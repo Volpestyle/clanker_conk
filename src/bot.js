@@ -9,6 +9,7 @@ import {
   buildReplyPrompt,
   buildSystemPrompt
 } from "./prompts.js";
+import { normalizeDiscoveryUrl } from "./discovery.js";
 import { chance, clamp, sanitizeBotText, sleep } from "./utils.js";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
@@ -18,13 +19,15 @@ const MAX_IMAGE_INPUTS = 3;
 const REACTION_CONTEXT_LIMIT = 12;
 const STARTUP_TASK_DELAY_MS = 4500;
 const INITIATIVE_TICK_MS = 60_000;
+const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
 
 export class ClankerBot {
-  constructor({ appConfig, store, llm, memory }) {
+  constructor({ appConfig, store, llm, memory, discovery }) {
     this.appConfig = appConfig;
     this.store = store;
     this.llm = llm;
     this.memory = memory;
+    this.discovery = discovery;
 
     this.lastBotMessageAt = 0;
     this.memoryTimer = null;
@@ -693,12 +696,25 @@ export class ClankerBot {
       const memoryMarkdown = settings.memory.enabled
         ? await this.memory.readMemoryMarkdown()
         : "";
+      const discoveryResult = await this.collectDiscoveryForInitiative({
+        settings,
+        channel,
+        recentMessages
+      });
+      const requireDiscoveryLink =
+        discoveryResult.enabled &&
+        discoveryResult.candidates.length > 0 &&
+        chance((settings.initiative?.discovery?.linkChancePercent || 0) / 100);
+
       const systemPrompt = buildSystemPrompt(settings, memoryMarkdown);
       const userPrompt = buildInitiativePrompt({
         channelName: channel.name || "channel",
         recentMessages,
         emojiHints: this.getEmojiHints(channel.guild),
-        allowImagePosts: settings.initiative.allowImagePosts
+        allowImagePosts: settings.initiative.allowImagePosts,
+        discoveryFindings: discoveryResult.candidates,
+        maxLinksPerPost: settings.initiative?.discovery?.maxLinksPerPost || 2,
+        requireDiscoveryLink
       });
 
       const generation = await this.llm.generate({
@@ -712,7 +728,15 @@ export class ClankerBot {
         }
       });
 
-      const finalText = sanitizeBotText(generation.text);
+      let finalText = sanitizeBotText(generation.text, 650);
+      if (!finalText || finalText === "[SKIP]") return;
+      const linkPolicy = this.applyDiscoveryLinkPolicy({
+        text: finalText,
+        candidates: discoveryResult.candidates,
+        selected: discoveryResult.selected,
+        requireDiscoveryLink
+      });
+      finalText = linkPolicy.text;
       if (!finalText || finalText === "[SKIP]") return;
 
       let payload = { content: finalText };
@@ -764,6 +788,12 @@ export class ClankerBot {
         content: finalText,
         referencedMessageId: null
       });
+      for (const sharedLink of linkPolicy.usedLinks) {
+        this.store.recordSharedLink({
+          url: sharedLink.url,
+          source: sharedLink.source
+        });
+      }
 
       this.store.logAction({
         kind: "initiative_post",
@@ -782,6 +812,17 @@ export class ClankerBot {
             elapsedMs: scheduleDecision.elapsedMs ?? null,
             requiredIntervalMs: scheduleDecision.requiredIntervalMs ?? null
           },
+          discovery: {
+            enabled: discoveryResult.enabled,
+            requiredLink: requireDiscoveryLink,
+            topics: discoveryResult.topics,
+            candidateCount: discoveryResult.candidates.length,
+            selectedCount: discoveryResult.selected.length,
+            usedLinks: linkPolicy.usedLinks,
+            forcedLink: linkPolicy.forcedLink,
+            reports: discoveryResult.reports,
+            errors: discoveryResult.errors
+          },
           imageUsed,
           llm: {
             provider: generation.provider,
@@ -794,6 +835,93 @@ export class ClankerBot {
     } finally {
       this.initiativePosting = false;
     }
+  }
+
+  async collectDiscoveryForInitiative({ settings, channel, recentMessages }) {
+    if (!this.discovery || !settings.initiative?.discovery?.enabled) {
+      return {
+        enabled: false,
+        topics: [],
+        candidates: [],
+        selected: [],
+        reports: [],
+        errors: []
+      };
+    }
+
+    try {
+      return await this.discovery.collect({
+        settings,
+        guildId: channel.guildId,
+        channelId: channel.id,
+        channelName: channel.name || "channel",
+        recentMessages
+      });
+    } catch (error) {
+      this.store.logAction({
+        kind: "bot_error",
+        guildId: channel.guildId,
+        channelId: channel.id,
+        userId: this.client.user?.id || null,
+        content: `initiative_discovery: ${String(error?.message || error)}`
+      });
+
+      return {
+        enabled: true,
+        topics: [],
+        candidates: [],
+        selected: [],
+        reports: [],
+        errors: [String(error?.message || error)]
+      };
+    }
+  }
+
+  applyDiscoveryLinkPolicy({ text, candidates, selected, requireDiscoveryLink }) {
+    const cleanText = sanitizeBotText(text, 650);
+    const candidateMap = new Map(
+      (candidates || []).map((item) => [normalizeDiscoveryUrl(item.url), item]).filter((entry) => Boolean(entry[0]))
+    );
+    const mentionedUrls = extractUrlsFromText(cleanText);
+    const matchedLinks = mentionedUrls
+      .map((url) => normalizeDiscoveryUrl(url))
+      .filter(Boolean)
+      .filter((url, index, arr) => arr.indexOf(url) === index)
+      .map((url) => ({
+        url,
+        source: candidateMap.get(url)?.source || "initiative"
+      }));
+
+    if (matchedLinks.length || !requireDiscoveryLink) {
+      return {
+        text: cleanText,
+        usedLinks: matchedLinks,
+        forcedLink: false
+      };
+    }
+
+    const fallbackPool = [...(selected || []), ...(candidates || [])];
+    const fallback = fallbackPool.find((item) => normalizeDiscoveryUrl(item.url));
+    if (!fallback) {
+      return {
+        text: "[SKIP]",
+        usedLinks: [],
+        forcedLink: false
+      };
+    }
+
+    const fallbackUrl = normalizeDiscoveryUrl(fallback.url);
+    const withForcedLink = sanitizeBotText(`${cleanText}\n${fallbackUrl}`, 650);
+    return {
+      text: withForcedLink,
+      usedLinks: [
+        {
+          url: fallbackUrl,
+          source: fallback.source || "initiative"
+        }
+      ],
+      forcedLink: true
+    };
   }
 
   getInitiativePostingIntervalMs(settings) {
@@ -986,6 +1114,11 @@ export class ClankerBot {
 
     return images;
   }
+}
+
+function extractUrlsFromText(text) {
+  URL_IN_TEXT_RE.lastIndex = 0;
+  return [...String(text || "").matchAll(URL_IN_TEXT_RE)].map((match) => String(match[0] || ""));
 }
 
 function parseReactionDecision(rawText) {

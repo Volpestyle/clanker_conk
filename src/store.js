@@ -59,11 +59,20 @@ export class Store {
         UNIQUE(subject, fact)
       );
 
+      CREATE TABLE IF NOT EXISTS shared_links (
+        url TEXT PRIMARY KEY,
+        first_shared_at TEXT NOT NULL,
+        last_shared_at TEXT NOT NULL,
+        share_count INTEGER NOT NULL DEFAULT 1,
+        source TEXT
+      );
+
       CREATE INDEX IF NOT EXISTS idx_messages_channel_time ON messages(channel_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_messages_guild_time ON messages(guild_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_actions_kind_time ON actions(kind, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_actions_time ON actions(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_memory_subject ON memory_facts(subject, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_shared_links_last_shared_at ON shared_links(last_shared_at DESC);
     `);
 
     if (!this.db.prepare("SELECT 1 FROM settings WHERE key = ?").get(SETTINGS_KEY)) {
@@ -243,6 +252,39 @@ export class Store {
       )
       .get(String(sinceIso));
     return Number(row?.count ?? 0);
+  }
+
+  wasLinkSharedSince(url, sinceIso) {
+    const normalizedUrl = String(url || "").trim();
+    if (!normalizedUrl) return false;
+
+    const row = this.db
+      .prepare(
+        `SELECT 1
+         FROM shared_links
+         WHERE url = ? AND last_shared_at >= ?
+         LIMIT 1`
+      )
+      .get(normalizedUrl, String(sinceIso));
+
+    return Boolean(row);
+  }
+
+  recordSharedLink({ url, source = null }) {
+    const normalizedUrl = String(url || "").trim();
+    if (!normalizedUrl) return;
+
+    const now = nowIso();
+    this.db
+      .prepare(
+        `INSERT INTO shared_links(url, first_shared_at, last_shared_at, share_count, source)
+         VALUES(?, ?, ?, 1, ?)
+         ON CONFLICT(url) DO UPDATE SET
+           last_shared_at = excluded.last_shared_at,
+           share_count = shared_links.share_count + 1,
+           source = excluded.source`
+      )
+      .run(normalizedUrl, now, now, source ? String(source).slice(0, 120) : null);
   }
 
   hasTriggeredResponse(triggerMessageId) {
@@ -493,10 +535,145 @@ function normalizeSettings(raw) {
     100
   );
   merged.initiative.imageModel = String(merged.initiative?.imageModel || "gpt-image-1").slice(0, 120);
+  if (!merged.initiative.discovery || typeof merged.initiative.discovery !== "object") {
+    merged.initiative.discovery = {};
+  }
+  if (!merged.initiative.discovery.sources || typeof merged.initiative.discovery.sources !== "object") {
+    merged.initiative.discovery.sources = {};
+  }
+
+  const defaultDiscovery = DEFAULT_SETTINGS.initiative?.discovery ?? {};
+  const defaultSources = defaultDiscovery.sources ?? {};
+  const sourceConfig = merged.initiative.discovery.sources ?? {};
+  merged.initiative.discovery = {
+    enabled:
+      merged.initiative.discovery?.enabled !== undefined
+        ? Boolean(merged.initiative.discovery?.enabled)
+        : Boolean(defaultDiscovery.enabled),
+    linkChancePercent: clamp(
+      Number(merged.initiative.discovery?.linkChancePercent) || Number(defaultDiscovery.linkChancePercent) || 0,
+      0,
+      100
+    ),
+    maxLinksPerPost: clamp(
+      Number(merged.initiative.discovery?.maxLinksPerPost) || Number(defaultDiscovery.maxLinksPerPost) || 2,
+      1,
+      4
+    ),
+    maxCandidatesForPrompt: clamp(
+      Number(merged.initiative.discovery?.maxCandidatesForPrompt) ||
+        Number(defaultDiscovery.maxCandidatesForPrompt) ||
+        6,
+      1,
+      12
+    ),
+    freshnessHours: clamp(
+      Number(merged.initiative.discovery?.freshnessHours) || Number(defaultDiscovery.freshnessHours) || 96,
+      1,
+      24 * 14
+    ),
+    dedupeHours: clamp(
+      Number(merged.initiative.discovery?.dedupeHours) || Number(defaultDiscovery.dedupeHours) || 168,
+      1,
+      24 * 45
+    ),
+    randomness: clamp(
+      Number(merged.initiative.discovery?.randomness) || Number(defaultDiscovery.randomness) || 55,
+      0,
+      100
+    ),
+    sourceFetchLimit: clamp(
+      Number(merged.initiative.discovery?.sourceFetchLimit) || Number(defaultDiscovery.sourceFetchLimit) || 10,
+      2,
+      30
+    ),
+    allowNsfw: Boolean(merged.initiative.discovery?.allowNsfw),
+    preferredTopics: uniqueStringList(
+      merged.initiative.discovery?.preferredTopics,
+      Number(defaultDiscovery.preferredTopics?.length ? defaultDiscovery.preferredTopics.length : 12),
+      80
+    ),
+    redditSubreddits: uniqueStringList(
+      merged.initiative.discovery?.redditSubreddits,
+      20,
+      40
+    ).map((entry) => entry.replace(/^r\//i, "")),
+    youtubeChannelIds: uniqueStringList(merged.initiative.discovery?.youtubeChannelIds, 20, 80),
+    rssFeeds: uniqueStringList(merged.initiative.discovery?.rssFeeds, 30, 240).filter(isHttpLikeUrl),
+    xHandles: uniqueStringList(merged.initiative.discovery?.xHandles, 20, 40).map((entry) =>
+      entry.replace(/^@/, "")
+    ),
+    xNitterBaseUrl: normalizeHttpBaseUrl(
+      merged.initiative.discovery?.xNitterBaseUrl,
+      defaultDiscovery.xNitterBaseUrl || "https://nitter.net"
+    ),
+    sources: {
+      reddit:
+        sourceConfig.reddit !== undefined
+          ? Boolean(sourceConfig.reddit)
+          : Boolean(defaultSources.reddit ?? true),
+      hackerNews:
+        sourceConfig.hackerNews !== undefined
+          ? Boolean(sourceConfig.hackerNews)
+          : Boolean(defaultSources.hackerNews ?? true),
+      youtube:
+        sourceConfig.youtube !== undefined
+          ? Boolean(sourceConfig.youtube)
+          : Boolean(defaultSources.youtube ?? true),
+      rss:
+        sourceConfig.rss !== undefined
+          ? Boolean(sourceConfig.rss)
+          : Boolean(defaultSources.rss ?? true),
+      x:
+        sourceConfig.x !== undefined
+          ? Boolean(sourceConfig.x)
+          : Boolean(defaultSources.x ?? false)
+    }
+  };
 
   merged.memory.enabled = Boolean(merged.memory?.enabled);
   merged.memory.maxRecentMessages = clamp(Number(merged.memory?.maxRecentMessages) || 35, 10, 120);
   merged.memory.maxHighlights = clamp(Number(merged.memory?.maxHighlights) || 16, 4, 80);
 
   return merged;
+}
+
+function uniqueStringList(input, maxItems = 20, maxLen = 120) {
+  if (Array.isArray(input)) {
+    return [...new Set(input.map((item) => String(item || "").trim()).filter(Boolean))]
+      .slice(0, Math.max(1, maxItems))
+      .map((item) => item.slice(0, maxLen));
+  }
+
+  if (typeof input !== "string") return [];
+
+  return [...new Set(input.split(/[\n,]/g).map((item) => item.trim()).filter(Boolean))]
+    .slice(0, Math.max(1, maxItems))
+    .map((item) => item.slice(0, maxLen));
+}
+
+function isHttpLikeUrl(rawUrl) {
+  const value = String(rawUrl || "").trim();
+  if (!value) return false;
+
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
+function normalizeHttpBaseUrl(value, fallback) {
+  const target = String(value || fallback || "").trim();
+
+  try {
+    const parsed = new URL(target);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return String(fallback || "https://nitter.net");
+    }
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return String(fallback || "https://nitter.net");
+  }
 }
