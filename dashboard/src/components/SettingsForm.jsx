@@ -39,6 +39,8 @@ export default function SettingsForm({ settings, onSave, toast }) {
       autonomousInitiativeEnabled: settings.initiative?.enabled ?? false,
       initiativePostsPerDay: settings.initiative?.maxPostsPerDay ?? 6,
       initiativeMinMinutes: settings.initiative?.minMinutesBetweenPosts ?? 120,
+      initiativePacingMode: settings.initiative?.pacingMode === "spontaneous" ? "spontaneous" : "even",
+      initiativeSpontaneity: settings.initiative?.spontaneity ?? 65,
       initiativeStartupPost: settings.initiative?.postOnStartup ?? false,
       initiativeImageEnabled: settings.initiative?.allowImagePosts ?? false,
       initiativeImageChance: settings.initiative?.imagePostChancePercent ?? 25,
@@ -95,6 +97,8 @@ export default function SettingsForm({ settings, onSave, toast }) {
         enabled: form.autonomousInitiativeEnabled,
         maxPostsPerDay: Number(form.initiativePostsPerDay),
         minMinutesBetweenPosts: Number(form.initiativeMinMinutes),
+        pacingMode: form.initiativePacingMode,
+        spontaneity: Number(form.initiativeSpontaneity),
         postOnStartup: form.initiativeStartupPost,
         allowImagePosts: form.initiativeImageEnabled,
         imagePostChancePercent: Number(form.initiativeImageChance),
@@ -345,6 +349,34 @@ export default function SettingsForm({ settings, onSave, toast }) {
             max="1440"
             value={form.initiativeMinMinutes}
             onChange={set("initiativeMinMinutes")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="initiative-pacing-mode">Initiative pacing mode</label>
+          <select
+            id="initiative-pacing-mode"
+            value={form.initiativePacingMode}
+            onChange={set("initiativePacingMode")}
+          >
+            <option value="even">Even pacing (strict)</option>
+            <option value="spontaneous">Spontaneous (randomized)</option>
+          </select>
+        </div>
+        <div>
+          <label htmlFor="initiative-spontaneity">
+            Spontaneity: <strong>{form.initiativeSpontaneity}%</strong>
+          </label>
+          <input
+            id="initiative-spontaneity"
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            value={form.initiativeSpontaneity}
+            onChange={set("initiativeSpontaneity")}
           />
         </div>
       </div>

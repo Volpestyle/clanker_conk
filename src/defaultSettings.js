@@ -43,6 +43,8 @@ export const DEFAULT_SETTINGS = {
     enabled: false,
     maxPostsPerDay: 6,
     minMinutesBetweenPosts: 120,
+    pacingMode: "even",
+    spontaneity: 65,
     postOnStartup: false,
     allowImagePosts: false,
     imagePostChancePercent: 25,
