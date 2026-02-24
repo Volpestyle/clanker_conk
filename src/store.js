@@ -220,6 +220,49 @@ export class Store {
     return Number(row?.count ?? 0);
   }
 
+  getLastActionTime(kind) {
+    const row = this.db
+      .prepare(
+        `SELECT created_at
+         FROM actions
+         WHERE kind = ?
+         ORDER BY created_at DESC
+         LIMIT 1`
+      )
+      .get(String(kind));
+
+    return row?.created_at ?? null;
+  }
+
+  countInitiativePostsSince(sinceIso) {
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM actions
+         WHERE kind = 'initiative_post' AND created_at >= ?`
+      )
+      .get(String(sinceIso));
+    return Number(row?.count ?? 0);
+  }
+
+  hasTriggeredResponse(triggerMessageId) {
+    const id = String(triggerMessageId).trim();
+    if (!id) return false;
+
+    const likeNeedle = `%"triggerMessageId":"${id}"%`;
+    const row = this.db
+      .prepare(
+        `SELECT 1
+         FROM actions
+         WHERE kind IN ('sent_reply', 'sent_message')
+           AND metadata LIKE ?
+         LIMIT 1`
+      )
+      .get(likeNeedle);
+
+    return Boolean(row);
+  }
+
   getRecentActions(limit = 200) {
     const rows = this.db
       .prepare(
@@ -267,8 +310,10 @@ export class Store {
       last24h: {
         sent_reply: 0,
         sent_message: 0,
+        initiative_post: 0,
         reacted: 0,
-        llm_call: 0
+        llm_call: 0,
+        image_call: 0
       },
       totalCostUsd: Number(totalCostRow?.total ?? 0),
       dailyCost: dayCostRows
@@ -355,20 +400,60 @@ function safeJsonParse(value, fallback) {
 
 function normalizeSettings(raw) {
   const merged = deepMerge(DEFAULT_SETTINGS, raw ?? {});
+  if (!merged.activity || typeof merged.activity !== "object") merged.activity = {};
+  if (!merged.startup || typeof merged.startup !== "object") merged.startup = {};
+  if (!merged.permissions || typeof merged.permissions !== "object") merged.permissions = {};
+  if (!merged.initiative || typeof merged.initiative !== "object") merged.initiative = {};
+  if (!merged.memory || typeof merged.memory !== "object") merged.memory = {};
+  if (!merged.llm || typeof merged.llm !== "object") merged.llm = {};
 
   merged.botName = String(merged.botName || "clanker conk").slice(0, 50);
 
-  merged.activity.level = clamp(Number(merged.activity?.level) || 0, 0, 100);
-  merged.activity.minSecondsBetweenMessages = clamp(
+  const replyLevel = clamp(
+    Number(merged.activity?.replyLevel ?? DEFAULT_SETTINGS.activity.replyLevel) || 0,
+    0,
+    100
+  );
+  const reactionLevel = clamp(
+    Number(merged.activity?.reactionLevel ?? DEFAULT_SETTINGS.activity.reactionLevel) || 0,
+    0,
+    100
+  );
+  const minSecondsBetweenMessages = clamp(
     Number(merged.activity?.minSecondsBetweenMessages) || 15,
     5,
     300
   );
+  merged.activity = {
+    replyLevel,
+    reactionLevel,
+    minSecondsBetweenMessages
+  };
 
   merged.llm.provider = merged.llm?.provider === "anthropic" ? "anthropic" : "openai";
   merged.llm.model = String(merged.llm?.model || "gpt-4.1-mini").slice(0, 120);
   merged.llm.temperature = clamp(Number(merged.llm?.temperature) || 0.9, 0, 2);
   merged.llm.maxOutputTokens = clamp(Number(merged.llm?.maxOutputTokens) || 220, 32, 1400);
+
+  merged.startup.catchupEnabled =
+    merged.startup?.catchupEnabled !== undefined ? Boolean(merged.startup?.catchupEnabled) : true;
+  const legacyLookbackMinutes = Number(merged.startup?.catchupLookbackMinutes) || 0;
+  const configuredHours = Number(merged.startup?.catchupLookbackHours) || 0;
+  const derivedHours = configuredHours || (legacyLookbackMinutes ? legacyLookbackMinutes / 60 : 6);
+  merged.startup.catchupLookbackHours = clamp(derivedHours, 1, 24);
+  if ("catchupLookbackMinutes" in merged.startup) {
+    delete merged.startup.catchupLookbackMinutes;
+  }
+  merged.startup.catchupMaxMessagesPerChannel = clamp(
+    Number(merged.startup?.catchupMaxMessagesPerChannel) || 20,
+    5,
+    80
+  );
+  merged.startup.maxCatchupRepliesPerChannel = clamp(
+    Number(merged.startup?.maxCatchupRepliesPerChannel) || 2,
+    1,
+    12
+  );
 
   merged.permissions.allowReplies = Boolean(merged.permissions?.allowReplies);
   merged.permissions.allowInitiativeReplies =
@@ -386,6 +471,23 @@ function normalizeSettings(raw) {
     200
   );
   merged.permissions.maxReactionsPerHour = clamp(Number(merged.permissions?.maxReactionsPerHour) || 24, 1, 300);
+
+  merged.initiative.enabled =
+    merged.initiative?.enabled !== undefined ? Boolean(merged.initiative?.enabled) : false;
+  merged.initiative.maxPostsPerDay = clamp(Number(merged.initiative?.maxPostsPerDay) || 0, 0, 100);
+  merged.initiative.minMinutesBetweenPosts = clamp(
+    Number(merged.initiative?.minMinutesBetweenPosts) || 120,
+    5,
+    24 * 60
+  );
+  merged.initiative.postOnStartup = Boolean(merged.initiative?.postOnStartup);
+  merged.initiative.allowImagePosts = Boolean(merged.initiative?.allowImagePosts);
+  merged.initiative.imagePostChancePercent = clamp(
+    Number(merged.initiative?.imagePostChancePercent) || 0,
+    0,
+    100
+  );
+  merged.initiative.imageModel = String(merged.initiative?.imageModel || "gpt-image-1").slice(0, 120);
 
   merged.memory.enabled = Boolean(merged.memory?.enabled);
   merged.memory.maxRecentMessages = clamp(Number(merged.memory?.maxRecentMessages) || 35, 10, 120);

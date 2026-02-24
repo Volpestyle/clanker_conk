@@ -93,6 +93,69 @@ export class LLMService {
     }
   }
 
+  async generateImage({ settings, prompt, trace = {} }) {
+    if (!this.openai) {
+      throw new Error("Image generation requires OPENAI_API_KEY.");
+    }
+
+    const model = String(settings?.initiative?.imageModel || "gpt-image-1");
+
+    try {
+      const response = await this.openai.images.generate({
+        model,
+        prompt: String(prompt || "").slice(0, 3200),
+        size: "1024x1024"
+      });
+
+      const first = response?.data?.[0];
+      if (!first) {
+        throw new Error("Image API returned no image data.");
+      }
+
+      let imageBuffer = null;
+      if (first.b64_json) {
+        imageBuffer = Buffer.from(first.b64_json, "base64");
+      }
+
+      const imageUrl = first.url ? String(first.url) : null;
+      if (!imageBuffer && !imageUrl) {
+        throw new Error("Image API response had neither b64 nor URL.");
+      }
+
+      this.store.logAction({
+        kind: "image_call",
+        guildId: trace.guildId,
+        channelId: trace.channelId,
+        userId: trace.userId,
+        content: `${model}`,
+        metadata: {
+          model,
+          source: trace.source || "unknown"
+        }
+      });
+
+      return {
+        provider: "openai",
+        model,
+        imageBuffer,
+        imageUrl
+      };
+    } catch (error) {
+      this.store.logAction({
+        kind: "image_error",
+        guildId: trace.guildId,
+        channelId: trace.channelId,
+        userId: trace.userId,
+        content: String(error?.message || error),
+        metadata: {
+          model,
+          source: trace.source || "unknown"
+        }
+      });
+      throw error;
+    }
+  }
+
   resolveProviderAndModel(llmSettings) {
     const desiredProvider = llmSettings.provider === "anthropic" ? "anthropic" : "openai";
 

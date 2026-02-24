@@ -11,7 +11,8 @@ export const DEFAULT_SETTINGS = {
     ]
   },
   activity: {
-    level: 35,
+    replyLevel: 35,
+    reactionLevel: 20,
     minSecondsBetweenMessages: 20
   },
   llm: {
@@ -20,6 +21,12 @@ export const DEFAULT_SETTINGS = {
     temperature: 0.9,
     maxOutputTokens: 220,
     pricing: {}
+  },
+  startup: {
+    catchupEnabled: true,
+    catchupLookbackHours: 6,
+    catchupMaxMessagesPerChannel: 20,
+    maxCatchupRepliesPerChannel: 2
   },
   permissions: {
     allowReplies: true,
@@ -31,6 +38,15 @@ export const DEFAULT_SETTINGS = {
     blockedUserIds: [],
     maxMessagesPerHour: 20,
     maxReactionsPerHour: 24
+  },
+  initiative: {
+    enabled: false,
+    maxPostsPerDay: 6,
+    minMinutesBetweenPosts: 120,
+    postOnStartup: false,
+    allowImagePosts: false,
+    imagePostChancePercent: 25,
+    imageModel: "gpt-image-1"
   },
   memory: {
     enabled: true,
