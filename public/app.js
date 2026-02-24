@@ -14,8 +14,10 @@ const el = {
   reactionCount: document.getElementById("reaction-count"),
   settingsForm: document.getElementById("settings-form"),
   botName: document.getElementById("bot-name"),
-  activityLevel: document.getElementById("activity-level"),
-  activityValue: document.getElementById("activity-value"),
+  replyLevel: document.getElementById("reply-level"),
+  replyValue: document.getElementById("reply-value"),
+  reactionLevel: document.getElementById("reaction-level"),
+  reactionValue: document.getElementById("reaction-value"),
   allowReplies: document.getElementById("allow-replies"),
   allowInitiative: document.getElementById("allow-initiative"),
   allowReactions: document.getElementById("allow-reactions"),
@@ -27,6 +29,17 @@ const el = {
   maxMessages: document.getElementById("max-messages"),
   maxReactions: document.getElementById("max-reactions"),
   minGap: document.getElementById("min-gap"),
+  catchupEnabled: document.getElementById("catchup-enabled"),
+  catchupLookback: document.getElementById("catchup-lookback"),
+  catchupMaxMessages: document.getElementById("catchup-max-messages"),
+  catchupMaxReplies: document.getElementById("catchup-max-replies"),
+  initiativeEnabled: document.getElementById("initiative-enabled"),
+  initiativeStartupPost: document.getElementById("initiative-startup-post"),
+  initiativePostsPerDay: document.getElementById("initiative-posts-per-day"),
+  initiativeMinMinutes: document.getElementById("initiative-min-minutes"),
+  initiativeImageEnabled: document.getElementById("initiative-image-enabled"),
+  initiativeImageChance: document.getElementById("initiative-image-chance"),
+  initiativeImageModel: document.getElementById("initiative-image-model"),
   initiativeChannels: document.getElementById("initiative-channels"),
   allowedChannels: document.getElementById("allowed-channels"),
   blockedChannels: document.getElementById("blocked-channels"),
@@ -48,8 +61,12 @@ el.saveToken.addEventListener("click", () => {
   loadAll();
 });
 
-el.activityLevel.addEventListener("input", () => {
-  el.activityValue.textContent = el.activityLevel.value;
+el.replyLevel.addEventListener("input", () => {
+  el.replyValue.textContent = el.replyLevel.value;
+});
+
+el.reactionLevel.addEventListener("input", () => {
+  el.reactionValue.textContent = el.reactionLevel.value;
 });
 
 el.actionFilter.addEventListener("change", renderActions);
@@ -70,7 +87,8 @@ el.settingsForm.addEventListener("submit", async (event) => {
   const patch = {
     botName: el.botName.value.trim(),
     activity: {
-      level: Number(el.activityLevel.value),
+      replyLevel: Number(el.replyLevel.value),
+      reactionLevel: Number(el.reactionLevel.value),
       minSecondsBetweenMessages: Number(el.minGap.value)
     },
     llm: {
@@ -78,6 +96,12 @@ el.settingsForm.addEventListener("submit", async (event) => {
       model: el.model.value.trim(),
       temperature: Number(el.temperature.value),
       maxOutputTokens: Number(el.maxTokens.value)
+    },
+    startup: {
+      catchupEnabled: el.catchupEnabled.checked,
+      catchupLookbackHours: Number(el.catchupLookback.value),
+      catchupMaxMessagesPerChannel: Number(el.catchupMaxMessages.value),
+      maxCatchupRepliesPerChannel: Number(el.catchupMaxReplies.value)
     },
     permissions: {
       allowReplies: el.allowReplies.checked,
@@ -89,6 +113,15 @@ el.settingsForm.addEventListener("submit", async (event) => {
       blockedUserIds: parseIdList(el.blockedUsers.value),
       maxMessagesPerHour: Number(el.maxMessages.value),
       maxReactionsPerHour: Number(el.maxReactions.value)
+    },
+    initiative: {
+      enabled: el.initiativeEnabled.checked,
+      maxPostsPerDay: Number(el.initiativePostsPerDay.value),
+      minMinutesBetweenPosts: Number(el.initiativeMinMinutes.value),
+      postOnStartup: el.initiativeStartupPost.checked,
+      allowImagePosts: el.initiativeImageEnabled.checked,
+      imagePostChancePercent: Number(el.initiativeImageChance.value),
+      imageModel: el.initiativeImageModel.value.trim()
     },
     memory: {
       enabled: el.memoryEnabled.checked
@@ -123,9 +156,17 @@ async function loadSettings() {
 }
 
 function hydrateSettings(settings) {
+  const startup = settings.startup || {};
+  const initiative = settings.initiative || {};
+  const activity = settings.activity || {};
+  const replyLevel = activity.replyLevel ?? 35;
+  const reactionLevel = activity.reactionLevel ?? 20;
+
   el.botName.value = settings.botName || "clanker conk";
-  el.activityLevel.value = settings.activity.level;
-  el.activityValue.textContent = String(settings.activity.level);
+  el.replyLevel.value = replyLevel;
+  el.replyValue.textContent = String(replyLevel);
+  el.reactionLevel.value = reactionLevel;
+  el.reactionValue.textContent = String(reactionLevel);
 
   el.allowReplies.checked = settings.permissions.allowReplies;
   el.allowInitiative.checked = settings.permissions.allowInitiativeReplies !== false;
@@ -140,7 +181,20 @@ function hydrateSettings(settings) {
   el.maxMessages.value =
     settings.permissions.maxMessagesPerHour ?? settings.permissions.maxRepliesPerHour ?? 20;
   el.maxReactions.value = settings.permissions.maxReactionsPerHour;
-  el.minGap.value = settings.activity.minSecondsBetweenMessages;
+  el.minGap.value = activity.minSecondsBetweenMessages ?? 20;
+
+  el.catchupEnabled.checked = startup.catchupEnabled !== false;
+  el.catchupLookback.value = startup.catchupLookbackHours ?? 6;
+  el.catchupMaxMessages.value = startup.catchupMaxMessagesPerChannel ?? 20;
+  el.catchupMaxReplies.value = startup.maxCatchupRepliesPerChannel ?? 2;
+
+  el.initiativeEnabled.checked = Boolean(initiative.enabled);
+  el.initiativeStartupPost.checked = Boolean(initiative.postOnStartup);
+  el.initiativePostsPerDay.value = initiative.maxPostsPerDay ?? 6;
+  el.initiativeMinMinutes.value = initiative.minMinutesBetweenPosts ?? 120;
+  el.initiativeImageEnabled.checked = Boolean(initiative.allowImagePosts);
+  el.initiativeImageChance.value = initiative.imagePostChancePercent ?? 25;
+  el.initiativeImageModel.value = initiative.imageModel || "gpt-image-1";
 
   el.initiativeChannels.value = formatIdList(settings.permissions.initiativeChannelIds);
   el.allowedChannels.value = formatIdList(settings.permissions.allowedChannelIds);
@@ -160,7 +214,9 @@ async function loadStats() {
 
   el.totalCost.textContent = `$${Number(stats.totalCostUsd || 0).toFixed(6)}`;
   el.replyCount.textContent = String(stats.last24h.sent_reply || 0);
-  el.messageCount.textContent = String(stats.last24h.sent_message || 0);
+  el.messageCount.textContent = String(
+    Number(stats.last24h.sent_message || 0) + Number(stats.last24h.initiative_post || 0)
+  );
   el.reactionCount.textContent = String(stats.last24h.reacted || 0);
 
   renderDailyCost(stats.dailyCost || []);

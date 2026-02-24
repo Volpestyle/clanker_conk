@@ -1,6 +1,14 @@
 import { useState, useMemo } from "react";
 
-const FILTERS = ["all", "sent_reply", "sent_message", "reacted", "llm_call"];
+const FILTERS = [
+  "all",
+  "sent_reply",
+  "sent_message",
+  "initiative_post",
+  "reacted",
+  "llm_call",
+  "image_call"
+];
 
 export default function ActionStream({ actions }) {
   const [filter, setFilter] = useState("all");
