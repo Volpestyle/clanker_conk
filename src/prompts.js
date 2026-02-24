@@ -35,10 +35,29 @@ export function buildSystemPrompt(settings, memoryMarkdown) {
   ].join("\n");
 }
 
-export function buildReplyPrompt({ message, recentMessages, relevantMessages, userFacts, emojiHints }) {
+export function buildReplyPrompt({
+  message,
+  imageInputs,
+  recentMessages,
+  relevantMessages,
+  userFacts,
+  emojiHints
+}) {
   const parts = [];
 
   parts.push(`Incoming message from ${message.authorName}: ${message.content}`);
+  if (imageInputs?.length) {
+    parts.push(
+      [
+        "Incoming image attachments:",
+        ...imageInputs.map((image) => {
+          const name = image.filename || "(unnamed)";
+          const type = image.contentType || "unknown";
+          return `- ${name} (${type})`;
+        })
+      ].join("\n")
+    );
+  }
   parts.push("Recent channel messages:");
   parts.push(formatRecentChat(recentMessages));
 
