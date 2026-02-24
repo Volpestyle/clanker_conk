@@ -1,0 +1,31 @@
+{
+  "name": "clanker_conk",
+  "version": "0.1.0",
+  "description": "Discord AI user bot persona for community interaction with dashboard and memory",
+  "type": "module",
+  "main": "src/app.js",
+  "scripts": {
+    "start": "node src/app.js",
+    "dev": "node --watch src/app.js",
+    "dev:ui": "npx vite",
+    "build:ui": "npx vite build",
+    "check": "find src -name '*.js' -print0 | xargs -0 -n1 node --check"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "better-sqlite3": "^11.7.2",
+    "discord.js": "^14.18.0",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "openai": "^4.80.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^5.1.4",
+    "vite": "^7.3.1"
+  }
+}
