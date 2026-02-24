@@ -1,10 +1,18 @@
 import { useState, useEffect } from "react";
 
+function parseList(val) {
+  return [...new Set(String(val || "").split(/[\n,]/g).map((x) => x.trim()).filter(Boolean))];
+}
+
 function parseIdList(val) {
-  return [...new Set(val.split(/[\n,]/g).map((x) => x.trim()).filter(Boolean))];
+  return parseList(val);
 }
 
 function formatIdList(items) {
+  return (items || []).join("\n");
+}
+
+function formatList(items) {
   return (items || []).join("\n");
 }
 
@@ -45,6 +53,27 @@ export default function SettingsForm({ settings, onSave, toast }) {
       initiativeImageEnabled: settings.initiative?.allowImagePosts ?? false,
       initiativeImageChance: settings.initiative?.imagePostChancePercent ?? 25,
       initiativeImageModel: settings.initiative?.imageModel ?? "gpt-image-1",
+      initiativeDiscoveryEnabled: settings.initiative?.discovery?.enabled ?? true,
+      initiativeDiscoveryLinkChance: settings.initiative?.discovery?.linkChancePercent ?? 80,
+      initiativeDiscoveryMaxLinks: settings.initiative?.discovery?.maxLinksPerPost ?? 2,
+      initiativeDiscoveryMaxCandidates: settings.initiative?.discovery?.maxCandidatesForPrompt ?? 6,
+      initiativeDiscoveryFreshnessHours: settings.initiative?.discovery?.freshnessHours ?? 96,
+      initiativeDiscoveryDedupeHours: settings.initiative?.discovery?.dedupeHours ?? 168,
+      initiativeDiscoveryRandomness: settings.initiative?.discovery?.randomness ?? 55,
+      initiativeDiscoveryFetchLimit: settings.initiative?.discovery?.sourceFetchLimit ?? 10,
+      initiativeDiscoveryAllowNsfw: settings.initiative?.discovery?.allowNsfw ?? false,
+      initiativeDiscoverySourceReddit: settings.initiative?.discovery?.sources?.reddit ?? true,
+      initiativeDiscoverySourceHackerNews: settings.initiative?.discovery?.sources?.hackerNews ?? true,
+      initiativeDiscoverySourceYoutube: settings.initiative?.discovery?.sources?.youtube ?? true,
+      initiativeDiscoverySourceRss: settings.initiative?.discovery?.sources?.rss ?? true,
+      initiativeDiscoverySourceX: settings.initiative?.discovery?.sources?.x ?? false,
+      initiativeDiscoveryPreferredTopics: formatList(settings.initiative?.discovery?.preferredTopics),
+      initiativeDiscoveryRedditSubs: formatList(settings.initiative?.discovery?.redditSubreddits),
+      initiativeDiscoveryYoutubeChannels: formatList(settings.initiative?.discovery?.youtubeChannelIds),
+      initiativeDiscoveryRssFeeds: formatList(settings.initiative?.discovery?.rssFeeds),
+      initiativeDiscoveryXHandles: formatList(settings.initiative?.discovery?.xHandles),
+      initiativeDiscoveryXNitterBase:
+        settings.initiative?.discovery?.xNitterBaseUrl ?? "https://nitter.net",
       initiativeChannels: formatIdList(settings.permissions?.initiativeChannelIds),
       allowedChannels: formatIdList(settings.permissions?.allowedChannelIds),
       blockedChannels: formatIdList(settings.permissions?.blockedChannelIds),
@@ -102,7 +131,31 @@ export default function SettingsForm({ settings, onSave, toast }) {
         postOnStartup: form.initiativeStartupPost,
         allowImagePosts: form.initiativeImageEnabled,
         imagePostChancePercent: Number(form.initiativeImageChance),
-        imageModel: form.initiativeImageModel.trim()
+        imageModel: form.initiativeImageModel.trim(),
+        discovery: {
+          enabled: form.initiativeDiscoveryEnabled,
+          linkChancePercent: Number(form.initiativeDiscoveryLinkChance),
+          maxLinksPerPost: Number(form.initiativeDiscoveryMaxLinks),
+          maxCandidatesForPrompt: Number(form.initiativeDiscoveryMaxCandidates),
+          freshnessHours: Number(form.initiativeDiscoveryFreshnessHours),
+          dedupeHours: Number(form.initiativeDiscoveryDedupeHours),
+          randomness: Number(form.initiativeDiscoveryRandomness),
+          sourceFetchLimit: Number(form.initiativeDiscoveryFetchLimit),
+          allowNsfw: form.initiativeDiscoveryAllowNsfw,
+          preferredTopics: parseList(form.initiativeDiscoveryPreferredTopics),
+          redditSubreddits: parseList(form.initiativeDiscoveryRedditSubs),
+          youtubeChannelIds: parseList(form.initiativeDiscoveryYoutubeChannels),
+          rssFeeds: parseList(form.initiativeDiscoveryRssFeeds),
+          xHandles: parseList(form.initiativeDiscoveryXHandles),
+          xNitterBaseUrl: form.initiativeDiscoveryXNitterBase.trim(),
+          sources: {
+            reddit: form.initiativeDiscoverySourceReddit,
+            hackerNews: form.initiativeDiscoverySourceHackerNews,
+            youtube: form.initiativeDiscoverySourceYoutube,
+            rss: form.initiativeDiscoverySourceRss,
+            x: form.initiativeDiscoverySourceX
+          }
+        }
       },
       memory: {
         enabled: form.memoryEnabled
@@ -403,6 +456,205 @@ export default function SettingsForm({ settings, onSave, toast }) {
           />
         </div>
       </div>
+
+      <h4>Creative Discovery</h4>
+      <div className="toggles">
+        <label>
+          <input
+            type="checkbox"
+            checked={form.initiativeDiscoveryEnabled}
+            onChange={set("initiativeDiscoveryEnabled")}
+          />
+          Enable external discovery for initiative posts
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.initiativeDiscoveryAllowNsfw}
+            onChange={set("initiativeDiscoveryAllowNsfw")}
+          />
+          Allow NSFW discovery items
+        </label>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="initiative-discovery-link-chance">Posts with links (%)</label>
+          <input
+            id="initiative-discovery-link-chance"
+            type="number"
+            min="0"
+            max="100"
+            value={form.initiativeDiscoveryLinkChance}
+            onChange={set("initiativeDiscoveryLinkChance")}
+          />
+        </div>
+        <div>
+          <label htmlFor="initiative-discovery-max-links">Max links per post</label>
+          <input
+            id="initiative-discovery-max-links"
+            type="number"
+            min="1"
+            max="4"
+            value={form.initiativeDiscoveryMaxLinks}
+            onChange={set("initiativeDiscoveryMaxLinks")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="initiative-discovery-max-candidates">Candidates for prompt</label>
+          <input
+            id="initiative-discovery-max-candidates"
+            type="number"
+            min="1"
+            max="12"
+            value={form.initiativeDiscoveryMaxCandidates}
+            onChange={set("initiativeDiscoveryMaxCandidates")}
+          />
+        </div>
+        <div>
+          <label htmlFor="initiative-discovery-fetch-limit">Fetch limit per source</label>
+          <input
+            id="initiative-discovery-fetch-limit"
+            type="number"
+            min="2"
+            max="30"
+            value={form.initiativeDiscoveryFetchLimit}
+            onChange={set("initiativeDiscoveryFetchLimit")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="initiative-discovery-freshness">Freshness window (hours)</label>
+          <input
+            id="initiative-discovery-freshness"
+            type="number"
+            min="1"
+            max="336"
+            value={form.initiativeDiscoveryFreshnessHours}
+            onChange={set("initiativeDiscoveryFreshnessHours")}
+          />
+        </div>
+        <div>
+          <label htmlFor="initiative-discovery-dedupe">Avoid repost window (hours)</label>
+          <input
+            id="initiative-discovery-dedupe"
+            type="number"
+            min="1"
+            max="1080"
+            value={form.initiativeDiscoveryDedupeHours}
+            onChange={set("initiativeDiscoveryDedupeHours")}
+          />
+        </div>
+      </div>
+
+      <label htmlFor="initiative-discovery-randomness">
+        Discovery randomness: <strong>{form.initiativeDiscoveryRandomness}%</strong>
+      </label>
+      <input
+        id="initiative-discovery-randomness"
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        value={form.initiativeDiscoveryRandomness}
+        onChange={set("initiativeDiscoveryRandomness")}
+      />
+
+      <div className="toggles">
+        <label>
+          <input
+            type="checkbox"
+            checked={form.initiativeDiscoverySourceReddit}
+            onChange={set("initiativeDiscoverySourceReddit")}
+          />
+          Reddit
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.initiativeDiscoverySourceHackerNews}
+            onChange={set("initiativeDiscoverySourceHackerNews")}
+          />
+          Hacker News
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.initiativeDiscoverySourceYoutube}
+            onChange={set("initiativeDiscoverySourceYoutube")}
+          />
+          YouTube RSS
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.initiativeDiscoverySourceRss}
+            onChange={set("initiativeDiscoverySourceRss")}
+          />
+          RSS feeds
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.initiativeDiscoverySourceX}
+            onChange={set("initiativeDiscoverySourceX")}
+          />
+          X via Nitter RSS
+        </label>
+      </div>
+
+      <label htmlFor="initiative-discovery-topics">Preferred topics (comma/newline)</label>
+      <textarea
+        id="initiative-discovery-topics"
+        rows="2"
+        value={form.initiativeDiscoveryPreferredTopics}
+        onChange={set("initiativeDiscoveryPreferredTopics")}
+      />
+
+      <label htmlFor="initiative-discovery-reddit">Reddit subreddits</label>
+      <textarea
+        id="initiative-discovery-reddit"
+        rows="2"
+        value={form.initiativeDiscoveryRedditSubs}
+        onChange={set("initiativeDiscoveryRedditSubs")}
+      />
+
+      <label htmlFor="initiative-discovery-youtube">YouTube channel IDs</label>
+      <textarea
+        id="initiative-discovery-youtube"
+        rows="2"
+        value={form.initiativeDiscoveryYoutubeChannels}
+        onChange={set("initiativeDiscoveryYoutubeChannels")}
+      />
+
+      <label htmlFor="initiative-discovery-rss">RSS feed URLs</label>
+      <textarea
+        id="initiative-discovery-rss"
+        rows="3"
+        value={form.initiativeDiscoveryRssFeeds}
+        onChange={set("initiativeDiscoveryRssFeeds")}
+      />
+
+      <label htmlFor="initiative-discovery-x-handles">X handles</label>
+      <textarea
+        id="initiative-discovery-x-handles"
+        rows="2"
+        value={form.initiativeDiscoveryXHandles}
+        onChange={set("initiativeDiscoveryXHandles")}
+      />
+
+      <label htmlFor="initiative-discovery-nitter">Nitter base URL (for X RSS)</label>
+      <input
+        id="initiative-discovery-nitter"
+        type="text"
+        value={form.initiativeDiscoveryXNitterBase}
+        onChange={set("initiativeDiscoveryXNitterBase")}
+      />
 
       <label htmlFor="initiative-channels">Standalone post channel IDs (only these)</label>
       <textarea
