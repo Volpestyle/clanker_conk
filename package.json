@@ -5,7 +5,9 @@
   "type": "module",
   "main": "src/app.js",
   "scripts": {
+    "prestart": "npm run build:ui",
     "start": "node src/app.js",
+    "predev": "npm run build:ui",
     "dev": "node --watch src/app.js",
     "dev:ui": "npx vite",
     "build:ui": "npx vite build",
