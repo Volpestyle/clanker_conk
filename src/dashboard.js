@@ -1,0 +1,75 @@
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import express from "express";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+export function createDashboardServer({ appConfig, store, bot, memory }) {
+  const app = express();
+
+  app.use(express.json({ limit: "1mb" }));
+  app.use(express.urlencoded({ extended: true }));
+
+  app.use("/api", (req, res, next) => {
+    if (!appConfig.dashboardToken) return next();
+
+    const presented = req.get("x-dashboard-token") || String(req.query.token || "");
+    if (presented === appConfig.dashboardToken) return next();
+
+    return res.status(401).json({ error: "Unauthorized. Provide x-dashboard-token." });
+  });
+
+  app.get("/api/health", (_req, res) => {
+    res.json({ ok: true });
+  });
+
+  app.get("/api/settings", (_req, res) => {
+    res.json(store.getSettings());
+  });
+
+  app.put("/api/settings", (req, res) => {
+    const nextSettings = store.patchSettings(req.body || {});
+    res.json(nextSettings);
+  });
+
+  app.get("/api/actions", (req, res) => {
+    const limit = Number(req.query.limit || 200);
+    res.json(store.getRecentActions(limit));
+  });
+
+  app.get("/api/stats", (_req, res) => {
+    res.json({
+      stats: store.getStats(),
+      runtime: bot.getRuntimeState()
+    });
+  });
+
+  app.get("/api/memory", async (_req, res) => {
+    const markdown = await memory.readMemoryMarkdown();
+    res.json({ markdown });
+  });
+
+  app.post("/api/memory/refresh", async (_req, res) => {
+    await memory.refreshMemoryMarkdown();
+    const markdown = await memory.readMemoryMarkdown();
+    res.json({ ok: true, markdown });
+  });
+
+  const distDir = path.resolve(__dirname, "../dashboard/dist");
+  const fallbackDir = path.resolve(__dirname, "../public");
+  const staticDir = fs.existsSync(path.join(distDir, "index.html")) ? distDir : fallbackDir;
+
+  app.use(express.static(staticDir));
+
+  app.get("*", (_req, res) => {
+    res.sendFile(path.join(staticDir, "index.html"));
+  });
+
+  const server = app.listen(appConfig.dashboardPort, () => {
+    console.log(`Dashboard running on http://localhost:${appConfig.dashboardPort}`);
+  });
+
+  return { app, server };
+}
