@@ -52,6 +52,8 @@ export class LLMService {
         model,
         inputTokens: response.usage.inputTokens,
         outputTokens: response.usage.outputTokens,
+        cacheWriteTokens: response.usage.cacheWriteTokens,
+        cacheReadTokens: response.usage.cacheReadTokens,
         customPricing: settings?.llm?.pricing
       });
 
@@ -291,7 +293,9 @@ export class LLMService {
       text,
       usage: {
         inputTokens: Number(response.usage?.input_tokens || 0),
-        outputTokens: Number(response.usage?.output_tokens || 0)
+        outputTokens: Number(response.usage?.output_tokens || 0),
+        cacheWriteTokens: Number(response.usage?.cache_creation_input_tokens || 0),
+        cacheReadTokens: Number(response.usage?.cache_read_input_tokens || 0)
       }
     };
   }
