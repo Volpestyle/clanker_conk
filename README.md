@@ -4,8 +4,9 @@ AI-powered Discord bot persona: **clanker conk**.
 
 Features:
 - Random human-like interactions in allowed channels.
-- Event-driven behavior only: reacts/responds when chat moves (no timer posting).
 - Standalone non-reply posts restricted to configured `initiativeChannelIds` only.
+- Initiative scheduler with `even` or `spontaneous` pacing modes.
+- Creative discovery for initiative posts (Reddit, Hacker News, YouTube RSS, RSS feeds, optional X via Nitter).
 - OpenAI or Anthropic support (runtime-configurable).
 - Dashboard UI for settings, permissions, logs, memory, and cost tracking.
 - Persistent memory and conversation history with `memory/MEMORY.md` regeneration.
@@ -53,6 +54,8 @@ Use dashboard to:
 - Configure allowed/blocked channels and users.
 - Toggle reply/initiative/reaction permissions.
 - Set standalone-post channel IDs (for your dedicated `clanker conk` channel).
+- Configure initiative pacing (`even` or `spontaneous`) and spontaneity.
+- Configure discovery source mix, link frequency, freshness, dedupe window, and topic/source lists.
 - Choose LLM provider + model.
 - Track accumulated API spend.
 - Inspect bot actions and memory.
@@ -62,3 +65,8 @@ Use dashboard to:
 - This project stores runtime data in `./data/clanker.db`.
 - `memory/MEMORY.md` is auto-regenerated from learned facts and recent highlights.
 - Personality is intentionally slangy and playful but constrained by explicit limitations.
+
+## 6. Technical Docs
+
+- Architecture and flow diagrams: `docs/technical-architecture.md`
+- Initiative discovery product spec: `docs/initiative-discovery-spec.md`
