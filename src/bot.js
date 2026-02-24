@@ -13,7 +13,7 @@ import { normalizeDiscoveryUrl } from "./discovery.js";
 import { chance, clamp, sanitizeBotText, sleep } from "./utils.js";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
-const CLANKER_KEYWORD_RE = /\bclank(?:er|a)\b/i;
+const CLANKER_KEYWORD_RE = /\bclank(?:er|a|s)\b/i;
 const QUESTION_START_RE =
   /^(?:who|what|when|where|why|how|can|could|would|will|should|is|are|am|do|does|did|anyone|someone|somebody)\b/i;
 const SECOND_PERSON_RE = /\b(?:you|your|yours|u|ur)\b/i;
