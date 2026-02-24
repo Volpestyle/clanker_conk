@@ -50,8 +50,11 @@
           <label for="bot-name">Bot display name</label>
           <input id="bot-name" type="text" />
 
-          <label for="activity-level">Activity level: <span id="activity-value">35</span></label>
-          <input id="activity-level" type="range" min="0" max="100" step="1" />
+          <label for="reply-level">Unsolicited reply chance: <span id="reply-value">35</span>%</label>
+          <input id="reply-level" type="range" min="0" max="100" step="1" />
+
+          <label for="reaction-level">Reaction eagerness: <span id="reaction-value">20</span>%</label>
+          <input id="reaction-level" type="range" min="0" max="100" step="1" />
 
           <div class="toggles">
             <label><input id="allow-replies" type="checkbox" /> Allow replies</label>
@@ -98,6 +101,54 @@
             </div>
           </div>
 
+          <h4>Startup Catch-up</h4>
+          <div class="toggles">
+            <label><input id="catchup-enabled" type="checkbox" /> Catch up on recent messages at startup</label>
+          </div>
+          <div class="split">
+            <div>
+              <label for="catchup-lookback">Catch-up lookback (hours)</label>
+              <input id="catchup-lookback" type="number" min="1" max="24" />
+            </div>
+            <div>
+              <label for="catchup-max-messages">Messages scanned per channel</label>
+              <input id="catchup-max-messages" type="number" min="5" max="80" />
+            </div>
+          </div>
+          <div class="split">
+            <div>
+              <label for="catchup-max-replies">Max startup replies per channel</label>
+              <input id="catchup-max-replies" type="number" min="1" max="12" />
+            </div>
+          </div>
+
+          <h4>Autonomous Initiative Posts</h4>
+          <div class="toggles">
+            <label><input id="initiative-enabled" type="checkbox" /> Enable autonomous posting</label>
+            <label><input id="initiative-startup-post" type="checkbox" /> Post on startup when due</label>
+            <label><input id="initiative-image-enabled" type="checkbox" /> Allow image posts</label>
+          </div>
+          <div class="split">
+            <div>
+              <label for="initiative-posts-per-day">Max initiative posts/day</label>
+              <input id="initiative-posts-per-day" type="number" min="0" max="100" />
+            </div>
+            <div>
+              <label for="initiative-min-minutes">Min minutes between initiative posts</label>
+              <input id="initiative-min-minutes" type="number" min="5" max="1440" />
+            </div>
+          </div>
+          <div class="split">
+            <div>
+              <label for="initiative-image-chance">Image post chance (%)</label>
+              <input id="initiative-image-chance" type="number" min="0" max="100" />
+            </div>
+            <div>
+              <label for="initiative-image-model">Image model</label>
+              <input id="initiative-image-model" type="text" placeholder="gpt-image-1" />
+            </div>
+          </div>
+
           <label for="initiative-channels">Standalone post channel IDs (only these)</label>
           <textarea id="initiative-channels" rows="2"></textarea>
 
@@ -121,8 +172,10 @@
               <option value="all">all</option>
               <option value="sent_reply">sent_reply</option>
               <option value="sent_message">sent_message</option>
+              <option value="initiative_post">initiative_post</option>
               <option value="reacted">reacted</option>
               <option value="llm_call">llm_call</option>
+              <option value="image_call">image_call</option>
             </select>
           </div>
 
