@@ -7,6 +7,7 @@ import { buildReplyPrompt, buildSystemPrompt } from "./prompts.js";
 import { chance, pickRandom, sanitizeBotText, sleep } from "./utils.js";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
+const CLANKER_KEYWORD_RE = /\bclanker\b/i;
 
 export class ClankerBot {
   constructor({ appConfig, store, llm, memory }) {
@@ -115,7 +116,9 @@ export class ClankerBot {
 
     const activity01 = settings.activity.level / 100;
     const mentioned = message.mentions.users.has(this.client.user.id);
-    const namePing = message.content.toLowerCase().includes(settings.botName.toLowerCase());
+    const content = String(message.content || "");
+    const namePing =
+      content.toLowerCase().includes(settings.botName.toLowerCase()) || CLANKER_KEYWORD_RE.test(content);
     const isReplyToBot = message.mentions.repliedUser?.id === this.client.user.id;
     const directlyAddressed = mentioned || namePing || isReplyToBot;
 
