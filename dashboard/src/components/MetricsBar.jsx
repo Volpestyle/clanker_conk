@@ -19,7 +19,9 @@ export default function MetricsBar({ stats }) {
     },
     {
       label: "Drop-ins (24h)",
-      value: String(s?.last24h?.sent_message || 0)
+      value: String(
+        Number(s?.last24h?.sent_message || 0) + Number(s?.last24h?.initiative_post || 0)
+      )
     },
     {
       label: "Reactions (24h)",

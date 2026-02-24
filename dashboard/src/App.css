@@ -319,6 +319,14 @@ button.sm {
   font-size: 1.1rem;
 }
 
+.settings-form h4 {
+  margin: 16px 0 2px;
+  font-size: 0.92rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-2);
+}
+
 .split {
   display: grid;
   gap: 10px;

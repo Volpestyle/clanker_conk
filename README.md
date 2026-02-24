@@ -49,7 +49,7 @@ Bot + dashboard start together.
 ## 4. Configure in dashboard
 
 Use dashboard to:
-- Set activity level.
+- Set unsolicited reply chance and reaction chance separately.
 - Configure allowed/blocked channels and users.
 - Toggle reply/initiative/reaction permissions.
 - Set standalone-post channel IDs (for your dedicated `clanker conk` channel).
