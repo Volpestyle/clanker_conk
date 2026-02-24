@@ -664,15 +664,16 @@ export class ClankerBot {
 
       const lastPostAt = this.store.getLastActionTime("initiative_post");
       const lastPostTs = lastPostAt ? new Date(lastPostAt).getTime() : 0;
-      const elapsed = Date.now() - lastPostTs;
-      const requiredInterval = this.getInitiativePostingIntervalMs(settings);
-
-      if (startup) {
-        if (!settings.initiative.postOnStartup) return;
-        if (lastPostTs && elapsed < requiredInterval) return;
-      } else if (lastPostTs && elapsed < requiredInterval) {
-        return;
-      }
+      const nowTs = Date.now();
+      const elapsedMs = lastPostTs ? nowTs - lastPostTs : null;
+      const scheduleDecision = this.evaluateInitiativeSchedule({
+        settings,
+        startup,
+        lastPostTs,
+        elapsedMs,
+        posts24h
+      });
+      if (!scheduleDecision.shouldPost) return;
 
       const channel = this.pickInitiativeChannel(settings);
       if (!channel) return;
@@ -773,6 +774,14 @@ export class ClankerBot {
         content: finalText,
         metadata: {
           source: startup ? "initiative_startup" : "initiative_scheduler",
+          pacing: {
+            mode: scheduleDecision.mode,
+            trigger: scheduleDecision.trigger,
+            chance: scheduleDecision.chance ?? null,
+            roll: scheduleDecision.roll ?? null,
+            elapsedMs: scheduleDecision.elapsedMs ?? null,
+            requiredIntervalMs: scheduleDecision.requiredIntervalMs ?? null
+          },
           imageUsed,
           llm: {
             provider: generation.provider,
@@ -792,6 +801,136 @@ export class ClankerBot {
     const perDay = Math.max(settings.initiative.maxPostsPerDay, 1);
     const evenPacing = Math.floor((24 * 60 * 60 * 1000) / perDay);
     return Math.max(minByGap, evenPacing);
+  }
+
+  getInitiativeAverageIntervalMs(settings) {
+    const perDay = Math.max(settings.initiative.maxPostsPerDay, 1);
+    return Math.floor((24 * 60 * 60 * 1000) / perDay);
+  }
+
+  getInitiativePacingMode(settings) {
+    return String(settings.initiative?.pacingMode || "even").toLowerCase() === "spontaneous"
+      ? "spontaneous"
+      : "even";
+  }
+
+  getInitiativeMinGapMs(settings) {
+    return Math.max(1, Number(settings.initiative?.minMinutesBetweenPosts || 0) * 60_000);
+  }
+
+  evaluateInitiativeSchedule({ settings, startup, lastPostTs, elapsedMs, posts24h }) {
+    const mode = this.getInitiativePacingMode(settings);
+    const minGapMs = this.getInitiativeMinGapMs(settings);
+
+    if (startup && !settings.initiative.postOnStartup) {
+      return {
+        shouldPost: false,
+        mode,
+        trigger: "startup_disabled"
+      };
+    }
+
+    if (!startup && lastPostTs && Number.isFinite(elapsedMs) && elapsedMs < minGapMs) {
+      return {
+        shouldPost: false,
+        mode,
+        trigger: "min_gap_block",
+        elapsedMs,
+        requiredIntervalMs: minGapMs
+      };
+    }
+
+    if (startup && !lastPostTs) {
+      return {
+        shouldPost: true,
+        mode,
+        trigger: "startup_bootstrap"
+      };
+    }
+
+    if (mode === "even") {
+      const requiredIntervalMs = this.getInitiativePostingIntervalMs(settings);
+      const due = !lastPostTs || !Number.isFinite(elapsedMs) || elapsedMs >= requiredIntervalMs;
+      return {
+        shouldPost: due,
+        mode,
+        trigger: due ? "even_due" : "even_wait",
+        elapsedMs,
+        requiredIntervalMs
+      };
+    }
+
+    if (startup && lastPostTs && Number.isFinite(elapsedMs) && elapsedMs < minGapMs) {
+      return {
+        shouldPost: false,
+        mode,
+        trigger: "startup_min_gap_block",
+        elapsedMs,
+        requiredIntervalMs: minGapMs
+      };
+    }
+
+    return this.evaluateSpontaneousInitiativeSchedule({
+      settings,
+      lastPostTs,
+      elapsedMs,
+      posts24h,
+      minGapMs
+    });
+  }
+
+  evaluateSpontaneousInitiativeSchedule({ settings, lastPostTs, elapsedMs, posts24h, minGapMs }) {
+    const mode = "spontaneous";
+    const spontaneity01 = clamp(Number(settings.initiative?.spontaneity) || 0, 0, 100) / 100;
+    const maxPostsPerDay = Math.max(Number(settings.initiative?.maxPostsPerDay) || 1, 1);
+    const averageIntervalMs = this.getInitiativeAverageIntervalMs(settings);
+
+    if (!lastPostTs || !Number.isFinite(elapsedMs)) {
+      const chanceNow = 0.05 + spontaneity01 * 0.12;
+      const roll = Math.random();
+      return {
+        shouldPost: roll < chanceNow,
+        mode,
+        trigger: roll < chanceNow ? "spontaneous_seed_post" : "spontaneous_seed_wait",
+        chance: Number(chanceNow.toFixed(4)),
+        roll: Number(roll.toFixed(4)),
+        elapsedMs: null,
+        requiredIntervalMs: averageIntervalMs
+      };
+    }
+
+    const rampWindowMs = Math.max(averageIntervalMs - minGapMs, INITIATIVE_TICK_MS);
+    const progress = clamp((elapsedMs - minGapMs) / rampWindowMs, 0, 1);
+    const baseChance = 0.015 + spontaneity01 * 0.03;
+    const peakChance = 0.1 + spontaneity01 * 0.28;
+    const capPressure = clamp(posts24h / maxPostsPerDay, 0, 1);
+    const capModifier = 1 - capPressure * 0.6;
+    const chanceNow = clamp((baseChance + (peakChance - baseChance) * progress) * capModifier, 0.005, 0.6);
+    const forceAfterMs = Math.max(minGapMs, Math.round(averageIntervalMs * (1.6 - spontaneity01 * 0.55)));
+
+    if (elapsedMs >= forceAfterMs) {
+      return {
+        shouldPost: true,
+        mode,
+        trigger: "spontaneous_force_due",
+        chance: Number(chanceNow.toFixed(4)),
+        roll: null,
+        elapsedMs,
+        requiredIntervalMs: forceAfterMs
+      };
+    }
+
+    const roll = Math.random();
+    const shouldPost = roll < chanceNow;
+    return {
+      shouldPost,
+      mode,
+      trigger: shouldPost ? "spontaneous_roll_due" : "spontaneous_roll_wait",
+      chance: Number(chanceNow.toFixed(4)),
+      roll: Number(roll.toFixed(4)),
+      elapsedMs,
+      requiredIntervalMs: forceAfterMs
+    };
   }
 
   pickInitiativeChannel(settings) {

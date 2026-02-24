@@ -480,6 +480,11 @@ function normalizeSettings(raw) {
     5,
     24 * 60
   );
+  merged.initiative.pacingMode =
+    String(merged.initiative?.pacingMode || "even").toLowerCase() === "spontaneous"
+      ? "spontaneous"
+      : "even";
+  merged.initiative.spontaneity = clamp(Number(merged.initiative?.spontaneity) || 65, 0, 100);
   merged.initiative.postOnStartup = Boolean(merged.initiative?.postOnStartup);
   merged.initiative.allowImagePosts = Boolean(merged.initiative?.allowImagePosts);
   merged.initiative.imagePostChancePercent = clamp(

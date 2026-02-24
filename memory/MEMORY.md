@@ -15,6 +15,9 @@
 - Captured from recurring topics in recent chat.
 
 ## Recent Highlights
+- tiny conk: Clanker is this you
+- donky conk: <@114910267858616321> ^
+- donky conk: <@1475941613019730094> can u see cat?
 - donky conk: u can call him clanka too
 - tiny conk: Clanker kinda cute
 - donky conk: it was really easy and took maybe an hour
@@ -36,6 +39,3 @@
 - tiny conk: Clanker this is ur home now
 - donky conk: hes gunna be able to actually do stuff soon so keep trying to exploit it lowkey then i know what to fix right clanker
 - titty conk: Tryna exploit it lmfao
-- titty conk: Clanker clanker clanker clanker clanker
-- donky conk: im tryna update it rn to be smarter but yea rn u have to say its name or reply
-- titty conk: Btw does it only trigger when u say its name
