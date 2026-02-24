@@ -43,7 +43,7 @@ Recommended bot permissions in server:
 npm run start
 ```
 
-Bot + dashboard start together.
+`start` builds the React dashboard and then starts bot + dashboard together.
 - Dashboard URL: `http://localhost:8787` (or your `DASHBOARD_PORT` value)
 
 ## 4. Configure in dashboard

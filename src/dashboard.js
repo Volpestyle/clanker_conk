@@ -57,14 +57,17 @@ export function createDashboardServer({ appConfig, store, bot, memory }) {
     res.json({ ok: true, markdown });
   });
 
-  const distDir = path.resolve(__dirname, "../dashboard/dist");
-  const fallbackDir = path.resolve(__dirname, "../public");
-  const staticDir = fs.existsSync(path.join(distDir, "index.html")) ? distDir : fallbackDir;
+  const staticDir = path.resolve(__dirname, "../dashboard/dist");
+  const indexPath = path.join(staticDir, "index.html");
+
+  if (!fs.existsSync(indexPath)) {
+    throw new Error("React dashboard build missing at dashboard/dist. Run `npm run build:ui`.");
+  }
 
   app.use(express.static(staticDir));
 
   app.get("*", (_req, res) => {
-    res.sendFile(path.join(staticDir, "index.html"));
+    res.sendFile(indexPath);
   });
 
   const server = app.listen(appConfig.dashboardPort, () => {
