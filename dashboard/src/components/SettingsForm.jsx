@@ -12,11 +12,16 @@ export default function SettingsForm({ settings, onSave, toast }) {
   const [form, setForm] = useState(null);
 
   useEffect(() => {
-    if (!settings || form) return;
-    setForm({
+    if (!settings) return;
+    const activity = settings.activity || {};
+    setForm((current) => ({
+      ...(current || {}),
       botName: settings.botName || "clanker conk",
-      activityLevel: settings.activity?.level ?? 35,
-      minGap: settings.activity?.minSecondsBetweenMessages ?? 20,
+      personaFlavor:
+        settings.persona?.flavor || "playful, chaotic-good, slangy Gen Z/Gen A energy without being toxic",
+      replyLevel: activity.replyLevel ?? 35,
+      reactionLevel: activity.reactionLevel ?? 20,
+      minGap: activity.minSecondsBetweenMessages ?? 20,
       allowReplies: settings.permissions?.allowReplies ?? true,
       allowInitiative: settings.permissions?.allowInitiativeReplies !== false,
       allowReactions: settings.permissions?.allowReactions ?? true,
@@ -27,11 +32,22 @@ export default function SettingsForm({ settings, onSave, toast }) {
       maxTokens: settings.llm?.maxOutputTokens ?? 220,
       maxMessages: settings.permissions?.maxMessagesPerHour ?? settings.permissions?.maxRepliesPerHour ?? 20,
       maxReactions: settings.permissions?.maxReactionsPerHour ?? 24,
+      catchupEnabled: settings.startup?.catchupEnabled !== false,
+      catchupLookbackHours: settings.startup?.catchupLookbackHours ?? 6,
+      catchupMaxMessages: settings.startup?.catchupMaxMessagesPerChannel ?? 20,
+      catchupMaxReplies: settings.startup?.maxCatchupRepliesPerChannel ?? 2,
+      autonomousInitiativeEnabled: settings.initiative?.enabled ?? false,
+      initiativePostsPerDay: settings.initiative?.maxPostsPerDay ?? 6,
+      initiativeMinMinutes: settings.initiative?.minMinutesBetweenPosts ?? 120,
+      initiativeStartupPost: settings.initiative?.postOnStartup ?? false,
+      initiativeImageEnabled: settings.initiative?.allowImagePosts ?? false,
+      initiativeImageChance: settings.initiative?.imagePostChancePercent ?? 25,
+      initiativeImageModel: settings.initiative?.imageModel ?? "gpt-image-1",
       initiativeChannels: formatIdList(settings.permissions?.initiativeChannelIds),
       allowedChannels: formatIdList(settings.permissions?.allowedChannelIds),
       blockedChannels: formatIdList(settings.permissions?.blockedChannelIds),
       blockedUsers: formatIdList(settings.permissions?.blockedUserIds)
-    });
+    }));
   }, [settings]);
 
   if (!form) return null;
@@ -44,8 +60,12 @@ export default function SettingsForm({ settings, onSave, toast }) {
     e.preventDefault();
     onSave({
       botName: form.botName.trim(),
+      persona: {
+        flavor: form.personaFlavor.trim()
+      },
       activity: {
-        level: Number(form.activityLevel),
+        replyLevel: Number(form.replyLevel),
+        reactionLevel: Number(form.reactionLevel),
         minSecondsBetweenMessages: Number(form.minGap)
       },
       llm: {
@@ -53,6 +73,12 @@ export default function SettingsForm({ settings, onSave, toast }) {
         model: form.model.trim(),
         temperature: Number(form.temperature),
         maxOutputTokens: Number(form.maxTokens)
+      },
+      startup: {
+        catchupEnabled: form.catchupEnabled,
+        catchupLookbackHours: Number(form.catchupLookbackHours),
+        catchupMaxMessagesPerChannel: Number(form.catchupMaxMessages),
+        maxCatchupRepliesPerChannel: Number(form.catchupMaxReplies)
       },
       permissions: {
         allowReplies: form.allowReplies,
@@ -64,6 +90,15 @@ export default function SettingsForm({ settings, onSave, toast }) {
         blockedUserIds: parseIdList(form.blockedUsers),
         maxMessagesPerHour: Number(form.maxMessages),
         maxReactionsPerHour: Number(form.maxReactions)
+      },
+      initiative: {
+        enabled: form.autonomousInitiativeEnabled,
+        maxPostsPerDay: Number(form.initiativePostsPerDay),
+        minMinutesBetweenPosts: Number(form.initiativeMinMinutes),
+        postOnStartup: form.initiativeStartupPost,
+        allowImagePosts: form.initiativeImageEnabled,
+        imagePostChancePercent: Number(form.initiativeImageChance),
+        imageModel: form.initiativeImageModel.trim()
       },
       memory: {
         enabled: form.memoryEnabled
@@ -78,17 +113,38 @@ export default function SettingsForm({ settings, onSave, toast }) {
       <label htmlFor="bot-name">Bot display name</label>
       <input id="bot-name" type="text" value={form.botName} onChange={set("botName")} />
 
-      <label htmlFor="activity-level">
-        Activity level: <strong>{form.activityLevel}</strong>
+      <label htmlFor="persona-flavor">Persona flavor</label>
+      <textarea
+        id="persona-flavor"
+        rows="3"
+        value={form.personaFlavor}
+        onChange={set("personaFlavor")}
+      />
+
+      <label htmlFor="reply-level">
+        Unsolicited reply chance: <strong>{form.replyLevel}%</strong>
       </label>
       <input
-        id="activity-level"
+        id="reply-level"
         type="range"
         min="0"
         max="100"
         step="1"
-        value={form.activityLevel}
-        onChange={set("activityLevel")}
+        value={form.replyLevel}
+        onChange={set("replyLevel")}
+      />
+
+      <label htmlFor="reaction-level">
+        Reaction eagerness: <strong>{form.reactionLevel}%</strong>
+      </label>
+      <input
+        id="reaction-level"
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        value={form.reactionLevel}
+        onChange={set("reactionLevel")}
       />
 
       <div className="toggles">
@@ -190,6 +246,130 @@ export default function SettingsForm({ settings, onSave, toast }) {
           />
         </div>
         <div />
+      </div>
+
+      <h4>Startup Catch-up</h4>
+      <div className="toggles">
+        <label>
+          <input type="checkbox" checked={form.catchupEnabled} onChange={set("catchupEnabled")} />
+          Catch up on recent messages at startup
+        </label>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="catchup-lookback">Catch-up lookback (hours)</label>
+          <input
+            id="catchup-lookback"
+            type="number"
+            min="1"
+            max="24"
+            value={form.catchupLookbackHours}
+            onChange={set("catchupLookbackHours")}
+          />
+        </div>
+        <div>
+          <label htmlFor="catchup-max-messages">Messages scanned per channel</label>
+          <input
+            id="catchup-max-messages"
+            type="number"
+            min="5"
+            max="80"
+            value={form.catchupMaxMessages}
+            onChange={set("catchupMaxMessages")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="catchup-max-replies">Max startup replies per channel</label>
+          <input
+            id="catchup-max-replies"
+            type="number"
+            min="1"
+            max="12"
+            value={form.catchupMaxReplies}
+            onChange={set("catchupMaxReplies")}
+          />
+        </div>
+        <div />
+      </div>
+
+      <h4>Autonomous Initiative Posts</h4>
+      <div className="toggles">
+        <label>
+          <input
+            type="checkbox"
+            checked={form.autonomousInitiativeEnabled}
+            onChange={set("autonomousInitiativeEnabled")}
+          />
+          Enable autonomous posting
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.initiativeStartupPost}
+            onChange={set("initiativeStartupPost")}
+          />
+          Post on startup when due
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.initiativeImageEnabled}
+            onChange={set("initiativeImageEnabled")}
+          />
+          Allow image posts
+        </label>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="initiative-posts-per-day">Max initiative posts/day</label>
+          <input
+            id="initiative-posts-per-day"
+            type="number"
+            min="0"
+            max="100"
+            value={form.initiativePostsPerDay}
+            onChange={set("initiativePostsPerDay")}
+          />
+        </div>
+        <div>
+          <label htmlFor="initiative-min-minutes">Min minutes between initiative posts</label>
+          <input
+            id="initiative-min-minutes"
+            type="number"
+            min="5"
+            max="1440"
+            value={form.initiativeMinMinutes}
+            onChange={set("initiativeMinMinutes")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="initiative-image-chance">Image post chance (%)</label>
+          <input
+            id="initiative-image-chance"
+            type="number"
+            min="0"
+            max="100"
+            value={form.initiativeImageChance}
+            onChange={set("initiativeImageChance")}
+          />
+        </div>
+        <div>
+          <label htmlFor="initiative-image-model">Image model</label>
+          <input
+            id="initiative-image-model"
+            type="text"
+            value={form.initiativeImageModel}
+            onChange={set("initiativeImageModel")}
+          />
+        </div>
       </div>
 
       <label htmlFor="initiative-channels">Standalone post channel IDs (only these)</label>
