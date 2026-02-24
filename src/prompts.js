@@ -11,6 +11,11 @@ function formatRecentChat(messages) {
     .join("\n");
 }
 
+function formatEmojiChoices(emojiOptions) {
+  if (!emojiOptions?.length) return "(no emoji options available)";
+  return emojiOptions.map((emoji) => `- ${emoji}`).join("\n");
+}
+
 export function buildSystemPrompt(settings, memoryMarkdown) {
   const hardLimits = settings.persona?.hardLimits ?? [];
   const trimmedMemory = (memoryMarkdown || "(memory unavailable)").slice(0, 7000);
@@ -79,6 +84,70 @@ export function buildReplyPrompt({
 
   parts.push("Task: write one natural Discord reply to the incoming message.");
   parts.push("If no response is needed, output exactly [SKIP].");
+
+  return parts.join("\n\n");
+}
+
+export function buildInitiativePrompt({
+  channelName,
+  recentMessages,
+  emojiHints,
+  allowImagePosts
+}) {
+  const parts = [];
+
+  parts.push(
+    `You are posting proactively in #${channelName}. No one directly asked you to respond.`
+  );
+  parts.push("Recent channel messages:");
+  parts.push(formatRecentChat(recentMessages));
+
+  if (emojiHints?.length) {
+    parts.push(`Server emoji options: ${emojiHints.join(", ")}`);
+  }
+
+  if (allowImagePosts) {
+    parts.push(
+      "You may include visual or meme-friendly ideas in your post text; an image may be generated separately."
+    );
+  }
+
+  parts.push("Task: write one standalone Discord message that feels timely and human.");
+  parts.push("Keep it short (1-3 lines), playful, and non-spammy.");
+  parts.push("If there is genuinely nothing good to post, output exactly [SKIP].");
+
+  return parts.join("\n\n");
+}
+
+export function buildReactionPrompt({
+  message,
+  recentMessages,
+  emojiOptions,
+  reactionLevel
+}) {
+  const parts = [];
+  const content = String(message.content || "").trim() || "(empty message)";
+
+  parts.push(`Incoming message from ${message.authorName}: ${content}`);
+  if (Number(message.attachmentCount || 0) > 0) {
+    parts.push(`Incoming message has ${message.attachmentCount} attachment(s).`);
+  }
+
+  parts.push("Recent channel messages:");
+  parts.push(formatRecentChat(recentMessages));
+
+  parts.push("Allowed reaction emojis (choose exactly one from this list if reacting):");
+  parts.push(formatEmojiChoices(emojiOptions));
+
+  parts.push(`Reaction eagerness setting: ${reactionLevel}/100`);
+  parts.push("Task: decide whether to react to the incoming message.");
+  parts.push("Return JSON only with this schema:");
+  parts.push(
+    '{"shouldReact": boolean, "emoji": string|null, "confidence": number, "reason": string}'
+  );
+  parts.push("Set confidence from 0 to 1.");
+  parts.push("If shouldReact is false, set emoji to null.");
+  parts.push("Do not output any text outside JSON.");
 
   return parts.join("\n\n");
 }
