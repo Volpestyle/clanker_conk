@@ -25,6 +25,10 @@ const CAN_YOU_RE = /\b(?:can|could|would|will)\s+you\b/i;
 const WHAT_DO_YOU_THINK_RE = /\bwhat\s+do\s+you\s+think\b/i;
 const PLEASE_RE = /\b(?:please|pls|plz)\b/i;
 const ADDRESS_CONTEXT_WINDOW = 8;
+const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
+const REPLY_QUEUE_RATE_LIMIT_WAIT_MS = 15_000;
+const REPLY_QUEUE_SEND_RETRY_BASE_MS = 2_500;
+const REPLY_QUEUE_SEND_MAX_RETRIES = 2;
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i;
 const MAX_IMAGE_INPUTS = 3;
 const REACTION_CONTEXT_LIMIT = 12;
@@ -56,6 +60,9 @@ export class ClankerBot {
     this.hasConnectedAtLeastOnce = false;
     this.lastGatewayEventAt = Date.now();
     this.reconnectAttempts = 0;
+    this.replyQueues = new Map();
+    this.replyQueueWorkers = new Set();
+    this.replyQueuedMessageIds = new Set();
 
     this.client = new Client({
       intents: [
@@ -180,6 +187,9 @@ export class ClankerBot {
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
     this.gatewayWatchdogTimer = null;
     this.reconnectTimeout = null;
+    this.replyQueues.clear();
+    this.replyQueueWorkers.clear();
+    this.replyQueuedMessageIds.clear();
     await this.client.destroy();
   }
 
@@ -189,6 +199,10 @@ export class ClankerBot {
       userTag: this.client.user?.tag ?? null,
       guildCount: this.client.guilds.cache.size,
       lastBotMessageAt: this.lastBotMessageAt ? new Date(this.lastBotMessageAt).toISOString() : null,
+      replyQueue: {
+        channels: this.replyQueues.size,
+        pending: this.getReplyQueuePendingCount()
+      },
       gateway: {
         hasConnectedAtLeastOnce: this.hasConnectedAtLeastOnce,
         reconnectInFlight: this.reconnectInFlight,
@@ -202,6 +216,206 @@ export class ClankerBot {
 
   markGatewayEvent() {
     this.lastGatewayEventAt = Date.now();
+  }
+
+  getReplyQueuePendingCount() {
+    let total = 0;
+    for (const queue of this.replyQueues.values()) {
+      total += queue.length;
+    }
+    return total;
+  }
+
+  enqueueReplyJob({ message, source, forceRespond = false, addressSignal = null }) {
+    if (!message?.id || !message?.channelId) return false;
+
+    const messageId = String(message.id);
+    if (!messageId) return false;
+    if (this.replyQueuedMessageIds.has(messageId)) return false;
+    if (this.store.hasTriggeredResponse(messageId)) return false;
+
+    const channelId = String(message.channelId);
+    const queue = this.replyQueues.get(channelId) || [];
+    if (queue.length >= REPLY_QUEUE_MAX_PER_CHANNEL) {
+      this.store.logAction({
+        kind: "bot_error",
+        guildId: message.guildId,
+        channelId: message.channelId,
+        messageId,
+        userId: message.author?.id || null,
+        content: `reply_queue_overflow: limit=${REPLY_QUEUE_MAX_PER_CHANNEL}`
+      });
+      return false;
+    }
+
+    queue.push({
+      message,
+      source: source || "message_event",
+      forceRespond: Boolean(forceRespond),
+      addressSignal,
+      attempts: 0
+    });
+    this.replyQueues.set(channelId, queue);
+    this.replyQueuedMessageIds.add(messageId);
+
+    this.processReplyQueue(channelId).catch((error) => {
+      this.store.logAction({
+        kind: "bot_error",
+        guildId: message.guildId,
+        channelId: message.channelId,
+        messageId,
+        userId: message.author?.id || null,
+        content: `reply_queue_worker: ${String(error?.message || error)}`
+      });
+    });
+
+    return true;
+  }
+
+  getReplyQueueWaitMs(settings) {
+    const cooldownMs = settings.activity.minSecondsBetweenMessages * 1000;
+    const elapsed = Date.now() - this.lastBotMessageAt;
+    const cooldownWaitMs = Math.max(0, cooldownMs - elapsed);
+    if (cooldownWaitMs > 0) return cooldownWaitMs;
+    if (!this.canSendMessage(settings.permissions.maxMessagesPerHour)) {
+      return REPLY_QUEUE_RATE_LIMIT_WAIT_MS;
+    }
+    return 0;
+  }
+
+  dequeueReplyJob(channelId) {
+    const queue = this.replyQueues.get(channelId);
+    if (!queue?.length) return null;
+
+    const job = queue.shift();
+    if (job?.message?.id) {
+      this.replyQueuedMessageIds.delete(String(job.message.id));
+    }
+
+    if (!queue.length) {
+      this.replyQueues.delete(channelId);
+    }
+
+    return job;
+  }
+
+  async processReplyQueue(channelId) {
+    if (this.replyQueueWorkers.has(channelId)) return;
+    this.replyQueueWorkers.add(channelId);
+
+    try {
+      while (!this.isStopping) {
+        const queue = this.replyQueues.get(channelId);
+        if (!queue?.length) break;
+
+        const head = queue[0];
+        const message = head?.message;
+        if (!message?.id) {
+          this.dequeueReplyJob(channelId);
+          continue;
+        }
+
+        const settings = this.store.getSettings();
+
+        if (!settings.permissions.allowReplies) {
+          this.dequeueReplyJob(channelId);
+          continue;
+        }
+        if (!message.author || message.author.bot) {
+          this.dequeueReplyJob(channelId);
+          continue;
+        }
+        if (!message.guild || !message.channel) {
+          this.dequeueReplyJob(channelId);
+          continue;
+        }
+        if (!this.isChannelAllowed(settings, message.channelId)) {
+          this.dequeueReplyJob(channelId);
+          continue;
+        }
+        if (this.isUserBlocked(settings, message.author.id)) {
+          this.dequeueReplyJob(channelId);
+          continue;
+        }
+        if (this.store.hasTriggeredResponse(message.id)) {
+          this.dequeueReplyJob(channelId);
+          continue;
+        }
+
+        const waitMs = this.getReplyQueueWaitMs(settings);
+        if (waitMs > 0) {
+          await sleep(Math.min(waitMs, REPLY_QUEUE_RATE_LIMIT_WAIT_MS));
+          continue;
+        }
+
+        const job = this.dequeueReplyJob(channelId);
+        if (!job) continue;
+
+        const recentMessages = this.store.getRecentMessages(
+          message.channelId,
+          settings.memory.maxRecentMessages
+        );
+        const addressSignal =
+          job.addressSignal || this.getReplyAddressSignal(settings, message, recentMessages);
+
+        try {
+          const sent = await this.maybeReplyToMessage(message, settings, {
+            forceRespond: job.forceRespond,
+            source: job.source,
+            addressSignal,
+            recentMessages
+          });
+
+          if (!sent && job.forceRespond && !this.isStopping && !this.store.hasTriggeredResponse(message.id)) {
+            const latestSettings = this.store.getSettings();
+            if (
+              latestSettings.permissions.allowReplies &&
+              this.isChannelAllowed(latestSettings, message.channelId) &&
+              !this.isUserBlocked(latestSettings, message.author.id)
+            ) {
+              const retryWaitMs = this.getReplyQueueWaitMs(latestSettings);
+              if (retryWaitMs > 0) {
+                const retryQueue = this.replyQueues.get(channelId) || [];
+                retryQueue.unshift(job);
+                this.replyQueues.set(channelId, retryQueue);
+                this.replyQueuedMessageIds.add(String(message.id));
+                await sleep(Math.min(retryWaitMs, REPLY_QUEUE_RATE_LIMIT_WAIT_MS));
+                continue;
+              }
+            }
+          }
+        } catch (error) {
+          if (job.attempts < REPLY_QUEUE_SEND_MAX_RETRIES && !this.isStopping) {
+            job.attempts += 1;
+            const retryQueue = this.replyQueues.get(channelId) || [];
+            retryQueue.unshift(job);
+            this.replyQueues.set(channelId, retryQueue);
+            this.replyQueuedMessageIds.add(String(message.id));
+            await sleep(REPLY_QUEUE_SEND_RETRY_BASE_MS * job.attempts);
+            continue;
+          }
+
+          this.store.logAction({
+            kind: "bot_error",
+            guildId: message.guildId,
+            channelId: message.channelId,
+            messageId: message.id,
+            userId: message.author?.id || null,
+            content: `reply_queue_send_failed: ${String(error?.message || error)}`
+          });
+        }
+      }
+    } finally {
+      this.replyQueueWorkers.delete(channelId);
+      if (!this.isStopping && this.replyQueues.get(channelId)?.length) {
+        this.processReplyQueue(channelId).catch((error) => {
+          this.store.logAction({
+            kind: "bot_error",
+            content: `reply_queue_restart: ${String(error?.message || error)}`
+          });
+        });
+      }
+    }
   }
 
   async ensureGatewayHealthy() {
@@ -311,13 +525,33 @@ export class ClankerBot {
     }
 
     await this.maybeReactToMessage(message, settings);
-    await this.maybeReplyToMessage(message, settings);
+    const recentMessages = this.store.getRecentMessages(
+      message.channelId,
+      settings.memory.maxRecentMessages
+    );
+    const addressSignal = this.getReplyAddressSignal(settings, message, recentMessages);
+
+    if (addressSignal.triggered) {
+      this.enqueueReplyJob({
+        message,
+        source: "message_event",
+        forceRespond: true,
+        addressSignal
+      });
+      return;
+    }
+
+    await this.maybeReplyToMessage(message, settings, {
+      source: "message_event",
+      addressSignal,
+      recentMessages
+    });
   }
 
   async maybeReplyToMessage(message, settings, options = {}) {
-    if (!settings.permissions.allowReplies) return;
-    if (!this.canSendMessage(settings.permissions.maxMessagesPerHour)) return;
-    if (!this.canTalkNow(settings)) return;
+    if (!settings.permissions.allowReplies) return false;
+    if (!this.canSendMessage(settings.permissions.maxMessagesPerHour)) return false;
+    if (!this.canTalkNow(settings)) return false;
 
     const recentMessages = Array.isArray(options.recentMessages)
       ? options.recentMessages
@@ -330,7 +564,7 @@ export class ClankerBot {
     const naturalProbability =
       settings.permissions.allowInitiativeReplies ? replyActivity01 : 0;
     const shouldRespond = options.forceRespond || addressed || chance(naturalProbability);
-    if (!shouldRespond) return;
+    if (!shouldRespond) return false;
 
     const memorySlice = settings.memory.enabled
       ? await this.memory.buildPromptMemorySlice({
@@ -367,7 +601,7 @@ export class ClankerBot {
     });
 
     const finalText = sanitizeBotText(generation.text);
-    if (!finalText || finalText === "[SKIP]") return;
+    if (!finalText || finalText === "[SKIP]") return false;
 
     await message.channel.sendTyping();
     await sleep(600 + Math.floor(Math.random() * 1800));
@@ -416,6 +650,8 @@ export class ClankerBot {
         }
       }
     });
+
+    return true;
   }
 
   async maybeReactToMessage(message, settings) {
@@ -834,14 +1070,13 @@ export class ClankerBot {
         if (!addressSignal.triggered) continue;
         if (now - message.createdTimestamp > lookbackMs) continue;
         if (this.store.hasTriggeredResponse(message.id)) continue;
-
-        await this.maybeReplyToMessage(message, settings, {
-          forceRespond: true,
+        const queued = this.enqueueReplyJob({
+          message,
           source: "startup_catchup",
-          addressSignal,
-          recentMessages
+          forceRespond: true,
+          addressSignal
         });
-        repliesSent += 1;
+        if (queued) repliesSent += 1;
       }
     }
   }
