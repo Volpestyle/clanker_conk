@@ -14,11 +14,26 @@ import { chance, clamp, sanitizeBotText, sleep } from "./utils.js";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
 const CLANKER_KEYWORD_RE = /\bclank(?:er|a)\b/i;
+const QUESTION_START_RE =
+  /^(?:who|what|when|where|why|how|can|could|would|will|should|is|are|am|do|does|did|anyone|someone|somebody)\b/i;
+const SECOND_PERSON_RE = /\b(?:you|your|yours|u|ur)\b/i;
+const DIRECT_REQUEST_RE = /\b(?:help|explain|clarify|tell|show|recommend|suggest|review|fix|solve|answer|rate)\b/i;
+const GROUP_PROMPT_RE = /\b(?:anyone|someone|somebody)\s+(?:know|seen|have|got|using|able)\b/i;
+const OPINION_PROMPT_RE = /\b(?:thoughts|opinion|opinions|idea|ideas|advice)\b/i;
+const ASK_PREFIX_RE = /^(?:hey|yo|hi|hello|ok(?:ay)?)[\s,]+/i;
+const CAN_YOU_RE = /\b(?:can|could|would|will)\s+you\b/i;
+const WHAT_DO_YOU_THINK_RE = /\bwhat\s+do\s+you\s+think\b/i;
+const PLEASE_RE = /\b(?:please|pls|plz)\b/i;
+const ADDRESS_CONTEXT_WINDOW = 8;
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i;
 const MAX_IMAGE_INPUTS = 3;
 const REACTION_CONTEXT_LIMIT = 12;
 const STARTUP_TASK_DELAY_MS = 4500;
 const INITIATIVE_TICK_MS = 60_000;
+const GATEWAY_WATCHDOG_TICK_MS = 30_000;
+const GATEWAY_STALE_MS = 2 * 60_000;
+const GATEWAY_RECONNECT_BASE_DELAY_MS = 5_000;
+const GATEWAY_RECONNECT_MAX_DELAY_MS = 60_000;
 const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
 
 export class ClankerBot {
@@ -32,8 +47,15 @@ export class ClankerBot {
     this.lastBotMessageAt = 0;
     this.memoryTimer = null;
     this.initiativeTimer = null;
+    this.gatewayWatchdogTimer = null;
+    this.reconnectTimeout = null;
     this.startupTasksRan = false;
     this.initiativePosting = false;
+    this.reconnectInFlight = false;
+    this.isStopping = false;
+    this.hasConnectedAtLeastOnce = false;
+    this.lastGatewayEventAt = Date.now();
+    this.reconnectAttempts = 0;
 
     this.client = new Client({
       intents: [
@@ -49,8 +71,52 @@ export class ClankerBot {
   }
 
   registerEvents() {
-    this.client.once("ready", () => {
-      console.log(`Logged in as ${this.client.user.tag}`);
+    this.client.on("ready", () => {
+      this.hasConnectedAtLeastOnce = true;
+      this.reconnectAttempts = 0;
+      this.markGatewayEvent();
+      console.log(`Logged in as ${this.client.user?.tag || "unknown"}`);
+    });
+
+    this.client.on("shardResume", () => {
+      this.markGatewayEvent();
+    });
+
+    this.client.on("shardDisconnect", (event, shardId) => {
+      this.markGatewayEvent();
+      this.store.logAction({
+        kind: "bot_error",
+        userId: this.client.user?.id,
+        content: `gateway_shard_disconnect: shard=${shardId} code=${event?.code ?? "unknown"}`
+      });
+    });
+
+    this.client.on("shardError", (error, shardId) => {
+      this.markGatewayEvent();
+      this.store.logAction({
+        kind: "bot_error",
+        userId: this.client.user?.id,
+        content: `gateway_shard_error: shard=${shardId} ${String(error?.message || error)}`
+      });
+    });
+
+    this.client.on("error", (error) => {
+      this.markGatewayEvent();
+      this.store.logAction({
+        kind: "bot_error",
+        userId: this.client.user?.id,
+        content: `gateway_error: ${String(error?.message || error)}`
+      });
+    });
+
+    this.client.on("invalidated", () => {
+      this.markGatewayEvent();
+      this.store.logAction({
+        kind: "bot_error",
+        userId: this.client.user?.id,
+        content: "gateway_session_invalidated"
+      });
+      this.scheduleReconnect("session_invalidated", 2_000);
     });
 
     this.client.on("messageCreate", async (message) => {
@@ -70,7 +136,9 @@ export class ClankerBot {
   }
 
   async start() {
+    this.isStopping = false;
     await this.client.login(this.appConfig.discordToken);
+    this.markGatewayEvent();
 
     this.memoryTimer = setInterval(() => {
       this.memory.refreshMemoryMarkdown().catch(() => undefined);
@@ -84,6 +152,15 @@ export class ClankerBot {
         });
       });
     }, INITIATIVE_TICK_MS);
+    this.gatewayWatchdogTimer = setInterval(() => {
+      this.ensureGatewayHealthy().catch((error) => {
+        this.store.logAction({
+          kind: "bot_error",
+          userId: this.client.user?.id,
+          content: `gateway_watchdog: ${String(error?.message || error)}`
+        });
+      });
+    }, GATEWAY_WATCHDOG_TICK_MS);
 
     setTimeout(() => {
       this.runStartupTasks().catch((error) => {
@@ -96,8 +173,13 @@ export class ClankerBot {
   }
 
   async stop() {
+    this.isStopping = true;
     if (this.memoryTimer) clearInterval(this.memoryTimer);
     if (this.initiativeTimer) clearInterval(this.initiativeTimer);
+    if (this.gatewayWatchdogTimer) clearInterval(this.gatewayWatchdogTimer);
+    if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
+    this.gatewayWatchdogTimer = null;
+    this.reconnectTimeout = null;
     await this.client.destroy();
   }
 
@@ -106,8 +188,96 @@ export class ClankerBot {
       isReady: this.client.isReady(),
       userTag: this.client.user?.tag ?? null,
       guildCount: this.client.guilds.cache.size,
-      lastBotMessageAt: this.lastBotMessageAt ? new Date(this.lastBotMessageAt).toISOString() : null
+      lastBotMessageAt: this.lastBotMessageAt ? new Date(this.lastBotMessageAt).toISOString() : null,
+      gateway: {
+        hasConnectedAtLeastOnce: this.hasConnectedAtLeastOnce,
+        reconnectInFlight: this.reconnectInFlight,
+        reconnectAttempts: this.reconnectAttempts,
+        lastGatewayEventAt: this.lastGatewayEventAt
+          ? new Date(this.lastGatewayEventAt).toISOString()
+          : null
+      }
     };
+  }
+
+  markGatewayEvent() {
+    this.lastGatewayEventAt = Date.now();
+  }
+
+  async ensureGatewayHealthy() {
+    if (this.isStopping) return;
+    if (this.reconnectInFlight) return;
+    if (!this.hasConnectedAtLeastOnce) return;
+
+    if (this.client.isReady()) {
+      this.markGatewayEvent();
+      return;
+    }
+
+    const elapsed = Date.now() - this.lastGatewayEventAt;
+    if (elapsed < GATEWAY_STALE_MS) return;
+
+    await this.reconnectGateway(`stale_gateway_${elapsed}ms`);
+  }
+
+  scheduleReconnect(reason, delayMs) {
+    if (this.isStopping) return;
+    if (this.reconnectTimeout) return;
+
+    this.reconnectTimeout = setTimeout(() => {
+      this.reconnectTimeout = null;
+      this.reconnectGateway(reason).catch((error) => {
+        this.store.logAction({
+          kind: "bot_error",
+          userId: this.client.user?.id,
+          content: `gateway_reconnect_crash: ${String(error?.message || error)}`
+        });
+      });
+    }, delayMs);
+  }
+
+  async reconnectGateway(reason) {
+    if (this.isStopping) return;
+    if (this.reconnectInFlight) return;
+    this.reconnectInFlight = true;
+    this.markGatewayEvent();
+
+    this.store.logAction({
+      kind: "bot_error",
+      userId: this.client.user?.id,
+      content: `gateway_reconnect_start: ${reason}`
+    });
+
+    try {
+      try {
+        await this.client.destroy();
+      } catch {
+        // ignore
+      }
+      await this.client.login(this.appConfig.discordToken);
+      this.markGatewayEvent();
+      this.reconnectAttempts = 0;
+    } catch (error) {
+      this.reconnectAttempts += 1;
+      const backoffDelay = Math.min(
+        GATEWAY_RECONNECT_BASE_DELAY_MS * 2 ** Math.max(this.reconnectAttempts - 1, 0),
+        GATEWAY_RECONNECT_MAX_DELAY_MS
+      );
+
+      this.store.logAction({
+        kind: "bot_error",
+        userId: this.client.user?.id,
+        content: `gateway_reconnect_failed: ${String(error?.message || error)}`,
+        metadata: {
+          attempt: this.reconnectAttempts,
+          nextRetryMs: backoffDelay
+        }
+      });
+
+      this.scheduleReconnect("retry_after_reconnect_failure", backoffDelay);
+    } finally {
+      this.reconnectInFlight = false;
+    }
   }
 
   async handleMessage(message) {
@@ -149,18 +319,18 @@ export class ClankerBot {
     if (!this.canSendMessage(settings.permissions.maxMessagesPerHour)) return;
     if (!this.canTalkNow(settings)) return;
 
+    const recentMessages = Array.isArray(options.recentMessages)
+      ? options.recentMessages
+      : this.store.getRecentMessages(message.channelId, settings.memory.maxRecentMessages);
     const replyActivity01 = settings.activity.replyLevel / 100;
-    const directlyAddressed = this.isDirectlyAddressed(settings, message);
+    const addressSignal =
+      options.addressSignal || this.getReplyAddressSignal(settings, message, recentMessages);
+    const addressed = addressSignal.triggered;
 
     const naturalProbability =
       settings.permissions.allowInitiativeReplies ? replyActivity01 : 0;
-    const shouldRespond = options.forceRespond || directlyAddressed || chance(naturalProbability);
+    const shouldRespond = options.forceRespond || addressed || chance(naturalProbability);
     if (!shouldRespond) return;
-
-    const recentMessages = this.store.getRecentMessages(
-      message.channelId,
-      settings.memory.maxRecentMessages
-    );
 
     const memorySlice = settings.memory.enabled
       ? await this.memory.buildPromptMemorySlice({
@@ -203,7 +373,8 @@ export class ClankerBot {
     await sleep(600 + Math.floor(Math.random() * 1800));
 
     const canStandalonePost = this.isInitiativeChannel(settings, message.channelId);
-    const sendAsReply = canStandalonePost ? (directlyAddressed ? chance(0.65) : false) : true;
+    const shouldThreadReply = addressed || options.forceRespond;
+    const sendAsReply = canStandalonePost ? (shouldThreadReply ? chance(0.65) : false) : true;
     const sent = sendAsReply
       ? await message.reply({
           content: finalText,
@@ -234,6 +405,7 @@ export class ClankerBot {
       metadata: {
         triggerMessageId: message.id,
         source: options.source || "message_event",
+        addressing: addressSignal,
         sendAsReply,
         canStandalonePost,
         llm: {
@@ -548,6 +720,83 @@ export class ClankerBot {
     return Boolean(mentioned || namePing || isReplyToBot);
   }
 
+  getReplyAddressSignal(settings, message, recentMessages = []) {
+    const referencedAuthorId = this.resolveReferencedAuthorId(message, recentMessages);
+    const direct =
+      this.isDirectlyAddressed(settings, message) ||
+      (referencedAuthorId && referencedAuthorId === this.client.user?.id);
+    if (direct) {
+      return {
+        direct: true,
+        inferred: false,
+        triggered: true,
+        reason: "direct"
+      };
+    }
+
+    const inferred = this.isLikelyAddressedByContent(message, recentMessages, referencedAuthorId);
+    return {
+      direct: false,
+      inferred,
+      triggered: inferred,
+      reason: inferred ? "inferred_contextual" : "not_addressed"
+    };
+  }
+
+  resolveReferencedAuthorId(message, recentMessages = []) {
+    const referenceId = String(message.reference?.messageId || "").trim();
+    if (!referenceId) return null;
+
+    const fromRecent = recentMessages.find((row) => String(row.message_id) === referenceId)?.author_id;
+    if (fromRecent) return String(fromRecent);
+
+    const fromResolved =
+      message.reference?.resolved?.author?.id ||
+      message.reference?.resolvedMessage?.author?.id ||
+      message.referencedMessage?.author?.id;
+
+    return fromResolved ? String(fromResolved) : null;
+  }
+
+  isLikelyAddressedByContent(message, recentMessages = [], referencedAuthorId = null) {
+    const content = String(message.content || "").replace(/\s+/g, " ").trim();
+    if (!content || content.length < 3) return false;
+
+    const lowered = content.toLowerCase();
+    let score = 0;
+
+    const looksLikeQuestion = content.includes("?") || QUESTION_START_RE.test(lowered);
+    if (looksLikeQuestion) score += 0.35;
+    if (SECOND_PERSON_RE.test(lowered)) score += 0.35;
+    if (CAN_YOU_RE.test(lowered) || WHAT_DO_YOU_THINK_RE.test(lowered)) score += 0.45;
+    if (GROUP_PROMPT_RE.test(lowered) || OPINION_PROMPT_RE.test(lowered)) score += 0.35;
+    if (DIRECT_REQUEST_RE.test(lowered)) score += 0.2;
+    if (PLEASE_RE.test(lowered)) score += 0.1;
+    if (ASK_PREFIX_RE.test(lowered)) score += 0.1;
+
+    const botId = String(this.client.user?.id || "");
+    const authorId = String(message.author?.id || "");
+    const messageId = String(message.id || "");
+    const previousMessages = recentMessages
+      .filter((row) => String(row.message_id) !== messageId)
+      .slice(0, ADDRESS_CONTEXT_WINDOW);
+
+    const hasReference = Boolean(message.reference?.messageId);
+    if (hasReference && referencedAuthorId && String(referencedAuthorId) !== botId) return false;
+    if (hasReference && !referencedAuthorId) return false;
+
+    const lastSpeakerWasBot = previousMessages[0]
+      ? String(previousMessages[0].author_id) === botId
+      : false;
+    const botInWindow = previousMessages.some((row) => String(row.author_id) === botId);
+    const authorInWindow = previousMessages.some((row) => String(row.author_id) === authorId);
+    const authorAndBotInWindow = botInWindow && authorInWindow;
+    const hasConversationContext = lastSpeakerWasBot || authorAndBotInWindow;
+    if (!hasConversationContext) return false;
+
+    return score >= 0.6;
+  }
+
   async runStartupTasks() {
     if (this.startupTasksRan) return;
     this.startupTasksRan = true;
@@ -577,13 +826,20 @@ export class ClankerBot {
         if (!message.guild || !message.channel) continue;
         if (!this.isChannelAllowed(settings, message.channelId)) continue;
         if (this.isUserBlocked(settings, message.author.id)) continue;
-        if (!this.isDirectlyAddressed(settings, message)) continue;
+        const recentMessages = this.store.getRecentMessages(
+          message.channelId,
+          settings.memory.maxRecentMessages
+        );
+        const addressSignal = this.getReplyAddressSignal(settings, message, recentMessages);
+        if (!addressSignal.triggered) continue;
         if (now - message.createdTimestamp > lookbackMs) continue;
         if (this.store.hasTriggeredResponse(message.id)) continue;
 
         await this.maybeReplyToMessage(message, settings, {
           forceRespond: true,
-          source: "startup_catchup"
+          source: "startup_catchup",
+          addressSignal,
+          recentMessages
         });
         repliesSent += 1;
       }
