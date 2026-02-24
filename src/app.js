@@ -2,6 +2,7 @@ import path from "node:path";
 import { appConfig, ensureRuntimeEnv } from "./config.js";
 import { createDashboardServer } from "./dashboard.js";
 import { ClankerBot } from "./bot.js";
+import { DiscoveryService } from "./discovery.js";
 import { LLMService } from "./llm.js";
 import { MemoryManager } from "./memory.js";
 import { Store } from "./store.js";
@@ -16,10 +17,11 @@ async function main() {
   store.init();
 
   const llm = new LLMService({ appConfig, store });
+  const discovery = new DiscoveryService({ store });
   const memory = new MemoryManager({ store, memoryFilePath });
   await memory.refreshMemoryMarkdown();
 
-  const bot = new ClankerBot({ appConfig, store, llm, memory });
+  const bot = new ClankerBot({ appConfig, store, llm, memory, discovery });
   const dashboard = createDashboardServer({ appConfig, store, bot, memory });
 
   await bot.start();

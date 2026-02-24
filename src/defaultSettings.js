@@ -48,7 +48,34 @@ export const DEFAULT_SETTINGS = {
     postOnStartup: false,
     allowImagePosts: false,
     imagePostChancePercent: 25,
-    imageModel: "gpt-image-1"
+    imageModel: "gpt-image-1",
+    discovery: {
+      enabled: true,
+      linkChancePercent: 80,
+      maxLinksPerPost: 2,
+      maxCandidatesForPrompt: 6,
+      freshnessHours: 96,
+      dedupeHours: 168,
+      randomness: 55,
+      sourceFetchLimit: 10,
+      allowNsfw: false,
+      preferredTopics: [],
+      redditSubreddits: ["technology", "programming", "games", "memes"],
+      youtubeChannelIds: [],
+      rssFeeds: [
+        "https://www.theverge.com/rss/index.xml",
+        "https://feeds.arstechnica.com/arstechnica/index"
+      ],
+      xHandles: [],
+      xNitterBaseUrl: "https://nitter.net",
+      sources: {
+        reddit: true,
+        hackerNews: true,
+        youtube: true,
+        rss: true,
+        x: false
+      }
+    }
   },
   memory: {
     enabled: true,

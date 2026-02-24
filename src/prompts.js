@@ -16,6 +16,21 @@ function formatEmojiChoices(emojiOptions) {
   return emojiOptions.map((emoji) => `- ${emoji}`).join("\n");
 }
 
+function formatDiscoveryFindings(findings) {
+  if (!findings?.length) return "(no fresh links found)";
+
+  return findings
+    .map((item) => {
+      const source = item.sourceLabel || item.source || "web";
+      const title = String(item.title || "untitled").trim();
+      const url = String(item.url || "").trim();
+      const excerpt = String(item.excerpt || "").trim();
+      const excerptLine = excerpt ? ` | ${excerpt}` : "";
+      return `- [${source}] ${title} -> ${url}${excerptLine}`;
+    })
+    .join("\n");
+}
+
 export function buildSystemPrompt(settings, memoryMarkdown) {
   const hardLimits = settings.persona?.hardLimits ?? [];
   const trimmedMemory = (memoryMarkdown || "(memory unavailable)").slice(0, 7000);
@@ -92,7 +107,10 @@ export function buildInitiativePrompt({
   channelName,
   recentMessages,
   emojiHints,
-  allowImagePosts
+  allowImagePosts,
+  discoveryFindings = [],
+  maxLinksPerPost = 2,
+  requireDiscoveryLink = false
 }) {
   const parts = [];
 
@@ -112,8 +130,21 @@ export function buildInitiativePrompt({
     );
   }
 
+  if (discoveryFindings?.length) {
+    parts.push("Fresh external findings (optional inspiration):");
+    parts.push(formatDiscoveryFindings(discoveryFindings));
+    parts.push(
+      `If you include links, use URLs exactly as listed above and keep it to at most ${maxLinksPerPost} links.`
+    );
+    if (requireDiscoveryLink) {
+      parts.push(
+        "Include at least one of the listed URLs if possible. If none fit naturally, output exactly [SKIP]."
+      );
+    }
+  }
+
   parts.push("Task: write one standalone Discord message that feels timely and human.");
-  parts.push("Keep it short (1-3 lines), playful, and non-spammy.");
+  parts.push("Keep it short (1-3 lines), playful, non-spammy, and slightly surprising.");
   parts.push("If there is genuinely nothing good to post, output exactly [SKIP].");
 
   return parts.join("\n\n");
