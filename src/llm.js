@@ -13,7 +13,14 @@ export class LLMService {
       : null;
   }
 
-  async generate({ settings, systemPrompt, userPrompt, contextMessages = [], trace = {} }) {
+  async generate({
+    settings,
+    systemPrompt,
+    userPrompt,
+    imageInputs = [],
+    contextMessages = [],
+    trace = {}
+  }) {
     const { provider, model } = this.resolveProviderAndModel(settings?.llm ?? {});
     const temperature = Number(settings?.llm?.temperature) || 0.9;
     const maxOutputTokens = Number(settings?.llm?.maxOutputTokens) || 220;
@@ -25,6 +32,7 @@ export class LLMService {
               model,
               systemPrompt,
               userPrompt,
+              imageInputs,
               contextMessages,
               temperature,
               maxOutputTokens
@@ -33,6 +41,7 @@ export class LLMService {
               model,
               systemPrompt,
               userPrompt,
+              imageInputs,
               contextMessages,
               temperature,
               maxOutputTokens
@@ -55,7 +64,8 @@ export class LLMService {
         metadata: {
           provider,
           model,
-          usage: response.usage
+          usage: response.usage,
+          inputImages: imageInputs.length
         },
         usdCost: costUsd
       });
@@ -121,14 +131,35 @@ export class LLMService {
     };
   }
 
-  async callOpenAI({ model, systemPrompt, userPrompt, contextMessages, temperature, maxOutputTokens }) {
+  async callOpenAI({
+    model,
+    systemPrompt,
+    userPrompt,
+    imageInputs,
+    contextMessages,
+    temperature,
+    maxOutputTokens
+  }) {
+    const userContent = imageInputs.length
+      ? [
+          { type: "text", text: userPrompt },
+          ...imageInputs.map((image) => ({
+            type: "image_url",
+            image_url: {
+              url: image.url,
+              detail: "auto"
+            }
+          }))
+        ]
+      : userPrompt;
+
     const messages = [
       { role: "system", content: systemPrompt },
       ...contextMessages.map((msg) => ({
         role: msg.role === "assistant" ? "assistant" : "user",
         content: msg.content
       })),
-      { role: "user", content: userPrompt }
+      { role: "user", content: userContent }
     ];
 
     const response = await this.openai.chat.completions.create({
@@ -149,13 +180,34 @@ export class LLMService {
     };
   }
 
-  async callAnthropic({ model, systemPrompt, userPrompt, contextMessages, temperature, maxOutputTokens }) {
+  async callAnthropic({
+    model,
+    systemPrompt,
+    userPrompt,
+    imageInputs,
+    contextMessages,
+    temperature,
+    maxOutputTokens
+  }) {
+    const userContent = imageInputs.length
+      ? [
+          { type: "text", text: userPrompt },
+          ...imageInputs.map((image) => ({
+            type: "image",
+            source: {
+              type: "url",
+              url: image.url
+            }
+          }))
+        ]
+      : userPrompt;
+
     const messages = [
       ...contextMessages.map((msg) => ({
         role: msg.role === "assistant" ? "assistant" : "user",
         content: msg.content
       })),
-      { role: "user", content: userPrompt }
+      { role: "user", content: userContent }
     ];
 
     const response = await this.anthropic.messages.create({

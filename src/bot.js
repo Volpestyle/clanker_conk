@@ -8,6 +8,8 @@ import { chance, pickRandom, sanitizeBotText, sleep } from "./utils.js";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
 const CLANKER_KEYWORD_RE = /\bclanker\b/i;
+const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i;
+const MAX_IMAGE_INPUTS = 3;
 
 export class ClankerBot {
   constructor({ appConfig, store, llm, memory }) {
@@ -139,6 +141,7 @@ export class ClankerBot {
           queryText: message.content
         })
       : { userFacts: [], relevantMessages: [], memoryMarkdown: "" };
+    const imageInputs = this.getImageInputs(message);
 
     const systemPrompt = buildSystemPrompt(settings, memorySlice.memoryMarkdown);
     const userPrompt = buildReplyPrompt({
@@ -146,6 +149,7 @@ export class ClankerBot {
         authorName: message.member?.displayName || message.author.username,
         content: message.content
       },
+      imageInputs,
       recentMessages,
       relevantMessages: memorySlice.relevantMessages,
       userFacts: memorySlice.userFacts,
@@ -156,6 +160,7 @@ export class ClankerBot {
       settings,
       systemPrompt,
       userPrompt,
+      imageInputs,
       trace: {
         guildId: message.guildId,
         channelId: message.channelId,
@@ -292,5 +297,26 @@ export class ClankerBot {
 
   getReactionEmojiOptions(guild) {
     return guild.emojis.cache.map((emoji) => emoji.identifier).slice(0, 24);
+  }
+
+  getImageInputs(message) {
+    const images = [];
+
+    for (const attachment of message.attachments.values()) {
+      if (images.length >= MAX_IMAGE_INPUTS) break;
+
+      const url = String(attachment.url || attachment.proxyURL || "").trim();
+      if (!url) continue;
+
+      const filename = String(attachment.name || "").trim();
+      const contentType = String(attachment.contentType || "").toLowerCase();
+      const urlPath = url.split("?")[0];
+      const isImage = contentType.startsWith("image/") || IMAGE_EXT_RE.test(filename) || IMAGE_EXT_RE.test(urlPath);
+      if (!isImage) continue;
+
+      images.push({ url, filename, contentType });
+    }
+
+    return images;
   }
 }
