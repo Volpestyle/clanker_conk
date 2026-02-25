@@ -304,7 +304,7 @@ export class Store {
       .prepare(
         `SELECT 1
          FROM actions
-         WHERE kind IN ('sent_reply', 'sent_message')
+         WHERE kind IN ('sent_reply', 'sent_message', 'reply_skipped')
            AND metadata LIKE ?
          LIMIT 1`
       )
@@ -370,7 +370,8 @@ export class Store {
         image_call: 0,
         gif_call: 0,
         search_call: 0,
-        youtube_context_call: 0
+        video_context_call: 0,
+        asr_call: 0
       },
       totalCostUsd: Number(totalCostRow?.total ?? 0),
       dailyCost: dayCostRows
@@ -454,7 +455,7 @@ function normalizeSettings(raw) {
   if (!merged.memory || typeof merged.memory !== "object") merged.memory = {};
   if (!merged.llm || typeof merged.llm !== "object") merged.llm = {};
   if (!merged.webSearch || typeof merged.webSearch !== "object") merged.webSearch = {};
-  if (!merged.youtubeContext || typeof merged.youtubeContext !== "object") merged.youtubeContext = {};
+  if (!merged.videoContext || typeof merged.videoContext !== "object") merged.videoContext = {};
 
   merged.botName = String(merged.botName || "clanker conk").slice(0, 50);
   merged.persona.flavor = String(merged.persona?.flavor || DEFAULT_SETTINGS.persona.flavor).slice(0, 240);
@@ -504,27 +505,54 @@ function normalizeSettings(raw) {
   merged.webSearch.safeSearch =
     merged.webSearch?.safeSearch !== undefined ? Boolean(merged.webSearch?.safeSearch) : true;
 
-  merged.youtubeContext.enabled =
-    merged.youtubeContext?.enabled !== undefined
-      ? Boolean(merged.youtubeContext?.enabled)
-      : Boolean(DEFAULT_SETTINGS.youtubeContext?.enabled);
-  const ytPerHourRaw = Number(merged.youtubeContext?.maxLookupsPerHour);
-  const ytVideosRaw = Number(merged.youtubeContext?.maxVideosPerMessage);
-  const ytCharsRaw = Number(merged.youtubeContext?.maxTranscriptChars);
-  merged.youtubeContext.maxLookupsPerHour = clamp(
-    Number.isFinite(ytPerHourRaw) ? ytPerHourRaw : Number(DEFAULT_SETTINGS.youtubeContext?.maxLookupsPerHour) || 12,
+  merged.videoContext.enabled =
+    merged.videoContext?.enabled !== undefined
+      ? Boolean(merged.videoContext?.enabled)
+      : Boolean(DEFAULT_SETTINGS.videoContext?.enabled);
+  const videoPerHourRaw = Number(merged.videoContext?.maxLookupsPerHour);
+  const videoPerMessageRaw = Number(merged.videoContext?.maxVideosPerMessage);
+  const transcriptCharsRaw = Number(merged.videoContext?.maxTranscriptChars);
+  const keyframeIntervalRaw = Number(merged.videoContext?.keyframeIntervalSeconds);
+  const keyframeCountRaw = Number(merged.videoContext?.maxKeyframesPerVideo);
+  const maxAsrSecondsRaw = Number(merged.videoContext?.maxAsrSeconds);
+  merged.videoContext.maxLookupsPerHour = clamp(
+    Number.isFinite(videoPerHourRaw) ? videoPerHourRaw : Number(DEFAULT_SETTINGS.videoContext?.maxLookupsPerHour) || 12,
     0,
     120
   );
-  merged.youtubeContext.maxVideosPerMessage = clamp(
-    Number.isFinite(ytVideosRaw) ? ytVideosRaw : Number(DEFAULT_SETTINGS.youtubeContext?.maxVideosPerMessage) || 2,
+  merged.videoContext.maxVideosPerMessage = clamp(
+    Number.isFinite(videoPerMessageRaw)
+      ? videoPerMessageRaw
+      : Number(DEFAULT_SETTINGS.videoContext?.maxVideosPerMessage) || 2,
     0,
     6
   );
-  merged.youtubeContext.maxTranscriptChars = clamp(
-    Number.isFinite(ytCharsRaw) ? ytCharsRaw : Number(DEFAULT_SETTINGS.youtubeContext?.maxTranscriptChars) || 1200,
+  merged.videoContext.maxTranscriptChars = clamp(
+    Number.isFinite(transcriptCharsRaw)
+      ? transcriptCharsRaw
+      : Number(DEFAULT_SETTINGS.videoContext?.maxTranscriptChars) || 1200,
     200,
     4000
+  );
+  merged.videoContext.keyframeIntervalSeconds = clamp(
+    Number.isFinite(keyframeIntervalRaw)
+      ? keyframeIntervalRaw
+      : Number(DEFAULT_SETTINGS.videoContext?.keyframeIntervalSeconds) || 8,
+    0,
+    120
+  );
+  merged.videoContext.maxKeyframesPerVideo = clamp(
+    Number.isFinite(keyframeCountRaw)
+      ? keyframeCountRaw
+      : Number(DEFAULT_SETTINGS.videoContext?.maxKeyframesPerVideo) || 3,
+    0,
+    8
+  );
+  merged.videoContext.allowAsrFallback = Boolean(merged.videoContext?.allowAsrFallback);
+  merged.videoContext.maxAsrSeconds = clamp(
+    Number.isFinite(maxAsrSecondsRaw) ? maxAsrSecondsRaw : Number(DEFAULT_SETTINGS.videoContext?.maxAsrSeconds) || 120,
+    15,
+    600
   );
 
   merged.startup.catchupEnabled =

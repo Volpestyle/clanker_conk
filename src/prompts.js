@@ -50,17 +50,20 @@ function formatWebSearchFindings(webSearch) {
     .join("\n");
 }
 
-function formatYouTubeFindings(youtubeContext) {
-  if (!youtubeContext?.videos?.length) return "(no YouTube context available)";
+function formatVideoFindings(videoContext) {
+  if (!videoContext?.videos?.length) return "(no video context available)";
 
-  return youtubeContext.videos
+  return videoContext.videos
     .map((item, index) => {
-      const sourceId = `Y${index + 1}`;
+      const sourceId = `V${index + 1}`;
+      const provider = String(item.provider || item.kind || "video").trim();
       const title = String(item.title || "untitled video").trim();
       const channel = String(item.channel || "unknown channel").trim();
       const url = String(item.url || "").trim();
       const description = String(item.description || "").trim();
       const transcript = String(item.transcript || "").trim();
+      const transcriptSource = String(item.transcriptSource || "").trim();
+      const keyframeCount = Number(item.keyframeCount);
       const publishedAt = String(item.publishedAt || "").trim();
       const durationSeconds = Number(item.durationSeconds);
       const durationLabel = Number.isFinite(durationSeconds) && durationSeconds > 0
@@ -68,8 +71,10 @@ function formatYouTubeFindings(youtubeContext) {
         : "";
       const publishedLabel = publishedAt ? ` | published: ${publishedAt}` : "";
       const summaryLabel = description ? ` | summary: ${description}` : "";
+      const transcriptSourceLabel = transcriptSource ? ` | transcript_source: ${transcriptSource}` : "";
       const transcriptLabel = transcript ? ` | transcript: ${transcript}` : "";
-      return `- [${sourceId}] ${title} by ${channel} -> ${url}${durationLabel}${publishedLabel}${summaryLabel}${transcriptLabel}`;
+      const keyframeLabel = Number.isFinite(keyframeCount) && keyframeCount > 0 ? ` | keyframes: ${keyframeCount}` : "";
+      return `- [${sourceId}] (${provider}) ${title} by ${channel} -> ${url}${durationLabel}${publishedLabel}${summaryLabel}${transcriptSourceLabel}${transcriptLabel}${keyframeLabel}`;
     })
     .join("\n");
 }
@@ -119,6 +124,7 @@ export function buildReplyPrompt({
   relevantMessages,
   userFacts,
   emojiHints,
+  reactionEmojiOptions = [],
   allowReplyImages = false,
   remainingReplyImages = 0,
   allowReplyGifs = false,
@@ -127,11 +133,12 @@ export function buildReplyPrompt({
   gifsConfigured = false,
   userRequestedImage = false,
   replyEagerness = 35,
+  reactionEagerness = 20,
   addressing = null,
   webSearch = null,
   allowWebSearchDirective = false,
   allowMemoryDirective = false,
-  youtubeContext = null
+  videoContext = null
 }) {
   const parts = [];
 
@@ -166,6 +173,10 @@ export function buildReplyPrompt({
   if (emojiHints?.length) {
     parts.push(`Server emoji options: ${emojiHints.join(", ")}`);
   }
+  if (reactionEmojiOptions?.length) {
+    parts.push("Allowed reaction emojis (use exactly one if reacting):");
+    parts.push(formatEmojiChoices(reactionEmojiOptions));
+  }
 
   const directlyAddressed = Boolean(addressing?.directlyAddressed);
   const responseRequired = Boolean(addressing?.responseRequired);
@@ -190,6 +201,21 @@ export function buildReplyPrompt({
       "If this message is not really meant for you or would interrupt people talking among themselves, output exactly [SKIP]."
     );
   }
+
+  const reactionLevel = Math.max(0, Math.min(100, Number(reactionEagerness) || 0));
+  parts.push(`Reaction eagerness setting: ${reactionLevel}/100.`);
+  if (reactionLevel <= 25) {
+    parts.push("React sparingly and only when it clearly adds social value.");
+  } else if (reactionLevel >= 75) {
+    parts.push("You can react more often, but only when it naturally fits the tone.");
+  } else {
+    parts.push("Use balanced judgment for reactions.");
+  }
+  parts.push(
+    "If a reaction is useful, append one final line exactly in this format: [[REACTION: emoji]]."
+  );
+  parts.push("Use only one emoji from the allowed reaction list.");
+  parts.push("If no reaction is needed, do not output REACTION.");
 
   if (allowWebSearchDirective) {
     const directCommand = looksLikeDirectWebSearchCommand(message?.content);
@@ -251,24 +277,24 @@ export function buildReplyPrompt({
     parts.push("If you reference web facts, cite source IDs inline like [S1] or [S2].");
   }
 
-  if (youtubeContext?.requested && !youtubeContext.used) {
-    if (!youtubeContext.enabled) {
-      parts.push("YouTube link understanding is disabled in settings.");
-    } else if (youtubeContext.blockedByBudget || !youtubeContext.budget?.canLookup) {
-      parts.push("YouTube link understanding is unavailable right now (hourly YouTube context budget exhausted).");
-    } else if (youtubeContext.error) {
-      parts.push(`YouTube link context fetch failed: ${youtubeContext.error}`);
+  if (videoContext?.requested && !videoContext.used) {
+    if (!videoContext.enabled) {
+      parts.push("Video link understanding is disabled in settings.");
+    } else if (videoContext.blockedByBudget || !videoContext.budget?.canLookup) {
+      parts.push("Video link understanding is unavailable right now (hourly video context budget exhausted).");
+    } else if (videoContext.error) {
+      parts.push(`Video link context fetch failed: ${videoContext.error}`);
     } else {
-      parts.push("YouTube links were detected, but no usable metadata/transcript was extracted.");
+      parts.push("Video links/attachments were detected, but no usable metadata/transcript was extracted.");
     }
     parts.push("Do not claim you watched or fully understood the video when context is missing.");
   }
 
-  if (youtubeContext?.used && youtubeContext.videos?.length) {
-    parts.push("YouTube context from linked videos:");
-    parts.push(formatYouTubeFindings(youtubeContext));
-    parts.push("If you reference YouTube details, cite source IDs inline like [Y1] or [Y2].");
-    parts.push("Treat transcripts as partial context. Avoid overclaiming what happened in the full video.");
+  if (videoContext?.used && videoContext.videos?.length) {
+    parts.push("Video context from linked or embedded videos:");
+    parts.push(formatVideoFindings(videoContext));
+    parts.push("If you reference video details, cite source IDs inline like [V1] or [V2].");
+    parts.push("Treat transcripts and keyframes as partial context. Avoid overclaiming what happened in the full video.");
   }
 
   const remainingImages = Math.max(0, Math.floor(Number(remainingReplyImages) || 0));
@@ -326,6 +352,7 @@ export function buildReplyPrompt({
   }
 
   parts.push("Task: write one natural Discord reply to the incoming message.");
+  parts.push("You may output both a normal reply and REACTION directive, or [SKIP] with optional REACTION.");
   parts.push("If no response is needed, output exactly [SKIP].");
 
   return parts.join("\n\n");
@@ -391,39 +418,6 @@ export function buildInitiativePrompt({
   parts.push("Task: write one standalone Discord message that feels timely and human.");
   parts.push("Keep it short (1-3 lines), playful, non-spammy, and slightly surprising.");
   parts.push("If there is genuinely nothing good to post, output exactly [SKIP].");
-
-  return parts.join("\n\n");
-}
-
-export function buildReactionPrompt({
-  message,
-  recentMessages,
-  emojiOptions,
-  reactionLevel
-}) {
-  const parts = [];
-  const content = String(message.content || "").trim() || "(empty message)";
-
-  parts.push(`Incoming message from ${message.authorName}: ${content}`);
-  if (Number(message.attachmentCount || 0) > 0) {
-    parts.push(`Incoming message has ${message.attachmentCount} attachment(s).`);
-  }
-
-  parts.push("Recent channel messages:");
-  parts.push(formatRecentChat(recentMessages));
-
-  parts.push("Allowed reaction emojis (choose exactly one from this list if reacting):");
-  parts.push(formatEmojiChoices(emojiOptions));
-
-  parts.push(`Reaction eagerness setting: ${reactionLevel}/100`);
-  parts.push("Task: decide whether to react to the incoming message.");
-  parts.push("Return JSON only with this schema:");
-  parts.push(
-    '{"shouldReact": boolean, "emoji": string|null, "confidence": number, "reason": string}'
-  );
-  parts.push("Set confidence from 0 to 1.");
-  parts.push("If shouldReact is false, set emoji to null.");
-  parts.push("Do not output any text outside JSON.");
 
   return parts.join("\n\n");
 }
