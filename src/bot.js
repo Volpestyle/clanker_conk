@@ -42,11 +42,8 @@ const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
 const IMAGE_REQUEST_RE =
   /\b(?:make|generate|create|draw|paint|send|show|post)\b[\w\s,]{0,30}\b(?:image|picture|pic|photo|meme|art)\b|\b(?:image|picture|pic|photo|meme|art)\b[\w\s,]{0,24}\b(?:please|pls|plz|of|for|about)\b/i;
 const IMAGE_PROMPT_DIRECTIVE_RE = /\[\[IMAGE_PROMPT:\s*([\s\S]*?)\s*\]\]\s*$/i;
-const WEB_SEARCH_REQUEST_RE =
-  /^(?:<@!?\d+>\s*)?(?:(?:can|could|would|will)\s+you\s+)?(?:google|search|find|look\s*up|lookup)\b|\b(?:google|search|look\s*up|lookup|find)\b[\w\s,]{0,48}\b(?:on\s+)?(?:the\s+)?(?:web|internet|online|google)\b/i;
+const WEB_SEARCH_DIRECTIVE_RE = /\[\[WEB_SEARCH:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
-const WEB_FRESHNESS_RE =
-  /\b(?:latest|today|current|right\s*now|news|newest|price|release\s*date|version|updated?)\b/i;
 const MAX_WEB_QUERY_LEN = 220;
 
 export class ClankerBot {
@@ -586,21 +583,15 @@ export class ClankerBot {
     const imageInputs = this.getImageInputs(message);
     const userRequestedImage = this.isExplicitImageRequest(message.content);
     const imageBudget = this.getImageBudgetState(settings);
-    const webSearch = await this.maybeBuildWebSearchContext({
-      settings,
-      message,
-      addressSignal,
-      forceRespond: options.forceRespond,
-      trace: {
-        guildId: message.guildId,
-        channelId: message.channelId,
-        userId: message.author.id,
-        source: options.source || "message_event"
-      }
-    });
+    let webSearch = this.buildWebSearchContext(settings, message.content);
+    const replyTrace = {
+      guildId: message.guildId,
+      channelId: message.channelId,
+      userId: message.author.id
+    };
 
     const systemPrompt = buildSystemPrompt(settings, memorySlice.memoryMarkdown);
-    const userPrompt = buildReplyPrompt({
+    const replyPromptBase = {
       message: {
         authorName: message.member?.displayName || message.author.username,
         content: message.content
@@ -612,25 +603,54 @@ export class ClankerBot {
       emojiHints: this.getEmojiHints(message.guild),
       allowReplyImages: settings.initiative.allowReplyImages && imageBudget.canGenerate,
       remainingReplyImages: imageBudget.remaining,
-      userRequestedImage,
-      webSearch
+      userRequestedImage
+    };
+    const initialUserPrompt = buildReplyPrompt({
+      ...replyPromptBase,
+      webSearch,
+      allowWebSearchDirective: true
     });
 
-    const generation = await this.llm.generate({
+    let generation = await this.llm.generate({
       settings,
       systemPrompt,
-      userPrompt,
+      userPrompt: initialUserPrompt,
       imageInputs,
-      trace: {
-        guildId: message.guildId,
-        channelId: message.channelId,
-        userId: message.author.id
-      }
+      trace: replyTrace
     });
+    let usedWebSearchFollowup = false;
+    let replyDirective = parseReplyDirectives(generation.text);
 
-    const replyDirective = parseReplyImageDirective(generation.text);
+    if (replyDirective.webSearchQuery) {
+      webSearch = await this.runModelRequestedWebSearch({
+        settings,
+        webSearch,
+        query: replyDirective.webSearchQuery,
+        trace: {
+          ...replyTrace,
+          source: options.source || "message_event"
+        }
+      });
+
+      const followupUserPrompt = buildReplyPrompt({
+        ...replyPromptBase,
+        webSearch,
+        allowWebSearchDirective: false
+      });
+
+      generation = await this.llm.generate({
+        settings,
+        systemPrompt,
+        userPrompt: followupUserPrompt,
+        imageInputs,
+        trace: replyTrace
+      });
+      replyDirective = parseReplyDirectives(generation.text);
+      usedWebSearchFollowup = true;
+    }
+
     const finalText = sanitizeBotText(
-      replyDirective.text || (replyDirective.imagePrompt ? "here you go" : generation.text)
+      replyDirective.text || (replyDirective.imagePrompt ? "here you go" : "")
     );
     if (!finalText || finalText === "[SKIP]") return false;
 
@@ -713,13 +733,15 @@ export class ClankerBot {
           maxPerHour: webSearch.budget?.maxPerHour ?? null,
           remainingAtPromptTime: webSearch.budget?.remaining ?? null,
           configured: webSearch.configured,
+          optedOutByUser: webSearch.optedOutByUser,
           error: webSearch.error || null
         },
         llm: {
           provider: generation.provider,
           model: generation.model,
           usage: generation.usage,
-          costUsd: generation.costUsd
+          costUsd: generation.costUsd,
+          usedWebSearchFollowup
         }
       }
     });
@@ -1030,89 +1052,67 @@ export class ClankerBot {
     };
   }
 
-  isExplicitWebSearchRequest(messageText) {
+  buildWebSearchContext(settings, messageText) {
     const text = String(messageText || "");
-    if (!text) return false;
-    if (WEB_SEARCH_OPTOUT_RE.test(text)) return false;
-    return WEB_SEARCH_REQUEST_RE.test(text);
-  }
-
-  shouldUseWebSearch({
-    messageText,
-    requested,
-    addressed
-  }) {
-    const text = String(messageText || "").trim();
-    if (!text) return false;
-    if (WEB_SEARCH_OPTOUT_RE.test(text)) return false;
-    if (requested) return true;
-    if (!addressed) return false;
-
-    const likelyQuestion = QUESTION_START_RE.test(text.toLowerCase()) || text.includes("?");
-    return likelyQuestion && WEB_FRESHNESS_RE.test(text);
-  }
-
-  async maybeBuildWebSearchContext({
-    settings,
-    message,
-    addressSignal,
-    forceRespond = false,
-    trace = {}
-  }) {
-    const text = String(message?.content || "");
-    const requested = this.isExplicitWebSearchRequest(text);
     const configured = Boolean(this.search?.isConfigured?.());
     const enabled = Boolean(settings.webSearch?.enabled);
     const budget = this.getWebSearchBudgetState(settings);
 
-    const base = {
-      requested,
+    return {
+      requested: false,
       configured,
       enabled,
       used: false,
       blockedByBudget: false,
+      optedOutByUser: WEB_SEARCH_OPTOUT_RE.test(text),
       error: null,
       query: "",
       results: [],
       fetchedPages: 0,
       budget
     };
+  }
 
-    if (!enabled || !configured) {
-      return base;
-    }
+  async runModelRequestedWebSearch({
+    settings,
+    webSearch,
+    query,
+    trace = {}
+  }) {
+    const normalizedQuery = normalizeDirectiveText(query, MAX_WEB_QUERY_LEN);
+    const state = {
+      ...webSearch,
+      requested: true,
+      query: normalizedQuery
+    };
 
-    const shouldSearch = this.shouldUseWebSearch({
-      messageText: text,
-      requested,
-      addressed: Boolean(forceRespond || addressSignal?.triggered)
-    });
-    if (!shouldSearch) {
-      return base;
-    }
-
-    if (!budget.canSearch) {
+    if (!normalizedQuery) {
       return {
-        ...base,
-        blockedByBudget: true,
-        query: deriveSearchQueryFromMessage(text, settings.botName)
+        ...state,
+        error: "Missing web search query."
       };
     }
 
-    const query = deriveSearchQueryFromMessage(text, settings.botName);
-    if (!query) {
-      return base;
+    if (state.optedOutByUser || !state.enabled || !state.configured) {
+      return state;
+    }
+
+    if (!state.budget?.canSearch) {
+      return {
+        ...state,
+        blockedByBudget: true
+      };
     }
 
     try {
       const result = await this.search.searchAndRead({
         settings,
-        query,
+        query: normalizedQuery,
         trace
       });
 
       return {
-        ...base,
+        ...state,
         used: result.results.length > 0,
         query: result.query,
         results: result.results,
@@ -1120,8 +1120,7 @@ export class ClankerBot {
       };
     } catch (error) {
       return {
-        ...base,
-        query,
+        ...state,
         error: String(error?.message || error)
       };
     }
@@ -1882,55 +1881,43 @@ function buildInitiativeImagePrompt(postText) {
   ].join("\n");
 }
 
-function deriveSearchQueryFromMessage(rawText, botName = "") {
-  const text = String(rawText || "");
-  if (!text.trim()) return "";
+function parseReplyDirectives(rawText) {
+  const parsed = {
+    text: String(rawText || "").trim(),
+    imagePrompt: null,
+    webSearchQuery: null
+  };
 
-  let cleaned = text
-    .replace(/<@!?\d+>/g, " ")
-    .replace(/\b(?:can|could|would|will)\s+you\b/gi, " ")
-    .replace(/\b(?:please|pls|plz)\b/gi, " ")
-    .replace(/\bgoogle(?:\s+search)?\b/gi, " ")
-    .replace(/\b(?:web|internet)\s*search\b/gi, " ")
-    .replace(/\b(?:look\s*up|lookup|search|find)\b/gi, " ")
-    .replace(/\b(?:online|on the web|on internet|on google)\b/gi, " ")
-    .replace(/[?]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (botName) {
-    const escapedName = escapeRegExp(String(botName || "").trim());
-    if (escapedName) {
-      cleaned = cleaned.replace(new RegExp(`\\b${escapedName}\\b`, "ig"), " ").replace(/\s+/g, " ").trim();
+  while (parsed.text) {
+    const imageMatch = parsed.text.match(IMAGE_PROMPT_DIRECTIVE_RE);
+    if (imageMatch) {
+      if (!parsed.imagePrompt) {
+        parsed.imagePrompt = normalizeDirectiveText(imageMatch[1], 240) || null;
+      }
+      parsed.text = parsed.text.slice(0, imageMatch.index).trim();
+      continue;
     }
+
+    const webSearchMatch = parsed.text.match(WEB_SEARCH_DIRECTIVE_RE);
+    if (webSearchMatch) {
+      if (!parsed.webSearchQuery) {
+        parsed.webSearchQuery = normalizeDirectiveText(webSearchMatch[1], MAX_WEB_QUERY_LEN) || null;
+      }
+      parsed.text = parsed.text.slice(0, webSearchMatch.index).trim();
+      continue;
+    }
+
+    break;
   }
 
-  if (!cleaned) {
-    cleaned = text.replace(/<@!?\d+>/g, " ").replace(/\s+/g, " ").trim();
-  }
-
-  return cleaned.slice(0, MAX_WEB_QUERY_LEN);
+  return parsed;
 }
 
-function parseReplyImageDirective(rawText) {
-  const text = String(rawText || "").trim();
-  const match = text.match(IMAGE_PROMPT_DIRECTIVE_RE);
-  if (!match) {
-    return {
-      text,
-      imagePrompt: null
-    };
-  }
-
-  const prompt = String(match[1] || "")
+function normalizeDirectiveText(text, maxLen) {
+  return String(text || "")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, 240);
-
-  return {
-    text: text.slice(0, match.index).trim(),
-    imagePrompt: prompt || null
-  };
+    .slice(0, maxLen);
 }
 
 function parseReactionDecision(rawText) {
@@ -1976,8 +1963,4 @@ function pickFirstAvailableEmoji(preferredEmojis, allowedEmojis) {
     if (allowedEmojis.includes(emoji)) return emoji;
   }
   return null;
-}
-
-function escapeRegExp(value) {
-  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
