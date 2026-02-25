@@ -1501,7 +1501,7 @@ export class ClankerBot {
         const imageResult = await this.maybeAttachGeneratedImage({
           settings,
           text: finalText,
-          prompt: `Create a playful Discord-ready image for this post:\n\n${finalText}`,
+          prompt: buildInitiativeImagePrompt(finalText),
           trace: {
             guildId: channel.guildId,
             channelId: channel.id,
@@ -1862,6 +1862,24 @@ export class ClankerBot {
 function extractUrlsFromText(text) {
   URL_IN_TEXT_RE.lastIndex = 0;
   return [...String(text || "").matchAll(URL_IN_TEXT_RE)].map((match) => String(match[0] || ""));
+}
+
+function buildInitiativeImagePrompt(postText) {
+  URL_IN_TEXT_RE.lastIndex = 0;
+  const topic = String(postText || "")
+    .replace(URL_IN_TEXT_RE, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 260);
+
+  return [
+    "Create a playful, meme-friendly image for a Discord post.",
+    `Topic context for visual inspiration only: ${topic || "a timely playful internet moment"}.`,
+    "Hard constraints:",
+    "- Do not include any visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks.",
+    "- Do not render the topic context as text inside the image.",
+    "- Make it purely visual with strong composition and expressive lighting."
+  ].join("\n");
 }
 
 function deriveSearchQueryFromMessage(rawText, botName = "") {

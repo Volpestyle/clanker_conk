@@ -1,6 +1,8 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import { estimateUsdCost } from "./pricing.js";
+import { estimateImageUsdCost, estimateUsdCost } from "./pricing.js";
+
+const IMAGE_MODEL = "gpt-image-1.5";
 
 export class LLMService {
   constructor({ appConfig, store }) {
@@ -100,13 +102,14 @@ export class LLMService {
       throw new Error("Image generation requires OPENAI_API_KEY.");
     }
 
-    const model = String(settings?.initiative?.imageModel || "gpt-image-1");
+    const model = IMAGE_MODEL;
+    const size = "1024x1024";
 
     try {
       const response = await this.openai.images.generate({
         model,
         prompt: String(prompt || "").slice(0, 3200),
-        size: "1024x1024"
+        size
       });
 
       const first = response?.data?.[0];
@@ -124,6 +127,14 @@ export class LLMService {
         throw new Error("Image API response had neither b64 nor URL.");
       }
 
+      const costUsd = estimateImageUsdCost({
+        provider: "openai",
+        model,
+        size,
+        imageCount: 1,
+        customPricing: settings?.llm?.pricing
+      });
+
       this.store.logAction({
         kind: "image_call",
         guildId: trace.guildId,
@@ -132,13 +143,17 @@ export class LLMService {
         content: `${model}`,
         metadata: {
           model,
+          size,
           source: trace.source || "unknown"
-        }
+        },
+        usdCost: costUsd
       });
 
       return {
         provider: "openai",
         model,
+        size,
+        costUsd,
         imageBuffer,
         imageUrl
       };

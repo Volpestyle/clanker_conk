@@ -5,6 +5,11 @@ const DEFAULT_PRICING = {
     "gpt-4.1-nano": { inputPer1M: 0.1, outputPer1M: 0.4 },
     "gpt-4o-mini": { inputPer1M: 0.15, outputPer1M: 0.6 }
   },
+  openaiImages: {
+    "gpt-image-1.5": {
+      "1024x1024": 0.04
+    }
+  },
   anthropic: {
     "claude-opus-4-6": {
       inputPer1M: 5.0,
@@ -132,6 +137,27 @@ export function estimateUsdCost({
   return Number((inputCost + outputCost + cacheWriteCost + cacheReadCost).toFixed(6));
 }
 
+export function estimateImageUsdCost({
+  provider,
+  model,
+  size = "1024x1024",
+  imageCount = 1,
+  customPricing = {}
+}) {
+  if (provider !== "openai") return 0;
+
+  const merged = mergePricing(customPricing);
+  const resolvedModel = resolveImageModelPricing(merged.openaiImages ?? {}, model);
+  if (!resolvedModel) return 0;
+
+  const normalizedSize = normalizeImageSize(size);
+  const perImage = Number(resolvedModel[normalizedSize] ?? resolvedModel.default ?? 0);
+  if (!perImage) return 0;
+
+  const count = Math.max(1, Math.floor(Number(imageCount) || 1));
+  return Number((perImage * count).toFixed(6));
+}
+
 export function getDefaultPricing() {
   return DEFAULT_PRICING;
 }
@@ -142,6 +168,10 @@ function mergePricing(customPricing) {
     openai: {
       ...DEFAULT_PRICING.openai,
       ...(custom.openai && typeof custom.openai === "object" ? custom.openai : {})
+    },
+    openaiImages: {
+      ...DEFAULT_PRICING.openaiImages,
+      ...(custom.openaiImages && typeof custom.openaiImages === "object" ? custom.openaiImages : {})
     },
     anthropic: {
       ...DEFAULT_PRICING.anthropic,
@@ -162,6 +192,16 @@ function resolvePricing(providerPricing, model) {
   return providerPricing[normalized] ?? null;
 }
 
+function resolveImageModelPricing(providerPricing, model) {
+  const exact = providerPricing[model];
+  if (exact && typeof exact === "object") return exact;
+
+  const normalized = normalizeModelKey(model);
+  if (!normalized) return null;
+
+  return providerPricing[normalized] ?? null;
+}
+
 function normalizeModelKey(model) {
   return String(model || "")
     .trim()
@@ -173,4 +213,11 @@ function normalizeModelKey(model) {
 
 function toCost(tokens, per1M) {
   return ((Number(tokens) || 0) / 1_000_000) * (Number(per1M) || 0);
+}
+
+function normalizeImageSize(size) {
+  return String(size || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
 }

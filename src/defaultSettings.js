@@ -58,7 +58,6 @@ export const DEFAULT_SETTINGS = {
     allowReplyImages: false,
     maxImagesPerDay: 10,
     imagePostChancePercent: 25,
-    imageModel: "gpt-image-1",
     discovery: {
       enabled: true,
       linkChancePercent: 80,
