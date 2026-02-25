@@ -1,4 +1,4 @@
-import { hasBotKeyword } from "./utils.js";
+import { hasBotKeyword } from "./utils.ts";
 
 function formatRecentChat(messages) {
   if (!messages?.length) return "(no recent messages available)";

@@ -1,0 +1,11 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "types": ["vite/client"]
+  },
+  "include": ["dashboard/src/**/*.ts", "dashboard/src/**/*.tsx"],
+  "exclude": ["node_modules", "dashboard/dist", "dist"]
+}

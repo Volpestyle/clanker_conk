@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
-import { DEFAULT_SETTINGS } from "./defaultSettings.js";
-import { clamp, deepMerge, nowIso, uniqueIdList } from "./utils.js";
+import { DEFAULT_SETTINGS } from "./defaultSettings.ts";
+import { clamp, deepMerge, nowIso, uniqueIdList } from "./utils.ts";
 
 const SETTINGS_KEY = "runtime_settings";
 

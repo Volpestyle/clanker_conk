@@ -1,5 +1,5 @@
-import { normalizeDiscoveryUrl } from "./discovery.js";
-import { clamp } from "./utils.js";
+import { normalizeDiscoveryUrl } from "./discovery.ts";
+import { clamp } from "./utils.ts";
 
 const GOOGLE_SEARCH_API_URL = "https://www.googleapis.com/customsearch/v1";
 const SEARCH_TIMEOUT_MS = 4_500;

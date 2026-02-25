@@ -1,5 +1,5 @@
 import net from "node:net";
-import { clamp } from "./utils.js";
+import { clamp } from "./utils.ts";
 
 const DISCOVERY_TIMEOUT_MS = 9_000;
 const DISCOVERY_USER_AGENT =

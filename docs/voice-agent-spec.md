@@ -78,23 +78,23 @@ Enable `clanker conk` to join Discord voice channels on command, run real-time c
 - API key configured as `XAI_API_KEY` in bot server environment.
 
 ## Proposed Architecture Changes
-- `src/bot.js`
+- `src/bot.ts`
   - Add voice intent trigger routing in `messageCreate`.
   - Add VC command handling (`join`, `leave`, `status`).
   - Add `GatewayIntentBits.GuildVoiceStates`.
-- `src/voice/voiceSessionManager.js`
+- `src/voice/voiceSessionManager.ts`
   - Owns session lifecycle, timers, join/leave, and guild-level locking.
-- `src/voice/voiceIntentParser.js`
+- `src/voice/voiceIntentParser.ts`
   - Detects natural-language text requests to join VC.
-- `src/voice/xaiRealtimeClient.js`
+- `src/voice/xaiRealtimeClient.ts`
   - Owns xAI websocket session creation, audio in/out streaming, and session updates.
-- `src/voice/soundboardDirector.js`
+- `src/voice/soundboardDirector.ts`
   - Chooses if/when to trigger soundboard sounds under cooldown and cap rules.
-- `src/prompts.js`
+- `src/prompts.ts`
   - Add voice-specific system/turn prompts while preserving current persona.
-- `src/store.js`
+- `src/store.ts`
   - Persist voice session metadata and voice actions.
-- `dashboard/src/components/SettingsForm.jsx`
+- `dashboard/src/components/SettingsForm.tsx`
   - Add voice settings controls.
 
 ## Settings Model (New)
@@ -183,8 +183,8 @@ Natural language should map into the same session manager as slash commands (sin
 
 ## Migration/Cleanup Notes
 - Remove the hard-limit statement "Cannot join voice channels." from:
-  - `src/defaultSettings.js`
-  - `src/memory.js` memory markdown identity block
+  - `src/defaultSettings.ts`
+  - `src/memory.ts` memory markdown identity block
   once voice mode is enabled in production.
 - Keep one canonical voice path; avoid parallel "legacy voice" shims.
 
