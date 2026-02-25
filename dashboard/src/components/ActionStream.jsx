@@ -4,6 +4,7 @@ const FILTERS = [
   "all",
   "sent_reply",
   "sent_message",
+  "reply_skipped",
   "initiative_post",
   "reacted",
   "llm_call",
@@ -12,8 +13,10 @@ const FILTERS = [
   "gif_error",
   "search_call",
   "search_error",
-  "youtube_context_call",
-  "youtube_context_error"
+  "video_context_call",
+  "video_context_error",
+  "asr_call",
+  "asr_error"
 ];
 
 export default function ActionStream({ actions }) {

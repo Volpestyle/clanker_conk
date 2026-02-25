@@ -5,7 +5,6 @@ import {
 } from "discord.js";
 import {
   buildInitiativePrompt,
-  buildReactionPrompt,
   buildReplyPrompt,
   buildSystemPrompt
 } from "./prompts.js";
@@ -20,7 +19,6 @@ const REPLY_QUEUE_SEND_RETRY_BASE_MS = 2_500;
 const REPLY_QUEUE_SEND_MAX_RETRIES = 2;
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i;
 const MAX_IMAGE_INPUTS = 3;
-const REACTION_CONTEXT_LIMIT = 12;
 const STARTUP_TASK_DELAY_MS = 4500;
 const INITIATIVE_TICK_MS = 60_000;
 const GATEWAY_WATCHDOG_TICK_MS = 30_000;
@@ -32,17 +30,19 @@ const IMAGE_REQUEST_RE =
   /\b(?:make|generate|create|draw|paint|send|show|post)\b[\w\s,]{0,30}\b(?:image|picture|pic|photo|meme|art)\b|\b(?:image|picture|pic|photo|meme|art)\b[\w\s,]{0,24}\b(?:please|pls|plz|of|for|about)\b/i;
 const IMAGE_PROMPT_DIRECTIVE_RE = /\[\[IMAGE_PROMPT:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const GIF_QUERY_DIRECTIVE_RE = /\[\[GIF_QUERY:\s*([\s\S]*?)\s*\]\]\s*$/i;
+const REACTION_DIRECTIVE_RE = /\[\[REACTION:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const WEB_SEARCH_DIRECTIVE_RE = /\[\[WEB_SEARCH:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const MEMORY_LINE_DIRECTIVE_RE = /\[\[MEMORY_LINE:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
 const MAX_WEB_QUERY_LEN = 220;
 const MAX_GIF_QUERY_LEN = 120;
 const MAX_MEMORY_LINE_LEN = 180;
-const MAX_YOUTUBE_TARGET_SCAN = 8;
-const MAX_YOUTUBE_FALLBACK_MESSAGES = 18;
+const MAX_VIDEO_TARGET_SCAN = 8;
+const MAX_VIDEO_FALLBACK_MESSAGES = 18;
+const MAX_MODEL_IMAGE_INPUTS = 8;
 
 export class ClankerBot {
-  constructor({ appConfig, store, llm, memory, discovery, search, gifs, youtube }) {
+  constructor({ appConfig, store, llm, memory, discovery, search, gifs, video }) {
     this.appConfig = appConfig;
     this.store = store;
     this.llm = llm;
@@ -50,7 +50,7 @@ export class ClankerBot {
     this.discovery = discovery;
     this.search = search;
     this.gifs = gifs;
-    this.youtube = youtube;
+    this.video = video;
 
     this.lastBotMessageAt = 0;
     this.memoryTimer = null;
@@ -504,6 +504,7 @@ export class ClankerBot {
     const settings = this.store.getSettings();
 
     const text = String(message.content || "").trim();
+    const recordedContent = this.composeMessageContentForHistory(message, text);
     this.store.recordMessage({
       messageId: message.id,
       guildId: message.guildId,
@@ -511,7 +512,7 @@ export class ClankerBot {
       authorId: message.author.id,
       authorName: message.member?.displayName || message.author.username,
       isBot: message.author.bot,
-      content: text,
+      content: recordedContent,
       referencedMessageId: message.reference?.messageId
     });
 
@@ -528,7 +529,6 @@ export class ClankerBot {
       });
     }
 
-    await this.maybeReactToMessage(message, settings);
     const recentMessages = this.store.getRecentMessages(
       message.channelId,
       settings.memory.maxRecentMessages
@@ -556,6 +556,10 @@ export class ClankerBot {
       options.addressSignal || this.getReplyAddressSignal(settings, message, recentMessages);
     const addressed = addressSignal.triggered;
     const replyEagerness = clamp(Number(settings.activity?.replyLevel) || 0, 0, 100);
+    const reactionEagerness = clamp(Number(settings.activity?.reactionLevel) || 0, 0, 100);
+    const reactionEmojiOptions = [
+      ...new Set([...this.getReactionEmojiOptions(message.guild), ...UNICODE_REACTIONS])
+    ];
 
     const shouldRespond =
       options.forceRespond || addressed || settings.permissions.allowInitiativeReplies;
@@ -568,16 +572,16 @@ export class ClankerBot {
           queryText: message.content
         })
       : { userFacts: [], relevantMessages: [], memoryMarkdown: "" };
-    const imageInputs = this.getImageInputs(message);
+    const attachmentImageInputs = this.getImageInputs(message);
     const userRequestedImage = this.isExplicitImageRequest(message.content);
     const imageBudget = this.getImageBudgetState(settings);
     const imageCapabilityReady = this.isImageGenerationReady(settings);
     const gifBudget = this.getGifBudgetState(settings);
     const gifsConfigured = Boolean(this.gifs?.isConfigured?.());
     let webSearch = this.buildWebSearchContext(settings, message.content);
-    const youtubeContext = await this.buildYouTubeReplyContext({
+    const videoContext = await this.buildVideoReplyContext({
       settings,
-      messageText: message.content,
+      message,
       recentMessages,
       trace: {
         guildId: message.guildId,
@@ -586,6 +590,7 @@ export class ClankerBot {
         source: options.source || "message_event"
       }
     });
+    const imageInputs = [...attachmentImageInputs, ...(videoContext.frameImages || [])].slice(0, MAX_MODEL_IMAGE_INPUTS);
     const replyTrace = {
       guildId: message.guildId,
       channelId: message.channelId,
@@ -603,6 +608,7 @@ export class ClankerBot {
       relevantMessages: memorySlice.relevantMessages,
       userFacts: memorySlice.userFacts,
       emojiHints: this.getEmojiHints(message.guild),
+      reactionEmojiOptions,
       allowReplyImages:
         settings.initiative.allowReplyImages && imageCapabilityReady && imageBudget.canGenerate,
       remainingReplyImages: imageBudget.remaining,
@@ -612,12 +618,13 @@ export class ClankerBot {
       gifsConfigured,
       userRequestedImage,
       replyEagerness,
+      reactionEagerness,
       addressing: {
         directlyAddressed: addressed,
         responseRequired: Boolean(options.forceRespond)
       },
       allowMemoryDirective: settings.memory.enabled,
-      youtubeContext
+      videoContext
     };
     const initialUserPrompt = buildReplyPrompt({
       ...replyPromptBase,
@@ -667,6 +674,17 @@ export class ClankerBot {
       usedWebSearchFollowup = true;
     }
 
+    const reaction = await this.maybeApplyReplyReaction({
+      message,
+      settings,
+      emojiOptions: reactionEmojiOptions,
+      emojiToken: replyDirective.reactionEmoji,
+      generation,
+      source: options.source || "message_event",
+      triggerMessageId: message.id,
+      addressing: addressSignal
+    });
+
     const memoryLine = replyDirective.memoryLine;
     let memorySaved = false;
     if (settings.memory.enabled && memoryLine) {
@@ -689,8 +707,21 @@ export class ClankerBot {
       }
     }
 
-    let finalText = sanitizeBotText(replyDirective.text || (replyDirective.imagePrompt || replyDirective.gifQuery ? "here you go" : ""));
-    if (!finalText || finalText === "[SKIP]") return false;
+    let finalText = sanitizeBotText(
+      replyDirective.text || (replyDirective.imagePrompt || replyDirective.gifQuery ? "here you go" : "")
+    );
+    if (!finalText || finalText === "[SKIP]") {
+      this.logSkippedReply({
+        message,
+        source: options.source || "message_event",
+        addressSignal,
+        generation,
+        usedWebSearchFollowup,
+        reason: finalText ? "llm_skip" : "empty_reply",
+        reaction
+      });
+      return false;
+    }
 
     let payload = { content: finalText };
     let imageUsed = false;
@@ -799,6 +830,7 @@ export class ClankerBot {
           requestedByModel: Boolean(memoryLine),
           saved: memorySaved
         },
+        reaction,
         webSearch: {
           requested: webSearch.requested,
           used: webSearch.used,
@@ -812,17 +844,18 @@ export class ClankerBot {
           optedOutByUser: webSearch.optedOutByUser,
           error: webSearch.error || null
         },
-        youtube: {
-          requested: youtubeContext.requested,
-          used: youtubeContext.used,
-          detectedVideos: youtubeContext.detectedVideos,
-          detectedFromRecentMessages: youtubeContext.detectedFromRecentMessages,
-          fetchedVideos: youtubeContext.videos?.length || 0,
-          blockedByHourlyCap: youtubeContext.blockedByBudget,
-          maxPerHour: youtubeContext.budget?.maxPerHour ?? null,
-          remainingAtPromptTime: youtubeContext.budget?.remaining ?? null,
-          enabled: youtubeContext.enabled,
-          errorCount: youtubeContext.errors?.length || 0
+        video: {
+          requested: videoContext.requested,
+          used: videoContext.used,
+          detectedVideos: videoContext.detectedVideos,
+          detectedFromRecentMessages: videoContext.detectedFromRecentMessages,
+          fetchedVideos: videoContext.videos?.length || 0,
+          extractedKeyframes: videoContext.frameImages?.length || 0,
+          blockedByHourlyCap: videoContext.blockedByBudget,
+          maxPerHour: videoContext.budget?.maxPerHour ?? null,
+          remainingAtPromptTime: videoContext.budget?.remaining ?? null,
+          enabled: videoContext.enabled,
+          errorCount: videoContext.errors?.length || 0
         },
         llm: {
           provider: generation.provider,
@@ -837,252 +870,114 @@ export class ClankerBot {
     return true;
   }
 
-  async maybeReactToMessage(message, settings) {
-    if (!settings.permissions.allowReactions) return;
-    if (!this.canTakeAction("reacted", settings.permissions.maxReactionsPerHour)) return;
+  async maybeApplyReplyReaction({
+    message,
+    settings,
+    emojiOptions,
+    emojiToken,
+    generation,
+    source,
+    triggerMessageId,
+    addressing
+  }) {
+    const result = {
+      requestedByModel: Boolean(emojiToken),
+      used: false,
+      emoji: null,
+      blockedByPermission: false,
+      blockedByHourlyCap: false,
+      blockedByAllowedSet: false
+    };
+    const normalized = normalizeReactionEmojiToken(emojiToken);
+    if (!normalized) return result;
 
-    const emojiOptions = [...new Set([...this.getReactionEmojiOptions(message.guild), ...UNICODE_REACTIONS])];
-    if (!emojiOptions.length) return;
+    if (!settings.permissions.allowReactions) {
+      return {
+        ...result,
+        blockedByPermission: true
+      };
+    }
 
-    const recentMessages = this.store.getRecentMessages(message.channelId, REACTION_CONTEXT_LIMIT);
-    const decision = await this.decideReaction({
-      message,
-      settings,
-      emojiOptions,
-      recentMessages
-    });
-    if (!decision.shouldReact || !decision.emoji) return;
+    if (!this.canTakeAction("reacted", settings.permissions.maxReactionsPerHour)) {
+      return {
+        ...result,
+        blockedByHourlyCap: true
+      };
+    }
+
+    if (!emojiOptions.includes(normalized)) {
+      return {
+        ...result,
+        blockedByAllowedSet: true,
+        emoji: normalized
+      };
+    }
 
     try {
-      await message.react(decision.emoji);
+      await message.react(normalized);
       this.store.logAction({
         kind: "reacted",
         guildId: message.guildId,
         channelId: message.channelId,
         messageId: message.id,
         userId: this.client.user.id,
-        content: decision.emoji,
+        content: normalized,
         metadata: {
-          source: decision.source,
-          confidence: decision.confidence,
-          reason: decision.reason,
-          llm: decision.llm
+          source,
+          triggerMessageId,
+          addressing,
+          reason: "reply_directive",
+          llm: {
+            provider: generation.provider,
+            model: generation.model,
+            usage: generation.usage,
+            costUsd: generation.costUsd
+          }
         }
       });
+      return {
+        ...result,
+        used: true,
+        emoji: normalized
+      };
     } catch {
-      // Ignore failed reactions (permissions or emoji constraints).
+      return {
+        ...result,
+        emoji: normalized
+      };
     }
   }
 
-  async decideReaction({ message, settings, emojiOptions, recentMessages }) {
-    const reactionLevel = clamp(Number(settings.activity?.reactionLevel) || 0, 0, 100);
-    const reactionSettings = {
-      ...settings,
-      llm: {
-        ...settings.llm,
-        temperature: Math.min(Number(settings.llm?.temperature) || 0.9, 0.35),
-        maxOutputTokens: Math.min(Number(settings.llm?.maxOutputTokens) || 220, 120)
-      }
-    };
-
-    const systemPrompt = this.buildReactionDecisionSystemPrompt(settings);
-    const userPrompt = buildReactionPrompt({
-      message: {
-        authorName: message.member?.displayName || message.author?.username || "unknown",
-        content: String(message.content || ""),
-        attachmentCount: message.attachments?.size || 0
-      },
-      recentMessages,
-      emojiOptions,
-      reactionLevel
-    });
-
-    const fallback = this.heuristicReactionDecision({
-      messageText: message.content,
-      emojiOptions,
-      reactionLevel
-    });
-
-    try {
-      const generation = await this.llm.generate({
-        settings: reactionSettings,
-        systemPrompt,
-        userPrompt,
-        trace: {
-          guildId: message.guildId,
-          channelId: message.channelId,
-          userId: this.client.user.id
-        }
-      });
-
-      const parsed = parseReactionDecision(generation.text);
-      const normalized = this.normalizeReactionDecision({
-        parsed,
-        emojiOptions,
-        reactionLevel
-      });
-
-      return {
-        ...normalized,
-        source: "llm",
+  logSkippedReply({
+    message,
+    source,
+    addressSignal,
+    generation,
+    usedWebSearchFollowup,
+    reason,
+    reaction
+  }) {
+    this.store.logAction({
+      kind: "reply_skipped",
+      guildId: message.guildId,
+      channelId: message.channelId,
+      messageId: message.id,
+      userId: this.client.user.id,
+      content: reason,
+      metadata: {
+        triggerMessageId: message.id,
+        source,
+        addressing: addressSignal,
+        reaction,
         llm: {
           provider: generation.provider,
           model: generation.model,
           usage: generation.usage,
-          costUsd: generation.costUsd
+          costUsd: generation.costUsd,
+          usedWebSearchFollowup
         }
-      };
-    } catch {
-      return {
-        ...fallback,
-        source: "heuristic_fallback",
-        llm: null
-      };
-    }
-  }
-
-  buildReactionDecisionSystemPrompt(settings) {
-    return [
-      `You are ${settings.botName}, deciding whether to add a Discord reaction.`,
-      "React only when it feels natural and adds social value.",
-      "Do not react to every message.",
-      "Avoid reacting on sensitive, personal, or potentially harmful topics.",
-      "Prefer reactions for humor, excitement, agreement, surprise, or supportive moments.",
-      "Pick one emoji that best matches tone and context, or no reaction.",
-      "Output JSON only with this schema:",
-      '{"shouldReact": boolean, "emoji": string|null, "confidence": number, "reason": string}'
-    ].join("\n");
-  }
-
-  normalizeReactionDecision({ parsed, emojiOptions, reactionLevel }) {
-    const fallback = {
-      shouldReact: false,
-      emoji: null,
-      confidence: 0,
-      reason: "No valid reaction decision."
-    };
-    if (!parsed || typeof parsed !== "object") return fallback;
-
-    const shouldReact = Boolean(parsed.shouldReact);
-    const rawEmojiValue = parsed.emoji === null || parsed.emoji === undefined ? null : String(parsed.emoji).trim();
-    const emojiRaw = rawEmojiValue ? normalizeReactionEmojiToken(rawEmojiValue) : null;
-    const confidenceNumber = Number(parsed.confidence);
-    const confidence = Number.isFinite(confidenceNumber) ? clamp(confidenceNumber, 0, 1) : 0;
-    const reason = String(parsed.reason || "").trim().slice(0, 180) || "No reason provided.";
-
-    if (!shouldReact) {
-      return {
-        shouldReact: false,
-        emoji: null,
-        confidence,
-        reason
-      };
-    }
-
-    if (!emojiRaw || !emojiOptions.includes(emojiRaw)) {
-      return {
-        shouldReact: false,
-        emoji: null,
-        confidence,
-        reason: "LLM chose an emoji outside allowed options."
-      };
-    }
-
-    const minConfidence = this.getReactionConfidenceThreshold(reactionLevel);
-    if (!Number.isFinite(confidence) || confidence < minConfidence) {
-      return {
-        shouldReact: false,
-        emoji: null,
-        confidence,
-        reason: "Decision confidence below reaction threshold."
-      };
-    }
-
-    return {
-      shouldReact: true,
-      emoji: emojiRaw,
-      confidence,
-      reason
-    };
-  }
-
-  getReactionConfidenceThreshold(reactionLevel) {
-    const level = clamp(Number(reactionLevel) || 0, 0, 100);
-    return 0.9 - level * 0.0065;
-  }
-
-  heuristicReactionDecision({ messageText, emojiOptions, reactionLevel }) {
-    const text = String(messageText || "").toLowerCase();
-    if (!text) {
-      return {
-        shouldReact: false,
-        emoji: null,
-        confidence: 0,
-        reason: "No message text."
-      };
-    }
-
-    const candidates = [
-      {
-        re: /\b(lol|lmao|lmfao|haha|rofl|😂|💀)\b/i,
-        emojis: ["😂", "💀"],
-        confidence: 0.9,
-        reason: "Laughter signal."
-      },
-      {
-        re: /\b(gg|nice|fire|lit|huge|lets go|let's go|goat|w|win|based)\b/i,
-        emojis: ["🔥", "💯", "🤝", "🫡"],
-        confidence: 0.84,
-        reason: "Hype/approval signal."
-      },
-      {
-        re: /\b(wtf|no way|wild|crazy|insane)\b/i,
-        emojis: ["😮", "👀"],
-        confidence: 0.78,
-        reason: "Surprise signal."
-      },
-      {
-        re: /\b(rip|sad|pain|unlucky|oof)\b/i,
-        emojis: ["😭"],
-        confidence: 0.82,
-        reason: "Sympathy signal."
-      },
-      {
-        re: /\?\s*$/i,
-        emojis: ["👀", "🧠"],
-        confidence: 0.62,
-        reason: "Question/prompt signal."
       }
-    ];
-
-    for (const candidate of candidates) {
-      if (!candidate.re.test(text)) continue;
-      const emoji = pickFirstAvailableEmoji(candidate.emojis, emojiOptions);
-      if (!emoji) break;
-
-      if (candidate.confidence < this.getReactionConfidenceThreshold(reactionLevel)) {
-        return {
-          shouldReact: false,
-          emoji: null,
-          confidence: candidate.confidence,
-          reason: "Heuristic confidence below threshold."
-        };
-      }
-
-      return {
-        shouldReact: true,
-        emoji,
-        confidence: candidate.confidence,
-        reason: candidate.reason
-      };
-    }
-
-    return {
-      shouldReact: false,
-      emoji: null,
-      confidence: 0.3,
-      reason: "No meaningful reaction pattern matched."
-    };
+    });
   }
 
   canTalkNow(settings) {
@@ -1162,11 +1057,11 @@ export class ClankerBot {
     };
   }
 
-  getYouTubeContextBudgetState(settings) {
-    const maxPerHour = clamp(Number(settings.youtubeContext?.maxLookupsPerHour) || 0, 0, 120);
+  getVideoContextBudgetState(settings) {
+    const maxPerHour = clamp(Number(settings.videoContext?.maxLookupsPerHour) || 0, 0, 120);
     const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const successCount = this.store.countActionsSince("youtube_context_call", since1h);
-    const errorCount = this.store.countActionsSince("youtube_context_error", since1h);
+    const successCount = this.store.countActionsSince("video_context_call", since1h);
+    const errorCount = this.store.countActionsSince("video_context_error", since1h);
     const used = successCount + errorCount;
     const remaining = Math.max(0, maxPerHour - used);
 
@@ -1180,11 +1075,16 @@ export class ClankerBot {
     };
   }
 
-  async buildYouTubeReplyContext({ settings, messageText, recentMessages = [], trace = {} }) {
-    const enabled = Boolean(settings.youtubeContext?.enabled);
-    const budget = this.getYouTubeContextBudgetState(settings);
-    const maxVideosPerMessage = clamp(Number(settings.youtubeContext?.maxVideosPerMessage) || 0, 0, 6);
-    const maxTranscriptChars = clamp(Number(settings.youtubeContext?.maxTranscriptChars) || 1200, 200, 4000);
+  async buildVideoReplyContext({ settings, message, recentMessages = [], trace = {} }) {
+    const messageText = String(message?.content || "");
+    const enabled = Boolean(settings.videoContext?.enabled);
+    const budget = this.getVideoContextBudgetState(settings);
+    const maxVideosPerMessage = clamp(Number(settings.videoContext?.maxVideosPerMessage) || 0, 0, 6);
+    const maxTranscriptChars = clamp(Number(settings.videoContext?.maxTranscriptChars) || 1200, 200, 4000);
+    const keyframeIntervalSeconds = clamp(Number(settings.videoContext?.keyframeIntervalSeconds) || 0, 0, 120);
+    const maxKeyframesPerVideo = clamp(Number(settings.videoContext?.maxKeyframesPerVideo) || 0, 0, 8);
+    const allowAsrFallback = Boolean(settings.videoContext?.allowAsrFallback);
+    const maxAsrSeconds = clamp(Number(settings.videoContext?.maxAsrSeconds) || 120, 15, 600);
 
     const base = {
       requested: false,
@@ -1196,21 +1096,22 @@ export class ClankerBot {
       detectedVideos: 0,
       detectedFromRecentMessages: false,
       videos: [],
+      frameImages: [],
       budget
     };
 
-    if (!this.youtube) {
+    if (!this.video) {
       return base;
     }
 
-    const directTargets = this.youtube.extractVideoTargets(messageText, MAX_YOUTUBE_TARGET_SCAN);
+    const directTargets = this.video.extractMessageTargets(message, MAX_VIDEO_TARGET_SCAN);
     const fallbackTargets =
-      !directTargets.length && looksLikeYouTubeFollowupMessage(messageText)
-        ? extractRecentYouTubeTargets({
-            youtubeService: this.youtube,
+      !directTargets.length && looksLikeVideoFollowupMessage(messageText)
+        ? extractRecentVideoTargets({
+            videoService: this.video,
             recentMessages,
-            maxMessages: MAX_YOUTUBE_FALLBACK_MESSAGES,
-            maxTargets: MAX_YOUTUBE_TARGET_SCAN
+            maxMessages: MAX_VIDEO_FALLBACK_MESSAGES,
+            maxTargets: MAX_VIDEO_TARGET_SCAN
           })
         : [];
     const detectedTargets = directTargets.length ? directTargets : fallbackTargets;
@@ -1270,22 +1171,32 @@ export class ClankerBot {
     const blockedByBudget = selectedTargets.length < targets.length;
 
     try {
-      const result = await this.youtube.fetchContexts({
+      const result = await this.video.fetchContexts({
         targets: selectedTargets,
         maxTranscriptChars,
+        keyframeIntervalSeconds,
+        maxKeyframesPerVideo,
+        allowAsrFallback,
+        maxAsrSeconds,
         trace
       });
       const firstError = result.errors?.[0]?.error || null;
+      const videos = (result.videos || []).map((item) => {
+        const { frameImages, ...rest } = item || {};
+        return rest;
+      });
+      const frameImages = (result.videos || []).flatMap((item) => item?.frameImages || []);
       return {
         ...base,
         requested: true,
-        used: Boolean(result.videos?.length),
+        used: Boolean(videos.length),
         blockedByBudget,
         error: firstError,
         errors: result.errors || [],
         detectedVideos: detectedTargets.length,
         detectedFromRecentMessages,
-        videos: result.videos || []
+        videos,
+        frameImages
       };
     } catch (error) {
       return {
@@ -2188,29 +2099,29 @@ function extractUrlsFromText(text) {
   return [...String(text || "").matchAll(URL_IN_TEXT_RE)].map((match) => String(match[0] || ""));
 }
 
-function looksLikeYouTubeFollowupMessage(rawText) {
+function looksLikeVideoFollowupMessage(rawText) {
   const text = String(rawText || "").trim();
   if (!text) return false;
   if (extractUrlsFromText(text).length) return false;
 
-  const hasVideoTopic = /\b(?:video|clip|youtube|yt)\b/i.test(text);
+  const hasVideoTopic = /\b(?:video|clip|youtube|yt|tiktok|tt|reel|short)\b/i.test(text);
   if (!hasVideoTopic) return false;
 
   return /\b(?:watch|watched|watching|see|seen|view|check|open|play)\b/i.test(text);
 }
 
-function extractRecentYouTubeTargets({
-  youtubeService,
+function extractRecentVideoTargets({
+  videoService,
   recentMessages,
-  maxMessages = MAX_YOUTUBE_FALLBACK_MESSAGES,
-  maxTargets = MAX_YOUTUBE_TARGET_SCAN
+  maxMessages = MAX_VIDEO_FALLBACK_MESSAGES,
+  maxTargets = MAX_VIDEO_TARGET_SCAN
 }) {
-  if (!youtubeService || !Array.isArray(recentMessages) || !recentMessages.length) return [];
+  if (!videoService || !Array.isArray(recentMessages) || !recentMessages.length) return [];
 
-  const normalizedMaxMessages = clamp(Number(maxMessages) || MAX_YOUTUBE_FALLBACK_MESSAGES, 1, 120);
-  const normalizedMaxTargets = clamp(Number(maxTargets) || MAX_YOUTUBE_TARGET_SCAN, 1, 8);
+  const normalizedMaxMessages = clamp(Number(maxMessages) || MAX_VIDEO_FALLBACK_MESSAGES, 1, 120);
+  const normalizedMaxTargets = clamp(Number(maxTargets) || MAX_VIDEO_TARGET_SCAN, 1, 8);
   const targets = [];
-  const seenVideoIds = new Set();
+  const seenKeys = new Set();
 
   for (const row of recentMessages.slice(0, normalizedMaxMessages)) {
     if (targets.length >= normalizedMaxTargets) break;
@@ -2219,12 +2130,12 @@ function extractRecentYouTubeTargets({
     const content = String(row?.content || "");
     if (!content) continue;
 
-    const rowTargets = youtubeService.extractVideoTargets(content, normalizedMaxTargets);
+    const rowTargets = videoService.extractVideoTargets(content, normalizedMaxTargets);
     for (const target of rowTargets) {
       if (targets.length >= normalizedMaxTargets) break;
-      const videoId = String(target?.videoId || "").trim();
-      if (!videoId || seenVideoIds.has(videoId)) continue;
-      seenVideoIds.add(videoId);
+      const key = String(target?.key || "").trim();
+      if (!key || seenKeys.has(key)) continue;
+      seenKeys.add(key);
       targets.push(target);
     }
   }
@@ -2273,6 +2184,7 @@ function parseReplyDirectives(rawText) {
     text: String(rawText || "").trim(),
     imagePrompt: null,
     gifQuery: null,
+    reactionEmoji: null,
     webSearchQuery: null,
     memoryLine: null
   };
@@ -2293,6 +2205,15 @@ function parseReplyDirectives(rawText) {
         parsed.gifQuery = normalizeDirectiveText(gifMatch[1], MAX_GIF_QUERY_LEN) || null;
       }
       parsed.text = parsed.text.slice(0, gifMatch.index).trim();
+      continue;
+    }
+
+    const reactionMatch = parsed.text.match(REACTION_DIRECTIVE_RE);
+    if (reactionMatch) {
+      if (!parsed.reactionEmoji) {
+        parsed.reactionEmoji = normalizeDirectiveText(reactionMatch[1], 64) || null;
+      }
+      parsed.text = parsed.text.slice(0, reactionMatch.index).trim();
       continue;
     }
 
@@ -2379,35 +2300,6 @@ function deriveDirectWebSearchQuery(rawText, botName = "") {
   return cleaned.slice(0, MAX_WEB_QUERY_LEN);
 }
 
-function parseReactionDecision(rawText) {
-  if (!rawText) return null;
-  const text = String(rawText).trim();
-
-  const direct = safeParseJson(text);
-  if (direct) return direct;
-
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  if (fenced?.[1]) {
-    const parsedFence = safeParseJson(fenced[1].trim());
-    if (parsedFence) return parsedFence;
-  }
-
-  const objectLike = text.match(/\{[\s\S]*\}/);
-  if (objectLike?.[0]) {
-    return safeParseJson(objectLike[0]);
-  }
-
-  return null;
-}
-
-function safeParseJson(text) {
-  try {
-    return JSON.parse(text);
-  } catch {
-    return null;
-  }
-}
-
 function normalizeReactionEmojiToken(emojiToken) {
   const token = String(emojiToken || "").trim();
   const custom = token.match(/^<a?:([^:>]+):(\d+)>$/);
@@ -2415,13 +2307,6 @@ function normalizeReactionEmojiToken(emojiToken) {
     return `${custom[1]}:${custom[2]}`;
   }
   return token;
-}
-
-function pickFirstAvailableEmoji(preferredEmojis, allowedEmojis) {
-  for (const emoji of preferredEmojis) {
-    if (allowedEmojis.includes(emoji)) return emoji;
-  }
-  return null;
 }
 
 function escapeRegExp(value) {
