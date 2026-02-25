@@ -15,6 +15,8 @@ export const appConfig = {
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
   googleSearchApiKey: process.env.GOOGLE_SEARCH_API_KEY ?? "",
   googleSearchEngineId: process.env.GOOGLE_SEARCH_ENGINE_ID ?? "",
+  tenorApiKey: process.env.TENOR_API_KEY ?? "",
+  tenorClientKey: process.env.TENOR_CLIENT_KEY ?? "",
   defaultProvider: process.env.DEFAULT_PROVIDER === "anthropic" ? "anthropic" : "openai",
   defaultOpenAiModel: process.env.DEFAULT_MODEL_OPENAI ?? "gpt-4.1-mini",
   defaultAnthropicModel: process.env.DEFAULT_MODEL_ANTHROPIC ?? "claude-3-5-haiku-latest"
