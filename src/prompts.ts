@@ -55,12 +55,10 @@ function formatWebSearchFindings(webSearch) {
       const domain = String(item.domain || "").trim();
       const snippet = String(item.snippet || "").trim();
       const pageSummary = String(item.pageSummary || "").trim();
-      const provider = String(item.provider || "").trim();
       const pageLine = pageSummary ? ` | page: ${pageSummary}` : "";
       const snippetLine = snippet ? ` | snippet: ${snippet}` : "";
       const domainLabel = domain ? ` (${domain})` : "";
-      const providerLabel = provider ? ` | provider: ${provider}` : "";
-      return `- [${sourceId}] ${title}${domainLabel} -> ${url}${providerLabel}${snippetLine}${pageLine}`;
+      return `- [${sourceId}] ${title}${domainLabel} -> ${url}${snippetLine}${pageLine}`;
     })
     .join("\n");
 }
