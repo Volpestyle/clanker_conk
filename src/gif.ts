@@ -1,4 +1,4 @@
-import { clamp } from "./utils.js";
+import { clamp } from "./utils.ts";
 
 const GIPHY_SEARCH_API_URL = "https://api.giphy.com/v1/gifs/search";
 const GIF_TIMEOUT_MS = 8_500;

@@ -5,17 +5,17 @@ This document explains how the bot is wired, how data moves through the system, 
 ## 1. High-Level Components
 
 Code entrypoint:
-- `src/app.js`: bootstraps storage, services, bot, and dashboard server.
+- `src/app.ts`: bootstraps storage, services, bot, and dashboard server.
 
 Core runtime:
-- `src/bot.js`: Discord event handling, reply/react logic, initiative scheduling, and posting.
-- `src/llm.js`: model provider abstraction (OpenAI or Anthropic), usage + cost logging, embeddings, image generation.
-- `src/memory.js`: append-only daily journaling + LLM-based fact extraction + hybrid memory retrieval (lexical + vector).
-- `src/discovery.js`: external link discovery for initiative posts.
-- `src/store.js`: SQLite persistence and settings normalization.
+- `src/bot.ts`: Discord event handling, reply/react logic, initiative scheduling, and posting.
+- `src/llm.ts`: model provider abstraction (OpenAI or Anthropic), usage + cost logging, embeddings, image generation.
+- `src/memory.ts`: append-only daily journaling + LLM-based fact extraction + hybrid memory retrieval (lexical + vector).
+- `src/discovery.ts`: external link discovery for initiative posts.
+- `src/store.ts`: SQLite persistence and settings normalization.
 
 Control plane:
-- `src/dashboard.js`: REST API and static dashboard hosting.
+- `src/dashboard.ts`: REST API and static dashboard hosting.
 - `dashboard/src/*`: React dashboard (polling stats/actions/memory/settings and writing settings back).
 
 Storage:
@@ -52,7 +52,7 @@ sequenceDiagram
 
 ## 3. Data Model (SQLite)
 
-Main tables created in `src/store.js`:
+Main tables created in `src/store.ts`:
 - `settings`: single `runtime_settings` JSON blob.
 - `messages`: normalized message history (user + bot messages).
 - `actions`: event log (replies, reactions, initiative posts, llm/image calls, errors) with `usd_cost`.

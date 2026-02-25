@@ -1,7 +1,7 @@
 import { createReadStream } from "node:fs";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
-import { estimateImageUsdCost, estimateUsdCost } from "./pricing.js";
+import { estimateImageUsdCost, estimateUsdCost } from "./pricing.ts";
 
 const MEMORY_FACT_TYPES = ["preference", "profile", "relationship", "project", "other"];
 const DEFAULT_MEMORY_EMBEDDING_MODEL = "text-embedding-3-small";

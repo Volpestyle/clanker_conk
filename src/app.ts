@@ -1,14 +1,14 @@
 import path from "node:path";
-import { appConfig, ensureRuntimeEnv } from "./config.js";
-import { createDashboardServer } from "./dashboard.js";
-import { ClankerBot } from "./bot.js";
-import { DiscoveryService } from "./discovery.js";
-import { GifService } from "./gif.js";
-import { LLMService } from "./llm.js";
-import { MemoryManager } from "./memory.js";
-import { WebSearchService } from "./search.js";
-import { Store } from "./store.js";
-import { VideoContextService } from "./video.js";
+import { appConfig, ensureRuntimeEnv } from "./config.ts";
+import { createDashboardServer } from "./dashboard.ts";
+import { ClankerBot } from "./bot.ts";
+import { DiscoveryService } from "./discovery.ts";
+import { GifService } from "./gif.ts";
+import { LLMService } from "./llm.ts";
+import { MemoryManager } from "./memory.ts";
+import { WebSearchService } from "./search.ts";
+import { Store } from "./store.ts";
+import { VideoContextService } from "./video.ts";
 
 async function main() {
   ensureRuntimeEnv();

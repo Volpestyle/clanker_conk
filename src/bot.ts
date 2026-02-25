@@ -7,9 +7,9 @@ import {
   buildInitiativePrompt,
   buildReplyPrompt,
   buildSystemPrompt
-} from "./prompts.js";
-import { normalizeDiscoveryUrl } from "./discovery.js";
-import { chance, clamp, hasBotKeyword, sanitizeBotText, sleep, stripBotKeywords } from "./utils.js";
+} from "./prompts.ts";
+import { normalizeDiscoveryUrl } from "./discovery.ts";
+import { chance, clamp, hasBotKeyword, sanitizeBotText, sleep, stripBotKeywords } from "./utils.ts";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;

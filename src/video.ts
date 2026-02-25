@@ -2,8 +2,8 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { normalizeDiscoveryUrl } from "./discovery.js";
-import { clamp } from "./utils.js";
+import { normalizeDiscoveryUrl } from "./discovery.ts";
+import { clamp } from "./utils.ts";
 
 const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
 const VIDEO_EXT_RE = /\.(mp4|m4v|mov|webm|mkv|avi|mpeg|mpg)$/i;
