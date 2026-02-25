@@ -298,7 +298,7 @@ class BraveSearchProvider {
   async search(input) {
     const endpoint = new URL(BRAVE_SEARCH_API_URL);
     endpoint.searchParams.set("q", input.query);
-    endpoint.searchParams.set("count", String(clamp(Number(input.maxResults) || 8, 1, 10)));
+    endpoint.searchParams.set("count", String(clamp(Number(input.maxResults) || 5, 1, 10)));
     if (input.recencyDays) {
       endpoint.searchParams.set("freshness", `${clamp(Number(input.recencyDays) || 30, 1, 365)}d`);
     }
@@ -346,8 +346,11 @@ class SerpApiSearchProvider {
     endpoint.searchParams.set("engine", "google");
     endpoint.searchParams.set("q", input.query);
     endpoint.searchParams.set("api_key", this.apiKey);
-    endpoint.searchParams.set("num", String(clamp(Number(input.maxResults) || 8, 1, 10)));
+    endpoint.searchParams.set("num", String(clamp(Number(input.maxResults) || 5, 1, 10)));
     endpoint.searchParams.set("safe", input.safeSearch ? "active" : "off");
+    if (input.recencyDays) {
+      endpoint.searchParams.set("tbs", `qdr:d${clamp(Number(input.recencyDays) || 30, 1, 365)}`);
+    }
 
     const { response, attempts } = await fetchWithRetry({
       request: () =>
@@ -393,7 +396,7 @@ function normalizeProviderResults(rawItems, provider, maxResults) {
       provider
     });
   }
-  return normalized.slice(0, clamp(Number(maxResults) || 8, 1, 10));
+  return normalized.slice(0, clamp(Number(maxResults) || 5, 1, 10));
 }
 
 function normalizeWebSearchConfig(rawConfig) {
@@ -404,7 +407,7 @@ function normalizeWebSearchConfig(rawConfig) {
   const maxConcurrentFetches = Number(cfg.maxConcurrentFetches);
 
   return {
-    maxResults: clamp(Number.isFinite(maxResultsRaw) ? maxResultsRaw : 8, 1, 10),
+    maxResults: clamp(Number.isFinite(maxResultsRaw) ? maxResultsRaw : 5, 1, 10),
     maxPagesToRead: clamp(Number.isFinite(maxPagesRaw) ? maxPagesRaw : 3, 0, 5),
     maxCharsPerPage: clamp(Number.isFinite(maxCharsRaw) ? maxCharsRaw : 1400, 350, 4000),
     safeSearch: cfg.safeSearch !== undefined ? Boolean(cfg.safeSearch) : true,
@@ -414,7 +417,7 @@ function normalizeWebSearchConfig(rawConfig) {
   };
 }
 
-function normalizeProviderOrder(order) {
+export function normalizeProviderOrder(order) {
   const allowed = new Set(["brave", "serpapi"]);
   const values = Array.isArray(order) ? order : ["brave", "serpapi"];
   const normalized = [];
@@ -566,15 +569,19 @@ async function readResponseBodyLimited(response, maxBytes) {
   let size = 0;
   const chunks = [];
 
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (!value) continue;
-    size += value.byteLength;
-    if (size > maxBytes) {
-      throw new Error(`response exceeds max size of ${maxBytes} bytes`);
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      size += value.byteLength;
+      if (size > maxBytes) {
+        throw new Error(`response exceeds max size of ${maxBytes} bytes`);
+      }
+      chunks.push(value);
     }
-    chunks.push(value);
+  } finally {
+    await reader.cancel().catch(() => {});
   }
 
   const buffer = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
@@ -597,6 +604,14 @@ function extractReadableContent(html, maxChars) {
     .replace(/&#39;/g, "'")
     .replace(/&lt;/gi, "<")
     .replace(/&gt;/gi, ">")
+    .replace(/&#(\d+);/g, (_m, code) => {
+      const num = Number(code);
+      return Number.isFinite(num) ? String.fromCharCode(num) : "";
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_m, hex) => {
+      const num = Number.parseInt(hex, 16);
+      return Number.isFinite(num) ? String.fromCharCode(num) : "";
+    })
     .replace(/\s+/g, " ")
     .trim();
   const summary = sanitizeExternalText(body, maxChars);
@@ -613,6 +628,8 @@ async function mapConcurrent(items, limit, mapper) {
   const results = new Array(items.length);
   let cursor = 0;
 
+  // Safe because mapper is always async (does I/O), so cursor is only
+  // read/incremented synchronously between awaits on the single JS thread.
   async function worker() {
     while (cursor < items.length) {
       const current = cursor;
