@@ -1,5 +1,13 @@
 import { hasBotKeyword } from "./utils.ts";
 
+function stripEmojiForPrompt(text) {
+  let value = String(text || "");
+  value = value.replace(/<a?:[a-zA-Z0-9_~]+:\d+>/g, "");
+  value = value.replace(/:[a-zA-Z0-9_+-]+:/g, "");
+  value = value.replace(/[\p{Extended_Pictographic}\uFE0F]/gu, "");
+  return value.replace(/\s+/g, " ").trim();
+}
+
 function formatRecentChat(messages) {
   if (!messages?.length) return "(no recent messages available)";
 
@@ -7,7 +15,10 @@ function formatRecentChat(messages) {
     .slice()
     .reverse()
     .map((msg) => {
-      const text = String(msg.content || "").replace(/\s+/g, " ").trim();
+      const isBot = msg.is_bot === 1 || msg.is_bot === true || msg.is_bot === "1";
+      const rawText = String(msg.content || "");
+      const normalized = isBot ? stripEmojiForPrompt(rawText) : rawText;
+      const text = normalized.replace(/\s+/g, " ").trim();
       return `- ${msg.author_name}: ${text || "(empty)"}`;
     })
     .join("\n");
