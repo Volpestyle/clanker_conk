@@ -160,7 +160,15 @@ export class Store {
     const tokens = [...new Set(raw.match(/[a-z0-9]{4,}/g) ?? [])].slice(0, 5);
 
     if (!tokens.length) {
-      return this.getRecentMessages(channelId, limit);
+      return this.db
+        .prepare(
+          `SELECT message_id, created_at, channel_id, author_id, author_name, is_bot, content
+           FROM messages
+           WHERE channel_id = ? AND is_bot = 0
+           ORDER BY created_at DESC
+           LIMIT ?`
+        )
+        .all(String(channelId), clamp(limit, 1, 24));
     }
 
     const clauses = tokens.map(() => "content LIKE ?").join(" OR ");
@@ -170,7 +178,7 @@ export class Store {
       .prepare(
         `SELECT message_id, created_at, channel_id, author_id, author_name, is_bot, content
          FROM messages
-         WHERE channel_id = ? AND (${clauses})
+         WHERE channel_id = ? AND is_bot = 0 AND (${clauses})
          ORDER BY created_at DESC
          LIMIT ?`
       )
@@ -360,7 +368,9 @@ export class Store {
         reacted: 0,
         llm_call: 0,
         image_call: 0,
-        search_call: 0
+        gif_call: 0,
+        search_call: 0,
+        youtube_context_call: 0
       },
       totalCostUsd: Number(totalCostRow?.total ?? 0),
       dailyCost: dayCostRows
@@ -404,27 +414,16 @@ export class Store {
       .all(String(subject), clamp(limit, 1, 100));
   }
 
-  getRecentFacts(limit = 80) {
+  getMemorySubjects(limit = 80) {
     return this.db
       .prepare(
-        `SELECT id, created_at, subject, fact, source_message_id, confidence
+        `SELECT subject, MAX(created_at) AS last_seen_at, COUNT(*) AS fact_count
          FROM memory_facts
-         ORDER BY created_at DESC
+         GROUP BY subject
+         ORDER BY last_seen_at DESC
          LIMIT ?`
       )
-      .all(clamp(limit, 1, 400));
-  }
-
-  getRecentHighlights(limit = 16) {
-    return this.db
-      .prepare(
-        `SELECT created_at, author_name, content
-         FROM messages
-         WHERE is_bot = 0
-         ORDER BY created_at DESC
-         LIMIT ?`
-      )
-      .all(clamp(limit, 1, 100));
+      .all(clamp(limit, 1, 500));
   }
 
   close() {
@@ -447,6 +446,7 @@ function safeJsonParse(value, fallback) {
 
 function normalizeSettings(raw) {
   const merged = deepMerge(DEFAULT_SETTINGS, raw ?? {});
+  if (!merged.persona || typeof merged.persona !== "object") merged.persona = {};
   if (!merged.activity || typeof merged.activity !== "object") merged.activity = {};
   if (!merged.startup || typeof merged.startup !== "object") merged.startup = {};
   if (!merged.permissions || typeof merged.permissions !== "object") merged.permissions = {};
@@ -454,8 +454,17 @@ function normalizeSettings(raw) {
   if (!merged.memory || typeof merged.memory !== "object") merged.memory = {};
   if (!merged.llm || typeof merged.llm !== "object") merged.llm = {};
   if (!merged.webSearch || typeof merged.webSearch !== "object") merged.webSearch = {};
+  if (!merged.youtubeContext || typeof merged.youtubeContext !== "object") merged.youtubeContext = {};
 
   merged.botName = String(merged.botName || "clanker conk").slice(0, 50);
+  merged.persona.flavor = String(merged.persona?.flavor || DEFAULT_SETTINGS.persona.flavor).slice(0, 240);
+  merged.persona.hardLimits = normalizeHardLimitList(
+    merged.persona?.hardLimits,
+    DEFAULT_SETTINGS.persona?.hardLimits ?? []
+  );
+  if ("shortReplyBias" in merged.persona) {
+    delete merged.persona.shortReplyBias;
+  }
 
   const replyLevel = clamp(
     Number(merged.activity?.replyLevel ?? DEFAULT_SETTINGS.activity.replyLevel) || 0,
@@ -494,6 +503,29 @@ function normalizeSettings(raw) {
   merged.webSearch.maxCharsPerPage = clamp(Number.isFinite(maxCharsRaw) ? maxCharsRaw : 1400, 350, 4000);
   merged.webSearch.safeSearch =
     merged.webSearch?.safeSearch !== undefined ? Boolean(merged.webSearch?.safeSearch) : true;
+
+  merged.youtubeContext.enabled =
+    merged.youtubeContext?.enabled !== undefined
+      ? Boolean(merged.youtubeContext?.enabled)
+      : Boolean(DEFAULT_SETTINGS.youtubeContext?.enabled);
+  const ytPerHourRaw = Number(merged.youtubeContext?.maxLookupsPerHour);
+  const ytVideosRaw = Number(merged.youtubeContext?.maxVideosPerMessage);
+  const ytCharsRaw = Number(merged.youtubeContext?.maxTranscriptChars);
+  merged.youtubeContext.maxLookupsPerHour = clamp(
+    Number.isFinite(ytPerHourRaw) ? ytPerHourRaw : Number(DEFAULT_SETTINGS.youtubeContext?.maxLookupsPerHour) || 12,
+    0,
+    120
+  );
+  merged.youtubeContext.maxVideosPerMessage = clamp(
+    Number.isFinite(ytVideosRaw) ? ytVideosRaw : Number(DEFAULT_SETTINGS.youtubeContext?.maxVideosPerMessage) || 2,
+    0,
+    6
+  );
+  merged.youtubeContext.maxTranscriptChars = clamp(
+    Number.isFinite(ytCharsRaw) ? ytCharsRaw : Number(DEFAULT_SETTINGS.youtubeContext?.maxTranscriptChars) || 1200,
+    200,
+    4000
+  );
 
   merged.startup.catchupEnabled =
     merged.startup?.catchupEnabled !== undefined ? Boolean(merged.startup?.catchupEnabled) : true;
@@ -548,14 +580,12 @@ function normalizeSettings(raw) {
   merged.initiative.postOnStartup = Boolean(merged.initiative?.postOnStartup);
   merged.initiative.allowImagePosts = Boolean(merged.initiative?.allowImagePosts);
   merged.initiative.allowReplyImages = Boolean(merged.initiative?.allowReplyImages);
+  merged.initiative.allowReplyGifs = Boolean(merged.initiative?.allowReplyGifs);
   merged.initiative.maxImagesPerDay = clamp(Number(merged.initiative?.maxImagesPerDay) || 0, 0, 200);
-  merged.initiative.imagePostChancePercent = clamp(
-    Number(merged.initiative?.imagePostChancePercent) || 0,
-    0,
-    100
-  );
-  if ("imageModel" in merged.initiative) {
-    delete merged.initiative.imageModel;
+  merged.initiative.maxGifsPerDay = clamp(Number(merged.initiative?.maxGifsPerDay) || 0, 0, 300);
+  merged.initiative.imageModel = String(merged.initiative?.imageModel || "gpt-image-1.5").slice(0, 120);
+  if ("imagePostChancePercent" in merged.initiative) {
+    delete merged.initiative.imagePostChancePercent;
   }
   if (!merged.initiative.discovery || typeof merged.initiative.discovery !== "object") {
     merged.initiative.discovery = {};
@@ -655,7 +685,6 @@ function normalizeSettings(raw) {
 
   merged.memory.enabled = Boolean(merged.memory?.enabled);
   merged.memory.maxRecentMessages = clamp(Number(merged.memory?.maxRecentMessages) || 35, 10, 120);
-  merged.memory.maxHighlights = clamp(Number(merged.memory?.maxHighlights) || 16, 4, 80);
 
   return merged;
 }
@@ -698,4 +727,11 @@ function normalizeHttpBaseUrl(value, fallback) {
   } catch {
     return String(fallback || "https://nitter.net");
   }
+}
+
+function normalizeHardLimitList(input, fallback = []) {
+  const source = Array.isArray(input) && input.length ? input : fallback;
+  return [...new Set(source.map((item) => String(item || "").trim()).filter(Boolean))]
+    .slice(0, 24)
+    .map((item) => item.slice(0, 180));
 }
