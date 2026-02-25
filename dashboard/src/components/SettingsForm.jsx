@@ -4,6 +4,10 @@ function parseList(val) {
   return [...new Set(String(val || "").split(/[\n,]/g).map((x) => x.trim()).filter(Boolean))];
 }
 
+function parseLineList(val) {
+  return [...new Set(String(val || "").split(/\n/g).map((x) => x.trim()).filter(Boolean))];
+}
+
 function parseIdList(val) {
   return parseList(val);
 }
@@ -13,6 +17,10 @@ function formatIdList(items) {
 }
 
 function formatList(items) {
+  return (items || []).join("\n");
+}
+
+function formatLineList(items) {
   return (items || []).join("\n");
 }
 
@@ -27,6 +35,7 @@ export default function SettingsForm({ settings, onSave, toast }) {
       botName: settings.botName || "clanker conk",
       personaFlavor:
         settings.persona?.flavor || "playful, chaotic-good, slangy Gen Z/Gen A energy without being toxic",
+      personaHardLimits: formatLineList(settings.persona?.hardLimits),
       replyLevel: activity.replyLevel ?? 35,
       reactionLevel: activity.reactionLevel ?? 20,
       minGap: activity.minSecondsBetweenMessages ?? 20,
@@ -44,6 +53,10 @@ export default function SettingsForm({ settings, onSave, toast }) {
       webSearchMaxResults: settings.webSearch?.maxResults ?? 5,
       webSearchMaxPages: settings.webSearch?.maxPagesToRead ?? 3,
       webSearchMaxChars: settings.webSearch?.maxCharsPerPage ?? 1400,
+      youtubeContextEnabled: settings.youtubeContext?.enabled ?? true,
+      youtubeContextPerHour: settings.youtubeContext?.maxLookupsPerHour ?? 12,
+      youtubeContextMaxVideos: settings.youtubeContext?.maxVideosPerMessage ?? 2,
+      youtubeContextMaxChars: settings.youtubeContext?.maxTranscriptChars ?? 1200,
       maxMessages: settings.permissions?.maxMessagesPerHour ?? settings.permissions?.maxRepliesPerHour ?? 20,
       maxReactions: settings.permissions?.maxReactionsPerHour ?? 24,
       catchupEnabled: settings.startup?.catchupEnabled !== false,
@@ -58,8 +71,10 @@ export default function SettingsForm({ settings, onSave, toast }) {
       initiativeStartupPost: settings.initiative?.postOnStartup ?? false,
       initiativeImageEnabled: settings.initiative?.allowImagePosts ?? false,
       replyImageEnabled: settings.initiative?.allowReplyImages ?? false,
+      replyGifEnabled: settings.initiative?.allowReplyGifs ?? false,
       maxImagesPerDay: settings.initiative?.maxImagesPerDay ?? 10,
-      initiativeImageChance: settings.initiative?.imagePostChancePercent ?? 25,
+      maxGifsPerDay: settings.initiative?.maxGifsPerDay ?? 30,
+      initiativeImageModel: settings.initiative?.imageModel ?? "gpt-image-1.5",
       initiativeDiscoveryEnabled: settings.initiative?.discovery?.enabled ?? true,
       initiativeDiscoveryLinkChance: settings.initiative?.discovery?.linkChancePercent ?? 80,
       initiativeDiscoveryMaxLinks: settings.initiative?.discovery?.maxLinksPerPost ?? 2,
@@ -99,7 +114,8 @@ export default function SettingsForm({ settings, onSave, toast }) {
     onSave({
       botName: form.botName.trim(),
       persona: {
-        flavor: form.personaFlavor.trim()
+        flavor: form.personaFlavor.trim(),
+        hardLimits: parseLineList(form.personaHardLimits)
       },
       activity: {
         replyLevel: Number(form.replyLevel),
@@ -119,6 +135,12 @@ export default function SettingsForm({ settings, onSave, toast }) {
         maxPagesToRead: Number(form.webSearchMaxPages),
         maxCharsPerPage: Number(form.webSearchMaxChars),
         safeSearch: form.webSearchSafeMode
+      },
+      youtubeContext: {
+        enabled: form.youtubeContextEnabled,
+        maxLookupsPerHour: Number(form.youtubeContextPerHour),
+        maxVideosPerMessage: Number(form.youtubeContextMaxVideos),
+        maxTranscriptChars: Number(form.youtubeContextMaxChars)
       },
       startup: {
         catchupEnabled: form.catchupEnabled,
@@ -146,8 +168,10 @@ export default function SettingsForm({ settings, onSave, toast }) {
         postOnStartup: form.initiativeStartupPost,
         allowImagePosts: form.initiativeImageEnabled,
         allowReplyImages: form.replyImageEnabled,
+        allowReplyGifs: form.replyGifEnabled,
         maxImagesPerDay: Number(form.maxImagesPerDay),
-        imagePostChancePercent: Number(form.initiativeImageChance),
+        maxGifsPerDay: Number(form.maxGifsPerDay),
+        imageModel: form.initiativeImageModel.trim(),
         discovery: {
           enabled: form.initiativeDiscoveryEnabled,
           linkChancePercent: Number(form.initiativeDiscoveryLinkChance),
@@ -192,6 +216,14 @@ export default function SettingsForm({ settings, onSave, toast }) {
         rows="3"
         value={form.personaFlavor}
         onChange={set("personaFlavor")}
+      />
+
+      <label htmlFor="persona-hard-limits">Persona hard limits (one per line)</label>
+      <textarea
+        id="persona-hard-limits"
+        rows="4"
+        value={form.personaHardLimits}
+        onChange={set("personaHardLimits")}
       />
 
       <label htmlFor="reply-level">
@@ -351,6 +383,58 @@ export default function SettingsForm({ settings, onSave, toast }) {
         </div>
       </div>
 
+      <h4>YouTube Link Context</h4>
+      <div className="toggles">
+        <label>
+          <input
+            type="checkbox"
+            checked={form.youtubeContextEnabled}
+            onChange={set("youtubeContextEnabled")}
+          />
+          Enable YouTube transcript/metadata context in replies
+        </label>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="youtube-context-per-hour">Max YouTube lookups/hour</label>
+          <input
+            id="youtube-context-per-hour"
+            type="number"
+            min="0"
+            max="120"
+            value={form.youtubeContextPerHour}
+            onChange={set("youtubeContextPerHour")}
+          />
+        </div>
+        <div>
+          <label htmlFor="youtube-context-max-videos">Max videos per message</label>
+          <input
+            id="youtube-context-max-videos"
+            type="number"
+            min="0"
+            max="6"
+            value={form.youtubeContextMaxVideos}
+            onChange={set("youtubeContextMaxVideos")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="youtube-context-max-chars">Max transcript chars per video</label>
+          <input
+            id="youtube-context-max-chars"
+            type="number"
+            min="200"
+            max="4000"
+            value={form.youtubeContextMaxChars}
+            onChange={set("youtubeContextMaxChars")}
+          />
+        </div>
+        <div />
+      </div>
+
       <div className="split">
         <div>
           <label htmlFor="max-messages">Max bot messages/hour</label>
@@ -473,6 +557,14 @@ export default function SettingsForm({ settings, onSave, toast }) {
           />
           Allow images in regular replies
         </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.replyGifEnabled}
+            onChange={set("replyGifEnabled")}
+          />
+          Allow GIFs in regular replies
+        </label>
       </div>
 
       <div className="split">
@@ -540,19 +632,27 @@ export default function SettingsForm({ settings, onSave, toast }) {
             onChange={set("maxImagesPerDay")}
           />
         </div>
-        <div />
+        <div>
+          <label htmlFor="max-gifs-per-day">Max GIF lookups/24h</label>
+          <input
+            id="max-gifs-per-day"
+            type="number"
+            min="0"
+            max="300"
+            value={form.maxGifsPerDay}
+            onChange={set("maxGifsPerDay")}
+          />
+        </div>
       </div>
 
       <div className="split">
         <div>
-          <label htmlFor="initiative-image-chance">Image post chance (%)</label>
+          <label htmlFor="initiative-image-model">Image model</label>
           <input
-            id="initiative-image-chance"
-            type="number"
-            min="0"
-            max="100"
-            value={form.initiativeImageChance}
-            onChange={set("initiativeImageChance")}
+            id="initiative-image-model"
+            type="text"
+            value={form.initiativeImageModel}
+            onChange={set("initiativeImageModel")}
           />
         </div>
         <div />
