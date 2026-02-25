@@ -10,6 +10,7 @@ Features:
 - OpenAI or Anthropic support (runtime-configurable).
 - Optional live Google web search for replies, including page inspection from top results.
 - Optional model-directed GIF replies via GIPHY search.
+- Video link understanding for YouTube/TikTok/embedded video links (captions first, optional ASR fallback, optional keyframes).
 - Dashboard UI for settings, permissions, logs, memory, and cost tracking.
 - Two-layer memory with append-only daily logs and curated `memory/MEMORY.md` distillation.
 
@@ -27,6 +28,7 @@ Fill `.env`:
 - Optional for live web search: `GOOGLE_SEARCH_API_KEY`, `GOOGLE_SEARCH_ENGINE_ID`.
 - Optional for model-directed GIF replies: `GIPHY_API_KEY` (and optional `GIPHY_RATING`, default `pg-13`).
 - Optional: `DASHBOARD_TOKEN` (protects dashboard API).
+- Optional but recommended for richer video understanding: install `ffmpeg` and `yt-dlp` on your system.
 
 ## 2. Discord bot permissions
 

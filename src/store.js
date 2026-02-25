@@ -54,6 +54,8 @@ export class Store {
         created_at TEXT NOT NULL,
         subject TEXT NOT NULL,
         fact TEXT NOT NULL,
+        fact_type TEXT NOT NULL DEFAULT 'general',
+        evidence_text TEXT,
         source_message_id TEXT,
         confidence REAL NOT NULL DEFAULT 0.5,
         UNIQUE(subject, fact)
@@ -73,6 +75,10 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_actions_time ON actions(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_memory_subject ON memory_facts(subject, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_shared_links_last_shared_at ON shared_links(last_shared_at DESC);
+    `);
+    this.ensureMemoryFactsSchema();
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_memory_subject_type ON memory_facts(subject, fact_type, created_at DESC);
     `);
 
     if (!this.db.prepare("SELECT 1 FROM settings WHERE key = ?").get(SETTINGS_KEY)) {
@@ -387,17 +393,28 @@ export class Store {
   }
 
   addMemoryFact(fact) {
+    const rawConfidence = Number(fact.confidence);
+    const confidence = clamp(Number.isFinite(rawConfidence) ? rawConfidence : 0.5, 0, 1);
     const result = this.db
       .prepare(
-        `INSERT OR IGNORE INTO memory_facts(created_at, subject, fact, source_message_id, confidence)
-         VALUES (?, ?, ?, ?, ?)`
+        `INSERT OR IGNORE INTO memory_facts(
+          created_at,
+          subject,
+          fact,
+          fact_type,
+          evidence_text,
+          source_message_id,
+          confidence
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         nowIso(),
         String(fact.subject),
         String(fact.fact).slice(0, 400),
+        String(fact.factType || "general").slice(0, 40),
+        fact.evidenceText ? String(fact.evidenceText).slice(0, 240) : null,
         fact.sourceMessageId ? String(fact.sourceMessageId) : null,
-        clamp(Number(fact.confidence) || 0.5, 0, 1)
+        confidence
       );
 
     return result.changes > 0;
@@ -406,7 +423,7 @@ export class Store {
   getFactsForSubject(subject, limit = 12) {
     return this.db
       .prepare(
-        `SELECT id, created_at, subject, fact, source_message_id, confidence
+        `SELECT id, created_at, subject, fact, fact_type, evidence_text, source_message_id, confidence
          FROM memory_facts
          WHERE subject = ?
          ORDER BY created_at DESC
@@ -433,6 +450,21 @@ export class Store {
       this.db = null;
     }
   }
+
+  ensureMemoryFactsSchema() {
+    const columns = this.db
+      .prepare("PRAGMA table_info(memory_facts)")
+      .all()
+      .map((row) => String(row.name));
+
+    if (!columns.includes("fact_type")) {
+      this.db.exec("ALTER TABLE memory_facts ADD COLUMN fact_type TEXT NOT NULL DEFAULT 'general';");
+    }
+
+    if (!columns.includes("evidence_text")) {
+      this.db.exec("ALTER TABLE memory_facts ADD COLUMN evidence_text TEXT;");
+    }
+  }
 }
 
 function safeJsonParse(value, fallback) {
@@ -456,6 +488,9 @@ function normalizeSettings(raw) {
   if (!merged.llm || typeof merged.llm !== "object") merged.llm = {};
   if (!merged.webSearch || typeof merged.webSearch !== "object") merged.webSearch = {};
   if (!merged.videoContext || typeof merged.videoContext !== "object") merged.videoContext = {};
+  if ("youtubeContext" in merged) {
+    delete merged.youtubeContext;
+  }
 
   merged.botName = String(merged.botName || "clanker conk").slice(0, 50);
   merged.persona.flavor = String(merged.persona?.flavor || DEFAULT_SETTINGS.persona.flavor).slice(0, 240);

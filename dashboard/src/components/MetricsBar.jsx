@@ -32,8 +32,8 @@ export default function MetricsBar({ stats }) {
       value: String(s?.last24h?.search_call || 0)
     },
     {
-      label: "YouTube Ctx (24h)",
-      value: String(s?.last24h?.youtube_context_call || 0)
+      label: "Video Ctx (24h)",
+      value: String(s?.last24h?.video_context_call || 0)
     },
     {
       label: "GIFs (24h)",

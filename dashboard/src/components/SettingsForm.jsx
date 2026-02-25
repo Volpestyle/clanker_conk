@@ -53,10 +53,14 @@ export default function SettingsForm({ settings, onSave, toast }) {
       webSearchMaxResults: settings.webSearch?.maxResults ?? 5,
       webSearchMaxPages: settings.webSearch?.maxPagesToRead ?? 3,
       webSearchMaxChars: settings.webSearch?.maxCharsPerPage ?? 1400,
-      youtubeContextEnabled: settings.youtubeContext?.enabled ?? true,
-      youtubeContextPerHour: settings.youtubeContext?.maxLookupsPerHour ?? 12,
-      youtubeContextMaxVideos: settings.youtubeContext?.maxVideosPerMessage ?? 2,
-      youtubeContextMaxChars: settings.youtubeContext?.maxTranscriptChars ?? 1200,
+      videoContextEnabled: settings.videoContext?.enabled ?? true,
+      videoContextPerHour: settings.videoContext?.maxLookupsPerHour ?? 12,
+      videoContextMaxVideos: settings.videoContext?.maxVideosPerMessage ?? 2,
+      videoContextMaxChars: settings.videoContext?.maxTranscriptChars ?? 1200,
+      videoContextKeyframeInterval: settings.videoContext?.keyframeIntervalSeconds ?? 8,
+      videoContextMaxKeyframes: settings.videoContext?.maxKeyframesPerVideo ?? 3,
+      videoContextAsrFallback: settings.videoContext?.allowAsrFallback ?? false,
+      videoContextMaxAsrSeconds: settings.videoContext?.maxAsrSeconds ?? 120,
       maxMessages: settings.permissions?.maxMessagesPerHour ?? settings.permissions?.maxRepliesPerHour ?? 20,
       maxReactions: settings.permissions?.maxReactionsPerHour ?? 24,
       catchupEnabled: settings.startup?.catchupEnabled !== false,
@@ -136,11 +140,15 @@ export default function SettingsForm({ settings, onSave, toast }) {
         maxCharsPerPage: Number(form.webSearchMaxChars),
         safeSearch: form.webSearchSafeMode
       },
-      youtubeContext: {
-        enabled: form.youtubeContextEnabled,
-        maxLookupsPerHour: Number(form.youtubeContextPerHour),
-        maxVideosPerMessage: Number(form.youtubeContextMaxVideos),
-        maxTranscriptChars: Number(form.youtubeContextMaxChars)
+      videoContext: {
+        enabled: form.videoContextEnabled,
+        maxLookupsPerHour: Number(form.videoContextPerHour),
+        maxVideosPerMessage: Number(form.videoContextMaxVideos),
+        maxTranscriptChars: Number(form.videoContextMaxChars),
+        keyframeIntervalSeconds: Number(form.videoContextKeyframeInterval),
+        maxKeyframesPerVideo: Number(form.videoContextMaxKeyframes),
+        allowAsrFallback: form.videoContextAsrFallback,
+        maxAsrSeconds: Number(form.videoContextMaxAsrSeconds)
       },
       startup: {
         catchupEnabled: form.catchupEnabled,
@@ -383,56 +391,99 @@ export default function SettingsForm({ settings, onSave, toast }) {
         </div>
       </div>
 
-      <h4>YouTube Link Context</h4>
+      <h4>Video Link Context</h4>
       <div className="toggles">
         <label>
           <input
             type="checkbox"
-            checked={form.youtubeContextEnabled}
-            onChange={set("youtubeContextEnabled")}
+            checked={form.videoContextEnabled}
+            onChange={set("videoContextEnabled")}
           />
-          Enable YouTube transcript/metadata context in replies
+          Enable video transcript/metadata context in replies
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.videoContextAsrFallback}
+            onChange={set("videoContextAsrFallback")}
+          />
+          Fallback to ASR when captions are unavailable
         </label>
       </div>
 
       <div className="split">
         <div>
-          <label htmlFor="youtube-context-per-hour">Max YouTube lookups/hour</label>
+          <label htmlFor="video-context-per-hour">Max video lookups/hour</label>
           <input
-            id="youtube-context-per-hour"
+            id="video-context-per-hour"
             type="number"
             min="0"
             max="120"
-            value={form.youtubeContextPerHour}
-            onChange={set("youtubeContextPerHour")}
+            value={form.videoContextPerHour}
+            onChange={set("videoContextPerHour")}
           />
         </div>
         <div>
-          <label htmlFor="youtube-context-max-videos">Max videos per message</label>
+          <label htmlFor="video-context-max-videos">Max videos per message</label>
           <input
-            id="youtube-context-max-videos"
+            id="video-context-max-videos"
             type="number"
             min="0"
             max="6"
-            value={form.youtubeContextMaxVideos}
-            onChange={set("youtubeContextMaxVideos")}
+            value={form.videoContextMaxVideos}
+            onChange={set("videoContextMaxVideos")}
           />
         </div>
       </div>
 
       <div className="split">
         <div>
-          <label htmlFor="youtube-context-max-chars">Max transcript chars per video</label>
+          <label htmlFor="video-context-max-chars">Max transcript chars per video</label>
           <input
-            id="youtube-context-max-chars"
+            id="video-context-max-chars"
             type="number"
             min="200"
             max="4000"
-            value={form.youtubeContextMaxChars}
-            onChange={set("youtubeContextMaxChars")}
+            value={form.videoContextMaxChars}
+            onChange={set("videoContextMaxChars")}
           />
         </div>
-        <div />
+        <div>
+          <label htmlFor="video-context-keyframe-interval">Keyframe interval (seconds)</label>
+          <input
+            id="video-context-keyframe-interval"
+            type="number"
+            min="0"
+            max="120"
+            value={form.videoContextKeyframeInterval}
+            onChange={set("videoContextKeyframeInterval")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="video-context-max-keyframes">Max keyframes per video</label>
+          <input
+            id="video-context-max-keyframes"
+            type="number"
+            min="0"
+            max="8"
+            value={form.videoContextMaxKeyframes}
+            onChange={set("videoContextMaxKeyframes")}
+          />
+        </div>
+        <div>
+          <label htmlFor="video-context-max-asr-seconds">Max ASR seconds per video</label>
+          <input
+            id="video-context-max-asr-seconds"
+            type="number"
+            min="15"
+            max="600"
+            value={form.videoContextMaxAsrSeconds}
+            onChange={set("videoContextMaxAsrSeconds")}
+          />
+        </div>
       </div>
 
       <div className="split">

@@ -526,7 +526,13 @@ export class ClankerBot {
         messageId: message.id,
         authorId: message.author.id,
         authorName: message.member?.displayName || message.author.username,
-        content: text
+        content: text,
+        settings,
+        trace: {
+          guildId: message.guildId,
+          channelId: message.channelId,
+          userId: message.author.id
+        }
       });
     }
 
@@ -2140,6 +2146,31 @@ export class ClankerBot {
     }
 
     return images;
+  }
+
+  composeMessageContentForHistory(message, baseText = "") {
+    const parts = [];
+    const text = String(baseText || "").trim();
+    if (text) parts.push(text);
+
+    if (message?.attachments?.size) {
+      for (const attachment of message.attachments.values()) {
+        const url = String(attachment.url || attachment.proxyURL || "").trim();
+        if (!url) continue;
+        parts.push(url);
+      }
+    }
+
+    if (Array.isArray(message?.embeds) && message.embeds.length) {
+      for (const embed of message.embeds) {
+        const videoUrl = String(embed?.video?.url || embed?.video?.proxyURL || "").trim();
+        const embedUrl = String(embed?.url || "").trim();
+        if (videoUrl) parts.push(videoUrl);
+        if (embedUrl) parts.push(embedUrl);
+      }
+    }
+
+    return parts.join(" ").replace(/\s+/g, " ").trim();
   }
 }
 

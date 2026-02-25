@@ -1,0 +1,1400 @@
+import { spawn } from "node:child_process";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { normalizeDiscoveryUrl } from "./discovery.js";
+import { clamp } from "./utils.js";
+
+const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
+const VIDEO_EXT_RE = /\.(mp4|m4v|mov|webm|mkv|avi|mpeg|mpg)$/i;
+const DISCORD_CDN_HOST_RE = /(?:^|\.)discordapp\.(?:com|net)$/i;
+const VIDEO_HOST_HINTS = new Set([
+  "v.redd.it",
+  "streamable.com",
+  "clips.twitch.tv",
+  "twitch.tv",
+  "x.com",
+  "twitter.com"
+]);
+const REQUEST_TIMEOUT_MS = 5_500;
+const MAX_FETCH_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 180;
+const CACHE_TTL_MS = 30 * 60 * 1000;
+const YT_DLP_TIMEOUT_MS = 50_000;
+const FFMPEG_TIMEOUT_MS = 45_000;
+const MAX_COMMAND_OUTPUT_BYTES = 8 * 1024 * 1024;
+const RETRYABLE_HTTP_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const RETRYABLE_FETCH_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT"
+]);
+const VIDEO_USER_AGENT =
+  "clanker-conk/0.2 (+video-context; https://github.com/Volpestyle/clanker_conk)";
+
+export class VideoContextService {
+  constructor({ store, llm }) {
+    this.store = store;
+    this.llm = llm;
+    this.cache = new Map();
+    this.toolAvailabilityPromise = null;
+  }
+
+  extractVideoTargets(text, limit = 2) {
+    const urls = extractUrls(String(text || ""));
+    const maxTargets = clamp(Number(limit) || 2, 0, 8);
+    const targets = [];
+    const seen = new Set();
+
+    for (const rawUrl of urls) {
+      if (targets.length >= maxTargets) break;
+      const target = parseVideoTarget(rawUrl, { source: "message_url" });
+      if (!target || seen.has(target.key)) continue;
+      seen.add(target.key);
+      targets.push(target);
+    }
+
+    return targets;
+  }
+
+  extractMessageTargets(message, limit = 2) {
+    const maxTargets = clamp(Number(limit) || 2, 0, 8);
+    const candidates = [];
+    const text = String(message?.content || "");
+    if (text) {
+      candidates.push(...this.extractVideoTargets(text, maxTargets));
+    }
+
+    if (message?.attachments?.size) {
+      for (const attachment of message.attachments.values()) {
+        if (candidates.length >= maxTargets) break;
+        const target = parseAttachmentTarget(attachment);
+        if (!target) continue;
+        candidates.push(target);
+      }
+    }
+
+    if (Array.isArray(message?.embeds) && message.embeds.length) {
+      for (const embed of message.embeds) {
+        if (candidates.length >= maxTargets) break;
+        const embedTargets = parseEmbedTargets(embed);
+        for (const target of embedTargets) {
+          if (candidates.length >= maxTargets) break;
+          candidates.push(target);
+        }
+      }
+    }
+
+    return dedupeTargets(candidates, maxTargets);
+  }
+
+  async fetchContexts({
+    targets,
+    maxTranscriptChars = 1200,
+    keyframeIntervalSeconds = 0,
+    maxKeyframesPerVideo = 0,
+    allowAsrFallback = false,
+    maxAsrSeconds = 120,
+    trace = {}
+  }) {
+    const list = Array.isArray(targets) ? targets : [];
+    const transcriptLimit = clamp(Number(maxTranscriptChars) || 1200, 200, 4000);
+    const keyframeInterval = clamp(Number(keyframeIntervalSeconds) || 0, 0, 120);
+    const keyframeCount = clamp(Number(maxKeyframesPerVideo) || 0, 0, 8);
+    const asrSeconds = clamp(Number(maxAsrSeconds) || 120, 15, 600);
+    const asrEnabled = Boolean(allowAsrFallback);
+    const videos = [];
+    const errors = [];
+
+    for (const target of list) {
+      try {
+        const context = await this.fetchVideoContext({
+          target,
+          maxTranscriptChars: transcriptLimit,
+          keyframeIntervalSeconds: keyframeInterval,
+          maxKeyframesPerVideo: keyframeCount,
+          allowAsrFallback: asrEnabled,
+          maxAsrSeconds: asrSeconds,
+          trace
+        });
+        videos.push(context);
+        this.store.logAction({
+          kind: "video_context_call",
+          guildId: trace.guildId,
+          channelId: trace.channelId,
+          userId: trace.userId,
+          content: String(context.videoId || context.url || target.key || "").slice(0, 2000),
+          metadata: {
+            source: trace.source || "unknown",
+            provider: context.provider,
+            kind: context.kind,
+            videoId: context.videoId,
+            url: context.url,
+            title: context.title,
+            channel: context.channel,
+            hasTranscript: Boolean(context.transcript),
+            transcriptSource: context.transcriptSource || null,
+            transcriptChars: context.transcript ? context.transcript.length : 0,
+            transcriptError: context.transcriptError || null,
+            keyframeCount: Number(context.keyframeCount || 0),
+            keyframeError: context.keyframeError || null,
+            cacheHit: Boolean(context.cacheHit)
+          }
+        });
+      } catch (error) {
+        const message = String(error?.message || error);
+        errors.push({
+          key: target.key,
+          url: target.url,
+          error: message
+        });
+        this.store.logAction({
+          kind: "video_context_error",
+          guildId: trace.guildId,
+          channelId: trace.channelId,
+          userId: trace.userId,
+          content: `${target.key}: ${message}`.slice(0, 2000),
+          metadata: {
+            source: trace.source || "unknown",
+            kind: target.kind,
+            key: target.key,
+            url: target.url,
+            attempts: Number(error?.attempts || 1)
+          }
+        });
+      }
+    }
+
+    return {
+      videos,
+      errors
+    };
+  }
+
+  async fetchVideoContext({
+    target,
+    maxTranscriptChars,
+    keyframeIntervalSeconds,
+    maxKeyframesPerVideo,
+    allowAsrFallback,
+    maxAsrSeconds,
+    trace = {}
+  }) {
+    this.pruneCache();
+    const cached = this.cache.get(target.key);
+    const hasFreshCache = cached && Date.now() - cached.cachedAt < CACHE_TTL_MS;
+    let base = null;
+    if (hasFreshCache) {
+      base = {
+        ...cached.value,
+        cacheHit: true
+      };
+    } else {
+      const fetched = await this.fetchBaseSummary({
+        target,
+        maxTranscriptChars
+      });
+      base = {
+        ...fetched,
+        cacheHit: false
+      };
+      this.cache.set(target.key, {
+        cachedAt: Date.now(),
+        value: {
+          ...fetched,
+          cacheHit: false
+        }
+      });
+    }
+
+    const needKeyframes = Number(keyframeIntervalSeconds) > 0 && Number(maxKeyframesPerVideo) > 0;
+    const shouldAsr = Boolean(allowAsrFallback) && !String(base.transcript || "").trim();
+    const context = {
+      ...base,
+      keyframeCount: 0,
+      keyframeError: null,
+      frameImages: []
+    };
+    if (!needKeyframes && !shouldAsr) return context;
+
+    let media = null;
+    let mediaError = null;
+    try {
+      media = await this.resolveMediaInput(target.url, target.forceDirect);
+    } catch (error) {
+      mediaError = String(error?.message || error);
+    }
+
+    if (mediaError) {
+      if (needKeyframes) {
+        context.keyframeError = mediaError;
+      }
+      if (shouldAsr && !context.transcriptError) {
+        context.transcriptError = mediaError;
+      }
+      return context;
+    }
+
+    try {
+      if (needKeyframes && media) {
+        try {
+          const frames = await this.extractKeyframesFromInput({
+            input: media.input,
+            keyframeIntervalSeconds,
+            maxKeyframesPerVideo
+          });
+          context.frameImages = frames;
+          context.keyframeCount = frames.length;
+        } catch (error) {
+          context.keyframeError = String(error?.message || error);
+        }
+      }
+
+      if (shouldAsr && media) {
+        try {
+          const transcript = await this.transcribeFromInput({
+            input: media.input,
+            maxAsrSeconds,
+            maxTranscriptChars,
+            trace
+          });
+          if (transcript) {
+            context.transcript = transcript;
+            context.transcriptSource = "asr";
+            context.transcriptError = null;
+          }
+        } catch (error) {
+          if (!context.transcriptError) {
+            context.transcriptError = String(error?.message || error);
+          }
+        }
+      }
+    } finally {
+      if (media?.cleanup) {
+        await media.cleanup().catch(() => undefined);
+      }
+    }
+
+    return context;
+  }
+
+  pruneCache() {
+    const now = Date.now();
+    for (const [key, entry] of this.cache.entries()) {
+      if (!entry || now - entry.cachedAt >= CACHE_TTL_MS) {
+        this.cache.delete(key);
+      }
+    }
+  }
+
+  async fetchBaseSummary({ target, maxTranscriptChars }) {
+    if (target.kind === "youtube" && target.videoId) {
+      return this.fetchYouTubeSummary({
+        videoId: target.videoId,
+        sourceUrl: target.url,
+        maxTranscriptChars
+      });
+    }
+
+    if (target.kind !== "direct" && (await this.hasYtDlp())) {
+      try {
+        return await this.fetchYtDlpSummary({ target, maxTranscriptChars });
+      } catch {
+        // Fall through to provider-specific fallback.
+      }
+    }
+
+    if (target.kind === "tiktok") {
+      return this.fetchTikTokSummary(target.url);
+    }
+
+    return this.fetchGenericSummary(target);
+  }
+
+  async fetchYouTubeSummary({ videoId, sourceUrl, maxTranscriptChars }) {
+    const watchUrl = `https://www.youtube.com/watch?v=${encodeURIComponent(videoId)}`;
+    const html = await fetchTextWithRetry({
+      url: `${watchUrl}&hl=en`,
+      accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.2"
+    });
+    const playerResponse = extractPlayerResponse(html);
+    if (!playerResponse) {
+      throw new Error("YouTube page did not expose playable metadata.");
+    }
+
+    const summary = summarizeYouTubeVideo({
+      videoId,
+      url: sourceUrl || watchUrl,
+      playerResponse
+    });
+    let transcript = "";
+    let transcriptError = null;
+    try {
+      transcript = await fetchYouTubeTranscriptText({
+        playerResponse,
+        maxTranscriptChars
+      });
+    } catch (error) {
+      transcriptError = String(error?.message || error);
+    }
+
+    return {
+      ...summary,
+      provider: "youtube",
+      kind: "youtube",
+      transcript,
+      transcriptSource: transcript ? "captions" : "",
+      transcriptError
+    };
+  }
+
+  async fetchYtDlpSummary({ target, maxTranscriptChars }) {
+    const info = await this.fetchYtDlpInfo(target.url);
+    const transcriptResult = await this.fetchTranscriptFromYtDlpInfo(info, maxTranscriptChars).catch((error) => ({
+      text: "",
+      source: "",
+      error: String(error?.message || error)
+    }));
+    const provider = target.kind === "tiktok" ? "tiktok" : "generic";
+    const fallbackHost = safeHostFromUrl(target.url);
+
+    return {
+      provider,
+      kind: target.kind,
+      videoId: sanitizeText(String(info?.id || target.videoId || ""), 80) || null,
+      url: normalizeDiscoveryUrl(info?.webpage_url || info?.original_url || target.url) || target.url,
+      title: sanitizeText(info?.title || "", 180) || "untitled video",
+      channel:
+        sanitizeText(
+          info?.uploader || info?.channel || info?.creator || info?.channel_url || fallbackHost || "",
+          120
+        ) || "unknown channel",
+      publishedAt: normalizeYtDlpDate(info?.upload_date) || normalizeDateIso(info?.release_timestamp),
+      durationSeconds: safeNumber(info?.duration),
+      viewCount: safeNumber(info?.view_count),
+      description: sanitizeText(info?.description || "", 360),
+      transcript: transcriptResult.text || "",
+      transcriptSource: transcriptResult.source || "",
+      transcriptError: transcriptResult.error || null
+    };
+  }
+
+  async fetchYtDlpInfo(url) {
+    if (!(await this.hasYtDlp())) {
+      throw new Error("yt-dlp is not installed.");
+    }
+    const { stdout } = await runCommand({
+      command: "yt-dlp",
+      args: [
+        "--no-warnings",
+        "--quiet",
+        "--skip-download",
+        "--no-playlist",
+        "--dump-single-json",
+        String(url)
+      ],
+      timeoutMs: YT_DLP_TIMEOUT_MS
+    });
+
+    const output = String(stdout || "").trim();
+    if (!output) {
+      throw new Error("yt-dlp returned empty metadata.");
+    }
+
+    try {
+      return JSON.parse(output);
+    } catch {
+      const lastLine = output.split(/\r?\n/).filter(Boolean).at(-1) || "";
+      try {
+        return JSON.parse(lastLine);
+      } catch {
+        throw new Error("yt-dlp metadata JSON parse failed.");
+      }
+    }
+  }
+
+  async fetchTranscriptFromYtDlpInfo(info, maxTranscriptChars) {
+    const subtitles = info?.subtitles && typeof info.subtitles === "object" ? info.subtitles : {};
+    const autoCaptions =
+      info?.automatic_captions && typeof info.automatic_captions === "object" ? info.automatic_captions : {};
+    const preferred =
+      pickSubtitleTrack(subtitles, { preferManual: true }) || pickSubtitleTrack(autoCaptions, { preferManual: false });
+    if (!preferred?.url) {
+      return { text: "", source: "", error: null };
+    }
+
+    const raw = await fetchTextWithRetry({
+      url: preferred.url,
+      accept: "application/xml,text/xml,text/vtt,text/plain;q=0.9,*/*;q=0.2"
+    });
+    const text = parseSubtitleText(raw, maxTranscriptChars);
+    return {
+      text,
+      source: text ? "captions" : "",
+      error: null
+    };
+  }
+
+  async fetchTikTokSummary(url) {
+    const oembedUrl = `https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`;
+    let data = null;
+    try {
+      const raw = await fetchTextWithRetry({
+        url: oembedUrl,
+        accept: "application/json,text/plain;q=0.9,*/*;q=0.2"
+      });
+      data = JSON.parse(raw);
+    } catch {
+      // Fall through to generic summary.
+    }
+
+    const host = safeHostFromUrl(url);
+    return {
+      provider: "tiktok",
+      kind: "tiktok",
+      videoId: sanitizeText(extractTikTokIdFromUrl(url) || "", 80) || null,
+      url,
+      title: sanitizeText(data?.title || "", 180) || "TikTok video",
+      channel: sanitizeText(data?.author_name || host || "", 120) || "unknown channel",
+      publishedAt: null,
+      durationSeconds: null,
+      viewCount: null,
+      description: sanitizeText(data?.title || "", 360),
+      transcript: "",
+      transcriptSource: "",
+      transcriptError: null
+    };
+  }
+
+  async fetchGenericSummary(target) {
+    const host = safeHostFromUrl(target.url);
+    let title = "";
+    let description = "";
+    let publishedAt = null;
+    if (target.kind === "generic") {
+      try {
+        const html = await fetchTextWithRetry({
+          url: target.url,
+          accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.2"
+        });
+        title =
+          sanitizeText(
+            readMetaTag(html, "og:title") || readMetaTag(html, "twitter:title") || readHtmlTitle(html) || "",
+            180
+          ) || "";
+        description = sanitizeText(
+          readMetaTag(html, "og:description") || readMetaTag(html, "twitter:description") || "",
+          360
+        );
+        publishedAt =
+          normalizeDateIso(readMetaTag(html, "article:published_time")) ||
+          normalizeDateIso(readMetaTag(html, "og:pubdate"));
+      } catch {
+        // Keep host fallback.
+      }
+    }
+
+    return {
+      provider: target.kind === "direct" ? "direct" : "generic",
+      kind: target.kind,
+      videoId: null,
+      url: target.url,
+      title: title || `${host || "linked"} video`,
+      channel: host || "unknown source",
+      publishedAt,
+      durationSeconds: null,
+      viewCount: null,
+      description,
+      transcript: "",
+      transcriptSource: "",
+      transcriptError: null
+    };
+  }
+
+  async resolveMediaInput(url, forceDirect = false) {
+    if (forceDirect || isLikelyDirectVideoUrl(url)) {
+      return {
+        input: url,
+        cleanup: null
+      };
+    }
+
+    if (!(await this.hasYtDlp())) {
+      throw new Error("yt-dlp is required for this video source.");
+    }
+
+    return this.downloadMediaWithYtDlp(url);
+  }
+
+  async downloadMediaWithYtDlp(url) {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-video-"));
+    const outputPattern = path.join(tempDir, "source.%(ext)s");
+    try {
+      await runCommand({
+        command: "yt-dlp",
+        args: [
+          "--no-warnings",
+          "--quiet",
+          "--no-playlist",
+          "--socket-timeout",
+          "8",
+          "--retries",
+          "2",
+          "--max-filesize",
+          "80M",
+          "-f",
+          "b",
+          "-o",
+          outputPattern,
+          String(url)
+        ],
+        timeoutMs: YT_DLP_TIMEOUT_MS
+      });
+
+      const rows = await fs.readdir(tempDir);
+      const files = [];
+      for (const entry of rows) {
+        const full = path.join(tempDir, entry);
+        const stat = await fs.stat(full).catch(() => null);
+        if (!stat || !stat.isFile()) continue;
+        files.push({ full, size: stat.size });
+      }
+      if (!files.length) {
+        throw new Error("yt-dlp produced no downloadable media file.");
+      }
+
+      files.sort((a, b) => b.size - a.size);
+      const mediaPath = files[0].full;
+      return {
+        input: mediaPath,
+        cleanup: async () => {
+          await fs.rm(tempDir, { recursive: true, force: true });
+        }
+      };
+    } catch (error) {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  async extractKeyframesFromInput({ input, keyframeIntervalSeconds, maxKeyframesPerVideo }) {
+    if (!(await this.hasFfmpeg())) {
+      throw new Error("ffmpeg is not installed.");
+    }
+
+    const interval = clamp(Number(keyframeIntervalSeconds) || 0, 1, 120);
+    const maxFrames = clamp(Number(maxKeyframesPerVideo) || 0, 1, 8);
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-frames-"));
+    const outputPattern = path.join(tempDir, "frame-%03d.jpg");
+
+    try {
+      await runCommand({
+        command: "ffmpeg",
+        args: [
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-y",
+          "-i",
+          String(input),
+          "-vf",
+          `fps=1/${interval}`,
+          "-frames:v",
+          String(maxFrames),
+          "-q:v",
+          "5",
+          outputPattern
+        ],
+        timeoutMs: FFMPEG_TIMEOUT_MS
+      });
+
+      const rows = await fs.readdir(tempDir);
+      const frameFiles = rows.filter((name) => name.toLowerCase().endsWith(".jpg")).sort();
+      const images = [];
+      for (const frame of frameFiles) {
+        const fullPath = path.join(tempDir, frame);
+        const dataBase64 = await fs.readFile(fullPath, { encoding: "base64" });
+        if (!dataBase64) continue;
+        images.push({
+          filename: frame,
+          contentType: "image/jpeg",
+          mediaType: "image/jpeg",
+          dataBase64,
+          source: "video_keyframe"
+        });
+      }
+      return images;
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  async transcribeFromInput({ input, maxAsrSeconds, maxTranscriptChars, trace = {} }) {
+    if (!(await this.hasFfmpeg())) {
+      throw new Error("ffmpeg is not installed.");
+    }
+    if (!this.llm?.isAsrReady?.()) {
+      throw new Error("ASR fallback requires OPENAI_API_KEY.");
+    }
+
+    const segmentSeconds = clamp(Number(maxAsrSeconds) || 120, 15, 600);
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-audio-"));
+    const audioPath = path.join(tempDir, "audio.wav");
+
+    try {
+      await runCommand({
+        command: "ffmpeg",
+        args: [
+          "-hide_banner",
+          "-loglevel",
+          "error",
+          "-y",
+          "-i",
+          String(input),
+          "-vn",
+          "-ac",
+          "1",
+          "-ar",
+          "16000",
+          "-t",
+          String(segmentSeconds),
+          audioPath
+        ],
+        timeoutMs: FFMPEG_TIMEOUT_MS
+      });
+
+      const transcript = await this.llm.transcribeAudio({
+        filePath: audioPath,
+        trace: {
+          ...trace,
+          source: trace.source || "video_context_asr"
+        }
+      });
+      return sanitizeText(transcript, maxTranscriptChars);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
+  async getToolAvailability() {
+    if (!this.toolAvailabilityPromise) {
+      this.toolAvailabilityPromise = Promise.all([
+        this.commandAvailable("ffmpeg", ["-version"]),
+        this.commandAvailable("yt-dlp", ["--version"])
+      ])
+        .then(([ffmpeg, ytDlp]) => ({ ffmpeg, ytDlp }))
+        .catch(() => ({ ffmpeg: false, ytDlp: false }));
+    }
+    return this.toolAvailabilityPromise;
+  }
+
+  async hasFfmpeg() {
+    const tools = await this.getToolAvailability();
+    return Boolean(tools.ffmpeg);
+  }
+
+  async hasYtDlp() {
+    const tools = await this.getToolAvailability();
+    return Boolean(tools.ytDlp);
+  }
+
+  async commandAvailable(command, args = ["--version"]) {
+    try {
+      await runCommand({
+        command,
+        args,
+        timeoutMs: 4_000
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+function extractUrls(text) {
+  URL_IN_TEXT_RE.lastIndex = 0;
+  return [...String(text || "").matchAll(URL_IN_TEXT_RE)].map((match) => String(match[0] || ""));
+}
+
+function dedupeTargets(targets, maxTargets) {
+  const out = [];
+  const seen = new Set();
+  for (const target of targets) {
+    if (!target) continue;
+    if (seen.has(target.key)) continue;
+    seen.add(target.key);
+    out.push(target);
+    if (out.length >= maxTargets) break;
+  }
+  return out;
+}
+
+function parseAttachmentTarget(attachment) {
+  const url = String(attachment?.url || attachment?.proxyURL || "").trim();
+  if (!url) return null;
+
+  const filename = String(attachment?.name || "").trim();
+  const contentType = String(attachment?.contentType || "").toLowerCase();
+  const isVideo =
+    contentType.startsWith("video/") || VIDEO_EXT_RE.test(filename) || VIDEO_EXT_RE.test(url.split("?")[0] || "");
+  if (!isVideo) return null;
+
+  const target = parseVideoTarget(url, {
+    source: "attachment",
+    forceDirect: true
+  });
+  if (target) return target;
+
+  return createDirectTargetFromUrl(url, "attachment");
+}
+
+function parseEmbedTargets(embed) {
+  const targets = [];
+  const videoUrl = String(embed?.video?.url || embed?.video?.proxyURL || "").trim();
+  if (videoUrl) {
+    const target = parseVideoTarget(videoUrl, {
+      source: "embed_video",
+      forceDirect: true
+    });
+    if (target) targets.push(target);
+  }
+
+  const embedUrl = String(embed?.url || "").trim();
+  if (embedUrl) {
+    const parsedTarget = parseVideoTarget(embedUrl, {
+      source: "embed_url"
+    });
+    if (parsedTarget) {
+      targets.push(parsedTarget);
+    } else if (String(embed?.type || "").toLowerCase() === "video") {
+      const fallbackTarget = createGenericTargetFromUrl(embedUrl, "embed_url");
+      if (fallbackTarget) targets.push(fallbackTarget);
+    }
+  }
+
+  return targets;
+}
+
+function parseVideoTarget(rawUrl, { source = "message_url", forceDirect = false } = {}) {
+  const safeUrl = normalizeDiscoveryUrl(rawUrl);
+  if (!safeUrl) return null;
+
+  let parsed = null;
+  try {
+    parsed = new URL(safeUrl);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+
+  const host = String(parsed.hostname || "").toLowerCase();
+  const compactHost = host.replace(/^www\./, "");
+
+  const youtube = parseYoutubeTargetFromUrl(parsed);
+  if (youtube) {
+    return {
+      key: `youtube:${youtube.videoId}`,
+      kind: "youtube",
+      provider: "youtube",
+      videoId: youtube.videoId,
+      url: youtube.url,
+      source,
+      forceDirect: false
+    };
+  }
+
+  if (isTikTokHost(compactHost)) {
+    const tiktokId = extractTikTokIdFromParsedUrl(parsed);
+    return {
+      key: tiktokId ? `tiktok:${tiktokId}` : `tiktok:${buildHostPathKey(parsed)}`,
+      kind: "tiktok",
+      provider: "tiktok",
+      videoId: tiktokId || null,
+      url: safeUrl,
+      source,
+      forceDirect: false
+    };
+  }
+
+  const direct = forceDirect || isLikelyDirectVideoUrl(safeUrl);
+  if (direct) {
+    return {
+      key: `direct:${buildHostPathKey(parsed)}`,
+      kind: "direct",
+      provider: "direct",
+      videoId: null,
+      url: safeUrl,
+      source,
+      forceDirect: true
+    };
+  }
+
+  if (VIDEO_HOST_HINTS.has(compactHost) || compactHost.includes("reddit.com")) {
+    return {
+      key: `generic:${buildHostPathKey(parsed)}`,
+      kind: "generic",
+      provider: "generic",
+      videoId: null,
+      url: safeUrl,
+      source,
+      forceDirect: false
+    };
+  }
+
+  return null;
+}
+
+function createDirectTargetFromUrl(rawUrl, source) {
+  let parsed = null;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+
+  return {
+    key: `direct:${buildHostPathKey(parsed)}`,
+    kind: "direct",
+    provider: "direct",
+    videoId: null,
+    url: rawUrl,
+    source,
+    forceDirect: true
+  };
+}
+
+function createGenericTargetFromUrl(rawUrl, source) {
+  let parsed = null;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return null;
+  }
+
+  return {
+    key: `generic:${buildHostPathKey(parsed)}`,
+    kind: "generic",
+    provider: "generic",
+    videoId: null,
+    url: rawUrl,
+    source,
+    forceDirect: false
+  };
+}
+
+function parseYoutubeTargetFromUrl(parsed) {
+  const host = String(parsed.hostname || "").toLowerCase();
+  const compactHost = host.replace(/^www\./, "");
+  let videoId = "";
+  if (compactHost === "youtu.be") {
+    videoId = parsed.pathname.split("/").filter(Boolean)[0] || "";
+  } else if (compactHost.endsWith("youtube.com") || compactHost === "youtube-nocookie.com") {
+    if (parsed.pathname === "/watch" || parsed.pathname === "/watch/") {
+      videoId = parsed.searchParams.get("v") || "";
+    } else {
+      const pathParts = parsed.pathname.split("/").filter(Boolean);
+      if (pathParts[0] === "shorts" || pathParts[0] === "embed" || pathParts[0] === "live") {
+        videoId = pathParts[1] || "";
+      }
+    }
+  }
+
+  videoId = String(videoId || "").trim();
+  if (!/^[a-zA-Z0-9_-]{6,20}$/.test(videoId)) return null;
+  return {
+    videoId,
+    url: `https://www.youtube.com/watch?v=${videoId}`
+  };
+}
+
+function isTikTokHost(compactHost) {
+  return (
+    compactHost === "tiktok.com" ||
+    compactHost.endsWith(".tiktok.com") ||
+    compactHost === "vm.tiktok.com" ||
+    compactHost === "vt.tiktok.com"
+  );
+}
+
+function extractTikTokIdFromUrl(rawUrl) {
+  try {
+    return extractTikTokIdFromParsedUrl(new URL(String(rawUrl)));
+  } catch {
+    return "";
+  }
+}
+
+function extractTikTokIdFromParsedUrl(parsed) {
+  const parts = parsed.pathname.split("/").filter(Boolean);
+  const videoIndex = parts.findIndex((part) => part.toLowerCase() === "video");
+  if (videoIndex >= 0 && parts[videoIndex + 1]) {
+    return String(parts[videoIndex + 1]).replace(/[^0-9]/g, "");
+  }
+  const itemId = parsed.searchParams.get("item_id");
+  if (itemId) return String(itemId).replace(/[^0-9]/g, "");
+  return "";
+}
+
+function buildHostPathKey(parsed) {
+  const host = String(parsed.hostname || "").toLowerCase().replace(/^www\./, "");
+  const pathname = String(parsed.pathname || "/").replace(/\/+$/, "") || "/";
+  return `${host}${pathname}`;
+}
+
+function isLikelyDirectVideoUrl(rawUrl) {
+  let parsed = null;
+  try {
+    parsed = new URL(String(rawUrl));
+  } catch {
+    return false;
+  }
+  const pathname = String(parsed.pathname || "");
+  if (VIDEO_EXT_RE.test(pathname)) return true;
+  if (DISCORD_CDN_HOST_RE.test(String(parsed.hostname || "").toLowerCase()) && pathname.includes("/attachments/")) {
+    return true;
+  }
+  return false;
+}
+
+function summarizeYouTubeVideo({ videoId, url, playerResponse }) {
+  const details = playerResponse?.videoDetails || {};
+  const micro = playerResponse?.microformat?.playerMicroformatRenderer || {};
+
+  const title =
+    sanitizeText(details?.title || micro?.title?.simpleText || micro?.title || "", 180) || "untitled video";
+  const channel =
+    sanitizeText(details?.author || micro?.ownerChannelName || micro?.ownerChannel || "", 120) || "unknown channel";
+  const description = sanitizeText(details?.shortDescription || micro?.description?.simpleText || "", 360);
+  const publishedAt = normalizeDateIso(micro?.publishDate || micro?.uploadDate || "");
+  const durationSeconds = safeNumber(details?.lengthSeconds);
+  const viewCount = safeNumber(details?.viewCount);
+
+  return {
+    videoId,
+    url: String(url || `https://www.youtube.com/watch?v=${videoId}`),
+    title,
+    channel,
+    publishedAt,
+    durationSeconds,
+    viewCount,
+    description
+  };
+}
+
+async function fetchYouTubeTranscriptText({ playerResponse, maxTranscriptChars }) {
+  const tracks = playerResponse?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+  if (!Array.isArray(tracks) || !tracks.length) return "";
+
+  const preferred =
+    tracks.find((track) => /^en(?:-|$)/i.test(String(track?.languageCode || "")) && track?.kind !== "asr") ||
+    tracks.find((track) => /^en(?:-|$)/i.test(String(track?.languageCode || ""))) ||
+    tracks.find((track) => track?.kind !== "asr") ||
+    tracks[0];
+  const baseUrl = String(preferred?.baseUrl || "").trim();
+  if (!baseUrl) return "";
+
+  const transcriptUrl = new URL(baseUrl);
+  transcriptUrl.searchParams.set("fmt", "srv3");
+  transcriptUrl.searchParams.set("xorb", "2");
+  transcriptUrl.searchParams.set("hl", "en");
+
+  const raw = await fetchTextWithRetry({
+    url: transcriptUrl.toString(),
+    accept: "application/xml,text/xml,text/plain;q=0.9,*/*;q=0.2"
+  });
+  return parseSubtitleText(raw, maxTranscriptChars);
+}
+
+function extractPlayerResponse(html) {
+  const source = String(html || "");
+  const markers = [
+    "var ytInitialPlayerResponse = ",
+    'window["ytInitialPlayerResponse"] = ',
+    "window['ytInitialPlayerResponse'] = ",
+    '"ytInitialPlayerResponse":'
+  ];
+
+  for (const marker of markers) {
+    const markerIndex = source.indexOf(marker);
+    if (markerIndex < 0) continue;
+    const startIndex = source.indexOf("{", markerIndex + marker.length);
+    if (startIndex < 0) continue;
+    const json = extractBalancedJsonObject(source, startIndex);
+    if (!json) continue;
+    try {
+      return JSON.parse(json);
+    } catch {
+      // Try next marker.
+    }
+  }
+
+  return null;
+}
+
+function extractBalancedJsonObject(text, startIndex) {
+  if (!text || startIndex < 0 || text[startIndex] !== "{") return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaping = false;
+  for (let index = startIndex; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaping) {
+        escaping = false;
+      } else if (char === "\\") {
+        escaping = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(startIndex, index + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
+function pickSubtitleTrack(tracksByLang, { preferManual } = { preferManual: true }) {
+  if (!tracksByLang || typeof tracksByLang !== "object") return null;
+  const keys = Object.keys(tracksByLang);
+  if (!keys.length) return null;
+
+  const orderedKeys = [
+    ...keys.filter((key) => /^en(?:[-_]|$)/i.test(key)),
+    ...keys.filter((key) => /english/i.test(key)),
+    ...keys.filter((key) => !/^en(?:[-_]|$)/i.test(key) && !/english/i.test(key))
+  ];
+  const uniqueKeys = [...new Set(orderedKeys)];
+  const extPriority = ["vtt", "srv3", "ttml", "json3", "srt"];
+
+  for (const lang of uniqueKeys) {
+    const rows = Array.isArray(tracksByLang[lang]) ? tracksByLang[lang] : [];
+    if (!rows.length) continue;
+    const orderedTracks = rows
+      .slice()
+      .sort((a, b) => extPriority.indexOf(String(a?.ext || "").toLowerCase()) -
+        extPriority.indexOf(String(b?.ext || "").toLowerCase()));
+    for (const row of orderedTracks) {
+      const url = String(row?.url || row?.data || "").trim();
+      if (!url) continue;
+      const ext = String(row?.ext || "").toLowerCase();
+      const appearsAuto = /\bauto(?:matic)?\b/i.test(String(row?.name || ""));
+      if (preferManual && appearsAuto) continue;
+      return { url, ext };
+    }
+  }
+
+  for (const lang of uniqueKeys) {
+    const rows = Array.isArray(tracksByLang[lang]) ? tracksByLang[lang] : [];
+    for (const row of rows) {
+      const url = String(row?.url || row?.data || "").trim();
+      if (!url) continue;
+      return { url, ext: String(row?.ext || "").toLowerCase() };
+    }
+  }
+
+  return null;
+}
+
+function parseSubtitleText(raw, maxTranscriptChars) {
+  const source = String(raw || "");
+  if (!source) return "";
+  const xmlBlocks = [...source.matchAll(/<(?:text|p)\b[^>]*>([\s\S]*?)<\/(?:text|p)>/gi)];
+  if (xmlBlocks.length) {
+    const joined = xmlBlocks
+      .map((match) =>
+        decodeHtmlEntities(
+          String(match?.[1] || "")
+            .replace(/<[^>]+>/g, " ")
+            .replace(/\s+/g, " ")
+            .trim()
+        )
+      )
+      .filter(Boolean)
+      .join(" ");
+    return sanitizeText(joined, maxTranscriptChars);
+  }
+
+  const lines = source
+    .split(/\r?\n/g)
+    .map((line) => decodeHtmlEntities(String(line || "").replace(/<[^>]+>/g, " ").trim()))
+    .filter(Boolean)
+    .filter((line) => !/^WEBVTT$/i.test(line))
+    .filter((line) => !/^\d+$/.test(line))
+    .filter((line) => !/^(NOTE|STYLE|REGION)\b/i.test(line))
+    .filter((line) => !/^\d{1,2}:\d{2}(?::\d{2})?[.,]\d{2,3}\s*-->\s*\d{1,2}:\d{2}(?::\d{2})?[.,]\d{2,3}/.test(line))
+    .filter((line) => !/^\d{1,2}:\d{2}(?::\d{2})?[.,]\d{2,3}$/.test(line))
+    .map((line) => line.replace(/\s+/g, " ").trim());
+  return sanitizeText(lines.join(" "), maxTranscriptChars);
+}
+
+function readMetaTag(html, propertyOrName) {
+  const escaped = escapeRegExp(propertyOrName);
+  const pattern = new RegExp(
+    `<meta[^>]+(?:property|name)=["']${escaped}["'][^>]+content=["']([^"']+)["'][^>]*>`,
+    "i"
+  );
+  const match = String(html || "").match(pattern);
+  return decodeHtmlEntities(String(match?.[1] || "").trim());
+}
+
+function readHtmlTitle(html) {
+  const match = String(html || "").match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return decodeHtmlEntities(String(match?.[1] || "").replace(/\s+/g, " ").trim());
+}
+
+async function fetchTextWithRetry({ url, accept = "*/*", maxAttempts = MAX_FETCH_ATTEMPTS }) {
+  const { response, attempts } = await fetchWithRetry({
+    request: () =>
+      fetch(url, {
+        method: "GET",
+        redirect: "follow",
+        headers: {
+          "user-agent": VIDEO_USER_AGENT,
+          accept
+        },
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+      }),
+    shouldRetryResponse: (res) => !res.ok && shouldRetryHttpStatus(res.status),
+    maxAttempts
+  });
+
+  if (!response.ok) {
+    const error = new Error(`Video HTTP ${response.status}`);
+    error.attempts = attempts;
+    throw error;
+  }
+
+  let text = "";
+  try {
+    text = await response.text();
+  } catch (error) {
+    throw withAttemptCount(error, attempts);
+  }
+  if (!text) {
+    const error = new Error("Video source returned empty response.");
+    error.attempts = attempts;
+    throw error;
+  }
+
+  return text;
+}
+
+async function fetchWithRetry({ request, shouldRetryResponse, maxAttempts = MAX_FETCH_ATTEMPTS }) {
+  let attempt = 0;
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    try {
+      const response = await request();
+      if (!shouldRetryResponse(response) || attempt >= maxAttempts) {
+        return { response, attempts: attempt };
+      }
+    } catch (error) {
+      if (!isRetryableFetchError(error) || attempt >= maxAttempts) {
+        throw withAttemptCount(error, attempt);
+      }
+    }
+
+    await sleep(getRetryDelayMs(attempt));
+  }
+
+  throw withAttemptCount(new Error("Video fetch failed after retries."), maxAttempts);
+}
+
+async function runCommand({ command, args, timeoutMs = 30_000 }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, Math.max(1, timeoutMs));
+
+    child.stdout.on("data", (chunk) => {
+      const text = String(chunk || "");
+      const nextBytes = Buffer.byteLength(text);
+      if (stdoutBytes < MAX_COMMAND_OUTPUT_BYTES) {
+        stdout += text;
+        if (Buffer.byteLength(stdout) > MAX_COMMAND_OUTPUT_BYTES) {
+          stdout = stdout.slice(0, MAX_COMMAND_OUTPUT_BYTES);
+        }
+      }
+      stdoutBytes += nextBytes;
+    });
+
+    child.stderr.on("data", (chunk) => {
+      const text = String(chunk || "");
+      const nextBytes = Buffer.byteLength(text);
+      if (stderrBytes < MAX_COMMAND_OUTPUT_BYTES) {
+        stderr += text;
+        if (Buffer.byteLength(stderr) > MAX_COMMAND_OUTPUT_BYTES) {
+          stderr = stderr.slice(0, MAX_COMMAND_OUTPUT_BYTES);
+        }
+      }
+      stderrBytes += nextBytes;
+    });
+
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (timedOut) {
+        reject(new Error(`${command} timed out after ${timeoutMs}ms.`));
+        return;
+      }
+      if (code !== 0) {
+        const message = String(stderr || stdout || "").replace(/\s+/g, " ").trim();
+        reject(new Error(`${command} exited with code ${code}${message ? `: ${message.slice(0, 400)}` : ""}`));
+        return;
+      }
+      resolve({
+        stdout: String(stdout || "").trim(),
+        stderr: String(stderr || "").trim()
+      });
+    });
+  });
+}
+
+function shouldRetryHttpStatus(status) {
+  return RETRYABLE_HTTP_STATUS.has(Number(status));
+}
+
+function isRetryableFetchError(error) {
+  const code = String(error?.code || error?.cause?.code || "").toUpperCase();
+  if (RETRYABLE_FETCH_ERROR_CODES.has(code)) return true;
+
+  const name = String(error?.name || "");
+  if (name === "AbortError" || name === "TimeoutError") return true;
+
+  const message = String(error?.message || "").toLowerCase();
+  return message.includes("timeout") || message.includes("timed out") || message.includes("fetch failed");
+}
+
+function withAttemptCount(error, attempts) {
+  if (error && typeof error === "object") {
+    try {
+      error.attempts = Number(attempts || 1);
+      return error;
+    } catch {
+      // Fall through to wrapped error.
+    }
+  }
+
+  const wrapped = new Error(String(error?.message || error || "unknown error"));
+  wrapped.attempts = Number(attempts || 1);
+  return wrapped;
+}
+
+function getRetryDelayMs(attempt) {
+  return Math.min(900, RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1));
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function safeNumber(value) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function normalizeDateIso(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const timestamp = Number(value);
+  if (Number.isFinite(timestamp) && timestamp > 0) {
+    const ms = timestamp > 9_999_999_999 ? timestamp : timestamp * 1000;
+    const parsed = new Date(ms);
+    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+  }
+
+  const text = String(value || "").trim();
+  if (!text) return null;
+  const parsed = Date.parse(text);
+  if (!Number.isFinite(parsed)) return null;
+  return new Date(parsed).toISOString();
+}
+
+function normalizeYtDlpDate(value) {
+  const text = String(value || "").trim();
+  if (!/^\d{8}$/.test(text)) return null;
+  const year = text.slice(0, 4);
+  const month = text.slice(4, 6);
+  const day = text.slice(6, 8);
+  const iso = `${year}-${month}-${day}T00:00:00.000Z`;
+  const parsed = Date.parse(iso);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
+function sanitizeText(value, maxLen = 240) {
+  const text = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (!text) return "";
+  if (text.length <= maxLen) return text;
+  return `${text.slice(0, Math.max(0, maxLen - 3)).trimEnd()}...`;
+}
+
+function safeHostFromUrl(url) {
+  try {
+    return String(new URL(String(url)).hostname || "")
+      .toLowerCase()
+      .replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function decodeHtmlEntities(value) {
+  return String(value || "")
+    .replace(/&#39;|&apos;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&#(\d+);/g, (_match, numberText) => {
+      const number = Number(numberText);
+      return Number.isFinite(number) ? String.fromCharCode(number) : "";
+    })
+    .replace(/&#x([0-9a-f]+);/gi, (_match, hexText) => {
+      const number = Number.parseInt(hexText, 16);
+      return Number.isFinite(number) ? String.fromCharCode(number) : "";
+    });
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
