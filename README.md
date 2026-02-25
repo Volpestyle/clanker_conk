@@ -9,8 +9,9 @@ Features:
 - Creative discovery for initiative posts (Reddit, Hacker News, YouTube RSS, RSS feeds, optional X via Nitter).
 - OpenAI or Anthropic support (runtime-configurable).
 - Optional live Google web search for replies, including page inspection from top results.
+- Optional model-directed GIF replies via Tenor search.
 - Dashboard UI for settings, permissions, logs, memory, and cost tracking.
-- Persistent memory and conversation history with `memory/MEMORY.md` regeneration.
+- Two-layer memory with append-only daily logs and curated `memory/MEMORY.md` distillation.
 
 ## 1. Setup
 
@@ -24,6 +25,7 @@ Fill `.env`:
 - `DISCORD_TOKEN`: your bot token.
 - `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY`.
 - Optional for live web search: `GOOGLE_SEARCH_API_KEY`, `GOOGLE_SEARCH_ENGINE_ID`.
+- Optional for model-directed GIF replies: `TENOR_API_KEY` (and optional `TENOR_CLIENT_KEY`).
 - Optional: `DASHBOARD_TOKEN` (protects dashboard API).
 
 ## 2. Discord bot permissions
@@ -77,6 +79,7 @@ Use dashboard to:
 - Configure initiative pacing (`even` or `spontaneous`) and spontaneity.
 - Configure discovery source mix, link frequency, freshness, dedupe window, and topic/source lists.
 - Configure live web search limits (hourly cap, results/query, pages inspected, safe mode).
+- Enable/disable model-directed GIF replies and set GIF lookup budget.
 - Choose LLM provider + model.
 - Track accumulated API spend.
 - Inspect bot actions and memory.
@@ -84,7 +87,8 @@ Use dashboard to:
 ## 5. Notes
 
 - This project stores runtime data in `./data/clanker.db`.
-- `memory/MEMORY.md` is auto-regenerated from learned facts and recent highlights.
+- `memory/YYYY-MM-DD.md` grows append-only with user-message journal entries.
+- `memory/MEMORY.md` is periodically curated from durable facts plus recent daily logs.
 - Personality is intentionally slangy and playful but constrained by explicit limitations.
 
 ## 6. Technical Docs
