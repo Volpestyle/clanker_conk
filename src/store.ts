@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { DEFAULT_SETTINGS } from "./defaultSettings.ts";
+import { normalizeProviderOrder } from "./search.ts";
 import { clamp, deepMerge, nowIso, uniqueIdList } from "./utils.ts";
 
 const SETTINGS_KEY = "runtime_settings";
@@ -614,12 +615,21 @@ function normalizeSettings(raw) {
   const maxResultsRaw = Number(merged.webSearch?.maxResults);
   const maxPagesRaw = Number(merged.webSearch?.maxPagesToRead);
   const maxCharsRaw = Number(merged.webSearch?.maxCharsPerPage);
+  const recencyDaysRaw = Number(merged.webSearch?.recencyDaysDefault);
+  const maxConcurrentFetchesRaw = Number(merged.webSearch?.maxConcurrentFetches);
   merged.webSearch.maxSearchesPerHour = clamp(Number.isFinite(maxSearchesRaw) ? maxSearchesRaw : 12, 1, 120);
   merged.webSearch.maxResults = clamp(Number.isFinite(maxResultsRaw) ? maxResultsRaw : 5, 1, 10);
-  merged.webSearch.maxPagesToRead = clamp(Number.isFinite(maxPagesRaw) ? maxPagesRaw : 3, 0, 6);
+  merged.webSearch.maxPagesToRead = clamp(Number.isFinite(maxPagesRaw) ? maxPagesRaw : 3, 0, 5);
   merged.webSearch.maxCharsPerPage = clamp(Number.isFinite(maxCharsRaw) ? maxCharsRaw : 1400, 350, 4000);
   merged.webSearch.safeSearch =
     merged.webSearch?.safeSearch !== undefined ? Boolean(merged.webSearch?.safeSearch) : true;
+  merged.webSearch.providerOrder = normalizeProviderOrder(merged.webSearch?.providerOrder);
+  merged.webSearch.recencyDaysDefault = clamp(Number.isFinite(recencyDaysRaw) ? recencyDaysRaw : 30, 1, 365);
+  merged.webSearch.maxConcurrentFetches = clamp(
+    Number.isFinite(maxConcurrentFetchesRaw) ? maxConcurrentFetchesRaw : 5,
+    1,
+    10
+  );
 
   merged.videoContext.enabled =
     merged.videoContext?.enabled !== undefined
