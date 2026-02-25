@@ -2413,29 +2413,40 @@ function embedWebSearchSources(text, webSearch) {
   const results = Array.isArray(webSearch?.results) ? webSearch.results : [];
   if (!results.length) return base;
 
-  let replacedAnyCitation = false;
-  const replaced = base.replace(/\[S(\d{1,2})\](?!\()/g, (full, rawIndex) => {
-    const index = Number(rawIndex) - 1;
+  const textWithPlainCitations = base.replace(/\[S(\d{1,2})\]\(\s*<?https?:\/\/[^)\s>]+[^)]*\)/gi, "[S$1]");
+  const citedIndices = [...new Set(
+    [...textWithPlainCitations.matchAll(/\[S(\d{1,2})\]/gi)]
+      .map((match) => Number(match[1]) - 1)
+      .filter((index) => Number.isInteger(index) && index >= 0 && index < results.length)
+  )].sort((a, b) => a - b);
+
+  const referenceIndices = citedIndices.length
+    ? citedIndices
+    : results
+        .map((_, index) => index)
+        .slice(0, 3);
+  if (!referenceIndices.length) return textWithPlainCitations;
+
+  const urlLines = [];
+  const domainLines = [];
+  for (const index of referenceIndices) {
     const row = results[index];
     const url = String(row?.url || "").trim();
-    if (!url) return full;
-    replacedAnyCitation = true;
-    return `[S${index + 1}](<${url}>)`;
-  });
-
-  if (replacedAnyCitation || /\[S\d{1,2}\]\(\s*<?https?:\/\//i.test(replaced)) {
-    return replaced;
-  }
-
-  const sourceLinks = [];
-  for (let index = 0; index < results.length && sourceLinks.length < 3; index += 1) {
-    const url = String(results[index]?.url || "").trim();
     if (!url) continue;
-    sourceLinks.push(`[S${index + 1}](<${url}>)`);
+    const domain = String(row?.domain || extractDomainForSourceLabel(url) || "source");
+    urlLines.push(`[S${index + 1}] ${domain} - <${url}>`);
+    domainLines.push(`[S${index + 1}] ${domain}`);
   }
+  if (!urlLines.length) return textWithPlainCitations;
 
-  if (!sourceLinks.length) return replaced;
-  return `${replaced}\n\nSources: ${sourceLinks.join(" ")}`;
+  const MAX_CONTENT_LEN = 1900;
+  const withUrls = `${textWithPlainCitations}\n\nSources:\n${urlLines.join("\n")}`;
+  if (withUrls.length <= MAX_CONTENT_LEN) return withUrls;
+
+  const withDomains = `${textWithPlainCitations}\n\nSources:\n${domainLines.join("\n")}`;
+  if (withDomains.length <= MAX_CONTENT_LEN) return withDomains;
+
+  return textWithPlainCitations;
 }
 
 function normalizeSkipSentinel(text) {
@@ -2445,4 +2456,12 @@ function normalizeSkipSentinel(text) {
 
   const withoutTrailingSkip = value.replace(/\s*\[SKIP\]\s*$/i, "").trim();
   return withoutTrailingSkip || "[SKIP]";
+}
+
+function extractDomainForSourceLabel(rawUrl) {
+  try {
+    return new URL(String(rawUrl || "")).hostname.replace(/^www\./i, "").toLowerCase();
+  } catch {
+    return "";
+  }
 }
