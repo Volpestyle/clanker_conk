@@ -8,7 +8,7 @@ import { LLMService } from "./llm.js";
 import { MemoryManager } from "./memory.js";
 import { WebSearchService } from "./search.js";
 import { Store } from "./store.js";
-import { YouTubeContextService } from "./youtube.js";
+import { VideoContextService } from "./video.js";
 
 async function main() {
   ensureRuntimeEnv();
@@ -23,11 +23,11 @@ async function main() {
   const discovery = new DiscoveryService({ store });
   const gifs = new GifService({ appConfig, store });
   const search = new WebSearchService({ appConfig, store });
-  const youtube = new YouTubeContextService({ store });
-  const memory = new MemoryManager({ store, memoryFilePath });
+  const video = new VideoContextService({ store, llm });
+  const memory = new MemoryManager({ store, llm, memoryFilePath });
   await memory.refreshMemoryMarkdown();
 
-  const bot = new ClankerBot({ appConfig, store, llm, memory, discovery, search, gifs, youtube });
+  const bot = new ClankerBot({ appConfig, store, llm, memory, discovery, search, gifs, video });
   const dashboard = createDashboardServer({ appConfig, store, bot, memory });
 
   await bot.start();

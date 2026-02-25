@@ -29,11 +29,15 @@ export const DEFAULT_SETTINGS = {
     maxCharsPerPage: 1400,
     safeSearch: true
   },
-  youtubeContext: {
+  videoContext: {
     enabled: true,
     maxLookupsPerHour: 12,
     maxVideosPerMessage: 2,
-    maxTranscriptChars: 1200
+    maxTranscriptChars: 1200,
+    keyframeIntervalSeconds: 8,
+    maxKeyframesPerVideo: 3,
+    allowAsrFallback: false,
+    maxAsrSeconds: 120
   },
   startup: {
     catchupEnabled: true,
