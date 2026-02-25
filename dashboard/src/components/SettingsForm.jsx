@@ -38,6 +38,12 @@ export default function SettingsForm({ settings, onSave, toast }) {
       model: settings.llm?.model ?? "gpt-4.1-mini",
       temperature: settings.llm?.temperature ?? 0.9,
       maxTokens: settings.llm?.maxOutputTokens ?? 220,
+      webSearchEnabled: settings.webSearch?.enabled ?? false,
+      webSearchSafeMode: settings.webSearch?.safeSearch ?? true,
+      webSearchPerHour: settings.webSearch?.maxSearchesPerHour ?? 12,
+      webSearchMaxResults: settings.webSearch?.maxResults ?? 5,
+      webSearchMaxPages: settings.webSearch?.maxPagesToRead ?? 3,
+      webSearchMaxChars: settings.webSearch?.maxCharsPerPage ?? 1400,
       maxMessages: settings.permissions?.maxMessagesPerHour ?? settings.permissions?.maxRepliesPerHour ?? 20,
       maxReactions: settings.permissions?.maxReactionsPerHour ?? 24,
       catchupEnabled: settings.startup?.catchupEnabled !== false,
@@ -51,6 +57,8 @@ export default function SettingsForm({ settings, onSave, toast }) {
       initiativeSpontaneity: settings.initiative?.spontaneity ?? 65,
       initiativeStartupPost: settings.initiative?.postOnStartup ?? false,
       initiativeImageEnabled: settings.initiative?.allowImagePosts ?? false,
+      replyImageEnabled: settings.initiative?.allowReplyImages ?? false,
+      maxImagesPerDay: settings.initiative?.maxImagesPerDay ?? 10,
       initiativeImageChance: settings.initiative?.imagePostChancePercent ?? 25,
       initiativeImageModel: settings.initiative?.imageModel ?? "gpt-image-1",
       initiativeDiscoveryEnabled: settings.initiative?.discovery?.enabled ?? true,
@@ -105,6 +113,14 @@ export default function SettingsForm({ settings, onSave, toast }) {
         temperature: Number(form.temperature),
         maxOutputTokens: Number(form.maxTokens)
       },
+      webSearch: {
+        enabled: form.webSearchEnabled,
+        maxSearchesPerHour: Number(form.webSearchPerHour),
+        maxResults: Number(form.webSearchMaxResults),
+        maxPagesToRead: Number(form.webSearchMaxPages),
+        maxCharsPerPage: Number(form.webSearchMaxChars),
+        safeSearch: form.webSearchSafeMode
+      },
       startup: {
         catchupEnabled: form.catchupEnabled,
         catchupLookbackHours: Number(form.catchupLookbackHours),
@@ -130,6 +146,8 @@ export default function SettingsForm({ settings, onSave, toast }) {
         spontaneity: Number(form.initiativeSpontaneity),
         postOnStartup: form.initiativeStartupPost,
         allowImagePosts: form.initiativeImageEnabled,
+        allowReplyImages: form.replyImageEnabled,
+        maxImagesPerDay: Number(form.maxImagesPerDay),
         imagePostChancePercent: Number(form.initiativeImageChance),
         imageModel: form.initiativeImageModel.trim(),
         discovery: {
@@ -265,6 +283,76 @@ export default function SettingsForm({ settings, onSave, toast }) {
         </div>
       </div>
 
+      <h4>Live Web Search (Google)</h4>
+      <div className="toggles">
+        <label>
+          <input
+            type="checkbox"
+            checked={form.webSearchEnabled}
+            onChange={set("webSearchEnabled")}
+          />
+          Enable live web search for replies
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.webSearchSafeMode}
+            onChange={set("webSearchSafeMode")}
+          />
+          SafeSearch enabled
+        </label>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="web-search-per-hour">Max searches/hour</label>
+          <input
+            id="web-search-per-hour"
+            type="number"
+            min="1"
+            max="120"
+            value={form.webSearchPerHour}
+            onChange={set("webSearchPerHour")}
+          />
+        </div>
+        <div>
+          <label htmlFor="web-search-results">Google results/query</label>
+          <input
+            id="web-search-results"
+            type="number"
+            min="1"
+            max="10"
+            value={form.webSearchMaxResults}
+            onChange={set("webSearchMaxResults")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="web-search-pages">Result pages to inspect</label>
+          <input
+            id="web-search-pages"
+            type="number"
+            min="0"
+            max="6"
+            value={form.webSearchMaxPages}
+            onChange={set("webSearchMaxPages")}
+          />
+        </div>
+        <div>
+          <label htmlFor="web-search-chars">Max chars/page extract</label>
+          <input
+            id="web-search-chars"
+            type="number"
+            min="350"
+            max="4000"
+            value={form.webSearchMaxChars}
+            onChange={set("webSearchMaxChars")}
+          />
+        </div>
+      </div>
+
       <div className="split">
         <div>
           <label htmlFor="max-messages">Max bot messages/hour</label>
@@ -379,6 +467,14 @@ export default function SettingsForm({ settings, onSave, toast }) {
           />
           Allow image posts
         </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.replyImageEnabled}
+            onChange={set("replyImageEnabled")}
+          />
+          Allow images in regular replies
+        </label>
       </div>
 
       <div className="split">
@@ -436,14 +532,14 @@ export default function SettingsForm({ settings, onSave, toast }) {
 
       <div className="split">
         <div>
-          <label htmlFor="initiative-image-chance">Image post chance (%)</label>
+          <label htmlFor="max-images-per-day">Max generated images/24h</label>
           <input
-            id="initiative-image-chance"
+            id="max-images-per-day"
             type="number"
             min="0"
-            max="100"
-            value={form.initiativeImageChance}
-            onChange={set("initiativeImageChance")}
+            max="200"
+            value={form.maxImagesPerDay}
+            onChange={set("maxImagesPerDay")}
           />
         </div>
         <div>
@@ -455,6 +551,21 @@ export default function SettingsForm({ settings, onSave, toast }) {
             onChange={set("initiativeImageModel")}
           />
         </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="initiative-image-chance">Image post chance (%)</label>
+          <input
+            id="initiative-image-chance"
+            type="number"
+            min="0"
+            max="100"
+            value={form.initiativeImageChance}
+            onChange={set("initiativeImageChance")}
+          />
+        </div>
+        <div />
       </div>
 
       <h4>Creative Discovery</h4>

@@ -22,6 +22,14 @@ export const DEFAULT_SETTINGS = {
     maxOutputTokens: 220,
     pricing: {}
   },
+  webSearch: {
+    enabled: false,
+    maxSearchesPerHour: 12,
+    maxResults: 5,
+    maxPagesToRead: 3,
+    maxCharsPerPage: 1400,
+    safeSearch: true
+  },
   startup: {
     catchupEnabled: true,
     catchupLookbackHours: 6,
@@ -47,6 +55,8 @@ export const DEFAULT_SETTINGS = {
     spontaneity: 65,
     postOnStartup: false,
     allowImagePosts: false,
+    allowReplyImages: false,
+    maxImagesPerDay: 10,
     imagePostChancePercent: 25,
     imageModel: "gpt-image-1",
     discovery: {

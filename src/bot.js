@@ -39,14 +39,24 @@ const GATEWAY_STALE_MS = 2 * 60_000;
 const GATEWAY_RECONNECT_BASE_DELAY_MS = 5_000;
 const GATEWAY_RECONNECT_MAX_DELAY_MS = 60_000;
 const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
+const IMAGE_REQUEST_RE =
+  /\b(?:make|generate|create|draw|paint|send|show|post)\b[\w\s,]{0,30}\b(?:image|picture|pic|photo|meme|art)\b|\b(?:image|picture|pic|photo|meme|art)\b[\w\s,]{0,24}\b(?:please|pls|plz|of|for|about)\b/i;
+const IMAGE_PROMPT_DIRECTIVE_RE = /\[\[IMAGE_PROMPT:\s*([\s\S]*?)\s*\]\]\s*$/i;
+const WEB_SEARCH_REQUEST_RE =
+  /^(?:<@!?\d+>\s*)?(?:(?:can|could|would|will)\s+you\s+)?(?:google|search|find|look\s*up|lookup)\b|\b(?:google|search|look\s*up|lookup|find)\b[\w\s,]{0,48}\b(?:on\s+)?(?:the\s+)?(?:web|internet|online|google)\b/i;
+const WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
+const WEB_FRESHNESS_RE =
+  /\b(?:latest|today|current|right\s*now|news|newest|price|release\s*date|version|updated?)\b/i;
+const MAX_WEB_QUERY_LEN = 220;
 
 export class ClankerBot {
-  constructor({ appConfig, store, llm, memory, discovery }) {
+  constructor({ appConfig, store, llm, memory, discovery, search }) {
     this.appConfig = appConfig;
     this.store = store;
     this.llm = llm;
     this.memory = memory;
     this.discovery = discovery;
+    this.search = search;
 
     this.lastBotMessageAt = 0;
     this.memoryTimer = null;
@@ -574,6 +584,20 @@ export class ClankerBot {
         })
       : { userFacts: [], relevantMessages: [], memoryMarkdown: "" };
     const imageInputs = this.getImageInputs(message);
+    const userRequestedImage = this.isExplicitImageRequest(message.content);
+    const imageBudget = this.getImageBudgetState(settings);
+    const webSearch = await this.maybeBuildWebSearchContext({
+      settings,
+      message,
+      addressSignal,
+      forceRespond: options.forceRespond,
+      trace: {
+        guildId: message.guildId,
+        channelId: message.channelId,
+        userId: message.author.id,
+        source: options.source || "message_event"
+      }
+    });
 
     const systemPrompt = buildSystemPrompt(settings, memorySlice.memoryMarkdown);
     const userPrompt = buildReplyPrompt({
@@ -585,7 +609,11 @@ export class ClankerBot {
       recentMessages,
       relevantMessages: memorySlice.relevantMessages,
       userFacts: memorySlice.userFacts,
-      emojiHints: this.getEmojiHints(message.guild)
+      emojiHints: this.getEmojiHints(message.guild),
+      allowReplyImages: settings.initiative.allowReplyImages && imageBudget.canGenerate,
+      remainingReplyImages: imageBudget.remaining,
+      userRequestedImage,
+      webSearch
     });
 
     const generation = await this.llm.generate({
@@ -600,8 +628,33 @@ export class ClankerBot {
       }
     });
 
-    const finalText = sanitizeBotText(generation.text);
+    const replyDirective = parseReplyImageDirective(generation.text);
+    const finalText = sanitizeBotText(
+      replyDirective.text || (replyDirective.imagePrompt ? "here you go" : generation.text)
+    );
     if (!finalText || finalText === "[SKIP]") return false;
+
+    let payload = { content: finalText };
+    let imageUsed = false;
+    let imageBudgetBlocked = false;
+    const imagePrompt = replyDirective.imagePrompt;
+
+    if (settings.initiative.allowReplyImages && imagePrompt) {
+      const imageResult = await this.maybeAttachGeneratedImage({
+        settings,
+        text: finalText,
+        prompt: imagePrompt,
+        trace: {
+          guildId: message.guildId,
+          channelId: message.channelId,
+          userId: message.author.id,
+          source: "reply_message"
+        }
+      });
+      payload = imageResult.payload;
+      imageUsed = imageResult.imageUsed;
+      imageBudgetBlocked = imageResult.blockedByBudget;
+    }
 
     await message.channel.sendTyping();
     await sleep(600 + Math.floor(Math.random() * 1800));
@@ -611,10 +664,10 @@ export class ClankerBot {
     const sendAsReply = canStandalonePost ? (shouldThreadReply ? chance(0.65) : false) : true;
     const sent = sendAsReply
       ? await message.reply({
-          content: finalText,
+          ...payload,
           allowedMentions: { repliedUser: false }
         })
-      : await message.channel.send(finalText);
+      : await message.channel.send(payload);
     const actionKind = sendAsReply ? "sent_reply" : "sent_message";
     const referencedMessageId = sendAsReply ? message.id : null;
 
@@ -642,6 +695,26 @@ export class ClankerBot {
         addressing: addressSignal,
         sendAsReply,
         canStandalonePost,
+        image: {
+          requestedByUser: userRequestedImage,
+          requestedByModel: Boolean(imagePrompt),
+          used: imageUsed,
+          blockedByDailyCap: imageBudgetBlocked,
+          maxPerDay: imageBudget.maxPerDay,
+          remainingAtPromptTime: imageBudget.remaining
+        },
+        webSearch: {
+          requested: webSearch.requested,
+          used: webSearch.used,
+          query: webSearch.query,
+          resultCount: webSearch.results?.length || 0,
+          fetchedPages: webSearch.fetchedPages || 0,
+          blockedByHourlyCap: webSearch.blockedByBudget,
+          maxPerHour: webSearch.budget?.maxPerHour ?? null,
+          remainingAtPromptTime: webSearch.budget?.remaining ?? null,
+          configured: webSearch.configured,
+          error: webSearch.error || null
+        },
         llm: {
           provider: generation.provider,
           model: generation.model,
@@ -923,6 +996,194 @@ export class ClankerBot {
     const sentMessages = this.store.countActionsSince("sent_message", since);
     const initiativePosts = this.store.countActionsSince("initiative_post", since);
     return sentReplies + sentMessages + initiativePosts < maxPerHour;
+  }
+
+  getImageBudgetState(settings) {
+    const maxPerDay = clamp(Number(settings.initiative?.maxImagesPerDay) || 0, 0, 200);
+    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const used = this.store.countActionsSince("image_call", since24h);
+    const remaining = Math.max(0, maxPerDay - used);
+
+    return {
+      maxPerDay,
+      used,
+      remaining,
+      canGenerate: maxPerDay > 0 && remaining > 0
+    };
+  }
+
+  isExplicitImageRequest(messageText) {
+    return IMAGE_REQUEST_RE.test(String(messageText || ""));
+  }
+
+  getWebSearchBudgetState(settings) {
+    const maxPerHour = clamp(Number(settings.webSearch?.maxSearchesPerHour) || 0, 0, 120);
+    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const used = this.store.countActionsSince("search_call", since1h);
+    const remaining = Math.max(0, maxPerHour - used);
+
+    return {
+      maxPerHour,
+      used,
+      remaining,
+      canSearch: maxPerHour > 0 && remaining > 0
+    };
+  }
+
+  isExplicitWebSearchRequest(messageText) {
+    const text = String(messageText || "");
+    if (!text) return false;
+    if (WEB_SEARCH_OPTOUT_RE.test(text)) return false;
+    return WEB_SEARCH_REQUEST_RE.test(text);
+  }
+
+  shouldUseWebSearch({
+    messageText,
+    requested,
+    addressed
+  }) {
+    const text = String(messageText || "").trim();
+    if (!text) return false;
+    if (WEB_SEARCH_OPTOUT_RE.test(text)) return false;
+    if (requested) return true;
+    if (!addressed) return false;
+
+    const likelyQuestion = QUESTION_START_RE.test(text.toLowerCase()) || text.includes("?");
+    return likelyQuestion && WEB_FRESHNESS_RE.test(text);
+  }
+
+  async maybeBuildWebSearchContext({
+    settings,
+    message,
+    addressSignal,
+    forceRespond = false,
+    trace = {}
+  }) {
+    const text = String(message?.content || "");
+    const requested = this.isExplicitWebSearchRequest(text);
+    const configured = Boolean(this.search?.isConfigured?.());
+    const enabled = Boolean(settings.webSearch?.enabled);
+    const budget = this.getWebSearchBudgetState(settings);
+
+    const base = {
+      requested,
+      configured,
+      enabled,
+      used: false,
+      blockedByBudget: false,
+      error: null,
+      query: "",
+      results: [],
+      fetchedPages: 0,
+      budget
+    };
+
+    if (!enabled || !configured) {
+      return base;
+    }
+
+    const shouldSearch = this.shouldUseWebSearch({
+      messageText: text,
+      requested,
+      addressed: Boolean(forceRespond || addressSignal?.triggered)
+    });
+    if (!shouldSearch) {
+      return base;
+    }
+
+    if (!budget.canSearch) {
+      return {
+        ...base,
+        blockedByBudget: true,
+        query: deriveSearchQueryFromMessage(text, settings.botName)
+      };
+    }
+
+    const query = deriveSearchQueryFromMessage(text, settings.botName);
+    if (!query) {
+      return base;
+    }
+
+    try {
+      const result = await this.search.searchAndRead({
+        settings,
+        query,
+        trace
+      });
+
+      return {
+        ...base,
+        used: result.results.length > 0,
+        query: result.query,
+        results: result.results,
+        fetchedPages: result.fetchedPages || 0
+      };
+    } catch (error) {
+      return {
+        ...base,
+        query,
+        error: String(error?.message || error)
+      };
+    }
+  }
+
+  async maybeAttachGeneratedImage({ settings, text, prompt, trace }) {
+    const payload = { content: text };
+    const budget = this.getImageBudgetState(settings);
+    if (!budget.canGenerate) {
+      return {
+        payload,
+        imageUsed: false,
+        blockedByBudget: true,
+        budget
+      };
+    }
+
+    try {
+      const image = await this.llm.generateImage({
+        settings,
+        prompt,
+        trace
+      });
+      const withImage = this.buildMessagePayloadWithImage(text, image);
+      return {
+        payload: withImage.payload,
+        imageUsed: withImage.imageUsed,
+        blockedByBudget: false,
+        budget
+      };
+    } catch {
+      return {
+        payload,
+        imageUsed: false,
+        blockedByBudget: false,
+        budget
+      };
+    }
+  }
+
+  buildMessagePayloadWithImage(text, image) {
+    if (image.imageBuffer) {
+      return {
+        payload: {
+          content: text,
+          files: [{ attachment: image.imageBuffer, name: `clanker-${Date.now()}.png` }]
+        },
+        imageUsed: true
+      };
+    }
+
+    if (image.imageUrl) {
+      return {
+        payload: { content: `${text}\n${image.imageUrl}` },
+        imageUsed: true
+      };
+    }
+
+    return {
+      payload: { content: text },
+      imageUsed: false
+    };
   }
 
   isUserBlocked(settings, userId) {
@@ -1232,35 +1493,25 @@ export class ClankerBot {
 
       let payload = { content: finalText };
       let imageUsed = false;
+      let imageBudgetBlocked = false;
       if (
         settings.initiative.allowImagePosts &&
         chance((settings.initiative.imagePostChancePercent || 0) / 100)
       ) {
-        try {
-          const image = await this.llm.generateImage({
-            settings,
-            prompt: `Create a playful Discord-ready image for this post:\n\n${finalText}`,
-            trace: {
-              guildId: channel.guildId,
-              channelId: channel.id,
-              userId: this.client.user.id,
-              source: "initiative_post"
-            }
-          });
-
-          if (image.imageBuffer) {
-            payload = {
-              content: finalText,
-              files: [{ attachment: image.imageBuffer, name: `clanker-${Date.now()}.png` }]
-            };
-            imageUsed = true;
-          } else if (image.imageUrl) {
-            payload = { content: `${finalText}\n${image.imageUrl}` };
-            imageUsed = true;
+        const imageResult = await this.maybeAttachGeneratedImage({
+          settings,
+          text: finalText,
+          prompt: `Create a playful Discord-ready image for this post:\n\n${finalText}`,
+          trace: {
+            guildId: channel.guildId,
+            channelId: channel.id,
+            userId: this.client.user.id,
+            source: "initiative_post"
           }
-        } catch {
-          // Fallback to text-only post when image generation fails.
-        }
+        });
+        payload = imageResult.payload;
+        imageUsed = imageResult.imageUsed;
+        imageBudgetBlocked = imageResult.blockedByBudget;
       }
 
       await channel.sendTyping();
@@ -1315,6 +1566,7 @@ export class ClankerBot {
             errors: discoveryResult.errors
           },
           imageUsed,
+          imageBudgetBlocked,
           llm: {
             provider: generation.provider,
             model: generation.model,
@@ -1612,6 +1864,57 @@ function extractUrlsFromText(text) {
   return [...String(text || "").matchAll(URL_IN_TEXT_RE)].map((match) => String(match[0] || ""));
 }
 
+function deriveSearchQueryFromMessage(rawText, botName = "") {
+  const text = String(rawText || "");
+  if (!text.trim()) return "";
+
+  let cleaned = text
+    .replace(/<@!?\d+>/g, " ")
+    .replace(/\b(?:can|could|would|will)\s+you\b/gi, " ")
+    .replace(/\b(?:please|pls|plz)\b/gi, " ")
+    .replace(/\bgoogle(?:\s+search)?\b/gi, " ")
+    .replace(/\b(?:web|internet)\s*search\b/gi, " ")
+    .replace(/\b(?:look\s*up|lookup|search|find)\b/gi, " ")
+    .replace(/\b(?:online|on the web|on internet|on google)\b/gi, " ")
+    .replace(/[?]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (botName) {
+    const escapedName = escapeRegExp(String(botName || "").trim());
+    if (escapedName) {
+      cleaned = cleaned.replace(new RegExp(`\\b${escapedName}\\b`, "ig"), " ").replace(/\s+/g, " ").trim();
+    }
+  }
+
+  if (!cleaned) {
+    cleaned = text.replace(/<@!?\d+>/g, " ").replace(/\s+/g, " ").trim();
+  }
+
+  return cleaned.slice(0, MAX_WEB_QUERY_LEN);
+}
+
+function parseReplyImageDirective(rawText) {
+  const text = String(rawText || "").trim();
+  const match = text.match(IMAGE_PROMPT_DIRECTIVE_RE);
+  if (!match) {
+    return {
+      text,
+      imagePrompt: null
+    };
+  }
+
+  const prompt = String(match[1] || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
+
+  return {
+    text: text.slice(0, match.index).trim(),
+    imagePrompt: prompt || null
+  };
+}
+
 function parseReactionDecision(rawText) {
   if (!rawText) return null;
   const text = String(rawText).trim();
@@ -1655,4 +1958,8 @@ function pickFirstAvailableEmoji(preferredEmojis, allowedEmojis) {
     if (allowedEmojis.includes(emoji)) return emoji;
   }
   return null;
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

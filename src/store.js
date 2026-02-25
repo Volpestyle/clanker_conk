@@ -334,14 +334,18 @@ export class Store {
       .all(since24h);
 
     const totalCostRow = this.db
-      .prepare("SELECT COALESCE(SUM(usd_cost), 0) AS total FROM actions WHERE kind = 'llm_call'")
+      .prepare(
+        `SELECT COALESCE(SUM(usd_cost), 0) AS total
+         FROM actions
+         WHERE kind IN ('llm_call', 'image_call')`
+      )
       .get();
 
     const dayCostRows = this.db
       .prepare(
         `SELECT substr(created_at, 1, 10) AS day, COALESCE(SUM(usd_cost), 0) AS usd
          FROM actions
-         WHERE kind = 'llm_call' AND created_at >= ?
+         WHERE kind IN ('llm_call', 'image_call') AND created_at >= ?
          GROUP BY day
          ORDER BY day DESC
          LIMIT 14`
@@ -355,7 +359,8 @@ export class Store {
         initiative_post: 0,
         reacted: 0,
         llm_call: 0,
-        image_call: 0
+        image_call: 0,
+        search_call: 0
       },
       totalCostUsd: Number(totalCostRow?.total ?? 0),
       dailyCost: dayCostRows
@@ -448,6 +453,7 @@ function normalizeSettings(raw) {
   if (!merged.initiative || typeof merged.initiative !== "object") merged.initiative = {};
   if (!merged.memory || typeof merged.memory !== "object") merged.memory = {};
   if (!merged.llm || typeof merged.llm !== "object") merged.llm = {};
+  if (!merged.webSearch || typeof merged.webSearch !== "object") merged.webSearch = {};
 
   merged.botName = String(merged.botName || "clanker conk").slice(0, 50);
 
@@ -476,6 +482,18 @@ function normalizeSettings(raw) {
   merged.llm.model = String(merged.llm?.model || "gpt-4.1-mini").slice(0, 120);
   merged.llm.temperature = clamp(Number(merged.llm?.temperature) || 0.9, 0, 2);
   merged.llm.maxOutputTokens = clamp(Number(merged.llm?.maxOutputTokens) || 220, 32, 1400);
+
+  merged.webSearch.enabled = Boolean(merged.webSearch?.enabled);
+  const maxSearchesRaw = Number(merged.webSearch?.maxSearchesPerHour);
+  const maxResultsRaw = Number(merged.webSearch?.maxResults);
+  const maxPagesRaw = Number(merged.webSearch?.maxPagesToRead);
+  const maxCharsRaw = Number(merged.webSearch?.maxCharsPerPage);
+  merged.webSearch.maxSearchesPerHour = clamp(Number.isFinite(maxSearchesRaw) ? maxSearchesRaw : 12, 1, 120);
+  merged.webSearch.maxResults = clamp(Number.isFinite(maxResultsRaw) ? maxResultsRaw : 5, 1, 10);
+  merged.webSearch.maxPagesToRead = clamp(Number.isFinite(maxPagesRaw) ? maxPagesRaw : 3, 0, 6);
+  merged.webSearch.maxCharsPerPage = clamp(Number.isFinite(maxCharsRaw) ? maxCharsRaw : 1400, 350, 4000);
+  merged.webSearch.safeSearch =
+    merged.webSearch?.safeSearch !== undefined ? Boolean(merged.webSearch?.safeSearch) : true;
 
   merged.startup.catchupEnabled =
     merged.startup?.catchupEnabled !== undefined ? Boolean(merged.startup?.catchupEnabled) : true;
@@ -529,6 +547,8 @@ function normalizeSettings(raw) {
   merged.initiative.spontaneity = clamp(Number(merged.initiative?.spontaneity) || 65, 0, 100);
   merged.initiative.postOnStartup = Boolean(merged.initiative?.postOnStartup);
   merged.initiative.allowImagePosts = Boolean(merged.initiative?.allowImagePosts);
+  merged.initiative.allowReplyImages = Boolean(merged.initiative?.allowReplyImages);
+  merged.initiative.maxImagesPerDay = clamp(Number(merged.initiative?.maxImagesPerDay) || 0, 0, 200);
   merged.initiative.imagePostChancePercent = clamp(
     Number(merged.initiative?.imagePostChancePercent) || 0,
     0,

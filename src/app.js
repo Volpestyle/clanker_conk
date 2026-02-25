@@ -5,6 +5,7 @@ import { ClankerBot } from "./bot.js";
 import { DiscoveryService } from "./discovery.js";
 import { LLMService } from "./llm.js";
 import { MemoryManager } from "./memory.js";
+import { WebSearchService } from "./search.js";
 import { Store } from "./store.js";
 
 async function main() {
@@ -18,10 +19,11 @@ async function main() {
 
   const llm = new LLMService({ appConfig, store });
   const discovery = new DiscoveryService({ store });
+  const search = new WebSearchService({ appConfig, store });
   const memory = new MemoryManager({ store, memoryFilePath });
   await memory.refreshMemoryMarkdown();
 
-  const bot = new ClankerBot({ appConfig, store, llm, memory, discovery });
+  const bot = new ClankerBot({ appConfig, store, llm, memory, discovery, search });
   const dashboard = createDashboardServer({ appConfig, store, bot, memory });
 
   await bot.start();
