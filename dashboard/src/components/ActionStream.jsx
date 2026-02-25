@@ -8,8 +8,12 @@ const FILTERS = [
   "reacted",
   "llm_call",
   "image_call",
+  "gif_call",
+  "gif_error",
   "search_call",
-  "search_error"
+  "search_error",
+  "youtube_context_call",
+  "youtube_context_error"
 ];
 
 export default function ActionStream({ actions }) {
