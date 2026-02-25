@@ -863,6 +863,8 @@ export class ClankerBot {
           query: webSearch.query,
           resultCount: webSearch.results?.length || 0,
           fetchedPages: webSearch.fetchedPages || 0,
+          providerUsed: webSearch.providerUsed || null,
+          providerFallbackUsed: Boolean(webSearch.providerFallbackUsed),
           blockedByHourlyCap: webSearch.blockedByBudget,
           maxPerHour: webSearch.budget?.maxPerHour ?? null,
           remainingAtPromptTime: webSearch.budget?.remaining ?? null,
@@ -1260,6 +1262,8 @@ export class ClankerBot {
       query: "",
       results: [],
       fetchedPages: 0,
+      providerUsed: null,
+      providerFallbackUsed: false,
       budget
     };
   }
@@ -1307,7 +1311,9 @@ export class ClankerBot {
         used: result.results.length > 0,
         query: result.query,
         results: result.results,
-        fetchedPages: result.fetchedPages || 0
+        fetchedPages: result.fetchedPages || 0,
+        providerUsed: result.providerUsed || null,
+        providerFallbackUsed: Boolean(result.providerFallbackUsed)
       };
     } catch (error) {
       return {
