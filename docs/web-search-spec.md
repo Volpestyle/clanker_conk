@@ -11,7 +11,7 @@ This spec replaces the Google-only implementation with a provider-agnostic, sour
 ## 1) Goals (adapted for Clanker Conk)
 
 1. **Fast**: typical lookup flow completes in 2–8s in Discord reply path.
-2. **Accurate**: prefer primary sources, fetch 1–3 pages, cite sources inline (`[S1]`).
+2. **Accurate**: prefer primary sources, fetch 1–3 pages, cite sources inline (`[1]`).
 3. **Reliable**: provider fallback, bounded retries/timeouts, extraction quality checks.
 4. **Safe**: SSRF protections, strict URL protocol/domain checks, rate limits.
 5. **Bot-native**: preserve existing `[[WEB_SEARCH: ...]]` directive UX while upgrading internals.
@@ -66,7 +66,7 @@ This spec replaces the Google-only implementation with a provider-agnostic, sour
    - `fetchAndExtract(url)` (fast)
    - if extraction quality is poor -> `renderAndExtract(url)` (fallback)
 5. Return normalized results with summaries + metadata to prompt builder.
-6. Model writes final response with `[S1]`, `[S2]` citations.
+6. Model writes final response with `[1]`, `[2]` citations.
 
 ---
 

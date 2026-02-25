@@ -2412,9 +2412,9 @@ function embedWebSearchSources(text, webSearch) {
   const results = Array.isArray(webSearch?.results) ? webSearch.results : [];
   if (!results.length) return base;
 
-  const textWithPlainCitations = base.replace(/\[S(\d{1,2})\]\(\s*<?https?:\/\/[^)\s>]+[^)]*\)/gi, "[S$1]");
+  const textWithPlainCitations = base.replace(/\[(\d{1,2})\]\(\s*<?https?:\/\/[^)\s>]+[^)]*\)/g, "[$1]");
   const citedIndices = [...new Set(
-    [...textWithPlainCitations.matchAll(/\[S(\d{1,2})\]/gi)]
+    [...textWithPlainCitations.matchAll(/\[(\d{1,2})\]/g)]
       .map((match) => Number(match[1]) - 1)
       .filter((index) => Number.isInteger(index) && index >= 0 && index < results.length)
   )].sort((a, b) => a - b);
@@ -2428,17 +2428,17 @@ function embedWebSearchSources(text, webSearch) {
     const url = String(row?.url || "").trim();
     if (!url) continue;
     const domain = String(row?.domain || extractDomainForSourceLabel(url) || "source");
-    urlLines.push(`[S${index + 1}] ${domain} - <${url}>`);
-    domainLines.push(`[S${index + 1}] ${domain}`);
+    urlLines.push(`[${index + 1}] ${domain} - <${url}>`);
+    domainLines.push(`[${index + 1}] ${domain}`);
   }
   if (!urlLines.length) return textWithPlainCitations;
 
-  const inlineLinked = textWithPlainCitations.replace(/\[S(\d{1,2})\]/gi, (full, rawIndex) => {
+  const inlineLinked = textWithPlainCitations.replace(/\[(\d{1,2})\]/g, (full, rawIndex) => {
     const index = Number(rawIndex) - 1;
     const row = results[index];
     const url = String(row?.url || "").trim();
     if (!url) return full;
-    return `[S${index + 1}](<${url}>)`;
+    return `[${index + 1}](<${url}>)`;
   });
 
   const MAX_CONTENT_LEN = 1900;
