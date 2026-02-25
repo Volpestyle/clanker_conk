@@ -736,6 +736,7 @@ export class ClankerBot {
     let finalText = sanitizeBotText(
       replyDirective.text || (replyDirective.imagePrompt || replyDirective.gifQuery ? "here you go" : "")
     );
+    finalText = normalizeSkipSentinel(finalText);
     if (!finalText || finalText === "[SKIP]") {
       this.logSkippedReply({
         message,
@@ -748,6 +749,7 @@ export class ClankerBot {
       });
       return false;
     }
+    finalText = embedWebSearchSources(finalText, webSearch);
 
     let payload = { content: finalText };
     let imageUsed = false;
@@ -1779,6 +1781,7 @@ export class ClankerBot {
         initiativeDirective.text || (imagePrompt ? "quick drop" : generation.text),
         650
       );
+      finalText = normalizeSkipSentinel(finalText);
       if (!finalText || finalText === "[SKIP]") return;
       const linkPolicy = this.applyDiscoveryLinkPolicy({
         text: finalText,
@@ -1786,7 +1789,7 @@ export class ClankerBot {
         selected: discoveryResult.selected,
         requireDiscoveryLink
       });
-      finalText = linkPolicy.text;
+      finalText = normalizeSkipSentinel(linkPolicy.text);
       if (!finalText || finalText === "[SKIP]") return;
 
       let payload = { content: finalText };
@@ -2400,4 +2403,46 @@ function normalizeReactionEmojiToken(emojiToken) {
 
 function escapeRegExp(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function embedWebSearchSources(text, webSearch) {
+  const base = String(text || "").trim();
+  if (!base) return "";
+  if (!webSearch?.used) return base;
+
+  const results = Array.isArray(webSearch?.results) ? webSearch.results : [];
+  if (!results.length) return base;
+
+  let replacedAnyCitation = false;
+  const replaced = base.replace(/\[S(\d{1,2})\](?!\()/g, (full, rawIndex) => {
+    const index = Number(rawIndex) - 1;
+    const row = results[index];
+    const url = String(row?.url || "").trim();
+    if (!url) return full;
+    replacedAnyCitation = true;
+    return `[S${index + 1}](<${url}>)`;
+  });
+
+  if (replacedAnyCitation || /\[S\d{1,2}\]\(\s*<?https?:\/\//i.test(replaced)) {
+    return replaced;
+  }
+
+  const sourceLinks = [];
+  for (let index = 0; index < results.length && sourceLinks.length < 3; index += 1) {
+    const url = String(results[index]?.url || "").trim();
+    if (!url) continue;
+    sourceLinks.push(`[S${index + 1}](<${url}>)`);
+  }
+
+  if (!sourceLinks.length) return replaced;
+  return `${replaced}\n\nSources: ${sourceLinks.join(" ")}`;
+}
+
+function normalizeSkipSentinel(text) {
+  const value = String(text || "").trim();
+  if (!value) return "";
+  if (/^\[SKIP\]$/i.test(value)) return "[SKIP]";
+
+  const withoutTrailingSkip = value.replace(/\s*\[SKIP\]\s*$/i, "").trim();
+  return withoutTrailingSkip || "[SKIP]";
 }
