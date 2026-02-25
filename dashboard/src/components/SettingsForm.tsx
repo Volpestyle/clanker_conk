@@ -53,6 +53,9 @@ export default function SettingsForm({ settings, onSave, toast }) {
       webSearchMaxResults: settings.webSearch?.maxResults ?? 5,
       webSearchMaxPages: settings.webSearch?.maxPagesToRead ?? 3,
       webSearchMaxChars: settings.webSearch?.maxCharsPerPage ?? 1400,
+      webSearchProviderOrder: (settings.webSearch?.providerOrder || ["brave", "serpapi"]).join(","),
+      webSearchRecencyDaysDefault: settings.webSearch?.recencyDaysDefault ?? 30,
+      webSearchMaxConcurrentFetches: settings.webSearch?.maxConcurrentFetches ?? 5,
       videoContextEnabled: settings.videoContext?.enabled ?? true,
       videoContextPerHour: settings.videoContext?.maxLookupsPerHour ?? 12,
       videoContextMaxVideos: settings.videoContext?.maxVideosPerMessage ?? 2,
@@ -138,7 +141,10 @@ export default function SettingsForm({ settings, onSave, toast }) {
         maxResults: Number(form.webSearchMaxResults),
         maxPagesToRead: Number(form.webSearchMaxPages),
         maxCharsPerPage: Number(form.webSearchMaxChars),
-        safeSearch: form.webSearchSafeMode
+        safeSearch: form.webSearchSafeMode,
+        providerOrder: parseList(form.webSearchProviderOrder),
+        recencyDaysDefault: Number(form.webSearchRecencyDaysDefault),
+        maxConcurrentFetches: Number(form.webSearchMaxConcurrentFetches)
       },
       videoContext: {
         enabled: form.videoContextEnabled,
@@ -321,7 +327,7 @@ export default function SettingsForm({ settings, onSave, toast }) {
         </div>
       </div>
 
-      <h4>Live Web Search (Google)</h4>
+      <h4>Live Web Search</h4>
       <div className="toggles">
         <label>
           <input
@@ -354,7 +360,7 @@ export default function SettingsForm({ settings, onSave, toast }) {
           />
         </div>
         <div>
-          <label htmlFor="web-search-results">Google results/query</label>
+          <label htmlFor="web-search-results">Search results/query</label>
           <input
             id="web-search-results"
             type="number"
@@ -373,7 +379,7 @@ export default function SettingsForm({ settings, onSave, toast }) {
             id="web-search-pages"
             type="number"
             min="0"
-            max="6"
+            max="5"
             value={form.webSearchMaxPages}
             onChange={set("webSearchMaxPages")}
           />
@@ -387,6 +393,44 @@ export default function SettingsForm({ settings, onSave, toast }) {
             max="4000"
             value={form.webSearchMaxChars}
             onChange={set("webSearchMaxChars")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="web-search-provider-order">Provider order (comma or newline list)</label>
+          <input
+            id="web-search-provider-order"
+            type="text"
+            value={form.webSearchProviderOrder}
+            onChange={set("webSearchProviderOrder")}
+            placeholder="brave,serpapi"
+          />
+        </div>
+        <div>
+          <label htmlFor="web-search-recency-days">Default recency days</label>
+          <input
+            id="web-search-recency-days"
+            type="number"
+            min="1"
+            max="365"
+            value={form.webSearchRecencyDaysDefault}
+            onChange={set("webSearchRecencyDaysDefault")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="web-search-concurrent-fetches">Max concurrent fetches</label>
+          <input
+            id="web-search-concurrent-fetches"
+            type="number"
+            min="1"
+            max="10"
+            value={form.webSearchMaxConcurrentFetches}
+            onChange={set("webSearchMaxConcurrentFetches")}
           />
         </div>
       </div>

@@ -257,7 +257,7 @@ export function buildReplyPrompt({
       parts.push("Live web lookup is disabled in settings.");
       parts.push("Do not claim you searched the web.");
     } else if (!webSearch?.configured) {
-      parts.push("Live web lookup is unavailable (missing Google search configuration).");
+      parts.push("Live web lookup is unavailable (no search provider is configured).");
       parts.push("Do not claim you searched the web.");
     } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
       parts.push("Live web lookup is unavailable right now (hourly search budget exhausted).");
@@ -287,7 +287,7 @@ export function buildReplyPrompt({
       parts.push("Acknowledge briefly and answer from known context only.");
     } else if (!webSearch.configured) {
       parts.push(
-        "The user asked for a web lookup, but live search is unavailable (missing Google search configuration)."
+        "The user asked for a web lookup, but live search is unavailable (no search provider is configured)."
       );
       parts.push("Acknowledge briefly and answer from known context only.");
     } else if (webSearch.blockedByBudget) {
