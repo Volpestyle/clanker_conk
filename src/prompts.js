@@ -84,7 +84,8 @@ export function buildReplyPrompt({
   allowReplyImages = false,
   remainingReplyImages = 0,
   userRequestedImage = false,
-  webSearch = null
+  webSearch = null,
+  allowWebSearchDirective = false
 }) {
   const parts = [];
 
@@ -120,8 +121,35 @@ export function buildReplyPrompt({
     parts.push(`Server emoji options: ${emojiHints.join(", ")}`);
   }
 
+  if (allowWebSearchDirective) {
+    if (webSearch?.optedOutByUser) {
+      parts.push("The user explicitly asked not to use web search.");
+      parts.push("Do not request WEB_SEARCH and do not claim live lookup.");
+    } else if (!webSearch?.enabled) {
+      parts.push("Live web lookup is disabled in settings.");
+      parts.push("Do not claim you searched the web.");
+    } else if (!webSearch?.configured) {
+      parts.push("Live web lookup is unavailable (missing Google search configuration).");
+      parts.push("Do not claim you searched the web.");
+    } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
+      parts.push("Live web lookup is unavailable right now (hourly search budget exhausted).");
+      parts.push("Do not claim you searched the web.");
+    } else {
+      parts.push("Live web lookup is available.");
+      parts.push(
+        "If better accuracy depends on live web info, append one final line exactly in this format: [[WEB_SEARCH: concise query]]"
+      );
+      parts.push("Use WEB_SEARCH only when needed and keep the query under 220 characters.");
+    }
+  }
+
   if (webSearch?.requested && !webSearch.used) {
-    if (!webSearch.configured) {
+    if (webSearch.optedOutByUser) {
+      parts.push("The user asked not to use web search. Respond without web lookup.");
+    } else if (!webSearch.enabled) {
+      parts.push("A web lookup was requested, but live search is disabled in settings.");
+      parts.push("Acknowledge briefly and answer from known context only.");
+    } else if (!webSearch.configured) {
       parts.push(
         "The user asked for a web lookup, but live search is unavailable (missing Google search configuration)."
       );

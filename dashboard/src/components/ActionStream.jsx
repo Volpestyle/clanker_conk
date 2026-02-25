@@ -20,6 +20,8 @@ export default function ActionStream({ actions }) {
     [actions, filter]
   );
 
+  const usedWebSearchFollowup = (action) => Boolean(action?.metadata?.llm?.usedWebSearchFollowup);
+
   return (
     <section className="panel">
       <div className="panel-head">
@@ -50,6 +52,9 @@ export default function ActionStream({ actions }) {
                   <span className={`kind-badge kind-${action.kind}`}>
                     {action.kind}
                   </span>
+                  {usedWebSearchFollowup(action) && (
+                    <span className="kind-badge kind-web-followup">web-followup</span>
+                  )}
                 </td>
                 <td>{action.channel_id || "-"}</td>
                 <td>{String(action.content || "").slice(0, 180)}</td>
