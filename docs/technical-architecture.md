@@ -10,7 +10,7 @@ Code entrypoint:
 Core runtime:
 - `src/bot.js`: Discord event handling, reply/react logic, initiative scheduling, and posting.
 - `src/llm.js`: model provider abstraction (OpenAI or Anthropic), usage + cost logging, image generation.
-- `src/memory.js`: heuristic fact extraction + `memory/MEMORY.md` generation.
+- `src/memory.js`: append-only daily journaling + fact extraction + curated `memory/MEMORY.md` distillation.
 - `src/discovery.js`: external link discovery for initiative posts.
 - `src/store.js`: SQLite persistence and settings normalization.
 
@@ -20,7 +20,8 @@ Control plane:
 
 Storage:
 - `data/clanker.db`: runtime SQLite database.
-- `memory/MEMORY.md`: generated memory snapshot used in prompts.
+- `memory/YYYY-MM-DD.md`: append-only daily journal files.
+- `memory/MEMORY.md`: curated long-term snapshot used in prompts.
 
 ## 2. Runtime Lifecycle
 
@@ -39,7 +40,7 @@ sequenceDiagram
     Proc->>Store: init() (create tables + default settings)
     Proc->>LLM: new LLMService()
     Proc->>Disc: new DiscoveryService()
-    Proc->>Memory: refreshMemoryMarkdown()
+    Proc->>Memory: refreshMemoryMarkdown() (curation pass)
     Proc->>Bot: new ClankerBot(...)
     Proc->>Dash: createDashboardServer(...)
     Proc->>Bot: start()
@@ -168,8 +169,9 @@ sequenceDiagram
 
     alt memory enabled
       Bot->>Memory: ingestMessage()
+      Memory->>Memory: append entry to memory/YYYY-MM-DD.md
       Memory->>Store: addMemoryFact() / logAction(memory_fact)
-      Memory->>Memory: queue refresh of MEMORY.md
+      Memory->>Memory: queue curated refresh of MEMORY.md
     end
 
     par Reaction path
