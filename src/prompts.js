@@ -126,6 +126,8 @@ export function buildReplyPrompt({
   gifRepliesEnabled = false,
   gifsConfigured = false,
   userRequestedImage = false,
+  replyEagerness = 35,
+  addressing = null,
   webSearch = null,
   allowWebSearchDirective = false,
   allowMemoryDirective = false,
@@ -163,6 +165,30 @@ export function buildReplyPrompt({
 
   if (emojiHints?.length) {
     parts.push(`Server emoji options: ${emojiHints.join(", ")}`);
+  }
+
+  const directlyAddressed = Boolean(addressing?.directlyAddressed);
+  const responseRequired = Boolean(addressing?.responseRequired);
+  if (directlyAddressed) {
+    parts.push("This message directly addressed you.");
+  }
+  if (responseRequired) {
+    parts.push("A reply is required for this turn unless safety policy requires refusing.");
+    parts.push("Do not output [SKIP] except for safety refusals.");
+  } else {
+    const eagerness = Math.max(0, Math.min(100, Number(replyEagerness) || 0));
+    parts.push(`Reply eagerness setting: ${eagerness}/100.`);
+    if (eagerness <= 25) {
+      parts.push("Be very selective and skip unless a reply is clearly useful.");
+    } else if (eagerness >= 75) {
+      parts.push("Be more willing to jump in when it improves the chat.");
+    } else {
+      parts.push("Use balanced judgment before joining the conversation.");
+    }
+    parts.push("Decide if replying adds value right now.");
+    parts.push(
+      "If this message is not really meant for you or would interrupt people talking among themselves, output exactly [SKIP]."
+    );
   }
 
   if (allowWebSearchDirective) {
