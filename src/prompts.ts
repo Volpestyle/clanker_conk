@@ -49,7 +49,7 @@ function formatWebSearchFindings(webSearch) {
 
   return webSearch.results
     .map((item, index) => {
-      const sourceId = `S${index + 1}`;
+      const sourceId = String(index + 1);
       const title = String(item.title || "untitled").trim();
       const url = String(item.url || "").trim();
       const domain = String(item.domain || "").trim();
@@ -313,7 +313,7 @@ export function buildReplyPrompt({
       "Decide whether to cite sources based on the user's message and the claim sensitivity."
     );
     parts.push(
-      "If citations would help (for example user asked for proof/sources or the claim is precise), use source IDs inline like [S1] or [S2]."
+      "If citations would help (for example user asked for proof/sources or the claim is precise), use source IDs inline like [1] or [2]."
     );
     parts.push("If citations are not needed, answer naturally without citation clutter.");
   }
