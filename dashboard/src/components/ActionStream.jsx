@@ -7,7 +7,9 @@ const FILTERS = [
   "initiative_post",
   "reacted",
   "llm_call",
-  "image_call"
+  "image_call",
+  "search_call",
+  "search_error"
 ];
 
 export default function ActionStream({ actions }) {

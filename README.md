@@ -8,6 +8,7 @@ Features:
 - Initiative scheduler with `even` or `spontaneous` pacing modes.
 - Creative discovery for initiative posts (Reddit, Hacker News, YouTube RSS, RSS feeds, optional X via Nitter).
 - OpenAI or Anthropic support (runtime-configurable).
+- Optional live Google web search for replies, including page inspection from top results.
 - Dashboard UI for settings, permissions, logs, memory, and cost tracking.
 - Persistent memory and conversation history with `memory/MEMORY.md` regeneration.
 
@@ -22,6 +23,7 @@ npm install
 Fill `.env`:
 - `DISCORD_TOKEN`: your bot token.
 - `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY`.
+- Optional for live web search: `GOOGLE_SEARCH_API_KEY`, `GOOGLE_SEARCH_ENGINE_ID`.
 - Optional: `DASHBOARD_TOKEN` (protects dashboard API).
 
 ## 2. Discord bot permissions
@@ -47,6 +49,24 @@ npm run start
 `start` builds the React dashboard and then starts bot + dashboard together.
 - Dashboard URL: `http://localhost:8787` (or your `DASHBOARD_PORT` value)
 
+## 3.1 Keep It Running Locally
+
+- If your computer is asleep, the bot is paused. Prevent host sleep for always-on behavior.
+- Run the bot under a process supervisor so it restarts after crashes/reboots.
+
+Example with PM2:
+
+```bash
+npm install -g pm2
+pm2 start npm --name clanker-conk -- run start
+pm2 save
+pm2 startup
+```
+
+Windows host sleep settings (for WSL users):
+- Set **Sleep** to **Never** while plugged in.
+- Allow display-off if needed; only system sleep needs to be disabled.
+
 ## 4. Configure in dashboard
 
 Use dashboard to:
@@ -56,6 +76,7 @@ Use dashboard to:
 - Set standalone-post channel IDs (for your dedicated `clanker conk` channel).
 - Configure initiative pacing (`even` or `spontaneous`) and spontaneity.
 - Configure discovery source mix, link frequency, freshness, dedupe window, and topic/source lists.
+- Configure live web search limits (hourly cap, results/query, pages inspected, safe mode).
 - Choose LLM provider + model.
 - Track accumulated API spend.
 - Inspect bot actions and memory.
@@ -70,3 +91,4 @@ Use dashboard to:
 
 - Architecture and flow diagrams: `docs/technical-architecture.md`
 - Initiative discovery product spec: `docs/initiative-discovery-spec.md`
+- Voice agent product spec: `docs/voice-agent-spec.md`

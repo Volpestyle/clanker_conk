@@ -26,6 +26,10 @@ export default function MetricsBar({ stats }) {
     {
       label: "Reactions (24h)",
       value: String(s?.last24h?.reacted || 0)
+    },
+    {
+      label: "Searches (24h)",
+      value: String(s?.last24h?.search_call || 0)
     }
   ];
 

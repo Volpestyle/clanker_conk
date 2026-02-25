@@ -31,6 +31,25 @@ function formatDiscoveryFindings(findings) {
     .join("\n");
 }
 
+function formatWebSearchFindings(webSearch) {
+  if (!webSearch?.results?.length) return "(no web results available)";
+
+  return webSearch.results
+    .map((item, index) => {
+      const sourceId = `S${index + 1}`;
+      const title = String(item.title || "untitled").trim();
+      const url = String(item.url || "").trim();
+      const domain = String(item.domain || "").trim();
+      const snippet = String(item.snippet || "").trim();
+      const pageSummary = String(item.pageSummary || "").trim();
+      const pageLine = pageSummary ? ` | page: ${pageSummary}` : "";
+      const snippetLine = snippet ? ` | snippet: ${snippet}` : "";
+      const domainLabel = domain ? ` (${domain})` : "";
+      return `- [${sourceId}] ${title}${domainLabel} -> ${url}${snippetLine}${pageLine}`;
+    })
+    .join("\n");
+}
+
 export function buildSystemPrompt(settings, memoryMarkdown) {
   const hardLimits = settings.persona?.hardLimits ?? [];
   const trimmedMemory = (memoryMarkdown || "(memory unavailable)").slice(0, 7000);
@@ -61,7 +80,11 @@ export function buildReplyPrompt({
   recentMessages,
   relevantMessages,
   userFacts,
-  emojiHints
+  emojiHints,
+  allowReplyImages = false,
+  remainingReplyImages = 0,
+  userRequestedImage = false,
+  webSearch = null
 }) {
   const parts = [];
 
@@ -95,6 +118,52 @@ export function buildReplyPrompt({
 
   if (emojiHints?.length) {
     parts.push(`Server emoji options: ${emojiHints.join(", ")}`);
+  }
+
+  if (webSearch?.requested && !webSearch.used) {
+    if (!webSearch.configured) {
+      parts.push(
+        "The user asked for a web lookup, but live search is unavailable (missing Google search configuration)."
+      );
+      parts.push("Acknowledge briefly and answer from known context only.");
+    } else if (webSearch.blockedByBudget) {
+      parts.push("The user asked for a web lookup, but the hourly search budget is exhausted.");
+      parts.push("Acknowledge the limit briefly and answer without claiming live lookup.");
+    } else if (webSearch.error) {
+      parts.push(`The web lookup failed: ${webSearch.error}`);
+      parts.push("Do not claim you successfully searched the web.");
+    } else if (!webSearch.results?.length) {
+      parts.push("A web lookup was attempted, but no useful results were found.");
+      parts.push("Answer carefully and avoid invented specifics.");
+    }
+  }
+
+  if (webSearch?.used && webSearch.results?.length) {
+    parts.push(`Live web findings for query: "${webSearch.query}"`);
+    parts.push(formatWebSearchFindings(webSearch));
+    parts.push("If you reference web facts, cite source IDs inline like [S1] or [S2].");
+  }
+
+  const remainingImages = Math.max(0, Math.floor(Number(remainingReplyImages) || 0));
+  if (allowReplyImages && remainingImages > 0) {
+    parts.push(
+      `Reply image generation is available (${remainingImages} image slot(s) left in the rolling 24h budget).`
+    );
+    parts.push(
+      "If an image should be generated, append one final line exactly in this format: [[IMAGE_PROMPT: your prompt here]]"
+    );
+    parts.push(
+      "Use IMAGE_PROMPT only when the user explicitly asks for an image or a visual is clearly the best response."
+    );
+    if (userRequestedImage) {
+      parts.push("The user explicitly asked for an image. Include IMAGE_PROMPT unless unsafe or disallowed.");
+    }
+    parts.push("Keep IMAGE_PROMPT concise (under 240 chars), and always include normal reply text.");
+  } else {
+    parts.push("Reply image generation is unavailable right now. Respond with text only.");
+    if (userRequestedImage) {
+      parts.push("The user asked for an image. Briefly acknowledge the limit in your text reply.");
+    }
   }
 
   parts.push("Task: write one natural Discord reply to the incoming message.");
