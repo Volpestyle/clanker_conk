@@ -3,7 +3,10 @@ const DEFAULT_PRICING = {
     "gpt-4.1": { inputPer1M: 2.0, outputPer1M: 8.0 },
     "gpt-4.1-mini": { inputPer1M: 0.4, outputPer1M: 1.6 },
     "gpt-4.1-nano": { inputPer1M: 0.1, outputPer1M: 0.4 },
-    "gpt-4o-mini": { inputPer1M: 0.15, outputPer1M: 0.6 }
+    "gpt-4o-mini": { inputPer1M: 0.15, outputPer1M: 0.6 },
+    "text-embedding-3-small": { inputPer1M: 0.02, outputPer1M: 0 },
+    "text-embedding-3-large": { inputPer1M: 0.13, outputPer1M: 0 },
+    "text-embedding-ada-002": { inputPer1M: 0.1, outputPer1M: 0 }
   },
   openaiImages: {
     "gpt-image-1.5": {
