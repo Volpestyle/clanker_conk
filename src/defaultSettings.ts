@@ -30,9 +30,7 @@ export const DEFAULT_SETTINGS = {
     safeSearch: true,
     providerOrder: ["brave", "serpapi"],
     recencyDaysDefault: 30,
-    renderFallbackEnabled: true,
-    maxConcurrentFetches: 5,
-    maxConcurrentRenders: 2
+    maxConcurrentFetches: 5
   },
   videoContext: {
     enabled: true,
