@@ -19,7 +19,8 @@ export const appConfig = {
   giphyRating: process.env.GIPHY_RATING ?? "pg-13",
   defaultProvider: process.env.DEFAULT_PROVIDER === "anthropic" ? "anthropic" : "openai",
   defaultOpenAiModel: process.env.DEFAULT_MODEL_OPENAI ?? "gpt-4.1-mini",
-  defaultAnthropicModel: process.env.DEFAULT_MODEL_ANTHROPIC ?? "claude-3-5-haiku-latest"
+  defaultAnthropicModel: process.env.DEFAULT_MODEL_ANTHROPIC ?? "claude-3-5-haiku-latest",
+  defaultMemoryEmbeddingModel: process.env.DEFAULT_MEMORY_EMBEDDING_MODEL ?? "text-embedding-3-small"
 };
 
 export function ensureRuntimeEnv() {

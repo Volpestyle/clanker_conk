@@ -588,9 +588,16 @@ export class ClankerBot {
       ? await this.memory.buildPromptMemorySlice({
           userId: message.author.id,
           channelId: message.channelId,
-          queryText: message.content
+          queryText: message.content,
+          settings,
+          trace: {
+            guildId: message.guildId,
+            channelId: message.channelId,
+            userId: message.author.id,
+            source: options.source || "message_event"
+          }
         })
-      : { userFacts: [], relevantMessages: [], memoryMarkdown: "" };
+      : { userFacts: [], relevantFacts: [], relevantMessages: [] };
     const attachmentImageInputs = this.getImageInputs(message);
     const userRequestedImage = this.isExplicitImageRequest(message.content);
     const imageBudget = this.getImageBudgetState(settings);
@@ -616,7 +623,7 @@ export class ClankerBot {
       userId: message.author.id
     };
 
-    const systemPrompt = buildSystemPrompt(settings, memorySlice.memoryMarkdown);
+    const systemPrompt = buildSystemPrompt(settings);
     const replyPromptBase = {
       message: {
         authorName: message.member?.displayName || message.author.username,
@@ -626,6 +633,7 @@ export class ClankerBot {
       recentMessages,
       relevantMessages: memorySlice.relevantMessages,
       userFacts: memorySlice.userFacts,
+      relevantFacts: memorySlice.relevantFacts,
       emojiHints: this.getEmojiHints(message.guild),
       reactionEmojiOptions,
       allowReplyImages:
@@ -1725,9 +1733,6 @@ export class ClankerBot {
             }))
         : this.store.getRecentMessages(channel.id, settings.memory.maxRecentMessages);
 
-      const memoryMarkdown = settings.memory.enabled
-        ? await this.memory.readMemoryMarkdown()
-        : "";
       const discoveryResult = await this.collectDiscoveryForInitiative({
         settings,
         channel,
@@ -1740,7 +1745,7 @@ export class ClankerBot {
       const initiativeImageBudget = this.getImageBudgetState(settings);
       const initiativeImageCapabilityReady = this.isImageGenerationReady(settings);
 
-      const systemPrompt = buildSystemPrompt(settings, memoryMarkdown);
+      const systemPrompt = buildSystemPrompt(settings);
       const userPrompt = buildInitiativePrompt({
         channelName: channel.name || "channel",
         recentMessages,

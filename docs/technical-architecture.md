@@ -9,8 +9,8 @@ Code entrypoint:
 
 Core runtime:
 - `src/bot.js`: Discord event handling, reply/react logic, initiative scheduling, and posting.
-- `src/llm.js`: model provider abstraction (OpenAI or Anthropic), usage + cost logging, image generation.
-- `src/memory.js`: append-only daily journaling + fact extraction + curated `memory/MEMORY.md` distillation.
+- `src/llm.js`: model provider abstraction (OpenAI or Anthropic), usage + cost logging, embeddings, image generation.
+- `src/memory.js`: append-only daily journaling + LLM-based fact extraction + hybrid memory retrieval (lexical + vector).
 - `src/discovery.js`: external link discovery for initiative posts.
 - `src/store.js`: SQLite persistence and settings normalization.
 
@@ -21,7 +21,7 @@ Control plane:
 Storage:
 - `data/clanker.db`: runtime SQLite database.
 - `memory/YYYY-MM-DD.md`: append-only daily journal files.
-- `memory/MEMORY.md`: curated long-term snapshot used in prompts.
+- `memory/MEMORY.md`: curated long-term snapshot for operator visibility and dashboard inspection.
 
 ## 2. Runtime Lifecycle
 
@@ -56,7 +56,8 @@ Main tables created in `src/store.js`:
 - `settings`: single `runtime_settings` JSON blob.
 - `messages`: normalized message history (user + bot messages).
 - `actions`: event log (replies, reactions, initiative posts, llm/image calls, errors) with `usd_cost`.
-- `memory_facts`: extracted user facts.
+- `memory_facts`: LLM-extracted durable facts with type/confidence/evidence.
+- `memory_fact_vectors`: cached embeddings per fact/model for semantic recall.
 - `shared_links`: external links already posted (for dedupe windows).
 
 Table relationship diagram (logical relationships):
@@ -99,8 +100,19 @@ erDiagram
         datetime created_at
         string subject
         string fact
+        string fact_type
+        string evidence_text
         string source_message_id
         float confidence
+    }
+
+    MEMORY_FACT_VECTORS {
+        int id PK
+        int fact_id
+        datetime created_at
+        datetime updated_at
+        string model
+        text embedding
     }
 
     SHARED_LINKS {
@@ -113,6 +125,7 @@ erDiagram
 
     MESSAGES ||--o{ ACTIONS : "message_id (context/trigger)"
     MESSAGES ||--o{ MEMORY_FACTS : "source_message_id"
+    MEMORY_FACTS ||--o{ MEMORY_FACT_VECTORS : "fact_id"
     MESSAGES ||--o{ MESSAGES : "referenced_message_id"
 ```
 
@@ -170,6 +183,8 @@ sequenceDiagram
     alt memory enabled
       Bot->>Memory: ingestMessage()
       Memory->>Memory: append entry to memory/YYYY-MM-DD.md
+      Memory->>LLM: extractMemoryFacts() (strict JSON extraction)
+      LLM->>Store: logAction(memory_extract_call / memory_extract_error)
       Memory->>Store: addMemoryFact() / logAction(memory_fact)
       Memory->>Memory: queue curated refresh of MEMORY.md
     end
@@ -180,7 +195,7 @@ sequenceDiagram
       Bot->>Discord: message.react(emoji)
       Bot->>Store: logAction(reacted)
     and Reply path
-      Bot->>Memory: buildPromptMemorySlice()
+      Bot->>Memory: buildPromptMemorySlice() (hybrid fact retrieval)
       Bot->>LLM: generate() for reply
       LLM->>Store: logAction(llm_call or llm_error)
       Bot->>Discord: reply() or send()

@@ -3,17 +3,31 @@ import path from "node:path";
 
 const DAILY_FILE_PATTERN = /^\d{4}-\d{2}-\d{2}\.md$/;
 const LORE_SUBJECT = "__lore__";
+const FACT_TYPE_LABELS = {
+  preference: "Preference",
+  profile: "Profile",
+  relationship: "Relationship",
+  project: "Project"
+};
+const ALLOWED_FACT_TYPES = new Set(["preference", "profile", "relationship", "project", "other", "general"]);
+const MAX_FACTS_PER_MESSAGE = 4;
+const HYBRID_FACT_LIMIT = 10;
+const HYBRID_CANDIDATE_MULTIPLIER = 6;
+const HYBRID_MAX_CANDIDATES = 90;
+const HYBRID_MAX_VECTOR_BACKFILL_PER_QUERY = 8;
+const SUBJECT_LORE = LORE_SUBJECT;
 
 export class MemoryManager {
-  constructor({ store, memoryFilePath }) {
+  constructor({ store, llm, memoryFilePath }) {
     this.store = store;
+    this.llm = llm;
     this.memoryFilePath = memoryFilePath;
     this.memoryDirPath = path.dirname(memoryFilePath);
     this.pendingWrite = false;
     this.initializedDailyFiles = new Set();
   }
 
-  async ingestMessage({ messageId, authorId, authorName, content }) {
+  async ingestMessage({ messageId, authorId, authorName, content, settings, trace = {} }) {
     const cleanedContent = cleanDailyEntryContent(content);
     if (!cleanedContent) return;
 
@@ -32,24 +46,54 @@ export class MemoryManager {
 
     let insertedAnyFact = false;
     if (cleanedContent.length >= 4) {
-      const extracted = extractFactsHeuristic({ authorName, content: cleanedContent });
+      let extracted = [];
+      try {
+        extracted = await this.llm.extractMemoryFacts({
+          settings,
+          authorName,
+          messageContent: cleanedContent,
+          maxFacts: MAX_FACTS_PER_MESSAGE,
+          trace
+        });
+      } catch (error) {
+        this.logMemoryError("fact_extraction", error, { messageId, userId: authorId });
+      }
 
-      for (const factText of extracted) {
+      for (const row of extracted) {
+        const factText = normalizeStoredFactText(row?.fact);
+        if (!factText) continue;
+        if (isInstructionLikeFactText(factText)) continue;
+        if (!isTextGroundedInSource(factText, cleanedContent)) continue;
+
+        const evidenceText = normalizeEvidenceText(row?.evidence, cleanedContent);
         const inserted = this.store.addMemoryFact({
           subject: authorId,
           fact: factText,
+          factType: normalizeFactType(row?.type),
+          evidenceText,
           sourceMessageId: messageId,
-          confidence: 0.55
+          confidence: clamp01(row?.confidence, 0.5)
         });
 
-        if (inserted) {
-          insertedAnyFact = true;
-          this.store.logAction({
-            kind: "memory_fact",
-            userId: authorId,
-            messageId,
-            content: factText
-          });
+        if (!inserted) continue;
+        insertedAnyFact = true;
+        this.store.logAction({
+          kind: "memory_fact",
+          userId: authorId,
+          messageId,
+          content: factText
+        });
+
+        const factRow = this.store.getMemoryFactBySubjectAndFact(authorId, factText);
+        if (factRow) {
+          this.ensureFactVector({
+            factRow,
+            settings,
+            trace: {
+              ...trace,
+              source: "memory_fact_ingest"
+            }
+          }).catch(() => undefined);
         }
       }
     }
@@ -59,16 +103,197 @@ export class MemoryManager {
     }
   }
 
-  async buildPromptMemorySlice({ userId, channelId, queryText }) {
-    const userFacts = this.store.getFactsForSubject(userId, 8);
+  async buildPromptMemorySlice({ userId, channelId, queryText, settings, trace = {} }) {
+    const userFacts = await this.selectHybridFacts({
+      subjects: [userId],
+      queryText,
+      settings,
+      trace,
+      limit: 8
+    });
+    const relevantFacts = await this.selectHybridFacts({
+      subjects: [userId, SUBJECT_LORE],
+      queryText,
+      settings,
+      trace,
+      limit: HYBRID_FACT_LIMIT
+    });
     const relevantMessages = this.store.searchRelevantMessages(channelId, queryText, 8);
-    const memoryMarkdown = await this.readMemoryMarkdown();
 
     return {
       userFacts,
-      relevantMessages,
-      memoryMarkdown
+      relevantFacts,
+      relevantMessages
     };
+  }
+
+  async selectHybridFacts({ subjects, queryText, settings, trace = {}, limit = HYBRID_FACT_LIMIT }) {
+    const normalizedSubjects = [...new Set((subjects || []).map((value) => String(value || "").trim()).filter(Boolean))];
+    if (!normalizedSubjects.length) return [];
+
+    const boundedLimit = clampInt(limit, 1, 24);
+    const candidateLimit = Math.min(
+      HYBRID_MAX_CANDIDATES,
+      Math.max(boundedLimit * HYBRID_CANDIDATE_MULTIPLIER, boundedLimit)
+    );
+    const candidates = this.store.getFactsForSubjects(normalizedSubjects, candidateLimit);
+    if (!candidates.length) return [];
+
+    const query = String(queryText || "").trim();
+    const queryTokens = extractStableTokens(query, 32);
+    const queryCompact = normalizeHighlightText(query);
+    const semanticScores = await this.getSemanticScoreMap({ candidates, queryText: query, settings, trace });
+    const semanticAvailable = semanticScores.size > 0;
+
+    const scored = candidates.map((row) => {
+      const lexicalScore = computeLexicalFactScore(row, { queryTokens, queryCompact });
+      const semanticScore = semanticScores.get(Number(row.id)) || 0;
+      const recencyScore = computeRecencyScore(row.created_at);
+      const confidenceScore = clamp01(row.confidence, 0.5);
+      const combined = semanticAvailable
+        ? 0.48 * semanticScore + 0.32 * lexicalScore + 0.12 * confidenceScore + 0.08 * recencyScore
+        : 0.68 * lexicalScore + 0.2 * confidenceScore + 0.12 * recencyScore;
+
+      return {
+        ...row,
+        _score: Number(combined.toFixed(6)),
+        _semanticScore: Number(semanticScore.toFixed(6)),
+        _lexicalScore: Number(lexicalScore.toFixed(6))
+      };
+    });
+
+    const sorted = scored.sort((a, b) => {
+      if (b._score !== a._score) return b._score - a._score;
+      return Date.parse(b.created_at || "") - Date.parse(a.created_at || "");
+    });
+
+    const filtered = queryTokens.length || semanticAvailable
+      ? sorted.filter((row) => row._score >= (semanticAvailable ? 0.16 : 0.08))
+      : sorted;
+
+    const selected = (filtered.length ? filtered : sorted).slice(0, boundedLimit);
+    return selected.map((row) => ({
+      id: row.id,
+      created_at: row.created_at,
+      subject: row.subject,
+      fact: row.fact,
+      fact_type: row.fact_type,
+      evidence_text: row.evidence_text,
+      source_message_id: row.source_message_id,
+      confidence: row.confidence,
+      score: row._score,
+      semanticScore: row._semanticScore,
+      lexicalScore: row._lexicalScore
+    }));
+  }
+
+  async getSemanticScoreMap({ candidates, queryText, settings, trace = {} }) {
+    if (!this.llm?.isEmbeddingReady?.()) return new Map();
+
+    const query = String(queryText || "").trim();
+    if (query.length < 3) return new Map();
+
+    let queryEmbeddingResult = null;
+    try {
+      queryEmbeddingResult = await this.llm.embedText({
+        settings,
+        text: query,
+        trace: {
+          ...trace,
+          source: "memory_query"
+        }
+      });
+    } catch {
+      return new Map();
+    }
+
+    const queryEmbedding = Array.isArray(queryEmbeddingResult?.embedding)
+      ? queryEmbeddingResult.embedding
+      : [];
+    const model = String(queryEmbeddingResult?.model || "").trim();
+    if (!queryEmbedding.length || !model) return new Map();
+
+    const factIds = candidates
+      .map((row) => Number(row.id))
+      .filter((value) => Number.isInteger(value) && value > 0);
+    if (!factIds.length) return new Map();
+
+    const vectorRows = this.store.getMemoryFactVectors(factIds, model);
+    const vectorMap = new Map(
+      vectorRows.map((row) => [Number(row.fact_id), row.embedding.map((value) => Number(value))])
+    );
+
+    let backfilled = 0;
+    for (const row of candidates) {
+      const factId = Number(row.id);
+      if (!Number.isInteger(factId) || factId <= 0) continue;
+      if (vectorMap.has(factId)) continue;
+      if (backfilled >= HYBRID_MAX_VECTOR_BACKFILL_PER_QUERY) break;
+
+      const embedding = await this.ensureFactVector({
+        factRow: row,
+        model,
+        settings,
+        trace: {
+          ...trace,
+          source: "memory_fact"
+        }
+      });
+      if (embedding?.length) {
+        backfilled += 1;
+        vectorMap.set(factId, embedding);
+      }
+    }
+
+    const scoreMap = new Map();
+    for (const row of candidates) {
+      const factId = Number(row.id);
+      const embedding = vectorMap.get(factId);
+      if (!embedding?.length) continue;
+      const cosine = cosineSimilarity(queryEmbedding, embedding);
+      if (Number.isFinite(cosine) && cosine > 0) {
+        scoreMap.set(factId, cosine);
+      }
+    }
+
+    return scoreMap;
+  }
+
+  async ensureFactVector({ factRow, model = "", settings, trace = {} }) {
+    const factId = Number(factRow?.id);
+    if (!Number.isInteger(factId) || factId <= 0) return null;
+
+    const resolvedModel = String(model || this.llm?.resolveEmbeddingModel?.(settings) || "").trim();
+    if (!resolvedModel) return null;
+
+    const existing = this.store.getMemoryFactVectors([factId], resolvedModel);
+    if (existing.length) {
+      const parsed = existing[0].embedding.map((value) => Number(value));
+      return parsed.length ? parsed : null;
+    }
+
+    try {
+      const payload = buildFactEmbeddingPayload(factRow);
+      if (!payload) return null;
+      const embedded = await this.llm.embedText({
+        settings,
+        text: payload,
+        trace
+      });
+      const vector = Array.isArray(embedded?.embedding)
+        ? embedded.embedding.map((value) => Number(value))
+        : [];
+      if (!vector.length) return null;
+
+      this.store.upsertMemoryFactVector({
+        factId,
+        model: embedded.model || resolvedModel,
+        embedding: vector
+      });
+      return vector;
+    } catch {
+      return null;
+    }
   }
 
   async queueMemoryRefresh() {
@@ -144,7 +369,7 @@ export class MemoryManager {
       const cleaned = [
         ...new Set(
           rows
-            .map((row) => cleanFactForMemory(row.fact))
+            .map((row) => formatTypedFactForMemory(row.fact, row.fact_type))
             .filter(Boolean)
         )
       ].slice(0, 6);
@@ -170,13 +395,15 @@ export class MemoryManager {
   async rememberLine({ line, sourceMessageId, userId, sourceText = "" }) {
     const cleaned = normalizeMemoryLineInput(line);
     if (!cleaned) return false;
-    if (isInstructionLikeMemoryLine(cleaned)) return false;
-    if (!isMemoryLineGroundedInSource(cleaned, sourceText)) return false;
+    if (isInstructionLikeFactText(cleaned)) return false;
+    if (!isTextGroundedInSource(cleaned, sourceText)) return false;
 
     const factText = `Memory line: ${cleaned}.`;
     const inserted = this.store.addMemoryFact({
       subject: LORE_SUBJECT,
       fact: factText,
+      factType: "lore",
+      evidenceText: normalizeEvidenceText(sourceText, sourceText),
       sourceMessageId,
       confidence: 0.72
     });
@@ -189,6 +416,17 @@ export class MemoryManager {
       messageId: sourceMessageId,
       content: factText
     });
+    const factRow = this.store.getMemoryFactBySubjectAndFact(LORE_SUBJECT, factText);
+    if (factRow) {
+      this.ensureFactVector({
+        factRow,
+        settings: null,
+        trace: {
+          userId,
+          source: "memory_lore_ingest"
+        }
+      }).catch(() => undefined);
+    }
     await this.queueMemoryRefresh();
     return true;
   }
@@ -280,36 +518,101 @@ export class MemoryManager {
   }
 }
 
-function extractFactsHeuristic({ authorName, content }) {
-  const text = String(content).trim();
-  const lowered = text.toLowerCase();
-  const facts = [];
-
-  const nameSafe = String(authorName || "unknown")
-    .replace(/[\n\r]/g, " ")
+function normalizeStoredFactText(rawFact) {
+  const compact = String(rawFact || "")
+    .replace(/\s+/g, " ")
     .trim();
+  if (compact.length < 4) return "";
+  if (!/[.!?]$/.test(compact)) return `${compact}.`.slice(0, 190);
+  return compact.slice(0, 190);
+}
 
-  const favoriteMatch = lowered.match(/\bmy favorite ([a-z0-9 ]{2,24}) is ([a-z0-9 '\-]{2,40})/i);
-  if (favoriteMatch) {
-    facts.push(`${nameSafe}'s favorite ${favoriteMatch[1].trim()} is ${favoriteMatch[2].trim()}.`);
+function normalizeFactType(rawType) {
+  const normalized = String(rawType || "")
+    .trim()
+    .toLowerCase();
+  if (!ALLOWED_FACT_TYPES.has(normalized)) return "other";
+  if (normalized === "general") return "other";
+  return normalized;
+}
+
+function normalizeEvidenceText(rawEvidence, sourceText) {
+  const evidence = sanitizeInline(rawEvidence || "", 220);
+  if (!evidence) return null;
+  return isTextGroundedInSource(evidence, sourceText) ? evidence : null;
+}
+
+function clamp01(value, fallback = 0.5) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  if (parsed <= 0) return 0;
+  if (parsed >= 1) return 1;
+  return parsed;
+}
+
+function clampInt(value, min, max) {
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed)) return min;
+  if (parsed < min) return min;
+  if (parsed > max) return max;
+  return parsed;
+}
+
+function buildFactEmbeddingPayload(factRow) {
+  const fact = sanitizeInline(factRow?.fact || "", 220);
+  const evidence = sanitizeInline(factRow?.evidence_text || "", 180);
+  const factType = sanitizeInline(factRow?.fact_type || "", 40);
+  if (!fact) return "";
+
+  const parts = [];
+  if (factType) parts.push(`type: ${factType}`);
+  parts.push(`fact: ${fact}`);
+  if (evidence) parts.push(`evidence: ${evidence}`);
+  return parts.join("\n");
+}
+
+function computeLexicalFactScore(row, { queryTokens, queryCompact }) {
+  const factCompact = normalizeHighlightText(row?.fact || "");
+  const evidenceCompact = normalizeHighlightText(row?.evidence_text || "");
+  const combinedCompact = `${factCompact} ${evidenceCompact}`.trim();
+  if (!combinedCompact) return 0;
+
+  if (queryCompact && combinedCompact.includes(queryCompact)) return 1;
+  if (!queryTokens?.length) return 0;
+
+  const factTokens = new Set(extractStableTokens(combinedCompact, 96));
+  const overlap = queryTokens.filter((token) => factTokens.has(token));
+  if (!overlap.length) return 0;
+
+  return Math.min(1, overlap.length / Math.max(1, queryTokens.length));
+}
+
+function computeRecencyScore(createdAtIso) {
+  const timestamp = Date.parse(String(createdAtIso || ""));
+  if (!Number.isFinite(timestamp)) return 0;
+  const ageMs = Math.max(0, Date.now() - timestamp);
+  const ageDays = ageMs / (24 * 60 * 60 * 1000);
+  return 1 / (1 + ageDays / 45);
+}
+
+function cosineSimilarity(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || !a.length || !b.length) return 0;
+  const dims = Math.min(a.length, b.length);
+  if (!dims) return 0;
+
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < dims; i += 1) {
+    const av = Number(a[i]) || 0;
+    const bv = Number(b[i]) || 0;
+    dot += av * bv;
+    normA += av * av;
+    normB += bv * bv;
   }
 
-  const likeMatch = lowered.match(/\bi (love|like|hate|play|watch|listen to) ([a-z0-9 '\-]{2,50})/i);
-  if (likeMatch) {
-    facts.push(`${nameSafe} says they ${likeMatch[1]} ${likeMatch[2].trim()}.`);
-  }
-
-  const callMeMatch = lowered.match(/\b(call me|i go by) ([a-z0-9 '\-]{2,24})/i);
-  if (callMeMatch) {
-    facts.push(`${nameSafe} also goes by ${callMeMatch[2].trim()}.`);
-  }
-
-  const imMatch = lowered.match(/\bi(?:'m| am) ([a-z0-9 '\-]{2,24})/i);
-  if (imMatch && !/[?.!]$/.test(text)) {
-    facts.push(`${nameSafe} described themselves as ${imMatch[1].trim()}.`);
-  }
-
-  return [...new Set(facts)].slice(0, 3);
+  if (normA <= 0 || normB <= 0) return 0;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
 function cleanFactForMemory(rawFact) {
@@ -326,6 +629,17 @@ function cleanFactForMemory(rawFact) {
   if (!/[.!?]$/.test(text)) text += ".";
 
   return text.slice(0, 190);
+}
+
+function formatTypedFactForMemory(rawFact, rawType) {
+  const fact = cleanFactForMemory(rawFact);
+  if (!fact) return "";
+
+  const type = String(rawType || "")
+    .trim()
+    .toLowerCase();
+  const label = FACT_TYPE_LABELS[type];
+  return label ? `${label}: ${fact}` : fact;
 }
 
 function buildHighlightsSection(entries, maxItems = 24) {
@@ -424,7 +738,7 @@ function normalizeMemoryLineInput(input) {
   return text.slice(0, 180);
 }
 
-function isInstructionLikeMemoryLine(line) {
+function isInstructionLikeFactText(line) {
   const text = String(line || "").toLowerCase();
   if (!text) return true;
   if (/\[\[[\s\S]*\]\]/.test(text)) return true;
@@ -435,7 +749,7 @@ function isInstructionLikeMemoryLine(line) {
   return false;
 }
 
-function isMemoryLineGroundedInSource(memoryLine, sourceText) {
+function isTextGroundedInSource(memoryLine, sourceText) {
   const sourceTokens = extractStableTokens(sourceText, 64);
   if (!sourceTokens.length) return false;
 

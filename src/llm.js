@@ -4,6 +4,7 @@ import OpenAI from "openai";
 import { estimateImageUsdCost, estimateUsdCost } from "./pricing.js";
 
 const MEMORY_FACT_TYPES = ["preference", "profile", "relationship", "project", "other"];
+const DEFAULT_MEMORY_EMBEDDING_MODEL = "text-embedding-3-small";
 const MEMORY_EXTRACTION_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -258,6 +259,92 @@ export class LLMService {
         cacheReadTokens: Number(response.usage?.cache_read_input_tokens || 0)
       }
     };
+  }
+
+  isEmbeddingReady() {
+    return Boolean(this.openai);
+  }
+
+  async embedText({ settings, text, trace = {} }) {
+    if (!this.openai) {
+      throw new Error("Embeddings require OPENAI_API_KEY.");
+    }
+
+    const input = normalizeInlineText(text, 8000);
+    if (!input) {
+      return {
+        embedding: [],
+        model: this.resolveEmbeddingModel(settings),
+        usage: { inputTokens: 0, outputTokens: 0 },
+        costUsd: 0
+      };
+    }
+
+    const model = this.resolveEmbeddingModel(settings);
+    try {
+      const response = await this.openai.embeddings.create({
+        model,
+        input
+      });
+
+      const embedding = Array.isArray(response?.data?.[0]?.embedding)
+        ? response.data[0].embedding.map((value) => Number(value))
+        : [];
+      if (!embedding.length) {
+        throw new Error("Embedding API returned no vector.");
+      }
+
+      const inputTokens = Number(response?.usage?.prompt_tokens || response?.usage?.total_tokens || 0);
+      const costUsd = estimateUsdCost({
+        provider: "openai",
+        model,
+        inputTokens,
+        outputTokens: 0,
+        customPricing: settings?.llm?.pricing
+      });
+
+      this.store.logAction({
+        kind: "memory_embedding_call",
+        guildId: trace.guildId,
+        channelId: trace.channelId,
+        userId: trace.userId,
+        content: model,
+        metadata: {
+          model,
+          inputChars: input.length,
+          vectorDims: embedding.length,
+          usage: { inputTokens, outputTokens: 0 }
+        },
+        usdCost: costUsd
+      });
+
+      return {
+        embedding,
+        model,
+        usage: { inputTokens, outputTokens: 0 },
+        costUsd
+      };
+    } catch (error) {
+      this.store.logAction({
+        kind: "memory_embedding_error",
+        guildId: trace.guildId,
+        channelId: trace.channelId,
+        userId: trace.userId,
+        content: String(error?.message || error),
+        metadata: {
+          model
+        }
+      });
+      throw error;
+    }
+  }
+
+  resolveEmbeddingModel(settings) {
+    const fromSettings = String(settings?.memory?.embeddingModel || "").trim();
+    if (fromSettings) return fromSettings.slice(0, 120);
+    const fromEnv = String(this.appConfig?.defaultMemoryEmbeddingModel || "").trim();
+    if (fromEnv) return fromEnv.slice(0, 120);
+    return DEFAULT_MEMORY_EMBEDDING_MODEL;
   }
 
   async generateImage({ settings, prompt, trace = {} }) {
