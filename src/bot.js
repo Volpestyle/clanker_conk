@@ -13,7 +13,7 @@ import { normalizeDiscoveryUrl } from "./discovery.js";
 import { chance, clamp, sanitizeBotText, sleep } from "./utils.js";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
-const CLANKER_KEYWORD_RE = /\bclank(?:er|a|s)\b/i;
+const CLANKER_KEYWORD_RE = /\bclank(?:er|a|s|or)\b/i;
 const QUESTION_START_RE =
   /^(?:who|what|when|where|why|how|can|could|would|will|should|is|are|am|do|does|did|anyone|someone|somebody)\b/i;
 const SECOND_PERSON_RE = /\b(?:you|your|yours|u|ur)\b/i;
@@ -49,6 +49,8 @@ const WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:go
 const MAX_WEB_QUERY_LEN = 220;
 const MAX_GIF_QUERY_LEN = 120;
 const MAX_MEMORY_LINE_LEN = 180;
+const MAX_YOUTUBE_TARGET_SCAN = 8;
+const MAX_YOUTUBE_FALLBACK_MESSAGES = 18;
 
 export class ClankerBot {
   constructor({ appConfig, store, llm, memory, discovery, search, gifs, youtube }) {
@@ -596,6 +598,7 @@ export class ClankerBot {
     const youtubeContext = await this.buildYouTubeReplyContext({
       settings,
       messageText: message.content,
+      recentMessages,
       trace: {
         guildId: message.guildId,
         channelId: message.channelId,
@@ -828,6 +831,7 @@ export class ClankerBot {
           requested: youtubeContext.requested,
           used: youtubeContext.used,
           detectedVideos: youtubeContext.detectedVideos,
+          detectedFromRecentMessages: youtubeContext.detectedFromRecentMessages,
           fetchedVideos: youtubeContext.videos?.length || 0,
           blockedByHourlyCap: youtubeContext.blockedByBudget,
           maxPerHour: youtubeContext.budget?.maxPerHour ?? null,
@@ -1191,7 +1195,7 @@ export class ClankerBot {
     };
   }
 
-  async buildYouTubeReplyContext({ settings, messageText, trace = {} }) {
+  async buildYouTubeReplyContext({ settings, messageText, recentMessages = [], trace = {} }) {
     const enabled = Boolean(settings.youtubeContext?.enabled);
     const budget = this.getYouTubeContextBudgetState(settings);
     const maxVideosPerMessage = clamp(Number(settings.youtubeContext?.maxVideosPerMessage) || 0, 0, 6);
@@ -1205,6 +1209,7 @@ export class ClankerBot {
       error: null,
       errors: [],
       detectedVideos: 0,
+      detectedFromRecentMessages: false,
       videos: [],
       budget
     };
@@ -1213,14 +1218,26 @@ export class ClankerBot {
       return base;
     }
 
-    const detectedTargets = this.youtube.extractVideoTargets(messageText, 8);
+    const directTargets = this.youtube.extractVideoTargets(messageText, MAX_YOUTUBE_TARGET_SCAN);
+    const fallbackTargets =
+      !directTargets.length && looksLikeYouTubeFollowupMessage(messageText)
+        ? extractRecentYouTubeTargets({
+            youtubeService: this.youtube,
+            recentMessages,
+            maxMessages: MAX_YOUTUBE_FALLBACK_MESSAGES,
+            maxTargets: MAX_YOUTUBE_TARGET_SCAN
+          })
+        : [];
+    const detectedTargets = directTargets.length ? directTargets : fallbackTargets;
     if (!detectedTargets.length) return base;
+    const detectedFromRecentMessages = directTargets.length === 0 && fallbackTargets.length > 0;
 
     if (maxVideosPerMessage <= 0) {
       return {
         ...base,
         requested: true,
-        detectedVideos: detectedTargets.length
+        detectedVideos: detectedTargets.length,
+        detectedFromRecentMessages
       };
     }
 
@@ -1229,7 +1246,8 @@ export class ClankerBot {
       return {
         ...base,
         requested: true,
-        detectedVideos: detectedTargets.length
+        detectedVideos: detectedTargets.length,
+        detectedFromRecentMessages
       };
     }
 
@@ -1237,7 +1255,8 @@ export class ClankerBot {
       return {
         ...base,
         requested: true,
-        detectedVideos: detectedTargets.length
+        detectedVideos: detectedTargets.length,
+        detectedFromRecentMessages
       };
     }
 
@@ -1246,6 +1265,7 @@ export class ClankerBot {
         ...base,
         requested: true,
         detectedVideos: detectedTargets.length,
+        detectedFromRecentMessages,
         blockedByBudget: true
       };
     }
@@ -1256,6 +1276,7 @@ export class ClankerBot {
         ...base,
         requested: true,
         detectedVideos: detectedTargets.length,
+        detectedFromRecentMessages,
         blockedByBudget: true
       };
     }
@@ -1278,6 +1299,7 @@ export class ClankerBot {
         error: firstError,
         errors: result.errors || [],
         detectedVideos: detectedTargets.length,
+        detectedFromRecentMessages,
         videos: result.videos || []
       };
     } catch (error) {
@@ -1285,6 +1307,7 @@ export class ClankerBot {
         ...base,
         requested: true,
         detectedVideos: detectedTargets.length,
+        detectedFromRecentMessages,
         blockedByBudget,
         error: String(error?.message || error),
         errors: [
@@ -2229,6 +2252,50 @@ function extractUrlsFromText(text) {
   return [...String(text || "").matchAll(URL_IN_TEXT_RE)].map((match) => String(match[0] || ""));
 }
 
+function looksLikeYouTubeFollowupMessage(rawText) {
+  const text = String(rawText || "").trim();
+  if (!text) return false;
+  if (extractUrlsFromText(text).length) return false;
+
+  const hasVideoTopic = /\b(?:video|clip|youtube|yt)\b/i.test(text);
+  if (!hasVideoTopic) return false;
+
+  return /\b(?:watch|watched|watching|see|seen|view|check|open|play)\b/i.test(text);
+}
+
+function extractRecentYouTubeTargets({
+  youtubeService,
+  recentMessages,
+  maxMessages = MAX_YOUTUBE_FALLBACK_MESSAGES,
+  maxTargets = MAX_YOUTUBE_TARGET_SCAN
+}) {
+  if (!youtubeService || !Array.isArray(recentMessages) || !recentMessages.length) return [];
+
+  const normalizedMaxMessages = clamp(Number(maxMessages) || MAX_YOUTUBE_FALLBACK_MESSAGES, 1, 120);
+  const normalizedMaxTargets = clamp(Number(maxTargets) || MAX_YOUTUBE_TARGET_SCAN, 1, 8);
+  const targets = [];
+  const seenVideoIds = new Set();
+
+  for (const row of recentMessages.slice(0, normalizedMaxMessages)) {
+    if (targets.length >= normalizedMaxTargets) break;
+    if (Number(row?.is_bot || 0) === 1) continue;
+
+    const content = String(row?.content || "");
+    if (!content) continue;
+
+    const rowTargets = youtubeService.extractVideoTargets(content, normalizedMaxTargets);
+    for (const target of rowTargets) {
+      if (targets.length >= normalizedMaxTargets) break;
+      const videoId = String(target?.videoId || "").trim();
+      if (!videoId || seenVideoIds.has(videoId)) continue;
+      seenVideoIds.add(videoId);
+      targets.push(target);
+    }
+  }
+
+  return targets;
+}
+
 function composeInitiativeImagePrompt(imagePrompt, postText) {
   URL_IN_TEXT_RE.lastIndex = 0;
   const topic = String(postText || "")
@@ -2332,7 +2399,7 @@ function isDirectWebSearchCommand(rawText, botName = "") {
   if (!hasSearchVerb) return false;
 
   if (/^(?:<@!?\d+>\s*)?(?:google|search|look\s*up|lookup|find)\b/i.test(text)) return true;
-  if (/\bclank(?:er|a|s)\b/i.test(text)) return true;
+  if (/\bclank(?:er|a|s|or)\b/i.test(text)) return true;
 
   if (botName) {
     const escapedName = escapeRegExp(String(botName || "").trim());
@@ -2348,7 +2415,7 @@ function deriveDirectWebSearchQuery(rawText, botName = "") {
 
   let cleaned = text
     .replace(/<@!?\d+>/g, " ")
-    .replace(/\bclank(?:er|a|s)\b/gi, " ")
+    .replace(/\bclank(?:er|a|s|or)\b/gi, " ")
     .replace(/\b(?:can|could|would|will)\s+(?:you|u)\b/gi, " ")
     .replace(/\b(?:please|pls|plz|try|again)\b/gi, " ")
     .replace(/\bgoogle(?:\s+search)?\b/gi, " ")

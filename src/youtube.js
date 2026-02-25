@@ -63,7 +63,8 @@ export class YouTubeContextService {
           durationSeconds: context.durationSeconds,
           viewCount: context.viewCount,
           description: context.description,
-          transcript: context.transcript
+          transcript: context.transcript,
+          transcriptError: context.transcriptError || null
         });
         this.store.logAction({
           kind: "youtube_context_call",
@@ -79,6 +80,7 @@ export class YouTubeContextService {
             channel: context.channel,
             hasTranscript: Boolean(context.transcript),
             transcriptChars: context.transcript ? context.transcript.length : 0,
+            transcriptError: context.transcriptError || null,
             cacheHit: Boolean(context.cacheHit)
           }
         });
@@ -136,10 +138,20 @@ export class YouTubeContextService {
       url: sourceUrl || watchUrl,
       playerResponse
     });
-    summary.transcript = await fetchTranscriptText({
-      playerResponse,
-      maxTranscriptChars
-    });
+    let transcript = "";
+    let transcriptError = null;
+    try {
+      transcript = await fetchTranscriptText({
+        playerResponse,
+        maxTranscriptChars
+      });
+    } catch (error) {
+      transcriptError = String(error?.message || error);
+    }
+    summary.transcript = transcript;
+    if (transcriptError) {
+      summary.transcriptError = transcriptError;
+    }
 
     const value = {
       ...summary,
