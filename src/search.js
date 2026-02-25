@@ -2,8 +2,20 @@ import { normalizeDiscoveryUrl } from "./discovery.js";
 import { clamp } from "./utils.js";
 
 const GOOGLE_SEARCH_API_URL = "https://www.googleapis.com/customsearch/v1";
-const SEARCH_TIMEOUT_MS = 9_000;
-const PAGE_TIMEOUT_MS = 8_500;
+const SEARCH_TIMEOUT_MS = 4_500;
+const PAGE_TIMEOUT_MS = 4_500;
+const MAX_WEB_FETCH_ATTEMPTS = 3;
+const RETRY_BASE_DELAY_MS = 180;
+const RETRYABLE_HTTP_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
+const RETRYABLE_FETCH_ERROR_CODES = new Set([
+  "ECONNRESET",
+  "ENOTFOUND",
+  "ETIMEDOUT",
+  "EAI_AGAIN",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT"
+]);
 const SEARCH_USER_AGENT =
   "clanker-conk/0.1 (+web-search; https://github.com/Volpestyle/clanker_conk)";
 
@@ -40,16 +52,18 @@ export class WebSearchService {
     }
 
     try {
-      const searchResults = await this.searchGoogle({
+      const searchData = await this.searchGoogle({
         query: normalizedQuery,
         maxResults: config.maxResults,
         safeSearch: config.safeSearch
       });
+      const searchResults = searchData.items;
       const readCandidates = searchResults.slice(0, config.maxPagesToRead);
       const pageSummaries = await Promise.all(
         readCandidates.map((item) =>
           this.readPageSummary(item.url, config.maxCharsPerPage).catch((error) => ({
-            error: String(error?.message || error)
+            error: String(error?.message || error),
+            attempts: Number(error?.attempts || 1)
           }))
         )
       );
@@ -70,6 +84,10 @@ export class WebSearchService {
       });
 
       const fetchedPages = results.filter((row) => row.pageSummary).length;
+      const pageReadAttempts = pageSummaries.reduce(
+        (sum, row) => sum + Number(row?.attempts || 1),
+        0
+      );
 
       this.store.logAction({
         kind: "search_call",
@@ -82,8 +100,11 @@ export class WebSearchService {
           source: trace.source || "unknown",
           maxResults: config.maxResults,
           returnedResults: results.length,
+          searchAttempts: searchData.attempts,
           pageReadsRequested: readCandidates.length,
           pageReadsSucceeded: fetchedPages,
+          pageReadAttempts,
+          maxAttemptsPerRequest: MAX_WEB_FETCH_ATTEMPTS,
           safeSearch: config.safeSearch
         }
       });
@@ -102,7 +123,9 @@ export class WebSearchService {
         content: String(error?.message || error),
         metadata: {
           query: normalizedQuery,
-          source: trace.source || "unknown"
+          source: trace.source || "unknown",
+          attempts: Number(error?.attempts || 1),
+          maxAttemptsPerRequest: MAX_WEB_FETCH_ATTEMPTS
         }
       });
       throw error;
@@ -119,28 +142,39 @@ export class WebSearchService {
     endpoint.searchParams.set("hl", "en");
     endpoint.searchParams.set("gl", "us");
 
-    const response = await fetch(endpoint, {
-      method: "GET",
-      headers: {
-        "user-agent": SEARCH_USER_AGENT,
-        accept: "application/json"
-      },
-      signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS)
+    const { response, attempts } = await fetchWithRetry({
+      request: () =>
+        fetch(endpoint, {
+          method: "GET",
+          headers: {
+            "user-agent": SEARCH_USER_AGENT,
+            accept: "application/json"
+          },
+          signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS)
+        }),
+      shouldRetryResponse: (res) => !res.ok && shouldRetryHttpStatus(res.status),
+      maxAttempts: MAX_WEB_FETCH_ATTEMPTS
     });
 
     if (!response.ok) {
-      throw new Error(`Google Search HTTP ${response.status}`);
+      const error = new Error(`Google Search HTTP ${response.status}`);
+      error.attempts = attempts;
+      throw error;
     }
 
     let payload = null;
     try {
       payload = await response.json();
     } catch {
-      throw new Error("Google Search returned invalid JSON.");
+      const error = new Error("Google Search returned invalid JSON.");
+      error.attempts = attempts;
+      throw error;
     }
 
     if (payload?.error?.message) {
-      throw new Error(`Google Search API error: ${payload.error.message}`);
+      const error = new Error(`Google Search API error: ${payload.error.message}`);
+      error.attempts = attempts;
+      throw error;
     }
 
     const rawItems = Array.isArray(payload?.items) ? payload.items : [];
@@ -161,7 +195,10 @@ export class WebSearchService {
       });
     }
 
-    return items.slice(0, clamp(Number(maxResults) || 5, 1, 10));
+    return {
+      items: items.slice(0, clamp(Number(maxResults) || 5, 1, 10)),
+      attempts
+    };
   }
 
   async readPageSummary(url, maxChars) {
@@ -170,18 +207,25 @@ export class WebSearchService {
       throw new Error(`blocked or invalid page URL: ${url}`);
     }
 
-    const response = await fetch(safeUrl, {
-      method: "GET",
-      redirect: "follow",
-      headers: {
-        "user-agent": SEARCH_USER_AGENT,
-        accept: "text/html,text/plain;q=0.9,*/*;q=0.2"
-      },
-      signal: AbortSignal.timeout(PAGE_TIMEOUT_MS)
+    const { response, attempts } = await fetchWithRetry({
+      request: () =>
+        fetch(safeUrl, {
+          method: "GET",
+          redirect: "follow",
+          headers: {
+            "user-agent": SEARCH_USER_AGENT,
+            accept: "text/html,text/plain;q=0.9,*/*;q=0.2"
+          },
+          signal: AbortSignal.timeout(PAGE_TIMEOUT_MS)
+        }),
+      shouldRetryResponse: (res) => !res.ok && shouldRetryHttpStatus(res.status),
+      maxAttempts: MAX_WEB_FETCH_ATTEMPTS
     });
 
     if (!response.ok) {
-      throw new Error(`page fetch HTTP ${response.status}`);
+      const error = new Error(`page fetch HTTP ${response.status}`);
+      error.attempts = attempts;
+      throw error;
     }
 
     const contentType = String(response.headers.get("content-type") || "").toLowerCase();
@@ -190,35 +234,45 @@ export class WebSearchService {
       !contentType.includes("text/html") &&
       !contentType.includes("text/plain")
     ) {
-      throw new Error(`unsupported content type: ${contentType || "unknown"}`);
+      const error = new Error(`unsupported content type: ${contentType || "unknown"}`);
+      error.attempts = attempts;
+      throw error;
     }
 
     const raw = await response.text();
     if (!raw) {
-      throw new Error("empty page response");
+      const error = new Error("empty page response");
+      error.attempts = attempts;
+      throw error;
     }
 
     if (contentType.includes("text/plain")) {
       const summary = sanitizeExternalText(raw, maxChars);
       if (!summary) {
-        throw new Error("page text had no usable content");
+        const error = new Error("page text had no usable content");
+        error.attempts = attempts;
+        throw error;
       }
 
       return {
         title: null,
-        summary
+        summary,
+        attempts
       };
     }
 
     const title = sanitizeExternalText(extractTitle(raw), 120) || null;
     const summary = sanitizeExternalText(extractReadableHtmlText(raw), maxChars);
     if (!summary) {
-      throw new Error("HTML page had no usable text");
+      const error = new Error("HTML page had no usable text");
+      error.attempts = attempts;
+      throw error;
     }
 
     return {
       title,
-      summary
+      summary,
+      attempts
     };
   }
 }
@@ -297,4 +351,67 @@ function sanitizeExternalText(value, maxLen = 240) {
   if (!text) return "";
   if (text.length <= maxLen) return text;
   return `${text.slice(0, Math.max(0, maxLen - 1)).trimEnd()}…`;
+}
+
+async function fetchWithRetry({
+  request,
+  shouldRetryResponse,
+  maxAttempts = MAX_WEB_FETCH_ATTEMPTS
+}) {
+  let attempt = 0;
+  while (attempt < maxAttempts) {
+    attempt += 1;
+    try {
+      const response = await request();
+      if (!shouldRetryResponse(response) || attempt >= maxAttempts) {
+        return { response, attempts: attempt };
+      }
+    } catch (error) {
+      if (!isRetryableFetchError(error) || attempt >= maxAttempts) {
+        throw withAttemptCount(error, attempt);
+      }
+    }
+
+    await sleep(getRetryDelayMs(attempt));
+  }
+
+  throw withAttemptCount(new Error("Web fetch failed after retries."), maxAttempts);
+}
+
+function shouldRetryHttpStatus(status) {
+  return RETRYABLE_HTTP_STATUS.has(Number(status));
+}
+
+function isRetryableFetchError(error) {
+  const code = String(error?.code || error?.cause?.code || "").toUpperCase();
+  if (RETRYABLE_FETCH_ERROR_CODES.has(code)) return true;
+
+  const name = String(error?.name || "");
+  if (name === "AbortError" || name === "TimeoutError") return true;
+
+  const message = String(error?.message || "").toLowerCase();
+  return message.includes("timeout") || message.includes("timed out") || message.includes("fetch failed");
+}
+
+function withAttemptCount(error, attempts) {
+  if (error && typeof error === "object") {
+    try {
+      error.attempts = Number(attempts || 1);
+      return error;
+    } catch {
+      // Fall through to wrapped error.
+    }
+  }
+
+  const wrapped = new Error(String(error?.message || error || "unknown error"));
+  wrapped.attempts = Number(attempts || 1);
+  return wrapped;
+}
+
+function getRetryDelayMs(attempt) {
+  return Math.min(900, RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1));
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
