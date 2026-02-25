@@ -42,18 +42,24 @@ const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
 const IMAGE_REQUEST_RE =
   /\b(?:make|generate|create|draw|paint|send|show|post)\b[\w\s,]{0,30}\b(?:image|picture|pic|photo|meme|art)\b|\b(?:image|picture|pic|photo|meme|art)\b[\w\s,]{0,24}\b(?:please|pls|plz|of|for|about)\b/i;
 const IMAGE_PROMPT_DIRECTIVE_RE = /\[\[IMAGE_PROMPT:\s*([\s\S]*?)\s*\]\]\s*$/i;
+const GIF_QUERY_DIRECTIVE_RE = /\[\[GIF_QUERY:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const WEB_SEARCH_DIRECTIVE_RE = /\[\[WEB_SEARCH:\s*([\s\S]*?)\s*\]\]\s*$/i;
+const MEMORY_LINE_DIRECTIVE_RE = /\[\[MEMORY_LINE:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
 const MAX_WEB_QUERY_LEN = 220;
+const MAX_GIF_QUERY_LEN = 120;
+const MAX_MEMORY_LINE_LEN = 180;
 
 export class ClankerBot {
-  constructor({ appConfig, store, llm, memory, discovery, search }) {
+  constructor({ appConfig, store, llm, memory, discovery, search, gifs, youtube }) {
     this.appConfig = appConfig;
     this.store = store;
     this.llm = llm;
     this.memory = memory;
     this.discovery = discovery;
     this.search = search;
+    this.gifs = gifs;
+    this.youtube = youtube;
 
     this.lastBotMessageAt = 0;
     this.memoryTimer = null;
@@ -583,7 +589,20 @@ export class ClankerBot {
     const imageInputs = this.getImageInputs(message);
     const userRequestedImage = this.isExplicitImageRequest(message.content);
     const imageBudget = this.getImageBudgetState(settings);
+    const imageCapabilityReady = this.isImageGenerationReady(settings);
+    const gifBudget = this.getGifBudgetState(settings);
+    const gifsConfigured = Boolean(this.gifs?.isConfigured?.());
     let webSearch = this.buildWebSearchContext(settings, message.content);
+    const youtubeContext = await this.buildYouTubeReplyContext({
+      settings,
+      messageText: message.content,
+      trace: {
+        guildId: message.guildId,
+        channelId: message.channelId,
+        userId: message.author.id,
+        source: options.source || "message_event"
+      }
+    });
     const replyTrace = {
       guildId: message.guildId,
       channelId: message.channelId,
@@ -601,9 +620,16 @@ export class ClankerBot {
       relevantMessages: memorySlice.relevantMessages,
       userFacts: memorySlice.userFacts,
       emojiHints: this.getEmojiHints(message.guild),
-      allowReplyImages: settings.initiative.allowReplyImages && imageBudget.canGenerate,
+      allowReplyImages:
+        settings.initiative.allowReplyImages && imageCapabilityReady && imageBudget.canGenerate,
       remainingReplyImages: imageBudget.remaining,
-      userRequestedImage
+      allowReplyGifs: settings.initiative.allowReplyGifs && gifsConfigured && gifBudget.canFetch,
+      remainingReplyGifs: gifBudget.remaining,
+      gifRepliesEnabled: settings.initiative.allowReplyGifs,
+      gifsConfigured,
+      userRequestedImage,
+      allowMemoryDirective: settings.memory.enabled,
+      youtubeContext
     };
     const initialUserPrompt = buildReplyPrompt({
       ...replyPromptBase,
@@ -620,6 +646,10 @@ export class ClankerBot {
     });
     let usedWebSearchFollowup = false;
     let replyDirective = parseReplyDirectives(generation.text);
+    const directWebSearchCommand = isDirectWebSearchCommand(message.content, settings.botName);
+    if (!replyDirective.webSearchQuery && directWebSearchCommand) {
+      replyDirective.webSearchQuery = deriveDirectWebSearchQuery(message.content, settings.botName);
+    }
 
     if (replyDirective.webSearchQuery) {
       webSearch = await this.runModelRequestedWebSearch({
@@ -649,17 +679,60 @@ export class ClankerBot {
       usedWebSearchFollowup = true;
     }
 
-    const finalText = sanitizeBotText(
-      replyDirective.text || (replyDirective.imagePrompt ? "here you go" : "")
-    );
+    const memoryLine = replyDirective.memoryLine;
+    let memorySaved = false;
+    if (settings.memory.enabled && memoryLine) {
+      try {
+        memorySaved = await this.memory.rememberLine({
+          line: memoryLine,
+          sourceMessageId: message.id,
+          userId: message.author.id,
+          sourceText: message.content
+        });
+      } catch (error) {
+        this.store.logAction({
+          kind: "bot_error",
+          guildId: message.guildId,
+          channelId: message.channelId,
+          messageId: message.id,
+          userId: message.author.id,
+          content: `memory_directive: ${String(error?.message || error)}`
+        });
+      }
+    }
+
+    let finalText = sanitizeBotText(replyDirective.text || (replyDirective.imagePrompt || replyDirective.gifQuery ? "here you go" : ""));
     if (!finalText || finalText === "[SKIP]") return false;
 
     let payload = { content: finalText };
     let imageUsed = false;
     let imageBudgetBlocked = false;
+    let imageCapabilityBlocked = false;
+    let gifUsed = false;
+    let gifBudgetBlocked = false;
+    let gifConfigBlocked = false;
     const imagePrompt = replyDirective.imagePrompt;
+    const gifQuery = replyDirective.gifQuery;
 
-    if (settings.initiative.allowReplyImages && imagePrompt) {
+    if (gifQuery) {
+      const gifResult = await this.maybeAttachReplyGif({
+        settings,
+        text: finalText,
+        query: gifQuery,
+        trace: {
+          guildId: message.guildId,
+          channelId: message.channelId,
+          userId: message.author.id,
+          source: "reply_message"
+        }
+      });
+      payload = gifResult.payload;
+      gifUsed = gifResult.gifUsed;
+      gifBudgetBlocked = gifResult.blockedByBudget;
+      gifConfigBlocked = gifResult.blockedByConfiguration;
+    }
+
+    if (!gifUsed && settings.initiative.allowReplyImages && imagePrompt) {
       const imageResult = await this.maybeAttachGeneratedImage({
         settings,
         text: finalText,
@@ -674,6 +747,7 @@ export class ClankerBot {
       payload = imageResult.payload;
       imageUsed = imageResult.imageUsed;
       imageBudgetBlocked = imageResult.blockedByBudget;
+      imageCapabilityBlocked = imageResult.blockedByCapability;
     }
 
     await message.channel.sendTyping();
@@ -720,8 +794,22 @@ export class ClankerBot {
           requestedByModel: Boolean(imagePrompt),
           used: imageUsed,
           blockedByDailyCap: imageBudgetBlocked,
+          blockedByCapability: imageCapabilityBlocked,
           maxPerDay: imageBudget.maxPerDay,
-          remainingAtPromptTime: imageBudget.remaining
+          remainingAtPromptTime: imageBudget.remaining,
+          capabilityReadyAtPromptTime: imageCapabilityReady
+        },
+        gif: {
+          requestedByModel: Boolean(gifQuery),
+          used: gifUsed,
+          blockedByDailyCap: gifBudgetBlocked,
+          blockedByConfiguration: gifConfigBlocked,
+          maxPerDay: gifBudget.maxPerDay,
+          remainingAtPromptTime: gifBudget.remaining
+        },
+        memory: {
+          requestedByModel: Boolean(memoryLine),
+          saved: memorySaved
         },
         webSearch: {
           requested: webSearch.requested,
@@ -735,6 +823,17 @@ export class ClankerBot {
           configured: webSearch.configured,
           optedOutByUser: webSearch.optedOutByUser,
           error: webSearch.error || null
+        },
+        youtube: {
+          requested: youtubeContext.requested,
+          used: youtubeContext.used,
+          detectedVideos: youtubeContext.detectedVideos,
+          fetchedVideos: youtubeContext.videos?.length || 0,
+          blockedByHourlyCap: youtubeContext.blockedByBudget,
+          maxPerHour: youtubeContext.budget?.maxPerHour ?? null,
+          remainingAtPromptTime: youtubeContext.budget?.remaining ?? null,
+          enabled: youtubeContext.enabled,
+          errorCount: youtubeContext.errors?.length || 0
         },
         llm: {
           provider: generation.provider,
@@ -1034,6 +1133,24 @@ export class ClankerBot {
     };
   }
 
+  getGifBudgetState(settings) {
+    const maxPerDay = clamp(Number(settings.initiative?.maxGifsPerDay) || 0, 0, 300);
+    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const used = this.store.countActionsSince("gif_call", since24h);
+    const remaining = Math.max(0, maxPerDay - used);
+
+    return {
+      maxPerDay,
+      used,
+      remaining,
+      canFetch: maxPerDay > 0 && remaining > 0
+    };
+  }
+
+  isImageGenerationReady(settings) {
+    return Boolean(this.llm?.isImageGenerationReady?.(settings));
+  }
+
   isExplicitImageRequest(messageText) {
     return IMAGE_REQUEST_RE.test(String(messageText || ""));
   }
@@ -1041,15 +1158,144 @@ export class ClankerBot {
   getWebSearchBudgetState(settings) {
     const maxPerHour = clamp(Number(settings.webSearch?.maxSearchesPerHour) || 0, 0, 120);
     const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const used = this.store.countActionsSince("search_call", since1h);
+    const successCount = this.store.countActionsSince("search_call", since1h);
+    const errorCount = this.store.countActionsSince("search_error", since1h);
+    const used = successCount + errorCount;
     const remaining = Math.max(0, maxPerHour - used);
 
     return {
       maxPerHour,
       used,
+      successCount,
+      errorCount,
       remaining,
       canSearch: maxPerHour > 0 && remaining > 0
     };
+  }
+
+  getYouTubeContextBudgetState(settings) {
+    const maxPerHour = clamp(Number(settings.youtubeContext?.maxLookupsPerHour) || 0, 0, 120);
+    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const successCount = this.store.countActionsSince("youtube_context_call", since1h);
+    const errorCount = this.store.countActionsSince("youtube_context_error", since1h);
+    const used = successCount + errorCount;
+    const remaining = Math.max(0, maxPerHour - used);
+
+    return {
+      maxPerHour,
+      used,
+      successCount,
+      errorCount,
+      remaining,
+      canLookup: maxPerHour > 0 && remaining > 0
+    };
+  }
+
+  async buildYouTubeReplyContext({ settings, messageText, trace = {} }) {
+    const enabled = Boolean(settings.youtubeContext?.enabled);
+    const budget = this.getYouTubeContextBudgetState(settings);
+    const maxVideosPerMessage = clamp(Number(settings.youtubeContext?.maxVideosPerMessage) || 0, 0, 6);
+    const maxTranscriptChars = clamp(Number(settings.youtubeContext?.maxTranscriptChars) || 1200, 200, 4000);
+
+    const base = {
+      requested: false,
+      enabled,
+      used: false,
+      blockedByBudget: false,
+      error: null,
+      errors: [],
+      detectedVideos: 0,
+      videos: [],
+      budget
+    };
+
+    if (!this.youtube) {
+      return base;
+    }
+
+    const detectedTargets = this.youtube.extractVideoTargets(messageText, 8);
+    if (!detectedTargets.length) return base;
+
+    if (maxVideosPerMessage <= 0) {
+      return {
+        ...base,
+        requested: true,
+        detectedVideos: detectedTargets.length
+      };
+    }
+
+    const targets = detectedTargets.slice(0, maxVideosPerMessage);
+    if (!targets.length) {
+      return {
+        ...base,
+        requested: true,
+        detectedVideos: detectedTargets.length
+      };
+    }
+
+    if (!enabled) {
+      return {
+        ...base,
+        requested: true,
+        detectedVideos: detectedTargets.length
+      };
+    }
+
+    if (!budget.canLookup) {
+      return {
+        ...base,
+        requested: true,
+        detectedVideos: detectedTargets.length,
+        blockedByBudget: true
+      };
+    }
+
+    const allowedCount = Math.min(targets.length, budget.remaining);
+    if (allowedCount <= 0) {
+      return {
+        ...base,
+        requested: true,
+        detectedVideos: detectedTargets.length,
+        blockedByBudget: true
+      };
+    }
+
+    const selectedTargets = targets.slice(0, allowedCount);
+    const blockedByBudget = selectedTargets.length < targets.length;
+
+    try {
+      const result = await this.youtube.fetchContexts({
+        targets: selectedTargets,
+        maxTranscriptChars,
+        trace
+      });
+      const firstError = result.errors?.[0]?.error || null;
+      return {
+        ...base,
+        requested: true,
+        used: Boolean(result.videos?.length),
+        blockedByBudget,
+        error: firstError,
+        errors: result.errors || [],
+        detectedVideos: detectedTargets.length,
+        videos: result.videos || []
+      };
+    } catch (error) {
+      return {
+        ...base,
+        requested: true,
+        detectedVideos: detectedTargets.length,
+        blockedByBudget,
+        error: String(error?.message || error),
+        errors: [
+          {
+            videoId: null,
+            url: null,
+            error: String(error?.message || error)
+          }
+        ]
+      };
+    }
   }
 
   buildWebSearchContext(settings, messageText) {
@@ -1128,12 +1374,24 @@ export class ClankerBot {
 
   async maybeAttachGeneratedImage({ settings, text, prompt, trace }) {
     const payload = { content: text };
+    const ready = this.isImageGenerationReady(settings);
+    if (!ready) {
+      return {
+        payload,
+        imageUsed: false,
+        blockedByBudget: false,
+        blockedByCapability: true,
+        budget: this.getImageBudgetState(settings)
+      };
+    }
+
     const budget = this.getImageBudgetState(settings);
     if (!budget.canGenerate) {
       return {
         payload,
         imageUsed: false,
         blockedByBudget: true,
+        blockedByCapability: false,
         budget
       };
     }
@@ -1149,6 +1407,7 @@ export class ClankerBot {
         payload: withImage.payload,
         imageUsed: withImage.imageUsed,
         blockedByBudget: false,
+        blockedByCapability: false,
         budget
       };
     } catch {
@@ -1156,6 +1415,86 @@ export class ClankerBot {
         payload,
         imageUsed: false,
         blockedByBudget: false,
+        blockedByCapability: false,
+        budget
+      };
+    }
+  }
+
+  async maybeAttachReplyGif({ settings, text, query, trace }) {
+    const payload = { content: text };
+    const budget = this.getGifBudgetState(settings);
+    const normalizedQuery = normalizeDirectiveText(query, MAX_GIF_QUERY_LEN);
+
+    if (!settings.initiative.allowReplyGifs) {
+      return {
+        payload,
+        gifUsed: false,
+        blockedByBudget: false,
+        blockedByConfiguration: true,
+        budget
+      };
+    }
+
+    if (!normalizedQuery) {
+      return {
+        payload,
+        gifUsed: false,
+        blockedByBudget: false,
+        blockedByConfiguration: false,
+        budget
+      };
+    }
+
+    if (!this.gifs?.isConfigured?.()) {
+      return {
+        payload,
+        gifUsed: false,
+        blockedByBudget: false,
+        blockedByConfiguration: true,
+        budget
+      };
+    }
+
+    if (!budget.canFetch) {
+      return {
+        payload,
+        gifUsed: false,
+        blockedByBudget: true,
+        blockedByConfiguration: false,
+        budget
+      };
+    }
+
+    try {
+      const gif = await this.gifs.pickGif({
+        query: normalizedQuery,
+        trace
+      });
+      if (!gif?.url) {
+        return {
+          payload,
+          gifUsed: false,
+          blockedByBudget: false,
+          blockedByConfiguration: false,
+          budget
+        };
+      }
+
+      const withGif = this.buildMessagePayloadWithGif(text, gif.url);
+      return {
+        payload: withGif.payload,
+        gifUsed: withGif.gifUsed,
+        blockedByBudget: false,
+        blockedByConfiguration: false,
+        budget
+      };
+    } catch {
+      return {
+        payload,
+        gifUsed: false,
+        blockedByBudget: false,
+        blockedByConfiguration: false,
         budget
       };
     }
@@ -1182,6 +1521,23 @@ export class ClankerBot {
     return {
       payload: { content: text },
       imageUsed: false
+    };
+  }
+
+  buildMessagePayloadWithGif(text, gifUrl) {
+    const normalizedUrl = String(gifUrl || "").trim();
+    if (!normalizedUrl) {
+      return {
+        payload: { content: text },
+        gifUsed: false
+      };
+    }
+
+    const trimmedText = String(text || "").trim();
+    const content = trimmedText ? `${trimmedText}\n${normalizedUrl}` : normalizedUrl;
+    return {
+      payload: { content },
+      gifUsed: true
     };
   }
 
@@ -1456,13 +1812,16 @@ export class ClankerBot {
         discoveryResult.enabled &&
         discoveryResult.candidates.length > 0 &&
         chance((settings.initiative?.discovery?.linkChancePercent || 0) / 100);
+      const initiativeImageBudget = this.getImageBudgetState(settings);
+      const initiativeImageCapabilityReady = this.isImageGenerationReady(settings);
 
       const systemPrompt = buildSystemPrompt(settings, memoryMarkdown);
       const userPrompt = buildInitiativePrompt({
         channelName: channel.name || "channel",
         recentMessages,
         emojiHints: this.getEmojiHints(channel.guild),
-        allowImagePosts: settings.initiative.allowImagePosts,
+        allowImagePosts: settings.initiative.allowImagePosts && initiativeImageCapabilityReady,
+        remainingInitiativeImages: initiativeImageBudget.remaining,
         discoveryFindings: discoveryResult.candidates,
         maxLinksPerPost: settings.initiative?.discovery?.maxLinksPerPost || 2,
         requireDiscoveryLink
@@ -1479,7 +1838,12 @@ export class ClankerBot {
         }
       });
 
-      let finalText = sanitizeBotText(generation.text, 650);
+      const initiativeDirective = parseInitiativeImageDirective(generation.text);
+      const imagePrompt = initiativeDirective.imagePrompt;
+      let finalText = sanitizeBotText(
+        initiativeDirective.text || (imagePrompt ? "quick drop" : generation.text),
+        650
+      );
       if (!finalText || finalText === "[SKIP]") return;
       const linkPolicy = this.applyDiscoveryLinkPolicy({
         text: finalText,
@@ -1493,14 +1857,12 @@ export class ClankerBot {
       let payload = { content: finalText };
       let imageUsed = false;
       let imageBudgetBlocked = false;
-      if (
-        settings.initiative.allowImagePosts &&
-        chance((settings.initiative.imagePostChancePercent || 0) / 100)
-      ) {
+      let imageCapabilityBlocked = false;
+      if (settings.initiative.allowImagePosts && imagePrompt) {
         const imageResult = await this.maybeAttachGeneratedImage({
           settings,
           text: finalText,
-          prompt: buildInitiativeImagePrompt(finalText),
+          prompt: composeInitiativeImagePrompt(imagePrompt, finalText),
           trace: {
             guildId: channel.guildId,
             channelId: channel.id,
@@ -1511,6 +1873,7 @@ export class ClankerBot {
         payload = imageResult.payload;
         imageUsed = imageResult.imageUsed;
         imageBudgetBlocked = imageResult.blockedByBudget;
+        imageCapabilityBlocked = imageResult.blockedByCapability;
       }
 
       await channel.sendTyping();
@@ -1564,8 +1927,11 @@ export class ClankerBot {
             reports: discoveryResult.reports,
             errors: discoveryResult.errors
           },
+          imageRequestedByModel: Boolean(imagePrompt),
           imageUsed,
           imageBudgetBlocked,
+          imageCapabilityBlocked,
+          imageCapabilityReadyAtPromptTime: initiativeImageCapabilityReady,
           llm: {
             provider: generation.provider,
             model: generation.model,
@@ -1863,29 +2229,49 @@ function extractUrlsFromText(text) {
   return [...String(text || "").matchAll(URL_IN_TEXT_RE)].map((match) => String(match[0] || ""));
 }
 
-function buildInitiativeImagePrompt(postText) {
+function composeInitiativeImagePrompt(imagePrompt, postText) {
   URL_IN_TEXT_RE.lastIndex = 0;
   const topic = String(postText || "")
     .replace(URL_IN_TEXT_RE, "")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 260);
+  const requested = normalizeDirectiveText(imagePrompt, 240);
 
   return [
     "Create a playful, meme-friendly image for a Discord post.",
-    `Topic context for visual inspiration only: ${topic || "a timely playful internet moment"}.`,
+    `Creative direction: ${requested || "a timely playful internet moment"}.`,
+    `Topic context for visual inspiration only: ${topic || "general chat mood"}.`,
     "Hard constraints:",
     "- Do not include any visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks.",
-    "- Do not render the topic context as text inside the image.",
+    "- Do not render any words from the creative direction or topic context as text inside the image.",
     "- Make it purely visual with strong composition and expressive lighting."
   ].join("\n");
+}
+
+function parseInitiativeImageDirective(rawText) {
+  const text = String(rawText || "").trim();
+  const match = text.match(IMAGE_PROMPT_DIRECTIVE_RE);
+  if (!match) {
+    return {
+      text,
+      imagePrompt: null
+    };
+  }
+
+  return {
+    text: text.slice(0, match.index).trim(),
+    imagePrompt: normalizeDirectiveText(match[1], 240) || null
+  };
 }
 
 function parseReplyDirectives(rawText) {
   const parsed = {
     text: String(rawText || "").trim(),
     imagePrompt: null,
-    webSearchQuery: null
+    gifQuery: null,
+    webSearchQuery: null,
+    memoryLine: null
   };
 
   while (parsed.text) {
@@ -1898,12 +2284,30 @@ function parseReplyDirectives(rawText) {
       continue;
     }
 
+    const gifMatch = parsed.text.match(GIF_QUERY_DIRECTIVE_RE);
+    if (gifMatch) {
+      if (!parsed.gifQuery) {
+        parsed.gifQuery = normalizeDirectiveText(gifMatch[1], MAX_GIF_QUERY_LEN) || null;
+      }
+      parsed.text = parsed.text.slice(0, gifMatch.index).trim();
+      continue;
+    }
+
     const webSearchMatch = parsed.text.match(WEB_SEARCH_DIRECTIVE_RE);
     if (webSearchMatch) {
       if (!parsed.webSearchQuery) {
         parsed.webSearchQuery = normalizeDirectiveText(webSearchMatch[1], MAX_WEB_QUERY_LEN) || null;
       }
       parsed.text = parsed.text.slice(0, webSearchMatch.index).trim();
+      continue;
+    }
+
+    const memoryMatch = parsed.text.match(MEMORY_LINE_DIRECTIVE_RE);
+    if (memoryMatch) {
+      if (!parsed.memoryLine) {
+        parsed.memoryLine = normalizeDirectiveText(memoryMatch[1], MAX_MEMORY_LINE_LEN) || null;
+      }
+      parsed.text = parsed.text.slice(0, memoryMatch.index).trim();
       continue;
     }
 
@@ -1918,6 +2322,58 @@ function normalizeDirectiveText(text, maxLen) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, maxLen);
+}
+
+function isDirectWebSearchCommand(rawText, botName = "") {
+  const text = String(rawText || "").trim();
+  if (!text || WEB_SEARCH_OPTOUT_RE.test(text)) return false;
+
+  const hasSearchVerb = /\b(?:google|search|look\s*up|lookup|find)\b/i.test(text);
+  if (!hasSearchVerb) return false;
+
+  if (/^(?:<@!?\d+>\s*)?(?:google|search|look\s*up|lookup|find)\b/i.test(text)) return true;
+  if (/\bclank(?:er|a|s)\b/i.test(text)) return true;
+
+  if (botName) {
+    const escapedName = escapeRegExp(String(botName || "").trim());
+    if (escapedName && new RegExp(`\\b${escapedName}\\b`, "i").test(text)) return true;
+  }
+
+  return /\b(?:can|could|would|will)\s+(?:you|u)\b/i.test(text);
+}
+
+function deriveDirectWebSearchQuery(rawText, botName = "") {
+  const text = String(rawText || "");
+  if (!text.trim()) return "";
+
+  let cleaned = text
+    .replace(/<@!?\d+>/g, " ")
+    .replace(/\bclank(?:er|a|s)\b/gi, " ")
+    .replace(/\b(?:can|could|would|will)\s+(?:you|u)\b/gi, " ")
+    .replace(/\b(?:please|pls|plz|try|again)\b/gi, " ")
+    .replace(/\bgoogle(?:\s+search)?\b/gi, " ")
+    .replace(/\b(?:web|internet)\s*search\b/gi, " ")
+    .replace(/\b(?:look\s*up|lookup|search|find)\b/gi, " ")
+    .replace(/\b(?:online|on the web|on internet|on google)\b/gi, " ")
+    .replace(/[?]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (botName) {
+    const escapedName = escapeRegExp(String(botName || "").trim());
+    if (escapedName) {
+      cleaned = cleaned
+        .replace(new RegExp(`\\b${escapedName}\\b`, "ig"), " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+  }
+
+  if (!cleaned) {
+    cleaned = text.replace(/<@!?\d+>/g, " ").replace(/\s+/g, " ").trim();
+  }
+
+  return cleaned.slice(0, MAX_WEB_QUERY_LEN);
 }
 
 function parseReactionDecision(rawText) {
@@ -1963,4 +2419,8 @@ function pickFirstAvailableEmoji(preferredEmojis, allowedEmojis) {
     if (allowedEmojis.includes(emoji)) return emoji;
   }
   return null;
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

@@ -2,7 +2,6 @@ export const DEFAULT_SETTINGS = {
   botName: "clanker conk",
   persona: {
     flavor: "playful, chaotic-good, slangy Gen Z/Gen A energy without being toxic",
-    shortReplyBias: true,
     hardLimits: [
       "Cannot join voice channels.",
       "Cannot play non-text games.",
@@ -30,6 +29,12 @@ export const DEFAULT_SETTINGS = {
     maxCharsPerPage: 1400,
     safeSearch: true
   },
+  youtubeContext: {
+    enabled: true,
+    maxLookupsPerHour: 12,
+    maxVideosPerMessage: 2,
+    maxTranscriptChars: 1200
+  },
   startup: {
     catchupEnabled: true,
     catchupLookbackHours: 6,
@@ -56,8 +61,10 @@ export const DEFAULT_SETTINGS = {
     postOnStartup: false,
     allowImagePosts: false,
     allowReplyImages: false,
+    allowReplyGifs: false,
     maxImagesPerDay: 10,
-    imagePostChancePercent: 25,
+    maxGifsPerDay: 30,
+    imageModel: "gpt-image-1.5",
     discovery: {
       enabled: true,
       linkChancePercent: 80,
@@ -88,7 +95,6 @@ export const DEFAULT_SETTINGS = {
   },
   memory: {
     enabled: true,
-    maxRecentMessages: 35,
-    maxHighlights: 16
+    maxRecentMessages: 35
   }
 };

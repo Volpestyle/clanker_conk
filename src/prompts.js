@@ -50,6 +50,44 @@ function formatWebSearchFindings(webSearch) {
     .join("\n");
 }
 
+function formatYouTubeFindings(youtubeContext) {
+  if (!youtubeContext?.videos?.length) return "(no YouTube context available)";
+
+  return youtubeContext.videos
+    .map((item, index) => {
+      const sourceId = `Y${index + 1}`;
+      const title = String(item.title || "untitled video").trim();
+      const channel = String(item.channel || "unknown channel").trim();
+      const url = String(item.url || "").trim();
+      const description = String(item.description || "").trim();
+      const transcript = String(item.transcript || "").trim();
+      const publishedAt = String(item.publishedAt || "").trim();
+      const durationSeconds = Number(item.durationSeconds);
+      const durationLabel = Number.isFinite(durationSeconds) && durationSeconds > 0
+        ? ` | duration: ${durationSeconds}s`
+        : "";
+      const publishedLabel = publishedAt ? ` | published: ${publishedAt}` : "";
+      const summaryLabel = description ? ` | summary: ${description}` : "";
+      const transcriptLabel = transcript ? ` | transcript: ${transcript}` : "";
+      return `- [${sourceId}] ${title} by ${channel} -> ${url}${durationLabel}${publishedLabel}${summaryLabel}${transcriptLabel}`;
+    })
+    .join("\n");
+}
+
+function looksLikeDirectWebSearchCommand(text) {
+  const raw = String(text || "").trim();
+  if (!raw) return false;
+
+  const hasSearchVerb = /\b(?:google|search|look\s*up|lookup|find)\b/i.test(raw);
+  if (!hasSearchVerb) return false;
+
+  if (/^(?:<@!?\d+>\s*)?(?:google|search|look\s*up|lookup|find)\b/i.test(raw)) return true;
+  if (/\bclank(?:er|a|s)\b/i.test(raw)) return true;
+  if (/\b(?:can|could|would|will)\s+(?:you|u)\b/i.test(raw)) return true;
+
+  return false;
+}
+
 export function buildSystemPrompt(settings, memoryMarkdown) {
   const hardLimits = settings.persona?.hardLimits ?? [];
   const trimmedMemory = (memoryMarkdown || "(memory unavailable)").slice(0, 7000);
@@ -83,9 +121,15 @@ export function buildReplyPrompt({
   emojiHints,
   allowReplyImages = false,
   remainingReplyImages = 0,
+  allowReplyGifs = false,
+  remainingReplyGifs = 0,
+  gifRepliesEnabled = false,
+  gifsConfigured = false,
   userRequestedImage = false,
   webSearch = null,
-  allowWebSearchDirective = false
+  allowWebSearchDirective = false,
+  allowMemoryDirective = false,
+  youtubeContext = null
 }) {
   const parts = [];
 
@@ -122,6 +166,7 @@ export function buildReplyPrompt({
   }
 
   if (allowWebSearchDirective) {
+    const directCommand = looksLikeDirectWebSearchCommand(message?.content);
     if (webSearch?.optedOutByUser) {
       parts.push("The user explicitly asked not to use web search.");
       parts.push("Do not request WEB_SEARCH and do not claim live lookup.");
@@ -136,6 +181,14 @@ export function buildReplyPrompt({
       parts.push("Do not claim you searched the web.");
     } else {
       parts.push("Live web lookup is available.");
+      parts.push("Web search is supported right now.");
+      parts.push("Do not claim you cannot search the web or that you are unable to browse.");
+      if (directCommand) {
+        parts.push("The incoming message is a direct command to search the web.");
+        parts.push(
+          "For this turn, request WEB_SEARCH unless the request is unsafe, disallowed, or impossible."
+        );
+      }
       parts.push(
         "If better accuracy depends on live web info, append one final line exactly in this format: [[WEB_SEARCH: concise query]]"
       );
@@ -172,6 +225,26 @@ export function buildReplyPrompt({
     parts.push("If you reference web facts, cite source IDs inline like [S1] or [S2].");
   }
 
+  if (youtubeContext?.requested && !youtubeContext.used) {
+    if (!youtubeContext.enabled) {
+      parts.push("YouTube link understanding is disabled in settings.");
+    } else if (youtubeContext.blockedByBudget || !youtubeContext.budget?.canLookup) {
+      parts.push("YouTube link understanding is unavailable right now (hourly YouTube context budget exhausted).");
+    } else if (youtubeContext.error) {
+      parts.push(`YouTube link context fetch failed: ${youtubeContext.error}`);
+    } else {
+      parts.push("YouTube links were detected, but no usable metadata/transcript was extracted.");
+    }
+    parts.push("Do not claim you watched or fully understood the video when context is missing.");
+  }
+
+  if (youtubeContext?.used && youtubeContext.videos?.length) {
+    parts.push("YouTube context from linked videos:");
+    parts.push(formatYouTubeFindings(youtubeContext));
+    parts.push("If you reference YouTube details, cite source IDs inline like [Y1] or [Y2].");
+    parts.push("Treat transcripts as partial context. Avoid overclaiming what happened in the full video.");
+  }
+
   const remainingImages = Math.max(0, Math.floor(Number(remainingReplyImages) || 0));
   if (allowReplyImages && remainingImages > 0) {
     parts.push(
@@ -194,6 +267,38 @@ export function buildReplyPrompt({
     }
   }
 
+  const remainingGifs = Math.max(0, Math.floor(Number(remainingReplyGifs) || 0));
+  if (allowReplyGifs && remainingGifs > 0) {
+    parts.push(`Reply GIF lookup is available (${remainingGifs} GIF lookup(s) left in the rolling 24h budget).`);
+    parts.push("GIF replies are supported right now.");
+    parts.push("Do not claim you cannot send GIFs and do not claim you are text-only.");
+    parts.push(
+      "If a GIF should be sent, append one final line exactly in this format: [[GIF_QUERY: short search query]]"
+    );
+    parts.push("Use GIF_QUERY only when a reaction GIF genuinely improves the reply.");
+    parts.push("Keep GIF_QUERY concise (under 120 chars), and always include normal reply text.");
+  } else if (gifRepliesEnabled && !gifsConfigured) {
+    parts.push("Reply GIF lookup is unavailable right now (missing Tenor configuration).");
+    parts.push("Do not output GIF_QUERY.");
+  } else if (gifRepliesEnabled) {
+    parts.push("Reply GIF lookup is unavailable right now (24h GIF budget exhausted).");
+    parts.push("Do not output GIF_QUERY.");
+  }
+
+  if ((allowReplyImages && remainingImages > 0) || (allowReplyGifs && remainingGifs > 0)) {
+    parts.push("If you use media directives, output at most one: IMAGE_PROMPT or GIF_QUERY.");
+  }
+
+  if (allowMemoryDirective) {
+    parts.push(
+      "If the incoming message contains durable info worth keeping, append one final line exactly in this format: [[MEMORY_LINE: concise memory line]]"
+    );
+    parts.push(
+      "Use MEMORY_LINE only for lasting facts (names, preferences, recurring relationships, long-lived context), not throwaway chatter."
+    );
+    parts.push("Keep MEMORY_LINE concise (under 180 chars) and factual.");
+  }
+
   parts.push("Task: write one natural Discord reply to the incoming message.");
   parts.push("If no response is needed, output exactly [SKIP].");
 
@@ -205,6 +310,7 @@ export function buildInitiativePrompt({
   recentMessages,
   emojiHints,
   allowImagePosts,
+  remainingInitiativeImages = 0,
   discoveryFindings = [],
   maxLinksPerPost = 2,
   requireDiscoveryLink = false
@@ -221,10 +327,26 @@ export function buildInitiativePrompt({
     parts.push(`Server emoji options: ${emojiHints.join(", ")}`);
   }
 
-  if (allowImagePosts) {
+  const remainingImages = Math.max(0, Math.floor(Number(remainingInitiativeImages) || 0));
+  if (allowImagePosts && remainingImages > 0) {
     parts.push(
       "You may include visual or meme-friendly ideas in your post text; an image may be generated separately."
     );
+    parts.push(
+      `Image generation is available for this post (${remainingImages} image slot(s) left in the rolling 24h budget).`
+    );
+    parts.push(
+      "Decide yourself whether this post should include an image. If yes, append one final line exactly in this format: [[IMAGE_PROMPT: your prompt here]]"
+    );
+    parts.push("If no image is needed, output only the post text.");
+    parts.push("Keep IMAGE_PROMPT concise (under 240 chars).");
+    parts.push(
+      "IMAGE_PROMPT must describe a visual only: no visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks."
+    );
+  } else if (allowImagePosts) {
+    parts.push("Image generation is currently unavailable (24h image budget exhausted). Output text only.");
+  } else {
+    parts.push("Image generation for initiative posts is disabled. Output text only.");
   }
 
   if (discoveryFindings?.length) {
