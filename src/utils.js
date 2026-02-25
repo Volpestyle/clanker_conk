@@ -2,6 +2,11 @@ export function nowIso() {
   return new Date().toISOString();
 }
 
+const BOT_KEYWORD_SUFFIX_PATTERN = "(?:a|er|s|or|ey|ie|r|y)?";
+const BOT_KEYWORD_PATTERN = `\\b(?:clank${BOT_KEYWORD_SUFFIX_PATTERN}|clunk${BOT_KEYWORD_SUFFIX_PATTERN})\\b`;
+const BOT_KEYWORD_RE = new RegExp(BOT_KEYWORD_PATTERN, "i");
+const BOT_KEYWORD_GLOBAL_RE = new RegExp(BOT_KEYWORD_PATTERN, "gi");
+
 export function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
@@ -69,6 +74,14 @@ export function sanitizeBotText(text, maxLen = 450) {
   }
 
   return clean;
+}
+
+export function hasBotKeyword(text) {
+  return BOT_KEYWORD_RE.test(String(text || ""));
+}
+
+export function stripBotKeywords(text) {
+  return String(text || "").replace(BOT_KEYWORD_GLOBAL_RE, " ");
 }
 
 function isObject(value) {
