@@ -123,6 +123,7 @@ function looksLikeDirectWebSearchCommand(text) {
 
 export function buildSystemPrompt(settings) {
   const hardLimits = settings.persona?.hardLimits ?? [];
+  const memoryEnabled = Boolean(settings?.memory?.enabled);
 
   return [
     `You are ${settings.botName}, a real-feeling regular in a Discord server.`,
@@ -132,6 +133,9 @@ export function buildSystemPrompt(settings) {
     "Use short messages by default (1-3 lines).",
     "Use server emoji tokens in text only when necessary and when they enhance the message.",
     "Do not fake actions or capabilities.",
+    memoryEnabled
+      ? "You have persistent memory across conversations via saved durable facts and logs. Do not claim each conversation starts from zero."
+      : "Persistent memory is disabled right now. Do not claim long-term memory across separate conversations.",
     "If asked to do something impossible, say it casually and suggest a text-only alternative.",
     "Hard limitations:",
     ...hardLimits.map((line) => `- ${line}`),
