@@ -558,6 +558,18 @@ function safeJsonParse(value, fallback) {
   }
 }
 
+function normalizeWebSearchProviderOrder(rawOrder) {
+  const allowed = new Set(["brave", "serpapi"]);
+  const items = Array.isArray(rawOrder) ? rawOrder : ["brave", "serpapi"];
+  const ordered = [];
+  for (const item of items) {
+    const key = String(item || "").toLowerCase();
+    if (!allowed.has(key) || ordered.includes(key)) continue;
+    ordered.push(key);
+  }
+  return ordered.length ? ordered : ["brave", "serpapi"];
+}
+
 function normalizeSettings(raw) {
   const merged = deepMerge(DEFAULT_SETTINGS, raw ?? {});
   if (!merged.persona || typeof merged.persona !== "object") merged.persona = {};
@@ -614,12 +626,31 @@ function normalizeSettings(raw) {
   const maxResultsRaw = Number(merged.webSearch?.maxResults);
   const maxPagesRaw = Number(merged.webSearch?.maxPagesToRead);
   const maxCharsRaw = Number(merged.webSearch?.maxCharsPerPage);
+  const recencyDaysRaw = Number(merged.webSearch?.recencyDaysDefault);
+  const maxConcurrentFetchesRaw = Number(merged.webSearch?.maxConcurrentFetches);
+  const maxConcurrentRendersRaw = Number(merged.webSearch?.maxConcurrentRenders);
   merged.webSearch.maxSearchesPerHour = clamp(Number.isFinite(maxSearchesRaw) ? maxSearchesRaw : 12, 1, 120);
-  merged.webSearch.maxResults = clamp(Number.isFinite(maxResultsRaw) ? maxResultsRaw : 5, 1, 10);
-  merged.webSearch.maxPagesToRead = clamp(Number.isFinite(maxPagesRaw) ? maxPagesRaw : 3, 0, 6);
+  merged.webSearch.maxResults = clamp(Number.isFinite(maxResultsRaw) ? maxResultsRaw : 8, 1, 10);
+  merged.webSearch.maxPagesToRead = clamp(Number.isFinite(maxPagesRaw) ? maxPagesRaw : 3, 0, 5);
   merged.webSearch.maxCharsPerPage = clamp(Number.isFinite(maxCharsRaw) ? maxCharsRaw : 1400, 350, 4000);
   merged.webSearch.safeSearch =
     merged.webSearch?.safeSearch !== undefined ? Boolean(merged.webSearch?.safeSearch) : true;
+  merged.webSearch.providerOrder = normalizeWebSearchProviderOrder(merged.webSearch?.providerOrder);
+  merged.webSearch.recencyDaysDefault = clamp(Number.isFinite(recencyDaysRaw) ? recencyDaysRaw : 30, 1, 365);
+  merged.webSearch.renderFallbackEnabled =
+    merged.webSearch?.renderFallbackEnabled !== undefined
+      ? Boolean(merged.webSearch?.renderFallbackEnabled)
+      : true;
+  merged.webSearch.maxConcurrentFetches = clamp(
+    Number.isFinite(maxConcurrentFetchesRaw) ? maxConcurrentFetchesRaw : 5,
+    1,
+    10
+  );
+  merged.webSearch.maxConcurrentRenders = clamp(
+    Number.isFinite(maxConcurrentRendersRaw) ? maxConcurrentRendersRaw : 2,
+    1,
+    4
+  );
 
   merged.videoContext.enabled =
     merged.videoContext?.enabled !== undefined
