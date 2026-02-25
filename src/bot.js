@@ -40,6 +40,7 @@ const MAX_MEMORY_LINE_LEN = 180;
 const MAX_VIDEO_TARGET_SCAN = 8;
 const MAX_VIDEO_FALLBACK_MESSAGES = 18;
 const MAX_MODEL_IMAGE_INPUTS = 8;
+const UNSOLICITED_REPLY_CONTEXT_WINDOW = 5;
 
 export class ClankerBot {
   constructor({ appConfig, store, llm, memory, discovery, search, gifs, video }) {
@@ -535,7 +536,14 @@ export class ClankerBot {
     );
     const addressSignal = this.getReplyAddressSignal(settings, message, recentMessages);
 
-    if (!addressSignal.triggered && !settings.permissions.allowInitiativeReplies) return;
+    const shouldQueueReply = this.shouldAttemptReplyDecision({
+      settings,
+      recentMessages,
+      addressSignal,
+      forceRespond: false,
+      triggerMessageId: message.id
+    });
+    if (!shouldQueueReply) return;
     this.enqueueReplyJob({
       source: "message_event",
       message,
@@ -561,9 +569,14 @@ export class ClankerBot {
       ...new Set([...this.getReactionEmojiOptions(message.guild), ...UNICODE_REACTIONS])
     ];
 
-    const shouldRespond =
-      options.forceRespond || addressed || settings.permissions.allowInitiativeReplies;
-    if (!shouldRespond) return false;
+    const shouldRunDecisionLoop = this.shouldAttemptReplyDecision({
+      settings,
+      recentMessages,
+      addressSignal,
+      forceRespond: Boolean(options.forceRespond),
+      triggerMessageId: message.id
+    });
+    if (!shouldRunDecisionLoop) return false;
 
     const memorySlice = settings.memory.enabled
       ? await this.memory.buildPromptMemorySlice({
@@ -1489,6 +1502,42 @@ export class ClankerBot {
       content.toLowerCase().includes(settings.botName.toLowerCase()) || CLANKER_KEYWORD_RE.test(content);
     const isReplyToBot = message.mentions?.repliedUser?.id === this.client.user.id;
     return Boolean(mentioned || namePing || isReplyToBot);
+  }
+
+  hasBotMessageInRecentWindow({
+    recentMessages,
+    windowSize = UNSOLICITED_REPLY_CONTEXT_WINDOW,
+    triggerMessageId = null
+  }) {
+    const botId = String(this.client.user?.id || "").trim();
+    if (!botId) return false;
+    if (!Array.isArray(recentMessages) || !recentMessages.length) return false;
+
+    const excludedMessageId = String(triggerMessageId || "").trim();
+    const candidateMessages = excludedMessageId
+      ? recentMessages.filter((row) => String(row?.message_id || "").trim() !== excludedMessageId)
+      : recentMessages;
+
+    const cappedWindow = clamp(Math.floor(windowSize), 1, 50);
+    return candidateMessages
+      .slice(0, cappedWindow)
+      .some((row) => String(row?.author_id || "").trim() === botId);
+  }
+
+  shouldAttemptReplyDecision({
+    settings,
+    recentMessages,
+    addressSignal,
+    forceRespond = false,
+    triggerMessageId = null
+  }) {
+    if (forceRespond || addressSignal?.triggered) return true;
+    if (!settings.permissions.allowInitiativeReplies) return false;
+    return this.hasBotMessageInRecentWindow({
+      recentMessages,
+      windowSize: UNSOLICITED_REPLY_CONTEXT_WINDOW,
+      triggerMessageId
+    });
   }
 
   getReplyAddressSignal(settings, message, recentMessages = []) {
