@@ -554,7 +554,9 @@ function normalizeSettings(raw) {
     0,
     100
   );
-  merged.initiative.imageModel = String(merged.initiative?.imageModel || "gpt-image-1").slice(0, 120);
+  if ("imageModel" in merged.initiative) {
+    delete merged.initiative.imageModel;
+  }
   if (!merged.initiative.discovery || typeof merged.initiative.discovery !== "object") {
     merged.initiative.discovery = {};
   }

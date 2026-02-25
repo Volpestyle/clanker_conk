@@ -60,7 +60,6 @@ export default function SettingsForm({ settings, onSave, toast }) {
       replyImageEnabled: settings.initiative?.allowReplyImages ?? false,
       maxImagesPerDay: settings.initiative?.maxImagesPerDay ?? 10,
       initiativeImageChance: settings.initiative?.imagePostChancePercent ?? 25,
-      initiativeImageModel: settings.initiative?.imageModel ?? "gpt-image-1",
       initiativeDiscoveryEnabled: settings.initiative?.discovery?.enabled ?? true,
       initiativeDiscoveryLinkChance: settings.initiative?.discovery?.linkChancePercent ?? 80,
       initiativeDiscoveryMaxLinks: settings.initiative?.discovery?.maxLinksPerPost ?? 2,
@@ -149,7 +148,6 @@ export default function SettingsForm({ settings, onSave, toast }) {
         allowReplyImages: form.replyImageEnabled,
         maxImagesPerDay: Number(form.maxImagesPerDay),
         imagePostChancePercent: Number(form.initiativeImageChance),
-        imageModel: form.initiativeImageModel.trim(),
         discovery: {
           enabled: form.initiativeDiscoveryEnabled,
           linkChancePercent: Number(form.initiativeDiscoveryLinkChance),
@@ -542,15 +540,7 @@ export default function SettingsForm({ settings, onSave, toast }) {
             onChange={set("maxImagesPerDay")}
           />
         </div>
-        <div>
-          <label htmlFor="initiative-image-model">Image model</label>
-          <input
-            id="initiative-image-model"
-            type="text"
-            value={form.initiativeImageModel}
-            onChange={set("initiativeImageModel")}
-          />
-        </div>
+        <div />
       </div>
 
       <div className="split">
