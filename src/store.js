@@ -875,7 +875,7 @@ function normalizeHttpBaseUrl(value, fallback) {
 }
 
 function normalizeHardLimitList(input, fallback = []) {
-  const source = Array.isArray(input) && input.length ? input : fallback;
+  const source = Array.isArray(input) ? input : fallback;
   return [...new Set(source.map((item) => String(item || "").trim()).filter(Boolean))]
     .slice(0, 24)
     .map((item) => item.slice(0, 180));
