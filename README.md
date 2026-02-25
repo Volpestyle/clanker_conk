@@ -98,3 +98,4 @@ Use dashboard to:
 - Architecture and flow diagrams: `docs/technical-architecture.md`
 - Initiative discovery product spec: `docs/initiative-discovery-spec.md`
 - Voice agent product spec: `docs/voice-agent-spec.md`
+- Web search v2 implementation spec: `docs/web-search-spec.md`
