@@ -8,7 +8,7 @@ Features:
 - Initiative scheduler with `even` or `spontaneous` pacing modes.
 - Creative discovery for initiative posts (Reddit, Hacker News, YouTube RSS, RSS feeds, optional X via Nitter).
 - OpenAI or Anthropic support (runtime-configurable).
-- Optional live Google web search for replies, including page inspection from top results.
+- Optional live web search for replies (Brave primary, SerpApi fallback), including page inspection from top results.
 - Optional model-directed GIF replies via GIPHY search.
 - Video link understanding for YouTube/TikTok/embedded video links (captions first, optional ASR fallback, optional keyframes).
 - Dashboard UI for settings, permissions, logs, memory, and cost tracking.
@@ -25,7 +25,7 @@ npm install
 Fill `.env`:
 - `DISCORD_TOKEN`: your bot token.
 - `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY`.
-- Optional for live web search: `GOOGLE_SEARCH_API_KEY`, `GOOGLE_SEARCH_ENGINE_ID`.
+- Optional for live web search: `BRAVE_SEARCH_API_KEY` (primary) and/or `SERPAPI_API_KEY` (fallback).
 - Optional for model-directed GIF replies: `GIPHY_API_KEY` (and optional `GIPHY_RATING`, default `pg-13`).
 - Optional: `DASHBOARD_TOKEN` (protects dashboard API).
 - Optional but recommended for richer video understanding: install `ffmpeg` and `yt-dlp` on your system.
@@ -80,7 +80,7 @@ Use dashboard to:
 - Set standalone-post channel IDs (for your dedicated `clanker conk` channel).
 - Configure initiative pacing (`even` or `spontaneous`) and spontaneity.
 - Configure discovery source mix, link frequency, freshness, dedupe window, and topic/source lists.
-- Configure live web search limits (hourly cap, results/query, pages inspected, safe mode).
+- Configure live web search limits (hourly cap, provider order, recency, results/query, pages inspected, and extraction settings).
 - Enable/disable model-directed GIF replies and set GIF lookup budget.
 - Choose LLM provider + model.
 - Track accumulated API spend.

@@ -27,7 +27,12 @@ export const DEFAULT_SETTINGS = {
     maxResults: 5,
     maxPagesToRead: 3,
     maxCharsPerPage: 1400,
-    safeSearch: true
+    safeSearch: true,
+    providerOrder: ["brave", "serpapi"],
+    recencyDaysDefault: 30,
+    renderFallbackEnabled: true,
+    maxConcurrentFetches: 5,
+    maxConcurrentRenders: 2
   },
   videoContext: {
     enabled: true,
