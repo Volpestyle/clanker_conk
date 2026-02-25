@@ -9,7 +9,7 @@ Features:
 - Creative discovery for initiative posts (Reddit, Hacker News, YouTube RSS, RSS feeds, optional X via Nitter).
 - OpenAI or Anthropic support (runtime-configurable).
 - Optional live Google web search for replies, including page inspection from top results.
-- Optional model-directed GIF replies via Tenor search.
+- Optional model-directed GIF replies via GIPHY search.
 - Dashboard UI for settings, permissions, logs, memory, and cost tracking.
 - Two-layer memory with append-only daily logs and curated `memory/MEMORY.md` distillation.
 
@@ -25,7 +25,7 @@ Fill `.env`:
 - `DISCORD_TOKEN`: your bot token.
 - `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY`.
 - Optional for live web search: `GOOGLE_SEARCH_API_KEY`, `GOOGLE_SEARCH_ENGINE_ID`.
-- Optional for model-directed GIF replies: `TENOR_API_KEY` (and optional `TENOR_CLIENT_KEY`).
+- Optional for model-directed GIF replies: `GIPHY_API_KEY` (and optional `GIPHY_RATING`, default `pg-13`).
 - Optional: `DASHBOARD_TOKEN` (protects dashboard API).
 
 ## 2. Discord bot permissions

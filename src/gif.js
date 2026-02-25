@@ -1,16 +1,17 @@
 import { clamp } from "./utils.js";
 
-const TENOR_SEARCH_API_URL = "https://tenor.googleapis.com/v2/search";
+const GIPHY_SEARCH_API_URL = "https://api.giphy.com/v1/gifs/search";
 const GIF_TIMEOUT_MS = 8_500;
 const GIF_USER_AGENT =
   "clanker-conk/0.1 (+gif-search; https://github.com/Volpestyle/clanker_conk)";
 const MAX_GIF_QUERY_LEN = 120;
+const GIPHY_ALLOWED_RATINGS = new Set(["g", "pg", "pg-13", "r"]);
 
 export class GifService {
   constructor({ appConfig, store }) {
     this.store = store;
-    this.apiKey = String(appConfig?.tenorApiKey || "").trim();
-    this.clientKey = String(appConfig?.tenorClientKey || "").trim();
+    this.apiKey = String(appConfig?.giphyApiKey || "").trim();
+    this.rating = normalizeGiphyRating(appConfig?.giphyRating);
   }
 
   isConfigured() {
@@ -19,7 +20,7 @@ export class GifService {
 
   async pickGif({ query, trace = {} }) {
     if (!this.isConfigured()) {
-      throw new Error("Tenor GIF search is not configured. Set TENOR_API_KEY.");
+      throw new Error("GIPHY GIF search is not configured. Set GIPHY_API_KEY.");
     }
 
     const normalizedQuery = sanitizeExternalText(query, MAX_GIF_QUERY_LEN);
@@ -28,7 +29,7 @@ export class GifService {
     }
 
     try {
-      const matches = await this.searchTenor({
+      const matches = await this.searchGiphy({
         query: normalizedQuery,
         limit: 10
       });
@@ -41,9 +42,10 @@ export class GifService {
         userId: trace.userId,
         content: normalizedQuery,
         metadata: {
-          provider: "tenor",
+          provider: "giphy",
           query: normalizedQuery,
           source: trace.source || "unknown",
+          rating: this.rating,
           returnedResults: matches.length,
           used: Boolean(selected),
           gifUrl: selected?.url || null
@@ -59,8 +61,9 @@ export class GifService {
         userId: trace.userId,
         content: String(error?.message || error),
         metadata: {
-          provider: "tenor",
+          provider: "giphy",
           query: normalizedQuery,
+          rating: this.rating,
           source: trace.source || "unknown"
         }
       });
@@ -68,17 +71,14 @@ export class GifService {
     }
   }
 
-  async searchTenor({ query, limit }) {
-    const endpoint = new URL(TENOR_SEARCH_API_URL);
-    endpoint.searchParams.set("key", this.apiKey);
+  async searchGiphy({ query, limit }) {
+    const endpoint = new URL(GIPHY_SEARCH_API_URL);
+    endpoint.searchParams.set("api_key", this.apiKey);
     endpoint.searchParams.set("q", query);
     endpoint.searchParams.set("limit", String(clamp(Number(limit) || 10, 1, 25)));
-    endpoint.searchParams.set("media_filter", "gif");
-    endpoint.searchParams.set("contentfilter", "medium");
-    endpoint.searchParams.set("locale", "en_US");
-    if (this.clientKey) {
-      endpoint.searchParams.set("client_key", this.clientKey);
-    }
+    endpoint.searchParams.set("rating", this.rating);
+    endpoint.searchParams.set("lang", "en");
+    endpoint.searchParams.set("bundle", "messaging_non_clips");
 
     const response = await fetch(endpoint, {
       method: "GET",
@@ -90,36 +90,49 @@ export class GifService {
     });
 
     if (!response.ok) {
-      throw new Error(`Tenor HTTP ${response.status}`);
+      throw new Error(`GIPHY HTTP ${response.status}`);
     }
 
     let payload = null;
     try {
       payload = await response.json();
     } catch {
-      throw new Error("Tenor returned invalid JSON.");
+      throw new Error("GIPHY returned invalid JSON.");
     }
 
-    const rawItems = Array.isArray(payload?.results) ? payload.results : [];
+    const rawItems = Array.isArray(payload?.data) ? payload.data : [];
     const seenUrls = new Set();
     const items = [];
 
     for (const row of rawItems) {
-      const media = row?.media_formats ?? {};
-      const url = sanitizeHttpsUrl(media?.gif?.url || media?.mediumgif?.url || media?.tinygif?.url || "");
+      const media = row?.images ?? {};
+      const url = sanitizeHttpsUrl(
+        media?.fixed_height?.url ||
+          media?.downsized?.url ||
+          media?.original?.url ||
+          media?.preview_gif?.url ||
+          ""
+      );
       if (!url || seenUrls.has(url)) continue;
       seenUrls.add(url);
 
       items.push({
         id: String(row?.id || ""),
-        title: sanitizeExternalText(row?.content_description || row?.title || "", 140),
+        title: sanitizeExternalText(row?.title || "", 140),
         url,
-        pageUrl: sanitizeHttpsUrl(row?.itemurl || row?.url || "")
+        pageUrl: sanitizeHttpsUrl(row?.url || row?.bitly_url || "")
       });
     }
 
     return items;
   }
+}
+
+function normalizeGiphyRating(rawValue) {
+  const normalized = String(rawValue || "pg-13")
+    .trim()
+    .toLowerCase();
+  return GIPHY_ALLOWED_RATINGS.has(normalized) ? normalized : "pg-13";
 }
 
 function pickRandom(items) {
