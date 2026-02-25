@@ -278,7 +278,7 @@ export function buildReplyPrompt({
     parts.push("Use GIF_QUERY only when a reaction GIF genuinely improves the reply.");
     parts.push("Keep GIF_QUERY concise (under 120 chars), and always include normal reply text.");
   } else if (gifRepliesEnabled && !gifsConfigured) {
-    parts.push("Reply GIF lookup is unavailable right now (missing Tenor configuration).");
+    parts.push("Reply GIF lookup is unavailable right now (missing GIPHY configuration).");
     parts.push("Do not output GIF_QUERY.");
   } else if (gifRepliesEnabled) {
     parts.push("Reply GIF lookup is unavailable right now (24h GIF budget exhausted).");
