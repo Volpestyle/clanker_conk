@@ -55,9 +55,7 @@ export default function SettingsForm({ settings, onSave, toast }) {
       webSearchMaxChars: settings.webSearch?.maxCharsPerPage ?? 1400,
       webSearchProviderOrder: (settings.webSearch?.providerOrder || ["brave", "serpapi"]).join(","),
       webSearchRecencyDaysDefault: settings.webSearch?.recencyDaysDefault ?? 30,
-      webSearchRenderFallbackEnabled: settings.webSearch?.renderFallbackEnabled ?? true,
       webSearchMaxConcurrentFetches: settings.webSearch?.maxConcurrentFetches ?? 5,
-      webSearchMaxConcurrentRenders: settings.webSearch?.maxConcurrentRenders ?? 2,
       videoContextEnabled: settings.videoContext?.enabled ?? true,
       videoContextPerHour: settings.videoContext?.maxLookupsPerHour ?? 12,
       videoContextMaxVideos: settings.videoContext?.maxVideosPerMessage ?? 2,
@@ -146,9 +144,7 @@ export default function SettingsForm({ settings, onSave, toast }) {
         safeSearch: form.webSearchSafeMode,
         providerOrder: parseList(form.webSearchProviderOrder),
         recencyDaysDefault: Number(form.webSearchRecencyDaysDefault),
-        renderFallbackEnabled: form.webSearchRenderFallbackEnabled,
-        maxConcurrentFetches: Number(form.webSearchMaxConcurrentFetches),
-        maxConcurrentRenders: Number(form.webSearchMaxConcurrentRenders)
+        maxConcurrentFetches: Number(form.webSearchMaxConcurrentFetches)
       },
       videoContext: {
         enabled: form.videoContextEnabled,
@@ -425,17 +421,6 @@ export default function SettingsForm({ settings, onSave, toast }) {
         </div>
       </div>
 
-      <div className="toggles">
-        <label>
-          <input
-            type="checkbox"
-            checked={form.webSearchRenderFallbackEnabled}
-            onChange={set("webSearchRenderFallbackEnabled")}
-          />
-          Render fallback enabled (JS-heavy pages)
-        </label>
-      </div>
-
       <div className="split">
         <div>
           <label htmlFor="web-search-concurrent-fetches">Max concurrent fetches</label>
@@ -446,17 +431,6 @@ export default function SettingsForm({ settings, onSave, toast }) {
             max="10"
             value={form.webSearchMaxConcurrentFetches}
             onChange={set("webSearchMaxConcurrentFetches")}
-          />
-        </div>
-        <div>
-          <label htmlFor="web-search-concurrent-renders">Max concurrent renders</label>
-          <input
-            id="web-search-concurrent-renders"
-            type="number"
-            min="1"
-            max="4"
-            value={form.webSearchMaxConcurrentRenders}
-            onChange={set("webSearchMaxConcurrentRenders")}
           />
         </div>
       </div>
