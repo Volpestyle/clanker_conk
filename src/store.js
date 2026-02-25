@@ -61,6 +61,16 @@ export class Store {
         UNIQUE(subject, fact)
       );
 
+      CREATE TABLE IF NOT EXISTS memory_fact_vectors (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        fact_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        model TEXT NOT NULL,
+        embedding TEXT NOT NULL,
+        UNIQUE(fact_id, model)
+      );
+
       CREATE TABLE IF NOT EXISTS shared_links (
         url TEXT PRIMARY KEY,
         first_shared_at TEXT NOT NULL,
@@ -74,6 +84,8 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_actions_kind_time ON actions(kind, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_actions_time ON actions(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_memory_subject ON memory_facts(subject, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_memory_vectors_fact_model ON memory_fact_vectors(fact_id, model);
+      CREATE INDEX IF NOT EXISTS idx_memory_vectors_model ON memory_fact_vectors(model);
       CREATE INDEX IF NOT EXISTS idx_shared_links_last_shared_at ON shared_links(last_shared_at DESC);
     `);
     this.ensureMemoryFactsSchema();
@@ -432,6 +444,75 @@ export class Store {
       .all(String(subject), clamp(limit, 1, 100));
   }
 
+  getFactsForSubjects(subjects, limit = 80) {
+    const normalizedSubjects = [...new Set((subjects || []).map((value) => String(value || "").trim()).filter(Boolean))];
+    if (!normalizedSubjects.length) return [];
+
+    const placeholders = normalizedSubjects.map(() => "?").join(", ");
+    return this.db
+      .prepare(
+        `SELECT id, created_at, subject, fact, fact_type, evidence_text, source_message_id, confidence
+         FROM memory_facts
+         WHERE subject IN (${placeholders})
+         ORDER BY created_at DESC
+         LIMIT ?`
+      )
+      .all(...normalizedSubjects, clamp(limit, 1, 500));
+  }
+
+  getMemoryFactBySubjectAndFact(subject, fact) {
+    return (
+      this.db
+        .prepare(
+          `SELECT id, created_at, subject, fact, fact_type, evidence_text, source_message_id, confidence
+           FROM memory_facts
+           WHERE subject = ? AND fact = ?
+           LIMIT 1`
+        )
+        .get(String(subject), String(fact)) || null
+    );
+  }
+
+  upsertMemoryFactVector({ factId, model, embedding }) {
+    const now = nowIso();
+    this.db
+      .prepare(
+        `INSERT INTO memory_fact_vectors(fact_id, created_at, updated_at, model, embedding)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(fact_id, model) DO UPDATE SET
+           updated_at = excluded.updated_at,
+           embedding = excluded.embedding`
+      )
+      .run(
+        Number(factId),
+        now,
+        now,
+        String(model || "").slice(0, 120),
+        JSON.stringify(embedding)
+      );
+  }
+
+  getMemoryFactVectors(factIds, model) {
+    const ids = [...new Set((factIds || []).map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0))];
+    if (!ids.length) return [];
+
+    const placeholders = ids.map(() => "?").join(", ");
+    return this.db
+      .prepare(
+        `SELECT fact_id, model, embedding, updated_at
+         FROM memory_fact_vectors
+         WHERE model = ? AND fact_id IN (${placeholders})`
+      )
+      .all(String(model || ""), ...ids)
+      .map((row) => ({
+        fact_id: Number(row.fact_id),
+        model: String(row.model),
+        embedding: safeJsonParse(row.embedding, []),
+        updated_at: row.updated_at
+      }))
+      .filter((row) => Array.isArray(row.embedding) && row.embedding.length > 0);
+  }
+
   getMemorySubjects(limit = 80) {
     return this.db
       .prepare(
@@ -748,6 +829,7 @@ function normalizeSettings(raw) {
 
   merged.memory.enabled = Boolean(merged.memory?.enabled);
   merged.memory.maxRecentMessages = clamp(Number(merged.memory?.maxRecentMessages) || 35, 10, 120);
+  merged.memory.embeddingModel = String(merged.memory?.embeddingModel || "text-embedding-3-small").slice(0, 120);
 
   return merged;
 }

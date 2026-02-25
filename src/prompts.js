@@ -79,6 +79,21 @@ function formatVideoFindings(videoContext) {
     .join("\n");
 }
 
+function formatMemoryFacts(facts) {
+  if (!facts?.length) return "(no durable memory hits)";
+
+  return facts
+    .map((row) => {
+      const fact = String(row?.fact || "").replace(/\s+/g, " ").trim();
+      if (!fact) return "";
+      const type = String(row?.fact_type || "").trim().toLowerCase();
+      const label = type && type !== "other" ? `${type}: ` : "";
+      return `- ${label}${fact}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
 function looksLikeDirectWebSearchCommand(text) {
   const raw = String(text || "").trim();
   if (!raw) return false;
@@ -93,9 +108,8 @@ function looksLikeDirectWebSearchCommand(text) {
   return false;
 }
 
-export function buildSystemPrompt(settings, memoryMarkdown) {
+export function buildSystemPrompt(settings) {
   const hardLimits = settings.persona?.hardLimits ?? [];
-  const trimmedMemory = (memoryMarkdown || "(memory unavailable)").slice(0, 7000);
 
   return [
     `You are ${settings.botName}, a real-feeling regular in a Discord server.`,
@@ -111,9 +125,7 @@ export function buildSystemPrompt(settings, memoryMarkdown) {
     "Safety:",
     "- No harassment, hate, sexual content with minors, or illegal instructions.",
     "- Keep tone friendly and fun.",
-    "If you should not send a message, output exactly [SKIP].",
-    "Memory snapshot:",
-    trimmedMemory
+    "If you should not send a message, output exactly [SKIP]."
   ].join("\n");
 }
 
@@ -123,6 +135,7 @@ export function buildReplyPrompt({
   recentMessages,
   relevantMessages,
   userFacts,
+  relevantFacts,
   emojiHints,
   reactionEmojiOptions = [],
   allowReplyImages = false,
@@ -168,6 +181,11 @@ export function buildReplyPrompt({
     for (const fact of userFacts) {
       parts.push(`- ${fact.fact}`);
     }
+  }
+
+  if (relevantFacts?.length) {
+    parts.push("Relevant durable memory:");
+    parts.push(formatMemoryFacts(relevantFacts));
   }
 
   if (emojiHints?.length) {

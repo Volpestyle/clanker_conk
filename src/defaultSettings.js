@@ -99,6 +99,7 @@ export const DEFAULT_SETTINGS = {
   },
   memory: {
     enabled: true,
-    maxRecentMessages: 35
+    maxRecentMessages: 35,
+    embeddingModel: "text-embedding-3-small"
   }
 };
