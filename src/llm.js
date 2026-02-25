@@ -2,8 +2,6 @@ import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { estimateImageUsdCost, estimateUsdCost } from "./pricing.js";
 
-const IMAGE_MODEL = "gpt-image-1.5";
-
 export class LLMService {
   constructor({ appConfig, store }) {
     this.appConfig = appConfig;
@@ -102,7 +100,7 @@ export class LLMService {
       throw new Error("Image generation requires OPENAI_API_KEY.");
     }
 
-    const model = IMAGE_MODEL;
+    const model = String(settings?.initiative?.imageModel || "gpt-image-1.5").trim() || "gpt-image-1.5";
     const size = "1024x1024";
 
     try {
@@ -171,6 +169,12 @@ export class LLMService {
       });
       throw error;
     }
+  }
+
+  isImageGenerationReady(settings) {
+    if (!this.openai) return false;
+    const model = String(settings?.initiative?.imageModel || "").trim();
+    return Boolean(model);
   }
 
   resolveProviderAndModel(llmSettings) {
