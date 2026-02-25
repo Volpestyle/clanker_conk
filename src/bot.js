@@ -14,17 +14,6 @@ import { chance, clamp, sanitizeBotText, sleep } from "./utils.js";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
 const CLANKER_KEYWORD_RE = /\bclank(?:er|a|s|or)\b/i;
-const QUESTION_START_RE =
-  /^(?:who|what|when|where|why|how|can|could|would|will|should|is|are|am|do|does|did|anyone|someone|somebody)\b/i;
-const SECOND_PERSON_RE = /\b(?:you|your|yours|u|ur)\b/i;
-const DIRECT_REQUEST_RE = /\b(?:help|explain|clarify|tell|show|recommend|suggest|review|fix|solve|answer|rate)\b/i;
-const GROUP_PROMPT_RE = /\b(?:anyone|someone|somebody)\s+(?:know|seen|have|got|using|able)\b/i;
-const OPINION_PROMPT_RE = /\b(?:thoughts|opinion|opinions|idea|ideas|advice)\b/i;
-const ASK_PREFIX_RE = /^(?:hey|yo|hi|hello|ok(?:ay)?)[\s,]+/i;
-const CAN_YOU_RE = /\b(?:can|could|would|will)\s+you\b/i;
-const WHAT_DO_YOU_THINK_RE = /\bwhat\s+do\s+you\s+think\b/i;
-const PLEASE_RE = /\b(?:please|pls|plz)\b/i;
-const ADDRESS_CONTEXT_WINDOW = 8;
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
 const REPLY_QUEUE_RATE_LIMIT_WAIT_MS = 15_000;
 const REPLY_QUEUE_SEND_RETRY_BASE_MS = 2_500;
@@ -546,20 +535,12 @@ export class ClankerBot {
     );
     const addressSignal = this.getReplyAddressSignal(settings, message, recentMessages);
 
-    if (addressSignal.triggered) {
-      this.enqueueReplyJob({
-        message,
-        source: "message_event",
-        forceRespond: true,
-        addressSignal
-      });
-      return;
-    }
-
-    await this.maybeReplyToMessage(message, settings, {
+    if (!addressSignal.triggered && !settings.permissions.allowInitiativeReplies) return;
+    this.enqueueReplyJob({
       source: "message_event",
+      message,
+      forceRespond: addressSignal.triggered,
       addressSignal,
-      recentMessages
     });
   }
 
@@ -571,14 +552,13 @@ export class ClankerBot {
     const recentMessages = Array.isArray(options.recentMessages)
       ? options.recentMessages
       : this.store.getRecentMessages(message.channelId, settings.memory.maxRecentMessages);
-    const replyActivity01 = settings.activity.replyLevel / 100;
     const addressSignal =
       options.addressSignal || this.getReplyAddressSignal(settings, message, recentMessages);
     const addressed = addressSignal.triggered;
+    const replyEagerness = clamp(Number(settings.activity?.replyLevel) || 0, 0, 100);
 
-    const naturalProbability =
-      settings.permissions.allowInitiativeReplies ? replyActivity01 : 0;
-    const shouldRespond = options.forceRespond || addressed || chance(naturalProbability);
+    const shouldRespond =
+      options.forceRespond || addressed || settings.permissions.allowInitiativeReplies;
     if (!shouldRespond) return false;
 
     const memorySlice = settings.memory.enabled
@@ -631,6 +611,11 @@ export class ClankerBot {
       gifRepliesEnabled: settings.initiative.allowReplyGifs,
       gifsConfigured,
       userRequestedImage,
+      replyEagerness,
+      addressing: {
+        directlyAddressed: addressed,
+        responseRequired: Boolean(options.forceRespond)
+      },
       allowMemoryDirective: settings.memory.enabled,
       youtubeContext
     };
@@ -1600,21 +1585,11 @@ export class ClankerBot {
     const direct =
       this.isDirectlyAddressed(settings, message) ||
       (referencedAuthorId && referencedAuthorId === this.client.user?.id);
-    if (direct) {
-      return {
-        direct: true,
-        inferred: false,
-        triggered: true,
-        reason: "direct"
-      };
-    }
-
-    const inferred = this.isLikelyAddressedByContent(message, recentMessages, referencedAuthorId);
     return {
-      direct: false,
-      inferred,
-      triggered: inferred,
-      reason: inferred ? "inferred_contextual" : "not_addressed"
+      direct: Boolean(direct),
+      inferred: false,
+      triggered: Boolean(direct),
+      reason: direct ? "direct" : "llm_decides"
     };
   }
 
@@ -1631,45 +1606,6 @@ export class ClankerBot {
       message.referencedMessage?.author?.id;
 
     return fromResolved ? String(fromResolved) : null;
-  }
-
-  isLikelyAddressedByContent(message, recentMessages = [], referencedAuthorId = null) {
-    const content = String(message.content || "").replace(/\s+/g, " ").trim();
-    if (!content || content.length < 3) return false;
-
-    const lowered = content.toLowerCase();
-    let score = 0;
-
-    const looksLikeQuestion = content.includes("?") || QUESTION_START_RE.test(lowered);
-    if (looksLikeQuestion) score += 0.35;
-    if (SECOND_PERSON_RE.test(lowered)) score += 0.35;
-    if (CAN_YOU_RE.test(lowered) || WHAT_DO_YOU_THINK_RE.test(lowered)) score += 0.45;
-    if (GROUP_PROMPT_RE.test(lowered) || OPINION_PROMPT_RE.test(lowered)) score += 0.35;
-    if (DIRECT_REQUEST_RE.test(lowered)) score += 0.2;
-    if (PLEASE_RE.test(lowered)) score += 0.1;
-    if (ASK_PREFIX_RE.test(lowered)) score += 0.1;
-
-    const botId = String(this.client.user?.id || "");
-    const authorId = String(message.author?.id || "");
-    const messageId = String(message.id || "");
-    const previousMessages = recentMessages
-      .filter((row) => String(row.message_id) !== messageId)
-      .slice(0, ADDRESS_CONTEXT_WINDOW);
-
-    const hasReference = Boolean(message.reference?.messageId);
-    if (hasReference && referencedAuthorId && String(referencedAuthorId) !== botId) return false;
-    if (hasReference && !referencedAuthorId) return false;
-
-    const lastSpeakerWasBot = previousMessages[0]
-      ? String(previousMessages[0].author_id) === botId
-      : false;
-    const botInWindow = previousMessages.some((row) => String(row.author_id) === botId);
-    const authorInWindow = previousMessages.some((row) => String(row.author_id) === authorId);
-    const authorAndBotInWindow = botInWindow && authorInWindow;
-    const hasConversationContext = lastSpeakerWasBot || authorAndBotInWindow;
-    if (!hasConversationContext) return false;
-
-    return score >= 0.6;
   }
 
   async runStartupTasks() {
