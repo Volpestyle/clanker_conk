@@ -149,6 +149,65 @@ export class ClankerBot {
       }
     });
 
+    this.client.on("messageReactionAdd", async (reaction) => {
+      try {
+        await this.syncMessageSnapshotFromReaction(reaction);
+      } catch (error) {
+        this.store.logAction({
+          kind: "bot_error",
+          guildId: reaction?.message?.guildId,
+          channelId: reaction?.message?.channelId,
+          messageId: reaction?.message?.id,
+          userId: this.client.user?.id,
+          content: `reaction_sync_add: ${String(error?.message || error)}`
+        });
+      }
+    });
+
+    this.client.on("messageReactionRemove", async (reaction) => {
+      try {
+        await this.syncMessageSnapshotFromReaction(reaction);
+      } catch (error) {
+        this.store.logAction({
+          kind: "bot_error",
+          guildId: reaction?.message?.guildId,
+          channelId: reaction?.message?.channelId,
+          messageId: reaction?.message?.id,
+          userId: this.client.user?.id,
+          content: `reaction_sync_remove: ${String(error?.message || error)}`
+        });
+      }
+    });
+
+    this.client.on("messageReactionRemoveAll", async (message) => {
+      try {
+        await this.syncMessageSnapshot(message);
+      } catch (error) {
+        this.store.logAction({
+          kind: "bot_error",
+          guildId: message?.guildId,
+          channelId: message?.channelId,
+          messageId: message?.id,
+          userId: this.client.user?.id,
+          content: `reaction_sync_remove_all: ${String(error?.message || error)}`
+        });
+      }
+    });
+
+    this.client.on("messageReactionRemoveEmoji", async (reaction) => {
+      try {
+        await this.syncMessageSnapshotFromReaction(reaction);
+      } catch (error) {
+        this.store.logAction({
+          kind: "bot_error",
+          guildId: reaction?.message?.guildId,
+          channelId: reaction?.message?.channelId,
+          messageId: reaction?.message?.id,
+          userId: this.client.user?.id,
+          content: `reaction_sync_remove_emoji: ${String(error?.message || error)}`
+        });
+      }
+    });
   }
 
   async start() {
@@ -832,7 +891,7 @@ export class ClankerBot {
       authorId: this.client.user.id,
       authorName: settings.botName,
       isBot: true,
-      content: finalText,
+      content: this.composeMessageContentForHistory(sent, finalText),
       referencedMessageId
     });
     this.store.logAction({
@@ -1828,7 +1887,7 @@ export class ClankerBot {
           authorId: message.author?.id || "unknown",
           authorName: message.member?.displayName || message.author?.username || "unknown",
           isBot: Boolean(message.author?.bot),
-          content: String(message.content || "").trim(),
+          content: this.composeMessageContentForHistory(message, String(message.content || "").trim()),
           referencedMessageId: message.reference?.messageId
         });
       }
@@ -1975,7 +2034,7 @@ export class ClankerBot {
         authorId: this.client.user.id,
         authorName: settings.botName,
         isBot: true,
-        content: finalText,
+        content: this.composeMessageContentForHistory(sent, finalText),
         referencedMessageId: null
       });
       for (const sharedLink of linkPolicy.usedLinks) {
@@ -2310,6 +2369,47 @@ export class ClankerBot {
     return images;
   }
 
+  async syncMessageSnapshotFromReaction(reaction) {
+    if (!reaction) return;
+
+    let resolved = reaction;
+    if (resolved.partial && typeof resolved.fetch === "function") {
+      try {
+        resolved = await resolved.fetch();
+      } catch {
+        return;
+      }
+    }
+
+    await this.syncMessageSnapshot(resolved?.message);
+  }
+
+  async syncMessageSnapshot(message) {
+    if (!message) return;
+
+    let resolved = message;
+    if (resolved.partial && typeof resolved.fetch === "function") {
+      try {
+        resolved = await resolved.fetch();
+      } catch {
+        return;
+      }
+    }
+
+    if (!resolved?.guildId || !resolved?.channelId || !resolved?.id || !resolved?.author?.id) return;
+
+    this.store.recordMessage({
+      messageId: resolved.id,
+      guildId: resolved.guildId,
+      channelId: resolved.channelId,
+      authorId: resolved.author.id,
+      authorName: resolved.member?.displayName || resolved.author.username || "unknown",
+      isBot: Boolean(resolved.author.bot),
+      content: this.composeMessageContentForHistory(resolved, String(resolved.content || "").trim()),
+      referencedMessageId: resolved.reference?.messageId
+    });
+  }
+
   composeMessageContentForHistory(message, baseText = "") {
     const parts = [];
     const text = String(baseText || "").trim();
@@ -2332,8 +2432,67 @@ export class ClankerBot {
       }
     }
 
+    const reactionSummary = formatReactionSummary(message);
+    if (reactionSummary) {
+      parts.push(`[reactions: ${reactionSummary}]`);
+    }
+
     return parts.join(" ").replace(/\s+/g, " ").trim();
   }
+}
+
+function formatReactionSummary(message) {
+  const cache = message?.reactions?.cache;
+  if (!cache?.size) return "";
+
+  const rows = [];
+  for (const reaction of cache.values()) {
+    const count = Number(reaction?.count || 0);
+    if (!Number.isFinite(count) || count <= 0) continue;
+    const label = normalizeReactionLabel(reaction?.emoji);
+    if (!label) continue;
+    rows.push({ label, count });
+  }
+
+  if (!rows.length) return "";
+
+  rows.sort((a, b) => {
+    if (b.count !== a.count) return b.count - a.count;
+    return a.label.localeCompare(b.label);
+  });
+
+  return rows
+    .slice(0, 6)
+    .map((row) => `${row.label}x${row.count}`)
+    .join(", ");
+}
+
+function normalizeReactionLabel(emoji) {
+  const id = String(emoji?.id || "").trim();
+  const rawName = String(emoji?.name || "").trim();
+  if (id) {
+    const safe = sanitizeReactionLabel(rawName);
+    return safe ? `custom:${safe}` : `custom:${id}`;
+  }
+  if (!rawName) return "";
+
+  const safe = sanitizeReactionLabel(rawName);
+  if (safe) return safe;
+
+  const codepoints = [...rawName]
+    .map((char) => char.codePointAt(0))
+    .filter((value) => Number.isFinite(value))
+    .map((value) => value.toString(16));
+  if (!codepoints.length) return "";
+  return `u${codepoints.join("_")}`;
+}
+
+function sanitizeReactionLabel(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_+-]+/g, "")
+    .slice(0, 32);
 }
 
 function extractUrlsFromText(text) {
