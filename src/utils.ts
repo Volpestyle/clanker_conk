@@ -61,7 +61,9 @@ export function uniqueIdList(input) {
   return [...new Set(split)];
 }
 
-export function sanitizeBotText(text, maxLen = 450) {
+const DISCORD_MESSAGE_SAFE_LIMIT = 1900;
+
+export function sanitizeBotText(text, maxLen = DISCORD_MESSAGE_SAFE_LIMIT) {
   if (!text) return "";
 
   let clean = String(text).trim();
@@ -69,8 +71,10 @@ export function sanitizeBotText(text, maxLen = 450) {
   clean = clean.replace(/\n{3,}/g, "\n\n");
   clean = clean.replace(/@everyone|@here/g, "");
 
-  if (clean.length > maxLen) {
-    clean = clean.slice(0, maxLen - 1).trimEnd() + "…";
+  const limit = Number(maxLen);
+  if (Number.isFinite(limit) && limit > 0 && clean.length > limit) {
+    const sliceLen = Math.max(1, Math.floor(limit) - 1);
+    clean = clean.slice(0, sliceLen).trimEnd() + "…";
   }
 
   return clean;

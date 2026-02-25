@@ -1778,8 +1778,7 @@ export class ClankerBot {
       const initiativeDirective = parseInitiativeImageDirective(generation.text);
       const imagePrompt = initiativeDirective.imagePrompt;
       let finalText = sanitizeBotText(
-        initiativeDirective.text || (imagePrompt ? "quick drop" : generation.text),
-        650
+        initiativeDirective.text || (imagePrompt ? "quick drop" : generation.text)
       );
       finalText = normalizeSkipSentinel(finalText);
       if (!finalText || finalText === "[SKIP]") return;
@@ -1924,7 +1923,7 @@ export class ClankerBot {
   }
 
   applyDiscoveryLinkPolicy({ text, candidates, selected, requireDiscoveryLink }) {
-    const cleanText = sanitizeBotText(text, 650);
+    const cleanText = sanitizeBotText(text);
     const candidateMap = new Map(
       (candidates || []).map((item) => [normalizeDiscoveryUrl(item.url), item]).filter((entry) => Boolean(entry[0]))
     );
@@ -1957,7 +1956,7 @@ export class ClankerBot {
     }
 
     const fallbackUrl = normalizeDiscoveryUrl(fallback.url);
-    const withForcedLink = sanitizeBotText(`${cleanText}\n${fallbackUrl}`, 650);
+    const withForcedLink = sanitizeBotText(`${cleanText}\n${fallbackUrl}`);
     return {
       text: withForcedLink,
       usedLinks: [
