@@ -309,7 +309,13 @@ export function buildReplyPrompt({
   if (webSearch?.used && webSearch.results?.length) {
     parts.push(`Live web findings for query: "${webSearch.query}"`);
     parts.push(formatWebSearchFindings(webSearch));
-    parts.push("If you reference web facts, cite source IDs inline like [S1] or [S2].");
+    parts.push(
+      "Decide whether to cite sources based on the user's message and the claim sensitivity."
+    );
+    parts.push(
+      "If citations would help (for example user asked for proof/sources or the claim is precise), use source IDs inline like [S1] or [S2]."
+    );
+    parts.push("If citations are not needed, answer naturally without citation clutter.");
   }
 
   if (videoContext?.requested && !videoContext.used) {

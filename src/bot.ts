@@ -2419,16 +2419,11 @@ function embedWebSearchSources(text, webSearch) {
       .filter((index) => Number.isInteger(index) && index >= 0 && index < results.length)
   )].sort((a, b) => a - b);
 
-  const referenceIndices = citedIndices.length
-    ? citedIndices
-    : results
-        .map((_, index) => index)
-        .slice(0, 3);
-  if (!referenceIndices.length) return textWithPlainCitations;
+  if (!citedIndices.length) return textWithPlainCitations;
 
   const urlLines = [];
   const domainLines = [];
-  for (const index of referenceIndices) {
+  for (const index of citedIndices) {
     const row = results[index];
     const url = String(row?.url || "").trim();
     if (!url) continue;
@@ -2438,12 +2433,26 @@ function embedWebSearchSources(text, webSearch) {
   }
   if (!urlLines.length) return textWithPlainCitations;
 
+  const inlineLinked = textWithPlainCitations.replace(/\[S(\d{1,2})\]/gi, (full, rawIndex) => {
+    const index = Number(rawIndex) - 1;
+    const row = results[index];
+    const url = String(row?.url || "").trim();
+    if (!url) return full;
+    return `[S${index + 1}](<${url}>)`;
+  });
+
   const MAX_CONTENT_LEN = 1900;
-  const withUrls = `${textWithPlainCitations}\n\nSources:\n${urlLines.join("\n")}`;
+  const withUrls = `${inlineLinked}\n\nSources:\n${urlLines.join("\n")}`;
   if (withUrls.length <= MAX_CONTENT_LEN) return withUrls;
 
-  const withDomains = `${textWithPlainCitations}\n\nSources:\n${domainLines.join("\n")}`;
+  const withDomains = `${inlineLinked}\n\nSources:\n${domainLines.join("\n")}`;
   if (withDomains.length <= MAX_CONTENT_LEN) return withDomains;
+
+  const plainWithUrls = `${textWithPlainCitations}\n\nSources:\n${urlLines.join("\n")}`;
+  if (plainWithUrls.length <= MAX_CONTENT_LEN) return plainWithUrls;
+
+  const plainWithDomains = `${textWithPlainCitations}\n\nSources:\n${domainLines.join("\n")}`;
+  if (plainWithDomains.length <= MAX_CONTENT_LEN) return plainWithDomains;
 
   return textWithPlainCitations;
 }
