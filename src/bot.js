@@ -9,10 +9,9 @@ import {
   buildSystemPrompt
 } from "./prompts.js";
 import { normalizeDiscoveryUrl } from "./discovery.js";
-import { chance, clamp, sanitizeBotText, sleep } from "./utils.js";
+import { chance, clamp, hasBotKeyword, sanitizeBotText, sleep, stripBotKeywords } from "./utils.js";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
-const CLANKER_KEYWORD_RE = /\bclank(?:er|a|s|or)\b/i;
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
 const REPLY_QUEUE_RATE_LIMIT_WAIT_MS = 15_000;
 const REPLY_QUEUE_SEND_RETRY_BASE_MS = 2_500;
@@ -1513,7 +1512,7 @@ export class ClankerBot {
     const mentioned = message.mentions?.users?.has(this.client.user.id);
     const content = String(message.content || "");
     const namePing =
-      content.toLowerCase().includes(settings.botName.toLowerCase()) || CLANKER_KEYWORD_RE.test(content);
+      content.toLowerCase().includes(settings.botName.toLowerCase()) || hasBotKeyword(content);
     const isReplyToBot = message.mentions?.repliedUser?.id === this.client.user.id;
     return Boolean(mentioned || namePing || isReplyToBot);
   }
@@ -2341,7 +2340,7 @@ function isDirectWebSearchCommand(rawText, botName = "") {
   if (!hasSearchVerb) return false;
 
   if (/^(?:<@!?\d+>\s*)?(?:google|search|look\s*up|lookup|find)\b/i.test(text)) return true;
-  if (/\bclank(?:er|a|s|or)\b/i.test(text)) return true;
+  if (hasBotKeyword(text)) return true;
 
   if (botName) {
     const escapedName = escapeRegExp(String(botName || "").trim());
@@ -2355,9 +2354,8 @@ function deriveDirectWebSearchQuery(rawText, botName = "") {
   const text = String(rawText || "");
   if (!text.trim()) return "";
 
-  let cleaned = text
+  let cleaned = stripBotKeywords(text)
     .replace(/<@!?\d+>/g, " ")
-    .replace(/\bclank(?:er|a|s|or)\b/gi, " ")
     .replace(/\b(?:can|could|would|will)\s+(?:you|u)\b/gi, " ")
     .replace(/\b(?:please|pls|plz|try|again)\b/gi, " ")
     .replace(/\bgoogle(?:\s+search)?\b/gi, " ")

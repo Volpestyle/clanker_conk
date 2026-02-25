@@ -1,3 +1,5 @@
+import { hasBotKeyword } from "./utils.js";
+
 function formatRecentChat(messages) {
   if (!messages?.length) return "(no recent messages available)";
 
@@ -102,7 +104,7 @@ function looksLikeDirectWebSearchCommand(text) {
   if (!hasSearchVerb) return false;
 
   if (/^(?:<@!?\d+>\s*)?(?:google|search|look\s*up|lookup|find)\b/i.test(raw)) return true;
-  if (/\bclank(?:er|a|s)\b/i.test(raw)) return true;
+  if (hasBotKeyword(raw)) return true;
   if (/\b(?:can|could|would|will)\s+(?:you|u)\b/i.test(raw)) return true;
 
   return false;
