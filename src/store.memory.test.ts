@@ -94,3 +94,19 @@ test("archiveOldFactsForSubject deactivates older facts", async () => {
     assert.equal(activeFacts.length, 2);
   });
 });
+
+test("voice reply decision llm settings normalize provider and model", async () => {
+  await withTempStore(async (store) => {
+    const patched = store.patchSettings({
+      voice: {
+        replyDecisionLlm: {
+          provider: "CLAUDE-CODE",
+          model: " opus "
+        }
+      }
+    });
+
+    assert.equal(patched.voice.replyDecisionLlm.provider, "claude-code");
+    assert.equal(patched.voice.replyDecisionLlm.model, "opus");
+  });
+});

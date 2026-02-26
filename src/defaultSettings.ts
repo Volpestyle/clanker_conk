@@ -57,6 +57,10 @@ export const DEFAULT_SETTINGS = {
     blockedVoiceUserIds: [],
     replyEagerness: 0,
     eagerCooldownSeconds: 45,
+    replyDecisionLlm: {
+      provider: "anthropic",
+      model: "claude-haiku-4-5"
+    },
     xai: {
       voice: "Rex",
       audioFormat: "audio/pcm",
