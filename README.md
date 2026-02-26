@@ -10,6 +10,7 @@ Features:
 - OpenAI or Anthropic support (runtime-configurable).
 - Optional live web search for replies (Brave primary, SerpApi fallback), including page inspection from top results.
 - Optional model-directed GIF replies via GIPHY search.
+- Optional Grok Imagine image/video generation for complex visuals and clips.
 - Video link understanding for YouTube/TikTok/embedded video links (captions first, optional ASR fallback, optional keyframes).
 - Dashboard UI for settings, permissions, logs, memory, and cost tracking.
 - Two-layer memory with append-only daily logs and curated `memory/MEMORY.md` distillation.
@@ -25,6 +26,7 @@ npm install
 Fill `.env`:
 - `DISCORD_TOKEN`: your bot token.
 - `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY`.
+- Optional for Grok Imagine media generation: `XAI_API_KEY` (and optional `XAI_BASE_URL`, default `https://api.x.ai/v1`).
 - Optional for live web search: `BRAVE_SEARCH_API_KEY` (primary) and/or `SERPAPI_API_KEY` (fallback).
 - Optional for model-directed GIF replies: `GIPHY_API_KEY` (and optional `GIPHY_RATING`, default `pg-13`).
 - Optional: `DASHBOARD_TOKEN` (protects dashboard API).
@@ -82,6 +84,7 @@ Use dashboard to:
 - Configure discovery source mix, link frequency, freshness, dedupe window, and topic/source lists.
 - Configure live web search limits (hourly cap, provider order, recency, results/query, pages inspected, and extraction settings).
 - Enable/disable model-directed GIF replies and set GIF lookup budget.
+- Configure allowed image/video generation models, simple/complex image routing models, and per-24h media budgets.
 - Choose LLM provider + model.
 - Track accumulated API spend.
 - Inspect bot actions and memory.
