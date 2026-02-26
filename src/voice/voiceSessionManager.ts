@@ -24,8 +24,17 @@ const MAX_MAX_SESSION_MINUTES = 120;
 const MIN_INACTIVITY_SECONDS = 20;
 const MAX_INACTIVITY_SECONDS = 3600;
 const INPUT_SPEECH_END_SILENCE_MS = 900;
+const CAPTURE_IDLE_FLUSH_MS = INPUT_SPEECH_END_SILENCE_MS + 220;
+const CAPTURE_MAX_DURATION_MS = 14_000;
 const BOT_TURN_SILENCE_RESET_MS = 1200;
 const ACTIVITY_TOUCH_THROTTLE_MS = 2000;
+const RESPONSE_FLUSH_DEBOUNCE_MS = 280;
+const MIN_RESPONSE_REQUEST_GAP_MS = 700;
+const RESPONSE_SILENCE_RETRY_DELAY_MS = 5200;
+const MAX_RESPONSE_SILENCE_RETRIES = 2;
+const RESPONSE_DONE_SILENCE_GRACE_MS = 1400;
+const PENDING_SUPERSEDE_MIN_AGE_MS = 1800;
+const BOT_DISCONNECT_GRACE_MS = 2500;
 
 export class VoiceSessionManager {
   constructor({ client, store, appConfig, composeOperationalMessage = null }) {
@@ -393,6 +402,16 @@ export class VoiceSessionManager {
           botTurnResetTimer: null,
           botTurnOpen: false,
           lastBotActivityTouchAt: 0,
+          responseFlushTimer: null,
+          responseWatchdogTimer: null,
+          responseDoneGraceTimer: null,
+          botDisconnectTimer: null,
+          lastResponseRequestAt: 0,
+          lastAudioDeltaAt: 0,
+          lastInboundAudioAt: 0,
+          lastAudioPipelineRepairAt: 0,
+          nextResponseRequestId: 0,
+          pendingResponse: null,
           userCaptures: new Map(),
           soundboard: {
             playCount: 0,
@@ -427,22 +446,6 @@ export class VoiceSessionManager {
             ),
             intentConfidence
           }
-        });
-
-        await this.sendOperationalMessage({
-          channel: message.channel,
-          settings,
-          guildId,
-          channelId: message.channelId,
-          userId,
-          messageId: message.id,
-          event: "voice_join_request",
-          reason: "joined",
-          details: {
-            targetVoiceChannelId,
-            maxSessionMinutes
-          },
-          fallback: `hopping in <#${targetVoiceChannelId}> for up to ${maxSessionMinutes}m.`
         });
 
         return true;
@@ -841,12 +844,49 @@ export class VoiceSessionManager {
       const discordPcm = convertXaiOutputToDiscordPcm(chunk, 24000);
       if (!discordPcm.length) return;
 
-      session.botAudioStream.write(discordPcm);
+      if (
+        !ensureBotAudioPlaybackReady({
+          session,
+          store: this.store,
+          botUserId: this.client.user?.id || null
+        })
+      ) {
+        return;
+      }
+
+      session.lastAudioDeltaAt = Date.now();
+      try {
+        session.botAudioStream.write(discordPcm);
+      } catch (error) {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.client.user?.id || null,
+          content: `bot_audio_stream_write_failed: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id
+          }
+        });
+        return;
+      }
       this.markBotTurnOut(session, settings);
+
+      if (this.pendingResponseHasAudio(session)) {
+        const pending = session.pendingResponse;
+        if (pending) {
+          pending.audioReceivedAt = session.lastAudioDeltaAt;
+        }
+        this.clearResponseSilenceTimers(session);
+      }
     };
 
-    const onTranscript = (text) => {
-      const transcript = String(text || "").trim();
+    const onTranscript = (payload) => {
+      const transcriptText =
+        payload && typeof payload === "object" ? payload.text : payload;
+      const transcriptEventType =
+        payload && typeof payload === "object" ? String(payload.eventType || "") : "";
+      const transcript = String(transcriptText || "").trim();
       if (!transcript) return;
       this.store.logAction({
         kind: "voice_runtime",
@@ -856,7 +896,9 @@ export class VoiceSessionManager {
         content: "xai_transcript",
         metadata: {
           sessionId: session.id,
-          transcript
+          transcript,
+          transcriptEventType: transcriptEventType || null,
+          transcriptSource: transcriptSourceFromEventType(transcriptEventType)
         }
       });
     };
@@ -872,7 +914,11 @@ export class VoiceSessionManager {
         content: `xai_error_event: ${details.message}`,
         metadata: {
           sessionId: session.id,
-          code: details.code
+          code: details.code,
+          param: details.param,
+          lastOutboundEventType: details.lastOutboundEventType,
+          lastOutboundEvent: details.lastOutboundEvent,
+          recentOutboundEvents: details.recentOutboundEvents
         }
       });
 
@@ -924,11 +970,68 @@ export class VoiceSessionManager {
       });
     };
 
+    const onResponseDone = (event) => {
+      if (session.ending) return;
+      const pending = session.pendingResponse;
+      if (!pending) return;
+
+      const responseId = parseResponseDoneId(event);
+      const responseStatus = parseResponseDoneStatus(event);
+      const hadAudio = this.pendingResponseHasAudio(session, pending);
+
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "xai_response_done",
+        metadata: {
+          sessionId: session.id,
+          requestId: pending.requestId,
+          responseId,
+          responseStatus,
+          hadAudio,
+          retryCount: pending.retryCount,
+          hardRecoveryAttempted: pending.hardRecoveryAttempted
+        }
+      });
+
+      if (hadAudio) {
+        this.clearPendingResponse(session);
+        return;
+      }
+
+      if (session.responseDoneGraceTimer) {
+        clearTimeout(session.responseDoneGraceTimer);
+      }
+
+      const requestId = Number(pending.requestId || 0);
+      const responseUserId = pending.userId || null;
+      session.responseDoneGraceTimer = setTimeout(() => {
+        session.responseDoneGraceTimer = null;
+        if (!session || session.ending) return;
+        const current = session.pendingResponse;
+        if (!current || Number(current.requestId || 0) !== requestId) return;
+        if (this.pendingResponseHasAudio(session, current)) {
+          this.clearPendingResponse(session);
+          return;
+        }
+        this.handleSilentResponse({
+          session,
+          userId: responseUserId,
+          trigger: "response_done",
+          responseId,
+          responseStatus
+        }).catch(() => undefined);
+      }, RESPONSE_DONE_SILENCE_GRACE_MS);
+    };
+
     session.xaiClient.on("audio_delta", onAudioDelta);
     session.xaiClient.on("transcript", onTranscript);
     session.xaiClient.on("error_event", onErrorEvent);
     session.xaiClient.on("socket_closed", onSocketClosed);
     session.xaiClient.on("socket_error", onSocketError);
+    session.xaiClient.on("response_done", onResponseDone);
 
     session.cleanupHandlers.push(() => {
       session.xaiClient.off("audio_delta", onAudioDelta);
@@ -936,6 +1039,7 @@ export class VoiceSessionManager {
       session.xaiClient.off("error_event", onErrorEvent);
       session.xaiClient.off("socket_closed", onSocketClosed);
       session.xaiClient.off("socket_error", onSocketError);
+      session.xaiClient.off("response_done", onResponseDone);
     });
   }
 
@@ -1004,9 +1108,18 @@ export class VoiceSessionManager {
       });
     };
 
+    const onSpeakingEnd = (userId) => {
+      if (String(userId || "") === String(this.client.user?.id || "")) return;
+      const capture = session.userCaptures.get(String(userId || ""));
+      if (!capture || typeof capture.finalize !== "function") return;
+      capture.finalize("speaking_end");
+    };
+
     speaking.on("start", onSpeakingStart);
+    speaking.on("end", onSpeakingEnd);
     session.cleanupHandlers.push(() => {
       speaking.removeListener("start", onSpeakingStart);
+      speaking.removeListener("end", onSpeakingEnd);
     });
   }
 
@@ -1035,7 +1148,10 @@ export class VoiceSessionManager {
       pcmStream,
       startedAt: Date.now(),
       bytesSent: 0,
-      lastActivityTouchAt: 0
+      lastActivityTouchAt: 0,
+      idleFlushTimer: null,
+      maxFlushTimer: null,
+      finalize: null
     };
 
     session.userCaptures.set(userId, captureState);
@@ -1056,6 +1172,13 @@ export class VoiceSessionManager {
       if (!current) return;
       session.userCaptures.delete(userId);
 
+      if (current.idleFlushTimer) {
+        clearTimeout(current.idleFlushTimer);
+      }
+      if (current.maxFlushTimer) {
+        clearTimeout(current.maxFlushTimer);
+      }
+
       try {
         current.opusStream.destroy();
       } catch {
@@ -1075,12 +1198,23 @@ export class VoiceSessionManager {
       }
     };
 
+    const scheduleIdleFlush = () => {
+      if (captureState.idleFlushTimer) {
+        clearTimeout(captureState.idleFlushTimer);
+      }
+      captureState.idleFlushTimer = setTimeout(() => {
+        finalizeUserTurn("idle_timeout");
+      }, CAPTURE_IDLE_FLUSH_MS);
+    };
+
     pcmStream.on("data", (chunk) => {
       const normalizedPcm = convertDiscordPcmToXaiInput(chunk);
       if (!normalizedPcm.length) return;
       captureState.bytesSent += normalizedPcm.length;
+      scheduleIdleFlush();
 
       const now = Date.now();
+      session.lastInboundAudioAt = now;
       if (now - captureState.lastActivityTouchAt >= ACTIVITY_TOUCH_THROTTLE_MS) {
         this.touchActivity(session.guildId, settings);
         captureState.lastActivityTouchAt = now;
@@ -1103,34 +1237,64 @@ export class VoiceSessionManager {
     });
 
     let captureFinalized = false;
-    const finalizeUserTurn = () => {
+    const finalizeUserTurn = (reason = "stream_end") => {
       if (captureFinalized) return;
       captureFinalized = true;
+
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "voice_turn_finalized",
+        metadata: {
+          sessionId: session.id,
+          reason: String(reason || "stream_end"),
+          bytesSent: captureState.bytesSent,
+          durationMs: Math.max(0, Date.now() - captureState.startedAt)
+        }
+      });
 
       if (captureState.bytesSent <= 0 || session.ending) {
         cleanupCapture();
         return;
       }
 
-      try {
-        session.xaiClient.commitInputAudioBuffer();
-        session.xaiClient.createAudioResponse();
-      } catch (error) {
-        this.store.logAction({
-          kind: "voice_error",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId,
-          content: `audio_commit_failed: ${String(error?.message || error)}`,
-          metadata: {
-            sessionId: session.id
-          }
-        });
-      }
+      this.scheduleResponseFromBufferedAudio({ session, userId });
 
       cleanupCapture();
     };
+    captureState.finalize = finalizeUserTurn;
+    captureState.maxFlushTimer = setTimeout(() => {
+      finalizeUserTurn("max_duration");
+    }, CAPTURE_MAX_DURATION_MS);
 
+    opusStream.once("error", (error) => {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: `inbound_audio_receive_error: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id
+        }
+      });
+      finalizeUserTurn("receive_error");
+    });
+    decoder.once("error", (error) => {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: `inbound_audio_decode_error: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id
+        }
+      });
+      finalizeUserTurn("decode_error");
+    });
     pcmStream.once("end", finalizeUserTurn);
     pcmStream.once("close", finalizeUserTurn);
     pcmStream.once("error", (error) => {
@@ -1146,6 +1310,355 @@ export class VoiceSessionManager {
       });
       finalizeUserTurn();
     });
+  }
+
+  scheduleResponseFromBufferedAudio({ session, userId = null }) {
+    if (!session || session.ending) return;
+
+    if (session.responseFlushTimer) {
+      clearTimeout(session.responseFlushTimer);
+    }
+
+    session.responseFlushTimer = setTimeout(() => {
+      session.responseFlushTimer = null;
+      this.flushResponseFromBufferedAudio({ session, userId });
+    }, RESPONSE_FLUSH_DEBOUNCE_MS);
+  }
+
+  flushResponseFromBufferedAudio({ session, userId = null }) {
+    if (!session || session.ending) return;
+
+    const now = Date.now();
+    const msSinceLastRequest = now - Number(session.lastResponseRequestAt || 0);
+    if (msSinceLastRequest < MIN_RESPONSE_REQUEST_GAP_MS) {
+      const waitMs = Math.max(20, MIN_RESPONSE_REQUEST_GAP_MS - msSinceLastRequest);
+      session.responseFlushTimer = setTimeout(() => {
+        session.responseFlushTimer = null;
+        this.flushResponseFromBufferedAudio({ session, userId });
+      }, waitMs);
+      return;
+    }
+
+    // Don't commit/request while users are still actively streaming audio chunks.
+    // This avoids partial-turn commits that can return no-audio responses.
+    if (session.userCaptures.size > 0) {
+      this.scheduleResponseFromBufferedAudio({ session, userId });
+      return;
+    }
+
+    // Keep one tracked assistant response in flight at a time.
+    if (session.pendingResponse) {
+      const pending = session.pendingResponse;
+      const pendingRequestedAt = Number(pending.requestedAt || 0);
+      const pendingAgeMs = pendingRequestedAt ? now - pendingRequestedAt : 0;
+      const hasNewerInboundAudio = Number(session.lastInboundAudioAt || 0) > pendingRequestedAt;
+
+      if (!hasNewerInboundAudio || pendingAgeMs < PENDING_SUPERSEDE_MIN_AGE_MS) {
+        this.scheduleResponseFromBufferedAudio({
+          session,
+          userId: pending.userId || userId
+        });
+        return;
+      }
+
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "pending_response_superseded",
+        metadata: {
+          sessionId: session.id,
+          requestId: pending.requestId,
+          source: pending.source || null,
+          pendingAgeMs
+        }
+      });
+      this.clearPendingResponse(session);
+    }
+
+    try {
+      session.xaiClient.commitInputAudioBuffer();
+      this.createTrackedAudioResponse({
+        session,
+        userId,
+        source: "turn_flush",
+        resetRetryState: true
+      });
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: `audio_commit_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id
+        }
+      });
+    }
+  }
+
+  createTrackedAudioResponse({ session, userId = null, source = "turn_flush", resetRetryState = false }) {
+    if (!session || session.ending) return;
+    session.xaiClient.createAudioResponse();
+
+    const now = Date.now();
+    const requestId = Number(session.nextResponseRequestId || 0) + 1;
+    session.nextResponseRequestId = requestId;
+    const previous = session.pendingResponse;
+
+    session.pendingResponse = {
+      requestId,
+      userId: userId || previous?.userId || null,
+      requestedAt: now,
+      retryCount: resetRetryState ? 0 : Number(previous?.retryCount || 0),
+      hardRecoveryAttempted: resetRetryState ? false : Boolean(previous?.hardRecoveryAttempted),
+      source: String(source || "turn_flush"),
+      handlingSilence: false,
+      audioReceivedAt: 0
+    };
+    session.lastResponseRequestAt = now;
+    this.clearResponseSilenceTimers(session);
+    this.armResponseSilenceWatchdog({
+      session,
+      requestId,
+      userId: session.pendingResponse.userId
+    });
+  }
+
+  pendingResponseHasAudio(session, pendingResponse = session?.pendingResponse) {
+    if (!session || !pendingResponse) return false;
+    const requestedAt = Number(pendingResponse.requestedAt || 0);
+    if (!requestedAt) return false;
+    return Number(session.lastAudioDeltaAt || 0) >= requestedAt;
+  }
+
+  clearResponseSilenceTimers(session) {
+    if (!session) return;
+    if (session.responseWatchdogTimer) {
+      clearTimeout(session.responseWatchdogTimer);
+      session.responseWatchdogTimer = null;
+    }
+    if (session.responseDoneGraceTimer) {
+      clearTimeout(session.responseDoneGraceTimer);
+      session.responseDoneGraceTimer = null;
+    }
+  }
+
+  clearPendingResponse(session) {
+    if (!session) return;
+    this.clearResponseSilenceTimers(session);
+    session.pendingResponse = null;
+  }
+
+  armResponseSilenceWatchdog({ session, requestId, userId = null }) {
+    if (!session || session.ending) return;
+    if (!Number.isFinite(Number(requestId)) || Number(requestId) <= 0) return;
+
+    if (session.responseWatchdogTimer) {
+      clearTimeout(session.responseWatchdogTimer);
+    }
+
+    session.responseWatchdogTimer = setTimeout(() => {
+      session.responseWatchdogTimer = null;
+      if (!session || session.ending) return;
+      const pending = session.pendingResponse;
+      if (!pending) return;
+      if (Number(pending.requestId || 0) !== Number(requestId)) return;
+      if (this.pendingResponseHasAudio(session, pending)) {
+        this.clearPendingResponse(session);
+        return;
+      }
+      this.handleSilentResponse({
+        session,
+        userId: pending.userId || userId,
+        trigger: "watchdog"
+      }).catch(() => undefined);
+    }, RESPONSE_SILENCE_RETRY_DELAY_MS);
+  }
+
+  async handleSilentResponse({
+    session,
+    userId = null,
+    trigger = "watchdog",
+    responseId = null,
+    responseStatus = null
+  }) {
+    if (!session || session.ending) return;
+    const pending = session.pendingResponse;
+    if (!pending) return;
+    if (pending.handlingSilence) return;
+    if (this.pendingResponseHasAudio(session, pending)) {
+      this.clearPendingResponse(session);
+      return;
+    }
+
+    const pendingRequestedAt = Number(pending.requestedAt || 0);
+    const hasNewerInboundAudio = Number(session.lastInboundAudioAt || 0) > pendingRequestedAt;
+    if (hasNewerInboundAudio) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "pending_response_replaced_by_newer_input",
+        metadata: {
+          sessionId: session.id,
+          requestId: pending.requestId,
+          source: pending.source || null
+        }
+      });
+      this.clearPendingResponse(session);
+      this.scheduleResponseFromBufferedAudio({
+        session,
+        userId: pending.userId || userId
+      });
+      return;
+    }
+
+    pending.handlingSilence = true;
+    this.clearResponseSilenceTimers(session);
+
+    if (session.userCaptures.size > 0) {
+      pending.handlingSilence = false;
+      this.armResponseSilenceWatchdog({
+        session,
+        requestId: pending.requestId,
+        userId: pending.userId || userId
+      });
+      return;
+    }
+
+    const resolvedUserId = pending.userId || userId || this.client.user?.id || null;
+    const setHandlingDone = () => {
+      const active = session.pendingResponse;
+      if (active && Number(active.requestId || 0) === Number(pending.requestId || 0)) {
+        active.handlingSilence = false;
+      }
+    };
+
+    if (pending.retryCount < MAX_RESPONSE_SILENCE_RETRIES) {
+      pending.retryCount += 1;
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: resolvedUserId,
+        content: "response_silent_retry",
+        metadata: {
+          sessionId: session.id,
+          requestId: pending.requestId,
+          retryCount: pending.retryCount,
+          maxRetries: MAX_RESPONSE_SILENCE_RETRIES,
+          responseRequestedAt: pending.requestedAt,
+          trigger,
+          responseId,
+          responseStatus
+        }
+      });
+
+      try {
+        this.createTrackedAudioResponse({
+          session,
+          userId: resolvedUserId,
+          source: "silent_retry",
+          resetRetryState: false
+        });
+      } catch (error) {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: resolvedUserId,
+          content: `response_retry_failed: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id,
+            requestId: pending.requestId
+          }
+        });
+        this.clearPendingResponse(session);
+        await this.endSession({
+          guildId: session.guildId,
+          reason: "response_stalled",
+          announcement: "voice output stalled and stayed silent, leaving vc.",
+          settings: session.settingsSnapshot
+        });
+      } finally {
+        setHandlingDone();
+      }
+      return;
+    }
+
+    if (!pending.hardRecoveryAttempted) {
+      pending.hardRecoveryAttempted = true;
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: resolvedUserId,
+        content: "response_silent_hard_recovery",
+        metadata: {
+          sessionId: session.id,
+          requestId: pending.requestId,
+          retryCount: pending.retryCount,
+          trigger,
+          responseId,
+          responseStatus
+        }
+      });
+
+      try {
+        session.xaiClient.commitInputAudioBuffer();
+        this.createTrackedAudioResponse({
+          session,
+          userId: resolvedUserId,
+          source: "hard_recovery",
+          resetRetryState: false
+        });
+      } catch (error) {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: resolvedUserId,
+          content: `response_hard_recovery_failed: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id,
+            requestId: pending.requestId
+          }
+        });
+        this.clearPendingResponse(session);
+        await this.endSession({
+          guildId: session.guildId,
+          reason: "response_stalled",
+          announcement: "voice output stalled and stayed silent, leaving vc.",
+          settings: session.settingsSnapshot
+        });
+      } finally {
+        setHandlingDone();
+      }
+      return;
+    }
+
+    this.store.logAction({
+      kind: "voice_error",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: resolvedUserId,
+      content: "response_silent_fallback",
+      metadata: {
+        sessionId: session.id,
+        requestId: pending.requestId,
+        retryCount: pending.retryCount,
+        hardRecoveryAttempted: pending.hardRecoveryAttempted,
+        trigger,
+        responseId,
+        responseStatus
+      }
+    });
+    this.clearPendingResponse(session);
+    // Drop this stuck turn and keep the VC session alive; a fresh user turn can recover.
   }
 
   async endSession({
@@ -1167,6 +1680,11 @@ export class VoiceSessionManager {
     if (session.maxTimer) clearTimeout(session.maxTimer);
     if (session.inactivityTimer) clearTimeout(session.inactivityTimer);
     if (session.botTurnResetTimer) clearTimeout(session.botTurnResetTimer);
+    if (session.botDisconnectTimer) clearTimeout(session.botDisconnectTimer);
+    if (session.responseFlushTimer) clearTimeout(session.responseFlushTimer);
+    if (session.responseWatchdogTimer) clearTimeout(session.responseWatchdogTimer);
+    if (session.responseDoneGraceTimer) clearTimeout(session.responseDoneGraceTimer);
+    session.pendingResponse = null;
 
     for (const capture of session.userCaptures.values()) {
       try {
@@ -1282,13 +1800,67 @@ export class VoiceSessionManager {
     if (!session) return;
 
     if (!newState?.channelId) {
-      await this.endSession({
-        guildId,
-        reason: "bot_disconnected",
-        announcement: "i got disconnected from vc.",
-        settings: session.settingsSnapshot
-      });
+      if (!session.botDisconnectTimer) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId,
+          channelId: session.textChannelId,
+          userId: this.client.user?.id || null,
+          content: "bot_disconnect_grace_started",
+          metadata: {
+            sessionId: session.id,
+            graceMs: BOT_DISCONNECT_GRACE_MS
+          }
+        });
+        session.botDisconnectTimer = setTimeout(() => {
+          session.botDisconnectTimer = null;
+          const liveSession = this.sessions.get(guildId);
+          if (!liveSession || liveSession.ending) return;
+
+          const guild = this.client.guilds.cache.get(guildId) || null;
+          const liveChannelId = String(guild?.members?.me?.voice?.channelId || "").trim();
+          if (liveChannelId) {
+            liveSession.voiceChannelId = liveChannelId;
+            liveSession.lastActivityAt = Date.now();
+            this.store.logAction({
+              kind: "voice_runtime",
+              guildId,
+              channelId: liveSession.textChannelId,
+              userId: this.client.user?.id || null,
+              content: "bot_disconnect_grace_resolved",
+              metadata: {
+                sessionId: liveSession.id,
+                voiceChannelId: liveChannelId
+              }
+            });
+            return;
+          }
+
+          this.endSession({
+            guildId,
+            reason: "bot_disconnected",
+            announcement: "i got disconnected from vc.",
+            settings: liveSession.settingsSnapshot
+          }).catch(() => undefined);
+        }, BOT_DISCONNECT_GRACE_MS);
+      }
       return;
+    }
+
+    if (session.botDisconnectTimer) {
+      clearTimeout(session.botDisconnectTimer);
+      session.botDisconnectTimer = null;
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "bot_disconnect_grace_cleared",
+        metadata: {
+          sessionId: session.id,
+          voiceChannelId: String(newState.channelId)
+        }
+      });
     }
 
     if (String(newState.channelId) !== session.voiceChannelId) {
@@ -1328,6 +1900,29 @@ export class VoiceSessionManager {
         ? details
         : { detail: String(details || "") };
 
+    const resolvedChannel = await this.resolveOperationalChannel(channel, channelId, {
+      guildId,
+      userId,
+      messageId,
+      event,
+      reason
+    });
+    if (!resolvedChannel) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: guildId || null,
+        channelId: channelId || channel?.id || null,
+        messageId: messageId || null,
+        userId: userId || this.client.user?.id || null,
+        content: "voice_message_channel_unavailable",
+        metadata: {
+          event,
+          reason
+        }
+      });
+      return false;
+    }
+
     let composedText = "";
     if (this.composeOperationalMessage && resolvedSettings) {
       try {
@@ -1362,10 +1957,44 @@ export class VoiceSessionManager {
 
     const content = String(composedText || fallbackText).trim();
     if (!content) return false;
-    return await this.sendToChannel(channel, content);
+    return await this.sendToChannel(resolvedChannel, content, {
+      guildId,
+      channelId: channelId || resolvedChannel?.id || null,
+      userId,
+      messageId,
+      event,
+      reason
+    });
   }
 
-  async sendToChannel(channel, text) {
+  async resolveOperationalChannel(channel, channelId, { guildId = null, userId = null, messageId = null, event, reason } = {}) {
+    if (channel && typeof channel.send === "function") return channel;
+
+    const resolvedChannelId = String(channelId || channel?.id || "").trim();
+    if (!resolvedChannelId) return null;
+
+    try {
+      const fetched = await this.client.channels.fetch(resolvedChannelId);
+      if (fetched && typeof fetched.send === "function") return fetched;
+      return null;
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: guildId || null,
+        channelId: resolvedChannelId || null,
+        messageId: messageId || null,
+        userId: userId || this.client.user?.id || null,
+        content: `voice_message_channel_fetch_failed: ${String(error?.message || error)}`,
+        metadata: {
+          event,
+          reason
+        }
+      });
+      return null;
+    }
+  }
+
+  async sendToChannel(channel, text, { guildId = null, channelId = null, userId = null, messageId = null, event, reason } = {}) {
     if (!channel || typeof channel.send !== "function") return false;
     const content = String(text || "").trim();
     if (!content) return false;
@@ -1373,7 +2002,19 @@ export class VoiceSessionManager {
     try {
       await channel.send(content);
       return true;
-    } catch {
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: guildId || null,
+        channelId: channelId || channel?.id || null,
+        messageId: messageId || null,
+        userId: userId || this.client.user?.id || null,
+        content: `voice_message_send_failed: ${String(error?.message || error)}`,
+        metadata: {
+          event,
+          reason
+        }
+      });
       return false;
     }
   }
@@ -1420,6 +2061,7 @@ function defaultExitMessage(reason) {
   if (reason === "inactivity_timeout") return "been quiet for a bit, leaving vc.";
   if (reason === "connection_lost" || reason === "bot_disconnected") return "lost the voice connection, i bounced.";
   if (reason === "xai_runtime_error" || reason === "xai_socket_closed") return "voice runtime dropped, i'm out.";
+  if (reason === "response_stalled") return "voice output got stuck, so i bounced.";
   if (reason === "settings_disabled") return "voice mode was disabled, so i dipped.";
   if (reason === "settings_channel_blocked" || reason === "settings_channel_not_allowlisted") {
     return "voice settings changed, so i left this vc.";
@@ -1430,12 +2072,127 @@ function defaultExitMessage(reason) {
 
 function parseXaiErrorPayload(payload) {
   if (!payload || typeof payload !== "object") {
-    return { message: String(payload || "unknown xai error"), code: null };
+    return {
+      message: String(payload || "unknown xai error"),
+      code: null,
+      param: null,
+      lastOutboundEventType: null,
+      lastOutboundEvent: null,
+      recentOutboundEvents: null
+    };
   }
 
   const message = String(payload.message || "unknown xai error");
   const code = payload.code ? String(payload.code) : null;
-  return { message, code };
+  const param =
+    payload.param !== undefined && payload.param !== null
+      ? String(payload.param)
+      : payload?.event?.error?.param
+        ? String(payload.event.error.param)
+        : null;
+  const lastOutboundEventType = payload.lastOutboundEventType
+    ? String(payload.lastOutboundEventType)
+    : null;
+  const lastOutboundEvent =
+    payload.lastOutboundEvent && typeof payload.lastOutboundEvent === "object"
+      ? payload.lastOutboundEvent
+      : null;
+  const recentOutboundEvents = Array.isArray(payload.recentOutboundEvents)
+    ? payload.recentOutboundEvents.slice(-4)
+    : null;
+  return {
+    message,
+    code,
+    param,
+    lastOutboundEventType,
+    lastOutboundEvent,
+    recentOutboundEvents
+  };
+}
+
+function parseResponseDoneId(event) {
+  if (!event || typeof event !== "object") return null;
+  const direct = event.response_id || event.id || null;
+  const nested = event.response?.id || null;
+  const value = nested || direct;
+  if (!value) return null;
+  return String(value);
+}
+
+function parseResponseDoneStatus(event) {
+  if (!event || typeof event !== "object") return null;
+  const status = event.response?.status || event.status || null;
+  if (!status) return null;
+  return String(status);
+}
+
+function ensureBotAudioPlaybackReady({ session, store, botUserId = null }) {
+  if (!session || !session.audioPlayer || !session.connection) return false;
+
+  const restartAudioPipeline = (reason) => {
+    const now = Date.now();
+    if (now - Number(session.lastAudioPipelineRepairAt || 0) < 600) {
+      return true;
+    }
+    session.lastAudioPipelineRepairAt = now;
+
+    try {
+      if (!session.botAudioStream || session.botAudioStream.destroyed || session.botAudioStream.writableEnded) {
+        session.botAudioStream = new PassThrough();
+      }
+
+      const resource = createAudioResource(session.botAudioStream, {
+        inputType: StreamType.Raw
+      });
+      session.audioPlayer.play(resource);
+      session.connection.subscribe(session.audioPlayer);
+      store?.logAction?.({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: botUserId,
+        content: "bot_audio_pipeline_restarted",
+        metadata: {
+          sessionId: session.id,
+          reason
+        }
+      });
+      return true;
+    } catch (error) {
+      store?.logAction?.({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: botUserId,
+        content: `bot_audio_pipeline_restart_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          reason
+        }
+      });
+      return false;
+    }
+  };
+
+  if (!session.botAudioStream || session.botAudioStream.destroyed || session.botAudioStream.writableEnded) {
+    return restartAudioPipeline("stream_unavailable");
+  }
+
+  const status = session.audioPlayer.state?.status || null;
+  if (status === AudioPlayerStatus.Idle || status === AudioPlayerStatus.AutoPaused) {
+    return restartAudioPipeline(`player_${String(status).toLowerCase()}`);
+  }
+
+  return true;
+}
+
+function transcriptSourceFromEventType(eventType) {
+  const normalized = String(eventType || "").trim();
+  if (!normalized) return "unknown";
+  if (normalized === "conversation.item.input_audio_transcription.completed") return "input";
+  if (/audio_transcript/i.test(normalized)) return "output";
+  if (/transcript/i.test(normalized)) return "unknown";
+  return "unknown";
 }
 
 function shortError(text) {

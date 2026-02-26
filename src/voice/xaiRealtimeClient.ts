@@ -3,6 +3,8 @@ import WebSocket from "ws";
 
 const XAI_REALTIME_URL = "wss://api.x.ai/v1/realtime";
 const CONNECT_TIMEOUT_MS = 10_000;
+const MAX_OUTBOUND_EVENT_HISTORY = 8;
+const MAX_EVENT_PREVIEW_CHARS = 280;
 
 const AUDIO_DELTA_TYPES = new Set([
   "response.audio.delta",
@@ -34,6 +36,10 @@ export class XaiRealtimeClient extends EventEmitter {
     this.sessionId = null;
     this.lastCloseCode = null;
     this.lastCloseReason = null;
+    this.lastOutboundEventType = null;
+    this.lastOutboundEventAt = 0;
+    this.lastOutboundEvent = null;
+    this.recentOutboundEvents = [];
   }
 
   async connect({
@@ -180,15 +186,26 @@ export class XaiRealtimeClient extends EventEmitter {
       const message =
         event.error?.message || event.error?.code || event.message || "Unknown xAI realtime error";
       this.lastError = String(message);
-      this.log("warn", "xai_realtime_error_event", {
+      const errorMetadata = {
         error: this.lastError,
         code: errorPayload?.code || null,
-        type: event.type
+        type: event.type,
+        param: errorPayload?.param || null,
+        lastOutboundEventType: this.lastOutboundEventType || null,
+        lastOutboundEvent: this.lastOutboundEvent || null,
+        recentOutboundEvents: this.recentOutboundEvents.slice(-4)
+      };
+      this.log("warn", "xai_realtime_error_event", {
+        ...errorMetadata
       });
       this.emit("error_event", {
         message: this.lastError,
         code: errorPayload?.code || null,
-        event
+        param: errorPayload?.param || null,
+        event,
+        lastOutboundEventType: this.lastOutboundEventType || null,
+        lastOutboundEvent: this.lastOutboundEvent || null,
+        recentOutboundEvents: this.recentOutboundEvents.slice(-4)
       });
       return;
     }
@@ -210,7 +227,10 @@ export class XaiRealtimeClient extends EventEmitter {
         null;
 
       if (transcript) {
-        this.emit("transcript", String(transcript));
+        this.emit("transcript", {
+          text: String(transcript),
+          eventType: String(event.type || "")
+        });
       }
       return;
     }
@@ -234,9 +254,7 @@ export class XaiRealtimeClient extends EventEmitter {
   }
 
   commitInputAudioBuffer() {
-    // xAI Voice Agent docs currently show conflicting commit event names in different sections.
-    // We use `conversation.item.commit`, which is accepted by current realtime behavior.
-    this.send({ type: "conversation.item.commit" });
+    this.send({ type: "input_audio_buffer.commit" });
   }
 
   createAudioResponse() {
@@ -251,6 +269,17 @@ export class XaiRealtimeClient extends EventEmitter {
   send(payload) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("xAI realtime socket is not open.");
+    }
+
+    const eventType = String(payload?.type || "unknown");
+    this.lastOutboundEventType = eventType;
+    this.lastOutboundEventAt = Date.now();
+    this.recordOutboundEvent(payload);
+    // Temporary diagnostics for realtime schema mismatches. Skip high-volume audio chunks.
+    if (eventType !== "input_audio_buffer.append") {
+      this.log("info", "xai_realtime_client_event_sent", {
+        ...(this.lastOutboundEvent || { type: eventType })
+      });
     }
 
     this.ws.send(JSON.stringify(payload));
@@ -301,13 +330,33 @@ export class XaiRealtimeClient extends EventEmitter {
       sessionId: this.sessionId,
       lastError: this.lastError,
       lastCloseCode: this.lastCloseCode,
-      lastCloseReason: this.lastCloseReason
+      lastCloseReason: this.lastCloseReason,
+      lastOutboundEventType: this.lastOutboundEventType || null,
+      lastOutboundEventAt: this.lastOutboundEventAt ? new Date(this.lastOutboundEventAt).toISOString() : null,
+      lastOutboundEvent: this.lastOutboundEvent || null,
+      recentOutboundEvents: this.recentOutboundEvents.slice(-4)
     };
   }
 
   log(level, event, metadata = null) {
     if (!this.logger) return;
     this.logger({ level, event, metadata });
+  }
+
+  recordOutboundEvent(payload) {
+    const eventType = String(payload?.type || "unknown");
+    const summarizedPayload = summarizeOutboundPayload(payload);
+    const event = compactObject({
+      type: eventType,
+      at: this.lastOutboundEventAt ? new Date(this.lastOutboundEventAt).toISOString() : null,
+      payload: summarizedPayload
+    });
+    this.lastOutboundEvent = event;
+    if (eventType === "input_audio_buffer.append") return;
+    this.recentOutboundEvents.push(event);
+    if (this.recentOutboundEvents.length > MAX_OUTBOUND_EVENT_HISTORY) {
+      this.recentOutboundEvents = this.recentOutboundEvents.slice(-MAX_OUTBOUND_EVENT_HISTORY);
+    }
   }
 }
 
@@ -339,4 +388,64 @@ function extractAudioBase64(event) {
   }
 
   return null;
+}
+
+function summarizeOutboundPayload(payload) {
+  if (!payload || typeof payload !== "object") return null;
+  const type = String(payload.type || "unknown");
+
+  if (type === "input_audio_buffer.append") {
+    const audioChars = typeof payload.audio === "string" ? payload.audio.length : null;
+    return compactObject({
+      type,
+      audioChars
+    });
+  }
+
+  if (type === "input_audio_buffer.commit" || type === "response.create") {
+    const response = payload.response && typeof payload.response === "object" ? payload.response : null;
+    return compactObject({
+      type,
+      response: response
+        ? {
+            modalities: Array.isArray(response.modalities) ? response.modalities.slice(0, 4) : null
+          }
+        : null
+    });
+  }
+
+  if (type === "session.update") {
+    const session = payload.session && typeof payload.session === "object" ? payload.session : {};
+    return compactObject({
+      type,
+      voice: session.voice || null,
+      region: session.region || null,
+      modalities: Array.isArray(session.modalities) ? session.modalities.slice(0, 4) : null,
+      inputAudioType: session?.audio?.input?.format?.type || null,
+      inputAudioRate: Number(session?.audio?.input?.format?.rate) || null,
+      outputAudioType: session?.audio?.output?.format?.type || null,
+      outputAudioRate: Number(session?.audio?.output?.format?.rate) || null,
+      turnDetectionType:
+        session?.turn_detection && typeof session.turn_detection === "object"
+          ? String(session.turn_detection.type || "")
+          : null,
+      instructionsChars: session.instructions ? String(session.instructions).length : 0
+    });
+  }
+
+  const preview = safeJsonPreview(payload, MAX_EVENT_PREVIEW_CHARS);
+  return compactObject({
+    type,
+    preview
+  });
+}
+
+function safeJsonPreview(value, maxChars) {
+  try {
+    const serialized = JSON.stringify(value);
+    if (serialized.length <= maxChars) return serialized;
+    return `${serialized.slice(0, maxChars)}...`;
+  } catch {
+    return "[unserializable_payload]";
+  }
 }
