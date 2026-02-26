@@ -452,8 +452,6 @@ export function buildReplyPrompt({
 export function buildVoiceTurnPrompt({
   speakerName = "unknown",
   transcript = "",
-  recentMessages = [],
-  relevantMessages = [],
   userFacts = [],
   relevantFacts = []
 }) {
@@ -465,13 +463,6 @@ export function buildVoiceTurnPrompt({
     .slice(0, 700);
 
   parts.push(`Incoming live voice transcript from ${speaker}: ${text || "(empty)"}`);
-  parts.push("Recent channel messages:");
-  parts.push(formatRecentChat(recentMessages));
-
-  if (relevantMessages?.length) {
-    parts.push("Relevant past messages:");
-    parts.push(formatRecentChat(relevantMessages));
-  }
 
   if (userFacts?.length) {
     parts.push("Known facts about this user:");

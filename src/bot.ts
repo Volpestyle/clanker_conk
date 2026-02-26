@@ -871,7 +871,7 @@ export class ClankerBot {
     const memorySlice = settings.memory?.enabled && this.memory?.buildPromptMemorySlice
       ? await this.memory.buildPromptMemorySlice({
           userId,
-          channelId,
+          channelId: null,
           queryText: incomingTranscript,
           settings,
           trace: {
@@ -902,10 +902,6 @@ export class ClankerBot {
     const userPrompt = buildVoiceTurnPrompt({
       speakerName,
       transcript: incomingTranscript,
-      recentMessages: channelId
-        ? this.store.getRecentMessages(channelId, settings.memory?.maxRecentMessages || 35)
-        : [],
-      relevantMessages: memorySlice.relevantMessages,
       userFacts: memorySlice.userFacts,
       relevantFacts: memorySlice.relevantFacts
     });
