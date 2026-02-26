@@ -8,6 +8,12 @@ import {
   buildReplyPrompt,
   buildSystemPrompt
 } from "./prompts.ts";
+import {
+  buildHardLimitsSection,
+  getPromptBotName,
+  getPromptStyle,
+  PROMPT_CAPABILITY_HONESTY_LINE
+} from "./promptCore.ts";
 import { normalizeDiscoveryUrl } from "./discovery.ts";
 import { chance, clamp, hasBotKeyword, sanitizeBotText, sleep, stripBotKeywords } from "./utils.ts";
 import { detectVoiceIntent } from "./voice/voiceIntentParser.ts";
@@ -93,7 +99,8 @@ export class ClankerBot {
     this.voiceSessionManager = new VoiceSessionManager({
       client: this.client,
       store: this.store,
-      appConfig: this.appConfig
+      appConfig: this.appConfig,
+      composeOperationalMessage: (payload) => this.composeVoiceOperationalMessage(payload)
     });
 
     this.registerEvents();
@@ -701,17 +708,100 @@ export class ClankerBot {
     if (intent.intent === "leave") {
       return await this.voiceSessionManager.requestLeave({
         message,
+        settings,
         reason: "nl_leave"
       });
     }
 
     if (intent.intent === "status") {
       return await this.voiceSessionManager.requestStatus({
-        message
+        message,
+        settings
       });
     }
 
     return false;
+  }
+
+  async composeVoiceOperationalMessage({
+    settings,
+    guildId = null,
+    channelId = null,
+    userId = null,
+    messageId = null,
+    event = "voice_runtime",
+    reason = null,
+    details = {},
+    fallbackText = ""
+  }) {
+    if (!this.llm?.generate || !settings) return "";
+
+    const tunedSettings = {
+      ...settings,
+      llm: {
+        ...(settings?.llm || {}),
+        temperature: clamp(Number(settings?.llm?.temperature) || 0.65, 0, 0.8),
+        maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || 120, 40, 120)
+      }
+    };
+
+    const systemPrompt = [
+      `You are ${getPromptBotName(settings)}, a Discord regular posting a voice-mode update.`,
+      `Style: ${getPromptStyle(settings, "casual and playful chat tone")}.`,
+      "Write exactly one short user-facing message for the text channel.",
+      "Clearly state what happened and why, especially when a request is blocked.",
+      "If relevant, mention required permissions/settings plainly.",
+      PROMPT_CAPABILITY_HONESTY_LINE,
+      ...buildHardLimitsSection(settings, { maxItems: 12 }),
+      "Do not output JSON, markdown headings, code blocks, labels, directives, or [SKIP].",
+      "Do not invent details that are not in the event payload."
+    ].join("\n");
+
+    const userPrompt = [
+      `Event: ${String(event || "voice_runtime")}`,
+      `Reason: ${String(reason || "unknown")}`,
+      `Details JSON: ${serializeForPrompt(details, 1400)}`,
+      fallbackText ? `Baseline meaning: ${String(fallbackText || "").trim()}` : "",
+      "Return only the final message text."
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    try {
+      const generation = await this.llm.generate({
+        settings: tunedSettings,
+        systemPrompt,
+        userPrompt,
+        trace: {
+          guildId,
+          channelId,
+          messageId,
+          userId,
+          source: "voice_operational_message",
+          event,
+          reason
+        }
+      });
+
+      const parsed = parseReplyDirectives(generation.text);
+      const normalized = sanitizeBotText(normalizeSkipSentinel(parsed.text || generation.text || ""), 280);
+      if (!normalized || normalized === "[SKIP]") return "";
+      return normalized;
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: guildId || null,
+        channelId: channelId || null,
+        messageId: messageId || null,
+        userId: userId || null,
+        content: `voice_operational_llm_failed: ${String(error?.message || error)}`,
+        metadata: {
+          event,
+          reason
+        }
+      });
+      return "";
+    }
   }
 
   async maybeReplyToMessage(message, settings, options = {}) {
@@ -3223,6 +3313,14 @@ function normalizeDirectiveText(text, maxLen) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, maxLen);
+}
+
+function serializeForPrompt(value, maxLen = 1200) {
+  try {
+    return String(JSON.stringify(value ?? {}, null, 2)).slice(0, Math.max(40, Number(maxLen) || 1200));
+  } catch {
+    return "{}";
+  }
 }
 
 function isDirectWebSearchCommand(rawText, botName = "") {
