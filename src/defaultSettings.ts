@@ -63,7 +63,9 @@ export const DEFAULT_SETTINGS = {
       enabled: true,
       maxPlaysPerSession: 4,
       minSecondsBetweenPlays: 45,
-      allowExternalSounds: false
+      allowExternalSounds: false,
+      preferredSoundIds: [],
+      mappings: {}
     }
   },
   startup: {
