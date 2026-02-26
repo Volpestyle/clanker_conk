@@ -40,6 +40,10 @@ const MAX_VIDEO_TARGET_SCAN = 8;
 const MAX_VIDEO_FALLBACK_MESSAGES = 18;
 const MAX_MODEL_IMAGE_INPUTS = 8;
 const UNSOLICITED_REPLY_CONTEXT_WINDOW = 5;
+const MENTION_CANDIDATE_RE = /(?<![\w<])@([a-z0-9][a-z0-9 ._'-]{0,63})/gi;
+const MAX_MENTION_CANDIDATES = 8;
+const MENTION_GUILD_HISTORY_LOOKBACK = 500;
+const MENTION_SEARCH_RESULT_LIMIT = 10;
 
 export class ClankerBot {
   constructor({ appConfig, store, llm, memory, discovery, search, gifs, video }) {
@@ -144,6 +148,7 @@ export class ClankerBot {
         });
       }
     });
+
   }
 
   async start() {
@@ -736,6 +741,7 @@ export class ClankerBot {
     let finalText = sanitizeBotText(
       replyDirective.text || (replyDirective.imagePrompt || replyDirective.gifQuery ? "here you go" : "")
     );
+    let mentionResolution = emptyMentionResolution();
     finalText = normalizeSkipSentinel(finalText);
     if (!finalText || finalText === "[SKIP]") {
       this.logSkippedReply({
@@ -749,6 +755,12 @@ export class ClankerBot {
       });
       return false;
     }
+    mentionResolution = await this.resolveDeterministicMentions({
+      text: finalText,
+      guild: message.guild,
+      guildId: message.guildId
+    });
+    finalText = mentionResolution.text;
     finalText = embedWebSearchSources(finalText, webSearch);
 
     let payload = { content: finalText };
@@ -858,6 +870,7 @@ export class ClankerBot {
           requestedByModel: Boolean(memoryLine),
           saved: memorySaved
         },
+        mentions: mentionResolution,
         reaction,
         webSearch: {
           requested: webSearch.requested,
@@ -1525,6 +1538,136 @@ export class ClankerBot {
     return Boolean(mentioned || namePing || isReplyToBot);
   }
 
+  async resolveDeterministicMentions({ text, guild, guildId }) {
+    const source = String(text || "");
+    if (!source || !source.includes("@")) {
+      return {
+        text: source,
+        attemptedCount: 0,
+        resolvedCount: 0,
+        ambiguousCount: 0,
+        unresolvedCount: 0
+      };
+    }
+
+    const candidates = extractMentionCandidates(source, MAX_MENTION_CANDIDATES);
+    if (!candidates.length) {
+      return {
+        text: source,
+        attemptedCount: 0,
+        resolvedCount: 0,
+        ambiguousCount: 0,
+        unresolvedCount: 0
+      };
+    }
+
+    const aliasIndex = this.buildMentionAliasIndex({ guild, guildId });
+    const keys = [...new Set(candidates.map((item) => item.lookupKey))];
+    const resolutionByKey = new Map();
+
+    for (const key of keys) {
+      const localIds = aliasIndex.get(key) || new Set();
+      if (localIds.size === 1) {
+        resolutionByKey.set(key, { status: "resolved", id: [...localIds][0] });
+        continue;
+      }
+      if (localIds.size > 1) {
+        resolutionByKey.set(key, { status: "ambiguous" });
+        continue;
+      }
+
+      const guildIds = await this.lookupGuildMembersByExactName(guild, key);
+      if (guildIds.size === 1) {
+        resolutionByKey.set(key, { status: "resolved", id: [...guildIds][0] });
+      } else if (guildIds.size > 1) {
+        resolutionByKey.set(key, { status: "ambiguous" });
+      } else {
+        resolutionByKey.set(key, { status: "unresolved" });
+      }
+    }
+
+    let output = source;
+    let resolvedCount = 0;
+    let ambiguousCount = 0;
+    let unresolvedCount = 0;
+    const sorted = candidates.slice().sort((a, b) => b.start - a.start);
+
+    for (const candidate of sorted) {
+      const resolution = resolutionByKey.get(candidate.lookupKey);
+      if (!resolution) continue;
+      if (resolution.status === "resolved") {
+        output = `${output.slice(0, candidate.start)}<@${resolution.id}>${output.slice(candidate.end)}`;
+        resolvedCount += 1;
+      } else if (resolution.status === "ambiguous") {
+        ambiguousCount += 1;
+      } else {
+        unresolvedCount += 1;
+      }
+    }
+
+    return {
+      text: output,
+      attemptedCount: candidates.length,
+      resolvedCount,
+      ambiguousCount,
+      unresolvedCount
+    };
+  }
+
+  buildMentionAliasIndex({ guild, guildId }) {
+    const aliases = new Map();
+    const addAlias = (name, id) => {
+      const key = normalizeMentionLookupKey(name);
+      const memberId = String(id || "").trim();
+      if (!key || !memberId) return;
+      if (key === "everyone" || key === "here") return;
+      const existing = aliases.get(key) || new Set();
+      existing.add(memberId);
+      aliases.set(key, existing);
+    };
+
+    if (guild?.members?.cache?.size) {
+      for (const member of guild.members.cache.values()) {
+        addAlias(member?.displayName, member?.id);
+        addAlias(member?.nickname, member?.id);
+        addAlias(member?.user?.globalName, member?.id);
+        addAlias(member?.user?.username, member?.id);
+      }
+    }
+
+    if (guildId) {
+      const rows = this.store.getRecentMessagesAcrossGuild(guildId, MENTION_GUILD_HISTORY_LOOKBACK);
+      for (const row of rows) {
+        addAlias(row?.author_name, row?.author_id);
+      }
+    }
+
+    return aliases;
+  }
+
+  async lookupGuildMembersByExactName(guild, lookupKey) {
+    if (!guild?.members?.search) return new Set();
+    const query = String(lookupKey || "").trim();
+    if (query.length < 2) return new Set();
+
+    try {
+      const matches = await guild.members.search({
+        query: query.slice(0, 32),
+        limit: MENTION_SEARCH_RESULT_LIMIT
+      });
+      const ids = new Set();
+      for (const member of matches.values()) {
+        const keys = collectMemberLookupKeys(member);
+        if (keys.has(query)) {
+          ids.add(String(member.id));
+        }
+      }
+      return ids;
+    } catch {
+      return new Set();
+    }
+  }
+
   hasBotMessageInRecentWindow({
     recentMessages,
     windowSize = UNSOLICITED_REPLY_CONTEXT_WINDOW,
@@ -1790,6 +1933,12 @@ export class ClankerBot {
       });
       finalText = normalizeSkipSentinel(linkPolicy.text);
       if (!finalText || finalText === "[SKIP]") return;
+      const mentionResolution = await this.resolveDeterministicMentions({
+        text: finalText,
+        guild: channel.guild,
+        guildId: channel.guildId
+      });
+      finalText = mentionResolution.text;
 
       let payload = { content: finalText };
       let imageUsed = false;
@@ -1864,6 +2013,7 @@ export class ClankerBot {
             reports: discoveryResult.reports,
             errors: discoveryResult.errors
           },
+          mentions: mentionResolution,
           imageRequestedByModel: Boolean(imagePrompt),
           imageUsed,
           imageBudgetBlocked,
@@ -2189,6 +2339,75 @@ export class ClankerBot {
 function extractUrlsFromText(text) {
   URL_IN_TEXT_RE.lastIndex = 0;
   return [...String(text || "").matchAll(URL_IN_TEXT_RE)].map((match) => String(match[0] || ""));
+}
+
+function emptyMentionResolution() {
+  return {
+    attemptedCount: 0,
+    resolvedCount: 0,
+    ambiguousCount: 0,
+    unresolvedCount: 0
+  };
+}
+
+function extractMentionCandidates(text, maxItems = MAX_MENTION_CANDIDATES) {
+  const source = String(text || "");
+  if (!source.includes("@")) return [];
+
+  const out = [];
+  MENTION_CANDIDATE_RE.lastIndex = 0;
+  let match;
+  while ((match = MENTION_CANDIDATE_RE.exec(source)) && out.length < Math.max(1, Number(maxItems) || 1)) {
+    const rawCandidate = String(match[1] || "");
+    const withoutTrailingSpace = rawCandidate.replace(/\s+$/g, "");
+    const withoutTrailingPunctuation = withoutTrailingSpace
+      .replace(/[.,:;!?)\]}]+$/g, "")
+      .replace(/\s+$/g, "");
+    const displayName = withoutTrailingPunctuation.trim();
+    if (!displayName) continue;
+    if (/^\d{2,}$/.test(displayName)) continue;
+
+    const lookupKey = normalizeMentionLookupKey(displayName);
+    if (!lookupKey || lookupKey === "everyone" || lookupKey === "here") continue;
+
+    const start = match.index;
+    const end = start + 1 + withoutTrailingPunctuation.length;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start + 1) continue;
+
+    out.push({
+      start,
+      end,
+      lookupKey
+    });
+  }
+
+  return out;
+}
+
+function normalizeMentionLookupKey(value) {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+}
+
+function collectMemberLookupKeys(member) {
+  const keys = new Set();
+  const values = [
+    member?.displayName,
+    member?.nickname,
+    member?.user?.globalName,
+    member?.user?.username
+  ];
+
+  for (const value of values) {
+    const normalized = normalizeMentionLookupKey(value);
+    if (!normalized) continue;
+    keys.add(normalized);
+  }
+
+  return keys;
 }
 
 function looksLikeVideoFollowupMessage(rawText) {
