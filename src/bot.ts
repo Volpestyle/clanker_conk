@@ -24,6 +24,8 @@ import {
   collectMemberLookupKeys,
   composeInitiativeImagePrompt,
   composeInitiativeVideoPrompt,
+  composeReplyImagePrompt,
+  composeReplyVideoPrompt,
   embedWebSearchSources,
   emptyMentionResolution,
   extractMentionCandidates,
@@ -39,6 +41,7 @@ import {
   parseStructuredReplyOutput,
   pickInitiativeMediaDirective,
   pickReplyMediaDirective,
+  resolveMaxMediaPromptLen,
   serializeForPrompt
 } from "./botHelpers.ts";
 import { normalizeDiscoveryUrl } from "./discovery.ts";
@@ -852,7 +855,7 @@ export class ClankerBot {
         }
       });
 
-      const parsed = parseReplyDirectives(generation.text);
+      const parsed = parseReplyDirectives(generation.text, resolveMaxMediaPromptLen(settings));
       const normalized = sanitizeBotText(normalizeSkipSentinel(parsed.text || generation.text || ""), 180);
       if (!normalized || normalized === "[SKIP]") return "";
       return normalized;
@@ -996,7 +999,7 @@ export class ClankerBot {
         }
       });
 
-      const parsed = parseReplyDirectives(generation.text);
+      const parsed = parseReplyDirectives(generation.text, resolveMaxMediaPromptLen(settings));
       let finalText = sanitizeBotText(normalizeSkipSentinel(parsed.text || generation.text || ""), 520);
       if (!finalText || finalText === "[SKIP]") {
         return { text: "" };
@@ -1147,7 +1150,8 @@ export class ClankerBot {
         enabled: Boolean(settings?.voice?.enabled),
         joinOnTextNL: Boolean(settings?.voice?.joinOnTextNL)
       },
-      videoContext
+      videoContext,
+      maxMediaPromptChars: resolveMaxMediaPromptLen(settings)
     };
     const initialUserPrompt = buildReplyPrompt({
       ...replyPromptBase,
@@ -1166,7 +1170,8 @@ export class ClankerBot {
     });
     let usedWebSearchFollowup = false;
     let usedMemoryLookupFollowup = false;
-    let replyDirective = parseStructuredReplyOutput(generation.text);
+    const mediaPromptLimit = resolveMaxMediaPromptLen(settings);
+    let replyDirective = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
     let voiceIntentHandled = await this.maybeHandleStructuredVoiceIntent({
       message,
       settings,
@@ -1218,7 +1223,7 @@ export class ClankerBot {
         imageInputs,
         trace: replyTrace
       });
-      replyDirective = parseStructuredReplyOutput(generation.text);
+      replyDirective = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
 
       voiceIntentHandled = await this.maybeHandleStructuredVoiceIntent({
         message,
@@ -1327,7 +1332,7 @@ export class ClankerBot {
       const imageResult = await this.maybeAttachGeneratedImage({
         settings,
         text: finalText,
-        prompt: imagePrompt,
+        prompt: composeReplyImagePrompt(imagePrompt, finalText, mediaPromptLimit),
         variant: "simple",
         trace: {
           guildId: message.guildId,
@@ -1347,7 +1352,7 @@ export class ClankerBot {
       const imageResult = await this.maybeAttachGeneratedImage({
         settings,
         text: finalText,
-        prompt: complexImagePrompt,
+        prompt: composeReplyImagePrompt(complexImagePrompt, finalText, mediaPromptLimit),
         variant: "complex",
         trace: {
           guildId: message.guildId,
@@ -1367,7 +1372,7 @@ export class ClankerBot {
       const videoResult = await this.maybeAttachGeneratedVideo({
         settings,
         text: finalText,
-        prompt: videoPrompt,
+        prompt: composeReplyVideoPrompt(videoPrompt, finalText, mediaPromptLimit),
         trace: {
           guildId: message.guildId,
           channelId: message.channelId,
@@ -2811,7 +2816,8 @@ export class ClankerBot {
         remainingInitiativeVideos: initiativeVideoBudget.remaining,
         discoveryFindings: discoveryResult.candidates,
         maxLinksPerPost: settings.initiative?.discovery?.maxLinksPerPost || 2,
-        requireDiscoveryLink
+        requireDiscoveryLink,
+        maxMediaPromptChars: resolveMaxMediaPromptLen(settings)
       });
 
       const generation = await this.llm.generate({
@@ -2825,7 +2831,8 @@ export class ClankerBot {
         }
       });
 
-      const initiativeDirective = parseInitiativeMediaDirective(generation.text);
+      const initiativeMediaPromptLimit = resolveMaxMediaPromptLen(settings);
+      const initiativeDirective = parseInitiativeMediaDirective(generation.text, initiativeMediaPromptLimit);
       const imagePrompt = initiativeDirective.imagePrompt;
       const complexImagePrompt = initiativeDirective.complexImagePrompt;
       const videoPrompt = initiativeDirective.videoPrompt;
@@ -2860,7 +2867,7 @@ export class ClankerBot {
         const imageResult = await this.maybeAttachGeneratedImage({
           settings,
           text: finalText,
-          prompt: composeInitiativeImagePrompt(imagePrompt, finalText),
+          prompt: composeInitiativeImagePrompt(imagePrompt, finalText, initiativeMediaPromptLimit),
           variant: "simple",
           trace: {
             guildId: channel.guildId,
@@ -2884,7 +2891,7 @@ export class ClankerBot {
         const imageResult = await this.maybeAttachGeneratedImage({
           settings,
           text: finalText,
-          prompt: composeInitiativeImagePrompt(complexImagePrompt, finalText),
+          prompt: composeInitiativeImagePrompt(complexImagePrompt, finalText, initiativeMediaPromptLimit),
           variant: "complex",
           trace: {
             guildId: channel.guildId,
@@ -2904,7 +2911,7 @@ export class ClankerBot {
         const videoResult = await this.maybeAttachGeneratedVideo({
           settings,
           text: finalText,
-          prompt: composeInitiativeVideoPrompt(videoPrompt, finalText),
+          prompt: composeInitiativeVideoPrompt(videoPrompt, finalText, initiativeMediaPromptLimit),
           trace: {
             guildId: channel.guildId,
             channelId: channel.id,
