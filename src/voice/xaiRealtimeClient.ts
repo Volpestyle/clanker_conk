@@ -218,7 +218,7 @@ export class XaiRealtimeClient extends EventEmitter {
   }
 
   commitInputAudioBuffer() {
-    this.send({ type: "input_audio_buffer.commit" });
+    this.send({ type: "conversation.item.commit" });
   }
 
   createAudioResponse() {

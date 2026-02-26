@@ -292,6 +292,11 @@ export class ClankerBot {
     };
   }
 
+  async applyRuntimeSettings(nextSettings = null) {
+    const settings = nextSettings || this.store.getSettings();
+    await this.voiceSessionManager.reconcileSettings(settings);
+  }
+
   markGatewayEvent() {
     this.lastGatewayEventAt = Date.now();
   }
