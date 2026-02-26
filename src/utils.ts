@@ -5,7 +5,6 @@ export function nowIso() {
 const BOT_KEYWORD_PREFIXES = ["clank", "clink", "clunk", "clenk", "clonk"];
 const BOT_KEYWORD_PATTERN = `\\b(?:${BOT_KEYWORD_PREFIXES.join("|")})[a-z0-9_-]*\\b`;
 const BOT_KEYWORD_RE = new RegExp(BOT_KEYWORD_PATTERN, "i");
-const BOT_KEYWORD_GLOBAL_RE = new RegExp(BOT_KEYWORD_PATTERN, "gi");
 
 export function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
@@ -82,10 +81,6 @@ export function sanitizeBotText(text, maxLen = DISCORD_MESSAGE_SAFE_LIMIT) {
 
 export function hasBotKeyword(text) {
   return BOT_KEYWORD_RE.test(String(text || ""));
-}
-
-export function stripBotKeywords(text) {
-  return String(text || "").replace(BOT_KEYWORD_GLOBAL_RE, " ");
 }
 
 function isObject(value) {
