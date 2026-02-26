@@ -586,9 +586,6 @@ function normalizeSettings(raw) {
   if (!merged.webSearch || typeof merged.webSearch !== "object") merged.webSearch = {};
   if (!merged.videoContext || typeof merged.videoContext !== "object") merged.videoContext = {};
   if (!merged.voice || typeof merged.voice !== "object") merged.voice = {};
-  if ("youtubeContext" in merged) {
-    delete merged.youtubeContext;
-  }
 
   merged.botName = String(merged.botName || "clanker conk").slice(0, 50);
   merged.persona.flavor = String(merged.persona?.flavor || DEFAULT_SETTINGS.persona.flavor).slice(0, 240);
@@ -596,9 +593,6 @@ function normalizeSettings(raw) {
     merged.persona?.hardLimits,
     DEFAULT_SETTINGS.persona?.hardLimits ?? []
   );
-  if ("shortReplyBias" in merged.persona) {
-    delete merged.persona.shortReplyBias;
-  }
 
   const replyLevel = clamp(
     Number(merged.activity?.replyLevel ?? DEFAULT_SETTINGS.activity.replyLevel) || 0,
@@ -703,24 +697,6 @@ function normalizeSettings(raw) {
   if (!merged.voice.soundboard || typeof merged.voice.soundboard !== "object") {
     merged.voice.soundboard = {};
   }
-  if ("joinOnTextCommand" in merged.voice) {
-    delete merged.voice.joinOnTextCommand;
-  }
-  if ("maxConcurrentGuildSessions" in merged.voice) {
-    delete merged.voice.maxConcurrentGuildSessions;
-  }
-  if ("intentCooldownUserSeconds" in merged.voice) {
-    delete merged.voice.intentCooldownUserSeconds;
-  }
-  if ("intentCooldownGuildSeconds" in merged.voice) {
-    delete merged.voice.intentCooldownGuildSeconds;
-  }
-  if ("maxPlaysPerSession" in merged.voice.soundboard) {
-    delete merged.voice.soundboard.maxPlaysPerSession;
-  }
-  if ("minSecondsBetweenPlays" in merged.voice.soundboard) {
-    delete merged.voice.soundboard.minSecondsBetweenPlays;
-  }
 
   const defaultVoice = DEFAULT_SETTINGS.voice || {};
   const defaultVoiceXai = defaultVoice.xai || {};
@@ -803,13 +779,12 @@ function normalizeSettings(raw) {
 
   merged.startup.catchupEnabled =
     merged.startup?.catchupEnabled !== undefined ? Boolean(merged.startup?.catchupEnabled) : true;
-  const legacyLookbackMinutes = Number(merged.startup?.catchupLookbackMinutes) || 0;
-  const configuredHours = Number(merged.startup?.catchupLookbackHours) || 0;
-  const derivedHours = configuredHours || (legacyLookbackMinutes ? legacyLookbackMinutes / 60 : 6);
-  merged.startup.catchupLookbackHours = clamp(derivedHours, 1, 24);
-  if ("catchupLookbackMinutes" in merged.startup) {
-    delete merged.startup.catchupLookbackMinutes;
-  }
+  const catchupLookbackHoursRaw = Number(merged.startup?.catchupLookbackHours);
+  merged.startup.catchupLookbackHours = clamp(
+    Number.isFinite(catchupLookbackHoursRaw) ? catchupLookbackHoursRaw : 6,
+    1,
+    24
+  );
   merged.startup.catchupMaxMessagesPerChannel = clamp(
     Number(merged.startup?.catchupMaxMessagesPerChannel) || 20,
     5,
@@ -832,7 +807,7 @@ function normalizeSettings(raw) {
   merged.permissions.blockedChannelIds = uniqueIdList(merged.permissions?.blockedChannelIds);
   merged.permissions.blockedUserIds = uniqueIdList(merged.permissions?.blockedUserIds);
   merged.permissions.maxMessagesPerHour = clamp(
-    Number(merged.permissions?.maxMessagesPerHour ?? merged.permissions?.maxRepliesPerHour) || 20,
+    Number(merged.permissions?.maxMessagesPerHour) || 20,
     1,
     200
   );
@@ -877,12 +852,6 @@ function normalizeSettings(raw) {
     8,
     120
   );
-  if ("imageModel" in merged.initiative) {
-    delete merged.initiative.imageModel;
-  }
-  if ("imagePostChancePercent" in merged.initiative) {
-    delete merged.initiative.imagePostChancePercent;
-  }
   if (!merged.initiative.discovery || typeof merged.initiative.discovery !== "object") {
     merged.initiative.discovery = {};
   }
