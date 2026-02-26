@@ -8,19 +8,7 @@ function parseLineList(val) {
   return [...new Set(String(val || "").split(/\n/g).map((x) => x.trim()).filter(Boolean))];
 }
 
-function parseIdList(val) {
-  return parseList(val);
-}
-
-function formatIdList(items) {
-  return (items || []).join("\n");
-}
-
 function formatList(items) {
-  return (items || []).join("\n");
-}
-
-function formatLineList(items) {
   return (items || []).join("\n");
 }
 
@@ -60,7 +48,7 @@ export default function SettingsForm({ settings, onSave, toast }) {
       botName: settings.botName || "clanker conk",
       personaFlavor:
         settings.persona?.flavor || "playful, chaotic-good, slangy Gen Z/Gen A energy without being toxic",
-      personaHardLimits: formatLineList(settings.persona?.hardLimits),
+      personaHardLimits: formatList(settings.persona?.hardLimits),
       replyLevel: activity.replyLevel ?? 35,
       reactionLevel: activity.reactionLevel ?? 20,
       minGap: activity.minSecondsBetweenMessages ?? 20,
@@ -96,18 +84,18 @@ export default function SettingsForm({ settings, onSave, toast }) {
       voiceMaxSessionMinutes: settings.voice?.maxSessionMinutes ?? 10,
       voiceInactivityLeaveSeconds: settings.voice?.inactivityLeaveSeconds ?? 90,
       voiceMaxSessionsPerDay: settings.voice?.maxSessionsPerDay ?? 12,
-      voiceAllowedChannelIds: formatIdList(settings.voice?.allowedVoiceChannelIds),
-      voiceBlockedChannelIds: formatIdList(settings.voice?.blockedVoiceChannelIds),
-      voiceBlockedUserIds: formatIdList(settings.voice?.blockedVoiceUserIds),
+      voiceAllowedChannelIds: formatList(settings.voice?.allowedVoiceChannelIds),
+      voiceBlockedChannelIds: formatList(settings.voice?.blockedVoiceChannelIds),
+      voiceBlockedUserIds: formatList(settings.voice?.blockedVoiceUserIds),
       voiceXaiVoice: settings.voice?.xai?.voice ?? "Rex",
       voiceXaiAudioFormat: settings.voice?.xai?.audioFormat ?? "audio/pcm",
       voiceXaiSampleRateHz: settings.voice?.xai?.sampleRateHz ?? 24000,
       voiceXaiRegion: settings.voice?.xai?.region ?? "us-east-1",
       voiceSoundboardEnabled: settings.voice?.soundboard?.enabled ?? true,
       voiceSoundboardAllowExternalSounds: settings.voice?.soundboard?.allowExternalSounds ?? false,
-      voiceSoundboardPreferredSoundIds: formatIdList(settings.voice?.soundboard?.preferredSoundIds),
+      voiceSoundboardPreferredSoundIds: formatList(settings.voice?.soundboard?.preferredSoundIds),
       voiceSoundboardMappings: formatMappingList(settings.voice?.soundboard?.mappings),
-      maxMessages: settings.permissions?.maxMessagesPerHour ?? settings.permissions?.maxRepliesPerHour ?? 20,
+      maxMessages: settings.permissions?.maxMessagesPerHour ?? 20,
       maxReactions: settings.permissions?.maxReactionsPerHour ?? 24,
       catchupEnabled: settings.startup?.catchupEnabled !== false,
       catchupLookbackHours: settings.startup?.catchupLookbackHours ?? 6,
@@ -153,10 +141,10 @@ export default function SettingsForm({ settings, onSave, toast }) {
       initiativeDiscoveryXHandles: formatList(settings.initiative?.discovery?.xHandles),
       initiativeDiscoveryXNitterBase:
         settings.initiative?.discovery?.xNitterBaseUrl ?? "https://nitter.net",
-      initiativeChannels: formatIdList(settings.permissions?.initiativeChannelIds),
-      allowedChannels: formatIdList(settings.permissions?.allowedChannelIds),
-      blockedChannels: formatIdList(settings.permissions?.blockedChannelIds),
-      blockedUsers: formatIdList(settings.permissions?.blockedUserIds)
+      initiativeChannels: formatList(settings.permissions?.initiativeChannelIds),
+      allowedChannels: formatList(settings.permissions?.allowedChannelIds),
+      blockedChannels: formatList(settings.permissions?.blockedChannelIds),
+      blockedUsers: formatList(settings.permissions?.blockedUserIds)
     }));
   }, [settings]);
 
@@ -214,9 +202,9 @@ export default function SettingsForm({ settings, onSave, toast }) {
         maxSessionMinutes: Number(form.voiceMaxSessionMinutes),
         inactivityLeaveSeconds: Number(form.voiceInactivityLeaveSeconds),
         maxSessionsPerDay: Number(form.voiceMaxSessionsPerDay),
-        allowedVoiceChannelIds: parseIdList(form.voiceAllowedChannelIds),
-        blockedVoiceChannelIds: parseIdList(form.voiceBlockedChannelIds),
-        blockedVoiceUserIds: parseIdList(form.voiceBlockedUserIds),
+        allowedVoiceChannelIds: parseList(form.voiceAllowedChannelIds),
+        blockedVoiceChannelIds: parseList(form.voiceBlockedChannelIds),
+        blockedVoiceUserIds: parseList(form.voiceBlockedUserIds),
         xai: {
           voice: String(form.voiceXaiVoice || "").trim(),
           audioFormat: String(form.voiceXaiAudioFormat || "").trim(),
@@ -226,7 +214,7 @@ export default function SettingsForm({ settings, onSave, toast }) {
         soundboard: {
           enabled: form.voiceSoundboardEnabled,
           allowExternalSounds: form.voiceSoundboardAllowExternalSounds,
-          preferredSoundIds: parseIdList(form.voiceSoundboardPreferredSoundIds),
+          preferredSoundIds: parseList(form.voiceSoundboardPreferredSoundIds),
           mappings: parseMappingList(form.voiceSoundboardMappings)
         }
       },
@@ -240,10 +228,10 @@ export default function SettingsForm({ settings, onSave, toast }) {
         allowReplies: form.allowReplies,
         allowInitiativeReplies: form.allowInitiative,
         allowReactions: form.allowReactions,
-        initiativeChannelIds: parseIdList(form.initiativeChannels),
-        allowedChannelIds: parseIdList(form.allowedChannels),
-        blockedChannelIds: parseIdList(form.blockedChannels),
-        blockedUserIds: parseIdList(form.blockedUsers),
+        initiativeChannelIds: parseList(form.initiativeChannels),
+        allowedChannelIds: parseList(form.allowedChannels),
+        blockedChannelIds: parseList(form.blockedChannels),
+        blockedUserIds: parseList(form.blockedUsers),
         maxMessagesPerHour: Number(form.maxMessages),
         maxReactionsPerHour: Number(form.maxReactions)
       },

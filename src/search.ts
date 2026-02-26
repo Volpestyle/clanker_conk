@@ -1,6 +1,5 @@
-import dns from "node:dns/promises";
-import net from "node:net";
 import { normalizeDiscoveryUrl } from "./discovery.ts";
+import { assertPublicUrl } from "./urlSafety.ts";
 import { clamp } from "./utils.ts";
 
 const BRAVE_SEARCH_API_URL = "https://api.search.brave.com/res/v1/web/search";
@@ -304,28 +303,16 @@ class BraveSearchProvider {
     }
     endpoint.searchParams.set("safesearch", input.safeSearch ? "strict" : "off");
 
-    const { response, attempts } = await fetchWithRetry({
-      request: () =>
-        fetch(endpoint, {
-          method: "GET",
-          headers: {
-            "x-subscription-token": this.apiKey,
-            accept: "application/json",
-            "user-agent": SEARCH_USER_AGENT
-          },
-          signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS)
-        }),
-      shouldRetryResponse: (res) => !res.ok && shouldRetryHttpStatus(res.status),
-      maxAttempts: SEARCH_RETRY_ATTEMPTS
+    const payload = await fetchSearchPayload({
+      endpoint,
+      headers: {
+        "x-subscription-token": this.apiKey,
+        accept: "application/json",
+        "user-agent": SEARCH_USER_AGENT
+      },
+      requestLabel: "Brave Search",
+      invalidJsonMessage: "Brave Search returned invalid JSON."
     });
-
-    if (!response.ok) {
-      const error = new Error(`Brave Search HTTP ${response.status}`);
-      error.attempts = attempts;
-      throw error;
-    }
-
-    const payload = await safeJson(response, attempts, "Brave Search returned invalid JSON.");
     const rawItems = Array.isArray(payload?.web?.results) ? payload.web.results : [];
     return { results: normalizeProviderResults(rawItems, "brave", input.maxResults) };
   }
@@ -352,30 +339,39 @@ class SerpApiSearchProvider {
       endpoint.searchParams.set("tbs", `qdr:d${clamp(Number(input.recencyDays) || 30, 1, 365)}`);
     }
 
-    const { response, attempts } = await fetchWithRetry({
-      request: () =>
-        fetch(endpoint, {
-          method: "GET",
-          headers: {
-            accept: "application/json",
-            "user-agent": SEARCH_USER_AGENT
-          },
-          signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS)
-        }),
-      shouldRetryResponse: (res) => !res.ok && shouldRetryHttpStatus(res.status),
-      maxAttempts: SEARCH_RETRY_ATTEMPTS
+    const payload = await fetchSearchPayload({
+      endpoint,
+      headers: {
+        accept: "application/json",
+        "user-agent": SEARCH_USER_AGENT
+      },
+      requestLabel: "SerpApi",
+      invalidJsonMessage: "SerpApi returned invalid JSON."
     });
-
-    if (!response.ok) {
-      const error = new Error(`SerpApi HTTP ${response.status}`);
-      error.attempts = attempts;
-      throw error;
-    }
-
-    const payload = await safeJson(response, attempts, "SerpApi returned invalid JSON.");
     const rawItems = Array.isArray(payload?.organic_results) ? payload.organic_results : [];
     return { results: normalizeProviderResults(rawItems, "serpapi", input.maxResults) };
   }
+}
+
+async function fetchSearchPayload({ endpoint, headers, requestLabel, invalidJsonMessage }) {
+  const { response, attempts } = await fetchWithRetry({
+    request: () =>
+      fetch(endpoint, {
+        method: "GET",
+        headers,
+        signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS)
+      }),
+    shouldRetryResponse: (res) => !res.ok && shouldRetryHttpStatus(res.status),
+    maxAttempts: SEARCH_RETRY_ATTEMPTS
+  });
+
+  if (!response.ok) {
+    const error = new Error(`${String(requestLabel || "Search")} HTTP ${response.status}`);
+    error.attempts = attempts;
+    throw error;
+  }
+
+  return await safeJson(response, attempts, invalidJsonMessage);
 }
 
 function normalizeProviderResults(rawItems, provider, maxResults) {
@@ -511,46 +507,6 @@ function sleep(ms) {
 
 function normalizeSearchUrl(raw) {
   return normalizeDiscoveryUrl(raw);
-}
-
-async function assertPublicUrl(rawUrl) {
-  const parsed = new URL(rawUrl);
-  const host = String(parsed.hostname || "").toLowerCase();
-  if (isBlockedHost(host)) {
-    throw new Error(`blocked host: ${host}`);
-  }
-
-  const records = await dns.lookup(host, { all: true });
-  for (const record of records) {
-    if (isPrivateIp(record?.address)) {
-      throw new Error(`blocked private address for host ${host}`);
-    }
-  }
-}
-
-function isBlockedHost(host) {
-  if (!host) return true;
-  if (host === "localhost" || host.endsWith(".local")) return true;
-  return isPrivateIp(host);
-}
-
-function isPrivateIp(value) {
-  const ipType = net.isIP(value);
-  if (!ipType) return false;
-
-  if (ipType === 4) {
-    const parts = value.split(".").map((part) => Number(part || 0));
-    if (parts[0] === 10 || parts[0] === 127 || parts[0] === 0) return true;
-    if (parts[0] === 169 && parts[1] === 254) return true;
-    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
-    if (parts[0] === 192 && parts[1] === 168) return true;
-    return false;
-  }
-
-  const compact = value.replace(/^\[|\]$/g, "").toLowerCase();
-  if (compact === "::1") return true;
-  if (compact.startsWith("fc") || compact.startsWith("fd")) return true;
-  return compact.startsWith("fe80");
 }
 
 async function safeJson(response, attempts, errorMessage) {
