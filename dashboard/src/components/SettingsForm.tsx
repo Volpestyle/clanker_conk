@@ -148,6 +148,7 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
           <option value="openai">openai</option>
           <option value="anthropic">anthropic</option>
           <option value="xai">xai (grok)</option>
+          <option value="claude-code">claude code (local)</option>
         </select>
 
         <label htmlFor="model-preset">Model Preset (priced models)</label>

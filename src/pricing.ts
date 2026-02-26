@@ -181,6 +181,11 @@ const DEFAULT_PRICING = {
     "grok-beta": { inputPer1M: 5.0, outputPer1M: 15.0 },
     "grok-vision-beta": { inputPer1M: 5.0, outputPer1M: 15.0 }
   },
+  "claude-code": {
+    sonnet: { inputPer1M: 0, outputPer1M: 0 },
+    haiku: { inputPer1M: 0, outputPer1M: 0 },
+    opus: { inputPer1M: 0, outputPer1M: 0 }
+  },
   xaiImages: {
     "grok-2-image-latest": { default: 0.07 },
     "grok-2-image-1212": { default: 0.07 },
@@ -213,7 +218,7 @@ const MODEL_ALIASES = {
   "grok beta": "grok-beta",
   "grok vision beta": "grok-vision-beta"
 };
-const LLM_PROVIDER_KEYS = ["openai", "anthropic", "xai"];
+const LLM_PROVIDER_KEYS = ["openai", "anthropic", "xai", "claude-code"];
 const NON_TEXT_MODEL_PATTERNS = [
   /embedding/i,
   /image/i,
@@ -277,7 +282,8 @@ export function getLlmModelCatalog(customPricing = {}) {
   return {
     openai: listLlmModelsForProvider(merged.openai, "openai"),
     anthropic: listLlmModelsForProvider(merged.anthropic, "anthropic"),
-    xai: listLlmModelsForProvider(merged.xai, "xai")
+    xai: listLlmModelsForProvider(merged.xai, "xai"),
+    "claude-code": listLlmModelsForProvider(merged["claude-code"], "claude-code")
   };
 }
 
@@ -303,6 +309,10 @@ function mergePricing(customPricing) {
     xaiImages: {
       ...DEFAULT_PRICING.xaiImages,
       ...(custom.xaiImages && typeof custom.xaiImages === "object" ? custom.xaiImages : {})
+    },
+    "claude-code": {
+      ...DEFAULT_PRICING["claude-code"],
+      ...(custom["claude-code"] && typeof custom["claude-code"] === "object" ? custom["claude-code"] : {})
     }
   };
 }
