@@ -314,23 +314,126 @@ button.sm {
 
 /* ---- SETTINGS FORM ---- */
 
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
 .settings-form h3 {
   margin: 0 0 4px;
   font-size: 1.1rem;
 }
 
 .settings-form h4 {
-  margin: 16px 0 2px;
-  font-size: 0.92rem;
+  margin: 20px 0 2px;
+  font-size: 0.82rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--ink-2);
+  border-top: 1px solid rgba(58, 100, 84, 0.25);
+  padding-top: 14px;
 }
+
+/* -- collapsible sections -- */
+
+.settings-section {
+  border: 1px solid rgba(58, 100, 84, 0.3);
+  border-radius: var(--radius-sm);
+  background: rgba(7, 21, 20, 0.3);
+  transition: border-color var(--transition);
+}
+
+.settings-section:hover {
+  border-color: rgba(58, 100, 84, 0.5);
+}
+
+.section-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 13px 16px;
+  background: none;
+  border: none;
+  color: var(--ink-1);
+  font-size: 0.86rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  cursor: pointer;
+  transition: background var(--transition);
+  border-radius: var(--radius-sm);
+}
+
+.section-toggle:hover {
+  background: rgba(255, 255, 255, 0.025);
+  transform: none;
+  border-color: transparent;
+}
+
+.section-arrow {
+  display: inline-block;
+  transition: transform var(--transition);
+  color: var(--accent-soft);
+  font-size: 0.72rem;
+}
+
+.settings-section.open .section-arrow {
+  transform: rotate(90deg);
+}
+
+.section-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-3);
+  opacity: 0.5;
+  margin-left: auto;
+  flex-shrink: 0;
+  transition: background var(--transition), opacity var(--transition), box-shadow var(--transition);
+}
+
+.section-dot.on {
+  background: var(--success);
+  opacity: 1;
+  box-shadow: 0 0 6px rgba(84, 255, 184, 0.4);
+}
+
+.section-body {
+  padding: 2px 16px 16px;
+}
+
+/* -- sticky save bar -- */
+
+.save-bar {
+  position: sticky;
+  bottom: -20px;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  padding: 14px 20px;
+  margin: 8px -20px -20px;
+  backdrop-filter: blur(14px);
+  z-index: 5;
+  border-radius: 0 0 var(--radius) var(--radius);
+}
+
+.save-bar .cta {
+  margin-top: 0;
+}
+
+/* -- grids -- */
 
 .split {
   display: grid;
   gap: 10px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.split-3 {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
 .toggles {
@@ -369,6 +472,14 @@ button.sm {
 
 .status-msg.ok {
   color: var(--success);
+}
+
+/* -- vertical stack helper -- */
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
 /* ---- PANEL HEAD ---- */
@@ -674,7 +785,7 @@ td .kind-badge + .kind-badge {
   .metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .split {
+  .split, .split-3 {
     grid-template-columns: 1fr;
   }
   .toggles {
