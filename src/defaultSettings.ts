@@ -66,7 +66,8 @@ export const DEFAULT_SETTINGS = {
       outputAudioFormat: "pcm16",
       inputSampleRateHz: 24000,
       outputSampleRateHz: 24000,
-      inputTranscriptionModel: "gpt-4o-mini-transcribe"
+      inputTranscriptionModel: "gpt-4o-mini-transcribe",
+      allowNsfwHumor: true
     },
     sttPipeline: {
       transcriptionModel: "gpt-4o-mini-transcribe",

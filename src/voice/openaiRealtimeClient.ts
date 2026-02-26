@@ -41,6 +41,7 @@ export class OpenAiRealtimeClient extends EventEmitter {
     this.lastOutboundEventAt = 0;
     this.lastOutboundEvent = null;
     this.recentOutboundEvents = [];
+    this.sessionConfig = null;
   }
 
   async connect({
@@ -49,8 +50,6 @@ export class OpenAiRealtimeClient extends EventEmitter {
     instructions = "",
     inputAudioFormat = "pcm16",
     outputAudioFormat = "pcm16",
-    inputSampleRateHz = 24000,
-    outputSampleRateHz = 24000,
     inputTranscriptionModel = "gpt-4o-mini-transcribe"
   } = {}) {
     if (!this.apiKey) {
@@ -62,6 +61,11 @@ export class OpenAiRealtimeClient extends EventEmitter {
     }
 
     const resolvedModel = String(model || "gpt-realtime").trim() || "gpt-realtime";
+    const resolvedVoice = String(voice || "alloy").trim() || "alloy";
+    const resolvedInputAudioFormat = normalizeOpenAiRealtimeAudioFormat(inputAudioFormat);
+    const resolvedOutputAudioFormat = normalizeOpenAiRealtimeAudioFormat(outputAudioFormat);
+    const resolvedInputTranscriptionModel =
+      String(inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
     const ws = await this.openSocket(this.buildRealtimeUrl(resolvedModel));
     this.ws = ws;
     this.connectedAt = Date.now();
@@ -96,27 +100,15 @@ export class OpenAiRealtimeClient extends EventEmitter {
       });
     });
 
-    this.send({
-      type: "session.update",
-      session: compactObject({
-        model: resolvedModel,
-        voice: String(voice || "alloy").trim() || "alloy",
-        instructions,
-        modalities: ["audio", "text"],
-        input_audio_format: normalizeOpenAiRealtimeAudioFormat(inputAudioFormat),
-        output_audio_format: normalizeOpenAiRealtimeAudioFormat(outputAudioFormat),
-        input_audio_transcription: compactObject({
-          model: String(inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe"
-        }),
-        turn_detection: {
-          type: null
-        },
-        metadata: compactObject({
-          inputSampleRateHz: Number(inputSampleRateHz) || 24000,
-          outputSampleRateHz: Number(outputSampleRateHz) || 24000
-        })
-      })
-    });
+    this.sessionConfig = {
+      model: resolvedModel,
+      voice: resolvedVoice,
+      instructions: String(instructions || ""),
+      inputAudioFormat: resolvedInputAudioFormat,
+      outputAudioFormat: resolvedOutputAudioFormat,
+      inputTranscriptionModel: resolvedInputTranscriptionModel
+    };
+    this.sendSessionUpdate();
 
     return this.getState();
   }
@@ -276,6 +268,18 @@ export class OpenAiRealtimeClient extends EventEmitter {
     });
   }
 
+  updateInstructions(instructions = "") {
+    if (!this.sessionConfig || typeof this.sessionConfig !== "object") {
+      throw new Error("OpenAI realtime session config is not initialized.");
+    }
+
+    this.sessionConfig = {
+      ...this.sessionConfig,
+      instructions: String(instructions || "")
+    };
+    this.sendSessionUpdate();
+  }
+
   send(payload) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("OpenAI realtime socket is not open.");
@@ -367,6 +371,25 @@ export class OpenAiRealtimeClient extends EventEmitter {
       this.recentOutboundEvents = this.recentOutboundEvents.slice(-MAX_OUTBOUND_EVENT_HISTORY);
     }
   }
+
+  sendSessionUpdate() {
+    const session = this.sessionConfig && typeof this.sessionConfig === "object" ? this.sessionConfig : {};
+    this.send({
+      type: "session.update",
+      session: compactObject({
+        type: "realtime",
+        model: String(session.model || "gpt-realtime").trim() || "gpt-realtime",
+        voice: String(session.voice || "alloy").trim() || "alloy",
+        instructions: String(session.instructions || ""),
+        modalities: ["audio", "text"],
+        input_audio_format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat),
+        output_audio_format: normalizeOpenAiRealtimeAudioFormat(session.outputAudioFormat),
+        input_audio_transcription: compactObject({
+          model: String(session.inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe"
+        })
+      })
+    });
+  }
 }
 
 function compactObject(value) {
@@ -448,10 +471,6 @@ function summarizeOutboundPayload(payload) {
       inputAudioFormat: session.input_audio_format || null,
       outputAudioFormat: session.output_audio_format || null,
       inputTranscriptionModel: session?.input_audio_transcription?.model || null,
-      turnDetectionType:
-        session?.turn_detection && typeof session.turn_detection === "object"
-          ? String(session.turn_detection.type || "")
-          : null,
       instructionsChars: session.instructions ? String(session.instructions).length : 0
     });
   }

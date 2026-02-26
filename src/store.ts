@@ -807,6 +807,10 @@ function normalizeSettings(raw) {
   )
     .trim()
     .slice(0, 120);
+  merged.voice.openaiRealtime.allowNsfwHumor =
+    merged.voice?.openaiRealtime?.allowNsfwHumor !== undefined
+      ? Boolean(merged.voice?.openaiRealtime?.allowNsfwHumor)
+      : Boolean(defaultVoiceOpenAiRealtime.allowNsfwHumor);
   merged.voice.sttPipeline.transcriptionModel = String(
     merged.voice?.sttPipeline?.transcriptionModel || defaultVoiceSttPipeline.transcriptionModel || "gpt-4o-mini-transcribe"
   )

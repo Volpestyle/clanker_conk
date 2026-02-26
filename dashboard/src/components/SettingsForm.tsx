@@ -106,6 +106,7 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
       voiceOpenAiRealtimeOutputSampleRateHz: settings.voice?.openaiRealtime?.outputSampleRateHz ?? 24000,
       voiceOpenAiRealtimeInputTranscriptionModel:
         settings.voice?.openaiRealtime?.inputTranscriptionModel ?? "gpt-4o-mini-transcribe",
+      voiceOpenAiRealtimeAllowNsfwHumor: settings.voice?.openaiRealtime?.allowNsfwHumor ?? true,
       voiceSttTranscriptionModel: settings.voice?.sttPipeline?.transcriptionModel ?? "gpt-4o-mini-transcribe",
       voiceSttTtsModel: settings.voice?.sttPipeline?.ttsModel ?? "gpt-4o-mini-tts",
       voiceSttTtsVoice: settings.voice?.sttPipeline?.ttsVoice ?? "alloy",
@@ -249,7 +250,8 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
           outputAudioFormat: String(form.voiceOpenAiRealtimeOutputAudioFormat || "").trim(),
           inputSampleRateHz: Number(form.voiceOpenAiRealtimeInputSampleRateHz),
           outputSampleRateHz: Number(form.voiceOpenAiRealtimeOutputSampleRateHz),
-          inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim()
+          inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
+          allowNsfwHumor: form.voiceOpenAiRealtimeAllowNsfwHumor
         },
         sttPipeline: {
           transcriptionModel: String(form.voiceSttTranscriptionModel || "").trim(),
@@ -861,6 +863,17 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
           />
         </div>
         <div />
+      </div>
+
+      <div className="toggles">
+        <label>
+          <input
+            type="checkbox"
+            checked={form.voiceOpenAiRealtimeAllowNsfwHumor}
+            onChange={set("voiceOpenAiRealtimeAllowNsfwHumor")}
+          />
+          OpenAI realtime: allow adult/NSFW humor (with safety limits)
+        </label>
       </div>
 
       <div className="split">
