@@ -2,6 +2,7 @@ import { assertPublicUrl, isBlockedHost } from "./urlSafety.ts";
 import { clamp } from "./utils.ts";
 
 const DISCOVERY_TIMEOUT_MS = 9_000;
+const DISCOVERY_MAX_REDIRECTS = 5;
 const DISCOVERY_USER_AGENT =
   "clanker-conk/0.1 (+initiative-discovery; https://github.com/Volpestyle/clanker_conk)";
 
@@ -628,23 +629,62 @@ async function readText(url, accept = "application/xml,text/xml,application/rss+
   if (!safeUrl) {
     throw new Error(`blocked or invalid discovery URL: ${url}`);
   }
-  await assertPublicUrl(safeUrl);
-
-  const response = await fetch(safeUrl, {
-    method: "GET",
-    redirect: "follow",
-    headers: {
-      "user-agent": DISCOVERY_USER_AGENT,
-      accept
-    },
-    signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS)
+  const { response, finalUrl } = await fetchDiscoveryResponse({
+    url: safeUrl,
+    accept
   });
 
   if (!response.ok) {
-    throw new Error(`HTTP ${response.status} for ${safeUrl}`);
+    throw new Error(`HTTP ${response.status} for ${finalUrl}`);
   }
 
   return response.text();
+}
+
+async function fetchDiscoveryResponse({ url, accept, maxRedirects = DISCOVERY_MAX_REDIRECTS }) {
+  let currentUrl = String(url || "");
+  for (let redirects = 0; redirects <= maxRedirects; redirects += 1) {
+    await assertPublicUrl(currentUrl);
+    const response = await fetch(currentUrl, {
+      method: "GET",
+      redirect: "manual",
+      headers: {
+        "user-agent": DISCOVERY_USER_AGENT,
+        accept
+      },
+      signal: AbortSignal.timeout(DISCOVERY_TIMEOUT_MS)
+    });
+
+    if (isRedirectStatus(response.status)) {
+      const location = String(response.headers.get("location") || "").trim();
+      if (!location) {
+        throw new Error(`redirect missing location for ${currentUrl}`);
+      }
+      const nextUrl = normalizeDiscoveryUrl(new URL(location, currentUrl).toString());
+      if (!nextUrl) {
+        throw new Error(`blocked or invalid discovery redirect URL: ${location}`);
+      }
+      currentUrl = nextUrl;
+      continue;
+    }
+
+    const finalUrl = normalizeDiscoveryUrl(response.url || currentUrl);
+    if (!finalUrl) {
+      throw new Error(`blocked or invalid discovery URL: ${response.url || currentUrl}`);
+    }
+    await assertPublicUrl(finalUrl);
+    return {
+      response,
+      finalUrl
+    };
+  }
+
+  throw new Error(`too many redirects for discovery URL: ${url}`);
+}
+
+function isRedirectStatus(status) {
+  const code = Number(status);
+  return code === 301 || code === 302 || code === 303 || code === 307 || code === 308;
 }
 
 function parseFeed(xml, { maxItems = 10 } = {}) {

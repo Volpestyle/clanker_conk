@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { normalizeDiscoveryUrl } from "./discovery.ts";
+import { assertPublicUrl } from "./urlSafety.ts";
 import { clamp } from "./utils.ts";
 
 const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
@@ -18,6 +19,7 @@ const VIDEO_HOST_HINTS = new Set([
 ]);
 const REQUEST_TIMEOUT_MS = 5_500;
 const MAX_FETCH_ATTEMPTS = 3;
+const MAX_FETCH_REDIRECTS = 5;
 const RETRY_BASE_DELAY_MS = 180;
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const YT_DLP_TIMEOUT_MS = 50_000;
@@ -1172,61 +1174,100 @@ function readHtmlTitle(html) {
 }
 
 async function fetchTextWithRetry({ url, accept = "*/*", maxAttempts = MAX_FETCH_ATTEMPTS }) {
-  const { response, attempts } = await fetchWithRetry({
-    request: () =>
-      fetch(url, {
-        method: "GET",
-        redirect: "follow",
-        headers: {
-          "user-agent": VIDEO_USER_AGENT,
-          accept
-        },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-      }),
-    shouldRetryResponse: (res) => !res.ok && shouldRetryHttpStatus(res.status),
-    maxAttempts
-  });
-
-  if (!response.ok) {
-    const error = new Error(`Video HTTP ${response.status}`);
-    error.attempts = attempts;
-    throw error;
+  const safeUrl = normalizeDiscoveryUrl(url);
+  if (!safeUrl) {
+    throw new Error(`blocked or invalid video URL: ${url}`);
   }
 
-  let text = "";
-  try {
-    text = await response.text();
-  } catch (error) {
-    throw withAttemptCount(error, attempts);
-  }
-  if (!text) {
-    const error = new Error("Video source returned empty response.");
-    error.attempts = attempts;
-    throw error;
-  }
-
-  return text;
-}
-
-async function fetchWithRetry({ request, shouldRetryResponse, maxAttempts = MAX_FETCH_ATTEMPTS }) {
+  const attemptLimit = Math.max(1, Number(maxAttempts) || MAX_FETCH_ATTEMPTS);
   let attempt = 0;
-  while (attempt < maxAttempts) {
+  while (attempt < attemptLimit) {
     attempt += 1;
     try {
-      const response = await request();
-      if (!shouldRetryResponse(response) || attempt >= maxAttempts) {
-        return { response, attempts: attempt };
+      const { response, finalUrl } = await fetchPublicResponseWithRedirects({
+        url: safeUrl,
+        accept
+      });
+
+      if (!response.ok) {
+        if (shouldRetryHttpStatus(response.status) && attempt < attemptLimit) {
+          await sleep(getRetryDelayMs(attempt));
+          continue;
+        }
+        const error = new Error(`Video HTTP ${response.status} for ${finalUrl}`);
+        error.attempts = attempt;
+        throw error;
       }
-    } catch (error) {
-      if (!isRetryableFetchError(error) || attempt >= maxAttempts) {
+
+      let text = "";
+      try {
+        text = await response.text();
+      } catch (error) {
         throw withAttemptCount(error, attempt);
       }
-    }
+      if (!text) {
+        const error = new Error("Video source returned empty response.");
+        error.attempts = attempt;
+        throw error;
+      }
 
-    await sleep(getRetryDelayMs(attempt));
+      return text;
+    } catch (error) {
+      if (isRetryableFetchError(error) && attempt < attemptLimit) {
+        await sleep(getRetryDelayMs(attempt));
+        continue;
+      }
+      throw withAttemptCount(error, attempt);
+    }
   }
 
-  throw withAttemptCount(new Error("Video fetch failed after retries."), maxAttempts);
+  throw withAttemptCount(new Error("Video fetch failed after retries."), attemptLimit);
+}
+
+async function fetchPublicResponseWithRedirects({ url, accept, maxRedirects = MAX_FETCH_REDIRECTS }) {
+  let currentUrl = String(url || "");
+  for (let redirects = 0; redirects <= maxRedirects; redirects += 1) {
+    await assertPublicUrl(currentUrl);
+    const response = await fetch(currentUrl, {
+      method: "GET",
+      redirect: "manual",
+      headers: {
+        "user-agent": VIDEO_USER_AGENT,
+        accept
+      },
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+    });
+
+    if (isRedirectStatus(response.status)) {
+      const location = String(response.headers.get("location") || "").trim();
+      if (!location) {
+        throw new Error(`video redirect missing location for ${currentUrl}`);
+      }
+      const nextUrl = normalizeDiscoveryUrl(new URL(location, currentUrl).toString());
+      if (!nextUrl) {
+        throw new Error(`blocked or invalid video redirect URL: ${location}`);
+      }
+      currentUrl = nextUrl;
+      continue;
+    }
+
+    const finalUrl = normalizeDiscoveryUrl(response.url || currentUrl);
+    if (!finalUrl) {
+      throw new Error(`blocked or invalid video URL: ${response.url || currentUrl}`);
+    }
+    await assertPublicUrl(finalUrl);
+    return {
+      response,
+      finalUrl
+    };
+  }
+
+  throw new Error(`too many redirects for video URL: ${url}`);
+}
+
+function isRedirectStatus(status) {
+  const code = Number(status);
+  return code === 301 || code === 302 || code === 303 || code === 307 || code === 308;
 }
 
 async function runCommand({ command, args, timeoutMs = 30_000 }) {
