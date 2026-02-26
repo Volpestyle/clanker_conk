@@ -401,8 +401,7 @@ export class Store {
     const totalCostRow = this.db
       .prepare(
         `SELECT COALESCE(SUM(usd_cost), 0) AS total
-         FROM actions
-         WHERE kind IN ('llm_call', 'image_call')`
+         FROM actions`
       )
       .get();
 
@@ -410,7 +409,7 @@ export class Store {
       .prepare(
         `SELECT substr(created_at, 1, 10) AS day, COALESCE(SUM(usd_cost), 0) AS usd
          FROM actions
-         WHERE kind IN ('llm_call', 'image_call') AND created_at >= ?
+         WHERE created_at >= ?
          GROUP BY day
          ORDER BY day DESC
          LIMIT 14`

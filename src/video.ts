@@ -850,9 +850,12 @@ function parseVideoTarget(rawUrl, { source = "message_url", forceDirect = false 
 }
 
 function createDirectTargetFromUrl(rawUrl, source) {
+  const safeUrl = normalizeDiscoveryUrl(rawUrl);
+  if (!safeUrl) return null;
+
   let parsed = null;
   try {
-    parsed = new URL(rawUrl);
+    parsed = new URL(safeUrl);
   } catch {
     return null;
   }
@@ -862,16 +865,19 @@ function createDirectTargetFromUrl(rawUrl, source) {
     kind: "direct",
     provider: "direct",
     videoId: null,
-    url: rawUrl,
+    url: safeUrl,
     source,
     forceDirect: true
   };
 }
 
 function createGenericTargetFromUrl(rawUrl, source) {
+  const safeUrl = normalizeDiscoveryUrl(rawUrl);
+  if (!safeUrl) return null;
+
   let parsed = null;
   try {
-    parsed = new URL(rawUrl);
+    parsed = new URL(safeUrl);
   } catch {
     return null;
   }
@@ -881,7 +887,7 @@ function createGenericTargetFromUrl(rawUrl, source) {
     kind: "generic",
     provider: "generic",
     videoId: null,
-    url: rawUrl,
+    url: safeUrl,
     source,
     forceDirect: false
   };

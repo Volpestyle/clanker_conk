@@ -199,6 +199,7 @@ export class DiscoveryService {
     const items = [];
     let fetched = 0;
     const selectedSubs = config.redditSubreddits.slice(0, 6);
+    const errors = [];
 
     for (const subreddit of selectedSubs) {
       const url = `https://www.reddit.com/r/${encodeURIComponent(subreddit)}/hot.json?limit=${config.sourceFetchLimit}&raw_json=1`;
@@ -207,15 +208,8 @@ export class DiscoveryService {
       try {
         payload = await readJson(url);
       } catch (error) {
-        return {
-          report: {
-            source: "reddit",
-            fetched,
-            accepted: items.length,
-            error: String(error?.message || error)
-          },
-          items
-        };
+        errors.push(`r/${subreddit}: ${String(error?.message || error)}`);
+        continue;
       }
 
       const children = payload?.data?.children;
@@ -253,7 +247,7 @@ export class DiscoveryService {
         source: "reddit",
         fetched,
         accepted: items.length,
-        error: null
+        error: errors.length ? errors.join(" | ") : null
       },
       items
     };
@@ -378,6 +372,7 @@ export class DiscoveryService {
     const normalizedSource = String(source || "rss");
     const items = [];
     let fetched = 0;
+    const errors = [];
 
     for (const input of Array.isArray(inputs) ? inputs : []) {
       const inputValue = String(input || "").trim();
@@ -390,15 +385,8 @@ export class DiscoveryService {
       try {
         xml = await readText(url);
       } catch (error) {
-        return {
-          report: {
-            source: normalizedSource,
-            fetched,
-            accepted: items.length,
-            error: String(error?.message || error)
-          },
-          items
-        };
+        errors.push(`${inputValue}: ${String(error?.message || error)}`);
+        continue;
       }
 
       const parsed = parseFeed(xml, { maxItems: config.sourceFetchLimit });
@@ -426,7 +414,7 @@ export class DiscoveryService {
         source: normalizedSource,
         fetched,
         accepted: items.length,
-        error: null
+        error: errors.length ? errors.join(" | ") : null
       },
       items
     };
@@ -759,7 +747,7 @@ function decodeXmlEntities(value) {
 function sanitizeExternalText(value, maxLen = 180) {
   const text = decodeXmlEntities(String(value || ""))
     .replace(/\s+/g, " ")
-    .replace(/\[[^\]]{2,80}\]\([^)]+\)/g, "$1")
+    .replace(/\[([^\]]{2,80})\]\([^)]+\)/g, "$1")
     .trim();
 
   if (!text) return "";

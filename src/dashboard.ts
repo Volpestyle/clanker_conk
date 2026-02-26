@@ -57,15 +57,23 @@ export function createDashboardServer({ appConfig, store, bot, memory }) {
     res.json(getLlmModelCatalog(settings?.llm?.pricing));
   });
 
-  app.get("/api/memory", async (_req, res) => {
-    const markdown = await memory.readMemoryMarkdown();
-    res.json({ markdown });
+  app.get("/api/memory", async (_req, res, next) => {
+    try {
+      const markdown = await memory.readMemoryMarkdown();
+      res.json({ markdown });
+    } catch (error) {
+      next(error);
+    }
   });
 
-  app.post("/api/memory/refresh", async (_req, res) => {
-    await memory.refreshMemoryMarkdown();
-    const markdown = await memory.readMemoryMarkdown();
-    res.json({ ok: true, markdown });
+  app.post("/api/memory/refresh", async (_req, res, next) => {
+    try {
+      await memory.refreshMemoryMarkdown();
+      const markdown = await memory.readMemoryMarkdown();
+      res.json({ ok: true, markdown });
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.get("/api/memory/search", async (req, res, next) => {
