@@ -1,5 +1,12 @@
 import { useState, useEffect } from "react";
 
+const CUSTOM_MODEL_OPTION_VALUE = "__custom_model__";
+const PROVIDER_MODEL_FALLBACKS = {
+  openai: ["gpt-4.1-mini"],
+  anthropic: ["claude-3-5-haiku-latest"],
+  xai: ["grok-3-mini-latest"]
+};
+
 function parseList(val) {
   return [...new Set(String(val || "").split(/[\n,]/g).map((x) => x.trim()).filter(Boolean))];
 }
@@ -37,7 +44,7 @@ function formatMappingList(map) {
     .join("\n");
 }
 
-export default function SettingsForm({ settings, onSave, toast }) {
+export default function SettingsForm({ settings, modelCatalog, onSave, toast }) {
   const [form, setForm] = useState(null);
 
   useEffect(() => {
@@ -150,8 +157,20 @@ export default function SettingsForm({ settings, onSave, toast }) {
 
   if (!form) return null;
 
+  const providerModelOptions = resolveProviderModelOptions(modelCatalog, form.provider);
+  const normalizedCurrentModel = String(form.model || "").trim();
+  const selectedPresetModel = providerModelOptions.includes(normalizedCurrentModel)
+    ? normalizedCurrentModel
+    : CUSTOM_MODEL_OPTION_VALUE;
+
   function set(key) {
     return (e) => setForm((f) => ({ ...f, [key]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
+  }
+
+  function selectPresetModel(e) {
+    const selected = String(e.target.value || "");
+    if (selected === CUSTOM_MODEL_OPTION_VALUE) return;
+    setForm((current) => ({ ...current, model: selected }));
   }
 
   function submit(e) {
@@ -358,13 +377,24 @@ export default function SettingsForm({ settings, onSave, toast }) {
       <select id="provider" value={form.provider} onChange={set("provider")}>
         <option value="openai">openai</option>
         <option value="anthropic">anthropic</option>
+        <option value="xai">xai (grok)</option>
       </select>
 
-      <label htmlFor="model">Model</label>
+      <label htmlFor="model-preset">Model Preset (priced models)</label>
+      <select id="model-preset" value={selectedPresetModel} onChange={selectPresetModel}>
+        {providerModelOptions.map((modelId) => (
+          <option key={modelId} value={modelId}>
+            {modelId}
+          </option>
+        ))}
+        <option value={CUSTOM_MODEL_OPTION_VALUE}>custom model (manual)</option>
+      </select>
+
+      <label htmlFor="model">Model ID</label>
       <input
         id="model"
         type="text"
-        placeholder="gpt-4.1-mini / claude-3-5-haiku-latest"
+        placeholder="gpt-4.1-mini / claude-3-5-haiku-latest / grok-3-mini-latest"
         value={form.model}
         onChange={set("model")}
       />
@@ -1292,4 +1322,20 @@ export default function SettingsForm({ settings, onSave, toast }) {
       )}
     </form>
   );
+}
+
+function resolveProviderModelOptions(modelCatalog, provider) {
+  const key = normalizeProviderKey(provider);
+  const fromCatalog = Array.isArray(modelCatalog?.[key]) ? modelCatalog[key] : [];
+  const fallback = PROVIDER_MODEL_FALLBACKS[key] || [];
+  return [...new Set([...fromCatalog, ...fallback].map((item) => String(item || "").trim()).filter(Boolean))];
+}
+
+function normalizeProviderKey(provider) {
+  const normalized = String(provider || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "anthropic") return "anthropic";
+  if (normalized === "xai") return "xai";
+  return "openai";
 }

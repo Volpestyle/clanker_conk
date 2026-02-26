@@ -7,7 +7,7 @@ Features:
 - Standalone non-reply posts restricted to configured `initiativeChannelIds` only.
 - Initiative scheduler with `even` or `spontaneous` pacing modes.
 - Creative discovery for initiative posts (Reddit, Hacker News, YouTube RSS, RSS feeds, optional X via Nitter).
-- OpenAI or Anthropic support (runtime-configurable).
+- OpenAI, Anthropic, or Grok (xAI) support (runtime-configurable).
 - Optional live web search for replies (Brave primary, SerpApi fallback), including page inspection from top results.
 - Optional model-directed GIF replies via GIPHY search.
 - Optional Grok Imagine image/video generation for complex visuals and clips.
@@ -26,8 +26,8 @@ npm install
 
 Fill `.env`:
 - `DISCORD_TOKEN`: your bot token.
-- `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY`.
-- `XAI_API_KEY`: required when voice mode is enabled, and also used for Grok Imagine media generation.
+- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and/or `XAI_API_KEY`.
+- `XAI_API_KEY`: required for Grok text models and voice mode, and also used for Grok Imagine media generation.
 - `XAI_BASE_URL`: optional xAI API base URL override (default `https://api.x.ai/v1`).
 - Optional for live web search: `BRAVE_SEARCH_API_KEY` (primary) and/or `SERPAPI_API_KEY` (fallback).
 - Optional for model-directed GIF replies: `GIPHY_API_KEY` (and optional `GIPHY_RATING`, default `pg-13`).

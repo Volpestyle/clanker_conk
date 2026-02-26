@@ -20,6 +20,7 @@ export default function App() {
   const actions = usePolling(() => api("/api/actions?limit=220"), 10_000);
   const memory = usePolling(() => api("/api/memory"), 30_000);
   const settings = usePolling(() => api("/api/settings"), 0);
+  const llmModels = usePolling(() => api("/api/llm/models"), 0);
 
   const handleSettingsSave = useCallback(async (patch) => {
     try {
@@ -51,6 +52,7 @@ export default function App() {
       <section className="grid-main">
         <SettingsForm
           settings={settings.data}
+          modelCatalog={llmModels.data}
           onSave={handleSettingsSave}
           toast={toast}
         />

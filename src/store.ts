@@ -615,7 +615,7 @@ function normalizeSettings(raw) {
     minSecondsBetweenMessages
   };
 
-  merged.llm.provider = merged.llm?.provider === "anthropic" ? "anthropic" : "openai";
+  merged.llm.provider = normalizeLlmProvider(merged.llm?.provider);
   merged.llm.model = String(merged.llm?.model || "gpt-4.1-mini").slice(0, 120);
   merged.llm.temperature = clamp(Number(merged.llm?.temperature) || 0.9, 0, 2);
   merged.llm.maxOutputTokens = clamp(Number(merged.llm?.maxOutputTokens) || 220, 32, 1400);
@@ -1009,6 +1009,15 @@ function normalizeHttpBaseUrl(value, fallback) {
   } catch {
     return String(fallback || "https://nitter.net");
   }
+}
+
+function normalizeLlmProvider(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "anthropic") return "anthropic";
+  if (normalized === "xai") return "xai";
+  return "openai";
 }
 
 function normalizeHardLimitList(input, fallback = []) {

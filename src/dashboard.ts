@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
+import { getLlmModelCatalog } from "./pricing.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -49,6 +50,11 @@ export function createDashboardServer({ appConfig, store, bot, memory }) {
       stats: store.getStats(),
       runtime: bot.getRuntimeState()
     });
+  });
+
+  app.get("/api/llm/models", (_req, res) => {
+    const settings = store.getSettings();
+    res.json(getLlmModelCatalog(settings?.llm?.pricing));
   });
 
   app.get("/api/memory", async (_req, res) => {

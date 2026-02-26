@@ -19,9 +19,10 @@ export const appConfig = {
   serpApiKey: process.env.SERPAPI_API_KEY ?? "",
   giphyApiKey: process.env.GIPHY_API_KEY ?? "",
   giphyRating: process.env.GIPHY_RATING ?? "pg-13",
-  defaultProvider: process.env.DEFAULT_PROVIDER === "anthropic" ? "anthropic" : "openai",
+  defaultProvider: normalizeDefaultProvider(process.env.DEFAULT_PROVIDER),
   defaultOpenAiModel: process.env.DEFAULT_MODEL_OPENAI ?? "gpt-4.1-mini",
   defaultAnthropicModel: process.env.DEFAULT_MODEL_ANTHROPIC ?? "claude-3-5-haiku-latest",
+  defaultXaiModel: process.env.DEFAULT_MODEL_XAI ?? "grok-3-mini-latest",
   defaultMemoryEmbeddingModel: process.env.DEFAULT_MEMORY_EMBEDDING_MODEL ?? "text-embedding-3-small"
 };
 
@@ -29,4 +30,13 @@ export function ensureRuntimeEnv() {
   if (!appConfig.discordToken) {
     throw new Error("Missing DISCORD_TOKEN in environment.");
   }
+}
+
+function normalizeDefaultProvider(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "anthropic") return "anthropic";
+  if (normalized === "xai") return "xai";
+  return "openai";
 }

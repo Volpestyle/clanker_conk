@@ -9,7 +9,7 @@ Code entrypoint:
 
 Core runtime:
 - `src/bot.ts`: Discord event handling, reply/react logic, initiative scheduling, and posting.
-- `src/llm.ts`: model provider abstraction (OpenAI or Anthropic), usage + cost logging, embeddings, image generation.
+- `src/llm.ts`: model provider abstraction (OpenAI, Anthropic, or xAI/Grok), usage + cost logging, embeddings, image generation.
 - `src/memory.ts`: append-only daily journaling + LLM-based fact extraction + hybrid memory retrieval (lexical + vector).
 - `src/discovery.ts`: external link discovery for initiative posts.
 - `src/store.ts`: SQLite persistence and settings normalization.

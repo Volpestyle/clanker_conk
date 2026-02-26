@@ -213,6 +213,15 @@ const MODEL_ALIASES = {
   "grok beta": "grok-beta",
   "grok vision beta": "grok-vision-beta"
 };
+const LLM_PROVIDER_KEYS = ["openai", "anthropic", "xai"];
+const NON_TEXT_MODEL_PATTERNS = [
+  /embedding/i,
+  /image/i,
+  /video/i,
+  /realtime/i,
+  /audio/i,
+  /(^|[-_])search([:_-]|$)/i
+];
 
 export function estimateUsdCost({
   provider,
@@ -261,6 +270,15 @@ export function estimateImageUsdCost({
 
 export function getDefaultPricing() {
   return DEFAULT_PRICING;
+}
+
+export function getLlmModelCatalog(customPricing = {}) {
+  const merged = mergePricing(customPricing);
+  return {
+    openai: listLlmModelsForProvider(merged.openai, "openai"),
+    anthropic: listLlmModelsForProvider(merged.anthropic, "anthropic"),
+    xai: listLlmModelsForProvider(merged.xai, "xai")
+  };
 }
 
 function mergePricing(customPricing) {
@@ -336,4 +354,19 @@ function normalizeImageSize(size) {
     .trim()
     .toLowerCase()
     .replace(/\s+/g, "");
+}
+
+function listLlmModelsForProvider(providerPricing, provider) {
+  if (!providerPricing || typeof providerPricing !== "object") return [];
+  if (!LLM_PROVIDER_KEYS.includes(provider)) return [];
+
+  return Object.keys(providerPricing).filter((model) => isTextLlmModel(model, provider));
+}
+
+function isTextLlmModel(model, provider) {
+  const normalized = String(model || "").trim().toLowerCase();
+  if (!normalized) return false;
+  if (provider === "openai" && normalized === "computer-use-preview") return false;
+  if (NON_TEXT_MODEL_PATTERNS.some((pattern) => pattern.test(normalized))) return false;
+  return true;
 }

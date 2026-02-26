@@ -74,7 +74,17 @@ export class LLMService {
               temperature,
               maxOutputTokens
             })
-          : await this.callOpenAI({
+          : provider === "xai"
+            ? await this.callXai({
+                model,
+                systemPrompt,
+                userPrompt,
+                imageInputs,
+                contextMessages,
+                temperature,
+                maxOutputTokens
+              })
+            : await this.callOpenAI({
               model,
               systemPrompt,
               userPrompt,
@@ -166,11 +176,17 @@ export class LLMService {
               systemPrompt,
               userPrompt
             })
-          : await this.callOpenAiMemoryExtraction({
-              model,
-              systemPrompt,
-              userPrompt
-            });
+          : provider === "xai"
+            ? await this.callXaiMemoryExtraction({
+                model,
+                systemPrompt,
+                userPrompt
+              })
+            : await this.callOpenAiMemoryExtraction({
+                model,
+                systemPrompt,
+                userPrompt
+              });
 
       const costUsd = estimateUsdCost({
         provider,
@@ -218,6 +234,10 @@ export class LLMService {
   }
 
   async callOpenAiMemoryExtraction({ model, systemPrompt, userPrompt }) {
+    if (!this.openai) {
+      throw new Error("Memory fact extraction requires OPENAI_API_KEY when provider is openai.");
+    }
+
     const response = await this.openai.chat.completions.create({
       model,
       temperature: 0,
@@ -230,6 +250,32 @@ export class LLMService {
           schema: MEMORY_EXTRACTION_SCHEMA
         }
       },
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt }
+      ]
+    });
+
+    const text = response.choices?.[0]?.message?.content?.trim() || '{"facts":[]}';
+
+    return {
+      text,
+      usage: {
+        inputTokens: Number(response.usage?.prompt_tokens || 0),
+        outputTokens: Number(response.usage?.completion_tokens || 0)
+      }
+    };
+  }
+
+  async callXaiMemoryExtraction({ model, systemPrompt, userPrompt }) {
+    if (!this.xai) {
+      throw new Error("Memory fact extraction requires XAI_API_KEY when provider is xai.");
+    }
+
+    const response = await this.xai.chat.completions.create({
+      model,
+      temperature: 0,
+      max_tokens: 320,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt }
@@ -729,44 +775,91 @@ export class LLMService {
   }
 
   resolveProviderAndModel(llmSettings) {
-    const desiredProvider = llmSettings.provider === "anthropic" ? "anthropic" : "openai";
+    const desiredProvider = normalizeLlmProvider(llmSettings?.provider, this.appConfig?.defaultProvider);
+    const desiredModel = String(llmSettings?.model || "")
+      .trim()
+      .slice(0, 120);
+    const fallbackProviders = resolveProviderFallbackOrder(desiredProvider);
 
-    if (desiredProvider === "anthropic") {
-      if (!this.anthropic) {
-        if (!this.openai) {
-          throw new Error("No LLM provider available. Add OPENAI_API_KEY or ANTHROPIC_API_KEY.");
-        }
-
-        return {
-          provider: "openai",
-          model: this.appConfig.defaultOpenAiModel
-        };
-      }
-
+    for (const provider of fallbackProviders) {
+      if (!this.isProviderConfigured(provider)) continue;
       return {
-        provider: "anthropic",
-        model: llmSettings.model || this.appConfig.defaultAnthropicModel
+        provider,
+        model: provider === desiredProvider && desiredModel ? desiredModel : this.resolveDefaultModel(provider)
       };
     }
 
-    if (!this.openai) {
-      if (!this.anthropic) {
-        throw new Error("No LLM provider available. Add OPENAI_API_KEY or ANTHROPIC_API_KEY.");
-      }
+    throw new Error("No LLM provider available. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, or XAI_API_KEY.");
+  }
 
-      return {
-        provider: "anthropic",
-        model: this.appConfig.defaultAnthropicModel
-      };
+  isProviderConfigured(provider) {
+    if (provider === "anthropic") return Boolean(this.anthropic);
+    if (provider === "xai") return Boolean(this.xai);
+    return Boolean(this.openai);
+  }
+
+  resolveDefaultModel(provider) {
+    if (provider === "anthropic") {
+      return normalizeDefaultModel(this.appConfig?.defaultAnthropicModel, "claude-3-5-haiku-latest");
     }
-
-    return {
-      provider: "openai",
-      model: llmSettings.model || this.appConfig.defaultOpenAiModel
-    };
+    if (provider === "xai") {
+      return normalizeDefaultModel(this.appConfig?.defaultXaiModel, "grok-3-mini-latest");
+    }
+    return normalizeDefaultModel(this.appConfig?.defaultOpenAiModel, "gpt-4.1-mini");
   }
 
   async callOpenAI({
+    model,
+    systemPrompt,
+    userPrompt,
+    imageInputs,
+    contextMessages,
+    temperature,
+    maxOutputTokens
+  }) {
+    if (!this.openai) {
+      throw new Error("OpenAI LLM calls require OPENAI_API_KEY.");
+    }
+
+    return this.callOpenAiCompatible({
+      client: this.openai,
+      model,
+      systemPrompt,
+      userPrompt,
+      imageInputs,
+      contextMessages,
+      temperature,
+      maxOutputTokens
+    });
+  }
+
+  async callXai({
+    model,
+    systemPrompt,
+    userPrompt,
+    imageInputs,
+    contextMessages,
+    temperature,
+    maxOutputTokens
+  }) {
+    if (!this.xai) {
+      throw new Error("xAI LLM calls require XAI_API_KEY.");
+    }
+
+    return this.callOpenAiCompatible({
+      client: this.xai,
+      model,
+      systemPrompt,
+      userPrompt,
+      imageInputs,
+      contextMessages,
+      temperature,
+      maxOutputTokens
+    });
+  }
+
+  async callOpenAiCompatible({
+    client,
     model,
     systemPrompt,
     userPrompt,
@@ -807,7 +900,7 @@ export class LLMService {
       { role: "user", content: userContent }
     ];
 
-    const response = await this.openai.chat.completions.create({
+    const response = await client.chat.completions.create({
       model,
       temperature,
       max_tokens: maxOutputTokens,
@@ -999,6 +1092,33 @@ function prioritizePreferredModel(allowedModels, preferredModel) {
   const preferred = String(preferredModel || "").trim();
   if (!preferred || !allowedModels.includes(preferred)) return allowedModels;
   return [preferred, ...allowedModels.filter((entry) => entry !== preferred)];
+}
+
+function normalizeLlmProvider(value, fallback = "openai") {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "anthropic") return "anthropic";
+  if (normalized === "xai") return "xai";
+
+  const fallbackProvider = String(fallback || "")
+    .trim()
+    .toLowerCase();
+  if (fallbackProvider === "anthropic") return "anthropic";
+  if (fallbackProvider === "xai") return "xai";
+  return "openai";
+}
+
+function resolveProviderFallbackOrder(provider) {
+  if (provider === "anthropic") return ["anthropic", "openai", "xai"];
+  if (provider === "xai") return ["xai", "openai", "anthropic"];
+  return ["openai", "anthropic", "xai"];
+}
+
+function normalizeDefaultModel(value, fallback) {
+  const normalized = String(value || "").trim();
+  if (normalized) return normalized.slice(0, 120);
+  return String(fallback || "").trim().slice(0, 120);
 }
 
 function inferProviderFromModel(model) {
