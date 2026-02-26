@@ -8,8 +8,10 @@ Enable `clanker conk` to join Discord voice channels on explicit natural-languag
 - Voice runtime is dashboard-selectable via `voice.mode`:
   - `voice_agent`: xAI realtime websocket (`wss://api.x.ai/v1/realtime`)
   - `openai_realtime`: OpenAI Realtime websocket (`wss://api.openai.com/v1/realtime?model=...`)
+  - `gemini_realtime`: Gemini Live API websocket
   - `stt_pipeline`: STT -> shared chat LLM brain -> TTS
 - Text NL voice controls (`join`, `leave`, `status`) are decided by an LLM classifier with confidence gating.
+- Text NL stream-watch controls (`watch_stream`, `stop_watching_stream`, `stream_status`) route through the same structured intent path.
 - `voiceSessionManager` is the single execution and safety authority for session lifecycle and join/leave/status behavior.
 - Default runtime mode: `voice_agent`.
 - Default xAI voice: `Rex`.
@@ -20,7 +22,7 @@ Enable `clanker conk` to join Discord voice channels on explicit natural-languag
 - Runs on guild text messages after normal channel/user permission filtering.
 - Uses a lightweight prefilter for voice/action/mention hints to avoid unnecessary LLM calls.
 - Classifies the message with strict JSON output:
-  - `intent`: `join | leave | status | none`
+  - `intent`: `join | leave | status | watch_stream | stop_watching_stream | stream_status | none`
   - `confidence`: `0..1`
 - Applies `voice.intentConfidenceThreshold` (clamped `0.4..0.99`) before taking action.
 - If parse/classification fails, intent handling fails closed (`none`).
@@ -38,6 +40,7 @@ Enable `clanker conk` to join Discord voice channels on explicit natural-languag
 - Runtime readiness:
   - `voice_agent` requires `XAI_API_KEY`
   - `openai_realtime` requires `OPENAI_API_KEY`
+  - `gemini_realtime` requires `GOOGLE_API_KEY`
   - `stt_pipeline` requires ASR + TTS readiness and voice-turn callback
 - Voice-channel permissions must include `CONNECT` and `SPEAK`.
 
@@ -54,7 +57,12 @@ Enable `clanker conk` to join Discord voice channels on explicit natural-languag
 - Runtime-specific response path:
   - `voice_agent`: stream PCM to xAI realtime, play returned audio.
   - `openai_realtime`: stream PCM to OpenAI Realtime, play returned audio.
+  - `gemini_realtime`: stream PCM to Gemini Live API, play returned audio.
   - `stt_pipeline`: transcribe turn, generate reply via shared chat LLM path (with memory), synthesize TTS, play audio.
+- Stream watch:
+  - `watch_stream` enables a per-session stream-watch state.
+  - External relay can post frames to `/api/voice/stream-ingest/frame`.
+  - In `gemini_realtime` mode, frames can trigger in-persona voice commentary under cooldown/quiet-channel guardrails.
 - Multi-party gating:
   - In one-human sessions, turns are accepted directly.
   - In multi-human sessions, bot requires explicit addressing (`botName` or bot keyword) and uses focused-speaker follow-up TTL behavior.
@@ -93,6 +101,8 @@ Enable `clanker conk` to join Discord voice channels on explicit natural-languag
   - xAI realtime websocket session and audio event handling.
 - `src/voice/openaiRealtimeClient.ts`
   - OpenAI Realtime websocket session and audio event handling.
+- `src/voice/geminiRealtimeClient.ts`
+  - Gemini Live websocket session for audio + video frame ingest.
 - `src/voice/soundboardDirector.ts`
   - Manual/mapped soundboard playback execution and permission checks.
 - `src/prompts.ts` + `src/bot.ts`
@@ -106,7 +116,7 @@ Enable `clanker conk` to join Discord voice channels on explicit natural-languag
 ```js
 voice: {
   enabled: false,
-  mode: "voice_agent", // "voice_agent" | "openai_realtime" | "stt_pipeline"
+  mode: "voice_agent", // "voice_agent" | "openai_realtime" | "gemini_realtime" | "stt_pipeline"
   joinOnTextNL: true,
   intentConfidenceThreshold: 0.75,
   maxSessionMinutes: 10,
@@ -132,11 +142,25 @@ voice: {
     inputTranscriptionModel: "gpt-4o-mini-transcribe",
     allowNsfwHumor: true
   },
+  geminiRealtime: {
+    model: "gemini-2.5-flash-native-audio-preview-12-2025",
+    voice: "Aoede",
+    apiBaseUrl: "https://generativelanguage.googleapis.com",
+    inputSampleRateHz: 16000,
+    outputSampleRateHz: 24000,
+    allowNsfwHumor: true
+  },
   sttPipeline: {
     transcriptionModel: "gpt-4o-mini-transcribe",
     ttsModel: "gpt-4o-mini-tts",
     ttsVoice: "alloy",
     ttsSpeed: 1
+  },
+  streamWatch: {
+    enabled: true,
+    minCommentaryIntervalSeconds: 8,
+    maxFramesPerMinute: 180,
+    maxFrameBytes: 350000
   },
   soundboard: {
     enabled: true,
@@ -198,9 +222,11 @@ Ambiguous requests can resolve to `none` and be ignored.
 4. Bot does not start when disabled, blocked, requester not in VC, permissions are missing, or runtime prerequisites are unavailable.
 5. For `voice.mode=voice_agent`, session config sends configured xAI voice and audio settings.
 6. For `voice.mode=openai_realtime`, session config sends configured model/voice/audio format/transcription settings.
-7. For `voice.mode=stt_pipeline`, replies use the shared chat LLM path and memory slice flow.
-8. Multi-party addressing guardrails prevent unwanted replies in group voice unless addressed/focused.
-9. Operational join/leave/status and failure updates are posted in text channels.
+7. For `voice.mode=gemini_realtime`, session config sends configured model/voice/sample-rate settings.
+8. For `voice.mode=stt_pipeline`, replies use the shared chat LLM path and memory slice flow.
+9. Multi-party addressing guardrails prevent unwanted replies in group voice unless addressed/focused.
+10. Operational join/leave/status and failure updates are posted in text channels.
+11. `watch_stream`/`stop_watching_stream`/`stream_status` intents are handled with confidence gating.
 
 ## Open Questions
 1. Should soundboard autonomy add stronger anti-spam controls beyond transcript-level dedupe?
