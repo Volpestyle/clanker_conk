@@ -6,6 +6,7 @@ Features:
 - Random human-like interactions in allowed channels.
 - Standalone non-reply posts restricted to configured `initiativeChannelIds` only.
 - Initiative scheduler with `even` or `spontaneous` pacing modes.
+- Natural-language scheduled automations (create/list/pause/resume/delete) with persistent runs.
 - Creative discovery for initiative posts (Reddit, Hacker News, YouTube RSS, RSS feeds, optional X via Nitter).
 - OpenAI, Anthropic, or Grok (xAI) support (runtime-configurable).
 - Optional live web search for replies (Brave primary, SerpApi fallback), including page inspection from top results.
@@ -16,6 +17,7 @@ Features:
 - Voice runtime mode selector: `voice_agent` (xAI realtime), `openai_realtime` (OpenAI Realtime), `gemini_realtime` (Gemini Live API), or `stt_pipeline` (STT -> shared chat LLM brain -> TTS).
 - Stream-watch voice controls (`watch_stream`, `stop_watching_stream`, `stream_status`) with external frame ingest path.
 - Dashboard UI for settings, permissions, logs, memory, and cost tracking.
+- Dashboard automation visibility endpoints: `/api/automations` and `/api/automations/runs`.
 - Two-layer memory with append-only daily logs and curated `memory/MEMORY.md` distillation.
 
 ## 1. Setup

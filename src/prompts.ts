@@ -199,6 +199,8 @@ export function buildReplyPrompt({
   allowWebSearchDirective = false,
   allowMemoryLookupDirective = false,
   allowMemoryDirective = false,
+  allowAutomationDirective = false,
+  automationTimeZoneLabel = "",
   voiceMode = null,
   videoContext = null,
   maxMediaPromptChars = 900
@@ -323,6 +325,23 @@ export function buildReplyPrompt({
     parts.push("Voice mode is disabled right now.");
     parts.push("If asked to join VC, say voice mode is currently disabled.");
     parts.push("Set voiceIntent.intent to none.");
+  }
+
+  if (allowAutomationDirective) {
+    const tzLabel = String(automationTimeZoneLabel || "").trim() || "local server time";
+    parts.push(`Automations are available for this guild. Scheduler timezone: ${tzLabel}.`);
+    parts.push("If the user asks to schedule/start recurring tasks, set automationAction.operation=create.");
+    parts.push("For create, set automationAction.schedule with one of:");
+    parts.push("- daily: {\"kind\":\"daily\",\"hour\":0-23,\"minute\":0-59}");
+    parts.push("- interval: {\"kind\":\"interval\",\"everyMinutes\":integer}");
+    parts.push("- once: {\"kind\":\"once\",\"atIso\":\"ISO-8601 timestamp\"}");
+    parts.push("For create, set automationAction.instruction to the exact task instruction (what to do each run).");
+    parts.push("Use automationAction.runImmediately=true only when user asks for immediate first run.");
+    parts.push("If user asks to stop/pause a recurring task, set automationAction.operation=pause with targetQuery.");
+    parts.push("If user asks to resume/re-enable, set automationAction.operation=resume with targetQuery.");
+    parts.push("If user asks to remove/delete permanently, set automationAction.operation=delete with targetQuery.");
+    parts.push("If user asks to see what is scheduled, set automationAction.operation=list.");
+    parts.push("When no automation control is requested, set automationAction.operation=none.");
   }
 
   if (allowWebSearchDirective) {
@@ -482,15 +501,120 @@ export function buildReplyPrompt({
   parts.push("Return strict JSON only. Do not output markdown or code fences.");
   parts.push("JSON format:");
   parts.push(
-    "{\"text\":\"reply or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"memoryLine\":null,\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null}}"
+    "{\"text\":\"reply or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"memoryLine\":null,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null}}"
   );
   parts.push("Set skip=true only when no response should be sent. If skip=true, set text to [SKIP].");
   parts.push("When no reaction is needed, set reactionEmoji to null.");
   parts.push("When no media should be generated, set media to null.");
   parts.push("When no lookup is needed, set webSearchQuery and memoryLookupQuery to null.");
   parts.push("When no durable fact should be saved, set memoryLine to null.");
+  parts.push("When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.");
   parts.push("Set voiceIntent.intent to one of join|leave|status|watch_stream|stop_watching_stream|stream_status|none.");
   parts.push("When not issuing voice control, set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null.");
+
+  return parts.join("\n\n");
+}
+
+export function buildAutomationPrompt({
+  instruction,
+  channelName = "channel",
+  recentMessages = [],
+  relevantMessages = [],
+  userFacts = [],
+  relevantFacts = [],
+  memoryLookup = null,
+  allowMemoryLookupDirective = false,
+  allowSimpleImagePosts = false,
+  allowComplexImagePosts = false,
+  allowVideoPosts = false,
+  allowGifs = false,
+  remainingImages = 0,
+  remainingVideos = 0,
+  remainingGifs = 0,
+  maxMediaPromptChars = 900
+}) {
+  const parts = [];
+  const taskInstruction = String(instruction || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 360);
+
+  parts.push("You are executing a scheduled automation task.");
+  parts.push(`Target channel: #${String(channelName || "channel").trim() || "channel"}.`);
+  parts.push(`Task instruction: ${taskInstruction || "(missing instruction)"}`);
+  parts.push("Keep the output in normal persona voice. No robotic framing.");
+  parts.push("Recent channel context:");
+  parts.push(formatRecentChat(recentMessages));
+  if (relevantMessages?.length) {
+    parts.push("Relevant past messages:");
+    parts.push(formatRecentChat(relevantMessages));
+  }
+  if (userFacts?.length) {
+    parts.push("Known facts about the automation owner:");
+    parts.push(formatMemoryFacts(userFacts, { includeType: false, includeProvenance: true, maxItems: 8 }));
+  }
+  if (relevantFacts?.length) {
+    parts.push("Relevant durable memory:");
+    parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: true, maxItems: 10 }));
+  }
+  if (memoryLookup?.requested) {
+    if (memoryLookup.error) {
+      parts.push(`Memory lookup failed: ${memoryLookup.error}`);
+      parts.push("Continue using currently available context.");
+    } else if (!memoryLookup.results?.length) {
+      parts.push(`Memory lookup for "${memoryLookup.query || taskInstruction}" found no durable matches.`);
+    } else {
+      parts.push(`Memory lookup results for "${memoryLookup.query || taskInstruction}":`);
+      parts.push(formatMemoryLookupResults(memoryLookup.results));
+      parts.push("If useful, reference these facts naturally in output/media.");
+    }
+  }
+  parts.push("When the task references a person (like 'me'), use durable memory facts if they are relevant.");
+
+  const imageSlots = Math.max(0, Math.floor(Number(remainingImages) || 0));
+  const videoSlots = Math.max(0, Math.floor(Number(remainingVideos) || 0));
+  const gifSlots = Math.max(0, Math.floor(Number(remainingGifs) || 0));
+
+  if ((allowSimpleImagePosts || allowComplexImagePosts || allowVideoPosts) && (imageSlots > 0 || videoSlots > 0)) {
+    parts.push("Media generation is available for this automation run.");
+    if (allowSimpleImagePosts && imageSlots > 0) {
+      parts.push("For simple image output, set media to {\"type\":\"image_simple\",\"prompt\":\"...\"}.");
+    }
+    if (allowComplexImagePosts && imageSlots > 0) {
+      parts.push("For detailed image output, set media to {\"type\":\"image_complex\",\"prompt\":\"...\"}.");
+    }
+    if (allowVideoPosts && videoSlots > 0) {
+      parts.push("For short generated video, set media to {\"type\":\"video\",\"prompt\":\"...\"}.");
+    }
+    parts.push(`Keep image/video prompts under ${maxMediaPromptChars} chars.`);
+    parts.push(MEDIA_PROMPT_CRAFT_GUIDANCE);
+  } else {
+    parts.push("Generated image/video is unavailable this run. Set media to null.");
+  }
+
+  if (allowGifs && gifSlots > 0) {
+    parts.push("GIF lookup is available this run. Use media {\"type\":\"gif\",\"prompt\":\"short query\"} when it helps.");
+  }
+
+  parts.push("Return strict JSON only.");
+  parts.push("JSON format:");
+  parts.push(
+    "{\"text\":\"message or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"memoryLine\":null,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null}}"
+  );
+  parts.push("Set webSearchQuery and memoryLine to null.");
+  if (allowMemoryLookupDirective) {
+    if (!memoryLookup?.enabled) {
+      parts.push("Durable memory lookup is unavailable for this run. Set memoryLookupQuery to null.");
+    } else {
+      parts.push("Durable memory lookup is available.");
+      parts.push("If memory context is insufficient for the task, set memoryLookupQuery to a concise query.");
+      parts.push("If not needed, set memoryLookupQuery to null.");
+    }
+  } else {
+    parts.push("Set memoryLookupQuery to null.");
+  }
+  parts.push("Set automationAction.operation=none and voiceIntent.intent=none.");
+  parts.push("Use [SKIP] only when sending nothing is clearly best.");
 
   return parts.join("\n\n");
 }
@@ -546,6 +670,7 @@ export function buildVoiceTurnPrompt({
 export function buildInitiativePrompt({
   channelName,
   recentMessages,
+  relevantFacts = [],
   emojiHints,
   allowSimpleImagePosts,
   allowComplexImagePosts,
@@ -564,6 +689,10 @@ export function buildInitiativePrompt({
   );
   parts.push("Recent channel messages:");
   parts.push(formatRecentChat(recentMessages));
+  if (relevantFacts?.length) {
+    parts.push("Relevant durable memory:");
+    parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: false, maxItems: 8 }));
+  }
 
   if (emojiHints?.length) {
     parts.push(`Server emoji options: ${emojiHints.join(", ")}`);

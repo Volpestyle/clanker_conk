@@ -1,4 +1,5 @@
 import { clamp } from "./utils.ts";
+import { normalizeAutomationSchedule } from "./automation.ts";
 
 const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
 const IMAGE_PROMPT_DIRECTIVE_RE = /\[\[IMAGE_PROMPT:\s*([\s\S]*?)\s*\]\]\s*$/i;
@@ -15,8 +16,11 @@ export const MAX_MEDIA_PROMPT_CEILING = 2000;
 export const MAX_WEB_QUERY_LEN = 220;
 export const MAX_GIF_QUERY_LEN = 120;
 const MAX_MEMORY_LINE_LEN = 180;
-const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
+export const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
 const MAX_REPLY_TEXT_LEN = 1200;
+const MAX_AUTOMATION_TITLE_LEN = 90;
+const MAX_AUTOMATION_INSTRUCTION_LEN = 360;
+const MAX_AUTOMATION_TARGET_QUERY_LEN = 180;
 
 export function resolveMaxMediaPromptLen(settings) {
   const raw = Number(settings?.initiative?.maxMediaPromptChars);
@@ -33,6 +37,7 @@ const REPLY_VOICE_INTENT_TYPES = new Set([
   "stream_status",
   "none"
 ]);
+const REPLY_AUTOMATION_OPERATION_TYPES = new Set(["create", "pause", "resume", "delete", "list", "none"]);
 const MAX_VOICE_INTENT_REASON_LEN = 180;
 export const MAX_VIDEO_TARGET_SCAN = 8;
 export const MAX_VIDEO_FALLBACK_MESSAGES = 18;
@@ -246,7 +251,12 @@ export function extractRecentVideoTargets({
   return targets;
 }
 
-export function composeInitiativeImagePrompt(imagePrompt, postText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
+export function composeInitiativeImagePrompt(
+  imagePrompt,
+  postText,
+  maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN,
+  memoryFacts = []
+) {
   URL_IN_TEXT_RE.lastIndex = 0;
   const topic = String(postText || "")
     .replace(URL_IN_TEXT_RE, "")
@@ -254,11 +264,13 @@ export function composeInitiativeImagePrompt(imagePrompt, postText, maxLen = DEF
     .trim()
     .slice(0, 260);
   const requested = normalizeDirectiveText(imagePrompt, maxLen);
+  const memoryHints = formatMediaMemoryHints(memoryFacts, 5);
 
   return [
     "Create a vivid, shareable image for a Discord post.",
     `Scene: ${requested || "a timely playful internet moment"}.`,
     `Mood/topic context (do not render as text): ${topic || "general chat mood"}.`,
+    memoryHints || null,
     "Style guidance:",
     "- Describe a concrete scene with a clear subject, action, and environment.",
     "- Use cinematic or editorial framing: strong focal point, depth of field, deliberate camera angle.",
@@ -269,10 +281,17 @@ export function composeInitiativeImagePrompt(imagePrompt, postText, maxLen = DEF
     "- Absolutely no visible text, letters, numbers, logos, subtitles, captions, UI elements, or watermarks anywhere in the image.",
     "- Do not render any words from the scene description or topic context as text inside the image.",
     "- Keep the composition clean with a single strong focal point."
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
-export function composeInitiativeVideoPrompt(videoPrompt, postText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
+export function composeInitiativeVideoPrompt(
+  videoPrompt,
+  postText,
+  maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN,
+  memoryFacts = []
+) {
   URL_IN_TEXT_RE.lastIndex = 0;
   const topic = String(postText || "")
     .replace(URL_IN_TEXT_RE, "")
@@ -280,11 +299,13 @@ export function composeInitiativeVideoPrompt(videoPrompt, postText, maxLen = DEF
     .trim()
     .slice(0, 260);
   const requested = normalizeDirectiveText(videoPrompt, maxLen);
+  const memoryHints = formatMediaMemoryHints(memoryFacts, 5);
 
   return [
     "Create a short, dynamic, shareable video clip for a Discord post.",
     `Scene: ${requested || "a timely playful internet moment"}.`,
     `Mood/topic context (do not render as text): ${topic || "general chat mood"}.`,
+    memoryHints || null,
     "Style guidance:",
     "- Describe a concrete motion arc: what the viewer sees at the start, what changes, and how it resolves.",
     "- Specify camera behavior (slow pan, tracking shot, static wide, zoom-in, dolly, handheld shake).",
@@ -293,10 +314,46 @@ export function composeInitiativeVideoPrompt(videoPrompt, postText, maxLen = DEF
     "Hard constraints:",
     "- No visible text, captions, subtitles, logos, watermarks, or UI overlays.",
     "- Smooth, continuous motion without abrupt jumps or flicker."
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
-export function composeReplyImagePrompt(imagePrompt, replyText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
+function formatMediaMemoryHints(memoryFacts = [], maxItems = 5) {
+  const out = collectMemoryFactHints(memoryFacts, maxItems);
+  if (!out.length) return "";
+  return `Relevant memory facts (use only when they match the scene): ${out.join(" | ")}`;
+}
+
+export function collectMemoryFactHints(memoryFacts = [], maxItems = 5) {
+  const rows = Array.isArray(memoryFacts) ? memoryFacts : [];
+  const out = [];
+  const seen = new Set();
+  const cap = Math.max(1, Math.floor(Number(maxItems) || 5));
+
+  for (const row of rows) {
+    const value = typeof row === "string" ? row : row?.fact;
+    const normalized = String(value || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 140);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(normalized);
+    if (out.length >= cap) break;
+  }
+
+  return out;
+}
+
+export function composeReplyImagePrompt(
+  imagePrompt,
+  replyText,
+  maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN,
+  memoryFacts = []
+) {
   URL_IN_TEXT_RE.lastIndex = 0;
   const context = String(replyText || "")
     .replace(URL_IN_TEXT_RE, "")
@@ -304,11 +361,13 @@ export function composeReplyImagePrompt(imagePrompt, replyText, maxLen = DEFAULT
     .trim()
     .slice(0, 260);
   const requested = normalizeDirectiveText(imagePrompt, maxLen);
+  const memoryHints = formatMediaMemoryHints(memoryFacts, 5);
 
   return [
     "Create a vivid image to accompany a Discord chat reply.",
     `Scene: ${requested || "a playful visual reaction"}.`,
     `Conversational context (do not render as text): ${context || "casual chat"}.`,
+    memoryHints || null,
     "Style guidance:",
     "- Describe a concrete scene with a clear subject, action, and setting.",
     "- Use expressive framing and lighting to sell the mood.",
@@ -316,10 +375,17 @@ export function composeReplyImagePrompt(imagePrompt, replyText, maxLen = DEFAULT
     "Hard constraints:",
     "- No visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks.",
     "- Keep the composition clean with one clear focal point."
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
-export function composeReplyVideoPrompt(videoPrompt, replyText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
+export function composeReplyVideoPrompt(
+  videoPrompt,
+  replyText,
+  maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN,
+  memoryFacts = []
+) {
   URL_IN_TEXT_RE.lastIndex = 0;
   const context = String(replyText || "")
     .replace(URL_IN_TEXT_RE, "")
@@ -327,11 +393,13 @@ export function composeReplyVideoPrompt(videoPrompt, replyText, maxLen = DEFAULT
     .trim()
     .slice(0, 260);
   const requested = normalizeDirectiveText(videoPrompt, maxLen);
+  const memoryHints = formatMediaMemoryHints(memoryFacts, 5);
 
   return [
     "Create a short, dynamic video clip to accompany a Discord chat reply.",
     `Scene: ${requested || "a playful visual reaction with motion"}.`,
     `Conversational context (do not render as text): ${context || "casual chat"}.`,
+    memoryHints || null,
     "Style guidance:",
     "- Describe a concrete motion arc: what starts, what changes, how it ends.",
     "- Specify camera behavior (pan, tracking, zoom, static, handheld).",
@@ -340,7 +408,9 @@ export function composeReplyVideoPrompt(videoPrompt, replyText, maxLen = DEFAULT
     "Hard constraints:",
     "- No visible text, captions, subtitles, logos, watermarks, or UI overlays.",
     "- Smooth, continuous motion."
-  ].join("\n");
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 export function parseInitiativeMediaDirective(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
@@ -512,6 +582,16 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
       webSearchQuery: null,
       memoryLookupQuery: null,
       memoryLine: null,
+      automationAction: {
+        operation: null,
+        title: null,
+        instruction: null,
+        schedule: null,
+        targetQuery: null,
+        automationId: null,
+        runImmediately: false,
+        targetChannelId: null
+      },
       voiceIntent: {
         intent: null,
         confidence: 0,
@@ -528,6 +608,7 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
   const memoryLookupQuery =
     normalizeDirectiveText(parsed?.memoryLookupQuery, MAX_MEMORY_LOOKUP_QUERY_LEN) || null;
   const memoryLine = normalizeDirectiveText(parsed?.memoryLine, MAX_MEMORY_LINE_LEN) || null;
+  const automationAction = normalizeStructuredAutomationAction(parsed?.automationAction);
   const mediaDirective = normalizeStructuredMediaDirective(parsed?.media, maxLen);
   const voiceIntent = normalizeStructuredVoiceIntent(parsed?.voiceIntent);
 
@@ -542,6 +623,7 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     webSearchQuery,
     memoryLookupQuery,
     memoryLine,
+    automationAction,
     voiceIntent
   };
 }
@@ -590,6 +672,79 @@ function normalizeStructuredVoiceIntent(rawIntent) {
     confidence,
     reason
   };
+}
+
+function normalizeStructuredAutomationAction(rawAction) {
+  const empty = {
+    operation: null,
+    title: null,
+    instruction: null,
+    schedule: null,
+    targetQuery: null,
+    automationId: null,
+    runImmediately: false,
+    targetChannelId: null
+  };
+  if (!rawAction || typeof rawAction !== "object") return empty;
+
+  const operation = normalizeAutomationOperation(rawAction.operation ?? rawAction.op);
+  if (!operation || operation === "none") return empty;
+
+  const automationIdRaw = Number(rawAction.automationId ?? rawAction.id);
+  const automationId = Number.isInteger(automationIdRaw) && automationIdRaw > 0 ? automationIdRaw : null;
+  const targetQuery = normalizeDirectiveText(
+    rawAction.targetQuery ?? rawAction.query ?? rawAction.target,
+    MAX_AUTOMATION_TARGET_QUERY_LEN
+  );
+  const targetChannelId = normalizeDirectiveText(rawAction.targetChannelId ?? rawAction.channelId, 40);
+  const runImmediately = rawAction.runImmediately === true;
+
+  if (operation === "create") {
+    const title = normalizeDirectiveText(rawAction.title, MAX_AUTOMATION_TITLE_LEN) || null;
+    const instruction =
+      normalizeDirectiveText(rawAction.instruction ?? rawAction.task ?? rawAction.prompt, MAX_AUTOMATION_INSTRUCTION_LEN) ||
+      null;
+    const schedule = normalizeAutomationSchedule(rawAction.schedule, {
+      nowMs: Date.now(),
+      allowPastOnce: false
+    });
+
+    if (!instruction || !schedule) return empty;
+
+    return {
+      operation,
+      title,
+      instruction,
+      schedule,
+      targetQuery: targetQuery || null,
+      automationId: null,
+      runImmediately,
+      targetChannelId: targetChannelId || null
+    };
+  }
+
+  return {
+    operation,
+    title: null,
+    instruction: null,
+    schedule: null,
+    targetQuery: targetQuery || null,
+    automationId,
+    runImmediately: false,
+    targetChannelId: targetChannelId || null
+  };
+}
+
+function normalizeAutomationOperation(rawValue) {
+  const normalized = String(rawValue || "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return "none";
+  if (normalized === "stop" || normalized === "disable") return "pause";
+  if (normalized === "start" || normalized === "enable" || normalized === "unpause") return "resume";
+  if (normalized === "remove" || normalized === "cancel") return "delete";
+  if (!REPLY_AUTOMATION_OPERATION_TYPES.has(normalized)) return "none";
+  return normalized;
 }
 
 function parseJsonObjectFromText(rawText) {

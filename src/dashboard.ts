@@ -165,6 +165,60 @@ export function createDashboardServer({ appConfig, store, bot, memory }) {
     }
   });
 
+  app.get("/api/automations", (req, res) => {
+    const guildId = String(req.query.guildId || "").trim();
+    const channelId = String(req.query.channelId || "").trim() || null;
+    const statusParam = String(req.query.status || "active,paused").trim();
+    const query = String(req.query.q || "").trim();
+    const limit = parseBoundedInt(req.query.limit, 30, 1, 120);
+
+    if (!guildId) {
+      return res.status(400).json({ error: "guildId is required" });
+    }
+
+    const statuses = statusParam
+      .split(",")
+      .map((item) => item.trim().toLowerCase())
+      .filter(Boolean);
+    const rows = store.listAutomations({
+      guildId,
+      channelId,
+      statuses,
+      query,
+      limit
+    });
+    return res.json({
+      guildId,
+      channelId,
+      statuses,
+      query,
+      limit,
+      rows
+    });
+  });
+
+  app.get("/api/automations/runs", (req, res) => {
+    const guildId = String(req.query.guildId || "").trim();
+    const automationId = Number(req.query.automationId);
+    const limit = parseBoundedInt(req.query.limit, 30, 1, 120);
+
+    if (!guildId || !Number.isInteger(automationId) || automationId <= 0) {
+      return res.status(400).json({ error: "guildId and automationId are required" });
+    }
+
+    const rows = store.getAutomationRuns({
+      guildId,
+      automationId,
+      limit
+    });
+    return res.json({
+      guildId,
+      automationId,
+      limit,
+      rows
+    });
+  });
+
   const staticDir = path.resolve(__dirname, "../dashboard/dist");
   const indexPath = path.join(staticDir, "index.html");
 
