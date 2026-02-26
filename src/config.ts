@@ -22,7 +22,7 @@ export const appConfig = {
   giphyRating: process.env.GIPHY_RATING ?? "pg-13",
   defaultProvider: normalizeDefaultProvider(process.env.DEFAULT_PROVIDER),
   defaultOpenAiModel: process.env.DEFAULT_MODEL_OPENAI ?? "gpt-4.1-mini",
-  defaultAnthropicModel: process.env.DEFAULT_MODEL_ANTHROPIC ?? "claude-3-5-haiku-latest",
+  defaultAnthropicModel: process.env.DEFAULT_MODEL_ANTHROPIC ?? "claude-haiku-4-5",
   defaultXaiModel: process.env.DEFAULT_MODEL_XAI ?? "grok-3-mini-latest",
   defaultClaudeCodeModel: process.env.DEFAULT_MODEL_CLAUDE_CODE ?? "sonnet",
   defaultMemoryEmbeddingModel: process.env.DEFAULT_MEMORY_EMBEDDING_MODEL ?? "text-embedding-3-small"

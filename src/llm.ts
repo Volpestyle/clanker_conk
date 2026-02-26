@@ -1,12 +1,12 @@
 import { createReadStream } from "node:fs";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { spawn, spawnSync } from "node:child_process";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { estimateImageUsdCost, estimateUsdCost } from "./pricing.ts";
 
-const execFileAsync = promisify(execFile);
 const CLAUDE_CODE_TIMEOUT_MS = 30_000;
+const CLAUDE_CODE_MAX_BUFFER_BYTES = 1024 * 1024;
+const CLAUDE_CODE_MODELS = new Set(["sonnet", "opus", "haiku"]);
 
 const MEMORY_FACT_TYPES = ["preference", "profile", "relationship", "project", "other"];
 const DEFAULT_MEMORY_EMBEDDING_MODEL = "text-embedding-3-small";
@@ -56,9 +56,9 @@ export class LLMService {
 
     this.claudeCodeAvailable = false;
     try {
-      const { execSync } = require("node:child_process");
-      const result = execSync("which claude", { encoding: "utf8", timeout: 5000 }).trim();
-      this.claudeCodeAvailable = Boolean(result);
+      const result = spawnSync("claude", ["--version"], { encoding: "utf8", timeout: 5000 });
+      const versionOutput = String(result?.stdout || result?.stderr || "").trim();
+      this.claudeCodeAvailable = result?.status === 0 && Boolean(versionOutput);
     } catch {
       this.claudeCodeAvailable = false;
     }
@@ -364,11 +364,12 @@ export class LLMService {
     const prompt = buildClaudeCodePrompt(systemPrompt, contextMessages, userPrompt);
 
     try {
-      const { stdout } = await execFileAsync(
-        "claude",
-        ["-p", "--output-format", "json", "--model", model, "--max-turns", "1"],
-        { input: prompt, timeout: CLAUDE_CODE_TIMEOUT_MS, maxBuffer: 1024 * 1024 }
-      );
+      const { stdout } = await runClaudeCli({
+        args: ["-p", "--output-format", "json", "--model", model, "--max-turns", "1"],
+        input: prompt,
+        timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
+        maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
+      });
 
       const envelope = safeJsonParse(stdout.trim(), null);
       const text = String(envelope?.result ?? envelope?.text ?? stdout).trim();
@@ -383,7 +384,12 @@ export class LLMService {
       if (error?.killed || error?.signal === "SIGTERM") {
         throw new Error(`claude-code timed out after ${CLAUDE_CODE_TIMEOUT_MS / 1000}s.`);
       }
-      throw new Error(`claude-code CLI error: ${error?.message || error}`);
+      const detail = String(error?.stderr || error?.stdout || "").trim();
+      throw new Error(
+        detail
+          ? `claude-code CLI error: ${error?.message || error} | ${detail.slice(0, 300)}`
+          : `claude-code CLI error: ${error?.message || error}`
+      );
     }
   }
 
@@ -396,17 +402,18 @@ export class LLMService {
     const prompt = buildClaudeCodePrompt(systemPrompt, [], userPrompt);
 
     try {
-      const { stdout } = await execFileAsync(
-        "claude",
-        [
+      const { stdout } = await runClaudeCli({
+        args: [
           "-p",
           "--output-format", "json",
           "--model", model,
           "--max-turns", "1",
           "--json-schema", schemaJson
         ],
-        { input: prompt, timeout: CLAUDE_CODE_TIMEOUT_MS, maxBuffer: 1024 * 1024 }
-      );
+        input: prompt,
+        timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
+        maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
+      });
 
       const envelope = safeJsonParse(stdout.trim(), null);
       const text = String(envelope?.result ?? envelope?.text ?? stdout).trim();
@@ -419,7 +426,12 @@ export class LLMService {
       if (error?.killed || error?.signal === "SIGTERM") {
         throw new Error(`claude-code memory extraction timed out after ${CLAUDE_CODE_TIMEOUT_MS / 1000}s.`);
       }
-      throw new Error(`claude-code CLI error: ${error?.message || error}`);
+      const detail = String(error?.stderr || error?.stdout || "").trim();
+      throw new Error(
+        detail
+          ? `claude-code CLI error: ${error?.message || error} | ${detail.slice(0, 300)}`
+          : `claude-code CLI error: ${error?.message || error}`
+      );
     }
   }
 
@@ -964,13 +976,30 @@ export class LLMService {
     const desiredModel = String(llmSettings?.model || "")
       .trim()
       .slice(0, 120);
+
+    if (desiredProvider === "claude-code" && !this.isProviderConfigured("claude-code")) {
+      throw new Error(
+        "LLM provider is set to claude-code, but the `claude` CLI is not available on PATH for this process. Ensure `which claude` works in the same shell/service environment that starts the bot, then restart."
+      );
+    }
+
     const fallbackProviders = resolveProviderFallbackOrder(desiredProvider);
 
     for (const provider of fallbackProviders) {
       if (!this.isProviderConfigured(provider)) continue;
+      let model = provider === desiredProvider && desiredModel ? desiredModel : this.resolveDefaultModel(provider);
+      if (provider === "claude-code") {
+        const normalizedClaudeCodeModel = normalizeClaudeCodeModel(model);
+        if (!normalizedClaudeCodeModel) {
+          throw new Error(
+            `Invalid claude-code model '${model}'. Use one of: sonnet, opus, haiku.`
+          );
+        }
+        model = normalizedClaudeCodeModel;
+      }
       return {
         provider,
-        model: provider === desiredProvider && desiredModel ? desiredModel : this.resolveDefaultModel(provider)
+        model
       };
     }
 
@@ -989,7 +1018,7 @@ export class LLMService {
       return normalizeDefaultModel(this.appConfig?.defaultClaudeCodeModel, "sonnet");
     }
     if (provider === "anthropic") {
-      return normalizeDefaultModel(this.appConfig?.defaultAnthropicModel, "claude-3-5-haiku-latest");
+      return normalizeDefaultModel(this.appConfig?.defaultAnthropicModel, "claude-haiku-4-5");
     }
     if (provider === "xai") {
       return normalizeDefaultModel(this.appConfig?.defaultXaiModel, "grok-3-mini-latest");
@@ -1321,6 +1350,14 @@ function normalizeDefaultModel(value, fallback) {
   return String(fallback || "").trim().slice(0, 120);
 }
 
+function normalizeClaudeCodeModel(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return "";
+  return CLAUDE_CODE_MODELS.has(normalized) ? normalized : "";
+}
+
 function inferProviderFromModel(model) {
   const normalized = String(model || "").trim().toLowerCase();
   if (!normalized) return "openai";
@@ -1355,6 +1392,87 @@ function safeJsonParse(value, fallback = null) {
   } catch {
     return fallback;
   }
+}
+
+function runClaudeCli({ args, input, timeoutMs, maxBufferBytes }) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("claude", args, { stdio: ["pipe", "pipe", "pipe"] });
+    let stdout = "";
+    let stderr = "";
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let settled = false;
+    let timedOut = false;
+
+    const finish = (error, result) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (error) reject(error);
+      else resolve(result);
+    };
+
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      try {
+        child.kill("SIGTERM");
+      } catch {}
+      setTimeout(() => {
+        if (settled) return;
+        try {
+          child.kill("SIGKILL");
+        } catch {}
+      }, 1000);
+    }, timeoutMs);
+
+    child.on("error", (error) => finish(error));
+
+    child.stdout.on("data", (chunk) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk || ""));
+      if (stdoutBytes < maxBufferBytes) {
+        const remaining = maxBufferBytes - stdoutBytes;
+        stdout += buffer.subarray(0, remaining).toString("utf8");
+      }
+      stdoutBytes += buffer.length;
+    });
+
+    child.stderr.on("data", (chunk) => {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk || ""));
+      if (stderrBytes < maxBufferBytes) {
+        const remaining = maxBufferBytes - stderrBytes;
+        stderr += buffer.subarray(0, remaining).toString("utf8");
+      }
+      stderrBytes += buffer.length;
+    });
+
+    child.on("close", (code, signal) => {
+      if (timedOut) {
+        const error = new Error("claude CLI timeout");
+        error.killed = true;
+        error.signal = signal || "SIGTERM";
+        error.code = code;
+        error.stdout = stdout;
+        error.stderr = stderr;
+        finish(error);
+        return;
+      }
+
+      if (code === 0) {
+        finish(null, { stdout, stderr });
+        return;
+      }
+
+      const error = new Error(`Command failed: claude ${args.join(" ")}`);
+      error.code = code;
+      error.signal = signal;
+      error.stdout = stdout;
+      error.stderr = stderr;
+      finish(error);
+    });
+
+    child.stdin.on("error", () => {});
+    child.stdin.end(input || "");
+  });
 }
 
 function buildClaudeCodePrompt(systemPrompt, contextMessages, userPrompt) {

@@ -2,7 +2,7 @@ export const CUSTOM_MODEL_OPTION_VALUE = "__custom_model__";
 
 const PROVIDER_MODEL_FALLBACKS = {
   openai: ["gpt-4.1-mini"],
-  anthropic: ["claude-3-5-haiku-latest"],
+  anthropic: ["claude-haiku-4-5"],
   xai: ["grok-3-mini-latest"],
   "claude-code": ["sonnet"]
 };
