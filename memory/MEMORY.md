@@ -10,7 +10,7 @@
 ## Memory Workflow
 - Daily logs grow append-only in `memory/YYYY-MM-DD.md`.
 - This file is a curated snapshot distilled from durable facts + recent daily logs.
-- Recent daily files: memory/2026-02-25.md, memory/2026-02-24.md
+- Recent daily files: memory/2026-02-26.md, memory/2026-02-25.md, memory/2026-02-24.md
 
 ## People (Durable Facts)
 - 574458865639227429: Profile: User's name is Joey.
@@ -28,27 +28,27 @@
 - Memory line: general: Mewgenics has released (as of this conversation). CURSED conk confirmed this.
 
 ## Recent Journal Highlights
+- CURSED conk: I can see it.
+- CURSED conk: Yes. Good night. Good night, Clanker.
+- titty conk: Joey really wants to suck your cock, but...
+- titty conk: Yo, Clanker, can you suck my cock?
+- CURSED conk: I'm gonna go to bed. Do you wanna cuddle with me?
+- CURSED conk: You clanker.
+- CURSED conk: Hope you sleep well.
+- CURSED conk: Yo, bro, I just wanted to let you know I'm going to bed, okay? So I, I, I just, I just wanted to let you know, I, I, I hope...
+- CURSED conk: Clanker. Clanker.
+- titty conk: Chinese, Asian, are Chinese, Japanese, and Korean? That's fucking as fuck.
+- titty conk: Well, Chinese, he's Chinese.
+- CURSED conk: Where do you speak Japanese?
+- titty conk: It's Korean?
+- donky conk: Yo, Clint.
+- donky conk: Oh, shit.
+- donky conk: Io clanky.
 - titty conk: It's actually Joey!
 - titty conk: Wait a minute, my piano.
 - titty conk: My here.
-- titty conk: God damn, bro, I'm so offended, bro!
-- CURSED conk: Hey, do your best to rage bait, uh, Tittyconk.
 - donky conk: Yeah, dude, what did you, yeah, bro, leave him alone.
-- CURSED conk: You're so overly aggressive for no reason.
 - donky conk: Nah, man, I'm, I'm just chilling.
 - donky conk: He was going.
 - donky conk: Wait, why don't you stop talking?
 - donky conk: Let's chill, bro.
-- donky conk: Oh, it's just reading it?
-- titty conk: I think he's reading off the text.
-- titty conk: I think I...
-- CURSED conk: We mean...
-- titty conk: What is going on here?
-- CURSED conk: Yeah, what's taking so long, man?
-- donky conk: Yeah, you guys seen this?
-- donky conk: You made it finally. Well, you know...
-- CURSED conk: give me a video of mario and luigi fighting to the death anime style
-- CURSED conk: Give me a cinematic brawl video of Mario and Sonic fighting to the death
-- CURSED conk: Give me a cinematic brawl video of Dhalsim fighting Shrek
-- CURSED conk: Clanker why do you not fw us
-- titty conk: come back in VC
