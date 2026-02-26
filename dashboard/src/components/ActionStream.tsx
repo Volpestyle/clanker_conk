@@ -1,4 +1,4 @@
-import { useState, useMemo } from "react";
+import { Fragment, useMemo, useState } from "react";
 
 const FILTERS = [
   "all",
@@ -29,6 +29,7 @@ const FILTERS = [
 
 export default function ActionStream({ actions }) {
   const [filter, setFilter] = useState("all");
+  const [expandedRowKey, setExpandedRowKey] = useState("");
 
   const rows = useMemo(
     () => (filter === "all" ? actions : actions.filter((a) => a.kind === filter)),
@@ -36,6 +37,26 @@ export default function ActionStream({ actions }) {
   );
 
   const usedWebSearchFollowup = (action) => Boolean(action?.metadata?.llm?.usedWebSearchFollowup);
+  const getRowKey = (action, index) => String(action?.id ?? `${action?.created_at || "unknown"}-${index}`);
+
+  const toggleRow = (rowKey) => {
+    setExpandedRowKey((current) => (current === rowKey ? "" : rowKey));
+  };
+
+  const toPrettyJson = (value) => {
+    if (value === null || value === undefined || value === "") return "(none)";
+    if (typeof value === "string") return value;
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  };
+
+  const formatMetaValue = (value) => {
+    if (value === null || value === undefined || value === "") return "-";
+    return String(value);
+  };
 
   return (
     <section className="panel">
@@ -49,33 +70,91 @@ export default function ActionStream({ actions }) {
       </div>
 
       <div className="table-wrap">
-        <table>
+        <table className="action-table">
+          <colgroup>
+            <col className="action-col-time" />
+            <col className="action-col-kind" />
+            <col className="action-col-channel" />
+            <col className="action-col-content" />
+            <col className="action-col-cost" />
+          </colgroup>
           <thead>
             <tr>
-              <th>Time</th>
-              <th>Kind</th>
-              <th>Channel</th>
-              <th>Content</th>
-              <th>Cost</th>
+              <th className="col-time">Time</th>
+              <th className="col-kind">Kind</th>
+              <th className="col-channel">Channel</th>
+              <th className="col-content">Content</th>
+              <th className="col-cost">Cost</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((action, i) => (
-              <tr key={action.id || i}>
-                <td>{new Date(action.created_at).toLocaleString()}</td>
-                <td>
-                  <span className={`kind-badge kind-${action.kind}`}>
-                    {action.kind}
-                  </span>
-                  {usedWebSearchFollowup(action) && (
-                    <span className="kind-badge kind-web-followup">web-followup</span>
+            {rows.map((action, i) => {
+              const rowKey = getRowKey(action, i);
+              const isExpanded = expandedRowKey === rowKey;
+
+              return (
+                <Fragment key={rowKey}>
+                  <tr
+                    className={`action-row${isExpanded ? " action-row-expanded" : ""}`}
+                    onClick={() => toggleRow(rowKey)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        toggleRow(rowKey);
+                      }
+                    }}
+                    tabIndex={0}
+                    aria-expanded={isExpanded}
+                  >
+                    <td className="action-time-cell col-time">
+                      <span className="action-time-inner">
+                        <span className={`expand-indicator${isExpanded ? " open" : ""}`} aria-hidden="true">
+                          ▸
+                        </span>
+                        {new Date(action.created_at).toLocaleString()}
+                      </span>
+                    </td>
+                    <td className="col-kind">
+                      <span className={`kind-badge kind-${action.kind}`}>
+                        {action.kind}
+                      </span>
+                      {usedWebSearchFollowup(action) && (
+                        <span className="kind-badge kind-web-followup">web-followup</span>
+                      )}
+                    </td>
+                    <td className="col-channel">{action.channel_id || "-"}</td>
+                    <td className="col-content">{String(action.content || "").slice(0, 180) || "-"}</td>
+                    <td className="col-cost">${Number(action.usd_cost || 0).toFixed(6)}</td>
+                  </tr>
+                  {isExpanded && (
+                    <tr className="action-detail-row">
+                      <td colSpan="5">
+                        <div className="action-detail">
+                          <div className="action-detail-grid">
+                            <p><span>Event ID</span><code>{formatMetaValue(action.id)}</code></p>
+                            <p><span>Guild</span><code>{formatMetaValue(action.guild_id)}</code></p>
+                            <p><span>Channel</span><code>{formatMetaValue(action.channel_id)}</code></p>
+                            <p><span>User</span><code>{formatMetaValue(action.user_id)}</code></p>
+                            <p><span>Message</span><code>{formatMetaValue(action.message_id)}</code></p>
+                            <p><span>Cost</span><code>${Number(action.usd_cost || 0).toFixed(6)}</code></p>
+                          </div>
+
+                          <div className="action-detail-block">
+                            <h4>Content</h4>
+                            <pre>{String(action.content || "(empty)")}</pre>
+                          </div>
+
+                          <div className="action-detail-block">
+                            <h4>Metadata</h4>
+                            <pre>{toPrettyJson(action.metadata)}</pre>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
                   )}
-                </td>
-                <td>{action.channel_id || "-"}</td>
-                <td>{String(action.content || "").slice(0, 180)}</td>
-                <td>${Number(action.usd_cost || 0).toFixed(6)}</td>
-              </tr>
-            ))}
+                </Fragment>
+              );
+            })}
             {rows.length === 0 && (
               <tr>
                 <td colSpan="5" style={{ textAlign: "center", color: "var(--ink-3)" }}>
