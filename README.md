@@ -35,7 +35,7 @@ Fill `.env`:
 - `XAI_BASE_URL`: optional xAI API base URL override (default `https://api.x.ai/v1`).
 - Optional for live web search: `BRAVE_SEARCH_API_KEY` (primary) and/or `SERPAPI_API_KEY` (fallback).
 - Optional for model-directed GIF replies: `GIPHY_API_KEY` (and optional `GIPHY_RATING`, default `pg-13`).
-- Optional: `DASHBOARD_TOKEN` (protects dashboard API).
+- Optional for general dashboard browsing, but required for stream ingest: `DASHBOARD_TOKEN` (sent as `x-dashboard-token`).
 - Optional but recommended for richer video understanding: install `ffmpeg` and `yt-dlp` on your system.
 
 ## 2. Discord bot permissions
@@ -98,7 +98,7 @@ Use dashboard to:
 - Configure allowed image/video generation models, simple/complex image routing models, and per-24h media budgets.
 - Choose LLM provider + model.
 - Choose voice runtime mode (`voice_agent`, `openai_realtime`, `gemini_realtime`, or `stt_pipeline`) and tune provider-specific realtime/STT/TTS settings.
-- Configure stream-watch ingest guardrails and use `/api/voice/stream-ingest/frame` for external frame relay.
+- Configure stream-watch ingest guardrails and use `/api/voice/stream-ingest/frame` for external frame relay (requires `DASHBOARD_TOKEN` auth).
 - Track accumulated API spend.
 - Inspect bot actions and memory.
 

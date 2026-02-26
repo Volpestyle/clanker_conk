@@ -6,18 +6,38 @@ import { getLlmModelCatalog } from "./pricing.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+const STREAM_INGEST_API_PATH = "/voice/stream-ingest/frame";
+const DASHBOARD_JSON_LIMIT = "7mb";
 
 export function createDashboardServer({ appConfig, store, bot, memory }) {
   const app = express();
 
-  app.use(express.json({ limit: "1mb" }));
+  // Supports max stream-watch frame payloads (4MB binary -> ~5.4MB JSON/base64 body).
+  app.use(express.json({ limit: DASHBOARD_JSON_LIMIT }));
   app.use(express.urlencoded({ extended: true }));
 
   app.use("/api", (req, res, next) => {
-    if (!appConfig.dashboardToken) return next();
+    const isStreamIngestRoute = req.path === STREAM_INGEST_API_PATH || req.path === `${STREAM_INGEST_API_PATH}/`;
+    const configuredToken = String(appConfig.dashboardToken || "").trim();
+    if (!configuredToken) {
+      if (isStreamIngestRoute) {
+        return res.status(503).json({
+          accepted: false,
+          reason: "dashboard_token_required"
+        });
+      }
+      return next();
+    }
 
     const presented = req.get("x-dashboard-token") || String(req.query.token || "");
-    if (presented === appConfig.dashboardToken) return next();
+    if (presented === configuredToken) return next();
+
+    if (isStreamIngestRoute) {
+      return res.status(401).json({
+        accepted: false,
+        reason: "unauthorized_dashboard_token"
+      });
+    }
 
     return res.status(401).json({ error: "Unauthorized. Provide x-dashboard-token." });
   });
@@ -52,7 +72,7 @@ export function createDashboardServer({ appConfig, store, bot, memory }) {
     });
   });
 
-  app.post("/api/voice/stream-ingest/frame", async (req, res, next) => {
+  app.post(`/api${STREAM_INGEST_API_PATH}`, async (req, res, next) => {
     try {
       const guildId = String(req.body?.guildId || "").trim();
       const dataBase64 = String(req.body?.dataBase64 || "").trim();
