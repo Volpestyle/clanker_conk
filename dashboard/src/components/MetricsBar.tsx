@@ -42,6 +42,10 @@ export default function MetricsBar({ stats }) {
     {
       label: "Voice Sessions (24h)",
       value: String(s?.last24h?.voice_session_start || 0)
+    },
+    {
+      label: "Voice Sounds (24h)",
+      value: String(s?.last24h?.voice_soundboard_play || 0)
     }
   ];
 

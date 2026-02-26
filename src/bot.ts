@@ -593,13 +593,23 @@ export class ClankerBot {
     if (message.author.bot) return;
     if (!this.isChannelAllowed(settings, message.channelId)) return;
     if (this.isUserBlocked(settings, message.author.id)) return;
+    const directlyAddressed = this.isDirectlyAddressed(settings, message);
 
     const voiceIntentHandled = await this.maybeHandleVoiceIntent({
       message,
       settings,
-      text
+      text,
+      directlyAddressed
     });
     if (voiceIntentHandled) return;
+
+    const soundboardIntentHandled = await this.voiceSessionManager.maybeHandleSoundboardIntent({
+      message,
+      settings,
+      text,
+      directlyAddressed
+    });
+    if (soundboardIntentHandled) return;
 
     if (settings.memory.enabled) {
       await this.memory.ingestMessage({
@@ -638,14 +648,14 @@ export class ClankerBot {
     });
   }
 
-  async maybeHandleVoiceIntent({ message, settings, text }) {
+  async maybeHandleVoiceIntent({ message, settings, text, directlyAddressed }) {
     const voiceSettings = settings?.voice || {};
     if (!voiceSettings.joinOnTextNL) return false;
 
     const intent = detectVoiceIntent({
       content: text,
       botName: settings.botName,
-      directlyAddressed: this.isDirectlyAddressed(settings, message),
+      directlyAddressed: Boolean(directlyAddressed),
       requireDirectMentionForJoin: Boolean(voiceSettings.requireDirectMentionForJoin)
     });
 

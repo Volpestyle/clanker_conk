@@ -1,17 +1,28 @@
 import { randomUUID } from "node:crypto";
+import { PassThrough } from "node:stream";
 import {
+  AudioPlayerStatus,
+  createAudioPlayer,
+  createAudioResource,
+  EndBehaviorType,
   entersState,
   getVoiceConnection,
   joinVoiceChannel,
+  StreamType,
   VoiceConnectionStatus
 } from "@discordjs/voice";
+import prism from "prism-media";
 import { clamp } from "../utils.ts";
+import { convertDiscordPcmToXaiInput, convertXaiOutputToDiscordPcm } from "./pcmAudio.ts";
+import { SoundboardDirector } from "./soundboardDirector.ts";
 import { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
 
 const MIN_MAX_SESSION_MINUTES = 1;
 const MAX_MAX_SESSION_MINUTES = 120;
 const MIN_INACTIVITY_SECONDS = 20;
 const MAX_INACTIVITY_SECONDS = 3600;
+const INPUT_SPEECH_END_SILENCE_MS = 900;
+const BOT_TURN_SILENCE_RESET_MS = 1200;
 
 export class VoiceSessionManager {
   constructor({ client, store, appConfig }) {
@@ -19,6 +30,11 @@ export class VoiceSessionManager {
     this.store = store;
     this.appConfig = appConfig;
     this.sessions = new Map();
+    this.soundboardDirector = new SoundboardDirector({
+      client,
+      store,
+      appConfig
+    });
 
     this.client.on("voiceStateUpdate", (oldState, newState) => {
       this.handleVoiceStateUpdate(oldState, newState).catch((error) => {
@@ -33,6 +49,16 @@ export class VoiceSessionManager {
     });
   }
 
+  getSession(guildId) {
+    const id = String(guildId || "");
+    if (!id) return null;
+    return this.sessions.get(id) || null;
+  }
+
+  hasActiveSession(guildId) {
+    return Boolean(this.getSession(guildId));
+  }
+
   getRuntimeState() {
     const sessions = [...this.sessions.values()].map((session) => ({
       sessionId: session.id,
@@ -43,6 +69,13 @@ export class VoiceSessionManager {
       lastActivityAt: new Date(session.lastActivityAt).toISOString(),
       maxEndsAt: session.maxEndsAt ? new Date(session.maxEndsAt).toISOString() : null,
       inactivityEndsAt: session.inactivityEndsAt ? new Date(session.inactivityEndsAt).toISOString() : null,
+      activeInputStreams: session.userCaptures.size,
+      soundboard: {
+        playCount: session.soundboard?.playCount || 0,
+        lastPlayedAt: session.soundboard?.lastPlayedAt
+          ? new Date(session.soundboard.lastPlayedAt).toISOString()
+          : null
+      },
       xai: session.xaiClient?.getState?.() || null
     }));
 
@@ -107,12 +140,19 @@ export class VoiceSessionManager {
         await this.sendToChannel(message.channel, "already in your vc.");
         return true;
       }
+
       await this.endSession({
         guildId,
         reason: "switch_channel",
         requestedByUserId: userId,
         announcement: "switching voice channels."
       });
+    }
+
+    const maxConcurrentGuildSessions = clamp(Number(settings.voice?.maxConcurrentGuildSessions) || 1, 1, 3);
+    if (!existing && this.sessions.size >= maxConcurrentGuildSessions) {
+      await this.sendToChannel(message.channel, "voice session cap reached right now.");
+      return true;
     }
 
     if (!this.appConfig?.xaiApiKey) {
@@ -128,6 +168,8 @@ export class VoiceSessionManager {
 
     let connection = null;
     let xaiClient = null;
+    let audioPlayer = null;
+    let botAudioStream = null;
 
     try {
       connection = joinVoiceChannel({
@@ -163,6 +205,14 @@ export class VoiceSessionManager {
         outputAudioFormat: xaiSettings.audioFormat || "audio/pcm"
       });
 
+      audioPlayer = createAudioPlayer();
+      botAudioStream = new PassThrough();
+      const audioResource = createAudioResource(botAudioStream, {
+        inputType: StreamType.Raw
+      });
+      audioPlayer.play(audioResource);
+      connection.subscribe(audioPlayer);
+
       const now = Date.now();
       const session = {
         id: randomUUID(),
@@ -172,18 +222,29 @@ export class VoiceSessionManager {
         requestedByUserId: userId,
         connection,
         xaiClient,
+        audioPlayer,
+        botAudioStream,
         startedAt: now,
         lastActivityAt: now,
         maxEndsAt: null,
         inactivityEndsAt: null,
         maxTimer: null,
         inactivityTimer: null,
+        botTurnResetTimer: null,
+        botTurnOpen: false,
+        userCaptures: new Map(),
+        soundboard: {
+          playCount: 0,
+          lastPlayedAt: 0
+        },
         cleanupHandlers: [],
         ending: false
       };
 
       this.sessions.set(guildId, session);
+      this.bindAudioPlayerHandlers(session);
       this.bindSessionHandlers(session, settings);
+      this.bindXaiHandlers(session);
       this.startSessionTimers(session, settings);
 
       this.store.logAction({
@@ -208,7 +269,7 @@ export class VoiceSessionManager {
 
       await this.sendToChannel(
         message.channel,
-        `🗣️ hopping in <#${targetVoiceChannelId}> for up to ${maxSessionMinutes}m.`
+        `hopping in <#${targetVoiceChannelId}> for up to ${maxSessionMinutes}m.`
       );
 
       return true;
@@ -226,6 +287,22 @@ export class VoiceSessionManager {
         await xaiClient.close().catch(() => undefined);
       }
 
+      if (botAudioStream) {
+        try {
+          botAudioStream.end();
+        } catch {
+          // ignore
+        }
+      }
+
+      if (audioPlayer) {
+        try {
+          audioPlayer.stop(true);
+        } catch {
+          // ignore
+        }
+      }
+
       if (connection) {
         try {
           connection.destroy();
@@ -241,8 +318,8 @@ export class VoiceSessionManager {
 
   async requestLeave({ message, reason = "nl_leave" }) {
     if (!message?.guild || !message?.channel) return false;
-    const guildId = String(message.guild.id);
 
+    const guildId = String(message.guild.id);
     if (!this.sessions.has(guildId)) {
       await this.sendToChannel(message.channel, "i'm not in vc right now.");
       return true;
@@ -255,6 +332,7 @@ export class VoiceSessionManager {
       announceChannel: message.channel,
       announcement: "aight i'm leaving vc."
     });
+
     return true;
   }
 
@@ -280,10 +358,76 @@ export class VoiceSessionManager {
     await this.sendToChannel(
       message.channel,
       `voice status: in <#${session.voiceChannelId}> | session ${elapsedSeconds}s | ` +
-        `max-left ${remainingSeconds ?? "n/a"}s | idle-left ${inactivitySeconds ?? "n/a"}s`
+        `max-left ${remainingSeconds ?? "n/a"}s | idle-left ${inactivitySeconds ?? "n/a"}s | ` +
+        `capturing ${session.userCaptures.size} speaker(s)`
     );
 
     return true;
+  }
+
+  async maybeHandleSoundboardIntent({ message, settings, text, directlyAddressed = false }) {
+    if (!message?.guild || !message?.channel) return false;
+
+    const session = this.getSession(message.guild.id);
+    if (!session) return false;
+    if (!settings?.voice?.soundboard?.enabled) return false;
+
+    const requested = this.soundboardDirector.resolveManualSoundRequest(text, settings);
+    if (!requested) {
+      await this.maybeTriggerHeuristicSoundboard({
+        message,
+        settings,
+        text,
+        directlyAddressed,
+        session
+      });
+      return false;
+    }
+
+    if (!directlyAddressed) {
+      return false;
+    }
+
+    const result = await this.soundboardDirector.play({
+      session,
+      settings,
+      soundId: requested.soundId,
+      sourceGuildId: requested.sourceGuildId,
+      reason: requested.reason,
+      triggerMessage: message
+    });
+
+    if (result.ok) {
+      await this.sendToChannel(
+        message.channel,
+        `soundboard played: ${requested.alias || requested.soundId}`
+      );
+    } else {
+      await this.sendToChannel(message.channel, `can't play that sound rn: ${result.message}`);
+    }
+
+    return true;
+  }
+
+  async maybeTriggerHeuristicSoundboard({ message, settings, text, directlyAddressed, session }) {
+    if (!directlyAddressed) return;
+
+    const hypeCue = /\b(?:let'?s\s*go|lfg|clutch|insane|no\s*way|holy|gg)\b/i.test(String(text || ""));
+    if (!hypeCue) return;
+
+    const preferred = settings?.voice?.soundboard?.preferredSoundIds || [];
+    if (!Array.isArray(preferred) || !preferred.length) return;
+
+    const soundId = String(preferred[0] || "").trim();
+    if (!soundId) return;
+
+    await this.soundboardDirector.play({
+      session,
+      settings,
+      soundId,
+      reason: "heuristic_hype",
+      triggerMessage: message
+    });
   }
 
   async stopAll(reason = "shutdown") {
@@ -336,6 +480,86 @@ export class VoiceSessionManager {
     }, inactivitySeconds * 1000);
   }
 
+  bindAudioPlayerHandlers(session) {
+    const onStateChange = (oldState, newState) => {
+      if (oldState.status !== AudioPlayerStatus.Playing && newState.status === AudioPlayerStatus.Playing) {
+        session.lastActivityAt = Date.now();
+      }
+    };
+
+    session.audioPlayer.on("stateChange", onStateChange);
+    session.cleanupHandlers.push(() => {
+      session.audioPlayer.off("stateChange", onStateChange);
+    });
+  }
+
+  bindXaiHandlers(session) {
+    const onAudioDelta = (audioBase64) => {
+      let chunk = null;
+      try {
+        chunk = Buffer.from(String(audioBase64 || ""), "base64");
+      } catch {
+        return;
+      }
+      if (!chunk || !chunk.length) return;
+
+      const discordPcm = convertXaiOutputToDiscordPcm(chunk, 24000);
+      if (!discordPcm.length) return;
+
+      session.botAudioStream.write(discordPcm);
+      this.markBotTurnOut(session);
+    };
+
+    const onTranscript = (text) => {
+      const transcript = String(text || "").trim();
+      if (!transcript) return;
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "xai_transcript",
+        metadata: {
+          sessionId: session.id,
+          transcript
+        }
+      });
+    };
+
+    session.xaiClient.on("audio_delta", onAudioDelta);
+    session.xaiClient.on("transcript", onTranscript);
+
+    session.cleanupHandlers.push(() => {
+      session.xaiClient.off("audio_delta", onAudioDelta);
+      session.xaiClient.off("transcript", onTranscript);
+    });
+  }
+
+  markBotTurnOut(session) {
+    if (!session.botTurnOpen) {
+      session.botTurnOpen = true;
+      this.store.logAction({
+        kind: "voice_turn_out",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "bot_audio_started",
+        metadata: {
+          sessionId: session.id
+        }
+      });
+    }
+
+    if (session.botTurnResetTimer) {
+      clearTimeout(session.botTurnResetTimer);
+    }
+
+    session.botTurnResetTimer = setTimeout(() => {
+      session.botTurnOpen = false;
+      session.botTurnResetTimer = null;
+    }, BOT_TURN_SILENCE_RESET_MS);
+  }
+
   bindSessionHandlers(session, settings) {
     const onStateChange = (_oldState, newState) => {
       if (session.ending) return;
@@ -357,27 +581,147 @@ export class VoiceSessionManager {
     });
 
     const speaking = session.connection.receiver?.speaking;
-    if (speaking?.on) {
-      const onSpeakingStart = (userId) => {
-        if (String(userId || "") === String(this.client.user?.id || "")) return;
-        this.touchActivity(session.guildId, settings);
+    if (!speaking?.on) return;
+
+    const onSpeakingStart = (userId) => {
+      if (String(userId || "") === String(this.client.user?.id || "")) return;
+      this.touchActivity(session.guildId, settings);
+      this.startInboundCapture({
+        session,
+        userId: String(userId || "")
+      });
+    };
+
+    speaking.on("start", onSpeakingStart);
+    session.cleanupHandlers.push(() => {
+      speaking.removeListener("start", onSpeakingStart);
+    });
+  }
+
+  startInboundCapture({ session, userId }) {
+    if (!session || !userId) return;
+    if (session.userCaptures.has(userId)) return;
+
+    const opusStream = session.connection.receiver.subscribe(userId, {
+      end: {
+        behavior: EndBehaviorType.AfterSilence,
+        duration: INPUT_SPEECH_END_SILENCE_MS
+      }
+    });
+
+    const decoder = new prism.opus.Decoder({
+      rate: 48000,
+      channels: 2,
+      frameSize: 960
+    });
+
+    const pcmStream = opusStream.pipe(decoder);
+    const captureState = {
+      userId,
+      opusStream,
+      decoder,
+      pcmStream,
+      startedAt: Date.now(),
+      bytesSent: 0
+    };
+
+    session.userCaptures.set(userId, captureState);
+
+    this.store.logAction({
+      kind: "voice_turn_in",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId,
+      content: "voice_activity_started",
+      metadata: {
+        sessionId: session.id
+      }
+    });
+
+    const cleanupCapture = () => {
+      const current = session.userCaptures.get(userId);
+      if (!current) return;
+      session.userCaptures.delete(userId);
+
+      try {
+        current.opusStream.destroy();
+      } catch {
+        // ignore
+      }
+
+      try {
+        current.decoder.destroy?.();
+      } catch {
+        // ignore
+      }
+
+      try {
+        current.pcmStream.destroy();
+      } catch {
+        // ignore
+      }
+    };
+
+    pcmStream.on("data", (chunk) => {
+      const normalizedPcm = convertDiscordPcmToXaiInput(chunk);
+      if (!normalizedPcm.length) return;
+      captureState.bytesSent += normalizedPcm.length;
+
+      try {
+        session.xaiClient.appendInputAudioPcm(normalizedPcm);
+      } catch (error) {
         this.store.logAction({
-          kind: "voice_turn_in",
+          kind: "voice_error",
           guildId: session.guildId,
           channelId: session.textChannelId,
-          userId: String(userId || ""),
-          content: "voice_activity_detected",
+          userId,
+          content: `audio_append_failed: ${String(error?.message || error)}`,
           metadata: {
             sessionId: session.id
           }
         });
-      };
+      }
+    });
 
-      speaking.on("start", onSpeakingStart);
-      session.cleanupHandlers.push(() => {
-        speaking.removeListener("start", onSpeakingStart);
+    let captureFinalized = false;
+    const finalizeUserTurn = () => {
+      if (captureFinalized) return;
+      captureFinalized = true;
+
+      try {
+        session.xaiClient.commitInputAudioBuffer();
+        session.xaiClient.createAudioResponse();
+      } catch (error) {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: `audio_commit_failed: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id
+          }
+        });
+      }
+
+      cleanupCapture();
+    };
+
+    pcmStream.once("end", finalizeUserTurn);
+    pcmStream.once("close", finalizeUserTurn);
+    pcmStream.once("error", (error) => {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: `inbound_audio_stream_error: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id
+        }
       });
-    }
+      finalizeUserTurn();
+    });
   }
 
   async endSession({
@@ -396,6 +740,26 @@ export class VoiceSessionManager {
 
     if (session.maxTimer) clearTimeout(session.maxTimer);
     if (session.inactivityTimer) clearTimeout(session.inactivityTimer);
+    if (session.botTurnResetTimer) clearTimeout(session.botTurnResetTimer);
+
+    for (const capture of session.userCaptures.values()) {
+      try {
+        capture.opusStream.destroy();
+      } catch {
+        // ignore
+      }
+      try {
+        capture.decoder.destroy?.();
+      } catch {
+        // ignore
+      }
+      try {
+        capture.pcmStream.destroy();
+      } catch {
+        // ignore
+      }
+    }
+    session.userCaptures.clear();
 
     for (const cleanup of session.cleanupHandlers || []) {
       try {
@@ -403,6 +767,18 @@ export class VoiceSessionManager {
       } catch {
         // ignore
       }
+    }
+
+    try {
+      session.botAudioStream?.end?.();
+    } catch {
+      // ignore
+    }
+
+    try {
+      session.audioPlayer?.stop?.(true);
+    } catch {
+      // ignore
     }
 
     try {

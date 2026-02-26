@@ -21,6 +21,8 @@ const FILTERS = [
   "voice_session_end",
   "voice_intent_detected",
   "voice_turn_in",
+  "voice_turn_out",
+  "voice_soundboard_play",
   "voice_runtime",
   "voice_error"
 ];

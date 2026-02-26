@@ -1,10 +1,28 @@
+import { EventEmitter } from "node:events";
 import WebSocket from "ws";
 
 const XAI_REALTIME_URL = "wss://api.x.ai/v1/realtime";
 const CONNECT_TIMEOUT_MS = 10_000;
 
-export class XaiRealtimeClient {
+const AUDIO_DELTA_TYPES = new Set([
+  "response.audio.delta",
+  "response.output_audio.delta",
+  "output_audio.delta",
+  "audio.delta",
+  "response.audio.chunk",
+  "response.output_audio.chunk"
+]);
+
+const TRANSCRIPT_TYPES = new Set([
+  "conversation.item.input_audio_transcription.completed",
+  "response.audio_transcript.done",
+  "response.audio_transcript.completed",
+  "transcript.completed"
+]);
+
+export class XaiRealtimeClient extends EventEmitter {
   constructor({ apiKey, logger = null }) {
+    super();
     this.apiKey = String(apiKey || "").trim();
     this.logger = typeof logger === "function" ? logger : null;
     this.ws = null;
@@ -65,7 +83,8 @@ export class XaiRealtimeClient {
         instructions,
         input_audio_format: inputAudioFormat,
         output_audio_format: outputAudioFormat,
-        region
+        region,
+        modalities: ["audio", "text"]
       })
     });
 
@@ -111,28 +130,84 @@ export class XaiRealtimeClient {
   }
 
   handleIncoming(payload) {
-    let parsed = null;
+    let event = null;
 
     try {
-      parsed = JSON.parse(String(payload || ""));
+      event = JSON.parse(String(payload || ""));
     } catch {
       return;
     }
 
-    if (!parsed || typeof parsed !== "object") return;
+    if (!event || typeof event !== "object") return;
 
-    if (parsed.type === "session.created") {
-      this.sessionId = parsed.session?.id || this.sessionId;
+    this.emit("event", event);
+
+    if (event.type === "session.created") {
+      this.sessionId = event.session?.id || this.sessionId;
       this.log("info", "xai_realtime_session_created", { sessionId: this.sessionId });
       return;
     }
 
-    if (parsed.type === "error") {
+    if (event.type === "error") {
       const message =
-        parsed.error?.message || parsed.error?.code || parsed.message || "Unknown xAI realtime error";
+        event.error?.message || event.error?.code || event.message || "Unknown xAI realtime error";
       this.lastError = String(message);
       this.log("warn", "xai_realtime_error_event", { error: this.lastError });
+      this.emit("error_event", this.lastError);
+      return;
     }
+
+    if (AUDIO_DELTA_TYPES.has(event.type)) {
+      const audioBase64 = extractAudioBase64(event);
+      if (audioBase64) {
+        this.emit("audio_delta", audioBase64);
+      }
+      return;
+    }
+
+    if (TRANSCRIPT_TYPES.has(event.type)) {
+      const transcript =
+        event.transcript ||
+        event.text ||
+        event.delta ||
+        event?.item?.content?.[0]?.transcript ||
+        null;
+
+      if (transcript) {
+        this.emit("transcript", String(transcript));
+      }
+      return;
+    }
+
+    if (event.type === "response.done") {
+      this.emit("response_done", event);
+    }
+  }
+
+  appendInputAudioPcm(audioBuffer) {
+    if (!audioBuffer || !audioBuffer.length) return;
+    this.appendInputAudioBase64(audioBuffer.toString("base64"));
+  }
+
+  appendInputAudioBase64(audioBase64) {
+    if (!audioBase64) return;
+    this.send({
+      type: "input_audio_buffer.append",
+      audio: String(audioBase64)
+    });
+  }
+
+  commitInputAudioBuffer() {
+    this.send({ type: "input_audio_buffer.commit" });
+  }
+
+  createAudioResponse() {
+    this.send({
+      type: "response.create",
+      response: {
+        modalities: ["audio", "text"]
+      }
+    });
   }
 
   send(payload) {
@@ -152,10 +227,14 @@ export class XaiRealtimeClient {
 
     await new Promise((resolve) => {
       const ws = this.ws;
+      let settled = false;
       const done = () => {
+        if (settled) return;
+        settled = true;
         ws.removeAllListeners("close");
         resolve(undefined);
       };
+
       ws.once("close", done);
       try {
         ws.close(1000, "session_ended");
@@ -201,4 +280,25 @@ function compactObject(value) {
     out[key] = entry;
   }
   return out;
+}
+
+function extractAudioBase64(event) {
+  const direct = event.delta || event.audio || event.chunk;
+  if (typeof direct === "string" && direct.trim()) {
+    return direct.trim();
+  }
+
+  const nested =
+    event?.audio?.delta ||
+    event?.audio?.chunk ||
+    event?.data?.audio ||
+    event?.data?.delta ||
+    event?.response?.audio?.delta ||
+    null;
+
+  if (typeof nested === "string" && nested.trim()) {
+    return nested.trim();
+  }
+
+  return null;
 }
