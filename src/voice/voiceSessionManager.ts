@@ -22,10 +22,36 @@ import {
   getPromptStyle,
   PROMPT_CAPABILITY_HONESTY_LINE
 } from "../promptCore.ts";
-import { clamp, hasBotKeyword } from "../utils.ts";
+import { clamp } from "../utils.ts";
 import { convertDiscordPcmToXaiInput, convertXaiOutputToDiscordPcm } from "./pcmAudio.ts";
 import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
-import { parseSoundboardReference, SoundboardDirector } from "./soundboardDirector.ts";
+import { SoundboardDirector } from "./soundboardDirector.ts";
+import {
+  REALTIME_MEMORY_FACT_LIMIT,
+  SOUNDBOARD_MAX_CANDIDATES,
+  dedupeSoundboardCandidates,
+  defaultExitMessage,
+  encodePcm16MonoAsWav,
+  ensureBotAudioPlaybackReady,
+  findMentionedSoundboardReference,
+  formatNaturalList,
+  formatRealtimeMemoryFacts,
+  formatSoundboardCandidateLine,
+  getRealtimeRuntimeLabel,
+  isRealtimeMode,
+  isVoiceTurnAddressedToBot,
+  matchSoundboardReference,
+  normalizeVoiceText,
+  parsePreferredSoundboardReferences,
+  parseRealtimeErrorPayload,
+  parseResponseDoneId,
+  parseResponseDoneStatus,
+  resolveRealtimeProvider,
+  resolveVoiceRuntimeMode,
+  shortError,
+  shouldAllowVoiceNsfwHumor,
+  transcriptSourceFromEventType
+} from "./voiceSessionHelpers.ts";
 import { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
 
 const MIN_MAX_SESSION_MINUTES = 1;
@@ -53,11 +79,9 @@ const REALTIME_ECHO_SUPPRESSION_MS = 1800;
 const REALTIME_INSTRUCTION_REFRESH_DEBOUNCE_MS = 220;
 const REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS = 420;
 const REALTIME_CONTEXT_MEMBER_LIMIT = 12;
-const REALTIME_MEMORY_FACT_LIMIT = 8;
 const SOUNDBOARD_DECISION_TRANSCRIPT_MAX_CHARS = 280;
 const SOUNDBOARD_DECISION_DEDUPE_WINDOW_MS = 8_000;
 const SOUNDBOARD_CATALOG_REFRESH_MS = 60_000;
-const SOUNDBOARD_MAX_CANDIDATES = 40;
 
 export class VoiceSessionManager {
   constructor({
@@ -3564,327 +3588,3 @@ export class VoiceSessionManager {
   }
 }
 
-function defaultExitMessage(reason) {
-  if (reason === "max_duration") return "time cap reached, dipping from vc.";
-  if (reason === "inactivity_timeout") return "been quiet for a bit, leaving vc.";
-  if (reason === "connection_lost" || reason === "bot_disconnected") return "lost the voice connection, i bounced.";
-  if (reason === "realtime_runtime_error" || reason === "realtime_socket_closed") {
-    return "voice runtime dropped, i'm out.";
-  }
-  if (reason === "response_stalled") return "voice output got stuck, so i bounced.";
-  if (reason === "settings_disabled") return "voice mode was disabled, so i dipped.";
-  if (reason === "settings_channel_blocked" || reason === "settings_channel_not_allowlisted") {
-    return "voice settings changed, so i left this vc.";
-  }
-  if (reason === "switch_channel") return "moving channels.";
-  return "leaving vc.";
-}
-
-function parseRealtimeErrorPayload(payload) {
-  if (!payload || typeof payload !== "object") {
-    return {
-      message: String(payload || "unknown realtime error"),
-      code: null,
-      param: null,
-      lastOutboundEventType: null,
-      lastOutboundEvent: null,
-      recentOutboundEvents: null
-    };
-  }
-
-  const message = String(payload.message || "unknown realtime error");
-  const code = payload.code ? String(payload.code) : null;
-  const param =
-    payload.param !== undefined && payload.param !== null
-      ? String(payload.param)
-      : payload?.event?.error?.param
-        ? String(payload.event.error.param)
-        : null;
-  const lastOutboundEventType = payload.lastOutboundEventType
-    ? String(payload.lastOutboundEventType)
-    : null;
-  const lastOutboundEvent =
-    payload.lastOutboundEvent && typeof payload.lastOutboundEvent === "object"
-      ? payload.lastOutboundEvent
-      : null;
-  const recentOutboundEvents = Array.isArray(payload.recentOutboundEvents)
-    ? payload.recentOutboundEvents.slice(-4)
-    : null;
-  return {
-    message,
-    code,
-    param,
-    lastOutboundEventType,
-    lastOutboundEvent,
-    recentOutboundEvents
-  };
-}
-
-function parseResponseDoneId(event) {
-  if (!event || typeof event !== "object") return null;
-  const direct = event.response_id || event.id || null;
-  const nested = event.response?.id || null;
-  const value = nested || direct;
-  if (!value) return null;
-  return String(value);
-}
-
-function parseResponseDoneStatus(event) {
-  if (!event || typeof event !== "object") return null;
-  const status = event.response?.status || event.status || null;
-  if (!status) return null;
-  return String(status);
-}
-
-function ensureBotAudioPlaybackReady({ session, store, botUserId = null }) {
-  if (!session || !session.audioPlayer || !session.connection) return false;
-
-  const restartAudioPipeline = (reason) => {
-    const now = Date.now();
-    if (now - Number(session.lastAudioPipelineRepairAt || 0) < 600) {
-      return true;
-    }
-    session.lastAudioPipelineRepairAt = now;
-
-    try {
-      if (!session.botAudioStream || session.botAudioStream.destroyed || session.botAudioStream.writableEnded) {
-        session.botAudioStream = new PassThrough();
-      }
-
-      const resource = createAudioResource(session.botAudioStream, {
-        inputType: StreamType.Raw
-      });
-      session.audioPlayer.play(resource);
-      session.connection.subscribe(session.audioPlayer);
-      store?.logAction?.({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: botUserId,
-        content: "bot_audio_pipeline_restarted",
-        metadata: {
-          sessionId: session.id,
-          reason
-        }
-      });
-      return true;
-    } catch (error) {
-      store?.logAction?.({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: botUserId,
-        content: `bot_audio_pipeline_restart_failed: ${String(error?.message || error)}`,
-        metadata: {
-          sessionId: session.id,
-          reason
-        }
-      });
-      return false;
-    }
-  };
-
-  if (!session.botAudioStream || session.botAudioStream.destroyed || session.botAudioStream.writableEnded) {
-    return restartAudioPipeline("stream_unavailable");
-  }
-
-  const status = session.audioPlayer.state?.status || null;
-  if (status === AudioPlayerStatus.Idle || status === AudioPlayerStatus.AutoPaused) {
-    return restartAudioPipeline(`player_${String(status).toLowerCase()}`);
-  }
-
-  return true;
-}
-
-function transcriptSourceFromEventType(eventType) {
-  const normalized = String(eventType || "").trim();
-  if (!normalized) return "unknown";
-  if (normalized === "conversation.item.input_audio_transcription.completed") return "input";
-  if (/audio_transcript/i.test(normalized)) return "output";
-  if (/transcript/i.test(normalized)) return "unknown";
-  return "unknown";
-}
-
-function shortError(text) {
-  return String(text || "unknown error")
-    .replace(/\s+/g, " ")
-    .slice(0, 220);
-}
-
-function formatNaturalList(values) {
-  const items = (Array.isArray(values) ? values : [])
-    .map((value) => String(value || "").trim())
-    .filter(Boolean);
-  if (!items.length) return "";
-  if (items.length === 1) return items[0];
-  if (items.length === 2) return `${items[0]} and ${items[1]}`;
-  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
-}
-
-function resolveVoiceRuntimeMode(settings) {
-  const normalized = String(settings?.voice?.mode || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "openai_realtime") return "openai_realtime";
-  if (normalized === "stt_pipeline") return "stt_pipeline";
-  return "voice_agent";
-}
-
-function resolveRealtimeProvider(mode) {
-  const normalized = String(mode || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "voice_agent") return "xai";
-  if (normalized === "openai_realtime") return "openai";
-  return null;
-}
-
-function isRealtimeMode(mode) {
-  return Boolean(resolveRealtimeProvider(mode));
-}
-
-function getRealtimeRuntimeLabel(mode) {
-  const provider = resolveRealtimeProvider(mode);
-  if (provider === "xai") return "xai";
-  if (provider === "openai") return "openai_realtime";
-  return "realtime";
-}
-
-function parsePreferredSoundboardReferences(values) {
-  const source = Array.isArray(values) ? values : [];
-  const parsed = source
-    .map((value) => parseSoundboardReference(value))
-    .filter(Boolean)
-    .map((entry) => ({
-      ...entry,
-      name: null,
-      origin: "preferred"
-    }));
-  return dedupeSoundboardCandidates(parsed).slice(0, SOUNDBOARD_MAX_CANDIDATES);
-}
-
-function dedupeSoundboardCandidates(candidates) {
-  const source = Array.isArray(candidates) ? candidates : [];
-  const seen = new Set();
-  const out = [];
-
-  for (const entry of source) {
-    if (!entry || typeof entry !== "object") continue;
-    const reference = String(entry.reference || "").trim();
-    if (!reference) continue;
-    const key = reference.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({
-      ...entry,
-      reference
-    });
-  }
-
-  return out;
-}
-
-function formatSoundboardCandidateLine(entry) {
-  const reference = String(entry?.reference || "").trim();
-  const name = String(entry?.name || "").trim();
-  if (!reference) return "";
-  return name ? `- ${reference} | ${name}` : `- ${reference}`;
-}
-
-function normalizeSoundboardReferenceToken(value) {
-  return String(value || "")
-    .trim()
-    .replace(/^[`"'([{<]+/, "")
-    .replace(/[`"')\]}>.,!?;:]+$/, "")
-    .toLowerCase();
-}
-
-function matchSoundboardReference(options, requestedRef) {
-  const token = normalizeSoundboardReferenceToken(requestedRef);
-  if (!token) return null;
-  return options.find((entry) => String(entry.reference || "").toLowerCase() === token) || null;
-}
-
-function findMentionedSoundboardReference(options, text) {
-  const raw = String(text || "").toLowerCase();
-  if (!raw) return null;
-  return options.find((entry) => raw.includes(String(entry.reference || "").toLowerCase())) || null;
-}
-
-function isVoiceTurnAddressedToBot(transcript, settings) {
-  const normalized = String(transcript || "")
-    .trim()
-    .toLowerCase();
-  if (!normalized) return false;
-
-  const botName = String(settings?.botName || "")
-    .trim()
-    .toLowerCase();
-  if (botName && normalized.includes(botName)) return true;
-  if (hasBotKeyword(normalized)) return true;
-
-  // Common STT mishearings of "clanker" variants
-  if (/\b(?:cranker|klank(?:er)?|clonk(?:er)?|klonk(?:er)?|kronk(?:er)?|planker|blanker)\b/i.test(normalized)) {
-    return true;
-  }
-
-  return false;
-}
-
-function shouldAllowVoiceNsfwHumor(settings) {
-  const voiceFlag = settings?.voice?.openaiRealtime?.allowNsfwHumor;
-  if (voiceFlag === true) return true;
-  if (voiceFlag === false) return false;
-  return false;
-}
-
-function formatRealtimeMemoryFacts(facts, maxItems = REALTIME_MEMORY_FACT_LIMIT) {
-  if (!Array.isArray(facts) || !facts.length) return "";
-  return facts
-    .slice(0, Math.max(1, Number(maxItems) || REALTIME_MEMORY_FACT_LIMIT))
-    .map((row) => {
-      const fact = normalizeVoiceText(row?.fact || "", 180);
-      if (!fact) return "";
-      const type = String(row?.fact_type || "")
-        .trim()
-        .toLowerCase();
-      return type && type !== "other" ? `${type}: ${fact}` : fact;
-    })
-    .filter(Boolean)
-    .join(" | ");
-}
-
-function normalizeVoiceText(value, maxChars = 520) {
-  return String(value || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, Math.max(40, Number(maxChars) || 520));
-}
-
-function encodePcm16MonoAsWav(pcmBuffer, sampleRate = 24000) {
-  const pcm = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
-  const normalizedRate = Math.max(8000, Math.min(48000, Number(sampleRate) || 24000));
-  const channels = 1;
-  const bitsPerSample = 16;
-  const blockAlign = (channels * bitsPerSample) / 8;
-  const byteRate = normalizedRate * blockAlign;
-  const dataSize = pcm.length;
-  const buffer = Buffer.alloc(44 + dataSize);
-
-  buffer.write("RIFF", 0);
-  buffer.writeUInt32LE(36 + dataSize, 4);
-  buffer.write("WAVE", 8);
-  buffer.write("fmt ", 12);
-  buffer.writeUInt32LE(16, 16);
-  buffer.writeUInt16LE(1, 20);
-  buffer.writeUInt16LE(channels, 22);
-  buffer.writeUInt32LE(normalizedRate, 24);
-  buffer.writeUInt32LE(byteRate, 28);
-  buffer.writeUInt16LE(blockAlign, 32);
-  buffer.writeUInt16LE(bitsPerSample, 34);
-  buffer.write("data", 36);
-  buffer.writeUInt32LE(dataSize, 40);
-  pcm.copy(buffer, 44);
-
-  return buffer;
-}
