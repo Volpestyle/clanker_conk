@@ -2,8 +2,8 @@ export function nowIso() {
   return new Date().toISOString();
 }
 
-const BOT_KEYWORD_SUFFIX_PATTERN = "(?:a|er|s|or|ey|ie|r|y)?";
-const BOT_KEYWORD_PATTERN = `\\b(?:clank${BOT_KEYWORD_SUFFIX_PATTERN}|clunk${BOT_KEYWORD_SUFFIX_PATTERN})\\b`;
+const BOT_KEYWORD_PREFIXES = ["clank", "clink", "clunk", "clenk", "clonk"];
+const BOT_KEYWORD_PATTERN = `\\b(?:${BOT_KEYWORD_PREFIXES.join("|")})[a-z0-9_-]*\\b`;
 const BOT_KEYWORD_RE = new RegExp(BOT_KEYWORD_PATTERN, "i");
 const BOT_KEYWORD_GLOBAL_RE = new RegExp(BOT_KEYWORD_PATTERN, "gi");
 
