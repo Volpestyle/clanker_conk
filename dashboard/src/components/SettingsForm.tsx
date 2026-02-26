@@ -120,11 +120,18 @@ export default function SettingsForm({ settings, onSave, toast }) {
       initiativeSpontaneity: settings.initiative?.spontaneity ?? 65,
       initiativeStartupPost: settings.initiative?.postOnStartup ?? false,
       initiativeImageEnabled: settings.initiative?.allowImagePosts ?? false,
+      initiativeVideoEnabled: settings.initiative?.allowVideoPosts ?? false,
       replyImageEnabled: settings.initiative?.allowReplyImages ?? false,
+      replyVideoEnabled: settings.initiative?.allowReplyVideos ?? false,
       replyGifEnabled: settings.initiative?.allowReplyGifs ?? false,
       maxImagesPerDay: settings.initiative?.maxImagesPerDay ?? 10,
+      maxVideosPerDay: settings.initiative?.maxVideosPerDay ?? 6,
       maxGifsPerDay: settings.initiative?.maxGifsPerDay ?? 30,
-      initiativeImageModel: settings.initiative?.imageModel ?? "gpt-image-1.5",
+      initiativeSimpleImageModel: settings.initiative?.simpleImageModel ?? "gpt-image-1.5",
+      initiativeComplexImageModel: settings.initiative?.complexImageModel ?? "grok-imagine-image",
+      initiativeVideoModel: settings.initiative?.videoModel ?? "grok-imagine-video",
+      initiativeAllowedImageModels: formatList(settings.initiative?.allowedImageModels ?? []),
+      initiativeAllowedVideoModels: formatList(settings.initiative?.allowedVideoModels ?? []),
       initiativeDiscoveryEnabled: settings.initiative?.discovery?.enabled ?? true,
       initiativeDiscoveryLinkChance: settings.initiative?.discovery?.linkChancePercent ?? 80,
       initiativeDiscoveryMaxLinks: settings.initiative?.discovery?.maxLinksPerPost ?? 2,
@@ -248,11 +255,18 @@ export default function SettingsForm({ settings, onSave, toast }) {
         spontaneity: Number(form.initiativeSpontaneity),
         postOnStartup: form.initiativeStartupPost,
         allowImagePosts: form.initiativeImageEnabled,
+        allowVideoPosts: form.initiativeVideoEnabled,
         allowReplyImages: form.replyImageEnabled,
+        allowReplyVideos: form.replyVideoEnabled,
         allowReplyGifs: form.replyGifEnabled,
         maxImagesPerDay: Number(form.maxImagesPerDay),
+        maxVideosPerDay: Number(form.maxVideosPerDay),
         maxGifsPerDay: Number(form.maxGifsPerDay),
-        imageModel: form.initiativeImageModel.trim(),
+        simpleImageModel: form.initiativeSimpleImageModel.trim(),
+        complexImageModel: form.initiativeComplexImageModel.trim(),
+        videoModel: form.initiativeVideoModel.trim(),
+        allowedImageModels: parseList(form.initiativeAllowedImageModels),
+        allowedVideoModels: parseList(form.initiativeAllowedVideoModels),
         discovery: {
           enabled: form.initiativeDiscoveryEnabled,
           linkChancePercent: Number(form.initiativeDiscoveryLinkChance),
@@ -878,10 +892,26 @@ export default function SettingsForm({ settings, onSave, toast }) {
         <label>
           <input
             type="checkbox"
+            checked={form.initiativeVideoEnabled}
+            onChange={set("initiativeVideoEnabled")}
+          />
+          Allow video posts
+        </label>
+        <label>
+          <input
+            type="checkbox"
             checked={form.replyImageEnabled}
             onChange={set("replyImageEnabled")}
           />
           Allow images in regular replies
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.replyVideoEnabled}
+            onChange={set("replyVideoEnabled")}
+          />
+          Allow videos in regular replies
         </label>
         <label>
           <input
@@ -959,6 +989,20 @@ export default function SettingsForm({ settings, onSave, toast }) {
           />
         </div>
         <div>
+          <label htmlFor="max-videos-per-day">Max generated videos/24h</label>
+          <input
+            id="max-videos-per-day"
+            type="number"
+            min="0"
+            max="120"
+            value={form.maxVideosPerDay}
+            onChange={set("maxVideosPerDay")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
           <label htmlFor="max-gifs-per-day">Max GIF lookups/24h</label>
           <input
             id="max-gifs-per-day"
@@ -969,19 +1013,57 @@ export default function SettingsForm({ settings, onSave, toast }) {
             onChange={set("maxGifsPerDay")}
           />
         </div>
+        <div>
+          <label htmlFor="initiative-simple-image-model">Simple image model</label>
+          <input
+            id="initiative-simple-image-model"
+            type="text"
+            value={form.initiativeSimpleImageModel}
+            onChange={set("initiativeSimpleImageModel")}
+          />
+        </div>
       </div>
 
       <div className="split">
         <div>
-          <label htmlFor="initiative-image-model">Image model</label>
+          <label htmlFor="initiative-complex-image-model">Complex image model</label>
           <input
-            id="initiative-image-model"
+            id="initiative-complex-image-model"
             type="text"
-            value={form.initiativeImageModel}
-            onChange={set("initiativeImageModel")}
+            value={form.initiativeComplexImageModel}
+            onChange={set("initiativeComplexImageModel")}
           />
         </div>
-        <div />
+        <div>
+          <label htmlFor="initiative-video-model">Video model</label>
+          <input
+            id="initiative-video-model"
+            type="text"
+            value={form.initiativeVideoModel}
+            onChange={set("initiativeVideoModel")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="initiative-allowed-image-models">Allowed image models (comma/newline list)</label>
+          <textarea
+            id="initiative-allowed-image-models"
+            rows="3"
+            value={form.initiativeAllowedImageModels}
+            onChange={set("initiativeAllowedImageModels")}
+          />
+        </div>
+        <div>
+          <label htmlFor="initiative-allowed-video-models">Allowed video models (comma/newline list)</label>
+          <textarea
+            id="initiative-allowed-video-models"
+            rows="3"
+            value={form.initiativeAllowedVideoModels}
+            onChange={set("initiativeAllowedVideoModels")}
+          />
+        </div>
       </div>
 
       <h4>Creative Discovery</h4>

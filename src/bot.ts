@@ -29,12 +29,17 @@ const GATEWAY_RECONNECT_MAX_DELAY_MS = 60_000;
 const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
 const IMAGE_REQUEST_RE =
   /\b(?:make|generate|create|draw|paint|send|show|post)\b[\w\s,]{0,30}\b(?:image|picture|pic|photo|meme|art)\b|\b(?:image|picture|pic|photo|meme|art)\b[\w\s,]{0,24}\b(?:please|pls|plz|of|for|about)\b/i;
+const VIDEO_REQUEST_RE =
+  /\b(?:make|generate|create|render|produce|send|show|post)\b[\w\s,]{0,30}\b(?:video|clip|animation|short|movie)\b|\b(?:video|clip|animation|short|movie)\b[\w\s,]{0,24}\b(?:please|pls|plz|of|for|about)\b/i;
 const IMAGE_PROMPT_DIRECTIVE_RE = /\[\[IMAGE_PROMPT:\s*([\s\S]*?)\s*\]\]\s*$/i;
+const COMPLEX_IMAGE_PROMPT_DIRECTIVE_RE = /\[\[COMPLEX_IMAGE_PROMPT:\s*([\s\S]*?)\s*\]\]\s*$/i;
+const VIDEO_PROMPT_DIRECTIVE_RE = /\[\[VIDEO_PROMPT:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const GIF_QUERY_DIRECTIVE_RE = /\[\[GIF_QUERY:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const REACTION_DIRECTIVE_RE = /\[\[REACTION:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const WEB_SEARCH_DIRECTIVE_RE = /\[\[WEB_SEARCH:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const MEMORY_LINE_DIRECTIVE_RE = /\[\[MEMORY_LINE:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
+const MAX_MEDIA_PROMPT_LEN = 240;
 const MAX_WEB_QUERY_LEN = 220;
 const MAX_GIF_QUERY_LEN = 120;
 const MAX_MEMORY_LINE_LEN = 180;
@@ -44,6 +49,7 @@ const MAX_MODEL_IMAGE_INPUTS = 8;
 const UNSOLICITED_REPLY_CONTEXT_WINDOW = 5;
 const MENTION_CANDIDATE_RE = /(?<![\w<])@([a-z0-9][a-z0-9 ._'-]{0,63})/gi;
 const MAX_MENTION_CANDIDATES = 8;
+const MAX_MENTION_LOOKUP_VARIANTS = 8;
 const MENTION_GUILD_HISTORY_LOOKBACK = 500;
 const MENTION_SEARCH_RESULT_LIMIT = 10;
 
@@ -750,8 +756,14 @@ export class ClankerBot {
       : { userFacts: [], relevantFacts: [], relevantMessages: [] };
     const attachmentImageInputs = this.getImageInputs(message);
     const userRequestedImage = this.isExplicitImageRequest(message.content);
+    const userRequestedVideo = this.isExplicitVideoRequest(message.content);
     const imageBudget = this.getImageBudgetState(settings);
-    const imageCapabilityReady = this.isImageGenerationReady(settings);
+    const videoBudget = this.getVideoGenerationBudgetState(settings);
+    const mediaCapabilities = this.getMediaGenerationCapabilities(settings);
+    const simpleImageCapabilityReady = mediaCapabilities.simpleImageReady;
+    const complexImageCapabilityReady = mediaCapabilities.complexImageReady;
+    const imageCapabilityReady = simpleImageCapabilityReady || complexImageCapabilityReady;
+    const videoCapabilityReady = mediaCapabilities.videoReady;
     const gifBudget = this.getGifBudgetState(settings);
     const gifsConfigured = Boolean(this.gifs?.isConfigured?.());
     let webSearch = this.buildWebSearchContext(settings, message.content);
@@ -786,14 +798,20 @@ export class ClankerBot {
       relevantFacts: memorySlice.relevantFacts,
       emojiHints: this.getEmojiHints(message.guild),
       reactionEmojiOptions,
-      allowReplyImages:
-        settings.initiative.allowReplyImages && imageCapabilityReady && imageBudget.canGenerate,
+      allowReplySimpleImages:
+        settings.initiative.allowReplyImages && simpleImageCapabilityReady && imageBudget.canGenerate,
+      allowReplyComplexImages:
+        settings.initiative.allowReplyImages && complexImageCapabilityReady && imageBudget.canGenerate,
       remainingReplyImages: imageBudget.remaining,
+      allowReplyVideos:
+        settings.initiative.allowReplyVideos && videoCapabilityReady && videoBudget.canGenerate,
+      remainingReplyVideos: videoBudget.remaining,
       allowReplyGifs: settings.initiative.allowReplyGifs && gifsConfigured && gifBudget.canFetch,
       remainingReplyGifs: gifBudget.remaining,
       gifRepliesEnabled: settings.initiative.allowReplyGifs,
       gifsConfigured,
       userRequestedImage,
+      userRequestedVideo,
       replyEagerness,
       reactionEagerness,
       addressing: {
@@ -884,9 +902,8 @@ export class ClankerBot {
       }
     }
 
-    let finalText = sanitizeBotText(
-      replyDirective.text || (replyDirective.imagePrompt || replyDirective.gifQuery ? "here you go" : "")
-    );
+    const mediaDirective = pickReplyMediaDirective(replyDirective);
+    let finalText = sanitizeBotText(replyDirective.text || (mediaDirective ? "here you go" : ""));
     let mentionResolution = emptyMentionResolution();
     finalText = normalizeSkipSentinel(finalText);
     if (!finalText || finalText === "[SKIP]") {
@@ -913,13 +930,19 @@ export class ClankerBot {
     let imageUsed = false;
     let imageBudgetBlocked = false;
     let imageCapabilityBlocked = false;
+    let imageVariantUsed = null;
+    let videoUsed = false;
+    let videoBudgetBlocked = false;
+    let videoCapabilityBlocked = false;
     let gifUsed = false;
     let gifBudgetBlocked = false;
     let gifConfigBlocked = false;
     const imagePrompt = replyDirective.imagePrompt;
+    const complexImagePrompt = replyDirective.complexImagePrompt;
+    const videoPrompt = replyDirective.videoPrompt;
     const gifQuery = replyDirective.gifQuery;
 
-    if (gifQuery) {
+    if (mediaDirective?.type === "gif" && gifQuery) {
       const gifResult = await this.maybeAttachReplyGif({
         settings,
         text: finalText,
@@ -937,11 +960,12 @@ export class ClankerBot {
       gifConfigBlocked = gifResult.blockedByConfiguration;
     }
 
-    if (!gifUsed && settings.initiative.allowReplyImages && imagePrompt) {
+    if (mediaDirective?.type === "image_simple" && settings.initiative.allowReplyImages && imagePrompt) {
       const imageResult = await this.maybeAttachGeneratedImage({
         settings,
         text: finalText,
         prompt: imagePrompt,
+        variant: "simple",
         trace: {
           guildId: message.guildId,
           channelId: message.channelId,
@@ -953,6 +977,45 @@ export class ClankerBot {
       imageUsed = imageResult.imageUsed;
       imageBudgetBlocked = imageResult.blockedByBudget;
       imageCapabilityBlocked = imageResult.blockedByCapability;
+      imageVariantUsed = imageResult.variant || "simple";
+    }
+
+    if (mediaDirective?.type === "image_complex" && settings.initiative.allowReplyImages && complexImagePrompt) {
+      const imageResult = await this.maybeAttachGeneratedImage({
+        settings,
+        text: finalText,
+        prompt: complexImagePrompt,
+        variant: "complex",
+        trace: {
+          guildId: message.guildId,
+          channelId: message.channelId,
+          userId: message.author.id,
+          source: "reply_message"
+        }
+      });
+      payload = imageResult.payload;
+      imageUsed = imageResult.imageUsed;
+      imageBudgetBlocked = imageResult.blockedByBudget;
+      imageCapabilityBlocked = imageResult.blockedByCapability;
+      imageVariantUsed = imageResult.variant || "complex";
+    }
+
+    if (mediaDirective?.type === "video" && settings.initiative.allowReplyVideos && videoPrompt) {
+      const videoResult = await this.maybeAttachGeneratedVideo({
+        settings,
+        text: finalText,
+        prompt: videoPrompt,
+        trace: {
+          guildId: message.guildId,
+          channelId: message.channelId,
+          userId: message.author.id,
+          source: "reply_message"
+        }
+      });
+      payload = videoResult.payload;
+      videoUsed = videoResult.videoUsed;
+      videoBudgetBlocked = videoResult.blockedByBudget;
+      videoCapabilityBlocked = videoResult.blockedByCapability;
     }
 
     await message.channel.sendTyping();
@@ -996,13 +1059,28 @@ export class ClankerBot {
         canStandalonePost,
         image: {
           requestedByUser: userRequestedImage,
-          requestedByModel: Boolean(imagePrompt),
+          requestedByModel: Boolean(imagePrompt || complexImagePrompt),
+          requestedSimpleByModel: Boolean(imagePrompt),
+          requestedComplexByModel: Boolean(complexImagePrompt),
+          selectedVariant: imageVariantUsed,
           used: imageUsed,
           blockedByDailyCap: imageBudgetBlocked,
           blockedByCapability: imageCapabilityBlocked,
           maxPerDay: imageBudget.maxPerDay,
           remainingAtPromptTime: imageBudget.remaining,
+          simpleCapabilityReadyAtPromptTime: simpleImageCapabilityReady,
+          complexCapabilityReadyAtPromptTime: complexImageCapabilityReady,
           capabilityReadyAtPromptTime: imageCapabilityReady
+        },
+        videoGeneration: {
+          requestedByUser: userRequestedVideo,
+          requestedByModel: Boolean(videoPrompt),
+          used: videoUsed,
+          blockedByDailyCap: videoBudgetBlocked,
+          blockedByCapability: videoCapabilityBlocked,
+          maxPerDay: videoBudget.maxPerDay,
+          remainingAtPromptTime: videoBudget.remaining,
+          capabilityReadyAtPromptTime: videoCapabilityReady
         },
         gif: {
           requestedByModel: Boolean(gifQuery),
@@ -1206,6 +1284,20 @@ export class ClankerBot {
     };
   }
 
+  getVideoGenerationBudgetState(settings) {
+    const maxPerDay = clamp(Number(settings.initiative?.maxVideosPerDay) || 0, 0, 120);
+    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+    const used = this.store.countActionsSince("video_call", since24h);
+    const remaining = Math.max(0, maxPerDay - used);
+
+    return {
+      maxPerDay,
+      used,
+      remaining,
+      canGenerate: maxPerDay > 0 && remaining > 0
+    };
+  }
+
   getGifBudgetState(settings) {
     const maxPerDay = clamp(Number(settings.initiative?.maxGifsPerDay) || 0, 0, 300);
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
@@ -1220,12 +1312,35 @@ export class ClankerBot {
     };
   }
 
-  isImageGenerationReady(settings) {
-    return Boolean(this.llm?.isImageGenerationReady?.(settings));
+  getMediaGenerationCapabilities(settings) {
+    if (!this.llm?.getMediaGenerationCapabilities) {
+      return {
+        simpleImageReady: false,
+        complexImageReady: false,
+        videoReady: false,
+        simpleImageModel: null,
+        complexImageModel: null,
+        videoModel: null
+      };
+    }
+
+    return this.llm.getMediaGenerationCapabilities(settings);
+  }
+
+  isImageGenerationReady(settings, variant = "any") {
+    return Boolean(this.llm?.isImageGenerationReady?.(settings, variant));
+  }
+
+  isVideoGenerationReady(settings) {
+    return Boolean(this.llm?.isVideoGenerationReady?.(settings));
   }
 
   isExplicitImageRequest(messageText) {
     return IMAGE_REQUEST_RE.test(String(messageText || ""));
+  }
+
+  isExplicitVideoRequest(messageText) {
+    return VIDEO_REQUEST_RE.test(String(messageText || ""));
   }
 
   getWebSearchBudgetState(settings) {
@@ -1484,13 +1599,14 @@ export class ClankerBot {
     }
   }
 
-  async maybeAttachGeneratedImage({ settings, text, prompt, trace }) {
+  async maybeAttachGeneratedImage({ settings, text, prompt, variant = "simple", trace }) {
     const payload = { content: text };
-    const ready = this.isImageGenerationReady(settings);
+    const ready = this.isImageGenerationReady(settings, variant);
     if (!ready) {
       return {
         payload,
         imageUsed: false,
+        variant: null,
         blockedByBudget: false,
         blockedByCapability: true,
         budget: this.getImageBudgetState(settings)
@@ -1502,6 +1618,7 @@ export class ClankerBot {
       return {
         payload,
         imageUsed: false,
+        variant: null,
         blockedByBudget: true,
         blockedByCapability: false,
         budget
@@ -1512,12 +1629,14 @@ export class ClankerBot {
       const image = await this.llm.generateImage({
         settings,
         prompt,
+        variant,
         trace
       });
       const withImage = this.buildMessagePayloadWithImage(text, image);
       return {
         payload: withImage.payload,
         imageUsed: withImage.imageUsed,
+        variant: image.variant || variant,
         blockedByBudget: false,
         blockedByCapability: false,
         budget
@@ -1526,6 +1645,56 @@ export class ClankerBot {
       return {
         payload,
         imageUsed: false,
+        variant: null,
+        blockedByBudget: false,
+        blockedByCapability: false,
+        budget
+      };
+    }
+  }
+
+  async maybeAttachGeneratedVideo({ settings, text, prompt, trace }) {
+    const payload = { content: text };
+    const ready = this.isVideoGenerationReady(settings);
+    if (!ready) {
+      return {
+        payload,
+        videoUsed: false,
+        blockedByBudget: false,
+        blockedByCapability: true,
+        budget: this.getVideoGenerationBudgetState(settings)
+      };
+    }
+
+    const budget = this.getVideoGenerationBudgetState(settings);
+    if (!budget.canGenerate) {
+      return {
+        payload,
+        videoUsed: false,
+        blockedByBudget: true,
+        blockedByCapability: false,
+        budget
+      };
+    }
+
+    try {
+      const video = await this.llm.generateVideo({
+        settings,
+        prompt,
+        trace
+      });
+      const withVideo = this.buildMessagePayloadWithVideo(text, video);
+      return {
+        payload: withVideo.payload,
+        videoUsed: withVideo.videoUsed,
+        blockedByBudget: false,
+        blockedByCapability: false,
+        budget
+      };
+    } catch {
+      return {
+        payload,
+        videoUsed: false,
         blockedByBudget: false,
         blockedByCapability: false,
         budget
@@ -1636,6 +1805,23 @@ export class ClankerBot {
     };
   }
 
+  buildMessagePayloadWithVideo(text, video) {
+    const videoUrl = String(video?.videoUrl || "").trim();
+    if (!videoUrl) {
+      return {
+        payload: { content: text },
+        videoUsed: false
+      };
+    }
+
+    const trimmedText = String(text || "").trim();
+    const content = trimmedText ? `${trimmedText}\n${videoUrl}` : videoUrl;
+    return {
+      payload: { content },
+      videoUsed: true
+    };
+  }
+
   buildMessagePayloadWithGif(text, gifUrl) {
     const normalizedUrl = String(gifUrl || "").trim();
     if (!normalizedUrl) {
@@ -1708,7 +1894,11 @@ export class ClankerBot {
     }
 
     const aliasIndex = this.buildMentionAliasIndex({ guild, guildId });
-    const keys = [...new Set(candidates.map((item) => item.lookupKey))];
+    const keys = [
+      ...new Set(
+        candidates.flatMap((item) => item.variants.map((variant) => variant.lookupKey))
+      )
+    ];
     const resolutionByKey = new Map();
 
     for (const key of keys) {
@@ -1739,12 +1929,28 @@ export class ClankerBot {
     const sorted = candidates.slice().sort((a, b) => b.start - a.start);
 
     for (const candidate of sorted) {
-      const resolution = resolutionByKey.get(candidate.lookupKey);
-      if (!resolution) continue;
-      if (resolution.status === "resolved") {
-        output = `${output.slice(0, candidate.start)}<@${resolution.id}>${output.slice(candidate.end)}`;
+      let selectedVariant = null;
+      let ambiguous = false;
+
+      for (const variant of candidate.variants) {
+        const resolution = resolutionByKey.get(variant.lookupKey);
+        if (!resolution) continue;
+        if (resolution.status === "resolved") {
+          selectedVariant = {
+            end: variant.end,
+            id: resolution.id
+          };
+          break;
+        }
+        if (resolution.status === "ambiguous") {
+          ambiguous = true;
+        }
+      }
+
+      if (selectedVariant) {
+        output = `${output.slice(0, candidate.start)}<@${selectedVariant.id}>${output.slice(selectedVariant.end)}`;
         resolvedCount += 1;
-      } else if (resolution.status === "ambiguous") {
+      } else if (ambiguous) {
         ambiguousCount += 1;
       } else {
         unresolvedCount += 1;
@@ -2039,15 +2245,33 @@ export class ClankerBot {
         discoveryResult.candidates.length > 0 &&
         chance((settings.initiative?.discovery?.linkChancePercent || 0) / 100);
       const initiativeImageBudget = this.getImageBudgetState(settings);
-      const initiativeImageCapabilityReady = this.isImageGenerationReady(settings);
+      const initiativeVideoBudget = this.getVideoGenerationBudgetState(settings);
+      const initiativeMediaCapabilities = this.getMediaGenerationCapabilities(settings);
+      const initiativeSimpleImageCapabilityReady = initiativeMediaCapabilities.simpleImageReady;
+      const initiativeComplexImageCapabilityReady = initiativeMediaCapabilities.complexImageReady;
+      const initiativeImageCapabilityReady =
+        initiativeSimpleImageCapabilityReady || initiativeComplexImageCapabilityReady;
+      const initiativeVideoCapabilityReady = initiativeMediaCapabilities.videoReady;
 
       const systemPrompt = buildSystemPrompt(settings);
       const userPrompt = buildInitiativePrompt({
         channelName: channel.name || "channel",
         recentMessages,
         emojiHints: this.getEmojiHints(channel.guild),
-        allowImagePosts: settings.initiative.allowImagePosts && initiativeImageCapabilityReady,
+        allowSimpleImagePosts:
+          settings.initiative.allowImagePosts &&
+          initiativeSimpleImageCapabilityReady &&
+          initiativeImageBudget.canGenerate,
+        allowComplexImagePosts:
+          settings.initiative.allowImagePosts &&
+          initiativeComplexImageCapabilityReady &&
+          initiativeImageBudget.canGenerate,
         remainingInitiativeImages: initiativeImageBudget.remaining,
+        allowVideoPosts:
+          settings.initiative.allowVideoPosts &&
+          initiativeVideoCapabilityReady &&
+          initiativeVideoBudget.canGenerate,
+        remainingInitiativeVideos: initiativeVideoBudget.remaining,
         discoveryFindings: discoveryResult.candidates,
         maxLinksPerPost: settings.initiative?.discovery?.maxLinksPerPost || 2,
         requireDiscoveryLink
@@ -2064,11 +2288,12 @@ export class ClankerBot {
         }
       });
 
-      const initiativeDirective = parseInitiativeImageDirective(generation.text);
+      const initiativeDirective = parseInitiativeMediaDirective(generation.text);
       const imagePrompt = initiativeDirective.imagePrompt;
-      let finalText = sanitizeBotText(
-        initiativeDirective.text || (imagePrompt ? "quick drop" : generation.text)
-      );
+      const complexImagePrompt = initiativeDirective.complexImagePrompt;
+      const videoPrompt = initiativeDirective.videoPrompt;
+      const mediaDirective = pickInitiativeMediaDirective(initiativeDirective);
+      let finalText = sanitizeBotText(initiativeDirective.text || (mediaDirective ? "quick drop" : generation.text));
       finalText = normalizeSkipSentinel(finalText);
       if (!finalText || finalText === "[SKIP]") return;
       const linkPolicy = this.applyDiscoveryLinkPolicy({
@@ -2090,11 +2315,16 @@ export class ClankerBot {
       let imageUsed = false;
       let imageBudgetBlocked = false;
       let imageCapabilityBlocked = false;
-      if (settings.initiative.allowImagePosts && imagePrompt) {
+      let imageVariantUsed = null;
+      let videoUsed = false;
+      let videoBudgetBlocked = false;
+      let videoCapabilityBlocked = false;
+      if (mediaDirective?.type === "image_simple" && settings.initiative.allowImagePosts && imagePrompt) {
         const imageResult = await this.maybeAttachGeneratedImage({
           settings,
           text: finalText,
           prompt: composeInitiativeImagePrompt(imagePrompt, finalText),
+          variant: "simple",
           trace: {
             guildId: channel.guildId,
             channelId: channel.id,
@@ -2106,6 +2336,49 @@ export class ClankerBot {
         imageUsed = imageResult.imageUsed;
         imageBudgetBlocked = imageResult.blockedByBudget;
         imageCapabilityBlocked = imageResult.blockedByCapability;
+        imageVariantUsed = imageResult.variant || "simple";
+      }
+
+      if (
+        mediaDirective?.type === "image_complex" &&
+        settings.initiative.allowImagePosts &&
+        complexImagePrompt
+      ) {
+        const imageResult = await this.maybeAttachGeneratedImage({
+          settings,
+          text: finalText,
+          prompt: composeInitiativeImagePrompt(complexImagePrompt, finalText),
+          variant: "complex",
+          trace: {
+            guildId: channel.guildId,
+            channelId: channel.id,
+            userId: this.client.user.id,
+            source: "initiative_post"
+          }
+        });
+        payload = imageResult.payload;
+        imageUsed = imageResult.imageUsed;
+        imageBudgetBlocked = imageResult.blockedByBudget;
+        imageCapabilityBlocked = imageResult.blockedByCapability;
+        imageVariantUsed = imageResult.variant || "complex";
+      }
+
+      if (mediaDirective?.type === "video" && settings.initiative.allowVideoPosts && videoPrompt) {
+        const videoResult = await this.maybeAttachGeneratedVideo({
+          settings,
+          text: finalText,
+          prompt: composeInitiativeVideoPrompt(videoPrompt, finalText),
+          trace: {
+            guildId: channel.guildId,
+            channelId: channel.id,
+            userId: this.client.user.id,
+            source: "initiative_post"
+          }
+        });
+        payload = videoResult.payload;
+        videoUsed = videoResult.videoUsed;
+        videoBudgetBlocked = videoResult.blockedByBudget;
+        videoCapabilityBlocked = videoResult.blockedByCapability;
       }
 
       await channel.sendTyping();
@@ -2160,11 +2433,21 @@ export class ClankerBot {
             errors: discoveryResult.errors
           },
           mentions: mentionResolution,
-          imageRequestedByModel: Boolean(imagePrompt),
+          imageRequestedByModel: Boolean(imagePrompt || complexImagePrompt),
+          imageRequestedSimpleByModel: Boolean(imagePrompt),
+          imageRequestedComplexByModel: Boolean(complexImagePrompt),
           imageUsed,
+          imageVariantUsed,
           imageBudgetBlocked,
           imageCapabilityBlocked,
+          imageSimpleCapabilityReadyAtPromptTime: initiativeSimpleImageCapabilityReady,
+          imageComplexCapabilityReadyAtPromptTime: initiativeComplexImageCapabilityReady,
           imageCapabilityReadyAtPromptTime: initiativeImageCapabilityReady,
+          videoRequestedByModel: Boolean(videoPrompt),
+          videoUsed,
+          videoBudgetBlocked,
+          videoCapabilityBlocked,
+          videoCapabilityReadyAtPromptTime: initiativeVideoCapabilityReady,
           llm: {
             provider: generation.provider,
             model: generation.model,
@@ -2609,25 +2892,59 @@ function extractMentionCandidates(text, maxItems = MAX_MENTION_CANDIDATES) {
     const withoutTrailingPunctuation = withoutTrailingSpace
       .replace(/[.,:;!?)\]}]+$/g, "")
       .replace(/\s+$/g, "");
-    const displayName = withoutTrailingPunctuation.trim();
-    if (!displayName) continue;
-    if (/^\d{2,}$/.test(displayName)) continue;
-
-    const lookupKey = normalizeMentionLookupKey(displayName);
-    if (!lookupKey || lookupKey === "everyone" || lookupKey === "here") continue;
-
     const start = match.index;
-    const end = start + 1 + withoutTrailingPunctuation.length;
+    const variants = buildMentionLookupVariants({
+      mentionText: withoutTrailingPunctuation,
+      mentionStart: start
+    });
+    if (!variants.length) continue;
+    const end = variants[0].end;
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start + 1) continue;
 
     out.push({
       start,
       end,
-      lookupKey
+      variants
     });
   }
 
   return out;
+}
+
+function buildMentionLookupVariants({ mentionText, mentionStart }) {
+  const source = String(mentionText || "").trim();
+  if (!source) return [];
+
+  const wordRe = /[a-z0-9][a-z0-9._'-]*/gi;
+  const tokens = [];
+  let token;
+  while ((token = wordRe.exec(source))) {
+    tokens.push({
+      end: token.index + String(token[0] || "").length
+    });
+  }
+  if (!tokens.length) return [];
+
+  const variants = [];
+  const seen = new Set();
+  const maxTokens = Math.min(tokens.length, MAX_MENTION_LOOKUP_VARIANTS);
+  for (let count = maxTokens; count >= 1; count -= 1) {
+    const tokenEnd = tokens[count - 1]?.end;
+    if (!Number.isFinite(tokenEnd) || tokenEnd <= 0) continue;
+    const prefix = source.slice(0, tokenEnd).replace(/\s+$/g, "");
+    if (!prefix) continue;
+    if (/^\d{2,}$/.test(prefix)) continue;
+    const lookupKey = normalizeMentionLookupKey(prefix);
+    if (!lookupKey || lookupKey === "everyone" || lookupKey === "here") continue;
+    if (seen.has(lookupKey)) continue;
+    seen.add(lookupKey);
+    variants.push({
+      lookupKey,
+      end: mentionStart + 1 + prefix.length
+    });
+  }
+
+  return variants;
 }
 
 function normalizeMentionLookupKey(value) {
@@ -2707,7 +3024,7 @@ function composeInitiativeImagePrompt(imagePrompt, postText) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 260);
-  const requested = normalizeDirectiveText(imagePrompt, 240);
+  const requested = normalizeDirectiveText(imagePrompt, MAX_MEDIA_PROMPT_LEN);
 
   return [
     "Create a playful, meme-friendly image for a Discord post.",
@@ -2720,46 +3037,141 @@ function composeInitiativeImagePrompt(imagePrompt, postText) {
   ].join("\n");
 }
 
-function parseInitiativeImageDirective(rawText) {
-  const text = String(rawText || "").trim();
-  const match = text.match(IMAGE_PROMPT_DIRECTIVE_RE);
-  if (!match) {
-    return {
-      text,
-      imagePrompt: null
-    };
+function composeInitiativeVideoPrompt(videoPrompt, postText) {
+  URL_IN_TEXT_RE.lastIndex = 0;
+  const topic = String(postText || "")
+    .replace(URL_IN_TEXT_RE, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 260);
+  const requested = normalizeDirectiveText(videoPrompt, MAX_MEDIA_PROMPT_LEN);
+
+  return [
+    "Create a short, dynamic, meme-friendly video for a Discord post.",
+    `Creative direction: ${requested || "a timely playful internet moment"}.`,
+    `Topic context for visual inspiration only: ${topic || "general chat mood"}.`,
+    "Hard constraints:",
+    "- Do not include visible text, captions, subtitles, logos, watermarks, or UI overlays.",
+    "- Keep motion clear and readable in a short social clip format."
+  ].join("\n");
+}
+
+function parseInitiativeMediaDirective(rawText) {
+  const parsed = {
+    text: String(rawText || "").trim(),
+    imagePrompt: null,
+    complexImagePrompt: null,
+    videoPrompt: null,
+    mediaDirective: null
+  };
+
+  while (parsed.text) {
+    const complexImageMatch = parsed.text.match(COMPLEX_IMAGE_PROMPT_DIRECTIVE_RE);
+    if (complexImageMatch) {
+      const prompt = normalizeDirectiveText(complexImageMatch[1], MAX_MEDIA_PROMPT_LEN) || null;
+      if (!parsed.complexImagePrompt) {
+        parsed.complexImagePrompt = prompt;
+      }
+      if (!parsed.mediaDirective && prompt) {
+        parsed.mediaDirective = { type: "image_complex", prompt };
+      }
+      parsed.text = parsed.text.slice(0, complexImageMatch.index).trim();
+      continue;
+    }
+
+    const imageMatch = parsed.text.match(IMAGE_PROMPT_DIRECTIVE_RE);
+    if (imageMatch) {
+      const prompt = normalizeDirectiveText(imageMatch[1], MAX_MEDIA_PROMPT_LEN) || null;
+      if (!parsed.imagePrompt) {
+        parsed.imagePrompt = prompt;
+      }
+      if (!parsed.mediaDirective && prompt) {
+        parsed.mediaDirective = { type: "image_simple", prompt };
+      }
+      parsed.text = parsed.text.slice(0, imageMatch.index).trim();
+      continue;
+    }
+
+    const videoMatch = parsed.text.match(VIDEO_PROMPT_DIRECTIVE_RE);
+    if (videoMatch) {
+      const prompt = normalizeDirectiveText(videoMatch[1], MAX_MEDIA_PROMPT_LEN) || null;
+      if (!parsed.videoPrompt) {
+        parsed.videoPrompt = prompt;
+      }
+      if (!parsed.mediaDirective && prompt) {
+        parsed.mediaDirective = { type: "video", prompt };
+      }
+      parsed.text = parsed.text.slice(0, videoMatch.index).trim();
+      continue;
+    }
+
+    break;
   }
 
-  return {
-    text: text.slice(0, match.index).trim(),
-    imagePrompt: normalizeDirectiveText(match[1], 240) || null
-  };
+  return parsed;
 }
 
 function parseReplyDirectives(rawText) {
   const parsed = {
     text: String(rawText || "").trim(),
     imagePrompt: null,
+    complexImagePrompt: null,
+    videoPrompt: null,
     gifQuery: null,
+    mediaDirective: null,
     reactionEmoji: null,
     webSearchQuery: null,
     memoryLine: null
   };
 
   while (parsed.text) {
+    const complexImageMatch = parsed.text.match(COMPLEX_IMAGE_PROMPT_DIRECTIVE_RE);
+    if (complexImageMatch) {
+      const prompt = normalizeDirectiveText(complexImageMatch[1], MAX_MEDIA_PROMPT_LEN) || null;
+      if (!parsed.complexImagePrompt) {
+        parsed.complexImagePrompt = prompt;
+      }
+      if (!parsed.mediaDirective && prompt) {
+        parsed.mediaDirective = { type: "image_complex", prompt };
+      }
+      parsed.text = parsed.text.slice(0, complexImageMatch.index).trim();
+      continue;
+    }
+
     const imageMatch = parsed.text.match(IMAGE_PROMPT_DIRECTIVE_RE);
     if (imageMatch) {
+      const prompt = normalizeDirectiveText(imageMatch[1], MAX_MEDIA_PROMPT_LEN) || null;
       if (!parsed.imagePrompt) {
-        parsed.imagePrompt = normalizeDirectiveText(imageMatch[1], 240) || null;
+        parsed.imagePrompt = prompt;
+      }
+      if (!parsed.mediaDirective && prompt) {
+        parsed.mediaDirective = { type: "image_simple", prompt };
       }
       parsed.text = parsed.text.slice(0, imageMatch.index).trim();
       continue;
     }
 
+    const videoMatch = parsed.text.match(VIDEO_PROMPT_DIRECTIVE_RE);
+    if (videoMatch) {
+      const prompt = normalizeDirectiveText(videoMatch[1], MAX_MEDIA_PROMPT_LEN) || null;
+      if (!parsed.videoPrompt) {
+        parsed.videoPrompt = prompt;
+      }
+      if (!parsed.mediaDirective && prompt) {
+        parsed.mediaDirective = { type: "video", prompt };
+      }
+      parsed.text = parsed.text.slice(0, videoMatch.index).trim();
+      continue;
+    }
+
     const gifMatch = parsed.text.match(GIF_QUERY_DIRECTIVE_RE);
     if (gifMatch) {
+      const query = normalizeDirectiveText(gifMatch[1], MAX_GIF_QUERY_LEN) || null;
       if (!parsed.gifQuery) {
-        parsed.gifQuery = normalizeDirectiveText(gifMatch[1], MAX_GIF_QUERY_LEN) || null;
+        parsed.gifQuery = query;
+      }
+      if (!parsed.mediaDirective && query) {
+        parsed.mediaDirective = { type: "gif", prompt: query };
       }
       parsed.text = parsed.text.slice(0, gifMatch.index).trim();
       continue;
@@ -2796,6 +3208,14 @@ function parseReplyDirectives(rawText) {
   }
 
   return parsed;
+}
+
+function pickReplyMediaDirective(parsed) {
+  return parsed?.mediaDirective || null;
+}
+
+function pickInitiativeMediaDirective(parsed) {
+  return parsed?.mediaDirective || null;
 }
 
 function normalizeDirectiveText(text, maxLen) {

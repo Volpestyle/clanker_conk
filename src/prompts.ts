@@ -155,13 +155,17 @@ export function buildReplyPrompt({
   relevantFacts,
   emojiHints,
   reactionEmojiOptions = [],
-  allowReplyImages = false,
+  allowReplySimpleImages = false,
+  allowReplyComplexImages = false,
   remainingReplyImages = 0,
+  allowReplyVideos = false,
+  remainingReplyVideos = 0,
   allowReplyGifs = false,
   remainingReplyGifs = 0,
   gifRepliesEnabled = false,
   gifsConfigured = false,
   userRequestedImage = false,
+  userRequestedVideo = false,
   replyEagerness = 35,
   reactionEagerness = 20,
   addressing = null,
@@ -339,24 +343,49 @@ export function buildReplyPrompt({
   }
 
   const remainingImages = Math.max(0, Math.floor(Number(remainingReplyImages) || 0));
-  if (allowReplyImages && remainingImages > 0) {
+  const remainingVideos = Math.max(0, Math.floor(Number(remainingReplyVideos) || 0));
+  const simpleImageAvailable = allowReplySimpleImages && remainingImages > 0;
+  const complexImageAvailable = allowReplyComplexImages && remainingImages > 0;
+  const videoGenerationAvailable = allowReplyVideos && remainingVideos > 0;
+  const anyVisualGeneration = simpleImageAvailable || complexImageAvailable || videoGenerationAvailable;
+
+  if (anyVisualGeneration) {
     parts.push(
-      `Reply image generation is available (${remainingImages} image slot(s) left in the rolling 24h budget).`
+      `Visual generation is available (${remainingImages} image slot(s), ${remainingVideos} video slot(s) left where enabled in the rolling 24h budgets).`
     );
-    parts.push(
-      "If an image should be generated, append one final line exactly in this format: [[IMAGE_PROMPT: your prompt here]]"
-    );
-    parts.push(
-      "Use IMAGE_PROMPT only when the user explicitly asks for an image or a visual is clearly the best response."
-    );
-    if (userRequestedImage) {
-      parts.push("The user explicitly asked for an image. Include IMAGE_PROMPT unless unsafe or disallowed.");
+    if (simpleImageAvailable) {
+      parts.push(
+        "For a simple/quick visual, append one final line exactly: [[IMAGE_PROMPT: your prompt here]]"
+      );
+      parts.push("Use IMAGE_PROMPT for straightforward concepts or fast meme-style visuals.");
     }
-    parts.push("Keep IMAGE_PROMPT concise (under 240 chars), and always include normal reply text.");
+    if (complexImageAvailable) {
+      parts.push(
+        "For a detailed or composition-heavy visual, append one final line exactly: [[COMPLEX_IMAGE_PROMPT: your prompt here]]"
+      );
+      parts.push("Use COMPLEX_IMAGE_PROMPT for cinematic/detail-rich scenes or harder visual requests.");
+    }
+    if (videoGenerationAvailable) {
+      parts.push(
+        "If a generated clip is best, append one final line exactly: [[VIDEO_PROMPT: your prompt here]]"
+      );
+      parts.push("Use VIDEO_PROMPT when motion/animation is meaningfully better than a still image.");
+    }
+    if (userRequestedImage && !simpleImageAvailable && complexImageAvailable) {
+      parts.push("The user asked for an image. Prefer COMPLEX_IMAGE_PROMPT for this turn.");
+    } else if (userRequestedImage && simpleImageAvailable) {
+      parts.push("The user asked for an image. Include IMAGE_PROMPT or COMPLEX_IMAGE_PROMPT unless unsafe.");
+    }
+    if (userRequestedVideo && videoGenerationAvailable) {
+      parts.push("The user asked for a video. Include VIDEO_PROMPT unless unsafe or disallowed.");
+    }
+    parts.push(
+      "Keep IMAGE_PROMPT, COMPLEX_IMAGE_PROMPT, and VIDEO_PROMPT concise (under 240 chars), and always include normal reply text."
+    );
   } else {
-    parts.push("Reply image generation is unavailable right now. Respond with text only.");
-    if (userRequestedImage) {
-      parts.push("The user asked for an image. Briefly acknowledge the limit in your text reply.");
+    parts.push("Reply image/video generation is unavailable right now. Respond with text only.");
+    if (userRequestedImage || userRequestedVideo) {
+      parts.push("The user asked for generated media. Briefly acknowledge the limit in your text reply.");
     }
   }
 
@@ -378,8 +407,10 @@ export function buildReplyPrompt({
     parts.push("Do not output GIF_QUERY.");
   }
 
-  if ((allowReplyImages && remainingImages > 0) || (allowReplyGifs && remainingGifs > 0)) {
-    parts.push("If you use media directives, output at most one: IMAGE_PROMPT or GIF_QUERY.");
+  if (anyVisualGeneration || (allowReplyGifs && remainingGifs > 0)) {
+    parts.push(
+      "If you use media directives, output at most one: IMAGE_PROMPT, COMPLEX_IMAGE_PROMPT, VIDEO_PROMPT, or GIF_QUERY."
+    );
   }
 
   if (allowMemoryDirective) {
@@ -403,8 +434,11 @@ export function buildInitiativePrompt({
   channelName,
   recentMessages,
   emojiHints,
-  allowImagePosts,
+  allowSimpleImagePosts,
+  allowComplexImagePosts,
+  allowVideoPosts,
   remainingInitiativeImages = 0,
+  remainingInitiativeVideos = 0,
   discoveryFindings = [],
   maxLinksPerPost = 2,
   requireDiscoveryLink = false
@@ -422,25 +456,39 @@ export function buildInitiativePrompt({
   }
 
   const remainingImages = Math.max(0, Math.floor(Number(remainingInitiativeImages) || 0));
-  if (allowImagePosts && remainingImages > 0) {
+  const remainingVideos = Math.max(0, Math.floor(Number(remainingInitiativeVideos) || 0));
+  const simpleImageAvailable = allowSimpleImagePosts && remainingImages > 0;
+  const complexImageAvailable = allowComplexImagePosts && remainingImages > 0;
+  const videoAvailable = allowVideoPosts && remainingVideos > 0;
+  const anyVisualAvailable = simpleImageAvailable || complexImageAvailable || videoAvailable;
+
+  if (anyVisualAvailable) {
     parts.push(
-      "You may include visual or meme-friendly ideas in your post text; an image may be generated separately."
+      "You may include visual or meme-friendly ideas in your post text; an image or short video may be generated separately."
     );
     parts.push(
-      `Image generation is available for this post (${remainingImages} image slot(s) left in the rolling 24h budget).`
+      `Visual generation is available for this post (${remainingImages} image slot(s), ${remainingVideos} video slot(s) left where enabled in the rolling 24h budgets).`
+    );
+    if (simpleImageAvailable) {
+      parts.push("For a simple/quick visual, append: [[IMAGE_PROMPT: your prompt here]]");
+    }
+    if (complexImageAvailable) {
+      parts.push("For a detailed/composition-heavy visual, append: [[COMPLEX_IMAGE_PROMPT: your prompt here]]");
+    }
+    if (videoAvailable) {
+      parts.push("If this post should include motion, append: [[VIDEO_PROMPT: your prompt here]]");
+    }
+    parts.push(
+      "Keep IMAGE_PROMPT, COMPLEX_IMAGE_PROMPT, and VIDEO_PROMPT concise (under 240 chars)."
     );
     parts.push(
-      "Decide yourself whether this post should include an image. If yes, append one final line exactly in this format: [[IMAGE_PROMPT: your prompt here]]"
+      "Any visual prompt must avoid visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks."
     );
-    parts.push("If no image is needed, output only the post text.");
-    parts.push("Keep IMAGE_PROMPT concise (under 240 chars).");
     parts.push(
-      "IMAGE_PROMPT must describe a visual only: no visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks."
+      "If no media is needed, output only the post text. If media is needed, output at most one media directive."
     );
-  } else if (allowImagePosts) {
-    parts.push("Image generation is currently unavailable (24h image budget exhausted). Output text only.");
   } else {
-    parts.push("Image generation for initiative posts is disabled. Output text only.");
+    parts.push("Image/video generation for initiative posts is unavailable right now. Output text only.");
   }
 
   if (discoveryFindings?.length) {
