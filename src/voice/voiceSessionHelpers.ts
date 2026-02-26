@@ -9,6 +9,7 @@ import { parseSoundboardReference } from "./soundboardDirector.ts";
 
 export const REALTIME_MEMORY_FACT_LIMIT = 8;
 export const SOUNDBOARD_MAX_CANDIDATES = 40;
+const OPENAI_REALTIME_MIN_COMMIT_AUDIO_MS = 100;
 
 export function defaultExitMessage(reason) {
   if (reason === "max_duration") return "time cap reached, dipping from vc.";
@@ -64,6 +65,37 @@ export function parseRealtimeErrorPayload(payload) {
     lastOutboundEvent,
     recentOutboundEvents
   };
+}
+
+export function isRecoverableRealtimeError({ mode, code, message }) {
+  const normalizedMode = String(mode || "")
+    .trim()
+    .toLowerCase();
+  if (normalizedMode !== "openai_realtime") return false;
+
+  const normalizedCode = String(code || "")
+    .trim()
+    .toLowerCase();
+  if (normalizedCode === "input_audio_buffer_commit_empty") return true;
+  if (normalizedCode === "conversation_already_has_active_response") return true;
+
+  const normalizedMessage = String(message || "")
+    .trim()
+    .toLowerCase();
+  if (!normalizedMessage) return false;
+  if (normalizedMessage.includes("active response in progress")) return true;
+  return normalizedMessage.includes("input audio buffer") && normalizedMessage.includes("buffer too small");
+}
+
+export function getRealtimeCommitMinimumBytes(mode, sampleRateHz = 24000) {
+  const normalizedMode = String(mode || "")
+    .trim()
+    .toLowerCase();
+  if (normalizedMode !== "openai_realtime") return 1;
+  const hz = Math.max(8_000, Number(sampleRateHz) || 24_000);
+  const bytesPerSecond = hz * 2;
+  const minBytes = Math.ceil((bytesPerSecond * OPENAI_REALTIME_MIN_COMMIT_AUDIO_MS) / 1000);
+  return Math.max(1, minBytes);
 }
 
 export function parseResponseDoneId(event) {

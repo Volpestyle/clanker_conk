@@ -42,6 +42,8 @@ export class OpenAiRealtimeClient extends EventEmitter {
     this.lastOutboundEvent = null;
     this.recentOutboundEvents = [];
     this.sessionConfig = null;
+    this.activeResponseId = null;
+    this.activeResponseStatus = null;
   }
 
   async connect({
@@ -90,6 +92,7 @@ export class OpenAiRealtimeClient extends EventEmitter {
       this.lastEventAt = Date.now();
       this.lastCloseCode = Number(code) || null;
       this.lastCloseReason = reasonBuffer ? String(reasonBuffer) : null;
+      this.clearActiveResponse();
       this.log("info", "openai_realtime_ws_closed", {
         code: this.lastCloseCode,
         reason: this.lastCloseReason
@@ -186,6 +189,13 @@ export class OpenAiRealtimeClient extends EventEmitter {
       const errorPayload = event.error && typeof event.error === "object" ? event.error : {};
       const message =
         event.error?.message || event.error?.code || event.message || "Unknown OpenAI realtime error";
+      const code = errorPayload?.code ? String(errorPayload.code).trim().toLowerCase() : "";
+      if (code === "conversation_already_has_active_response") {
+        const match = String(message).match(/\bresp_[a-z0-9]+\b/i);
+        if (match?.[0]) {
+          this.setActiveResponse(match[0], "in_progress");
+        }
+      }
       this.lastError = String(message);
       const errorMetadata = {
         error: this.lastError,
@@ -209,6 +219,14 @@ export class OpenAiRealtimeClient extends EventEmitter {
         lastOutboundEvent: this.lastOutboundEvent || null,
         recentOutboundEvents: this.recentOutboundEvents.slice(-4)
       });
+      return;
+    }
+
+    if (event.type === "response.created") {
+      const response = event.response && typeof event.response === "object" ? event.response : {};
+      const responseId = response?.id || event.response_id || null;
+      const status = response?.status || event.status || "in_progress";
+      this.setActiveResponse(responseId, status);
       return;
     }
 
@@ -238,6 +256,10 @@ export class OpenAiRealtimeClient extends EventEmitter {
     }
 
     if (event.type === "response.done") {
+      const response = event.response && typeof event.response === "object" ? event.response : {};
+      const responseId = response?.id || event.response_id || null;
+      const status = response?.status || event.status || "completed";
+      this.finishActiveResponse(responseId, status);
       this.emit("response_done", event);
     }
   }
@@ -333,6 +355,7 @@ export class OpenAiRealtimeClient extends EventEmitter {
     });
 
     this.ws = null;
+    this.clearActiveResponse();
   }
 
   getState() {
@@ -347,8 +370,19 @@ export class OpenAiRealtimeClient extends EventEmitter {
       lastOutboundEventType: this.lastOutboundEventType || null,
       lastOutboundEventAt: this.lastOutboundEventAt ? new Date(this.lastOutboundEventAt).toISOString() : null,
       lastOutboundEvent: this.lastOutboundEvent || null,
-      recentOutboundEvents: this.recentOutboundEvents.slice(-4)
+      recentOutboundEvents: this.recentOutboundEvents.slice(-4),
+      activeResponseId: this.activeResponseId || null,
+      activeResponseStatus: this.activeResponseStatus || null
     };
+  }
+
+  isResponseInProgress() {
+    const status = String(this.activeResponseStatus || "")
+      .trim()
+      .toLowerCase();
+    if (TERMINAL_RESPONSE_STATUSES.has(status)) return false;
+    if (status === "in_progress") return true;
+    return Boolean(this.activeResponseId);
   }
 
   log(level, event, metadata = null) {
@@ -377,7 +411,6 @@ export class OpenAiRealtimeClient extends EventEmitter {
     this.send({
       type: "session.update",
       session: compactObject({
-        type: "realtime",
         model: String(session.model || "gpt-realtime").trim() || "gpt-realtime",
         voice: String(session.voice || "alloy").trim() || "alloy",
         instructions: String(session.instructions || ""),
@@ -390,7 +423,42 @@ export class OpenAiRealtimeClient extends EventEmitter {
       })
     });
   }
+
+  setActiveResponse(responseId, status = "in_progress") {
+    const normalizedId = responseId ? String(responseId).trim() : "";
+    const normalizedStatus = String(status || "in_progress").trim() || "in_progress";
+    if (normalizedId) {
+      this.activeResponseId = normalizedId;
+    }
+    this.activeResponseStatus = normalizedStatus;
+  }
+
+  finishActiveResponse(responseId = null, status = "completed") {
+    const normalizedStatus = String(status || "completed")
+      .trim()
+      .toLowerCase();
+    const normalizedId = responseId ? String(responseId).trim() : "";
+    if (!normalizedId || !this.activeResponseId || normalizedId === this.activeResponseId) {
+      this.clearActiveResponse(normalizedStatus || "completed");
+      return;
+    }
+    if (TERMINAL_RESPONSE_STATUSES.has(normalizedStatus)) {
+      this.clearActiveResponse(normalizedStatus);
+    }
+  }
+
+  clearActiveResponse(status = null) {
+    this.activeResponseId = null;
+    this.activeResponseStatus = status ? String(status).trim() || null : null;
+  }
 }
+
+const TERMINAL_RESPONSE_STATUSES = new Set([
+  "completed",
+  "cancelled",
+  "failed",
+  "incomplete"
+]);
 
 function compactObject(value) {
   const out = {};

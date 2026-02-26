@@ -35,9 +35,11 @@ import {
   ensureBotAudioPlaybackReady,
   findMentionedSoundboardReference,
   formatNaturalList,
+  getRealtimeCommitMinimumBytes,
   formatRealtimeMemoryFacts,
   formatSoundboardCandidateLine,
   getRealtimeRuntimeLabel,
+  isRecoverableRealtimeError,
   isRealtimeMode,
   isVoiceTurnAddressedToBot,
   matchSoundboardReference,
@@ -58,12 +60,13 @@ const MIN_MAX_SESSION_MINUTES = 1;
 const MAX_MAX_SESSION_MINUTES = 120;
 const MIN_INACTIVITY_SECONDS = 20;
 const MAX_INACTIVITY_SECONDS = 3600;
-const INPUT_SPEECH_END_SILENCE_MS = 900;
+const INPUT_SPEECH_END_SILENCE_MS = 1400;
 const CAPTURE_IDLE_FLUSH_MS = INPUT_SPEECH_END_SILENCE_MS + 220;
 const CAPTURE_MAX_DURATION_MS = 14_000;
 const BOT_TURN_SILENCE_RESET_MS = 1200;
 const ACTIVITY_TOUCH_THROTTLE_MS = 2000;
 const RESPONSE_FLUSH_DEBOUNCE_MS = 280;
+const OPENAI_ACTIVE_RESPONSE_RETRY_MS = 260;
 const MIN_RESPONSE_REQUEST_GAP_MS = 700;
 const RESPONSE_SILENCE_RETRY_DELAY_MS = 5200;
 const MAX_RESPONSE_SILENCE_RETRIES = 2;
@@ -601,6 +604,7 @@ export class VoiceSessionManager {
           lastResponseRequestAt: 0,
           lastAudioDeltaAt: 0,
           lastInboundAudioAt: 0,
+          pendingRealtimeInputBytes: 0,
           lastAudioPipelineRepairAt: 0,
           nextResponseRequestId: 0,
           pendingResponse: null,
@@ -1309,6 +1313,9 @@ export class VoiceSessionManager {
         return;
       }
       this.markBotTurnOut(session, settings);
+      if (session.mode === "openai_realtime") {
+        session.pendingRealtimeInputBytes = 0;
+      }
 
       if (this.pendingResponseHasAudio(session)) {
         const pending = session.pendingResponse;
@@ -1341,6 +1348,10 @@ export class VoiceSessionManager {
         }
       });
 
+      if (session.mode === "openai_realtime" && transcriptSource === "output") {
+        session.pendingRealtimeInputBytes = 0;
+      }
+
       if (transcriptSource === "input") {
         this.maybeTriggerAutonomousSoundboard({
           session,
@@ -1370,6 +1381,38 @@ export class VoiceSessionManager {
           recentOutboundEvents: details.recentOutboundEvents
         }
       });
+
+      if (
+        isRecoverableRealtimeError({
+          mode: session.mode,
+          code: details.code,
+          message: details.message
+        })
+      ) {
+        const normalizedCode = String(details.code || "")
+          .trim()
+          .toLowerCase();
+        const isActiveResponseCollision =
+          normalizedCode === "conversation_already_has_active_response" ||
+          /active response in progress/i.test(String(details.message || ""));
+        session.pendingRealtimeInputBytes = 0;
+        const pending = session.pendingResponse;
+        if (
+          normalizedCode === "input_audio_buffer_commit_empty" &&
+          pending &&
+          !this.pendingResponseHasAudio(session, pending)
+        ) {
+          this.clearPendingResponse(session);
+        } else if (isActiveResponseCollision && pending) {
+          pending.handlingSilence = false;
+          this.armResponseSilenceWatchdog({
+            session,
+            requestId: pending.requestId,
+            userId: pending.userId
+          });
+        }
+        return;
+      }
 
       this.endSession({
         guildId: session.guildId,
@@ -1970,6 +2013,7 @@ export class VoiceSessionManager {
 
     try {
       session.realtimeClient.appendInputAudioPcm(pcmBuffer);
+      session.pendingRealtimeInputBytes = Math.max(0, Number(session.pendingRealtimeInputBytes || 0)) + pcmBuffer.length;
     } catch (error) {
       this.store.logAction({
         kind: "voice_error",
@@ -2104,6 +2148,18 @@ export class VoiceSessionManager {
     }
 
     if (focusActive && focusedSpeakerUserId === String(userId || "")) {
+      if (!normalizedTranscript) {
+        return {
+          allow: false,
+          reason: "needs_addressing_transcript",
+          participantCount,
+          focusActive: true,
+          focusedSpeakerUserId,
+          needsTranscript: true,
+          addressed: null,
+          transcript: ""
+        };
+      }
       return {
         allow: true,
         reason: "focused_speaker_followup",
@@ -2865,14 +2921,36 @@ export class VoiceSessionManager {
       this.clearPendingResponse(session);
     }
 
+    const pendingInputBytes = Math.max(0, Number(session.pendingRealtimeInputBytes || 0));
+    const minCommitBytes = getRealtimeCommitMinimumBytes(
+      session.mode,
+      Number(session.realtimeInputSampleRateHz) || 24000
+    );
+    if (pendingInputBytes < minCommitBytes) {
+      return;
+    }
+
+    if (this.isOpenAiRealtimeResponseActive(session)) {
+      session.responseFlushTimer = setTimeout(() => {
+        session.responseFlushTimer = null;
+        this.flushResponseFromBufferedAudio({ session, userId });
+      }, OPENAI_ACTIVE_RESPONSE_RETRY_MS);
+      return;
+    }
+
     try {
       session.realtimeClient.commitInputAudioBuffer();
-      this.createTrackedAudioResponse({
+      session.pendingRealtimeInputBytes = 0;
+      const created = this.createTrackedAudioResponse({
         session,
         userId,
         source: "turn_flush",
-        resetRetryState: true
+        resetRetryState: true,
+        emitCreateEvent: session.mode !== "openai_realtime"
       });
+      if (!created) {
+        this.scheduleResponseFromBufferedAudio({ session, userId });
+      }
     } catch (error) {
       this.store.logAction({
         kind: "voice_error",
@@ -2887,10 +2965,32 @@ export class VoiceSessionManager {
     }
   }
 
-  createTrackedAudioResponse({ session, userId = null, source = "turn_flush", resetRetryState = false }) {
-    if (!session || session.ending) return;
-    if (!isRealtimeMode(session.mode)) return;
-    session.realtimeClient.createAudioResponse();
+  createTrackedAudioResponse({
+    session,
+    userId = null,
+    source = "turn_flush",
+    resetRetryState = false,
+    emitCreateEvent = true
+  }) {
+    if (!session || session.ending) return false;
+    if (!isRealtimeMode(session.mode)) return false;
+    if (emitCreateEvent && this.isOpenAiRealtimeResponseActive(session)) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "response_create_skipped_active_response",
+        metadata: {
+          sessionId: session.id,
+          source: String(source || "turn_flush")
+        }
+      });
+      return false;
+    }
+    if (emitCreateEvent) {
+      session.realtimeClient.createAudioResponse();
+    }
 
     const now = Date.now();
     const requestId = Number(session.nextResponseRequestId || 0) + 1;
@@ -2914,6 +3014,7 @@ export class VoiceSessionManager {
       requestId,
       userId: session.pendingResponse.userId
     });
+    return true;
   }
 
   pendingResponseHasAudio(session, pendingResponse = session?.pendingResponse) {
@@ -2939,6 +3040,17 @@ export class VoiceSessionManager {
     if (!session) return;
     this.clearResponseSilenceTimers(session);
     session.pendingResponse = null;
+  }
+
+  isOpenAiRealtimeResponseActive(session) {
+    if (!session || session.mode !== "openai_realtime") return false;
+    const checker = session.realtimeClient?.isResponseInProgress;
+    if (typeof checker !== "function") return false;
+    try {
+      return Boolean(checker.call(session.realtimeClient));
+    } catch {
+      return false;
+    }
   }
 
   armResponseSilenceWatchdog({ session, requestId, userId = null }) {
@@ -3050,12 +3162,19 @@ export class VoiceSessionManager {
       });
 
       try {
-        this.createTrackedAudioResponse({
+        const created = this.createTrackedAudioResponse({
           session,
           userId: resolvedUserId,
           source: "silent_retry",
           resetRetryState: false
         });
+        if (!created) {
+          this.armResponseSilenceWatchdog({
+            session,
+            requestId: pending.requestId,
+            userId: pending.userId || userId
+          });
+        }
       } catch (error) {
         this.store.logAction({
           kind: "voice_error",
@@ -3100,13 +3219,28 @@ export class VoiceSessionManager {
       });
 
       try {
-        session.realtimeClient.commitInputAudioBuffer();
-        this.createTrackedAudioResponse({
+        const pendingInputBytes = Math.max(0, Number(session.pendingRealtimeInputBytes || 0));
+        const minCommitBytes = getRealtimeCommitMinimumBytes(
+          session.mode,
+          Number(session.realtimeInputSampleRateHz) || 24000
+        );
+        if (pendingInputBytes >= minCommitBytes) {
+          session.realtimeClient.commitInputAudioBuffer();
+          session.pendingRealtimeInputBytes = 0;
+        }
+        const created = this.createTrackedAudioResponse({
           session,
           userId: resolvedUserId,
           source: "hard_recovery",
           resetRetryState: false
         });
+        if (!created) {
+          this.armResponseSilenceWatchdog({
+            session,
+            requestId: pending.requestId,
+            userId: pending.userId || userId
+          });
+        }
       } catch (error) {
         this.store.logAction({
           kind: "voice_error",
@@ -3587,4 +3721,3 @@ export class VoiceSessionManager {
     return `i need ${formatNaturalList(missing)} permissions in that vc before i can join.`;
   }
 }
-
