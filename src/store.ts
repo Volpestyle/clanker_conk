@@ -1353,11 +1353,7 @@ function normalizeSettings(raw) {
       ? Boolean(merged.voice?.soundboard?.allowExternalSounds)
       : Boolean(defaultVoiceSoundboard.allowExternalSounds);
   merged.voice.soundboard.preferredSoundIds = uniqueIdList(merged.voice?.soundboard?.preferredSoundIds).slice(0, 40);
-  merged.voice.soundboard.mappings = normalizeStringMap(merged.voice?.soundboard?.mappings, {
-    maxItems: 40,
-    maxKeyLen: 80,
-    maxValueLen: 160
-  });
+  delete merged.voice.soundboard.mappings;
 
   merged.startup.catchupEnabled =
     merged.startup?.catchupEnabled !== undefined ? Boolean(merged.startup?.catchupEnabled) : true;
@@ -1549,22 +1545,6 @@ function uniqueStringList(input, maxItems = 20, maxLen = 120) {
   return [...new Set(input.split(/[\n,]/g).map((item) => item.trim()).filter(Boolean))]
     .slice(0, Math.max(1, maxItems))
     .map((item) => item.slice(0, maxLen));
-}
-
-function normalizeStringMap(input, { maxItems = 40, maxKeyLen = 80, maxValueLen = 160 } = {}) {
-  if (!input || typeof input !== "object" || Array.isArray(input)) return {};
-
-  const entries = Object.entries(input)
-    .map(([key, value]) => [String(key || "").trim(), String(value || "").trim()])
-    .filter(([key, value]) => Boolean(key) && Boolean(value))
-    .slice(0, Math.max(1, maxItems));
-
-  const out = {};
-  for (const [key, value] of entries) {
-    out[key.slice(0, maxKeyLen)] = value.slice(0, maxValueLen);
-  }
-
-  return out;
 }
 
 function isHttpLikeUrl(rawUrl) {

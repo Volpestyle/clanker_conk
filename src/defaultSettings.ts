@@ -82,8 +82,7 @@ export const DEFAULT_SETTINGS = {
     soundboard: {
       enabled: true,
       allowExternalSounds: false,
-      preferredSoundIds: [],
-      mappings: {}
+      preferredSoundIds: []
     }
   },
   startup: {

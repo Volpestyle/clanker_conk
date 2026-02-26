@@ -9,7 +9,7 @@ export class SoundboardDirector {
     this.appConfig = appConfig;
   }
 
-  async play({ session, settings, soundId, sourceGuildId = null, reason = "manual", triggerMessage = null }) {
+  async play({ session, settings, soundId, sourceGuildId = null, reason = "autonomous", triggerMessage = null }) {
     if (!session || !soundId) {
       return {
         ok: false,
@@ -194,68 +194,21 @@ export class SoundboardDirector {
     };
   }
 
-  resolveManualSoundRequest(text, settings) {
-    const raw = String(text || "").trim().toLowerCase();
-    if (!raw) return null;
-
-    const explicit = raw.match(/\b(?:play|hit|drop|send)\s+soundboard\s+([a-z0-9:_-]{2,80})\b/i);
-    if (explicit?.[1]) {
-      const directId = String(explicit[1]).trim();
-      return {
-        soundId: directId,
-        alias: directId,
-        sourceGuildId: null,
-        reason: "explicit_id"
-      };
-    }
-
-    const mappings = normalizeMappingObject(settings?.voice?.soundboard?.mappings || {});
-    const mappingEntries = Object.entries(mappings);
-    if (!mappingEntries.length) return null;
-
-    const hasPlayVerb = /\b(?:play|hit|drop|send|trigger)\b/i.test(raw);
-
-    for (const [alias, mappedValue] of mappingEntries) {
-      if (!raw.includes(alias.toLowerCase())) continue;
-      if (!hasPlayVerb && !/\b(?:airhorn|bruh|sad\s*violin|vine\s*boom)\b/i.test(raw)) continue;
-
-      const { soundId, sourceGuildId } = parseMappedValue(mappedValue);
-      if (!soundId) continue;
-      return {
-        soundId,
-        alias,
-        sourceGuildId,
-        reason: "mapped_alias"
-      };
-    }
-
-    return null;
-  }
 }
 
-function normalizeMappingObject(raw) {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
-  const out = {};
-
-  for (const [key, value] of Object.entries(raw)) {
-    const alias = String(key || "").trim();
-    const target = String(value || "").trim();
-    if (!alias || !target) continue;
-    out[alias.slice(0, 80)] = target.slice(0, 160);
-  }
-
-  return out;
-}
-
-function parseMappedValue(value) {
+export function parseSoundboardReference(value) {
   const raw = String(value || "").trim();
-  if (!raw) return { soundId: null, sourceGuildId: null };
+  if (!raw) return null;
 
   const [soundIdPart, sourceGuildPart] = raw.split("@");
   const soundId = String(soundIdPart || "").trim();
   const sourceGuildId = String(sourceGuildPart || "").trim() || null;
+  if (!soundId) return null;
+
+  const reference = sourceGuildId ? `${soundId}@${sourceGuildId}` : soundId;
   return {
-    soundId: soundId || null,
-    sourceGuildId
+    soundId,
+    sourceGuildId,
+    reference
   };
 }

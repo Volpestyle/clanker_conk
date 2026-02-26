@@ -25,7 +25,7 @@ import {
 import { clamp, hasBotKeyword } from "../utils.ts";
 import { convertDiscordPcmToXaiInput, convertXaiOutputToDiscordPcm } from "./pcmAudio.ts";
 import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
-import { SoundboardDirector } from "./soundboardDirector.ts";
+import { parseSoundboardReference, SoundboardDirector } from "./soundboardDirector.ts";
 import { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
 
 const MIN_MAX_SESSION_MINUTES = 1;
@@ -54,6 +54,10 @@ const REALTIME_INSTRUCTION_REFRESH_DEBOUNCE_MS = 220;
 const REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS = 420;
 const REALTIME_CONTEXT_MEMBER_LIMIT = 12;
 const REALTIME_MEMORY_FACT_LIMIT = 8;
+const SOUNDBOARD_DECISION_TRANSCRIPT_MAX_CHARS = 280;
+const SOUNDBOARD_DECISION_DEDUPE_WINDOW_MS = 8_000;
+const SOUNDBOARD_CATALOG_REFRESH_MS = 60_000;
+const SOUNDBOARD_MAX_CANDIDATES = 40;
 
 export class VoiceSessionManager {
   constructor({
@@ -583,7 +587,11 @@ export class VoiceSessionManager {
           userCaptures: new Map(),
           soundboard: {
             playCount: 0,
-            lastPlayedAt: 0
+            lastPlayedAt: 0,
+            lastDecisionFingerprint: "",
+            lastDecisionAt: 0,
+            catalogCandidates: [],
+            catalogFetchedAt: 0
           },
           lastEagerResponseAt: 0,
           baseVoiceInstructions,
@@ -781,95 +789,313 @@ export class VoiceSessionManager {
     return true;
   }
 
-  async maybeHandleSoundboardIntent({ message, settings, text, directlyAddressed = false }) {
-    if (!message?.guild || !message?.channel) return false;
+  async maybeTriggerAutonomousSoundboard({
+    session,
+    settings,
+    userId = null,
+    transcript = "",
+    source = "voice_transcript"
+  }) {
+    if (!session || session.ending) return;
+    if (!this.llm?.generate) return;
 
-    const session = this.getSession(message.guild.id);
-    if (!session) return false;
-    if (!settings?.voice?.soundboard?.enabled) return false;
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    if (!resolvedSettings?.voice?.soundboard?.enabled) return;
+    const candidateInfo = await this.resolveAutonomousSoundboardCandidates({
+      session,
+      settings: resolvedSettings
+    });
+    const candidates = Array.isArray(candidateInfo?.candidates) ? candidateInfo.candidates : [];
+    const candidateSource = String(candidateInfo?.source || "none");
+    if (!candidates.length) return;
 
-    const requested = this.soundboardDirector.resolveManualSoundRequest(text, settings);
-    if (!requested) {
-      await this.maybeTriggerHeuristicSoundboard({
-        message,
-        settings,
-        text,
-        directlyAddressed,
-        session
-      });
-      return false;
+    const normalizedTranscript = normalizeVoiceText(transcript, SOUNDBOARD_DECISION_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedTranscript || normalizedTranscript.length < 6) return;
+
+    session.soundboard = session.soundboard || {
+      playCount: 0,
+      lastPlayedAt: 0,
+      lastDecisionFingerprint: "",
+      lastDecisionAt: 0,
+      catalogCandidates: [],
+      catalogFetchedAt: 0
+    };
+
+    const now = Date.now();
+    const fingerprint = normalizedTranscript.toLowerCase();
+    if (
+      session.soundboard.lastDecisionFingerprint === fingerprint &&
+      now - Number(session.soundboard.lastDecisionAt || 0) < SOUNDBOARD_DECISION_DEDUPE_WINDOW_MS
+    ) {
+      return;
     }
 
-    if (!directlyAddressed) {
-      return false;
-    }
+    session.soundboard.lastDecisionFingerprint = fingerprint;
+    session.soundboard.lastDecisionAt = now;
+
+    const decision = await this.decideAutonomousSoundboard({
+      session,
+      settings: resolvedSettings,
+      userId,
+      transcript: normalizedTranscript,
+      candidates
+    });
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: userId || this.client.user?.id || null,
+      content: "voice_soundboard_autonomy_decision",
+      metadata: {
+        sessionId: session.id,
+        mode: session.mode,
+        source: String(source || "voice_transcript"),
+        transcript: normalizedTranscript,
+        candidateCount: candidates.length,
+        candidateSource,
+        play: Boolean(decision.play),
+        reason: decision.reason || null,
+        selectedReference: decision.reference || null,
+        llmResponse: decision.raw || null,
+        error: decision.error || null
+      }
+    });
+
+    if (!decision.play || !decision.reference) return;
 
     const result = await this.soundboardDirector.play({
       session,
-      settings,
-      soundId: requested.soundId,
-      sourceGuildId: requested.sourceGuildId,
-      reason: requested.reason,
-      triggerMessage: message
+      settings: resolvedSettings,
+      soundId: decision.reference.soundId,
+      sourceGuildId: decision.reference.sourceGuildId,
+      reason: `autonomous_${String(source || "voice_transcript").slice(0, 50)}`
     });
 
-    if (result.ok) {
-      await this.sendOperationalMessage({
-        channel: message.channel,
-        settings,
-        guildId: message.guildId,
-        channelId: message.channelId,
-        userId: message.author?.id || null,
-        messageId: message.id,
-        event: "voice_soundboard_request",
-        reason: "played",
-        details: {
-          alias: requested.alias || null,
-          soundId: requested.soundId
-        },
-        fallback: `soundboard played: ${requested.alias || requested.soundId}`
-      });
-    } else {
-      await this.sendOperationalMessage({
-        channel: message.channel,
-        settings,
-        guildId: message.guildId,
-        channelId: message.channelId,
-        userId: message.author?.id || null,
-        messageId: message.id,
-        event: "voice_soundboard_request",
-        reason: result.reason || "play_failed",
-        details: {
-          alias: requested.alias || null,
-          soundId: requested.soundId,
-          error: shortError(result.message || "")
-        },
-        fallback: `can't play that sound rn: ${result.message}`
-      });
-    }
-
-    return true;
+    this.store.logAction({
+      kind: result.ok ? "voice_runtime" : "voice_error",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: userId || this.client.user?.id || null,
+      content: result.ok ? "voice_soundboard_autonomy_played" : "voice_soundboard_autonomy_failed",
+      metadata: {
+        sessionId: session.id,
+        mode: session.mode,
+        source: String(source || "voice_transcript"),
+        transcript: normalizedTranscript,
+        soundId: decision.reference.soundId,
+        sourceGuildId: decision.reference.sourceGuildId,
+        reason: result.reason || null,
+        error: result.ok ? null : shortError(result.message || "")
+      }
+    });
   }
 
-  async maybeTriggerHeuristicSoundboard({ message, settings, text, directlyAddressed, session }) {
-    if (!directlyAddressed) return;
+  async decideAutonomousSoundboard({ session, settings, userId = null, transcript, candidates }) {
+    if (!this.llm?.generate) {
+      return {
+        play: false,
+        reason: "llm_generate_unavailable",
+        reference: null,
+        raw: "",
+        error: null
+      };
+    }
 
-    const hypeCue = /\b(?:let'?s\s*go|lfg|clutch|insane|no\s*way|holy|gg)\b/i.test(String(text || ""));
-    if (!hypeCue) return;
+    const options = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
+    if (!options.length) {
+      return {
+        play: false,
+        reason: "no_candidate_sounds",
+        reference: null,
+        raw: "",
+        error: null
+      };
+    }
 
-    const preferred = settings?.voice?.soundboard?.preferredSoundIds || [];
-    if (!Array.isArray(preferred) || !preferred.length) return;
+    const speakerName = this.resolveVoiceSpeakerName(session, userId) || "someone";
+    const participantCount = this.countHumanVoiceParticipants(session);
+    const botName = getPromptBotName(settings);
+    const optionLines = options.map(formatSoundboardCandidateLine).filter(Boolean).join("\n");
+    const autonomySettings = {
+      ...settings,
+      llm: {
+        ...(settings?.memoryLlm || settings?.llm || {}),
+        temperature: 0.35,
+        maxOutputTokens: 28
+      }
+    };
 
-    const soundId = String(preferred[0] || "").trim();
-    if (!soundId) return;
+    const systemPrompt = [
+      `You are the autonomous voice soundboard director for a Discord bot named "${botName}".`,
+      "Decide whether to trigger a soundboard effect based on the latest spoken VC transcript.",
+      "Use a sound only if it clearly adds social or comedic value right now.",
+      "If uncertain or neutral, skip.",
+      "Respond with exactly one line:",
+      "SKIP",
+      "or",
+      "PLAY <sound_ref>",
+      "where <sound_ref> is copied exactly from the candidate list."
+    ].join("\n");
 
-    await this.soundboardDirector.play({
-      session,
-      settings,
-      soundId,
-      reason: "heuristic_hype",
-      triggerMessage: message
-    });
+    const userPrompt = [
+      `VC participants: ${participantCount}`,
+      `Speaker: ${speakerName}`,
+      `Transcript: "${String(transcript || "").trim()}"`,
+      "Candidate sound refs:",
+      optionLines
+    ].join("\n");
+
+    try {
+      const generation = await this.llm.generate({
+        settings: autonomySettings,
+        systemPrompt,
+        userPrompt,
+        contextMessages: [],
+        trace: {
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: userId || this.client.user?.id || null,
+          source: "voice_soundboard_autonomy_decision"
+        }
+      });
+      const raw = String(generation?.text || "").trim();
+      if (!raw) {
+        return {
+          play: false,
+          reason: "empty_response",
+          reference: null,
+          raw,
+          error: null
+        };
+      }
+
+      if (/^skip\b/i.test(raw)) {
+        return {
+          play: false,
+          reason: "skip",
+          reference: null,
+          raw,
+          error: null
+        };
+      }
+
+      const directPlayMatch = raw.match(/^play\s+([^\s]+)$/i);
+      const requestedRef = directPlayMatch?.[1] ? String(directPlayMatch[1]).trim() : "";
+      const matched = matchSoundboardReference(options, requestedRef) || findMentionedSoundboardReference(options, raw);
+
+      if (!matched) {
+        return {
+          play: false,
+          reason: "invalid_sound_ref",
+          reference: null,
+          raw,
+          error: null
+        };
+      }
+
+      return {
+        play: true,
+        reason: "play_selected",
+        reference: matched,
+        raw,
+        error: null
+      };
+    } catch (error) {
+      return {
+        play: false,
+        reason: "llm_error",
+        reference: null,
+        raw: "",
+        error: String(error?.message || error)
+      };
+    }
+  }
+
+  async resolveAutonomousSoundboardCandidates({ session, settings }) {
+    const preferred = parsePreferredSoundboardReferences(settings?.voice?.soundboard?.preferredSoundIds);
+    if (preferred.length) {
+      return {
+        source: "preferred",
+        candidates: preferred.slice(0, SOUNDBOARD_MAX_CANDIDATES)
+      };
+    }
+
+    const guildCandidates = await this.fetchGuildSoundboardCandidates({ session });
+    if (guildCandidates.length) {
+      return {
+        source: "guild_catalog",
+        candidates: guildCandidates.slice(0, SOUNDBOARD_MAX_CANDIDATES)
+      };
+    }
+
+    return {
+      source: "none",
+      candidates: []
+    };
+  }
+
+  async fetchGuildSoundboardCandidates({ session }) {
+    if (!session || session.ending) return [];
+    const now = Date.now();
+
+    session.soundboard = session.soundboard || {
+      playCount: 0,
+      lastPlayedAt: 0,
+      lastDecisionFingerprint: "",
+      lastDecisionAt: 0,
+      catalogCandidates: [],
+      catalogFetchedAt: 0
+    };
+
+    const cached = Array.isArray(session.soundboard.catalogCandidates)
+      ? session.soundboard.catalogCandidates.filter(Boolean)
+      : [];
+    const lastFetchedAt = Number(session.soundboard.catalogFetchedAt || 0);
+    if (lastFetchedAt > 0 && now - lastFetchedAt < SOUNDBOARD_CATALOG_REFRESH_MS) {
+      return cached;
+    }
+
+    const guild = this.client.guilds.cache.get(String(session.guildId || ""));
+    if (!guild?.soundboardSounds?.fetch) {
+      return cached;
+    }
+
+    try {
+      const fetched = await guild.soundboardSounds.fetch();
+      const candidates = [];
+      fetched.forEach((sound) => {
+        if (!sound || sound.available === false) return;
+        const soundId = String(sound.soundId || "").trim();
+        if (!soundId) return;
+        const name = String(sound.name || "").trim();
+        candidates.push({
+          soundId,
+          sourceGuildId: null,
+          reference: soundId,
+          name: name || null,
+          origin: "guild_catalog"
+        });
+      });
+
+      const deduped = dedupeSoundboardCandidates(candidates).slice(0, SOUNDBOARD_MAX_CANDIDATES);
+      session.soundboard.catalogCandidates = deduped;
+      session.soundboard.catalogFetchedAt = now;
+      return deduped;
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: `voice_soundboard_catalog_fetch_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id
+        }
+      });
+      session.soundboard.catalogFetchedAt = now;
+      return cached;
+    }
   }
 
   async stopAll(reason = "shutdown") {
@@ -1076,6 +1302,7 @@ export class VoiceSessionManager {
         payload && typeof payload === "object" ? String(payload.eventType || "") : "";
       const transcript = String(transcriptText || "").trim();
       if (!transcript) return;
+      const transcriptSource = transcriptSourceFromEventType(transcriptEventType);
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
@@ -1086,9 +1313,19 @@ export class VoiceSessionManager {
           sessionId: session.id,
           transcript,
           transcriptEventType: transcriptEventType || null,
-          transcriptSource: transcriptSourceFromEventType(transcriptEventType)
+          transcriptSource
         }
       });
+
+      if (transcriptSource === "input") {
+        this.maybeTriggerAutonomousSoundboard({
+          session,
+          settings: settings || session.settingsSnapshot || this.store.getSettings(),
+          userId: null,
+          transcript,
+          source: "realtime_input_transcript"
+        }).catch(() => undefined);
+      }
     };
 
     const onErrorEvent = (errorPayload) => {
@@ -1629,6 +1866,16 @@ export class VoiceSessionManager {
         traceSource: "voice_realtime_turn_context",
         errorPrefix: "voice_realtime_context_transcription_failed"
       });
+    }
+
+    if (turnTranscript) {
+      this.maybeTriggerAutonomousSoundboard({
+        session,
+        settings,
+        userId,
+        transcript: turnTranscript,
+        source: "realtime_turn"
+      }).catch(() => undefined);
     }
 
     if (!decision.allow) {
@@ -2269,6 +2516,13 @@ export class VoiceSessionManager {
         transcript
       }
     });
+    this.maybeTriggerAutonomousSoundboard({
+      session,
+      settings,
+      userId,
+      transcript,
+      source: "stt_pipeline_turn"
+    }).catch(() => undefined);
 
     let turnDecision = this.assessVoiceTurnAddressing({
       session,
@@ -3494,6 +3748,67 @@ function getRealtimeRuntimeLabel(mode) {
   if (provider === "xai") return "xai";
   if (provider === "openai") return "openai_realtime";
   return "realtime";
+}
+
+function parsePreferredSoundboardReferences(values) {
+  const source = Array.isArray(values) ? values : [];
+  const parsed = source
+    .map((value) => parseSoundboardReference(value))
+    .filter(Boolean)
+    .map((entry) => ({
+      ...entry,
+      name: null,
+      origin: "preferred"
+    }));
+  return dedupeSoundboardCandidates(parsed).slice(0, SOUNDBOARD_MAX_CANDIDATES);
+}
+
+function dedupeSoundboardCandidates(candidates) {
+  const source = Array.isArray(candidates) ? candidates : [];
+  const seen = new Set();
+  const out = [];
+
+  for (const entry of source) {
+    if (!entry || typeof entry !== "object") continue;
+    const reference = String(entry.reference || "").trim();
+    if (!reference) continue;
+    const key = reference.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({
+      ...entry,
+      reference
+    });
+  }
+
+  return out;
+}
+
+function formatSoundboardCandidateLine(entry) {
+  const reference = String(entry?.reference || "").trim();
+  const name = String(entry?.name || "").trim();
+  if (!reference) return "";
+  return name ? `- ${reference} | ${name}` : `- ${reference}`;
+}
+
+function normalizeSoundboardReferenceToken(value) {
+  return String(value || "")
+    .trim()
+    .replace(/^[`"'([{<]+/, "")
+    .replace(/[`"')\]}>.,!?;:]+$/, "")
+    .toLowerCase();
+}
+
+function matchSoundboardReference(options, requestedRef) {
+  const token = normalizeSoundboardReferenceToken(requestedRef);
+  if (!token) return null;
+  return options.find((entry) => String(entry.reference || "").toLowerCase() === token) || null;
+}
+
+function findMentionedSoundboardReference(options, text) {
+  const raw = String(text || "").toLowerCase();
+  if (!raw) return null;
+  return options.find((entry) => raw.includes(String(entry.reference || "").toLowerCase())) || null;
 }
 
 function isVoiceTurnAddressedToBot(transcript, settings) {

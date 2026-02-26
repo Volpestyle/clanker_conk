@@ -65,9 +65,10 @@ Enable `clanker conk` to join Discord voice channels on explicit natural-languag
   - Silent-response retries + hard recovery path.
   - Stalled turn fallback drops the stuck turn to allow recovery on next user turn.
 - Soundboard:
-  - Manual soundboard requests are supported while in-session.
-  - Optional heuristic hype trigger can fire first preferred sound when directly addressed.
-  - Current implementation does not enforce a configured cooldown or per-session cap.
+  - Soundboard use is autonomous while in-session, based on live VC transcript context.
+  - If `voice.soundboard.preferredSoundIds` is set, selection is constrained to those references.
+  - If `voice.soundboard.preferredSoundIds` is empty, candidates are fetched from the guild soundboard catalog.
+  - No configured cooldown or per-session cap is enforced.
 
 ### 5. Session End
 - Session ends on any of:
@@ -140,8 +141,7 @@ voice: {
   soundboard: {
     enabled: true,
     allowExternalSounds: false,
-    preferredSoundIds: [],
-    mappings: {} // alias -> "sound_id" or "sound_id@source_guild_id"
+    preferredSoundIds: [] // optional override list; empty => use guild soundboard catalog
   }
 }
 ```
@@ -203,6 +203,6 @@ Ambiguous requests can resolve to `none` and be ignored.
 9. Operational join/leave/status and failure updates are posted in text channels.
 
 ## Open Questions
-1. Should soundboard add explicit cooldown and per-session cap settings in code?
+1. Should soundboard autonomy add stronger anti-spam controls beyond transcript-level dedupe?
 2. Should voice-control permissions add role-based allowlisting?
 3. Should transcript/event retention policy be formalized with explicit pruning controls?

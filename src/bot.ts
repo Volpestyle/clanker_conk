@@ -754,14 +754,6 @@ export class ClankerBot {
     });
     if (voiceIntentHandled) return;
 
-    const soundboardIntentHandled = await this.voiceSessionManager.maybeHandleSoundboardIntent({
-      message,
-      settings,
-      text,
-      directlyAddressed
-    });
-    if (soundboardIntentHandled) return;
-
     if (settings.memory.enabled) {
       await this.memory.ingestMessage({
         messageId: message.id,

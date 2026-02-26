@@ -19,31 +19,6 @@ function formatList(items) {
   return (items || []).join("\n");
 }
 
-function parseMappingList(val) {
-  const lines = String(val || "")
-    .split(/\n/g)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  const out = {};
-  for (const line of lines) {
-    const eqIndex = line.indexOf("=");
-    if (eqIndex <= 0) continue;
-    const key = line.slice(0, eqIndex).trim();
-    const value = line.slice(eqIndex + 1).trim();
-    if (!key || !value) continue;
-    out[key] = value;
-  }
-  return out;
-}
-
-function formatMappingList(map) {
-  if (!map || typeof map !== "object" || Array.isArray(map)) return "";
-  return Object.entries(map)
-    .map(([key, value]) => `${key}=${value}`)
-    .join("\n");
-}
-
 export default function SettingsForm({ settings, modelCatalog, onSave, toast }) {
   const [form, setForm] = useState(null);
 
@@ -116,7 +91,6 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
       voiceSoundboardEnabled: settings.voice?.soundboard?.enabled ?? true,
       voiceSoundboardAllowExternalSounds: settings.voice?.soundboard?.allowExternalSounds ?? false,
       voiceSoundboardPreferredSoundIds: formatList(settings.voice?.soundboard?.preferredSoundIds),
-      voiceSoundboardMappings: formatMappingList(settings.voice?.soundboard?.mappings),
       maxMessages: settings.permissions?.maxMessagesPerHour ?? 20,
       maxReactions: settings.permissions?.maxReactionsPerHour ?? 24,
       catchupEnabled: settings.startup?.catchupEnabled !== false,
@@ -273,8 +247,7 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
         soundboard: {
           enabled: form.voiceSoundboardEnabled,
           allowExternalSounds: form.voiceSoundboardAllowExternalSounds,
-          preferredSoundIds: parseList(form.voiceSoundboardPreferredSoundIds),
-          mappings: parseMappingList(form.voiceSoundboardMappings)
+          preferredSoundIds: parseList(form.voiceSoundboardPreferredSoundIds)
         }
       },
       startup: {
@@ -996,20 +969,14 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
 
           {form.voiceSoundboardEnabled && (
             <>
-              <label htmlFor="voice-sb-preferred">Preferred sound IDs (one per line)</label>
+              <label htmlFor="voice-sb-preferred">
+                Sound refs (`sound_id` or `sound_id@source_guild_id`, one per line). Leave empty to auto-use guild sounds.
+              </label>
               <textarea
                 id="voice-sb-preferred"
                 rows="3"
                 value={form.voiceSoundboardPreferredSoundIds}
                 onChange={set("voiceSoundboardPreferredSoundIds")}
-              />
-
-              <label htmlFor="voice-sb-mappings">Alias mappings (`alias=sound_id[@source_guild_id]`)</label>
-              <textarea
-                id="voice-sb-mappings"
-                rows="4"
-                value={form.voiceSoundboardMappings}
-                onChange={set("voiceSoundboardMappings")}
               />
             </>
           )}
