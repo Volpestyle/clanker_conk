@@ -178,6 +178,8 @@ export function transcriptSourceFromEventType(eventType) {
   const normalized = String(eventType || "").trim();
   if (!normalized) return "unknown";
   if (normalized === "conversation.item.input_audio_transcription.completed") return "input";
+  if (normalized.includes("input_audio_transcription")) return "input";
+  if (normalized.includes("output_audio_transcription")) return "output";
   if (/audio_transcript/i.test(normalized)) return "output";
   if (/transcript/i.test(normalized)) return "unknown";
   return "unknown";
@@ -203,6 +205,7 @@ export function resolveVoiceRuntimeMode(settings) {
   const normalized = String(settings?.voice?.mode || "")
     .trim()
     .toLowerCase();
+  if (normalized === "gemini_realtime") return "gemini_realtime";
   if (normalized === "openai_realtime") return "openai_realtime";
   if (normalized === "stt_pipeline") return "stt_pipeline";
   return "voice_agent";
@@ -214,6 +217,7 @@ export function resolveRealtimeProvider(mode) {
     .toLowerCase();
   if (normalized === "voice_agent") return "xai";
   if (normalized === "openai_realtime") return "openai";
+  if (normalized === "gemini_realtime") return "gemini";
   return null;
 }
 
@@ -225,6 +229,7 @@ export function getRealtimeRuntimeLabel(mode) {
   const provider = resolveRealtimeProvider(mode);
   if (provider === "xai") return "xai";
   if (provider === "openai") return "openai_realtime";
+  if (provider === "gemini") return "gemini_realtime";
   return "realtime";
 }
 
@@ -310,7 +315,11 @@ export function isVoiceTurnAddressedToBot(transcript, settings) {
 }
 
 export function shouldAllowVoiceNsfwHumor(settings) {
-  const voiceFlag = settings?.voice?.openaiRealtime?.allowNsfwHumor;
+  const mode = resolveVoiceRuntimeMode(settings);
+  const voiceFlag =
+    mode === "gemini_realtime"
+      ? settings?.voice?.geminiRealtime?.allowNsfwHumor
+      : settings?.voice?.openaiRealtime?.allowNsfwHumor;
   if (voiceFlag === true) return true;
   if (voiceFlag === false) return false;
   return false;

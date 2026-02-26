@@ -1,5 +1,6 @@
 import {
   buildHardLimitsSection,
+  buildVoiceToneGuardrails,
   getPromptBotName,
   getPromptStyle,
   PROMPT_CAPABILITY_HONESTY_LINE
@@ -302,6 +303,15 @@ export function buildReplyPrompt({
       "If the incoming message is clearly asking you to join, leave, or report VC status, set voiceIntent.intent to join, leave, or status."
     );
     parts.push(
+      "If the user clearly asks you to watch their stream in VC, set voiceIntent.intent to watch_stream."
+    );
+    parts.push(
+      "If the user clearly asks you to stop watching stream, set voiceIntent.intent to stop_watching_stream."
+    );
+    parts.push(
+      "If the user asks whether stream watch is on/off, set voiceIntent.intent to stream_status."
+    );
+    parts.push(
       "Set voiceIntent.confidence from 0 to 1. Use high confidence only for explicit voice-control requests aimed at you."
     );
     parts.push("For normal chat or ambiguous requests, set voiceIntent.intent to none and keep confidence low.");
@@ -479,7 +489,7 @@ export function buildReplyPrompt({
   parts.push("When no media should be generated, set media to null.");
   parts.push("When no lookup is needed, set webSearchQuery and memoryLookupQuery to null.");
   parts.push("When no durable fact should be saved, set memoryLine to null.");
-  parts.push("Set voiceIntent.intent to one of join|leave|status|none.");
+  parts.push("Set voiceIntent.intent to one of join|leave|status|watch_stream|stop_watching_stream|stream_status|none.");
   parts.push("When not issuing voice control, set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null.");
 
   return parts.join("\n\n");
@@ -494,6 +504,7 @@ export function buildVoiceTurnPrompt({
   voiceEagerness = 0
 }) {
   const parts = [];
+  const voiceToneGuardrails = buildVoiceToneGuardrails();
   const speaker = String(speakerName || "unknown").trim() || "unknown";
   const text = String(transcript || "")
     .replace(/\s+/g, " ")
@@ -518,10 +529,14 @@ export function buildVoiceTurnPrompt({
     parts.push(`Voice reply eagerness: ${eagerness}/100.`);
     parts.push("Only speak up if you can genuinely add value. If not, output exactly [SKIP].");
 
-    parts.push("Task: respond as a natural spoken VC reply, or output exactly [SKIP] if you have nothing to add. Keep it concise by default but go longer if warranted.");
+    parts.push(...voiceToneGuardrails);
+    parts.push(
+      "Task: respond as a natural spoken VC reply, or output exactly [SKIP] if you have nothing to add."
+    );
     parts.push("If responding, use plain text only. No directives, tags, or markdown.");
   } else {
-    parts.push("Task: respond as a natural spoken VC reply. Keep it concise by default but go longer if warranted.");
+    parts.push(...voiceToneGuardrails);
+    parts.push("Task: respond as a natural spoken VC reply.");
     parts.push("Use plain text only. Do not output directives, tags, markdown, or [SKIP].");
   }
 

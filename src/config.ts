@@ -12,6 +12,7 @@ export const appConfig = {
   dashboardPort: asNumber(process.env.DASHBOARD_PORT, 8787),
   dashboardToken: process.env.DASHBOARD_TOKEN ?? "",
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
+  geminiApiKey: process.env.GOOGLE_API_KEY ?? "",
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
   xaiApiKey: process.env.XAI_API_KEY ?? "",
   xaiBaseUrl: process.env.XAI_BASE_URL ?? "https://api.x.ai/v1",

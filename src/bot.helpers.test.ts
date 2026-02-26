@@ -66,6 +66,29 @@ test("parseStructuredReplyOutput honors skip flag", () => {
   assert.equal(parsed.voiceIntent.intent, null);
 });
 
+test("parseStructuredReplyOutput accepts stream watch voice intents", () => {
+  const parsed = parseStructuredReplyOutput(
+    JSON.stringify({
+      text: "bet",
+      skip: false,
+      reactionEmoji: null,
+      media: null,
+      webSearchQuery: null,
+      memoryLookupQuery: null,
+      memoryLine: null,
+      voiceIntent: {
+        intent: "watch_stream",
+        confidence: 0.95,
+        reason: "explicit stream watch request"
+      }
+    })
+  );
+
+  assert.equal(parsed.voiceIntent.intent, "watch_stream");
+  assert.equal(parsed.voiceIntent.confidence, 0.95);
+  assert.equal(parsed.voiceIntent.reason, "explicit stream watch request");
+});
+
 test("parseStructuredReplyOutput normalizes invalid voice intent payload", () => {
   const parsed = parseStructuredReplyOutput(
     JSON.stringify({

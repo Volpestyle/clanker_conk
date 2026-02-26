@@ -24,7 +24,15 @@ export function resolveMaxMediaPromptLen(settings) {
   return clamp(Math.floor(raw), MAX_MEDIA_PROMPT_FLOOR, MAX_MEDIA_PROMPT_CEILING);
 }
 const REPLY_MEDIA_TYPES = new Set(["image_simple", "image_complex", "video", "gif"]);
-const REPLY_VOICE_INTENT_TYPES = new Set(["join", "leave", "status", "none"]);
+const REPLY_VOICE_INTENT_TYPES = new Set([
+  "join",
+  "leave",
+  "status",
+  "watch_stream",
+  "stop_watching_stream",
+  "stream_status",
+  "none"
+]);
 const MAX_VOICE_INTENT_REASON_LEN = 180;
 export const MAX_VIDEO_TARGET_SCAN = 8;
 export const MAX_VIDEO_FALLBACK_MESSAGES = 18;
