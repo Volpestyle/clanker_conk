@@ -25,7 +25,6 @@ const MAX_INACTIVITY_SECONDS = 3600;
 const INPUT_SPEECH_END_SILENCE_MS = 900;
 const BOT_TURN_SILENCE_RESET_MS = 1200;
 const ACTIVITY_TOUCH_THROTTLE_MS = 2000;
-const COOLDOWN_SWEEP_MIN_INTERVAL_MS = 30_000;
 
 export class VoiceSessionManager {
   constructor({ client, store, appConfig }) {
@@ -34,9 +33,6 @@ export class VoiceSessionManager {
     this.appConfig = appConfig;
     this.sessions = new Map();
     this.joinLocks = new Map();
-    this.joinCooldownByUser = new Map();
-    this.joinCooldownByGuild = new Map();
-    this.lastCooldownSweepAt = 0;
     this.soundboardDirector = new SoundboardDirector({
       client,
       store,
@@ -175,12 +171,6 @@ export class VoiceSessionManager {
       });
       if (missingPermissionMessage) {
         await this.sendToChannel(message.channel, missingPermissionMessage);
-        return true;
-      }
-
-      const cooldown = this.consumeJoinCooldown({ guildId, userId, settings });
-      if (cooldown.blocked) {
-        await this.sendToChannel(message.channel, cooldown.message);
         return true;
       }
 
@@ -474,8 +464,6 @@ export class VoiceSessionManager {
 
     await this.stopAll(reason);
     this.joinLocks.clear();
-    this.joinCooldownByUser.clear();
-    this.joinCooldownByGuild.clear();
   }
 
   async withJoinLock(guildId, fn) {
@@ -1085,71 +1073,6 @@ export class VoiceSessionManager {
     }
 
     return null;
-  }
-
-  consumeJoinCooldown({ guildId, userId, settings }) {
-    const now = Date.now();
-    this.sweepExpiredJoinCooldowns(now);
-
-    const userCooldownSeconds = clamp(Number(settings?.voice?.intentCooldownUserSeconds) || 0, 0, 600);
-    const guildCooldownSeconds = clamp(Number(settings?.voice?.intentCooldownGuildSeconds) || 0, 0, 600);
-    const userKey = `${guildId}:${userId}`;
-    const userCooldownUntil = Number(this.joinCooldownByUser.get(userKey) || 0);
-    const guildCooldownUntil = Number(this.joinCooldownByGuild.get(guildId) || 0);
-
-    if (userCooldownSeconds > 0) {
-      const remainingUserMs = userCooldownUntil - now;
-      if (remainingUserMs > 0) {
-        return {
-          blocked: true,
-          message: `slow down, try the join request again in ${Math.ceil(remainingUserMs / 1000)}s.`
-        };
-      }
-    }
-
-    if (guildCooldownSeconds > 0) {
-      const remainingGuildMs = guildCooldownUntil - now;
-      if (remainingGuildMs > 0) {
-        return {
-          blocked: true,
-          message: `voice join cooldown active for this server (${Math.ceil(remainingGuildMs / 1000)}s left).`
-        };
-      }
-    }
-
-    if (userCooldownSeconds > 0) {
-      this.joinCooldownByUser.set(userKey, now + userCooldownSeconds * 1000);
-    } else {
-      this.joinCooldownByUser.delete(userKey);
-    }
-    if (guildCooldownSeconds > 0) {
-      this.joinCooldownByGuild.set(guildId, now + guildCooldownSeconds * 1000);
-    } else {
-      this.joinCooldownByGuild.delete(guildId);
-    }
-
-    return {
-      blocked: false,
-      message: null
-    };
-  }
-
-  sweepExpiredJoinCooldowns(now = Date.now()) {
-    if (now - this.lastCooldownSweepAt < COOLDOWN_SWEEP_MIN_INTERVAL_MS) {
-      return;
-    }
-    this.lastCooldownSweepAt = now;
-
-    for (const [key, expiresAt] of this.joinCooldownByUser.entries()) {
-      if (Number(expiresAt) <= now) {
-        this.joinCooldownByUser.delete(key);
-      }
-    }
-    for (const [key, expiresAt] of this.joinCooldownByGuild.entries()) {
-      if (Number(expiresAt) <= now) {
-        this.joinCooldownByGuild.delete(key);
-      }
-    }
   }
 }
 
