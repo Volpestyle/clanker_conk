@@ -9,12 +9,20 @@ const REACTION_DIRECTIVE_RE = /\[\[REACTION:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const WEB_SEARCH_DIRECTIVE_RE = /\[\[WEB_SEARCH:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const MEMORY_LINE_DIRECTIVE_RE = /\[\[MEMORY_LINE:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
-const MAX_MEDIA_PROMPT_LEN = 480;
+const DEFAULT_MAX_MEDIA_PROMPT_LEN = 900;
+export const MAX_MEDIA_PROMPT_FLOOR = 120;
+export const MAX_MEDIA_PROMPT_CEILING = 2000;
 export const MAX_WEB_QUERY_LEN = 220;
 export const MAX_GIF_QUERY_LEN = 120;
 const MAX_MEMORY_LINE_LEN = 180;
 const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
 const MAX_REPLY_TEXT_LEN = 1200;
+
+export function resolveMaxMediaPromptLen(settings) {
+  const raw = Number(settings?.initiative?.maxMediaPromptChars);
+  if (!Number.isFinite(raw)) return DEFAULT_MAX_MEDIA_PROMPT_LEN;
+  return clamp(Math.floor(raw), MAX_MEDIA_PROMPT_FLOOR, MAX_MEDIA_PROMPT_CEILING);
+}
 const REPLY_MEDIA_TYPES = new Set(["image_simple", "image_complex", "video", "gif"]);
 const REPLY_VOICE_INTENT_TYPES = new Set(["join", "leave", "status", "none"]);
 const MAX_VOICE_INTENT_REASON_LEN = 180;
@@ -230,14 +238,14 @@ export function extractRecentVideoTargets({
   return targets;
 }
 
-export function composeInitiativeImagePrompt(imagePrompt, postText) {
+export function composeInitiativeImagePrompt(imagePrompt, postText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
   URL_IN_TEXT_RE.lastIndex = 0;
   const topic = String(postText || "")
     .replace(URL_IN_TEXT_RE, "")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 260);
-  const requested = normalizeDirectiveText(imagePrompt, MAX_MEDIA_PROMPT_LEN);
+  const requested = normalizeDirectiveText(imagePrompt, maxLen);
 
   return [
     "Create a vivid, shareable image for a Discord post.",
@@ -256,14 +264,14 @@ export function composeInitiativeImagePrompt(imagePrompt, postText) {
   ].join("\n");
 }
 
-export function composeInitiativeVideoPrompt(videoPrompt, postText) {
+export function composeInitiativeVideoPrompt(videoPrompt, postText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
   URL_IN_TEXT_RE.lastIndex = 0;
   const topic = String(postText || "")
     .replace(URL_IN_TEXT_RE, "")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 260);
-  const requested = normalizeDirectiveText(videoPrompt, MAX_MEDIA_PROMPT_LEN);
+  const requested = normalizeDirectiveText(videoPrompt, maxLen);
 
   return [
     "Create a short, dynamic, shareable video clip for a Discord post.",
@@ -280,14 +288,14 @@ export function composeInitiativeVideoPrompt(videoPrompt, postText) {
   ].join("\n");
 }
 
-export function composeReplyImagePrompt(imagePrompt, replyText) {
+export function composeReplyImagePrompt(imagePrompt, replyText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
   URL_IN_TEXT_RE.lastIndex = 0;
   const context = String(replyText || "")
     .replace(URL_IN_TEXT_RE, "")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 260);
-  const requested = normalizeDirectiveText(imagePrompt, MAX_MEDIA_PROMPT_LEN);
+  const requested = normalizeDirectiveText(imagePrompt, maxLen);
 
   return [
     "Create a vivid image to accompany a Discord chat reply.",
@@ -303,14 +311,14 @@ export function composeReplyImagePrompt(imagePrompt, replyText) {
   ].join("\n");
 }
 
-export function composeReplyVideoPrompt(videoPrompt, replyText) {
+export function composeReplyVideoPrompt(videoPrompt, replyText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
   URL_IN_TEXT_RE.lastIndex = 0;
   const context = String(replyText || "")
     .replace(URL_IN_TEXT_RE, "")
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 260);
-  const requested = normalizeDirectiveText(videoPrompt, MAX_MEDIA_PROMPT_LEN);
+  const requested = normalizeDirectiveText(videoPrompt, maxLen);
 
   return [
     "Create a short, dynamic video clip to accompany a Discord chat reply.",
@@ -327,7 +335,7 @@ export function composeReplyVideoPrompt(videoPrompt, replyText) {
   ].join("\n");
 }
 
-export function parseInitiativeMediaDirective(rawText) {
+export function parseInitiativeMediaDirective(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
   const parsed = {
     text: String(rawText || "").trim(),
     imagePrompt: null,
@@ -339,7 +347,7 @@ export function parseInitiativeMediaDirective(rawText) {
   while (parsed.text) {
     const complexImageMatch = parsed.text.match(COMPLEX_IMAGE_PROMPT_DIRECTIVE_RE);
     if (complexImageMatch) {
-      const prompt = normalizeDirectiveText(complexImageMatch[1], MAX_MEDIA_PROMPT_LEN) || null;
+      const prompt = normalizeDirectiveText(complexImageMatch[1], maxLen) || null;
       if (!parsed.complexImagePrompt) {
         parsed.complexImagePrompt = prompt;
       }
@@ -352,7 +360,7 @@ export function parseInitiativeMediaDirective(rawText) {
 
     const imageMatch = parsed.text.match(IMAGE_PROMPT_DIRECTIVE_RE);
     if (imageMatch) {
-      const prompt = normalizeDirectiveText(imageMatch[1], MAX_MEDIA_PROMPT_LEN) || null;
+      const prompt = normalizeDirectiveText(imageMatch[1], maxLen) || null;
       if (!parsed.imagePrompt) {
         parsed.imagePrompt = prompt;
       }
@@ -365,7 +373,7 @@ export function parseInitiativeMediaDirective(rawText) {
 
     const videoMatch = parsed.text.match(VIDEO_PROMPT_DIRECTIVE_RE);
     if (videoMatch) {
-      const prompt = normalizeDirectiveText(videoMatch[1], MAX_MEDIA_PROMPT_LEN) || null;
+      const prompt = normalizeDirectiveText(videoMatch[1], maxLen) || null;
       if (!parsed.videoPrompt) {
         parsed.videoPrompt = prompt;
       }
@@ -382,7 +390,7 @@ export function parseInitiativeMediaDirective(rawText) {
   return parsed;
 }
 
-export function parseReplyDirectives(rawText) {
+export function parseReplyDirectives(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
   const parsed = {
     text: String(rawText || "").trim(),
     imagePrompt: null,
@@ -398,7 +406,7 @@ export function parseReplyDirectives(rawText) {
   while (parsed.text) {
     const complexImageMatch = parsed.text.match(COMPLEX_IMAGE_PROMPT_DIRECTIVE_RE);
     if (complexImageMatch) {
-      const prompt = normalizeDirectiveText(complexImageMatch[1], MAX_MEDIA_PROMPT_LEN) || null;
+      const prompt = normalizeDirectiveText(complexImageMatch[1], maxLen) || null;
       if (!parsed.complexImagePrompt) {
         parsed.complexImagePrompt = prompt;
       }
@@ -411,7 +419,7 @@ export function parseReplyDirectives(rawText) {
 
     const imageMatch = parsed.text.match(IMAGE_PROMPT_DIRECTIVE_RE);
     if (imageMatch) {
-      const prompt = normalizeDirectiveText(imageMatch[1], MAX_MEDIA_PROMPT_LEN) || null;
+      const prompt = normalizeDirectiveText(imageMatch[1], maxLen) || null;
       if (!parsed.imagePrompt) {
         parsed.imagePrompt = prompt;
       }
@@ -424,7 +432,7 @@ export function parseReplyDirectives(rawText) {
 
     const videoMatch = parsed.text.match(VIDEO_PROMPT_DIRECTIVE_RE);
     if (videoMatch) {
-      const prompt = normalizeDirectiveText(videoMatch[1], MAX_MEDIA_PROMPT_LEN) || null;
+      const prompt = normalizeDirectiveText(videoMatch[1], maxLen) || null;
       if (!parsed.videoPrompt) {
         parsed.videoPrompt = prompt;
       }
@@ -481,7 +489,7 @@ export function parseReplyDirectives(rawText) {
   return parsed;
 }
 
-export function parseStructuredReplyOutput(rawText) {
+export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
   const fallbackText = String(rawText || "").trim();
   const parsed = parseJsonObjectFromText(fallbackText);
   if (!parsed) {
@@ -512,7 +520,7 @@ export function parseStructuredReplyOutput(rawText) {
   const memoryLookupQuery =
     normalizeDirectiveText(parsed?.memoryLookupQuery, MAX_MEMORY_LOOKUP_QUERY_LEN) || null;
   const memoryLine = normalizeDirectiveText(parsed?.memoryLine, MAX_MEMORY_LINE_LEN) || null;
-  const mediaDirective = normalizeStructuredMediaDirective(parsed?.media);
+  const mediaDirective = normalizeStructuredMediaDirective(parsed?.media, maxLen);
   const voiceIntent = normalizeStructuredVoiceIntent(parsed?.voiceIntent);
 
   return {
@@ -530,14 +538,14 @@ export function parseStructuredReplyOutput(rawText) {
   };
 }
 
-function normalizeStructuredMediaDirective(rawMedia) {
+function normalizeStructuredMediaDirective(rawMedia, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
   if (!rawMedia || typeof rawMedia !== "object") return null;
   const rawType = String(rawMedia.type || "")
     .trim()
     .toLowerCase();
   if (!rawType || rawType === "none") return null;
   if (!REPLY_MEDIA_TYPES.has(rawType)) return null;
-  const prompt = normalizeDirectiveText(rawMedia.prompt, rawType === "gif" ? MAX_GIF_QUERY_LEN : MAX_MEDIA_PROMPT_LEN);
+  const prompt = normalizeDirectiveText(rawMedia.prompt, rawType === "gif" ? MAX_GIF_QUERY_LEN : maxLen);
   if (!prompt) return null;
   return {
     type: rawType,
