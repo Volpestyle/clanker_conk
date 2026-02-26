@@ -2,78 +2,185 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
 
-function createManager(participantCount) {
+function createManager({
+  participantCount = 2,
+  generate = async () => ({ text: "NO" })
+} = {}) {
   const fakeClient = {
     on() {},
     off() {},
     guilds: { cache: new Map() },
     users: { cache: new Map() },
-    user: { id: "bot-user" }
+    user: { id: "bot-user", username: "clanker conk" }
   };
   const fakeStore = {
-    logAction() {}
+    logAction() {},
+    getSettings() {
+      return {
+        botName: "clanker conk"
+      };
+    }
   };
   const manager = new VoiceSessionManager({
     client: fakeClient,
     store: fakeStore,
-    appConfig: {}
+    appConfig: {},
+    llm: {
+      generate
+    }
   });
   manager.countHumanVoiceParticipants = () => participantCount;
   return manager;
 }
 
-test("focused speaker follow-up allows 1:1 turn without transcript", () => {
-  const manager = createManager(2);
-  const session = {
-    focusedSpeakerUserId: "speaker-1",
-    focusedSpeakerExpiresAt: Date.now() + 5_000
+function baseSettings(overrides = {}) {
+  return {
+    botName: "clanker conk",
+    memory: {
+      enabled: false
+    },
+    llm: {
+      provider: "openai",
+      model: "gpt-4.1-mini"
+    },
+    voice: {
+      replyEagerness: 60,
+      eagerCooldownSeconds: 45,
+      replyDecisionLlm: {
+        provider: "anthropic",
+        model: "claude-haiku-4-5"
+      }
+    },
+    ...overrides
   };
+}
 
-  const decision = manager.assessVoiceTurnAddressing({
-    session,
+test("reply decider blocks turns when transcript is missing", async () => {
+  const manager = createManager();
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      botTurnOpen: false,
+      lastUnaddressedReplyAt: 0
+    },
     userId: "speaker-1",
-    settings: { botName: "clanker conk" },
+    settings: baseSettings(),
     transcript: ""
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "missing_transcript");
+});
+
+test("reply decider blocks unaddressed turns when eagerness is disabled", async () => {
+  const manager = createManager();
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      botTurnOpen: false,
+      lastUnaddressedReplyAt: 0
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 0,
+        eagerCooldownSeconds: 45,
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "what do you think about this"
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "eagerness_disabled_without_direct_address");
+});
+
+test("reply decider allows unaddressed turn when model says YES", async () => {
+  const manager = createManager({
+    generate: async () => ({ text: "YES" })
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      botTurnOpen: false,
+      lastUnaddressedReplyAt: 0
+    },
+    userId: "speaker-1",
+    settings: baseSettings(),
+    transcript: "that reminds me of yesterday, what happened again?"
   });
 
   assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "focused_speaker_followup_no_transcript");
+  assert.equal(decision.reason, "llm_yes");
+  assert.equal(decision.directAddressed, false);
 });
 
-test("focused speaker follow-up still requires transcript in larger groups", () => {
-  const manager = createManager(4);
-  const session = {
-    focusedSpeakerUserId: "speaker-1",
-    focusedSpeakerExpiresAt: Date.now() + 5_000
-  };
-
-  const decision = manager.assessVoiceTurnAddressing({
-    session,
+test("reply decider respects cooldown for unaddressed turns", async () => {
+  const manager = createManager({
+    generate: async () => ({ text: "YES" })
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      botTurnOpen: false,
+      lastUnaddressedReplyAt: Date.now()
+    },
     userId: "speaker-1",
-    settings: { botName: "clanker conk" },
-    transcript: ""
+    settings: baseSettings(),
+    transcript: "can you jump in on this"
   });
 
   assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "needs_addressing_transcript");
+  assert.equal(decision.reason, "unaddressed_cooldown");
 });
 
-test("focus follows active speaker continuity and does not stick after speaker switch", () => {
-  const manager = createManager(2);
-  const session = {
-    focusedSpeakerUserId: "speaker-1",
-    focusedSpeakerExpiresAt: Date.now() + 30_000,
-    lastHumanTurnUserId: "speaker-2",
-    lastHumanTurnAt: Date.now()
+test("direct address falls back to allow when decider LLM is unavailable", async () => {
+  const fakeClient = {
+    on() {},
+    off() {},
+    guilds: { cache: new Map() },
+    users: { cache: new Map() },
+    user: { id: "bot-user", username: "clanker conk" }
   };
+  const fakeStore = {
+    logAction() {},
+    getSettings() {
+      return { botName: "clanker conk" };
+    }
+  };
+  const manager = new VoiceSessionManager({
+    client: fakeClient,
+    store: fakeStore,
+    appConfig: {},
+    llm: {}
+  });
+  manager.countHumanVoiceParticipants = () => 3;
 
-  const decision = manager.assessVoiceTurnAddressing({
-    session,
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      botTurnOpen: false,
+      lastUnaddressedReplyAt: 0
+    },
     userId: "speaker-1",
-    settings: { botName: "clanker conk" },
-    transcript: "so what happened then?"
+    settings: baseSettings(),
+    transcript: "clanky can you explain that"
   });
 
-  assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "not_addressed_in_group");
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "direct_address_no_decider");
+  assert.equal(decision.directAddressed, true);
 });
