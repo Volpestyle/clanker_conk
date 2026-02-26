@@ -122,6 +122,7 @@ export const DEFAULT_SETTINGS = {
     videoModel: "grok-imagine-video",
     allowedImageModels: ["gpt-image-1.5", "grok-imagine-image", "grok-2-image-1212"],
     allowedVideoModels: ["grok-imagine-video", "grok-2-video"],
+    maxMediaPromptChars: 900,
     discovery: {
       enabled: true,
       linkChancePercent: 80,

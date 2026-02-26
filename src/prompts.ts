@@ -5,6 +5,14 @@ import {
   PROMPT_CAPABILITY_HONESTY_LINE
 } from "./promptCore.ts";
 
+const MEDIA_PROMPT_CRAFT_GUIDANCE = [
+  "Write media prompts as vivid scene descriptions, not abstract concepts.",
+  "Include: subject/action, visual style or medium (photo, illustration, 3D render, pixel art, etc.), lighting/mood, camera angle or framing, and color palette when relevant.",
+  "Be specific: 'a golden retriever leaping through autumn leaves, warm backlit sunset, low angle, film grain' beats 'a dog outside'.",
+  "For video prompts, describe the motion arc: what starts, what changes, and how it ends.",
+  "Never put text, words, or UI elements in media prompts."
+].join(" ");
+
 function stripEmojiForPrompt(text) {
   let value = String(text || "");
   value = value.replace(/<a?:[a-zA-Z0-9_~]+:\d+>/g, "");
@@ -191,7 +199,8 @@ export function buildReplyPrompt({
   allowMemoryLookupDirective = false,
   allowMemoryDirective = false,
   voiceMode = null,
-  videoContext = null
+  videoContext = null,
+  maxMediaPromptChars = 900
 }) {
   const parts = [];
 
@@ -424,7 +433,8 @@ export function buildReplyPrompt({
       parts.push("If a generated clip is best, set media to {\"type\":\"video\",\"prompt\":\"...\"}.");
       parts.push("Use video when motion/animation is meaningfully better than a still image.");
     }
-    parts.push("Keep image/video media prompts concise (under 240 chars), and always include normal reply text.");
+    parts.push(`Keep image/video media prompts under ${maxMediaPromptChars} chars, and always include normal reply text.`);
+    parts.push(MEDIA_PROMPT_CRAFT_GUIDANCE);
   } else {
     parts.push("Reply image/video generation is unavailable right now. Respond with text only.");
     parts.push("Set media to null.");
@@ -529,7 +539,8 @@ export function buildInitiativePrompt({
   remainingInitiativeVideos = 0,
   discoveryFindings = [],
   maxLinksPerPost = 2,
-  requireDiscoveryLink = false
+  requireDiscoveryLink = false,
+  maxMediaPromptChars = 900
 }) {
   const parts = [];
 
@@ -567,11 +578,12 @@ export function buildInitiativePrompt({
       parts.push("If this post should include motion, append: [[VIDEO_PROMPT: your prompt here]]");
     }
     parts.push(
-      "Keep IMAGE_PROMPT, COMPLEX_IMAGE_PROMPT, and VIDEO_PROMPT concise (under 240 chars)."
+      `Keep IMAGE_PROMPT, COMPLEX_IMAGE_PROMPT, and VIDEO_PROMPT under ${maxMediaPromptChars} chars.`
     );
     parts.push(
       "Any visual prompt must avoid visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks."
     );
+    parts.push(MEDIA_PROMPT_CRAFT_GUIDANCE);
     parts.push(
       "If no media is needed, output only the post text. If media is needed, output at most one media directive."
     );
