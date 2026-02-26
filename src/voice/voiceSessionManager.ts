@@ -1154,7 +1154,15 @@ export class VoiceSessionManager {
     }
 
     const normalizedStreamerId = String(streamerUserId || "").trim() || null;
-    if (streamWatch.targetUserId && normalizedStreamerId && streamWatch.targetUserId !== normalizedStreamerId) {
+    if (streamWatch.targetUserId && !normalizedStreamerId) {
+      return {
+        accepted: false,
+        reason: "streamer_user_id_required",
+        targetUserId: streamWatch.targetUserId
+      };
+    }
+
+    if (streamWatch.targetUserId && streamWatch.targetUserId !== normalizedStreamerId) {
       return {
         accepted: false,
         reason: "target_user_mismatch",
