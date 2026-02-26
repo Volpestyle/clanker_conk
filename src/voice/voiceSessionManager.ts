@@ -13,6 +13,7 @@ import {
 } from "@discordjs/voice";
 import { PermissionFlagsBits } from "discord.js";
 import prism from "prism-media";
+import { buildHardLimitsSection, getPromptBotName, PROMPT_CAPABILITY_HONESTY_LINE } from "../promptCore.ts";
 import { clamp } from "../utils.ts";
 import { convertDiscordPcmToXaiInput, convertXaiOutputToDiscordPcm } from "./pcmAudio.ts";
 import { SoundboardDirector } from "./soundboardDirector.ts";
@@ -27,10 +28,12 @@ const BOT_TURN_SILENCE_RESET_MS = 1200;
 const ACTIVITY_TOUCH_THROTTLE_MS = 2000;
 
 export class VoiceSessionManager {
-  constructor({ client, store, appConfig }) {
+  constructor({ client, store, appConfig, composeOperationalMessage = null }) {
     this.client = client;
     this.store = store;
     this.appConfig = appConfig;
+    this.composeOperationalMessage =
+      typeof composeOperationalMessage === "function" ? composeOperationalMessage : null;
     this.sessions = new Map();
     this.pendingSessionGuildIds = new Set();
     this.joinLocks = new Map();
@@ -94,24 +97,62 @@ export class VoiceSessionManager {
     if (!message?.guild || !message?.member || !message?.channel) return false;
 
     const guildId = String(message.guild.id);
+    const userId = String(message.author?.id || "");
+    if (!userId) return false;
+
     return await this.withJoinLock(guildId, async () => {
       if (!settings?.voice?.enabled || !settings?.voice?.joinOnTextNL) {
-        await this.sendToChannel(message.channel, "voice mode is off rn. ask an admin to enable it.");
+        await this.sendOperationalMessage({
+          channel: message.channel,
+          settings,
+          guildId,
+          channelId: message.channelId,
+          userId,
+          messageId: message.id,
+          event: "voice_join_request",
+          reason: "voice_disabled",
+          details: {
+            voiceEnabled: Boolean(settings?.voice?.enabled),
+            joinOnTextNL: Boolean(settings?.voice?.joinOnTextNL)
+          },
+          fallback: "voice mode is off rn. ask an admin to enable it."
+        });
         return true;
       }
 
-      const userId = String(message.author?.id || "");
-      if (!userId) return false;
-
       const blockedUsers = settings.voice?.blockedVoiceUserIds || [];
       if (blockedUsers.includes(userId)) {
-        await this.sendToChannel(message.channel, "you are blocked from voice controls here.");
+        await this.sendOperationalMessage({
+          channel: message.channel,
+          settings,
+          guildId,
+          channelId: message.channelId,
+          userId,
+          messageId: message.id,
+          event: "voice_join_request",
+          reason: "requester_blocked",
+          details: {
+            blockedVoiceUserIdsCount: blockedUsers.length
+          },
+          fallback: "you are blocked from voice controls here."
+        });
         return true;
       }
 
       const memberVoiceChannel = message.member.voice?.channel;
       if (!memberVoiceChannel) {
-        await this.sendToChannel(message.channel, "join a vc first, then ping me to hop in.");
+        await this.sendOperationalMessage({
+          channel: message.channel,
+          settings,
+          guildId,
+          channelId: message.channelId,
+          userId,
+          messageId: message.id,
+          event: "voice_join_request",
+          reason: "requester_not_in_voice",
+          details: {},
+          fallback: "join a vc first, then ping me to hop in."
+        });
         return true;
       }
 
@@ -120,12 +161,39 @@ export class VoiceSessionManager {
       const allowedChannels = settings.voice?.allowedVoiceChannelIds || [];
 
       if (blockedChannels.includes(targetVoiceChannelId)) {
-        await this.sendToChannel(message.channel, "that voice channel is blocked for me.");
+        await this.sendOperationalMessage({
+          channel: message.channel,
+          settings,
+          guildId,
+          channelId: message.channelId,
+          userId,
+          messageId: message.id,
+          event: "voice_join_request",
+          reason: "channel_blocked",
+          details: {
+            targetVoiceChannelId
+          },
+          fallback: "that voice channel is blocked for me."
+        });
         return true;
       }
 
       if (allowedChannels.length > 0 && !allowedChannels.includes(targetVoiceChannelId)) {
-        await this.sendToChannel(message.channel, "i can only join allowlisted voice channels here.");
+        await this.sendOperationalMessage({
+          channel: message.channel,
+          settings,
+          guildId,
+          channelId: message.channelId,
+          userId,
+          messageId: message.id,
+          event: "voice_join_request",
+          reason: "channel_not_allowlisted",
+          details: {
+            targetVoiceChannelId,
+            allowlistedChannelCount: allowedChannels.length
+          },
+          fallback: "i can only join allowlisted voice channels here."
+        });
         return true;
       }
 
@@ -134,7 +202,21 @@ export class VoiceSessionManager {
         const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
         const startedLastDay = this.store.countActionsSince("voice_session_start", since24h);
         if (startedLastDay >= maxSessionsPerDay) {
-          await this.sendToChannel(message.channel, "daily voice session limit hit for now.");
+          await this.sendOperationalMessage({
+            channel: message.channel,
+            settings,
+            guildId,
+            channelId: message.channelId,
+            userId,
+            messageId: message.id,
+            event: "voice_join_request",
+            reason: "max_sessions_per_day_reached",
+            details: {
+              startedLastDay,
+              maxSessionsPerDay
+            },
+            fallback: "daily voice session limit hit for now."
+          });
           return true;
         }
       }
@@ -143,7 +225,20 @@ export class VoiceSessionManager {
       if (existing) {
         if (existing.voiceChannelId === targetVoiceChannelId) {
           this.touchActivity(guildId, settings);
-          await this.sendToChannel(message.channel, "already in your vc.");
+          await this.sendOperationalMessage({
+            channel: message.channel,
+            settings,
+            guildId,
+            channelId: message.channelId,
+            userId,
+            messageId: message.id,
+            event: "voice_join_request",
+            reason: "already_in_channel",
+            details: {
+              voiceChannelId: targetVoiceChannelId
+            },
+            fallback: "already in your vc."
+          });
           return true;
         }
 
@@ -151,21 +246,48 @@ export class VoiceSessionManager {
           guildId,
           reason: "switch_channel",
           requestedByUserId: userId,
-          announcement: "switching voice channels."
+          announceChannel: message.channel,
+          announcement: "switching voice channels.",
+          settings,
+          messageId: message.id
         });
       }
 
       if (!this.appConfig?.xaiApiKey) {
-        await this.sendToChannel(message.channel, "voice runtime is not configured yet (missing `XAI_API_KEY`).");
+        await this.sendOperationalMessage({
+          channel: message.channel,
+          settings,
+          guildId,
+          channelId: message.channelId,
+          userId,
+          messageId: message.id,
+          event: "voice_join_request",
+          reason: "xai_api_key_missing",
+          details: {},
+          fallback: "voice runtime is not configured yet (missing `XAI_API_KEY`)."
+        });
         return true;
       }
 
-      const missingPermissionMessage = this.getMissingJoinPermissionMessage({
+      const missingPermissionInfo = this.getMissingJoinPermissionInfo({
         guild: message.guild,
         voiceChannel: memberVoiceChannel
       });
-      if (missingPermissionMessage) {
-        await this.sendToChannel(message.channel, missingPermissionMessage);
+      if (missingPermissionInfo) {
+        await this.sendOperationalMessage({
+          channel: message.channel,
+          settings,
+          guildId,
+          channelId: message.channelId,
+          userId,
+          messageId: message.id,
+          event: "voice_join_request",
+          reason: missingPermissionInfo.reason,
+          details: {
+            missingPermissions: missingPermissionInfo.missingPermissions || []
+          },
+          fallback: this.composeMissingPermissionFallback(missingPermissionInfo)
+        });
         return true;
       }
 
@@ -186,7 +308,21 @@ export class VoiceSessionManager {
         if (!existing) {
           const activeOrPendingSessions = this.sessions.size + this.pendingSessionGuildIds.size;
           if (activeOrPendingSessions >= maxConcurrentSessions) {
-            await this.sendToChannel(message.channel, "voice session cap reached right now.");
+            await this.sendOperationalMessage({
+              channel: message.channel,
+              settings,
+              guildId,
+              channelId: message.channelId,
+              userId,
+              messageId: message.id,
+              event: "voice_join_request",
+              reason: "max_concurrent_sessions_reached",
+              details: {
+                activeOrPendingSessions,
+                maxConcurrentSessions
+              },
+              fallback: "voice session cap reached right now."
+            });
             return true;
           }
 
@@ -293,10 +429,21 @@ export class VoiceSessionManager {
           }
         });
 
-        await this.sendToChannel(
-          message.channel,
-          `hopping in <#${targetVoiceChannelId}> for up to ${maxSessionMinutes}m.`
-        );
+        await this.sendOperationalMessage({
+          channel: message.channel,
+          settings,
+          guildId,
+          channelId: message.channelId,
+          userId,
+          messageId: message.id,
+          event: "voice_join_request",
+          reason: "joined",
+          details: {
+            targetVoiceChannelId,
+            maxSessionMinutes
+          },
+          fallback: `hopping in <#${targetVoiceChannelId}> for up to ${maxSessionMinutes}m.`
+        });
 
         return true;
       } catch (error) {
@@ -337,7 +484,20 @@ export class VoiceSessionManager {
           }
         }
 
-        await this.sendToChannel(message.channel, `couldn't join voice: ${shortError(errorText)}`);
+        await this.sendOperationalMessage({
+          channel: message.channel,
+          settings,
+          guildId,
+          channelId: message.channelId,
+          userId,
+          messageId: message.id,
+          event: "voice_join_request",
+          reason: "join_failed",
+          details: {
+            error: shortError(errorText)
+          },
+          fallback: `couldn't join voice: ${shortError(errorText)}`
+        });
         return true;
       } finally {
         if (reservedConcurrencySlot) {
@@ -347,12 +507,23 @@ export class VoiceSessionManager {
     });
   }
 
-  async requestLeave({ message, reason = "nl_leave" }) {
+  async requestLeave({ message, settings, reason = "nl_leave" }) {
     if (!message?.guild || !message?.channel) return false;
 
     const guildId = String(message.guild.id);
     if (!this.sessions.has(guildId)) {
-      await this.sendToChannel(message.channel, "i'm not in vc right now.");
+      await this.sendOperationalMessage({
+        channel: message.channel,
+        settings,
+        guildId,
+        channelId: message.channelId,
+        userId: message.author?.id || null,
+        messageId: message.id,
+        event: "voice_leave_request",
+        reason: "not_in_voice",
+        details: {},
+        fallback: "i'm not in vc right now."
+      });
       return true;
     }
 
@@ -361,20 +532,33 @@ export class VoiceSessionManager {
       reason,
       requestedByUserId: message.author?.id || null,
       announceChannel: message.channel,
-      announcement: "aight i'm leaving vc."
+      announcement: "aight i'm leaving vc.",
+      settings,
+      messageId: message.id
     });
 
     return true;
   }
 
-  async requestStatus({ message }) {
+  async requestStatus({ message, settings }) {
     if (!message?.guild || !message?.channel) return false;
 
     const guildId = String(message.guild.id);
     const session = this.sessions.get(guildId);
 
     if (!session) {
-      await this.sendToChannel(message.channel, "voice status: offline (not in vc).");
+      await this.sendOperationalMessage({
+        channel: message.channel,
+        settings,
+        guildId,
+        channelId: message.channelId,
+        userId: message.author?.id || null,
+        messageId: message.id,
+        event: "voice_status_request",
+        reason: "offline",
+        details: {},
+        fallback: "voice status: offline (not in vc)."
+      });
       return true;
     }
 
@@ -386,12 +570,27 @@ export class VoiceSessionManager {
       ? Math.max(0, Math.ceil((session.inactivityEndsAt - Date.now()) / 1000))
       : null;
 
-    await this.sendToChannel(
-      message.channel,
-      `voice status: in <#${session.voiceChannelId}> | session ${elapsedSeconds}s | ` +
+    await this.sendOperationalMessage({
+      channel: message.channel,
+      settings: settings || session.settingsSnapshot,
+      guildId,
+      channelId: message.channelId,
+      userId: message.author?.id || null,
+      messageId: message.id,
+      event: "voice_status_request",
+      reason: "online",
+      details: {
+        voiceChannelId: session.voiceChannelId,
+        elapsedSeconds,
+        remainingSeconds: remainingSeconds ?? null,
+        inactivitySeconds: inactivitySeconds ?? null,
+        activeCaptures: session.userCaptures.size
+      },
+      fallback:
+        `voice status: in <#${session.voiceChannelId}> | session ${elapsedSeconds}s | ` +
         `max-left ${remainingSeconds ?? "n/a"}s | idle-left ${inactivitySeconds ?? "n/a"}s | ` +
         `capturing ${session.userCaptures.size} speaker(s)`
-    );
+    });
 
     return true;
   }
@@ -429,12 +628,38 @@ export class VoiceSessionManager {
     });
 
     if (result.ok) {
-      await this.sendToChannel(
-        message.channel,
-        `soundboard played: ${requested.alias || requested.soundId}`
-      );
+      await this.sendOperationalMessage({
+        channel: message.channel,
+        settings,
+        guildId: message.guildId,
+        channelId: message.channelId,
+        userId: message.author?.id || null,
+        messageId: message.id,
+        event: "voice_soundboard_request",
+        reason: "played",
+        details: {
+          alias: requested.alias || null,
+          soundId: requested.soundId
+        },
+        fallback: `soundboard played: ${requested.alias || requested.soundId}`
+      });
     } else {
-      await this.sendToChannel(message.channel, `can't play that sound rn: ${result.message}`);
+      await this.sendOperationalMessage({
+        channel: message.channel,
+        settings,
+        guildId: message.guildId,
+        channelId: message.channelId,
+        userId: message.author?.id || null,
+        messageId: message.id,
+        event: "voice_soundboard_request",
+        reason: result.reason || "play_failed",
+        details: {
+          alias: requested.alias || null,
+          soundId: requested.soundId,
+          error: shortError(result.message || "")
+        },
+        fallback: `can't play that sound rn: ${result.message}`
+      });
     }
 
     return true;
@@ -515,7 +740,8 @@ export class VoiceSessionManager {
         await this.endSession({
           guildId: session.guildId,
           reason: "settings_disabled",
-          announcement: "voice mode was disabled, leaving vc."
+          announcement: "voice mode was disabled, leaving vc.",
+          settings
         });
         continue;
       }
@@ -524,7 +750,8 @@ export class VoiceSessionManager {
         await this.endSession({
           guildId: session.guildId,
           reason: "settings_channel_blocked",
-          announcement: "this vc is now blocked for me, leaving."
+          announcement: "this vc is now blocked for me, leaving.",
+          settings
         });
         continue;
       }
@@ -533,7 +760,8 @@ export class VoiceSessionManager {
         await this.endSession({
           guildId: session.guildId,
           reason: "settings_channel_not_allowlisted",
-          announcement: "this vc is no longer allowlisted, leaving."
+          announcement: "this vc is no longer allowlisted, leaving.",
+          settings
         });
         continue;
       }
@@ -555,7 +783,8 @@ export class VoiceSessionManager {
       this.endSession({
         guildId: session.guildId,
         reason: "max_duration",
-        announcement: `max session time (${maxSessionMinutes}m) reached, leaving vc.`
+        announcement: `max session time (${maxSessionMinutes}m) reached, leaving vc.`,
+        settings
       }).catch(() => undefined);
     }, maxDurationMs);
 
@@ -580,7 +809,8 @@ export class VoiceSessionManager {
       this.endSession({
         guildId: session.guildId,
         reason: "inactivity_timeout",
-        announcement: `no one talked for ${inactivitySeconds}s, leaving vc.`
+        announcement: `no one talked for ${inactivitySeconds}s, leaving vc.`,
+        settings
       }).catch(() => undefined);
     }, inactivitySeconds * 1000);
   }
@@ -649,7 +879,8 @@ export class VoiceSessionManager {
       this.endSession({
         guildId: session.guildId,
         reason: "xai_runtime_error",
-        announcement: "voice runtime hit an error, leaving vc."
+        announcement: "voice runtime hit an error, leaving vc.",
+        settings
       }).catch(() => undefined);
     };
 
@@ -673,7 +904,8 @@ export class VoiceSessionManager {
       this.endSession({
         guildId: session.guildId,
         reason: "xai_socket_closed",
-        announcement: "lost xai voice runtime, leaving vc."
+        announcement: "lost xai voice runtime, leaving vc.",
+        settings
       }).catch(() => undefined);
     };
 
@@ -748,7 +980,8 @@ export class VoiceSessionManager {
         this.endSession({
           guildId: session.guildId,
           reason: "connection_lost",
-          announcement: "voice connection dropped, i'm out."
+          announcement: "voice connection dropped, i'm out.",
+          settings
         }).catch(() => undefined);
       }
     };
@@ -920,7 +1153,9 @@ export class VoiceSessionManager {
     reason = "unknown",
     requestedByUserId = null,
     announceChannel = null,
-    announcement = null
+    announcement = undefined,
+    settings = null,
+    messageId = null
   }) {
     const session = this.sessions.get(String(guildId));
     if (!session) return false;
@@ -1009,9 +1244,25 @@ export class VoiceSessionManager {
     });
 
     const channel = announceChannel || this.client.channels.cache.get(session.textChannelId);
-    const message = announcement === null ? null : announcement || defaultExitMessage(reason);
-    if (message) {
-      await this.sendToChannel(channel, message);
+    if (announcement !== null) {
+      const fallbackText = String(announcement === undefined ? defaultExitMessage(reason) : announcement || "").trim();
+      if (fallbackText) {
+        await this.sendOperationalMessage({
+          channel,
+          settings: settings || session.settingsSnapshot,
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: requestedByUserId || this.client.user?.id || null,
+          messageId,
+          event: "voice_session_end",
+          reason,
+          details: {
+            voiceChannelId: session.voiceChannelId,
+            durationSeconds
+          },
+          fallback: fallbackText
+        });
+      }
     }
 
     return true;
@@ -1034,7 +1285,8 @@ export class VoiceSessionManager {
       await this.endSession({
         guildId,
         reason: "bot_disconnected",
-        announcement: "i got disconnected from vc."
+        announcement: "i got disconnected from vc.",
+        settings: session.settingsSnapshot
       });
       return;
     }
@@ -1046,19 +1298,71 @@ export class VoiceSessionManager {
   }
 
   buildVoiceInstructions(settings) {
-    const hardLimits = Array.isArray(settings?.persona?.hardLimits)
-      ? settings.persona.hardLimits
-      : [];
-
     return [
-      `You are ${settings?.botName || "clanker conk"} speaking in live Discord voice chat.`,
+      `You are ${getPromptBotName(settings)} speaking in live Discord voice chat.`,
       "Keep delivery calm, conversational, and low-drama.",
       "Use short turns by default and avoid monologues.",
       "Keep the same playful persona as text chat without being toxic.",
-      "Never claim capabilities you do not have.",
-      "Hard limitations:",
-      ...hardLimits.slice(0, 12).map((line) => `- ${line}`)
+      PROMPT_CAPABILITY_HONESTY_LINE,
+      ...buildHardLimitsSection(settings, { maxItems: 12 })
     ].join("\n");
+  }
+
+  async sendOperationalMessage({
+    channel,
+    settings = null,
+    guildId = null,
+    channelId = null,
+    userId = null,
+    messageId = null,
+    event = "voice_runtime",
+    reason = null,
+    details = {},
+    fallback = ""
+  }) {
+    const fallbackText = String(fallback || "").trim();
+    const resolvedSettings =
+      settings || (typeof this.store?.getSettings === "function" ? this.store.getSettings() : null);
+    const detailsPayload =
+      details && typeof details === "object" && !Array.isArray(details)
+        ? details
+        : { detail: String(details || "") };
+
+    let composedText = "";
+    if (this.composeOperationalMessage && resolvedSettings) {
+      try {
+        composedText = String(
+          (await this.composeOperationalMessage({
+            settings: resolvedSettings,
+            guildId: guildId || null,
+            channelId: channelId || channel?.id || null,
+            userId: userId || null,
+            messageId: messageId || null,
+            event: String(event || "voice_runtime"),
+            reason: reason ? String(reason) : null,
+            details: detailsPayload,
+            fallbackText
+          })) || ""
+        ).trim();
+      } catch (error) {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: guildId || null,
+          channelId: channelId || channel?.id || null,
+          messageId: messageId || null,
+          userId: userId || this.client.user?.id || null,
+          content: `voice_message_compose_failed: ${String(error?.message || error)}`,
+          metadata: {
+            event,
+            reason
+          }
+        });
+      }
+    }
+
+    const content = String(composedText || fallbackText).trim();
+    if (!content) return false;
+    return await this.sendToChannel(channel, content);
   }
 
   async sendToChannel(channel, text) {
@@ -1074,18 +1378,40 @@ export class VoiceSessionManager {
     }
   }
 
-  getMissingJoinPermissionMessage({ guild, voiceChannel }) {
+  getMissingJoinPermissionInfo({ guild, voiceChannel }) {
     const me = guild?.members?.me;
     if (!me) {
-      return "can't resolve my voice permissions in this server yet.";
+      return {
+        reason: "bot_member_unavailable",
+        missingPermissions: []
+      };
     }
 
     const perms = voiceChannel?.permissionsFor?.(me);
-    if (!perms?.has(PermissionFlagsBits.Connect) || !perms?.has(PermissionFlagsBits.Speak)) {
-      return "i need CONNECT and SPEAK permissions in that vc before i can join.";
+    const missingPermissions = [];
+    if (!perms?.has(PermissionFlagsBits.Connect)) missingPermissions.push("CONNECT");
+    if (!perms?.has(PermissionFlagsBits.Speak)) missingPermissions.push("SPEAK");
+    if (!missingPermissions.length) return null;
+    return {
+      reason: "missing_voice_permissions",
+      missingPermissions
+    };
+  }
+
+  composeMissingPermissionFallback(permissionInfo) {
+    if (!permissionInfo) return "";
+    if (permissionInfo.reason === "bot_member_unavailable") {
+      return "can't resolve my voice permissions in this server yet.";
     }
 
-    return null;
+    const missing = Array.isArray(permissionInfo.missingPermissions)
+      ? permissionInfo.missingPermissions.filter(Boolean)
+      : [];
+    if (!missing.length) {
+      return "i need voice permissions in that vc before i can join.";
+    }
+
+    return `i need ${formatNaturalList(missing)} permissions in that vc before i can join.`;
   }
 }
 
@@ -1116,4 +1442,14 @@ function shortError(text) {
   return String(text || "unknown error")
     .replace(/\s+/g, " ")
     .slice(0, 220);
+}
+
+function formatNaturalList(values) {
+  const items = (Array.isArray(values) ? values : [])
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  if (!items.length) return "";
+  if (items.length === 1) return items[0];
+  if (items.length === 2) return `${items[0]} and ${items[1]}`;
+  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
 }

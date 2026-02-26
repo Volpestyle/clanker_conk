@@ -1,4 +1,10 @@
 import { hasBotKeyword } from "./utils.ts";
+import {
+  buildHardLimitsSection,
+  getPromptBotName,
+  getPromptStyle,
+  PROMPT_CAPABILITY_HONESTY_LINE
+} from "./promptCore.ts";
 
 function stripEmojiForPrompt(text) {
   let value = String(text || "");
@@ -122,23 +128,21 @@ function looksLikeDirectWebSearchCommand(text) {
 }
 
 export function buildSystemPrompt(settings) {
-  const hardLimits = settings.persona?.hardLimits ?? [];
   const memoryEnabled = Boolean(settings?.memory?.enabled);
 
   return [
-    `You are ${settings.botName}, a real-feeling regular in a Discord server.`,
-    `Style: ${settings.persona?.flavor || "playful slang"}.`,
+    `You are ${getPromptBotName(settings)}, a real-feeling regular in a Discord server.`,
+    `Style: ${getPromptStyle(settings, "playful slang")}.`,
     "Write like a person in chat, not like an assistant.",
     "Use occasional slang naturally (not every sentence).",
     "Use short messages by default (1-3 lines).",
     "Use server emoji tokens in text only when necessary and when they enhance the message.",
-    "Do not fake actions or capabilities.",
+    PROMPT_CAPABILITY_HONESTY_LINE,
     memoryEnabled
       ? "You have persistent memory across conversations via saved durable facts and logs. Do not claim each conversation starts from zero."
       : "Persistent memory is disabled right now. Do not claim long-term memory across separate conversations.",
     "If asked to do something impossible, say it casually and suggest a text-only alternative.",
-    "Hard limitations:",
-    ...hardLimits.map((line) => `- ${line}`),
+    ...buildHardLimitsSection(settings),
     "Safety:",
     "- No harassment, hate, sexual content with minors, or illegal instructions.",
     "- Keep tone friendly and fun.",
