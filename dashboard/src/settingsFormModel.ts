@@ -3,7 +3,8 @@ export const CUSTOM_MODEL_OPTION_VALUE = "__custom_model__";
 const PROVIDER_MODEL_FALLBACKS = {
   openai: ["gpt-4.1-mini"],
   anthropic: ["claude-3-5-haiku-latest"],
-  xai: ["grok-3-mini-latest"]
+  xai: ["grok-3-mini-latest"],
+  "claude-code": ["sonnet"]
 };
 
 function parseList(val) {
@@ -299,5 +300,6 @@ function normalizeProviderKey(provider) {
     .toLowerCase();
   if (normalized === "anthropic") return "anthropic";
   if (normalized === "xai") return "xai";
+  if (normalized === "claude-code") return "claude-code";
   return "openai";
 }

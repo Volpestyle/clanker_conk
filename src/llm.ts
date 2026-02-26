@@ -1,7 +1,12 @@
 import { createReadStream } from "node:fs";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { estimateImageUsdCost, estimateUsdCost } from "./pricing.ts";
+
+const execFileAsync = promisify(execFile);
+const CLAUDE_CODE_TIMEOUT_MS = 30_000;
 
 const MEMORY_FACT_TYPES = ["preference", "profile", "relationship", "project", "other"];
 const DEFAULT_MEMORY_EMBEDDING_MODEL = "text-embedding-3-small";
@@ -48,6 +53,15 @@ export class LLMService {
     this.anthropic = appConfig.anthropicApiKey
       ? new Anthropic({ apiKey: appConfig.anthropicApiKey })
       : null;
+
+    this.claudeCodeAvailable = false;
+    try {
+      const { execSync } = require("node:child_process");
+      const result = execSync("which claude", { encoding: "utf8", timeout: 5000 }).trim();
+      this.claudeCodeAvailable = Boolean(result);
+    } catch {
+      this.claudeCodeAvailable = false;
+    }
   }
 
   async generate({
@@ -64,18 +78,16 @@ export class LLMService {
 
     try {
       const response =
-        provider === "anthropic"
-          ? await this.callAnthropic({
+        provider === "claude-code"
+          ? await this.callClaudeCode({
               model,
               systemPrompt,
               userPrompt,
               imageInputs,
-              contextMessages,
-              temperature,
-              maxOutputTokens
+              contextMessages
             })
-          : provider === "xai"
-            ? await this.callXai({
+          : provider === "anthropic"
+            ? await this.callAnthropic({
                 model,
                 systemPrompt,
                 userPrompt,
@@ -84,15 +96,25 @@ export class LLMService {
                 temperature,
                 maxOutputTokens
               })
-            : await this.callOpenAI({
-              model,
-              systemPrompt,
-              userPrompt,
-              imageInputs,
-              contextMessages,
-              temperature,
-              maxOutputTokens
-            });
+            : provider === "xai"
+              ? await this.callXai({
+                  model,
+                  systemPrompt,
+                  userPrompt,
+                  imageInputs,
+                  contextMessages,
+                  temperature,
+                  maxOutputTokens
+                })
+              : await this.callOpenAI({
+                model,
+                systemPrompt,
+                userPrompt,
+                imageInputs,
+                contextMessages,
+                temperature,
+                maxOutputTokens
+              });
 
       const costUsd = estimateUsdCost({
         provider,
@@ -175,23 +197,29 @@ export class LLMService {
 
     try {
       const response =
-        provider === "anthropic"
-          ? await this.callAnthropicMemoryExtraction({
+        provider === "claude-code"
+          ? await this.callClaudeCodeMemoryExtraction({
               model,
               systemPrompt,
               userPrompt
             })
-          : provider === "xai"
-            ? await this.callXaiMemoryExtraction({
+          : provider === "anthropic"
+            ? await this.callAnthropicMemoryExtraction({
                 model,
                 systemPrompt,
                 userPrompt
               })
-            : await this.callOpenAiMemoryExtraction({
-                model,
-                systemPrompt,
-                userPrompt
-              });
+            : provider === "xai"
+              ? await this.callXaiMemoryExtraction({
+                  model,
+                  systemPrompt,
+                  userPrompt
+                })
+              : await this.callOpenAiMemoryExtraction({
+                  model,
+                  systemPrompt,
+                  userPrompt
+                });
 
       const costUsd = estimateUsdCost({
         provider,
@@ -322,6 +350,77 @@ export class LLMService {
         cacheReadTokens: Number(response.usage?.cache_read_input_tokens || 0)
       }
     };
+  }
+
+  async callClaudeCode({ model, systemPrompt, userPrompt, imageInputs = [], contextMessages = [] }) {
+    if (!this.claudeCodeAvailable) {
+      throw new Error("claude-code provider requires the 'claude' CLI to be installed.");
+    }
+
+    if (imageInputs.length) {
+      console.warn("[claude-code] Image inputs are not supported by the CLI and will be skipped.");
+    }
+
+    const prompt = buildClaudeCodePrompt(systemPrompt, contextMessages, userPrompt);
+
+    try {
+      const { stdout } = await execFileAsync(
+        "claude",
+        ["-p", "--output-format", "json", "--model", model, "--max-turns", "1"],
+        { input: prompt, timeout: CLAUDE_CODE_TIMEOUT_MS, maxBuffer: 1024 * 1024 }
+      );
+
+      const envelope = safeJsonParse(stdout.trim(), null);
+      const text = String(envelope?.result ?? envelope?.text ?? stdout).trim();
+      const costUsd = Number(envelope?.cost_usd ?? 0);
+
+      return {
+        text,
+        usage: { inputTokens: 0, outputTokens: 0 },
+        costUsd
+      };
+    } catch (error) {
+      if (error?.killed || error?.signal === "SIGTERM") {
+        throw new Error(`claude-code timed out after ${CLAUDE_CODE_TIMEOUT_MS / 1000}s.`);
+      }
+      throw new Error(`claude-code CLI error: ${error?.message || error}`);
+    }
+  }
+
+  async callClaudeCodeMemoryExtraction({ model, systemPrompt, userPrompt }) {
+    if (!this.claudeCodeAvailable) {
+      throw new Error("claude-code provider requires the 'claude' CLI to be installed.");
+    }
+
+    const schemaJson = JSON.stringify(MEMORY_EXTRACTION_SCHEMA);
+    const prompt = buildClaudeCodePrompt(systemPrompt, [], userPrompt);
+
+    try {
+      const { stdout } = await execFileAsync(
+        "claude",
+        [
+          "-p",
+          "--output-format", "json",
+          "--model", model,
+          "--max-turns", "1",
+          "--json-schema", schemaJson
+        ],
+        { input: prompt, timeout: CLAUDE_CODE_TIMEOUT_MS, maxBuffer: 1024 * 1024 }
+      );
+
+      const envelope = safeJsonParse(stdout.trim(), null);
+      const text = String(envelope?.result ?? envelope?.text ?? stdout).trim();
+
+      return {
+        text,
+        usage: { inputTokens: 0, outputTokens: 0 }
+      };
+    } catch (error) {
+      if (error?.killed || error?.signal === "SIGTERM") {
+        throw new Error(`claude-code memory extraction timed out after ${CLAUDE_CODE_TIMEOUT_MS / 1000}s.`);
+      }
+      throw new Error(`claude-code CLI error: ${error?.message || error}`);
+    }
   }
 
   isEmbeddingReady() {
@@ -875,16 +974,20 @@ export class LLMService {
       };
     }
 
-    throw new Error("No LLM provider available. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, or XAI_API_KEY.");
+    throw new Error("No LLM provider available. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, XAI_API_KEY, or install the claude CLI.");
   }
 
   isProviderConfigured(provider) {
+    if (provider === "claude-code") return Boolean(this.claudeCodeAvailable);
     if (provider === "anthropic") return Boolean(this.anthropic);
     if (provider === "xai") return Boolean(this.xai);
     return Boolean(this.openai);
   }
 
   resolveDefaultModel(provider) {
+    if (provider === "claude-code") {
+      return normalizeDefaultModel(this.appConfig?.defaultClaudeCodeModel, "sonnet");
+    }
     if (provider === "anthropic") {
       return normalizeDefaultModel(this.appConfig?.defaultAnthropicModel, "claude-3-5-haiku-latest");
     }
@@ -1194,19 +1297,22 @@ function normalizeLlmProvider(value, fallback = "openai") {
     .toLowerCase();
   if (normalized === "anthropic") return "anthropic";
   if (normalized === "xai") return "xai";
+  if (normalized === "claude-code") return "claude-code";
 
   const fallbackProvider = String(fallback || "")
     .trim()
     .toLowerCase();
   if (fallbackProvider === "anthropic") return "anthropic";
   if (fallbackProvider === "xai") return "xai";
+  if (fallbackProvider === "claude-code") return "claude-code";
   return "openai";
 }
 
 function resolveProviderFallbackOrder(provider) {
-  if (provider === "anthropic") return ["anthropic", "openai", "xai"];
-  if (provider === "xai") return ["xai", "openai", "anthropic"];
-  return ["openai", "anthropic", "xai"];
+  if (provider === "claude-code") return ["claude-code", "anthropic", "openai", "xai"];
+  if (provider === "anthropic") return ["anthropic", "openai", "xai", "claude-code"];
+  if (provider === "xai") return ["xai", "openai", "anthropic", "claude-code"];
+  return ["openai", "anthropic", "xai", "claude-code"];
 }
 
 function normalizeDefaultModel(value, fallback) {
@@ -1249,6 +1355,23 @@ function safeJsonParse(value, fallback = null) {
   } catch {
     return fallback;
   }
+}
+
+function buildClaudeCodePrompt(systemPrompt, contextMessages, userPrompt) {
+  const parts = [];
+  if (systemPrompt) {
+    parts.push(`[System]\n${systemPrompt}`);
+  }
+  if (Array.isArray(contextMessages) && contextMessages.length) {
+    for (const msg of contextMessages) {
+      const role = msg.role === "assistant" ? "Assistant" : "User";
+      parts.push(`[${role}]\n${msg.content}`);
+    }
+  }
+  if (userPrompt) {
+    parts.push(`[User]\n${userPrompt}`);
+  }
+  return parts.join("\n\n");
 }
 
 function sleepMs(ms) {

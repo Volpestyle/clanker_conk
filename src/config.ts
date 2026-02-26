@@ -23,6 +23,7 @@ export const appConfig = {
   defaultOpenAiModel: process.env.DEFAULT_MODEL_OPENAI ?? "gpt-4.1-mini",
   defaultAnthropicModel: process.env.DEFAULT_MODEL_ANTHROPIC ?? "claude-3-5-haiku-latest",
   defaultXaiModel: process.env.DEFAULT_MODEL_XAI ?? "grok-3-mini-latest",
+  defaultClaudeCodeModel: process.env.DEFAULT_MODEL_CLAUDE_CODE ?? "sonnet",
   defaultMemoryEmbeddingModel: process.env.DEFAULT_MEMORY_EMBEDDING_MODEL ?? "text-embedding-3-small"
 };
 
@@ -38,5 +39,6 @@ function normalizeDefaultProvider(value) {
     .toLowerCase();
   if (normalized === "anthropic") return "anthropic";
   if (normalized === "xai") return "xai";
+  if (normalized === "claude-code") return "claude-code";
   return "openai";
 }
