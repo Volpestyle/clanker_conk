@@ -42,6 +42,7 @@ const MAX_MODEL_IMAGE_INPUTS = 8;
 const UNSOLICITED_REPLY_CONTEXT_WINDOW = 5;
 const MENTION_CANDIDATE_RE = /(?<![\w<])@([a-z0-9][a-z0-9 ._'-]{0,63})/gi;
 const MAX_MENTION_CANDIDATES = 8;
+const MAX_MENTION_LOOKUP_VARIANTS = 8;
 const MENTION_GUILD_HISTORY_LOOKBACK = 500;
 const MENTION_SEARCH_RESULT_LIMIT = 10;
 
@@ -1621,7 +1622,11 @@ export class ClankerBot {
     }
 
     const aliasIndex = this.buildMentionAliasIndex({ guild, guildId });
-    const keys = [...new Set(candidates.map((item) => item.lookupKey))];
+    const keys = [
+      ...new Set(
+        candidates.flatMap((item) => item.variants.map((variant) => variant.lookupKey))
+      )
+    ];
     const resolutionByKey = new Map();
 
     for (const key of keys) {
@@ -1652,12 +1657,28 @@ export class ClankerBot {
     const sorted = candidates.slice().sort((a, b) => b.start - a.start);
 
     for (const candidate of sorted) {
-      const resolution = resolutionByKey.get(candidate.lookupKey);
-      if (!resolution) continue;
-      if (resolution.status === "resolved") {
-        output = `${output.slice(0, candidate.start)}<@${resolution.id}>${output.slice(candidate.end)}`;
+      let selectedVariant = null;
+      let ambiguous = false;
+
+      for (const variant of candidate.variants) {
+        const resolution = resolutionByKey.get(variant.lookupKey);
+        if (!resolution) continue;
+        if (resolution.status === "resolved") {
+          selectedVariant = {
+            end: variant.end,
+            id: resolution.id
+          };
+          break;
+        }
+        if (resolution.status === "ambiguous") {
+          ambiguous = true;
+        }
+      }
+
+      if (selectedVariant) {
+        output = `${output.slice(0, candidate.start)}<@${selectedVariant.id}>${output.slice(selectedVariant.end)}`;
         resolvedCount += 1;
-      } else if (resolution.status === "ambiguous") {
+      } else if (ambiguous) {
         ambiguousCount += 1;
       } else {
         unresolvedCount += 1;
@@ -2522,25 +2543,59 @@ function extractMentionCandidates(text, maxItems = MAX_MENTION_CANDIDATES) {
     const withoutTrailingPunctuation = withoutTrailingSpace
       .replace(/[.,:;!?)\]}]+$/g, "")
       .replace(/\s+$/g, "");
-    const displayName = withoutTrailingPunctuation.trim();
-    if (!displayName) continue;
-    if (/^\d{2,}$/.test(displayName)) continue;
-
-    const lookupKey = normalizeMentionLookupKey(displayName);
-    if (!lookupKey || lookupKey === "everyone" || lookupKey === "here") continue;
-
     const start = match.index;
-    const end = start + 1 + withoutTrailingPunctuation.length;
+    const variants = buildMentionLookupVariants({
+      mentionText: withoutTrailingPunctuation,
+      mentionStart: start
+    });
+    if (!variants.length) continue;
+    const end = variants[0].end;
     if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start + 1) continue;
 
     out.push({
       start,
       end,
-      lookupKey
+      variants
     });
   }
 
   return out;
+}
+
+function buildMentionLookupVariants({ mentionText, mentionStart }) {
+  const source = String(mentionText || "").trim();
+  if (!source) return [];
+
+  const wordRe = /[a-z0-9][a-z0-9._'-]*/gi;
+  const tokens = [];
+  let token;
+  while ((token = wordRe.exec(source))) {
+    tokens.push({
+      end: token.index + String(token[0] || "").length
+    });
+  }
+  if (!tokens.length) return [];
+
+  const variants = [];
+  const seen = new Set();
+  const maxTokens = Math.min(tokens.length, MAX_MENTION_LOOKUP_VARIANTS);
+  for (let count = maxTokens; count >= 1; count -= 1) {
+    const tokenEnd = tokens[count - 1]?.end;
+    if (!Number.isFinite(tokenEnd) || tokenEnd <= 0) continue;
+    const prefix = source.slice(0, tokenEnd).replace(/\s+$/g, "");
+    if (!prefix) continue;
+    if (/^\d{2,}$/.test(prefix)) continue;
+    const lookupKey = normalizeMentionLookupKey(prefix);
+    if (!lookupKey || lookupKey === "everyone" || lookupKey === "here") continue;
+    if (seen.has(lookupKey)) continue;
+    seen.add(lookupKey);
+    variants.push({
+      lookupKey,
+      end: mentionStart + 1 + prefix.length
+    });
+  }
+
+  return variants;
 }
 
 function normalizeMentionLookupKey(value) {
