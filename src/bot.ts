@@ -4,6 +4,7 @@ import {
   Partials
 } from "discord.js";
 import {
+  buildAutomationPrompt,
   buildInitiativePrompt,
   buildReplyPrompt,
   buildSystemPrompt,
@@ -18,10 +19,12 @@ import {
 } from "./promptCore.ts";
 import {
   MAX_GIF_QUERY_LEN,
+  MAX_MEMORY_LOOKUP_QUERY_LEN,
   MAX_MENTION_CANDIDATES,
   MAX_VIDEO_FALLBACK_MESSAGES,
   MAX_VIDEO_TARGET_SCAN,
   MAX_WEB_QUERY_LEN,
+  collectMemoryFactHints,
   collectMemberLookupKeys,
   composeInitiativeImagePrompt,
   composeInitiativeVideoPrompt,
@@ -45,6 +48,12 @@ import {
   resolveMaxMediaPromptLen,
   serializeForPrompt
 } from "./botHelpers.ts";
+import {
+  formatAutomationSchedule,
+  getLocalTimeZoneLabel,
+  resolveFollowingNextRunAt,
+  resolveInitialNextRunAt
+} from "./automation.ts";
 import { normalizeDiscoveryUrl } from "./discovery.ts";
 import { chance, clamp, hasBotKeyword, sanitizeBotText, sleep } from "./utils.ts";
 import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
@@ -58,6 +67,7 @@ const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i;
 const MAX_IMAGE_INPUTS = 3;
 const STARTUP_TASK_DELAY_MS = 4500;
 const INITIATIVE_TICK_MS = 60_000;
+const AUTOMATION_TICK_MS = 30_000;
 const GATEWAY_WATCHDOG_TICK_MS = 30_000;
 const GATEWAY_STALE_MS = 2 * 60_000;
 const GATEWAY_RECONNECT_BASE_DELAY_MS = 5_000;
@@ -66,6 +76,9 @@ const MAX_MODEL_IMAGE_INPUTS = 8;
 const UNSOLICITED_REPLY_CONTEXT_WINDOW = 5;
 const MENTION_GUILD_HISTORY_LOOKBACK = 500;
 const MENTION_SEARCH_RESULT_LIMIT = 10;
+const MAX_AUTOMATIONS_PER_GUILD = 90;
+const MAX_AUTOMATION_RUNS_PER_TICK = 4;
+const MAX_AUTOMATION_LIST_ROWS = 10;
 
 export class ClankerBot {
   constructor({ appConfig, store, llm, memory, discovery, search, gifs, video }) {
@@ -81,10 +94,12 @@ export class ClankerBot {
     this.lastBotMessageAt = 0;
     this.memoryTimer = null;
     this.initiativeTimer = null;
+    this.automationTimer = null;
     this.gatewayWatchdogTimer = null;
     this.reconnectTimeout = null;
     this.startupTasksRan = false;
     this.initiativePosting = false;
+    this.automationCycleRunning = false;
     this.reconnectInFlight = false;
     this.isStopping = false;
     this.hasConnectedAtLeastOnce = false;
@@ -259,6 +274,14 @@ export class ClankerBot {
         });
       });
     }, INITIATIVE_TICK_MS);
+    this.automationTimer = setInterval(() => {
+      this.maybeRunAutomationCycle().catch((error) => {
+        this.store.logAction({
+          kind: "bot_error",
+          content: `automation_cycle: ${String(error?.message || error)}`
+        });
+      });
+    }, AUTOMATION_TICK_MS);
     this.gatewayWatchdogTimer = setInterval(() => {
       this.ensureGatewayHealthy().catch((error) => {
         this.store.logAction({
@@ -283,9 +306,11 @@ export class ClankerBot {
     this.isStopping = true;
     if (this.memoryTimer) clearInterval(this.memoryTimer);
     if (this.initiativeTimer) clearInterval(this.initiativeTimer);
+    if (this.automationTimer) clearInterval(this.automationTimer);
     if (this.gatewayWatchdogTimer) clearInterval(this.gatewayWatchdogTimer);
     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
     this.gatewayWatchdogTimer = null;
+    this.automationTimer = null;
     this.reconnectTimeout = null;
     this.replyQueues.clear();
     this.replyQueueWorkers.clear();
@@ -831,6 +856,27 @@ export class ClankerBot {
         maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || operationalMaxOutputTokens, 32, 110)
       }
     };
+    const operationalMemoryFacts = await this.loadRelevantMemoryFacts({
+      settings,
+      guildId,
+      channelId,
+      queryText: `${String(event || "")} ${String(reason || "")} ${String(fallbackText || "")}`
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 280),
+      trace: {
+        guildId,
+        channelId,
+        userId,
+        source: "voice_operational_message"
+      },
+      limit: 6
+    });
+    const operationalMemoryHints = this.buildMediaMemoryFacts({
+      userFacts: [],
+      relevantFacts: operationalMemoryFacts,
+      maxItems: 6
+    });
 
     const systemPrompt = [
       `You are ${getPromptBotName(settings)}, a Discord regular posting a voice-mode update.`,
@@ -851,6 +897,9 @@ export class ClankerBot {
       `Event: ${String(event || "voice_runtime")}`,
       `Reason: ${String(reason || "unknown")}`,
       `Details JSON: ${serializeForPrompt(details, 1400)}`,
+      operationalMemoryHints.length
+        ? `Relevant durable memory (use only if directly useful): ${operationalMemoryHints.join(" | ")}`
+        : "",
       fallbackText ? `Baseline meaning: ${String(fallbackText || "").trim()}` : "",
       isVoiceSessionEnd ? "Constraint: one chill sentence, 4-12 words." : "Constraint: one brief sentence.",
       "Return only the final message text."
@@ -960,21 +1009,19 @@ export class ClankerBot {
       }
     }
 
-    const memorySlice = settings.memory?.enabled && this.memory?.buildPromptMemorySlice
-      ? await this.memory.buildPromptMemorySlice({
-          userId,
-          guildId,
-          channelId: null,
-          queryText: incomingTranscript,
-          settings,
-          trace: {
-            guildId,
-            channelId,
-            userId,
-            source: "voice_stt_pipeline_generation"
-          }
-        })
-      : { userFacts: [], relevantFacts: [], relevantMessages: [] };
+    const memorySlice = await this.loadPromptMemorySlice({
+      settings,
+      userId,
+      guildId,
+      channelId: null,
+      queryText: incomingTranscript,
+      trace: {
+        guildId,
+        channelId,
+        userId
+      },
+      source: "voice_stt_pipeline_generation"
+    });
 
     const tunedSettings = {
       ...settings,
@@ -1089,21 +1136,23 @@ export class ClankerBot {
     });
     if (!shouldRunDecisionLoop) return false;
 
-    const memorySlice = settings.memory.enabled
-      ? await this.memory.buildPromptMemorySlice({
-          userId: message.author.id,
-          guildId: message.guildId,
-          channelId: message.channelId,
-          queryText: message.content,
-          settings,
-          trace: {
-            guildId: message.guildId,
-            channelId: message.channelId,
-            userId: message.author.id,
-            source: options.source || "message_event"
-          }
-        })
-      : { userFacts: [], relevantFacts: [], relevantMessages: [] };
+    const memorySlice = await this.loadPromptMemorySlice({
+      settings,
+      userId: message.author.id,
+      guildId: message.guildId,
+      channelId: message.channelId,
+      queryText: message.content,
+      trace: {
+        guildId: message.guildId,
+        channelId: message.channelId,
+        userId: message.author.id
+      },
+      source: options.source || "message_event"
+    });
+    const replyMediaMemoryFacts = this.buildMediaMemoryFacts({
+      userFacts: memorySlice.userFacts,
+      relevantFacts: memorySlice.relevantFacts
+    });
     const attachmentImageInputs = this.getImageInputs(message);
     const imageBudget = this.getImageBudgetState(settings);
     const videoBudget = this.getVideoGenerationBudgetState(settings);
@@ -1166,6 +1215,8 @@ export class ClankerBot {
         responseRequired: Boolean(options.forceRespond)
       },
       allowMemoryDirective: settings.memory.enabled,
+      allowAutomationDirective: true,
+      automationTimeZoneLabel: getLocalTimeZoneLabel(),
       voiceMode: {
         enabled: Boolean(settings?.voice?.enabled),
         joinOnTextNL: Boolean(settings?.voice?.joinOnTextNL)
@@ -1199,6 +1250,17 @@ export class ClankerBot {
     });
     if (voiceIntentHandled) return true;
 
+    const automationIntentHandled = await this.maybeHandleStructuredAutomationIntent({
+      message,
+      settings,
+      replyDirective,
+      generation,
+      source: options.source || "message_event",
+      triggerMessageIds,
+      addressing: addressSignal
+    });
+    if (automationIntentHandled) return true;
+
     if (replyDirective.webSearchQuery) {
       usedWebSearchFollowup = true;
       webSearch = await this.runModelRequestedWebSearch({
@@ -1212,38 +1274,36 @@ export class ClankerBot {
       });
     }
 
-    if (replyDirective.memoryLookupQuery) {
-      usedMemoryLookupFollowup = true;
-      memoryLookup = await this.runModelRequestedMemoryLookup({
+    if (usedWebSearchFollowup || replyDirective.memoryLookupQuery) {
+      const followup = await this.maybeRegenerateWithMemoryLookup({
         settings,
+        systemPrompt,
+        generation,
+        directive: replyDirective,
         memoryLookup,
-        query: replyDirective.memoryLookupQuery,
         guildId: message.guildId,
         channelId: message.channelId,
         trace: {
           ...replyTrace,
-          source: options.source || "message_event"
-        }
-      });
-    }
-
-    if (usedWebSearchFollowup || usedMemoryLookupFollowup) {
-      const followupUserPrompt = buildReplyPrompt({
-        ...replyPromptBase,
-        webSearch,
-        memoryLookup,
-        allowWebSearchDirective: false,
-        allowMemoryLookupDirective: false
-      });
-
-      generation = await this.llm.generate({
-        settings,
-        systemPrompt,
-        userPrompt: followupUserPrompt,
+          source: options.source || "message_event",
+          event: "reply_followup"
+        },
+        mediaPromptLimit,
         imageInputs,
-        trace: replyTrace
+        forceRegenerate: usedWebSearchFollowup,
+        buildUserPrompt: ({ memoryLookup: nextMemoryLookup, allowMemoryLookupDirective }) =>
+          buildReplyPrompt({
+            ...replyPromptBase,
+            webSearch,
+            memoryLookup: nextMemoryLookup,
+            allowWebSearchDirective: false,
+            allowMemoryLookupDirective
+          })
       });
-      replyDirective = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
+      generation = followup.generation;
+      replyDirective = followup.directive;
+      memoryLookup = followup.memoryLookup;
+      usedMemoryLookupFollowup = followup.usedMemoryLookup;
 
       voiceIntentHandled = await this.maybeHandleStructuredVoiceIntent({
         message,
@@ -1251,6 +1311,17 @@ export class ClankerBot {
         replyDirective
       });
       if (voiceIntentHandled) return true;
+
+      const followupAutomationHandled = await this.maybeHandleStructuredAutomationIntent({
+        message,
+        settings,
+        replyDirective,
+        generation,
+        source: options.source || "message_event",
+        triggerMessageIds,
+        addressing: addressSignal
+      });
+      if (followupAutomationHandled) return true;
     }
 
     const reaction = await this.maybeApplyReplyReaction({
@@ -1352,7 +1423,7 @@ export class ClankerBot {
       const imageResult = await this.maybeAttachGeneratedImage({
         settings,
         text: finalText,
-        prompt: composeReplyImagePrompt(imagePrompt, finalText, mediaPromptLimit),
+        prompt: composeReplyImagePrompt(imagePrompt, finalText, mediaPromptLimit, replyMediaMemoryFacts),
         variant: "simple",
         trace: {
           guildId: message.guildId,
@@ -1372,7 +1443,12 @@ export class ClankerBot {
       const imageResult = await this.maybeAttachGeneratedImage({
         settings,
         text: finalText,
-        prompt: composeReplyImagePrompt(complexImagePrompt, finalText, mediaPromptLimit),
+        prompt: composeReplyImagePrompt(
+          complexImagePrompt,
+          finalText,
+          mediaPromptLimit,
+          replyMediaMemoryFacts
+        ),
         variant: "complex",
         trace: {
           guildId: message.guildId,
@@ -1392,7 +1468,7 @@ export class ClankerBot {
       const videoResult = await this.maybeAttachGeneratedVideo({
         settings,
         text: finalText,
-        prompt: composeReplyVideoPrompt(videoPrompt, finalText, mediaPromptLimit),
+        prompt: composeReplyVideoPrompt(videoPrompt, finalText, mediaPromptLimit, replyMediaMemoryFacts),
         trace: {
           guildId: message.guildId,
           channelId: message.channelId,
@@ -1602,6 +1678,453 @@ export class ClankerBot {
     }
 
     return false;
+  }
+
+  async maybeHandleStructuredAutomationIntent({
+    message,
+    settings,
+    replyDirective,
+    generation,
+    source,
+    triggerMessageIds = [],
+    addressing = null
+  }) {
+    const automationAction = replyDirective?.automationAction;
+    const operation = String(automationAction?.operation || "").trim();
+    if (!operation) return false;
+
+    const result = await this.applyAutomationControlAction({
+      message,
+      settings,
+      automationAction
+    });
+    if (!result?.handled) return false;
+
+    const finalText = this.composeAutomationControlReply({
+      modelText: replyDirective?.text,
+      fallbackText: result.fallbackText,
+      detailLines: result.detailLines
+    });
+
+    if (!finalText || finalText === "[SKIP]") return true;
+
+    await message.channel.sendTyping();
+    await sleep(350 + Math.floor(Math.random() * 800));
+    const sent = await message.reply({
+      content: finalText,
+      allowedMentions: { repliedUser: false }
+    });
+
+    this.markSpoke();
+    this.store.recordMessage({
+      messageId: sent.id,
+      createdAt: sent.createdTimestamp,
+      guildId: sent.guildId,
+      channelId: sent.channelId,
+      authorId: this.client.user.id,
+      authorName: settings.botName,
+      isBot: true,
+      content: this.composeMessageContentForHistory(sent, finalText),
+      referencedMessageId: message.id
+    });
+    this.store.logAction({
+      kind: "sent_reply",
+      guildId: sent.guildId,
+      channelId: sent.channelId,
+      messageId: sent.id,
+      userId: this.client.user.id,
+      content: finalText,
+      metadata: {
+        triggerMessageId: message.id,
+        triggerMessageIds,
+        source,
+        sendAsReply: true,
+        canStandalonePost: this.isInitiativeChannel(settings, message.channelId),
+        addressing,
+        automationControl: result.metadata || null,
+        llm: {
+          provider: generation?.provider || null,
+          model: generation?.model || null,
+          usage: generation?.usage || null,
+          costUsd: generation?.costUsd || 0
+        }
+      }
+    });
+
+    return true;
+  }
+
+  composeAutomationControlReply({ modelText, fallbackText, detailLines = [] }) {
+    const cleanedModel = sanitizeBotText(normalizeSkipSentinel(modelText || ""), 500);
+    const cleanedFallback = sanitizeBotText(normalizeSkipSentinel(fallbackText || ""), 500);
+    const body = cleanedModel && cleanedModel !== "[SKIP]" ? cleanedModel : cleanedFallback;
+    if (!body || body === "[SKIP]") return "";
+
+    const extra = (Array.isArray(detailLines) ? detailLines : [])
+      .map((line) => String(line || "").trim())
+      .filter(Boolean)
+      .slice(0, 8);
+    if (!extra.length) return body;
+
+    return sanitizeBotText(`${body}\n${extra.join("\n")}`, 1700);
+  }
+
+  async applyAutomationControlAction({ message, settings, automationAction }) {
+    const operation = String(automationAction?.operation || "")
+      .trim()
+      .toLowerCase();
+    const guildId = String(message.guildId || "").trim();
+    if (!guildId) {
+      return {
+        handled: true,
+        fallbackText: "can't manage schedules outside a server channel rn.",
+        detailLines: [],
+        metadata: {
+          operation,
+          ok: false,
+          reason: "missing_guild_scope"
+        }
+      };
+    }
+
+    if (operation === "list") {
+      const rows = this.store.listAutomations({
+        guildId,
+        statuses: ["active", "paused"],
+        limit: MAX_AUTOMATION_LIST_ROWS
+      });
+      if (!rows.length) {
+        return {
+          handled: true,
+          fallbackText: "no scheduled jobs right now.",
+          detailLines: [],
+          metadata: {
+            operation,
+            ok: true,
+            count: 0
+          }
+        };
+      }
+
+      const detailLines = rows.map((row) => this.formatAutomationListLine(row));
+      return {
+        handled: true,
+        fallbackText: "here's what's on deck:",
+        detailLines,
+        metadata: {
+          operation,
+          ok: true,
+          count: rows.length,
+          automationIds: rows.map((row) => row.id)
+        }
+      };
+    }
+
+    if (operation === "create") {
+      const instruction = String(automationAction?.instruction || "").trim();
+      const schedule = automationAction?.schedule || null;
+      if (!instruction || !schedule) {
+        return {
+          handled: true,
+          fallbackText: "i need both a task and schedule to set that up.",
+          detailLines: [],
+          metadata: {
+            operation,
+            ok: false,
+            reason: "missing_schedule_or_instruction"
+          }
+        };
+      }
+
+      const currentCount = this.store.countAutomations({
+        guildId,
+        statuses: ["active", "paused"]
+      });
+      if (currentCount >= MAX_AUTOMATIONS_PER_GUILD) {
+        return {
+          handled: true,
+          fallbackText: `too many scheduled jobs already (${MAX_AUTOMATIONS_PER_GUILD} max).`,
+          detailLines: [],
+          metadata: {
+            operation,
+            ok: false,
+            reason: "automation_cap_reached",
+            currentCount
+          }
+        };
+      }
+
+      const requestedChannelId = String(automationAction?.targetChannelId || "").trim();
+      const targetChannelId = requestedChannelId || message.channelId;
+      if (!this.isChannelAllowed(settings, targetChannelId)) {
+        return {
+          handled: true,
+          fallbackText: "that channel is blocked by my current settings.",
+          detailLines: [],
+          metadata: {
+            operation,
+            ok: false,
+            reason: "target_channel_blocked",
+            targetChannelId
+          }
+        };
+      }
+
+      const channel = this.client.channels.cache.get(String(targetChannelId));
+      if (!channel || !channel.isTextBased?.() || typeof channel.send !== "function") {
+        return {
+          handled: true,
+          fallbackText: "can't post there right now, pick another channel.",
+          detailLines: [],
+          metadata: {
+            operation,
+            ok: false,
+            reason: "target_channel_unavailable",
+            targetChannelId
+          }
+        };
+      }
+
+      const nextRunAt = resolveInitialNextRunAt({
+        schedule,
+        nowMs: Date.now(),
+        runImmediately: Boolean(automationAction?.runImmediately)
+      });
+      if (!nextRunAt) {
+        return {
+          handled: true,
+          fallbackText: "that schedule format didn't parse cleanly. try like 'daily at 1pm'.",
+          detailLines: [],
+          metadata: {
+            operation,
+            ok: false,
+            reason: "schedule_invalid"
+          }
+        };
+      }
+
+      const title = String(automationAction?.title || "").trim() || String(instruction).slice(0, 80);
+      const created = this.store.createAutomation({
+        guildId,
+        channelId: String(channel.id),
+        createdByUserId: message.author?.id || "unknown",
+        createdByName: message.member?.displayName || message.author?.username || "unknown",
+        title,
+        instruction,
+        schedule,
+        nextRunAt
+      });
+
+      if (!created) {
+        return {
+          handled: true,
+          fallbackText: "that didn't save right. try again in a sec.",
+          detailLines: [],
+          metadata: {
+            operation,
+            ok: false,
+            reason: "create_failed"
+          }
+        };
+      }
+
+      this.store.logAction({
+        kind: "automation_created",
+        guildId,
+        channelId: created.channel_id,
+        userId: message.author?.id || null,
+        content: `${created.title}: ${created.instruction}`.slice(0, 400),
+        metadata: {
+          automationId: created.id,
+          schedule: created.schedule,
+          nextRunAt: created.next_run_at
+        }
+      });
+
+      this.maybeRunAutomationCycle().catch(() => undefined);
+
+      return {
+        handled: true,
+        fallbackText: "bet, scheduled.",
+        detailLines: [this.formatAutomationListLine(created)],
+        metadata: {
+          operation,
+          ok: true,
+          automationId: created.id,
+          runImmediately: Boolean(automationAction?.runImmediately)
+        }
+      };
+    }
+
+    if (operation === "pause" || operation === "resume" || operation === "delete") {
+      const targetRows = this.resolveAutomationTargetsForControl({
+        guildId,
+        channelId: message.channelId,
+        operation,
+        automationId: automationAction?.automationId,
+        targetQuery: automationAction?.targetQuery
+      });
+      if (!targetRows.length) {
+        return {
+          handled: true,
+          fallbackText: "couldn't find a matching scheduled job.",
+          detailLines: [],
+          metadata: {
+            operation,
+            ok: false,
+            reason: "no_matching_automation",
+            targetQuery: automationAction?.targetQuery || null,
+            automationId: automationAction?.automationId || null
+          }
+        };
+      }
+
+      const nowMs = Date.now();
+      const updatedRows = [];
+      for (const row of targetRows) {
+        if (operation === "pause") {
+          const paused = this.store.setAutomationStatus({
+            automationId: row.id,
+            guildId,
+            status: "paused",
+            nextRunAt: null
+          });
+          if (paused) updatedRows.push(paused);
+          continue;
+        }
+
+        if (operation === "resume") {
+          const nextRunAt = resolveInitialNextRunAt({
+            schedule: row.schedule,
+            nowMs,
+            runImmediately: false
+          });
+          if (!nextRunAt) continue;
+          const resumed = this.store.setAutomationStatus({
+            automationId: row.id,
+            guildId,
+            status: "active",
+            nextRunAt
+          });
+          if (resumed) updatedRows.push(resumed);
+          continue;
+        }
+
+        const deleted = this.store.setAutomationStatus({
+          automationId: row.id,
+          guildId,
+          status: "deleted",
+          nextRunAt: null
+        });
+        if (deleted) updatedRows.push(deleted);
+      }
+
+      if (!updatedRows.length) {
+        return {
+          handled: true,
+          fallbackText: "found it, but couldn't update it cleanly.",
+          detailLines: [],
+          metadata: {
+            operation,
+            ok: false,
+            reason: "status_update_failed",
+            targetCount: targetRows.length
+          }
+        };
+      }
+
+      this.store.logAction({
+        kind: "automation_updated",
+        guildId,
+        channelId: message.channelId,
+        userId: message.author?.id || null,
+        content: `${operation}: ${updatedRows.map((row) => `#${row.id}`).join(", ")}`.slice(0, 400),
+        metadata: {
+          operation,
+          updatedIds: updatedRows.map((row) => row.id),
+          targetQuery: automationAction?.targetQuery || null
+        }
+      });
+
+      if (operation === "resume") {
+        this.maybeRunAutomationCycle().catch(() => undefined);
+      }
+
+      const verb =
+        operation === "pause" ? "paused" : operation === "resume" ? "resumed" : "deleted";
+      return {
+        handled: true,
+        fallbackText: `${verb}.`,
+        detailLines: updatedRows.map((row) => this.formatAutomationListLine(row)),
+        metadata: {
+          operation,
+          ok: true,
+          updatedIds: updatedRows.map((row) => row.id)
+        }
+      };
+    }
+
+    return false;
+  }
+
+  resolveAutomationTargetsForControl({ guildId, channelId, operation, automationId = null, targetQuery = "" }) {
+    const statuses =
+      operation === "pause"
+        ? ["active"]
+        : operation === "resume"
+          ? ["paused"]
+          : ["active", "paused"];
+    const normalizedQuery = String(targetQuery || "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (Number.isInteger(Number(automationId)) && Number(automationId) > 0) {
+      const row = this.store.getAutomationById(Number(automationId), guildId);
+      if (!row || !statuses.includes(row.status)) return [];
+      return [row];
+    }
+
+    if (normalizedQuery) {
+      const inChannel = this.store.findAutomationsByQuery({
+        guildId,
+        channelId,
+        query: normalizedQuery,
+        statuses,
+        limit: 8
+      });
+      if (inChannel.length) return inChannel;
+
+      return this.store.findAutomationsByQuery({
+        guildId,
+        query: normalizedQuery,
+        statuses,
+        limit: 8
+      });
+    }
+
+    const fallback = this.store.getMostRecentAutomations({
+      guildId,
+      channelId,
+      statuses,
+      limit: 1
+    });
+    if (fallback.length) return fallback;
+
+    return this.store.getMostRecentAutomations({
+      guildId,
+      statuses,
+      limit: 1
+    });
+  }
+
+  formatAutomationListLine(row) {
+    const channelLabel = row?.channel_id ? `<#${row.channel_id}>` : "(unknown channel)";
+    const scheduleLabel = formatAutomationSchedule(row?.schedule);
+    const nextRunLabel = row?.next_run_at ? new Date(row.next_run_at).toLocaleString() : "paused";
+    const title = String(row?.title || "scheduled task").slice(0, 80);
+    const status = String(row?.status || "active");
+    return `- #${row?.id} [${status}] ${title} | ${scheduleLabel} | next: ${nextRunLabel} | ${channelLabel}`;
   }
 
   async maybeApplyReplyReaction({
@@ -2019,6 +2542,163 @@ export class ClankerBot {
     };
   }
 
+  async loadPromptMemorySlice({
+    settings,
+    userId = null,
+    guildId,
+    channelId = null,
+    queryText = "",
+    trace = {},
+    source = "prompt_memory_slice"
+  }) {
+    const empty = { userFacts: [], relevantFacts: [], relevantMessages: [] };
+    if (!settings?.memory?.enabled || !this.memory?.buildPromptMemorySlice) return empty;
+
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) return empty;
+    const normalizedUserId = String(userId || "").trim() || null;
+    const normalizedChannelId = String(channelId || "").trim() || null;
+    const normalizedQuery = String(queryText || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 420);
+
+    try {
+      const slice = await this.memory.buildPromptMemorySlice({
+        userId: normalizedUserId,
+        guildId: normalizedGuildId,
+        channelId: normalizedChannelId,
+        queryText: normalizedQuery,
+        settings,
+        trace: {
+          ...trace,
+          source
+        }
+      });
+
+      return {
+        userFacts: Array.isArray(slice?.userFacts) ? slice.userFacts : [],
+        relevantFacts: Array.isArray(slice?.relevantFacts) ? slice.relevantFacts : [],
+        relevantMessages: Array.isArray(slice?.relevantMessages) ? slice.relevantMessages : []
+      };
+    } catch (error) {
+      this.store.logAction({
+        kind: "bot_error",
+        guildId: normalizedGuildId,
+        channelId: normalizedChannelId,
+        userId: normalizedUserId,
+        content: `${source}: ${String(error?.message || error)}`
+      });
+      return empty;
+    }
+  }
+
+  buildMediaMemoryFacts({ userFacts = [], relevantFacts = [], maxItems = 5 } = {}) {
+    const merged = [
+      ...(Array.isArray(userFacts) ? userFacts : []),
+      ...(Array.isArray(relevantFacts) ? relevantFacts : [])
+    ];
+    const max = clamp(Math.floor(Number(maxItems) || 5), 1, 8);
+    return collectMemoryFactHints(merged, max);
+  }
+
+  getScopedFallbackFacts({ guildId, channelId = null, limit = 8 }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId || typeof this.store?.getFactsForScope !== "function") return [];
+
+    const boundedLimit = clamp(Math.floor(Number(limit) || 8), 1, 24);
+    const candidateLimit = clamp(boundedLimit * 4, boundedLimit, 120);
+    const rows = this.store.getFactsForScope({
+      guildId: normalizedGuildId,
+      limit: candidateLimit
+    });
+    if (!rows.length) return [];
+
+    const normalizedChannelId = String(channelId || "").trim();
+    if (!normalizedChannelId) return rows.slice(0, boundedLimit);
+
+    const sameChannel = [];
+    const noChannel = [];
+    const otherChannel = [];
+    for (const row of rows) {
+      const rowChannelId = String(row?.channel_id || "").trim();
+      if (rowChannelId && rowChannelId === normalizedChannelId) {
+        sameChannel.push(row);
+        continue;
+      }
+      if (!rowChannelId) {
+        noChannel.push(row);
+        continue;
+      }
+      otherChannel.push(row);
+    }
+
+    return [...sameChannel, ...noChannel, ...otherChannel].slice(0, boundedLimit);
+  }
+
+  async loadRelevantMemoryFacts({
+    settings,
+    guildId,
+    channelId = null,
+    queryText = "",
+    trace = {},
+    limit = 8,
+    fallbackWhenNoMatch = true
+  }) {
+    if (!settings?.memory?.enabled || !this.memory?.searchDurableFacts) return [];
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) return [];
+    const normalizedChannelId = String(channelId || "").trim() || null;
+    const boundedLimit = clamp(Math.floor(Number(limit) || 8), 1, 24);
+    const normalizedQuery = String(queryText || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 320);
+    if (!normalizedQuery) {
+      return this.getScopedFallbackFacts({
+        guildId: normalizedGuildId,
+        channelId: normalizedChannelId,
+        limit: boundedLimit
+      });
+    }
+
+    try {
+      const results = await this.memory.searchDurableFacts({
+        guildId: normalizedGuildId,
+        channelId: normalizedChannelId,
+        queryText: normalizedQuery,
+        settings,
+        trace: {
+          ...trace,
+          source: trace?.source || "memory_context"
+        },
+        limit: boundedLimit
+      });
+      if (results.length || !fallbackWhenNoMatch) return results;
+      return this.getScopedFallbackFacts({
+        guildId: normalizedGuildId,
+        channelId: normalizedChannelId,
+        limit: boundedLimit
+      });
+    } catch (error) {
+      this.store.logAction({
+        kind: "bot_error",
+        guildId: normalizedGuildId,
+        channelId: normalizedChannelId,
+        content: `memory_context: ${String(error?.message || error)}`,
+        metadata: {
+          queryText: normalizedQuery.slice(0, 120),
+          source: trace?.source || "memory_context"
+        }
+      });
+      return this.getScopedFallbackFacts({
+        guildId: normalizedGuildId,
+        channelId: normalizedChannelId,
+        limit: boundedLimit
+      });
+    }
+  }
+
   async runModelRequestedWebSearch({
     settings,
     webSearch,
@@ -2082,7 +2762,7 @@ export class ClankerBot {
     channelId = null,
     trace = {}
   }) {
-    const normalizedQuery = normalizeDirectiveText(query, MAX_WEB_QUERY_LEN);
+    const normalizedQuery = normalizeDirectiveText(query, MAX_MEMORY_LOOKUP_QUERY_LEN);
     const state = {
       ...memoryLookup,
       requested: true,
@@ -2128,6 +2808,71 @@ export class ClankerBot {
         error: String(error?.message || error)
       };
     }
+  }
+
+  async maybeRegenerateWithMemoryLookup({
+    settings,
+    systemPrompt,
+    generation,
+    directive,
+    memoryLookup,
+    guildId,
+    channelId = null,
+    trace = {},
+    mediaPromptLimit,
+    imageInputs = null,
+    forceRegenerate = false,
+    buildUserPrompt
+  }) {
+    let nextMemoryLookup = memoryLookup;
+    let nextGeneration = generation;
+    let nextDirective = directive;
+    let usedMemoryLookup = false;
+    let shouldRegenerate = Boolean(forceRegenerate);
+
+    if (directive?.memoryLookupQuery) {
+      usedMemoryLookup = true;
+      shouldRegenerate = true;
+      nextMemoryLookup = await this.runModelRequestedMemoryLookup({
+        settings,
+        memoryLookup: nextMemoryLookup,
+        query: directive.memoryLookupQuery,
+        guildId,
+        channelId,
+        trace
+      });
+    }
+
+    if (shouldRegenerate && typeof buildUserPrompt === "function") {
+      const followupPrompt = buildUserPrompt({
+        memoryLookup: nextMemoryLookup,
+        allowMemoryLookupDirective: false
+      });
+      const followupTrace = {
+        ...trace,
+        event: String(trace?.event || "llm_followup")
+          .trim()
+          .concat(":lookup_followup")
+      };
+      const generationPayload = {
+        settings,
+        systemPrompt,
+        userPrompt: followupPrompt,
+        trace: followupTrace
+      };
+      if (Array.isArray(imageInputs) && imageInputs.length) {
+        generationPayload.imageInputs = imageInputs;
+      }
+      nextGeneration = await this.llm.generate(generationPayload);
+      nextDirective = parseStructuredReplyOutput(nextGeneration.text, mediaPromptLimit);
+    }
+
+    return {
+      generation: nextGeneration,
+      directive: nextDirective,
+      memoryLookup: nextMemoryLookup,
+      usedMemoryLookup
+    };
   }
 
   async maybeAttachGeneratedImage({ settings, text, prompt, variant = "simple", trace }) {
@@ -2661,6 +3406,7 @@ export class ClankerBot {
     const settings = this.store.getSettings();
     await this.runStartupCatchup(settings);
     await this.maybeRunInitiativeCycle({ startup: true });
+    await this.maybeRunAutomationCycle();
   }
 
   async runStartupCatchup(settings) {
@@ -2713,6 +3459,395 @@ export class ClankerBot {
         if (queued) repliesSent += 1;
       }
     }
+  }
+
+  async maybeRunAutomationCycle() {
+    if (this.automationCycleRunning) return;
+    this.automationCycleRunning = true;
+
+    try {
+      const dueRows = this.store.claimDueAutomations({
+        now: new Date().toISOString(),
+        limit: MAX_AUTOMATION_RUNS_PER_TICK
+      });
+      if (!dueRows.length) return;
+
+      for (const row of dueRows) {
+        await this.runAutomationJob(row);
+      }
+    } finally {
+      this.automationCycleRunning = false;
+    }
+  }
+
+  async runAutomationJob(automation) {
+    const startedAt = new Date().toISOString();
+    const guildId = String(automation?.guild_id || "").trim();
+    const channelId = String(automation?.channel_id || "").trim();
+    const automationId = Number(automation?.id || 0);
+    if (!guildId || !channelId || !Number.isInteger(automationId) || automationId <= 0) return;
+
+    const settings = this.store.getSettings();
+    let status = "active";
+    let nextRunAt = null;
+    let runStatus = "ok";
+    let summary = "";
+    let errorText = "";
+    let sentMessageId = null;
+    let retrySoon = false;
+
+    try {
+      if (!this.isChannelAllowed(settings, channelId)) {
+        runStatus = "error";
+        errorText = "channel blocked by current settings";
+      } else if (!this.canSendMessage(settings.permissions.maxMessagesPerHour)) {
+        runStatus = "skipped";
+        summary = "hourly message cap hit; retrying soon";
+        retrySoon = true;
+      } else if (!this.canTalkNow(settings)) {
+        runStatus = "skipped";
+        summary = "message cooldown active; retrying soon";
+        retrySoon = true;
+      } else {
+        const channel = this.client.channels.cache.get(channelId);
+        if (!channel || !channel.isTextBased?.() || typeof channel.send !== "function") {
+          runStatus = "error";
+          errorText = "channel unavailable";
+        } else {
+          const generationResult = await this.generateAutomationPayload({
+            automation,
+            settings,
+            channel
+          });
+
+          if (generationResult.skip) {
+            runStatus = "skipped";
+            summary = generationResult.summary || "model skipped this run";
+          } else {
+            await channel.sendTyping();
+            await sleep(350 + Math.floor(Math.random() * 1100));
+            const sent = await channel.send(generationResult.payload);
+            sentMessageId = sent.id;
+            summary = generationResult.summary || "posted";
+            this.markSpoke();
+            this.store.recordMessage({
+              messageId: sent.id,
+              createdAt: sent.createdTimestamp,
+              guildId: sent.guildId,
+              channelId: sent.channelId,
+              authorId: this.client.user.id,
+              authorName: settings.botName,
+              isBot: true,
+              content: this.composeMessageContentForHistory(sent, generationResult.text),
+              referencedMessageId: null
+            });
+            this.store.logAction({
+              kind: "automation_post",
+              guildId: sent.guildId,
+              channelId: sent.channelId,
+              messageId: sent.id,
+              userId: this.client.user.id,
+              content: generationResult.text,
+              metadata: {
+                automationId,
+                media: generationResult.media || null,
+                llm: generationResult.llm || null
+              }
+            });
+          }
+        }
+      }
+    } catch (error) {
+      runStatus = "error";
+      errorText = String(error?.message || error);
+    }
+
+    if (runStatus === "error") {
+      status = "paused";
+      nextRunAt = null;
+    } else if (retrySoon) {
+      nextRunAt = new Date(Date.now() + 5 * 60_000).toISOString();
+    } else {
+      nextRunAt = resolveFollowingNextRunAt({
+        schedule: automation.schedule,
+        previousNextRunAt: automation.next_run_at,
+        runFinishedMs: Date.now()
+      });
+      if (!nextRunAt) {
+        status = "paused";
+      }
+    }
+
+    const finishedAt = new Date().toISOString();
+    const finalized = this.store.finalizeAutomationRun({
+      automationId,
+      guildId,
+      status,
+      nextRunAt,
+      lastRunAt: finishedAt,
+      lastError: errorText || null,
+      lastResult: summary || (runStatus === "error" ? "error" : runStatus)
+    });
+    this.store.recordAutomationRun({
+      automationId,
+      startedAt,
+      finishedAt,
+      status: runStatus,
+      summary: summary || null,
+      error: errorText || null,
+      messageId: sentMessageId,
+      metadata: {
+        nextRunAt,
+        statusAfterRun: finalized?.status || status
+      }
+    });
+
+    this.store.logAction({
+      kind: runStatus === "error" ? "automation_error" : "automation_run",
+      guildId,
+      channelId,
+      messageId: sentMessageId,
+      userId: this.client.user?.id || null,
+      content:
+        runStatus === "error"
+          ? `automation #${automationId}: ${errorText || "run failed"}`
+          : `automation #${automationId}: ${summary || runStatus}`,
+      metadata: {
+        automationId,
+        runStatus,
+        statusAfterRun: finalized?.status || status,
+        nextRunAt
+      }
+    });
+  }
+
+  async generateAutomationPayload({ automation, settings, channel }) {
+    if (!this.llm?.generate) {
+      const fallback = sanitizeBotText(String(automation?.instruction || "scheduled task"), 1200);
+      return {
+        skip: false,
+        summary: fallback.slice(0, 220),
+        text: fallback,
+        payload: { content: fallback },
+        media: null,
+        llm: null
+      };
+    }
+
+    const recentMessages = this.store.getRecentMessages(channel.id, settings.memory.maxRecentMessages);
+    const automationOwnerId = String(automation?.created_by_user_id || "").trim() || null;
+    const automationQuery = `${String(automation?.title || "")} ${String(automation?.instruction || "")}`
+      .replace(/\s+/g, " ")
+      .trim();
+    const memorySlice = await this.loadPromptMemorySlice({
+      settings,
+      userId: automationOwnerId,
+      guildId: automation.guild_id,
+      channelId: automation.channel_id,
+      queryText: automationQuery,
+      trace: {
+        guildId: automation.guild_id,
+        channelId: automation.channel_id,
+        userId: automationOwnerId
+      },
+      source: "automation_run"
+    });
+
+    const imageBudget = this.getImageBudgetState(settings);
+    const videoBudget = this.getVideoGenerationBudgetState(settings);
+    const gifBudget = this.getGifBudgetState(settings);
+    const mediaCapabilities = this.getMediaGenerationCapabilities(settings);
+    const mediaPromptLimit = resolveMaxMediaPromptLen(settings);
+    const automationMediaMemoryFacts = this.buildMediaMemoryFacts({
+      userFacts: memorySlice.userFacts,
+      relevantFacts: memorySlice.relevantFacts
+    });
+    let memoryLookup = this.buildMemoryLookupContext({ settings });
+    const promptBase = {
+      instruction: automation.instruction,
+      channelName: channel.name || "channel",
+      recentMessages,
+      relevantMessages: memorySlice.relevantMessages,
+      userFacts: memorySlice.userFacts,
+      relevantFacts: memorySlice.relevantFacts,
+      allowSimpleImagePosts:
+        settings.initiative.allowImagePosts && mediaCapabilities.simpleImageReady && imageBudget.canGenerate,
+      allowComplexImagePosts:
+        settings.initiative.allowImagePosts && mediaCapabilities.complexImageReady && imageBudget.canGenerate,
+      allowVideoPosts:
+        settings.initiative.allowVideoPosts && mediaCapabilities.videoReady && videoBudget.canGenerate,
+      allowGifs: settings.initiative.allowReplyGifs && this.gifs?.isConfigured?.() && gifBudget.canFetch,
+      remainingImages: imageBudget.remaining,
+      remainingVideos: videoBudget.remaining,
+      remainingGifs: gifBudget.remaining,
+      maxMediaPromptChars: mediaPromptLimit
+    };
+    let userPrompt = buildAutomationPrompt({
+      ...promptBase,
+      memoryLookup,
+      allowMemoryLookupDirective: true
+    });
+    const automationSystemPrompt = buildSystemPrompt(settings);
+    let generation = await this.llm.generate({
+      settings,
+      systemPrompt: automationSystemPrompt,
+      userPrompt,
+      trace: {
+        guildId: automation.guild_id,
+        channelId: automation.channel_id,
+        userId: this.client.user?.id || null,
+        source: "automation_run",
+        event: `automation:${automation.id}`
+      }
+    });
+    let directive = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
+    const followup = await this.maybeRegenerateWithMemoryLookup({
+      settings,
+      systemPrompt: automationSystemPrompt,
+      generation,
+      directive,
+      memoryLookup,
+      guildId: automation.guild_id,
+      channelId: automation.channel_id,
+      trace: {
+        guildId: automation.guild_id,
+        channelId: automation.channel_id,
+        userId: this.client.user?.id || null,
+        source: "automation_run",
+        event: `automation:${automation.id}`
+      },
+      mediaPromptLimit,
+      forceRegenerate: false,
+      buildUserPrompt: ({ memoryLookup: nextMemoryLookup, allowMemoryLookupDirective }) =>
+        buildAutomationPrompt({
+          ...promptBase,
+          memoryLookup: nextMemoryLookup,
+          allowMemoryLookupDirective
+        })
+    });
+    generation = followup.generation;
+    directive = followup.directive;
+    memoryLookup = followup.memoryLookup;
+
+    let finalText = sanitizeBotText(normalizeSkipSentinel(directive.text || ""), 1200);
+    if (!finalText) {
+      finalText = sanitizeBotText(String(automation.instruction || "scheduled task"), 1200);
+    }
+
+    if (finalText === "[SKIP]") {
+      return {
+        skip: true,
+        summary: "model skipped run",
+        text: "",
+        payload: null,
+        media: null,
+        llm: {
+          provider: generation.provider,
+          model: generation.model,
+          usage: generation.usage,
+          costUsd: generation.costUsd
+        }
+      };
+    }
+
+    const mediaDirective = pickReplyMediaDirective(directive);
+    let payload = { content: finalText };
+    let media = null;
+
+    if (mediaDirective?.type === "gif" && directive.gifQuery) {
+      const gifResult = await this.maybeAttachReplyGif({
+        settings,
+        text: finalText,
+        query: directive.gifQuery,
+        trace: {
+          guildId: automation.guild_id,
+          channelId: automation.channel_id,
+          userId: this.client.user?.id || null,
+          source: "automation_run"
+        }
+      });
+      payload = gifResult.payload;
+      if (gifResult.gifUsed) media = { type: "gif" };
+    }
+
+    if (mediaDirective?.type === "image_simple" && directive.imagePrompt) {
+      const imageResult = await this.maybeAttachGeneratedImage({
+        settings,
+        text: finalText,
+        prompt: composeReplyImagePrompt(
+          directive.imagePrompt,
+          finalText,
+          mediaPromptLimit,
+          automationMediaMemoryFacts
+        ),
+        variant: "simple",
+        trace: {
+          guildId: automation.guild_id,
+          channelId: automation.channel_id,
+          userId: this.client.user?.id || null,
+          source: "automation_run"
+        }
+      });
+      payload = imageResult.payload;
+      if (imageResult.imageUsed) media = { type: "image_simple" };
+    }
+
+    if (mediaDirective?.type === "image_complex" && directive.complexImagePrompt) {
+      const imageResult = await this.maybeAttachGeneratedImage({
+        settings,
+        text: finalText,
+        prompt: composeReplyImagePrompt(
+          directive.complexImagePrompt,
+          finalText,
+          mediaPromptLimit,
+          automationMediaMemoryFacts
+        ),
+        variant: "complex",
+        trace: {
+          guildId: automation.guild_id,
+          channelId: automation.channel_id,
+          userId: this.client.user?.id || null,
+          source: "automation_run"
+        }
+      });
+      payload = imageResult.payload;
+      if (imageResult.imageUsed) media = { type: "image_complex" };
+    }
+
+    if (mediaDirective?.type === "video" && directive.videoPrompt) {
+      const videoResult = await this.maybeAttachGeneratedVideo({
+        settings,
+        text: finalText,
+        prompt: composeReplyVideoPrompt(
+          directive.videoPrompt,
+          finalText,
+          mediaPromptLimit,
+          automationMediaMemoryFacts
+        ),
+        trace: {
+          guildId: automation.guild_id,
+          channelId: automation.channel_id,
+          userId: this.client.user?.id || null,
+          source: "automation_run"
+        }
+      });
+      payload = videoResult.payload;
+      if (videoResult.videoUsed) media = { type: "video" };
+    }
+
+    return {
+      skip: false,
+      summary: finalText.slice(0, 220),
+      text: finalText,
+      payload,
+      media,
+      llm: {
+        provider: generation.provider,
+        model: generation.model,
+        usage: generation.usage,
+        costUsd: generation.costUsd
+      }
+    };
   }
 
   getStartupScanChannels(settings) {
@@ -2818,6 +3953,31 @@ export class ClankerBot {
               content: String(msg.content || "").trim()
             }))
         : this.store.getRecentMessages(channel.id, settings.memory.maxRecentMessages);
+      const initiativeMemoryQuery = recentMessages
+        .slice(0, 6)
+        .map((row) => String(row?.content || "").trim())
+        .filter(Boolean)
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 320);
+      const initiativeRelevantFacts = await this.loadRelevantMemoryFacts({
+        settings,
+        guildId: channel.guildId,
+        channelId: channel.id,
+        queryText: initiativeMemoryQuery,
+        trace: {
+          guildId: channel.guildId,
+          channelId: channel.id,
+          userId: this.client.user.id,
+          source: "initiative_prompt"
+        },
+        limit: 8
+      });
+      const initiativeMediaMemoryFacts = this.buildMediaMemoryFacts({
+        userFacts: [],
+        relevantFacts: initiativeRelevantFacts
+      });
 
       const discoveryResult = await this.collectDiscoveryForInitiative({
         settings,
@@ -2841,6 +4001,7 @@ export class ClankerBot {
       const userPrompt = buildInitiativePrompt({
         channelName: channel.name || "channel",
         recentMessages,
+        relevantFacts: initiativeRelevantFacts,
         emojiHints: this.getEmojiHints(channel.guild),
         allowSimpleImagePosts:
           settings.initiative.allowImagePosts &&
@@ -2909,7 +4070,12 @@ export class ClankerBot {
         const imageResult = await this.maybeAttachGeneratedImage({
           settings,
           text: finalText,
-          prompt: composeInitiativeImagePrompt(imagePrompt, finalText, initiativeMediaPromptLimit),
+          prompt: composeInitiativeImagePrompt(
+            imagePrompt,
+            finalText,
+            initiativeMediaPromptLimit,
+            initiativeMediaMemoryFacts
+          ),
           variant: "simple",
           trace: {
             guildId: channel.guildId,
@@ -2933,7 +4099,12 @@ export class ClankerBot {
         const imageResult = await this.maybeAttachGeneratedImage({
           settings,
           text: finalText,
-          prompt: composeInitiativeImagePrompt(complexImagePrompt, finalText, initiativeMediaPromptLimit),
+          prompt: composeInitiativeImagePrompt(
+            complexImagePrompt,
+            finalText,
+            initiativeMediaPromptLimit,
+            initiativeMediaMemoryFacts
+          ),
           variant: "complex",
           trace: {
             guildId: channel.guildId,
@@ -2953,7 +4124,12 @@ export class ClankerBot {
         const videoResult = await this.maybeAttachGeneratedVideo({
           settings,
           text: finalText,
-          prompt: composeInitiativeVideoPrompt(videoPrompt, finalText, initiativeMediaPromptLimit),
+          prompt: composeInitiativeVideoPrompt(
+            videoPrompt,
+            finalText,
+            initiativeMediaPromptLimit,
+            initiativeMediaMemoryFacts
+          ),
           trace: {
             guildId: channel.guildId,
             channelId: channel.id,

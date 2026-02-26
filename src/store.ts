@@ -4,6 +4,11 @@ import Database from "better-sqlite3";
 import { DEFAULT_SETTINGS } from "./defaultSettings.ts";
 import { normalizeProviderOrder } from "./search.ts";
 import { clamp, deepMerge, nowIso, uniqueIdList } from "./utils.ts";
+import {
+  buildAutomationMatchText,
+  normalizeAutomationInstruction,
+  normalizeAutomationTitle
+} from "./automation.ts";
 
 const SETTINGS_KEY = "runtime_settings";
 
@@ -101,6 +106,40 @@ export class Store {
         source TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS automations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        guild_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        created_by_user_id TEXT NOT NULL,
+        created_by_name TEXT,
+        title TEXT NOT NULL,
+        instruction TEXT NOT NULL,
+        schedule_json TEXT NOT NULL,
+        next_run_at TEXT,
+        status TEXT NOT NULL DEFAULT 'active',
+        is_running INTEGER NOT NULL DEFAULT 0,
+        running_started_at TEXT,
+        last_run_at TEXT,
+        last_error TEXT,
+        last_result TEXT,
+        match_text TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS automation_runs (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        automation_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        finished_at TEXT,
+        status TEXT NOT NULL,
+        summary TEXT,
+        error TEXT,
+        message_id TEXT,
+        metadata TEXT
+      );
+
       CREATE INDEX IF NOT EXISTS idx_messages_channel_time ON messages(channel_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_messages_guild_time ON messages(guild_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_actions_kind_time ON actions(kind, created_at DESC);
@@ -109,6 +148,10 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_memory_vectors_model ON memory_fact_vectors(model);
       CREATE INDEX IF NOT EXISTS idx_memory_orphans_stage_time ON memory_fact_orphans(source_stage, archived_at DESC);
       CREATE INDEX IF NOT EXISTS idx_shared_links_last_shared_at ON shared_links(last_shared_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_automations_scope_status_next ON automations(guild_id, status, next_run_at);
+      CREATE INDEX IF NOT EXISTS idx_automations_running_next ON automations(is_running, next_run_at);
+      CREATE INDEX IF NOT EXISTS idx_automations_match_text ON automations(guild_id, match_text);
+      CREATE INDEX IF NOT EXISTS idx_automation_runs_job_time ON automation_runs(automation_id, created_at DESC);
     `);
     const schemaMigrationSummary = this.ensureMemoryFactsSchema();
     const legacyReconcileSummary = this.reconcileLegacyScopedFacts();
@@ -452,6 +495,380 @@ export class Store {
     }
 
     return out;
+  }
+
+  createAutomation({
+    guildId,
+    channelId,
+    createdByUserId,
+    createdByName = "",
+    title,
+    instruction,
+    schedule,
+    nextRunAt = null
+  }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    const normalizedChannelId = String(channelId || "").trim();
+    const normalizedCreatedBy = String(createdByUserId || "").trim();
+    const normalizedTitle = normalizeAutomationTitle(title, "scheduled task");
+    const normalizedInstruction = normalizeAutomationInstruction(instruction);
+
+    if (!normalizedGuildId || !normalizedChannelId || !normalizedCreatedBy || !normalizedInstruction) {
+      return null;
+    }
+
+    const normalizedSchedule = safeJsonParse(JSON.stringify(schedule), null);
+    if (!normalizedSchedule || typeof normalizedSchedule !== "object") return null;
+
+    const now = nowIso();
+    const matchText = buildAutomationMatchText({
+      title: normalizedTitle,
+      instruction: normalizedInstruction
+    });
+    const result = this.db
+      .prepare(
+        `INSERT INTO automations(
+          created_at,
+          updated_at,
+          guild_id,
+          channel_id,
+          created_by_user_id,
+          created_by_name,
+          title,
+          instruction,
+          schedule_json,
+          next_run_at,
+          status,
+          is_running,
+          running_started_at,
+          last_run_at,
+          last_error,
+          last_result,
+          match_text
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', 0, NULL, NULL, NULL, NULL, ?)`
+      )
+      .run(
+        now,
+        now,
+        normalizedGuildId,
+        normalizedChannelId,
+        normalizedCreatedBy,
+        String(createdByName || "").trim().slice(0, 80) || null,
+        normalizedTitle,
+        normalizedInstruction,
+        JSON.stringify(normalizedSchedule),
+        nextRunAt ? String(nextRunAt) : null,
+        matchText
+      );
+
+    const id = Number(result?.lastInsertRowid || 0);
+    if (!id) return null;
+    return this.getAutomationById(id, normalizedGuildId);
+  }
+
+  getAutomationById(automationId, guildId = null) {
+    const id = Number(automationId);
+    if (!Number.isInteger(id) || id <= 0) return null;
+
+    if (guildId) {
+      const row = this.db
+        .prepare("SELECT * FROM automations WHERE id = ? AND guild_id = ? LIMIT 1")
+        .get(id, String(guildId));
+      return mapAutomationRow(row);
+    }
+
+    const row = this.db
+      .prepare("SELECT * FROM automations WHERE id = ? LIMIT 1")
+      .get(id);
+    return mapAutomationRow(row);
+  }
+
+  countAutomations({ guildId, statuses = ["active", "paused"] }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) return 0;
+
+    const normalizedStatuses = normalizeAutomationStatusFilter(statuses);
+    if (!normalizedStatuses.length) return 0;
+
+    const placeholders = normalizedStatuses.map(() => "?").join(", ");
+    const row = this.db
+      .prepare(
+        `SELECT COUNT(*) AS count
+         FROM automations
+         WHERE guild_id = ? AND status IN (${placeholders})`
+      )
+      .get(normalizedGuildId, ...normalizedStatuses);
+    return Number(row?.count || 0);
+  }
+
+  listAutomations({
+    guildId,
+    channelId = null,
+    statuses = ["active", "paused"],
+    query = "",
+    limit = 20
+  }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) return [];
+
+    const normalizedStatuses = normalizeAutomationStatusFilter(statuses);
+    if (!normalizedStatuses.length) return [];
+
+    const where = ["guild_id = ?"];
+    const args = [normalizedGuildId];
+
+    if (channelId) {
+      where.push("channel_id = ?");
+      args.push(String(channelId));
+    }
+
+    where.push(`status IN (${normalizedStatuses.map(() => "?").join(", ")})`);
+    args.push(...normalizedStatuses);
+
+    const normalizedQuery = String(query || "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+    if (normalizedQuery) {
+      where.push("match_text LIKE ?");
+      args.push(`%${normalizedQuery}%`);
+    }
+
+    const rows = this.db
+      .prepare(
+        `SELECT *
+         FROM automations
+         WHERE ${where.join(" AND ")}
+         ORDER BY updated_at DESC, id DESC
+         LIMIT ?`
+      )
+      .all(...args, clamp(Math.floor(Number(limit) || 20), 1, 120));
+
+    return rows.map((row) => mapAutomationRow(row)).filter(Boolean);
+  }
+
+  getMostRecentAutomations({
+    guildId,
+    channelId = null,
+    statuses = ["active", "paused"],
+    limit = 8
+  }) {
+    return this.listAutomations({
+      guildId,
+      channelId,
+      statuses,
+      query: "",
+      limit
+    });
+  }
+
+  findAutomationsByQuery({
+    guildId,
+    channelId = null,
+    query = "",
+    statuses = ["active", "paused"],
+    limit = 8
+  }) {
+    return this.listAutomations({
+      guildId,
+      channelId,
+      statuses,
+      query,
+      limit
+    });
+  }
+
+  setAutomationStatus({
+    automationId,
+    guildId,
+    status,
+    nextRunAt = null,
+    lastError = null,
+    lastResult = null
+  }) {
+    const id = Number(automationId);
+    const normalizedGuildId = String(guildId || "").trim();
+    const normalizedStatus = normalizeAutomationStatus(status);
+    if (!Number.isInteger(id) || id <= 0 || !normalizedGuildId || !normalizedStatus) return null;
+
+    this.db
+      .prepare(
+        `UPDATE automations
+         SET
+           updated_at = ?,
+           status = ?,
+           next_run_at = ?,
+           is_running = 0,
+           running_started_at = NULL,
+           last_error = ?,
+           last_result = ?
+         WHERE id = ? AND guild_id = ?`
+      )
+      .run(
+        nowIso(),
+        normalizedStatus,
+        nextRunAt ? String(nextRunAt) : null,
+        lastError ? String(lastError).slice(0, 500) : null,
+        lastResult ? String(lastResult).slice(0, 500) : null,
+        id,
+        normalizedGuildId
+      );
+
+    return this.getAutomationById(id, normalizedGuildId);
+  }
+
+  claimDueAutomations({ now = nowIso(), limit = 4 } = {}) {
+    const normalizedNow = String(now || nowIso());
+    const boundedLimit = clamp(Math.floor(Number(limit) || 4), 1, 40);
+    const selectDueIds = this.db.prepare(
+      `SELECT id
+       FROM automations
+       WHERE status = 'active'
+         AND is_running = 0
+         AND next_run_at IS NOT NULL
+         AND next_run_at <= ?
+       ORDER BY next_run_at ASC, id ASC
+       LIMIT ?`
+    );
+    const claimOne = this.db.prepare(
+      `UPDATE automations
+       SET
+         is_running = 1,
+         running_started_at = ?,
+         updated_at = ?
+       WHERE id = ?
+         AND status = 'active'
+         AND is_running = 0
+         AND next_run_at IS NOT NULL
+         AND next_run_at <= ?`
+    );
+    const fetchOne = this.db.prepare("SELECT * FROM automations WHERE id = ? LIMIT 1");
+    const claimTx = this.db.transaction((referenceNow, requestLimit) => {
+      const dueIds = selectDueIds
+        .all(referenceNow, requestLimit)
+        .map((row) => Number(row?.id))
+        .filter((id) => Number.isInteger(id) && id > 0);
+      if (!dueIds.length) return [];
+
+      const claimedRows = [];
+      for (const id of dueIds) {
+        const claim = claimOne.run(referenceNow, referenceNow, id, referenceNow);
+        if (Number(claim?.changes || 0) !== 1) continue;
+        const row = fetchOne.get(id);
+        if (row) claimedRows.push(row);
+      }
+      return claimedRows;
+    });
+
+    const rows = claimTx(normalizedNow, boundedLimit);
+    return rows.map((row) => mapAutomationRow(row)).filter(Boolean);
+  }
+
+  finalizeAutomationRun({
+    automationId,
+    guildId,
+    status = "active",
+    nextRunAt = null,
+    lastRunAt = null,
+    lastError = null,
+    lastResult = null
+  }) {
+    const id = Number(automationId);
+    const normalizedGuildId = String(guildId || "").trim();
+    const normalizedStatus = normalizeAutomationStatus(status);
+    if (!Number.isInteger(id) || id <= 0 || !normalizedGuildId || !normalizedStatus) return null;
+
+    this.db
+      .prepare(
+        `UPDATE automations
+         SET
+           updated_at = ?,
+           status = ?,
+           next_run_at = ?,
+           is_running = 0,
+           running_started_at = NULL,
+           last_run_at = ?,
+           last_error = ?,
+           last_result = ?
+         WHERE id = ? AND guild_id = ?`
+      )
+      .run(
+        nowIso(),
+        normalizedStatus,
+        nextRunAt ? String(nextRunAt) : null,
+        lastRunAt ? String(lastRunAt) : null,
+        lastError ? String(lastError).slice(0, 500) : null,
+        lastResult ? String(lastResult).slice(0, 500) : null,
+        id,
+        normalizedGuildId
+      );
+
+    return this.getAutomationById(id, normalizedGuildId);
+  }
+
+  recordAutomationRun({
+    automationId,
+    startedAt = null,
+    finishedAt = null,
+    status = "ok",
+    summary = "",
+    error = "",
+    messageId = null,
+    metadata = null
+  }) {
+    const id = Number(automationId);
+    if (!Number.isInteger(id) || id <= 0) return null;
+
+    const createdAt = nowIso();
+    this.db
+      .prepare(
+        `INSERT INTO automation_runs(
+          automation_id,
+          created_at,
+          started_at,
+          finished_at,
+          status,
+          summary,
+          error,
+          message_id,
+          metadata
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        id,
+        createdAt,
+        startedAt ? String(startedAt) : createdAt,
+        finishedAt ? String(finishedAt) : null,
+        normalizeAutomationRunStatus(status),
+        summary ? String(summary).slice(0, 700) : null,
+        error ? String(error).slice(0, 1000) : null,
+        messageId ? String(messageId) : null,
+        metadata ? JSON.stringify(metadata) : null
+      );
+  }
+
+  getAutomationRuns({ automationId, guildId, limit = 20 } = {}) {
+    const id = Number(automationId);
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!Number.isInteger(id) || id <= 0 || !normalizedGuildId) return [];
+
+    const rows = this.db
+      .prepare(
+        `SELECT runs.*
+         FROM automation_runs AS runs
+         JOIN automations AS jobs
+           ON jobs.id = runs.automation_id
+         WHERE runs.automation_id = ?
+           AND jobs.guild_id = ?
+         ORDER BY runs.created_at DESC
+         LIMIT ?`
+      )
+      .all(id, normalizedGuildId, clamp(Math.floor(Number(limit) || 20), 1, 120));
+
+    return rows.map((row) => ({
+      ...row,
+      metadata: safeJsonParse(row.metadata, null)
+    }));
   }
 
   addMemoryFact(fact) {
@@ -1046,6 +1463,70 @@ function buildInferredGuildExpr(tableAlias) {
 function getSqlChanges(db) {
   const row = db.prepare("SELECT changes() AS count").get();
   return Number(row?.count || 0);
+}
+
+function normalizeAutomationStatus(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "active") return "active";
+  if (normalized === "paused") return "paused";
+  if (normalized === "deleted") return "deleted";
+  return "";
+}
+
+function normalizeAutomationRunStatus(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "ok") return "ok";
+  if (normalized === "error") return "error";
+  if (normalized === "skipped") return "skipped";
+  return "ok";
+}
+
+function normalizeAutomationStatusFilter(statuses) {
+  const list = Array.isArray(statuses) ? statuses : [statuses];
+  const raw = list
+    .map((status) => String(status || "").trim().toLowerCase())
+    .filter(Boolean);
+  if (raw.includes("all")) {
+    return ["active", "paused", "deleted"];
+  }
+  return [
+    ...new Set(
+      raw
+        .map((status) => normalizeAutomationStatus(status))
+        .filter(Boolean)
+    )
+  ];
+}
+
+function mapAutomationRow(row) {
+  if (!row) return null;
+  const schedule = safeJsonParse(row.schedule_json, null);
+  if (!schedule || typeof schedule !== "object") return null;
+
+  return {
+    id: Number(row.id),
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+    guild_id: row.guild_id,
+    channel_id: row.channel_id,
+    created_by_user_id: row.created_by_user_id,
+    created_by_name: row.created_by_name || null,
+    title: row.title,
+    instruction: row.instruction,
+    schedule,
+    next_run_at: row.next_run_at || null,
+    status: row.status,
+    is_running: Number(row.is_running || 0) === 1,
+    running_started_at: row.running_started_at || null,
+    last_run_at: row.last_run_at || null,
+    last_error: row.last_error || null,
+    last_result: row.last_result || null,
+    match_text: row.match_text || ""
+  };
 }
 
 function safeJsonParse(value, fallback) {

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseStructuredReplyOutput } from "./botHelpers.ts";
+import { composeReplyImagePrompt, parseStructuredReplyOutput } from "./botHelpers.ts";
 
 test("parseStructuredReplyOutput reads structured reply JSON", () => {
   const parsed = parseStructuredReplyOutput(
@@ -27,6 +27,7 @@ test("parseStructuredReplyOutput reads structured reply JSON", () => {
   assert.equal(parsed.webSearchQuery, "latest bitcoin price");
   assert.equal(parsed.memoryLookupQuery, "favorite games");
   assert.equal(parsed.memoryLine, "user likes roguelikes");
+  assert.equal(parsed.automationAction.operation, null);
   assert.equal(parsed.voiceIntent.intent, "join");
   assert.equal(parsed.voiceIntent.confidence, 0.92);
   assert.equal(parsed.voiceIntent.reason, "explicit join request");
@@ -39,6 +40,7 @@ test("parseStructuredReplyOutput falls back to plain text when output is not JSO
   assert.equal(parsed.mediaDirective, null);
   assert.equal(parsed.webSearchQuery, null);
   assert.equal(parsed.memoryLookupQuery, null);
+  assert.equal(parsed.automationAction.operation, null);
   assert.equal(parsed.voiceIntent.intent, null);
   assert.equal(parsed.voiceIntent.confidence, 0);
   assert.equal(parsed.voiceIntent.reason, null);
@@ -110,4 +112,70 @@ test("parseStructuredReplyOutput normalizes invalid voice intent payload", () =>
   assert.equal(parsed.voiceIntent.intent, null);
   assert.equal(parsed.voiceIntent.confidence, 0);
   assert.equal(parsed.voiceIntent.reason, null);
+});
+
+test("parseStructuredReplyOutput normalizes automation create payload", () => {
+  const parsed = parseStructuredReplyOutput(
+    JSON.stringify({
+      text: "bet i got you",
+      skip: false,
+      reactionEmoji: null,
+      media: null,
+      webSearchQuery: null,
+      memoryLookupQuery: null,
+      memoryLine: null,
+      automationAction: {
+        operation: "create",
+        title: "giraffe drip",
+        instruction: "post a giraffe picture",
+        schedule: {
+          kind: "daily",
+          hour: 13,
+          minute: 0
+        },
+        runImmediately: true
+      },
+      voiceIntent: {
+        intent: "none",
+        confidence: 0,
+        reason: null
+      }
+    })
+  );
+
+  assert.equal(parsed.automationAction.operation, "create");
+  assert.equal(parsed.automationAction.title, "giraffe drip");
+  assert.equal(parsed.automationAction.instruction, "post a giraffe picture");
+  assert.equal(parsed.automationAction.schedule?.kind, "daily");
+  assert.equal(parsed.automationAction.schedule?.hour, 13);
+  assert.equal(parsed.automationAction.schedule?.minute, 0);
+  assert.equal(parsed.automationAction.runImmediately, true);
+});
+
+test("parseStructuredReplyOutput maps automation stop to pause", () => {
+  const parsed = parseStructuredReplyOutput(
+    JSON.stringify({
+      text: "say less",
+      automationAction: {
+        operation: "stop",
+        targetQuery: "giraffe"
+      }
+    })
+  );
+
+  assert.equal(parsed.automationAction.operation, "pause");
+  assert.equal(parsed.automationAction.targetQuery, "giraffe");
+});
+
+test("composeReplyImagePrompt includes memory hints when provided", () => {
+  const prompt = composeReplyImagePrompt(
+    "portrait of the user",
+    "here you go",
+    900,
+    ["user is 7 ft tall", "user wears red hoodies"]
+  );
+
+  assert.match(prompt, /Relevant memory facts/);
+  assert.match(prompt, /7 ft tall/);
+  assert.match(prompt, /red hoodies/);
 });
