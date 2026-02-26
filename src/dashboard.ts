@@ -41,7 +41,7 @@ export function createDashboardServer({ appConfig, store, bot, memory }) {
   });
 
   app.get("/api/actions", (req, res) => {
-    const limit = Number(req.query.limit || 200);
+    const limit = parseBoundedInt(req.query.limit, 200, 1, 1000);
     res.json(store.getRecentActions(limit));
   });
 
@@ -129,4 +129,12 @@ export function createDashboardServer({ appConfig, store, bot, memory }) {
   });
 
   return { app, server };
+}
+
+function parseBoundedInt(value, fallback, min, max) {
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed)) return fallback;
+  if (parsed < min) return min;
+  if (parsed > max) return max;
+  return parsed;
 }

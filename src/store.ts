@@ -152,6 +152,9 @@ export class Store {
   }
 
   recordMessage(message) {
+    const createdAt = normalizeMessageCreatedAt(
+      message?.createdAt ?? message?.created_at ?? message?.createdTimestamp
+    );
     this.db
       .prepare(
         `INSERT INTO messages(
@@ -176,7 +179,7 @@ export class Store {
       )
       .run(
         String(message.messageId),
-        nowIso(),
+        createdAt,
         message.guildId ? String(message.guildId) : null,
         String(message.channelId),
         String(message.authorId),
@@ -371,6 +374,8 @@ export class Store {
   }
 
   getRecentActions(limit = 200) {
+    const parsedLimit = Number(limit);
+    const boundedLimit = clamp(Number.isFinite(parsedLimit) ? Math.floor(parsedLimit) : 200, 1, 1000);
     const rows = this.db
       .prepare(
         `SELECT id, created_at, guild_id, channel_id, message_id, user_id, kind, content, metadata, usd_cost
@@ -378,7 +383,7 @@ export class Store {
          ORDER BY created_at DESC
          LIMIT ?`
       )
-      .all(clamp(Math.floor(limit), 1, 1000));
+      .all(boundedLimit);
 
     return rows.map((row) => ({
       ...row,
@@ -1051,6 +1056,28 @@ function safeJsonParse(value, fallback) {
   } catch {
     return fallback;
   }
+}
+
+function normalizeMessageCreatedAt(value) {
+  if (value instanceof Date) {
+    const timestamp = value.getTime();
+    return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : nowIso();
+  }
+
+  const numeric = Number(value);
+  if (Number.isFinite(numeric) && numeric > 0) {
+    return new Date(numeric).toISOString();
+  }
+
+  const text = String(value || "").trim();
+  if (text) {
+    const parsed = Date.parse(text);
+    if (Number.isFinite(parsed)) {
+      return new Date(parsed).toISOString();
+    }
+  }
+
+  return nowIso();
 }
 
 function normalizeSettings(raw) {
