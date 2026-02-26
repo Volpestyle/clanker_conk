@@ -125,7 +125,7 @@ export class Store {
   recordMessage(message) {
     this.db
       .prepare(
-        `INSERT OR IGNORE INTO messages(
+        `INSERT INTO messages(
           message_id,
           created_at,
           guild_id,
@@ -135,7 +135,15 @@ export class Store {
           is_bot,
           content,
           referenced_message_id
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(message_id) DO UPDATE SET
+          guild_id = excluded.guild_id,
+          channel_id = excluded.channel_id,
+          author_id = excluded.author_id,
+          author_name = excluded.author_name,
+          is_bot = excluded.is_bot,
+          content = excluded.content,
+          referenced_message_id = excluded.referenced_message_id`
       )
       .run(
         String(message.messageId),
