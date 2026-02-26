@@ -58,10 +58,6 @@ const GATEWAY_WATCHDOG_TICK_MS = 30_000;
 const GATEWAY_STALE_MS = 2 * 60_000;
 const GATEWAY_RECONNECT_BASE_DELAY_MS = 5_000;
 const GATEWAY_RECONNECT_MAX_DELAY_MS = 60_000;
-const IMAGE_REQUEST_RE =
-  /\b(?:make|generate|create|draw|paint|send|show|post)\b[\w\s,]{0,30}\b(?:image|picture|pic|photo|meme|art)\b|\b(?:image|picture|pic|photo|meme|art)\b[\w\s,]{0,24}\b(?:please|pls|plz|of|for|about)\b/i;
-const VIDEO_REQUEST_RE =
-  /\b(?:make|generate|create|render|produce|send|show|post)\b[\w\s,]{0,30}\b(?:video|clip|animation|short|movie)\b|\b(?:video|clip|animation|short|movie)\b[\w\s,]{0,24}\b(?:please|pls|plz|of|for|about)\b/i;
 const MAX_MODEL_IMAGE_INPUTS = 8;
 const UNSOLICITED_REPLY_CONTEXT_WINDOW = 5;
 const MENTION_GUILD_HISTORY_LOOKBACK = 500;
@@ -1086,8 +1082,6 @@ export class ClankerBot {
         })
       : { userFacts: [], relevantFacts: [], relevantMessages: [] };
     const attachmentImageInputs = this.getImageInputs(message);
-    const userRequestedImage = this.isExplicitImageRequest(message.content);
-    const userRequestedVideo = this.isExplicitVideoRequest(message.content);
     const imageBudget = this.getImageBudgetState(settings);
     const videoBudget = this.getVideoGenerationBudgetState(settings);
     const mediaCapabilities = this.getMediaGenerationCapabilities(settings);
@@ -1142,8 +1136,6 @@ export class ClankerBot {
       remainingReplyGifs: gifBudget.remaining,
       gifRepliesEnabled: settings.initiative.allowReplyGifs,
       gifsConfigured,
-      userRequestedImage,
-      userRequestedVideo,
       replyEagerness,
       reactionEagerness,
       addressing: {
@@ -1431,7 +1423,6 @@ export class ClankerBot {
         sendAsReply,
         canStandalonePost,
         image: {
-          requestedByUser: userRequestedImage,
           requestedByModel: Boolean(imagePrompt || complexImagePrompt),
           requestedSimpleByModel: Boolean(imagePrompt),
           requestedComplexByModel: Boolean(complexImagePrompt),
@@ -1446,7 +1437,6 @@ export class ClankerBot {
           capabilityReadyAtPromptTime: imageCapabilityReady
         },
         videoGeneration: {
-          requestedByUser: userRequestedVideo,
           requestedByModel: Boolean(videoPrompt),
           used: videoUsed,
           blockedByDailyCap: videoBudgetBlocked,
@@ -1767,14 +1757,6 @@ export class ClankerBot {
 
   isVideoGenerationReady(settings) {
     return Boolean(this.llm?.isVideoGenerationReady?.(settings));
-  }
-
-  isExplicitImageRequest(messageText) {
-    return IMAGE_REQUEST_RE.test(String(messageText || ""));
-  }
-
-  isExplicitVideoRequest(messageText) {
-    return VIDEO_REQUEST_RE.test(String(messageText || ""));
   }
 
   getWebSearchBudgetState(settings) {

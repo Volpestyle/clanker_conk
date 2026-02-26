@@ -182,8 +182,6 @@ export function buildReplyPrompt({
   remainingReplyGifs = 0,
   gifRepliesEnabled = false,
   gifsConfigured = false,
-  userRequestedImage = false,
-  userRequestedVideo = false,
   replyEagerness = 35,
   reactionEagerness = 20,
   addressing = null,
@@ -426,21 +424,10 @@ export function buildReplyPrompt({
       parts.push("If a generated clip is best, set media to {\"type\":\"video\",\"prompt\":\"...\"}.");
       parts.push("Use video when motion/animation is meaningfully better than a still image.");
     }
-    if (userRequestedImage && !simpleImageAvailable && complexImageAvailable) {
-      parts.push("The user asked for an image. Prefer media.type=image_complex for this turn.");
-    } else if (userRequestedImage && simpleImageAvailable) {
-      parts.push("The user asked for an image. Set media.type to image_simple or image_complex unless unsafe.");
-    }
-    if (userRequestedVideo && videoGenerationAvailable) {
-      parts.push("The user asked for a video. Set media.type=video unless unsafe or disallowed.");
-    }
     parts.push("Keep image/video media prompts concise (under 240 chars), and always include normal reply text.");
   } else {
     parts.push("Reply image/video generation is unavailable right now. Respond with text only.");
     parts.push("Set media to null.");
-    if (userRequestedImage || userRequestedVideo) {
-      parts.push("The user asked for generated media. Briefly acknowledge the limit in your text reply.");
-    }
   }
 
   const remainingGifs = Math.max(0, Math.floor(Number(remainingReplyGifs) || 0));
