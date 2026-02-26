@@ -13,6 +13,7 @@
 - Recent daily files: memory/2026-02-25.md, memory/2026-02-24.md
 
 ## People (Durable Facts)
+- 574458865639227429: Profile: User's name is Joey.
 - 830574404453793842: Relationship: donky conk refers to someone as 'my son', suggesting a close mentorship or paternal-type relationship with this person. | Project: donky conk uses Brave Search API for web search functionality. | Project: donky conk is working on improving someone's web searching confidence/ability. | Relationship: donky conk has a positive/supportive attitude toward someone named clanka.
 - 114910267858616321: Relationship: CURSED conk finds someone to be very kind. | Relationship: CURSED conk refers to user <@1475941613019730094> as 'son', suggesting a parental or mentor-type relationship dynamic. | CURSED conk says they play dhalsim. | CURSED conk says they love this guy man. | CURSED conk says they love you as if you were my own.
 - 692124766018076782: Clanker is attracted to Black/chocolate-skinned women. | Relationship: tiny conk dislikes someone named Jeff. | Relationship: tiny conk has an affectionate relationship with someone or something called 'clanker'.
@@ -27,27 +28,27 @@
 - Memory line: general: Mewgenics has released (as of this conversation). CURSED conk confirmed this.
 
 ## Recent Journal Highlights
-- donky conk: lets see an image too
-- donky conk: make a video of clanker conk
-- donky conk: yea do dat
-- donky conk: no make a video of u what u look like
-- donky conk: clanky make a video of you
+- titty conk: It's actually Joey!
+- titty conk: Wait a minute, my piano.
+- titty conk: My here.
+- titty conk: God damn, bro, I'm so offended, bro!
+- CURSED conk: Hey, do your best to rage bait, uh, Tittyconk.
+- donky conk: Yeah, dude, what did you, yeah, bro, leave him alone.
+- CURSED conk: You're so overly aggressive for no reason.
+- donky conk: Nah, man, I'm, I'm just chilling.
+- donky conk: He was going.
+- donky conk: Wait, why don't you stop talking?
+- donky conk: Let's chill, bro.
+- donky conk: Oh, it's just reading it?
+- titty conk: I think he's reading off the text.
+- titty conk: I think I...
+- CURSED conk: We mean...
+- titty conk: What is going on here?
+- CURSED conk: Yeah, what's taking so long, man?
+- donky conk: Yeah, you guys seen this?
+- donky conk: You made it finally. Well, you know...
 - CURSED conk: give me a video of mario and luigi fighting to the death anime style
 - CURSED conk: Give me a cinematic brawl video of Mario and Sonic fighting to the death
 - CURSED conk: Give me a cinematic brawl video of Dhalsim fighting Shrek
-- donky conk: jk try again
-- donky conk: gimmie video of donky kong vs shrek
-- donky conk: donky kong vs shrek
 - CURSED conk: Clanker why do you not fw us
 - titty conk: come back in VC
-- CURSED conk: Clanker welcome back!!!
-- CURSED conk: ZOOMER ass clanker conk bro
-- CURSED conk: LOOOOOOL
-- CURSED conk: Clanker what’s your favorite song?
-- tiny conk: hes one day old literally
-- tiny conk: w clunker
-- tiny conk: every message from him seems the same prompt over and over again
-- tiny conk: and he says bro at the beginning of every other sentence
-- tiny conk: lol i feel like his reactions are off
-- tiny conk: if you can have the tenor in ur iphone keyboard, clanker should be able to have it too
-- tiny conk: i really thought you were asking a bot to do math for you
