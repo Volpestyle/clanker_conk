@@ -1,118 +1,107 @@
 # Voice Agent Product Spec
 
 ## Goal
-Enable `clanker conk` to join Discord voice channels on explicit natural-language requests, run live conversations with selectable runtime modes, and use soundboard effects contextually while staying human-like and constrained by strict session limits (default max 10 minutes).
+Enable `clanker conk` to join Discord voice channels on explicit natural-language requests, run live conversations with selectable runtime modes, and optionally use Discord soundboard effects, while staying constrained by runtime limits and operational guardrails.
 
 ## Product Decision (Current)
 - Updated: February 26, 2026
-- Voice runtime is dashboard-selectable per bot:
-  - `voice_agent`: xAI Grok Voice Agent realtime (`wss://api.x.ai/v1/realtime`) for lowest latency.
-  - `openai_realtime`: OpenAI Realtime API (`wss://api.openai.com/v1/realtime?model=...`) for low-latency voice-in/voice-out.
-  - `stt_pipeline`: STT -> chat LLM brain -> TTS pipeline for stronger persona/memory parity with text chat.
-- Default runtime: `voice_agent`.
-- Default xAI voice profile: `Rex` (male) with neutral delivery instructions.
+- Voice runtime is dashboard-selectable via `voice.mode`:
+  - `voice_agent`: xAI realtime websocket (`wss://api.x.ai/v1/realtime`)
+  - `openai_realtime`: OpenAI Realtime websocket (`wss://api.openai.com/v1/realtime?model=...`)
+  - `stt_pipeline`: STT -> shared chat LLM brain -> TTS
+- Text NL voice controls (`join`, `leave`, `status`) are decided by an LLM classifier with confidence gating.
+- `voiceSessionManager` is the single execution and safety authority for session lifecycle and join/leave/status behavior.
+- Default runtime mode: `voice_agent`.
+- Default xAI voice: `Rex`.
 
-## Why This Matters
-- Users already treat `clanker conk` like a social participant in text channels.
-- Voice mode should extend that same persona into VC without turning into a generic assistant.
-- Explicit time limits keep cost, moderation risk, and channel disruption under control.
+## Implemented Behavior
 
-## Primary User Stories
-1. As a server member, I can say in text chat, "yo clanka hop in vc" or "go join the vc and bother those guys," and the bot joins my current voice channel.
-2. As a server admin, I can enforce a hard max session length (10 minutes default), channel allow/block rules, and soundboard rate limits.
-3. As users in voice chat, we can have back-and-forth conversation with the same style/personality as text mode.
-4. As server admins, we can disable voice mode instantly without redeploying.
+### 1. Text Trigger Routing
+- Runs on guild text messages after normal channel/user permission filtering.
+- Uses a lightweight prefilter for voice/action/mention hints to avoid unnecessary LLM calls.
+- Classifies the message with strict JSON output:
+  - `intent`: `join | leave | status | none`
+  - `confidence`: `0..1`
+- Applies `voice.intentConfidenceThreshold` (clamped `0.4..0.99`) before taking action.
+- If parse/classification fails, intent handling fails closed (`none`).
 
-## Non-Goals (v1)
-- 24/7 passive listening.
-- Joining random channels without an explicit trigger.
-- Long-term raw audio storage.
-- Multi-guild multi-channel voice sharding optimization.
+### 2. Join Preflight Checks
+- `voice.enabled` and `voice.joinOnTextNL` must both be true.
+- Requesting user must not be in `blockedVoiceUserIds`.
+- Requesting user must already be in a voice channel.
+- Target voice channel (requestor channel) must pass:
+  - not in `blockedVoiceChannelIds`
+  - if allowlist exists, it must be in `allowedVoiceChannelIds`
+- Daily/global limits:
+  - `maxSessionsPerDay` (24h count of `voice_session_start`)
+  - `maxConcurrentSessions` across active + pending sessions
+- Runtime readiness:
+  - `voice_agent` requires `XAI_API_KEY`
+  - `openai_realtime` requires `OPENAI_API_KEY`
+  - `stt_pipeline` requires ASR + TTS readiness and voice-turn callback
+- Voice-channel permissions must include `CONNECT` and `SPEAK`.
 
-## Product Behavior
-1. Trigger from text:
-   - Bot detects direct request + voice intent in text chat.
-   - Target channel defaults to the requestor's current VC.
-2. Preflight checks:
-   - Voice mode enabled.
-   - Channel/user permission checks.
-   - Not already in an active session for that guild.
-3. Session start:
-   - Bot joins VC, posts a short in-text confirmation, starts countdown timer.
-4. Live conversation loop:
-   - Ingest voice audio.
-   - Runtime-specific response path:
-     - `voice_agent`: stream audio to xAI realtime and play returned audio.
-     - `openai_realtime`: stream audio to OpenAI Realtime and play returned audio.
-     - `stt_pipeline`: transcribe audio, run the same chat LLM brain (with memory), synthesize speech, then play audio.
-   - Optionally fire soundboard effects when confidence and cooldown rules allow.
-5. Session end:
-   - Hard stop at max duration (10 min default).
-   - Early stop on inactivity timeout, explicit NL stop request, disconnect, or permission loss.
-   - Bot announces exit briefly in text or voice.
+### 3. Session Start
+- Joins requestor voice channel with `@discordjs/voice`.
+- Waits for ready state (up to 15s).
+- Initializes runtime-specific client and audio pipeline.
+- Starts max-duration and inactivity timers.
+- Logs `voice_session_start`.
+- Sends an operational update to text chat.
 
-## Technical Approach
-- Common session lifecycle (join/leave/timers/cooldowns/guards) lives in `voiceSessionManager`.
-- Runtime mode selected via `voice.mode`:
-  - `voice_agent`:
-    - xAI realtime websocket (`wss://api.x.ai/v1/realtime`) for low-latency voice-in/voice-out.
-    - `session.update` config includes `voice`, instructions, region, and PCM format settings.
-  - `openai_realtime`:
-    - OpenAI realtime websocket (`wss://api.openai.com/v1/realtime?model=...`) for low-latency voice-in/voice-out.
-    - `session.update` config includes `model`, `voice`, instructions, and audio/transcription format settings.
-  - `stt_pipeline`:
-    - Capture inbound PCM, write WAV temp files, transcribe with configured STT model.
-    - Generate reply text through the same chat LLM stack used for text messages.
-    - Pull memory context using existing memory slice logic.
-    - Synthesize speech via configured TTS model/voice and play back in VC.
-- Enforce hard leave at `maxSessionMinutes=10`.
+### 4. Live Conversation Loop
+- Captures inbound speaker audio, decodes Opus, normalizes PCM.
+- Runtime-specific response path:
+  - `voice_agent`: stream PCM to xAI realtime, play returned audio.
+  - `openai_realtime`: stream PCM to OpenAI Realtime, play returned audio.
+  - `stt_pipeline`: transcribe turn, generate reply via shared chat LLM path (with memory), synthesize TTS, play audio.
+- Multi-party gating:
+  - In one-human sessions, turns are accepted directly.
+  - In multi-human sessions, bot requires explicit addressing (`botName` or bot keyword) and uses focused-speaker follow-up TTL behavior.
+- OpenAI realtime context refresh:
+  - Debounced instruction updates include live roster, active speaker/transcript, and memory facts.
+- Realtime reliability:
+  - One pending response at a time.
+  - Silent-response retries + hard recovery path.
+  - Stalled turn fallback drops the stuck turn to allow recovery on next user turn.
+- Soundboard:
+  - Manual soundboard requests are supported while in-session.
+  - Optional heuristic hype trigger can fire first preferred sound when directly addressed.
+  - Current implementation does not enforce a configured cooldown or per-session cap.
 
-### Voice Selection Note
-- xAI currently exposes five voices: `Ara`, `Rex`, `Sal`, `Eve`, `Leo`.
-- `Rex` is male and closest to your "neutral male" request when paired with neutral speaking instructions.
-- If strictly neutral (not male) timbre is preferred later, swap to `Sal`.
+### 5. Session End
+- Session ends on any of:
+  - max-duration timeout
+  - inactivity timeout
+  - explicit NL leave
+  - runtime/socket error
+  - connection loss
+  - bot disconnect grace timeout
+  - settings reconciliation (voice disabled or channel no longer allowed)
+  - channel switch request
+- Cleans up connection, timers, captures, realtime client, and audio stream.
+- Logs `voice_session_end`.
+- Sends a text-channel operational message (not voice TTS announcement).
 
-## Required Discord Capabilities
-- Add `GuildVoiceStates` gateway intent.
-- Add bot permissions:
-  - `Connect`
-  - `Speak`
-  - `Use Soundboard`
-  - `Use External Sounds` (if cross-server sounds are allowed)
-- Use `@discordjs/voice` for joining channels and audio streaming.
-- Use Discord soundboard APIs / methods for contextual effects while connected.
-
-## Required xAI Capabilities
-- Required only when `voice.mode=voice_agent`.
-- xAI realtime endpoint: `wss://api.x.ai/v1/realtime`.
-- Runtime region: `us-east-1` (Voice Agent availability constraint).
-- API key configured as `XAI_API_KEY` in bot server environment.
-
-## Required OpenAI Capabilities
-- Required for `voice.mode=openai_realtime` and `voice.mode=stt_pipeline`.
-- STT and TTS API access via `OPENAI_API_KEY`.
-
-## Proposed Architecture Changes
+## Current Architecture
 - `src/bot.ts`
-  - Add voice intent trigger routing in `messageCreate`.
-  - Add LLM-based VC NL intent handling (`join`, `leave`, `status`) with confidence gating.
-  - Add `GatewayIntentBits.GuildVoiceStates`.
+  - Routes message events and invokes LLM-based voice intent classification.
 - `src/voice/voiceSessionManager.ts`
-  - Owns session lifecycle, timers, join/leave, and guild-level locking.
+  - Source of truth for voice session lifecycle, preflight checks, timers, runtime wiring, and guardrails.
 - `src/voice/xaiRealtimeClient.ts`
-  - Owns xAI websocket session creation, audio in/out streaming, and session updates.
+  - xAI realtime websocket session and audio event handling.
 - `src/voice/openaiRealtimeClient.ts`
-  - Owns OpenAI websocket session creation, audio in/out streaming, and session updates.
+  - OpenAI Realtime websocket session and audio event handling.
 - `src/voice/soundboardDirector.ts`
-  - Chooses if/when to trigger soundboard sounds under cooldown and cap rules.
-- `src/prompts.ts`
-  - Add voice-specific system/turn prompts while preserving current persona.
+  - Manual/mapped soundboard playback execution and permission checks.
+- `src/prompts.ts` + `src/bot.ts`
+  - Voice turn prompt/instruction generation and operational messaging.
 - `src/store.ts`
-  - Persist voice session metadata and voice actions.
+  - Voice settings normalization and voice action persistence.
 - `dashboard/src/components/SettingsForm.tsx`
-  - Add voice settings controls.
+  - Voice settings UI controls.
 
-## Settings Model (New)
+## Settings Model (Current)
 ```js
 voice: {
   enabled: false,
@@ -122,12 +111,12 @@ voice: {
   maxSessionMinutes: 10,
   inactivityLeaveSeconds: 90,
   maxSessionsPerDay: 12,
-  maxConcurrentSessions: 1, // global cross-guild voice session cap
+  maxConcurrentSessions: 1,
   allowedVoiceChannelIds: [],
   blockedVoiceChannelIds: [],
   blockedVoiceUserIds: [],
   xai: {
-    voice: "Rex", // male voice with neutral delivery instructions
+    voice: "Rex",
     audioFormat: "audio/pcm",
     sampleRateHz: 24000,
     region: "us-east-1"
@@ -139,7 +128,8 @@ voice: {
     outputAudioFormat: "pcm16",
     inputSampleRateHz: 24000,
     outputSampleRateHz: 24000,
-    inputTranscriptionModel: "gpt-4o-mini-transcribe"
+    inputTranscriptionModel: "gpt-4o-mini-transcribe",
+    allowNsfwHumor: true
   },
   sttPipeline: {
     transcriptionModel: "gpt-4o-mini-transcribe",
@@ -149,9 +139,9 @@ voice: {
   },
   soundboard: {
     enabled: true,
-    maxPlaysPerSession: 4,
-    minSecondsBetweenPlays: 45,
-    allowExternalSounds: false
+    allowExternalSounds: false,
+    preferredSoundIds: [],
+    mappings: {} // alias -> "sound_id" or "sound_id@source_guild_id"
   }
 }
 ```
@@ -161,67 +151,58 @@ voice: {
 ### Action Log Kinds
 - `voice_session_start`
 - `voice_session_end`
+- `voice_intent_detected`
 - `voice_turn_in`
 - `voice_turn_out`
 - `voice_soundboard_play`
+- `voice_runtime`
 - `voice_error`
 
-### Metrics
-- Join success rate
-- Time to join VC
-- Median reply latency (voice turn)
-- Session duration distribution
-- Soundboard plays/session
-- Voice-mode USD cost/day
+### Metrics (Practical)
+- Join success/failure rates.
+- Session duration distribution.
+- Voice runtime error rates.
+- Soundboard play frequency.
+- Voice-mode USD cost/day.
 
-## Safety + Guardrails
+## Safety + Guardrails (Current)
 - Admin kill switch: `voice.enabled=false`.
-- Strict time cap and inactivity timeout.
-- One active session per guild.
-- Soundboard anti-spam cooldown + per-session cap.
-- No raw audio retention by default.
-- Keep transcript retention short and configurable.
-- Keep "playful bother" behavior non-harassing; apply existing moderation policy to voice outputs.
+- Session hard cap (`maxSessionMinutes`) and inactivity timeout (`inactivityLeaveSeconds`).
+- Per-guild join lock and explicit session cleanup.
+- Global concurrency cap (`maxConcurrentSessions`) and daily session cap (`maxSessionsPerDay`).
+- Channel/user allow/block lists for voice control.
+- Runtime/API prerequisite checks before join.
+- No long-term raw audio storage path in DB.
+  - STT transcription uses temporary WAV files in OS temp dir and deletes them after use.
+- Soundboard is gated by settings + Discord permissions.
+  - No implemented configurable cooldown/per-session cap yet.
 
-## UX/NL Design
+## UX / NL Controls
 
-### Natural Language Triggers
-- "join vc"
-- "hop in voice"
-- "go join the vc and bother those guys"
-- "leave vc"
-- "get out of vc"
-- "voice status"
+### Example NL Triggers
+- `join vc`
+- `hop in voice`
+- `go join the vc and bother those guys`
+- `leave vc`
+- `get out of vc`
+- `voice status`
 
-No slash commands in v1. NL is the only control surface.
-All NL intents route through the same `voiceSessionManager` methods (single source of truth).
+No slash commands are required for voice controls.
+All NL intents route through `voiceSessionManager` methods.
+Ambiguous requests can resolve to `none` and be ignored.
 
-## Rollout Plan
-1. Phase 1: Join/leave infrastructure + timer + xAI realtime websocket session wiring.
-2. Phase 2: Add dashboard-selectable multi-runtime mode (`voice_agent`, `openai_realtime`, and `stt_pipeline`).
-3. Phase 3: Voice behavior tuning (persona parity with text, interruption handling, memory quality).
-4. Phase 4: Soundboard director with strict caps/cooldowns + cost reporting.
-
-## Acceptance Criteria
-1. Bot joins requestor's VC within 5 seconds after a valid NL trigger.
-2. Bot leaves automatically at or before configured max session time (default 10 minutes).
-3. Bot leaves early after configured inactivity timeout.
-4. Bot does not start if voice mode disabled or channel is blocked.
-5. Soundboard playback never exceeds configured cooldown and per-session cap.
-6. Voice prompt style remains consistent with text persona.
-7. If `voice.mode=voice_agent`, every xAI voice session sends `voice: "Rex"` in session config.
-8. If `voice.mode=openai_realtime`, every session sends configured OpenAI model + voice in session config.
-9. If `voice.mode=stt_pipeline`, replies are generated by the same chat LLM path used for text mode and include memory context.
-10. Voice output follows neutral delivery style guidance (calm, conversational, low-drama).
-
-## Migration/Cleanup Notes
-- Remove the hard-limit statement "Cannot join voice channels." from:
-  - `src/defaultSettings.ts`
-  - `src/memory.ts` memory markdown identity block
-  once voice mode is enabled in production.
-- Keep runtime selection explicit via `voice.mode` and avoid hidden fallback shims.
+## Acceptance Criteria (Current)
+1. A high-confidence valid NL join request triggers a join attempt to the requestor VC with preflight guardrails enforced.
+2. Bot leaves automatically at or before configured max session time.
+3. Bot leaves automatically after configured inactivity timeout.
+4. Bot does not start when disabled, blocked, requester not in VC, permissions are missing, or runtime prerequisites are unavailable.
+5. For `voice.mode=voice_agent`, session config sends configured xAI voice and audio settings.
+6. For `voice.mode=openai_realtime`, session config sends configured model/voice/audio format/transcription settings.
+7. For `voice.mode=stt_pipeline`, replies use the shared chat LLM path and memory slice flow.
+8. Multi-party addressing guardrails prevent unwanted replies in group voice unless addressed/focused.
+9. Operational join/leave/status and failure updates are posted in text channels.
 
 ## Open Questions
-1. Should voice sessions be restricted to allowlisted roles in v1?
-2. Do we want transcript storage off by default, or short retention (for debugging)?
-3. Should the bot auto-join opportunistically later, or remain explicit-NL-trigger-only?
+1. Should soundboard add explicit cooldown and per-session cap settings in code?
+2. Should voice-control permissions add role-based allowlisting?
+3. Should transcript/event retention policy be formalized with explicit pruning controls?
