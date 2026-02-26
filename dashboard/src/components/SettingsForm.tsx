@@ -93,8 +93,6 @@ export default function SettingsForm({ settings, onSave, toast }) {
       voiceJoinOnTextNL: settings.voice?.joinOnTextNL ?? true,
       voiceRequireDirectMention: settings.voice?.requireDirectMentionForJoin ?? true,
       voiceIntentConfidenceThreshold: settings.voice?.intentConfidenceThreshold ?? 0.75,
-      voiceIntentCooldownUserSeconds: settings.voice?.intentCooldownUserSeconds ?? 25,
-      voiceIntentCooldownGuildSeconds: settings.voice?.intentCooldownGuildSeconds ?? 8,
       voiceMaxSessionMinutes: settings.voice?.maxSessionMinutes ?? 10,
       voiceInactivityLeaveSeconds: settings.voice?.inactivityLeaveSeconds ?? 90,
       voiceMaxSessionsPerDay: settings.voice?.maxSessionsPerDay ?? 12,
@@ -106,8 +104,6 @@ export default function SettingsForm({ settings, onSave, toast }) {
       voiceXaiSampleRateHz: settings.voice?.xai?.sampleRateHz ?? 24000,
       voiceXaiRegion: settings.voice?.xai?.region ?? "us-east-1",
       voiceSoundboardEnabled: settings.voice?.soundboard?.enabled ?? true,
-      voiceSoundboardMaxPlaysPerSession: settings.voice?.soundboard?.maxPlaysPerSession ?? 4,
-      voiceSoundboardMinSecondsBetweenPlays: settings.voice?.soundboard?.minSecondsBetweenPlays ?? 45,
       voiceSoundboardAllowExternalSounds: settings.voice?.soundboard?.allowExternalSounds ?? false,
       voiceSoundboardPreferredSoundIds: formatIdList(settings.voice?.soundboard?.preferredSoundIds),
       voiceSoundboardMappings: formatMappingList(settings.voice?.soundboard?.mappings),
@@ -208,8 +204,6 @@ export default function SettingsForm({ settings, onSave, toast }) {
         joinOnTextNL: form.voiceJoinOnTextNL,
         requireDirectMentionForJoin: form.voiceRequireDirectMention,
         intentConfidenceThreshold: Number(form.voiceIntentConfidenceThreshold),
-        intentCooldownUserSeconds: Number(form.voiceIntentCooldownUserSeconds),
-        intentCooldownGuildSeconds: Number(form.voiceIntentCooldownGuildSeconds),
         maxSessionMinutes: Number(form.voiceMaxSessionMinutes),
         inactivityLeaveSeconds: Number(form.voiceInactivityLeaveSeconds),
         maxSessionsPerDay: Number(form.voiceMaxSessionsPerDay),
@@ -224,8 +218,6 @@ export default function SettingsForm({ settings, onSave, toast }) {
         },
         soundboard: {
           enabled: form.voiceSoundboardEnabled,
-          maxPlaysPerSession: Number(form.voiceSoundboardMaxPlaysPerSession),
-          minSecondsBetweenPlays: Number(form.voiceSoundboardMinSecondsBetweenPlays),
           allowExternalSounds: form.voiceSoundboardAllowExternalSounds,
           preferredSoundIds: parseIdList(form.voiceSoundboardPreferredSoundIds),
           mappings: parseMappingList(form.voiceSoundboardMappings)
@@ -653,31 +645,6 @@ export default function SettingsForm({ settings, onSave, toast }) {
 
       <div className="split">
         <div>
-          <label htmlFor="voice-intent-cooldown-user">Join cooldown per user (seconds)</label>
-          <input
-            id="voice-intent-cooldown-user"
-            type="number"
-            min="0"
-            max="600"
-            value={form.voiceIntentCooldownUserSeconds}
-            onChange={set("voiceIntentCooldownUserSeconds")}
-          />
-        </div>
-        <div>
-          <label htmlFor="voice-intent-cooldown-guild">Join cooldown per guild (seconds)</label>
-          <input
-            id="voice-intent-cooldown-guild"
-            type="number"
-            min="0"
-            max="600"
-            value={form.voiceIntentCooldownGuildSeconds}
-            onChange={set("voiceIntentCooldownGuildSeconds")}
-          />
-        </div>
-      </div>
-
-      <div className="split">
-        <div>
           <label htmlFor="voice-inactivity-seconds">Inactivity leave seconds</label>
           <input
             id="voice-inactivity-seconds"
@@ -752,31 +719,6 @@ export default function SettingsForm({ settings, onSave, toast }) {
           />
           Allow external soundboard sounds
         </label>
-      </div>
-
-      <div className="split">
-        <div>
-          <label htmlFor="voice-sb-max-plays">Soundboard max plays/session</label>
-          <input
-            id="voice-sb-max-plays"
-            type="number"
-            min="0"
-            max="20"
-            value={form.voiceSoundboardMaxPlaysPerSession}
-            onChange={set("voiceSoundboardMaxPlaysPerSession")}
-          />
-        </div>
-        <div>
-          <label htmlFor="voice-sb-min-seconds">Soundboard min seconds between plays</label>
-          <input
-            id="voice-sb-min-seconds"
-            type="number"
-            min="5"
-            max="600"
-            value={form.voiceSoundboardMinSecondsBetweenPlays}
-            onChange={set("voiceSoundboardMinSecondsBetweenPlays")}
-          />
-        </div>
       </div>
 
       <label htmlFor="voice-sb-preferred">Preferred sound IDs (one per line)</label>

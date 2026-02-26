@@ -709,20 +709,28 @@ function normalizeSettings(raw) {
   if ("maxConcurrentGuildSessions" in merged.voice) {
     delete merged.voice.maxConcurrentGuildSessions;
   }
+  if ("intentCooldownUserSeconds" in merged.voice) {
+    delete merged.voice.intentCooldownUserSeconds;
+  }
+  if ("intentCooldownGuildSeconds" in merged.voice) {
+    delete merged.voice.intentCooldownGuildSeconds;
+  }
+  if ("maxPlaysPerSession" in merged.voice.soundboard) {
+    delete merged.voice.soundboard.maxPlaysPerSession;
+  }
+  if ("minSecondsBetweenPlays" in merged.voice.soundboard) {
+    delete merged.voice.soundboard.minSecondsBetweenPlays;
+  }
 
   const defaultVoice = DEFAULT_SETTINGS.voice || {};
   const defaultVoiceXai = defaultVoice.xai || {};
   const defaultVoiceSoundboard = defaultVoice.soundboard || {};
   const voiceIntentThresholdRaw = Number(merged.voice?.intentConfidenceThreshold);
-  const voiceIntentCooldownUserRaw = Number(merged.voice?.intentCooldownUserSeconds);
-  const voiceIntentCooldownGuildRaw = Number(merged.voice?.intentCooldownGuildSeconds);
   const voiceMaxSessionRaw = Number(merged.voice?.maxSessionMinutes);
   const voiceInactivityRaw = Number(merged.voice?.inactivityLeaveSeconds);
   const voiceDailySessionsRaw = Number(merged.voice?.maxSessionsPerDay);
   const voiceConcurrentSessionsRaw = Number(merged.voice?.maxConcurrentSessions);
   const voiceSampleRateRaw = Number(merged.voice?.xai?.sampleRateHz);
-  const voiceMaxPlaysRaw = Number(merged.voice?.soundboard?.maxPlaysPerSession);
-  const voiceMinBetweenPlaysRaw = Number(merged.voice?.soundboard?.minSecondsBetweenPlays);
 
   merged.voice.enabled =
     merged.voice?.enabled !== undefined ? Boolean(merged.voice?.enabled) : Boolean(defaultVoice.enabled);
@@ -738,20 +746,6 @@ function normalizeSettings(raw) {
       : Number(defaultVoice.intentConfidenceThreshold) || 0.75,
     0.4,
     0.99
-  );
-  merged.voice.intentCooldownUserSeconds = clamp(
-    Number.isFinite(voiceIntentCooldownUserRaw)
-      ? voiceIntentCooldownUserRaw
-      : Number(defaultVoice.intentCooldownUserSeconds) || 25,
-    0,
-    600
-  );
-  merged.voice.intentCooldownGuildSeconds = clamp(
-    Number.isFinite(voiceIntentCooldownGuildRaw)
-      ? voiceIntentCooldownGuildRaw
-      : Number(defaultVoice.intentCooldownGuildSeconds) || 8,
-    0,
-    600
   );
   merged.voice.maxSessionMinutes = clamp(
     Number.isFinite(voiceMaxSessionRaw) ? voiceMaxSessionRaw : Number(defaultVoice.maxSessionMinutes) || 10,
@@ -796,20 +790,6 @@ function normalizeSettings(raw) {
     merged.voice?.soundboard?.enabled !== undefined
       ? Boolean(merged.voice?.soundboard?.enabled)
       : Boolean(defaultVoiceSoundboard.enabled);
-  merged.voice.soundboard.maxPlaysPerSession = clamp(
-    Number.isFinite(voiceMaxPlaysRaw)
-      ? voiceMaxPlaysRaw
-      : Number(defaultVoiceSoundboard.maxPlaysPerSession) || 4,
-    0,
-    20
-  );
-  merged.voice.soundboard.minSecondsBetweenPlays = clamp(
-    Number.isFinite(voiceMinBetweenPlaysRaw)
-      ? voiceMinBetweenPlaysRaw
-      : Number(defaultVoiceSoundboard.minSecondsBetweenPlays) || 45,
-    5,
-    600
-  );
   merged.voice.soundboard.allowExternalSounds =
     merged.voice?.soundboard?.allowExternalSounds !== undefined
       ? Boolean(merged.voice?.soundboard?.allowExternalSounds)

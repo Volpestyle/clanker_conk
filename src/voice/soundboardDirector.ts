@@ -1,5 +1,4 @@
 import { PermissionFlagsBits } from "discord.js";
-import { clamp } from "../utils.ts";
 
 const API_BASE = "https://discord.com/api/v10";
 
@@ -28,8 +27,6 @@ export class SoundboardDirector {
       };
     }
 
-    const maxPlaysPerSession = clamp(Number(soundboardSettings.maxPlaysPerSession) || 0, 0, 20);
-    const minSecondsBetweenPlays = clamp(Number(soundboardSettings.minSecondsBetweenPlays) || 45, 5, 600);
     const allowExternalSounds = Boolean(soundboardSettings.allowExternalSounds);
 
     if (sourceGuildId && !allowExternalSounds) {
@@ -44,24 +41,6 @@ export class SoundboardDirector {
       playCount: 0,
       lastPlayedAt: 0
     };
-
-    if (maxPlaysPerSession > 0 && session.soundboard.playCount >= maxPlaysPerSession) {
-      return {
-        ok: false,
-        reason: "session_cap",
-        message: `soundboard cap reached (${maxPlaysPerSession} per session)`
-      };
-    }
-
-    const elapsedSinceLastPlayMs = Date.now() - (session.soundboard.lastPlayedAt || 0);
-    if (session.soundboard.lastPlayedAt && elapsedSinceLastPlayMs < minSecondsBetweenPlays * 1000) {
-      const remaining = Math.ceil((minSecondsBetweenPlays * 1000 - elapsedSinceLastPlayMs) / 1000);
-      return {
-        ok: false,
-        reason: "cooldown",
-        message: `soundboard cooldown active (${remaining}s left)`
-      };
-    }
 
     const guild = this.client.guilds.cache.get(session.guildId);
     if (!guild) {
