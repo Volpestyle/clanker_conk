@@ -68,6 +68,9 @@ export class XaiRealtimeClient extends EventEmitter {
       this.lastEventAt = Date.now();
       this.lastError = String(error?.message || error);
       this.log("warn", "xai_realtime_ws_error", { error: this.lastError });
+      this.emit("socket_error", {
+        message: this.lastError
+      });
     });
 
     ws.on("close", (code, reasonBuffer) => {
@@ -75,6 +78,10 @@ export class XaiRealtimeClient extends EventEmitter {
       this.lastCloseCode = Number(code) || null;
       this.lastCloseReason = reasonBuffer ? String(reasonBuffer) : null;
       this.log("info", "xai_realtime_ws_closed", {
+        code: this.lastCloseCode,
+        reason: this.lastCloseReason
+      });
+      this.emit("socket_closed", {
         code: this.lastCloseCode,
         reason: this.lastCloseReason
       });
@@ -169,11 +176,20 @@ export class XaiRealtimeClient extends EventEmitter {
     }
 
     if (event.type === "error") {
+      const errorPayload = event.error && typeof event.error === "object" ? event.error : {};
       const message =
         event.error?.message || event.error?.code || event.message || "Unknown xAI realtime error";
       this.lastError = String(message);
-      this.log("warn", "xai_realtime_error_event", { error: this.lastError });
-      this.emit("error_event", this.lastError);
+      this.log("warn", "xai_realtime_error_event", {
+        error: this.lastError,
+        code: errorPayload?.code || null,
+        type: event.type
+      });
+      this.emit("error_event", {
+        message: this.lastError,
+        code: errorPayload?.code || null,
+        event
+      });
       return;
     }
 
@@ -218,6 +234,8 @@ export class XaiRealtimeClient extends EventEmitter {
   }
 
   commitInputAudioBuffer() {
+    // xAI Voice Agent docs currently show conflicting commit event names in different sections.
+    // We use `conversation.item.commit`, which is accepted by current realtime behavior.
     this.send({ type: "conversation.item.commit" });
   }
 

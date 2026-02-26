@@ -51,7 +51,7 @@ export const DEFAULT_SETTINGS = {
     maxSessionMinutes: 10,
     inactivityLeaveSeconds: 90,
     maxSessionsPerDay: 12,
-    maxConcurrentGuildSessions: 1,
+    maxConcurrentSessions: 1,
     allowedVoiceChannelIds: [],
     blockedVoiceChannelIds: [],
     blockedVoiceUserIds: [],
