@@ -398,7 +398,11 @@ export class Store {
         gif_call: 0,
         search_call: 0,
         video_context_call: 0,
-        asr_call: 0
+        asr_call: 0,
+        voice_session_start: 0,
+        voice_session_end: 0,
+        voice_intent_detected: 0,
+        voice_turn_in: 0
       },
       totalCostUsd: Number(totalCostRow?.total ?? 0),
       dailyCost: dayCostRows
@@ -578,6 +582,7 @@ function normalizeSettings(raw) {
   if (!merged.llm || typeof merged.llm !== "object") merged.llm = {};
   if (!merged.webSearch || typeof merged.webSearch !== "object") merged.webSearch = {};
   if (!merged.videoContext || typeof merged.videoContext !== "object") merged.videoContext = {};
+  if (!merged.voice || typeof merged.voice !== "object") merged.voice = {};
   if ("youtubeContext" in merged) {
     delete merged.youtubeContext;
   }
@@ -688,6 +693,105 @@ function normalizeSettings(raw) {
     15,
     600
   );
+
+  if (!merged.voice.xai || typeof merged.voice.xai !== "object") {
+    merged.voice.xai = {};
+  }
+  if (!merged.voice.soundboard || typeof merged.voice.soundboard !== "object") {
+    merged.voice.soundboard = {};
+  }
+  if ("joinOnTextCommand" in merged.voice) {
+    delete merged.voice.joinOnTextCommand;
+  }
+
+  const defaultVoice = DEFAULT_SETTINGS.voice || {};
+  const defaultVoiceXai = defaultVoice.xai || {};
+  const defaultVoiceSoundboard = defaultVoice.soundboard || {};
+  const voiceIntentThresholdRaw = Number(merged.voice?.intentConfidenceThreshold);
+  const voiceMaxSessionRaw = Number(merged.voice?.maxSessionMinutes);
+  const voiceInactivityRaw = Number(merged.voice?.inactivityLeaveSeconds);
+  const voiceDailySessionsRaw = Number(merged.voice?.maxSessionsPerDay);
+  const voiceConcurrentGuildRaw = Number(merged.voice?.maxConcurrentGuildSessions);
+  const voiceSampleRateRaw = Number(merged.voice?.xai?.sampleRateHz);
+  const voiceMaxPlaysRaw = Number(merged.voice?.soundboard?.maxPlaysPerSession);
+  const voiceMinBetweenPlaysRaw = Number(merged.voice?.soundboard?.minSecondsBetweenPlays);
+
+  merged.voice.enabled =
+    merged.voice?.enabled !== undefined ? Boolean(merged.voice?.enabled) : Boolean(defaultVoice.enabled);
+  merged.voice.joinOnTextNL =
+    merged.voice?.joinOnTextNL !== undefined ? Boolean(merged.voice?.joinOnTextNL) : Boolean(defaultVoice.joinOnTextNL);
+  merged.voice.requireDirectMentionForJoin =
+    merged.voice?.requireDirectMentionForJoin !== undefined
+      ? Boolean(merged.voice?.requireDirectMentionForJoin)
+      : Boolean(defaultVoice.requireDirectMentionForJoin);
+  merged.voice.intentConfidenceThreshold = clamp(
+    Number.isFinite(voiceIntentThresholdRaw)
+      ? voiceIntentThresholdRaw
+      : Number(defaultVoice.intentConfidenceThreshold) || 0.75,
+    0.4,
+    0.99
+  );
+  merged.voice.maxSessionMinutes = clamp(
+    Number.isFinite(voiceMaxSessionRaw) ? voiceMaxSessionRaw : Number(defaultVoice.maxSessionMinutes) || 10,
+    1,
+    120
+  );
+  merged.voice.inactivityLeaveSeconds = clamp(
+    Number.isFinite(voiceInactivityRaw) ? voiceInactivityRaw : Number(defaultVoice.inactivityLeaveSeconds) || 90,
+    20,
+    3600
+  );
+  merged.voice.maxSessionsPerDay = clamp(
+    Number.isFinite(voiceDailySessionsRaw) ? voiceDailySessionsRaw : Number(defaultVoice.maxSessionsPerDay) || 12,
+    0,
+    120
+  );
+  merged.voice.maxConcurrentGuildSessions = clamp(
+    Number.isFinite(voiceConcurrentGuildRaw)
+      ? voiceConcurrentGuildRaw
+      : Number(defaultVoice.maxConcurrentGuildSessions) || 1,
+    1,
+    1
+  );
+  merged.voice.allowedVoiceChannelIds = uniqueIdList(merged.voice?.allowedVoiceChannelIds);
+  merged.voice.blockedVoiceChannelIds = uniqueIdList(merged.voice?.blockedVoiceChannelIds);
+  merged.voice.blockedVoiceUserIds = uniqueIdList(merged.voice?.blockedVoiceUserIds);
+
+  merged.voice.xai.voice = String(merged.voice?.xai?.voice || defaultVoiceXai.voice || "Rex").slice(0, 60);
+  merged.voice.xai.audioFormat = String(merged.voice?.xai?.audioFormat || defaultVoiceXai.audioFormat || "audio/pcm")
+    .trim()
+    .slice(0, 40);
+  merged.voice.xai.sampleRateHz = clamp(
+    Number.isFinite(voiceSampleRateRaw) ? voiceSampleRateRaw : Number(defaultVoiceXai.sampleRateHz) || 24000,
+    8000,
+    48000
+  );
+  merged.voice.xai.region = String(merged.voice?.xai?.region || defaultVoiceXai.region || "us-east-1")
+    .trim()
+    .slice(0, 40);
+
+  merged.voice.soundboard.enabled =
+    merged.voice?.soundboard?.enabled !== undefined
+      ? Boolean(merged.voice?.soundboard?.enabled)
+      : Boolean(defaultVoiceSoundboard.enabled);
+  merged.voice.soundboard.maxPlaysPerSession = clamp(
+    Number.isFinite(voiceMaxPlaysRaw)
+      ? voiceMaxPlaysRaw
+      : Number(defaultVoiceSoundboard.maxPlaysPerSession) || 4,
+    0,
+    20
+  );
+  merged.voice.soundboard.minSecondsBetweenPlays = clamp(
+    Number.isFinite(voiceMinBetweenPlaysRaw)
+      ? voiceMinBetweenPlaysRaw
+      : Number(defaultVoiceSoundboard.minSecondsBetweenPlays) || 45,
+    5,
+    600
+  );
+  merged.voice.soundboard.allowExternalSounds =
+    merged.voice?.soundboard?.allowExternalSounds !== undefined
+      ? Boolean(merged.voice?.soundboard?.allowExternalSounds)
+      : Boolean(defaultVoiceSoundboard.allowExternalSounds);
 
   merged.startup.catchupEnabled =
     merged.startup?.catchupEnabled !== undefined ? Boolean(merged.startup?.catchupEnabled) : true;

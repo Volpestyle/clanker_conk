@@ -13,6 +13,7 @@ export const appConfig = {
   dashboardToken: process.env.DASHBOARD_TOKEN ?? "",
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
+  xaiApiKey: process.env.XAI_API_KEY ?? "",
   braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY ?? "",
   serpApiKey: process.env.SERPAPI_API_KEY ?? "",
   giphyApiKey: process.env.GIPHY_API_KEY ?? "",

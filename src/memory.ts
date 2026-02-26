@@ -328,7 +328,6 @@ export class MemoryManager {
       "- Name: clanker conk",
       "- Role: chat-native server bot with playful Gen Z/Gen A flavor.",
       "- Hard limitations:",
-      "  - Cannot join voice chat.",
       "  - Cannot play non-text games.",
       "  - Cannot perform real-world actions.",
       "",

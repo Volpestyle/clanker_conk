@@ -11,6 +11,7 @@ Features:
 - Optional live web search for replies (Brave primary, SerpApi fallback), including page inspection from top results.
 - Optional model-directed GIF replies via GIPHY search.
 - Video link understanding for YouTube/TikTok/embedded video links (captions first, optional ASR fallback, optional keyframes).
+- NL-controlled Discord voice sessions (join/leave/status) with session limits and runtime guards.
 - Dashboard UI for settings, permissions, logs, memory, and cost tracking.
 - Two-layer memory with append-only daily logs and curated `memory/MEMORY.md` distillation.
 
@@ -25,6 +26,7 @@ npm install
 Fill `.env`:
 - `DISCORD_TOKEN`: your bot token.
 - `OPENAI_API_KEY` and/or `ANTHROPIC_API_KEY`.
+- `XAI_API_KEY`: required for voice mode runtime.
 - Optional for live web search: `BRAVE_SEARCH_API_KEY` (primary) and/or `SERPAPI_API_KEY` (fallback).
 - Optional for model-directed GIF replies: `GIPHY_API_KEY` (and optional `GIPHY_RATING`, default `pg-13`).
 - Optional: `DASHBOARD_TOKEN` (protects dashboard API).
@@ -37,6 +39,7 @@ Required intents:
 - `GuildMessages`
 - `GuildMessageReactions`
 - `MessageContent`
+- `GuildVoiceStates` (required when voice mode is enabled)
 
 Recommended bot permissions in server:
 - View Channels

@@ -38,6 +38,10 @@ export default function MetricsBar({ stats }) {
     {
       label: "GIFs (24h)",
       value: String(s?.last24h?.gif_call || 0)
+    },
+    {
+      label: "Voice Sessions (24h)",
+      value: String(s?.last24h?.voice_session_start || 0)
     }
   ];
 
