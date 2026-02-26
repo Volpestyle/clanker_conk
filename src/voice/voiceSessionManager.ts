@@ -11,6 +11,7 @@ import {
   StreamType,
   VoiceConnectionStatus
 } from "@discordjs/voice";
+import { PermissionFlagsBits } from "discord.js";
 import prism from "prism-media";
 import { clamp } from "../utils.ts";
 import { convertDiscordPcmToXaiInput, convertXaiOutputToDiscordPcm } from "./pcmAudio.ts";
@@ -23,6 +24,7 @@ const MIN_INACTIVITY_SECONDS = 20;
 const MAX_INACTIVITY_SECONDS = 3600;
 const INPUT_SPEECH_END_SILENCE_MS = 900;
 const BOT_TURN_SILENCE_RESET_MS = 1200;
+const ACTIVITY_TOUCH_THROTTLE_MS = 2000;
 
 export class VoiceSessionManager {
   constructor({ client, store, appConfig }) {
@@ -105,12 +107,6 @@ export class VoiceSessionManager {
       return true;
     }
 
-    const cooldown = this.consumeJoinCooldown({ guildId, userId, settings });
-    if (cooldown.blocked) {
-      await this.sendToChannel(message.channel, cooldown.message);
-      return true;
-    }
-
     const memberVoiceChannel = message.member.voice?.channel;
     if (!memberVoiceChannel) {
       await this.sendToChannel(message.channel, "join a vc first, then ping me to hop in.");
@@ -165,6 +161,21 @@ export class VoiceSessionManager {
 
     if (!this.appConfig?.xaiApiKey) {
       await this.sendToChannel(message.channel, "voice runtime is not configured yet (missing `XAI_API_KEY`).");
+      return true;
+    }
+
+    const missingPermissionMessage = this.getMissingJoinPermissionMessage({
+      guild: message.guild,
+      voiceChannel: memberVoiceChannel
+    });
+    if (missingPermissionMessage) {
+      await this.sendToChannel(message.channel, missingPermissionMessage);
+      return true;
+    }
+
+    const cooldown = this.consumeJoinCooldown({ guildId, userId, settings });
+    if (cooldown.blocked) {
+      await this.sendToChannel(message.channel, cooldown.message);
       return true;
     }
 
@@ -242,11 +253,13 @@ export class VoiceSessionManager {
         inactivityTimer: null,
         botTurnResetTimer: null,
         botTurnOpen: false,
+        lastBotActivityTouchAt: 0,
         userCaptures: new Map(),
         soundboard: {
           playCount: 0,
           lastPlayedAt: 0
         },
+        settingsSnapshot: settings,
         cleanupHandlers: [],
         ending: false
       };
@@ -254,7 +267,7 @@ export class VoiceSessionManager {
       this.sessions.set(guildId, session);
       this.bindAudioPlayerHandlers(session);
       this.bindSessionHandlers(session, settings);
-      this.bindXaiHandlers(session);
+      this.bindXaiHandlers(session, settings);
       this.startSessionTimers(session, settings);
 
       this.store.logAction({
@@ -447,6 +460,45 @@ export class VoiceSessionManager {
     }
   }
 
+  async reconcileSettings(settings) {
+    const voiceEnabled = Boolean(settings?.voice?.enabled);
+    const allowlist = new Set(settings?.voice?.allowedVoiceChannelIds || []);
+    const blocklist = new Set(settings?.voice?.blockedVoiceChannelIds || []);
+
+    for (const session of [...this.sessions.values()]) {
+      session.settingsSnapshot = settings || session.settingsSnapshot;
+
+      if (!voiceEnabled) {
+        await this.endSession({
+          guildId: session.guildId,
+          reason: "settings_disabled",
+          announcement: "voice mode was disabled, leaving vc."
+        });
+        continue;
+      }
+
+      if (blocklist.has(session.voiceChannelId)) {
+        await this.endSession({
+          guildId: session.guildId,
+          reason: "settings_channel_blocked",
+          announcement: "this vc is now blocked for me, leaving."
+        });
+        continue;
+      }
+
+      if (allowlist.size > 0 && !allowlist.has(session.voiceChannelId)) {
+        await this.endSession({
+          guildId: session.guildId,
+          reason: "settings_channel_not_allowlisted",
+          announcement: "this vc is no longer allowlisted, leaving."
+        });
+        continue;
+      }
+
+      this.touchActivity(session.guildId, settings);
+    }
+  }
+
   startSessionTimers(session, settings) {
     const maxSessionMinutes = clamp(
       Number(settings.voice?.maxSessionMinutes) || 10,
@@ -503,7 +555,7 @@ export class VoiceSessionManager {
     });
   }
 
-  bindXaiHandlers(session) {
+  bindXaiHandlers(session, settings = session.settingsSnapshot) {
     const onAudioDelta = (audioBase64) => {
       let chunk = null;
       try {
@@ -517,7 +569,7 @@ export class VoiceSessionManager {
       if (!discordPcm.length) return;
 
       session.botAudioStream.write(discordPcm);
-      this.markBotTurnOut(session);
+      this.markBotTurnOut(session, settings);
     };
 
     const onTranscript = (text) => {
@@ -545,7 +597,13 @@ export class VoiceSessionManager {
     });
   }
 
-  markBotTurnOut(session) {
+  markBotTurnOut(session, settings = session.settingsSnapshot) {
+    const now = Date.now();
+    if (now - Number(session.lastBotActivityTouchAt || 0) >= ACTIVITY_TOUCH_THROTTLE_MS) {
+      this.touchActivity(session.guildId, settings);
+      session.lastBotActivityTouchAt = now;
+    }
+
     if (!session.botTurnOpen) {
       session.botTurnOpen = true;
       this.store.logAction({
@@ -598,7 +656,8 @@ export class VoiceSessionManager {
       this.touchActivity(session.guildId, settings);
       this.startInboundCapture({
         session,
-        userId: String(userId || "")
+        userId: String(userId || ""),
+        settings
       });
     };
 
@@ -608,7 +667,7 @@ export class VoiceSessionManager {
     });
   }
 
-  startInboundCapture({ session, userId }) {
+  startInboundCapture({ session, userId, settings = session?.settingsSnapshot }) {
     if (!session || !userId) return;
     if (session.userCaptures.has(userId)) return;
 
@@ -632,7 +691,8 @@ export class VoiceSessionManager {
       decoder,
       pcmStream,
       startedAt: Date.now(),
-      bytesSent: 0
+      bytesSent: 0,
+      lastActivityTouchAt: 0
     };
 
     session.userCaptures.set(userId, captureState);
@@ -677,6 +737,12 @@ export class VoiceSessionManager {
       if (!normalizedPcm.length) return;
       captureState.bytesSent += normalizedPcm.length;
 
+      const now = Date.now();
+      if (now - captureState.lastActivityTouchAt >= ACTIVITY_TOUCH_THROTTLE_MS) {
+        this.touchActivity(session.guildId, settings);
+        captureState.lastActivityTouchAt = now;
+      }
+
       try {
         session.xaiClient.appendInputAudioPcm(normalizedPcm);
       } catch (error) {
@@ -697,6 +763,11 @@ export class VoiceSessionManager {
     const finalizeUserTurn = () => {
       if (captureFinalized) return;
       captureFinalized = true;
+
+      if (captureState.bytesSent <= 0 || session.ending) {
+        cleanupCapture();
+        return;
+      }
 
       try {
         session.xaiClient.commitInputAudioBuffer();
@@ -893,6 +964,20 @@ export class VoiceSessionManager {
     }
   }
 
+  getMissingJoinPermissionMessage({ guild, voiceChannel }) {
+    const me = guild?.members?.me;
+    if (!me) {
+      return "can't resolve my voice permissions in this server yet.";
+    }
+
+    const perms = voiceChannel?.permissionsFor?.(me);
+    if (!perms?.has(PermissionFlagsBits.Connect) || !perms?.has(PermissionFlagsBits.Speak)) {
+      return "i need CONNECT and SPEAK permissions in that vc before i can join.";
+    }
+
+    return null;
+  }
+
   consumeJoinCooldown({ guildId, userId, settings }) {
     const now = Date.now();
     const userCooldownSeconds = clamp(Number(settings?.voice?.intentCooldownUserSeconds) || 0, 0, 600);
@@ -939,6 +1024,10 @@ function defaultExitMessage(reason) {
   if (reason === "max_duration") return "time cap reached, dipping from vc.";
   if (reason === "inactivity_timeout") return "been quiet for a bit, leaving vc.";
   if (reason === "connection_lost" || reason === "bot_disconnected") return "lost the voice connection, i bounced.";
+  if (reason === "settings_disabled") return "voice mode was disabled, so i dipped.";
+  if (reason === "settings_channel_blocked" || reason === "settings_channel_not_allowlisted") {
+    return "voice settings changed, so i left this vc.";
+  }
   if (reason === "switch_channel") return "moving channels.";
   return "leaving vc.";
 }

@@ -46,6 +46,10 @@ Recommended bot permissions in server:
 - Send Messages
 - Read Message History
 - Add Reactions
+- Connect (voice)
+- Speak (voice)
+- Use Soundboard (voice soundboard features)
+- Use External Sounds (only if `voice.soundboard.allowExternalSounds=true`)
 
 ## 3. Run
 
