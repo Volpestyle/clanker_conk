@@ -710,6 +710,8 @@ function normalizeSettings(raw) {
   const defaultVoiceXai = defaultVoice.xai || {};
   const defaultVoiceSoundboard = defaultVoice.soundboard || {};
   const voiceIntentThresholdRaw = Number(merged.voice?.intentConfidenceThreshold);
+  const voiceIntentCooldownUserRaw = Number(merged.voice?.intentCooldownUserSeconds);
+  const voiceIntentCooldownGuildRaw = Number(merged.voice?.intentCooldownGuildSeconds);
   const voiceMaxSessionRaw = Number(merged.voice?.maxSessionMinutes);
   const voiceInactivityRaw = Number(merged.voice?.inactivityLeaveSeconds);
   const voiceDailySessionsRaw = Number(merged.voice?.maxSessionsPerDay);
@@ -732,6 +734,20 @@ function normalizeSettings(raw) {
       : Number(defaultVoice.intentConfidenceThreshold) || 0.75,
     0.4,
     0.99
+  );
+  merged.voice.intentCooldownUserSeconds = clamp(
+    Number.isFinite(voiceIntentCooldownUserRaw)
+      ? voiceIntentCooldownUserRaw
+      : Number(defaultVoice.intentCooldownUserSeconds) || 25,
+    0,
+    600
+  );
+  merged.voice.intentCooldownGuildSeconds = clamp(
+    Number.isFinite(voiceIntentCooldownGuildRaw)
+      ? voiceIntentCooldownGuildRaw
+      : Number(defaultVoice.intentCooldownGuildSeconds) || 8,
+    0,
+    600
   );
   merged.voice.maxSessionMinutes = clamp(
     Number.isFinite(voiceMaxSessionRaw) ? voiceMaxSessionRaw : Number(defaultVoice.maxSessionMinutes) || 10,

@@ -15,6 +15,8 @@ const AUDIO_DELTA_TYPES = new Set([
 
 const TRANSCRIPT_TYPES = new Set([
   "conversation.item.input_audio_transcription.completed",
+  "response.output_audio_transcript.delta",
+  "response.output_audio_transcript.done",
   "response.audio_transcript.done",
   "response.audio_transcript.completed",
   "transcript.completed"
@@ -39,7 +41,9 @@ export class XaiRealtimeClient extends EventEmitter {
     instructions = "",
     region = "us-east-1",
     inputAudioFormat = "audio/pcm",
-    outputAudioFormat = "audio/pcm"
+    outputAudioFormat = "audio/pcm",
+    inputSampleRateHz = 24000,
+    outputSampleRateHz = 24000
   } = {}) {
     if (!this.apiKey) {
       throw new Error("Missing XAI_API_KEY for realtime voice runtime.");
@@ -81,8 +85,23 @@ export class XaiRealtimeClient extends EventEmitter {
       session: compactObject({
         voice,
         instructions,
-        input_audio_format: inputAudioFormat,
-        output_audio_format: outputAudioFormat,
+        audio: {
+          input: {
+            format: {
+              type: inputAudioFormat,
+              rate: Number(inputSampleRateHz) || 24000
+            }
+          },
+          output: {
+            format: {
+              type: outputAudioFormat,
+              rate: Number(outputSampleRateHz) || 24000
+            }
+          }
+        },
+        turn_detection: {
+          type: null
+        },
         region,
         modalities: ["audio", "text"]
       })
@@ -97,6 +116,7 @@ export class XaiRealtimeClient extends EventEmitter {
 
       const ws = new WebSocket(XAI_REALTIME_URL, {
         headers: {
+          "Content-Type": "application/json",
           Authorization: `Bearer ${this.apiKey}`
         },
         handshakeTimeout: CONNECT_TIMEOUT_MS
@@ -142,7 +162,7 @@ export class XaiRealtimeClient extends EventEmitter {
 
     this.emit("event", event);
 
-    if (event.type === "session.created") {
+    if (event.type === "session.created" || event.type === "session.updated") {
       this.sessionId = event.session?.id || this.sessionId;
       this.log("info", "xai_realtime_session_created", { sessionId: this.sessionId });
       return;

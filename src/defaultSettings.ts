@@ -46,6 +46,8 @@ export const DEFAULT_SETTINGS = {
     joinOnTextNL: true,
     requireDirectMentionForJoin: true,
     intentConfidenceThreshold: 0.75,
+    intentCooldownUserSeconds: 25,
+    intentCooldownGuildSeconds: 8,
     maxSessionMinutes: 10,
     inactivityLeaveSeconds: 90,
     maxSessionsPerDay: 12,
