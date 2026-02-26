@@ -1,4 +1,38 @@
-import { Fragment, useMemo, useState } from "react";
+import { Fragment, useCallback, useMemo, useRef, useState } from "react";
+
+const STORAGE_KEY = "actionStreamColWidths";
+const COLUMNS = ["time", "kind", "channel", "content", "cost"] as const;
+const DEFAULT_WIDTHS: Record<string, number> = {
+  time: 210,
+  kind: 196,
+  channel: 210,
+  content: 400,
+  cost: 122,
+};
+const MIN_COL_WIDTH = 60;
+
+function loadColWidths(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      // Validate all columns present and numeric
+      const result: Record<string, number> = {};
+      for (const col of COLUMNS) {
+        const v = parsed[col];
+        result[col] = typeof v === "number" && v >= MIN_COL_WIDTH ? v : DEFAULT_WIDTHS[col];
+      }
+      return result;
+    }
+  } catch { /* ignore */ }
+  return { ...DEFAULT_WIDTHS };
+}
+
+function saveColWidths(widths: Record<string, number>) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(widths));
+  } catch { /* ignore */ }
+}
 
 const FILTERS = [
   "all",
@@ -30,6 +64,43 @@ const FILTERS = [
 export default function ActionStream({ actions }) {
   const [filter, setFilter] = useState("all");
   const [expandedRowKey, setExpandedRowKey] = useState("");
+  const [colWidths, setColWidths] = useState(loadColWidths);
+  const dragRef = useRef<{ col: string; startX: number; startW: number } | null>(null);
+
+  const onResizeStart = useCallback((col: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startW = colWidths[col];
+    dragRef.current = { col, startX, startW };
+
+    const onMove = (ev: MouseEvent) => {
+      if (!dragRef.current) return;
+      const delta = ev.clientX - dragRef.current.startX;
+      const newW = Math.max(MIN_COL_WIDTH, dragRef.current.startW + delta);
+      setColWidths((prev) => {
+        const next = { ...prev, [dragRef.current!.col]: newW };
+        return next;
+      });
+    };
+
+    const onUp = () => {
+      document.removeEventListener("mousemove", onMove);
+      document.removeEventListener("mouseup", onUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      setColWidths((prev) => {
+        saveColWidths(prev);
+        return prev;
+      });
+      dragRef.current = null;
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  }, [colWidths]);
 
   const rows = useMemo(
     () => (filter === "all" ? actions : actions.filter((a) => a.kind === filter)),
@@ -72,19 +143,25 @@ export default function ActionStream({ actions }) {
       <div className="table-wrap">
         <table className="action-table">
           <colgroup>
-            <col className="action-col-time" />
-            <col className="action-col-kind" />
-            <col className="action-col-channel" />
-            <col className="action-col-content" />
-            <col className="action-col-cost" />
+            {COLUMNS.map((col) => (
+              <col key={col} style={{ width: colWidths[col] }} />
+            ))}
           </colgroup>
           <thead>
             <tr>
-              <th className="col-time">Time</th>
-              <th className="col-kind">Kind</th>
-              <th className="col-channel">Channel</th>
-              <th className="col-content">Content</th>
-              <th className="col-cost">Cost</th>
+              {COLUMNS.map((col) => (
+                <th key={col} className={`col-${col}`}>
+                  <div className="th-resizable">
+                    <span>{col === "content" ? "Content" : col.charAt(0).toUpperCase() + col.slice(1)}</span>
+                    <div
+                      className="col-resize-handle"
+                      onMouseDown={(e) => onResizeStart(col, e)}
+                      role="separator"
+                      aria-orientation="vertical"
+                    />
+                  </div>
+                </th>
+              ))}
             </tr>
           </thead>
           <tbody>

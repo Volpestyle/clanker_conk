@@ -680,20 +680,38 @@ button.sm {
   color: var(--ink-1);
 }
 
-.action-col-time {
-  width: 210px;
+/* Column default widths now set via inline styles from JS (persisted to localStorage) */
+
+.th-resizable {
+  display: flex;
+  align-items: center;
+  position: relative;
 }
 
-.action-col-kind {
-  width: 196px;
+.col-resize-handle {
+  position: absolute;
+  right: -6px;
+  top: -8px;
+  bottom: -8px;
+  width: 12px;
+  cursor: col-resize;
+  z-index: 3;
 }
 
-.action-col-channel {
-  width: 210px;
+.col-resize-handle::after {
+  content: "";
+  position: absolute;
+  right: 5px;
+  top: 8px;
+  bottom: 8px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background var(--transition);
 }
 
-.action-col-cost {
-  width: 122px;
+.col-resize-handle:hover::after {
+  background: var(--accent-soft);
 }
 
 .action-table .col-time,
