@@ -199,7 +199,8 @@ export function buildReplyPrompt({
   allowMemoryLookupDirective = false,
   allowMemoryDirective = false,
   voiceMode = null,
-  videoContext = null
+  videoContext = null,
+  maxMediaPromptChars = 900
 }) {
   const parts = [];
 
@@ -432,7 +433,7 @@ export function buildReplyPrompt({
       parts.push("If a generated clip is best, set media to {\"type\":\"video\",\"prompt\":\"...\"}.");
       parts.push("Use video when motion/animation is meaningfully better than a still image.");
     }
-    parts.push("Keep image/video media prompts under 480 chars, and always include normal reply text.");
+    parts.push(`Keep image/video media prompts under ${maxMediaPromptChars} chars, and always include normal reply text.`);
     parts.push(MEDIA_PROMPT_CRAFT_GUIDANCE);
   } else {
     parts.push("Reply image/video generation is unavailable right now. Respond with text only.");
@@ -538,7 +539,8 @@ export function buildInitiativePrompt({
   remainingInitiativeVideos = 0,
   discoveryFindings = [],
   maxLinksPerPost = 2,
-  requireDiscoveryLink = false
+  requireDiscoveryLink = false,
+  maxMediaPromptChars = 900
 }) {
   const parts = [];
 
@@ -576,7 +578,7 @@ export function buildInitiativePrompt({
       parts.push("If this post should include motion, append: [[VIDEO_PROMPT: your prompt here]]");
     }
     parts.push(
-      "Keep IMAGE_PROMPT, COMPLEX_IMAGE_PROMPT, and VIDEO_PROMPT under 480 chars."
+      `Keep IMAGE_PROMPT, COMPLEX_IMAGE_PROMPT, and VIDEO_PROMPT under ${maxMediaPromptChars} chars.`
     );
     parts.push(
       "Any visual prompt must avoid visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks."
