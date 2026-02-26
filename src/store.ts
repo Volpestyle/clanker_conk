@@ -741,11 +741,33 @@ function normalizeSettings(raw) {
   merged.initiative.spontaneity = clamp(Number(merged.initiative?.spontaneity) || 65, 0, 100);
   merged.initiative.postOnStartup = Boolean(merged.initiative?.postOnStartup);
   merged.initiative.allowImagePosts = Boolean(merged.initiative?.allowImagePosts);
+  merged.initiative.allowVideoPosts = Boolean(merged.initiative?.allowVideoPosts);
   merged.initiative.allowReplyImages = Boolean(merged.initiative?.allowReplyImages);
+  merged.initiative.allowReplyVideos = Boolean(merged.initiative?.allowReplyVideos);
   merged.initiative.allowReplyGifs = Boolean(merged.initiative?.allowReplyGifs);
   merged.initiative.maxImagesPerDay = clamp(Number(merged.initiative?.maxImagesPerDay) || 0, 0, 200);
+  merged.initiative.maxVideosPerDay = clamp(Number(merged.initiative?.maxVideosPerDay) || 0, 0, 120);
   merged.initiative.maxGifsPerDay = clamp(Number(merged.initiative?.maxGifsPerDay) || 0, 0, 300);
-  merged.initiative.imageModel = String(merged.initiative?.imageModel || "gpt-image-1.5").slice(0, 120);
+  merged.initiative.simpleImageModel = String(
+    merged.initiative?.simpleImageModel || "gpt-image-1.5"
+  ).slice(0, 120);
+  merged.initiative.complexImageModel = String(
+    merged.initiative?.complexImageModel || "grok-imagine-image"
+  ).slice(0, 120);
+  merged.initiative.videoModel = String(merged.initiative?.videoModel || "grok-imagine-video").slice(0, 120);
+  merged.initiative.allowedImageModels = uniqueStringList(
+    merged.initiative?.allowedImageModels ?? DEFAULT_SETTINGS.initiative?.allowedImageModels ?? [],
+    12,
+    120
+  );
+  merged.initiative.allowedVideoModels = uniqueStringList(
+    merged.initiative?.allowedVideoModels ?? DEFAULT_SETTINGS.initiative?.allowedVideoModels ?? [],
+    8,
+    120
+  );
+  if ("imageModel" in merged.initiative) {
+    delete merged.initiative.imageModel;
+  }
   if ("imagePostChancePercent" in merged.initiative) {
     delete merged.initiative.imagePostChancePercent;
   }
