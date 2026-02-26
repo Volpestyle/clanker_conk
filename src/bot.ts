@@ -736,22 +736,31 @@ export class ClankerBot {
     fallbackText = ""
   }) {
     if (!this.llm?.generate || !settings) return "";
+    const normalizedEvent = String(event || "voice_runtime")
+      .trim()
+      .toLowerCase();
+    const isVoiceSessionEnd = normalizedEvent === "voice_session_end";
+    const operationalTemperature = isVoiceSessionEnd ? 0.35 : 0.55;
+    const operationalMaxOutputTokens = isVoiceSessionEnd ? 60 : 100;
 
     const tunedSettings = {
       ...settings,
       llm: {
         ...(settings?.llm || {}),
-        temperature: clamp(Number(settings?.llm?.temperature) || 0.65, 0, 0.8),
-        maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || 120, 40, 120)
+        temperature: clamp(Number(settings?.llm?.temperature) || operationalTemperature, 0, 0.7),
+        maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || operationalMaxOutputTokens, 32, 110)
       }
     };
 
     const systemPrompt = [
       `You are ${getPromptBotName(settings)}, a Discord regular posting a voice-mode update.`,
-      `Style: ${getPromptStyle(settings, "casual and playful chat tone")}.`,
+      `Style: ${getPromptStyle(settings, "laid-back, concise, low-drama chat tone")}.`,
       "Write exactly one short user-facing message for the text channel.",
+      "Keep it chill and simple. No overexplaining.",
       "Clearly state what happened and why, especially when a request is blocked.",
       "If relevant, mention required permissions/settings plainly.",
+      "For voice_session_end, keep it to one brief sentence (4-12 words).",
+      "Avoid dramatic wording, blame, apology spirals, and long postmortems.",
       PROMPT_CAPABILITY_HONESTY_LINE,
       ...buildHardLimitsSection(settings, { maxItems: 12 }),
       "Do not output JSON, markdown headings, code blocks, labels, directives, or [SKIP].",
@@ -763,6 +772,7 @@ export class ClankerBot {
       `Reason: ${String(reason || "unknown")}`,
       `Details JSON: ${serializeForPrompt(details, 1400)}`,
       fallbackText ? `Baseline meaning: ${String(fallbackText || "").trim()}` : "",
+      isVoiceSessionEnd ? "Constraint: one chill sentence, 4-12 words." : "Constraint: one brief sentence.",
       "Return only the final message text."
     ]
       .filter(Boolean)
@@ -785,7 +795,7 @@ export class ClankerBot {
       });
 
       const parsed = parseReplyDirectives(generation.text);
-      const normalized = sanitizeBotText(normalizeSkipSentinel(parsed.text || generation.text || ""), 280);
+      const normalized = sanitizeBotText(normalizeSkipSentinel(parsed.text || generation.text || ""), 180);
       if (!normalized || normalized === "[SKIP]") return "";
       return normalized;
     } catch (error) {
