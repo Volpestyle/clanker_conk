@@ -32,6 +32,7 @@ export class VoiceSessionManager {
     this.store = store;
     this.appConfig = appConfig;
     this.sessions = new Map();
+    this.pendingSessionGuildIds = new Set();
     this.joinLocks = new Map();
     this.soundboardDirector = new SoundboardDirector({
       client,
@@ -154,12 +155,6 @@ export class VoiceSessionManager {
         });
       }
 
-      const maxConcurrentSessions = clamp(Number(settings.voice?.maxConcurrentSessions) || 1, 1, 3);
-      if (!existing && this.sessions.size >= maxConcurrentSessions) {
-        await this.sendToChannel(message.channel, "voice session cap reached right now.");
-        return true;
-      }
-
       if (!this.appConfig?.xaiApiKey) {
         await this.sendToChannel(message.channel, "voice runtime is not configured yet (missing `XAI_API_KEY`).");
         return true;
@@ -184,8 +179,21 @@ export class VoiceSessionManager {
       let xaiClient = null;
       let audioPlayer = null;
       let botAudioStream = null;
+      let reservedConcurrencySlot = false;
 
       try {
+        const maxConcurrentSessions = clamp(Number(settings.voice?.maxConcurrentSessions) || 1, 1, 3);
+        if (!existing) {
+          const activeOrPendingSessions = this.sessions.size + this.pendingSessionGuildIds.size;
+          if (activeOrPendingSessions >= maxConcurrentSessions) {
+            await this.sendToChannel(message.channel, "voice session cap reached right now.");
+            return true;
+          }
+
+          this.pendingSessionGuildIds.add(guildId);
+          reservedConcurrencySlot = true;
+        }
+
         connection = joinVoiceChannel({
           channelId: memberVoiceChannel.id,
           guildId: message.guild.id,
@@ -331,6 +339,10 @@ export class VoiceSessionManager {
 
         await this.sendToChannel(message.channel, `couldn't join voice: ${shortError(errorText)}`);
         return true;
+      } finally {
+        if (reservedConcurrencySlot) {
+          this.pendingSessionGuildIds.delete(guildId);
+        }
       }
     });
   }
@@ -463,6 +475,7 @@ export class VoiceSessionManager {
     }
 
     await this.stopAll(reason);
+    this.pendingSessionGuildIds.clear();
     this.joinLocks.clear();
   }
 
