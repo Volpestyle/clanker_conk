@@ -149,6 +149,12 @@ export const DEFAULT_SETTINGS = {
       }
     }
   },
+  memoryLlm: {
+    provider: "anthropic",
+    model: "claude-haiku-4-5",
+    temperature: 0,
+    maxOutputTokens: 320
+  },
   memory: {
     enabled: true,
     maxRecentMessages: 35,

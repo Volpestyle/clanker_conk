@@ -809,6 +809,10 @@ function normalizeSettings(raw) {
   if (!merged.initiative || typeof merged.initiative !== "object") merged.initiative = {};
   if (!merged.memory || typeof merged.memory !== "object") merged.memory = {};
   if (!merged.llm || typeof merged.llm !== "object") merged.llm = {};
+  if (merged.memoryLlm && typeof merged.memoryLlm === "object") {
+    merged.memoryLlm.provider = normalizeLlmProvider(merged.memoryLlm?.provider);
+    merged.memoryLlm.model = String(merged.memoryLlm?.model || "claude-haiku-4-5").slice(0, 120);
+  }
   if (!merged.webSearch || typeof merged.webSearch !== "object") merged.webSearch = {};
   if (!merged.videoContext || typeof merged.videoContext !== "object") merged.videoContext = {};
   if (!merged.voice || typeof merged.voice !== "object") merged.voice = {};

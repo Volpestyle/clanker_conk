@@ -156,7 +156,8 @@ export class LLMService {
     const inputText = normalizeInlineText(messageContent, 900);
     if (!inputText || inputText.length < 4) return [];
 
-    const { provider, model } = this.resolveProviderAndModel(settings?.llm ?? {});
+    const llmOverride = settings?.memoryLlm ?? settings?.llm ?? {};
+    const { provider, model } = this.resolveProviderAndModel(llmOverride);
     const boundedMaxFacts = clampInt(maxFacts, 1, 6);
     const systemPrompt = [
       "You extract durable memory facts from one Discord user message.",
