@@ -240,13 +240,13 @@ export function composeInitiativeImagePrompt(imagePrompt, postText) {
   const requested = normalizeDirectiveText(imagePrompt, MAX_MEDIA_PROMPT_LEN);
 
   return [
-    "Create a playful, meme-friendly image for a Discord post.",
+    "Create a visually striking, meme-friendly image for a Discord post. Strong subject, punchy composition, expressive mood.",
     `Creative direction: ${requested || "a timely playful internet moment"}.`,
     `Topic context for visual inspiration only: ${topic || "general chat mood"}.`,
     "Hard constraints:",
     "- Do not include any visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks.",
     "- Do not render any words from the creative direction or topic context as text inside the image.",
-    "- Make it purely visual with strong composition and expressive lighting."
+    "- Make it purely visual with strong composition, expressive lighting, and high clarity."
   ].join("\n");
 }
 
@@ -260,13 +260,55 @@ export function composeInitiativeVideoPrompt(videoPrompt, postText) {
   const requested = normalizeDirectiveText(videoPrompt, MAX_MEDIA_PROMPT_LEN);
 
   return [
-    "Create a short, dynamic, meme-friendly video for a Discord post.",
+    "Create a short, dynamic video clip optimized for social sharing. Clear motion, expressive energy, tight framing.",
     `Creative direction: ${requested || "a timely playful internet moment"}.`,
     `Topic context for visual inspiration only: ${topic || "general chat mood"}.`,
     "Hard constraints:",
     "- Do not include visible text, captions, subtitles, logos, watermarks, or UI overlays.",
-    "- Keep motion clear and readable in a short social clip format."
+    "- Keep motion purposeful, smooth, and visually readable in a short social clip format."
   ].join("\n");
+}
+
+export function composeReplyImagePrompt(imagePrompt, replyText, variant = "simple") {
+  URL_IN_TEXT_RE.lastIndex = 0;
+  const context = String(replyText || "")
+    .replace(URL_IN_TEXT_RE, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 260);
+  const requested = normalizeDirectiveText(imagePrompt, MAX_MEDIA_PROMPT_LEN);
+  const styleHint = variant === "complex"
+    ? "Create a detailed, high-quality image with rich scene composition, dramatic lighting, and cinematic depth."
+    : "Create a punchy, visually clear image with a strong subject, expressive mood, and bold composition.";
+
+  return [
+    styleHint,
+    `Creative direction: ${requested || "a fun, expressive visual moment"}.`,
+    context ? `Conversation context (visual inspiration only): ${context}.` : null,
+    "Hard constraints:",
+    "- Do not include any visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks.",
+    "- Do not render any words from the creative direction as text inside the image.",
+    "- Focus on a clear, expressive visual with strong composition and high clarity."
+  ].filter(Boolean).join("\n");
+}
+
+export function composeReplyVideoPrompt(videoPrompt, replyText) {
+  URL_IN_TEXT_RE.lastIndex = 0;
+  const context = String(replyText || "")
+    .replace(URL_IN_TEXT_RE, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 260);
+  const requested = normalizeDirectiveText(videoPrompt, MAX_MEDIA_PROMPT_LEN);
+
+  return [
+    "Create a short, dynamic video clip with clear motion, expressive energy, and tight framing.",
+    `Creative direction: ${requested || "a lively, visually engaging moment"}.`,
+    context ? `Conversation context (visual inspiration only): ${context}.` : null,
+    "Hard constraints:",
+    "- Do not include visible text, captions, subtitles, logos, watermarks, or UI overlays.",
+    "- Keep motion purposeful and visually readable in a short social clip format."
+  ].filter(Boolean).join("\n");
 }
 
 export function parseInitiativeMediaDirective(rawText) {

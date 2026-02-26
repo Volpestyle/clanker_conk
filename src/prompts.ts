@@ -414,17 +414,17 @@ export function buildReplyPrompt({
     );
     if (simpleImageAvailable) {
       parts.push("For a simple/quick visual, set media to {\"type\":\"image_simple\",\"prompt\":\"...\"}.");
-      parts.push("Use image_simple for straightforward concepts or fast meme-style visuals.");
+      parts.push("image_simple: best for punchy single-subject or meme-style visuals. Prompt format: subject + setting + mood/style (e.g. 'dramatic close-up of a cat, cinematic side lighting, dark moody background').");
     }
     if (complexImageAvailable) {
       parts.push("For a detailed/composition-heavy visual, set media to {\"type\":\"image_complex\",\"prompt\":\"...\"}.");
-      parts.push("Use image_complex for cinematic/detail-rich scenes or harder visual requests.");
+      parts.push("image_complex: best for multi-element scenes or cinematic setpieces. Prompt format: scene composition + lighting style + art direction + atmosphere (e.g. 'vast neon-lit cyberpunk street at night, rain reflections, wide-angle, photorealistic, high detail').");
     }
     if (videoGenerationAvailable) {
       parts.push("If a generated clip is best, set media to {\"type\":\"video\",\"prompt\":\"...\"}.");
-      parts.push("Use video when motion/animation is meaningfully better than a still image.");
+      parts.push("video: use when motion or animation meaningfully beats a still. Prompt format: subject + motion type + camera movement + mood (e.g. 'playful golden retriever spinning in circles, slow-motion, bright sunny park, camera gently tracking').");
     }
-    parts.push("Keep image/video media prompts concise (under 240 chars), and always include normal reply text.");
+    parts.push("Media prompt rules: no text, letters, logos, watermarks, or UI elements inside any prompt. Keep prompts under 240 chars. Always include normal reply text alongside media.");
   } else {
     parts.push("Reply image/video generation is unavailable right now. Respond with text only.");
     parts.push("Set media to null.");
@@ -567,10 +567,13 @@ export function buildInitiativePrompt({
       parts.push("If this post should include motion, append: [[VIDEO_PROMPT: your prompt here]]");
     }
     parts.push(
-      "Keep IMAGE_PROMPT, COMPLEX_IMAGE_PROMPT, and VIDEO_PROMPT concise (under 240 chars)."
+      "Keep IMAGE_PROMPT, COMPLEX_IMAGE_PROMPT, and VIDEO_PROMPT under 240 chars."
     );
     parts.push(
-      "Any visual prompt must avoid visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks."
+      "IMAGE_PROMPT / COMPLEX_IMAGE_PROMPT: describe subject + setting + lighting style + mood/art direction. No visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks inside the prompt."
+    );
+    parts.push(
+      "VIDEO_PROMPT: describe scene + motion type + camera movement + energy/mood. No text, captions, or logos inside the prompt."
     );
     parts.push(
       "If no media is needed, output only the post text. If media is needed, output at most one media directive."

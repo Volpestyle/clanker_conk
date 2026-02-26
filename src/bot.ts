@@ -24,6 +24,8 @@ import {
   collectMemberLookupKeys,
   composeInitiativeImagePrompt,
   composeInitiativeVideoPrompt,
+  composeReplyImagePrompt,
+  composeReplyVideoPrompt,
   embedWebSearchSources,
   emptyMentionResolution,
   extractMentionCandidates,
@@ -1327,7 +1329,7 @@ export class ClankerBot {
       const imageResult = await this.maybeAttachGeneratedImage({
         settings,
         text: finalText,
-        prompt: imagePrompt,
+        prompt: composeReplyImagePrompt(imagePrompt, finalText, "simple"),
         variant: "simple",
         trace: {
           guildId: message.guildId,
@@ -1347,7 +1349,7 @@ export class ClankerBot {
       const imageResult = await this.maybeAttachGeneratedImage({
         settings,
         text: finalText,
-        prompt: complexImagePrompt,
+        prompt: composeReplyImagePrompt(complexImagePrompt, finalText, "complex"),
         variant: "complex",
         trace: {
           guildId: message.guildId,
@@ -1367,7 +1369,7 @@ export class ClankerBot {
       const videoResult = await this.maybeAttachGeneratedVideo({
         settings,
         text: finalText,
-        prompt: videoPrompt,
+        prompt: composeReplyVideoPrompt(videoPrompt, finalText),
         trace: {
           guildId: message.guildId,
           channelId: message.channelId,
