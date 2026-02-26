@@ -1231,6 +1231,9 @@ function normalizeSettings(raw) {
   if (!merged.voice.sttPipeline || typeof merged.voice.sttPipeline !== "object") {
     merged.voice.sttPipeline = {};
   }
+  if (!merged.voice.replyDecisionLlm || typeof merged.voice.replyDecisionLlm !== "object") {
+    merged.voice.replyDecisionLlm = {};
+  }
   if (!merged.voice.streamWatch || typeof merged.voice.streamWatch !== "object") {
     merged.voice.streamWatch = {};
   }
@@ -1243,6 +1246,7 @@ function normalizeSettings(raw) {
   const defaultVoiceOpenAiRealtime = defaultVoice.openaiRealtime || {};
   const defaultVoiceGeminiRealtime = defaultVoice.geminiRealtime || {};
   const defaultVoiceSttPipeline = defaultVoice.sttPipeline || {};
+  const defaultVoiceReplyDecisionLlm = defaultVoice.replyDecisionLlm || {};
   const defaultVoiceStreamWatch = defaultVoice.streamWatch || {};
   const defaultVoiceSoundboard = defaultVoice.soundboard || {};
   const voiceIntentThresholdRaw = Number(merged.voice?.intentConfidenceThreshold);
@@ -1307,6 +1311,24 @@ function normalizeSettings(raw) {
   merged.voice.eagerCooldownSeconds = clamp(
     Number.isFinite(voiceEagerCooldownRaw) ? voiceEagerCooldownRaw : 45, 10, 300
   );
+  merged.voice.replyDecisionLlm.provider = normalizeLlmProvider(
+    merged.voice?.replyDecisionLlm?.provider || defaultVoiceReplyDecisionLlm.provider || "anthropic"
+  );
+  const replyDecisionModelFallback = String(
+    defaultVoiceReplyDecisionLlm.model || defaultModelForLlmProvider(merged.voice.replyDecisionLlm.provider)
+  )
+    .trim()
+    .slice(0, 120);
+  merged.voice.replyDecisionLlm.model = String(
+    merged.voice?.replyDecisionLlm?.model ||
+      replyDecisionModelFallback ||
+      defaultModelForLlmProvider(merged.voice.replyDecisionLlm.provider)
+  )
+    .trim()
+    .slice(0, 120);
+  if (!merged.voice.replyDecisionLlm.model) {
+    merged.voice.replyDecisionLlm.model = defaultModelForLlmProvider(merged.voice.replyDecisionLlm.provider);
+  }
 
   merged.voice.xai.voice = String(merged.voice?.xai?.voice || defaultVoiceXai.voice || "Rex").slice(0, 60);
   merged.voice.xai.audioFormat = String(merged.voice?.xai?.audioFormat || defaultVoiceXai.audioFormat || "audio/pcm")
@@ -1678,6 +1700,13 @@ function normalizeLlmProvider(value) {
   if (normalized === "xai") return "xai";
   if (normalized === "claude-code") return "claude-code";
   return "openai";
+}
+
+function defaultModelForLlmProvider(provider) {
+  if (provider === "anthropic") return "claude-haiku-4-5";
+  if (provider === "xai") return "grok-3-mini-latest";
+  if (provider === "claude-code") return "sonnet";
+  return "gpt-4.1-mini";
 }
 
 function normalizeVoiceMode(value, fallback = "voice_agent") {

@@ -4,6 +4,7 @@ import {
   getRealtimeCommitMinimumBytes,
   getRealtimeRuntimeLabel,
   isRecoverableRealtimeError,
+  isVoiceTurnAddressedToBot,
   resolveRealtimeProvider,
   resolveVoiceRuntimeMode,
   transcriptSourceFromEventType
@@ -55,4 +56,11 @@ test("Gemini realtime mode resolves to gemini provider and label", () => {
 test("transcriptSourceFromEventType classifies Gemini transcription events", () => {
   assert.equal(transcriptSourceFromEventType("input_audio_transcription"), "input");
   assert.equal(transcriptSourceFromEventType("output_audio_transcription"), "output");
+});
+
+test("isVoiceTurnAddressedToBot catches common ASR wake-word variants", () => {
+  const settings = { botName: "clanker conk" };
+  assert.equal(isVoiceTurnAddressedToBot("Planky, what did you do today?", settings), true);
+  assert.equal(isVoiceTurnAddressedToBot("Linky can you answer this?", settings), true);
+  assert.equal(isVoiceTurnAddressedToBot("i sent you a link yesterday", settings), false);
 });

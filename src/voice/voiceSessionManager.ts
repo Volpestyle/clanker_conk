@@ -78,7 +78,8 @@ const BOT_DISCONNECT_GRACE_MS = 2500;
 const STT_CONTEXT_MAX_MESSAGES = 10;
 const STT_TRANSCRIPT_MAX_CHARS = 700;
 const STT_REPLY_MAX_CHARS = 520;
-const VOICE_TURN_FOCUS_TTL_MS = 28_000;
+const VOICE_TURN_FOCUS_TTL_MS = 90_000;
+const VOICE_TURN_RECENT_SPEAKER_WINDOW_MS = 120_000;
 const VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS = 260;
 const REALTIME_ECHO_SUPPRESSION_MS = 1800;
 const REALTIME_INSTRUCTION_REFRESH_DEBOUNCE_MS = 220;
@@ -647,6 +648,8 @@ export class VoiceSessionManager {
           realtimeOutputSampleRateHz,
           focusedSpeakerUserId: null,
           focusedSpeakerExpiresAt: 0,
+          lastHumanTurnUserId: null,
+          lastHumanTurnAt: 0,
           connection,
           realtimeClient,
           audioPlayer,
@@ -2417,6 +2420,12 @@ export class VoiceSessionManager {
     if (!isRealtimeMode(session.mode)) return;
     if (!pcmBuffer?.length) return;
 
+    const normalizedUserId = String(userId || "").trim();
+    if (normalizedUserId) {
+      session.lastHumanTurnUserId = normalizedUserId;
+      session.lastHumanTurnAt = Date.now();
+    }
+
     const settings = session.settingsSnapshot || this.store.getSettings();
     let turnTranscript = "";
     let decision = this.assessVoiceTurnAddressing({
@@ -2518,6 +2527,8 @@ export class VoiceSessionManager {
             replyEagerness: clamp(replyEagerness, 0, 100),
             transcript: decision.transcript || turnTranscript || null,
             llmResponse: eagerness.llmResponse || null,
+            llmProvider: eagerness.llmProvider || null,
+            llmModel: eagerness.llmModel || null,
             error: eagerness.error || null
           }
         });
@@ -2610,6 +2621,11 @@ export class VoiceSessionManager {
 
     const botName = getPromptBotName(settings);
     const participantCount = this.countHumanVoiceParticipants(session);
+    const replyDecisionLlm = settings?.voice?.replyDecisionLlm || {};
+    const llmProvider = normalizeVoiceReplyDecisionProvider(replyDecisionLlm?.provider);
+    const llmModel = String(replyDecisionLlm?.model || defaultVoiceReplyDecisionModel(llmProvider))
+      .trim()
+      .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
 
     const focusedSpeakerExpiresAt = Number(session?.focusedSpeakerExpiresAt || 0);
     const focusedSpeakerUserId = String(session?.focusedSpeakerUserId || "").trim();
@@ -2620,7 +2636,9 @@ export class VoiceSessionManager {
     const eagernessSettings = {
       ...settings,
       llm: {
-        ...(settings?.memoryLlm || settings?.llm || {}),
+        ...(settings?.llm || {}),
+        provider: llmProvider,
+        model: llmModel,
         temperature: 0.1,
         maxOutputTokens: 4
       }
@@ -2629,6 +2647,8 @@ export class VoiceSessionManager {
     const systemPrompt = [
       `You decide whether a Discord voice bot named "${botName}" should chime into a conversation it was NOT directly addressed in.`,
       `Reply eagerness: ${replyEagerness}/100 (0=never, 25=only highly relevant, 50=real value, 75=fairly chatty, 100=most conversations).`,
+      "In low-participant channels (one speaker plus bot context), lean more toward YES when the speaker asks a direct question or clearly invites a response.",
+      "If the transcript contains a likely ASR variant of the bot name (like clanky/planky/linky), treat that as a direct address and answer YES.",
       "Say YES if the bot genuinely has something to add — a helpful answer, relevant knowledge, or natural social moment. Say NO if chiming in would feel intrusive or the bot has nothing useful to contribute.",
       "Answer YES or NO only."
     ].join("\n");
@@ -2641,6 +2661,12 @@ export class VoiceSessionManager {
       "someone";
 
     let userPrompt = `Voice channel with ${participantCount} people. ${speakerName} said: "${normalizedTranscript}"`;
+    if (participantCount <= 2) {
+      userPrompt += "\nThis is effectively a one-person conversation with the bot listening in.";
+    }
+    if (/[?]\s*$/.test(normalizedTranscript)) {
+      userPrompt += "\nThe latest turn sounds like a question.";
+    }
     if (focusExpiredRecently) {
       const elapsedSec = Math.round((now - focusedSpeakerExpiresAt) / 1000);
       userPrompt += `\nThe bot was in this conversation recently but hasn't been addressed in ${elapsedSec}s.`;
@@ -2661,10 +2687,25 @@ export class VoiceSessionManager {
       });
 
       const raw = String(generation?.text || "").trim();
-      const shouldChimeIn = /^y/i.test(raw);
-      return { shouldChimeIn, reason: shouldChimeIn ? "llm_yes" : "llm_no", llmResponse: raw };
+      const token = String(raw.split(/\s+/g)[0] || "")
+        .replace(/[^a-z]/gi, "")
+        .toLowerCase();
+      const shouldChimeIn = token === "yes";
+      return {
+        shouldChimeIn,
+        reason: shouldChimeIn ? "llm_yes" : "llm_no",
+        llmResponse: raw,
+        llmProvider,
+        llmModel
+      };
     } catch (error) {
-      return { shouldChimeIn: false, reason: "llm_error", error: String(error?.message || error) };
+      return {
+        shouldChimeIn: false,
+        reason: "llm_error",
+        error: String(error?.message || error),
+        llmProvider,
+        llmModel
+      };
     }
   }
 
@@ -2673,7 +2714,17 @@ export class VoiceSessionManager {
     const participantCount = this.countHumanVoiceParticipants(session);
     const focusedSpeakerUserId = String(session?.focusedSpeakerUserId || "").trim();
     const focusedSpeakerExpiresAt = Number(session?.focusedSpeakerExpiresAt || 0);
-    const focusActive = Boolean(focusedSpeakerUserId && focusedSpeakerExpiresAt > now);
+    const lastHumanTurnUserId = String(session?.lastHumanTurnUserId || "").trim();
+    const lastHumanTurnAt = Number(session?.lastHumanTurnAt || 0);
+    const hasRecentSpeakerSignal = Boolean(
+      lastHumanTurnUserId &&
+        lastHumanTurnAt > 0 &&
+        now - lastHumanTurnAt <= VOICE_TURN_RECENT_SPEAKER_WINDOW_MS
+    );
+    const focusActive = Boolean(
+      focusedSpeakerUserId &&
+        (hasRecentSpeakerSignal ? lastHumanTurnUserId === focusedSpeakerUserId : focusedSpeakerExpiresAt > now)
+    );
     const normalizedTranscript = normalizeVoiceText(transcript, VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS);
 
     if (!focusActive && focusedSpeakerUserId) {
@@ -2696,6 +2747,20 @@ export class VoiceSessionManager {
 
     if (focusActive && focusedSpeakerUserId === String(userId || "")) {
       if (!normalizedTranscript) {
+        if (participantCount <= 2) {
+          session.focusedSpeakerUserId = String(userId || "");
+          session.focusedSpeakerExpiresAt = now + VOICE_TURN_FOCUS_TTL_MS;
+          return {
+            allow: true,
+            reason: "focused_speaker_followup_no_transcript",
+            participantCount,
+            focusActive: true,
+            focusedSpeakerUserId: session.focusedSpeakerUserId,
+            needsTranscript: false,
+            addressed: null,
+            transcript: ""
+          };
+        }
         return {
           allow: false,
           reason: "needs_addressing_transcript",
@@ -2707,12 +2772,14 @@ export class VoiceSessionManager {
           transcript: ""
         };
       }
+      session.focusedSpeakerUserId = String(userId || "");
+      session.focusedSpeakerExpiresAt = now + VOICE_TURN_FOCUS_TTL_MS;
       return {
         allow: true,
         reason: "focused_speaker_followup",
         participantCount,
         focusActive: true,
-        focusedSpeakerUserId,
+        focusedSpeakerUserId: session.focusedSpeakerUserId,
         needsTranscript: false,
         addressed: normalizedTranscript ? isVoiceTurnAddressedToBot(normalizedTranscript, settings) : null,
         transcript: normalizedTranscript
@@ -3116,6 +3183,12 @@ export class VoiceSessionManager {
     if (!pcmBuffer?.length) return;
     if (!this.llm?.transcribeAudio || !this.llm?.synthesizeSpeech) return;
 
+    const normalizedUserId = String(userId || "").trim();
+    if (normalizedUserId) {
+      session.lastHumanTurnUserId = normalizedUserId;
+      session.lastHumanTurnAt = Date.now();
+    }
+
     const settings = session.settingsSnapshot || this.store.getSettings();
     const sttSettings = settings?.voice?.sttPipeline || {};
     const transcriptionModel =
@@ -3184,6 +3257,8 @@ export class VoiceSessionManager {
             replyEagerness: clamp(replyEagerness, 0, 100),
             transcript: turnDecision.transcript || transcript || null,
             llmResponse: eagerness.llmResponse || null,
+            llmProvider: eagerness.llmProvider || null,
+            llmModel: eagerness.llmModel || null,
             error: eagerness.error || null
           }
         });
@@ -4268,4 +4343,21 @@ export class VoiceSessionManager {
 
     return `i need ${formatNaturalList(missing)} permissions in that vc before i can join.`;
   }
+}
+
+function normalizeVoiceReplyDecisionProvider(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "anthropic") return "anthropic";
+  if (normalized === "xai") return "xai";
+  if (normalized === "claude-code") return "claude-code";
+  return "openai";
+}
+
+function defaultVoiceReplyDecisionModel(provider) {
+  if (provider === "anthropic") return "claude-haiku-4-5";
+  if (provider === "xai") return "grok-3-mini-latest";
+  if (provider === "claude-code") return "sonnet";
+  return "gpt-4.1-mini";
 }

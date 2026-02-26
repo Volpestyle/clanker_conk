@@ -51,6 +51,14 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
     : isClaudeCodeProvider
       ? (providerModelOptions[0] || "")
       : CUSTOM_MODEL_OPTION_VALUE;
+  const voiceReplyDecisionModelOptions = resolveProviderModelOptions(modelCatalog, form.voiceReplyDecisionLlmProvider);
+  const isVoiceReplyDecisionClaudeCodeProvider = form.voiceReplyDecisionLlmProvider === "claude-code";
+  const normalizedVoiceReplyDecisionModel = String(form.voiceReplyDecisionLlmModel || "").trim();
+  const selectedVoiceReplyDecisionPresetModel = voiceReplyDecisionModelOptions.includes(normalizedVoiceReplyDecisionModel)
+    ? normalizedVoiceReplyDecisionModel
+    : isVoiceReplyDecisionClaudeCodeProvider
+      ? (voiceReplyDecisionModelOptions[0] || "")
+      : CUSTOM_MODEL_OPTION_VALUE;
   const isVoiceAgentMode = form.voiceMode === "voice_agent";
   const isOpenAiRealtimeMode = form.voiceMode === "openai_realtime";
   const isGeminiRealtimeMode = form.voiceMode === "gemini_realtime";
@@ -81,6 +89,25 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
     const selected = String(e.target.value || "");
     if (selected === CUSTOM_MODEL_OPTION_VALUE) return;
     setForm((current) => ({ ...current, model: selected }));
+  }
+
+  function setVoiceReplyDecisionProvider(e) {
+    const provider = String(e.target.value || "").trim();
+    setForm((current) => {
+      const next = { ...current, voiceReplyDecisionLlmProvider: provider };
+      if (provider !== "claude-code") return next;
+      const options = resolveProviderModelOptions(modelCatalog, provider);
+      const currentModel = String(current?.voiceReplyDecisionLlmModel || "").trim();
+      if (options.includes(currentModel)) return next;
+      next.voiceReplyDecisionLlmModel = options[0] || "sonnet";
+      return next;
+    });
+  }
+
+  function selectVoiceReplyDecisionPresetModel(e) {
+    const selected = String(e.target.value || "");
+    if (selected === CUSTOM_MODEL_OPTION_VALUE) return;
+    setForm((current) => ({ ...current, voiceReplyDecisionLlmModel: selected }));
   }
 
   function submit(e) {
@@ -549,6 +576,48 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
                 />
               </div>
             </div>
+
+            <h4>Chime-In Decider LLM</h4>
+            <div className="split">
+              <div>
+                <label htmlFor="voice-reply-decision-provider">Provider</label>
+                <select
+                  id="voice-reply-decision-provider"
+                  value={form.voiceReplyDecisionLlmProvider}
+                  onChange={setVoiceReplyDecisionProvider}
+                >
+                  <option value="openai">openai</option>
+                  <option value="anthropic">anthropic</option>
+                  <option value="xai">xai (grok)</option>
+                  <option value="claude-code">claude code (local)</option>
+                </select>
+              </div>
+              <div>
+                <label htmlFor="voice-reply-decision-model-preset">Model Preset</label>
+                <select
+                  id="voice-reply-decision-model-preset"
+                  value={selectedVoiceReplyDecisionPresetModel}
+                  onChange={selectVoiceReplyDecisionPresetModel}
+                >
+                  {voiceReplyDecisionModelOptions.map((modelId) => (
+                    <option key={modelId} value={modelId}>
+                      {modelId}
+                    </option>
+                  ))}
+                  {!isVoiceReplyDecisionClaudeCodeProvider && (
+                    <option value={CUSTOM_MODEL_OPTION_VALUE}>custom model (manual)</option>
+                  )}
+                </select>
+              </div>
+            </div>
+            <label htmlFor="voice-reply-decision-model">Model ID</label>
+            <input
+              id="voice-reply-decision-model"
+              type="text"
+              value={form.voiceReplyDecisionLlmModel}
+              onChange={set("voiceReplyDecisionLlmModel")}
+              disabled={isVoiceReplyDecisionClaudeCodeProvider}
+            />
 
             {/* -- xAI voice agent -- */}
             {isVoiceAgentMode && (

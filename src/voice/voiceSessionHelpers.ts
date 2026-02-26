@@ -307,7 +307,11 @@ export function isVoiceTurnAddressedToBot(transcript, settings) {
   if (hasBotKeyword(normalized)) return true;
 
   // Common STT mishearings of "clanker" variants
-  if (/\b(?:cranker|klank(?:er)?|clonk(?:er)?|klonk(?:er)?|kronk(?:er)?|planker|blanker)\b/i.test(normalized)) {
+  if (
+    /\b(?:cranker|klank(?:er|y)?|clonk(?:er|y)?|klonk(?:er|y)?|kronk(?:er|y)?|plank(?:er|y)?|blank(?:er|y)?|linky)\b/i.test(
+      normalized
+    )
+  ) {
     return true;
   }
 
