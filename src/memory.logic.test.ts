@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { __memoryTestables } from "./memory.ts";
+import { MemoryManager, __memoryTestables } from "./memory.ts";
 
 test("memory grounding requires substantial overlap", () => {
   const source = "I talked about pizza and coding today.";
@@ -42,4 +42,43 @@ test("channel scope score prefers same channel and gives small credit to unknown
   assert.equal(__memoryTestables.computeChannelScopeScore("chan-2", "chan-1"), 0);
   assert.equal(__memoryTestables.computeChannelScopeScore("", "chan-1"), 0.25);
   assert.equal(__memoryTestables.computeChannelScopeScore("chan-1", ""), 0);
+});
+
+test("strict relevance mode returns no results when every candidate is weak", async () => {
+  const memory = new MemoryManager({
+    store: {},
+    llm: {
+      isEmbeddingReady() {
+        return false;
+      }
+    },
+    memoryFilePath: "memory/MEMORY.md"
+  });
+
+  const candidates = [
+    {
+      id: 1,
+      created_at: new Date().toISOString(),
+      channel_id: "chan-1",
+      confidence: 0.8,
+      fact: "User likes long walks.",
+      evidence_text: "long walks"
+    }
+  ];
+
+  const strictResults = await memory.rankHybridCandidates({
+    candidates,
+    queryText: "database replication",
+    settings: {},
+    requireRelevanceGate: true
+  });
+  assert.equal(strictResults.length, 0);
+
+  const fallbackResults = await memory.rankHybridCandidates({
+    candidates,
+    queryText: "database replication",
+    settings: {},
+    requireRelevanceGate: false
+  });
+  assert.equal(fallbackResults.length, 1);
 });

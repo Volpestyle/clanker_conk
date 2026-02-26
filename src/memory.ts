@@ -26,36 +26,52 @@ export class MemoryManager {
     this.pendingWrite = false;
     this.initializedDailyFiles = new Set();
     this.ingestQueue = [];
-    this.ingestQueuedIds = new Set();
+    this.ingestQueuedJobs = new Map();
     this.ingestWorkerActive = false;
     this.maxIngestQueue = 400;
   }
 
   async ingestMessage({ messageId, authorId, authorName, content, settings, trace = {} }) {
     const normalizedMessageId = String(messageId || "").trim();
-    if (!normalizedMessageId) return;
-    if (this.ingestQueuedIds.has(normalizedMessageId)) return;
+    if (!normalizedMessageId) return false;
+
+    const existingJob = this.ingestQueuedJobs.get(normalizedMessageId);
+    if (existingJob?.promise) {
+      return existingJob.promise;
+    }
 
     if (this.ingestQueue.length >= this.maxIngestQueue) {
       const dropped = this.ingestQueue.shift();
       if (dropped?.messageId) {
-        this.ingestQueuedIds.delete(dropped.messageId);
+        this.ingestQueuedJobs.delete(dropped.messageId);
+      }
+      if (typeof dropped?.resolve === "function") {
+        dropped.resolve(false);
       }
       this.logMemoryError("ingest_queue_overflow", "ingest queue full; dropping oldest message", {
         droppedMessageId: dropped?.messageId || null
       });
     }
 
-    this.ingestQueue.push({
+    let resolveJob = () => undefined;
+    const promise = new Promise((resolve) => {
+      resolveJob = resolve;
+    });
+
+    const job = {
       messageId: normalizedMessageId,
       authorId: String(authorId || "").trim(),
       authorName: String(authorName || "unknown"),
       content,
       settings,
-      trace
-    });
-    this.ingestQueuedIds.add(normalizedMessageId);
+      trace,
+      resolve: resolveJob,
+      promise
+    };
+    this.ingestQueue.push(job);
+    this.ingestQueuedJobs.set(normalizedMessageId, job);
     this.runIngestWorker().catch(() => undefined);
+    return promise;
   }
 
   async runIngestWorker() {
@@ -66,14 +82,16 @@ export class MemoryManager {
       while (this.ingestQueue.length) {
         const job = this.ingestQueue.shift();
         if (!job) continue;
-        this.ingestQueuedIds.delete(job.messageId);
+        this.ingestQueuedJobs.delete(job.messageId);
         try {
           await this.processIngestMessage(job);
+          if (typeof job.resolve === "function") job.resolve(true);
         } catch (error) {
           this.logMemoryError("ingest_worker", error, {
             messageId: job.messageId,
             userId: job.authorId
           });
+          if (typeof job.resolve === "function") job.resolve(false);
         }
       }
     } finally {
@@ -243,7 +261,8 @@ export class MemoryManager {
       queryText,
       settings,
       trace,
-      channelId
+      channelId,
+      requireRelevanceGate: true
     });
 
     return ranked.slice(0, boundedLimit).map((row) => ({
@@ -304,7 +323,14 @@ export class MemoryManager {
     }));
   }
 
-  async rankHybridCandidates({ candidates, queryText, settings, trace = {}, channelId = null }) {
+  async rankHybridCandidates({
+    candidates,
+    queryText,
+    settings,
+    trace = {},
+    channelId = null,
+    requireRelevanceGate = false
+  }) {
     const query = String(queryText || "").trim();
     const queryTokens = extractStableTokens(query, 32);
     const queryCompact = normalizeHighlightText(query);
@@ -335,15 +361,18 @@ export class MemoryManager {
       return Date.parse(b.created_at || "") - Date.parse(a.created_at || "");
     });
 
-    const filtered = queryTokens.length || semanticAvailable
-      ? sorted.filter((row) =>
-        passesHybridRelevanceGate({
-          row,
-          semanticAvailable
-        }))
-      : sorted;
+    if (!queryTokens.length && !semanticAvailable) {
+      return sorted;
+    }
 
-    return (filtered.length ? filtered : sorted);
+    const filtered = sorted.filter((row) =>
+      passesHybridRelevanceGate({
+        row,
+        semanticAvailable
+      }));
+    if (filtered.length) return filtered;
+    if (requireRelevanceGate) return [];
+    return sorted;
   }
 
   async getSemanticScoreMap({ candidates, queryText, settings, trace = {} }) {

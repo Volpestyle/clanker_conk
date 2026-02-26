@@ -76,6 +76,23 @@ export class Store {
         UNIQUE(fact_id, model)
       );
 
+      CREATE TABLE IF NOT EXISTS memory_fact_orphans (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL,
+        archived_at TEXT NOT NULL,
+        source_stage TEXT NOT NULL,
+        legacy_fact_id INTEGER,
+        guild_id TEXT,
+        channel_id TEXT,
+        subject TEXT NOT NULL,
+        fact TEXT NOT NULL,
+        fact_type TEXT NOT NULL DEFAULT 'general',
+        evidence_text TEXT,
+        source_message_id TEXT,
+        confidence REAL NOT NULL DEFAULT 0.5,
+        reason TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS shared_links (
         url TEXT PRIMARY KEY,
         first_shared_at TEXT NOT NULL,
@@ -90,16 +107,21 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_actions_time ON actions(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_memory_vectors_fact_model ON memory_fact_vectors(fact_id, model);
       CREATE INDEX IF NOT EXISTS idx_memory_vectors_model ON memory_fact_vectors(model);
+      CREATE INDEX IF NOT EXISTS idx_memory_orphans_stage_time ON memory_fact_orphans(source_stage, archived_at DESC);
       CREATE INDEX IF NOT EXISTS idx_shared_links_last_shared_at ON shared_links(last_shared_at DESC);
     `);
-    this.ensureMemoryFactsSchema();
-    this.reconcileLegacyScopedFacts();
+    const schemaMigrationSummary = this.ensureMemoryFactsSchema();
+    const legacyReconcileSummary = this.reconcileLegacyScopedFacts();
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_memory_scope_subject ON memory_facts(guild_id, subject, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_memory_scope_channel ON memory_facts(guild_id, channel_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_memory_scope_subject_type ON memory_facts(guild_id, subject, fact_type, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_memory_scope_active ON memory_facts(guild_id, is_active, created_at DESC);
     `);
+    this.logMemoryMigrationSummary({
+      schemaMigrationSummary,
+      legacyReconcileSummary
+    });
 
     if (!this.db.prepare("SELECT 1 FROM settings WHERE key = ?").get(SETTINGS_KEY)) {
       const defaultSettings = normalizeSettings(DEFAULT_SETTINGS);
@@ -681,9 +703,9 @@ export class Store {
     ]);
     const hasAllColumns = columns.length && [...required].every((column) => columns.includes(column));
     const hasScopedUnique = this.hasMemoryScopedUniqueConstraint();
-    if (hasAllColumns && hasScopedUnique) return;
+    if (hasAllColumns && hasScopedUnique) return null;
 
-    this.migrateMemoryFactsTable(new Set(columns));
+    return this.migrateMemoryFactsTable(new Set(columns));
   }
 
   hasMemoryScopedUniqueConstraint() {
@@ -712,6 +734,9 @@ export class Store {
     const hasSourceMessageId = columnSet.has("source_message_id");
     const hasConfidence = columnSet.has("confidence");
     const hasIsActive = columnSet.has("is_active");
+    const now = nowIso();
+    let migratedCount = 0;
+    let archivedCount = 0;
 
     this.db.exec("BEGIN");
     try {
@@ -743,9 +768,47 @@ export class Store {
       const factTypeExpr = hasFactType ? "COALESCE(NULLIF(fact_type, ''), 'general')" : "'general'";
       const evidenceExpr = hasEvidenceText ? "evidence_text" : "NULL";
       const sourceExpr = hasSourceMessageId ? "source_message_id" : "NULL";
+      const legacyGuildExpr = hasGuildId ? "NULLIF(memory_facts_legacy.guild_id, '')" : "NULL";
       const confidenceExpr = hasConfidence ? "COALESCE(confidence, 0.5)" : "0.5";
       const activeExpr = hasIsActive ? "CASE WHEN is_active = 0 THEN 0 ELSE 1 END" : "1";
       const guildWhereExpr = `WHERE ${guildExpr} IS NOT NULL`;
+
+      this.db
+        .prepare(
+          `INSERT INTO memory_fact_orphans(
+            created_at,
+            archived_at,
+            source_stage,
+            legacy_fact_id,
+            guild_id,
+            channel_id,
+            subject,
+            fact,
+            fact_type,
+            evidence_text,
+            source_message_id,
+            confidence,
+            reason
+          )
+          SELECT
+            created_at,
+            ?,
+            'schema_migration',
+            id,
+            ${legacyGuildExpr},
+            ${channelExpr},
+            subject,
+            fact,
+            ${factTypeExpr},
+            ${evidenceExpr},
+            ${sourceExpr},
+            ${confidenceExpr},
+            'missing_guild_scope'
+          FROM memory_facts_legacy
+          WHERE ${guildExpr} IS NULL`
+        )
+        .run(now);
+      archivedCount += getSqlChanges(this.db);
 
       this.db.exec(
         `INSERT INTO memory_facts(
@@ -778,9 +841,14 @@ export class Store {
         FROM memory_facts_legacy
         ${guildWhereExpr};`
       );
+      migratedCount += getSqlChanges(this.db);
 
       this.db.exec("DROP TABLE memory_facts_legacy;");
       this.db.exec("COMMIT");
+      return {
+        migratedCount,
+        archivedCount
+      };
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;
@@ -790,39 +858,167 @@ export class Store {
   reconcileLegacyScopedFacts() {
     const inferredLegacyGuildExpr = buildInferredGuildExpr("legacy");
     const inferredCurrentGuildExpr = buildInferredGuildExpr("memory_facts");
-    this.db.exec(`
-      DELETE FROM memory_fact_vectors
-      WHERE fact_id IN (
-        SELECT legacy.id
-        FROM memory_facts AS legacy
-        JOIN memory_facts AS scoped
-          ON scoped.guild_id = ${inferredLegacyGuildExpr}
-         AND scoped.subject = legacy.subject
-         AND scoped.fact = legacy.fact
-        WHERE legacy.guild_id = '__legacy__'
-          AND ${inferredLegacyGuildExpr} IS NOT NULL
-      );
-      DELETE FROM memory_facts
-      WHERE id IN (
-        SELECT legacy.id
-        FROM memory_facts AS legacy
-        JOIN memory_facts AS scoped
-          ON scoped.guild_id = ${inferredLegacyGuildExpr}
-         AND scoped.subject = legacy.subject
-         AND scoped.fact = legacy.fact
-        WHERE legacy.guild_id = '__legacy__'
-          AND ${inferredLegacyGuildExpr} IS NOT NULL
-      );
-      UPDATE memory_facts
-      SET guild_id = ${inferredCurrentGuildExpr}
-      WHERE guild_id = '__legacy__'
-        AND ${inferredCurrentGuildExpr} IS NOT NULL;
-      DELETE FROM memory_fact_vectors
-      WHERE fact_id IN (
-        SELECT id FROM memory_facts WHERE guild_id = '__legacy__'
-      );
-      DELETE FROM memory_facts WHERE guild_id = '__legacy__';
-    `);
+    const now = nowIso();
+    let archivedCount = 0;
+    let reassignedCount = 0;
+    let removedDuplicateCount = 0;
+    let removedUnresolvedCount = 0;
+
+    this.db.exec("BEGIN");
+    try {
+      this.db
+        .prepare(
+          `INSERT INTO memory_fact_orphans(
+            created_at,
+            archived_at,
+            source_stage,
+            legacy_fact_id,
+            guild_id,
+            channel_id,
+            subject,
+            fact,
+            fact_type,
+            evidence_text,
+            source_message_id,
+            confidence,
+            reason
+          )
+          SELECT
+            legacy.created_at,
+            ?,
+            'legacy_reconcile',
+            legacy.id,
+            legacy.guild_id,
+            legacy.channel_id,
+            legacy.subject,
+            legacy.fact,
+            legacy.fact_type,
+            legacy.evidence_text,
+            legacy.source_message_id,
+            legacy.confidence,
+            'superseded_by_scoped_duplicate'
+          FROM memory_facts AS legacy
+          JOIN memory_facts AS scoped
+            ON scoped.guild_id = ${inferredLegacyGuildExpr}
+           AND scoped.subject = legacy.subject
+           AND scoped.fact = legacy.fact
+          WHERE legacy.guild_id = '__legacy__'
+            AND ${inferredLegacyGuildExpr} IS NOT NULL`
+        )
+        .run(now);
+      archivedCount += getSqlChanges(this.db);
+
+      this.db.exec(`
+        DELETE FROM memory_fact_vectors
+        WHERE fact_id IN (
+          SELECT legacy.id
+          FROM memory_facts AS legacy
+          JOIN memory_facts AS scoped
+            ON scoped.guild_id = ${inferredLegacyGuildExpr}
+           AND scoped.subject = legacy.subject
+           AND scoped.fact = legacy.fact
+          WHERE legacy.guild_id = '__legacy__'
+            AND ${inferredLegacyGuildExpr} IS NOT NULL
+        );
+      `);
+      this.db.exec(`
+        DELETE FROM memory_facts
+        WHERE id IN (
+          SELECT legacy.id
+          FROM memory_facts AS legacy
+          JOIN memory_facts AS scoped
+            ON scoped.guild_id = ${inferredLegacyGuildExpr}
+           AND scoped.subject = legacy.subject
+           AND scoped.fact = legacy.fact
+          WHERE legacy.guild_id = '__legacy__'
+            AND ${inferredLegacyGuildExpr} IS NOT NULL
+        );
+      `);
+      removedDuplicateCount += getSqlChanges(this.db);
+
+      this.db.exec(`
+        UPDATE memory_facts
+        SET guild_id = ${inferredCurrentGuildExpr}
+        WHERE guild_id = '__legacy__'
+          AND ${inferredCurrentGuildExpr} IS NOT NULL;
+      `);
+      reassignedCount += getSqlChanges(this.db);
+
+      this.db
+        .prepare(
+          `INSERT INTO memory_fact_orphans(
+            created_at,
+            archived_at,
+            source_stage,
+            legacy_fact_id,
+            guild_id,
+            channel_id,
+            subject,
+            fact,
+            fact_type,
+            evidence_text,
+            source_message_id,
+            confidence,
+            reason
+          )
+          SELECT
+            created_at,
+            ?,
+            'legacy_reconcile',
+            id,
+            guild_id,
+            channel_id,
+            subject,
+            fact,
+            fact_type,
+            evidence_text,
+            source_message_id,
+            confidence,
+            'missing_guild_scope'
+          FROM memory_facts
+          WHERE guild_id = '__legacy__'`
+        )
+        .run(now);
+      archivedCount += getSqlChanges(this.db);
+
+      this.db.exec(`
+        DELETE FROM memory_fact_vectors
+        WHERE fact_id IN (
+          SELECT id FROM memory_facts WHERE guild_id = '__legacy__'
+        );
+      `);
+      this.db.exec("DELETE FROM memory_facts WHERE guild_id = '__legacy__';");
+      removedUnresolvedCount += getSqlChanges(this.db);
+
+      this.db.exec("COMMIT");
+      return {
+        archivedCount,
+        reassignedCount,
+        removedDuplicateCount,
+        removedUnresolvedCount
+      };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+
+  logMemoryMigrationSummary({ schemaMigrationSummary, legacyReconcileSummary }) {
+    const summary = {
+      migrated: Number(schemaMigrationSummary?.migratedCount || 0),
+      archived: Number(schemaMigrationSummary?.archivedCount || 0) + Number(legacyReconcileSummary?.archivedCount || 0),
+      reassignedLegacy: Number(legacyReconcileSummary?.reassignedCount || 0),
+      removedLegacyDuplicates: Number(legacyReconcileSummary?.removedDuplicateCount || 0),
+      removedLegacyUnresolved: Number(legacyReconcileSummary?.removedUnresolvedCount || 0)
+    };
+    const changed = Object.values(summary).some((value) => value > 0);
+    if (!changed) return;
+
+    this.logAction({
+      kind: "memory_migration",
+      content: `memory migration applied: migrated=${summary.migrated}, archived=${summary.archived}, reassigned_legacy=${summary.reassignedLegacy}, removed_legacy_duplicates=${summary.removedLegacyDuplicates}, removed_legacy_unresolved=${summary.removedLegacyUnresolved}`,
+      metadata: summary
+    });
   }
 }
 
@@ -841,6 +1037,11 @@ function buildInferredGuildExpr(tableAlias) {
       ELSE NULL
     END
   )`;
+}
+
+function getSqlChanges(db) {
+  const row = db.prepare("SELECT changes() AS count").get();
+  return Number(row?.count || 0);
 }
 
 function safeJsonParse(value, fallback) {
