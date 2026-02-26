@@ -1,7 +1,7 @@
 # Voice Agent Product Spec
 
 ## Goal
-Enable `clanker conk` to join Discord voice channels on command, run real-time conversations using xAI Grok Voice Agent, and use soundboard effects contextually, while staying human-like and constrained by strict session limits (default max 10 minutes).
+Enable `clanker conk` to join Discord voice channels on explicit natural-language requests, run real-time conversations using xAI Grok Voice Agent, and use soundboard effects contextually, while staying human-like and constrained by strict session limits (default max 10 minutes).
 
 ## Product Decision (Locked)
 - Decision date: February 25, 2026
@@ -44,7 +44,7 @@ Enable `clanker conk` to join Discord voice channels on command, run real-time c
    - Optionally fire soundboard effects when confidence and cooldown rules allow.
 5. Session end:
    - Hard stop at max duration (10 min default).
-   - Early stop on inactivity timeout, manual stop command, disconnect, or permission loss.
+   - Early stop on inactivity timeout, explicit NL stop request, disconnect, or permission loss.
    - Bot announces exit briefly in text or voice.
 
 ## Technical Approach (V1)
@@ -80,7 +80,7 @@ Enable `clanker conk` to join Discord voice channels on command, run real-time c
 ## Proposed Architecture Changes
 - `src/bot.ts`
   - Add voice intent trigger routing in `messageCreate`.
-  - Add VC command handling (`join`, `leave`, `status`).
+  - Add VC NL intent handling (`join`, `leave`, `status`) with confidence gating.
   - Add `GatewayIntentBits.GuildVoiceStates`.
 - `src/voice/voiceSessionManager.ts`
   - Owns session lifecycle, timers, join/leave, and guild-level locking.
@@ -101,11 +101,13 @@ Enable `clanker conk` to join Discord voice channels on command, run real-time c
 ```js
 voice: {
   enabled: false,
-  joinOnTextCommand: true,
+  joinOnTextNL: true,
+  requireDirectMentionForJoin: true,
+  intentConfidenceThreshold: 0.75,
   maxSessionMinutes: 10,
   inactivityLeaveSeconds: 90,
   maxSessionsPerDay: 12,
-  maxConcurrentGuildSessions: 1,
+  maxConcurrentSessions: 1, // global cross-guild voice session cap
   allowedVoiceChannelIds: [],
   blockedVoiceChannelIds: [],
   blockedVoiceUserIds: [],
@@ -151,20 +153,18 @@ voice: {
 - Keep transcript retention short and configurable.
 - Keep "playful bother" behavior non-harassing; apply existing moderation policy to voice outputs.
 
-## UX/Command Design
+## UX/NL Design
 
 ### Natural Language Triggers
 - "join vc"
 - "hop in voice"
 - "go join the vc and bother those guys"
+- "leave vc"
+- "get out of vc"
+- "voice status"
 
-### Control Commands
-- `/voice join`
-- `/voice leave`
-- `/voice status`
-- `/voice stop-in <minutes>` (admin)
-
-Natural language should map into the same session manager as slash commands (single source of truth).
+No slash commands in v1. NL is the only control surface.
+All NL intents route through the same `voiceSessionManager` methods (single source of truth).
 
 ## Rollout Plan
 1. Phase 1: Join/leave infrastructure + timer + xAI realtime websocket session wiring.
@@ -172,7 +172,7 @@ Natural language should map into the same session manager as slash commands (sin
 3. Phase 3: Soundboard director with strict caps/cooldowns + dashboard controls + cost reporting.
 
 ## Acceptance Criteria
-1. Bot joins requestor's VC within 5 seconds after valid command.
+1. Bot joins requestor's VC within 5 seconds after a valid NL trigger.
 2. Bot leaves automatically at or before configured max session time (default 10 minutes).
 3. Bot leaves early after configured inactivity timeout.
 4. Bot does not start if voice mode disabled or channel is blocked.
@@ -191,4 +191,4 @@ Natural language should map into the same session manager as slash commands (sin
 ## Open Questions
 1. Should voice sessions be restricted to allowlisted roles in v1?
 2. Do we want transcript storage off by default, or short retention (for debugging)?
-3. Should the bot auto-join opportunistically later, or remain command-only?
+3. Should the bot auto-join opportunistically later, or remain explicit-NL-trigger-only?

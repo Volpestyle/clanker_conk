@@ -16,7 +16,15 @@ const FILTERS = [
   "video_context_call",
   "video_context_error",
   "asr_call",
-  "asr_error"
+  "asr_error",
+  "voice_session_start",
+  "voice_session_end",
+  "voice_intent_detected",
+  "voice_turn_in",
+  "voice_turn_out",
+  "voice_soundboard_play",
+  "voice_runtime",
+  "voice_error"
 ];
 
 export default function ActionStream({ actions }) {

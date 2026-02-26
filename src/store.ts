@@ -398,7 +398,14 @@ export class Store {
         gif_call: 0,
         search_call: 0,
         video_context_call: 0,
-        asr_call: 0
+        asr_call: 0,
+        voice_session_start: 0,
+        voice_session_end: 0,
+        voice_intent_detected: 0,
+        voice_turn_in: 0,
+        voice_turn_out: 0,
+        voice_soundboard_play: 0,
+        voice_error: 0
       },
       totalCostUsd: Number(totalCostRow?.total ?? 0),
       dailyCost: dayCostRows
@@ -578,6 +585,7 @@ function normalizeSettings(raw) {
   if (!merged.llm || typeof merged.llm !== "object") merged.llm = {};
   if (!merged.webSearch || typeof merged.webSearch !== "object") merged.webSearch = {};
   if (!merged.videoContext || typeof merged.videoContext !== "object") merged.videoContext = {};
+  if (!merged.voice || typeof merged.voice !== "object") merged.voice = {};
   if ("youtubeContext" in merged) {
     delete merged.youtubeContext;
   }
@@ -688,6 +696,110 @@ function normalizeSettings(raw) {
     15,
     600
   );
+
+  if (!merged.voice.xai || typeof merged.voice.xai !== "object") {
+    merged.voice.xai = {};
+  }
+  if (!merged.voice.soundboard || typeof merged.voice.soundboard !== "object") {
+    merged.voice.soundboard = {};
+  }
+  if ("joinOnTextCommand" in merged.voice) {
+    delete merged.voice.joinOnTextCommand;
+  }
+  if ("maxConcurrentGuildSessions" in merged.voice) {
+    delete merged.voice.maxConcurrentGuildSessions;
+  }
+  if ("intentCooldownUserSeconds" in merged.voice) {
+    delete merged.voice.intentCooldownUserSeconds;
+  }
+  if ("intentCooldownGuildSeconds" in merged.voice) {
+    delete merged.voice.intentCooldownGuildSeconds;
+  }
+  if ("maxPlaysPerSession" in merged.voice.soundboard) {
+    delete merged.voice.soundboard.maxPlaysPerSession;
+  }
+  if ("minSecondsBetweenPlays" in merged.voice.soundboard) {
+    delete merged.voice.soundboard.minSecondsBetweenPlays;
+  }
+
+  const defaultVoice = DEFAULT_SETTINGS.voice || {};
+  const defaultVoiceXai = defaultVoice.xai || {};
+  const defaultVoiceSoundboard = defaultVoice.soundboard || {};
+  const voiceIntentThresholdRaw = Number(merged.voice?.intentConfidenceThreshold);
+  const voiceMaxSessionRaw = Number(merged.voice?.maxSessionMinutes);
+  const voiceInactivityRaw = Number(merged.voice?.inactivityLeaveSeconds);
+  const voiceDailySessionsRaw = Number(merged.voice?.maxSessionsPerDay);
+  const voiceConcurrentSessionsRaw = Number(merged.voice?.maxConcurrentSessions);
+  const voiceSampleRateRaw = Number(merged.voice?.xai?.sampleRateHz);
+
+  merged.voice.enabled =
+    merged.voice?.enabled !== undefined ? Boolean(merged.voice?.enabled) : Boolean(defaultVoice.enabled);
+  merged.voice.joinOnTextNL =
+    merged.voice?.joinOnTextNL !== undefined ? Boolean(merged.voice?.joinOnTextNL) : Boolean(defaultVoice.joinOnTextNL);
+  merged.voice.requireDirectMentionForJoin =
+    merged.voice?.requireDirectMentionForJoin !== undefined
+      ? Boolean(merged.voice?.requireDirectMentionForJoin)
+      : Boolean(defaultVoice.requireDirectMentionForJoin);
+  merged.voice.intentConfidenceThreshold = clamp(
+    Number.isFinite(voiceIntentThresholdRaw)
+      ? voiceIntentThresholdRaw
+      : Number(defaultVoice.intentConfidenceThreshold) || 0.75,
+    0.4,
+    0.99
+  );
+  merged.voice.maxSessionMinutes = clamp(
+    Number.isFinite(voiceMaxSessionRaw) ? voiceMaxSessionRaw : Number(defaultVoice.maxSessionMinutes) || 10,
+    1,
+    120
+  );
+  merged.voice.inactivityLeaveSeconds = clamp(
+    Number.isFinite(voiceInactivityRaw) ? voiceInactivityRaw : Number(defaultVoice.inactivityLeaveSeconds) || 90,
+    20,
+    3600
+  );
+  merged.voice.maxSessionsPerDay = clamp(
+    Number.isFinite(voiceDailySessionsRaw) ? voiceDailySessionsRaw : Number(defaultVoice.maxSessionsPerDay) || 12,
+    0,
+    120
+  );
+  merged.voice.maxConcurrentSessions = clamp(
+    Number.isFinite(voiceConcurrentSessionsRaw)
+      ? voiceConcurrentSessionsRaw
+      : Number(defaultVoice.maxConcurrentSessions) || 1,
+    1,
+    3
+  );
+  merged.voice.allowedVoiceChannelIds = uniqueIdList(merged.voice?.allowedVoiceChannelIds);
+  merged.voice.blockedVoiceChannelIds = uniqueIdList(merged.voice?.blockedVoiceChannelIds);
+  merged.voice.blockedVoiceUserIds = uniqueIdList(merged.voice?.blockedVoiceUserIds);
+
+  merged.voice.xai.voice = String(merged.voice?.xai?.voice || defaultVoiceXai.voice || "Rex").slice(0, 60);
+  merged.voice.xai.audioFormat = String(merged.voice?.xai?.audioFormat || defaultVoiceXai.audioFormat || "audio/pcm")
+    .trim()
+    .slice(0, 40);
+  merged.voice.xai.sampleRateHz = clamp(
+    Number.isFinite(voiceSampleRateRaw) ? voiceSampleRateRaw : Number(defaultVoiceXai.sampleRateHz) || 24000,
+    8000,
+    48000
+  );
+  merged.voice.xai.region = String(merged.voice?.xai?.region || defaultVoiceXai.region || "us-east-1")
+    .trim()
+    .slice(0, 40);
+
+  merged.voice.soundboard.enabled =
+    merged.voice?.soundboard?.enabled !== undefined
+      ? Boolean(merged.voice?.soundboard?.enabled)
+      : Boolean(defaultVoiceSoundboard.enabled);
+  merged.voice.soundboard.allowExternalSounds =
+    merged.voice?.soundboard?.allowExternalSounds !== undefined
+      ? Boolean(merged.voice?.soundboard?.allowExternalSounds)
+      : Boolean(defaultVoiceSoundboard.allowExternalSounds);
+  merged.voice.soundboard.preferredSoundIds = uniqueIdList(merged.voice?.soundboard?.preferredSoundIds).slice(0, 40);
+  merged.voice.soundboard.mappings = normalizeStringMap(merged.voice?.soundboard?.mappings, {
+    maxItems: 40,
+    maxKeyLen: 80,
+    maxValueLen: 160
+  });
 
   merged.startup.catchupEnabled =
     merged.startup?.catchupEnabled !== undefined ? Boolean(merged.startup?.catchupEnabled) : true;
@@ -886,6 +998,22 @@ function uniqueStringList(input, maxItems = 20, maxLen = 120) {
   return [...new Set(input.split(/[\n,]/g).map((item) => item.trim()).filter(Boolean))]
     .slice(0, Math.max(1, maxItems))
     .map((item) => item.slice(0, maxLen));
+}
+
+function normalizeStringMap(input, { maxItems = 40, maxKeyLen = 80, maxValueLen = 160 } = {}) {
+  if (!input || typeof input !== "object" || Array.isArray(input)) return {};
+
+  const entries = Object.entries(input)
+    .map(([key, value]) => [String(key || "").trim(), String(value || "").trim()])
+    .filter(([key, value]) => Boolean(key) && Boolean(value))
+    .slice(0, Math.max(1, maxItems));
+
+  const out = {};
+  for (const [key, value] of entries) {
+    out[key.slice(0, maxKeyLen)] = value.slice(0, maxValueLen);
+  }
+
+  return out;
 }
 
 function isHttpLikeUrl(rawUrl) {

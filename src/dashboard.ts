@@ -29,9 +29,14 @@ export function createDashboardServer({ appConfig, store, bot, memory }) {
     res.json(store.getSettings());
   });
 
-  app.put("/api/settings", (req, res) => {
-    const nextSettings = store.patchSettings(req.body || {});
-    res.json(nextSettings);
+  app.put("/api/settings", async (req, res, next) => {
+    try {
+      const nextSettings = store.patchSettings(req.body || {});
+      await bot.applyRuntimeSettings(nextSettings);
+      res.json(nextSettings);
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.get("/api/actions", (req, res) => {

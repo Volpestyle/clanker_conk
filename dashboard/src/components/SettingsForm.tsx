@@ -24,6 +24,31 @@ function formatLineList(items) {
   return (items || []).join("\n");
 }
 
+function parseMappingList(val) {
+  const lines = String(val || "")
+    .split(/\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const out = {};
+  for (const line of lines) {
+    const eqIndex = line.indexOf("=");
+    if (eqIndex <= 0) continue;
+    const key = line.slice(0, eqIndex).trim();
+    const value = line.slice(eqIndex + 1).trim();
+    if (!key || !value) continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+function formatMappingList(map) {
+  if (!map || typeof map !== "object" || Array.isArray(map)) return "";
+  return Object.entries(map)
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
+}
+
 export default function SettingsForm({ settings, onSave, toast }) {
   const [form, setForm] = useState(null);
 
@@ -64,6 +89,24 @@ export default function SettingsForm({ settings, onSave, toast }) {
       videoContextMaxKeyframes: settings.videoContext?.maxKeyframesPerVideo ?? 3,
       videoContextAsrFallback: settings.videoContext?.allowAsrFallback ?? false,
       videoContextMaxAsrSeconds: settings.videoContext?.maxAsrSeconds ?? 120,
+      voiceEnabled: settings.voice?.enabled ?? false,
+      voiceJoinOnTextNL: settings.voice?.joinOnTextNL ?? true,
+      voiceRequireDirectMention: settings.voice?.requireDirectMentionForJoin ?? true,
+      voiceIntentConfidenceThreshold: settings.voice?.intentConfidenceThreshold ?? 0.75,
+      voiceMaxSessionMinutes: settings.voice?.maxSessionMinutes ?? 10,
+      voiceInactivityLeaveSeconds: settings.voice?.inactivityLeaveSeconds ?? 90,
+      voiceMaxSessionsPerDay: settings.voice?.maxSessionsPerDay ?? 12,
+      voiceAllowedChannelIds: formatIdList(settings.voice?.allowedVoiceChannelIds),
+      voiceBlockedChannelIds: formatIdList(settings.voice?.blockedVoiceChannelIds),
+      voiceBlockedUserIds: formatIdList(settings.voice?.blockedVoiceUserIds),
+      voiceXaiVoice: settings.voice?.xai?.voice ?? "Rex",
+      voiceXaiAudioFormat: settings.voice?.xai?.audioFormat ?? "audio/pcm",
+      voiceXaiSampleRateHz: settings.voice?.xai?.sampleRateHz ?? 24000,
+      voiceXaiRegion: settings.voice?.xai?.region ?? "us-east-1",
+      voiceSoundboardEnabled: settings.voice?.soundboard?.enabled ?? true,
+      voiceSoundboardAllowExternalSounds: settings.voice?.soundboard?.allowExternalSounds ?? false,
+      voiceSoundboardPreferredSoundIds: formatIdList(settings.voice?.soundboard?.preferredSoundIds),
+      voiceSoundboardMappings: formatMappingList(settings.voice?.soundboard?.mappings),
       maxMessages: settings.permissions?.maxMessagesPerHour ?? settings.permissions?.maxRepliesPerHour ?? 20,
       maxReactions: settings.permissions?.maxReactionsPerHour ?? 24,
       catchupEnabled: settings.startup?.catchupEnabled !== false,
@@ -162,6 +205,30 @@ export default function SettingsForm({ settings, onSave, toast }) {
         maxKeyframesPerVideo: Number(form.videoContextMaxKeyframes),
         allowAsrFallback: form.videoContextAsrFallback,
         maxAsrSeconds: Number(form.videoContextMaxAsrSeconds)
+      },
+      voice: {
+        enabled: form.voiceEnabled,
+        joinOnTextNL: form.voiceJoinOnTextNL,
+        requireDirectMentionForJoin: form.voiceRequireDirectMention,
+        intentConfidenceThreshold: Number(form.voiceIntentConfidenceThreshold),
+        maxSessionMinutes: Number(form.voiceMaxSessionMinutes),
+        inactivityLeaveSeconds: Number(form.voiceInactivityLeaveSeconds),
+        maxSessionsPerDay: Number(form.voiceMaxSessionsPerDay),
+        allowedVoiceChannelIds: parseIdList(form.voiceAllowedChannelIds),
+        blockedVoiceChannelIds: parseIdList(form.voiceBlockedChannelIds),
+        blockedVoiceUserIds: parseIdList(form.voiceBlockedUserIds),
+        xai: {
+          voice: String(form.voiceXaiVoice || "").trim(),
+          audioFormat: String(form.voiceXaiAudioFormat || "").trim(),
+          sampleRateHz: Number(form.voiceXaiSampleRateHz),
+          region: String(form.voiceXaiRegion || "").trim()
+        },
+        soundboard: {
+          enabled: form.voiceSoundboardEnabled,
+          allowExternalSounds: form.voiceSoundboardAllowExternalSounds,
+          preferredSoundIds: parseIdList(form.voiceSoundboardPreferredSoundIds),
+          mappings: parseMappingList(form.voiceSoundboardMappings)
+        }
       },
       startup: {
         catchupEnabled: form.catchupEnabled,
@@ -543,6 +610,170 @@ export default function SettingsForm({ settings, onSave, toast }) {
           />
         </div>
       </div>
+
+      <h4>Voice Mode (NL-only)</h4>
+      <div className="toggles">
+        <label>
+          <input type="checkbox" checked={form.voiceEnabled} onChange={set("voiceEnabled")} />
+          Enable voice sessions
+        </label>
+        <label>
+          <input type="checkbox" checked={form.voiceJoinOnTextNL} onChange={set("voiceJoinOnTextNL")} />
+          Allow NL join/leave/status triggers
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.voiceRequireDirectMention}
+            onChange={set("voiceRequireDirectMention")}
+          />
+          Require direct mention for join
+        </label>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="voice-intent-threshold">Intent confidence threshold</label>
+          <input
+            id="voice-intent-threshold"
+            type="number"
+            min="0.4"
+            max="0.99"
+            step="0.01"
+            value={form.voiceIntentConfidenceThreshold}
+            onChange={set("voiceIntentConfidenceThreshold")}
+          />
+        </div>
+        <div>
+          <label htmlFor="voice-max-session-minutes">Max session minutes</label>
+          <input
+            id="voice-max-session-minutes"
+            type="number"
+            min="1"
+            max="120"
+            value={form.voiceMaxSessionMinutes}
+            onChange={set("voiceMaxSessionMinutes")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="voice-inactivity-seconds">Inactivity leave seconds</label>
+          <input
+            id="voice-inactivity-seconds"
+            type="number"
+            min="20"
+            max="3600"
+            value={form.voiceInactivityLeaveSeconds}
+            onChange={set("voiceInactivityLeaveSeconds")}
+          />
+        </div>
+        <div>
+          <label htmlFor="voice-max-sessions-day">Max sessions/day</label>
+          <input
+            id="voice-max-sessions-day"
+            type="number"
+            min="0"
+            max="120"
+            value={form.voiceMaxSessionsPerDay}
+            onChange={set("voiceMaxSessionsPerDay")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="voice-xai-voice">xAI voice</label>
+          <input id="voice-xai-voice" type="text" value={form.voiceXaiVoice} onChange={set("voiceXaiVoice")} />
+        </div>
+        <div>
+          <label htmlFor="voice-xai-region">xAI region</label>
+          <input id="voice-xai-region" type="text" value={form.voiceXaiRegion} onChange={set("voiceXaiRegion")} />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="voice-xai-audio-format">xAI audio format</label>
+          <input
+            id="voice-xai-audio-format"
+            type="text"
+            value={form.voiceXaiAudioFormat}
+            onChange={set("voiceXaiAudioFormat")}
+          />
+        </div>
+        <div>
+          <label htmlFor="voice-xai-sample-rate">xAI sample rate (Hz)</label>
+          <input
+            id="voice-xai-sample-rate"
+            type="number"
+            min="8000"
+            max="48000"
+            value={form.voiceXaiSampleRateHz}
+            onChange={set("voiceXaiSampleRateHz")}
+          />
+        </div>
+      </div>
+
+      <div className="toggles">
+        <label>
+          <input
+            type="checkbox"
+            checked={form.voiceSoundboardEnabled}
+            onChange={set("voiceSoundboardEnabled")}
+          />
+          Enable voice soundboard director
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.voiceSoundboardAllowExternalSounds}
+            onChange={set("voiceSoundboardAllowExternalSounds")}
+          />
+          Allow external soundboard sounds
+        </label>
+      </div>
+
+      <label htmlFor="voice-sb-preferred">Preferred sound IDs (one per line)</label>
+      <textarea
+        id="voice-sb-preferred"
+        rows="3"
+        value={form.voiceSoundboardPreferredSoundIds}
+        onChange={set("voiceSoundboardPreferredSoundIds")}
+      />
+
+      <label htmlFor="voice-sb-mappings">Alias mappings (`alias=sound_id[@source_guild_id]`)</label>
+      <textarea
+        id="voice-sb-mappings"
+        rows="4"
+        value={form.voiceSoundboardMappings}
+        onChange={set("voiceSoundboardMappings")}
+      />
+
+      <label htmlFor="voice-allowed-channels">Allowed voice channel IDs (optional)</label>
+      <textarea
+        id="voice-allowed-channels"
+        rows="3"
+        value={form.voiceAllowedChannelIds}
+        onChange={set("voiceAllowedChannelIds")}
+      />
+
+      <label htmlFor="voice-blocked-channels">Blocked voice channel IDs</label>
+      <textarea
+        id="voice-blocked-channels"
+        rows="3"
+        value={form.voiceBlockedChannelIds}
+        onChange={set("voiceBlockedChannelIds")}
+      />
+
+      <label htmlFor="voice-blocked-users">Blocked voice user IDs</label>
+      <textarea
+        id="voice-blocked-users"
+        rows="3"
+        value={form.voiceBlockedUserIds}
+        onChange={set("voiceBlockedUserIds")}
+      />
 
       <div className="split">
         <div>
