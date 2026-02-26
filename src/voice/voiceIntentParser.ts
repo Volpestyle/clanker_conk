@@ -1,0 +1,76 @@
+import { hasBotKeyword } from "../utils.ts";
+
+const JOIN_PATTERNS = [
+  /\b(?:join|hop\s*in|jump\s*in|get\s*in|pull\s*up|come\s*to|enter)\b[\w\s]{0,32}\b(?:vc|voice|voice\s*chat|call)\b/i,
+  /\b(?:vc|voice|voice\s*chat|call)\b[\w\s]{0,24}\b(?:join|hop\s*in|jump\s*in|come\s*in)\b/i,
+  /\b(?:bother|annoy|terrorize)\b[\w\s]{0,32}\b(?:vc|voice|call)\b/i
+];
+
+const LEAVE_PATTERNS = [
+  /\b(?:leave|dip|bounce|exit|get\s*out|disconnect|hang\s*up|stop)\b[\w\s]{0,32}\b(?:vc|voice|voice\s*chat|call)\b/i,
+  /\b(?:vc|voice|voice\s*chat|call)\b[\w\s]{0,24}\b(?:off|stop|leave|quit)\b/i
+];
+
+const STATUS_PATTERNS = [
+  /\b(?:voice\s*status|vc\s*status)\b/i,
+  /\b(?:are\s*you\s*in\s*(?:vc|voice)|where\s*are\s*you\s*in\s*voice)\b/i,
+  /\b(?:status)\b[\w\s]{0,20}\b(?:vc|voice|call)\b/i
+];
+
+const DIRECT_MENTION_RE = /<@!?\d+>/;
+
+function normalizeText(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/[`*_~]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function matchesAny(text, patterns) {
+  return patterns.some((pattern) => pattern.test(text));
+}
+
+export function detectVoiceIntent({
+  content,
+  botName,
+  directlyAddressed = false,
+  requireDirectMentionForJoin = true
+}) {
+  const normalized = normalizeText(content);
+  const hasDirectMention = DIRECT_MENTION_RE.test(normalized);
+  const hasKeywordMention = hasBotKeyword(normalized);
+  const hasNameMention = botName
+    ? normalized.includes(String(botName).toLowerCase().trim())
+    : false;
+  const mentionSatisfied = Boolean(directlyAddressed || hasDirectMention || hasKeywordMention || hasNameMention);
+
+  const joinMatched = matchesAny(normalized, JOIN_PATTERNS);
+  const leaveMatched = matchesAny(normalized, LEAVE_PATTERNS);
+  const statusMatched = matchesAny(normalized, STATUS_PATTERNS);
+
+  let intent = null;
+  let confidence = 0;
+
+  if (joinMatched) {
+    intent = "join";
+    confidence = mentionSatisfied ? 0.92 : 0.78;
+  } else if (leaveMatched) {
+    intent = "leave";
+    confidence = mentionSatisfied ? 0.9 : 0.74;
+  } else if (statusMatched) {
+    intent = "status";
+    confidence = mentionSatisfied ? 0.88 : 0.72;
+  }
+
+  const blockedByMentionGate =
+    intent === "join" && requireDirectMentionForJoin && !mentionSatisfied;
+
+  return {
+    intent,
+    confidence,
+    mentionSatisfied,
+    blockedByMentionGate,
+    normalizedText: normalized
+  };
+}

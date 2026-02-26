@@ -10,6 +10,8 @@ import {
 } from "./prompts.ts";
 import { normalizeDiscoveryUrl } from "./discovery.ts";
 import { chance, clamp, hasBotKeyword, sanitizeBotText, sleep, stripBotKeywords } from "./utils.ts";
+import { detectVoiceIntent } from "./voice/voiceIntentParser.ts";
+import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
@@ -77,9 +79,15 @@ export class ClankerBot {
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.GuildMessageReactions,
+        GatewayIntentBits.GuildVoiceStates,
         GatewayIntentBits.MessageContent
       ],
       partials: [Partials.Channel, Partials.Message, Partials.Reaction]
+    });
+    this.voiceSessionManager = new VoiceSessionManager({
+      client: this.client,
+      store: this.store,
+      appConfig: this.appConfig
     });
 
     this.registerEvents();
@@ -258,6 +266,7 @@ export class ClankerBot {
     this.replyQueues.clear();
     this.replyQueueWorkers.clear();
     this.replyQueuedMessageIds.clear();
+    await this.voiceSessionManager.stopAll("shutdown");
     await this.client.destroy();
   }
 
@@ -278,7 +287,8 @@ export class ClankerBot {
         lastGatewayEventAt: this.lastGatewayEventAt
           ? new Date(this.lastGatewayEventAt).toISOString()
           : null
-      }
+      },
+      voice: this.voiceSessionManager.getRuntimeState()
     };
   }
 
@@ -584,6 +594,13 @@ export class ClankerBot {
     if (!this.isChannelAllowed(settings, message.channelId)) return;
     if (this.isUserBlocked(settings, message.author.id)) return;
 
+    const voiceIntentHandled = await this.maybeHandleVoiceIntent({
+      message,
+      settings,
+      text
+    });
+    if (voiceIntentHandled) return;
+
     if (settings.memory.enabled) {
       await this.memory.ingestMessage({
         messageId: message.id,
@@ -619,6 +636,61 @@ export class ClankerBot {
       forceRespond: addressSignal.triggered,
       addressSignal,
     });
+  }
+
+  async maybeHandleVoiceIntent({ message, settings, text }) {
+    const voiceSettings = settings?.voice || {};
+    if (!voiceSettings.joinOnTextNL) return false;
+
+    const intent = detectVoiceIntent({
+      content: text,
+      botName: settings.botName,
+      directlyAddressed: this.isDirectlyAddressed(settings, message),
+      requireDirectMentionForJoin: Boolean(voiceSettings.requireDirectMentionForJoin)
+    });
+
+    if (!intent.intent) return false;
+    if (intent.blockedByMentionGate) return false;
+
+    const threshold = clamp(Number(voiceSettings.intentConfidenceThreshold) || 0.75, 0.4, 0.99);
+    if (intent.confidence < threshold) return false;
+
+    this.store.logAction({
+      kind: "voice_intent_detected",
+      guildId: message.guildId,
+      channelId: message.channelId,
+      messageId: message.id,
+      userId: message.author?.id || null,
+      content: intent.intent,
+      metadata: {
+        confidence: intent.confidence,
+        mentionSatisfied: intent.mentionSatisfied,
+        threshold
+      }
+    });
+
+    if (intent.intent === "join") {
+      return await this.voiceSessionManager.requestJoin({
+        message,
+        settings,
+        intentConfidence: intent.confidence
+      });
+    }
+
+    if (intent.intent === "leave") {
+      return await this.voiceSessionManager.requestLeave({
+        message,
+        reason: "nl_leave"
+      });
+    }
+
+    if (intent.intent === "status") {
+      return await this.voiceSessionManager.requestStatus({
+        message
+      });
+    }
+
+    return false;
   }
 
   async maybeReplyToMessage(message, settings, options = {}) {

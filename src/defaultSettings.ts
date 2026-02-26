@@ -3,7 +3,6 @@ export const DEFAULT_SETTINGS = {
   persona: {
     flavor: "playful, chaotic-good, slangy Gen Z/Gen A energy without being toxic",
     hardLimits: [
-      "Cannot join voice channels.",
       "Cannot play non-text games.",
       "Cannot perform real-world actions.",
       "Cannot access private data beyond visible channel history."
@@ -41,6 +40,31 @@ export const DEFAULT_SETTINGS = {
     maxKeyframesPerVideo: 3,
     allowAsrFallback: false,
     maxAsrSeconds: 120
+  },
+  voice: {
+    enabled: false,
+    joinOnTextNL: true,
+    requireDirectMentionForJoin: true,
+    intentConfidenceThreshold: 0.75,
+    maxSessionMinutes: 10,
+    inactivityLeaveSeconds: 90,
+    maxSessionsPerDay: 12,
+    maxConcurrentGuildSessions: 1,
+    allowedVoiceChannelIds: [],
+    blockedVoiceChannelIds: [],
+    blockedVoiceUserIds: [],
+    xai: {
+      voice: "Rex",
+      audioFormat: "audio/pcm",
+      sampleRateHz: 24000,
+      region: "us-east-1"
+    },
+    soundboard: {
+      enabled: true,
+      maxPlaysPerSession: 4,
+      minSecondsBetweenPlays: 45,
+      allowExternalSounds: false
+    }
   },
   startup: {
     catchupEnabled: true,
