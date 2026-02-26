@@ -9,6 +9,7 @@ async function main() {
   for (const entry of entries) {
     if (!entry.isFile()) continue;
     if (!entry.name.endsWith(".ts")) continue;
+    if (entry.name.endsWith(".test.ts") || entry.name.endsWith(".spec.ts")) continue;
     if (entry.name === "app.ts") continue;
 
     const modulePath = path.join(srcDir, entry.name);

@@ -25,11 +25,67 @@ export class MemoryManager {
     this.memoryDirPath = path.dirname(memoryFilePath);
     this.pendingWrite = false;
     this.initializedDailyFiles = new Set();
+    this.ingestQueue = [];
+    this.ingestQueuedIds = new Set();
+    this.ingestWorkerActive = false;
+    this.maxIngestQueue = 400;
   }
 
   async ingestMessage({ messageId, authorId, authorName, content, settings, trace = {} }) {
+    const normalizedMessageId = String(messageId || "").trim();
+    if (!normalizedMessageId) return;
+    if (this.ingestQueuedIds.has(normalizedMessageId)) return;
+
+    if (this.ingestQueue.length >= this.maxIngestQueue) {
+      const dropped = this.ingestQueue.shift();
+      if (dropped?.messageId) {
+        this.ingestQueuedIds.delete(dropped.messageId);
+      }
+      this.logMemoryError("ingest_queue_overflow", "ingest queue full; dropping oldest message", {
+        droppedMessageId: dropped?.messageId || null
+      });
+    }
+
+    this.ingestQueue.push({
+      messageId: normalizedMessageId,
+      authorId: String(authorId || "").trim(),
+      authorName: String(authorName || "unknown"),
+      content,
+      settings,
+      trace
+    });
+    this.ingestQueuedIds.add(normalizedMessageId);
+    this.runIngestWorker().catch(() => undefined);
+  }
+
+  async runIngestWorker() {
+    if (this.ingestWorkerActive) return;
+    this.ingestWorkerActive = true;
+
+    try {
+      while (this.ingestQueue.length) {
+        const job = this.ingestQueue.shift();
+        if (!job) continue;
+        this.ingestQueuedIds.delete(job.messageId);
+        try {
+          await this.processIngestMessage(job);
+        } catch (error) {
+          this.logMemoryError("ingest_worker", error, {
+            messageId: job.messageId,
+            userId: job.authorId
+          });
+        }
+      }
+    } finally {
+      this.ingestWorkerActive = false;
+    }
+  }
+
+  async processIngestMessage({ messageId, authorId, authorName, content, settings, trace = {} }) {
     const cleanedContent = cleanDailyEntryContent(content);
     if (!cleanedContent) return;
+    const scopeGuildId = String(trace?.guildId || "").trim();
+    const scopeChannelId = String(trace?.channelId || "").trim();
 
     let wroteDailyEntry = false;
     try {
@@ -37,6 +93,8 @@ export class MemoryManager {
         messageId,
         authorId,
         authorName,
+        guildId: scopeGuildId,
+        channelId: scopeChannelId,
         content: cleanedContent
       });
       wroteDailyEntry = true;
@@ -45,7 +103,7 @@ export class MemoryManager {
     }
 
     let insertedAnyFact = false;
-    if (cleanedContent.length >= 4) {
+    if (cleanedContent.length >= 4 && scopeGuildId) {
       let extracted = [];
       try {
         extracted = await this.llm.extractMemoryFacts({
@@ -67,6 +125,8 @@ export class MemoryManager {
 
         const evidenceText = normalizeEvidenceText(row?.evidence, cleanedContent);
         const inserted = this.store.addMemoryFact({
+          guildId: scopeGuildId,
+          channelId: scopeChannelId || null,
           subject: authorId,
           fact: factText,
           factType: normalizeFactType(row?.type),
@@ -84,7 +144,7 @@ export class MemoryManager {
           content: factText
         });
 
-        const factRow = this.store.getMemoryFactBySubjectAndFact(authorId, factText);
+        const factRow = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, authorId, factText);
         if (factRow) {
           this.ensureFactVector({
             factRow,
@@ -98,14 +158,41 @@ export class MemoryManager {
       }
     }
 
+    if (insertedAnyFact && scopeGuildId && authorId) {
+      this.store.archiveOldFactsForSubject({
+        guildId: scopeGuildId,
+        subject: authorId,
+        keep: 80
+      });
+    }
+
     if (wroteDailyEntry || insertedAnyFact) {
-      await this.queueMemoryRefresh();
+      this.queueMemoryRefresh();
     }
   }
 
-  async buildPromptMemorySlice({ userId, channelId, queryText, settings, trace = {} }) {
+  async drainIngestQueue({ timeoutMs = 5000 } = {}) {
+    const timeout = Math.max(100, Number(timeoutMs) || 5000);
+    const deadline = Date.now() + timeout;
+    while ((this.ingestWorkerActive || this.ingestQueue.length) && Date.now() < deadline) {
+      await sleepMs(25);
+    }
+  }
+
+  async buildPromptMemorySlice({ userId, guildId, channelId, queryText, settings, trace = {} }) {
+    const scopeGuildId = String(guildId || "").trim();
+    if (!scopeGuildId) {
+      return {
+        userFacts: [],
+        relevantFacts: [],
+        relevantMessages: []
+      };
+    }
+
     const userFacts = await this.selectHybridFacts({
       subjects: [userId],
+      guildId: scopeGuildId,
+      channelId,
       queryText,
       settings,
       trace,
@@ -113,12 +200,14 @@ export class MemoryManager {
     });
     const relevantFacts = await this.selectHybridFacts({
       subjects: [userId, SUBJECT_LORE],
+      guildId: scopeGuildId,
+      channelId,
       queryText,
       settings,
       trace,
       limit: HYBRID_FACT_LIMIT
     });
-    const relevantMessages = this.store.searchRelevantMessages(channelId, queryText, 8);
+    const relevantMessages = channelId ? this.store.searchRelevantMessages(channelId, queryText, 8) : [];
 
     return {
       userFacts,
@@ -127,21 +216,99 @@ export class MemoryManager {
     };
   }
 
-  async selectHybridFacts({ subjects, queryText, settings, trace = {}, limit = HYBRID_FACT_LIMIT }) {
+  async searchDurableFacts({
+    guildId,
+    channelId = null,
+    queryText,
+    settings,
+    trace = {},
+    limit = HYBRID_FACT_LIMIT
+  }) {
+    const scopeGuildId = String(guildId || "").trim();
+    if (!scopeGuildId) return [];
+
+    const boundedLimit = clampInt(limit, 1, 24);
+    const candidateLimit = Math.min(
+      HYBRID_MAX_CANDIDATES * 2,
+      Math.max(boundedLimit * HYBRID_CANDIDATE_MULTIPLIER * 2, boundedLimit)
+    );
+    const candidates = this.store.getFactsForScope({
+      guildId: scopeGuildId,
+      limit: candidateLimit
+    });
+    if (!candidates.length) return [];
+
+    const ranked = await this.rankHybridCandidates({
+      candidates,
+      queryText,
+      settings,
+      trace,
+      channelId
+    });
+
+    return ranked.slice(0, boundedLimit).map((row) => ({
+      id: row.id,
+      created_at: row.created_at,
+      guild_id: row.guild_id,
+      channel_id: row.channel_id,
+      subject: row.subject,
+      fact: row.fact,
+      fact_type: row.fact_type,
+      evidence_text: row.evidence_text,
+      source_message_id: row.source_message_id,
+      confidence: row.confidence,
+      score: row._score,
+      semanticScore: row._semanticScore,
+      lexicalScore: row._lexicalScore
+    }));
+  }
+
+  async selectHybridFacts({ subjects, guildId, channelId, queryText, settings, trace = {}, limit = HYBRID_FACT_LIMIT }) {
     const normalizedSubjects = [...new Set((subjects || []).map((value) => String(value || "").trim()).filter(Boolean))];
     if (!normalizedSubjects.length) return [];
+    const scopeGuildId = String(guildId || "").trim();
+    if (!scopeGuildId) return [];
 
     const boundedLimit = clampInt(limit, 1, 24);
     const candidateLimit = Math.min(
       HYBRID_MAX_CANDIDATES,
       Math.max(boundedLimit * HYBRID_CANDIDATE_MULTIPLIER, boundedLimit)
     );
-    const candidates = this.store.getFactsForSubjects(normalizedSubjects, candidateLimit);
+    const candidates = this.store.getFactsForSubjects(normalizedSubjects, candidateLimit, {
+      guildId: scopeGuildId
+    });
     if (!candidates.length) return [];
 
+    const ranked = await this.rankHybridCandidates({
+      candidates,
+      queryText,
+      settings,
+      trace,
+      channelId
+    });
+
+    return ranked.slice(0, boundedLimit).map((row) => ({
+      id: row.id,
+      created_at: row.created_at,
+      guild_id: row.guild_id,
+      channel_id: row.channel_id,
+      subject: row.subject,
+      fact: row.fact,
+      fact_type: row.fact_type,
+      evidence_text: row.evidence_text,
+      source_message_id: row.source_message_id,
+      confidence: row.confidence,
+      score: row._score,
+      semanticScore: row._semanticScore,
+      lexicalScore: row._lexicalScore
+    }));
+  }
+
+  async rankHybridCandidates({ candidates, queryText, settings, trace = {}, channelId = null }) {
     const query = String(queryText || "").trim();
     const queryTokens = extractStableTokens(query, 32);
     const queryCompact = normalizeHighlightText(query);
+    const normalizedChannelId = String(channelId || "").trim();
     const semanticScores = await this.getSemanticScoreMap({ candidates, queryText: query, settings, trace });
     const semanticAvailable = semanticScores.size > 0;
 
@@ -150,9 +317,10 @@ export class MemoryManager {
       const semanticScore = semanticScores.get(Number(row.id)) || 0;
       const recencyScore = computeRecencyScore(row.created_at);
       const confidenceScore = clamp01(row.confidence, 0.5);
+      const channelScore = computeChannelScopeScore(row.channel_id, normalizedChannelId);
       const combined = semanticAvailable
-        ? 0.48 * semanticScore + 0.32 * lexicalScore + 0.12 * confidenceScore + 0.08 * recencyScore
-        : 0.68 * lexicalScore + 0.2 * confidenceScore + 0.12 * recencyScore;
+        ? 0.5 * semanticScore + 0.28 * lexicalScore + 0.1 * confidenceScore + 0.07 * recencyScore + 0.05 * channelScore
+        : 0.75 * lexicalScore + 0.1 * confidenceScore + 0.1 * recencyScore + 0.05 * channelScore;
 
       return {
         ...row,
@@ -168,23 +336,14 @@ export class MemoryManager {
     });
 
     const filtered = queryTokens.length || semanticAvailable
-      ? sorted.filter((row) => row._score >= (semanticAvailable ? 0.16 : 0.08))
+      ? sorted.filter((row) =>
+        passesHybridRelevanceGate({
+          row,
+          semanticAvailable
+        }))
       : sorted;
 
-    const selected = (filtered.length ? filtered : sorted).slice(0, boundedLimit);
-    return selected.map((row) => ({
-      id: row.id,
-      created_at: row.created_at,
-      subject: row.subject,
-      fact: row.fact,
-      fact_type: row.fact_type,
-      evidence_text: row.evidence_text,
-      source_message_id: row.source_message_id,
-      confidence: row.confidence,
-      score: row._score,
-      semanticScore: row._semanticScore,
-      lexicalScore: row._lexicalScore
-    }));
+    return (filtered.length ? filtered : sorted);
   }
 
   async getSemanticScoreMap({ candidates, queryText, settings, trace = {} }) {
@@ -364,7 +523,9 @@ export class MemoryManager {
 
     for (const subjectRow of subjects) {
       if (subjectRow.subject === LORE_SUBJECT) continue;
-      const rows = this.store.getFactsForSubject(subjectRow.subject, 6);
+      const rows = this.store.getFactsForSubjectScoped(subjectRow.subject, 6, {
+        guildId: subjectRow.guild_id
+      });
       const cleaned = [
         ...new Set(
           rows
@@ -373,25 +534,33 @@ export class MemoryManager {
         )
       ].slice(0, 6);
       if (!cleaned.length) continue;
-      peopleLines.push(`- ${subjectRow.subject}: ${cleaned.join(" | ")}`);
+      const scopeLabel = subjectRow.guild_id ? `[guild:${subjectRow.guild_id}] ` : "";
+      peopleLines.push(`- ${scopeLabel}${subjectRow.subject}: ${cleaned.join(" | ")}`);
     }
 
     return peopleLines;
   }
 
   buildLoreSection(maxItems = 6) {
-    const durableLoreLines = [
-      ...new Set(
-        this.store
-          .getFactsForSubject(LORE_SUBJECT, 12)
-          .map((row) => normalizeLoreFactForDisplay(row.fact))
-          .filter(Boolean)
-      )
-    ].map((fact) => `- ${fact}`);
+    const rows = this.store.getFactsForSubjectScoped(LORE_SUBJECT, 32, null);
+    const durableLoreLines = [];
+    const seen = new Set();
+    for (const row of rows) {
+      const normalized = normalizeLoreFactForDisplay(row.fact);
+      if (!normalized) continue;
+      const key = `${row.guild_id || ""}:${normalized.toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const scopeLabel = row.guild_id ? `[guild:${row.guild_id}] ` : "";
+      durableLoreLines.push(`- ${scopeLabel}${normalized}`);
+    }
     return durableLoreLines.slice(0, Math.max(1, maxItems));
   }
 
-  async rememberLine({ line, sourceMessageId, userId, sourceText = "" }) {
+  async rememberLine({ line, sourceMessageId, userId, guildId, channelId = null, sourceText = "" }) {
+    const scopeGuildId = String(guildId || "").trim();
+    if (!scopeGuildId) return false;
+
     const cleaned = normalizeMemoryLineInput(line);
     if (!cleaned) return false;
     if (isInstructionLikeFactText(cleaned)) return false;
@@ -399,6 +568,8 @@ export class MemoryManager {
 
     const factText = `Memory line: ${cleaned}.`;
     const inserted = this.store.addMemoryFact({
+      guildId: scopeGuildId,
+      channelId: channelId ? String(channelId) : null,
       subject: LORE_SUBJECT,
       fact: factText,
       factType: "lore",
@@ -415,7 +586,13 @@ export class MemoryManager {
       messageId: sourceMessageId,
       content: factText
     });
-    const factRow = this.store.getMemoryFactBySubjectAndFact(LORE_SUBJECT, factText);
+    this.store.archiveOldFactsForSubject({
+      guildId: scopeGuildId,
+      subject: LORE_SUBJECT,
+      keep: 120
+    });
+
+    const factRow = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, LORE_SUBJECT, factText);
     if (factRow) {
       this.ensureFactVector({
         factRow,
@@ -426,17 +603,23 @@ export class MemoryManager {
         }
       }).catch(() => undefined);
     }
-    await this.queueMemoryRefresh();
+    this.queueMemoryRefresh();
     return true;
   }
 
-  async appendDailyLogEntry({ authorId, authorName, content }) {
+  async appendDailyLogEntry({ authorId, authorName, guildId = "", channelId = "", content }) {
     const now = new Date();
     const dateKey = formatDateLocal(now);
     const dailyFilePath = path.join(this.memoryDirPath, `${dateKey}.md`);
     const safeAuthorName = sanitizeInline(authorName || "unknown", 80);
     const safeAuthorId = sanitizeInline(authorId || "unknown", 40);
-    const line = `- ${now.toISOString()} | ${safeAuthorName} (${safeAuthorId}) | ${content}`;
+    const safeGuildId = sanitizeInline(guildId || "", 40);
+    const safeChannelId = sanitizeInline(channelId || "", 40);
+    const scopeFragment = [safeGuildId ? `guild:${safeGuildId}` : "", safeChannelId ? `channel:${safeChannelId}` : ""]
+      .filter(Boolean)
+      .join(" ");
+    const scopedContent = scopeFragment ? `[${scopeFragment}] ${content}` : content;
+    const line = `- ${now.toISOString()} | ${safeAuthorName} (${safeAuthorId}) | ${scopedContent}`;
 
     await fs.mkdir(this.memoryDirPath, { recursive: true });
     await this.ensureDailyLogHeader(dailyFilePath, dateKey);
@@ -594,6 +777,28 @@ function computeRecencyScore(createdAtIso) {
   return 1 / (1 + ageDays / 45);
 }
 
+function computeChannelScopeScore(rowChannelId, queryChannelId) {
+  const normalizedQueryChannelId = String(queryChannelId || "").trim();
+  if (!normalizedQueryChannelId) return 0;
+
+  const normalizedRowChannelId = String(rowChannelId || "").trim();
+  if (!normalizedRowChannelId) return 0.25;
+  return normalizedRowChannelId === normalizedQueryChannelId ? 1 : 0;
+}
+
+function passesHybridRelevanceGate({ row, semanticAvailable }) {
+  const lexicalScore = clamp01(row?._lexicalScore, 0);
+  const semanticScore = clamp01(row?._semanticScore, 0);
+  const combinedScore = clamp01(row?._score, 0);
+
+  if (semanticAvailable) {
+    if (semanticScore >= 0.2 || lexicalScore >= 0.22) return true;
+    return combinedScore >= 0.52 && (semanticScore >= 0.08 || lexicalScore >= 0.1);
+  }
+
+  return lexicalScore >= 0.24 || combinedScore >= 0.62;
+}
+
 function cosineSimilarity(a, b) {
   if (!Array.isArray(a) || !Array.isArray(b) || !a.length || !b.length) return 0;
   const dims = Math.min(a.length, b.length);
@@ -749,6 +954,11 @@ function isInstructionLikeFactText(line) {
 }
 
 function isTextGroundedInSource(memoryLine, sourceText) {
+  const sourceCompact = normalizeHighlightText(sourceText);
+  const memoryCompact = normalizeHighlightText(memoryLine);
+  if (!sourceCompact || !memoryCompact) return false;
+  if (sourceCompact.includes(memoryCompact)) return true;
+
   const sourceTokens = extractStableTokens(sourceText, 64);
   if (!sourceTokens.length) return false;
 
@@ -756,13 +966,10 @@ function isTextGroundedInSource(memoryLine, sourceText) {
   if (!memoryTokens.length) return false;
 
   const sourceSet = new Set(sourceTokens);
-  const overlap = memoryTokens.filter((token) => sourceSet.has(token));
-  if (overlap.length >= 1) return true;
-
-  const sourceCompact = normalizeHighlightText(sourceText);
-  const memoryCompact = normalizeHighlightText(memoryLine);
-  if (!sourceCompact || !memoryCompact) return false;
-  if (sourceCompact.includes(memoryCompact)) return true;
+  const overlapCount = memoryTokens.filter((token) => sourceSet.has(token)).length;
+  const minOverlap = Math.max(2, Math.ceil(memoryTokens.length * 0.45));
+  if (overlapCount >= minOverlap) return true;
+  if (memoryTokens.length <= 3 && overlapCount === memoryTokens.length && overlapCount >= 2) return true;
 
   return false;
 }
@@ -798,3 +1005,13 @@ function formatDateLocal(date) {
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+export const __memoryTestables = {
+  computeChannelScopeScore,
+  passesHybridRelevanceGate,
+  isTextGroundedInSource
+};

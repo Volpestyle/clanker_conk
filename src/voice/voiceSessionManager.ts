@@ -1862,6 +1862,7 @@ export class VoiceSessionManager {
     try {
       const slice = await this.memory.buildPromptMemorySlice({
         userId: normalizedUserId,
+        guildId: session.guildId,
         channelId: null,
         queryText: normalizedTranscript,
         settings,
@@ -2944,16 +2945,22 @@ export class VoiceSessionManager {
     const botName = getPromptBotName(settings);
     const style = getPromptStyle(settings, "playful slang");
     const allowNsfwHumor = shouldAllowVoiceNsfwHumor(settings);
+    const memoryEnabled = Boolean(settings?.memory?.enabled);
     return [
-      `You are ${botName} speaking in live Discord voice chat.`,
+      `You are ${botName}, a real-feeling regular in a Discord server, speaking in live voice chat.`,
       `Stay in-character as ${botName}. Style: ${style}.`,
+      "Talk like a person hanging out, not like an assistant.",
+      "Use occasional slang naturally (not every sentence).",
       "Keep delivery calm, conversational, and low-drama.",
-      "Use short turns by default and avoid monologues.",
-      "Keep the same playful persona as text chat without being toxic.",
+      "Default to short turns but go longer when the conversation warrants it.",
       allowNsfwHumor
         ? "Adult/NSFW humor is allowed for consenting adults, but never include minors, coercion, or targeted harassment."
         : "Keep humor non-sexual by default unless users explicitly request a safe toned-down joke.",
       PROMPT_CAPABILITY_HONESTY_LINE,
+      memoryEnabled
+        ? "You have persistent memory across conversations via saved durable facts. Do not claim each conversation starts from zero."
+        : "Persistent memory is disabled right now. Do not claim long-term memory across separate conversations.",
+      "If asked to do something impossible, say it casually.",
       ...buildHardLimitsSection(settings, { maxItems: 12 })
     ].join("\n");
   }

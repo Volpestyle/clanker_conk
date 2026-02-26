@@ -88,14 +88,15 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_messages_guild_time ON messages(guild_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_actions_kind_time ON actions(kind, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_actions_time ON actions(created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_memory_scope_subject ON memory_facts(guild_id, subject, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_memory_scope_channel ON memory_facts(guild_id, channel_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_memory_vectors_fact_model ON memory_fact_vectors(fact_id, model);
       CREATE INDEX IF NOT EXISTS idx_memory_vectors_model ON memory_fact_vectors(model);
       CREATE INDEX IF NOT EXISTS idx_shared_links_last_shared_at ON shared_links(last_shared_at DESC);
     `);
     this.ensureMemoryFactsSchema();
+    this.reconcileLegacyScopedFacts();
     this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_memory_scope_subject ON memory_facts(guild_id, subject, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_memory_scope_channel ON memory_facts(guild_id, channel_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_memory_scope_subject_type ON memory_facts(guild_id, subject, fact_type, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_memory_scope_active ON memory_facts(guild_id, is_active, created_at DESC);
     `);
@@ -474,10 +475,6 @@ export class Store {
     return result.changes > 0;
   }
 
-  getFactsForSubject(subject, limit = 12) {
-    return this.getFactsForSubjectScoped(subject, limit, null);
-  }
-
   getFactsForSubjectScoped(subject, limit = 12, scope = null) {
     const where = ["subject = ?", "is_active = 1"];
     const args = [String(subject)];
@@ -627,7 +624,7 @@ export class Store {
     const normalizedSubject = String(subject || "").trim();
     if (!normalizedGuildId || !normalizedSubject) return 0;
 
-    const boundedKeep = clamp(Math.floor(Number(keep) || 60), 10, 400);
+    const boundedKeep = clamp(Math.floor(Number(keep) || 60), 1, 400);
     const where = ["guild_id = ?", "subject = ?", "is_active = 1"];
     const args = [normalizedGuildId, normalizedSubject];
     if (factType) {
@@ -738,13 +735,17 @@ export class Store {
       `);
 
       const updatedAtExpr = hasUpdatedAt ? "updated_at" : "created_at";
-      const guildExpr = hasGuildId ? "COALESCE(NULLIF(guild_id, ''), '__legacy__')" : "'__legacy__'";
+      const inferredGuildExpr = hasSourceMessageId ? buildInferredGuildExpr("memory_facts_legacy") : "NULL";
+      const guildExpr = hasGuildId
+        ? `COALESCE(NULLIF(memory_facts_legacy.guild_id, ''), ${inferredGuildExpr})`
+        : inferredGuildExpr;
       const channelExpr = hasChannelId ? "channel_id" : "NULL";
       const factTypeExpr = hasFactType ? "COALESCE(NULLIF(fact_type, ''), 'general')" : "'general'";
       const evidenceExpr = hasEvidenceText ? "evidence_text" : "NULL";
       const sourceExpr = hasSourceMessageId ? "source_message_id" : "NULL";
       const confidenceExpr = hasConfidence ? "COALESCE(confidence, 0.5)" : "0.5";
       const activeExpr = hasIsActive ? "CASE WHEN is_active = 0 THEN 0 ELSE 1 END" : "1";
+      const guildWhereExpr = `WHERE ${guildExpr} IS NOT NULL`;
 
       this.db.exec(
         `INSERT INTO memory_facts(
@@ -774,7 +775,8 @@ export class Store {
           ${sourceExpr},
           ${confidenceExpr},
           ${activeExpr}
-        FROM memory_facts_legacy;`
+        FROM memory_facts_legacy
+        ${guildWhereExpr};`
       );
 
       this.db.exec("DROP TABLE memory_facts_legacy;");
@@ -784,10 +786,61 @@ export class Store {
       throw error;
     }
   }
+
+  reconcileLegacyScopedFacts() {
+    const inferredLegacyGuildExpr = buildInferredGuildExpr("legacy");
+    const inferredCurrentGuildExpr = buildInferredGuildExpr("memory_facts");
+    this.db.exec(`
+      DELETE FROM memory_fact_vectors
+      WHERE fact_id IN (
+        SELECT legacy.id
+        FROM memory_facts AS legacy
+        JOIN memory_facts AS scoped
+          ON scoped.guild_id = ${inferredLegacyGuildExpr}
+         AND scoped.subject = legacy.subject
+         AND scoped.fact = legacy.fact
+        WHERE legacy.guild_id = '__legacy__'
+          AND ${inferredLegacyGuildExpr} IS NOT NULL
+      );
+      DELETE FROM memory_facts
+      WHERE id IN (
+        SELECT legacy.id
+        FROM memory_facts AS legacy
+        JOIN memory_facts AS scoped
+          ON scoped.guild_id = ${inferredLegacyGuildExpr}
+         AND scoped.subject = legacy.subject
+         AND scoped.fact = legacy.fact
+        WHERE legacy.guild_id = '__legacy__'
+          AND ${inferredLegacyGuildExpr} IS NOT NULL
+      );
+      UPDATE memory_facts
+      SET guild_id = ${inferredCurrentGuildExpr}
+      WHERE guild_id = '__legacy__'
+        AND ${inferredCurrentGuildExpr} IS NOT NULL;
+      DELETE FROM memory_fact_vectors
+      WHERE fact_id IN (
+        SELECT id FROM memory_facts WHERE guild_id = '__legacy__'
+      );
+      DELETE FROM memory_facts WHERE guild_id = '__legacy__';
+    `);
+  }
 }
 
 function quoteSqlIdentifier(name) {
   return `"${String(name || "").replace(/"/g, "\"\"")}"`;
+}
+
+function buildInferredGuildExpr(tableAlias) {
+  const sourceMessageIdRef = `${tableAlias}.source_message_id`;
+  return `COALESCE(
+    (SELECT NULLIF(msg.guild_id, '') FROM messages AS msg WHERE msg.message_id = ${sourceMessageIdRef} LIMIT 1),
+    CASE
+      WHEN ${sourceMessageIdRef} LIKE 'voice-%'
+       AND instr(substr(${sourceMessageIdRef}, 7), '-') > 0
+      THEN substr(${sourceMessageIdRef}, 7, instr(substr(${sourceMessageIdRef}, 7), '-') - 1)
+      ELSE NULL
+    END
+  )`;
 }
 
 function safeJsonParse(value, fallback) {

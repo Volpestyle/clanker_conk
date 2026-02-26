@@ -1128,7 +1128,7 @@ export class ClankerBot {
     const systemPrompt = [
       buildSystemPrompt(settings),
       "You are speaking in live Discord voice chat.",
-      "Keep replies concise and conversational.",
+      "Keep replies conversational. Be concise by default but go longer when it makes sense.",
       "Output plain spoken text only.",
       "Do not output directives like [[...]], [SKIP], or markdown."
     ].join("\n");

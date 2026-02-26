@@ -68,6 +68,41 @@ export function createDashboardServer({ appConfig, store, bot, memory }) {
     res.json({ ok: true, markdown });
   });
 
+  app.get("/api/memory/search", async (req, res, next) => {
+    try {
+      const queryText = String(req.query.q || "").trim();
+      const guildId = String(req.query.guildId || "").trim();
+      const channelId = String(req.query.channelId || "").trim() || null;
+      const limit = Number(req.query.limit || 10);
+      if (!queryText || !guildId) {
+        return res.json({ results: [], queryText, guildId, channelId, limit: 0 });
+      }
+
+      const settings = store.getSettings();
+      const results = await memory.searchDurableFacts({
+        guildId,
+        channelId,
+        queryText,
+        settings,
+        trace: {
+          guildId,
+          channelId,
+          source: "dashboard_memory_search"
+        },
+        limit
+      });
+      return res.json({
+        queryText,
+        guildId,
+        channelId,
+        limit,
+        results
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   const staticDir = path.resolve(__dirname, "../dashboard/dist");
   const indexPath = path.join(staticDir, "index.html");
 

@@ -11,6 +11,7 @@
     "dev": "node --watch src/app.ts",
     "dev:ui": "npx vite",
     "build:ui": "npx vite build",
+    "test": "node --test src/**/*.test.ts",
     "check": "node scripts/check-backend.mjs && npx vite build"
   },
   "engines": {

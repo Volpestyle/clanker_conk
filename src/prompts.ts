@@ -98,16 +98,48 @@ function formatVideoFindings(videoContext) {
     .join("\n");
 }
 
-function formatMemoryFacts(facts) {
+function renderPromptMemoryFact(row, { includeType = true, includeProvenance = true } = {}) {
+  const fact = String(row?.fact || "").replace(/\s+/g, " ").trim();
+  if (!fact) return "";
+
+  const type = String(row?.fact_type || "").trim().toLowerCase();
+  const label = includeType && type && type !== "other" ? `${type}: ` : "";
+  if (!includeProvenance) return `${label}${fact}`;
+
+  const evidence = String(row?.evidence_text || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 90);
+  const source = String(row?.source_message_id || "").trim().slice(0, 28);
+  const createdAt = String(row?.created_at || "").trim().slice(0, 10);
+  const confidence = Number(row?.confidence);
+  const confidenceLabel = Number.isFinite(confidence) ? ` | conf:${confidence.toFixed(2)}` : "";
+  const evidenceLabel = evidence ? ` | evidence: "${evidence}"` : "";
+  const sourceLabel = source ? ` | source:${source}` : "";
+  const dateLabel = createdAt ? ` | date:${createdAt}` : "";
+
+  return `${label}${fact}${evidenceLabel}${sourceLabel}${dateLabel}${confidenceLabel}`;
+}
+
+function formatMemoryFacts(facts, { includeType = true, includeProvenance = true, maxItems = 12 } = {}) {
   if (!facts?.length) return "(no durable memory hits)";
 
   return facts
+    .slice(0, Math.max(1, Number(maxItems) || 12))
     .map((row) => {
-      const fact = String(row?.fact || "").replace(/\s+/g, " ").trim();
-      if (!fact) return "";
-      const type = String(row?.fact_type || "").trim().toLowerCase();
-      const label = type && type !== "other" ? `${type}: ` : "";
-      return `- ${label}${fact}`;
+      const rendered = renderPromptMemoryFact(row, { includeType, includeProvenance });
+      return rendered ? `- ${rendered}` : "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function formatMemoryLookupResults(results) {
+  if (!results?.length) return "(no matching durable memory found)";
+  return results
+    .map((row, index) => {
+      const rendered = renderPromptMemoryFact(row, { includeType: true, includeProvenance: true });
+      return rendered ? `- [M${index + 1}] ${rendered}` : "";
     })
     .filter(Boolean)
     .join("\n");
@@ -135,7 +167,7 @@ export function buildSystemPrompt(settings) {
     `Style: ${getPromptStyle(settings, "playful slang")}.`,
     "Write like a person in chat, not like an assistant.",
     "Use occasional slang naturally (not every sentence).",
-    "Use short messages by default (1-3 lines).",
+    "Default to short messages but go longer when the conversation calls for it.",
     "Use server emoji tokens in text only when necessary and when they enhance the message.",
     PROMPT_CAPABILITY_HONESTY_LINE,
     memoryEnabled
@@ -143,9 +175,6 @@ export function buildSystemPrompt(settings) {
       : "Persistent memory is disabled right now. Do not claim long-term memory across separate conversations.",
     "If asked to do something impossible, say it casually and suggest a text-only alternative.",
     ...buildHardLimitsSection(settings),
-    "Safety:",
-    "- No harassment, hate, sexual content with minors, or illegal instructions.",
-    "- Keep tone friendly and fun.",
     "If you should not send a message, output exactly [SKIP]."
   ].join("\n");
 }
@@ -174,6 +203,7 @@ export function buildReplyPrompt({
   reactionEagerness = 20,
   addressing = null,
   webSearch = null,
+  memoryLookup = null,
   allowWebSearchDirective = false,
   allowMemoryDirective = false,
   voiceMode = null,
@@ -204,14 +234,26 @@ export function buildReplyPrompt({
 
   if (userFacts?.length) {
     parts.push("Known facts about this user:");
-    for (const fact of userFacts) {
-      parts.push(`- ${fact.fact}`);
-    }
+    parts.push(formatMemoryFacts(userFacts, { includeType: false, includeProvenance: true, maxItems: 8 }));
   }
 
   if (relevantFacts?.length) {
     parts.push("Relevant durable memory:");
-    parts.push(formatMemoryFacts(relevantFacts));
+    parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: true, maxItems: 10 }));
+  }
+
+  if (memoryLookup?.requested) {
+    if (memoryLookup.error) {
+      parts.push(`Memory lookup failed: ${memoryLookup.error}`);
+      parts.push("Answer from currently available context and avoid inventing memory.");
+    } else if (!memoryLookup.results?.length) {
+      parts.push(`Memory lookup for "${memoryLookup.query || message?.content || ""}" found no durable matches.`);
+      parts.push("Say that no strong memory match was found if the user asked what you remember.");
+    } else {
+      parts.push(`Memory lookup results for "${memoryLookup.query || message?.content || ""}":`);
+      parts.push(formatMemoryLookupResults(memoryLookup.results));
+      parts.push("If useful, cite memory hits inline as [M1], [M2], etc.");
+    }
   }
 
   if (emojiHints?.length) {
@@ -466,17 +508,15 @@ export function buildVoiceTurnPrompt({
 
   if (userFacts?.length) {
     parts.push("Known facts about this user:");
-    for (const fact of userFacts) {
-      parts.push(`- ${fact.fact}`);
-    }
+    parts.push(formatMemoryFacts(userFacts, { includeType: false, includeProvenance: false, maxItems: 8 }));
   }
 
   if (relevantFacts?.length) {
     parts.push("Relevant durable memory:");
-    parts.push(formatMemoryFacts(relevantFacts));
+    parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: false, maxItems: 8 }));
   }
 
-  parts.push("Task: respond as a short spoken VC reply (1-2 sentences by default).");
+  parts.push("Task: respond as a natural spoken VC reply. Keep it concise by default but go longer if warranted.");
   parts.push("Use plain text only. Do not output directives, tags, markdown, or [SKIP].");
 
   return parts.join("\n\n");
@@ -557,7 +597,7 @@ export function buildInitiativePrompt({
   }
 
   parts.push("Task: write one standalone Discord message that feels timely and human.");
-  parts.push("Keep it short (1-3 lines), playful, non-spammy, and slightly surprising.");
+  parts.push("Keep it playful, non-spammy, and slightly surprising.");
   parts.push("If there is genuinely nothing good to post, output exactly [SKIP].");
 
   return parts.join("\n\n");
