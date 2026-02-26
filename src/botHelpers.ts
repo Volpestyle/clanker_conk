@@ -9,7 +9,7 @@ const REACTION_DIRECTIVE_RE = /\[\[REACTION:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const WEB_SEARCH_DIRECTIVE_RE = /\[\[WEB_SEARCH:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const MEMORY_LINE_DIRECTIVE_RE = /\[\[MEMORY_LINE:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
-const MAX_MEDIA_PROMPT_LEN = 240;
+const MAX_MEDIA_PROMPT_LEN = 480;
 export const MAX_WEB_QUERY_LEN = 220;
 export const MAX_GIF_QUERY_LEN = 120;
 const MAX_MEMORY_LINE_LEN = 180;
@@ -240,13 +240,19 @@ export function composeInitiativeImagePrompt(imagePrompt, postText) {
   const requested = normalizeDirectiveText(imagePrompt, MAX_MEDIA_PROMPT_LEN);
 
   return [
-    "Create a playful, meme-friendly image for a Discord post.",
-    `Creative direction: ${requested || "a timely playful internet moment"}.`,
-    `Topic context for visual inspiration only: ${topic || "general chat mood"}.`,
+    "Create a vivid, shareable image for a Discord post.",
+    `Scene: ${requested || "a timely playful internet moment"}.`,
+    `Mood/topic context (do not render as text): ${topic || "general chat mood"}.`,
+    "Style guidance:",
+    "- Describe a concrete scene with a clear subject, action, and environment.",
+    "- Use cinematic or editorial framing: strong focal point, depth of field, deliberate camera angle.",
+    "- Include expressive lighting (golden hour, neon glow, dramatic chiaroscuro, soft diffused, etc.).",
+    "- Choose a cohesive color palette that reinforces the mood.",
+    "- Favor a specific visual medium when it fits (photo-realistic, illustration, 3D render, pixel art, watercolor, cel-shaded, collage).",
     "Hard constraints:",
-    "- Do not include any visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks.",
-    "- Do not render any words from the creative direction or topic context as text inside the image.",
-    "- Make it purely visual with strong composition and expressive lighting."
+    "- Absolutely no visible text, letters, numbers, logos, subtitles, captions, UI elements, or watermarks anywhere in the image.",
+    "- Do not render any words from the scene description or topic context as text inside the image.",
+    "- Keep the composition clean with a single strong focal point."
   ].join("\n");
 }
 
@@ -260,12 +266,64 @@ export function composeInitiativeVideoPrompt(videoPrompt, postText) {
   const requested = normalizeDirectiveText(videoPrompt, MAX_MEDIA_PROMPT_LEN);
 
   return [
-    "Create a short, dynamic, meme-friendly video for a Discord post.",
-    `Creative direction: ${requested || "a timely playful internet moment"}.`,
-    `Topic context for visual inspiration only: ${topic || "general chat mood"}.`,
+    "Create a short, dynamic, shareable video clip for a Discord post.",
+    `Scene: ${requested || "a timely playful internet moment"}.`,
+    `Mood/topic context (do not render as text): ${topic || "general chat mood"}.`,
+    "Style guidance:",
+    "- Describe a concrete motion arc: what the viewer sees at the start, what changes, and how it resolves.",
+    "- Specify camera behavior (slow pan, tracking shot, static wide, zoom-in, dolly, handheld shake).",
+    "- Include lighting mood and color palette.",
+    "- Keep the action legible in a short social-clip format (3-6 seconds of clear motion).",
     "Hard constraints:",
-    "- Do not include visible text, captions, subtitles, logos, watermarks, or UI overlays.",
-    "- Keep motion clear and readable in a short social clip format."
+    "- No visible text, captions, subtitles, logos, watermarks, or UI overlays.",
+    "- Smooth, continuous motion without abrupt jumps or flicker."
+  ].join("\n");
+}
+
+export function composeReplyImagePrompt(imagePrompt, replyText) {
+  URL_IN_TEXT_RE.lastIndex = 0;
+  const context = String(replyText || "")
+    .replace(URL_IN_TEXT_RE, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 260);
+  const requested = normalizeDirectiveText(imagePrompt, MAX_MEDIA_PROMPT_LEN);
+
+  return [
+    "Create a vivid image to accompany a Discord chat reply.",
+    `Scene: ${requested || "a playful visual reaction"}.`,
+    `Conversational context (do not render as text): ${context || "casual chat"}.`,
+    "Style guidance:",
+    "- Describe a concrete scene with a clear subject, action, and setting.",
+    "- Use expressive framing and lighting to sell the mood.",
+    "- Pick a visual medium that fits the tone (photo, illustration, 3D render, pixel art, etc.).",
+    "Hard constraints:",
+    "- No visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks.",
+    "- Keep the composition clean with one clear focal point."
+  ].join("\n");
+}
+
+export function composeReplyVideoPrompt(videoPrompt, replyText) {
+  URL_IN_TEXT_RE.lastIndex = 0;
+  const context = String(replyText || "")
+    .replace(URL_IN_TEXT_RE, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 260);
+  const requested = normalizeDirectiveText(videoPrompt, MAX_MEDIA_PROMPT_LEN);
+
+  return [
+    "Create a short, dynamic video clip to accompany a Discord chat reply.",
+    `Scene: ${requested || "a playful visual reaction with motion"}.`,
+    `Conversational context (do not render as text): ${context || "casual chat"}.`,
+    "Style guidance:",
+    "- Describe a concrete motion arc: what starts, what changes, how it ends.",
+    "- Specify camera behavior (pan, tracking, zoom, static, handheld).",
+    "- Include lighting and color palette.",
+    "- Keep the action clear in a short social-clip format.",
+    "Hard constraints:",
+    "- No visible text, captions, subtitles, logos, watermarks, or UI overlays.",
+    "- Smooth, continuous motion."
   ].join("\n");
 }
 
