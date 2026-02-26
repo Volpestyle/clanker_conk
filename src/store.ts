@@ -694,6 +694,9 @@ function normalizeSettings(raw) {
   if (!merged.voice.xai || typeof merged.voice.xai !== "object") {
     merged.voice.xai = {};
   }
+  if (!merged.voice.openaiRealtime || typeof merged.voice.openaiRealtime !== "object") {
+    merged.voice.openaiRealtime = {};
+  }
   if (!merged.voice.sttPipeline || typeof merged.voice.sttPipeline !== "object") {
     merged.voice.sttPipeline = {};
   }
@@ -703,6 +706,7 @@ function normalizeSettings(raw) {
 
   const defaultVoice = DEFAULT_SETTINGS.voice || {};
   const defaultVoiceXai = defaultVoice.xai || {};
+  const defaultVoiceOpenAiRealtime = defaultVoice.openaiRealtime || {};
   const defaultVoiceSttPipeline = defaultVoice.sttPipeline || {};
   const defaultVoiceSoundboard = defaultVoice.soundboard || {};
   const voiceIntentThresholdRaw = Number(merged.voice?.intentConfidenceThreshold);
@@ -711,6 +715,8 @@ function normalizeSettings(raw) {
   const voiceDailySessionsRaw = Number(merged.voice?.maxSessionsPerDay);
   const voiceConcurrentSessionsRaw = Number(merged.voice?.maxConcurrentSessions);
   const voiceSampleRateRaw = Number(merged.voice?.xai?.sampleRateHz);
+  const openAiRealtimeInputSampleRateRaw = Number(merged.voice?.openaiRealtime?.inputSampleRateHz);
+  const openAiRealtimeOutputSampleRateRaw = Number(merged.voice?.openaiRealtime?.outputSampleRateHz);
   const voiceSttTtsSpeedRaw = Number(merged.voice?.sttPipeline?.ttsSpeed);
 
   merged.voice.enabled =
@@ -764,6 +770,43 @@ function normalizeSettings(raw) {
   merged.voice.xai.region = String(merged.voice?.xai?.region || defaultVoiceXai.region || "us-east-1")
     .trim()
     .slice(0, 40);
+  merged.voice.openaiRealtime.model = String(
+    merged.voice?.openaiRealtime?.model || defaultVoiceOpenAiRealtime.model || "gpt-realtime"
+  )
+    .trim()
+    .slice(0, 120);
+  merged.voice.openaiRealtime.voice = String(
+    merged.voice?.openaiRealtime?.voice || defaultVoiceOpenAiRealtime.voice || "alloy"
+  )
+    .trim()
+    .slice(0, 60);
+  merged.voice.openaiRealtime.inputAudioFormat = normalizeOpenAiRealtimeAudioFormat(
+    merged.voice?.openaiRealtime?.inputAudioFormat || defaultVoiceOpenAiRealtime.inputAudioFormat || "pcm16"
+  );
+  merged.voice.openaiRealtime.outputAudioFormat = normalizeOpenAiRealtimeAudioFormat(
+    merged.voice?.openaiRealtime?.outputAudioFormat || defaultVoiceOpenAiRealtime.outputAudioFormat || "pcm16"
+  );
+  merged.voice.openaiRealtime.inputSampleRateHz = clamp(
+    Number.isFinite(openAiRealtimeInputSampleRateRaw)
+      ? openAiRealtimeInputSampleRateRaw
+      : Number(defaultVoiceOpenAiRealtime.inputSampleRateHz) || 24000,
+    8000,
+    48000
+  );
+  merged.voice.openaiRealtime.outputSampleRateHz = clamp(
+    Number.isFinite(openAiRealtimeOutputSampleRateRaw)
+      ? openAiRealtimeOutputSampleRateRaw
+      : Number(defaultVoiceOpenAiRealtime.outputSampleRateHz) || 24000,
+    8000,
+    48000
+  );
+  merged.voice.openaiRealtime.inputTranscriptionModel = String(
+    merged.voice?.openaiRealtime?.inputTranscriptionModel ||
+      defaultVoiceOpenAiRealtime.inputTranscriptionModel ||
+      "gpt-4o-mini-transcribe"
+  )
+    .trim()
+    .slice(0, 120);
   merged.voice.sttPipeline.transcriptionModel = String(
     merged.voice?.sttPipeline?.transcriptionModel || defaultVoiceSttPipeline.transcriptionModel || "gpt-4o-mini-transcribe"
   )
@@ -1049,8 +1092,18 @@ function normalizeVoiceMode(value, fallback = "voice_agent") {
   const normalized = String(value || fallback || "")
     .trim()
     .toLowerCase();
+  if (normalized === "openai_realtime") return "openai_realtime";
   if (normalized === "stt_pipeline") return "stt_pipeline";
   return "voice_agent";
+}
+
+function normalizeOpenAiRealtimeAudioFormat(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "g711_ulaw") return "g711_ulaw";
+  if (normalized === "g711_alaw") return "g711_alaw";
+  return "pcm16";
 }
 
 function normalizeHardLimitList(input, fallback = []) {

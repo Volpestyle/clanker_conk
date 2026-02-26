@@ -19,6 +19,7 @@ import prism from "prism-media";
 import { buildHardLimitsSection, getPromptBotName, PROMPT_CAPABILITY_HONESTY_LINE } from "../promptCore.ts";
 import { clamp } from "../utils.ts";
 import { convertDiscordPcmToXaiInput, convertXaiOutputToDiscordPcm } from "./pcmAudio.ts";
+import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 import { SoundboardDirector } from "./soundboardDirector.ts";
 import { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
 
@@ -110,7 +111,14 @@ export class VoiceSessionManager {
               : 0
           }
         : null,
-      xai: session.xaiClient?.getState?.() || null
+      realtime: isRealtimeMode(session.mode)
+        ? {
+            provider: session.realtimeProvider || resolveRealtimeProvider(session.mode),
+            inputSampleRateHz: Number(session.realtimeInputSampleRateHz) || 24000,
+            outputSampleRateHz: Number(session.realtimeOutputSampleRateHz) || 24000,
+            state: session.realtimeClient?.getState?.() || null
+          }
+        : null
     }));
 
     return {
@@ -297,6 +305,23 @@ export class VoiceSessionManager {
         });
         return true;
       }
+      if (runtimeMode === "openai_realtime" && !this.appConfig?.openaiApiKey) {
+        await this.sendOperationalMessage({
+          channel: message.channel,
+          settings,
+          guildId,
+          channelId: message.channelId,
+          userId,
+          messageId: message.id,
+          event: "voice_join_request",
+          reason: "openai_api_key_missing",
+          details: {
+            mode: runtimeMode
+          },
+          fallback: "OpenAI realtime mode needs `OPENAI_API_KEY`."
+        });
+        return true;
+      }
       if (runtimeMode === "stt_pipeline") {
         if (!this.llm?.isAsrReady?.()) {
           await this.sendOperationalMessage({
@@ -380,10 +405,12 @@ export class VoiceSessionManager {
       );
 
       let connection = null;
-      let xaiClient = null;
+      let realtimeClient = null;
       let audioPlayer = null;
       let botAudioStream = null;
       let reservedConcurrencySlot = false;
+      let realtimeInputSampleRateHz = 24000;
+      let realtimeOutputSampleRateHz = 24000;
 
       try {
         const maxConcurrentSessions = clamp(Number(settings.voice?.maxConcurrentSessions) || 1, 1, 3);
@@ -423,7 +450,7 @@ export class VoiceSessionManager {
         await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
 
         if (runtimeMode === "voice_agent") {
-          xaiClient = new XaiRealtimeClient({
+          realtimeClient = new XaiRealtimeClient({
             apiKey: this.appConfig.xaiApiKey,
             logger: ({ level, event, metadata }) => {
               this.store.logAction({
@@ -438,14 +465,46 @@ export class VoiceSessionManager {
           });
 
           const xaiSettings = settings.voice?.xai || {};
-          await xaiClient.connect({
+          realtimeInputSampleRateHz = Number(xaiSettings.sampleRateHz) || 24000;
+          realtimeOutputSampleRateHz = Number(xaiSettings.sampleRateHz) || 24000;
+          await realtimeClient.connect({
             voice: xaiSettings.voice || "Rex",
             instructions: this.buildVoiceInstructions(settings),
             region: xaiSettings.region || "us-east-1",
             inputAudioFormat: xaiSettings.audioFormat || "audio/pcm",
             outputAudioFormat: xaiSettings.audioFormat || "audio/pcm",
-            inputSampleRateHz: Number(xaiSettings.sampleRateHz) || 24000,
-            outputSampleRateHz: Number(xaiSettings.sampleRateHz) || 24000
+            inputSampleRateHz: realtimeInputSampleRateHz,
+            outputSampleRateHz: realtimeOutputSampleRateHz
+          });
+        } else if (runtimeMode === "openai_realtime") {
+          realtimeClient = new OpenAiRealtimeClient({
+            apiKey: this.appConfig.openaiApiKey,
+            logger: ({ level, event, metadata }) => {
+              this.store.logAction({
+                kind: level === "warn" ? "voice_error" : "voice_runtime",
+                guildId,
+                channelId: message.channelId,
+                userId: this.client.user?.id || null,
+                content: event,
+                metadata
+              });
+            }
+          });
+
+          const openAiRealtimeSettings = settings.voice?.openaiRealtime || {};
+          realtimeInputSampleRateHz = Number(openAiRealtimeSettings.inputSampleRateHz) || 24000;
+          realtimeOutputSampleRateHz = Number(openAiRealtimeSettings.outputSampleRateHz) || 24000;
+          await realtimeClient.connect({
+            model: String(openAiRealtimeSettings.model || "gpt-realtime").trim() || "gpt-realtime",
+            voice: String(openAiRealtimeSettings.voice || "alloy").trim() || "alloy",
+            instructions: this.buildVoiceInstructions(settings),
+            inputAudioFormat: String(openAiRealtimeSettings.inputAudioFormat || "pcm16").trim() || "pcm16",
+            outputAudioFormat: String(openAiRealtimeSettings.outputAudioFormat || "pcm16").trim() || "pcm16",
+            inputSampleRateHz: realtimeInputSampleRateHz,
+            outputSampleRateHz: realtimeOutputSampleRateHz,
+            inputTranscriptionModel:
+              String(openAiRealtimeSettings.inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() ||
+              "gpt-4o-mini-transcribe"
           });
         }
 
@@ -465,8 +524,11 @@ export class VoiceSessionManager {
           textChannelId: String(message.channelId),
           requestedByUserId: userId,
           mode: runtimeMode,
+          realtimeProvider: resolveRealtimeProvider(runtimeMode),
+          realtimeInputSampleRateHz,
+          realtimeOutputSampleRateHz,
           connection,
-          xaiClient,
+          realtimeClient,
           audioPlayer,
           botAudioStream,
           startedAt: now,
@@ -504,8 +566,8 @@ export class VoiceSessionManager {
         this.sessions.set(guildId, session);
         this.bindAudioPlayerHandlers(session);
         this.bindSessionHandlers(session, settings);
-        if (runtimeMode === "voice_agent") {
-          this.bindXaiHandlers(session, settings);
+        if (isRealtimeMode(runtimeMode)) {
+          this.bindRealtimeHandlers(session, settings);
         }
         this.startSessionTimers(session, settings);
 
@@ -541,8 +603,8 @@ export class VoiceSessionManager {
           content: `voice_join_failed: ${errorText}`
         });
 
-        if (xaiClient) {
-          await xaiClient.close().catch(() => undefined);
+        if (realtimeClient) {
+          await realtimeClient.close().catch(() => undefined);
         }
 
         if (botAudioStream) {
@@ -913,8 +975,9 @@ export class VoiceSessionManager {
     });
   }
 
-  bindXaiHandlers(session, settings = session.settingsSnapshot) {
-    if (!session?.xaiClient) return;
+  bindRealtimeHandlers(session, settings = session.settingsSnapshot) {
+    if (!session?.realtimeClient) return;
+    const runtimeLabel = getRealtimeRuntimeLabel(session.mode);
     const onAudioDelta = (audioBase64) => {
       let chunk = null;
       try {
@@ -924,7 +987,10 @@ export class VoiceSessionManager {
       }
       if (!chunk || !chunk.length) return;
 
-      const discordPcm = convertXaiOutputToDiscordPcm(chunk, 24000);
+      const discordPcm = convertXaiOutputToDiscordPcm(
+        chunk,
+        Number(session.realtimeOutputSampleRateHz) || 24000
+      );
       if (!discordPcm.length) return;
 
       if (
@@ -976,7 +1042,7 @@ export class VoiceSessionManager {
         guildId: session.guildId,
         channelId: session.textChannelId,
         userId: this.client.user?.id || null,
-        content: "xai_transcript",
+        content: `${runtimeLabel}_transcript`,
         metadata: {
           sessionId: session.id,
           transcript,
@@ -988,13 +1054,13 @@ export class VoiceSessionManager {
 
     const onErrorEvent = (errorPayload) => {
       if (session.ending) return;
-      const details = parseXaiErrorPayload(errorPayload);
+      const details = parseRealtimeErrorPayload(errorPayload);
       this.store.logAction({
         kind: "voice_error",
         guildId: session.guildId,
         channelId: session.textChannelId,
         userId: this.client.user?.id || null,
-        content: `xai_error_event: ${details.message}`,
+        content: `${runtimeLabel}_error_event: ${details.message}`,
         metadata: {
           sessionId: session.id,
           code: details.code,
@@ -1007,7 +1073,7 @@ export class VoiceSessionManager {
 
       this.endSession({
         guildId: session.guildId,
-        reason: "xai_runtime_error",
+        reason: "realtime_runtime_error",
         announcement: "voice runtime hit an error, leaving vc.",
         settings
       }).catch(() => undefined);
@@ -1022,7 +1088,7 @@ export class VoiceSessionManager {
         guildId: session.guildId,
         channelId: session.textChannelId,
         userId: this.client.user?.id || null,
-        content: "xai_socket_closed",
+        content: `${runtimeLabel}_socket_closed`,
         metadata: {
           sessionId: session.id,
           code,
@@ -1032,8 +1098,8 @@ export class VoiceSessionManager {
 
       this.endSession({
         guildId: session.guildId,
-        reason: "xai_socket_closed",
-        announcement: "lost xai voice runtime, leaving vc.",
+        reason: "realtime_socket_closed",
+        announcement: "lost realtime voice runtime, leaving vc.",
         settings
       }).catch(() => undefined);
     };
@@ -1046,7 +1112,7 @@ export class VoiceSessionManager {
         guildId: session.guildId,
         channelId: session.textChannelId,
         userId: this.client.user?.id || null,
-        content: `xai_socket_error: ${message}`,
+        content: `${runtimeLabel}_socket_error: ${message}`,
         metadata: {
           sessionId: session.id
         }
@@ -1067,7 +1133,7 @@ export class VoiceSessionManager {
         guildId: session.guildId,
         channelId: session.textChannelId,
         userId: this.client.user?.id || null,
-        content: "xai_response_done",
+        content: `${runtimeLabel}_response_done`,
         metadata: {
           sessionId: session.id,
           requestId: pending.requestId,
@@ -1109,20 +1175,20 @@ export class VoiceSessionManager {
       }, RESPONSE_DONE_SILENCE_GRACE_MS);
     };
 
-    session.xaiClient.on("audio_delta", onAudioDelta);
-    session.xaiClient.on("transcript", onTranscript);
-    session.xaiClient.on("error_event", onErrorEvent);
-    session.xaiClient.on("socket_closed", onSocketClosed);
-    session.xaiClient.on("socket_error", onSocketError);
-    session.xaiClient.on("response_done", onResponseDone);
+    session.realtimeClient.on("audio_delta", onAudioDelta);
+    session.realtimeClient.on("transcript", onTranscript);
+    session.realtimeClient.on("error_event", onErrorEvent);
+    session.realtimeClient.on("socket_closed", onSocketClosed);
+    session.realtimeClient.on("socket_error", onSocketError);
+    session.realtimeClient.on("response_done", onResponseDone);
 
     session.cleanupHandlers.push(() => {
-      session.xaiClient.off("audio_delta", onAudioDelta);
-      session.xaiClient.off("transcript", onTranscript);
-      session.xaiClient.off("error_event", onErrorEvent);
-      session.xaiClient.off("socket_closed", onSocketClosed);
-      session.xaiClient.off("socket_error", onSocketError);
-      session.xaiClient.off("response_done", onResponseDone);
+      session.realtimeClient.off("audio_delta", onAudioDelta);
+      session.realtimeClient.off("transcript", onTranscript);
+      session.realtimeClient.off("error_event", onErrorEvent);
+      session.realtimeClient.off("socket_closed", onSocketClosed);
+      session.realtimeClient.off("socket_error", onSocketError);
+      session.realtimeClient.off("response_done", onResponseDone);
     });
   }
 
@@ -1292,7 +1358,10 @@ export class VoiceSessionManager {
     };
 
     pcmStream.on("data", (chunk) => {
-      const normalizedPcm = convertDiscordPcmToXaiInput(chunk);
+      const normalizedPcm = convertDiscordPcmToXaiInput(
+        chunk,
+        Number(session.realtimeInputSampleRateHz) || 24000
+      );
       if (!normalizedPcm.length) return;
       captureState.bytesSent += normalizedPcm.length;
       captureState.pcmChunks.push(normalizedPcm);
@@ -1305,9 +1374,9 @@ export class VoiceSessionManager {
         captureState.lastActivityTouchAt = now;
       }
 
-      if (session.mode === "voice_agent") {
+      if (isRealtimeMode(session.mode)) {
         try {
-          session.xaiClient.appendInputAudioPcm(normalizedPcm);
+          session.realtimeClient.appendInputAudioPcm(normalizedPcm);
         } catch (error) {
           this.store.logAction({
             kind: "voice_error",
@@ -1646,7 +1715,7 @@ export class VoiceSessionManager {
 
   scheduleResponseFromBufferedAudio({ session, userId = null }) {
     if (!session || session.ending) return;
-    if (session.mode !== "voice_agent") return;
+    if (!isRealtimeMode(session.mode)) return;
 
     if (session.responseFlushTimer) {
       clearTimeout(session.responseFlushTimer);
@@ -1660,7 +1729,7 @@ export class VoiceSessionManager {
 
   flushResponseFromBufferedAudio({ session, userId = null }) {
     if (!session || session.ending) return;
-    if (session.mode !== "voice_agent") return;
+    if (!isRealtimeMode(session.mode)) return;
 
     const now = Date.now();
     const msSinceLastRequest = now - Number(session.lastResponseRequestAt || 0);
@@ -1712,7 +1781,7 @@ export class VoiceSessionManager {
     }
 
     try {
-      session.xaiClient.commitInputAudioBuffer();
+      session.realtimeClient.commitInputAudioBuffer();
       this.createTrackedAudioResponse({
         session,
         userId,
@@ -1735,8 +1804,8 @@ export class VoiceSessionManager {
 
   createTrackedAudioResponse({ session, userId = null, source = "turn_flush", resetRetryState = false }) {
     if (!session || session.ending) return;
-    if (session.mode !== "voice_agent") return;
-    session.xaiClient.createAudioResponse();
+    if (!isRealtimeMode(session.mode)) return;
+    session.realtimeClient.createAudioResponse();
 
     const now = Date.now();
     const requestId = Number(session.nextResponseRequestId || 0) + 1;
@@ -1789,7 +1858,7 @@ export class VoiceSessionManager {
 
   armResponseSilenceWatchdog({ session, requestId, userId = null }) {
     if (!session || session.ending) return;
-    if (session.mode !== "voice_agent") return;
+    if (!isRealtimeMode(session.mode)) return;
     if (!Number.isFinite(Number(requestId)) || Number(requestId) <= 0) return;
 
     if (session.responseWatchdogTimer) {
@@ -1822,7 +1891,7 @@ export class VoiceSessionManager {
     responseStatus = null
   }) {
     if (!session || session.ending) return;
-    if (session.mode !== "voice_agent") return;
+    if (!isRealtimeMode(session.mode)) return;
     const pending = session.pendingResponse;
     if (!pending) return;
     if (pending.handlingSilence) return;
@@ -1946,7 +2015,7 @@ export class VoiceSessionManager {
       });
 
       try {
-        session.xaiClient.commitInputAudioBuffer();
+        session.realtimeClient.commitInputAudioBuffer();
         this.createTrackedAudioResponse({
           session,
           userId: resolvedUserId,
@@ -2063,7 +2132,7 @@ export class VoiceSessionManager {
     }
 
     try {
-      await session.xaiClient?.close?.();
+      await session.realtimeClient?.close?.();
     } catch {
       // ignore
     }
@@ -2398,7 +2467,9 @@ function defaultExitMessage(reason) {
   if (reason === "max_duration") return "time cap reached, dipping from vc.";
   if (reason === "inactivity_timeout") return "been quiet for a bit, leaving vc.";
   if (reason === "connection_lost" || reason === "bot_disconnected") return "lost the voice connection, i bounced.";
-  if (reason === "xai_runtime_error" || reason === "xai_socket_closed") return "voice runtime dropped, i'm out.";
+  if (reason === "realtime_runtime_error" || reason === "realtime_socket_closed") {
+    return "voice runtime dropped, i'm out.";
+  }
   if (reason === "response_stalled") return "voice output got stuck, so i bounced.";
   if (reason === "settings_disabled") return "voice mode was disabled, so i dipped.";
   if (reason === "settings_channel_blocked" || reason === "settings_channel_not_allowlisted") {
@@ -2408,10 +2479,10 @@ function defaultExitMessage(reason) {
   return "leaving vc.";
 }
 
-function parseXaiErrorPayload(payload) {
+function parseRealtimeErrorPayload(payload) {
   if (!payload || typeof payload !== "object") {
     return {
-      message: String(payload || "unknown xai error"),
+      message: String(payload || "unknown realtime error"),
       code: null,
       param: null,
       lastOutboundEventType: null,
@@ -2420,7 +2491,7 @@ function parseXaiErrorPayload(payload) {
     };
   }
 
-  const message = String(payload.message || "unknown xai error");
+  const message = String(payload.message || "unknown realtime error");
   const code = payload.code ? String(payload.code) : null;
   const param =
     payload.param !== undefined && payload.param !== null
@@ -2553,8 +2624,29 @@ function resolveVoiceRuntimeMode(settings) {
   const normalized = String(settings?.voice?.mode || "")
     .trim()
     .toLowerCase();
+  if (normalized === "openai_realtime") return "openai_realtime";
   if (normalized === "stt_pipeline") return "stt_pipeline";
   return "voice_agent";
+}
+
+function resolveRealtimeProvider(mode) {
+  const normalized = String(mode || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "voice_agent") return "xai";
+  if (normalized === "openai_realtime") return "openai";
+  return null;
+}
+
+function isRealtimeMode(mode) {
+  return Boolean(resolveRealtimeProvider(mode));
+}
+
+function getRealtimeRuntimeLabel(mode) {
+  const provider = resolveRealtimeProvider(mode);
+  if (provider === "xai") return "xai";
+  if (provider === "openai") return "openai_realtime";
+  return "realtime";
 }
 
 function normalizeVoiceText(value, maxChars = 520) {

@@ -58,10 +58,11 @@ export function mono16ToStereo16(input) {
   return output;
 }
 
-export function convertDiscordPcmToXaiInput(discordPcm) {
+export function convertDiscordPcmToXaiInput(discordPcm, outputSampleRate = 24000) {
   const mono48k = downmixStereo16ToMono16(discordPcm);
   if (!mono48k.length) return Buffer.alloc(0);
-  return resampleMono16(mono48k, 48000, 24000);
+  const normalizedOutputRate = Math.max(8000, Math.min(48000, Number(outputSampleRate) || 24000));
+  return resampleMono16(mono48k, 48000, normalizedOutputRate);
 }
 
 export function convertXaiOutputToDiscordPcm(xaiPcm, inputSampleRate = 24000) {

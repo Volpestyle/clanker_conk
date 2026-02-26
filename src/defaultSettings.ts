@@ -59,6 +59,15 @@ export const DEFAULT_SETTINGS = {
       sampleRateHz: 24000,
       region: "us-east-1"
     },
+    openaiRealtime: {
+      model: "gpt-realtime",
+      voice: "alloy",
+      inputAudioFormat: "pcm16",
+      outputAudioFormat: "pcm16",
+      inputSampleRateHz: 24000,
+      outputSampleRateHz: 24000,
+      inputTranscriptionModel: "gpt-4o-mini-transcribe"
+    },
     sttPipeline: {
       transcriptionModel: "gpt-4o-mini-transcribe",
       ttsModel: "gpt-4o-mini-tts",

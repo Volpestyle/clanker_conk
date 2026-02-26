@@ -98,6 +98,14 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
       voiceXaiAudioFormat: settings.voice?.xai?.audioFormat ?? "audio/pcm",
       voiceXaiSampleRateHz: settings.voice?.xai?.sampleRateHz ?? 24000,
       voiceXaiRegion: settings.voice?.xai?.region ?? "us-east-1",
+      voiceOpenAiRealtimeModel: settings.voice?.openaiRealtime?.model ?? "gpt-realtime",
+      voiceOpenAiRealtimeVoice: settings.voice?.openaiRealtime?.voice ?? "alloy",
+      voiceOpenAiRealtimeInputAudioFormat: settings.voice?.openaiRealtime?.inputAudioFormat ?? "pcm16",
+      voiceOpenAiRealtimeOutputAudioFormat: settings.voice?.openaiRealtime?.outputAudioFormat ?? "pcm16",
+      voiceOpenAiRealtimeInputSampleRateHz: settings.voice?.openaiRealtime?.inputSampleRateHz ?? 24000,
+      voiceOpenAiRealtimeOutputSampleRateHz: settings.voice?.openaiRealtime?.outputSampleRateHz ?? 24000,
+      voiceOpenAiRealtimeInputTranscriptionModel:
+        settings.voice?.openaiRealtime?.inputTranscriptionModel ?? "gpt-4o-mini-transcribe",
       voiceSttTranscriptionModel: settings.voice?.sttPipeline?.transcriptionModel ?? "gpt-4o-mini-transcribe",
       voiceSttTtsModel: settings.voice?.sttPipeline?.ttsModel ?? "gpt-4o-mini-tts",
       voiceSttTtsVoice: settings.voice?.sttPipeline?.ttsVoice ?? "alloy",
@@ -233,6 +241,15 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
           audioFormat: String(form.voiceXaiAudioFormat || "").trim(),
           sampleRateHz: Number(form.voiceXaiSampleRateHz),
           region: String(form.voiceXaiRegion || "").trim()
+        },
+        openaiRealtime: {
+          model: String(form.voiceOpenAiRealtimeModel || "").trim(),
+          voice: String(form.voiceOpenAiRealtimeVoice || "").trim(),
+          inputAudioFormat: String(form.voiceOpenAiRealtimeInputAudioFormat || "").trim(),
+          outputAudioFormat: String(form.voiceOpenAiRealtimeOutputAudioFormat || "").trim(),
+          inputSampleRateHz: Number(form.voiceOpenAiRealtimeInputSampleRateHz),
+          outputSampleRateHz: Number(form.voiceOpenAiRealtimeOutputSampleRateHz),
+          inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim()
         },
         sttPipeline: {
           transcriptionModel: String(form.voiceSttTranscriptionModel || "").trim(),
@@ -654,6 +671,7 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
       <label htmlFor="voice-mode">Voice runtime mode</label>
       <select id="voice-mode" value={form.voiceMode} onChange={set("voiceMode")}>
         <option value="voice_agent">Voice agent (xAI realtime low-latency)</option>
+        <option value="openai_realtime">OpenAI realtime (low-latency)</option>
         <option value="stt_pipeline">STT pipeline (reuse chat LLM + memory)</option>
       </select>
 
@@ -761,6 +779,88 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
             onChange={set("voiceSttTtsModel")}
           />
         </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="voice-openai-realtime-model">OpenAI realtime model</label>
+          <input
+            id="voice-openai-realtime-model"
+            type="text"
+            value={form.voiceOpenAiRealtimeModel}
+            onChange={set("voiceOpenAiRealtimeModel")}
+          />
+        </div>
+        <div>
+          <label htmlFor="voice-openai-realtime-voice">OpenAI realtime voice</label>
+          <input
+            id="voice-openai-realtime-voice"
+            type="text"
+            value={form.voiceOpenAiRealtimeVoice}
+            onChange={set("voiceOpenAiRealtimeVoice")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="voice-openai-realtime-input-format">OpenAI input audio format</label>
+          <input
+            id="voice-openai-realtime-input-format"
+            type="text"
+            value={form.voiceOpenAiRealtimeInputAudioFormat}
+            onChange={set("voiceOpenAiRealtimeInputAudioFormat")}
+          />
+        </div>
+        <div>
+          <label htmlFor="voice-openai-realtime-output-format">OpenAI output audio format</label>
+          <input
+            id="voice-openai-realtime-output-format"
+            type="text"
+            value={form.voiceOpenAiRealtimeOutputAudioFormat}
+            onChange={set("voiceOpenAiRealtimeOutputAudioFormat")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="voice-openai-realtime-input-sample-rate">OpenAI input sample rate (Hz)</label>
+          <input
+            id="voice-openai-realtime-input-sample-rate"
+            type="number"
+            min="8000"
+            max="48000"
+            value={form.voiceOpenAiRealtimeInputSampleRateHz}
+            onChange={set("voiceOpenAiRealtimeInputSampleRateHz")}
+          />
+        </div>
+        <div>
+          <label htmlFor="voice-openai-realtime-output-sample-rate">OpenAI output sample rate (Hz)</label>
+          <input
+            id="voice-openai-realtime-output-sample-rate"
+            type="number"
+            min="8000"
+            max="48000"
+            value={form.voiceOpenAiRealtimeOutputSampleRateHz}
+            onChange={set("voiceOpenAiRealtimeOutputSampleRateHz")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="voice-openai-realtime-transcription-model">
+            OpenAI realtime input transcription model
+          </label>
+          <input
+            id="voice-openai-realtime-transcription-model"
+            type="text"
+            value={form.voiceOpenAiRealtimeInputTranscriptionModel}
+            onChange={set("voiceOpenAiRealtimeInputTranscriptionModel")}
+          />
+        </div>
+        <div />
       </div>
 
       <div className="split">
