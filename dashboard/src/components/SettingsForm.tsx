@@ -30,6 +30,7 @@ function Section({ title, active, defaultOpen = false, children }: {
 /* ---------- main form ---------- */
 
 export default function SettingsForm({ settings, modelCatalog, onSave, toast }) {
+  const [open, setOpen] = useState(false);
   const [form, setForm] = useState(null);
 
   useEffect(() => {
@@ -43,10 +44,13 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
   if (!form) return null;
 
   const providerModelOptions = resolveProviderModelOptions(modelCatalog, form.provider);
+  const isClaudeCodeProvider = form.provider === "claude-code";
   const normalizedCurrentModel = String(form.model || "").trim();
   const selectedPresetModel = providerModelOptions.includes(normalizedCurrentModel)
     ? normalizedCurrentModel
-    : CUSTOM_MODEL_OPTION_VALUE;
+    : isClaudeCodeProvider
+      ? (providerModelOptions[0] || "")
+      : CUSTOM_MODEL_OPTION_VALUE;
   const isVoiceAgentMode = form.voiceMode === "voice_agent";
   const isOpenAiRealtimeMode = form.voiceMode === "openai_realtime";
   const isGeminiRealtimeMode = form.voiceMode === "gemini_realtime";
@@ -58,6 +62,19 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
 
   function set(key) {
     return (e) => setForm((f) => ({ ...f, [key]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
+  }
+
+  function setProvider(e) {
+    const provider = String(e.target.value || "").trim();
+    setForm((current) => {
+      const next = { ...current, provider };
+      if (provider !== "claude-code") return next;
+      const claudeCodeOptions = resolveProviderModelOptions(modelCatalog, provider);
+      const currentModel = String(current?.model || "").trim();
+      if (claudeCodeOptions.includes(currentModel)) return next;
+      next.model = claudeCodeOptions[0] || "sonnet";
+      return next;
+    });
   }
 
   function selectPresetModel(e) {
@@ -72,11 +89,15 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
   }
 
   return (
-    <form className="panel settings-form" onSubmit={submit}>
-      <h3>Settings</h3>
+    <form className={`panel settings-form${open ? " settings-open" : ""}`} onSubmit={submit}>
+      <button type="button" className="settings-panel-toggle" onClick={() => setOpen(o => !o)}>
+        <span className="section-arrow">&#x25B8;</span>
+        <h3>Settings</h3>
+      </button>
 
+      {open && <>
       {/* -------- CORE BEHAVIOR -------- */}
-      <Section title="Core Behavior" defaultOpen>
+      <Section title="Core Behavior">
         <label htmlFor="bot-name">Bot display name</label>
         <input id="bot-name" type="text" value={form.botName} onChange={set("botName")} />
 
@@ -143,9 +164,9 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
       </Section>
 
       {/* -------- LLM CONFIGURATION -------- */}
-      <Section title="LLM Configuration" defaultOpen>
+      <Section title="LLM Configuration">
         <label htmlFor="provider">LLM provider</label>
-        <select id="provider" value={form.provider} onChange={set("provider")}>
+        <select id="provider" value={form.provider} onChange={setProvider}>
           <option value="openai">openai</option>
           <option value="anthropic">anthropic</option>
           <option value="xai">xai (grok)</option>
@@ -159,16 +180,17 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
               {modelId}
             </option>
           ))}
-          <option value={CUSTOM_MODEL_OPTION_VALUE}>custom model (manual)</option>
+          {!isClaudeCodeProvider && <option value={CUSTOM_MODEL_OPTION_VALUE}>custom model (manual)</option>}
         </select>
 
         <label htmlFor="model">Model ID</label>
         <input
           id="model"
           type="text"
-          placeholder="gpt-4.1-mini / claude-3-5-haiku-latest / grok-3-mini-latest"
+          placeholder="gpt-4.1-mini / claude-haiku-4-5 / grok-3-mini-latest"
           value={form.model}
           onChange={set("model")}
+          disabled={isClaudeCodeProvider}
         />
 
         <div className="split">
@@ -1493,6 +1515,7 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
           <p className={`status-msg ${toast.type}`}>{toast.text}</p>
         )}
       </div>
+      </>}
     </form>
   );
 }

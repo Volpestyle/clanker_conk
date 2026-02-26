@@ -41,7 +41,7 @@ html, body, #root {
   min-height: 100vh;
   color: var(--ink-0);
   background: var(--bg-0);
-  font-family: "Space Grotesk", system-ui, -apple-system, sans-serif;
+  font-family: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-size: 15px;
@@ -116,6 +116,7 @@ body {
 
 .hero .eyebrow {
   color: var(--accent);
+  font-family: "Manrope", "Plus Jakarta Sans", sans-serif;
   text-transform: uppercase;
   font-weight: 600;
   font-size: 0.68rem;
@@ -125,6 +126,7 @@ body {
 
 .hero h1 {
   margin: 0;
+  font-family: "Manrope", "Plus Jakarta Sans", sans-serif;
   font-size: clamp(1.5rem, 3vw, 2.1rem);
   font-weight: 700;
   letter-spacing: -0.02em;
@@ -388,6 +390,7 @@ button.cta {
   padding: 10px 16px;
   background: var(--accent);
   color: #0a150f;
+  font-family: "Manrope", "Plus Jakarta Sans", sans-serif;
   font-weight: 700;
   font-size: 0.9rem;
   border: none;
@@ -414,8 +417,33 @@ button.sm {
   gap: 10px;
 }
 
+.settings-panel-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--ink-0);
+  cursor: pointer;
+  transition: color var(--transition);
+}
+
+.settings-panel-toggle:hover { color: var(--accent); }
+
+.settings-panel-toggle .section-arrow {
+  font-size: 0.9rem;
+  transition: transform var(--transition);
+}
+
+.settings-open > .settings-panel-toggle .section-arrow {
+  transform: rotate(90deg);
+}
+
 .settings-form h3 {
-  margin: 0 0 2px;
+  margin: 0;
+  font-family: "Manrope", "Plus Jakarta Sans", sans-serif;
   font-size: 1rem;
   font-weight: 600;
 }
@@ -457,6 +485,7 @@ button.sm {
   background: none;
   border: none;
   color: var(--ink-1);
+  font-family: "Manrope", "Plus Jakarta Sans", sans-serif;
   font-size: 0.8rem;
   font-weight: 600;
   text-transform: uppercase;
