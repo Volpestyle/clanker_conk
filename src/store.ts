@@ -1225,8 +1225,14 @@ function normalizeSettings(raw) {
   if (!merged.voice.openaiRealtime || typeof merged.voice.openaiRealtime !== "object") {
     merged.voice.openaiRealtime = {};
   }
+  if (!merged.voice.geminiRealtime || typeof merged.voice.geminiRealtime !== "object") {
+    merged.voice.geminiRealtime = {};
+  }
   if (!merged.voice.sttPipeline || typeof merged.voice.sttPipeline !== "object") {
     merged.voice.sttPipeline = {};
+  }
+  if (!merged.voice.streamWatch || typeof merged.voice.streamWatch !== "object") {
+    merged.voice.streamWatch = {};
   }
   if (!merged.voice.soundboard || typeof merged.voice.soundboard !== "object") {
     merged.voice.soundboard = {};
@@ -1235,7 +1241,9 @@ function normalizeSettings(raw) {
   const defaultVoice = DEFAULT_SETTINGS.voice || {};
   const defaultVoiceXai = defaultVoice.xai || {};
   const defaultVoiceOpenAiRealtime = defaultVoice.openaiRealtime || {};
+  const defaultVoiceGeminiRealtime = defaultVoice.geminiRealtime || {};
   const defaultVoiceSttPipeline = defaultVoice.sttPipeline || {};
+  const defaultVoiceStreamWatch = defaultVoice.streamWatch || {};
   const defaultVoiceSoundboard = defaultVoice.soundboard || {};
   const voiceIntentThresholdRaw = Number(merged.voice?.intentConfidenceThreshold);
   const voiceMaxSessionRaw = Number(merged.voice?.maxSessionMinutes);
@@ -1245,7 +1253,12 @@ function normalizeSettings(raw) {
   const voiceSampleRateRaw = Number(merged.voice?.xai?.sampleRateHz);
   const openAiRealtimeInputSampleRateRaw = Number(merged.voice?.openaiRealtime?.inputSampleRateHz);
   const openAiRealtimeOutputSampleRateRaw = Number(merged.voice?.openaiRealtime?.outputSampleRateHz);
+  const geminiRealtimeInputSampleRateRaw = Number(merged.voice?.geminiRealtime?.inputSampleRateHz);
+  const geminiRealtimeOutputSampleRateRaw = Number(merged.voice?.geminiRealtime?.outputSampleRateHz);
   const voiceSttTtsSpeedRaw = Number(merged.voice?.sttPipeline?.ttsSpeed);
+  const streamWatchCommentaryIntervalRaw = Number(merged.voice?.streamWatch?.minCommentaryIntervalSeconds);
+  const streamWatchMaxFramesPerMinuteRaw = Number(merged.voice?.streamWatch?.maxFramesPerMinute);
+  const streamWatchMaxFrameBytesRaw = Number(merged.voice?.streamWatch?.maxFrameBytes);
 
   merged.voice.enabled =
     merged.voice?.enabled !== undefined ? Boolean(merged.voice?.enabled) : Boolean(defaultVoice.enabled);
@@ -1348,6 +1361,38 @@ function normalizeSettings(raw) {
     merged.voice?.openaiRealtime?.allowNsfwHumor !== undefined
       ? Boolean(merged.voice?.openaiRealtime?.allowNsfwHumor)
       : Boolean(defaultVoiceOpenAiRealtime.allowNsfwHumor);
+  merged.voice.geminiRealtime.model = String(
+    merged.voice?.geminiRealtime?.model || defaultVoiceGeminiRealtime.model || "gemini-2.5-flash-native-audio-preview-12-2025"
+  )
+    .trim()
+    .slice(0, 140);
+  merged.voice.geminiRealtime.voice = String(
+    merged.voice?.geminiRealtime?.voice || defaultVoiceGeminiRealtime.voice || "Aoede"
+  )
+    .trim()
+    .slice(0, 60);
+  merged.voice.geminiRealtime.apiBaseUrl = normalizeHttpBaseUrl(
+    merged.voice?.geminiRealtime?.apiBaseUrl,
+    defaultVoiceGeminiRealtime.apiBaseUrl || "https://generativelanguage.googleapis.com"
+  );
+  merged.voice.geminiRealtime.inputSampleRateHz = clamp(
+    Number.isFinite(geminiRealtimeInputSampleRateRaw)
+      ? geminiRealtimeInputSampleRateRaw
+      : Number(defaultVoiceGeminiRealtime.inputSampleRateHz) || 16000,
+    8000,
+    48000
+  );
+  merged.voice.geminiRealtime.outputSampleRateHz = clamp(
+    Number.isFinite(geminiRealtimeOutputSampleRateRaw)
+      ? geminiRealtimeOutputSampleRateRaw
+      : Number(defaultVoiceGeminiRealtime.outputSampleRateHz) || 24000,
+    8000,
+    48000
+  );
+  merged.voice.geminiRealtime.allowNsfwHumor =
+    merged.voice?.geminiRealtime?.allowNsfwHumor !== undefined
+      ? Boolean(merged.voice?.geminiRealtime?.allowNsfwHumor)
+      : Boolean(defaultVoiceGeminiRealtime.allowNsfwHumor);
   merged.voice.sttPipeline.transcriptionModel = String(
     merged.voice?.sttPipeline?.transcriptionModel || defaultVoiceSttPipeline.transcriptionModel || "gpt-4o-mini-transcribe"
   )
@@ -1369,6 +1414,31 @@ function normalizeSettings(raw) {
       : Number(defaultVoiceSttPipeline.ttsSpeed) || 1,
     0.25,
     2
+  );
+  merged.voice.streamWatch.enabled =
+    merged.voice?.streamWatch?.enabled !== undefined
+      ? Boolean(merged.voice?.streamWatch?.enabled)
+      : Boolean(defaultVoiceStreamWatch.enabled);
+  merged.voice.streamWatch.minCommentaryIntervalSeconds = clamp(
+    Number.isFinite(streamWatchCommentaryIntervalRaw)
+      ? streamWatchCommentaryIntervalRaw
+      : Number(defaultVoiceStreamWatch.minCommentaryIntervalSeconds) || 8,
+    3,
+    120
+  );
+  merged.voice.streamWatch.maxFramesPerMinute = clamp(
+    Number.isFinite(streamWatchMaxFramesPerMinuteRaw)
+      ? streamWatchMaxFramesPerMinuteRaw
+      : Number(defaultVoiceStreamWatch.maxFramesPerMinute) || 180,
+    6,
+    600
+  );
+  merged.voice.streamWatch.maxFrameBytes = clamp(
+    Number.isFinite(streamWatchMaxFrameBytesRaw)
+      ? streamWatchMaxFrameBytesRaw
+      : Number(defaultVoiceStreamWatch.maxFrameBytes) || 350000,
+    50_000,
+    4_000_000
   );
 
   merged.voice.soundboard.enabled =
@@ -1606,6 +1676,7 @@ function normalizeLlmProvider(value) {
     .toLowerCase();
   if (normalized === "anthropic") return "anthropic";
   if (normalized === "xai") return "xai";
+  if (normalized === "claude-code") return "claude-code";
   return "openai";
 }
 
@@ -1613,6 +1684,7 @@ function normalizeVoiceMode(value, fallback = "voice_agent") {
   const normalized = String(value || fallback || "")
     .trim()
     .toLowerCase();
+  if (normalized === "gemini_realtime") return "gemini_realtime";
   if (normalized === "openai_realtime") return "openai_realtime";
   if (normalized === "stt_pipeline") return "stt_pipeline";
   return "voice_agent";
