@@ -1260,6 +1260,15 @@ function normalizeSettings(raw) {
   merged.voice.blockedVoiceChannelIds = uniqueIdList(merged.voice?.blockedVoiceChannelIds);
   merged.voice.blockedVoiceUserIds = uniqueIdList(merged.voice?.blockedVoiceUserIds);
 
+  const voiceEagernessRaw = Number(merged.voice?.replyEagerness);
+  merged.voice.replyEagerness = clamp(
+    Number.isFinite(voiceEagernessRaw) ? voiceEagernessRaw : 0, 0, 100
+  );
+  const voiceEagerCooldownRaw = Number(merged.voice?.eagerCooldownSeconds);
+  merged.voice.eagerCooldownSeconds = clamp(
+    Number.isFinite(voiceEagerCooldownRaw) ? voiceEagerCooldownRaw : 45, 10, 300
+  );
+
   merged.voice.xai.voice = String(merged.voice?.xai?.voice || defaultVoiceXai.voice || "Rex").slice(0, 60);
   merged.voice.xai.audioFormat = String(merged.voice?.xai?.audioFormat || defaultVoiceXai.audioFormat || "audio/pcm")
     .trim()

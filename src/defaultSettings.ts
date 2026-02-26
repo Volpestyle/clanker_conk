@@ -55,6 +55,8 @@ export const DEFAULT_SETTINGS = {
     allowedVoiceChannelIds: [],
     blockedVoiceChannelIds: [],
     blockedVoiceUserIds: [],
+    replyEagerness: 0,
+    eagerCooldownSeconds: 45,
     xai: {
       voice: "Rex",
       audioFormat: "audio/pcm",

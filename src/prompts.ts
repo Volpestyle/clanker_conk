@@ -495,7 +495,9 @@ export function buildVoiceTurnPrompt({
   speakerName = "unknown",
   transcript = "",
   userFacts = [],
-  relevantFacts = []
+  relevantFacts = [],
+  isEagerTurn = false,
+  voiceEagerness = 0
 }) {
   const parts = [];
   const speaker = String(speakerName || "unknown").trim() || "unknown";
@@ -516,8 +518,18 @@ export function buildVoiceTurnPrompt({
     parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: false, maxItems: 8 }));
   }
 
-  parts.push("Task: respond as a natural spoken VC reply. Keep it concise by default but go longer if warranted.");
-  parts.push("Use plain text only. Do not output directives, tags, markdown, or [SKIP].");
+  if (isEagerTurn) {
+    const eagerness = Math.max(0, Math.min(100, Number(voiceEagerness) || 0));
+    parts.push(`You were NOT directly addressed. You're considering whether to chime in.`);
+    parts.push(`Voice reply eagerness: ${eagerness}/100.`);
+    parts.push("Only speak up if you can genuinely add value. If not, output exactly [SKIP].");
+
+    parts.push("Task: respond as a natural spoken VC reply, or output exactly [SKIP] if you have nothing to add. Keep it concise by default but go longer if warranted.");
+    parts.push("If responding, use plain text only. No directives, tags, or markdown.");
+  } else {
+    parts.push("Task: respond as a natural spoken VC reply. Keep it concise by default but go longer if warranted.");
+    parts.push("Use plain text only. Do not output directives, tags, markdown, or [SKIP].");
+  }
 
   return parts.join("\n\n");
 }

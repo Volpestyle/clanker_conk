@@ -1044,7 +1044,9 @@ export class ClankerBot {
     userId = null,
     transcript = "",
     contextMessages = [],
-    sessionId = null
+    sessionId = null,
+    isEagerTurn = false,
+    voiceEagerness = 0
   }) {
     if (!this.llm?.generate || !settings) return { text: "" };
     const incomingTranscript = String(transcript || "")
@@ -1130,13 +1132,17 @@ export class ClankerBot {
       "You are speaking in live Discord voice chat.",
       "Keep replies conversational. Be concise by default but go longer when it makes sense.",
       "Output plain spoken text only.",
-      "Do not output directives like [[...]], [SKIP], or markdown."
+      isEagerTurn
+        ? "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text only, no directives or markdown."
+        : "Do not output directives like [[...]], [SKIP], or markdown."
     ].join("\n");
     const userPrompt = buildVoiceTurnPrompt({
       speakerName,
       transcript: incomingTranscript,
       userFacts: memorySlice.userFacts,
-      relevantFacts: memorySlice.relevantFacts
+      relevantFacts: memorySlice.relevantFacts,
+      isEagerTurn,
+      voiceEagerness
     });
 
     try {

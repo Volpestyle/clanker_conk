@@ -91,6 +91,8 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
       voiceMaxSessionMinutes: settings.voice?.maxSessionMinutes ?? 10,
       voiceInactivityLeaveSeconds: settings.voice?.inactivityLeaveSeconds ?? 90,
       voiceMaxSessionsPerDay: settings.voice?.maxSessionsPerDay ?? 12,
+      voiceReplyEagerness: settings.voice?.replyEagerness ?? 0,
+      voiceEagerCooldownSeconds: settings.voice?.eagerCooldownSeconds ?? 45,
       voiceAllowedChannelIds: formatList(settings.voice?.allowedVoiceChannelIds),
       voiceBlockedChannelIds: formatList(settings.voice?.blockedVoiceChannelIds),
       voiceBlockedUserIds: formatList(settings.voice?.blockedVoiceUserIds),
@@ -234,6 +236,8 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
         maxSessionMinutes: Number(form.voiceMaxSessionMinutes),
         inactivityLeaveSeconds: Number(form.voiceInactivityLeaveSeconds),
         maxSessionsPerDay: Number(form.voiceMaxSessionsPerDay),
+        replyEagerness: Number(form.voiceReplyEagerness),
+        eagerCooldownSeconds: Number(form.voiceEagerCooldownSeconds),
         allowedVoiceChannelIds: parseList(form.voiceAllowedChannelIds),
         blockedVoiceChannelIds: parseList(form.voiceBlockedChannelIds),
         blockedVoiceUserIds: parseList(form.voiceBlockedUserIds),
@@ -724,6 +728,33 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
             max="120"
             value={form.voiceMaxSessionsPerDay}
             onChange={set("voiceMaxSessionsPerDay")}
+          />
+        </div>
+      </div>
+
+      <label htmlFor="voice-reply-eagerness">
+        Voice reply eagerness (chime-ins when not addressed): <strong>{form.voiceReplyEagerness}%</strong>
+      </label>
+      <input
+        id="voice-reply-eagerness"
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        value={form.voiceReplyEagerness}
+        onChange={set("voiceReplyEagerness")}
+      />
+
+      <div className="split">
+        <div>
+          <label htmlFor="voice-eager-cooldown-seconds">Eager chime-in cooldown (seconds)</label>
+          <input
+            id="voice-eager-cooldown-seconds"
+            type="number"
+            min="10"
+            max="300"
+            value={form.voiceEagerCooldownSeconds}
+            onChange={set("voiceEagerCooldownSeconds")}
           />
         </div>
       </div>
