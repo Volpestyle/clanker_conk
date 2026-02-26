@@ -357,28 +357,42 @@ export class LLMService {
       throw new Error("claude-code provider requires the 'claude' CLI to be installed.");
     }
 
-    if (imageInputs.length) {
-      console.warn("[claude-code] Image inputs are not supported by the CLI and will be skipped.");
-    }
-
-    const prompt = buildClaudeCodePrompt(systemPrompt, contextMessages, userPrompt);
+    const streamInput = buildClaudeCodeStreamInput({
+      systemPrompt,
+      contextMessages,
+      userPrompt,
+      imageInputs
+    });
 
     try {
       const { stdout } = await runClaudeCli({
-        args: ["-p", "--output-format", "json", "--model", model, "--max-turns", "1"],
-        input: prompt,
+        args: [
+          "-p",
+          "--verbose",
+          "--no-session-persistence",
+          "--tools", "",
+          "--input-format", "stream-json",
+          "--output-format", "stream-json",
+          "--model", model,
+          "--max-turns", "1"
+        ],
+        input: streamInput,
         timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
         maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
       });
 
-      const envelope = safeJsonParse(stdout.trim(), null);
-      const text = String(envelope?.result ?? envelope?.text ?? stdout).trim();
-      const costUsd = Number(envelope?.cost_usd ?? 0);
+      const parsed = parseClaudeCodeStreamOutput(stdout);
+      if (!parsed) {
+        throw new Error("claude-code returned an empty or invalid stream response.");
+      }
+      if (parsed.isError) {
+        throw new Error(parsed.errorMessage || "claude-code returned an error result.");
+      }
 
       return {
-        text,
-        usage: { inputTokens: 0, outputTokens: 0 },
-        costUsd
+        text: parsed.text,
+        usage: parsed.usage,
+        costUsd: parsed.costUsd
       };
     } catch (error) {
       if (error?.killed || error?.signal === "SIGTERM") {
@@ -399,28 +413,42 @@ export class LLMService {
     }
 
     const schemaJson = JSON.stringify(MEMORY_EXTRACTION_SCHEMA);
-    const prompt = buildClaudeCodePrompt(systemPrompt, [], userPrompt);
+    const streamInput = buildClaudeCodeStreamInput({
+      systemPrompt,
+      contextMessages: [],
+      userPrompt,
+      imageInputs: []
+    });
 
     try {
       const { stdout } = await runClaudeCli({
         args: [
           "-p",
-          "--output-format", "json",
+          "--verbose",
+          "--no-session-persistence",
+          "--tools", "",
+          "--input-format", "stream-json",
+          "--output-format", "stream-json",
           "--model", model,
           "--max-turns", "1",
           "--json-schema", schemaJson
         ],
-        input: prompt,
+        input: streamInput,
         timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
         maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
       });
 
-      const envelope = safeJsonParse(stdout.trim(), null);
-      const text = String(envelope?.result ?? envelope?.text ?? stdout).trim();
+      const parsed = parseClaudeCodeStreamOutput(stdout);
+      if (!parsed) {
+        throw new Error("claude-code returned an empty or invalid stream response.");
+      }
+      if (parsed.isError) {
+        throw new Error(parsed.errorMessage || "claude-code returned an error result.");
+      }
 
       return {
-        text,
-        usage: { inputTokens: 0, outputTokens: 0 }
+        text: parsed.text,
+        usage: parsed.usage
       };
     } catch (error) {
       if (error?.killed || error?.signal === "SIGTERM") {
@@ -1145,31 +1173,7 @@ export class LLMService {
     temperature,
     maxOutputTokens
   }) {
-    const imageParts = imageInputs
-      .map((image) => {
-        const mediaType = String(image?.mediaType || image?.contentType || "").trim().toLowerCase();
-        const base64 = String(image?.dataBase64 || "").trim();
-        const url = String(image?.url || "").trim();
-        if (base64 && /^image\/[a-z0-9.+-]+$/i.test(mediaType)) {
-          return {
-            type: "image",
-            source: {
-              type: "base64",
-              media_type: mediaType,
-              data: base64
-            }
-          };
-        }
-        if (!url) return null;
-        return {
-          type: "image",
-          source: {
-            type: "url",
-            url
-          }
-        };
-      })
-      .filter(Boolean);
+    const imageParts = buildAnthropicImageParts(imageInputs);
     const userContent = imageParts.length
       ? [
           { type: "text", text: userPrompt },
@@ -1475,21 +1479,135 @@ function runClaudeCli({ args, input, timeoutMs, maxBufferBytes }) {
   });
 }
 
-function buildClaudeCodePrompt(systemPrompt, contextMessages, userPrompt) {
-  const parts = [];
-  if (systemPrompt) {
-    parts.push(`[System]\n${systemPrompt}`);
+function buildAnthropicImageParts(imageInputs) {
+  return (Array.isArray(imageInputs) ? imageInputs : [])
+    .map((image) => {
+      const mediaType = String(image?.mediaType || image?.contentType || "").trim().toLowerCase();
+      const base64 = String(image?.dataBase64 || "").trim();
+      const url = String(image?.url || "").trim();
+      if (base64 && /^image\/[a-z0-9.+-]+$/i.test(mediaType)) {
+        return {
+          type: "image",
+          source: {
+            type: "base64",
+            media_type: mediaType,
+            data: base64
+          }
+        };
+      }
+      if (!url) return null;
+      return {
+        type: "image",
+        source: {
+          type: "url",
+          url
+        }
+      };
+    })
+    .filter(Boolean);
+}
+
+function buildClaudeCodeStreamInput({
+  systemPrompt,
+  contextMessages = [],
+  userPrompt,
+  imageInputs = []
+}) {
+  const events = [];
+
+  const systemText = String(systemPrompt || "").trim();
+  if (systemText) {
+    events.push({
+      type: "system",
+      message: {
+        role: "system",
+        content: [{ type: "text", text: systemText }]
+      }
+    });
   }
-  if (Array.isArray(contextMessages) && contextMessages.length) {
-    for (const msg of contextMessages) {
-      const role = msg.role === "assistant" ? "Assistant" : "User";
-      parts.push(`[${role}]\n${msg.content}`);
+
+  for (const msg of Array.isArray(contextMessages) ? contextMessages : []) {
+    const role = msg?.role === "assistant" ? "assistant" : "user";
+    const text = String(msg?.content || "");
+    events.push({
+      type: role,
+      message: {
+        role,
+        content: [{ type: "text", text }]
+      }
+    });
+  }
+
+  const userText = String(userPrompt || "");
+  const imageParts = buildAnthropicImageParts(imageInputs);
+  const userContent = [{ type: "text", text: userText }, ...imageParts];
+  events.push({
+    type: "user",
+    message: {
+      role: "user",
+      content: userContent
+    }
+  });
+
+  return `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
+}
+
+function parseClaudeCodeStreamOutput(rawOutput) {
+  const lines = String(rawOutput || "")
+    .split(/\r?\n/g)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  let lastResult = null;
+  let lastAssistantText = "";
+
+  for (const line of lines) {
+    const event = safeJsonParse(line, null);
+    if (!event || typeof event !== "object") continue;
+
+    if (event.type === "assistant" && event.message && Array.isArray(event.message.content)) {
+      const text = event.message.content
+        .filter((part) => part?.type === "text")
+        .map((part) => String(part?.text || ""))
+        .join("\n")
+        .trim();
+      if (text) lastAssistantText = text;
+      continue;
+    }
+
+    if (event.type === "result") {
+      lastResult = event;
     }
   }
-  if (userPrompt) {
-    parts.push(`[User]\n${userPrompt}`);
+
+  if (!lastResult) {
+    if (!lastAssistantText) return null;
+    return {
+      text: lastAssistantText,
+      isError: false,
+      errorMessage: "",
+      usage: { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 },
+      costUsd: 0
+    };
   }
-  return parts.join("\n\n");
+
+  const usage = lastResult.usage || {};
+  const resultText = String(lastResult.result || "").trim();
+  const errors = Array.isArray(lastResult.errors) ? lastResult.errors : [];
+  const errorMessage = resultText || errors.map((item) => String(item || "").trim()).filter(Boolean).join(" | ");
+
+  return {
+    text: resultText || lastAssistantText,
+    isError: Boolean(lastResult.is_error),
+    errorMessage,
+    usage: {
+      inputTokens: Number(usage.input_tokens || 0),
+      outputTokens: Number(usage.output_tokens || 0),
+      cacheWriteTokens: Number(usage.cache_creation_input_tokens || 0),
+      cacheReadTokens: Number(usage.cache_read_input_tokens || 0)
+    },
+    costUsd: Number(lastResult.total_cost_usd || 0)
+  };
 }
 
 function sleepMs(ms) {
