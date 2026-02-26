@@ -53,13 +53,17 @@ export class Store {
       CREATE TABLE IF NOT EXISTS memory_facts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        guild_id TEXT NOT NULL,
+        channel_id TEXT,
         subject TEXT NOT NULL,
         fact TEXT NOT NULL,
         fact_type TEXT NOT NULL DEFAULT 'general',
         evidence_text TEXT,
         source_message_id TEXT,
         confidence REAL NOT NULL DEFAULT 0.5,
-        UNIQUE(subject, fact)
+        is_active INTEGER NOT NULL DEFAULT 1,
+        UNIQUE(guild_id, subject, fact)
       );
 
       CREATE TABLE IF NOT EXISTS memory_fact_vectors (
@@ -84,14 +88,16 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_messages_guild_time ON messages(guild_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_actions_kind_time ON actions(kind, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_actions_time ON actions(created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_memory_subject ON memory_facts(subject, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_memory_scope_subject ON memory_facts(guild_id, subject, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_memory_scope_channel ON memory_facts(guild_id, channel_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_memory_vectors_fact_model ON memory_fact_vectors(fact_id, model);
       CREATE INDEX IF NOT EXISTS idx_memory_vectors_model ON memory_fact_vectors(model);
       CREATE INDEX IF NOT EXISTS idx_shared_links_last_shared_at ON shared_links(last_shared_at DESC);
     `);
     this.ensureMemoryFactsSchema();
     this.db.exec(`
-      CREATE INDEX IF NOT EXISTS idx_memory_subject_type ON memory_facts(subject, fact_type, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_memory_scope_subject_type ON memory_facts(guild_id, subject, fact_type, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_memory_scope_active ON memory_facts(guild_id, is_active, created_at DESC);
     `);
 
     if (!this.db.prepare("SELECT 1 FROM settings WHERE key = ?").get(SETTINGS_KEY)) {
@@ -326,16 +332,17 @@ export class Store {
     const id = String(triggerMessageId).trim();
     if (!id) return false;
 
-    const likeNeedle = `%"triggerMessageId":"${id}"%`;
+    const singleTriggerNeedle = `%"triggerMessageId":"${id}"%`;
+    const triggerListNeedle = `%"triggerMessageIds"%\"${id}\"%`;
     const row = this.db
       .prepare(
         `SELECT 1
          FROM actions
          WHERE kind IN ('sent_reply', 'sent_message', 'reply_skipped')
-           AND metadata LIKE ?
+           AND (metadata LIKE ? OR metadata LIKE ?)
          LIMIT 1`
       )
-      .get(likeNeedle);
+      .get(singleTriggerNeedle, triggerListNeedle);
 
     return Boolean(row);
   }
@@ -421,22 +428,41 @@ export class Store {
   }
 
   addMemoryFact(fact) {
+    const guildId = String(fact.guildId || "").trim();
+    if (!guildId) return false;
+
     const rawConfidence = Number(fact.confidence);
     const confidence = clamp(Number.isFinite(rawConfidence) ? rawConfidence : 0.5, 0, 1);
+    const now = nowIso();
     const result = this.db
       .prepare(
-        `INSERT OR IGNORE INTO memory_facts(
+        `INSERT INTO memory_facts(
           created_at,
+          updated_at,
+          guild_id,
+          channel_id,
           subject,
           fact,
           fact_type,
           evidence_text,
           source_message_id,
-          confidence
-        ) VALUES (?, ?, ?, ?, ?, ?, ?)`
+          confidence,
+          is_active
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+        ON CONFLICT(guild_id, subject, fact) DO UPDATE SET
+          updated_at = excluded.updated_at,
+          channel_id = excluded.channel_id,
+          fact_type = excluded.fact_type,
+          evidence_text = excluded.evidence_text,
+          source_message_id = excluded.source_message_id,
+          confidence = MAX(memory_facts.confidence, excluded.confidence),
+          is_active = 1`
       )
       .run(
-        nowIso(),
+        now,
+        now,
+        guildId,
+        fact.channelId ? String(fact.channelId).slice(0, 120) : null,
         String(fact.subject),
         String(fact.fact).slice(0, 400),
         String(fact.factType || "general").slice(0, 40),
@@ -449,43 +475,90 @@ export class Store {
   }
 
   getFactsForSubject(subject, limit = 12) {
-    return this.db
-      .prepare(
-        `SELECT id, created_at, subject, fact, fact_type, evidence_text, source_message_id, confidence
-         FROM memory_facts
-         WHERE subject = ?
-         ORDER BY created_at DESC
-         LIMIT ?`
-      )
-      .all(String(subject), clamp(limit, 1, 100));
+    return this.getFactsForSubjectScoped(subject, limit, null);
   }
 
-  getFactsForSubjects(subjects, limit = 80) {
+  getFactsForSubjectScoped(subject, limit = 12, scope = null) {
+    const where = ["subject = ?", "is_active = 1"];
+    const args = [String(subject)];
+    if (scope?.guildId) {
+      where.push("guild_id = ?");
+      args.push(String(scope.guildId));
+    }
+
+    return this.db
+      .prepare(
+        `SELECT id, created_at, updated_at, guild_id, channel_id, subject, fact, fact_type, evidence_text, source_message_id, confidence
+         FROM memory_facts
+         WHERE ${where.join(" AND ")}
+         ORDER BY updated_at DESC
+         LIMIT ?`
+      )
+      .all(...args, clamp(limit, 1, 100));
+  }
+
+  getFactsForSubjects(subjects, limit = 80, scope = null) {
     const normalizedSubjects = [...new Set((subjects || []).map((value) => String(value || "").trim()).filter(Boolean))];
     if (!normalizedSubjects.length) return [];
 
     const placeholders = normalizedSubjects.map(() => "?").join(", ");
+    const where = [`subject IN (${placeholders})`, "is_active = 1"];
+    const args = [...normalizedSubjects];
+    if (scope?.guildId) {
+      where.push("guild_id = ?");
+      args.push(String(scope.guildId));
+    }
+
     return this.db
       .prepare(
-        `SELECT id, created_at, subject, fact, fact_type, evidence_text, source_message_id, confidence
+        `SELECT id, created_at, updated_at, guild_id, channel_id, subject, fact, fact_type, evidence_text, source_message_id, confidence
          FROM memory_facts
-         WHERE subject IN (${placeholders})
-         ORDER BY created_at DESC
+         WHERE ${where.join(" AND ")}
+         ORDER BY updated_at DESC
          LIMIT ?`
       )
-      .all(...normalizedSubjects, clamp(limit, 1, 500));
+      .all(...args, clamp(limit, 1, 500));
   }
 
-  getMemoryFactBySubjectAndFact(subject, fact) {
+  getFactsForScope({ guildId, limit = 120, subjectIds = null }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) return [];
+
+    const where = ["guild_id = ?", "is_active = 1"];
+    const args = [normalizedGuildId];
+
+    if (Array.isArray(subjectIds) && subjectIds.length) {
+      const normalizedSubjects = [...new Set(subjectIds.map((value) => String(value || "").trim()).filter(Boolean))];
+      if (normalizedSubjects.length) {
+        where.push(`subject IN (${normalizedSubjects.map(() => "?").join(", ")})`);
+        args.push(...normalizedSubjects);
+      }
+    }
+
+    return this.db
+      .prepare(
+        `SELECT id, created_at, updated_at, guild_id, channel_id, subject, fact, fact_type, evidence_text, source_message_id, confidence
+         FROM memory_facts
+         WHERE ${where.join(" AND ")}
+         ORDER BY updated_at DESC
+         LIMIT ?`
+      )
+      .all(...args, clamp(limit, 1, 1000));
+  }
+
+  getMemoryFactBySubjectAndFact(guildId, subject, fact) {
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) return null;
+
     return (
       this.db
         .prepare(
-          `SELECT id, created_at, subject, fact, fact_type, evidence_text, source_message_id, confidence
+          `SELECT id, created_at, updated_at, guild_id, channel_id, subject, fact, fact_type, evidence_text, source_message_id, confidence
            FROM memory_facts
-           WHERE subject = ? AND fact = ?
+           WHERE guild_id = ? AND subject = ? AND fact = ? AND is_active = 1
            LIMIT 1`
         )
-        .get(String(subject), String(fact)) || null
+        .get(normalizedGuildId, String(subject), String(fact)) || null
     );
   }
 
@@ -529,16 +602,58 @@ export class Store {
       .filter((row) => Array.isArray(row.embedding) && row.embedding.length > 0);
   }
 
-  getMemorySubjects(limit = 80) {
+  getMemorySubjects(limit = 80, scope = null) {
+    const where = ["is_active = 1"];
+    const args = [];
+    if (scope?.guildId) {
+      where.push("guild_id = ?");
+      args.push(String(scope.guildId));
+    }
+
     return this.db
       .prepare(
-        `SELECT subject, MAX(created_at) AS last_seen_at, COUNT(*) AS fact_count
+        `SELECT guild_id, subject, MAX(updated_at) AS last_seen_at, COUNT(*) AS fact_count
          FROM memory_facts
-         GROUP BY subject
+         WHERE ${where.join(" AND ")}
+         GROUP BY guild_id, subject
          ORDER BY last_seen_at DESC
          LIMIT ?`
       )
-      .all(clamp(limit, 1, 500));
+      .all(...args, clamp(limit, 1, 500));
+  }
+
+  archiveOldFactsForSubject({ guildId, subject, factType = null, keep = 60 }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    const normalizedSubject = String(subject || "").trim();
+    if (!normalizedGuildId || !normalizedSubject) return 0;
+
+    const boundedKeep = clamp(Math.floor(Number(keep) || 60), 10, 400);
+    const where = ["guild_id = ?", "subject = ?", "is_active = 1"];
+    const args = [normalizedGuildId, normalizedSubject];
+    if (factType) {
+      where.push("fact_type = ?");
+      args.push(String(factType));
+    }
+
+    const rows = this.db
+      .prepare(
+        `SELECT id
+         FROM memory_facts
+         WHERE ${where.join(" AND ")}
+         ORDER BY updated_at DESC
+         LIMIT 1000`
+      )
+      .all(...args);
+    if (rows.length <= boundedKeep) return 0;
+
+    const staleIds = rows.slice(boundedKeep).map((row) => Number(row.id)).filter((id) => Number.isInteger(id) && id > 0);
+    if (!staleIds.length) return 0;
+
+    const placeholders = staleIds.map(() => "?").join(", ");
+    const result = this.db
+      .prepare(`UPDATE memory_facts SET is_active = 0, updated_at = ? WHERE id IN (${placeholders})`)
+      .run(nowIso(), ...staleIds);
+    return Number(result?.changes || 0);
   }
 
   close() {
@@ -554,14 +669,125 @@ export class Store {
       .all()
       .map((row) => String(row.name));
 
-    if (!columns.includes("fact_type")) {
-      this.db.exec("ALTER TABLE memory_facts ADD COLUMN fact_type TEXT NOT NULL DEFAULT 'general';");
-    }
+    const required = new Set([
+      "created_at",
+      "updated_at",
+      "guild_id",
+      "channel_id",
+      "subject",
+      "fact",
+      "fact_type",
+      "evidence_text",
+      "source_message_id",
+      "confidence",
+      "is_active"
+    ]);
+    const hasAllColumns = columns.length && [...required].every((column) => columns.includes(column));
+    const hasScopedUnique = this.hasMemoryScopedUniqueConstraint();
+    if (hasAllColumns && hasScopedUnique) return;
 
-    if (!columns.includes("evidence_text")) {
-      this.db.exec("ALTER TABLE memory_facts ADD COLUMN evidence_text TEXT;");
+    this.migrateMemoryFactsTable(new Set(columns));
+  }
+
+  hasMemoryScopedUniqueConstraint() {
+    const indexes = this.db.prepare("PRAGMA index_list(memory_facts)").all();
+    for (const indexRow of indexes) {
+      if (!indexRow?.unique) continue;
+      const name = String(indexRow.name || "");
+      if (!name) continue;
+      const cols = this.db
+        .prepare(`PRAGMA index_info(${quoteSqlIdentifier(name)})`)
+        .all()
+        .map((row) => String(row.name || ""));
+      if (cols.join(",") === "guild_id,subject,fact") {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  migrateMemoryFactsTable(columnSet) {
+    const hasUpdatedAt = columnSet.has("updated_at");
+    const hasGuildId = columnSet.has("guild_id");
+    const hasChannelId = columnSet.has("channel_id");
+    const hasFactType = columnSet.has("fact_type");
+    const hasEvidenceText = columnSet.has("evidence_text");
+    const hasSourceMessageId = columnSet.has("source_message_id");
+    const hasConfidence = columnSet.has("confidence");
+    const hasIsActive = columnSet.has("is_active");
+
+    this.db.exec("BEGIN");
+    try {
+      this.db.exec("ALTER TABLE memory_facts RENAME TO memory_facts_legacy;");
+      this.db.exec(`
+        CREATE TABLE memory_facts (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          guild_id TEXT NOT NULL,
+          channel_id TEXT,
+          subject TEXT NOT NULL,
+          fact TEXT NOT NULL,
+          fact_type TEXT NOT NULL DEFAULT 'general',
+          evidence_text TEXT,
+          source_message_id TEXT,
+          confidence REAL NOT NULL DEFAULT 0.5,
+          is_active INTEGER NOT NULL DEFAULT 1,
+          UNIQUE(guild_id, subject, fact)
+        );
+      `);
+
+      const updatedAtExpr = hasUpdatedAt ? "updated_at" : "created_at";
+      const guildExpr = hasGuildId ? "COALESCE(NULLIF(guild_id, ''), '__legacy__')" : "'__legacy__'";
+      const channelExpr = hasChannelId ? "channel_id" : "NULL";
+      const factTypeExpr = hasFactType ? "COALESCE(NULLIF(fact_type, ''), 'general')" : "'general'";
+      const evidenceExpr = hasEvidenceText ? "evidence_text" : "NULL";
+      const sourceExpr = hasSourceMessageId ? "source_message_id" : "NULL";
+      const confidenceExpr = hasConfidence ? "COALESCE(confidence, 0.5)" : "0.5";
+      const activeExpr = hasIsActive ? "CASE WHEN is_active = 0 THEN 0 ELSE 1 END" : "1";
+
+      this.db.exec(
+        `INSERT INTO memory_facts(
+          id,
+          created_at,
+          updated_at,
+          guild_id,
+          channel_id,
+          subject,
+          fact,
+          fact_type,
+          evidence_text,
+          source_message_id,
+          confidence,
+          is_active
+        )
+        SELECT
+          id,
+          created_at,
+          ${updatedAtExpr},
+          ${guildExpr},
+          ${channelExpr},
+          subject,
+          fact,
+          ${factTypeExpr},
+          ${evidenceExpr},
+          ${sourceExpr},
+          ${confidenceExpr},
+          ${activeExpr}
+        FROM memory_facts_legacy;`
+      );
+
+      this.db.exec("DROP TABLE memory_facts_legacy;");
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
     }
   }
+}
+
+function quoteSqlIdentifier(name) {
+  return `"${String(name || "").replace(/"/g, "\"\"")}"`;
 }
 
 function safeJsonParse(value, fallback) {
@@ -609,10 +835,28 @@ function normalizeSettings(raw) {
     5,
     300
   );
+  const replyCoalesceWindowSecondsRaw = Number(merged.activity?.replyCoalesceWindowSeconds);
+  const replyCoalesceMaxMessagesRaw = Number(merged.activity?.replyCoalesceMaxMessages);
+  const replyCoalesceWindowSeconds = clamp(
+    Number.isFinite(replyCoalesceWindowSecondsRaw)
+      ? replyCoalesceWindowSecondsRaw
+      : Number(DEFAULT_SETTINGS.activity?.replyCoalesceWindowSeconds) || 4,
+    0,
+    20
+  );
+  const replyCoalesceMaxMessages = clamp(
+    Number.isFinite(replyCoalesceMaxMessagesRaw)
+      ? replyCoalesceMaxMessagesRaw
+      : Number(DEFAULT_SETTINGS.activity?.replyCoalesceMaxMessages) || 6,
+    1,
+    20
+  );
   merged.activity = {
     replyLevel,
     reactionLevel,
-    minSecondsBetweenMessages
+    minSecondsBetweenMessages,
+    replyCoalesceWindowSeconds,
+    replyCoalesceMaxMessages
   };
 
   merged.llm.provider = normalizeLlmProvider(merged.llm?.provider);

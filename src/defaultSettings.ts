@@ -11,7 +11,9 @@ export const DEFAULT_SETTINGS = {
   activity: {
     replyLevel: 35,
     reactionLevel: 20,
-    minSecondsBetweenMessages: 20
+    minSecondsBetweenMessages: 20,
+    replyCoalesceWindowSeconds: 4,
+    replyCoalesceMaxMessages: 6
   },
   llm: {
     provider: "openai",

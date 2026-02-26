@@ -17,7 +17,6 @@ import {
 } from "./promptCore.ts";
 import { normalizeDiscoveryUrl } from "./discovery.ts";
 import { chance, clamp, hasBotKeyword, sanitizeBotText, sleep, stripBotKeywords } from "./utils.ts";
-import { detectVoiceIntent } from "./voice/voiceIntentParser.ts";
 import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
@@ -59,6 +58,12 @@ const MAX_MENTION_CANDIDATES = 8;
 const MAX_MENTION_LOOKUP_VARIANTS = 8;
 const MENTION_GUILD_HISTORY_LOOKBACK = 500;
 const MENTION_SEARCH_RESULT_LIMIT = 10;
+const DIRECT_USER_MENTION_RE = /<@!?\d+>/;
+const VOICE_TOPIC_HINT_RE = /\b(?:v\s*\.?\s*c|vs|voice(?:\s*(?:chat|channel))?|call)\b/i;
+const VOICE_ACTION_HINT_RE =
+  /\b(?:join|hop\s*in|jump\s*in|get\s*in|pull\s*up|come|leave|dip|bounce|exit|get\s*out|disconnect|status|where)\b/i;
+const VOICE_INTENT_LABELS = new Set(["join", "leave", "status", "none"]);
+const MAX_VOICE_INTENT_REASON_LEN = 180;
 
 export class ClankerBot {
   constructor({ appConfig, store, llm, memory, discovery, search, gifs, video }) {
@@ -283,6 +288,9 @@ export class ClankerBot {
     this.replyQueues.clear();
     this.replyQueueWorkers.clear();
     this.replyQueuedMessageIds.clear();
+    if (this.memory?.drainIngestQueue) {
+      await this.memory.drainIngestQueue({ timeoutMs: 4000 }).catch(() => undefined);
+    }
     await this.voiceSessionManager.dispose("shutdown");
     await this.client.destroy();
   }
@@ -383,6 +391,24 @@ export class ClankerBot {
     return 0;
   }
 
+  getReplyCoalesceWindowMs(settings) {
+    const seconds = clamp(Number(settings.activity?.replyCoalesceWindowSeconds) || 0, 0, 20);
+    return Math.floor(seconds * 1000);
+  }
+
+  getReplyCoalesceMaxMessages(settings) {
+    return clamp(Number(settings.activity?.replyCoalesceMaxMessages) || 1, 1, 20);
+  }
+
+  getReplyCoalesceWaitMs(settings, message) {
+    const windowMs = this.getReplyCoalesceWindowMs(settings);
+    if (windowMs <= 0) return 0;
+    const createdAtRaw = Number(message?.createdTimestamp);
+    const createdAt = Number.isFinite(createdAtRaw) && createdAtRaw > 0 ? createdAtRaw : Date.now();
+    const ageMs = Date.now() - createdAt;
+    return Math.max(0, windowMs - ageMs);
+  }
+
   dequeueReplyJob(channelId) {
     const queue = this.replyQueues.get(channelId);
     if (!queue?.length) return null;
@@ -399,6 +425,64 @@ export class ClankerBot {
     return job;
   }
 
+  dequeueReplyBurst(channelId, settings) {
+    const firstJob = this.dequeueReplyJob(channelId);
+    if (!firstJob) return [];
+
+    const burst = [firstJob];
+    const windowMs = this.getReplyCoalesceWindowMs(settings);
+    const maxMessages = this.getReplyCoalesceMaxMessages(settings);
+    if (windowMs <= 0 || maxMessages <= 1) return burst;
+
+    const firstMessage = firstJob.message;
+    const firstAuthorId = String(firstMessage?.author?.id || "").trim();
+    if (!firstAuthorId) return burst;
+
+    const firstCreatedAtRaw = Number(firstMessage?.createdTimestamp);
+    const firstCreatedAt = Number.isFinite(firstCreatedAtRaw) && firstCreatedAtRaw > 0
+      ? firstCreatedAtRaw
+      : Date.now();
+
+    while (burst.length < maxMessages) {
+      const queue = this.replyQueues.get(channelId);
+      const candidate = queue?.[0];
+      if (!candidate) break;
+
+      const candidateMessage = candidate.message;
+      if (!candidateMessage?.id) {
+        this.dequeueReplyJob(channelId);
+        continue;
+      }
+
+      const candidateAuthorId = String(candidateMessage.author?.id || "").trim();
+      if (candidateAuthorId !== firstAuthorId) break;
+
+      const candidateCreatedAtRaw = Number(candidateMessage.createdTimestamp);
+      const candidateCreatedAt = Number.isFinite(candidateCreatedAtRaw) && candidateCreatedAtRaw > 0
+        ? candidateCreatedAtRaw
+        : firstCreatedAt;
+      if (Math.abs(candidateCreatedAt - firstCreatedAt) > windowMs) break;
+
+      const nextJob = this.dequeueReplyJob(channelId);
+      if (!nextJob) break;
+      burst.push(nextJob);
+    }
+
+    return burst;
+  }
+
+  requeueReplyJobs(channelId, jobs) {
+    const validJobs = (jobs || []).filter((job) => job?.message?.id);
+    if (!validJobs.length) return;
+
+    const queue = this.replyQueues.get(channelId) || [];
+    queue.unshift(...validJobs);
+    this.replyQueues.set(channelId, queue);
+    for (const job of validJobs) {
+      this.replyQueuedMessageIds.add(String(job.message.id));
+    }
+  }
+
   async processReplyQueue(channelId) {
     if (this.replyQueueWorkers.has(channelId)) return;
     this.replyQueueWorkers.add(channelId);
@@ -409,8 +493,8 @@ export class ClankerBot {
         if (!queue?.length) break;
 
         const head = queue[0];
-        const message = head?.message;
-        if (!message?.id) {
+        const headMessage = head?.message;
+        if (!headMessage?.id) {
           this.dequeueReplyJob(channelId);
           continue;
         }
@@ -421,24 +505,30 @@ export class ClankerBot {
           this.dequeueReplyJob(channelId);
           continue;
         }
-        if (!message.author || message.author.bot) {
+        if (!headMessage.author || headMessage.author.bot) {
           this.dequeueReplyJob(channelId);
           continue;
         }
-        if (!message.guild || !message.channel) {
+        if (!headMessage.guild || !headMessage.channel) {
           this.dequeueReplyJob(channelId);
           continue;
         }
-        if (!this.isChannelAllowed(settings, message.channelId)) {
+        if (!this.isChannelAllowed(settings, headMessage.channelId)) {
           this.dequeueReplyJob(channelId);
           continue;
         }
-        if (this.isUserBlocked(settings, message.author.id)) {
+        if (this.isUserBlocked(settings, headMessage.author.id)) {
           this.dequeueReplyJob(channelId);
           continue;
         }
-        if (this.store.hasTriggeredResponse(message.id)) {
+        if (this.store.hasTriggeredResponse(headMessage.id)) {
           this.dequeueReplyJob(channelId);
+          continue;
+        }
+
+        const coalesceWaitMs = this.getReplyCoalesceWaitMs(settings, headMessage);
+        if (coalesceWaitMs > 0) {
+          await sleep(Math.min(coalesceWaitMs, REPLY_QUEUE_RATE_LIMIT_WAIT_MS));
           continue;
         }
 
@@ -448,25 +538,61 @@ export class ClankerBot {
           continue;
         }
 
-        const job = this.dequeueReplyJob(channelId);
-        if (!job) continue;
+        const burstJobs = this.dequeueReplyBurst(channelId, settings);
+        if (!burstJobs.length) continue;
+
+        const latestJob = burstJobs[burstJobs.length - 1];
+        const message = latestJob?.message;
+        if (!message?.id) continue;
+
+        const triggerMessageIds = [
+          ...new Set(burstJobs.map((job) => String(job?.message?.id || "").trim()).filter(Boolean))
+        ];
 
         const recentMessages = this.store.getRecentMessages(
           message.channelId,
           settings.memory.maxRecentMessages
         );
-        const addressSignal =
-          job.addressSignal || this.getReplyAddressSignal(settings, message, recentMessages);
+        const addressSignal = {
+          ...(latestJob.addressSignal || this.getReplyAddressSignal(settings, message, recentMessages))
+        };
+        addressSignal.direct = Boolean(addressSignal.direct);
+        addressSignal.inferred = Boolean(addressSignal.inferred);
+        addressSignal.triggered = Boolean(addressSignal.triggered);
+        addressSignal.reason = String(addressSignal.reason || "llm_decides");
+
+        for (const burstJob of burstJobs) {
+          const burstMessage = burstJob?.message;
+          if (!burstMessage?.id) continue;
+          const signal =
+            burstJob.addressSignal || this.getReplyAddressSignal(settings, burstMessage, recentMessages);
+          if (!signal) continue;
+          if (signal.direct) addressSignal.direct = true;
+          if (signal.inferred) addressSignal.inferred = true;
+          if (signal.triggered && !addressSignal.triggered) {
+            addressSignal.triggered = true;
+            addressSignal.reason = String(signal.reason || "direct");
+          }
+        }
+        const forceRespond = burstJobs.some((job) => Boolean(job?.forceRespond || job?.addressSignal?.triggered));
+        if (forceRespond && !addressSignal.triggered) {
+          addressSignal.triggered = true;
+          addressSignal.reason = "direct";
+        }
+        const source = burstJobs.length > 1
+          ? `${latestJob.source || "message_event"}_coalesced`
+          : latestJob.source || "message_event";
 
         try {
           const sent = await this.maybeReplyToMessage(message, settings, {
-            forceRespond: job.forceRespond,
-            source: job.source,
+            forceRespond,
+            source,
             addressSignal,
-            recentMessages
+            recentMessages,
+            triggerMessageIds
           });
 
-          if (!sent && job.forceRespond && !this.isStopping && !this.store.hasTriggeredResponse(message.id)) {
+          if (!sent && forceRespond && !this.isStopping && !this.store.hasTriggeredResponse(message.id)) {
             const latestSettings = this.store.getSettings();
             if (
               latestSettings.permissions.allowReplies &&
@@ -475,23 +601,24 @@ export class ClankerBot {
             ) {
               const retryWaitMs = this.getReplyQueueWaitMs(latestSettings);
               if (retryWaitMs > 0) {
-                const retryQueue = this.replyQueues.get(channelId) || [];
-                retryQueue.unshift(job);
-                this.replyQueues.set(channelId, retryQueue);
-                this.replyQueuedMessageIds.add(String(message.id));
+                this.requeueReplyJobs(channelId, burstJobs);
                 await sleep(Math.min(retryWaitMs, REPLY_QUEUE_RATE_LIMIT_WAIT_MS));
                 continue;
               }
             }
           }
         } catch (error) {
-          if (job.attempts < REPLY_QUEUE_SEND_MAX_RETRIES && !this.isStopping) {
-            job.attempts += 1;
-            const retryQueue = this.replyQueues.get(channelId) || [];
-            retryQueue.unshift(job);
-            this.replyQueues.set(channelId, retryQueue);
-            this.replyQueuedMessageIds.add(String(message.id));
-            await sleep(REPLY_QUEUE_SEND_RETRY_BASE_MS * job.attempts);
+          const maxAttempts = burstJobs.reduce(
+            (max, job) => Math.max(max, Math.max(0, Number(job?.attempts) || 0)),
+            0
+          );
+          if (maxAttempts < REPLY_QUEUE_SEND_MAX_RETRIES && !this.isStopping) {
+            const nextAttempt = maxAttempts + 1;
+            for (const job of burstJobs) {
+              job.attempts = Math.max(0, Number(job?.attempts) || 0) + 1;
+            }
+            this.requeueReplyJobs(channelId, burstJobs);
+            await sleep(REPLY_QUEUE_SEND_RETRY_BASE_MS * nextAttempt);
             continue;
           }
 
@@ -674,11 +801,35 @@ export class ClankerBot {
     const voiceSettings = settings?.voice || {};
     if (!voiceSettings.joinOnTextNL) return false;
 
-    const intent = detectVoiceIntent({
-      content: text,
-      botName: settings.botName,
-      directlyAddressed: Boolean(directlyAddressed)
-    });
+    if (
+      !shouldEvaluateVoiceIntentWithLLM({
+        text,
+        botName: settings.botName,
+        directlyAddressed: Boolean(directlyAddressed)
+      })
+    ) {
+      return false;
+    }
+
+    let intent = { intent: null, confidence: 0, reason: null };
+    try {
+      intent = await this.decideVoiceIntentWithLlm({
+        message,
+        settings,
+        text,
+        directlyAddressed
+      });
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: message.guildId,
+        channelId: message.channelId,
+        messageId: message.id,
+        userId: message.author?.id || null,
+        content: `voice_intent_llm_failed: ${String(error?.message || error)}`
+      });
+      return false;
+    }
 
     if (!intent.intent) return false;
 
@@ -694,8 +845,9 @@ export class ClankerBot {
       content: intent.intent,
       metadata: {
         confidence: intent.confidence,
-        mentionSatisfied: intent.mentionSatisfied,
-        threshold
+        threshold,
+        detector: "llm",
+        reason: intent.reason || null
       }
     });
 
@@ -723,6 +875,73 @@ export class ClankerBot {
     }
 
     return false;
+  }
+
+  async decideVoiceIntentWithLlm({ message, settings, text, directlyAddressed }) {
+    if (!this.llm?.generate) {
+      return {
+        intent: null,
+        confidence: 0,
+        reason: null
+      };
+    }
+
+    const recentContext = this.store
+      .getRecentMessages(message.channelId, 7)
+      .filter((row) => String(row?.message_id || "") !== String(message.id))
+      .slice(0, 6)
+      .reverse()
+      .map((row) => {
+        const author = normalizeDirectiveText(row?.author_name || row?.author_id || "user", 40) || "user";
+        const role = Number(row?.is_bot) ? "bot" : "user";
+        const content = normalizeDirectiveText(row?.content || "", 170) || "(empty)";
+        return `- ${author} (${role}): ${content}`;
+      });
+
+    const tunedSettings = {
+      ...settings,
+      llm: {
+        ...(settings?.llm || {}),
+        temperature: clamp(Number(settings?.llm?.temperature) || 0.15, 0, 0.35),
+        maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || 120, 40, 180)
+      }
+    };
+
+    const systemPrompt = [
+      `You classify Discord voice-control intents for ${getPromptBotName(settings)}.`,
+      "Decide whether the latest user message is asking THIS bot to control VC state.",
+      'Return strict JSON only: {"intent":"join|leave|status|none","confidence":0..1,"reason":"short"}',
+      "- intent=join: user asks the bot to join/hop in voice.",
+      "- intent=leave: user asks the bot to leave/disconnect from voice.",
+      "- intent=status: user asks whether bot is in voice or asks voice status.",
+      "- intent=none: message is not a clear voice-control request to this bot.",
+      "- If ambiguous or likely aimed at another person, output none with low confidence."
+    ].join("\n");
+
+    const latestMessage = normalizeDirectiveText(text, 450) || "(empty)";
+    const userPrompt = [
+      `Bot name: ${normalizeDirectiveText(settings?.botName || "clanker conk", 80) || "clanker conk"}`,
+      `Directly addressed signal: ${Boolean(directlyAddressed)}`,
+      `Latest message: ${latestMessage}`,
+      "Recent channel context (oldest -> newest):",
+      recentContext.length ? recentContext.join("\n") : "- (none)"
+    ].join("\n");
+
+    const generation = await this.llm.generate({
+      settings: tunedSettings,
+      systemPrompt,
+      userPrompt,
+      trace: {
+        guildId: message.guildId,
+        channelId: message.channelId,
+        userId: message.author?.id || null,
+        messageId: message.id,
+        source: "voice_intent",
+        event: "voice_intent_decision"
+      }
+    });
+
+    return parseVoiceIntentDecision(generation.text);
   }
 
   async composeVoiceOperationalMessage({
@@ -882,6 +1101,7 @@ export class ClankerBot {
     const memorySlice = settings.memory?.enabled && this.memory?.buildPromptMemorySlice
       ? await this.memory.buildPromptMemorySlice({
           userId,
+          guildId,
           channelId: null,
           queryText: incomingTranscript,
           settings,
@@ -944,6 +1164,8 @@ export class ClankerBot {
             line: parsed.memoryLine,
             sourceMessageId: `voice-${String(guildId || "guild")}-${Date.now()}-memory`,
             userId: String(userId),
+            guildId,
+            channelId,
             sourceText: incomingTranscript
           })
           .catch(() => undefined);
@@ -977,6 +1199,13 @@ export class ClankerBot {
       : this.store.getRecentMessages(message.channelId, settings.memory.maxRecentMessages);
     const addressSignal =
       options.addressSignal || this.getReplyAddressSignal(settings, message, recentMessages);
+    const triggerMessageIds = [
+      ...new Set(
+        [...(Array.isArray(options.triggerMessageIds) ? options.triggerMessageIds : []), message.id]
+          .map((value) => String(value || "").trim())
+          .filter(Boolean)
+      )
+    ];
     const addressed = addressSignal.triggered;
     const replyEagerness = clamp(Number(settings.activity?.replyLevel) || 0, 0, 100);
     const reactionEagerness = clamp(Number(settings.activity?.reactionLevel) || 0, 0, 100);
@@ -996,6 +1225,7 @@ export class ClankerBot {
     const memorySlice = settings.memory.enabled
       ? await this.memory.buildPromptMemorySlice({
           userId: message.author.id,
+          guildId: message.guildId,
           channelId: message.channelId,
           queryText: message.content,
           settings,
@@ -1134,6 +1364,7 @@ export class ClankerBot {
       generation,
       source: options.source || "message_event",
       triggerMessageId: message.id,
+      triggerMessageIds,
       addressing: addressSignal
     });
 
@@ -1145,6 +1376,8 @@ export class ClankerBot {
           line: memoryLine,
           sourceMessageId: message.id,
           userId: message.author.id,
+          guildId: message.guildId,
+          channelId: message.channelId,
           sourceText: message.content
         });
       } catch (error) {
@@ -1167,6 +1400,7 @@ export class ClankerBot {
       this.logSkippedReply({
         message,
         source: options.source || "message_event",
+        triggerMessageIds,
         addressSignal,
         generation,
         usedWebSearchFollowup,
@@ -1310,6 +1544,7 @@ export class ClankerBot {
       content: finalText,
       metadata: {
         triggerMessageId: message.id,
+        triggerMessageIds,
         source: options.source || "message_event",
         addressing: addressSignal,
         sendAsReply,
@@ -1402,6 +1637,7 @@ export class ClankerBot {
     generation,
     source,
     triggerMessageId,
+    triggerMessageIds = [],
     addressing
   }) {
     const result = {
@@ -1449,6 +1685,7 @@ export class ClankerBot {
         metadata: {
           source,
           triggerMessageId,
+          triggerMessageIds,
           addressing,
           reason: "reply_directive",
           llm: {
@@ -1475,6 +1712,7 @@ export class ClankerBot {
   logSkippedReply({
     message,
     source,
+    triggerMessageIds = [],
     addressSignal,
     generation,
     usedWebSearchFollowup,
@@ -1490,6 +1728,7 @@ export class ClankerBot {
       content: reason,
       metadata: {
         triggerMessageId: message.id,
+        triggerMessageIds,
         source,
         addressing: addressSignal,
         reaction,
@@ -3516,6 +3755,58 @@ function parseReplyDirectives(rawText) {
   return parsed;
 }
 
+function parseVoiceIntentDecision(rawText) {
+  const fallback = {
+    intent: null,
+    confidence: 0,
+    reason: null
+  };
+  const raw = String(rawText || "").trim();
+  if (!raw) return fallback;
+
+  const attempts = [
+    raw,
+    raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1],
+    (() => {
+      const start = raw.indexOf("{");
+      const end = raw.lastIndexOf("}");
+      return start >= 0 && end > start ? raw.slice(start, end + 1) : "";
+    })()
+  ]
+    .map((item) => String(item || "").trim())
+    .filter(Boolean);
+
+  let parsed = null;
+  for (const candidate of attempts) {
+    try {
+      const candidateParsed = JSON.parse(candidate);
+      if (candidateParsed && typeof candidateParsed === "object") {
+        parsed = candidateParsed;
+        break;
+      }
+    } catch {
+      // try next candidate
+    }
+  }
+  if (!parsed) return fallback;
+
+  const rawIntent = String(parsed.intent || "")
+    .trim()
+    .toLowerCase();
+  if (!VOICE_INTENT_LABELS.has(rawIntent)) return fallback;
+
+  const intent = rawIntent === "none" ? null : rawIntent;
+  const confidenceRaw = Number(parsed.confidence);
+  const confidence = Number.isFinite(confidenceRaw) ? clamp(confidenceRaw, 0, 1) : 0;
+  const reason = normalizeDirectiveText(parsed.reason, MAX_VOICE_INTENT_REASON_LEN) || null;
+
+  return {
+    intent,
+    confidence,
+    reason
+  };
+}
+
 function pickReplyMediaDirective(parsed) {
   return parsed?.mediaDirective || null;
 }
@@ -3588,6 +3879,24 @@ function deriveDirectWebSearchQuery(rawText, botName = "") {
   }
 
   return cleaned.slice(0, MAX_WEB_QUERY_LEN);
+}
+
+function shouldEvaluateVoiceIntentWithLLM({ text, botName = "", directlyAddressed = false }) {
+  const normalized = String(text || "").trim().toLowerCase();
+  if (!normalized) return false;
+
+  const hasVoiceTopic = VOICE_TOPIC_HINT_RE.test(normalized);
+  const hasVoiceAction = VOICE_ACTION_HINT_RE.test(normalized);
+  if (hasVoiceTopic && hasVoiceAction) return true;
+
+  const hasDirectMention = DIRECT_USER_MENTION_RE.test(normalized);
+  const hasKeywordMention = hasBotKeyword(normalized);
+  const escapedName = escapeRegExp(String(botName || "").trim());
+  const hasNameMention = escapedName ? new RegExp(`\\b${escapedName}\\b`, "i").test(normalized) : false;
+  const mentionSatisfied = Boolean(directlyAddressed || hasDirectMention || hasKeywordMention || hasNameMention);
+  if (!mentionSatisfied) return false;
+
+  return hasVoiceTopic || hasVoiceAction;
 }
 
 function normalizeReactionEmojiToken(emojiToken) {
