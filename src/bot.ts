@@ -8,8 +8,16 @@ import {
   buildReplyPrompt,
   buildSystemPrompt
 } from "./prompts.ts";
+import {
+  buildHardLimitsSection,
+  getPromptBotName,
+  getPromptStyle,
+  PROMPT_CAPABILITY_HONESTY_LINE
+} from "./promptCore.ts";
 import { normalizeDiscoveryUrl } from "./discovery.ts";
 import { chance, clamp, hasBotKeyword, sanitizeBotText, sleep, stripBotKeywords } from "./utils.ts";
+import { detectVoiceIntent } from "./voice/voiceIntentParser.ts";
+import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
@@ -83,9 +91,16 @@ export class ClankerBot {
         GatewayIntentBits.Guilds,
         GatewayIntentBits.GuildMessages,
         GatewayIntentBits.GuildMessageReactions,
+        GatewayIntentBits.GuildVoiceStates,
         GatewayIntentBits.MessageContent
       ],
       partials: [Partials.Channel, Partials.Message, Partials.Reaction]
+    });
+    this.voiceSessionManager = new VoiceSessionManager({
+      client: this.client,
+      store: this.store,
+      appConfig: this.appConfig,
+      composeOperationalMessage: (payload) => this.composeVoiceOperationalMessage(payload)
     });
 
     this.registerEvents();
@@ -264,6 +279,7 @@ export class ClankerBot {
     this.replyQueues.clear();
     this.replyQueueWorkers.clear();
     this.replyQueuedMessageIds.clear();
+    await this.voiceSessionManager.dispose("shutdown");
     await this.client.destroy();
   }
 
@@ -284,8 +300,14 @@ export class ClankerBot {
         lastGatewayEventAt: this.lastGatewayEventAt
           ? new Date(this.lastGatewayEventAt).toISOString()
           : null
-      }
+      },
+      voice: this.voiceSessionManager.getRuntimeState()
     };
+  }
+
+  async applyRuntimeSettings(nextSettings = null) {
+    const settings = nextSettings || this.store.getSettings();
+    await this.voiceSessionManager.reconcileSettings(settings);
   }
 
   markGatewayEvent() {
@@ -589,6 +611,23 @@ export class ClankerBot {
     if (message.author.bot) return;
     if (!this.isChannelAllowed(settings, message.channelId)) return;
     if (this.isUserBlocked(settings, message.author.id)) return;
+    const directlyAddressed = this.isDirectlyAddressed(settings, message);
+
+    const voiceIntentHandled = await this.maybeHandleVoiceIntent({
+      message,
+      settings,
+      text,
+      directlyAddressed
+    });
+    if (voiceIntentHandled) return;
+
+    const soundboardIntentHandled = await this.voiceSessionManager.maybeHandleSoundboardIntent({
+      message,
+      settings,
+      text,
+      directlyAddressed
+    });
+    if (soundboardIntentHandled) return;
 
     if (settings.memory.enabled) {
       await this.memory.ingestMessage({
@@ -625,6 +664,144 @@ export class ClankerBot {
       forceRespond: addressSignal.triggered,
       addressSignal,
     });
+  }
+
+  async maybeHandleVoiceIntent({ message, settings, text, directlyAddressed }) {
+    const voiceSettings = settings?.voice || {};
+    if (!voiceSettings.joinOnTextNL) return false;
+
+    const intent = detectVoiceIntent({
+      content: text,
+      botName: settings.botName,
+      directlyAddressed: Boolean(directlyAddressed),
+      requireDirectMentionForJoin: Boolean(voiceSettings.requireDirectMentionForJoin)
+    });
+
+    if (!intent.intent) return false;
+    if (intent.blockedByMentionGate) return false;
+
+    const threshold = clamp(Number(voiceSettings.intentConfidenceThreshold) || 0.75, 0.4, 0.99);
+    if (intent.confidence < threshold) return false;
+
+    this.store.logAction({
+      kind: "voice_intent_detected",
+      guildId: message.guildId,
+      channelId: message.channelId,
+      messageId: message.id,
+      userId: message.author?.id || null,
+      content: intent.intent,
+      metadata: {
+        confidence: intent.confidence,
+        mentionSatisfied: intent.mentionSatisfied,
+        threshold
+      }
+    });
+
+    if (intent.intent === "join") {
+      return await this.voiceSessionManager.requestJoin({
+        message,
+        settings,
+        intentConfidence: intent.confidence
+      });
+    }
+
+    if (intent.intent === "leave") {
+      return await this.voiceSessionManager.requestLeave({
+        message,
+        settings,
+        reason: "nl_leave"
+      });
+    }
+
+    if (intent.intent === "status") {
+      return await this.voiceSessionManager.requestStatus({
+        message,
+        settings
+      });
+    }
+
+    return false;
+  }
+
+  async composeVoiceOperationalMessage({
+    settings,
+    guildId = null,
+    channelId = null,
+    userId = null,
+    messageId = null,
+    event = "voice_runtime",
+    reason = null,
+    details = {},
+    fallbackText = ""
+  }) {
+    if (!this.llm?.generate || !settings) return "";
+
+    const tunedSettings = {
+      ...settings,
+      llm: {
+        ...(settings?.llm || {}),
+        temperature: clamp(Number(settings?.llm?.temperature) || 0.65, 0, 0.8),
+        maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || 120, 40, 120)
+      }
+    };
+
+    const systemPrompt = [
+      `You are ${getPromptBotName(settings)}, a Discord regular posting a voice-mode update.`,
+      `Style: ${getPromptStyle(settings, "casual and playful chat tone")}.`,
+      "Write exactly one short user-facing message for the text channel.",
+      "Clearly state what happened and why, especially when a request is blocked.",
+      "If relevant, mention required permissions/settings plainly.",
+      PROMPT_CAPABILITY_HONESTY_LINE,
+      ...buildHardLimitsSection(settings, { maxItems: 12 }),
+      "Do not output JSON, markdown headings, code blocks, labels, directives, or [SKIP].",
+      "Do not invent details that are not in the event payload."
+    ].join("\n");
+
+    const userPrompt = [
+      `Event: ${String(event || "voice_runtime")}`,
+      `Reason: ${String(reason || "unknown")}`,
+      `Details JSON: ${serializeForPrompt(details, 1400)}`,
+      fallbackText ? `Baseline meaning: ${String(fallbackText || "").trim()}` : "",
+      "Return only the final message text."
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    try {
+      const generation = await this.llm.generate({
+        settings: tunedSettings,
+        systemPrompt,
+        userPrompt,
+        trace: {
+          guildId,
+          channelId,
+          messageId,
+          userId,
+          source: "voice_operational_message",
+          event,
+          reason
+        }
+      });
+
+      const parsed = parseReplyDirectives(generation.text);
+      const normalized = sanitizeBotText(normalizeSkipSentinel(parsed.text || generation.text || ""), 280);
+      if (!normalized || normalized === "[SKIP]") return "";
+      return normalized;
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: guildId || null,
+        channelId: channelId || null,
+        messageId: messageId || null,
+        userId: userId || null,
+        content: `voice_operational_llm_failed: ${String(error?.message || error)}`,
+        metadata: {
+          event,
+          reason
+        }
+      });
+      return "";
+    }
   }
 
   async maybeReplyToMessage(message, settings, options = {}) {
@@ -3136,6 +3313,14 @@ function normalizeDirectiveText(text, maxLen) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, maxLen);
+}
+
+function serializeForPrompt(value, maxLen = 1200) {
+  try {
+    return String(JSON.stringify(value ?? {}, null, 2)).slice(0, Math.max(40, Number(maxLen) || 1200));
+  } catch {
+    return "{}";
+  }
 }
 
 function isDirectWebSearchCommand(rawText, botName = "") {
