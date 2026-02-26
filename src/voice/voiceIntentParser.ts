@@ -1,20 +1,20 @@
 import { hasBotKeyword } from "../utils.ts";
 
 const JOIN_PATTERNS = [
-  /\b(?:join|hop\s*in|jump\s*in|get\s*in|pull\s*up|come\s*to|enter)\b[\w\s]{0,32}\b(?:vc|voice|voice\s*chat|call)\b/i,
-  /\b(?:vc|voice|voice\s*chat|call)\b[\w\s]{0,24}\b(?:join|hop\s*in|jump\s*in|come\s*in)\b/i,
-  /\b(?:bother|annoy|terrorize)\b[\w\s]{0,32}\b(?:vc|voice|call)\b/i
+  /\b(?:join|hop\s*in|jump\s*in|get\s*in|pull\s*up|come\s*to|enter)\b[\w\s]{0,32}\b(?:v\s*\.?\s*c|vs|voice(?:\s*(?:chat|channel))?|call)\b/i,
+  /\b(?:v\s*\.?\s*c|vs|voice(?:\s*(?:chat|channel))?|call)\b[\w\s]{0,24}\b(?:join|hop\s*in|jump\s*in|come\s*in)\b/i,
+  /\b(?:bother|annoy|terrorize)\b[\w\s]{0,32}\b(?:v\s*\.?\s*c|vs|voice(?:\s*(?:chat|channel))?|call)\b/i
 ];
 
 const LEAVE_PATTERNS = [
-  /\b(?:leave|dip|bounce|exit|get\s*out|disconnect|hang\s*up|stop)\b[\w\s]{0,32}\b(?:vc|voice|voice\s*chat|call)\b/i,
-  /\b(?:vc|voice|voice\s*chat|call)\b[\w\s]{0,24}\b(?:off|stop|leave|quit)\b/i
+  /\b(?:leave|dip|bounce|exit|get\s*out|disconnect|hang\s*up|stop)\b[\w\s]{0,32}\b(?:v\s*\.?\s*c|vs|voice(?:\s*(?:chat|channel))?|call)\b/i,
+  /\b(?:v\s*\.?\s*c|vs|voice(?:\s*(?:chat|channel))?|call)\b[\w\s]{0,24}\b(?:off|stop|leave|quit)\b/i
 ];
 
 const STATUS_PATTERNS = [
-  /\b(?:voice\s*status|vc\s*status)\b/i,
-  /\b(?:are\s*you\s*in\s*(?:vc|voice)|where\s*are\s*you\s*in\s*voice)\b/i,
-  /\b(?:status)\b[\w\s]{0,20}\b(?:vc|voice|call)\b/i
+  /\b(?:voice\s*status|v\s*\.?\s*c\s*status|vs\s*status)\b/i,
+  /\b(?:are\s*you\s*in\s*(?:v\s*\.?\s*c|vs|voice)|where\s*are\s*you\s*in\s*voice)\b/i,
+  /\b(?:status)\b[\w\s]{0,20}\b(?:v\s*\.?\s*c|vs|voice(?:\s*(?:chat|channel))?|call)\b/i
 ];
 
 const DIRECT_MENTION_RE = /<@!?\d+>/;
@@ -42,8 +42,7 @@ function matchesAny(text, patterns) {
 export function detectVoiceIntent({
   content,
   botName,
-  directlyAddressed = false,
-  requireDirectMentionForJoin = true
+  directlyAddressed = false
 }) {
   const normalized = normalizeText(content);
   const hasDirectMention = DIRECT_MENTION_RE.test(normalized);
@@ -71,14 +70,10 @@ export function detectVoiceIntent({
     confidence = mentionSatisfied ? INTENT_CONFIDENCE.statusMentioned : INTENT_CONFIDENCE.statusUnmentioned;
   }
 
-  const blockedByMentionGate =
-    intent === "join" && requireDirectMentionForJoin && !mentionSatisfied;
-
   return {
     intent,
     confidence,
     mentionSatisfied,
-    blockedByMentionGate,
     normalizedText: normalized
   };
 }

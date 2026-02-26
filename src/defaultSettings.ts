@@ -43,8 +43,8 @@ export const DEFAULT_SETTINGS = {
   },
   voice: {
     enabled: false,
+    mode: "voice_agent",
     joinOnTextNL: true,
-    requireDirectMentionForJoin: true,
     intentConfidenceThreshold: 0.75,
     maxSessionMinutes: 10,
     inactivityLeaveSeconds: 90,
@@ -58,6 +58,12 @@ export const DEFAULT_SETTINGS = {
       audioFormat: "audio/pcm",
       sampleRateHz: 24000,
       region: "us-east-1"
+    },
+    sttPipeline: {
+      transcriptionModel: "gpt-4o-mini-transcribe",
+      ttsModel: "gpt-4o-mini-tts",
+      ttsVoice: "alloy",
+      ttsSpeed: 1
     },
     soundboard: {
       enabled: true,

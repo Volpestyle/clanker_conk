@@ -13,6 +13,7 @@ Features:
 - Optional Grok Imagine image/video generation for complex visuals and clips.
 - Video link understanding for YouTube/TikTok/embedded video links (captions first, optional ASR fallback, optional keyframes).
 - NL-controlled Discord voice sessions (join/leave/status) with session limits and runtime guards.
+- Voice runtime mode selector: `voice_agent` (xAI realtime low latency) or `stt_pipeline` (STT -> shared chat LLM brain -> TTS).
 - Dashboard UI for settings, permissions, logs, memory, and cost tracking.
 - Two-layer memory with append-only daily logs and curated `memory/MEMORY.md` distillation.
 
@@ -28,6 +29,7 @@ Fill `.env`:
 - `DISCORD_TOKEN`: your bot token.
 - `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and/or `XAI_API_KEY`.
 - `XAI_API_KEY`: required for Grok text models and voice mode, and also used for Grok Imagine media generation.
+- `OPENAI_API_KEY`: required for the `voice.sttPipeline` mode (speech-to-text + text-to-speech).
 - `XAI_BASE_URL`: optional xAI API base URL override (default `https://api.x.ai/v1`).
 - Optional for live web search: `BRAVE_SEARCH_API_KEY` (primary) and/or `SERPAPI_API_KEY` (fallback).
 - Optional for model-directed GIF replies: `GIPHY_API_KEY` (and optional `GIPHY_RATING`, default `pg-13`).
@@ -93,6 +95,7 @@ Use dashboard to:
 - Enable/disable model-directed GIF replies and set GIF lookup budget.
 - Configure allowed image/video generation models, simple/complex image routing models, and per-24h media budgets.
 - Choose LLM provider + model.
+- Choose voice runtime mode (`voice_agent` or `stt_pipeline`) and tune STT/TTS models.
 - Track accumulated API spend.
 - Inspect bot actions and memory.
 

@@ -694,12 +694,16 @@ function normalizeSettings(raw) {
   if (!merged.voice.xai || typeof merged.voice.xai !== "object") {
     merged.voice.xai = {};
   }
+  if (!merged.voice.sttPipeline || typeof merged.voice.sttPipeline !== "object") {
+    merged.voice.sttPipeline = {};
+  }
   if (!merged.voice.soundboard || typeof merged.voice.soundboard !== "object") {
     merged.voice.soundboard = {};
   }
 
   const defaultVoice = DEFAULT_SETTINGS.voice || {};
   const defaultVoiceXai = defaultVoice.xai || {};
+  const defaultVoiceSttPipeline = defaultVoice.sttPipeline || {};
   const defaultVoiceSoundboard = defaultVoice.soundboard || {};
   const voiceIntentThresholdRaw = Number(merged.voice?.intentConfidenceThreshold);
   const voiceMaxSessionRaw = Number(merged.voice?.maxSessionMinutes);
@@ -707,15 +711,14 @@ function normalizeSettings(raw) {
   const voiceDailySessionsRaw = Number(merged.voice?.maxSessionsPerDay);
   const voiceConcurrentSessionsRaw = Number(merged.voice?.maxConcurrentSessions);
   const voiceSampleRateRaw = Number(merged.voice?.xai?.sampleRateHz);
+  const voiceSttTtsSpeedRaw = Number(merged.voice?.sttPipeline?.ttsSpeed);
 
   merged.voice.enabled =
     merged.voice?.enabled !== undefined ? Boolean(merged.voice?.enabled) : Boolean(defaultVoice.enabled);
+  merged.voice.mode = normalizeVoiceMode(merged.voice?.mode, defaultVoice.mode);
   merged.voice.joinOnTextNL =
     merged.voice?.joinOnTextNL !== undefined ? Boolean(merged.voice?.joinOnTextNL) : Boolean(defaultVoice.joinOnTextNL);
-  merged.voice.requireDirectMentionForJoin =
-    merged.voice?.requireDirectMentionForJoin !== undefined
-      ? Boolean(merged.voice?.requireDirectMentionForJoin)
-      : Boolean(defaultVoice.requireDirectMentionForJoin);
+  delete merged.voice.requireDirectMentionForJoin;
   merged.voice.intentConfidenceThreshold = clamp(
     Number.isFinite(voiceIntentThresholdRaw)
       ? voiceIntentThresholdRaw
@@ -761,6 +764,28 @@ function normalizeSettings(raw) {
   merged.voice.xai.region = String(merged.voice?.xai?.region || defaultVoiceXai.region || "us-east-1")
     .trim()
     .slice(0, 40);
+  merged.voice.sttPipeline.transcriptionModel = String(
+    merged.voice?.sttPipeline?.transcriptionModel || defaultVoiceSttPipeline.transcriptionModel || "gpt-4o-mini-transcribe"
+  )
+    .trim()
+    .slice(0, 120);
+  merged.voice.sttPipeline.ttsModel = String(
+    merged.voice?.sttPipeline?.ttsModel || defaultVoiceSttPipeline.ttsModel || "gpt-4o-mini-tts"
+  )
+    .trim()
+    .slice(0, 120);
+  merged.voice.sttPipeline.ttsVoice = String(
+    merged.voice?.sttPipeline?.ttsVoice || defaultVoiceSttPipeline.ttsVoice || "alloy"
+  )
+    .trim()
+    .slice(0, 60);
+  merged.voice.sttPipeline.ttsSpeed = clamp(
+    Number.isFinite(voiceSttTtsSpeedRaw)
+      ? voiceSttTtsSpeedRaw
+      : Number(defaultVoiceSttPipeline.ttsSpeed) || 1,
+    0.25,
+    2
+  );
 
   merged.voice.soundboard.enabled =
     merged.voice?.soundboard?.enabled !== undefined
@@ -1018,6 +1043,14 @@ function normalizeLlmProvider(value) {
   if (normalized === "anthropic") return "anthropic";
   if (normalized === "xai") return "xai";
   return "openai";
+}
+
+function normalizeVoiceMode(value, fallback = "voice_agent") {
+  const normalized = String(value || fallback || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "stt_pipeline") return "stt_pipeline";
+  return "voice_agent";
 }
 
 function normalizeHardLimitList(input, fallback = []) {

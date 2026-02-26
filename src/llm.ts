@@ -114,7 +114,11 @@ export class LLMService {
           provider,
           model,
           usage: response.usage,
-          inputImages: imageInputs.length
+          inputImages: imageInputs.length,
+          source: trace.source ? String(trace.source) : null,
+          event: trace.event ? String(trace.event) : null,
+          reason: trace.reason ? String(trace.reason) : null,
+          messageId: trace.messageId ? String(trace.messageId) : null
         },
         usdCost: costUsd
       });
@@ -421,13 +425,13 @@ export class LLMService {
       );
     }
 
-    const size = "1024x1024";
+    const size = provider === "openai" ? "1024x1024" : null;
 
     try {
       const response = await client.images.generate({
         model,
         prompt: String(prompt || "").slice(0, 3200),
-        size
+        ...(size ? { size } : {})
       });
 
       const first = response?.data?.[0];
@@ -724,6 +728,10 @@ export class LLMService {
     return Boolean(this.openai);
   }
 
+  isSpeechSynthesisReady() {
+    return Boolean(this.openai);
+  }
+
   async transcribeAudio({ filePath, model = "gpt-4o-mini-transcribe", trace = {} }) {
     if (!this.openai) {
       throw new Error("ASR fallback requires OPENAI_API_KEY.");
@@ -767,6 +775,83 @@ export class LLMService {
         content: String(error?.message || error),
         metadata: {
           model: resolvedModel,
+          source: trace.source || "unknown"
+        }
+      });
+      throw error;
+    }
+  }
+
+  async synthesizeSpeech({
+    text,
+    model = "gpt-4o-mini-tts",
+    voice = "alloy",
+    speed = 1,
+    responseFormat = "pcm",
+    trace = {}
+  }) {
+    if (!this.openai) {
+      throw new Error("Speech synthesis requires OPENAI_API_KEY.");
+    }
+
+    const resolvedText = normalizeInlineText(text, 4000);
+    if (!resolvedText) {
+      throw new Error("Speech synthesis requires non-empty text.");
+    }
+
+    const resolvedModel = String(model || "gpt-4o-mini-tts").trim() || "gpt-4o-mini-tts";
+    const resolvedVoice = String(voice || "alloy").trim() || "alloy";
+    const resolvedFormat = String(responseFormat || "pcm").trim().toLowerCase() || "pcm";
+    const resolvedSpeed = clampNumber(speed, 0.25, 2, 1);
+
+    try {
+      const response = await this.openai.audio.speech.create({
+        model: resolvedModel,
+        voice: resolvedVoice,
+        input: resolvedText,
+        speed: resolvedSpeed,
+        response_format: resolvedFormat
+      });
+      const audioBuffer = Buffer.from(await response.arrayBuffer());
+      if (!audioBuffer.length) {
+        throw new Error("Speech synthesis returned empty audio.");
+      }
+
+      this.store.logAction({
+        kind: "tts_call",
+        guildId: trace.guildId,
+        channelId: trace.channelId,
+        userId: trace.userId,
+        content: resolvedModel,
+        metadata: {
+          model: resolvedModel,
+          voice: resolvedVoice,
+          speed: resolvedSpeed,
+          responseFormat: resolvedFormat,
+          textChars: resolvedText.length,
+          source: trace.source || "unknown"
+        }
+      });
+
+      return {
+        audioBuffer,
+        model: resolvedModel,
+        voice: resolvedVoice,
+        speed: resolvedSpeed,
+        responseFormat: resolvedFormat
+      };
+    } catch (error) {
+      this.store.logAction({
+        kind: "tts_error",
+        guildId: trace.guildId,
+        channelId: trace.channelId,
+        userId: trace.userId,
+        content: String(error?.message || error),
+        metadata: {
+          model: resolvedModel,
+          voice: resolvedVoice,
+          speed: resolvedSpeed,
+          responseFormat: resolvedFormat,
           source: trace.source || "unknown"
         }
       });
@@ -1011,6 +1096,14 @@ function clamp01(value, fallback = 0.5) {
 function clampInt(value, min, max) {
   const parsed = Math.floor(Number(value));
   if (!Number.isFinite(parsed)) return min;
+  if (parsed < min) return min;
+  if (parsed > max) return max;
+  return parsed;
+}
+
+function clampNumber(value, min, max, fallback = min) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
   if (parsed < min) return min;
   if (parsed > max) return max;
   return parsed;

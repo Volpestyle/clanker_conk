@@ -1,13 +1,15 @@
 # Voice Agent Product Spec
 
 ## Goal
-Enable `clanker conk` to join Discord voice channels on explicit natural-language requests, run real-time conversations using xAI Grok Voice Agent, and use soundboard effects contextually, while staying human-like and constrained by strict session limits (default max 10 minutes).
+Enable `clanker conk` to join Discord voice channels on explicit natural-language requests, run live conversations with selectable runtime modes, and use soundboard effects contextually while staying human-like and constrained by strict session limits (default max 10 minutes).
 
-## Product Decision (Locked)
-- Decision date: February 25, 2026
-- V1 voice stack: xAI Grok Voice Agent realtime (`wss://api.x.ai/v1/realtime`)
-- Default voice profile: `Rex` (male) with neutral delivery instructions
-- No parallel STT/TTS fallback path in V1 (single voice runtime path)
+## Product Decision (Current)
+- Updated: February 26, 2026
+- Voice runtime is dashboard-selectable per bot:
+  - `voice_agent`: xAI Grok Voice Agent realtime (`wss://api.x.ai/v1/realtime`) for lowest latency.
+  - `stt_pipeline`: STT -> chat LLM brain -> TTS pipeline for stronger persona/memory parity with text chat.
+- Default runtime: `voice_agent`.
+- Default xAI voice profile: `Rex` (male) with neutral delivery instructions.
 
 ## Why This Matters
 - Users already treat `clanker conk` like a social participant in text channels.
@@ -38,24 +40,27 @@ Enable `clanker conk` to join Discord voice channels on explicit natural-languag
    - Bot joins VC, posts a short in-text confirmation, starts countdown timer.
 4. Live conversation loop:
    - Ingest voice audio.
-   - Stream audio to xAI realtime session.
-   - Generate response with same persona and memory context.
-   - Play model audio output back to the channel.
+   - Runtime-specific response path:
+     - `voice_agent`: stream audio to xAI realtime and play returned audio.
+     - `stt_pipeline`: transcribe audio, run the same chat LLM brain (with memory), synthesize speech, then play audio.
    - Optionally fire soundboard effects when confidence and cooldown rules allow.
 5. Session end:
    - Hard stop at max duration (10 min default).
    - Early stop on inactivity timeout, explicit NL stop request, disconnect, or permission loss.
    - Bot announces exit briefly in text or voice.
 
-## Technical Approach (V1)
-- Use xAI realtime websocket (`wss://api.x.ai/v1/realtime`) for low-latency voice-in/voice-out.
-- Use `session.update` to configure:
-  - `voice: "Rex"`
-  - persona instructions aligned to current text behavior, with explicit neutral delivery guardrails (calm, conversational, non-announcer tone).
-  - audio format: `audio/pcm` at 24kHz for input/output.
-- Use server-side API key auth for bot runtime (no browser client token flow needed).
+## Technical Approach
+- Common session lifecycle (join/leave/timers/cooldowns/guards) lives in `voiceSessionManager`.
+- Runtime mode selected via `voice.mode`:
+  - `voice_agent`:
+    - xAI realtime websocket (`wss://api.x.ai/v1/realtime`) for low-latency voice-in/voice-out.
+    - `session.update` config includes `voice`, instructions, region, and PCM format settings.
+  - `stt_pipeline`:
+    - Capture inbound PCM, write WAV temp files, transcribe with configured STT model.
+    - Generate reply text through the same chat LLM stack used for text messages.
+    - Pull memory context using existing memory slice logic.
+    - Synthesize speech via configured TTS model/voice and play back in VC.
 - Enforce hard leave at `maxSessionMinutes=10`.
-- Billing model: $0.05/minute of connection time (+ tool invocation costs if enabled).
 
 ### Voice Selection Note
 - xAI currently exposes five voices: `Ara`, `Rex`, `Sal`, `Eve`, `Leo`.
@@ -73,9 +78,14 @@ Enable `clanker conk` to join Discord voice channels on explicit natural-languag
 - Use Discord soundboard APIs / methods for contextual effects while connected.
 
 ## Required xAI Capabilities
+- Required only when `voice.mode=voice_agent`.
 - xAI realtime endpoint: `wss://api.x.ai/v1/realtime`.
 - Runtime region: `us-east-1` (Voice Agent availability constraint).
 - API key configured as `XAI_API_KEY` in bot server environment.
+
+## Required OpenAI Capabilities
+- Required for `voice.mode=stt_pipeline`.
+- STT and TTS API access via `OPENAI_API_KEY`.
 
 ## Proposed Architecture Changes
 - `src/bot.ts`
@@ -101,8 +111,8 @@ Enable `clanker conk` to join Discord voice channels on explicit natural-languag
 ```js
 voice: {
   enabled: false,
+  mode: "voice_agent", // "voice_agent" | "stt_pipeline"
   joinOnTextNL: true,
-  requireDirectMentionForJoin: true,
   intentConfidenceThreshold: 0.75,
   maxSessionMinutes: 10,
   inactivityLeaveSeconds: 90,
@@ -116,6 +126,12 @@ voice: {
     audioFormat: "audio/pcm",
     sampleRateHz: 24000,
     region: "us-east-1"
+  },
+  sttPipeline: {
+    transcriptionModel: "gpt-4o-mini-transcribe",
+    ttsModel: "gpt-4o-mini-tts",
+    ttsVoice: "alloy",
+    ttsSpeed: 1
   },
   soundboard: {
     enabled: true,
@@ -168,8 +184,9 @@ All NL intents route through the same `voiceSessionManager` methods (single sour
 
 ## Rollout Plan
 1. Phase 1: Join/leave infrastructure + timer + xAI realtime websocket session wiring.
-2. Phase 2: Voice behavior tuning (persona parity with text, neutral male delivery, interruption handling).
-3. Phase 3: Soundboard director with strict caps/cooldowns + dashboard controls + cost reporting.
+2. Phase 2: Add dashboard-selectable dual runtime mode (`voice_agent` and `stt_pipeline`).
+3. Phase 3: Voice behavior tuning (persona parity with text, interruption handling, memory quality).
+4. Phase 4: Soundboard director with strict caps/cooldowns + cost reporting.
 
 ## Acceptance Criteria
 1. Bot joins requestor's VC within 5 seconds after a valid NL trigger.
@@ -178,15 +195,16 @@ All NL intents route through the same `voiceSessionManager` methods (single sour
 4. Bot does not start if voice mode disabled or channel is blocked.
 5. Soundboard playback never exceeds configured cooldown and per-session cap.
 6. Voice prompt style remains consistent with text persona.
-7. Every xAI voice session sends `voice: "Rex"` in session config.
-8. Voice output follows neutral delivery style guidance (calm, conversational, low-drama).
+7. If `voice.mode=voice_agent`, every xAI voice session sends `voice: "Rex"` in session config.
+8. If `voice.mode=stt_pipeline`, replies are generated by the same chat LLM path used for text mode and include memory context.
+9. Voice output follows neutral delivery style guidance (calm, conversational, low-drama).
 
 ## Migration/Cleanup Notes
 - Remove the hard-limit statement "Cannot join voice channels." from:
   - `src/defaultSettings.ts`
   - `src/memory.ts` memory markdown identity block
   once voice mode is enabled in production.
-- Keep one canonical voice path; avoid parallel "legacy voice" shims.
+- Keep runtime selection explicit via `voice.mode` and avoid hidden fallback shims.
 
 ## Open Questions
 1. Should voice sessions be restricted to allowlisted roles in v1?

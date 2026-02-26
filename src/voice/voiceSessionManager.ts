@@ -1,4 +1,7 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import {
   AudioPlayerStatus,
@@ -35,14 +38,19 @@ const MAX_RESPONSE_SILENCE_RETRIES = 2;
 const RESPONSE_DONE_SILENCE_GRACE_MS = 1400;
 const PENDING_SUPERSEDE_MIN_AGE_MS = 1800;
 const BOT_DISCONNECT_GRACE_MS = 2500;
+const STT_CONTEXT_MAX_MESSAGES = 10;
+const STT_TRANSCRIPT_MAX_CHARS = 700;
+const STT_REPLY_MAX_CHARS = 520;
 
 export class VoiceSessionManager {
-  constructor({ client, store, appConfig, composeOperationalMessage = null }) {
+  constructor({ client, store, appConfig, llm = null, composeOperationalMessage = null, generateVoiceTurn = null }) {
     this.client = client;
     this.store = store;
     this.appConfig = appConfig;
+    this.llm = llm || null;
     this.composeOperationalMessage =
       typeof composeOperationalMessage === "function" ? composeOperationalMessage : null;
+    this.generateVoiceTurn = typeof generateVoiceTurn === "function" ? generateVoiceTurn : null;
     this.sessions = new Map();
     this.pendingSessionGuildIds = new Set();
     this.joinLocks = new Map();
@@ -93,6 +101,15 @@ export class VoiceSessionManager {
           ? new Date(session.soundboard.lastPlayedAt).toISOString()
           : null
       },
+      mode: session.mode || "voice_agent",
+      stt: session.mode === "stt_pipeline"
+        ? {
+            pendingTurns: Number(session.pendingSttTurns || 0),
+            contextMessages: Array.isArray(session.sttContextMessages)
+              ? session.sttContextMessages.length
+              : 0
+          }
+        : null,
       xai: session.xaiClient?.getState?.() || null
     }));
 
@@ -262,7 +279,8 @@ export class VoiceSessionManager {
         });
       }
 
-      if (!this.appConfig?.xaiApiKey) {
+      const runtimeMode = resolveVoiceRuntimeMode(settings);
+      if (runtimeMode === "voice_agent" && !this.appConfig?.xaiApiKey) {
         await this.sendOperationalMessage({
           channel: message.channel,
           settings,
@@ -272,10 +290,65 @@ export class VoiceSessionManager {
           messageId: message.id,
           event: "voice_join_request",
           reason: "xai_api_key_missing",
-          details: {},
-          fallback: "voice runtime is not configured yet (missing `XAI_API_KEY`)."
+          details: {
+            mode: runtimeMode
+          },
+          fallback: "voice agent mode needs `XAI_API_KEY`."
         });
         return true;
+      }
+      if (runtimeMode === "stt_pipeline") {
+        if (!this.llm?.isAsrReady?.()) {
+          await this.sendOperationalMessage({
+            channel: message.channel,
+            settings,
+            guildId,
+            channelId: message.channelId,
+            userId,
+            messageId: message.id,
+            event: "voice_join_request",
+            reason: "stt_pipeline_asr_unavailable",
+            details: {
+              mode: runtimeMode
+            },
+            fallback: "stt pipeline needs `OPENAI_API_KEY` for speech-to-text."
+          });
+          return true;
+        }
+        if (!this.llm?.isSpeechSynthesisReady?.()) {
+          await this.sendOperationalMessage({
+            channel: message.channel,
+            settings,
+            guildId,
+            channelId: message.channelId,
+            userId,
+            messageId: message.id,
+            event: "voice_join_request",
+            reason: "stt_pipeline_tts_unavailable",
+            details: {
+              mode: runtimeMode
+            },
+            fallback: "stt pipeline needs `OPENAI_API_KEY` for text-to-speech."
+          });
+          return true;
+        }
+        if (typeof this.generateVoiceTurn !== "function") {
+          await this.sendOperationalMessage({
+            channel: message.channel,
+            settings,
+            guildId,
+            channelId: message.channelId,
+            userId,
+            messageId: message.id,
+            event: "voice_join_request",
+            reason: "stt_pipeline_brain_unavailable",
+            details: {
+              mode: runtimeMode
+            },
+            fallback: "stt pipeline brain callback is missing in runtime."
+          });
+          return true;
+        }
       }
 
       const missingPermissionInfo = this.getMissingJoinPermissionInfo({
@@ -349,30 +422,32 @@ export class VoiceSessionManager {
 
         await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
 
-        xaiClient = new XaiRealtimeClient({
-          apiKey: this.appConfig.xaiApiKey,
-          logger: ({ level, event, metadata }) => {
-            this.store.logAction({
-              kind: level === "warn" ? "voice_error" : "voice_runtime",
-              guildId,
-              channelId: message.channelId,
-              userId: this.client.user?.id || null,
-              content: event,
-              metadata
-            });
-          }
-        });
+        if (runtimeMode === "voice_agent") {
+          xaiClient = new XaiRealtimeClient({
+            apiKey: this.appConfig.xaiApiKey,
+            logger: ({ level, event, metadata }) => {
+              this.store.logAction({
+                kind: level === "warn" ? "voice_error" : "voice_runtime",
+                guildId,
+                channelId: message.channelId,
+                userId: this.client.user?.id || null,
+                content: event,
+                metadata
+              });
+            }
+          });
 
-        const xaiSettings = settings.voice?.xai || {};
-        await xaiClient.connect({
-          voice: xaiSettings.voice || "Rex",
-          instructions: this.buildVoiceInstructions(settings),
-          region: xaiSettings.region || "us-east-1",
-          inputAudioFormat: xaiSettings.audioFormat || "audio/pcm",
-          outputAudioFormat: xaiSettings.audioFormat || "audio/pcm",
-          inputSampleRateHz: Number(xaiSettings.sampleRateHz) || 24000,
-          outputSampleRateHz: Number(xaiSettings.sampleRateHz) || 24000
-        });
+          const xaiSettings = settings.voice?.xai || {};
+          await xaiClient.connect({
+            voice: xaiSettings.voice || "Rex",
+            instructions: this.buildVoiceInstructions(settings),
+            region: xaiSettings.region || "us-east-1",
+            inputAudioFormat: xaiSettings.audioFormat || "audio/pcm",
+            outputAudioFormat: xaiSettings.audioFormat || "audio/pcm",
+            inputSampleRateHz: Number(xaiSettings.sampleRateHz) || 24000,
+            outputSampleRateHz: Number(xaiSettings.sampleRateHz) || 24000
+          });
+        }
 
         audioPlayer = createAudioPlayer();
         botAudioStream = new PassThrough();
@@ -389,6 +464,7 @@ export class VoiceSessionManager {
           voiceChannelId: targetVoiceChannelId,
           textChannelId: String(message.channelId),
           requestedByUserId: userId,
+          mode: runtimeMode,
           connection,
           xaiClient,
           audioPlayer,
@@ -412,6 +488,9 @@ export class VoiceSessionManager {
           lastAudioPipelineRepairAt: 0,
           nextResponseRequestId: 0,
           pendingResponse: null,
+          pendingSttTurns: 0,
+          sttContextMessages: [],
+          sttTurnChain: Promise.resolve(),
           userCaptures: new Map(),
           soundboard: {
             playCount: 0,
@@ -425,7 +504,9 @@ export class VoiceSessionManager {
         this.sessions.set(guildId, session);
         this.bindAudioPlayerHandlers(session);
         this.bindSessionHandlers(session, settings);
-        this.bindXaiHandlers(session, settings);
+        if (runtimeMode === "voice_agent") {
+          this.bindXaiHandlers(session, settings);
+        }
         this.startSessionTimers(session, settings);
 
         this.store.logAction({
@@ -436,6 +517,7 @@ export class VoiceSessionManager {
           content: `voice_joined:${targetVoiceChannelId}`,
           metadata: {
             sessionId: session.id,
+            mode: runtimeMode,
             requestedByUserId: userId,
             voiceChannelId: targetVoiceChannelId,
             maxSessionMinutes,
@@ -832,6 +914,7 @@ export class VoiceSessionManager {
   }
 
   bindXaiHandlers(session, settings = session.settingsSnapshot) {
+    if (!session?.xaiClient) return;
     const onAudioDelta = (audioBase64) => {
       let chunk = null;
       try {
@@ -1148,6 +1231,7 @@ export class VoiceSessionManager {
       pcmStream,
       startedAt: Date.now(),
       bytesSent: 0,
+      pcmChunks: [],
       lastActivityTouchAt: 0,
       idleFlushTimer: null,
       maxFlushTimer: null,
@@ -1211,6 +1295,7 @@ export class VoiceSessionManager {
       const normalizedPcm = convertDiscordPcmToXaiInput(chunk);
       if (!normalizedPcm.length) return;
       captureState.bytesSent += normalizedPcm.length;
+      captureState.pcmChunks.push(normalizedPcm);
       scheduleIdleFlush();
 
       const now = Date.now();
@@ -1220,19 +1305,21 @@ export class VoiceSessionManager {
         captureState.lastActivityTouchAt = now;
       }
 
-      try {
-        session.xaiClient.appendInputAudioPcm(normalizedPcm);
-      } catch (error) {
-        this.store.logAction({
-          kind: "voice_error",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId,
-          content: `audio_append_failed: ${String(error?.message || error)}`,
-          metadata: {
-            sessionId: session.id
-          }
-        });
+      if (session.mode === "voice_agent") {
+        try {
+          session.xaiClient.appendInputAudioPcm(normalizedPcm);
+        } catch (error) {
+          this.store.logAction({
+            kind: "voice_error",
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId,
+            content: `audio_append_failed: ${String(error?.message || error)}`,
+            metadata: {
+              sessionId: session.id
+            }
+          });
+        }
       }
     });
 
@@ -1260,7 +1347,17 @@ export class VoiceSessionManager {
         return;
       }
 
-      this.scheduleResponseFromBufferedAudio({ session, userId });
+      if (session.mode === "stt_pipeline") {
+        const pcmBuffer = Buffer.concat(captureState.pcmChunks);
+        this.queueSttPipelineTurn({
+          session,
+          userId,
+          pcmBuffer,
+          captureReason: reason
+        });
+      } else {
+        this.scheduleResponseFromBufferedAudio({ session, userId });
+      }
 
       cleanupCapture();
     };
@@ -1312,8 +1409,244 @@ export class VoiceSessionManager {
     });
   }
 
+  queueSttPipelineTurn({ session, userId, pcmBuffer, captureReason = "stream_end" }) {
+    if (!session || session.ending) return;
+    if (session.mode !== "stt_pipeline") return;
+    if (!pcmBuffer || !pcmBuffer.length) return;
+
+    session.pendingSttTurns = Number(session.pendingSttTurns || 0) + 1;
+    const chain = Promise.resolve(session.sttTurnChain || Promise.resolve());
+    session.sttTurnChain = chain
+      .catch(() => undefined)
+      .then(async () => {
+        await this.runSttPipelineTurn({
+          session,
+          userId,
+          pcmBuffer,
+          captureReason
+        });
+      })
+      .catch((error) => {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: `stt_pipeline_turn_failed: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id
+          }
+        });
+      })
+      .finally(() => {
+        session.pendingSttTurns = Math.max(0, Number(session.pendingSttTurns || 0) - 1);
+      });
+  }
+
+  async runSttPipelineTurn({ session, userId, pcmBuffer, captureReason = "stream_end" }) {
+    if (!session || session.ending) return;
+    if (session.mode !== "stt_pipeline") return;
+    if (!pcmBuffer?.length) return;
+    if (!this.llm?.transcribeAudio || !this.llm?.synthesizeSpeech) return;
+
+    const settings = session.settingsSnapshot || this.store.getSettings();
+    const sttSettings = settings?.voice?.sttPipeline || {};
+    const transcriptionModel =
+      String(sttSettings?.transcriptionModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
+    const transcript = await this.transcribePcmTurn({
+      session,
+      userId,
+      pcmBuffer,
+      model: transcriptionModel,
+      captureReason
+    });
+    if (!transcript) return;
+    if (session.ending) return;
+
+    this.touchActivity(session.guildId, settings);
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId,
+      content: "stt_pipeline_transcript",
+      metadata: {
+        sessionId: session.id,
+        captureReason: String(captureReason || "stream_end"),
+        transcript
+      }
+    });
+
+    if (typeof this.generateVoiceTurn !== "function") return;
+
+    const contextMessages = Array.isArray(session.sttContextMessages)
+      ? session.sttContextMessages
+          .filter((row) => row && typeof row === "object")
+          .map((row) => ({
+            role: row.role === "assistant" ? "assistant" : "user",
+            content: normalizeVoiceText(row.content, STT_REPLY_MAX_CHARS)
+          }))
+          .filter((row) => row.content)
+          .slice(-STT_CONTEXT_MAX_MESSAGES)
+      : [];
+
+    let replyText = "";
+    try {
+      const generated = await this.generateVoiceTurn({
+        settings,
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        transcript,
+        contextMessages,
+        sessionId: session.id
+      });
+      replyText = normalizeVoiceText(generated?.text || generated, STT_REPLY_MAX_CHARS);
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: `stt_pipeline_generation_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id
+        }
+      });
+      return;
+    }
+    if (!replyText || session.ending) return;
+
+    session.sttContextMessages = [
+      ...contextMessages,
+      {
+        role: "user",
+        content: normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS)
+      },
+      {
+        role: "assistant",
+        content: replyText
+      }
+    ].slice(-STT_CONTEXT_MAX_MESSAGES);
+
+    const ttsModel = String(sttSettings?.ttsModel || "gpt-4o-mini-tts").trim() || "gpt-4o-mini-tts";
+    const ttsVoice = String(sttSettings?.ttsVoice || "alloy").trim() || "alloy";
+    const ttsSpeedRaw = Number(sttSettings?.ttsSpeed);
+    const ttsSpeed = Number.isFinite(ttsSpeedRaw) ? ttsSpeedRaw : 1;
+    let ttsPcm = Buffer.alloc(0);
+    try {
+      const tts = await this.llm.synthesizeSpeech({
+        text: replyText,
+        model: ttsModel,
+        voice: ttsVoice,
+        speed: ttsSpeed,
+        responseFormat: "pcm",
+        trace: {
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.client.user?.id || null,
+          source: "voice_stt_pipeline_tts"
+        }
+      });
+      ttsPcm = tts.audioBuffer;
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: `stt_pipeline_tts_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          model: ttsModel,
+          voice: ttsVoice
+        }
+      });
+      return;
+    }
+    if (!ttsPcm.length || session.ending) return;
+
+    const discordPcm = convertXaiOutputToDiscordPcm(ttsPcm, 24000);
+    if (!discordPcm.length) return;
+    if (
+      !ensureBotAudioPlaybackReady({
+        session,
+        store: this.store,
+        botUserId: this.client.user?.id || null
+      })
+    ) {
+      return;
+    }
+
+    try {
+      session.lastAudioDeltaAt = Date.now();
+      session.botAudioStream.write(discordPcm);
+      this.markBotTurnOut(session, settings);
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "stt_pipeline_reply_spoken",
+        metadata: {
+          sessionId: session.id,
+          replyText
+        }
+      });
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: `stt_pipeline_audio_write_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id
+        }
+      });
+    }
+  }
+
+  async transcribePcmTurn({ session, userId, pcmBuffer, model, captureReason = "stream_end" }) {
+    if (!this.llm?.transcribeAudio || !pcmBuffer?.length) return "";
+    const resolvedModel = String(model || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-voice-stt-"));
+    const wavPath = path.join(tempDir, "turn.wav");
+    try {
+      await fs.writeFile(wavPath, encodePcm16MonoAsWav(pcmBuffer, 24000));
+      const transcript = await this.llm.transcribeAudio({
+        filePath: wavPath,
+        model: resolvedModel,
+        trace: {
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          source: "voice_stt_pipeline_turn"
+        }
+      });
+      return normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: `stt_pipeline_transcription_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          model: resolvedModel,
+          captureReason: String(captureReason || "stream_end")
+        }
+      });
+      return "";
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+
   scheduleResponseFromBufferedAudio({ session, userId = null }) {
     if (!session || session.ending) return;
+    if (session.mode !== "voice_agent") return;
 
     if (session.responseFlushTimer) {
       clearTimeout(session.responseFlushTimer);
@@ -1327,6 +1660,7 @@ export class VoiceSessionManager {
 
   flushResponseFromBufferedAudio({ session, userId = null }) {
     if (!session || session.ending) return;
+    if (session.mode !== "voice_agent") return;
 
     const now = Date.now();
     const msSinceLastRequest = now - Number(session.lastResponseRequestAt || 0);
@@ -1401,6 +1735,7 @@ export class VoiceSessionManager {
 
   createTrackedAudioResponse({ session, userId = null, source = "turn_flush", resetRetryState = false }) {
     if (!session || session.ending) return;
+    if (session.mode !== "voice_agent") return;
     session.xaiClient.createAudioResponse();
 
     const now = Date.now();
@@ -1454,6 +1789,7 @@ export class VoiceSessionManager {
 
   armResponseSilenceWatchdog({ session, requestId, userId = null }) {
     if (!session || session.ending) return;
+    if (session.mode !== "voice_agent") return;
     if (!Number.isFinite(Number(requestId)) || Number(requestId) <= 0) return;
 
     if (session.responseWatchdogTimer) {
@@ -1486,6 +1822,7 @@ export class VoiceSessionManager {
     responseStatus = null
   }) {
     if (!session || session.ending) return;
+    if (session.mode !== "voice_agent") return;
     const pending = session.pendingResponse;
     if (!pending) return;
     if (pending.handlingSilence) return;
@@ -1755,6 +2092,7 @@ export class VoiceSessionManager {
       content: reason,
       metadata: {
         sessionId: session.id,
+        mode: session.mode || "voice_agent",
         voiceChannelId: session.voiceChannelId,
         durationSeconds,
         requestedByUserId
@@ -2209,4 +2547,47 @@ function formatNaturalList(values) {
   if (items.length === 1) return items[0];
   if (items.length === 2) return `${items[0]} and ${items[1]}`;
   return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
+}
+
+function resolveVoiceRuntimeMode(settings) {
+  const normalized = String(settings?.voice?.mode || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "stt_pipeline") return "stt_pipeline";
+  return "voice_agent";
+}
+
+function normalizeVoiceText(value, maxChars = 520) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, Math.max(40, Number(maxChars) || 520));
+}
+
+function encodePcm16MonoAsWav(pcmBuffer, sampleRate = 24000) {
+  const pcm = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
+  const normalizedRate = Math.max(8000, Math.min(48000, Number(sampleRate) || 24000));
+  const channels = 1;
+  const bitsPerSample = 16;
+  const blockAlign = (channels * bitsPerSample) / 8;
+  const byteRate = normalizedRate * blockAlign;
+  const dataSize = pcm.length;
+  const buffer = Buffer.alloc(44 + dataSize);
+
+  buffer.write("RIFF", 0);
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  buffer.write("WAVE", 8);
+  buffer.write("fmt ", 12);
+  buffer.writeUInt32LE(16, 16);
+  buffer.writeUInt16LE(1, 20);
+  buffer.writeUInt16LE(channels, 22);
+  buffer.writeUInt32LE(normalizedRate, 24);
+  buffer.writeUInt32LE(byteRate, 28);
+  buffer.writeUInt16LE(blockAlign, 32);
+  buffer.writeUInt16LE(bitsPerSample, 34);
+  buffer.write("data", 36);
+  buffer.writeUInt32LE(dataSize, 40);
+  pcm.copy(buffer, 44);
+
+  return buffer;
 }

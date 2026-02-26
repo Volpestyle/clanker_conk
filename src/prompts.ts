@@ -176,6 +176,7 @@ export function buildReplyPrompt({
   webSearch = null,
   allowWebSearchDirective = false,
   allowMemoryDirective = false,
+  voiceMode = null,
   videoContext = null
 }) {
   const parts = [];
@@ -259,6 +260,20 @@ export function buildReplyPrompt({
   );
   parts.push("Use only one emoji from the allowed reaction list.");
   parts.push("If no reaction is needed, do not output REACTION.");
+
+  const voiceEnabled = Boolean(voiceMode?.enabled);
+  const voiceJoinOnTextNL = Boolean(voiceMode?.joinOnTextNL);
+  if (voiceEnabled && voiceJoinOnTextNL) {
+    parts.push("Voice mode is enabled right now.");
+    parts.push("Do not claim you are text-only or unable to join voice channels.");
+    parts.push("If users mention VC/voice requests, stay consistent with voice being available.");
+  } else if (voiceEnabled) {
+    parts.push("Voice mode is enabled, but text-triggered NL join controls are disabled.");
+    parts.push("If asked to join VC from text chat, say text triggers are currently disabled.");
+  } else {
+    parts.push("Voice mode is disabled right now.");
+    parts.push("If asked to join VC, say voice mode is currently disabled.");
+  }
 
   if (allowWebSearchDirective) {
     const directCommand = looksLikeDirectWebSearchCommand(message?.content);
@@ -430,6 +445,48 @@ export function buildReplyPrompt({
   parts.push("Task: write one natural Discord reply to the incoming message.");
   parts.push("You may output both a normal reply and REACTION directive, or [SKIP] with optional REACTION.");
   parts.push("If no response is needed, output exactly [SKIP].");
+
+  return parts.join("\n\n");
+}
+
+export function buildVoiceTurnPrompt({
+  speakerName = "unknown",
+  transcript = "",
+  recentMessages = [],
+  relevantMessages = [],
+  userFacts = [],
+  relevantFacts = []
+}) {
+  const parts = [];
+  const speaker = String(speakerName || "unknown").trim() || "unknown";
+  const text = String(transcript || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 700);
+
+  parts.push(`Incoming live voice transcript from ${speaker}: ${text || "(empty)"}`);
+  parts.push("Recent channel messages:");
+  parts.push(formatRecentChat(recentMessages));
+
+  if (relevantMessages?.length) {
+    parts.push("Relevant past messages:");
+    parts.push(formatRecentChat(relevantMessages));
+  }
+
+  if (userFacts?.length) {
+    parts.push("Known facts about this user:");
+    for (const fact of userFacts) {
+      parts.push(`- ${fact.fact}`);
+    }
+  }
+
+  if (relevantFacts?.length) {
+    parts.push("Relevant durable memory:");
+    parts.push(formatMemoryFacts(relevantFacts));
+  }
+
+  parts.push("Task: respond as a short spoken VC reply (1-2 sentences by default).");
+  parts.push("Use plain text only. Do not output directives, tags, markdown, or [SKIP].");
 
   return parts.join("\n\n");
 }

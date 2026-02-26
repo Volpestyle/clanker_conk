@@ -6,7 +6,8 @@ import {
 import {
   buildInitiativePrompt,
   buildReplyPrompt,
-  buildSystemPrompt
+  buildSystemPrompt,
+  buildVoiceTurnPrompt
 } from "./prompts.ts";
 import {
   buildHardLimitsSection,
@@ -100,7 +101,9 @@ export class ClankerBot {
       client: this.client,
       store: this.store,
       appConfig: this.appConfig,
-      composeOperationalMessage: (payload) => this.composeVoiceOperationalMessage(payload)
+      llm: this.llm,
+      composeOperationalMessage: (payload) => this.composeVoiceOperationalMessage(payload),
+      generateVoiceTurn: (payload) => this.generateVoiceTurnReply(payload)
     });
 
     this.registerEvents();
@@ -673,12 +676,10 @@ export class ClankerBot {
     const intent = detectVoiceIntent({
       content: text,
       botName: settings.botName,
-      directlyAddressed: Boolean(directlyAddressed),
-      requireDirectMentionForJoin: Boolean(voiceSettings.requireDirectMentionForJoin)
+      directlyAddressed: Boolean(directlyAddressed)
     });
 
     if (!intent.intent) return false;
-    if (intent.blockedByMentionGate) return false;
 
     const threshold = clamp(Number(voiceSettings.intentConfidenceThreshold) || 0.75, 0.4, 0.99);
     if (intent.confidence < threshold) return false;
@@ -804,6 +805,161 @@ export class ClankerBot {
     }
   }
 
+  async generateVoiceTurnReply({
+    settings,
+    guildId = null,
+    channelId = null,
+    userId = null,
+    transcript = "",
+    contextMessages = [],
+    sessionId = null
+  }) {
+    if (!this.llm?.generate || !settings) return { text: "" };
+    const incomingTranscript = String(transcript || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 700);
+    if (!incomingTranscript) return { text: "" };
+
+    const normalizedContextMessages = (Array.isArray(contextMessages) ? contextMessages : [])
+      .map((row) => ({
+        role: row?.role === "assistant" ? "assistant" : "user",
+        content: String(row?.content || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 520)
+      }))
+      .filter((row) => row.content)
+      .slice(-10);
+
+    const guild = this.client.guilds.cache.get(String(guildId || ""));
+    const speakerName =
+      guild?.members?.cache?.get(String(userId || ""))?.displayName ||
+      guild?.members?.cache?.get(String(userId || ""))?.user?.username ||
+      this.client.users?.cache?.get(String(userId || ""))?.username ||
+      "unknown";
+
+    if (settings.memory?.enabled && this.memory?.ingestMessage && userId) {
+      try {
+        await this.memory.ingestMessage({
+          messageId: `voice-${String(guildId || "guild")}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+          authorId: String(userId),
+          authorName: String(speakerName || "unknown"),
+          content: incomingTranscript,
+          settings,
+          trace: {
+            guildId,
+            channelId,
+            userId,
+            source: "voice_stt_pipeline_ingest"
+          }
+        });
+      } catch (error) {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId,
+          channelId,
+          userId,
+          content: `voice_stt_memory_ingest_failed: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId
+          }
+        });
+      }
+    }
+
+    const memorySlice = settings.memory?.enabled && this.memory?.buildPromptMemorySlice
+      ? await this.memory.buildPromptMemorySlice({
+          userId,
+          channelId,
+          queryText: incomingTranscript,
+          settings,
+          trace: {
+            guildId,
+            channelId,
+            userId,
+            source: "voice_stt_pipeline_generation"
+          }
+        })
+      : { userFacts: [], relevantFacts: [], relevantMessages: [] };
+
+    const tunedSettings = {
+      ...settings,
+      llm: {
+        ...(settings?.llm || {}),
+        temperature: clamp(Number(settings?.llm?.temperature) || 0.8, 0, 1.2),
+        maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || 220, 40, 180)
+      }
+    };
+
+    const systemPrompt = [
+      buildSystemPrompt(settings),
+      "You are speaking in live Discord voice chat.",
+      "Keep replies concise and conversational.",
+      "Output plain spoken text only.",
+      "Do not output directives like [[...]], [SKIP], or markdown."
+    ].join("\n");
+    const userPrompt = buildVoiceTurnPrompt({
+      speakerName,
+      transcript: incomingTranscript,
+      recentMessages: channelId
+        ? this.store.getRecentMessages(channelId, settings.memory?.maxRecentMessages || 35)
+        : [],
+      relevantMessages: memorySlice.relevantMessages,
+      userFacts: memorySlice.userFacts,
+      relevantFacts: memorySlice.relevantFacts
+    });
+
+    try {
+      const generation = await this.llm.generate({
+        settings: tunedSettings,
+        systemPrompt,
+        userPrompt,
+        contextMessages: normalizedContextMessages,
+        trace: {
+          guildId,
+          channelId,
+          userId,
+          source: "voice_stt_pipeline_generation",
+          event: sessionId ? "voice_session" : "voice_turn"
+        }
+      });
+
+      const parsed = parseReplyDirectives(generation.text);
+      let finalText = sanitizeBotText(normalizeSkipSentinel(parsed.text || generation.text || ""), 520);
+      if (!finalText || finalText === "[SKIP]") {
+        return { text: "" };
+      }
+
+      if (settings.memory?.enabled && parsed.memoryLine && this.memory?.rememberLine && userId) {
+        await this.memory
+          .rememberLine({
+            line: parsed.memoryLine,
+            sourceMessageId: `voice-${String(guildId || "guild")}-${Date.now()}-memory`,
+            userId: String(userId),
+            sourceText: incomingTranscript
+          })
+          .catch(() => undefined);
+      }
+
+      return {
+        text: finalText
+      };
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId,
+        channelId,
+        userId,
+        content: `voice_stt_generation_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId
+        }
+      });
+      return { text: "" };
+    }
+  }
+
   async maybeReplyToMessage(message, settings, options = {}) {
     if (!settings.permissions.allowReplies) return false;
     if (!this.canSendMessage(settings.permissions.maxMessagesPerHour)) return false;
@@ -909,6 +1065,10 @@ export class ClankerBot {
         responseRequired: Boolean(options.forceRespond)
       },
       allowMemoryDirective: settings.memory.enabled,
+      voiceMode: {
+        enabled: Boolean(settings?.voice?.enabled),
+        joinOnTextNL: Boolean(settings?.voice?.joinOnTextNL)
+      },
       videoContext
     };
     const initialUserPrompt = buildReplyPrompt({
@@ -2130,6 +2290,45 @@ export class ClankerBot {
       .some((row) => String(row?.author_id || "").trim() === botId);
   }
 
+  hasStartupFollowupAfterMessage({
+    messages,
+    messageIndex,
+    triggerMessageId,
+    windowSize = UNSOLICITED_REPLY_CONTEXT_WINDOW
+  }) {
+    const botId = String(this.client.user?.id || "").trim();
+    if (!botId) return false;
+    if (!Array.isArray(messages) || !messages.length) return false;
+    if (!Number.isInteger(messageIndex) || messageIndex < 0 || messageIndex >= messages.length) return false;
+
+    const triggerId = String(triggerMessageId || "").trim();
+    const startIndex = messageIndex + 1;
+
+    if (triggerId) {
+      for (let index = startIndex; index < messages.length; index += 1) {
+        const candidate = messages[index];
+        if (String(candidate?.author?.id || "").trim() !== botId) continue;
+
+        const referencedId = String(
+          candidate?.reference?.messageId || candidate?.referencedMessage?.id || ""
+        ).trim();
+        if (referencedId && referencedId === triggerId) {
+          return true;
+        }
+      }
+    }
+
+    const cappedWindow = clamp(Math.floor(windowSize), 1, 50);
+    const endIndex = Math.min(messages.length, startIndex + cappedWindow);
+    for (let index = startIndex; index < endIndex; index += 1) {
+      if (String(messages[index]?.author?.id || "").trim() === botId) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
   shouldAttemptReplyDecision({
     settings,
     recentMessages,
@@ -2197,7 +2396,8 @@ export class ClankerBot {
       let repliesSent = 0;
 
       const messages = await this.hydrateRecentMessages(channel, maxMessages);
-      for (const message of messages) {
+      for (let index = messages.length - 1; index >= 0; index -= 1) {
+        const message = messages[index];
         if (repliesSent >= maxRepliesPerChannel) break;
         if (!message?.author || message.author.bot) continue;
         if (!message.guild || !message.channel) continue;
@@ -2211,6 +2411,15 @@ export class ClankerBot {
         if (!addressSignal.triggered) continue;
         if (now - message.createdTimestamp > lookbackMs) continue;
         if (this.store.hasTriggeredResponse(message.id)) continue;
+        if (
+          this.hasStartupFollowupAfterMessage({
+            messages,
+            messageIndex: index,
+            triggerMessageId: message.id
+          })
+        ) {
+          continue;
+        }
         const queued = this.enqueueReplyJob({
           message,
           source: "startup_catchup",

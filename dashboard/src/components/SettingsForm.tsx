@@ -85,8 +85,8 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
       videoContextAsrFallback: settings.videoContext?.allowAsrFallback ?? false,
       videoContextMaxAsrSeconds: settings.videoContext?.maxAsrSeconds ?? 120,
       voiceEnabled: settings.voice?.enabled ?? false,
+      voiceMode: settings.voice?.mode ?? "voice_agent",
       voiceJoinOnTextNL: settings.voice?.joinOnTextNL ?? true,
-      voiceRequireDirectMention: settings.voice?.requireDirectMentionForJoin ?? true,
       voiceIntentConfidenceThreshold: settings.voice?.intentConfidenceThreshold ?? 0.75,
       voiceMaxSessionMinutes: settings.voice?.maxSessionMinutes ?? 10,
       voiceInactivityLeaveSeconds: settings.voice?.inactivityLeaveSeconds ?? 90,
@@ -98,6 +98,10 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
       voiceXaiAudioFormat: settings.voice?.xai?.audioFormat ?? "audio/pcm",
       voiceXaiSampleRateHz: settings.voice?.xai?.sampleRateHz ?? 24000,
       voiceXaiRegion: settings.voice?.xai?.region ?? "us-east-1",
+      voiceSttTranscriptionModel: settings.voice?.sttPipeline?.transcriptionModel ?? "gpt-4o-mini-transcribe",
+      voiceSttTtsModel: settings.voice?.sttPipeline?.ttsModel ?? "gpt-4o-mini-tts",
+      voiceSttTtsVoice: settings.voice?.sttPipeline?.ttsVoice ?? "alloy",
+      voiceSttTtsSpeed: settings.voice?.sttPipeline?.ttsSpeed ?? 1,
       voiceSoundboardEnabled: settings.voice?.soundboard?.enabled ?? true,
       voiceSoundboardAllowExternalSounds: settings.voice?.soundboard?.allowExternalSounds ?? false,
       voiceSoundboardPreferredSoundIds: formatList(settings.voice?.soundboard?.preferredSoundIds),
@@ -215,8 +219,8 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
       },
       voice: {
         enabled: form.voiceEnabled,
+        mode: form.voiceMode,
         joinOnTextNL: form.voiceJoinOnTextNL,
-        requireDirectMentionForJoin: form.voiceRequireDirectMention,
         intentConfidenceThreshold: Number(form.voiceIntentConfidenceThreshold),
         maxSessionMinutes: Number(form.voiceMaxSessionMinutes),
         inactivityLeaveSeconds: Number(form.voiceInactivityLeaveSeconds),
@@ -229,6 +233,12 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
           audioFormat: String(form.voiceXaiAudioFormat || "").trim(),
           sampleRateHz: Number(form.voiceXaiSampleRateHz),
           region: String(form.voiceXaiRegion || "").trim()
+        },
+        sttPipeline: {
+          transcriptionModel: String(form.voiceSttTranscriptionModel || "").trim(),
+          ttsModel: String(form.voiceSttTtsModel || "").trim(),
+          ttsVoice: String(form.voiceSttTtsVoice || "").trim(),
+          ttsSpeed: Number(form.voiceSttTtsSpeed)
         },
         soundboard: {
           enabled: form.voiceSoundboardEnabled,
@@ -639,15 +649,13 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
           <input type="checkbox" checked={form.voiceJoinOnTextNL} onChange={set("voiceJoinOnTextNL")} />
           Allow NL join/leave/status triggers
         </label>
-        <label>
-          <input
-            type="checkbox"
-            checked={form.voiceRequireDirectMention}
-            onChange={set("voiceRequireDirectMention")}
-          />
-          Require direct mention for join
-        </label>
       </div>
+
+      <label htmlFor="voice-mode">Voice runtime mode</label>
+      <select id="voice-mode" value={form.voiceMode} onChange={set("voiceMode")}>
+        <option value="voice_agent">Voice agent (xAI realtime low-latency)</option>
+        <option value="stt_pipeline">STT pipeline (reuse chat LLM + memory)</option>
+      </select>
 
       <div className="split">
         <div>
@@ -730,6 +738,51 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
             max="48000"
             value={form.voiceXaiSampleRateHz}
             onChange={set("voiceXaiSampleRateHz")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="voice-stt-transcribe-model">STT model</label>
+          <input
+            id="voice-stt-transcribe-model"
+            type="text"
+            value={form.voiceSttTranscriptionModel}
+            onChange={set("voiceSttTranscriptionModel")}
+          />
+        </div>
+        <div>
+          <label htmlFor="voice-stt-tts-model">TTS model</label>
+          <input
+            id="voice-stt-tts-model"
+            type="text"
+            value={form.voiceSttTtsModel}
+            onChange={set("voiceSttTtsModel")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="voice-stt-tts-voice">TTS voice</label>
+          <input
+            id="voice-stt-tts-voice"
+            type="text"
+            value={form.voiceSttTtsVoice}
+            onChange={set("voiceSttTtsVoice")}
+          />
+        </div>
+        <div>
+          <label htmlFor="voice-stt-tts-speed">TTS speed</label>
+          <input
+            id="voice-stt-tts-speed"
+            type="number"
+            min="0.25"
+            max="2"
+            step="0.05"
+            value={form.voiceSttTtsSpeed}
+            onChange={set("voiceSttTtsSpeed")}
           />
         </div>
       </div>
