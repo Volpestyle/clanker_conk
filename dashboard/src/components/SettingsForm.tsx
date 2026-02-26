@@ -93,6 +93,8 @@ export default function SettingsForm({ settings, onSave, toast }) {
       voiceJoinOnTextNL: settings.voice?.joinOnTextNL ?? true,
       voiceRequireDirectMention: settings.voice?.requireDirectMentionForJoin ?? true,
       voiceIntentConfidenceThreshold: settings.voice?.intentConfidenceThreshold ?? 0.75,
+      voiceIntentCooldownUserSeconds: settings.voice?.intentCooldownUserSeconds ?? 25,
+      voiceIntentCooldownGuildSeconds: settings.voice?.intentCooldownGuildSeconds ?? 8,
       voiceMaxSessionMinutes: settings.voice?.maxSessionMinutes ?? 10,
       voiceInactivityLeaveSeconds: settings.voice?.inactivityLeaveSeconds ?? 90,
       voiceMaxSessionsPerDay: settings.voice?.maxSessionsPerDay ?? 12,
@@ -206,6 +208,8 @@ export default function SettingsForm({ settings, onSave, toast }) {
         joinOnTextNL: form.voiceJoinOnTextNL,
         requireDirectMentionForJoin: form.voiceRequireDirectMention,
         intentConfidenceThreshold: Number(form.voiceIntentConfidenceThreshold),
+        intentCooldownUserSeconds: Number(form.voiceIntentCooldownUserSeconds),
+        intentCooldownGuildSeconds: Number(form.voiceIntentCooldownGuildSeconds),
         maxSessionMinutes: Number(form.voiceMaxSessionMinutes),
         inactivityLeaveSeconds: Number(form.voiceInactivityLeaveSeconds),
         maxSessionsPerDay: Number(form.voiceMaxSessionsPerDay),
@@ -643,6 +647,31 @@ export default function SettingsForm({ settings, onSave, toast }) {
             max="120"
             value={form.voiceMaxSessionMinutes}
             onChange={set("voiceMaxSessionMinutes")}
+          />
+        </div>
+      </div>
+
+      <div className="split">
+        <div>
+          <label htmlFor="voice-intent-cooldown-user">Join cooldown per user (seconds)</label>
+          <input
+            id="voice-intent-cooldown-user"
+            type="number"
+            min="0"
+            max="600"
+            value={form.voiceIntentCooldownUserSeconds}
+            onChange={set("voiceIntentCooldownUserSeconds")}
+          />
+        </div>
+        <div>
+          <label htmlFor="voice-intent-cooldown-guild">Join cooldown per guild (seconds)</label>
+          <input
+            id="voice-intent-cooldown-guild"
+            type="number"
+            min="0"
+            max="600"
+            value={form.voiceIntentCooldownGuildSeconds}
+            onChange={set("voiceIntentCooldownGuildSeconds")}
           />
         </div>
       </div>

@@ -30,6 +30,8 @@ export class VoiceSessionManager {
     this.store = store;
     this.appConfig = appConfig;
     this.sessions = new Map();
+    this.joinCooldownByUser = new Map();
+    this.joinCooldownByGuild = new Map();
     this.soundboardDirector = new SoundboardDirector({
       client,
       store,
@@ -100,6 +102,12 @@ export class VoiceSessionManager {
     const blockedUsers = settings.voice?.blockedVoiceUserIds || [];
     if (blockedUsers.includes(userId)) {
       await this.sendToChannel(message.channel, "you are blocked from voice controls here.");
+      return true;
+    }
+
+    const cooldown = this.consumeJoinCooldown({ guildId, userId, settings });
+    if (cooldown.blocked) {
+      await this.sendToChannel(message.channel, cooldown.message);
       return true;
     }
 
@@ -202,7 +210,9 @@ export class VoiceSessionManager {
         instructions: this.buildVoiceInstructions(settings),
         region: xaiSettings.region || "us-east-1",
         inputAudioFormat: xaiSettings.audioFormat || "audio/pcm",
-        outputAudioFormat: xaiSettings.audioFormat || "audio/pcm"
+        outputAudioFormat: xaiSettings.audioFormat || "audio/pcm",
+        inputSampleRateHz: Number(xaiSettings.sampleRateHz) || 24000,
+        outputSampleRateHz: Number(xaiSettings.sampleRateHz) || 24000
       });
 
       audioPlayer = createAudioPlayer();
@@ -881,6 +891,47 @@ export class VoiceSessionManager {
     } catch {
       return false;
     }
+  }
+
+  consumeJoinCooldown({ guildId, userId, settings }) {
+    const now = Date.now();
+    const userCooldownSeconds = clamp(Number(settings?.voice?.intentCooldownUserSeconds) || 0, 0, 600);
+    const guildCooldownSeconds = clamp(Number(settings?.voice?.intentCooldownGuildSeconds) || 0, 0, 600);
+    const userKey = `${guildId}:${userId}`;
+    const previousUserAt = Number(this.joinCooldownByUser.get(userKey) || 0);
+    const previousGuildAt = Number(this.joinCooldownByGuild.get(guildId) || 0);
+
+    if (userCooldownSeconds > 0) {
+      const remainingUserMs = previousUserAt + userCooldownSeconds * 1000 - now;
+      if (remainingUserMs > 0) {
+        return {
+          blocked: true,
+          message: `slow down, try the join request again in ${Math.ceil(remainingUserMs / 1000)}s.`
+        };
+      }
+    }
+
+    if (guildCooldownSeconds > 0) {
+      const remainingGuildMs = previousGuildAt + guildCooldownSeconds * 1000 - now;
+      if (remainingGuildMs > 0) {
+        return {
+          blocked: true,
+          message: `voice join cooldown active for this server (${Math.ceil(remainingGuildMs / 1000)}s left).`
+        };
+      }
+    }
+
+    if (userCooldownSeconds > 0) {
+      this.joinCooldownByUser.set(userKey, now);
+    }
+    if (guildCooldownSeconds > 0) {
+      this.joinCooldownByGuild.set(guildId, now);
+    }
+
+    return {
+      blocked: false,
+      message: null
+    };
   }
 }
 

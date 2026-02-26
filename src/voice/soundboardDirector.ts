@@ -30,6 +30,15 @@ export class SoundboardDirector {
 
     const maxPlaysPerSession = clamp(Number(soundboardSettings.maxPlaysPerSession) || 0, 0, 20);
     const minSecondsBetweenPlays = clamp(Number(soundboardSettings.minSecondsBetweenPlays) || 45, 5, 600);
+    const allowExternalSounds = Boolean(soundboardSettings.allowExternalSounds);
+
+    if (sourceGuildId && !allowExternalSounds) {
+      return {
+        ok: false,
+        reason: "external_disabled",
+        message: "external sounds are disabled in settings"
+      };
+    }
 
     session.soundboard = session.soundboard || {
       playCount: 0,
