@@ -49,6 +49,7 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
     : CUSTOM_MODEL_OPTION_VALUE;
   const isVoiceAgentMode = form.voiceMode === "voice_agent";
   const isOpenAiRealtimeMode = form.voiceMode === "openai_realtime";
+  const isGeminiRealtimeMode = form.voiceMode === "gemini_realtime";
   const isSttPipelineMode = form.voiceMode === "stt_pipeline";
   const showVoiceAdvanced = form.voiceEnabled;
   const showInitiativeAdvanced = form.autonomousInitiativeEnabled;
@@ -445,6 +446,7 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
             <select id="voice-mode" value={form.voiceMode} onChange={set("voiceMode")}>
               <option value="voice_agent">Voice agent (xAI realtime low-latency)</option>
               <option value="openai_realtime">OpenAI realtime (low-latency)</option>
+              <option value="gemini_realtime">Gemini realtime (audio + stream frames)</option>
               <option value="stt_pipeline">STT pipeline (reuse chat LLM + memory)</option>
             </select>
 
@@ -663,6 +665,81 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
               </>
             )}
 
+            {/* -- Gemini realtime -- */}
+            {isGeminiRealtimeMode && (
+              <>
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-gemini-realtime-model">Gemini realtime model</label>
+                    <input
+                      id="voice-gemini-realtime-model"
+                      type="text"
+                      value={form.voiceGeminiRealtimeModel}
+                      onChange={set("voiceGeminiRealtimeModel")}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="voice-gemini-realtime-voice">Gemini realtime voice</label>
+                    <input
+                      id="voice-gemini-realtime-voice"
+                      type="text"
+                      value={form.voiceGeminiRealtimeVoice}
+                      onChange={set("voiceGeminiRealtimeVoice")}
+                    />
+                  </div>
+                </div>
+
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-gemini-realtime-api-base-url">Gemini API base URL</label>
+                    <input
+                      id="voice-gemini-realtime-api-base-url"
+                      type="text"
+                      value={form.voiceGeminiRealtimeApiBaseUrl}
+                      onChange={set("voiceGeminiRealtimeApiBaseUrl")}
+                    />
+                  </div>
+                  <div />
+                </div>
+
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-gemini-realtime-input-sample-rate">Gemini input sample rate (Hz)</label>
+                    <input
+                      id="voice-gemini-realtime-input-sample-rate"
+                      type="number"
+                      min="8000"
+                      max="48000"
+                      value={form.voiceGeminiRealtimeInputSampleRateHz}
+                      onChange={set("voiceGeminiRealtimeInputSampleRateHz")}
+                    />
+                  </div>
+                  <div>
+                    <label htmlFor="voice-gemini-realtime-output-sample-rate">Gemini output sample rate (Hz)</label>
+                    <input
+                      id="voice-gemini-realtime-output-sample-rate"
+                      type="number"
+                      min="8000"
+                      max="48000"
+                      value={form.voiceGeminiRealtimeOutputSampleRateHz}
+                      onChange={set("voiceGeminiRealtimeOutputSampleRateHz")}
+                    />
+                  </div>
+                </div>
+
+                <div className="toggles">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={form.voiceGeminiRealtimeAllowNsfwHumor}
+                      onChange={set("voiceGeminiRealtimeAllowNsfwHumor")}
+                    />
+                    Gemini realtime: allow adult/NSFW humor (with safety limits)
+                  </label>
+                </div>
+              </>
+            )}
+
             {/* -- STT pipeline -- */}
             {isSttPipelineMode && (
               <>
@@ -711,6 +788,64 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
                   </div>
                 </div>
               </>
+            )}
+
+            <h4>Stream Watch</h4>
+            <div className="toggles">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={form.voiceStreamWatchEnabled}
+                  onChange={set("voiceStreamWatchEnabled")}
+                />
+                Enable stream frame ingest + commentary
+              </label>
+            </div>
+
+            {form.voiceStreamWatchEnabled && (
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-stream-watch-commentary-interval">
+                    Min seconds between stream commentary turns
+                  </label>
+                  <input
+                    id="voice-stream-watch-commentary-interval"
+                    type="number"
+                    min="3"
+                    max="120"
+                    value={form.voiceStreamWatchMinCommentaryIntervalSeconds}
+                    onChange={set("voiceStreamWatchMinCommentaryIntervalSeconds")}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="voice-stream-watch-max-fpm">Max ingested stream frames/min</label>
+                  <input
+                    id="voice-stream-watch-max-fpm"
+                    type="number"
+                    min="6"
+                    max="600"
+                    value={form.voiceStreamWatchMaxFramesPerMinute}
+                    onChange={set("voiceStreamWatchMaxFramesPerMinute")}
+                  />
+                </div>
+              </div>
+            )}
+
+            {form.voiceStreamWatchEnabled && (
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-stream-watch-max-frame-bytes">Max stream frame bytes</label>
+                  <input
+                    id="voice-stream-watch-max-frame-bytes"
+                    type="number"
+                    min="50000"
+                    max="4000000"
+                    value={form.voiceStreamWatchMaxFrameBytes}
+                    onChange={set("voiceStreamWatchMaxFrameBytes")}
+                  />
+                </div>
+                <div />
+              </div>
             )}
 
             {/* -- Soundboard -- */}

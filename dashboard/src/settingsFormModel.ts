@@ -79,10 +79,23 @@ export function settingsToForm(settings) {
     voiceOpenAiRealtimeInputTranscriptionModel:
       settings?.voice?.openaiRealtime?.inputTranscriptionModel ?? "gpt-4o-mini-transcribe",
     voiceOpenAiRealtimeAllowNsfwHumor: settings?.voice?.openaiRealtime?.allowNsfwHumor ?? true,
+    voiceGeminiRealtimeModel:
+      settings?.voice?.geminiRealtime?.model ?? "gemini-2.5-flash-native-audio-preview-12-2025",
+    voiceGeminiRealtimeVoice: settings?.voice?.geminiRealtime?.voice ?? "Aoede",
+    voiceGeminiRealtimeApiBaseUrl:
+      settings?.voice?.geminiRealtime?.apiBaseUrl ?? "https://generativelanguage.googleapis.com",
+    voiceGeminiRealtimeInputSampleRateHz: settings?.voice?.geminiRealtime?.inputSampleRateHz ?? 16000,
+    voiceGeminiRealtimeOutputSampleRateHz: settings?.voice?.geminiRealtime?.outputSampleRateHz ?? 24000,
+    voiceGeminiRealtimeAllowNsfwHumor: settings?.voice?.geminiRealtime?.allowNsfwHumor ?? true,
     voiceSttTranscriptionModel: settings?.voice?.sttPipeline?.transcriptionModel ?? "gpt-4o-mini-transcribe",
     voiceSttTtsModel: settings?.voice?.sttPipeline?.ttsModel ?? "gpt-4o-mini-tts",
     voiceSttTtsVoice: settings?.voice?.sttPipeline?.ttsVoice ?? "alloy",
     voiceSttTtsSpeed: settings?.voice?.sttPipeline?.ttsSpeed ?? 1,
+    voiceStreamWatchEnabled: settings?.voice?.streamWatch?.enabled ?? true,
+    voiceStreamWatchMinCommentaryIntervalSeconds:
+      settings?.voice?.streamWatch?.minCommentaryIntervalSeconds ?? 8,
+    voiceStreamWatchMaxFramesPerMinute: settings?.voice?.streamWatch?.maxFramesPerMinute ?? 180,
+    voiceStreamWatchMaxFrameBytes: settings?.voice?.streamWatch?.maxFrameBytes ?? 350000,
     voiceSoundboardEnabled: settings?.voice?.soundboard?.enabled ?? true,
     voiceSoundboardAllowExternalSounds: settings?.voice?.soundboard?.allowExternalSounds ?? false,
     voiceSoundboardPreferredSoundIds: formatList(settings?.voice?.soundboard?.preferredSoundIds),
@@ -207,11 +220,25 @@ export function formToSettingsPatch(form) {
         inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
         allowNsfwHumor: form.voiceOpenAiRealtimeAllowNsfwHumor
       },
+      geminiRealtime: {
+        model: String(form.voiceGeminiRealtimeModel || "").trim(),
+        voice: String(form.voiceGeminiRealtimeVoice || "").trim(),
+        apiBaseUrl: String(form.voiceGeminiRealtimeApiBaseUrl || "").trim(),
+        inputSampleRateHz: Number(form.voiceGeminiRealtimeInputSampleRateHz),
+        outputSampleRateHz: Number(form.voiceGeminiRealtimeOutputSampleRateHz),
+        allowNsfwHumor: form.voiceGeminiRealtimeAllowNsfwHumor
+      },
       sttPipeline: {
         transcriptionModel: String(form.voiceSttTranscriptionModel || "").trim(),
         ttsModel: String(form.voiceSttTtsModel || "").trim(),
         ttsVoice: String(form.voiceSttTtsVoice || "").trim(),
         ttsSpeed: Number(form.voiceSttTtsSpeed)
+      },
+      streamWatch: {
+        enabled: form.voiceStreamWatchEnabled,
+        minCommentaryIntervalSeconds: Number(form.voiceStreamWatchMinCommentaryIntervalSeconds),
+        maxFramesPerMinute: Number(form.voiceStreamWatchMaxFramesPerMinute),
+        maxFrameBytes: Number(form.voiceStreamWatchMaxFrameBytes)
       },
       soundboard: {
         enabled: form.voiceSoundboardEnabled,

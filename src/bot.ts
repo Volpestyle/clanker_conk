@@ -10,6 +10,7 @@ import {
   buildVoiceTurnPrompt
 } from "./prompts.ts";
 import {
+  buildVoiceToneGuardrails,
   buildHardLimitsSection,
   getPromptBotName,
   getPromptStyle,
@@ -321,6 +322,24 @@ export class ClankerBot {
   async applyRuntimeSettings(nextSettings = null) {
     const settings = nextSettings || this.store.getSettings();
     await this.voiceSessionManager.reconcileSettings(settings);
+  }
+
+  async ingestVoiceStreamFrame({
+    guildId,
+    streamerUserId = null,
+    mimeType = "image/jpeg",
+    dataBase64 = "",
+    source = "api_stream_ingest"
+  }) {
+    const settings = this.store.getSettings();
+    return await this.voiceSessionManager.ingestStreamFrame({
+      guildId,
+      streamerUserId,
+      mimeType,
+      dataBase64,
+      source,
+      settings
+    });
   }
 
   markGatewayEvent() {
@@ -966,10 +985,11 @@ export class ClankerBot {
       }
     };
 
+    const voiceToneGuardrails = buildVoiceToneGuardrails();
     const systemPrompt = [
       buildSystemPrompt(settings),
       "You are speaking in live Discord voice chat.",
-      "Keep replies conversational. Be concise by default but go longer when it makes sense.",
+      ...voiceToneGuardrails,
       "Output plain spoken text only.",
       isEagerTurn
         ? "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text only, no directives or markdown."
@@ -1554,6 +1574,28 @@ export class ClankerBot {
 
     if (intent.intent === "status") {
       return await this.voiceSessionManager.requestStatus({
+        message,
+        settings
+      });
+    }
+
+    if (intent.intent === "watch_stream") {
+      return await this.voiceSessionManager.requestWatchStream({
+        message,
+        settings,
+        targetUserId: message.author?.id || null
+      });
+    }
+
+    if (intent.intent === "stop_watching_stream") {
+      return await this.voiceSessionManager.requestStopWatchingStream({
+        message,
+        settings
+      });
+    }
+
+    if (intent.intent === "stream_status") {
+      return await this.voiceSessionManager.requestStreamWatchStatus({
         message,
         settings
       });

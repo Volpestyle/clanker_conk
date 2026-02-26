@@ -2,7 +2,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   getRealtimeCommitMinimumBytes,
-  isRecoverableRealtimeError
+  getRealtimeRuntimeLabel,
+  isRecoverableRealtimeError,
+  resolveRealtimeProvider,
+  resolveVoiceRuntimeMode,
+  transcriptSourceFromEventType
 } from "./voice/voiceSessionHelpers.ts";
 
 test("isRecoverableRealtimeError matches OpenAI empty commit code", () => {
@@ -39,4 +43,16 @@ test("getRealtimeCommitMinimumBytes enforces OpenAI minimum audio window", () =>
 
 test("getRealtimeCommitMinimumBytes uses passthrough minimum for non-openai modes", () => {
   assert.equal(getRealtimeCommitMinimumBytes("voice_agent", 24_000), 1);
+  assert.equal(getRealtimeCommitMinimumBytes("gemini_realtime", 24_000), 1);
+});
+
+test("Gemini realtime mode resolves to gemini provider and label", () => {
+  assert.equal(resolveVoiceRuntimeMode({ voice: { mode: "gemini_realtime" } }), "gemini_realtime");
+  assert.equal(resolveRealtimeProvider("gemini_realtime"), "gemini");
+  assert.equal(getRealtimeRuntimeLabel("gemini_realtime"), "gemini_realtime");
+});
+
+test("transcriptSourceFromEventType classifies Gemini transcription events", () => {
+  assert.equal(transcriptSourceFromEventType("input_audio_transcription"), "input");
+  assert.equal(transcriptSourceFromEventType("output_audio_transcription"), "output");
 });

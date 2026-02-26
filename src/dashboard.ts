@@ -52,6 +52,40 @@ export function createDashboardServer({ appConfig, store, bot, memory }) {
     });
   });
 
+  app.post("/api/voice/stream-ingest/frame", async (req, res, next) => {
+    try {
+      const guildId = String(req.body?.guildId || "").trim();
+      const dataBase64 = String(req.body?.dataBase64 || "").trim();
+      const streamerUserId = String(req.body?.streamerUserId || "").trim() || null;
+      const mimeType = String(req.body?.mimeType || "image/jpeg").trim() || "image/jpeg";
+      const source = String(req.body?.source || "api_stream_ingest").trim() || "api_stream_ingest";
+
+      if (!guildId) {
+        return res.status(400).json({
+          accepted: false,
+          reason: "guild_id_required"
+        });
+      }
+      if (!dataBase64) {
+        return res.status(400).json({
+          accepted: false,
+          reason: "frame_data_required"
+        });
+      }
+
+      const result = await bot.ingestVoiceStreamFrame({
+        guildId,
+        streamerUserId,
+        mimeType,
+        dataBase64,
+        source
+      });
+      return res.json(result || { accepted: false, reason: "unknown" });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   app.get("/api/llm/models", (_req, res) => {
     const settings = store.getSettings();
     res.json(getLlmModelCatalog(settings?.llm?.pricing));

@@ -73,11 +73,25 @@ export const DEFAULT_SETTINGS = {
       inputTranscriptionModel: "gpt-4o-mini-transcribe",
       allowNsfwHumor: true
     },
+    geminiRealtime: {
+      model: "gemini-2.5-flash-native-audio-preview-12-2025",
+      voice: "Aoede",
+      apiBaseUrl: "https://generativelanguage.googleapis.com",
+      inputSampleRateHz: 16000,
+      outputSampleRateHz: 24000,
+      allowNsfwHumor: true
+    },
     sttPipeline: {
       transcriptionModel: "gpt-4o-mini-transcribe",
       ttsModel: "gpt-4o-mini-tts",
       ttsVoice: "alloy",
       ttsSpeed: 1
+    },
+    streamWatch: {
+      enabled: true,
+      minCommentaryIntervalSeconds: 8,
+      maxFramesPerMinute: 180,
+      maxFrameBytes: 350000
     },
     soundboard: {
       enabled: true,
