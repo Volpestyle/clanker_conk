@@ -507,7 +507,10 @@ export class ClankerBot {
           this.dequeueReplyJob(channelId);
           continue;
         }
-        if (!headMessage.author || headMessage.author.bot) {
+        if (
+          !headMessage.author ||
+          String(headMessage.author.id || "") === String(this.client.user?.id || "")
+        ) {
           this.dequeueReplyJob(channelId);
           continue;
         }
@@ -742,7 +745,7 @@ export class ClankerBot {
       referencedMessageId: message.reference?.messageId
     });
 
-    if (message.author.bot) return;
+    if (String(message.author.id) === String(this.client.user?.id || "")) return;
     if (!this.isChannelAllowed(settings, message.channelId)) return;
     if (this.isUserBlocked(settings, message.author.id)) return;
 
@@ -2648,7 +2651,10 @@ export class ClankerBot {
       for (let index = messages.length - 1; index >= 0; index -= 1) {
         const message = messages[index];
         if (repliesSent >= maxRepliesPerChannel) break;
-        if (!message?.author || message.author.bot) continue;
+        if (
+          !message?.author ||
+          String(message.author.id || "") === String(this.client.user?.id || "")
+        ) continue;
         if (!message.guild || !message.channel) continue;
         if (!this.isChannelAllowed(settings, message.channelId)) continue;
         if (this.isUserBlocked(settings, message.author.id)) continue;
