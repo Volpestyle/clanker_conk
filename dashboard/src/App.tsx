@@ -49,22 +49,22 @@ export default function App() {
 
       <MetricsBar stats={stats.data} />
 
-      <section className="grid-main">
-        <SettingsForm
-          settings={settings.data}
-          modelCatalog={llmModels.data}
-          onSave={handleSettingsSave}
-          toast={toast}
-        />
-        <ActionStream actions={actions.data || []} />
-      </section>
+      <SettingsForm
+        settings={settings.data}
+        modelCatalog={llmModels.data}
+        onSave={handleSettingsSave}
+        toast={toast}
+      />
 
       <section className="grid-secondary">
-        <MemoryViewer
-          markdown={memory.data?.markdown}
-          onRefresh={handleMemoryRefresh}
-        />
-        <DailyCost rows={stats.data?.stats?.dailyCost} />
+        <ActionStream actions={actions.data || []} />
+        <div className="stack">
+          <MemoryViewer
+            markdown={memory.data?.markdown}
+            onRefresh={handleMemoryRefresh}
+          />
+          <DailyCost rows={stats.data?.stats?.dailyCost} />
+        </div>
       </section>
     </main>
   );
