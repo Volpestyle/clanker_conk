@@ -266,7 +266,7 @@ export class ClankerBot {
     this.replyQueues.clear();
     this.replyQueueWorkers.clear();
     this.replyQueuedMessageIds.clear();
-    await this.voiceSessionManager.stopAll("shutdown");
+    await this.voiceSessionManager.dispose("shutdown");
     await this.client.destroy();
   }
 

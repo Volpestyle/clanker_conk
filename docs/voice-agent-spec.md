@@ -107,7 +107,7 @@ voice: {
   maxSessionMinutes: 10,
   inactivityLeaveSeconds: 90,
   maxSessionsPerDay: 12,
-  maxConcurrentGuildSessions: 1,
+  maxConcurrentSessions: 1, // global cross-guild voice session cap
   allowedVoiceChannelIds: [],
   blockedVoiceChannelIds: [],
   blockedVoiceUserIds: [],

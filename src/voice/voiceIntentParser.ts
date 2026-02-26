@@ -18,6 +18,14 @@ const STATUS_PATTERNS = [
 ];
 
 const DIRECT_MENTION_RE = /<@!?\d+>/;
+const INTENT_CONFIDENCE = {
+  joinMentioned: 0.92,
+  joinUnmentioned: 0.78,
+  leaveMentioned: 0.9,
+  leaveUnmentioned: 0.82,
+  statusMentioned: 0.88,
+  statusUnmentioned: 0.8
+};
 
 function normalizeText(text) {
   return String(text || "")
@@ -54,13 +62,13 @@ export function detectVoiceIntent({
 
   if (joinMatched) {
     intent = "join";
-    confidence = mentionSatisfied ? 0.92 : 0.78;
+    confidence = mentionSatisfied ? INTENT_CONFIDENCE.joinMentioned : INTENT_CONFIDENCE.joinUnmentioned;
   } else if (leaveMatched) {
     intent = "leave";
-    confidence = mentionSatisfied ? 0.9 : 0.74;
+    confidence = mentionSatisfied ? INTENT_CONFIDENCE.leaveMentioned : INTENT_CONFIDENCE.leaveUnmentioned;
   } else if (statusMatched) {
     intent = "status";
-    confidence = mentionSatisfied ? 0.88 : 0.72;
+    confidence = mentionSatisfied ? INTENT_CONFIDENCE.statusMentioned : INTENT_CONFIDENCE.statusUnmentioned;
   }
 
   const blockedByMentionGate =

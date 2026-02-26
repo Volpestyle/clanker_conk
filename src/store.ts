@@ -404,7 +404,8 @@ export class Store {
         voice_intent_detected: 0,
         voice_turn_in: 0,
         voice_turn_out: 0,
-        voice_soundboard_play: 0
+        voice_soundboard_play: 0,
+        voice_error: 0
       },
       totalCostUsd: Number(totalCostRow?.total ?? 0),
       dailyCost: dayCostRows
@@ -705,6 +706,9 @@ function normalizeSettings(raw) {
   if ("joinOnTextCommand" in merged.voice) {
     delete merged.voice.joinOnTextCommand;
   }
+  if ("maxConcurrentGuildSessions" in merged.voice) {
+    delete merged.voice.maxConcurrentGuildSessions;
+  }
 
   const defaultVoice = DEFAULT_SETTINGS.voice || {};
   const defaultVoiceXai = defaultVoice.xai || {};
@@ -715,7 +719,7 @@ function normalizeSettings(raw) {
   const voiceMaxSessionRaw = Number(merged.voice?.maxSessionMinutes);
   const voiceInactivityRaw = Number(merged.voice?.inactivityLeaveSeconds);
   const voiceDailySessionsRaw = Number(merged.voice?.maxSessionsPerDay);
-  const voiceConcurrentGuildRaw = Number(merged.voice?.maxConcurrentGuildSessions);
+  const voiceConcurrentSessionsRaw = Number(merged.voice?.maxConcurrentSessions);
   const voiceSampleRateRaw = Number(merged.voice?.xai?.sampleRateHz);
   const voiceMaxPlaysRaw = Number(merged.voice?.soundboard?.maxPlaysPerSession);
   const voiceMinBetweenPlaysRaw = Number(merged.voice?.soundboard?.minSecondsBetweenPlays);
@@ -764,12 +768,12 @@ function normalizeSettings(raw) {
     0,
     120
   );
-  merged.voice.maxConcurrentGuildSessions = clamp(
-    Number.isFinite(voiceConcurrentGuildRaw)
-      ? voiceConcurrentGuildRaw
-      : Number(defaultVoice.maxConcurrentGuildSessions) || 1,
+  merged.voice.maxConcurrentSessions = clamp(
+    Number.isFinite(voiceConcurrentSessionsRaw)
+      ? voiceConcurrentSessionsRaw
+      : Number(defaultVoice.maxConcurrentSessions) || 1,
     1,
-    1
+    3
   );
   merged.voice.allowedVoiceChannelIds = uniqueIdList(merged.voice?.allowedVoiceChannelIds);
   merged.voice.blockedVoiceChannelIds = uniqueIdList(merged.voice?.blockedVoiceChannelIds);
