@@ -45,6 +45,8 @@ const REACTION_DIRECTIVE_RE = /\[\[REACTION:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const WEB_SEARCH_DIRECTIVE_RE = /\[\[WEB_SEARCH:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const MEMORY_LINE_DIRECTIVE_RE = /\[\[MEMORY_LINE:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
+const MEMORY_LOOKUP_DIRECT_RE =
+  /\b(?:what\s+do\s+you\s+(?:remember|know)(?:\s+about)?|do\s+you\s+remember(?:\s+anything)?(?:\s+about)?|what(?:'s|\s+is)\s+in\s+(?:your\s+)?memory(?:\s+about)?|remember(?:\s+anything)?\s+about)\b/i;
 const MAX_MEDIA_PROMPT_LEN = 240;
 const MAX_WEB_QUERY_LEN = 220;
 const MAX_GIF_QUERY_LEN = 120;
@@ -1250,6 +1252,16 @@ export class ClankerBot {
     const gifBudget = this.getGifBudgetState(settings);
     const gifsConfigured = Boolean(this.gifs?.isConfigured?.());
     let webSearch = this.buildWebSearchContext(settings, message.content);
+    const memoryLookup = await this.buildMemoryLookupContext({
+      settings,
+      message,
+      trace: {
+        guildId: message.guildId,
+        channelId: message.channelId,
+        userId: message.author.id,
+        source: options.source || "message_event"
+      }
+    });
     const videoContext = await this.buildVideoReplyContext({
       settings,
       message,
@@ -1301,6 +1313,7 @@ export class ClankerBot {
         directlyAddressed: addressed,
         responseRequired: Boolean(options.forceRespond)
       },
+      memoryLookup,
       allowMemoryDirective: settings.memory.enabled,
       voiceMode: {
         enabled: Boolean(settings?.voice?.enabled),
@@ -2038,6 +2051,68 @@ export class ClankerBot {
       providerFallbackUsed: false,
       budget
     };
+  }
+
+  async buildMemoryLookupContext({ settings, message, trace = {} }) {
+    const base = {
+      requested: false,
+      used: false,
+      query: "",
+      results: [],
+      error: null
+    };
+
+    if (!settings?.memory?.enabled) return base;
+    if (!this.memory?.searchDurableFacts) return base;
+
+    const text = String(message?.content || "");
+    if (!isDirectMemoryLookupCommand(text, settings?.botName)) return base;
+
+    const guildId = String(message?.guildId || "").trim();
+    const channelId = String(message?.channelId || "").trim() || null;
+    const query = deriveDirectMemoryLookupQuery(text, settings?.botName);
+    const state = {
+      ...base,
+      requested: true,
+      query
+    };
+
+    if (!guildId) {
+      return {
+        ...state,
+        error: "Memory lookup requires guild scope."
+      };
+    }
+    if (!query) {
+      return {
+        ...state,
+        error: "Missing memory lookup query."
+      };
+    }
+
+    try {
+      const results = await this.memory.searchDurableFacts({
+        guildId,
+        channelId,
+        queryText: query,
+        settings,
+        trace: {
+          ...trace,
+          source: "direct_memory_lookup"
+        },
+        limit: 10
+      });
+      return {
+        ...state,
+        used: Boolean(results.length),
+        results
+      };
+    } catch (error) {
+      return {
+        ...state,
+        error: String(error?.message || error)
+      };
+    }
   }
 
   async runModelRequestedWebSearch({
@@ -3860,6 +3935,61 @@ function deriveDirectWebSearchQuery(rawText, botName = "") {
     .replace(/\b(?:web|internet)\s*search\b/gi, " ")
     .replace(/\b(?:look\s*up|lookup|search|find)\b/gi, " ")
     .replace(/\b(?:online|on the web|on internet|on google)\b/gi, " ")
+    .replace(/[?]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (botName) {
+    const escapedName = escapeRegExp(String(botName || "").trim());
+    if (escapedName) {
+      cleaned = cleaned
+        .replace(new RegExp(`\\b${escapedName}\\b`, "ig"), " ")
+        .replace(/\s+/g, " ")
+        .trim();
+    }
+  }
+
+  if (!cleaned) {
+    cleaned = text.replace(/<@!?\d+>/g, " ").replace(/\s+/g, " ").trim();
+  }
+
+  return cleaned.slice(0, MAX_WEB_QUERY_LEN);
+}
+
+function isDirectMemoryLookupCommand(rawText, botName = "") {
+  const text = String(rawText || "").trim();
+  if (!text) return false;
+  if (!MEMORY_LOOKUP_DIRECT_RE.test(text)) return false;
+
+  if (
+    /^(?:<@!?\d+>\s*)?(?:what\s+do\s+you\s+(?:remember|know)|do\s+you\s+remember|remember(?:\s+anything)?\s+about|what(?:'s|\s+is)\s+in\s+(?:your\s+)?memory)\b/i.test(
+      text
+    )
+  ) {
+    return true;
+  }
+  if (hasBotKeyword(text)) return true;
+
+  if (botName) {
+    const escapedName = escapeRegExp(String(botName || "").trim());
+    if (escapedName && new RegExp(`\\b${escapedName}\\b`, "i").test(text)) return true;
+  }
+
+  return /\b(?:you|u)\b/i.test(text);
+}
+
+function deriveDirectMemoryLookupQuery(rawText, botName = "") {
+  const text = String(rawText || "");
+  if (!text.trim()) return "";
+
+  let cleaned = stripBotKeywords(text)
+    .replace(/<@!?\d+>/g, " ")
+    .replace(
+      /\b(?:what\s+do\s+you\s+(?:remember|know)(?:\s+about)?|do\s+you\s+remember(?:\s+anything)?(?:\s+about)?|what(?:'s|\s+is)\s+in\s+(?:your\s+)?memory(?:\s+about)?|remember(?:\s+anything)?\s+about)\b/gi,
+      " "
+    )
+    .replace(/\b(?:can|could|would|will)\s+(?:you|u)\b/gi, " ")
+    .replace(/\b(?:please|pls|plz|tell me|show me|rn|now)\b/gi, " ")
     .replace(/[?]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();

@@ -95,12 +95,10 @@ Enable `clanker conk` to join Discord voice channels on explicit natural-languag
 ## Proposed Architecture Changes
 - `src/bot.ts`
   - Add voice intent trigger routing in `messageCreate`.
-  - Add VC NL intent handling (`join`, `leave`, `status`) with confidence gating.
+  - Add LLM-based VC NL intent handling (`join`, `leave`, `status`) with confidence gating.
   - Add `GatewayIntentBits.GuildVoiceStates`.
 - `src/voice/voiceSessionManager.ts`
   - Owns session lifecycle, timers, join/leave, and guild-level locking.
-- `src/voice/voiceIntentParser.ts`
-  - Detects natural-language text requests to join VC.
 - `src/voice/xaiRealtimeClient.ts`
   - Owns xAI websocket session creation, audio in/out streaming, and session updates.
 - `src/voice/openaiRealtimeClient.ts`
