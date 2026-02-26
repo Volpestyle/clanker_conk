@@ -1,4 +1,4 @@
-import net from "node:net";
+import { assertPublicUrl, isBlockedHost } from "./urlSafety.ts";
 import { clamp } from "./utils.ts";
 
 const DISCOVERY_TIMEOUT_MS = 9_000;
@@ -333,121 +333,66 @@ export class DiscoveryService {
   }
 
   async fetchYoutube(config) {
-    const channelIds = config.youtubeChannelIds.slice(0, 8);
-    const items = [];
-    let fetched = 0;
-
-    for (const channelId of channelIds) {
-      const url = `https://www.youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(channelId)}`;
-      let xml = "";
-      try {
-        xml = await readText(url);
-      } catch (error) {
-        return {
-          report: {
-            source: "youtube",
-            fetched,
-            accepted: items.length,
-            error: String(error?.message || error)
-          },
-          items
-        };
-      }
-
-      const parsed = parseFeed(xml, { maxItems: config.sourceFetchLimit });
-      fetched += parsed.items.length;
-
-      for (const entry of parsed.items) {
-        if (!entry.link) continue;
-        items.push({
-          source: "youtube",
-          sourceLabel: parsed.feedTitle || `YouTube ${channelId}`,
-          title: sanitizeExternalText(entry.title, 180),
-          url: entry.link,
-          excerpt: sanitizeExternalText(entry.summary || "", 180),
-          popularity: 0,
-          publishedAt: entry.publishedAt,
-          nsfw: false
-        });
-      }
-    }
-
-    return {
-      report: {
-        source: "youtube",
-        fetched,
-        accepted: items.length,
-        error: null
-      },
-      items
-    };
+    return await this.fetchFeedSources({
+      source: "youtube",
+      inputs: config.youtubeChannelIds.slice(0, 8),
+      config,
+      excerptMaxLen: 180,
+      buildUrl: (channelId) =>
+        `https://www.youtube.com/feeds/videos.xml?channel_id=${encodeURIComponent(String(channelId || ""))}`,
+      buildSourceLabel: ({ input, parsed }) => parsed.feedTitle || `YouTube ${input}`
+    });
   }
 
   async fetchRss(config) {
-    const feeds = config.rssFeeds.slice(0, 8);
-    const items = [];
-    let fetched = 0;
-
-    for (const feedUrl of feeds) {
-      let xml = "";
-      try {
-        xml = await readText(feedUrl);
-      } catch (error) {
-        return {
-          report: {
-            source: "rss",
-            fetched,
-            accepted: items.length,
-            error: String(error?.message || error)
-          },
-          items
-        };
-      }
-
-      const parsed = parseFeed(xml, { maxItems: config.sourceFetchLimit });
-      fetched += parsed.items.length;
-
-      for (const entry of parsed.items) {
-        if (!entry.link) continue;
-        items.push({
-          source: "rss",
-          sourceLabel: parsed.feedTitle || feedUrl,
-          title: sanitizeExternalText(entry.title, 180),
-          url: entry.link,
-          excerpt: sanitizeExternalText(entry.summary || "", 180),
-          popularity: 0,
-          publishedAt: entry.publishedAt,
-          nsfw: false
-        });
-      }
-    }
-
-    return {
-      report: {
-        source: "rss",
-        fetched,
-        accepted: items.length,
-        error: null
-      },
-      items
-    };
+    return await this.fetchFeedSources({
+      source: "rss",
+      inputs: config.rssFeeds.slice(0, 8),
+      config,
+      excerptMaxLen: 180,
+      buildUrl: (feedUrl) => String(feedUrl || ""),
+      buildSourceLabel: ({ input, parsed }) => parsed.feedTitle || String(input || "")
+    });
   }
 
   async fetchX(config) {
-    const handles = config.xHandles.slice(0, 6);
     const baseUrl = config.xNitterBaseUrl.replace(/\/+$/, "");
+    return await this.fetchFeedSources({
+      source: "x",
+      inputs: config.xHandles.slice(0, 6),
+      config,
+      excerptMaxLen: 200,
+      buildUrl: (handle) => `${baseUrl}/${encodeURIComponent(String(handle || ""))}/rss`,
+      buildSourceLabel: ({ input }) => `@${input}`
+    });
+  }
+
+  async fetchFeedSources({
+    source,
+    inputs,
+    config,
+    buildUrl,
+    buildSourceLabel,
+    excerptMaxLen = 180
+  }) {
+    const normalizedSource = String(source || "rss");
     const items = [];
     let fetched = 0;
 
-    for (const handle of handles) {
-      const url = `${baseUrl}/${encodeURIComponent(handle)}/rss`;
+    for (const input of Array.isArray(inputs) ? inputs : []) {
+      const inputValue = String(input || "").trim();
+      if (!inputValue) continue;
+
+      const url = String(buildUrl?.(inputValue) || "").trim();
+      if (!url) continue;
+
       let xml = "";
       try {
         xml = await readText(url);
       } catch (error) {
         return {
           report: {
-            source: "x",
+            source: normalizedSource,
             fetched,
             accepted: items.length,
             error: String(error?.message || error)
@@ -462,11 +407,13 @@ export class DiscoveryService {
       for (const entry of parsed.items) {
         if (!entry.link) continue;
         items.push({
-          source: "x",
-          sourceLabel: `@${handle}`,
+          source: normalizedSource,
+          sourceLabel: String(
+            buildSourceLabel?.({ input: inputValue, parsed, entry, url }) || parsed.feedTitle || inputValue
+          ),
           title: sanitizeExternalText(entry.title, 180),
           url: entry.link,
-          excerpt: sanitizeExternalText(entry.summary || "", 200),
+          excerpt: sanitizeExternalText(entry.summary || "", excerptMaxLen),
           popularity: 0,
           publishedAt: entry.publishedAt,
           nsfw: false
@@ -476,7 +423,7 @@ export class DiscoveryService {
 
     return {
       report: {
-        source: "x",
+        source: normalizedSource,
         fetched,
         accepted: items.length,
         error: null
@@ -678,29 +625,6 @@ export function normalizeDiscoveryUrl(rawUrl) {
   return normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
 }
 
-function isBlockedHost(hostname) {
-  const host = String(hostname || "").toLowerCase();
-  if (!host) return true;
-  if (host === "localhost" || host.endsWith(".local")) return true;
-
-  const ipType = net.isIP(host);
-  if (!ipType) return false;
-
-  if (ipType === 4) {
-    const parts = host.split(".").map((part) => Number(part || 0));
-    if (parts[0] === 10 || parts[0] === 127 || parts[0] === 0) return true;
-    if (parts[0] === 169 && parts[1] === 254) return true;
-    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
-    if (parts[0] === 192 && parts[1] === 168) return true;
-    return false;
-  }
-
-  const compact = host.replace(/^\[|\]$/g, "").toLowerCase();
-  if (compact === "::1") return true;
-  if (compact.startsWith("fc") || compact.startsWith("fd")) return true;
-  return compact.startsWith("fe80");
-}
-
 async function readJson(url) {
   const raw = await readText(url, "application/json");
 
@@ -716,6 +640,7 @@ async function readText(url, accept = "application/xml,text/xml,application/rss+
   if (!safeUrl) {
     throw new Error(`blocked or invalid discovery URL: ${url}`);
   }
+  await assertPublicUrl(safeUrl);
 
   const response = await fetch(safeUrl, {
     method: "GET",
