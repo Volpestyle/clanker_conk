@@ -14,6 +14,7 @@ export const appConfig = {
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
   xaiApiKey: process.env.XAI_API_KEY ?? "",
+  xaiBaseUrl: process.env.XAI_BASE_URL ?? "https://api.x.ai/v1",
   braveSearchApiKey: process.env.BRAVE_SEARCH_API_KEY ?? "",
   serpApiKey: process.env.SERPAPI_API_KEY ?? "",
   giphyApiKey: process.env.GIPHY_API_KEY ?? "",

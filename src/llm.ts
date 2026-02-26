@@ -5,6 +5,12 @@ import { estimateImageUsdCost, estimateUsdCost } from "./pricing.ts";
 
 const MEMORY_FACT_TYPES = ["preference", "profile", "relationship", "project", "other"];
 const DEFAULT_MEMORY_EMBEDDING_MODEL = "text-embedding-3-small";
+const XAI_DEFAULT_BASE_URL = "https://api.x.ai/v1";
+const XAI_VIDEO_POLL_INTERVAL_MS = 2500;
+const XAI_VIDEO_TIMEOUT_MS = 4 * 60_000;
+const XAI_REQUEST_TIMEOUT_MS = 20_000;
+const XAI_VIDEO_DONE_STATUSES = new Set(["done", "completed", "succeeded", "success", "ready"]);
+const XAI_VIDEO_FAILED_STATUSES = new Set(["failed", "error", "cancelled", "canceled"]);
 const MEMORY_EXTRACTION_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -33,6 +39,12 @@ export class LLMService {
     this.store = store;
 
     this.openai = appConfig.openaiApiKey ? new OpenAI({ apiKey: appConfig.openaiApiKey }) : null;
+    this.xai = appConfig.xaiApiKey
+      ? new OpenAI({
+          apiKey: appConfig.xaiApiKey,
+          baseURL: normalizeXaiBaseUrl(appConfig.xaiBaseUrl)
+        })
+      : null;
     this.anthropic = appConfig.anthropicApiKey
       ? new Anthropic({ apiKey: appConfig.anthropicApiKey })
       : null;
@@ -347,16 +359,26 @@ export class LLMService {
     return DEFAULT_MEMORY_EMBEDDING_MODEL;
   }
 
-  async generateImage({ settings, prompt, trace = {} }) {
-    if (!this.openai) {
-      throw new Error("Image generation requires OPENAI_API_KEY.");
+  async generateImage({ settings, prompt, variant = "simple", trace = {} }) {
+    const target = this.resolveImageGenerationTarget(settings, variant);
+    if (!target) {
+      throw new Error("Image generation is unavailable (missing API key or no allowed image model).");
     }
 
-    const model = String(settings?.initiative?.imageModel || "gpt-image-1.5").trim() || "gpt-image-1.5";
+    const { provider, model } = target;
+    const client = provider === "xai" ? this.xai : this.openai;
+    if (!client) {
+      throw new Error(
+        provider === "xai"
+          ? "xAI image generation requires XAI_API_KEY."
+          : "OpenAI image generation requires OPENAI_API_KEY."
+      );
+    }
+
     const size = "1024x1024";
 
     try {
-      const response = await this.openai.images.generate({
+      const response = await client.images.generate({
         model,
         prompt: String(prompt || "").slice(0, 3200),
         size
@@ -378,7 +400,7 @@ export class LLMService {
       }
 
       const costUsd = estimateImageUsdCost({
-        provider: "openai",
+        provider,
         model,
         size,
         imageCount: 1,
@@ -390,19 +412,22 @@ export class LLMService {
         guildId: trace.guildId,
         channelId: trace.channelId,
         userId: trace.userId,
-        content: `${model}`,
+        content: `${provider}:${model}`,
         metadata: {
+          provider,
           model,
           size,
+          variant,
           source: trace.source || "unknown"
         },
         usdCost: costUsd
       });
 
       return {
-        provider: "openai",
+        provider,
         model,
         size,
+        variant,
         costUsd,
         imageBuffer,
         imageUrl
@@ -415,6 +440,125 @@ export class LLMService {
         userId: trace.userId,
         content: String(error?.message || error),
         metadata: {
+          provider,
+          model,
+          variant,
+          source: trace.source || "unknown"
+        }
+      });
+      throw error;
+    }
+  }
+
+  async generateVideo({ settings, prompt, trace = {} }) {
+    const target = this.resolveVideoGenerationTarget(settings);
+    if (!target) {
+      throw new Error("Video generation is unavailable (missing XAI_API_KEY or no allowed xAI video model).");
+    }
+
+    const model = target.model;
+    const baseUrl = normalizeXaiBaseUrl(this.appConfig?.xaiBaseUrl);
+    const payload = {
+      model,
+      prompt: String(prompt || "").slice(0, 3200)
+    };
+
+    try {
+      const createResponse = await this.fetchXaiJson(
+        `${baseUrl}/videos/generations`,
+        {
+          method: "POST",
+          body: payload
+        },
+        XAI_REQUEST_TIMEOUT_MS
+      );
+
+      const requestId = String(createResponse?.id || createResponse?.request_id || "").trim();
+      if (!requestId) {
+        throw new Error("xAI video API returned no request id.");
+      }
+
+      const startedAt = Date.now();
+      let pollAttempts = 0;
+      let statusResponse = null;
+
+      while (Date.now() - startedAt < XAI_VIDEO_TIMEOUT_MS) {
+        await sleepMs(XAI_VIDEO_POLL_INTERVAL_MS);
+        pollAttempts += 1;
+
+        const poll = await this.fetchXaiJson(
+          `${baseUrl}/videos/${encodeURIComponent(requestId)}`,
+          { method: "GET" },
+          XAI_REQUEST_TIMEOUT_MS
+        );
+        const status = String(poll?.status || "").trim().toLowerCase();
+
+        if (isXaiVideoDone(status, poll)) {
+          statusResponse = poll;
+          break;
+        }
+        if (XAI_VIDEO_FAILED_STATUSES.has(status)) {
+          throw new Error(`xAI video generation failed with status "${status}".`);
+        }
+      }
+
+      if (!statusResponse) {
+        throw new Error(`xAI video generation timed out after ${Math.floor(XAI_VIDEO_TIMEOUT_MS / 1000)}s.`);
+      }
+
+      const status = String(statusResponse?.status || "").trim().toLowerCase() || "done";
+      const videoUrl = extractXaiVideoUrl(statusResponse);
+      if (!videoUrl) {
+        throw new Error("xAI video generation completed but returned no video URL.");
+      }
+
+      const durationSeconds = Number(
+        statusResponse?.video?.duration_seconds ??
+          statusResponse?.video?.duration ??
+          statusResponse?.duration_seconds ??
+          statusResponse?.duration ??
+          0
+      );
+      const normalizedDuration = Number.isFinite(durationSeconds) && durationSeconds > 0 ? durationSeconds : null;
+      const costUsd = 0;
+
+      this.store.logAction({
+        kind: "video_call",
+        guildId: trace.guildId,
+        channelId: trace.channelId,
+        userId: trace.userId,
+        content: `xai:${model}`,
+        metadata: {
+          provider: "xai",
+          model,
+          requestId,
+          status,
+          pollAttempts,
+          durationSeconds: normalizedDuration,
+          source: trace.source || "unknown"
+        },
+        usdCost: costUsd
+      });
+
+      return {
+        provider: "xai",
+        model,
+        requestId,
+        status,
+        pollAttempts,
+        durationSeconds: normalizedDuration,
+        videoUrl,
+        costUsd
+      };
+    } catch (error) {
+      this.store.logAction({
+        kind: "video_error",
+        guildId: trace.guildId,
+        channelId: trace.channelId,
+        userId: trace.userId,
+        content: String(error?.message || error),
+        metadata: {
+          provider: "xai",
           model,
           source: trace.source || "unknown"
         }
@@ -423,10 +567,111 @@ export class LLMService {
     }
   }
 
-  isImageGenerationReady(settings) {
-    if (!this.openai) return false;
-    const model = String(settings?.initiative?.imageModel || "").trim();
-    return Boolean(model);
+  async fetchXaiJson(url, { method = "GET", body } = {}, timeoutMs = XAI_REQUEST_TIMEOUT_MS) {
+    if (!this.appConfig?.xaiApiKey) {
+      throw new Error("Missing XAI_API_KEY.");
+    }
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const response = await fetch(url, {
+        method,
+        headers: {
+          Authorization: `Bearer ${this.appConfig.xaiApiKey}`,
+          Accept: "application/json",
+          ...(body !== undefined ? { "Content-Type": "application/json" } : {})
+        },
+        body: body !== undefined ? JSON.stringify(body) : undefined,
+        signal: controller.signal
+      });
+
+      const raw = await response.text();
+      const parsed = raw ? safeJsonParse(raw, null) : {};
+      if (!response.ok) {
+        const message = normalizeInlineText(
+          parsed?.error?.message || parsed?.message || raw || response.statusText,
+          240
+        );
+        throw new Error(`xAI request failed (${response.status})${message ? `: ${message}` : ""}`);
+      }
+
+      if (parsed && typeof parsed === "object") return parsed;
+      throw new Error("xAI returned an invalid JSON payload.");
+    } catch (error) {
+      if (error?.name === "AbortError") {
+        throw new Error(`xAI request timed out after ${Math.floor(timeoutMs / 1000)}s.`);
+      }
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  getMediaGenerationCapabilities(settings) {
+    const simpleImageTarget = this.resolveImageGenerationTarget(settings, "simple");
+    const complexImageTarget = this.resolveImageGenerationTarget(settings, "complex");
+    const videoTarget = this.resolveVideoGenerationTarget(settings);
+    return {
+      simpleImageReady: Boolean(simpleImageTarget),
+      complexImageReady: Boolean(complexImageTarget),
+      videoReady: Boolean(videoTarget),
+      simpleImageModel: simpleImageTarget?.model || null,
+      complexImageModel: complexImageTarget?.model || null,
+      videoModel: videoTarget?.model || null
+    };
+  }
+
+  isImageGenerationReady(settings, variant = "any") {
+    if (variant === "simple") {
+      return Boolean(this.resolveImageGenerationTarget(settings, "simple"));
+    }
+    if (variant === "complex") {
+      return Boolean(this.resolveImageGenerationTarget(settings, "complex"));
+    }
+    return Boolean(
+      this.resolveImageGenerationTarget(settings, "simple") ||
+        this.resolveImageGenerationTarget(settings, "complex")
+    );
+  }
+
+  isVideoGenerationReady(settings) {
+    return Boolean(this.resolveVideoGenerationTarget(settings));
+  }
+
+  resolveImageGenerationTarget(settings, variant = "simple") {
+    const allowedModels = normalizeModelAllowlist(settings?.initiative?.allowedImageModels);
+    if (!allowedModels.length) return null;
+
+    const preferredModel = String(
+      variant === "complex" ? settings?.initiative?.complexImageModel : settings?.initiative?.simpleImageModel
+    ).trim();
+    const candidates = prioritizePreferredModel(allowedModels, preferredModel);
+
+    for (const model of candidates) {
+      const provider = inferProviderFromModel(model);
+      if (provider === "openai" && this.openai) return { provider, model };
+      if (provider === "xai" && this.xai) return { provider, model };
+    }
+
+    return null;
+  }
+
+  resolveVideoGenerationTarget(settings) {
+    if (!this.xai) return null;
+
+    const allowedModels = normalizeModelAllowlist(settings?.initiative?.allowedVideoModels);
+    if (!allowedModels.length) return null;
+
+    const preferredModel = String(settings?.initiative?.videoModel || "").trim();
+    const candidates = prioritizePreferredModel(allowedModels, preferredModel);
+    for (const model of candidates) {
+      if (inferProviderFromModel(model) === "xai") {
+        return { provider: "xai", model };
+      }
+    }
+
+    return null;
   }
 
   isAsrReady() {
@@ -734,4 +979,64 @@ function normalizeExtractedFacts(parsed, maxFacts) {
   }
 
   return normalized;
+}
+
+function normalizeXaiBaseUrl(value) {
+  const raw = String(value || XAI_DEFAULT_BASE_URL).trim();
+  const normalized = raw || XAI_DEFAULT_BASE_URL;
+  return normalized.replace(/\/+$/, "");
+}
+
+function normalizeModelAllowlist(input, maxItems = 20) {
+  if (!Array.isArray(input)) return [];
+
+  return [...new Set(input.map((item) => String(item || "").trim()).filter(Boolean))]
+    .slice(0, Math.max(1, maxItems))
+    .map((item) => item.slice(0, 120));
+}
+
+function prioritizePreferredModel(allowedModels, preferredModel) {
+  const preferred = String(preferredModel || "").trim();
+  if (!preferred || !allowedModels.includes(preferred)) return allowedModels;
+  return [preferred, ...allowedModels.filter((entry) => entry !== preferred)];
+}
+
+function inferProviderFromModel(model) {
+  const normalized = String(model || "").trim().toLowerCase();
+  if (!normalized) return "openai";
+  if (normalized.startsWith("xai/")) return "xai";
+  if (normalized.includes("grok")) return "xai";
+  return "openai";
+}
+
+function isXaiVideoDone(status, payload) {
+  const normalizedStatus = String(status || "").trim().toLowerCase();
+  if (XAI_VIDEO_DONE_STATUSES.has(normalizedStatus)) return true;
+  return Boolean(extractXaiVideoUrl(payload));
+}
+
+function extractXaiVideoUrl(payload) {
+  const directUrl = String(payload?.video?.url || payload?.url || "").trim();
+  if (directUrl) return directUrl;
+
+  if (Array.isArray(payload?.videos)) {
+    for (const item of payload.videos) {
+      const url = String(item?.url || item?.video?.url || "").trim();
+      if (url) return url;
+    }
+  }
+
+  return "";
+}
+
+function safeJsonParse(value, fallback = null) {
+  try {
+    return JSON.parse(String(value || ""));
+  } catch {
+    return fallback;
+  }
+}
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
 }
