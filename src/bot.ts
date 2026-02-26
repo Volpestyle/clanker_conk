@@ -15,8 +15,34 @@ import {
   getPromptStyle,
   PROMPT_CAPABILITY_HONESTY_LINE
 } from "./promptCore.ts";
+import {
+  MAX_GIF_QUERY_LEN,
+  MAX_MENTION_CANDIDATES,
+  MAX_VIDEO_FALLBACK_MESSAGES,
+  MAX_VIDEO_TARGET_SCAN,
+  MAX_WEB_QUERY_LEN,
+  collectMemberLookupKeys,
+  composeInitiativeImagePrompt,
+  composeInitiativeVideoPrompt,
+  embedWebSearchSources,
+  emptyMentionResolution,
+  extractMentionCandidates,
+  extractRecentVideoTargets,
+  formatReactionSummary,
+  isWebSearchOptOutText,
+  looksLikeVideoFollowupMessage,
+  normalizeDirectiveText,
+  normalizeReactionEmojiToken,
+  normalizeSkipSentinel,
+  parseInitiativeMediaDirective,
+  parseReplyDirectives,
+  parseStructuredReplyOutput,
+  pickInitiativeMediaDirective,
+  pickReplyMediaDirective,
+  serializeForPrompt
+} from "./botHelpers.ts";
 import { normalizeDiscoveryUrl } from "./discovery.ts";
-import { chance, clamp, hasBotKeyword, sanitizeBotText, sleep, stripBotKeywords } from "./utils.ts";
+import { chance, clamp, hasBotKeyword, sanitizeBotText, sleep } from "./utils.ts";
 import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
@@ -32,40 +58,14 @@ const GATEWAY_WATCHDOG_TICK_MS = 30_000;
 const GATEWAY_STALE_MS = 2 * 60_000;
 const GATEWAY_RECONNECT_BASE_DELAY_MS = 5_000;
 const GATEWAY_RECONNECT_MAX_DELAY_MS = 60_000;
-const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
 const IMAGE_REQUEST_RE =
   /\b(?:make|generate|create|draw|paint|send|show|post)\b[\w\s,]{0,30}\b(?:image|picture|pic|photo|meme|art)\b|\b(?:image|picture|pic|photo|meme|art)\b[\w\s,]{0,24}\b(?:please|pls|plz|of|for|about)\b/i;
 const VIDEO_REQUEST_RE =
   /\b(?:make|generate|create|render|produce|send|show|post)\b[\w\s,]{0,30}\b(?:video|clip|animation|short|movie)\b|\b(?:video|clip|animation|short|movie)\b[\w\s,]{0,24}\b(?:please|pls|plz|of|for|about)\b/i;
-const IMAGE_PROMPT_DIRECTIVE_RE = /\[\[IMAGE_PROMPT:\s*([\s\S]*?)\s*\]\]\s*$/i;
-const COMPLEX_IMAGE_PROMPT_DIRECTIVE_RE = /\[\[COMPLEX_IMAGE_PROMPT:\s*([\s\S]*?)\s*\]\]\s*$/i;
-const VIDEO_PROMPT_DIRECTIVE_RE = /\[\[VIDEO_PROMPT:\s*([\s\S]*?)\s*\]\]\s*$/i;
-const GIF_QUERY_DIRECTIVE_RE = /\[\[GIF_QUERY:\s*([\s\S]*?)\s*\]\]\s*$/i;
-const REACTION_DIRECTIVE_RE = /\[\[REACTION:\s*([\s\S]*?)\s*\]\]\s*$/i;
-const WEB_SEARCH_DIRECTIVE_RE = /\[\[WEB_SEARCH:\s*([\s\S]*?)\s*\]\]\s*$/i;
-const MEMORY_LINE_DIRECTIVE_RE = /\[\[MEMORY_LINE:\s*([\s\S]*?)\s*\]\]\s*$/i;
-const WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
-const MEMORY_LOOKUP_DIRECT_RE =
-  /\b(?:what\s+do\s+you\s+(?:remember|know)(?:\s+about)?|do\s+you\s+remember(?:\s+anything)?(?:\s+about)?|what(?:'s|\s+is)\s+in\s+(?:your\s+)?memory(?:\s+about)?|remember(?:\s+anything)?\s+about)\b/i;
-const MAX_MEDIA_PROMPT_LEN = 240;
-const MAX_WEB_QUERY_LEN = 220;
-const MAX_GIF_QUERY_LEN = 120;
-const MAX_MEMORY_LINE_LEN = 180;
-const MAX_VIDEO_TARGET_SCAN = 8;
-const MAX_VIDEO_FALLBACK_MESSAGES = 18;
 const MAX_MODEL_IMAGE_INPUTS = 8;
 const UNSOLICITED_REPLY_CONTEXT_WINDOW = 5;
-const MENTION_CANDIDATE_RE = /(?<![\w<])@([a-z0-9][a-z0-9 ._'-]{0,63})/gi;
-const MAX_MENTION_CANDIDATES = 8;
-const MAX_MENTION_LOOKUP_VARIANTS = 8;
 const MENTION_GUILD_HISTORY_LOOKBACK = 500;
 const MENTION_SEARCH_RESULT_LIMIT = 10;
-const DIRECT_USER_MENTION_RE = /<@!?\d+>/;
-const VOICE_TOPIC_HINT_RE = /\b(?:v\s*\.?\s*c|vs|voice(?:\s*(?:chat|channel))?|call)\b/i;
-const VOICE_ACTION_HINT_RE =
-  /\b(?:join|hop\s*in|jump\s*in|get\s*in|pull\s*up|come|leave|dip|bounce|exit|get\s*out|disconnect|status|where)\b/i;
-const VOICE_INTENT_LABELS = new Set(["join", "leave", "status", "none"]);
-const MAX_VOICE_INTENT_REASON_LEN = 180;
 
 export class ClankerBot {
   constructor({ appConfig, store, llm, memory, discovery, search, gifs, video }) {
@@ -732,6 +732,7 @@ export class ClankerBot {
     const recordedContent = this.composeMessageContentForHistory(message, text);
     this.store.recordMessage({
       messageId: message.id,
+      createdAt: message.createdTimestamp,
       guildId: message.guildId,
       channelId: message.channelId,
       authorId: message.author.id,
@@ -744,15 +745,6 @@ export class ClankerBot {
     if (message.author.bot) return;
     if (!this.isChannelAllowed(settings, message.channelId)) return;
     if (this.isUserBlocked(settings, message.author.id)) return;
-    const directlyAddressed = this.isDirectlyAddressed(settings, message);
-
-    const voiceIntentHandled = await this.maybeHandleVoiceIntent({
-      message,
-      settings,
-      text,
-      directlyAddressed
-    });
-    if (voiceIntentHandled) return;
 
     if (settings.memory.enabled) {
       await this.memory.ingestMessage({
@@ -789,153 +781,6 @@ export class ClankerBot {
       forceRespond: addressSignal.triggered,
       addressSignal,
     });
-  }
-
-  async maybeHandleVoiceIntent({ message, settings, text, directlyAddressed }) {
-    const voiceSettings = settings?.voice || {};
-    if (!voiceSettings.joinOnTextNL) return false;
-
-    if (
-      !shouldEvaluateVoiceIntentWithLLM({
-        text,
-        botName: settings.botName,
-        directlyAddressed: Boolean(directlyAddressed)
-      })
-    ) {
-      return false;
-    }
-
-    let intent = { intent: null, confidence: 0, reason: null };
-    try {
-      intent = await this.decideVoiceIntentWithLlm({
-        message,
-        settings,
-        text,
-        directlyAddressed
-      });
-    } catch (error) {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: message.guildId,
-        channelId: message.channelId,
-        messageId: message.id,
-        userId: message.author?.id || null,
-        content: `voice_intent_llm_failed: ${String(error?.message || error)}`
-      });
-      return false;
-    }
-
-    if (!intent.intent) return false;
-
-    const threshold = clamp(Number(voiceSettings.intentConfidenceThreshold) || 0.75, 0.4, 0.99);
-    if (intent.confidence < threshold) return false;
-
-    this.store.logAction({
-      kind: "voice_intent_detected",
-      guildId: message.guildId,
-      channelId: message.channelId,
-      messageId: message.id,
-      userId: message.author?.id || null,
-      content: intent.intent,
-      metadata: {
-        confidence: intent.confidence,
-        threshold,
-        detector: "llm",
-        reason: intent.reason || null
-      }
-    });
-
-    if (intent.intent === "join") {
-      return await this.voiceSessionManager.requestJoin({
-        message,
-        settings,
-        intentConfidence: intent.confidence
-      });
-    }
-
-    if (intent.intent === "leave") {
-      return await this.voiceSessionManager.requestLeave({
-        message,
-        settings,
-        reason: "nl_leave"
-      });
-    }
-
-    if (intent.intent === "status") {
-      return await this.voiceSessionManager.requestStatus({
-        message,
-        settings
-      });
-    }
-
-    return false;
-  }
-
-  async decideVoiceIntentWithLlm({ message, settings, text, directlyAddressed }) {
-    if (!this.llm?.generate) {
-      return {
-        intent: null,
-        confidence: 0,
-        reason: null
-      };
-    }
-
-    const recentContext = this.store
-      .getRecentMessages(message.channelId, 7)
-      .filter((row) => String(row?.message_id || "") !== String(message.id))
-      .slice(0, 6)
-      .reverse()
-      .map((row) => {
-        const author = normalizeDirectiveText(row?.author_name || row?.author_id || "user", 40) || "user";
-        const role = Number(row?.is_bot) ? "bot" : "user";
-        const content = normalizeDirectiveText(row?.content || "", 170) || "(empty)";
-        return `- ${author} (${role}): ${content}`;
-      });
-
-    const tunedSettings = {
-      ...settings,
-      llm: {
-        ...(settings?.llm || {}),
-        temperature: clamp(Number(settings?.llm?.temperature) || 0.15, 0, 0.35),
-        maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || 120, 40, 180)
-      }
-    };
-
-    const systemPrompt = [
-      `You classify Discord voice-control intents for ${getPromptBotName(settings)}.`,
-      "Decide whether the latest user message is asking THIS bot to control VC state.",
-      'Return strict JSON only: {"intent":"join|leave|status|none","confidence":0..1,"reason":"short"}',
-      "- intent=join: user asks the bot to join/hop in voice.",
-      "- intent=leave: user asks the bot to leave/disconnect from voice.",
-      "- intent=status: user asks whether bot is in voice or asks voice status.",
-      "- intent=none: message is not a clear voice-control request to this bot.",
-      "- If ambiguous or likely aimed at another person, output none with low confidence."
-    ].join("\n");
-
-    const latestMessage = normalizeDirectiveText(text, 450) || "(empty)";
-    const userPrompt = [
-      `Bot name: ${normalizeDirectiveText(settings?.botName || "clanker conk", 80) || "clanker conk"}`,
-      `Directly addressed signal: ${Boolean(directlyAddressed)}`,
-      `Latest message: ${latestMessage}`,
-      "Recent channel context (oldest -> newest):",
-      recentContext.length ? recentContext.join("\n") : "- (none)"
-    ].join("\n");
-
-    const generation = await this.llm.generate({
-      settings: tunedSettings,
-      systemPrompt,
-      userPrompt,
-      trace: {
-        guildId: message.guildId,
-        channelId: message.channelId,
-        userId: message.author?.id || null,
-        messageId: message.id,
-        source: "voice_intent",
-        event: "voice_intent_decision"
-      }
-    });
-
-    return parseVoiceIntentDecision(generation.text);
   }
 
   async composeVoiceOperationalMessage({
@@ -1250,16 +1095,7 @@ export class ClankerBot {
     const gifBudget = this.getGifBudgetState(settings);
     const gifsConfigured = Boolean(this.gifs?.isConfigured?.());
     let webSearch = this.buildWebSearchContext(settings, message.content);
-    const memoryLookup = await this.buildMemoryLookupContext({
-      settings,
-      message,
-      trace: {
-        guildId: message.guildId,
-        channelId: message.channelId,
-        userId: message.author.id,
-        source: options.source || "message_event"
-      }
-    });
+    let memoryLookup = this.buildMemoryLookupContext({ settings });
     const videoContext = await this.buildVideoReplyContext({
       settings,
       message,
@@ -1311,7 +1147,6 @@ export class ClankerBot {
         directlyAddressed: addressed,
         responseRequired: Boolean(options.forceRespond)
       },
-      memoryLookup,
       allowMemoryDirective: settings.memory.enabled,
       voiceMode: {
         enabled: Boolean(settings?.voice?.enabled),
@@ -1322,7 +1157,9 @@ export class ClankerBot {
     const initialUserPrompt = buildReplyPrompt({
       ...replyPromptBase,
       webSearch,
-      allowWebSearchDirective: true
+      memoryLookup,
+      allowWebSearchDirective: true,
+      allowMemoryLookupDirective: true
     });
 
     let generation = await this.llm.generate({
@@ -1333,13 +1170,17 @@ export class ClankerBot {
       trace: replyTrace
     });
     let usedWebSearchFollowup = false;
-    let replyDirective = parseReplyDirectives(generation.text);
-    const directWebSearchCommand = isDirectWebSearchCommand(message.content, settings.botName);
-    if (!replyDirective.webSearchQuery && directWebSearchCommand) {
-      replyDirective.webSearchQuery = deriveDirectWebSearchQuery(message.content, settings.botName);
-    }
+    let usedMemoryLookupFollowup = false;
+    let replyDirective = parseStructuredReplyOutput(generation.text);
+    let voiceIntentHandled = await this.maybeHandleStructuredVoiceIntent({
+      message,
+      settings,
+      replyDirective
+    });
+    if (voiceIntentHandled) return true;
 
     if (replyDirective.webSearchQuery) {
+      usedWebSearchFollowup = true;
       webSearch = await this.runModelRequestedWebSearch({
         settings,
         webSearch,
@@ -1349,11 +1190,30 @@ export class ClankerBot {
           source: options.source || "message_event"
         }
       });
+    }
 
+    if (replyDirective.memoryLookupQuery) {
+      usedMemoryLookupFollowup = true;
+      memoryLookup = await this.runModelRequestedMemoryLookup({
+        settings,
+        memoryLookup,
+        query: replyDirective.memoryLookupQuery,
+        guildId: message.guildId,
+        channelId: message.channelId,
+        trace: {
+          ...replyTrace,
+          source: options.source || "message_event"
+        }
+      });
+    }
+
+    if (usedWebSearchFollowup || usedMemoryLookupFollowup) {
       const followupUserPrompt = buildReplyPrompt({
         ...replyPromptBase,
         webSearch,
-        allowWebSearchDirective: false
+        memoryLookup,
+        allowWebSearchDirective: false,
+        allowMemoryLookupDirective: false
       });
 
       generation = await this.llm.generate({
@@ -1363,8 +1223,14 @@ export class ClankerBot {
         imageInputs,
         trace: replyTrace
       });
-      replyDirective = parseReplyDirectives(generation.text);
-      usedWebSearchFollowup = true;
+      replyDirective = parseStructuredReplyOutput(generation.text);
+
+      voiceIntentHandled = await this.maybeHandleStructuredVoiceIntent({
+        message,
+        settings,
+        replyDirective
+      });
+      if (voiceIntentHandled) return true;
     }
 
     const reaction = await this.maybeApplyReplyReaction({
@@ -1538,6 +1404,7 @@ export class ClankerBot {
     this.markSpoke();
     this.store.recordMessage({
       messageId: sent.id,
+      createdAt: sent.createdTimestamp,
       guildId: sent.guildId,
       channelId: sent.channelId,
       authorId: this.client.user.id,
@@ -1595,7 +1462,12 @@ export class ClankerBot {
         },
         memory: {
           requestedByModel: Boolean(memoryLine),
-          saved: memorySaved
+          saved: memorySaved,
+          lookupRequested: memoryLookup.requested,
+          lookupUsed: memoryLookup.used,
+          lookupQuery: memoryLookup.query,
+          lookupResultCount: memoryLookup.results?.length || 0,
+          lookupError: memoryLookup.error || null
         },
         mentions: mentionResolution,
         reaction,
@@ -1632,12 +1504,64 @@ export class ClankerBot {
           model: generation.model,
           usage: generation.usage,
           costUsd: generation.costUsd,
-          usedWebSearchFollowup
+          usedWebSearchFollowup,
+          usedMemoryLookupFollowup
         }
       }
     });
 
     return true;
+  }
+
+  async maybeHandleStructuredVoiceIntent({ message, settings, replyDirective }) {
+    const voiceSettings = settings?.voice || {};
+    if (!voiceSettings.enabled || !voiceSettings.joinOnTextNL) return false;
+
+    const intent = replyDirective?.voiceIntent;
+    if (!intent?.intent) return false;
+
+    const threshold = clamp(Number(voiceSettings.intentConfidenceThreshold) || 0.75, 0.4, 0.99);
+    if (intent.confidence < threshold) return false;
+
+    this.store.logAction({
+      kind: "voice_intent_detected",
+      guildId: message.guildId,
+      channelId: message.channelId,
+      messageId: message.id,
+      userId: message.author?.id || null,
+      content: intent.intent,
+      metadata: {
+        confidence: intent.confidence,
+        threshold,
+        detector: "reply_llm",
+        reason: intent.reason || null
+      }
+    });
+
+    if (intent.intent === "join") {
+      return await this.voiceSessionManager.requestJoin({
+        message,
+        settings,
+        intentConfidence: intent.confidence
+      });
+    }
+
+    if (intent.intent === "leave") {
+      return await this.voiceSessionManager.requestLeave({
+        message,
+        settings,
+        reason: "nl_leave"
+      });
+    }
+
+    if (intent.intent === "status") {
+      return await this.voiceSessionManager.requestStatus({
+        message,
+        settings
+      });
+    }
+
+    return false;
   }
 
   async maybeApplyReplyReaction({
@@ -2040,7 +1964,7 @@ export class ClankerBot {
       enabled,
       used: false,
       blockedByBudget: false,
-      optedOutByUser: WEB_SEARCH_OPTOUT_RE.test(text),
+      optedOutByUser: isWebSearchOptOutText(text),
       error: null,
       query: "",
       results: [],
@@ -2051,66 +1975,16 @@ export class ClankerBot {
     };
   }
 
-  async buildMemoryLookupContext({ settings, message, trace = {} }) {
-    const base = {
+  buildMemoryLookupContext({ settings }) {
+    const enabled = Boolean(settings?.memory?.enabled && this.memory?.searchDurableFacts);
+    return {
+      enabled,
       requested: false,
       used: false,
       query: "",
       results: [],
       error: null
     };
-
-    if (!settings?.memory?.enabled) return base;
-    if (!this.memory?.searchDurableFacts) return base;
-
-    const text = String(message?.content || "");
-    if (!isDirectMemoryLookupCommand(text, settings?.botName)) return base;
-
-    const guildId = String(message?.guildId || "").trim();
-    const channelId = String(message?.channelId || "").trim() || null;
-    const query = deriveDirectMemoryLookupQuery(text, settings?.botName);
-    const state = {
-      ...base,
-      requested: true,
-      query
-    };
-
-    if (!guildId) {
-      return {
-        ...state,
-        error: "Memory lookup requires guild scope."
-      };
-    }
-    if (!query) {
-      return {
-        ...state,
-        error: "Missing memory lookup query."
-      };
-    }
-
-    try {
-      const results = await this.memory.searchDurableFacts({
-        guildId,
-        channelId,
-        queryText: query,
-        settings,
-        trace: {
-          ...trace,
-          source: "direct_memory_lookup"
-        },
-        limit: 10
-      });
-      return {
-        ...state,
-        used: Boolean(results.length),
-        results
-      };
-    } catch (error) {
-      return {
-        ...state,
-        error: String(error?.message || error)
-      };
-    }
   }
 
   async runModelRequestedWebSearch({
@@ -2159,6 +2033,62 @@ export class ClankerBot {
         fetchedPages: result.fetchedPages || 0,
         providerUsed: result.providerUsed || null,
         providerFallbackUsed: Boolean(result.providerFallbackUsed)
+      };
+    } catch (error) {
+      return {
+        ...state,
+        error: String(error?.message || error)
+      };
+    }
+  }
+
+  async runModelRequestedMemoryLookup({
+    settings,
+    memoryLookup,
+    query,
+    guildId,
+    channelId = null,
+    trace = {}
+  }) {
+    const normalizedQuery = normalizeDirectiveText(query, MAX_WEB_QUERY_LEN);
+    const state = {
+      ...memoryLookup,
+      requested: true,
+      query: normalizedQuery
+    };
+
+    if (!state.enabled || !this.memory?.searchDurableFacts) {
+      return state;
+    }
+    if (!normalizedQuery) {
+      return {
+        ...state,
+        error: "Missing memory lookup query."
+      };
+    }
+    if (!guildId) {
+      return {
+        ...state,
+        error: "Memory lookup requires guild scope."
+      };
+    }
+
+    try {
+      const results = await this.memory.searchDurableFacts({
+        guildId: String(guildId),
+        channelId: String(channelId || "").trim() || null,
+        queryText: normalizedQuery,
+        settings,
+        trace: {
+          ...trace,
+          source: "model_memory_lookup"
+        },
+        limit: 10
+      });
+      return {
+        ...state,
+        used: Boolean(results.length),
+        results
       };
     } catch (error) {
       return {
@@ -2793,6 +2723,7 @@ export class ClankerBot {
       for (const message of sorted) {
         this.store.recordMessage({
           messageId: message.id,
+          createdAt: message.createdTimestamp,
           guildId: message.guildId,
           channelId: message.channelId,
           authorId: message.author?.id || "unknown",
@@ -3007,6 +2938,7 @@ export class ClankerBot {
       this.markSpoke();
       this.store.recordMessage({
         messageId: sent.id,
+        createdAt: sent.createdTimestamp,
         guildId: sent.guildId,
         channelId: sent.channelId,
         authorId: this.client.user.id,
@@ -3388,6 +3320,7 @@ export class ClankerBot {
 
     this.store.recordMessage({
       messageId: resolved.id,
+      createdAt: resolved.createdTimestamp,
       guildId: resolved.guildId,
       channelId: resolved.channelId,
       authorId: resolved.author.id,
@@ -3426,686 +3359,5 @@ export class ClankerBot {
     }
 
     return parts.join(" ").replace(/\s+/g, " ").trim();
-  }
-}
-
-function formatReactionSummary(message) {
-  const cache = message?.reactions?.cache;
-  if (!cache?.size) return "";
-
-  const rows = [];
-  for (const reaction of cache.values()) {
-    const count = Number(reaction?.count || 0);
-    if (!Number.isFinite(count) || count <= 0) continue;
-    const label = normalizeReactionLabel(reaction?.emoji);
-    if (!label) continue;
-    rows.push({ label, count });
-  }
-
-  if (!rows.length) return "";
-
-  rows.sort((a, b) => {
-    if (b.count !== a.count) return b.count - a.count;
-    return a.label.localeCompare(b.label);
-  });
-
-  return rows
-    .slice(0, 6)
-    .map((row) => `${row.label}x${row.count}`)
-    .join(", ");
-}
-
-function normalizeReactionLabel(emoji) {
-  const id = String(emoji?.id || "").trim();
-  const rawName = String(emoji?.name || "").trim();
-  if (id) {
-    const safe = sanitizeReactionLabel(rawName);
-    return safe ? `custom:${safe}` : `custom:${id}`;
-  }
-  if (!rawName) return "";
-
-  const safe = sanitizeReactionLabel(rawName);
-  if (safe) return safe;
-
-  const codepoints = [...rawName]
-    .map((char) => char.codePointAt(0))
-    .filter((value) => Number.isFinite(value))
-    .map((value) => value.toString(16));
-  if (!codepoints.length) return "";
-  return `u${codepoints.join("_")}`;
-}
-
-function sanitizeReactionLabel(value) {
-  return String(value || "")
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_+-]+/g, "")
-    .slice(0, 32);
-}
-
-function extractUrlsFromText(text) {
-  URL_IN_TEXT_RE.lastIndex = 0;
-  return [...String(text || "").matchAll(URL_IN_TEXT_RE)].map((match) => String(match[0] || ""));
-}
-
-function emptyMentionResolution() {
-  return {
-    attemptedCount: 0,
-    resolvedCount: 0,
-    ambiguousCount: 0,
-    unresolvedCount: 0
-  };
-}
-
-function extractMentionCandidates(text, maxItems = MAX_MENTION_CANDIDATES) {
-  const source = String(text || "");
-  if (!source.includes("@")) return [];
-
-  const out = [];
-  MENTION_CANDIDATE_RE.lastIndex = 0;
-  let match;
-  while ((match = MENTION_CANDIDATE_RE.exec(source)) && out.length < Math.max(1, Number(maxItems) || 1)) {
-    const rawCandidate = String(match[1] || "");
-    const withoutTrailingSpace = rawCandidate.replace(/\s+$/g, "");
-    const withoutTrailingPunctuation = withoutTrailingSpace
-      .replace(/[.,:;!?)\]}]+$/g, "")
-      .replace(/\s+$/g, "");
-    const start = match.index;
-    const variants = buildMentionLookupVariants({
-      mentionText: withoutTrailingPunctuation,
-      mentionStart: start
-    });
-    if (!variants.length) continue;
-    const end = variants[0].end;
-    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start + 1) continue;
-
-    out.push({
-      start,
-      end,
-      variants
-    });
-  }
-
-  return out;
-}
-
-function buildMentionLookupVariants({ mentionText, mentionStart }) {
-  const source = String(mentionText || "").trim();
-  if (!source) return [];
-
-  const wordRe = /[a-z0-9][a-z0-9._'-]*/gi;
-  const tokens = [];
-  let token;
-  while ((token = wordRe.exec(source))) {
-    tokens.push({
-      end: token.index + String(token[0] || "").length
-    });
-  }
-  if (!tokens.length) return [];
-
-  const variants = [];
-  const seen = new Set();
-  const maxTokens = Math.min(tokens.length, MAX_MENTION_LOOKUP_VARIANTS);
-  for (let count = maxTokens; count >= 1; count -= 1) {
-    const tokenEnd = tokens[count - 1]?.end;
-    if (!Number.isFinite(tokenEnd) || tokenEnd <= 0) continue;
-    const prefix = source.slice(0, tokenEnd).replace(/\s+$/g, "");
-    if (!prefix) continue;
-    if (/^\d{2,}$/.test(prefix)) continue;
-    const lookupKey = normalizeMentionLookupKey(prefix);
-    if (!lookupKey || lookupKey === "everyone" || lookupKey === "here") continue;
-    if (seen.has(lookupKey)) continue;
-    seen.add(lookupKey);
-    variants.push({
-      lookupKey,
-      end: mentionStart + 1 + prefix.length
-    });
-  }
-
-  return variants;
-}
-
-function normalizeMentionLookupKey(value) {
-  return String(value || "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 80);
-}
-
-function collectMemberLookupKeys(member) {
-  const keys = new Set();
-  const values = [
-    member?.displayName,
-    member?.nickname,
-    member?.user?.globalName,
-    member?.user?.username
-  ];
-
-  for (const value of values) {
-    const normalized = normalizeMentionLookupKey(value);
-    if (!normalized) continue;
-    keys.add(normalized);
-  }
-
-  return keys;
-}
-
-function looksLikeVideoFollowupMessage(rawText) {
-  const text = String(rawText || "").trim();
-  if (!text) return false;
-  if (extractUrlsFromText(text).length) return false;
-
-  const hasVideoTopic = /\b(?:video|clip|youtube|yt|tiktok|tt|reel|short)\b/i.test(text);
-  if (!hasVideoTopic) return false;
-
-  return /\b(?:watch|watched|watching|see|seen|view|check|open|play)\b/i.test(text);
-}
-
-function extractRecentVideoTargets({
-  videoService,
-  recentMessages,
-  maxMessages = MAX_VIDEO_FALLBACK_MESSAGES,
-  maxTargets = MAX_VIDEO_TARGET_SCAN
-}) {
-  if (!videoService || !Array.isArray(recentMessages) || !recentMessages.length) return [];
-
-  const normalizedMaxMessages = clamp(Number(maxMessages) || MAX_VIDEO_FALLBACK_MESSAGES, 1, 120);
-  const normalizedMaxTargets = clamp(Number(maxTargets) || MAX_VIDEO_TARGET_SCAN, 1, 8);
-  const targets = [];
-  const seenKeys = new Set();
-
-  for (const row of recentMessages.slice(0, normalizedMaxMessages)) {
-    if (targets.length >= normalizedMaxTargets) break;
-    if (Number(row?.is_bot || 0) === 1) continue;
-
-    const content = String(row?.content || "");
-    if (!content) continue;
-
-    const rowTargets = videoService.extractVideoTargets(content, normalizedMaxTargets);
-    for (const target of rowTargets) {
-      if (targets.length >= normalizedMaxTargets) break;
-      const key = String(target?.key || "").trim();
-      if (!key || seenKeys.has(key)) continue;
-      seenKeys.add(key);
-      targets.push(target);
-    }
-  }
-
-  return targets;
-}
-
-function composeInitiativeImagePrompt(imagePrompt, postText) {
-  URL_IN_TEXT_RE.lastIndex = 0;
-  const topic = String(postText || "")
-    .replace(URL_IN_TEXT_RE, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 260);
-  const requested = normalizeDirectiveText(imagePrompt, MAX_MEDIA_PROMPT_LEN);
-
-  return [
-    "Create a playful, meme-friendly image for a Discord post.",
-    `Creative direction: ${requested || "a timely playful internet moment"}.`,
-    `Topic context for visual inspiration only: ${topic || "general chat mood"}.`,
-    "Hard constraints:",
-    "- Do not include any visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks.",
-    "- Do not render any words from the creative direction or topic context as text inside the image.",
-    "- Make it purely visual with strong composition and expressive lighting."
-  ].join("\n");
-}
-
-function composeInitiativeVideoPrompt(videoPrompt, postText) {
-  URL_IN_TEXT_RE.lastIndex = 0;
-  const topic = String(postText || "")
-    .replace(URL_IN_TEXT_RE, "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 260);
-  const requested = normalizeDirectiveText(videoPrompt, MAX_MEDIA_PROMPT_LEN);
-
-  return [
-    "Create a short, dynamic, meme-friendly video for a Discord post.",
-    `Creative direction: ${requested || "a timely playful internet moment"}.`,
-    `Topic context for visual inspiration only: ${topic || "general chat mood"}.`,
-    "Hard constraints:",
-    "- Do not include visible text, captions, subtitles, logos, watermarks, or UI overlays.",
-    "- Keep motion clear and readable in a short social clip format."
-  ].join("\n");
-}
-
-function parseInitiativeMediaDirective(rawText) {
-  const parsed = {
-    text: String(rawText || "").trim(),
-    imagePrompt: null,
-    complexImagePrompt: null,
-    videoPrompt: null,
-    mediaDirective: null
-  };
-
-  while (parsed.text) {
-    const complexImageMatch = parsed.text.match(COMPLEX_IMAGE_PROMPT_DIRECTIVE_RE);
-    if (complexImageMatch) {
-      const prompt = normalizeDirectiveText(complexImageMatch[1], MAX_MEDIA_PROMPT_LEN) || null;
-      if (!parsed.complexImagePrompt) {
-        parsed.complexImagePrompt = prompt;
-      }
-      if (!parsed.mediaDirective && prompt) {
-        parsed.mediaDirective = { type: "image_complex", prompt };
-      }
-      parsed.text = parsed.text.slice(0, complexImageMatch.index).trim();
-      continue;
-    }
-
-    const imageMatch = parsed.text.match(IMAGE_PROMPT_DIRECTIVE_RE);
-    if (imageMatch) {
-      const prompt = normalizeDirectiveText(imageMatch[1], MAX_MEDIA_PROMPT_LEN) || null;
-      if (!parsed.imagePrompt) {
-        parsed.imagePrompt = prompt;
-      }
-      if (!parsed.mediaDirective && prompt) {
-        parsed.mediaDirective = { type: "image_simple", prompt };
-      }
-      parsed.text = parsed.text.slice(0, imageMatch.index).trim();
-      continue;
-    }
-
-    const videoMatch = parsed.text.match(VIDEO_PROMPT_DIRECTIVE_RE);
-    if (videoMatch) {
-      const prompt = normalizeDirectiveText(videoMatch[1], MAX_MEDIA_PROMPT_LEN) || null;
-      if (!parsed.videoPrompt) {
-        parsed.videoPrompt = prompt;
-      }
-      if (!parsed.mediaDirective && prompt) {
-        parsed.mediaDirective = { type: "video", prompt };
-      }
-      parsed.text = parsed.text.slice(0, videoMatch.index).trim();
-      continue;
-    }
-
-    break;
-  }
-
-  return parsed;
-}
-
-function parseReplyDirectives(rawText) {
-  const parsed = {
-    text: String(rawText || "").trim(),
-    imagePrompt: null,
-    complexImagePrompt: null,
-    videoPrompt: null,
-    gifQuery: null,
-    mediaDirective: null,
-    reactionEmoji: null,
-    webSearchQuery: null,
-    memoryLine: null
-  };
-
-  while (parsed.text) {
-    const complexImageMatch = parsed.text.match(COMPLEX_IMAGE_PROMPT_DIRECTIVE_RE);
-    if (complexImageMatch) {
-      const prompt = normalizeDirectiveText(complexImageMatch[1], MAX_MEDIA_PROMPT_LEN) || null;
-      if (!parsed.complexImagePrompt) {
-        parsed.complexImagePrompt = prompt;
-      }
-      if (!parsed.mediaDirective && prompt) {
-        parsed.mediaDirective = { type: "image_complex", prompt };
-      }
-      parsed.text = parsed.text.slice(0, complexImageMatch.index).trim();
-      continue;
-    }
-
-    const imageMatch = parsed.text.match(IMAGE_PROMPT_DIRECTIVE_RE);
-    if (imageMatch) {
-      const prompt = normalizeDirectiveText(imageMatch[1], MAX_MEDIA_PROMPT_LEN) || null;
-      if (!parsed.imagePrompt) {
-        parsed.imagePrompt = prompt;
-      }
-      if (!parsed.mediaDirective && prompt) {
-        parsed.mediaDirective = { type: "image_simple", prompt };
-      }
-      parsed.text = parsed.text.slice(0, imageMatch.index).trim();
-      continue;
-    }
-
-    const videoMatch = parsed.text.match(VIDEO_PROMPT_DIRECTIVE_RE);
-    if (videoMatch) {
-      const prompt = normalizeDirectiveText(videoMatch[1], MAX_MEDIA_PROMPT_LEN) || null;
-      if (!parsed.videoPrompt) {
-        parsed.videoPrompt = prompt;
-      }
-      if (!parsed.mediaDirective && prompt) {
-        parsed.mediaDirective = { type: "video", prompt };
-      }
-      parsed.text = parsed.text.slice(0, videoMatch.index).trim();
-      continue;
-    }
-
-    const gifMatch = parsed.text.match(GIF_QUERY_DIRECTIVE_RE);
-    if (gifMatch) {
-      const query = normalizeDirectiveText(gifMatch[1], MAX_GIF_QUERY_LEN) || null;
-      if (!parsed.gifQuery) {
-        parsed.gifQuery = query;
-      }
-      if (!parsed.mediaDirective && query) {
-        parsed.mediaDirective = { type: "gif", prompt: query };
-      }
-      parsed.text = parsed.text.slice(0, gifMatch.index).trim();
-      continue;
-    }
-
-    const reactionMatch = parsed.text.match(REACTION_DIRECTIVE_RE);
-    if (reactionMatch) {
-      if (!parsed.reactionEmoji) {
-        parsed.reactionEmoji = normalizeDirectiveText(reactionMatch[1], 64) || null;
-      }
-      parsed.text = parsed.text.slice(0, reactionMatch.index).trim();
-      continue;
-    }
-
-    const webSearchMatch = parsed.text.match(WEB_SEARCH_DIRECTIVE_RE);
-    if (webSearchMatch) {
-      if (!parsed.webSearchQuery) {
-        parsed.webSearchQuery = normalizeDirectiveText(webSearchMatch[1], MAX_WEB_QUERY_LEN) || null;
-      }
-      parsed.text = parsed.text.slice(0, webSearchMatch.index).trim();
-      continue;
-    }
-
-    const memoryMatch = parsed.text.match(MEMORY_LINE_DIRECTIVE_RE);
-    if (memoryMatch) {
-      if (!parsed.memoryLine) {
-        parsed.memoryLine = normalizeDirectiveText(memoryMatch[1], MAX_MEMORY_LINE_LEN) || null;
-      }
-      parsed.text = parsed.text.slice(0, memoryMatch.index).trim();
-      continue;
-    }
-
-    break;
-  }
-
-  return parsed;
-}
-
-function parseVoiceIntentDecision(rawText) {
-  const fallback = {
-    intent: null,
-    confidence: 0,
-    reason: null
-  };
-  const raw = String(rawText || "").trim();
-  if (!raw) return fallback;
-
-  const attempts = [
-    raw,
-    raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1],
-    (() => {
-      const start = raw.indexOf("{");
-      const end = raw.lastIndexOf("}");
-      return start >= 0 && end > start ? raw.slice(start, end + 1) : "";
-    })()
-  ]
-    .map((item) => String(item || "").trim())
-    .filter(Boolean);
-
-  let parsed = null;
-  for (const candidate of attempts) {
-    try {
-      const candidateParsed = JSON.parse(candidate);
-      if (candidateParsed && typeof candidateParsed === "object") {
-        parsed = candidateParsed;
-        break;
-      }
-    } catch {
-      // try next candidate
-    }
-  }
-  if (!parsed) return fallback;
-
-  const rawIntent = String(parsed.intent || "")
-    .trim()
-    .toLowerCase();
-  if (!VOICE_INTENT_LABELS.has(rawIntent)) return fallback;
-
-  const intent = rawIntent === "none" ? null : rawIntent;
-  const confidenceRaw = Number(parsed.confidence);
-  const confidence = Number.isFinite(confidenceRaw) ? clamp(confidenceRaw, 0, 1) : 0;
-  const reason = normalizeDirectiveText(parsed.reason, MAX_VOICE_INTENT_REASON_LEN) || null;
-
-  return {
-    intent,
-    confidence,
-    reason
-  };
-}
-
-function pickReplyMediaDirective(parsed) {
-  return parsed?.mediaDirective || null;
-}
-
-function pickInitiativeMediaDirective(parsed) {
-  return parsed?.mediaDirective || null;
-}
-
-function normalizeDirectiveText(text, maxLen) {
-  return String(text || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, maxLen);
-}
-
-function serializeForPrompt(value, maxLen = 1200) {
-  try {
-    return String(JSON.stringify(value ?? {}, null, 2)).slice(0, Math.max(40, Number(maxLen) || 1200));
-  } catch {
-    return "{}";
-  }
-}
-
-function isDirectWebSearchCommand(rawText, botName = "") {
-  const text = String(rawText || "").trim();
-  if (!text || WEB_SEARCH_OPTOUT_RE.test(text)) return false;
-
-  const hasSearchVerb = /\b(?:google|search|look\s*up|lookup|find)\b/i.test(text);
-  if (!hasSearchVerb) return false;
-
-  if (/^(?:<@!?\d+>\s*)?(?:google|search|look\s*up|lookup|find)\b/i.test(text)) return true;
-  if (hasBotKeyword(text)) return true;
-
-  if (botName) {
-    const escapedName = escapeRegExp(String(botName || "").trim());
-    if (escapedName && new RegExp(`\\b${escapedName}\\b`, "i").test(text)) return true;
-  }
-
-  return /\b(?:can|could|would|will)\s+(?:you|u)\b/i.test(text);
-}
-
-function deriveDirectWebSearchQuery(rawText, botName = "") {
-  const text = String(rawText || "");
-  if (!text.trim()) return "";
-
-  let cleaned = stripBotKeywords(text)
-    .replace(/<@!?\d+>/g, " ")
-    .replace(/\b(?:can|could|would|will)\s+(?:you|u)\b/gi, " ")
-    .replace(/\b(?:please|pls|plz|try|again)\b/gi, " ")
-    .replace(/\bgoogle(?:\s+search)?\b/gi, " ")
-    .replace(/\b(?:web|internet)\s*search\b/gi, " ")
-    .replace(/\b(?:look\s*up|lookup|search|find)\b/gi, " ")
-    .replace(/\b(?:online|on the web|on internet|on google)\b/gi, " ")
-    .replace(/[?]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (botName) {
-    const escapedName = escapeRegExp(String(botName || "").trim());
-    if (escapedName) {
-      cleaned = cleaned
-        .replace(new RegExp(`\\b${escapedName}\\b`, "ig"), " ")
-        .replace(/\s+/g, " ")
-        .trim();
-    }
-  }
-
-  if (!cleaned) {
-    cleaned = text.replace(/<@!?\d+>/g, " ").replace(/\s+/g, " ").trim();
-  }
-
-  return cleaned.slice(0, MAX_WEB_QUERY_LEN);
-}
-
-function isDirectMemoryLookupCommand(rawText, botName = "") {
-  const text = String(rawText || "").trim();
-  if (!text) return false;
-  if (!MEMORY_LOOKUP_DIRECT_RE.test(text)) return false;
-
-  if (
-    /^(?:<@!?\d+>\s*)?(?:what\s+do\s+you\s+(?:remember|know)|do\s+you\s+remember|remember(?:\s+anything)?\s+about|what(?:'s|\s+is)\s+in\s+(?:your\s+)?memory)\b/i.test(
-      text
-    )
-  ) {
-    return true;
-  }
-  if (hasBotKeyword(text)) return true;
-
-  if (botName) {
-    const escapedName = escapeRegExp(String(botName || "").trim());
-    if (escapedName && new RegExp(`\\b${escapedName}\\b`, "i").test(text)) return true;
-  }
-
-  return /\b(?:you|u)\b/i.test(text);
-}
-
-function deriveDirectMemoryLookupQuery(rawText, botName = "") {
-  const text = String(rawText || "");
-  if (!text.trim()) return "";
-
-  let cleaned = stripBotKeywords(text)
-    .replace(/<@!?\d+>/g, " ")
-    .replace(
-      /\b(?:what\s+do\s+you\s+(?:remember|know)(?:\s+about)?|do\s+you\s+remember(?:\s+anything)?(?:\s+about)?|what(?:'s|\s+is)\s+in\s+(?:your\s+)?memory(?:\s+about)?|remember(?:\s+anything)?\s+about)\b/gi,
-      " "
-    )
-    .replace(/\b(?:can|could|would|will)\s+(?:you|u)\b/gi, " ")
-    .replace(/\b(?:please|pls|plz|tell me|show me|rn|now)\b/gi, " ")
-    .replace(/[?]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (botName) {
-    const escapedName = escapeRegExp(String(botName || "").trim());
-    if (escapedName) {
-      cleaned = cleaned
-        .replace(new RegExp(`\\b${escapedName}\\b`, "ig"), " ")
-        .replace(/\s+/g, " ")
-        .trim();
-    }
-  }
-
-  if (!cleaned) {
-    cleaned = text.replace(/<@!?\d+>/g, " ").replace(/\s+/g, " ").trim();
-  }
-
-  return cleaned.slice(0, MAX_WEB_QUERY_LEN);
-}
-
-function shouldEvaluateVoiceIntentWithLLM({ text, botName = "", directlyAddressed = false }) {
-  const normalized = String(text || "").trim().toLowerCase();
-  if (!normalized) return false;
-
-  const hasVoiceTopic = VOICE_TOPIC_HINT_RE.test(normalized);
-  const hasVoiceAction = VOICE_ACTION_HINT_RE.test(normalized);
-  if (hasVoiceTopic && hasVoiceAction) return true;
-
-  const hasDirectMention = DIRECT_USER_MENTION_RE.test(normalized);
-  const hasKeywordMention = hasBotKeyword(normalized);
-  const escapedName = escapeRegExp(String(botName || "").trim());
-  const hasNameMention = escapedName ? new RegExp(`\\b${escapedName}\\b`, "i").test(normalized) : false;
-  const mentionSatisfied = Boolean(directlyAddressed || hasDirectMention || hasKeywordMention || hasNameMention);
-  if (!mentionSatisfied) return false;
-
-  return hasVoiceTopic || hasVoiceAction;
-}
-
-function normalizeReactionEmojiToken(emojiToken) {
-  const token = String(emojiToken || "").trim();
-  const custom = token.match(/^<a?:([^:>]+):(\d+)>$/);
-  if (custom) {
-    return `${custom[1]}:${custom[2]}`;
-  }
-  return token;
-}
-
-function escapeRegExp(value) {
-  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function embedWebSearchSources(text, webSearch) {
-  const base = String(text || "").trim();
-  if (!base) return "";
-  if (!webSearch?.used) return base;
-
-  const results = Array.isArray(webSearch?.results) ? webSearch.results : [];
-  if (!results.length) return base;
-
-  const textWithPlainCitations = base.replace(/\[(\d{1,2})\]\(\s*<?https?:\/\/[^)\s>]+[^)]*\)/g, "[$1]");
-  const citedIndices = [...new Set(
-    [...textWithPlainCitations.matchAll(/\[(\d{1,2})\]/g)]
-      .map((match) => Number(match[1]) - 1)
-      .filter((index) => Number.isInteger(index) && index >= 0 && index < results.length)
-  )].sort((a, b) => a - b);
-
-  if (!citedIndices.length) return textWithPlainCitations;
-
-  const urlLines = [];
-  const domainLines = [];
-  for (const index of citedIndices) {
-    const row = results[index];
-    const url = String(row?.url || "").trim();
-    if (!url) continue;
-    const domain = String(row?.domain || extractDomainForSourceLabel(url) || "source");
-    urlLines.push(`[${index + 1}] ${domain} - <${url}>`);
-    domainLines.push(`[${index + 1}] ${domain}`);
-  }
-  if (!urlLines.length) return textWithPlainCitations;
-
-  const inlineLinked = textWithPlainCitations.replace(/\[(\d{1,2})\]/g, (full, rawIndex) => {
-    const index = Number(rawIndex) - 1;
-    const row = results[index];
-    const url = String(row?.url || "").trim();
-    if (!url) return full;
-    return `[${index + 1}](<${url}>)`;
-  });
-
-  const MAX_CONTENT_LEN = 1900;
-  const withUrls = `${inlineLinked}\n\nSources:\n${urlLines.join("\n")}`;
-  if (withUrls.length <= MAX_CONTENT_LEN) return withUrls;
-
-  const withDomains = `${inlineLinked}\n\nSources:\n${domainLines.join("\n")}`;
-  if (withDomains.length <= MAX_CONTENT_LEN) return withDomains;
-
-  const plainWithUrls = `${textWithPlainCitations}\n\nSources:\n${urlLines.join("\n")}`;
-  if (plainWithUrls.length <= MAX_CONTENT_LEN) return plainWithUrls;
-
-  const plainWithDomains = `${textWithPlainCitations}\n\nSources:\n${domainLines.join("\n")}`;
-  if (plainWithDomains.length <= MAX_CONTENT_LEN) return plainWithDomains;
-
-  return textWithPlainCitations;
-}
-
-function normalizeSkipSentinel(text) {
-  const value = String(text || "").trim();
-  if (!value) return "";
-  if (/^\[SKIP\]$/i.test(value)) return "[SKIP]";
-
-  const withoutTrailingSkip = value.replace(/\s*\[SKIP\]\s*$/i, "").trim();
-  return withoutTrailingSkip || "[SKIP]";
-}
-
-function extractDomainForSourceLabel(rawUrl) {
-  try {
-    return new URL(String(rawUrl || "")).hostname.replace(/^www\./i, "").toLowerCase();
-  } catch {
-    return "";
   }
 }

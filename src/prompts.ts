@@ -1,4 +1,3 @@
-import { hasBotKeyword } from "./utils.ts";
 import {
   buildHardLimitsSection,
   getPromptBotName,
@@ -145,20 +144,6 @@ function formatMemoryLookupResults(results) {
     .join("\n");
 }
 
-function looksLikeDirectWebSearchCommand(text) {
-  const raw = String(text || "").trim();
-  if (!raw) return false;
-
-  const hasSearchVerb = /\b(?:google|search|look\s*up|lookup|find)\b/i.test(raw);
-  if (!hasSearchVerb) return false;
-
-  if (/^(?:<@!?\d+>\s*)?(?:google|search|look\s*up|lookup|find)\b/i.test(raw)) return true;
-  if (hasBotKeyword(raw)) return true;
-  if (/\b(?:can|could|would|will)\s+(?:you|u)\b/i.test(raw)) return true;
-
-  return false;
-}
-
 export function buildSystemPrompt(settings) {
   const memoryEnabled = Boolean(settings?.memory?.enabled);
 
@@ -205,6 +190,7 @@ export function buildReplyPrompt({
   webSearch = null,
   memoryLookup = null,
   allowWebSearchDirective = false,
+  allowMemoryLookupDirective = false,
   allowMemoryDirective = false,
   voiceMode = null,
   videoContext = null
@@ -297,11 +283,7 @@ export function buildReplyPrompt({
   } else {
     parts.push("Use balanced judgment for reactions.");
   }
-  parts.push(
-    "If a reaction is useful, append one final line exactly in this format: [[REACTION: emoji]]."
-  );
-  parts.push("Use only one emoji from the allowed reaction list.");
-  parts.push("If no reaction is needed, do not output REACTION.");
+  parts.push("If a reaction is useful, set reactionEmoji to exactly one allowed emoji. Otherwise set reactionEmoji to null.");
 
   const voiceEnabled = Boolean(voiceMode?.enabled);
   const voiceJoinOnTextNL = Boolean(voiceMode?.joinOnTextNL);
@@ -309,42 +291,60 @@ export function buildReplyPrompt({
     parts.push("Voice mode is enabled right now.");
     parts.push("Do not claim you are text-only or unable to join voice channels.");
     parts.push("If users mention VC/voice requests, stay consistent with voice being available.");
+    parts.push(
+      "If the incoming message is clearly asking you to join, leave, or report VC status, set voiceIntent.intent to join, leave, or status."
+    );
+    parts.push(
+      "Set voiceIntent.confidence from 0 to 1. Use high confidence only for explicit voice-control requests aimed at you."
+    );
+    parts.push("For normal chat or ambiguous requests, set voiceIntent.intent to none and keep confidence low.");
   } else if (voiceEnabled) {
     parts.push("Voice mode is enabled, but text-triggered NL join controls are disabled.");
     parts.push("If asked to join VC from text chat, say text triggers are currently disabled.");
+    parts.push("Set voiceIntent.intent to none.");
   } else {
     parts.push("Voice mode is disabled right now.");
     parts.push("If asked to join VC, say voice mode is currently disabled.");
+    parts.push("Set voiceIntent.intent to none.");
   }
 
   if (allowWebSearchDirective) {
-    const directCommand = looksLikeDirectWebSearchCommand(message?.content);
     if (webSearch?.optedOutByUser) {
       parts.push("The user explicitly asked not to use web search.");
-      parts.push("Do not request WEB_SEARCH and do not claim live lookup.");
+      parts.push("Set webSearchQuery to null and do not claim live lookup.");
     } else if (!webSearch?.enabled) {
       parts.push("Live web lookup is disabled in settings.");
+      parts.push("Set webSearchQuery to null.");
       parts.push("Do not claim you searched the web.");
     } else if (!webSearch?.configured) {
       parts.push("Live web lookup is unavailable (no search provider is configured).");
+      parts.push("Set webSearchQuery to null.");
       parts.push("Do not claim you searched the web.");
     } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
       parts.push("Live web lookup is unavailable right now (hourly search budget exhausted).");
+      parts.push("Set webSearchQuery to null.");
       parts.push("Do not claim you searched the web.");
     } else {
       parts.push("Live web lookup is available.");
       parts.push("Web search is supported right now.");
       parts.push("Do not claim you cannot search the web or that you are unable to browse.");
-      if (directCommand) {
-        parts.push("The incoming message is a direct command to search the web.");
-        parts.push(
-          "For this turn, request WEB_SEARCH unless the request is unsafe, disallowed, or impossible."
-        );
-      }
       parts.push(
-        "If better accuracy depends on live web info, append one final line exactly in this format: [[WEB_SEARCH: concise query]]"
+        "If better accuracy depends on live web info, set webSearchQuery to a concise query."
       );
-      parts.push("Use WEB_SEARCH only when needed and keep the query under 220 characters.");
+      parts.push("Use webSearchQuery only when needed and keep it under 220 characters.");
+    }
+  }
+
+  if (allowMemoryLookupDirective) {
+    if (!memoryLookup?.enabled) {
+      parts.push("Durable memory lookup is unavailable for this turn.");
+      parts.push("Set memoryLookupQuery to null.");
+    } else {
+      parts.push("Durable memory lookup is available for this turn.");
+      parts.push(
+        "If the user asks what you remember (or asks for stored facts) and current memory context is insufficient, set memoryLookupQuery to a concise lookup query."
+      );
+      parts.push("Use memoryLookupQuery only when needed and keep it under 220 characters.");
     }
   }
 
@@ -415,36 +415,29 @@ export function buildReplyPrompt({
       `Visual generation is available (${remainingImages} image slot(s), ${remainingVideos} video slot(s) left where enabled in the rolling 24h budgets).`
     );
     if (simpleImageAvailable) {
-      parts.push(
-        "For a simple/quick visual, append one final line exactly: [[IMAGE_PROMPT: your prompt here]]"
-      );
-      parts.push("Use IMAGE_PROMPT for straightforward concepts or fast meme-style visuals.");
+      parts.push("For a simple/quick visual, set media to {\"type\":\"image_simple\",\"prompt\":\"...\"}.");
+      parts.push("Use image_simple for straightforward concepts or fast meme-style visuals.");
     }
     if (complexImageAvailable) {
-      parts.push(
-        "For a detailed or composition-heavy visual, append one final line exactly: [[COMPLEX_IMAGE_PROMPT: your prompt here]]"
-      );
-      parts.push("Use COMPLEX_IMAGE_PROMPT for cinematic/detail-rich scenes or harder visual requests.");
+      parts.push("For a detailed/composition-heavy visual, set media to {\"type\":\"image_complex\",\"prompt\":\"...\"}.");
+      parts.push("Use image_complex for cinematic/detail-rich scenes or harder visual requests.");
     }
     if (videoGenerationAvailable) {
-      parts.push(
-        "If a generated clip is best, append one final line exactly: [[VIDEO_PROMPT: your prompt here]]"
-      );
-      parts.push("Use VIDEO_PROMPT when motion/animation is meaningfully better than a still image.");
+      parts.push("If a generated clip is best, set media to {\"type\":\"video\",\"prompt\":\"...\"}.");
+      parts.push("Use video when motion/animation is meaningfully better than a still image.");
     }
     if (userRequestedImage && !simpleImageAvailable && complexImageAvailable) {
-      parts.push("The user asked for an image. Prefer COMPLEX_IMAGE_PROMPT for this turn.");
+      parts.push("The user asked for an image. Prefer media.type=image_complex for this turn.");
     } else if (userRequestedImage && simpleImageAvailable) {
-      parts.push("The user asked for an image. Include IMAGE_PROMPT or COMPLEX_IMAGE_PROMPT unless unsafe.");
+      parts.push("The user asked for an image. Set media.type to image_simple or image_complex unless unsafe.");
     }
     if (userRequestedVideo && videoGenerationAvailable) {
-      parts.push("The user asked for a video. Include VIDEO_PROMPT unless unsafe or disallowed.");
+      parts.push("The user asked for a video. Set media.type=video unless unsafe or disallowed.");
     }
-    parts.push(
-      "Keep IMAGE_PROMPT, COMPLEX_IMAGE_PROMPT, and VIDEO_PROMPT concise (under 240 chars), and always include normal reply text."
-    );
+    parts.push("Keep image/video media prompts concise (under 240 chars), and always include normal reply text.");
   } else {
     parts.push("Reply image/video generation is unavailable right now. Respond with text only.");
+    parts.push("Set media to null.");
     if (userRequestedImage || userRequestedVideo) {
       parts.push("The user asked for generated media. Briefly acknowledge the limit in your text reply.");
     }
@@ -455,38 +448,42 @@ export function buildReplyPrompt({
     parts.push(`Reply GIF lookup is available (${remainingGifs} GIF lookup(s) left in the rolling 24h budget).`);
     parts.push("GIF replies are supported right now.");
     parts.push("Do not claim you cannot send GIFs and do not claim you are text-only.");
-    parts.push(
-      "If a GIF should be sent, append one final line exactly in this format: [[GIF_QUERY: short search query]]"
-    );
-    parts.push("Use GIF_QUERY only when a reaction GIF genuinely improves the reply.");
-    parts.push("Keep GIF_QUERY concise (under 120 chars), and always include normal reply text.");
+    parts.push("If a GIF should be sent, set media to {\"type\":\"gif\",\"prompt\":\"short search query\"}.");
+    parts.push("Use media.type=gif only when a reaction GIF genuinely improves the reply.");
+    parts.push("Keep GIF media prompts concise (under 120 chars), and always include normal reply text.");
   } else if (gifRepliesEnabled && !gifsConfigured) {
     parts.push("Reply GIF lookup is unavailable right now (missing GIPHY configuration).");
-    parts.push("Do not output GIF_QUERY.");
+    parts.push("Do not set media.type=gif.");
   } else if (gifRepliesEnabled) {
     parts.push("Reply GIF lookup is unavailable right now (24h GIF budget exhausted).");
-    parts.push("Do not output GIF_QUERY.");
+    parts.push("Do not set media.type=gif.");
   }
 
   if (anyVisualGeneration || (allowReplyGifs && remainingGifs > 0)) {
-    parts.push(
-      "If you use media directives, output at most one: IMAGE_PROMPT, COMPLEX_IMAGE_PROMPT, VIDEO_PROMPT, or GIF_QUERY."
-    );
+    parts.push("Set at most one media object for this reply.");
   }
 
   if (allowMemoryDirective) {
+    parts.push("If the incoming message contains durable info worth keeping, set memoryLine to a concise fact.");
     parts.push(
-      "If the incoming message contains durable info worth keeping, append one final line exactly in this format: [[MEMORY_LINE: concise memory line]]"
+      "Use memoryLine only for lasting facts (names, preferences, recurring relationships, long-lived context), not throwaway chatter."
     );
-    parts.push(
-      "Use MEMORY_LINE only for lasting facts (names, preferences, recurring relationships, long-lived context), not throwaway chatter."
-    );
-    parts.push("Keep MEMORY_LINE concise (under 180 chars) and factual.");
+    parts.push("Keep memoryLine concise (under 180 chars) and factual.");
   }
 
   parts.push("Task: write one natural Discord reply to the incoming message.");
-  parts.push("You may output both a normal reply and REACTION directive, or [SKIP] with optional REACTION.");
-  parts.push("If no response is needed, output exactly [SKIP].");
+  parts.push("Return strict JSON only. Do not output markdown or code fences.");
+  parts.push("JSON format:");
+  parts.push(
+    "{\"text\":\"reply or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"memoryLine\":null,\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null}}"
+  );
+  parts.push("Set skip=true only when no response should be sent. If skip=true, set text to [SKIP].");
+  parts.push("When no reaction is needed, set reactionEmoji to null.");
+  parts.push("When no media should be generated, set media to null.");
+  parts.push("When no lookup is needed, set webSearchQuery and memoryLookupQuery to null.");
+  parts.push("When no durable fact should be saved, set memoryLine to null.");
+  parts.push("Set voiceIntent.intent to one of join|leave|status|none.");
+  parts.push("When not issuing voice control, set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null.");
 
   return parts.join("\n\n");
 }
