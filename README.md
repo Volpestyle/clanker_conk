@@ -13,7 +13,8 @@ Features:
 - Optional Grok Imagine image/video generation for complex visuals and clips.
 - Video link understanding for YouTube/TikTok/embedded video links (captions first, optional ASR fallback, optional keyframes).
 - NL-controlled Discord voice sessions (join/leave/status) with session limits and runtime guards.
-- Voice runtime mode selector: `voice_agent` (xAI realtime low latency), `openai_realtime` (OpenAI Realtime low latency), or `stt_pipeline` (STT -> shared chat LLM brain -> TTS).
+- Voice runtime mode selector: `voice_agent` (xAI realtime), `openai_realtime` (OpenAI Realtime), `gemini_realtime` (Gemini Live API), or `stt_pipeline` (STT -> shared chat LLM brain -> TTS).
+- Stream-watch voice controls (`watch_stream`, `stop_watching_stream`, `stream_status`) with external frame ingest path.
 - Dashboard UI for settings, permissions, logs, memory, and cost tracking.
 - Two-layer memory with append-only daily logs and curated `memory/MEMORY.md` distillation.
 
@@ -27,9 +28,10 @@ npm install
 
 Fill `.env`:
 - `DISCORD_TOKEN`: your bot token.
-- `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and/or `XAI_API_KEY`.
+- `OPENAI_API_KEY`, `GOOGLE_API_KEY`, `ANTHROPIC_API_KEY`, and/or `XAI_API_KEY`.
 - `XAI_API_KEY`: required for Grok text models and `voice_agent` mode, and also used for Grok Imagine media generation.
 - `OPENAI_API_KEY`: required for `voice.openaiRealtime` mode and `voice.sttPipeline` mode.
+- `GOOGLE_API_KEY`: required for `voice.geminiRealtime` mode and stream-watch frame commentary.
 - `XAI_BASE_URL`: optional xAI API base URL override (default `https://api.x.ai/v1`).
 - Optional for live web search: `BRAVE_SEARCH_API_KEY` (primary) and/or `SERPAPI_API_KEY` (fallback).
 - Optional for model-directed GIF replies: `GIPHY_API_KEY` (and optional `GIPHY_RATING`, default `pg-13`).
@@ -95,7 +97,8 @@ Use dashboard to:
 - Enable/disable model-directed GIF replies and set GIF lookup budget.
 - Configure allowed image/video generation models, simple/complex image routing models, and per-24h media budgets.
 - Choose LLM provider + model.
-- Choose voice runtime mode (`voice_agent`, `openai_realtime`, or `stt_pipeline`) and tune provider-specific realtime/STT/TTS settings.
+- Choose voice runtime mode (`voice_agent`, `openai_realtime`, `gemini_realtime`, or `stt_pipeline`) and tune provider-specific realtime/STT/TTS settings.
+- Configure stream-watch ingest guardrails and use `/api/voice/stream-ingest/frame` for external frame relay.
 - Track accumulated API spend.
 - Inspect bot actions and memory.
 
@@ -111,4 +114,5 @@ Use dashboard to:
 - Architecture and flow diagrams: `docs/technical-architecture.md`
 - Initiative discovery product spec: `docs/initiative-discovery-spec.md`
 - Voice agent product spec: `docs/voice-agent-spec.md`
+- Gemini realtime + stream-watch spec: `docs/gemini-realitme-integration.md`
 - Web search v2 implementation spec: `docs/web-search-spec.md`
