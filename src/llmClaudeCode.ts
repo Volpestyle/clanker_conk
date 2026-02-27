@@ -1,5 +1,18 @@
 import { spawn } from "node:child_process";
 
+type ClaudeCliResult = {
+  stdout: string;
+  stderr: string;
+};
+
+type ClaudeCliError = Error & {
+  killed?: boolean;
+  signal?: string | null;
+  code?: number | null;
+  stdout?: string;
+  stderr?: string;
+};
+
 export function safeJsonParse(value, fallback = null) {
   try {
     return JSON.parse(String(value || ""));
@@ -9,7 +22,7 @@ export function safeJsonParse(value, fallback = null) {
 }
 
 export function runClaudeCli({ args, input, timeoutMs, maxBufferBytes }) {
-  return new Promise((resolve, reject) => {
+  return new Promise<ClaudeCliResult>((resolve, reject) => {
     const child = spawn("claude", args, { stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
@@ -18,12 +31,12 @@ export function runClaudeCli({ args, input, timeoutMs, maxBufferBytes }) {
     let settled = false;
     let timedOut = false;
 
-    const finish = (error, result) => {
+    const finish = (error: Error | null, result?: ClaudeCliResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
       if (error) reject(error);
-      else resolve(result);
+      else resolve(result || { stdout: "", stderr: "" });
     };
 
     const timeout = setTimeout(() => {
@@ -61,13 +74,13 @@ export function runClaudeCli({ args, input, timeoutMs, maxBufferBytes }) {
 
     child.on("close", (code, signal) => {
       if (timedOut) {
-        const error = new Error("claude CLI timeout");
+        const error = new Error("claude CLI timeout") as ClaudeCliError;
         error.killed = true;
         error.signal = signal || "SIGTERM";
         error.code = code;
         error.stdout = stdout;
         error.stderr = stderr;
-        finish(error);
+        finish(error, undefined);
         return;
       }
 
@@ -76,12 +89,12 @@ export function runClaudeCli({ args, input, timeoutMs, maxBufferBytes }) {
         return;
       }
 
-      const error = new Error(`Command failed: claude ${args.join(" ")}`);
+      const error = new Error(`Command failed: claude ${args.join(" ")}`) as ClaudeCliError;
       error.code = code;
       error.signal = signal;
       error.stdout = stdout;
       error.stderr = stderr;
-      finish(error);
+      finish(error, undefined);
     });
 
     child.stdin.on("error", () => {});

@@ -20,6 +20,25 @@ const TRANSCRIPT_TYPES = new Set([
 ]);
 
 export class OpenAiRealtimeClient extends EventEmitter {
+  apiKey;
+  baseUrl;
+  logger;
+  ws;
+  connectedAt;
+  lastEventAt;
+  lastError;
+  sessionId;
+  lastCloseCode;
+  lastCloseReason;
+  lastOutboundEventType;
+  lastOutboundEventAt;
+  lastOutboundEvent;
+  recentOutboundEvents;
+  sessionConfig;
+  activeResponseId;
+  activeResponseStatus;
+  latestVideoFrame;
+
   constructor({ apiKey, baseUrl = DEFAULT_OPENAI_BASE_URL, logger = null }) {
     super();
     this.apiKey = String(apiKey || "").trim();

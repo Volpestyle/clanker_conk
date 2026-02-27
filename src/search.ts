@@ -22,8 +22,36 @@ const RETRYABLE_FETCH_ERROR_CODES = new Set([
 ]);
 const SEARCH_USER_AGENT =
   "clanker-conk/0.2 (+web-search-v2; https://github.com/Volpestyle/clanker_conk)";
+type ProviderSearchInput = {
+  query: string;
+  maxResults: number;
+  recencyDays: number;
+  safeSearch: boolean;
+};
+
+type ProviderSearchRow = {
+  url: string;
+  provider?: string | null;
+  [key: string]: string | number | boolean | null | undefined;
+};
+
+type ProviderSearchResult = {
+  results: ProviderSearchRow[];
+};
+
+class AttemptError extends Error {
+  attempts;
+
+  constructor(message, attempts) {
+    super(message);
+    this.attempts = Number(attempts || 1);
+  }
+}
 
 export class WebSearchService {
+  store;
+  providers;
+
   constructor({ appConfig, store }) {
     this.store = store;
     this.providers = buildProviders(appConfig);
@@ -33,7 +61,11 @@ export class WebSearchService {
     return this.providers.some((provider) => provider.isConfigured());
   }
 
-  async searchAndRead({ settings, query, trace = {} }) {
+  async searchAndRead({
+    settings,
+    query,
+    trace = { guildId: null, channelId: null, userId: null, source: null }
+  }) {
     const config = normalizeWebSearchConfig(settings?.webSearch);
     const normalizedQuery = sanitizeExternalText(query, 220);
     if (!normalizedQuery) {
@@ -178,16 +210,12 @@ export class WebSearchService {
     });
 
     if (!response.ok) {
-      const error = new Error(`page fetch HTTP ${response.status}`);
-      error.attempts = attempts;
-      throw error;
+      throw new AttemptError(`page fetch HTTP ${response.status}`, attempts);
     }
 
     const finalUrl = normalizeSearchUrl(response.url);
     if (!finalUrl) {
-      const error = new Error(`redirected to blocked URL: ${response.url}`);
-      error.attempts = attempts;
-      throw error;
+      throw new AttemptError(`redirected to blocked URL: ${response.url}`, attempts);
     }
     await assertPublicUrl(finalUrl);
 
@@ -197,24 +225,18 @@ export class WebSearchService {
       !contentType.includes("text/html") &&
       !contentType.includes("text/plain")
     ) {
-      const error = new Error(`unsupported content type: ${contentType || "unknown"}`);
-      error.attempts = attempts;
-      throw error;
+      throw new AttemptError(`unsupported content type: ${contentType || "unknown"}`, attempts);
     }
 
     const raw = await readResponseBodyLimited(response, MAX_RESPONSE_BYTES);
     if (!raw) {
-      const error = new Error("empty page response");
-      error.attempts = attempts;
-      throw error;
+      throw new AttemptError("empty page response", attempts);
     }
 
     if (contentType.includes("text/plain")) {
       const summary = sanitizeExternalText(raw, maxChars);
       if (!summary) {
-        const error = new Error("page text had no usable content");
-        error.attempts = attempts;
-        throw error;
+        throw new AttemptError("page text had no usable content", attempts);
       }
 
       return {
@@ -227,9 +249,7 @@ export class WebSearchService {
 
     const extraction = extractReadableContent(raw, maxChars);
     if (!extraction.summary) {
-      const error = new Error("HTML page had no usable text");
-      error.attempts = attempts;
-      throw error;
+      throw new AttemptError("HTML page had no usable text", attempts);
     }
 
     return {
@@ -266,7 +286,7 @@ function buildProviders(appConfig) {
   ];
 }
 
-function resolveProviderOrder(providers, configuredOrder) {
+function resolveProviderOrder(providers = [], configuredOrder) {
   const desired = Array.isArray(configuredOrder) && configuredOrder.length
     ? configuredOrder
     : ["brave", "serpapi"];
@@ -285,6 +305,9 @@ function resolveProviderOrder(providers, configuredOrder) {
 }
 
 class BraveSearchProvider {
+  name;
+  apiKey;
+
   constructor(appConfig) {
     this.name = "brave";
     this.apiKey = String(appConfig?.braveSearchApiKey || "").trim();
@@ -294,7 +317,7 @@ class BraveSearchProvider {
     return Boolean(this.apiKey);
   }
 
-  async search(input) {
+  async search(input: ProviderSearchInput): Promise<ProviderSearchResult> {
     const endpoint = new URL(BRAVE_SEARCH_API_URL);
     endpoint.searchParams.set("q", input.query);
     endpoint.searchParams.set("count", String(clamp(Number(input.maxResults) || 5, 1, 10)));
@@ -319,6 +342,9 @@ class BraveSearchProvider {
 }
 
 class SerpApiSearchProvider {
+  name;
+  apiKey;
+
   constructor(appConfig) {
     this.name = "serpapi";
     this.apiKey = String(appConfig?.serpApiKey || "").trim();
@@ -328,7 +354,7 @@ class SerpApiSearchProvider {
     return Boolean(this.apiKey);
   }
 
-  async search(input) {
+  async search(input: ProviderSearchInput): Promise<ProviderSearchResult> {
     const endpoint = new URL(SERPAPI_SEARCH_API_URL);
     endpoint.searchParams.set("engine", "google");
     endpoint.searchParams.set("q", input.query);
@@ -366,9 +392,7 @@ async function fetchSearchPayload({ endpoint, headers, requestLabel, invalidJson
   });
 
   if (!response.ok) {
-    const error = new Error(`${String(requestLabel || "Search")} HTTP ${response.status}`);
-    error.attempts = attempts;
-    throw error;
+    throw new AttemptError(`${String(requestLabel || "Search")} HTTP ${response.status}`, attempts);
   }
 
   return await safeJson(response, attempts, invalidJsonMessage);
@@ -483,17 +507,13 @@ function isRetryableFetchError(error) {
 }
 
 function withAttemptCount(error, attempts) {
-  if (error && typeof error === "object") {
-    try {
-      error.attempts = Number(attempts || 1);
-      return error;
-    } catch {
-      // noop
-    }
+  if (error instanceof AttemptError) {
+    error.attempts = Number(attempts || 1);
+    return error;
   }
 
-  const wrapped = new Error(String(error?.message || error || "unknown error"));
-  wrapped.attempts = Number(attempts || 1);
+  const wrapped = new AttemptError(String(error?.message || error || "unknown error"), attempts);
+  if (error instanceof Error && error.stack) wrapped.stack = error.stack;
   return wrapped;
 }
 
@@ -513,9 +533,7 @@ async function safeJson(response, attempts, errorMessage) {
   try {
     return await response.json();
   } catch {
-    const error = new Error(errorMessage);
-    error.attempts = attempts;
-    throw error;
+    throw new AttemptError(errorMessage, attempts);
   }
 }
 

@@ -6,8 +6,18 @@ const GIF_USER_AGENT =
   "clanker-conk/0.1 (+gif-search; https://github.com/Volpestyle/clanker_conk)";
 const MAX_GIF_QUERY_LEN = 120;
 const GIPHY_ALLOWED_RATINGS = new Set(["g", "pg", "pg-13", "r"]);
+type GifTrace = {
+  guildId?: string | null;
+  channelId?: string | null;
+  userId?: string | null;
+  source?: string | null;
+};
 
 export class GifService {
+  store;
+  apiKey;
+  rating;
+
   constructor({ appConfig, store }) {
     this.store = store;
     this.apiKey = String(appConfig?.giphyApiKey || "").trim();
@@ -18,7 +28,7 @@ export class GifService {
     return Boolean(this.apiKey);
   }
 
-  async pickGif({ query, trace = {} }) {
+  async pickGif({ query, trace = {} as GifTrace }) {
     if (!this.isConfigured()) {
       throw new Error("GIPHY GIF search is not configured. Set GIPHY_API_KEY.");
     }

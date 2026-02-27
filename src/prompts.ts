@@ -285,7 +285,10 @@ export function buildReplyPrompt({
     } else {
       parts.push(`Memory lookup results for "${memoryLookup.query || message?.content || ""}":`);
       parts.push(formatMemoryLookupResults(memoryLookup.results));
-      parts.push("If useful, cite memory hits inline as [M1], [M2], etc.");
+      parts.push("Reference memory naturally without source tags by default.");
+      parts.push(
+        "Only cite memory hits inline as [M1], [M2], etc. when the user explicitly asks for memory citations, sources, or proof."
+      );
     }
   }
 

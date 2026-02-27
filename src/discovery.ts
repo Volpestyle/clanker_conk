@@ -61,6 +61,8 @@ const SOURCE_WEIGHTS = {
 };
 
 export class DiscoveryService {
+  store;
+
   constructor({ store }) {
     this.store = store;
   }

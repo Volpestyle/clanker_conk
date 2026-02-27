@@ -115,6 +115,19 @@ const SOUNDBOARD_DECISION_TRANSCRIPT_MAX_CHARS = 280;
 const SOUNDBOARD_CATALOG_REFRESH_MS = 60_000;
 
 export class VoiceSessionManager {
+  client;
+  store;
+  appConfig;
+  llm;
+  memory;
+  composeOperationalMessage;
+  generateVoiceTurn;
+  sessions;
+  pendingSessionGuildIds;
+  joinLocks;
+  soundboardDirector;
+  onVoiceStateUpdate;
+
   constructor({
     client,
     store,

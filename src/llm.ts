@@ -31,6 +31,16 @@ const XAI_VIDEO_TIMEOUT_MS = 4 * 60_000;
 const XAI_REQUEST_TIMEOUT_MS = 20_000;
 const XAI_VIDEO_DONE_STATUSES = new Set(["done", "completed", "succeeded", "success", "ready"]);
 const XAI_VIDEO_FAILED_STATUSES = new Set(["failed", "error", "cancelled", "canceled"]);
+type XaiJsonPrimitive = string | number | boolean | null;
+type XaiJsonValue = XaiJsonPrimitive | XaiJsonRecord | XaiJsonValue[];
+type XaiJsonRecord = {
+  [key: string]: XaiJsonValue;
+};
+
+type XaiJsonRequestOptions = {
+  method?: string;
+  body?: XaiJsonRecord | null;
+};
 const MEMORY_EXTRACTION_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -54,6 +64,13 @@ const MEMORY_EXTRACTION_SCHEMA = {
 };
 
 export class LLMService {
+  appConfig;
+  store;
+  openai;
+  xai;
+  anthropic;
+  claudeCodeAvailable;
+
   constructor({ appConfig, store }) {
     this.appConfig = appConfig;
     this.store = store;
@@ -85,7 +102,15 @@ export class LLMService {
     userPrompt,
     imageInputs = [],
     contextMessages = [],
-    trace = {},
+    trace = {
+      guildId: null,
+      channelId: null,
+      userId: null,
+      source: null,
+      event: null,
+      reason: null,
+      messageId: null
+    },
     jsonSchema = ""
   }) {
     const { provider, model } = this.resolveProviderAndModel(settings?.llm ?? {});
@@ -139,8 +164,8 @@ export class LLMService {
         model,
         inputTokens: response.usage.inputTokens,
         outputTokens: response.usage.outputTokens,
-        cacheWriteTokens: response.usage.cacheWriteTokens,
-        cacheReadTokens: response.usage.cacheReadTokens,
+        cacheWriteTokens: Number(response.usage.cacheWriteTokens || 0),
+        cacheReadTokens: Number(response.usage.cacheReadTokens || 0),
         customPricing: settings?.llm?.pricing
       });
 
@@ -191,7 +216,15 @@ export class LLMService {
     authorName,
     messageContent,
     maxFacts = 3,
-    trace = {}
+    trace = {
+      guildId: null,
+      channelId: null,
+      userId: null,
+      source: null,
+      event: null,
+      reason: null,
+      messageId: null
+    }
   }) {
     const inputText = normalizeInlineText(messageContent, 900);
     if (!inputText || inputText.length < 4) return [];
@@ -313,7 +346,9 @@ export class LLMService {
       text,
       usage: {
         inputTokens: Number(response.usage?.prompt_tokens || 0),
-        outputTokens: Number(response.usage?.completion_tokens || 0)
+        outputTokens: Number(response.usage?.completion_tokens || 0),
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0
       }
     };
   }
@@ -339,7 +374,9 @@ export class LLMService {
       text,
       usage: {
         inputTokens: Number(response.usage?.prompt_tokens || 0),
-        outputTokens: Number(response.usage?.completion_tokens || 0)
+        outputTokens: Number(response.usage?.completion_tokens || 0),
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0
       }
     };
   }
@@ -562,7 +599,11 @@ export class LLMService {
     return Boolean(this.openai);
   }
 
-  async embedText({ settings, text, trace = {} }) {
+  async embedText({
+    settings,
+    text,
+    trace = { guildId: null, channelId: null, userId: null, source: null }
+  }) {
     if (!this.openai) {
       throw new Error("Embeddings require OPENAI_API_KEY.");
     }
@@ -597,6 +638,8 @@ export class LLMService {
         model,
         inputTokens,
         outputTokens: 0,
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0,
         customPricing: settings?.llm?.pricing
       });
 
@@ -644,7 +687,12 @@ export class LLMService {
     return DEFAULT_MEMORY_EMBEDDING_MODEL;
   }
 
-  async generateImage({ settings, prompt, variant = "simple", trace = {} }) {
+  async generateImage({
+    settings,
+    prompt,
+    variant = "simple",
+    trace = { guildId: null, channelId: null, userId: null, source: null }
+  }) {
     const target = this.resolveImageGenerationTarget(settings, variant);
     if (!target) {
       throw new Error("Image generation is unavailable (missing API key or no allowed image model).");
@@ -735,7 +783,11 @@ export class LLMService {
     }
   }
 
-  async generateVideo({ settings, prompt, trace = {} }) {
+  async generateVideo({
+    settings,
+    prompt,
+    trace = { guildId: null, channelId: null, userId: null, source: null }
+  }) {
     const target = this.resolveVideoGenerationTarget(settings);
     if (!target) {
       throw new Error("Video generation is unavailable (missing XAI_API_KEY or no allowed xAI video model).");
@@ -852,7 +904,8 @@ export class LLMService {
     }
   }
 
-  async fetchXaiJson(url, { method = "GET", body } = {}, timeoutMs = XAI_REQUEST_TIMEOUT_MS) {
+  async fetchXaiJson(url, options: XaiJsonRequestOptions = {}, timeoutMs = XAI_REQUEST_TIMEOUT_MS) {
+    const { method = "GET", body } = options;
     if (!this.appConfig?.xaiApiKey) {
       throw new Error("Missing XAI_API_KEY.");
     }
@@ -967,7 +1020,11 @@ export class LLMService {
     return Boolean(this.openai);
   }
 
-  async transcribeAudio({ filePath, model = "gpt-4o-mini-transcribe", trace = {} }) {
+  async transcribeAudio({
+    filePath,
+    model = "gpt-4o-mini-transcribe",
+    trace = { guildId: null, channelId: null, userId: null, source: null }
+  }) {
     if (!this.openai) {
       throw new Error("ASR fallback requires OPENAI_API_KEY.");
     }
@@ -1023,7 +1080,7 @@ export class LLMService {
     voice = "alloy",
     speed = 1,
     responseFormat = "pcm",
-    trace = {}
+    trace = { guildId: null, channelId: null, userId: null, source: null }
   }) {
     if (!this.openai) {
       throw new Error("Speech synthesis requires OPENAI_API_KEY.");
@@ -1254,7 +1311,9 @@ export class LLMService {
       text,
       usage: {
         inputTokens: Number(response.usage?.prompt_tokens || 0),
-        outputTokens: Number(response.usage?.completion_tokens || 0)
+        outputTokens: Number(response.usage?.completion_tokens || 0),
+        cacheWriteTokens: 0,
+        cacheReadTokens: 0
       }
     };
   }
