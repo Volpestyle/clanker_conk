@@ -91,6 +91,34 @@ test("parseStructuredReplyOutput accepts stream watch voice intents", () => {
   assert.equal(parsed.voiceIntent.reason, "explicit stream watch request");
 });
 
+test("parseStructuredReplyOutput accepts screen share offer intent", () => {
+  const parsed = parseStructuredReplyOutput(
+    JSON.stringify({
+      text: "i can peek your setup",
+      skip: false,
+      reactionEmoji: null,
+      media: null,
+      webSearchQuery: null,
+      memoryLookupQuery: null,
+      memoryLine: null,
+      voiceIntent: {
+        intent: "none",
+        confidence: 0,
+        reason: null
+      },
+      screenShareIntent: {
+        action: "offer_link",
+        confidence: 0.88,
+        reason: "needs visual context"
+      }
+    })
+  );
+
+  assert.equal(parsed.screenShareIntent.action, "offer_link");
+  assert.equal(parsed.screenShareIntent.confidence, 0.88);
+  assert.equal(parsed.screenShareIntent.reason, "needs visual context");
+});
+
 test("parseStructuredReplyOutput normalizes invalid voice intent payload", () => {
   const parsed = parseStructuredReplyOutput(
     JSON.stringify({

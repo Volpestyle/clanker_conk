@@ -202,6 +202,7 @@ export function buildReplyPrompt({
   allowAutomationDirective = false,
   automationTimeZoneLabel = "",
   voiceMode = null,
+  screenShare = null,
   videoContext = null,
   maxMediaPromptChars = 900
 }) {
@@ -320,6 +321,29 @@ export function buildReplyPrompt({
     parts.push("Voice mode is disabled right now.");
     parts.push("If asked to join VC, say voice mode is currently disabled.");
     parts.push("Set voiceIntent.intent to none.");
+  }
+
+  const screenShareEnabled = Boolean(screenShare?.enabled);
+  if (screenShareEnabled) {
+    const status = String(screenShare?.status || "ready").trim().toLowerCase();
+    if (status === "ready") {
+      parts.push("You can offer a secure temporary screen-share link when useful.");
+      parts.push(
+        "If the user asks you to see/watch their screen or stream, set screenShareIntent.action to offer_link."
+      );
+      parts.push(
+        "If visual context would materially improve troubleshooting/help, you may proactively set screenShareIntent.action to offer_link."
+      );
+      parts.push(
+        "Set screenShareIntent.confidence from 0 to 1. Use high confidence only when a share link is clearly useful."
+      );
+    } else {
+      parts.push("Screen-share links are currently unavailable because public HTTPS is not ready.");
+      parts.push("Set screenShareIntent.action to none.");
+    }
+  } else {
+    parts.push("Screen-share links are disabled.");
+    parts.push("Set screenShareIntent.action to none.");
   }
 
   if (allowAutomationDirective) {
@@ -496,7 +520,7 @@ export function buildReplyPrompt({
   parts.push("Return strict JSON only. Do not output markdown or code fences.");
   parts.push("JSON format:");
   parts.push(
-    "{\"text\":\"reply or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"memoryLine\":null,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null}}"
+    "{\"text\":\"reply or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"memoryLine\":null,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
   );
   parts.push("Set skip=true only when no response should be sent. If skip=true, set text to [SKIP].");
   parts.push("When no reaction is needed, set reactionEmoji to null.");
@@ -506,6 +530,8 @@ export function buildReplyPrompt({
   parts.push("When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.");
   parts.push("Set voiceIntent.intent to one of join|leave|status|watch_stream|stop_watching_stream|stream_status|none.");
   parts.push("When not issuing voice control, set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null.");
+  parts.push("Set screenShareIntent.action to one of offer_link|none.");
+  parts.push("When not offering a share link, set screenShareIntent.action=none, screenShareIntent.confidence=0, screenShareIntent.reason=null.");
 
   return parts.join("\n\n");
 }

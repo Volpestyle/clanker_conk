@@ -7,10 +7,27 @@ const asNumber = (value, fallback) => {
   return Number.isFinite(parsed) ? parsed : fallback;
 };
 
+const asBoolean = (value, fallback = false) => {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) return Boolean(fallback);
+  if (["1", "true", "yes", "on"].includes(normalized)) return true;
+  if (["0", "false", "no", "off"].includes(normalized)) return false;
+  return Boolean(fallback);
+};
+
 export const appConfig = {
   discordToken: process.env.DISCORD_TOKEN ?? "",
   dashboardPort: asNumber(process.env.DASHBOARD_PORT, 8787),
+  dashboardHost: normalizeDashboardHost(process.env.DASHBOARD_HOST),
   dashboardToken: process.env.DASHBOARD_TOKEN ?? "",
+  publicApiToken: process.env.PUBLIC_API_TOKEN ?? "",
+  publicHttpsEnabled: asBoolean(process.env.PUBLIC_HTTPS_ENABLED, false),
+  publicHttpsProvider: normalizePublicHttpsProvider(process.env.PUBLIC_HTTPS_PROVIDER),
+  publicHttpsTargetUrl: process.env.PUBLIC_HTTPS_TARGET_URL ?? "",
+  publicHttpsCloudflaredBin: process.env.PUBLIC_HTTPS_CLOUDFLARED_BIN ?? "cloudflared",
+  publicShareSessionTtlMinutes: asNumber(process.env.PUBLIC_SHARE_SESSION_TTL_MINUTES, 12),
   openaiApiKey: process.env.OPENAI_API_KEY ?? "",
   geminiApiKey: process.env.GOOGLE_API_KEY ?? "",
   anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
@@ -42,4 +59,17 @@ function normalizeDefaultProvider(value) {
   if (normalized === "xai") return "xai";
   if (normalized === "claude-code") return "claude-code";
   return "openai";
+}
+
+function normalizePublicHttpsProvider(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "cloudflared") return "cloudflared";
+  return "cloudflared";
+}
+
+function normalizeDashboardHost(value) {
+  const normalized = String(value || "").trim();
+  return normalized || "127.0.0.1";
 }

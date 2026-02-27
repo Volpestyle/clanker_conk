@@ -9,13 +9,15 @@ Code entrypoint:
 
 Core runtime:
 - `src/bot.ts`: Discord event handling, reply/react logic, initiative scheduling, and posting.
-- `src/llm.ts`: model provider abstraction (OpenAI, Anthropic, or xAI/Grok), usage + cost logging, embeddings, image generation.
+- `src/llm.ts`: model provider abstraction (OpenAI, Anthropic, xAI/Grok, or Claude Code), usage + cost logging, embeddings, image/video generation, ASR, and TTS.
 - `src/memory.ts`: append-only daily journaling + LLM-based fact extraction + hybrid memory retrieval (lexical + vector).
 - `src/discovery.ts`: external link discovery for initiative posts.
 - `src/store.ts`: SQLite persistence and settings normalization.
+- `src/publicHttpsEntrypoint.ts`: optional Cloudflare Quick Tunnel runtime for exposing local dashboard/API over public HTTPS.
+- `src/screenShareSessionManager.ts`: tokenized browser screen-share session lifecycle and frame relay into voice stream-watch ingest.
 
 Control plane:
-- `src/dashboard.ts`: REST API and static dashboard hosting.
+- `src/dashboard.ts`: REST API and static dashboard hosting, including tunnel-host public/private route gating.
 - `dashboard/src/*`: React dashboard (polling stats/actions/memory/settings and writing settings back).
 
 Storage:
@@ -35,6 +37,8 @@ sequenceDiagram
     participant Disc as DiscoveryService
     participant Bot as ClankerBot
     participant Dash as DashboardServer
+    participant Pub as PublicHttpsEntrypoint
+    participant Scr as ScreenShareSessionManager
     participant Discord as Discord API
 
     Proc->>Store: init() (create tables + default settings)
@@ -44,6 +48,8 @@ sequenceDiagram
     Proc->>Bot: new ClankerBot(...)
     Proc->>Dash: createDashboardServer(...)
     Proc->>Bot: start()
+    Proc->>Pub: start() (optional cloudflared tunnel)
+    Proc->>Scr: initialize tokenized share-session manager
     Bot->>Discord: login()
     Bot->>Bot: start memory timer (5m)
     Bot->>Bot: start initiative timer (60s tick)
@@ -98,12 +104,16 @@ erDiagram
     MEMORY_FACTS {
         int id PK
         datetime created_at
+        datetime updated_at
+        string guild_id
+        string channel_id
         string subject
         string fact
         string fact_type
         string evidence_text
         string source_message_id
         float confidence
+        int is_active
     }
 
     MEMORY_FACT_VECTORS_NATIVE {
@@ -288,13 +298,16 @@ Dashboard writes:
 
 ## 9. Action Log Kinds
 
-Observed `actions.kind` values:
-- Messaging: `sent_reply`, `sent_message`, `initiative_post`
-- Reactions: `reacted`
-- LLM: `llm_call`, `llm_error`
-- Image: `image_call`, `image_error`
-- Memory: `memory_fact`
-- Errors: `bot_error`
+Common `actions.kind` values in current runtime:
+- Messaging/initiative: `sent_reply`, `sent_message`, `reply_skipped`, `initiative_post`, `automation_post`
+- Reactions: `reacted`, `voice_soundboard_play`
+- LLM + media generation: `llm_call`, `llm_error`, `image_call`, `image_error`, `video_call`, `video_error`, `gif_call`, `gif_error`
+- Memory pipeline: `memory_fact`, `memory_extract_call`, `memory_extract_error`, `memory_embedding_call`, `memory_embedding_error`, `memory_migration`
+- Search + video context: `search_call`, `search_error`, `video_context_call`, `video_context_error`
+- Voice runtime: `voice_session_start`, `voice_session_end`, `voice_turn_in`, `voice_turn_out`, `voice_runtime`, `voice_intent_detected`, `voice_error`
+- Speech services: `asr_call`, `asr_error`, `tts_call`, `tts_error`
+- Automation updates: `automation_created`, `automation_updated`
+- Generic failures: `bot_error`
 
 These power the activity stream and metrics/cost widgets in the dashboard.
 
