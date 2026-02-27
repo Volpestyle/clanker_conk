@@ -1,0 +1,26 @@
+sequenceDiagram
+    autonumber
+    participant Proc as Node Process
+    participant Store as Store (SQLite)
+    participant Memory as MemoryManager
+    participant LLM as LLMService
+    participant Disc as DiscoveryService
+    participant Bot as ClankerBot
+    participant Dash as DashboardServer
+    participant Pub as PublicHttpsEntrypoint
+    participant Scr as ScreenShareSessionManager
+    participant Discord as Discord API
+
+    Proc->>Store: init() (create tables + default settings)
+    Proc->>LLM: new LLMService()
+    Proc->>Disc: new DiscoveryService()
+    Proc->>Memory: refreshMemoryMarkdown() (curation pass)
+    Proc->>Bot: new ClankerBot(...)
+    Proc->>Dash: createDashboardServer(...)
+    Proc->>Bot: start()
+    Proc->>Pub: start() (optional cloudflared tunnel)
+    Proc->>Scr: initialize tokenized share-session manager
+    Bot->>Discord: login()
+    Bot->>Bot: start memory timer (5m)
+    Bot->>Bot: start initiative timer (60s tick)
+    Bot->>Bot: schedule startup tasks (~4.5s delay)

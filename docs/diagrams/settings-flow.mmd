@@ -1,0 +1,14 @@
+sequenceDiagram
+    autonumber
+    participant UI as Dashboard UI
+    participant API as /api/settings
+    participant Store as Store
+    participant Bot as ClankerBot
+
+    UI->>API: PUT settings patch
+    API->>Store: patchSettings(patch)
+    Store->>Store: deepMerge + normalizeSettings
+    Store->>Store: UPDATE settings JSON
+    API-->>UI: normalized settings
+    Bot->>Store: getSettings() on next event/tick
+    Store-->>Bot: latest config

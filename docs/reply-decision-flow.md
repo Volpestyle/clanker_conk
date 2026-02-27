@@ -43,14 +43,22 @@ So text keeps a second backstop: policy gate first, then model-level skip.
 
 So voice is stricter on admission in realtime modes, while STT mode mirrors text more closely with an extra `[SKIP]` backstop.
 
-## 3) Config semantics
+## 3) Text dispatch mode
+
+After text Stage A/B resolves to "send":
+
+- Direct/force turns are sent as threaded replies.
+- Non-addressed turns are sent as channel-level messages (`sent_message`), including in non-initiative channels.
+- In initiative channels, direct/force turns may still be sent as replies or channel-level messages.
+
+## 4) Config semantics
 
 - `activity.replyLevelInitiative` and `activity.replyLevelNonInitiative` are **eagerness signals**, not literal random percentages.
 - `permissions.allowInitiativeReplies` controls whether non-addressed text turns can enter Stage A.
 - `replyFollowupLlm` (optional) can override provider/model for text follow-up regeneration passes.
 - `voice.replyEagerness` biases the voice decision gate for non-direct turns.
 
-## 4) Observability
+## 5) Observability
 
 Useful logs for tuning:
 
