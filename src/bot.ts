@@ -51,7 +51,9 @@ import {
 import {
   createAutomationControlRuntime,
   createMentionResolutionRuntime,
+  createReplyAdmissionRuntime,
   createReplyFollowupRuntime,
+  createStartupCatchupRuntime,
   createVoiceReplyRuntime
 } from "./bot/runtimeContexts.ts";
 import {
@@ -65,6 +67,13 @@ import {
   runModelRequestedMemoryLookup as runModelRequestedMemoryLookupForReplyFollowup,
   runModelRequestedWebSearch as runModelRequestedWebSearchForReplyFollowup
 } from "./bot/replyFollowup.ts";
+import {
+  getReplyAddressSignal as getReplyAddressSignalForReplyAdmission,
+  hasBotMessageInRecentWindow as hasBotMessageInRecentWindowForReplyAdmission,
+  hasStartupFollowupAfterMessage as hasStartupFollowupAfterMessageForReplyAdmission,
+  shouldAttemptReplyDecision as shouldAttemptReplyDecisionForReplyAdmission
+} from "./bot/replyAdmission.ts";
+import { runStartupCatchup as runStartupCatchupForStartupCatchup } from "./bot/startupCatchup.ts";
 import {
   composeVoiceOperationalMessage,
   generateVoiceTurnReply
@@ -2864,19 +2873,12 @@ export class ClankerBot {
     windowSize = UNSOLICITED_REPLY_CONTEXT_WINDOW,
     triggerMessageId = null
   }) {
-    const botId = String(this.client.user?.id || "").trim();
-    if (!botId) return false;
-    if (!Array.isArray(recentMessages) || !recentMessages.length) return false;
-
-    const excludedMessageId = String(triggerMessageId || "").trim();
-    const candidateMessages = excludedMessageId
-      ? recentMessages.filter((row) => String(row?.message_id || "").trim() !== excludedMessageId)
-      : recentMessages;
-
-    const cappedWindow = clamp(Math.floor(windowSize), 1, 50);
-    return candidateMessages
-      .slice(0, cappedWindow)
-      .some((row) => String(row?.author_id || "").trim() === botId);
+    return hasBotMessageInRecentWindowForReplyAdmission({
+      botUserId: this.client.user?.id,
+      recentMessages,
+      windowSize,
+      triggerMessageId
+    });
   }
 
   hasStartupFollowupAfterMessage({
@@ -2885,37 +2887,13 @@ export class ClankerBot {
     triggerMessageId,
     windowSize = UNSOLICITED_REPLY_CONTEXT_WINDOW
   }) {
-    const botId = String(this.client.user?.id || "").trim();
-    if (!botId) return false;
-    if (!Array.isArray(messages) || !messages.length) return false;
-    if (!Number.isInteger(messageIndex) || messageIndex < 0 || messageIndex >= messages.length) return false;
-
-    const triggerId = String(triggerMessageId || "").trim();
-    const startIndex = messageIndex + 1;
-
-    if (triggerId) {
-      for (let index = startIndex; index < messages.length; index += 1) {
-        const candidate = messages[index];
-        if (String(candidate?.author?.id || "").trim() !== botId) continue;
-
-        const referencedId = String(
-          candidate?.reference?.messageId || candidate?.referencedMessage?.id || ""
-        ).trim();
-        if (referencedId && referencedId === triggerId) {
-          return true;
-        }
-      }
-    }
-
-    const cappedWindow = clamp(Math.floor(windowSize), 1, 50);
-    const endIndex = Math.min(messages.length, startIndex + cappedWindow);
-    for (let index = startIndex; index < endIndex; index += 1) {
-      if (String(messages[index]?.author?.id || "").trim() === botId) {
-        return true;
-      }
-    }
-
-    return false;
+    return hasStartupFollowupAfterMessageForReplyAdmission({
+      botUserId: this.client.user?.id,
+      messages,
+      messageIndex,
+      triggerMessageId,
+      windowSize
+    });
   }
 
   shouldAttemptReplyDecision({
@@ -2925,41 +2903,20 @@ export class ClankerBot {
     forceRespond = false,
     triggerMessageId = null
   }) {
-    if (forceRespond || addressSignal?.triggered) return true;
-    if (!settings.permissions.allowInitiativeReplies) return false;
-    return this.hasBotMessageInRecentWindow({
+    return shouldAttemptReplyDecisionForReplyAdmission({
+      botUserId: this.client.user?.id,
+      settings,
       recentMessages,
-      windowSize: UNSOLICITED_REPLY_CONTEXT_WINDOW,
-      triggerMessageId
+      addressSignal,
+      forceRespond,
+      triggerMessageId,
+      windowSize: UNSOLICITED_REPLY_CONTEXT_WINDOW
     });
   }
 
   getReplyAddressSignal(settings, message, recentMessages = []) {
-    const referencedAuthorId = this.resolveReferencedAuthorId(message, recentMessages);
-    const direct =
-      this.isDirectlyAddressed(settings, message) ||
-      (referencedAuthorId && referencedAuthorId === this.client.user?.id);
-    return {
-      direct: Boolean(direct),
-      inferred: false,
-      triggered: Boolean(direct),
-      reason: direct ? "direct" : "llm_decides"
-    };
-  }
-
-  resolveReferencedAuthorId(message, recentMessages = []) {
-    const referenceId = String(message.reference?.messageId || "").trim();
-    if (!referenceId) return null;
-
-    const fromRecent = recentMessages.find((row) => String(row.message_id) === referenceId)?.author_id;
-    if (fromRecent) return String(fromRecent);
-
-    const fromResolved =
-      message.reference?.resolved?.author?.id ||
-      message.reference?.resolvedMessage?.author?.id ||
-      message.referencedMessage?.author?.id;
-
-    return fromResolved ? String(fromResolved) : null;
+    const runtime = createReplyAdmissionRuntime(this);
+    return getReplyAddressSignalForReplyAdmission(runtime, settings, message, recentMessages);
   }
 
   async runStartupTasks() {
@@ -2973,55 +2930,8 @@ export class ClankerBot {
   }
 
   async runStartupCatchup(settings) {
-    if (!settings.startup?.catchupEnabled) return;
-    if (!settings.permissions.allowReplies) return;
-
-    const channels = this.getStartupScanChannels(settings);
-    const lookbackMs = settings.startup.catchupLookbackHours * 60 * 60_000;
-    const maxMessages = settings.startup.catchupMaxMessagesPerChannel;
-    const maxRepliesPerChannel = settings.startup.maxCatchupRepliesPerChannel;
-    const now = Date.now();
-
-    for (const channel of channels) {
-      let repliesSent = 0;
-
-      const messages = await this.hydrateRecentMessages(channel, maxMessages);
-      for (let index = messages.length - 1; index >= 0; index -= 1) {
-        const message = messages[index];
-        if (repliesSent >= maxRepliesPerChannel) break;
-        if (
-          !message?.author ||
-          String(message.author.id || "") === String(this.client.user?.id || "")
-        ) continue;
-        if (!message.guild || !message.channel) continue;
-        if (!this.isChannelAllowed(settings, message.channelId)) continue;
-        if (this.isUserBlocked(settings, message.author.id)) continue;
-        const recentMessages = this.store.getRecentMessages(
-          message.channelId,
-          settings.memory.maxRecentMessages
-        );
-        const addressSignal = this.getReplyAddressSignal(settings, message, recentMessages);
-        if (!addressSignal.triggered) continue;
-        if (now - message.createdTimestamp > lookbackMs) continue;
-        if (this.store.hasTriggeredResponse(message.id)) continue;
-        if (
-          this.hasStartupFollowupAfterMessage({
-            messages,
-            messageIndex: index,
-            triggerMessageId: message.id
-          })
-        ) {
-          continue;
-        }
-        const queued = this.enqueueReplyJob({
-          message,
-          source: "startup_catchup",
-          forceRespond: true,
-          addressSignal
-        });
-        if (queued) repliesSent += 1;
-      }
-    }
+    const runtime = createStartupCatchupRuntime(this);
+    return await runStartupCatchupForStartupCatchup(runtime, settings);
   }
 
   async maybeRunAutomationCycle() {
