@@ -35,6 +35,7 @@ import {
   defaultExitMessage,
   encodePcm16MonoAsWav,
   ensureBotAudioPlaybackReady,
+  extractSoundboardDirective,
   findMentionedSoundboardReference,
   formatNaturalList,
   getRealtimeCommitMinimumBytes,
@@ -535,7 +536,16 @@ export class VoiceSessionManager {
 
         await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
 
-        const baseVoiceInstructions = this.buildVoiceInstructions(settings);
+        const initialSoundboardCandidateInfo = await this.resolveSoundboardCandidates({
+          settings,
+          guild: message.guild
+        });
+        const initialSoundboardCandidates = Array.isArray(initialSoundboardCandidateInfo?.candidates)
+          ? initialSoundboardCandidateInfo.candidates
+          : [];
+        const baseVoiceInstructions = this.buildVoiceInstructions(settings, {
+          soundboardCandidates: initialSoundboardCandidates
+        });
         if (runtimeMode === "voice_agent") {
           realtimeClient = new XaiRealtimeClient({
             apiKey: this.appConfig.xaiApiKey,
@@ -685,8 +695,17 @@ export class VoiceSessionManager {
           soundboard: {
             playCount: 0,
             lastPlayedAt: 0,
-            catalogCandidates: [],
-            catalogFetchedAt: 0
+            catalogCandidates:
+              String(initialSoundboardCandidateInfo?.source || "") === "guild_catalog"
+                ? initialSoundboardCandidates.slice(0, SOUNDBOARD_MAX_CANDIDATES)
+                : [],
+            catalogFetchedAt:
+              String(initialSoundboardCandidateInfo?.source || "") === "guild_catalog" ||
+              String(initialSoundboardCandidateInfo?.source || "") === "none"
+                ? now
+                : 0,
+            lastDirectiveKey: "",
+            lastDirectiveAt: 0
           },
           lastUnaddressedReplyAt: 0,
           baseVoiceInstructions,
@@ -1358,73 +1377,93 @@ export class VoiceSessionManager {
     }
   }
 
-  async maybeTriggerAutonomousSoundboard({
+  async maybeTriggerAssistantDirectedSoundboard({
     session,
     settings,
     userId = null,
     transcript = "",
+    requestedRef = "",
     source = "voice_transcript"
   }) {
     if (!session || session.ending) return;
-    if (!this.llm?.generate) return;
 
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
     if (!resolvedSettings?.voice?.soundboard?.enabled) return;
-    const candidateInfo = await this.resolveAutonomousSoundboardCandidates({
+    const normalizedRef = String(requestedRef || "").trim().slice(0, 180);
+    if (!normalizedRef) return;
+
+    const normalizedTranscript = normalizeVoiceText(transcript, SOUNDBOARD_DECISION_TRANSCRIPT_MAX_CHARS);
+    session.soundboard = session.soundboard || {
+      playCount: 0,
+      lastPlayedAt: 0,
+      catalogCandidates: [],
+      catalogFetchedAt: 0,
+      lastDirectiveKey: "",
+      lastDirectiveAt: 0
+    };
+
+    const directiveKey = [
+      String(source || "voice_transcript").trim().toLowerCase(),
+      normalizedRef.toLowerCase(),
+      String(normalizedTranscript || "").trim().toLowerCase()
+    ].join("|");
+    const now = Date.now();
+    if (
+      directiveKey &&
+      directiveKey === String(session.soundboard.lastDirectiveKey || "") &&
+      now - Number(session.soundboard.lastDirectiveAt || 0) < 6_000
+    ) {
+      return;
+    }
+    session.soundboard.lastDirectiveKey = directiveKey;
+    session.soundboard.lastDirectiveAt = now;
+
+    const candidateInfo = await this.resolveSoundboardCandidates({
       session,
       settings: resolvedSettings
     });
     const candidates = Array.isArray(candidateInfo?.candidates) ? candidateInfo.candidates : [];
     const candidateSource = String(candidateInfo?.source || "none");
-    if (!candidates.length) return;
-
-    const normalizedTranscript = normalizeVoiceText(transcript, SOUNDBOARD_DECISION_TRANSCRIPT_MAX_CHARS);
-    if (!normalizedTranscript || normalizedTranscript.length < 6) return;
-
-    session.soundboard = session.soundboard || {
-      playCount: 0,
-      lastPlayedAt: 0,
-      catalogCandidates: [],
-      catalogFetchedAt: 0
-    };
-
-    const decision = await this.decideAutonomousSoundboard({
-      session,
-      settings: resolvedSettings,
-      userId,
-      transcript: normalizedTranscript,
-      candidates
-    });
+    const byReference = matchSoundboardReference(candidates, normalizedRef);
+    const byMention = byReference ? null : findMentionedSoundboardReference(candidates, normalizedRef);
+    const byName =
+      byReference || byMention
+        ? null
+        : candidates.find((entry) => String(entry?.name || "").trim().toLowerCase() === normalizedRef.toLowerCase()) ||
+          candidates.find((entry) =>
+            String(entry?.name || "")
+              .trim()
+              .toLowerCase()
+              .includes(normalizedRef.toLowerCase())
+          );
+    const matched = byReference || byMention || byName || null;
 
     this.store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,
       channelId: session.textChannelId,
       userId: userId || this.client.user?.id || null,
-      content: "voice_soundboard_autonomy_decision",
+      content: "voice_soundboard_directive_decision",
       metadata: {
         sessionId: session.id,
         mode: session.mode,
         source: String(source || "voice_transcript"),
-        transcript: normalizedTranscript,
+        transcript: normalizedTranscript || null,
+        requestedRef: normalizedRef,
         candidateCount: candidates.length,
         candidateSource,
-        play: Boolean(decision.play),
-        reason: decision.reason || null,
-        selectedReference: decision.reference || null,
-        llmResponse: decision.raw || null,
-        error: decision.error || null
+        matchedReference: matched?.reference || null
       }
     });
 
-    if (!decision.play || !decision.reference) return;
+    if (!matched) return;
 
     const result = await this.soundboardDirector.play({
       session,
       settings: resolvedSettings,
-      soundId: decision.reference.soundId,
-      sourceGuildId: decision.reference.sourceGuildId,
-      reason: `autonomous_${String(source || "voice_transcript").slice(0, 50)}`
+      soundId: matched.soundId,
+      sourceGuildId: matched.sourceGuildId,
+      reason: `assistant_directive_${String(source || "voice_transcript").slice(0, 50)}`
     });
 
     this.store.logAction({
@@ -1432,142 +1471,22 @@ export class VoiceSessionManager {
       guildId: session.guildId,
       channelId: session.textChannelId,
       userId: userId || this.client.user?.id || null,
-      content: result.ok ? "voice_soundboard_autonomy_played" : "voice_soundboard_autonomy_failed",
+      content: result.ok ? "voice_soundboard_directive_played" : "voice_soundboard_directive_failed",
       metadata: {
         sessionId: session.id,
         mode: session.mode,
         source: String(source || "voice_transcript"),
-        transcript: normalizedTranscript,
-        soundId: decision.reference.soundId,
-        sourceGuildId: decision.reference.sourceGuildId,
+        transcript: normalizedTranscript || null,
+        requestedRef: normalizedRef,
+        soundId: matched.soundId,
+        sourceGuildId: matched.sourceGuildId,
         reason: result.reason || null,
         error: result.ok ? null : shortError(result.message || "")
       }
     });
   }
 
-  async decideAutonomousSoundboard({ session, settings, userId = null, transcript, candidates }) {
-    if (!this.llm?.generate) {
-      return {
-        play: false,
-        reason: "llm_generate_unavailable",
-        reference: null,
-        raw: "",
-        error: null
-      };
-    }
-
-    const options = Array.isArray(candidates) ? candidates.filter(Boolean) : [];
-    if (!options.length) {
-      return {
-        play: false,
-        reason: "no_candidate_sounds",
-        reference: null,
-        raw: "",
-        error: null
-      };
-    }
-
-    const speakerName = this.resolveVoiceSpeakerName(session, userId) || "someone";
-    const participantCount = this.countHumanVoiceParticipants(session);
-    const botName = getPromptBotName(settings);
-    const optionLines = options.map(formatSoundboardCandidateLine).filter(Boolean).join("\n");
-    const autonomySettings = {
-      ...settings,
-      llm: {
-        ...(settings?.memoryLlm || settings?.llm || {}),
-        temperature: 0.35,
-        maxOutputTokens: 28
-      }
-    };
-
-    const systemPrompt = [
-      `You are the autonomous voice soundboard director for a Discord bot named "${botName}".`,
-      "Decide whether to trigger a soundboard effect based on the latest spoken VC transcript.",
-      "Use a sound only if it clearly adds social or comedic value right now.",
-      "If uncertain or neutral, skip.",
-      "Respond with exactly one line:",
-      "SKIP",
-      "or",
-      "PLAY <sound_ref>",
-      "where <sound_ref> is copied exactly from the candidate list."
-    ].join("\n");
-
-    const userPrompt = [
-      `VC participants: ${participantCount}`,
-      `Speaker: ${speakerName}`,
-      `Transcript: "${String(transcript || "").trim()}"`,
-      "Candidate sound refs:",
-      optionLines
-    ].join("\n");
-
-    try {
-      const generation = await this.llm.generate({
-        settings: autonomySettings,
-        systemPrompt,
-        userPrompt,
-        contextMessages: [],
-        trace: {
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: userId || this.client.user?.id || null,
-          source: "voice_soundboard_autonomy_decision"
-        }
-      });
-      const raw = String(generation?.text || "").trim();
-      if (!raw) {
-        return {
-          play: false,
-          reason: "empty_response",
-          reference: null,
-          raw,
-          error: null
-        };
-      }
-
-      if (/^skip\b/i.test(raw)) {
-        return {
-          play: false,
-          reason: "skip",
-          reference: null,
-          raw,
-          error: null
-        };
-      }
-
-      const directPlayMatch = raw.match(/^play\s+([^\s]+)$/i);
-      const requestedRef = directPlayMatch?.[1] ? String(directPlayMatch[1]).trim() : "";
-      const matched = matchSoundboardReference(options, requestedRef) || findMentionedSoundboardReference(options, raw);
-
-      if (!matched) {
-        return {
-          play: false,
-          reason: "invalid_sound_ref",
-          reference: null,
-          raw,
-          error: null
-        };
-      }
-
-      return {
-        play: true,
-        reason: "play_selected",
-        reference: matched,
-        raw,
-        error: null
-      };
-    } catch (error) {
-      return {
-        play: false,
-        reason: "llm_error",
-        reference: null,
-        raw: "",
-        error: String(error?.message || error)
-      };
-    }
-  }
-
-  async resolveAutonomousSoundboardCandidates({ session, settings }) {
+  async resolveSoundboardCandidates({ session = null, settings, guild = null }) {
     const preferred = parsePreferredSoundboardReferences(settings?.voice?.soundboard?.preferredSoundIds);
     if (preferred.length) {
       return {
@@ -1576,7 +1495,10 @@ export class VoiceSessionManager {
       };
     }
 
-    const guildCandidates = await this.fetchGuildSoundboardCandidates({ session });
+    const guildCandidates = await this.fetchGuildSoundboardCandidates({
+      session,
+      guild
+    });
     if (guildCandidates.length) {
       return {
         source: "guild_catalog",
@@ -1590,32 +1512,36 @@ export class VoiceSessionManager {
     };
   }
 
-  async fetchGuildSoundboardCandidates({ session }) {
-    if (!session || session.ending) return [];
+  async fetchGuildSoundboardCandidates({ session = null, guild = null }) {
+    if (session && session.ending) return [];
     const now = Date.now();
 
-    session.soundboard = session.soundboard || {
-      playCount: 0,
-      lastPlayedAt: 0,
-      catalogCandidates: [],
-      catalogFetchedAt: 0
-    };
-
-    const cached = Array.isArray(session.soundboard.catalogCandidates)
-      ? session.soundboard.catalogCandidates.filter(Boolean)
-      : [];
-    const lastFetchedAt = Number(session.soundboard.catalogFetchedAt || 0);
-    if (lastFetchedAt > 0 && now - lastFetchedAt < SOUNDBOARD_CATALOG_REFRESH_MS) {
-      return cached;
+    let cached = [];
+    if (session) {
+      session.soundboard = session.soundboard || {
+        playCount: 0,
+        lastPlayedAt: 0,
+        catalogCandidates: [],
+        catalogFetchedAt: 0,
+        lastDirectiveKey: "",
+        lastDirectiveAt: 0
+      };
+      cached = Array.isArray(session.soundboard.catalogCandidates)
+        ? session.soundboard.catalogCandidates.filter(Boolean)
+        : [];
+      const lastFetchedAt = Number(session.soundboard.catalogFetchedAt || 0);
+      if (lastFetchedAt > 0 && now - lastFetchedAt < SOUNDBOARD_CATALOG_REFRESH_MS) {
+        return cached;
+      }
     }
 
-    const guild = this.client.guilds.cache.get(String(session.guildId || ""));
-    if (!guild?.soundboardSounds?.fetch) {
-      return cached;
+    const resolvedGuild = guild || this.client.guilds.cache.get(String(session?.guildId || ""));
+    if (!resolvedGuild?.soundboardSounds?.fetch) {
+      return cached || [];
     }
 
     try {
-      const fetched = await guild.soundboardSounds.fetch();
+      const fetched = await resolvedGuild.soundboardSounds.fetch();
       const candidates = [];
       fetched.forEach((sound) => {
         if (!sound || sound.available === false) return;
@@ -1632,22 +1558,26 @@ export class VoiceSessionManager {
       });
 
       const deduped = dedupeSoundboardCandidates(candidates).slice(0, SOUNDBOARD_MAX_CANDIDATES);
-      session.soundboard.catalogCandidates = deduped;
-      session.soundboard.catalogFetchedAt = now;
+      if (session?.soundboard) {
+        session.soundboard.catalogCandidates = deduped;
+        session.soundboard.catalogFetchedAt = now;
+      }
       return deduped;
     } catch (error) {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: this.client.user?.id || null,
-        content: `voice_soundboard_catalog_fetch_failed: ${String(error?.message || error)}`,
-        metadata: {
-          sessionId: session.id
-        }
-      });
-      session.soundboard.catalogFetchedAt = now;
-      return cached;
+      if (session) {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.client.user?.id || null,
+          content: `voice_soundboard_catalog_fetch_failed: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id
+          }
+        });
+        session.soundboard.catalogFetchedAt = now;
+      }
+      return cached || [];
     }
   }
 
@@ -1859,6 +1789,15 @@ export class VoiceSessionManager {
       const transcript = String(transcriptText || "").trim();
       if (!transcript) return;
       const transcriptSource = transcriptSourceFromEventType(transcriptEventType);
+      const parsedDirective =
+        transcriptSource === "output"
+          ? extractSoundboardDirective(transcript)
+          : {
+              text: transcript,
+              reference: null
+            };
+      const transcriptForLogs = String(parsedDirective?.text || transcript).trim();
+      const requestedSoundboardRef = String(parsedDirective?.reference || "").trim();
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
@@ -1867,30 +1806,32 @@ export class VoiceSessionManager {
         content: `${runtimeLabel}_transcript`,
         metadata: {
           sessionId: session.id,
-          transcript,
+          transcript: transcriptForLogs || transcript,
           transcriptEventType: transcriptEventType || null,
-          transcriptSource
+          transcriptSource,
+          soundboardRef: requestedSoundboardRef || null
         }
       });
 
       if (session.mode === "openai_realtime" && transcriptSource === "output") {
         session.pendingRealtimeInputBytes = 0;
       }
-      if (transcriptSource === "output") {
+      if (transcriptSource === "output" && transcriptForLogs) {
         this.recordVoiceTurn(session, {
           role: "assistant",
           userId: this.client.user?.id || null,
-          text: transcript
+          text: transcriptForLogs
         });
       }
 
-      if (transcriptSource === "input") {
-        this.maybeTriggerAutonomousSoundboard({
+      if (transcriptSource === "output" && requestedSoundboardRef) {
+        this.maybeTriggerAssistantDirectedSoundboard({
           session,
           settings: settings || session.settingsSnapshot || this.store.getSettings(),
-          userId: null,
-          transcript,
-          source: "realtime_input_transcript"
+          userId: this.client.user?.id || null,
+          transcript: transcriptForLogs || transcript,
+          requestedRef: requestedSoundboardRef,
+          source: "realtime_output_transcript"
         }).catch(() => undefined);
       }
     };
@@ -2428,13 +2369,6 @@ export class VoiceSessionManager {
         userId,
         text: turnTranscript
       });
-      this.maybeTriggerAutonomousSoundboard({
-        session,
-        settings,
-        userId,
-        transcript: turnTranscript,
-        source: "realtime_turn"
-      }).catch(() => undefined);
     }
 
     const decision = await this.evaluateVoiceReplyDecision({
@@ -3222,13 +3156,6 @@ export class VoiceSessionManager {
         transcript
       }
     });
-    this.maybeTriggerAutonomousSoundboard({
-      session,
-      settings,
-      userId,
-      transcript,
-      source: "stt_pipeline_turn"
-    }).catch(() => undefined);
     this.recordVoiceTurn(session, {
       role: "user",
       userId,
@@ -3279,8 +3206,20 @@ export class VoiceSessionManager {
           .filter((row) => row.content)
           .slice(-STT_CONTEXT_MAX_MESSAGES)
       : [];
+    const soundboardCandidateInfo = await this.resolveSoundboardCandidates({
+      session,
+      settings
+    });
+    const soundboardCandidateLines = (Array.isArray(soundboardCandidateInfo?.candidates)
+      ? soundboardCandidateInfo.candidates
+      : []
+    )
+      .map((entry) => formatSoundboardCandidateLine(entry))
+      .filter(Boolean)
+      .slice(0, SOUNDBOARD_MAX_CANDIDATES);
 
     let replyText = "";
+    let requestedSoundboardRef = "";
     try {
       const generated = await this.generateVoiceTurn({
         settings,
@@ -3291,9 +3230,18 @@ export class VoiceSessionManager {
         contextMessages,
         sessionId: session.id,
         isEagerTurn: !turnDecision.directAddressed,
-        voiceEagerness: Number(settings?.voice?.replyEagerness) || 0
+        voiceEagerness: Number(settings?.voice?.replyEagerness) || 0,
+        soundboardCandidates: soundboardCandidateLines
       });
-      replyText = normalizeVoiceText(generated?.text || generated, STT_REPLY_MAX_CHARS);
+      const generatedPayload =
+        generated && typeof generated === "object"
+          ? generated
+          : {
+              text: generated,
+              soundboardRef: null
+            };
+      replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
+      requestedSoundboardRef = String(generatedPayload?.soundboardRef || "").trim().slice(0, 180);
     } catch (error) {
       this.store.logAction({
         kind: "voice_error",
@@ -3390,9 +3338,20 @@ export class VoiceSessionManager {
         content: "stt_pipeline_reply_spoken",
         metadata: {
           sessionId: session.id,
-          replyText
+          replyText,
+          soundboardRef: requestedSoundboardRef || null
         }
       });
+      if (requestedSoundboardRef) {
+        await this.maybeTriggerAssistantDirectedSoundboard({
+          session,
+          settings,
+          userId: this.client.user?.id || null,
+          transcript: replyText,
+          requestedRef: requestedSoundboardRef,
+          source: "stt_pipeline_reply"
+        });
+      }
     } catch (error) {
       this.store.logAction({
         kind: "voice_error",
@@ -4122,13 +4081,18 @@ export class VoiceSessionManager {
     }
   }
 
-  buildVoiceInstructions(settings) {
+  buildVoiceInstructions(settings, { soundboardCandidates = [] } = {}) {
     const botName = getPromptBotName(settings);
     const style = getPromptStyle(settings, "playful slang");
     const allowNsfwHumor = shouldAllowVoiceNsfwHumor(settings);
     const memoryEnabled = Boolean(settings?.memory?.enabled);
+    const soundboardEnabled = Boolean(settings?.voice?.soundboard?.enabled);
+    const soundboardCandidateLines = (Array.isArray(soundboardCandidates) ? soundboardCandidates : [])
+      .map((entry) => formatSoundboardCandidateLine(entry))
+      .filter(Boolean)
+      .slice(0, SOUNDBOARD_MAX_CANDIDATES);
     const voiceToneGuardrails = buildVoiceToneGuardrails();
-    return [
+    const lines = [
       `You are ${botName}, a real-feeling regular in a Discord server, speaking in live voice chat.`,
       `Stay in-character as ${botName}. Style: ${style}.`,
       "Talk like a person hanging out, not like an assistant.",
@@ -4143,7 +4107,20 @@ export class VoiceSessionManager {
         : "Persistent memory is disabled right now. Do not claim long-term memory across separate conversations.",
       "If asked to do something impossible, say it casually.",
       ...buildHardLimitsSection(settings, { maxItems: 12 })
-    ].join("\n");
+    ];
+
+    if (soundboardEnabled && soundboardCandidateLines.length) {
+      lines.push("Soundboard control is enabled.");
+      lines.push("Available sound refs:");
+      lines.push(soundboardCandidateLines.join("\n"));
+      lines.push(
+        "If you want to trigger a soundboard effect, append exactly one trailing directive: [[SOUNDBOARD:<sound_ref>]] using an exact ref from the list."
+      );
+      lines.push("If no sound should play, omit that directive.");
+      lines.push("Never mention or explain the directive in normal speech.");
+    }
+
+    return lines.join("\n");
   }
 
   async sendOperationalMessage({

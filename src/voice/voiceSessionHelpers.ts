@@ -10,6 +10,8 @@ import { parseSoundboardReference } from "./soundboardDirector.ts";
 export const REALTIME_MEMORY_FACT_LIMIT = 8;
 export const SOUNDBOARD_MAX_CANDIDATES = 40;
 const OPENAI_REALTIME_MIN_COMMIT_AUDIO_MS = 100;
+const SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*([\s\S]*?)\s*\]\]/gi;
+const MAX_SOUNDBOARD_DIRECTIVE_REF_LEN = 180;
 
 export function defaultExitMessage(reason) {
   if (reason === "max_duration") return "time cap reached, dipping from vc.";
@@ -180,9 +182,42 @@ export function transcriptSourceFromEventType(eventType) {
   if (normalized === "conversation.item.input_audio_transcription.completed") return "input";
   if (normalized.includes("input_audio_transcription")) return "input";
   if (normalized.includes("output_audio_transcription")) return "output";
+  if (normalized.includes("server_content_text")) return "output";
+  if (normalized.includes("response.text")) return "output";
+  if (normalized.includes("output_text")) return "output";
   if (/audio_transcript/i.test(normalized)) return "output";
   if (/transcript/i.test(normalized)) return "unknown";
   return "unknown";
+}
+
+export function extractSoundboardDirective(rawText) {
+  const text = String(rawText || "");
+  if (!text) {
+    return {
+      text: "",
+      reference: null
+    };
+  }
+
+  let lastReference = "";
+  SOUNDBOARD_DIRECTIVE_RE.lastIndex = 0;
+  let match = null;
+  while ((match = SOUNDBOARD_DIRECTIVE_RE.exec(text))) {
+    lastReference = String(match?.[1] || "")
+      .trim()
+      .slice(0, MAX_SOUNDBOARD_DIRECTIVE_REF_LEN);
+  }
+  SOUNDBOARD_DIRECTIVE_RE.lastIndex = 0;
+
+  const withoutDirective = text
+    .replace(SOUNDBOARD_DIRECTIVE_RE, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+  return {
+    text: withoutDirective,
+    reference: lastReference || null
+  };
 }
 
 export function shortError(text) {

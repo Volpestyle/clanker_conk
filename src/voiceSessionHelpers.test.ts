@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  extractSoundboardDirective,
   getRealtimeCommitMinimumBytes,
   getRealtimeRuntimeLabel,
   isRecoverableRealtimeError,
@@ -56,6 +57,13 @@ test("Gemini realtime mode resolves to gemini provider and label", () => {
 test("transcriptSourceFromEventType classifies Gemini transcription events", () => {
   assert.equal(transcriptSourceFromEventType("input_audio_transcription"), "input");
   assert.equal(transcriptSourceFromEventType("output_audio_transcription"), "output");
+  assert.equal(transcriptSourceFromEventType("server_content_text"), "output");
+});
+
+test("extractSoundboardDirective strips directive and returns selected reference", () => {
+  const parsed = extractSoundboardDirective("that was crazy [[SOUNDBOARD:1234567890@111222333]]");
+  assert.equal(parsed.text, "that was crazy");
+  assert.equal(parsed.reference, "1234567890@111222333");
 });
 
 test("isVoiceTurnAddressedToBot catches common ASR wake-word variants", () => {

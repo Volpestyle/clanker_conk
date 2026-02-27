@@ -9,6 +9,7 @@ const GIF_QUERY_DIRECTIVE_RE = /\[\[GIF_QUERY:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const REACTION_DIRECTIVE_RE = /\[\[REACTION:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const WEB_SEARCH_DIRECTIVE_RE = /\[\[WEB_SEARCH:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const MEMORY_LINE_DIRECTIVE_RE = /\[\[MEMORY_LINE:\s*([\s\S]*?)\s*\]\]\s*$/i;
+const SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
 const DEFAULT_MAX_MEDIA_PROMPT_LEN = 900;
 export const MAX_MEDIA_PROMPT_FLOOR = 120;
@@ -16,6 +17,7 @@ export const MAX_MEDIA_PROMPT_CEILING = 2000;
 export const MAX_WEB_QUERY_LEN = 220;
 export const MAX_GIF_QUERY_LEN = 120;
 const MAX_MEMORY_LINE_LEN = 180;
+const MAX_SOUNDBOARD_REF_LEN = 180;
 export const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
 const MAX_REPLY_TEXT_LEN = 1200;
 const MAX_AUTOMATION_TITLE_LEN = 90;
@@ -478,7 +480,8 @@ export function parseReplyDirectives(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_
     mediaDirective: null,
     reactionEmoji: null,
     webSearchQuery: null,
-    memoryLine: null
+    memoryLine: null,
+    soundboardRef: null
   };
 
   while (parsed.text) {
@@ -558,6 +561,15 @@ export function parseReplyDirectives(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_
         parsed.memoryLine = normalizeDirectiveText(memoryMatch[1], MAX_MEMORY_LINE_LEN) || null;
       }
       parsed.text = parsed.text.slice(0, memoryMatch.index).trim();
+      continue;
+    }
+
+    const soundboardMatch = parsed.text.match(SOUNDBOARD_DIRECTIVE_RE);
+    if (soundboardMatch) {
+      if (!parsed.soundboardRef) {
+        parsed.soundboardRef = normalizeDirectiveText(soundboardMatch[1], MAX_SOUNDBOARD_REF_LEN) || null;
+      }
+      parsed.text = parsed.text.slice(0, soundboardMatch.index).trim();
       continue;
     }
 

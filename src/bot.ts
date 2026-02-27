@@ -953,7 +953,8 @@ export class ClankerBot {
     contextMessages = [],
     sessionId = null,
     isEagerTurn = false,
-    voiceEagerness = 0
+    voiceEagerness = 0,
+    soundboardCandidates = []
   }) {
     if (!this.llm?.generate || !settings) return { text: "" };
     const incomingTranscript = String(transcript || "")
@@ -972,6 +973,13 @@ export class ClankerBot {
       }))
       .filter((row) => row.content)
       .slice(-10);
+    const normalizedSoundboardCandidates = (Array.isArray(soundboardCandidates) ? soundboardCandidates : [])
+      .map((line) => String(line || "").trim())
+      .filter(Boolean)
+      .slice(0, 40);
+    const allowSoundboardDirective = Boolean(
+      settings?.voice?.soundboard?.enabled && normalizedSoundboardCandidates.length
+    );
 
     const guild = this.client.guilds.cache.get(String(guildId || ""));
     const speakerName =
@@ -1038,17 +1046,28 @@ export class ClankerBot {
       "You are speaking in live Discord voice chat.",
       ...voiceToneGuardrails,
       "Output plain spoken text only.",
+      allowSoundboardDirective
+        ? "Optional control: append exactly one trailing [[SOUNDBOARD:<sound_ref>]] directive when you want a soundboard effect."
+        : null,
       isEagerTurn
-        ? "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text only, no directives or markdown."
-        : "Do not output directives like [[...]], [SKIP], or markdown."
-    ].join("\n");
+        ? allowSoundboardDirective
+          ? "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text and only the optional trailing soundboard directive."
+          : "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text only, no directives or markdown."
+        : allowSoundboardDirective
+          ? "Do not output directives or markdown, except the optional trailing [[SOUNDBOARD:<sound_ref>]] directive. Do not output [SKIP]."
+          : "Do not output directives like [[...]], [SKIP], or markdown.",
+      allowSoundboardDirective ? "Never mention the control directive in normal speech." : null
+    ]
+      .filter(Boolean)
+      .join("\n");
     const userPrompt = buildVoiceTurnPrompt({
       speakerName,
       transcript: incomingTranscript,
       userFacts: memorySlice.userFacts,
       relevantFacts: memorySlice.relevantFacts,
       isEagerTurn,
-      voiceEagerness
+      voiceEagerness,
+      soundboardCandidates: normalizedSoundboardCandidates
     });
 
     try {
@@ -1067,9 +1086,14 @@ export class ClankerBot {
       });
 
       const parsed = parseReplyDirectives(generation.text, resolveMaxMediaPromptLen(settings));
+      const soundboardRef = allowSoundboardDirective
+        ? String(parsed.soundboardRef || "")
+            .trim()
+            .slice(0, 180) || null
+        : null;
       let finalText = sanitizeBotText(normalizeSkipSentinel(parsed.text || generation.text || ""), 520);
       if (!finalText || finalText === "[SKIP]") {
-        return { text: "" };
+        return { text: "", soundboardRef: null };
       }
 
       if (settings.memory?.enabled && parsed.memoryLine && this.memory?.rememberLine && userId) {
@@ -1086,7 +1110,8 @@ export class ClankerBot {
       }
 
       return {
-        text: finalText
+        text: finalText,
+        soundboardRef
       };
     } catch (error) {
       this.store.logAction({
