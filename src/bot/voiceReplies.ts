@@ -15,7 +15,7 @@ import {
 } from "../botHelpers.ts";
 import { clamp, sanitizeBotText } from "../utils.ts";
 
-export async function composeVoiceOperationalMessage(bot, {
+export async function composeVoiceOperationalMessage(runtime, {
   settings,
   guildId = null,
   channelId = null,
@@ -28,7 +28,7 @@ export async function composeVoiceOperationalMessage(bot, {
   maxOutputChars = 180,
   allowSkip = false
 }) {
-  if (!bot.llm?.generate || !settings) return "";
+  if (!runtime.llm?.generate || !settings) return "";
   const normalizedEvent = String(event || "voice_runtime")
     .trim()
     .toLowerCase();
@@ -46,7 +46,7 @@ export async function composeVoiceOperationalMessage(bot, {
       maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || operationalMaxOutputTokens, 32, 110)
     }
   };
-  const operationalMemoryFacts = await bot.loadRelevantMemoryFacts({
+  const operationalMemoryFacts = await runtime.loadRelevantMemoryFacts({
     settings,
     guildId,
     channelId,
@@ -62,7 +62,7 @@ export async function composeVoiceOperationalMessage(bot, {
     },
     limit: 6
   });
-  const operationalMemoryHints = bot.buildMediaMemoryFacts({
+  const operationalMemoryHints = runtime.buildMediaMemoryFacts({
     userFacts: [],
     relevantFacts: operationalMemoryFacts,
     maxItems: 6
@@ -114,7 +114,7 @@ export async function composeVoiceOperationalMessage(bot, {
     .join("\n");
 
   try {
-    const generation = await bot.llm.generate({
+    const generation = await runtime.llm.generate({
       settings: tunedSettings,
       systemPrompt,
       userPrompt,
@@ -138,7 +138,7 @@ export async function composeVoiceOperationalMessage(bot, {
     if (normalized === "[SKIP]") return allowSkip ? "[SKIP]" : "";
     return normalized;
   } catch (error) {
-    bot.store.logAction({
+    runtime.store.logAction({
       kind: "voice_error",
       guildId: guildId || null,
       channelId: channelId || null,
@@ -154,7 +154,7 @@ export async function composeVoiceOperationalMessage(bot, {
   }
 }
 
-export async function generateVoiceTurnReply(bot, {
+export async function generateVoiceTurnReply(runtime, {
   settings,
   guildId = null,
   channelId = null,
@@ -166,7 +166,7 @@ export async function generateVoiceTurnReply(bot, {
   voiceEagerness = 0,
   soundboardCandidates = []
 }) {
-  if (!bot.llm?.generate || !settings) return { text: "" };
+  if (!runtime.llm?.generate || !settings) return { text: "" };
   const incomingTranscript = String(transcript || "")
     .replace(/\s+/g, " ")
     .trim()
@@ -191,16 +191,16 @@ export async function generateVoiceTurnReply(bot, {
     settings?.voice?.soundboard?.enabled && normalizedSoundboardCandidates.length
   );
 
-  const guild = bot.client.guilds.cache.get(String(guildId || ""));
+  const guild = runtime.client.guilds.cache.get(String(guildId || ""));
   const speakerName =
     guild?.members?.cache?.get(String(userId || ""))?.displayName ||
     guild?.members?.cache?.get(String(userId || ""))?.user?.username ||
-    bot.client.users?.cache?.get(String(userId || ""))?.username ||
+    runtime.client.users?.cache?.get(String(userId || ""))?.username ||
     "unknown";
 
-  if (settings.memory?.enabled && bot.memory?.ingestMessage && userId) {
+  if (settings.memory?.enabled && runtime.memory?.ingestMessage && userId) {
     try {
-      await bot.memory.ingestMessage({
+      await runtime.memory.ingestMessage({
         messageId: `voice-${String(guildId || "guild")}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
         authorId: String(userId),
         authorName: String(speakerName || "unknown"),
@@ -214,7 +214,7 @@ export async function generateVoiceTurnReply(bot, {
         }
       });
     } catch (error) {
-      bot.store.logAction({
+      runtime.store.logAction({
         kind: "voice_error",
         guildId,
         channelId,
@@ -227,7 +227,7 @@ export async function generateVoiceTurnReply(bot, {
     }
   }
 
-  const memorySlice = await bot.loadPromptMemorySlice({
+  const memorySlice = await runtime.loadPromptMemorySlice({
     settings,
     userId,
     guildId,
@@ -281,7 +281,7 @@ export async function generateVoiceTurnReply(bot, {
   });
 
   try {
-    const generation = await bot.llm.generate({
+    const generation = await runtime.llm.generate({
       settings: tunedSettings,
       systemPrompt,
       userPrompt,
@@ -306,8 +306,8 @@ export async function generateVoiceTurnReply(bot, {
       return { text: "", soundboardRef: null };
     }
 
-    if (settings.memory?.enabled && parsed.memoryLine && bot.memory?.rememberLine && userId) {
-      await bot.memory
+    if (settings.memory?.enabled && parsed.memoryLine && runtime.memory?.rememberLine && userId) {
+      await runtime.memory
         .rememberLine({
           line: parsed.memoryLine,
           sourceMessageId: `voice-${String(guildId || "guild")}-${Date.now()}-memory`,
@@ -324,7 +324,7 @@ export async function generateVoiceTurnReply(bot, {
       soundboardRef
     };
   } catch (error) {
-    bot.store.logAction({
+    runtime.store.logAction({
       kind: "voice_error",
       guildId,
       channelId,

@@ -23,7 +23,7 @@ export function composeAutomationControlReply({ modelText, fallbackText, detailL
   return sanitizeBotText(`${body}\n${extra.join("\n")}`, 1700);
 }
 
-export async function applyAutomationControlAction(bot, { message, settings, automationAction }) {
+export async function applyAutomationControlAction(runtime, { message, settings, automationAction }) {
   const operation = String(automationAction?.operation || "")
     .trim()
     .toLowerCase();
@@ -42,7 +42,7 @@ export async function applyAutomationControlAction(bot, { message, settings, aut
   }
 
   if (operation === "list") {
-    const rows = bot.store.listAutomations({
+    const rows = runtime.store.listAutomations({
       guildId,
       statuses: ["active", "paused"],
       limit: MAX_AUTOMATION_LIST_ROWS
@@ -90,7 +90,7 @@ export async function applyAutomationControlAction(bot, { message, settings, aut
       };
     }
 
-    const currentCount = bot.store.countAutomations({
+    const currentCount = runtime.store.countAutomations({
       guildId,
       statuses: ["active", "paused"]
     });
@@ -110,7 +110,7 @@ export async function applyAutomationControlAction(bot, { message, settings, aut
 
     const requestedChannelId = String(automationAction?.targetChannelId || "").trim();
     const targetChannelId = requestedChannelId || message.channelId;
-    if (!bot.isChannelAllowed(settings, targetChannelId)) {
+    if (!runtime.isChannelAllowed(settings, targetChannelId)) {
       return {
         handled: true,
         fallbackText: "that channel is blocked by my current settings.",
@@ -124,7 +124,7 @@ export async function applyAutomationControlAction(bot, { message, settings, aut
       };
     }
 
-    const channel = bot.client.channels.cache.get(String(targetChannelId));
+    const channel = runtime.client.channels.cache.get(String(targetChannelId));
     if (!channel || !channel.isTextBased?.() || typeof channel.send !== "function") {
       return {
         handled: true,
@@ -158,7 +158,7 @@ export async function applyAutomationControlAction(bot, { message, settings, aut
     }
 
     const title = String(automationAction?.title || "").trim() || String(instruction).slice(0, 80);
-    const created = bot.store.createAutomation({
+    const created = runtime.store.createAutomation({
       guildId,
       channelId: String(channel.id),
       createdByUserId: message.author?.id || "unknown",
@@ -182,7 +182,7 @@ export async function applyAutomationControlAction(bot, { message, settings, aut
       };
     }
 
-    bot.store.logAction({
+    runtime.store.logAction({
       kind: "automation_created",
       guildId,
       channelId: created.channel_id,
@@ -195,7 +195,7 @@ export async function applyAutomationControlAction(bot, { message, settings, aut
       }
     });
 
-    bot.maybeRunAutomationCycle().catch(() => undefined);
+    runtime.maybeRunAutomationCycle().catch(() => undefined);
 
     return {
       handled: true,
@@ -211,7 +211,7 @@ export async function applyAutomationControlAction(bot, { message, settings, aut
   }
 
   if (operation === "pause" || operation === "resume" || operation === "delete") {
-    const targetRows = resolveAutomationTargetsForControl(bot, {
+    const targetRows = resolveAutomationTargetsForControl(runtime, {
       guildId,
       channelId: message.channelId,
       operation,
@@ -237,7 +237,7 @@ export async function applyAutomationControlAction(bot, { message, settings, aut
     const updatedRows = [];
     for (const row of targetRows) {
       if (operation === "pause") {
-        const paused = bot.store.setAutomationStatus({
+        const paused = runtime.store.setAutomationStatus({
           automationId: row.id,
           guildId,
           status: "paused",
@@ -254,7 +254,7 @@ export async function applyAutomationControlAction(bot, { message, settings, aut
           runImmediately: false
         });
         if (!nextRunAt) continue;
-        const resumed = bot.store.setAutomationStatus({
+        const resumed = runtime.store.setAutomationStatus({
           automationId: row.id,
           guildId,
           status: "active",
@@ -264,7 +264,7 @@ export async function applyAutomationControlAction(bot, { message, settings, aut
         continue;
       }
 
-      const deleted = bot.store.setAutomationStatus({
+      const deleted = runtime.store.setAutomationStatus({
         automationId: row.id,
         guildId,
         status: "deleted",
@@ -287,7 +287,7 @@ export async function applyAutomationControlAction(bot, { message, settings, aut
       };
     }
 
-    bot.store.logAction({
+    runtime.store.logAction({
       kind: "automation_updated",
       guildId,
       channelId: message.channelId,
@@ -301,7 +301,7 @@ export async function applyAutomationControlAction(bot, { message, settings, aut
     });
 
     if (operation === "resume") {
-      bot.maybeRunAutomationCycle().catch(() => undefined);
+      runtime.maybeRunAutomationCycle().catch(() => undefined);
     }
 
     const verb = operation === "pause" ? "paused" : operation === "resume" ? "resumed" : "deleted";
@@ -321,7 +321,7 @@ export async function applyAutomationControlAction(bot, { message, settings, aut
 }
 
 export function resolveAutomationTargetsForControl(
-  bot,
+  runtime,
   { guildId, channelId, operation, automationId = null, targetQuery = "" }
 ) {
   const statuses = operation === "pause" ? ["active"] : operation === "resume" ? ["paused"] : ["active", "paused"];
@@ -331,13 +331,13 @@ export function resolveAutomationTargetsForControl(
     .trim();
 
   if (Number.isInteger(Number(automationId)) && Number(automationId) > 0) {
-    const row = bot.store.getAutomationById(Number(automationId), guildId);
+    const row = runtime.store.getAutomationById(Number(automationId), guildId);
     if (!row || !statuses.includes(row.status)) return [];
     return [row];
   }
 
   if (normalizedQuery) {
-    const inChannel = bot.store.findAutomationsByQuery({
+    const inChannel = runtime.store.findAutomationsByQuery({
       guildId,
       channelId,
       query: normalizedQuery,
@@ -346,7 +346,7 @@ export function resolveAutomationTargetsForControl(
     });
     if (inChannel.length) return inChannel;
 
-    return bot.store.findAutomationsByQuery({
+    return runtime.store.findAutomationsByQuery({
       guildId,
       query: normalizedQuery,
       statuses,
@@ -354,7 +354,7 @@ export function resolveAutomationTargetsForControl(
     });
   }
 
-  const fallback = bot.store.getMostRecentAutomations({
+  const fallback = runtime.store.getMostRecentAutomations({
     guildId,
     channelId,
     statuses,
@@ -362,7 +362,7 @@ export function resolveAutomationTargetsForControl(
   });
   if (fallback.length) return fallback;
 
-  return bot.store.getMostRecentAutomations({
+  return runtime.store.getMostRecentAutomations({
     guildId,
     statuses,
     limit: 1

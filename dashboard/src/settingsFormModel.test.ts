@@ -6,7 +6,7 @@ import {
   resolvePresetModelSelection,
   resolveProviderModelOptions,
   settingsToForm
-} from "../dashboard/src/settingsFormModel.ts";
+} from "./settingsFormModel.ts";
 
 test("settingsFormModel converts settings to form defaults and back to normalized patch", () => {
   const form = settingsToForm({

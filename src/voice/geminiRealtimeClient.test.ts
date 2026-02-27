@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { GeminiRealtimeClient } from "./voice/geminiRealtimeClient.ts";
+import { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
 
 test("GeminiRealtimeClient builds websocket URL and normalizes model prefix", () => {
   const client = new GeminiRealtimeClient({

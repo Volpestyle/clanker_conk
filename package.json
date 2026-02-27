@@ -13,9 +13,9 @@
     "build:ui": "npx vite build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test": "node --import tsx --test src/*.test.ts",
-    "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include=\"src/**/*.ts\" --test-coverage-exclude=\"src/**/*.test.ts\" src/*.test.ts",
-    "test:coverage:check": "node --import tsx --test --experimental-test-coverage --test-coverage-include=\"src/**/*.ts\" --test-coverage-exclude=\"src/**/*.test.ts\" --test-coverage-lines=50 --test-coverage-branches=45 --test-coverage-functions=40 src/*.test.ts",
+    "test": "node --import tsx --test \"src/**/*.test.ts\" \"dashboard/src/**/*.test.ts\"",
+    "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include=\"src/**/*.ts\" --test-coverage-include=\"dashboard/src/**/*.ts\" --test-coverage-include=\"dashboard/src/**/*.tsx\" --test-coverage-exclude=\"src/**/*.test.ts\" --test-coverage-exclude=\"dashboard/src/**/*.test.ts\" \"src/**/*.test.ts\" \"dashboard/src/**/*.test.ts\"",
+    "test:coverage:check": "node --import tsx --test --experimental-test-coverage --test-coverage-include=\"src/**/*.ts\" --test-coverage-include=\"dashboard/src/**/*.ts\" --test-coverage-include=\"dashboard/src/**/*.tsx\" --test-coverage-exclude=\"src/**/*.test.ts\" --test-coverage-exclude=\"dashboard/src/**/*.test.ts\" --test-coverage-lines=50 --test-coverage-branches=45 --test-coverage-functions=40 \"src/**/*.test.ts\" \"dashboard/src/**/*.test.ts\"",
     "check": "npm run lint && node --import tsx scripts/check-backend.mjs && npx vite build",
     "diagrams": "node scripts/gen-diagrams.mjs"
   },

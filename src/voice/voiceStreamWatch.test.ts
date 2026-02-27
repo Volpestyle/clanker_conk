@@ -6,7 +6,7 @@ import {
   initializeStreamWatchState,
   maybeTriggerStreamWatchCommentary,
   resolveStreamWatchVisionProviderSettings
-} from "./voice/voiceStreamWatch.ts";
+} from "./voiceStreamWatch.ts";
 
 function createSettings(overrides = {}) {
   const defaults = {

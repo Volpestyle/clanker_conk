@@ -10,7 +10,7 @@ import {
   resolveRealtimeProvider,
   resolveVoiceRuntimeMode,
   transcriptSourceFromEventType
-} from "./voice/voiceSessionHelpers.ts";
+} from "./voiceSessionHelpers.ts";
 
 test("isRecoverableRealtimeError matches OpenAI empty commit code", () => {
   const recoverable = isRecoverableRealtimeError({

@@ -5,7 +5,7 @@ import {
   composeAutomationControlReply,
   formatAutomationListLine,
   resolveAutomationTargetsForControl
-} from "./bot/automationControl.ts";
+} from "./automationControl.ts";
 
 function baseAutomationRow(overrides = {}) {
   return {

@@ -1,3 +1,10 @@
+export const PROVIDER_MODEL_FALLBACKS = {
+  openai: ["gpt-4.1-mini"],
+  anthropic: ["claude-haiku-4-5"],
+  xai: ["grok-3-mini-latest"],
+  "claude-code": ["sonnet"]
+};
+
 export const DEFAULT_SETTINGS = {
   botName: "clanker conk",
   persona: {

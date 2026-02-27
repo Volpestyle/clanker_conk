@@ -8,7 +8,7 @@ import {
   getInitiativePacingMode,
   getInitiativePostingIntervalMs,
   pickInitiativeChannel
-} from "./bot/initiativeSchedule.ts";
+} from "./initiativeSchedule.ts";
 
 function baseSettings(overrides = {}) {
   const base = {

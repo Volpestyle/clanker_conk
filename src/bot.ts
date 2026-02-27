@@ -54,6 +54,10 @@ import {
   resolveAutomationTargetsForControl
 } from "./bot/automationControl.ts";
 import {
+  createAutomationControlRuntime,
+  createVoiceReplyRuntime
+} from "./bot/runtimeContexts.ts";
+import {
   composeVoiceOperationalMessage,
   generateVoiceTurnReply
 } from "./bot/voiceReplies.ts";
@@ -617,7 +621,8 @@ export class ClankerBot {
     maxOutputChars = 180,
     allowSkip = false
   }) {
-    return await composeVoiceOperationalMessage(this, {
+    const runtime = createVoiceReplyRuntime(this);
+    return await composeVoiceOperationalMessage(runtime, {
       settings,
       guildId,
       channelId,
@@ -644,7 +649,8 @@ export class ClankerBot {
     voiceEagerness = 0,
     soundboardCandidates = []
   }) {
-    return await generateVoiceTurnReply(this, {
+    const runtime = createVoiceReplyRuntime(this);
+    return await generateVoiceTurnReply(runtime, {
       settings,
       guildId,
       channelId,
@@ -1651,7 +1657,8 @@ export class ClankerBot {
   }
 
   async applyAutomationControlAction({ message, settings, automationAction }) {
-    return await applyAutomationControlAction(this, {
+    const runtime = createAutomationControlRuntime(this);
+    return await applyAutomationControlAction(runtime, {
       message,
       settings,
       automationAction
@@ -1659,7 +1666,8 @@ export class ClankerBot {
   }
 
   resolveAutomationTargetsForControl({ guildId, channelId, operation, automationId = null, targetQuery = "" }) {
-    return resolveAutomationTargetsForControl(this, {
+    const runtime = createAutomationControlRuntime(this);
+    return resolveAutomationTargetsForControl(runtime, {
       guildId,
       channelId,
       operation,

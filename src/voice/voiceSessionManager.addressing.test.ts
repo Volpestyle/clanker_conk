@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { VoiceSessionManager, resolveRealtimeTurnTranscriptionPlan } from "./voice/voiceSessionManager.ts";
+import { VoiceSessionManager, resolveRealtimeTurnTranscriptionPlan } from "./voiceSessionManager.ts";
 
 function createManager({
   participantCount = 2,
