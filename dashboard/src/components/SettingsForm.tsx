@@ -484,13 +484,6 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
 
         {showVoiceAdvanced && (
           <>
-            <div className="toggles">
-              <label>
-                <input type="checkbox" checked={form.voiceJoinOnTextNL} onChange={set("voiceJoinOnTextNL")} />
-                Allow NL join/leave/status triggers
-              </label>
-            </div>
-
             <label htmlFor="voice-mode">Voice runtime mode</label>
             <select id="voice-mode" value={form.voiceMode} onChange={set("voiceMode")}>
               <option value="voice_agent">Voice agent (xAI realtime low-latency)</option>

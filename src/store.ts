@@ -1636,7 +1636,13 @@ function normalizeSettings(raw) {
   const maxCharsRaw = Number(merged.webSearch?.maxCharsPerPage);
   const recencyDaysRaw = Number(merged.webSearch?.recencyDaysDefault);
   const maxConcurrentFetchesRaw = Number(merged.webSearch?.maxConcurrentFetches);
-  merged.webSearch.maxSearchesPerHour = clamp(Number.isFinite(maxSearchesRaw) ? maxSearchesRaw : 12, 1, 120);
+  merged.webSearch.maxSearchesPerHour = clamp(
+    Number.isFinite(maxSearchesRaw)
+      ? maxSearchesRaw
+      : Number(DEFAULT_SETTINGS.webSearch?.maxSearchesPerHour) || 20,
+    1,
+    120
+  );
   merged.webSearch.maxResults = clamp(Number.isFinite(maxResultsRaw) ? maxResultsRaw : 5, 1, 10);
   merged.webSearch.maxPagesToRead = clamp(Number.isFinite(maxPagesRaw) ? maxPagesRaw : 3, 0, 5);
   merged.webSearch.maxCharsPerPage = clamp(Number.isFinite(maxCharsRaw) ? maxCharsRaw : 1400, 350, 4000);
@@ -1748,8 +1754,7 @@ function normalizeSettings(raw) {
   merged.voice.enabled =
     merged.voice?.enabled !== undefined ? Boolean(merged.voice?.enabled) : Boolean(defaultVoice.enabled);
   merged.voice.mode = normalizeVoiceMode(merged.voice?.mode, defaultVoice.mode);
-  merged.voice.joinOnTextNL =
-    merged.voice?.joinOnTextNL !== undefined ? Boolean(merged.voice?.joinOnTextNL) : Boolean(defaultVoice.joinOnTextNL);
+  delete merged.voice.joinOnTextNL;
   delete merged.voice.requireDirectMentionForJoin;
   merged.voice.intentConfidenceThreshold = clamp(
     Number.isFinite(voiceIntentThresholdRaw)

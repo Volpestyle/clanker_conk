@@ -28,7 +28,7 @@ Enable `clanker conk` to join Discord voice channels on explicit natural-languag
 - If parse/classification fails, intent handling fails closed (`none`).
 
 ### 2. Join Preflight Checks
-- `voice.enabled` and `voice.joinOnTextNL` must both be true.
+- `voice.enabled` must be true.
 - Requesting user must not be in `blockedVoiceUserIds`.
 - Requesting user must already be in a voice channel.
 - Target voice channel (requestor channel) must pass:
@@ -117,7 +117,6 @@ Enable `clanker conk` to join Discord voice channels on explicit natural-languag
 voice: {
   enabled: false,
   mode: "voice_agent", // "voice_agent" | "openai_realtime" | "gemini_realtime" | "stt_pipeline"
-  joinOnTextNL: true,
   intentConfidenceThreshold: 0.75,
   maxSessionMinutes: 10,
   inactivityLeaveSeconds: 90,
