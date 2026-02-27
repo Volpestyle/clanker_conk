@@ -18,3 +18,11 @@ export function createVoiceReplyRuntime(bot) {
     loadPromptMemorySlice: (payload) => bot.loadPromptMemorySlice(payload)
   };
 }
+
+export function createReplyFollowupRuntime(bot) {
+  return {
+    llm: bot.llm,
+    search: bot.search,
+    memory: bot.memory
+  };
+}
