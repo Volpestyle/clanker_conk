@@ -270,6 +270,25 @@ export class XaiRealtimeClient extends EventEmitter {
     });
   }
 
+  requestTextUtterance(promptText) {
+    const prompt = String(promptText || "").trim();
+    if (!prompt) return;
+    this.send({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: prompt
+          }
+        ]
+      }
+    });
+    this.createAudioResponse();
+  }
+
   send(payload) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error("xAI realtime socket is not open.");
