@@ -9,7 +9,6 @@
  *  - StructuredOutput tool payloads with no result text
  *  - contract violation retry & bounded fallback
  *
- * See: docs/claude-code-voice-classifier-incident-2026-02-27.md
  */
 import test from "node:test";
 import assert from "node:assert/strict";
