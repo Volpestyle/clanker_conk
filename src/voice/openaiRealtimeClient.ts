@@ -7,25 +7,16 @@ const MAX_OUTBOUND_EVENT_HISTORY = 8;
 const MAX_EVENT_PREVIEW_CHARS = 280;
 
 const AUDIO_DELTA_TYPES = new Set([
-  "response.audio.delta",
-  "response.output_audio.delta",
-  "output_audio.delta",
-  "audio.delta",
-  "response.audio.chunk",
-  "response.output_audio.chunk"
+  "response.output_audio.delta"
 ]);
 
 const TRANSCRIPT_TYPES = new Set([
+  "conversation.item.input_audio_transcription.delta",
   "conversation.item.input_audio_transcription.completed",
-  "response.audio_transcript.delta",
-  "response.audio_transcript.done",
   "response.output_audio_transcript.delta",
   "response.output_audio_transcript.done",
-  "response.text.delta",
-  "response.text.done",
   "response.output_text.delta",
-  "response.output_text.done",
-  "transcript.completed"
+  "response.output_text.done"
 ]);
 
 export class OpenAiRealtimeClient extends EventEmitter {
@@ -48,11 +39,12 @@ export class OpenAiRealtimeClient extends EventEmitter {
     this.sessionConfig = null;
     this.activeResponseId = null;
     this.activeResponseStatus = null;
+    this.latestVideoFrame = null;
   }
 
   async connect({
     model = "gpt-realtime",
-    voice = "alloy",
+    voice = "",
     instructions = "",
     inputAudioFormat = "pcm16",
     outputAudioFormat = "pcm16",
@@ -67,9 +59,12 @@ export class OpenAiRealtimeClient extends EventEmitter {
     }
 
     const resolvedModel = String(model || "gpt-realtime").trim() || "gpt-realtime";
-    const resolvedVoice = String(voice || "alloy").trim() || "alloy";
-    const resolvedInputAudioFormat = normalizeOpenAiRealtimeAudioFormat(inputAudioFormat);
-    const resolvedOutputAudioFormat = normalizeOpenAiRealtimeAudioFormat(outputAudioFormat);
+    const resolvedVoice = String(voice || "").trim();
+    if (!resolvedVoice) {
+      throw new Error("OpenAI realtime voice is required (configure voice.openaiRealtime.voice).");
+    }
+    const resolvedInputAudioFormat = normalizeOpenAiRealtimeAudioFormat(inputAudioFormat, "input");
+    const resolvedOutputAudioFormat = normalizeOpenAiRealtimeAudioFormat(outputAudioFormat, "output");
     const resolvedInputTranscriptionModel =
       String(inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
     const ws = await this.openSocket(this.buildRealtimeUrl(resolvedModel));
@@ -115,6 +110,7 @@ export class OpenAiRealtimeClient extends EventEmitter {
       outputAudioFormat: resolvedOutputAudioFormat,
       inputTranscriptionModel: resolvedInputTranscriptionModel
     };
+    this.latestVideoFrame = null;
     this.sendSessionUpdate();
 
     return this.getState();
@@ -137,8 +133,7 @@ export class OpenAiRealtimeClient extends EventEmitter {
       const ws = new WebSocket(String(url), {
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${this.apiKey}`,
-          "OpenAI-Beta": "realtime=v1"
+          Authorization: `Bearer ${this.apiKey}`
         },
         handshakeTimeout: CONNECT_TIMEOUT_MS
       });
@@ -289,7 +284,50 @@ export class OpenAiRealtimeClient extends EventEmitter {
     this.send({
       type: "response.create",
       response: {
-        modalities: ["audio", "text"]
+        output_modalities: ["audio"]
+      }
+    });
+  }
+
+  appendInputVideoFrame({ mimeType = "image/jpeg", dataBase64 }) {
+    const normalizedFrame = String(dataBase64 || "").trim();
+    if (!normalizedFrame) return;
+    this.latestVideoFrame = {
+      mimeType: normalizeImageMimeType(mimeType),
+      dataBase64: normalizedFrame,
+      at: Date.now()
+    };
+  }
+
+  requestVideoCommentary(promptText) {
+    const prompt = String(promptText || "").trim();
+    if (!prompt) return;
+    const frame = this.latestVideoFrame;
+    if (!frame?.dataBase64) {
+      throw new Error("No stream-watch frame buffered for OpenAI realtime commentary.");
+    }
+    const imageUrl = `data:${frame.mimeType};base64,${frame.dataBase64}`;
+    this.send({
+      type: "response.create",
+      response: {
+        conversation: "none",
+        output_modalities: ["audio"],
+        input: [
+          {
+            type: "message",
+            role: "user",
+            content: [
+              {
+                type: "input_text",
+                text: prompt
+              },
+              {
+                type: "input_image",
+                image_url: imageUrl
+              }
+            ]
+          }
+        ]
       }
     });
   }
@@ -359,6 +397,7 @@ export class OpenAiRealtimeClient extends EventEmitter {
     });
 
     this.ws = null;
+    this.latestVideoFrame = null;
     this.clearActiveResponse();
   }
 
@@ -376,7 +415,8 @@ export class OpenAiRealtimeClient extends EventEmitter {
       lastOutboundEvent: this.lastOutboundEvent || null,
       recentOutboundEvents: this.recentOutboundEvents.slice(-4),
       activeResponseId: this.activeResponseId || null,
-      activeResponseStatus: this.activeResponseStatus || null
+      activeResponseStatus: this.activeResponseStatus || null,
+      bufferedVideoFrameAt: this.latestVideoFrame?.at ? new Date(this.latestVideoFrame.at).toISOString() : null
     };
   }
 
@@ -412,17 +452,30 @@ export class OpenAiRealtimeClient extends EventEmitter {
 
   sendSessionUpdate() {
     const session = this.sessionConfig && typeof this.sessionConfig === "object" ? this.sessionConfig : {};
+    const resolvedVoice = String(session.voice || "").trim();
+    if (!resolvedVoice) {
+      throw new Error("OpenAI realtime voice is required (configure voice.openaiRealtime.voice).");
+    }
     this.send({
       type: "session.update",
       session: compactObject({
+        type: "realtime",
         model: String(session.model || "gpt-realtime").trim() || "gpt-realtime",
-        voice: String(session.voice || "alloy").trim() || "alloy",
         instructions: String(session.instructions || ""),
-        modalities: ["audio", "text"],
-        input_audio_format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat),
-        output_audio_format: normalizeOpenAiRealtimeAudioFormat(session.outputAudioFormat),
-        input_audio_transcription: compactObject({
-          model: String(session.inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe"
+        output_modalities: ["audio"],
+        audio: compactObject({
+          input: compactObject({
+            format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat, "input"),
+            transcription: compactObject({
+              model:
+                String(session.inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() ||
+                "gpt-4o-mini-transcribe"
+            })
+          }),
+          output: compactObject({
+            format: normalizeOpenAiRealtimeAudioFormat(session.outputAudioFormat, "output"),
+            voice: resolvedVoice
+          })
         })
       })
     });
@@ -479,13 +532,61 @@ function normalizeOpenAiBaseUrl(value) {
   return normalized.replace(/\/+$/, "");
 }
 
-function normalizeOpenAiRealtimeAudioFormat(value) {
+function normalizeOpenAiRealtimeAudioFormat(value, direction = "input") {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const type = String(value.type || "")
+      .trim()
+      .toLowerCase();
+    if (type === "audio/pcmu") {
+      return {
+        type: "audio/pcmu"
+      };
+    }
+    if (type === "audio/pcma") {
+      return {
+        type: "audio/pcma"
+      };
+    }
+    if (type === "audio/pcm") {
+      const rate = Number(value.rate);
+      return {
+        type: "audio/pcm",
+        rate: Number.isFinite(rate) && rate > 0 ? Math.floor(rate) : 24000
+      };
+    }
+  }
+
   const normalized = String(value || "")
     .trim()
     .toLowerCase();
-  if (normalized === "g711_ulaw") return "g711_ulaw";
-  if (normalized === "g711_alaw") return "g711_alaw";
-  return "pcm16";
+  if (normalized === "g711_ulaw") {
+    return {
+      type: "audio/pcmu"
+    };
+  }
+  if (normalized === "g711_alaw") {
+    return {
+      type: "audio/pcma"
+    };
+  }
+
+  // GA Realtime uses explicit media-type descriptors for PCM.
+  // Keep the direction arg in case we need asymmetric defaults later.
+  void direction;
+  return {
+    type: "audio/pcm",
+    rate: 24000
+  };
+}
+
+function normalizeImageMimeType(value) {
+  const normalized = String(value || "image/jpeg")
+    .trim()
+    .toLowerCase();
+  if (normalized === "image/jpg") return "image/jpeg";
+  if (normalized === "image/png") return "image/png";
+  if (normalized === "image/webp") return "image/webp";
+  return "image/jpeg";
 }
 
 function extractAudioBase64(event) {
@@ -521,13 +622,48 @@ function summarizeOutboundPayload(payload) {
     });
   }
 
-  if (type === "input_audio_buffer.commit" || type === "response.create") {
+  if (type === "input_audio_buffer.commit") {
     const response = payload.response && typeof payload.response === "object" ? payload.response : null;
     return compactObject({
       type,
       response: response
         ? {
-            modalities: Array.isArray(response.modalities) ? response.modalities.slice(0, 4) : null
+            outputModalities: Array.isArray(response.output_modalities)
+              ? response.output_modalities.slice(0, 4)
+              : null
+          }
+        : null
+    });
+  }
+
+  if (type === "response.create") {
+    const response = payload.response && typeof payload.response === "object" ? payload.response : null;
+    const inputItems = Array.isArray(response?.input) ? response.input : [];
+    const inputTextChars = inputItems.reduce((total, item) => {
+      const content = Array.isArray(item?.content) ? item.content : [];
+      return (
+        total +
+        content.reduce((sum, part) => {
+          if (part?.type !== "input_text") return sum;
+          return sum + String(part?.text || "").length;
+        }, 0)
+      );
+    }, 0);
+    const hasInputImage = inputItems.some((item) => {
+      const content = Array.isArray(item?.content) ? item.content : [];
+      return content.some((part) => part?.type === "input_image");
+    });
+    return compactObject({
+      type,
+      response: response
+        ? {
+            conversation: response.conversation || null,
+            outputModalities: Array.isArray(response.output_modalities)
+              ? response.output_modalities.slice(0, 4)
+              : null,
+            inputItems: inputItems.length,
+            inputTextChars,
+            hasInputImage
           }
         : null
     });
@@ -535,14 +671,16 @@ function summarizeOutboundPayload(payload) {
 
   if (type === "session.update") {
     const session = payload.session && typeof payload.session === "object" ? payload.session : {};
+    const audio = session.audio && typeof session.audio === "object" ? session.audio : {};
     return compactObject({
       type,
+      sessionType: session.type || null,
       model: session.model || null,
-      voice: session.voice || null,
-      modalities: Array.isArray(session.modalities) ? session.modalities.slice(0, 4) : null,
-      inputAudioFormat: session.input_audio_format || null,
-      outputAudioFormat: session.output_audio_format || null,
-      inputTranscriptionModel: session?.input_audio_transcription?.model || null,
+      outputModalities: Array.isArray(session.output_modalities) ? session.output_modalities.slice(0, 4) : null,
+      inputAudioFormat: audio?.input?.format || null,
+      outputAudioFormat: audio?.output?.format || null,
+      outputVoice: audio?.output?.voice || null,
+      inputTranscriptionModel: audio?.input?.transcription?.model || null,
       instructionsChars: session.instructions ? String(session.instructions).length : 0
     });
   }

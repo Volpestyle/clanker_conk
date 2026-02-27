@@ -98,6 +98,8 @@ const SOUNDBOARD_DECISION_TRANSCRIPT_MAX_CHARS = 280;
 const SOUNDBOARD_CATALOG_REFRESH_MS = 60_000;
 const STREAM_WATCH_AUDIO_QUIET_WINDOW_MS = 2200;
 const STREAM_WATCH_COMMENTARY_PROMPT_MAX_CHARS = 220;
+const STREAM_WATCH_COMMENTARY_LINE_MAX_CHARS = 160;
+const STREAM_WATCH_VISION_MAX_OUTPUT_TOKENS = 72;
 
 export class VoiceSessionManager {
   constructor({
@@ -698,7 +700,10 @@ export class VoiceSessionManager {
             lastCommentaryAt: 0,
             ingestedFrameCount: 0,
             acceptedFrameCountInWindow: 0,
-            frameWindowStartedAt: 0
+            frameWindowStartedAt: 0,
+            latestFrameMimeType: null,
+            latestFrameDataBase64: "",
+            latestFrameAt: 0
           },
           soundboard: {
             playCount: 0,
@@ -971,7 +976,7 @@ export class VoiceSessionManager {
       return true;
     }
 
-    if (session.mode !== "gemini_realtime") {
+    if (!this.supportsStreamWatchCommentary(session, settings)) {
       await this.sendOperationalMessage({
         channel: message.channel,
         settings,
@@ -980,24 +985,22 @@ export class VoiceSessionManager {
         userId: requesterId,
         messageId: message.id,
         event: "voice_stream_watch_request",
-        reason: "gemini_mode_required",
+        reason: "stream_watch_provider_unavailable",
         details: {
-          mode: session.mode
+          mode: session.mode,
+          realtimeProvider: session.realtimeProvider
         },
-        fallback: "switch voice mode to `gemini_realtime` for stream watching."
+        fallback:
+          "switch voice mode to `openai_realtime` or `gemini_realtime`, or configure a vision fallback provider for `voice_agent`."
       });
       return true;
     }
 
-    session.streamWatch = session.streamWatch || {};
-    session.streamWatch.active = true;
-    session.streamWatch.targetUserId = String(targetUserId || requesterId || "").trim() || null;
-    session.streamWatch.requestedByUserId = requesterId;
-    session.streamWatch.lastFrameAt = 0;
-    session.streamWatch.lastCommentaryAt = 0;
-    session.streamWatch.ingestedFrameCount = 0;
-    session.streamWatch.acceptedFrameCountInWindow = 0;
-    session.streamWatch.frameWindowStartedAt = 0;
+    this.initializeStreamWatchState({
+      session,
+      requesterUserId: requesterId,
+      targetUserId: String(targetUserId || requesterId || "").trim() || null
+    });
 
     await this.sendOperationalMessage({
       channel: message.channel,
@@ -1014,6 +1017,226 @@ export class VoiceSessionManager {
       fallback: "bet, i'm watching your stream. pipe frames to `/api/voice/stream-ingest/frame`."
     });
     return true;
+  }
+
+  initializeStreamWatchState({ session, requesterUserId, targetUserId = null }) {
+    if (!session) return;
+    session.streamWatch = session.streamWatch || {};
+    session.streamWatch.active = true;
+    session.streamWatch.targetUserId = String(targetUserId || requesterUserId || "").trim() || null;
+    session.streamWatch.requestedByUserId = String(requesterUserId || "").trim() || null;
+    session.streamWatch.lastFrameAt = 0;
+    session.streamWatch.lastCommentaryAt = 0;
+    session.streamWatch.ingestedFrameCount = 0;
+    session.streamWatch.acceptedFrameCountInWindow = 0;
+    session.streamWatch.frameWindowStartedAt = 0;
+    session.streamWatch.latestFrameMimeType = null;
+    session.streamWatch.latestFrameDataBase64 = "";
+    session.streamWatch.latestFrameAt = 0;
+  }
+
+  supportsStreamWatchCommentary(session, settings = null) {
+    if (!session || session.ending) return false;
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    if (!isRealtimeMode(session.mode)) return false;
+    const realtimeClient = session.realtimeClient;
+    const hasNativeVideoCommentary = Boolean(
+      realtimeClient &&
+        typeof realtimeClient.appendInputVideoFrame === "function" &&
+        typeof realtimeClient.requestVideoCommentary === "function"
+    );
+    if (hasNativeVideoCommentary) return true;
+    return this.supportsVisionFallbackStreamWatchCommentary({ session, settings: resolvedSettings });
+  }
+
+  supportsVisionFallbackStreamWatchCommentary({ session, settings = null } = {}) {
+    if (!session || session.ending) return false;
+    if (session.mode !== "voice_agent") return false;
+    const realtimeClient = session.realtimeClient;
+    if (!realtimeClient || typeof realtimeClient.requestTextUtterance !== "function") return false;
+    if (!this.llm || typeof this.llm.generate !== "function") return false;
+    return Boolean(this.resolveStreamWatchVisionProviderSettings(settings));
+  }
+
+  resolveStreamWatchVisionProviderSettings(settings = null) {
+    const llmSettings = settings?.llm && typeof settings.llm === "object" ? settings.llm : {};
+    const candidates = [
+      {
+        provider: "openai",
+        model: "gpt-4.1-mini"
+      },
+      {
+        provider: "xai",
+        model: "grok-2-vision-latest"
+      },
+      {
+        provider: "anthropic",
+        model: "claude-haiku-4-5"
+      },
+      {
+        provider: "claude-code",
+        model: "sonnet"
+      }
+    ];
+
+    for (const candidate of candidates) {
+      const configured = this.llm?.isProviderConfigured?.(candidate.provider);
+      if (!configured) continue;
+      return {
+        ...llmSettings,
+        provider: candidate.provider,
+        model: candidate.model,
+        temperature: 0.3,
+        maxOutputTokens: STREAM_WATCH_VISION_MAX_OUTPUT_TOKENS
+      };
+    }
+
+    return null;
+  }
+
+  async generateVisionFallbackStreamWatchCommentary({
+    session,
+    settings,
+    streamerUserId = null,
+    frameMimeType = "image/jpeg",
+    frameDataBase64 = ""
+  }) {
+    if (!session || session.ending) return null;
+    if (!this.llm || typeof this.llm.generate !== "function") return null;
+    const normalizedFrame = String(frameDataBase64 || "").trim();
+    if (!normalizedFrame) return null;
+
+    const providerSettings = this.resolveStreamWatchVisionProviderSettings(settings);
+    if (!providerSettings) return null;
+    const speakerName = this.resolveVoiceSpeakerName(session, streamerUserId) || "the streamer";
+    const systemPrompt = [
+      `You are ${getPromptBotName(settings)} in Discord VC.`,
+      "You are looking at one still frame from a live stream.",
+      "Return exactly one short spoken commentary line (max 12 words).",
+      "No lists, no quotes, no stage directions."
+    ].join(" ");
+    const userPrompt = [
+      `Latest frame from ${speakerName}'s stream.`,
+      "Comment on only what is visible in this frame.",
+      "If uncertain, say so briefly."
+    ].join(" ");
+
+    const generated = await this.llm.generate({
+      settings: {
+        ...(settings || {}),
+        llm: providerSettings
+      },
+      systemPrompt,
+      userPrompt,
+      imageInputs: [
+        {
+          mediaType: String(frameMimeType || "image/jpeg"),
+          dataBase64: normalizedFrame
+        }
+      ],
+      trace: {
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        source: "voice_stream_watch_vision_fallback"
+      }
+    });
+
+    const rawText = String(generated?.text || "").trim();
+    const oneLine = rawText.split(/\r?\n/)[0] || "";
+    const text = normalizeVoiceText(oneLine, STREAM_WATCH_COMMENTARY_LINE_MAX_CHARS);
+    if (!text) return null;
+    return {
+      text,
+      provider: generated?.provider || providerSettings.provider || null,
+      model: generated?.model || providerSettings.model || null
+    };
+  }
+
+  isUserInSessionVoiceChannel({ session, userId }) {
+    const normalizedUserId = String(userId || "").trim();
+    if (!session || !normalizedUserId) return false;
+    const guild = this.client.guilds.cache.get(String(session.guildId || "")) || null;
+    const voiceChannel = guild?.channels?.cache?.get(String(session.voiceChannelId || "")) || null;
+    return Boolean(voiceChannel?.members?.has?.(normalizedUserId));
+  }
+
+  async enableWatchStreamForUser({
+    guildId,
+    requesterUserId,
+    targetUserId = null,
+    settings = null,
+    source = "screen_share_link"
+  }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    const normalizedRequesterId = String(requesterUserId || "").trim();
+    if (!normalizedGuildId || !normalizedRequesterId) {
+      return {
+        ok: false,
+        reason: "invalid_request"
+      };
+    }
+
+    const session = this.sessions.get(normalizedGuildId);
+    if (!session) {
+      return {
+        ok: false,
+        reason: "session_not_found",
+        fallback: "i'm not in vc rn. ask me to join first."
+      };
+    }
+
+    if (!this.isUserInSessionVoiceChannel({ session, userId: normalizedRequesterId })) {
+      return {
+        ok: false,
+        reason: "requester_not_in_same_vc",
+        fallback: "you need to be in my vc for screen sharing."
+      };
+    }
+
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    const streamWatchSettings = resolvedSettings?.voice?.streamWatch || {};
+    if (!streamWatchSettings.enabled) {
+      return {
+        ok: false,
+        reason: "stream_watch_disabled",
+        fallback: "stream watch is disabled in settings rn."
+      };
+    }
+
+    if (!this.supportsStreamWatchCommentary(session, resolvedSettings)) {
+      return {
+        ok: false,
+        reason: "stream_watch_provider_unavailable",
+        fallback:
+          "switch voice mode to `openai_realtime` or `gemini_realtime`, or configure a vision fallback provider for `voice_agent`."
+      };
+    }
+
+    const resolvedTarget = String(targetUserId || normalizedRequesterId).trim() || normalizedRequesterId;
+    this.initializeStreamWatchState({
+      session,
+      requesterUserId: normalizedRequesterId,
+      targetUserId: resolvedTarget
+    });
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: normalizedRequesterId,
+      content: "stream_watch_enabled_programmatic",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "screen_share_link"),
+        targetUserId: resolvedTarget
+      }
+    });
+
+    return {
+      ok: true,
+      reason: "watching_started",
+      targetUserId: session.streamWatch?.targetUserId || resolvedTarget
+    };
   }
 
   async requestStopWatchingStream({ message, settings }) {
@@ -1056,6 +1279,9 @@ export class VoiceSessionManager {
 
     session.streamWatch.active = false;
     session.streamWatch.targetUserId = null;
+    session.streamWatch.latestFrameMimeType = null;
+    session.streamWatch.latestFrameDataBase64 = "";
+    session.streamWatch.latestFrameAt = 0;
 
     await this.sendOperationalMessage({
       channel: message.channel,
@@ -1159,11 +1385,10 @@ export class VoiceSessionManager {
         reason: "stream_watch_disabled"
       };
     }
-
-    if (session.mode !== "gemini_realtime") {
+    if (!this.supportsStreamWatchCommentary(session, resolvedSettings)) {
       return {
         accepted: false,
-        reason: "gemini_mode_required"
+        reason: "provider_video_ingest_unavailable"
       };
     }
 
@@ -1246,34 +1471,34 @@ export class VoiceSessionManager {
     }
 
     const realtimeClient = session.realtimeClient;
-    if (!realtimeClient || typeof realtimeClient.appendInputVideoFrame !== "function") {
-      return {
-        accepted: false,
-        reason: "provider_video_ingest_unavailable"
-      };
-    }
-
-    try {
-      realtimeClient.appendInputVideoFrame({
-        mimeType: normalizedMimeType === "image/jpg" ? "image/jpeg" : normalizedMimeType,
-        dataBase64: normalizedFrame
-      });
-    } catch (error) {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: normalizedStreamerId || this.client.user?.id || null,
-        content: `stream_watch_frame_ingest_failed: ${String(error?.message || error)}`,
-        metadata: {
-          sessionId: session.id,
-          source: String(source || "api_stream_ingest")
-        }
-      });
-      return {
-        accepted: false,
-        reason: "frame_ingest_failed"
-      };
+    const resolvedMimeType = normalizedMimeType === "image/jpg" ? "image/jpeg" : normalizedMimeType;
+    if (realtimeClient && typeof realtimeClient.appendInputVideoFrame === "function") {
+      try {
+        realtimeClient.appendInputVideoFrame({
+          mimeType: resolvedMimeType,
+          dataBase64: normalizedFrame
+        });
+      } catch (error) {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: normalizedStreamerId || this.client.user?.id || null,
+          content: `stream_watch_frame_ingest_failed: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id,
+            source: String(source || "api_stream_ingest")
+          }
+        });
+        return {
+          accepted: false,
+          reason: "frame_ingest_failed"
+        };
+      }
+    } else {
+      streamWatch.latestFrameMimeType = resolvedMimeType;
+      streamWatch.latestFrameDataBase64 = normalizedFrame;
+      streamWatch.latestFrameAt = now;
     }
 
     streamWatch.lastFrameAt = now;
@@ -1290,7 +1515,7 @@ export class VoiceSessionManager {
       metadata: {
         sessionId: session.id,
         source: String(source || "api_stream_ingest"),
-        mimeType: normalizedMimeType,
+        mimeType: resolvedMimeType,
         frameBytes: approxBytes,
         totalFrames: streamWatch.ingestedFrameCount
       }
@@ -1317,7 +1542,7 @@ export class VoiceSessionManager {
     source = "api_stream_ingest"
   }) {
     if (!session || session.ending) return;
-    if (session.mode !== "gemini_realtime") return;
+    if (!this.supportsStreamWatchCommentary(session, settings)) return;
     if (!session.streamWatch?.active) return;
     if (session.userCaptures.size > 0) return;
     if (session.pendingResponse) return;
@@ -1336,10 +1561,10 @@ export class VoiceSessionManager {
     if (now - Number(session.streamWatch.lastCommentaryAt || 0) < minCommentaryIntervalSeconds * 1000) return;
 
     const realtimeClient = session.realtimeClient;
-    if (!realtimeClient || typeof realtimeClient.requestVideoCommentary !== "function") return;
+    if (!realtimeClient) return;
 
     const speakerName = this.resolveVoiceSpeakerName(session, streamerUserId) || "the streamer";
-    const prompt = normalizeVoiceText(
+    const nativePrompt = normalizeVoiceText(
       [
         `You're in Discord VC watching ${speakerName}'s live stream.`,
         "Give one short in-character spoken commentary line about the latest frame.",
@@ -1349,7 +1574,37 @@ export class VoiceSessionManager {
     );
 
     try {
-      realtimeClient.requestVideoCommentary(prompt);
+      let fallbackVisionMeta = null;
+      if (typeof realtimeClient.requestVideoCommentary === "function") {
+        realtimeClient.requestVideoCommentary(nativePrompt);
+      } else if (typeof realtimeClient.requestTextUtterance === "function") {
+        const bufferedFrame = String(session.streamWatch?.latestFrameDataBase64 || "").trim();
+        if (!bufferedFrame) return;
+        const generated = await this.generateVisionFallbackStreamWatchCommentary({
+          session,
+          settings,
+          streamerUserId,
+          frameMimeType: session.streamWatch?.latestFrameMimeType || "image/jpeg",
+          frameDataBase64: bufferedFrame
+        });
+        const line = normalizeVoiceText(generated?.text || "", STREAM_WATCH_COMMENTARY_LINE_MAX_CHARS);
+        if (!line) return;
+        const utterancePrompt = normalizeVoiceText(
+          [
+            `You're in Discord VC watching ${speakerName}'s live stream.`,
+            `Speak exactly this one short stream commentary line and nothing else: ${line}`
+          ].join(" "),
+          STREAM_WATCH_COMMENTARY_PROMPT_MAX_CHARS
+        );
+        realtimeClient.requestTextUtterance(utterancePrompt);
+        fallbackVisionMeta = {
+          provider: generated?.provider || null,
+          model: generated?.model || null
+        };
+      } else {
+        return;
+      }
+
       const created = this.createTrackedAudioResponse({
         session,
         userId: session.streamWatch.targetUserId || streamerUserId || this.client.user?.id || null,
@@ -1368,7 +1623,10 @@ export class VoiceSessionManager {
         metadata: {
           sessionId: session.id,
           source: String(source || "api_stream_ingest"),
-          streamerUserId: streamerUserId || null
+          streamerUserId: streamerUserId || null,
+          commentaryPath: fallbackVisionMeta ? "vision_fallback_text_utterance" : "provider_native_video",
+          visionProvider: fallbackVisionMeta?.provider || null,
+          visionModel: fallbackVisionMeta?.model || null
         }
       });
     } catch (error) {
