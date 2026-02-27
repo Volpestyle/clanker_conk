@@ -101,12 +101,14 @@ test("voice reply decision llm settings normalize provider and model", async () 
       voice: {
         replyDecisionLlm: {
           provider: "CLAUDE-CODE",
-          model: " opus "
+          model: " opus ",
+          maxAttempts: 7
         }
       }
     });
 
     assert.equal(patched.voice.replyDecisionLlm.provider, "claude-code");
     assert.equal(patched.voice.replyDecisionLlm.model, "opus");
+    assert.equal(patched.voice.replyDecisionLlm.maxAttempts, 3);
   });
 });

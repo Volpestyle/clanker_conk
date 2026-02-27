@@ -377,25 +377,70 @@ export class LLMService {
       systemPrompt,
       maxOutputTokens
     });
+    const streamArgs = buildClaudeCodeCliArgs({
+      model,
+      systemPrompt: claudeSystemPrompt,
+      jsonSchema
+    });
+    let streamFailure = "";
 
     try {
       const { stdout } = await runClaudeCli({
-        args: buildClaudeCodeCliArgs({
-          model,
-          systemPrompt: claudeSystemPrompt,
-          jsonSchema
-        }),
+        args: streamArgs,
         input: streamInput,
         timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
         maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
       });
 
       const parsed = parseClaudeCodeStreamOutput(stdout);
-      if (!parsed || !String(parsed.text || "").trim()) {
-        throw new Error("claude-code returned an empty or invalid stream response.");
-      }
-      if (parsed.isError) {
+      if (parsed?.isError) {
         throw new Error(parsed.errorMessage || "claude-code returned an error result.");
+      }
+      if (parsed && String(parsed.text || "").trim()) {
+        return {
+          text: parsed.text,
+          usage: parsed.usage,
+          costUsd: parsed.costUsd
+        };
+      }
+
+      streamFailure = "claude-code returned an empty or invalid stream response.";
+    } catch (error) {
+      const normalizedError = normalizeClaudeCodeCliError(error, {
+        timeoutPrefix: "claude-code timed out"
+      });
+      if (normalizedError.isTimeout) {
+        throw new Error(normalizedError.message);
+      }
+      streamFailure = normalizedError.message;
+    }
+
+    const fallbackPrompt = buildClaudeCodeFallbackPrompt({
+      contextMessages,
+      userPrompt,
+      imageInputs
+    });
+    const fallbackArgs = buildClaudeCodeJsonCliArgs({
+      model,
+      systemPrompt: claudeSystemPrompt,
+      jsonSchema,
+      prompt: fallbackPrompt
+    });
+    let jsonFallbackFailure = "";
+
+    try {
+      const { stdout } = await runClaudeCli({
+        args: fallbackArgs,
+        input: "",
+        timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
+        maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
+      });
+      const parsed = parseClaudeCodeJsonOutput(stdout);
+      if (parsed?.isError) {
+        throw new Error(parsed.errorMessage || "claude-code returned an error result.");
+      }
+      if (!parsed || !String(parsed.text || "").trim()) {
+        throw new Error("claude-code returned an empty or invalid fallback response.");
       }
 
       return {
@@ -404,15 +449,53 @@ export class LLMService {
         costUsd: parsed.costUsd
       };
     } catch (error) {
-      if (error?.killed || error?.signal === "SIGTERM") {
-        throw new Error(`claude-code timed out after ${CLAUDE_CODE_TIMEOUT_MS / 1000}s.`);
+      const normalizedError = normalizeClaudeCodeCliError(error, {
+        timeoutPrefix: "claude-code fallback timed out"
+      });
+      if (normalizedError.isTimeout) {
+        throw new Error(
+          streamFailure
+            ? `${streamFailure} | fallback: ${normalizedError.message}`
+            : normalizedError.message
+        );
       }
-      const detail = String(error?.stderr || error?.stdout || "").trim();
-      throw new Error(
-        detail
-          ? `claude-code CLI error: ${error?.message || error} | ${detail.slice(0, 300)}`
-          : `claude-code CLI error: ${error?.message || error}`
-      );
+      jsonFallbackFailure = normalizedError.message;
+    }
+
+    const textFallbackArgs = buildClaudeCodeTextCliArgs({
+      model,
+      systemPrompt: claudeSystemPrompt,
+      jsonSchema,
+      prompt: fallbackPrompt
+    });
+    try {
+      const { stdout } = await runClaudeCli({
+        args: textFallbackArgs,
+        input: "",
+        timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
+        maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
+      });
+      const text = String(stdout || "").trim();
+      if (!text) {
+        throw new Error("claude-code returned an empty or invalid text fallback response.");
+      }
+
+      return {
+        text,
+        usage: {
+          inputTokens: 0,
+          outputTokens: 0,
+          cacheWriteTokens: 0,
+          cacheReadTokens: 0
+        },
+        costUsd: 0
+      };
+    } catch (error) {
+      const normalizedError = normalizeClaudeCodeCliError(error, {
+        timeoutPrefix: "claude-code text fallback timed out"
+      });
+      const messageParts = [streamFailure, jsonFallbackFailure, normalizedError.message].filter(Boolean);
+      throw new Error(messageParts.join(" | "));
     }
   }
 
@@ -453,15 +536,10 @@ export class LLMService {
         usage: parsed.usage
       };
     } catch (error) {
-      if (error?.killed || error?.signal === "SIGTERM") {
-        throw new Error(`claude-code memory extraction timed out after ${CLAUDE_CODE_TIMEOUT_MS / 1000}s.`);
-      }
-      const detail = String(error?.stderr || error?.stdout || "").trim();
-      throw new Error(
-        detail
-          ? `claude-code CLI error: ${error?.message || error} | ${detail.slice(0, 300)}`
-          : `claude-code CLI error: ${error?.message || error}`
-      );
+      const normalizedError = normalizeClaudeCodeCliError(error, {
+        timeoutPrefix: "claude-code memory extraction timed out"
+      });
+      throw new Error(normalizedError.message);
     }
   }
 
@@ -1547,6 +1625,7 @@ export function buildClaudeCodeCliArgs({ model, systemPrompt = "", jsonSchema = 
     "-p",
     "--verbose",
     "--no-session-persistence",
+    "--strict-mcp-config",
     "--tools", "",
     "--input-format", "stream-json",
     "--output-format", "stream-json",
@@ -1565,6 +1644,114 @@ export function buildClaudeCodeCliArgs({ model, systemPrompt = "", jsonSchema = 
   }
 
   return args;
+}
+
+export function buildClaudeCodeJsonCliArgs({
+  model,
+  systemPrompt = "",
+  jsonSchema = "",
+  prompt = ""
+}) {
+  const args = [
+    "-p",
+    "--no-session-persistence",
+    "--strict-mcp-config",
+    "--tools", "",
+    "--output-format", "json",
+    "--model", model,
+    "--max-turns", "1"
+  ];
+
+  const normalizedSystemPrompt = String(systemPrompt || "").trim();
+  if (normalizedSystemPrompt) {
+    args.push("--system-prompt", normalizedSystemPrompt);
+  }
+
+  const normalizedSchema = String(jsonSchema || "").trim();
+  if (normalizedSchema) {
+    args.push("--json-schema", normalizedSchema);
+  }
+
+  const normalizedPrompt = String(prompt || "").trim();
+  if (normalizedPrompt) {
+    args.push(normalizedPrompt);
+  }
+
+  return args;
+}
+
+export function buildClaudeCodeTextCliArgs({
+  model,
+  systemPrompt = "",
+  jsonSchema = "",
+  prompt = ""
+}) {
+  const args = [
+    "-p",
+    "--no-session-persistence",
+    "--strict-mcp-config",
+    "--tools", "",
+    "--model", model,
+    "--max-turns", "1"
+  ];
+
+  const normalizedSystemPrompt = String(systemPrompt || "").trim();
+  if (normalizedSystemPrompt) {
+    args.push("--system-prompt", normalizedSystemPrompt);
+  }
+
+  const normalizedSchema = String(jsonSchema || "").trim();
+  if (normalizedSchema) {
+    args.push("--json-schema", normalizedSchema);
+  }
+
+  const normalizedPrompt = String(prompt || "").trim();
+  if (normalizedPrompt) {
+    args.push(normalizedPrompt);
+  }
+
+  return args;
+}
+
+export function buildClaudeCodeFallbackPrompt({
+  contextMessages = [],
+  userPrompt = "",
+  imageInputs = []
+}) {
+  const sections = [];
+  const historyLines = [];
+  for (const message of Array.isArray(contextMessages) ? contextMessages : []) {
+    const role = message?.role === "assistant" ? "assistant" : "user";
+    const text = String(message?.content || "").trim();
+    if (!text) continue;
+    historyLines.push(`${role}: ${text}`);
+  }
+  if (historyLines.length) {
+    sections.push(`Conversation context:\n${historyLines.join("\n")}`);
+  }
+
+  const normalizedPrompt = String(userPrompt || "").trim();
+  if (normalizedPrompt) {
+    sections.push(`User request:\n${normalizedPrompt}`);
+  }
+
+  const imageLines = (Array.isArray(imageInputs) ? imageInputs : [])
+    .map((image) => {
+      const url = String(image?.url || "").trim();
+      if (url) return `- ${url}`;
+
+      const mediaType = String(image?.mediaType || image?.contentType || "").trim();
+      const hasInlineImage = Boolean(String(image?.dataBase64 || "").trim());
+      if (!hasInlineImage) return "";
+
+      return mediaType ? `- inline image (${mediaType})` : "- inline image";
+    })
+    .filter(Boolean);
+  if (imageLines.length) {
+    sections.push(`Image references:\n${imageLines.join("\n")}`);
+  }
+
+  return sections.join("\n\n").trim();
 }
 
 export function buildClaudeCodeSystemPrompt({ systemPrompt = "", maxOutputTokens = 0 }) {
@@ -1666,6 +1853,68 @@ function serializeClaudeCodeStructuredOutput(rawValue) {
   } catch {
     return "";
   }
+}
+
+export function parseClaudeCodeJsonOutput(rawOutput) {
+  const rawText = String(rawOutput || "").trim();
+  if (!rawText) return null;
+
+  const parsedWhole = safeJsonParse(rawText, null);
+  let lastResult =
+    parsedWhole && typeof parsedWhole === "object" && !Array.isArray(parsedWhole)
+      ? parsedWhole
+      : null;
+
+  if (!lastResult || (!lastResult.type && lastResult.result === undefined)) {
+    const lines = rawText
+      .split(/\r?\n/g)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    lastResult = null;
+    for (const line of lines) {
+      const event = safeJsonParse(line, null);
+      if (!event || typeof event !== "object") continue;
+      if (event.type === "result") {
+        lastResult = event;
+      }
+    }
+  }
+  if (!lastResult) return null;
+
+  const usage = lastResult.usage || {};
+  const resultText = String(lastResult.result || "").trim();
+  const errors = Array.isArray(lastResult.errors) ? lastResult.errors : [];
+  const errorMessage = resultText || errors.map((item) => String(item || "").trim()).filter(Boolean).join(" | ");
+
+  return {
+    text: resultText,
+    isError: Boolean(lastResult.is_error),
+    errorMessage,
+    usage: {
+      inputTokens: Number(usage.input_tokens || 0),
+      outputTokens: Number(usage.output_tokens || 0),
+      cacheWriteTokens: Number(usage.cache_creation_input_tokens || 0),
+      cacheReadTokens: Number(usage.cache_read_input_tokens || 0)
+    },
+    costUsd: Number(lastResult.total_cost_usd || 0)
+  };
+}
+
+function normalizeClaudeCodeCliError(error, { timeoutPrefix = "claude-code timed out" } = {}) {
+  if (error?.killed || error?.signal === "SIGTERM") {
+    return {
+      isTimeout: true,
+      message: `${timeoutPrefix} after ${CLAUDE_CODE_TIMEOUT_MS / 1000}s.`
+    };
+  }
+
+  const detail = String(error?.stderr || error?.stdout || "").trim();
+  return {
+    isTimeout: false,
+    message: detail
+      ? `claude-code CLI error: ${error?.message || error} | ${detail.slice(0, 300)}`
+      : `claude-code CLI error: ${error?.message || error}`
+  };
 }
 
 function sleepMs(ms) {
