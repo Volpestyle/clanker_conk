@@ -2,9 +2,13 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   buildClaudeCodeCliArgs,
+  buildClaudeCodeJsonCliArgs,
+  buildClaudeCodeTextCliArgs,
+  buildClaudeCodeFallbackPrompt,
   buildClaudeCodeStreamInput,
   buildClaudeCodeSystemPrompt,
-  parseClaudeCodeStreamOutput
+  parseClaudeCodeStreamOutput,
+  parseClaudeCodeJsonOutput
 } from "./llm.ts";
 
 test("buildClaudeCodeStreamInput emits only context and user events (no stream system event)", () => {
@@ -55,6 +59,7 @@ test("buildClaudeCodeCliArgs includes stream-json flags, system prompt, and opti
   assert.equal(args.includes("stream-json"), true);
   assert.equal(args.includes("--output-format"), true);
   assert.equal(args.includes("--no-session-persistence"), true);
+  assert.equal(args.includes("--strict-mcp-config"), true);
   assert.equal(args.includes("--system-prompt"), true);
   assert.equal(args.includes("--json-schema"), true);
 
@@ -66,6 +71,55 @@ test("buildClaudeCodeCliArgs includes stream-json flags, system prompt, and opti
 
   const schemaIndex = args.indexOf("--json-schema");
   assert.equal(args[schemaIndex + 1], '{"type":"object","properties":{"decision":{"type":"string"}}}');
+});
+
+test("buildClaudeCodeJsonCliArgs includes output-format json and trailing prompt", () => {
+  const args = buildClaudeCodeJsonCliArgs({
+    model: "opus",
+    systemPrompt: "You are concise.",
+    jsonSchema: '{"type":"object"}',
+    prompt: "Hello there"
+  });
+
+  assert.equal(args.includes("--output-format"), true);
+  assert.equal(args.includes("--strict-mcp-config"), true);
+  const outputFormatIndex = args.indexOf("--output-format");
+  assert.equal(args[outputFormatIndex + 1], "json");
+
+  const modelIndex = args.indexOf("--model");
+  assert.equal(args[modelIndex + 1], "opus");
+
+  assert.equal(args[args.length - 1], "Hello there");
+});
+
+test("buildClaudeCodeTextCliArgs builds plain text fallback args", () => {
+  const args = buildClaudeCodeTextCliArgs({
+    model: "opus",
+    systemPrompt: "You are concise.",
+    jsonSchema: '{"type":"object"}',
+    prompt: "Hello there"
+  });
+
+  assert.equal(args.includes("--output-format"), false);
+  assert.equal(args.includes("--strict-mcp-config"), true);
+  const modelIndex = args.indexOf("--model");
+  assert.equal(args[modelIndex + 1], "opus");
+  assert.equal(args[args.length - 1], "Hello there");
+});
+
+test("buildClaudeCodeFallbackPrompt includes context, prompt, and image references", () => {
+  const prompt = buildClaudeCodeFallbackPrompt({
+    contextMessages: [{ role: "assistant", content: "A prior reply" }],
+    userPrompt: "What should I do next?",
+    imageInputs: [{ url: "https://example.com/one.png" }, { mediaType: "image/png", dataBase64: "abcd" }]
+  });
+
+  assert.equal(prompt.includes("Conversation context"), true);
+  assert.equal(prompt.includes("assistant: A prior reply"), true);
+  assert.equal(prompt.includes("User request"), true);
+  assert.equal(prompt.includes("What should I do next?"), true);
+  assert.equal(prompt.includes("https://example.com/one.png"), true);
+  assert.equal(prompt.includes("inline image (image/png)"), true);
 });
 
 test("buildClaudeCodeSystemPrompt appends output-budget guidance when a token limit exists", () => {
@@ -135,5 +189,57 @@ test("parseClaudeCodeStreamOutput falls back to assistant text when no result ev
   const parsed = parseClaudeCodeStreamOutput(raw);
   assert.ok(parsed);
   assert.equal(parsed.text, "YES");
+  assert.equal(parsed.isError, false);
+});
+
+test("parseClaudeCodeJsonOutput parses result payload and usage", () => {
+  const raw = JSON.stringify({
+    type: "result",
+    subtype: "success",
+    is_error: false,
+    result: "YES",
+    usage: {
+      input_tokens: 4,
+      output_tokens: 2,
+      cache_creation_input_tokens: 10,
+      cache_read_input_tokens: 20
+    },
+    total_cost_usd: 0.11
+  });
+
+  const parsed = parseClaudeCodeJsonOutput(raw);
+  assert.ok(parsed);
+  assert.equal(parsed.text, "YES");
+  assert.equal(parsed.isError, false);
+  assert.equal(parsed.costUsd, 0.11);
+  assert.deepEqual(parsed.usage, {
+    inputTokens: 4,
+    outputTokens: 2,
+    cacheWriteTokens: 10,
+    cacheReadTokens: 20
+  });
+});
+
+test("parseClaudeCodeJsonOutput supports pretty-printed whole JSON output", () => {
+  const raw = JSON.stringify(
+    {
+      type: "result",
+      is_error: false,
+      result: "NO",
+      usage: {
+        input_tokens: 1,
+        output_tokens: 1,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 0
+      },
+      total_cost_usd: 0.01
+    },
+    null,
+    2
+  );
+
+  const parsed = parseClaudeCodeJsonOutput(raw);
+  assert.ok(parsed);
+  assert.equal(parsed.text, "NO");
   assert.equal(parsed.isError, false);
 });
