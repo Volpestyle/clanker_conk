@@ -13,11 +13,9 @@ import { getMediaPromptCraftGuidance } from "./promptCore.ts";
 import {
   MAX_GIF_QUERY_LEN,
   MAX_IMAGE_LOOKUP_QUERY_LEN,
-  MAX_MEMORY_LOOKUP_QUERY_LEN,
   MAX_MENTION_CANDIDATES,
   MAX_VIDEO_FALLBACK_MESSAGES,
   MAX_VIDEO_TARGET_SCAN,
-  MAX_WEB_QUERY_LEN,
   collectMemoryFactHints,
   collectMemberLookupKeys,
   composeInitiativeImagePrompt,
@@ -55,8 +53,15 @@ import {
 } from "./bot/automationControl.ts";
 import {
   createAutomationControlRuntime,
+  createReplyFollowupRuntime,
   createVoiceReplyRuntime
 } from "./bot/runtimeContexts.ts";
+import {
+  maybeRegenerateWithMemoryLookup as maybeRegenerateWithMemoryLookupForReplyFollowup,
+  resolveReplyFollowupGenerationSettings as resolveReplyFollowupGenerationSettingsForReplyFollowup,
+  runModelRequestedMemoryLookup as runModelRequestedMemoryLookupForReplyFollowup,
+  runModelRequestedWebSearch as runModelRequestedWebSearchForReplyFollowup
+} from "./bot/replyFollowup.ts";
 import {
   composeVoiceOperationalMessage,
   generateVoiceTurnReply
@@ -105,6 +110,7 @@ const MAX_AUTOMATION_RUNS_PER_TICK = 4;
 const SCREEN_SHARE_MESSAGE_MAX_CHARS = 420;
 const SCREEN_SHARE_INTENT_THRESHOLD = 0.66;
 const REPLY_PERFORMANCE_VERSION = 1;
+const IS_NODE_TEST_PROCESS = process.execArgv.includes("--test") || process.argv.includes("--test");
 const SCREEN_SHARE_EXPLICIT_REQUEST_RE =
   /\b(?:screen\s*share|share\s*(?:my|the)?\s*screen|watch\s*(?:my|the)?\s*screen|see\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*stream|watch\s*(?:my|the)?\s*stream)\b/i;
 
@@ -670,6 +676,16 @@ export class ClankerBot {
     return chance(0.65);
   }
 
+  shouldSkipSimulatedTypingDelay() {
+    if (this.appConfig?.disableSimulatedTypingDelay === true) return true;
+    return IS_NODE_TEST_PROCESS;
+  }
+
+  getSimulatedTypingDelayMs(minMs, jitterMs) {
+    if (this.shouldSkipSimulatedTypingDelay()) return 0;
+    return minMs + Math.floor(Math.random() * jitterMs);
+  }
+
   async maybeReplyToMessage(message, settings, options = {}) {
     if (!settings.permissions.allowReplies) return false;
     if (!this.canSendMessage(settings.permissions.maxMessagesPerHour)) return false;
@@ -1121,7 +1137,7 @@ export class ClankerBot {
 
     const typingStartedAtMs = Date.now();
     await message.channel.sendTyping();
-    await sleep(600 + Math.floor(Math.random() * 1800));
+    await sleep(this.getSimulatedTypingDelayMs(600, 1800));
     const typingDelayMs = Math.max(0, Date.now() - typingStartedAtMs);
 
     const shouldThreadReply = addressed || options.forceRespond;
@@ -1371,7 +1387,7 @@ export class ClankerBot {
 
     const typingStartedAtMs = Date.now();
     await message.channel.sendTyping();
-    await sleep(350 + Math.floor(Math.random() * 800));
+    await sleep(this.getSimulatedTypingDelayMs(350, 800));
     const typingDelayMs = Math.max(0, Date.now() - typingStartedAtMs);
     const sendStartedAtMs = Date.now();
     const sent = await message.reply({
@@ -2479,53 +2495,13 @@ export class ClankerBot {
     query,
     trace = {}
   }) {
-    const normalizedQuery = normalizeDirectiveText(query, MAX_WEB_QUERY_LEN);
-    const state = {
-      ...webSearch,
-      requested: true,
-      query: normalizedQuery
-    };
-
-    if (!normalizedQuery) {
-      return {
-        ...state,
-        error: "Missing web search query."
-      };
-    }
-
-    if (state.optedOutByUser || !state.enabled || !state.configured) {
-      return state;
-    }
-
-    if (!state.budget?.canSearch) {
-      return {
-        ...state,
-        blockedByBudget: true
-      };
-    }
-
-    try {
-      const result = await this.search.searchAndRead({
-        settings,
-        query: normalizedQuery,
-        trace
-      });
-
-      return {
-        ...state,
-        used: result.results.length > 0,
-        query: result.query,
-        results: result.results,
-        fetchedPages: result.fetchedPages || 0,
-        providerUsed: result.providerUsed || null,
-        providerFallbackUsed: Boolean(result.providerFallbackUsed)
-      };
-    } catch (error) {
-      return {
-        ...state,
-        error: String(error?.message || error)
-      };
-    }
+    const runtime = createReplyFollowupRuntime(this);
+    return await runModelRequestedWebSearchForReplyFollowup(runtime, {
+      settings,
+      webSearch,
+      query,
+      trace
+    });
   }
 
   async runModelRequestedMemoryLookup({
@@ -2536,70 +2512,19 @@ export class ClankerBot {
     channelId = null,
     trace = {}
   }) {
-    const normalizedQuery = normalizeDirectiveText(query, MAX_MEMORY_LOOKUP_QUERY_LEN);
-    const state = {
-      ...memoryLookup,
-      requested: true,
-      query: normalizedQuery
-    };
-
-    if (!state.enabled || !this.memory?.searchDurableFacts) {
-      return state;
-    }
-    if (!normalizedQuery) {
-      return {
-        ...state,
-        error: "Missing memory lookup query."
-      };
-    }
-    if (!guildId) {
-      return {
-        ...state,
-        error: "Memory lookup requires guild scope."
-      };
-    }
-
-    try {
-      const results = await this.memory.searchDurableFacts({
-        guildId: String(guildId),
-        channelId: String(channelId || "").trim() || null,
-        queryText: normalizedQuery,
-        settings,
-        trace: {
-          ...trace,
-          source: "model_memory_lookup"
-        },
-        limit: 10
-      });
-      return {
-        ...state,
-        used: Boolean(results.length),
-        results
-      };
-    } catch (error) {
-      return {
-        ...state,
-        error: String(error?.message || error)
-      };
-    }
+    const runtime = createReplyFollowupRuntime(this);
+    return await runModelRequestedMemoryLookupForReplyFollowup(runtime, {
+      settings,
+      memoryLookup,
+      query,
+      guildId,
+      channelId,
+      trace
+    });
   }
 
   resolveReplyFollowupGenerationSettings(settings) {
-    const followupConfig = settings?.replyFollowupLlm || {};
-    if (!followupConfig.enabled) return settings;
-
-    const provider = String(followupConfig.provider || settings?.llm?.provider || "").trim();
-    const model = String(followupConfig.model || settings?.llm?.model || "").trim();
-    if (!provider || !model) return settings;
-
-    return {
-      ...settings,
-      llm: {
-        ...(settings?.llm || {}),
-        provider,
-        model
-      }
-    };
+    return resolveReplyFollowupGenerationSettingsForReplyFollowup(settings);
   }
 
   async maybeRegenerateWithMemoryLookup({
@@ -2618,80 +2543,26 @@ export class ClankerBot {
     forceRegenerate = false,
     buildUserPrompt
   }) {
-    let nextMemoryLookup = memoryLookup;
-    let nextImageLookup = imageLookup;
-    let nextGeneration = generation;
-    let nextDirective = directive;
-    let usedMemoryLookup = false;
-    let usedImageLookup = false;
-    let nextImageInputs = Array.isArray(imageInputs) ? [...imageInputs] : [];
-    let shouldRegenerate = Boolean(forceRegenerate);
-
-    if (directive?.memoryLookupQuery) {
-      usedMemoryLookup = true;
-      shouldRegenerate = true;
-      nextMemoryLookup = await this.runModelRequestedMemoryLookup({
-        settings,
-        memoryLookup: nextMemoryLookup,
-        query: directive.memoryLookupQuery,
-        guildId,
-        channelId,
-        trace
-      });
-    }
-
-    if (directive?.imageLookupQuery && nextImageLookup) {
-      usedImageLookup = true;
-      shouldRegenerate = true;
-      nextImageLookup = await this.runModelRequestedImageLookup({
-        imageLookup: nextImageLookup,
-        query: directive.imageLookupQuery
-      });
-      if (Array.isArray(nextImageLookup?.selectedImageInputs) && nextImageLookup.selectedImageInputs.length) {
-        nextImageInputs = this.mergeImageInputs({
-          baseInputs: nextImageInputs,
-          extraInputs: nextImageLookup.selectedImageInputs,
-          maxInputs: MAX_MODEL_IMAGE_INPUTS
-        });
-      }
-    }
-
-    if (shouldRegenerate && typeof buildUserPrompt === "function") {
-      const followupPrompt = buildUserPrompt({
-        memoryLookup: nextMemoryLookup,
-        imageLookup: nextImageLookup,
-        imageInputs: nextImageInputs,
-        allowMemoryLookupDirective: false,
-        allowImageLookupDirective: false
-      });
-      const followupTrace = {
-        ...trace,
-        event: String(trace?.event || "llm_followup")
-          .trim()
-          .concat(":lookup_followup")
-      };
-      const generationPayload = {
-        settings: followupSettings || settings,
-        systemPrompt,
-        userPrompt: followupPrompt,
-        trace: followupTrace
-      };
-      if (nextImageInputs.length) {
-        generationPayload.imageInputs = nextImageInputs;
-      }
-      nextGeneration = await this.llm.generate(generationPayload);
-      nextDirective = parseStructuredReplyOutput(nextGeneration.text, mediaPromptLimit);
-    }
-
-    return {
-      generation: nextGeneration,
-      directive: nextDirective,
-      memoryLookup: nextMemoryLookup,
-      imageLookup: nextImageLookup,
-      imageInputs: nextImageInputs,
-      usedMemoryLookup,
-      usedImageLookup
-    };
+    const runtime = createReplyFollowupRuntime(this);
+    return await maybeRegenerateWithMemoryLookupForReplyFollowup(runtime, {
+      settings,
+      followupSettings,
+      systemPrompt,
+      generation,
+      directive,
+      memoryLookup,
+      imageLookup,
+      guildId,
+      channelId,
+      trace,
+      mediaPromptLimit,
+      imageInputs,
+      forceRegenerate,
+      buildUserPrompt,
+      runModelRequestedImageLookup: (payload) => this.runModelRequestedImageLookup(payload),
+      mergeImageInputs: (payload) => this.mergeImageInputs(payload),
+      maxModelImageInputs: MAX_MODEL_IMAGE_INPUTS
+    });
   }
 
   async maybeAttachGeneratedImage({ settings, text, prompt, variant = "simple", trace }) {
@@ -3346,7 +3217,7 @@ export class ClankerBot {
             summary = generationResult.summary || "model skipped this run";
           } else {
             await channel.sendTyping();
-            await sleep(350 + Math.floor(Math.random() * 1100));
+            await sleep(this.getSimulatedTypingDelayMs(350, 1100));
             const sent = await channel.send(generationResult.payload);
             sentMessageId = sent.id;
             summary = generationResult.summary || "posted";
@@ -3969,7 +3840,7 @@ export class ClankerBot {
       }
 
       await channel.sendTyping();
-      await sleep(500 + Math.floor(Math.random() * 1200));
+      await sleep(this.getSimulatedTypingDelayMs(500, 1200));
 
       const sent = await channel.send(payload);
 
