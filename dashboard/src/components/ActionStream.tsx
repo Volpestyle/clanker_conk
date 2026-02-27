@@ -1,4 +1,5 @@
-import { Fragment, useCallback, useMemo, useRef, useState } from "react";
+import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Skeleton from "./Skeleton";
 
 const STORAGE_KEY = "actionStreamColWidths";
 const COLUMNS = ["time", "kind", "channel", "content", "cost"] as const;
@@ -16,7 +17,6 @@ function loadColWidths(): Record<string, number> {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
-      // Validate all columns present and numeric
       const result: Record<string, number> = {};
       for (const col of COLUMNS) {
         const v = parsed[col];
@@ -34,7 +34,18 @@ function saveColWidths(widths: Record<string, number>) {
   } catch { /* ignore */ }
 }
 
-const FILTERS = [
+const PRIMARY_PILLS = [
+  "all",
+  "sent_reply",
+  "sent_message",
+  "llm_call",
+  "reacted",
+  "voice_session_start",
+  "gif_call",
+  "search_call",
+] as const;
+
+const ALL_FILTERS = [
   "all",
   "sent_reply",
   "sent_message",
@@ -63,11 +74,47 @@ const FILTERS = [
   "bot_error"
 ];
 
+const OVERFLOW_FILTERS = ALL_FILTERS.filter(
+  (f) => !(PRIMARY_PILLS as readonly string[]).includes(f)
+);
+
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+
+  function copy(e: React.MouseEvent) {
+    e.stopPropagation();
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }
+
+  return (
+    <button type="button" className="copy-btn" onClick={copy} title="Copy">
+      {copied ? "\u2713" : "\u2398"}
+    </button>
+  );
+}
+
 export default function ActionStream({ actions }) {
   const [filter, setFilter] = useState("all");
   const [expandedRowKey, setExpandedRowKey] = useState("");
   const [colWidths, setColWidths] = useState(loadColWidths);
+  const [moreOpen, setMoreOpen] = useState(false);
+  const moreRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ col: string; startX: number; startW: number } | null>(null);
+
+  // Close overflow dropdown on outside click
+  useEffect(() => {
+    if (!moreOpen) return;
+    function handleClick(e: MouseEvent) {
+      if (moreRef.current && !moreRef.current.contains(e.target as Node)) {
+        setMoreOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClick);
+    return () => document.removeEventListener("mousedown", handleClick);
+  }, [moreOpen]);
 
   const onResizeStart = useCallback((col: string, e: React.MouseEvent) => {
     e.preventDefault();
@@ -131,22 +178,72 @@ export default function ActionStream({ actions }) {
     return String(value);
   };
 
+  if (!actions || actions.length === 0) {
+    return (
+      <section className="panel">
+        <div className="panel-head">
+          <h3>Action Stream</h3>
+        </div>
+        {actions === undefined || actions === null ? (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+            {[0, 1, 2, 3].map((i) => (
+              <Skeleton key={i} height="32px" />
+            ))}
+          </div>
+        ) : (
+          <p style={{ color: "var(--ink-3)", fontSize: "0.84rem" }}>No actions yet</p>
+        )}
+      </section>
+    );
+  }
+
   return (
     <section className="panel">
       <div className="panel-head">
         <h3>Action Stream</h3>
-        <select value={filter} onChange={(e) => setFilter(e.target.value)}>
-          {FILTERS.map((f) => (
-            <option key={f} value={f}>{f}</option>
-          ))}
-        </select>
+      </div>
+
+      <div className="filter-pills">
+        {PRIMARY_PILLS.map((f) => (
+          <button
+            key={f}
+            type="button"
+            className={`filter-pill${filter === f ? " active" : ""}`}
+            onClick={() => setFilter(f)}
+          >
+            {f === "all" ? "All" : f}
+          </button>
+        ))}
+        <div className="filter-more-wrap" ref={moreRef}>
+          <button
+            type="button"
+            className={`filter-pill${OVERFLOW_FILTERS.includes(filter) ? " active" : ""}`}
+            onClick={() => setMoreOpen((v) => !v)}
+          >
+            More &#x25BE;
+          </button>
+          {moreOpen && (
+            <div className="filter-dropdown">
+              {OVERFLOW_FILTERS.map((f) => (
+                <button
+                  key={f}
+                  type="button"
+                  className={`filter-dropdown-item${filter === f ? " active" : ""}`}
+                  onClick={() => { setFilter(f); setMoreOpen(false); }}
+                >
+                  {f}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="table-wrap">
         <table className="action-table">
           <colgroup>
             {COLUMNS.map((col) => (
-              <col key={col} style={{ width: colWidths[col] }} />
+              <col key={col} className={`col-${col}`} style={{ width: colWidths[col] }} />
             ))}
           </colgroup>
           <thead>
@@ -188,7 +285,7 @@ export default function ActionStream({ actions }) {
                     <td className="action-time-cell col-time">
                       <span className="action-time-inner">
                         <span className={`expand-indicator${isExpanded ? " open" : ""}`} aria-hidden="true">
-                          ▸
+                          &#x25B8;
                         </span>
                         {new Date(action.created_at).toLocaleString()}
                       </span>
@@ -207,14 +304,34 @@ export default function ActionStream({ actions }) {
                   </tr>
                   {isExpanded && (
                     <tr className="action-detail-row">
-                      <td colSpan="5">
+                      <td colSpan={5}>
                         <div className="action-detail">
                           <div className="action-detail-grid">
-                            <p><span>Event ID</span><code>{formatMetaValue(action.id)}</code></p>
-                            <p><span>Guild</span><code>{formatMetaValue(action.guild_id)}</code></p>
-                            <p><span>Channel</span><code>{formatMetaValue(action.channel_id)}</code></p>
-                            <p><span>User</span><code>{formatMetaValue(action.user_id)}</code></p>
-                            <p><span>Message</span><code>{formatMetaValue(action.message_id)}</code></p>
+                            <p>
+                              <span>Event ID</span>
+                              <code>{formatMetaValue(action.id)}</code>
+                              {action.id && <CopyButton text={String(action.id)} />}
+                            </p>
+                            <p>
+                              <span>Guild</span>
+                              <code>{formatMetaValue(action.guild_id)}</code>
+                              {action.guild_id && <CopyButton text={String(action.guild_id)} />}
+                            </p>
+                            <p>
+                              <span>Channel</span>
+                              <code>{formatMetaValue(action.channel_id)}</code>
+                              {action.channel_id && <CopyButton text={String(action.channel_id)} />}
+                            </p>
+                            <p>
+                              <span>User</span>
+                              <code>{formatMetaValue(action.user_id)}</code>
+                              {action.user_id && <CopyButton text={String(action.user_id)} />}
+                            </p>
+                            <p>
+                              <span>Message</span>
+                              <code>{formatMetaValue(action.message_id)}</code>
+                              {action.message_id && <CopyButton text={String(action.message_id)} />}
+                            </p>
                             <p><span>Cost</span><code>${Number(action.usd_cost || 0).toFixed(6)}</code></p>
                           </div>
 
@@ -236,8 +353,8 @@ export default function ActionStream({ actions }) {
             })}
             {rows.length === 0 && (
               <tr>
-                <td colSpan="5" style={{ textAlign: "center", color: "var(--ink-3)" }}>
-                  No actions yet
+                <td colSpan={5} style={{ textAlign: "center", color: "var(--ink-3)" }}>
+                  No actions match filter
                 </td>
               </tr>
             )}

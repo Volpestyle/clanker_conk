@@ -1,8 +1,10 @@
+import React from "react";
 import { SettingsSection } from "../SettingsSection";
+import { rangeStyle } from "../../utils";
 
-export function CoreBehaviorSettingsSection({ form, set }) {
+export function CoreBehaviorSettingsSection({ id, form, set }) {
   return (
-    <SettingsSection title="Core Behavior">
+    <SettingsSection id={id} title="Core Behavior">
       <label htmlFor="bot-name">Bot display name</label>
       <input id="bot-name" type="text" value={form.botName} onChange={set("botName")} />
 
@@ -33,6 +35,7 @@ export function CoreBehaviorSettingsSection({ form, set }) {
         step="1"
         value={form.replyLevelInitiative}
         onChange={set("replyLevelInitiative")}
+        style={rangeStyle(form.replyLevelInitiative)}
       />
 
       <label htmlFor="reply-level-non-initiative">
@@ -46,6 +49,7 @@ export function CoreBehaviorSettingsSection({ form, set }) {
         step="1"
         value={form.replyLevelNonInitiative}
         onChange={set("replyLevelNonInitiative")}
+        style={rangeStyle(form.replyLevelNonInitiative)}
       />
 
       <label htmlFor="reaction-level">
@@ -59,6 +63,7 @@ export function CoreBehaviorSettingsSection({ form, set }) {
         step="1"
         value={form.reactionLevel}
         onChange={set("reactionLevel")}
+        style={rangeStyle(form.reactionLevel)}
       />
 
       <div className="toggles">

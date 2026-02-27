@@ -1,8 +1,9 @@
+import React from "react";
 import { SettingsSection } from "../SettingsSection";
 
-export function StartupCatchupSettingsSection({ form, set }) {
+export function StartupCatchupSettingsSection({ id, form, set }) {
   return (
-    <SettingsSection title="Startup Catch-up" active={form.catchupEnabled}>
+    <SettingsSection id={id} title="Startup Catch-up" active={form.catchupEnabled}>
       <div className="toggles">
         <label>
           <input type="checkbox" checked={form.catchupEnabled} onChange={set("catchupEnabled")} />

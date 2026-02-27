@@ -1,8 +1,9 @@
+import React from "react";
 import { SettingsSection } from "../SettingsSection";
 
-export function RateLimitsSettingsSection({ form, set }) {
+export function RateLimitsSettingsSection({ id, form, set }) {
   return (
-    <SettingsSection title="Rate Limits">
+    <SettingsSection id={id} title="Rate Limits">
       <div className="split-3">
         <div>
           <label htmlFor="max-messages">Max bot messages/hour</label>

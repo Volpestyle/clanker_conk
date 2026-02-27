@@ -1,7 +1,9 @@
+import React from "react";
 import { CUSTOM_MODEL_OPTION_VALUE } from "../../settingsFormModel";
 import { SettingsSection } from "../SettingsSection";
 
 export function LlmConfigurationSettingsSection({
+  id,
   form,
   set,
   setProvider,
@@ -21,7 +23,7 @@ export function LlmConfigurationSettingsSection({
   selectedMemoryLlmPresetModel
 }) {
   return (
-    <SettingsSection title="LLM Configuration">
+    <SettingsSection id={id} title="LLM Configuration">
       <label htmlFor="provider">LLM provider</label>
       <select id="provider" value={form.provider} onChange={setProvider}>
         <option value="openai">openai</option>

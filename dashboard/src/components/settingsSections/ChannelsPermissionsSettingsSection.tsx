@@ -1,8 +1,9 @@
+import React from "react";
 import { SettingsSection } from "../SettingsSection";
 
-export function ChannelsPermissionsSettingsSection({ form, set }) {
+export function ChannelsPermissionsSettingsSection({ id, form, set }) {
   return (
-    <SettingsSection title="Channels & Permissions">
+    <SettingsSection id={id} title="Channels & Permissions">
       <label htmlFor="initiative-channels">Standalone post channel IDs (only these)</label>
       <textarea
         id="initiative-channels"
