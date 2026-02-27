@@ -21,6 +21,10 @@ const TRANSCRIPT_TYPES = new Set([
   "response.output_audio_transcript.done",
   "response.audio_transcript.done",
   "response.audio_transcript.completed",
+  "response.text.delta",
+  "response.text.done",
+  "response.output_text.delta",
+  "response.output_text.done",
   "transcript.completed"
 ]);
 

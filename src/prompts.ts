@@ -625,7 +625,8 @@ export function buildVoiceTurnPrompt({
   userFacts = [],
   relevantFacts = [],
   isEagerTurn = false,
-  voiceEagerness = 0
+  voiceEagerness = 0,
+  soundboardCandidates = []
 }) {
   const parts = [];
   const voiceToneGuardrails = buildVoiceToneGuardrails();
@@ -634,6 +635,10 @@ export function buildVoiceTurnPrompt({
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 700);
+  const normalizedSoundboardCandidates = (Array.isArray(soundboardCandidates) ? soundboardCandidates : [])
+    .map((line) => String(line || "").trim())
+    .filter(Boolean)
+    .slice(0, 40);
 
   parts.push(`Incoming live voice transcript from ${speaker}: ${text || "(empty)"}`);
 
@@ -647,6 +652,15 @@ export function buildVoiceTurnPrompt({
     parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: false, maxItems: 8 }));
   }
 
+  if (normalizedSoundboardCandidates.length) {
+    parts.push("Optional soundboard refs:");
+    parts.push(normalizedSoundboardCandidates.join("\n"));
+    parts.push(
+      "If you want a soundboard effect, append exactly one trailing directive: [[SOUNDBOARD:<sound_ref>]] where <sound_ref> matches the list exactly."
+    );
+    parts.push("If no soundboard effect should play, omit the directive.");
+  }
+
   if (isEagerTurn) {
     const eagerness = Math.max(0, Math.min(100, Number(voiceEagerness) || 0));
     parts.push(`You were NOT directly addressed. You're considering whether to chime in.`);
@@ -657,11 +671,15 @@ export function buildVoiceTurnPrompt({
     parts.push(
       "Task: respond as a natural spoken VC reply, or output exactly [SKIP] if you have nothing to add."
     );
-    parts.push("If responding, use plain text only. No directives, tags, or markdown.");
+    parts.push(
+      "If responding, use plain text only. No directives, tags, or markdown except the optional trailing [[SOUNDBOARD:<sound_ref>]] directive."
+    );
   } else {
     parts.push(...voiceToneGuardrails);
     parts.push("Task: respond as a natural spoken VC reply.");
-    parts.push("Use plain text only. Do not output directives, tags, markdown, or [SKIP].");
+    parts.push(
+      "Use plain text only. Do not output directives, tags, markdown, or [SKIP], except the optional trailing [[SOUNDBOARD:<sound_ref>]] directive."
+    );
   }
 
   return parts.join("\n\n");

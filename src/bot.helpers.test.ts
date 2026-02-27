@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { composeReplyImagePrompt, parseStructuredReplyOutput } from "./botHelpers.ts";
+import { composeReplyImagePrompt, parseReplyDirectives, parseStructuredReplyOutput } from "./botHelpers.ts";
 
 test("parseStructuredReplyOutput reads structured reply JSON", () => {
   const parsed = parseStructuredReplyOutput(
@@ -178,4 +178,10 @@ test("composeReplyImagePrompt includes memory hints when provided", () => {
   assert.match(prompt, /Relevant memory facts/);
   assert.match(prompt, /7 ft tall/);
   assert.match(prompt, /red hoodies/);
+});
+
+test("parseReplyDirectives parses trailing soundboard directive", () => {
+  const parsed = parseReplyDirectives("say less [[SOUNDBOARD:1234567890@555666777]]");
+  assert.equal(parsed.text, "say less");
+  assert.equal(parsed.soundboardRef, "1234567890@555666777");
 });
