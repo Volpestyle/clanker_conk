@@ -715,7 +715,6 @@ export class VoiceSessionManager {
             lastDirectiveKey: "",
             lastDirectiveAt: 0
           },
-          lastUnaddressedReplyAt: 0,
           focusedSpeakerUserId: null,
           focusedSpeakerAt: 0,
           baseVoiceInstructions,
@@ -2522,10 +2521,6 @@ export class VoiceSessionManager {
     });
 
     if (!decision.allow) return;
-    if (!decision.directAddressed) {
-      session.lastUnaddressedReplyAt = Date.now();
-    }
-
     try {
       session.realtimeClient.appendInputAudioPcm(pcmBuffer);
       session.pendingRealtimeInputBytes = Math.max(0, Number(session.pendingRealtimeInputBytes || 0)) + pcmBuffer.length;
@@ -2562,7 +2557,6 @@ export class VoiceSessionManager {
     const participantCount = this.countHumanVoiceParticipants(session);
     const directAddressed = normalizedTranscript ? isVoiceTurnAddressedToBot(normalizedTranscript, settings) : false;
     const replyEagerness = clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
-    const cooldownMs = (Number(settings?.voice?.eagerCooldownSeconds) || 45) * 1000;
     const now = Date.now();
 
     if (!normalizedTranscript) {
@@ -2628,16 +2622,6 @@ export class VoiceSessionManager {
       return {
         allow: false,
         reason: "eagerness_disabled_without_direct_address",
-        participantCount,
-        directAddressed,
-        transcript: normalizedTranscript
-      };
-    }
-
-    if (!directAddressed && now - Number(session?.lastUnaddressedReplyAt || 0) < cooldownMs) {
-      return {
-        allow: false,
-        reason: "unaddressed_cooldown",
         participantCount,
         directAddressed,
         transcript: normalizedTranscript
@@ -3597,9 +3581,6 @@ export class VoiceSessionManager {
       session.lastAudioDeltaAt = Date.now();
       session.botAudioStream.write(discordPcm);
       this.markBotTurnOut(session, settings);
-      if (!turnDecision.directAddressed) {
-        session.lastUnaddressedReplyAt = Date.now();
-      }
       this.recordVoiceTurn(session, {
         role: "assistant",
         userId: this.client.user?.id || null,
@@ -4669,7 +4650,7 @@ function defaultVoiceReplyDecisionModel(provider) {
   return "gpt-4.1-mini";
 }
 
-function parseVoiceDecisionContract(rawText) {
+export function parseVoiceDecisionContract(rawText) {
   const normalized = String(rawText || "").trim();
   if (!normalized) {
     return {
