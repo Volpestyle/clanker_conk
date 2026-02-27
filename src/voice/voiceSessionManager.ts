@@ -89,7 +89,7 @@ const REALTIME_ECHO_SUPPRESSION_MS = 1800;
 const REALTIME_INSTRUCTION_REFRESH_DEBOUNCE_MS = 220;
 const REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS = 420;
 const REALTIME_CONTEXT_MEMBER_LIMIT = 12;
-const FOCUSED_SPEAKER_CONTINUATION_MS = 12_000;
+const FOCUSED_SPEAKER_CONTINUATION_MS = 20_000;
 const VOICE_LOW_SIGNAL_MIN_ALNUM_CHARS = 10;
 const VOICE_LOW_SIGNAL_MIN_WORDS = 2;
 const OPENAI_REALTIME_SHORT_CLIP_ASR_MS = 1200;
@@ -2585,6 +2585,17 @@ export class VoiceSessionManager {
       };
     }
 
+    const lowSignalFragment = isLowSignalVoiceFragment(normalizedTranscript);
+    if (lowSignalFragment) {
+      return {
+        allow: false,
+        reason: "low_signal_fragment",
+        participantCount,
+        directAddressed,
+        transcript: normalizedTranscript
+      };
+    }
+
     const focusedSpeakerUserId = String(session?.focusedSpeakerUserId || "").trim();
     const focusedSpeakerAgeMs = now - Number(session?.focusedSpeakerAt || 0);
     const focusedSpeakerFollowup =
@@ -2618,16 +2629,6 @@ export class VoiceSessionManager {
       return {
         allow: false,
         reason: "unaddressed_cooldown",
-        participantCount,
-        directAddressed,
-        transcript: normalizedTranscript
-      };
-    }
-
-    if (!directAddressed && isLowSignalVoiceFragment(normalizedTranscript)) {
-      return {
-        allow: false,
-        reason: "low_signal_fragment",
         participantCount,
         directAddressed,
         transcript: normalizedTranscript
@@ -2670,14 +2671,23 @@ export class VoiceSessionManager {
       .filter(Boolean)
       .slice(0, 10);
     const recentHistory = this.formatVoiceDecisionHistory(session, 6);
-    const memoryContext = await this.buildVoiceDecisionMemoryContext({
-      session,
-      settings,
-      userId,
-      transcript: normalizedTranscript,
-      source
-    });
-    const maxDecisionAttempts = clamp(Math.floor(Number(replyDecisionLlm?.maxAttempts) || 3), 1, 3);
+    const compactHistory = this.formatVoiceDecisionHistory(session, 3);
+    const shouldLoadMemoryContext = Boolean(directAddressed);
+    const memoryContext = shouldLoadMemoryContext
+      ? await this.buildVoiceDecisionMemoryContext({
+          session,
+          settings,
+          userId,
+          transcript: normalizedTranscript,
+          source
+        })
+      : "";
+    const configuredMaxDecisionAttempts = Number(replyDecisionLlm?.maxAttempts);
+    const maxDecisionAttempts = clamp(
+      Math.floor(Number.isFinite(configuredMaxDecisionAttempts) ? configuredMaxDecisionAttempts : 1),
+      1,
+      3
+    );
     const primaryDecisionSettings = {
       ...settings,
       llm: {
@@ -2707,21 +2717,38 @@ export class VoiceSessionManager {
     }
 
     const compactContextPromptParts = [
+      `Current speaker: ${speakerName}.`,
       `Directly addressed: ${directAddressed ? "yes" : "no"}.`,
       `Reply eagerness: ${replyEagerness}/100.`,
       `Participants: ${participantCount}.`,
       `Transcript: "${normalizedTranscript}".`
     ];
+    if (participantList.length) {
+      compactContextPromptParts.push(`Known participants: ${participantList.join(", ")}.`);
+    }
+    if (compactHistory) {
+      compactContextPromptParts.push(`Recent turns:\n${compactHistory}`);
+    }
     if (memoryContext) {
       compactContextPromptParts.push(`Hints: ${memoryContext}`);
     }
 
+    const systemPromptCompact = [
+      `You decide if "${botName}" should reply right now in a live Discord voice chat.`,
+      "Output exactly one token: YES or NO.",
+      "Prefer YES for direct wake-word mentions and likely ASR variants of the bot name.",
+      "Prefer YES for clear questions/requests that seem aimed at the bot or the current speaker flow.",
+      "If this sounds like a follow-up from an engaged speaker, lean YES.",
+      "Prefer NO for filler/noise, pure acknowledgements, or turns clearly aimed at another human.",
+      "When uncertain and the utterance is a clear question, prefer YES.",
+      "Never output anything except YES or NO."
+    ].join("\n");
     const systemPromptFull = [
       `You classify whether "${botName}" should reply now in Discord voice chat.`,
       "Output exactly one token: YES or NO.",
       "If directly addressed, strongly prefer YES unless transcript is too unclear to answer.",
       "If not directly addressed, use reply eagerness and flow; prefer NO if interruptive or low value.",
-      "In small conversations, prefer YES for clear questions.",
+      "In small conversations, prefer YES for clear questions and active back-and-forth.",
       "Treat likely ASR wake-word variants (for example clanky/planky/linky) as direct address.",
       "Never output anything except YES or NO."
     ].join("\n");
@@ -2733,16 +2760,16 @@ export class VoiceSessionManager {
 
     const decisionProcedure = [
       {
+        label: "primary_compact_context",
+        settings: primaryDecisionSettings,
+        systemPrompt: systemPromptCompact,
+        userPrompt: compactContextPromptParts.join("\n")
+      },
+      {
         label: "primary_full_context",
         settings: primaryDecisionSettings,
         systemPrompt: systemPromptFull,
         userPrompt: fullContextPromptParts.join("\n\n")
-      },
-      {
-        label: "primary_compact_context",
-        settings: primaryDecisionSettings,
-        systemPrompt: systemPromptStrict,
-        userPrompt: compactContextPromptParts.join("\n")
       },
       {
         label: "primary_minimal_context",
@@ -2788,6 +2815,20 @@ export class VoiceSessionManager {
         const raw = String(generation?.text || "").trim();
         const parsed = parseVoiceDecisionContract(raw);
         if (parsed.confident) {
+          const resolvedProvider = generation?.provider || llmProvider;
+          const resolvedModel = generation?.model || step?.settings?.llm?.model || llmModel;
+          if (directAddressed && !parsed.allow) {
+            return {
+              allow: true,
+              reason: index === 0 ? "direct_address_override_llm_no" : "direct_address_override_llm_no_retry",
+              participantCount,
+              directAddressed,
+              transcript: normalizedTranscript,
+              llmResponse: raw,
+              llmProvider: resolvedProvider,
+              llmModel: resolvedModel
+            };
+          }
           return {
             allow: parsed.allow,
             reason: parsed.allow ? (index === 0 ? "llm_yes" : "llm_yes_retry") : index === 0 ? "llm_no" : "llm_no_retry",
@@ -2795,8 +2836,8 @@ export class VoiceSessionManager {
             directAddressed,
             transcript: normalizedTranscript,
             llmResponse: raw,
-            llmProvider: generation?.provider || llmProvider,
-            llmModel: generation?.model || step?.settings?.llm?.model || llmModel
+            llmProvider: resolvedProvider,
+            llmModel: resolvedModel
           };
         }
 
@@ -2813,6 +2854,18 @@ export class VoiceSessionManager {
     }
 
     if (!invalidOutputs.length && generationErrors.length) {
+      if (directAddressed) {
+        return {
+          allow: true,
+          reason: "direct_address_llm_error_fallback",
+          participantCount,
+          directAddressed,
+          transcript: normalizedTranscript,
+          llmProvider,
+          llmModel,
+          error: generationErrors.map((row) => `${row.step}: ${row.error}`).join(" | ")
+        };
+      }
       return {
         allow: false,
         reason: "llm_error",
@@ -2822,6 +2875,22 @@ export class VoiceSessionManager {
         llmProvider,
         llmModel,
         error: generationErrors.map((row) => `${row.step}: ${row.error}`).join(" | ")
+      };
+    }
+
+    if (directAddressed) {
+      return {
+        allow: true,
+        reason: "direct_address_contract_fallback",
+        participantCount,
+        directAddressed,
+        transcript: normalizedTranscript,
+        llmResponse: invalidOutputs.map((row) => `${row.step}=${row.text}`).join(" | "),
+        llmProvider,
+        llmModel,
+        error: generationErrors.length
+          ? generationErrors.map((row) => `${row.step}: ${row.error}`).join(" | ")
+          : undefined
       };
     }
 
@@ -4499,13 +4568,16 @@ export class VoiceSessionManager {
 function isLowSignalVoiceFragment(transcript = "") {
   const normalized = String(transcript || "").trim();
   if (!normalized) return true;
-  if (/[?]/.test(normalized)) return false;
+  if (/[?¿؟？]/u.test(normalized)) return false;
   if (/^(who|what|when|where|why|how|can|could|would|should|do|does|did|is|are|am|will|won'?t)\b/i.test(normalized)) {
     return false;
   }
 
-  const alnumChars = (normalized.match(/[0-9A-Za-z]/g) || []).length;
-  const wordCount = normalized.split(/\s+/).filter(Boolean).length;
+  const alnumChars = (normalized.match(/[\p{L}\p{N}]/gu) || []).length;
+  const wordCount = normalized.split(/\s+/u).filter(Boolean).length;
+  if (wordCount >= 3 && alnumChars >= 6) {
+    return false;
+  }
   if (alnumChars >= VOICE_LOW_SIGNAL_MIN_ALNUM_CHARS && wordCount >= VOICE_LOW_SIGNAL_MIN_WORDS) {
     return false;
   }
