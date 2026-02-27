@@ -51,6 +51,14 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
     : isClaudeCodeProvider
       ? (providerModelOptions[0] || "")
       : CUSTOM_MODEL_OPTION_VALUE;
+  const replyFollowupModelOptions = resolveProviderModelOptions(modelCatalog, form.replyFollowupLlmProvider);
+  const isReplyFollowupClaudeCodeProvider = form.replyFollowupLlmProvider === "claude-code";
+  const normalizedReplyFollowupModel = String(form.replyFollowupLlmModel || "").trim();
+  const selectedReplyFollowupPresetModel = replyFollowupModelOptions.includes(normalizedReplyFollowupModel)
+    ? normalizedReplyFollowupModel
+    : isReplyFollowupClaudeCodeProvider
+      ? (replyFollowupModelOptions[0] || "")
+      : CUSTOM_MODEL_OPTION_VALUE;
   const memoryLlmModelOptions = resolveProviderModelOptions(modelCatalog, form.memoryLlmProvider);
   const isMemoryLlmClaudeCodeProvider = form.memoryLlmProvider === "claude-code";
   const normalizedMemoryLlmModel = String(form.memoryLlmModel || "").trim();
@@ -112,6 +120,25 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
     });
   }
 
+  function setReplyFollowupProvider(e) {
+    const provider = String(e.target.value || "").trim();
+    setForm((current) => {
+      const next = { ...current, replyFollowupLlmProvider: provider };
+      if (provider !== "claude-code") return next;
+      const options = resolveProviderModelOptions(modelCatalog, provider);
+      const currentModel = String(current?.replyFollowupLlmModel || "").trim();
+      if (options.includes(currentModel)) return next;
+      next.replyFollowupLlmModel = options[0] || "sonnet";
+      return next;
+    });
+  }
+
+  function selectReplyFollowupPresetModel(e) {
+    const selected = String(e.target.value || "");
+    if (selected === CUSTOM_MODEL_OPTION_VALUE) return;
+    setForm((current) => ({ ...current, replyFollowupLlmModel: selected }));
+  }
+
   function selectMemoryLlmPresetModel(e) {
     const selected = String(e.target.value || "");
     if (selected === CUSTOM_MODEL_OPTION_VALUE) return;
@@ -171,17 +198,30 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
           onChange={set("personaHardLimits")}
         />
 
-        <label htmlFor="reply-level">
-          Unsolicited reply chance: <strong>{form.replyLevel}%</strong>
+        <label htmlFor="reply-level-initiative">
+          Unsolicited reply eagerness (initiative channels): <strong>{form.replyLevelInitiative}%</strong>
         </label>
         <input
-          id="reply-level"
+          id="reply-level-initiative"
           type="range"
           min="0"
           max="100"
           step="1"
-          value={form.replyLevel}
-          onChange={set("replyLevel")}
+          value={form.replyLevelInitiative}
+          onChange={set("replyLevelInitiative")}
+        />
+
+        <label htmlFor="reply-level-non-initiative">
+          Unsolicited reply eagerness (non-initiative channels): <strong>{form.replyLevelNonInitiative}%</strong>
+        </label>
+        <input
+          id="reply-level-non-initiative"
+          type="range"
+          min="0"
+          max="100"
+          step="1"
+          value={form.replyLevelNonInitiative}
+          onChange={set("replyLevelNonInitiative")}
         />
 
         <label htmlFor="reaction-level">
@@ -273,6 +313,61 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
             />
           </div>
         </div>
+
+        <h4>Reply Follow-Up Regeneration LLM</h4>
+        <p>Optional override for second-pass reply regeneration (web search / memory lookup follow-ups).</p>
+        <div className="toggles">
+          <label>
+            <input
+              type="checkbox"
+              checked={form.replyFollowupLlmEnabled}
+              onChange={set("replyFollowupLlmEnabled")}
+            />
+            Use separate follow-up LLM
+          </label>
+        </div>
+        <div className="split">
+          <div>
+            <label htmlFor="reply-followup-llm-provider">Provider</label>
+            <select
+              id="reply-followup-llm-provider"
+              value={form.replyFollowupLlmProvider}
+              onChange={setReplyFollowupProvider}
+              disabled={!form.replyFollowupLlmEnabled}
+            >
+              <option value="openai">openai</option>
+              <option value="anthropic">anthropic</option>
+              <option value="xai">xai (grok)</option>
+              <option value="claude-code">claude code (local)</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor="reply-followup-llm-model-preset">Model Preset</label>
+            <select
+              id="reply-followup-llm-model-preset"
+              value={selectedReplyFollowupPresetModel}
+              onChange={selectReplyFollowupPresetModel}
+              disabled={!form.replyFollowupLlmEnabled}
+            >
+              {replyFollowupModelOptions.map((modelId) => (
+                <option key={modelId} value={modelId}>
+                  {modelId}
+                </option>
+              ))}
+              {!isReplyFollowupClaudeCodeProvider && (
+                <option value={CUSTOM_MODEL_OPTION_VALUE}>custom model (manual)</option>
+              )}
+            </select>
+          </div>
+        </div>
+        <label htmlFor="reply-followup-llm-model">Model ID</label>
+        <input
+          id="reply-followup-llm-model"
+          type="text"
+          value={form.replyFollowupLlmModel}
+          onChange={set("replyFollowupLlmModel")}
+          disabled={!form.replyFollowupLlmEnabled || isReplyFollowupClaudeCodeProvider}
+        />
 
         <h4>Memory Extraction LLM</h4>
         <p>Used for durable fact extraction (`memory_extract_call`).</p>

@@ -67,18 +67,24 @@ test("extractSoundboardDirective strips directive and returns selected reference
   assert.equal(parsed.reference, "1234567890@111222333");
 });
 
-test("isVoiceTurnAddressedToBot catches close wake-word spellings", () => {
+test("isVoiceTurnAddressedToBot balances fuzzy wake detection with false-positive guards", () => {
   const settings = { botName: "clanker conk" };
-  assert.equal(isVoiceTurnAddressedToBot("Clicker, what did we talk about yesterday?", settings), true);
-  assert.equal(isVoiceTurnAddressedToBot("yo clunker can you answer this?", settings), true);
-  assert.equal(isVoiceTurnAddressedToBot("i sent you a link yesterday", settings), false);
-});
+  const cases = [
+    { text: "yo clunker can you answer this?", expected: true },
+    { text: "yo clanky can you answer this?", expected: true },
+    { text: "i think clunker can you answer this?", expected: true },
+    { text: "clankerton can you jump in?", expected: true },
+    { text: "clunkeroni can you jump in?", expected: true },
+    { text: "i sent you a link yesterday", expected: false },
+    { text: "Hi cleaner.", expected: false },
+    { text: "cleaner can you jump in?", expected: false },
+    { text: "the cleaner is broken again", expected: false },
+    { text: "Very big step up from Paldea. Pretty excited to see what they cook up", expected: false }
+  ];
 
-test("isVoiceTurnAddressedToBot accepts fuzzy wake variants without extra context gating", () => {
-  const settings = { botName: "clanker conk" };
-  assert.equal(isVoiceTurnAddressedToBot("Hi cleaner.", settings), true);
-  assert.equal(isVoiceTurnAddressedToBot("cleaner can you jump in?", settings), true);
-  assert.equal(isVoiceTurnAddressedToBot("the cleaner is broken again", settings), true);
+  for (const row of cases) {
+    assert.equal(isVoiceTurnAddressedToBot(row.text, settings), row.expected, row.text);
+  }
 });
 
 test("isVoiceTurnAddressedToBot follows configured botName without clank hardcoding", () => {
@@ -102,6 +108,29 @@ test("isBotNameAddressed can run relaxed bot-name fuzzy matching for text messag
     }),
     false
   );
+});
+
+test("isBotNameAddressed stays flexible for custom names while rejecting near misses", () => {
+  const cases = [
+    { transcript: "sparky bot can you help me with this?", botName: "sparky bot", expected: true },
+    { transcript: "clanky can you help me with this?", botName: "clanker conk", expected: true },
+    { transcript: "sporky can you help me with this?", botName: "sparky bot", expected: true },
+    { transcript: "i think sporky can you help me with this?", botName: "sparky bot", expected: true },
+    { transcript: "i like spark plugs in old cars", botName: "sparky bot", expected: false },
+    { transcript: "clankerton", botName: "sparky bot", expected: false },
+    { transcript: "Very big step up from Paldea. Pretty excited to see what they cook up", botName: "clanker conk", expected: false }
+  ];
+
+  for (const row of cases) {
+    assert.equal(
+      isBotNameAddressed({
+        transcript: row.transcript,
+        botName: row.botName
+      }),
+      row.expected,
+      `${row.botName} :: ${row.transcript}`
+    );
+  }
 });
 
 test("isBotNameAddressed accepts nickname suffix variants while rejecting distant variants", () => {

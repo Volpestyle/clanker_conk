@@ -1664,6 +1664,7 @@ function normalizeSettings(raw) {
   if (!merged.initiative || typeof merged.initiative !== "object") merged.initiative = {};
   if (!merged.memory || typeof merged.memory !== "object") merged.memory = {};
   if (!merged.llm || typeof merged.llm !== "object") merged.llm = {};
+  if (!merged.replyFollowupLlm || typeof merged.replyFollowupLlm !== "object") merged.replyFollowupLlm = {};
   if (merged.memoryLlm && typeof merged.memoryLlm === "object") {
     merged.memoryLlm.provider = normalizeLlmProvider(merged.memoryLlm?.provider);
     merged.memoryLlm.model = String(merged.memoryLlm?.model || "claude-haiku-4-5").slice(0, 120);
@@ -1679,8 +1680,13 @@ function normalizeSettings(raw) {
     DEFAULT_SETTINGS.persona?.hardLimits ?? []
   );
 
-  const replyLevel = clamp(
-    Number(merged.activity?.replyLevel ?? DEFAULT_SETTINGS.activity.replyLevel) || 0,
+  const replyLevelInitiative = clamp(
+    Number(merged.activity?.replyLevelInitiative ?? DEFAULT_SETTINGS.activity.replyLevelInitiative) || 0,
+    0,
+    100
+  );
+  const replyLevelNonInitiative = clamp(
+    Number(merged.activity?.replyLevelNonInitiative ?? DEFAULT_SETTINGS.activity.replyLevelNonInitiative) || 0,
     0,
     100
   );
@@ -1711,7 +1717,8 @@ function normalizeSettings(raw) {
     20
   );
   merged.activity = {
-    replyLevel,
+    replyLevelInitiative,
+    replyLevelNonInitiative,
     reactionLevel,
     minSecondsBetweenMessages,
     replyCoalesceWindowSeconds,
@@ -1722,6 +1729,25 @@ function normalizeSettings(raw) {
   merged.llm.model = String(merged.llm?.model || "gpt-4.1-mini").slice(0, 120);
   merged.llm.temperature = clamp(Number(merged.llm?.temperature) || 0.9, 0, 2);
   merged.llm.maxOutputTokens = clamp(Number(merged.llm?.maxOutputTokens) || 220, 32, 1400);
+  merged.replyFollowupLlm.enabled =
+    merged.replyFollowupLlm?.enabled !== undefined
+      ? Boolean(merged.replyFollowupLlm?.enabled)
+      : Boolean(DEFAULT_SETTINGS.replyFollowupLlm?.enabled);
+  merged.replyFollowupLlm.provider = normalizeLlmProvider(
+    String(merged.replyFollowupLlm?.provider || "").trim() ||
+      merged.llm.provider ||
+      "openai"
+  );
+  merged.replyFollowupLlm.model = String(
+    merged.replyFollowupLlm?.model ||
+      merged.llm.model ||
+      defaultModelForLlmProvider(merged.replyFollowupLlm.provider)
+  )
+    .trim()
+    .slice(0, 120);
+  if (!merged.replyFollowupLlm.model) {
+    merged.replyFollowupLlm.model = defaultModelForLlmProvider(merged.replyFollowupLlm.provider);
+  }
 
   merged.webSearch.enabled = Boolean(merged.webSearch?.enabled);
   const maxSearchesRaw = Number(merged.webSearch?.maxSearchesPerHour);
