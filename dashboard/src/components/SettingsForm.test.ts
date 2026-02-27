@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import SettingsForm from "../dashboard/src/components/SettingsForm.tsx";
+import SettingsForm from "./SettingsForm.tsx";
 
 function renderForm(props) {
   return renderToStaticMarkup(

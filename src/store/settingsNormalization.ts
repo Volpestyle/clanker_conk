@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS } from "../defaultSettings.ts";
+import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
 import { normalizeProviderOrder } from "../search.ts";
 import { clamp, deepMerge, uniqueIdList } from "../utils.ts";
 

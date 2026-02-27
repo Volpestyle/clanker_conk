@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { normalizeSettings } from "./store/settingsNormalization.ts";
+import { normalizeSettings } from "./settingsNormalization.ts";
 
 test("normalizeSettings clamps and normalizes complex nested settings", () => {
   const normalized = normalizeSettings({

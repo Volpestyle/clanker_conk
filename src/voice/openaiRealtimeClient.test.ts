@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { OpenAiRealtimeClient } from "./voice/openaiRealtimeClient.ts";
+import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 
 test("OpenAiRealtimeClient sendSessionUpdate uses GA session audio schema", () => {
   const client = new OpenAiRealtimeClient({ apiKey: "test-key" });

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { sendOperationalMessage } from "./voice/voiceOperationalMessaging.ts";
+import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
 
 function createManager({ composeOperationalMessage = null } = {}) {
   const sentMessages = [];

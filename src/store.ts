@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
 import { load as loadSqliteVec } from "sqlite-vec";
-import { DEFAULT_SETTINGS } from "./defaultSettings.ts";
+import { DEFAULT_SETTINGS } from "./settings/settingsSchema.ts";
 import { clamp, deepMerge, nowIso } from "./utils.ts";
 import {
   buildAutomationMatchText,

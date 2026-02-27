@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
+import { VoiceSessionManager } from "./voiceSessionManager.ts";
 
 function createManager() {
   const logs = [];

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import {
   composeVoiceOperationalMessage,
   generateVoiceTurnReply
-} from "./bot/voiceReplies.ts";
+} from "./voiceReplies.ts";
 
 function baseSettings(overrides = {}) {
   const base = {
