@@ -81,6 +81,9 @@ function createBot({
     countActionsSince(kind) {
       return Number(countByKind[kind] || 0);
     },
+    hasTriggeredResponse() {
+      return false;
+    },
     logAction(entry) {
       logs.push(entry);
     },
@@ -396,4 +399,123 @@ test("ClankerBot initiative channel picker uses channel allowlist checks", () =>
 
   const picked = bot.pickInitiativeChannel(settings);
   assert.equal(picked?.id, "chan-2");
+});
+
+test("ClankerBot enqueueReplyJob handles dedupe, overflow, and worker errors", async () => {
+  const { bot, logs, store } = createBot();
+  const processCalls = [];
+  bot.processReplyQueue = async (channelId) => {
+    processCalls.push(channelId);
+  };
+
+  const message = {
+    id: "msg-1",
+    channelId: "chan-1",
+    guildId: "guild-1",
+    author: { id: "user-1" },
+    createdTimestamp: Date.now()
+  };
+
+  assert.equal(
+    bot.enqueueReplyJob({
+      message,
+      source: "message_event"
+    }),
+    true
+  );
+  assert.equal(bot.getReplyQueuePendingCount(), 1);
+  assert.deepEqual(processCalls, ["chan-1"]);
+
+  assert.equal(
+    bot.enqueueReplyJob({
+      message
+    }),
+    false
+  );
+
+  store.hasTriggeredResponse = (messageId) => messageId === "msg-triggered";
+  assert.equal(
+    bot.enqueueReplyJob({
+      message: {
+        ...message,
+        id: "msg-triggered"
+      }
+    }),
+    false
+  );
+
+  const overflowQueue = [];
+  for (let index = 0; index < 60; index += 1) {
+    overflowQueue.push({
+      message: {
+        ...message,
+        id: `queued-${index}`
+      },
+      attempts: 0
+    });
+  }
+  bot.replyQueues.set("chan-overflow", overflowQueue);
+  assert.equal(
+    bot.enqueueReplyJob({
+      message: {
+        ...message,
+        id: "msg-overflow",
+        channelId: "chan-overflow"
+      }
+    }),
+    false
+  );
+  assert.equal(logs.some((entry) => String(entry.content).includes("reply_queue_overflow")), true);
+
+  bot.processReplyQueue = async () => {
+    throw new Error("worker crashed");
+  };
+  assert.equal(
+    bot.enqueueReplyJob({
+      message: {
+        ...message,
+        id: "msg-worker-error",
+        channelId: "chan-worker"
+      }
+    }),
+    true
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(logs.some((entry) => String(entry.content).includes("reply_queue_worker: worker crashed")), true);
+});
+
+test("ClankerBot gateway health and reconnect wrappers handle success and failure", async () => {
+  const { bot, logs } = createBot();
+  bot.appConfig.discordToken = "token";
+  let destroyCalls = 0;
+  let loginCalls = 0;
+
+  bot.client.destroy = async () => {
+    destroyCalls += 1;
+  };
+  bot.client.login = async () => {
+    loginCalls += 1;
+    return "ok";
+  };
+  bot.client.isReady = () => false;
+  bot.hasConnectedAtLeastOnce = true;
+  bot.reconnectInFlight = false;
+  bot.isStopping = false;
+  bot.lastGatewayEventAt = Date.now() - 3 * 60_000;
+
+  await bot.ensureGatewayHealthy();
+  assert.equal(destroyCalls, 1);
+  assert.equal(loginCalls, 1);
+  assert.equal(bot.reconnectAttempts, 0);
+  assert.equal(logs.some((entry) => String(entry.content).includes("gateway_reconnect_start")), true);
+
+  bot.client.login = async () => {
+    throw new Error("login failed");
+  };
+  await bot.reconnectGateway("forced_test_failure");
+  assert.equal(bot.reconnectAttempts, 1);
+  assert.equal(bot.reconnectTimeout !== null, true);
+  clearTimeout(bot.reconnectTimeout);
+  bot.reconnectTimeout = null;
+  assert.equal(logs.some((entry) => String(entry.content).includes("gateway_reconnect_failed")), true);
 });
