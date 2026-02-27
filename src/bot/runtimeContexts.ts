@@ -26,3 +26,9 @@ export function createReplyFollowupRuntime(bot) {
     memory: bot.memory
   };
 }
+
+export function createMentionResolutionRuntime(bot) {
+  return {
+    store: bot.store
+  };
+}

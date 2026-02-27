@@ -13,18 +13,15 @@ import { getMediaPromptCraftGuidance } from "./promptCore.ts";
 import {
   MAX_GIF_QUERY_LEN,
   MAX_IMAGE_LOOKUP_QUERY_LEN,
-  MAX_MENTION_CANDIDATES,
   MAX_VIDEO_FALLBACK_MESSAGES,
   MAX_VIDEO_TARGET_SCAN,
   collectMemoryFactHints,
-  collectMemberLookupKeys,
   composeInitiativeImagePrompt,
   composeInitiativeVideoPrompt,
   composeReplyImagePrompt,
   composeReplyVideoPrompt,
   embedWebSearchSources,
   emptyMentionResolution,
-  extractMentionCandidates,
   extractRecentVideoTargets,
   extractUrlsFromText,
   formatReactionSummary,
@@ -53,9 +50,15 @@ import {
 } from "./bot/automationControl.ts";
 import {
   createAutomationControlRuntime,
+  createMentionResolutionRuntime,
   createReplyFollowupRuntime,
   createVoiceReplyRuntime
 } from "./bot/runtimeContexts.ts";
+import {
+  buildMentionAliasIndex as buildMentionAliasIndexForMentions,
+  lookupGuildMembersByExactName as lookupGuildMembersByExactNameForMentions,
+  resolveDeterministicMentions as resolveDeterministicMentionsForMentions
+} from "./bot/mentions.ts";
 import {
   maybeRegenerateWithMemoryLookup as maybeRegenerateWithMemoryLookupForReplyFollowup,
   resolveReplyFollowupGenerationSettings as resolveReplyFollowupGenerationSettingsForReplyFollowup,
@@ -104,13 +107,13 @@ const MAX_HISTORY_IMAGE_CANDIDATES = 24;
 const MAX_HISTORY_IMAGE_LOOKUP_RESULTS = 6;
 const MAX_IMAGE_LOOKUP_QUERY_TOKENS = 7;
 const UNSOLICITED_REPLY_CONTEXT_WINDOW = 5;
-const MENTION_GUILD_HISTORY_LOOKBACK = 500;
-const MENTION_SEARCH_RESULT_LIMIT = 10;
 const MAX_AUTOMATION_RUNS_PER_TICK = 4;
 const SCREEN_SHARE_MESSAGE_MAX_CHARS = 420;
 const SCREEN_SHARE_INTENT_THRESHOLD = 0.66;
 const REPLY_PERFORMANCE_VERSION = 1;
-const IS_NODE_TEST_PROCESS = process.execArgv.includes("--test") || process.argv.includes("--test");
+const IS_NODE_TEST_PROCESS = Boolean(process.env.NODE_TEST_CONTEXT) ||
+  process.execArgv.includes("--test") ||
+  process.argv.includes("--test");
 const SCREEN_SHARE_EXPLICIT_REQUEST_RE =
   /\b(?:screen\s*share|share\s*(?:my|the)?\s*screen|watch\s*(?:my|the)?\s*screen|see\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*stream|watch\s*(?:my|the)?\s*stream)\b/i;
 
@@ -2839,153 +2842,21 @@ export class ClankerBot {
   }
 
   async resolveDeterministicMentions({ text, guild, guildId }) {
-    const source = String(text || "");
-    if (!source || !source.includes("@")) {
-      return {
-        text: source,
-        attemptedCount: 0,
-        resolvedCount: 0,
-        ambiguousCount: 0,
-        unresolvedCount: 0
-      };
-    }
-
-    const candidates = extractMentionCandidates(source, MAX_MENTION_CANDIDATES);
-    if (!candidates.length) {
-      return {
-        text: source,
-        attemptedCount: 0,
-        resolvedCount: 0,
-        ambiguousCount: 0,
-        unresolvedCount: 0
-      };
-    }
-
-    const aliasIndex = this.buildMentionAliasIndex({ guild, guildId });
-    const keys = [
-      ...new Set(
-        candidates.flatMap((item) => item.variants.map((variant) => variant.lookupKey))
-      )
-    ];
-    const resolutionByKey = new Map();
-
-    for (const key of keys) {
-      const localIds = aliasIndex.get(key) || new Set();
-      if (localIds.size === 1) {
-        resolutionByKey.set(key, { status: "resolved", id: [...localIds][0] });
-        continue;
-      }
-      if (localIds.size > 1) {
-        resolutionByKey.set(key, { status: "ambiguous" });
-        continue;
-      }
-
-      const guildIds = await this.lookupGuildMembersByExactName(guild, key);
-      if (guildIds.size === 1) {
-        resolutionByKey.set(key, { status: "resolved", id: [...guildIds][0] });
-      } else if (guildIds.size > 1) {
-        resolutionByKey.set(key, { status: "ambiguous" });
-      } else {
-        resolutionByKey.set(key, { status: "unresolved" });
-      }
-    }
-
-    let output = source;
-    let resolvedCount = 0;
-    let ambiguousCount = 0;
-    let unresolvedCount = 0;
-    const sorted = candidates.slice().sort((a, b) => b.start - a.start);
-
-    for (const candidate of sorted) {
-      let selectedVariant = null;
-      let ambiguous = false;
-
-      for (const variant of candidate.variants) {
-        const resolution = resolutionByKey.get(variant.lookupKey);
-        if (!resolution) continue;
-        if (resolution.status === "resolved") {
-          selectedVariant = {
-            end: variant.end,
-            id: resolution.id
-          };
-          break;
-        }
-        if (resolution.status === "ambiguous") {
-          ambiguous = true;
-        }
-      }
-
-      if (selectedVariant) {
-        output = `${output.slice(0, candidate.start)}<@${selectedVariant.id}>${output.slice(selectedVariant.end)}`;
-        resolvedCount += 1;
-      } else if (ambiguous) {
-        ambiguousCount += 1;
-      } else {
-        unresolvedCount += 1;
-      }
-    }
-
-    return {
-      text: output,
-      attemptedCount: candidates.length,
-      resolvedCount,
-      ambiguousCount,
-      unresolvedCount
-    };
+    const runtime = createMentionResolutionRuntime(this);
+    return await resolveDeterministicMentionsForMentions(runtime, {
+      text,
+      guild,
+      guildId
+    });
   }
 
   buildMentionAliasIndex({ guild, guildId }) {
-    const aliases = new Map();
-    const addAlias = (name, id) => {
-      const key = normalizeMentionLookupKey(name);
-      const memberId = String(id || "").trim();
-      if (!key || !memberId) return;
-      if (key === "everyone" || key === "here") return;
-      const existing = aliases.get(key) || new Set();
-      existing.add(memberId);
-      aliases.set(key, existing);
-    };
-
-    if (guild?.members?.cache?.size) {
-      for (const member of guild.members.cache.values()) {
-        addAlias(member?.displayName, member?.id);
-        addAlias(member?.nickname, member?.id);
-        addAlias(member?.user?.globalName, member?.id);
-        addAlias(member?.user?.username, member?.id);
-      }
-    }
-
-    if (guildId) {
-      const rows = this.store.getRecentMessagesAcrossGuild(guildId, MENTION_GUILD_HISTORY_LOOKBACK);
-      for (const row of rows) {
-        addAlias(row?.author_name, row?.author_id);
-      }
-    }
-
-    return aliases;
+    const runtime = createMentionResolutionRuntime(this);
+    return buildMentionAliasIndexForMentions(runtime, { guild, guildId });
   }
 
   async lookupGuildMembersByExactName(guild, lookupKey) {
-    if (!guild?.members?.search) return new Set();
-    const query = String(lookupKey || "").trim();
-    if (query.length < 2) return new Set();
-
-    try {
-      const matches = await guild.members.search({
-        query: query.slice(0, 32),
-        limit: MENTION_SEARCH_RESULT_LIMIT
-      });
-      const ids = new Set();
-      for (const member of matches.values()) {
-        const keys = collectMemberLookupKeys(member);
-        if (keys.has(query)) {
-          ids.add(String(member.id));
-        }
-      }
-      return ids;
-    } catch {
-      return new Set();
-    }
+    return await lookupGuildMembersByExactNameForMentions({ guild, lookupKey });
   }
 
   hasBotMessageInRecentWindow({
