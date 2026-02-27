@@ -1,4 +1,5 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { appConfig, ensureRuntimeEnv } from "./config.ts";
 import { createDashboardServer } from "./dashboard.ts";
 import { ClankerBot } from "./bot.ts";
@@ -12,7 +13,7 @@ import { VideoContextService } from "./video.ts";
 import { PublicHttpsEntrypoint } from "./publicHttpsEntrypoint.ts";
 import { ScreenShareSessionManager } from "./screenShareSessionManager.ts";
 
-async function main() {
+export async function main() {
   ensureRuntimeEnv();
 
   const dbPath = path.resolve(process.cwd(), "data", "clanker.db");
@@ -78,7 +79,21 @@ async function main() {
   process.on("SIGTERM", () => shutdown("SIGTERM"));
 }
 
-main().catch((error) => {
-  console.error("Fatal startup error:", error);
-  process.exit(1);
-});
+export function isDirectExecution(argv = process.argv) {
+  const entry = String(argv?.[1] || "").trim();
+  if (!entry) return false;
+  return path.resolve(entry) === fileURLToPath(import.meta.url);
+}
+
+export async function runCli() {
+  try {
+    await main();
+  } catch (error) {
+    console.error("Fatal startup error:", error);
+    process.exit(1);
+  }
+}
+
+if (isDirectExecution()) {
+  void runCli();
+}

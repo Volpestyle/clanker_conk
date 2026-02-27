@@ -1,18 +1,16 @@
 import {
   buildHardLimitsSection,
   buildVoiceToneGuardrails,
+  getMediaPromptCraftGuidance,
   getPromptBotName,
+  getPromptCapabilityHonestyLine,
+  getPromptImpossibleActionLine,
+  getPromptMemoryDisabledLine,
+  getPromptMemoryEnabledLine,
+  getPromptSkipLine,
   getPromptStyle,
-  PROMPT_CAPABILITY_HONESTY_LINE
+  getPromptTextGuidance
 } from "./promptCore.ts";
-
-const MEDIA_PROMPT_CRAFT_GUIDANCE = [
-  "Write media prompts as vivid scene descriptions, not abstract concepts.",
-  "Include: subject/action, visual style or medium (photo, illustration, 3D render, pixel art, etc.), lighting/mood, camera angle or framing, and color palette when relevant.",
-  "Be specific: 'a golden retriever leaping through autumn leaves, warm backlit sunset, low angle, film grain' beats 'a dog outside'.",
-  "For video prompts, describe the motion arc: what starts, what changes, and how it ends.",
-  "Never put text, words, or UI elements in media prompts."
-].join(" ");
 
 function stripEmojiForPrompt(text) {
   let value = String(text || "");
@@ -153,23 +151,57 @@ function formatMemoryLookupResults(results) {
     .join("\n");
 }
 
+function formatImageLookupCandidates(candidates) {
+  if (!candidates?.length) return "(no recent image references found)";
+  return candidates
+    .slice(0, 12)
+    .map((row, index) => {
+      const filename = String(row?.filename || "(unnamed)").trim();
+      const author = String(row?.authorName || "unknown").trim();
+      const when = String(row?.createdAt || "").trim();
+      const context = String(row?.context || "").trim();
+      const whenLabel = when ? ` at ${when}` : "";
+      const contextLabel = context ? ` | context: ${context}` : "";
+      return `- [I${index + 1}] ${filename} by ${author}${whenLabel}${contextLabel}`;
+    })
+    .join("\n");
+}
+
+function formatImageLookupResults(results) {
+  if (!results?.length) return "(no matching history images found)";
+  return results
+    .map((row, index) => {
+      const filename = String(row?.filename || "(unnamed)").trim();
+      const author = String(row?.authorName || "unknown").trim();
+      const when = String(row?.createdAt || "").trim();
+      const reason = String(row?.matchReason || "").trim();
+      const whenLabel = when ? ` at ${when}` : "";
+      const reasonLabel = reason ? ` | match: ${reason}` : "";
+      return `- [I${index + 1}] ${filename} by ${author}${whenLabel}${reasonLabel}`;
+    })
+    .join("\n");
+}
+
 export function buildSystemPrompt(settings) {
   const memoryEnabled = Boolean(settings?.memory?.enabled);
+  const textGuidance = getPromptTextGuidance(settings, [
+    "Write like a person in chat, not like an assistant.",
+    "Use occasional slang naturally (not every sentence).",
+    "Default to short messages but go longer when the conversation calls for it.",
+    "Use server emoji tokens in text only when necessary and when they enhance the message."
+  ]);
 
   return [
     `You are ${getPromptBotName(settings)}, a real-feeling regular in a Discord server.`,
     `Style: ${getPromptStyle(settings, "playful slang")}.`,
-    "Write like a person in chat, not like an assistant.",
-    "Use occasional slang naturally (not every sentence).",
-    "Default to short messages but go longer when the conversation calls for it.",
-    "Use server emoji tokens in text only when necessary and when they enhance the message.",
-    PROMPT_CAPABILITY_HONESTY_LINE,
+    ...textGuidance,
+    getPromptCapabilityHonestyLine(settings),
     memoryEnabled
-      ? "You have persistent memory across conversations via saved durable facts and logs. Do not claim each conversation starts from zero."
-      : "Persistent memory is disabled right now. Do not claim long-term memory across separate conversations.",
-    "If asked to do something impossible, say it casually and suggest a text-only alternative.",
+      ? getPromptMemoryEnabledLine(settings)
+      : getPromptMemoryDisabledLine(settings),
+    getPromptImpossibleActionLine(settings),
     ...buildHardLimitsSection(settings),
-    "If you should not send a message, output exactly [SKIP]."
+    getPromptSkipLine(settings)
   ].join("\n");
 }
 
@@ -196,17 +228,21 @@ export function buildReplyPrompt({
   addressing = null,
   webSearch = null,
   memoryLookup = null,
+  imageLookup = null,
   allowWebSearchDirective = false,
   allowMemoryLookupDirective = false,
+  allowImageLookupDirective = false,
   allowMemoryDirective = false,
   allowAutomationDirective = false,
   automationTimeZoneLabel = "",
   voiceMode = null,
   screenShare = null,
   videoContext = null,
-  maxMediaPromptChars = 900
+  maxMediaPromptChars = 900,
+  mediaPromptCraftGuidance = null
 }) {
   const parts = [];
+  const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance();
 
   parts.push(`Incoming message from ${message.authorName}: ${message.content}`);
   if (imageInputs?.length) {
@@ -250,6 +286,20 @@ export function buildReplyPrompt({
       parts.push(`Memory lookup results for "${memoryLookup.query || message?.content || ""}":`);
       parts.push(formatMemoryLookupResults(memoryLookup.results));
       parts.push("If useful, cite memory hits inline as [M1], [M2], etc.");
+    }
+  }
+
+  if (imageLookup?.requested) {
+    if (imageLookup.error) {
+      parts.push(`History image lookup failed: ${imageLookup.error}`);
+      parts.push("Answer from currently available context and avoid pretending you saw an older image.");
+    } else if (!imageLookup.results?.length) {
+      parts.push(`History image lookup for "${imageLookup.query || message?.content || ""}" found no matches.`);
+      parts.push("Say briefly that no matching prior image was found if the user asked about one.");
+    } else {
+      parts.push(`History image lookup results for "${imageLookup.query || message?.content || ""}":`);
+      parts.push(formatImageLookupResults(imageLookup.results));
+      parts.push("Use this visual context directly and avoid guessing details not present.");
     }
   }
 
@@ -407,6 +457,26 @@ export function buildReplyPrompt({
     }
   }
 
+  if (allowImageLookupDirective) {
+    if (!imageLookup?.enabled) {
+      parts.push("History image lookup is unavailable for this turn.");
+      parts.push("Set imageLookupQuery to null.");
+    } else if (!imageLookup?.candidates?.length) {
+      parts.push("No recent image references were found in message history.");
+      parts.push("Set imageLookupQuery to null.");
+    } else {
+      parts.push("History image lookup is available for this turn.");
+      parts.push("Recent image references from message history:");
+      parts.push(formatImageLookupCandidates(imageLookup.candidates));
+      parts.push(
+        "If the user refers to an earlier image/photo and current image attachments are insufficient, set imageLookupQuery to a concise lookup query."
+      );
+      parts.push("Use imageLookupQuery only when needed and keep it under 220 characters.");
+      parts.push("If no historical image lookup is needed, set imageLookupQuery to null.");
+      parts.push("Do not claim you cannot review earlier shared images when history lookup is available.");
+    }
+  }
+
   if (webSearch?.requested && !webSearch.used) {
     if (webSearch.optedOutByUser) {
       parts.push("The user asked not to use web search. Respond without web lookup.");
@@ -486,7 +556,7 @@ export function buildReplyPrompt({
       parts.push("Use video when motion/animation is meaningfully better than a still image.");
     }
     parts.push(`Keep image/video media prompts under ${maxMediaPromptChars} chars, and always include normal reply text.`);
-    parts.push(MEDIA_PROMPT_CRAFT_GUIDANCE);
+    parts.push(mediaGuidance);
   } else {
     parts.push("Reply image/video generation is unavailable right now. Respond with text only.");
     parts.push("Set media to null.");
@@ -524,12 +594,12 @@ export function buildReplyPrompt({
   parts.push("Return strict JSON only. Do not output markdown or code fences.");
   parts.push("JSON format:");
   parts.push(
-    "{\"text\":\"reply or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"memoryLine\":null,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
+    "{\"text\":\"reply or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"memoryLine\":null,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
   );
   parts.push("Set skip=true only when no response should be sent. If skip=true, set text to [SKIP].");
   parts.push("When no reaction is needed, set reactionEmoji to null.");
   parts.push("When no media should be generated, set media to null.");
-  parts.push("When no lookup is needed, set webSearchQuery and memoryLookupQuery to null.");
+  parts.push("When no lookup is needed, set webSearchQuery, memoryLookupQuery, and imageLookupQuery to null.");
   parts.push("When no durable fact should be saved, set memoryLine to null.");
   parts.push("When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.");
   parts.push("Set voiceIntent.intent to one of join|leave|status|watch_stream|stop_watching_stream|stream_status|none.");
@@ -556,9 +626,11 @@ export function buildAutomationPrompt({
   remainingImages = 0,
   remainingVideos = 0,
   remainingGifs = 0,
-  maxMediaPromptChars = 900
+  maxMediaPromptChars = 900,
+  mediaPromptCraftGuidance = null
 }) {
   const parts = [];
+  const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance();
   const taskInstruction = String(instruction || "")
     .replace(/\s+/g, " ")
     .trim()
@@ -612,7 +684,7 @@ export function buildAutomationPrompt({
       parts.push("For short generated video, set media to {\"type\":\"video\",\"prompt\":\"...\"}.");
     }
     parts.push(`Keep image/video prompts under ${maxMediaPromptChars} chars.`);
-    parts.push(MEDIA_PROMPT_CRAFT_GUIDANCE);
+    parts.push(mediaGuidance);
   } else {
     parts.push("Generated image/video is unavailable this run. Set media to null.");
   }
@@ -723,9 +795,11 @@ export function buildInitiativePrompt({
   discoveryFindings = [],
   maxLinksPerPost = 2,
   requireDiscoveryLink = false,
-  maxMediaPromptChars = 900
+  maxMediaPromptChars = 900,
+  mediaPromptCraftGuidance = null
 }) {
   const parts = [];
+  const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance();
 
   parts.push(
     `You are posting proactively in #${channelName}. No one directly asked you to respond.`
@@ -770,7 +844,7 @@ export function buildInitiativePrompt({
     parts.push(
       "Any visual prompt must avoid visible text, letters, numbers, logos, subtitles, captions, UI, or watermarks."
     );
-    parts.push(MEDIA_PROMPT_CRAFT_GUIDANCE);
+    parts.push(mediaGuidance);
     parts.push(
       "If no media is needed, output only the post text. If media is needed, output at most one media directive."
     );

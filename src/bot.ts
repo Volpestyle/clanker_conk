@@ -7,18 +7,12 @@ import {
   buildAutomationPrompt,
   buildInitiativePrompt,
   buildReplyPrompt,
-  buildSystemPrompt,
-  buildVoiceTurnPrompt
+  buildSystemPrompt
 } from "./prompts.ts";
-import {
-  buildVoiceToneGuardrails,
-  buildHardLimitsSection,
-  getPromptBotName,
-  getPromptStyle,
-  PROMPT_CAPABILITY_HONESTY_LINE
-} from "./promptCore.ts";
+import { getMediaPromptCraftGuidance } from "./promptCore.ts";
 import {
   MAX_GIF_QUERY_LEN,
+  MAX_IMAGE_LOOKUP_QUERY_LEN,
   MAX_MEMORY_LOOKUP_QUERY_LEN,
   MAX_MENTION_CANDIDATES,
   MAX_VIDEO_FALLBACK_MESSAGES,
@@ -42,45 +36,68 @@ import {
   normalizeReactionEmojiToken,
   normalizeSkipSentinel,
   parseInitiativeMediaDirective,
-  parseReplyDirectives,
   parseStructuredReplyOutput,
   pickInitiativeMediaDirective,
   pickReplyMediaDirective,
-  resolveMaxMediaPromptLen,
-  serializeForPrompt
+  resolveMaxMediaPromptLen
 } from "./botHelpers.ts";
 import {
-  formatAutomationSchedule,
   getLocalTimeZoneLabel,
-  resolveFollowingNextRunAt,
-  resolveInitialNextRunAt
+  resolveFollowingNextRunAt
 } from "./automation.ts";
 import { normalizeDiscoveryUrl } from "./discovery.ts";
 import { chance, clamp, sanitizeBotText, sleep } from "./utils.ts";
+import {
+  applyAutomationControlAction,
+  composeAutomationControlReply,
+  formatAutomationListLine,
+  resolveAutomationTargetsForControl
+} from "./bot/automationControl.ts";
+import {
+  composeVoiceOperationalMessage,
+  generateVoiceTurnReply
+} from "./bot/voiceReplies.ts";
+import {
+  dequeueReplyBurst,
+  dequeueReplyJob,
+  ensureGatewayHealthy,
+  getReplyCoalesceMaxMessages,
+  getReplyCoalesceWaitMs,
+  getReplyCoalesceWindowMs,
+  getReplyQueueWaitMs,
+  processReplyQueue,
+  reconnectGateway,
+  requeueReplyJobs,
+  scheduleReconnect
+} from "./bot/queueGateway.ts";
+import {
+  evaluateInitiativeSchedule,
+  evaluateSpontaneousInitiativeSchedule,
+  getInitiativeAverageIntervalMs,
+  getInitiativeMinGapMs,
+  getInitiativePacingMode,
+  getInitiativePostingIntervalMs,
+  pickInitiativeChannel
+} from "./bot/initiativeSchedule.ts";
 import { isBotNameAddressed } from "./voice/voiceSessionHelpers.ts";
 import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
-const REPLY_QUEUE_RATE_LIMIT_WAIT_MS = 15_000;
-const REPLY_QUEUE_SEND_RETRY_BASE_MS = 2_500;
-const REPLY_QUEUE_SEND_MAX_RETRIES = 2;
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i;
 const MAX_IMAGE_INPUTS = 3;
 const STARTUP_TASK_DELAY_MS = 4500;
 const INITIATIVE_TICK_MS = 60_000;
 const AUTOMATION_TICK_MS = 30_000;
 const GATEWAY_WATCHDOG_TICK_MS = 30_000;
-const GATEWAY_STALE_MS = 2 * 60_000;
-const GATEWAY_RECONNECT_BASE_DELAY_MS = 5_000;
-const GATEWAY_RECONNECT_MAX_DELAY_MS = 60_000;
 const MAX_MODEL_IMAGE_INPUTS = 8;
+const MAX_HISTORY_IMAGE_CANDIDATES = 24;
+const MAX_HISTORY_IMAGE_LOOKUP_RESULTS = 6;
+const MAX_IMAGE_LOOKUP_QUERY_TOKENS = 7;
 const UNSOLICITED_REPLY_CONTEXT_WINDOW = 5;
 const MENTION_GUILD_HISTORY_LOOKBACK = 500;
 const MENTION_SEARCH_RESULT_LIMIT = 10;
-const MAX_AUTOMATIONS_PER_GUILD = 90;
 const MAX_AUTOMATION_RUNS_PER_TICK = 4;
-const MAX_AUTOMATION_LIST_ROWS = 10;
 const SCREEN_SHARE_MESSAGE_MAX_CHARS = 420;
 const SCREEN_SHARE_INTENT_THRESHOLD = 0.66;
 const SCREEN_SHARE_EXPLICIT_REQUEST_RE =
@@ -437,347 +454,47 @@ export class ClankerBot {
   }
 
   getReplyQueueWaitMs(settings) {
-    const cooldownMs = settings.activity.minSecondsBetweenMessages * 1000;
-    const elapsed = Date.now() - this.lastBotMessageAt;
-    const cooldownWaitMs = Math.max(0, cooldownMs - elapsed);
-    if (cooldownWaitMs > 0) return cooldownWaitMs;
-    if (!this.canSendMessage(settings.permissions.maxMessagesPerHour)) {
-      return REPLY_QUEUE_RATE_LIMIT_WAIT_MS;
-    }
-    return 0;
+    return getReplyQueueWaitMs(this, settings);
   }
 
   getReplyCoalesceWindowMs(settings) {
-    const seconds = clamp(Number(settings.activity?.replyCoalesceWindowSeconds) || 0, 0, 20);
-    return Math.floor(seconds * 1000);
+    return getReplyCoalesceWindowMs(settings);
   }
 
   getReplyCoalesceMaxMessages(settings) {
-    return clamp(Number(settings.activity?.replyCoalesceMaxMessages) || 1, 1, 20);
+    return getReplyCoalesceMaxMessages(settings);
   }
 
   getReplyCoalesceWaitMs(settings, message) {
-    const windowMs = this.getReplyCoalesceWindowMs(settings);
-    if (windowMs <= 0) return 0;
-    const createdAtRaw = Number(message?.createdTimestamp);
-    const createdAt = Number.isFinite(createdAtRaw) && createdAtRaw > 0 ? createdAtRaw : Date.now();
-    const ageMs = Date.now() - createdAt;
-    return Math.max(0, windowMs - ageMs);
+    return getReplyCoalesceWaitMs(settings, message);
   }
 
   dequeueReplyJob(channelId) {
-    const queue = this.replyQueues.get(channelId);
-    if (!queue?.length) return null;
-
-    const job = queue.shift();
-    if (job?.message?.id) {
-      this.replyQueuedMessageIds.delete(String(job.message.id));
-    }
-
-    if (!queue.length) {
-      this.replyQueues.delete(channelId);
-    }
-
-    return job;
+    return dequeueReplyJob(this, channelId);
   }
 
   dequeueReplyBurst(channelId, settings) {
-    const firstJob = this.dequeueReplyJob(channelId);
-    if (!firstJob) return [];
-
-    const burst = [firstJob];
-    const windowMs = this.getReplyCoalesceWindowMs(settings);
-    const maxMessages = this.getReplyCoalesceMaxMessages(settings);
-    if (windowMs <= 0 || maxMessages <= 1) return burst;
-
-    const firstMessage = firstJob.message;
-    const firstAuthorId = String(firstMessage?.author?.id || "").trim();
-    if (!firstAuthorId) return burst;
-
-    const firstCreatedAtRaw = Number(firstMessage?.createdTimestamp);
-    const firstCreatedAt = Number.isFinite(firstCreatedAtRaw) && firstCreatedAtRaw > 0
-      ? firstCreatedAtRaw
-      : Date.now();
-
-    while (burst.length < maxMessages) {
-      const queue = this.replyQueues.get(channelId);
-      const candidate = queue?.[0];
-      if (!candidate) break;
-
-      const candidateMessage = candidate.message;
-      if (!candidateMessage?.id) {
-        this.dequeueReplyJob(channelId);
-        continue;
-      }
-
-      const candidateAuthorId = String(candidateMessage.author?.id || "").trim();
-      if (candidateAuthorId !== firstAuthorId) break;
-
-      const candidateCreatedAtRaw = Number(candidateMessage.createdTimestamp);
-      const candidateCreatedAt = Number.isFinite(candidateCreatedAtRaw) && candidateCreatedAtRaw > 0
-        ? candidateCreatedAtRaw
-        : firstCreatedAt;
-      if (Math.abs(candidateCreatedAt - firstCreatedAt) > windowMs) break;
-
-      const nextJob = this.dequeueReplyJob(channelId);
-      if (!nextJob) break;
-      burst.push(nextJob);
-    }
-
-    return burst;
+    return dequeueReplyBurst(this, channelId, settings);
   }
 
   requeueReplyJobs(channelId, jobs) {
-    const validJobs = (jobs || []).filter((job) => job?.message?.id);
-    if (!validJobs.length) return;
-
-    const queue = this.replyQueues.get(channelId) || [];
-    queue.unshift(...validJobs);
-    this.replyQueues.set(channelId, queue);
-    for (const job of validJobs) {
-      this.replyQueuedMessageIds.add(String(job.message.id));
-    }
+    return requeueReplyJobs(this, channelId, jobs);
   }
 
   async processReplyQueue(channelId) {
-    if (this.replyQueueWorkers.has(channelId)) return;
-    this.replyQueueWorkers.add(channelId);
-
-    try {
-      while (!this.isStopping) {
-        const queue = this.replyQueues.get(channelId);
-        if (!queue?.length) break;
-
-        const head = queue[0];
-        const headMessage = head?.message;
-        if (!headMessage?.id) {
-          this.dequeueReplyJob(channelId);
-          continue;
-        }
-
-        const settings = this.store.getSettings();
-
-        if (!settings.permissions.allowReplies) {
-          this.dequeueReplyJob(channelId);
-          continue;
-        }
-        if (
-          !headMessage.author ||
-          String(headMessage.author.id || "") === String(this.client.user?.id || "")
-        ) {
-          this.dequeueReplyJob(channelId);
-          continue;
-        }
-        if (!headMessage.guild || !headMessage.channel) {
-          this.dequeueReplyJob(channelId);
-          continue;
-        }
-        if (!this.isChannelAllowed(settings, headMessage.channelId)) {
-          this.dequeueReplyJob(channelId);
-          continue;
-        }
-        if (this.isUserBlocked(settings, headMessage.author.id)) {
-          this.dequeueReplyJob(channelId);
-          continue;
-        }
-        if (this.store.hasTriggeredResponse(headMessage.id)) {
-          this.dequeueReplyJob(channelId);
-          continue;
-        }
-
-        const coalesceWaitMs = this.getReplyCoalesceWaitMs(settings, headMessage);
-        if (coalesceWaitMs > 0) {
-          await sleep(Math.min(coalesceWaitMs, REPLY_QUEUE_RATE_LIMIT_WAIT_MS));
-          continue;
-        }
-
-        const waitMs = this.getReplyQueueWaitMs(settings);
-        if (waitMs > 0) {
-          await sleep(Math.min(waitMs, REPLY_QUEUE_RATE_LIMIT_WAIT_MS));
-          continue;
-        }
-
-        const burstJobs = this.dequeueReplyBurst(channelId, settings);
-        if (!burstJobs.length) continue;
-
-        const latestJob = burstJobs[burstJobs.length - 1];
-        const message = latestJob?.message;
-        if (!message?.id) continue;
-
-        const triggerMessageIds = [
-          ...new Set(burstJobs.map((job) => String(job?.message?.id || "").trim()).filter(Boolean))
-        ];
-
-        const recentMessages = this.store.getRecentMessages(
-          message.channelId,
-          settings.memory.maxRecentMessages
-        );
-        const addressSignal = {
-          ...(latestJob.addressSignal || this.getReplyAddressSignal(settings, message, recentMessages))
-        };
-        addressSignal.direct = Boolean(addressSignal.direct);
-        addressSignal.inferred = Boolean(addressSignal.inferred);
-        addressSignal.triggered = Boolean(addressSignal.triggered);
-        addressSignal.reason = String(addressSignal.reason || "llm_decides");
-
-        for (const burstJob of burstJobs) {
-          const burstMessage = burstJob?.message;
-          if (!burstMessage?.id) continue;
-          const signal =
-            burstJob.addressSignal || this.getReplyAddressSignal(settings, burstMessage, recentMessages);
-          if (!signal) continue;
-          if (signal.direct) addressSignal.direct = true;
-          if (signal.inferred) addressSignal.inferred = true;
-          if (signal.triggered && !addressSignal.triggered) {
-            addressSignal.triggered = true;
-            addressSignal.reason = String(signal.reason || "direct");
-          }
-        }
-        const forceRespond = burstJobs.some((job) => Boolean(job?.forceRespond || job?.addressSignal?.triggered));
-        if (forceRespond && !addressSignal.triggered) {
-          addressSignal.triggered = true;
-          addressSignal.reason = "direct";
-        }
-        const source = burstJobs.length > 1
-          ? `${latestJob.source || "message_event"}_coalesced`
-          : latestJob.source || "message_event";
-
-        try {
-          const sent = await this.maybeReplyToMessage(message, settings, {
-            forceRespond,
-            source,
-            addressSignal,
-            recentMessages,
-            triggerMessageIds
-          });
-
-          if (!sent && forceRespond && !this.isStopping && !this.store.hasTriggeredResponse(message.id)) {
-            const latestSettings = this.store.getSettings();
-            if (
-              latestSettings.permissions.allowReplies &&
-              this.isChannelAllowed(latestSettings, message.channelId) &&
-              !this.isUserBlocked(latestSettings, message.author.id)
-            ) {
-              const retryWaitMs = this.getReplyQueueWaitMs(latestSettings);
-              if (retryWaitMs > 0) {
-                this.requeueReplyJobs(channelId, burstJobs);
-                await sleep(Math.min(retryWaitMs, REPLY_QUEUE_RATE_LIMIT_WAIT_MS));
-                continue;
-              }
-            }
-          }
-        } catch (error) {
-          const maxAttempts = burstJobs.reduce(
-            (max, job) => Math.max(max, Math.max(0, Number(job?.attempts) || 0)),
-            0
-          );
-          if (maxAttempts < REPLY_QUEUE_SEND_MAX_RETRIES && !this.isStopping) {
-            const nextAttempt = maxAttempts + 1;
-            for (const job of burstJobs) {
-              job.attempts = Math.max(0, Number(job?.attempts) || 0) + 1;
-            }
-            this.requeueReplyJobs(channelId, burstJobs);
-            await sleep(REPLY_QUEUE_SEND_RETRY_BASE_MS * nextAttempt);
-            continue;
-          }
-
-          this.store.logAction({
-            kind: "bot_error",
-            guildId: message.guildId,
-            channelId: message.channelId,
-            messageId: message.id,
-            userId: message.author?.id || null,
-            content: `reply_queue_send_failed: ${String(error?.message || error)}`
-          });
-        }
-      }
-    } finally {
-      this.replyQueueWorkers.delete(channelId);
-      if (!this.isStopping && this.replyQueues.get(channelId)?.length) {
-        this.processReplyQueue(channelId).catch((error) => {
-          this.store.logAction({
-            kind: "bot_error",
-            content: `reply_queue_restart: ${String(error?.message || error)}`
-          });
-        });
-      }
-    }
+    return await processReplyQueue(this, channelId);
   }
 
   async ensureGatewayHealthy() {
-    if (this.isStopping) return;
-    if (this.reconnectInFlight) return;
-    if (!this.hasConnectedAtLeastOnce) return;
-
-    if (this.client.isReady()) {
-      this.markGatewayEvent();
-      return;
-    }
-
-    const elapsed = Date.now() - this.lastGatewayEventAt;
-    if (elapsed < GATEWAY_STALE_MS) return;
-
-    await this.reconnectGateway(`stale_gateway_${elapsed}ms`);
+    return await ensureGatewayHealthy(this);
   }
 
   scheduleReconnect(reason, delayMs) {
-    if (this.isStopping) return;
-    if (this.reconnectTimeout) return;
-
-    this.reconnectTimeout = setTimeout(() => {
-      this.reconnectTimeout = null;
-      this.reconnectGateway(reason).catch((error) => {
-        this.store.logAction({
-          kind: "bot_error",
-          userId: this.client.user?.id,
-          content: `gateway_reconnect_crash: ${String(error?.message || error)}`
-        });
-      });
-    }, delayMs);
+    return scheduleReconnect(this, reason, delayMs);
   }
 
   async reconnectGateway(reason) {
-    if (this.isStopping) return;
-    if (this.reconnectInFlight) return;
-    this.reconnectInFlight = true;
-    this.markGatewayEvent();
-
-    this.store.logAction({
-      kind: "bot_error",
-      userId: this.client.user?.id,
-      content: `gateway_reconnect_start: ${reason}`
-    });
-
-    try {
-      try {
-        await this.client.destroy();
-      } catch {
-        // ignore
-      }
-      await this.client.login(this.appConfig.discordToken);
-      this.markGatewayEvent();
-      this.reconnectAttempts = 0;
-    } catch (error) {
-      this.reconnectAttempts += 1;
-      const backoffDelay = Math.min(
-        GATEWAY_RECONNECT_BASE_DELAY_MS * 2 ** Math.max(this.reconnectAttempts - 1, 0),
-        GATEWAY_RECONNECT_MAX_DELAY_MS
-      );
-
-      this.store.logAction({
-        kind: "bot_error",
-        userId: this.client.user?.id,
-        content: `gateway_reconnect_failed: ${String(error?.message || error)}`,
-        metadata: {
-          attempt: this.reconnectAttempts,
-          nextRetryMs: backoffDelay
-        }
-      });
-
-      this.scheduleReconnect("retry_after_reconnect_failure", backoffDelay);
-    } finally {
-      this.reconnectInFlight = false;
-    }
+    return await reconnectGateway(this, reason);
   }
 
   async handleMessage(message) {
@@ -850,122 +567,22 @@ export class ClankerBot {
     reason = null,
     details = {},
     fallbackText = "",
-    maxOutputChars = 180
+    maxOutputChars = 180,
+    allowSkip = false
   }) {
-    if (!this.llm?.generate || !settings) return "";
-    const normalizedEvent = String(event || "voice_runtime")
-      .trim()
-      .toLowerCase();
-    const isVoiceSessionEnd = normalizedEvent === "voice_session_end";
-    const isScreenShareOffer = normalizedEvent === "voice_screen_share_offer";
-    const operationalTemperature = isVoiceSessionEnd ? 0.35 : 0.55;
-    const operationalMaxOutputTokens = isVoiceSessionEnd ? 60 : isScreenShareOffer ? 140 : 100;
-    const outputCharLimit = clamp(Number(maxOutputChars) || 180, 80, 700);
-
-    const tunedSettings = {
-      ...settings,
-      llm: {
-        ...(settings?.llm || {}),
-        temperature: clamp(Number(settings?.llm?.temperature) || operationalTemperature, 0, 0.7),
-        maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || operationalMaxOutputTokens, 32, 110)
-      }
-    };
-    const operationalMemoryFacts = await this.loadRelevantMemoryFacts({
+    return await composeVoiceOperationalMessage(this, {
       settings,
       guildId,
       channelId,
-      queryText: `${String(event || "")} ${String(reason || "")} ${String(fallbackText || "")}`
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 280),
-      trace: {
-        guildId,
-        channelId,
-        userId,
-        source: "voice_operational_message"
-      },
-      limit: 6
+      userId,
+      messageId,
+      event,
+      reason,
+      details,
+      fallbackText,
+      maxOutputChars,
+      allowSkip
     });
-    const operationalMemoryHints = this.buildMediaMemoryFacts({
-      userFacts: [],
-      relevantFacts: operationalMemoryFacts,
-      maxItems: 6
-    });
-
-    const systemPrompt = [
-      `You are ${getPromptBotName(settings)}, a Discord regular posting a voice-mode update.`,
-      `Style: ${getPromptStyle(settings, "laid-back, concise, low-drama chat tone")}.`,
-      "Write exactly one short user-facing message for the text channel.",
-      "Keep it chill and simple. No overexplaining.",
-      "Clearly state what happened and why, especially when a request is blocked.",
-      "If relevant, mention required permissions/settings plainly.",
-      "For voice_session_end, keep it to one brief sentence (4-12 words).",
-      isScreenShareOffer
-        ? "If Details JSON includes linkUrl, include that exact URL unchanged in the final message."
-        : "",
-      "Avoid dramatic wording, blame, apology spirals, and long postmortems.",
-      PROMPT_CAPABILITY_HONESTY_LINE,
-      ...buildHardLimitsSection(settings, { maxItems: 12 }),
-      "Do not output JSON, markdown headings, code blocks, labels, directives, or [SKIP].",
-      "Do not invent details that are not in the event payload."
-    ].join("\n");
-
-    const userPrompt = [
-      `Event: ${String(event || "voice_runtime")}`,
-      `Reason: ${String(reason || "unknown")}`,
-      `Details JSON: ${serializeForPrompt(details, 1400)}`,
-      operationalMemoryHints.length
-        ? `Relevant durable memory (use only if directly useful): ${operationalMemoryHints.join(" | ")}`
-        : "",
-      fallbackText ? `Baseline meaning: ${String(fallbackText || "").trim()}` : "",
-      isVoiceSessionEnd
-        ? "Constraint: one chill sentence, 4-12 words."
-        : isScreenShareOffer
-          ? "Constraint: low-key tone, 1-2 short sentences."
-          : "Constraint: one brief sentence.",
-      "Return only the final message text."
-    ]
-      .filter(Boolean)
-      .join("\n");
-
-    try {
-      const generation = await this.llm.generate({
-        settings: tunedSettings,
-        systemPrompt,
-        userPrompt,
-        trace: {
-          guildId,
-          channelId,
-          messageId,
-          userId,
-          source: "voice_operational_message",
-          event,
-          reason
-        }
-      });
-
-      const parsed = parseReplyDirectives(generation.text, resolveMaxMediaPromptLen(settings));
-      const normalized = sanitizeBotText(
-        normalizeSkipSentinel(parsed.text || generation.text || ""),
-        outputCharLimit
-      );
-      if (!normalized || normalized === "[SKIP]") return "";
-      return normalized;
-    } catch (error) {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: guildId || null,
-        channelId: channelId || null,
-        messageId: messageId || null,
-        userId: userId || null,
-        content: `voice_operational_llm_failed: ${String(error?.message || error)}`,
-        metadata: {
-          event,
-          reason
-        }
-      });
-      return "";
-    }
   }
 
   async generateVoiceTurnReply({
@@ -980,176 +597,24 @@ export class ClankerBot {
     voiceEagerness = 0,
     soundboardCandidates = []
   }) {
-    if (!this.llm?.generate || !settings) return { text: "" };
-    const incomingTranscript = String(transcript || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 700);
-    if (!incomingTranscript) return { text: "" };
-
-    const normalizedContextMessages = (Array.isArray(contextMessages) ? contextMessages : [])
-      .map((row) => ({
-        role: row?.role === "assistant" ? "assistant" : "user",
-        content: String(row?.content || "")
-          .replace(/\s+/g, " ")
-          .trim()
-          .slice(0, 520)
-      }))
-      .filter((row) => row.content)
-      .slice(-10);
-    const normalizedSoundboardCandidates = (Array.isArray(soundboardCandidates) ? soundboardCandidates : [])
-      .map((line) => String(line || "").trim())
-      .filter(Boolean)
-      .slice(0, 40);
-    const allowSoundboardDirective = Boolean(
-      settings?.voice?.soundboard?.enabled && normalizedSoundboardCandidates.length
-    );
-
-    const guild = this.client.guilds.cache.get(String(guildId || ""));
-    const speakerName =
-      guild?.members?.cache?.get(String(userId || ""))?.displayName ||
-      guild?.members?.cache?.get(String(userId || ""))?.user?.username ||
-      this.client.users?.cache?.get(String(userId || ""))?.username ||
-      "unknown";
-
-    if (settings.memory?.enabled && this.memory?.ingestMessage && userId) {
-      try {
-        await this.memory.ingestMessage({
-          messageId: `voice-${String(guildId || "guild")}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-          authorId: String(userId),
-          authorName: String(speakerName || "unknown"),
-          content: incomingTranscript,
-          settings,
-          trace: {
-            guildId,
-            channelId,
-            userId,
-            source: "voice_stt_pipeline_ingest"
-          }
-        });
-      } catch (error) {
-        this.store.logAction({
-          kind: "voice_error",
-          guildId,
-          channelId,
-          userId,
-          content: `voice_stt_memory_ingest_failed: ${String(error?.message || error)}`,
-          metadata: {
-            sessionId
-          }
-        });
-      }
-    }
-
-    const memorySlice = await this.loadPromptMemorySlice({
+    return await generateVoiceTurnReply(this, {
       settings,
-      userId,
       guildId,
-      channelId: null,
-      queryText: incomingTranscript,
-      trace: {
-        guildId,
-        channelId,
-        userId
-      },
-      source: "voice_stt_pipeline_generation"
-    });
-
-    const tunedSettings = {
-      ...settings,
-      llm: {
-        ...(settings?.llm || {}),
-        temperature: clamp(Number(settings?.llm?.temperature) || 0.8, 0, 1.2),
-        maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || 220, 40, 180)
-      }
-    };
-
-    const voiceToneGuardrails = buildVoiceToneGuardrails();
-    const systemPrompt = [
-      buildSystemPrompt(settings),
-      "You are speaking in live Discord voice chat.",
-      ...voiceToneGuardrails,
-      "Output plain spoken text only.",
-      allowSoundboardDirective
-        ? "Optional control: append exactly one trailing [[SOUNDBOARD:<sound_ref>]] directive when you want a soundboard effect."
-        : null,
-      isEagerTurn
-        ? allowSoundboardDirective
-          ? "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text and only the optional trailing soundboard directive."
-          : "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text only, no directives or markdown."
-        : allowSoundboardDirective
-          ? "Do not output directives or markdown, except the optional trailing [[SOUNDBOARD:<sound_ref>]] directive. Do not output [SKIP]."
-          : "Do not output directives like [[...]], [SKIP], or markdown.",
-      allowSoundboardDirective ? "Never mention the control directive in normal speech." : null
-    ]
-      .filter(Boolean)
-      .join("\n");
-    const userPrompt = buildVoiceTurnPrompt({
-      speakerName,
-      transcript: incomingTranscript,
-      userFacts: memorySlice.userFacts,
-      relevantFacts: memorySlice.relevantFacts,
+      channelId,
+      userId,
+      transcript,
+      contextMessages,
+      sessionId,
       isEagerTurn,
       voiceEagerness,
-      soundboardCandidates: normalizedSoundboardCandidates
+      soundboardCandidates
     });
+  }
 
-    try {
-      const generation = await this.llm.generate({
-        settings: tunedSettings,
-        systemPrompt,
-        userPrompt,
-        contextMessages: normalizedContextMessages,
-        trace: {
-          guildId,
-          channelId,
-          userId,
-          source: "voice_stt_pipeline_generation",
-          event: sessionId ? "voice_session" : "voice_turn"
-        }
-      });
-
-      const parsed = parseReplyDirectives(generation.text, resolveMaxMediaPromptLen(settings));
-      const soundboardRef = allowSoundboardDirective
-        ? String(parsed.soundboardRef || "")
-            .trim()
-            .slice(0, 180) || null
-        : null;
-      let finalText = sanitizeBotText(normalizeSkipSentinel(parsed.text || generation.text || ""), 520);
-      if (!finalText || finalText === "[SKIP]") {
-        return { text: "", soundboardRef: null };
-      }
-
-      if (settings.memory?.enabled && parsed.memoryLine && this.memory?.rememberLine && userId) {
-        await this.memory
-          .rememberLine({
-            line: parsed.memoryLine,
-            sourceMessageId: `voice-${String(guildId || "guild")}-${Date.now()}-memory`,
-            userId: String(userId),
-            guildId,
-            channelId,
-            sourceText: incomingTranscript
-          })
-          .catch(() => undefined);
-      }
-
-      return {
-        text: finalText,
-        soundboardRef
-      };
-    } catch (error) {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId,
-        channelId,
-        userId,
-        content: `voice_stt_generation_failed: ${String(error?.message || error)}`,
-        metadata: {
-          sessionId
-        }
-      });
-      return { text: "" };
-    }
+  shouldSendAsReply({ isInitiativeChannel = false, shouldThreadReply = false } = {}) {
+    if (!shouldThreadReply) return false;
+    if (!isInitiativeChannel) return true;
+    return chance(0.65);
   }
 
   async maybeReplyToMessage(message, settings, options = {}) {
@@ -1234,7 +699,11 @@ export class ClankerBot {
         source: options.source || "message_event"
       }
     });
-    const imageInputs = [...attachmentImageInputs, ...(videoContext.frameImages || [])].slice(0, MAX_MODEL_IMAGE_INPUTS);
+    let modelImageInputs = [...attachmentImageInputs, ...(videoContext.frameImages || [])].slice(0, MAX_MODEL_IMAGE_INPUTS);
+    let imageLookup = this.buildImageLookupContext({
+      recentMessages,
+      excludedUrls: modelImageInputs.map((image) => String(image?.url || "").trim())
+    });
     const replyTrace = {
       guildId: message.guildId,
       channelId: message.channelId,
@@ -1252,7 +721,6 @@ export class ClankerBot {
         authorName: message.member?.displayName || message.author.username,
         content: message.content
       },
-      imageInputs,
       recentMessages,
       relevantMessages: memorySlice.relevantMessages,
       userFacts: memorySlice.userFacts,
@@ -1285,25 +753,30 @@ export class ClankerBot {
       },
       screenShare: screenShareCapability,
       videoContext,
-      maxMediaPromptChars: resolveMaxMediaPromptLen(settings)
+      maxMediaPromptChars: resolveMaxMediaPromptLen(settings),
+      mediaPromptCraftGuidance: getMediaPromptCraftGuidance(settings)
     };
     const initialUserPrompt = buildReplyPrompt({
       ...replyPromptBase,
+      imageInputs: modelImageInputs,
       webSearch,
       memoryLookup,
+      imageLookup,
       allowWebSearchDirective: true,
-      allowMemoryLookupDirective: true
+      allowMemoryLookupDirective: true,
+      allowImageLookupDirective: true
     });
 
     let generation = await this.llm.generate({
       settings,
       systemPrompt,
       userPrompt: initialUserPrompt,
-      imageInputs,
+      imageInputs: modelImageInputs,
       trace: replyTrace
     });
     let usedWebSearchFollowup = false;
     let usedMemoryLookupFollowup = false;
+    let usedImageLookupFollowup = false;
     const followupGenerationSettings = this.resolveReplyFollowupGenerationSettings(settings);
     const mediaPromptLimit = resolveMaxMediaPromptLen(settings);
     let replyDirective = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
@@ -1338,7 +811,7 @@ export class ClankerBot {
       });
     }
 
-    if (usedWebSearchFollowup || replyDirective.memoryLookupQuery) {
+    if (usedWebSearchFollowup || replyDirective.memoryLookupQuery || replyDirective.imageLookupQuery) {
       const followup = await this.maybeRegenerateWithMemoryLookup({
         settings,
         followupSettings: followupGenerationSettings,
@@ -1346,6 +819,7 @@ export class ClankerBot {
         generation,
         directive: replyDirective,
         memoryLookup,
+        imageLookup,
         guildId: message.guildId,
         channelId: message.channelId,
         trace: {
@@ -1354,21 +828,33 @@ export class ClankerBot {
           event: "reply_followup"
         },
         mediaPromptLimit,
-        imageInputs,
+        imageInputs: modelImageInputs,
         forceRegenerate: usedWebSearchFollowup,
-        buildUserPrompt: ({ memoryLookup: nextMemoryLookup, allowMemoryLookupDirective }) =>
+        buildUserPrompt: ({
+          memoryLookup: nextMemoryLookup,
+          imageLookup: nextImageLookup,
+          imageInputs: nextImageInputs,
+          allowMemoryLookupDirective,
+          allowImageLookupDirective
+        }) =>
           buildReplyPrompt({
             ...replyPromptBase,
+            imageInputs: nextImageInputs,
             webSearch,
             memoryLookup: nextMemoryLookup,
+            imageLookup: nextImageLookup,
             allowWebSearchDirective: false,
-            allowMemoryLookupDirective
+            allowMemoryLookupDirective,
+            allowImageLookupDirective
           })
       });
       generation = followup.generation;
       replyDirective = followup.directive;
       memoryLookup = followup.memoryLookup;
+      imageLookup = followup.imageLookup;
+      modelImageInputs = followup.imageInputs;
       usedMemoryLookupFollowup = followup.usedMemoryLookup;
+      usedImageLookupFollowup = followup.usedImageLookup;
 
       voiceIntentHandled = await this.maybeHandleStructuredVoiceIntent({
         message,
@@ -1565,9 +1051,12 @@ export class ClankerBot {
     await message.channel.sendTyping();
     await sleep(600 + Math.floor(Math.random() * 1800));
 
-    const canStandalonePost = isInitiativeChannel;
     const shouldThreadReply = addressed || options.forceRespond;
-    const sendAsReply = canStandalonePost ? (shouldThreadReply ? chance(0.65) : false) : true;
+    const canStandalonePost = isInitiativeChannel || !shouldThreadReply;
+    const sendAsReply = this.shouldSendAsReply({
+      isInitiativeChannel,
+      shouldThreadReply
+    });
     const sent = sendAsReply
       ? await message.reply({
           ...payload,
@@ -1643,6 +1132,14 @@ export class ClankerBot {
           lookupResultCount: memoryLookup.results?.length || 0,
           lookupError: memoryLookup.error || null
         },
+        imageLookup: {
+          requested: imageLookup.requested,
+          used: imageLookup.used,
+          query: imageLookup.query,
+          candidateCount: imageLookup.candidates?.length || 0,
+          resultCount: imageLookup.results?.length || 0,
+          error: imageLookup.error || null
+        },
         mentions: mentionResolution,
         reaction,
         screenShareOffer,
@@ -1680,7 +1177,8 @@ export class ClankerBot {
           usage: generation.usage,
           costUsd: generation.costUsd,
           usedWebSearchFollowup,
-          usedMemoryLookupFollowup
+          usedMemoryLookupFollowup,
+          usedImageLookupFollowup
         }
       }
     });
@@ -2059,376 +1557,33 @@ export class ClankerBot {
   }
 
   composeAutomationControlReply({ modelText, fallbackText, detailLines = [] }) {
-    const cleanedModel = sanitizeBotText(normalizeSkipSentinel(modelText || ""), 500);
-    const cleanedFallback = sanitizeBotText(normalizeSkipSentinel(fallbackText || ""), 500);
-    const body = cleanedModel && cleanedModel !== "[SKIP]" ? cleanedModel : cleanedFallback;
-    if (!body || body === "[SKIP]") return "";
-
-    const extra = (Array.isArray(detailLines) ? detailLines : [])
-      .map((line) => String(line || "").trim())
-      .filter(Boolean)
-      .slice(0, 8);
-    if (!extra.length) return body;
-
-    return sanitizeBotText(`${body}\n${extra.join("\n")}`, 1700);
+    return composeAutomationControlReply({
+      modelText,
+      fallbackText,
+      detailLines
+    });
   }
 
   async applyAutomationControlAction({ message, settings, automationAction }) {
-    const operation = String(automationAction?.operation || "")
-      .trim()
-      .toLowerCase();
-    const guildId = String(message.guildId || "").trim();
-    if (!guildId) {
-      return {
-        handled: true,
-        fallbackText: "can't manage schedules outside a server channel rn.",
-        detailLines: [],
-        metadata: {
-          operation,
-          ok: false,
-          reason: "missing_guild_scope"
-        }
-      };
-    }
-
-    if (operation === "list") {
-      const rows = this.store.listAutomations({
-        guildId,
-        statuses: ["active", "paused"],
-        limit: MAX_AUTOMATION_LIST_ROWS
-      });
-      if (!rows.length) {
-        return {
-          handled: true,
-          fallbackText: "no scheduled jobs right now.",
-          detailLines: [],
-          metadata: {
-            operation,
-            ok: true,
-            count: 0
-          }
-        };
-      }
-
-      const detailLines = rows.map((row) => this.formatAutomationListLine(row));
-      return {
-        handled: true,
-        fallbackText: "here's what's on deck:",
-        detailLines,
-        metadata: {
-          operation,
-          ok: true,
-          count: rows.length,
-          automationIds: rows.map((row) => row.id)
-        }
-      };
-    }
-
-    if (operation === "create") {
-      const instruction = String(automationAction?.instruction || "").trim();
-      const schedule = automationAction?.schedule || null;
-      if (!instruction || !schedule) {
-        return {
-          handled: true,
-          fallbackText: "i need both a task and schedule to set that up.",
-          detailLines: [],
-          metadata: {
-            operation,
-            ok: false,
-            reason: "missing_schedule_or_instruction"
-          }
-        };
-      }
-
-      const currentCount = this.store.countAutomations({
-        guildId,
-        statuses: ["active", "paused"]
-      });
-      if (currentCount >= MAX_AUTOMATIONS_PER_GUILD) {
-        return {
-          handled: true,
-          fallbackText: `too many scheduled jobs already (${MAX_AUTOMATIONS_PER_GUILD} max).`,
-          detailLines: [],
-          metadata: {
-            operation,
-            ok: false,
-            reason: "automation_cap_reached",
-            currentCount
-          }
-        };
-      }
-
-      const requestedChannelId = String(automationAction?.targetChannelId || "").trim();
-      const targetChannelId = requestedChannelId || message.channelId;
-      if (!this.isChannelAllowed(settings, targetChannelId)) {
-        return {
-          handled: true,
-          fallbackText: "that channel is blocked by my current settings.",
-          detailLines: [],
-          metadata: {
-            operation,
-            ok: false,
-            reason: "target_channel_blocked",
-            targetChannelId
-          }
-        };
-      }
-
-      const channel = this.client.channels.cache.get(String(targetChannelId));
-      if (!channel || !channel.isTextBased?.() || typeof channel.send !== "function") {
-        return {
-          handled: true,
-          fallbackText: "can't post there right now, pick another channel.",
-          detailLines: [],
-          metadata: {
-            operation,
-            ok: false,
-            reason: "target_channel_unavailable",
-            targetChannelId
-          }
-        };
-      }
-
-      const nextRunAt = resolveInitialNextRunAt({
-        schedule,
-        nowMs: Date.now(),
-        runImmediately: Boolean(automationAction?.runImmediately)
-      });
-      if (!nextRunAt) {
-        return {
-          handled: true,
-          fallbackText: "that schedule format didn't parse cleanly. try like 'daily at 1pm'.",
-          detailLines: [],
-          metadata: {
-            operation,
-            ok: false,
-            reason: "schedule_invalid"
-          }
-        };
-      }
-
-      const title = String(automationAction?.title || "").trim() || String(instruction).slice(0, 80);
-      const created = this.store.createAutomation({
-        guildId,
-        channelId: String(channel.id),
-        createdByUserId: message.author?.id || "unknown",
-        createdByName: message.member?.displayName || message.author?.username || "unknown",
-        title,
-        instruction,
-        schedule,
-        nextRunAt
-      });
-
-      if (!created) {
-        return {
-          handled: true,
-          fallbackText: "that didn't save right. try again in a sec.",
-          detailLines: [],
-          metadata: {
-            operation,
-            ok: false,
-            reason: "create_failed"
-          }
-        };
-      }
-
-      this.store.logAction({
-        kind: "automation_created",
-        guildId,
-        channelId: created.channel_id,
-        userId: message.author?.id || null,
-        content: `${created.title}: ${created.instruction}`.slice(0, 400),
-        metadata: {
-          automationId: created.id,
-          schedule: created.schedule,
-          nextRunAt: created.next_run_at
-        }
-      });
-
-      this.maybeRunAutomationCycle().catch(() => undefined);
-
-      return {
-        handled: true,
-        fallbackText: "bet, scheduled.",
-        detailLines: [this.formatAutomationListLine(created)],
-        metadata: {
-          operation,
-          ok: true,
-          automationId: created.id,
-          runImmediately: Boolean(automationAction?.runImmediately)
-        }
-      };
-    }
-
-    if (operation === "pause" || operation === "resume" || operation === "delete") {
-      const targetRows = this.resolveAutomationTargetsForControl({
-        guildId,
-        channelId: message.channelId,
-        operation,
-        automationId: automationAction?.automationId,
-        targetQuery: automationAction?.targetQuery
-      });
-      if (!targetRows.length) {
-        return {
-          handled: true,
-          fallbackText: "couldn't find a matching scheduled job.",
-          detailLines: [],
-          metadata: {
-            operation,
-            ok: false,
-            reason: "no_matching_automation",
-            targetQuery: automationAction?.targetQuery || null,
-            automationId: automationAction?.automationId || null
-          }
-        };
-      }
-
-      const nowMs = Date.now();
-      const updatedRows = [];
-      for (const row of targetRows) {
-        if (operation === "pause") {
-          const paused = this.store.setAutomationStatus({
-            automationId: row.id,
-            guildId,
-            status: "paused",
-            nextRunAt: null
-          });
-          if (paused) updatedRows.push(paused);
-          continue;
-        }
-
-        if (operation === "resume") {
-          const nextRunAt = resolveInitialNextRunAt({
-            schedule: row.schedule,
-            nowMs,
-            runImmediately: false
-          });
-          if (!nextRunAt) continue;
-          const resumed = this.store.setAutomationStatus({
-            automationId: row.id,
-            guildId,
-            status: "active",
-            nextRunAt
-          });
-          if (resumed) updatedRows.push(resumed);
-          continue;
-        }
-
-        const deleted = this.store.setAutomationStatus({
-          automationId: row.id,
-          guildId,
-          status: "deleted",
-          nextRunAt: null
-        });
-        if (deleted) updatedRows.push(deleted);
-      }
-
-      if (!updatedRows.length) {
-        return {
-          handled: true,
-          fallbackText: "found it, but couldn't update it cleanly.",
-          detailLines: [],
-          metadata: {
-            operation,
-            ok: false,
-            reason: "status_update_failed",
-            targetCount: targetRows.length
-          }
-        };
-      }
-
-      this.store.logAction({
-        kind: "automation_updated",
-        guildId,
-        channelId: message.channelId,
-        userId: message.author?.id || null,
-        content: `${operation}: ${updatedRows.map((row) => `#${row.id}`).join(", ")}`.slice(0, 400),
-        metadata: {
-          operation,
-          updatedIds: updatedRows.map((row) => row.id),
-          targetQuery: automationAction?.targetQuery || null
-        }
-      });
-
-      if (operation === "resume") {
-        this.maybeRunAutomationCycle().catch(() => undefined);
-      }
-
-      const verb =
-        operation === "pause" ? "paused" : operation === "resume" ? "resumed" : "deleted";
-      return {
-        handled: true,
-        fallbackText: `${verb}.`,
-        detailLines: updatedRows.map((row) => this.formatAutomationListLine(row)),
-        metadata: {
-          operation,
-          ok: true,
-          updatedIds: updatedRows.map((row) => row.id)
-        }
-      };
-    }
-
-    return false;
+    return await applyAutomationControlAction(this, {
+      message,
+      settings,
+      automationAction
+    });
   }
 
   resolveAutomationTargetsForControl({ guildId, channelId, operation, automationId = null, targetQuery = "" }) {
-    const statuses =
-      operation === "pause"
-        ? ["active"]
-        : operation === "resume"
-          ? ["paused"]
-          : ["active", "paused"];
-    const normalizedQuery = String(targetQuery || "")
-      .toLowerCase()
-      .replace(/\s+/g, " ")
-      .trim();
-
-    if (Number.isInteger(Number(automationId)) && Number(automationId) > 0) {
-      const row = this.store.getAutomationById(Number(automationId), guildId);
-      if (!row || !statuses.includes(row.status)) return [];
-      return [row];
-    }
-
-    if (normalizedQuery) {
-      const inChannel = this.store.findAutomationsByQuery({
-        guildId,
-        channelId,
-        query: normalizedQuery,
-        statuses,
-        limit: 8
-      });
-      if (inChannel.length) return inChannel;
-
-      return this.store.findAutomationsByQuery({
-        guildId,
-        query: normalizedQuery,
-        statuses,
-        limit: 8
-      });
-    }
-
-    const fallback = this.store.getMostRecentAutomations({
+    return resolveAutomationTargetsForControl(this, {
       guildId,
       channelId,
-      statuses,
-      limit: 1
-    });
-    if (fallback.length) return fallback;
-
-    return this.store.getMostRecentAutomations({
-      guildId,
-      statuses,
-      limit: 1
+      operation,
+      automationId,
+      targetQuery
     });
   }
 
   formatAutomationListLine(row) {
-    const channelLabel = row?.channel_id ? `<#${row.channel_id}>` : "(unknown channel)";
-    const scheduleLabel = formatAutomationSchedule(row?.schedule);
-    const nextRunLabel = row?.next_run_at ? new Date(row.next_run_at).toLocaleString() : "paused";
-    const title = String(row?.title || "scheduled task").slice(0, 80);
-    const status = String(row?.status || "active");
-    return `- #${row?.id} [${status}] ${title} | ${scheduleLabel} | next: ${nextRunLabel} | ${channelLabel}`;
+    return formatAutomationListLine(row);
   }
 
   async maybeApplyReplyReaction({
@@ -2783,7 +1938,7 @@ export class ClankerBot {
       });
       const firstError = result.errors?.[0]?.error || null;
       const videos = (result.videos || []).map((item) => {
-        const { frameImages, ...rest } = item || {};
+        const { frameImages: _frameImages, ...rest } = item || {};
         return rest;
       });
       const frameImages = (result.videos || []).flatMap((item) => item?.frameImages || []);
@@ -2851,6 +2006,215 @@ export class ClankerBot {
       results: [],
       error: null
     };
+  }
+
+  buildImageLookupContext({ recentMessages = [], excludedUrls = [] } = {}) {
+    const excluded = new Set(
+      (Array.isArray(excludedUrls) ? excludedUrls : [])
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+    );
+    const candidates = this.extractHistoryImageCandidates({
+      recentMessages,
+      excluded
+    });
+    return {
+      enabled: true,
+      requested: false,
+      used: false,
+      query: "",
+      candidates,
+      results: [],
+      selectedImageInputs: [],
+      error: null
+    };
+  }
+
+  extractHistoryImageCandidates({ recentMessages = [], excluded = new Set() } = {}) {
+    const rows = Array.isArray(recentMessages) ? recentMessages : [];
+    const seen = excluded instanceof Set ? new Set(excluded) : new Set();
+    const candidates = [];
+
+    for (const row of rows) {
+      if (candidates.length >= MAX_HISTORY_IMAGE_CANDIDATES) break;
+      const content = String(row?.content || "");
+      if (!content) continue;
+
+      const urls = extractUrlsFromText(content);
+      if (!urls.length) continue;
+
+      for (const rawUrl of urls) {
+        if (candidates.length >= MAX_HISTORY_IMAGE_CANDIDATES) break;
+        const url = String(rawUrl || "").trim();
+        if (!url) continue;
+        if (!isLikelyImageUrl(url)) continue;
+        if (seen.has(url)) continue;
+        seen.add(url);
+
+        const parsed = parseHistoryImageReference(url);
+        const contentSansUrl = content.replace(url, " ").replace(/\s+/g, " ").trim();
+        candidates.push({
+          messageId: String(row?.message_id || "").trim() || null,
+          authorName: String(row?.author_name || "unknown").trim() || "unknown",
+          createdAt: String(row?.created_at || "").trim(),
+          url,
+          filename: parsed.filename || "(unnamed)",
+          contentType: parsed.contentType || "",
+          context: contentSansUrl.slice(0, 180),
+          recencyRank: candidates.length
+        });
+      }
+    }
+
+    return candidates;
+  }
+
+  rankImageLookupCandidates({ candidates = [], query = "" } = {}) {
+    const normalizedQuery = String(query || "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+    const queryTokens = [...new Set(normalizedQuery.match(/[a-z0-9]{3,}/g) || [])].slice(
+      0,
+      MAX_IMAGE_LOOKUP_QUERY_TOKENS
+    );
+    const wantsVisualRecall = /\b(?:image|photo|picture|pic|screenshot|meme|earlier|previous|that)\b/i.test(
+      normalizedQuery
+    );
+
+    const ranked = (Array.isArray(candidates) ? candidates : []).map((candidate, index) => {
+      const haystack = [
+        candidate?.context,
+        candidate?.filename,
+        candidate?.authorName
+      ]
+        .map((value) => String(value || "").toLowerCase())
+        .join(" ");
+      let score = Math.max(0, 4 - index * 0.3);
+      const reasons = [];
+
+      if (normalizedQuery && haystack.includes(normalizedQuery)) {
+        score += 9;
+        reasons.push("phrase match");
+      }
+
+      let tokenHits = 0;
+      for (const token of queryTokens) {
+        if (!token) continue;
+        if (haystack.includes(token)) {
+          score += 2;
+          tokenHits += 1;
+        }
+      }
+      if (tokenHits > 0) {
+        reasons.push(`${tokenHits} token hit${tokenHits === 1 ? "" : "s"}`);
+      }
+
+      if (wantsVisualRecall) {
+        score += 1;
+      }
+
+      return {
+        ...candidate,
+        score,
+        matchReason: reasons.join(", ") || "recency fallback"
+      };
+    });
+
+    ranked.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return (a.recencyRank || 0) - (b.recencyRank || 0);
+    });
+
+    const matched = ranked.filter((item) => item.score >= 4);
+    return matched.length ? matched : ranked;
+  }
+
+  async runModelRequestedImageLookup({
+    imageLookup,
+    query
+  }) {
+    const normalizedQuery = normalizeDirectiveText(query, MAX_IMAGE_LOOKUP_QUERY_LEN);
+    const state = {
+      ...imageLookup,
+      requested: true,
+      used: false,
+      query: normalizedQuery,
+      results: [],
+      selectedImageInputs: [],
+      error: null
+    };
+
+    if (!state.enabled) {
+      return state;
+    }
+    if (!normalizedQuery) {
+      return {
+        ...state,
+        error: "Missing image lookup query."
+      };
+    }
+
+    const candidates = Array.isArray(state.candidates) ? state.candidates : [];
+    if (!candidates.length) {
+      return {
+        ...state,
+        error: "No recent history images are available for lookup."
+      };
+    }
+
+    const ranked = this.rankImageLookupCandidates({
+      candidates,
+      query: normalizedQuery
+    });
+    const selected = ranked.slice(0, Math.min(MAX_HISTORY_IMAGE_LOOKUP_RESULTS, MAX_MODEL_IMAGE_INPUTS));
+    if (!selected.length) {
+      return {
+        ...state,
+        error: "No matching history images were found."
+      };
+    }
+
+    return {
+      ...state,
+      used: true,
+      results: selected,
+      selectedImageInputs: selected.map((item) => ({
+        url: item.url,
+        filename: item.filename,
+        contentType: item.contentType
+      }))
+    };
+  }
+
+  mergeImageInputs({ baseInputs = [], extraInputs = [], maxInputs = MAX_MODEL_IMAGE_INPUTS } = {}) {
+    const merged = [];
+    const seen = new Set();
+    const pushUnique = (input) => {
+      if (!input || typeof input !== "object") return;
+      const url = String(input?.url || "").trim();
+      const mediaType = String(input?.mediaType || input?.contentType || "").trim().toLowerCase();
+      const inlineData = String(input?.dataBase64 || "").trim();
+      const key = url
+        ? `url:${url}`
+        : inlineData
+          ? `inline:${mediaType}:${inlineData.slice(0, 80)}`
+          : "";
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      merged.push(input);
+    };
+
+    for (const input of Array.isArray(baseInputs) ? baseInputs : []) {
+      if (merged.length >= maxInputs) break;
+      pushUnique(input);
+    }
+    for (const input of Array.isArray(extraInputs) ? extraInputs : []) {
+      if (merged.length >= maxInputs) break;
+      pushUnique(input);
+    }
+
+    return merged.slice(0, maxInputs);
   }
 
   async loadPromptMemorySlice({
@@ -3146,6 +2510,7 @@ export class ClankerBot {
     generation,
     directive,
     memoryLookup,
+    imageLookup = null,
     guildId,
     channelId = null,
     trace = {},
@@ -3155,9 +2520,12 @@ export class ClankerBot {
     buildUserPrompt
   }) {
     let nextMemoryLookup = memoryLookup;
+    let nextImageLookup = imageLookup;
     let nextGeneration = generation;
     let nextDirective = directive;
     let usedMemoryLookup = false;
+    let usedImageLookup = false;
+    let nextImageInputs = Array.isArray(imageInputs) ? [...imageInputs] : [];
     let shouldRegenerate = Boolean(forceRegenerate);
 
     if (directive?.memoryLookupQuery) {
@@ -3173,10 +2541,29 @@ export class ClankerBot {
       });
     }
 
+    if (directive?.imageLookupQuery && nextImageLookup) {
+      usedImageLookup = true;
+      shouldRegenerate = true;
+      nextImageLookup = await this.runModelRequestedImageLookup({
+        imageLookup: nextImageLookup,
+        query: directive.imageLookupQuery
+      });
+      if (Array.isArray(nextImageLookup?.selectedImageInputs) && nextImageLookup.selectedImageInputs.length) {
+        nextImageInputs = this.mergeImageInputs({
+          baseInputs: nextImageInputs,
+          extraInputs: nextImageLookup.selectedImageInputs,
+          maxInputs: MAX_MODEL_IMAGE_INPUTS
+        });
+      }
+    }
+
     if (shouldRegenerate && typeof buildUserPrompt === "function") {
       const followupPrompt = buildUserPrompt({
         memoryLookup: nextMemoryLookup,
-        allowMemoryLookupDirective: false
+        imageLookup: nextImageLookup,
+        imageInputs: nextImageInputs,
+        allowMemoryLookupDirective: false,
+        allowImageLookupDirective: false
       });
       const followupTrace = {
         ...trace,
@@ -3190,8 +2577,8 @@ export class ClankerBot {
         userPrompt: followupPrompt,
         trace: followupTrace
       };
-      if (Array.isArray(imageInputs) && imageInputs.length) {
-        generationPayload.imageInputs = imageInputs;
+      if (nextImageInputs.length) {
+        generationPayload.imageInputs = nextImageInputs;
       }
       nextGeneration = await this.llm.generate(generationPayload);
       nextDirective = parseStructuredReplyOutput(nextGeneration.text, mediaPromptLimit);
@@ -3201,7 +2588,10 @@ export class ClankerBot {
       generation: nextGeneration,
       directive: nextDirective,
       memoryLookup: nextMemoryLookup,
-      usedMemoryLookup
+      imageLookup: nextImageLookup,
+      imageInputs: nextImageInputs,
+      usedMemoryLookup,
+      usedImageLookup
     };
   }
 
@@ -4012,9 +3402,10 @@ export class ClankerBot {
       remainingImages: imageBudget.remaining,
       remainingVideos: videoBudget.remaining,
       remainingGifs: gifBudget.remaining,
-      maxMediaPromptChars: mediaPromptLimit
+      maxMediaPromptChars: mediaPromptLimit,
+      mediaPromptCraftGuidance: getMediaPromptCraftGuidance(settings)
     };
-    let userPrompt = buildAutomationPrompt({
+    const userPrompt = buildAutomationPrompt({
       ...promptBase,
       memoryLookup,
       allowMemoryLookupDirective: true
@@ -4354,7 +3745,8 @@ export class ClankerBot {
         discoveryFindings: discoveryResult.candidates,
         maxLinksPerPost: settings.initiative?.discovery?.maxLinksPerPost || 2,
         requireDiscoveryLink,
-        maxMediaPromptChars: resolveMaxMediaPromptLen(settings)
+        maxMediaPromptChars: resolveMaxMediaPromptLen(settings),
+        mediaPromptCraftGuidance: getMediaPromptCraftGuidance(settings)
       });
 
       const generation = await this.llm.generate({
@@ -4646,80 +4038,33 @@ export class ClankerBot {
   }
 
   getInitiativePostingIntervalMs(settings) {
-    const minByGap = settings.initiative.minMinutesBetweenPosts * 60_000;
-    const perDay = Math.max(settings.initiative.maxPostsPerDay, 1);
-    const evenPacing = Math.floor((24 * 60 * 60 * 1000) / perDay);
-    return Math.max(minByGap, evenPacing);
+    return getInitiativePostingIntervalMs(settings);
   }
 
   getInitiativeAverageIntervalMs(settings) {
-    const perDay = Math.max(settings.initiative.maxPostsPerDay, 1);
-    return Math.floor((24 * 60 * 60 * 1000) / perDay);
+    return getInitiativeAverageIntervalMs(settings);
   }
 
   getInitiativePacingMode(settings) {
-    return String(settings.initiative?.pacingMode || "even").toLowerCase() === "spontaneous"
-      ? "spontaneous"
-      : "even";
+    return getInitiativePacingMode(settings);
   }
 
   getInitiativeMinGapMs(settings) {
-    return Math.max(1, Number(settings.initiative?.minMinutesBetweenPosts || 0) * 60_000);
+    return getInitiativeMinGapMs(settings);
   }
 
   evaluateInitiativeSchedule({ settings, startup, lastPostTs, elapsedMs, posts24h }) {
-    const mode = this.getInitiativePacingMode(settings);
-    const minGapMs = this.getInitiativeMinGapMs(settings);
+    return evaluateInitiativeSchedule({
+      settings,
+      startup,
+      lastPostTs,
+      elapsedMs,
+      posts24h
+    });
+  }
 
-    if (startup && !settings.initiative.postOnStartup) {
-      return {
-        shouldPost: false,
-        mode,
-        trigger: "startup_disabled"
-      };
-    }
-
-    if (!startup && lastPostTs && Number.isFinite(elapsedMs) && elapsedMs < minGapMs) {
-      return {
-        shouldPost: false,
-        mode,
-        trigger: "min_gap_block",
-        elapsedMs,
-        requiredIntervalMs: minGapMs
-      };
-    }
-
-    if (startup && !lastPostTs) {
-      return {
-        shouldPost: true,
-        mode,
-        trigger: "startup_bootstrap"
-      };
-    }
-
-    if (mode === "even") {
-      const requiredIntervalMs = this.getInitiativePostingIntervalMs(settings);
-      const due = !lastPostTs || !Number.isFinite(elapsedMs) || elapsedMs >= requiredIntervalMs;
-      return {
-        shouldPost: due,
-        mode,
-        trigger: due ? "even_due" : "even_wait",
-        elapsedMs,
-        requiredIntervalMs
-      };
-    }
-
-    if (startup && lastPostTs && Number.isFinite(elapsedMs) && elapsedMs < minGapMs) {
-      return {
-        shouldPost: false,
-        mode,
-        trigger: "startup_min_gap_block",
-        elapsedMs,
-        requiredIntervalMs: minGapMs
-      };
-    }
-
-    return this.evaluateSpontaneousInitiativeSchedule({
+  evaluateSpontaneousInitiativeSchedule({ settings, lastPostTs, elapsedMs, posts24h, minGapMs }) {
+    return evaluateSpontaneousInitiativeSchedule({
       settings,
       lastPostTs,
       elapsedMs,
@@ -4728,79 +4073,12 @@ export class ClankerBot {
     });
   }
 
-  evaluateSpontaneousInitiativeSchedule({ settings, lastPostTs, elapsedMs, posts24h, minGapMs }) {
-    const mode = "spontaneous";
-    const spontaneity01 = clamp(Number(settings.initiative?.spontaneity) || 0, 0, 100) / 100;
-    const maxPostsPerDay = Math.max(Number(settings.initiative?.maxPostsPerDay) || 1, 1);
-    const averageIntervalMs = this.getInitiativeAverageIntervalMs(settings);
-
-    if (!lastPostTs || !Number.isFinite(elapsedMs)) {
-      const chanceNow = 0.05 + spontaneity01 * 0.12;
-      const roll = Math.random();
-      return {
-        shouldPost: roll < chanceNow,
-        mode,
-        trigger: roll < chanceNow ? "spontaneous_seed_post" : "spontaneous_seed_wait",
-        chance: Number(chanceNow.toFixed(4)),
-        roll: Number(roll.toFixed(4)),
-        elapsedMs: null,
-        requiredIntervalMs: averageIntervalMs
-      };
-    }
-
-    const rampWindowMs = Math.max(averageIntervalMs - minGapMs, INITIATIVE_TICK_MS);
-    const progress = clamp((elapsedMs - minGapMs) / rampWindowMs, 0, 1);
-    const baseChance = 0.015 + spontaneity01 * 0.03;
-    const peakChance = 0.1 + spontaneity01 * 0.28;
-    const capPressure = clamp(posts24h / maxPostsPerDay, 0, 1);
-    const capModifier = 1 - capPressure * 0.6;
-    const chanceNow = clamp((baseChance + (peakChance - baseChance) * progress) * capModifier, 0.005, 0.6);
-    const forceAfterMs = Math.max(minGapMs, Math.round(averageIntervalMs * (1.6 - spontaneity01 * 0.55)));
-
-    if (elapsedMs >= forceAfterMs) {
-      return {
-        shouldPost: true,
-        mode,
-        trigger: "spontaneous_force_due",
-        chance: Number(chanceNow.toFixed(4)),
-        roll: null,
-        elapsedMs,
-        requiredIntervalMs: forceAfterMs
-      };
-    }
-
-    const roll = Math.random();
-    const shouldPost = roll < chanceNow;
-    return {
-      shouldPost,
-      mode,
-      trigger: shouldPost ? "spontaneous_roll_due" : "spontaneous_roll_wait",
-      chance: Number(chanceNow.toFixed(4)),
-      roll: Number(roll.toFixed(4)),
-      elapsedMs,
-      requiredIntervalMs: forceAfterMs
-    };
-  }
-
   pickInitiativeChannel(settings) {
-    const ids = settings.permissions.initiativeChannelIds
-      .map((id) => String(id).trim())
-      .filter(Boolean);
-    if (!ids.length) return null;
-
-    const shuffled = ids
-      .map((id) => ({ id, sortKey: Math.random() }))
-      .sort((a, b) => a.sortKey - b.sortKey)
-      .map((item) => item.id);
-
-    for (const id of shuffled) {
-      const channel = this.client.channels.cache.get(id);
-      if (!channel || !channel.isTextBased?.() || typeof channel.send !== "function") continue;
-      if (!this.isChannelAllowed(settings, channel.id)) continue;
-      return channel;
-    }
-
-    return null;
+    return pickInitiativeChannel({
+      settings,
+      client: this.client,
+      isChannelAllowed: (resolvedSettings, channelId) => this.isChannelAllowed(resolvedSettings, channelId)
+    });
   }
 
   getEmojiHints(guild) {
@@ -4917,4 +4195,57 @@ function safeUrlHost(rawUrl) {
   } catch {
     return "";
   }
+}
+
+function isLikelyImageUrl(rawUrl) {
+  const text = String(rawUrl || "").trim();
+  if (!text) return false;
+  try {
+    const parsed = new URL(text);
+    const pathname = String(parsed.pathname || "").toLowerCase();
+    if (IMAGE_EXT_RE.test(pathname) || pathname.endsWith(".avif")) return true;
+    const formatParam = String(parsed.searchParams.get("format") || "").trim().toLowerCase();
+    if (formatParam && /^(png|jpe?g|gif|webp|bmp|heic|heif|avif)$/.test(formatParam)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function parseHistoryImageReference(rawUrl) {
+  const text = String(rawUrl || "").trim();
+  if (!text) return { filename: "(unnamed)", contentType: "" };
+  try {
+    const parsed = new URL(text);
+    const pathname = String(parsed.pathname || "");
+    const segment = pathname.split("/").pop() || "";
+    const decoded = decodeURIComponent(segment || "");
+    const fallback = decoded || segment || "(unnamed)";
+    const ext = fallback.includes(".") ? fallback.split(".").pop() : "";
+    let contentType = normalizeImageContentTypeFromExt(ext);
+    if (!contentType) {
+      const formatParam = String(parsed.searchParams.get("format") || "").trim().toLowerCase();
+      contentType = normalizeImageContentTypeFromExt(formatParam);
+    }
+    return {
+      filename: fallback,
+      contentType
+    };
+  } catch {
+    return { filename: "(unnamed)", contentType: "" };
+  }
+}
+
+function normalizeImageContentTypeFromExt(rawExt) {
+  const ext = String(rawExt || "").trim().toLowerCase().replace(/^\./, "");
+  if (!ext) return "";
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg";
+  if (ext === "png") return "image/png";
+  if (ext === "gif") return "image/gif";
+  if (ext === "webp") return "image/webp";
+  if (ext === "bmp") return "image/bmp";
+  if (ext === "heic") return "image/heic";
+  if (ext === "heif") return "image/heif";
+  if (ext === "avif") return "image/avif";
+  return "";
 }
