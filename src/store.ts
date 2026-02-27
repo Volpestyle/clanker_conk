@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import Database from "better-sqlite3";
+import { load as loadSqliteVec } from "sqlite-vec";
 import { DEFAULT_SETTINGS } from "./defaultSettings.ts";
 import { normalizeProviderOrder } from "./search.ts";
 import { clamp, deepMerge, nowIso, uniqueIdList } from "./utils.ts";
@@ -16,6 +17,8 @@ export class Store {
   constructor(dbPath) {
     this.dbPath = dbPath;
     this.db = null;
+    this.sqliteVecReady = null;
+    this.sqliteVecError = "";
   }
 
   init() {
@@ -71,14 +74,13 @@ export class Store {
         UNIQUE(guild_id, subject, fact)
       );
 
-      CREATE TABLE IF NOT EXISTS memory_fact_vectors (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
+      CREATE TABLE IF NOT EXISTS memory_fact_vectors_native (
         fact_id INTEGER NOT NULL,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
         model TEXT NOT NULL,
-        embedding TEXT NOT NULL,
-        UNIQUE(fact_id, model)
+        dims INTEGER NOT NULL,
+        embedding_blob BLOB NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (fact_id, model)
       );
 
       CREATE TABLE IF NOT EXISTS memory_fact_orphans (
@@ -144,8 +146,7 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_messages_guild_time ON messages(guild_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_actions_kind_time ON actions(kind, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_actions_time ON actions(created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_memory_vectors_fact_model ON memory_fact_vectors(fact_id, model);
-      CREATE INDEX IF NOT EXISTS idx_memory_vectors_model ON memory_fact_vectors(model);
+      CREATE INDEX IF NOT EXISTS idx_memory_vectors_native_model_dims ON memory_fact_vectors_native(model, dims);
       CREATE INDEX IF NOT EXISTS idx_memory_orphans_stage_time ON memory_fact_orphans(source_stage, archived_at DESC);
       CREATE INDEX IF NOT EXISTS idx_shared_links_last_shared_at ON shared_links(last_shared_at DESC);
       CREATE INDEX IF NOT EXISTS idx_automations_scope_status_next ON automations(guild_id, status, next_run_at);
@@ -153,8 +154,10 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_automations_match_text ON automations(guild_id, match_text);
       CREATE INDEX IF NOT EXISTS idx_automation_runs_job_time ON automation_runs(automation_id, created_at DESC);
     `);
+    this.ensureSqliteVecReady();
     const schemaMigrationSummary = this.ensureMemoryFactsSchema();
     const legacyReconcileSummary = this.reconcileLegacyScopedFacts();
+    const vectorMigrationSummary = this.ensureMemoryVectorNativeSchema();
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_memory_scope_subject ON memory_facts(guild_id, subject, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_memory_scope_channel ON memory_facts(guild_id, channel_id, created_at DESC);
@@ -163,7 +166,8 @@ export class Store {
     `);
     this.logMemoryMigrationSummary({
       schemaMigrationSummary,
-      legacyReconcileSummary
+      legacyReconcileSummary,
+      vectorMigrationSummary
     });
 
     if (!this.db.prepare("SELECT 1 FROM settings WHERE key = ?").get(SETTINGS_KEY)) {
@@ -1002,44 +1006,189 @@ export class Store {
     );
   }
 
-  upsertMemoryFactVector({ factId, model, embedding }) {
-    const now = nowIso();
-    this.db
-      .prepare(
-        `INSERT INTO memory_fact_vectors(fact_id, created_at, updated_at, model, embedding)
-         VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(fact_id, model) DO UPDATE SET
-           updated_at = excluded.updated_at,
-           embedding = excluded.embedding`
-      )
-      .run(
-        Number(factId),
-        now,
-        now,
-        String(model || "").slice(0, 120),
-        JSON.stringify(embedding)
-      );
+  ensureSqliteVecReady() {
+    if (this.sqliteVecReady !== null) {
+      return this.sqliteVecReady;
+    }
+
+    try {
+      loadSqliteVec(this.db);
+      this.sqliteVecReady = true;
+      this.sqliteVecError = "";
+    } catch (error) {
+      this.sqliteVecReady = false;
+      this.sqliteVecError = String(error?.message || error);
+    }
+
+    return this.sqliteVecReady;
   }
 
-  getMemoryFactVectors(factIds, model) {
+  ensureMemoryVectorNativeSchema() {
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS memory_fact_vectors_native (
+        fact_id INTEGER NOT NULL,
+        model TEXT NOT NULL,
+        dims INTEGER NOT NULL,
+        embedding_blob BLOB NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (fact_id, model)
+      );
+      CREATE INDEX IF NOT EXISTS idx_memory_vectors_native_model_dims ON memory_fact_vectors_native(model, dims);
+    `);
+    const legacyTableExists = hasTable(this.db, "memory_fact_vectors");
+    const backupTableExists = hasTable(this.db, "memory_fact_vectors_backup");
+    if (!legacyTableExists && !backupTableExists) {
+      return null;
+    }
+
+    let importedCount = 0;
+    let skippedInvalid = 0;
+    let droppedLegacyTable = 0;
+    let droppedBackupTable = 0;
+
+    this.db.exec("BEGIN");
+    try {
+      if (legacyTableExists) {
+        const sourceRows = this.db
+          .prepare("SELECT id, fact_id, created_at, updated_at, model, embedding FROM memory_fact_vectors")
+          .all();
+        const now = nowIso();
+        const upsertNative = this.db.prepare(
+          `INSERT INTO memory_fact_vectors_native(fact_id, model, dims, embedding_blob, updated_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(fact_id, model) DO UPDATE SET
+             dims = excluded.dims,
+             embedding_blob = excluded.embedding_blob,
+             updated_at = excluded.updated_at`
+        );
+        for (const row of sourceRows) {
+          const vector = parseStoredEmbedding(row.embedding);
+          if (!vector.length) {
+            skippedInvalid += 1;
+            continue;
+          }
+          const result = upsertNative.run(
+            Number(row.fact_id),
+            String(row.model || "").slice(0, 120),
+            vector.length,
+            vectorToBlob(vector),
+            String(row.updated_at || row.created_at || now)
+          );
+          importedCount += Number(result?.changes || 0);
+        }
+
+        this.db.exec("DROP TABLE memory_fact_vectors;");
+        droppedLegacyTable = 1;
+      }
+
+      if (backupTableExists) {
+        this.db.exec("DROP TABLE memory_fact_vectors_backup;");
+        droppedBackupTable = 1;
+      }
+
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+
+    if (!importedCount && !skippedInvalid && !droppedLegacyTable && !droppedBackupTable) {
+      return null;
+    }
+
+    return {
+      importedCount,
+      skippedInvalid,
+      droppedLegacyTable,
+      droppedBackupTable
+    };
+  }
+
+  upsertMemoryFactVectorNative({ factId, model, embedding, updatedAt = nowIso() }) {
+    const factIdInt = Number(factId);
+    const normalizedModel = String(model || "").slice(0, 120);
+    const vector = normalizeEmbeddingVector(embedding);
+    if (!Number.isInteger(factIdInt) || factIdInt <= 0) return false;
+    if (!normalizedModel || !vector.length) return false;
+
+    const result = this.db
+      .prepare(
+        `INSERT INTO memory_fact_vectors_native(fact_id, model, dims, embedding_blob, updated_at)
+         VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(fact_id, model) DO UPDATE SET
+           dims = excluded.dims,
+           embedding_blob = excluded.embedding_blob,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        factIdInt,
+        normalizedModel,
+        vector.length,
+        vectorToBlob(vector),
+        String(updatedAt || nowIso())
+      );
+
+    return Number(result?.changes || 0) > 0;
+  }
+
+  getMemoryFactVectorNative(factId, model) {
+    const factIdInt = Number(factId);
+    const normalizedModel = String(model || "").trim();
+    if (!Number.isInteger(factIdInt) || factIdInt <= 0) return null;
+    if (!normalizedModel) return null;
+
+    const row = this.db
+      .prepare(
+        `SELECT embedding_blob
+         FROM memory_fact_vectors_native
+         WHERE fact_id = ? AND model = ?
+         LIMIT 1`
+      )
+      .get(factIdInt, normalizedModel);
+    const vector = parseEmbeddingBlob(row?.embedding_blob);
+    return vector.length ? vector : null;
+  }
+
+  getMemoryFactVectorNativeScores({ factIds, model, queryEmbedding }) {
+    if (!this.ensureSqliteVecReady()) return [];
+
     const ids = [...new Set((factIds || []).map((value) => Number(value)).filter((value) => Number.isInteger(value) && value > 0))];
-    if (!ids.length) return [];
+    const normalizedModel = String(model || "").trim();
+    const normalizedQueryEmbedding = normalizeEmbeddingVector(queryEmbedding);
+    if (!ids.length || !normalizedModel || !normalizedQueryEmbedding.length) return [];
 
     const placeholders = ids.map(() => "?").join(", ");
-    return this.db
-      .prepare(
-        `SELECT fact_id, model, embedding, updated_at
-         FROM memory_fact_vectors
-         WHERE model = ? AND fact_id IN (${placeholders})`
-      )
-      .all(String(model || ""), ...ids)
-      .map((row) => ({
-        fact_id: Number(row.fact_id),
-        model: String(row.model),
-        embedding: safeJsonParse(row.embedding, []),
-        updated_at: row.updated_at
-      }))
-      .filter((row) => Array.isArray(row.embedding) && row.embedding.length > 0);
+    try {
+      return this.db
+        .prepare(
+          `SELECT fact_id, (1 - vec_distance_cosine(embedding_blob, ?)) AS score
+           FROM memory_fact_vectors_native
+           WHERE model = ? AND dims = ? AND fact_id IN (${placeholders})`
+        )
+        .all(
+          vectorToBlob(normalizedQueryEmbedding),
+          normalizedModel,
+          normalizedQueryEmbedding.length,
+          ...ids
+        )
+        .map((row) => ({
+          fact_id: Number(row.fact_id),
+          score: Number(row.score)
+        }))
+        .filter((row) => Number.isInteger(row.fact_id) && row.fact_id > 0 && Number.isFinite(row.score));
+    } catch (error) {
+      this.sqliteVecReady = false;
+      this.sqliteVecError = String(error?.message || error);
+      return [];
+    }
+  }
+
+  upsertMemoryFactVector({ factId, model, embedding }) {
+    return this.upsertMemoryFactVectorNative({
+      factId,
+      model,
+      embedding
+    });
   }
 
   getMemorySubjects(limit = 80, scope = null) {
@@ -1330,7 +1479,7 @@ export class Store {
       archivedCount += getSqlChanges(this.db);
 
       this.db.exec(`
-        DELETE FROM memory_fact_vectors
+        DELETE FROM memory_fact_vectors_native
         WHERE fact_id IN (
           SELECT legacy.id
           FROM memory_facts AS legacy
@@ -1403,7 +1552,7 @@ export class Store {
       archivedCount += getSqlChanges(this.db);
 
       this.db.exec(`
-        DELETE FROM memory_fact_vectors
+        DELETE FROM memory_fact_vectors_native
         WHERE fact_id IN (
           SELECT id FROM memory_facts WHERE guild_id = '__legacy__'
         );
@@ -1424,20 +1573,24 @@ export class Store {
     }
   }
 
-  logMemoryMigrationSummary({ schemaMigrationSummary, legacyReconcileSummary }) {
+  logMemoryMigrationSummary({ schemaMigrationSummary, legacyReconcileSummary, vectorMigrationSummary = null }) {
     const summary = {
       migrated: Number(schemaMigrationSummary?.migratedCount || 0),
       archived: Number(schemaMigrationSummary?.archivedCount || 0) + Number(legacyReconcileSummary?.archivedCount || 0),
       reassignedLegacy: Number(legacyReconcileSummary?.reassignedCount || 0),
       removedLegacyDuplicates: Number(legacyReconcileSummary?.removedDuplicateCount || 0),
-      removedLegacyUnresolved: Number(legacyReconcileSummary?.removedUnresolvedCount || 0)
+      removedLegacyUnresolved: Number(legacyReconcileSummary?.removedUnresolvedCount || 0),
+      vectorsImportedFromLegacy: Number(vectorMigrationSummary?.importedCount || 0),
+      vectorsInvalidSkipped: Number(vectorMigrationSummary?.skippedInvalid || 0),
+      droppedLegacyVectorTable: Number(vectorMigrationSummary?.droppedLegacyTable || 0),
+      droppedLegacyVectorBackup: Number(vectorMigrationSummary?.droppedBackupTable || 0)
     };
     const changed = Object.values(summary).some((value) => value > 0);
     if (!changed) return;
 
     this.logAction({
       kind: "memory_migration",
-      content: `memory migration applied: migrated=${summary.migrated}, archived=${summary.archived}, reassigned_legacy=${summary.reassignedLegacy}, removed_legacy_duplicates=${summary.removedLegacyDuplicates}, removed_legacy_unresolved=${summary.removedLegacyUnresolved}`,
+      content: `memory migration applied: migrated=${summary.migrated}, archived=${summary.archived}, reassigned_legacy=${summary.reassignedLegacy}, removed_legacy_duplicates=${summary.removedLegacyDuplicates}, removed_legacy_unresolved=${summary.removedLegacyUnresolved}, vectors_imported_from_legacy=${summary.vectorsImportedFromLegacy}, vectors_invalid_skipped=${summary.vectorsInvalidSkipped}, dropped_legacy_vector_table=${summary.droppedLegacyVectorTable}, dropped_legacy_vector_backup=${summary.droppedLegacyVectorBackup}`,
       metadata: summary
     });
   }
@@ -1463,6 +1616,55 @@ function buildInferredGuildExpr(tableAlias) {
 function getSqlChanges(db) {
   const row = db.prepare("SELECT changes() AS count").get();
   return Number(row?.count || 0);
+}
+
+function hasTable(db, tableName) {
+  return Boolean(
+    db
+      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1")
+      .get(String(tableName || ""))
+  );
+}
+
+function parseStoredEmbedding(rawEmbedding) {
+  const parsed = safeJsonParse(rawEmbedding, []);
+  return normalizeEmbeddingVector(parsed);
+}
+
+function normalizeEmbeddingVector(rawEmbedding) {
+  if (!Array.isArray(rawEmbedding) || !rawEmbedding.length) return [];
+  const normalized = [];
+  for (const value of rawEmbedding) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) continue;
+    normalized.push(numeric);
+  }
+  return normalized;
+}
+
+function vectorToBlob(embedding) {
+  return Buffer.from(new Float32Array(embedding).buffer);
+}
+
+function parseEmbeddingBlob(rawBlob) {
+  if (!rawBlob) return [];
+  let buffer = rawBlob;
+  if (!Buffer.isBuffer(buffer)) {
+    try {
+      buffer = Buffer.from(buffer);
+    } catch {
+      return [];
+    }
+  }
+  if (!buffer.length || buffer.length % 4 !== 0) return [];
+  const values = new Float32Array(buffer.buffer, buffer.byteOffset, buffer.length / 4);
+  const out = [];
+  for (const value of values) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return [];
+    out.push(numeric);
+  }
+  return out;
 }
 
 function normalizeAutomationStatus(value) {
@@ -1793,10 +1995,7 @@ function normalizeSettings(raw) {
   merged.voice.replyEagerness = clamp(
     Number.isFinite(voiceEagernessRaw) ? voiceEagernessRaw : 0, 0, 100
   );
-  const voiceEagerCooldownRaw = Number(merged.voice?.eagerCooldownSeconds);
-  merged.voice.eagerCooldownSeconds = clamp(
-    Number.isFinite(voiceEagerCooldownRaw) ? voiceEagerCooldownRaw : 45, 10, 300
-  );
+  delete merged.voice.eagerCooldownSeconds;
   merged.voice.replyDecisionLlm.provider = normalizeLlmProvider(
     merged.voice?.replyDecisionLlm?.provider || defaultVoiceReplyDecisionLlm.provider || "anthropic"
   );
@@ -1815,6 +2014,17 @@ function normalizeSettings(raw) {
   if (!merged.voice.replyDecisionLlm.model) {
     merged.voice.replyDecisionLlm.model = defaultModelForLlmProvider(merged.voice.replyDecisionLlm.provider);
   }
+  const replyDecisionMaxAttemptsRaw = Number(merged.voice?.replyDecisionLlm?.maxAttempts);
+  const defaultReplyDecisionMaxAttemptsRaw = Number(defaultVoiceReplyDecisionLlm.maxAttempts);
+  merged.voice.replyDecisionLlm.maxAttempts = clamp(
+    Number.isFinite(replyDecisionMaxAttemptsRaw)
+      ? replyDecisionMaxAttemptsRaw
+      : Number.isFinite(defaultReplyDecisionMaxAttemptsRaw)
+        ? defaultReplyDecisionMaxAttemptsRaw
+        : 1,
+    1,
+    3
+  );
 
   merged.voice.xai.voice = String(merged.voice?.xai?.voice || defaultVoiceXai.voice || "Rex").slice(0, 60);
   merged.voice.xai.audioFormat = String(merged.voice?.xai?.audioFormat || defaultVoiceXai.audioFormat || "audio/pcm")
