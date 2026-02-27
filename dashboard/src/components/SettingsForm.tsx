@@ -492,6 +492,17 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
               <option value="stt_pipeline">STT pipeline (reuse chat LLM + memory)</option>
             </select>
 
+            <div className="toggles">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={form.voiceAllowNsfwHumor}
+                  onChange={set("voiceAllowNsfwHumor")}
+                />
+                Voice: allow adult/NSFW humor (with safety limits)
+              </label>
+            </div>
+
             <div className="split">
               <div>
                 <label htmlFor="voice-intent-threshold">Intent confidence threshold</label>
@@ -722,16 +733,6 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
                   <div />
                 </div>
 
-                <div className="toggles">
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={form.voiceOpenAiRealtimeAllowNsfwHumor}
-                      onChange={set("voiceOpenAiRealtimeAllowNsfwHumor")}
-                    />
-                    OpenAI realtime: allow adult/NSFW humor (with safety limits)
-                  </label>
-                </div>
               </>
             )}
 
@@ -797,16 +798,6 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
                   </div>
                 </div>
 
-                <div className="toggles">
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={form.voiceGeminiRealtimeAllowNsfwHumor}
-                      onChange={set("voiceGeminiRealtimeAllowNsfwHumor")}
-                    />
-                    Gemini realtime: allow adult/NSFW humor (with safety limits)
-                  </label>
-                </div>
               </>
             )}
 

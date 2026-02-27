@@ -1848,6 +1848,10 @@ function normalizeSettings(raw) {
   merged.voice.enabled =
     merged.voice?.enabled !== undefined ? Boolean(merged.voice?.enabled) : Boolean(defaultVoice.enabled);
   merged.voice.mode = normalizeVoiceMode(merged.voice?.mode, defaultVoice.mode);
+  merged.voice.allowNsfwHumor =
+    merged.voice?.allowNsfwHumor !== undefined
+      ? Boolean(merged.voice?.allowNsfwHumor)
+      : Boolean(defaultVoice.allowNsfwHumor);
   delete merged.voice.joinOnTextNL;
   delete merged.voice.requireDirectMentionForJoin;
   merged.voice.intentConfidenceThreshold = clamp(
@@ -1967,10 +1971,7 @@ function normalizeSettings(raw) {
   )
     .trim()
     .slice(0, 120);
-  merged.voice.openaiRealtime.allowNsfwHumor =
-    merged.voice?.openaiRealtime?.allowNsfwHumor !== undefined
-      ? Boolean(merged.voice?.openaiRealtime?.allowNsfwHumor)
-      : Boolean(defaultVoiceOpenAiRealtime.allowNsfwHumor);
+  delete merged.voice.openaiRealtime.allowNsfwHumor;
   merged.voice.geminiRealtime.model = String(
     merged.voice?.geminiRealtime?.model || defaultVoiceGeminiRealtime.model || "gemini-2.5-flash-native-audio-preview-12-2025"
   )
@@ -1999,10 +2000,7 @@ function normalizeSettings(raw) {
     8000,
     48000
   );
-  merged.voice.geminiRealtime.allowNsfwHumor =
-    merged.voice?.geminiRealtime?.allowNsfwHumor !== undefined
-      ? Boolean(merged.voice?.geminiRealtime?.allowNsfwHumor)
-      : Boolean(defaultVoiceGeminiRealtime.allowNsfwHumor);
+  delete merged.voice.geminiRealtime.allowNsfwHumor;
   merged.voice.sttPipeline.transcriptionModel = String(
     merged.voice?.sttPipeline?.transcriptionModel || defaultVoiceSttPipeline.transcriptionModel || "gpt-4o-mini-transcribe"
   )

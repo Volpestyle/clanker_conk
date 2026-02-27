@@ -56,6 +56,7 @@ export function settingsToForm(settings) {
     videoContextMaxAsrSeconds: settings?.videoContext?.maxAsrSeconds ?? 120,
     voiceEnabled: settings?.voice?.enabled ?? false,
     voiceMode: settings?.voice?.mode ?? "voice_agent",
+    voiceAllowNsfwHumor: settings?.voice?.allowNsfwHumor ?? true,
     voiceIntentConfidenceThreshold: settings?.voice?.intentConfidenceThreshold ?? 0.75,
     voiceMaxSessionMinutes: settings?.voice?.maxSessionMinutes ?? 10,
     voiceInactivityLeaveSeconds: settings?.voice?.inactivityLeaveSeconds ?? 90,
@@ -78,7 +79,6 @@ export function settingsToForm(settings) {
     voiceOpenAiRealtimeOutputSampleRateHz: settings?.voice?.openaiRealtime?.outputSampleRateHz ?? 24000,
     voiceOpenAiRealtimeInputTranscriptionModel:
       settings?.voice?.openaiRealtime?.inputTranscriptionModel ?? "gpt-4o-mini-transcribe",
-    voiceOpenAiRealtimeAllowNsfwHumor: settings?.voice?.openaiRealtime?.allowNsfwHumor ?? true,
     voiceGeminiRealtimeModel:
       settings?.voice?.geminiRealtime?.model ?? "gemini-2.5-flash-native-audio-preview-12-2025",
     voiceGeminiRealtimeVoice: settings?.voice?.geminiRealtime?.voice ?? "Aoede",
@@ -86,7 +86,6 @@ export function settingsToForm(settings) {
       settings?.voice?.geminiRealtime?.apiBaseUrl ?? "https://generativelanguage.googleapis.com",
     voiceGeminiRealtimeInputSampleRateHz: settings?.voice?.geminiRealtime?.inputSampleRateHz ?? 16000,
     voiceGeminiRealtimeOutputSampleRateHz: settings?.voice?.geminiRealtime?.outputSampleRateHz ?? 24000,
-    voiceGeminiRealtimeAllowNsfwHumor: settings?.voice?.geminiRealtime?.allowNsfwHumor ?? true,
     voiceSttTranscriptionModel: settings?.voice?.sttPipeline?.transcriptionModel ?? "gpt-4o-mini-transcribe",
     voiceSttTtsModel: settings?.voice?.sttPipeline?.ttsModel ?? "gpt-4o-mini-tts",
     voiceSttTtsVoice: settings?.voice?.sttPipeline?.ttsVoice ?? "alloy",
@@ -194,6 +193,7 @@ export function formToSettingsPatch(form) {
     voice: {
       enabled: form.voiceEnabled,
       mode: form.voiceMode,
+      allowNsfwHumor: form.voiceAllowNsfwHumor,
       intentConfidenceThreshold: Number(form.voiceIntentConfidenceThreshold),
       maxSessionMinutes: Number(form.voiceMaxSessionMinutes),
       inactivityLeaveSeconds: Number(form.voiceInactivityLeaveSeconds),
@@ -219,16 +219,14 @@ export function formToSettingsPatch(form) {
         outputAudioFormat: String(form.voiceOpenAiRealtimeOutputAudioFormat || "").trim(),
         inputSampleRateHz: Number(form.voiceOpenAiRealtimeInputSampleRateHz),
         outputSampleRateHz: Number(form.voiceOpenAiRealtimeOutputSampleRateHz),
-        inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
-        allowNsfwHumor: form.voiceOpenAiRealtimeAllowNsfwHumor
+        inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim()
       },
       geminiRealtime: {
         model: String(form.voiceGeminiRealtimeModel || "").trim(),
         voice: String(form.voiceGeminiRealtimeVoice || "").trim(),
         apiBaseUrl: String(form.voiceGeminiRealtimeApiBaseUrl || "").trim(),
         inputSampleRateHz: Number(form.voiceGeminiRealtimeInputSampleRateHz),
-        outputSampleRateHz: Number(form.voiceGeminiRealtimeOutputSampleRateHz),
-        allowNsfwHumor: form.voiceGeminiRealtimeAllowNsfwHumor
+        outputSampleRateHz: Number(form.voiceGeminiRealtimeOutputSampleRateHz)
       },
       sttPipeline: {
         transcriptionModel: String(form.voiceSttTranscriptionModel || "").trim(),

@@ -46,6 +46,7 @@ export const DEFAULT_SETTINGS = {
   voice: {
     enabled: false,
     mode: "voice_agent",
+    allowNsfwHumor: true,
     intentConfidenceThreshold: 0.75,
     maxSessionMinutes: 10,
     inactivityLeaveSeconds: 90,
@@ -73,16 +74,14 @@ export const DEFAULT_SETTINGS = {
       outputAudioFormat: "pcm16",
       inputSampleRateHz: 24000,
       outputSampleRateHz: 24000,
-      inputTranscriptionModel: "gpt-4o-mini-transcribe",
-      allowNsfwHumor: true
+      inputTranscriptionModel: "gpt-4o-mini-transcribe"
     },
     geminiRealtime: {
       model: "gemini-2.5-flash-native-audio-preview-12-2025",
       voice: "Aoede",
       apiBaseUrl: "https://generativelanguage.googleapis.com",
       inputSampleRateHz: 16000,
-      outputSampleRateHz: 24000,
-      allowNsfwHumor: true
+      outputSampleRateHz: 24000
     },
     sttPipeline: {
       transcriptionModel: "gpt-4o-mini-transcribe",

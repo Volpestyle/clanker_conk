@@ -454,11 +454,7 @@ function isLikelyDirectAddressWakeContext(tokens, tokenIndex = 0) {
 }
 
 export function shouldAllowVoiceNsfwHumor(settings) {
-  const mode = resolveVoiceRuntimeMode(settings);
-  const voiceFlag =
-    mode === "gemini_realtime"
-      ? settings?.voice?.geminiRealtime?.allowNsfwHumor
-      : settings?.voice?.openaiRealtime?.allowNsfwHumor;
+  const voiceFlag = settings?.voice?.allowNsfwHumor;
   if (voiceFlag === true) return true;
   if (voiceFlag === false) return false;
   return false;
