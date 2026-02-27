@@ -1,0 +1,303 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
+
+function createManager() {
+  const messages = [];
+  const endCalls = [];
+  const touchCalls = [];
+  const offCalls = [];
+
+  const client = {
+    on() {},
+    off(eventName) {
+      offCalls.push(eventName);
+    },
+    guilds: { cache: new Map() },
+    users: { cache: new Map() },
+    user: { id: "bot-user", username: "clanker conk" }
+  };
+
+  const manager = new VoiceSessionManager({
+    client,
+    store: {
+      logAction() {},
+      getSettings() {
+        return {
+          botName: "clanker conk"
+        };
+      }
+    },
+    appConfig: {},
+    llm: {
+      async generate() {
+        return {
+          text: "NO"
+        };
+      }
+    },
+    memory: null
+  });
+
+  manager.sendOperationalMessage = async (payload) => {
+    messages.push(payload);
+  };
+  manager.endSession = async (payload) => {
+    endCalls.push(payload);
+  };
+  manager.touchActivity = (guildId, settings) => {
+    touchCalls.push({ guildId, settings });
+  };
+
+  return {
+    manager,
+    messages,
+    endCalls,
+    touchCalls,
+    offCalls
+  };
+}
+
+function createMessage(overrides = {}) {
+  return {
+    guild: {
+      id: "guild-1"
+    },
+    channel: {
+      id: "text-1"
+    },
+    channelId: "text-1",
+    author: {
+      id: "user-1"
+    },
+    id: "msg-1",
+    ...overrides
+  };
+}
+
+function createSession(overrides = {}) {
+  const now = Date.now();
+  return {
+    id: "session-1",
+    guildId: "guild-1",
+    voiceChannelId: "voice-1",
+    textChannelId: "text-1",
+    startedAt: now - 60_000,
+    lastActivityAt: now - 2_000,
+    maxEndsAt: now + 120_000,
+    inactivityEndsAt: now + 45_000,
+    userCaptures: new Map(),
+    soundboard: {
+      playCount: 0,
+      lastPlayedAt: 0
+    },
+    mode: "stt_pipeline",
+    streamWatch: {
+      active: false,
+      targetUserId: null,
+      requestedByUserId: null,
+      lastFrameAt: 0,
+      lastCommentaryAt: 0,
+      ingestedFrameCount: 0
+    },
+    pendingSttTurns: 0,
+    sttContextMessages: [],
+    recentVoiceTurns: [],
+    realtimeProvider: null,
+    realtimeInputSampleRateHz: 24000,
+    realtimeOutputSampleRateHz: 24000,
+    realtimeClient: null,
+    settingsSnapshot: {
+      botName: "clanker conk",
+      voice: {
+        enabled: true
+      }
+    },
+    ...overrides
+  };
+}
+
+test("getRuntimeState summarizes STT and realtime sessions", () => {
+  const { manager } = createManager();
+  const now = Date.now();
+
+  manager.sessions.set(
+    "guild-1",
+    createSession({
+      id: "stt-session",
+      mode: "stt_pipeline",
+      pendingSttTurns: 2,
+      sttContextMessages: [{ role: "user", content: "hello" }],
+      userCaptures: new Map([["user-a", {}]])
+    })
+  );
+  manager.sessions.set(
+    "guild-2",
+    createSession({
+      id: "realtime-session",
+      guildId: "guild-2",
+      voiceChannelId: "voice-2",
+      textChannelId: "text-2",
+      mode: "openai_realtime",
+      streamWatch: {
+        active: true,
+        targetUserId: "user-z",
+        requestedByUserId: "user-mod",
+        lastFrameAt: now - 2_000,
+        lastCommentaryAt: now - 4_000,
+        ingestedFrameCount: 8
+      },
+      realtimeProvider: "openai",
+      realtimeClient: {
+        getState() {
+          return { connected: true };
+        }
+      },
+      recentVoiceTurns: [{ role: "user", text: "yo" }]
+    })
+  );
+
+  const runtime = manager.getRuntimeState();
+  assert.equal(runtime.activeCount, 2);
+
+  const stt = runtime.sessions.find((row) => row.sessionId === "stt-session");
+  assert.equal(stt?.stt?.pendingTurns, 2);
+  assert.equal(stt?.realtime, null);
+
+  const realtime = runtime.sessions.find((row) => row.sessionId === "realtime-session");
+  assert.equal(realtime?.realtime?.provider, "openai");
+  assert.deepEqual(realtime?.realtime?.state, { connected: true });
+});
+
+test("requestStatus reports offline and online states", async () => {
+  const { manager, messages } = createManager();
+
+  const offline = await manager.requestStatus({
+    message: createMessage(),
+    settings: { voice: { enabled: true } }
+  });
+  assert.equal(offline, true);
+  assert.equal(messages.at(-1)?.reason, "offline");
+
+  manager.sessions.set(
+    "guild-1",
+    createSession({
+      userCaptures: new Map([
+        ["user-a", {}],
+        ["user-b", {}]
+      ]),
+      streamWatch: {
+        active: true,
+        targetUserId: "user-a",
+        requestedByUserId: "user-mod",
+        lastFrameAt: Date.now() - 1_000,
+        lastCommentaryAt: Date.now() - 2_000,
+        ingestedFrameCount: 3
+      }
+    })
+  );
+
+  const online = await manager.requestStatus({
+    message: createMessage(),
+    settings: null
+  });
+  assert.equal(online, true);
+  assert.equal(messages.at(-1)?.reason, "online");
+  assert.equal(messages.at(-1)?.details?.activeCaptures, 2);
+  assert.equal(messages.at(-1)?.details?.streamWatchActive, true);
+});
+
+test("requestLeave sends not_in_voice or ends active session", async () => {
+  const { manager, messages, endCalls } = createManager();
+
+  const withoutSession = await manager.requestLeave({
+    message: createMessage(),
+    settings: {}
+  });
+  assert.equal(withoutSession, true);
+  assert.equal(messages.at(-1)?.reason, "not_in_voice");
+
+  manager.sessions.set("guild-1", createSession());
+  const withSession = await manager.requestLeave({
+    message: createMessage(),
+    settings: {},
+    reason: "manual_leave"
+  });
+  assert.equal(withSession, true);
+  assert.equal(endCalls.length, 1);
+  assert.equal(endCalls[0]?.reason, "manual_leave");
+});
+
+test("withJoinLock serializes join operations per guild key", async () => {
+  const { manager } = createManager();
+  const order = [];
+
+  const first = manager.withJoinLock("guild-1", async () => {
+    order.push("first:start");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    order.push("first:end");
+    return "first";
+  });
+  const second = manager.withJoinLock("guild-1", async () => {
+    order.push("second:run");
+    return "second";
+  });
+
+  const results = await Promise.all([first, second]);
+  assert.deepEqual(results, ["first", "second"]);
+  assert.deepEqual(order, ["first:start", "first:end", "second:run"]);
+  assert.equal(manager.joinLocks.size, 0);
+});
+
+test("reconcileSettings ends blocked sessions and touches allowed sessions", async () => {
+  const { manager, endCalls, touchCalls } = createManager();
+
+  manager.sessions.set(
+    "guild-blocked",
+    createSession({
+      guildId: "guild-blocked",
+      voiceChannelId: "voice-blocked"
+    })
+  );
+  manager.sessions.set(
+    "guild-allowed",
+    createSession({
+      guildId: "guild-allowed",
+      voiceChannelId: "voice-allowed"
+    })
+  );
+  manager.sessions.set(
+    "guild-not-allowlisted",
+    createSession({
+      guildId: "guild-not-allowlisted",
+      voiceChannelId: "voice-other"
+    })
+  );
+
+  await manager.reconcileSettings({
+    voice: {
+      enabled: true,
+      blockedVoiceChannelIds: ["voice-blocked"],
+      allowedVoiceChannelIds: ["voice-allowed"]
+    }
+  });
+
+  assert.equal(endCalls.length, 2);
+  assert.deepEqual(
+    endCalls.map((entry) => entry.reason).sort(),
+    ["settings_channel_blocked", "settings_channel_not_allowlisted"]
+  );
+  assert.equal(touchCalls.length, 1);
+  assert.equal(touchCalls[0]?.guildId, "guild-allowed");
+});
+
+test("dispose detaches handlers and clears join locks", async () => {
+  const { manager, offCalls } = createManager();
+  manager.joinLocks.set("guild-1", Promise.resolve());
+  manager.sessions.set("guild-1", createSession());
+
+  await manager.dispose("shutdown");
+
+  assert.equal(offCalls.includes("voiceStateUpdate"), true);
+  assert.equal(manager.joinLocks.size, 0);
+});

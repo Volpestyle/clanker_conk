@@ -165,6 +165,7 @@ test("dashboard API smoke: health/settings/actions/stats endpoints", async (t) =
     assert.equal(statsResponse.status, 200);
     const statsJson = await statsResponse.json();
     assert.equal(typeof statsJson.stats, "object");
+    assert.equal(typeof statsJson.stats.performance, "object");
     assert.equal(typeof statsJson.runtime, "object");
   });
   if (result?.skipped) {

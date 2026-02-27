@@ -160,7 +160,7 @@ function applyBaselineSettings(store, channelId) {
   });
 }
 
-test("non-addressed non-initiative turn can still reply when model contributes value", async () => {
+test("non-addressed non-initiative turn can still post when model contributes value", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";
     applyBaselineSettings(store, channelId);
@@ -246,10 +246,10 @@ test("non-addressed non-initiative turn can still reply when model contributes v
     });
 
     assert.equal(sent, true);
-    assert.equal(replyPayloads.length, 1);
-    assert.equal(channelSendPayloads.length, 0);
+    assert.equal(replyPayloads.length, 0);
+    assert.equal(channelSendPayloads.length, 1);
     assert.equal(typingCallsRef.count > 0, true);
-    assert.match(String(replyPayloads[0]?.content || ""), /evo lines decide everything/i);
+    assert.match(String(channelSendPayloads[0]?.content || ""), /evo lines decide everything/i);
 
     const llmPrompt = String(llmCalls[0]?.userPrompt || "");
     assert.match(llmPrompt, /Reply eagerness hint: 10\/100\./);
@@ -640,12 +640,590 @@ test("reply follow-up regeneration can use dedicated provider/model override", a
     });
 
     assert.equal(sent, true);
-    assert.equal(replyPayloads.length, 1);
-    assert.equal(channelSendPayloads.length, 0);
+    assert.equal(replyPayloads.length, 0);
+    assert.equal(channelSendPayloads.length, 1);
     assert.equal(llmCalls.length, 2);
     assert.equal(llmCalls[0]?.settings?.llm?.provider, "openai");
     assert.equal(llmCalls[0]?.settings?.llm?.model, "gpt-4.1-mini");
     assert.equal(llmCalls[1]?.settings?.llm?.provider, "anthropic");
     assert.equal(llmCalls[1]?.settings?.llm?.model, "claude-haiku-4-5");
+  });
+});
+
+test("reply follow-up regeneration can add history images when model requests image lookup", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+    store.patchSettings({
+      activity: {
+        replyLevelNonInitiative: 100
+      }
+    });
+
+    const llmCalls = [];
+    const replyPayloads = [];
+    const channelSendPayloads = [];
+    const typingCallsRef = { count: 0 };
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate(payload) {
+          llmCalls.push(payload);
+          if (llmCalls.length === 1) {
+            return {
+              text: JSON.stringify({
+                text: "lemme check that image rq",
+                skip: false,
+                reactionEmoji: null,
+                media: null,
+                webSearchQuery: null,
+                memoryLookupQuery: null,
+                imageLookupQuery: "that dog starter photo",
+                memoryLine: null,
+                automationAction: { operation: "none" },
+                voiceIntent: { intent: "none", confidence: 0, reason: null },
+                screenShareIntent: { action: "none", confidence: 0, reason: null }
+              }),
+              provider: "test",
+              model: "test-model",
+              usage: null,
+              costUsd: 0
+            };
+          }
+
+          return {
+            text: JSON.stringify({
+              text: "that one was the dog starter image",
+              skip: false,
+              reactionEmoji: null,
+              media: null,
+              webSearchQuery: null,
+              memoryLookupQuery: null,
+              imageLookupQuery: null,
+              memoryLine: null,
+              automationAction: { operation: "none" },
+              voiceIntent: { intent: "none", confidence: 0, reason: null },
+              screenShareIntent: { action: "none", confidence: 0, reason: null }
+            }),
+            provider: "test",
+            model: "test-model",
+            usage: null,
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanker conk",
+      tag: "clanker conk#0001"
+    };
+
+    const guild = buildGuild();
+    const channel = buildChannel({ guild, channelId, channelSendPayloads, typingCallsRef });
+    store.recordMessage({
+      messageId: "img-context-1",
+      createdAt: Date.now() - 3_000,
+      guildId: guild.id,
+      channelId,
+      authorId: "user-2",
+      authorName: "smelly conk",
+      isBot: false,
+      content:
+        "https://cdn.discordapp.com/attachments/chan-1/9001/starter-dog.jpg?ex=69a358b6&is=69a20736&hm=abc",
+      referencedMessageId: null
+    });
+
+    const incoming = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-image-lookup",
+      content: "my bad, what is the photo referencing?",
+      replyPayloads
+    });
+
+    const settings = store.getSettings();
+    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const sent = await bot.maybeReplyToMessage(incoming, settings, {
+      source: "message_event",
+      forceRespond: true,
+      recentMessages,
+      addressSignal: {
+        direct: false,
+        inferred: false,
+        triggered: false,
+        reason: "llm_decides"
+      }
+    });
+
+    assert.equal(sent, true);
+    assert.equal(replyPayloads.length, 1);
+    assert.equal(channelSendPayloads.length, 0);
+    assert.equal(llmCalls.length, 2);
+    assert.equal(Array.isArray(llmCalls[0]?.imageInputs) ? llmCalls[0].imageInputs.length : 0, 0);
+    assert.equal(Array.isArray(llmCalls[1]?.imageInputs), true);
+    assert.equal(llmCalls[1]?.imageInputs?.length || 0, 1);
+    assert.match(String(llmCalls[1]?.imageInputs?.[0]?.url || ""), /starter-dog\.jpg/i);
+  });
+});
+
+test("voice intent handoff routes join requests to voice session manager instead of sending text", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+    store.patchSettings({
+      voice: {
+        enabled: true,
+        intentConfidenceThreshold: 0.75
+      }
+    });
+
+    const replyPayloads = [];
+    const channelSendPayloads = [];
+    const typingCallsRef = { count: 0 };
+    let joinCall = null;
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate() {
+          return {
+            text: JSON.stringify({
+              text: "bet hopping in",
+              skip: false,
+              reactionEmoji: null,
+              media: null,
+              webSearchQuery: null,
+              memoryLookupQuery: null,
+              memoryLine: null,
+              automationAction: { operation: "none" },
+              voiceIntent: { intent: "join", confidence: 0.92, reason: "explicit join request" },
+              screenShareIntent: { action: "none", confidence: 0, reason: null }
+            }),
+            provider: "test",
+            model: "test-model",
+            usage: null,
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanker conk",
+      tag: "clanker conk#0001"
+    };
+    bot.voiceSessionManager.requestJoin = async (payload) => {
+      joinCall = payload;
+      return true;
+    };
+
+    const guild = buildGuild();
+    const channel = buildChannel({ guild, channelId, channelSendPayloads, typingCallsRef });
+    const incoming = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-voice-join",
+      content: "clanker join vc",
+      replyPayloads
+    });
+
+    const settings = store.getSettings();
+    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const sent = await bot.maybeReplyToMessage(incoming, settings, {
+      source: "message_event",
+      forceRespond: true,
+      recentMessages,
+      addressSignal: {
+        direct: true,
+        inferred: false,
+        triggered: true,
+        reason: "direct"
+      }
+    });
+
+    assert.equal(sent, true);
+    assert.equal(Boolean(joinCall), true);
+    assert.equal(joinCall?.intentConfidence, 0.92);
+    assert.equal(replyPayloads.length, 0);
+    assert.equal(channelSendPayloads.length, 0);
+    assert.equal(typingCallsRef.count, 0);
+
+    const intentEvent = store
+      .getRecentActions(20)
+      .find((row) => row.kind === "voice_intent_detected" && row.message_id === "msg-voice-join");
+    assert.equal(Boolean(intentEvent), true);
+    assert.equal(intentEvent?.content, "join");
+  });
+});
+
+test("voice intent below confidence threshold falls back to normal text reply path", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+    store.patchSettings({
+      voice: {
+        enabled: true,
+        intentConfidenceThreshold: 0.9
+      }
+    });
+
+    const replyPayloads = [];
+    const channelSendPayloads = [];
+    const typingCallsRef = { count: 0 };
+    let joinCallCount = 0;
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate() {
+          return {
+            text: JSON.stringify({
+              text: "yo say less",
+              skip: false,
+              reactionEmoji: null,
+              media: null,
+              webSearchQuery: null,
+              memoryLookupQuery: null,
+              memoryLine: null,
+              automationAction: { operation: "none" },
+              voiceIntent: { intent: "join", confidence: 0.5, reason: "weak intent guess" },
+              screenShareIntent: { action: "none", confidence: 0, reason: null }
+            }),
+            provider: "test",
+            model: "test-model",
+            usage: null,
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanker conk",
+      tag: "clanker conk#0001"
+    };
+    bot.voiceSessionManager.requestJoin = async () => {
+      joinCallCount += 1;
+      return true;
+    };
+
+    const guild = buildGuild();
+    const channel = buildChannel({ guild, channelId, channelSendPayloads, typingCallsRef });
+    const incoming = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-voice-low-confidence",
+      content: "clanker join vc maybe?",
+      replyPayloads
+    });
+
+    const settings = store.getSettings();
+    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const sent = await bot.maybeReplyToMessage(incoming, settings, {
+      source: "message_event",
+      forceRespond: true,
+      recentMessages,
+      addressSignal: {
+        direct: true,
+        inferred: false,
+        triggered: true,
+        reason: "direct"
+      }
+    });
+
+    assert.equal(sent, true);
+    assert.equal(joinCallCount, 0);
+    assert.equal(replyPayloads.length, 1);
+    assert.equal(channelSendPayloads.length, 0);
+    assert.equal(typingCallsRef.count > 0, true);
+  });
+});
+
+test("voice intent dispatcher routes all supported intents to voice session manager handlers", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+    store.patchSettings({
+      voice: {
+        enabled: true,
+        intentConfidenceThreshold: 0.75
+      }
+    });
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate() {
+          return {
+            text: "",
+            provider: "test",
+            model: "test-model",
+            usage: null,
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanker conk",
+      tag: "clanker conk#0001"
+    };
+
+    const called = [];
+    bot.voiceSessionManager.requestJoin = async () => {
+      called.push("join");
+      return true;
+    };
+    bot.voiceSessionManager.requestLeave = async () => {
+      called.push("leave");
+      return true;
+    };
+    bot.voiceSessionManager.requestStatus = async () => {
+      called.push("status");
+      return true;
+    };
+    bot.voiceSessionManager.requestWatchStream = async () => {
+      called.push("watch_stream");
+      return true;
+    };
+    bot.voiceSessionManager.requestStopWatchingStream = async () => {
+      called.push("stop_watching_stream");
+      return true;
+    };
+    bot.voiceSessionManager.requestStreamWatchStatus = async () => {
+      called.push("stream_status");
+      return true;
+    };
+
+    const message = {
+      id: "msg-intent-dispatch",
+      guildId: "guild-1",
+      channelId,
+      author: { id: "user-1", username: "alice" },
+      member: { displayName: "alice" }
+    };
+    const settings = store.getSettings();
+    const intents = [
+      "join",
+      "leave",
+      "status",
+      "watch_stream",
+      "stop_watching_stream",
+      "stream_status"
+    ];
+
+    for (const intent of intents) {
+      const handled = await bot.maybeHandleStructuredVoiceIntent({
+        message,
+        settings,
+        replyDirective: {
+          voiceIntent: {
+            intent,
+            confidence: 0.99,
+            reason: "explicit command"
+          }
+        }
+      });
+      assert.equal(handled, true);
+    }
+
+    assert.deepEqual(called, intents);
+  });
+});
+
+test("initiative-channel direct turns can be routed to thread replies when policy chooses reply mode", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+    store.patchSettings({
+      permissions: {
+        initiativeChannelIds: [channelId]
+      }
+    });
+
+    const replyPayloads = [];
+    const channelSendPayloads = [];
+    const typingCallsRef = { count: 0 };
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate() {
+          return {
+            text: JSON.stringify({
+              text: "threaded response",
+              skip: false,
+              reactionEmoji: null,
+              media: null,
+              webSearchQuery: null,
+              memoryLookupQuery: null,
+              memoryLine: null,
+              automationAction: { operation: "none" },
+              voiceIntent: { intent: "none", confidence: 0, reason: null },
+              screenShareIntent: { action: "none", confidence: 0, reason: null }
+            }),
+            provider: "test",
+            model: "test-model",
+            usage: null,
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanker conk",
+      tag: "clanker conk#0001"
+    };
+    bot.shouldSendAsReply = () => true;
+
+    const guild = buildGuild();
+    const channel = buildChannel({ guild, channelId, channelSendPayloads, typingCallsRef });
+    const incoming = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-initiative-threaded",
+      content: "clanker respond in thread",
+      replyPayloads
+    });
+
+    const settings = store.getSettings();
+    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const sent = await bot.maybeReplyToMessage(incoming, settings, {
+      source: "message_event",
+      forceRespond: true,
+      recentMessages,
+      addressSignal: {
+        direct: true,
+        inferred: false,
+        triggered: true,
+        reason: "direct"
+      }
+    });
+
+    assert.equal(sent, true);
+    assert.equal(replyPayloads.length, 1);
+    assert.equal(channelSendPayloads.length, 0);
+  });
+});
+
+test("initiative-channel direct turns can be routed to standalone channel messages when policy chooses standalone mode", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+    store.patchSettings({
+      permissions: {
+        initiativeChannelIds: [channelId]
+      }
+    });
+
+    const replyPayloads = [];
+    const channelSendPayloads = [];
+    const typingCallsRef = { count: 0 };
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate() {
+          return {
+            text: JSON.stringify({
+              text: "standalone response",
+              skip: false,
+              reactionEmoji: null,
+              media: null,
+              webSearchQuery: null,
+              memoryLookupQuery: null,
+              memoryLine: null,
+              automationAction: { operation: "none" },
+              voiceIntent: { intent: "none", confidence: 0, reason: null },
+              screenShareIntent: { action: "none", confidence: 0, reason: null }
+            }),
+            provider: "test",
+            model: "test-model",
+            usage: null,
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanker conk",
+      tag: "clanker conk#0001"
+    };
+    bot.shouldSendAsReply = () => false;
+
+    const guild = buildGuild();
+    const channel = buildChannel({ guild, channelId, channelSendPayloads, typingCallsRef });
+    const incoming = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-initiative-standalone",
+      content: "clanker respond standalone",
+      replyPayloads
+    });
+
+    const settings = store.getSettings();
+    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const sent = await bot.maybeReplyToMessage(incoming, settings, {
+      source: "message_event",
+      forceRespond: true,
+      recentMessages,
+      addressSignal: {
+        direct: true,
+        inferred: false,
+        triggered: true,
+        reason: "direct"
+      }
+    });
+
+    assert.equal(sent, true);
+    assert.equal(replyPayloads.length, 0);
+    assert.equal(channelSendPayloads.length, 1);
   });
 });
