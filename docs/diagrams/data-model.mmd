@@ -1,0 +1,67 @@
+erDiagram
+    SETTINGS {
+        string key PK
+        text value
+        datetime updated_at
+    }
+
+    MESSAGES {
+        string message_id PK
+        datetime created_at
+        string guild_id
+        string channel_id
+        string author_id
+        string author_name
+        int is_bot
+        text content
+        string referenced_message_id
+    }
+
+    ACTIONS {
+        int id PK
+        datetime created_at
+        string guild_id
+        string channel_id
+        string message_id
+        string user_id
+        string kind
+        text content
+        text metadata
+        float usd_cost
+    }
+
+    MEMORY_FACTS {
+        int id PK
+        datetime created_at
+        datetime updated_at
+        string guild_id
+        string channel_id
+        string subject
+        string fact
+        string fact_type
+        string evidence_text
+        string source_message_id
+        float confidence
+        int is_active
+    }
+
+    MEMORY_FACT_VECTORS_NATIVE {
+        int fact_id
+        string model
+        int dims
+        blob embedding_blob
+        datetime updated_at
+    }
+
+    SHARED_LINKS {
+        string url PK
+        datetime first_shared_at
+        datetime last_shared_at
+        int share_count
+        string source
+    }
+
+    MESSAGES ||--o{ ACTIONS : "message_id (context/trigger)"
+    MESSAGES ||--o{ MEMORY_FACTS : "source_message_id"
+    MEMORY_FACTS ||--o{ MEMORY_FACT_VECTORS_NATIVE : "fact_id"
+    MESSAGES ||--o{ MESSAGES : "referenced_message_id"

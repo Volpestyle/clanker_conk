@@ -11,8 +11,13 @@
     "dev": "tsx watch src/app.ts",
     "dev:ui": "npx vite",
     "build:ui": "npx vite build",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
     "test": "node --import tsx --test src/*.test.ts",
-    "check": "node --import tsx scripts/check-backend.mjs && npx vite build"
+    "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include=\"src/**/*.ts\" --test-coverage-exclude=\"src/**/*.test.ts\" src/*.test.ts",
+    "test:coverage:check": "node --import tsx --test --experimental-test-coverage --test-coverage-include=\"src/**/*.ts\" --test-coverage-exclude=\"src/**/*.test.ts\" --test-coverage-lines=50 --test-coverage-branches=45 --test-coverage-functions=40 src/*.test.ts",
+    "check": "npm run lint && node --import tsx scripts/check-backend.mjs && npx vite build",
+    "diagrams": "node scripts/gen-diagrams.mjs"
   },
   "engines": {
     "node": ">=20"
@@ -34,7 +39,14 @@
     "ws": "^8.19.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.36.0",
+    "@mermaid-js/mermaid-cli": "^11.12.0",
     "@vitejs/plugin-react": "^5.1.4",
+    "eslint": "^9.36.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^16.4.0",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.44.0",
     "tsx": "^4.20.5",
     "vite": "^7.3.1"
   }

@@ -8,11 +8,16 @@ Code entrypoint:
 - `src/app.ts`: bootstraps storage, services, bot, and dashboard server.
 
 Core runtime:
-- `src/bot.ts`: Discord event handling, reply/react logic, initiative scheduling, and posting.
+- `src/bot.ts`: Discord event handling and orchestration.
+- `src/bot/*`: extracted bot domains (`automationControl`, `initiativeSchedule`, `queueGateway`, `voiceReplies`).
 - `src/llm.ts`: model provider abstraction (OpenAI, Anthropic, xAI/Grok, or Claude Code), usage + cost logging, embeddings, image/video generation, ASR, and TTS.
+- `src/llmClaudeCode.ts`: Claude Code CLI invocation/parsing helpers used by `LLMService`.
 - `src/memory.ts`: append-only daily journaling + LLM-based fact extraction + hybrid memory retrieval (lexical + vector).
 - `src/discovery.ts`: external link discovery for initiative posts.
-- `src/store.ts`: SQLite persistence and settings normalization.
+- `src/store.ts`: SQLite persistence orchestration.
+- `src/store/*`: settings normalization and store helper utilities.
+- `src/voice/voiceSessionManager.ts`: voice orchestration and session lifecycle.
+- `src/voice/voiceJoinFlow.ts`, `src/voice/voiceStreamWatch.ts`, `src/voice/voiceOperationalMessaging.ts`, `src/voice/voiceDecisionRuntime.ts`: extracted voice domains.
 - `src/publicHttpsEntrypoint.ts`: optional Cloudflare Quick Tunnel runtime for exposing local dashboard/API over public HTTPS.
 - `src/screenShareSessionManager.ts`: tokenized browser screen-share session lifecycle and frame relay into voice stream-watch ingest.
 
@@ -23,38 +28,12 @@ Control plane:
 Storage:
 - `data/clanker.db`: runtime SQLite database.
 - `memory/YYYY-MM-DD.md`: append-only daily journal files.
-- `memory/MEMORY.md`: curated long-term snapshot for operator visibility and dashboard inspection.
+- `memory/MEMORY.md`: operator-facing curated snapshot for dashboard inspection (not directly injected into model prompts).
 
 ## 2. Runtime Lifecycle
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Proc as Node Process
-    participant Store as Store (SQLite)
-    participant Memory as MemoryManager
-    participant LLM as LLMService
-    participant Disc as DiscoveryService
-    participant Bot as ClankerBot
-    participant Dash as DashboardServer
-    participant Pub as PublicHttpsEntrypoint
-    participant Scr as ScreenShareSessionManager
-    participant Discord as Discord API
-
-    Proc->>Store: init() (create tables + default settings)
-    Proc->>LLM: new LLMService()
-    Proc->>Disc: new DiscoveryService()
-    Proc->>Memory: refreshMemoryMarkdown() (curation pass)
-    Proc->>Bot: new ClankerBot(...)
-    Proc->>Dash: createDashboardServer(...)
-    Proc->>Bot: start()
-    Proc->>Pub: start() (optional cloudflared tunnel)
-    Proc->>Scr: initialize tokenized share-session manager
-    Bot->>Discord: login()
-    Bot->>Bot: start memory timer (5m)
-    Bot->>Bot: start initiative timer (60s tick)
-    Bot->>Bot: schedule startup tasks (~4.5s delay)
-```
+![Runtime Lifecycle](diagrams/runtime-lifecycle.png)
+<!-- source: docs/diagrams/runtime-lifecycle.mmd -->
 
 ## 3. Data Model (SQLite)
 
@@ -68,75 +47,8 @@ Main tables created in `src/store.ts`:
 
 Table relationship diagram (logical relationships):
 
-```mermaid
-erDiagram
-    SETTINGS {
-        string key PK
-        text value
-        datetime updated_at
-    }
-
-    MESSAGES {
-        string message_id PK
-        datetime created_at
-        string guild_id
-        string channel_id
-        string author_id
-        string author_name
-        int is_bot
-        text content
-        string referenced_message_id
-    }
-
-    ACTIONS {
-        int id PK
-        datetime created_at
-        string guild_id
-        string channel_id
-        string message_id
-        string user_id
-        string kind
-        text content
-        text metadata
-        float usd_cost
-    }
-
-    MEMORY_FACTS {
-        int id PK
-        datetime created_at
-        datetime updated_at
-        string guild_id
-        string channel_id
-        string subject
-        string fact
-        string fact_type
-        string evidence_text
-        string source_message_id
-        float confidence
-        int is_active
-    }
-
-    MEMORY_FACT_VECTORS_NATIVE {
-        int fact_id
-        string model
-        int dims
-        blob embedding_blob
-        datetime updated_at
-    }
-
-    SHARED_LINKS {
-        string url PK
-        datetime first_shared_at
-        datetime last_shared_at
-        int share_count
-        string source
-    }
-
-    MESSAGES ||--o{ ACTIONS : "message_id (context/trigger)"
-    MESSAGES ||--o{ MEMORY_FACTS : "source_message_id"
-    MEMORY_FACTS ||--o{ MEMORY_FACT_VECTORS_NATIVE : "fact_id"
-    MESSAGES ||--o{ MESSAGES : "referenced_message_id"
-```
+![Data Model](diagrams/data-model.png)
+<!-- source: docs/diagrams/data-model.mmd -->
 
 Note: the implementation uses logical joins and lookups; SQLite foreign-key constraints are not currently declared.
 
@@ -154,64 +66,15 @@ Settings are patched through dashboard API and normalized in `Store.patchSetting
 
 The bot reads settings at decision time (`store.getSettings()`), so updates apply without restart.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant UI as Dashboard UI
-    participant API as /api/settings
-    participant Store as Store
-    participant Bot as ClankerBot
-
-    UI->>API: PUT settings patch
-    API->>Store: patchSettings(patch)
-    Store->>Store: deepMerge + normalizeSettings
-    Store->>Store: UPDATE settings JSON
-    API-->>UI: normalized settings
-    Bot->>Store: getSettings() on next event/tick
-    Store-->>Bot: latest config
-```
+![Settings Flow](diagrams/settings-flow.png)
+<!-- source: docs/diagrams/settings-flow.mmd -->
 
 ## 5. Message Event Flow (Replies + Reactions)
 
 Entrypoint: Discord `messageCreate` handler in `ClankerBot`.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Discord as Discord
-    participant Bot as ClankerBot
-    participant Store as Store
-    participant Memory as MemoryManager
-    participant LLM as LLMService
-
-    Discord->>Bot: messageCreate(message)
-    Bot->>Store: recordMessage(incoming)
-    Bot->>Store: getSettings()
-    Bot->>Bot: channel/user/bot guards
-
-    alt memory enabled
-      Bot->>Memory: ingestMessage()
-      Memory->>Memory: append entry to memory/YYYY-MM-DD.md
-      Memory->>LLM: extractMemoryFacts() (strict JSON extraction)
-      LLM->>Store: logAction(memory_extract_call / memory_extract_error)
-      Memory->>Store: addMemoryFact() / logAction(memory_fact)
-      Memory->>Memory: queue curated refresh of MEMORY.md
-    end
-
-    par Reaction path
-      Bot->>LLM: generate() for reaction decision
-      LLM->>Store: logAction(llm_call or llm_error)
-      Bot->>Discord: message.react(emoji)
-      Bot->>Store: logAction(reacted)
-    and Reply path
-      Bot->>Memory: buildPromptMemorySlice() (hybrid fact retrieval)
-      Bot->>LLM: generate() for reply
-      LLM->>Store: logAction(llm_call or llm_error)
-      Bot->>Discord: reply() or send()
-      Bot->>Store: recordMessage(outgoing)
-      Bot->>Store: logAction(sent_reply or sent_message)
-    end
-```
+![Message Event Flow](diagrams/message-event-flow.png)
+<!-- source: docs/diagrams/message-event-flow.mmd -->
 
 Key guardrails:
 - channel allow/block lists.
@@ -224,42 +87,8 @@ Key guardrails:
 
 Initiative logic runs every 60 seconds, but posting depends on schedule rules and caps.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Tick as 60s Timer
-    participant Bot as ClankerBot
-    participant Store as Store
-    participant Disc as DiscoveryService
-    participant LLM as LLMService
-    participant Discord as Discord
-
-    Tick->>Bot: maybeRunInitiativeCycle()
-    Bot->>Store: getSettings()
-    Bot->>Bot: eligibility checks (enabled, limits, cooldown)
-    Bot->>Store: countInitiativePostsSince(24h)
-    Bot->>Store: getLastActionTime(initiative_post)
-    Bot->>Bot: evaluate schedule (even/spontaneous)
-
-    alt due to post
-      Bot->>Bot: pick initiative channel + hydrate recent messages
-      Bot->>Disc: collect(...) if discovery enabled
-      Disc->>Store: wasLinkSharedSince(...) during dedupe
-      Bot->>LLM: generate() with initiative prompt
-      LLM->>Store: logAction(llm_call or llm_error)
-      Bot->>Bot: applyDiscoveryLinkPolicy()
-      opt image post selected
-        Bot->>LLM: generateImage()
-        LLM->>Store: logAction(image_call or image_error)
-      end
-      Bot->>Discord: channel.send(payload)
-      Bot->>Store: recordMessage(outgoing)
-      Bot->>Store: recordSharedLink(url) for used links
-      Bot->>Store: logAction(initiative_post + pacing/discovery metadata)
-    else not due
-      Bot->>Bot: return
-    end
-```
+![Initiative Post Flow](diagrams/initiative-post-flow.png)
+<!-- source: docs/diagrams/initiative-post-flow.mmd -->
 
 Scheduling modes:
 - `even`: post only when elapsed time exceeds `max(minMinutesBetweenPosts, 24h/maxPostsPerDay)`.
@@ -302,7 +131,7 @@ Common `actions.kind` values in current runtime:
 - Messaging/initiative: `sent_reply`, `sent_message`, `reply_skipped`, `initiative_post`, `automation_post`
 - Reactions: `reacted`, `voice_soundboard_play`
 - LLM + media generation: `llm_call`, `llm_error`, `image_call`, `image_error`, `video_call`, `video_error`, `gif_call`, `gif_error`
-- Memory pipeline: `memory_fact`, `memory_extract_call`, `memory_extract_error`, `memory_embedding_call`, `memory_embedding_error`, `memory_migration`
+- Memory pipeline: `memory_fact`, `memory_extract_call`, `memory_extract_error`, `memory_embedding_call`, `memory_embedding_error`
 - Search + video context: `search_call`, `search_error`, `video_context_call`, `video_context_error`
 - Voice runtime: `voice_session_start`, `voice_session_end`, `voice_turn_in`, `voice_turn_out`, `voice_runtime`, `voice_intent_detected`, `voice_error`
 - Speech services: `asr_call`, `asr_error`, `tts_call`, `tts_error`

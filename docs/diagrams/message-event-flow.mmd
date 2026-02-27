@@ -1,0 +1,35 @@
+sequenceDiagram
+    autonumber
+    participant Discord as Discord
+    participant Bot as ClankerBot
+    participant Store as Store
+    participant Memory as MemoryManager
+    participant LLM as LLMService
+
+    Discord->>Bot: messageCreate(message)
+    Bot->>Store: recordMessage(incoming)
+    Bot->>Store: getSettings()
+    Bot->>Bot: channel/user/bot guards
+
+    alt memory enabled
+      Bot->>Memory: ingestMessage()
+      Memory->>Memory: append entry to memory/YYYY-MM-DD.md
+      Memory->>LLM: extractMemoryFacts() (strict JSON extraction)
+      LLM->>Store: logAction(memory_extract_call / memory_extract_error)
+      Memory->>Store: addMemoryFact() / logAction(memory_fact)
+      Memory->>Memory: queue curated refresh of MEMORY.md
+    end
+
+    par Reaction path
+      Bot->>LLM: generate() for reaction decision
+      LLM->>Store: logAction(llm_call or llm_error)
+      Bot->>Discord: message.react(emoji)
+      Bot->>Store: logAction(reacted)
+    and Reply path
+      Bot->>Memory: buildPromptMemorySlice() (hybrid fact retrieval)
+      Bot->>LLM: generate() for reply
+      LLM->>Store: logAction(llm_call or llm_error)
+      Bot->>Discord: reply() or send()
+      Bot->>Store: recordMessage(outgoing)
+      Bot->>Store: logAction(sent_reply or sent_message)
+    end

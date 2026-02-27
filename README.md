@@ -4,7 +4,7 @@ AI-powered Discord bot persona: **clanker conk**.
 
 Features:
 - Random human-like interactions in allowed channels.
-- Standalone non-reply posts restricted to configured `initiativeChannelIds` only.
+- Standalone initiative posts stay restricted to `initiativeChannelIds`; reply turns may also post channel-level comments when a turn is not directly addressed.
 - Initiative scheduler with `even` or `spontaneous` pacing modes.
 - Natural-language scheduled automations (create/list/pause/resume/delete) with persistent runs.
 - Creative discovery for initiative posts (Reddit, Hacker News, YouTube RSS, RSS feeds, optional X via Nitter).

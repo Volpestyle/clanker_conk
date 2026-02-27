@@ -1,0 +1,34 @@
+sequenceDiagram
+    autonumber
+    participant Tick as 60s Timer
+    participant Bot as ClankerBot
+    participant Store as Store
+    participant Disc as DiscoveryService
+    participant LLM as LLMService
+    participant Discord as Discord
+
+    Tick->>Bot: maybeRunInitiativeCycle()
+    Bot->>Store: getSettings()
+    Bot->>Bot: eligibility checks (enabled, limits, cooldown)
+    Bot->>Store: countInitiativePostsSince(24h)
+    Bot->>Store: getLastActionTime(initiative_post)
+    Bot->>Bot: evaluate schedule (even/spontaneous)
+
+    alt due to post
+      Bot->>Bot: pick initiative channel + hydrate recent messages
+      Bot->>Disc: collect(...) if discovery enabled
+      Disc->>Store: wasLinkSharedSince(...) during dedupe
+      Bot->>LLM: generate() with initiative prompt
+      LLM->>Store: logAction(llm_call or llm_error)
+      Bot->>Bot: applyDiscoveryLinkPolicy()
+      opt image post selected
+        Bot->>LLM: generateImage()
+        LLM->>Store: logAction(image_call or image_error)
+      end
+      Bot->>Discord: channel.send(payload)
+      Bot->>Store: recordMessage(outgoing)
+      Bot->>Store: recordSharedLink(url) for used links
+      Bot->>Store: logAction(initiative_post + pacing/discovery metadata)
+    else not due
+      Bot->>Bot: return
+    end

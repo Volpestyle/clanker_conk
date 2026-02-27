@@ -1,0 +1,30 @@
+flowchart TD
+    A[Incoming text message or voice transcript] --> B{memory.enabled}
+    B -- no --> N0[Skip durable memory ingest]
+    B -- yes --> C[memory.ingestMessage queue]
+    C --> D[processIngestMessage]
+    D --> E[Append line to memory/YYYY-MM-DD.md]
+    D --> F{guild scope and content >= 4 chars}
+    F -- yes --> G[LLM extractMemoryFacts]
+    G --> H[Filter and normalize facts<br/>grounded, non-instructional, typed]
+    H --> I[store.addMemoryFact in memory_facts]
+    I --> J[ensureFactVector<br/>upsert memory_fact_vectors_native]
+    I --> K[archiveOldFactsForSubject]
+    F -- no --> L
+    K --> L[queueMemoryRefresh debounce]
+    E --> L
+    L --> M[refresh memory/MEMORY.md snapshot]
+
+    R[Reply or automation or voice turn generation] --> S[memory.buildPromptMemorySlice]
+    S --> T[selectHybridFacts by subject and guild]
+    T --> U[rankHybridCandidates<br/>lexical + semantic + confidence + recency + channel]
+    S --> V[store.searchRelevantMessages]
+    U --> W[Inject userFacts and relevantFacts into LLM prompt]
+    V --> W
+
+    X[Dashboard or model memory lookup] --> Y[memory.searchDurableFacts]
+    Y --> Z[Strict relevance gate hybrid ranking]
+    Z --> AA[Return ranked durable facts]
+
+    M -. operator-facing only .-> AB[Dashboard /api/memory view]
+    M -. not prompt input .-> AC[Runtime prompts use SQLite retrieval]
