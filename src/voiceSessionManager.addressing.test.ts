@@ -152,6 +152,45 @@ test("reply decider retries contract violation output and accepts YES", async ()
   assert.equal(callCount, 2);
 });
 
+test("reply decider uses JSON schema contract for claude-code and accepts structured YES", async () => {
+  const seenSchemas = [];
+  const manager = createManager({
+    generate: async (payload) => {
+      seenSchemas.push(String(payload?.jsonSchema || ""));
+      return { text: '{"decision":"YES"}', provider: "claude-code", model: "haiku" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      botTurnOpen: false,
+      lastUnaddressedReplyAt: 0
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        eagerCooldownSeconds: 45,
+        replyDecisionLlm: {
+          provider: "claude-code",
+          model: "haiku"
+        }
+      }
+    }),
+    transcript: "clanky what's up?"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "llm_yes");
+  assert.equal(decision.directAddressed, true);
+  assert.equal(seenSchemas.length > 0, true);
+  assert.equal(seenSchemas[0].includes('"decision"'), true);
+  assert.equal(seenSchemas[0].includes('"YES"'), true);
+  assert.equal(seenSchemas[0].includes('"NO"'), true);
+});
+
 test("reply decider blocks contract violations after bounded retries", async () => {
   let callCount = 0;
   const manager = createManager({
