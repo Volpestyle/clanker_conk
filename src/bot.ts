@@ -56,7 +56,8 @@ import {
   resolveInitialNextRunAt
 } from "./automation.ts";
 import { normalizeDiscoveryUrl } from "./discovery.ts";
-import { chance, clamp, hasBotKeyword, sanitizeBotText, sleep } from "./utils.ts";
+import { chance, clamp, sanitizeBotText, sleep } from "./utils.ts";
+import { isBotNameAddressed } from "./voice/voiceSessionHelpers.ts";
 import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
@@ -3315,8 +3316,10 @@ export class ClankerBot {
   isDirectlyAddressed(settings, message) {
     const mentioned = message.mentions?.users?.has(this.client.user.id);
     const content = String(message.content || "");
-    const namePing =
-      content.toLowerCase().includes(settings.botName.toLowerCase()) || hasBotKeyword(content);
+    const namePing = isBotNameAddressed({
+      transcript: content,
+      botName: settings?.botName || ""
+    });
     const isReplyToBot = message.mentions?.repliedUser?.id === this.client.user.id;
     return Boolean(mentioned || namePing || isReplyToBot);
   }

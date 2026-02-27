@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  isBotNameAddressed,
   extractSoundboardDirective,
   getRealtimeCommitMinimumBytes,
   getRealtimeRuntimeLabel,
@@ -73,15 +74,39 @@ test("isVoiceTurnAddressedToBot catches close wake-word spellings", () => {
   assert.equal(isVoiceTurnAddressedToBot("i sent you a link yesterday", settings), false);
 });
 
-test("isVoiceTurnAddressedToBot uses wake-word context to avoid incidental mentions", () => {
+test("isVoiceTurnAddressedToBot accepts fuzzy wake variants without extra context gating", () => {
   const settings = { botName: "clanker conk" };
   assert.equal(isVoiceTurnAddressedToBot("Hi cleaner.", settings), true);
   assert.equal(isVoiceTurnAddressedToBot("cleaner can you jump in?", settings), true);
-  assert.equal(isVoiceTurnAddressedToBot("the cleaner is broken again", settings), false);
+  assert.equal(isVoiceTurnAddressedToBot("the cleaner is broken again", settings), true);
 });
 
 test("isVoiceTurnAddressedToBot follows configured botName without clank hardcoding", () => {
   const settings = { botName: "sparky bot" };
   assert.equal(isVoiceTurnAddressedToBot("Sporky, can you help me with this?", settings), true);
   assert.equal(isVoiceTurnAddressedToBot("clunker can you help me with this?", settings), false);
+});
+
+test("isBotNameAddressed can run relaxed bot-name fuzzy matching for text messages", () => {
+  assert.equal(
+    isBotNameAddressed({
+      transcript: "whats up sporky",
+      botName: "sparky bot"
+    }),
+    true
+  );
+  assert.equal(
+    isBotNameAddressed({
+      transcript: "clankerton",
+      botName: "sparky bot"
+    }),
+    false
+  );
+});
+
+test("isBotNameAddressed accepts nickname suffix variants while rejecting distant variants", () => {
+  const settings = { botName: "clanker conk" };
+  assert.equal(isVoiceTurnAddressedToBot("clankerton", settings), true);
+  assert.equal(isVoiceTurnAddressedToBot("clunkeroni", settings), true);
+  assert.equal(isVoiceTurnAddressedToBot("clinkitity", settings), false);
 });
