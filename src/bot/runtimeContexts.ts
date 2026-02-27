@@ -32,3 +32,25 @@ export function createMentionResolutionRuntime(bot) {
     store: bot.store
   };
 }
+
+export function createReplyAdmissionRuntime(bot) {
+  return {
+    botUserId: String(bot.client.user?.id || "").trim(),
+    isDirectlyAddressed: (settings, message) => bot.isDirectlyAddressed(settings, message)
+  };
+}
+
+export function createStartupCatchupRuntime(bot) {
+  return {
+    botUserId: String(bot.client.user?.id || "").trim(),
+    store: bot.store,
+    getStartupScanChannels: (settings) => bot.getStartupScanChannels(settings),
+    hydrateRecentMessages: (channel, limit) => bot.hydrateRecentMessages(channel, limit),
+    isChannelAllowed: (settings, channelId) => bot.isChannelAllowed(settings, channelId),
+    isUserBlocked: (settings, userId) => bot.isUserBlocked(settings, userId),
+    getReplyAddressSignal: (settings, message, recentMessages) =>
+      bot.getReplyAddressSignal(settings, message, recentMessages),
+    hasStartupFollowupAfterMessage: (payload) => bot.hasStartupFollowupAfterMessage(payload),
+    enqueueReplyJob: (payload) => bot.enqueueReplyJob(payload)
+  };
+}
