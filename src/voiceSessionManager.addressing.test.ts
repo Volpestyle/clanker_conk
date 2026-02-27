@@ -247,7 +247,7 @@ test("reply decider allows low-signal direct wake-word pings", async () => {
     },
     userId: "speaker-1",
     settings: baseSettings(),
-    transcript: "clunk"
+    transcript: "clunker"
   });
 
   assert.equal(decision.allow, true);

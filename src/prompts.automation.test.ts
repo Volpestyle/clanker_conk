@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildAutomationPrompt, buildInitiativePrompt } from "./prompts.ts";
+import { buildAutomationPrompt, buildInitiativePrompt, buildReplyPrompt } from "./prompts.ts";
 
 test("buildAutomationPrompt includes durable memory context", () => {
   const prompt = buildAutomationPrompt({
@@ -51,4 +51,34 @@ test("buildInitiativePrompt includes relevant memory context", () => {
 
   assert.match(prompt, /Relevant durable memory:/);
   assert.match(prompt, /community likes giraffes/);
+});
+
+test("buildReplyPrompt treats reply eagerness as a soft contribution threshold", () => {
+  const prompt = buildReplyPrompt({
+    message: {
+      authorName: "alice",
+      content: "pokemon starters look mid"
+    },
+    imageInputs: [],
+    recentMessages: [
+      { author_name: "alice", content: "pokemon starters look mid" },
+      { author_name: "bob", content: "yeah these designs are weird" }
+    ],
+    relevantMessages: [],
+    userFacts: [],
+    relevantFacts: [],
+    emojiHints: [],
+    reactionEmojiOptions: [],
+    replyEagerness: 25,
+    reactionEagerness: 20,
+    addressing: {
+      directlyAddressed: false,
+      responseRequired: false
+    }
+  });
+
+  assert.match(prompt, /Reply eagerness hint: 25\/100\./);
+  assert.match(prompt, /soft threshold/i);
+  assert.match(prompt, /Higher eagerness means lower contribution threshold; lower eagerness means higher threshold\./);
+  assert.match(prompt, /useful, interesting, or funny enough/i);
 });

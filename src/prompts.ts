@@ -271,14 +271,18 @@ export function buildReplyPrompt({
     parts.push("Do not output [SKIP] except for safety refusals.");
   } else {
     const eagerness = Math.max(0, Math.min(100, Number(replyEagerness) || 0));
-    parts.push(`Reply eagerness setting: ${eagerness}/100.`);
+    parts.push(`Reply eagerness hint: ${eagerness}/100.`);
+    parts.push("Treat reply eagerness as a soft threshold for when your jump-in contribution is worth it.");
     if (eagerness <= 25) {
-      parts.push("Be very selective and skip unless a reply is clearly useful.");
+      parts.push("Be very selective and skip unless you can add clearly strong value.");
     } else if (eagerness >= 75) {
-      parts.push("Be more willing to jump in when it improves the chat.");
+      parts.push("You can jump in more often, including lighter/fun contributions that still fit the flow.");
     } else {
       parts.push("Use balanced judgment before joining the conversation.");
     }
+    parts.push("Higher eagerness means lower contribution threshold; lower eagerness means higher threshold.");
+    parts.push("Judge value by whether your message is useful, interesting, or funny enough to justify the interruption risk.");
+    parts.push("If unsure whether your contribution is worth it, output exactly [SKIP].");
     parts.push("Decide if replying adds value right now.");
     parts.push(
       "If this message is not really meant for you or would interrupt people talking among themselves, output exactly [SKIP]."

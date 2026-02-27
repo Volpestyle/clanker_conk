@@ -9,7 +9,8 @@ export const DEFAULT_SETTINGS = {
     ]
   },
   activity: {
-    replyLevel: 35,
+    replyLevelInitiative: 35,
+    replyLevelNonInitiative: 10,
     reactionLevel: 20,
     minSecondsBetweenMessages: 20,
     replyCoalesceWindowSeconds: 4,
@@ -21,6 +22,11 @@ export const DEFAULT_SETTINGS = {
     temperature: 0.9,
     maxOutputTokens: 220,
     pricing: {}
+  },
+  replyFollowupLlm: {
+    enabled: false,
+    provider: "openai",
+    model: "gpt-4.1-mini"
   },
   webSearch: {
     enabled: false,

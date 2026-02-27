@@ -26,7 +26,8 @@ export function settingsToForm(settings) {
     personaFlavor:
       settings?.persona?.flavor || "playful, chaotic-good, slangy Gen Z/Gen A energy without being toxic",
     personaHardLimits: formatList(settings?.persona?.hardLimits),
-    replyLevel: activity.replyLevel ?? 35,
+    replyLevelInitiative: activity.replyLevelInitiative ?? 35,
+    replyLevelNonInitiative: activity.replyLevelNonInitiative ?? 10,
     reactionLevel: activity.reactionLevel ?? 20,
     minGap: activity.minSecondsBetweenMessages ?? 20,
     allowReplies: settings?.permissions?.allowReplies ?? true,
@@ -35,6 +36,9 @@ export function settingsToForm(settings) {
     memoryEnabled: settings?.memory?.enabled ?? true,
     provider: settings?.llm?.provider ?? "openai",
     model: settings?.llm?.model ?? "gpt-4.1-mini",
+    replyFollowupLlmEnabled: settings?.replyFollowupLlm?.enabled ?? false,
+    replyFollowupLlmProvider: settings?.replyFollowupLlm?.provider ?? settings?.llm?.provider ?? "openai",
+    replyFollowupLlmModel: settings?.replyFollowupLlm?.model ?? settings?.llm?.model ?? "gpt-4.1-mini",
     memoryLlmProvider: settings?.memoryLlm?.provider ?? "anthropic",
     memoryLlmModel: settings?.memoryLlm?.model ?? "claude-haiku-4-5",
     temperature: settings?.llm?.temperature ?? 0.9,
@@ -161,7 +165,8 @@ export function formToSettingsPatch(form) {
       hardLimits: parseLineList(form.personaHardLimits)
     },
     activity: {
-      replyLevel: Number(form.replyLevel),
+      replyLevelInitiative: Number(form.replyLevelInitiative),
+      replyLevelNonInitiative: Number(form.replyLevelNonInitiative),
       reactionLevel: Number(form.reactionLevel),
       minSecondsBetweenMessages: Number(form.minGap)
     },
@@ -170,6 +175,11 @@ export function formToSettingsPatch(form) {
       model: form.model.trim(),
       temperature: Number(form.temperature),
       maxOutputTokens: Number(form.maxTokens)
+    },
+    replyFollowupLlm: {
+      enabled: Boolean(form.replyFollowupLlmEnabled),
+      provider: String(form.replyFollowupLlmProvider || "").trim(),
+      model: String(form.replyFollowupLlmModel || "").trim()
     },
     memoryLlm: {
       provider: String(form.memoryLlmProvider || "").trim(),

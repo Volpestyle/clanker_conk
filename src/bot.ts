@@ -1170,8 +1170,17 @@ export class ClankerBot {
       )
     ];
     const addressed = addressSignal.triggered;
-    const replyEagerness = clamp(Number(settings.activity?.replyLevel) || 0, 0, 100);
     const reactionEagerness = clamp(Number(settings.activity?.reactionLevel) || 0, 0, 100);
+    const isInitiativeChannel = this.isInitiativeChannel(settings, message.channelId);
+    const replyEagerness = clamp(
+      Number(
+        isInitiativeChannel
+          ? settings.activity?.replyLevelInitiative
+          : settings.activity?.replyLevelNonInitiative
+      ) || 0,
+      0,
+      100
+    );
     const reactionEmojiOptions = [
       ...new Set([...this.getReactionEmojiOptions(message.guild), ...UNICODE_REACTIONS])
     ];
@@ -1295,6 +1304,7 @@ export class ClankerBot {
     });
     let usedWebSearchFollowup = false;
     let usedMemoryLookupFollowup = false;
+    const followupGenerationSettings = this.resolveReplyFollowupGenerationSettings(settings);
     const mediaPromptLimit = resolveMaxMediaPromptLen(settings);
     let replyDirective = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
     let voiceIntentHandled = await this.maybeHandleStructuredVoiceIntent({
@@ -1331,6 +1341,7 @@ export class ClankerBot {
     if (usedWebSearchFollowup || replyDirective.memoryLookupQuery) {
       const followup = await this.maybeRegenerateWithMemoryLookup({
         settings,
+        followupSettings: followupGenerationSettings,
         systemPrompt,
         generation,
         directive: replyDirective,
@@ -1554,7 +1565,7 @@ export class ClankerBot {
     await message.channel.sendTyping();
     await sleep(600 + Math.floor(Math.random() * 1800));
 
-    const canStandalonePost = this.isInitiativeChannel(settings, message.channelId);
+    const canStandalonePost = isInitiativeChannel;
     const shouldThreadReply = addressed || options.forceRespond;
     const sendAsReply = canStandalonePost ? (shouldThreadReply ? chance(0.65) : false) : true;
     const sent = sendAsReply
@@ -2505,12 +2516,22 @@ export class ClankerBot {
     source,
     triggerMessageIds = [],
     addressSignal,
-    generation,
-    usedWebSearchFollowup,
+    generation = null,
+    usedWebSearchFollowup = false,
     reason,
     reaction,
-    screenShareOffer = null
+    screenShareOffer = null,
+    extraMetadata = null
   }) {
+    const llmMetadata = generation
+      ? {
+          provider: generation.provider,
+          model: generation.model,
+          usage: generation.usage,
+          costUsd: generation.costUsd,
+          usedWebSearchFollowup
+        }
+      : null;
     this.store.logAction({
       kind: "reply_skipped",
       guildId: message.guildId,
@@ -2525,13 +2546,8 @@ export class ClankerBot {
         addressing: addressSignal,
         reaction,
         screenShareOffer,
-        llm: {
-          provider: generation.provider,
-          model: generation.model,
-          usage: generation.usage,
-          costUsd: generation.costUsd,
-          usedWebSearchFollowup
-        }
+        llm: llmMetadata,
+        ...(extraMetadata && typeof extraMetadata === "object" ? extraMetadata : {})
       }
     });
   }
@@ -3105,8 +3121,27 @@ export class ClankerBot {
     }
   }
 
+  resolveReplyFollowupGenerationSettings(settings) {
+    const followupConfig = settings?.replyFollowupLlm || {};
+    if (!followupConfig.enabled) return settings;
+
+    const provider = String(followupConfig.provider || settings?.llm?.provider || "").trim();
+    const model = String(followupConfig.model || settings?.llm?.model || "").trim();
+    if (!provider || !model) return settings;
+
+    return {
+      ...settings,
+      llm: {
+        ...(settings?.llm || {}),
+        provider,
+        model
+      }
+    };
+  }
+
   async maybeRegenerateWithMemoryLookup({
     settings,
+    followupSettings = null,
     systemPrompt,
     generation,
     directive,
@@ -3150,7 +3185,7 @@ export class ClankerBot {
           .concat(":lookup_followup")
       };
       const generationPayload = {
-        settings,
+        settings: followupSettings || settings,
         systemPrompt,
         userPrompt: followupPrompt,
         trace: followupTrace
@@ -3998,8 +4033,10 @@ export class ClankerBot {
       }
     });
     let directive = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
+    const followupGenerationSettings = this.resolveReplyFollowupGenerationSettings(settings);
     const followup = await this.maybeRegenerateWithMemoryLookup({
       settings,
+      followupSettings: followupGenerationSettings,
       systemPrompt: automationSystemPrompt,
       generation,
       directive,

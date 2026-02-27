@@ -13,6 +13,8 @@ const SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*([\s\S]*?)\s*\]\]/gi;
 const MAX_SOUNDBOARD_DIRECTIVE_REF_LEN = 180;
 const WAKE_SUFFIX_VARIANT_MIN_WAKE_LEN = 6;
 const WAKE_SUFFIX_VARIANT_MAX_EXTRA_CHARS = 4;
+const WAKE_FUZZY_MIN_LEN = 5;
+const WAKE_TWO_EDIT_DISTANCE_MIN_LEN = 9;
 
 export function defaultExitMessage(reason) {
   if (reason === "max_duration") return "time cap reached, dipping from vc.";
@@ -350,8 +352,9 @@ export function isBotNameAddressed({
     for (let tokenIndex = 0; tokenIndex < transcriptTokens.length; tokenIndex += 1) {
       const spokenToken = transcriptTokens[tokenIndex];
       const matchedWakeToken = botWakeTokens.find((wakeToken) => isLikelyWakeTokenVariant(spokenToken, wakeToken));
-      if (!matchedWakeToken) continue;
-      return true;
+      if (matchedWakeToken) {
+        return true;
+      }
     }
   }
 
@@ -379,9 +382,6 @@ function buildBotWakeTokens(botName = "") {
     if (token.endsWith("er") && token.length >= 6) {
       expanded.add(token.slice(0, -2));
     }
-    if (token.endsWith("y") && token.length >= 5) {
-      expanded.add(token.slice(0, -1));
-    }
   }
   return [...expanded];
 }
@@ -393,11 +393,26 @@ function isLikelyWakeTokenVariant(spokenToken = "", wakeToken = "") {
   if (spoken === wake) return true;
   if (spoken.length < 3 || wake.length < 3) return false;
   if (spoken[0] !== wake[0]) return false;
+  if (wake.length < WAKE_FUZZY_MIN_LEN) return false;
 
-  const maxDistance = Math.max(spoken.length, wake.length) >= 7 ? 2 : 1;
+  // Support common nickname contraction like "clanker" -> "clanky".
+  if (wake.endsWith("er") && wake.length >= 6 && spoken.endsWith("y")) {
+    const yVariant = `${wake.slice(0, -2)}y`;
+    if (spoken === yVariant) return true;
+  }
+
+  if (Math.abs(spoken.length - wake.length) <= 1 && spoken.at(-1) !== wake.at(-1)) return false;
+
+  const maxLen = Math.max(spoken.length, wake.length);
+  const maxDistance = maxLen >= WAKE_TWO_EDIT_DISTANCE_MIN_LEN ? 2 : 1;
   if (Math.abs(spoken.length - wake.length) <= maxDistance) {
-    if (boundedLevenshteinDistance(spoken, wake, maxDistance) <= maxDistance) {
-      return true;
+    const distance = boundedLevenshteinDistance(spoken, wake, maxDistance);
+    if (distance <= maxDistance) {
+      const similarity = 1 - distance / maxLen;
+      const minSimilarity = maxLen >= WAKE_TWO_EDIT_DISTANCE_MIN_LEN ? 0.74 : 0.82;
+      if (similarity >= minSimilarity) {
+        return true;
+      }
     }
   }
 
@@ -409,8 +424,12 @@ function isLikelyWakeTokenVariant(spokenToken = "", wakeToken = "") {
     const extraChars = spoken.length - wake.length;
     if (extraChars <= WAKE_SUFFIX_VARIANT_MAX_EXTRA_CHARS) {
       const spokenPrefix = spoken.slice(0, wake.length);
-      if (boundedLevenshteinDistance(spokenPrefix, wake, 1) <= 1) {
-        return true;
+      const prefixDistance = boundedLevenshteinDistance(spokenPrefix, wake, 1);
+      if (prefixDistance <= 1) {
+        const prefixSimilarity = 1 - prefixDistance / wake.length;
+        if (prefixSimilarity >= 0.84) {
+          return true;
+        }
       }
     }
   }
