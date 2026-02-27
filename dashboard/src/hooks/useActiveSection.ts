@@ -34,7 +34,7 @@ export function useActiveSection(ids: readonly string[]): string {
     }
 
     return () => observer.current?.disconnect();
-  }, [ids.join(",")]);
+  }, [ids]);
 
   return active;
 }

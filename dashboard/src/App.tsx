@@ -23,27 +23,30 @@ export default function App() {
   const memory = usePolling(() => api("/api/memory"), 30_000);
   const settings = usePolling(() => api("/api/settings"), 0);
   const llmModels = usePolling(() => api("/api/llm/models"), 0);
+  const reloadStats = stats.reload;
+  const reloadMemory = memory.reload;
+  const reloadSettings = settings.reload;
 
   const handleSettingsSave = useCallback(async (patch) => {
     try {
       await api("/api/settings", { method: "PUT", body: patch });
-      settings.reload();
-      stats.reload();
+      reloadSettings();
+      reloadStats();
       notify("Settings saved");
     } catch (err) {
       notify(err.message, "error");
     }
-  }, [settings.reload, stats.reload, notify]);
+  }, [reloadSettings, reloadStats, notify]);
 
   const handleMemoryRefresh = useCallback(async () => {
     try {
       await api("/api/memory/refresh", { method: "POST" });
-      memory.reload();
+      reloadMemory();
       notify("Memory regenerated");
     } catch (err) {
       notify(err.message, "error");
     }
-  }, [memory.reload, notify]);
+  }, [reloadMemory, notify]);
 
   const isReady = stats.data?.runtime?.isReady ?? false;
 

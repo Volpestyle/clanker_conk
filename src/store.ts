@@ -396,7 +396,7 @@ export class Store {
     if (!id) return false;
 
     const singleTriggerNeedle = `%"triggerMessageId":"${id}"%`;
-    const triggerListNeedle = `%"triggerMessageIds"%\"${id}\"%`;
+    const triggerListNeedle = `%"triggerMessageIds"%"${id}"%`;
     const row = this.db
       .prepare(
         `SELECT 1
