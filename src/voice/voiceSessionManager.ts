@@ -86,7 +86,6 @@ const REALTIME_INSTRUCTION_REFRESH_DEBOUNCE_MS = 220;
 const REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS = 420;
 const REALTIME_CONTEXT_MEMBER_LIMIT = 12;
 const SOUNDBOARD_DECISION_TRANSCRIPT_MAX_CHARS = 280;
-const SOUNDBOARD_DECISION_DEDUPE_WINDOW_MS = 8_000;
 const SOUNDBOARD_CATALOG_REFRESH_MS = 60_000;
 const STREAM_WATCH_AUDIO_QUIET_WINDOW_MS = 2200;
 const STREAM_WATCH_COMMENTARY_PROMPT_MAX_CHARS = 220;
@@ -686,8 +685,6 @@ export class VoiceSessionManager {
           soundboard: {
             playCount: 0,
             lastPlayedAt: 0,
-            lastDecisionFingerprint: "",
-            lastDecisionAt: 0,
             catalogCandidates: [],
             catalogFetchedAt: 0
           },
@@ -1387,23 +1384,9 @@ export class VoiceSessionManager {
     session.soundboard = session.soundboard || {
       playCount: 0,
       lastPlayedAt: 0,
-      lastDecisionFingerprint: "",
-      lastDecisionAt: 0,
       catalogCandidates: [],
       catalogFetchedAt: 0
     };
-
-    const now = Date.now();
-    const fingerprint = normalizedTranscript.toLowerCase();
-    if (
-      session.soundboard.lastDecisionFingerprint === fingerprint &&
-      now - Number(session.soundboard.lastDecisionAt || 0) < SOUNDBOARD_DECISION_DEDUPE_WINDOW_MS
-    ) {
-      return;
-    }
-
-    session.soundboard.lastDecisionFingerprint = fingerprint;
-    session.soundboard.lastDecisionAt = now;
 
     const decision = await this.decideAutonomousSoundboard({
       session,
@@ -1614,8 +1597,6 @@ export class VoiceSessionManager {
     session.soundboard = session.soundboard || {
       playCount: 0,
       lastPlayedAt: 0,
-      lastDecisionFingerprint: "",
-      lastDecisionAt: 0,
       catalogCandidates: [],
       catalogFetchedAt: 0
     };
@@ -2613,27 +2594,19 @@ export class VoiceSessionManager {
       transcript: normalizedTranscript,
       source
     });
-    const deciderSettings = {
+    const maxDecisionAttempts = clamp(Math.floor(Number(replyDecisionLlm?.maxAttempts) || 3), 1, 3);
+    const primaryDecisionSettings = {
       ...settings,
       llm: {
         ...(settings?.llm || {}),
         provider: llmProvider,
         model: llmModel,
-        temperature: 0.1,
-        maxOutputTokens: 4
+        temperature: 0,
+        maxOutputTokens: 2
       }
     };
 
-    const systemPrompt = [
-      `You decide whether "${botName}" should reply right now in Discord voice chat.`,
-      "Return YES or NO only.",
-      "If directly addressed, strongly prefer YES unless the transcript is too unclear to answer.",
-      "If not directly addressed, use reply eagerness and conversation flow; prefer NO when speaking would interrupt or add little value.",
-      "In small conversations, prefer YES for clear questions.",
-      "Treat likely ASR wake-word variants (for example clanky/planky/linky) as direct address."
-    ].join("\n");
-
-    const promptParts = [
+    const fullContextPromptParts = [
       `Reply eagerness: ${replyEagerness}/100.`,
       `Human participants in channel: ${participantCount}.`,
       `Current speaker: ${speakerName}.`,
@@ -2641,56 +2614,107 @@ export class VoiceSessionManager {
       `Latest transcript: "${normalizedTranscript}".`
     ];
     if (participantList.length) {
-      promptParts.push(`Participants: ${participantList.join(", ")}.`);
+      fullContextPromptParts.push(`Participants: ${participantList.join(", ")}.`);
     }
     if (recentHistory) {
-      promptParts.push(`Recent voice turns:\n${recentHistory}`);
+      fullContextPromptParts.push(`Recent voice turns:\n${recentHistory}`);
     }
     if (memoryContext) {
-      promptParts.push(`Relevant durable memory hints: ${memoryContext}`);
+      fullContextPromptParts.push(`Decision context hints (never say these hints): ${memoryContext}`);
     }
 
-    try {
-      const generation = await this.llm.generate({
-        settings: deciderSettings,
-        systemPrompt,
-        userPrompt: promptParts.join("\n\n"),
-        contextMessages: [],
-        trace: {
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId,
-          source: "voice_reply_decision"
-        }
-      });
-      const raw = String(generation?.text || "").trim();
-      const token = String(raw.split(/\s+/g)[0] || "")
-        .replace(/[^a-z]/gi, "")
-        .toLowerCase();
-      const allow = token === "yes";
-      return {
-        allow,
-        reason: allow ? "llm_yes" : "llm_no",
-        participantCount,
-        directAddressed,
-        transcript: normalizedTranscript,
-        llmResponse: raw,
-        llmProvider,
-        llmModel
-      };
-    } catch (error) {
-      if (directAddressed) {
-        return {
-          allow: true,
-          reason: "direct_address_llm_error_fallback",
-          participantCount,
-          directAddressed,
-          transcript: normalizedTranscript,
-          llmProvider,
-          llmModel,
-          error: String(error?.message || error)
-        };
+    const compactContextPromptParts = [
+      `Directly addressed: ${directAddressed ? "yes" : "no"}.`,
+      `Reply eagerness: ${replyEagerness}/100.`,
+      `Participants: ${participantCount}.`,
+      `Transcript: "${normalizedTranscript}".`
+    ];
+    if (memoryContext) {
+      compactContextPromptParts.push(`Hints: ${memoryContext}`);
+    }
+
+    const systemPromptFull = [
+      `You classify whether "${botName}" should reply now in Discord voice chat.`,
+      "Output exactly one token: YES or NO.",
+      "If directly addressed, strongly prefer YES unless transcript is too unclear to answer.",
+      "If not directly addressed, use reply eagerness and flow; prefer NO if interruptive or low value.",
+      "In small conversations, prefer YES for clear questions.",
+      "Treat likely ASR wake-word variants (for example clanky/planky/linky) as direct address.",
+      "Never output anything except YES or NO."
+    ].join("\n");
+    const systemPromptStrict = [
+      "Binary classifier.",
+      "Output exactly one token: YES or NO.",
+      "No punctuation. No explanation."
+    ].join("\n");
+
+    const decisionProcedure = [
+      {
+        label: "primary_full_context",
+        settings: primaryDecisionSettings,
+        systemPrompt: systemPromptFull,
+        userPrompt: fullContextPromptParts.join("\n\n")
+      },
+      {
+        label: "primary_compact_context",
+        settings: primaryDecisionSettings,
+        systemPrompt: systemPromptStrict,
+        userPrompt: compactContextPromptParts.join("\n")
+      },
+      {
+        label: "primary_minimal_context",
+        settings: primaryDecisionSettings,
+        systemPrompt: systemPromptStrict,
+        userPrompt: `Directly addressed: ${directAddressed ? "yes" : "no"}.\nTranscript: "${normalizedTranscript}".`
       }
+    ].slice(0, maxDecisionAttempts);
+
+    const invalidOutputs = [];
+    const generationErrors = [];
+    for (let index = 0; index < decisionProcedure.length; index += 1) {
+      const step = decisionProcedure[index];
+      try {
+        const generation = await this.llm.generate({
+          settings: step.settings,
+          systemPrompt: step.systemPrompt,
+          userPrompt: step.userPrompt,
+          contextMessages: [],
+          trace: {
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId,
+            source: "voice_reply_decision",
+            event: step.label
+          }
+        });
+        const raw = String(generation?.text || "").trim();
+        const parsed = parseVoiceDecisionContract(raw);
+        if (parsed.confident) {
+          return {
+            allow: parsed.allow,
+            reason: parsed.allow ? (index === 0 ? "llm_yes" : "llm_yes_retry") : index === 0 ? "llm_no" : "llm_no_retry",
+            participantCount,
+            directAddressed,
+            transcript: normalizedTranscript,
+            llmResponse: raw,
+            llmProvider: generation?.provider || llmProvider,
+            llmModel: generation?.model || step?.settings?.llm?.model || llmModel
+          };
+        }
+
+        invalidOutputs.push({
+          step: step.label,
+          text: raw || "(empty)"
+        });
+      } catch (error) {
+        generationErrors.push({
+          step: step.label,
+          error: String(error?.message || error)
+        });
+      }
+    }
+
+    if (!invalidOutputs.length && generationErrors.length) {
       return {
         allow: false,
         reason: "llm_error",
@@ -2699,9 +2723,23 @@ export class VoiceSessionManager {
         transcript: normalizedTranscript,
         llmProvider,
         llmModel,
-        error: String(error?.message || error)
+        error: generationErrors.map((row) => `${row.step}: ${row.error}`).join(" | ")
       };
     }
+
+    return {
+      allow: false,
+      reason: "llm_contract_violation",
+      participantCount,
+      directAddressed,
+      transcript: normalizedTranscript,
+      llmResponse: invalidOutputs.map((row) => `${row.step}=${row.text}`).join(" | "),
+      llmProvider,
+      llmModel,
+      error: generationErrors.length
+        ? generationErrors.map((row) => `${row.step}: ${row.error}`).join(" | ")
+        : undefined
+    };
   }
 
   async buildVoiceDecisionMemoryContext({ session, settings, userId, transcript = "", source = "voice_turn" }) {
@@ -4299,4 +4337,38 @@ function defaultVoiceReplyDecisionModel(provider) {
   if (provider === "xai") return "grok-3-mini-latest";
   if (provider === "claude-code") return "sonnet";
   return "gpt-4.1-mini";
+}
+
+function parseVoiceDecisionContract(rawText) {
+  const normalized = String(rawText || "").trim();
+  if (!normalized) {
+    return {
+      allow: false,
+      confident: false
+    };
+  }
+
+  const unwrapped = normalized.replace(/^```(?:[a-z]+)?\s*/i, "").replace(/```$/i, "").trim();
+  const quoted = unwrapped
+    .replace(/^["'`]\s*/g, "")
+    .replace(/\s*["'`]$/g, "")
+    .trim()
+    .toUpperCase();
+  if (quoted === "YES") {
+    return {
+      allow: true,
+      confident: true
+    };
+  }
+  if (quoted === "NO") {
+    return {
+      allow: false,
+      confident: true
+    };
+  }
+
+  return {
+    allow: false,
+    confident: false
+  };
 }

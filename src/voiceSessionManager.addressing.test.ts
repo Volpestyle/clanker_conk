@@ -124,6 +124,61 @@ test("reply decider allows unaddressed turn when model says YES", async () => {
   assert.equal(decision.directAddressed, false);
 });
 
+test("reply decider retries contract violation output and accepts YES", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      if (callCount === 1) return { text: "Let me check my memory files first." };
+      return { text: "YES" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      botTurnOpen: false,
+      lastUnaddressedReplyAt: 0
+    },
+    userId: "speaker-1",
+    settings: baseSettings(),
+    transcript: "clanky what's up?"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "llm_yes_retry");
+  assert.equal(decision.directAddressed, true);
+  assert.equal(callCount, 2);
+});
+
+test("reply decider blocks contract violations after bounded retries", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      return { text: "maybe later" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      botTurnOpen: false,
+      lastUnaddressedReplyAt: 0
+    },
+    userId: "speaker-1",
+    settings: baseSettings(),
+    transcript: "clanky what's up?"
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "llm_contract_violation");
+  assert.equal(decision.directAddressed, true);
+  assert.equal(callCount, 3);
+});
+
 test("reply decider respects cooldown for unaddressed turns", async () => {
   const manager = createManager({
     generate: async () => ({ text: "YES" })

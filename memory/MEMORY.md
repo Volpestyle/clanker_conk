@@ -28,14 +28,14 @@
 - [guild:1052402897645752351] Memory line: general: Mewgenics has released (as of this conversation). CURSED conk confirmed this.
 
 ## Recent Journal Highlights
+- donky conk: [guild:1052402897645752351 channel:1475944808198574205] join clank
+- donky conk: [guild:1052402897645752351 channel:1475944808198574205] Clanky, why did you play that sound when you joined?
+- donky conk: [guild:1052402897645752351 channel:1475944808198574205] Why did you play that sound when you joined?
+- donky conk: [guild:1052402897645752351 channel:1475944808198574205] Yo, what's up, Clanky?
+- donky conk: [guild:1052402897645752351 channel:1475944808198574205] join vc
+- donky conk: [guild:1052402897645752351 channel:1475944808198574205] hi clunk
+- donky conk: [guild:1052402897645752351 channel:1475944808198574205] hi clanky
 - donky conk: [guild:1052402897645752351 channel:1475944808198574205] Mhm.
-- donky conk: [guild:1052402897645752351 channel:1475944808198574205] Clinky, hit me with a sound effect.
-- donky conk: [guild:1052402897645752351 channel:1475944808198574205] Hm.
-- donky conk: [guild:1052402897645752351 channel:1475944808198574205] I'm trying to get into you, into that booty.
-- donky conk: [guild:1052402897645752351 channel:1475944808198574205] Yo, Clink here. My friend Joey wants to suck your dick.
-- donky conk: [guild:1052402897645752351 channel:1475944808198574205] Oh, my friend Joey wants to suck your dick.
-- donky conk: [guild:1052402897645752351 channel:1475944808198574205] Yo, what's good, clinker?
-- donky conk: [guild:1052402897645752351 channel:1475944808198574205] clinkeroni, join vc
 - CURSED conk: be the people we wanted to be when we were young
 - CURSED conk: leave our old lives behind
 - CURSED conk: clanker let’s just runaway together
