@@ -1,0 +1,379 @@
+import {
+  formatAutomationSchedule,
+  resolveInitialNextRunAt
+} from "../automation.ts";
+import { normalizeSkipSentinel } from "../botHelpers.ts";
+import { sanitizeBotText } from "../utils.ts";
+
+const MAX_AUTOMATIONS_PER_GUILD = 90;
+const MAX_AUTOMATION_LIST_ROWS = 10;
+
+export function composeAutomationControlReply({ modelText, fallbackText, detailLines = [] }) {
+  const cleanedModel = sanitizeBotText(normalizeSkipSentinel(modelText || ""), 500);
+  const cleanedFallback = sanitizeBotText(normalizeSkipSentinel(fallbackText || ""), 500);
+  const body = cleanedModel && cleanedModel !== "[SKIP]" ? cleanedModel : cleanedFallback;
+  if (!body || body === "[SKIP]") return "";
+
+  const extra = (Array.isArray(detailLines) ? detailLines : [])
+    .map((line) => String(line || "").trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  if (!extra.length) return body;
+
+  return sanitizeBotText(`${body}\n${extra.join("\n")}`, 1700);
+}
+
+export async function applyAutomationControlAction(bot, { message, settings, automationAction }) {
+  const operation = String(automationAction?.operation || "")
+    .trim()
+    .toLowerCase();
+  const guildId = String(message.guildId || "").trim();
+  if (!guildId) {
+    return {
+      handled: true,
+      fallbackText: "can't manage schedules outside a server channel rn.",
+      detailLines: [],
+      metadata: {
+        operation,
+        ok: false,
+        reason: "missing_guild_scope"
+      }
+    };
+  }
+
+  if (operation === "list") {
+    const rows = bot.store.listAutomations({
+      guildId,
+      statuses: ["active", "paused"],
+      limit: MAX_AUTOMATION_LIST_ROWS
+    });
+    if (!rows.length) {
+      return {
+        handled: true,
+        fallbackText: "no scheduled jobs right now.",
+        detailLines: [],
+        metadata: {
+          operation,
+          ok: true,
+          count: 0
+        }
+      };
+    }
+
+    const detailLines = rows.map((row) => formatAutomationListLine(row));
+    return {
+      handled: true,
+      fallbackText: "here's what's on deck:",
+      detailLines,
+      metadata: {
+        operation,
+        ok: true,
+        count: rows.length,
+        automationIds: rows.map((row) => row.id)
+      }
+    };
+  }
+
+  if (operation === "create") {
+    const instruction = String(automationAction?.instruction || "").trim();
+    const schedule = automationAction?.schedule || null;
+    if (!instruction || !schedule) {
+      return {
+        handled: true,
+        fallbackText: "i need both a task and schedule to set that up.",
+        detailLines: [],
+        metadata: {
+          operation,
+          ok: false,
+          reason: "missing_schedule_or_instruction"
+        }
+      };
+    }
+
+    const currentCount = bot.store.countAutomations({
+      guildId,
+      statuses: ["active", "paused"]
+    });
+    if (currentCount >= MAX_AUTOMATIONS_PER_GUILD) {
+      return {
+        handled: true,
+        fallbackText: `too many scheduled jobs already (${MAX_AUTOMATIONS_PER_GUILD} max).`,
+        detailLines: [],
+        metadata: {
+          operation,
+          ok: false,
+          reason: "automation_cap_reached",
+          currentCount
+        }
+      };
+    }
+
+    const requestedChannelId = String(automationAction?.targetChannelId || "").trim();
+    const targetChannelId = requestedChannelId || message.channelId;
+    if (!bot.isChannelAllowed(settings, targetChannelId)) {
+      return {
+        handled: true,
+        fallbackText: "that channel is blocked by my current settings.",
+        detailLines: [],
+        metadata: {
+          operation,
+          ok: false,
+          reason: "target_channel_blocked",
+          targetChannelId
+        }
+      };
+    }
+
+    const channel = bot.client.channels.cache.get(String(targetChannelId));
+    if (!channel || !channel.isTextBased?.() || typeof channel.send !== "function") {
+      return {
+        handled: true,
+        fallbackText: "can't post there right now, pick another channel.",
+        detailLines: [],
+        metadata: {
+          operation,
+          ok: false,
+          reason: "target_channel_unavailable",
+          targetChannelId
+        }
+      };
+    }
+
+    const nextRunAt = resolveInitialNextRunAt({
+      schedule,
+      nowMs: Date.now(),
+      runImmediately: Boolean(automationAction?.runImmediately)
+    });
+    if (!nextRunAt) {
+      return {
+        handled: true,
+        fallbackText: "that schedule format didn't parse cleanly. try like 'daily at 1pm'.",
+        detailLines: [],
+        metadata: {
+          operation,
+          ok: false,
+          reason: "schedule_invalid"
+        }
+      };
+    }
+
+    const title = String(automationAction?.title || "").trim() || String(instruction).slice(0, 80);
+    const created = bot.store.createAutomation({
+      guildId,
+      channelId: String(channel.id),
+      createdByUserId: message.author?.id || "unknown",
+      createdByName: message.member?.displayName || message.author?.username || "unknown",
+      title,
+      instruction,
+      schedule,
+      nextRunAt
+    });
+
+    if (!created) {
+      return {
+        handled: true,
+        fallbackText: "that didn't save right. try again in a sec.",
+        detailLines: [],
+        metadata: {
+          operation,
+          ok: false,
+          reason: "create_failed"
+        }
+      };
+    }
+
+    bot.store.logAction({
+      kind: "automation_created",
+      guildId,
+      channelId: created.channel_id,
+      userId: message.author?.id || null,
+      content: `${created.title}: ${created.instruction}`.slice(0, 400),
+      metadata: {
+        automationId: created.id,
+        schedule: created.schedule,
+        nextRunAt: created.next_run_at
+      }
+    });
+
+    bot.maybeRunAutomationCycle().catch(() => undefined);
+
+    return {
+      handled: true,
+      fallbackText: "bet, scheduled.",
+      detailLines: [formatAutomationListLine(created)],
+      metadata: {
+        operation,
+        ok: true,
+        automationId: created.id,
+        runImmediately: Boolean(automationAction?.runImmediately)
+      }
+    };
+  }
+
+  if (operation === "pause" || operation === "resume" || operation === "delete") {
+    const targetRows = resolveAutomationTargetsForControl(bot, {
+      guildId,
+      channelId: message.channelId,
+      operation,
+      automationId: automationAction?.automationId,
+      targetQuery: automationAction?.targetQuery
+    });
+    if (!targetRows.length) {
+      return {
+        handled: true,
+        fallbackText: "couldn't find a matching scheduled job.",
+        detailLines: [],
+        metadata: {
+          operation,
+          ok: false,
+          reason: "no_matching_automation",
+          targetQuery: automationAction?.targetQuery || null,
+          automationId: automationAction?.automationId || null
+        }
+      };
+    }
+
+    const nowMs = Date.now();
+    const updatedRows = [];
+    for (const row of targetRows) {
+      if (operation === "pause") {
+        const paused = bot.store.setAutomationStatus({
+          automationId: row.id,
+          guildId,
+          status: "paused",
+          nextRunAt: null
+        });
+        if (paused) updatedRows.push(paused);
+        continue;
+      }
+
+      if (operation === "resume") {
+        const nextRunAt = resolveInitialNextRunAt({
+          schedule: row.schedule,
+          nowMs,
+          runImmediately: false
+        });
+        if (!nextRunAt) continue;
+        const resumed = bot.store.setAutomationStatus({
+          automationId: row.id,
+          guildId,
+          status: "active",
+          nextRunAt
+        });
+        if (resumed) updatedRows.push(resumed);
+        continue;
+      }
+
+      const deleted = bot.store.setAutomationStatus({
+        automationId: row.id,
+        guildId,
+        status: "deleted",
+        nextRunAt: null
+      });
+      if (deleted) updatedRows.push(deleted);
+    }
+
+    if (!updatedRows.length) {
+      return {
+        handled: true,
+        fallbackText: "found it, but couldn't update it cleanly.",
+        detailLines: [],
+        metadata: {
+          operation,
+          ok: false,
+          reason: "status_update_failed",
+          targetCount: targetRows.length
+        }
+      };
+    }
+
+    bot.store.logAction({
+      kind: "automation_updated",
+      guildId,
+      channelId: message.channelId,
+      userId: message.author?.id || null,
+      content: `${operation}: ${updatedRows.map((row) => `#${row.id}`).join(", ")}`.slice(0, 400),
+      metadata: {
+        operation,
+        updatedIds: updatedRows.map((row) => row.id),
+        targetQuery: automationAction?.targetQuery || null
+      }
+    });
+
+    if (operation === "resume") {
+      bot.maybeRunAutomationCycle().catch(() => undefined);
+    }
+
+    const verb = operation === "pause" ? "paused" : operation === "resume" ? "resumed" : "deleted";
+    return {
+      handled: true,
+      fallbackText: `${verb}.`,
+      detailLines: updatedRows.map((row) => formatAutomationListLine(row)),
+      metadata: {
+        operation,
+        ok: true,
+        updatedIds: updatedRows.map((row) => row.id)
+      }
+    };
+  }
+
+  return false;
+}
+
+export function resolveAutomationTargetsForControl(
+  bot,
+  { guildId, channelId, operation, automationId = null, targetQuery = "" }
+) {
+  const statuses = operation === "pause" ? ["active"] : operation === "resume" ? ["paused"] : ["active", "paused"];
+  const normalizedQuery = String(targetQuery || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+
+  if (Number.isInteger(Number(automationId)) && Number(automationId) > 0) {
+    const row = bot.store.getAutomationById(Number(automationId), guildId);
+    if (!row || !statuses.includes(row.status)) return [];
+    return [row];
+  }
+
+  if (normalizedQuery) {
+    const inChannel = bot.store.findAutomationsByQuery({
+      guildId,
+      channelId,
+      query: normalizedQuery,
+      statuses,
+      limit: 8
+    });
+    if (inChannel.length) return inChannel;
+
+    return bot.store.findAutomationsByQuery({
+      guildId,
+      query: normalizedQuery,
+      statuses,
+      limit: 8
+    });
+  }
+
+  const fallback = bot.store.getMostRecentAutomations({
+    guildId,
+    channelId,
+    statuses,
+    limit: 1
+  });
+  if (fallback.length) return fallback;
+
+  return bot.store.getMostRecentAutomations({
+    guildId,
+    statuses,
+    limit: 1
+  });
+}
+
+export function formatAutomationListLine(row) {
+  const channelLabel = row?.channel_id ? `<#${row.channel_id}>` : "(unknown channel)";
+  const scheduleLabel = formatAutomationSchedule(row?.schedule);
+  const nextRunLabel = row?.next_run_at ? new Date(row.next_run_at).toLocaleString() : "paused";
+  const title = String(row?.title || "scheduled task").slice(0, 80);
+  const status = String(row?.status || "active");
+  return `- #${row?.id} [${status}] ${title} | ${scheduleLabel} | next: ${nextRunLabel} | ${channelLabel}`;
+}

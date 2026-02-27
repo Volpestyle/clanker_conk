@@ -519,19 +519,9 @@ export class MemoryManager {
       : "(No daily files yet.)";
 
     const markdown = [
-      "# Clanker Conk Memory",
+      "# Durable Memory Snapshot",
       "",
-      "## Identity",
-      "- Name: clanker conk",
-      "- Role: chat-native server bot with playful Gen Z/Gen A flavor.",
-      "- Hard limitations:",
-      "  - Cannot play non-text games.",
-      "  - Cannot perform real-world actions.",
-      "",
-      "## Memory Workflow",
-      "- Daily logs grow append-only in `memory/YYYY-MM-DD.md`.",
-      "- This file is a curated snapshot distilled from durable facts + recent daily logs.",
-      `- Recent daily files: ${dailyFilesLine}`,
+      "_Operator-facing summary. Runtime prompts use indexed durable facts + retrieval, not this markdown file directly._",
       "",
       "## People (Durable Facts)",
       ...(peopleSection.length ? peopleSection : ["- (No stable people facts yet.)"]),
@@ -540,7 +530,11 @@ export class MemoryManager {
       ...(loreSection.length ? loreSection : ["- (No durable lore lines yet.)"]),
       "",
       "## Recent Journal Highlights",
-      ...(highlightsSection.length ? highlightsSection : ["- (No recent highlights yet.)"])
+      ...(highlightsSection.length ? highlightsSection : ["- (No recent highlights yet.)"]),
+      "",
+      "## Source Daily Logs",
+      "- Daily logs are append-only in `memory/YYYY-MM-DD.md`.",
+      `- Recent files: ${dailyFilesLine}`
     ].join("\n");
 
     await fs.mkdir(this.memoryDirPath, { recursive: true });

@@ -19,6 +19,7 @@ export const MAX_GIF_QUERY_LEN = 120;
 const MAX_MEMORY_LINE_LEN = 180;
 const MAX_SOUNDBOARD_REF_LEN = 180;
 export const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
+export const MAX_IMAGE_LOOKUP_QUERY_LEN = 220;
 const MAX_REPLY_TEXT_LEN = 1200;
 const MAX_AUTOMATION_TITLE_LEN = 90;
 const MAX_AUTOMATION_INSTRUCTION_LEN = 360;
@@ -595,6 +596,7 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
       reactionEmoji: null,
       webSearchQuery: null,
       memoryLookupQuery: null,
+      imageLookupQuery: null,
       memoryLine: null,
       automationAction: {
         operation: null,
@@ -626,6 +628,8 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
   const webSearchQuery = normalizeDirectiveText(parsed?.webSearchQuery, MAX_WEB_QUERY_LEN) || null;
   const memoryLookupQuery =
     normalizeDirectiveText(parsed?.memoryLookupQuery, MAX_MEMORY_LOOKUP_QUERY_LEN) || null;
+  const imageLookupQuery =
+    normalizeDirectiveText(parsed?.imageLookupQuery, MAX_IMAGE_LOOKUP_QUERY_LEN) || null;
   const memoryLine = normalizeDirectiveText(parsed?.memoryLine, MAX_MEMORY_LINE_LEN) || null;
   const automationAction = normalizeStructuredAutomationAction(parsed?.automationAction);
   const mediaDirective = normalizeStructuredMediaDirective(parsed?.media, maxLen);
@@ -642,6 +646,7 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     reactionEmoji,
     webSearchQuery,
     memoryLookupQuery,
+    imageLookupQuery,
     memoryLine,
     automationAction,
     voiceIntent,
