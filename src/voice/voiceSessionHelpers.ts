@@ -4,7 +4,6 @@ import {
   createAudioResource,
   StreamType
 } from "@discordjs/voice";
-import { hasBotKeyword } from "../utils.ts";
 import { parseSoundboardReference } from "./soundboardDirector.ts";
 
 export const REALTIME_MEMORY_FACT_LIMIT = 8;
@@ -12,24 +11,8 @@ export const SOUNDBOARD_MAX_CANDIDATES = 40;
 const OPENAI_REALTIME_MIN_COMMIT_AUDIO_MS = 100;
 const SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*([\s\S]*?)\s*\]\]/gi;
 const MAX_SOUNDBOARD_DIRECTIVE_REF_LEN = 180;
-const VOICE_WAKE_GREETINGS = new Set(["yo", "hey", "hi", "hello", "sup", "ok", "okay", "ayo", "bro", "dude"]);
-const VOICE_WAKE_REQUEST_HINTS = new Set([
-  "can",
-  "could",
-  "would",
-  "do",
-  "does",
-  "did",
-  "what",
-  "why",
-  "how",
-  "where",
-  "when",
-  "who",
-  "please",
-  "tell",
-  "say"
-]);
+const WAKE_SUFFIX_VARIANT_MIN_WAKE_LEN = 6;
+const WAKE_SUFFIX_VARIANT_MAX_EXTRA_CHARS = 4;
 
 export function defaultExitMessage(reason) {
   if (reason === "max_duration") return "time cap reached, dipping from vc.";
@@ -347,35 +330,39 @@ export function findMentionedSoundboardReference(options, text) {
   return options.find((entry) => raw.includes(String(entry.reference || "").toLowerCase())) || null;
 }
 
-export function isVoiceTurnAddressedToBot(transcript, settings) {
+export function isBotNameAddressed({
+  transcript,
+  botName = ""
+}) {
   const normalized = String(transcript || "")
     .trim()
     .toLowerCase();
   if (!normalized) return false;
 
-  const botName = String(settings?.botName || "")
+  const normalizedBotName = String(botName || "")
     .trim()
     .toLowerCase();
-  if (botName && normalized.includes(botName)) return true;
+  if (normalizedBotName && normalized.includes(normalizedBotName)) return true;
 
   const transcriptTokens = tokenizeWakeTokens(normalized);
-  const botWakeTokens = buildBotWakeTokens(botName);
+  const botWakeTokens = buildBotWakeTokens(normalizedBotName);
   if (transcriptTokens.length && botWakeTokens.length) {
     for (let tokenIndex = 0; tokenIndex < transcriptTokens.length; tokenIndex += 1) {
       const spokenToken = transcriptTokens[tokenIndex];
       const matchedWakeToken = botWakeTokens.find((wakeToken) => isLikelyWakeTokenVariant(spokenToken, wakeToken));
       if (!matchedWakeToken) continue;
-      if (isLikelyDirectAddressWakeContext(transcriptTokens, tokenIndex)) {
-        return true;
-      }
+      return true;
     }
   }
 
-  const useLegacyKeywordFallback =
-    !botWakeTokens.length || botWakeTokens.some((wakeToken) => hasBotKeyword(wakeToken));
-  if (useLegacyKeywordFallback && hasBotKeyword(normalized)) return true;
-
   return false;
+}
+
+export function isVoiceTurnAddressedToBot(transcript, settings) {
+  return isBotNameAddressed({
+    transcript,
+    botName: settings?.botName || ""
+  });
 }
 
 function tokenizeWakeTokens(value = "") {
@@ -408,9 +395,27 @@ function isLikelyWakeTokenVariant(spokenToken = "", wakeToken = "") {
   if (spoken[0] !== wake[0]) return false;
 
   const maxDistance = Math.max(spoken.length, wake.length) >= 7 ? 2 : 1;
-  if (Math.abs(spoken.length - wake.length) > maxDistance) return false;
+  if (Math.abs(spoken.length - wake.length) <= maxDistance) {
+    if (boundedLevenshteinDistance(spoken, wake, maxDistance) <= maxDistance) {
+      return true;
+    }
+  }
 
-  return boundedLevenshteinDistance(spoken, wake, maxDistance) <= maxDistance;
+  // Allow nickname-style suffix variants on longer wake tokens.
+  if (
+    wake.length >= WAKE_SUFFIX_VARIANT_MIN_WAKE_LEN &&
+    spoken.length > wake.length
+  ) {
+    const extraChars = spoken.length - wake.length;
+    if (extraChars <= WAKE_SUFFIX_VARIANT_MAX_EXTRA_CHARS) {
+      const spokenPrefix = spoken.slice(0, wake.length);
+      if (boundedLevenshteinDistance(spokenPrefix, wake, 1) <= 1) {
+        return true;
+      }
+    }
+  }
+
+  return false;
 }
 
 function boundedLevenshteinDistance(left = "", right = "", maxDistance = 2) {
@@ -438,19 +443,6 @@ function boundedLevenshteinDistance(left = "", right = "", maxDistance = 2) {
     previous = current;
   }
   return previous[rightWord.length];
-}
-
-function isLikelyDirectAddressWakeContext(tokens, tokenIndex = 0) {
-  if (!Array.isArray(tokens) || !tokens.length) return false;
-  if (tokenIndex <= 0) return true;
-
-  const previous = String(tokens[tokenIndex - 1] || "").toLowerCase();
-  if (VOICE_WAKE_GREETINGS.has(previous)) return true;
-
-  const next = String(tokens[tokenIndex + 1] || "").toLowerCase();
-  if (VOICE_WAKE_REQUEST_HINTS.has(next)) return true;
-
-  return false;
 }
 
 export function shouldAllowVoiceNsfwHumor(settings) {

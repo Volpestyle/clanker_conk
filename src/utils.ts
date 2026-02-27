@@ -2,10 +2,6 @@ export function nowIso() {
   return new Date().toISOString();
 }
 
-const BOT_KEYWORD_PREFIXES = ["clank", "clink", "clunk", "clenk", "clonk"];
-const BOT_KEYWORD_PATTERN = `\\b(?:${BOT_KEYWORD_PREFIXES.join("|")})[a-z0-9_-]*\\b`;
-const BOT_KEYWORD_RE = new RegExp(BOT_KEYWORD_PATTERN, "i");
-
 export function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value));
 }
@@ -77,10 +73,6 @@ export function sanitizeBotText(text, maxLen = DISCORD_MESSAGE_SAFE_LIMIT) {
   }
 
   return clean;
-}
-
-export function hasBotKeyword(text) {
-  return BOT_KEYWORD_RE.test(String(text || ""));
 }
 
 function isObject(value) {
