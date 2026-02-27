@@ -2587,6 +2587,15 @@ export class VoiceSessionManager {
 
     const lowSignalFragment = isLowSignalVoiceFragment(normalizedTranscript);
     if (lowSignalFragment) {
+      if (directAddressed && isLikelyWakeWordPing(normalizedTranscript)) {
+        return {
+          allow: true,
+          reason: "direct_address_wake_ping",
+          participantCount,
+          directAddressed,
+          transcript: normalizedTranscript
+        };
+      }
       return {
         allow: false,
         reason: "low_signal_fragment",
@@ -4583,6 +4592,19 @@ function isLowSignalVoiceFragment(transcript = "") {
   }
 
   return true;
+}
+
+function isLikelyWakeWordPing(transcript = "") {
+  const normalized = String(transcript || "")
+    .toLowerCase()
+    .trim();
+  if (!normalized) return false;
+
+  const tokenCount = normalized
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/u)
+    .filter(Boolean).length;
+  return tokenCount > 0 && tokenCount <= 3;
 }
 
 function normalizeVoiceReplyDecisionProvider(value) {

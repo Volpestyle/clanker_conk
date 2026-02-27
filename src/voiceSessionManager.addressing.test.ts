@@ -238,7 +238,7 @@ test("reply decider blocks low-signal focused speaker followup", async () => {
   assert.equal(callCount, 0);
 });
 
-test("reply decider blocks low-signal direct-addressed fragments", async () => {
+test("reply decider allows low-signal direct wake-word pings", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -256,11 +256,38 @@ test("reply decider blocks low-signal direct-addressed fragments", async () => {
     },
     userId: "speaker-1",
     settings: baseSettings(),
-    transcript: "clanker yo"
+    transcript: "clunk"
   });
 
-  assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "low_signal_fragment");
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "direct_address_wake_ping");
+  assert.equal(decision.directAddressed, true);
+  assert.equal(callCount, 0);
+});
+
+test("reply decider allows short clunker wake ping", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      return { text: "YES" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      botTurnOpen: false,
+      lastUnaddressedReplyAt: 0
+    },
+    userId: "speaker-1",
+    settings: baseSettings(),
+    transcript: "yo clunker"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "direct_address_wake_ping");
   assert.equal(decision.directAddressed, true);
   assert.equal(callCount, 0);
 });

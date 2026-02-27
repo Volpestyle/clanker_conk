@@ -66,9 +66,22 @@ test("extractSoundboardDirective strips directive and returns selected reference
   assert.equal(parsed.reference, "1234567890@111222333");
 });
 
-test("isVoiceTurnAddressedToBot catches common ASR wake-word variants", () => {
+test("isVoiceTurnAddressedToBot catches close wake-word spellings", () => {
   const settings = { botName: "clanker conk" };
-  assert.equal(isVoiceTurnAddressedToBot("Planky, what did you do today?", settings), true);
-  assert.equal(isVoiceTurnAddressedToBot("Linky can you answer this?", settings), true);
+  assert.equal(isVoiceTurnAddressedToBot("Clicker, what did we talk about yesterday?", settings), true);
+  assert.equal(isVoiceTurnAddressedToBot("yo clunker can you answer this?", settings), true);
   assert.equal(isVoiceTurnAddressedToBot("i sent you a link yesterday", settings), false);
+});
+
+test("isVoiceTurnAddressedToBot uses wake-word context to avoid incidental mentions", () => {
+  const settings = { botName: "clanker conk" };
+  assert.equal(isVoiceTurnAddressedToBot("Hi cleaner.", settings), true);
+  assert.equal(isVoiceTurnAddressedToBot("cleaner can you jump in?", settings), true);
+  assert.equal(isVoiceTurnAddressedToBot("the cleaner is broken again", settings), false);
+});
+
+test("isVoiceTurnAddressedToBot follows configured botName without clank hardcoding", () => {
+  const settings = { botName: "sparky bot" };
+  assert.equal(isVoiceTurnAddressedToBot("Sporky, can you help me with this?", settings), true);
+  assert.equal(isVoiceTurnAddressedToBot("clunker can you help me with this?", settings), false);
 });
