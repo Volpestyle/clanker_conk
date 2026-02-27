@@ -218,7 +218,7 @@ Key guardrails:
 - blocked users.
 - per-hour message and reaction limits.
 - minimum seconds between bot messages.
-- direct-address and random-chance gating for replies.
+- direct-address and recent-bot-context gating for unsolicited replies (with LLM skip as backstop).
 
 ## 6. Initiative Post Flow
 
