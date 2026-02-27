@@ -157,7 +157,6 @@ export class Store {
     this.ensureSqliteVecReady();
     const schemaMigrationSummary = this.ensureMemoryFactsSchema();
     const legacyReconcileSummary = this.reconcileLegacyScopedFacts();
-    const vectorMigrationSummary = this.ensureMemoryVectorNativeSchema();
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_memory_scope_subject ON memory_facts(guild_id, subject, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_memory_scope_channel ON memory_facts(guild_id, channel_id, created_at DESC);
@@ -166,8 +165,7 @@ export class Store {
     `);
     this.logMemoryMigrationSummary({
       schemaMigrationSummary,
-      legacyReconcileSummary,
-      vectorMigrationSummary
+      legacyReconcileSummary
     });
 
     if (!this.db.prepare("SELECT 1 FROM settings WHERE key = ?").get(SETTINGS_KEY)) {
@@ -1023,87 +1021,6 @@ export class Store {
     return this.sqliteVecReady;
   }
 
-  ensureMemoryVectorNativeSchema() {
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS memory_fact_vectors_native (
-        fact_id INTEGER NOT NULL,
-        model TEXT NOT NULL,
-        dims INTEGER NOT NULL,
-        embedding_blob BLOB NOT NULL,
-        updated_at TEXT NOT NULL,
-        PRIMARY KEY (fact_id, model)
-      );
-      CREATE INDEX IF NOT EXISTS idx_memory_vectors_native_model_dims ON memory_fact_vectors_native(model, dims);
-    `);
-    const legacyTableExists = hasTable(this.db, "memory_fact_vectors");
-    const backupTableExists = hasTable(this.db, "memory_fact_vectors_backup");
-    if (!legacyTableExists && !backupTableExists) {
-      return null;
-    }
-
-    let importedCount = 0;
-    let skippedInvalid = 0;
-    let droppedLegacyTable = 0;
-    let droppedBackupTable = 0;
-
-    this.db.exec("BEGIN");
-    try {
-      if (legacyTableExists) {
-        const sourceRows = this.db
-          .prepare("SELECT id, fact_id, created_at, updated_at, model, embedding FROM memory_fact_vectors")
-          .all();
-        const now = nowIso();
-        const upsertNative = this.db.prepare(
-          `INSERT INTO memory_fact_vectors_native(fact_id, model, dims, embedding_blob, updated_at)
-           VALUES (?, ?, ?, ?, ?)
-           ON CONFLICT(fact_id, model) DO UPDATE SET
-             dims = excluded.dims,
-             embedding_blob = excluded.embedding_blob,
-             updated_at = excluded.updated_at`
-        );
-        for (const row of sourceRows) {
-          const vector = parseStoredEmbedding(row.embedding);
-          if (!vector.length) {
-            skippedInvalid += 1;
-            continue;
-          }
-          const result = upsertNative.run(
-            Number(row.fact_id),
-            String(row.model || "").slice(0, 120),
-            vector.length,
-            vectorToBlob(vector),
-            String(row.updated_at || row.created_at || now)
-          );
-          importedCount += Number(result?.changes || 0);
-        }
-
-        this.db.exec("DROP TABLE memory_fact_vectors;");
-        droppedLegacyTable = 1;
-      }
-
-      if (backupTableExists) {
-        this.db.exec("DROP TABLE memory_fact_vectors_backup;");
-        droppedBackupTable = 1;
-      }
-
-      this.db.exec("COMMIT");
-    } catch (error) {
-      this.db.exec("ROLLBACK");
-      throw error;
-    }
-
-    if (!importedCount && !skippedInvalid && !droppedLegacyTable && !droppedBackupTable) {
-      return null;
-    }
-
-    return {
-      importedCount,
-      skippedInvalid,
-      droppedLegacyTable,
-      droppedBackupTable
-    };
-  }
-
   upsertMemoryFactVectorNative({ factId, model, embedding, updatedAt = nowIso() }) {
     const factIdInt = Number(factId);
     const normalizedModel = String(model || "").slice(0, 120);
@@ -1181,14 +1098,6 @@ export class Store {
       this.sqliteVecError = String(error?.message || error);
       return [];
     }
-  }
-
-  upsertMemoryFactVector({ factId, model, embedding }) {
-    return this.upsertMemoryFactVectorNative({
-      factId,
-      model,
-      embedding
-    });
   }
 
   getMemorySubjects(limit = 80, scope = null) {
@@ -1573,24 +1482,20 @@ export class Store {
     }
   }
 
-  logMemoryMigrationSummary({ schemaMigrationSummary, legacyReconcileSummary, vectorMigrationSummary = null }) {
+  logMemoryMigrationSummary({ schemaMigrationSummary, legacyReconcileSummary }) {
     const summary = {
       migrated: Number(schemaMigrationSummary?.migratedCount || 0),
       archived: Number(schemaMigrationSummary?.archivedCount || 0) + Number(legacyReconcileSummary?.archivedCount || 0),
       reassignedLegacy: Number(legacyReconcileSummary?.reassignedCount || 0),
       removedLegacyDuplicates: Number(legacyReconcileSummary?.removedDuplicateCount || 0),
-      removedLegacyUnresolved: Number(legacyReconcileSummary?.removedUnresolvedCount || 0),
-      vectorsImportedFromLegacy: Number(vectorMigrationSummary?.importedCount || 0),
-      vectorsInvalidSkipped: Number(vectorMigrationSummary?.skippedInvalid || 0),
-      droppedLegacyVectorTable: Number(vectorMigrationSummary?.droppedLegacyTable || 0),
-      droppedLegacyVectorBackup: Number(vectorMigrationSummary?.droppedBackupTable || 0)
+      removedLegacyUnresolved: Number(legacyReconcileSummary?.removedUnresolvedCount || 0)
     };
     const changed = Object.values(summary).some((value) => value > 0);
     if (!changed) return;
 
     this.logAction({
       kind: "memory_migration",
-      content: `memory migration applied: migrated=${summary.migrated}, archived=${summary.archived}, reassigned_legacy=${summary.reassignedLegacy}, removed_legacy_duplicates=${summary.removedLegacyDuplicates}, removed_legacy_unresolved=${summary.removedLegacyUnresolved}, vectors_imported_from_legacy=${summary.vectorsImportedFromLegacy}, vectors_invalid_skipped=${summary.vectorsInvalidSkipped}, dropped_legacy_vector_table=${summary.droppedLegacyVectorTable}, dropped_legacy_vector_backup=${summary.droppedLegacyVectorBackup}`,
+      content: `memory migration applied: migrated=${summary.migrated}, archived=${summary.archived}, reassigned_legacy=${summary.reassignedLegacy}, removed_legacy_duplicates=${summary.removedLegacyDuplicates}, removed_legacy_unresolved=${summary.removedLegacyUnresolved}`,
       metadata: summary
     });
   }
@@ -1616,19 +1521,6 @@ function buildInferredGuildExpr(tableAlias) {
 function getSqlChanges(db) {
   const row = db.prepare("SELECT changes() AS count").get();
   return Number(row?.count || 0);
-}
-
-function hasTable(db, tableName) {
-  return Boolean(
-    db
-      .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1")
-      .get(String(tableName || ""))
-  );
-}
-
-function parseStoredEmbedding(rawEmbedding) {
-  const parsed = safeJsonParse(rawEmbedding, []);
-  return normalizeEmbeddingVector(parsed);
 }
 
 function normalizeEmbeddingVector(rawEmbedding) {

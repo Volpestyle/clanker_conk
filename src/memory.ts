@@ -406,16 +406,36 @@ export class MemoryManager {
       .filter((value) => Number.isInteger(value) && value > 0);
     if (!factIds.length) return new Map();
 
-    const vectorRows = this.store.getMemoryFactVectors(factIds, model);
-    const vectorMap = new Map(
-      vectorRows.map((row) => [Number(row.fact_id), row.embedding.map((value) => Number(value))])
-    );
+    const scoreMap = new Map();
+    const scoredFactIds = new Set();
+    const collectNativeScores = (ids) => {
+      const rows = this.store.getMemoryFactVectorNativeScores?.({
+        factIds: ids,
+        model,
+        queryEmbedding
+      });
+      if (!Array.isArray(rows) || !rows.length) return;
+      for (const row of rows) {
+        const factId = Number(row?.fact_id);
+        const score = Number(row?.score);
+        if (!Number.isInteger(factId) || factId <= 0) continue;
+        scoredFactIds.add(factId);
+        if (Number.isFinite(score) && score > 0) {
+          scoreMap.set(factId, score);
+        }
+      }
+    };
+    collectNativeScores(factIds);
+
+    const unresolvedFactIds = factIds.filter((factId) => !scoredFactIds.has(factId));
+    if (!unresolvedFactIds.length) return scoreMap;
 
     let backfilled = 0;
+    const unresolvedSet = new Set(unresolvedFactIds);
     for (const row of candidates) {
       const factId = Number(row.id);
+      if (!unresolvedSet.has(factId)) continue;
       if (!Number.isInteger(factId) || factId <= 0) continue;
-      if (vectorMap.has(factId)) continue;
       if (backfilled >= HYBRID_MAX_VECTOR_BACKFILL_PER_QUERY) break;
 
       const embedding = await this.ensureFactVector({
@@ -429,19 +449,11 @@ export class MemoryManager {
       });
       if (embedding?.length) {
         backfilled += 1;
-        vectorMap.set(factId, embedding);
       }
     }
 
-    const scoreMap = new Map();
-    for (const row of candidates) {
-      const factId = Number(row.id);
-      const embedding = vectorMap.get(factId);
-      if (!embedding?.length) continue;
-      const cosine = cosineSimilarity(queryEmbedding, embedding);
-      if (Number.isFinite(cosine) && cosine > 0) {
-        scoreMap.set(factId, cosine);
-      }
+    if (backfilled > 0) {
+      collectNativeScores(unresolvedFactIds);
     }
 
     return scoreMap;
@@ -454,11 +466,8 @@ export class MemoryManager {
     const resolvedModel = String(model || this.llm?.resolveEmbeddingModel?.(settings) || "").trim();
     if (!resolvedModel) return null;
 
-    const existing = this.store.getMemoryFactVectors([factId], resolvedModel);
-    if (existing.length) {
-      const parsed = existing[0].embedding.map((value) => Number(value));
-      return parsed.length ? parsed : null;
-    }
+    const existing = this.store.getMemoryFactVectorNative?.(factId, resolvedModel);
+    if (existing?.length) return existing;
 
     try {
       const payload = buildFactEmbeddingPayload(factRow);
@@ -473,7 +482,7 @@ export class MemoryManager {
         : [];
       if (!vector.length) return null;
 
-      this.store.upsertMemoryFactVector({
+      this.store.upsertMemoryFactVectorNative({
         factId,
         model: embedded.model || resolvedModel,
         embedding: vector
@@ -826,26 +835,6 @@ function passesHybridRelevanceGate({ row, semanticAvailable }) {
   }
 
   return lexicalScore >= 0.24 || combinedScore >= 0.62;
-}
-
-function cosineSimilarity(a, b) {
-  if (!Array.isArray(a) || !Array.isArray(b) || !a.length || !b.length) return 0;
-  const dims = Math.min(a.length, b.length);
-  if (!dims) return 0;
-
-  let dot = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let i = 0; i < dims; i += 1) {
-    const av = Number(a[i]) || 0;
-    const bv = Number(b[i]) || 0;
-    dot += av * bv;
-    normA += av * av;
-    normB += bv * bv;
-  }
-
-  if (normA <= 0 || normB <= 0) return 0;
-  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
 function cleanFactForMemory(rawFact) {

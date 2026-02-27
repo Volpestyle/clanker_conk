@@ -198,15 +198,6 @@ test("legacy reconcile archives duplicate and unresolved __legacy__ rows", async
           content TEXT NOT NULL,
           referenced_message_id TEXT
         );
-        CREATE TABLE memory_fact_vectors (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          fact_id INTEGER NOT NULL,
-          created_at TEXT NOT NULL,
-          updated_at TEXT NOT NULL,
-          model TEXT NOT NULL,
-          embedding TEXT NOT NULL,
-          UNIQUE(fact_id, model)
-        );
       `);
       createScopedMemoryFactsTable(legacyDb);
 
