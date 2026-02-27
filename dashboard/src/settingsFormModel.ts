@@ -26,6 +26,22 @@ export function settingsToForm(settings) {
     personaFlavor:
       settings?.persona?.flavor || "playful, chaotic-good, slangy Gen Z/Gen A energy without being toxic",
     personaHardLimits: formatList(settings?.persona?.hardLimits),
+    promptCapabilityHonestyLine:
+      settings?.prompt?.capabilityHonestyLine || "Never claim capabilities you do not have.",
+    promptImpossibleActionLine:
+      settings?.prompt?.impossibleActionLine ||
+      "If asked to do something impossible, say it casually and suggest a text-only alternative.",
+    promptMemoryEnabledLine:
+      settings?.prompt?.memoryEnabledLine ||
+      "You have persistent memory across conversations via saved durable facts and logs. Do not claim each conversation starts from zero.",
+    promptMemoryDisabledLine:
+      settings?.prompt?.memoryDisabledLine ||
+      "Persistent memory is disabled right now. Do not claim long-term memory across separate conversations.",
+    promptSkipLine: settings?.prompt?.skipLine || "If you should not send a message, output exactly [SKIP].",
+    promptTextGuidance: formatList(settings?.prompt?.textGuidance),
+    promptVoiceGuidance: formatList(settings?.prompt?.voiceGuidance),
+    promptVoiceOperationalGuidance: formatList(settings?.prompt?.voiceOperationalGuidance),
+    promptMediaPromptCraftGuidance: settings?.prompt?.mediaPromptCraftGuidance || "",
     replyLevelInitiative: activity.replyLevelInitiative ?? 35,
     replyLevelNonInitiative: activity.replyLevelNonInitiative ?? 10,
     reactionLevel: activity.reactionLevel ?? 20,
@@ -163,6 +179,17 @@ export function formToSettingsPatch(form) {
     persona: {
       flavor: form.personaFlavor.trim(),
       hardLimits: parseLineList(form.personaHardLimits)
+    },
+    prompt: {
+      capabilityHonestyLine: String(form.promptCapabilityHonestyLine || "").trim(),
+      impossibleActionLine: String(form.promptImpossibleActionLine || "").trim(),
+      memoryEnabledLine: String(form.promptMemoryEnabledLine || "").trim(),
+      memoryDisabledLine: String(form.promptMemoryDisabledLine || "").trim(),
+      skipLine: String(form.promptSkipLine || "").trim(),
+      textGuidance: parseLineList(form.promptTextGuidance),
+      voiceGuidance: parseLineList(form.promptVoiceGuidance),
+      voiceOperationalGuidance: parseLineList(form.promptVoiceOperationalGuidance),
+      mediaPromptCraftGuidance: String(form.promptMediaPromptCraftGuidance || "").trim()
     },
     activity: {
       replyLevelInitiative: Number(form.replyLevelInitiative),
@@ -335,6 +362,23 @@ export function resolveProviderModelOptions(modelCatalog, provider) {
   const fromCatalog = Array.isArray(modelCatalog?.[key]) ? modelCatalog[key] : [];
   const fallback = PROVIDER_MODEL_FALLBACKS[key] || [];
   return [...new Set([...fromCatalog, ...fallback].map((item) => String(item || "").trim()).filter(Boolean))];
+}
+
+export function resolvePresetModelSelection({ modelCatalog, provider, model }) {
+  const options = resolveProviderModelOptions(modelCatalog, provider);
+  const isClaudeCodeProvider = String(provider || "").trim() === "claude-code";
+  const normalizedModel = String(model || "").trim();
+  const selectedPresetModel = options.includes(normalizedModel)
+    ? normalizedModel
+    : isClaudeCodeProvider
+      ? (options[0] || "")
+      : CUSTOM_MODEL_OPTION_VALUE;
+
+  return {
+    options,
+    isClaudeCodeProvider,
+    selectedPresetModel
+  };
 }
 
 function normalizeProviderKey(provider) {
