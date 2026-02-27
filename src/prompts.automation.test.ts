@@ -82,3 +82,83 @@ test("buildReplyPrompt treats reply eagerness as a soft contribution threshold",
   assert.match(prompt, /Higher eagerness means lower contribution threshold; lower eagerness means higher threshold\./);
   assert.match(prompt, /useful, interesting, or funny enough/i);
 });
+
+test("buildReplyPrompt includes history image lookup instructions when enabled", () => {
+  const prompt = buildReplyPrompt({
+    message: {
+      authorName: "alice",
+      content: "what was that photo again?"
+    },
+    imageInputs: [],
+    recentMessages: [],
+    relevantMessages: [],
+    userFacts: [],
+    relevantFacts: [],
+    emojiHints: [],
+    reactionEmojiOptions: [],
+    webSearch: null,
+    memoryLookup: null,
+    imageLookup: {
+      enabled: true,
+      requested: false,
+      used: false,
+      query: "",
+      error: null,
+      candidates: [
+        {
+          filename: "starter.jpg",
+          authorName: "smelly conk",
+          createdAt: "2026-02-27T21:05:58.891Z",
+          context: "",
+          matchReason: "",
+        }
+      ],
+      results: []
+    },
+    allowImageLookupDirective: true
+  });
+
+  assert.match(prompt, /History image lookup is available for this turn\./);
+  assert.match(prompt, /Recent image references from message history:/);
+  assert.match(prompt, /imageLookupQuery/);
+});
+
+test("buildReplyPrompt keeps memory citations opt-in for explicit user requests", () => {
+  const prompt = buildReplyPrompt({
+    message: {
+      authorName: "alice",
+      content: "what do you remember?"
+    },
+    imageInputs: [],
+    recentMessages: [],
+    relevantMessages: [],
+    userFacts: [],
+    relevantFacts: [],
+    emojiHints: [],
+    reactionEmojiOptions: [],
+    memoryLookup: {
+      enabled: true,
+      requested: true,
+      used: true,
+      query: "what do you remember?",
+      error: null,
+      results: [
+        {
+          fact: "alice likes giraffes",
+          fact_type: "preference",
+          confidence: 0.9,
+          evidence_text: "i like giraffes",
+          source_message_id: "msg-1",
+          created_at: "2026-02-27T00:00:00.000Z"
+        }
+      ]
+    }
+  });
+
+  assert.match(prompt, /Reference memory naturally without source tags by default\./);
+  assert.match(
+    prompt,
+    /Only cite memory hits inline as \[M1\], \[M2\], etc\. when the user explicitly asks for memory citations, sources, or proof\./
+  );
+  assert.equal(/If useful, cite memory hits inline as \[M1\], \[M2\], etc\./.test(prompt), false);
+});

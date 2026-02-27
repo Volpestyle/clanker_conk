@@ -740,3 +740,144 @@ test("realtime transcription plan keeps mini with full fallback on longer clips"
   assert.equal(plan.fallbackModel, "gpt-4o-transcribe");
   assert.equal(plan.reason, "mini_with_full_fallback");
 });
+
+test("runRealtimeTurn does not forward audio when reply decision denies turn", async () => {
+  const runtimeLogs = [];
+  let appendedAudioCalls = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.evaluateVoiceReplyDecision = async () => ({
+    allow: false,
+    reason: "llm_no",
+    participantCount: 2,
+    directAddressed: false,
+    transcript: "side chatter"
+  });
+
+  const session = {
+    id: "session-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "voice_agent",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    realtimeClient: {
+      appendInputAudioPcm() {
+        appendedAudioCalls += 1;
+      }
+    }
+  };
+
+  await manager.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([1, 2, 3, 4]),
+    captureReason: "stream_end"
+  });
+
+  assert.equal(appendedAudioCalls, 0);
+  const addressingLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
+  );
+  assert.equal(Boolean(addressingLog), true);
+  assert.equal(Boolean(addressingLog?.metadata?.allow), false);
+  assert.equal(addressingLog?.metadata?.reason, "llm_no");
+});
+
+test("runRealtimeTurn forwards audio and prepares openai context when reply decision allows turn", async () => {
+  let appendedAudioCalls = 0;
+  let preparedContextCalls = 0;
+  let scheduledResponseCalls = 0;
+  const manager = createManager();
+  manager.evaluateVoiceReplyDecision = async () => ({
+    allow: true,
+    reason: "llm_yes",
+    participantCount: 2,
+    directAddressed: false,
+    transcript: "tell me more"
+  });
+  manager.prepareOpenAiRealtimeTurnContext = async () => {
+    preparedContextCalls += 1;
+  };
+  manager.scheduleResponseFromBufferedAudio = () => {
+    scheduledResponseCalls += 1;
+  };
+
+  const session = {
+    id: "session-2",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    realtimeClient: {
+      appendInputAudioPcm() {
+        appendedAudioCalls += 1;
+      }
+    },
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([8, 9, 10, 11]),
+    captureReason: "stream_end"
+  });
+
+  assert.equal(appendedAudioCalls, 1);
+  assert.equal(preparedContextCalls, 1);
+  assert.equal(scheduledResponseCalls, 1);
+  assert.equal(session.pendingRealtimeInputBytes, 4);
+});
+
+test("runSttPipelineTurn exits before generation when turn admission denies speaking", async () => {
+  const runtimeLogs = [];
+  let generateVoiceTurnCalls = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.llm.transcribeAudio = async () => ({ text: "any update?" });
+  manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
+  manager.transcribePcmTurn = async () => "any update?";
+  manager.evaluateVoiceReplyDecision = async () => ({
+    allow: false,
+    reason: "llm_no",
+    participantCount: 2,
+    directAddressed: false,
+    transcript: "any update?"
+  });
+  manager.generateVoiceTurn = async () => {
+    generateVoiceTurnCalls += 1;
+    return { text: "should not run" };
+  };
+  manager.touchActivity = () => {};
+
+  const session = {
+    id: "session-3",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "stt_pipeline",
+    ending: false,
+    sttContextMessages: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.runSttPipelineTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([4, 5, 6, 7]),
+    captureReason: "stream_end"
+  });
+
+  assert.equal(generateVoiceTurnCalls, 0);
+  const addressingLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
+  );
+  assert.equal(Boolean(addressingLog), true);
+  assert.equal(Boolean(addressingLog?.metadata?.allow), false);
+  assert.equal(addressingLog?.metadata?.reason, "llm_no");
+});

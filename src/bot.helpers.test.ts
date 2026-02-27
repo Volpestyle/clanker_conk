@@ -11,6 +11,7 @@ test("parseStructuredReplyOutput reads structured reply JSON", () => {
       media: { type: "gif", prompt: "cat dance" },
       webSearchQuery: "latest bitcoin price",
       memoryLookupQuery: "favorite games",
+      imageLookupQuery: "that dog photo from earlier",
       memoryLine: "user likes roguelikes",
       voiceIntent: {
         intent: "join",
@@ -26,6 +27,7 @@ test("parseStructuredReplyOutput reads structured reply JSON", () => {
   assert.equal(parsed.mediaDirective?.type, "gif");
   assert.equal(parsed.webSearchQuery, "latest bitcoin price");
   assert.equal(parsed.memoryLookupQuery, "favorite games");
+  assert.equal(parsed.imageLookupQuery, "that dog photo from earlier");
   assert.equal(parsed.memoryLine, "user likes roguelikes");
   assert.equal(parsed.automationAction.operation, null);
   assert.equal(parsed.voiceIntent.intent, "join");
@@ -40,6 +42,7 @@ test("parseStructuredReplyOutput falls back to plain text when output is not JSO
   assert.equal(parsed.mediaDirective, null);
   assert.equal(parsed.webSearchQuery, null);
   assert.equal(parsed.memoryLookupQuery, null);
+  assert.equal(parsed.imageLookupQuery, null);
   assert.equal(parsed.automationAction.operation, null);
   assert.equal(parsed.voiceIntent.intent, null);
   assert.equal(parsed.voiceIntent.confidence, 0);
