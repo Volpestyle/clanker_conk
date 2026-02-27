@@ -12,6 +12,24 @@ export const SOUNDBOARD_MAX_CANDIDATES = 40;
 const OPENAI_REALTIME_MIN_COMMIT_AUDIO_MS = 100;
 const SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*([\s\S]*?)\s*\]\]/gi;
 const MAX_SOUNDBOARD_DIRECTIVE_REF_LEN = 180;
+const VOICE_WAKE_GREETINGS = new Set(["yo", "hey", "hi", "hello", "sup", "ok", "okay", "ayo", "bro", "dude"]);
+const VOICE_WAKE_REQUEST_HINTS = new Set([
+  "can",
+  "could",
+  "would",
+  "do",
+  "does",
+  "did",
+  "what",
+  "why",
+  "how",
+  "where",
+  "when",
+  "who",
+  "please",
+  "tell",
+  "say"
+]);
 
 export function defaultExitMessage(reason) {
   if (reason === "max_duration") return "time cap reached, dipping from vc.";
@@ -339,16 +357,98 @@ export function isVoiceTurnAddressedToBot(transcript, settings) {
     .trim()
     .toLowerCase();
   if (botName && normalized.includes(botName)) return true;
-  if (hasBotKeyword(normalized)) return true;
 
-  // Common STT mishearings of "clanker" variants
-  if (
-    /\b(?:cranker|klank(?:er|y)?|clonk(?:er|y)?|klonk(?:er|y)?|kronk(?:er|y)?|plank(?:er|y)?|blank(?:er|y)?|linky)\b/i.test(
-      normalized
-    )
-  ) {
-    return true;
+  const transcriptTokens = tokenizeWakeTokens(normalized);
+  const botWakeTokens = buildBotWakeTokens(botName);
+  if (transcriptTokens.length && botWakeTokens.length) {
+    for (let tokenIndex = 0; tokenIndex < transcriptTokens.length; tokenIndex += 1) {
+      const spokenToken = transcriptTokens[tokenIndex];
+      const matchedWakeToken = botWakeTokens.find((wakeToken) => isLikelyWakeTokenVariant(spokenToken, wakeToken));
+      if (!matchedWakeToken) continue;
+      if (isLikelyDirectAddressWakeContext(transcriptTokens, tokenIndex)) {
+        return true;
+      }
+    }
   }
+
+  const useLegacyKeywordFallback =
+    !botWakeTokens.length || botWakeTokens.some((wakeToken) => hasBotKeyword(wakeToken));
+  if (useLegacyKeywordFallback && hasBotKeyword(normalized)) return true;
+
+  return false;
+}
+
+function tokenizeWakeTokens(value = "") {
+  return String(value || "")
+    .toLowerCase()
+    .match(/[\p{L}\p{N}]+/gu) || [];
+}
+
+function buildBotWakeTokens(botName = "") {
+  const baseTokens = tokenizeWakeTokens(botName).filter((token) => token.length >= 3);
+  const expanded = new Set();
+  for (const token of baseTokens) {
+    expanded.add(token);
+    if (token.endsWith("er") && token.length >= 6) {
+      expanded.add(token.slice(0, -2));
+    }
+    if (token.endsWith("y") && token.length >= 5) {
+      expanded.add(token.slice(0, -1));
+    }
+  }
+  return [...expanded];
+}
+
+function isLikelyWakeTokenVariant(spokenToken = "", wakeToken = "") {
+  const spoken = String(spokenToken || "").trim().toLowerCase();
+  const wake = String(wakeToken || "").trim().toLowerCase();
+  if (!spoken || !wake) return false;
+  if (spoken === wake) return true;
+  if (spoken.length < 3 || wake.length < 3) return false;
+  if (spoken[0] !== wake[0]) return false;
+
+  const maxDistance = Math.max(spoken.length, wake.length) >= 7 ? 2 : 1;
+  if (Math.abs(spoken.length - wake.length) > maxDistance) return false;
+
+  return boundedLevenshteinDistance(spoken, wake, maxDistance) <= maxDistance;
+}
+
+function boundedLevenshteinDistance(left = "", right = "", maxDistance = 2) {
+  const leftWord = String(left || "");
+  const rightWord = String(right || "");
+  if (leftWord === rightWord) return 0;
+  if (!leftWord.length) return rightWord.length;
+  if (!rightWord.length) return leftWord.length;
+  if (Math.abs(leftWord.length - rightWord.length) > maxDistance) return maxDistance + 1;
+
+  let previous = Array.from({ length: rightWord.length + 1 }, (_, index) => index);
+  for (let row = 1; row <= leftWord.length; row += 1) {
+    const current = [row];
+    let rowMin = current[0];
+    for (let column = 1; column <= rightWord.length; column += 1) {
+      const substitutionCost = leftWord[row - 1] === rightWord[column - 1] ? 0 : 1;
+      const insertion = current[column - 1] + 1;
+      const deletion = previous[column] + 1;
+      const substitution = previous[column - 1] + substitutionCost;
+      const value = Math.min(insertion, deletion, substitution);
+      current.push(value);
+      if (value < rowMin) rowMin = value;
+    }
+    if (rowMin > maxDistance) return maxDistance + 1;
+    previous = current;
+  }
+  return previous[rightWord.length];
+}
+
+function isLikelyDirectAddressWakeContext(tokens, tokenIndex = 0) {
+  if (!Array.isArray(tokens) || !tokens.length) return false;
+  if (tokenIndex <= 0) return true;
+
+  const previous = String(tokens[tokenIndex - 1] || "").toLowerCase();
+  if (VOICE_WAKE_GREETINGS.has(previous)) return true;
+
+  const next = String(tokens[tokenIndex + 1] || "").toLowerCase();
+  if (VOICE_WAKE_REQUEST_HINTS.has(next)) return true;
 
   return false;
 }
