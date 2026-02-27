@@ -127,7 +127,7 @@ Windows host sleep settings (for WSL users):
 ## 4. Configure in dashboard
 
 Use dashboard to:
-- Set unsolicited reply chance and reaction chance separately.
+- Set unsolicited reply eagerness separately for initiative vs non-initiative channels, plus reaction eagerness.
 - Configure allowed/blocked channels and users.
 - Toggle reply/initiative/reaction permissions.
 - Set standalone-post channel IDs (for your dedicated `clanker conk` channel).
@@ -137,6 +137,7 @@ Use dashboard to:
 - Enable/disable model-directed GIF replies and set GIF lookup budget.
 - Configure allowed image/video generation models, simple/complex image routing models, and per-24h media budgets.
 - Choose LLM provider + model.
+- Optionally use a dedicated provider/model for reply follow-up regenerations (web/memory lookup passes).
 - Choose voice runtime mode (`voice_agent`, `openai_realtime`, `gemini_realtime`, or `stt_pipeline`) and tune provider-specific realtime/STT/TTS settings.
 - Configure stream-watch ingest guardrails and use `/api/voice/stream-ingest/frame` for external relay (`DASHBOARD_TOKEN` or `PUBLIC_API_TOKEN`) or tokenized `/api/voice/share-session/:token/frame`.
 - Track accumulated API spend.
@@ -152,6 +153,7 @@ Use dashboard to:
 ## 6. Technical Docs
 
 - Architecture and flow diagrams: `docs/technical-architecture.md`
+- Reply decision policy (text + voice): `docs/reply-decision-flow.md`
 - Initiative discovery product spec: `docs/initiative-discovery-spec.md`
 - Public HTTPS entrypoint + relay design spec: `docs/public-https-entrypoint-spec.md`
 - Screen-share link flow spec: `docs/screen-share-link-spec.md`
