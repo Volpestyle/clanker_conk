@@ -81,6 +81,7 @@ const MENTION_SEARCH_RESULT_LIMIT = 10;
 const MAX_AUTOMATIONS_PER_GUILD = 90;
 const MAX_AUTOMATION_RUNS_PER_TICK = 4;
 const MAX_AUTOMATION_LIST_ROWS = 10;
+const SCREEN_SHARE_MESSAGE_MAX_CHARS = 420;
 const SCREEN_SHARE_INTENT_THRESHOLD = 0.66;
 const SCREEN_SHARE_EXPLICIT_REQUEST_RE =
   /\b(?:screen\s*share|share\s*(?:my|the)?\s*screen|watch\s*(?:my|the)?\s*screen|see\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*stream|watch\s*(?:my|the)?\s*stream)\b/i;
@@ -848,15 +849,18 @@ export class ClankerBot {
     event = "voice_runtime",
     reason = null,
     details = {},
-    fallbackText = ""
+    fallbackText = "",
+    maxOutputChars = 180
   }) {
     if (!this.llm?.generate || !settings) return "";
     const normalizedEvent = String(event || "voice_runtime")
       .trim()
       .toLowerCase();
     const isVoiceSessionEnd = normalizedEvent === "voice_session_end";
+    const isScreenShareOffer = normalizedEvent === "voice_screen_share_offer";
     const operationalTemperature = isVoiceSessionEnd ? 0.35 : 0.55;
-    const operationalMaxOutputTokens = isVoiceSessionEnd ? 60 : 100;
+    const operationalMaxOutputTokens = isVoiceSessionEnd ? 60 : isScreenShareOffer ? 140 : 100;
+    const outputCharLimit = clamp(Number(maxOutputChars) || 180, 80, 700);
 
     const tunedSettings = {
       ...settings,
@@ -896,6 +900,9 @@ export class ClankerBot {
       "Clearly state what happened and why, especially when a request is blocked.",
       "If relevant, mention required permissions/settings plainly.",
       "For voice_session_end, keep it to one brief sentence (4-12 words).",
+      isScreenShareOffer
+        ? "If Details JSON includes linkUrl, include that exact URL unchanged in the final message."
+        : "",
       "Avoid dramatic wording, blame, apology spirals, and long postmortems.",
       PROMPT_CAPABILITY_HONESTY_LINE,
       ...buildHardLimitsSection(settings, { maxItems: 12 }),
@@ -911,7 +918,11 @@ export class ClankerBot {
         ? `Relevant durable memory (use only if directly useful): ${operationalMemoryHints.join(" | ")}`
         : "",
       fallbackText ? `Baseline meaning: ${String(fallbackText || "").trim()}` : "",
-      isVoiceSessionEnd ? "Constraint: one chill sentence, 4-12 words." : "Constraint: one brief sentence.",
+      isVoiceSessionEnd
+        ? "Constraint: one chill sentence, 4-12 words."
+        : isScreenShareOffer
+          ? "Constraint: low-key tone, 1-2 short sentences."
+          : "Constraint: one brief sentence.",
       "Return only the final message text."
     ]
       .filter(Boolean)
@@ -934,7 +945,10 @@ export class ClankerBot {
       });
 
       const parsed = parseReplyDirectives(generation.text, resolveMaxMediaPromptLen(settings));
-      const normalized = sanitizeBotText(normalizeSkipSentinel(parsed.text || generation.text || ""), 180);
+      const normalized = sanitizeBotText(
+        normalizeSkipSentinel(parsed.text || generation.text || ""),
+        outputCharLimit
+      );
       if (!normalized || normalized === "[SKIP]") return "";
       return normalized;
     } catch (error) {
@@ -1828,13 +1842,21 @@ export class ClankerBot {
 
     const explicitRequest = SCREEN_SHARE_EXPLICIT_REQUEST_RE.test(String(message?.content || ""));
     const manager = this.screenShareSessionManager;
+    const settings = this.store.getSettings();
     if (!message?.guildId || !message?.channelId) return empty;
     if (!manager) {
       if (!explicitRequest) return empty;
+      const fallbackText = await this.composeScreenShareUnavailableMessage({
+        message,
+        settings,
+        reason: "screen_share_manager_unavailable",
+        source,
+        baseline: "i can't generate a screen-share link right now."
+      });
       return {
         ...empty,
         explicitRequest: true,
-        fallbackText: "i can't generate a screen-share link right now."
+        fallbackText
       };
     }
 
@@ -1878,16 +1900,24 @@ export class ClankerBot {
           reason: created?.reason || "unknown"
         };
       }
+      const unavailableBaseline = String(
+        created?.message ||
+          "can't spin up a share link right now. i need to be in vc with you, in gemini realtime mode."
+      ).slice(0, SCREEN_SHARE_MESSAGE_MAX_CHARS);
+      const fallbackText = await this.composeScreenShareUnavailableMessage({
+        message,
+        settings,
+        reason: created?.reason || "unknown",
+        source,
+        baseline: unavailableBaseline
+      });
       return {
         ...empty,
         explicitRequest,
         intentRequested,
         confidence,
         reason: created?.reason || "unknown",
-        fallbackText: String(
-          created?.message ||
-            "can't spin up a share link right now. i need to be in vc with you, in gemini realtime mode."
-        ).slice(0, 420)
+        fallbackText
       };
     }
 
@@ -1912,9 +1942,16 @@ export class ClankerBot {
       }
     });
 
-    const appendText = explicitRequest
-      ? `screen-share link: ${linkUrl}\nopen it and hit Start Sharing (expires in ${expiresInMinutes}m).`
-      : `if it helps, share your screen here: ${linkUrl} (expires in ${expiresInMinutes}m).`;
+    const appendText = await this.composeScreenShareOfferMessage({
+      message,
+      settings,
+      linkUrl,
+      expiresInMinutes,
+      explicitRequest,
+      intentRequested,
+      confidence,
+      source
+    });
 
     return {
       offered: true,
@@ -1926,6 +1963,88 @@ export class ClankerBot {
       confidence,
       reason: "offered"
     };
+  }
+
+  async composeScreenShareOfferMessage({
+    message,
+    settings,
+    linkUrl,
+    expiresInMinutes,
+    explicitRequest = false,
+    intentRequested = false,
+    confidence = 0,
+    source = "message_event"
+  }) {
+    const baseline = explicitRequest
+      ? `screen-share link: ${linkUrl}\nopen it and hit Start Sharing (expires in ${expiresInMinutes}m).`
+      : `if it helps, share your screen here: ${linkUrl} (expires in ${expiresInMinutes}m).`;
+
+    const composed = await this.composeVoiceOperationalMessage({
+      settings,
+      guildId: message.guildId,
+      channelId: message.channelId,
+      userId: message.author?.id || null,
+      messageId: message.id,
+      event: "voice_screen_share_offer",
+      reason: explicitRequest ? "explicit_request" : "proactive_offer",
+      details: {
+        linkUrl,
+        expiresInMinutes,
+        explicitRequest: Boolean(explicitRequest),
+        intentRequested: Boolean(intentRequested),
+        confidence: Number(confidence || 0),
+        source: String(source || "message_event")
+      },
+      fallbackText: baseline,
+      maxOutputChars: SCREEN_SHARE_MESSAGE_MAX_CHARS
+    });
+
+    const normalized = sanitizeBotText(
+      normalizeSkipSentinel(String(composed || baseline)),
+      SCREEN_SHARE_MESSAGE_MAX_CHARS
+    );
+    if (!normalized || normalized === "[SKIP]") return baseline;
+    if (!String(normalized).includes(linkUrl)) return baseline;
+    return normalized;
+  }
+
+  async composeScreenShareUnavailableMessage({
+    message,
+    settings,
+    reason = "unavailable",
+    source = "message_event",
+    baseline = "i can't generate a screen-share link right now."
+  }) {
+    const normalizedBaseline = sanitizeBotText(
+      normalizeSkipSentinel(String(baseline || "")),
+      SCREEN_SHARE_MESSAGE_MAX_CHARS
+    );
+    if (!normalizedBaseline || normalizedBaseline === "[SKIP]") {
+      return "i can't generate a screen-share link right now.";
+    }
+
+    const composed = await this.composeVoiceOperationalMessage({
+      settings,
+      guildId: message.guildId,
+      channelId: message.channelId,
+      userId: message.author?.id || null,
+      messageId: message.id,
+      event: "voice_screen_share_offer",
+      reason: String(reason || "unavailable"),
+      details: {
+        source: String(source || "message_event"),
+        unavailable: true
+      },
+      fallbackText: normalizedBaseline,
+      maxOutputChars: SCREEN_SHARE_MESSAGE_MAX_CHARS
+    });
+
+    const normalized = sanitizeBotText(
+      normalizeSkipSentinel(String(composed || normalizedBaseline)),
+      SCREEN_SHARE_MESSAGE_MAX_CHARS
+    );
+    if (!normalized || normalized === "[SKIP]") return normalizedBaseline;
+    return normalized;
   }
 
   composeAutomationControlReply({ modelText, fallbackText, detailLines = [] }) {
