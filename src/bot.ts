@@ -34,6 +34,7 @@ import {
   emptyMentionResolution,
   extractMentionCandidates,
   extractRecentVideoTargets,
+  extractUrlsFromText,
   formatReactionSummary,
   isWebSearchOptOutText,
   looksLikeVideoFollowupMessage,
@@ -1243,8 +1244,7 @@ export class ClankerBot {
       allowAutomationDirective: true,
       automationTimeZoneLabel: getLocalTimeZoneLabel(),
       voiceMode: {
-        enabled: Boolean(settings?.voice?.enabled),
-        joinOnTextNL: Boolean(settings?.voice?.joinOnTextNL)
+        enabled: Boolean(settings?.voice?.enabled)
       },
       videoContext,
       maxMediaPromptChars: resolveMaxMediaPromptLen(settings)
@@ -1634,7 +1634,7 @@ export class ClankerBot {
 
   async maybeHandleStructuredVoiceIntent({ message, settings, replyDirective }) {
     const voiceSettings = settings?.voice || {};
-    if (!voiceSettings.enabled || !voiceSettings.joinOnTextNL) return false;
+    if (!voiceSettings.enabled) return false;
 
     const intent = replyDirective?.voiceIntent;
     if (!intent?.intent) return false;

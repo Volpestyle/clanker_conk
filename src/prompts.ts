@@ -296,8 +296,7 @@ export function buildReplyPrompt({
   parts.push("If a reaction is useful, set reactionEmoji to exactly one allowed emoji. Otherwise set reactionEmoji to null.");
 
   const voiceEnabled = Boolean(voiceMode?.enabled);
-  const voiceJoinOnTextNL = Boolean(voiceMode?.joinOnTextNL);
-  if (voiceEnabled && voiceJoinOnTextNL) {
+  if (voiceEnabled) {
     parts.push("Voice mode is enabled right now.");
     parts.push("Do not claim you are text-only or unable to join voice channels.");
     parts.push("If users mention VC/voice requests, stay consistent with voice being available.");
@@ -317,10 +316,6 @@ export function buildReplyPrompt({
       "Set voiceIntent.confidence from 0 to 1. Use high confidence only for explicit voice-control requests aimed at you."
     );
     parts.push("For normal chat or ambiguous requests, set voiceIntent.intent to none and keep confidence low.");
-  } else if (voiceEnabled) {
-    parts.push("Voice mode is enabled, but text-triggered NL join controls are disabled.");
-    parts.push("If asked to join VC from text chat, say text triggers are currently disabled.");
-    parts.push("Set voiceIntent.intent to none.");
   } else {
     parts.push("Voice mode is disabled right now.");
     parts.push("If asked to join VC, say voice mode is currently disabled.");

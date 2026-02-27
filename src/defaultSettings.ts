@@ -24,7 +24,7 @@ export const DEFAULT_SETTINGS = {
   },
   webSearch: {
     enabled: false,
-    maxSearchesPerHour: 12,
+    maxSearchesPerHour: 20,
     maxResults: 5,
     maxPagesToRead: 3,
     maxCharsPerPage: 1400,
@@ -46,7 +46,6 @@ export const DEFAULT_SETTINGS = {
   voice: {
     enabled: false,
     mode: "voice_agent",
-    joinOnTextNL: true,
     intentConfidenceThreshold: 0.75,
     maxSessionMinutes: 10,
     inactivityLeaveSeconds: 90,
