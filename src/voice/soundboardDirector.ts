@@ -3,6 +3,10 @@ import { PermissionFlagsBits } from "discord.js";
 const API_BASE = "https://discord.com/api/v10";
 
 export class SoundboardDirector {
+  client;
+  store;
+  appConfig;
+
   constructor({ client, store, appConfig }) {
     this.client = client;
     this.store = store;

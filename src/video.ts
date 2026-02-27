@@ -39,6 +39,11 @@ const VIDEO_USER_AGENT =
   "clanker-conk/0.2 (+video-context; https://github.com/Volpestyle/clanker_conk)";
 
 export class VideoContextService {
+  store;
+  llm;
+  cache;
+  toolAvailabilityPromise;
+
   constructor({ store, llm }) {
     this.store = store;
     this.llm = llm;

@@ -29,6 +29,20 @@ const TRANSCRIPT_TYPES = new Set([
 ]);
 
 export class XaiRealtimeClient extends EventEmitter {
+  apiKey;
+  logger;
+  ws;
+  connectedAt;
+  lastEventAt;
+  lastError;
+  sessionId;
+  lastCloseCode;
+  lastCloseReason;
+  lastOutboundEventType;
+  lastOutboundEventAt;
+  lastOutboundEvent;
+  recentOutboundEvents;
+
   constructor({ apiKey, logger = null }) {
     super();
     this.apiKey = String(apiKey || "").trim();

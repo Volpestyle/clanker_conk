@@ -7,6 +7,12 @@ const MAX_SESSION_TTL_MINUTES = 30;
 const MAX_ACTIVE_SESSIONS = 240;
 
 export class ScreenShareSessionManager {
+  appConfig;
+  store;
+  bot;
+  publicHttpsEntrypoint;
+  sessions;
+
   constructor({ appConfig, store, bot, publicHttpsEntrypoint }) {
     this.appConfig = appConfig || {};
     this.store = store;

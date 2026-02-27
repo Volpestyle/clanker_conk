@@ -28,7 +28,17 @@ export function normalizeSettings(raw) {
     DEFAULT_SETTINGS.persona?.hardLimits ?? []
   );
 
-  const defaultPrompt = DEFAULT_SETTINGS.prompt || {};
+  const defaultPrompt = DEFAULT_SETTINGS.prompt || {
+    capabilityHonestyLine: "Never claim capabilities you do not have.",
+    impossibleActionLine: "If asked to do something impossible, say it casually.",
+    memoryEnabledLine: "You have persistent memory across conversations.",
+    memoryDisabledLine: "Persistent memory is disabled right now.",
+    skipLine: "If you should not send a message, output exactly [SKIP].",
+    textGuidance: [],
+    voiceGuidance: [],
+    voiceOperationalGuidance: [],
+    mediaPromptCraftGuidance: ""
+  };
   merged.prompt.capabilityHonestyLine = normalizePromptLine(
     merged.prompt?.capabilityHonestyLine,
     defaultPrompt.capabilityHonestyLine || "Never claim capabilities you do not have."
@@ -82,7 +92,7 @@ export function normalizeSettings(raw) {
     100
   );
   const minSecondsBetweenMessages = clamp(
-    Number(merged.activity?.minSecondsBetweenMessages) || 15,
+    Number(merged.activity?.minSecondsBetweenMessages) || 5,
     5,
     300
   );
@@ -234,7 +244,59 @@ export function normalizeSettings(raw) {
     merged.voice.soundboard = {};
   }
 
-  const defaultVoice = DEFAULT_SETTINGS.voice || {};
+  const defaultVoice = DEFAULT_SETTINGS.voice || {
+    enabled: false,
+    mode: "stt_pipeline",
+    allowNsfwHumor: false,
+    intentConfidenceThreshold: 0.75,
+    maxSessionMinutes: 10,
+    inactivityLeaveSeconds: 90,
+    maxSessionsPerDay: 12,
+    maxConcurrentSessions: 1,
+    xai: {
+      voice: "Rex",
+      audioFormat: "audio/pcm",
+      sampleRateHz: 24000,
+      region: "us-east-1"
+    },
+    openaiRealtime: {
+      model: "gpt-realtime",
+      voice: "alloy",
+      inputAudioFormat: "pcm16",
+      outputAudioFormat: "pcm16",
+      inputSampleRateHz: 24000,
+      outputSampleRateHz: 24000,
+      inputTranscriptionModel: "gpt-4o-mini-transcribe"
+    },
+    geminiRealtime: {
+      model: "gemini-2.5-flash-native-audio-preview-12-2025",
+      voice: "Aoede",
+      apiBaseUrl: "https://generativelanguage.googleapis.com",
+      inputSampleRateHz: 16000,
+      outputSampleRateHz: 24000
+    },
+    sttPipeline: {
+      transcriptionModel: "gpt-4o-mini-transcribe",
+      ttsModel: "gpt-4o-mini-tts",
+      ttsVoice: "alloy",
+      ttsSpeed: 1
+    },
+    replyDecisionLlm: {
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+      maxAttempts: 1
+    },
+    streamWatch: {
+      enabled: false,
+      minCommentaryIntervalSeconds: 8,
+      maxFramesPerMinute: 180,
+      maxFrameBytes: 350000
+    },
+    soundboard: {
+      enabled: false,
+      allowExternalSounds: false
+    }
+  };
   const defaultVoiceXai = defaultVoice.xai || {};
   const defaultVoiceOpenAiRealtime = defaultVoice.openaiRealtime || {};
   const defaultVoiceGeminiRealtime = defaultVoice.geminiRealtime || {};
@@ -554,8 +616,32 @@ export function normalizeSettings(raw) {
     merged.initiative.discovery.sources = {};
   }
 
-  const defaultDiscovery = DEFAULT_SETTINGS.initiative?.discovery ?? {};
-  const defaultSources = defaultDiscovery.sources ?? {};
+  const defaultDiscovery = DEFAULT_SETTINGS.initiative?.discovery ?? {
+    enabled: false,
+    linkChancePercent: 0,
+    maxLinksPerPost: 2,
+    maxCandidatesForPrompt: 6,
+    freshnessHours: 96,
+    dedupeHours: 168,
+    randomness: 55,
+    sourceFetchLimit: 10,
+    preferredTopics: [],
+    xNitterBaseUrl: "https://nitter.net",
+    sources: {
+      reddit: true,
+      hackerNews: true,
+      youtube: true,
+      rss: true,
+      x: false
+    }
+  };
+  const defaultSources = defaultDiscovery.sources ?? {
+    reddit: true,
+    hackerNews: true,
+    youtube: true,
+    rss: true,
+    x: false
+  };
   const sourceConfig = merged.initiative.discovery.sources ?? {};
   merged.initiative.discovery = {
     enabled:

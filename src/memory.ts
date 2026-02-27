@@ -16,8 +16,18 @@ const HYBRID_CANDIDATE_MULTIPLIER = 6;
 const HYBRID_MAX_CANDIDATES = 90;
 const HYBRID_MAX_VECTOR_BACKFILL_PER_QUERY = 8;
 const SUBJECT_LORE = LORE_SUBJECT;
-
 export class MemoryManager {
+  store;
+  llm;
+  memoryFilePath;
+  memoryDirPath;
+  pendingWrite;
+  initializedDailyFiles;
+  ingestQueue;
+  ingestQueuedJobs;
+  ingestWorkerActive;
+  maxIngestQueue;
+
   constructor({ store, llm, memoryFilePath }) {
     this.store = store;
     this.llm = llm;
@@ -31,7 +41,14 @@ export class MemoryManager {
     this.maxIngestQueue = 400;
   }
 
-  async ingestMessage({ messageId, authorId, authorName, content, settings, trace = {} }) {
+  async ingestMessage({
+    messageId,
+    authorId,
+    authorName,
+    content,
+    settings,
+    trace = { guildId: null, channelId: null, userId: null, source: null }
+  }) {
     const normalizedMessageId = String(messageId || "").trim();
     if (!normalizedMessageId) return false;
 
@@ -53,8 +70,8 @@ export class MemoryManager {
       });
     }
 
-    let resolveJob = () => undefined;
-    const promise = new Promise((resolve) => {
+    let resolveJob = (_value = false) => undefined;
+    const promise = new Promise<boolean>((resolve) => {
       resolveJob = resolve;
     });
 
@@ -99,7 +116,14 @@ export class MemoryManager {
     }
   }
 
-  async processIngestMessage({ messageId, authorId, authorName, content, settings, trace = {} }) {
+  async processIngestMessage({
+    messageId,
+    authorId,
+    authorName,
+    content,
+    settings,
+    trace = { guildId: null, channelId: null, userId: null, source: null }
+  }) {
     const cleanedContent = cleanDailyEntryContent(content);
     if (!cleanedContent) return;
     const scopeGuildId = String(trace?.guildId || "").trim();
@@ -639,15 +663,20 @@ export class MemoryManager {
     return true;
   }
 
-  async appendDailyLogEntry({ authorId, authorName, guildId = "", channelId = "", content }) {
+  async appendDailyLogEntry({ messageId = "", authorId, authorName, guildId = "", channelId = "", content }) {
     const now = new Date();
     const dateKey = formatDateLocal(now);
     const dailyFilePath = path.join(this.memoryDirPath, `${dateKey}.md`);
     const safeAuthorName = sanitizeInline(authorName || "unknown", 80);
     const safeAuthorId = sanitizeInline(authorId || "unknown", 40);
+    const safeMessageId = sanitizeInline(messageId || "", 40);
     const safeGuildId = sanitizeInline(guildId || "", 40);
     const safeChannelId = sanitizeInline(channelId || "", 40);
-    const scopeFragment = [safeGuildId ? `guild:${safeGuildId}` : "", safeChannelId ? `channel:${safeChannelId}` : ""]
+    const scopeFragment = [
+      safeGuildId ? `guild:${safeGuildId}` : "",
+      safeChannelId ? `channel:${safeChannelId}` : "",
+      safeMessageId ? `message:${safeMessageId}` : ""
+    ]
       .filter(Boolean)
       .join(" ");
     const scopedContent = scopeFragment ? `[${scopeFragment}] ${content}` : content;

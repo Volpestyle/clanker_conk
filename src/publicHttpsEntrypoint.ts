@@ -32,6 +32,16 @@ export function resolvePublicHttpsTargetUrl(rawTargetUrl, dashboardPort) {
 }
 
 export class PublicHttpsEntrypoint {
+  appConfig;
+  store;
+  child;
+  stdoutReader;
+  stderrReader;
+  isStopping;
+  preventAutoRetry;
+  retryTimer;
+  state;
+
   constructor({ appConfig, store }) {
     this.appConfig = appConfig || {};
     this.store = store;
@@ -99,7 +109,7 @@ export class PublicHttpsEntrypoint {
       return this.getState();
     }
 
-    await new Promise((resolve) => {
+    await new Promise<void>((resolve) => {
       const done = () => {
         this.cleanupChildHandles();
         resolve();
@@ -158,7 +168,7 @@ export class PublicHttpsEntrypoint {
     this.stdoutReader.on("line", (line) => this.handleCloudflaredLine(line, "stdout"));
     this.stderrReader.on("line", (line) => this.handleCloudflaredLine(line, "stderr"));
 
-    child.on("error", (error) => {
+    child.on("error", (error: NodeJS.ErrnoException) => {
       const message = String(error?.message || error || "unknown");
       if (String(error?.code || "").trim().toUpperCase() === "ENOENT") {
         this.preventAutoRetry = true;

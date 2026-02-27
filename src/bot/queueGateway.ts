@@ -208,6 +208,7 @@ export async function processReplyQueue(bot, channelId) {
       const source = burstJobs.length > 1
         ? `${latestJob.source || "message_event"}_coalesced`
         : latestJob.source || "message_event";
+      const performanceSeed = latestJob?.performanceSeed || null;
 
       try {
         const sent = await bot.maybeReplyToMessage(message, settings, {
@@ -215,7 +216,8 @@ export async function processReplyQueue(bot, channelId) {
           source,
           addressSignal,
           recentMessages,
-          triggerMessageIds
+          triggerMessageIds,
+          performanceSeed
         });
 
         if (!sent && forceRespond && !bot.isStopping && !bot.store.hasTriggeredResponse(message.id)) {

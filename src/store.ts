@@ -25,6 +25,11 @@ import {
 const SETTINGS_KEY = "runtime_settings";
 
 export class Store {
+  dbPath;
+  db;
+  sqliteVecReady;
+  sqliteVecError;
+
   constructor(dbPath) {
     this.dbPath = dbPath;
     this.db = null;
@@ -423,6 +428,75 @@ export class Store {
     }));
   }
 
+  getReplyPerformanceStats({ windowHours = 24, maxSamples = 4000 } = {}) {
+    const boundedHours = clamp(Math.floor(Number(windowHours) || 24), 1, 168);
+    const boundedSamples = clamp(Math.floor(Number(maxSamples) || 4000), 100, 20000);
+    const sinceIso = new Date(Date.now() - boundedHours * 60 * 60 * 1000).toISOString();
+
+    const rows = this.db
+      .prepare(
+        `SELECT kind, metadata
+         FROM actions
+         WHERE created_at >= ?
+           AND kind IN ('sent_reply', 'sent_message', 'reply_skipped')
+         ORDER BY id DESC
+         LIMIT ?`
+      )
+      .all(sinceIso, boundedSamples);
+
+    const byKind = {
+      sent_reply: 0,
+      sent_message: 0,
+      reply_skipped: 0
+    };
+    const totalMsValues = [];
+    const processingMsValues = [];
+    const queueMsValues = [];
+    const ingestMsValues = [];
+    const memorySliceMsValues = [];
+    const llm1MsValues = [];
+    const followupMsValues = [];
+    const typingDelayMsValues = [];
+    const sendMsValues = [];
+
+    for (const row of rows) {
+      const metadata = safeJsonParse(row?.metadata, null);
+      const performance = metadata?.performance;
+      if (!performance || typeof performance !== "object") continue;
+
+      const kind = String(row?.kind || "");
+      if (kind in byKind) byKind[kind] += 1;
+
+      pushPerformanceMetric(totalMsValues, performance.totalMs);
+      pushPerformanceMetric(processingMsValues, performance.processingMs);
+      pushPerformanceMetric(queueMsValues, performance.queueMs);
+      pushPerformanceMetric(ingestMsValues, performance.ingestMs);
+      pushPerformanceMetric(memorySliceMsValues, performance.memorySliceMs);
+      pushPerformanceMetric(llm1MsValues, performance.llm1Ms);
+      pushPerformanceMetric(followupMsValues, performance.followupMs);
+      pushPerformanceMetric(typingDelayMsValues, performance.typingDelayMs);
+      pushPerformanceMetric(sendMsValues, performance.sendMs);
+    }
+
+    return {
+      windowHours: boundedHours,
+      sampleLimit: boundedSamples,
+      sampleCount: totalMsValues.length,
+      byKind,
+      totalMs: summarizeLatencyMetric(totalMsValues),
+      processingMs: summarizeLatencyMetric(processingMsValues),
+      phases: {
+        queueMs: summarizeLatencyMetric(queueMsValues),
+        ingestMs: summarizeLatencyMetric(ingestMsValues),
+        memorySliceMs: summarizeLatencyMetric(memorySliceMsValues),
+        llm1Ms: summarizeLatencyMetric(llm1MsValues),
+        followupMs: summarizeLatencyMetric(followupMsValues),
+        typingDelayMs: summarizeLatencyMetric(typingDelayMsValues),
+        sendMs: summarizeLatencyMetric(sendMsValues)
+      }
+    };
+  }
+
   getStats() {
     const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
 
@@ -474,7 +548,11 @@ export class Store {
         voice_error: 0
       },
       totalCostUsd: Number(totalCostRow?.total ?? 0),
-      dailyCost: dayCostRows
+      dailyCost: dayCostRows,
+      performance: this.getReplyPerformanceStats({
+        windowHours: 24,
+        maxSamples: 4000
+      })
     };
 
     for (const row of rows) {
@@ -706,7 +784,7 @@ export class Store {
     return this.getAutomationById(id, normalizedGuildId);
   }
 
-  claimDueAutomations({ now = nowIso(), limit = 4 } = {}) {
+  claimDueAutomations({ now = nowIso(), limit = 4 }: { now?: string; limit?: number } = {}) {
     const normalizedNow = String(now || nowIso());
     const boundedLimit = clamp(Math.floor(Number(limit) || 4), 1, 40);
     const selectDueIds = this.db.prepare(
@@ -761,7 +839,15 @@ export class Store {
     lastRunAt = null,
     lastError = null,
     lastResult = null
-  }) {
+  }: {
+    automationId?: number | string;
+    guildId?: string;
+    status?: string;
+    nextRunAt?: string | null;
+    lastRunAt?: string | null;
+    lastError?: string | null;
+    lastResult?: string | null;
+  } = {}) {
     const id = Number(automationId);
     const normalizedGuildId = String(guildId || "").trim();
     const normalizedStatus = normalizeAutomationStatus(status);
@@ -836,7 +922,15 @@ export class Store {
       );
   }
 
-  getAutomationRuns({ automationId, guildId, limit = 20 } = {}) {
+  getAutomationRuns({
+    automationId,
+    guildId,
+    limit = 20
+  }: {
+    automationId?: number | string;
+    guildId?: string;
+    limit?: number;
+  } = {}) {
     const id = Number(automationId);
     const normalizedGuildId = String(guildId || "").trim();
     if (!Number.isInteger(id) || id <= 0 || !normalizedGuildId) return [];
@@ -1147,4 +1241,54 @@ export class Store {
       this.db = null;
     }
   }
+}
+
+function normalizePerformanceMetricMs(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return Math.floor(parsed);
+}
+
+function pushPerformanceMetric(target, value) {
+  const normalized = normalizePerformanceMetricMs(value);
+  if (normalized === null) return;
+  target.push(normalized);
+}
+
+function percentileNearestRank(sortedValues, percentile) {
+  const values = Array.isArray(sortedValues) ? sortedValues : [];
+  if (!values.length) return null;
+  const p = clamp(Number(percentile) || 0, 0, 100);
+  if (p <= 0) return values[0];
+  if (p >= 100) return values[values.length - 1];
+  const rank = Math.ceil((p / 100) * values.length);
+  const index = clamp(rank - 1, 0, values.length - 1);
+  return values[index];
+}
+
+function summarizeLatencyMetric(values) {
+  const numeric = (Array.isArray(values) ? values : [])
+    .map((value) => normalizePerformanceMetricMs(value))
+    .filter((value) => value !== null);
+  if (!numeric.length) {
+    return {
+      count: 0,
+      minMs: null,
+      p50Ms: null,
+      p95Ms: null,
+      avgMs: null,
+      maxMs: null
+    };
+  }
+
+  const sorted = [...numeric].sort((a, b) => a - b);
+  const sum = sorted.reduce((acc, value) => acc + value, 0);
+  return {
+    count: sorted.length,
+    minMs: sorted[0],
+    p50Ms: percentileNearestRank(sorted, 50),
+    p95Ms: percentileNearestRank(sorted, 95),
+    avgMs: Number((sum / sorted.length).toFixed(1)),
+    maxMs: sorted[sorted.length - 1]
+  };
 }

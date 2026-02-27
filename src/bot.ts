@@ -100,10 +100,40 @@ const MENTION_SEARCH_RESULT_LIMIT = 10;
 const MAX_AUTOMATION_RUNS_PER_TICK = 4;
 const SCREEN_SHARE_MESSAGE_MAX_CHARS = 420;
 const SCREEN_SHARE_INTENT_THRESHOLD = 0.66;
+const REPLY_PERFORMANCE_VERSION = 1;
 const SCREEN_SHARE_EXPLICIT_REQUEST_RE =
   /\b(?:screen\s*share|share\s*(?:my|the)?\s*screen|watch\s*(?:my|the)?\s*screen|see\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*stream|watch\s*(?:my|the)?\s*stream)\b/i;
 
 export class ClankerBot {
+  appConfig;
+  store;
+  llm;
+  memory;
+  discovery;
+  search;
+  gifs;
+  video;
+  lastBotMessageAt;
+  memoryTimer;
+  initiativeTimer;
+  automationTimer;
+  gatewayWatchdogTimer;
+  reconnectTimeout;
+  startupTasksRan;
+  initiativePosting;
+  automationCycleRunning;
+  reconnectInFlight;
+  isStopping;
+  hasConnectedAtLeastOnce;
+  lastGatewayEventAt;
+  reconnectAttempts;
+  replyQueues;
+  replyQueueWorkers;
+  replyQueuedMessageIds;
+  screenShareSessionManager;
+  client;
+  voiceSessionManager;
+
   constructor({ appConfig, store, llm, memory, discovery, search, gifs, video }) {
     this.appConfig = appConfig;
     this.store = store;
@@ -407,7 +437,13 @@ export class ClankerBot {
     return total;
   }
 
-  enqueueReplyJob({ message, source, forceRespond = false, addressSignal = null }) {
+  enqueueReplyJob({
+    message,
+    source,
+    forceRespond = false,
+    addressSignal = null,
+    performanceSeed = null
+  }) {
     if (!message?.id || !message?.channelId) return false;
 
     const messageId = String(message.id);
@@ -434,6 +470,11 @@ export class ClankerBot {
       source: source || "message_event",
       forceRespond: Boolean(forceRespond),
       addressSignal,
+      performanceSeed: normalizeReplyPerformanceSeed({
+        triggerMessageCreatedAtMs: message?.createdTimestamp,
+        queuedAtMs: Date.now(),
+        ingestMs: performanceSeed?.ingestMs
+      }),
       attempts: 0
     });
     this.replyQueues.set(channelId, queue);
@@ -520,7 +561,9 @@ export class ClankerBot {
     if (!this.isChannelAllowed(settings, message.channelId)) return;
     if (this.isUserBlocked(settings, message.author.id)) return;
 
+    let memoryIngestMs = null;
     if (settings.memory.enabled) {
+      const ingestStartedAtMs = Date.now();
       await this.memory.ingestMessage({
         messageId: message.id,
         authorId: message.author.id,
@@ -533,6 +576,7 @@ export class ClankerBot {
           userId: message.author.id
         }
       });
+      memoryIngestMs = Math.max(0, Date.now() - ingestStartedAtMs);
     }
 
     const recentMessages = this.store.getRecentMessages(
@@ -554,6 +598,9 @@ export class ClankerBot {
       message,
       forceRespond: addressSignal.triggered,
       addressSignal,
+      performanceSeed: {
+        ingestMs: memoryIngestMs
+      }
     });
   }
 
@@ -659,6 +706,14 @@ export class ClankerBot {
     });
     if (!shouldRunDecisionLoop) return false;
 
+    const source = String(options.source || "message_event");
+    const performance = createReplyPerformanceTracker({
+      messageCreatedAtMs: message?.createdTimestamp,
+      source,
+      seed: options.performanceSeed
+    });
+
+    const memorySliceStartedAtMs = Date.now();
     const memorySlice = await this.loadPromptMemorySlice({
       settings,
       userId: message.author.id,
@@ -670,8 +725,9 @@ export class ClankerBot {
         channelId: message.channelId,
         userId: message.author.id
       },
-      source: options.source || "message_event"
+      source
     });
+    performance.memorySliceMs = Math.max(0, Date.now() - memorySliceStartedAtMs);
     const replyMediaMemoryFacts = this.buildMediaMemoryFacts({
       userFacts: memorySlice.userFacts,
       relevantFacts: memorySlice.relevantFacts
@@ -696,7 +752,7 @@ export class ClankerBot {
         guildId: message.guildId,
         channelId: message.channelId,
         userId: message.author.id,
-        source: options.source || "message_event"
+        source
       }
     });
     let modelImageInputs = [...attachmentImageInputs, ...(videoContext.frameImages || [])].slice(0, MAX_MODEL_IMAGE_INPUTS);
@@ -767,6 +823,7 @@ export class ClankerBot {
       allowImageLookupDirective: true
     });
 
+    const llm1StartedAtMs = Date.now();
     let generation = await this.llm.generate({
       settings,
       systemPrompt,
@@ -774,6 +831,7 @@ export class ClankerBot {
       imageInputs: modelImageInputs,
       trace: replyTrace
     });
+    performance.llm1Ms = Math.max(0, Date.now() - llm1StartedAtMs);
     let usedWebSearchFollowup = false;
     let usedMemoryLookupFollowup = false;
     let usedImageLookupFollowup = false;
@@ -792,12 +850,14 @@ export class ClankerBot {
       settings,
       replyDirective,
       generation,
-      source: options.source || "message_event",
+      source,
       triggerMessageIds,
-      addressing: addressSignal
+      addressing: addressSignal,
+      performance
     });
     if (automationIntentHandled) return true;
 
+    const followupStartedAtMs = Date.now();
     if (replyDirective.webSearchQuery) {
       usedWebSearchFollowup = true;
       webSearch = await this.runModelRequestedWebSearch({
@@ -806,7 +866,7 @@ export class ClankerBot {
         query: replyDirective.webSearchQuery,
         trace: {
           ...replyTrace,
-          source: options.source || "message_event"
+          source
         }
       });
     }
@@ -824,7 +884,7 @@ export class ClankerBot {
         channelId: message.channelId,
         trace: {
           ...replyTrace,
-          source: options.source || "message_event",
+          source,
           event: "reply_followup"
         },
         mediaPromptLimit,
@@ -868,11 +928,15 @@ export class ClankerBot {
         settings,
         replyDirective,
         generation,
-        source: options.source || "message_event",
+        source,
         triggerMessageIds,
-        addressing: addressSignal
+        addressing: addressSignal,
+        performance
       });
       if (followupAutomationHandled) return true;
+    }
+    if (usedWebSearchFollowup || usedMemoryLookupFollowup || usedImageLookupFollowup) {
+      performance.followupMs = Math.max(0, Date.now() - followupStartedAtMs);
     }
 
     const reaction = await this.maybeApplyReplyReaction({
@@ -881,7 +945,7 @@ export class ClankerBot {
       emojiOptions: reactionEmojiOptions,
       emojiToken: replyDirective.reactionEmoji,
       generation,
-      source: options.source || "message_event",
+      source,
       triggerMessageId: message.id,
       triggerMessageIds,
       addressing: addressSignal
@@ -918,7 +982,7 @@ export class ClankerBot {
     const screenShareOffer = await this.maybeHandleScreenShareOfferIntent({
       message,
       replyDirective,
-      source: options.source || "message_event"
+      source
     });
     if (screenShareOffer.appendText) {
       const textParts = [];
@@ -932,14 +996,15 @@ export class ClankerBot {
     if (!finalText || finalText === "[SKIP]") {
       this.logSkippedReply({
         message,
-        source: options.source || "message_event",
+        source,
         triggerMessageIds,
         addressSignal,
         generation,
         usedWebSearchFollowup,
         reason: finalText ? "llm_skip" : "empty_reply",
         reaction,
-        screenShareOffer
+        screenShareOffer,
+        performance
       });
       return false;
     }
@@ -1048,8 +1113,10 @@ export class ClankerBot {
       videoCapabilityBlocked = videoResult.blockedByCapability;
     }
 
+    const typingStartedAtMs = Date.now();
     await message.channel.sendTyping();
     await sleep(600 + Math.floor(Math.random() * 1800));
+    const typingDelayMs = Math.max(0, Date.now() - typingStartedAtMs);
 
     const shouldThreadReply = addressed || options.forceRespond;
     const canStandalonePost = isInitiativeChannel || !shouldThreadReply;
@@ -1057,12 +1124,14 @@ export class ClankerBot {
       isInitiativeChannel,
       shouldThreadReply
     });
+    const sendStartedAtMs = Date.now();
     const sent = sendAsReply
       ? await message.reply({
           ...payload,
           allowedMentions: { repliedUser: false }
         })
       : await message.channel.send(payload);
+    const sendMs = Math.max(0, Date.now() - sendStartedAtMs);
     const actionKind = sendAsReply ? "sent_reply" : "sent_message";
     const referencedMessageId = sendAsReply ? message.id : null;
 
@@ -1088,7 +1157,7 @@ export class ClankerBot {
       metadata: {
         triggerMessageId: message.id,
         triggerMessageIds,
-        source: options.source || "message_event",
+        source,
         addressing: addressSignal,
         sendAsReply,
         canStandalonePost,
@@ -1179,7 +1248,13 @@ export class ClankerBot {
           usedWebSearchFollowup,
           usedMemoryLookupFollowup,
           usedImageLookupFollowup
-        }
+        },
+        performance: finalizeReplyPerformanceSample({
+          performance,
+          actionKind,
+          typingDelayMs,
+          sendMs
+        })
       }
     });
 
@@ -1266,7 +1341,8 @@ export class ClankerBot {
     generation,
     source,
     triggerMessageIds = [],
-    addressing = null
+    addressing = null,
+    performance = null
   }) {
     const automationAction = replyDirective?.automationAction;
     const operation = String(automationAction?.operation || "").trim();
@@ -1287,12 +1363,16 @@ export class ClankerBot {
 
     if (!finalText || finalText === "[SKIP]") return true;
 
+    const typingStartedAtMs = Date.now();
     await message.channel.sendTyping();
     await sleep(350 + Math.floor(Math.random() * 800));
+    const typingDelayMs = Math.max(0, Date.now() - typingStartedAtMs);
+    const sendStartedAtMs = Date.now();
     const sent = await message.reply({
       content: finalText,
       allowedMentions: { repliedUser: false }
     });
+    const sendMs = Math.max(0, Date.now() - sendStartedAtMs);
 
     this.markSpoke();
     this.store.recordMessage({
@@ -1326,7 +1406,13 @@ export class ClankerBot {
           model: generation?.model || null,
           usage: generation?.usage || null,
           costUsd: generation?.costUsd || 0
-        }
+        },
+        performance: finalizeReplyPerformanceSample({
+          performance,
+          actionKind: "sent_reply",
+          typingDelayMs,
+          sendMs
+        })
       }
     });
 
@@ -1676,6 +1762,7 @@ export class ClankerBot {
     reason,
     reaction,
     screenShareOffer = null,
+    performance = null,
     extraMetadata = null
   }) {
     const llmMetadata = generation
@@ -1702,6 +1789,10 @@ export class ClankerBot {
         reaction,
         screenShareOffer,
         llm: llmMetadata,
+        performance: finalizeReplyPerformanceSample({
+          performance,
+          actionKind: "reply_skipped"
+        }),
         ...(extraMetadata && typeof extraMetadata === "object" ? extraMetadata : {})
       }
     });
@@ -4248,4 +4339,101 @@ function normalizeImageContentTypeFromExt(rawExt) {
   if (ext === "heif") return "image/heif";
   if (ext === "avif") return "image/avif";
   return "";
+}
+
+function normalizeNonNegativeMs(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  if (parsed < 0) return null;
+  return Math.floor(parsed);
+}
+
+function normalizeReplyPerformanceSeed(seed = {}) {
+  const triggerMessageCreatedAtMs = normalizeNonNegativeMs(seed?.triggerMessageCreatedAtMs);
+  const queuedAtMs = normalizeNonNegativeMs(seed?.queuedAtMs);
+  const ingestMs = normalizeNonNegativeMs(seed?.ingestMs);
+  if (triggerMessageCreatedAtMs === null && queuedAtMs === null && ingestMs === null) return null;
+
+  return {
+    triggerMessageCreatedAtMs,
+    queuedAtMs,
+    ingestMs
+  };
+}
+
+function createReplyPerformanceTracker({ messageCreatedAtMs, source = "message_event", seed = null } = {}) {
+  const normalizedSeed = normalizeReplyPerformanceSeed({
+    triggerMessageCreatedAtMs: seed?.triggerMessageCreatedAtMs ?? messageCreatedAtMs,
+    queuedAtMs: seed?.queuedAtMs,
+    ingestMs: seed?.ingestMs
+  });
+  const startedAtMs = Date.now();
+
+  return {
+    source: String(source || "message_event"),
+    startedAtMs,
+    triggerMessageCreatedAtMs: normalizedSeed?.triggerMessageCreatedAtMs ?? normalizeNonNegativeMs(messageCreatedAtMs),
+    queuedAtMs: normalizedSeed?.queuedAtMs ?? null,
+    ingestMs: normalizedSeed?.ingestMs ?? null,
+    memorySliceMs: null,
+    llm1Ms: null,
+    followupMs: null
+  };
+}
+
+function finalizeReplyPerformanceSample({
+  performance,
+  actionKind,
+  typingDelayMs = null,
+  sendMs = null
+} = {}) {
+  if (!performance || typeof performance !== "object") return null;
+
+  const finishedAtMs = Date.now();
+  const triggerMessageCreatedAtMs = normalizeNonNegativeMs(performance.triggerMessageCreatedAtMs);
+  const startedAtMs = normalizeNonNegativeMs(performance.startedAtMs);
+  const queuedAtMs = normalizeNonNegativeMs(performance.queuedAtMs);
+  const normalizedSendMs = normalizeNonNegativeMs(sendMs);
+  const normalizedTypingDelayMs = normalizeNonNegativeMs(typingDelayMs);
+  const triggerToFinishMs =
+    triggerMessageCreatedAtMs !== null ? Math.max(0, finishedAtMs - triggerMessageCreatedAtMs) : null;
+  const hasReasonableTriggerBaseline =
+    triggerToFinishMs !== null && triggerToFinishMs <= 15 * 60 * 1000;
+  const totalMs = hasReasonableTriggerBaseline
+    ? triggerToFinishMs
+    : queuedAtMs !== null
+      ? Math.max(0, finishedAtMs - queuedAtMs)
+      : startedAtMs !== null
+        ? Math.max(0, finishedAtMs - startedAtMs)
+        : null;
+  const processingMs = startedAtMs !== null ? Math.max(0, finishedAtMs - startedAtMs) : null;
+  const queueMs = startedAtMs !== null && queuedAtMs !== null ? Math.max(0, startedAtMs - queuedAtMs) : null;
+
+  const sample = {
+    version: REPLY_PERFORMANCE_VERSION,
+    source: String(performance.source || "message_event"),
+    actionKind: String(actionKind || "unknown"),
+    totalMs: normalizeNonNegativeMs(totalMs),
+    queueMs: normalizeNonNegativeMs(queueMs),
+    processingMs: normalizeNonNegativeMs(processingMs),
+    ingestMs: normalizeNonNegativeMs(performance.ingestMs),
+    memorySliceMs: normalizeNonNegativeMs(performance.memorySliceMs),
+    llm1Ms: normalizeNonNegativeMs(performance.llm1Ms),
+    followupMs: normalizeNonNegativeMs(performance.followupMs),
+    typingDelayMs: normalizedTypingDelayMs,
+    sendMs: normalizedSendMs
+  };
+
+  const hasAnyTiming = [
+    sample.totalMs,
+    sample.queueMs,
+    sample.processingMs,
+    sample.ingestMs,
+    sample.memorySliceMs,
+    sample.llm1Ms,
+    sample.followupMs,
+    sample.typingDelayMs,
+    sample.sendMs
+  ].some((value) => typeof value === "number");
+  return hasAnyTiming ? sample : null;
 }

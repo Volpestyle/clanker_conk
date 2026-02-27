@@ -8,6 +8,25 @@ const MAX_OUTBOUND_EVENT_HISTORY = 8;
 const MAX_EVENT_PREVIEW_CHARS = 280;
 
 export class GeminiRealtimeClient extends EventEmitter {
+  apiKey;
+  baseUrl;
+  logger;
+  ws;
+  connectedAt;
+  lastEventAt;
+  lastError;
+  sessionId;
+  lastCloseCode;
+  lastCloseReason;
+  lastOutboundEventType;
+  lastOutboundEventAt;
+  lastOutboundEvent;
+  recentOutboundEvents;
+  sessionConfig;
+  setupComplete;
+  pendingResponseActive;
+  audioActivityOpen;
+
   constructor({ apiKey, baseUrl = DEFAULT_GEMINI_BASE_URL, logger = null }) {
     super();
     this.apiKey = String(apiKey || "").trim();
