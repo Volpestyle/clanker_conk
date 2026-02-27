@@ -82,3 +82,60 @@ test("strict relevance mode returns no results when every candidate is weak", as
   });
   assert.equal(fallbackResults.length, 1);
 });
+
+test("native vector scoring is used when available", async () => {
+  let nativeScoreCalls = 0;
+  const now = new Date().toISOString();
+
+  const memory = new MemoryManager({
+    store: {
+      getMemoryFactVectorNativeScores({ factIds }) {
+        nativeScoreCalls += 1;
+        return factIds.map((factId) => ({
+          fact_id: factId,
+          score: Number(factId) === 2 ? 0.93 : 0.18
+        }));
+      }
+    },
+    llm: {
+      isEmbeddingReady() {
+        return true;
+      },
+      async embedText() {
+        return {
+          embedding: [0.4, 0.1, 0.2],
+          model: "text-embedding-3-small"
+        };
+      }
+    },
+    memoryFilePath: "memory/MEMORY.md"
+  });
+
+  const ranked = await memory.rankHybridCandidates({
+    candidates: [
+      {
+        id: 1,
+        created_at: now,
+        channel_id: "chan-1",
+        confidence: 0.8,
+        fact: "User likes old strategy games.",
+        evidence_text: "likes old strategy games"
+      },
+      {
+        id: 2,
+        created_at: now,
+        channel_id: "chan-1",
+        confidence: 0.8,
+        fact: "User prefers realtime shooters.",
+        evidence_text: "prefers realtime shooters"
+      }
+    ],
+    queryText: "what games do they prefer",
+    settings: {},
+    channelId: "chan-1",
+    requireRelevanceGate: false
+  });
+
+  assert.equal(nativeScoreCalls, 1);
+  assert.equal(ranked[0].id, 2);
+});

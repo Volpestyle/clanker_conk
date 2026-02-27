@@ -57,7 +57,7 @@ Main tables created in `src/store.ts`:
 - `messages`: normalized message history (user + bot messages).
 - `actions`: event log (replies, reactions, initiative posts, llm/image calls, errors) with `usd_cost`.
 - `memory_facts`: LLM-extracted durable facts with type/confidence/evidence.
-- `memory_fact_vectors`: cached embeddings per fact/model for semantic recall.
+- `memory_fact_vectors_native`: sqlite-vec-compatible embeddings per fact/model for semantic recall.
 - `shared_links`: external links already posted (for dedupe windows).
 
 Table relationship diagram (logical relationships):
@@ -106,13 +106,12 @@ erDiagram
         float confidence
     }
 
-    MEMORY_FACT_VECTORS {
-        int id PK
+    MEMORY_FACT_VECTORS_NATIVE {
         int fact_id
-        datetime created_at
-        datetime updated_at
         string model
-        text embedding
+        int dims
+        blob embedding_blob
+        datetime updated_at
     }
 
     SHARED_LINKS {
@@ -125,7 +124,7 @@ erDiagram
 
     MESSAGES ||--o{ ACTIONS : "message_id (context/trigger)"
     MESSAGES ||--o{ MEMORY_FACTS : "source_message_id"
-    MEMORY_FACTS ||--o{ MEMORY_FACT_VECTORS : "fact_id"
+    MEMORY_FACTS ||--o{ MEMORY_FACT_VECTORS_NATIVE : "fact_id"
     MESSAGES ||--o{ MESSAGES : "referenced_message_id"
 ```
 
