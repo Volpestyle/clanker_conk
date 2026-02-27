@@ -35,6 +35,8 @@ export function settingsToForm(settings) {
     memoryEnabled: settings?.memory?.enabled ?? true,
     provider: settings?.llm?.provider ?? "openai",
     model: settings?.llm?.model ?? "gpt-4.1-mini",
+    memoryLlmProvider: settings?.memoryLlm?.provider ?? "anthropic",
+    memoryLlmModel: settings?.memoryLlm?.model ?? "claude-haiku-4-5",
     temperature: settings?.llm?.temperature ?? 0.9,
     maxTokens: settings?.llm?.maxOutputTokens ?? 220,
     webSearchEnabled: settings?.webSearch?.enabled ?? false,
@@ -168,6 +170,10 @@ export function formToSettingsPatch(form) {
       model: form.model.trim(),
       temperature: Number(form.temperature),
       maxOutputTokens: Number(form.maxTokens)
+    },
+    memoryLlm: {
+      provider: String(form.memoryLlmProvider || "").trim(),
+      model: String(form.memoryLlmModel || "").trim()
     },
     webSearch: {
       enabled: form.webSearchEnabled,

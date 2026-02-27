@@ -51,6 +51,14 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
     : isClaudeCodeProvider
       ? (providerModelOptions[0] || "")
       : CUSTOM_MODEL_OPTION_VALUE;
+  const memoryLlmModelOptions = resolveProviderModelOptions(modelCatalog, form.memoryLlmProvider);
+  const isMemoryLlmClaudeCodeProvider = form.memoryLlmProvider === "claude-code";
+  const normalizedMemoryLlmModel = String(form.memoryLlmModel || "").trim();
+  const selectedMemoryLlmPresetModel = memoryLlmModelOptions.includes(normalizedMemoryLlmModel)
+    ? normalizedMemoryLlmModel
+    : isMemoryLlmClaudeCodeProvider
+      ? (memoryLlmModelOptions[0] || "")
+      : CUSTOM_MODEL_OPTION_VALUE;
   const voiceReplyDecisionModelOptions = resolveProviderModelOptions(modelCatalog, form.voiceReplyDecisionLlmProvider);
   const isVoiceReplyDecisionClaudeCodeProvider = form.voiceReplyDecisionLlmProvider === "claude-code";
   const normalizedVoiceReplyDecisionModel = String(form.voiceReplyDecisionLlmModel || "").trim();
@@ -89,6 +97,25 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
     const selected = String(e.target.value || "");
     if (selected === CUSTOM_MODEL_OPTION_VALUE) return;
     setForm((current) => ({ ...current, model: selected }));
+  }
+
+  function setMemoryLlmProvider(e) {
+    const provider = String(e.target.value || "").trim();
+    setForm((current) => {
+      const next = { ...current, memoryLlmProvider: provider };
+      if (provider !== "claude-code") return next;
+      const options = resolveProviderModelOptions(modelCatalog, provider);
+      const currentModel = String(current?.memoryLlmModel || "").trim();
+      if (options.includes(currentModel)) return next;
+      next.memoryLlmModel = options[0] || "sonnet";
+      return next;
+    });
+  }
+
+  function selectMemoryLlmPresetModel(e) {
+    const selected = String(e.target.value || "");
+    if (selected === CUSTOM_MODEL_OPTION_VALUE) return;
+    setForm((current) => ({ ...current, memoryLlmModel: selected }));
   }
 
   function setVoiceReplyDecisionProvider(e) {
@@ -246,6 +273,45 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
             />
           </div>
         </div>
+
+        <h4>Memory Extraction LLM</h4>
+        <p>Used for durable fact extraction (`memory_extract_call`).</p>
+        <div className="split">
+          <div>
+            <label htmlFor="memory-llm-provider">Provider</label>
+            <select id="memory-llm-provider" value={form.memoryLlmProvider} onChange={setMemoryLlmProvider}>
+              <option value="openai">openai</option>
+              <option value="anthropic">anthropic</option>
+              <option value="xai">xai (grok)</option>
+              <option value="claude-code">claude code (local)</option>
+            </select>
+          </div>
+          <div>
+            <label htmlFor="memory-llm-model-preset">Model Preset</label>
+            <select
+              id="memory-llm-model-preset"
+              value={selectedMemoryLlmPresetModel}
+              onChange={selectMemoryLlmPresetModel}
+            >
+              {memoryLlmModelOptions.map((modelId) => (
+                <option key={modelId} value={modelId}>
+                  {modelId}
+                </option>
+              ))}
+              {!isMemoryLlmClaudeCodeProvider && (
+                <option value={CUSTOM_MODEL_OPTION_VALUE}>custom model (manual)</option>
+              )}
+            </select>
+          </div>
+        </div>
+        <label htmlFor="memory-llm-model">Model ID</label>
+        <input
+          id="memory-llm-model"
+          type="text"
+          value={form.memoryLlmModel}
+          onChange={set("memoryLlmModel")}
+          disabled={isMemoryLlmClaudeCodeProvider}
+        />
       </Section>
 
       {/* -------- WEB SEARCH -------- */}
@@ -555,7 +621,7 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
             </div>
 
             <label htmlFor="voice-reply-eagerness">
-              Voice reply eagerness (chime-ins when not addressed): <strong>{form.voiceReplyEagerness}%</strong>
+              Voice reply eagerness (unaddressed turns): <strong>{form.voiceReplyEagerness}%</strong>
             </label>
             <input
               id="voice-reply-eagerness"
@@ -567,7 +633,8 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
               onChange={set("voiceReplyEagerness")}
             />
 
-            <h4>Chime-In Decider LLM</h4>
+            <h4>Voice Reply Decider</h4>
+            <p>Controls when Clank should chime in during VC.</p>
             <div className="split">
               <div>
                 <label htmlFor="voice-reply-decision-provider">Provider</label>
