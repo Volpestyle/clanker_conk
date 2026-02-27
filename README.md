@@ -153,6 +153,5 @@ Use dashboard to:
 
 - Architecture and flow diagrams: `docs/technical-architecture.md`
 - Initiative discovery product spec: `docs/initiative-discovery-spec.md`
-- Voice classifier incident write-up: `docs/claude-code-voice-classifier-incident-2026-02-27.md`
 - Public HTTPS entrypoint + relay design spec: `docs/public-https-entrypoint-spec.md`
 - Screen-share link flow spec: `docs/screen-share-link-spec.md`
