@@ -61,7 +61,6 @@ export function settingsToForm(settings) {
     voiceInactivityLeaveSeconds: settings?.voice?.inactivityLeaveSeconds ?? 90,
     voiceMaxSessionsPerDay: settings?.voice?.maxSessionsPerDay ?? 12,
     voiceReplyEagerness: settings?.voice?.replyEagerness ?? 0,
-    voiceEagerCooldownSeconds: settings?.voice?.eagerCooldownSeconds ?? 45,
     voiceReplyDecisionLlmProvider: settings?.voice?.replyDecisionLlm?.provider ?? "anthropic",
     voiceReplyDecisionLlmModel: settings?.voice?.replyDecisionLlm?.model ?? "claude-haiku-4-5",
     voiceAllowedChannelIds: formatList(settings?.voice?.allowedVoiceChannelIds),
@@ -200,7 +199,6 @@ export function formToSettingsPatch(form) {
       inactivityLeaveSeconds: Number(form.voiceInactivityLeaveSeconds),
       maxSessionsPerDay: Number(form.voiceMaxSessionsPerDay),
       replyEagerness: Number(form.voiceReplyEagerness),
-      eagerCooldownSeconds: Number(form.voiceEagerCooldownSeconds),
       replyDecisionLlm: {
         provider: String(form.voiceReplyDecisionLlmProvider || "").trim(),
         model: String(form.voiceReplyDecisionLlmModel || "").trim()

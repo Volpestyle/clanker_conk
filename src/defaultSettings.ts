@@ -55,10 +55,10 @@ export const DEFAULT_SETTINGS = {
     blockedVoiceChannelIds: [],
     blockedVoiceUserIds: [],
     replyEagerness: 0,
-    eagerCooldownSeconds: 45,
     replyDecisionLlm: {
       provider: "anthropic",
-      model: "claude-haiku-4-5"
+      model: "claude-haiku-4-5",
+      maxAttempts: 1
     },
     xai: {
       voice: "Rex",

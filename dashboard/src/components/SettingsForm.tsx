@@ -556,20 +556,6 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
               onChange={set("voiceReplyEagerness")}
             />
 
-            <div className="split">
-              <div>
-                <label htmlFor="voice-eager-cooldown-seconds">Eager chime-in cooldown (seconds)</label>
-                <input
-                  id="voice-eager-cooldown-seconds"
-                  type="number"
-                  min="10"
-                  max="300"
-                  value={form.voiceEagerCooldownSeconds}
-                  onChange={set("voiceEagerCooldownSeconds")}
-                />
-              </div>
-            </div>
-
             <h4>Chime-In Decider LLM</h4>
             <div className="split">
               <div>

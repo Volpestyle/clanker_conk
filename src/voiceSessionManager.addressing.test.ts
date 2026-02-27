@@ -47,7 +47,6 @@ function baseSettings(overrides = {}) {
     },
     voice: {
       replyEagerness: 60,
-      eagerCooldownSeconds: 45,
       replyDecisionLlm: {
         provider: "anthropic",
         model: "claude-haiku-4-5"
@@ -65,7 +64,6 @@ test("reply decider blocks turns when transcript is missing", async () => {
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0
     },
     userId: "speaker-1",
     settings: baseSettings(),
@@ -90,7 +88,6 @@ test("reply decider skips llm for low-signal unaddressed fragments", async () =>
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0
     },
     userId: "speaker-1",
     settings: baseSettings(),
@@ -116,7 +113,6 @@ test("reply decider treats multilingual question punctuation as high-signal", as
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0
     },
     userId: "speaker-1",
     settings: baseSettings(),
@@ -142,7 +138,6 @@ test("reply decider sends short three-word complaint turns to llm", async () => 
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0
     },
     userId: "speaker-1",
     settings: baseSettings(),
@@ -168,7 +163,6 @@ test("reply decider allows focused speaker followup without another direct addre
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0,
       focusedSpeakerUserId: "speaker-1",
       focusedSpeakerAt: Date.now()
     },
@@ -196,7 +190,6 @@ test("reply decider keeps focused speaker followup window for longer turns", asy
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0,
       focusedSpeakerUserId: "speaker-1",
       focusedSpeakerAt: Date.now() - 15_000
     },
@@ -224,7 +217,6 @@ test("reply decider blocks low-signal focused speaker followup", async () => {
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0,
       focusedSpeakerUserId: "speaker-1",
       focusedSpeakerAt: Date.now()
     },
@@ -252,7 +244,6 @@ test("reply decider allows low-signal direct wake-word pings", async () => {
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0
     },
     userId: "speaker-1",
     settings: baseSettings(),
@@ -279,7 +270,6 @@ test("reply decider allows short clunker wake ping", async () => {
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0
     },
     userId: "speaker-1",
     settings: baseSettings(),
@@ -300,13 +290,11 @@ test("reply decider blocks unaddressed turns when eagerness is disabled", async 
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0
     },
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
         replyEagerness: 0,
-        eagerCooldownSeconds: 45,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -330,7 +318,6 @@ test("reply decider allows unaddressed turn when model says YES", async () => {
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0
     },
     userId: "speaker-1",
     settings: baseSettings(),
@@ -359,7 +346,6 @@ test("reply decider uses richer compact prompt guidance on first attempt", async
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0,
       recentVoiceTurns: [
         { role: "user", userId: "speaker-2", speakerName: "alice", text: "can you hear me?", at: Date.now() - 1500 },
         { role: "assistant", userId: "bot-user", speakerName: "clanker conk", text: "yeah i hear you", at: Date.now() - 900 }
@@ -398,7 +384,6 @@ test("reply decider skips memory retrieval for unaddressed turns", async () => {
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0
     },
     userId: "speaker-1",
     settings: baseSettings({
@@ -434,7 +419,6 @@ test("reply decider can load memory hints for direct-address turns", async () =>
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0
     },
     userId: "speaker-1",
     settings: baseSettings({
@@ -465,7 +449,6 @@ test("reply decider still uses LLM in one-human sessions", async () => {
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0
     },
     userId: "speaker-1",
     settings: baseSettings(),
@@ -493,13 +476,11 @@ test("reply decider retries contract violation output and accepts YES", async ()
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0
     },
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
         replyEagerness: 60,
-        eagerCooldownSeconds: 45,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5",
@@ -530,13 +511,11 @@ test("reply decider uses JSON schema contract for claude-code and accepts struct
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0
     },
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
         replyEagerness: 60,
-        eagerCooldownSeconds: 45,
         replyDecisionLlm: {
           provider: "claude-code",
           model: "haiku"
@@ -569,7 +548,6 @@ test("reply decider fails open when direct-addressed turn gets explicit NO", asy
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0
     },
     userId: "speaker-1",
     settings: baseSettings({
@@ -604,13 +582,11 @@ test("reply decider blocks contract violations after bounded retries", async () 
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0
     },
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
         replyEagerness: 60,
-        eagerCooldownSeconds: 45,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5",
@@ -641,7 +617,6 @@ test("direct address fails open when decider returns contract violations", async
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0
     },
     userId: "speaker-1",
     settings: baseSettings(),
@@ -668,7 +643,6 @@ test("direct address fails open when decider throws errors", async () => {
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0
     },
     userId: "speaker-1",
     settings: baseSettings(),
@@ -681,7 +655,7 @@ test("direct address fails open when decider throws errors", async () => {
   assert.equal(callCount, 1);
 });
 
-test("reply decider respects cooldown for unaddressed turns", async () => {
+test("reply decider does not gate unaddressed turns behind cooldown", async () => {
   const manager = createManager({
     generate: async () => ({ text: "YES" })
   });
@@ -691,15 +665,15 @@ test("reply decider respects cooldown for unaddressed turns", async () => {
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: Date.now()
     },
     userId: "speaker-1",
     settings: baseSettings(),
     transcript: "can you jump in on this"
   });
 
-  assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "unaddressed_cooldown");
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "llm_yes");
+  assert.equal(decision.directAddressed, false);
 });
 
 test("direct address falls back to allow when decider LLM is unavailable", async () => {
@@ -730,7 +704,6 @@ test("direct address falls back to allow when decider LLM is unavailable", async
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      lastUnaddressedReplyAt: 0
     },
     userId: "speaker-1",
     settings: baseSettings(),
