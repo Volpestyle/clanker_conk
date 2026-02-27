@@ -58,7 +58,9 @@ const FILTERS = [
   "voice_turn_out",
   "voice_soundboard_play",
   "voice_runtime",
-  "voice_error"
+  "voice_error",
+  "bot_runtime",
+  "bot_error"
 ];
 
 export default function ActionStream({ actions }) {

@@ -41,6 +41,8 @@ const REPLY_VOICE_INTENT_TYPES = new Set([
 ]);
 const REPLY_AUTOMATION_OPERATION_TYPES = new Set(["create", "pause", "resume", "delete", "list", "none"]);
 const MAX_VOICE_INTENT_REASON_LEN = 180;
+const REPLY_SCREEN_SHARE_ACTION_TYPES = new Set(["offer_link", "none"]);
+const MAX_SCREEN_SHARE_REASON_LEN = 180;
 export const MAX_VIDEO_TARGET_SCAN = 8;
 export const MAX_VIDEO_FALLBACK_MESSAGES = 18;
 const MENTION_CANDIDATE_RE = /(?<![\w<])@([a-z0-9][a-z0-9 ._'-]{0,63})/gi;
@@ -101,7 +103,7 @@ function sanitizeReactionLabel(value) {
     .slice(0, 32);
 }
 
-function extractUrlsFromText(text) {
+export function extractUrlsFromText(text) {
   URL_IN_TEXT_RE.lastIndex = 0;
   return [...String(text || "").matchAll(URL_IN_TEXT_RE)].map((match) => String(match[0] || ""));
 }
@@ -608,6 +610,11 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
         intent: null,
         confidence: 0,
         reason: null
+      },
+      screenShareIntent: {
+        action: null,
+        confidence: 0,
+        reason: null
       }
     };
   }
@@ -623,6 +630,7 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
   const automationAction = normalizeStructuredAutomationAction(parsed?.automationAction);
   const mediaDirective = normalizeStructuredMediaDirective(parsed?.media, maxLen);
   const voiceIntent = normalizeStructuredVoiceIntent(parsed?.voiceIntent);
+  const screenShareIntent = normalizeStructuredScreenShareIntent(parsed?.screenShareIntent ?? parsed?.screenShare);
 
   return {
     text: text || "",
@@ -636,7 +644,8 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     memoryLookupQuery,
     memoryLine,
     automationAction,
-    voiceIntent
+    voiceIntent,
+    screenShareIntent
   };
 }
 
@@ -681,6 +690,37 @@ function normalizeStructuredVoiceIntent(rawIntent) {
 
   return {
     intent: intentLabel === "none" ? null : intentLabel,
+    confidence,
+    reason
+  };
+}
+
+function normalizeStructuredScreenShareIntent(rawIntent) {
+  if (!rawIntent || typeof rawIntent !== "object") {
+    return {
+      action: null,
+      confidence: 0,
+      reason: null
+    };
+  }
+
+  const actionLabel = String(rawIntent.action || rawIntent.intent || "")
+    .trim()
+    .toLowerCase();
+  if (!REPLY_SCREEN_SHARE_ACTION_TYPES.has(actionLabel)) {
+    return {
+      action: null,
+      confidence: 0,
+      reason: null
+    };
+  }
+
+  const confidenceRaw = Number(rawIntent.confidence);
+  const confidence = Number.isFinite(confidenceRaw) ? clamp(confidenceRaw, 0, 1) : 0;
+  const reason = normalizeDirectiveText(rawIntent.reason, MAX_SCREEN_SHARE_REASON_LEN) || null;
+
+  return {
+    action: actionLabel === "none" ? null : actionLabel,
     confidence,
     reason
   };

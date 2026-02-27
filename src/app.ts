@@ -9,6 +9,8 @@ import { MemoryManager } from "./memory.ts";
 import { WebSearchService } from "./search.ts";
 import { Store } from "./store.ts";
 import { VideoContextService } from "./video.ts";
+import { PublicHttpsEntrypoint } from "./publicHttpsEntrypoint.ts";
+import { ScreenShareSessionManager } from "./screenShareSessionManager.ts";
 
 async function main() {
   ensureRuntimeEnv();
@@ -28,9 +30,25 @@ async function main() {
   await memory.refreshMemoryMarkdown();
 
   const bot = new ClankerBot({ appConfig, store, llm, memory, discovery, search, gifs, video });
-  const dashboard = createDashboardServer({ appConfig, store, bot, memory });
+  const publicHttpsEntrypoint = new PublicHttpsEntrypoint({ appConfig, store });
+  const screenShareSessionManager = new ScreenShareSessionManager({
+    appConfig,
+    store,
+    bot,
+    publicHttpsEntrypoint
+  });
+  bot.attachScreenShareSessionManager(screenShareSessionManager);
+  const dashboard = createDashboardServer({
+    appConfig,
+    store,
+    bot,
+    memory,
+    publicHttpsEntrypoint,
+    screenShareSessionManager
+  });
 
   await bot.start();
+  await publicHttpsEntrypoint.start();
 
   let closing = false;
   const shutdown = async (signal) => {
@@ -41,6 +59,12 @@ async function main() {
 
     try {
       await bot.stop();
+    } catch {
+      // ignore
+    }
+
+    try {
+      await publicHttpsEntrypoint.stop();
     } catch {
       // ignore
     }

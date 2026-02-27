@@ -80,6 +80,9 @@ const MENTION_SEARCH_RESULT_LIMIT = 10;
 const MAX_AUTOMATIONS_PER_GUILD = 90;
 const MAX_AUTOMATION_RUNS_PER_TICK = 4;
 const MAX_AUTOMATION_LIST_ROWS = 10;
+const SCREEN_SHARE_INTENT_THRESHOLD = 0.66;
+const SCREEN_SHARE_EXPLICIT_REQUEST_RE =
+  /\b(?:screen\s*share|share\s*(?:my|the)?\s*screen|watch\s*(?:my|the)?\s*screen|see\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*stream|watch\s*(?:my|the)?\s*stream)\b/i;
 
 export class ClankerBot {
   constructor({ appConfig, store, llm, memory, discovery, search, gifs, video }) {
@@ -109,6 +112,7 @@ export class ClankerBot {
     this.replyQueues = new Map();
     this.replyQueueWorkers = new Set();
     this.replyQueuedMessageIds = new Set();
+    this.screenShareSessionManager = null;
 
     this.client = new Client({
       intents: [
@@ -131,6 +135,10 @@ export class ClankerBot {
     });
 
     this.registerEvents();
+  }
+
+  attachScreenShareSessionManager(manager) {
+    this.screenShareSessionManager = manager || null;
   }
 
   registerEvents() {
@@ -1208,6 +1216,11 @@ export class ClankerBot {
       channelId: message.channelId,
       userId: message.author.id
     };
+    const screenShareCapability = this.screenShareSessionManager?.getLinkCapability?.() || {
+      enabled: false,
+      status: "disabled",
+      publicUrl: ""
+    };
 
     const systemPrompt = buildSystemPrompt(settings);
     const replyPromptBase = {
@@ -1246,6 +1259,7 @@ export class ClankerBot {
       voiceMode: {
         enabled: Boolean(settings?.voice?.enabled)
       },
+      screenShare: screenShareCapability,
       videoContext,
       maxMediaPromptChars: resolveMaxMediaPromptLen(settings)
     };
@@ -1389,6 +1403,20 @@ export class ClankerBot {
     let finalText = sanitizeBotText(replyDirective.text || (mediaDirective ? "here you go" : ""));
     let mentionResolution = emptyMentionResolution();
     finalText = normalizeSkipSentinel(finalText);
+    const screenShareOffer = await this.maybeHandleScreenShareOfferIntent({
+      message,
+      replyDirective,
+      source: options.source || "message_event"
+    });
+    if (screenShareOffer.appendText) {
+      const textParts = [];
+      if (finalText && finalText !== "[SKIP]") textParts.push(finalText);
+      textParts.push(screenShareOffer.appendText);
+      finalText = sanitizeBotText(textParts.join("\n"), 1700);
+    }
+    if ((!finalText || finalText === "[SKIP]") && screenShareOffer.fallbackText) {
+      finalText = sanitizeBotText(screenShareOffer.fallbackText, 1700);
+    }
     if (!finalText || finalText === "[SKIP]") {
       this.logSkippedReply({
         message,
@@ -1398,7 +1426,8 @@ export class ClankerBot {
         generation,
         usedWebSearchFollowup,
         reason: finalText ? "llm_skip" : "empty_reply",
-        reaction
+        reaction,
+        screenShareOffer
       });
       return false;
     }
@@ -1590,6 +1619,7 @@ export class ClankerBot {
         },
         mentions: mentionResolution,
         reaction,
+        screenShareOffer,
         webSearch: {
           requested: webSearch.requested,
           used: webSearch.used,
@@ -1777,6 +1807,124 @@ export class ClankerBot {
     });
 
     return true;
+  }
+
+  async maybeHandleScreenShareOfferIntent({
+    message,
+    replyDirective,
+    source = "message_event"
+  }) {
+    const empty = {
+      offered: false,
+      appendText: "",
+      fallbackText: "",
+      linkUrl: null,
+      explicitRequest: false,
+      intentRequested: false,
+      confidence: 0,
+      reason: null
+    };
+
+    const explicitRequest = SCREEN_SHARE_EXPLICIT_REQUEST_RE.test(String(message?.content || ""));
+    const manager = this.screenShareSessionManager;
+    if (!message?.guildId || !message?.channelId) return empty;
+    if (!manager) {
+      if (!explicitRequest) return empty;
+      return {
+        ...empty,
+        explicitRequest: true,
+        fallbackText: "i can't generate a screen-share link right now."
+      };
+    }
+
+    const intent = replyDirective?.screenShareIntent || {};
+    const intentRequested = intent?.action === "offer_link";
+    const confidence = Number(intent?.confidence || 0);
+    const intentAllowed = intentRequested && confidence >= SCREEN_SHARE_INTENT_THRESHOLD;
+    if (!explicitRequest && !intentAllowed) return empty;
+
+    const created = await manager.createSession({
+      guildId: message.guildId,
+      channelId: message.channelId,
+      requesterUserId: message.author?.id || null,
+      requesterDisplayName: message.member?.displayName || message.author?.username || "",
+      targetUserId: message.author?.id || null,
+      source
+    });
+
+    if (!created?.ok) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: message.guildId,
+        channelId: message.channelId,
+        messageId: message.id,
+        userId: message.author?.id || null,
+        content: "screen_share_offer_unavailable",
+        metadata: {
+          reason: created?.reason || "unknown",
+          explicitRequest,
+          intentRequested,
+          confidence,
+          source
+        }
+      });
+      if (!explicitRequest) {
+        return {
+          ...empty,
+          explicitRequest,
+          intentRequested,
+          confidence,
+          reason: created?.reason || "unknown"
+        };
+      }
+      return {
+        ...empty,
+        explicitRequest,
+        intentRequested,
+        confidence,
+        reason: created?.reason || "unknown",
+        fallbackText: String(
+          created?.message ||
+            "can't spin up a share link right now. i need to be in vc with you, in gemini realtime mode."
+        ).slice(0, 420)
+      };
+    }
+
+    const linkUrl = String(created.shareUrl || "").trim();
+    const expiresInMinutes = Number(created.expiresInMinutes || 0);
+    if (!linkUrl) return empty;
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: message.guildId,
+      channelId: message.channelId,
+      messageId: message.id,
+      userId: message.author?.id || null,
+      content: "screen_share_offer_prepared",
+      metadata: {
+        explicitRequest,
+        intentRequested,
+        confidence,
+        expiresInMinutes,
+        linkHost: safeUrlHost(linkUrl),
+        source
+      }
+    });
+
+    const appendText = explicitRequest
+      ? `screen-share link: ${linkUrl}\nopen it and hit Start Sharing (expires in ${expiresInMinutes}m).`
+      : `if it helps, share your screen here: ${linkUrl} (expires in ${expiresInMinutes}m).`;
+
+    return {
+      offered: true,
+      appendText,
+      fallbackText: "",
+      linkUrl,
+      explicitRequest,
+      intentRequested,
+      confidence,
+      reason: "offered"
+    };
   }
 
   composeAutomationControlReply({ modelText, fallbackText, detailLines = [] }) {
@@ -2240,7 +2388,8 @@ export class ClankerBot {
     generation,
     usedWebSearchFollowup,
     reason,
-    reaction
+    reaction,
+    screenShareOffer = null
   }) {
     this.store.logAction({
       kind: "reply_skipped",
@@ -2255,6 +2404,7 @@ export class ClankerBot {
         source,
         addressing: addressSignal,
         reaction,
+        screenShareOffer,
         llm: {
           provider: generation.provider,
           model: generation.model,
@@ -4597,5 +4747,15 @@ export class ClankerBot {
     }
 
     return parts.join(" ").replace(/\s+/g, " ").trim();
+  }
+}
+
+function safeUrlHost(rawUrl) {
+  const text = String(rawUrl || "").trim();
+  if (!text) return "";
+  try {
+    return String(new URL(text).host || "").trim().slice(0, 160);
+  } catch {
+    return "";
   }
 }

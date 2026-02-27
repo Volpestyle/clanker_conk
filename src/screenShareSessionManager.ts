@@ -155,7 +155,7 @@ export class ScreenShareSessionManager {
         source: session.source,
         expiresAt: new Date(expiresAt).toISOString(),
         targetUserId: session.targetUserId,
-        shareUrl
+        shareHost: safeUrlHost(shareUrl)
       }
     });
 
@@ -175,6 +175,18 @@ export class ScreenShareSessionManager {
       return {
         accepted: false,
         reason: "share_session_not_found"
+      };
+    }
+
+    const voicePresence = this.validateSessionVoicePresence(session);
+    if (!voicePresence.ok) {
+      this.stopSessionByToken({
+        token: session.token,
+        reason: voicePresence.reason
+      });
+      return {
+        accepted: false,
+        reason: voicePresence.reason
       };
     }
 
@@ -210,6 +222,52 @@ export class ScreenShareSessionManager {
       session.lastFrameAt = Date.now();
     }
     return result || { accepted: false, reason: "unknown" };
+  }
+
+  validateSessionVoicePresence(session) {
+    const voiceManager = this.bot?.voiceSessionManager || null;
+    if (!voiceManager || typeof voiceManager.getSession !== "function") {
+      return {
+        ok: false,
+        reason: "voice_session_not_found"
+      };
+    }
+
+    const voiceSession = voiceManager.getSession(String(session?.guildId || "").trim());
+    if (!voiceSession || voiceSession.ending) {
+      return {
+        ok: false,
+        reason: "voice_session_not_found"
+      };
+    }
+
+    if (typeof voiceManager.isUserInSessionVoiceChannel === "function") {
+      const requesterPresent = voiceManager.isUserInSessionVoiceChannel({
+        session: voiceSession,
+        userId: session.requesterUserId
+      });
+      if (!requesterPresent) {
+        return {
+          ok: false,
+          reason: "requester_not_in_same_vc"
+        };
+      }
+
+      if (session.targetUserId) {
+        const targetPresent = voiceManager.isUserInSessionVoiceChannel({
+          session: voiceSession,
+          userId: session.targetUserId
+        });
+        if (!targetPresent) {
+          return {
+            ok: false,
+            reason: "target_user_not_in_same_vc"
+          };
+        }
+      }
+    }
+
+    return { ok: true };
   }
 
   stopSessionByToken({ token, reason = "stopped_by_user" }) {
@@ -515,4 +573,14 @@ function escapeJsString(value) {
     .replaceAll("\n", "\\n")
     .replaceAll("\r", "\\r")
     .replaceAll("</", "<\\/");
+}
+
+function safeUrlHost(rawUrl) {
+  const text = String(rawUrl || "").trim();
+  if (!text) return "";
+  try {
+    return String(new URL(text).host || "").trim().slice(0, 160);
+  } catch {
+    return "";
+  }
 }

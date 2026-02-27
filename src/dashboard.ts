@@ -3,42 +3,113 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import { getLlmModelCatalog } from "./pricing.ts";
+import { classifyApiAccessPath, isAllowedPublicApiPath, isPublicTunnelRequestHost } from "./publicIngressAccess.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const STREAM_INGEST_API_PATH = "/voice/stream-ingest/frame";
 const DASHBOARD_JSON_LIMIT = "7mb";
+const DASHBOARD_DEFAULT_HOST = "127.0.0.1";
+const PUBLIC_FRAME_REQUEST_WINDOW_MS = 60_000;
+const PUBLIC_FRAME_REQUEST_MAX_PER_WINDOW = 1200;
+const PUBLIC_FRAME_DECLARED_BYTES_MAX = 6_000_000;
+const PUBLIC_SHARE_FRAME_PATH_RE = /^\/api\/voice\/share-session\/[a-z0-9_-]{16,}\/frame\/?$/i;
 
-export function createDashboardServer({ appConfig, store, bot, memory }) {
+export function createDashboardServer({
+  appConfig,
+  store,
+  bot,
+  memory,
+  publicHttpsEntrypoint = null,
+  screenShareSessionManager = null
+}) {
   const app = express();
+  const publicFrameIngressRateLimit = new Map();
+
+  app.use((req, res, next) => {
+    if (!isPublicFrameIngressPath(req.path)) return next();
+
+    const contentLengthHeader = String(req.get("content-length") || "").trim();
+    if (contentLengthHeader) {
+      const declaredBytes = Number(contentLengthHeader);
+      if (Number.isFinite(declaredBytes) && declaredBytes > PUBLIC_FRAME_DECLARED_BYTES_MAX) {
+        return res.status(413).json({
+          accepted: false,
+          reason: "payload_too_large"
+        });
+      }
+    }
+
+    const callerIp =
+      String(req.get("cf-connecting-ip") || req.ip || req.socket?.remoteAddress || "").trim() || "unknown";
+    const rateKey = `${callerIp}|${String(req.path || "")}`;
+    const allowed = consumeFixedWindowRateLimit({
+      buckets: publicFrameIngressRateLimit,
+      key: rateKey,
+      nowMs: Date.now(),
+      windowMs: PUBLIC_FRAME_REQUEST_WINDOW_MS,
+      maxRequests: PUBLIC_FRAME_REQUEST_MAX_PER_WINDOW
+    });
+    if (!allowed) {
+      return res.status(429).json({
+        accepted: false,
+        reason: "ingest_rate_limited"
+      });
+    }
+    return next();
+  });
 
   // Supports max stream-watch frame payloads (4MB binary -> ~5.4MB JSON/base64 body).
   app.use(express.json({ limit: DASHBOARD_JSON_LIMIT }));
   app.use(express.urlencoded({ extended: true }));
 
   app.use("/api", (req, res, next) => {
-    const isStreamIngestRoute = req.path === STREAM_INGEST_API_PATH || req.path === `${STREAM_INGEST_API_PATH}/`;
-    const configuredToken = String(appConfig.dashboardToken || "").trim();
-    if (!configuredToken) {
-      if (isStreamIngestRoute) {
-        return res.status(503).json({
-          accepted: false,
-          reason: "dashboard_token_required"
-        });
-      }
-      return next();
+    const apiAccessKind = classifyApiAccessPath(req.path);
+    const isPublicApiRoute = isAllowedPublicApiPath(req.path);
+    const dashboardToken = String(appConfig.dashboardToken || "").trim();
+    const publicApiToken = String(appConfig.publicApiToken || "").trim();
+    const presentedDashboardToken = req.get("x-dashboard-token") || String(req.query.token || "");
+    const presentedPublicToken = req.get("x-public-api-token") || "";
+    const isDashboardAuthorized = Boolean(dashboardToken) && presentedDashboardToken === dashboardToken;
+    const isPublicApiAuthorized = Boolean(publicApiToken) && presentedPublicToken === publicApiToken;
+    const isPublicTunnelRequest = isRequestFromPublicTunnel(req, publicHttpsEntrypoint);
+    const publicHttpsEnabled = Boolean(publicHttpsEntrypoint?.getState?.()?.enabled);
+
+    if (isDashboardAuthorized) return next();
+    if (apiAccessKind === "public_session_token") return next();
+    if (apiAccessKind === "public_header_token" && isPublicApiAuthorized) return next();
+
+    if (isPublicTunnelRequest && !isPublicApiRoute) {
+      return res.status(404).json({ error: "Not found." });
     }
 
-    const presented = req.get("x-dashboard-token") || String(req.query.token || "");
-    if (presented === configuredToken) return next();
-
-    if (isStreamIngestRoute) {
+    if (apiAccessKind === "public_header_token") {
+      if (!dashboardToken && !publicApiToken) {
+        return res.status(503).json({
+          accepted: false,
+          reason: "dashboard_or_public_api_token_required"
+        });
+      }
+      if (publicApiToken && !isPublicApiAuthorized) {
+        return res.status(401).json({
+          accepted: false,
+          reason: "unauthorized_public_api_token"
+        });
+      }
       return res.status(401).json({
         accepted: false,
         reason: "unauthorized_dashboard_token"
       });
     }
 
+    if (!dashboardToken) {
+      if (publicHttpsEnabled) {
+        return res.status(503).json({
+          error: "dashboard_token_required_when_public_https_enabled"
+        });
+      }
+      return next();
+    }
     return res.status(401).json({ error: "Unauthorized. Provide x-dashboard-token." });
   });
 
@@ -66,9 +137,95 @@ export function createDashboardServer({ appConfig, store, bot, memory }) {
   });
 
   app.get("/api/stats", (_req, res) => {
+    const botRuntime = bot.getRuntimeState();
     res.json({
       stats: store.getStats(),
-      runtime: bot.getRuntimeState()
+      runtime: {
+        ...botRuntime,
+        publicHttps: publicHttpsEntrypoint?.getState?.() || null,
+        screenShare: screenShareSessionManager?.getRuntimeState?.() || null
+      }
+    });
+  });
+
+  app.get("/api/public-https", (_req, res) => {
+    res.json(publicHttpsEntrypoint?.getState?.() || null);
+  });
+
+  app.post("/api/voice/share-session", async (req, res, next) => {
+    try {
+      if (!screenShareSessionManager) {
+        return res.status(503).json({
+          ok: false,
+          reason: "screen_share_manager_unavailable"
+        });
+      }
+
+      const result = await screenShareSessionManager.createSession({
+        guildId: String(req.body?.guildId || "").trim(),
+        channelId: String(req.body?.channelId || "").trim(),
+        requesterUserId: String(req.body?.requesterUserId || "").trim(),
+        requesterDisplayName: String(req.body?.requesterDisplayName || "").trim(),
+        targetUserId: String(req.body?.targetUserId || "").trim() || null,
+        source: String(req.body?.source || "dashboard_api").trim() || "dashboard_api"
+      });
+      return res.status(result?.ok ? 200 : 400).json(result);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post("/api/voice/share-session/:token/frame", async (req, res, next) => {
+    try {
+      if (!screenShareSessionManager) {
+        return res.status(503).json({
+          accepted: false,
+          reason: "screen_share_manager_unavailable"
+        });
+      }
+      const token = String(req.params?.token || "").trim();
+      const dataBase64 = String(req.body?.dataBase64 || "").trim();
+      const mimeType = String(req.body?.mimeType || "image/jpeg").trim() || "image/jpeg";
+      const source = String(req.body?.source || "share_session_page").trim() || "share_session_page";
+      if (!token || !dataBase64) {
+        return res.status(400).json({
+          accepted: false,
+          reason: !token ? "share_session_token_required" : "frame_data_required"
+        });
+      }
+
+      const result = await screenShareSessionManager.ingestFrameByToken({
+        token,
+        mimeType,
+        dataBase64,
+        source
+      });
+      const status = result?.accepted ? 200 : 400;
+      return res.status(status).json(result || { accepted: false, reason: "unknown" });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post("/api/voice/share-session/:token/stop", (req, res) => {
+    if (!screenShareSessionManager) {
+      return res.status(503).json({
+        ok: false,
+        reason: "screen_share_manager_unavailable"
+      });
+    }
+    const token = String(req.params?.token || "").trim();
+    const reason = String(req.body?.reason || "stopped_by_user").trim() || "stopped_by_user";
+    if (!token) {
+      return res.status(400).json({
+        ok: false,
+        reason: "share_session_token_required"
+      });
+    }
+    const stopped = screenShareSessionManager.stopSessionByToken({ token, reason });
+    return res.json({
+      ok: Boolean(stopped),
+      reason: stopped ? "ok" : "share_session_not_found"
     });
   });
 
@@ -219,6 +376,22 @@ export function createDashboardServer({ appConfig, store, bot, memory }) {
     });
   });
 
+  app.use((req, res, next) => {
+    const isApiRoute = req.path === "/api" || req.path.startsWith("/api/");
+    if (isApiRoute) return next();
+    if (!isRequestFromPublicTunnel(req, publicHttpsEntrypoint)) return next();
+    if (req.path.startsWith("/share/")) return next();
+    return res.status(404).send("Not found.");
+  });
+
+  app.get("/share/:token", (req, res) => {
+    if (!screenShareSessionManager) {
+      return res.status(503).send("Screen share link unavailable.");
+    }
+    const rendered = screenShareSessionManager.renderSharePage(String(req.params?.token || "").trim());
+    return res.status(rendered?.statusCode || 200).send(String(rendered?.html || ""));
+  });
+
   const staticDir = path.resolve(__dirname, "../dashboard/dist");
   const indexPath = path.join(staticDir, "index.html");
 
@@ -232,8 +405,9 @@ export function createDashboardServer({ appConfig, store, bot, memory }) {
     res.sendFile(indexPath);
   });
 
-  const server = app.listen(appConfig.dashboardPort, () => {
-    console.log(`Dashboard running on http://localhost:${appConfig.dashboardPort}`);
+  const dashboardHost = normalizeDashboardHost(appConfig.dashboardHost);
+  const server = app.listen(appConfig.dashboardPort, dashboardHost, () => {
+    console.log(`Dashboard running on http://${dashboardHost}:${appConfig.dashboardPort}`);
   });
 
   return { app, server };
@@ -245,4 +419,64 @@ function parseBoundedInt(value, fallback, min, max) {
   if (parsed < min) return min;
   if (parsed > max) return max;
   return parsed;
+}
+
+function isRequestFromPublicTunnel(req, publicHttpsEntrypoint) {
+  const requestHost = String(req.get("x-forwarded-host") || req.get("host") || "").trim();
+  if (!requestHost) return false;
+  const publicState = publicHttpsEntrypoint?.getState?.() || null;
+  return isPublicTunnelRequestHost(requestHost, publicState);
+}
+
+function normalizeDashboardHost(rawHost) {
+  const normalized = String(rawHost || "").trim();
+  return normalized || DASHBOARD_DEFAULT_HOST;
+}
+
+function isPublicFrameIngressPath(rawPath) {
+  const normalizedPath = String(rawPath || "").trim();
+  if (!normalizedPath) return false;
+  if (normalizedPath === `/api${STREAM_INGEST_API_PATH}` || normalizedPath === `/api${STREAM_INGEST_API_PATH}/`) {
+    return true;
+  }
+  return PUBLIC_SHARE_FRAME_PATH_RE.test(normalizedPath);
+}
+
+function consumeFixedWindowRateLimit({ buckets, key, nowMs, windowMs, maxRequests }) {
+  if (!buckets || !key) return false;
+  const now = Number.isFinite(Number(nowMs)) ? Number(nowMs) : Date.now();
+  const windowSpan = Math.max(1, Number(windowMs) || 1);
+  const maxInWindow = Math.max(1, Number(maxRequests) || 1);
+
+  let bucket = buckets.get(key) || null;
+  if (!bucket || now - Number(bucket.windowStartedAt || 0) >= windowSpan) {
+    bucket = {
+      windowStartedAt: now,
+      count: 0,
+      lastSeenAt: now
+    };
+    buckets.set(key, bucket);
+  }
+
+  if (Number(bucket.count || 0) >= maxInWindow) {
+    bucket.lastSeenAt = now;
+    pruneRateLimitBuckets(buckets, now, windowSpan);
+    return false;
+  }
+
+  bucket.count = Number(bucket.count || 0) + 1;
+  bucket.lastSeenAt = now;
+  pruneRateLimitBuckets(buckets, now, windowSpan);
+  return true;
+}
+
+function pruneRateLimitBuckets(buckets, nowMs, windowMs) {
+  if (!buckets || buckets.size <= 2500) return;
+  const staleBefore = nowMs - windowMs * 3;
+  for (const [key, bucket] of buckets.entries()) {
+    if (Number(bucket?.lastSeenAt || 0) < staleBefore) {
+      buckets.delete(key);
+    }
+    if (buckets.size <= 1500) break;
+  }
 }

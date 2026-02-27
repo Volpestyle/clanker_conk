@@ -2,6 +2,9 @@ export default function MetricsBar({ stats }) {
   const runtime = stats?.runtime;
   const s = stats?.stats;
   const isOnline = runtime?.isReady;
+  const publicHttps = runtime?.publicHttps;
+  const publicHttpsValue = formatPublicHttpsValue(publicHttps);
+  const screenShareActive = Number(runtime?.screenShare?.activeCount || 0);
 
   const cards = [
     {
@@ -50,6 +53,14 @@ export default function MetricsBar({ stats }) {
     {
       label: "Voice Errors (24h)",
       value: String(s?.last24h?.voice_error || 0)
+    },
+    {
+      label: "Public HTTPS",
+      value: publicHttpsValue
+    },
+    {
+      label: "Share Sessions",
+      value: String(screenShareActive)
     }
   ];
 
@@ -63,4 +74,16 @@ export default function MetricsBar({ stats }) {
       ))}
     </section>
   );
+}
+
+function formatPublicHttpsValue(publicHttps) {
+  if (!publicHttps?.enabled) return "disabled";
+  const url = String(publicHttps?.publicUrl || "").trim();
+  if (url) return url.replace(/^https?:\/\//, "");
+  const status = String(publicHttps?.status || "").trim().toLowerCase();
+  if (!status) return "starting";
+  if (status === "error") return "error";
+  if (status === "ready") return "ready";
+  if (status === "stopped") return "stopped";
+  return "starting";
 }
