@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 
-export function usePolling(fetcher, intervalMs, deps = []) {
+export function usePolling(fetcher, intervalMs) {
   const [data, setData] = useState(null);
   const [error, setError] = useState(null);
   const [lastSuccess, setLastSuccess] = useState<number | null>(null);
@@ -16,7 +16,7 @@ export function usePolling(fetcher, intervalMs, deps = []) {
     } catch (err) {
       setError(err.message);
     }
-  }, deps);
+  }, []);
 
   useEffect(() => {
     load();

@@ -578,7 +578,7 @@ function pickSelectedCandidates(candidates, maxLinks, randomness) {
     selected.push(item);
   }
 
-  return selected.map(({ weightedScore, ...rest }) => rest);
+  return selected.map(({ weightedScore: _weightedScore, ...rest }) => rest);
 }
 
 export function normalizeDiscoveryUrl(rawUrl) {
