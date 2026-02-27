@@ -1,8 +1,9 @@
+import React from "react";
 import { SettingsSection } from "../SettingsSection";
 
-export function PromptGuidanceSettingsSection({ form, set }) {
+export function PromptGuidanceSettingsSection({ id, form, set }) {
   return (
-    <SettingsSection title="Prompt Guidance">
+    <SettingsSection id={id} title="Prompt Guidance">
       <p>
         Identity and persona live in Core Behavior. These fields tune reusable prompt guidance and system policy lines.
       </p>

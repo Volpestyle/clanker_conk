@@ -7,6 +7,8 @@ import SettingsForm from "./components/SettingsForm";
 import ActionStream from "./components/ActionStream";
 import MemoryViewer from "./components/MemoryViewer";
 import DailyCost from "./components/DailyCost";
+import PerformancePanel from "./components/PerformancePanel";
+import StaleIndicator from "./components/StaleIndicator";
 
 export default function App() {
   const [toast, setToast] = useState({ text: "", type: "" });
@@ -43,11 +45,14 @@ export default function App() {
     }
   }, [memory.reload, notify]);
 
+  const isReady = stats.data?.runtime?.isReady ?? false;
+
   return (
     <main className="shell">
-      <Header />
+      <Header isReady={isReady} />
 
       <MetricsBar stats={stats.data} />
+      <StaleIndicator lastSuccess={stats.lastSuccess} />
 
       <SettingsForm
         settings={settings.data}
@@ -63,6 +68,7 @@ export default function App() {
             markdown={memory.data?.markdown}
             onRefresh={handleMemoryRefresh}
           />
+          <PerformancePanel performance={stats.data?.stats?.performance} />
           <DailyCost rows={stats.data?.stats?.dailyCost} />
         </div>
       </section>

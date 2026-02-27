@@ -1,20 +1,17 @@
-import { useState } from "react";
-
-export function SettingsSection({ title, active, defaultOpen = false, children }: {
+import React from "react";
+export function SettingsSection({ id, title, active, children }: {
+  id?: string;
   title: string;
   active?: boolean;
-  defaultOpen?: boolean;
   children: React.ReactNode;
 }) {
-  const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className={`settings-section${open ? " open" : ""}`}>
-      <button type="button" className="section-toggle" onClick={() => setOpen((value) => !value)}>
-        <span className="section-arrow">&#x25B8;</span>
-        <span>{title}</span>
+    <div id={id} className="settings-section open">
+      <div className="section-header">
+        <span className="section-header-title">{title}</span>
         {active !== undefined && <span className={`section-dot${active ? " on" : ""}`} />}
-      </button>
-      {open && <div className="section-body">{children}</div>}
+      </div>
+      <div className="section-body">{children}</div>
     </div>
   );
 }

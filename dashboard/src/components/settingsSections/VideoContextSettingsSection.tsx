@@ -1,8 +1,9 @@
+import React from "react";
 import { SettingsSection } from "../SettingsSection";
 
-export function VideoContextSettingsSection({ form, set }) {
+export function VideoContextSettingsSection({ id, form, set }) {
   return (
-    <SettingsSection title="Video Context" active={form.videoContextEnabled}>
+    <SettingsSection id={id} title="Video Context" active={form.videoContextEnabled}>
       <div className="toggles">
         <label>
           <input

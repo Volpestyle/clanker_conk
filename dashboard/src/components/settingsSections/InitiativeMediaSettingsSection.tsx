@@ -1,6 +1,9 @@
+import React from "react";
 import { SettingsSection } from "../SettingsSection";
+import { rangeStyle } from "../../utils";
 
 export function InitiativeMediaSettingsSection({
+  id,
   form,
   set,
   showInitiativeAdvanced,
@@ -8,7 +11,7 @@ export function InitiativeMediaSettingsSection({
   showInitiativeVideoControls
 }) {
   return (
-    <SettingsSection title="Initiative Posts & Media" active={form.autonomousInitiativeEnabled}>
+    <SettingsSection id={id} title="Initiative Posts & Media" active={form.autonomousInitiativeEnabled}>
       <div className="toggles">
         <label>
           <input
@@ -125,6 +128,7 @@ export function InitiativeMediaSettingsSection({
                 step="1"
                 value={form.initiativeSpontaneity}
                 onChange={set("initiativeSpontaneity")}
+                style={rangeStyle(form.initiativeSpontaneity)}
               />
             </div>
           </div>
@@ -345,6 +349,7 @@ export function InitiativeMediaSettingsSection({
                 step="1"
                 value={form.initiativeDiscoveryRandomness}
                 onChange={set("initiativeDiscoveryRandomness")}
+                style={rangeStyle(form.initiativeDiscoveryRandomness)}
               />
 
               <div className="toggles">

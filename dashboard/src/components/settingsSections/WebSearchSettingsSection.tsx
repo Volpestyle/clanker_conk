@@ -1,8 +1,9 @@
+import React from "react";
 import { SettingsSection } from "../SettingsSection";
 
-export function WebSearchSettingsSection({ form, set }) {
+export function WebSearchSettingsSection({ id, form, set }) {
   return (
-    <SettingsSection title="Web Search" active={form.webSearchEnabled}>
+    <SettingsSection id={id} title="Web Search" active={form.webSearchEnabled}>
       <div className="toggles">
         <label>
           <input

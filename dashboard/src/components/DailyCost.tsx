@@ -1,19 +1,47 @@
+import React from "react";
+import Skeleton from "./Skeleton";
+
 export default function DailyCost({ rows }) {
+  if (rows === undefined || rows === null) {
+    return (
+      <section className="panel">
+        <h3 style={{ margin: "0 0 12px" }}>Daily Cost (14d)</h3>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {[0, 1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} height="36px" />
+          ))}
+        </div>
+      </section>
+    );
+  }
+
+  if (rows.length === 0) {
+    return (
+      <section className="panel">
+        <h3 style={{ margin: "0 0 12px" }}>Daily Cost (14d)</h3>
+        <p className="cost-empty">No usage yet</p>
+      </section>
+    );
+  }
+
+  const maxCost = Math.max(...rows.map((r) => Number(r.usd || 0)), 0.000001);
+
   return (
     <section className="panel">
       <h3 style={{ margin: "0 0 12px" }}>Daily Cost (14d)</h3>
-      {!rows || rows.length === 0 ? (
-        <p className="cost-empty">No usage yet</p>
-      ) : (
-        <ul className="cost-list">
-          {rows.map((row) => (
-            <li key={row.day}>
+      <ul className="cost-list">
+        {rows.map((row) => {
+          const usd = Number(row.usd || 0);
+          const pct = (usd / maxCost) * 100;
+          return (
+            <li key={row.day} className="cost-item">
+              <div className="cost-bar" style={{ width: `${pct}%` }} />
               <span className="day">{row.day}</span>
-              <span className="usd">${Number(row.usd || 0).toFixed(6)}</span>
+              <span className="usd">${usd.toFixed(6)}</span>
             </li>
-          ))}
-        </ul>
-      )}
+          );
+        })}
+      </ul>
     </section>
   );
 }

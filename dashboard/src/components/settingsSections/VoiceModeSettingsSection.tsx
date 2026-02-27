@@ -1,7 +1,10 @@
+import React from "react";
 import { CUSTOM_MODEL_OPTION_VALUE } from "../../settingsFormModel";
 import { SettingsSection } from "../SettingsSection";
+import { rangeStyle } from "../../utils";
 
 export function VoiceModeSettingsSection({
+  id,
   form,
   set,
   showVoiceAdvanced,
@@ -16,7 +19,7 @@ export function VoiceModeSettingsSection({
   selectedVoiceReplyDecisionPresetModel
 }) {
   return (
-    <SettingsSection title="Voice Mode" active={form.voiceEnabled}>
+    <SettingsSection id={id} title="Voice Mode" active={form.voiceEnabled}>
       <div className="toggles">
         <label>
           <input type="checkbox" checked={form.voiceEnabled} onChange={set("voiceEnabled")} />
@@ -107,6 +110,7 @@ export function VoiceModeSettingsSection({
             step="1"
             value={form.voiceReplyEagerness}
             onChange={set("voiceReplyEagerness")}
+            style={rangeStyle(form.voiceReplyEagerness)}
           />
 
           <h4>Voice Reply Decider</h4>

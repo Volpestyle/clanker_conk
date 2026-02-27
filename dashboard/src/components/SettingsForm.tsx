@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   CUSTOM_MODEL_OPTION_VALUE,
   formToSettingsPatch,
@@ -6,6 +6,7 @@ import {
   resolveProviderModelOptions,
   settingsToForm
 } from "../settingsFormModel";
+import { useActiveSection } from "../hooks/useActiveSection";
 import { CoreBehaviorSettingsSection } from "./settingsSections/CoreBehaviorSettingsSection";
 import { PromptGuidanceSettingsSection } from "./settingsSections/PromptGuidanceSettingsSection";
 import { LlmConfigurationSettingsSection } from "./settingsSections/LlmConfigurationSettingsSection";
@@ -17,17 +18,37 @@ import { StartupCatchupSettingsSection } from "./settingsSections/StartupCatchup
 import { InitiativeMediaSettingsSection } from "./settingsSections/InitiativeMediaSettingsSection";
 import { ChannelsPermissionsSettingsSection } from "./settingsSections/ChannelsPermissionsSettingsSection";
 
+const SECTIONS = [
+  { id: "sec-core", label: "Core Behavior" },
+  { id: "sec-prompts", label: "Prompts" },
+  { id: "sec-llm", label: "LLM Config" },
+  { id: "sec-search", label: "Web Search" },
+  { id: "sec-video", label: "Video Context" },
+  { id: "sec-voice", label: "Voice Mode" },
+  { id: "sec-rate", label: "Rate Limits" },
+  { id: "sec-startup", label: "Startup" },
+  { id: "sec-initiative", label: "Initiative" },
+  { id: "sec-channels", label: "Channels" },
+] as const;
+
+const SECTION_IDS = SECTIONS.map((s) => s.id);
+
 export default function SettingsForm({ settings, modelCatalog, onSave, toast }) {
-  const [open, setOpen] = useState(false);
   const [form, setForm] = useState(() => (settings ? settingsToForm(settings) : null));
+  const savedFormRef = useRef<string>("");
 
   useEffect(() => {
     if (!settings) return;
-    setForm((current) => ({
-      ...(current || {}),
-      ...settingsToForm(settings)
-    }));
+    const next = settingsToForm(settings);
+    setForm((current) => ({ ...(current || {}), ...next }));
+    savedFormRef.current = JSON.stringify(next);
   }, [settings]);
+
+  const activeSection = useActiveSection(SECTION_IDS);
+  const isDirty = useMemo(() => {
+    if (!form || !savedFormRef.current) return false;
+    return JSON.stringify(form) !== savedFormRef.current;
+  }, [form]);
 
   if (!form) return null;
 
@@ -93,23 +114,19 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
   }
 
   function setProvider(e) {
-    const provider = String(e.target.value || "").trim();
-    setProviderWithPresetFallback("provider", "model", provider);
+    setProviderWithPresetFallback("provider", "model", String(e.target.value || "").trim());
   }
 
   function setMemoryLlmProvider(e) {
-    const provider = String(e.target.value || "").trim();
-    setProviderWithPresetFallback("memoryLlmProvider", "memoryLlmModel", provider);
+    setProviderWithPresetFallback("memoryLlmProvider", "memoryLlmModel", String(e.target.value || "").trim());
   }
 
   function setReplyFollowupProvider(e) {
-    const provider = String(e.target.value || "").trim();
-    setProviderWithPresetFallback("replyFollowupLlmProvider", "replyFollowupLlmModel", provider);
+    setProviderWithPresetFallback("replyFollowupLlmProvider", "replyFollowupLlmModel", String(e.target.value || "").trim());
   }
 
   function setVoiceReplyDecisionProvider(e) {
-    const provider = String(e.target.value || "").trim();
-    setProviderWithPresetFallback("voiceReplyDecisionLlmProvider", "voiceReplyDecisionLlmModel", provider);
+    setProviderWithPresetFallback("voiceReplyDecisionLlmProvider", "voiceReplyDecisionLlmModel", String(e.target.value || "").trim());
   }
 
   function selectModelFieldPreset(modelField, selected) {
@@ -138,19 +155,33 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
     onSave(formToSettingsPatch(form));
   }
 
-  return (
-    <form className={`panel settings-form${open ? " settings-open" : ""}`} onSubmit={submit}>
-      <button type="button" className="settings-panel-toggle" onClick={() => setOpen((o) => !o)}>
-        <span className="section-arrow">&#x25B8;</span>
-        <h3>Settings</h3>
-      </button>
+  function scrollTo(id: string) {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
 
-      {open && (
-        <>
-          <CoreBehaviorSettingsSection form={form} set={set} />
-          <PromptGuidanceSettingsSection form={form} set={set} />
+  return (
+    <form className="panel settings-form" onSubmit={submit}>
+      <h3 className="settings-title">Settings</h3>
+      <div className="settings-layout">
+        <nav className="settings-sidebar">
+          {SECTIONS.map((s) => (
+            <button
+              key={s.id}
+              type="button"
+              className={`settings-nav-item${activeSection === s.id ? " active" : ""}`}
+              onClick={() => scrollTo(s.id)}
+            >
+              {s.label}
+            </button>
+          ))}
+        </nav>
+
+        <div className="settings-content">
+          <CoreBehaviorSettingsSection id="sec-core" form={form} set={set} />
+          <PromptGuidanceSettingsSection id="sec-prompts" form={form} set={set} />
 
           <LlmConfigurationSettingsSection
+            id="sec-llm"
             form={form}
             set={set}
             setProvider={setProvider}
@@ -170,10 +201,11 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
             selectedMemoryLlmPresetModel={selectedMemoryLlmPresetModel}
           />
 
-          <WebSearchSettingsSection form={form} set={set} />
-          <VideoContextSettingsSection form={form} set={set} />
+          <WebSearchSettingsSection id="sec-search" form={form} set={set} />
+          <VideoContextSettingsSection id="sec-video" form={form} set={set} />
 
           <VoiceModeSettingsSection
+            id="sec-voice"
             form={form}
             set={set}
             showVoiceAdvanced={showVoiceAdvanced}
@@ -188,10 +220,11 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
             selectedVoiceReplyDecisionPresetModel={selectedVoiceReplyDecisionPresetModel}
           />
 
-          <RateLimitsSettingsSection form={form} set={set} />
-          <StartupCatchupSettingsSection form={form} set={set} />
+          <RateLimitsSettingsSection id="sec-rate" form={form} set={set} />
+          <StartupCatchupSettingsSection id="sec-startup" form={form} set={set} />
 
           <InitiativeMediaSettingsSection
+            id="sec-initiative"
             form={form}
             set={set}
             showInitiativeAdvanced={showInitiativeAdvanced}
@@ -199,16 +232,19 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
             showInitiativeVideoControls={showInitiativeVideoControls}
           />
 
-          <ChannelsPermissionsSettingsSection form={form} set={set} />
+          <ChannelsPermissionsSettingsSection id="sec-channels" form={form} set={set} />
+        </div>
+      </div>
 
-          <div className="save-bar">
-            <button type="submit" className="cta">Save settings</button>
-            {toast.text && (
-              <p className={`status-msg ${toast.type}`}>{toast.text}</p>
-            )}
-          </div>
-        </>
-      )}
+      <div className="save-bar">
+        <button type="submit" className="cta">
+          Save settings
+          {isDirty && <span className="unsaved-dot" />}
+        </button>
+        {toast.text && (
+          <p className={`status-msg ${toast.type}`}>{toast.text}</p>
+        )}
+      </div>
     </form>
   );
 }
