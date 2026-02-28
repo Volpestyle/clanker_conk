@@ -291,6 +291,9 @@ test("maybeInterruptBotForAssertiveSpeech cuts playback after assertive speech",
         "user-1",
         {
           bytesSent: minBytes + 2_400,
+          signalSampleCount: 24_000,
+          signalActiveSampleCount: 1_680,
+          signalPeakAbs: 5_400,
           speakingEndFinalizeTimer: null
         }
       ]
@@ -340,6 +343,45 @@ test("maybeInterruptBotForAssertiveSpeech cuts playback after assertive speech",
   assert.equal(Number(session.pendingResponse?.audioReceivedAt || 0) > 0, true);
   assert.equal(Number(session.bargeInSuppressionUntil || 0) > Date.now(), true);
   assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), true);
+});
+
+test("maybeInterruptBotForAssertiveSpeech ignores near-silent captures", () => {
+  const { manager, logs } = createManager();
+  const stopCalls = [];
+  const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
+  const session = createSession({
+    botTurnOpen: true,
+    userCaptures: new Map([
+      [
+        "user-1",
+        {
+          bytesSent: minBytes + 2_400,
+          signalSampleCount: 24_000,
+          signalActiveSampleCount: 120,
+          signalPeakAbs: 220,
+          speakingEndFinalizeTimer: null
+        }
+      ]
+    ]),
+    audioPlayer: {
+      stop(force) {
+        stopCalls.push(force);
+      }
+    },
+    botAudioStream: {
+      destroy() {}
+    }
+  });
+
+  const interrupted = manager.maybeInterruptBotForAssertiveSpeech({
+    session,
+    userId: "user-1",
+    source: "test"
+  });
+  assert.equal(interrupted, false);
+  assert.equal(session.botTurnOpen, true);
+  assert.equal(stopCalls.length, 0);
+  assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
 });
 
 test("enqueueDiscordPcmForPlayback trims oldest queued audio once hard cap is exceeded", () => {
@@ -440,7 +482,17 @@ test("enqueueDiscordPcmForPlayback interrupts bot output when user speech would 
 
   const session = createSession({
     botTurnOpen: true,
-    userCaptures: new Map([["user-1", { bytesSent: DISCORD_PCM_FRAME_BYTES * 2 }]]),
+    userCaptures: new Map([
+      [
+        "user-1",
+        {
+          bytesSent: DISCORD_PCM_FRAME_BYTES * 12,
+          signalSampleCount: 32_000,
+          signalActiveSampleCount: 2_100,
+          signalPeakAbs: 6_200
+        }
+      ]
+    ]),
     audioPlayer: {
       state: {
         status: "playing"
@@ -494,6 +546,63 @@ test("enqueueDiscordPcmForPlayback interrupts bot output when user speech would 
   const interruptLog = logs.find((entry) => entry?.content === "voice_barge_in_interrupt");
   assert.equal(Boolean(interruptLog), true);
   assert.equal(interruptLog?.metadata?.source, "playback_queue_overflow_guard");
+});
+
+test("enqueueDiscordPcmForPlayback does not interrupt for near-silent active capture", () => {
+  const { manager, logs } = createManager();
+  manager.scheduleAudioPlaybackPump = () => {};
+  const stopCalls = [];
+
+  const session = createSession({
+    botTurnOpen: true,
+    userCaptures: new Map([
+      [
+        "user-1",
+        {
+          bytesSent: DISCORD_PCM_FRAME_BYTES * 12,
+          signalSampleCount: 32_000,
+          signalActiveSampleCount: 220,
+          signalPeakAbs: 180
+        }
+      ]
+    ]),
+    audioPlayer: {
+      state: {
+        status: "playing"
+      },
+      stop(force) {
+        stopCalls.push(force);
+      }
+    },
+    connection: {
+      subscribe() {}
+    },
+    botAudioStream: {
+      writableLength: 0,
+      destroy() {}
+    },
+    audioPlaybackQueue: {
+      chunks: [Buffer.alloc(DISCORD_PCM_FRAME_BYTES, 1)],
+      headOffset: 0,
+      queuedBytes: AUDIO_PLAYBACK_QUEUE_WARN_BYTES - DISCORD_PCM_FRAME_BYTES,
+      pumping: false,
+      timer: null,
+      waitingDrain: false,
+      drainHandler: null,
+      lastWarnAt: 0,
+      lastTrimAt: 0
+    }
+  });
+
+  const queued = manager.enqueueDiscordPcmForPlayback({
+    session,
+    discordPcm: Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 2)
+  });
+
+  assert.equal(queued, true);
+  assert.equal(session.botTurnOpen, true);
+  assert.equal(stopCalls.length, 0);
+  assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
 });
 
 test("enqueueDiscordPcmForPlayback clears stale drain wait when audio stream is replaced", () => {

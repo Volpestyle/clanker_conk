@@ -105,6 +105,7 @@ import {
   BARGE_IN_MIN_SPEECH_MS,
   BARGE_IN_SUPPRESSION_MAX_MS,
   BOT_DISCONNECT_GRACE_MS,
+  DIRECT_ADDRESS_CROSS_SPEAKER_WAKE_MS,
   BOT_TURN_DEFERRED_COALESCE_MAX,
   BOT_TURN_DEFERRED_FLUSH_DELAY_MS,
   BOT_TURN_DEFERRED_QUEUE_MAX,
@@ -127,6 +128,7 @@ import {
   OPENAI_ACTIVE_RESPONSE_RETRY_MS,
   PENDING_SUPERSEDE_MIN_AGE_MS,
   JOIN_GREETING_LLM_WINDOW_MS,
+  NON_DIRECT_REPLY_MIN_SILENCE_MS,
   REALTIME_CONTEXT_MEMBER_LIMIT,
   REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS,
   REALTIME_INSTRUCTION_REFRESH_DEBOUNCE_MS,
@@ -1135,6 +1137,7 @@ export class VoiceSessionManager {
       : 24000;
     const minCaptureBytes = Math.max(2, Math.ceil((sampleRateHz * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000));
     if (Number(capture.bytesSent || 0) < minCaptureBytes) return false;
+    if (!this.isCaptureSignalAssertive(capture)) return false;
 
     return this.interruptBotSpeechForBargeIn({
       session,
@@ -1142,6 +1145,39 @@ export class VoiceSessionManager {
       source: String(source || "speaking_start"),
       minCaptureBytes
     });
+  }
+
+  isCaptureSignalAssertive(capture) {
+    if (!capture || typeof capture !== "object") return false;
+    const sampleCount = Math.max(0, Number(capture.signalSampleCount || 0));
+    if (sampleCount <= 0) return false;
+
+    const activeSampleCount = Math.max(0, Number(capture.signalActiveSampleCount || 0));
+    const peakAbs = Math.max(0, Number(capture.signalPeakAbs || 0));
+    const activeSampleRatio = activeSampleCount / sampleCount;
+    const peak = peakAbs / 32768;
+
+    const nearSilentSignal =
+      activeSampleRatio <= VOICE_SILENCE_GATE_ACTIVE_RATIO_MAX &&
+      peak <= VOICE_SILENCE_GATE_PEAK_MAX;
+    return !nearSilentSignal;
+  }
+
+  hasAssertiveInboundCapture(session) {
+    if (!session || !(session.userCaptures instanceof Map) || session.userCaptures.size <= 0) return false;
+    const sampleRateHz = isRealtimeMode(session.mode)
+      ? Number(session.realtimeInputSampleRateHz) || 24000
+      : 24000;
+    const minCaptureBytes = Math.max(2, Math.ceil((sampleRateHz * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000));
+
+    for (const capture of session.userCaptures.values()) {
+      if (!capture || typeof capture !== "object") continue;
+      if (capture.speakingEndFinalizeTimer) continue;
+      if (Number(capture.bytesSent || 0) < minCaptureBytes) continue;
+      if (!this.isCaptureSignalAssertive(capture)) continue;
+      return true;
+    }
+    return false;
   }
 
   interruptBotSpeechForBargeIn({
@@ -1805,9 +1841,8 @@ export class VoiceSessionManager {
     const streamBufferedBytesBeforeEnqueue = Math.max(0, Number(session.botAudioStream?.writableLength || 0));
     const projectedBufferedBytes =
       Math.max(0, Number(state.queuedBytes || 0)) + streamBufferedBytesBeforeEnqueue + pcm.length;
-    const activeInboundCaptureCount = Number(session.userCaptures?.size || 0);
     if (
-      activeInboundCaptureCount > 0 &&
+      this.hasAssertiveInboundCapture(session) &&
       session.botTurnOpen &&
       !this.isBargeInOutputSuppressed(session) &&
       projectedBufferedBytes >= AUDIO_PLAYBACK_QUEUE_WARN_BYTES
@@ -3398,6 +3433,9 @@ export class VoiceSessionManager {
       pcmStream,
       startedAt: Date.now(),
       bytesSent: 0,
+      signalSampleCount: 0,
+      signalActiveSampleCount: 0,
+      signalPeakAbs: 0,
       pcmChunks: [],
       lastActivityTouchAt: 0,
       idleFlushTimer: null,
@@ -3475,6 +3513,23 @@ export class VoiceSessionManager {
       );
       if (!normalizedPcm.length) return;
       captureState.bytesSent += normalizedPcm.length;
+      const sampleCount = Math.floor(normalizedPcm.length / 2);
+      if (sampleCount > 0) {
+        let peakAbs = Math.max(0, Number(captureState.signalPeakAbs || 0));
+        let activeSamples = 0;
+        for (let offset = 0; offset < normalizedPcm.length; offset += 2) {
+          const sample = normalizedPcm.readInt16LE(offset);
+          const absSample = Math.abs(sample);
+          if (absSample > peakAbs) peakAbs = absSample;
+          if (absSample >= VOICE_SILENCE_GATE_ACTIVE_SAMPLE_MIN_ABS) {
+            activeSamples += 1;
+          }
+        }
+        captureState.signalSampleCount = Math.max(0, Number(captureState.signalSampleCount || 0)) + sampleCount;
+        captureState.signalActiveSampleCount =
+          Math.max(0, Number(captureState.signalActiveSampleCount || 0)) + activeSamples;
+        captureState.signalPeakAbs = peakAbs;
+      }
       captureState.pcmChunks.push(normalizedPcm);
       if (captureState.speakingEndFinalizeTimer) {
         clearTimeout(captureState.speakingEndFinalizeTimer);
@@ -4097,13 +4152,25 @@ export class VoiceSessionManager {
         msSinceDirectAddress: Number.isFinite(decision.conversationContext?.msSinceDirectAddress)
           ? Math.round(decision.conversationContext.msSinceDirectAddress)
           : null,
+        msSinceInboundAudio: Number.isFinite(decision.msSinceInboundAudio)
+          ? Math.round(decision.msSinceInboundAudio)
+          : null,
+        requiredSilenceMs: Number.isFinite(decision.requiredSilenceMs)
+          ? Math.round(decision.requiredSilenceMs)
+          : null,
+        retryAfterMs: Number.isFinite(decision.retryAfterMs)
+          ? Math.round(decision.retryAfterMs)
+          : null,
         error: decision.error || null
       }
     });
 
     const useNativeRealtimeReply = this.shouldUseNativeRealtimeReply({ session, settings });
     if (!decision.allow) {
-      if (decision.reason === "bot_turn_open") {
+      if (
+        decision.reason === "bot_turn_open" ||
+        decision.reason === "awaiting_non_direct_silence_window"
+      ) {
         this.queueDeferredBotTurnOpenTurn({
           session,
           userId,
@@ -4111,7 +4178,9 @@ export class VoiceSessionManager {
           pcmBuffer,
           captureReason,
           source: "realtime",
-          directAddressed: Boolean(decision.directAddressed)
+          directAddressed: Boolean(decision.directAddressed),
+          deferReason: decision.reason,
+          flushDelayMs: decision.retryAfterMs
         });
       }
       return;
@@ -4147,11 +4216,17 @@ export class VoiceSessionManager {
     pcmBuffer = null,
     captureReason = "stream_end",
     source = "voice_turn",
-    directAddressed = false
+    directAddressed = false,
+    deferReason = "bot_turn_open",
+    flushDelayMs = null
   }) {
     if (!session || session.ending) return;
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     if (!normalizedTranscript) return;
+    const normalizedDeferReason = String(deferReason || "bot_turn_open").trim() || "bot_turn_open";
+    const normalizedFlushDelayMs = Number.isFinite(Number(flushDelayMs))
+      ? Math.max(20, Math.round(Number(flushDelayMs)))
+      : BOT_TURN_DEFERRED_FLUSH_DELAY_MS;
     const pendingQueue = Array.isArray(session.pendingDeferredTurns) ? session.pendingDeferredTurns : [];
     if (!Array.isArray(session.pendingDeferredTurns)) {
       session.pendingDeferredTurns = pendingQueue;
@@ -4166,6 +4241,8 @@ export class VoiceSessionManager {
       captureReason: String(captureReason || "stream_end"),
       source: String(source || "voice_turn"),
       directAddressed: Boolean(directAddressed),
+      deferReason: normalizedDeferReason,
+      flushDelayMs: normalizedFlushDelayMs,
       queuedAt: Date.now()
     });
     this.store.logAction({
@@ -4179,11 +4256,16 @@ export class VoiceSessionManager {
         source: String(source || "voice_turn"),
         mode: session.mode,
         captureReason: String(captureReason || "stream_end"),
+        deferReason: normalizedDeferReason,
         directAddressed: Boolean(directAddressed),
+        flushDelayMs: normalizedFlushDelayMs,
         deferredQueueSize: pendingQueue.length
       }
     });
-    this.scheduleDeferredBotTurnOpenFlush({ session });
+    this.scheduleDeferredBotTurnOpenFlush({
+      session,
+      delayMs: normalizedFlushDelayMs
+    });
   }
 
   scheduleDeferredBotTurnOpenFlush({ session, delayMs = BOT_TURN_DEFERRED_FLUSH_DELAY_MS }) {
@@ -4274,11 +4356,23 @@ export class VoiceSessionManager {
         msSinceDirectAddress: Number.isFinite(decision.conversationContext?.msSinceDirectAddress)
           ? Math.round(decision.conversationContext.msSinceDirectAddress)
           : null,
+        msSinceInboundAudio: Number.isFinite(decision.msSinceInboundAudio)
+          ? Math.round(decision.msSinceInboundAudio)
+          : null,
+        requiredSilenceMs: Number.isFinite(decision.requiredSilenceMs)
+          ? Math.round(decision.requiredSilenceMs)
+          : null,
+        retryAfterMs: Number.isFinite(decision.retryAfterMs)
+          ? Math.round(decision.retryAfterMs)
+          : null,
         error: decision.error || null
       }
     });
     if (!decision.allow) {
-      if (decision.reason === "bot_turn_open") {
+      if (
+        decision.reason === "bot_turn_open" ||
+        decision.reason === "awaiting_non_direct_silence_window"
+      ) {
         this.queueDeferredBotTurnOpenTurn({
           session,
           userId: latestTurn?.userId || null,
@@ -4286,7 +4380,9 @@ export class VoiceSessionManager {
           pcmBuffer: coalescedPcmBuffer,
           captureReason: latestTurn?.captureReason || "stream_end",
           source: "bot_turn_open_deferred_flush",
-          directAddressed: Boolean(decision.directAddressed)
+          directAddressed: Boolean(decision.directAddressed),
+          deferReason: decision.reason,
+          flushDelayMs: decision.retryAfterMs
         });
       }
       return;
@@ -4499,17 +4595,61 @@ export class VoiceSessionManager {
       speakerName
     });
     const now = Date.now();
-    const directAddressedByName = normalizedTranscript
-      ? (
-        isVoiceTurnAddressedToBot(normalizedTranscript, settings) ||
-        isLikelyBotNameVariantAddress(normalizedTranscript, settings?.botName || "")
-      )
+    const directAddressedByWakePhrase = normalizedTranscript
+      ? isVoiceTurnAddressedToBot(normalizedTranscript, settings)
+      : false;
+    const directAddressedByNameVariant = normalizedTranscript
+      ? isLikelyBotNameVariantAddress(normalizedTranscript, settings?.botName || "")
       : false;
     const joinWindowAgeMs = Math.max(0, now - Number(session?.startedAt || 0));
     const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
-    const directAddressed = directAddressedByName;
+    const normalizeWakeTokens = (value = "") =>
+      String(value || "")
+        .trim()
+        .toLowerCase()
+        .normalize("NFKD")
+        .replace(/\p{M}+/gu, "")
+        .match(/[\p{L}\p{N}]+/gu) || [];
+    const containsTokenSequence = (tokens = [], sequence = []) => {
+      if (!Array.isArray(tokens) || !Array.isArray(sequence)) return false;
+      if (!tokens.length || !sequence.length || sequence.length > tokens.length) return false;
+      for (let start = 0; start <= tokens.length - sequence.length; start += 1) {
+        let matched = true;
+        for (let index = 0; index < sequence.length; index += 1) {
+          if (tokens[start + index] !== sequence[index]) {
+            matched = false;
+            break;
+          }
+        }
+        if (matched) return true;
+      }
+      return false;
+    };
+    const botWakeTokens = normalizeWakeTokens(settings?.botName || "");
+    const transcriptWakeTokens = normalizeWakeTokens(normalizedTranscript);
+    const transcriptWakeTokenSet = new Set(transcriptWakeTokens);
+    const mergedWakeToken = botWakeTokens.length >= 2 ? botWakeTokens.join("") : "";
+    const mergedWakeTokenAddressed = Boolean(mergedWakeToken) && transcriptWakeTokenSet.has(mergedWakeToken);
+    const exactWakeSequenceAddressed = containsTokenSequence(transcriptWakeTokens, botWakeTokens);
+    const primaryWakeToken = botWakeTokens.find((token) => token.length >= 4 && !["bot", "ai", "assistant"].includes(token))
+      || botWakeTokens.find((token) => token.length >= 4)
+      || "";
+    const primaryWakeTokenAddressed = primaryWakeToken ? transcriptWakeTokenSet.has(primaryWakeToken) : false;
+    // Treat merged/phonetic variants as ambiguous (LLM-check candidates), not hard direct-address fast-path.
+    const directAddressed =
+      directAddressedByWakePhrase &&
+      !addressedToOtherParticipant &&
+      (
+        primaryWakeTokenAddressed ||
+        exactWakeSequenceAddressed ||
+        !mergedWakeTokenAddressed
+      ) &&
+      !(directAddressedByNameVariant && mergedWakeTokenAddressed);
     const usedFallbackModel = Boolean(transcriptionContext?.usedFallbackModel);
     const replyEagerness = clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
+    const replyDecisionLlm = settings?.voice?.replyDecisionLlm || {};
+    const classifierEnabled =
+      replyDecisionLlm?.enabled !== undefined ? Boolean(replyDecisionLlm.enabled) : true;
     const conversationContext = this.buildVoiceConversationContext({
       session,
       userId: normalizedUserId,
@@ -4609,7 +4749,7 @@ export class VoiceSessionManager {
       };
     }
 
-    if (directAddressed) {
+    if (directAddressed && classifierEnabled) {
       return {
         allow: true,
         reason: "direct_address_fast_path",
@@ -4631,12 +4771,9 @@ export class VoiceSessionManager {
       };
     }
 
-    const replyDecisionLlm = settings?.voice?.replyDecisionLlm || {};
     const sessionMode = String(session?.mode || settings?.voice?.mode || "")
       .trim()
       .toLowerCase();
-    const classifierEnabled =
-      replyDecisionLlm?.enabled !== undefined ? Boolean(replyDecisionLlm.enabled) : true;
     const requestedDecisionProvider = replyDecisionLlm?.provider;
     const llmProvider = normalizeVoiceReplyDecisionProvider(requestedDecisionProvider);
     const requestedDecisionModel = replyDecisionLlm?.model;
@@ -4651,6 +4788,59 @@ export class VoiceSessionManager {
           session,
           settings
         }) === "brain");
+    const configuredNonDirectSilenceMs = Number(settings?.voice?.nonDirectReplyMinSilenceMs);
+    const nonDirectReplyMinSilenceMs = clamp(
+      Number.isFinite(configuredNonDirectSilenceMs)
+        ? Math.round(configuredNonDirectSilenceMs)
+        : NON_DIRECT_REPLY_MIN_SILENCE_MS,
+      600,
+      12_000
+    );
+    const configuredCrossSpeakerWakeMs = Number(settings?.voice?.crossSpeakerWakeMs);
+    const crossSpeakerWakeMs = clamp(
+      Number.isFinite(configuredCrossSpeakerWakeMs)
+        ? Math.round(configuredCrossSpeakerWakeMs)
+        : DIRECT_ADDRESS_CROSS_SPEAKER_WAKE_MS,
+      1200,
+      20_000
+    );
+    const lastInboundAudioAt = Number(session?.lastInboundAudioAt || 0);
+    const msSinceInboundAudio =
+      lastInboundAudioAt > 0 ? Math.max(0, now - lastInboundAudioAt) : null;
+    const msSinceDirectAddress = Number(conversationContext?.msSinceDirectAddress || 0);
+    const directAddressWakeAcrossSpeakers =
+      Boolean(conversationContext?.recentDirectAddress) &&
+      !conversationContext?.sameAsRecentDirectAddress &&
+      Number.isFinite(msSinceDirectAddress) &&
+      msSinceDirectAddress <= crossSpeakerWakeMs;
+    const wakeModeActive =
+      Boolean(conversationContext?.recentAssistantReply) ||
+      Boolean(conversationContext?.sameAsRecentDirectAddress) ||
+      directAddressWakeAcrossSpeakers;
+    const shouldDelayNonDirectMergedRealtimeReply =
+      !classifierEnabled &&
+      isRealtimeMode(sessionMode) &&
+      mergedWithGeneration &&
+      participantCount > 1 &&
+      !directAddressed &&
+      (addressedToOtherParticipant || (!directAddressedByNameVariant && !wakeModeActive)) &&
+      Number.isFinite(msSinceInboundAudio) &&
+      msSinceInboundAudio < nonDirectReplyMinSilenceMs;
+    if (shouldDelayNonDirectMergedRealtimeReply) {
+      return {
+        allow: false,
+        reason: "awaiting_non_direct_silence_window",
+        participantCount,
+        directAddressed,
+        transcript: normalizedTranscript,
+        llmProvider,
+        llmModel,
+        conversationContext,
+        msSinceInboundAudio,
+        requiredSilenceMs: nonDirectReplyMinSilenceMs,
+        retryAfterMs: Math.max(60, nonDirectReplyMinSilenceMs - Number(msSinceInboundAudio || 0))
+      };
+    }
     if (!classifierEnabled) {
       return {
         allow: mergedWithGeneration,
@@ -5835,18 +6025,32 @@ export class VoiceSessionManager {
         msSinceDirectAddress: Number.isFinite(turnDecision.conversationContext?.msSinceDirectAddress)
           ? Math.round(turnDecision.conversationContext.msSinceDirectAddress)
           : null,
+        msSinceInboundAudio: Number.isFinite(turnDecision.msSinceInboundAudio)
+          ? Math.round(turnDecision.msSinceInboundAudio)
+          : null,
+        requiredSilenceMs: Number.isFinite(turnDecision.requiredSilenceMs)
+          ? Math.round(turnDecision.requiredSilenceMs)
+          : null,
+        retryAfterMs: Number.isFinite(turnDecision.retryAfterMs)
+          ? Math.round(turnDecision.retryAfterMs)
+          : null,
         error: turnDecision.error || null
       }
     });
     if (!turnDecision.allow) {
-      if (turnDecision.reason === "bot_turn_open") {
+      if (
+        turnDecision.reason === "bot_turn_open" ||
+        turnDecision.reason === "awaiting_non_direct_silence_window"
+      ) {
         this.queueDeferredBotTurnOpenTurn({
           session,
           userId,
           transcript: turnDecision.transcript || transcript,
           captureReason,
           source: "stt_pipeline",
-          directAddressed: Boolean(turnDecision.directAddressed)
+          directAddressed: Boolean(turnDecision.directAddressed),
+          deferReason: turnDecision.reason,
+          flushDelayMs: turnDecision.retryAfterMs
         });
       }
       return;
