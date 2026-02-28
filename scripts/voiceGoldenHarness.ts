@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { runVoiceGoldenHarness, printVoiceGoldenHarnessReport, VOICE_GOLDEN_MODES } from "../src/voice/voiceGoldenHarness.ts";
+import { writeJsonReport } from "./replay/core/output.ts";
 
 type CliArgs = {
   mode: "simulated" | "live";
@@ -138,8 +139,7 @@ async function main() {
   printVoiceGoldenHarnessReport(report);
 
   if (args.outJsonPath) {
-    await Bun.write(args.outJsonPath, `${JSON.stringify(report, null, 2)}\n`);
-    console.log(`wrote json report -> ${args.outJsonPath}`);
+    await writeJsonReport(args.outJsonPath, report);
   }
 
   if (report.summary.failed > 0) {

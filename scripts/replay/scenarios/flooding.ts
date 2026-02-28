@@ -22,10 +22,10 @@ import {
   clamp,
   formatPct,
   isoInWindow,
-  parseJsonObjectFromText,
   stableNumber,
   toRecentMessagesDesc
 } from "../core/utils.ts";
+import { runJsonJudge } from "../core/judge.ts";
 
 type FloodingReplayArgs = ReplayBaseArgs & {
   actorProvider: string;
@@ -556,7 +556,8 @@ async function runJudge({
     'Output schema: {"isFlooding":true|false,"floodScore":0..100,"confidence":0..1,"summary":"...","signals":["..."]}'
   ].join("\n\n");
 
-  const generation = await llm.generate({
+  return await runJsonJudge<JudgeResult>({
+    llm,
     settings,
     systemPrompt,
     userPrompt,
@@ -566,24 +567,32 @@ async function runJudge({
       userId: null,
       source: "flooding_replay_judge",
       event: "flooding_verdict"
-    }
+    },
+    onParsed: (parsed, rawText) => {
+      const rawSignals = Array.isArray(parsed.signals) ? parsed.signals : [];
+      const signals = rawSignals
+        .map((value) => String(value || "").trim())
+        .filter(Boolean)
+        .slice(0, 10);
+
+      return {
+        isFlooding: Boolean(parsed.isFlooding),
+        floodScore: clamp(Math.floor(stableNumber(parsed.floodScore, 0)), 0, 100),
+        confidence: clamp(stableNumber(parsed.confidence, 0), 0, 1),
+        summary: String(parsed.summary || "").trim(),
+        signals,
+        rawText
+      };
+    },
+    onParseError: (rawText) => ({
+      isFlooding: false,
+      floodScore: 0,
+      confidence: 0,
+      summary: "judge_parse_error",
+      signals: [],
+      rawText
+    })
   });
-
-  const parsed = parseJsonObjectFromText(String(generation.text || "")) || {};
-  const rawSignals = Array.isArray(parsed.signals) ? parsed.signals : [];
-  const signals = rawSignals
-    .map((value) => String(value || "").trim())
-    .filter(Boolean)
-    .slice(0, 10);
-
-  return {
-    isFlooding: Boolean(parsed.isFlooding),
-    floodScore: clamp(Math.floor(stableNumber(parsed.floodScore, 0)), 0, 100),
-    confidence: clamp(stableNumber(parsed.confidence, 0), 0, 1),
-    summary: String(parsed.summary || "").trim(),
-    signals,
-    rawText: String(generation.text || "")
-  };
 }
 
 function printStats(label: string, stats: ChannelStats) {

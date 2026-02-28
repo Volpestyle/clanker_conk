@@ -7,6 +7,9 @@ import { appConfig } from "../config.ts";
 import { LLMService } from "../llm.ts";
 import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
 import { normalizeSettings } from "../store/settingsNormalization.ts";
+import { runJsonJudge } from "../../scripts/replay/core/judge.ts";
+import { summarizeNamedMetricRows, type NumericStats } from "../../scripts/replay/core/metrics.ts";
+import { formatPct, stableNumber } from "../../scripts/replay/core/utils.ts";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
 import { encodePcm16MonoAsWav, transcriptSourceFromEventType } from "./voiceSessionHelpers.ts";
 import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
@@ -137,14 +140,7 @@ export type VoiceGoldenModeReport = {
   };
 };
 
-export type StageStat = {
-  count: number;
-  minMs: number;
-  maxMs: number;
-  avgMs: number;
-  p50Ms: number;
-  p95Ms: number;
-};
+export type StageStat = NumericStats;
 
 export type VoiceGoldenHarnessReport = {
   startedAt: string;
@@ -431,38 +427,6 @@ function buildJudgeSettings(judge: VoiceGoldenJudgeConfig) {
   });
 }
 
-function parseJsonObjectFromText(rawText: string) {
-  const value = String(rawText || "").trim();
-  if (!value) return null;
-  try {
-    const direct = JSON.parse(value);
-    if (direct && typeof direct === "object" && !Array.isArray(direct)) {
-      return direct as Record<string, unknown>;
-    }
-  } catch {
-    // fall through
-  }
-
-  const firstBrace = value.indexOf("{");
-  const lastBrace = value.lastIndexOf("}");
-  if (firstBrace < 0 || lastBrace <= firstBrace) return null;
-  try {
-    const sliced = JSON.parse(value.slice(firstBrace, lastBrace + 1));
-    if (sliced && typeof sliced === "object" && !Array.isArray(sliced)) {
-      return sliced as Record<string, unknown>;
-    }
-  } catch {
-    // ignore
-  }
-
-  return null;
-}
-
-function stableNumber(value: unknown, fallback = 0) {
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : fallback;
-}
-
 function uniqueLines(values: string[]) {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -483,46 +447,12 @@ function pickBestTranscript(values: string[]) {
   return normalized.sort((a, b) => b.length - a.length)[0] || "";
 }
 
-function quantile(values: number[], q: number) {
-  const sorted = values
-    .map((value) => Number(value))
-    .filter((value) => Number.isFinite(value))
-    .sort((a, b) => a - b);
-  if (!sorted.length) return 0;
-  const index = Math.min(sorted.length - 1, Math.max(0, Math.ceil(q * sorted.length) - 1));
-  return sorted[index] || 0;
-}
-
 function buildStageStats(rows: VoiceGoldenCaseResult[]): Record<string, StageStat> {
-  const stageBuckets = new Map<string, number[]>();
-  for (const row of rows) {
-    const entries = Object.entries(row.timings);
-    for (const [key, value] of entries) {
-      if (!Number.isFinite(value) || value <= 0) continue;
-      if (!stageBuckets.has(key)) stageBuckets.set(key, []);
-      stageBuckets.get(key)?.push(value);
-    }
-  }
-
-  const out: Record<string, StageStat> = {};
-  for (const [stage, values] of stageBuckets.entries()) {
-    const total = values.reduce((sum, value) => sum + value, 0);
-    out[stage] = {
-      count: values.length,
-      minMs: Math.min(...values),
-      maxMs: Math.max(...values),
-      avgMs: total / values.length,
-      p50Ms: quantile(values, 0.5),
-      p95Ms: quantile(values, 0.95)
-    };
-  }
-
-  return out;
+  return summarizeNamedMetricRows(rows.map((row) => ({ ...row.timings })));
 }
 
 function stablePassRate(passed: number, executed: number) {
-  if (executed <= 0) return 0;
-  return (100 * passed) / executed;
+  return formatPct(passed, executed);
 }
 
 function hashString(value: string) {
@@ -1232,7 +1162,8 @@ async function runJudge({
     'Output schema: {"pass":true|false,"score":0..100,"confidence":0..1,"summary":"...","issues":["..."]}'
   ].join("\n");
 
-  const generation = await llm.generate({
+  return await runJsonJudge<JudgeResult>({
+    llm,
     settings: judgeSettings,
     systemPrompt,
     userPrompt,
@@ -1244,36 +1175,35 @@ async function runJudge({
       event: "judge_case",
       reason: null,
       messageId: null
+    },
+    onParsed: (parsed, rawText) => {
+      const issues = Array.isArray(parsed.issues)
+        ? parsed.issues.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8)
+        : [];
+
+      return {
+        pass: Boolean(parsed.pass),
+        score: Math.max(0, Math.min(100, Math.floor(stableNumber(parsed.score, 0)))),
+        confidence: Math.max(0, Math.min(1, stableNumber(parsed.confidence, 0))),
+        summary: String(parsed.summary || "").trim(),
+        issues,
+        rawText
+      };
+    },
+    onParseError: (rawText) => {
+      const deterministicPass =
+        decision.allow === caseRow.expectedAllow &&
+        (caseRow.expectedAllow ? Boolean(responseText.trim()) : !responseText.trim());
+      return {
+        pass: deterministicPass,
+        score: deterministicPass ? 75 : 25,
+        confidence: 0.2,
+        summary: "judge_output_parse_failed",
+        issues: ["judge returned non-JSON output"],
+        rawText
+      };
     }
   });
-
-  const parsed = parseJsonObjectFromText(String(generation.text || ""));
-  if (!parsed) {
-    const deterministicPass =
-      decision.allow === caseRow.expectedAllow &&
-      (caseRow.expectedAllow ? Boolean(responseText.trim()) : !responseText.trim());
-    return {
-      pass: deterministicPass,
-      score: deterministicPass ? 75 : 25,
-      confidence: 0.2,
-      summary: "judge_output_parse_failed",
-      issues: ["judge returned non-JSON output"],
-      rawText: String(generation.text || "")
-    };
-  }
-
-  const issues = Array.isArray(parsed.issues)
-    ? parsed.issues.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8)
-    : [];
-
-  return {
-    pass: Boolean(parsed.pass),
-    score: Math.max(0, Math.min(100, Math.floor(stableNumber(parsed.score, 0)))),
-    confidence: Math.max(0, Math.min(1, stableNumber(parsed.confidence, 0))),
-    summary: String(parsed.summary || "").trim(),
-    issues,
-    rawText: String(generation.text || "")
-  };
 }
 
 function buildDeterministicJudge({
