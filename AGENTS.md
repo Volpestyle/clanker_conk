@@ -20,6 +20,7 @@
 - Prefer LLM-driven decisions over hardcoded heuristics for conversational behavior; add deterministic heuristics only when explicitly requested or required for guardrails and obvious no-brainer cost savings.
 - Never use hardcoded fallback text or voice lines for bot output. User-visible bot speech/messages must be model-generated unless the user explicitly requests deterministic wording.
 - Bot name is a customizable setting. bot is not always named 'clanker conk'
+- Use git commit author `Volpestyle <14805252+Volpestyle@users.noreply.github.com>` for all commits in this repository.
 
 ## Dashboard UI Preferences
 
