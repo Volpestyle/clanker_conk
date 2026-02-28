@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { PassThrough } from "node:stream";
 import {
   createAudioPlayer,
   createAudioResource,
@@ -13,6 +12,7 @@ import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 import { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
 import { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
 import {
+  createBotAudioPlaybackStream,
   SOUNDBOARD_MAX_CANDIDATES,
   isRealtimeMode,
   resolveRealtimeProvider,
@@ -447,7 +447,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       }
 
       audioPlayer = createAudioPlayer();
-      botAudioStream = new PassThrough();
+      botAudioStream = createBotAudioPlaybackStream();
       const audioResource = createAudioResource(botAudioStream, {
         inputType: StreamType.Raw
       });

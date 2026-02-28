@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
+  createBotAudioPlaybackStream,
   isBotNameAddressed,
   extractSoundboardDirective,
   getRealtimeCommitMinimumBytes,
@@ -13,6 +14,7 @@ import {
   resolveVoiceRuntimeMode,
   transcriptSourceFromEventType
 } from "./voiceSessionHelpers.ts";
+import { AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES } from "./voiceSessionManager.constants.ts";
 
 test("isRecoverableRealtimeError matches OpenAI empty commit code", () => {
   const recoverable = isRecoverableRealtimeError({
@@ -21,6 +23,12 @@ test("isRecoverableRealtimeError matches OpenAI empty commit code", () => {
     message: ""
   });
   assert.equal(recoverable, true);
+});
+
+test("createBotAudioPlaybackStream configures a larger writable high-water mark", () => {
+  const stream = createBotAudioPlaybackStream();
+  assert.equal(stream.writableHighWaterMark, AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES);
+  stream.destroy();
 });
 
 test("isRecoverableRealtimeError does not match unrelated realtime errors", () => {

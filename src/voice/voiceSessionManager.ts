@@ -85,6 +85,7 @@ import {
 import { requestJoin } from "./voiceJoinFlow.ts";
 import {
   ACTIVITY_TOUCH_THROTTLE_MS,
+  AUDIO_PLAYBACK_PUMP_CHUNK_BYTES,
   AUDIO_PLAYBACK_QUEUE_WARN_BYTES,
   AUDIO_PLAYBACK_QUEUE_WARN_COOLDOWN_MS,
   BOT_DISCONNECT_GRACE_MS,
@@ -95,7 +96,6 @@ import {
   CAPTURE_IDLE_FLUSH_MS,
   CAPTURE_MAX_DURATION_MS,
   DISCORD_PCM_FRAME_BYTES,
-  DISCORD_PCM_FRAME_MS,
   FOCUSED_SPEAKER_CONTINUATION_MS,
   INPUT_SPEECH_END_SILENCE_MS,
   MAX_INACTIVITY_SECONDS,
@@ -1203,47 +1203,45 @@ export class VoiceSessionManager {
           botUserId: this.client.user?.id || null
         })
       ) {
-        this.scheduleAudioPlaybackPump(session, DISCORD_PCM_FRAME_MS);
+        this.scheduleAudioPlaybackPump(session, 20);
         return;
       }
 
-      const frame = this.dequeueAudioPlaybackFrame(session, DISCORD_PCM_FRAME_BYTES);
-      if (!frame.length) return;
+      while (!session.ending && Array.isArray(state.chunks) && state.chunks.length) {
+        const chunk = this.dequeueAudioPlaybackFrame(session, AUDIO_PLAYBACK_PUMP_CHUNK_BYTES);
+        if (!chunk.length) break;
 
-      try {
-        const wrote = session.botAudioStream.write(frame);
-        if (wrote === false && typeof session.botAudioStream?.once === "function") {
-          if (!state.waitingDrain) {
-            state.waitingDrain = true;
-            const onDrain = () => {
-              state.waitingDrain = false;
-              state.drainHandler = null;
-              if (!session.ending) {
-                this.scheduleAudioPlaybackPump(session, 0);
-              }
-            };
-            state.drainHandler = onDrain;
-            session.botAudioStream.once("drain", onDrain);
+        try {
+          const wrote = session.botAudioStream.write(chunk);
+          if (wrote === false && typeof session.botAudioStream?.once === "function") {
+            if (!state.waitingDrain) {
+              state.waitingDrain = true;
+              const onDrain = () => {
+                state.waitingDrain = false;
+                state.drainHandler = null;
+                if (!session.ending) {
+                  this.scheduleAudioPlaybackPump(session, 0);
+                }
+              };
+              state.drainHandler = onDrain;
+              session.botAudioStream.once("drain", onDrain);
+            }
+            return;
           }
+        } catch (error) {
+          this.store.logAction({
+            kind: "voice_error",
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId: this.client.user?.id || null,
+            content: `bot_audio_stream_write_failed: ${String(error?.message || error)}`,
+            metadata: {
+              sessionId: session.id
+            }
+          });
+          this.clearAudioPlaybackQueue(session);
           return;
         }
-      } catch (error) {
-        this.store.logAction({
-          kind: "voice_error",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: this.client.user?.id || null,
-          content: `bot_audio_stream_write_failed: ${String(error?.message || error)}`,
-          metadata: {
-            sessionId: session.id
-          }
-        });
-        this.clearAudioPlaybackQueue(session);
-        return;
-      }
-
-      if (state.chunks.length) {
-        this.scheduleAudioPlaybackPump(session, DISCORD_PCM_FRAME_MS);
       }
     } finally {
       state.pumping = false;

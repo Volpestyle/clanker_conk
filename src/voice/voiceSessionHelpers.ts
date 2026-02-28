@@ -5,6 +5,7 @@ import {
   StreamType
 } from "@discordjs/voice";
 import { parseSoundboardReference } from "./soundboardDirector.ts";
+import { AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES } from "./voiceSessionManager.constants.ts";
 
 export const REALTIME_MEMORY_FACT_LIMIT = 8;
 export const SOUNDBOARD_MAX_CANDIDATES = 40;
@@ -22,6 +23,12 @@ const VOCATIVE_GREETING_TOKENS = new Set([
   "hola"
 ]);
 const VOCATIVE_IGNORE_TOKENS = new Set(["guys", "everyone", "all", "chat", "yall", "yaall"]);
+
+export function createBotAudioPlaybackStream() {
+  return new PassThrough({
+    highWaterMark: AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES
+  });
+}
 
 export function parseRealtimeErrorPayload(payload) {
   if (!payload || typeof payload !== "object") {
@@ -156,7 +163,7 @@ export function ensureBotAudioPlaybackReady({ session, store, botUserId = null }
 
     try {
       if (!session.botAudioStream || session.botAudioStream.destroyed || session.botAudioStream.writableEnded) {
-        session.botAudioStream = new PassThrough();
+        session.botAudioStream = createBotAudioPlaybackStream();
       }
 
       const resource = createAudioResource(session.botAudioStream, {
