@@ -38,11 +38,28 @@ export class ScreenShareSessionManager {
 
   getLinkCapability() {
     const publicState = this.publicHttpsEntrypoint?.getState?.() || null;
-    const publicUrl = String(publicState?.publicUrl || "").trim();
+    const publicUrl = normalizeShareBaseUrl(publicState?.publicUrl);
+    if (publicUrl) {
+      return {
+        enabled: true,
+        status: String(publicState?.status || "ready"),
+        publicUrl
+      };
+    }
+
+    const localUrl = getLocalShareBaseUrl(this.appConfig);
+    if (localUrl) {
+      return {
+        enabled: true,
+        status: "ready",
+        publicUrl: localUrl
+      };
+    }
+
     return {
-      enabled: Boolean(publicUrl),
+      enabled: false,
       status: String(publicState?.status || "disabled"),
-      publicUrl
+      publicUrl: ""
     };
   }
 
@@ -70,11 +87,9 @@ export class ScreenShareSessionManager {
   }
 
   getPublicShareUrlForToken(token) {
-    const publicUrl = String(this.publicHttpsEntrypoint?.getState?.()?.publicUrl || "")
-      .trim()
-      .replace(/\/$/, "");
-    if (!publicUrl || !token) return "";
-    return `${publicUrl}/share/${encodeURIComponent(token)}`;
+    const shareBaseUrl = normalizeShareBaseUrl(this.getLinkCapability()?.publicUrl);
+    if (!shareBaseUrl || !token) return "";
+    return `${shareBaseUrl}/share/${encodeURIComponent(token)}`;
   }
 
   async createSession({
@@ -99,12 +114,12 @@ export class ScreenShareSessionManager {
       };
     }
 
-    const publicShareBaseUrl = String(this.publicHttpsEntrypoint?.getState?.()?.publicUrl || "").trim();
-    if (!publicShareBaseUrl) {
+    const shareBaseUrl = normalizeShareBaseUrl(this.getLinkCapability()?.publicUrl);
+    if (!shareBaseUrl) {
       return {
         ok: false,
-        reason: "public_https_unavailable",
-        message: "public share link is unavailable right now."
+        reason: "share_link_unavailable",
+        message: "share link is unavailable right now."
       };
     }
 
@@ -149,7 +164,7 @@ export class ScreenShareSessionManager {
     };
     this.sessions.set(token, session);
 
-    const shareUrl = this.getPublicShareUrlForToken(token);
+    const shareUrl = `${shareBaseUrl}/share/${encodeURIComponent(token)}`;
     this.store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,
@@ -589,4 +604,24 @@ function safeUrlHost(rawUrl) {
   } catch {
     return "";
   }
+}
+
+function normalizeShareBaseUrl(rawUrl) {
+  const text = String(rawUrl || "").trim().replace(/\/$/, "");
+  if (!text) return "";
+  try {
+    const parsed = new URL(text);
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return "";
+  }
+}
+
+function getLocalShareBaseUrl(appConfig) {
+  const configuredPort = Number(appConfig?.dashboardPort);
+  const port =
+    Number.isFinite(configuredPort) && configuredPort >= 1 && configuredPort <= 65535
+      ? Math.floor(configuredPort)
+      : 8787;
+  return `http://127.0.0.1:${port}`;
 }

@@ -16,7 +16,7 @@ Features:
 - NL-controlled Discord voice sessions (join/leave/status) with session limits and runtime guards.
 - Voice runtime mode selector: `voice_agent` (xAI realtime), `openai_realtime` (OpenAI Realtime), `gemini_realtime` (Gemini Live API), or `stt_pipeline` (STT -> brain LLM -> TTS).
 - Stream-watch voice controls (`watch_stream`, `stop_watching_stream`, `stream_status`) with external frame ingest path.
-- Model-directed screen-share link offers (`screenShareIntent`) with temporary browser capture links.
+- Model-directed screen-share link offers (`screenShareIntent`) with temporary browser capture links (localhost fallback or public HTTPS).
 - Optional auto-managed public HTTPS dashboard entrypoint via Cloudflare Quick Tunnel.
 - Dashboard UI for settings, permissions, logs, memory, and cost tracking.
 - Dashboard automation visibility endpoints: `/api/automations` and `/api/automations/runs`.
@@ -49,6 +49,7 @@ Fill `.env`:
   - optional `PUBLIC_HTTPS_TARGET_URL` (defaults to `http://127.0.0.1:${DASHBOARD_PORT}`)
   - optional `PUBLIC_HTTPS_CLOUDFLARED_BIN` (defaults to `cloudflared`)
   - optional `PUBLIC_SHARE_SESSION_TTL_MINUTES` (default `12`, clamp `2..30`)
+  - if disabled, screen-share links still work locally via `http://127.0.0.1:${DASHBOARD_PORT}/share/<token>` on the machine running the bot
 - Optional but recommended for richer video understanding: install `ffmpeg` and `yt-dlp` on your system.
 
 ## 2. Discord bot permissions
@@ -80,7 +81,7 @@ bun run start
 - Dashboard URL: `http://localhost:8787` (or your `DASHBOARD_PORT` value)
 - Public HTTPS status: `GET /api/public-https` and in `/api/stats -> runtime.publicHttps`
 
-## 3.1 Public HTTPS Entrypoint (Cloudflare Quick Tunnel)
+## 3.1 Public HTTPS Entrypoint (Cloudflare Quick Tunnel, optional for remote users)
 
 Install `cloudflared` and set:
 

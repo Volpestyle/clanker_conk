@@ -187,8 +187,11 @@ test("cleanup and runtime state remove expired sessions and trim oldest overflow
   assert.equal(runtime.newestExpiresAt, new Date(nowMs + 60_000 + 241).toISOString());
 });
 
-test("link capability and share URL formatting handle missing and present public URL", () => {
+test("link capability uses local fallback and prefers public URL when available", () => {
   const { manager } = createHarness({
+    appConfig: {
+      dashboardPort: 9191
+    },
     publicState: {
       enabled: true,
       status: "starting",
@@ -196,11 +199,11 @@ test("link capability and share URL formatting handle missing and present public
     }
   });
   assert.deepEqual(manager.getLinkCapability(), {
-    enabled: false,
-    status: "starting",
-    publicUrl: ""
+    enabled: true,
+    status: "ready",
+    publicUrl: "http://127.0.0.1:9191"
   });
-  assert.equal(manager.getPublicShareUrlForToken("abc"), "");
+  assert.equal(manager.getPublicShareUrlForToken("abc"), "http://127.0.0.1:9191/share/abc");
 
   manager.publicHttpsEntrypoint = {
     getState() {
@@ -217,7 +220,7 @@ test("link capability and share URL formatting handle missing and present public
   );
 });
 
-test("createSession rejects invalid input and unavailable public HTTPS", async () => {
+test("createSession rejects invalid input and falls back to localhost share URL", async () => {
   const { manager } = createHarness();
   const invalid = await manager.createSession({
     guildId: "",
@@ -238,8 +241,11 @@ test("createSession rejects invalid input and unavailable public HTTPS", async (
     channelId: "channel-1",
     requesterUserId: "user-1"
   });
-  assert.equal(unavailable.ok, false);
-  assert.equal(unavailable.reason, "public_https_unavailable");
+  assert.equal(unavailable.ok, true);
+  assert.equal(
+    String(unavailable.shareUrl || "").startsWith("http://127.0.0.1:8787/share/"),
+    true
+  );
 });
 
 test("createSession propagates stream-watch failures and clamps ttl and fields on success", async () => {

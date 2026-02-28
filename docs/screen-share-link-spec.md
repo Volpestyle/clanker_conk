@@ -9,7 +9,9 @@ Let `clanker conk` send a temporary clickable link in Discord that opens a brows
 1. User asks clank to look at their screen (or model decides a visual would help).
 2. Reply model sets `screenShareIntent.action=offer_link`.
 3. Bot creates a short-lived tokenized share session.
-4. Bot replies with `https://.../share/<token>`.
+4. Bot replies with a tokenized share URL:
+   - local fallback: `http://127.0.0.1:<DASHBOARD_PORT>/share/<token>`
+   - public tunnel (when enabled): `https://.../share/<token>`
 5. User opens link and clicks `Start Sharing`.
 6. Browser captures display frames and posts them to `/api/voice/share-session/:token/frame`.
 7. Bot ingests frames through existing stream-watch flow and comments in VC.
@@ -31,6 +33,7 @@ Let `clanker conk` send a temporary clickable link in Discord that opens a brows
     `openai_realtime`, `gemini_realtime`, or `voice_agent` with a configured vision fallback provider
 - Frame ingest revalidates requester/target VC presence and auto-stops the share session if either leaves.
 - Public ingress route-gating and token/header auth rules are defined in `docs/public-https-entrypoint-spec.md`.
+- When public HTTPS is disabled, share links are localhost-only and intended for the machine running the bot.
 
 ## Endpoints
 - `POST /api/voice/share-session` (create tokenized session, admin/private auth path)
