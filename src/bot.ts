@@ -141,6 +141,7 @@ export class ClankerBot {
   gatewayWatchdogTimer;
   reconnectTimeout;
   startupTasksRan;
+  startupTimeout;
   initiativePosting;
   automationCycleRunning;
   reconnectInFlight;
@@ -172,6 +173,7 @@ export class ClankerBot {
     this.gatewayWatchdogTimer = null;
     this.reconnectTimeout = null;
     this.startupTasksRan = false;
+    this.startupTimeout = null;
     this.initiativePosting = false;
     this.automationCycleRunning = false;
     this.reconnectInFlight = false;
@@ -371,7 +373,8 @@ export class ClankerBot {
       });
     }, GATEWAY_WATCHDOG_TICK_MS);
 
-    setTimeout(() => {
+    this.startupTimeout = setTimeout(() => {
+      if (this.isStopping) return;
       this.runStartupTasks().catch((error) => {
         this.store.logAction({
           kind: "bot_error",
@@ -383,6 +386,7 @@ export class ClankerBot {
 
   async stop() {
     this.isStopping = true;
+    if (this.startupTimeout) clearTimeout(this.startupTimeout);
     if (this.memoryTimer) clearInterval(this.memoryTimer);
     if (this.initiativeTimer) clearInterval(this.initiativeTimer);
     if (this.automationTimer) clearInterval(this.automationTimer);
@@ -391,6 +395,7 @@ export class ClankerBot {
     this.gatewayWatchdogTimer = null;
     this.automationTimer = null;
     this.reconnectTimeout = null;
+    this.startupTimeout = null;
     this.replyQueues.clear();
     this.replyQueueWorkers.clear();
     this.replyQueuedMessageIds.clear();
@@ -3033,6 +3038,7 @@ export class ClankerBot {
   }
 
   async runStartupTasks() {
+    if (this.isStopping) return;
     if (this.startupTasksRan) return;
     this.startupTasksRan = true;
 
