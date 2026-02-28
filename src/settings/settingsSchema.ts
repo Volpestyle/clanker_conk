@@ -14,6 +14,7 @@ export const PROVIDER_MODEL_FALLBACKS = {
 
 export const DEFAULT_SETTINGS = {
   botName: "clanker conk",
+  botNameAliases: [],
   persona: {
     flavor: "playful, chaotic-good, slangy Gen Z/Gen A energy without being toxic",
     hardLimits: [
@@ -175,7 +176,13 @@ export const DEFAULT_SETTINGS = {
       maxFramesPerMinute: 180,
       maxFrameBytes: 350000,
       commentaryPath: "auto",
-      keyframeIntervalMs: 1200
+      keyframeIntervalMs: 1200,
+      autonomousCommentaryEnabled: true,
+      brainContextEnabled: true,
+      brainContextMinIntervalSeconds: 4,
+      brainContextMaxEntries: 8,
+      brainContextPrompt:
+        "Use these frame notes as live stream context when relevant. Treat them as snapshots, not continuous vision."
     },
     soundboard: {
       enabled: true,

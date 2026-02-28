@@ -77,6 +77,7 @@ export function settingsToForm(settings) {
   const selectedVoiceMode = settings?.voice?.mode ?? defaultVoice.mode;
   return {
     botName: settings?.botName ?? defaults.botName,
+    botNameAliases: formatLineList(settings?.botNameAliases ?? defaults.botNameAliases),
     personaFlavor: settings?.persona?.flavor ?? defaults.persona.flavor,
     personaHardLimits: formatLineList(settings?.persona?.hardLimits),
     promptCapabilityHonestyLine: settings?.prompt?.capabilityHonestyLine ?? defaultPrompt.capabilityHonestyLine,
@@ -214,6 +215,17 @@ export function settingsToForm(settings) {
       settings?.voice?.streamWatch?.commentaryPath ?? defaultVoiceStreamWatch.commentaryPath,
     voiceStreamWatchKeyframeIntervalMs:
       settings?.voice?.streamWatch?.keyframeIntervalMs ?? defaultVoiceStreamWatch.keyframeIntervalMs,
+    voiceStreamWatchAutonomousCommentaryEnabled:
+      settings?.voice?.streamWatch?.autonomousCommentaryEnabled ?? defaultVoiceStreamWatch.autonomousCommentaryEnabled,
+    voiceStreamWatchBrainContextEnabled:
+      settings?.voice?.streamWatch?.brainContextEnabled ?? defaultVoiceStreamWatch.brainContextEnabled,
+    voiceStreamWatchBrainContextMinIntervalSeconds:
+      settings?.voice?.streamWatch?.brainContextMinIntervalSeconds ??
+      defaultVoiceStreamWatch.brainContextMinIntervalSeconds,
+    voiceStreamWatchBrainContextMaxEntries:
+      settings?.voice?.streamWatch?.brainContextMaxEntries ?? defaultVoiceStreamWatch.brainContextMaxEntries,
+    voiceStreamWatchBrainContextPrompt:
+      settings?.voice?.streamWatch?.brainContextPrompt ?? defaultVoiceStreamWatch.brainContextPrompt,
     voiceSoundboardEnabled: settings?.voice?.soundboard?.enabled ?? defaultVoiceSoundboard.enabled,
     voiceSoundboardAllowExternalSounds: settings?.voice?.soundboard?.allowExternalSounds ?? defaultVoiceSoundboard.allowExternalSounds,
     voiceSoundboardPreferredSoundIds: formatLineList(settings?.voice?.soundboard?.preferredSoundIds),
@@ -273,6 +285,7 @@ export function settingsToForm(settings) {
 export function formToSettingsPatch(form) {
   return {
     botName: form.botName.trim(),
+    botNameAliases: parseUniqueLineList(form.botNameAliases),
     persona: {
       flavor: form.personaFlavor.trim(),
       hardLimits: parseUniqueLineList(form.personaHardLimits)
@@ -405,7 +418,12 @@ export function formToSettingsPatch(form) {
         maxFramesPerMinute: Number(form.voiceStreamWatchMaxFramesPerMinute),
         maxFrameBytes: Number(form.voiceStreamWatchMaxFrameBytes),
         commentaryPath: String(form.voiceStreamWatchCommentaryPath || "").trim(),
-        keyframeIntervalMs: Number(form.voiceStreamWatchKeyframeIntervalMs)
+        keyframeIntervalMs: Number(form.voiceStreamWatchKeyframeIntervalMs),
+        autonomousCommentaryEnabled: Boolean(form.voiceStreamWatchAutonomousCommentaryEnabled),
+        brainContextEnabled: Boolean(form.voiceStreamWatchBrainContextEnabled),
+        brainContextMinIntervalSeconds: Number(form.voiceStreamWatchBrainContextMinIntervalSeconds),
+        brainContextMaxEntries: Number(form.voiceStreamWatchBrainContextMaxEntries),
+        brainContextPrompt: String(form.voiceStreamWatchBrainContextPrompt || "").trim()
       },
       soundboard: {
         enabled: form.voiceSoundboardEnabled,

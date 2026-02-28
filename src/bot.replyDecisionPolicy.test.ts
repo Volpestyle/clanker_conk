@@ -541,6 +541,90 @@ test("non-addressed initiative turn can still contribute when model responds", a
   });
 });
 
+test("initiative channel evaluates non-addressed turns without prior bot message context", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+    store.patchSettings({
+      permissions: {
+        initiativeChannelIds: [channelId]
+      }
+    });
+
+    const llmCalls = [];
+    const replyPayloads = [];
+    const channelSendPayloads = [];
+    const typingCallsRef = { count: 0 };
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate(payload) {
+          llmCalls.push(payload);
+          return {
+            text: JSON.stringify({
+              text: "yep i'm tracking",
+              skip: false,
+              reactionEmoji: null,
+              media: null,
+              webSearchQuery: null,
+              memoryLookupQuery: null,
+              memoryLine: null,
+              automationAction: { operation: "none" },
+              voiceIntent: { intent: "none", confidence: 0, reason: null },
+              screenShareIntent: { action: "none", confidence: 0, reason: null }
+            }),
+            provider: "test",
+            model: "test-model",
+            usage: null,
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanker conk",
+      tag: "clanker conk#0001"
+    };
+
+    const guild = buildGuild();
+    const channel = buildChannel({ guild, channelId, channelSendPayloads, typingCallsRef });
+    const incoming = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-initiative-no-context",
+      content: "anyone got loadout ideas",
+      replyPayloads
+    });
+
+    const settings = store.getSettings();
+    const sent = await bot.maybeReplyToMessage(incoming, settings, {
+      source: "message_event",
+      recentMessages: [],
+      addressSignal: {
+        direct: false,
+        inferred: false,
+        triggered: false,
+        reason: "llm_decides"
+      }
+    });
+
+    assert.equal(sent, true);
+    assert.equal(llmCalls.length, 1);
+    assert.equal(replyPayloads.length, 0);
+    assert.equal(channelSendPayloads.length, 1);
+    assert.equal(typingCallsRef.count > 0, true);
+  });
+});
+
 test("non-addressed turn is dropped before llm when unsolicited gate is closed", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";

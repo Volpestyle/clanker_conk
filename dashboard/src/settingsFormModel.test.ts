@@ -11,6 +11,7 @@ import {
 test("settingsFormModel converts settings to form defaults and back to normalized patch", () => {
   const form = settingsToForm({
     botName: "clanker conk",
+    botNameAliases: ["clank", "conk", "clank"],
     persona: {
       flavor: "chaotic but kind",
       hardLimits: ["no hate", "no hate", "keep it fun"]
@@ -28,6 +29,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   });
 
   assert.equal(form.botName, "clanker conk");
+  assert.equal(form.botNameAliases, "clank\nconk\nclank");
   assert.equal(form.personaFlavor, "chaotic but kind");
   assert.equal(form.personaHardLimits, "no hate\nno hate\nkeep it fun");
   assert.equal(form.provider, "openai");
@@ -47,11 +49,20 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.voiceThoughtEngineEagerness, 0);
   assert.equal(form.voiceStreamWatchCommentaryPath, "auto");
   assert.equal(form.voiceStreamWatchKeyframeIntervalMs, 1200);
+  assert.equal(form.voiceStreamWatchAutonomousCommentaryEnabled, true);
+  assert.equal(form.voiceStreamWatchBrainContextEnabled, true);
+  assert.equal(form.voiceStreamWatchBrainContextMinIntervalSeconds, 4);
+  assert.equal(form.voiceStreamWatchBrainContextMaxEntries, 8);
+  assert.equal(
+    form.voiceStreamWatchBrainContextPrompt,
+    "Use these frame notes as live stream context when relevant. Treat them as snapshots, not continuous vision."
+  );
   assert.equal(form.initiativeChannels, "1\n2");
   assert.equal(form.allowedChannels, "2\n3");
   assert.equal(form.voiceRealtimeReplyStrategy, "brain");
 
   form.personaHardLimits = "no hate\nno hate\nkeep it fun\n";
+  form.botNameAliases = "clank\nconk\nclank\n";
   form.allowedChannels = "2\n2\n3\n";
   form.initiativeDiscoveryRssFeeds = "https://one.example/feed\nhttps://one.example/feed\n";
   form.initiativeDiscoveryXHandles = "@alice\n@alice\nbob\n";
@@ -63,8 +74,14 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.replyFollowupToolTimeoutMs = 16000;
   form.voiceStreamWatchCommentaryPath = "anthropic_keyframes";
   form.voiceStreamWatchKeyframeIntervalMs = 1750;
+  form.voiceStreamWatchAutonomousCommentaryEnabled = false;
+  form.voiceStreamWatchBrainContextEnabled = true;
+  form.voiceStreamWatchBrainContextMinIntervalSeconds = 6;
+  form.voiceStreamWatchBrainContextMaxEntries = 5;
+  form.voiceStreamWatchBrainContextPrompt = "Use stream snapshots as context for replies.";
 
   const patch = formToSettingsPatch(form);
+  assert.deepEqual(patch.botNameAliases, ["clank", "conk"]);
   assert.deepEqual(patch.persona.hardLimits, ["no hate", "keep it fun"]);
   assert.deepEqual(patch.permissions.allowedChannelIds, ["2", "3"]);
   assert.deepEqual(patch.initiative.discovery.rssFeeds, ["https://one.example/feed"]);
@@ -78,6 +95,11 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.replyFollowupLlm.toolTimeoutMs, 16000);
   assert.equal(patch.voice.streamWatch.commentaryPath, "anthropic_keyframes");
   assert.equal(patch.voice.streamWatch.keyframeIntervalMs, 1750);
+  assert.equal(patch.voice.streamWatch.autonomousCommentaryEnabled, false);
+  assert.equal(patch.voice.streamWatch.brainContextEnabled, true);
+  assert.equal(patch.voice.streamWatch.brainContextMinIntervalSeconds, 6);
+  assert.equal(patch.voice.streamWatch.brainContextMaxEntries, 5);
+  assert.equal(patch.voice.streamWatch.brainContextPrompt, "Use stream snapshots as context for replies.");
   assert.equal(patch.voice.thoughtEngine.enabled, true);
   assert.equal(patch.voice.thoughtEngine.provider, "anthropic");
   assert.equal(patch.voice.thoughtEngine.model, "claude-haiku-4-5");

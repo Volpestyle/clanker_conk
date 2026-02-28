@@ -1,8 +1,7 @@
 import { clamp } from "../utils.ts";
 import { isBotNameAddressed } from "../voice/voiceSessionHelpers.ts";
 import {
-  DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
-  hasBotNameCue
+  DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD
 } from "../directAddressConfidence.ts";
 
 export type ReplyAddressSignal = {
@@ -18,19 +17,6 @@ export type ReplyAddressSignal = {
 type ReplyAddressRuntime = {
   botUserId?: string;
   isDirectlyAddressed: (settings, message) => boolean;
-  scoreDirectAddressConfidence?: (payload: {
-    settings,
-    message,
-    recentMessages,
-    fallbackConfidence: number,
-    threshold: number
-  }) => Promise<{
-    confidence?: number;
-    addressed?: boolean;
-    threshold?: number;
-    source?: "llm" | "fallback";
-    reason?: string;
-  } | null>;
 };
 
 export function hasBotMessageInRecentWindow({
@@ -99,12 +85,14 @@ export function shouldAttemptReplyDecision({
   settings,
   recentMessages,
   addressSignal,
+  isInitiativeChannel = false,
   forceRespond = false,
   triggerMessageId = null,
   windowSize = 5
 }) {
-  if (forceRespond || addressSignal?.triggered) return true;
+  if (forceRespond || isHardAddressSignal(addressSignal)) return true;
   if (!settings?.permissions?.allowInitiativeReplies) return false;
+  if (isInitiativeChannel) return true;
   return hasBotMessageInRecentWindow({
     botUserId,
     recentMessages,
@@ -132,61 +120,25 @@ export async function getReplyAddressSignal(
   const directByPlatform =
     runtime.isDirectlyAddressed(settings, message) ||
     Boolean(referencedAuthorId && referencedAuthorId === runtime.botUserId);
-  const inferredByExactName = isBotNameAddressed({
-    transcript: String(message?.content || ""),
-    botName: String(settings?.botName || "")
-  });
-  const fallbackConfidence = inferredByExactName ? 0.95 : 0;
+  const exactNameReason = resolveExactNameReason(settings, message);
+  const inferredByExactName = Boolean(exactNameReason);
   const threshold = DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD;
-  const shouldCallAddressingLlm =
-    !directByPlatform &&
-    !inferredByExactName &&
-    hasBotNameCue({
-      transcript: String(message?.content || ""),
-      botName: String(settings?.botName || "")
-    });
-
-  const llmScore = shouldCallAddressingLlm && typeof runtime.scoreDirectAddressConfidence === "function"
-    ? await runtime.scoreDirectAddressConfidence({
-        settings,
-        message,
-        recentMessages,
-        fallbackConfidence,
-        threshold
-      })
-    : null;
-  const scoredThreshold = clamp(Number(llmScore?.threshold) || threshold, 0.4, 0.95);
-  const scoredConfidence = clamp(
-    Math.max(
-      Number(llmScore?.confidence) || 0,
-      fallbackConfidence
-    ),
-    0,
-    1
-  );
-  const inferredByLlm = Boolean(
-    llmScore && (
-      llmScore.addressed === true ||
-      scoredConfidence >= scoredThreshold
-    )
-  );
-  const direct = Boolean(directByPlatform || inferredByExactName || inferredByLlm);
+  const scoredThreshold = clamp(Number(threshold) || DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD, 0.4, 0.95);
+  const direct = Boolean(directByPlatform || inferredByExactName);
   const reason = direct
     ? directByPlatform
       ? "direct"
-      : inferredByExactName
-        ? "name_exact"
-        : "llm_direct_address"
+      : exactNameReason || "name_exact"
     : "llm_decides";
   const confidence = directByPlatform
     ? 1
     : inferredByExactName
-      ? Math.max(scoredConfidence, 0.95)
-      : scoredConfidence;
+      ? 0.95
+      : 0;
 
   return {
     direct: Boolean(direct),
-    inferred: Boolean(inferredByExactName || inferredByLlm),
+    inferred: Boolean(inferredByExactName),
     triggered: Boolean(direct),
     reason,
     confidence,
@@ -195,9 +147,7 @@ export async function getReplyAddressSignal(
       ? "direct"
       : inferredByExactName
         ? "exact_name"
-        : llmScore?.source === "llm"
-          ? "llm"
-          : "fallback"
+        : "fallback"
   };
 }
 
@@ -214,4 +164,33 @@ function resolveReferencedAuthorId(message, recentMessages = []) {
     message.referencedMessage?.author?.id;
 
   return fromResolved ? String(fromResolved) : null;
+}
+
+function resolveExactNameReason(settings, message) {
+  const transcript = String(message?.content || "");
+  const botName = String(settings?.botName || "").trim();
+  if (botName && isBotNameAddressed({ transcript, botName })) {
+    return "name_exact";
+  }
+
+  const aliases = Array.isArray(settings?.botNameAliases) ? settings.botNameAliases : [];
+  for (const alias of aliases) {
+    const normalizedAlias = String(alias || "").trim();
+    if (!normalizedAlias) continue;
+    if (botName && normalizedAlias.toLowerCase() === botName.toLowerCase()) continue;
+    if (isBotNameAddressed({ transcript, botName: normalizedAlias })) {
+      return "name_alias";
+    }
+  }
+
+  return null;
+}
+
+function isHardAddressSignal(addressSignal: Partial<ReplyAddressSignal> | null = null) {
+  if (!addressSignal || typeof addressSignal !== "object") return false;
+  if (!addressSignal.triggered) return false;
+  const reason = String(addressSignal.reason || "")
+    .trim()
+    .toLowerCase();
+  return reason === "direct" || reason === "name_exact" || reason === "name_alias";
 }

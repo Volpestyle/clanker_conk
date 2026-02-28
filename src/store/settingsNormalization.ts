@@ -50,6 +50,11 @@ export function normalizeSettings(raw) {
   if (!merged.prompt || typeof merged.prompt !== "object") merged.prompt = {};
 
   merged.botName = String(merged.botName || "clanker conk").slice(0, 50);
+  merged.botNameAliases = uniqueStringList(
+    merged.botNameAliases,
+    24,
+    50
+  );
   merged.persona.flavor = String(merged.persona?.flavor || DEFAULT_SETTINGS.persona.flavor).slice(
     0,
     PERSONA_FLAVOR_MAX_CHARS
@@ -386,6 +391,11 @@ export function normalizeSettings(raw) {
     maxFrameBytes?: number;
     commentaryPath?: string;
     keyframeIntervalMs?: number;
+    autonomousCommentaryEnabled?: boolean;
+    brainContextEnabled?: boolean;
+    brainContextMinIntervalSeconds?: number;
+    brainContextMaxEntries?: number;
+    brainContextPrompt?: string;
   };
   type VoiceSoundboardDefaults = {
     enabled?: boolean;
@@ -437,6 +447,8 @@ export function normalizeSettings(raw) {
   const streamWatchMaxFramesPerMinuteRaw = Number(merged.voice?.streamWatch?.maxFramesPerMinute);
   const streamWatchMaxFrameBytesRaw = Number(merged.voice?.streamWatch?.maxFrameBytes);
   const streamWatchKeyframeIntervalRaw = Number(merged.voice?.streamWatch?.keyframeIntervalMs);
+  const streamWatchBrainContextIntervalRaw = Number(merged.voice?.streamWatch?.brainContextMinIntervalSeconds);
+  const streamWatchBrainContextMaxEntriesRaw = Number(merged.voice?.streamWatch?.brainContextMaxEntries);
 
   merged.voice.enabled =
     merged.voice?.enabled !== undefined ? Boolean(merged.voice?.enabled) : Boolean(defaultVoice.enabled);
@@ -741,6 +753,40 @@ export function normalizeSettings(raw) {
     250,
     5000
   );
+  merged.voice.streamWatch.autonomousCommentaryEnabled =
+    merged.voice?.streamWatch?.autonomousCommentaryEnabled !== undefined
+      ? Boolean(merged.voice?.streamWatch?.autonomousCommentaryEnabled)
+      : defaultVoiceStreamWatch.autonomousCommentaryEnabled !== undefined
+        ? Boolean(defaultVoiceStreamWatch.autonomousCommentaryEnabled)
+        : true;
+  merged.voice.streamWatch.brainContextEnabled =
+    merged.voice?.streamWatch?.brainContextEnabled !== undefined
+      ? Boolean(merged.voice?.streamWatch?.brainContextEnabled)
+      : defaultVoiceStreamWatch.brainContextEnabled !== undefined
+        ? Boolean(defaultVoiceStreamWatch.brainContextEnabled)
+        : true;
+  merged.voice.streamWatch.brainContextMinIntervalSeconds = clamp(
+    Number.isFinite(streamWatchBrainContextIntervalRaw)
+      ? streamWatchBrainContextIntervalRaw
+      : Number(defaultVoiceStreamWatch.brainContextMinIntervalSeconds) || 4,
+    1,
+    120
+  );
+  merged.voice.streamWatch.brainContextMaxEntries = clamp(
+    Number.isFinite(streamWatchBrainContextMaxEntriesRaw)
+      ? streamWatchBrainContextMaxEntriesRaw
+      : Number(defaultVoiceStreamWatch.brainContextMaxEntries) || 8,
+    1,
+    24
+  );
+  const brainContextPrompt = String(
+    merged.voice?.streamWatch?.brainContextPrompt ?? defaultVoiceStreamWatch.brainContextPrompt ?? ""
+  )
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 420);
+  merged.voice.streamWatch.brainContextPrompt =
+    brainContextPrompt || String(defaultVoiceStreamWatch.brainContextPrompt || "");
 
   merged.voice.soundboard.enabled =
     merged.voice?.soundboard?.enabled !== undefined

@@ -5,6 +5,7 @@ import { normalizeSettings, PERSONA_FLAVOR_MAX_CHARS } from "./settingsNormaliza
 test("normalizeSettings clamps and normalizes complex nested settings", () => {
   const normalized = normalizeSettings({
     botName: "x".repeat(120),
+    botNameAliases: ["clank", "clank", "  ", "conk", "alias-".repeat(20)],
     llm: {
       provider: "XAI",
       model: "",
@@ -79,7 +80,12 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
         maxFramesPerMinute: 9999,
         maxFrameBytes: 10,
         commentaryPath: "not-real",
-        keyframeIntervalMs: 20
+        keyframeIntervalMs: 20,
+        autonomousCommentaryEnabled: 0,
+        brainContextEnabled: "yes",
+        brainContextMinIntervalSeconds: -4,
+        brainContextMaxEntries: 999,
+        brainContextPrompt: `${"x".repeat(520)}   `
       },
       soundboard: {
         preferredSoundIds: ["first", "first", "second"]
@@ -102,6 +108,7 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   });
 
   assert.equal(normalized.botName.length, 50);
+  assert.deepEqual(normalized.botNameAliases, ["clank", "conk", "alias-alias-alias-alias-alias-alias-alias-alias-al"]);
   assert.equal(normalized.llm.provider, "xai");
   assert.equal(normalized.llm.model, "grok-3-mini-latest");
   assert.equal(normalized.llm.temperature, 2);
@@ -159,6 +166,11 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.voice.streamWatch.maxFrameBytes, 50_000);
   assert.equal(normalized.voice.streamWatch.commentaryPath, "auto");
   assert.equal(normalized.voice.streamWatch.keyframeIntervalMs, 250);
+  assert.equal(normalized.voice.streamWatch.autonomousCommentaryEnabled, false);
+  assert.equal(normalized.voice.streamWatch.brainContextEnabled, true);
+  assert.equal(normalized.voice.streamWatch.brainContextMinIntervalSeconds, 1);
+  assert.equal(normalized.voice.streamWatch.brainContextMaxEntries, 24);
+  assert.equal(normalized.voice.streamWatch.brainContextPrompt.length, 420);
   assert.deepEqual(normalized.voice.soundboard.preferredSoundIds, ["first", "second"]);
 
   assert.deepEqual(normalized.initiative.allowedImageModels, ["gpt-image-1.5", "grok-imagine-image"]);

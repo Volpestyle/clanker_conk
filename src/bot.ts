@@ -94,7 +94,6 @@ import {
   resolveOperationalChannel,
   sendToChannel
 } from "./voice/voiceOperationalMessaging.ts";
-import { scoreDirectAddressConfidence } from "./directAddressConfidence.ts";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
@@ -891,11 +890,13 @@ export class ClankerBot {
       settings.memory.maxRecentMessages
     );
     const addressSignal = await this.getReplyAddressSignal(settings, message, recentMessages);
+    const isInitiativeChannel = this.isInitiativeChannel(settings, message.channelId);
 
     const shouldQueueReply = this.shouldAttemptReplyDecision({
       settings,
       recentMessages,
       addressSignal,
+      isInitiativeChannel,
       forceRespond: false,
       triggerMessageId: message.id
     });
@@ -1073,6 +1074,7 @@ export class ClankerBot {
       settings,
       recentMessages,
       addressSignal,
+      isInitiativeChannel,
       forceRespond: Boolean(options.forceRespond),
       triggerMessageId: message.id
     });
@@ -3651,6 +3653,7 @@ export class ClankerBot {
     settings,
     recentMessages,
     addressSignal,
+    isInitiativeChannel = false,
     forceRespond = false,
     triggerMessageId = null
   }) {
@@ -3659,6 +3662,7 @@ export class ClankerBot {
       settings,
       recentMessages,
       addressSignal,
+      isInitiativeChannel,
       forceRespond,
       triggerMessageId,
       windowSize: UNSOLICITED_REPLY_CONTEXT_WINDOW
@@ -3670,51 +3674,7 @@ export class ClankerBot {
       {
         botUserId: String(this.client.user?.id || "").trim(),
         isDirectlyAddressed: (runtimeSettings, runtimeMessage) =>
-          this.isDirectlyAddressed(runtimeSettings, runtimeMessage),
-        scoreDirectAddressConfidence: async ({
-          settings: runtimeSettings,
-          message: runtimeMessage,
-          recentMessages: runtimeRecentMessages,
-          fallbackConfidence,
-          threshold
-        }) => {
-          const transcript = String(runtimeMessage?.content || "").trim();
-          if (!transcript) return null;
-
-          const participantNames = (Array.isArray(runtimeRecentMessages) ? runtimeRecentMessages : [])
-            .map((row) => ({
-              authorId: String(row?.author_id || "").trim(),
-              authorName: String(row?.author_name || "").trim()
-            }))
-            .filter((row) =>
-              Boolean(row.authorName) &&
-              row.authorId !== String(this.client.user?.id || "").trim() &&
-              row.authorId !== String(runtimeMessage?.author?.id || "").trim()
-            )
-            .map((row) => row.authorName)
-            .filter((value, index, values) => values.indexOf(value) === index)
-            .slice(0, 12);
-
-          return await scoreDirectAddressConfidence({
-            llm: this.llm,
-            settings: runtimeSettings,
-            transcript,
-            botName: String(runtimeSettings?.botName || ""),
-            mode: "text",
-            speakerName: String(runtimeMessage?.member?.displayName || runtimeMessage?.author?.username || ""),
-            participantNames,
-            fallbackConfidence,
-            threshold,
-            trace: {
-              guildId: runtimeMessage?.guildId || null,
-              channelId: runtimeMessage?.channelId || null,
-              userId: runtimeMessage?.author?.id || null,
-              source: "text_direct_address",
-              event: "reply_admission",
-              messageId: runtimeMessage?.id || null
-            }
-          });
-        }
+          this.isDirectlyAddressed(runtimeSettings, runtimeMessage)
       },
       settings,
       message,

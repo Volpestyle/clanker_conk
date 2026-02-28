@@ -1,28 +1,20 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { ADDRESSING_SMOKE_CASES } from "../addressingSmokeCases.ts";
 import {
   getReplyAddressSignal,
+  shouldAttemptReplyDecision,
   shouldForceRespondForAddressSignal
 } from "./replyAdmission.ts";
 
 const BASE_SETTINGS = {
-  botName: "clanker conk"
+  botName: "clanker conk",
+  botNameAliases: ["clank"]
 };
 
 const BASE_RUNTIME = {
   botUserId: "bot-1",
   isDirectlyAddressed() {
     return false;
-  },
-  async scoreDirectAddressConfidence() {
-    return {
-      confidence: 0,
-      addressed: false,
-      threshold: 0.62,
-      source: "fallback",
-      reason: "stub"
-    };
   }
 };
 
@@ -60,71 +52,22 @@ test("reply admission treats merged bot-name token commands as direct address", 
   assert.equal(signal.reason, "name_exact");
 });
 
-test("reply admission uses classifier confidence callback for ambiguous addressing", async () => {
-  const expectedByText = new Map(
-    ADDRESSING_SMOKE_CASES.map((row) => [
-      row.text.toLowerCase(),
-      row.expected
-    ])
-  );
-  const runtime = {
-    ...BASE_RUNTIME,
-    async scoreDirectAddressConfidence({ message }) {
-      const key = String(message?.content || "").trim().toLowerCase();
-      const expected = Boolean(expectedByText.get(key));
-      return {
-        confidence: expected ? 0.88 : 0.18,
-        addressed: expected,
-        threshold: 0.62,
-        source: "llm",
-        reason: expected ? "test_llm_direct" : "test_llm_not_direct"
-      };
-    }
-  };
-  for (const row of ADDRESSING_SMOKE_CASES) {
-    const signal = await getReplyAddressSignal(runtime, BASE_SETTINGS, buildMessage(row.text), []);
-    assert.equal(Boolean(signal.triggered), row.expected, row.text);
-  }
-});
-
-test("reply admission treats classifier-positive ambiguous token as direct admission signal", async () => {
+test("reply admission treats configured alias commands as direct address", async () => {
   const signal = await getReplyAddressSignal(
-    {
-      ...BASE_RUNTIME,
-      async scoreDirectAddressConfidence() {
-        return {
-          confidence: 0.83,
-          addressed: true,
-          threshold: 0.62,
-          source: "llm",
-          reason: "test_llm_direct"
-        };
-      }
-    },
+    BASE_RUNTIME,
     BASE_SETTINGS,
-    buildMessage("join vc clink"),
+    buildMessage("clank join vc"),
     []
   );
 
   assert.equal(signal.direct, true);
   assert.equal(signal.triggered, true);
-  assert.equal(signal.reason, "llm_direct_address");
+  assert.equal(signal.reason, "name_alias");
 });
 
-test("reply admission ignores classifier-negative ambiguous token in generic prose", async () => {
+test("reply admission ignores ambiguous soundalike tokens in generic prose", async () => {
   const signal = await getReplyAddressSignal(
-    {
-      ...BASE_RUNTIME,
-      async scoreDirectAddressConfidence() {
-        return {
-          confidence: 0.21,
-          addressed: false,
-          threshold: 0.62,
-          source: "llm",
-          reason: "test_llm_not_direct"
-        };
-      }
-    },
+    BASE_RUNTIME,
     BASE_SETTINGS,
     buildMessage("the cable made a clink sound"),
     []
@@ -135,13 +78,78 @@ test("reply admission ignores classifier-negative ambiguous token in generic pro
   assert.equal(signal.reason, "llm_decides");
 });
 
+test("reply admission initiative channels always run decision loop when allowed", () => {
+  const shouldRun = shouldAttemptReplyDecision({
+    botUserId: "bot-1",
+    settings: {
+      permissions: {
+        allowInitiativeReplies: true
+      }
+    },
+    recentMessages: [],
+    addressSignal: {
+      direct: false,
+      inferred: false,
+      triggered: false,
+      reason: "llm_decides"
+    },
+    isInitiativeChannel: true,
+    triggerMessageId: "msg-1"
+  });
+
+  assert.equal(shouldRun, true);
+});
+
+test("reply admission non-initiative channels require hard signal or followup window", () => {
+  const settings = {
+    permissions: {
+      allowInitiativeReplies: true
+    }
+  };
+
+  const withoutWindow = shouldAttemptReplyDecision({
+    botUserId: "bot-1",
+    settings,
+    recentMessages: [],
+    addressSignal: {
+      direct: true,
+      inferred: true,
+      triggered: true,
+      reason: "llm_direct_address"
+    },
+    isInitiativeChannel: false,
+    triggerMessageId: "msg-1"
+  });
+  assert.equal(withoutWindow, false);
+
+  const withWindow = shouldAttemptReplyDecision({
+    botUserId: "bot-1",
+    settings,
+    recentMessages: [
+      {
+        message_id: "bot-ctx-1",
+        author_id: "bot-1"
+      }
+    ],
+    addressSignal: {
+      direct: false,
+      inferred: false,
+      triggered: false,
+      reason: "llm_decides"
+    },
+    isInitiativeChannel: false,
+    triggerMessageId: "msg-1"
+  });
+  assert.equal(withWindow, true);
+});
+
 test("reply admission only force-responds for non-fuzzy address signals", () => {
   assert.equal(
     shouldForceRespondForAddressSignal({
       direct: true,
       inferred: true,
       triggered: true,
-      reason: "llm_direct_address"
+      reason: "name_variant"
     }),
     false
   );
