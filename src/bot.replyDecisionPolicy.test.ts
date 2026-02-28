@@ -427,7 +427,7 @@ test("smoke: text followup-window turn addressed to another user is llm-skipped"
     ];
 
     const settings = store.getSettings();
-    const addressSignal = bot.getReplyAddressSignal(settings, incoming, recentMessages);
+    const addressSignal = await bot.getReplyAddressSignal(settings, incoming, recentMessages);
     assert.equal(Boolean(addressSignal?.triggered), false);
     const sent = await bot.maybeReplyToMessage(incoming, settings, {
       source: "message_event",

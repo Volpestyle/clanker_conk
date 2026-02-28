@@ -27,7 +27,7 @@ export async function runStartupCatchup(runtime, settings) {
         message.channelId,
         settings.memory.maxRecentMessages
       );
-      const addressSignal = runtime.getReplyAddressSignal(settings, message, recentMessages);
+      const addressSignal = await runtime.getReplyAddressSignal(settings, message, recentMessages);
       if (!addressSignal.triggered) continue;
       if (now - message.createdTimestamp > lookbackMs) continue;
       if (runtime.store.hasTriggeredResponse(message.id)) continue;

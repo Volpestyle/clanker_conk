@@ -252,7 +252,7 @@ test("smoke: live text reply admission handles wake variants and prank-like nega
         messageId: `live-text-msg-${index + 1}`,
         content: row.text
       });
-      const addressSignal = bot.getReplyAddressSignal(settings, message, staticRecentMessages);
+      const addressSignal = await bot.getReplyAddressSignal(settings, message, staticRecentMessages);
       assert.equal(
         Boolean(addressSignal?.triggered),
         row.expected,

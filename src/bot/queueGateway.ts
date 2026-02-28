@@ -214,20 +214,28 @@ export async function processReplyQueue(bot, channelId) {
         settings.memory.maxRecentMessages
       );
       const addressSignal = {
-        ...(latestJob.addressSignal || bot.getReplyAddressSignal(settings, message, recentMessages))
+        ...(latestJob.addressSignal || await bot.getReplyAddressSignal(settings, message, recentMessages))
       };
       addressSignal.direct = Boolean(addressSignal.direct);
       addressSignal.inferred = Boolean(addressSignal.inferred);
       addressSignal.triggered = Boolean(addressSignal.triggered);
       addressSignal.reason = String(addressSignal.reason || "llm_decides");
+      addressSignal.confidence = Math.max(0, Math.min(1, Number(addressSignal.confidence) || 0));
+      addressSignal.threshold = Math.max(0.4, Math.min(0.95, Number(addressSignal.threshold) || 0.62));
+      addressSignal.confidenceSource = String(addressSignal.confidenceSource || "fallback");
 
       for (const burstJob of burstJobs) {
         const burstMessage = burstJob?.message;
         if (!burstMessage?.id) continue;
-        const signal = burstJob.addressSignal || bot.getReplyAddressSignal(settings, burstMessage, recentMessages);
+        const signal = burstJob.addressSignal || await bot.getReplyAddressSignal(settings, burstMessage, recentMessages);
         if (!signal) continue;
         if (signal.direct) addressSignal.direct = true;
         if (signal.inferred) addressSignal.inferred = true;
+        if ((Number(signal.confidence) || 0) > addressSignal.confidence) {
+          addressSignal.confidence = Math.max(0, Math.min(1, Number(signal.confidence) || 0));
+          addressSignal.threshold = Math.max(0.4, Math.min(0.95, Number(signal.threshold) || addressSignal.threshold));
+          addressSignal.confidenceSource = String(signal.confidenceSource || addressSignal.confidenceSource || "fallback");
+        }
         if (signal.triggered && !addressSignal.triggered) {
           addressSignal.triggered = true;
           addressSignal.reason = String(signal.reason || "direct");
@@ -244,6 +252,8 @@ export async function processReplyQueue(bot, channelId) {
       if (forceRespond && !addressSignal.triggered) {
         addressSignal.triggered = true;
         addressSignal.reason = "direct";
+        addressSignal.confidence = 1;
+        addressSignal.confidenceSource = "direct";
       }
       const source = burstJobs.length > 1
         ? `${latestJob.source || "message_event"}_coalesced`

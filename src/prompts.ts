@@ -374,7 +374,18 @@ export function buildReplyPrompt({
   }
 
   const directlyAddressed = Boolean(addressing?.directlyAddressed);
+  const directAddressConfidence = Number(addressing?.directAddressConfidence);
+  const directAddressThreshold = Number(addressing?.directAddressThreshold);
   const responseRequired = Boolean(addressing?.responseRequired);
+  if (Number.isFinite(directAddressConfidence)) {
+    const boundedConfidence = Math.max(0, Math.min(1, directAddressConfidence));
+    const boundedThreshold = Number.isFinite(directAddressThreshold)
+      ? Math.max(0.4, Math.min(0.95, directAddressThreshold))
+      : 0.62;
+    parts.push(
+      `Direct-address confidence: ${boundedConfidence.toFixed(3)} (threshold ${boundedThreshold.toFixed(2)}).`
+    );
+  }
   if (directlyAddressed) {
     parts.push("This message directly addressed you.");
   }
@@ -836,9 +847,9 @@ export function buildAutomationPrompt({
   parts.push("Return strict JSON only.");
   parts.push("JSON format:");
   parts.push(
-    "{\"text\":\"message or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null}}"
+    "{\"text\":\"message or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
   );
-  parts.push("Set webSearchQuery, memoryLine, and selfMemoryLine to null.");
+  parts.push("Set webSearchQuery, imageLookupQuery, memoryLine, and selfMemoryLine to null.");
   if (allowMemoryLookupDirective) {
     if (!memoryLookup?.enabled) {
       parts.push("Durable memory lookup is unavailable for this run. Set memoryLookupQuery to null.");
@@ -850,7 +861,9 @@ export function buildAutomationPrompt({
   } else {
     parts.push("Set memoryLookupQuery to null.");
   }
-  parts.push("Set automationAction.operation=none and voiceIntent.intent=none.");
+  parts.push("Set automationAction.operation=none.");
+  parts.push("Set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null.");
+  parts.push("Set screenShareIntent.action=none, screenShareIntent.confidence=0, screenShareIntent.reason=null.");
   parts.push("Use [SKIP] only when sending nothing is clearly best.");
 
   return parts.join("\n\n");

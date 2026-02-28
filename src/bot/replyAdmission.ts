@@ -1,12 +1,36 @@
 import { clamp } from "../utils.ts";
-import { isLikelyBotNameVariantAddress } from "../addressingNameVariants.ts";
 import { isBotNameAddressed } from "../voice/voiceSessionHelpers.ts";
+import {
+  DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
+  hasBotNameCue
+} from "../directAddressConfidence.ts";
 
 export type ReplyAddressSignal = {
   direct: boolean;
   inferred: boolean;
   triggered: boolean;
   reason: string;
+  confidence: number;
+  threshold: number;
+  confidenceSource: "llm" | "fallback" | "direct" | "exact_name";
+};
+
+type ReplyAddressRuntime = {
+  botUserId?: string;
+  isDirectlyAddressed: (settings, message) => boolean;
+  scoreDirectAddressConfidence?: (payload: {
+    settings,
+    message,
+    recentMessages,
+    fallbackConfidence: number,
+    threshold: number
+  }) => Promise<{
+    confidence?: number;
+    addressed?: boolean;
+    threshold?: number;
+    source?: "llm" | "fallback";
+    reason?: string;
+  } | null>;
 };
 
 export function hasBotMessageInRecentWindow({
@@ -95,35 +119,85 @@ export function shouldForceRespondForAddressSignal(addressSignal: Partial<ReplyA
   const reason = String(addressSignal.reason || "")
     .trim()
     .toLowerCase();
-  return reason !== "name_variant";
+  return reason !== "name_variant" && reason !== "llm_direct_address";
 }
 
-export function getReplyAddressSignal(runtime, settings, message, recentMessages = []) {
+export async function getReplyAddressSignal(
+  runtime: ReplyAddressRuntime,
+  settings,
+  message,
+  recentMessages = []
+) {
   const referencedAuthorId = resolveReferencedAuthorId(message, recentMessages);
+  const directByPlatform =
+    runtime.isDirectlyAddressed(settings, message) ||
+    Boolean(referencedAuthorId && referencedAuthorId === runtime.botUserId);
   const inferredByExactName = isBotNameAddressed({
     transcript: String(message?.content || ""),
     botName: String(settings?.botName || "")
   });
-  const inferredByNameVariant = isLikelyBotNameVariantAddress(
-    String(message?.content || ""),
-    String(settings?.botName || "")
+  const fallbackConfidence = inferredByExactName ? 0.95 : 0;
+  const threshold = DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD;
+  const shouldCallAddressingLlm =
+    !directByPlatform &&
+    !inferredByExactName &&
+    hasBotNameCue({
+      transcript: String(message?.content || ""),
+      botName: String(settings?.botName || "")
+    });
+
+  const llmScore = shouldCallAddressingLlm && typeof runtime.scoreDirectAddressConfidence === "function"
+    ? await runtime.scoreDirectAddressConfidence({
+        settings,
+        message,
+        recentMessages,
+        fallbackConfidence,
+        threshold
+      })
+    : null;
+  const scoredThreshold = clamp(Number(llmScore?.threshold) || threshold, 0.4, 0.95);
+  const scoredConfidence = clamp(
+    Math.max(
+      Number(llmScore?.confidence) || 0,
+      fallbackConfidence
+    ),
+    0,
+    1
   );
-  const direct =
-    runtime.isDirectlyAddressed(settings, message) ||
-    (referencedAuthorId && referencedAuthorId === runtime.botUserId) ||
-    inferredByExactName ||
-    inferredByNameVariant;
+  const inferredByLlm = Boolean(
+    llmScore && (
+      llmScore.addressed === true ||
+      scoredConfidence >= scoredThreshold
+    )
+  );
+  const direct = Boolean(directByPlatform || inferredByExactName || inferredByLlm);
+  const reason = direct
+    ? directByPlatform
+      ? "direct"
+      : inferredByExactName
+        ? "name_exact"
+        : "llm_direct_address"
+    : "llm_decides";
+  const confidence = directByPlatform
+    ? 1
+    : inferredByExactName
+      ? Math.max(scoredConfidence, 0.95)
+      : scoredConfidence;
+
   return {
     direct: Boolean(direct),
-    inferred: Boolean(inferredByExactName || inferredByNameVariant),
+    inferred: Boolean(inferredByExactName || inferredByLlm),
     triggered: Boolean(direct),
-    reason: direct
-      ? inferredByExactName
-        ? "name_exact"
-        : inferredByNameVariant
-          ? "name_variant"
-          : "direct"
-      : "llm_decides"
+    reason,
+    confidence,
+    threshold: scoredThreshold,
+    confidenceSource: directByPlatform
+      ? "direct"
+      : inferredByExactName
+        ? "exact_name"
+        : llmScore?.source === "llm"
+          ? "llm"
+          : "fallback"
   };
 }
 

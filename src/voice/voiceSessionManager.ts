@@ -26,7 +26,11 @@ import {
 } from "../promptCore.ts";
 import { estimateUsdCost } from "../pricing.ts";
 import { clamp } from "../utils.ts";
-import { isLikelyBotNameVariantAddress } from "../addressingNameVariants.ts";
+import {
+  DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
+  hasBotNameCue,
+  scoreDirectAddressConfidence
+} from "../directAddressConfidence.ts";
 import { convertDiscordPcmToXaiInput, convertXaiOutputToDiscordPcm } from "./pcmAudio.ts";
 import { SoundboardDirector } from "./soundboardDirector.ts";
 import {
@@ -4595,14 +4599,34 @@ export class VoiceSessionManager {
       speakerName
     });
     const now = Date.now();
+    if (!normalizedTranscript) {
+      const emptyConversationContext = this.buildVoiceConversationContext({
+        session,
+        userId: normalizedUserId,
+        directAddressed: false,
+        addressedToOtherParticipant,
+        now
+      });
+      return {
+        allow: false,
+        reason: "missing_transcript",
+        participantCount,
+        directAddressed: false,
+        directAddressConfidence: 0,
+        directAddressThreshold: DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
+        transcript: "",
+        conversationContext: emptyConversationContext
+      };
+    }
     const directAddressedByWakePhrase = normalizedTranscript
       ? isVoiceTurnAddressedToBot(normalizedTranscript, settings)
       : false;
-    const directAddressedByNameVariant = normalizedTranscript
-      ? isLikelyBotNameVariantAddress(normalizedTranscript, settings?.botName || "")
-      : false;
     const joinWindowAgeMs = Math.max(0, now - Number(session?.startedAt || 0));
     const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
+    const replyDecisionLlm = settings?.voice?.replyDecisionLlm || {};
+    const classifierEnabled =
+      replyDecisionLlm?.enabled !== undefined ? Boolean(replyDecisionLlm.enabled) : true;
+
     const normalizeWakeTokens = (value = "") =>
       String(value || "")
         .trim()
@@ -4635,21 +4659,59 @@ export class VoiceSessionManager {
       || botWakeTokens.find((token) => token.length >= 4)
       || "";
     const primaryWakeTokenAddressed = primaryWakeToken ? transcriptWakeTokenSet.has(primaryWakeToken) : false;
-    // Treat merged/phonetic variants as ambiguous (LLM-check candidates), not hard direct-address fast-path.
-    const directAddressed =
+    const deterministicDirectAddressed =
       directAddressedByWakePhrase &&
-      !addressedToOtherParticipant &&
       (
         primaryWakeTokenAddressed ||
         exactWakeSequenceAddressed ||
         !mergedWakeTokenAddressed
-      ) &&
-      !(directAddressedByNameVariant && mergedWakeTokenAddressed);
+      );
+    const nameCueDetected = hasBotNameCue({
+      transcript: normalizedTranscript,
+      botName: getPromptBotName(settings)
+    });
+    const shouldRunAddressClassifier =
+      classifierEnabled &&
+      !deterministicDirectAddressed &&
+      !mergedWakeTokenAddressed &&
+      nameCueDetected;
+    const directAddressAssessment = shouldRunAddressClassifier
+      ? await scoreDirectAddressConfidence({
+          llm: this.llm,
+          settings,
+          transcript: normalizedTranscript,
+          botName: getPromptBotName(settings),
+          mode: "voice",
+          speakerName,
+          participantNames: participantList,
+          threshold: DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
+          fallbackConfidence: deterministicDirectAddressed ? 0.92 : 0,
+          trace: {
+            guildId: session?.guildId || null,
+            channelId: session?.textChannelId || null,
+            userId: normalizedUserId || null,
+            source: "voice_direct_address",
+            event: String(_source || "stt_pipeline")
+          }
+        })
+      : {
+          confidence: deterministicDirectAddressed ? 0.92 : 0,
+          threshold: DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
+          addressed: deterministicDirectAddressed,
+          reason: deterministicDirectAddressed ? "deterministic_wake_phrase" : "deterministic_not_direct",
+          source: "fallback",
+          llmProvider: null,
+          llmModel: null,
+          llmResponse: null,
+          error: null
+        };
+    const directAddressConfidence = Number(directAddressAssessment.confidence) || 0;
+    const directAddressThreshold = Number(directAddressAssessment.threshold) || DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD;
+    const directAddressed =
+      !addressedToOtherParticipant &&
+      directAddressConfidence >= directAddressThreshold;
     const usedFallbackModel = Boolean(transcriptionContext?.usedFallbackModel);
     const replyEagerness = clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
-    const replyDecisionLlm = settings?.voice?.replyDecisionLlm || {};
-    const classifierEnabled =
-      replyDecisionLlm?.enabled !== undefined ? Boolean(replyDecisionLlm.enabled) : true;
     const conversationContext = this.buildVoiceConversationContext({
       session,
       userId: normalizedUserId,
@@ -4660,23 +4722,14 @@ export class VoiceSessionManager {
     const formatAgeMs = (value) =>
       Number.isFinite(value) ? String(Math.max(0, Math.round(value))) : "none";
 
-    if (!normalizedTranscript) {
-      return {
-        allow: false,
-        reason: "missing_transcript",
-        participantCount,
-        directAddressed,
-        transcript: "",
-        conversationContext
-      };
-    }
-
     if (session?.botTurnOpen) {
       return {
         allow: false,
         reason: "bot_turn_open",
         participantCount,
         directAddressed,
+        directAddressConfidence,
+        directAddressThreshold,
         transcript: normalizedTranscript,
         conversationContext
       };
@@ -4695,6 +4748,8 @@ export class VoiceSessionManager {
           reason: "direct_address_wake_ping",
           participantCount,
           directAddressed,
+          directAddressConfidence,
+          directAddressThreshold,
           transcript: normalizedTranscript,
           conversationContext
         };
@@ -4705,6 +4760,8 @@ export class VoiceSessionManager {
           reason: usedFallbackModel ? "low_signal_fallback_fragment" : "low_signal_fragment",
           participantCount,
           directAddressed,
+          directAddressConfidence,
+          directAddressThreshold,
           transcript: normalizedTranscript,
           conversationContext
         };
@@ -4727,6 +4784,8 @@ export class VoiceSessionManager {
         reason: "focused_speaker_followup",
         participantCount,
         directAddressed,
+        directAddressConfidence,
+        directAddressThreshold,
         transcript: normalizedTranscript,
         conversationContext
       };
@@ -4744,6 +4803,8 @@ export class VoiceSessionManager {
         reason: "bot_recent_reply_followup",
         participantCount,
         directAddressed,
+        directAddressConfidence,
+        directAddressThreshold,
         transcript: normalizedTranscript,
         conversationContext
       };
@@ -4755,6 +4816,8 @@ export class VoiceSessionManager {
         reason: "direct_address_fast_path",
         participantCount,
         directAddressed,
+        directAddressConfidence,
+        directAddressThreshold,
         transcript: normalizedTranscript,
         conversationContext
       };
@@ -4766,6 +4829,8 @@ export class VoiceSessionManager {
         reason: "eagerness_disabled_without_direct_address",
         participantCount,
         directAddressed,
+        directAddressConfidence,
+        directAddressThreshold,
         transcript: normalizedTranscript,
         conversationContext
       };
@@ -4823,7 +4888,7 @@ export class VoiceSessionManager {
       mergedWithGeneration &&
       participantCount > 1 &&
       !directAddressed &&
-      (addressedToOtherParticipant || (!directAddressedByNameVariant && !wakeModeActive)) &&
+      (addressedToOtherParticipant || (!nameCueDetected && directAddressConfidence < directAddressThreshold && !wakeModeActive)) &&
       Number.isFinite(msSinceInboundAudio) &&
       msSinceInboundAudio < nonDirectReplyMinSilenceMs;
     if (shouldDelayNonDirectMergedRealtimeReply) {
@@ -4832,6 +4897,8 @@ export class VoiceSessionManager {
         reason: "awaiting_non_direct_silence_window",
         participantCount,
         directAddressed,
+        directAddressConfidence,
+        directAddressThreshold,
         transcript: normalizedTranscript,
         llmProvider,
         llmModel,
@@ -4850,6 +4917,8 @@ export class VoiceSessionManager {
             : "classifier_disabled",
         participantCount,
         directAddressed,
+        directAddressConfidence,
+        directAddressThreshold,
         transcript: normalizedTranscript,
         llmProvider,
         llmModel,
@@ -4863,6 +4932,8 @@ export class VoiceSessionManager {
         reason: "llm_generate_unavailable",
         participantCount,
         directAddressed,
+        directAddressConfidence,
+        directAddressThreshold,
         transcript: normalizedTranscript,
         llmProvider,
         llmModel,
@@ -4881,6 +4952,8 @@ export class VoiceSessionManager {
       promptHistoryChars: recentHistory.length,
       transcriptChars: normalizedTranscript.length,
       directAddressed: Boolean(directAddressed),
+      directAddressConfidence: Number(directAddressConfidence.toFixed(3)),
+      directAddressThreshold: Number(directAddressThreshold.toFixed(2)),
       joinWindowActive
     });
     const configuredMaxDecisionAttempts = Number(replyDecisionLlm?.maxAttempts);
@@ -4927,6 +5000,7 @@ export class VoiceSessionManager {
       `Recent bot reply ms ago: ${formatAgeMs(conversationContext.msSinceAssistantReply)}.`,
       `Recent direct address ms ago: ${formatAgeMs(conversationContext.msSinceDirectAddress)}.`,
       `Directly addressed: ${directAddressed ? "yes" : "no"}.`,
+      `Direct-address confidence: ${directAddressConfidence.toFixed(3)} (threshold ${directAddressThreshold.toFixed(2)}).`,
       `Likely aimed at another participant: ${addressedToOtherParticipant ? "yes" : "no"}.`,
       `Latest transcript: "${normalizedTranscript}".`,
       wakeVariantHint
@@ -4948,6 +5022,7 @@ export class VoiceSessionManager {
       `Current speaker matches focused speaker: ${conversationContext.sameAsFocusedSpeaker ? "yes" : "no"}.`,
       `Recent bot reply ms ago: ${formatAgeMs(conversationContext.msSinceAssistantReply)}.`,
       `Directly addressed: ${directAddressed ? "yes" : "no"}.`,
+      `Direct-address confidence: ${directAddressConfidence.toFixed(3)} (threshold ${directAddressThreshold.toFixed(2)}).`,
       `Likely aimed at another participant: ${addressedToOtherParticipant ? "yes" : "no"}.`,
       `Reply eagerness: ${replyEagerness}/100.`,
       `Participants: ${participantCount}.`,
@@ -4996,6 +5071,7 @@ export class VoiceSessionManager {
           "Join-window bias rule: if Join window active is yes and this turn is a short greeting/check-in, default to YES unless another human target is explicit.\n" +
           `Conversation engagement state: ${conversationContext.engagementState}.\n` +
           `Directly addressed: ${directAddressed ? "yes" : "no"}.\n` +
+          `Direct-address confidence: ${directAddressConfidence.toFixed(3)} (threshold ${directAddressThreshold.toFixed(2)}).\n` +
           `Transcript: "${normalizedTranscript}".`
       }
     ].slice(0, maxDecisionAttempts);
@@ -5043,6 +5119,8 @@ export class VoiceSessionManager {
             reason: parsed.allow ? (index === 0 ? "llm_yes" : "llm_yes_retry") : index === 0 ? "llm_no" : "llm_no_retry",
             participantCount,
             directAddressed,
+            directAddressConfidence,
+            directAddressThreshold,
             transcript: normalizedTranscript,
             llmResponse: raw,
             llmProvider: resolvedProvider,
@@ -5070,6 +5148,8 @@ export class VoiceSessionManager {
         reason: "llm_error",
         participantCount,
         directAddressed,
+        directAddressConfidence,
+        directAddressThreshold,
         transcript: normalizedTranscript,
         llmProvider,
         llmModel,
@@ -5083,6 +5163,8 @@ export class VoiceSessionManager {
       reason: "llm_contract_violation",
       participantCount,
       directAddressed,
+      directAddressConfidence,
+      directAddressThreshold,
       transcript: normalizedTranscript,
       llmResponse: invalidOutputs.map((row) => `${row.step}=${row.text}`).join(" | "),
       llmProvider,
@@ -5132,9 +5214,7 @@ export class VoiceSessionManager {
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     if (!normalizedTranscript) return false;
     const resolvedSettings = settings || session?.settingsSnapshot || this.store.getSettings();
-    const directAddressed =
-      isVoiceTurnAddressedToBot(normalizedTranscript, resolvedSettings) ||
-      isLikelyBotNameVariantAddress(normalizedTranscript, resolvedSettings?.botName || "");
+    const directAddressed = isVoiceTurnAddressedToBot(normalizedTranscript, resolvedSettings);
     if (directAddressed) return true;
     return !isLowSignalVoiceFragment(normalizedTranscript);
   }

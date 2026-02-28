@@ -1,6 +1,28 @@
-# Reply Decision Flow (Text + Voice)
+# Reply Decision Flow (Text + Voice Chat)
 
 This document describes the current two-stage reply policy and how text and voice differ at execution time.
+
+## 0) Visual Flows (Text + Chat)
+
+### Text reply sequence
+
+![Text Reply Decision Sequence](diagrams/reply-decision-text-sequence.png)
+<!-- source: docs/diagrams/reply-decision-text-sequence.mmd -->
+
+### Text reply state machine
+
+![Text Reply Decision State](diagrams/reply-decision-text-state.png)
+<!-- source: docs/diagrams/reply-decision-text-state.mmd -->
+
+### Voice chat reply sequence
+
+![Voice Chat Reply Decision Sequence](diagrams/reply-decision-chat-sequence.png)
+<!-- source: docs/diagrams/reply-decision-chat-sequence.mmd -->
+
+### Voice chat reply state machine
+
+![Voice Chat Reply Decision State](diagrams/reply-decision-chat-state.png)
+<!-- source: docs/diagrams/reply-decision-chat-state.mmd -->
 
 ## 1) Stage A: Should we even attempt a reply?
 
@@ -15,10 +37,10 @@ Current addressing signal reasons:
 
 - `direct`: explicit mention/reply-thread style direct address.
 - `name_exact`: exact/merged bot-name token match.
-- `name_variant`: near-name variant match.
+- `llm_direct_address`: LLM confidence classifier marked the turn as likely directed at the bot.
 - `llm_decides`: no direct signal.
 
-Important nuance: force-respond is only automatic for non-`name_variant` direct signals (`shouldForceRespondForAddressSignal`).
+Important nuance: force-respond is only automatic for high-certainty direct signals; `llm_direct_address` does not auto-force (`shouldForceRespondForAddressSignal`).
 
 The text path applies this admission gate before queueing and again right before generation, so non-addressed channel chatter does not continuously hit the main reply model.
 
@@ -26,11 +48,11 @@ The text path applies this admission gate before queueing and again right before
 
 `evaluateVoiceReplyDecision(...)` is the admission gate. It combines:
 
-- direct-address signal (`isVoiceTurnAddressedToBot` + name-variant matching),
+- direct-address signal (`isVoiceTurnAddressedToBot` + direct-address confidence),
 - low-signal filtering (`isLowSignalVoiceFragment` / wake-ping checks),
 - focused-speaker + recent-bot-reply continuation windows,
 - `voice.replyEagerness` gating for non-direct turns,
-- a YES/NO classifier LLM (`voice.replyDecisionLlm`) when heuristics do not resolve the turn.
+- a YES/NO classifier LLM (`voice.replyDecisionLlm`) when deterministic fast paths do not resolve the turn.
 
 Fast-path allow reasons include `direct_address_fast_path`, `focused_speaker_followup`, and `bot_recent_reply_followup`. Fast-path deny reasons include `missing_transcript`, `bot_turn_open`, `low_signal_fragment`, and `eagerness_disabled_without_direct_address`.
 
@@ -44,7 +66,7 @@ After Stage A passes, the main reply LLM runs with explicit `[SKIP]` support for
 
 - Non-addressed turns: model can choose `[SKIP]`.
 - Force-required turns: prompt marks reply as required (except safety refusal).
-- Direct `name_variant` turns are admitted but not force-required, so they can still `[SKIP]`.
+- `llm_direct_address` turns are admitted but not force-required, so they can still `[SKIP]`.
 
 If the model output is empty (and no media-only payload is viable), the turn is also treated as skipped (`reply_skipped` with `empty_reply`/`empty_reply_after_media`).
 

@@ -94,6 +94,7 @@ import {
   resolveOperationalChannel,
   sendToChannel
 } from "./voice/voiceOperationalMessaging.ts";
+import { scoreDirectAddressConfidence } from "./directAddressConfidence.ts";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
@@ -122,15 +123,65 @@ const IS_TEST_PROCESS = /\.test\.[cm]?[jt]sx?$/i.test(String(process.argv?.[1] |
   process.argv.includes("--test");
 const SCREEN_SHARE_EXPLICIT_REQUEST_RE =
   /\b(?:screen\s*share|share\s*(?:my|the)?\s*screen|watch\s*(?:my|the)?\s*screen|see\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*stream|watch\s*(?:my|the)?\s*stream)\b/i;
-const REPLY_DIRECTIVE_JSON_SCHEMA = JSON.stringify({
+const REPLY_DIRECTIVE_SCHEMA = {
   type: "object",
-  additionalProperties: true,
+  additionalProperties: false,
   properties: {
     text: { type: "string" },
     skip: { type: "boolean" },
+    reactionEmoji: { type: ["string", "null"] },
+    media: {
+      anyOf: [
+        { type: "null" },
+        {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            type: {
+              type: "string",
+              enum: ["image_simple", "image_complex", "video", "gif", "none"]
+            },
+            prompt: { type: ["string", "null"] }
+          },
+          required: ["type", "prompt"]
+        }
+      ]
+    },
+    webSearchQuery: { type: ["string", "null"] },
+    memoryLookupQuery: { type: ["string", "null"] },
+    imageLookupQuery: { type: ["string", "null"] },
+    memoryLine: { type: ["string", "null"] },
+    selfMemoryLine: { type: ["string", "null"] },
+    automationAction: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["create", "pause", "resume", "delete", "list", "none"]
+        },
+        title: { type: ["string", "null"] },
+        instruction: { type: ["string", "null"] },
+        schedule: { type: ["object", "null"] },
+        targetQuery: { type: ["string", "null"] },
+        automationId: { type: ["number", "null"] },
+        runImmediately: { type: "boolean" },
+        targetChannelId: { type: ["string", "null"] }
+      },
+      required: [
+        "operation",
+        "title",
+        "instruction",
+        "schedule",
+        "targetQuery",
+        "automationId",
+        "runImmediately",
+        "targetChannelId"
+      ]
+    },
     voiceIntent: {
       type: "object",
-      additionalProperties: true,
+      additionalProperties: false,
       properties: {
         intent: {
           type: "string",
@@ -140,10 +191,34 @@ const REPLY_DIRECTIVE_JSON_SCHEMA = JSON.stringify({
         reason: { type: ["string", "null"] }
       },
       required: ["intent", "confidence", "reason"]
+    },
+    screenShareIntent: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        action: { type: "string", enum: ["offer_link", "none"] },
+        confidence: { type: "number" },
+        reason: { type: ["string", "null"] }
+      },
+      required: ["action", "confidence", "reason"]
     }
   },
-  required: ["text", "skip", "voiceIntent"]
-});
+  required: [
+    "text",
+    "skip",
+    "reactionEmoji",
+    "media",
+    "webSearchQuery",
+    "memoryLookupQuery",
+    "imageLookupQuery",
+    "memoryLine",
+    "selfMemoryLine",
+    "automationAction",
+    "voiceIntent",
+    "screenShareIntent"
+  ]
+};
+const REPLY_DIRECTIVE_JSON_SCHEMA = JSON.stringify(REPLY_DIRECTIVE_SCHEMA);
 
 type ReplyPerformanceSeed = {
   triggerMessageCreatedAtMs?: number | null;
@@ -164,7 +239,15 @@ type ReplyPerformanceTracker = {
 
 type ReplyAttemptOptions = {
   recentMessages?: Array<Record<string, unknown>>;
-  addressSignal?: { triggered?: boolean; reason?: string } | null;
+  addressSignal?: {
+    direct?: boolean;
+    inferred?: boolean;
+    triggered?: boolean;
+    reason?: string;
+    confidence?: number;
+    threshold?: number;
+    confidenceSource?: "llm" | "fallback" | "direct" | "exact_name";
+  } | null;
   triggerMessageIds?: string[];
   forceRespond?: boolean;
   source?: string;
@@ -904,7 +987,7 @@ export class ClankerBot {
       message.channelId,
       settings.memory.maxRecentMessages
     );
-    const addressSignal = this.getReplyAddressSignal(settings, message, recentMessages);
+    const addressSignal = await this.getReplyAddressSignal(settings, message, recentMessages);
 
     const shouldQueueReply = this.shouldAttemptReplyDecision({
       settings,
@@ -1059,7 +1142,7 @@ export class ClankerBot {
       ? options.recentMessages
       : this.store.getRecentMessages(message.channelId, settings.memory.maxRecentMessages);
     const addressSignal =
-      options.addressSignal || this.getReplyAddressSignal(settings, message, recentMessages);
+      options.addressSignal || await this.getReplyAddressSignal(settings, message, recentMessages);
     const triggerMessageIds = [
       ...new Set(
         [...(Array.isArray(options.triggerMessageIds) ? options.triggerMessageIds : []), message.id]
@@ -1205,6 +1288,8 @@ export class ClankerBot {
       reactionEagerness,
       addressing: {
         directlyAddressed: addressed,
+        directAddressConfidence: Number(addressSignal?.confidence) || 0,
+        directAddressThreshold: Number(addressSignal?.threshold) || 0.62,
         responseRequired: Boolean(options.forceRespond)
       },
       allowMemoryDirective: settings.memory.enabled,
@@ -3684,12 +3769,56 @@ export class ClankerBot {
     });
   }
 
-  getReplyAddressSignal(settings, message, recentMessages = []) {
-    return getReplyAddressSignalForReplyAdmission(
+  async getReplyAddressSignal(settings, message, recentMessages = []) {
+    return await getReplyAddressSignalForReplyAdmission(
       {
         botUserId: String(this.client.user?.id || "").trim(),
         isDirectlyAddressed: (runtimeSettings, runtimeMessage) =>
-          this.isDirectlyAddressed(runtimeSettings, runtimeMessage)
+          this.isDirectlyAddressed(runtimeSettings, runtimeMessage),
+        scoreDirectAddressConfidence: async ({
+          settings: runtimeSettings,
+          message: runtimeMessage,
+          recentMessages: runtimeRecentMessages,
+          fallbackConfidence,
+          threshold
+        }) => {
+          const transcript = String(runtimeMessage?.content || "").trim();
+          if (!transcript) return null;
+
+          const participantNames = (Array.isArray(runtimeRecentMessages) ? runtimeRecentMessages : [])
+            .map((row) => ({
+              authorId: String(row?.author_id || "").trim(),
+              authorName: String(row?.author_name || "").trim()
+            }))
+            .filter((row) =>
+              Boolean(row.authorName) &&
+              row.authorId !== String(this.client.user?.id || "").trim() &&
+              row.authorId !== String(runtimeMessage?.author?.id || "").trim()
+            )
+            .map((row) => row.authorName)
+            .filter((value, index, values) => values.indexOf(value) === index)
+            .slice(0, 12);
+
+          return await scoreDirectAddressConfidence({
+            llm: this.llm,
+            settings: runtimeSettings,
+            transcript,
+            botName: String(runtimeSettings?.botName || ""),
+            mode: "text",
+            speakerName: String(runtimeMessage?.member?.displayName || runtimeMessage?.author?.username || ""),
+            participantNames,
+            fallbackConfidence,
+            threshold,
+            trace: {
+              guildId: runtimeMessage?.guildId || null,
+              channelId: runtimeMessage?.channelId || null,
+              userId: runtimeMessage?.author?.id || null,
+              source: "text_direct_address",
+              event: "reply_admission",
+              messageId: runtimeMessage?.id || null
+            }
+          });
+        }
       },
       settings,
       message,
@@ -3954,6 +4083,7 @@ export class ClankerBot {
       settings,
       systemPrompt: automationSystemPrompt,
       userPrompt,
+      jsonSchema: REPLY_DIRECTIVE_JSON_SCHEMA,
       trace: {
         guildId: automation.guild_id,
         channelId: automation.channel_id,
@@ -3990,7 +4120,8 @@ export class ClankerBot {
             memoryLookup: nextMemoryLookup,
             allowMemoryLookupDirective
           }),
-        maxModelImageInputs: MAX_MODEL_IMAGE_INPUTS
+        maxModelImageInputs: MAX_MODEL_IMAGE_INPUTS,
+        jsonSchema: REPLY_DIRECTIVE_JSON_SCHEMA
       }
     );
     generation = followup.generation;
