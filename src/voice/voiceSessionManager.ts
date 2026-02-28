@@ -100,11 +100,9 @@ import {
 } from "./voiceSessionHelpers.ts";
 import { requestJoin } from "./voiceJoinFlow.ts";
 import {
-  AUDIO_PLAYBACK_QUEUE_ABSOLUTE_MAX_BYTES,
   ACTIVITY_TOUCH_THROTTLE_MS,
   AUDIO_PLAYBACK_PUMP_CHUNK_BYTES,
   AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES,
-  AUDIO_PLAYBACK_QUEUE_TRIM_LOG_COOLDOWN_MS,
   AUDIO_PLAYBACK_QUEUE_WARN_BYTES,
   AUDIO_PLAYBACK_QUEUE_WARN_COOLDOWN_MS,
   BARGE_IN_ASSERTION_MS,
@@ -132,7 +130,6 @@ import {
   MIN_MAX_SESSION_MINUTES,
   MIN_RESPONSE_REQUEST_GAP_MS,
   OPENAI_ACTIVE_RESPONSE_RETRY_MS,
-  PENDING_SUPERSEDE_MIN_AGE_MS,
   JOIN_GREETING_LLM_WINDOW_MS,
   NON_DIRECT_REPLY_MIN_SILENCE_MS,
   REALTIME_CONTEXT_MEMBER_LIMIT,
@@ -191,6 +188,7 @@ import {
   VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS,
   VOICE_LOOKUP_BUSY_ANNOUNCE_DELAY_MS,
   VOICE_LOOKUP_BUSY_LOG_COOLDOWN_MS,
+  VOICE_LOW_SIGNAL_POST_REPLY_MAX_CLIP_MS,
   VOICE_SILENCE_GATE_ACTIVE_RATIO_MAX,
   VOICE_SILENCE_GATE_ACTIVE_SAMPLE_MIN_ABS,
   VOICE_SILENCE_GATE_MIN_CLIP_MS,
@@ -1266,6 +1264,19 @@ export class VoiceSessionManager {
     const queuedBytes = Math.max(0, Number(queueState?.queuedBytes || 0));
     const now = Date.now();
     const pendingRequestId = Number(session.pendingResponse?.requestId || 0) || null;
+    let responseCancelAttempted = false;
+    let responseCancelSucceeded = false;
+    let responseCancelError = null;
+
+    const cancelActiveResponse = session.realtimeClient?.cancelActiveResponse;
+    if (typeof cancelActiveResponse === "function") {
+      responseCancelAttempted = true;
+      try {
+        responseCancelSucceeded = Boolean(cancelActiveResponse.call(session.realtimeClient));
+      } catch (error) {
+        responseCancelError = shortError(error);
+      }
+    }
 
     this.clearAudioPlaybackQueue(session);
     if (session.botTurnResetTimer) {
@@ -1308,7 +1319,10 @@ export class VoiceSessionManager {
         queuedBytesDropped: queuedBytes,
         pendingRequestId,
         minCaptureBytes: Math.max(0, Number(minCaptureBytes || 0)),
-        suppressionMs: BARGE_IN_SUPPRESSION_MAX_MS
+        suppressionMs: BARGE_IN_SUPPRESSION_MAX_MS,
+        responseCancelAttempted,
+        responseCancelSucceeded,
+        responseCancelError
       }
     });
     return true;
@@ -1700,8 +1714,7 @@ export class VoiceSessionManager {
         timer: null,
         waitingDrain: false,
         drainHandler: null,
-        lastWarnAt: 0,
-        lastTrimAt: 0
+        lastWarnAt: 0
       };
     }
     return session.audioPlaybackQueue;
@@ -1724,7 +1737,6 @@ export class VoiceSessionManager {
     state.headOffset = 0;
     state.queuedBytes = 0;
     state.lastWarnAt = 0;
-    state.lastTrimAt = 0;
   }
 
   dequeueAudioPlaybackFrame(session, frameBytes = DISCORD_PCM_FRAME_BYTES) {
@@ -1767,49 +1779,6 @@ export class VoiceSessionManager {
     if (!pieces.length) return Buffer.alloc(0);
     if (pieces.length === 1) return pieces[0];
     return Buffer.concat(pieces);
-  }
-
-  dropAudioPlaybackBytesFromHead(session, maxDropBytes = 0) {
-    const state = this.ensureAudioPlaybackQueueState(session);
-    let remaining = Math.max(0, Math.floor(Number(maxDropBytes) || 0));
-    let droppedBytes = 0;
-
-    while (remaining > 0 && state.chunks.length > 0) {
-      const head = state.chunks[0];
-      if (!Buffer.isBuffer(head) || !head.length) {
-        state.chunks.shift();
-        if (state.chunks.length === 0) {
-          state.headOffset = 0;
-        }
-        continue;
-      }
-
-      const available = Math.max(0, head.length - state.headOffset);
-      if (available <= 0) {
-        state.chunks.shift();
-        if (state.chunks.length === 0) {
-          state.headOffset = 0;
-        }
-        continue;
-      }
-
-      const dropNow = Math.min(available, remaining);
-      if (dropNow >= available) {
-        state.chunks.shift();
-        state.headOffset = 0;
-        if (state.chunks.length === 0) {
-          state.headOffset = 0;
-        }
-      } else {
-        state.headOffset += dropNow;
-      }
-
-      state.queuedBytes = Math.max(0, Number(state.queuedBytes || 0) - dropNow);
-      droppedBytes += dropNow;
-      remaining -= dropNow;
-    }
-
-    return droppedBytes;
   }
 
   scheduleAudioPlaybackPump(session, delayMs = 0) {
@@ -1934,39 +1903,7 @@ export class VoiceSessionManager {
     state.queuedBytes = Math.max(0, Number(state.queuedBytes || 0)) + pcm.length;
     const now = Date.now();
     const streamBufferedBytes = Math.max(0, Number(session.botAudioStream?.writableLength || 0));
-    let totalBufferedBytes = Math.max(0, Number(state.queuedBytes || 0)) + streamBufferedBytes;
-    const trimTargetBytes = totalBufferedBytes > AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES
-      ? AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES
-      : 0;
-    if (trimTargetBytes > 0) {
-      const overflowBytes = totalBufferedBytes - trimTargetBytes;
-      const droppedBytes = this.dropAudioPlaybackBytesFromHead(session, overflowBytes);
-      if (
-        droppedBytes > 0 &&
-        now - Number(state.lastTrimAt || 0) >= AUDIO_PLAYBACK_QUEUE_TRIM_LOG_COOLDOWN_MS
-      ) {
-        state.lastTrimAt = now;
-        this.store.logAction({
-          kind: "voice_runtime",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: this.client.user?.id || null,
-          content: "bot_audio_queue_trimmed",
-          metadata: {
-            sessionId: session.id,
-            droppedBytes,
-            trimStrategy: "drop_oldest",
-            trimTargetBytes,
-            queuedBytes: Math.max(0, Number(state.queuedBytes || 0)),
-            streamBufferedBytes,
-            totalBufferedBytesBeforeTrim: totalBufferedBytes,
-            hardMaxBufferedBytes: AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES,
-            absoluteMaxBufferedBytes: AUDIO_PLAYBACK_QUEUE_ABSOLUTE_MAX_BYTES
-          }
-        });
-      }
-      totalBufferedBytes = Math.max(0, Number(state.queuedBytes || 0)) + streamBufferedBytes;
-    }
+    const totalBufferedBytes = Math.max(0, Number(state.queuedBytes || 0)) + streamBufferedBytes;
     if (
       totalBufferedBytes >= AUDIO_PLAYBACK_QUEUE_WARN_BYTES &&
       now - Number(state.lastWarnAt || 0) >= AUDIO_PLAYBACK_QUEUE_WARN_COOLDOWN_MS
@@ -1990,6 +1927,65 @@ export class VoiceSessionManager {
     }
     this.scheduleAudioPlaybackPump(session, 0);
     return true;
+  }
+
+  getReplyOutputLockState(session) {
+    if (!session || session.ending) {
+      return {
+        locked: true,
+        reason: "session_inactive",
+        botTurnOpen: false,
+        pendingResponse: false,
+        openAiActiveResponse: false,
+        queueBusy: false,
+        queuedBytes: 0,
+        streamBufferedBytes: 0
+      };
+    }
+
+    const queueState =
+      session.audioPlaybackQueue && typeof session.audioPlaybackQueue === "object"
+        ? session.audioPlaybackQueue
+        : null;
+    const queuedBytes = Math.max(0, Number(queueState?.queuedBytes || 0));
+    const queueBusy = Boolean(queueState?.pumping || queueState?.waitingDrain);
+    const streamBufferedBytes = Math.max(0, Number(session.botAudioStream?.writableLength || 0));
+    const botTurnOpen = Boolean(session.botTurnOpen);
+    const pendingResponse = Boolean(session.pendingResponse && typeof session.pendingResponse === "object");
+    const openAiActiveResponse = this.isOpenAiRealtimeResponseActive(session);
+    const locked =
+      botTurnOpen ||
+      pendingResponse ||
+      openAiActiveResponse ||
+      queueBusy ||
+      queuedBytes > 0 ||
+      streamBufferedBytes > 0;
+
+    let reason = "idle";
+    if (pendingResponse) {
+      reason = "pending_response";
+    } else if (openAiActiveResponse) {
+      reason = "openai_active_response";
+    } else if (botTurnOpen) {
+      reason = "bot_turn_open";
+    } else if (queueBusy) {
+      reason = "queue_busy";
+    } else if (queuedBytes > 0) {
+      reason = "queued_audio";
+    } else if (streamBufferedBytes > 0) {
+      reason = "stream_buffered_audio";
+    }
+
+    return {
+      locked,
+      reason,
+      botTurnOpen,
+      pendingResponse,
+      openAiActiveResponse,
+      queueBusy,
+      queuedBytes,
+      streamBufferedBytes
+    };
   }
 
   async enqueueChunkedTtsPcmForPlayback({
@@ -2281,11 +2277,13 @@ export class VoiceSessionManager {
         retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
       };
     }
-    if (session.botTurnOpen) {
+    const replyOutputLockState = this.getReplyOutputLockState(session);
+    if (replyOutputLockState.locked) {
       return {
         allow: false,
         reason: "bot_turn_open",
-        retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
+        retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS,
+        outputLockReason: replyOutputLockState.reason
       };
     }
     if (Number(session.voiceLookupBusyCount || 0) > 0) {
@@ -2299,13 +2297,6 @@ export class VoiceSessionManager {
       return {
         allow: false,
         reason: "active_user_capture",
-        retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
-      };
-    }
-    if (session.pendingResponse) {
-      return {
-        allow: false,
-        reason: "pending_realtime_response",
         retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
       };
     }
@@ -4216,7 +4207,9 @@ export class VoiceSessionManager {
       transcript: turnTranscript,
       source: "realtime",
       transcriptionContext: {
-        usedFallbackModel: usedFallbackModelForTranscript
+        usedFallbackModel: usedFallbackModelForTranscript,
+        captureReason: String(captureReason || "stream_end"),
+        clipDurationMs
       }
     });
     this.updateFocusedSpeakerWindow({
@@ -4395,7 +4388,8 @@ export class VoiceSessionManager {
     const pendingQueue = Array.isArray(session.pendingDeferredTurns) ? session.pendingDeferredTurns : [];
     if (!pendingQueue.length) return;
 
-    if (session.botTurnOpen || Number(session.userCaptures?.size || 0) > 0) {
+    const replyOutputLockState = this.getReplyOutputLockState(session);
+    if (replyOutputLockState.locked || Number(session.userCaptures?.size || 0) > 0) {
       this.scheduleDeferredBotTurnOpenFlush({ session });
       return;
     }
@@ -4828,8 +4822,17 @@ export class VoiceSessionManager {
     });
     const formatAgeMs = (value) =>
       Number.isFinite(value) ? String(Math.max(0, Math.round(value))) : "none";
+    const configuredNonDirectSilenceMs = Number(settings?.voice?.nonDirectReplyMinSilenceMs);
+    const nonDirectReplyMinSilenceMs = clamp(
+      Number.isFinite(configuredNonDirectSilenceMs)
+        ? Math.round(configuredNonDirectSilenceMs)
+        : NON_DIRECT_REPLY_MIN_SILENCE_MS,
+      600,
+      12_000
+    );
 
-    if (session?.botTurnOpen) {
+    const replyOutputLockState = this.getReplyOutputLockState(session);
+    if (replyOutputLockState.locked) {
       return {
         allow: false,
         reason: "bot_turn_open",
@@ -4838,7 +4841,9 @@ export class VoiceSessionManager {
         directAddressConfidence,
         directAddressThreshold,
         transcript: normalizedTranscript,
-        conversationContext
+        conversationContext,
+        retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS,
+        outputLockReason: replyOutputLockState.reason
       };
     }
 
@@ -4859,6 +4864,31 @@ export class VoiceSessionManager {
           directAddressThreshold,
           transcript: normalizedTranscript,
           conversationContext
+        };
+      }
+      const clipDurationMs = Math.max(0, Number(transcriptionContext?.clipDurationMs || 0));
+      const captureReason = String(transcriptionContext?.captureReason || "stream_end").trim() || "stream_end";
+      const msSinceAssistantReply = Number(conversationContext?.msSinceAssistantReply ?? Number.NaN);
+      const lowSignalRecentReplyClip =
+        !directAddressed &&
+        !addressedToOtherParticipant &&
+        captureReason === "speaking_end" &&
+        clipDurationMs > 0 &&
+        clipDurationMs <= VOICE_LOW_SIGNAL_POST_REPLY_MAX_CLIP_MS &&
+        Number.isFinite(msSinceAssistantReply) &&
+        msSinceAssistantReply <= nonDirectReplyMinSilenceMs;
+      if (lowSignalRecentReplyClip) {
+        return {
+          allow: false,
+          reason: "low_signal_recent_reply_clip",
+          participantCount,
+          directAddressed,
+          directAddressConfidence,
+          directAddressThreshold,
+          transcript: normalizedTranscript,
+          conversationContext,
+          requiredSilenceMs: nonDirectReplyMinSilenceMs,
+          retryAfterMs: Math.max(60, nonDirectReplyMinSilenceMs - Math.round(msSinceAssistantReply))
         };
       }
       if (!lowSignalLlmEligible) {
@@ -4960,14 +4990,6 @@ export class VoiceSessionManager {
           session,
           settings
         }) === "brain");
-    const configuredNonDirectSilenceMs = Number(settings?.voice?.nonDirectReplyMinSilenceMs);
-    const nonDirectReplyMinSilenceMs = clamp(
-      Number.isFinite(configuredNonDirectSilenceMs)
-        ? Math.round(configuredNonDirectSilenceMs)
-        : NON_DIRECT_REPLY_MIN_SILENCE_MS,
-      600,
-      12_000
-    );
     const configuredCrossSpeakerWakeMs = Number(settings?.voice?.crossSpeakerWakeMs);
     const crossSpeakerWakeMs = clamp(
       Number.isFinite(configuredCrossSpeakerWakeMs)
@@ -6180,7 +6202,9 @@ export class VoiceSessionManager {
       transcript,
       source: "stt_pipeline",
       transcriptionContext: {
-        usedFallbackModel: usedFallbackModelForTranscript
+        usedFallbackModel: usedFallbackModelForTranscript,
+        captureReason: String(captureReason || "stream_end"),
+        clipDurationMs
       }
     });
     this.updateFocusedSpeakerWindow({
@@ -6950,35 +6974,13 @@ export class VoiceSessionManager {
       return;
     }
 
-    // Keep one tracked assistant response in flight at a time.
-    if (session.pendingResponse) {
-      const pending = session.pendingResponse;
-      const pendingRequestedAt = Number(pending.requestedAt || 0);
-      const pendingAgeMs = pendingRequestedAt ? now - pendingRequestedAt : 0;
-      const hasNewerInboundAudio = Number(session.lastInboundAudioAt || 0) > pendingRequestedAt;
-
-      if (!hasNewerInboundAudio || pendingAgeMs < PENDING_SUPERSEDE_MIN_AGE_MS) {
-        this.scheduleResponseFromBufferedAudio({
-          session,
-          userId: pending.userId || userId
-        });
-        return;
-      }
-
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: this.client.user?.id || null,
-        content: "pending_response_superseded",
-        metadata: {
-          sessionId: session.id,
-          requestId: pending.requestId,
-          source: pending.source || null,
-          pendingAgeMs
-        }
+    const replyOutputLockState = this.getReplyOutputLockState(session);
+    if (replyOutputLockState.locked) {
+      this.scheduleResponseFromBufferedAudio({
+        session,
+        userId: session.pendingResponse?.userId || userId
       });
-      this.clearPendingResponse(session);
+      return;
     }
 
     const pendingInputBytes = Math.max(0, Number(session.pendingRealtimeInputBytes || 0));
@@ -7159,29 +7161,6 @@ export class VoiceSessionManager {
     if (pending.handlingSilence) return;
     if (this.pendingResponseHasAudio(session, pending)) {
       this.clearPendingResponse(session);
-      return;
-    }
-
-    const pendingRequestedAt = Number(pending.requestedAt || 0);
-    const hasNewerInboundAudio = Number(session.lastInboundAudioAt || 0) > pendingRequestedAt;
-    if (hasNewerInboundAudio) {
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: this.client.user?.id || null,
-        content: "pending_response_replaced_by_newer_input",
-        metadata: {
-          sessionId: session.id,
-          requestId: pending.requestId,
-          source: pending.source || null
-        }
-      });
-      this.clearPendingResponse(session);
-      this.scheduleResponseFromBufferedAudio({
-        session,
-        userId: pending.userId || userId
-      });
       return;
     }
 

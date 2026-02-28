@@ -73,6 +73,16 @@ test("GeminiRealtimeClient requestVideoCommentary sends user turn and tracks act
   assert.equal(outbound[0]?.clientContent?.turns?.[0]?.parts?.[0]?.text, "what is on screen?");
 });
 
+test("GeminiRealtimeClient cancelActiveResponse is a no-op", () => {
+  const client = new GeminiRealtimeClient({ apiKey: "gem-key" });
+  client.pendingResponseActive = true;
+
+  const cancelled = client.cancelActiveResponse();
+
+  assert.equal(cancelled, false);
+  assert.equal(client.pendingResponseActive, true);
+});
+
 test("GeminiRealtimeClient handleIncoming emits setup, transcript, audio, done, and errors", () => {
   const client = new GeminiRealtimeClient({ apiKey: "gem-key" });
   const audio = [];

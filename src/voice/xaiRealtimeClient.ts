@@ -252,6 +252,20 @@ export class XaiRealtimeClient extends EventEmitter {
     });
   }
 
+  cancelActiveResponse() {
+    try {
+      this.send({
+        type: "response.cancel"
+      });
+      return true;
+    } catch (error) {
+      this.log("warn", "xai_realtime_response_cancel_failed", {
+        error: String(error?.message || error)
+      });
+      return false;
+    }
+  }
+
   requestTextUtterance(promptText) {
     const prompt = String(promptText || "").trim();
     if (!prompt) return;

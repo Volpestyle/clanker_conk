@@ -281,6 +281,7 @@ test("maybeInterruptBotForAssertiveSpeech requires sustained capture bytes", () 
 test("maybeInterruptBotForAssertiveSpeech cuts playback after assertive speech", () => {
   const { manager, logs } = createManager();
   const stopCalls = [];
+  const cancelCalls = [];
   let streamDestroyed = false;
   const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
   const session = createSession({
@@ -301,6 +302,12 @@ test("maybeInterruptBotForAssertiveSpeech cuts playback after assertive speech",
     audioPlayer: {
       stop(force) {
         stopCalls.push(force);
+      }
+    },
+    realtimeClient: {
+      cancelActiveResponse() {
+        cancelCalls.push("cancel");
+        return true;
       }
     },
     botAudioStream: {
@@ -339,10 +346,15 @@ test("maybeInterruptBotForAssertiveSpeech cuts playback after assertive speech",
   assert.equal(session.audioPlaybackQueue.queuedBytes, 0);
   assert.equal(stopCalls.length, 1);
   assert.equal(stopCalls[0], true);
+  assert.equal(cancelCalls.length, 1);
   assert.equal(streamDestroyed, true);
   assert.equal(Number(session.pendingResponse?.audioReceivedAt || 0) > 0, true);
   assert.equal(Number(session.bargeInSuppressionUntil || 0) > Date.now(), true);
-  assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), true);
+  const interruptLog = logs.find((entry) => entry?.content === "voice_barge_in_interrupt");
+  assert.ok(interruptLog);
+  assert.equal(interruptLog?.metadata?.responseCancelAttempted, true);
+  assert.equal(interruptLog?.metadata?.responseCancelSucceeded, true);
+  assert.equal(interruptLog?.metadata?.responseCancelError, null);
 });
 
 test("maybeInterruptBotForAssertiveSpeech ignores near-silent captures", () => {
@@ -384,7 +396,7 @@ test("maybeInterruptBotForAssertiveSpeech ignores near-silent captures", () => {
   assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
 });
 
-test("enqueueDiscordPcmForPlayback trims oldest queued audio once hard cap is exceeded", () => {
+test("enqueueDiscordPcmForPlayback keeps full queued audio when hard cap is exceeded", () => {
   const { manager, logs } = createManager();
   manager.scheduleAudioPlaybackPump = () => {};
   const session = createSession({
@@ -419,17 +431,15 @@ test("enqueueDiscordPcmForPlayback trims oldest queued audio once hard cap is ex
   });
 
   assert.equal(queued, true);
-  assert.equal(session.audioPlaybackQueue.queuedBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
+  assert.equal(session.audioPlaybackQueue.queuedBytes, oversizedChunk.length);
   const backlogLog = logs.find((entry) => entry?.content === "bot_audio_queue_backlog");
   assert.equal(Boolean(backlogLog), true);
   assert.equal(backlogLog?.metadata?.hardMaxBufferedBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
   const trimLog = logs.find((entry) => entry?.content === "bot_audio_queue_trimmed");
-  assert.equal(Boolean(trimLog), true);
-  assert.equal(trimLog?.metadata?.trimStrategy, "drop_oldest");
-  assert.equal(trimLog?.metadata?.trimTargetBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
+  assert.equal(Boolean(trimLog), false);
 });
 
-test("enqueueDiscordPcmForPlayback keeps buffered bytes pinned to hard cap even when absolute cap is exceeded", () => {
+test("enqueueDiscordPcmForPlayback preserves queued bytes even when above legacy absolute cap", () => {
   const { manager, logs } = createManager();
   manager.scheduleAudioPlaybackPump = () => {};
   const session = createSession({
@@ -464,14 +474,12 @@ test("enqueueDiscordPcmForPlayback keeps buffered bytes pinned to hard cap even 
   });
 
   assert.equal(queued, true);
-  assert.equal(session.audioPlaybackQueue.queuedBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
+  assert.equal(session.audioPlaybackQueue.queuedBytes, oversizedChunk.length);
   const trimLog = logs.find((entry) => entry?.content === "bot_audio_queue_trimmed");
-  assert.equal(Boolean(trimLog), true);
-  assert.equal(trimLog?.metadata?.hardMaxBufferedBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
-  assert.equal(trimLog?.metadata?.absoluteMaxBufferedBytes, AUDIO_PLAYBACK_QUEUE_ABSOLUTE_MAX_BYTES);
-  assert.equal(trimLog?.metadata?.trimStrategy, "drop_oldest");
-  assert.equal(trimLog?.metadata?.trimTargetBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
-  assert.equal(trimLog?.metadata?.droppedBytes > 0, true);
+  assert.equal(Boolean(trimLog), false);
+  const backlogLog = logs.find((entry) => entry?.content === "bot_audio_queue_backlog");
+  assert.equal(Boolean(backlogLog), true);
+  assert.equal(backlogLog?.metadata?.hardMaxBufferedBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
 });
 
 test("enqueueDiscordPcmForPlayback interrupts bot output when user speech would overflow playback queue", () => {

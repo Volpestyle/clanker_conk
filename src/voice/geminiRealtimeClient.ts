@@ -295,6 +295,11 @@ export class GeminiRealtimeClient extends EventEmitter {
     this.pendingResponseActive = true;
   }
 
+  cancelActiveResponse() {
+    // Gemini Live currently relies on turn completion/interruption events.
+    return false;
+  }
+
   requestVideoCommentary(promptText) {
     const prompt = String(promptText || "").trim();
     if (!prompt) return;

@@ -234,7 +234,7 @@ test("armResponseSilenceWatchdog clears pending response when audio already arri
   }
 });
 
-test("handleSilentResponse replaces pending response when newer inbound audio exists", async () => {
+test("handleSilentResponse does not supersede pending response when newer inbound audio exists", async () => {
   const { manager, logs } = createManager();
   const requestedAt = Date.now() - 5_000;
   const session = createRealtimeSession({
@@ -251,9 +251,10 @@ test("handleSilentResponse replaces pending response when newer inbound audio ex
     lastInboundAudioAt: requestedAt + 200
   });
 
-  const scheduled = [];
-  manager.scheduleResponseFromBufferedAudio = (args) => {
-    scheduled.push(args);
+  const rearmed = [];
+  manager.createTrackedAudioResponse = () => false;
+  manager.armResponseSilenceWatchdog = (args) => {
+    rearmed.push(args);
   };
 
   await manager.handleSilentResponse({
@@ -262,10 +263,12 @@ test("handleSilentResponse replaces pending response when newer inbound audio ex
     trigger: "watchdog"
   });
 
-  assert.equal(session.pendingResponse, null);
-  assert.equal(scheduled.length, 1);
-  assert.equal(scheduled[0]?.userId, "speaker-7");
-  assert.equal(logs.some((entry) => String(entry.content).includes("pending_response_replaced_by_newer_input")), true);
+  assert.equal(session.pendingResponse?.requestId, 7);
+  assert.equal(session.pendingResponse?.retryCount, 1);
+  assert.equal(rearmed.length, 1);
+  assert.equal(rearmed[0]?.requestId, 7);
+  assert.equal(logs.some((entry) => String(entry.content).includes("pending_response_replaced_by_newer_input")), false);
+  assert.equal(logs.some((entry) => String(entry.content).includes("response_silent_retry")), true);
 });
 
 test("flushResponseFromBufferedAudio defers commit while realtime turn backlog is still draining", () => {

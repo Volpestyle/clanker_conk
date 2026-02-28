@@ -278,6 +278,26 @@ export class OpenAiRealtimeClient extends EventEmitter {
     });
   }
 
+  cancelActiveResponse() {
+    const active = this.isResponseInProgress();
+    if (!active) return false;
+
+    try {
+      this.send({
+        type: "response.cancel"
+      });
+    } catch (error) {
+      this.log("warn", "openai_realtime_response_cancel_failed", {
+        error: String(error?.message || error)
+      });
+      this.clearActiveResponse("cancelled");
+      return false;
+    }
+
+    this.clearActiveResponse("cancelled");
+    return true;
+  }
+
   appendInputVideoFrame({ mimeType = "image/jpeg", dataBase64 }) {
     const normalizedFrame = String(dataBase64 || "").trim();
     if (!normalizedFrame) return;

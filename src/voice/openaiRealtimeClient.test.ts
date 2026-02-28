@@ -104,6 +104,24 @@ test("OpenAiRealtimeClient marks active response from active-response error", ()
   assert.equal(client.getState().activeResponseId, "resp_XYZ987");
 });
 
+test("OpenAiRealtimeClient cancelActiveResponse sends cancel and clears active response", () => {
+  const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
+  const outbound = [];
+  client.send = (payload) => {
+    outbound.push(payload);
+  };
+
+  client.setActiveResponse("resp_123", "in_progress");
+  const cancelled = client.cancelActiveResponse();
+
+  assert.equal(cancelled, true);
+  assert.equal(outbound.length, 1);
+  assert.equal(outbound[0]?.type, "response.cancel");
+  assert.equal(client.isResponseInProgress(), false);
+  assert.equal(client.getState().activeResponseId, null);
+  assert.equal(client.getState().activeResponseStatus, "cancelled");
+});
+
 test("OpenAiRealtimeClient stream-watch commentary sends out-of-band image input", () => {
   const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
   let outbound = null;

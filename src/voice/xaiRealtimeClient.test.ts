@@ -34,6 +34,20 @@ test("XaiRealtimeClient appendInputAudioPcm encodes and sends audio chunk", () =
   assert.equal(outbound[0]?.audio, Buffer.from([1, 2, 3, 4]).toString("base64"));
 });
 
+test("XaiRealtimeClient cancelActiveResponse sends response.cancel", () => {
+  const client = new XaiRealtimeClient({ apiKey: "test-key" });
+  const outbound = [];
+  client.send = (payload) => {
+    outbound.push(payload);
+  };
+
+  const cancelled = client.cancelActiveResponse();
+
+  assert.equal(cancelled, true);
+  assert.equal(outbound.length, 1);
+  assert.equal(outbound[0]?.type, "response.cancel");
+});
+
 test("XaiRealtimeClient handleIncoming emits audio, transcript, response_done, and error metadata", () => {
   const client = new XaiRealtimeClient({ apiKey: "test-key" });
   const audioChunks = [];
