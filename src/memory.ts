@@ -18,6 +18,8 @@ const HYBRID_FACT_LIMIT = 10;
 const HYBRID_CANDIDATE_MULTIPLIER = 6;
 const HYBRID_MAX_CANDIDATES = 90;
 const HYBRID_MAX_VECTOR_BACKFILL_PER_QUERY = 8;
+const QUERY_EMBEDDING_CACHE_TTL_MS = 60 * 1000;
+const QUERY_EMBEDDING_CACHE_MAX_ENTRIES = 256;
 const SUBJECT_LORE = LORE_SUBJECT;
 const SUBJECT_SELF = SELF_SUBJECT;
 export class MemoryManager {
@@ -31,6 +33,8 @@ export class MemoryManager {
   ingestQueuedJobs;
   ingestWorkerActive;
   maxIngestQueue;
+  queryEmbeddingCache;
+  queryEmbeddingInFlight;
 
   constructor({ store, llm, memoryFilePath }) {
     this.store = store;
@@ -43,6 +47,8 @@ export class MemoryManager {
     this.ingestQueuedJobs = new Map();
     this.ingestWorkerActive = false;
     this.maxIngestQueue = 400;
+    this.queryEmbeddingCache = new Map();
+    this.queryEmbeddingInFlight = new Map();
   }
 
   async ingestMessage({
@@ -447,6 +453,100 @@ export class MemoryManager {
     return sorted;
   }
 
+  buildQueryEmbeddingCacheKey({ queryText, settings }) {
+    const normalizedQuery = normalizeQueryEmbeddingText(queryText);
+    if (!normalizedQuery) return "";
+    const resolvedModel = String(this.llm?.resolveEmbeddingModel?.(settings) || "").trim().toLowerCase() || "default";
+    return `${resolvedModel}\n${normalizedQuery}`;
+  }
+
+  getCachedQueryEmbedding(cacheKey) {
+    if (!cacheKey) return null;
+    const now = Date.now();
+    const cached = this.queryEmbeddingCache.get(cacheKey) || null;
+    if (!cached) return null;
+    if (now >= Number(cached.expiresAt || 0)) {
+      this.queryEmbeddingCache.delete(cacheKey);
+      return null;
+    }
+    return {
+      embedding: Array.isArray(cached.embedding) ? [...cached.embedding] : [],
+      model: String(cached.model || "")
+    };
+  }
+
+  setCachedQueryEmbedding(cacheKey, value) {
+    if (!cacheKey) return;
+    const embedding = Array.isArray(value?.embedding) ? value.embedding.map((item) => Number(item)) : [];
+    const model = String(value?.model || "").trim();
+    if (!embedding.length || !model) return;
+
+    const now = Date.now();
+    this.queryEmbeddingCache.set(cacheKey, {
+      embedding,
+      model,
+      expiresAt: now + QUERY_EMBEDDING_CACHE_TTL_MS
+    });
+
+    for (const [key, entry] of this.queryEmbeddingCache.entries()) {
+      if (now < Number(entry?.expiresAt || 0)) continue;
+      this.queryEmbeddingCache.delete(key);
+    }
+    while (this.queryEmbeddingCache.size > QUERY_EMBEDDING_CACHE_MAX_ENTRIES) {
+      const oldestKey = this.queryEmbeddingCache.keys().next().value;
+      if (!oldestKey) break;
+      this.queryEmbeddingCache.delete(oldestKey);
+    }
+  }
+
+  async getQueryEmbeddingForRetrieval({ queryText, settings, trace = {} }) {
+    const query = normalizeQueryEmbeddingText(queryText);
+    if (query.length < 3) return null;
+
+    const cacheKey = this.buildQueryEmbeddingCacheKey({ queryText: query, settings });
+    if (!cacheKey) return null;
+
+    const cached = this.getCachedQueryEmbedding(cacheKey);
+    if (cached?.embedding?.length && cached?.model) {
+      return cached;
+    }
+
+    const inFlight = this.queryEmbeddingInFlight.get(cacheKey);
+    if (inFlight) {
+      return await inFlight;
+    }
+
+    const task = (async () => {
+      const queryEmbeddingResult = await this.llm.embedText({
+        settings,
+        text: query,
+        trace: {
+          ...trace,
+          source: "memory_query"
+        }
+      });
+      const queryEmbedding = Array.isArray(queryEmbeddingResult?.embedding)
+        ? queryEmbeddingResult.embedding.map((value) => Number(value))
+        : [];
+      const model = String(queryEmbeddingResult?.model || "").trim();
+      if (!queryEmbedding.length || !model) return null;
+
+      const result = {
+        embedding: queryEmbedding,
+        model
+      };
+      this.setCachedQueryEmbedding(cacheKey, result);
+      return result;
+    })();
+
+    this.queryEmbeddingInFlight.set(cacheKey, task);
+    try {
+      return await task;
+    } finally {
+      this.queryEmbeddingInFlight.delete(cacheKey);
+    }
+  }
+
   async getSemanticScoreMap({ candidates, queryText, settings, trace = {} }) {
     if (!this.llm?.isEmbeddingReady?.()) return new Map();
 
@@ -455,13 +555,10 @@ export class MemoryManager {
 
     let queryEmbeddingResult = null;
     try {
-      queryEmbeddingResult = await this.llm.embedText({
+      queryEmbeddingResult = await this.getQueryEmbeddingForRetrieval({
+        queryText: query,
         settings,
-        text: query,
-        trace: {
-          ...trace,
-          source: "memory_query"
-        }
+        trace
       });
     } catch {
       return new Map();
@@ -1176,6 +1273,13 @@ function extractStableTokens(text, maxTokens = 64) {
     0,
     Math.max(1, maxTokens)
   );
+}
+
+function normalizeQueryEmbeddingText(text) {
+  return String(text || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 420);
 }
 
 function cleanDailyEntryContent(content) {

@@ -139,3 +139,122 @@ test("native vector scoring is used when available", async () => {
   assert.equal(nativeScoreCalls, 1);
   assert.equal(ranked[0].id, 2);
 });
+
+test("query embeddings are cached for repeated retrieval queries", async () => {
+  let embedCalls = 0;
+  const now = new Date().toISOString();
+
+  const memory = new MemoryManager({
+    store: {
+      getMemoryFactVectorNativeScores({ factIds }) {
+        return factIds.map((factId) => ({
+          fact_id: factId,
+          score: 0.82
+        }));
+      }
+    },
+    llm: {
+      isEmbeddingReady() {
+        return true;
+      },
+      resolveEmbeddingModel() {
+        return "text-embedding-3-small";
+      },
+      async embedText() {
+        embedCalls += 1;
+        return {
+          embedding: [0.25, 0.15, 0.45],
+          model: "text-embedding-3-small"
+        };
+      }
+    },
+    memoryFilePath: "memory/MEMORY.md"
+  });
+
+  const payload = {
+    candidates: [
+      {
+        id: 17,
+        created_at: now,
+        channel_id: "chan-1",
+        confidence: 0.8,
+        fact: "User enjoys strategy games.",
+        evidence_text: "enjoys strategy games"
+      }
+    ],
+    queryText: "what games do they enjoy",
+    settings: {},
+    channelId: "chan-1",
+    requireRelevanceGate: false
+  };
+
+  await memory.rankHybridCandidates(payload);
+  await memory.rankHybridCandidates(payload);
+
+  assert.equal(embedCalls, 1);
+});
+
+test("query embedding calls are deduped while in flight", async () => {
+  let embedCalls = 0;
+  let releaseEmbedding = () => undefined;
+  const embeddingGate = new Promise((resolve) => {
+    releaseEmbedding = resolve;
+  });
+  const now = new Date().toISOString();
+
+  const memory = new MemoryManager({
+    store: {
+      getMemoryFactVectorNativeScores({ factIds }) {
+        return factIds.map((factId) => ({
+          fact_id: factId,
+          score: 0.79
+        }));
+      }
+    },
+    llm: {
+      isEmbeddingReady() {
+        return true;
+      },
+      resolveEmbeddingModel() {
+        return "text-embedding-3-small";
+      },
+      async embedText() {
+        embedCalls += 1;
+        await embeddingGate;
+        return {
+          embedding: [0.31, 0.28, 0.19],
+          model: "text-embedding-3-small"
+        };
+      }
+    },
+    memoryFilePath: "memory/MEMORY.md"
+  });
+
+  const payload = {
+    candidates: [
+      {
+        id: 21,
+        created_at: now,
+        channel_id: "chan-1",
+        confidence: 0.85,
+        fact: "User likes turn-based tactics.",
+        evidence_text: "likes turn-based tactics"
+      }
+    ],
+    queryText: "what tactics games does the user like",
+    settings: {},
+    channelId: "chan-1",
+    requireRelevanceGate: false
+  };
+
+  const first = memory.rankHybridCandidates(payload);
+  const second = memory.rankHybridCandidates(payload);
+  await Promise.resolve();
+
+  assert.equal(embedCalls, 1);
+
+  releaseEmbedding();
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+  assert.equal(firstResult.length, 1);
+  assert.equal(secondResult.length, 1);
+});
