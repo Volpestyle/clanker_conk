@@ -173,7 +173,9 @@ export const DEFAULT_SETTINGS = {
       enabled: true,
       minCommentaryIntervalSeconds: 8,
       maxFramesPerMinute: 180,
-      maxFrameBytes: 350000
+      maxFrameBytes: 350000,
+      commentaryPath: "auto",
+      keyframeIntervalMs: 1200
     },
     soundboard: {
       enabled: true,

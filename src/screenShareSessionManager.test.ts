@@ -404,4 +404,5 @@ test("renderSharePage returns branded invalid and valid pages", async () => {
     valid.html.includes(`/api/voice/share-session/${encodeURIComponent(created.token)}/stop`),
     true
   );
+  assert.equal(valid.html.includes("const FRAME_INTERVAL_MS=1200;"), true);
 });

@@ -384,6 +384,8 @@ export function normalizeSettings(raw) {
     minCommentaryIntervalSeconds?: number;
     maxFramesPerMinute?: number;
     maxFrameBytes?: number;
+    commentaryPath?: string;
+    keyframeIntervalMs?: number;
   };
   type VoiceSoundboardDefaults = {
     enabled?: boolean;
@@ -434,6 +436,7 @@ export function normalizeSettings(raw) {
   const streamWatchCommentaryIntervalRaw = Number(merged.voice?.streamWatch?.minCommentaryIntervalSeconds);
   const streamWatchMaxFramesPerMinuteRaw = Number(merged.voice?.streamWatch?.maxFramesPerMinute);
   const streamWatchMaxFrameBytesRaw = Number(merged.voice?.streamWatch?.maxFrameBytes);
+  const streamWatchKeyframeIntervalRaw = Number(merged.voice?.streamWatch?.keyframeIntervalMs);
 
   merged.voice.enabled =
     merged.voice?.enabled !== undefined ? Boolean(merged.voice?.enabled) : Boolean(defaultVoice.enabled);
@@ -727,6 +730,17 @@ export function normalizeSettings(raw) {
     50_000,
     4_000_000
   );
+  merged.voice.streamWatch.commentaryPath = normalizeStreamWatchCommentaryPath(
+    merged.voice?.streamWatch?.commentaryPath,
+    defaultVoiceStreamWatch.commentaryPath || "auto"
+  );
+  merged.voice.streamWatch.keyframeIntervalMs = clamp(
+    Number.isFinite(streamWatchKeyframeIntervalRaw)
+      ? streamWatchKeyframeIntervalRaw
+      : Number(defaultVoiceStreamWatch.keyframeIntervalMs) || 1200,
+    250,
+    5000
+  );
 
   merged.voice.soundboard.enabled =
     merged.voice?.soundboard?.enabled !== undefined
@@ -976,6 +990,14 @@ function normalizeRealtimeReplyStrategy(value, fallback = "brain") {
     .toLowerCase();
   if (normalized === "native") return "native";
   return "brain";
+}
+
+function normalizeStreamWatchCommentaryPath(value, fallback = "auto") {
+  const normalized = String(value || fallback || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "anthropic_keyframes") return "anthropic_keyframes";
+  return "auto";
 }
 
 function normalizeOpenAiRealtimeAudioFormat(value) {

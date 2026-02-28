@@ -318,6 +318,12 @@ export class ScreenShareSessionManager {
       };
     }
 
+    const settings = this.store.getSettings();
+    const keyframeIntervalMs = clamp(
+      Number(settings?.voice?.streamWatch?.keyframeIntervalMs) || 1200,
+      250,
+      5000
+    );
     const frameApiPath = `/api/voice/share-session/${encodeURIComponent(session.token)}/frame`;
     const stopApiPath = `/api/voice/share-session/${encodeURIComponent(session.token)}/stop`;
     return {
@@ -325,7 +331,8 @@ export class ScreenShareSessionManager {
       html: buildSharePageHtml({
         expiresAtIso: new Date(session.expiresAt).toISOString(),
         frameApiPath,
-        stopApiPath
+        stopApiPath,
+        keyframeIntervalMs
       })
     };
   }
@@ -373,10 +380,11 @@ function buildInvalidSharePageHtml(message) {
   ].join("");
 }
 
-function buildSharePageHtml({ expiresAtIso, frameApiPath, stopApiPath }) {
+function buildSharePageHtml({ expiresAtIso, frameApiPath, stopApiPath, keyframeIntervalMs }) {
   const safeExpiresAtIso = escapeJsString(String(expiresAtIso || ""));
   const safeFrameApiPath = escapeJsString(String(frameApiPath || ""));
   const safeStopApiPath = escapeJsString(String(stopApiPath || ""));
+  const resolvedKeyframeIntervalMs = clamp(Number(keyframeIntervalMs) || 1200, 250, 5000);
 
   return [
     "<!doctype html>",
@@ -478,7 +486,7 @@ function buildSharePageHtml({ expiresAtIso, frameApiPath, stopApiPath }) {
     `const EXPIRES_AT='${safeExpiresAtIso}';`,
     `const FRAME_API_PATH='${safeFrameApiPath}';`,
     `const STOP_API_PATH='${safeStopApiPath}';`,
-    "const FRAME_INTERVAL_MS=900;",
+    `const FRAME_INTERVAL_MS=${Math.floor(resolvedKeyframeIntervalMs)};`,
     "const MAX_WIDTH=960;",
     "const JPEG_QUALITY=0.62;",
     "const startBtn=document.getElementById('start');",

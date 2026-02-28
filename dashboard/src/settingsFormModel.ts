@@ -210,6 +210,10 @@ export function settingsToForm(settings) {
       settings?.voice?.streamWatch?.minCommentaryIntervalSeconds ?? defaultVoiceStreamWatch.minCommentaryIntervalSeconds,
     voiceStreamWatchMaxFramesPerMinute: settings?.voice?.streamWatch?.maxFramesPerMinute ?? defaultVoiceStreamWatch.maxFramesPerMinute,
     voiceStreamWatchMaxFrameBytes: settings?.voice?.streamWatch?.maxFrameBytes ?? defaultVoiceStreamWatch.maxFrameBytes,
+    voiceStreamWatchCommentaryPath:
+      settings?.voice?.streamWatch?.commentaryPath ?? defaultVoiceStreamWatch.commentaryPath,
+    voiceStreamWatchKeyframeIntervalMs:
+      settings?.voice?.streamWatch?.keyframeIntervalMs ?? defaultVoiceStreamWatch.keyframeIntervalMs,
     voiceSoundboardEnabled: settings?.voice?.soundboard?.enabled ?? defaultVoiceSoundboard.enabled,
     voiceSoundboardAllowExternalSounds: settings?.voice?.soundboard?.allowExternalSounds ?? defaultVoiceSoundboard.allowExternalSounds,
     voiceSoundboardPreferredSoundIds: formatLineList(settings?.voice?.soundboard?.preferredSoundIds),
@@ -399,7 +403,9 @@ export function formToSettingsPatch(form) {
         enabled: form.voiceStreamWatchEnabled,
         minCommentaryIntervalSeconds: Number(form.voiceStreamWatchMinCommentaryIntervalSeconds),
         maxFramesPerMinute: Number(form.voiceStreamWatchMaxFramesPerMinute),
-        maxFrameBytes: Number(form.voiceStreamWatchMaxFrameBytes)
+        maxFrameBytes: Number(form.voiceStreamWatchMaxFrameBytes),
+        commentaryPath: String(form.voiceStreamWatchCommentaryPath || "").trim(),
+        keyframeIntervalMs: Number(form.voiceStreamWatchKeyframeIntervalMs)
       },
       soundboard: {
         enabled: form.voiceSoundboardEnabled,

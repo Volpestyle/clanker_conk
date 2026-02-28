@@ -20,7 +20,9 @@ function createSettings(overrides = {}) {
         enabled: true,
         minCommentaryIntervalSeconds: 8,
         maxFramesPerMinute: 180,
-        maxFrameBytes: 350000
+        maxFrameBytes: 350000,
+        commentaryPath: "auto",
+        keyframeIntervalMs: 1200
       }
     }
   };
@@ -214,6 +216,26 @@ test("resolveStreamWatchVisionProviderSettings picks first configured provider i
   assert.equal(resolved.model, "grok-2-vision-latest");
   assert.equal(resolved.temperature, 0.3);
   assert.equal(resolved.maxOutputTokens, 72);
+});
+
+test("resolveStreamWatchVisionProviderSettings honors anthropic keyframe forced path", () => {
+  const { manager } = createManager({
+    llm: {
+      isProviderConfigured(provider) {
+        return provider === "xai" || provider === "anthropic";
+      }
+    }
+  });
+  const resolved = resolveStreamWatchVisionProviderSettings(manager, {
+    voice: {
+      streamWatch: {
+        commentaryPath: "anthropic_keyframes"
+      }
+    }
+  });
+
+  assert.equal(resolved?.provider, "anthropic");
+  assert.equal(resolved?.model, "claude-haiku-4-5");
 });
 
 test("enableWatchStreamForUser enforces same-voice-channel requirement and supports success", async () => {
@@ -425,4 +447,124 @@ test("maybeTriggerStreamWatchCommentary supports vision-fallback text utterance 
   assert.equal(Boolean(logged), true);
   assert.equal(logged?.metadata?.commentaryPath, "vision_fallback_text_utterance");
   assert.equal(logged?.metadata?.visionProvider, "anthropic");
+});
+
+test("maybeTriggerStreamWatchCommentary forces anthropic keyframe fallback when configured", async () => {
+  let requestVideoCommentaryCalls = 0;
+  let requestTextUtteranceCalls = 0;
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: false,
+    realtimeClient: {
+      appendInputVideoFrame() {},
+      requestVideoCommentary() {
+        requestVideoCommentaryCalls += 1;
+      },
+      requestTextUtterance() {
+        requestTextUtteranceCalls += 1;
+      }
+    },
+    streamWatch: {
+      active: true,
+      targetUserId: "user-1",
+      requestedByUserId: "user-1",
+      lastFrameAt: Date.now(),
+      lastCommentaryAt: 0,
+      ingestedFrameCount: 0,
+      acceptedFrameCountInWindow: 0,
+      frameWindowStartedAt: 0,
+      latestFrameMimeType: "image/png",
+      latestFrameDataBase64: "AAAA",
+      latestFrameAt: Date.now()
+    }
+  });
+  const settings = createSettings({
+    voice: {
+      streamWatch: {
+        commentaryPath: "anthropic_keyframes"
+      }
+    }
+  });
+  const { manager, actions } = createManager({
+    session,
+    settings,
+    llm: {
+      isProviderConfigured(provider) {
+        return provider === "anthropic";
+      },
+      async generate() {
+        return {
+          text: "looks like a close fight on screen",
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        };
+      }
+    }
+  });
+
+  await maybeTriggerStreamWatchCommentary(manager, {
+    session,
+    settings,
+    streamerUserId: "user-1",
+    source: "unit_test"
+  });
+
+  assert.equal(requestVideoCommentaryCalls, 0);
+  assert.equal(requestTextUtteranceCalls, 1);
+  const logged = actions.find((entry) => entry.content === "stream_watch_commentary_requested");
+  assert.equal(logged?.metadata?.configuredCommentaryPath, "anthropic_keyframes");
+});
+
+test("maybeTriggerStreamWatchCommentary skips while playback queue is busy", async () => {
+  let requestTextUtteranceCalls = 0;
+  const session = createSession({
+    mode: "voice_agent",
+    botTurnOpen: true,
+    realtimeClient: {
+      requestTextUtterance() {
+        requestTextUtteranceCalls += 1;
+      }
+    },
+    streamWatch: {
+      active: true,
+      targetUserId: "user-1",
+      requestedByUserId: "user-1",
+      lastFrameAt: Date.now(),
+      lastCommentaryAt: 0,
+      ingestedFrameCount: 0,
+      acceptedFrameCountInWindow: 0,
+      frameWindowStartedAt: 0,
+      latestFrameMimeType: "image/png",
+      latestFrameDataBase64: "AAAA",
+      latestFrameAt: Date.now()
+    },
+    audioPlaybackQueue: {
+      chunks: [],
+      headOffset: 0,
+      queuedBytes: 96_000,
+      pumping: false,
+      timer: null,
+      waitingDrain: false,
+      drainHandler: null
+    }
+  });
+  const { manager, actions, createdResponses } = createManager({
+    session,
+    llm: {
+      isProviderConfigured(provider) {
+        return provider === "anthropic";
+      }
+    }
+  });
+
+  await maybeTriggerStreamWatchCommentary(manager, {
+    session,
+    settings: createSettings(),
+    streamerUserId: "user-1",
+    source: "unit_test"
+  });
+
+  assert.equal(requestTextUtteranceCalls, 0);
+  assert.equal(createdResponses.length, 0);
+  assert.equal(actions.some((entry) => entry.content === "stream_watch_commentary_requested"), false);
 });

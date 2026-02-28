@@ -77,7 +77,9 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
       streamWatch: {
         minCommentaryIntervalSeconds: 1,
         maxFramesPerMinute: 9999,
-        maxFrameBytes: 10
+        maxFrameBytes: 10,
+        commentaryPath: "not-real",
+        keyframeIntervalMs: 20
       },
       soundboard: {
         preferredSoundIds: ["first", "first", "second"]
@@ -155,6 +157,8 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.voice.streamWatch.minCommentaryIntervalSeconds, 3);
   assert.equal(normalized.voice.streamWatch.maxFramesPerMinute, 600);
   assert.equal(normalized.voice.streamWatch.maxFrameBytes, 50_000);
+  assert.equal(normalized.voice.streamWatch.commentaryPath, "auto");
+  assert.equal(normalized.voice.streamWatch.keyframeIntervalMs, 250);
   assert.deepEqual(normalized.voice.soundboard.preferredSoundIds, ["first", "second"]);
 
   assert.deepEqual(normalized.initiative.allowedImageModels, ["gpt-image-1.5", "grok-imagine-image"]);

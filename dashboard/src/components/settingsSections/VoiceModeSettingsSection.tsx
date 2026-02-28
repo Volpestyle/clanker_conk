@@ -664,6 +664,34 @@ export function VoiceModeSettingsSection({
                   onChange={set("voiceStreamWatchMaxFrameBytes")}
                 />
               </div>
+              <div>
+                <label htmlFor="voice-stream-watch-keyframe-interval-ms">Share-page keyframe interval (ms)</label>
+                <input
+                  id="voice-stream-watch-keyframe-interval-ms"
+                  type="number"
+                  min="250"
+                  max="5000"
+                  step="50"
+                  value={form.voiceStreamWatchKeyframeIntervalMs}
+                  onChange={set("voiceStreamWatchKeyframeIntervalMs")}
+                />
+              </div>
+            </div>
+          )}
+
+          {form.voiceStreamWatchEnabled && (
+            <div className="split">
+              <div>
+                <label htmlFor="voice-stream-watch-commentary-path">Screen-watch vision path</label>
+                <select
+                  id="voice-stream-watch-commentary-path"
+                  value={form.voiceStreamWatchCommentaryPath}
+                  onChange={set("voiceStreamWatchCommentaryPath")}
+                >
+                  <option value="auto">Auto (native video when available)</option>
+                  <option value="anthropic_keyframes">Anthropic keyframes (forced fallback)</option>
+                </select>
+              </div>
               <div />
             </div>
           )}

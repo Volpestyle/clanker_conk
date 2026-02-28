@@ -6,6 +6,40 @@ const STREAM_WATCH_AUDIO_QUIET_WINDOW_MS = 2200;
 const STREAM_WATCH_COMMENTARY_PROMPT_MAX_CHARS = 220;
 const STREAM_WATCH_COMMENTARY_LINE_MAX_CHARS = 160;
 const STREAM_WATCH_VISION_MAX_OUTPUT_TOKENS = 72;
+const STREAM_WATCH_COMMENTARY_PATH_AUTO = "auto";
+const STREAM_WATCH_COMMENTARY_PATH_ANTHROPIC_KEYFRAMES = "anthropic_keyframes";
+
+function normalizeStreamWatchCommentaryPath(value, fallback = STREAM_WATCH_COMMENTARY_PATH_AUTO) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === STREAM_WATCH_COMMENTARY_PATH_ANTHROPIC_KEYFRAMES) {
+    return STREAM_WATCH_COMMENTARY_PATH_ANTHROPIC_KEYFRAMES;
+  }
+  if (normalized === STREAM_WATCH_COMMENTARY_PATH_AUTO) {
+    return STREAM_WATCH_COMMENTARY_PATH_AUTO;
+  }
+  return fallback;
+}
+
+function resolveStreamWatchCommentaryPath(settings = null) {
+  const configured = settings?.voice?.streamWatch?.commentaryPath;
+  return normalizeStreamWatchCommentaryPath(configured, STREAM_WATCH_COMMENTARY_PATH_AUTO);
+}
+
+function isStreamWatchPlaybackBusy(session) {
+  if (!session || session.ending) return false;
+  if (session.botTurnOpen) return true;
+  const queueState =
+    session.audioPlaybackQueue && typeof session.audioPlaybackQueue === "object"
+      ? session.audioPlaybackQueue
+      : null;
+  if (!queueState) return false;
+  const queuedBytes = Math.max(0, Number(queueState.queuedBytes || 0));
+  const queueActive = Boolean(queueState.pumping || queueState.waitingDrain);
+  const streamBufferedBytes = Math.max(0, Number(session.botAudioStream?.writableLength || 0));
+  return queueActive || queuedBytes > 0 || streamBufferedBytes > 0;
+}
 
 async function sendStreamWatchOfflineMessage(manager, { message, settings, guildId, requesterId }) {
   await manager.sendOperationalMessage({
@@ -146,6 +180,10 @@ export function supportsStreamWatchCommentary(manager, session, settings = null)
   const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
   if (!isRealtimeMode(session.mode)) return false;
   const realtimeClient = session.realtimeClient;
+  const commentaryPath = resolveStreamWatchCommentaryPath(resolvedSettings);
+  if (commentaryPath === STREAM_WATCH_COMMENTARY_PATH_ANTHROPIC_KEYFRAMES) {
+    return supportsVisionFallbackStreamWatchCommentary(manager, { session, settings: resolvedSettings });
+  }
   const hasNativeVideoCommentary = Boolean(
     realtimeClient &&
       typeof realtimeClient.appendInputVideoFrame === "function" &&
@@ -157,7 +195,6 @@ export function supportsStreamWatchCommentary(manager, session, settings = null)
 
 export function supportsVisionFallbackStreamWatchCommentary(manager, { session = null, settings = null } = {}) {
   if (!session || session.ending) return false;
-  if (session.mode !== "voice_agent") return false;
   const realtimeClient = session.realtimeClient;
   if (!realtimeClient || typeof realtimeClient.requestTextUtterance !== "function") return false;
   if (!manager.llm || typeof manager.llm.generate !== "function") return false;
@@ -165,8 +202,9 @@ export function supportsVisionFallbackStreamWatchCommentary(manager, { session =
 }
 
 export function resolveStreamWatchVisionProviderSettings(manager, settings = null) {
+  const commentaryPath = resolveStreamWatchCommentaryPath(settings);
   const llmSettings = settings?.llm && typeof settings.llm === "object" ? settings.llm : {};
-  const candidates = [
+  const fallbackCandidates = [
     {
       provider: "anthropic",
       model: "claude-haiku-4-5"
@@ -180,6 +218,9 @@ export function resolveStreamWatchVisionProviderSettings(manager, settings = nul
       model: "sonnet"
     }
   ];
+  const candidates = commentaryPath === STREAM_WATCH_COMMENTARY_PATH_ANTHROPIC_KEYFRAMES
+    ? fallbackCandidates.filter((candidate) => candidate.provider === "anthropic")
+    : fallbackCandidates;
 
   for (const candidate of candidates) {
     const configured = manager.llm?.isProviderConfigured?.(candidate.provider);
@@ -214,13 +255,15 @@ export async function generateVisionFallbackStreamWatchCommentary(manager, {
   const systemPrompt = [
     `You are ${getPromptBotName(settings)} in Discord VC.`,
     "You are looking at one still frame from a live stream.",
+    "You can see the provided frame.",
+    "Never say you cannot see the screen or ask for a stream link.",
     "Return exactly one short spoken commentary line (max 12 words).",
     "No lists, no quotes, no stage directions."
   ].join(" ");
   const userPrompt = [
     `Latest frame from ${speakerName}'s stream.`,
     "Comment on only what is visible in this frame.",
-    "If uncertain, say so briefly."
+    "If uncertain about details, say that briefly without denying visibility."
   ].join(" ");
 
   const generated = await manager.llm.generate({
@@ -607,6 +650,7 @@ export async function maybeTriggerStreamWatchCommentary(manager, {
   if (!session.streamWatch?.active) return;
   if (session.userCaptures.size > 0) return;
   if (session.pendingResponse) return;
+  if (isStreamWatchPlaybackBusy(session)) return;
 
   const quietWindowMs = STREAM_WATCH_AUDIO_QUIET_WINDOW_MS;
   const sinceLastInboundAudio = Date.now() - Number(session.lastInboundAudioAt || 0);
@@ -623,6 +667,8 @@ export async function maybeTriggerStreamWatchCommentary(manager, {
 
   const realtimeClient = session.realtimeClient;
   if (!realtimeClient) return;
+  const commentaryPath = resolveStreamWatchCommentaryPath(settings);
+  const forceAnthropicKeyframes = commentaryPath === STREAM_WATCH_COMMENTARY_PATH_ANTHROPIC_KEYFRAMES;
 
   const speakerName = manager.resolveVoiceSpeakerName(session, streamerUserId) || "the streamer";
   const nativePrompt = normalizeVoiceText(
@@ -636,7 +682,7 @@ export async function maybeTriggerStreamWatchCommentary(manager, {
 
   try {
     let fallbackVisionMeta = null;
-    if (typeof realtimeClient.requestVideoCommentary === "function") {
+    if (!forceAnthropicKeyframes && typeof realtimeClient.requestVideoCommentary === "function") {
       realtimeClient.requestVideoCommentary(nativePrompt);
     } else if (typeof realtimeClient.requestTextUtterance === "function") {
       const bufferedFrame = String(session.streamWatch?.latestFrameDataBase64 || "").trim();
@@ -680,6 +726,7 @@ export async function maybeTriggerStreamWatchCommentary(manager, {
         source: String(source || "api_stream_ingest"),
         streamerUserId: streamerUserId || null,
         commentaryPath: fallbackVisionMeta ? "vision_fallback_text_utterance" : "provider_native_video",
+        configuredCommentaryPath: commentaryPath,
         visionProvider: fallbackVisionMeta?.provider || null,
         visionModel: fallbackVisionMeta?.model || null
       }

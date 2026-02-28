@@ -45,6 +45,8 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.voiceThoughtEngineModel, "claude-haiku-4-5");
   assert.equal(form.voiceThoughtEngineTemperature, 0.8);
   assert.equal(form.voiceThoughtEngineEagerness, 0);
+  assert.equal(form.voiceStreamWatchCommentaryPath, "auto");
+  assert.equal(form.voiceStreamWatchKeyframeIntervalMs, 1200);
   assert.equal(form.initiativeChannels, "1\n2");
   assert.equal(form.allowedChannels, "2\n3");
   assert.equal(form.voiceRealtimeReplyStrategy, "brain");
@@ -59,6 +61,8 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.replyFollowupMaxMemoryLookupCalls = 3;
   form.replyFollowupMaxImageLookupCalls = 1;
   form.replyFollowupToolTimeoutMs = 16000;
+  form.voiceStreamWatchCommentaryPath = "anthropic_keyframes";
+  form.voiceStreamWatchKeyframeIntervalMs = 1750;
 
   const patch = formToSettingsPatch(form);
   assert.deepEqual(patch.persona.hardLimits, ["no hate", "keep it fun"]);
@@ -72,6 +76,8 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.replyFollowupLlm.maxMemoryLookupCalls, 3);
   assert.equal(patch.replyFollowupLlm.maxImageLookupCalls, 1);
   assert.equal(patch.replyFollowupLlm.toolTimeoutMs, 16000);
+  assert.equal(patch.voice.streamWatch.commentaryPath, "anthropic_keyframes");
+  assert.equal(patch.voice.streamWatch.keyframeIntervalMs, 1750);
   assert.equal(patch.voice.thoughtEngine.enabled, true);
   assert.equal(patch.voice.thoughtEngine.provider, "anthropic");
   assert.equal(patch.voice.thoughtEngine.model, "claude-haiku-4-5");
