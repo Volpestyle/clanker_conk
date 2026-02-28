@@ -55,6 +55,7 @@ type ActionRow = {
   kind: string;
   content: string | null;
   metadata: string | null;
+  message_id?: string | null;
 };
 
 type DecisionOutcomeKind = "sent_message" | "sent_reply" | "reply_skipped" | "voice_intent_detected" | "no_action";
@@ -832,7 +833,7 @@ async function main() {
 
   const voiceIntentByMessage = new Map<string, ActionRow>();
   for (const row of voiceIntentRows) {
-    const messageId = String((row as unknown as { message_id?: string }).message_id || "");
+    const messageId = String(row.message_id || "");
     const metadata = parseMetadataObject(row);
     const inferredMessageId = String(metadata.messageId || "").trim();
     const key = messageId || inferredMessageId;

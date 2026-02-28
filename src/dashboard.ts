@@ -68,7 +68,7 @@ export function createDashboardServer({
     const isPublicApiRoute = isAllowedPublicApiPath(req.path);
     const dashboardToken = String(appConfig.dashboardToken || "").trim();
     const publicApiToken = String(appConfig.publicApiToken || "").trim();
-    const presentedDashboardToken = req.get("x-dashboard-token") || String(req.query.token || "");
+    const presentedDashboardToken = req.get("x-dashboard-token") || "";
     const presentedPublicToken = req.get("x-public-api-token") || "";
     const isDashboardAuthorized = Boolean(dashboardToken) && presentedDashboardToken === dashboardToken;
     const isPublicApiAuthorized = Boolean(publicApiToken) && presentedPublicToken === publicApiToken;

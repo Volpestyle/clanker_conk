@@ -104,9 +104,6 @@ function createManager(overrides = {}) {
     },
     getMissingJoinPermissionInfo() {
       return null;
-    },
-    composeMissingPermissionFallback() {
-      return "";
     }
   };
 
@@ -357,9 +354,6 @@ test("requestJoin reports missing permission info from manager checks", async ()
         reason: "missing_voice_permissions",
         missingPermissions: ["CONNECT"]
       };
-    },
-    composeMissingPermissionFallback() {
-      return "need CONNECT";
     }
   });
 

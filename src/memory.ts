@@ -626,14 +626,15 @@ export class MemoryManager {
   }
 
   buildPeopleSection() {
-    const subjects = this.store.getMemorySubjects(80);
+    const subjects = this.store
+      .getMemorySubjects(80)
+      .filter((subjectRow) => subjectRow.subject !== LORE_SUBJECT && subjectRow.subject !== SELF_SUBJECT);
+    const factsByScopedSubject = this.getPeopleFactsByScopedSubject(subjects);
     const peopleLines = [];
 
     for (const subjectRow of subjects) {
-      if (subjectRow.subject === LORE_SUBJECT || subjectRow.subject === SELF_SUBJECT) continue;
-      const rows = this.store.getFactsForSubjectScoped(subjectRow.subject, 6, {
-        guildId: subjectRow.guild_id
-      });
+      const scopedSubjectKey = `${String(subjectRow.guild_id || "").trim()}::${String(subjectRow.subject || "").trim()}`;
+      const rows = factsByScopedSubject.get(scopedSubjectKey) || [];
       const cleaned = [
         ...new Set(
           rows
@@ -647,6 +648,43 @@ export class MemoryManager {
     }
 
     return peopleLines;
+  }
+
+  getPeopleFactsByScopedSubject(subjectRows = []) {
+    const subjectsByGuild = new Map();
+    for (const subjectRow of subjectRows) {
+      const guildId = String(subjectRow?.guild_id || "").trim();
+      const subjectId = String(subjectRow?.subject || "").trim();
+      if (!guildId || !subjectId) continue;
+      const existing = subjectsByGuild.get(guildId) || [];
+      if (!existing.includes(subjectId)) {
+        existing.push(subjectId);
+      }
+      subjectsByGuild.set(guildId, existing);
+    }
+
+    const factsByScopedSubject = new Map();
+    for (const [guildId, subjectIds] of subjectsByGuild.entries()) {
+      const rows = this.store.getFactsForSubjectsScoped({
+        guildId,
+        subjectIds,
+        perSubjectLimit: 6,
+        totalLimit: Math.min(1200, Math.max(200, subjectIds.length * 10))
+      });
+
+      for (const row of rows) {
+        const scopedGuildId = String(row?.guild_id || "").trim();
+        const scopedSubjectId = String(row?.subject || "").trim();
+        if (!scopedGuildId || !scopedSubjectId) continue;
+        const scopedSubjectKey = `${scopedGuildId}::${scopedSubjectId}`;
+        const existing = factsByScopedSubject.get(scopedSubjectKey) || [];
+        if (existing.length >= 6) continue;
+        existing.push(row);
+        factsByScopedSubject.set(scopedSubjectKey, existing);
+      }
+    }
+
+    return factsByScopedSubject;
   }
 
   buildSelfSection(maxItems = 6) {

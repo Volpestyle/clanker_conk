@@ -21,8 +21,13 @@ import {
   safeJsonParse,
   vectorToBlob
 } from "./store/storeHelpers.ts";
+import {
+  normalizeResponseTriggerMessageIds,
+  shouldTrackResponseTriggerKind
+} from "./store/responseTriggers.ts";
 
 const SETTINGS_KEY = "runtime_settings";
+const RESPONSE_TRIGGER_INDEX_STATE_KEY = "__response_trigger_index_last_action_id__";
 
 export class Store {
   dbPath;
@@ -141,6 +146,12 @@ export class Store {
         metadata TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS response_triggers (
+        trigger_message_id TEXT PRIMARY KEY,
+        action_id INTEGER NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
       CREATE INDEX IF NOT EXISTS idx_messages_channel_time ON messages(channel_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_messages_guild_time ON messages(guild_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_actions_kind_time ON actions(kind, created_at DESC);
@@ -151,6 +162,7 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_automations_running_next ON automations(is_running, next_run_at);
       CREATE INDEX IF NOT EXISTS idx_automations_match_text ON automations(guild_id, match_text);
       CREATE INDEX IF NOT EXISTS idx_automation_runs_job_time ON automation_runs(automation_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_response_triggers_action_id ON response_triggers(action_id);
     `);
     this.ensureSqliteVecReady();
     this.db.exec(`
@@ -169,6 +181,8 @@ export class Store {
       const row = this.db.prepare("SELECT value FROM settings WHERE key = ?").get(SETTINGS_KEY);
       this.rewriteRuntimeSettingsRow(row?.value);
     }
+
+    this.syncResponseTriggerIndex();
   }
 
   rewriteRuntimeSettingsRow(rawValue) {
@@ -313,8 +327,10 @@ export class Store {
 
   logAction(action) {
     const metadata = action.metadata ? JSON.stringify(action.metadata) : null;
+    const createdAt = nowIso();
+    const actionKind = String(action.kind);
 
-    this.db
+    const result = this.db
       .prepare(
         `INSERT INTO actions(
           created_at,
@@ -329,16 +345,23 @@ export class Store {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
-        nowIso(),
+        createdAt,
         action.guildId ? String(action.guildId) : null,
         action.channelId ? String(action.channelId) : null,
         action.messageId ? String(action.messageId) : null,
         action.userId ? String(action.userId) : null,
-        String(action.kind),
+        actionKind,
         action.content ? String(action.content).slice(0, 2000) : null,
         metadata,
         Number(action.usdCost) || 0
       );
+
+    this.indexResponseTriggersForAction({
+      actionId: Number(result?.lastInsertRowid || 0),
+      kind: actionKind,
+      metadata: action.metadata,
+      createdAt
+    });
   }
 
   countActionsSince(kind, sinceIso) {
@@ -406,21 +429,113 @@ export class Store {
       .run(normalizedUrl, now, now, source ? String(source).slice(0, 120) : null);
   }
 
+  indexResponseTriggersForAction({
+    actionId,
+    kind,
+    metadata,
+    createdAt = nowIso()
+  }) {
+    const normalizedActionId = Number(actionId);
+    if (!Number.isInteger(normalizedActionId) || normalizedActionId <= 0) return;
+    if (!shouldTrackResponseTriggerKind(kind)) return;
+
+    const triggerMessageIds = normalizeResponseTriggerMessageIds(metadata);
+    if (!triggerMessageIds.length) return;
+
+    const insertTrigger = this.db.prepare(
+      `INSERT OR IGNORE INTO response_triggers(trigger_message_id, action_id, created_at)
+       VALUES (?, ?, ?)`
+    );
+    const insertTx = this.db.transaction((ids, responseActionId, responseCreatedAt) => {
+      for (const triggerMessageId of ids) {
+        insertTrigger.run(triggerMessageId, responseActionId, responseCreatedAt);
+      }
+    });
+    insertTx(triggerMessageIds, normalizedActionId, String(createdAt || nowIso()));
+  }
+
+  getResponseTriggerIndexCursor() {
+    const row = this.db
+      .prepare("SELECT value FROM settings WHERE key = ? LIMIT 1")
+      .get(RESPONSE_TRIGGER_INDEX_STATE_KEY);
+    const parsed = safeJsonParse(row?.value, null);
+    const rawLastActionId = Number(parsed?.lastActionId);
+    if (!Number.isFinite(rawLastActionId)) return 0;
+    if (rawLastActionId <= 0) return 0;
+    return Math.floor(rawLastActionId);
+  }
+
+  setResponseTriggerIndexCursor(lastActionId) {
+    const normalizedLastActionId = Number(lastActionId);
+    if (!Number.isFinite(normalizedLastActionId) || normalizedLastActionId < 0) return;
+
+    this.db
+      .prepare(
+        `INSERT INTO settings(key, value, updated_at)
+         VALUES(?, ?, ?)
+         ON CONFLICT(key) DO UPDATE SET
+           value = excluded.value,
+           updated_at = excluded.updated_at`
+      )
+      .run(
+        RESPONSE_TRIGGER_INDEX_STATE_KEY,
+        JSON.stringify({ lastActionId: Math.floor(normalizedLastActionId) }),
+        nowIso()
+      );
+  }
+
+  syncResponseTriggerIndex({ batchSize = 500 } = {}) {
+    const boundedBatchSize = clamp(Math.floor(Number(batchSize) || 500), 50, 2000);
+    let cursor = this.getResponseTriggerIndexCursor();
+    const originalCursor = cursor;
+    const selectTrackedActions = this.db.prepare(
+      `SELECT id, created_at, kind, metadata
+       FROM actions
+       WHERE id > ?
+         AND kind IN ('sent_reply', 'sent_message', 'reply_skipped')
+       ORDER BY id ASC
+       LIMIT ?`
+    );
+
+    while (true) {
+      const rows = selectTrackedActions.all(cursor, boundedBatchSize);
+      if (!rows.length) break;
+
+      for (const row of rows) {
+        const actionId = Number(row?.id);
+        if (!Number.isInteger(actionId) || actionId <= 0) continue;
+        const metadata = safeJsonParse(row?.metadata, null);
+        this.indexResponseTriggersForAction({
+          actionId,
+          kind: row?.kind,
+          metadata,
+          createdAt: row?.created_at
+        });
+      }
+
+      const nextCursor = Number(rows[rows.length - 1]?.id || 0);
+      if (!Number.isInteger(nextCursor) || nextCursor <= cursor) break;
+      cursor = nextCursor;
+      if (rows.length < boundedBatchSize) break;
+    }
+
+    if (cursor > originalCursor) {
+      this.setResponseTriggerIndexCursor(cursor);
+    }
+  }
+
   hasTriggeredResponse(triggerMessageId) {
     const id = String(triggerMessageId).trim();
     if (!id) return false;
 
-    const singleTriggerNeedle = `%"triggerMessageId":"${id}"%`;
-    const triggerListNeedle = `%"triggerMessageIds"%"${id}"%`;
     const row = this.db
       .prepare(
         `SELECT 1
-         FROM actions
-         WHERE kind IN ('sent_reply', 'sent_message', 'reply_skipped')
-           AND (metadata LIKE ? OR metadata LIKE ?)
+         FROM response_triggers
+         WHERE trigger_message_id = ?
          LIMIT 1`
       )
-      .get(singleTriggerNeedle, triggerListNeedle);
+      .get(id);
 
     return Boolean(row);
   }
@@ -1082,6 +1197,73 @@ export class Store {
          LIMIT ?`
       )
       .all(...args, clamp(limit, 1, 1000));
+  }
+
+  getFactsForSubjectsScoped({
+    guildId,
+    subjectIds = [],
+    perSubjectLimit = 6,
+    totalLimit = 600
+  } = {}) {
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) return [];
+
+    const normalizedSubjects = [
+      ...new Set((subjectIds || []).map((value) => String(value || "").trim()).filter(Boolean))
+    ];
+    if (!normalizedSubjects.length) return [];
+
+    const boundedPerSubjectLimit = clamp(Math.floor(Number(perSubjectLimit) || 6), 1, 24);
+    const boundedTotalLimit = clamp(
+      Math.floor(Number(totalLimit) || normalizedSubjects.length * boundedPerSubjectLimit * 2),
+      boundedPerSubjectLimit,
+      1200
+    );
+    const subjectPlaceholders = normalizedSubjects.map(() => "?").join(", ");
+
+    return this.db
+      .prepare(
+        `SELECT
+           id,
+           created_at,
+           updated_at,
+           guild_id,
+           channel_id,
+           subject,
+           fact,
+           fact_type,
+           evidence_text,
+           source_message_id,
+           confidence
+         FROM (
+           SELECT
+             id,
+             created_at,
+             updated_at,
+             guild_id,
+             channel_id,
+             subject,
+             fact,
+             fact_type,
+             evidence_text,
+             source_message_id,
+             confidence,
+             ROW_NUMBER() OVER (PARTITION BY subject ORDER BY updated_at DESC) AS row_num
+           FROM memory_facts
+           WHERE guild_id = ?
+             AND is_active = 1
+             AND subject IN (${subjectPlaceholders})
+         ) AS ranked
+         WHERE row_num <= ?
+         ORDER BY updated_at DESC
+         LIMIT ?`
+      )
+      .all(
+        normalizedGuildId,
+        ...normalizedSubjects,
+        boundedPerSubjectLimit,
+        boundedTotalLimit
+      );
   }
 
   getMemoryFactBySubjectAndFact(guildId, subject, fact) {

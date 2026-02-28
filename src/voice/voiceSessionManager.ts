@@ -3497,7 +3497,7 @@ export class VoiceSessionManager {
       }
     }
 
-    if (!Boolean(generatedPayload?.usedWebSearchFollowup)) return false;
+    if (!generatedPayload?.usedWebSearchFollowup) return false;
     const replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
     const requestedSoundboardRef = String(generatedPayload?.soundboardRef || "").trim().slice(0, 180);
     if (!replyText) return true;
