@@ -145,6 +145,7 @@ export function buildVoiceToneGuardrails() {
     "Match your normal text-chat persona in voice: same attitude, slang level, and casual cadence.",
     "Keep turns tight: one clear idea, usually one short sentence.",
     "Use a second short sentence only when needed for clarity or when asked for detail.",
+    "In voice, avoid chat-only shorthand acronyms (for example lmao, fr, ngl); use natural spoken phrasing instead.",
     "Avoid assistant-like preambles, disclaimers, and over-explaining.",
     "Avoid bullet lists and rigid formatting unless someone explicitly asks for structured steps."
   ];

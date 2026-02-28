@@ -9,6 +9,7 @@ test("buildVoiceToneGuardrails provides concise non-assistant voice constraints"
   assert.equal(lines.length >= 4, true);
   assert.equal(lines.every((line) => typeof line === "string" && line.trim().length > 0), true);
   assert.equal(lines.some((line) => /one clear idea/i.test(line)), true);
+  assert.equal(lines.some((line) => /avoid chat-only shorthand acronyms/i.test(line)), true);
   assert.equal(lines.some((line) => /assistant-like preambles/i.test(line)), true);
 });
 
@@ -20,6 +21,7 @@ test("buildVoiceTurnPrompt includes shared voice tone guardrails", () => {
   });
   assert.equal(/Match your normal text-chat persona in voice/i.test(prompt), true);
   assert.equal(/one clear idea, usually one short sentence/i.test(prompt), true);
+  assert.equal(/avoid chat-only shorthand acronyms/i.test(prompt), true);
 });
 
 test("buildVoiceTurnPrompt exposes screen-share directive only when capability is ready", () => {
