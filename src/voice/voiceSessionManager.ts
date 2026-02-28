@@ -2703,7 +2703,6 @@ export class VoiceSessionManager {
 
     const botName = getPromptBotName(settings);
     const recentHistory = this.formatVoiceDecisionHistory(session, 6);
-    const compactHistory = this.formatVoiceDecisionHistory(session, 3);
     const configuredMaxDecisionAttempts = Number(replyDecisionLlm?.maxAttempts);
     const maxDecisionAttempts = clamp(
       Math.floor(Number.isFinite(configuredMaxDecisionAttempts) ? configuredMaxDecisionAttempts : 1),
@@ -2761,8 +2760,8 @@ export class VoiceSessionManager {
     if (participantList.length) {
       compactContextPromptParts.push(`Known participants: ${participantList.join(", ")}.`);
     }
-    if (compactHistory) {
-      compactContextPromptParts.push(`Recent turns:\n${compactHistory}`);
+    if (recentHistory) {
+      compactContextPromptParts.push(`Recent turns:\n${recentHistory}`);
     }
 
     const systemPromptCompact = [
@@ -2883,6 +2882,7 @@ export class VoiceSessionManager {
           step: step.label,
           text: raw || "(empty)"
         });
+        break;
       } catch (error) {
         generationErrors.push({
           step: step.label,

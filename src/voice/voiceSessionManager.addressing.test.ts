@@ -672,12 +672,14 @@ test("reply decider still uses LLM in one-human sessions", async () => {
   assert.equal(callCount, 1);
 });
 
-test("reply decider retries contract violation output and accepts YES", async () => {
+test("reply decider retries hard failures and accepts YES", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
       callCount += 1;
-      if (callCount === 1) return { text: "Let me check my memory files first." };
+      if (callCount === 1) {
+        throw new Error("temporary classifier provider error");
+      }
       return { text: "YES" };
     }
   });
@@ -927,7 +929,7 @@ test("reply decider treats merged bot-name token as direct-addressed fast path",
   assert.equal(callCount, 0);
 });
 
-test("reply decider blocks contract violations after bounded retries", async () => {
+test("reply decider blocks contract violations without retrying", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -959,7 +961,7 @@ test("reply decider blocks contract violations after bounded retries", async () 
   assert.equal(decision.allow, false);
   assert.equal(decision.reason, "llm_contract_violation");
   assert.equal(decision.directAddressed, false);
-  assert.equal(callCount, 3);
+  assert.equal(callCount, 1);
 });
 
 test("reply decider does not gate unaddressed turns behind cooldown", async () => {

@@ -7,7 +7,8 @@
  *  - JSON-wrapped decisions with extra keys
  *  - code-fenced or quoted outputs
  *  - StructuredOutput tool payloads with no result text
- *  - contract violation retry & bounded fallback
+ *  - contract violation fail-closed behavior
+ *  - bounded retry on hard generation failures
  *
  */
 import { test } from "bun:test";
@@ -405,21 +406,17 @@ test("smoke: claude-code structured NO accepted through decision pipeline", asyn
   assert.equal(decision.reason, "llm_no");
 });
 
-test("smoke: claude-code verbose output triggers retry and recovers (incident repro)", async () => {
+test("smoke: claude-code verbose output fails contract without retry", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
       callCount += 1;
-      if (callCount === 1) {
-        // Simulate the incident: verbose output instead of YES/NO
-        return {
-          text: "Based on my analysis of this conversation, I think the bot should respond because the user seems to be asking a question directly.",
-          provider: "claude-code",
-          model: "haiku"
-        };
-      }
-      // Retry succeeds with strict output
-      return { text: '{"decision":"YES"}', provider: "claude-code", model: "haiku" };
+      // Simulate the incident: verbose output instead of YES/NO
+      return {
+        text: "Based on my analysis of this conversation, I think the bot should respond because the user seems to be asking a question directly.",
+        provider: "claude-code",
+        model: "haiku"
+      };
     }
   });
   const decision = await manager.evaluateVoiceReplyDecision({
@@ -432,20 +429,18 @@ test("smoke: claude-code verbose output triggers retry and recovers (incident re
     transcript: "can someone help with this one?"
   });
 
-  assert.equal(callCount, 2, "should retry after contract violation");
-  assert.equal(decision.allow, true);
+  assert.equal(callCount, 1, "should not retry contract violations");
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "llm_contract_violation");
   assert.equal(decision.directAddressed, false);
 });
 
-test("smoke: claude-code empty response triggers retry (incident repro)", async () => {
+test("smoke: claude-code empty response is contract violation without retry", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
       callCount += 1;
-      if (callCount === 1) {
-        return { text: "", provider: "claude-code", model: "haiku" };
-      }
-      return { text: "NO", provider: "claude-code", model: "haiku" };
+      return { text: "", provider: "claude-code", model: "haiku" };
     }
   });
   const decision = await manager.evaluateVoiceReplyDecision({
@@ -458,22 +453,17 @@ test("smoke: claude-code empty response triggers retry (incident repro)", async 
     transcript: "did you guys see that game last night?"
   });
 
-  assert.equal(callCount, 2, "should retry after empty response");
+  assert.equal(callCount, 1, "should not retry contract violations");
   assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "llm_no_retry");
+  assert.equal(decision.reason, "llm_contract_violation");
 });
 
-test("smoke: claude-code repeated failures bounded by maxAttempts (incident repro)", async () => {
+test("smoke: claude-code hard errors are bounded by maxAttempts", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
       callCount += 1;
-      // Every attempt returns verbose garbage
-      return {
-        text: "I need more context to make this determination. Let me analyze the conversation.",
-        provider: "claude-code",
-        model: "haiku"
-      };
+      throw new Error("claude-code stream failure");
     }
   });
   const decision = await manager.evaluateVoiceReplyDecision({
@@ -497,7 +487,7 @@ test("smoke: claude-code repeated failures bounded by maxAttempts (incident repr
 
   assert.equal(callCount, 3, "must stop after maxAttempts");
   assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "llm_contract_violation");
+  assert.equal(decision.reason, "llm_error");
 });
 
 test("smoke: claude-code error throws still fail-open for direct address", async () => {
