@@ -69,7 +69,7 @@ test("config parses explicit env values", async () => {
       PUBLIC_HTTPS_PROVIDER: "cloudflared",
       PUBLIC_SHARE_SESSION_TTL_MINUTES: "25",
       DEFAULT_PROVIDER: "claude-code",
-      DEFAULT_MODEL_OPENAI: "gpt-4.1",
+      DEFAULT_MODEL_OPENAI: "claude-haiku-4-5",
       DEFAULT_MODEL_ANTHROPIC: "claude-sonnet-4-5",
       DEFAULT_MODEL_XAI: "grok-4-latest",
       DEFAULT_MODEL_CLAUDE_CODE: "opus",
@@ -85,7 +85,7 @@ test("config parses explicit env values", async () => {
       assert.equal(appConfig.publicHttpsProvider, "cloudflared");
       assert.equal(appConfig.publicShareSessionTtlMinutes, 25);
       assert.equal(appConfig.defaultProvider, "claude-code");
-      assert.equal(appConfig.defaultOpenAiModel, "gpt-4.1");
+      assert.equal(appConfig.defaultOpenAiModel, "claude-haiku-4-5");
       assert.equal(appConfig.defaultAnthropicModel, "claude-sonnet-4-5");
       assert.equal(appConfig.defaultXaiModel, "grok-4-latest");
       assert.equal(appConfig.defaultClaudeCodeModel, "opus");
@@ -112,7 +112,7 @@ test("config falls back for invalid values", async () => {
       assert.equal(appConfig.dashboardHost, "127.0.0.1");
       assert.equal(appConfig.publicHttpsEnabled, false);
       assert.equal(appConfig.publicShareSessionTtlMinutes, 12);
-      assert.equal(appConfig.defaultProvider, "openai");
+      assert.equal(appConfig.defaultProvider, "anthropic");
       assert.throws(() => ensureRuntimeEnv(), /Missing DISCORD_TOKEN/);
     }
   );

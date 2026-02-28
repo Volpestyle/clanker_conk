@@ -7,6 +7,7 @@ import { appConfig } from "../config.ts";
 import { LLMService } from "../llm.ts";
 import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
 import { normalizeSettings } from "../store/settingsNormalization.ts";
+import { parseBooleanFlag } from "../normalization/valueParsers.ts";
 import { runJsonJudge } from "../../scripts/replay/core/judge.ts";
 import { summarizeNamedMetricRows, type NumericStats } from "../../scripts/replay/core/metrics.ts";
 import { formatPct, stableNumber } from "../../scripts/replay/core/utils.ts";
@@ -15,13 +16,9 @@ import { encodePcm16MonoAsWav, transcriptSourceFromEventType } from "./voiceSess
 import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 import { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
 import { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
+import { VOICE_RUNTIME_MODES, parseVoiceRuntimeMode } from "./voiceModes.ts";
 
-export const VOICE_GOLDEN_MODES = [
-  "stt_pipeline",
-  "voice_agent",
-  "openai_realtime",
-  "gemini_realtime"
-] as const;
+export const VOICE_GOLDEN_MODES = VOICE_RUNTIME_MODES;
 
 export type VoiceGoldenMode = (typeof VOICE_GOLDEN_MODES)[number];
 export type VoiceGoldenRunMode = "simulated" | "live";
@@ -276,13 +273,7 @@ const DEFAULT_TIMEOUT_MS = 45_000;
 const DEFAULT_MAX_CASES = VOICE_GOLDEN_CASES.length;
 
 function parseBool(value: unknown, fallback = false) {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase();
-  if (!normalized) return fallback;
-  if (["1", "true", "yes", "on"].includes(normalized)) return true;
-  if (["0", "false", "no", "off"].includes(normalized)) return false;
-  return fallback;
+  return parseBooleanFlag(value, fallback);
 }
 
 function normalizeMode(value: unknown): VoiceGoldenRunMode {
@@ -309,14 +300,7 @@ function normalizeVoiceModeList(values: unknown): VoiceGoldenMode[] {
 }
 
 function normalizeVoiceMode(value: unknown): VoiceGoldenMode | null {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "stt_pipeline") return "stt_pipeline";
-  if (normalized === "voice_agent") return "voice_agent";
-  if (normalized === "openai_realtime") return "openai_realtime";
-  if (normalized === "gemini_realtime") return "gemini_realtime";
-  return null;
+  return parseVoiceRuntimeMode(value);
 }
 
 function resolveDefaults(options: VoiceGoldenHarnessOptions = {}): VoiceGoldenResolvedOptions {

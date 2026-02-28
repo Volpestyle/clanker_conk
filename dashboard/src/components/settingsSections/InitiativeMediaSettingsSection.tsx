@@ -8,7 +8,9 @@ export function InitiativeMediaSettingsSection({
   set,
   showInitiativeAdvanced,
   showInitiativeImageControls,
-  showInitiativeVideoControls
+  showInitiativeVideoControls,
+  initiativeImageModelOptions,
+  initiativeVideoModelOptions
 }) {
   return (
     <SettingsSection id={id} title="Initiative Posts & Media" active={form.autonomousInitiativeEnabled}>
@@ -151,24 +153,34 @@ export function InitiativeMediaSettingsSection({
             </div>
             <div>
               <label htmlFor="initiative-simple-image-model">Simple image model</label>
-              <input
+              <select
                 id="initiative-simple-image-model"
-                type="text"
                 value={form.initiativeSimpleImageModel}
                 onChange={set("initiativeSimpleImageModel")}
-              />
+              >
+                {initiativeImageModelOptions.map((modelId) => (
+                  <option key={modelId} value={modelId}>
+                    {modelId}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
 
           <div className="split">
             <div>
               <label htmlFor="initiative-complex-image-model">Complex image model</label>
-              <input
+              <select
                 id="initiative-complex-image-model"
-                type="text"
                 value={form.initiativeComplexImageModel}
                 onChange={set("initiativeComplexImageModel")}
-              />
+              >
+                {initiativeImageModelOptions.map((modelId) => (
+                  <option key={modelId} value={modelId}>
+                    {modelId}
+                  </option>
+                ))}
+              </select>
             </div>
             <div>
               <label htmlFor="initiative-allowed-image-models">Allowed image models (comma/newline list)</label>
@@ -198,12 +210,17 @@ export function InitiativeMediaSettingsSection({
           </div>
           <div>
             <label htmlFor="initiative-video-model">Video model</label>
-            <input
+            <select
               id="initiative-video-model"
-              type="text"
               value={form.initiativeVideoModel}
               onChange={set("initiativeVideoModel")}
-            />
+            >
+              {initiativeVideoModelOptions.map((modelId) => (
+                <option key={modelId} value={modelId}>
+                  {modelId}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
       )}

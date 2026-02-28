@@ -14,7 +14,7 @@ function baseSettings(overrides = {}) {
     },
     llm: {
       provider: "openai",
-      model: "gpt-4.1-mini",
+      model: "claude-haiku-4-5",
       temperature: 0.8,
       maxOutputTokens: 160
     },
@@ -27,7 +27,7 @@ function baseSettings(overrides = {}) {
     voice: {
       generationLlm: {
         provider: "openai",
-        model: "gpt-4.1-mini"
+        model: "claude-haiku-4-5"
       },
       soundboard: {
         enabled: false
@@ -374,7 +374,7 @@ test("generateVoiceTurnReply uses voice generation llm provider/model instead of
     settings: baseSettings({
       llm: {
         provider: "openai",
-        model: "gpt-4.1-mini"
+        model: "claude-haiku-4-5"
       },
       voice: {
         generationLlm: {

@@ -4,6 +4,7 @@ sequenceDiagram
     participant Bot as ClankerBot
     participant Store as Store
     participant Memory as MemoryManager
+    participant Search as SearchService
     participant LLM as LLMService
 
     Discord->>Bot: messageCreate(message)
@@ -27,8 +28,22 @@ sequenceDiagram
       Bot->>Store: logAction(reacted)
     and Reply path
       Bot->>Memory: buildPromptMemorySlice() (hybrid fact retrieval)
-      Bot->>LLM: generate() for reply
+      Bot->>LLM: generate() for initial reply
       LLM->>Store: logAction(llm_call or llm_error)
+      opt model requests follow-up lookup
+        opt webSearchQuery directive
+          Bot->>Search: searchAndRead()
+          Search->>Store: logAction(search_call or search_error)
+        end
+        opt memoryLookupQuery directive
+          Bot->>Memory: searchDurableFacts()
+        end
+        opt imageLookupQuery directive
+          Bot->>Store: getRecentMessages() for image candidates
+        end
+        Bot->>LLM: generate() follow-up reply (optional replyFollowupLlm)
+        LLM->>Store: logAction(llm_call or llm_error)
+      end
       Bot->>Discord: reply() or send()
       Bot->>Store: recordMessage(outgoing)
       Bot->>Store: logAction(sent_reply or sent_message)

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
+import { normalizeDashboardHost } from "./config.ts";
 import { getLlmModelCatalog } from "./pricing.ts";
 import { classifyApiAccessPath, isAllowedPublicApiPath, isPublicTunnelRequestHost } from "./publicIngressAccess.ts";
 
@@ -9,7 +10,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const STREAM_INGEST_API_PATH = "/voice/stream-ingest/frame";
 const DASHBOARD_JSON_LIMIT = "7mb";
-const DASHBOARD_DEFAULT_HOST = "127.0.0.1";
 const PUBLIC_FRAME_REQUEST_WINDOW_MS = 60_000;
 const PUBLIC_FRAME_REQUEST_MAX_PER_WINDOW = 1200;
 const PUBLIC_FRAME_DECLARED_BYTES_MAX = 6_000_000;
@@ -508,11 +508,6 @@ function isRequestFromPublicTunnel(req, publicHttpsEntrypoint) {
   if (!requestHost) return false;
   const publicState = publicHttpsEntrypoint?.getState?.() || null;
   return isPublicTunnelRequestHost(requestHost, publicState);
-}
-
-function normalizeDashboardHost(rawHost) {
-  const normalized = String(rawHost || "").trim();
-  return normalized || DASHBOARD_DEFAULT_HOST;
 }
 
 function isPublicFrameIngressPath(rawPath) {

@@ -145,16 +145,12 @@ export function resolveStreamWatchVisionProviderSettings(manager, settings = nul
   const llmSettings = settings?.llm && typeof settings.llm === "object" ? settings.llm : {};
   const candidates = [
     {
-      provider: "openai",
-      model: "gpt-4.1-mini"
+      provider: "anthropic",
+      model: "claude-haiku-4-5"
     },
     {
       provider: "xai",
       model: "grok-2-vision-latest"
-    },
-    {
-      provider: "anthropic",
-      model: "claude-haiku-4-5"
     },
     {
       provider: "claude-code",

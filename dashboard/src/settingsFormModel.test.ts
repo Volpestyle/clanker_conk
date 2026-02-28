@@ -1,8 +1,8 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
-  CUSTOM_MODEL_OPTION_VALUE,
   formToSettingsPatch,
+  resolveModelOptionsFromText,
   resolvePresetModelSelection,
   resolveProviderModelOptions,
   settingsToForm
@@ -89,7 +89,7 @@ test("resolveProviderModelOptions merges catalog values with provider fallback d
   assert.deepEqual(anthropic, ["claude-haiku-4-5"]);
 });
 
-test("resolvePresetModelSelection enforces claude-code preset behavior", () => {
+test("resolvePresetModelSelection always resolves to a real dropdown option", () => {
   const nonClaude = resolvePresetModelSelection({
     modelCatalog: {
       openai: ["claude-haiku-4-5"]
@@ -97,8 +97,7 @@ test("resolvePresetModelSelection enforces claude-code preset behavior", () => {
     provider: "openai",
     model: "custom-model-not-listed"
   });
-  assert.equal(nonClaude.isClaudeCodeProvider, false);
-  assert.equal(nonClaude.selectedPresetModel, CUSTOM_MODEL_OPTION_VALUE);
+  assert.equal(nonClaude.selectedPresetModel, "claude-haiku-4-5");
 
   const claudeCode = resolvePresetModelSelection({
     modelCatalog: {
@@ -109,6 +108,15 @@ test("resolvePresetModelSelection enforces claude-code preset behavior", () => {
   });
   assert.equal(claudeCode.isClaudeCodeProvider, true);
   assert.equal(claudeCode.selectedPresetModel, "opus");
+});
+
+test("resolveModelOptionsFromText normalizes model lists for dropdown options", () => {
+  const options = resolveModelOptionsFromText(
+    "gpt-image-1.5\ngpt-image-1.5\n",
+    "grok-imagine-image",
+    ["", "grok-imagine-image"]
+  );
+  assert.deepEqual(options, ["gpt-image-1.5", "grok-imagine-image"]);
 });
 
 test("formToSettingsPatch keeps stt pipeline voice generation and reply decider independent from main text llm", () => {

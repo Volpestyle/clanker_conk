@@ -26,7 +26,7 @@ test("SettingsForm renders sectioned settings layout when settings are provided"
       botName: "clanker conk"
     },
     modelCatalog: {
-      openai: ["gpt-4.1-mini"]
+      openai: ["claude-haiku-4-5"]
     },
     onSave() {},
     toast: { text: "saved", type: "ok" }

@@ -1262,7 +1262,7 @@ export class LLMService {
     if (provider === "xai") {
       return normalizeDefaultModel(this.appConfig?.defaultXaiModel, "grok-3-mini-latest");
     }
-    return normalizeDefaultModel(this.appConfig?.defaultOpenAiModel, "gpt-4.1-mini");
+    return normalizeDefaultModel(this.appConfig?.defaultOpenAiModel, "claude-haiku-4-5");
   }
 
   async callOpenAI({

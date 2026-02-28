@@ -1,4 +1,5 @@
 import { spawn } from "node:child_process";
+import { safeJsonParse as safeJsonParseValue } from "./normalization/valueParsers.ts";
 
 type ClaudeCliResult = {
   stdout: string;
@@ -14,11 +15,7 @@ type ClaudeCliError = Error & {
 };
 
 export function safeJsonParse(value, fallback = null) {
-  try {
-    return JSON.parse(String(value || ""));
-  } catch {
-    return fallback;
-  }
+  return safeJsonParseValue(value, fallback, { coerceToString: true });
 }
 
 export function runClaudeCli({ args, input, timeoutMs, maxBufferBytes }) {

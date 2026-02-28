@@ -66,3 +66,18 @@ Useful logs for tuning:
 - Voice: `voice_turn_addressing` (`allow`, `reason`, `directAddressed`, `llmResponse`)
 
 These logs are the source of truth when diagnosing over-replying or missed replies.
+
+## 6) Latency-First Model Tuning
+
+Model choices that matter most for turn latency:
+
+- `llm.provider` + `llm.model`: primary reply-generation call for text and shared-brain voice.
+- `replyFollowupLlm.enabled` + `replyFollowupLlm.provider/model`: can add a second generation pass after model-requested lookups (`webSearchQuery`, `memoryLookupQuery`, `imageLookupQuery`).
+- `voice.replyDecisionLlm.provider/model`: classifier model for ambiguous voice turns before the bot decides to speak.
+- `voice.openaiRealtime.model` / `voice.geminiRealtime.model` or `voice.sttPipeline.transcriptionModel` + `voice.sttPipeline.ttsModel`: dominant latency levers after voice admission.
+
+Model choice with lower immediate impact:
+
+- `memoryLlm.provider/model`: used for memory extraction on ingest; this is not on the synchronous text reply critical path.
+
+When tuning, check reply performance phases (`llm1Ms`, `followupMs`) and voice `voice_turn_addressing` logs before/after each model change.

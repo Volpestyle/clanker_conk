@@ -1,18 +1,14 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { runVoiceGoldenHarness, VOICE_GOLDEN_MODES } from "./voiceGoldenHarness.ts";
+import { parseBooleanFlag, parseNumberOrFallback } from "../normalization/valueParsers.ts";
 
 function envFlag(name: string, fallback = false) {
-  const normalized = String(process.env[name] || "")
-    .trim()
-    .toLowerCase();
-  if (!normalized) return fallback;
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+  return parseBooleanFlag(process.env[name], fallback);
 }
 
 function envNumber(name: string, fallback: number) {
-  const parsed = Number(process.env[name]);
-  return Number.isFinite(parsed) ? parsed : fallback;
+  return parseNumberOrFallback(process.env[name], fallback);
 }
 
 function envModes(name: string) {

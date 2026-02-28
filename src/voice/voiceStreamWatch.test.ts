@@ -13,7 +13,7 @@ function createSettings(overrides = {}) {
     botName: "clanker conk",
     llm: {
       provider: "openai",
-      model: "gpt-4.1-mini"
+      model: "claude-haiku-4-5"
     },
     voice: {
       streamWatch: {
@@ -107,7 +107,7 @@ function createManager({
         return {
           text: "looks chaotic",
           provider: "openai",
-          model: "gpt-4.1-mini"
+          model: "claude-haiku-4-5"
         };
       },
       ...llm
@@ -269,7 +269,7 @@ test("ingestStreamFrame validates mime, frame size, and frame-rate limits", asyn
     settings,
     llm: {
       isProviderConfigured(provider) {
-        return provider === "openai";
+        return provider === "anthropic";
       }
     }
   });
@@ -325,7 +325,7 @@ test("ingestStreamFrame accepts fallback-buffered frame and updates runtime coun
     }),
     llm: {
       isProviderConfigured(provider) {
-        return provider === "openai";
+        return provider === "anthropic";
       }
     }
   });
@@ -404,13 +404,13 @@ test("maybeTriggerStreamWatchCommentary supports vision-fallback text utterance 
     session,
     llm: {
       isProviderConfigured(provider) {
-        return provider === "openai";
+        return provider === "anthropic";
       },
       async generate() {
         return {
           text: "looks like a wild clutch moment",
-          provider: "openai",
-          model: "gpt-4.1-mini"
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
         };
       }
     }
@@ -429,5 +429,5 @@ test("maybeTriggerStreamWatchCommentary supports vision-fallback text utterance 
   const logged = actions.find((entry) => entry.content === "stream_watch_commentary_requested");
   assert.equal(Boolean(logged), true);
   assert.equal(logged?.metadata?.commentaryPath, "vision_fallback_text_utterance");
-  assert.equal(logged?.metadata?.visionProvider, "openai");
+  assert.equal(logged?.metadata?.visionProvider, "anthropic");
 });

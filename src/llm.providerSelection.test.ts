@@ -13,7 +13,7 @@ function createService(appConfig = {}, { logs = null } = {}) {
       xaiBaseUrl: "https://api.x.ai/v1",
       anthropicApiKey: "",
       defaultProvider: "openai",
-      defaultOpenAiModel: "gpt-4.1-mini",
+      defaultOpenAiModel: "claude-haiku-4-5",
       defaultAnthropicModel: "claude-haiku-4-5",
       defaultXaiModel: "grok-3-mini-latest",
       defaultClaudeCodeModel: "sonnet",
@@ -221,7 +221,7 @@ test("callOpenAI uses Responses API with max_output_tokens and multimodal input"
   };
 
   const result = await service.callOpenAI({
-    model: "gpt-4.1-mini",
+    model: "claude-haiku-4-5",
     systemPrompt: "system prompt",
     userPrompt: "what is in this image?",
     imageInputs: [
@@ -281,7 +281,7 @@ test("callOpenAiMemoryExtraction uses Responses JSON schema format", async () =>
   };
 
   const result = await service.callOpenAiMemoryExtraction({
-    model: "gpt-4.1-mini",
+    model: "claude-haiku-4-5",
     systemPrompt: "extract durable facts only",
     userPrompt: "user says they like sci-fi"
   });

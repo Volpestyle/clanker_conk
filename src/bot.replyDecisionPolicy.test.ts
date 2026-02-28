@@ -728,7 +728,7 @@ test("reply follow-up regeneration can use dedicated provider/model override", a
     store.patchSettings({
       llm: {
         provider: "openai",
-        model: "gpt-4.1-mini"
+        model: "claude-haiku-4-5"
       },
       replyFollowupLlm: {
         enabled: true,
@@ -840,7 +840,7 @@ test("reply follow-up regeneration can use dedicated provider/model override", a
     assert.equal(channelSendPayloads.length, 1);
     assert.equal(llmCalls.length, 2);
     assert.equal(llmCalls[0]?.settings?.llm?.provider, "openai");
-    assert.equal(llmCalls[0]?.settings?.llm?.model, "gpt-4.1-mini");
+    assert.equal(llmCalls[0]?.settings?.llm?.model, "claude-haiku-4-5");
     assert.equal(llmCalls[1]?.settings?.llm?.provider, "anthropic");
     assert.equal(llmCalls[1]?.settings?.llm?.model, "claude-haiku-4-5");
   });

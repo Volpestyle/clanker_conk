@@ -8,29 +8,24 @@ import { Store } from "../store.ts";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { defaultModelForLlmProvider, normalizeLlmProvider } from "../llm/llmHelpers.ts";
+import { parseBooleanFlag } from "../normalization/valueParsers.ts";
 
 function envFlag(name) {
-  const normalized = String(process.env[name] || "")
-    .trim()
-    .toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
-}
-
-function normalizeProvider(value) {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "anthropic") return "anthropic";
-  if (normalized === "xai") return "xai";
-  if (normalized === "claude-code") return "claude-code";
-  return "openai";
+  return parseBooleanFlag(process.env[name], false);
 }
 
 function defaultModelForProvider(provider) {
-  if (provider === "anthropic") return String(appConfig.defaultAnthropicModel || "claude-haiku-4-5");
-  if (provider === "xai") return String(appConfig.defaultXaiModel || "grok-3-mini-latest");
-  if (provider === "claude-code") return String(appConfig.defaultClaudeCodeModel || "sonnet");
-  return String(appConfig.defaultOpenAiModel || "gpt-4.1-mini");
+  if (provider === "anthropic") {
+    return String(appConfig.defaultAnthropicModel || defaultModelForLlmProvider("anthropic"));
+  }
+  if (provider === "xai") {
+    return String(appConfig.defaultXaiModel || defaultModelForLlmProvider("xai"));
+  }
+  if (provider === "claude-code") {
+    return String(appConfig.defaultClaudeCodeModel || defaultModelForLlmProvider("claude-code"));
+  }
+  return String(appConfig.defaultOpenAiModel || defaultModelForLlmProvider("openai"));
 }
 
 function hasProviderCredentials(provider) {
@@ -139,7 +134,7 @@ function buildIncomingMessage({
 test("smoke: live text reply admission handles wake variants and prank-like negatives", { timeout: 30_000 }, async () => {
   if (!envFlag("RUN_LIVE_TEXT_REPLY_SMOKE")) return;
 
-  const provider = normalizeProvider(process.env.LIVE_TEXT_SMOKE_PROVIDER || "anthropic");
+  const provider = normalizeLlmProvider(process.env.LIVE_TEXT_SMOKE_PROVIDER || "anthropic");
   const model = String(process.env.LIVE_TEXT_SMOKE_MODEL || defaultModelForProvider(provider)).trim()
     || defaultModelForProvider(provider);
 

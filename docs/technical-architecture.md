@@ -85,7 +85,28 @@ Key guardrails:
 - minimum seconds between bot messages.
 - direct-address and recent-bot-context gating for unsolicited replies (with LLM skip as backstop).
 
-## 6. Initiative Post Flow
+## 6. Latency-Critical Model Choices
+
+Core sequence diagrams for this topic:
+- `docs/diagrams/message-event-flow.mmd` (text message handling path).
+- `docs/diagrams/runtime-lifecycle.mmd` (boot/runtime timers that can add queue delay).
+- `docs/diagrams/settings-flow.mmd` (how model changes apply live without restart).
+
+Highest-impact model settings for user-visible reply latency:
+- `llm.provider` + `llm.model`: main reply generation model (primary synchronous call in the text/voice shared-brain path). This is reported as `llm1Ms` in reply performance stats.
+- `replyFollowupLlm.enabled` + `replyFollowupLlm.provider/model`: optional second-pass generation model used after model-requested web/memory/image lookup directives. This contributes to `followupMs` and is a major tail-latency lever.
+- `voice.replyDecisionLlm.provider/model`: YES/NO classifier for ambiguous voice turns before speaking. Slower classifiers increase gate time before turn output.
+- `voice.openaiRealtime.model` / `voice.geminiRealtime.model` or `voice.sttPipeline.transcriptionModel` + `voice.sttPipeline.ttsModel`: these directly shape voice-turn latency after admission.
+- `llm.provider = claude-code`: each generation runs through local CLI invocation/parsing, which can add extra latency and jitter versus direct API providers.
+
+Lower impact on immediate reply latency:
+- `memoryLlm.provider/model` mainly affects asynchronous memory extraction after message ingest, not the synchronous text reply loop.
+
+How to validate changes:
+- `Store.getReplyPerformanceStats()` aggregates `memorySliceMs`, `llm1Ms`, and `followupMs`.
+- voice action logs with `kind=voice_runtime` and `content=voice_turn_addressing` include classifier provider/model metadata.
+
+## 7. Initiative Post Flow
 
 Initiative logic runs every 60 seconds, but posting depends on schedule rules and caps.
 
@@ -96,7 +117,7 @@ Scheduling modes:
 - `even`: post only when elapsed time exceeds `max(minMinutesBetweenPosts, 24h/maxPostsPerDay)`.
 - `spontaneous`: after min gap, uses probabilistic ramps + force-due bound.
 
-## 7. Discovery Subsystem (Initiative Creativity)
+## 8. Discovery Subsystem (Initiative Creativity)
 
 `DiscoveryService.collect()`:
 1. Builds topic seeds from preferred topics + recent chat text.
@@ -115,7 +136,7 @@ Scheduling modes:
 
 If a cycle requires a link and model output includes none, bot can append one fallback discovered link or skip posting.
 
-## 8. Dashboard Read/Write Patterns
+## 9. Dashboard Read/Write Patterns
 
 Dashboard polling:
 - `/api/stats` every 10s
@@ -131,7 +152,7 @@ Dashboard read APIs also include:
 - `GET /api/automations`: list automations by guild/channel/status/query.
 - `GET /api/automations/runs`: list run history for one automation.
 
-## 9. Action Log Kinds
+## 10. Action Log Kinds
 
 Common `actions.kind` values in current runtime:
 - Messaging/initiative: `sent_reply`, `sent_message`, `reply_skipped`, `initiative_post`, `automation_post`
@@ -146,7 +167,7 @@ Common `actions.kind` values in current runtime:
 
 These power the activity stream and metrics/cost widgets in the dashboard.
 
-## 10. Failure Behavior
+## 11. Failure Behavior
 
 - LLM failures are logged (`llm_error`) and bubble to caller; bot-level wrappers log `bot_error`.
 - Reaction failures (permission/emoji issues) are swallowed.

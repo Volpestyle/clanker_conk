@@ -3,6 +3,7 @@ import {
   collectMemberLookupKeys,
   extractMentionCandidates
 } from "../botHelpers.ts";
+import { normalizeMentionLookupKey } from "./mentionLookup.ts";
 
 const MENTION_GUILD_HISTORY_LOOKBACK = 500;
 const MENTION_SEARCH_RESULT_LIMIT = 10;
@@ -155,12 +156,4 @@ export async function lookupGuildMembersByExactName({ guild, lookupKey }) {
   } catch {
     return new Set();
   }
-}
-
-function normalizeMentionLookupKey(value) {
-  return String(value || "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 80);
 }

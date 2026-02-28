@@ -1,3 +1,5 @@
+import { clamp01, clampInt } from "../normalization/numbers.ts";
+
 const LORE_SUBJECT = "__lore__";
 const SELF_SUBJECT = "__self__";
 
@@ -34,22 +36,6 @@ export function normalizeEvidenceText(rawEvidence, sourceText) {
   const evidence = sanitizeInline(rawEvidence || "", 220);
   if (!evidence) return null;
   return isTextGroundedInSource(evidence, sourceText) ? evidence : null;
-}
-
-export function clamp01(value, fallback = 0.5) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  if (parsed <= 0) return 0;
-  if (parsed >= 1) return 1;
-  return parsed;
-}
-
-export function clampInt(value, min, max) {
-  const parsed = Math.floor(Number(value));
-  if (!Number.isFinite(parsed)) return min;
-  if (parsed < min) return min;
-  if (parsed > max) return max;
-  return parsed;
 }
 
 export function buildFactEmbeddingPayload(factRow) {

@@ -6,6 +6,7 @@ import {
 } from "@discordjs/voice";
 import { parseSoundboardReference } from "./soundboardDirector.ts";
 import { AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES } from "./voiceSessionManager.constants.ts";
+import { normalizeVoiceRuntimeMode } from "./voiceModes.ts";
 
 export const REALTIME_MEMORY_FACT_LIMIT = 8;
 export const SOUNDBOARD_MAX_CANDIDATES = 40;
@@ -262,13 +263,7 @@ export function shortError(text) {
 }
 
 export function resolveVoiceRuntimeMode(settings) {
-  const normalized = String(settings?.voice?.mode || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "gemini_realtime") return "gemini_realtime";
-  if (normalized === "openai_realtime") return "openai_realtime";
-  if (normalized === "stt_pipeline") return "stt_pipeline";
-  return "voice_agent";
+  return normalizeVoiceRuntimeMode(settings?.voice?.mode);
 }
 
 export function resolveRealtimeProvider(mode) {

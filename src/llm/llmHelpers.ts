@@ -3,6 +3,9 @@ export const MEMORY_FACT_TYPES = ["preference", "profile", "relationship", "proj
 export const MEMORY_FACT_SUBJECTS = ["author", "bot", "lore"];
 const XAI_DEFAULT_BASE_URL = "https://api.x.ai/v1";
 export const XAI_VIDEO_DONE_STATUSES = new Set(["done", "completed", "succeeded", "success", "ready"]);
+import { clamp01, clampInt, clampNumber } from "../normalization/numbers.ts";
+import { normalizeBoundedStringList } from "../settings/listNormalization.ts";
+export { clamp01, clampInt, clampNumber };
 
 export function extractOpenAiResponseText(response) {
   const direct = String(response?.output_text || "").trim();
@@ -62,30 +65,6 @@ export function normalizeInlineText(value, maxLen) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, maxLen);
-}
-
-export function clamp01(value, fallback = 0.5) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  if (parsed < 0) return 0;
-  if (parsed > 1) return 1;
-  return parsed;
-}
-
-export function clampInt(value, min, max) {
-  const parsed = Math.floor(Number(value));
-  if (!Number.isFinite(parsed)) return min;
-  if (parsed < min) return min;
-  if (parsed > max) return max;
-  return parsed;
-}
-
-export function clampNumber(value, min, max, fallback = min) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  if (parsed < min) return min;
-  if (parsed > max) return max;
-  return parsed;
 }
 
 export function normalizeFactType(type) {
@@ -158,10 +137,7 @@ export function normalizeXaiBaseUrl(value) {
 
 export function normalizeModelAllowlist(input, maxItems = 20) {
   if (!Array.isArray(input)) return [];
-
-  return [...new Set(input.map((item) => String(item || "").trim()).filter(Boolean))]
-    .slice(0, Math.max(1, maxItems))
-    .map((item) => item.slice(0, 120));
+  return normalizeBoundedStringList(input, { maxItems, maxLen: 120 });
 }
 
 export function prioritizePreferredModel(allowedModels, preferredModel) {
@@ -174,6 +150,7 @@ export function normalizeLlmProvider(value, fallback = "openai") {
   const normalized = String(value || "")
     .trim()
     .toLowerCase();
+  if (normalized === "openai") return "openai";
   if (normalized === "anthropic") return "anthropic";
   if (normalized === "xai") return "xai";
   if (normalized === "claude-code") return "claude-code";
@@ -181,6 +158,7 @@ export function normalizeLlmProvider(value, fallback = "openai") {
   const fallbackProvider = String(fallback || "")
     .trim()
     .toLowerCase();
+  if (fallbackProvider === "openai") return "openai";
   if (fallbackProvider === "anthropic") return "anthropic";
   if (fallbackProvider === "xai") return "xai";
   if (fallbackProvider === "claude-code") return "claude-code";
@@ -191,7 +169,7 @@ export function defaultModelForLlmProvider(provider) {
   if (provider === "anthropic") return "claude-haiku-4-5";
   if (provider === "xai") return "grok-3-mini-latest";
   if (provider === "claude-code") return "sonnet";
-  return "gpt-4.1-mini";
+  return "claude-haiku-4-5";
 }
 
 export function resolveProviderFallbackOrder(provider) {

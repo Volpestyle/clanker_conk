@@ -1,5 +1,4 @@
 import React from "react";
-import { CUSTOM_MODEL_OPTION_VALUE } from "../../settingsFormModel";
 import { SettingsSection } from "../SettingsSection";
 
 export function LlmConfigurationSettingsSection({
@@ -9,17 +8,14 @@ export function LlmConfigurationSettingsSection({
   setProvider,
   selectPresetModel,
   providerModelOptions,
-  isClaudeCodeProvider,
   selectedPresetModel,
   setReplyFollowupProvider,
   selectReplyFollowupPresetModel,
   replyFollowupModelOptions,
-  isReplyFollowupClaudeCodeProvider,
   selectedReplyFollowupPresetModel,
   setMemoryLlmProvider,
   selectMemoryLlmPresetModel,
   memoryLlmModelOptions,
-  isMemoryLlmClaudeCodeProvider,
   selectedMemoryLlmPresetModel
 }) {
   return (
@@ -32,25 +28,14 @@ export function LlmConfigurationSettingsSection({
         <option value="claude-code">claude code (local)</option>
       </select>
 
-      <label htmlFor="model-preset">Model Preset (priced models)</label>
+      <label htmlFor="model-preset">Model ID</label>
       <select id="model-preset" value={selectedPresetModel} onChange={selectPresetModel}>
         {providerModelOptions.map((modelId) => (
           <option key={modelId} value={modelId}>
             {modelId}
           </option>
         ))}
-        {!isClaudeCodeProvider && <option value={CUSTOM_MODEL_OPTION_VALUE}>custom model (manual)</option>}
       </select>
-
-      <label htmlFor="model">Model ID</label>
-      <input
-        id="model"
-        type="text"
-        placeholder="gpt-4.1-mini / claude-haiku-4-5 / grok-3-mini-latest"
-        value={form.model}
-        onChange={set("model")}
-        disabled={isClaudeCodeProvider}
-      />
 
       <div className="split">
         <div>
@@ -107,7 +92,7 @@ export function LlmConfigurationSettingsSection({
           </select>
         </div>
         <div>
-          <label htmlFor="reply-followup-llm-model-preset">Model Preset</label>
+          <label htmlFor="reply-followup-llm-model-preset">Model ID</label>
           <select
             id="reply-followup-llm-model-preset"
             value={selectedReplyFollowupPresetModel}
@@ -119,20 +104,9 @@ export function LlmConfigurationSettingsSection({
                 {modelId}
               </option>
             ))}
-            {!isReplyFollowupClaudeCodeProvider && (
-              <option value={CUSTOM_MODEL_OPTION_VALUE}>custom model (manual)</option>
-            )}
           </select>
         </div>
       </div>
-      <label htmlFor="reply-followup-llm-model">Model ID</label>
-      <input
-        id="reply-followup-llm-model"
-        type="text"
-        value={form.replyFollowupLlmModel}
-        onChange={set("replyFollowupLlmModel")}
-        disabled={!form.replyFollowupLlmEnabled || isReplyFollowupClaudeCodeProvider}
-      />
 
       <h4>Memory Extraction LLM</h4>
       <p>Used for durable fact extraction (`memory_extract_call`).</p>
@@ -147,7 +121,7 @@ export function LlmConfigurationSettingsSection({
           </select>
         </div>
         <div>
-          <label htmlFor="memory-llm-model-preset">Model Preset</label>
+          <label htmlFor="memory-llm-model-preset">Model ID</label>
           <select
             id="memory-llm-model-preset"
             value={selectedMemoryLlmPresetModel}
@@ -158,20 +132,9 @@ export function LlmConfigurationSettingsSection({
                 {modelId}
               </option>
             ))}
-            {!isMemoryLlmClaudeCodeProvider && (
-              <option value={CUSTOM_MODEL_OPTION_VALUE}>custom model (manual)</option>
-            )}
           </select>
         </div>
       </div>
-      <label htmlFor="memory-llm-model">Model ID</label>
-      <input
-        id="memory-llm-model"
-        type="text"
-        value={form.memoryLlmModel}
-        onChange={set("memoryLlmModel")}
-        disabled={isMemoryLlmClaudeCodeProvider}
-      />
     </SettingsSection>
   );
 }

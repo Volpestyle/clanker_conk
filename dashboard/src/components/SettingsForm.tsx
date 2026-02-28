@@ -125,6 +125,32 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
   const showInitiativeImageControls = form.initiativeImageEnabled || form.replyImageEnabled;
   const showInitiativeVideoControls = form.initiativeVideoEnabled || form.replyVideoEnabled;
 
+  useEffect(() => {
+    setForm((current) => {
+      if (!current) return current;
+      let changed = false;
+      const next = { ...current };
+      const syncModel = (field, value) => {
+        if (!value) return;
+        if (String(next[field] || "").trim() === value) return;
+        next[field] = value;
+        changed = true;
+      };
+      syncModel("model", selectedPresetModel);
+      syncModel("replyFollowupLlmModel", selectedReplyFollowupPresetModel);
+      syncModel("memoryLlmModel", selectedMemoryLlmPresetModel);
+      syncModel("voiceGenerationLlmModel", selectedVoiceGenerationPresetModel);
+      syncModel("voiceReplyDecisionLlmModel", selectedVoiceReplyDecisionPresetModel);
+      return changed ? next : current;
+    });
+  }, [
+    selectedPresetModel,
+    selectedReplyFollowupPresetModel,
+    selectedMemoryLlmPresetModel,
+    selectedVoiceGenerationPresetModel,
+    selectedVoiceReplyDecisionPresetModel
+  ]);
+
   function set(key) {
     return (e) => setForm((f) => ({ ...f, [key]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
   }

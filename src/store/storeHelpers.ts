@@ -1,4 +1,5 @@
 import { nowIso } from "../utils.ts";
+import { safeJsonParse as safeJsonParseValue } from "../normalization/valueParsers.ts";
 
 export function normalizeEmbeddingVector(rawEmbedding) {
   if (!Array.isArray(rawEmbedding) || !rawEmbedding.length) return [];
@@ -101,13 +102,7 @@ export function mapAutomationRow(row) {
 }
 
 export function safeJsonParse(value, fallback) {
-  if (!value || typeof value !== "string") return fallback;
-
-  try {
-    return JSON.parse(value);
-  } catch {
-    return fallback;
-  }
+  return safeJsonParseValue(value, fallback);
 }
 
 export function normalizeMessageCreatedAt(value) {

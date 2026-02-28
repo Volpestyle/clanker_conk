@@ -1,5 +1,4 @@
 import React from "react";
-import { CUSTOM_MODEL_OPTION_VALUE } from "../../settingsFormModel";
 import { SettingsSection } from "../SettingsSection";
 import { rangeStyle } from "../../utils";
 
@@ -15,13 +14,16 @@ export function VoiceModeSettingsSection({
   setVoiceReplyDecisionProvider,
   selectVoiceReplyDecisionPresetModel,
   voiceReplyDecisionModelOptions,
-  isVoiceReplyDecisionClaudeCodeProvider,
   selectedVoiceReplyDecisionPresetModel,
   setVoiceGenerationProvider,
   selectVoiceGenerationPresetModel,
   voiceGenerationModelOptions,
-  isVoiceGenerationClaudeCodeProvider,
   selectedVoiceGenerationPresetModel,
+  openAiRealtimeModelOptions,
+  openAiTranscriptionModelOptions,
+  geminiRealtimeModelOptions,
+  sttTranscriptionModelOptions,
+  sttTtsModelOptions,
   onResetVoiceReplyDecisionPrompts
 }) {
   const isRealtimeMode = isVoiceAgentMode || isOpenAiRealtimeMode || isGeminiRealtimeMode;
@@ -159,7 +161,7 @@ export function VoiceModeSettingsSection({
               </select>
             </div>
             <div>
-              <label htmlFor="voice-generation-model-preset">Model Preset</label>
+              <label htmlFor="voice-generation-model-preset">Model ID</label>
               <select
                 id="voice-generation-model-preset"
                 value={selectedVoiceGenerationPresetModel}
@@ -170,20 +172,9 @@ export function VoiceModeSettingsSection({
                     {modelId}
                   </option>
                 ))}
-                {!isVoiceGenerationClaudeCodeProvider && (
-                  <option value={CUSTOM_MODEL_OPTION_VALUE}>custom model (manual)</option>
-                )}
               </select>
             </div>
           </div>
-          <label htmlFor="voice-generation-model">Model ID</label>
-          <input
-            id="voice-generation-model"
-            type="text"
-            value={form.voiceGenerationLlmModel}
-            onChange={set("voiceGenerationLlmModel")}
-            disabled={isVoiceGenerationClaudeCodeProvider}
-          />
 
           <h4>Voice Reply Decider</h4>
           <p>Controls when Clank should chime in during VC.</p>
@@ -225,7 +216,7 @@ export function VoiceModeSettingsSection({
                   </select>
                 </div>
                 <div>
-                  <label htmlFor="voice-reply-decision-model-preset">Model Preset</label>
+                  <label htmlFor="voice-reply-decision-model-preset">Model ID</label>
                   <select
                     id="voice-reply-decision-model-preset"
                     value={selectedVoiceReplyDecisionPresetModel}
@@ -236,20 +227,9 @@ export function VoiceModeSettingsSection({
                         {modelId}
                       </option>
                     ))}
-                    {!isVoiceReplyDecisionClaudeCodeProvider && (
-                      <option value={CUSTOM_MODEL_OPTION_VALUE}>custom model (manual)</option>
-                    )}
                   </select>
                 </div>
               </div>
-              <label htmlFor="voice-reply-decision-model">Model ID</label>
-              <input
-                id="voice-reply-decision-model"
-                type="text"
-                value={form.voiceReplyDecisionLlmModel}
-                onChange={set("voiceReplyDecisionLlmModel")}
-                disabled={isVoiceReplyDecisionClaudeCodeProvider}
-              />
 
               <details>
                 <summary>Advanced classifier prompts/rules</summary>
@@ -344,12 +324,17 @@ export function VoiceModeSettingsSection({
               <div className="split">
                 <div>
                   <label htmlFor="voice-openai-realtime-model">OpenAI realtime model</label>
-                  <input
+                  <select
                     id="voice-openai-realtime-model"
-                    type="text"
                     value={form.voiceOpenAiRealtimeModel}
                     onChange={set("voiceOpenAiRealtimeModel")}
-                  />
+                  >
+                    {openAiRealtimeModelOptions.map((modelId) => (
+                      <option key={modelId} value={modelId}>
+                        {modelId}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label htmlFor="voice-openai-realtime-voice">OpenAI realtime voice</label>
@@ -388,12 +373,17 @@ export function VoiceModeSettingsSection({
                   <label htmlFor="voice-openai-realtime-transcription-model">
                     OpenAI realtime input transcription model
                   </label>
-                  <input
+                  <select
                     id="voice-openai-realtime-transcription-model"
-                    type="text"
                     value={form.voiceOpenAiRealtimeInputTranscriptionModel}
                     onChange={set("voiceOpenAiRealtimeInputTranscriptionModel")}
-                  />
+                  >
+                    {openAiTranscriptionModelOptions.map((modelId) => (
+                      <option key={modelId} value={modelId}>
+                        {modelId}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div />
               </div>
@@ -405,12 +395,17 @@ export function VoiceModeSettingsSection({
               <div className="split">
                 <div>
                   <label htmlFor="voice-gemini-realtime-model">Gemini realtime model</label>
-                  <input
+                  <select
                     id="voice-gemini-realtime-model"
-                    type="text"
                     value={form.voiceGeminiRealtimeModel}
                     onChange={set("voiceGeminiRealtimeModel")}
-                  />
+                  >
+                    {geminiRealtimeModelOptions.map((modelId) => (
+                      <option key={modelId} value={modelId}>
+                        {modelId}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label htmlFor="voice-gemini-realtime-voice">Gemini realtime voice</label>
@@ -468,21 +463,31 @@ export function VoiceModeSettingsSection({
               <div className="split">
                 <div>
                   <label htmlFor="voice-stt-transcribe-model">STT model</label>
-                  <input
+                  <select
                     id="voice-stt-transcribe-model"
-                    type="text"
                     value={form.voiceSttTranscriptionModel}
                     onChange={set("voiceSttTranscriptionModel")}
-                  />
+                  >
+                    {sttTranscriptionModelOptions.map((modelId) => (
+                      <option key={modelId} value={modelId}>
+                        {modelId}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label htmlFor="voice-stt-tts-model">TTS model</label>
-                  <input
+                  <select
                     id="voice-stt-tts-model"
-                    type="text"
                     value={form.voiceSttTtsModel}
                     onChange={set("voiceSttTtsModel")}
-                  />
+                  >
+                    {sttTtsModelOptions.map((modelId) => (
+                      <option key={modelId} value={modelId}>
+                        {modelId}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 

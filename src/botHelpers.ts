@@ -1,5 +1,6 @@
 import { clamp } from "./utils.ts";
 import { normalizeAutomationSchedule } from "./automation.ts";
+import { normalizeMentionLookupKey } from "./bot/mentionLookup.ts";
 
 const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
 const IMAGE_PROMPT_DIRECTIVE_RE = /\[\[IMAGE_PROMPT:\s*([^\]]*?)\s*\]\]\s*$/i;
@@ -186,14 +187,6 @@ function buildMentionLookupVariants({ mentionText, mentionStart }) {
   }
 
   return variants;
-}
-
-function normalizeMentionLookupKey(value) {
-  return String(value || "")
-    .toLowerCase()
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 80);
 }
 
 export function collectMemberLookupKeys(member) {

@@ -3,14 +3,12 @@ import assert from "node:assert/strict";
 import { appConfig } from "../config.ts";
 import { LLMService } from "../llm.ts";
 import { ADDRESSING_SMOKE_CASES } from "../addressingSmokeCases.ts";
+import { parseBooleanFlag } from "../normalization/valueParsers.ts";
 import { defaultVoiceReplyDecisionModel, normalizeVoiceReplyDecisionProvider } from "./voiceDecisionRuntime.ts";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
 
 function envFlag(name) {
-  const normalized = String(process.env[name] || "")
-    .trim()
-    .toLowerCase();
-  return normalized === "1" || normalized === "true" || normalized === "yes" || normalized === "on";
+  return parseBooleanFlag(process.env[name], false);
 }
 
 function hasProviderCredentials(provider) {
@@ -77,7 +75,7 @@ test("smoke: live voice decision model admits wake-variant turns", { timeout: 30
     },
     llm: {
       provider: "openai",
-      model: "gpt-4.1-mini"
+      model: "claude-haiku-4-5"
     },
     voice: {
       replyEagerness: 50,

@@ -53,7 +53,7 @@ function baseSettings(overrides = {}) {
   return {
     botName: "clanker conk",
     memory: { enabled: false },
-    llm: { provider: "openai", model: "gpt-4.1-mini" },
+    llm: { provider: "openai", model: "claude-haiku-4-5" },
     voice: {
       replyEagerness: 60,
       replyDecisionLlm: {
