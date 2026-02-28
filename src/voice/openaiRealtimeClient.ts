@@ -351,6 +351,25 @@ export class OpenAiRealtimeClient extends EventEmitter {
     });
   }
 
+  requestTextUtterance(promptText) {
+    const prompt = String(promptText || "").trim();
+    if (!prompt) return;
+    this.send({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: prompt
+          }
+        ]
+      }
+    });
+    this.createAudioResponse();
+  }
+
   updateInstructions(instructions = "") {
     if (!this.sessionConfig || typeof this.sessionConfig !== "object") {
       throw new Error("OpenAI realtime session config is not initialized.");

@@ -23,8 +23,7 @@ export async function requestWatchStream(manager, { message, settings, targetUse
       messageId: message.id,
       event: "voice_stream_watch_request",
       reason: "offline",
-      details: {},
-      fallback: "i'm not in vc rn. ask me to join first."
+      details: {}
     });
     return true;
   }
@@ -41,8 +40,7 @@ export async function requestWatchStream(manager, { message, settings, targetUse
       reason: "requester_not_in_same_vc",
       details: {
         voiceChannelId: session.voiceChannelId
-      },
-      fallback: "you need to be in my vc for stream watch commands."
+      }
     });
     return true;
   }
@@ -58,8 +56,7 @@ export async function requestWatchStream(manager, { message, settings, targetUse
       messageId: message.id,
       event: "voice_stream_watch_request",
       reason: "stream_watch_disabled",
-      details: {},
-      fallback: "stream watch is disabled in settings rn."
+      details: {}
     });
     return true;
   }
@@ -77,9 +74,7 @@ export async function requestWatchStream(manager, { message, settings, targetUse
       details: {
         mode: session.mode,
         realtimeProvider: session.realtimeProvider
-      },
-      fallback:
-        "switch voice mode to `openai_realtime` or `gemini_realtime`, or configure a vision fallback provider for `voice_agent`."
+      }
     });
     return true;
   }
@@ -102,7 +97,6 @@ export async function requestWatchStream(manager, { message, settings, targetUse
     details: {
       targetUserId: session.streamWatch.targetUserId
     },
-    fallback: "bet, i'm watching your stream. pipe frames to `/api/voice/stream-ingest/frame`.",
     mustNotify: false
   });
   return true;
@@ -270,16 +264,14 @@ export async function enableWatchStreamForUser(manager, {
   if (!session) {
     return {
       ok: false,
-      reason: "session_not_found",
-      fallback: "i'm not in vc rn. ask me to join first."
+      reason: "session_not_found"
     };
   }
 
   if (!isUserInSessionVoiceChannel(manager, { session, userId: normalizedRequesterId })) {
     return {
       ok: false,
-      reason: "requester_not_in_same_vc",
-      fallback: "you need to be in my vc for screen sharing."
+      reason: "requester_not_in_same_vc"
     };
   }
 
@@ -288,17 +280,14 @@ export async function enableWatchStreamForUser(manager, {
   if (!streamWatchSettings.enabled) {
     return {
       ok: false,
-      reason: "stream_watch_disabled",
-      fallback: "stream watch is disabled in settings rn."
+      reason: "stream_watch_disabled"
     };
   }
 
   if (!supportsStreamWatchCommentary(manager, session, resolvedSettings)) {
     return {
       ok: false,
-      reason: "stream_watch_provider_unavailable",
-      fallback:
-        "switch voice mode to `openai_realtime` or `gemini_realtime`, or configure a vision fallback provider for `voice_agent`."
+      reason: "stream_watch_provider_unavailable"
     };
   }
 
@@ -344,8 +333,7 @@ export async function requestStopWatchingStream(manager, { message, settings }) 
       messageId: message.id,
       event: "voice_stream_watch_request",
       reason: "offline",
-      details: {},
-      fallback: "i'm not in vc right now."
+      details: {}
     });
     return true;
   }
@@ -361,7 +349,6 @@ export async function requestStopWatchingStream(manager, { message, settings }) 
       event: "voice_stream_watch_request",
       reason: "already_stopped",
       details: {},
-      fallback: "i'm not watching any stream rn.",
       mustNotify: false
     });
     return true;
@@ -383,7 +370,6 @@ export async function requestStopWatchingStream(manager, { message, settings }) 
     event: "voice_stream_watch_request",
     reason: "watching_stopped",
     details: {},
-    fallback: "stopped watching stream.",
     mustNotify: false
   });
   return true;
@@ -405,8 +391,7 @@ export async function requestStreamWatchStatus(manager, { message, settings }) {
       messageId: message.id,
       event: "voice_stream_watch_request",
       reason: "offline",
-      details: {},
-      fallback: "stream watch status: offline (not in vc)."
+      details: {}
     });
     return true;
   }
@@ -435,11 +420,7 @@ export async function requestStreamWatchStatus(manager, { message, settings }) {
       lastFrameAgoSec,
       lastCommentaryAgoSec,
       ingestedFrameCount: Number(streamWatch.ingestedFrameCount || 0)
-    },
-    fallback:
-      `stream watch: ${streamWatch.active ? "on" : "off"} | mode ${session.mode} | ` +
-      `target ${streamWatch.targetUserId || "none"} | last-frame ${lastFrameAgoSec ?? "n/a"}s | ` +
-      `last-comment ${lastCommentaryAgoSec ?? "n/a"}s`
+    }
   });
   return true;
 }

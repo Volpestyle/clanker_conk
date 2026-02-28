@@ -583,6 +583,50 @@ test("reply decider uses JSON schema contract for claude-code and accepts struct
   assert.equal(seenSchemas[0].includes('"NO"'), true);
 });
 
+test("reply decider in stt pipeline uses main text llm provider/model", async () => {
+  const seenDecisionLlmSettings = [];
+  const manager = createManager({
+    generate: async (payload) => {
+      seenDecisionLlmSettings.push(payload?.settings?.llm || {});
+      return { text: "NO" };
+    }
+  });
+
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "stt_pipeline",
+      botTurnOpen: false,
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      llm: {
+        provider: "claude-code",
+        model: "sonnet"
+      },
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          provider: "openai",
+          model: "gpt-4.1-mini",
+          maxAttempts: 1
+        }
+      }
+    }),
+    transcript: "what should we do next?"
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "llm_no");
+  assert.equal(decision.llmProvider, "claude-code");
+  assert.equal(decision.llmModel, "sonnet");
+  assert.equal(seenDecisionLlmSettings.length, 1);
+  assert.equal(seenDecisionLlmSettings[0]?.provider, "claude-code");
+  assert.equal(seenDecisionLlmSettings[0]?.model, "sonnet");
+});
+
 test("reply decider bypasses LLM for direct-addressed turns", async () => {
   let callCount = 0;
   const manager = createManager({
@@ -774,6 +818,11 @@ test("runRealtimeTurn does not forward audio when reply decision denies turn", a
     mode: "voice_agent",
     ending: false,
     pendingRealtimeInputBytes: 0,
+    settingsSnapshot: baseSettings({
+      memory: {
+        enabled: true
+      }
+    }),
     realtimeClient: {
       appendInputAudioPcm() {
         appendedAudioCalls += 1;
@@ -1037,7 +1086,11 @@ test("runSttPipelineTurn exits before generation when turn admission denies spea
     mode: "stt_pipeline",
     ending: false,
     sttContextMessages: [],
-    settingsSnapshot: baseSettings()
+    settingsSnapshot: baseSettings({
+      memory: {
+        enabled: true
+      }
+    })
   };
 
   const turnRun = manager.runSttPipelineTurn({

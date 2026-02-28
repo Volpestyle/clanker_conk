@@ -21,6 +21,9 @@ function baseSettings(overrides = {}) {
     memory: {
       enabled: false
     },
+    webSearch: {
+      enabled: false
+    },
     voice: {
       soundboard: {
         enabled: false
@@ -43,6 +46,10 @@ function baseSettings(overrides = {}) {
       ...base.memory,
       ...(overrides.memory || {})
     },
+    webSearch: {
+      ...base.webSearch,
+      ...(overrides.webSearch || {})
+    },
     voice: {
       ...base.voice,
       ...(overrides.voice || {}),
@@ -56,11 +63,30 @@ function baseSettings(overrides = {}) {
 
 function createVoiceBot({
   generationText = "all good",
-  generationError = null
+  generationError = null,
+  generationSequence = null,
+  searchConfigured = true,
+  runWebSearch = async ({ webSearch, query }) => ({
+    ...(webSearch || {}),
+    requested: true,
+    query: String(query || "").trim(),
+    used: true,
+    results: [
+      {
+        title: "sample result",
+        url: "https://example.com",
+        domain: "example.com",
+        snippet: "sample",
+        pageSummary: "sample summary"
+      }
+    ]
+  })
 } = {}) {
   const logs = [];
   const ingests = [];
   const remembers = [];
+  const webSearchCalls = [];
+  const generationPayloads = [];
   let generationCalls = 0;
 
   const guild = {
@@ -79,9 +105,15 @@ function createVoiceBot({
 
   const bot = {
     llm: {
-      async generate() {
+      async generate(payload) {
         generationCalls += 1;
+        generationPayloads.push(payload);
         if (generationError) throw generationError;
+        if (Array.isArray(generationSequence) && generationCalls <= generationSequence.length) {
+          return {
+            text: String(generationSequence[generationCalls - 1] || "")
+          };
+        }
         return {
           text: generationText
         };
@@ -112,6 +144,34 @@ function createVoiceBot({
         relevantFacts: []
       };
     },
+    buildWebSearchContext(settings) {
+      return {
+        requested: false,
+        configured: true,
+        enabled: Boolean(settings?.webSearch?.enabled),
+        used: false,
+        blockedByBudget: false,
+        optedOutByUser: false,
+        error: null,
+        query: "",
+        results: [],
+        fetchedPages: 0,
+        providerUsed: null,
+        providerFallbackUsed: false,
+        budget: {
+          canSearch: true
+        }
+      };
+    },
+    async runModelRequestedWebSearch(payload) {
+      webSearchCalls.push(payload);
+      return await runWebSearch(payload);
+    },
+    search: {
+      isConfigured() {
+        return Boolean(searchConfigured);
+      }
+    },
     client: {
       guilds: {
         cache: new Map([["guild-1", guild]])
@@ -127,6 +187,8 @@ function createVoiceBot({
     logs,
     ingests,
     remembers,
+    webSearchCalls,
+    generationPayloads,
     getGenerationCalls() {
       return generationCalls;
     }
@@ -294,4 +356,42 @@ test("generateVoiceTurnReply logs voice errors when generation fails", async () 
   assert.equal(logs.length, 1);
   assert.equal(logs[0]?.kind, "voice_error");
   assert.equal(String(logs[0]?.content || "").includes("voice_stt_generation_failed"), true);
+});
+
+test("generateVoiceTurnReply runs web lookup follow-up with start/complete callbacks", async () => {
+  const { bot, webSearchCalls, getGenerationCalls } = createVoiceBot({
+    generationSequence: [
+      "one sec [[WEB_SEARCH:latest rust stable version]]",
+      "latest stable rust is 1.90"
+    ]
+  });
+
+  const callbackEvents = [];
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      webSearch: {
+        enabled: true
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "what's the latest rust stable?",
+    onWebLookupStart: async (payload) => {
+      callbackEvents.push(`start:${String(payload?.query || "")}`);
+    },
+    onWebLookupComplete: async (payload) => {
+      callbackEvents.push(`done:${String(payload?.query || "")}`);
+    }
+  });
+
+  assert.equal(getGenerationCalls(), 2);
+  assert.equal(webSearchCalls.length, 1);
+  assert.equal(webSearchCalls[0]?.query, "latest rust stable version");
+  assert.deepEqual(callbackEvents, [
+    "start:latest rust stable version",
+    "done:latest rust stable version"
+  ]);
+  assert.equal(reply.text, "latest stable rust is 1.90");
+  assert.equal(reply.usedWebSearchFollowup, true);
 });

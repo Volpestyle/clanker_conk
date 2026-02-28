@@ -14,22 +14,6 @@ const MAX_SOUNDBOARD_DIRECTIVE_REF_LEN = 180;
 const PRIMARY_WAKE_TOKEN_MIN_LEN = 4;
 const PRIMARY_WAKE_GENERIC_TOKENS = new Set(["bot", "ai", "assistant"]);
 
-export function defaultExitMessage(reason) {
-  if (reason === "max_duration") return "time cap reached, dipping from vc.";
-  if (reason === "inactivity_timeout") return "been quiet for a bit, leaving vc.";
-  if (reason === "connection_lost" || reason === "bot_disconnected") return "lost the voice connection, i bounced.";
-  if (reason === "realtime_runtime_error" || reason === "realtime_socket_closed") {
-    return "voice runtime dropped, i'm out.";
-  }
-  if (reason === "response_stalled") return "voice output got stuck, so i bounced.";
-  if (reason === "settings_disabled") return "voice mode was disabled, so i dipped.";
-  if (reason === "settings_channel_blocked" || reason === "settings_channel_not_allowlisted") {
-    return "voice settings changed, so i left this vc.";
-  }
-  if (reason === "switch_channel") return "moving channels.";
-  return "leaving vc.";
-}
-
 export function parseRealtimeErrorPayload(payload) {
   if (!payload || typeof payload !== "object") {
     return {
@@ -225,16 +209,6 @@ export function shortError(text) {
   return String(text || "unknown error")
     .replace(/\s+/g, " ")
     .slice(0, 220);
-}
-
-export function formatNaturalList(values) {
-  const items = (Array.isArray(values) ? values : [])
-    .map((value) => String(value || "").trim())
-    .filter(Boolean);
-  if (!items.length) return "";
-  if (items.length === 1) return items[0];
-  if (items.length === 2) return `${items[0]} and ${items[1]}`;
-  return `${items.slice(0, -1).join(", ")}, and ${items[items.length - 1]}`;
 }
 
 export function resolveVoiceRuntimeMode(settings) {

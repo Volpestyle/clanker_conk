@@ -634,7 +634,6 @@ export class ClankerBot {
     event = "voice_runtime",
     reason = null,
     details = {},
-    fallbackText = "",
     maxOutputChars = 180,
     allowSkip = false
   }) {
@@ -648,7 +647,6 @@ export class ClankerBot {
       event,
       reason,
       details,
-      fallbackText,
       maxOutputChars,
       allowSkip
     });
@@ -664,7 +662,10 @@ export class ClankerBot {
     sessionId = null,
     isEagerTurn = false,
     voiceEagerness = 0,
-    soundboardCandidates = []
+    soundboardCandidates = [],
+    onWebLookupStart = null,
+    onWebLookupComplete = null,
+    webSearchTimeoutMs = null
   }) {
     const runtime = createVoiceReplyRuntime(this);
     return await generateVoiceTurnReply(runtime, {
@@ -677,7 +678,10 @@ export class ClankerBot {
       sessionId,
       isEagerTurn,
       voiceEagerness,
-      soundboardCandidates
+      soundboardCandidates,
+      onWebLookupStart,
+      onWebLookupComplete,
+      webSearchTimeoutMs
     });
   }
 
@@ -842,6 +846,7 @@ export class ClankerBot {
       },
       screenShare: screenShareCapability,
       videoContext,
+      channelMode: isInitiativeChannel ? "initiative" : "non_initiative",
       maxMediaPromptChars: resolveMaxMediaPromptLen(settings),
       mediaPromptCraftGuidance: getMediaPromptCraftGuidance(settings)
     };
@@ -1012,7 +1017,7 @@ export class ClankerBot {
     }
 
     const mediaDirective = pickReplyMediaDirective(replyDirective);
-    let finalText = sanitizeBotText(replyDirective.text || (mediaDirective ? "here you go" : ""));
+    let finalText = sanitizeBotText(replyDirective.text || "");
     let mentionResolution = emptyMentionResolution();
     finalText = normalizeSkipSentinel(finalText);
     const screenShareOffer = await this.maybeHandleScreenShareOfferIntent({
@@ -1026,10 +1031,25 @@ export class ClankerBot {
       textParts.push(screenShareOffer.appendText);
       finalText = sanitizeBotText(textParts.join("\n"), 1700);
     }
-    if ((!finalText || finalText === "[SKIP]") && screenShareOffer.fallbackText) {
-      finalText = sanitizeBotText(screenShareOffer.fallbackText, 1700);
+    const allowMediaOnlyReply = !finalText && Boolean(mediaDirective);
+    const modelProducedSkip = finalText === "[SKIP]";
+    const modelProducedEmpty = !finalText;
+    if (modelProducedEmpty && !allowMediaOnlyReply) {
+      this.store.logAction({
+        kind: "bot_error",
+        guildId: message.guildId,
+        channelId: message.channelId,
+        messageId: message.id,
+        userId: this.client.user?.id || null,
+        content: "reply_model_output_empty",
+        metadata: {
+          source,
+          triggerMessageIds,
+          addressed: Boolean(addressSignal?.triggered)
+        }
+      });
     }
-    if (!finalText || finalText === "[SKIP]") {
+    if (finalText === "[SKIP]" || (!finalText && !allowMediaOnlyReply)) {
       this.logSkippedReply({
         message,
         source,
@@ -1037,7 +1057,7 @@ export class ClankerBot {
         addressSignal,
         generation,
         usedWebSearchFollowup,
-        reason: finalText ? "llm_skip" : "empty_reply",
+        reason: modelProducedSkip ? "llm_skip" : "empty_reply",
         reaction,
         screenShareOffer,
         performance
@@ -1171,6 +1191,35 @@ export class ClankerBot {
       videoUsed = videoResult.videoUsed;
       videoBudgetBlocked = videoResult.blockedByBudget;
       videoCapabilityBlocked = videoResult.blockedByCapability;
+    }
+
+    if (!finalText && !imageUsed && !videoUsed && !gifUsed) {
+      this.store.logAction({
+        kind: "bot_error",
+        guildId: message.guildId,
+        channelId: message.channelId,
+        messageId: message.id,
+        userId: this.client.user?.id || null,
+        content: "reply_model_output_empty_after_media",
+        metadata: {
+          source,
+          triggerMessageIds,
+          addressed: Boolean(addressSignal?.triggered)
+        }
+      });
+      this.logSkippedReply({
+        message,
+        source,
+        triggerMessageIds,
+        addressSignal,
+        generation,
+        usedWebSearchFollowup,
+        reason: "empty_reply_after_media",
+        reaction,
+        screenShareOffer,
+        performance
+      });
+      return false;
     }
 
     const typingStartedAtMs = Date.now();
@@ -1421,11 +1470,25 @@ export class ClankerBot {
 
     const finalText = this.composeAutomationControlReply({
       modelText: replyDirective?.text,
-      fallbackText: result.fallbackText,
       detailLines: result.detailLines
     });
 
-    if (!finalText || finalText === "[SKIP]") return true;
+    if (!finalText || finalText === "[SKIP]") {
+      this.store.logAction({
+        kind: "bot_error",
+        guildId: message.guildId,
+        channelId: message.channelId,
+        messageId: message.id,
+        userId: this.client.user?.id || null,
+        content: "automation_control_reply_missing",
+        metadata: {
+          operation,
+          source,
+          automationControl: result.metadata || null
+        }
+      });
+      return true;
+    }
 
     const typingStartedAtMs = Date.now();
     await message.channel.sendTyping();
@@ -1491,7 +1554,6 @@ export class ClankerBot {
     const empty = {
       offered: false,
       appendText: "",
-      fallbackText: "",
       linkUrl: null,
       explicitRequest: false,
       intentRequested: false,
@@ -1505,17 +1567,16 @@ export class ClankerBot {
     if (!message?.guildId || !message?.channelId) return empty;
     if (!manager) {
       if (!explicitRequest) return empty;
-      const fallbackText = await this.composeScreenShareUnavailableMessage({
+      const appendText = await this.composeScreenShareUnavailableMessage({
         message,
         settings,
         reason: "screen_share_manager_unavailable",
-        source,
-        baseline: "i can't generate a screen-share link right now."
+        source
       });
       return {
         ...empty,
         explicitRequest: true,
-        fallbackText
+        appendText
       };
     }
 
@@ -1559,16 +1620,11 @@ export class ClankerBot {
           reason: created?.reason || "unknown"
         };
       }
-      const unavailableBaseline = String(
-        created?.message ||
-          "can't spin up a share link right now. i need to be in vc with you, in gemini realtime mode."
-      ).slice(0, SCREEN_SHARE_MESSAGE_MAX_CHARS);
-      const fallbackText = await this.composeScreenShareUnavailableMessage({
+      const appendText = await this.composeScreenShareUnavailableMessage({
         message,
         settings,
         reason: created?.reason || "unknown",
-        source,
-        baseline: unavailableBaseline
+        source
       });
       return {
         ...empty,
@@ -1576,7 +1632,7 @@ export class ClankerBot {
         intentRequested,
         confidence,
         reason: created?.reason || "unknown",
-        fallbackText
+        appendText
       };
     }
 
@@ -1615,7 +1671,6 @@ export class ClankerBot {
     return {
       offered: true,
       appendText,
-      fallbackText: "",
       linkUrl,
       explicitRequest,
       intentRequested,
@@ -1634,10 +1689,6 @@ export class ClankerBot {
     confidence = 0,
     source = "message_event"
   }) {
-    const baseline = explicitRequest
-      ? `screen-share link: ${linkUrl}\nopen it and hit Start Sharing (expires in ${expiresInMinutes}m).`
-      : `if it helps, share your screen here: ${linkUrl} (expires in ${expiresInMinutes}m).`;
-
     const composed = await this.composeVoiceOperationalMessage({
       settings,
       guildId: message.guildId,
@@ -1654,16 +1705,47 @@ export class ClankerBot {
         confidence: Number(confidence || 0),
         source: String(source || "message_event")
       },
-      fallbackText: baseline,
       maxOutputChars: SCREEN_SHARE_MESSAGE_MAX_CHARS
     });
 
     const normalized = sanitizeBotText(
-      normalizeSkipSentinel(String(composed || baseline)),
+      normalizeSkipSentinel(String(composed || "")),
       SCREEN_SHARE_MESSAGE_MAX_CHARS
     );
-    if (!normalized || normalized === "[SKIP]") return baseline;
-    if (!String(normalized).includes(linkUrl)) return baseline;
+    if (!normalized || normalized === "[SKIP]") {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: message.guildId,
+        channelId: message.channelId,
+        messageId: message.id,
+        userId: message.author?.id || null,
+        content: "screen_share_offer_message_empty",
+        metadata: {
+          explicitRequest: Boolean(explicitRequest),
+          intentRequested: Boolean(intentRequested),
+          confidence: Number(confidence || 0),
+          source: String(source || "message_event")
+        }
+      });
+      return "";
+    }
+    if (!String(normalized).includes(linkUrl)) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: message.guildId,
+        channelId: message.channelId,
+        messageId: message.id,
+        userId: message.author?.id || null,
+        content: "screen_share_offer_message_missing_link",
+        metadata: {
+          explicitRequest: Boolean(explicitRequest),
+          intentRequested: Boolean(intentRequested),
+          confidence: Number(confidence || 0),
+          source: String(source || "message_event")
+        }
+      });
+      return "";
+    }
     return normalized;
   }
 
@@ -1671,17 +1753,8 @@ export class ClankerBot {
     message,
     settings,
     reason = "unavailable",
-    source = "message_event",
-    baseline = "i can't generate a screen-share link right now."
+    source = "message_event"
   }) {
-    const normalizedBaseline = sanitizeBotText(
-      normalizeSkipSentinel(String(baseline || "")),
-      SCREEN_SHARE_MESSAGE_MAX_CHARS
-    );
-    if (!normalizedBaseline || normalizedBaseline === "[SKIP]") {
-      return "i can't generate a screen-share link right now.";
-    }
-
     const composed = await this.composeVoiceOperationalMessage({
       settings,
       guildId: message.guildId,
@@ -1694,22 +1767,34 @@ export class ClankerBot {
         source: String(source || "message_event"),
         unavailable: true
       },
-      fallbackText: normalizedBaseline,
       maxOutputChars: SCREEN_SHARE_MESSAGE_MAX_CHARS
     });
 
     const normalized = sanitizeBotText(
-      normalizeSkipSentinel(String(composed || normalizedBaseline)),
+      normalizeSkipSentinel(String(composed || "")),
       SCREEN_SHARE_MESSAGE_MAX_CHARS
     );
-    if (!normalized || normalized === "[SKIP]") return normalizedBaseline;
+    if (!normalized || normalized === "[SKIP]") {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: message.guildId,
+        channelId: message.channelId,
+        messageId: message.id,
+        userId: message.author?.id || null,
+        content: "screen_share_unavailable_message_empty",
+        metadata: {
+          reason: String(reason || "unavailable"),
+          source: String(source || "message_event")
+        }
+      });
+      return "";
+    }
     return normalized;
   }
 
-  composeAutomationControlReply({ modelText, fallbackText, detailLines = [] }) {
+  composeAutomationControlReply({ modelText, detailLines = [] }) {
     return composeAutomationControlReply({
       modelText,
-      fallbackText,
       detailLines
     });
   }
@@ -2801,8 +2886,11 @@ export class ClankerBot {
     }
 
     if (image.imageUrl) {
+      const normalizedUrl = String(image.imageUrl || "").trim();
+      const trimmedText = String(text || "").trim();
+      const content = trimmedText ? `${trimmedText}\n${normalizedUrl}` : normalizedUrl;
       return {
-        payload: { content: `${text}\n${image.imageUrl}` },
+        payload: { content },
         imageUsed: true
       };
     }
@@ -3542,9 +3630,23 @@ export class ClankerBot {
       const complexImagePrompt = initiativeDirective.complexImagePrompt;
       const videoPrompt = initiativeDirective.videoPrompt;
       const mediaDirective = pickInitiativeMediaDirective(initiativeDirective);
-      let finalText = sanitizeBotText(initiativeDirective.text || (mediaDirective ? "quick drop" : generation.text));
+      let finalText = sanitizeBotText(initiativeDirective.text || (mediaDirective ? "" : generation.text));
       finalText = normalizeSkipSentinel(finalText);
-      if (!finalText || finalText === "[SKIP]") return;
+      const allowMediaOnlyInitiative = !finalText && Boolean(mediaDirective);
+      if (finalText === "[SKIP]") return;
+      if (!finalText && !allowMediaOnlyInitiative) {
+        this.store.logAction({
+          kind: "bot_error",
+          guildId: channel.guildId,
+          channelId: channel.id,
+          userId: this.client.user?.id || null,
+          content: "initiative_model_output_empty",
+          metadata: {
+            source: startup ? "initiative_startup" : "initiative_scheduler"
+          }
+        });
+        return;
+      }
       const linkPolicy = this.applyDiscoveryLinkPolicy({
         text: finalText,
         candidates: discoveryResult.candidates,
@@ -3552,7 +3654,22 @@ export class ClankerBot {
         requireDiscoveryLink
       });
       finalText = normalizeSkipSentinel(linkPolicy.text);
-      if (!finalText || finalText === "[SKIP]") return;
+      const allowMediaOnlyAfterLinkPolicy = !finalText && Boolean(mediaDirective);
+      if (finalText === "[SKIP]") return;
+      if (!finalText && !allowMediaOnlyAfterLinkPolicy) {
+        this.store.logAction({
+          kind: "bot_error",
+          guildId: channel.guildId,
+          channelId: channel.id,
+          userId: this.client.user?.id || null,
+          content: "initiative_model_output_empty_after_link_policy",
+          metadata: {
+            source: startup ? "initiative_startup" : "initiative_scheduler",
+            forcedLink: Boolean(linkPolicy.forcedLink)
+          }
+        });
+        return;
+      }
       const mentionResolution = await this.resolveDeterministicMentions({
         text: finalText,
         guild: channel.guild,
@@ -3643,6 +3760,20 @@ export class ClankerBot {
         videoUsed = videoResult.videoUsed;
         videoBudgetBlocked = videoResult.blockedByBudget;
         videoCapabilityBlocked = videoResult.blockedByCapability;
+      }
+
+      if (!finalText && !imageUsed && !videoUsed) {
+        this.store.logAction({
+          kind: "bot_error",
+          guildId: channel.guildId,
+          channelId: channel.id,
+          userId: this.client.user?.id || null,
+          content: "initiative_model_output_empty_after_media",
+          metadata: {
+            source: startup ? "initiative_startup" : "initiative_scheduler"
+          }
+        });
+        return;
       }
 
       await channel.sendTyping();

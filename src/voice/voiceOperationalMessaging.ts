@@ -8,10 +8,8 @@ export async function sendOperationalMessage(manager, {
   event = "voice_runtime",
   reason = null,
   details = {},
-  fallback = "",
   mustNotify = true
 }) {
-  const fallbackText = String(fallback || "").trim();
   const resolvedSettings =
     settings || (typeof manager.store?.getSettings === "function" ? manager.store.getSettings() : null);
   const detailsPayload =
@@ -43,42 +41,73 @@ export async function sendOperationalMessage(manager, {
   }
 
   let composedText = "";
-  if (manager.composeOperationalMessage && resolvedSettings) {
-    try {
-      composedText = String(
-        (await manager.composeOperationalMessage({
-          settings: resolvedSettings,
-          guildId: guildId || null,
-          channelId: channelId || channel?.id || null,
-          userId: userId || null,
-          messageId: messageId || null,
-          event: String(event || "voice_runtime"),
-          reason: reason ? String(reason) : null,
-          details: detailsPayload,
-          fallbackText,
-          allowSkip: !mustNotify
-        })) || ""
-      ).trim();
-    } catch (error) {
-      manager.store.logAction({
-        kind: "voice_error",
+  if (!manager.composeOperationalMessage || !resolvedSettings) {
+    manager.store.logAction({
+      kind: "voice_error",
+      guildId: guildId || null,
+      channelId: channelId || channel?.id || null,
+      messageId: messageId || null,
+      userId: userId || manager.client.user?.id || null,
+      content: "voice_message_compose_unavailable",
+      metadata: {
+        event,
+        reason,
+        hasComposeOperationalMessage: Boolean(manager.composeOperationalMessage),
+        hasResolvedSettings: Boolean(resolvedSettings)
+      }
+    });
+    return false;
+  }
+
+  try {
+    composedText = String(
+      (await manager.composeOperationalMessage({
+        settings: resolvedSettings,
         guildId: guildId || null,
         channelId: channelId || channel?.id || null,
+        userId: userId || null,
         messageId: messageId || null,
-        userId: userId || manager.client.user?.id || null,
-        content: `voice_message_compose_failed: ${String(error?.message || error)}`,
-        metadata: {
-          event,
-          reason
-        }
-      });
-    }
+        event: String(event || "voice_runtime"),
+        reason: reason ? String(reason) : null,
+        details: detailsPayload,
+        allowSkip: !mustNotify
+      })) || ""
+    ).trim();
+  } catch (error) {
+    manager.store.logAction({
+      kind: "voice_error",
+      guildId: guildId || null,
+      channelId: channelId || channel?.id || null,
+      messageId: messageId || null,
+      userId: userId || manager.client.user?.id || null,
+      content: `voice_message_compose_failed: ${String(error?.message || error)}`,
+      metadata: {
+        event,
+        reason
+      }
+    });
+    return false;
   }
 
   const normalizedComposedText = String(composedText || "").trim();
   const skipRequested = /^\[SKIP\]$/i.test(normalizedComposedText);
   if (!mustNotify) {
-    if (!normalizedComposedText || skipRequested) return true;
+    if (skipRequested) return true;
+    if (!normalizedComposedText) {
+      manager.store.logAction({
+        kind: "voice_error",
+        guildId: guildId || null,
+        channelId: channelId || resolvedChannel?.id || channel?.id || null,
+        messageId: messageId || null,
+        userId: userId || manager.client.user?.id || null,
+        content: "voice_message_model_empty",
+        metadata: {
+          event,
+          reason
+        }
+      });
+      return false;
+    }
     return await sendToChannel(manager, resolvedChannel, normalizedComposedText, {
       guildId,
       channelId: channelId || resolvedChannel?.id || null,
@@ -89,9 +118,27 @@ export async function sendOperationalMessage(manager, {
     });
   }
 
-  const content = String((skipRequested ? "" : normalizedComposedText) || fallbackText).trim();
-  if (!content) return false;
-  return await sendToChannel(manager, resolvedChannel, content, {
+  if (skipRequested) {
+    return true;
+  }
+
+  if (!normalizedComposedText) {
+    manager.store.logAction({
+      kind: "voice_error",
+      guildId: guildId || null,
+      channelId: channelId || resolvedChannel?.id || channel?.id || null,
+      messageId: messageId || null,
+      userId: userId || manager.client.user?.id || null,
+      content: "voice_message_model_empty",
+      metadata: {
+        event,
+        reason
+      }
+    });
+    return false;
+  }
+
+  return await sendToChannel(manager, resolvedChannel, normalizedComposedText, {
     guildId,
     channelId: channelId || resolvedChannel?.id || null,
     userId,

@@ -8,10 +8,9 @@ import { sanitizeBotText } from "../utils.ts";
 const MAX_AUTOMATIONS_PER_GUILD = 90;
 const MAX_AUTOMATION_LIST_ROWS = 10;
 
-export function composeAutomationControlReply({ modelText, fallbackText, detailLines = [] }) {
+export function composeAutomationControlReply({ modelText, detailLines = [] }) {
   const cleanedModel = sanitizeBotText(normalizeSkipSentinel(modelText || ""), 500);
-  const cleanedFallback = sanitizeBotText(normalizeSkipSentinel(fallbackText || ""), 500);
-  const body = cleanedModel && cleanedModel !== "[SKIP]" ? cleanedModel : cleanedFallback;
+  const body = cleanedModel && cleanedModel !== "[SKIP]" ? cleanedModel : "";
   if (!body || body === "[SKIP]") return "";
 
   const extra = (Array.isArray(detailLines) ? detailLines : [])
@@ -31,7 +30,6 @@ export async function applyAutomationControlAction(runtime, { message, settings,
   if (!guildId) {
     return {
       handled: true,
-      fallbackText: "can't manage schedules outside a server channel rn.",
       detailLines: [],
       metadata: {
         operation,
@@ -50,7 +48,6 @@ export async function applyAutomationControlAction(runtime, { message, settings,
     if (!rows.length) {
       return {
         handled: true,
-        fallbackText: "no scheduled jobs right now.",
         detailLines: [],
         metadata: {
           operation,
@@ -63,7 +60,6 @@ export async function applyAutomationControlAction(runtime, { message, settings,
     const detailLines = rows.map((row) => formatAutomationListLine(row));
     return {
       handled: true,
-      fallbackText: "here's what's on deck:",
       detailLines,
       metadata: {
         operation,
@@ -80,7 +76,6 @@ export async function applyAutomationControlAction(runtime, { message, settings,
     if (!instruction || !schedule) {
       return {
         handled: true,
-        fallbackText: "i need both a task and schedule to set that up.",
         detailLines: [],
         metadata: {
           operation,
@@ -97,7 +92,6 @@ export async function applyAutomationControlAction(runtime, { message, settings,
     if (currentCount >= MAX_AUTOMATIONS_PER_GUILD) {
       return {
         handled: true,
-        fallbackText: `too many scheduled jobs already (${MAX_AUTOMATIONS_PER_GUILD} max).`,
         detailLines: [],
         metadata: {
           operation,
@@ -113,7 +107,6 @@ export async function applyAutomationControlAction(runtime, { message, settings,
     if (!runtime.isChannelAllowed(settings, targetChannelId)) {
       return {
         handled: true,
-        fallbackText: "that channel is blocked by my current settings.",
         detailLines: [],
         metadata: {
           operation,
@@ -128,7 +121,6 @@ export async function applyAutomationControlAction(runtime, { message, settings,
     if (!channel || !channel.isTextBased?.() || typeof channel.send !== "function") {
       return {
         handled: true,
-        fallbackText: "can't post there right now, pick another channel.",
         detailLines: [],
         metadata: {
           operation,
@@ -147,7 +139,6 @@ export async function applyAutomationControlAction(runtime, { message, settings,
     if (!nextRunAt) {
       return {
         handled: true,
-        fallbackText: "that schedule format didn't parse cleanly. try like 'daily at 1pm'.",
         detailLines: [],
         metadata: {
           operation,
@@ -172,7 +163,6 @@ export async function applyAutomationControlAction(runtime, { message, settings,
     if (!created) {
       return {
         handled: true,
-        fallbackText: "that didn't save right. try again in a sec.",
         detailLines: [],
         metadata: {
           operation,
@@ -199,7 +189,6 @@ export async function applyAutomationControlAction(runtime, { message, settings,
 
     return {
       handled: true,
-      fallbackText: "bet, scheduled.",
       detailLines: [formatAutomationListLine(created)],
       metadata: {
         operation,
@@ -221,7 +210,6 @@ export async function applyAutomationControlAction(runtime, { message, settings,
     if (!targetRows.length) {
       return {
         handled: true,
-        fallbackText: "couldn't find a matching scheduled job.",
         detailLines: [],
         metadata: {
           operation,
@@ -276,7 +264,6 @@ export async function applyAutomationControlAction(runtime, { message, settings,
     if (!updatedRows.length) {
       return {
         handled: true,
-        fallbackText: "found it, but couldn't update it cleanly.",
         detailLines: [],
         metadata: {
           operation,
@@ -304,10 +291,8 @@ export async function applyAutomationControlAction(runtime, { message, settings,
       runtime.maybeRunAutomationCycle().catch(() => undefined);
     }
 
-    const verb = operation === "pause" ? "paused" : operation === "resume" ? "resumed" : "deleted";
     return {
       handled: true,
-      fallbackText: `${verb}.`,
       detailLines: updatedRows.map((row) => formatAutomationListLine(row)),
       metadata: {
         operation,
