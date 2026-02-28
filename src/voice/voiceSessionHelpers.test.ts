@@ -4,6 +4,7 @@ import {
   createBotAudioPlaybackStream,
   isBotNameAddressed,
   extractSoundboardDirective,
+  parseSoundboardDirectiveSequence,
   getRealtimeCommitMinimumBytes,
   getRealtimeRuntimeLabel,
   isFinalRealtimeTranscriptEventType,
@@ -103,6 +104,21 @@ test("extractSoundboardDirective strips directive and returns selected reference
   const parsed = extractSoundboardDirective("that was crazy [[SOUNDBOARD:1234567890@111222333]]");
   assert.equal(parsed.text, "that was crazy");
   assert.equal(parsed.reference, "1234567890@111222333");
+});
+
+test("parseSoundboardDirectiveSequence preserves ordered inline directives", () => {
+  const parsed = parseSoundboardDirectiveSequence(
+    "yo [[SOUNDBOARD:airhorn@123]] hold up [[SOUNDBOARD:rimshot@456]] done"
+  );
+  assert.equal(parsed.text, "yo hold up done");
+  assert.deepEqual(parsed.references, ["airhorn@123", "rimshot@456"]);
+  assert.deepEqual(parsed.sequence, [
+    { type: "speech", text: "yo " },
+    { type: "soundboard", reference: "airhorn@123" },
+    { type: "speech", text: " hold up " },
+    { type: "soundboard", reference: "rimshot@456" },
+    { type: "speech", text: " done" }
+  ]);
 });
 
 test("parseResponseDoneModel extracts response model from response.done events", () => {

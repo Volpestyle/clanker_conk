@@ -486,7 +486,7 @@ export function parseReplyDirectives(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_
     openArticleRef: null,
     memoryLine: null,
     selfMemoryLine: null,
-    soundboardRef: null,
+    soundboardRefs: [],
     screenShareLinkRequested: false,
     leaveVoiceChannelRequested: false
   };
@@ -592,8 +592,9 @@ export function parseReplyDirectives(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_
 
     const soundboardMatch = parsed.text.match(SOUNDBOARD_DIRECTIVE_RE);
     if (soundboardMatch) {
-      if (!parsed.soundboardRef) {
-        parsed.soundboardRef = normalizeDirectiveText(soundboardMatch[1], MAX_SOUNDBOARD_REF_LEN) || null;
+      const normalizedRef = normalizeDirectiveText(soundboardMatch[1], MAX_SOUNDBOARD_REF_LEN) || null;
+      if (normalizedRef) {
+        parsed.soundboardRefs.unshift(normalizedRef);
       }
       parsed.text = parsed.text.slice(0, soundboardMatch.index).trim();
       continue;

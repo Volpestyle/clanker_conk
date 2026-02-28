@@ -502,13 +502,36 @@ test("generateVoiceTurnReply parses memory and soundboard directives", async () 
   });
 
   assert.equal(reply.text, "bet");
-  assert.equal(reply.soundboardRef, "airhorn@123");
+  assert.deepEqual(reply.soundboardRefs, ["airhorn@123"]);
   assert.equal(ingests.length, 0);
   assert.equal(remembers.length, 2);
   assert.equal(remembers[0]?.line, "likes pizza");
   assert.equal(remembers[0]?.scope, "lore");
   assert.equal(remembers[1]?.line, "i keep replies concise");
   assert.equal(remembers[1]?.scope, "self");
+});
+
+test("generateVoiceTurnReply preserves ordered trailing soundboard directives", async () => {
+  const { bot } = createVoiceBot({
+    generationText: "bet [[SOUNDBOARD:airhorn@123]] [[SOUNDBOARD:rimshot@456]]"
+  });
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      voice: {
+        soundboard: {
+          enabled: true
+        }
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "drop both",
+    soundboardCandidates: ["airhorn@123", "rimshot@456"]
+  });
+
+  assert.equal(reply.text, "bet");
+  assert.deepEqual(reply.soundboardRefs, ["airhorn@123", "rimshot@456"]);
 });
 
 test("generateVoiceTurnReply drops soundboard directive when soundboard is disabled", async () => {
@@ -531,7 +554,30 @@ test("generateVoiceTurnReply drops soundboard directive when soundboard is disab
   });
 
   assert.equal(reply.text, "copy that");
-  assert.equal(reply.soundboardRef, null);
+  assert.deepEqual(reply.soundboardRefs, []);
+});
+
+test("generateVoiceTurnReply strips inline soundboard directives when soundboard is disabled", async () => {
+  const { bot } = createVoiceBot({
+    generationText: "copy [[SOUNDBOARD:airhorn@123]] that"
+  });
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      voice: {
+        soundboard: {
+          enabled: false
+        }
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "say something",
+    soundboardCandidates: ["airhorn@123"]
+  });
+
+  assert.equal(reply.text, "copy that");
+  assert.deepEqual(reply.soundboardRefs, []);
 });
 
 test("generateVoiceTurnReply strips selected soundboard id and name from spoken text", async () => {
@@ -554,7 +600,7 @@ test("generateVoiceTurnReply strips selected soundboard id and name from spoken 
   });
 
   assert.equal(reply.text, "playing now");
-  assert.equal(reply.soundboardRef, "airhorn@123");
+  assert.deepEqual(reply.soundboardRefs, ["airhorn@123"]);
 });
 
 test("generateVoiceTurnReply preserves soundboard ref when scrubbed speech becomes empty", async () => {
@@ -577,7 +623,7 @@ test("generateVoiceTurnReply preserves soundboard ref when scrubbed speech becom
   });
 
   assert.equal(reply.text, "");
-  assert.equal(reply.soundboardRef, "airhorn@123");
+  assert.deepEqual(reply.soundboardRefs, ["airhorn@123"]);
 });
 
 test("generateVoiceTurnReply logs voice errors when generation fails", async () => {

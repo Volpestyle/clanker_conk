@@ -79,6 +79,7 @@ import {
   isVoiceTurnAddressedToBot,
   matchSoundboardReference,
   normalizeVoiceText,
+  parseSoundboardDirectiveSequence,
   parsePreferredSoundboardReferences,
   parseRealtimeErrorPayload,
   parseResponseDoneId,
@@ -96,6 +97,9 @@ import {
   AUDIO_PLAYBACK_PUMP_CHUNK_BYTES,
   AUDIO_PLAYBACK_QUEUE_WARN_BYTES,
   AUDIO_PLAYBACK_QUEUE_WARN_COOLDOWN_MS,
+  BARGE_IN_ASSERTION_MS,
+  BARGE_IN_MIN_SPEECH_MS,
+  BARGE_IN_SUPPRESSION_MAX_MS,
   BOT_DISCONNECT_GRACE_MS,
   BOT_TURN_DEFERRED_COALESCE_MAX,
   BOT_TURN_DEFERRED_FLUSH_DELAY_MS,
@@ -106,6 +110,10 @@ import {
   DISCORD_PCM_FRAME_BYTES,
   FOCUSED_SPEAKER_CONTINUATION_MS,
   INPUT_SPEECH_END_SILENCE_MS,
+  LEAVE_DIRECTIVE_PLAYBACK_MAX_WAIT_MS,
+  LEAVE_DIRECTIVE_PLAYBACK_NO_SIGNAL_GRACE_MS,
+  LEAVE_DIRECTIVE_PLAYBACK_POLL_MS,
+  LEAVE_DIRECTIVE_REALTIME_AUDIO_START_WAIT_MS,
   MAX_INACTIVITY_SECONDS,
   MAX_MAX_SESSION_MINUTES,
   MAX_RESPONSE_SILENCE_RETRIES,
@@ -1010,13 +1018,13 @@ export class VoiceSessionManager {
       const finalTranscriptEvent = isFinalRealtimeTranscriptEventType(transcriptEventType, transcriptSource);
       const parsedDirective =
         transcriptSource === "output"
-          ? extractSoundboardDirective(transcript)
+          ? parseSoundboardDirectiveSequence(transcript)
           : {
               text: transcript,
-              reference: null
+              references: []
             };
       const transcriptForLogs = String(parsedDirective?.text || transcript).trim();
-      const requestedSoundboardRef = String(parsedDirective?.reference || "").trim();
+      const requestedSoundboardRefs = this.normalizeSoundboardRefs(parsedDirective?.references || []);
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
@@ -1028,7 +1036,7 @@ export class VoiceSessionManager {
           transcript: transcriptForLogs || transcript,
           transcriptEventType: transcriptEventType || null,
           transcriptSource,
-          soundboardRef: requestedSoundboardRef || null
+          soundboardRefs: requestedSoundboardRefs.length ? requestedSoundboardRefs : null
         }
       });
 
@@ -1053,15 +1061,21 @@ export class VoiceSessionManager {
         });
       }
 
-      if (transcriptSource === "output" && requestedSoundboardRef && finalTranscriptEvent) {
-        this.maybeTriggerAssistantDirectedSoundboard({
-          session,
-          settings: resolvedSettings,
-          userId: this.client.user?.id || null,
-          transcript: transcriptForLogs || transcript,
-          requestedRef: requestedSoundboardRef,
-          source: "realtime_output_transcript"
-        }).catch(() => undefined);
+      if (transcriptSource === "output" && requestedSoundboardRefs.length > 0 && finalTranscriptEvent) {
+        (async () => {
+          let directiveIndex = 0;
+          for (const requestedRef of requestedSoundboardRefs) {
+            directiveIndex += 1;
+            await this.maybeTriggerAssistantDirectedSoundboard({
+              session,
+              settings: resolvedSettings,
+              userId: this.client.user?.id || null,
+              transcript: transcriptForLogs || transcript,
+              requestedRef,
+              source: `realtime_output_transcript_${directiveIndex}`
+            });
+          }
+        })().catch(() => undefined);
       }
     };
 
@@ -2371,6 +2385,276 @@ export class VoiceSessionManager {
       });
       return false;
     }
+  }
+
+  normalizeSoundboardRefs(soundboardRefs = []) {
+    return (Array.isArray(soundboardRefs) ? soundboardRefs : [])
+      .map((entry) =>
+        String(entry || "")
+          .trim()
+          .slice(0, 180)
+      )
+      .filter(Boolean)
+      .slice(0, 12);
+  }
+
+  buildVoiceReplyPlaybackPlan({
+    replyText = "",
+    trailingSoundboardRefs = []
+  }) {
+    const parsed = parseSoundboardDirectiveSequence(replyText);
+    const sequence = Array.isArray(parsed?.sequence) ? parsed.sequence : [];
+    const steps = [];
+    const appendSpeech = (rawText) => {
+      const normalized = normalizeVoiceText(rawText, STT_REPLY_MAX_CHARS);
+      if (!normalized) return;
+      const last = steps[steps.length - 1];
+      if (last?.type === "speech") {
+        last.text = normalizeVoiceText(`${last.text} ${normalized}`, STT_REPLY_MAX_CHARS);
+      } else {
+        steps.push({
+          type: "speech",
+          text: normalized
+        });
+      }
+    };
+
+    for (const entry of sequence) {
+      if (!entry || typeof entry !== "object") continue;
+      if (entry.type === "speech") {
+        appendSpeech(entry.text);
+        continue;
+      }
+      if (entry.type === "soundboard") {
+        const reference = String(entry.reference || "")
+          .trim()
+          .slice(0, 180);
+        if (!reference) continue;
+        steps.push({
+          type: "soundboard",
+          reference
+        });
+      }
+    }
+
+    for (const reference of this.normalizeSoundboardRefs(trailingSoundboardRefs)) {
+      steps.push({
+        type: "soundboard",
+        reference
+      });
+    }
+
+    const spokenText = normalizeVoiceText(parsed?.text || "", STT_REPLY_MAX_CHARS);
+    const soundboardRefs = steps
+      .filter((entry) => entry?.type === "soundboard")
+      .map((entry) => entry.reference);
+    return {
+      spokenText,
+      steps,
+      soundboardRefs
+    };
+  }
+
+  async playVoiceReplyInOrder({
+    session,
+    settings,
+    spokenText = "",
+    playbackSteps = [],
+    source = "voice_reply",
+    preferRealtimeUtterance = false
+  }) {
+    if (!session || session.ending) {
+      return {
+        completed: false,
+        spokeLine: false,
+        requestedRealtimeUtterance: false,
+        playedSoundboardCount: 0
+      };
+    }
+    const steps = Array.isArray(playbackSteps) ? playbackSteps : [];
+    if (!steps.length) {
+      return {
+        completed: true,
+        spokeLine: false,
+        requestedRealtimeUtterance: false,
+        playedSoundboardCount: 0
+      };
+    }
+
+    const requiresOrderedPlayback = steps.some((entry) => entry?.type === "soundboard");
+    let speechStep = 0;
+    let soundboardStep = 0;
+    let spokeLine = false;
+    let requestedRealtimeUtterance = false;
+    let playedSoundboardCount = 0;
+
+    for (const step of steps) {
+      if (session.ending) {
+        return {
+          completed: false,
+          spokeLine,
+          requestedRealtimeUtterance,
+          playedSoundboardCount
+        };
+      }
+      if (!step || typeof step !== "object") continue;
+      if (step.type === "speech") {
+        const segmentText = normalizeVoiceText(step.text, STT_REPLY_MAX_CHARS);
+        if (!segmentText) continue;
+        speechStep += 1;
+        const speechSource = `${String(source || "voice_reply")}:speech_${speechStep}`;
+        if (preferRealtimeUtterance) {
+          const requested = this.requestRealtimeTextUtterance({
+            session,
+            text: segmentText,
+            userId: this.client.user?.id || null,
+            source: speechSource
+          });
+          if (requested) {
+            spokeLine = true;
+            requestedRealtimeUtterance = true;
+            if (requiresOrderedPlayback) {
+              await this.waitForLeaveDirectivePlayback({
+                session,
+                expectRealtimeAudio: true,
+                source: speechSource
+              });
+            }
+            continue;
+          }
+        }
+        const spoke = await this.speakVoiceLineWithTts({
+          session,
+          settings,
+          text: segmentText,
+          source: `${speechSource}:tts_fallback`
+        });
+        if (!spoke) {
+          return {
+            completed: false,
+            spokeLine,
+            requestedRealtimeUtterance,
+            playedSoundboardCount
+          };
+        }
+        spokeLine = true;
+        if (requiresOrderedPlayback) {
+          await this.waitForLeaveDirectivePlayback({
+            session,
+            expectRealtimeAudio: false,
+            source: speechSource
+          });
+        }
+        continue;
+      }
+      if (step.type === "soundboard") {
+        const requestedRef = String(step.reference || "")
+          .trim()
+          .slice(0, 180);
+        if (!requestedRef) continue;
+        soundboardStep += 1;
+        await this.maybeTriggerAssistantDirectedSoundboard({
+          session,
+          settings,
+          userId: this.client.user?.id || null,
+          transcript: spokenText,
+          requestedRef,
+          source: `${String(source || "voice_reply")}:soundboard_${soundboardStep}`
+        });
+        playedSoundboardCount += 1;
+      }
+    }
+
+    return {
+      completed: true,
+      spokeLine,
+      requestedRealtimeUtterance,
+      playedSoundboardCount
+    };
+  }
+
+  async waitForLeaveDirectivePlayback({
+    session,
+    expectRealtimeAudio = false,
+    source = "leave_directive"
+  }) {
+    if (!session || session.ending) return;
+    const hasPlaybackSignals =
+      typeof session.botTurnOpen === "boolean" ||
+      (session.audioPlaybackQueue && typeof session.audioPlaybackQueue === "object") ||
+      (expectRealtimeAudio && session.pendingResponse && typeof session.pendingResponse === "object");
+    if (!hasPlaybackSignals) return;
+
+    const waitStartedAt = Date.now();
+    let audioRequestedAt = Math.max(
+      0,
+      Number(session.pendingResponse?.requestedAt || 0),
+      Number(session.lastResponseRequestAt || 0)
+    );
+    if (!audioRequestedAt) {
+      audioRequestedAt = waitStartedAt;
+    }
+    const deadlineAt = waitStartedAt + LEAVE_DIRECTIVE_PLAYBACK_MAX_WAIT_MS;
+    let observedPlayback = false;
+    let timedOutOnStart = false;
+
+    while (!session.ending) {
+      const now = Date.now();
+      if (now >= deadlineAt) break;
+      const queueState =
+        session.audioPlaybackQueue && typeof session.audioPlaybackQueue === "object"
+          ? session.audioPlaybackQueue
+          : null;
+      const queuedBytes = Math.max(0, Number(queueState?.queuedBytes || 0));
+      const queueBusy = Boolean(queueState?.pumping || queueState?.waitingDrain);
+      const botTurnOpen = Boolean(session.botTurnOpen);
+      const pending = session.pendingResponse;
+      const pendingHasAudio = pending ? this.pendingResponseHasAudio(session, pending) : false;
+      const hasPostRequestAudio = Number(session.lastAudioDeltaAt || 0) >= audioRequestedAt;
+
+      if (botTurnOpen || queueBusy || queuedBytes > 0 || pendingHasAudio || hasPostRequestAudio) {
+        observedPlayback = true;
+      }
+
+      if (observedPlayback && !botTurnOpen && !queueBusy && queuedBytes <= 0) {
+        break;
+      }
+
+      const elapsedMs = now - waitStartedAt;
+      if (!observedPlayback) {
+        if (expectRealtimeAudio && elapsedMs >= LEAVE_DIRECTIVE_REALTIME_AUDIO_START_WAIT_MS) {
+          timedOutOnStart = true;
+          break;
+        }
+        if (!expectRealtimeAudio && elapsedMs >= LEAVE_DIRECTIVE_PLAYBACK_NO_SIGNAL_GRACE_MS) {
+          break;
+        }
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, LEAVE_DIRECTIVE_PLAYBACK_POLL_MS));
+    }
+
+    const queueState =
+      session.audioPlaybackQueue && typeof session.audioPlaybackQueue === "object"
+        ? session.audioPlaybackQueue
+        : null;
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.client.user?.id || null,
+      content: "leave_directive_playback_wait",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "leave_directive"),
+        expectRealtimeAudio,
+        observedPlayback,
+        timedOutOnStart,
+        elapsedMs: Math.max(0, Date.now() - waitStartedAt),
+        botTurnOpen: Boolean(session.botTurnOpen),
+        queuedBytes: Math.max(0, Number(queueState?.queuedBytes || 0))
+      }
+    });
   }
 
   async speakVoiceLineWithTts({
@@ -5081,7 +5365,7 @@ export class VoiceSessionManager {
     };
 
     let replyText = "";
-    let requestedSoundboardRef = "";
+    let requestedSoundboardRefs = [];
     let usedWebSearchFollowup = false;
     let usedOpenArticleFollowup = false;
     let usedScreenShareOffer = false;
@@ -5127,14 +5411,14 @@ export class VoiceSessionManager {
           ? generated
           : {
               text: generated,
-              soundboardRef: null,
+              soundboardRefs: [],
               usedWebSearchFollowup: false,
               usedOpenArticleFollowup: false,
               usedScreenShareOffer: false,
               leaveVoiceChannelRequested: false
             };
       replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
-      requestedSoundboardRef = String(generatedPayload?.soundboardRef || "").trim().slice(0, 180);
+      requestedSoundboardRefs = this.normalizeSoundboardRefs(generatedPayload?.soundboardRefs);
       usedWebSearchFollowup = Boolean(generatedPayload?.usedWebSearchFollowup);
       usedOpenArticleFollowup = Boolean(generatedPayload?.usedOpenArticleFollowup);
       usedScreenShareOffer = Boolean(generatedPayload?.usedScreenShareOffer);
@@ -5158,24 +5442,27 @@ export class VoiceSessionManager {
       }
     }
     if (session.ending) return;
-    if (!replyText && !requestedSoundboardRef && !leaveVoiceChannelRequested) return;
-
-    let spokeLine = false;
-    if (replyText) {
-      spokeLine = await this.speakVoiceLineWithTts({
-        session,
-        settings,
-        text: replyText,
-        source: "voice_stt_pipeline_tts"
-      });
-      if (!spokeLine) return;
-    }
+    const playbackPlan = this.buildVoiceReplyPlaybackPlan({
+      replyText,
+      trailingSoundboardRefs: requestedSoundboardRefs
+    });
+    if (!playbackPlan.spokenText && playbackPlan.soundboardRefs.length === 0 && !leaveVoiceChannelRequested) return;
+    const playbackResult = await this.playVoiceReplyInOrder({
+      session,
+      settings,
+      spokenText: playbackPlan.spokenText,
+      playbackSteps: playbackPlan.steps,
+      source: "stt_pipeline_reply",
+      preferRealtimeUtterance: false
+    });
+    if (!playbackResult.completed) return;
+    const spokeLine = Boolean(playbackResult.spokeLine);
 
     try {
       const replyAt = Date.now();
-      const replyRuntimeEvent = replyText
+      const replyRuntimeEvent = playbackPlan.spokenText
         ? "stt_pipeline_reply_spoken"
-        : requestedSoundboardRef
+        : playbackPlan.soundboardRefs.length > 0
           ? "stt_pipeline_soundboard_only"
           : leaveVoiceChannelRequested
             ? "stt_pipeline_leave_directive"
@@ -5184,11 +5471,11 @@ export class VoiceSessionManager {
         session.lastAudioDeltaAt = replyAt;
       }
       session.lastAssistantReplyAt = replyAt;
-      if (replyText) {
+      if (playbackPlan.spokenText) {
         this.recordVoiceTurn(session, {
           role: "assistant",
           userId: this.client.user?.id || null,
-          text: replyText
+          text: playbackPlan.spokenText
         });
       }
       this.store.logAction({
@@ -5199,9 +5486,10 @@ export class VoiceSessionManager {
         content: replyRuntimeEvent,
         metadata: {
           sessionId: session.id,
-          replyText: replyText || null,
+          replyText: playbackPlan.spokenText || null,
           spokeLine,
-          soundboardRef: requestedSoundboardRef || null,
+          soundboardRefs: playbackPlan.soundboardRefs,
+          playedSoundboardCount: Number(playbackResult.playedSoundboardCount || 0),
           usedWebSearchFollowup,
           usedOpenArticleFollowup,
           usedScreenShareOffer,
@@ -5213,16 +5501,6 @@ export class VoiceSessionManager {
           contextCharsSent: contextMessageChars
         }
       });
-      if (requestedSoundboardRef) {
-        await this.maybeTriggerAssistantDirectedSoundboard({
-          session,
-          settings,
-          userId: this.client.user?.id || null,
-          transcript: replyText,
-          requestedRef: requestedSoundboardRef,
-          source: "stt_pipeline_reply"
-        });
-      }
     } catch (error) {
       this.store.logAction({
         kind: "voice_error",
@@ -5237,6 +5515,14 @@ export class VoiceSessionManager {
     }
 
     if (!leaveVoiceChannelRequested || session.ending) return;
+
+    if (playbackPlan.spokenText && spokeLine) {
+      await this.waitForLeaveDirectivePlayback({
+        session,
+        expectRealtimeAudio: false,
+        source: "stt_pipeline_leave_directive"
+      });
+    }
 
     await this.endSession({
       guildId: session.guildId,
@@ -5394,7 +5680,7 @@ export class VoiceSessionManager {
           ? generated
           : {
               text: generated,
-              soundboardRef: null,
+              soundboardRefs: [],
               usedWebSearchFollowup: false,
               usedOpenArticleFollowup: false,
               usedScreenShareOffer: false,
@@ -5420,12 +5706,16 @@ export class VoiceSessionManager {
     }
 
     const replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
-    const requestedSoundboardRef = String(generatedPayload?.soundboardRef || "").trim().slice(0, 180);
+    const requestedSoundboardRefs = this.normalizeSoundboardRefs(generatedPayload?.soundboardRefs);
     const usedWebSearchFollowup = Boolean(generatedPayload?.usedWebSearchFollowup);
     const usedOpenArticleFollowup = Boolean(generatedPayload?.usedOpenArticleFollowup);
     const usedScreenShareOffer = Boolean(generatedPayload?.usedScreenShareOffer);
     const leaveVoiceChannelRequested = Boolean(generatedPayload?.leaveVoiceChannelRequested);
-    if (!replyText && !requestedSoundboardRef && !leaveVoiceChannelRequested) {
+    const playbackPlan = this.buildVoiceReplyPlaybackPlan({
+      replyText,
+      trailingSoundboardRefs: requestedSoundboardRefs
+    });
+    if (!playbackPlan.spokenText && playbackPlan.soundboardRefs.length === 0 && !leaveVoiceChannelRequested) {
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
@@ -5439,6 +5729,7 @@ export class VoiceSessionManager {
           usedWebSearchFollowup,
           usedOpenArticleFollowup,
           usedScreenShareOffer,
+          soundboardRefs: [],
           leaveVoiceChannelRequested,
           joinWindowActive,
           joinWindowAgeMs: Math.round(joinWindowAgeMs),
@@ -5452,7 +5743,7 @@ export class VoiceSessionManager {
       return true;
     }
 
-    if (replyText && session.mode === "openai_realtime") {
+    if (playbackPlan.spokenText && session.mode === "openai_realtime") {
       await this.prepareOpenAiRealtimeTurnContext({
         session,
         settings,
@@ -5464,29 +5755,25 @@ export class VoiceSessionManager {
 
     const replyRequestedAt = Date.now();
     session.lastAssistantReplyAt = replyRequestedAt;
-    let requestedRealtimeUtterance = false;
-    if (replyText) {
-      requestedRealtimeUtterance = this.requestRealtimeTextUtterance({
-        session,
-        text: replyText,
-        userId: this.client.user?.id || null,
-        source: `${String(source || "realtime")}:reply`
-      });
-      if (!requestedRealtimeUtterance) {
-        const spokeFallback = await this.speakVoiceLineWithTts({
-          session,
-          settings,
-          text: replyText,
-          source: `${String(source || "realtime")}:tts_fallback`
-        });
-        if (!spokeFallback) return false;
-        session.lastAudioDeltaAt = replyRequestedAt;
-        session.lastAssistantReplyAt = replyRequestedAt;
-      }
+    const playbackResult = await this.playVoiceReplyInOrder({
+      session,
+      settings,
+      spokenText: playbackPlan.spokenText,
+      playbackSteps: playbackPlan.steps,
+      source: `${String(source || "realtime")}:reply`,
+      preferRealtimeUtterance: true
+    });
+    if (!playbackResult.completed) return false;
+    const requestedRealtimeUtterance = Boolean(playbackResult.requestedRealtimeUtterance);
+    if (playbackResult.spokeLine && !requestedRealtimeUtterance) {
+      session.lastAudioDeltaAt = replyRequestedAt;
+      session.lastAssistantReplyAt = replyRequestedAt;
+    }
+    if (playbackPlan.spokenText) {
       this.recordVoiceTurn(session, {
         role: "assistant",
         userId: this.client.user?.id || null,
-        text: replyText
+        text: playbackPlan.spokenText
       });
     }
     this.store.logAction({
@@ -5499,9 +5786,10 @@ export class VoiceSessionManager {
         sessionId: session.id,
         mode: session.mode,
         source: String(source || "realtime"),
-        replyText: replyText || null,
+        replyText: playbackPlan.spokenText || null,
         requestedRealtimeUtterance,
-        soundboardRef: requestedSoundboardRef || null,
+        soundboardRefs: playbackPlan.soundboardRefs,
+        playedSoundboardCount: Number(playbackResult.playedSoundboardCount || 0),
         usedWebSearchFollowup,
         usedOpenArticleFollowup,
         usedScreenShareOffer,
@@ -5514,18 +5802,14 @@ export class VoiceSessionManager {
       }
     });
 
-    if (requestedSoundboardRef) {
-      await this.maybeTriggerAssistantDirectedSoundboard({
-        session,
-        settings,
-        userId: this.client.user?.id || null,
-        transcript: replyText,
-        requestedRef: requestedSoundboardRef,
-        source: `${String(source || "realtime")}:reply`
-      });
-    }
-
     if (leaveVoiceChannelRequested && !session.ending) {
+      if (playbackPlan.spokenText && playbackResult.spokeLine) {
+        await this.waitForLeaveDirectivePlayback({
+          session,
+          expectRealtimeAudio: requestedRealtimeUtterance,
+          source: `${String(source || "realtime")}:leave_directive`
+        });
+      }
       await this.endSession({
         guildId: session.guildId,
         reason: "assistant_leave_directive",
@@ -6393,7 +6677,7 @@ export class VoiceSessionManager {
       lines.push("Available sound refs:");
       lines.push(soundboardCandidateLines.join("\n"));
       lines.push(
-        "If you want to trigger a soundboard effect, append exactly one trailing directive: [[SOUNDBOARD:<sound_ref>]] using an exact ref from the list."
+        "If you want soundboard effects, insert one or more directives where they should fire: [[SOUNDBOARD:<sound_ref>]] using exact refs from the list."
       );
       lines.push("If no sound should play, omit that directive.");
       lines.push("Never mention or explain the directive in normal speech.");

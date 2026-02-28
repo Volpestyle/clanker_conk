@@ -276,32 +276,80 @@ export function isFinalRealtimeTranscriptEventType(eventType, source = null) {
 }
 
 export function extractSoundboardDirective(rawText) {
+  const parsed = parseSoundboardDirectiveSequence(rawText);
+  const refs = Array.isArray(parsed?.references) ? parsed.references : [];
   const text = String(rawText || "");
-  if (!text) {
+  if (!text || !refs.length) {
     return {
-      text: "",
+      text: parsed?.text || "",
       reference: null
     };
   }
 
-  let lastReference = "";
+  return {
+    text: parsed.text || "",
+    reference: refs[refs.length - 1] || null
+  };
+}
+
+export function parseSoundboardDirectiveSequence(rawText) {
+  const text = String(rawText || "");
+  if (!text) {
+    return {
+      text: "",
+      references: [],
+      sequence: []
+    };
+  }
+
+  const sequence = [];
+  const references = [];
+  let cursor = 0;
+
   SOUNDBOARD_DIRECTIVE_RE.lastIndex = 0;
   let match = null;
   while ((match = SOUNDBOARD_DIRECTIVE_RE.exec(text))) {
-    lastReference = String(match?.[1] || "")
+    const fullMatch = String(match?.[0] || "");
+    if (!fullMatch) continue;
+    const start = Number(match.index || 0);
+    const end = start + fullMatch.length;
+    if (start > cursor) {
+      sequence.push({
+        type: "speech",
+        text: text.slice(cursor, start)
+      });
+    }
+    const reference = String(match?.[1] || "")
       .trim()
       .slice(0, MAX_SOUNDBOARD_DIRECTIVE_REF_LEN);
+    if (reference) {
+      references.push(reference);
+      sequence.push({
+        type: "soundboard",
+        reference
+      });
+    }
+    cursor = end;
   }
   SOUNDBOARD_DIRECTIVE_RE.lastIndex = 0;
+
+  if (cursor < text.length) {
+    sequence.push({
+      type: "speech",
+      text: text.slice(cursor)
+    });
+  }
 
   const withoutDirective = text
     .replace(SOUNDBOARD_DIRECTIVE_RE, " ")
     .replace(/\s+/g, " ")
     .trim();
+  SOUNDBOARD_DIRECTIVE_RE.lastIndex = 0;
 
   return {
     text: withoutDirective,
-    reference: lastReference || null
+    references,
+    sequence
   };
 }
 

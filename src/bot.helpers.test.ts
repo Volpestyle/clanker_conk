@@ -216,7 +216,15 @@ test("composeReplyImagePrompt includes memory hints when provided", () => {
 test("parseReplyDirectives parses trailing soundboard directive", () => {
   const parsed = parseReplyDirectives("say less [[SOUNDBOARD:1234567890@555666777]]");
   assert.equal(parsed.text, "say less");
-  assert.equal(parsed.soundboardRef, "1234567890@555666777");
+  assert.deepEqual(parsed.soundboardRefs, ["1234567890@555666777"]);
+});
+
+test("parseReplyDirectives preserves ordered trailing soundboard directives", () => {
+  const parsed = parseReplyDirectives(
+    "say less [[SOUNDBOARD:1234567890@555666777]] [[SOUNDBOARD:111222333@444555666]]"
+  );
+  assert.equal(parsed.text, "say less");
+  assert.deepEqual(parsed.soundboardRefs, ["1234567890@555666777", "111222333@444555666"]);
 });
 
 test("parseReplyDirectives parses trailing self memory directive", () => {

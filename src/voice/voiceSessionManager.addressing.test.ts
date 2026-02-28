@@ -1944,6 +1944,7 @@ test("smoke: runRealtimeBrainReply passes join-window context into generation", 
 test("runRealtimeBrainReply ends VC when model requests leave directive", async () => {
   const manager = createManager();
   const endCalls = [];
+  const waitCalls = [];
   manager.resolveSoundboardCandidates = async () => ({
     candidates: []
   });
@@ -1951,9 +1952,12 @@ test("runRealtimeBrainReply ends VC when model requests leave directive", async 
   manager.prepareOpenAiRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => true;
   manager.generateVoiceTurn = async () => ({
-    text: "",
+    text: "aight, peace out",
     leaveVoiceChannelRequested: true
   });
+  manager.waitForLeaveDirectivePlayback = async (payload) => {
+    waitCalls.push(payload);
+  };
   manager.endSession = async (payload) => {
     endCalls.push(payload);
     return true;
@@ -1984,8 +1988,68 @@ test("runRealtimeBrainReply ends VC when model requests leave directive", async 
   });
 
   assert.equal(result, true);
+  assert.equal(waitCalls.length, 1);
+  assert.equal(waitCalls[0]?.expectRealtimeAudio, true);
   assert.equal(endCalls.length, 1);
   assert.equal(endCalls[0]?.reason, "assistant_leave_directive");
+});
+
+test("runRealtimeBrainReply plays inline and trailing soundboard directives in order", async () => {
+  const manager = createManager();
+  const eventOrder = [];
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
+  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.generateVoiceTurn = async () => ({
+    text: "yo [[SOUNDBOARD:airhorn@123]] done",
+    soundboardRefs: ["rimshot@456"]
+  });
+  manager.requestRealtimeTextUtterance = ({ text }) => {
+    eventOrder.push(`speech:${String(text)}`);
+    return true;
+  };
+  manager.waitForLeaveDirectivePlayback = async () => {
+    eventOrder.push("wait");
+  };
+  manager.maybeTriggerAssistantDirectedSoundboard = async ({ requestedRef }) => {
+    eventOrder.push(`sound:${String(requestedRef)}`);
+  };
+
+  const session = {
+    id: "session-realtime-inline-order-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 8_000,
+    maxEndsAt: Date.now() + 90_000,
+    inactivityEndsAt: Date.now() + 25_000,
+    realtimeClient: {},
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "sequence test",
+    directAddressed: true,
+    source: "realtime"
+  });
+
+  assert.equal(result, true);
+  assert.deepEqual(eventOrder, [
+    "speech:yo",
+    "wait",
+    "sound:airhorn@123",
+    "speech:done",
+    "wait",
+    "sound:rimshot@456"
+  ]);
 });
 
 test("runRealtimeBrainReply treats engaged thread turns as non-eager even without direct address", async () => {
@@ -2324,7 +2388,7 @@ test("runSttPipelineReply triggers soundboard even when generated speech is empt
   });
   manager.generateVoiceTurn = async () => ({
     text: "",
-    soundboardRef: "airhorn@123"
+    soundboardRefs: ["airhorn@123"]
   });
   manager.speakVoiceLineWithTts = async (payload) => {
     spokenLines.push(payload);
@@ -2364,9 +2428,53 @@ test("runSttPipelineReply triggers soundboard even when generated speech is empt
   assert.equal(soundboardCalls[0]?.requestedRef, "airhorn@123");
 });
 
+test("runSttPipelineReply plays inline soundboard directives in spoken order", async () => {
+  const manager = createManager();
+  const spokenLines = [];
+  const soundboardCalls = [];
+  manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
+  manager.resolveSoundboardCandidates = async () => ({
+    source: "preferred",
+    candidates: []
+  });
+  manager.generateVoiceTurn = async () => ({
+    text: "yo [[SOUNDBOARD:airhorn@123]] hold up [[SOUNDBOARD:rimshot@456]] done"
+  });
+  manager.speakVoiceLineWithTts = async ({ text }) => {
+    spokenLines.push(String(text));
+    return true;
+  };
+  manager.waitForLeaveDirectivePlayback = async () => {};
+  manager.maybeTriggerAssistantDirectedSoundboard = async ({ requestedRef }) => {
+    soundboardCalls.push(String(requestedRef));
+  };
+
+  const session = {
+    id: "session-stt-inline-order-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "stt_pipeline",
+    ending: false,
+    recentVoiceTurns: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.runSttPipelineReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "sequence this",
+    directAddressed: true
+  });
+
+  assert.deepEqual(spokenLines, ["yo", "hold up", "done"]);
+  assert.deepEqual(soundboardCalls, ["airhorn@123", "rimshot@456"]);
+});
+
 test("runSttPipelineReply ends VC when model requests leave directive", async () => {
   const manager = createManager();
   const endCalls = [];
+  const waitCalls = [];
   manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
   manager.resolveSoundboardCandidates = async () => ({
     source: "preferred",
@@ -2377,6 +2485,9 @@ test("runSttPipelineReply ends VC when model requests leave directive", async ()
     leaveVoiceChannelRequested: true
   });
   manager.speakVoiceLineWithTts = async () => true;
+  manager.waitForLeaveDirectivePlayback = async (payload) => {
+    waitCalls.push(payload);
+  };
   manager.endSession = async (payload) => {
     endCalls.push(payload);
     return true;
@@ -2402,6 +2513,8 @@ test("runSttPipelineReply ends VC when model requests leave directive", async ()
     directAddressed: true
   });
 
+  assert.equal(waitCalls.length, 1);
+  assert.equal(waitCalls[0]?.expectRealtimeAudio, false);
   assert.equal(endCalls.length, 1);
   assert.equal(endCalls[0]?.reason, "assistant_leave_directive");
 });

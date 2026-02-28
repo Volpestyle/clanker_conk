@@ -23,6 +23,8 @@ import { clamp, sanitizeBotText } from "../utils.ts";
 const MAX_SOUNDBOARD_LEAK_TOKEN_SCAN = 24;
 const SOUNDBOARD_CANDIDATE_PARSE_LIMIT = 40;
 const SOUNDBOARD_SIMPLE_TOKEN_RE = /^[a-z0-9 _-]+$/i;
+const INLINE_SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*[\s\S]*?\s*\]\]/gi;
+const MAX_VOICE_SOUNDBOARD_REFS = 10;
 const LOOKUP_CONTEXT_PROMPT_LIMIT = 4;
 const LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS = 72;
 const OPEN_ARTICLE_DEFAULT_MAX_CHARS = 12_000;
@@ -298,8 +300,11 @@ export async function generateVoiceTurnReply(runtime, {
     "[[LEAVE_VC]]"
   ];
   const directivesLine = allowedDirectives.length
-    ? `Allowed optional trailing directives: ${allowedDirectives.join(", ")}.`
+    ? `Allowed optional directives: ${allowedDirectives.join(", ")}.`
     : "Do not output directives like [[...]].";
+  const soundboardDirectiveLine = allowSoundboardDirective
+    ? "SOUNDBOARD directives may appear inline anywhere in spoken text (including middle/end) to control when each effect plays."
+    : null;
 
   const guild = runtime.client.guilds.cache.get(String(guildId || ""));
   const speakerName =
@@ -422,15 +427,16 @@ export async function generateVoiceTurnReply(runtime, {
     ...voiceToneGuardrails,
     "Output plain spoken text only.",
     directivesLine,
+    soundboardDirectiveLine,
     effectiveJoinWindowActive
       ? "Join window active: you just joined VC. If this turn sounds like a greeting/check-in, prefer a short acknowledgement over [SKIP] unless clearly aimed at another human."
       : null,
     isEagerTurn
       ? allowedDirectives.length
-        ? "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text and only optional trailing directives."
+        ? "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text and only optional directives from the allowed list."
         : "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text only, no directives or markdown."
       : allowedDirectives.length
-        ? "Do not output markdown or [SKIP]. Optional trailing directives are allowed only as listed."
+        ? "Do not output markdown or [SKIP]. Optional directives are allowed only as listed."
         : "Do not output directives like [[...]], [SKIP], or markdown.",
     allowSoundboardDirective ? "Never mention the soundboard control directive in normal speech." : null
   ]
@@ -671,22 +677,34 @@ export async function generateVoiceTurnReply(runtime, {
       }
     }
 
-    const soundboardRef = allowSoundboardDirective
-      ? String(parsed.soundboardRef || "")
-          .trim()
-          .slice(0, 180) || null
-      : null;
+    const soundboardRefs = allowSoundboardDirective
+      ? (Array.isArray(parsed.soundboardRefs) ? parsed.soundboardRefs : [])
+          .map((entry) =>
+            String(entry || "")
+              .trim()
+              .slice(0, 180)
+          )
+          .filter(Boolean)
+          .slice(0, MAX_VOICE_SOUNDBOARD_REFS)
+      : [];
     const leaveVoiceChannelRequested = Boolean(parsed.leaveVoiceChannelRequested);
-    const baseText = sanitizeBotText(normalizeSkipSentinel(parsed.text || generation.text || ""), 520);
+    const soundboardSafeText = allowSoundboardDirective
+      ? String(parsed.text || generation.text || "")
+      : String(parsed.text || generation.text || "")
+          .replace(INLINE_SOUNDBOARD_DIRECTIVE_RE, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+    INLINE_SOUNDBOARD_DIRECTIVE_RE.lastIndex = 0;
+    const baseText = sanitizeBotText(normalizeSkipSentinel(soundboardSafeText), 520);
     const finalText = sanitizeSoundboardSpeechLeak({
       text: baseText,
-      soundboardRef,
+      soundboardRefs,
       soundboardCandidates: normalizedSoundboardCandidates
     });
-    if ((!finalText || finalText === "[SKIP]") && !soundboardRef && !leaveVoiceChannelRequested) {
+    if ((!finalText || finalText === "[SKIP]") && soundboardRefs.length === 0 && !leaveVoiceChannelRequested) {
       return {
         text: "",
-        soundboardRef: null,
+        soundboardRefs: [],
         usedWebSearchFollowup,
         usedOpenArticleFollowup,
         usedScreenShareOffer
@@ -695,7 +713,7 @@ export async function generateVoiceTurnReply(runtime, {
     if (!finalText || finalText === "[SKIP]") {
       const response = {
         text: "",
-        soundboardRef,
+        soundboardRefs,
         usedWebSearchFollowup,
         usedOpenArticleFollowup,
         usedScreenShareOffer
@@ -739,7 +757,7 @@ export async function generateVoiceTurnReply(runtime, {
 
     const response = {
       text: finalText,
-      soundboardRef,
+      soundboardRefs,
       usedWebSearchFollowup,
       usedOpenArticleFollowup,
       usedScreenShareOffer
@@ -910,31 +928,37 @@ function resolveOpenArticleCandidate({ ref, candidates }) {
 
 function sanitizeSoundboardSpeechLeak({
   text,
-  soundboardRef,
+  soundboardRefs,
   soundboardCandidates
 }) {
   const spoken = String(text || "").trim();
-  const normalizedRef = String(soundboardRef || "").trim();
-  if (!spoken || !normalizedRef) return spoken;
+  const normalizedRefs = (Array.isArray(soundboardRefs) ? soundboardRefs : [])
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean)
+    .slice(0, MAX_VOICE_SOUNDBOARD_REFS);
+  if (!spoken || normalizedRefs.length === 0) return spoken;
 
   const parsedCandidates = parseSoundboardCandidateLines(soundboardCandidates);
-  const selectedCandidate = parsedCandidates.find(
-    (candidate) => candidate.reference.toLowerCase() === normalizedRef.toLowerCase()
+  const tokensToRemove = [];
+  for (const normalizedRef of normalizedRefs) {
+    const selectedCandidate = parsedCandidates.find(
+      (candidate) => candidate.reference.toLowerCase() === normalizedRef.toLowerCase()
+    );
+    tokensToRemove.push(
+      normalizedRef,
+      normalizedRef.split("@")[0] || "",
+      selectedCandidate?.reference || "",
+      selectedCandidate?.reference.split("@")[0] || "",
+      selectedCandidate?.name || ""
+    );
+  }
+  const dedupedTokens = [...new Set(tokensToRemove.map((token) => String(token || "").trim()).filter(Boolean))].slice(
+    0,
+    MAX_SOUNDBOARD_LEAK_TOKEN_SCAN
   );
 
-  const tokensToRemove = [
-    normalizedRef,
-    normalizedRef.split("@")[0] || "",
-    selectedCandidate?.reference || "",
-    selectedCandidate?.reference.split("@")[0] || "",
-    selectedCandidate?.name || ""
-  ]
-    .map((token) => String(token || "").trim())
-    .filter(Boolean)
-    .slice(0, MAX_SOUNDBOARD_LEAK_TOKEN_SCAN);
-
   let cleaned = spoken;
-  for (const token of tokensToRemove) {
+  for (const token of dedupedTokens) {
     cleaned = removeCaseInsensitivePhrase(cleaned, token);
   }
 
