@@ -383,6 +383,10 @@ export function buildReplyPrompt({
   parts.push("Questions like \"is that you <name-ish-token>?\" are often directed at you.");
   parts.push("Do not infer direct address from rhyme alone.");
   parts.push("Generic prank/stank/stinky chatter without a clear name-like callout is usually not directed at you.");
+  parts.push(
+    "Capability state rule: distinguish between unsupported features and currently unavailable features. If something is disabled/unconfigured/budget-blocked, describe it as currently unavailable with the reason."
+  );
+  parts.push("Do not make absolute claims that a supported feature can never work.");
   if (responseRequired) {
     parts.push("A reply is required for this turn unless safety policy requires refusing.");
     parts.push("Do not output [SKIP] except for safety refusals.");
@@ -489,30 +493,41 @@ export function buildReplyPrompt({
     parts.push("If intent target is ambiguous, prefer voiceIntent.intent=none with lower confidence.");
     parts.push("For normal chat or ambiguous requests, set voiceIntent.intent to none and keep confidence low.");
   } else {
+    parts.push("Voice control capability exists but is currently disabled in settings.");
     parts.push("If asked to join VC, say voice mode is currently disabled.");
     parts.push("Set voiceIntent.intent to none.");
   }
 
+  const screenShareStatus = String(screenShare?.status || "disabled").trim().toLowerCase() || "disabled";
   const screenShareEnabled = Boolean(screenShare?.enabled);
-  if (screenShareEnabled) {
-    const status = String(screenShare?.status || "ready").trim().toLowerCase();
-    if (status === "ready") {
-      parts.push("You can offer a secure temporary screen-share link when useful.");
-      parts.push(
-        "If the user asks you to see/watch their screen or stream, set screenShareIntent.action to offer_link."
-      );
-      parts.push(
-        "If visual context would materially improve troubleshooting/help, you may proactively set screenShareIntent.action to offer_link."
-      );
-      parts.push(
-        "Set screenShareIntent.confidence from 0 to 1. Use high confidence only when a share link is clearly useful."
-      );
-    } else {
-      parts.push("Screen-share links are currently unavailable because public HTTPS is not ready.");
-      parts.push("Set screenShareIntent.action to none.");
-    }
+  const screenShareAvailable =
+    screenShare?.available === undefined
+      ? screenShareEnabled && screenShareStatus === "ready"
+      : Boolean(screenShare.available);
+  const screenShareSupported =
+    screenShare?.supported === undefined
+      ? Boolean(screenShare) &&
+        String(screenShare?.reason || "").trim().toLowerCase() !== "screen_share_manager_unavailable"
+      : Boolean(screenShare.supported);
+  const screenShareReason =
+    String(screenShare?.reason || "").trim().toLowerCase() || screenShareStatus || "unavailable";
+  if (screenShareAvailable) {
+    parts.push("You can offer a secure temporary screen-share link when useful.");
+    parts.push(
+      "If the user asks you to see/watch their screen or stream, set screenShareIntent.action to offer_link."
+    );
+    parts.push(
+      "If visual context would materially improve troubleshooting/help, you may proactively set screenShareIntent.action to offer_link."
+    );
+    parts.push(
+      "Set screenShareIntent.confidence from 0 to 1. Use high confidence only when a share link is clearly useful."
+    );
+  } else if (screenShareSupported) {
+    parts.push(`Screen-share link capability exists but is currently unavailable (reason: ${screenShareReason}).`);
+    parts.push("If asked, explain it can work when available, but do not claim you can watch a screen right now.");
+    parts.push("Set screenShareIntent.action to none.");
   } else {
-    parts.push("Screen-share links are disabled.");
+    parts.push("Screen-share links are not available in this runtime.");
     parts.push("Set screenShareIntent.action to none.");
   }
 
@@ -538,15 +553,15 @@ export function buildReplyPrompt({
       parts.push("The user explicitly asked not to use web search.");
       parts.push("Set webSearchQuery to null and do not claim live lookup.");
     } else if (!webSearch?.enabled) {
-      parts.push("Live web lookup is disabled in settings.");
+      parts.push("Live web lookup capability exists but is currently unavailable (disabled in settings).");
       parts.push("Set webSearchQuery to null.");
       parts.push("Do not claim you searched the web.");
     } else if (!webSearch?.configured) {
-      parts.push("Live web lookup is unavailable (no search provider is configured).");
+      parts.push("Live web lookup capability exists but is currently unavailable (no search provider is configured).");
       parts.push("Set webSearchQuery to null.");
       parts.push("Do not claim you searched the web.");
     } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
-      parts.push("Live web lookup is unavailable right now (hourly search budget exhausted).");
+      parts.push("Live web lookup capability exists but is currently unavailable (hourly search budget exhausted).");
       parts.push("Set webSearchQuery to null.");
       parts.push("Do not claim you searched the web.");
     } else {
@@ -562,7 +577,7 @@ export function buildReplyPrompt({
 
   if (allowMemoryLookupDirective) {
     if (!memoryLookup?.enabled) {
-      parts.push("Durable memory lookup is unavailable for this turn.");
+      parts.push("Durable memory lookup capability exists but is currently unavailable for this turn.");
       parts.push("Set memoryLookupQuery to null.");
     } else {
       parts.push("Durable memory lookup is available for this turn.");
@@ -575,10 +590,10 @@ export function buildReplyPrompt({
 
   if (allowImageLookupDirective) {
     if (!imageLookup?.enabled) {
-      parts.push("History image lookup is unavailable for this turn.");
+      parts.push("History image lookup capability exists but is currently unavailable for this turn.");
       parts.push("Set imageLookupQuery to null.");
     } else if (!imageLookup?.candidates?.length) {
-      parts.push("No recent image references were found in message history.");
+      parts.push("History image lookup capability is available, but no recent image references were found.");
       parts.push("Set imageLookupQuery to null.");
     } else {
       parts.push("History image lookup is available for this turn.");
@@ -630,9 +645,11 @@ export function buildReplyPrompt({
 
   if (videoContext?.requested && !videoContext.used) {
     if (!videoContext.enabled) {
-      parts.push("Video link understanding is disabled in settings.");
+      parts.push("Video link understanding capability exists but is currently unavailable (disabled in settings).");
     } else if (videoContext.blockedByBudget || !videoContext.budget?.canLookup) {
-      parts.push("Video link understanding is unavailable right now (hourly video context budget exhausted).");
+      parts.push(
+        "Video link understanding capability exists but is currently unavailable (hourly video context budget exhausted)."
+      );
     } else if (videoContext.error) {
       parts.push(`Video link context fetch failed: ${videoContext.error}`);
     } else {
@@ -674,7 +691,8 @@ export function buildReplyPrompt({
     parts.push(`Keep image/video media prompts under ${maxMediaPromptChars} chars, and always include normal reply text.`);
     parts.push(mediaGuidance);
   } else {
-    parts.push("Reply image/video generation is unavailable right now. Respond with text only.");
+    parts.push("Reply image/video generation capability exists but is currently unavailable for this turn.");
+    parts.push("Respond with text only.");
     parts.push("Set media to null.");
   }
 
@@ -687,10 +705,10 @@ export function buildReplyPrompt({
     parts.push("Use media.type=gif only when a reaction GIF genuinely improves the reply.");
     parts.push("Keep GIF media prompts concise (under 120 chars), and always include normal reply text.");
   } else if (gifRepliesEnabled && !gifsConfigured) {
-    parts.push("Reply GIF lookup is unavailable right now (missing GIPHY configuration).");
+    parts.push("Reply GIF lookup capability exists but is currently unavailable (missing GIPHY configuration).");
     parts.push("Do not set media.type=gif.");
   } else if (gifRepliesEnabled) {
-    parts.push("Reply GIF lookup is unavailable right now (24h GIF budget exhausted).");
+    parts.push("Reply GIF lookup capability exists but is currently unavailable (24h GIF budget exhausted).");
     parts.push("Do not set media.type=gif.");
   }
 
@@ -944,6 +962,10 @@ export function buildVoiceTurnPrompt({
       participantRoster: normalizedParticipantRoster
     })
   );
+  parts.push(
+    "Capability state rule: distinguish unsupported features from currently unavailable features. When disabled/unconfigured/budget-blocked, treat the feature as currently unavailable with the specific reason."
+  );
+  parts.push("Avoid absolute claims that a supported feature can never work.");
 
   if (normalizedMembershipEvents.length) {
     parts.push("Recent voice membership changes:");
@@ -1071,13 +1093,13 @@ export function buildVoiceTurnPrompt({
       parts.push("The user asked not to use web search.");
       parts.push("Do not output [[WEB_SEARCH:...]].");
     } else if (!webSearch?.enabled) {
-      parts.push("Live web lookup is disabled in settings.");
+      parts.push("Live web lookup capability exists but is currently unavailable (disabled in settings).");
       parts.push("Do not output [[WEB_SEARCH:...]].");
     } else if (!webSearch?.configured) {
-      parts.push("Live web lookup is unavailable (provider not configured).");
+      parts.push("Live web lookup capability exists but is currently unavailable (provider not configured).");
       parts.push("Do not output [[WEB_SEARCH:...]].");
     } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
-      parts.push("Live web lookup is unavailable right now (budget exhausted).");
+      parts.push("Live web lookup capability exists but is currently unavailable (budget exhausted).");
       parts.push("Do not output [[WEB_SEARCH:...]].");
     } else {
       parts.push("Live web lookup is available.");
@@ -1090,14 +1112,29 @@ export function buildVoiceTurnPrompt({
     parts.push("Do not output [[WEB_SEARCH:...]].");
   }
 
+  const screenShareStatus = String(screenShare?.status || "disabled").trim().toLowerCase() || "disabled";
+  const screenShareEnabled = Boolean(screenShare?.enabled);
+  const screenShareAvailable =
+    screenShare?.available === undefined
+      ? screenShareEnabled && screenShareStatus === "ready"
+      : Boolean(screenShare.available);
+  const screenShareSupported =
+    screenShare?.supported === undefined
+      ? Boolean(screenShare) &&
+        String(screenShare?.reason || "").trim().toLowerCase() !== "screen_share_manager_unavailable"
+      : Boolean(screenShare.supported);
+  const screenShareReason =
+    String(screenShare?.reason || "").trim().toLowerCase() || screenShareStatus || "unavailable";
+
   if (allowScreenShareDirective) {
     parts.push("VC screen-share link offers are available.");
     parts.push(
       "If the speaker asks you to see/watch their screen or stream, append a trailing directive [[SCREEN_SHARE_LINK]]."
     );
     parts.push("Only use one screen-share directive when it is clearly useful.");
-  } else if (screenShare?.enabled && String(screenShare?.status || "").trim().toLowerCase() !== "ready") {
-    parts.push("Screen-share links are currently unavailable.");
+  } else if (screenShareSupported && !screenShareAvailable) {
+    parts.push(`VC screen-share link capability exists but is currently unavailable (reason: ${screenShareReason}).`);
+    parts.push("If asked, acknowledge the capability exists but is unavailable right now.");
     parts.push("Do not output [[SCREEN_SHARE_LINK]].");
   } else {
     parts.push("Do not output [[SCREEN_SHARE_LINK]].");

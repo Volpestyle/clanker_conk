@@ -674,6 +674,7 @@ test("generateVoiceTurnReply triggers voice screen-share link offer from directi
     generationText: "i can check it [[SCREEN_SHARE_LINK]]",
     screenShareCapability: {
       enabled: true,
+      available: true,
       status: "ready",
       publicUrl: "https://fancy-cat.trycloudflare.com"
     },
@@ -694,6 +695,37 @@ test("generateVoiceTurnReply triggers voice screen-share link offer from directi
   assert.equal(screenShareCalls[0]?.guildId, "guild-1");
   assert.equal(screenShareCalls[0]?.channelId, "text-1");
   assert.equal(screenShareCalls[0]?.requesterUserId, "user-1");
+});
+
+test("generateVoiceTurnReply describes supported-but-unavailable screen-share capability in prompt", async () => {
+  const { bot, generationPayloads, screenShareCalls } = createVoiceBot({
+    generationText: "can't pull it up rn",
+    screenShareCapability: {
+      supported: true,
+      enabled: true,
+      available: false,
+      status: "starting",
+      publicUrl: "https://fancy-cat.trycloudflare.com",
+      reason: "public_https_starting"
+    }
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "can you watch my screen right now?"
+  });
+
+  assert.equal(reply.text, "can't pull it up rn");
+  assert.equal(screenShareCalls.length, 0);
+  const userPrompt = String(generationPayloads[0]?.userPrompt || "");
+  assert.equal(
+    userPrompt.includes("VC screen-share link capability exists but is currently unavailable (reason: public_https_starting)."),
+    true
+  );
+  assert.equal(userPrompt.includes("Do not output [[SCREEN_SHARE_LINK]]."), true);
 });
 
 test("generateVoiceTurnReply returns leave request when model emits leave directive", async () => {

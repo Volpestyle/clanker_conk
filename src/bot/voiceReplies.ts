@@ -266,8 +266,6 @@ export async function generateVoiceTurnReply(runtime, {
   );
   const allowMemoryDirectives = Boolean(settings?.memory?.enabled);
   const allowWebSearchDirective = Boolean(
-    settings?.webSearch?.enabled &&
-      runtime.search?.isConfigured?.() &&
       typeof runtime.runModelRequestedWebSearch === "function" &&
       typeof runtime.buildWebSearchContext === "function"
   );
@@ -279,8 +277,7 @@ export async function generateVoiceTurnReply(runtime, {
     userId
   });
   const allowScreenShareDirective = Boolean(
-    screenShare.enabled &&
-      String(screenShare.status || "").trim().toLowerCase() === "ready" &&
+    screenShare.available &&
       typeof runtime.offerVoiceScreenShareLink === "function" &&
       guildId &&
       channelId &&
@@ -403,6 +400,13 @@ export async function generateVoiceTurnReply(runtime, {
           canSearch: false
         }
       };
+  const webSearchAvailableNow = Boolean(
+    webSearch?.enabled &&
+      webSearch?.configured &&
+      !webSearch?.optedOutByUser &&
+      !webSearch?.blockedByBudget &&
+      webSearch?.budget?.canSearch !== false
+  );
   let openArticleCandidates = buildOpenArticleCandidates({
     webSearch,
     recentWebLookups
@@ -492,7 +496,12 @@ export async function generateVoiceTurnReply(runtime, {
     });
 
     let parsed = parseReplyDirectives(generation.text, resolveMaxMediaPromptLen(settings));
-    if (allowWebSearchDirective && parsed.webSearchQuery && typeof runtime.runModelRequestedWebSearch === "function") {
+    if (
+      allowWebSearchDirective &&
+      webSearchAvailableNow &&
+      parsed.webSearchQuery &&
+      typeof runtime.runModelRequestedWebSearch === "function"
+    ) {
       usedWebSearchFollowup = true;
       const normalizedQuery = String(parsed.webSearchQuery || "").trim();
       let lookupStarted = false;
@@ -788,9 +797,12 @@ export async function generateVoiceTurnReply(runtime, {
 function resolveVoiceScreenShareCapability(runtime, { settings, guildId, channelId, userId }) {
   if (typeof runtime?.getVoiceScreenShareCapability !== "function") {
     return {
+      supported: false,
       enabled: false,
+      available: false,
       status: "disabled",
-      publicUrl: ""
+      publicUrl: "",
+      reason: "screen_share_capability_unavailable"
     };
   }
 
@@ -800,10 +812,21 @@ function resolveVoiceScreenShareCapability(runtime, { settings, guildId, channel
     channelId,
     requesterUserId: userId
   });
+  const status = String(capability?.status || "disabled").trim().toLowerCase() || "disabled";
+  const enabled = Boolean(capability?.enabled);
+  const available = capability?.available === undefined ? enabled && status === "ready" : Boolean(capability.available);
+  const rawReason = String(capability?.reason || "").trim().toLowerCase();
+  const supported =
+    capability?.supported === undefined
+      ? rawReason !== "screen_share_manager_unavailable"
+      : Boolean(capability.supported);
   return {
-    enabled: Boolean(capability?.enabled),
-    status: String(capability?.status || "disabled").trim().toLowerCase() || "disabled",
-    publicUrl: String(capability?.publicUrl || "").trim()
+    supported,
+    enabled,
+    available,
+    status,
+    publicUrl: String(capability?.publicUrl || "").trim(),
+    reason: available ? null : rawReason || status || "unavailable"
   };
 }
 

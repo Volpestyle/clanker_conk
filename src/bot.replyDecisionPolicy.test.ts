@@ -1609,7 +1609,9 @@ test("getVoiceScreenShareCapability normalizes status and handles missing manage
     });
 
     const unavailable = bot.getVoiceScreenShareCapability();
+    assert.equal(unavailable.supported, false);
     assert.equal(unavailable.enabled, false);
+    assert.equal(unavailable.available, false);
     assert.equal(unavailable.status, "disabled");
     assert.equal(unavailable.reason, "screen_share_manager_unavailable");
 
@@ -1624,9 +1626,29 @@ test("getVoiceScreenShareCapability normalizes status and handles missing manage
     });
 
     const ready = bot.getVoiceScreenShareCapability();
+    assert.equal(ready.supported, true);
     assert.equal(ready.enabled, true);
+    assert.equal(ready.available, true);
     assert.equal(ready.status, "ready");
     assert.equal(ready.publicUrl, "https://demo.trycloudflare.com");
+    assert.equal(ready.reason, null);
+
+    bot.attachScreenShareSessionManager({
+      getLinkCapability() {
+        return {
+          enabled: true,
+          status: "starting",
+          publicUrl: "https://demo.trycloudflare.com"
+        };
+      }
+    });
+
+    const warming = bot.getVoiceScreenShareCapability();
+    assert.equal(warming.supported, true);
+    assert.equal(warming.enabled, true);
+    assert.equal(warming.available, false);
+    assert.equal(warming.status, "starting");
+    assert.equal(warming.reason, "starting");
   });
 });
 

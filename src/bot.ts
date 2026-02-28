@@ -1007,7 +1007,9 @@ export class ClankerBot {
         runModelRequestedWebSearchForReplyFollowup(
           { llm: this.llm, search: this.search, memory: this.memory },
           payload
-        )
+        ),
+      getVoiceScreenShareCapability: (payload) => this.getVoiceScreenShareCapability(payload),
+      offerVoiceScreenShareLink: (payload) => this.offerVoiceScreenShareLink(payload)
     };
     return await generateVoiceTurnReply(runtime, {
       settings,
@@ -1156,11 +1158,12 @@ export class ClankerBot {
       channelId: message.channelId,
       userId: message.author.id
     };
-    const screenShareCapability = this.screenShareSessionManager?.getLinkCapability?.() || {
-      enabled: false,
-      status: "disabled",
-      publicUrl: ""
-    };
+    const screenShareCapability = this.getVoiceScreenShareCapability({
+      settings,
+      guildId: message.guildId,
+      channelId: message.channelId,
+      requesterUserId: message.author?.id || null
+    });
     const activeVoiceSession =
       typeof this.voiceSessionManager?.getSession === "function"
         ? this.voiceSessionManager.getSession(message.guildId)
@@ -1787,7 +1790,9 @@ export class ClankerBot {
     const manager = this.screenShareSessionManager;
     if (!manager || typeof manager.getLinkCapability !== "function") {
       return {
+        supported: false,
         enabled: false,
+        available: false,
         status: "disabled",
         publicUrl: "",
         reason: "screen_share_manager_unavailable"
@@ -1796,11 +1801,16 @@ export class ClankerBot {
 
     const capability = manager.getLinkCapability();
     const status = String(capability?.status || "disabled").trim().toLowerCase() || "disabled";
-    const enabled = Boolean(capability?.enabled) && status === "ready";
+    const enabled = Boolean(capability?.enabled);
+    const available = enabled && status === "ready";
+    const rawReason = String(capability?.reason || "").trim().toLowerCase();
     return {
+      supported: true,
       enabled,
+      available,
       status,
-      publicUrl: String(capability?.publicUrl || "").trim()
+      publicUrl: String(capability?.publicUrl || "").trim(),
+      reason: available ? null : rawReason || status || "unavailable"
     };
   }
 
