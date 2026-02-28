@@ -3336,7 +3336,7 @@ export class VoiceSessionManager {
     return boundedLines.reverse().join("\n");
   }
 
-  shouldPersistUserTranscriptTimelineTurn({ session, settings = null, transcript = "" } = {}) {
+  shouldPersistUserTranscriptTimelineTurn({ session = null, settings = null, transcript = "" } = {}) {
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     if (!normalizedTranscript) return false;
     const resolvedSettings = settings || session?.settingsSnapshot || this.store.getSettings();
@@ -4192,10 +4192,18 @@ export class VoiceSessionManager {
           userId,
           directAddressed: Boolean(directAddressed)
         });
+    const joinWindowAgeMs = Math.max(0, Date.now() - Number(session?.startedAt || 0));
+    const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
+    const generationConversationContext = {
+      ...(resolvedConversationContext || {}),
+      joinWindowActive,
+      joinWindowAgeMs: Math.round(joinWindowAgeMs)
+    };
 
     let replyText = "";
     let requestedSoundboardRef = "";
     let usedWebSearchFollowup = false;
+    let usedScreenShareOffer = false;
     let releaseLookupBusy = null;
     try {
       const generated = await this.generateVoiceTurn({
@@ -4207,8 +4215,10 @@ export class VoiceSessionManager {
         contextMessages,
         sessionId: session.id,
         isEagerTurn: !directAddressed,
+        joinWindowActive,
+        joinWindowAgeMs,
         voiceEagerness: Number(settings?.voice?.replyEagerness) || 0,
-        conversationContext: resolvedConversationContext,
+        conversationContext: generationConversationContext,
         soundboardCandidates: soundboardCandidateLines,
         onWebLookupStart: async ({ query }) => {
           if (typeof releaseLookupBusy === "function") return;
@@ -4233,11 +4243,13 @@ export class VoiceSessionManager {
           : {
               text: generated,
               soundboardRef: null,
-              usedWebSearchFollowup: false
+              usedWebSearchFollowup: false,
+              usedScreenShareOffer: false
             };
       replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
       requestedSoundboardRef = String(generatedPayload?.soundboardRef || "").trim().slice(0, 180);
       usedWebSearchFollowup = Boolean(generatedPayload?.usedWebSearchFollowup);
+      usedScreenShareOffer = Boolean(generatedPayload?.usedScreenShareOffer);
     } catch (error) {
       this.store.logAction({
         kind: "voice_error",
@@ -4286,6 +4298,9 @@ export class VoiceSessionManager {
           replyText,
           soundboardRef: requestedSoundboardRef || null,
           usedWebSearchFollowup,
+          usedScreenShareOffer,
+          joinWindowActive,
+          joinWindowAgeMs: Math.round(joinWindowAgeMs),
           contextTurnsSent: contextMessages.length,
           contextTurnsAvailable: contextTurns.length,
           contextCharsSent: contextMessageChars
@@ -4393,6 +4408,13 @@ export class VoiceSessionManager {
           userId,
           directAddressed: Boolean(directAddressed)
         });
+    const joinWindowAgeMs = Math.max(0, Date.now() - Number(session?.startedAt || 0));
+    const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
+    const generationConversationContext = {
+      ...(resolvedConversationContext || {}),
+      joinWindowActive,
+      joinWindowAgeMs: Math.round(joinWindowAgeMs)
+    };
 
     let releaseLookupBusy = null;
     let generatedPayload = null;
@@ -4406,8 +4428,10 @@ export class VoiceSessionManager {
         contextMessages,
         sessionId: session.id,
         isEagerTurn: !directAddressed,
+        joinWindowActive,
+        joinWindowAgeMs,
         voiceEagerness: Number(settings?.voice?.replyEagerness) || 0,
-        conversationContext: resolvedConversationContext,
+        conversationContext: generationConversationContext,
         soundboardCandidates: soundboardCandidateLines,
         onWebLookupStart: async ({ query }) => {
           if (typeof releaseLookupBusy === "function") return;
@@ -4432,7 +4456,8 @@ export class VoiceSessionManager {
           : {
               text: generated,
               soundboardRef: null,
-              usedWebSearchFollowup: false
+              usedWebSearchFollowup: false,
+              usedScreenShareOffer: false
             };
     } catch (error) {
       this.store.logAction({
@@ -4456,6 +4481,7 @@ export class VoiceSessionManager {
     const replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
     const requestedSoundboardRef = String(generatedPayload?.soundboardRef || "").trim().slice(0, 180);
     const usedWebSearchFollowup = Boolean(generatedPayload?.usedWebSearchFollowup);
+    const usedScreenShareOffer = Boolean(generatedPayload?.usedScreenShareOffer);
     if (!replyText) {
       this.store.logAction({
         kind: "voice_runtime",
@@ -4468,6 +4494,9 @@ export class VoiceSessionManager {
           mode: session.mode,
           source: String(source || "realtime"),
           usedWebSearchFollowup,
+          usedScreenShareOffer,
+          joinWindowActive,
+          joinWindowAgeMs: Math.round(joinWindowAgeMs),
           conversationState: resolvedConversationContext?.engagementState || null,
           engagedWithCurrentSpeaker: Boolean(resolvedConversationContext?.engagedWithCurrentSpeaker),
           contextTurnsSent: contextMessages.length,
@@ -4526,6 +4555,9 @@ export class VoiceSessionManager {
         replyText,
         soundboardRef: requestedSoundboardRef || null,
         usedWebSearchFollowup,
+        usedScreenShareOffer,
+        joinWindowActive,
+        joinWindowAgeMs: Math.round(joinWindowAgeMs),
         contextTurnsSent: contextMessages.length,
         contextTurnsAvailable: contextTurns.length,
         contextCharsSent: contextMessageChars
@@ -5331,6 +5363,7 @@ export class VoiceSessionManager {
     const voiceToneGuardrails = buildVoiceToneGuardrails();
     const voiceGuidance = getPromptVoiceGuidance(settings, [
       "Talk like a person hanging out, not like an assistant.",
+      "You're chill, but eager to be helpful whenever it makes sense.",
       "Use occasional slang naturally (not every sentence)."
     ]);
     const lines = [

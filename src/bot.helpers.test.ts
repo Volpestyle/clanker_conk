@@ -224,3 +224,9 @@ test("parseReplyDirectives parses trailing self memory directive", () => {
   assert.equal(parsed.text, "say less");
   assert.equal(parsed.selfMemoryLine, "i stay concise in vc");
 });
+
+test("parseReplyDirectives parses trailing screen-share link directive", () => {
+  const parsed = parseReplyDirectives("bet [[SCREEN_SHARE_LINK]]");
+  assert.equal(parsed.text, "bet");
+  assert.equal(parsed.screenShareLinkRequested, true);
+});

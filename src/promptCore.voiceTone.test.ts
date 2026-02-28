@@ -21,3 +21,27 @@ test("buildVoiceTurnPrompt includes shared voice tone guardrails", () => {
   assert.equal(/Match your normal text-chat persona in voice/i.test(prompt), true);
   assert.equal(/one clear idea, usually one short sentence/i.test(prompt), true);
 });
+
+test("buildVoiceTurnPrompt exposes screen-share directive only when capability is ready", () => {
+  const readyPrompt = buildVoiceTurnPrompt({
+    speakerName: "tester",
+    transcript: "can you see my screen?",
+    allowScreenShareDirective: true,
+    screenShare: {
+      enabled: true,
+      status: "ready"
+    }
+  });
+  assert.equal(/\[\[SCREEN_SHARE_LINK\]\]/i.test(readyPrompt), true);
+
+  const blockedPrompt = buildVoiceTurnPrompt({
+    speakerName: "tester",
+    transcript: "can you see my screen?",
+    allowScreenShareDirective: false,
+    screenShare: {
+      enabled: false,
+      status: "disabled"
+    }
+  });
+  assert.equal(/Do not output \[\[SCREEN_SHARE_LINK\]\]\./i.test(blockedPrompt), true);
+});

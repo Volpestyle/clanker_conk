@@ -239,6 +239,13 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     objective: "Give a short natural acknowledgement suitable for live voice."
   },
   {
+    id: "join-window-greeting",
+    title: "Join Window Greeting",
+    userText: "yo, whats up",
+    expectedAllow: true,
+    objective: "Right after join, treat greeting/check-in as worth a short acknowledgement."
+  },
+  {
     id: "low-signal-lol",
     title: "Low Signal Fragment",
     userText: "lol",

@@ -187,6 +187,7 @@ export function buildSystemPrompt(settings) {
   const textGuidance = getPromptTextGuidance(settings, [
     "Write like a person in chat, not like an assistant.",
     "Use occasional slang naturally (not every sentence).",
+    "You're chill, but eager to be helpful whenever it makes sense.",
     "Default to short messages but go longer when the conversation calls for it.",
     "Use server emoji tokens in text only when necessary and when they enhance the message."
   ]);
@@ -769,11 +770,15 @@ export function buildVoiceTurnPrompt({
   isEagerTurn = false,
   voiceEagerness = 0,
   conversationContext = null,
+  joinWindowActive = false,
+  joinWindowAgeMs = null,
   botName = "the bot",
   soundboardCandidates = [],
   memoryEnabled = false,
   webSearch = null,
-  allowWebSearchDirective = false
+  allowWebSearchDirective = false,
+  screenShare = null,
+  allowScreenShareDirective = false
 }) {
   const parts = [];
   const voiceToneGuardrails = buildVoiceToneGuardrails();
@@ -813,6 +818,17 @@ export function buildVoiceTurnPrompt({
             : "none"
         }`
       ].join("\n")
+    );
+  }
+
+  if (joinWindowActive) {
+    parts.push(
+      `Join window active: yes${
+        Number.isFinite(joinWindowAgeMs) ? ` (${Math.max(0, Math.round(Number(joinWindowAgeMs)))}ms since join)` : ""
+      }.`
+    );
+    parts.push(
+      "Join-window bias: if this turn is a short greeting/check-in (for example hi/hey/yo/what's up), reply with a brief acknowledgement instead of [SKIP] unless clearly aimed at another human."
     );
   }
 
@@ -864,6 +880,19 @@ export function buildVoiceTurnPrompt({
     }
   } else {
     parts.push("Do not output [[WEB_SEARCH:...]].");
+  }
+
+  if (allowScreenShareDirective) {
+    parts.push("VC screen-share link offers are available.");
+    parts.push(
+      "If the speaker asks you to see/watch their screen or stream, append a trailing directive [[SCREEN_SHARE_LINK]]."
+    );
+    parts.push("Only use one screen-share directive when it is clearly useful.");
+  } else if (screenShare?.enabled && String(screenShare?.status || "").trim().toLowerCase() !== "ready") {
+    parts.push("Screen-share links are currently unavailable.");
+    parts.push("Do not output [[SCREEN_SHARE_LINK]].");
+  } else {
+    parts.push("Do not output [[SCREEN_SHARE_LINK]].");
   }
 
   if (webSearch?.requested && !webSearch?.used) {

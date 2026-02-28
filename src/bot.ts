@@ -59,7 +59,8 @@ import {
   getReplyAddressSignal as getReplyAddressSignalForReplyAdmission,
   hasBotMessageInRecentWindow as hasBotMessageInRecentWindowForReplyAdmission,
   hasStartupFollowupAfterMessage as hasStartupFollowupAfterMessageForReplyAdmission,
-  shouldAttemptReplyDecision as shouldAttemptReplyDecisionForReplyAdmission
+  shouldAttemptReplyDecision as shouldAttemptReplyDecisionForReplyAdmission,
+  shouldForceRespondForAddressSignal as shouldForceRespondForAddressSignalForReplyAdmission
 } from "./bot/replyAdmission.ts";
 import { runStartupCatchup as runStartupCatchupForStartupCatchup } from "./bot/startupCatchup.ts";
 import {
@@ -89,6 +90,10 @@ import {
   pickInitiativeChannel
 } from "./bot/initiativeSchedule.ts";
 import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
+import {
+  resolveOperationalChannel,
+  sendToChannel
+} from "./voice/voiceOperationalMessaging.ts";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
@@ -132,7 +137,7 @@ type ReplyPerformanceTracker = {
 
 type ReplyAttemptOptions = {
   recentMessages?: Array<Record<string, unknown>>;
-  addressSignal?: { triggered?: boolean } | null;
+  addressSignal?: { triggered?: boolean; reason?: string } | null;
   triggerMessageIds?: string[];
   forceRespond?: boolean;
   source?: string;
@@ -655,7 +660,7 @@ export class ClankerBot {
     this.enqueueReplyJob({
       source: "message_event",
       message,
-      forceRespond: addressSignal.triggered,
+      forceRespond: shouldForceRespondForAddressSignalForReplyAdmission(addressSignal),
       addressSignal
     });
   }
@@ -687,7 +692,9 @@ export class ClankerBot {
         runModelRequestedWebSearchForReplyFollowup(
           { llm: this.llm, search: this.search, memory: this.memory },
           payload
-        )
+        ),
+      getVoiceScreenShareCapability: (payload) => this.getVoiceScreenShareCapability(payload),
+      offerVoiceScreenShareLink: (payload) => this.offerVoiceScreenShareLink(payload)
     };
     return await composeVoiceOperationalMessage(runtime, {
       settings,
@@ -1465,6 +1472,201 @@ export class ClankerBot {
     return true;
   }
 
+  getVoiceScreenShareCapability({
+    settings = null,
+    guildId = null,
+    channelId = null,
+    requesterUserId = null
+  } = {}) {
+    const manager = this.screenShareSessionManager;
+    if (!manager || typeof manager.getLinkCapability !== "function") {
+      return {
+        enabled: false,
+        status: "disabled",
+        publicUrl: "",
+        reason: "screen_share_manager_unavailable"
+      };
+    }
+
+    const capability = manager.getLinkCapability();
+    const status = String(capability?.status || "disabled").trim().toLowerCase() || "disabled";
+    const enabled = Boolean(capability?.enabled) && status === "ready";
+    return {
+      enabled,
+      status,
+      publicUrl: String(capability?.publicUrl || "").trim()
+    };
+  }
+
+  async offerVoiceScreenShareLink({
+    settings = null,
+    guildId = null,
+    channelId = null,
+    requesterUserId = null,
+    transcript = "",
+    source = "voice_turn_directive"
+  } = {}) {
+    const manager = this.screenShareSessionManager;
+    const normalizedGuildId = String(guildId || "").trim();
+    const normalizedChannelId = String(channelId || "").trim();
+    const normalizedRequesterUserId = String(requesterUserId || "").trim();
+    if (!normalizedGuildId || !normalizedChannelId || !normalizedRequesterUserId) {
+      return {
+        offered: false,
+        reason: "invalid_context"
+      };
+    }
+
+    const resolvedSettings = settings || this.store.getSettings();
+    const guild = this.client.guilds.cache.get(normalizedGuildId) || null;
+    const requesterDisplayName =
+      guild?.members?.cache?.get(normalizedRequesterUserId)?.displayName ||
+      guild?.members?.cache?.get(normalizedRequesterUserId)?.user?.username ||
+      this.client.users?.cache?.get(normalizedRequesterUserId)?.username ||
+      "unknown";
+    const syntheticMessage = {
+      guildId: normalizedGuildId,
+      channelId: normalizedChannelId,
+      id: null,
+      author: {
+        id: normalizedRequesterUserId,
+        username: requesterDisplayName
+      },
+      member: {
+        displayName: requesterDisplayName
+      }
+    };
+    const eventSource = String(source || "voice_turn_directive").trim().slice(0, 80) || "voice_turn_directive";
+
+    const channel = await this.resolveOperationalChannel(null, normalizedChannelId, {
+      guildId: normalizedGuildId,
+      userId: normalizedRequesterUserId,
+      messageId: null,
+      event: "voice_screen_share_offer",
+      reason: "voice_directive"
+    });
+    if (!channel) {
+      return {
+        offered: false,
+        reason: "channel_unavailable"
+      };
+    }
+
+    if (!manager || typeof manager.createSession !== "function") {
+      const unavailableMessage = await this.composeScreenShareUnavailableMessage({
+        message: syntheticMessage,
+        settings: resolvedSettings,
+        reason: "screen_share_manager_unavailable",
+        source: eventSource
+      });
+      if (unavailableMessage) {
+        await this.sendToChannel(channel, unavailableMessage, {
+          guildId: normalizedGuildId,
+          channelId: normalizedChannelId,
+          userId: normalizedRequesterUserId,
+          event: "voice_screen_share_offer",
+          reason: "screen_share_manager_unavailable"
+        });
+      }
+      return {
+        offered: false,
+        reason: "screen_share_manager_unavailable"
+      };
+    }
+
+    const created = await manager.createSession({
+      guildId: normalizedGuildId,
+      channelId: normalizedChannelId,
+      requesterUserId: normalizedRequesterUserId,
+      requesterDisplayName,
+      targetUserId: normalizedRequesterUserId,
+      source: eventSource
+    });
+    if (!created?.ok) {
+      const unavailableReason = String(created?.reason || "unknown");
+      const unavailableMessage = await this.composeScreenShareUnavailableMessage({
+        message: syntheticMessage,
+        settings: resolvedSettings,
+        reason: unavailableReason,
+        source: eventSource
+      });
+      if (unavailableMessage) {
+        await this.sendToChannel(channel, unavailableMessage, {
+          guildId: normalizedGuildId,
+          channelId: normalizedChannelId,
+          userId: normalizedRequesterUserId,
+          event: "voice_screen_share_offer",
+          reason: unavailableReason
+        });
+      }
+      return {
+        offered: false,
+        reason: unavailableReason
+      };
+    }
+
+    const linkUrl = String(created?.shareUrl || "").trim();
+    const expiresInMinutes = Number(created?.expiresInMinutes || 0);
+    if (!linkUrl) {
+      return {
+        offered: false,
+        reason: "missing_share_url"
+      };
+    }
+
+    const offerMessage = await this.composeScreenShareOfferMessage({
+      message: syntheticMessage,
+      settings: resolvedSettings,
+      linkUrl,
+      expiresInMinutes,
+      explicitRequest: true,
+      intentRequested: true,
+      confidence: 1,
+      source: eventSource
+    });
+    if (!offerMessage) {
+      return {
+        offered: false,
+        reason: "offer_message_empty"
+      };
+    }
+
+    const sent = await this.sendToChannel(channel, offerMessage, {
+      guildId: normalizedGuildId,
+      channelId: normalizedChannelId,
+      userId: normalizedRequesterUserId,
+      event: "voice_screen_share_offer",
+      reason: "voice_directive"
+    });
+    if (!sent) {
+      return {
+        offered: false,
+        reason: "offer_message_send_failed"
+      };
+    }
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: normalizedGuildId,
+      channelId: normalizedChannelId,
+      userId: normalizedRequesterUserId,
+      content: "screen_share_offer_sent_from_voice",
+      metadata: {
+        source: eventSource,
+        transcript: String(transcript || "").slice(0, 220),
+        expiresInMinutes: Number.isFinite(expiresInMinutes) ? expiresInMinutes : null,
+        linkHost: safeUrlHost(linkUrl)
+      }
+    });
+
+    return {
+      offered: true,
+      reason: "offered",
+      linkUrl,
+      expiresInMinutes
+    };
+  }
+
   async maybeHandleStructuredVoiceIntent({ message, settings, replyDirective }) {
     const voiceSettings = settings?.voice || {};
     if (!voiceSettings.enabled) return false;
@@ -1896,6 +2098,35 @@ export class ClankerBot {
       return "";
     }
     return normalized;
+  }
+
+  async resolveOperationalChannel(
+    channel,
+    channelId,
+    { guildId = null, userId = null, messageId = null, event = null, reason = null } = {}
+  ) {
+    return await resolveOperationalChannel(this, channel, channelId, {
+      guildId,
+      userId,
+      messageId,
+      event,
+      reason
+    });
+  }
+
+  async sendToChannel(
+    channel,
+    text,
+    { guildId = null, channelId = null, userId = null, messageId = null, event = null, reason = null } = {}
+  ) {
+    return await sendToChannel(this, channel, text, {
+      guildId,
+      channelId,
+      userId,
+      messageId,
+      event,
+      reason
+    });
   }
 
   async maybeApplyReplyReaction({

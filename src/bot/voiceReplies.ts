@@ -180,6 +180,8 @@ export async function generateVoiceTurnReply(runtime, {
   contextMessages = [],
   sessionId = null,
   isEagerTurn = false,
+  joinWindowActive = false,
+  joinWindowAgeMs = null,
   voiceEagerness = 0,
   conversationContext = null,
   soundboardCandidates = [],
@@ -218,6 +220,20 @@ export async function generateVoiceTurnReply(runtime, {
       typeof runtime.runModelRequestedWebSearch === "function" &&
       typeof runtime.buildWebSearchContext === "function"
   );
+  const screenShare = resolveVoiceScreenShareCapability(runtime, {
+    settings,
+    guildId,
+    channelId,
+    userId
+  });
+  const allowScreenShareDirective = Boolean(
+    screenShare.enabled &&
+      String(screenShare.status || "").trim().toLowerCase() === "ready" &&
+      typeof runtime.offerVoiceScreenShareLink === "function" &&
+      guildId &&
+      channelId &&
+      userId
+  );
   const allowedDirectives = [
     ...(allowMemoryDirectives
       ? [
@@ -226,7 +242,8 @@ export async function generateVoiceTurnReply(runtime, {
         ]
       : []),
     ...(allowSoundboardDirective ? ["[[SOUNDBOARD:<sound_ref>]]"] : []),
-    ...(allowWebSearchDirective ? ["[[WEB_SEARCH:<concise query>]]"] : [])
+    ...(allowWebSearchDirective ? ["[[WEB_SEARCH:<concise query>]]"] : []),
+    ...(allowScreenShareDirective ? ["[[SCREEN_SHARE_LINK]]"] : [])
   ];
   const directivesLine = allowedDirectives.length
     ? `Allowed optional trailing directives: ${allowedDirectives.join(", ")}.`
@@ -290,6 +307,15 @@ export async function generateVoiceTurnReply(runtime, {
         }
       };
   let usedWebSearchFollowup = false;
+  const effectiveJoinWindowActive =
+    Boolean(joinWindowActive) || Boolean(conversationContext?.joinWindowActive);
+  const explicitJoinWindowAgeMs = Number(joinWindowAgeMs);
+  const contextJoinWindowAgeMs = Number(conversationContext?.joinWindowAgeMs);
+  const effectiveJoinWindowAgeMs = Number.isFinite(explicitJoinWindowAgeMs)
+    ? Math.max(0, Math.round(explicitJoinWindowAgeMs))
+    : Number.isFinite(contextJoinWindowAgeMs)
+      ? Math.max(0, Math.round(contextJoinWindowAgeMs))
+      : null;
 
   const voiceToneGuardrails = buildVoiceToneGuardrails();
   const systemPrompt = [
@@ -298,6 +324,9 @@ export async function generateVoiceTurnReply(runtime, {
     ...voiceToneGuardrails,
     "Output plain spoken text only.",
     directivesLine,
+    effectiveJoinWindowActive
+      ? "Join window active: you just joined VC. If this turn sounds like a greeting/check-in, prefer a short acknowledgement over [SKIP] unless clearly aimed at another human."
+      : null,
     isEagerTurn
       ? allowedDirectives.length
         ? "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text and only optional trailing directives."
@@ -321,11 +350,15 @@ export async function generateVoiceTurnReply(runtime, {
       isEagerTurn,
       voiceEagerness,
       conversationContext,
+      joinWindowActive: effectiveJoinWindowActive,
+      joinWindowAgeMs: effectiveJoinWindowAgeMs,
       botName: getPromptBotName(settings),
       soundboardCandidates: normalizedSoundboardCandidates,
       memoryEnabled: Boolean(settings.memory?.enabled),
       webSearch: webSearchContext,
-      allowWebSearchDirective: allowWebSearch
+      allowWebSearchDirective: allowWebSearch,
+      screenShare,
+      allowScreenShareDirective
     });
 
   try {
@@ -410,14 +443,45 @@ export async function generateVoiceTurnReply(runtime, {
       parsed = parseReplyDirectives(generation.text, resolveMaxMediaPromptLen(settings));
     }
 
-    const soundboardRef = allowSoundboardDirective
+    let usedScreenShareOffer = false;
+    if (allowScreenShareDirective && parsed.screenShareLinkRequested && typeof runtime.offerVoiceScreenShareLink === "function") {
+      try {
+        const offered = await runtime.offerVoiceScreenShareLink({
+          settings,
+          guildId,
+          channelId,
+          requesterUserId: String(userId),
+          transcript: incomingTranscript,
+          source: sessionId ? "voice_session_directive" : "voice_turn_directive"
+        });
+        usedScreenShareOffer = Boolean(offered?.offered);
+      } catch (error) {
+        runtime.store?.logAction?.({
+          kind: "voice_error",
+          guildId,
+          channelId,
+          userId,
+          content: `voice_screen_share_offer_failed: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId
+          }
+        });
+      }
+    }
+
+    let soundboardRef = allowSoundboardDirective
       ? String(parsed.soundboardRef || "")
           .trim()
           .slice(0, 180) || null
       : null;
     const finalText = sanitizeBotText(normalizeSkipSentinel(parsed.text || generation.text || ""), 520);
     if (!finalText || finalText === "[SKIP]") {
-      return { text: "", soundboardRef: null };
+      return {
+        text: "",
+        soundboardRef: null,
+        usedWebSearchFollowup,
+        usedScreenShareOffer
+      };
     }
 
     if (settings.memory?.enabled && parsed.memoryLine && runtime.memory?.rememberDirectiveLine && userId) {
@@ -451,7 +515,8 @@ export async function generateVoiceTurnReply(runtime, {
     return {
       text: finalText,
       soundboardRef,
-      usedWebSearchFollowup
+      usedWebSearchFollowup,
+      usedScreenShareOffer
     };
   } catch (error) {
     runtime.store.logAction({
@@ -466,6 +531,28 @@ export async function generateVoiceTurnReply(runtime, {
     });
     return { text: "" };
   }
+}
+
+function resolveVoiceScreenShareCapability(runtime, { settings, guildId, channelId, userId }) {
+  if (typeof runtime?.getVoiceScreenShareCapability !== "function") {
+    return {
+      enabled: false,
+      status: "disabled",
+      publicUrl: ""
+    };
+  }
+
+  const capability = runtime.getVoiceScreenShareCapability({
+    settings,
+    guildId,
+    channelId,
+    requesterUserId: userId
+  });
+  return {
+    enabled: Boolean(capability?.enabled),
+    status: String(capability?.status || "disabled").trim().toLowerCase() || "disabled",
+    publicUrl: String(capability?.publicUrl || "").trim()
+  };
 }
 
 function resolveVoiceWebSearchTimeoutMs({ settings, overrideMs }) {

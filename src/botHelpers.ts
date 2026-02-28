@@ -13,6 +13,7 @@ const WEB_SEARCH_DIRECTIVE_RE = /\[\[WEB_SEARCH:\s*([^\]]*?)\s*\]\]\s*$/i;
 const MEMORY_LINE_DIRECTIVE_RE = /\[\[MEMORY_LINE:\s*([^\]]*?)\s*\]\]\s*$/i;
 const SELF_MEMORY_LINE_DIRECTIVE_RE = /\[\[SELF_MEMORY_LINE:\s*([^\]]*?)\s*\]\]\s*$/i;
 const SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*([^\]]*?)\s*\]\]\s*$/i;
+const SCREEN_SHARE_LINK_DIRECTIVE_RE = /\[\[SCREEN_SHARE_LINK\]\]\s*$/i;
 const WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
 const DEFAULT_MAX_MEDIA_PROMPT_LEN = 900;
 const MAX_MEDIA_PROMPT_FLOOR = 120;
@@ -481,7 +482,8 @@ export function parseReplyDirectives(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_
     webSearchQuery: null,
     memoryLine: null,
     selfMemoryLine: null,
-    soundboardRef: null
+    soundboardRef: null,
+    screenShareLinkRequested: false
   };
 
   while (parsed.text) {
@@ -579,6 +581,13 @@ export function parseReplyDirectives(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_
         parsed.soundboardRef = normalizeDirectiveText(soundboardMatch[1], MAX_SOUNDBOARD_REF_LEN) || null;
       }
       parsed.text = parsed.text.slice(0, soundboardMatch.index).trim();
+      continue;
+    }
+
+    const screenShareMatch = parsed.text.match(SCREEN_SHARE_LINK_DIRECTIVE_RE);
+    if (screenShareMatch) {
+      parsed.screenShareLinkRequested = true;
+      parsed.text = parsed.text.slice(0, screenShareMatch.index).trim();
       continue;
     }
 

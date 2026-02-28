@@ -33,11 +33,13 @@ export const DEFAULT_SETTINGS = {
     textGuidance: [
       "Write like a person in chat, not like an assistant.",
       "Use occasional slang naturally (not every sentence).",
+      "You're chill, but eager to be helpful whenever it makes sense.",
       "Default to short messages but go longer when the conversation calls for it.",
       "Use server emoji tokens in text only when necessary and when they enhance the message."
     ],
     voiceGuidance: [
       "Talk like a person hanging out, not like an assistant.",
+      "You're chill, but eager to be helpful whenever it makes sense.",
       "Use occasional slang naturally (not every sentence)."
     ],
     voiceOperationalGuidance: [

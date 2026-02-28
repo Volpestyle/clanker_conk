@@ -1876,6 +1876,52 @@ test("runRealtimeTurn uses brain reply generation when admission allows turn", a
   assert.equal(brainPayloads[0]?.source, "realtime");
 });
 
+test("smoke: runRealtimeBrainReply passes join-window context into generation", async () => {
+  const generationPayloads = [];
+  const manager = createManager();
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = () => true;
+  manager.generateVoiceTurn = async (payload) => {
+    generationPayloads.push(payload);
+    return {
+      text: "yo what's good"
+    };
+  };
+
+  const session = {
+    id: "session-join-greeting-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 2_000,
+    realtimeClient: {},
+    recentVoiceTurns: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "yo, what's up?",
+    directAddressed: false,
+    source: "realtime"
+  });
+
+  assert.equal(result, true);
+  assert.equal(generationPayloads.length, 1);
+  assert.equal(Boolean(generationPayloads[0]?.isEagerTurn), true);
+  assert.equal(Boolean(generationPayloads[0]?.joinWindowActive), true);
+  assert.equal(
+    Number.isFinite(Number(generationPayloads[0]?.joinWindowAgeMs)),
+    true
+  );
+});
+
 test("runRealtimeTurn uses native realtime forwarding when strategy is native", async () => {
   const brainPayloads = [];
   const forwardedPayloads = [];

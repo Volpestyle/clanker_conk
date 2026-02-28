@@ -688,7 +688,7 @@ button.sm {
 
 .settings-sidebar {
   position: sticky;
-  top: 20px;
+  top: 68px;
   display: flex;
   flex-direction: column;
   gap: 2px;

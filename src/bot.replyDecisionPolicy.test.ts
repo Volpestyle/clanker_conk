@@ -1521,6 +1521,204 @@ test("smoke: 'clanka look at my screen' initiates a screen-share link message", 
   });
 });
 
+test("getVoiceScreenShareCapability normalizes status and handles missing manager", async () => {
+  await withTempStore(async (store) => {
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: null,
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    const unavailable = bot.getVoiceScreenShareCapability();
+    assert.equal(unavailable.enabled, false);
+    assert.equal(unavailable.status, "disabled");
+    assert.equal(unavailable.reason, "screen_share_manager_unavailable");
+
+    bot.attachScreenShareSessionManager({
+      getLinkCapability() {
+        return {
+          enabled: true,
+          status: "READY",
+          publicUrl: " https://demo.trycloudflare.com "
+        };
+      }
+    });
+
+    const ready = bot.getVoiceScreenShareCapability();
+    assert.equal(ready.enabled, true);
+    assert.equal(ready.status, "ready");
+    assert.equal(ready.publicUrl, "https://demo.trycloudflare.com");
+  });
+});
+
+test("offerVoiceScreenShareLink sends generated offer to text channel when session is created", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-screen-share-offer";
+    applyBaselineSettings(store, channelId);
+
+    const channelSendPayloads = [];
+    const createSessionCalls = [];
+    const channel = {
+      id: channelId,
+      guildId: "guild-1",
+      async send(payload) {
+        channelSendPayloads.push(payload);
+        return { id: "msg-1" };
+      }
+    };
+    const guild = buildGuild();
+    guild.members.cache.set("user-1", {
+      displayName: "alice",
+      user: { username: "alice_user" }
+    });
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: null,
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanker conk",
+      tag: "clanker conk#0001"
+    };
+    bot.client.guilds = {
+      cache: new Map([[guild.id, guild]])
+    };
+    bot.client.users = {
+      cache: new Map()
+    };
+    bot.client.channels = {
+      async fetch(id) {
+        if (id === channelId) return channel;
+        return null;
+      }
+    };
+
+    bot.attachScreenShareSessionManager({
+      async createSession(args) {
+        createSessionCalls.push(args);
+        return {
+          ok: true,
+          shareUrl: "https://screen.example/session/abc",
+          expiresInMinutes: 12
+        };
+      }
+    });
+
+    bot.composeScreenShareOfferMessage = async (payload) =>
+      `bet, open this and start sharing: ${String(payload?.linkUrl || "")}`;
+
+    const result = await bot.offerVoiceScreenShareLink({
+      settings: store.getSettings(),
+      guildId: guild.id,
+      channelId,
+      requesterUserId: "user-1",
+      transcript: "yo look at this",
+      source: "voice_turn_directive"
+    });
+
+    assert.equal(result.offered, true);
+    assert.equal(result.reason, "offered");
+    assert.equal(channelSendPayloads.length, 1);
+    assert.match(String(channelSendPayloads[0] || ""), /screen\.example\/session\/abc/);
+    assert.equal(createSessionCalls.length, 1);
+    assert.equal(createSessionCalls[0]?.guildId, guild.id);
+    assert.equal(createSessionCalls[0]?.channelId, channelId);
+    assert.equal(createSessionCalls[0]?.requesterUserId, "user-1");
+    assert.equal(createSessionCalls[0]?.targetUserId, "user-1");
+    assert.equal(createSessionCalls[0]?.source, "voice_turn_directive");
+  });
+});
+
+test("offerVoiceScreenShareLink sends generated unavailable text when session creation fails", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-screen-share-unavailable";
+    applyBaselineSettings(store, channelId);
+
+    const channelSendPayloads = [];
+    const channel = {
+      id: channelId,
+      guildId: "guild-1",
+      async send(payload) {
+        channelSendPayloads.push(payload);
+        return { id: "msg-2" };
+      }
+    };
+    const guild = buildGuild();
+    guild.members.cache.set("user-1", {
+      displayName: "alice",
+      user: { username: "alice_user" }
+    });
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: null,
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanker conk",
+      tag: "clanker conk#0001"
+    };
+    bot.client.guilds = {
+      cache: new Map([[guild.id, guild]])
+    };
+    bot.client.users = {
+      cache: new Map()
+    };
+    bot.client.channels = {
+      async fetch(id) {
+        if (id === channelId) return channel;
+        return null;
+      }
+    };
+
+    bot.attachScreenShareSessionManager({
+      async createSession() {
+        return {
+          ok: false,
+          reason: "provider_unavailable"
+        };
+      }
+    });
+
+    bot.composeScreenShareUnavailableMessage = async () =>
+      "can't share screen links right now, try again in a minute";
+
+    const result = await bot.offerVoiceScreenShareLink({
+      settings: store.getSettings(),
+      guildId: guild.id,
+      channelId,
+      requesterUserId: "user-1",
+      transcript: "screen share broken?",
+      source: "voice_turn_directive"
+    });
+
+    assert.equal(result.offered, false);
+    assert.equal(result.reason, "provider_unavailable");
+    assert.equal(channelSendPayloads.length, 1);
+    assert.match(String(channelSendPayloads[0] || ""), /can't share screen links right now/i);
+  });
+});
+
 test("initiative-channel direct turns can be routed to thread replies when policy chooses reply mode", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";

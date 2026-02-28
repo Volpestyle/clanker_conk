@@ -74,6 +74,12 @@ function createVoiceBot({
   generationError = null,
   generationSequence = null,
   searchConfigured = true,
+  screenShareCapability = {
+    enabled: false,
+    status: "disabled",
+    publicUrl: ""
+  },
+  offerScreenShare = async () => ({ offered: true }),
   runWebSearch = async ({ webSearch, query }) => ({
     ...(webSearch || {}),
     requested: true,
@@ -94,6 +100,7 @@ function createVoiceBot({
   const ingests = [];
   const remembers = [];
   const webSearchCalls = [];
+  const screenShareCalls = [];
   const generationPayloads = [];
   let generationCalls = 0;
 
@@ -175,6 +182,13 @@ function createVoiceBot({
       webSearchCalls.push(payload);
       return await runWebSearch(payload);
     },
+    getVoiceScreenShareCapability() {
+      return screenShareCapability;
+    },
+    async offerVoiceScreenShareLink(payload) {
+      screenShareCalls.push(payload);
+      return await offerScreenShare(payload);
+    },
     search: {
       isConfigured() {
         return Boolean(searchConfigured);
@@ -196,6 +210,7 @@ function createVoiceBot({
     ingests,
     remembers,
     webSearchCalls,
+    screenShareCalls,
     generationPayloads,
     getGenerationCalls() {
       return generationCalls;
@@ -284,6 +299,33 @@ test("generateVoiceTurnReply returns early for empty transcripts", async () => {
 
   assert.deepEqual(reply, { text: "" });
   assert.equal(getGenerationCalls(), 0);
+});
+
+test("generateVoiceTurnReply adds join-window greeting bias guidance", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: "[SKIP]"
+  });
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "yo, what's up?",
+    isEagerTurn: true,
+    joinWindowActive: true,
+    joinWindowAgeMs: 1800
+  });
+
+  assert.equal(reply.text, "");
+  assert.equal(generationPayloads.length, 1);
+  assert.equal(
+    String(generationPayloads[0]?.systemPrompt || "").includes("Join window active: you just joined VC."),
+    true
+  );
+  assert.equal(
+    String(generationPayloads[0]?.userPrompt || "").includes("Join window active: yes"),
+    true
+  );
 });
 
 test("generateVoiceTurnReply parses memory and soundboard directives", async () => {
@@ -430,4 +472,31 @@ test("generateVoiceTurnReply runs web lookup follow-up with start/complete callb
   ]);
   assert.equal(reply.text, "latest stable rust is 1.90");
   assert.equal(reply.usedWebSearchFollowup, true);
+});
+
+test("generateVoiceTurnReply triggers voice screen-share link offer from directive", async () => {
+  const { bot, screenShareCalls } = createVoiceBot({
+    generationText: "i can check it [[SCREEN_SHARE_LINK]]",
+    screenShareCapability: {
+      enabled: true,
+      status: "ready",
+      publicUrl: "https://fancy-cat.trycloudflare.com"
+    },
+    offerScreenShare: async () => ({ offered: true })
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "can you look at my screen?"
+  });
+
+  assert.equal(reply.text, "i can check it");
+  assert.equal(reply.usedScreenShareOffer, true);
+  assert.equal(screenShareCalls.length, 1);
+  assert.equal(screenShareCalls[0]?.guildId, "guild-1");
+  assert.equal(screenShareCalls[0]?.channelId, "text-1");
+  assert.equal(screenShareCalls[0]?.requesterUserId, "user-1");
 });
