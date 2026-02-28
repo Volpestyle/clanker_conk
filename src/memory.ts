@@ -55,6 +55,7 @@ export class MemoryManager {
   maxIngestQueue;
   queryEmbeddingCache;
   queryEmbeddingInFlight;
+  dailyLogMessageIds;
 
   constructor({ store, llm, memoryFilePath }) {
     this.store = store;
@@ -69,6 +70,7 @@ export class MemoryManager {
     this.maxIngestQueue = 400;
     this.queryEmbeddingCache = new Map();
     this.queryEmbeddingInFlight = new Map();
+    this.dailyLogMessageIds = new Map();
   }
 
   async ingestMessage({
@@ -947,7 +949,36 @@ export class MemoryManager {
 
     await fs.mkdir(this.memoryDirPath, { recursive: true });
     await this.ensureDailyLogHeader(dailyFilePath, dateKey);
+    if (safeMessageId) {
+      const knownMessageIds = await this.getDailyLogMessageIds(dailyFilePath);
+      if (knownMessageIds.has(safeMessageId)) return;
+      await fs.appendFile(dailyFilePath, `${line}\n`, "utf8");
+      knownMessageIds.add(safeMessageId);
+      return;
+    }
     await fs.appendFile(dailyFilePath, `${line}\n`, "utf8");
+  }
+
+  async getDailyLogMessageIds(dailyFilePath) {
+    const cacheKey = String(dailyFilePath || "").trim();
+    if (!cacheKey) return new Set();
+    const cached = this.dailyLogMessageIds.get(cacheKey);
+    if (cached) return cached;
+
+    const messageIds = new Set();
+    try {
+      const existing = await fs.readFile(cacheKey, "utf8");
+      for (const line of existing.split("\n")) {
+        const match = line.match(/\bmessage:([^\]\s]+)/u);
+        if (match?.[1]) {
+          messageIds.add(String(match[1]).trim());
+        }
+      }
+    } catch {
+      // Ignore missing/unreadable daily file and bootstrap with an empty index.
+    }
+    this.dailyLogMessageIds.set(cacheKey, messageIds);
+    return messageIds;
   }
 
   async ensureDailyLogHeader(dailyFilePath, dateKey) {

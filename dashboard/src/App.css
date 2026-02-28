@@ -2007,6 +2007,29 @@ td .kind-badge + .kind-badge {
   overflow-y: auto;
 }
 
+.vm-convo-context-summary {
+  display: grid;
+  gap: 4px;
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.vm-convo-context-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 0.7rem;
+  color: var(--ink-2);
+}
+
+.vm-convo-context-row span:last-child {
+  color: var(--ink-1);
+  font-family: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+}
+
 .vm-convo-msg {
   padding: 6px 10px;
   border-radius: var(--radius-xs);

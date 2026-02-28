@@ -148,6 +148,7 @@ import {
   VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS,
   VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
   VOICE_DECIDER_HISTORY_MAX_TURNS,
+  VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS,
   VOICE_LOOKUP_BUSY_LOG_COOLDOWN_MS,
   VOICE_LOOKUP_BUSY_MAX_CHARS,
   VOICE_TURN_MIN_ASR_CLIP_MS,
@@ -221,8 +222,17 @@ export class VoiceSessionManager {
   getRuntimeState() {
     const sessions = [...this.sessions.values()].map((session) => {
       const participants = this.getVoiceChannelParticipants(session);
-      const recentTurns = Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns : [];
+      const modelTurns = Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns : [];
+      const transcriptTurns = Array.isArray(session.transcriptTurns) ? session.transcriptTurns : [];
       const deferredQueue = Array.isArray(session.pendingDeferredTurns) ? session.pendingDeferredTurns : [];
+      const generationSummary =
+        session.modelContextSummary && typeof session.modelContextSummary === "object"
+          ? session.modelContextSummary.generation || null
+          : null;
+      const deciderSummary =
+        session.modelContextSummary && typeof session.modelContextSummary === "object"
+          ? session.modelContextSummary.decider || null
+          : null;
 
       return {
         sessionId: session.id,
@@ -256,16 +266,23 @@ export class VoiceSessionManager {
           lastDirectAddressAt: session.lastDirectAddressAt
             ? new Date(session.lastDirectAddressAt).toISOString()
             : null,
-          lastDirectAddressUserId: session.lastDirectAddressUserId || null
+          lastDirectAddressUserId: session.lastDirectAddressUserId || null,
+          modelContext: {
+            generation: generationSummary,
+            decider: deciderSummary,
+            trackedTurns: modelTurns.length,
+            trackedTurnLimit: VOICE_DECIDER_HISTORY_MAX_TURNS,
+            trackedTranscriptTurns: transcriptTurns.length
+          }
         },
         participants: participants.map((p) => ({ userId: p.userId, displayName: p.displayName })),
         participantCount: participants.length,
         voiceLookupBusyCount: Number(session.voiceLookupBusyCount || 0),
         pendingDeferredTurns: deferredQueue.length,
-        recentTurns: recentTurns.slice(-12).map((t) => ({
+        recentTurns: transcriptTurns.slice(-VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS).map((t) => ({
           role: t.role,
           speakerName: t.speakerName || "",
-          text: String(t.text || "").slice(0, 300),
+          text: String(t.text || ""),
           at: t.at ? new Date(t.at).toISOString() : null
         })),
         streamWatch: {
@@ -283,9 +300,7 @@ export class VoiceSessionManager {
         stt: session.mode === "stt_pipeline"
           ? {
               pendingTurns: Number(session.pendingSttTurns || 0),
-              contextMessages: Array.isArray(session.recentVoiceTurns)
-                ? session.recentVoiceTurns.length
-                : 0
+              contextMessages: modelTurns.length
             }
           : null,
         realtime: isRealtimeMode(session.mode)
@@ -293,7 +308,7 @@ export class VoiceSessionManager {
               provider: session.realtimeProvider || resolveRealtimeProvider(session.mode),
               inputSampleRateHz: Number(session.realtimeInputSampleRateHz) || 24000,
               outputSampleRateHz: Number(session.realtimeOutputSampleRateHz) || 24000,
-              recentVoiceTurns: Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns.length : 0,
+              recentVoiceTurns: modelTurns.length,
               pendingTurns:
                 (session.realtimeTurnDrainActive ? 1 : 0) +
                 (Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns.length : 0),
@@ -2258,9 +2273,10 @@ export class VoiceSessionManager {
       2,
       Math.ceil(((VOICE_TURN_MIN_ASR_CLIP_MS / 1000) * sampleRateHz * 2))
     );
-    const skipShortClipAsr =
+    const isShortSpeakingEndClip =
       String(captureReason || "stream_end") === "speaking_end" &&
       pcmBuffer.length < minAsrClipBytes;
+    const skipShortClipAsr = Boolean(isShortSpeakingEndClip);
     let turnTranscript = "";
     let resolvedFallbackModel = transcriptionPlan.fallbackModel || null;
     let resolvedTranscriptionPlanReason = transcriptionPlan.reason;
@@ -2968,6 +2984,17 @@ export class VoiceSessionManager {
 
     const botName = getPromptBotName(settings);
     const recentHistory = this.formatVoiceDecisionHistory(session, 6, VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS);
+    const trackedTurnCount = Array.isArray(session?.recentVoiceTurns) ? session.recentVoiceTurns.length : 0;
+    this.updateModelContextSummary(session, "decider", {
+      source: String(_source || "stt_pipeline"),
+      capturedAt: new Date(now).toISOString(),
+      availableTurns: trackedTurnCount,
+      maxTurns: VOICE_DECIDER_HISTORY_MAX_TURNS,
+      promptHistoryChars: recentHistory.length,
+      transcriptChars: normalizedTranscript.length,
+      directAddressed: Boolean(directAddressed),
+      joinWindowActive
+    });
     const configuredMaxDecisionAttempts = Number(replyDecisionLlm?.maxAttempts);
     const maxDecisionAttempts = clamp(
       Math.floor(Number.isFinite(configuredMaxDecisionAttempts) ? configuredMaxDecisionAttempts : 1),
@@ -3212,12 +3239,14 @@ export class VoiceSessionManager {
 
   recordVoiceTurn(session, { role = "user", userId = null, text = "" } = {}) {
     if (!session || session.ending) return;
-    const normalizedText = normalizeVoiceText(text, VOICE_DECIDER_HISTORY_MAX_CHARS);
-    if (!normalizedText) return;
+    const normalizedContextText = normalizeVoiceText(text, VOICE_DECIDER_HISTORY_MAX_CHARS);
+    const normalizedTranscriptText = normalizeVoiceText(text, STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedContextText || !normalizedTranscriptText) return;
 
     const normalizedRole = role === "assistant" ? "assistant" : "user";
     const normalizedUserId = String(userId || "").trim() || null;
     const turns = Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns : [];
+    const transcriptTurns = Array.isArray(session.transcriptTurns) ? session.transcriptTurns : [];
     const speakerName =
       normalizedRole === "assistant"
         ? getPromptBotName(session.settingsSnapshot || this.store.getSettings())
@@ -3227,21 +3256,44 @@ export class VoiceSessionManager {
       previous &&
       previous.role === normalizedRole &&
       String(previous.userId || "") === String(normalizedUserId || "") &&
-      String(previous.text || "") === normalizedText
+      String(previous.text || "") === normalizedContextText
     ) {
       return;
     }
 
+    const nextAt = Date.now();
+    const normalizedSpeakerName = String(speakerName || "").trim() || "someone";
     session.recentVoiceTurns = [
       ...turns,
       {
         role: normalizedRole,
         userId: normalizedUserId,
-        speakerName: String(speakerName || "").trim() || "someone",
-        text: normalizedText,
-        at: Date.now()
+        speakerName: normalizedSpeakerName,
+        text: normalizedContextText,
+        at: nextAt
       }
     ].slice(-VOICE_DECIDER_HISTORY_MAX_TURNS);
+    session.transcriptTurns = [
+      ...transcriptTurns,
+      {
+        role: normalizedRole,
+        userId: normalizedUserId,
+        speakerName: normalizedSpeakerName,
+        text: normalizedTranscriptText,
+        at: nextAt
+      }
+    ].slice(-VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS);
+  }
+
+  updateModelContextSummary(session, section, summary = null) {
+    if (!session || session.ending) return;
+    const key = section === "decider" ? "decider" : "generation";
+    const current =
+      session.modelContextSummary && typeof session.modelContextSummary === "object"
+        ? session.modelContextSummary
+        : { generation: null, decider: null };
+    current[key] = summary && typeof summary === "object" ? summary : null;
+    session.modelContextSummary = current;
   }
 
   updateFocusedSpeakerWindow({
@@ -3967,6 +4019,17 @@ export class VoiceSessionManager {
         content: normalizeVoiceText(row.text, STT_REPLY_MAX_CHARS)
       }))
       .filter((row) => row.content);
+    const contextMessageChars = contextMessages.reduce((total, row) => total + String(row?.content || "").length, 0);
+    this.updateModelContextSummary(session, "generation", {
+      source: "stt_pipeline",
+      capturedAt: new Date().toISOString(),
+      availableTurns: contextTurns.length,
+      sentTurns: contextMessages.length,
+      maxTurns: STT_CONTEXT_MAX_MESSAGES,
+      contextChars: contextMessageChars,
+      transcriptChars: normalizedTranscript.length,
+      directAddressed: Boolean(directAddressed)
+    });
     const soundboardCandidateInfo = await this.resolveSoundboardCandidates({
       session,
       settings
@@ -4079,7 +4142,10 @@ export class VoiceSessionManager {
           sessionId: session.id,
           replyText,
           soundboardRef: requestedSoundboardRef || null,
-          usedWebSearchFollowup
+          usedWebSearchFollowup,
+          contextTurnsSent: contextMessages.length,
+          contextTurnsAvailable: contextTurns.length,
+          contextCharsSent: contextMessageChars
         }
       });
       if (requestedSoundboardRef) {
@@ -4154,6 +4220,17 @@ export class VoiceSessionManager {
         content: normalizeVoiceText(row.text, STT_REPLY_MAX_CHARS)
       }))
       .filter((row) => row.content);
+    const contextMessageChars = contextMessages.reduce((total, row) => total + String(row?.content || "").length, 0);
+    this.updateModelContextSummary(session, "generation", {
+      source: String(source || "realtime"),
+      capturedAt: new Date().toISOString(),
+      availableTurns: contextTurns.length,
+      sentTurns: contextMessages.length,
+      maxTurns: STT_CONTEXT_MAX_MESSAGES,
+      contextChars: contextMessageChars,
+      transcriptChars: normalizedTranscript.length,
+      directAddressed: Boolean(directAddressed)
+    });
     const soundboardCandidateInfo = await this.resolveSoundboardCandidates({
       session,
       settings
@@ -4249,7 +4326,10 @@ export class VoiceSessionManager {
           source: String(source || "realtime"),
           usedWebSearchFollowup,
           conversationState: resolvedConversationContext?.engagementState || null,
-          engagedWithCurrentSpeaker: Boolean(resolvedConversationContext?.engagedWithCurrentSpeaker)
+          engagedWithCurrentSpeaker: Boolean(resolvedConversationContext?.engagedWithCurrentSpeaker),
+          contextTurnsSent: contextMessages.length,
+          contextTurnsAvailable: contextTurns.length,
+          contextCharsSent: contextMessageChars
         }
       });
       return true;
@@ -4302,7 +4382,10 @@ export class VoiceSessionManager {
         source: String(source || "realtime"),
         replyText,
         soundboardRef: requestedSoundboardRef || null,
-        usedWebSearchFollowup
+        usedWebSearchFollowup,
+        contextTurnsSent: contextMessages.length,
+        contextTurnsAvailable: contextTurns.length,
+        contextCharsSent: contextMessageChars
       }
     });
 

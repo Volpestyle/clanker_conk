@@ -457,6 +457,11 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         realtimeInputSampleRateHz,
         realtimeOutputSampleRateHz,
         recentVoiceTurns: [],
+        transcriptTurns: [],
+        modelContextSummary: {
+          generation: null,
+          decider: null
+        },
         connection,
         realtimeClient,
         audioPlayer,

@@ -1,5 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { MemoryManager } from "./memory.ts";
 
 function createMemoryForIngestTests(storeOverrides = {}) {
@@ -116,6 +119,47 @@ test("voice transcript ingest writes synthetic message rows for prompt history c
   memory.ingestWorkerActive = false;
   await memory.runIngestWorker();
   assert.equal(await ingestPromise, true);
+});
+
+test("appendDailyLogEntry dedupes repeated message ids", async () => {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-memory-log-"));
+  try {
+    const memory = new MemoryManager({
+      store: {
+        logAction() {
+          return undefined;
+        }
+      },
+      llm: {},
+      memoryFilePath: path.join(tempDir, "MEMORY.md")
+    });
+
+    await memory.appendDailyLogEntry({
+      messageId: "voice-guild-1-dup-1",
+      authorId: "user-1",
+      authorName: "Alice",
+      guildId: "guild-1",
+      channelId: "chan-1",
+      content: "hello from vc"
+    });
+    await memory.appendDailyLogEntry({
+      messageId: "voice-guild-1-dup-1",
+      authorId: "user-1",
+      authorName: "Alice",
+      guildId: "guild-1",
+      channelId: "chan-1",
+      content: "hello from vc"
+    });
+
+    const date = new Date();
+    const dateKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+    const dailyFilePath = path.join(tempDir, `${dateKey}.md`);
+    const text = await fs.readFile(dailyFilePath, "utf8");
+    const matches = text.match(/message:voice-guild-1-dup-1/gu) || [];
+    assert.equal(matches.length, 1);
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
 });
 
 test("processIngestMessage routes extracted subjects to author/self/lore memory", async () => {

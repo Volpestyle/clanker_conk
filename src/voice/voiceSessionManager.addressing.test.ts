@@ -1,7 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { VoiceSessionManager, resolveRealtimeTurnTranscriptionPlan } from "./voiceSessionManager.ts";
-import { STT_TURN_QUEUE_MAX } from "./voiceSessionManager.constants.ts";
+import { STT_TURN_QUEUE_MAX, VOICE_TURN_MIN_ASR_CLIP_MS } from "./voiceSessionManager.constants.ts";
 
 function createManager({
   participantCount = 2,
@@ -1333,6 +1333,70 @@ test("runRealtimeTurn skips ASR on very short speaking_end clips", async () => {
   );
   assert.equal(Boolean(addressingLog), true);
   assert.equal(addressingLog?.metadata?.asrSkippedShortClip, true);
+});
+
+test("runRealtimeTurn transcribes speaking_end clips above minimum duration threshold", async () => {
+  const runtimeLogs = [];
+  let transcribeCalls = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.llm.isAsrReady = () => true;
+  manager.llm.transcribeAudio = async () => ({ text: "unused" });
+  manager.transcribePcmTurn = async () => {
+    transcribeCalls += 1;
+    return "yo";
+  };
+  manager.evaluateVoiceReplyDecision = async ({ transcript }) => ({
+    allow: false,
+    reason: transcript ? "llm_no" : "missing_transcript",
+    participantCount: 2,
+    directAddressed: false,
+    transcript
+  });
+
+  const session = {
+    id: "session-short-clip-strong-signal-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "voice_agent",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    realtimeInputSampleRateHz: 24000,
+    realtimeClient: {
+      appendInputAudioPcm() {}
+    },
+    settingsSnapshot: baseSettings()
+  };
+
+  const sampleRateHz = 24000;
+  const minAsrClipBytes = Math.max(
+    2,
+    Math.ceil(((VOICE_TURN_MIN_ASR_CLIP_MS / 1000) * sampleRateHz * 2))
+  );
+  const aboveThresholdClip = Buffer.alloc(minAsrClipBytes + 2, 10);
+
+  await manager.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: aboveThresholdClip,
+    captureReason: "speaking_end"
+  });
+
+  assert.equal(transcribeCalls, 1);
+  assert.equal(
+    runtimeLogs.some(
+      (row) => row?.kind === "voice_runtime" && row?.content === "realtime_turn_transcription_skipped_short_clip"
+    ),
+    false
+  );
+  const addressingLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
+  );
+  assert.equal(Boolean(addressingLog), true);
+  assert.equal(addressingLog?.metadata?.asrSkippedShortClip, false);
+  assert.equal(addressingLog?.metadata?.transcript, "yo");
 });
 
 test("transcribePcmTurn escalates repeated empty transcripts after configured threshold", async () => {

@@ -48,6 +48,36 @@ export type VoiceSession = {
   mode: string;
   botTurnOpen: boolean;
   focusedSpeaker: { userId: string; displayName: string | null; since: string | null } | null;
+  conversation: {
+    lastAssistantReplyAt: string | null;
+    lastDirectAddressAt: string | null;
+    lastDirectAddressUserId: string | null;
+    modelContext: {
+      generation: {
+        source: string;
+        capturedAt: string;
+        availableTurns: number;
+        sentTurns: number;
+        maxTurns: number;
+        contextChars: number;
+        transcriptChars: number;
+        directAddressed: boolean;
+      } | null;
+      decider: {
+        source: string;
+        capturedAt: string;
+        availableTurns: number;
+        maxTurns: number;
+        promptHistoryChars: number;
+        transcriptChars: number;
+        directAddressed: boolean;
+        joinWindowActive: boolean;
+      } | null;
+      trackedTurns: number;
+      trackedTurnLimit: number;
+      trackedTranscriptTurns: number;
+    };
+  };
   participants: VoiceParticipant[];
   participantCount: number;
   voiceLookupBusyCount: number;

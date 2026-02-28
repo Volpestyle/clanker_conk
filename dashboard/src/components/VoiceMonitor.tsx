@@ -116,6 +116,11 @@ function Stat({ label, value, warn }: { label: string; value: ReactNode; warn?: 
 function PipelineBadge({ session }: { session: VoiceSession }) {
   const rt = session.realtime;
   const stt = session.stt;
+  const context = session.conversation?.modelContext;
+  const generationContext = context?.generation;
+  const trackedTurns = Number(context?.trackedTurns || 0);
+  const sentTurns = Number(generationContext?.sentTurns || 0);
+  const hasContextCoverage = trackedTurns > 0;
 
   if (rt) {
     const state = rt.state as RealtimeState | null;
@@ -127,6 +132,11 @@ function PipelineBadge({ session }: { session: VoiceSession }) {
         <span className="vm-pipe-detail">
           {rt.inputSampleRateHz / 1000}kHz in / {rt.outputSampleRateHz / 1000}kHz out
         </span>
+        {hasContextCoverage && (
+          <span className="vm-pipe-detail">
+            ctx {sentTurns}/{trackedTurns}
+          </span>
+        )}
         {rt.drainActive && <span className="vm-pipe-tag vm-pipe-draining">draining</span>}
         {state?.activeResponseId && (
           <span className="vm-pipe-tag vm-pipe-responding">responding</span>
@@ -140,7 +150,9 @@ function PipelineBadge({ session }: { session: VoiceSession }) {
       <div className="vm-pipeline-row">
         <span className="vm-pipe-dot vm-pipe-ok" />
         <span className="vm-pipe-label">STT Pipeline</span>
-        <span className="vm-pipe-detail">{stt.contextMessages} ctx msgs</span>
+        <span className="vm-pipe-detail">
+          ctx {sentTurns}/{Math.max(trackedTurns, Number(stt.contextMessages || 0))}
+        </span>
       </div>
     );
   }
@@ -224,7 +236,20 @@ function ParticipantList({ session }: { session: VoiceSession }) {
 
 // ---- Conversation Context ----
 
-function ConversationContext({ turns }: { turns: VoiceTurn[] }) {
+function ConversationContext({ session }: { session: VoiceSession }) {
+  const turns = session.recentTurns || [];
+  const modelContext = session.conversation?.modelContext || null;
+  const generation = modelContext?.generation || null;
+  const decider = modelContext?.decider || null;
+  const trackedTurns = Number(modelContext?.trackedTurns || 0);
+  const trackedTurnLimit = Number(modelContext?.trackedTurnLimit || 0);
+  const trackedTranscriptTurns = Number(modelContext?.trackedTranscriptTurns || turns.length);
+  const generationAvailableTurns = Number(generation?.availableTurns || trackedTurns);
+  const generationSentTurns = Number(generation?.sentTurns || 0);
+  const generationMaxTurns = Number(generation?.maxTurns || 0);
+  const deciderAvailableTurns = Number(decider?.availableTurns || trackedTurns);
+  const deciderMaxTurns = Number(decider?.maxTurns || 0);
+  const deciderSentTurns = Math.min(deciderAvailableTurns, deciderMaxTurns || deciderAvailableTurns);
   const [, setTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 5000);
@@ -235,6 +260,33 @@ function ConversationContext({ turns }: { turns: VoiceTurn[] }) {
 
   return (
     <Section title="Conversation" badge={turns.length}>
+      <div className="vm-convo-context-summary">
+        <div className="vm-convo-context-row">
+          <span>Generation context</span>
+          <span>
+            {generationSentTurns}/{generationAvailableTurns || 0}
+            {generationMaxTurns > 0 ? ` (max ${generationMaxTurns})` : ""}
+          </span>
+        </div>
+        <div className="vm-convo-context-row">
+          <span>Decider context</span>
+          <span>
+            {deciderSentTurns}/{deciderAvailableTurns || 0}
+            {deciderMaxTurns > 0 ? ` (max ${deciderMaxTurns})` : ""}
+          </span>
+        </div>
+        <div className="vm-convo-context-row">
+          <span>Tracked turns</span>
+          <span>
+            {trackedTurns}
+            {trackedTurnLimit > 0 ? ` (limit ${trackedTurnLimit})` : ""}
+          </span>
+        </div>
+        <div className="vm-convo-context-row">
+          <span>Transcript log turns</span>
+          <span>{trackedTranscriptTurns}</span>
+        </div>
+      </div>
       <div className="vm-convo-feed">
         {turns.map((t, i) => (
           <div key={i} className={`vm-convo-msg vm-convo-${t.role}`}>
@@ -362,7 +414,7 @@ function SessionCard({ session }: { session: VoiceSession }) {
           <ParticipantList session={session} />
 
           {/* Conversation context */}
-          <ConversationContext turns={session.recentTurns || []} />
+          <ConversationContext session={session} />
 
           {/* Stream watch */}
           <StreamWatchDetail session={session} />
