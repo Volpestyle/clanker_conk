@@ -322,6 +322,46 @@ export function createDashboardServer({
     }
   });
 
+  app.get("/api/guilds", (_req, res) => {
+    try {
+      const guilds = bot.getGuilds();
+      res.json(guilds.map((g) => ({ id: g.id, name: g.name })));
+    } catch (error) {
+      res.json([]);
+    }
+  });
+
+  app.post("/api/memory/simulate-slice", async (req, res, next) => {
+    try {
+      const userId = String(req.body?.userId || "").trim() || null;
+      const guildId = String(req.body?.guildId || "").trim();
+      const channelId = String(req.body?.channelId || "").trim() || null;
+      const queryText = String(req.body?.queryText || "").trim();
+
+      if (!guildId || !queryText) {
+        return res.status(400).json({ error: "guildId and queryText are required" });
+      }
+
+      const settings = store.getSettings();
+      const result = await memory.buildPromptMemorySlice({
+        userId,
+        guildId,
+        channelId,
+        queryText,
+        settings,
+        trace: { guildId, channelId, source: "dashboard_simulate_slice" }
+      });
+
+      return res.json({
+        userFacts: result.userFacts || [],
+        relevantFacts: result.relevantFacts || [],
+        relevantMessages: result.relevantMessages || []
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   app.get("/api/automations", (req, res) => {
     const guildId = String(req.query.guildId || "").trim();
     const channelId = String(req.query.channelId || "").trim() || null;

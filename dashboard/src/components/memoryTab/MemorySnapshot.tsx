@@ -1,17 +1,22 @@
-import React, { useMemo } from "react";
-import Skeleton from "./Skeleton";
-import { renderMarkdown } from "../renderMarkdown";
+import { useMemo } from "react";
+import Skeleton from "../Skeleton";
+import { renderMarkdown } from "../../renderMarkdown";
 
-export default function MemoryViewer({ markdown, onRefresh }) {
+interface Props {
+  markdown: string | null | undefined;
+  onRefresh: () => void;
+}
+
+export default function MemorySnapshot({ markdown, onRefresh }: Props) {
   const rendered = useMemo(
     () => (markdown ? renderMarkdown(markdown) : ""),
     [markdown]
   );
 
   return (
-    <section className="panel">
+    <div>
       <div className="panel-head">
-        <h3>Memory</h3>
+        <h3>Memory Snapshot</h3>
         <button type="button" className="sm" onClick={onRefresh}>
           Refresh memory.md
         </button>
@@ -31,6 +36,6 @@ export default function MemoryViewer({ markdown, onRefresh }) {
       ) : (
         <pre className="memory-box">No memory data</pre>
       )}
-    </section>
+    </div>
   );
 }

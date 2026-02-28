@@ -428,6 +428,10 @@ export class ClankerBot {
     };
   }
 
+  getGuilds() {
+    return [...this.client.guilds.cache.values()].map((g) => ({ id: g.id, name: g.name }));
+  }
+
   async applyRuntimeSettings(nextSettings = null) {
     const settings = nextSettings || this.store.getSettings();
     await this.voiceSessionManager.reconcileSettings(settings);

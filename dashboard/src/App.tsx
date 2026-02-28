@@ -5,12 +5,12 @@ import Header from "./components/Header";
 import MetricsBar from "./components/MetricsBar";
 import SettingsForm from "./components/SettingsForm";
 import ActionStream from "./components/ActionStream";
-import MemoryViewer from "./components/MemoryViewer";
+import MemoryTab from "./components/MemoryTab";
 import DailyCost from "./components/DailyCost";
 import PerformancePanel from "./components/PerformancePanel";
 import StaleIndicator from "./components/StaleIndicator";
 
-type MainTab = "activity" | "settings";
+type MainTab = "activity" | "memory" | "settings";
 
 export default function App() {
   const [toast, setToast] = useState({ text: "", type: "" });
@@ -74,6 +74,17 @@ export default function App() {
         </button>
         <button
           role="tab"
+          aria-selected={tab === "memory"}
+          className={`main-tab${tab === "memory" ? " active" : ""}`}
+          onClick={() => setTab("memory")}
+        >
+          <span className="main-tab-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a7 7 0 0 1 7 7c0 2.38-1.19 4.47-3 5.74V17a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-2.26C6.19 13.47 5 11.38 5 9a7 7 0 0 1 7-7z"/><line x1="10" y1="22" x2="14" y2="22"/></svg>
+          </span>
+          Memory
+        </button>
+        <button
+          role="tab"
           aria-selected={tab === "settings"}
           className={`main-tab${tab === "settings" ? " active" : ""}`}
           onClick={() => setTab("settings")}
@@ -94,14 +105,18 @@ export default function App() {
           )}
           <ActionStream actions={actions.data || []} />
           <div className="stack">
-            <MemoryViewer
-              markdown={memory.data?.markdown}
-              onRefresh={handleMemoryRefresh}
-            />
             <PerformancePanel performance={stats.data?.stats?.performance} />
             <DailyCost rows={stats.data?.stats?.dailyCost} />
           </div>
         </section>
+      )}
+
+      {tab === "memory" && (
+        <MemoryTab
+          markdown={memory.data?.markdown}
+          onRefresh={handleMemoryRefresh}
+          notify={notify}
+        />
       )}
 
       <section className={tab === "settings" ? "" : "tab-panel-hidden"} aria-hidden={tab !== "settings"}>
