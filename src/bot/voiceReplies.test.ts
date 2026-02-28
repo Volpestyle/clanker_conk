@@ -390,6 +390,52 @@ test("generateVoiceTurnReply drops soundboard directive when soundboard is disab
   assert.equal(reply.soundboardRef, null);
 });
 
+test("generateVoiceTurnReply strips selected soundboard id and name from spoken text", async () => {
+  const { bot } = createVoiceBot({
+    generationText: "playing airhorn@123 now airhorn [[SOUNDBOARD:airhorn@123]]"
+  });
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      voice: {
+        soundboard: {
+          enabled: true
+        }
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "drop a sound",
+    soundboardCandidates: ["airhorn@123 | airhorn"]
+  });
+
+  assert.equal(reply.text, "playing now");
+  assert.equal(reply.soundboardRef, "airhorn@123");
+});
+
+test("generateVoiceTurnReply preserves soundboard ref when scrubbed speech becomes empty", async () => {
+  const { bot } = createVoiceBot({
+    generationText: "airhorn@123 [[SOUNDBOARD:airhorn@123]]"
+  });
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      voice: {
+        soundboard: {
+          enabled: true
+        }
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "drop a sound",
+    soundboardCandidates: ["airhorn@123 | airhorn"]
+  });
+
+  assert.equal(reply.text, "");
+  assert.equal(reply.soundboardRef, "airhorn@123");
+});
+
 test("generateVoiceTurnReply logs voice errors when generation fails", async () => {
   const { bot, logs } = createVoiceBot({
     generationError: new Error("generation failed")

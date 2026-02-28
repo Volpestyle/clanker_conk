@@ -20,6 +20,10 @@ import {
 import { runModelRequestedWebSearchWithTimeout } from "./replyFollowup.ts";
 import { clamp, sanitizeBotText } from "../utils.ts";
 
+const MAX_SOUNDBOARD_LEAK_TOKEN_SCAN = 24;
+const SOUNDBOARD_CANDIDATE_PARSE_LIMIT = 40;
+const SOUNDBOARD_SIMPLE_TOKEN_RE = /^[a-z0-9 _-]+$/i;
+
 export async function composeVoiceOperationalMessage(runtime, {
   settings,
   guildId = null,
@@ -335,7 +339,7 @@ export async function generateVoiceTurnReply(runtime, {
         ? "Do not output markdown or [SKIP]. Optional trailing directives are allowed only as listed."
         : "Do not output directives like [[...]], [SKIP], or markdown.",
     allowSoundboardDirective ? "Never mention the soundboard control directive in normal speech." : null
-  ] 
+  ]
     .filter(Boolean)
     .join("\n");
   const buildVoiceUserPrompt = ({
@@ -474,11 +478,24 @@ export async function generateVoiceTurnReply(runtime, {
           .trim()
           .slice(0, 180) || null
       : null;
-    const finalText = sanitizeBotText(normalizeSkipSentinel(parsed.text || generation.text || ""), 520);
-    if (!finalText || finalText === "[SKIP]") {
+    const baseText = sanitizeBotText(normalizeSkipSentinel(parsed.text || generation.text || ""), 520);
+    const finalText = sanitizeSoundboardSpeechLeak({
+      text: baseText,
+      soundboardRef,
+      soundboardCandidates: normalizedSoundboardCandidates
+    });
+    if ((!finalText || finalText === "[SKIP]") && !soundboardRef) {
       return {
         text: "",
         soundboardRef: null,
+        usedWebSearchFollowup,
+        usedScreenShareOffer
+      };
+    }
+    if (!finalText || finalText === "[SKIP]") {
+      return {
+        text: "",
+        soundboardRef,
         usedWebSearchFollowup,
         usedScreenShareOffer
       };
@@ -560,4 +577,77 @@ function resolveVoiceWebSearchTimeoutMs({ settings, overrideMs }) {
   const configured = Number(settings?.voice?.webSearchTimeoutMs);
   const raw = Number.isFinite(explicit) ? explicit : Number.isFinite(configured) ? configured : 8000;
   return clamp(Math.floor(raw), 500, 45000);
+}
+
+function sanitizeSoundboardSpeechLeak({
+  text,
+  soundboardRef,
+  soundboardCandidates
+}) {
+  const spoken = String(text || "").trim();
+  const normalizedRef = String(soundboardRef || "").trim();
+  if (!spoken || !normalizedRef) return spoken;
+
+  const parsedCandidates = parseSoundboardCandidateLines(soundboardCandidates);
+  const selectedCandidate = parsedCandidates.find(
+    (candidate) => candidate.reference.toLowerCase() === normalizedRef.toLowerCase()
+  );
+
+  const tokensToRemove = [
+    normalizedRef,
+    normalizedRef.split("@")[0] || "",
+    selectedCandidate?.reference || "",
+    selectedCandidate?.reference.split("@")[0] || "",
+    selectedCandidate?.name || ""
+  ]
+    .map((token) => String(token || "").trim())
+    .filter(Boolean)
+    .slice(0, MAX_SOUNDBOARD_LEAK_TOKEN_SCAN);
+
+  let cleaned = spoken;
+  for (const token of tokensToRemove) {
+    cleaned = removeCaseInsensitivePhrase(cleaned, token);
+  }
+
+  return cleaned
+    .replace(/\s+/g, " ")
+    .replace(/\s+([,.;!?])/g, "$1")
+    .trim();
+}
+
+function parseSoundboardCandidateLines(lines) {
+  const source = Array.isArray(lines) ? lines : [];
+  const parsed = [];
+  for (const line of source.slice(0, SOUNDBOARD_CANDIDATE_PARSE_LIMIT)) {
+    const raw = String(line || "")
+      .replace(/^\s*-\s*/, "")
+      .trim();
+    if (!raw) continue;
+    const [referencePart, namePart] = raw.split("|");
+    const reference = String(referencePart || "").trim();
+    if (!reference) continue;
+    const name = String(namePart || "").trim();
+    parsed.push({
+      reference,
+      name: name || ""
+    });
+  }
+  return parsed;
+}
+
+function removeCaseInsensitivePhrase(text, phrase) {
+  const source = String(text || "");
+  const token = String(phrase || "").trim();
+  if (!source || !token) return source;
+
+  const escaped = escapeRegex(token);
+  const pattern = SOUNDBOARD_SIMPLE_TOKEN_RE.test(token)
+    ? new RegExp(`\\b${escaped}\\b`, "gi")
+    : new RegExp(escaped, "gi");
+
+  return source.replace(pattern, " ");
+}
+
+function escapeRegex(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

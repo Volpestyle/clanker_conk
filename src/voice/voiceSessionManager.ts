@@ -2284,7 +2284,12 @@ export class VoiceSessionManager {
     const strategy = String(resolvedSettings?.voice?.realtimeReplyStrategy || "brain")
       .trim()
       .toLowerCase();
-    if (strategy === "native") return "native";
+    if (strategy === "native") {
+      if (Boolean(resolvedSettings?.voice?.soundboard?.enabled)) {
+        return "brain";
+      }
+      return "native";
+    }
     return "brain";
   }
 
@@ -4268,34 +4273,43 @@ export class VoiceSessionManager {
         releaseLookupBusy = null;
       }
     }
-    if (!replyText || session.ending) return;
+    if (session.ending) return;
+    if (!replyText && !requestedSoundboardRef) return;
 
-    const spokeLine = await this.speakVoiceLineWithTts({
-      session,
-      settings,
-      text: replyText,
-      source: "voice_stt_pipeline_tts"
-    });
-    if (!spokeLine) return;
+    let spokeLine = false;
+    if (replyText) {
+      spokeLine = await this.speakVoiceLineWithTts({
+        session,
+        settings,
+        text: replyText,
+        source: "voice_stt_pipeline_tts"
+      });
+      if (!spokeLine) return;
+    }
 
     try {
       const replyAt = Date.now();
-      session.lastAudioDeltaAt = replyAt;
+      if (spokeLine) {
+        session.lastAudioDeltaAt = replyAt;
+      }
       session.lastAssistantReplyAt = replyAt;
-      this.recordVoiceTurn(session, {
-        role: "assistant",
-        userId: this.client.user?.id || null,
-        text: replyText
-      });
+      if (replyText) {
+        this.recordVoiceTurn(session, {
+          role: "assistant",
+          userId: this.client.user?.id || null,
+          text: replyText
+        });
+      }
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
         channelId: session.textChannelId,
         userId: this.client.user?.id || null,
-        content: "stt_pipeline_reply_spoken",
+        content: replyText ? "stt_pipeline_reply_spoken" : "stt_pipeline_soundboard_only",
         metadata: {
           sessionId: session.id,
-          replyText,
+          replyText: replyText || null,
+          spokeLine,
           soundboardRef: requestedSoundboardRef || null,
           usedWebSearchFollowup,
           usedScreenShareOffer,
@@ -4482,7 +4496,7 @@ export class VoiceSessionManager {
     const requestedSoundboardRef = String(generatedPayload?.soundboardRef || "").trim().slice(0, 180);
     const usedWebSearchFollowup = Boolean(generatedPayload?.usedWebSearchFollowup);
     const usedScreenShareOffer = Boolean(generatedPayload?.usedScreenShareOffer);
-    if (!replyText) {
+    if (!replyText && !requestedSoundboardRef) {
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
@@ -4507,7 +4521,7 @@ export class VoiceSessionManager {
       return true;
     }
 
-    if (session.mode === "openai_realtime") {
+    if (replyText && session.mode === "openai_realtime") {
       await this.prepareOpenAiRealtimeTurnContext({
         session,
         settings,
@@ -4517,31 +4531,33 @@ export class VoiceSessionManager {
       });
     }
 
-    const requestedRealtimeUtterance = this.requestRealtimeTextUtterance({
-      session,
-      text: replyText,
-      userId: this.client.user?.id || null,
-      source: `${String(source || "realtime")}:reply`
-    });
     const replyRequestedAt = Date.now();
     session.lastAssistantReplyAt = replyRequestedAt;
-    if (!requestedRealtimeUtterance) {
-      const spokeFallback = await this.speakVoiceLineWithTts({
+    let requestedRealtimeUtterance = false;
+    if (replyText) {
+      requestedRealtimeUtterance = this.requestRealtimeTextUtterance({
         session,
-        settings,
         text: replyText,
-        source: `${String(source || "realtime")}:tts_fallback`
+        userId: this.client.user?.id || null,
+        source: `${String(source || "realtime")}:reply`
       });
-      if (!spokeFallback) return false;
-      session.lastAudioDeltaAt = replyRequestedAt;
-      session.lastAssistantReplyAt = replyRequestedAt;
+      if (!requestedRealtimeUtterance) {
+        const spokeFallback = await this.speakVoiceLineWithTts({
+          session,
+          settings,
+          text: replyText,
+          source: `${String(source || "realtime")}:tts_fallback`
+        });
+        if (!spokeFallback) return false;
+        session.lastAudioDeltaAt = replyRequestedAt;
+        session.lastAssistantReplyAt = replyRequestedAt;
+      }
+      this.recordVoiceTurn(session, {
+        role: "assistant",
+        userId: this.client.user?.id || null,
+        text: replyText
+      });
     }
-
-    this.recordVoiceTurn(session, {
-      role: "assistant",
-      userId: this.client.user?.id || null,
-      text: replyText
-    });
     this.store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,
@@ -4552,7 +4568,8 @@ export class VoiceSessionManager {
         sessionId: session.id,
         mode: session.mode,
         source: String(source || "realtime"),
-        replyText,
+        replyText: replyText || null,
+        requestedRealtimeUtterance,
         soundboardRef: requestedSoundboardRef || null,
         usedWebSearchFollowup,
         usedScreenShareOffer,

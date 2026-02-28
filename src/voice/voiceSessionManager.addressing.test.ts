@@ -1977,6 +1977,63 @@ test("runRealtimeTurn uses native realtime forwarding when strategy is native", 
   assert.equal(forwardedPayloads[0]?.transcript, "");
 });
 
+test("runRealtimeTurn uses brain strategy when soundboard is enabled", async () => {
+  const brainPayloads = [];
+  const forwardedPayloads = [];
+  const manager = createManager();
+  manager.evaluateVoiceReplyDecision = async () => ({
+    allow: true,
+    reason: "llm_yes",
+    participantCount: 2,
+    directAddressed: false,
+    transcript: "say it native"
+  });
+  manager.runRealtimeBrainReply = async (payload) => {
+    brainPayloads.push(payload);
+    return true;
+  };
+  manager.forwardRealtimeTurnAudio = async (payload) => {
+    forwardedPayloads.push(payload);
+    return true;
+  };
+
+  const session = {
+    id: "session-native-soundboard-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    realtimeClient: {},
+    settingsSnapshot: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        realtimeReplyStrategy: "native",
+        soundboard: {
+          enabled: true
+        },
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    })
+  };
+
+  const pcmBuffer = Buffer.from([8, 9, 10, 11]);
+  await manager.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer,
+    captureReason: "stream_end"
+  });
+
+  assert.equal(brainPayloads.length, 1);
+  assert.equal(forwardedPayloads.length, 0);
+  assert.equal(brainPayloads[0]?.session, session);
+  assert.equal(brainPayloads[0]?.source, "realtime");
+});
+
 test("bindRealtimeHandlers logs OpenAI realtime response.done usage cost", () => {
   const runtimeLogs = [];
   const handlerMap = new Map();
@@ -2133,6 +2190,64 @@ test("runSttPipelineTurn exits before generation when turn admission denies spea
   assert.equal(Boolean(addressingLog), true);
   assert.equal(Boolean(addressingLog?.metadata?.allow), false);
   assert.equal(addressingLog?.metadata?.reason, "llm_no");
+});
+
+test("runSttPipelineReply triggers soundboard even when generated speech is empty", async () => {
+  const manager = createManager();
+  const soundboardCalls = [];
+  const spokenLines = [];
+  manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
+  manager.resolveSoundboardCandidates = async () => ({
+    source: "preferred",
+    candidates: [
+      {
+        reference: "airhorn@123",
+        soundId: "airhorn",
+        sourceGuildId: "123",
+        name: "airhorn"
+      }
+    ]
+  });
+  manager.generateVoiceTurn = async () => ({
+    text: "",
+    soundboardRef: "airhorn@123"
+  });
+  manager.speakVoiceLineWithTts = async (payload) => {
+    spokenLines.push(payload);
+    return true;
+  };
+  manager.maybeTriggerAssistantDirectedSoundboard = async (payload) => {
+    soundboardCalls.push(payload);
+  };
+
+  const session = {
+    id: "session-stt-soundboard-only-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "stt_pipeline",
+    ending: false,
+    recentVoiceTurns: [],
+    settingsSnapshot: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        soundboard: {
+          enabled: true
+        }
+      }
+    })
+  };
+
+  await manager.runSttPipelineReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "drop a sound",
+    directAddressed: true
+  });
+
+  assert.equal(spokenLines.length, 0);
+  assert.equal(soundboardCalls.length, 1);
+  assert.equal(soundboardCalls[0]?.requestedRef, "airhorn@123");
 });
 
 test("runSttPipelineTurn queues bot-turn-open transcripts for deferred flush", async () => {
