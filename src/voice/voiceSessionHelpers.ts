@@ -11,10 +11,8 @@ export const SOUNDBOARD_MAX_CANDIDATES = 40;
 const OPENAI_REALTIME_MIN_COMMIT_AUDIO_MS = 100;
 const SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*([\s\S]*?)\s*\]\]/gi;
 const MAX_SOUNDBOARD_DIRECTIVE_REF_LEN = 180;
-const WAKE_SUFFIX_VARIANT_MIN_WAKE_LEN = 6;
-const WAKE_SUFFIX_VARIANT_MAX_EXTRA_CHARS = 4;
-const WAKE_FUZZY_MIN_LEN = 5;
-const WAKE_TWO_EDIT_DISTANCE_MIN_LEN = 9;
+const PRIMARY_WAKE_TOKEN_MIN_LEN = 4;
+const PRIMARY_WAKE_GENERIC_TOKENS = new Set(["bot", "ai", "assistant"]);
 
 export function defaultExitMessage(reason) {
   if (reason === "max_duration") return "time cap reached, dipping from vc.";
@@ -336,32 +334,15 @@ export function isBotNameAddressed({
   transcript,
   botName = ""
 }) {
-  const normalized = String(transcript || "")
-    .trim()
-    .toLowerCase();
-  if (!normalized) return false;
+  const transcriptTokens = tokenizeWakeTokens(transcript);
+  if (!transcriptTokens.length) return false;
 
-  const normalizedBotName = String(botName || "")
-    .trim()
-    .toLowerCase();
-  if (normalizedBotName && normalized.includes(normalizedBotName)) return true;
+  const botTokens = tokenizeWakeTokens(botName);
+  if (!botTokens.length) return false;
+  if (containsTokenSequence(transcriptTokens, botTokens)) return true;
 
-  const transcriptTokens = tokenizeWakeTokens(normalized);
-  const botWakeTokens = buildBotWakeTokens(normalizedBotName);
-  if (transcriptTokens.length && botWakeTokens.length) {
-    for (let tokenIndex = 0; tokenIndex < transcriptTokens.length; tokenIndex += 1) {
-      const spokenToken = transcriptTokens[tokenIndex];
-      const spokenCandidates = buildSpokenWakeTokenCandidates(spokenToken);
-      const matchedWakeToken = botWakeTokens.find((wakeToken) =>
-        spokenCandidates.some((candidate) => isLikelyWakeTokenVariant(candidate, wakeToken))
-      );
-      if (matchedWakeToken) {
-        return true;
-      }
-    }
-  }
-
-  return false;
+  const primaryWakeToken = resolvePrimaryWakeToken(botTokens);
+  return primaryWakeToken ? transcriptTokens.some((token) => token === primaryWakeToken) : false;
 }
 
 export function isVoiceTurnAddressedToBot(transcript, settings) {
@@ -372,123 +353,40 @@ export function isVoiceTurnAddressedToBot(transcript, settings) {
 }
 
 function tokenizeWakeTokens(value = "") {
+  const normalized = normalizeWakeText(value);
+  const matches = normalized.match(/[\p{L}\p{N}]+/gu);
+  return Array.isArray(matches) ? matches : [];
+}
+
+function normalizeWakeText(value = "") {
   return String(value || "")
+    .trim()
     .toLowerCase()
-    .match(/[\p{L}\p{N}]+/gu) || [];
+    .normalize("NFKD")
+    .replace(/\p{M}+/gu, "");
 }
 
-function buildBotWakeTokens(botName = "") {
-  const baseTokens = tokenizeWakeTokens(botName).filter((token) => token.length >= 3);
-  const expanded = new Set();
-  for (const token of baseTokens) {
-    expanded.add(token);
-    if (token.endsWith("er") && token.length >= 6) {
-      expanded.add(token.slice(0, -2));
-    }
-  }
-  return [...expanded];
-}
-
-function buildSpokenWakeTokenCandidates(spokenToken = "") {
-  const normalized = String(spokenToken || "").trim().toLowerCase();
-  if (!normalized) return [];
-
-  const candidates = new Set([normalized]);
-  const withoutPossessive = normalized.replace(/[’']s$/u, "");
-  if (withoutPossessive && withoutPossessive !== normalized) {
-    candidates.add(withoutPossessive);
-  }
-
-  // ASR often pluralizes wake words ("clakers", "clankers") when speakers are clipped.
-  for (const candidate of [...candidates]) {
-    if (candidate.endsWith("ers") && candidate.length >= 6) {
-      candidates.add(candidate.slice(0, -1));
-      continue;
-    }
-    if (candidate.endsWith("s") && candidate.length >= 6 && !candidate.endsWith("ss")) {
-      candidates.add(candidate.slice(0, -1));
-    }
-  }
-
-  return [...candidates];
-}
-
-function isLikelyWakeTokenVariant(spokenToken = "", wakeToken = "") {
-  const spoken = String(spokenToken || "").trim().toLowerCase();
-  const wake = String(wakeToken || "").trim().toLowerCase();
-  if (!spoken || !wake) return false;
-  if (spoken === wake) return true;
-  if (spoken.length < 3 || wake.length < 3) return false;
-  if (spoken[0] !== wake[0]) return false;
-  if (wake.length < WAKE_FUZZY_MIN_LEN) return false;
-
-  // Support common nickname contraction like "clanker" -> "clanky".
-  if (wake.endsWith("er") && wake.length >= 6 && spoken.endsWith("y")) {
-    const yVariant = `${wake.slice(0, -2)}y`;
-    if (spoken === yVariant) return true;
-  }
-
-  if (Math.abs(spoken.length - wake.length) <= 1 && spoken.at(-1) !== wake.at(-1)) return false;
-
-  const maxLen = Math.max(spoken.length, wake.length);
-  const maxDistance = maxLen >= WAKE_TWO_EDIT_DISTANCE_MIN_LEN ? 2 : 1;
-  if (Math.abs(spoken.length - wake.length) <= maxDistance) {
-    const distance = boundedLevenshteinDistance(spoken, wake, maxDistance);
-    if (distance <= maxDistance) {
-      const similarity = 1 - distance / maxLen;
-      const minSimilarity = maxLen >= WAKE_TWO_EDIT_DISTANCE_MIN_LEN ? 0.74 : 0.82;
-      if (similarity >= minSimilarity) {
-        return true;
+function containsTokenSequence(tokens = [], sequence = []) {
+  if (!Array.isArray(tokens) || !Array.isArray(sequence)) return false;
+  if (!tokens.length || !sequence.length || sequence.length > tokens.length) return false;
+  for (let start = 0; start <= tokens.length - sequence.length; start += 1) {
+    let matched = true;
+    for (let index = 0; index < sequence.length; index += 1) {
+      if (tokens[start + index] !== sequence[index]) {
+        matched = false;
+        break;
       }
     }
+    if (matched) return true;
   }
-
-  // Allow nickname-style suffix variants on longer wake tokens.
-  if (
-    wake.length >= WAKE_SUFFIX_VARIANT_MIN_WAKE_LEN &&
-    spoken.length > wake.length
-  ) {
-    const extraChars = spoken.length - wake.length;
-    if (extraChars <= WAKE_SUFFIX_VARIANT_MAX_EXTRA_CHARS) {
-      const spokenPrefix = spoken.slice(0, wake.length);
-      const prefixDistance = boundedLevenshteinDistance(spokenPrefix, wake, 1);
-      if (prefixDistance <= 1) {
-        const prefixSimilarity = 1 - prefixDistance / wake.length;
-        if (prefixSimilarity >= 0.84) {
-          return true;
-        }
-      }
-    }
-  }
-
   return false;
 }
 
-function boundedLevenshteinDistance(left = "", right = "", maxDistance = 2) {
-  const leftWord = String(left || "");
-  const rightWord = String(right || "");
-  if (leftWord === rightWord) return 0;
-  if (!leftWord.length) return rightWord.length;
-  if (!rightWord.length) return leftWord.length;
-  if (Math.abs(leftWord.length - rightWord.length) > maxDistance) return maxDistance + 1;
-
-  let previous = Array.from({ length: rightWord.length + 1 }, (_, index) => index);
-  for (let row = 1; row <= leftWord.length; row += 1) {
-    const current = [row];
-    let rowMin = current[0];
-    for (let column = 1; column <= rightWord.length; column += 1) {
-      const substitutionCost = leftWord[row - 1] === rightWord[column - 1] ? 0 : 1;
-      const insertion = current[column - 1] + 1;
-      const deletion = previous[column] + 1;
-      const substitution = previous[column - 1] + substitutionCost;
-      const value = Math.min(insertion, deletion, substitution);
-      current.push(value);
-      if (value < rowMin) rowMin = value;
-    }
-    if (rowMin > maxDistance) return maxDistance + 1;
-    previous = current;
-  }
-  return previous[rightWord.length];
+function resolvePrimaryWakeToken(botTokens = []) {
+  const candidates = botTokens.filter((token) => token.length >= PRIMARY_WAKE_TOKEN_MIN_LEN);
+  if (!candidates.length) return null;
+  const preferred = candidates.find((token) => !PRIMARY_WAKE_GENERIC_TOKENS.has(token));
+  return preferred || candidates[0];
 }
 
 export function shouldAllowVoiceNsfwHumor(settings) {

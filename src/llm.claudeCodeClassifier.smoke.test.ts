@@ -429,7 +429,7 @@ test("smoke: claude-code verbose output triggers retry and recovers (incident re
     },
     userId: "speaker-1",
     settings: baseSettings(),
-    transcript: "clanky can you help with this one?"
+    transcript: "clanker can you help with this one?"
   });
 
   assert.equal(callCount, 2, "should retry after contract violation");
@@ -513,7 +513,7 @@ test("smoke: claude-code error throws still fail-open for direct address", async
     },
     userId: "speaker-1",
     settings: baseSettings(),
-    transcript: "hey clanky what's going on?"
+    transcript: "hey clanker what's going on?"
   });
 
   assert.equal(decision.allow, true, "direct address must fail-open on error");
