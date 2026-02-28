@@ -510,6 +510,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         sttTurnChain: Promise.resolve(),
         realtimeTurnDrainActive: false,
         pendingRealtimeTurns: [],
+        pendingDeferredTurns: [],
+        deferredTurnFlushTimer: null,
         userCaptures: new Map(),
         streamWatch: {
           active: false,

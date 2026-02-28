@@ -447,7 +447,7 @@ test("reply decider skips memory retrieval for unaddressed turns", async () => {
   assert.equal(memoryCallCount, 0);
 });
 
-test("reply decider can load memory hints for direct-address turns", async () => {
+test("reply decider uses direct-address fast path without memory lookup", async () => {
   let memoryCallCount = 0;
   const manager = createManager({
     generate: async () => ({ text: "YES" }),
@@ -479,7 +479,8 @@ test("reply decider can load memory hints for direct-address turns", async () =>
 
   assert.equal(decision.allow, true);
   assert.equal(decision.directAddressed, true);
-  assert.equal(memoryCallCount, 1);
+  assert.equal(decision.reason, "direct_address_fast_path");
+  assert.equal(memoryCallCount, 0);
 });
 
 test("reply decider still uses LLM in one-human sessions", async () => {
@@ -536,12 +537,12 @@ test("reply decider retries contract violation output and accepts YES", async ()
         }
       }
     }),
-    transcript: "clanker what's up?"
+    transcript: "what's up with this queue?"
   });
 
   assert.equal(decision.allow, true);
   assert.equal(decision.reason, "llm_yes_retry");
-  assert.equal(decision.directAddressed, true);
+  assert.equal(decision.directAddressed, false);
   assert.equal(callCount, 2);
 });
 
@@ -570,19 +571,19 @@ test("reply decider uses JSON schema contract for claude-code and accepts struct
         }
       }
     }),
-    transcript: "clanker what's up?"
+    transcript: "what's up with this queue?"
   });
 
   assert.equal(decision.allow, true);
   assert.equal(decision.reason, "llm_yes");
-  assert.equal(decision.directAddressed, true);
+  assert.equal(decision.directAddressed, false);
   assert.equal(seenSchemas.length > 0, true);
   assert.equal(seenSchemas[0].includes('"decision"'), true);
   assert.equal(seenSchemas[0].includes('"YES"'), true);
   assert.equal(seenSchemas[0].includes('"NO"'), true);
 });
 
-test("reply decider fails open when direct-addressed turn gets explicit NO", async () => {
+test("reply decider bypasses LLM for direct-addressed turns", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -611,9 +612,9 @@ test("reply decider fails open when direct-addressed turn gets explicit NO", asy
   });
 
   assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "direct_address_override_llm_no");
+  assert.equal(decision.reason, "direct_address_fast_path");
   assert.equal(decision.directAddressed, true);
-  assert.equal(callCount, 1);
+  assert.equal(callCount, 0);
 });
 
 test("reply decider blocks contract violations after bounded retries", async () => {
@@ -651,58 +652,6 @@ test("reply decider blocks contract violations after bounded retries", async () 
   assert.equal(callCount, 3);
 });
 
-test("direct address fails open when decider returns contract violations", async () => {
-  let callCount = 0;
-  const manager = createManager({
-    generate: async () => {
-      callCount += 1;
-      return { text: "maybe later" };
-    }
-  });
-  const decision = await manager.evaluateVoiceReplyDecision({
-    session: {
-      guildId: "guild-1",
-      textChannelId: "chan-1",
-      voiceChannelId: "voice-1",
-      botTurnOpen: false,
-    },
-    userId: "speaker-1",
-    settings: baseSettings(),
-    transcript: "clanker what happened"
-  });
-
-  assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "direct_address_contract_fallback");
-  assert.equal(decision.directAddressed, true);
-  assert.equal(callCount, 1);
-});
-
-test("direct address fails open when decider throws errors", async () => {
-  let callCount = 0;
-  const manager = createManager({
-    generate: async () => {
-      callCount += 1;
-      throw new Error("decider unavailable");
-    }
-  });
-  const decision = await manager.evaluateVoiceReplyDecision({
-    session: {
-      guildId: "guild-1",
-      textChannelId: "chan-1",
-      voiceChannelId: "voice-1",
-      botTurnOpen: false,
-    },
-    userId: "speaker-1",
-    settings: baseSettings(),
-    transcript: "clanker can you respond"
-  });
-
-  assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "direct_address_llm_error_fallback");
-  assert.equal(decision.directAddressed, true);
-  assert.equal(callCount, 1);
-});
-
 test("reply decider does not gate unaddressed turns behind cooldown", async () => {
   const manager = createManager({
     generate: async () => ({ text: "YES" })
@@ -724,7 +673,7 @@ test("reply decider does not gate unaddressed turns behind cooldown", async () =
   assert.equal(decision.directAddressed, false);
 });
 
-test("direct address falls back to allow when decider LLM is unavailable", async () => {
+test("direct address stays fast-path when decider LLM is unavailable", async () => {
   const fakeClient = {
     on() {},
     off() {},
@@ -759,7 +708,7 @@ test("direct address falls back to allow when decider LLM is unavailable", async
   });
 
   assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "direct_address_no_decider");
+  assert.equal(decision.reason, "direct_address_fast_path");
   assert.equal(decision.directAddressed, true);
 });
 
@@ -792,11 +741,15 @@ test("realtime transcription plan keeps mini with full fallback on longer clips"
 test("runRealtimeTurn does not forward audio when reply decision denies turn", async () => {
   const runtimeLogs = [];
   let appendedAudioCalls = 0;
+  let releaseMemoryIngest = () => undefined;
   let memoryIngestCalls = 0;
   const manager = createManager({
     memory: {
       async ingestMessage() {
         memoryIngestCalls += 1;
+        await new Promise((resolve) => {
+          releaseMemoryIngest = resolve;
+        });
       }
     }
   });
@@ -828,13 +781,19 @@ test("runRealtimeTurn does not forward audio when reply decision denies turn", a
     }
   };
 
-  await manager.runRealtimeTurn({
+  const turnRun = manager.runRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([1, 2, 3, 4]),
     captureReason: "stream_end"
   });
+  const runOutcome = await Promise.race([
+    turnRun.then(() => "done"),
+    new Promise((resolve) => setTimeout(() => resolve("timeout"), 80))
+  ]);
 
+  assert.equal(runOutcome, "done");
+  releaseMemoryIngest();
   assert.equal(appendedAudioCalls, 0);
   const addressingLog = runtimeLogs.find(
     (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
@@ -845,7 +804,7 @@ test("runRealtimeTurn does not forward audio when reply decision denies turn", a
   assert.equal(memoryIngestCalls, 1);
 });
 
-test("runRealtimeTurn defers direct-addressed turns when bot audio is already open", async () => {
+test("runRealtimeTurn queues direct-addressed bot-turn-open turns for deferred flush", async () => {
   const runtimeLogs = [];
   const deferredTurns = [];
   let appendedAudioCalls = 0;
@@ -853,7 +812,7 @@ test("runRealtimeTurn defers direct-addressed turns when bot audio is already op
   manager.store.logAction = (row) => {
     runtimeLogs.push(row);
   };
-  manager.deferDirectAddressedRealtimeTurn = (payload) => {
+  manager.queueDeferredBotTurnOpenTurn = (payload) => {
     deferredTurns.push(payload);
   };
   manager.evaluateVoiceReplyDecision = async () => ({
@@ -889,7 +848,7 @@ test("runRealtimeTurn defers direct-addressed turns when bot audio is already op
   assert.equal(appendedAudioCalls, 0);
   assert.equal(deferredTurns.length, 1);
   assert.equal(deferredTurns[0]?.session, session);
-  assert.equal(deferredTurns[0]?.deferCount, 0);
+  assert.equal(Boolean(deferredTurns[0]?.directAddressed), true);
   const addressingLog = runtimeLogs.find(
     (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
   );
@@ -899,18 +858,18 @@ test("runRealtimeTurn defers direct-addressed turns when bot audio is already op
   assert.equal(Boolean(addressingLog?.metadata?.directAddressed), true);
 });
 
-test("runRealtimeTurn skips defer once direct-address bot-turn-open retry budget is exhausted", async () => {
+test("runRealtimeTurn queues non-direct bot-turn-open turns for deferred flush", async () => {
   const deferredTurns = [];
   const manager = createManager();
-  manager.deferDirectAddressedRealtimeTurn = (payload) => {
+  manager.queueDeferredBotTurnOpenTurn = (payload) => {
     deferredTurns.push(payload);
   };
   manager.evaluateVoiceReplyDecision = async () => ({
     allow: false,
     reason: "bot_turn_open",
     participantCount: 2,
-    directAddressed: true,
-    transcript: "clanker are you there"
+    directAddressed: false,
+    transcript: "hold up, one sec"
   });
 
   const session = {
@@ -930,11 +889,11 @@ test("runRealtimeTurn skips defer once direct-address bot-turn-open retry budget
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([8, 9, 10, 11]),
-    captureReason: "stream_end",
-    deferCount: 2
+    captureReason: "stream_end"
   });
 
-  assert.equal(deferredTurns.length, 0);
+  assert.equal(deferredTurns.length, 1);
+  assert.equal(Boolean(deferredTurns[0]?.directAddressed), false);
 });
 
 test("queueRealtimeTurn keeps a bounded FIFO backlog while realtime drain is active", () => {
@@ -1040,11 +999,15 @@ test("runRealtimeTurn forwards audio and prepares openai context when reply deci
 test("runSttPipelineTurn exits before generation when turn admission denies speaking", async () => {
   const runtimeLogs = [];
   let generateVoiceTurnCalls = 0;
+  let releaseMemoryIngest = () => undefined;
   let memoryIngestCalls = 0;
   const manager = createManager({
     memory: {
       async ingestMessage() {
         memoryIngestCalls += 1;
+        await new Promise((resolve) => {
+          releaseMemoryIngest = resolve;
+        });
       }
     }
   });
@@ -1077,13 +1040,19 @@ test("runSttPipelineTurn exits before generation when turn admission denies spea
     settingsSnapshot: baseSettings()
   };
 
-  await manager.runSttPipelineTurn({
+  const turnRun = manager.runSttPipelineTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([4, 5, 6, 7]),
     captureReason: "stream_end"
   });
+  const runOutcome = await Promise.race([
+    turnRun.then(() => "done"),
+    new Promise((resolve) => setTimeout(() => resolve("timeout"), 80))
+  ]);
 
+  assert.equal(runOutcome, "done");
+  releaseMemoryIngest();
   assert.equal(generateVoiceTurnCalls, 0);
   assert.equal(memoryIngestCalls, 1);
   const addressingLog = runtimeLogs.find(
@@ -1092,4 +1061,217 @@ test("runSttPipelineTurn exits before generation when turn admission denies spea
   assert.equal(Boolean(addressingLog), true);
   assert.equal(Boolean(addressingLog?.metadata?.allow), false);
   assert.equal(addressingLog?.metadata?.reason, "llm_no");
+});
+
+test("runSttPipelineTurn queues bot-turn-open transcripts for deferred flush", async () => {
+  const queuedTurns = [];
+  let runSttPipelineReplyCalls = 0;
+  const manager = createManager();
+  manager.llm.transcribeAudio = async () => ({ text: "clanker wait for this point" });
+  manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
+  manager.transcribePcmTurn = async () => "clanker wait for this point";
+  manager.evaluateVoiceReplyDecision = async () => ({
+    allow: false,
+    reason: "bot_turn_open",
+    participantCount: 2,
+    directAddressed: true,
+    transcript: "clanker wait for this point"
+  });
+  manager.queueDeferredBotTurnOpenTurn = (payload) => {
+    queuedTurns.push(payload);
+  };
+  manager.runSttPipelineReply = async () => {
+    runSttPipelineReplyCalls += 1;
+  };
+  manager.touchActivity = () => {};
+
+  const session = {
+    id: "session-stt-defer-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "stt_pipeline",
+    ending: false,
+    sttContextMessages: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.runSttPipelineTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([4, 5, 6, 7]),
+    captureReason: "stream_end"
+  });
+
+  assert.equal(runSttPipelineReplyCalls, 0);
+  assert.equal(queuedTurns.length, 1);
+  assert.equal(queuedTurns[0]?.source, "stt_pipeline");
+  assert.equal(queuedTurns[0]?.transcript, "clanker wait for this point");
+});
+
+test("flushDeferredBotTurnOpenTurns waits for silence before admission", async () => {
+  let decisionCalls = 0;
+  let scheduledFlushCalls = 0;
+  const manager = createManager();
+  manager.scheduleDeferredBotTurnOpenFlush = () => {
+    scheduledFlushCalls += 1;
+  };
+  manager.evaluateVoiceReplyDecision = async () => {
+    decisionCalls += 1;
+    return {
+      allow: false,
+      reason: "llm_no",
+      participantCount: 2,
+      directAddressed: false,
+      transcript: "ignored"
+    };
+  };
+  const session = {
+    id: "session-stt-defer-2",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "stt_pipeline",
+    ending: false,
+    botTurnOpen: false,
+    userCaptures: new Map([["speaker-1", {}]]),
+    pendingDeferredTurns: [
+      {
+        userId: "speaker-1",
+        transcript: "clanker what about this",
+        pcmBuffer: null,
+        captureReason: "speaking_end",
+        source: "stt_pipeline",
+        directAddressed: true,
+        queuedAt: Date.now()
+      }
+    ]
+  };
+
+  await manager.flushDeferredBotTurnOpenTurns({ session });
+
+  assert.equal(decisionCalls, 0);
+  assert.equal(scheduledFlushCalls, 1);
+  assert.equal(session.pendingDeferredTurns.length, 1);
+});
+
+test("flushDeferredBotTurnOpenTurns coalesces deferred transcripts into one admission", async () => {
+  const decisionPayloads = [];
+  const replyPayloads = [];
+  const manager = createManager();
+  manager.evaluateVoiceReplyDecision = async (payload) => {
+    decisionPayloads.push(payload);
+    return {
+      allow: true,
+      reason: "llm_yes",
+      participantCount: 2,
+      directAddressed: true,
+      transcript: payload.transcript
+    };
+  };
+  manager.runSttPipelineReply = async (payload) => {
+    replyPayloads.push(payload);
+  };
+  const session = {
+    id: "session-stt-defer-3",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "stt_pipeline",
+    ending: false,
+    botTurnOpen: false,
+    userCaptures: new Map(),
+    settingsSnapshot: baseSettings(),
+    pendingDeferredTurns: [
+      {
+        userId: "speaker-1",
+        transcript: "clanker hold on",
+        pcmBuffer: null,
+        captureReason: "speaking_end",
+        source: "stt_pipeline",
+        directAddressed: true,
+        queuedAt: Date.now() - 20
+      },
+      {
+        userId: "speaker-2",
+        transcript: "what about the rust panic trace",
+        pcmBuffer: null,
+        captureReason: "speaking_end",
+        source: "stt_pipeline",
+        directAddressed: false,
+        queuedAt: Date.now()
+      }
+    ]
+  };
+
+  await manager.flushDeferredBotTurnOpenTurns({ session });
+
+  assert.equal(decisionPayloads.length, 1);
+  assert.equal(
+    decisionPayloads[0]?.transcript,
+    "clanker hold on what about the rust panic trace"
+  );
+  assert.equal(replyPayloads.length, 1);
+  assert.equal(
+    replyPayloads[0]?.transcript,
+    "clanker hold on what about the rust panic trace"
+  );
+  assert.equal(session.pendingDeferredTurns.length, 0);
+});
+
+test("flushDeferredBotTurnOpenTurns forwards coalesced realtime audio after one admission", async () => {
+  const decisionPayloads = [];
+  const forwardedPayloads = [];
+  const manager = createManager();
+  manager.evaluateVoiceReplyDecision = async (payload) => {
+    decisionPayloads.push(payload);
+    return {
+      allow: true,
+      reason: "llm_yes",
+      participantCount: 2,
+      directAddressed: false,
+      transcript: payload.transcript
+    };
+  };
+  manager.forwardRealtimeTurnAudio = async (payload) => {
+    forwardedPayloads.push(payload);
+  };
+  const session = {
+    id: "session-realtime-defer-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    botTurnOpen: false,
+    userCaptures: new Map(),
+    settingsSnapshot: baseSettings(),
+    pendingDeferredTurns: [
+      {
+        userId: "speaker-1",
+        transcript: "clanker hold up",
+        pcmBuffer: Buffer.from([1, 2]),
+        captureReason: "speaking_end",
+        source: "realtime",
+        directAddressed: true,
+        queuedAt: Date.now() - 30
+      },
+      {
+        userId: "speaker-2",
+        transcript: "add this too",
+        pcmBuffer: Buffer.from([3, 4, 5]),
+        captureReason: "speaking_end",
+        source: "realtime",
+        directAddressed: false,
+        queuedAt: Date.now()
+      }
+    ]
+  };
+
+  await manager.flushDeferredBotTurnOpenTurns({ session });
+
+  assert.equal(decisionPayloads.length, 1);
+  assert.equal(decisionPayloads[0]?.transcript, "clanker hold up add this too");
+  assert.equal(forwardedPayloads.length, 1);
+  assert.equal(forwardedPayloads[0]?.captureReason, "bot_turn_open_deferred_flush");
+  assert.equal(forwardedPayloads[0]?.transcript, "clanker hold up add this too");
+  assert.equal(Buffer.isBuffer(forwardedPayloads[0]?.pcmBuffer), true);
+  assert.equal(forwardedPayloads[0]?.pcmBuffer.equals(Buffer.from([1, 2, 3, 4, 5])), true);
+  assert.equal(session.pendingDeferredTurns.length, 0);
 });

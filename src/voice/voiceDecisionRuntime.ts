@@ -1,5 +1,6 @@
 const VOICE_LOW_SIGNAL_MIN_ALNUM_CHARS = 10;
 const VOICE_LOW_SIGNAL_MIN_WORDS = 2;
+const LOW_SIGNAL_LLM_MIN_TOKEN_LEN = 5;
 const OPENAI_REALTIME_SHORT_CLIP_ASR_MS = 1200;
 const PCM16_MONO_BYTES_PER_SAMPLE = 2;
 
@@ -34,6 +35,20 @@ export function isLikelyWakeWordPing(transcript = "") {
     .split(/\s+/u)
     .filter(Boolean).length;
   return tokenCount > 0 && tokenCount <= 3;
+}
+
+export function shouldUseLlmForLowSignalTurn(transcript = "") {
+  const normalized = String(transcript || "")
+    .toLowerCase()
+    .trim();
+  if (!normalized) return false;
+
+  const tokens = normalized
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/u)
+    .filter(Boolean);
+  if (!tokens.length || tokens.length > 3) return false;
+  return tokens.some((token) => token.length >= LOW_SIGNAL_LLM_MIN_TOKEN_LEN);
 }
 
 export function normalizeVoiceReplyDecisionProvider(value) {
