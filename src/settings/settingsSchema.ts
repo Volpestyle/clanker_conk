@@ -128,6 +128,7 @@ export const DEFAULT_SETTINGS = {
       minSecondsBetweenThoughts: 20
     },
     generationLlm: {
+      useTextModel: false,
       provider: "anthropic",
       model: "claude-haiku-4-5"
     },

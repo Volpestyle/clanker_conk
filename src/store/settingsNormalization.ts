@@ -173,6 +173,7 @@ export function normalizeSettings(raw) {
   );
   merged.replyFollowupLlm.provider = normalizedReplyFollowupLlm.provider;
   merged.replyFollowupLlm.model = normalizedReplyFollowupLlm.model;
+  delete merged.replyFollowupLlm.useTextModel;
   const defaultReplyFollowup = DEFAULT_SETTINGS.replyFollowupLlm || {};
   const maxToolStepsRaw = Number(merged.replyFollowupLlm?.maxToolSteps);
   const maxTotalToolCallsRaw = Number(merged.replyFollowupLlm?.maxTotalToolCalls);
@@ -390,6 +391,7 @@ export function normalizeSettings(raw) {
     systemPromptStrict?: string;
   };
   type VoiceGenerationDefaults = {
+    useTextModel?: boolean;
     provider?: string;
     model?: string;
   };
@@ -575,6 +577,10 @@ export function normalizeSettings(raw) {
     8,
     600
   );
+  merged.voice.generationLlm.useTextModel =
+    merged.voice?.generationLlm?.useTextModel !== undefined
+      ? Boolean(merged.voice?.generationLlm?.useTextModel)
+      : Boolean(defaultVoiceGenerationLlm.useTextModel);
   const voiceGenerationProviderRaw = String(merged.voice?.generationLlm?.provider || "").trim();
   const defaultVoiceGenerationProvider = normalizeLlmProvider(defaultVoiceGenerationLlm.provider || "anthropic");
   const defaultVoiceGenerationModel =
@@ -586,8 +592,12 @@ export function normalizeSettings(raw) {
     defaultVoiceGenerationProvider,
     defaultVoiceGenerationModel
   );
-  merged.voice.generationLlm.provider = normalizedVoiceGenerationLlm.provider;
-  merged.voice.generationLlm.model = normalizedVoiceGenerationLlm.model;
+  merged.voice.generationLlm.provider = merged.voice.generationLlm.useTextModel
+    ? merged.llm.provider
+    : normalizedVoiceGenerationLlm.provider;
+  merged.voice.generationLlm.model = merged.voice.generationLlm.useTextModel
+    ? merged.llm.model
+    : normalizedVoiceGenerationLlm.model;
   merged.voice.replyDecisionLlm.enabled =
     merged.voice?.replyDecisionLlm?.enabled !== undefined
       ? Boolean(merged.voice?.replyDecisionLlm?.enabled)

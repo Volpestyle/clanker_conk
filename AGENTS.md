@@ -8,7 +8,9 @@
 - Classifiers
   - haiku
   - gpt-5-nano reasoning low
+- Use `docs/llm-orchestration-mental-model.md` as the canonical guide for how to think about, reason about, and expand LLM routing/decision orchestration in this bot.
 - Runtime/package manager standard: use Bun (`bun`, `bun run`, `bunx`) over Node/NPM (`node`, `npm`, `npx`) unless explicitly requested.
+- Do not run smoke tests unless the user explicitly directs you to run them, since they incur cost.
 
 - Always remove legacy compatibility paths and dead code as part of the same change.
 - Do not keep backward-compatibility shims, aliases, or old-field fallbacks unless the user explicitly asks for them.

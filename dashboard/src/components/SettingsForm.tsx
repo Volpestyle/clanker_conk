@@ -132,6 +132,7 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
   const isVoiceAgentMode = effectiveForm.voiceMode === "voice_agent";
   const isOpenAiRealtimeMode = effectiveForm.voiceMode === "openai_realtime";
   const isGeminiRealtimeMode = effectiveForm.voiceMode === "gemini_realtime";
+  const isElevenLabsRealtimeMode = effectiveForm.voiceMode === "elevenlabs_realtime";
   const isSttPipelineMode = effectiveForm.voiceMode === "stt_pipeline";
   const showVoiceAdvanced = effectiveForm.voiceEnabled;
   const showInitiativeAdvanced = effectiveForm.autonomousInitiativeEnabled;
@@ -155,6 +156,10 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
       syncModel("voiceGenerationLlmModel", selectedVoiceGenerationPresetModel);
       syncModel("voiceReplyDecisionLlmModel", selectedVoiceReplyDecisionPresetModel);
       syncModel("voiceThoughtEngineModel", selectedVoiceThoughtEnginePresetModel);
+      if (next.voiceGenerationLlmUseTextModel) {
+        syncModel("voiceGenerationLlmProvider", next.provider);
+        syncModel("voiceGenerationLlmModel", selectedPresetModel);
+      }
       return changed ? next : current;
     });
   }, [
@@ -302,6 +307,7 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
             isVoiceAgentMode={isVoiceAgentMode}
             isOpenAiRealtimeMode={isOpenAiRealtimeMode}
             isGeminiRealtimeMode={isGeminiRealtimeMode}
+            isElevenLabsRealtimeMode={isElevenLabsRealtimeMode}
             isSttPipelineMode={isSttPipelineMode}
             setVoiceReplyDecisionProvider={setVoiceReplyDecisionProvider}
             selectVoiceReplyDecisionPresetModel={selectVoiceReplyDecisionPresetModel}

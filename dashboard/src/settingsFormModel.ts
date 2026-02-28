@@ -105,8 +105,8 @@ export function settingsToForm(settings) {
     provider: settings?.llm?.provider ?? defaultLlm.provider,
     model: settings?.llm?.model ?? defaultLlm.model,
     replyFollowupLlmEnabled: settings?.replyFollowupLlm?.enabled ?? defaultReplyFollowupLlm.enabled,
-    replyFollowupLlmProvider: settings?.replyFollowupLlm?.provider ?? settings?.llm?.provider ?? defaultReplyFollowupLlm.provider,
-    replyFollowupLlmModel: settings?.replyFollowupLlm?.model ?? settings?.llm?.model ?? defaultReplyFollowupLlm.model,
+    replyFollowupLlmProvider: settings?.replyFollowupLlm?.provider ?? defaultReplyFollowupLlm.provider,
+    replyFollowupLlmModel: settings?.replyFollowupLlm?.model ?? defaultReplyFollowupLlm.model,
     replyFollowupMaxToolSteps: settings?.replyFollowupLlm?.maxToolSteps ?? defaultReplyFollowupLlm.maxToolSteps,
     replyFollowupMaxTotalToolCalls:
       settings?.replyFollowupLlm?.maxTotalToolCalls ?? defaultReplyFollowupLlm.maxTotalToolCalls,
@@ -181,6 +181,8 @@ export function settingsToForm(settings) {
     voiceReplyDecisionSystemPromptStrict:
       settings?.voice?.replyDecisionLlm?.prompts?.systemPromptStrict ??
       defaultVoice.replyDecisionLlm?.prompts?.systemPromptStrict,
+    voiceGenerationLlmUseTextModel:
+      settings?.voice?.generationLlm?.useTextModel ?? defaultVoiceGenerationLlm.useTextModel,
     voiceGenerationLlmProvider:
       settings?.voice?.generationLlm?.provider ?? defaultVoiceGenerationLlm.provider,
     voiceGenerationLlmModel:
@@ -391,6 +393,7 @@ export function formToSettingsPatch(form) {
         }
       },
       generationLlm: {
+        useTextModel: Boolean(form.voiceGenerationLlmUseTextModel),
         provider: String(form.voiceGenerationLlmProvider || "").trim(),
         model: String(form.voiceGenerationLlmModel || "").trim()
       },

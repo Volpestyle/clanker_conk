@@ -666,6 +666,35 @@ test("generateVoiceTurnReply uses voice generation llm provider/model instead of
   assert.equal(generationPayloads[0]?.settings?.llm?.model, "claude-haiku-4-5");
 });
 
+test("generateVoiceTurnReply uses text llm provider/model when voice generation useTextModel is enabled", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: "copy that"
+  });
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      llm: {
+        provider: "claude-code",
+        model: "sonnet"
+      },
+      voice: {
+        generationLlm: {
+          useTextModel: true,
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "quick status?"
+  });
+
+  assert.equal(generationPayloads.length > 0, true);
+  assert.equal(generationPayloads[0]?.settings?.llm?.provider, "claude-code");
+  assert.equal(generationPayloads[0]?.settings?.llm?.model, "sonnet");
+});
+
 test("generateVoiceTurnReply runs web lookup follow-up with start/complete callbacks", async () => {
   const { bot, webSearchCalls, lookupMemoryWrites, getGenerationCalls } = createVoiceBot({
     generationSequence: [

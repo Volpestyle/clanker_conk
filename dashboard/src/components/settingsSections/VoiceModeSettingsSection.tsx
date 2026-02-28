@@ -2,7 +2,6 @@ import React from "react";
 import { SettingsSection } from "../SettingsSection";
 import { rangeStyle } from "../../utils";
 import { LlmProviderOptions } from "./LlmProviderOptions";
-import { ElevenLabsVoiceManager } from "./ElevenLabsVoiceManager";
 
 export function VoiceModeSettingsSection({
   id,
@@ -160,6 +159,16 @@ export function VoiceModeSettingsSection({
             <>
               <h4>Brain LLM</h4>
               <p>Used for voice reply generation when the reply path is set to Brain.</p>
+              <div className="toggles">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={form.voiceGenerationLlmUseTextModel}
+                    onChange={set("voiceGenerationLlmUseTextModel")}
+                  />
+                  Use text model
+                </label>
+              </div>
               <div className="split">
                 <div>
                   <label htmlFor="voice-generation-provider">Provider</label>
@@ -167,6 +176,7 @@ export function VoiceModeSettingsSection({
                     id="voice-generation-provider"
                     value={form.voiceGenerationLlmProvider}
                     onChange={setVoiceGenerationProvider}
+                    disabled={form.voiceGenerationLlmUseTextModel}
                   >
                     <LlmProviderOptions />
                   </select>
@@ -177,6 +187,7 @@ export function VoiceModeSettingsSection({
                     id="voice-generation-model-preset"
                     value={selectedVoiceGenerationPresetModel}
                     onChange={selectVoiceGenerationPresetModel}
+                    disabled={form.voiceGenerationLlmUseTextModel}
                   >
                     {voiceGenerationModelOptions.map((modelId) => (
                       <option key={modelId} value={modelId}>
@@ -603,17 +614,6 @@ export function VoiceModeSettingsSection({
                   />
                 </div>
               </div>
-
-              <h4>ElevenLabs Voice</h4>
-              <p>Select an existing voice or clone a new one from audio samples.</p>
-              <ElevenLabsVoiceManager
-                selectedVoiceId={form.voiceElevenLabsRealtimeVoiceId || ""}
-                onSelectVoice={(voiceId) =>
-                  set("voiceElevenLabsRealtimeVoiceId")({
-                    target: { value: voiceId, type: "text" }
-                  })
-                }
-              />
             </>
           )}
 

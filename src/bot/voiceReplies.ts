@@ -343,9 +343,13 @@ export async function generateVoiceTurnReply(runtime, {
     ? recentWebLookupsRaw
     : [];
 
-  const voiceGenerationProvider = normalizeLlmProvider(settings?.voice?.generationLlm?.provider);
+  const voiceGenerationUsesTextModel = Boolean(settings?.voice?.generationLlm?.useTextModel);
+  const voiceGenerationProvider = normalizeLlmProvider(
+    voiceGenerationUsesTextModel ? settings?.llm?.provider : settings?.voice?.generationLlm?.provider
+  );
   const voiceGenerationModel = String(
-    settings?.voice?.generationLlm?.model || defaultModelForLlmProvider(voiceGenerationProvider)
+    (voiceGenerationUsesTextModel ? settings?.llm?.model : settings?.voice?.generationLlm?.model) ||
+      defaultModelForLlmProvider(voiceGenerationProvider)
   )
     .trim()
     .slice(0, 120) || defaultModelForLlmProvider(voiceGenerationProvider);
