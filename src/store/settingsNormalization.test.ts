@@ -241,3 +241,14 @@ test("normalizeSettings preserves custom voice decider prompt overrides", () => 
   assert.equal(normalized.voice.replyDecisionLlm.prompts.systemPromptFull, "full {{botName}}");
   assert.equal(normalized.voice.replyDecisionLlm.prompts.systemPromptStrict, "strict {{botName}}");
 });
+
+test("normalizeSettings preserves long media prompt craft guidance blocks", () => {
+  const longGuidance = `line one\n${"x".repeat(1200)}\nline three`;
+  const normalized = normalizeSettings({
+    prompt: {
+      mediaPromptCraftGuidance: longGuidance
+    }
+  });
+
+  assert.equal(normalized.prompt.mediaPromptCraftGuidance, longGuidance);
+});

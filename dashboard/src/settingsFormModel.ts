@@ -86,9 +86,10 @@ export function settingsToForm(settings) {
     promptMemoryDisabledLine:
       settings?.prompt?.memoryDisabledLine ?? defaultPrompt.memoryDisabledLine,
     promptSkipLine: settings?.prompt?.skipLine ?? defaultPrompt.skipLine,
-    promptTextGuidance: formatLineList(settings?.prompt?.textGuidance),
-    promptVoiceGuidance: formatLineList(settings?.prompt?.voiceGuidance),
-    promptVoiceOperationalGuidance: formatLineList(settings?.prompt?.voiceOperationalGuidance),
+    promptTextGuidance: formatLineList(settings?.prompt?.textGuidance ?? defaultPrompt.textGuidance),
+    promptVoiceGuidance: formatLineList(settings?.prompt?.voiceGuidance ?? defaultPrompt.voiceGuidance),
+    promptVoiceOperationalGuidance:
+      formatLineList(settings?.prompt?.voiceOperationalGuidance ?? defaultPrompt.voiceOperationalGuidance),
     promptMediaPromptCraftGuidance: settings?.prompt?.mediaPromptCraftGuidance ?? defaultPrompt.mediaPromptCraftGuidance,
     replyLevelInitiative: activity.replyLevelInitiative ?? defaultActivity.replyLevelInitiative,
     replyLevelNonInitiative: activity.replyLevelNonInitiative ?? defaultActivity.replyLevelNonInitiative,

@@ -75,9 +75,10 @@ export function normalizeSettings(raw) {
     merged.prompt?.voiceOperationalGuidance,
     defaultPrompt.voiceOperationalGuidance
   );
-  merged.prompt.mediaPromptCraftGuidance = normalizePromptLine(
+  merged.prompt.mediaPromptCraftGuidance = normalizeLongPromptBlock(
     merged.prompt?.mediaPromptCraftGuidance,
-    defaultPrompt.mediaPromptCraftGuidance
+    defaultPrompt.mediaPromptCraftGuidance,
+    8_000
   );
 
   const replyLevelInitiative = clamp(

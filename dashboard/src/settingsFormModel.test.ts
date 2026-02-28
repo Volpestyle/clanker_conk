@@ -59,6 +59,9 @@ test("settingsToForm preserves explicit empty prompt overrides", () => {
       memoryEnabledLine: "",
       memoryDisabledLine: "",
       skipLine: "",
+      textGuidance: [],
+      voiceGuidance: [],
+      voiceOperationalGuidance: [],
       mediaPromptCraftGuidance: ""
     }
   });
@@ -68,7 +71,17 @@ test("settingsToForm preserves explicit empty prompt overrides", () => {
   assert.equal(form.promptMemoryEnabledLine, "");
   assert.equal(form.promptMemoryDisabledLine, "");
   assert.equal(form.promptSkipLine, "");
+  assert.equal(form.promptTextGuidance, "");
+  assert.equal(form.promptVoiceGuidance, "");
+  assert.equal(form.promptVoiceOperationalGuidance, "");
   assert.equal(form.promptMediaPromptCraftGuidance, "");
+});
+
+test("settingsToForm uses default prompt guidance lists when omitted", () => {
+  const form = settingsToForm({});
+  assert.equal(form.promptTextGuidance.length > 0, true);
+  assert.equal(form.promptVoiceGuidance.length > 0, true);
+  assert.equal(form.promptVoiceOperationalGuidance.length > 0, true);
 });
 
 test("resolveProviderModelOptions merges catalog values with provider fallback defaults", () => {
