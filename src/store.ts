@@ -28,6 +28,92 @@ import {
 import { pushPerformanceMetric, summarizeLatencyMetric } from "./store/storePerformance.ts";
 
 const SETTINGS_KEY = "runtime_settings";
+const LOOKUP_CONTEXT_QUERY_MAX_CHARS = 220;
+const LOOKUP_CONTEXT_SOURCE_MAX_CHARS = 120;
+const LOOKUP_CONTEXT_PROVIDER_MAX_CHARS = 64;
+const LOOKUP_CONTEXT_RESULT_MAX_CHARS = 420;
+const LOOKUP_CONTEXT_MATCH_TEXT_MAX_CHARS = 1800;
+const LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT = 5;
+const LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL_DEFAULT = 120;
+const LOOKUP_CONTEXT_MAX_TTL_HOURS = 168;
+const LOOKUP_CONTEXT_MAX_AGE_HOURS = 168;
+const LOOKUP_CONTEXT_MAX_SEARCH_LIMIT = 16;
+
+function normalizeLookupResultText(value, maxChars = LOOKUP_CONTEXT_RESULT_MAX_CHARS) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, Math.max(40, Number(maxChars) || LOOKUP_CONTEXT_RESULT_MAX_CHARS));
+}
+
+function normalizeLookupResultRows(rows, maxResults = LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT) {
+  const source = Array.isArray(rows) ? rows : [];
+  const boundedMaxResults = clamp(
+    Math.floor(Number(maxResults) || LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT),
+    1,
+    10
+  );
+  const normalizedRows = [];
+  for (const row of source) {
+    if (normalizedRows.length >= boundedMaxResults) break;
+    const url = normalizeLookupResultText(row?.url, 420);
+    if (!url) continue;
+    normalizedRows.push({
+      title: normalizeLookupResultText(row?.title, 180),
+      url,
+      domain: normalizeLookupResultText(row?.domain, 120),
+      snippet: normalizeLookupResultText(row?.snippet, 260),
+      pageSummary: normalizeLookupResultText(row?.pageSummary, 320)
+    });
+  }
+  return normalizedRows;
+}
+
+function buildLookupContextMatchText({ query, results = [] }) {
+  const normalizedQuery = normalizeLookupResultText(query, LOOKUP_CONTEXT_QUERY_MAX_CHARS);
+  const resultRows = Array.isArray(results) ? results : [];
+  const segments = [normalizedQuery];
+  for (const row of resultRows) {
+    const title = normalizeLookupResultText(row?.title, 180);
+    const domain = normalizeLookupResultText(row?.domain, 120);
+    const snippet = normalizeLookupResultText(row?.snippet, 220);
+    const pageSummary = normalizeLookupResultText(row?.pageSummary, 220);
+    if (title) segments.push(title);
+    if (domain) segments.push(domain);
+    if (snippet) segments.push(snippet);
+    if (pageSummary) segments.push(pageSummary);
+  }
+  return segments
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, LOOKUP_CONTEXT_MATCH_TEXT_MAX_CHARS);
+}
+
+function scoreLookupContextRow(row, tokens = []) {
+  const normalizedTokens = Array.isArray(tokens) ? tokens : [];
+  if (!normalizedTokens.length) return 0;
+  const query = String(row?.query || "")
+    .toLowerCase()
+    .trim();
+  const matchText = String(row?.match_text || "")
+    .toLowerCase()
+    .trim();
+  if (!query && !matchText) return 0;
+
+  let score = 0;
+  for (const token of normalizedTokens) {
+    if (!token) continue;
+    if (query.includes(token)) {
+      score += 3;
+      continue;
+    }
+    if (matchText.includes(token)) {
+      score += 1;
+    }
+  }
+  return score;
+}
 
 export class Store {
   dbPath;
@@ -114,6 +200,20 @@ export class Store {
         source TEXT
       );
 
+      CREATE TABLE IF NOT EXISTS lookup_context (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        guild_id TEXT NOT NULL,
+        channel_id TEXT,
+        user_id TEXT,
+        source TEXT,
+        query TEXT NOT NULL,
+        provider TEXT,
+        results_json TEXT NOT NULL,
+        match_text TEXT NOT NULL
+      );
+
       CREATE TABLE IF NOT EXISTS automations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         created_at TEXT NOT NULL,
@@ -160,6 +260,8 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_actions_time ON actions(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_memory_vectors_native_model_dims ON memory_fact_vectors_native(model, dims);
       CREATE INDEX IF NOT EXISTS idx_shared_links_last_shared_at ON shared_links(last_shared_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_lookup_context_scope_time ON lookup_context(guild_id, channel_id, created_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_lookup_context_expires ON lookup_context(expires_at);
       CREATE INDEX IF NOT EXISTS idx_automations_scope_status_next ON automations(guild_id, status, next_run_at);
       CREATE INDEX IF NOT EXISTS idx_automations_running_next ON automations(is_running, next_run_at);
       CREATE INDEX IF NOT EXISTS idx_automations_match_text ON automations(guild_id, match_text);
@@ -436,6 +538,250 @@ export class Store {
            source = excluded.source`
       )
       .run(normalizedUrl, now, now, source ? String(source).slice(0, 120) : null);
+  }
+
+  pruneLookupContext({
+    now = nowIso(),
+    guildId = null,
+    channelId = null,
+    maxRowsPerChannel = LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL_DEFAULT
+  } = {}) {
+    const normalizedNow = String(now || nowIso());
+    this.db
+      .prepare(
+        `DELETE FROM lookup_context
+         WHERE expires_at <= ?`
+      )
+      .run(normalizedNow);
+
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) return;
+    const boundedMaxRowsPerChannel = clamp(
+      Math.floor(Number(maxRowsPerChannel) || LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL_DEFAULT),
+      1,
+      500
+    );
+    const normalizedChannelId = String(channelId || "").trim();
+    if (normalizedChannelId) {
+      this.db
+        .prepare(
+          `DELETE FROM lookup_context
+           WHERE id IN (
+             SELECT id
+             FROM lookup_context
+             WHERE guild_id = ? AND channel_id = ?
+             ORDER BY created_at DESC
+             LIMIT -1 OFFSET ?
+           )`
+        )
+        .run(normalizedGuildId, normalizedChannelId, boundedMaxRowsPerChannel);
+      return;
+    }
+
+    this.db
+      .prepare(
+        `DELETE FROM lookup_context
+         WHERE id IN (
+           SELECT id
+           FROM lookup_context
+           WHERE guild_id = ? AND channel_id IS NULL
+           ORDER BY created_at DESC
+           LIMIT -1 OFFSET ?
+         )`
+      )
+      .run(normalizedGuildId, boundedMaxRowsPerChannel);
+  }
+
+  recordLookupContext({
+    guildId,
+    channelId = null,
+    userId = null,
+    source = null,
+    query,
+    provider = null,
+    results = [],
+    ttlHours = 48,
+    maxResults = LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT,
+    maxRowsPerChannel = LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL_DEFAULT
+  }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    const normalizedQuery = normalizeLookupResultText(query, LOOKUP_CONTEXT_QUERY_MAX_CHARS);
+    if (!normalizedGuildId || !normalizedQuery) return false;
+
+    const normalizedResults = normalizeLookupResultRows(results, maxResults);
+    if (!normalizedResults.length) return false;
+
+    const now = nowIso();
+    const boundedTtlHours = clamp(Math.floor(Number(ttlHours) || 48), 1, LOOKUP_CONTEXT_MAX_TTL_HOURS);
+    const expiresAt = new Date(Date.now() + boundedTtlHours * 60 * 60 * 1000).toISOString();
+    const normalizedChannelId = String(channelId || "").trim() || null;
+    const normalizedUserId = String(userId || "").trim() || null;
+    const normalizedSource = normalizeLookupResultText(source, LOOKUP_CONTEXT_SOURCE_MAX_CHARS) || null;
+    const normalizedProvider = normalizeLookupResultText(provider, LOOKUP_CONTEXT_PROVIDER_MAX_CHARS) || null;
+    const matchText = buildLookupContextMatchText({
+      query: normalizedQuery,
+      results: normalizedResults
+    });
+    const result = this.db
+      .prepare(
+        `INSERT INTO lookup_context(
+          created_at,
+          expires_at,
+          guild_id,
+          channel_id,
+          user_id,
+          source,
+          query,
+          provider,
+          results_json,
+          match_text
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      )
+      .run(
+        now,
+        expiresAt,
+        normalizedGuildId,
+        normalizedChannelId,
+        normalizedUserId,
+        normalizedSource,
+        normalizedQuery,
+        normalizedProvider,
+        JSON.stringify(normalizedResults),
+        matchText
+      );
+    this.pruneLookupContext({
+      now,
+      guildId: normalizedGuildId,
+      channelId: normalizedChannelId,
+      maxRowsPerChannel
+    });
+    return Number(result?.changes || 0) > 0;
+  }
+
+  searchLookupContext({
+    guildId,
+    channelId = null,
+    queryText = "",
+    limit = 4,
+    maxAgeHours = 72
+  }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) return [];
+
+    const now = nowIso();
+    const boundedMaxAgeHours = clamp(
+      Math.floor(Number(maxAgeHours) || 72),
+      1,
+      LOOKUP_CONTEXT_MAX_AGE_HOURS
+    );
+    const sinceIso = new Date(Date.now() - boundedMaxAgeHours * 60 * 60 * 1000).toISOString();
+    const boundedLimit = clamp(Math.floor(Number(limit) || 4), 1, LOOKUP_CONTEXT_MAX_SEARCH_LIMIT);
+    const candidateLimit = clamp(boundedLimit * 6, boundedLimit, 120);
+    const normalizedChannelId = String(channelId || "").trim();
+
+    const rows = normalizedChannelId
+      ? this.db
+          .prepare(
+            `SELECT id, created_at, guild_id, channel_id, user_id, source, query, provider, results_json, match_text
+             FROM lookup_context
+             WHERE guild_id = ?
+               AND (channel_id = ? OR channel_id IS NULL)
+               AND created_at >= ?
+               AND expires_at > ?
+             ORDER BY created_at DESC
+             LIMIT ?`
+          )
+          .all(normalizedGuildId, normalizedChannelId, sinceIso, now, candidateLimit)
+      : this.db
+          .prepare(
+            `SELECT id, created_at, guild_id, channel_id, user_id, source, query, provider, results_json, match_text
+             FROM lookup_context
+             WHERE guild_id = ?
+               AND created_at >= ?
+               AND expires_at > ?
+             ORDER BY created_at DESC
+             LIMIT ?`
+          )
+          .all(normalizedGuildId, sinceIso, now, candidateLimit);
+
+    const normalizedQuery = String(queryText || "")
+      .toLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+    const queryTokens = [...new Set(normalizedQuery.match(/[a-z0-9]{3,}/g) || [])].slice(0, 8);
+    const parsedRows = rows.map((row) => {
+      const parsedResults = safeJsonParse(row?.results_json, []);
+      const normalizedResults = normalizeLookupResultRows(parsedResults, LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT);
+      const createdAt = String(row?.created_at || "").trim();
+      const createdAtMs = Date.parse(createdAt);
+      const ageMinutes = Number.isFinite(createdAtMs)
+        ? Math.max(0, Math.round((Date.now() - createdAtMs) / 60000))
+        : null;
+      return {
+        id: Number(row?.id || 0),
+        createdAt,
+        guildId: String(row?.guild_id || "").trim(),
+        channelId: String(row?.channel_id || "").trim() || null,
+        userId: String(row?.user_id || "").trim() || null,
+        source: String(row?.source || "").trim() || null,
+        query: normalizeLookupResultText(row?.query, LOOKUP_CONTEXT_QUERY_MAX_CHARS),
+        provider: normalizeLookupResultText(row?.provider, LOOKUP_CONTEXT_PROVIDER_MAX_CHARS) || null,
+        results: normalizedResults,
+        ageMinutes,
+        matchText: String(row?.match_text || "")
+          .replace(/\s+/g, " ")
+          .trim()
+      };
+    }).filter((row) => row.query && row.results.length);
+
+    if (!queryTokens.length) {
+      return parsedRows.slice(0, boundedLimit);
+    }
+
+    const rankedRows = parsedRows
+      .map((row, index) => ({
+        ...row,
+        _score: scoreLookupContextRow(
+          {
+            query: row.query,
+            match_text: row.matchText
+          },
+          queryTokens
+        ),
+        _rank: index
+      }))
+      .filter((row) => row._score > 0)
+      .sort((a, b) => {
+        if (b._score !== a._score) return b._score - a._score;
+        return a._rank - b._rank;
+      })
+      .slice(0, boundedLimit)
+      .map((row) => ({
+        id: row.id,
+        createdAt: row.createdAt,
+        guildId: row.guildId,
+        channelId: row.channelId,
+        userId: row.userId,
+        source: row.source,
+        query: row.query,
+        provider: row.provider,
+        results: row.results,
+        ageMinutes: row.ageMinutes
+      }));
+    if (rankedRows.length) return rankedRows;
+
+    return parsedRows.slice(0, boundedLimit).map((row) => ({
+      id: row.id,
+      createdAt: row.createdAt,
+      guildId: row.guildId,
+      channelId: row.channelId,
+      userId: row.userId,
+      source: row.source,
+      query: row.query,
+      provider: row.provider,
+      results: row.results,
+      ageMinutes: row.ageMinutes
+    }));
   }
 
   indexResponseTriggersForAction({

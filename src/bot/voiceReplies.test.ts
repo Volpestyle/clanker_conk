@@ -74,6 +74,7 @@ function createVoiceBot({
   generationError = null,
   generationSequence = null,
   searchConfigured = true,
+  recentLookupContext = [],
   screenShareCapability = {
     enabled: false,
     status: "disabled",
@@ -100,6 +101,8 @@ function createVoiceBot({
   const ingests = [];
   const remembers = [];
   const webSearchCalls = [];
+  const lookupMemorySearchCalls = [];
+  const lookupMemoryWrites = [];
   const screenShareCalls = [];
   const generationPayloads = [];
   let generationCalls = 0;
@@ -159,6 +162,14 @@ function createVoiceBot({
         relevantFacts: []
       };
     },
+    loadRecentLookupContext(payload) {
+      lookupMemorySearchCalls.push(payload);
+      return recentLookupContext;
+    },
+    rememberRecentLookupContext(payload) {
+      lookupMemoryWrites.push(payload);
+      return true;
+    },
     buildWebSearchContext(settings) {
       return {
         requested: false,
@@ -210,6 +221,8 @@ function createVoiceBot({
     ingests,
     remembers,
     webSearchCalls,
+    lookupMemorySearchCalls,
+    lookupMemoryWrites,
     screenShareCalls,
     generationPayloads,
     getGenerationCalls() {
@@ -530,7 +543,7 @@ test("generateVoiceTurnReply uses voice generation llm provider/model instead of
 });
 
 test("generateVoiceTurnReply runs web lookup follow-up with start/complete callbacks", async () => {
-  const { bot, webSearchCalls, getGenerationCalls } = createVoiceBot({
+  const { bot, webSearchCalls, lookupMemoryWrites, getGenerationCalls } = createVoiceBot({
     generationSequence: [
       "one sec [[WEB_SEARCH:latest rust stable version]]",
       "latest stable rust is 1.90"
@@ -563,8 +576,44 @@ test("generateVoiceTurnReply runs web lookup follow-up with start/complete callb
     "start:latest rust stable version",
     "done:latest rust stable version"
   ]);
+  assert.equal(lookupMemoryWrites.length, 1);
+  assert.equal(lookupMemoryWrites[0]?.query, "latest rust stable version");
+  assert.equal(lookupMemoryWrites[0]?.results?.[0]?.domain, "example.com");
   assert.equal(reply.text, "latest stable rust is 1.90");
   assert.equal(reply.usedWebSearchFollowup, true);
+});
+
+test("generateVoiceTurnReply includes short-term lookup memory in prompt context", async () => {
+  const { bot, generationPayloads, lookupMemorySearchCalls } = createVoiceBot({
+    generationText: "[SKIP]",
+    recentLookupContext: [
+      {
+        query: "rust stable release date",
+        provider: "brave",
+        ageMinutes: 20,
+        results: [
+          {
+            domain: "blog.rust-lang.org",
+            url: "https://blog.rust-lang.org/releases/"
+          }
+        ]
+      }
+    ]
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "what source did you use before?"
+  });
+
+  assert.equal(reply.text, "");
+  assert.equal(lookupMemorySearchCalls.length, 1);
+  const userPrompt = String(generationPayloads[0]?.userPrompt || "");
+  assert.equal(userPrompt.includes("Short-term lookup memory from recent successful web searches"), true);
+  assert.equal(userPrompt.includes("blog.rust-lang.org"), true);
 });
 
 test("generateVoiceTurnReply triggers voice screen-share link offer from directive", async () => {

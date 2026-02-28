@@ -75,6 +75,34 @@ function formatWebSearchFindings(webSearch) {
     .join("\n");
 }
 
+function formatRecentLookupContext(recentWebLookups) {
+  const rows = Array.isArray(recentWebLookups) ? recentWebLookups : [];
+  if (!rows.length) return "(no recent lookup cache)";
+
+  return rows
+    .slice(0, 6)
+    .map((item, index) => {
+      const query = String(item?.query || "").trim() || "unknown query";
+      const provider = String(item?.provider || "").trim();
+      const ageMinutes = Number(item?.ageMinutes);
+      const ageLabel = Number.isFinite(ageMinutes)
+        ? ageMinutes < 60
+          ? `${Math.max(0, Math.round(ageMinutes))}m ago`
+          : `${Math.max(1, Math.round(ageMinutes / 60))}h ago`
+        : "recent";
+      const sourceHints = (Array.isArray(item?.results) ? item.results : [])
+        .slice(0, 3)
+        .map((row) => String(row?.domain || row?.url || "").trim())
+        .filter(Boolean);
+      const sourceLabel = sourceHints.length
+        ? ` | sources: ${sourceHints.join(", ")}`
+        : "";
+      const providerLabel = provider ? ` | provider: ${provider}` : "";
+      return `- [R${index + 1}] "${query}" (${ageLabel})${providerLabel}${sourceLabel}`;
+    })
+    .join("\n");
+}
+
 function formatVideoFindings(videoContext) {
   if (!videoContext?.videos?.length) return "(no video context available)";
 
@@ -228,6 +256,7 @@ export function buildReplyPrompt({
   reactionEagerness = 20,
   addressing = null,
   webSearch = null,
+  recentWebLookups = [],
   memoryLookup = null,
   imageLookup = null,
   allowWebSearchDirective = false,
@@ -307,6 +336,13 @@ export function buildReplyPrompt({
       parts.push(formatImageLookupResults(imageLookup.results));
       parts.push("Use this visual context directly and avoid guessing details not present.");
     }
+  }
+
+  if (recentWebLookups?.length) {
+    parts.push("Short-term lookup memory from recent successful web searches (may be stale):");
+    parts.push(formatRecentLookupContext(recentWebLookups));
+    parts.push("If the user asks what source you used earlier, reference these cached domains/URLs directly.");
+    parts.push("Use this as background context only. If freshness matters, run a new live web lookup.");
   }
 
   if (emojiHints?.length) {
@@ -787,6 +823,7 @@ export function buildVoiceTurnPrompt({
   soundboardCandidates = [],
   memoryEnabled = false,
   webSearch = null,
+  recentWebLookups = [],
   allowWebSearchDirective = false,
   screenShare = null,
   allowScreenShareDirective = false
@@ -914,6 +951,13 @@ export function buildVoiceTurnPrompt({
       "If you want a soundboard effect, append exactly one trailing directive: [[SOUNDBOARD:<sound_ref>]] where <sound_ref> matches the list exactly."
     );
     parts.push("If no soundboard effect should play, omit the directive.");
+  }
+
+  if (recentWebLookups?.length) {
+    parts.push("Short-term lookup memory from recent successful web searches (may be stale):");
+    parts.push(formatRecentLookupContext(recentWebLookups));
+    parts.push("If the speaker asks what source you used earlier, mention these cached domains/URLs.");
+    parts.push("Use this only as lightweight context. For fresh facts, request a new web lookup.");
   }
 
   if (allowWebSearchDirective) {

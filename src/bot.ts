@@ -112,6 +112,11 @@ const MAX_AUTOMATION_RUNS_PER_TICK = 4;
 const SCREEN_SHARE_MESSAGE_MAX_CHARS = 420;
 const SCREEN_SHARE_INTENT_THRESHOLD = 0.66;
 const REPLY_PERFORMANCE_VERSION = 1;
+const LOOKUP_CONTEXT_PROMPT_LIMIT = 4;
+const LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS = 72;
+const LOOKUP_CONTEXT_TTL_HOURS = 48;
+const LOOKUP_CONTEXT_MAX_RESULTS = 5;
+const LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL = 120;
 const IS_NODE_TEST_PROCESS = Boolean(process.env.NODE_TEST_CONTEXT) ||
   process.execArgv.includes("--test") ||
   process.argv.includes("--test");
@@ -710,6 +715,8 @@ export class ClankerBot {
       loadPromptMemorySlice: (payload) => this.loadPromptMemorySlice(payload),
       buildWebSearchContext: (runtimeSettings, messageText) =>
         this.buildWebSearchContext(runtimeSettings, messageText),
+      loadRecentLookupContext: (payload) => this.getRecentLookupContextForPrompt(payload),
+      rememberRecentLookupContext: (payload) => this.rememberRecentLookupContext(payload),
       runModelRequestedWebSearch: (payload) =>
         runModelRequestedWebSearchForReplyFollowup(
           { llm: this.llm, search: this.search, memory: this.memory },
@@ -763,6 +770,8 @@ export class ClankerBot {
       loadPromptMemorySlice: (payload) => this.loadPromptMemorySlice(payload),
       buildWebSearchContext: (runtimeSettings, messageText) =>
         this.buildWebSearchContext(runtimeSettings, messageText),
+      loadRecentLookupContext: (payload) => this.getRecentLookupContextForPrompt(payload),
+      rememberRecentLookupContext: (payload) => this.rememberRecentLookupContext(payload),
       runModelRequestedWebSearch: (payload) =>
         runModelRequestedWebSearchForReplyFollowup(
           { llm: this.llm, search: this.search, memory: this.memory },
@@ -886,6 +895,13 @@ export class ClankerBot {
     const gifBudget = this.getGifBudgetState(settings);
     const gifsConfigured = Boolean(this.gifs?.isConfigured?.());
     let webSearch = this.buildWebSearchContext(settings, message.content);
+    const recentWebLookups = this.getRecentLookupContextForPrompt({
+      guildId: message.guildId,
+      channelId: message.channelId,
+      queryText: message.content,
+      limit: LOOKUP_CONTEXT_PROMPT_LIMIT,
+      maxAgeHours: LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS
+    });
     let memoryLookup = this.buildMemoryLookupContext({ settings });
     const videoContext = await this.buildVideoReplyContext({
       settings,
@@ -950,6 +966,7 @@ export class ClankerBot {
       voiceMode: {
         enabled: Boolean(settings?.voice?.enabled)
       },
+      recentWebLookups,
       screenShare: screenShareCapability,
       videoContext,
       channelMode: isInitiativeChannel ? "initiative" : "non_initiative",
@@ -1027,6 +1044,17 @@ export class ClankerBot {
         ...webSearch,
         ...followupWebSearch
       };
+      if (webSearch.used && Array.isArray(webSearch.results) && webSearch.results.length) {
+        this.rememberRecentLookupContext({
+          guildId: message.guildId,
+          channelId: message.channelId,
+          userId: message.author.id,
+          source,
+          query: webSearch.query || replyDirective.webSearchQuery,
+          provider: webSearch.providerUsed || null,
+          results: webSearch.results
+        });
+      }
     }
 
     if (usedWebSearchFollowup || replyDirective.memoryLookupQuery || replyDirective.imageLookupQuery) {
@@ -2550,6 +2578,91 @@ export class ClankerBot {
           }
         ]
       };
+    }
+  }
+
+  getRecentLookupContextForPrompt({
+    guildId,
+    channelId = null,
+    queryText = "",
+    limit = LOOKUP_CONTEXT_PROMPT_LIMIT,
+    maxAgeHours = LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS
+  } = {}) {
+    if (!this.store || typeof this.store.searchLookupContext !== "function") return [];
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) return [];
+    const normalizedChannelId = String(channelId || "").trim() || null;
+    const normalizedQuery = String(queryText || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 280);
+    try {
+      return this.store.searchLookupContext({
+        guildId: normalizedGuildId,
+        channelId: normalizedChannelId,
+        queryText: normalizedQuery,
+        limit,
+        maxAgeHours
+      });
+    } catch (error) {
+      this.store.logAction({
+        kind: "bot_error",
+        guildId: normalizedGuildId,
+        channelId: normalizedChannelId,
+        userId: this.client.user?.id || null,
+        content: `lookup_context_search: ${String(error?.message || error)}`
+      });
+      return [];
+    }
+  }
+
+  rememberRecentLookupContext({
+    guildId,
+    channelId = null,
+    userId = null,
+    source = "reply_web_lookup",
+    query = "",
+    provider = null,
+    results = []
+  } = {}) {
+    if (!this.store || typeof this.store.recordLookupContext !== "function") return false;
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) return false;
+    const normalizedChannelId = String(channelId || "").trim() || null;
+    const normalizedUserId = String(userId || "").trim() || null;
+    const normalizedSource = String(source || "reply_web_lookup")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 120);
+    const normalizedQuery = String(query || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 220);
+    if (!normalizedQuery) return false;
+    const normalizedResults = (Array.isArray(results) ? results : []).slice(0, LOOKUP_CONTEXT_MAX_RESULTS);
+    if (!normalizedResults.length) return false;
+    try {
+      return this.store.recordLookupContext({
+        guildId: normalizedGuildId,
+        channelId: normalizedChannelId,
+        userId: normalizedUserId,
+        source: normalizedSource,
+        query: normalizedQuery,
+        provider,
+        results: normalizedResults,
+        ttlHours: LOOKUP_CONTEXT_TTL_HOURS,
+        maxResults: LOOKUP_CONTEXT_MAX_RESULTS,
+        maxRowsPerChannel: LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL
+      });
+    } catch (error) {
+      this.store.logAction({
+        kind: "bot_error",
+        guildId: normalizedGuildId,
+        channelId: normalizedChannelId,
+        userId: this.client.user?.id || null,
+        content: `lookup_context_record: ${String(error?.message || error)}`
+      });
+      return false;
     }
   }
 

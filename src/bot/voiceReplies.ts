@@ -23,6 +23,8 @@ import { clamp, sanitizeBotText } from "../utils.ts";
 const MAX_SOUNDBOARD_LEAK_TOKEN_SCAN = 24;
 const SOUNDBOARD_CANDIDATE_PARSE_LIMIT = 40;
 const SOUNDBOARD_SIMPLE_TOKEN_RE = /^[a-z0-9 _-]+$/i;
+const LOOKUP_CONTEXT_PROMPT_LIMIT = 4;
+const LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS = 72;
 
 export async function composeVoiceOperationalMessage(runtime, {
   settings,
@@ -302,6 +304,19 @@ export async function generateVoiceTurnReply(runtime, {
     },
     source: "voice_stt_pipeline_generation"
   });
+  const recentWebLookupsRaw =
+    typeof runtime.loadRecentLookupContext === "function"
+      ? runtime.loadRecentLookupContext({
+          guildId,
+          channelId,
+          queryText: incomingTranscript,
+          limit: LOOKUP_CONTEXT_PROMPT_LIMIT,
+          maxAgeHours: LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS
+        })
+      : [];
+  const recentWebLookups = Array.isArray(recentWebLookupsRaw)
+    ? recentWebLookupsRaw
+    : [];
 
   const voiceGenerationProvider = normalizeLlmProvider(settings?.voice?.generationLlm?.provider);
   const voiceGenerationModel = String(
@@ -391,6 +406,7 @@ export async function generateVoiceTurnReply(runtime, {
       soundboardCandidates: normalizedSoundboardCandidates,
       memoryEnabled: Boolean(settings.memory?.enabled),
       webSearch: webSearchContext,
+      recentWebLookups,
       allowWebSearchDirective: allowWebSearch,
       screenShare,
       allowScreenShareDirective
@@ -448,6 +464,22 @@ export async function generateVoiceTurnReply(runtime, {
           query: normalizedQuery,
           timeoutMs: lookupTimeoutMs
         });
+        if (
+          webSearch?.used &&
+          Array.isArray(webSearch?.results) &&
+          webSearch.results.length > 0 &&
+          typeof runtime.rememberRecentLookupContext === "function"
+        ) {
+          runtime.rememberRecentLookupContext({
+            guildId,
+            channelId,
+            userId,
+            source: sessionId ? "voice_session_web_lookup" : "voice_turn_web_lookup",
+            query: webSearch.query || normalizedQuery,
+            provider: webSearch.providerUsed || null,
+            results: webSearch.results
+          });
+        }
       } finally {
         if (lookupStarted && typeof onWebLookupComplete === "function") {
           await onWebLookupComplete({

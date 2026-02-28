@@ -193,6 +193,41 @@ test("buildReplyPrompt keeps memory citations opt-in for explicit user requests"
   assert.equal(/If useful, cite memory hits inline as \[M1\], \[M2\], etc\./.test(prompt), false);
 });
 
+test("buildReplyPrompt includes short-term lookup memory context", () => {
+  const prompt = buildReplyPrompt({
+    message: {
+      authorName: "alice",
+      content: "what source did you use earlier?"
+    },
+    imageInputs: [],
+    recentMessages: [],
+    relevantMessages: [],
+    userFacts: [],
+    relevantFacts: [],
+    emojiHints: [],
+    reactionEmojiOptions: [],
+    recentWebLookups: [
+      {
+        query: "latest rust stable version",
+        provider: "brave",
+        ageMinutes: 14,
+        results: [
+          {
+            domain: "blog.rust-lang.org",
+            url: "https://blog.rust-lang.org/releases/",
+            title: "Rust releases"
+          }
+        ]
+      }
+    ]
+  });
+
+  assert.match(prompt, /Short-term lookup memory from recent successful web searches/);
+  assert.match(prompt, /\[R1\]/);
+  assert.match(prompt, /blog\.rust-lang\.org/);
+  assert.match(prompt, /If the user asks what source you used earlier, reference these cached domains\/URLs directly\./);
+});
+
 test("buildReplyPrompt hard-rules explicit VC join commands when voice mode is enabled", () => {
   const prompt = buildReplyPrompt({
     message: {
