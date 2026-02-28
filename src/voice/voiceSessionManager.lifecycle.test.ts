@@ -273,13 +273,16 @@ test("requestStatus reports offline and online states", async () => {
   );
 
   const online = await manager.requestStatus({
-    message: createMessage(),
+    message: createMessage({
+      content: "clankie r u in vc rn?"
+    }),
     settings: null
   });
   assert.equal(online, true);
   assert.equal(messages.at(-1)?.reason, "online");
   assert.equal(messages.at(-1)?.details?.activeCaptures, 2);
   assert.equal(messages.at(-1)?.details?.streamWatchActive, true);
+  assert.equal(messages.at(-1)?.details?.requestText, "clankie r u in vc rn?");
 });
 
 test("requestLeave sends not_in_voice or ends active session", async () => {
