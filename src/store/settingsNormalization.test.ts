@@ -48,6 +48,7 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
         enabled: "yes",
         provider: "NOT-REAL",
         model: "",
+        temperature: 9,
         eagerness: 999,
         minSilenceSeconds: 1,
         minSecondsBetweenThoughts: 9999
@@ -123,6 +124,7 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.voice.thoughtEngine.enabled, true);
   assert.equal(normalized.voice.thoughtEngine.provider, "anthropic");
   assert.equal(normalized.voice.thoughtEngine.model, "claude-haiku-4-5");
+  assert.equal(normalized.voice.thoughtEngine.temperature, 2);
   assert.equal(normalized.voice.thoughtEngine.eagerness, 100);
   assert.equal(normalized.voice.thoughtEngine.minSilenceSeconds, 8);
   assert.equal(normalized.voice.thoughtEngine.minSecondsBetweenThoughts, 600);

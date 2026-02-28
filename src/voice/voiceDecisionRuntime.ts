@@ -170,6 +170,102 @@ export function parseVoiceDecisionContract(rawText) {
   };
 }
 
+export function parseVoiceThoughtDecisionContract(rawText) {
+  const normalized = String(rawText || "").trim();
+  if (!normalized) {
+    return {
+      allow: false,
+      confident: false,
+      finalThought: "",
+      usedMemory: false,
+      reason: ""
+    };
+  }
+
+  const unwrapped = normalized.replace(/^```(?:[a-z]+)?\s*/i, "").replace(/```$/i, "").trim();
+  const parseAllowValue = (value) => {
+    if (typeof value === "boolean") return value;
+    const normalizedValue = String(value || "").trim().toUpperCase();
+    if (normalizedValue === "YES" || normalizedValue === "TRUE" || normalizedValue === "1") return true;
+    if (normalizedValue === "NO" || normalizedValue === "FALSE" || normalizedValue === "0") return false;
+    return null;
+  };
+
+  try {
+    const parsedJson = JSON.parse(unwrapped);
+    if (parsedJson && typeof parsedJson === "object" && !Array.isArray(parsedJson)) {
+      const allowValue = parseAllowValue(
+        parsedJson.allow ??
+          parsedJson.decision ??
+          parsedJson.answer ??
+          parsedJson.value
+      );
+      if (allowValue !== null) {
+        const finalThoughtValue =
+          typeof parsedJson.finalThought === "string"
+            ? parsedJson.finalThought
+            : typeof parsedJson.thought === "string"
+              ? parsedJson.thought
+              : typeof parsedJson.line === "string"
+                ? parsedJson.line
+                : typeof parsedJson.text === "string"
+                  ? parsedJson.text
+                  : "";
+        const usedMemoryValue = parsedJson.usedMemory;
+        const usedMemory =
+          typeof usedMemoryValue === "boolean"
+            ? usedMemoryValue
+            : /^(true|yes|1)$/i.test(String(usedMemoryValue || "").trim());
+        return {
+          allow: allowValue,
+          confident: true,
+          finalThought: String(finalThoughtValue || "").trim(),
+          usedMemory,
+          reason: String(parsedJson.reason || "").trim()
+        };
+      }
+    }
+  } catch {
+    // ignore invalid JSON and continue with token parsing fallback
+  }
+
+  const tokenMatch = unwrapped.match(/^\s*(YES|NO)\b/i);
+  if (!tokenMatch) {
+    return {
+      allow: false,
+      confident: false,
+      finalThought: "",
+      usedMemory: false,
+      reason: ""
+    };
+  }
+
+  const allow = String(tokenMatch[1] || "").toUpperCase() === "YES";
+  let remainder = unwrapped.slice(tokenMatch[0].length).trim();
+  remainder = remainder.replace(/^[:\-]\s*/, "");
+  let usedMemory = false;
+  const usedMemoryMatch = remainder.match(/\bused[_\s-]?memory\s*[:=]\s*(true|false|yes|no|1|0)\b/i);
+  if (usedMemoryMatch) {
+    usedMemory = /^(true|yes|1)$/i.test(String(usedMemoryMatch[1] || "").trim());
+    remainder = `${remainder.slice(0, usedMemoryMatch.index)} ${remainder.slice((usedMemoryMatch.index || 0) + usedMemoryMatch[0].length)}`.trim();
+  }
+
+  let reason = "";
+  const reasonMatch = remainder.match(/\breason\s*[:=]\s*([a-z0-9_.-]+)/i);
+  if (reasonMatch) {
+    reason = String(reasonMatch[1] || "").trim();
+    remainder = `${remainder.slice(0, reasonMatch.index)} ${remainder.slice((reasonMatch.index || 0) + reasonMatch[0].length)}`.trim();
+  }
+
+  return {
+    allow,
+    confident: true,
+    finalThought: allow ? remainder : "",
+    usedMemory,
+    reason
+  };
+}
+
 function estimatePcm16MonoDurationMs(pcmByteLength, sampleRateHz = 24000) {
   const normalizedBytes = Math.max(0, Number(pcmByteLength) || 0);
   const normalizedRate = Math.max(1, Number(sampleRateHz) || 24000);

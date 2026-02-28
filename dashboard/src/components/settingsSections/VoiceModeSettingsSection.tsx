@@ -330,6 +330,17 @@ export function VoiceModeSettingsSection({
                 </div>
               </div>
 
+              <label htmlFor="voice-thought-temperature">Thought temperature</label>
+              <input
+                id="voice-thought-temperature"
+                type="number"
+                min="0"
+                max="2"
+                step="0.05"
+                value={form.voiceThoughtEngineTemperature}
+                onChange={set("voiceThoughtEngineTemperature")}
+              />
+
               <label htmlFor="voice-thought-eagerness">
                 Thought eagerness: <strong>{form.voiceThoughtEngineEagerness}%</strong>
               </label>

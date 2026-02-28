@@ -141,6 +141,8 @@ export function settingsToForm(settings) {
       settings?.voice?.thoughtEngine?.provider ?? defaultVoiceThoughtEngine.provider,
     voiceThoughtEngineModel:
       settings?.voice?.thoughtEngine?.model ?? defaultVoiceThoughtEngine.model,
+    voiceThoughtEngineTemperature:
+      settings?.voice?.thoughtEngine?.temperature ?? defaultVoiceThoughtEngine.temperature,
     voiceThoughtEngineEagerness:
       settings?.voice?.thoughtEngine?.eagerness ?? defaultVoiceThoughtEngine.eagerness,
     voiceThoughtEngineMinSilenceSeconds:
@@ -329,6 +331,7 @@ export function formToSettingsPatch(form) {
         enabled: Boolean(form.voiceThoughtEngineEnabled),
         provider: String(form.voiceThoughtEngineProvider || "").trim(),
         model: String(form.voiceThoughtEngineModel || "").trim(),
+        temperature: Number(form.voiceThoughtEngineTemperature),
         eagerness: Number(form.voiceThoughtEngineEagerness),
         minSilenceSeconds: Number(form.voiceThoughtEngineMinSilenceSeconds),
         minSecondsBetweenThoughts: Number(form.voiceThoughtEngineMinSecondsBetweenThoughts)

@@ -35,6 +35,7 @@ import {
   isLowSignalVoiceFragment,
   normalizeVoiceReplyDecisionProvider,
   parseVoiceDecisionContract,
+  parseVoiceThoughtDecisionContract,
   resolveVoiceReplyDecisionMaxOutputTokens,
   shouldUseLlmForLowSignalTurn,
   resolveRealtimeTurnTranscriptionPlan
@@ -167,6 +168,8 @@ import {
   VOICE_THOUGHT_LOOP_MIN_INTERVAL_SECONDS,
   VOICE_THOUGHT_LOOP_MIN_SILENCE_SECONDS,
   VOICE_THOUGHT_MAX_CHARS,
+  VOICE_THOUGHT_MEMORY_SEARCH_LIMIT,
+  VOICE_THOUGHT_DECISION_MAX_OUTPUT_TOKENS,
   VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS,
   VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
   VOICE_FALLBACK_NOISE_GATE_ACTIVE_RATIO_MAX,
@@ -1994,6 +1997,8 @@ export class VoiceSessionManager {
     );
     const configuredModel = String(thoughtEngine?.model || "").trim().slice(0, 120);
     const model = configuredModel || defaultModelForLlmProvider(provider);
+    const configuredTemperature = Number(thoughtEngine?.temperature);
+    const temperature = clamp(Number.isFinite(configuredTemperature) ? configuredTemperature : 0.8, 0, 2);
     const eagerness = clamp(Number(thoughtEngine?.eagerness) || 0, 0, 100);
     const minSilenceSeconds = clamp(
       Number(thoughtEngine?.minSilenceSeconds) || 20,
@@ -2010,6 +2015,7 @@ export class VoiceSessionManager {
       enabled,
       provider,
       model,
+      temperature,
       eagerness,
       minSilenceSeconds,
       minSecondsBetweenThoughts
@@ -2233,13 +2239,13 @@ export class VoiceSessionManager {
 
     session.thoughtLoopBusy = true;
     try {
-      const thoughtCandidate = await this.generateVoiceThoughtCandidate({
+      const thoughtDraft = await this.generateVoiceThoughtCandidate({
         session,
         settings: resolvedSettings,
         config: thoughtConfig,
         trigger
       });
-      if (!thoughtCandidate) {
+      if (!thoughtDraft) {
         this.store.logAction({
           kind: "voice_runtime",
           guildId: session.guildId,
@@ -2255,10 +2261,22 @@ export class VoiceSessionManager {
         return false;
       }
 
+      const replyDecisionEnabled =
+        resolvedSettings?.voice?.replyDecisionLlm?.enabled !== undefined
+          ? Boolean(resolvedSettings.voice.replyDecisionLlm.enabled)
+          : true;
+      const thoughtMemoryFacts = replyDecisionEnabled
+        ? await this.loadVoiceThoughtMemoryFacts({
+            session,
+            settings: resolvedSettings,
+            thoughtCandidate: thoughtDraft
+          })
+        : [];
       const decision = await this.evaluateVoiceThoughtDecision({
         session,
         settings: resolvedSettings,
-        thoughtCandidate
+        thoughtCandidate: thoughtDraft,
+        memoryFacts: thoughtMemoryFacts
       });
       this.store.logAction({
         kind: "voice_runtime",
@@ -2272,7 +2290,10 @@ export class VoiceSessionManager {
           trigger: String(trigger || "timer"),
           allow: Boolean(decision.allow),
           reason: decision.reason,
-          thoughtCandidate,
+          thoughtDraft,
+          finalThought: decision.finalThought || null,
+          memoryFactCount: Number(decision.memoryFactCount || 0),
+          usedMemory: Boolean(decision.usedMemory),
           llmResponse: decision.llmResponse || null,
           llmProvider: decision.llmProvider || null,
           llmModel: decision.llmModel || null,
@@ -2280,11 +2301,16 @@ export class VoiceSessionManager {
         }
       });
       if (!decision.allow) return false;
+      const finalThought = normalizeVoiceText(
+        decision.finalThought || thoughtDraft,
+        VOICE_THOUGHT_MAX_CHARS
+      );
+      if (!finalThought) return false;
 
       const spoken = await this.deliverVoiceThoughtCandidate({
         session,
         settings: resolvedSettings,
-        thoughtCandidate,
+        thoughtCandidate: finalThought,
         trigger
       });
       if (spoken) {
@@ -2356,7 +2382,7 @@ export class VoiceSessionManager {
         ...(settings?.llm || {}),
         provider: thoughtConfig.provider,
         model: thoughtConfig.model,
-        temperature: clamp(Number(settings?.llm?.temperature) || 0.8, 0.2, 1.2),
+        temperature: thoughtConfig.temperature,
         maxOutputTokens: 96
       }
     };
@@ -2383,16 +2409,81 @@ export class VoiceSessionManager {
     return thoughtCandidate;
   }
 
-  async evaluateVoiceThoughtDecision({
+  async loadVoiceThoughtMemoryFacts({
     session,
     settings,
     thoughtCandidate
+  }) {
+    if (!session || session.ending) return [];
+    if (!settings?.memory?.enabled) return [];
+    if (!this.memory || typeof this.memory.searchDurableFacts !== "function") return [];
+
+    const normalizedThought = normalizeVoiceText(thoughtCandidate, VOICE_THOUGHT_MAX_CHARS);
+    if (!normalizedThought) return [];
+    const recentHistory = this.formatVoiceDecisionHistory(session, 6, VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS);
+    const queryText = normalizeVoiceText(
+      [normalizedThought, recentHistory].filter(Boolean).join("\n"),
+      STT_TRANSCRIPT_MAX_CHARS
+    );
+    if (!queryText) return [];
+
+    try {
+      const results = await this.memory.searchDurableFacts({
+        guildId: session.guildId,
+        channelId: session.textChannelId || null,
+        queryText,
+        settings,
+        trace: {
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.client.user?.id || null,
+          source: "voice_thought_memory_search"
+        },
+        limit: VOICE_THOUGHT_MEMORY_SEARCH_LIMIT
+      });
+
+      const rows = Array.isArray(results) ? results : [];
+      const deduped = [];
+      const seenFacts = new Set();
+      for (const row of rows) {
+        const factText = normalizeVoiceText(row?.fact || "", 180);
+        if (!factText) continue;
+        const dedupeKey = factText.toLowerCase();
+        if (seenFacts.has(dedupeKey)) continue;
+        seenFacts.add(dedupeKey);
+        deduped.push(row);
+        if (deduped.length >= VOICE_THOUGHT_MEMORY_SEARCH_LIMIT) break;
+      }
+      return deduped;
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: `voice_thought_memory_search_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id
+        }
+      });
+      return [];
+    }
+  }
+
+  async evaluateVoiceThoughtDecision({
+    session,
+    settings,
+    thoughtCandidate,
+    memoryFacts = []
   }) {
     const normalizedThought = normalizeVoiceText(thoughtCandidate, VOICE_THOUGHT_MAX_CHARS);
     if (!normalizedThought) {
       return {
         allow: false,
-        reason: "empty_thought_candidate"
+        reason: "empty_thought_candidate",
+        finalThought: "",
+        usedMemory: false,
+        memoryFactCount: 0
       };
     }
 
@@ -2402,13 +2493,19 @@ export class VoiceSessionManager {
     if (!classifierEnabled) {
       return {
         allow: true,
-        reason: "classifier_disabled"
+        reason: "classifier_disabled",
+        finalThought: normalizedThought,
+        usedMemory: false,
+        memoryFactCount: 0
       };
     }
     if (!this.llm?.generate) {
       return {
         allow: false,
-        reason: "llm_generate_unavailable"
+        reason: "llm_generate_unavailable",
+        finalThought: "",
+        usedMemory: false,
+        memoryFactCount: 0
       };
     }
 
@@ -2420,24 +2517,35 @@ export class VoiceSessionManager {
     const recentHistory = this.formatVoiceDecisionHistory(session, 8, VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS);
     const silenceMs = Math.max(0, Date.now() - Number(session.lastActivityAt || 0));
     const thoughtEagerness = clamp(Number(settings?.voice?.thoughtEngine?.eagerness) || 0, 0, 100);
+    const ambientMemoryFacts = Array.isArray(memoryFacts) ? memoryFacts : [];
+    const ambientMemory = formatRealtimeMemoryFacts(ambientMemoryFacts, VOICE_THOUGHT_MEMORY_SEARCH_LIMIT);
     const botName = getPromptBotName(settings);
 
     const systemPrompt = [
-      `You decide whether ${botName} should speak a candidate line right now in live Discord voice chat.`,
-      "Respond with exactly YES or NO."
+      `You decide whether ${botName} should speak a candidate thought line right now in live Discord voice chat.`,
+      "Return strict JSON only with keys: allow (boolean), finalThought (string), usedMemory (boolean), reason (string).",
+      "If allow is true, finalThought must contain one short spoken line.",
+      "If allow is false, finalThought must be an empty string.",
+      "You may improve the draft using memory only when it feels natural and additive.",
+      "Prefer allow=false over awkward memory references.",
+      "No markdown, no extra keys."
     ].join("\n");
     const userPromptParts = [
-      `Candidate line: "${normalizedThought}"`,
+      `Draft thought: "${normalizedThought}"`,
       `Thought eagerness: ${thoughtEagerness}/100.`,
       `Current human participant count: ${participants.length || 0}.`,
       `Silence duration ms: ${Math.max(0, Math.round(silenceMs))}.`,
-      "Decision rule: YES only when saying this now would feel natural and additive; otherwise NO."
+      `Final thought hard max chars: ${VOICE_THOUGHT_MAX_CHARS}.`,
+      "Decision rule: allow only when saying the final line now would feel natural and additive."
     ];
     if (participants.length) {
       userPromptParts.push(`Participant names: ${participants.slice(0, 12).join(", ")}.`);
     }
     if (recentHistory) {
       userPromptParts.push(`Recent voice turns:\n${recentHistory}`);
+    }
+    if (ambientMemory) {
+      userPromptParts.push(`Ambient durable memory (optional): ${ambientMemory}`);
     }
 
     try {
@@ -2449,13 +2557,30 @@ export class VoiceSessionManager {
             provider: llmProvider,
             model: llmModel,
             temperature: 0,
-            maxOutputTokens: resolveVoiceReplyDecisionMaxOutputTokens(llmProvider, llmModel),
+            maxOutputTokens: VOICE_THOUGHT_DECISION_MAX_OUTPUT_TOKENS,
             reasoningEffort: String(replyDecisionLlm?.reasoningEffort || "minimal").trim().toLowerCase() || "minimal"
           }
         },
         systemPrompt,
         userPrompt: userPromptParts.join("\n"),
         contextMessages: [],
+        jsonSchema: JSON.stringify({
+          type: "object",
+          additionalProperties: false,
+          required: ["allow", "finalThought", "usedMemory", "reason"],
+          properties: {
+            allow: { type: "boolean" },
+            finalThought: {
+              type: "string",
+              maxLength: VOICE_THOUGHT_MAX_CHARS
+            },
+            usedMemory: { type: "boolean" },
+            reason: {
+              type: "string",
+              maxLength: 80
+            }
+          }
+        }),
         trace: {
           guildId: session.guildId,
           channelId: session.textChannelId,
@@ -2464,19 +2589,46 @@ export class VoiceSessionManager {
         }
       });
       const raw = String(generation?.text || "").trim();
-      const parsed = parseVoiceDecisionContract(raw);
+      const parsed = parseVoiceThoughtDecisionContract(raw);
       if (!parsed.confident) {
         return {
           allow: false,
           reason: "llm_contract_violation",
+          finalThought: "",
+          usedMemory: false,
+          memoryFactCount: ambientMemoryFacts.length,
           llmResponse: raw,
           llmProvider: generation?.provider || llmProvider,
           llmModel: generation?.model || llmModel
         };
       }
+      const sanitizedThought = normalizeVoiceText(
+        extractSoundboardDirective(parsed.finalThought || "").text,
+        VOICE_THOUGHT_MAX_CHARS
+      );
+      if (parsed.allow && (!sanitizedThought || sanitizedThought === "[SKIP]")) {
+        return {
+          allow: false,
+          reason: "llm_contract_violation",
+          finalThought: "",
+          usedMemory: false,
+          memoryFactCount: ambientMemoryFacts.length,
+          llmResponse: raw,
+          llmProvider: generation?.provider || llmProvider,
+          llmModel: generation?.model || llmModel
+        };
+      }
+      const parsedReason = String(parsed.reason || "")
+        .trim()
+        .toLowerCase()
+        .replace(/[^\w.-]+/g, "_")
+        .slice(0, 80);
       return {
         allow: parsed.allow,
-        reason: parsed.allow ? "llm_yes" : "llm_no",
+        reason: parsedReason || (parsed.allow ? "llm_allow" : "llm_deny"),
+        finalThought: parsed.allow ? sanitizedThought : "",
+        usedMemory: parsed.allow ? Boolean(parsed.usedMemory) : false,
+        memoryFactCount: ambientMemoryFacts.length,
         llmResponse: raw,
         llmProvider: generation?.provider || llmProvider,
         llmModel: generation?.model || llmModel
@@ -2485,6 +2637,9 @@ export class VoiceSessionManager {
       return {
         allow: false,
         reason: "llm_error",
+        finalThought: "",
+        usedMemory: false,
+        memoryFactCount: ambientMemoryFacts.length,
         llmProvider,
         llmModel,
         error: String(error?.message || error)

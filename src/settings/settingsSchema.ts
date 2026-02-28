@@ -115,6 +115,7 @@ export const DEFAULT_SETTINGS = {
       enabled: true,
       provider: "anthropic",
       model: "claude-haiku-4-5",
+      temperature: 0.8,
       eagerness: 0,
       minSilenceSeconds: 20,
       minSecondsBetweenThoughts: 20

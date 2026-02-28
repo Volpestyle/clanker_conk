@@ -288,6 +288,7 @@ export function normalizeSettings(raw) {
     enabled?: boolean;
     provider?: string;
     model?: string;
+    temperature?: number;
     eagerness?: number;
     minSilenceSeconds?: number;
     minSecondsBetweenThoughts?: number;
@@ -450,6 +451,17 @@ export function normalizeSettings(raw) {
   if (!merged.voice.thoughtEngine.model) {
     merged.voice.thoughtEngine.model = defaultModelForLlmProvider(merged.voice.thoughtEngine.provider);
   }
+  const voiceThoughtTemperatureRaw = Number(merged.voice?.thoughtEngine?.temperature);
+  const defaultVoiceThoughtTemperatureRaw = Number(defaultVoiceThoughtEngine.temperature);
+  merged.voice.thoughtEngine.temperature = clamp(
+    Number.isFinite(voiceThoughtTemperatureRaw)
+      ? voiceThoughtTemperatureRaw
+      : Number.isFinite(defaultVoiceThoughtTemperatureRaw)
+        ? defaultVoiceThoughtTemperatureRaw
+        : 0.8,
+    0,
+    2
+  );
   const voiceThoughtMinSilenceRaw = Number(merged.voice?.thoughtEngine?.minSilenceSeconds);
   const defaultVoiceThoughtMinSilenceRaw = Number(defaultVoiceThoughtEngine.minSilenceSeconds);
   merged.voice.thoughtEngine.minSilenceSeconds = clamp(

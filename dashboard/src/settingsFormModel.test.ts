@@ -37,6 +37,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.voiceThoughtEngineEnabled, true);
   assert.equal(form.voiceThoughtEngineProvider, "anthropic");
   assert.equal(form.voiceThoughtEngineModel, "claude-haiku-4-5");
+  assert.equal(form.voiceThoughtEngineTemperature, 0.8);
   assert.equal(form.voiceThoughtEngineEagerness, 0);
   assert.equal(form.initiativeChannels, "1\n2");
   assert.equal(form.allowedChannels, "2\n3");
@@ -56,6 +57,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.voice.thoughtEngine.enabled, true);
   assert.equal(patch.voice.thoughtEngine.provider, "anthropic");
   assert.equal(patch.voice.thoughtEngine.model, "claude-haiku-4-5");
+  assert.equal(patch.voice.thoughtEngine.temperature, 0.8);
   assert.equal(patch.voice.thoughtEngine.eagerness, 0);
 });
 
