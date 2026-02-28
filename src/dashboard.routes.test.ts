@@ -9,7 +9,12 @@ import { Store } from "./store.ts";
 function isListenPermissionError(error) {
   const code = String(error?.code || "").toUpperCase();
   const message = String(error?.message || "");
-  return code === "EPERM" || code === "EACCES" || /listen\s+EPERM|listen\s+EACCES/i.test(message);
+  return (
+    code === "EPERM" ||
+    code === "EACCES" ||
+    (code === "EADDRINUSE" && /port\s+0\s+in\s+use/i.test(message)) ||
+    /listen\s+EPERM|listen\s+EACCES/i.test(message)
+  );
 }
 
 async function withDashboardServer(
