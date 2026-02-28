@@ -7,6 +7,8 @@ import {
   getRealtimeRuntimeLabel,
   isRecoverableRealtimeError,
   isVoiceTurnAddressedToBot,
+  parseResponseDoneModel,
+  parseResponseDoneUsage,
   resolveRealtimeProvider,
   resolveVoiceRuntimeMode,
   transcriptSourceFromEventType
@@ -65,6 +67,51 @@ test("extractSoundboardDirective strips directive and returns selected reference
   const parsed = extractSoundboardDirective("that was crazy [[SOUNDBOARD:1234567890@111222333]]");
   assert.equal(parsed.text, "that was crazy");
   assert.equal(parsed.reference, "1234567890@111222333");
+});
+
+test("parseResponseDoneModel extracts response model from response.done events", () => {
+  const model = parseResponseDoneModel({
+    type: "response.done",
+    response: {
+      id: "resp_123",
+      model: "gpt-realtime-mini"
+    }
+  });
+  assert.equal(model, "gpt-realtime-mini");
+});
+
+test("parseResponseDoneUsage extracts realtime token totals and detail counts", () => {
+  const usage = parseResponseDoneUsage({
+    type: "response.done",
+    response: {
+      id: "resp_123",
+      usage: {
+        input_tokens: 2000,
+        output_tokens: 800,
+        total_tokens: 2800,
+        input_token_details: {
+          cached_tokens: 500,
+          audio_tokens: 1200,
+          text_tokens: 800
+        },
+        output_token_details: {
+          audio_tokens: 400,
+          text_tokens: 400
+        }
+      }
+    }
+  });
+
+  assert.deepEqual(usage, {
+    inputTokens: 2000,
+    outputTokens: 800,
+    totalTokens: 2800,
+    cacheReadTokens: 500,
+    inputAudioTokens: 1200,
+    inputTextTokens: 800,
+    outputAudioTokens: 400,
+    outputTextTokens: 400
+  });
 });
 
 test("isVoiceTurnAddressedToBot matches exact bot-name phrase and primary wake token", () => {

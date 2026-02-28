@@ -8,6 +8,12 @@ const GATEWAY_STALE_MS = 2 * 60_000;
 const GATEWAY_RECONNECT_BASE_DELAY_MS = 5_000;
 const GATEWAY_RECONNECT_MAX_DELAY_MS = 60_000;
 
+type ReplyCoalesceWaitOptions = {
+  nowMs?: number;
+  allowEdgeGrace?: boolean;
+  edgeGraceMs?: number;
+};
+
 export function getReplyQueueWaitMs(bot, settings) {
   const cooldownMs = settings.activity.minSecondsBetweenMessages * 1000;
   const elapsed = Date.now() - bot.lastBotMessageAt;
@@ -28,7 +34,7 @@ export function getReplyCoalesceMaxMessages(settings) {
   return clamp(Number(settings.activity?.replyCoalesceMaxMessages) || 1, 1, 20);
 }
 
-export function getReplyCoalesceWaitMs(settings, message, options = {}) {
+export function getReplyCoalesceWaitMs(settings, message, options: ReplyCoalesceWaitOptions = {}) {
   const windowMs = getReplyCoalesceWindowMs(settings);
   if (windowMs <= 0) return 0;
   const nowMs = Number(options?.nowMs);

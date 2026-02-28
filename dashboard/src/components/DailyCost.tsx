@@ -8,7 +8,9 @@ export default function DailyCost({ rows }) {
         <h3 style={{ margin: "0 0 12px" }}>Daily Cost (14d)</h3>
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {[0, 1, 2, 3, 4].map((i) => (
-            <Skeleton key={i} height="36px" />
+            <div key={i}>
+              <Skeleton height="36px" />
+            </div>
           ))}
         </div>
       </section>

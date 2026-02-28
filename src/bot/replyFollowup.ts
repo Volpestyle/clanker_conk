@@ -5,6 +5,59 @@ import {
   parseStructuredReplyOutput
 } from "../botHelpers.ts";
 
+type ReplyFollowupTrace = Record<string, unknown> & {
+  event?: string;
+  source?: string;
+};
+
+type WebSearchState = {
+  requested?: boolean;
+  query?: string;
+  optedOutByUser?: boolean;
+  enabled?: boolean;
+  configured?: boolean;
+  used?: boolean;
+  blockedByBudget?: boolean;
+  error?: string | null;
+  results?: unknown[];
+  fetchedPages?: number;
+  providerUsed?: string | null;
+  providerFallbackUsed?: boolean;
+  budget?: {
+    canSearch?: boolean;
+  };
+  [key: string]: unknown;
+};
+
+type MemoryLookupState = {
+  enabled?: boolean;
+  requested?: boolean;
+  query?: string;
+  used?: boolean;
+  results?: unknown[];
+  error?: string | null;
+  [key: string]: unknown;
+};
+
+type ImageLookupState = {
+  enabled?: boolean;
+  requested?: boolean;
+  query?: string;
+  used?: boolean;
+  candidates?: unknown[];
+  results?: unknown[];
+  selectedImageInputs?: Array<Record<string, unknown>>;
+  error?: string | null;
+  [key: string]: unknown;
+};
+
+type ReplyDirectiveShape = ReturnType<typeof parseStructuredReplyOutput>;
+
+type ReplyGenerationShape = {
+  text: string;
+  [key: string]: unknown;
+};
+
 export function resolveReplyFollowupGenerationSettings(settings) {
   const followupConfig = settings?.replyFollowupLlm || {};
   if (!followupConfig.enabled) return settings;
@@ -23,24 +76,29 @@ export function resolveReplyFollowupGenerationSettings(settings) {
   };
 }
 
-export async function runModelRequestedWebSearch(runtime, {
+export async function runModelRequestedWebSearch<T extends WebSearchState>(runtime, {
   settings,
   webSearch,
   query,
   trace = {}
-}) {
+}: {
+  settings: Record<string, unknown>;
+  webSearch: T;
+  query: string;
+  trace?: ReplyFollowupTrace;
+}): Promise<T> {
   const normalizedQuery = normalizeDirectiveText(query, MAX_WEB_QUERY_LEN);
   const state = {
     ...webSearch,
     requested: true,
     query: normalizedQuery
-  };
+  } as T;
 
   if (!normalizedQuery) {
     return {
       ...state,
       error: "Missing web search query."
-    };
+    } as T;
   }
 
   if (state.optedOutByUser || !state.enabled || !state.configured) {
@@ -51,7 +109,7 @@ export async function runModelRequestedWebSearch(runtime, {
     return {
       ...state,
       blockedByBudget: true
-    };
+    } as T;
   }
 
   try {
@@ -69,29 +127,36 @@ export async function runModelRequestedWebSearch(runtime, {
       fetchedPages: result.fetchedPages || 0,
       providerUsed: result.providerUsed || null,
       providerFallbackUsed: Boolean(result.providerFallbackUsed)
-    };
+    } as T;
   } catch (error) {
     return {
       ...state,
       error: String(error?.message || error)
-    };
+    } as T;
   }
 }
 
-export async function runModelRequestedMemoryLookup(runtime, {
+export async function runModelRequestedMemoryLookup<T extends MemoryLookupState>(runtime, {
   settings,
   memoryLookup,
   query,
   guildId,
   channelId = null,
   trace = {}
-}) {
+}: {
+  settings: Record<string, unknown>;
+  memoryLookup: T;
+  query: string;
+  guildId: string;
+  channelId?: string | null;
+  trace?: ReplyFollowupTrace;
+}): Promise<T> {
   const normalizedQuery = normalizeDirectiveText(query, MAX_MEMORY_LOOKUP_QUERY_LEN);
   const state = {
     ...memoryLookup,
     requested: true,
     query: normalizedQuery
-  };
+  } as T;
 
   if (!state.enabled || !runtime.memory?.searchDurableFacts) {
     return state;
@@ -100,13 +165,13 @@ export async function runModelRequestedMemoryLookup(runtime, {
     return {
       ...state,
       error: "Missing memory lookup query."
-    };
+    } as T;
   }
   if (!guildId) {
     return {
       ...state,
       error: "Memory lookup requires guild scope."
-    };
+    } as T;
   }
 
   try {
@@ -125,16 +190,21 @@ export async function runModelRequestedMemoryLookup(runtime, {
       ...state,
       used: Boolean(results.length),
       results
-    };
+    } as T;
   } catch (error) {
     return {
       ...state,
       error: String(error?.message || error)
-    };
+    } as T;
   }
 }
 
-export async function maybeRegenerateWithMemoryLookup(runtime, {
+export async function maybeRegenerateWithMemoryLookup<
+  TGeneration extends ReplyGenerationShape,
+  TDirective extends ReplyDirectiveShape,
+  TMemoryLookup extends MemoryLookupState,
+  TImageLookup extends ImageLookupState | null
+>(runtime, {
   settings,
   followupSettings = null,
   systemPrompt,
@@ -152,6 +222,31 @@ export async function maybeRegenerateWithMemoryLookup(runtime, {
   runModelRequestedImageLookup,
   mergeImageInputs,
   maxModelImageInputs
+}: {
+  settings: Record<string, unknown>;
+  followupSettings?: Record<string, unknown> | null;
+  systemPrompt: string;
+  generation: TGeneration;
+  directive: TDirective;
+  memoryLookup: TMemoryLookup;
+  imageLookup?: TImageLookup;
+  guildId: string;
+  channelId?: string | null;
+  trace?: ReplyFollowupTrace;
+  mediaPromptLimit: number;
+  imageInputs?: Array<Record<string, unknown>> | null;
+  forceRegenerate?: boolean;
+  buildUserPrompt: (payload: Record<string, unknown>) => string;
+  runModelRequestedImageLookup?: (payload: {
+    imageLookup: TImageLookup;
+    query: string;
+  }) => Promise<TImageLookup>;
+  mergeImageInputs?: (payload: {
+    baseInputs: Array<Record<string, unknown>>;
+    extraInputs: Array<Record<string, unknown>>;
+    maxInputs: number;
+  }) => Array<Record<string, unknown>>;
+  maxModelImageInputs: number;
 }) {
   let nextMemoryLookup = memoryLookup;
   let nextImageLookup = imageLookup;
@@ -168,11 +263,11 @@ export async function maybeRegenerateWithMemoryLookup(runtime, {
     nextMemoryLookup = await runModelRequestedMemoryLookup(runtime, {
       settings,
       memoryLookup: nextMemoryLookup,
-      query: directive.memoryLookupQuery,
+      query: String(directive.memoryLookupQuery || ""),
       guildId,
       channelId,
       trace
-    });
+    }) as TMemoryLookup;
   }
 
   if (
@@ -184,8 +279,8 @@ export async function maybeRegenerateWithMemoryLookup(runtime, {
     shouldRegenerate = true;
     nextImageLookup = await runModelRequestedImageLookup({
       imageLookup: nextImageLookup,
-      query: directive.imageLookupQuery
-    });
+      query: String(directive.imageLookupQuery || "")
+    }) as TImageLookup;
     if (
       Array.isArray(nextImageLookup?.selectedImageInputs) &&
       nextImageLookup.selectedImageInputs.length &&
@@ -213,7 +308,13 @@ export async function maybeRegenerateWithMemoryLookup(runtime, {
         .trim()
         .concat(":lookup_followup")
     };
-    const generationPayload = {
+    const generationPayload: {
+      settings: Record<string, unknown>;
+      systemPrompt: string;
+      userPrompt: string;
+      trace: ReplyFollowupTrace;
+      imageInputs?: Array<Record<string, unknown>>;
+    } = {
       settings: followupSettings || settings,
       systemPrompt,
       userPrompt: followupPrompt,
@@ -222,8 +323,11 @@ export async function maybeRegenerateWithMemoryLookup(runtime, {
     if (nextImageInputs.length) {
       generationPayload.imageInputs = nextImageInputs;
     }
-    nextGeneration = await runtime.llm.generate(generationPayload);
-    nextDirective = parseStructuredReplyOutput(nextGeneration.text, mediaPromptLimit);
+    nextGeneration = await runtime.llm.generate(generationPayload) as TGeneration;
+    nextDirective = parseStructuredReplyOutput(
+      String(nextGeneration.text || ""),
+      mediaPromptLimit
+    ) as TDirective;
   }
 
   return {

@@ -244,7 +244,66 @@ export function normalizeSettings(raw) {
     merged.voice.soundboard = {};
   }
 
-  const defaultVoice = DEFAULT_SETTINGS.voice || {
+  type VoiceXaiDefaults = {
+    voice?: string;
+    audioFormat?: string;
+    sampleRateHz?: number;
+    region?: string;
+  };
+  type VoiceOpenAiRealtimeDefaults = {
+    model?: string;
+    voice?: string;
+    inputAudioFormat?: string;
+    outputAudioFormat?: string;
+    inputTranscriptionModel?: string;
+  };
+  type VoiceGeminiRealtimeDefaults = {
+    model?: string;
+    voice?: string;
+    apiBaseUrl?: string;
+    inputSampleRateHz?: number;
+    outputSampleRateHz?: number;
+  };
+  type VoiceSttPipelineDefaults = {
+    transcriptionModel?: string;
+    ttsModel?: string;
+    ttsVoice?: string;
+    ttsSpeed?: number;
+  };
+  type VoiceReplyDecisionDefaults = {
+    provider?: string;
+    model?: string;
+    maxAttempts?: number;
+  };
+  type VoiceStreamWatchDefaults = {
+    enabled?: boolean;
+    minCommentaryIntervalSeconds?: number;
+    maxFramesPerMinute?: number;
+    maxFrameBytes?: number;
+  };
+  type VoiceSoundboardDefaults = {
+    enabled?: boolean;
+    allowExternalSounds?: boolean;
+  };
+  type VoiceDefaults = {
+    enabled?: boolean;
+    mode?: string;
+    allowNsfwHumor?: boolean;
+    intentConfidenceThreshold?: number;
+    maxSessionMinutes?: number;
+    inactivityLeaveSeconds?: number;
+    maxSessionsPerDay?: number;
+    maxConcurrentSessions?: number;
+    xai?: VoiceXaiDefaults;
+    openaiRealtime?: VoiceOpenAiRealtimeDefaults;
+    geminiRealtime?: VoiceGeminiRealtimeDefaults;
+    sttPipeline?: VoiceSttPipelineDefaults;
+    replyDecisionLlm?: VoiceReplyDecisionDefaults;
+    streamWatch?: VoiceStreamWatchDefaults;
+    soundboard?: VoiceSoundboardDefaults;
+  };
+
+  const defaultVoice: VoiceDefaults = DEFAULT_SETTINGS.voice || {
     enabled: false,
     mode: "stt_pipeline",
     allowNsfwHumor: false,
@@ -295,13 +354,13 @@ export function normalizeSettings(raw) {
       allowExternalSounds: false
     }
   };
-  const defaultVoiceXai = defaultVoice.xai || {};
-  const defaultVoiceOpenAiRealtime = defaultVoice.openaiRealtime || {};
-  const defaultVoiceGeminiRealtime = defaultVoice.geminiRealtime || {};
-  const defaultVoiceSttPipeline = defaultVoice.sttPipeline || {};
-  const defaultVoiceReplyDecisionLlm = defaultVoice.replyDecisionLlm || {};
-  const defaultVoiceStreamWatch = defaultVoice.streamWatch || {};
-  const defaultVoiceSoundboard = defaultVoice.soundboard || {};
+  const defaultVoiceXai: VoiceXaiDefaults = defaultVoice.xai || {};
+  const defaultVoiceOpenAiRealtime: VoiceOpenAiRealtimeDefaults = defaultVoice.openaiRealtime || {};
+  const defaultVoiceGeminiRealtime: VoiceGeminiRealtimeDefaults = defaultVoice.geminiRealtime || {};
+  const defaultVoiceSttPipeline: VoiceSttPipelineDefaults = defaultVoice.sttPipeline || {};
+  const defaultVoiceReplyDecisionLlm: VoiceReplyDecisionDefaults = defaultVoice.replyDecisionLlm || {};
+  const defaultVoiceStreamWatch: VoiceStreamWatchDefaults = defaultVoice.streamWatch || {};
+  const defaultVoiceSoundboard: VoiceSoundboardDefaults = defaultVoice.soundboard || {};
   const voiceIntentThresholdRaw = Number(merged.voice?.intentConfidenceThreshold);
   const voiceMaxSessionRaw = Number(merged.voice?.maxSessionMinutes);
   const voiceInactivityRaw = Number(merged.voice?.inactivityLeaveSeconds);

@@ -187,7 +187,9 @@ export default function ActionStream({ actions }) {
         {actions === undefined || actions === null ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {[0, 1, 2, 3].map((i) => (
-              <Skeleton key={i} height="32px" />
+              <div key={i}>
+                <Skeleton height="32px" />
+              </div>
             ))}
           </div>
         ) : (

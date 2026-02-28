@@ -101,6 +101,40 @@ export function parseResponseDoneStatus(event) {
   return String(status);
 }
 
+export function parseResponseDoneModel(event) {
+  if (!event || typeof event !== "object") return null;
+  const model = event.response?.model || null;
+  if (!model) return null;
+  return String(model);
+}
+
+export function parseResponseDoneUsage(event) {
+  if (!event || typeof event !== "object") return null;
+  const response = event.response && typeof event.response === "object" ? event.response : null;
+  const usage = response?.usage && typeof response.usage === "object" ? response.usage : null;
+  if (!usage) return null;
+
+  const inputDetails =
+    usage.input_token_details && typeof usage.input_token_details === "object"
+      ? usage.input_token_details
+      : {};
+  const outputDetails =
+    usage.output_token_details && typeof usage.output_token_details === "object"
+      ? usage.output_token_details
+      : {};
+
+  return {
+    inputTokens: clampUsageTokenCount(usage.input_tokens),
+    outputTokens: clampUsageTokenCount(usage.output_tokens),
+    totalTokens: clampUsageTokenCount(usage.total_tokens),
+    cacheReadTokens: clampUsageTokenCount(inputDetails.cached_tokens),
+    inputAudioTokens: clampUsageTokenCount(inputDetails.audio_tokens),
+    inputTextTokens: clampUsageTokenCount(inputDetails.text_tokens),
+    outputAudioTokens: clampUsageTokenCount(outputDetails.audio_tokens),
+    outputTextTokens: clampUsageTokenCount(outputDetails.text_tokens)
+  };
+}
+
 export function ensureBotAudioPlaybackReady({ session, store, botUserId = null }) {
   if (!session || !session.audioPlayer || !session.connection) return false;
 
@@ -419,4 +453,10 @@ export function encodePcm16MonoAsWav(pcmBuffer, sampleRate = 24000) {
   pcm.copy(buffer, 44);
 
   return buffer;
+}
+
+function clampUsageTokenCount(value) {
+  const parsed = Number(value || 0);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.max(0, Math.floor(parsed));
 }

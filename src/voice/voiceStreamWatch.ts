@@ -132,7 +132,7 @@ export function supportsStreamWatchCommentary(manager, session, settings = null)
   return supportsVisionFallbackStreamWatchCommentary(manager, { session, settings: resolvedSettings });
 }
 
-export function supportsVisionFallbackStreamWatchCommentary(manager, { session, settings = null } = {}) {
+export function supportsVisionFallbackStreamWatchCommentary(manager, { session = null, settings = null } = {}) {
   if (!session || session.ending) return false;
   if (session.mode !== "voice_agent") return false;
   const realtimeClient = session.realtimeClient;

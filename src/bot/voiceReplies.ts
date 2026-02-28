@@ -461,6 +461,19 @@ async function runVoiceWebSearchWithTimeout(runtime, {
   trace = {},
   timeoutMs = 8000
 }) {
+  type WebSearchSuccess = {
+    ok: true;
+    value: Record<string, unknown>;
+  };
+  type WebSearchFailure = {
+    ok: false;
+    error: Error;
+  };
+  type WebSearchTimeout = {
+    ok: false;
+    timeout: true;
+  };
+
   const runPromise = Promise.resolve(
     runtime.runModelRequestedWebSearch({
       settings,
@@ -469,19 +482,22 @@ async function runVoiceWebSearchWithTimeout(runtime, {
       trace
     })
   ).then(
-    (value) => ({ ok: true, value }),
-    (error) => ({ ok: false, error })
+    (value): WebSearchSuccess => ({ ok: true, value }),
+    (error): WebSearchFailure => ({ ok: false, error: error instanceof Error ? error : new Error(String(error)) })
   );
 
-  const timeoutPromise = new Promise((resolve) => {
+  const timeoutPromise = new Promise<WebSearchTimeout>((resolve) => {
     setTimeout(() => {
       resolve({ ok: false, timeout: true });
     }, Math.max(50, Number(timeoutMs) || 8000));
   });
 
-  const result = await Promise.race([runPromise, timeoutPromise]);
+  const result = await Promise.race<WebSearchSuccess | WebSearchFailure | WebSearchTimeout>([
+    runPromise,
+    timeoutPromise
+  ]);
   if (result?.ok && result.value) return result.value;
-  if (result?.timeout) {
+  if ("timeout" in result && result.timeout) {
     return {
       ...(webSearch || {}),
       requested: true,
@@ -495,6 +511,8 @@ async function runVoiceWebSearchWithTimeout(runtime, {
     requested: true,
     query: String(query || "").trim(),
     used: false,
-    error: String(result?.error?.message || result?.error || "web lookup failed")
+    error: "error" in result
+      ? String(result.error?.message || result.error || "web lookup failed")
+      : "web lookup failed"
   };
 }

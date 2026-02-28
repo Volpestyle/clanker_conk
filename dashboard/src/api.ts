@@ -1,5 +1,10 @@
 let token = localStorage.getItem("dashboard_token") || "";
 
+type ApiOptions = {
+  method?: string;
+  body?: unknown;
+};
+
 export function setToken(t) {
   token = t;
   localStorage.setItem("dashboard_token", t);
@@ -9,7 +14,7 @@ export function getToken() {
   return token;
 }
 
-export async function api(url, options = {}) {
+export async function api(url: string, options: ApiOptions = {}) {
   const headers = {
     ...(options.body ? { "Content-Type": "application/json" } : {}),
     ...(token ? { "x-dashboard-token": token } : {})

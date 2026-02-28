@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { api } from "../../api";
 import MemoryResultsTable from "./MemoryResultsTable";
 
@@ -20,7 +20,7 @@ export default function MemorySearch({ guilds, notify }: Props) {
   const [results, setResults] = useState<any[] | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const handleSearch = async (e: React.FormEvent) => {
+  const handleSearch = async (e: FormEvent) => {
     e.preventDefault();
     if (!guildId || !query.trim()) return;
     setLoading(true);

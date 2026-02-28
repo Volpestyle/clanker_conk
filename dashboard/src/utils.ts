@@ -1,4 +1,6 @@
-export function rangeStyle(value: number, min = 0, max = 100): React.CSSProperties {
+import type { CSSProperties } from "react";
+
+export function rangeStyle(value: number, min = 0, max = 100): CSSProperties {
   const pct = ((value - min) / (max - min)) * 100;
   return {
     background: `linear-gradient(to right, var(--accent) ${pct}%, rgba(255,255,255,0.06) ${pct}%)`

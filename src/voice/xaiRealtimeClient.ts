@@ -141,8 +141,8 @@ export class XaiRealtimeClient extends EventEmitter {
     return this.getState();
   }
 
-  async openSocket() {
-    return await new Promise((resolve, reject) => {
+  async openSocket(): Promise<WebSocket> {
+    return await new Promise<WebSocket>((resolve, reject) => {
       let settled = false;
 
       const ws = new WebSocket(XAI_REALTIME_URL, {

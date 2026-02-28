@@ -152,7 +152,7 @@ export async function resolveOperationalChannel(
   manager,
   channel,
   channelId,
-  { guildId = null, userId = null, messageId = null, event, reason } = {}
+  { guildId = null, userId = null, messageId = null, event = null, reason = null } = {}
 ) {
   if (channel && typeof channel.send === "function") return channel;
 
@@ -184,7 +184,7 @@ export async function sendToChannel(
   manager,
   channel,
   text,
-  { guildId = null, channelId = null, userId = null, messageId = null, event, reason } = {}
+  { guildId = null, channelId = null, userId = null, messageId = null, event = null, reason = null } = {}
 ) {
   if (!channel || typeof channel.send !== "function") return false;
   const content = String(text || "").trim();

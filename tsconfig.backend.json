@@ -4,8 +4,14 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "allowImportingTsExtensions": true,
-    "types": ["node"]
+    "types": ["node", "bun-types"]
   },
   "include": ["src/**/*.ts", "vite.config.ts"],
-  "exclude": ["node_modules", "dashboard/dist", "dist"]
+  "exclude": [
+    "node_modules",
+    "dashboard/dist",
+    "dist",
+    "src/**/*.test.ts",
+    "src/**/*.spec.ts"
+  ]
 }

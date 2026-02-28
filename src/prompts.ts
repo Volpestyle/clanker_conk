@@ -243,7 +243,7 @@ export function buildReplyPrompt({
   mediaPromptCraftGuidance = null
 }) {
   const parts = [];
-  const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance();
+  const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance(null);
   const normalizedChannelMode = channelMode === "initiative" ? "initiative" : "non_initiative";
 
   parts.push(`Incoming message from ${message.authorName}: ${message.content}`);
@@ -667,7 +667,7 @@ export function buildAutomationPrompt({
   mediaPromptCraftGuidance = null
 }) {
   const parts = [];
-  const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance();
+  const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance(null);
   const taskInstruction = String(instruction || "")
     .replace(/\s+/g, " ")
     .trim()
@@ -885,7 +885,7 @@ export function buildInitiativePrompt({
   mediaPromptCraftGuidance = null
 }) {
   const parts = [];
-  const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance();
+  const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance(null);
 
   parts.push(
     `You are posting proactively in #${channelName}. No one directly asked you to respond.`

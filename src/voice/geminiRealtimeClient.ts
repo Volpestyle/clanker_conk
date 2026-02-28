@@ -132,8 +132,8 @@ export class GeminiRealtimeClient extends EventEmitter {
     return url.toString();
   }
 
-  async openSocket(url) {
-    return await new Promise((resolve, reject) => {
+  async openSocket(url): Promise<WebSocket> {
+    return await new Promise<WebSocket>((resolve, reject) => {
       let settled = false;
 
       const ws = new WebSocket(String(url), {

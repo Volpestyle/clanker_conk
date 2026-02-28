@@ -1045,6 +1045,94 @@ test("runRealtimeTurn forwards audio and prepares openai context when reply deci
   assert.equal(session.pendingRealtimeInputBytes, 4);
 });
 
+test("bindRealtimeHandlers logs OpenAI realtime response.done usage cost", () => {
+  const runtimeLogs = [];
+  const handlerMap = new Map();
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+
+  const session = {
+    id: "session-realtime-cost-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingResponse: null,
+    responseDoneGraceTimer: null,
+    settingsSnapshot: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        },
+        openaiRealtime: {
+          model: "gpt-realtime-mini"
+        }
+      }
+    }),
+    realtimeClient: {
+      sessionConfig: {
+        model: "gpt-realtime-mini"
+      },
+      on(eventName, handler) {
+        handlerMap.set(eventName, handler);
+      },
+      off(eventName, handler) {
+        if (handlerMap.get(eventName) === handler) {
+          handlerMap.delete(eventName);
+        }
+      }
+    },
+    cleanupHandlers: []
+  };
+
+  manager.bindRealtimeHandlers(session, session.settingsSnapshot);
+
+  const onResponseDone = handlerMap.get("response_done");
+  assert.equal(typeof onResponseDone, "function");
+  onResponseDone({
+    type: "response.done",
+    response: {
+      id: "resp_001",
+      status: "completed",
+      model: "gpt-realtime-mini",
+      usage: {
+        input_tokens: 1000,
+        output_tokens: 500,
+        total_tokens: 1500,
+        input_token_details: {
+          cached_tokens: 100,
+          audio_tokens: 700,
+          text_tokens: 300
+        },
+        output_token_details: {
+          audio_tokens: 350,
+          text_tokens: 150
+        }
+      }
+    }
+  });
+
+  assert.equal(runtimeLogs.length, 1);
+  assert.equal(runtimeLogs[0]?.kind, "voice_runtime");
+  assert.equal(runtimeLogs[0]?.content, "openai_realtime_response_done");
+  assert.equal(runtimeLogs[0]?.usdCost, 0.001806);
+  assert.equal(runtimeLogs[0]?.metadata?.responseModel, "gpt-realtime-mini");
+  assert.deepEqual(runtimeLogs[0]?.metadata?.responseUsage, {
+    inputTokens: 1000,
+    outputTokens: 500,
+    totalTokens: 1500,
+    cacheReadTokens: 100,
+    inputAudioTokens: 700,
+    inputTextTokens: 300,
+    outputAudioTokens: 350,
+    outputTextTokens: 150
+  });
+});
+
 test("runSttPipelineTurn exits before generation when turn admission denies speaking", async () => {
   const runtimeLogs = [];
   let generateVoiceTurnCalls = 0;

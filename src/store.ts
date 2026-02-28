@@ -1200,7 +1200,7 @@ export class Store {
   }
 
   getFactsForSubjectsScoped({
-    guildId,
+    guildId = null,
     subjectIds = [],
     perSubjectLimit = 6,
     totalLimit = 600

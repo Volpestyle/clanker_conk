@@ -7,8 +7,21 @@ async function withApiModule({ initialToken = "" } = {}, run) {
   if (initialToken) storage.set("dashboard_token", initialToken);
 
   globalThis.localStorage = {
+    get length() {
+      return storage.size;
+    },
+    clear() {
+      storage.clear();
+    },
     getItem(key) {
       return storage.has(key) ? storage.get(key) : null;
+    },
+    key(index) {
+      const keys = [...storage.keys()];
+      return keys[index] ?? null;
+    },
+    removeItem(key) {
+      storage.delete(String(key));
     },
     setItem(key, value) {
       storage.set(String(key), String(value));

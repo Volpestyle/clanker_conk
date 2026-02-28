@@ -112,6 +112,7 @@ export function extractUrlsFromText(text) {
 
 export function emptyMentionResolution() {
   return {
+    text: "",
     attemptedCount: 0,
     resolvedCount: 0,
     ambiguousCount: 0,

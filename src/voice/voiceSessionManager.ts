@@ -20,6 +20,7 @@ import {
   getPromptStyle,
   getPromptVoiceGuidance
 } from "../promptCore.ts";
+import { estimateUsdCost } from "../pricing.ts";
 import { clamp } from "../utils.ts";
 import { convertDiscordPcmToXaiInput, convertXaiOutputToDiscordPcm } from "./pcmAudio.ts";
 import { SoundboardDirector } from "./soundboardDirector.ts";
@@ -71,7 +72,9 @@ import {
   parsePreferredSoundboardReferences,
   parseRealtimeErrorPayload,
   parseResponseDoneId,
+  parseResponseDoneModel,
   parseResponseDoneStatus,
+  parseResponseDoneUsage,
   resolveRealtimeProvider,
   shortError,
   shouldAllowVoiceNsfwHumor,
@@ -355,7 +358,7 @@ export class VoiceSessionManager {
     return supportsStreamWatchCommentary(this, session, settings);
   }
 
-  supportsVisionFallbackStreamWatchCommentary({ session, settings = null } = {}) {
+  supportsVisionFallbackStreamWatchCommentary({ session = null, settings = null } = {}) {
     return supportsVisionFallbackStreamWatchCommentary(this, { session, settings });
   }
 
@@ -993,11 +996,29 @@ export class VoiceSessionManager {
     const onResponseDone = (event) => {
       if (session.ending) return;
       const pending = session.pendingResponse;
-      if (!pending) return;
-
       const responseId = parseResponseDoneId(event);
       const responseStatus = parseResponseDoneStatus(event);
-      const hadAudio = this.pendingResponseHasAudio(session, pending);
+      const responseUsage = parseResponseDoneUsage(event);
+      const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+      const resolvedResponseModel = session.mode === "openai_realtime"
+        ? parseResponseDoneModel(event) ||
+          String(session.realtimeClient?.sessionConfig?.model || "").trim() ||
+          String(resolvedSettings?.voice?.openaiRealtime?.model || "gpt-realtime").trim() ||
+          "gpt-realtime"
+        : parseResponseDoneModel(event);
+      const responseUsdCost =
+        session.mode === "openai_realtime" && responseUsage
+          ? estimateUsdCost({
+              provider: "openai",
+              model: resolvedResponseModel || "gpt-realtime",
+              inputTokens: Number(responseUsage.inputTokens || 0),
+              outputTokens: Number(responseUsage.outputTokens || 0),
+              cacheReadTokens: Number(responseUsage.cacheReadTokens || 0),
+              cacheWriteTokens: 0,
+              customPricing: resolvedSettings?.llm?.pricing
+            })
+          : 0;
+      const hadAudio = pending ? this.pendingResponseHasAudio(session, pending) : false;
 
       this.store.logAction({
         kind: "voice_runtime",
@@ -1005,16 +1026,24 @@ export class VoiceSessionManager {
         channelId: session.textChannelId,
         userId: this.client.user?.id || null,
         content: `${runtimeLabel}_response_done`,
+        usdCost: responseUsdCost,
         metadata: {
           sessionId: session.id,
-          requestId: pending.requestId,
+          requestId: pending?.requestId || null,
           responseId,
           responseStatus,
+          responseModel: resolvedResponseModel || null,
+          responseUsage,
           hadAudio,
-          retryCount: pending.retryCount,
-          hardRecoveryAttempted: pending.hardRecoveryAttempted
+          retryCount: pending ? Number(pending.retryCount || 0) : null,
+          hardRecoveryAttempted:
+            pending && Object.hasOwn(pending, "hardRecoveryAttempted")
+              ? Boolean(pending.hardRecoveryAttempted)
+              : null
         }
       });
+
+      if (!pending) return;
 
       if (hadAudio) {
         this.clearPendingResponse(session);
@@ -1368,7 +1397,24 @@ export class VoiceSessionManager {
 
   abortActiveInboundCaptures({ session, reason = "capture_suppressed" }) {
     if (!session || session.ending) return;
-    const captures = Array.from(session.userCaptures?.entries?.() || []);
+    const captures: Array<[
+      string,
+      {
+        abort?: (reason?: string) => void;
+        opusStream?: { destroy?: () => void };
+        decoder?: { destroy?: () => void };
+        pcmStream?: { destroy?: () => void };
+      }
+    ]> = [];
+    if (session.userCaptures instanceof Map) {
+      for (const [rawUserId, rawCapture] of session.userCaptures.entries()) {
+        const normalizedCapture =
+          rawCapture && typeof rawCapture === "object"
+            ? { ...rawCapture }
+            : {};
+        captures.push([String(rawUserId || ""), normalizedCapture]);
+      }
+    }
     for (const [userId, capture] of captures) {
       if (capture && typeof capture.abort === "function") {
         capture.abort(reason);
@@ -2424,7 +2470,7 @@ export class VoiceSessionManager {
       });
   }
 
-  async evaluateVoiceReplyDecision({ session, settings, userId, transcript }) {
+  async evaluateVoiceReplyDecision({ session, settings, userId, transcript, source: _source = "stt_pipeline" }) {
     const normalizedTranscript = normalizeVoiceText(transcript, VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS);
     const normalizedUserId = String(userId || "").trim();
     const participantCount = this.countHumanVoiceParticipants(session);
@@ -2781,7 +2827,13 @@ export class VoiceSessionManager {
     ].slice(-VOICE_DECIDER_HISTORY_MAX_TURNS);
   }
 
-  updateFocusedSpeakerWindow({ session, userId = null, allow = false, directAddressed = false, reason = "" } = {}) {
+  updateFocusedSpeakerWindow({
+    session = null,
+    userId = null,
+    allow = false,
+    directAddressed = false,
+    reason = ""
+  } = {}) {
     if (!session || session.ending) return;
     const normalizedUserId = String(userId || "").trim();
     if (!normalizedUserId) return;
@@ -4349,7 +4401,11 @@ export class VoiceSessionManager {
     });
   }
 
-  async resolveOperationalChannel(channel, channelId, { guildId = null, userId = null, messageId = null, event, reason } = {}) {
+  async resolveOperationalChannel(
+    channel,
+    channelId,
+    { guildId = null, userId = null, messageId = null, event = null, reason = null } = {}
+  ) {
     return await resolveOperationalChannel(this, channel, channelId, {
       guildId,
       userId,
@@ -4359,7 +4415,11 @@ export class VoiceSessionManager {
     });
   }
 
-  async sendToChannel(channel, text, { guildId = null, channelId = null, userId = null, messageId = null, event, reason } = {}) {
+  async sendToChannel(
+    channel,
+    text,
+    { guildId = null, channelId = null, userId = null, messageId = null, event = null, reason = null } = {}
+  ) {
     return await sendToChannel(this, channel, text, {
       guildId,
       channelId,

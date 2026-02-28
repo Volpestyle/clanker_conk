@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { api } from "../../api";
 import MemoryResultsTable from "./MemoryResultsTable";
 import MemoryMessagesTable from "./MemoryMessagesTable";
@@ -27,7 +27,7 @@ export default function MemorySimulator({ guilds, notify }: Props) {
   const [result, setResult] = useState<SimulationResult | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const handleSimulate = async (e: React.FormEvent) => {
+  const handleSimulate = async (e: FormEvent) => {
     e.preventDefault();
     if (!guildId || !userId.trim() || !queryText.trim()) return;
     setLoading(true);

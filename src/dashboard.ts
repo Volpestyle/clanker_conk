@@ -326,7 +326,7 @@ export function createDashboardServer({
     try {
       const guilds = bot.getGuilds();
       res.json(guilds.map((g) => ({ id: g.id, name: g.name })));
-    } catch (error) {
+    } catch {
       res.json([]);
     }
   });

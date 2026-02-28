@@ -125,6 +125,41 @@ const IS_NODE_TEST_PROCESS = Boolean(process.env.NODE_TEST_CONTEXT) ||
 const SCREEN_SHARE_EXPLICIT_REQUEST_RE =
   /\b(?:screen\s*share|share\s*(?:my|the)?\s*screen|watch\s*(?:my|the)?\s*screen|see\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*stream|watch\s*(?:my|the)?\s*stream)\b/i;
 
+type ReplyPerformanceSeed = {
+  triggerMessageCreatedAtMs?: number | null;
+  queuedAtMs?: number | null;
+  ingestMs?: number | null;
+};
+
+type ReplyPerformanceTracker = {
+  source: string;
+  startedAtMs: number;
+  triggerMessageCreatedAtMs: number | null;
+  queuedAtMs: number | null;
+  ingestMs: number | null;
+  memorySliceMs: number | null;
+  llm1Ms: number | null;
+  followupMs: number | null;
+};
+
+type ReplyAttemptOptions = {
+  recentMessages?: Array<Record<string, unknown>>;
+  addressSignal?: { triggered?: boolean } | null;
+  triggerMessageIds?: string[];
+  forceRespond?: boolean;
+  source?: string;
+  performanceSeed?: ReplyPerformanceSeed | null;
+};
+
+type MemoryTrace = Record<string, unknown> & {
+  source?: string;
+};
+
+type DiscoveryLinkCandidate = {
+  url?: string;
+  source?: string;
+};
+
 export class ClankerBot {
   appConfig;
   store;
@@ -713,7 +748,7 @@ export class ClankerBot {
     return minMs + Math.floor(Math.random() * jitterMs);
   }
 
-  async maybeReplyToMessage(message, settings, options = {}) {
+  async maybeReplyToMessage(message, settings, options: ReplyAttemptOptions = {}) {
     if (!settings.permissions.allowReplies) return false;
     if (!this.canSendMessage(settings.permissions.maxMessagesPerHour)) return false;
     if (!this.canTalkNow(settings)) return false;
@@ -910,7 +945,7 @@ export class ClankerBot {
     const followupStartedAtMs = Date.now();
     if (replyDirective.webSearchQuery) {
       usedWebSearchFollowup = true;
-      webSearch = await this.runModelRequestedWebSearch({
+      const followupWebSearch = await this.runModelRequestedWebSearch({
         settings,
         webSearch,
         query: replyDirective.webSearchQuery,
@@ -919,6 +954,10 @@ export class ClankerBot {
           source
         }
       });
+      webSearch = {
+        ...webSearch,
+        ...followupWebSearch
+      };
     }
 
     if (usedWebSearchFollowup || replyDirective.memoryLookupQuery || replyDirective.imageLookupQuery) {
@@ -1478,11 +1517,17 @@ export class ClankerBot {
       settings,
       automationAction
     });
-    if (!result?.handled) return false;
+    if (!result || typeof result !== "object" || !("handled" in result) || result.handled !== true) {
+      return false;
+    }
+    const resultDetailLines = "detailLines" in result && Array.isArray(result.detailLines)
+      ? result.detailLines
+      : [];
+    const resultMetadata = "metadata" in result ? result.metadata : null;
 
     const finalText = this.composeAutomationControlReply({
       modelText: replyDirective?.text,
-      detailLines: result.detailLines
+      detailLines: resultDetailLines
     });
 
     if (!finalText || finalText === "[SKIP]") {
@@ -1496,7 +1541,7 @@ export class ClankerBot {
         metadata: {
           operation,
           source,
-          automationControl: result.metadata || null
+          automationControl: resultMetadata || null
         }
       });
       return true;
@@ -1539,7 +1584,7 @@ export class ClankerBot {
         sendAsReply: true,
         canStandalonePost: this.isInitiativeChannel(settings, message.channelId),
         addressing,
-        automationControl: result.metadata || null,
+        automationControl: resultMetadata || null,
         llm: {
           provider: generation?.provider || null,
           model: generation?.model || null,
@@ -2573,6 +2618,18 @@ export class ClankerBot {
     trace = {},
     limit = 8,
     fallbackWhenNoMatch = true
+  }: {
+    settings: {
+      memory?: {
+        enabled?: boolean;
+      };
+    } & Record<string, unknown>;
+    guildId: string;
+    channelId?: string | null;
+    queryText?: string;
+    trace?: MemoryTrace;
+    limit?: number;
+    fallbackWhenNoMatch?: boolean;
   }) {
     if (!settings?.memory?.enabled || !this.memory?.searchDurableFacts) return [];
     const normalizedGuildId = String(guildId || "").trim();
@@ -3825,8 +3882,8 @@ export class ClankerBot {
           pacing: {
             mode: scheduleDecision.mode,
             trigger: scheduleDecision.trigger,
-            chance: scheduleDecision.chance ?? null,
-            roll: scheduleDecision.roll ?? null,
+            chance: "chance" in scheduleDecision ? scheduleDecision.chance ?? null : null,
+            roll: "roll" in scheduleDecision ? scheduleDecision.roll ?? null : null,
             elapsedMs: scheduleDecision.elapsedMs ?? null,
             requiredIntervalMs: scheduleDecision.requiredIntervalMs ?? null
           },
@@ -3910,11 +3967,25 @@ export class ClankerBot {
     }
   }
 
-  applyDiscoveryLinkPolicy({ text, candidates, selected, requireDiscoveryLink }) {
+  applyDiscoveryLinkPolicy({
+    text,
+    candidates,
+    selected,
+    requireDiscoveryLink
+  }: {
+    text: string;
+    candidates?: DiscoveryLinkCandidate[];
+    selected?: DiscoveryLinkCandidate[];
+    requireDiscoveryLink?: boolean;
+  }) {
     const cleanText = sanitizeBotText(text);
-    const candidateMap = new Map(
-      (candidates || []).map((item) => [normalizeDiscoveryUrl(item.url), item]).filter((entry) => Boolean(entry[0]))
-    );
+    const candidateEntries: Array<[string, DiscoveryLinkCandidate]> = [];
+    for (const item of candidates || []) {
+      const normalizedUrl = normalizeDiscoveryUrl(item.url);
+      if (!normalizedUrl) continue;
+      candidateEntries.push([normalizedUrl, item]);
+    }
+    const candidateMap = new Map<string, DiscoveryLinkCandidate>(candidateEntries);
     const mentionedUrls = extractUrlsFromText(cleanText);
     const matchedLinks = mentionedUrls
       .map((url) => normalizeDiscoveryUrl(url))
@@ -4177,7 +4248,7 @@ function normalizeNonNegativeMs(value) {
   return Math.floor(parsed);
 }
 
-function normalizeReplyPerformanceSeed(seed = {}) {
+function normalizeReplyPerformanceSeed(seed: ReplyPerformanceSeed = {}) {
   const triggerMessageCreatedAtMs = normalizeNonNegativeMs(seed?.triggerMessageCreatedAtMs);
   const queuedAtMs = normalizeNonNegativeMs(seed?.queuedAtMs);
   const ingestMs = normalizeNonNegativeMs(seed?.ingestMs);
@@ -4190,7 +4261,15 @@ function normalizeReplyPerformanceSeed(seed = {}) {
   };
 }
 
-function createReplyPerformanceTracker({ messageCreatedAtMs, source = "message_event", seed = null } = {}) {
+function createReplyPerformanceTracker({
+  messageCreatedAtMs = null,
+  source = "message_event",
+  seed = null
+}: {
+  messageCreatedAtMs?: number | null;
+  source?: string;
+  seed?: ReplyPerformanceSeed | null;
+} = {}): ReplyPerformanceTracker {
   const normalizedSeed = normalizeReplyPerformanceSeed({
     triggerMessageCreatedAtMs: seed?.triggerMessageCreatedAtMs ?? messageCreatedAtMs,
     queuedAtMs: seed?.queuedAtMs,
@@ -4215,6 +4294,11 @@ function finalizeReplyPerformanceSample({
   actionKind,
   typingDelayMs = null,
   sendMs = null
+}: {
+  performance?: ReplyPerformanceTracker | null;
+  actionKind?: string;
+  typingDelayMs?: number | null;
+  sendMs?: number | null;
 } = {}) {
   if (!performance || typeof performance !== "object") return null;
 

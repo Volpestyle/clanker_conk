@@ -38,6 +38,25 @@ const RETRYABLE_FETCH_ERROR_CODES = new Set([
 const VIDEO_USER_AGENT =
   "clanker-conk/0.2 (+video-context; https://github.com/Volpestyle/clanker_conk)";
 
+type VideoTrace = {
+  guildId?: string | null;
+  channelId?: string | null;
+  userId?: string | null;
+  source?: string;
+};
+
+type VideoTarget = {
+  key: string;
+  url: string;
+  kind: string;
+  videoId?: string | null;
+  forceDirect?: boolean;
+};
+
+type ErrorWithAttempts = Error & {
+  attempts?: number;
+};
+
 export class VideoContextService {
   store;
   llm;
@@ -107,6 +126,14 @@ export class VideoContextService {
     allowAsrFallback = false,
     maxAsrSeconds = 120,
     trace = {}
+  }: {
+    targets: VideoTarget[];
+    maxTranscriptChars?: number;
+    keyframeIntervalSeconds?: number;
+    maxKeyframesPerVideo?: number;
+    allowAsrFallback?: boolean;
+    maxAsrSeconds?: number;
+    trace?: VideoTrace;
   }) {
     const list = Array.isArray(targets) ? targets : [];
     const transcriptLimit = clamp(Number(maxTranscriptChars) || 1200, 200, 4000);
@@ -190,6 +217,14 @@ export class VideoContextService {
     allowAsrFallback,
     maxAsrSeconds,
     trace = {}
+  }: {
+    target: VideoTarget;
+    maxTranscriptChars: number;
+    keyframeIntervalSeconds: number;
+    maxKeyframesPerVideo: number;
+    allowAsrFallback: boolean;
+    maxAsrSeconds: number;
+    trace?: VideoTrace;
   }) {
     this.pruneCache();
     const cached = this.cache.get(target.key);
@@ -640,7 +675,17 @@ export class VideoContextService {
     }
   }
 
-  async transcribeFromInput({ input, maxAsrSeconds, maxTranscriptChars, trace = {} }) {
+  async transcribeFromInput({
+    input,
+    maxAsrSeconds,
+    maxTranscriptChars,
+    trace = {}
+  }: {
+    input: string;
+    maxAsrSeconds: number;
+    maxTranscriptChars: number;
+    trace?: VideoTrace;
+  }) {
     if (!(await this.hasFfmpeg())) {
       throw new Error("ffmpeg is not installed.");
     }
@@ -1199,7 +1244,7 @@ async function fetchTextWithRetry({ url, accept = "*/*", maxAttempts = MAX_FETCH
           await sleep(getRetryDelayMs(attempt));
           continue;
         }
-        const error = new Error(`Video HTTP ${response.status} for ${finalUrl}`);
+        const error: ErrorWithAttempts = new Error(`Video HTTP ${response.status} for ${finalUrl}`);
         error.attempts = attempt;
         throw error;
       }
@@ -1211,7 +1256,7 @@ async function fetchTextWithRetry({ url, accept = "*/*", maxAttempts = MAX_FETCH
         throw withAttemptCount(error, attempt);
       }
       if (!text) {
-        const error = new Error("Video source returned empty response.");
+        const error: ErrorWithAttempts = new Error("Video source returned empty response.");
         error.attempts = attempt;
         throw error;
       }
@@ -1276,7 +1321,7 @@ function isRedirectStatus(status) {
 }
 
 async function runCommand({ command, args, timeoutMs = 30_000 }) {
-  return new Promise((resolve, reject) => {
+  return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
     const child = spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"]
     });
@@ -1355,16 +1400,26 @@ function isRetryableFetchError(error) {
 }
 
 function withAttemptCount(error, attempts) {
+  if (error instanceof Error) {
+    const errorWithAttempts: ErrorWithAttempts = error;
+    errorWithAttempts.attempts = Number(attempts || 1);
+    return errorWithAttempts;
+  }
+
   if (error && typeof error === "object") {
     try {
-      error.attempts = Number(attempts || 1);
+      Object.defineProperty(error, "attempts", {
+        value: Number(attempts || 1),
+        writable: true,
+        configurable: true
+      });
       return error;
     } catch {
       // Fall through to wrapped error.
     }
   }
 
-  const wrapped = new Error(String(error?.message || error || "unknown error"));
+  const wrapped: ErrorWithAttempts = new Error(String(error?.message || error || "unknown error"));
   wrapped.attempts = Number(attempts || 1);
   return wrapped;
 }

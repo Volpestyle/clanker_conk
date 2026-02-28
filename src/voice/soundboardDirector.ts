@@ -115,7 +115,10 @@ export class SoundboardDirector {
       };
     }
 
-    const body = {
+    const body: {
+      sound_id: string;
+      source_guild_id?: string;
+    } = {
       sound_id: String(soundId)
     };
 
