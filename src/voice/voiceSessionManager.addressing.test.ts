@@ -2085,6 +2085,14 @@ test("smoke: runRealtimeBrainReply passes join-window context into generation", 
     };
   };
 
+  const settingsSnapshot = baseSettings();
+  settingsSnapshot.voice.streamWatch = {
+    enabled: true,
+    commentaryPath: "anthropic_keyframes",
+    brainContextEnabled: true,
+    brainContextPrompt: "Use stream keyframes for continuity."
+  };
+
   const session = {
     id: "session-join-greeting-1",
     guildId: "guild-1",
@@ -2093,6 +2101,20 @@ test("smoke: runRealtimeBrainReply passes join-window context into generation", 
     ending: false,
     startedAt: Date.now() - 2_000,
     realtimeClient: {},
+    streamWatch: {
+      active: true,
+      targetUserId: "speaker-1",
+      lastBrainContextAt: Date.now() - 1500,
+      brainContextEntries: [
+        {
+          text: "scoreboard is visible and timer is low",
+          at: Date.now() - 1_500,
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          speakerName: "alice"
+        }
+      ]
+    },
     recentVoiceTurns: [],
     membershipEvents: [
       {
@@ -2102,7 +2124,7 @@ test("smoke: runRealtimeBrainReply passes join-window context into generation", 
         at: Date.now() - 1_200
       }
     ],
-    settingsSnapshot: baseSettings()
+    settingsSnapshot
   };
 
   const result = await manager.runRealtimeBrainReply({
@@ -2129,6 +2151,11 @@ test("smoke: runRealtimeBrainReply passes join-window context into generation", 
   assert.equal(generationPayloads[0]?.recentMembershipEvents?.length, 1);
   assert.equal(generationPayloads[0]?.recentMembershipEvents?.[0]?.eventType, "join");
   assert.equal(generationPayloads[0]?.recentMembershipEvents?.[0]?.displayName, "bob");
+  assert.equal(
+    Array.isArray(generationPayloads[0]?.conversationContext?.streamWatchBrainContext?.notes),
+    true
+  );
+  assert.equal(generationPayloads[0]?.conversationContext?.streamWatchBrainContext?.notes?.length, 1);
 });
 
 test("runRealtimeBrainReply ends VC when model requests leave directive", async () => {

@@ -966,6 +966,26 @@ export function buildVoiceTurnPrompt({
     }))
     .filter((entry) => entry.ref && entry.url)
     .slice(0, 12);
+  const normalizedStreamWatchBrainContext =
+    normalizedConversationContext?.streamWatchBrainContext &&
+    typeof normalizedConversationContext.streamWatchBrainContext === "object"
+      ? {
+          prompt: String(normalizedConversationContext.streamWatchBrainContext.prompt || "").trim().slice(0, 420),
+          notes: (
+            Array.isArray(normalizedConversationContext.streamWatchBrainContext.notes)
+              ? normalizedConversationContext.streamWatchBrainContext.notes
+              : []
+          )
+            .map((note) =>
+              String(note || "")
+                .replace(/\s+/g, " ")
+                .trim()
+                .slice(0, 240)
+            )
+            .filter(Boolean)
+            .slice(-12)
+        }
+      : null;
 
   parts.push(`Incoming live voice transcript from ${speaker}: ${text || "(empty)"}`);
   parts.push(
@@ -1017,6 +1037,21 @@ export function buildVoiceTurnPrompt({
             : "none"
         }`
       ].join("\n")
+    );
+  }
+
+  if (normalizedStreamWatchBrainContext?.notes?.length) {
+    parts.push(
+      [
+        "Live stream-watch keyframe context:",
+        normalizedStreamWatchBrainContext.prompt
+          ? `- Guidance: ${normalizedStreamWatchBrainContext.prompt}`
+          : null,
+        ...normalizedStreamWatchBrainContext.notes.map((note) => `- ${note}`),
+        "- These are sampled frame snapshots. Avoid overclaiming continuity between samples."
+      ]
+        .filter(Boolean)
+        .join("\n")
     );
   }
 

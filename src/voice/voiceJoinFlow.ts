@@ -11,6 +11,7 @@ import { clamp } from "../utils.ts";
 import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 import { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
 import { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
+import { ElevenLabsRealtimeClient } from "./elevenLabsRealtimeClient.ts";
 import {
   createBotAudioPlaybackStream,
   SOUNDBOARD_MAX_CANDIDATES,
@@ -240,6 +241,42 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       });
       return true;
     }
+    if (runtimeMode === "elevenlabs_realtime" && !manager.appConfig?.elevenLabsApiKey) {
+      await manager.sendOperationalMessage({
+        channel: message.channel,
+        settings,
+        guildId,
+        channelId: message.channelId,
+        userId,
+        messageId: message.id,
+        event: "voice_join_request",
+        reason: "elevenlabs_api_key_missing",
+        details: {
+          mode: runtimeMode
+        }
+      });
+      return true;
+    }
+    if (runtimeMode === "elevenlabs_realtime") {
+      const elevenLabsSettings = settings.voice?.elevenLabsRealtime || {};
+      const elevenLabsAgentId = String(elevenLabsSettings.agentId || "").trim();
+      if (!elevenLabsAgentId) {
+        await manager.sendOperationalMessage({
+          channel: message.channel,
+          settings,
+          guildId,
+          channelId: message.channelId,
+          userId,
+          messageId: message.id,
+          event: "voice_join_request",
+          reason: "elevenlabs_agent_id_missing",
+          details: {
+            mode: runtimeMode
+          }
+        });
+        return true;
+      }
+    }
     if (runtimeMode === "stt_pipeline") {
       if (!manager.llm?.isAsrReady?.()) {
         await manager.sendOperationalMessage({
@@ -435,6 +472,23 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           inputSampleRateHz: realtimeInputSampleRateHz,
           outputSampleRateHz: realtimeOutputSampleRateHz
         });
+      } else if (runtimeMode === "elevenlabs_realtime") {
+        const elevenLabsRealtimeSettings = settings.voice?.elevenLabsRealtime || {};
+        realtimeClient = new ElevenLabsRealtimeClient({
+          apiKey: manager.appConfig.elevenLabsApiKey,
+          baseUrl:
+            String(elevenLabsRealtimeSettings.apiBaseUrl || "https://api.elevenlabs.io").trim() ||
+            "https://api.elevenlabs.io",
+          logger: realtimeRuntimeLogger
+        });
+        realtimeInputSampleRateHz = Number(elevenLabsRealtimeSettings.inputSampleRateHz) || 16000;
+        realtimeOutputSampleRateHz = Number(elevenLabsRealtimeSettings.outputSampleRateHz) || 16000;
+        await realtimeClient.connect({
+          agentId: String(elevenLabsRealtimeSettings.agentId || "").trim(),
+          instructions: baseVoiceInstructions,
+          inputSampleRateHz: realtimeInputSampleRateHz,
+          outputSampleRateHz: realtimeOutputSampleRateHz
+        });
       }
 
       audioPlayer = createAudioPlayer();
@@ -512,6 +566,10 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           requestedByUserId: null,
           lastFrameAt: 0,
           lastCommentaryAt: 0,
+          lastBrainContextAt: 0,
+          lastBrainContextProvider: null,
+          lastBrainContextModel: null,
+          brainContextEntries: [],
           ingestedFrameCount: 0,
           acceptedFrameCountInWindow: 0,
           frameWindowStartedAt: 0,

@@ -306,6 +306,9 @@ export function normalizeSettings(raw) {
   if (!merged.voice.openaiRealtime || typeof merged.voice.openaiRealtime !== "object") {
     merged.voice.openaiRealtime = {};
   }
+  if (!merged.voice.elevenLabsRealtime || typeof merged.voice.elevenLabsRealtime !== "object") {
+    merged.voice.elevenLabsRealtime = {};
+  }
   if (!merged.voice.geminiRealtime || typeof merged.voice.geminiRealtime !== "object") {
     merged.voice.geminiRealtime = {};
   }
@@ -343,6 +346,12 @@ export function normalizeSettings(raw) {
     inputAudioFormat?: string;
     outputAudioFormat?: string;
     inputTranscriptionModel?: string;
+  };
+  type VoiceElevenLabsRealtimeDefaults = {
+    agentId?: string;
+    apiBaseUrl?: string;
+    inputSampleRateHz?: number;
+    outputSampleRateHz?: number;
   };
   type VoiceGeminiRealtimeDefaults = {
     model?: string;
@@ -413,6 +422,7 @@ export function normalizeSettings(raw) {
     maxConcurrentSessions?: number;
     xai?: VoiceXaiDefaults;
     openaiRealtime?: VoiceOpenAiRealtimeDefaults;
+    elevenLabsRealtime?: VoiceElevenLabsRealtimeDefaults;
     geminiRealtime?: VoiceGeminiRealtimeDefaults;
     sttPipeline?: VoiceSttPipelineDefaults;
     thoughtEngine?: VoiceThoughtEngineDefaults;
@@ -425,6 +435,7 @@ export function normalizeSettings(raw) {
   const defaultVoice: VoiceDefaults = DEFAULT_SETTINGS.voice;
   const defaultVoiceXai: VoiceXaiDefaults = defaultVoice.xai ?? {};
   const defaultVoiceOpenAiRealtime: VoiceOpenAiRealtimeDefaults = defaultVoice.openaiRealtime ?? {};
+  const defaultVoiceElevenLabsRealtime: VoiceElevenLabsRealtimeDefaults = defaultVoice.elevenLabsRealtime ?? {};
   const defaultVoiceGeminiRealtime: VoiceGeminiRealtimeDefaults = defaultVoice.geminiRealtime ?? {};
   const defaultVoiceSttPipeline: VoiceSttPipelineDefaults = defaultVoice.sttPipeline ?? {};
   const defaultVoiceThoughtEngine: VoiceThoughtEngineDefaults = defaultVoice.thoughtEngine ?? {};
@@ -440,6 +451,8 @@ export function normalizeSettings(raw) {
   const voiceDailySessionsRaw = Number(merged.voice?.maxSessionsPerDay);
   const voiceConcurrentSessionsRaw = Number(merged.voice?.maxConcurrentSessions);
   const voiceSampleRateRaw = Number(merged.voice?.xai?.sampleRateHz);
+  const elevenLabsRealtimeInputSampleRateRaw = Number(merged.voice?.elevenLabsRealtime?.inputSampleRateHz);
+  const elevenLabsRealtimeOutputSampleRateRaw = Number(merged.voice?.elevenLabsRealtime?.outputSampleRateHz);
   const geminiRealtimeInputSampleRateRaw = Number(merged.voice?.geminiRealtime?.inputSampleRateHz);
   const geminiRealtimeOutputSampleRateRaw = Number(merged.voice?.geminiRealtime?.outputSampleRateHz);
   const voiceSttTtsSpeedRaw = Number(merged.voice?.sttPipeline?.ttsSpeed);
@@ -667,6 +680,29 @@ export function normalizeSettings(raw) {
   )
     .trim()
     .slice(0, 120);
+  merged.voice.elevenLabsRealtime.agentId = String(
+    merged.voice?.elevenLabsRealtime?.agentId || defaultVoiceElevenLabsRealtime.agentId || ""
+  )
+    .trim()
+    .slice(0, 120);
+  merged.voice.elevenLabsRealtime.apiBaseUrl = normalizeHttpBaseUrl(
+    merged.voice?.elevenLabsRealtime?.apiBaseUrl,
+    defaultVoiceElevenLabsRealtime.apiBaseUrl || "https://api.elevenlabs.io"
+  );
+  merged.voice.elevenLabsRealtime.inputSampleRateHz = clamp(
+    Number.isFinite(elevenLabsRealtimeInputSampleRateRaw)
+      ? elevenLabsRealtimeInputSampleRateRaw
+      : Number(defaultVoiceElevenLabsRealtime.inputSampleRateHz) || 16000,
+    8000,
+    48000
+  );
+  merged.voice.elevenLabsRealtime.outputSampleRateHz = clamp(
+    Number.isFinite(elevenLabsRealtimeOutputSampleRateRaw)
+      ? elevenLabsRealtimeOutputSampleRateRaw
+      : Number(defaultVoiceElevenLabsRealtime.outputSampleRateHz) || 16000,
+    8000,
+    48000
+  );
   merged.voice.geminiRealtime.model = String(
     merged.voice?.geminiRealtime?.model || defaultVoiceGeminiRealtime.model || "gemini-2.5-flash-native-audio-preview-12-2025"
   )

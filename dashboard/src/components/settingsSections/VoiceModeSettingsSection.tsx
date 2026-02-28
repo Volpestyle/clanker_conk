@@ -696,6 +696,68 @@ export function VoiceModeSettingsSection({
             </div>
           )}
 
+          {form.voiceStreamWatchEnabled && (
+            <div className="toggles">
+              <label>
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.voiceStreamWatchAutonomousCommentaryEnabled)}
+                  onChange={set("voiceStreamWatchAutonomousCommentaryEnabled")}
+                />
+                Auto-speak stream commentary turns
+              </label>
+              <label>
+                <input
+                  type="checkbox"
+                  checked={Boolean(form.voiceStreamWatchBrainContextEnabled)}
+                  onChange={set("voiceStreamWatchBrainContextEnabled")}
+                />
+                Feed keyframe context into Brain prompt
+              </label>
+            </div>
+          )}
+
+          {form.voiceStreamWatchEnabled && form.voiceStreamWatchBrainContextEnabled && (
+            <div className="split">
+              <div>
+                <label htmlFor="voice-stream-watch-brain-context-interval">
+                  Min seconds between keyframe analyses
+                </label>
+                <input
+                  id="voice-stream-watch-brain-context-interval"
+                  type="number"
+                  min="1"
+                  max="120"
+                  value={form.voiceStreamWatchBrainContextMinIntervalSeconds}
+                  onChange={set("voiceStreamWatchBrainContextMinIntervalSeconds")}
+                />
+              </div>
+              <div>
+                <label htmlFor="voice-stream-watch-brain-context-max-entries">Brain keyframe history size</label>
+                <input
+                  id="voice-stream-watch-brain-context-max-entries"
+                  type="number"
+                  min="1"
+                  max="24"
+                  value={form.voiceStreamWatchBrainContextMaxEntries}
+                  onChange={set("voiceStreamWatchBrainContextMaxEntries")}
+                />
+              </div>
+            </div>
+          )}
+
+          {form.voiceStreamWatchEnabled && form.voiceStreamWatchBrainContextEnabled && (
+            <>
+              <label htmlFor="voice-stream-watch-brain-context-prompt">Brain keyframe context instruction</label>
+              <textarea
+                id="voice-stream-watch-brain-context-prompt"
+                rows={3}
+                value={form.voiceStreamWatchBrainContextPrompt}
+                onChange={set("voiceStreamWatchBrainContextPrompt")}
+              />
+            </>
+          )}
+
           <div className="toggles">
             <label>
               <input

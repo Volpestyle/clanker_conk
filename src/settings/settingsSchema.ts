@@ -157,6 +157,12 @@ export const DEFAULT_SETTINGS = {
       outputAudioFormat: "pcm16",
       inputTranscriptionModel: "gpt-4o-mini-transcribe"
     },
+    elevenLabsRealtime: {
+      agentId: "",
+      apiBaseUrl: "https://api.elevenlabs.io",
+      inputSampleRateHz: 16000,
+      outputSampleRateHz: 16000
+    },
     geminiRealtime: {
       model: "gemini-2.5-flash-native-audio-preview-12-2025",
       voice: "Aoede",

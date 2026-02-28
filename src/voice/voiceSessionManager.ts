@@ -47,6 +47,7 @@ import {
 import { defaultModelForLlmProvider, normalizeLlmProvider } from "../llm/llmHelpers.ts";
 import {
   enableWatchStreamForUser,
+  getStreamWatchBrainContextForPrompt,
   generateVisionFallbackStreamWatchCommentary,
   ingestStreamFrame,
   initializeStreamWatchState,
@@ -57,6 +58,7 @@ import {
   requestWatchStream,
   resolveStreamWatchVisionProviderSettings,
   supportsStreamWatchCommentary,
+  supportsStreamWatchBrainContext,
   supportsVisionFallbackStreamWatchCommentary
 } from "./voiceStreamWatch.ts";
 import {
@@ -442,6 +444,12 @@ export class VoiceSessionManager {
           lastCommentaryAt: session.streamWatch?.lastCommentaryAt
             ? new Date(session.streamWatch.lastCommentaryAt).toISOString()
             : null,
+          lastBrainContextAt: session.streamWatch?.lastBrainContextAt
+            ? new Date(session.streamWatch.lastBrainContextAt).toISOString()
+            : null,
+          brainContextCount: Array.isArray(session.streamWatch?.brainContextEntries)
+            ? session.streamWatch.brainContextEntries.length
+            : 0,
           ingestedFrameCount: Number(session.streamWatch?.ingestedFrameCount || 0)
         },
         stt: session.mode === "stt_pipeline"
@@ -581,8 +589,16 @@ export class VoiceSessionManager {
     return supportsVisionFallbackStreamWatchCommentary(this, { session, settings });
   }
 
+  supportsStreamWatchBrainContext({ session = null, settings = null } = {}) {
+    return supportsStreamWatchBrainContext(this, { session, settings });
+  }
+
   resolveStreamWatchVisionProviderSettings(settings = null) {
     return resolveStreamWatchVisionProviderSettings(this, settings);
+  }
+
+  getStreamWatchBrainContextForPrompt(session, settings = null) {
+    return getStreamWatchBrainContextForPrompt(session, settings);
   }
 
   async generateVisionFallbackStreamWatchCommentary({
@@ -5605,6 +5621,7 @@ export class VoiceSessionManager {
     const baseInstructions = String(session?.baseVoiceInstructions || this.buildVoiceInstructions(settings)).trim();
     const speakerName = this.resolveVoiceSpeakerName(session, speakerUserId);
     const normalizedTranscript = normalizeVoiceText(transcript, REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS);
+    const streamWatchBrainContext = this.getStreamWatchBrainContextForPrompt(session, settings);
     const participants = this.getVoiceChannelParticipants(session);
     const recentMembershipEvents = this.getRecentVoiceMembershipEvents(session, {
       maxItems: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
@@ -5660,6 +5677,19 @@ export class VoiceSessionManager {
           "Durable memory context:",
           userFacts ? `- Known facts about active speaker: ${userFacts}` : null,
           relevantFacts ? `- Other relevant memory: ${relevantFacts}` : null
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
+    }
+
+    if (streamWatchBrainContext?.notes?.length) {
+      sections.push(
+        [
+          "Screen-share stream frame context:",
+          `- Guidance: ${String(streamWatchBrainContext.prompt || "").trim()}`,
+          ...streamWatchBrainContext.notes.slice(-8).map((note) => `- ${note}`),
+          "- Treat these notes as snapshots, not a continuous feed."
         ]
           .filter(Boolean)
           .join("\n")
@@ -6309,12 +6339,14 @@ export class VoiceSessionManager {
     const joinWindowAgeMs = Math.max(0, Date.now() - Number(session?.startedAt || 0));
     const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
     const sessionTiming = this.buildVoiceSessionTimingContext(session);
+    const streamWatchBrainContext = this.getStreamWatchBrainContextForPrompt(session, settings);
     const generationConversationContext = {
       ...(resolvedConversationContext || {}),
       joinWindowActive,
       joinWindowAgeMs: Math.round(joinWindowAgeMs),
       sessionTimeoutWarningActive: Boolean(sessionTiming?.timeoutWarningActive),
-      sessionTimeoutWarningReason: String(sessionTiming?.timeoutWarningReason || "none")
+      sessionTimeoutWarningReason: String(sessionTiming?.timeoutWarningReason || "none"),
+      streamWatchBrainContext
     };
 
     let replyText = "";
@@ -6583,12 +6615,14 @@ export class VoiceSessionManager {
     const joinWindowAgeMs = Math.max(0, Date.now() - Number(session?.startedAt || 0));
     const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
     const sessionTiming = this.buildVoiceSessionTimingContext(session);
+    const streamWatchBrainContext = this.getStreamWatchBrainContextForPrompt(session, settings);
     const generationConversationContext = {
       ...(resolvedConversationContext || {}),
       joinWindowActive,
       joinWindowAgeMs: Math.round(joinWindowAgeMs),
       sessionTimeoutWarningActive: Boolean(sessionTiming?.timeoutWarningActive),
-      sessionTimeoutWarningReason: String(sessionTiming?.timeoutWarningReason || "none")
+      sessionTimeoutWarningReason: String(sessionTiming?.timeoutWarningReason || "none"),
+      streamWatchBrainContext
     };
 
     let releaseLookupBusy = null;

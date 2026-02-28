@@ -22,7 +22,13 @@ function createSettings(overrides = {}) {
         maxFramesPerMinute: 180,
         maxFrameBytes: 350000,
         commentaryPath: "auto",
-        keyframeIntervalMs: 1200
+        keyframeIntervalMs: 1200,
+        autonomousCommentaryEnabled: true,
+        brainContextEnabled: true,
+        brainContextMinIntervalSeconds: 4,
+        brainContextMaxEntries: 8,
+        brainContextPrompt:
+          "Use these frame notes as live stream context when relevant. Treat them as snapshots, not continuous vision."
       }
     }
   };
@@ -59,6 +65,10 @@ function createSession(overrides = {}) {
       requestedByUserId: "user-1",
       lastFrameAt: 0,
       lastCommentaryAt: 0,
+      lastBrainContextAt: 0,
+      lastBrainContextProvider: null,
+      lastBrainContextModel: null,
+      brainContextEntries: [],
       ingestedFrameCount: 0,
       acceptedFrameCountInWindow: 0,
       frameWindowStartedAt: 0,
@@ -169,6 +179,10 @@ test("initializeStreamWatchState resets stream-watch counters and frame buffers"
       requestedByUserId: null,
       lastFrameAt: 100,
       lastCommentaryAt: 100,
+      lastBrainContextAt: 100,
+      lastBrainContextProvider: "anthropic",
+      lastBrainContextModel: "claude-haiku-4-5",
+      brainContextEntries: [{ text: "old", at: 10 }],
       ingestedFrameCount: 12,
       acceptedFrameCountInWindow: 8,
       frameWindowStartedAt: 123,
@@ -189,6 +203,10 @@ test("initializeStreamWatchState resets stream-watch counters and frame buffers"
   assert.equal(session.streamWatch.requestedByUserId, "requester-1");
   assert.equal(session.streamWatch.lastFrameAt, 0);
   assert.equal(session.streamWatch.lastCommentaryAt, 0);
+  assert.equal(session.streamWatch.lastBrainContextAt, 0);
+  assert.equal(session.streamWatch.lastBrainContextProvider, null);
+  assert.equal(session.streamWatch.lastBrainContextModel, null);
+  assert.deepEqual(session.streamWatch.brainContextEntries, []);
   assert.equal(session.streamWatch.ingestedFrameCount, 0);
   assert.equal(session.streamWatch.acceptedFrameCountInWindow, 0);
   assert.equal(session.streamWatch.frameWindowStartedAt, 0);
@@ -513,6 +531,90 @@ test("maybeTriggerStreamWatchCommentary forces anthropic keyframe fallback when 
   assert.equal(requestTextUtteranceCalls, 1);
   const logged = actions.find((entry) => entry.content === "stream_watch_commentary_requested");
   assert.equal(logged?.metadata?.configuredCommentaryPath, "anthropic_keyframes");
+});
+
+test("maybeTriggerStreamWatchCommentary can update brain context without speaking commentary", async () => {
+  let requestVideoCommentaryCalls = 0;
+  let requestTextUtteranceCalls = 0;
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: false,
+    realtimeClient: {
+      appendInputVideoFrame() {},
+      requestVideoCommentary() {
+        requestVideoCommentaryCalls += 1;
+      },
+      requestTextUtterance() {
+        requestTextUtteranceCalls += 1;
+      }
+    },
+    streamWatch: {
+      active: true,
+      targetUserId: "user-1",
+      requestedByUserId: "user-1",
+      lastFrameAt: Date.now(),
+      lastCommentaryAt: 0,
+      lastBrainContextAt: 0,
+      lastBrainContextProvider: null,
+      lastBrainContextModel: null,
+      brainContextEntries: [],
+      ingestedFrameCount: 0,
+      acceptedFrameCountInWindow: 0,
+      frameWindowStartedAt: 0,
+      latestFrameMimeType: "image/png",
+      latestFrameDataBase64: "AAAA",
+      latestFrameAt: Date.now()
+    }
+  });
+  const settings = createSettings({
+    voice: {
+      streamWatch: {
+        commentaryPath: "anthropic_keyframes",
+        autonomousCommentaryEnabled: false,
+        brainContextEnabled: true,
+        brainContextMinIntervalSeconds: 1,
+        brainContextMaxEntries: 6,
+        brainContextPrompt: "Summarize this frame for downstream brain replies."
+      }
+    }
+  });
+  const { manager, actions, createdResponses } = createManager({
+    session,
+    settings,
+    llm: {
+      isProviderConfigured(provider) {
+        return provider === "anthropic";
+      },
+      async generate() {
+        return {
+          text: "fps hud and a team fight on screen",
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        };
+      }
+    }
+  });
+
+  await maybeTriggerStreamWatchCommentary(manager, {
+    session,
+    settings,
+    streamerUserId: "user-1",
+    source: "unit_test"
+  });
+
+  assert.equal(requestVideoCommentaryCalls, 0);
+  assert.equal(requestTextUtteranceCalls, 0);
+  assert.equal(createdResponses.length, 0);
+  assert.equal(Array.isArray(session.streamWatch.brainContextEntries), true);
+  assert.equal(session.streamWatch.brainContextEntries.length, 1);
+  assert.equal(
+    actions.some((entry) => entry.content === "stream_watch_brain_context_updated"),
+    true
+  );
+  assert.equal(
+    actions.some((entry) => entry.content === "stream_watch_commentary_requested"),
+    false
+  );
 });
 
 test("maybeTriggerStreamWatchCommentary skips while playback queue is busy", async () => {
