@@ -110,8 +110,7 @@ import {
   REALTIME_CONTEXT_MEMBER_LIMIT,
   REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS,
   REALTIME_INSTRUCTION_REFRESH_DEBOUNCE_MS,
-  REALTIME_TURN_COALESCE_MAX_BYTES,
-  REALTIME_TURN_COALESCE_WINDOW_MS,
+  REALTIME_TURN_PENDING_MERGE_MAX_BYTES,
   REALTIME_TURN_QUEUE_MAX,
   REALTIME_TURN_STALE_SKIP_MS,
   RESPONSE_DONE_SILENCE_GRACE_MS,
@@ -134,15 +133,19 @@ import {
   STT_CONTEXT_MAX_MESSAGES,
   STT_REPLY_MAX_CHARS,
   STT_TRANSCRIPT_MAX_CHARS,
+  STT_TURN_COALESCE_MAX_BYTES,
+  STT_TURN_COALESCE_WINDOW_MS,
   STT_TURN_QUEUE_MAX,
   STT_TURN_STALE_SKIP_MS,
   STT_TTS_CONVERSION_CHUNK_MS,
   STT_TTS_CONVERSION_YIELD_EVERY_CHUNKS,
   VOICE_DECIDER_HISTORY_MAX_CHARS,
   VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS,
+  VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
   VOICE_DECIDER_HISTORY_MAX_TURNS,
   VOICE_LOOKUP_BUSY_LOG_COOLDOWN_MS,
   VOICE_LOOKUP_BUSY_MAX_CHARS,
+  VOICE_TURN_MIN_ASR_CLIP_MS,
   VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS
 } from "./voiceSessionManager.constants.ts";
 
@@ -2006,27 +2009,33 @@ export class VoiceSessionManager {
     });
   }
 
-  shouldCoalesceRealtimeTurn(prevTurn, nextTurn) {
-    if (!prevTurn || !nextTurn) return false;
-    const prevUserId = String(prevTurn.userId || "").trim();
-    const nextUserId = String(nextTurn.userId || "").trim();
-    if (!prevUserId || !nextUserId || prevUserId !== nextUserId) return false;
+  mergeRealtimeQueuedTurn(existingTurn, incomingTurn) {
+    if (!existingTurn) return incomingTurn || null;
+    if (!incomingTurn) return existingTurn;
 
-    const prevCaptureReason = String(prevTurn.captureReason || "").trim();
-    const nextCaptureReason = String(nextTurn.captureReason || "").trim();
-    if (!prevCaptureReason || !nextCaptureReason || prevCaptureReason !== nextCaptureReason) return false;
+    const existingBuffer = Buffer.isBuffer(existingTurn.pcmBuffer) ? existingTurn.pcmBuffer : Buffer.alloc(0);
+    const incomingBuffer = Buffer.isBuffer(incomingTurn.pcmBuffer) ? incomingTurn.pcmBuffer : Buffer.alloc(0);
+    if (!incomingBuffer.length) return existingTurn;
 
-    const prevQueuedAt = Number(prevTurn.queuedAt || 0);
-    const nextQueuedAt = Number(nextTurn.queuedAt || 0);
-    if (!prevQueuedAt || !nextQueuedAt) return false;
-    if (nextQueuedAt - prevQueuedAt > REALTIME_TURN_COALESCE_WINDOW_MS) return false;
+    const combinedBytes = existingBuffer.length + incomingBuffer.length;
+    const maxMergeBytes = Math.max(1, Number(REALTIME_TURN_PENDING_MERGE_MAX_BYTES) || combinedBytes);
+    const droppedHeadBytes = Math.max(0, combinedBytes - maxMergeBytes);
+    let mergedBuffer = null;
+    if (droppedHeadBytes > 0) {
+      const mergedWindow = Buffer.concat([existingBuffer, incomingBuffer], combinedBytes).subarray(droppedHeadBytes);
+      mergedBuffer = Buffer.from(mergedWindow);
+    } else {
+      mergedBuffer = Buffer.concat([existingBuffer, incomingBuffer], combinedBytes);
+    }
 
-    const prevBuffer = Buffer.isBuffer(prevTurn.pcmBuffer) ? prevTurn.pcmBuffer : null;
-    const nextBuffer = Buffer.isBuffer(nextTurn.pcmBuffer) ? nextTurn.pcmBuffer : null;
-    if (!prevBuffer?.length || !nextBuffer?.length) return false;
-    if (prevBuffer.length + nextBuffer.length > REALTIME_TURN_COALESCE_MAX_BYTES) return false;
-
-    return true;
+    return {
+      ...existingTurn,
+      ...incomingTurn,
+      pcmBuffer: mergedBuffer,
+      queuedAt: Number(incomingTurn.queuedAt || Date.now()),
+      mergedTurnCount: Math.max(1, Number(existingTurn.mergedTurnCount || 1)) + 1,
+      droppedHeadBytes
+    };
   }
 
   queueRealtimeTurn({ session, userId, pcmBuffer, captureReason = "stream_end" }) {
@@ -2043,14 +2052,25 @@ export class VoiceSessionManager {
       userId,
       pcmBuffer,
       captureReason,
-      queuedAt: Date.now()
+      queuedAt: Date.now(),
+      mergedTurnCount: 1,
+      droppedHeadBytes: 0
     };
 
     if (session.realtimeTurnDrainActive) {
-      const lastQueuedTurn = pendingQueue[pendingQueue.length - 1] || null;
-      if (this.shouldCoalesceRealtimeTurn(lastQueuedTurn, queuedTurn)) {
-        lastQueuedTurn.pcmBuffer = Buffer.concat([lastQueuedTurn.pcmBuffer, queuedTurn.pcmBuffer]);
-        lastQueuedTurn.captureReason = queuedTurn.captureReason;
+      const firstPending = pendingQueue.shift() || null;
+      let mergedPending = firstPending || queuedTurn;
+      while (pendingQueue.length > 0) {
+        const nextPending = pendingQueue.shift();
+        if (!nextPending) continue;
+        mergedPending = this.mergeRealtimeQueuedTurn(mergedPending, nextPending);
+      }
+      if (firstPending) {
+        mergedPending = this.mergeRealtimeQueuedTurn(mergedPending, queuedTurn);
+      }
+      if (!mergedPending) return;
+      pendingQueue.push(mergedPending);
+      if (Number(mergedPending.mergedTurnCount || 1) > 1 || Number(mergedPending.droppedHeadBytes || 0) > 0) {
         this.store.logAction({
           kind: "voice_runtime",
           guildId: session.guildId,
@@ -2060,39 +2080,25 @@ export class VoiceSessionManager {
           metadata: {
             sessionId: session.id,
             captureReason: String(captureReason || "stream_end"),
-            combinedBytes: lastQueuedTurn.pcmBuffer.length,
-            queueDepth: pendingQueue.length
+            combinedBytes: mergedPending.pcmBuffer.length,
+            mergedTurnCount: Number(mergedPending.mergedTurnCount || 1),
+            droppedHeadBytes: Number(mergedPending.droppedHeadBytes || 0),
+            queueDepth: pendingQueue.length,
+            maxQueueDepth: REALTIME_TURN_QUEUE_MAX
           }
         });
-        return;
       }
-
-      if (pendingQueue.length >= REALTIME_TURN_QUEUE_MAX) {
-        const droppedTurn = pendingQueue.shift();
-        if (droppedTurn) {
-          this.store.logAction({
-            kind: "voice_runtime",
-            guildId: session.guildId,
-            channelId: session.textChannelId,
-            userId,
-            content: "realtime_turn_superseded",
-            metadata: {
-              sessionId: session.id,
-              replacedCaptureReason: String(droppedTurn.captureReason || "stream_end"),
-              replacingCaptureReason: String(captureReason || "stream_end"),
-              replacedQueueAgeMs: Math.max(0, Date.now() - Number(droppedTurn.queuedAt || Date.now())),
-              maxQueueDepth: REALTIME_TURN_QUEUE_MAX
-            }
-          });
-        }
-      }
-      pendingQueue.push(queuedTurn);
       return;
     }
 
     if (pendingQueue.length > 0) {
-      pendingQueue.push(queuedTurn);
-      const nextTurn = pendingQueue.shift();
+      let nextTurn = pendingQueue.shift() || queuedTurn;
+      while (pendingQueue.length > 0) {
+        const pendingTurn = pendingQueue.shift();
+        if (!pendingTurn) continue;
+        nextTurn = this.mergeRealtimeQueuedTurn(nextTurn, pendingTurn);
+      }
+      nextTurn = this.mergeRealtimeQueuedTurn(nextTurn, queuedTurn);
       if (!nextTurn) return;
       this.drainRealtimeTurnQueue(nextTurn).catch(() => undefined);
       return;
@@ -2146,6 +2152,12 @@ export class VoiceSessionManager {
     }
   }
 
+  estimatePcm16MonoDurationMs(pcmByteLength, sampleRateHz = 24000) {
+    const normalizedBytes = Math.max(0, Number(pcmByteLength) || 0);
+    const normalizedRate = Math.max(1, Number(sampleRateHz) || 24000);
+    return Math.round((normalizedBytes / (2 * normalizedRate)) * 1000);
+  }
+
   async runRealtimeTurn({ session, userId, pcmBuffer, captureReason = "stream_end", queuedAt = 0 }) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
@@ -2187,8 +2199,34 @@ export class VoiceSessionManager {
       pcmByteLength: pcmBuffer.length,
       sampleRateHz
     });
+    const clipDurationMs = this.estimatePcm16MonoDurationMs(pcmBuffer.length, sampleRateHz);
+    const minAsrClipBytes = Math.max(
+      2,
+      Math.ceil(((VOICE_TURN_MIN_ASR_CLIP_MS / 1000) * sampleRateHz * 2))
+    );
+    const skipShortClipAsr =
+      String(captureReason || "stream_end") === "speaking_end" &&
+      pcmBuffer.length < minAsrClipBytes;
     let turnTranscript = "";
-    if (this.llm?.isAsrReady?.() && this.llm?.transcribeAudio) {
+    let resolvedFallbackModel = transcriptionPlan.fallbackModel || null;
+    let resolvedTranscriptionPlanReason = transcriptionPlan.reason;
+    if (skipShortClipAsr) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "realtime_turn_transcription_skipped_short_clip",
+        metadata: {
+          sessionId: session.id,
+          captureReason: String(captureReason || "stream_end"),
+          pcmBytes: pcmBuffer.length,
+          clipDurationMs,
+          minAsrClipMs: VOICE_TURN_MIN_ASR_CLIP_MS,
+          minAsrClipBytes
+        }
+      });
+    } else if (this.llm?.isAsrReady?.() && this.llm?.transcribeAudio) {
       turnTranscript = await this.transcribePcmTurn({
         session,
         userId,
@@ -2197,19 +2235,38 @@ export class VoiceSessionManager {
         sampleRateHz,
         captureReason,
         traceSource: "voice_realtime_turn_decider",
-        errorPrefix: "voice_realtime_transcription_failed"
+        errorPrefix: "voice_realtime_transcription_failed",
+        emptyTranscriptRuntimeEvent: "voice_realtime_transcription_empty",
+        emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK
       });
 
-      if (!turnTranscript && transcriptionPlan.fallbackModel) {
+      if (
+        !turnTranscript &&
+        !resolvedFallbackModel &&
+        session.mode === "voice_agent" &&
+        transcriptionPlan.primaryModel === "gpt-4o-mini-transcribe"
+      ) {
+        resolvedFallbackModel = "gpt-4o-transcribe";
+        resolvedTranscriptionPlanReason = "mini_with_full_fallback_runtime";
+      }
+
+      if (
+        !turnTranscript &&
+        resolvedFallbackModel &&
+        resolvedFallbackModel !== transcriptionPlan.primaryModel
+      ) {
         turnTranscript = await this.transcribePcmTurn({
           session,
           userId,
           pcmBuffer,
-          model: transcriptionPlan.fallbackModel,
+          model: resolvedFallbackModel,
           sampleRateHz,
           captureReason,
           traceSource: "voice_realtime_turn_decider_fallback",
-          errorPrefix: "voice_realtime_transcription_fallback_failed"
+          errorPrefix: "voice_realtime_transcription_fallback_failed",
+          emptyTranscriptRuntimeEvent: "voice_realtime_transcription_empty",
+          emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
+          suppressEmptyTranscriptLogs: true
         });
       }
     }
@@ -2264,8 +2321,10 @@ export class VoiceSessionManager {
         directAddressed: Boolean(decision.directAddressed),
         transcript: decision.transcript || turnTranscript || null,
         transcriptionModelPrimary: transcriptionPlan.primaryModel,
-        transcriptionModelFallback: transcriptionPlan.fallbackModel || null,
-        transcriptionPlanReason: transcriptionPlan.reason,
+        transcriptionModelFallback: resolvedFallbackModel || null,
+        transcriptionPlanReason: resolvedTranscriptionPlanReason,
+        clipDurationMs,
+        asrSkippedShortClip: skipShortClipAsr,
         llmResponse: decision.llmResponse || null,
         llmProvider: decision.llmProvider || null,
         llmModel: decision.llmModel || null,
@@ -3320,6 +3379,29 @@ export class VoiceSessionManager {
     session.pendingSttTurns = Math.max(0, (session.sttTurnDrainActive ? 1 : 0) + pendingQueueDepth);
   }
 
+  shouldCoalesceSttTurn(prevTurn, nextTurn) {
+    if (!prevTurn || !nextTurn) return false;
+    const prevUserId = String(prevTurn.userId || "").trim();
+    const nextUserId = String(nextTurn.userId || "").trim();
+    if (!prevUserId || !nextUserId || prevUserId !== nextUserId) return false;
+
+    const prevCaptureReason = String(prevTurn.captureReason || "").trim();
+    const nextCaptureReason = String(nextTurn.captureReason || "").trim();
+    if (!prevCaptureReason || !nextCaptureReason || prevCaptureReason !== nextCaptureReason) return false;
+
+    const prevQueuedAt = Number(prevTurn.queuedAt || 0);
+    const nextQueuedAt = Number(nextTurn.queuedAt || 0);
+    if (!prevQueuedAt || !nextQueuedAt) return false;
+    if (nextQueuedAt - prevQueuedAt > STT_TURN_COALESCE_WINDOW_MS) return false;
+
+    const prevBuffer = Buffer.isBuffer(prevTurn.pcmBuffer) ? prevTurn.pcmBuffer : null;
+    const nextBuffer = Buffer.isBuffer(nextTurn.pcmBuffer) ? nextTurn.pcmBuffer : null;
+    if (!prevBuffer?.length || !nextBuffer?.length) return false;
+    if (prevBuffer.length + nextBuffer.length > STT_TURN_COALESCE_MAX_BYTES) return false;
+
+    return true;
+  }
+
   queueSttPipelineTurn({ session, userId, pcmBuffer, captureReason = "stream_end" }) {
     if (!session || session.ending) return;
     if (session.mode !== "stt_pipeline") return;
@@ -3335,6 +3417,26 @@ export class VoiceSessionManager {
     };
 
     if (session.sttTurnDrainActive) {
+      const lastQueuedTurn = pendingQueue[pendingQueue.length - 1] || null;
+      if (this.shouldCoalesceSttTurn(lastQueuedTurn, queuedTurn)) {
+        lastQueuedTurn.pcmBuffer = Buffer.concat([lastQueuedTurn.pcmBuffer, queuedTurn.pcmBuffer]);
+        lastQueuedTurn.captureReason = queuedTurn.captureReason;
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: "stt_pipeline_turn_coalesced",
+          metadata: {
+            sessionId: session.id,
+            captureReason: String(captureReason || "stream_end"),
+            combinedBytes: lastQueuedTurn.pcmBuffer.length,
+            queueDepth: pendingQueue.length
+          }
+        });
+        return;
+      }
+
       if (pendingQueue.length >= STT_TURN_QUEUE_MAX) {
         const droppedTurn = pendingQueue.shift();
         if (droppedTurn) {
@@ -3427,19 +3529,71 @@ export class VoiceSessionManager {
     if (!this.llm?.transcribeAudio || !this.llm?.synthesizeSpeech) return;
 
     const queueWaitMs = queuedAt ? Math.max(0, Date.now() - Number(queuedAt || Date.now())) : 0;
+    const pendingQueueDepth = Array.isArray(session.pendingSttTurnsQueue) ? session.pendingSttTurnsQueue.length : 0;
     const staleTurn = queueWaitMs >= STT_TURN_STALE_SKIP_MS;
+    if (staleTurn && pendingQueueDepth > 1) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "stt_pipeline_turn_skipped_stale",
+        metadata: {
+          sessionId: session.id,
+          captureReason: String(captureReason || "stream_end"),
+          queueWaitMs,
+          pendingQueueDepth,
+          pcmBytes: pcmBuffer.length,
+          droppedBeforeAsr: true
+        }
+      });
+      return;
+    }
 
     const settings = session.settingsSnapshot || this.store.getSettings();
     const sttSettings = settings?.voice?.sttPipeline || {};
-    const transcriptionModel =
+    const transcriptionModelPrimary =
       String(sttSettings?.transcriptionModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
-    const transcript = await this.transcribePcmTurn({
+    const sampleRateHz = 24000;
+    const clipDurationMs = this.estimatePcm16MonoDurationMs(pcmBuffer.length, sampleRateHz);
+    let transcriptionModelFallback = null;
+    let transcriptionPlanReason = "configured_model";
+    if (transcriptionModelPrimary === "gpt-4o-mini-transcribe") {
+      transcriptionModelFallback = "gpt-4o-transcribe";
+      transcriptionPlanReason = "mini_with_full_fallback_runtime";
+    }
+
+    let transcript = await this.transcribePcmTurn({
       session,
       userId,
       pcmBuffer,
-      model: transcriptionModel,
-      captureReason
+      model: transcriptionModelPrimary,
+      sampleRateHz,
+      captureReason,
+      traceSource: "voice_stt_pipeline_turn",
+      errorPrefix: "stt_pipeline_transcription_failed",
+      emptyTranscriptRuntimeEvent: "voice_stt_transcription_empty",
+      emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK
     });
+    if (
+      !transcript &&
+      transcriptionModelFallback &&
+      transcriptionModelFallback !== transcriptionModelPrimary
+    ) {
+      transcript = await this.transcribePcmTurn({
+        session,
+        userId,
+        pcmBuffer,
+        model: transcriptionModelFallback,
+        sampleRateHz,
+        captureReason,
+        traceSource: "voice_stt_pipeline_turn_fallback",
+        errorPrefix: "stt_pipeline_transcription_fallback_failed",
+        emptyTranscriptRuntimeEvent: "voice_stt_transcription_empty",
+        emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
+        suppressEmptyTranscriptLogs: true
+      });
+    }
     if (!transcript) return;
     if (session.ending) return;
 
@@ -3453,7 +3607,11 @@ export class VoiceSessionManager {
       metadata: {
         sessionId: session.id,
         captureReason: String(captureReason || "stream_end"),
-        transcript
+        transcript,
+        transcriptionModelPrimary,
+        transcriptionModelFallback,
+        transcriptionPlanReason,
+        clipDurationMs
       }
     });
     this.recordVoiceTurn(session, {
@@ -3482,7 +3640,9 @@ export class VoiceSessionManager {
           sessionId: session.id,
           captureReason: String(captureReason || "stream_end"),
           queueWaitMs,
-          pcmBytes: pcmBuffer.length
+          pendingQueueDepth,
+          pcmBytes: pcmBuffer.length,
+          droppedBeforeAsr: false
         }
       });
       return;
@@ -3519,6 +3679,11 @@ export class VoiceSessionManager {
         participantCount: Number(turnDecision.participantCount || 0),
         directAddressed: Boolean(turnDecision.directAddressed),
         transcript: turnDecision.transcript || transcript || null,
+        transcriptionModelPrimary,
+        transcriptionModelFallback,
+        transcriptionPlanReason,
+        clipDurationMs,
+        asrSkippedShortClip: false,
         llmResponse: turnDecision.llmResponse || null,
         llmProvider: turnDecision.llmProvider || null,
         llmModel: turnDecision.llmModel || null,
@@ -3871,10 +4036,19 @@ export class VoiceSessionManager {
     sampleRateHz = 24000,
     captureReason = "stream_end",
     traceSource = "voice_stt_pipeline_turn",
-    errorPrefix = "stt_pipeline_transcription_failed"
+    errorPrefix = "stt_pipeline_transcription_failed",
+    emptyTranscriptRuntimeEvent = "voice_transcription_empty",
+    emptyTranscriptErrorStreakThreshold = 1,
+    suppressEmptyTranscriptLogs = false
   }) {
     if (!this.llm?.transcribeAudio || !pcmBuffer?.length) return "";
     const resolvedModel = String(model || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
+    const source = String(traceSource || "voice_stt_pipeline_turn");
+    const emptyTranscriptThreshold = Math.max(1, Math.floor(Number(emptyTranscriptErrorStreakThreshold) || 1));
+    if (!session.asrEmptyTranscriptStreakBySource || typeof session.asrEmptyTranscriptStreakBySource !== "object") {
+      session.asrEmptyTranscriptStreakBySource = {};
+    }
+    const streaks = session.asrEmptyTranscriptStreakBySource;
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-voice-stt-"));
     const wavPath = path.join(tempDir, "turn.wav");
     try {
@@ -3886,21 +4060,53 @@ export class VoiceSessionManager {
           guildId: session.guildId,
           channelId: session.textChannelId,
           userId,
-          source: String(traceSource || "voice_stt_pipeline_turn")
+          source
         }
       });
+      streaks[source] = 0;
       return normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     } catch (error) {
+      const message = String(error?.message || error);
+      const emptyTranscriptError = /ASR returned empty transcript\.?/i.test(message);
+      if (emptyTranscriptError) {
+        if (suppressEmptyTranscriptLogs) {
+          return "";
+        }
+        const nextStreak = Math.max(0, Number(streaks[source] || 0)) + 1;
+        streaks[source] = nextStreak;
+        const escalated = nextStreak >= emptyTranscriptThreshold;
+        this.store.logAction({
+          kind: escalated ? "voice_error" : "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: escalated
+            ? `${String(errorPrefix || "stt_pipeline_transcription_failed")}: ${message}`
+            : String(emptyTranscriptRuntimeEvent || "voice_transcription_empty"),
+          metadata: {
+            sessionId: session.id,
+            model: resolvedModel,
+            captureReason: String(captureReason || "stream_end"),
+            source,
+            emptyTranscript: true,
+            emptyTranscriptStreak: nextStreak,
+            emptyTranscriptErrorThreshold: emptyTranscriptThreshold
+          }
+        });
+        return "";
+      }
+      streaks[source] = 0;
       this.store.logAction({
         kind: "voice_error",
         guildId: session.guildId,
         channelId: session.textChannelId,
         userId,
-        content: `${String(errorPrefix || "stt_pipeline_transcription_failed")}: ${String(error?.message || error)}`,
+        content: `${String(errorPrefix || "stt_pipeline_transcription_failed")}: ${message}`,
         metadata: {
           sessionId: session.id,
           model: resolvedModel,
-          captureReason: String(captureReason || "stream_end")
+          captureReason: String(captureReason || "stream_end"),
+          source
         }
       });
       return "";

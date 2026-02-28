@@ -1075,6 +1075,162 @@ test("realtime transcription plan keeps mini with full fallback on longer clips"
   assert.equal(plan.reason, "mini_with_full_fallback");
 });
 
+test("runRealtimeTurn in voice_agent retries full ASR model after empty mini transcript", async () => {
+  const runtimeLogs = [];
+  const attemptedModels = [];
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.llm.isAsrReady = () => true;
+  manager.llm.transcribeAudio = async () => ({ text: "unused" });
+  manager.transcribePcmTurn = async ({ model }) => {
+    attemptedModels.push(String(model || ""));
+    if (model === "gpt-4o-mini-transcribe") return "";
+    return "fallback transcript";
+  };
+  manager.evaluateVoiceReplyDecision = async ({ transcript }) => ({
+    allow: false,
+    reason: "llm_no",
+    participantCount: 2,
+    directAddressed: false,
+    transcript
+  });
+
+  const session = {
+    id: "session-voice-agent-fallback-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "voice_agent",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    realtimeInputSampleRateHz: 24000,
+    realtimeClient: {
+      appendInputAudioPcm() {}
+    },
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.alloc(96_000, 1),
+    captureReason: "stream_end"
+  });
+
+  assert.deepEqual(attemptedModels, ["gpt-4o-mini-transcribe", "gpt-4o-transcribe"]);
+  const addressingLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
+  );
+  assert.equal(Boolean(addressingLog), true);
+  assert.equal(addressingLog?.metadata?.transcriptionModelFallback, "gpt-4o-transcribe");
+  assert.equal(addressingLog?.metadata?.transcriptionPlanReason, "mini_with_full_fallback_runtime");
+  assert.equal(addressingLog?.metadata?.transcript, "fallback transcript");
+});
+
+test("runRealtimeTurn skips ASR on very short speaking_end clips", async () => {
+  const runtimeLogs = [];
+  let transcribeCalls = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.llm.isAsrReady = () => true;
+  manager.llm.transcribeAudio = async () => ({ text: "unused" });
+  manager.transcribePcmTurn = async () => {
+    transcribeCalls += 1;
+    return "should-not-happen";
+  };
+  manager.evaluateVoiceReplyDecision = async ({ transcript }) => ({
+    allow: false,
+    reason: transcript ? "llm_no" : "missing_transcript",
+    participantCount: 2,
+    directAddressed: false,
+    transcript
+  });
+
+  const session = {
+    id: "session-short-clip-skip-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "voice_agent",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    realtimeInputSampleRateHz: 24000,
+    realtimeClient: {
+      appendInputAudioPcm() {}
+    },
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([1, 2, 3, 4]),
+    captureReason: "speaking_end"
+  });
+
+  assert.equal(transcribeCalls, 0);
+  assert.equal(
+    runtimeLogs.some(
+      (row) => row?.kind === "voice_runtime" && row?.content === "realtime_turn_transcription_skipped_short_clip"
+    ),
+    true
+  );
+  const addressingLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
+  );
+  assert.equal(Boolean(addressingLog), true);
+  assert.equal(addressingLog?.metadata?.asrSkippedShortClip, true);
+});
+
+test("transcribePcmTurn escalates repeated empty transcripts after configured threshold", async () => {
+  const runtimeLogs = [];
+  const errorLogs = [];
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    if (row?.kind === "voice_runtime") runtimeLogs.push(row);
+    if (row?.kind === "voice_error") errorLogs.push(row);
+  };
+  manager.llm.transcribeAudio = async () => {
+    throw new Error("ASR returned empty transcript.");
+  };
+
+  const session = {
+    id: "session-empty-streak-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "voice_agent",
+    ending: false
+  };
+
+  for (let index = 0; index < 3; index += 1) {
+    const transcript = await manager.transcribePcmTurn({
+      session,
+      userId: "speaker-1",
+      pcmBuffer: Buffer.alloc(48_000, 1),
+      model: "gpt-4o-mini-transcribe",
+      sampleRateHz: 24000,
+      captureReason: "speaking_end",
+      traceSource: "voice_realtime_turn_decider",
+      errorPrefix: "voice_realtime_transcription_failed",
+      emptyTranscriptRuntimeEvent: "voice_realtime_transcription_empty",
+      emptyTranscriptErrorStreakThreshold: 3
+    });
+    assert.equal(transcript, "");
+  }
+
+  assert.equal(
+    runtimeLogs.filter((row) => row?.content === "voice_realtime_transcription_empty").length,
+    2
+  );
+  const escalated = errorLogs.filter((row) =>
+    String(row?.content || "").startsWith("voice_realtime_transcription_failed:")
+  );
+  assert.equal(escalated.length, 1);
+  assert.equal(escalated[0]?.metadata?.emptyTranscriptStreak, 3);
+});
+
 test("runRealtimeTurn does not forward audio when reply decision denies turn", async () => {
   const runtimeLogs = [];
   let appendedAudioCalls = 0;
@@ -1238,7 +1394,7 @@ test("runRealtimeTurn queues non-direct bot-turn-open turns for deferred flush",
   assert.equal(Boolean(deferredTurns[0]?.directAddressed), false);
 });
 
-test("queueRealtimeTurn keeps a bounded FIFO backlog while realtime drain is active", () => {
+test("queueRealtimeTurn keeps only one merged pending turn while realtime drain is active", () => {
   const runtimeLogs = [];
   const manager = createManager();
   manager.store.logAction = (row) => {
@@ -1281,17 +1437,18 @@ test("queueRealtimeTurn keeps a bounded FIFO backlog while realtime drain is act
 
   assert.deepEqual(
     session.pendingRealtimeTurns.map((turn) => turn.captureReason),
-    ["r2", "r3", "r4"]
+    ["r4"]
   );
-  const supersededLogs = runtimeLogs.filter(
-    (row) => row?.kind === "voice_runtime" && row?.content === "realtime_turn_superseded"
+  assert.equal(Buffer.isBuffer(session.pendingRealtimeTurns[0]?.pcmBuffer), true);
+  assert.equal(session.pendingRealtimeTurns[0]?.pcmBuffer.equals(Buffer.from([1, 2, 3, 4])), true);
+  const coalescedLogs = runtimeLogs.filter(
+    (row) => row?.kind === "voice_runtime" && row?.content === "realtime_turn_coalesced"
   );
-  assert.equal(supersededLogs.length, 1);
-  assert.equal(supersededLogs[0]?.metadata?.replacedCaptureReason, "r1");
-  assert.equal(supersededLogs[0]?.metadata?.maxQueueDepth, 3);
+  assert.equal(coalescedLogs.length > 0, true);
+  assert.equal(coalescedLogs.at(-1)?.metadata?.maxQueueDepth, 1);
 });
 
-test("queueRealtimeTurn coalesces adjacent queued turns from the same speaker", () => {
+test("queueRealtimeTurn coalesces queued turns even when speaker or reason changes", () => {
   const manager = createManager();
   const session = {
     id: "session-queue-coalesce-1",
@@ -1311,14 +1468,16 @@ test("queueRealtimeTurn coalesces adjacent queued turns from the same speaker", 
   });
   manager.queueRealtimeTurn({
     session,
-    userId: "speaker-1",
+    userId: "speaker-2",
     pcmBuffer: Buffer.from([4, 5]),
-    captureReason: "speaking_end"
+    captureReason: "idle_timeout"
   });
 
   assert.equal(session.pendingRealtimeTurns.length, 1);
   assert.equal(Buffer.isBuffer(session.pendingRealtimeTurns[0]?.pcmBuffer), true);
   assert.equal(session.pendingRealtimeTurns[0]?.pcmBuffer.equals(Buffer.from([1, 2, 3, 4, 5])), true);
+  assert.equal(session.pendingRealtimeTurns[0]?.userId, "speaker-2");
+  assert.equal(session.pendingRealtimeTurns[0]?.captureReason, "idle_timeout");
 });
 
 test("runRealtimeTurn skips stale queued turns when newer backlog exists", async () => {
@@ -1623,6 +1782,99 @@ test("runSttPipelineTurn queues bot-turn-open transcripts for deferred flush", a
   assert.equal(queuedTurns[0]?.transcript, "clanker wait for this point");
 });
 
+test("runSttPipelineTurn retries full ASR model after empty mini transcript", async () => {
+  const runtimeLogs = [];
+  const attemptedModels = [];
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.llm.transcribeAudio = async () => ({ text: "unused" });
+  manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
+  manager.transcribePcmTurn = async ({ model }) => {
+    attemptedModels.push(String(model || ""));
+    if (model === "gpt-4o-mini-transcribe") return "";
+    return "fallback stt transcript";
+  };
+  manager.evaluateVoiceReplyDecision = async ({ transcript }) => ({
+    allow: false,
+    reason: "llm_no",
+    participantCount: 2,
+    directAddressed: false,
+    transcript
+  });
+
+  const session = {
+    id: "session-stt-fallback-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "stt_pipeline",
+    ending: false,
+    recentVoiceTurns: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.runSttPipelineTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.alloc(96_000, 1),
+    captureReason: "stream_end"
+  });
+
+  assert.deepEqual(attemptedModels, ["gpt-4o-mini-transcribe", "gpt-4o-transcribe"]);
+  const addressingLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
+  );
+  assert.equal(Boolean(addressingLog), true);
+  assert.equal(addressingLog?.metadata?.mode, "stt_pipeline");
+  assert.equal(addressingLog?.metadata?.transcriptionModelFallback, "gpt-4o-transcribe");
+  assert.equal(addressingLog?.metadata?.transcriptionPlanReason, "mini_with_full_fallback_runtime");
+  assert.equal(addressingLog?.metadata?.transcript, "fallback stt transcript");
+});
+
+test("runSttPipelineTurn empty transcripts escalate after streak threshold", async () => {
+  const runtimeLogs = [];
+  const errorLogs = [];
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    if (row?.kind === "voice_runtime") runtimeLogs.push(row);
+    if (row?.kind === "voice_error") errorLogs.push(row);
+  };
+  manager.llm.transcribeAudio = async () => {
+    throw new Error("ASR returned empty transcript.");
+  };
+  manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
+
+  const session = {
+    id: "session-stt-empty-streak-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "stt_pipeline",
+    ending: false,
+    recentVoiceTurns: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  for (let index = 0; index < 3; index += 1) {
+    await manager.runSttPipelineTurn({
+      session,
+      userId: "speaker-1",
+      pcmBuffer: Buffer.alloc(48_000, 1),
+      captureReason: "speaking_end"
+    });
+  }
+
+  assert.equal(
+    runtimeLogs.filter((row) => row?.content === "voice_stt_transcription_empty").length,
+    2
+  );
+  const escalated = errorLogs.filter((row) =>
+    String(row?.content || "").startsWith("stt_pipeline_transcription_failed:")
+  );
+  assert.equal(escalated.length, 1);
+  assert.equal(escalated[0]?.metadata?.emptyTranscriptStreak, 3);
+});
+
 test("queueSttPipelineTurn keeps a bounded FIFO backlog while a turn is running", async () => {
   const runtimeLogs = [];
   const seenCaptureReasons = [];
@@ -1693,6 +1945,114 @@ test("queueSttPipelineTurn keeps a bounded FIFO backlog while a turn is running"
 
   assert.deepEqual(seenCaptureReasons, ["first", ...expectedQueuedReasons]);
   assert.equal(session.pendingSttTurns, 0);
+});
+
+test("queueSttPipelineTurn coalesces adjacent queued STT turns from the same speaker", () => {
+  const runtimeLogs = [];
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+
+  const now = Date.now();
+  const session = {
+    id: "session-stt-coalesce-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "stt_pipeline",
+    ending: false,
+    pendingSttTurns: 2,
+    sttTurnDrainActive: true,
+    pendingSttTurnsQueue: [
+      {
+        session: null,
+        userId: "speaker-1",
+        pcmBuffer: Buffer.from([1, 2, 3]),
+        captureReason: "speaking_end",
+        queuedAt: now - 200
+      }
+    ]
+  };
+  session.pendingSttTurnsQueue[0].session = session;
+
+  manager.queueSttPipelineTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([4, 5, 6, 7]),
+    captureReason: "speaking_end"
+  });
+
+  assert.equal(session.pendingSttTurnsQueue.length, 1);
+  assert.equal(
+    session.pendingSttTurnsQueue[0]?.pcmBuffer.equals(Buffer.from([1, 2, 3, 4, 5, 6, 7])),
+    true
+  );
+  assert.equal(
+    runtimeLogs.some((row) => row?.kind === "voice_runtime" && row?.content === "stt_pipeline_turn_coalesced"),
+    true
+  );
+});
+
+test("runSttPipelineTurn drops stale queued turns before ASR when backlog exists", async () => {
+  const runtimeLogs = [];
+  let transcribeCalls = 0;
+  let decisionCalls = 0;
+  let runReplyCalls = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.llm.transcribeAudio = async () => ({ text: "old turn" });
+  manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
+  manager.transcribePcmTurn = async () => {
+    transcribeCalls += 1;
+    return "old turn";
+  };
+  manager.evaluateVoiceReplyDecision = async () => {
+    decisionCalls += 1;
+    return {
+      allow: true,
+      reason: "llm_yes",
+      participantCount: 2,
+      directAddressed: false,
+      transcript: "old turn"
+    };
+  };
+  manager.runSttPipelineReply = async () => {
+    runReplyCalls += 1;
+  };
+
+  const session = {
+    id: "session-stt-stale-backlog-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "stt_pipeline",
+    ending: false,
+    recentVoiceTurns: [],
+    pendingSttTurnsQueue: [
+      { userId: "speaker-2", pcmBuffer: Buffer.from([9]), captureReason: "speaking_end" },
+      { userId: "speaker-3", pcmBuffer: Buffer.from([10]), captureReason: "speaking_end" }
+    ],
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.runSttPipelineTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([1, 2, 3, 4]),
+    captureReason: "stream_end",
+    queuedAt: Date.now() - 5_200
+  });
+
+  assert.equal(transcribeCalls, 0);
+  assert.equal(decisionCalls, 0);
+  assert.equal(runReplyCalls, 0);
+  assert.equal(session.recentVoiceTurns.length, 0);
+  const staleLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "stt_pipeline_turn_skipped_stale"
+  );
+  assert.equal(Boolean(staleLog), true);
+  assert.equal(staleLog?.metadata?.droppedBeforeAsr, true);
 });
 
 test("runSttPipelineTurn transcribes stale queued turns for context but skips reply generation", async () => {
