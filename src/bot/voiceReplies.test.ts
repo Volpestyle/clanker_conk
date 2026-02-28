@@ -74,6 +74,11 @@ function createVoiceBot({
   generationError = null,
   generationSequence = null,
   searchConfigured = true,
+  openArticleRead = async (url) => ({
+    title: "opened article",
+    summary: `opened ${String(url || "")}`.trim(),
+    extractionMethod: "fast"
+  }),
   recentLookupContext = [],
   screenShareCapability = {
     enabled: false,
@@ -101,6 +106,7 @@ function createVoiceBot({
   const ingests = [];
   const remembers = [];
   const webSearchCalls = [];
+  const openArticleCalls = [];
   const lookupMemorySearchCalls = [];
   const lookupMemoryWrites = [];
   const screenShareCalls = [];
@@ -203,6 +209,13 @@ function createVoiceBot({
     search: {
       isConfigured() {
         return Boolean(searchConfigured);
+      },
+      async readPageSummary(url, maxChars) {
+        openArticleCalls.push({
+          url,
+          maxChars
+        });
+        return await openArticleRead(url, maxChars);
       }
     },
     client: {
@@ -221,6 +234,7 @@ function createVoiceBot({
     ingests,
     remembers,
     webSearchCalls,
+    openArticleCalls,
     lookupMemorySearchCalls,
     lookupMemoryWrites,
     screenShareCalls,
@@ -300,6 +314,50 @@ test("composeVoiceOperationalMessage logs voice errors when llm generation throw
   assert.equal(String(logs[0]?.content || "").includes("voice_operational_llm_failed"), true);
 });
 
+test("composeVoiceOperationalMessage nudges status replies to answer the ask directly", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: "yeah i'm in vc rn"
+  });
+
+  const text = await composeVoiceOperationalMessage(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    messageId: "msg-1",
+    event: "voice_status_request",
+    reason: "online",
+    details: {
+      elapsedSeconds: 55,
+      inactivitySeconds: 67,
+      remainingSeconds: 1445,
+      activeCaptures: 0,
+      requestText: "clankie r u in vc rn?"
+    }
+  });
+
+  assert.equal(text, "yeah i'm in vc rn");
+  assert.equal(generationPayloads.length, 1);
+  const systemPrompt = String(generationPayloads[0]?.systemPrompt || "");
+  const userPrompt = String(generationPayloads[0]?.userPrompt || "");
+  assert.equal(
+    systemPrompt.includes("For voice_status_request, answer the user's actual ask first in character using Details JSON."),
+    true
+  );
+  assert.equal(systemPrompt.includes("Do not dump every status field by default."), true);
+  assert.equal(
+    userPrompt.includes(
+      "Status field meanings: elapsedSeconds=time already in VC; inactivitySeconds=time until inactivity auto-leave; remainingSeconds=time until max session time cap; activeCaptures=current live inbound captures."
+    ),
+    true
+  );
+  assert.equal(userPrompt.includes("Requester text: clankie r u in vc rn?"), true);
+  assert.equal(
+    userPrompt.includes("If they asked a yes/no presence question, lead with that answer and keep timers secondary."),
+    true
+  );
+});
+
 test("generateVoiceTurnReply returns early for empty transcripts", async () => {
   const { bot, getGenerationCalls } = createVoiceBot();
   const reply = await generateVoiceTurnReply(bot, {
@@ -339,6 +397,32 @@ test("generateVoiceTurnReply adds join-window greeting bias guidance", async () 
     String(generationPayloads[0]?.userPrompt || "").includes("Join window active: yes"),
     true
   );
+});
+
+test("generateVoiceTurnReply includes session timeout warning prompt flag", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: "[SKIP]"
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "should we wrap?",
+    isEagerTurn: true,
+    sessionTiming: {
+      timeoutWarningActive: true,
+      timeoutWarningReason: "max_duration",
+      maxSecondsRemaining: 70,
+      inactivitySecondsRemaining: 44
+    }
+  });
+
+  assert.equal(reply.text, "");
+  const userPrompt = String(generationPayloads[0]?.userPrompt || "");
+  assert.equal(userPrompt.includes("Session timeout warning flag: true"), true);
+  assert.equal(userPrompt.includes("append [[LEAVE_VC]]"), true);
 });
 
 test("generateVoiceTurnReply includes roster and membership-change prompt context", async () => {
@@ -616,6 +700,49 @@ test("generateVoiceTurnReply includes short-term lookup memory in prompt context
   assert.equal(userPrompt.includes("blog.rust-lang.org"), true);
 });
 
+test("generateVoiceTurnReply opens cached article via OPEN_ARTICLE directive", async () => {
+  const { bot, openArticleCalls, getGenerationCalls } = createVoiceBot({
+    generationSequence: [
+      "say less [[OPEN_ARTICLE:first]]",
+      "here's what it says"
+    ],
+    recentLookupContext: [
+      {
+        query: "top news today",
+        provider: "brave",
+        ageMinutes: 1,
+        results: [
+          {
+            title: "example headline",
+            url: "https://example.com/news-1",
+            domain: "example.com"
+          }
+        ]
+      }
+    ],
+    openArticleRead: async () => ({
+      title: "example headline",
+      summary: "fuller article extract",
+      extractionMethod: "fast"
+    })
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "open that first article"
+  });
+
+  assert.equal(getGenerationCalls(), 2);
+  assert.equal(openArticleCalls.length, 1);
+  assert.equal(openArticleCalls[0]?.url, "https://example.com/news-1");
+  assert.equal(Number(openArticleCalls[0]?.maxChars) >= 12000, true);
+  assert.equal(reply.text, "here's what it says");
+  assert.equal(reply.usedOpenArticleFollowup, true);
+});
+
 test("generateVoiceTurnReply triggers voice screen-share link offer from directive", async () => {
   const { bot, screenShareCalls } = createVoiceBot({
     generationText: "i can check it [[SCREEN_SHARE_LINK]]",
@@ -641,4 +768,21 @@ test("generateVoiceTurnReply triggers voice screen-share link offer from directi
   assert.equal(screenShareCalls[0]?.guildId, "guild-1");
   assert.equal(screenShareCalls[0]?.channelId, "text-1");
   assert.equal(screenShareCalls[0]?.requesterUserId, "user-1");
+});
+
+test("generateVoiceTurnReply returns leave request when model emits leave directive", async () => {
+  const { bot } = createVoiceBot({
+    generationText: "aight i'ma bounce [[LEAVE_VC]]"
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "you good to keep chilling?"
+  });
+
+  assert.equal(reply.text, "aight i'ma bounce");
+  assert.equal(reply.leaveVoiceChannelRequested, true);
 });

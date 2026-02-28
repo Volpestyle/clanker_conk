@@ -313,7 +313,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
     }
 
     const maxSessionMinutes = clamp(
-      Number(settings.voice?.maxSessionMinutes) || 10,
+      Number(settings.voice?.maxSessionMinutes) || 30,
       MIN_MAX_SESSION_MINUTES,
       MAX_MAX_SESSION_MINUTES
     );
@@ -496,6 +496,11 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         pendingRealtimeTurns: [],
         pendingDeferredTurns: [],
         deferredTurnFlushTimer: null,
+        thoughtLoopTimer: null,
+        thoughtLoopBusy: false,
+        nextThoughtAt: 0,
+        lastThoughtAttemptAt: 0,
+        lastThoughtSpokenAt: 0,
         userCaptures: new Map(),
         streamWatch: {
           active: false,
@@ -577,7 +582,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           voiceChannelId: targetVoiceChannelId,
           maxSessionMinutes,
           inactivityLeaveSeconds: clamp(
-            Number(settings.voice?.inactivityLeaveSeconds) || 90,
+            Number(settings.voice?.inactivityLeaveSeconds) || 300,
             MIN_INACTIVITY_SECONDS,
             MAX_INACTIVITY_SECONDS
           ),

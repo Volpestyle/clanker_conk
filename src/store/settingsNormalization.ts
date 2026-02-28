@@ -166,7 +166,7 @@ export function normalizeSettings(raw) {
   );
   merged.webSearch.maxResults = clamp(Number.isFinite(maxResultsRaw) ? maxResultsRaw : 5, 1, 10);
   merged.webSearch.maxPagesToRead = clamp(Number.isFinite(maxPagesRaw) ? maxPagesRaw : 3, 0, 5);
-  merged.webSearch.maxCharsPerPage = clamp(Number.isFinite(maxCharsRaw) ? maxCharsRaw : 1400, 350, 4000);
+  merged.webSearch.maxCharsPerPage = clamp(Number.isFinite(maxCharsRaw) ? maxCharsRaw : 6000, 350, 24000);
   merged.webSearch.safeSearch =
     merged.webSearch?.safeSearch !== undefined ? Boolean(merged.webSearch?.safeSearch) : true;
   merged.webSearch.providerOrder = normalizeProviderOrder(merged.webSearch?.providerOrder);
@@ -239,6 +239,9 @@ export function normalizeSettings(raw) {
   if (!merged.voice.sttPipeline || typeof merged.voice.sttPipeline !== "object") {
     merged.voice.sttPipeline = {};
   }
+  if (!merged.voice.thoughtEngine || typeof merged.voice.thoughtEngine !== "object") {
+    merged.voice.thoughtEngine = {};
+  }
   if (!merged.voice.generationLlm || typeof merged.voice.generationLlm !== "object") {
     merged.voice.generationLlm = {};
   }
@@ -280,6 +283,13 @@ export function normalizeSettings(raw) {
     ttsModel?: string;
     ttsVoice?: string;
     ttsSpeed?: number;
+  };
+  type VoiceThoughtEngineDefaults = {
+    enabled?: boolean;
+    provider?: string;
+    model?: string;
+    minSilenceSeconds?: number;
+    minSecondsBetweenThoughts?: number;
   };
   type VoiceReplyDecisionDefaults = {
     enabled?: boolean;
@@ -323,6 +333,7 @@ export function normalizeSettings(raw) {
     openaiRealtime?: VoiceOpenAiRealtimeDefaults;
     geminiRealtime?: VoiceGeminiRealtimeDefaults;
     sttPipeline?: VoiceSttPipelineDefaults;
+    thoughtEngine?: VoiceThoughtEngineDefaults;
     generationLlm?: VoiceGenerationDefaults;
     replyDecisionLlm?: VoiceReplyDecisionDefaults;
     streamWatch?: VoiceStreamWatchDefaults;
@@ -334,6 +345,7 @@ export function normalizeSettings(raw) {
   const defaultVoiceOpenAiRealtime: VoiceOpenAiRealtimeDefaults = defaultVoice.openaiRealtime ?? {};
   const defaultVoiceGeminiRealtime: VoiceGeminiRealtimeDefaults = defaultVoice.geminiRealtime ?? {};
   const defaultVoiceSttPipeline: VoiceSttPipelineDefaults = defaultVoice.sttPipeline ?? {};
+  const defaultVoiceThoughtEngine: VoiceThoughtEngineDefaults = defaultVoice.thoughtEngine ?? {};
   const defaultVoiceGenerationLlm: VoiceGenerationDefaults = defaultVoice.generationLlm ?? {};
   const defaultVoiceReplyDecisionLlm: VoiceReplyDecisionDefaults = defaultVoice.replyDecisionLlm ?? {};
   const defaultVoiceReplyDecisionPrompts: VoiceReplyDecisionPromptDefaults =
@@ -372,12 +384,12 @@ export function normalizeSettings(raw) {
     0.99
   );
   merged.voice.maxSessionMinutes = clamp(
-    Number.isFinite(voiceMaxSessionRaw) ? voiceMaxSessionRaw : Number(defaultVoice.maxSessionMinutes) || 10,
+    Number.isFinite(voiceMaxSessionRaw) ? voiceMaxSessionRaw : Number(defaultVoice.maxSessionMinutes) || 30,
     1,
     120
   );
   merged.voice.inactivityLeaveSeconds = clamp(
-    Number.isFinite(voiceInactivityRaw) ? voiceInactivityRaw : Number(defaultVoice.inactivityLeaveSeconds) || 90,
+    Number.isFinite(voiceInactivityRaw) ? voiceInactivityRaw : Number(defaultVoice.inactivityLeaveSeconds) || 300,
     20,
     3600
   );
@@ -400,6 +412,53 @@ export function normalizeSettings(raw) {
   const voiceEagernessRaw = Number(merged.voice?.replyEagerness);
   merged.voice.replyEagerness = clamp(
     Number.isFinite(voiceEagernessRaw) ? voiceEagernessRaw : 0, 0, 100
+  );
+  merged.voice.thoughtEngine.enabled =
+    merged.voice?.thoughtEngine?.enabled !== undefined
+      ? Boolean(merged.voice?.thoughtEngine?.enabled)
+      : defaultVoiceThoughtEngine?.enabled !== undefined
+        ? Boolean(defaultVoiceThoughtEngine.enabled)
+        : true;
+  const voiceThoughtProviderRaw = String(merged.voice?.thoughtEngine?.provider || "").trim();
+  merged.voice.thoughtEngine.provider = normalizeLlmProvider(
+    voiceThoughtProviderRaw,
+    defaultVoiceThoughtEngine.provider || "anthropic"
+  );
+  const defaultVoiceThoughtModel =
+    merged.voice.thoughtEngine.provider === normalizeLlmProvider(defaultVoiceThoughtEngine.provider)
+      ? String(defaultVoiceThoughtEngine.model || "").trim().slice(0, 120)
+      : "";
+  merged.voice.thoughtEngine.model = String(
+    merged.voice?.thoughtEngine?.model ||
+      defaultVoiceThoughtModel ||
+      defaultModelForLlmProvider(merged.voice.thoughtEngine.provider)
+  )
+    .trim()
+    .slice(0, 120);
+  if (!merged.voice.thoughtEngine.model) {
+    merged.voice.thoughtEngine.model = defaultModelForLlmProvider(merged.voice.thoughtEngine.provider);
+  }
+  const voiceThoughtMinSilenceRaw = Number(merged.voice?.thoughtEngine?.minSilenceSeconds);
+  const defaultVoiceThoughtMinSilenceRaw = Number(defaultVoiceThoughtEngine.minSilenceSeconds);
+  merged.voice.thoughtEngine.minSilenceSeconds = clamp(
+    Number.isFinite(voiceThoughtMinSilenceRaw)
+      ? voiceThoughtMinSilenceRaw
+      : Number.isFinite(defaultVoiceThoughtMinSilenceRaw)
+        ? defaultVoiceThoughtMinSilenceRaw
+        : 20,
+    8,
+    300
+  );
+  const voiceThoughtMinGapRaw = Number(merged.voice?.thoughtEngine?.minSecondsBetweenThoughts);
+  const defaultVoiceThoughtMinGapRaw = Number(defaultVoiceThoughtEngine.minSecondsBetweenThoughts);
+  merged.voice.thoughtEngine.minSecondsBetweenThoughts = clamp(
+    Number.isFinite(voiceThoughtMinGapRaw)
+      ? voiceThoughtMinGapRaw
+      : Number.isFinite(defaultVoiceThoughtMinGapRaw)
+        ? defaultVoiceThoughtMinGapRaw
+        : merged.voice.thoughtEngine.minSilenceSeconds,
+    8,
+    600
   );
   const voiceGenerationProviderRaw = String(merged.voice?.generationLlm?.provider || "").trim();
   merged.voice.generationLlm.provider = normalizeLlmProvider(

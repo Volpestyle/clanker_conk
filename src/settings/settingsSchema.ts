@@ -81,7 +81,7 @@ export const DEFAULT_SETTINGS = {
     maxSearchesPerHour: 20,
     maxResults: 5,
     maxPagesToRead: 3,
-    maxCharsPerPage: 1400,
+    maxCharsPerPage: 6000,
     safeSearch: true,
     providerOrder: ["brave", "serpapi"],
     recencyDaysDefault: 30,
@@ -103,14 +103,21 @@ export const DEFAULT_SETTINGS = {
     realtimeReplyStrategy: "brain",
     allowNsfwHumor: true,
     intentConfidenceThreshold: 0.75,
-    maxSessionMinutes: 10,
-    inactivityLeaveSeconds: 90,
+    maxSessionMinutes: 30,
+    inactivityLeaveSeconds: 300,
     maxSessionsPerDay: 12,
     maxConcurrentSessions: 1,
     allowedVoiceChannelIds: [],
     blockedVoiceChannelIds: [],
     blockedVoiceUserIds: [],
     replyEagerness: 0,
+    thoughtEngine: {
+      enabled: true,
+      provider: "anthropic",
+      model: "claude-haiku-4-5",
+      minSilenceSeconds: 20,
+      minSecondsBetweenThoughts: 20
+    },
     generationLlm: {
       provider: "anthropic",
       model: "claude-haiku-4-5"

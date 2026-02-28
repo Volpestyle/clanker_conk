@@ -1941,6 +1941,101 @@ test("smoke: runRealtimeBrainReply passes join-window context into generation", 
   assert.equal(generationPayloads[0]?.recentMembershipEvents?.[0]?.displayName, "bob");
 });
 
+test("runRealtimeBrainReply ends VC when model requests leave directive", async () => {
+  const manager = createManager();
+  const endCalls = [];
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
+  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = () => true;
+  manager.generateVoiceTurn = async () => ({
+    text: "",
+    leaveVoiceChannelRequested: true
+  });
+  manager.endSession = async (payload) => {
+    endCalls.push(payload);
+    return true;
+  };
+
+  const session = {
+    id: "session-realtime-leave-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 5_000,
+    maxEndsAt: Date.now() + 90_000,
+    inactivityEndsAt: Date.now() + 25_000,
+    realtimeClient: {},
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "we can wrap this up now",
+    directAddressed: true,
+    source: "realtime"
+  });
+
+  assert.equal(result, true);
+  assert.equal(endCalls.length, 1);
+  assert.equal(endCalls[0]?.reason, "assistant_leave_directive");
+});
+
+test("runRealtimeBrainReply treats engaged thread turns as non-eager even without direct address", async () => {
+  const generationPayloads = [];
+  const manager = createManager();
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
+  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = () => true;
+  manager.generateVoiceTurn = async (payload) => {
+    generationPayloads.push(payload);
+    return {
+      text: "on it"
+    };
+  };
+
+  const session = {
+    id: "session-engaged-thread-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 28_000,
+    realtimeClient: {},
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "open that first article",
+    directAddressed: false,
+    conversationContext: {
+      engagementState: "engaged",
+      engaged: true,
+      engagedWithCurrentSpeaker: false
+    },
+    source: "realtime"
+  });
+
+  assert.equal(result, true);
+  assert.equal(generationPayloads.length, 1);
+  assert.equal(Boolean(generationPayloads[0]?.isEagerTurn), false);
+});
+
 test("runRealtimeTurn uses native realtime forwarding when strategy is native", async () => {
   const brainPayloads = [];
   const forwardedPayloads = [];
@@ -2267,6 +2362,48 @@ test("runSttPipelineReply triggers soundboard even when generated speech is empt
   assert.equal(spokenLines.length, 0);
   assert.equal(soundboardCalls.length, 1);
   assert.equal(soundboardCalls[0]?.requestedRef, "airhorn@123");
+});
+
+test("runSttPipelineReply ends VC when model requests leave directive", async () => {
+  const manager = createManager();
+  const endCalls = [];
+  manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
+  manager.resolveSoundboardCandidates = async () => ({
+    source: "preferred",
+    candidates: []
+  });
+  manager.generateVoiceTurn = async () => ({
+    text: "aight i'm heading out",
+    leaveVoiceChannelRequested: true
+  });
+  manager.speakVoiceLineWithTts = async () => true;
+  manager.endSession = async (payload) => {
+    endCalls.push(payload);
+    return true;
+  };
+
+  const session = {
+    id: "session-stt-leave-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "stt_pipeline",
+    ending: false,
+    maxEndsAt: Date.now() + 80_000,
+    inactivityEndsAt: Date.now() + 30_000,
+    recentVoiceTurns: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.runSttPipelineReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "anything else before we stop?",
+    directAddressed: true
+  });
+
+  assert.equal(endCalls.length, 1);
+  assert.equal(endCalls[0]?.reason, "assistant_leave_directive");
 });
 
 test("runSttPipelineTurn queues bot-turn-open transcripts for deferred flush", async () => {

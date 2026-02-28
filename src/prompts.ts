@@ -104,6 +104,25 @@ function formatRecentLookupContext(recentWebLookups) {
     .join("\n");
 }
 
+function formatOpenArticleCandidates(candidates) {
+  const rows = Array.isArray(candidates) ? candidates : [];
+  if (!rows.length) return "(no cached lookup articles available)";
+
+  return rows
+    .slice(0, 12)
+    .map((item) => {
+      const ref = String(item?.ref || "").trim() || "first";
+      const title = String(item?.title || "untitled").trim() || "untitled";
+      const url = String(item?.url || "").trim();
+      const domain = String(item?.domain || "").trim();
+      const query = String(item?.query || "").trim();
+      const domainLabel = domain ? ` (${domain})` : "";
+      const queryLabel = query ? ` | from query: "${query}"` : "";
+      return `- [${ref}] ${title}${domainLabel} -> ${url}${queryLabel}`;
+    })
+    .join("\n");
+}
+
 function formatVideoFindings(videoContext) {
   if (!videoContext?.videos?.length) return "(no video context available)";
 
@@ -827,6 +846,7 @@ export function buildVoiceTurnPrompt({
   isEagerTurn = false,
   voiceEagerness = 0,
   conversationContext = null,
+  sessionTiming = null,
   joinWindowActive = false,
   joinWindowAgeMs = null,
   botName = "the bot",
@@ -836,7 +856,10 @@ export function buildVoiceTurnPrompt({
   memoryEnabled = false,
   webSearch = null,
   recentWebLookups = [],
+  openArticleCandidates = [],
+  openedArticle = null,
   allowWebSearchDirective = false,
+  allowOpenArticleDirective = false,
   screenShare = null,
   allowScreenShareDirective = false
 }) {
@@ -854,6 +877,24 @@ export function buildVoiceTurnPrompt({
   const normalizedBotName = String(botName || "the bot").trim() || "the bot";
   const normalizedConversationContext =
     conversationContext && typeof conversationContext === "object" ? conversationContext : null;
+  const normalizedSessionTiming =
+    sessionTiming && typeof sessionTiming === "object"
+      ? {
+          maxSecondsRemaining: Number.isFinite(Number(sessionTiming.maxSecondsRemaining))
+            ? Math.max(0, Math.round(Number(sessionTiming.maxSecondsRemaining)))
+            : null,
+          inactivitySecondsRemaining: Number.isFinite(Number(sessionTiming.inactivitySecondsRemaining))
+            ? Math.max(0, Math.round(Number(sessionTiming.inactivitySecondsRemaining)))
+            : null,
+          timeoutWarningActive: Boolean(sessionTiming.timeoutWarningActive),
+          timeoutWarningReason:
+            String(sessionTiming.timeoutWarningReason || "").trim().toLowerCase() === "max_duration"
+              ? "max_duration"
+              : String(sessionTiming.timeoutWarningReason || "").trim().toLowerCase() === "inactivity"
+                ? "inactivity"
+                : "none"
+        }
+      : null;
   const normalizedParticipantRoster = (Array.isArray(participantRoster) ? participantRoster : [])
     .map((entry) => {
       if (typeof entry === "string") {
@@ -881,10 +922,20 @@ export function buildVoiceTurnPrompt({
     })
     .filter(Boolean)
     .slice(-6);
+  const normalizedOpenArticleCandidates = (Array.isArray(openArticleCandidates) ? openArticleCandidates : [])
+    .map((entry) => ({
+      ref: String(entry?.ref || "").trim(),
+      title: String(entry?.title || "").trim(),
+      url: String(entry?.url || "").trim(),
+      domain: String(entry?.domain || "").trim(),
+      query: String(entry?.query || "").trim()
+    }))
+    .filter((entry) => entry.ref && entry.url)
+    .slice(0, 12);
 
   parts.push(`Incoming live voice transcript from ${speaker}: ${text || "(empty)"}`);
   parts.push(
-    `Interpret second-person references like \"you\"/\"your\" as likely referring to ${normalizedBotName} unless another human target is explicit.`
+    `Interpret second-person references like "you"/"your" as likely referring to ${normalizedBotName} unless another human target is explicit.`
   );
   parts.push(
     ...buildVoiceSelfContextLines({
@@ -942,6 +993,31 @@ export function buildVoiceTurnPrompt({
     );
   }
 
+  if (normalizedSessionTiming) {
+    parts.push(
+      [
+        "Session timing context:",
+        `- Session timeout warning flag: ${normalizedSessionTiming.timeoutWarningActive ? "true" : "false"}`,
+        `- Warning reason: ${normalizedSessionTiming.timeoutWarningReason}`,
+        `- Max-session seconds remaining: ${
+          Number.isFinite(normalizedSessionTiming.maxSecondsRemaining)
+            ? normalizedSessionTiming.maxSecondsRemaining
+            : "unknown"
+        }`,
+        `- Inactivity seconds remaining: ${
+          Number.isFinite(normalizedSessionTiming.inactivitySecondsRemaining)
+            ? normalizedSessionTiming.inactivitySecondsRemaining
+            : "unknown"
+        }`
+      ].join("\n")
+    );
+    if (normalizedSessionTiming.timeoutWarningActive) {
+      parts.push(
+        "If this feels naturally wrapped up, you may append [[LEAVE_VC]] to end your VC session after this turn."
+      );
+    }
+  }
+
   if (userFacts?.length) {
     parts.push("Known facts about this user:");
     parts.push(formatMemoryFacts(userFacts, { includeType: false, includeProvenance: false, maxItems: 8 }));
@@ -973,6 +1049,21 @@ export function buildVoiceTurnPrompt({
     parts.push(formatRecentLookupContext(recentWebLookups));
     parts.push("If the speaker asks what source you used earlier, mention these cached domains/URLs.");
     parts.push("Use this only as lightweight context. For fresh facts, request a new web lookup.");
+  }
+
+  if (allowOpenArticleDirective) {
+    if (normalizedOpenArticleCandidates.length) {
+      parts.push("Opening cached articles is available for this turn.");
+      parts.push(
+        "If the speaker asks to open/read/click a previously found article, append [[OPEN_ARTICLE:<article_ref>]]."
+      );
+      parts.push("Valid cached article refs:");
+      parts.push(formatOpenArticleCandidates(normalizedOpenArticleCandidates));
+      parts.push("Use one ref exactly as listed (or use [[OPEN_ARTICLE:first]] for the top cached article).");
+    } else {
+      parts.push("No cached article refs are available right now.");
+      parts.push("Do not output [[OPEN_ARTICLE:...]].");
+    }
   }
 
   if (allowWebSearchDirective) {
@@ -1012,6 +1103,10 @@ export function buildVoiceTurnPrompt({
     parts.push("Do not output [[SCREEN_SHARE_LINK]].");
   }
 
+  parts.push(
+    "If you intentionally want to leave VC after this turn, append a trailing directive [[LEAVE_VC]]."
+  );
+
   if (webSearch?.requested && !webSearch?.used) {
     if (webSearch.error) {
       parts.push(`Web lookup failed: ${webSearch.error}`);
@@ -1025,6 +1120,38 @@ export function buildVoiceTurnPrompt({
   if (webSearch?.used && webSearch.results?.length) {
     parts.push(`Live web findings for query: "${webSearch.query}"`);
     parts.push(formatWebSearchFindings(webSearch));
+  }
+
+  if (openedArticle && typeof openedArticle === "object") {
+    const openRef = String(openedArticle?.ref || "").trim();
+    const openTitle = String(openedArticle?.title || "").trim();
+    const openUrl = String(openedArticle?.url || "").trim();
+    const openDomain = String(openedArticle?.domain || "").trim();
+    const openQuery = String(openedArticle?.query || "").trim();
+    const openMethod = String(openedArticle?.extractionMethod || "").trim();
+    const openContent = String(openedArticle?.content || "").trim();
+    const openError = String(openedArticle?.error || "").trim();
+
+    if (openError) {
+      parts.push(`Open-article request failed: ${openError}`);
+      parts.push("Respond naturally without claiming full-article read succeeded.");
+    } else if (openContent) {
+      parts.push("Opened cached article context for this turn:");
+      parts.push(
+        [
+          openRef ? `- ref: ${openRef}` : null,
+          openTitle ? `- title: ${openTitle}` : null,
+          openDomain ? `- domain: ${openDomain}` : null,
+          openUrl ? `- url: ${openUrl}` : null,
+          openQuery ? `- source query: ${openQuery}` : null,
+          openMethod ? `- extraction: ${openMethod}` : null
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
+      parts.push("Opened article extracted text:");
+      parts.push(openContent);
+    }
   }
 
   if (isEagerTurn) {

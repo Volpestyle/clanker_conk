@@ -25,6 +25,14 @@ const SOUNDBOARD_CANDIDATE_PARSE_LIMIT = 40;
 const SOUNDBOARD_SIMPLE_TOKEN_RE = /^[a-z0-9 _-]+$/i;
 const LOOKUP_CONTEXT_PROMPT_LIMIT = 4;
 const LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS = 72;
+const OPEN_ARTICLE_DEFAULT_MAX_CHARS = 12_000;
+const OPEN_ARTICLE_REF_MAX_LEN = 260;
+const OPEN_ARTICLE_MAX_CANDIDATES = 12;
+const OPEN_ARTICLE_ROW_LIMIT = 4;
+const OPEN_ARTICLE_RESULTS_PER_ROW = 5;
+const OPEN_ARTICLE_ROW_REF_RE = /^r(\d+):(\d+)$/i;
+const OPEN_ARTICLE_INDEX_REF_RE = /^\d+$/;
+const OPEN_ARTICLE_URL_RE = /^https?:\/\//i;
 
 export async function composeVoiceOperationalMessage(runtime, {
   settings,
@@ -53,14 +61,29 @@ export async function composeVoiceOperationalMessage(runtime, {
     });
     return "";
   }
+  const detailsPayload: Record<string, unknown> = {};
+  if (details && typeof details === "object" && !Array.isArray(details)) {
+    for (const [key, value] of Object.entries(details)) {
+      detailsPayload[String(key)] = value;
+    }
+  } else {
+    detailsPayload.detail = String(details || "");
+  }
   const normalizedEvent = String(event || "voice_runtime")
     .trim()
     .toLowerCase();
   const isVoiceSessionEnd = normalizedEvent === "voice_session_end";
+  const isVoiceStatusRequest = normalizedEvent === "voice_status_request";
   const isScreenShareOffer = normalizedEvent === "voice_screen_share_offer";
   const operationalTemperature = isVoiceSessionEnd ? 0.35 : 0.55;
   const operationalMaxOutputTokens = isVoiceSessionEnd ? 60 : isScreenShareOffer ? 140 : 100;
   const outputCharLimit = clamp(Number(maxOutputChars) || 180, 80, 700);
+  const statusRequesterText = isVoiceStatusRequest
+    ? String(detailsPayload?.requestText || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 220)
+    : "";
 
   const tunedSettings = {
     ...settings,
@@ -104,8 +127,18 @@ export async function composeVoiceOperationalMessage(runtime, {
     allowSkip
       ? "Write one short user-facing message for the text channel only if it's actually helpful."
       : "Write exactly one short user-facing message for the text channel.",
+    "Stay in character as a regular server member with your usual voice, not a dashboard logger.",
     ...operationalGuidance,
     "For voice_session_end, keep it to one brief sentence (4-12 words).",
+    isVoiceStatusRequest
+      ? "For voice_status_request, answer the user's actual ask first in character using Details JSON."
+      : "",
+    isVoiceStatusRequest
+      ? "Default to a direct presence check answer for check-in questions; include extra metrics only when asked."
+      : "",
+    isVoiceStatusRequest
+      ? "Do not dump every status field by default."
+      : "",
     isScreenShareOffer
       ? "If Details JSON includes linkUrl, include that exact URL unchanged in the final message."
       : "",
@@ -121,7 +154,14 @@ export async function composeVoiceOperationalMessage(runtime, {
   const userPrompt = [
     `Event: ${String(event || "voice_runtime")}`,
     `Reason: ${String(reason || "unknown")}`,
-    `Details JSON: ${serializeForPrompt(details, 1400)}`,
+    `Details JSON: ${serializeForPrompt(detailsPayload, 1400)}`,
+    statusRequesterText ? `Requester text: ${statusRequesterText}` : "",
+    isVoiceStatusRequest
+      ? "Status field meanings: elapsedSeconds=time already in VC; inactivitySeconds=time until inactivity auto-leave; remainingSeconds=time until max session time cap; activeCaptures=current live inbound captures."
+      : "",
+    isVoiceStatusRequest
+      ? "Answer the requester text directly. If they asked a yes/no presence question, lead with that answer and keep timers secondary."
+      : "",
     operationalMemoryHints.length
       ? `Relevant durable memory (use only if directly useful): ${operationalMemoryHints.join(" | ")}`
       : "",
@@ -186,6 +226,7 @@ export async function generateVoiceTurnReply(runtime, {
   contextMessages = [],
   sessionId = null,
   isEagerTurn = false,
+  sessionTiming = null,
   joinWindowActive = false,
   joinWindowAgeMs = null,
   voiceEagerness = 0,
@@ -228,6 +269,7 @@ export async function generateVoiceTurnReply(runtime, {
       typeof runtime.runModelRequestedWebSearch === "function" &&
       typeof runtime.buildWebSearchContext === "function"
   );
+  const allowOpenArticleDirective = Boolean(typeof runtime.search?.readPageSummary === "function");
   const screenShare = resolveVoiceScreenShareCapability(runtime, {
     settings,
     guildId,
@@ -251,7 +293,9 @@ export async function generateVoiceTurnReply(runtime, {
       : []),
     ...(allowSoundboardDirective ? ["[[SOUNDBOARD:<sound_ref>]]"] : []),
     ...(allowWebSearchDirective ? ["[[WEB_SEARCH:<concise query>]]"] : []),
-    ...(allowScreenShareDirective ? ["[[SCREEN_SHARE_LINK]]"] : [])
+    ...(allowOpenArticleDirective ? ["[[OPEN_ARTICLE:<article_ref>]]"] : []),
+    ...(allowScreenShareDirective ? ["[[SCREEN_SHARE_LINK]]"] : []),
+    "[[LEAVE_VC]]"
   ];
   const directivesLine = allowedDirectives.length
     ? `Allowed optional trailing directives: ${allowedDirectives.join(", ")}.`
@@ -354,7 +398,13 @@ export async function generateVoiceTurnReply(runtime, {
           canSearch: false
         }
       };
+  let openArticleCandidates = buildOpenArticleCandidates({
+    webSearch,
+    recentWebLookups
+  });
+  let openedArticle = null;
   let usedWebSearchFollowup = false;
+  let usedOpenArticleFollowup = false;
   const effectiveJoinWindowActive =
     Boolean(joinWindowActive) || Boolean(conversationContext?.joinWindowActive);
   const explicitJoinWindowAgeMs = Number(joinWindowAgeMs);
@@ -388,7 +438,10 @@ export async function generateVoiceTurnReply(runtime, {
     .join("\n");
   const buildVoiceUserPrompt = ({
     webSearchContext = webSearch,
-    allowWebSearch = allowWebSearchDirective
+    allowWebSearch = allowWebSearchDirective,
+    openArticleCandidatesContext = openArticleCandidates,
+    openedArticleContext = openedArticle,
+    allowOpenArticle = allowOpenArticleDirective
   } = {}) =>
     buildVoiceTurnPrompt({
       speakerName,
@@ -398,6 +451,7 @@ export async function generateVoiceTurnReply(runtime, {
       isEagerTurn,
       voiceEagerness,
       conversationContext,
+      sessionTiming,
       joinWindowActive: effectiveJoinWindowActive,
       joinWindowAgeMs: effectiveJoinWindowAgeMs,
       botName: getPromptBotName(settings),
@@ -407,7 +461,10 @@ export async function generateVoiceTurnReply(runtime, {
       memoryEnabled: Boolean(settings.memory?.enabled),
       webSearch: webSearchContext,
       recentWebLookups,
+      openArticleCandidates: openArticleCandidatesContext,
+      openedArticle: openedArticleContext,
       allowWebSearchDirective: allowWebSearch,
+      allowOpenArticleDirective: allowOpenArticle,
       screenShare,
       allowScreenShareDirective
     });
@@ -490,13 +547,18 @@ export async function generateVoiceTurnReply(runtime, {
           });
         }
       }
+      openArticleCandidates = buildOpenArticleCandidates({
+        webSearch,
+        recentWebLookups
+      });
 
       generation = await runtime.llm.generate({
         settings: tunedSettings,
         systemPrompt,
         userPrompt: buildVoiceUserPrompt({
           webSearchContext: webSearch,
-          allowWebSearch: false
+          allowWebSearch: false,
+          openArticleCandidatesContext: openArticleCandidates
         }),
         contextMessages: normalizedContextMessages,
         trace: {
@@ -505,6 +567,79 @@ export async function generateVoiceTurnReply(runtime, {
           userId,
           source: "voice_stt_pipeline_generation",
           event: sessionId ? "voice_session_lookup_followup" : "voice_turn_lookup_followup"
+        }
+      });
+      parsed = parseReplyDirectives(generation.text, resolveMaxMediaPromptLen(settings));
+    }
+
+    openArticleCandidates = buildOpenArticleCandidates({
+      webSearch,
+      recentWebLookups
+    });
+
+    if (allowOpenArticleDirective && parsed.openArticleRef) {
+      usedOpenArticleFollowup = true;
+      const requestedRef = normalizeOpenArticleRef(parsed.openArticleRef);
+      const resolvedOpenArticle = resolveOpenArticleCandidate({
+        ref: requestedRef,
+        candidates: openArticleCandidates
+      });
+
+      if (resolvedOpenArticle) {
+        let openArticleError = "";
+        let openArticleResult = null;
+        try {
+          openArticleResult = await runtime.search.readPageSummary(
+            resolvedOpenArticle.url,
+            resolveVoiceOpenArticleMaxChars(settings)
+          );
+        } catch (error) {
+          openArticleError = String(error?.message || error);
+        }
+
+        const openedContent = String(openArticleResult?.summary || "").trim();
+        openedArticle = {
+          ref: resolvedOpenArticle.ref,
+          title: String(openArticleResult?.title || resolvedOpenArticle.title || "").trim() || null,
+          url: resolvedOpenArticle.url,
+          domain: resolvedOpenArticle.domain,
+          query: resolvedOpenArticle.query,
+          extractionMethod: String(openArticleResult?.extractionMethod || "").trim() || null,
+          content: openedContent,
+          error:
+            openArticleError ||
+            (openedContent ? "" : "opened article had no usable text")
+        };
+      } else {
+        openedArticle = {
+          ref: requestedRef,
+          title: null,
+          url: "",
+          domain: "",
+          query: "",
+          extractionMethod: null,
+          content: "",
+          error: "could not resolve that article ref from cached lookup results"
+        };
+      }
+
+      generation = await runtime.llm.generate({
+        settings: tunedSettings,
+        systemPrompt,
+        userPrompt: buildVoiceUserPrompt({
+          webSearchContext: webSearch,
+          allowWebSearch: false,
+          openArticleCandidatesContext: openArticleCandidates,
+          openedArticleContext: openedArticle,
+          allowOpenArticle: false
+        }),
+        contextMessages: normalizedContextMessages,
+        trace: {
+          guildId,
+          channelId,
+          userId,
+          source: "voice_stt_pipeline_generation",
+          event: sessionId ? "voice_session_open_article_followup" : "voice_turn_open_article_followup"
         }
       });
       parsed = parseReplyDirectives(generation.text, resolveMaxMediaPromptLen(settings));
@@ -536,32 +671,42 @@ export async function generateVoiceTurnReply(runtime, {
       }
     }
 
-    let soundboardRef = allowSoundboardDirective
+    const soundboardRef = allowSoundboardDirective
       ? String(parsed.soundboardRef || "")
           .trim()
           .slice(0, 180) || null
       : null;
+    const leaveVoiceChannelRequested = Boolean(parsed.leaveVoiceChannelRequested);
     const baseText = sanitizeBotText(normalizeSkipSentinel(parsed.text || generation.text || ""), 520);
     const finalText = sanitizeSoundboardSpeechLeak({
       text: baseText,
       soundboardRef,
       soundboardCandidates: normalizedSoundboardCandidates
     });
-    if ((!finalText || finalText === "[SKIP]") && !soundboardRef) {
+    if ((!finalText || finalText === "[SKIP]") && !soundboardRef && !leaveVoiceChannelRequested) {
       return {
         text: "",
         soundboardRef: null,
         usedWebSearchFollowup,
+        usedOpenArticleFollowup,
         usedScreenShareOffer
       };
     }
     if (!finalText || finalText === "[SKIP]") {
-      return {
+      const response = {
         text: "",
         soundboardRef,
         usedWebSearchFollowup,
+        usedOpenArticleFollowup,
         usedScreenShareOffer
       };
+      if (leaveVoiceChannelRequested) {
+        return {
+          ...response,
+          leaveVoiceChannelRequested: true
+        };
+      }
+      return response;
     }
 
     if (settings.memory?.enabled && parsed.memoryLine && runtime.memory?.rememberDirectiveLine && userId) {
@@ -592,12 +737,20 @@ export async function generateVoiceTurnReply(runtime, {
         .catch(() => undefined);
     }
 
-    return {
+    const response = {
       text: finalText,
       soundboardRef,
       usedWebSearchFollowup,
+      usedOpenArticleFollowup,
       usedScreenShareOffer
     };
+    if (leaveVoiceChannelRequested) {
+      return {
+        ...response,
+        leaveVoiceChannelRequested: true
+      };
+    }
+    return response;
   } catch (error) {
     runtime.store.logAction({
       kind: "voice_error",
@@ -640,6 +793,119 @@ function resolveVoiceWebSearchTimeoutMs({ settings, overrideMs }) {
   const configured = Number(settings?.voice?.webSearchTimeoutMs);
   const raw = Number.isFinite(explicit) ? explicit : Number.isFinite(configured) ? configured : 8000;
   return clamp(Math.floor(raw), 500, 45000);
+}
+
+function resolveVoiceOpenArticleMaxChars(settings) {
+  const configured = Number(settings?.webSearch?.maxCharsPerPage);
+  const atLeastDefault = Number.isFinite(configured)
+    ? Math.max(Math.floor(configured), OPEN_ARTICLE_DEFAULT_MAX_CHARS)
+    : OPEN_ARTICLE_DEFAULT_MAX_CHARS;
+  return clamp(atLeastDefault, 2_000, 24_000);
+}
+
+function normalizeOpenArticleRef(rawRef) {
+  const normalized = String(rawRef || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, OPEN_ARTICLE_REF_MAX_LEN);
+  return normalized || "first";
+}
+
+function buildOpenArticleCandidates({ webSearch, recentWebLookups }) {
+  const candidates = [];
+  const seenUrls = new Set();
+  const pushCandidate = ({
+    ref,
+    title,
+    url,
+    domain,
+    query
+  }) => {
+    const normalizedRef = String(ref || "").trim();
+    const normalizedUrl = String(url || "").trim();
+    if (!normalizedRef || !normalizedUrl || seenUrls.has(normalizedUrl)) return;
+    seenUrls.add(normalizedUrl);
+    candidates.push({
+      ref: normalizedRef,
+      title: String(title || "untitled").trim() || "untitled",
+      url: normalizedUrl,
+      domain: String(domain || "").trim(),
+      query: String(query || "").trim()
+    });
+  };
+
+  const currentResults = (Array.isArray(webSearch?.results) ? webSearch.results : [])
+    .slice(0, OPEN_ARTICLE_RESULTS_PER_ROW);
+  for (let index = 0; index < currentResults.length; index += 1) {
+    const row = currentResults[index];
+    const url = String(row?.url || "").trim();
+    if (!url) continue;
+    pushCandidate({
+      ref: `R0:${index + 1}`,
+      title: row?.title,
+      url,
+      domain: row?.domain,
+      query: webSearch?.query || ""
+    });
+  }
+
+  const cachedRows = (Array.isArray(recentWebLookups) ? recentWebLookups : []).slice(0, OPEN_ARTICLE_ROW_LIMIT);
+  for (let rowIndex = 0; rowIndex < cachedRows.length; rowIndex += 1) {
+    const row = cachedRows[rowIndex];
+    const rowResults = (Array.isArray(row?.results) ? row.results : []).slice(0, OPEN_ARTICLE_RESULTS_PER_ROW);
+    for (let resultIndex = 0; resultIndex < rowResults.length; resultIndex += 1) {
+      const result = rowResults[resultIndex];
+      const url = String(result?.url || "").trim();
+      if (!url) continue;
+      pushCandidate({
+        ref: `R${rowIndex + 1}:${resultIndex + 1}`,
+        title: result?.title,
+        url,
+        domain: result?.domain,
+        query: row?.query
+      });
+    }
+  }
+
+  if (!candidates.length) return [];
+  const first = candidates[0];
+  const withAliases = [first, ...candidates.slice(1)];
+  if (first) {
+    withAliases.unshift({
+      ...first,
+      ref: "first"
+    });
+  }
+  return withAliases.slice(0, OPEN_ARTICLE_MAX_CANDIDATES);
+}
+
+function resolveOpenArticleCandidate({ ref, candidates }) {
+  const normalizedRef = normalizeOpenArticleRef(ref).toLowerCase();
+  const rows = Array.isArray(candidates) ? candidates : [];
+  if (!rows.length) return null;
+
+  if (normalizedRef === "first") {
+    return rows.find((row) => String(row?.ref || "").toLowerCase() === "first") || rows[0];
+  }
+
+  const exact = rows.find((row) => String(row?.ref || "").toLowerCase() === normalizedRef);
+  if (exact) return exact;
+
+  if (OPEN_ARTICLE_URL_RE.test(normalizedRef)) {
+    return rows.find((row) => String(row?.url || "").toLowerCase() === normalizedRef) || null;
+  }
+
+  if (OPEN_ARTICLE_INDEX_REF_RE.test(normalizedRef)) {
+    const wantedIndex = Number(normalizedRef);
+    if (Number.isInteger(wantedIndex) && wantedIndex > 0) {
+      const indexedRows = rows.filter((row) =>
+        OPEN_ARTICLE_ROW_REF_RE.test(String(row?.ref || ""))
+      );
+      return indexedRows[wantedIndex - 1] || null;
+    }
+  }
+
+  return null;
 }
 
 function sanitizeSoundboardSpeechLeak({

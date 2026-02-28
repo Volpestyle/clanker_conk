@@ -10,16 +10,19 @@ const VIDEO_PROMPT_DIRECTIVE_RE = /\[\[VIDEO_PROMPT:\s*([^\]]*?)\s*\]\]\s*$/i;
 const GIF_QUERY_DIRECTIVE_RE = /\[\[GIF_QUERY:\s*([^\]]*?)\s*\]\]\s*$/i;
 const REACTION_DIRECTIVE_RE = /\[\[REACTION:\s*([^\]]*?)\s*\]\]\s*$/i;
 const WEB_SEARCH_DIRECTIVE_RE = /\[\[WEB_SEARCH:\s*([^\]]*?)\s*\]\]\s*$/i;
+const OPEN_ARTICLE_DIRECTIVE_RE = /\[\[OPEN_ARTICLE:\s*([^\]]*?)\s*\]\]\s*$/i;
 const MEMORY_LINE_DIRECTIVE_RE = /\[\[MEMORY_LINE:\s*([^\]]*?)\s*\]\]\s*$/i;
 const SELF_MEMORY_LINE_DIRECTIVE_RE = /\[\[SELF_MEMORY_LINE:\s*([^\]]*?)\s*\]\]\s*$/i;
 const SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*([^\]]*?)\s*\]\]\s*$/i;
 const SCREEN_SHARE_LINK_DIRECTIVE_RE = /\[\[SCREEN_SHARE_LINK\]\]\s*$/i;
+const LEAVE_VC_DIRECTIVE_RE = /\[\[LEAVE_VC\]\]\s*$/i;
 const WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
 const DEFAULT_MAX_MEDIA_PROMPT_LEN = 900;
 const MAX_MEDIA_PROMPT_FLOOR = 120;
 const MAX_MEDIA_PROMPT_CEILING = 2000;
 export const MAX_WEB_QUERY_LEN = 220;
 export const MAX_GIF_QUERY_LEN = 120;
+const MAX_OPEN_ARTICLE_REF_LEN = 260;
 const MAX_MEMORY_LINE_LEN = 180;
 const MAX_SOUNDBOARD_REF_LEN = 180;
 export const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
@@ -480,10 +483,12 @@ export function parseReplyDirectives(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_
     mediaDirective: null,
     reactionEmoji: null,
     webSearchQuery: null,
+    openArticleRef: null,
     memoryLine: null,
     selfMemoryLine: null,
     soundboardRef: null,
-    screenShareLinkRequested: false
+    screenShareLinkRequested: false,
+    leaveVoiceChannelRequested: false
   };
 
   while (parsed.text) {
@@ -557,6 +562,16 @@ export function parseReplyDirectives(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_
       continue;
     }
 
+    const openArticleMatch = parsed.text.match(OPEN_ARTICLE_DIRECTIVE_RE);
+    if (openArticleMatch) {
+      if (!parsed.openArticleRef) {
+        parsed.openArticleRef =
+          normalizeDirectiveText(openArticleMatch[1], MAX_OPEN_ARTICLE_REF_LEN) || "first";
+      }
+      parsed.text = parsed.text.slice(0, openArticleMatch.index).trim();
+      continue;
+    }
+
     const memoryMatch = parsed.text.match(MEMORY_LINE_DIRECTIVE_RE);
     if (memoryMatch) {
       if (!parsed.memoryLine) {
@@ -588,6 +603,13 @@ export function parseReplyDirectives(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_
     if (screenShareMatch) {
       parsed.screenShareLinkRequested = true;
       parsed.text = parsed.text.slice(0, screenShareMatch.index).trim();
+      continue;
+    }
+
+    const leaveVcMatch = parsed.text.match(LEAVE_VC_DIRECTIVE_RE);
+    if (leaveVcMatch) {
+      parsed.leaveVoiceChannelRequested = true;
+      parsed.text = parsed.text.slice(0, leaveVcMatch.index).trim();
       continue;
     }
 

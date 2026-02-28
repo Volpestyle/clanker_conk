@@ -39,6 +39,7 @@ import {
   shouldUseLlmForLowSignalTurn,
   resolveRealtimeTurnTranscriptionPlan
 } from "./voiceDecisionRuntime.ts";
+import { defaultModelForLlmProvider, normalizeLlmProvider } from "../llm/llmHelpers.ts";
 import {
   enableWatchStreamForUser,
   generateVisionFallbackStreamWatchCommentary,
@@ -150,9 +151,21 @@ import {
   VOICE_MEMBERSHIP_EVENT_FRESH_MS,
   VOICE_MEMBERSHIP_EVENT_MAX_TRACKED,
   VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT,
+  VOICE_THOUGHT_LOOP_BUSY_RETRY_MS,
+  VOICE_THOUGHT_LOOP_MAX_INTERVAL_SECONDS,
+  VOICE_THOUGHT_LOOP_MAX_SILENCE_SECONDS,
+  VOICE_THOUGHT_LOOP_MIN_INTERVAL_SECONDS,
+  VOICE_THOUGHT_LOOP_MIN_SILENCE_SECONDS,
+  VOICE_THOUGHT_MAX_CHARS,
   VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS,
   VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
+  VOICE_FALLBACK_NOISE_GATE_ACTIVE_RATIO_MAX,
+  VOICE_FALLBACK_NOISE_GATE_MAX_CLIP_MS,
+  VOICE_FALLBACK_NOISE_GATE_PEAK_MAX,
+  VOICE_FALLBACK_NOISE_GATE_RMS_MAX,
+  VOICE_INACTIVITY_WARNING_SECONDS,
   VOICE_DECIDER_HISTORY_MAX_TURNS,
+  VOICE_MAX_DURATION_WARNING_SECONDS,
   VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS,
   VOICE_LOOKUP_BUSY_LOG_COOLDOWN_MS,
   VOICE_SILENCE_GATE_ACTIVE_RATIO_MAX,
@@ -280,6 +293,16 @@ export class VoiceSessionManager {
             ? new Date(session.lastDirectAddressAt).toISOString()
             : null,
           lastDirectAddressUserId: session.lastDirectAddressUserId || null,
+          thoughtEngine: {
+            busy: Boolean(session.thoughtLoopBusy),
+            nextAttemptAt: session.nextThoughtAt ? new Date(session.nextThoughtAt).toISOString() : null,
+            lastAttemptAt: session.lastThoughtAttemptAt
+              ? new Date(session.lastThoughtAttemptAt).toISOString()
+              : null,
+            lastSpokenAt: session.lastThoughtSpokenAt
+              ? new Date(session.lastThoughtSpokenAt).toISOString()
+              : null
+          },
           modelContext: {
             generation: generationSummary,
             decider: deciderSummary,
@@ -386,6 +409,10 @@ export class VoiceSessionManager {
 
     const guildId = String(message.guild.id);
     const session = this.sessions.get(guildId);
+    const requestText = String(message?.content || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 220);
 
     if (!session) {
       await this.sendOperationalMessage({
@@ -426,7 +453,8 @@ export class VoiceSessionManager {
         inactivitySeconds: inactivitySeconds ?? null,
         activeCaptures: session.userCaptures.size,
         streamWatchActive: Boolean(session.streamWatch?.active),
-        streamWatchTargetUserId: session.streamWatch?.targetUserId || null
+        streamWatchTargetUserId: session.streamWatch?.targetUserId || null,
+        requestText: requestText || null
       }
     });
 
@@ -819,7 +847,7 @@ export class VoiceSessionManager {
 
   startSessionTimers(session, settings) {
     const maxSessionMinutes = clamp(
-      Number(settings.voice?.maxSessionMinutes) || 10,
+      Number(settings.voice?.maxSessionMinutes) || 30,
       MIN_MAX_SESSION_MINUTES,
       MAX_MAX_SESSION_MINUTES
     );
@@ -842,8 +870,10 @@ export class VoiceSessionManager {
     const session = this.sessions.get(String(guildId));
     if (!session) return;
 
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+
     const inactivitySeconds = clamp(
-      Number(settings?.voice?.inactivityLeaveSeconds) || 90,
+      Number(resolvedSettings?.voice?.inactivityLeaveSeconds) || 300,
       MIN_INACTIVITY_SECONDS,
       MAX_INACTIVITY_SECONDS
     );
@@ -857,9 +887,52 @@ export class VoiceSessionManager {
         guildId: session.guildId,
         reason: "inactivity_timeout",
         announcement: `no one talked for ${inactivitySeconds}s, leaving vc.`,
-        settings
+        settings: resolvedSettings
       }).catch(() => undefined);
     }, inactivitySeconds * 1000);
+
+    this.scheduleVoiceThoughtLoop({
+      session,
+      settings: resolvedSettings
+    });
+  }
+
+  buildVoiceSessionTimingContext(session) {
+    if (!session || typeof session !== "object") return null;
+
+    const now = Date.now();
+    const maxEndsAt = Number(session.maxEndsAt);
+    const inactivityEndsAt = Number(session.inactivityEndsAt);
+    const maxSecondsRemaining = Number.isFinite(maxEndsAt)
+      ? Math.max(0, Math.ceil((maxEndsAt - now) / 1000))
+      : null;
+    const inactivitySecondsRemaining = Number.isFinite(inactivityEndsAt)
+      ? Math.max(0, Math.ceil((inactivityEndsAt - now) / 1000))
+      : null;
+
+    const maxDurationWarningActive =
+      Number.isFinite(maxSecondsRemaining) && maxSecondsRemaining <= VOICE_MAX_DURATION_WARNING_SECONDS;
+    const inactivityWarningActive =
+      Number.isFinite(inactivitySecondsRemaining) && inactivitySecondsRemaining <= VOICE_INACTIVITY_WARNING_SECONDS;
+
+    let timeoutWarningReason = "none";
+    if (maxDurationWarningActive && inactivityWarningActive) {
+      timeoutWarningReason =
+        maxSecondsRemaining <= inactivitySecondsRemaining
+          ? "max_duration"
+          : "inactivity";
+    } else if (maxDurationWarningActive) {
+      timeoutWarningReason = "max_duration";
+    } else if (inactivityWarningActive) {
+      timeoutWarningReason = "inactivity";
+    }
+
+    return {
+      timeoutWarningActive: maxDurationWarningActive || inactivityWarningActive,
+      timeoutWarningReason,
+      maxSecondsRemaining,
+      inactivitySecondsRemaining
+    };
   }
 
   bindAudioPlayerHandlers(session) {
@@ -1541,6 +1614,579 @@ export class VoiceSessionManager {
       }
       session.userCaptures?.delete?.(String(userId || ""));
     }
+  }
+
+  resolveVoiceThoughtEngineConfig(settings = null) {
+    const resolvedSettings = settings || this.store.getSettings();
+    const voiceSettings = resolvedSettings?.voice || {};
+    const thoughtEngine = voiceSettings?.thoughtEngine || {};
+    const enabled =
+      thoughtEngine?.enabled !== undefined ? Boolean(thoughtEngine.enabled) : true;
+    const provider = normalizeLlmProvider(
+      thoughtEngine?.provider,
+      voiceSettings?.generationLlm?.provider || "anthropic"
+    );
+    const configuredModel = String(thoughtEngine?.model || "").trim().slice(0, 120);
+    const model = configuredModel || defaultModelForLlmProvider(provider);
+    const minSilenceSeconds = clamp(
+      Number(thoughtEngine?.minSilenceSeconds) || 20,
+      VOICE_THOUGHT_LOOP_MIN_SILENCE_SECONDS,
+      VOICE_THOUGHT_LOOP_MAX_SILENCE_SECONDS
+    );
+    const minSecondsBetweenThoughts = clamp(
+      Number(thoughtEngine?.minSecondsBetweenThoughts) || minSilenceSeconds,
+      VOICE_THOUGHT_LOOP_MIN_INTERVAL_SECONDS,
+      VOICE_THOUGHT_LOOP_MAX_INTERVAL_SECONDS
+    );
+
+    return {
+      enabled,
+      provider,
+      model,
+      minSilenceSeconds,
+      minSecondsBetweenThoughts
+    };
+  }
+
+  clearVoiceThoughtLoopTimer(session) {
+    if (!session) return;
+    if (session.thoughtLoopTimer) {
+      clearTimeout(session.thoughtLoopTimer);
+      session.thoughtLoopTimer = null;
+    }
+    session.nextThoughtAt = 0;
+  }
+
+  scheduleVoiceThoughtLoop({
+    session,
+    settings = null,
+    delayMs = null
+  }) {
+    if (!session || session.ending) return;
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    const thoughtConfig = this.resolveVoiceThoughtEngineConfig(resolvedSettings);
+    this.clearVoiceThoughtLoopTimer(session);
+    if (!thoughtConfig.enabled) return;
+
+    const defaultDelayMs = thoughtConfig.minSilenceSeconds * 1000;
+    const requestedDelayMs = Number(delayMs);
+    const waitMs = Math.max(
+      120,
+      Number.isFinite(requestedDelayMs) ? Math.round(requestedDelayMs) : defaultDelayMs
+    );
+    session.nextThoughtAt = Date.now() + waitMs;
+    session.thoughtLoopTimer = setTimeout(() => {
+      session.thoughtLoopTimer = null;
+      session.nextThoughtAt = 0;
+      this.maybeRunVoiceThoughtLoop({
+        session,
+        settings: session.settingsSnapshot || this.store.getSettings(),
+        trigger: "timer"
+      }).catch(() => undefined);
+    }, waitMs);
+  }
+
+  evaluateVoiceThoughtLoopGate({
+    session,
+    settings = null,
+    config = null,
+    now = Date.now()
+  }) {
+    if (!session || session.ending) {
+      return {
+        allow: false,
+        reason: "session_inactive",
+        retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
+      };
+    }
+
+    const thoughtConfig = config || this.resolveVoiceThoughtEngineConfig(settings);
+    if (!thoughtConfig.enabled) {
+      return {
+        allow: false,
+        reason: "thought_engine_disabled",
+        retryAfterMs: thoughtConfig.minSilenceSeconds * 1000
+      };
+    }
+
+    const minSilenceMs = thoughtConfig.minSilenceSeconds * 1000;
+    const minIntervalMs = thoughtConfig.minSecondsBetweenThoughts * 1000;
+    const silentDurationMs = Math.max(0, now - Number(session.lastActivityAt || 0));
+    if (silentDurationMs < minSilenceMs) {
+      return {
+        allow: false,
+        reason: "silence_window_not_met",
+        retryAfterMs: Math.max(200, minSilenceMs - silentDurationMs)
+      };
+    }
+
+    const sinceLastAttemptMs = Math.max(0, now - Number(session.lastThoughtAttemptAt || 0));
+    if (sinceLastAttemptMs < minIntervalMs) {
+      return {
+        allow: false,
+        reason: "thought_attempt_cooldown",
+        retryAfterMs: Math.max(300, minIntervalMs - sinceLastAttemptMs)
+      };
+    }
+
+    if (session.thoughtLoopBusy) {
+      return {
+        allow: false,
+        reason: "thought_loop_busy",
+        retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
+      };
+    }
+    if (session.botTurnOpen) {
+      return {
+        allow: false,
+        reason: "bot_turn_open",
+        retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
+      };
+    }
+    if (Number(session.voiceLookupBusyCount || 0) > 0) {
+      return {
+        allow: false,
+        reason: "voice_lookup_busy",
+        retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
+      };
+    }
+    if (Number(session.userCaptures?.size || 0) > 0) {
+      return {
+        allow: false,
+        reason: "active_user_capture",
+        retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
+      };
+    }
+    if (session.pendingResponse) {
+      return {
+        allow: false,
+        reason: "pending_realtime_response",
+        retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
+      };
+    }
+    if (Number(session.pendingSttTurns || 0) > 0) {
+      return {
+        allow: false,
+        reason: "pending_stt_turns",
+        retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
+      };
+    }
+    if (this.getRealtimeTurnBacklogSize(session) > 0) {
+      return {
+        allow: false,
+        reason: "pending_realtime_turns",
+        retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
+      };
+    }
+    if (Array.isArray(session.pendingDeferredTurns) && session.pendingDeferredTurns.length > 0) {
+      return {
+        allow: false,
+        reason: "pending_deferred_turns",
+        retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
+      };
+    }
+    if (this.countHumanVoiceParticipants(session) <= 0) {
+      return {
+        allow: false,
+        reason: "no_human_participants",
+        retryAfterMs: minSilenceMs
+      };
+    }
+
+    return {
+      allow: true,
+      reason: "ok",
+      retryAfterMs: minIntervalMs
+    };
+  }
+
+  async maybeRunVoiceThoughtLoop({
+    session,
+    settings = null,
+    trigger = "timer"
+  }) {
+    if (!session || session.ending) return false;
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    const thoughtConfig = this.resolveVoiceThoughtEngineConfig(resolvedSettings);
+    if (!thoughtConfig.enabled) {
+      this.clearVoiceThoughtLoopTimer(session);
+      return false;
+    }
+
+    const gate = this.evaluateVoiceThoughtLoopGate({
+      session,
+      settings: resolvedSettings,
+      config: thoughtConfig
+    });
+    if (!gate.allow) {
+      this.scheduleVoiceThoughtLoop({
+        session,
+        settings: resolvedSettings,
+        delayMs: gate.retryAfterMs
+      });
+      return false;
+    }
+
+    const thoughtChance = clamp(Number(resolvedSettings?.voice?.replyEagerness) || 0, 0, 100) / 100;
+    const now = Date.now();
+    session.lastThoughtAttemptAt = now;
+    if (thoughtChance <= 0) {
+      this.scheduleVoiceThoughtLoop({
+        session,
+        settings: resolvedSettings,
+        delayMs: thoughtConfig.minSecondsBetweenThoughts * 1000
+      });
+      return false;
+    }
+
+    const roll = Math.random();
+    if (roll > thoughtChance) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "voice_thought_skipped_probability",
+        metadata: {
+          sessionId: session.id,
+          mode: session.mode,
+          trigger: String(trigger || "timer"),
+          replyEagerness: Math.round(thoughtChance * 100),
+          roll: Number(roll.toFixed(5))
+        }
+      });
+      this.scheduleVoiceThoughtLoop({
+        session,
+        settings: resolvedSettings,
+        delayMs: thoughtConfig.minSecondsBetweenThoughts * 1000
+      });
+      return false;
+    }
+
+    session.thoughtLoopBusy = true;
+    try {
+      const thoughtCandidate = await this.generateVoiceThoughtCandidate({
+        session,
+        settings: resolvedSettings,
+        config: thoughtConfig,
+        trigger
+      });
+      if (!thoughtCandidate) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.client.user?.id || null,
+          content: "voice_thought_generation_skip",
+          metadata: {
+            sessionId: session.id,
+            mode: session.mode,
+            trigger: String(trigger || "timer")
+          }
+        });
+        return false;
+      }
+
+      const decision = await this.evaluateVoiceThoughtDecision({
+        session,
+        settings: resolvedSettings,
+        thoughtCandidate
+      });
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "voice_thought_decision",
+        metadata: {
+          sessionId: session.id,
+          mode: session.mode,
+          trigger: String(trigger || "timer"),
+          allow: Boolean(decision.allow),
+          reason: decision.reason,
+          thoughtCandidate,
+          llmResponse: decision.llmResponse || null,
+          llmProvider: decision.llmProvider || null,
+          llmModel: decision.llmModel || null,
+          error: decision.error || null
+        }
+      });
+      if (!decision.allow) return false;
+
+      const spoken = await this.deliverVoiceThoughtCandidate({
+        session,
+        settings: resolvedSettings,
+        thoughtCandidate,
+        trigger
+      });
+      if (spoken) {
+        session.lastThoughtSpokenAt = Date.now();
+      }
+      return spoken;
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: `voice_thought_loop_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          mode: session.mode,
+          trigger: String(trigger || "timer")
+        }
+      });
+      return false;
+    } finally {
+      session.thoughtLoopBusy = false;
+      this.scheduleVoiceThoughtLoop({
+        session,
+        settings: resolvedSettings,
+        delayMs: thoughtConfig.minSecondsBetweenThoughts * 1000
+      });
+    }
+  }
+
+  async generateVoiceThoughtCandidate({
+    session,
+    settings,
+    config,
+    trigger = "timer"
+  }) {
+    if (!session || session.ending) return "";
+    if (!this.llm?.generate) return "";
+
+    const thoughtConfig = config || this.resolveVoiceThoughtEngineConfig(settings);
+    const participants = this.getVoiceChannelParticipants(session).map((entry) => entry.displayName).filter(Boolean);
+    const recentHistory = this.formatVoiceDecisionHistory(session, 6, VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS);
+    const replyEagerness = clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
+    const silenceMs = Math.max(0, Date.now() - Number(session.lastActivityAt || 0));
+    const botName = getPromptBotName(settings);
+    const systemPrompt = [
+      `You are the internal thought engine for ${botName} in live Discord voice chat.`,
+      "Draft exactly one short natural spoken line that might fit right now.",
+      "Thought style: freedom to reflect the social atmosphere. Try to catch a vibe.",
+      "It can be funny, insightful, witty, serious, frustrated, or even a short train-of-thought blurb when that still feels socially natural.",
+      "It is valid to reflect the bot's current mood/persona.",
+      "If there is no good line, output exactly [SKIP].",
+      "No markdown, no quotes, no meta commentary, no soundboard directives."
+    ].join("\n");
+    const userPromptParts = [
+      `Current humans in VC: ${participants.length || 0}.`,
+      participants.length ? `Participant names: ${participants.slice(0, 12).join(", ")}.` : "Participant names: none.",
+      `Reply eagerness setting: ${replyEagerness}/100.`,
+      `Silence duration ms: ${Math.max(0, Math.round(silenceMs))}.`,
+      "Goal: seed a light initiative line that can keep conversation moving without forcing it."
+    ];
+    if (recentHistory) {
+      userPromptParts.push(`Recent voice turns:\n${recentHistory}`);
+    }
+    const userPrompt = userPromptParts.join("\n");
+    const generationSettings = {
+      ...settings,
+      llm: {
+        ...(settings?.llm || {}),
+        provider: thoughtConfig.provider,
+        model: thoughtConfig.model,
+        temperature: clamp(Number(settings?.llm?.temperature) || 0.8, 0.2, 1.2),
+        maxOutputTokens: 96
+      }
+    };
+
+    const generation = await this.llm.generate({
+      settings: generationSettings,
+      systemPrompt,
+      userPrompt,
+      contextMessages: [],
+      trace: {
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        source: "voice_thought_generation",
+        event: String(trigger || "timer")
+      }
+    });
+    const thoughtRaw = String(generation?.text || "").trim();
+    const thoughtNoDirective = extractSoundboardDirective(thoughtRaw).text;
+    const thoughtCandidate = normalizeVoiceText(thoughtNoDirective, VOICE_THOUGHT_MAX_CHARS);
+    if (!thoughtCandidate || thoughtCandidate === "[SKIP]") {
+      return "";
+    }
+    return thoughtCandidate;
+  }
+
+  async evaluateVoiceThoughtDecision({
+    session,
+    settings,
+    thoughtCandidate
+  }) {
+    const normalizedThought = normalizeVoiceText(thoughtCandidate, VOICE_THOUGHT_MAX_CHARS);
+    if (!normalizedThought) {
+      return {
+        allow: false,
+        reason: "empty_thought_candidate"
+      };
+    }
+
+    const replyDecisionLlm = settings?.voice?.replyDecisionLlm || {};
+    const classifierEnabled =
+      replyDecisionLlm?.enabled !== undefined ? Boolean(replyDecisionLlm.enabled) : true;
+    if (!classifierEnabled) {
+      return {
+        allow: true,
+        reason: "classifier_disabled"
+      };
+    }
+    if (!this.llm?.generate) {
+      return {
+        allow: false,
+        reason: "llm_generate_unavailable"
+      };
+    }
+
+    const llmProvider = normalizeVoiceReplyDecisionProvider(replyDecisionLlm?.provider);
+    const llmModel = String(replyDecisionLlm?.model || defaultVoiceReplyDecisionModel(llmProvider))
+      .trim()
+      .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
+    const participants = this.getVoiceChannelParticipants(session).map((entry) => entry.displayName).filter(Boolean);
+    const recentHistory = this.formatVoiceDecisionHistory(session, 8, VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS);
+    const silenceMs = Math.max(0, Date.now() - Number(session.lastActivityAt || 0));
+    const replyEagerness = clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
+    const botName = getPromptBotName(settings);
+
+    const systemPrompt = [
+      `You decide whether ${botName} should speak a candidate line right now in live Discord voice chat.`,
+      "Respond with exactly YES or NO."
+    ].join("\n");
+    const userPromptParts = [
+      `Candidate line: "${normalizedThought}"`,
+      `Reply eagerness: ${replyEagerness}/100.`,
+      `Current human participant count: ${participants.length || 0}.`,
+      `Silence duration ms: ${Math.max(0, Math.round(silenceMs))}.`,
+      "Decision rule: YES only when saying this now would feel natural and additive; otherwise NO."
+    ];
+    if (participants.length) {
+      userPromptParts.push(`Participant names: ${participants.slice(0, 12).join(", ")}.`);
+    }
+    if (recentHistory) {
+      userPromptParts.push(`Recent voice turns:\n${recentHistory}`);
+    }
+
+    try {
+      const generation = await this.llm.generate({
+        settings: {
+          ...settings,
+          llm: {
+            ...(settings?.llm || {}),
+            provider: llmProvider,
+            model: llmModel,
+            temperature: 0,
+            maxOutputTokens: resolveVoiceReplyDecisionMaxOutputTokens(llmProvider, llmModel),
+            reasoningEffort: String(replyDecisionLlm?.reasoningEffort || "minimal").trim().toLowerCase() || "minimal"
+          }
+        },
+        systemPrompt,
+        userPrompt: userPromptParts.join("\n"),
+        contextMessages: [],
+        trace: {
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.client.user?.id || null,
+          source: "voice_thought_decision"
+        }
+      });
+      const raw = String(generation?.text || "").trim();
+      const parsed = parseVoiceDecisionContract(raw);
+      if (!parsed.confident) {
+        return {
+          allow: false,
+          reason: "llm_contract_violation",
+          llmResponse: raw,
+          llmProvider: generation?.provider || llmProvider,
+          llmModel: generation?.model || llmModel
+        };
+      }
+      return {
+        allow: parsed.allow,
+        reason: parsed.allow ? "llm_yes" : "llm_no",
+        llmResponse: raw,
+        llmProvider: generation?.provider || llmProvider,
+        llmModel: generation?.model || llmModel
+      };
+    } catch (error) {
+      return {
+        allow: false,
+        reason: "llm_error",
+        llmProvider,
+        llmModel,
+        error: String(error?.message || error)
+      };
+    }
+  }
+
+  async deliverVoiceThoughtCandidate({
+    session,
+    settings,
+    thoughtCandidate,
+    trigger = "timer"
+  }) {
+    if (!session || session.ending) return false;
+    const line = normalizeVoiceText(thoughtCandidate, STT_REPLY_MAX_CHARS);
+    if (!line) return false;
+
+    let requestedRealtimeUtterance = false;
+    if (isRealtimeMode(session.mode)) {
+      requestedRealtimeUtterance = this.requestRealtimeTextUtterance({
+        session,
+        text: line,
+        userId: this.client.user?.id || null,
+        source: "voice_thought_engine"
+      });
+      if (!requestedRealtimeUtterance) {
+        const spokeFallback = await this.speakVoiceLineWithTts({
+          session,
+          settings,
+          text: line,
+          source: "voice_thought_engine_tts_fallback"
+        });
+        if (!spokeFallback) return false;
+        session.lastAudioDeltaAt = Date.now();
+      }
+    } else {
+      const spokeLine = await this.speakVoiceLineWithTts({
+        session,
+        settings,
+        text: line,
+        source: "voice_thought_engine_tts"
+      });
+      if (!spokeLine) return false;
+      session.lastAudioDeltaAt = Date.now();
+    }
+
+    const replyAt = Date.now();
+    session.lastAssistantReplyAt = replyAt;
+    this.recordVoiceTurn(session, {
+      role: "assistant",
+      userId: this.client.user?.id || null,
+      text: line
+    });
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.client.user?.id || null,
+      content: "voice_thought_spoken",
+      metadata: {
+        sessionId: session.id,
+        mode: session.mode,
+        trigger: String(trigger || "timer"),
+        thoughtText: line,
+        requestedRealtimeUtterance
+      }
+    });
+
+    return true;
   }
 
   beginVoiceWebLookupBusy({
@@ -2291,6 +2937,31 @@ export class VoiceSessionManager {
     };
   }
 
+  shouldDropFallbackLowSignalTurn({
+    transcript,
+    usedFallbackModel = false,
+    silenceGate,
+    captureReason = "stream_end"
+  }) {
+    if (!usedFallbackModel) return false;
+    if (String(captureReason || "stream_end") !== "speaking_end") return false;
+    const normalizedTranscript = normalizeVoiceText(transcript, VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedTranscript || !isLowSignalVoiceFragment(normalizedTranscript)) return false;
+
+    const clipDurationMs = Number(silenceGate?.clipDurationMs || 0);
+    const rms = Number(silenceGate?.rms || 0);
+    const peak = Number(silenceGate?.peak || 0);
+    const activeSampleRatio = Number(silenceGate?.activeSampleRatio || 0);
+
+    return (
+      clipDurationMs > 0 &&
+      clipDurationMs <= VOICE_FALLBACK_NOISE_GATE_MAX_CLIP_MS &&
+      rms <= VOICE_FALLBACK_NOISE_GATE_RMS_MAX &&
+      peak <= VOICE_FALLBACK_NOISE_GATE_PEAK_MAX &&
+      activeSampleRatio <= VOICE_FALLBACK_NOISE_GATE_ACTIVE_RATIO_MAX
+    );
+  }
+
   resolveRealtimeReplyStrategy({ session, settings = null }) {
     if (!session || !isRealtimeMode(session.mode)) return "brain";
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
@@ -2298,7 +2969,7 @@ export class VoiceSessionManager {
       .trim()
       .toLowerCase();
     if (strategy === "native") {
-      if (Boolean(resolvedSettings?.voice?.soundboard?.enabled)) {
+      if (resolvedSettings?.voice?.soundboard?.enabled) {
         return "brain";
       }
       return "native";
@@ -2389,6 +3060,7 @@ export class VoiceSessionManager {
     let turnTranscript = "";
     let resolvedFallbackModel = transcriptionPlan.fallbackModel || null;
     let resolvedTranscriptionPlanReason = transcriptionPlan.reason;
+    let usedFallbackModelForTranscript = false;
     if (skipShortClipAsr) {
       this.store.logAction({
         kind: "voice_runtime",
@@ -2447,7 +3119,42 @@ export class VoiceSessionManager {
           emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
           suppressEmptyTranscriptLogs: true
         });
+        if (turnTranscript) {
+          usedFallbackModelForTranscript = true;
+        }
       }
+    }
+
+    if (
+      turnTranscript &&
+      this.shouldDropFallbackLowSignalTurn({
+        transcript: turnTranscript,
+        usedFallbackModel: usedFallbackModelForTranscript,
+        silenceGate,
+        captureReason
+      })
+    ) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "voice_turn_dropped_low_signal_fallback",
+        metadata: {
+          sessionId: session.id,
+          source: "realtime",
+          captureReason: String(captureReason || "stream_end"),
+          transcript: turnTranscript,
+          clipDurationMs,
+          rms: Number(silenceGate.rms.toFixed(6)),
+          peak: Number(silenceGate.peak.toFixed(6)),
+          activeSampleRatio: Number(silenceGate.activeSampleRatio.toFixed(6)),
+          transcriptionModelPrimary: transcriptionPlan.primaryModel,
+          transcriptionModelFallback: resolvedFallbackModel || null,
+          transcriptionUsedFallbackModel: true
+        }
+      });
+      return;
     }
 
     const persistRealtimeTranscriptTurn = this.shouldPersistUserTranscriptTimelineTurn({
@@ -2477,7 +3184,10 @@ export class VoiceSessionManager {
       settings,
       userId,
       transcript: turnTranscript,
-      source: "realtime"
+      source: "realtime",
+      transcriptionContext: {
+        usedFallbackModel: usedFallbackModelForTranscript
+      }
     });
     this.updateFocusedSpeakerWindow({
       session,
@@ -2506,6 +3216,7 @@ export class VoiceSessionManager {
         transcript: decision.transcript || turnTranscript || null,
         transcriptionModelPrimary: transcriptionPlan.primaryModel,
         transcriptionModelFallback: resolvedFallbackModel || null,
+        transcriptionUsedFallbackModel: usedFallbackModelForTranscript,
         transcriptionPlanReason: resolvedTranscriptionPlanReason,
         clipDurationMs,
         asrSkippedShortClip: skipShortClipAsr,
@@ -2901,7 +3612,14 @@ export class VoiceSessionManager {
     };
   }
 
-  async evaluateVoiceReplyDecision({ session, settings, userId, transcript, source: _source = "stt_pipeline" }) {
+  async evaluateVoiceReplyDecision({
+    session,
+    settings,
+    userId,
+    transcript,
+    source: _source = "stt_pipeline",
+    transcriptionContext = null
+  }) {
     const normalizedTranscript = normalizeVoiceText(transcript, VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS);
     const normalizedUserId = String(userId || "").trim();
     const participantCount = this.countHumanVoiceParticipants(session);
@@ -2926,6 +3644,7 @@ export class VoiceSessionManager {
     const joinWindowAgeMs = Math.max(0, now - Number(session?.startedAt || 0));
     const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
     const directAddressed = directAddressedByName;
+    const usedFallbackModel = Boolean(transcriptionContext?.usedFallbackModel);
     const replyEagerness = clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
     const conversationContext = this.buildVoiceConversationContext({
       session,
@@ -2963,6 +3682,7 @@ export class VoiceSessionManager {
     const wakeWordPing = isLikelyWakeWordPing(normalizedTranscript);
     const lowSignalLlmEligible =
       !directAddressed &&
+      !usedFallbackModel &&
       (joinWindowActive || shouldUseLlmForLowSignalTurn(normalizedTranscript));
     if (lowSignalFragment) {
       if (directAddressed && wakeWordPing) {
@@ -2978,7 +3698,7 @@ export class VoiceSessionManager {
       if (!lowSignalLlmEligible) {
         return {
           allow: false,
-          reason: "low_signal_fragment",
+          reason: usedFallbackModel ? "low_signal_fallback_fragment" : "low_signal_fragment",
           participantCount,
           directAddressed,
           transcript: normalizedTranscript,
@@ -3437,14 +4157,14 @@ export class VoiceSessionManager {
 
     const now = Date.now();
     const normalizedReason = String(reason || "").trim().toLowerCase();
-    if (Boolean(directAddressed)) {
+    if (directAddressed) {
       session.lastDirectAddressAt = now;
       session.lastDirectAddressUserId = normalizedUserId;
     }
     if (
-      Boolean(allow) &&
+      allow &&
       (
-        Boolean(directAddressed) ||
+        directAddressed ||
         normalizedReason === "focused_speaker_followup" ||
         normalizedReason === "bot_recent_reply_followup" ||
         normalizedReason === "llm_yes" ||
@@ -3455,7 +4175,7 @@ export class VoiceSessionManager {
       session.focusedSpeakerAt = now;
       return;
     }
-    if (Boolean(directAddressed) && normalizedReason === "bot_turn_open") {
+    if (directAddressed && normalizedReason === "bot_turn_open") {
       session.focusedSpeakerUserId = normalizedUserId;
       session.focusedSpeakerAt = now;
       return;
@@ -4070,6 +4790,7 @@ export class VoiceSessionManager {
       transcriptionModelFallback = "gpt-4o-transcribe";
       transcriptionPlanReason = "mini_with_full_fallback_runtime";
     }
+    let usedFallbackModelForTranscript = false;
 
     let transcript = await this.transcribePcmTurn({
       session,
@@ -4101,8 +4822,41 @@ export class VoiceSessionManager {
         emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
         suppressEmptyTranscriptLogs: true
       });
+      if (transcript) {
+        usedFallbackModelForTranscript = true;
+      }
     }
     if (!transcript) return;
+    if (
+      this.shouldDropFallbackLowSignalTurn({
+        transcript,
+        usedFallbackModel: usedFallbackModelForTranscript,
+        silenceGate,
+        captureReason
+      })
+    ) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "voice_turn_dropped_low_signal_fallback",
+        metadata: {
+          sessionId: session.id,
+          source: "stt_pipeline",
+          captureReason: String(captureReason || "stream_end"),
+          transcript,
+          clipDurationMs,
+          rms: Number(silenceGate.rms.toFixed(6)),
+          peak: Number(silenceGate.peak.toFixed(6)),
+          activeSampleRatio: Number(silenceGate.activeSampleRatio.toFixed(6)),
+          transcriptionModelPrimary,
+          transcriptionModelFallback,
+          transcriptionUsedFallbackModel: true
+        }
+      });
+      return;
+    }
     if (session.ending) return;
 
     this.touchActivity(session.guildId, settings);
@@ -4118,6 +4872,7 @@ export class VoiceSessionManager {
         transcript,
         transcriptionModelPrimary,
         transcriptionModelFallback,
+        transcriptionUsedFallbackModel: usedFallbackModelForTranscript,
         transcriptionPlanReason,
         clipDurationMs
       }
@@ -4168,7 +4923,10 @@ export class VoiceSessionManager {
       settings,
       userId,
       transcript,
-      source: "stt_pipeline"
+      source: "stt_pipeline",
+      transcriptionContext: {
+        usedFallbackModel: usedFallbackModelForTranscript
+      }
     });
     this.updateFocusedSpeakerWindow({
       session,
@@ -4196,6 +4954,7 @@ export class VoiceSessionManager {
         transcript: turnDecision.transcript || transcript || null,
         transcriptionModelPrimary,
         transcriptionModelFallback,
+        transcriptionUsedFallbackModel: usedFallbackModelForTranscript,
         transcriptionPlanReason,
         clipDurationMs,
         asrSkippedShortClip: false,
@@ -4310,16 +5069,21 @@ export class VoiceSessionManager {
     });
     const joinWindowAgeMs = Math.max(0, Date.now() - Number(session?.startedAt || 0));
     const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
+    const sessionTiming = this.buildVoiceSessionTimingContext(session);
     const generationConversationContext = {
       ...(resolvedConversationContext || {}),
       joinWindowActive,
-      joinWindowAgeMs: Math.round(joinWindowAgeMs)
+      joinWindowAgeMs: Math.round(joinWindowAgeMs),
+      sessionTimeoutWarningActive: Boolean(sessionTiming?.timeoutWarningActive),
+      sessionTimeoutWarningReason: String(sessionTiming?.timeoutWarningReason || "none")
     };
 
     let replyText = "";
     let requestedSoundboardRef = "";
     let usedWebSearchFollowup = false;
+    let usedOpenArticleFollowup = false;
     let usedScreenShareOffer = false;
+    let leaveVoiceChannelRequested = false;
     let releaseLookupBusy = null;
     try {
       const generated = await this.generateVoiceTurn({
@@ -4330,11 +5094,12 @@ export class VoiceSessionManager {
         transcript: normalizedTranscript,
         contextMessages,
         sessionId: session.id,
-        isEagerTurn: !directAddressed,
+        isEagerTurn: !directAddressed && !generationConversationContext?.engaged,
         joinWindowActive,
         joinWindowAgeMs,
         voiceEagerness: Number(settings?.voice?.replyEagerness) || 0,
         conversationContext: generationConversationContext,
+        sessionTiming,
         participantRoster,
         recentMembershipEvents,
         soundboardCandidates: soundboardCandidateLines,
@@ -4362,12 +5127,16 @@ export class VoiceSessionManager {
               text: generated,
               soundboardRef: null,
               usedWebSearchFollowup: false,
-              usedScreenShareOffer: false
+              usedOpenArticleFollowup: false,
+              usedScreenShareOffer: false,
+              leaveVoiceChannelRequested: false
             };
       replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
       requestedSoundboardRef = String(generatedPayload?.soundboardRef || "").trim().slice(0, 180);
       usedWebSearchFollowup = Boolean(generatedPayload?.usedWebSearchFollowup);
+      usedOpenArticleFollowup = Boolean(generatedPayload?.usedOpenArticleFollowup);
       usedScreenShareOffer = Boolean(generatedPayload?.usedScreenShareOffer);
+      leaveVoiceChannelRequested = Boolean(generatedPayload?.leaveVoiceChannelRequested);
     } catch (error) {
       this.store.logAction({
         kind: "voice_error",
@@ -4387,7 +5156,7 @@ export class VoiceSessionManager {
       }
     }
     if (session.ending) return;
-    if (!replyText && !requestedSoundboardRef) return;
+    if (!replyText && !requestedSoundboardRef && !leaveVoiceChannelRequested) return;
 
     let spokeLine = false;
     if (replyText) {
@@ -4402,6 +5171,13 @@ export class VoiceSessionManager {
 
     try {
       const replyAt = Date.now();
+      const replyRuntimeEvent = replyText
+        ? "stt_pipeline_reply_spoken"
+        : requestedSoundboardRef
+          ? "stt_pipeline_soundboard_only"
+          : leaveVoiceChannelRequested
+            ? "stt_pipeline_leave_directive"
+            : "stt_pipeline_reply_skipped";
       if (spokeLine) {
         session.lastAudioDeltaAt = replyAt;
       }
@@ -4418,14 +5194,16 @@ export class VoiceSessionManager {
         guildId: session.guildId,
         channelId: session.textChannelId,
         userId: this.client.user?.id || null,
-        content: replyText ? "stt_pipeline_reply_spoken" : "stt_pipeline_soundboard_only",
+        content: replyRuntimeEvent,
         metadata: {
           sessionId: session.id,
           replyText: replyText || null,
           spokeLine,
           soundboardRef: requestedSoundboardRef || null,
           usedWebSearchFollowup,
+          usedOpenArticleFollowup,
           usedScreenShareOffer,
+          leaveVoiceChannelRequested,
           joinWindowActive,
           joinWindowAgeMs: Math.round(joinWindowAgeMs),
           contextTurnsSent: contextMessages.length,
@@ -4455,6 +5233,28 @@ export class VoiceSessionManager {
         }
       });
     }
+
+    if (!leaveVoiceChannelRequested || session.ending) return;
+
+    await this.endSession({
+      guildId: session.guildId,
+      reason: "assistant_leave_directive",
+      requestedByUserId: this.client.user?.id || null,
+      settings,
+      announcement: "wrapping up vc."
+    }).catch((error) => {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: `assistant_leave_directive_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          mode: session.mode
+        }
+      });
+    });
   }
 
   async runRealtimeBrainReply({
@@ -4541,10 +5341,13 @@ export class VoiceSessionManager {
     });
     const joinWindowAgeMs = Math.max(0, Date.now() - Number(session?.startedAt || 0));
     const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
+    const sessionTiming = this.buildVoiceSessionTimingContext(session);
     const generationConversationContext = {
       ...(resolvedConversationContext || {}),
       joinWindowActive,
-      joinWindowAgeMs: Math.round(joinWindowAgeMs)
+      joinWindowAgeMs: Math.round(joinWindowAgeMs),
+      sessionTimeoutWarningActive: Boolean(sessionTiming?.timeoutWarningActive),
+      sessionTimeoutWarningReason: String(sessionTiming?.timeoutWarningReason || "none")
     };
 
     let releaseLookupBusy = null;
@@ -4558,11 +5361,12 @@ export class VoiceSessionManager {
         transcript: normalizedTranscript,
         contextMessages,
         sessionId: session.id,
-        isEagerTurn: !directAddressed,
+        isEagerTurn: !directAddressed && !generationConversationContext?.engaged,
         joinWindowActive,
         joinWindowAgeMs,
         voiceEagerness: Number(settings?.voice?.replyEagerness) || 0,
         conversationContext: generationConversationContext,
+        sessionTiming,
         participantRoster,
         recentMembershipEvents,
         soundboardCandidates: soundboardCandidateLines,
@@ -4590,7 +5394,9 @@ export class VoiceSessionManager {
               text: generated,
               soundboardRef: null,
               usedWebSearchFollowup: false,
-              usedScreenShareOffer: false
+              usedOpenArticleFollowup: false,
+              usedScreenShareOffer: false,
+              leaveVoiceChannelRequested: false
             };
     } catch (error) {
       this.store.logAction({
@@ -4614,8 +5420,10 @@ export class VoiceSessionManager {
     const replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
     const requestedSoundboardRef = String(generatedPayload?.soundboardRef || "").trim().slice(0, 180);
     const usedWebSearchFollowup = Boolean(generatedPayload?.usedWebSearchFollowup);
+    const usedOpenArticleFollowup = Boolean(generatedPayload?.usedOpenArticleFollowup);
     const usedScreenShareOffer = Boolean(generatedPayload?.usedScreenShareOffer);
-    if (!replyText && !requestedSoundboardRef) {
+    const leaveVoiceChannelRequested = Boolean(generatedPayload?.leaveVoiceChannelRequested);
+    if (!replyText && !requestedSoundboardRef && !leaveVoiceChannelRequested) {
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
@@ -4627,7 +5435,9 @@ export class VoiceSessionManager {
           mode: session.mode,
           source: String(source || "realtime"),
           usedWebSearchFollowup,
+          usedOpenArticleFollowup,
           usedScreenShareOffer,
+          leaveVoiceChannelRequested,
           joinWindowActive,
           joinWindowAgeMs: Math.round(joinWindowAgeMs),
           conversationState: resolvedConversationContext?.engagementState || null,
@@ -4691,7 +5501,9 @@ export class VoiceSessionManager {
         requestedRealtimeUtterance,
         soundboardRef: requestedSoundboardRef || null,
         usedWebSearchFollowup,
+        usedOpenArticleFollowup,
         usedScreenShareOffer,
+        leaveVoiceChannelRequested,
         joinWindowActive,
         joinWindowAgeMs: Math.round(joinWindowAgeMs),
         contextTurnsSent: contextMessages.length,
@@ -4708,6 +5520,29 @@ export class VoiceSessionManager {
         transcript: replyText,
         requestedRef: requestedSoundboardRef,
         source: `${String(source || "realtime")}:reply`
+      });
+    }
+
+    if (leaveVoiceChannelRequested && !session.ending) {
+      await this.endSession({
+        guildId: session.guildId,
+        reason: "assistant_leave_directive",
+        requestedByUserId: this.client.user?.id || null,
+        settings,
+        announcement: "wrapping up vc."
+      }).catch((error) => {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.client.user?.id || null,
+          content: `assistant_leave_directive_failed: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id,
+            mode: session.mode,
+            source: String(source || "realtime")
+          }
+        });
       });
     }
 
@@ -5263,6 +6098,8 @@ export class VoiceSessionManager {
     if (session.responseDoneGraceTimer) clearTimeout(session.responseDoneGraceTimer);
     if (session.realtimeInstructionRefreshTimer) clearTimeout(session.realtimeInstructionRefreshTimer);
     if (session.deferredTurnFlushTimer) clearTimeout(session.deferredTurnFlushTimer);
+    this.clearVoiceThoughtLoopTimer(session);
+    session.thoughtLoopBusy = false;
     session.pendingResponse = null;
     session.sttTurnDrainActive = false;
     session.pendingSttTurnsQueue = [];

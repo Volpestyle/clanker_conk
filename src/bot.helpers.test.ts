@@ -230,3 +230,15 @@ test("parseReplyDirectives parses trailing screen-share link directive", () => {
   assert.equal(parsed.text, "bet");
   assert.equal(parsed.screenShareLinkRequested, true);
 });
+
+test("parseReplyDirectives parses trailing open-article directive", () => {
+  const parsed = parseReplyDirectives("say less [[OPEN_ARTICLE:R1:2]]");
+  assert.equal(parsed.text, "say less");
+  assert.equal(parsed.openArticleRef, "R1:2");
+});
+
+test("parseReplyDirectives parses trailing leave-vc directive", () => {
+  const parsed = parseReplyDirectives("aight i'm out [[LEAVE_VC]]");
+  assert.equal(parsed.text, "aight i'm out");
+  assert.equal(parsed.leaveVoiceChannelRequested, true);
+});
