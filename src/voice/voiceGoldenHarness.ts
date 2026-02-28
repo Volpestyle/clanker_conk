@@ -1514,7 +1514,7 @@ export async function runVoiceGoldenHarness(inputOptions: VoiceGoldenHarnessOpti
           modeReports.push(aggregateModeReport(mode, `missing_credentials:${missing.join(",")}`, []));
           continue;
         }
-        throw new Error(`Missing credentials for mode \"${mode}\": ${missing.join(", ")}`);
+        throw new Error(`Missing credentials for mode "${mode}": ${missing.join(", ")}`);
       }
     }
 
