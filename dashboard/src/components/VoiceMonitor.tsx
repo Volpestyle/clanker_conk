@@ -7,6 +7,7 @@ import {
   type RealtimeState,
   type VoiceMembershipEvent
 } from "../hooks/useVoiceSSE";
+import { useVoiceHistory } from "../hooks/useVoiceHistory";
 
 // ---- helpers ----
 
@@ -778,10 +779,141 @@ function EventFilter({
   );
 }
 
+// ---- Voice History Viewer ----
+
+function HistoryTranscript({ events }: { events: VoiceEvent[] }) {
+  const turns = events
+    .filter((e) => {
+      const meta = e.metadata as Record<string, unknown> | undefined;
+      return e.kind === "voice_runtime" && meta?.transcript;
+    })
+    .map((e) => {
+      const meta = e.metadata as Record<string, unknown>;
+      return {
+        role: String(meta.transcriptSource || "user"),
+        text: String(meta.transcript || ""),
+        at: e.createdAt
+      };
+    });
+
+  if (turns.length === 0) return null;
+
+  return (
+    <Section title="Transcript" badge={turns.length} defaultOpen>
+      <div className="vm-convo-feed">
+        {turns.map((t, i) => (
+          <div key={i} className={`vm-convo-msg vm-convo-${t.role}`}>
+            <div className="vm-convo-meta">
+              <span className={`vm-convo-role vm-convo-role-${t.role}`}>
+                {t.role === "assistant" ? "bot" : t.role}
+              </span>
+              {t.at && <span className="vm-convo-time">{relativeTime(t.at)}</span>}
+            </div>
+            <div className="vm-convo-text">{t.text || "(empty)"}</div>
+          </div>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
+function VoiceHistoryViewer({
+  history
+}: {
+  history: ReturnType<typeof useVoiceHistory>;
+}) {
+  const { sessions, selectedSessionId, events, loading, error, toggle } = history;
+  const [historyActiveKinds, setHistoryActiveKinds] = useState<Set<string>>(
+    () => new Set(EVENT_KINDS.filter((k) => k !== "runtime"))
+  );
+  const [historyShowRuntime, setHistoryShowRuntime] = useState(false);
+
+  if (sessions.length === 0) return null;
+
+  const selected = sessions.find((s) => s.sessionId === selectedSessionId) || null;
+
+  const filteredEvents = events.filter((e) => {
+    const kindShort = (e.kind || "").replace(/^voice_/, "");
+    if (kindShort === "runtime" && !historyShowRuntime) return false;
+    return historyActiveKinds.has(kindShort);
+  });
+
+  return (
+    <section className="vm-history panel">
+      <h3>Past Sessions</h3>
+      <div className="vm-history-picker">
+        {sessions.map((s) => (
+          <button
+            key={s.sessionId}
+            className={`vm-history-pill ${s.sessionId === selectedSessionId ? "vm-history-pill-active" : ""}`}
+            onClick={() => toggle(s.sessionId)}
+          >
+            <span className="vm-history-pill-mode">{MODE_LABELS[s.mode] || s.mode}</span>
+            <span className="vm-history-pill-time">{relativeTime(s.startedAt)}</span>
+            <span className="vm-history-pill-dur">{formatDuration(s.durationSeconds)}</span>
+          </button>
+        ))}
+      </div>
+
+      {selectedSessionId && (
+        <div className="vm-history-detail">
+          {loading && <p className="vm-empty">Loading session...</p>}
+          {error && <p className="vm-empty" style={{ color: "var(--danger)" }}>{error}</p>}
+
+          {selected && !loading && (
+            <>
+              <div className="vm-detail-grid">
+                <Stat label="Mode" value={MODE_LABELS[selected.mode] || selected.mode} />
+                <Stat label="Duration" value={formatDuration(selected.durationSeconds)} />
+                <Stat label="End Reason" value={selected.endReason} />
+              </div>
+
+              <HistoryTranscript events={events} />
+
+              <Section title="Events" badge={filteredEvents.length} defaultOpen={false}>
+                <EventFilter
+                  active={historyActiveKinds}
+                  onToggle={(kind) =>
+                    setHistoryActiveKinds((prev) => {
+                      const next = new Set(prev);
+                      if (next.has(kind)) next.delete(kind);
+                      else next.add(kind);
+                      return next;
+                    })
+                  }
+                  showRuntime={historyShowRuntime}
+                  onToggleRuntime={() => setHistoryShowRuntime(!historyShowRuntime)}
+                />
+                <div className="vm-timeline-feed">
+                  {filteredEvents.length === 0 ? (
+                    <p className="vm-empty">No events</p>
+                  ) : (
+                    filteredEvents.map((e, i) => (
+                      <EventRow key={`${e.createdAt}-${i}`} event={e} />
+                    ))
+                  )}
+                </div>
+              </Section>
+            </>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
 // ---- Main Component ----
 
 export default function VoiceMonitor() {
   const { voiceState, events, status } = useVoiceSSE();
+  const history = useVoiceHistory();
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedGuildId, setSelectedGuildId] = useState("");
   const [joinTextChannelId, setJoinTextChannelId] = useState(DEFAULT_JOIN_TEXT_CHANNEL_ID);
@@ -798,8 +930,19 @@ export default function VoiceMonitor() {
     () => new Set(EVENT_KINDS.filter((k) => k !== "runtime"))
   );
   const timelineRef = useRef<HTMLDivElement>(null);
+  const prevSessionIdsRef = useRef<Set<string>>(new Set());
 
   const sessions = voiceState?.sessions || [];
+
+  // Auto-refresh history when a live session disappears
+  useEffect(() => {
+    const currentIds = new Set(sessions.map((s) => s.sessionId));
+    const prevIds = prevSessionIdsRef.current;
+    if (prevIds.size > 0 && currentIds.size < prevIds.size) {
+      history.refresh();
+    }
+    prevSessionIdsRef.current = currentIds;
+  }, [sessions, history]);
 
   useEffect(() => {
     let cancelled = false;
@@ -933,6 +1076,9 @@ export default function VoiceMonitor() {
           </div>
         )}
       </section>
+
+      {/* Past session history */}
+      <VoiceHistoryViewer history={history} />
 
       {/* Event timeline */}
       <section className="vm-timeline panel">

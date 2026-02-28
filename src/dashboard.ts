@@ -351,6 +351,24 @@ export function createDashboardServer({
     });
   });
 
+  app.get("/api/voice/history/sessions", (_req, res, next) => {
+    try {
+      const limit = Number(_req.query.limit) || 3;
+      res.json(store.getRecentVoiceSessions(limit));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.get("/api/voice/history/sessions/:sessionId/events", (_req, res, next) => {
+    try {
+      const sessionId = String(_req.params.sessionId || "");
+      res.json(store.getVoiceSessionEvents(sessionId));
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/api/memory", async (_req, res, next) => {
     try {
       const markdown = await memory.readMemoryMarkdown();
