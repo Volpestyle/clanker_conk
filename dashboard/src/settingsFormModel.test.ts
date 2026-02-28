@@ -36,7 +36,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.voiceGenerationLlmModel, "claude-haiku-4-5");
   assert.equal(form.initiativeChannels, "1\n2");
   assert.equal(form.allowedChannels, "2\n3");
-  assert.equal(form.voiceRealtimeReplyStrategy, "shared_brain");
+  assert.equal(form.voiceRealtimeReplyStrategy, "brain");
 
   form.personaHardLimits = "no hate\nno hate\nkeep it fun\n";
   form.allowedChannels = "2\n2\n3\n";
@@ -48,7 +48,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.deepEqual(patch.permissions.allowedChannelIds, ["2", "3"]);
   assert.deepEqual(patch.initiative.discovery.rssFeeds, ["https://one.example/feed"]);
   assert.deepEqual(patch.initiative.discovery.xHandles, ["@alice", "bob"]);
-  assert.equal(patch.voice.realtimeReplyStrategy, "shared_brain");
+  assert.equal(patch.voice.realtimeReplyStrategy, "brain");
 });
 
 test("settingsToForm preserves explicit empty prompt overrides", () => {

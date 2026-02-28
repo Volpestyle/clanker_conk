@@ -920,7 +920,7 @@ test("reply decider can skip classifier call in stt pipeline when disabled", asy
   assert.equal(callCount, 0);
 });
 
-test("reply decider can skip classifier call in realtime shared-brain mode when disabled", async () => {
+test("reply decider can skip classifier call in realtime brain mode when disabled", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -1638,8 +1638,8 @@ test("runRealtimeTurn skips stale queued turns when newer backlog exists", async
   assert.equal(Boolean(staleSkipLog), true);
 });
 
-test("runRealtimeTurn uses shared-brain reply generation when admission allows turn", async () => {
-  const sharedBrainPayloads = [];
+test("runRealtimeTurn uses brain reply generation when admission allows turn", async () => {
+  const brainPayloads = [];
   const manager = createManager();
   manager.evaluateVoiceReplyDecision = async () => ({
     allow: true,
@@ -1648,8 +1648,8 @@ test("runRealtimeTurn uses shared-brain reply generation when admission allows t
     directAddressed: false,
     transcript: "tell me more"
   });
-  manager.runRealtimeSharedBrainReply = async (payload) => {
-    sharedBrainPayloads.push(payload);
+  manager.runRealtimeBrainReply = async (payload) => {
+    brainPayloads.push(payload);
     return true;
   };
 
@@ -1671,15 +1671,15 @@ test("runRealtimeTurn uses shared-brain reply generation when admission allows t
     captureReason: "stream_end"
   });
 
-  assert.equal(sharedBrainPayloads.length, 1);
-  assert.equal(sharedBrainPayloads[0]?.session, session);
-  assert.equal(sharedBrainPayloads[0]?.transcript, "");
-  assert.equal(sharedBrainPayloads[0]?.directAddressed, false);
-  assert.equal(sharedBrainPayloads[0]?.source, "realtime");
+  assert.equal(brainPayloads.length, 1);
+  assert.equal(brainPayloads[0]?.session, session);
+  assert.equal(brainPayloads[0]?.transcript, "");
+  assert.equal(brainPayloads[0]?.directAddressed, false);
+  assert.equal(brainPayloads[0]?.source, "realtime");
 });
 
 test("runRealtimeTurn uses native realtime forwarding when strategy is native", async () => {
-  const sharedBrainPayloads = [];
+  const brainPayloads = [];
   const forwardedPayloads = [];
   const manager = createManager();
   manager.evaluateVoiceReplyDecision = async () => ({
@@ -1689,8 +1689,8 @@ test("runRealtimeTurn uses native realtime forwarding when strategy is native", 
     directAddressed: false,
     transcript: "say it native"
   });
-  manager.runRealtimeSharedBrainReply = async (payload) => {
-    sharedBrainPayloads.push(payload);
+  manager.runRealtimeBrainReply = async (payload) => {
+    brainPayloads.push(payload);
     return true;
   };
   manager.forwardRealtimeTurnAudio = async (payload) => {
@@ -1726,7 +1726,7 @@ test("runRealtimeTurn uses native realtime forwarding when strategy is native", 
     captureReason: "stream_end"
   });
 
-  assert.equal(sharedBrainPayloads.length, 0);
+  assert.equal(brainPayloads.length, 0);
   assert.equal(forwardedPayloads.length, 1);
   assert.equal(forwardedPayloads[0]?.session, session);
   assert.equal(forwardedPayloads[0]?.pcmBuffer, pcmBuffer);
@@ -2375,7 +2375,7 @@ test("flushDeferredBotTurnOpenTurns coalesces deferred transcripts into one admi
   assert.equal(session.pendingDeferredTurns.length, 0);
 });
 
-test("flushDeferredBotTurnOpenTurns runs shared-brain realtime reply after one admission", async () => {
+test("flushDeferredBotTurnOpenTurns runs brain realtime reply after one admission", async () => {
   const decisionPayloads = [];
   const realtimeReplyPayloads = [];
   const manager = createManager();
@@ -2389,7 +2389,7 @@ test("flushDeferredBotTurnOpenTurns runs shared-brain realtime reply after one a
       transcript: payload.transcript
     };
   };
-  manager.runRealtimeSharedBrainReply = async (payload) => {
+  manager.runRealtimeBrainReply = async (payload) => {
     realtimeReplyPayloads.push(payload);
     return true;
   };
@@ -2453,8 +2453,8 @@ test("flushDeferredBotTurnOpenTurns forwards native realtime audio after one adm
     forwardedPayloads.push(payload);
     return true;
   };
-  manager.runRealtimeSharedBrainReply = async () => {
-    throw new Error("should_not_use_shared_brain");
+  manager.runRealtimeBrainReply = async () => {
+    throw new Error("should_not_use_brain_path");
   };
 
   const firstPcm = Buffer.from([1, 2]);

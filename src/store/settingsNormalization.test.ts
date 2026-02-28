@@ -215,7 +215,7 @@ test("normalizeSettings keeps stt pipeline voice generation and reply decider in
   assert.equal(normalized.voice.replyDecisionLlm.model, "claude-haiku-4-5");
   assert.equal(normalized.voice.replyDecisionLlm.enabled, true);
   assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, 2);
-  assert.equal(normalized.voice.realtimeReplyStrategy, "shared_brain");
+  assert.equal(normalized.voice.realtimeReplyStrategy, "brain");
 });
 
 test("normalizeSettings preserves custom voice decider prompt overrides", () => {

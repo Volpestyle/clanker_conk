@@ -828,12 +828,12 @@ function normalizeHttpBaseUrl(value, fallback) {
   }
 }
 
-function normalizeRealtimeReplyStrategy(value, fallback = "shared_brain") {
+function normalizeRealtimeReplyStrategy(value, fallback = "brain") {
   const normalized = String(value || fallback || "")
     .trim()
     .toLowerCase();
   if (normalized === "native") return "native";
-  return "shared_brain";
+  return "brain";
 }
 
 function normalizeOpenAiRealtimeAudioFormat(value) {

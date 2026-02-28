@@ -2198,13 +2198,13 @@ export class VoiceSessionManager {
   }
 
   resolveRealtimeReplyStrategy({ session, settings = null }) {
-    if (!session || !isRealtimeMode(session.mode)) return "shared_brain";
+    if (!session || !isRealtimeMode(session.mode)) return "brain";
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    const strategy = String(resolvedSettings?.voice?.realtimeReplyStrategy || "shared_brain")
+    const strategy = String(resolvedSettings?.voice?.realtimeReplyStrategy || "brain")
       .trim()
       .toLowerCase();
     if (strategy === "native") return "native";
-    return "shared_brain";
+    return "brain";
   }
 
   shouldUseNativeRealtimeReply({ session, settings = null }) {
@@ -2423,7 +2423,7 @@ export class VoiceSessionManager {
       return;
     }
 
-    await this.runRealtimeSharedBrainReply({
+    await this.runRealtimeBrainReply({
       session,
       settings,
       userId,
@@ -2612,7 +2612,7 @@ export class VoiceSessionManager {
       return;
     }
 
-    await this.runRealtimeSharedBrainReply({
+    await this.runRealtimeBrainReply({
       session,
       settings,
       userId: latestTurn?.userId || null,
@@ -2935,7 +2935,7 @@ export class VoiceSessionManager {
         this.resolveRealtimeReplyStrategy({
           session,
           settings
-        }) === "shared_brain");
+        }) === "brain");
     if (!classifierEnabled) {
       return {
         allow: mergedWithGeneration,
@@ -4104,7 +4104,7 @@ export class VoiceSessionManager {
     }
   }
 
-  async runRealtimeSharedBrainReply({
+  async runRealtimeBrainReply({
     session,
     settings,
     userId,

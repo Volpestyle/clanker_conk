@@ -98,7 +98,7 @@ export const DEFAULT_SETTINGS = {
   voice: {
     enabled: false,
     mode: "voice_agent",
-    realtimeReplyStrategy: "shared_brain",
+    realtimeReplyStrategy: "brain",
     allowNsfwHumor: true,
     intentConfidenceThreshold: 0.75,
     maxSessionMinutes: 10,

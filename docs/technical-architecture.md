@@ -93,7 +93,7 @@ Core sequence diagrams for this topic:
 - `docs/diagrams/settings-flow.mmd` (how model changes apply live without restart).
 
 Highest-impact model settings for user-visible reply latency:
-- `llm.provider` + `llm.model`: main reply generation model (primary synchronous call in the text/voice shared-brain path). This is reported as `llm1Ms` in reply performance stats.
+- `llm.provider` + `llm.model`: main reply generation model (primary synchronous call in the text/voice brain path). This is reported as `llm1Ms` in reply performance stats.
 - `replyFollowupLlm.enabled` + `replyFollowupLlm.provider/model`: optional second-pass generation model used after model-requested web/memory/image lookup directives. This contributes to `followupMs` and is a major tail-latency lever.
 - `voice.replyDecisionLlm.provider/model`: YES/NO classifier for ambiguous voice turns before speaking. Slower classifiers increase gate time before turn output.
 - `voice.openaiRealtime.model` / `voice.geminiRealtime.model` or `voice.sttPipeline.transcriptionModel` + `voice.sttPipeline.ttsModel`: these directly shape voice-turn latency after admission.

@@ -1,6 +1,7 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
 import { rangeStyle } from "../../utils";
+import { LlmProviderOptions } from "./LlmProviderOptions";
 
 export function VoiceModeSettingsSection({
   id,
@@ -27,12 +28,13 @@ export function VoiceModeSettingsSection({
   onResetVoiceReplyDecisionPrompts
 }) {
   const isRealtimeMode = isVoiceAgentMode || isOpenAiRealtimeMode || isGeminiRealtimeMode;
-  const realtimeReplyStrategy = String(form.voiceRealtimeReplyStrategy || "shared_brain")
+  const realtimeReplyStrategy = String(form.voiceRealtimeReplyStrategy || "brain")
     .trim()
     .toLowerCase();
+  const usesBrainGeneration = isSttPipelineMode || (isRealtimeMode && realtimeReplyStrategy === "brain");
   const classifierMergedWithGeneration =
     !form.voiceReplyDecisionLlmEnabled &&
-    (isSttPipelineMode || (isRealtimeMode && realtimeReplyStrategy === "shared_brain"));
+    usesBrainGeneration;
   const classifierDisabledNativeRealtime =
     !form.voiceReplyDecisionLlmEnabled && isRealtimeMode && realtimeReplyStrategy === "native";
   return (
@@ -62,8 +64,8 @@ export function VoiceModeSettingsSection({
                 value={form.voiceRealtimeReplyStrategy}
                 onChange={set("voiceRealtimeReplyStrategy")}
               >
-                <option value="shared_brain">Shared brain (full transcript + context)</option>
-                <option value="native">Native provider response</option>
+                <option value="brain">Brain (our LLM reply generation)</option>
+                <option value="native">Native realtime provider response</option>
               </select>
             </>
           )}
@@ -144,37 +146,38 @@ export function VoiceModeSettingsSection({
             style={rangeStyle(form.voiceReplyEagerness)}
           />
 
-          <h4>Voice Generation LLM</h4>
-          <p>Used for shared-brain voice replies.</p>
-          <div className="split">
-            <div>
-              <label htmlFor="voice-generation-provider">Provider</label>
-              <select
-                id="voice-generation-provider"
-                value={form.voiceGenerationLlmProvider}
-                onChange={setVoiceGenerationProvider}
-              >
-                <option value="openai">openai</option>
-                <option value="anthropic">anthropic</option>
-                <option value="xai">xai (grok)</option>
-                <option value="claude-code">claude code (local)</option>
-              </select>
-            </div>
-            <div>
-              <label htmlFor="voice-generation-model-preset">Model ID</label>
-              <select
-                id="voice-generation-model-preset"
-                value={selectedVoiceGenerationPresetModel}
-                onChange={selectVoiceGenerationPresetModel}
-              >
-                {voiceGenerationModelOptions.map((modelId) => (
-                  <option key={modelId} value={modelId}>
-                    {modelId}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+          {usesBrainGeneration && (
+            <>
+              <h4>Brain LLM</h4>
+              <p>Used for voice reply generation when the reply path is set to Brain.</p>
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-generation-provider">Provider</label>
+                  <select
+                    id="voice-generation-provider"
+                    value={form.voiceGenerationLlmProvider}
+                    onChange={setVoiceGenerationProvider}
+                  >
+                    <LlmProviderOptions />
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="voice-generation-model-preset">Model ID</label>
+                  <select
+                    id="voice-generation-model-preset"
+                    value={selectedVoiceGenerationPresetModel}
+                    onChange={selectVoiceGenerationPresetModel}
+                  >
+                    {voiceGenerationModelOptions.map((modelId) => (
+                      <option key={modelId} value={modelId}>
+                        {modelId}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </>
+          )}
 
           <h4>Voice Reply Decider</h4>
           <p>Controls when Clank should chime in during VC.</p>
@@ -195,7 +198,7 @@ export function VoiceModeSettingsSection({
           )}
           {classifierDisabledNativeRealtime && (
             <p>
-              Native realtime mode has no shared-brain generation step, so disabling the classifier keeps only
+              Native realtime mode has no Brain-generation step, so disabling the classifier keeps only
               deterministic fast-path admissions.
             </p>
           )}
@@ -209,10 +212,7 @@ export function VoiceModeSettingsSection({
                     value={form.voiceReplyDecisionLlmProvider}
                     onChange={setVoiceReplyDecisionProvider}
                   >
-                    <option value="openai">openai</option>
-                    <option value="anthropic">anthropic</option>
-                    <option value="xai">xai (grok)</option>
-                    <option value="claude-code">claude code (local)</option>
+                    <LlmProviderOptions />
                   </select>
                 </div>
                 <div>

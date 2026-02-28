@@ -71,7 +71,7 @@ These logs are the source of truth when diagnosing over-replying or missed repli
 
 Model choices that matter most for turn latency:
 
-- `llm.provider` + `llm.model`: primary reply-generation call for text and shared-brain voice.
+- `llm.provider` + `llm.model`: primary reply-generation call for text and brain voice paths.
 - `replyFollowupLlm.enabled` + `replyFollowupLlm.provider/model`: can add a second generation pass after model-requested lookups (`webSearchQuery`, `memoryLookupQuery`, `imageLookupQuery`).
 - `voice.replyDecisionLlm.provider/model`: classifier model for ambiguous voice turns before the bot decides to speak.
 - `voice.openaiRealtime.model` / `voice.geminiRealtime.model` or `voice.sttPipeline.transcriptionModel` + `voice.sttPipeline.ttsModel`: dominant latency levers after voice admission.
