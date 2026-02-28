@@ -254,3 +254,29 @@ test("buildReplyPrompt hard-rules explicit VC join commands when voice mode is e
   assert.match(prompt, /set voiceIntent\.intent=join/i);
   assert.match(prompt, /set voiceIntent\.confidence to at least 0\.9/i);
 });
+
+test("buildReplyPrompt injects live VC continuity context when an active session exists", () => {
+  const prompt = buildReplyPrompt({
+    message: {
+      authorName: "alice",
+      content: "who is in vc?"
+    },
+    imageInputs: [],
+    recentMessages: [],
+    relevantMessages: [],
+    userFacts: [],
+    relevantFacts: [],
+    emojiHints: [],
+    reactionEmojiOptions: [],
+    voiceMode: {
+      enabled: true,
+      activeSession: true,
+      participantRoster: [{ displayName: "alice" }, { displayName: "bob" }]
+    }
+  });
+
+  assert.match(prompt, /You are currently in VC right now\./);
+  assert.match(prompt, /Humans currently in channel: alice, bob\./);
+  assert.match(prompt, /Continuity rule: while in VC, do not claim you are outside VC\./);
+  assert.match(prompt, /acknowledge that you're already in VC\./);
+});

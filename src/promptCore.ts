@@ -140,6 +140,45 @@ export function buildHardLimitsSection(settings, { maxItems = null } = {}) {
   ];
 }
 
+function normalizeVoiceParticipantRoster(participantRoster, maxItems = 12) {
+  const limit = Number.isFinite(Number(maxItems)) ? Math.max(0, Math.floor(Number(maxItems))) : 12;
+  return (Array.isArray(participantRoster) ? participantRoster : [])
+    .map((entry) => {
+      if (typeof entry === "string") return String(entry).trim();
+      return String(entry?.displayName || entry?.name || "").trim();
+    })
+    .filter(Boolean)
+    .slice(0, limit);
+}
+
+export function buildVoiceSelfContextLines({
+  voiceEnabled = false,
+  inVoiceChannel = false,
+  participantRoster = []
+} = {}) {
+  if (!voiceEnabled) {
+    return ["Voice mode is disabled right now."];
+  }
+
+  const lines = [
+    "Voice mode is enabled right now.",
+    "Do not claim you are text-only or unable to join voice channels."
+  ];
+  if (!inVoiceChannel) {
+    lines.push("You are currently not in VC.");
+    return lines;
+  }
+
+  lines.push("You are currently in VC right now.");
+  const participants = normalizeVoiceParticipantRoster(participantRoster, 12);
+  if (participants.length) {
+    lines.push(`Humans currently in channel: ${participants.join(", ")}.`);
+  }
+  lines.push("You do have member-list context for this VC; do not claim you can't see who is in channel.");
+  lines.push("Continuity rule: while in VC, do not claim you are outside VC.");
+  return lines;
+}
+
 export function buildVoiceToneGuardrails() {
   return [
     "Match your normal text-chat persona in voice: same attitude, slang level, and casual cadence.",

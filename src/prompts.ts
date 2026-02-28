@@ -1,5 +1,6 @@
 import {
   buildHardLimitsSection,
+  buildVoiceSelfContextLines,
   buildVoiceToneGuardrails,
   getMediaPromptCraftGuidance,
   getPromptBotName,
@@ -411,10 +412,22 @@ export function buildReplyPrompt({
   parts.push("If a reaction is useful, set reactionEmoji to exactly one allowed emoji. Otherwise set reactionEmoji to null.");
 
   const voiceEnabled = Boolean(voiceMode?.enabled);
+  const inVoiceChannel = voiceEnabled && Boolean(voiceMode?.activeSession);
+  const voiceParticipantRoster = Array.isArray(voiceMode?.participantRoster) ? voiceMode.participantRoster : [];
+  parts.push(
+    ...buildVoiceSelfContextLines({
+      voiceEnabled,
+      inVoiceChannel,
+      participantRoster: voiceParticipantRoster
+    })
+  );
   if (voiceEnabled) {
-    parts.push("Voice mode is enabled right now.");
-    parts.push("Do not claim you are text-only or unable to join voice channels.");
     parts.push("If users mention VC/voice requests, stay consistent with voice being available.");
+    if (inVoiceChannel) {
+      parts.push("If users ask whether you're in VC, acknowledge that you're already in VC.");
+    } else {
+      parts.push("If users ask whether you're in VC, acknowledge that you're not currently in VC.");
+    }
     parts.push(
       "Hard rule: if a message is an explicit VC command aimed at you (for example: 'join vc', 'join voice', 'hop in vc', 'rejoin vc', 'join again', 'come back'), set voiceIntent.intent=join."
     );
@@ -457,7 +470,6 @@ export function buildReplyPrompt({
     parts.push("If intent target is ambiguous, prefer voiceIntent.intent=none with lower confidence.");
     parts.push("For normal chat or ambiguous requests, set voiceIntent.intent to none and keep confidence low.");
   } else {
-    parts.push("Voice mode is disabled right now.");
     parts.push("If asked to join VC, say voice mode is currently disabled.");
     parts.push("Set voiceIntent.intent to none.");
   }
@@ -874,10 +886,13 @@ export function buildVoiceTurnPrompt({
   parts.push(
     `Interpret second-person references like \"you\"/\"your\" as likely referring to ${normalizedBotName} unless another human target is explicit.`
   );
-  if (normalizedParticipantRoster.length) {
-    parts.push(`Humans currently in channel: ${normalizedParticipantRoster.join(", ")}.`);
-    parts.push("You do have member-list context for this VC; do not claim you can't see who is in channel.");
-  }
+  parts.push(
+    ...buildVoiceSelfContextLines({
+      voiceEnabled: true,
+      inVoiceChannel: true,
+      participantRoster: normalizedParticipantRoster
+    })
+  );
 
   if (normalizedMembershipEvents.length) {
     parts.push("Recent voice membership changes:");

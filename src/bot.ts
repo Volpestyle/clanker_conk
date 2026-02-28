@@ -929,6 +929,18 @@ export class ClankerBot {
       status: "disabled",
       publicUrl: ""
     };
+    const activeVoiceSession =
+      typeof this.voiceSessionManager?.getSession === "function"
+        ? this.voiceSessionManager.getSession(message.guildId)
+        : null;
+    const inVoiceChannelNow = Boolean(activeVoiceSession && !activeVoiceSession.ending);
+    const activeVoiceParticipantRoster =
+      inVoiceChannelNow && typeof this.voiceSessionManager?.getVoiceChannelParticipants === "function"
+        ? this.voiceSessionManager
+            .getVoiceChannelParticipants(activeVoiceSession)
+            .map((entry) => String(entry?.displayName || "").trim())
+            .filter(Boolean)
+        : [];
 
     const systemPrompt = buildSystemPrompt(settings);
     const replyPromptBase = {
@@ -964,7 +976,9 @@ export class ClankerBot {
       allowAutomationDirective: true,
       automationTimeZoneLabel: getLocalTimeZoneLabel(),
       voiceMode: {
-        enabled: Boolean(settings?.voice?.enabled)
+        enabled: Boolean(settings?.voice?.enabled),
+        activeSession: inVoiceChannelNow,
+        participantRoster: activeVoiceParticipantRoster
       },
       recentWebLookups,
       screenShare: screenShareCapability,
@@ -2581,8 +2595,17 @@ export class ClankerBot {
     }
   }
 
+  /**
+   * @param {{
+   *   guildId?: string | null;
+   *   channelId?: string | null;
+   *   queryText?: string;
+   *   limit?: number;
+   *   maxAgeHours?: number;
+   * }} options
+   */
   getRecentLookupContextForPrompt({
-    guildId,
+    guildId = null,
     channelId = null,
     queryText = "",
     limit = LOOKUP_CONTEXT_PROMPT_LIMIT,
@@ -2616,8 +2639,19 @@ export class ClankerBot {
     }
   }
 
+  /**
+   * @param {{
+   *   guildId?: string | null;
+   *   channelId?: string | null;
+   *   userId?: string | null;
+   *   source?: string;
+   *   query?: string;
+   *   provider?: string | null;
+   *   results?: unknown[];
+   * }} options
+   */
   rememberRecentLookupContext({
-    guildId,
+    guildId = null,
     channelId = null,
     userId = null,
     source = "reply_web_lookup",
