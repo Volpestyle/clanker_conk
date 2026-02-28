@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { PassThrough } from "node:stream";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
 import {
+  AUDIO_PLAYBACK_QUEUE_ABSOLUTE_MAX_BYTES,
   AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES,
   BARGE_IN_MIN_SPEECH_MS,
   DISCORD_PCM_FRAME_BYTES
@@ -340,7 +341,7 @@ test("maybeInterruptBotForAssertiveSpeech cuts playback after assertive speech",
   assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), true);
 });
 
-test("enqueueDiscordPcmForPlayback trims oldest queued audio when hard cap is exceeded", () => {
+test("enqueueDiscordPcmForPlayback avoids trimming when only hard cap is exceeded", () => {
   const { manager, logs } = createManager();
   manager.scheduleAudioPlaybackPump = () => {};
   const session = createSession({
@@ -375,10 +376,58 @@ test("enqueueDiscordPcmForPlayback trims oldest queued audio when hard cap is ex
   });
 
   assert.equal(queued, true);
-  assert.equal(session.audioPlaybackQueue.queuedBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
+  assert.equal(
+    session.audioPlaybackQueue.queuedBytes,
+    AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES + DISCORD_PCM_FRAME_BYTES * 3
+  );
+  const backlogLog = logs.find((entry) => entry?.content === "bot_audio_queue_backlog");
+  assert.equal(Boolean(backlogLog), true);
+  assert.equal(backlogLog?.metadata?.hardMaxBufferedBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
+  const trimLog = logs.find((entry) => entry?.content === "bot_audio_queue_trimmed");
+  assert.equal(Boolean(trimLog), false);
+});
+
+test("enqueueDiscordPcmForPlayback trims newest queued audio when absolute cap is exceeded", () => {
+  const { manager, logs } = createManager();
+  manager.scheduleAudioPlaybackPump = () => {};
+  const session = createSession({
+    audioPlayer: {
+      state: {
+        status: "playing"
+      }
+    },
+    connection: {
+      subscribe() {}
+    },
+    botAudioStream: {
+      writableLength: 0
+    },
+    audioPlaybackQueue: {
+      chunks: [],
+      headOffset: 0,
+      queuedBytes: 0,
+      pumping: false,
+      timer: null,
+      waitingDrain: false,
+      drainHandler: null,
+      lastWarnAt: 0,
+      lastTrimAt: 0
+    }
+  });
+
+  const oversizedChunk = Buffer.alloc(AUDIO_PLAYBACK_QUEUE_ABSOLUTE_MAX_BYTES + DISCORD_PCM_FRAME_BYTES * 5, 9);
+  const queued = manager.enqueueDiscordPcmForPlayback({
+    session,
+    discordPcm: oversizedChunk
+  });
+
+  assert.equal(queued, true);
+  assert.equal(session.audioPlaybackQueue.queuedBytes, AUDIO_PLAYBACK_QUEUE_ABSOLUTE_MAX_BYTES);
   const trimLog = logs.find((entry) => entry?.content === "bot_audio_queue_trimmed");
   assert.equal(Boolean(trimLog), true);
   assert.equal(trimLog?.metadata?.hardMaxBufferedBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
+  assert.equal(trimLog?.metadata?.absoluteMaxBufferedBytes, AUDIO_PLAYBACK_QUEUE_ABSOLUTE_MAX_BYTES);
+  assert.equal(trimLog?.metadata?.trimStrategy, "drop_newest");
   assert.equal(trimLog?.metadata?.droppedBytes > 0, true);
 });
 
