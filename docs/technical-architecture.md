@@ -87,24 +87,17 @@ Key guardrails:
 
 ## 6. Latency-Critical Model Choices
 
-Core sequence diagrams for this topic:
-- `docs/diagrams/message-event-flow.mmd` (text message handling path).
-- `docs/diagrams/runtime-lifecycle.mmd` (boot/runtime timers that can add queue delay).
-- `docs/diagrams/settings-flow.mmd` (how model changes apply live without restart).
+This architecture doc keeps only a summary view. Canonical tuning guidance lives in:
+- `docs/reply-decision-flow.md` section `6) Latency-First Model Tuning`.
 
-Highest-impact model settings for user-visible reply latency:
-- `llm.provider` + `llm.model`: main reply generation model (primary synchronous call in the text/voice brain path). This is reported as `llm1Ms` in reply performance stats.
-- `replyFollowupLlm.enabled` + `replyFollowupLlm.provider/model`: optional second-pass generation model used after model-requested web/memory/image lookup directives. This contributes to `followupMs` and is a major tail-latency lever.
-- `voice.replyDecisionLlm.provider/model`: YES/NO classifier for ambiguous voice turns before speaking. Slower classifiers increase gate time before turn output.
-- `voice.openaiRealtime.model` / `voice.geminiRealtime.model` or `voice.sttPipeline.transcriptionModel` + `voice.sttPipeline.ttsModel`: these directly shape voice-turn latency after admission.
-- `llm.provider = claude-code`: each generation runs through local CLI invocation/parsing, which can add extra latency and jitter versus direct API providers.
+High-impact latency levers:
+- `llm.provider` + `llm.model` for primary reply generation.
+- `replyFollowupLlm.*` when follow-up lookup/regeneration passes are enabled.
+- voice decision/realtime model settings (`voice.replyDecisionLlm.*`, realtime/STT/TTS model fields).
 
-Lower impact on immediate reply latency:
-- `memoryLlm.provider/model` mainly affects asynchronous memory extraction after message ingest, not the synchronous text reply loop.
-
-How to validate changes:
-- `Store.getReplyPerformanceStats()` aggregates `memorySliceMs`, `llm1Ms`, and `followupMs`.
-- voice action logs with `kind=voice_runtime` and `content=voice_turn_addressing` include classifier provider/model metadata.
+Validation signals:
+- `Store.getReplyPerformanceStats()` (`memorySliceMs`, `llm1Ms`, `followupMs`).
+- voice `voice_turn_addressing` runtime logs.
 
 ## 7. Initiative Post Flow
 
@@ -119,22 +112,10 @@ Scheduling modes:
 
 ## 8. Discovery Subsystem (Initiative Creativity)
 
-`DiscoveryService.collect()`:
-1. Builds topic seeds from preferred topics + recent chat text.
-2. Fetches enabled sources in parallel:
-   - Reddit hot JSON
-   - Hacker News top stories
-   - YouTube channel RSS
-   - configured RSS feeds
-   - optional X handles via Nitter RSS
-3. Normalizes/filters candidates:
-   - URL safety + tracking param cleanup
-   - freshness window
-   - NSFW filtering
-   - repost dedupe against `shared_links`
-4. Scores + ranks candidates and selects prompt shortlist.
+`DiscoveryService.collect()` builds topic seeds, fetches enabled sources in parallel, filters/ranks candidates, and provides a shortlist to initiative prompting.
 
-If a cycle requires a link and model output includes none, bot can append one fallback discovered link or skip posting.
+Canonical discovery behavior, controls, and rollout guidance live in:
+- `docs/initiative-discovery-spec.md`.
 
 ## 9. Dashboard Read/Write Patterns
 

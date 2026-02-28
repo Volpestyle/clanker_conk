@@ -100,11 +100,8 @@ When tunnel bootstrap succeeds, the public URL appears in:
 - action stream (`public_https_entrypoint_ready`)
 
 Public/private gating defaults:
-- Requests coming through the tunnel host can only hit allowlisted public routes (`/api/voice/stream-ingest/frame`, tokenized `/api/voice/share-session/:token/*`, and `/share/:token`).
-- Dashboard UI/static routes are blocked on tunnel host.
-- Header-token ingest route accepts `x-dashboard-token: <DASHBOARD_TOKEN>` or `x-public-api-token: <PUBLIC_API_TOKEN>` (when configured).
-- Tokenized share-session routes use their session token in the URL path.
-- Private/local admin APIs use `x-dashboard-token: <DASHBOARD_TOKEN>` and are blocked if public HTTPS is enabled without a dashboard token.
+- Tunnel ingress remains allowlisted and authenticated; dashboard/admin routes stay private.
+- Canonical route-gating and auth behavior: `docs/public-https-entrypoint-spec.md`.
 
 ## 3.2 Keep It Running Locally
 

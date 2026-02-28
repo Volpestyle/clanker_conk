@@ -30,9 +30,7 @@ Let `clanker conk` send a temporary clickable link in Discord that opens a brows
   - `voice.mode` supports stream-watch commentary:
     `openai_realtime`, `gemini_realtime`, or `voice_agent` with a configured vision fallback provider
 - Frame ingest revalidates requester/target VC presence and auto-stops the share session if either leaves.
-- Public tunnel host is route-gated:
-  - dashboard/admin APIs blocked
-  - only allowlisted public/token routes exposed
+- Public ingress route-gating and token/header auth rules are defined in `docs/public-https-entrypoint-spec.md`.
 
 ## Endpoints
 - `POST /api/voice/share-session` (create tokenized session, admin/private auth path)
@@ -42,5 +40,5 @@ Let `clanker conk` send a temporary clickable link in Discord that opens a brows
 
 ## Security Model
 - Share-session token is capability-style auth for that single session route only.
-- `PUBLIC_API_TOKEN` remains available for direct ingest route use-cases.
-- `DASHBOARD_TOKEN` continues to protect admin/dashboard APIs.
+- `PUBLIC_API_TOKEN` is still supported for direct frame-ingest routes outside share-session token URLs.
+- `DASHBOARD_TOKEN` remains admin/private API auth.
