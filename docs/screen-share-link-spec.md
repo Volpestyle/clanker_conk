@@ -1,12 +1,12 @@
 # Screen Share Link Spec
 
-Updated: February 27, 2026
+Updated: February 28, 2026
 
 ## Goal
-Let `clanker conk` send a temporary clickable link in Discord that opens a browser screen-share page and streams frames to the bot voice session.
+Let the bot send a temporary clickable link in Discord that opens a browser screen-share page and streams frames to the bot voice session.
 
 ## UX Flow
-1. User asks clank to look at their screen (or model decides a visual would help).
+1. User asks the bot to look at their screen (or model decides a visual would help).
 2. Reply model sets `screenShareIntent.action=offer_link`.
 3. Bot creates a short-lived tokenized share session.
 4. Bot replies with a tokenized share URL:

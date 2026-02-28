@@ -211,6 +211,7 @@ Dashboard API:
 - `GET /api/memory`: returns snapshot markdown content.
 - `POST /api/memory/refresh`: regenerates and returns snapshot.
 - `GET /api/memory/search?q=...&guildId=...&channelId=...&limit=...`: hybrid durable fact search.
+- `POST /api/memory/simulate-slice`: preview `buildPromptMemorySlice(...)` output (`userFacts`, `relevantFacts`, `relevantMessages`) for a `guildId` + `queryText` request body.
 
 Action log kinds used by memory pipeline:
 

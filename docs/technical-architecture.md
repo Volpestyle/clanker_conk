@@ -132,6 +132,7 @@ Dashboard writes:
 Dashboard read APIs also include:
 - `GET /api/automations`: list automations by guild/channel/status/query.
 - `GET /api/automations/runs`: list run history for one automation.
+- `POST /api/memory/simulate-slice`: simulate retrieval slices for memory prompt tuning.
 
 ## 10. Action Log Kinds
 

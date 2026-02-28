@@ -1,16 +1,23 @@
 # Replay Test Suite
 
-This project currently has one replay harness: [`scripts/floodingReplayHarness.ts`](../scripts/floodingReplayHarness.ts).
+This project currently has two offline behavior-validation harnesses:
 
-Replay harnesses evaluate bot behavior against real conversation history in `data/clanker.db` without running the full Discord runtime loop.
+- Flooding replay harness: [`scripts/floodingReplayHarness.ts`](../scripts/floodingReplayHarness.ts)
+- Voice golden harness: [`scripts/voiceGoldenHarness.ts`](../scripts/voiceGoldenHarness.ts) (covered in `docs/voice-golden-test-suite.md`)
+
+Harness intent:
+
+- Flooding replay evaluates behavior against real conversation history in `data/clanker.db` without running the full Discord runtime loop.
+- Voice golden validates voice reply decisions and outputs using curated utterance cases across runtime modes.
 
 ## Replay Framework Layout
 
-Replay harnesses now share a common framework:
+Flooding replay uses a shared replay framework:
 
 - Engine/runtime loop: `scripts/replay/core/engine.ts`
 - Shared DB loading and history priming: `scripts/replay/core/db.ts`
-- Shared helper types/utilities/output: `scripts/replay/core/types.ts`, `scripts/replay/core/utils.ts`, `scripts/replay/core/output.ts`
+- Shared LLM, judge, metrics, and output modules: `scripts/replay/core/llm.ts`, `scripts/replay/core/judge.ts`, `scripts/replay/core/metrics.ts`, `scripts/replay/core/output.ts`
+- Shared helper types/utilities: `scripts/replay/core/types.ts`, `scripts/replay/core/utils.ts`
 - Scenario implementations: `scripts/replay/scenarios/*.ts`
 - Thin CLI entrypoints: `scripts/*ReplayHarness.ts`
 
@@ -40,12 +47,16 @@ The flooding harness runs this pipeline:
 Recorded replay (no actor LLM calls):
 
 ```bash
+bun run replay:flooding
+# or
 bun scripts/floodingReplayHarness.ts --mode recorded
 ```
 
 Live replay (actor LLM; optional judge):
 
 ```bash
+bun run replay:flooding:live
+# or
 bun scripts/floodingReplayHarness.ts --mode live
 ```
 
@@ -82,6 +93,7 @@ bun scripts/floodingReplayHarness.ts --mode recorded \
 - `--actor-provider`, `--actor-model`: override actor LLM in live mode.
 - `--judge-provider`, `--judge-model`, `--judge`, `--no-judge`: control judge behavior.
 - `--window-start`, `--window-end`: timeline window for judge + snapshot focus.
+- `--assert-min-llm-calls`: assert minimum actor LLM volume in replay window.
 - `--out-json`: write machine-readable report.
 
 ## Creating a New Replay Harness

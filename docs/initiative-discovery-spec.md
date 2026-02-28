@@ -1,7 +1,7 @@
 # Initiative Creative Discovery Spec
 
 ## Goal
-Make initiative channels feel alive and surprising by letting `clanker conk` discover fresh external content and turn it into native-feeling Discord posts.
+Make initiative channels feel alive and surprising by letting the bot discover fresh external content and turn it into native-feeling Discord posts.
 
 ## Outcomes
 - Higher-quality initiative posts with real links and timely topics.

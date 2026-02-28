@@ -1,6 +1,6 @@
 # clanker_conk
 
-AI-powered Discord bot persona: **clanker conk**.
+AI-powered Discord bot persona (default name: **clanker conk**).
 
 Features:
 - Random human-like interactions in allowed channels.
@@ -125,10 +125,11 @@ Windows host sleep settings (for WSL users):
 ## 4. Configure in dashboard
 
 Use dashboard to:
+- Set `botName` and persona/prompt behavior.
 - Set unsolicited reply eagerness separately for initiative vs non-initiative channels, plus reaction eagerness.
 - Configure allowed/blocked channels and users.
 - Toggle reply/initiative/reaction permissions.
-- Set standalone-post channel IDs (for your dedicated `clanker conk` channel).
+- Set standalone-post channel IDs (for your dedicated bot channel).
 - Configure initiative pacing (`even` or `spontaneous`) and spontaneity.
 - Configure discovery source mix, link frequency, freshness, dedupe window, and topic/source lists.
 - Configure live web search limits (hourly cap, provider order, recency, results/query, pages inspected, and extraction settings).
@@ -151,8 +152,11 @@ Use dashboard to:
 ## 6. Technical Docs
 
 - Architecture and flow diagrams: `docs/technical-architecture.md`
+- LLM orchestration mental model: `docs/llm-orchestration-mental-model.md`
 - Reply decision policy (text + voice): `docs/reply-decision-flow.md`
+- Memory system source of truth: `docs/memory-system.md`
 - Replay harness guide (flooding + authoring): `docs/replay-test-suite.md`
+- Voice golden validation suite: `docs/voice-golden-test-suite.md`
 - Initiative discovery product spec: `docs/initiative-discovery-spec.md`
 - Public HTTPS entrypoint + relay design spec: `docs/public-https-entrypoint-spec.md`
 - Screen-share link flow spec: `docs/screen-share-link-spec.md`
