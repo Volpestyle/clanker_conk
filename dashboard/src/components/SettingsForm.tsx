@@ -2,9 +2,11 @@ import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
   GEMINI_REALTIME_MODEL_OPTIONS,
   OPENAI_REALTIME_MODEL_OPTIONS,
+  OPENAI_REALTIME_VOICE_OPTIONS,
   OPENAI_TRANSCRIPTION_MODEL_OPTIONS,
   STT_TRANSCRIPTION_MODEL_OPTIONS,
   STT_TTS_MODEL_OPTIONS,
+  XAI_VOICE_OPTIONS,
   formToSettingsPatch,
   resolveModelOptions,
   resolveModelOptionsFromText,
@@ -89,6 +91,14 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
   const openAiRealtimeModelOptions = resolveModelOptions(
     OPENAI_REALTIME_MODEL_OPTIONS,
     effectiveForm.voiceOpenAiRealtimeModel
+  );
+  const openAiRealtimeVoiceOptions = resolveModelOptions(
+    OPENAI_REALTIME_VOICE_OPTIONS,
+    effectiveForm.voiceOpenAiRealtimeVoice
+  );
+  const xAiVoiceOptions = resolveModelOptions(
+    XAI_VOICE_OPTIONS,
+    effectiveForm.voiceXaiVoice
   );
   const openAiTranscriptionModelOptions = resolveModelOptions(
     OPENAI_TRANSCRIPTION_MODEL_OPTIONS,
@@ -273,7 +283,9 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
             selectVoiceGenerationPresetModel={selectVoiceGenerationPresetModel}
             voiceGenerationModelOptions={voiceGenerationModelOptions}
             selectedVoiceGenerationPresetModel={selectedVoiceGenerationPresetModel}
+            xAiVoiceOptions={xAiVoiceOptions}
             openAiRealtimeModelOptions={openAiRealtimeModelOptions}
+            openAiRealtimeVoiceOptions={openAiRealtimeVoiceOptions}
             openAiTranscriptionModelOptions={openAiTranscriptionModelOptions}
             geminiRealtimeModelOptions={geminiRealtimeModelOptions}
             sttTranscriptionModelOptions={sttTranscriptionModelOptions}

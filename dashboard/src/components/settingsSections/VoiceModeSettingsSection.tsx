@@ -20,7 +20,9 @@ export function VoiceModeSettingsSection({
   selectVoiceGenerationPresetModel,
   voiceGenerationModelOptions,
   selectedVoiceGenerationPresetModel,
+  xAiVoiceOptions,
   openAiRealtimeModelOptions,
+  openAiRealtimeVoiceOptions,
   openAiTranscriptionModelOptions,
   geminiRealtimeModelOptions,
   sttTranscriptionModelOptions,
@@ -286,7 +288,13 @@ export function VoiceModeSettingsSection({
               <div className="split">
                 <div>
                   <label htmlFor="voice-xai-voice">xAI voice</label>
-                  <input id="voice-xai-voice" type="text" value={form.voiceXaiVoice} onChange={set("voiceXaiVoice")} />
+                  <select id="voice-xai-voice" value={form.voiceXaiVoice} onChange={set("voiceXaiVoice")}>
+                    {xAiVoiceOptions.map((voiceName) => (
+                      <option key={voiceName} value={voiceName}>
+                        {voiceName}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div>
                   <label htmlFor="voice-xai-region">xAI region</label>
@@ -338,12 +346,17 @@ export function VoiceModeSettingsSection({
                 </div>
                 <div>
                   <label htmlFor="voice-openai-realtime-voice">OpenAI realtime voice</label>
-                  <input
+                  <select
                     id="voice-openai-realtime-voice"
-                    type="text"
                     value={form.voiceOpenAiRealtimeVoice}
                     onChange={set("voiceOpenAiRealtimeVoice")}
-                  />
+                  >
+                    {openAiRealtimeVoiceOptions.map((voiceName) => (
+                      <option key={voiceName} value={voiceName}>
+                        {voiceName}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 

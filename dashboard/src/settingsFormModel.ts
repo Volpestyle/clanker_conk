@@ -13,6 +13,17 @@ export const OPENAI_REALTIME_MODEL_OPTIONS = Object.freeze([
   "gpt-realtime-mini"
 ]);
 
+export const OPENAI_REALTIME_VOICE_OPTIONS = Object.freeze([
+  "alloy",
+  "ash",
+  "ballad",
+  "coral",
+  "echo",
+  "sage",
+  "shimmer",
+  "verse"
+]);
+
 export const OPENAI_TRANSCRIPTION_MODEL_OPTIONS = Object.freeze([
   "gpt-4o-mini-transcribe",
   "gpt-4o-transcribe"
@@ -30,6 +41,14 @@ export const STT_TRANSCRIPTION_MODEL_OPTIONS = Object.freeze([
 
 export const STT_TTS_MODEL_OPTIONS = Object.freeze([
   "gpt-4o-mini-tts"
+]);
+
+export const XAI_VOICE_OPTIONS = Object.freeze([
+  "Ara",
+  "Rex",
+  "Sal",
+  "Eve",
+  "Leo"
 ]);
 
 export function settingsToForm(settings) {
