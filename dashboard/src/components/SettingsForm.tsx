@@ -43,6 +43,7 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
   const [form, setForm] = useState(() => (settings ? settingsToForm(settings) : null));
   const savedFormRef = useRef<string>("");
   const defaultForm = useMemo(() => settingsToForm({}), []);
+  const effectiveForm = form ?? defaultForm;
 
   useEffect(() => {
     if (!settings) return;
@@ -57,13 +58,11 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
     return JSON.stringify(form) !== savedFormRef.current;
   }, [form]);
 
-  if (!form) return null;
-
   function resolvePresetSelection(providerField, modelField) {
     return resolvePresetModelSelection({
       modelCatalog,
-      provider: form[providerField],
-      model: form[modelField]
+      provider: effectiveForm[providerField],
+      model: effectiveForm[modelField]
     });
   }
 
@@ -89,41 +88,41 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
   } = resolvePresetSelection("voiceGenerationLlmProvider", "voiceGenerationLlmModel");
   const openAiRealtimeModelOptions = resolveModelOptions(
     OPENAI_REALTIME_MODEL_OPTIONS,
-    form.voiceOpenAiRealtimeModel
+    effectiveForm.voiceOpenAiRealtimeModel
   );
   const openAiTranscriptionModelOptions = resolveModelOptions(
     OPENAI_TRANSCRIPTION_MODEL_OPTIONS,
-    form.voiceOpenAiRealtimeInputTranscriptionModel
+    effectiveForm.voiceOpenAiRealtimeInputTranscriptionModel
   );
   const geminiRealtimeModelOptions = resolveModelOptions(
     GEMINI_REALTIME_MODEL_OPTIONS,
-    form.voiceGeminiRealtimeModel
+    effectiveForm.voiceGeminiRealtimeModel
   );
   const sttTranscriptionModelOptions = resolveModelOptions(
     STT_TRANSCRIPTION_MODEL_OPTIONS,
-    form.voiceSttTranscriptionModel
+    effectiveForm.voiceSttTranscriptionModel
   );
   const sttTtsModelOptions = resolveModelOptions(
     STT_TTS_MODEL_OPTIONS,
-    form.voiceSttTtsModel
+    effectiveForm.voiceSttTtsModel
   );
   const initiativeImageModelOptions = resolveModelOptionsFromText(
-    form.initiativeAllowedImageModels,
-    form.initiativeSimpleImageModel,
-    form.initiativeComplexImageModel
+    effectiveForm.initiativeAllowedImageModels,
+    effectiveForm.initiativeSimpleImageModel,
+    effectiveForm.initiativeComplexImageModel
   );
   const initiativeVideoModelOptions = resolveModelOptionsFromText(
-    form.initiativeAllowedVideoModels,
-    form.initiativeVideoModel
+    effectiveForm.initiativeAllowedVideoModels,
+    effectiveForm.initiativeVideoModel
   );
-  const isVoiceAgentMode = form.voiceMode === "voice_agent";
-  const isOpenAiRealtimeMode = form.voiceMode === "openai_realtime";
-  const isGeminiRealtimeMode = form.voiceMode === "gemini_realtime";
-  const isSttPipelineMode = form.voiceMode === "stt_pipeline";
-  const showVoiceAdvanced = form.voiceEnabled;
-  const showInitiativeAdvanced = form.autonomousInitiativeEnabled;
-  const showInitiativeImageControls = form.initiativeImageEnabled || form.replyImageEnabled;
-  const showInitiativeVideoControls = form.initiativeVideoEnabled || form.replyVideoEnabled;
+  const isVoiceAgentMode = effectiveForm.voiceMode === "voice_agent";
+  const isOpenAiRealtimeMode = effectiveForm.voiceMode === "openai_realtime";
+  const isGeminiRealtimeMode = effectiveForm.voiceMode === "gemini_realtime";
+  const isSttPipelineMode = effectiveForm.voiceMode === "stt_pipeline";
+  const showVoiceAdvanced = effectiveForm.voiceEnabled;
+  const showInitiativeAdvanced = effectiveForm.autonomousInitiativeEnabled;
+  const showInitiativeImageControls = effectiveForm.initiativeImageEnabled || effectiveForm.replyImageEnabled;
+  const showInitiativeVideoControls = effectiveForm.initiativeVideoEnabled || effectiveForm.replyVideoEnabled;
 
   useEffect(() => {
     setForm((current) => {
@@ -150,6 +149,8 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
     selectedVoiceGenerationPresetModel,
     selectedVoiceReplyDecisionPresetModel
   ]);
+
+  if (!form) return null;
 
   function set(key) {
     return (e) => setForm((f) => ({ ...f, [key]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
