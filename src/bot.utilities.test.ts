@@ -136,6 +136,49 @@ test("ClankerBot message pacing and action budgets are enforced", () => {
   }
 });
 
+test("ClankerBot direct address requires mention or reply reference", () => {
+  const { bot } = createBot();
+  bot.client.user = { id: "bot-1" };
+
+  const plainNameMessage = {
+    content: "clanker can you check this?",
+    mentions: {
+      users: {
+        has() {
+          return false;
+        }
+      },
+      repliedUser: null
+    }
+  };
+  const mentionMessage = {
+    content: "hey <@bot-1>",
+    mentions: {
+      users: {
+        has(userId) {
+          return userId === "bot-1";
+        }
+      },
+      repliedUser: null
+    }
+  };
+  const replyMessage = {
+    content: "following up",
+    mentions: {
+      users: {
+        has() {
+          return false;
+        }
+      },
+      repliedUser: { id: "bot-1" }
+    }
+  };
+
+  assert.equal(bot.isDirectlyAddressed(baseSettings(), plainNameMessage), false);
+  assert.equal(bot.isDirectlyAddressed(baseSettings(), mentionMessage), true);
+  assert.equal(bot.isDirectlyAddressed(baseSettings(), replyMessage), true);
+});
+
 test("ClankerBot media/search/video budgets and capability fallbacks", () => {
   const { bot } = createBot({
     countByKind: {
