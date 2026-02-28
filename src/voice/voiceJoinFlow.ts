@@ -509,7 +509,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         sttContextMessages: [],
         sttTurnChain: Promise.resolve(),
         realtimeTurnDrainActive: false,
-        pendingRealtimeTurn: null,
+        pendingRealtimeTurns: [],
         userCaptures: new Map(),
         streamWatch: {
           active: false,
@@ -546,6 +546,15 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         lastOpenAiRealtimeInstructionsAt: 0,
         realtimeInstructionRefreshTimer: null,
         settingsSnapshot: settings,
+        audioPlaybackQueue: {
+          chunks: [],
+          headOffset: 0,
+          queuedBytes: 0,
+          pumping: false,
+          timer: null,
+          waitingDrain: false,
+          drainHandler: null
+        },
         cleanupHandlers: [],
         ending: false
       };

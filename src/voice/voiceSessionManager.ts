@@ -99,6 +99,9 @@ const RESPONSE_SILENCE_RETRY_DELAY_MS = 5200;
 const MAX_RESPONSE_SILENCE_RETRIES = 2;
 const RESPONSE_DONE_SILENCE_GRACE_MS = 1400;
 const PENDING_SUPERSEDE_MIN_AGE_MS = 1800;
+const REALTIME_TURN_QUEUE_MAX = 3;
+const DIRECT_ADDRESS_BOT_TURN_DEFER_DELAY_MS = BOT_TURN_SILENCE_RESET_MS;
+const MAX_DIRECT_ADDRESS_BOT_TURN_DEFERS = 2;
 const BOT_DISCONNECT_GRACE_MS = 2500;
 const STT_CONTEXT_MAX_MESSAGES = 10;
 const STT_TRANSCRIPT_MAX_CHARS = 700;
@@ -113,6 +116,10 @@ const REALTIME_CONTEXT_MEMBER_LIMIT = 12;
 const FOCUSED_SPEAKER_CONTINUATION_MS = 20_000;
 const SOUNDBOARD_DECISION_TRANSCRIPT_MAX_CHARS = 280;
 const SOUNDBOARD_CATALOG_REFRESH_MS = 60_000;
+const DISCORD_PCM_FRAME_MS = 20;
+const DISCORD_PCM_FRAME_BYTES = 3840;
+const STT_TTS_CONVERSION_CHUNK_MS = 120;
+const STT_TTS_CONVERSION_YIELD_EVERY_CHUNKS = 8;
 
 export class VoiceSessionManager {
   client;
@@ -222,6 +229,9 @@ export class VoiceSessionManager {
             inputSampleRateHz: Number(session.realtimeInputSampleRateHz) || 24000,
             outputSampleRateHz: Number(session.realtimeOutputSampleRateHz) || 24000,
             recentVoiceTurns: Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns.length : 0,
+            pendingTurns:
+              (session.realtimeTurnDrainActive ? 1 : 0) +
+              (Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns.length : 0),
             state: session.realtimeClient?.getState?.() || null
           }
         : null
@@ -798,19 +808,12 @@ export class VoiceSessionManager {
       }
 
       session.lastAudioDeltaAt = Date.now();
-      try {
-        session.botAudioStream.write(discordPcm);
-      } catch (error) {
-        this.store.logAction({
-          kind: "voice_error",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: this.client.user?.id || null,
-          content: `bot_audio_stream_write_failed: ${String(error?.message || error)}`,
-          metadata: {
-            sessionId: session.id
-          }
-        });
+      if (
+        !this.enqueueDiscordPcmForPlayback({
+          session,
+          discordPcm
+        })
+      ) {
         return;
       }
       this.markBotTurnOut(session, settings);
@@ -1052,6 +1055,212 @@ export class VoiceSessionManager {
       session.realtimeClient.off("socket_error", onSocketError);
       session.realtimeClient.off("response_done", onResponseDone);
     });
+  }
+
+  ensureAudioPlaybackQueueState(session) {
+    if (!session.audioPlaybackQueue || typeof session.audioPlaybackQueue !== "object") {
+      session.audioPlaybackQueue = {
+        chunks: [],
+        headOffset: 0,
+        queuedBytes: 0,
+        pumping: false,
+        timer: null,
+        waitingDrain: false,
+        drainHandler: null
+      };
+    }
+    return session.audioPlaybackQueue;
+  }
+
+  clearAudioPlaybackQueue(session) {
+    if (!session) return;
+    const state = this.ensureAudioPlaybackQueueState(session);
+    if (state.timer) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
+    if (state.waitingDrain && state.drainHandler && typeof session.botAudioStream?.off === "function") {
+      session.botAudioStream.off("drain", state.drainHandler);
+    }
+    state.waitingDrain = false;
+    state.drainHandler = null;
+    state.pumping = false;
+    state.chunks = [];
+    state.headOffset = 0;
+    state.queuedBytes = 0;
+  }
+
+  dequeueAudioPlaybackFrame(session, frameBytes = DISCORD_PCM_FRAME_BYTES) {
+    const state = this.ensureAudioPlaybackQueueState(session);
+    if (!Array.isArray(state.chunks) || !state.chunks.length) return Buffer.alloc(0);
+
+    const boundedFrameBytes = Math.max(1, Math.floor(Number(frameBytes) || DISCORD_PCM_FRAME_BYTES));
+    let remaining = boundedFrameBytes;
+    const pieces = [];
+
+    while (remaining > 0 && state.chunks.length) {
+      const head = state.chunks[0];
+      if (!Buffer.isBuffer(head) || !head.length) {
+        state.chunks.shift();
+        state.headOffset = 0;
+        continue;
+      }
+
+      const available = head.length - state.headOffset;
+      if (available <= 0) {
+        state.chunks.shift();
+        state.headOffset = 0;
+        continue;
+      }
+
+      const takeBytes = Math.min(available, remaining);
+      const start = state.headOffset;
+      const end = start + takeBytes;
+      pieces.push(head.subarray(start, end));
+      state.headOffset = end;
+      state.queuedBytes = Math.max(0, Number(state.queuedBytes || 0) - takeBytes);
+      remaining -= takeBytes;
+
+      if (state.headOffset >= head.length) {
+        state.chunks.shift();
+        state.headOffset = 0;
+      }
+    }
+
+    if (!pieces.length) return Buffer.alloc(0);
+    if (pieces.length === 1) return pieces[0];
+    return Buffer.concat(pieces);
+  }
+
+  scheduleAudioPlaybackPump(session, delayMs = 0) {
+    if (!session || session.ending) return;
+    const state = this.ensureAudioPlaybackQueueState(session);
+    if (state.timer || state.waitingDrain) return;
+
+    const waitMs = Math.max(0, Math.floor(Number(delayMs) || 0));
+    state.timer = setTimeout(() => {
+      state.timer = null;
+      this.pumpAudioPlaybackQueue(session);
+    }, waitMs);
+  }
+
+  pumpAudioPlaybackQueue(session) {
+    if (!session || session.ending) return;
+    const state = this.ensureAudioPlaybackQueueState(session);
+    if (state.pumping) return;
+    if (!Array.isArray(state.chunks) || !state.chunks.length) return;
+
+    state.pumping = true;
+    try {
+      if (
+        !ensureBotAudioPlaybackReady({
+          session,
+          store: this.store,
+          botUserId: this.client.user?.id || null
+        })
+      ) {
+        this.scheduleAudioPlaybackPump(session, DISCORD_PCM_FRAME_MS);
+        return;
+      }
+
+      const frame = this.dequeueAudioPlaybackFrame(session, DISCORD_PCM_FRAME_BYTES);
+      if (!frame.length) return;
+
+      try {
+        const wrote = session.botAudioStream.write(frame);
+        if (wrote === false && typeof session.botAudioStream?.once === "function") {
+          if (!state.waitingDrain) {
+            state.waitingDrain = true;
+            const onDrain = () => {
+              state.waitingDrain = false;
+              state.drainHandler = null;
+              if (!session.ending) {
+                this.scheduleAudioPlaybackPump(session, 0);
+              }
+            };
+            state.drainHandler = onDrain;
+            session.botAudioStream.once("drain", onDrain);
+          }
+          return;
+        }
+      } catch (error) {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.client.user?.id || null,
+          content: `bot_audio_stream_write_failed: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id
+          }
+        });
+        this.clearAudioPlaybackQueue(session);
+        return;
+      }
+
+      if (state.chunks.length) {
+        this.scheduleAudioPlaybackPump(session, DISCORD_PCM_FRAME_MS);
+      }
+    } finally {
+      state.pumping = false;
+    }
+  }
+
+  enqueueDiscordPcmForPlayback({ session, discordPcm }) {
+    if (!session || session.ending) return false;
+    const pcm = Buffer.isBuffer(discordPcm) ? discordPcm : Buffer.from(discordPcm || []);
+    if (!pcm.length) return false;
+
+    if (
+      !ensureBotAudioPlaybackReady({
+        session,
+        store: this.store,
+        botUserId: this.client.user?.id || null
+      })
+    ) {
+      return false;
+    }
+
+    const state = this.ensureAudioPlaybackQueueState(session);
+    state.chunks.push(pcm);
+    state.queuedBytes = Math.max(0, Number(state.queuedBytes || 0)) + pcm.length;
+    this.scheduleAudioPlaybackPump(session, 0);
+    return true;
+  }
+
+  async enqueueChunkedTtsPcmForPlayback({
+    session,
+    ttsPcm,
+    inputSampleRateHz = 24000
+  }) {
+    if (!session || session.ending) return false;
+    const pcm = Buffer.isBuffer(ttsPcm) ? ttsPcm : Buffer.from(ttsPcm || []);
+    if (!pcm.length) return false;
+
+    const sampleRate = Math.max(8_000, Math.floor(Number(inputSampleRateHz) || 24_000));
+    const chunkBytesRaw = Math.floor((sampleRate * 2 * STT_TTS_CONVERSION_CHUNK_MS) / 1000);
+    const chunkBytes = Math.max(2, chunkBytesRaw - (chunkBytesRaw % 2));
+
+    let queuedAny = false;
+    let chunkCount = 0;
+    for (let offset = 0; offset < pcm.length; offset += chunkBytes) {
+      if (session.ending) break;
+      const chunk = pcm.subarray(offset, Math.min(offset + chunkBytes, pcm.length));
+      const discordPcm = convertXaiOutputToDiscordPcm(chunk, sampleRate);
+      if (discordPcm.length) {
+        queuedAny = this.enqueueDiscordPcmForPlayback({
+          session,
+          discordPcm
+        }) || queuedAny;
+      }
+
+      chunkCount += 1;
+      if (chunkCount % STT_TTS_CONVERSION_YIELD_EVERY_CHUNKS === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    }
+
+    return queuedAny;
   }
 
   markBotTurnOut(session, settings = session.settingsSnapshot) {
@@ -1377,37 +1586,53 @@ export class VoiceSessionManager {
     });
   }
 
-  queueRealtimeTurn({ session, userId, pcmBuffer, captureReason = "stream_end" }) {
+  queueRealtimeTurn({ session, userId, pcmBuffer, captureReason = "stream_end", deferCount = 0 }) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
     if (!pcmBuffer || !pcmBuffer.length) return;
+    const pendingQueue = Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns : [];
+    if (!Array.isArray(session.pendingRealtimeTurns)) {
+      session.pendingRealtimeTurns = pendingQueue;
+    }
 
     const queuedTurn = {
       session,
       userId,
       pcmBuffer,
       captureReason,
+      deferCount: Math.max(0, Number(deferCount || 0)),
       queuedAt: Date.now()
     };
 
     if (session.realtimeTurnDrainActive) {
-      const previousPending = session.pendingRealtimeTurn;
-      session.pendingRealtimeTurn = queuedTurn;
-      if (previousPending) {
-        this.store.logAction({
-          kind: "voice_runtime",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId,
-          content: "realtime_turn_superseded",
-          metadata: {
-            sessionId: session.id,
-            replacedCaptureReason: String(previousPending.captureReason || "stream_end"),
-            replacingCaptureReason: String(captureReason || "stream_end"),
-            replacedQueueAgeMs: Math.max(0, Date.now() - Number(previousPending.queuedAt || Date.now()))
-          }
-        });
+      if (pendingQueue.length >= REALTIME_TURN_QUEUE_MAX) {
+        const droppedTurn = pendingQueue.shift();
+        if (droppedTurn) {
+          this.store.logAction({
+            kind: "voice_runtime",
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId,
+            content: "realtime_turn_superseded",
+            metadata: {
+              sessionId: session.id,
+              replacedCaptureReason: String(droppedTurn.captureReason || "stream_end"),
+              replacingCaptureReason: String(captureReason || "stream_end"),
+              replacedQueueAgeMs: Math.max(0, Date.now() - Number(droppedTurn.queuedAt || Date.now())),
+              maxQueueDepth: REALTIME_TURN_QUEUE_MAX
+            }
+          });
+        }
       }
+      pendingQueue.push(queuedTurn);
+      return;
+    }
+
+    if (pendingQueue.length > 0) {
+      pendingQueue.push(queuedTurn);
+      const nextTurn = pendingQueue.shift();
+      if (!nextTurn) return;
+      this.drainRealtimeTurnQueue(nextTurn).catch(() => undefined);
       return;
     }
 
@@ -1418,6 +1643,10 @@ export class VoiceSessionManager {
     const session = initialTurn?.session;
     if (!session || session.ending) return;
     if (session.realtimeTurnDrainActive) return;
+    const pendingQueue = Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns : [];
+    if (!Array.isArray(session.pendingRealtimeTurns)) {
+      session.pendingRealtimeTurns = pendingQueue;
+    }
 
     session.realtimeTurnDrainActive = true;
     let turn = initialTurn;
@@ -1439,30 +1668,23 @@ export class VoiceSessionManager {
           });
         }
 
-        const next = session.pendingRealtimeTurn;
-        session.pendingRealtimeTurn = null;
+        const next = pendingQueue.shift();
         turn = next || null;
       }
     } finally {
       session.realtimeTurnDrainActive = false;
       if (session.ending) {
-        session.pendingRealtimeTurn = null;
+        session.pendingRealtimeTurns = [];
       } else {
-        const pending = session.pendingRealtimeTurn;
+        const pending = pendingQueue.shift();
         if (pending) {
-          session.pendingRealtimeTurn = null;
-          this.queueRealtimeTurn({
-            session,
-            userId: pending.userId,
-            pcmBuffer: pending.pcmBuffer,
-            captureReason: pending.captureReason
-          });
+          this.drainRealtimeTurnQueue(pending).catch(() => undefined);
         }
       }
     }
   }
 
-  async runRealtimeTurn({ session, userId, pcmBuffer, captureReason = "stream_end", queuedAt = 0 }) {
+  async runRealtimeTurn({ session, userId, pcmBuffer, captureReason = "stream_end", deferCount = 0, queuedAt = 0 }) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
     if (!pcmBuffer?.length) return;
@@ -1558,7 +1780,22 @@ export class VoiceSessionManager {
       }
     });
 
-    if (!decision.allow) return;
+    if (!decision.allow) {
+      if (
+        decision.reason === "bot_turn_open" &&
+        Boolean(decision.directAddressed) &&
+        Number(deferCount || 0) < MAX_DIRECT_ADDRESS_BOT_TURN_DEFERS
+      ) {
+        this.deferDirectAddressedRealtimeTurn({
+          session,
+          userId,
+          pcmBuffer,
+          captureReason,
+          deferCount: Number(deferCount || 0)
+        });
+      }
+      return;
+    }
     try {
       session.realtimeClient.appendInputAudioPcm(pcmBuffer);
       session.pendingRealtimeInputBytes = Math.max(0, Number(session.pendingRealtimeInputBytes || 0)) + pcmBuffer.length;
@@ -1587,6 +1824,38 @@ export class VoiceSessionManager {
       });
     }
     this.scheduleResponseFromBufferedAudio({ session, userId });
+  }
+
+  deferDirectAddressedRealtimeTurn({ session, userId, pcmBuffer, captureReason = "stream_end", deferCount = 0 }) {
+    if (!session || session.ending) return;
+    if (!pcmBuffer?.length) return;
+
+    const nextDeferCount = Math.max(0, Number(deferCount || 0)) + 1;
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId,
+      content: "direct_address_turn_deferred",
+      metadata: {
+        sessionId: session.id,
+        captureReason: String(captureReason || "stream_end"),
+        deferCount: nextDeferCount,
+        maxDefers: MAX_DIRECT_ADDRESS_BOT_TURN_DEFERS,
+        deferDelayMs: DIRECT_ADDRESS_BOT_TURN_DEFER_DELAY_MS
+      }
+    });
+
+    setTimeout(() => {
+      if (!session || session.ending) return;
+      this.queueRealtimeTurn({
+        session,
+        userId,
+        pcmBuffer,
+        captureReason,
+        deferCount: nextDeferCount
+      });
+    }, DIRECT_ADDRESS_BOT_TURN_DEFER_DELAY_MS);
   }
 
   async evaluateVoiceReplyDecision({ session, settings, userId, transcript, source = "voice_turn" }) {
@@ -2602,22 +2871,15 @@ export class VoiceSessionManager {
       return;
     }
     if (!ttsPcm.length || session.ending) return;
-
-    const discordPcm = convertXaiOutputToDiscordPcm(ttsPcm, 24000);
-    if (!discordPcm.length) return;
-    if (
-      !ensureBotAudioPlaybackReady({
-        session,
-        store: this.store,
-        botUserId: this.client.user?.id || null
-      })
-    ) {
-      return;
-    }
+    const queuedTtsAudio = await this.enqueueChunkedTtsPcmForPlayback({
+      session,
+      ttsPcm,
+      inputSampleRateHz: 24000
+    });
+    if (!queuedTtsAudio) return;
 
     try {
       session.lastAudioDeltaAt = Date.now();
-      session.botAudioStream.write(discordPcm);
       this.markBotTurnOut(session, settings);
       this.recordVoiceTurn(session, {
         role: "assistant",
@@ -3163,6 +3425,8 @@ export class VoiceSessionManager {
     if (session.responseDoneGraceTimer) clearTimeout(session.responseDoneGraceTimer);
     if (session.realtimeInstructionRefreshTimer) clearTimeout(session.realtimeInstructionRefreshTimer);
     session.pendingResponse = null;
+    session.pendingRealtimeTurns = [];
+    this.clearAudioPlaybackQueue(session);
 
     for (const capture of session.userCaptures.values()) {
       try {
