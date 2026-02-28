@@ -1,7 +1,7 @@
 import type { Database } from "bun:sqlite";
 import type { LLMService } from "../../../src/llm.ts";
 
-export type HarnessMode = "recorded" | "live";
+type HarnessMode = "recorded" | "live";
 export type ChannelMode = "initiative" | "non_initiative";
 
 export type ReplayBaseArgs = {
@@ -38,7 +38,7 @@ export type ActionRow = {
   message_id?: string | null;
 };
 
-export type DecisionOutcomeKind =
+type DecisionOutcomeKind =
   | "sent_message"
   | "sent_reply"
   | "reply_skipped"
@@ -98,7 +98,7 @@ export type CreateScenarioStateInput<TArgs extends ReplayBaseArgs, TDbState> = {
   initiativeChannelIds: Set<string>;
 };
 
-export type ReplayTurnContext<TArgs extends ReplayBaseArgs, TScenarioState> = {
+type ReplayTurnContext<TArgs extends ReplayBaseArgs, TScenarioState> = {
   args: TArgs;
   scenarioState: TScenarioState;
   runtimeSettings: Record<string, unknown>;
@@ -112,7 +112,7 @@ export type ReplayTurnContext<TArgs extends ReplayBaseArgs, TScenarioState> = {
   turnIndex: number;
 };
 
-export type ReplayTurnResult = {
+type ReplayTurnResult = {
   addressed: boolean;
   attempted: boolean;
   decision: ReplayDecision;

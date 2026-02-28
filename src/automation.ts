@@ -1,7 +1,6 @@
 import { clamp } from "./utils.ts";
 
-export const AUTOMATION_OPERATION_TYPES = new Set(["create", "pause", "resume", "delete", "list", "none"]);
-export const AUTOMATION_SCHEDULE_KINDS = new Set(["daily", "interval", "once"]);
+const AUTOMATION_SCHEDULE_KINDS = new Set(["daily", "interval", "once"]);
 
 const MAX_AUTOMATION_TITLE_LEN = 90;
 const MAX_AUTOMATION_INSTRUCTION_LEN = 360;

@@ -7,7 +7,7 @@ export type NumericStats = {
   p95Ms: number;
 };
 
-export function quantile(values: number[], q: number) {
+function quantile(values: number[], q: number) {
   const sorted = values
     .map((value) => Number(value))
     .filter((value) => Number.isFinite(value))
@@ -17,7 +17,7 @@ export function quantile(values: number[], q: number) {
   return sorted[index] || 0;
 }
 
-export function summarizeNumericSeries(values: number[]): NumericStats | null {
+function summarizeNumericSeries(values: number[]): NumericStats | null {
   const normalized = values
     .map((value) => Number(value))
     .filter((value) => Number.isFinite(value));

@@ -114,7 +114,7 @@ const DEFAULT_ARGS: FloodingReplayArgs = {
   outJsonPath: ""
 };
 
-export function parseFloodingReplayArgs(argv: string[]): FloodingReplayArgs {
+function parseFloodingReplayArgs(argv: string[]): FloodingReplayArgs {
   const out: FloodingReplayArgs = { ...DEFAULT_ARGS };
   for (let i = 0; i < argv.length; i += 1) {
     const key = String(argv[i] || "").trim();

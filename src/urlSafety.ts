@@ -1,7 +1,7 @@
 import dns from "node:dns/promises";
 import net from "node:net";
 
-export function isPrivateIp(value) {
+function isPrivateIp(value) {
   const ipType = net.isIP(String(value || ""));
   if (!ipType) return false;
 

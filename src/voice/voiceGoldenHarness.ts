@@ -14,8 +14,8 @@ import { VOICE_RUNTIME_MODES, parseVoiceRuntimeMode } from "./voiceModes.ts";
 
 export const VOICE_GOLDEN_MODES = VOICE_RUNTIME_MODES;
 
-export type VoiceGoldenMode = (typeof VOICE_GOLDEN_MODES)[number];
-export type VoiceGoldenRunMode = "simulated" | "live";
+type VoiceGoldenMode = (typeof VOICE_GOLDEN_MODES)[number];
+type VoiceGoldenRunMode = "simulated" | "live";
 
 type VoiceGoldenCase = {
   id: string;
@@ -31,7 +31,7 @@ type VoiceGoldenJudgeConfig = {
   model: string;
 };
 
-export type VoiceGoldenHarnessOptions = {
+type VoiceGoldenHarnessOptions = {
   mode?: VoiceGoldenRunMode;
   modes?: VoiceGoldenMode[];
   iterations?: number;
@@ -97,7 +97,7 @@ type JudgeResult = {
   rawText: string;
 };
 
-export type VoiceGoldenCaseResult = {
+type VoiceGoldenCaseResult = {
   mode: VoiceGoldenMode;
   caseId: string;
   caseTitle: string;
@@ -113,7 +113,7 @@ export type VoiceGoldenCaseResult = {
   error: string | null;
 };
 
-export type VoiceGoldenModeReport = {
+type VoiceGoldenModeReport = {
   mode: VoiceGoldenMode;
   skippedReason: string | null;
   results: VoiceGoldenCaseResult[];
@@ -126,9 +126,9 @@ export type VoiceGoldenModeReport = {
   };
 };
 
-export type StageStat = NumericStats;
+type StageStat = NumericStats;
 
-export type VoiceGoldenHarnessReport = {
+type VoiceGoldenHarnessReport = {
   startedAt: string;
   finishedAt: string;
   options: VoiceGoldenResolvedOptions;

@@ -104,7 +104,7 @@ export async function resolveDeterministicMentions(runtime, { text, guild, guild
   };
 }
 
-export function buildMentionAliasIndex(runtime, { guild, guildId }) {
+function buildMentionAliasIndex(runtime, { guild, guildId }) {
   const aliases = new Map();
   const addAlias = (name, id) => {
     const key = normalizeMentionLookupKey(name);
@@ -135,7 +135,7 @@ export function buildMentionAliasIndex(runtime, { guild, guildId }) {
   return aliases;
 }
 
-export async function lookupGuildMembersByExactName({ guild, lookupKey }) {
+async function lookupGuildMembersByExactName({ guild, lookupKey }) {
   if (!guild?.members?.search) return new Set();
   const query = String(lookupKey || "").trim();
   if (query.length < 2) return new Set();

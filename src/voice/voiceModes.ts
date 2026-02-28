@@ -5,7 +5,7 @@ export const VOICE_RUNTIME_MODES = [
   "stt_pipeline"
 ] as const;
 
-export type VoiceRuntimeMode = (typeof VOICE_RUNTIME_MODES)[number];
+type VoiceRuntimeMode = (typeof VOICE_RUNTIME_MODES)[number];
 
 export function normalizeVoiceRuntimeMode(value: unknown, fallback: VoiceRuntimeMode = "voice_agent"): VoiceRuntimeMode {
   const normalized = String(value || fallback || "")

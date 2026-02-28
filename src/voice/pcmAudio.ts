@@ -23,7 +23,7 @@ function int16ArrayToBuffer(samples) {
   return Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength);
 }
 
-export function downmixStereo16ToMono16(input) {
+function downmixStereo16ToMono16(input) {
   const stereoSamples = toAlignedInt16Samples(input);
   const frameCount = Math.floor(stereoSamples.length / 2);
   if (frameCount <= 0) return Buffer.alloc(0);
@@ -38,7 +38,7 @@ export function downmixStereo16ToMono16(input) {
   return int16ArrayToBuffer(monoSamples);
 }
 
-export function resampleMono16(input, inputSampleRate, outputSampleRate) {
+function resampleMono16(input, inputSampleRate, outputSampleRate) {
   const inRate = Number(inputSampleRate) || 0;
   const outRate = Number(outputSampleRate) || 0;
   if (inRate <= 0 || outRate <= 0) return Buffer.alloc(0);
@@ -66,7 +66,7 @@ export function resampleMono16(input, inputSampleRate, outputSampleRate) {
   return int16ArrayToBuffer(outputSamples);
 }
 
-export function mono16ToStereo16(input) {
+function mono16ToStereo16(input) {
   const inputSamples = toAlignedInt16Samples(input);
   const sampleCount = inputSamples.length;
   if (sampleCount <= 0) return Buffer.alloc(0);

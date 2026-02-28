@@ -47,10 +47,6 @@ export function classifyApiAccessPath(apiPath) {
   return API_ACCESS_KIND.private;
 }
 
-export function requiresPublicApiHeaderToken(apiPath) {
-  return classifyApiAccessPath(apiPath) === API_ACCESS_KIND.publicHeaderToken;
-}
-
 export function isPublicSessionTokenApiPath(apiPath) {
   return classifyApiAccessPath(apiPath) === API_ACCESS_KIND.publicSessionToken;
 }

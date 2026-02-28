@@ -111,7 +111,7 @@ export function getReplyAddressSignal(runtime, settings, message, recentMessages
   };
 }
 
-export function resolveReferencedAuthorId(message, recentMessages = []) {
+function resolveReferencedAuthorId(message, recentMessages = []) {
   const referenceId = String(message.reference?.messageId || "").trim();
   if (!referenceId) return null;
 

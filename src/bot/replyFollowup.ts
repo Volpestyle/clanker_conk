@@ -217,7 +217,7 @@ export async function runModelRequestedWebSearchWithTimeout<T extends WebSearchS
   } as T;
 }
 
-export async function runModelRequestedMemoryLookup<T extends MemoryLookupState>(runtime, {
+async function runModelRequestedMemoryLookup<T extends MemoryLookupState>(runtime, {
   settings,
   memoryLookup,
   query,

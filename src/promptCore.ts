@@ -3,7 +3,7 @@ import { normalizeBoundedStringList } from "./settings/listNormalization.ts";
 const DEFAULT_BOT_NAME = "clanker conk";
 const DEFAULT_STYLE = "playful slang";
 
-export const PROMPT_CAPABILITY_HONESTY_LINE = "Never claim capabilities you do not have.";
+const PROMPT_CAPABILITY_HONESTY_LINE = "Never claim capabilities you do not have.";
 const DEFAULT_IMPOSSIBLE_ACTION_LINE = "If asked to do something impossible, say it casually and suggest a text-only alternative.";
 const DEFAULT_MEMORY_ENABLED_LINE =
   "You have persistent memory across conversations via saved durable facts and logs. Do not claim each conversation starts from zero.";
@@ -121,7 +121,7 @@ export function getMediaPromptCraftGuidance(settings, fallback = DEFAULT_MEDIA_P
   return configured || String(fallback || DEFAULT_MEDIA_PROMPT_CRAFT_GUIDANCE);
 }
 
-export function getPromptHardLimits(settings, { maxItems = null } = {}) {
+function getPromptHardLimits(settings, { maxItems = null } = {}) {
   const source = Array.isArray(settings?.persona?.hardLimits) ? settings.persona.hardLimits : [];
   const limits = source
     .map((line) => String(line || "").trim())

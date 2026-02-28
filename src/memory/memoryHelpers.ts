@@ -1,4 +1,4 @@
-import { clamp01, clampInt } from "../normalization/numbers.ts";
+import { clamp01 } from "../normalization/numbers.ts";
 
 const LORE_SUBJECT = "__lore__";
 const SELF_SUBJECT = "__self__";
@@ -97,7 +97,7 @@ export function passesHybridRelevanceGate({ row, semanticAvailable }) {
   return lexicalScore >= 0.24 || combinedScore >= 0.62;
 }
 
-export function cleanFactForMemory(rawFact) {
+function cleanFactForMemory(rawFact) {
   let text = String(rawFact || "")
     .replace(/\s+/g, " ")
     .trim();

@@ -10,11 +10,6 @@ export function chance(probability) {
   return Math.random() < probability;
 }
 
-export function pickRandom(values) {
-  if (!values.length) return null;
-  return values[Math.floor(Math.random() * values.length)] ?? null;
-}
-
 export function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -265,10 +265,6 @@ export function estimateImageUsdCost({
   return Number((perImage * count).toFixed(6));
 }
 
-export function getDefaultPricing() {
-  return DEFAULT_PRICING;
-}
-
 export function getLlmModelCatalog(customPricing = {}) {
   const merged = mergePricing(customPricing);
   return {

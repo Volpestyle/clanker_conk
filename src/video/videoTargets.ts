@@ -153,7 +153,7 @@ export function parseVideoTarget(rawUrl, { source = "message_url", forceDirect =
   return null;
 }
 
-export function createDirectTargetFromUrl(rawUrl, source) {
+function createDirectTargetFromUrl(rawUrl, source) {
   const safeUrl = normalizeDiscoveryUrl(rawUrl);
   if (!safeUrl) return null;
 
@@ -175,7 +175,7 @@ export function createDirectTargetFromUrl(rawUrl, source) {
   };
 }
 
-export function createGenericTargetFromUrl(rawUrl, source) {
+function createGenericTargetFromUrl(rawUrl, source) {
   const safeUrl = normalizeDiscoveryUrl(rawUrl);
   if (!safeUrl) return null;
 
@@ -197,7 +197,7 @@ export function createGenericTargetFromUrl(rawUrl, source) {
   };
 }
 
-export function parseYoutubeTargetFromUrl(parsed) {
+function parseYoutubeTargetFromUrl(parsed) {
   const host = String(parsed.hostname || "").toLowerCase();
   const compactHost = host.replace(/^www\./, "");
   let videoId = "";
@@ -222,7 +222,7 @@ export function parseYoutubeTargetFromUrl(parsed) {
   };
 }
 
-export function isTikTokHost(compactHost) {
+function isTikTokHost(compactHost) {
   return (
     compactHost === "tiktok.com" ||
     compactHost.endsWith(".tiktok.com") ||
@@ -239,7 +239,7 @@ export function extractTikTokIdFromUrl(rawUrl) {
   }
 }
 
-export function extractTikTokIdFromParsedUrl(parsed) {
+function extractTikTokIdFromParsedUrl(parsed) {
   const parts = parsed.pathname.split("/").filter(Boolean);
   const videoIndex = parts.findIndex((part) => part.toLowerCase() === "video");
   if (videoIndex >= 0 && parts[videoIndex + 1]) {
@@ -250,7 +250,7 @@ export function extractTikTokIdFromParsedUrl(parsed) {
   return "";
 }
 
-export function buildHostPathKey(parsed) {
+function buildHostPathKey(parsed) {
   const host = String(parsed.hostname || "").toLowerCase().replace(/^www\./, "");
   const pathname = String(parsed.pathname || "/").replace(/\/+$/, "") || "/";
   return `${host}${pathname}`;
@@ -270,4 +270,3 @@ export function isLikelyDirectVideoUrl(rawUrl) {
   }
   return false;
 }
-

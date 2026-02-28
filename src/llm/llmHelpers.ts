@@ -1,8 +1,8 @@
-export const CLAUDE_CODE_MODELS = new Set(["sonnet", "opus", "haiku"]);
+const CLAUDE_CODE_MODELS = new Set(["sonnet", "opus", "haiku"]);
 export const MEMORY_FACT_TYPES = ["preference", "profile", "relationship", "project", "other"];
 export const MEMORY_FACT_SUBJECTS = ["author", "bot", "lore"];
 const XAI_DEFAULT_BASE_URL = "https://api.x.ai/v1";
-export const XAI_VIDEO_DONE_STATUSES = new Set(["done", "completed", "succeeded", "success", "ready"]);
+const XAI_VIDEO_DONE_STATUSES = new Set(["done", "completed", "succeeded", "success", "ready"]);
 import { clamp01, clampInt, clampNumber } from "../normalization/numbers.ts";
 import { extractJsonObjectFromText } from "../normalization/jsonExtraction.ts";
 import { normalizeBoundedStringList } from "../settings/listNormalization.ts";
@@ -68,7 +68,7 @@ export function normalizeInlineText(value, maxLen) {
     .slice(0, maxLen);
 }
 
-export function normalizeFactType(type) {
+function normalizeFactType(type) {
   const normalized = String(type || "")
     .trim()
     .toLowerCase();

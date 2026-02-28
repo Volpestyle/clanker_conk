@@ -7,7 +7,7 @@ export function openReadOnlyDb(dbPath: string) {
   return new Database(dbPath, { readonly: true, create: false });
 }
 
-export function queryRows<T extends Record<string, unknown>>(
+function queryRows<T extends Record<string, unknown>>(
   db: Database,
   sql: string,
   params: unknown[] = []

@@ -10,7 +10,7 @@ type JudgeTrace = {
   messageId: unknown;
 };
 
-export type JudgeLlmService = {
+type JudgeLlmService = {
   generate: (input: {
     settings: Record<string, unknown>;
     systemPrompt: string;
@@ -28,7 +28,7 @@ export type JudgeLlmService = {
   }>;
 };
 
-export type RunJsonJudgeInput<T> = {
+type RunJsonJudgeInput<T> = {
   llm: JudgeLlmService;
   settings: Record<string, unknown>;
   systemPrompt: string;

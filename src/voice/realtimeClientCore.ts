@@ -1,8 +1,8 @@
 import WebSocket from "ws";
 
-export const CONNECT_TIMEOUT_MS = 10_000;
-export const MAX_OUTBOUND_EVENT_HISTORY = 8;
-export const MAX_EVENT_PREVIEW_CHARS = 280;
+const CONNECT_TIMEOUT_MS = 10_000;
+const MAX_OUTBOUND_EVENT_HISTORY = 8;
+const MAX_EVENT_PREVIEW_CHARS = 280;
 
 export function compactObject(value) {
   const out = {};
@@ -77,7 +77,7 @@ export function handleRealtimeSocketClose(client, code, reasonBuffer, { logEvent
   });
 }
 
-export function recordOutboundEvent(client, {
+function recordOutboundEvent(client, {
   payload,
   eventType,
   summarizeOutboundPayload,
