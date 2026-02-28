@@ -2338,7 +2338,6 @@ export class VoiceSessionManager {
           session,
           userId,
           transcript: decision.transcript || turnTranscript,
-          pcmBuffer,
           captureReason,
           source: "realtime",
           directAddressed: Boolean(decision.directAddressed)
@@ -2346,22 +2345,14 @@ export class VoiceSessionManager {
       }
       return;
     }
-    const handledLookupReply = await this.maybeHandleRealtimeWebLookupReply({
-      session,
-      settings,
-      userId,
-      transcript: turnTranscript,
-      directAddressed: Boolean(decision.directAddressed)
-    });
-    if (handledLookupReply) return;
 
-    await this.forwardRealtimeTurnAudio({
+    await this.runRealtimeSharedBrainReply({
       session,
       settings,
       userId,
       transcript: turnTranscript,
-      pcmBuffer,
-      captureReason
+      directAddressed: Boolean(decision.directAddressed),
+      source: "realtime"
     });
   }
 
@@ -2369,7 +2360,6 @@ export class VoiceSessionManager {
     session,
     userId = null,
     transcript = "",
-    pcmBuffer = null,
     captureReason = "stream_end",
     source = "voice_turn",
     directAddressed = false
@@ -2387,7 +2377,6 @@ export class VoiceSessionManager {
     pendingQueue.push({
       userId: String(userId || "").trim() || null,
       transcript: normalizedTranscript,
-      pcmBuffer: pcmBuffer?.length ? pcmBuffer : null,
       captureReason: String(captureReason || "stream_end"),
       source: String(source || "voice_turn"),
       directAddressed: Boolean(directAddressed),
@@ -2444,13 +2433,6 @@ export class VoiceSessionManager {
       STT_TRANSCRIPT_MAX_CHARS
     );
     if (!coalescedTranscript) return;
-    const coalescedPcmBuffer = isRealtimeMode(session.mode)
-      ? Buffer.concat(
-          coalescedTurns
-            .map((entry) => (entry?.pcmBuffer?.length ? entry.pcmBuffer : null))
-            .filter(Boolean)
-        )
-      : null;
 
     const settings = session.settingsSnapshot || this.store.getSettings();
     const decision = await this.evaluateVoiceReplyDecision({
@@ -2497,7 +2479,6 @@ export class VoiceSessionManager {
           session,
           userId: latestTurn?.userId || null,
           transcript: coalescedTranscript,
-          pcmBuffer: coalescedPcmBuffer,
           captureReason: latestTurn?.captureReason || "stream_end",
           source: "bot_turn_open_deferred_flush",
           directAddressed: Boolean(decision.directAddressed)
@@ -2518,49 +2499,14 @@ export class VoiceSessionManager {
     }
 
     if (!isRealtimeMode(session.mode)) return;
-    if (!coalescedPcmBuffer?.length) return;
-    await this.forwardRealtimeTurnAudio({
+    await this.runRealtimeSharedBrainReply({
       session,
       settings,
       userId: latestTurn?.userId || null,
       transcript: coalescedTranscript,
-      pcmBuffer: coalescedPcmBuffer,
-      captureReason: "bot_turn_open_deferred_flush"
+      directAddressed: Boolean(decision.directAddressed),
+      source: "bot_turn_open_deferred_flush"
     });
-  }
-
-  async forwardRealtimeTurnAudio({ session, settings, userId, transcript = "", pcmBuffer, captureReason = "stream_end" }) {
-    if (!session || session.ending) return;
-    if (!isRealtimeMode(session.mode)) return;
-    if (!pcmBuffer?.length) return;
-    try {
-      session.realtimeClient.appendInputAudioPcm(pcmBuffer);
-      session.pendingRealtimeInputBytes = Math.max(0, Number(session.pendingRealtimeInputBytes || 0)) + pcmBuffer.length;
-    } catch (error) {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId,
-        content: `audio_append_failed: ${String(error?.message || error)}`,
-        metadata: {
-          sessionId: session.id,
-          mode: session.mode
-        }
-      });
-      return;
-    }
-
-    if (session.mode === "openai_realtime") {
-      await this.prepareOpenAiRealtimeTurnContext({
-        session,
-        settings,
-        userId,
-        transcript,
-        captureReason
-      });
-    }
-    this.scheduleResponseFromBufferedAudio({ session, userId });
   }
 
   queueVoiceMemoryIngest({
@@ -3869,41 +3815,53 @@ export class VoiceSessionManager {
     }
   }
 
-  shouldAttemptRealtimeWebLookup({ settings, transcript = "" }) {
-    if (!settings?.webSearch?.enabled) return false;
-    const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    if (!normalizedTranscript) return false;
-    if (isLowSignalVoiceFragment(normalizedTranscript)) return false;
-    if (/\?/.test(normalizedTranscript)) return true;
-    return /\b(?:latest|news|today|current|price|weather|update|lookup|search|who|what|when|where|why|how)\b/i.test(
-      normalizedTranscript
-    );
-  }
-
-  async maybeHandleRealtimeWebLookupReply({
+  async runRealtimeSharedBrainReply({
     session,
     settings,
     userId,
     transcript = "",
-    directAddressed = false
+    directAddressed = false,
+    source = "realtime"
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
-    if (typeof this.generateVoiceTurn !== "function") return false;
-    if (!this.shouldAttemptRealtimeWebLookup({ settings, transcript })) return false;
+    if (typeof this.generateVoiceTurn !== "function") {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "realtime_generation_unavailable",
+        metadata: {
+          sessionId: session.id,
+          source: String(source || "realtime")
+        }
+      });
+      return false;
+    }
 
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     if (!normalizedTranscript) return false;
-    const contextMessages = Array.isArray(session.recentVoiceTurns)
+    const contextTranscript = normalizeVoiceText(normalizedTranscript, STT_REPLY_MAX_CHARS);
+    const contextTurns = Array.isArray(session.recentVoiceTurns)
       ? session.recentVoiceTurns
           .filter((row) => row && typeof row === "object")
-          .map((row) => ({
-            role: row.role === "assistant" ? "assistant" : "user",
-            content: normalizeVoiceText(row.text, STT_REPLY_MAX_CHARS)
-          }))
-          .filter((row) => row.content)
           .slice(-STT_CONTEXT_MAX_MESSAGES)
       : [];
+    if (contextTurns.length > 0 && contextTranscript) {
+      const lastTurn = contextTurns[contextTurns.length - 1];
+      const lastRole = lastTurn?.role === "assistant" ? "assistant" : "user";
+      const lastContent = normalizeVoiceText(lastTurn?.text, STT_REPLY_MAX_CHARS);
+      if (lastRole === "user" && lastContent && lastContent === contextTranscript) {
+        contextTurns.pop();
+      }
+    }
+    const contextMessages = contextTurns
+      .map((row) => ({
+        role: row.role === "assistant" ? "assistant" : "user",
+        content: normalizeVoiceText(row.text, STT_REPLY_MAX_CHARS)
+      }))
+      .filter((row) => row.content);
     const soundboardCandidateInfo = await this.resolveSoundboardCandidates({
       session,
       settings
@@ -3937,7 +3895,7 @@ export class VoiceSessionManager {
             settings,
             userId,
             query,
-            source: "realtime_web_lookup"
+            source: `${String(source || "realtime")}:web_lookup`
           });
         },
         onWebLookupComplete: async () => {
@@ -3961,9 +3919,10 @@ export class VoiceSessionManager {
         guildId: session.guildId,
         channelId: session.textChannelId,
         userId,
-        content: `realtime_web_lookup_generation_failed: ${String(error?.message || error)}`,
+        content: `realtime_generation_failed: ${String(error?.message || error)}`,
         metadata: {
-          sessionId: session.id
+          sessionId: session.id,
+          source: String(source || "realtime")
         }
       });
       return false;
@@ -3973,23 +3932,48 @@ export class VoiceSessionManager {
       }
     }
 
-    if (!generatedPayload?.usedWebSearchFollowup) return false;
     const replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
     const requestedSoundboardRef = String(generatedPayload?.soundboardRef || "").trim().slice(0, 180);
-    if (!replyText) return true;
+    const usedWebSearchFollowup = Boolean(generatedPayload?.usedWebSearchFollowup);
+    if (!replyText) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "realtime_reply_skipped",
+        metadata: {
+          sessionId: session.id,
+          mode: session.mode,
+          source: String(source || "realtime"),
+          usedWebSearchFollowup
+        }
+      });
+      return true;
+    }
+
+    if (session.mode === "openai_realtime") {
+      await this.prepareOpenAiRealtimeTurnContext({
+        session,
+        settings,
+        userId,
+        transcript: normalizedTranscript,
+        captureReason: String(source || "realtime")
+      });
+    }
 
     const requestedRealtimeUtterance = this.requestRealtimeTextUtterance({
       session,
       text: replyText,
       userId: this.client.user?.id || null,
-      source: "realtime_web_lookup_reply"
+      source: `${String(source || "realtime")}:reply`
     });
     if (!requestedRealtimeUtterance) {
       const spokeFallback = await this.speakVoiceLineWithTts({
         session,
         settings,
         text: replyText,
-        source: "realtime_web_lookup_tts"
+        source: `${String(source || "realtime")}:tts_fallback`
       });
       if (!spokeFallback) return false;
       session.lastAudioDeltaAt = Date.now();
@@ -4005,12 +3989,14 @@ export class VoiceSessionManager {
       guildId: session.guildId,
       channelId: session.textChannelId,
       userId: this.client.user?.id || null,
-      content: "realtime_web_lookup_reply_requested",
+      content: "realtime_reply_requested",
       metadata: {
         sessionId: session.id,
         mode: session.mode,
+        source: String(source || "realtime"),
         replyText,
-        soundboardRef: requestedSoundboardRef || null
+        soundboardRef: requestedSoundboardRef || null,
+        usedWebSearchFollowup
       }
     });
 
@@ -4021,7 +4007,7 @@ export class VoiceSessionManager {
         userId: this.client.user?.id || null,
         transcript: replyText,
         requestedRef: requestedSoundboardRef,
-        source: "realtime_web_lookup_reply"
+        source: `${String(source || "realtime")}:reply`
       });
     }
 

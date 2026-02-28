@@ -1533,10 +1533,8 @@ test("runRealtimeTurn skips stale queued turns when newer backlog exists", async
   assert.equal(Boolean(staleSkipLog), true);
 });
 
-test("runRealtimeTurn forwards audio and prepares openai context when reply decision allows turn", async () => {
-  let appendedAudioCalls = 0;
-  let preparedContextCalls = 0;
-  let scheduledResponseCalls = 0;
+test("runRealtimeTurn uses shared-brain reply generation when admission allows turn", async () => {
+  const sharedBrainPayloads = [];
   const manager = createManager();
   manager.evaluateVoiceReplyDecision = async () => ({
     allow: true,
@@ -1545,11 +1543,9 @@ test("runRealtimeTurn forwards audio and prepares openai context when reply deci
     directAddressed: false,
     transcript: "tell me more"
   });
-  manager.prepareOpenAiRealtimeTurnContext = async () => {
-    preparedContextCalls += 1;
-  };
-  manager.scheduleResponseFromBufferedAudio = () => {
-    scheduledResponseCalls += 1;
+  manager.runRealtimeSharedBrainReply = async (payload) => {
+    sharedBrainPayloads.push(payload);
+    return true;
   };
 
   const session = {
@@ -1559,11 +1555,7 @@ test("runRealtimeTurn forwards audio and prepares openai context when reply deci
     mode: "openai_realtime",
     ending: false,
     pendingRealtimeInputBytes: 0,
-    realtimeClient: {
-      appendInputAudioPcm() {
-        appendedAudioCalls += 1;
-      }
-    },
+    realtimeClient: {},
     settingsSnapshot: baseSettings()
   };
 
@@ -1574,10 +1566,11 @@ test("runRealtimeTurn forwards audio and prepares openai context when reply deci
     captureReason: "stream_end"
   });
 
-  assert.equal(appendedAudioCalls, 1);
-  assert.equal(preparedContextCalls, 1);
-  assert.equal(scheduledResponseCalls, 1);
-  assert.equal(session.pendingRealtimeInputBytes, 4);
+  assert.equal(sharedBrainPayloads.length, 1);
+  assert.equal(sharedBrainPayloads[0]?.session, session);
+  assert.equal(sharedBrainPayloads[0]?.transcript, "");
+  assert.equal(sharedBrainPayloads[0]?.directAddressed, false);
+  assert.equal(sharedBrainPayloads[0]?.source, "realtime");
 });
 
 test("bindRealtimeHandlers logs OpenAI realtime response.done usage cost", () => {
@@ -2222,9 +2215,9 @@ test("flushDeferredBotTurnOpenTurns coalesces deferred transcripts into one admi
   assert.equal(session.pendingDeferredTurns.length, 0);
 });
 
-test("flushDeferredBotTurnOpenTurns forwards coalesced realtime audio after one admission", async () => {
+test("flushDeferredBotTurnOpenTurns runs shared-brain realtime reply after one admission", async () => {
   const decisionPayloads = [];
-  const forwardedPayloads = [];
+  const realtimeReplyPayloads = [];
   const manager = createManager();
   manager.evaluateVoiceReplyDecision = async (payload) => {
     decisionPayloads.push(payload);
@@ -2236,8 +2229,9 @@ test("flushDeferredBotTurnOpenTurns forwards coalesced realtime audio after one 
       transcript: payload.transcript
     };
   };
-  manager.forwardRealtimeTurnAudio = async (payload) => {
-    forwardedPayloads.push(payload);
+  manager.runRealtimeSharedBrainReply = async (payload) => {
+    realtimeReplyPayloads.push(payload);
+    return true;
   };
   const session = {
     id: "session-realtime-defer-1",
@@ -2274,10 +2268,9 @@ test("flushDeferredBotTurnOpenTurns forwards coalesced realtime audio after one 
 
   assert.equal(decisionPayloads.length, 1);
   assert.equal(decisionPayloads[0]?.transcript, "clanker hold up add this too");
-  assert.equal(forwardedPayloads.length, 1);
-  assert.equal(forwardedPayloads[0]?.captureReason, "bot_turn_open_deferred_flush");
-  assert.equal(forwardedPayloads[0]?.transcript, "clanker hold up add this too");
-  assert.equal(Buffer.isBuffer(forwardedPayloads[0]?.pcmBuffer), true);
-  assert.equal(forwardedPayloads[0]?.pcmBuffer.equals(Buffer.from([1, 2, 3, 4, 5])), true);
+  assert.equal(realtimeReplyPayloads.length, 1);
+  assert.equal(realtimeReplyPayloads[0]?.transcript, "clanker hold up add this too");
+  assert.equal(realtimeReplyPayloads[0]?.source, "bot_turn_open_deferred_flush");
+  assert.equal(realtimeReplyPayloads[0]?.directAddressed, false);
   assert.equal(session.pendingDeferredTurns.length, 0);
 });
