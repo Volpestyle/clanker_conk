@@ -11,6 +11,8 @@ import {
   VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
 } from "../promptCore.ts";
 
+export const PERSONA_FLAVOR_MAX_CHARS = 2_000;
+
 export function normalizeSettings(raw) {
   const merged = deepMerge(DEFAULT_SETTINGS, raw ?? {});
   if (!merged.persona || typeof merged.persona !== "object") merged.persona = {};
@@ -36,7 +38,10 @@ export function normalizeSettings(raw) {
   if (!merged.prompt || typeof merged.prompt !== "object") merged.prompt = {};
 
   merged.botName = String(merged.botName || "clanker conk").slice(0, 50);
-  merged.persona.flavor = String(merged.persona?.flavor || DEFAULT_SETTINGS.persona.flavor).slice(0, 240);
+  merged.persona.flavor = String(merged.persona?.flavor || DEFAULT_SETTINGS.persona.flavor).slice(
+    0,
+    PERSONA_FLAVOR_MAX_CHARS
+  );
   merged.persona.hardLimits = normalizeHardLimitList(
     merged.persona?.hardLimits,
     DEFAULT_SETTINGS.persona?.hardLimits ?? []

@@ -181,6 +181,7 @@ import {
   VOICE_DECIDER_HISTORY_MAX_TURNS,
   VOICE_MAX_DURATION_WARNING_SECONDS,
   VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS,
+  VOICE_LOOKUP_BUSY_ANNOUNCE_DELAY_MS,
   VOICE_LOOKUP_BUSY_LOG_COOLDOWN_MS,
   VOICE_SILENCE_GATE_ACTIVE_RATIO_MAX,
   VOICE_SILENCE_GATE_ACTIVE_SAMPLE_MIN_ABS,
@@ -1801,6 +1802,25 @@ export class VoiceSessionManager {
     }
 
     const state = this.ensureAudioPlaybackQueueState(session);
+    const streamBufferedBytesBeforeEnqueue = Math.max(0, Number(session.botAudioStream?.writableLength || 0));
+    const projectedBufferedBytes =
+      Math.max(0, Number(state.queuedBytes || 0)) + streamBufferedBytesBeforeEnqueue + pcm.length;
+    const activeInboundCaptureCount = Number(session.userCaptures?.size || 0);
+    if (
+      activeInboundCaptureCount > 0 &&
+      session.botTurnOpen &&
+      !this.isBargeInOutputSuppressed(session) &&
+      projectedBufferedBytes >= AUDIO_PLAYBACK_QUEUE_WARN_BYTES
+    ) {
+      const interrupted = this.interruptBotSpeechForBargeIn({
+        session,
+        userId: null,
+        source: "playback_queue_overflow_guard",
+        minCaptureBytes: 0
+      });
+      if (interrupted) return false;
+    }
+
     state.chunks.push(pcm);
     state.queuedBytes = Math.max(0, Number(state.queuedBytes || 0)) + pcm.length;
     const now = Date.now();
@@ -2755,13 +2775,22 @@ export class VoiceSessionManager {
         session,
         reason: "voice_web_lookup_busy"
       });
-      this.announceVoiceWebLookupBusy({
-        session,
-        settings,
-        userId,
-        query,
-        source
-      }).catch(() => undefined);
+      if (session.voiceLookupBusyAnnounceTimer) {
+        clearTimeout(session.voiceLookupBusyAnnounceTimer);
+        session.voiceLookupBusyAnnounceTimer = null;
+      }
+      session.voiceLookupBusyAnnounceTimer = setTimeout(() => {
+        session.voiceLookupBusyAnnounceTimer = null;
+        if (!session || session.ending) return;
+        if (Number(session.voiceLookupBusyCount || 0) <= 0) return;
+        this.announceVoiceWebLookupBusy({
+          session,
+          settings,
+          userId,
+          query,
+          source
+        }).catch(() => undefined);
+      }, VOICE_LOOKUP_BUSY_ANNOUNCE_DELAY_MS);
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
@@ -2784,6 +2813,10 @@ export class VoiceSessionManager {
       const nextCount = Math.max(0, Number(session.voiceLookupBusyCount || 0) - 1);
       session.voiceLookupBusyCount = nextCount;
       if (nextCount > 0) return;
+      if (session.voiceLookupBusyAnnounceTimer) {
+        clearTimeout(session.voiceLookupBusyAnnounceTimer);
+        session.voiceLookupBusyAnnounceTimer = null;
+      }
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
@@ -6934,6 +6967,7 @@ export class VoiceSessionManager {
     if (session.responseDoneGraceTimer) clearTimeout(session.responseDoneGraceTimer);
     if (session.realtimeInstructionRefreshTimer) clearTimeout(session.realtimeInstructionRefreshTimer);
     if (session.deferredTurnFlushTimer) clearTimeout(session.deferredTurnFlushTimer);
+    if (session.voiceLookupBusyAnnounceTimer) clearTimeout(session.voiceLookupBusyAnnounceTimer);
     this.clearVoiceThoughtLoopTimer(session);
     session.thoughtLoopBusy = false;
     session.pendingResponse = null;
@@ -6942,6 +6976,7 @@ export class VoiceSessionManager {
     session.pendingSttTurns = 0;
     session.pendingRealtimeTurns = [];
     session.pendingDeferredTurns = [];
+    session.voiceLookupBusyAnnounceTimer = null;
     session.bargeInSuppressionUntil = 0;
     session.bargeInSuppressedAudioChunks = 0;
     session.bargeInSuppressedAudioBytes = 0;

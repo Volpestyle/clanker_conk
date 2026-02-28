@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { normalizeSettings } from "./settingsNormalization.ts";
+import { normalizeSettings, PERSONA_FLAVOR_MAX_CHARS } from "./settingsNormalization.ts";
 
 test("normalizeSettings clamps and normalizes complex nested settings", () => {
   const normalized = normalizeSettings({
@@ -261,4 +261,22 @@ test("normalizeSettings preserves long media prompt craft guidance blocks", () =
   });
 
   assert.equal(normalized.prompt.mediaPromptCraftGuidance, longGuidance);
+});
+
+test("normalizeSettings allows longer persona flavor values", () => {
+  const withinLimit = "x".repeat(PERSONA_FLAVOR_MAX_CHARS);
+  const normalizedWithinLimit = normalizeSettings({
+    persona: {
+      flavor: withinLimit
+    }
+  });
+  assert.equal(normalizedWithinLimit.persona.flavor, withinLimit);
+
+  const overLimit = `${"y".repeat(PERSONA_FLAVOR_MAX_CHARS)}overflow`;
+  const normalizedOverLimit = normalizeSettings({
+    persona: {
+      flavor: overLimit
+    }
+  });
+  assert.equal(normalizedOverLimit.persona.flavor.length, PERSONA_FLAVOR_MAX_CHARS);
 });

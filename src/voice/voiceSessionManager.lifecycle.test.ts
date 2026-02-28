@@ -5,6 +5,7 @@ import { VoiceSessionManager } from "./voiceSessionManager.ts";
 import {
   AUDIO_PLAYBACK_QUEUE_ABSOLUTE_MAX_BYTES,
   AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES,
+  AUDIO_PLAYBACK_QUEUE_WARN_BYTES,
   BARGE_IN_MIN_SPEECH_MS,
   DISCORD_PCM_FRAME_BYTES
 } from "./voiceSessionManager.constants.ts";
@@ -429,6 +430,70 @@ test("enqueueDiscordPcmForPlayback keeps buffered bytes pinned to hard cap even 
   assert.equal(trimLog?.metadata?.trimStrategy, "drop_oldest");
   assert.equal(trimLog?.metadata?.trimTargetBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
   assert.equal(trimLog?.metadata?.droppedBytes > 0, true);
+});
+
+test("enqueueDiscordPcmForPlayback interrupts bot output when user speech would overflow playback queue", () => {
+  const { manager, logs } = createManager();
+  manager.scheduleAudioPlaybackPump = () => {};
+  const stopCalls = [];
+  let streamDestroyed = false;
+
+  const session = createSession({
+    botTurnOpen: true,
+    userCaptures: new Map([["user-1", { bytesSent: DISCORD_PCM_FRAME_BYTES * 2 }]]),
+    audioPlayer: {
+      state: {
+        status: "playing"
+      },
+      stop(force) {
+        stopCalls.push(force);
+      }
+    },
+    connection: {
+      subscribe() {}
+    },
+    botAudioStream: {
+      writableLength: 0,
+      destroy() {
+        streamDestroyed = true;
+      }
+    },
+    pendingResponse: {
+      requestId: 17,
+      requestedAt: Date.now() - 600,
+      retryCount: 0,
+      hardRecoveryAttempted: false,
+      source: "turn_flush",
+      handlingSilence: false,
+      audioReceivedAt: 0
+    },
+    audioPlaybackQueue: {
+      chunks: [Buffer.alloc(DISCORD_PCM_FRAME_BYTES, 1)],
+      headOffset: 0,
+      queuedBytes: AUDIO_PLAYBACK_QUEUE_WARN_BYTES - DISCORD_PCM_FRAME_BYTES,
+      pumping: false,
+      timer: null,
+      waitingDrain: false,
+      drainHandler: null,
+      lastWarnAt: 0,
+      lastTrimAt: 0
+    }
+  });
+
+  const queued = manager.enqueueDiscordPcmForPlayback({
+    session,
+    discordPcm: Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 2)
+  });
+
+  assert.equal(queued, false);
+  assert.equal(session.botTurnOpen, false);
+  assert.equal(session.audioPlaybackQueue.queuedBytes, 0);
+  assert.equal(stopCalls.length, 1);
+  assert.equal(stopCalls[0], true);
+  assert.equal(streamDestroyed, true);
+  const interruptLog = logs.find((entry) => entry?.content === "voice_barge_in_interrupt");
+  assert.equal(Boolean(interruptLog), true);
+  assert.equal(interruptLog?.metadata?.source, "playback_queue_overflow_guard");
 });
 
 test("enqueueDiscordPcmForPlayback clears stale drain wait when audio stream is replaced", () => {
