@@ -34,6 +34,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.personaHardLimits, "no hate\nno hate\nkeep it fun");
   assert.equal(form.provider, "openai");
   assert.equal(form.model, "claude-haiku-4-5");
+  assert.equal(form.voiceGenerationLlmUseTextModel, false);
   assert.equal(form.voiceGenerationLlmProvider, "anthropic");
   assert.equal(form.voiceGenerationLlmModel, "claude-haiku-4-5");
   assert.equal(form.replyFollowupMaxToolSteps, 2);
@@ -72,6 +73,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.replyFollowupMaxMemoryLookupCalls = 3;
   form.replyFollowupMaxImageLookupCalls = 1;
   form.replyFollowupToolTimeoutMs = 16000;
+  form.voiceGenerationLlmUseTextModel = true;
   form.voiceStreamWatchCommentaryPath = "anthropic_keyframes";
   form.voiceStreamWatchKeyframeIntervalMs = 1750;
   form.voiceStreamWatchAutonomousCommentaryEnabled = false;
@@ -93,6 +95,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.replyFollowupLlm.maxMemoryLookupCalls, 3);
   assert.equal(patch.replyFollowupLlm.maxImageLookupCalls, 1);
   assert.equal(patch.replyFollowupLlm.toolTimeoutMs, 16000);
+  assert.equal(patch.voice.generationLlm.useTextModel, true);
   assert.equal(patch.voice.streamWatch.commentaryPath, "anthropic_keyframes");
   assert.equal(patch.voice.streamWatch.keyframeIntervalMs, 1750);
   assert.equal(patch.voice.streamWatch.autonomousCommentaryEnabled, false);
@@ -208,6 +211,7 @@ test("formToSettingsPatch keeps stt pipeline voice generation and reply decider 
 
   form.voiceGenerationLlmProvider = "anthropic";
   form.voiceGenerationLlmModel = "claude-haiku-4-5";
+  form.voiceGenerationLlmUseTextModel = false;
   form.voiceReplyDecisionLlmEnabled = false;
   form.voiceReplyDecisionLlmProvider = "openai";
   form.voiceReplyDecisionLlmModel = "claude-haiku-4-5";
@@ -216,6 +220,7 @@ test("formToSettingsPatch keeps stt pipeline voice generation and reply decider 
   form.voiceReplyDecisionSystemPromptFull = "full {{botName}}";
   form.voiceReplyDecisionSystemPromptStrict = "strict {{botName}}";
   const patch = formToSettingsPatch(form);
+  assert.equal(patch.voice.generationLlm.useTextModel, false);
   assert.equal(patch.voice.generationLlm.provider, "anthropic");
   assert.equal(patch.voice.generationLlm.model, "claude-haiku-4-5");
   assert.equal(patch.voice.replyDecisionLlm.enabled, false);
@@ -238,4 +243,31 @@ test("settingsFormModel round-trips realtime reply strategy", () => {
   assert.equal(form.voiceRealtimeReplyStrategy, "native");
   const patch = formToSettingsPatch(form);
   assert.equal(patch.voice.realtimeReplyStrategy, "native");
+});
+
+test("settingsFormModel round-trips elevenlabs realtime settings", () => {
+  const form = settingsToForm({
+    voice: {
+      mode: "elevenlabs_realtime",
+      elevenLabsRealtime: {
+        agentId: "agent_123",
+        apiBaseUrl: "https://api.elevenlabs.io",
+        inputSampleRateHz: 16000,
+        outputSampleRateHz: 22050
+      }
+    }
+  });
+
+  assert.equal(form.voiceMode, "elevenlabs_realtime");
+  assert.equal(form.voiceElevenLabsRealtimeAgentId, "agent_123");
+  assert.equal(form.voiceElevenLabsRealtimeApiBaseUrl, "https://api.elevenlabs.io");
+  assert.equal(form.voiceElevenLabsRealtimeInputSampleRateHz, 16000);
+  assert.equal(form.voiceElevenLabsRealtimeOutputSampleRateHz, 22050);
+
+  const patch = formToSettingsPatch(form);
+  assert.equal(patch.voice.mode, "elevenlabs_realtime");
+  assert.equal(patch.voice.elevenLabsRealtime.agentId, "agent_123");
+  assert.equal(patch.voice.elevenLabsRealtime.apiBaseUrl, "https://api.elevenlabs.io");
+  assert.equal(patch.voice.elevenLabsRealtime.inputSampleRateHz, 16000);
+  assert.equal(patch.voice.elevenLabsRealtime.outputSampleRateHz, 22050);
 });

@@ -140,6 +140,7 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
 
   assert.equal(normalized.voice.mode, "openai_realtime");
   assert.equal(normalized.voice.realtimeReplyStrategy, "native");
+  assert.equal(normalized.voice.generationLlm.useTextModel, false);
   assert.equal(normalized.voice.generationLlm.provider, "anthropic");
   assert.equal(normalized.voice.generationLlm.model, "claude-haiku-4-5");
   assert.equal(normalized.voice.thoughtEngine.enabled, true);
@@ -217,6 +218,53 @@ test("normalizeSettings handles memoryLlm defaults and discovery source fallback
   assert.equal(typeof normalized.initiative.discovery.sources.x, "boolean");
 });
 
+test("normalizeSettings forces voice generation llm to text llm when useTextModel is enabled", () => {
+  const normalized = normalizeSettings({
+    llm: {
+      provider: "openai",
+      model: "claude-haiku-4-5"
+    },
+    voice: {
+      generationLlm: {
+        useTextModel: true,
+        provider: "anthropic",
+        model: "grok-3-mini-latest"
+      }
+    },
+    replyFollowupLlm: {
+      enabled: true,
+      useTextModel: true,
+      provider: "anthropic",
+      model: "grok-3-mini-latest"
+    }
+  });
+
+  assert.equal(normalized.voice.generationLlm.useTextModel, true);
+  assert.equal(normalized.voice.generationLlm.provider, "openai");
+  assert.equal(normalized.voice.generationLlm.model, "claude-haiku-4-5");
+  assert.equal("useTextModel" in normalized.replyFollowupLlm, false);
+});
+
+test("normalizeSettings normalizes elevenlabs realtime mode settings", () => {
+  const normalized = normalizeSettings({
+    voice: {
+      mode: "ELEVENLABS_REALTIME",
+      elevenLabsRealtime: {
+        agentId: "   agent_abc   ",
+        apiBaseUrl: "ftp://not-allowed.example/path",
+        inputSampleRateHz: 200000,
+        outputSampleRateHz: 4000
+      }
+    }
+  });
+
+  assert.equal(normalized.voice.mode, "elevenlabs_realtime");
+  assert.equal(normalized.voice.elevenLabsRealtime.agentId, "agent_abc");
+  assert.equal(normalized.voice.elevenLabsRealtime.apiBaseUrl, "https://api.elevenlabs.io");
+  assert.equal(normalized.voice.elevenLabsRealtime.inputSampleRateHz, 48000);
+  assert.equal(normalized.voice.elevenLabsRealtime.outputSampleRateHz, 8000);
+});
+
 test("normalizeSettings uses provider-appropriate memoryLlm model fallback", () => {
   const normalized = normalizeSettings({
     memoryLlm: {
@@ -252,6 +300,7 @@ test("normalizeSettings keeps stt pipeline voice generation and reply decider in
 
   assert.equal(normalized.voice.generationLlm.provider, "openai");
   assert.equal(normalized.voice.generationLlm.model, "claude-haiku-4-5");
+  assert.equal(normalized.voice.generationLlm.useTextModel, false);
   assert.equal(normalized.voice.replyDecisionLlm.provider, "openai");
   assert.equal(normalized.voice.replyDecisionLlm.model, "claude-haiku-4-5");
   assert.equal(normalized.voice.replyDecisionLlm.enabled, true);
