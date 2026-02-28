@@ -1,6 +1,7 @@
 import { clamp } from "./utils.ts";
 import { normalizeAutomationSchedule } from "./automation.ts";
 import { normalizeMentionLookupKey } from "./bot/mentionLookup.ts";
+import { extractJsonObjectFromText } from "./normalization/jsonExtraction.ts";
 
 const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
 const IMAGE_PROMPT_DIRECTIVE_RE = /\[\[IMAGE_PROMPT:\s*([^\]]*?)\s*\]\]\s*$/i;
@@ -589,7 +590,7 @@ export function parseReplyDirectives(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_
 
 export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
   const fallbackText = String(rawText || "").trim();
-  const parsed = parseJsonObjectFromText(fallbackText);
+  const parsed = extractJsonObjectFromText(fallbackText);
   if (!parsed) {
     return {
       text: fallbackText,
@@ -810,36 +811,6 @@ function normalizeAutomationOperation(rawValue) {
   if (normalized === "remove" || normalized === "cancel") return "delete";
   if (!REPLY_AUTOMATION_OPERATION_TYPES.has(normalized)) return "none";
   return normalized;
-}
-
-function parseJsonObjectFromText(rawText) {
-  const raw = String(rawText || "").trim();
-  if (!raw) return null;
-
-  const attempts = [
-    raw,
-    raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1],
-    (() => {
-      const start = raw.indexOf("{");
-      const end = raw.lastIndexOf("}");
-      return start >= 0 && end > start ? raw.slice(start, end + 1) : "";
-    })()
-  ]
-    .map((item) => String(item || "").trim())
-    .filter(Boolean);
-
-  for (const candidate of attempts) {
-    try {
-      const parsed = JSON.parse(candidate);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed;
-      }
-    } catch {
-      // try next candidate
-    }
-  }
-
-  return null;
 }
 
 export function pickReplyMediaDirective(parsed) {

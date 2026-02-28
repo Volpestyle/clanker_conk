@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { api } from "../../api";
 import MemoryResultsTable, { type FactResult } from "./MemoryResultsTable";
+import { ChannelIdField, GuildSelectField } from "./MemoryFormFields";
 
 interface Guild {
   id: string;
@@ -44,15 +45,7 @@ export default function MemorySearch({ guilds, notify }: Props) {
     <div>
       <form className="memory-form" onSubmit={handleSearch}>
         <div className="memory-form-row">
-          <label>
-            Guild
-            <select value={guildId} onChange={(e) => setGuildId(e.target.value)}>
-              <option value="">Select guild...</option>
-              {guilds.map((g) => (
-                <option key={g.id} value={g.id}>{g.name}</option>
-              ))}
-            </select>
-          </label>
+          <GuildSelectField guilds={guilds} guildId={guildId} onGuildChange={setGuildId} />
           <label>
             Query
             <input
@@ -64,15 +57,7 @@ export default function MemorySearch({ guilds, notify }: Props) {
           </label>
         </div>
         <div className="memory-form-row">
-          <label>
-            Channel ID <span style={{ color: "var(--ink-3)" }}>(optional)</span>
-            <input
-              type="text"
-              value={channelId}
-              onChange={(e) => setChannelId(e.target.value)}
-              placeholder="Channel ID"
-            />
-          </label>
+          <ChannelIdField channelId={channelId} onChannelIdChange={setChannelId} />
           <label>
             Limit
             <select value={limit} onChange={(e) => setLimit(Number(e.target.value))}>

@@ -161,28 +161,13 @@ export function buildClaudeCodeStreamInput({
 }
 
 export function buildClaudeCodeCliArgs({ model, systemPrompt = "", jsonSchema = "" }) {
-  const args = [
-    "-p",
-    "--verbose",
-    "--no-session-persistence",
-    "--strict-mcp-config",
-    "--tools", "",
-    "--input-format", "stream-json",
-    "--output-format", "stream-json",
-    "--model", model,
-    "--max-turns", "1"
-  ];
-
-  const normalizedSystemPrompt = String(systemPrompt || "").trim();
-  if (normalizedSystemPrompt) {
-    args.push("--system-prompt", normalizedSystemPrompt);
-  }
-
-  const normalizedSchema = String(jsonSchema || "").trim();
-  if (normalizedSchema) {
-    args.push("--json-schema", normalizedSchema);
-  }
-
+  const args = buildClaudeCodeBaseCliArgs({
+    model,
+    verbose: true,
+    inputFormat: "stream-json",
+    outputFormat: "stream-json"
+  });
+  appendClaudeCodeOptionalCliArgs(args, { systemPrompt, jsonSchema });
   return args;
 }
 
@@ -192,31 +177,11 @@ export function buildClaudeCodeJsonCliArgs({
   jsonSchema = "",
   prompt = ""
 }) {
-  const args = [
-    "-p",
-    "--no-session-persistence",
-    "--strict-mcp-config",
-    "--tools", "",
-    "--output-format", "json",
-    "--model", model,
-    "--max-turns", "1"
-  ];
-
-  const normalizedSystemPrompt = String(systemPrompt || "").trim();
-  if (normalizedSystemPrompt) {
-    args.push("--system-prompt", normalizedSystemPrompt);
-  }
-
-  const normalizedSchema = String(jsonSchema || "").trim();
-  if (normalizedSchema) {
-    args.push("--json-schema", normalizedSchema);
-  }
-
-  const normalizedPrompt = String(prompt || "").trim();
-  if (normalizedPrompt) {
-    args.push(normalizedPrompt);
-  }
-
+  const args = buildClaudeCodeBaseCliArgs({
+    model,
+    outputFormat: "json"
+  });
+  appendClaudeCodeOptionalCliArgs(args, { systemPrompt, jsonSchema, prompt });
   return args;
 }
 
@@ -226,30 +191,8 @@ export function buildClaudeCodeTextCliArgs({
   jsonSchema = "",
   prompt = ""
 }) {
-  const args = [
-    "-p",
-    "--no-session-persistence",
-    "--strict-mcp-config",
-    "--tools", "",
-    "--model", model,
-    "--max-turns", "1"
-  ];
-
-  const normalizedSystemPrompt = String(systemPrompt || "").trim();
-  if (normalizedSystemPrompt) {
-    args.push("--system-prompt", normalizedSystemPrompt);
-  }
-
-  const normalizedSchema = String(jsonSchema || "").trim();
-  if (normalizedSchema) {
-    args.push("--json-schema", normalizedSchema);
-  }
-
-  const normalizedPrompt = String(prompt || "").trim();
-  if (normalizedPrompt) {
-    args.push(normalizedPrompt);
-  }
-
+  const args = buildClaudeCodeBaseCliArgs({ model });
+  appendClaudeCodeOptionalCliArgs(args, { systemPrompt, jsonSchema, prompt });
   return args;
 }
 
@@ -364,22 +307,13 @@ export function parseClaudeCodeStreamOutput(rawOutput) {
 
   const usage = lastResult.usage || {};
   const resultText = String(lastResult.result || "").trim();
-  const errors = Array.isArray(lastResult.errors) ? lastResult.errors : [];
-  const errorMessage = resultText || errors.map((item) => String(item || "").trim()).filter(Boolean).join(" | ");
   const preferredText = lastStructuredOutputText || resultText || lastAssistantText;
 
-  return {
-    text: preferredText,
-    isError: Boolean(lastResult.is_error),
-    errorMessage,
-    usage: {
-      inputTokens: Number(usage.input_tokens || 0),
-      outputTokens: Number(usage.output_tokens || 0),
-      cacheWriteTokens: Number(usage.cache_creation_input_tokens || 0),
-      cacheReadTokens: Number(usage.cache_read_input_tokens || 0)
-    },
-    costUsd: Number(lastResult.total_cost_usd || 0)
-  };
+  return buildClaudeCodeParsedResult({
+    result: lastResult,
+    usage,
+    resultText: preferredText
+  });
 }
 
 function serializeClaudeCodeStructuredOutput(rawValue) {
@@ -423,12 +357,65 @@ export function parseClaudeCodeJsonOutput(rawOutput) {
 
   const usage = lastResult.usage || {};
   const resultText = String(lastResult.result || "").trim();
-  const errors = Array.isArray(lastResult.errors) ? lastResult.errors : [];
-  const errorMessage = resultText || errors.map((item) => String(item || "").trim()).filter(Boolean).join(" | ");
+  return buildClaudeCodeParsedResult({
+    result: lastResult,
+    usage,
+    resultText
+  });
+}
 
+function buildClaudeCodeBaseCliArgs({
+  model,
+  verbose = false,
+  inputFormat = "",
+  outputFormat = ""
+}) {
+  const args = ["-p"];
+  if (verbose) args.push("--verbose");
+  args.push(
+    "--no-session-persistence",
+    "--strict-mcp-config",
+    "--tools", ""
+  );
+  if (String(inputFormat || "").trim()) {
+    args.push("--input-format", String(inputFormat).trim());
+  }
+  if (String(outputFormat || "").trim()) {
+    args.push("--output-format", String(outputFormat).trim());
+  }
+  args.push("--model", model, "--max-turns", "1");
+  return args;
+}
+
+function appendClaudeCodeOptionalCliArgs(args, {
+  systemPrompt = "",
+  jsonSchema = "",
+  prompt = ""
+}) {
+  const normalizedSystemPrompt = String(systemPrompt || "").trim();
+  if (normalizedSystemPrompt) {
+    args.push("--system-prompt", normalizedSystemPrompt);
+  }
+
+  const normalizedSchema = String(jsonSchema || "").trim();
+  if (normalizedSchema) {
+    args.push("--json-schema", normalizedSchema);
+  }
+
+  const normalizedPrompt = String(prompt || "").trim();
+  if (normalizedPrompt) {
+    args.push(normalizedPrompt);
+  }
+}
+
+function buildClaudeCodeParsedResult({ result, usage, resultText = "" }) {
+  const errors = Array.isArray(result?.errors) ? result.errors : [];
+  const normalizedResultText = String(resultText || "").trim();
+  const errorMessage =
+    normalizedResultText || errors.map((item) => String(item || "").trim()).filter(Boolean).join(" | ");
   return {
-    text: resultText,
-    isError: Boolean(lastResult.is_error),
+    text: normalizedResultText,
+    isError: Boolean(result?.is_error),
     errorMessage,
     usage: {
       inputTokens: Number(usage.input_tokens || 0),
@@ -436,7 +423,7 @@ export function parseClaudeCodeJsonOutput(rawOutput) {
       cacheWriteTokens: Number(usage.cache_creation_input_tokens || 0),
       cacheReadTokens: Number(usage.cache_read_input_tokens || 0)
     },
-    costUsd: Number(lastResult.total_cost_usd || 0)
+    costUsd: Number(result?.total_cost_usd || 0)
   };
 }
 

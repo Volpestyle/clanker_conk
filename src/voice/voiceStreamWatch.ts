@@ -7,26 +7,49 @@ const STREAM_WATCH_COMMENTARY_PROMPT_MAX_CHARS = 220;
 const STREAM_WATCH_COMMENTARY_LINE_MAX_CHARS = 160;
 const STREAM_WATCH_VISION_MAX_OUTPUT_TOKENS = 72;
 
-export async function requestWatchStream(manager, { message, settings, targetUserId = null }) {
-  if (!message?.guild || !message?.channel) return false;
+async function sendStreamWatchOfflineMessage(manager, { message, settings, guildId, requesterId }) {
+  await manager.sendOperationalMessage({
+    channel: message.channel,
+    settings,
+    guildId,
+    channelId: message.channelId,
+    userId: requesterId,
+    messageId: message.id,
+    event: "voice_stream_watch_request",
+    reason: "offline",
+    details: {}
+  });
+}
 
+async function resolveStreamWatchRequestContext(manager, { message, settings }) {
+  if (!message?.guild || !message?.channel) return null;
   const guildId = String(message.guild.id);
-  const session = manager.sessions.get(guildId);
   const requesterId = String(message.author?.id || "").trim() || null;
+  const session = manager.sessions.get(guildId);
   if (!session) {
-    await manager.sendOperationalMessage({
-      channel: message.channel,
+    await sendStreamWatchOfflineMessage(manager, {
+      message,
       settings,
       guildId,
-      channelId: message.channelId,
-      userId: requesterId,
-      messageId: message.id,
-      event: "voice_stream_watch_request",
-      reason: "offline",
-      details: {}
+      requesterId
     });
-    return true;
+    return {
+      handled: true
+    };
   }
+  return {
+    handled: false,
+    guildId,
+    requesterId,
+    session
+  };
+}
+
+export async function requestWatchStream(manager, { message, settings, targetUserId = null }) {
+  const context = await resolveStreamWatchRequestContext(manager, { message, settings });
+  if (!context) return false;
+  if (context.handled) return true;
+  const { guildId, session, requesterId } = context;
 
   if (String(message.member?.voice?.channelId || "") !== String(session.voiceChannelId || "")) {
     await manager.sendOperationalMessage({
@@ -314,25 +337,10 @@ export async function enableWatchStreamForUser(manager, {
 }
 
 export async function requestStopWatchingStream(manager, { message, settings }) {
-  if (!message?.guild || !message?.channel) return false;
-
-  const guildId = String(message.guild.id);
-  const session = manager.sessions.get(guildId);
-  const requesterId = String(message.author?.id || "").trim() || null;
-  if (!session) {
-    await manager.sendOperationalMessage({
-      channel: message.channel,
-      settings,
-      guildId,
-      channelId: message.channelId,
-      userId: requesterId,
-      messageId: message.id,
-      event: "voice_stream_watch_request",
-      reason: "offline",
-      details: {}
-    });
-    return true;
-  }
+  const context = await resolveStreamWatchRequestContext(manager, { message, settings });
+  if (!context) return false;
+  if (context.handled) return true;
+  const { guildId, session, requesterId } = context;
 
   if (!session.streamWatch?.active) {
     await manager.sendOperationalMessage({
@@ -372,25 +380,10 @@ export async function requestStopWatchingStream(manager, { message, settings }) 
 }
 
 export async function requestStreamWatchStatus(manager, { message, settings }) {
-  if (!message?.guild || !message?.channel) return false;
-
-  const guildId = String(message.guild.id);
-  const session = manager.sessions.get(guildId);
-  const requesterId = String(message.author?.id || "").trim() || null;
-  if (!session) {
-    await manager.sendOperationalMessage({
-      channel: message.channel,
-      settings,
-      guildId,
-      channelId: message.channelId,
-      userId: requesterId,
-      messageId: message.id,
-      event: "voice_stream_watch_request",
-      reason: "offline",
-      details: {}
-    });
-    return true;
-  }
+  const context = await resolveStreamWatchRequestContext(manager, { message, settings });
+  if (!context) return false;
+  if (context.handled) return true;
+  const { guildId, session, requesterId } = context;
 
   const streamWatch = session.streamWatch || {};
   const lastFrameAgoSec = Number(streamWatch.lastFrameAt || 0)

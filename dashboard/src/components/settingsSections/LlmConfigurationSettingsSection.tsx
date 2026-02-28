@@ -1,5 +1,6 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
+import { LlmProviderOptions } from "./LlmProviderOptions";
 
 export function LlmConfigurationSettingsSection({
   id,
@@ -22,10 +23,7 @@ export function LlmConfigurationSettingsSection({
     <SettingsSection id={id} title="LLM Configuration">
       <label htmlFor="provider">LLM provider</label>
       <select id="provider" value={form.provider} onChange={setProvider}>
-        <option value="openai">openai</option>
-        <option value="anthropic">anthropic</option>
-        <option value="xai">xai (grok)</option>
-        <option value="claude-code">claude code (local)</option>
+        <LlmProviderOptions />
       </select>
 
       <label htmlFor="model-preset">Model ID</label>
@@ -85,10 +83,7 @@ export function LlmConfigurationSettingsSection({
             onChange={setReplyFollowupProvider}
             disabled={!form.replyFollowupLlmEnabled}
           >
-            <option value="openai">openai</option>
-            <option value="anthropic">anthropic</option>
-            <option value="xai">xai (grok)</option>
-            <option value="claude-code">claude code (local)</option>
+            <LlmProviderOptions />
           </select>
         </div>
         <div>
@@ -114,10 +109,7 @@ export function LlmConfigurationSettingsSection({
         <div>
           <label htmlFor="memory-llm-provider">Provider</label>
           <select id="memory-llm-provider" value={form.memoryLlmProvider} onChange={setMemoryLlmProvider}>
-            <option value="openai">openai</option>
-            <option value="anthropic">anthropic</option>
-            <option value="xai">xai (grok)</option>
-            <option value="claude-code">claude code (local)</option>
+            <LlmProviderOptions />
           </select>
         </div>
         <div>

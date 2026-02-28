@@ -4,6 +4,7 @@ export const MEMORY_FACT_SUBJECTS = ["author", "bot", "lore"];
 const XAI_DEFAULT_BASE_URL = "https://api.x.ai/v1";
 export const XAI_VIDEO_DONE_STATUSES = new Set(["done", "completed", "succeeded", "success", "ready"]);
 import { clamp01, clampInt, clampNumber } from "../normalization/numbers.ts";
+import { extractJsonObjectFromText } from "../normalization/jsonExtraction.ts";
 import { normalizeBoundedStringList } from "../settings/listNormalization.ts";
 export { clamp01, clampInt, clampNumber };
 
@@ -78,28 +79,7 @@ export function parseMemoryExtractionJson(rawText) {
   const raw = String(rawText || "").trim();
   if (!raw) return { facts: [] };
 
-  const attempts = [
-    raw,
-    raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1],
-    (() => {
-      const start = raw.indexOf("{");
-      const end = raw.lastIndexOf("}");
-      return start >= 0 && end > start ? raw.slice(start, end + 1) : "";
-    })()
-  ]
-    .map((item) => String(item || "").trim())
-    .filter(Boolean);
-
-  for (const candidate of attempts) {
-    try {
-      const parsed = JSON.parse(candidate);
-      if (parsed && typeof parsed === "object") return parsed;
-    } catch {
-      // try next candidate
-    }
-  }
-
-  return { facts: [] };
+  return extractJsonObjectFromText(raw) || { facts: [] };
 }
 
 export function normalizeExtractedFacts(parsed, maxFacts) {

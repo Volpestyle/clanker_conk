@@ -91,36 +91,7 @@ export async function sendOperationalMessage(manager, {
 
   const normalizedComposedText = String(composedText || "").trim();
   const skipRequested = /^\[SKIP\]$/i.test(normalizedComposedText);
-  if (!mustNotify) {
-    if (skipRequested) return true;
-    if (!normalizedComposedText) {
-      manager.store.logAction({
-        kind: "voice_error",
-        guildId: guildId || null,
-        channelId: channelId || resolvedChannel?.id || channel?.id || null,
-        messageId: messageId || null,
-        userId: userId || manager.client.user?.id || null,
-        content: "voice_message_model_empty",
-        metadata: {
-          event,
-          reason
-        }
-      });
-      return false;
-    }
-    return await sendToChannel(manager, resolvedChannel, normalizedComposedText, {
-      guildId,
-      channelId: channelId || resolvedChannel?.id || null,
-      userId,
-      messageId,
-      event,
-      reason
-    });
-  }
-
-  if (skipRequested) {
-    return true;
-  }
+  if (skipRequested) return true;
 
   if (!normalizedComposedText) {
     manager.store.logAction({

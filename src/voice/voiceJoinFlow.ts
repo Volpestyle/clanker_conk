@@ -25,6 +25,19 @@ const MAX_MAX_SESSION_MINUTES = 120;
 const MIN_INACTIVITY_SECONDS = 20;
 const MAX_INACTIVITY_SECONDS = 3600;
 
+function createRealtimeRuntimeLogger(manager, { guildId, channelId, botUserId }) {
+  return ({ level, event, metadata }) => {
+    manager.store.logAction({
+      kind: level === "warn" ? "voice_error" : "voice_runtime",
+      guildId,
+      channelId,
+      userId: botUserId,
+      content: event,
+      metadata
+    });
+  };
+}
+
 export async function requestJoin(manager, { message, settings, intentConfidence = null }) {
   if (!message?.guild || !message?.member || !message?.channel) return false;
 
@@ -359,19 +372,15 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       const baseVoiceInstructions = manager.buildVoiceInstructions(settings, {
         soundboardCandidates: initialSoundboardCandidates
       });
+      const realtimeRuntimeLogger = createRealtimeRuntimeLogger(manager, {
+        guildId,
+        channelId: message.channelId,
+        botUserId: manager.client.user?.id || null
+      });
       if (runtimeMode === "voice_agent") {
         realtimeClient = new XaiRealtimeClient({
           apiKey: manager.appConfig.xaiApiKey,
-          logger: ({ level, event, metadata }) => {
-            manager.store.logAction({
-              kind: level === "warn" ? "voice_error" : "voice_runtime",
-              guildId,
-              channelId: message.channelId,
-              userId: manager.client.user?.id || null,
-              content: event,
-              metadata
-            });
-          }
+          logger: realtimeRuntimeLogger
         });
 
         const xaiSettings = settings.voice?.xai || {};
@@ -389,16 +398,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       } else if (runtimeMode === "openai_realtime") {
         realtimeClient = new OpenAiRealtimeClient({
           apiKey: manager.appConfig.openaiApiKey,
-          logger: ({ level, event, metadata }) => {
-            manager.store.logAction({
-              kind: level === "warn" ? "voice_error" : "voice_runtime",
-              guildId,
-              channelId: message.channelId,
-              userId: manager.client.user?.id || null,
-              content: event,
-              metadata
-            });
-          }
+          logger: realtimeRuntimeLogger
         });
 
         const openAiRealtimeSettings = settings.voice?.openaiRealtime || {};
@@ -421,16 +421,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           baseUrl:
             String(geminiRealtimeSettings.apiBaseUrl || "https://generativelanguage.googleapis.com").trim() ||
             "https://generativelanguage.googleapis.com",
-          logger: ({ level, event, metadata }) => {
-            manager.store.logAction({
-              kind: level === "warn" ? "voice_error" : "voice_runtime",
-              guildId,
-              channelId: message.channelId,
-              userId: manager.client.user?.id || null,
-              content: event,
-              metadata
-            });
-          }
+          logger: realtimeRuntimeLogger
         });
 
         realtimeInputSampleRateHz = Number(geminiRealtimeSettings.inputSampleRateHz) || 16000;

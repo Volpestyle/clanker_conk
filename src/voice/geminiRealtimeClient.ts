@@ -1,11 +1,19 @@
 import { EventEmitter } from "node:events";
 import WebSocket from "ws";
+import {
+  buildCommonRealtimeState,
+  closeRealtimeSocket,
+  compactObject,
+  handleRealtimeSocketClose,
+  handleRealtimeSocketError,
+  markRealtimeConnected,
+  openRealtimeSocket,
+  safeJsonPreview,
+  sendRealtimePayload
+} from "./realtimeClientCore.ts";
 
 const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 const GEMINI_LIVE_PATH = "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
-const CONNECT_TIMEOUT_MS = 10_000;
-const MAX_OUTBOUND_EVENT_HISTORY = 8;
-const MAX_EVENT_PREVIEW_CHARS = 280;
 
 export class GeminiRealtimeClient extends EventEmitter {
   apiKey;
@@ -70,10 +78,7 @@ export class GeminiRealtimeClient extends EventEmitter {
     const resolvedOutputRate = Math.max(8000, Math.min(48000, Number(outputSampleRateHz) || 24000));
     const ws = await this.openSocket(this.buildRealtimeUrl());
 
-    this.ws = ws;
-    this.connectedAt = Date.now();
-    this.lastEventAt = Date.now();
-    this.lastError = null;
+    markRealtimeConnected(this, ws);
     this.setupComplete = false;
     this.pendingResponseActive = false;
     this.audioActivityOpen = false;
@@ -84,27 +89,18 @@ export class GeminiRealtimeClient extends EventEmitter {
     });
 
     ws.on("error", (error) => {
-      this.lastEventAt = Date.now();
-      this.lastError = String(error?.message || error);
-      this.log("warn", "gemini_realtime_ws_error", { error: this.lastError });
-      this.emit("socket_error", {
-        message: this.lastError
+      handleRealtimeSocketError(this, error, {
+        logEvent: "gemini_realtime_ws_error"
       });
     });
 
     ws.on("close", (code, reasonBuffer) => {
-      this.lastEventAt = Date.now();
-      this.lastCloseCode = Number(code) || null;
-      this.lastCloseReason = reasonBuffer ? String(reasonBuffer) : null;
-      this.pendingResponseActive = false;
-      this.audioActivityOpen = false;
-      this.log("info", "gemini_realtime_ws_closed", {
-        code: this.lastCloseCode,
-        reason: this.lastCloseReason
-      });
-      this.emit("socket_closed", {
-        code: this.lastCloseCode,
-        reason: this.lastCloseReason
+      handleRealtimeSocketClose(this, code, reasonBuffer, {
+        logEvent: "gemini_realtime_ws_closed",
+        onClose: () => {
+          this.pendingResponseActive = false;
+          this.audioActivityOpen = false;
+        }
       });
     });
 
@@ -133,41 +129,14 @@ export class GeminiRealtimeClient extends EventEmitter {
   }
 
   async openSocket(url): Promise<WebSocket> {
-    return await new Promise<WebSocket>((resolve, reject) => {
-      let settled = false;
-
-      const ws = new WebSocket(String(url), {
-        headers: {
-          "Content-Type": "application/json",
-          "x-goog-api-key": this.apiKey
-        },
-        handshakeTimeout: CONNECT_TIMEOUT_MS
-      });
-
-      const timeout = setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        try {
-          ws.terminate();
-        } catch {
-          // ignore
-        }
-        reject(new Error(`Timed out connecting to Gemini Live API after ${CONNECT_TIMEOUT_MS}ms.`));
-      }, CONNECT_TIMEOUT_MS + 1000);
-
-      ws.once("open", () => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        resolve(ws);
-      });
-
-      ws.once("error", (error) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timeout);
-        reject(new Error(`Gemini Live API connection failed: ${String(error?.message || error)}`));
-      });
+    return await openRealtimeSocket({
+      url,
+      headers: {
+        "Content-Type": "application/json",
+        "x-goog-api-key": this.apiKey
+      },
+      timeoutMessage: "Timed out connecting to Gemini Live API after 10000ms.",
+      connectErrorPrefix: "Gemini Live API connection failed"
     });
   }
 
@@ -422,21 +391,15 @@ export class GeminiRealtimeClient extends EventEmitter {
   }
 
   send(payload) {
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      throw new Error("Gemini realtime socket is not open.");
-    }
-
-    const eventType = summarizeGeminiEventType(payload);
-    this.lastOutboundEventType = eventType;
-    this.lastOutboundEventAt = Date.now();
-    this.recordOutboundEvent(payload);
-    if (eventType !== "realtimeInput.mediaChunks") {
-      this.log("info", "gemini_realtime_client_event_sent", {
-        ...(this.lastOutboundEvent || { type: eventType })
-      });
-    }
-
-    this.ws.send(JSON.stringify(payload));
+    sendRealtimePayload(this, {
+      payload,
+      eventType: summarizeGeminiEventType(payload),
+      summarizeOutboundPayload,
+      skipHistoryEventType: "realtimeInput.mediaChunks",
+      skipLogEventType: "realtimeInput.mediaChunks",
+      logEvent: "gemini_realtime_client_event_sent",
+      socketNotOpenMessage: "Gemini realtime socket is not open."
+    });
   }
 
   async close() {
@@ -445,33 +408,7 @@ export class GeminiRealtimeClient extends EventEmitter {
       this.ws = null;
       return;
     }
-
-    await new Promise((resolve) => {
-      const ws = this.ws;
-      let settled = false;
-      const done = () => {
-        if (settled) return;
-        settled = true;
-        ws.removeAllListeners("close");
-        resolve(undefined);
-      };
-
-      ws.once("close", done);
-      try {
-        ws.close(1000, "session_ended");
-      } catch {
-        done();
-      }
-
-      setTimeout(() => {
-        try {
-          ws.terminate();
-        } catch {
-          // ignore
-        }
-        done();
-      }, 1500);
-    });
+    await closeRealtimeSocket(this.ws);
 
     this.ws = null;
     this.pendingResponseActive = false;
@@ -480,18 +417,8 @@ export class GeminiRealtimeClient extends EventEmitter {
 
   getState() {
     return {
-      connected: Boolean(this.ws && this.ws.readyState === WebSocket.OPEN),
-      connectedAt: this.connectedAt ? new Date(this.connectedAt).toISOString() : null,
-      lastEventAt: this.lastEventAt ? new Date(this.lastEventAt).toISOString() : null,
-      sessionId: this.sessionId,
+      ...buildCommonRealtimeState(this),
       setupComplete: this.setupComplete,
-      lastError: this.lastError,
-      lastCloseCode: this.lastCloseCode,
-      lastCloseReason: this.lastCloseReason,
-      lastOutboundEventType: this.lastOutboundEventType || null,
-      lastOutboundEventAt: this.lastOutboundEventAt ? new Date(this.lastOutboundEventAt).toISOString() : null,
-      lastOutboundEvent: this.lastOutboundEvent || null,
-      recentOutboundEvents: this.recentOutboundEvents.slice(-4),
       pendingResponseActive: this.pendingResponseActive
     };
   }
@@ -504,31 +431,6 @@ export class GeminiRealtimeClient extends EventEmitter {
     if (!this.logger) return;
     this.logger({ level, event, metadata });
   }
-
-  recordOutboundEvent(payload) {
-    const eventType = summarizeGeminiEventType(payload);
-    const summarizedPayload = summarizeOutboundPayload(payload);
-    const event = compactObject({
-      type: eventType,
-      at: this.lastOutboundEventAt ? new Date(this.lastOutboundEventAt).toISOString() : null,
-      payload: summarizedPayload
-    });
-    this.lastOutboundEvent = event;
-    if (eventType === "realtimeInput.mediaChunks") return;
-    this.recentOutboundEvents.push(event);
-    if (this.recentOutboundEvents.length > MAX_OUTBOUND_EVENT_HISTORY) {
-      this.recentOutboundEvents = this.recentOutboundEvents.slice(-MAX_OUTBOUND_EVENT_HISTORY);
-    }
-  }
-}
-
-function compactObject(value) {
-  const out = {};
-  for (const [key, entry] of Object.entries(value || {})) {
-    if (entry === undefined || entry === null || entry === "") continue;
-    out[key] = entry;
-  }
-  return out;
 }
 
 function summarizeGeminiEventType(payload) {
@@ -585,21 +487,11 @@ function summarizeOutboundPayload(payload) {
     });
   }
 
-  const preview = safeJsonPreview(payload, MAX_EVENT_PREVIEW_CHARS);
+  const preview = safeJsonPreview(payload);
   return compactObject({
     type,
     preview
   });
-}
-
-function safeJsonPreview(value, maxChars) {
-  try {
-    const serialized = JSON.stringify(value);
-    if (serialized.length <= maxChars) return serialized;
-    return `${serialized.slice(0, maxChars)}...`;
-  } catch {
-    return "[unserializable_payload]";
-  }
 }
 
 function normalizeGeminiBaseUrl(value) {
