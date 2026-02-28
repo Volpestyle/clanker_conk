@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from "react";
 import { api } from "../../api";
-import MemoryResultsTable from "./MemoryResultsTable";
+import MemoryResultsTable, { type FactResult } from "./MemoryResultsTable";
 
 interface Guild {
   id: string;
@@ -12,12 +12,16 @@ interface Props {
   notify: (text: string, type?: string) => void;
 }
 
+interface MemorySearchResponse {
+  results?: FactResult[];
+}
+
 export default function MemorySearch({ guilds, notify }: Props) {
   const [guildId, setGuildId] = useState("");
   const [query, setQuery] = useState("");
   const [channelId, setChannelId] = useState("");
   const [limit, setLimit] = useState(10);
-  const [results, setResults] = useState<any[] | null>(null);
+  const [results, setResults] = useState<FactResult[] | null>(null);
   const [loading, setLoading] = useState(false);
 
   const handleSearch = async (e: FormEvent) => {
@@ -27,10 +31,10 @@ export default function MemorySearch({ guilds, notify }: Props) {
     try {
       const params = new URLSearchParams({ q: query.trim(), guildId, limit: String(limit) });
       if (channelId.trim()) params.set("channelId", channelId.trim());
-      const data = await api(`/api/memory/search?${params}`);
+      const data = await api<MemorySearchResponse>(`/api/memory/search?${params}`);
       setResults(data.results || []);
-    } catch (err: any) {
-      notify(err.message, "error");
+    } catch (error: unknown) {
+      notify(error instanceof Error ? error.message : String(error), "error");
     } finally {
       setLoading(false);
     }

@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-interface FactResult {
+export interface FactResult {
   subject?: string;
   factType?: string;
   fact?: string;

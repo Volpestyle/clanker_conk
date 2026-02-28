@@ -5,16 +5,16 @@ type ApiOptions = {
   body?: unknown;
 };
 
-export function setToken(t) {
+export function setToken(t: string) {
   token = t;
   localStorage.setItem("dashboard_token", t);
 }
 
-export function getToken() {
+export function getToken(): string {
   return token;
 }
 
-export async function api(url: string, options: ApiOptions = {}) {
+export async function api<T = unknown>(url: string, options: ApiOptions = {}): Promise<T> {
   const headers = {
     ...(options.body ? { "Content-Type": "application/json" } : {}),
     ...(token ? { "x-dashboard-token": token } : {})
@@ -31,5 +31,5 @@ export async function api(url: string, options: ApiOptions = {}) {
     throw new Error(`API ${res.status}: ${text}`);
   }
 
-  return res.json();
+  return res.json() as Promise<T>;
 }

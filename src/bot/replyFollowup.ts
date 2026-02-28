@@ -58,6 +58,14 @@ type ReplyGenerationShape = {
   [key: string]: unknown;
 };
 
+type ReplyFollowupPromptPayload = {
+  memoryLookup: MemoryLookupState;
+  imageLookup: ImageLookupState | null;
+  imageInputs: Array<Record<string, unknown>>;
+  allowMemoryLookupDirective: boolean;
+  allowImageLookupDirective: boolean;
+};
+
 export function resolveReplyFollowupGenerationSettings(settings) {
   const followupConfig = settings?.replyFollowupLlm || {};
   if (!followupConfig.enabled) return settings;
@@ -236,7 +244,7 @@ export async function maybeRegenerateWithMemoryLookup<
   mediaPromptLimit: number;
   imageInputs?: Array<Record<string, unknown>> | null;
   forceRegenerate?: boolean;
-  buildUserPrompt: (payload: Record<string, unknown>) => string;
+  buildUserPrompt: (payload: ReplyFollowupPromptPayload) => string;
   runModelRequestedImageLookup?: (payload: {
     imageLookup: TImageLookup;
     query: string;

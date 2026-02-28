@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { api } from "../../api";
-import MemoryResultsTable from "./MemoryResultsTable";
-import MemoryMessagesTable from "./MemoryMessagesTable";
+import MemoryResultsTable, { type FactResult } from "./MemoryResultsTable";
+import MemoryMessagesTable, { type RelevantMessage } from "./MemoryMessagesTable";
 
 interface Guild {
   id: string;
@@ -14,9 +14,9 @@ interface Props {
 }
 
 interface SimulationResult {
-  userFacts: any[];
-  relevantFacts: any[];
-  relevantMessages: any[];
+  userFacts: FactResult[];
+  relevantFacts: FactResult[];
+  relevantMessages: RelevantMessage[];
 }
 
 export default function MemorySimulator({ guilds, notify }: Props) {
@@ -34,10 +34,13 @@ export default function MemorySimulator({ guilds, notify }: Props) {
     try {
       const body: Record<string, string> = { guildId, queryText: queryText.trim(), userId: userId.trim() };
       if (channelId.trim()) body.channelId = channelId.trim();
-      const data = await api("/api/memory/simulate-slice", { method: "POST", body });
+      const data = await api<SimulationResult>("/api/memory/simulate-slice", {
+        method: "POST",
+        body
+      });
       setResult(data);
-    } catch (err: any) {
-      notify(err.message, "error");
+    } catch (error: unknown) {
+      notify(error instanceof Error ? error.message : String(error), "error");
     } finally {
       setLoading(false);
     }

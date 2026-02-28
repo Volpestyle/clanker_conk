@@ -19,18 +19,35 @@ import {
   safeJsonParse,
   sleepMs
 } from "./llmClaudeCode.ts";
+import {
+  MEMORY_FACT_TYPES,
+  clampInt,
+  clampNumber,
+  extractOpenAiImageBase64,
+  extractOpenAiResponseText,
+  extractOpenAiResponseUsage,
+  extractXaiVideoUrl,
+  inferProviderFromModel,
+  isXaiVideoDone,
+  normalizeClaudeCodeModel,
+  normalizeDefaultModel,
+  normalizeExtractedFacts,
+  normalizeInlineText,
+  normalizeLlmProvider,
+  normalizeModelAllowlist,
+  normalizeOpenAiImageGenerationSize,
+  normalizeXaiBaseUrl,
+  parseMemoryExtractionJson,
+  prioritizePreferredModel,
+  resolveProviderFallbackOrder
+} from "./llm/llmHelpers.ts";
 
 const CLAUDE_CODE_TIMEOUT_MS = 30_000;
 const CLAUDE_CODE_MAX_BUFFER_BYTES = 1024 * 1024;
-const CLAUDE_CODE_MODELS = new Set(["sonnet", "opus", "haiku"]);
-
-const MEMORY_FACT_TYPES = ["preference", "profile", "relationship", "project", "other"];
 const DEFAULT_MEMORY_EMBEDDING_MODEL = "text-embedding-3-small";
-const XAI_DEFAULT_BASE_URL = "https://api.x.ai/v1";
 const XAI_VIDEO_POLL_INTERVAL_MS = 2500;
 const XAI_VIDEO_TIMEOUT_MS = 4 * 60_000;
 const XAI_REQUEST_TIMEOUT_MS = 20_000;
-const XAI_VIDEO_DONE_STATUSES = new Set(["done", "completed", "succeeded", "success", "ready"]);
 const XAI_VIDEO_FAILED_STATUSES = new Set(["failed", "error", "cancelled", "canceled"]);
 type XaiJsonPrimitive = string | number | boolean | null;
 type XaiJsonValue = XaiJsonPrimitive | XaiJsonRecord | XaiJsonValue[];
@@ -1452,235 +1469,6 @@ export class LLMService {
     };
   }
 }
-
-function extractOpenAiResponseText(response) {
-  const direct = String(response?.output_text || "").trim();
-  if (direct) return direct;
-
-  const output = Array.isArray(response?.output) ? response.output : [];
-  const textParts = [];
-
-  for (const item of output) {
-    if (!item || typeof item !== "object") continue;
-    if (item.type !== "message") continue;
-    const contentParts = Array.isArray(item.content) ? item.content : [];
-    for (const part of contentParts) {
-      if (!part || typeof part !== "object") continue;
-      if (part.type !== "output_text") continue;
-      const text = String(part.text || "").trim();
-      if (text) textParts.push(text);
-    }
-  }
-
-  return textParts.join("\n").trim();
-}
-
-function extractOpenAiResponseUsage(response) {
-  const usage = response?.usage && typeof response.usage === "object" ? response.usage : null;
-  return {
-    inputTokens: Number(usage?.input_tokens || 0),
-    outputTokens: Number(usage?.output_tokens || 0),
-    cacheWriteTokens: 0,
-    cacheReadTokens: Number(usage?.input_tokens_details?.cached_tokens || 0)
-  };
-}
-
-function extractOpenAiImageBase64(response) {
-  const output = Array.isArray(response?.output) ? response.output : [];
-  for (const item of output) {
-    if (!item || typeof item !== "object") continue;
-    if (item.type !== "image_generation_call") continue;
-    const result = String(item.result || "").trim();
-    if (result) return result;
-  }
-  return "";
-}
-
-function normalizeOpenAiImageGenerationSize(value) {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "1024x1024") return "1024x1024";
-  if (normalized === "1024x1536") return "1024x1536";
-  if (normalized === "1536x1024") return "1536x1024";
-  return "auto";
-}
-
-function normalizeInlineText(value, maxLen) {
-  return String(value || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, maxLen);
-}
-
-function clamp01(value, fallback = 0.5) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  if (parsed < 0) return 0;
-  if (parsed > 1) return 1;
-  return parsed;
-}
-
-function clampInt(value, min, max) {
-  const parsed = Math.floor(Number(value));
-  if (!Number.isFinite(parsed)) return min;
-  if (parsed < min) return min;
-  if (parsed > max) return max;
-  return parsed;
-}
-
-function clampNumber(value, min, max, fallback = min) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  if (parsed < min) return min;
-  if (parsed > max) return max;
-  return parsed;
-}
-
-function normalizeFactType(type) {
-  const normalized = String(type || "")
-    .trim()
-    .toLowerCase();
-  return MEMORY_FACT_TYPES.includes(normalized) ? normalized : "other";
-}
-
-function parseMemoryExtractionJson(rawText) {
-  const raw = String(rawText || "").trim();
-  if (!raw) return { facts: [] };
-
-  const attempts = [
-    raw,
-    raw.match(/```(?:json)?\s*([\s\S]*?)```/i)?.[1],
-    (() => {
-      const start = raw.indexOf("{");
-      const end = raw.lastIndexOf("}");
-      return start >= 0 && end > start ? raw.slice(start, end + 1) : "";
-    })()
-  ]
-    .map((item) => String(item || "").trim())
-    .filter(Boolean);
-
-  for (const candidate of attempts) {
-    try {
-      const parsed = JSON.parse(candidate);
-      if (parsed && typeof parsed === "object") return parsed;
-    } catch {
-      // try next candidate
-    }
-  }
-
-  return { facts: [] };
-}
-
-function normalizeExtractedFacts(parsed, maxFacts) {
-  const facts = Array.isArray(parsed?.facts) ? parsed.facts : [];
-  const normalized = [];
-
-  for (const item of facts) {
-    if (!item || typeof item !== "object") continue;
-
-    const fact = normalizeInlineText(item.fact, 190);
-    const evidence = normalizeInlineText(item.evidence, 220);
-    if (!fact || !evidence) continue;
-
-    normalized.push({
-      fact,
-      type: normalizeFactType(item.type),
-      confidence: clamp01(item.confidence, 0.5),
-      evidence
-    });
-    if (normalized.length >= maxFacts) break;
-  }
-
-  return normalized;
-}
-
-function normalizeXaiBaseUrl(value) {
-  const raw = String(value || XAI_DEFAULT_BASE_URL).trim();
-  const normalized = raw || XAI_DEFAULT_BASE_URL;
-  return normalized.replace(/\/+$/, "");
-}
-
-function normalizeModelAllowlist(input, maxItems = 20) {
-  if (!Array.isArray(input)) return [];
-
-  return [...new Set(input.map((item) => String(item || "").trim()).filter(Boolean))]
-    .slice(0, Math.max(1, maxItems))
-    .map((item) => item.slice(0, 120));
-}
-
-function prioritizePreferredModel(allowedModels, preferredModel) {
-  const preferred = String(preferredModel || "").trim();
-  if (!preferred || !allowedModels.includes(preferred)) return allowedModels;
-  return [preferred, ...allowedModels.filter((entry) => entry !== preferred)];
-}
-
-function normalizeLlmProvider(value, fallback = "openai") {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "anthropic") return "anthropic";
-  if (normalized === "xai") return "xai";
-  if (normalized === "claude-code") return "claude-code";
-
-  const fallbackProvider = String(fallback || "")
-    .trim()
-    .toLowerCase();
-  if (fallbackProvider === "anthropic") return "anthropic";
-  if (fallbackProvider === "xai") return "xai";
-  if (fallbackProvider === "claude-code") return "claude-code";
-  return "openai";
-}
-
-function resolveProviderFallbackOrder(provider) {
-  if (provider === "claude-code") return ["claude-code", "anthropic", "openai", "xai"];
-  if (provider === "anthropic") return ["anthropic", "openai", "xai", "claude-code"];
-  if (provider === "xai") return ["xai", "openai", "anthropic", "claude-code"];
-  return ["openai", "anthropic", "xai", "claude-code"];
-}
-
-function normalizeDefaultModel(value, fallback) {
-  const normalized = String(value || "").trim();
-  if (normalized) return normalized.slice(0, 120);
-  return String(fallback || "").trim().slice(0, 120);
-}
-
-function normalizeClaudeCodeModel(value) {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase();
-  if (!normalized) return "";
-  return CLAUDE_CODE_MODELS.has(normalized) ? normalized : "";
-}
-
-function inferProviderFromModel(model) {
-  const normalized = String(model || "").trim().toLowerCase();
-  if (!normalized) return "openai";
-  if (normalized.startsWith("xai/")) return "xai";
-  if (normalized.includes("grok")) return "xai";
-  return "openai";
-}
-
-function isXaiVideoDone(status, payload) {
-  const normalizedStatus = String(status || "").trim().toLowerCase();
-  if (XAI_VIDEO_DONE_STATUSES.has(normalizedStatus)) return true;
-  return Boolean(extractXaiVideoUrl(payload));
-}
-
-function extractXaiVideoUrl(payload) {
-  const directUrl = String(payload?.video?.url || payload?.url || "").trim();
-  if (directUrl) return directUrl;
-
-  if (Array.isArray(payload?.videos)) {
-    for (const item of payload.videos) {
-      const url = String(item?.url || item?.video?.url || "").trim();
-      if (url) return url;
-    }
-  }
-
-  return "";
-}
-
 
 export {
   buildClaudeCodeCliArgs,

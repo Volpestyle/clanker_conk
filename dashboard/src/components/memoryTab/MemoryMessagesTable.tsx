@@ -1,4 +1,4 @@
-interface RelevantMessage {
+export interface RelevantMessage {
   timestamp?: string;
   author?: string;
   content?: string;

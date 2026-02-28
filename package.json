@@ -13,12 +13,13 @@
     "build:ui": "bunx vite build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
+    "typecheck": "bunx tsc -b --noEmit",
     "test": "bun test ./src ./dashboard/src",
     "test:coverage": "bun test --coverage ./src ./dashboard/src",
     "test:coverage:check": "bun test --coverage ./src ./dashboard/src",
     "replay:flooding": "bun scripts/floodingReplayHarness.ts --mode recorded",
     "replay:flooding:live": "bun scripts/floodingReplayHarness.ts --mode live",
-    "check": "bun run lint && bun scripts/check-backend.mjs && bunx vite build",
+    "check": "bun run lint && bun run typecheck && bun scripts/check-backend.mjs && bunx vite build",
     "diagrams": "bun scripts/gen-diagrams.mjs"
   },
   "engines": {

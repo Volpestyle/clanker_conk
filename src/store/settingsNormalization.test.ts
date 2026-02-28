@@ -39,8 +39,6 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
     },
     voice: {
       mode: "OPENAI_REALTIME",
-      joinOnTextNL: true,
-      requireDirectMentionForJoin: true,
       replyDecisionLlm: {
         provider: "CLAUDE-CODE",
         model: "",
@@ -48,9 +46,7 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
       },
       openaiRealtime: {
         inputAudioFormat: "bad-format",
-        outputAudioFormat: "g711_alaw",
-        inputSampleRateHz: 7000,
-        outputSampleRateHz: 99_000
+        outputAudioFormat: "g711_alaw"
       },
       geminiRealtime: {
         apiBaseUrl: "ftp://invalid.example/path",
@@ -63,10 +59,7 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
         maxFrameBytes: 10
       },
       soundboard: {
-        preferredSoundIds: ["first", "first", "second"],
-        mappings: {
-          legacy: true
-        }
+        preferredSoundIds: ["first", "first", "second"]
       }
     },
     initiative: {
@@ -115,8 +108,6 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, 3);
   assert.equal(normalized.voice.openaiRealtime.inputAudioFormat, "pcm16");
   assert.equal(normalized.voice.openaiRealtime.outputAudioFormat, "g711_alaw");
-  assert.equal("inputSampleRateHz" in normalized.voice.openaiRealtime, false);
-  assert.equal("outputSampleRateHz" in normalized.voice.openaiRealtime, false);
   assert.equal(normalized.voice.geminiRealtime.apiBaseUrl, "https://generativelanguage.googleapis.com");
   assert.equal(normalized.voice.geminiRealtime.inputSampleRateHz, 8000);
   assert.equal(normalized.voice.geminiRealtime.outputSampleRateHz, 48000);
@@ -124,9 +115,6 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.voice.streamWatch.maxFramesPerMinute, 600);
   assert.equal(normalized.voice.streamWatch.maxFrameBytes, 50_000);
   assert.deepEqual(normalized.voice.soundboard.preferredSoundIds, ["first", "second"]);
-  assert.equal("mappings" in normalized.voice.soundboard, false);
-  assert.equal("joinOnTextNL" in normalized.voice, false);
-  assert.equal("requireDirectMentionForJoin" in normalized.voice, false);
 
   assert.deepEqual(normalized.initiative.allowedImageModels, ["gpt-image-1.5", "grok-imagine-image"]);
   assert.deepEqual(normalized.initiative.allowedVideoModels, ["grok-imagine-video"]);

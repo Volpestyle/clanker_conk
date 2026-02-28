@@ -44,27 +44,14 @@ import { normalizeDiscoveryUrl } from "./discovery.ts";
 import { chance, clamp, sanitizeBotText, sleep } from "./utils.ts";
 import {
   applyAutomationControlAction,
-  composeAutomationControlReply,
-  formatAutomationListLine,
-  resolveAutomationTargetsForControl
+  composeAutomationControlReply
 } from "./bot/automationControl.ts";
 import {
-  createAutomationControlRuntime,
-  createMentionResolutionRuntime,
-  createReplyAdmissionRuntime,
-  createReplyFollowupRuntime,
-  createStartupCatchupRuntime,
-  createVoiceReplyRuntime
-} from "./bot/runtimeContexts.ts";
-import {
-  buildMentionAliasIndex as buildMentionAliasIndexForMentions,
-  lookupGuildMembersByExactName as lookupGuildMembersByExactNameForMentions,
   resolveDeterministicMentions as resolveDeterministicMentionsForMentions
 } from "./bot/mentions.ts";
 import {
   maybeRegenerateWithMemoryLookup as maybeRegenerateWithMemoryLookupForReplyFollowup,
   resolveReplyFollowupGenerationSettings as resolveReplyFollowupGenerationSettingsForReplyFollowup,
-  runModelRequestedMemoryLookup as runModelRequestedMemoryLookupForReplyFollowup,
   runModelRequestedWebSearch as runModelRequestedWebSearchForReplyFollowup
 } from "./bot/replyFollowup.ts";
 import {
@@ -684,7 +671,23 @@ export class ClankerBot {
     maxOutputChars = 180,
     allowSkip = false
   }) {
-    const runtime = createVoiceReplyRuntime(this);
+    const runtime = {
+      llm: this.llm,
+      store: this.store,
+      memory: this.memory,
+      search: this.search,
+      client: this.client,
+      loadRelevantMemoryFacts: (payload) => this.loadRelevantMemoryFacts(payload),
+      buildMediaMemoryFacts: (payload) => this.buildMediaMemoryFacts(payload),
+      loadPromptMemorySlice: (payload) => this.loadPromptMemorySlice(payload),
+      buildWebSearchContext: (runtimeSettings, messageText) =>
+        this.buildWebSearchContext(runtimeSettings, messageText),
+      runModelRequestedWebSearch: (payload) =>
+        runModelRequestedWebSearchForReplyFollowup(
+          { llm: this.llm, search: this.search, memory: this.memory },
+          payload
+        )
+    };
     return await composeVoiceOperationalMessage(runtime, {
       settings,
       guildId,
@@ -714,7 +717,23 @@ export class ClankerBot {
     onWebLookupComplete = null,
     webSearchTimeoutMs = null
   }) {
-    const runtime = createVoiceReplyRuntime(this);
+    const runtime = {
+      llm: this.llm,
+      store: this.store,
+      memory: this.memory,
+      search: this.search,
+      client: this.client,
+      loadRelevantMemoryFacts: (payload) => this.loadRelevantMemoryFacts(payload),
+      buildMediaMemoryFacts: (payload) => this.buildMediaMemoryFacts(payload),
+      loadPromptMemorySlice: (payload) => this.loadPromptMemorySlice(payload),
+      buildWebSearchContext: (runtimeSettings, messageText) =>
+        this.buildWebSearchContext(runtimeSettings, messageText),
+      runModelRequestedWebSearch: (payload) =>
+        runModelRequestedWebSearchForReplyFollowup(
+          { llm: this.llm, search: this.search, memory: this.memory },
+          payload
+        )
+    };
     return await generateVoiceTurnReply(runtime, {
       settings,
       guildId,
@@ -920,7 +939,7 @@ export class ClankerBot {
     let usedWebSearchFollowup = false;
     let usedMemoryLookupFollowup = false;
     let usedImageLookupFollowup = false;
-    const followupGenerationSettings = this.resolveReplyFollowupGenerationSettings(settings);
+    const followupGenerationSettings = resolveReplyFollowupGenerationSettingsForReplyFollowup(settings);
     const mediaPromptLimit = resolveMaxMediaPromptLen(settings);
     let replyDirective = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
     let voiceIntentHandled = await this.maybeHandleStructuredVoiceIntent({
@@ -945,15 +964,18 @@ export class ClankerBot {
     const followupStartedAtMs = Date.now();
     if (replyDirective.webSearchQuery) {
       usedWebSearchFollowup = true;
-      const followupWebSearch = await this.runModelRequestedWebSearch({
-        settings,
-        webSearch,
-        query: replyDirective.webSearchQuery,
-        trace: {
-          ...replyTrace,
-          source
+      const followupWebSearch = await runModelRequestedWebSearchForReplyFollowup(
+        { llm: this.llm, search: this.search, memory: this.memory },
+        {
+          settings,
+          webSearch,
+          query: replyDirective.webSearchQuery,
+          trace: {
+            ...replyTrace,
+            source
+          }
         }
-      });
+      );
       webSearch = {
         ...webSearch,
         ...followupWebSearch
@@ -961,42 +983,48 @@ export class ClankerBot {
     }
 
     if (usedWebSearchFollowup || replyDirective.memoryLookupQuery || replyDirective.imageLookupQuery) {
-      const followup = await this.maybeRegenerateWithMemoryLookup({
-        settings,
-        followupSettings: followupGenerationSettings,
-        systemPrompt,
-        generation,
-        directive: replyDirective,
-        memoryLookup,
-        imageLookup,
-        guildId: message.guildId,
-        channelId: message.channelId,
-        trace: {
-          ...replyTrace,
-          source,
-          event: "reply_followup"
-        },
-        mediaPromptLimit,
-        imageInputs: modelImageInputs,
-        forceRegenerate: usedWebSearchFollowup,
-        buildUserPrompt: ({
-          memoryLookup: nextMemoryLookup,
-          imageLookup: nextImageLookup,
-          imageInputs: nextImageInputs,
-          allowMemoryLookupDirective,
-          allowImageLookupDirective
-        }) =>
-          buildReplyPrompt({
-            ...replyPromptBase,
-            imageInputs: nextImageInputs,
-            webSearch,
+      const followup = await maybeRegenerateWithMemoryLookupForReplyFollowup(
+        { llm: this.llm, search: this.search, memory: this.memory },
+        {
+          settings,
+          followupSettings: followupGenerationSettings,
+          systemPrompt,
+          generation,
+          directive: replyDirective,
+          memoryLookup,
+          imageLookup,
+          guildId: message.guildId,
+          channelId: message.channelId,
+          trace: {
+            ...replyTrace,
+            source,
+            event: "reply_followup"
+          },
+          mediaPromptLimit,
+          imageInputs: modelImageInputs,
+          forceRegenerate: usedWebSearchFollowup,
+          buildUserPrompt: ({
             memoryLookup: nextMemoryLookup,
             imageLookup: nextImageLookup,
-            allowWebSearchDirective: false,
+            imageInputs: nextImageInputs,
             allowMemoryLookupDirective,
             allowImageLookupDirective
-          })
-      });
+          }) =>
+            buildReplyPrompt({
+              ...replyPromptBase,
+              imageInputs: nextImageInputs,
+              webSearch,
+              memoryLookup: nextMemoryLookup,
+              imageLookup: nextImageLookup,
+              allowWebSearchDirective: false,
+              allowMemoryLookupDirective,
+              allowImageLookupDirective
+            }),
+          runModelRequestedImageLookup: (payload) => this.runModelRequestedImageLookup(payload),
+          mergeImageInputs: (payload) => this.mergeImageInputs(payload),
+          maxModelImageInputs: MAX_MODEL_IMAGE_INPUTS
+        }
+      );
       generation = followup.generation;
       replyDirective = followup.directive;
       memoryLookup = followup.memoryLookup;
@@ -1139,11 +1167,14 @@ export class ClankerBot {
       }
     }
 
-    mentionResolution = await this.resolveDeterministicMentions({
-      text: finalText,
-      guild: message.guild,
-      guildId: message.guildId
-    });
+    mentionResolution = await resolveDeterministicMentionsForMentions(
+      { store: this.store },
+      {
+        text: finalText,
+        guild: message.guild,
+        guildId: message.guildId
+      }
+    );
     finalText = mentionResolution.text;
     finalText = embedWebSearchSources(finalText, webSearch);
 
@@ -1512,11 +1543,20 @@ export class ClankerBot {
     const operation = String(automationAction?.operation || "").trim();
     if (!operation) return false;
 
-    const result = await this.applyAutomationControlAction({
-      message,
-      settings,
-      automationAction
-    });
+    const result = await applyAutomationControlAction(
+      {
+        store: this.store,
+        client: this.client,
+        isChannelAllowed: (runtimeSettings, channelId) =>
+          this.isChannelAllowed(runtimeSettings, channelId),
+        maybeRunAutomationCycle: () => this.maybeRunAutomationCycle()
+      },
+      {
+        message,
+        settings,
+        automationAction
+      }
+    );
     if (!result || typeof result !== "object" || !("handled" in result) || result.handled !== true) {
       return false;
     }
@@ -1525,7 +1565,7 @@ export class ClankerBot {
       : [];
     const resultMetadata = "metadata" in result ? result.metadata : null;
 
-    const finalText = this.composeAutomationControlReply({
+    const finalText = composeAutomationControlReply({
       modelText: replyDirective?.text,
       detailLines: resultDetailLines
     });
@@ -1847,37 +1887,6 @@ export class ClankerBot {
       return "";
     }
     return normalized;
-  }
-
-  composeAutomationControlReply({ modelText, detailLines = [] }) {
-    return composeAutomationControlReply({
-      modelText,
-      detailLines
-    });
-  }
-
-  async applyAutomationControlAction({ message, settings, automationAction }) {
-    const runtime = createAutomationControlRuntime(this);
-    return await applyAutomationControlAction(runtime, {
-      message,
-      settings,
-      automationAction
-    });
-  }
-
-  resolveAutomationTargetsForControl({ guildId, channelId, operation, automationId = null, targetQuery = "" }) {
-    const runtime = createAutomationControlRuntime(this);
-    return resolveAutomationTargetsForControl(runtime, {
-      guildId,
-      channelId,
-      operation,
-      automationId,
-      targetQuery
-    });
-  }
-
-  formatAutomationListLine(row) {
-    return formatAutomationListLine(row);
   }
 
   async maybeApplyReplyReaction({
@@ -2685,82 +2694,6 @@ export class ClankerBot {
     }
   }
 
-  async runModelRequestedWebSearch({
-    settings,
-    webSearch,
-    query,
-    trace = {}
-  }) {
-    const runtime = createReplyFollowupRuntime(this);
-    return await runModelRequestedWebSearchForReplyFollowup(runtime, {
-      settings,
-      webSearch,
-      query,
-      trace
-    });
-  }
-
-  async runModelRequestedMemoryLookup({
-    settings,
-    memoryLookup,
-    query,
-    guildId,
-    channelId = null,
-    trace = {}
-  }) {
-    const runtime = createReplyFollowupRuntime(this);
-    return await runModelRequestedMemoryLookupForReplyFollowup(runtime, {
-      settings,
-      memoryLookup,
-      query,
-      guildId,
-      channelId,
-      trace
-    });
-  }
-
-  resolveReplyFollowupGenerationSettings(settings) {
-    return resolveReplyFollowupGenerationSettingsForReplyFollowup(settings);
-  }
-
-  async maybeRegenerateWithMemoryLookup({
-    settings,
-    followupSettings = null,
-    systemPrompt,
-    generation,
-    directive,
-    memoryLookup,
-    imageLookup = null,
-    guildId,
-    channelId = null,
-    trace = {},
-    mediaPromptLimit,
-    imageInputs = null,
-    forceRegenerate = false,
-    buildUserPrompt
-  }) {
-    const runtime = createReplyFollowupRuntime(this);
-    return await maybeRegenerateWithMemoryLookupForReplyFollowup(runtime, {
-      settings,
-      followupSettings,
-      systemPrompt,
-      generation,
-      directive,
-      memoryLookup,
-      imageLookup,
-      guildId,
-      channelId,
-      trace,
-      mediaPromptLimit,
-      imageInputs,
-      forceRegenerate,
-      buildUserPrompt,
-      runModelRequestedImageLookup: (payload) => this.runModelRequestedImageLookup(payload),
-      mergeImageInputs: (payload) => this.mergeImageInputs(payload),
-      maxModelImageInputs: MAX_MODEL_IMAGE_INPUTS
-    });
-  }
-
   async maybeAttachGeneratedImage({ settings, text, prompt, variant = "simple", trace }) {
     const payload = { content: text };
     const ready = this.isImageGenerationReady(settings, variant);
@@ -3005,17 +2938,26 @@ export class ClankerBot {
   }
 
   isUserBlocked(settings, userId) {
-    return settings.permissions.blockedUserIds.includes(String(userId));
+    const blockedUserIds = Array.isArray(settings?.permissions?.blockedUserIds)
+      ? settings.permissions.blockedUserIds
+      : [];
+    return blockedUserIds.includes(String(userId));
   }
 
   isChannelAllowed(settings, channelId) {
     const id = String(channelId);
+    const blockedChannelIds = Array.isArray(settings?.permissions?.blockedChannelIds)
+      ? settings.permissions.blockedChannelIds
+      : [];
+    const allowedChannelIds = Array.isArray(settings?.permissions?.allowedChannelIds)
+      ? settings.permissions.allowedChannelIds
+      : [];
 
-    if (settings.permissions.blockedChannelIds.includes(id)) {
+    if (blockedChannelIds.includes(id)) {
       return false;
     }
 
-    const allowList = settings.permissions.allowedChannelIds;
+    const allowList = allowedChannelIds;
     if (allowList.length === 0) return true;
 
     return allowList.includes(id);
@@ -3023,31 +2965,16 @@ export class ClankerBot {
 
   isInitiativeChannel(settings, channelId) {
     const id = String(channelId);
-    return settings.permissions.initiativeChannelIds.includes(id);
+    const initiativeChannelIds = Array.isArray(settings?.permissions?.initiativeChannelIds)
+      ? settings.permissions.initiativeChannelIds
+      : [];
+    return initiativeChannelIds.includes(id);
   }
 
   isDirectlyAddressed(_settings, message) {
     const mentioned = message.mentions?.users?.has(this.client.user.id);
     const isReplyToBot = message.mentions?.repliedUser?.id === this.client.user.id;
     return Boolean(mentioned || isReplyToBot);
-  }
-
-  async resolveDeterministicMentions({ text, guild, guildId }) {
-    const runtime = createMentionResolutionRuntime(this);
-    return await resolveDeterministicMentionsForMentions(runtime, {
-      text,
-      guild,
-      guildId
-    });
-  }
-
-  buildMentionAliasIndex({ guild, guildId }) {
-    const runtime = createMentionResolutionRuntime(this);
-    return buildMentionAliasIndexForMentions(runtime, { guild, guildId });
-  }
-
-  async lookupGuildMembersByExactName(guild, lookupKey) {
-    return await lookupGuildMembersByExactNameForMentions({ guild, lookupKey });
   }
 
   hasBotMessageInRecentWindow({
@@ -3097,8 +3024,16 @@ export class ClankerBot {
   }
 
   getReplyAddressSignal(settings, message, recentMessages = []) {
-    const runtime = createReplyAdmissionRuntime(this);
-    return getReplyAddressSignalForReplyAdmission(runtime, settings, message, recentMessages);
+    return getReplyAddressSignalForReplyAdmission(
+      {
+        botUserId: String(this.client.user?.id || "").trim(),
+        isDirectlyAddressed: (runtimeSettings, runtimeMessage) =>
+          this.isDirectlyAddressed(runtimeSettings, runtimeMessage)
+      },
+      settings,
+      message,
+      recentMessages
+    );
   }
 
   async runStartupTasks() {
@@ -3107,14 +3042,23 @@ export class ClankerBot {
     this.startupTasksRan = true;
 
     const settings = this.store.getSettings();
-    await this.runStartupCatchup(settings);
+    await runStartupCatchupForStartupCatchup(
+      {
+        botUserId: String(this.client.user?.id || "").trim(),
+        store: this.store,
+        getStartupScanChannels: (runtimeSettings) => this.getStartupScanChannels(runtimeSettings),
+        hydrateRecentMessages: (channel, limit) => this.hydrateRecentMessages(channel, limit),
+        isChannelAllowed: (runtimeSettings, channelId) => this.isChannelAllowed(runtimeSettings, channelId),
+        isUserBlocked: (runtimeSettings, userId) => this.isUserBlocked(runtimeSettings, userId),
+        getReplyAddressSignal: (runtimeSettings, message, recentMessages) =>
+          this.getReplyAddressSignal(runtimeSettings, message, recentMessages),
+        hasStartupFollowupAfterMessage: (payload) => this.hasStartupFollowupAfterMessage(payload),
+        enqueueReplyJob: (payload) => this.enqueueReplyJob(payload)
+      },
+      settings
+    );
     await this.maybeRunInitiativeCycle({ startup: true });
     await this.maybeRunAutomationCycle();
-  }
-
-  async runStartupCatchup(settings) {
-    const runtime = createStartupCatchupRuntime(this);
-    return await runStartupCatchupForStartupCatchup(runtime, settings);
   }
 
   async maybeRunAutomationCycle() {
@@ -3358,32 +3302,36 @@ export class ClankerBot {
       }
     });
     let directive = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
-    const followupGenerationSettings = this.resolveReplyFollowupGenerationSettings(settings);
-    const followup = await this.maybeRegenerateWithMemoryLookup({
-      settings,
-      followupSettings: followupGenerationSettings,
-      systemPrompt: automationSystemPrompt,
-      generation,
-      directive,
-      memoryLookup,
-      guildId: automation.guild_id,
-      channelId: automation.channel_id,
-      trace: {
+    const followupGenerationSettings = resolveReplyFollowupGenerationSettingsForReplyFollowup(settings);
+    const followup = await maybeRegenerateWithMemoryLookupForReplyFollowup(
+      { llm: this.llm, search: this.search, memory: this.memory },
+      {
+        settings,
+        followupSettings: followupGenerationSettings,
+        systemPrompt: automationSystemPrompt,
+        generation,
+        directive,
+        memoryLookup,
         guildId: automation.guild_id,
         channelId: automation.channel_id,
-        userId: this.client.user?.id || null,
-        source: "automation_run",
-        event: `automation:${automation.id}`
-      },
-      mediaPromptLimit,
-      forceRegenerate: false,
-      buildUserPrompt: ({ memoryLookup: nextMemoryLookup, allowMemoryLookupDirective }) =>
-        buildAutomationPrompt({
-          ...promptBase,
-          memoryLookup: nextMemoryLookup,
-          allowMemoryLookupDirective
-        })
-    });
+        trace: {
+          guildId: automation.guild_id,
+          channelId: automation.channel_id,
+          userId: this.client.user?.id || null,
+          source: "automation_run",
+          event: `automation:${automation.id}`
+        },
+        mediaPromptLimit,
+        forceRegenerate: false,
+        buildUserPrompt: ({ memoryLookup: nextMemoryLookup, allowMemoryLookupDirective }) =>
+          buildAutomationPrompt({
+            ...promptBase,
+            memoryLookup: nextMemoryLookup,
+            allowMemoryLookupDirective
+          }),
+        maxModelImageInputs: MAX_MODEL_IMAGE_INPUTS
+      }
+    );
     generation = followup.generation;
     directive = followup.directive;
     memoryLookup = followup.memoryLookup;
@@ -3740,11 +3688,14 @@ export class ClankerBot {
         });
         return;
       }
-      const mentionResolution = await this.resolveDeterministicMentions({
-        text: finalText,
-        guild: channel.guild,
-        guildId: channel.guildId
-      });
+      const mentionResolution = await resolveDeterministicMentionsForMentions(
+        { store: this.store },
+        {
+          text: finalText,
+          guild: channel.guild,
+          guildId: channel.guildId
+        }
+      );
       finalText = mentionResolution.text;
 
       let payload = { content: finalText };

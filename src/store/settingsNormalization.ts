@@ -381,8 +381,6 @@ export function normalizeSettings(raw) {
     merged.voice?.allowNsfwHumor !== undefined
       ? Boolean(merged.voice?.allowNsfwHumor)
       : Boolean(defaultVoice.allowNsfwHumor);
-  delete merged.voice.joinOnTextNL;
-  delete merged.voice.requireDirectMentionForJoin;
   merged.voice.intentConfidenceThreshold = clamp(
     Number.isFinite(voiceIntentThresholdRaw)
       ? voiceIntentThresholdRaw
@@ -420,7 +418,6 @@ export function normalizeSettings(raw) {
   merged.voice.replyEagerness = clamp(
     Number.isFinite(voiceEagernessRaw) ? voiceEagernessRaw : 0, 0, 100
   );
-  delete merged.voice.eagerCooldownSeconds;
   if (merged.voice.mode === "stt_pipeline") {
     merged.voice.replyDecisionLlm.provider = merged.llm.provider;
     merged.voice.replyDecisionLlm.model = merged.llm.model;
@@ -484,8 +481,6 @@ export function normalizeSettings(raw) {
   merged.voice.openaiRealtime.outputAudioFormat = normalizeOpenAiRealtimeAudioFormat(
     merged.voice?.openaiRealtime?.outputAudioFormat || defaultVoiceOpenAiRealtime.outputAudioFormat || "pcm16"
   );
-  delete merged.voice.openaiRealtime.inputSampleRateHz;
-  delete merged.voice.openaiRealtime.outputSampleRateHz;
   merged.voice.openaiRealtime.inputTranscriptionModel = String(
     merged.voice?.openaiRealtime?.inputTranscriptionModel ||
       defaultVoiceOpenAiRealtime.inputTranscriptionModel ||
@@ -493,7 +488,6 @@ export function normalizeSettings(raw) {
   )
     .trim()
     .slice(0, 120);
-  delete merged.voice.openaiRealtime.allowNsfwHumor;
   merged.voice.geminiRealtime.model = String(
     merged.voice?.geminiRealtime?.model || defaultVoiceGeminiRealtime.model || "gemini-2.5-flash-native-audio-preview-12-2025"
   )
@@ -522,7 +516,6 @@ export function normalizeSettings(raw) {
     8000,
     48000
   );
-  delete merged.voice.geminiRealtime.allowNsfwHumor;
   merged.voice.sttPipeline.transcriptionModel = String(
     merged.voice?.sttPipeline?.transcriptionModel || defaultVoiceSttPipeline.transcriptionModel || "gpt-4o-mini-transcribe"
   )
@@ -580,7 +573,6 @@ export function normalizeSettings(raw) {
       ? Boolean(merged.voice?.soundboard?.allowExternalSounds)
       : Boolean(defaultVoiceSoundboard.allowExternalSounds);
   merged.voice.soundboard.preferredSoundIds = uniqueIdList(merged.voice?.soundboard?.preferredSoundIds).slice(0, 40);
-  delete merged.voice.soundboard.mappings;
 
   merged.startup.catchupEnabled =
     merged.startup?.catchupEnabled !== undefined ? Boolean(merged.startup?.catchupEnabled) : true;
