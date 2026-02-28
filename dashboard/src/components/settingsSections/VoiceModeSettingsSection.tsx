@@ -114,47 +114,61 @@ export function VoiceModeSettingsSection({
           />
 
           <h4>Voice Reply Decider</h4>
-          <p>Controls when Clank should chime in during VC.</p>
-          <div className="split">
-            <div>
-              <label htmlFor="voice-reply-decision-provider">Provider</label>
-              <select
-                id="voice-reply-decision-provider"
-                value={form.voiceReplyDecisionLlmProvider}
-                onChange={setVoiceReplyDecisionProvider}
-              >
-                <option value="openai">openai</option>
-                <option value="anthropic">anthropic</option>
-                <option value="xai">xai (grok)</option>
-                <option value="claude-code">claude code (local)</option>
-              </select>
-            </div>
-            <div>
-              <label htmlFor="voice-reply-decision-model-preset">Model Preset</label>
-              <select
-                id="voice-reply-decision-model-preset"
-                value={selectedVoiceReplyDecisionPresetModel}
-                onChange={selectVoiceReplyDecisionPresetModel}
-              >
-                {voiceReplyDecisionModelOptions.map((modelId) => (
-                  <option key={modelId} value={modelId}>
-                    {modelId}
-                  </option>
-                ))}
-                {!isVoiceReplyDecisionClaudeCodeProvider && (
-                  <option value={CUSTOM_MODEL_OPTION_VALUE}>custom model (manual)</option>
-                )}
-              </select>
-            </div>
-          </div>
-          <label htmlFor="voice-reply-decision-model">Model ID</label>
-          <input
-            id="voice-reply-decision-model"
-            type="text"
-            value={form.voiceReplyDecisionLlmModel}
-            onChange={set("voiceReplyDecisionLlmModel")}
-            disabled={isVoiceReplyDecisionClaudeCodeProvider}
-          />
+          {isSttPipelineMode ? (
+            <p>
+              In STT pipeline mode, reply decisions use the main text LLM selection:
+              {" "}
+              <code>{String(form.provider || "").trim()}</code>
+              {" "}
+              /
+              {" "}
+              <code>{String(form.model || "").trim()}</code>.
+            </p>
+          ) : (
+            <>
+              <p>Controls when Clank should chime in during VC.</p>
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-reply-decision-provider">Provider</label>
+                  <select
+                    id="voice-reply-decision-provider"
+                    value={form.voiceReplyDecisionLlmProvider}
+                    onChange={setVoiceReplyDecisionProvider}
+                  >
+                    <option value="openai">openai</option>
+                    <option value="anthropic">anthropic</option>
+                    <option value="xai">xai (grok)</option>
+                    <option value="claude-code">claude code (local)</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="voice-reply-decision-model-preset">Model Preset</label>
+                  <select
+                    id="voice-reply-decision-model-preset"
+                    value={selectedVoiceReplyDecisionPresetModel}
+                    onChange={selectVoiceReplyDecisionPresetModel}
+                  >
+                    {voiceReplyDecisionModelOptions.map((modelId) => (
+                      <option key={modelId} value={modelId}>
+                        {modelId}
+                      </option>
+                    ))}
+                    {!isVoiceReplyDecisionClaudeCodeProvider && (
+                      <option value={CUSTOM_MODEL_OPTION_VALUE}>custom model (manual)</option>
+                    )}
+                  </select>
+                </div>
+              </div>
+              <label htmlFor="voice-reply-decision-model">Model ID</label>
+              <input
+                id="voice-reply-decision-model"
+                type="text"
+                value={form.voiceReplyDecisionLlmModel}
+                onChange={set("voiceReplyDecisionLlmModel")}
+                disabled={isVoiceReplyDecisionClaudeCodeProvider}
+              />
+            </>
+          )}
 
           {isVoiceAgentMode && (
             <>
@@ -234,31 +248,6 @@ export function VoiceModeSettingsSection({
                     type="text"
                     value={form.voiceOpenAiRealtimeOutputAudioFormat}
                     onChange={set("voiceOpenAiRealtimeOutputAudioFormat")}
-                  />
-                </div>
-              </div>
-
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-openai-realtime-input-sample-rate">OpenAI input sample rate (Hz)</label>
-                  <input
-                    id="voice-openai-realtime-input-sample-rate"
-                    type="number"
-                    min="8000"
-                    max="48000"
-                    value={form.voiceOpenAiRealtimeInputSampleRateHz}
-                    onChange={set("voiceOpenAiRealtimeInputSampleRateHz")}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="voice-openai-realtime-output-sample-rate">OpenAI output sample rate (Hz)</label>
-                  <input
-                    id="voice-openai-realtime-output-sample-rate"
-                    type="number"
-                    min="8000"
-                    max="48000"
-                    value={form.voiceOpenAiRealtimeOutputSampleRateHz}
-                    onChange={set("voiceOpenAiRealtimeOutputSampleRateHz")}
                   />
                 </div>
               </div>

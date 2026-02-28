@@ -264,8 +264,6 @@ export function normalizeSettings(raw) {
       voice: "alloy",
       inputAudioFormat: "pcm16",
       outputAudioFormat: "pcm16",
-      inputSampleRateHz: 24000,
-      outputSampleRateHz: 24000,
       inputTranscriptionModel: "gpt-4o-mini-transcribe"
     },
     geminiRealtime: {
@@ -310,8 +308,6 @@ export function normalizeSettings(raw) {
   const voiceDailySessionsRaw = Number(merged.voice?.maxSessionsPerDay);
   const voiceConcurrentSessionsRaw = Number(merged.voice?.maxConcurrentSessions);
   const voiceSampleRateRaw = Number(merged.voice?.xai?.sampleRateHz);
-  const openAiRealtimeInputSampleRateRaw = Number(merged.voice?.openaiRealtime?.inputSampleRateHz);
-  const openAiRealtimeOutputSampleRateRaw = Number(merged.voice?.openaiRealtime?.outputSampleRateHz);
   const geminiRealtimeInputSampleRateRaw = Number(merged.voice?.geminiRealtime?.inputSampleRateHz);
   const geminiRealtimeOutputSampleRateRaw = Number(merged.voice?.geminiRealtime?.outputSampleRateHz);
   const voiceSttTtsSpeedRaw = Number(merged.voice?.sttPipeline?.ttsSpeed);
@@ -366,23 +362,28 @@ export function normalizeSettings(raw) {
     Number.isFinite(voiceEagernessRaw) ? voiceEagernessRaw : 0, 0, 100
   );
   delete merged.voice.eagerCooldownSeconds;
-  merged.voice.replyDecisionLlm.provider = normalizeLlmProvider(
-    merged.voice?.replyDecisionLlm?.provider || defaultVoiceReplyDecisionLlm.provider || "anthropic"
-  );
-  const replyDecisionModelFallback = String(
-    defaultVoiceReplyDecisionLlm.model || defaultModelForLlmProvider(merged.voice.replyDecisionLlm.provider)
-  )
-    .trim()
-    .slice(0, 120);
-  merged.voice.replyDecisionLlm.model = String(
-    merged.voice?.replyDecisionLlm?.model ||
-      replyDecisionModelFallback ||
-      defaultModelForLlmProvider(merged.voice.replyDecisionLlm.provider)
-  )
-    .trim()
-    .slice(0, 120);
-  if (!merged.voice.replyDecisionLlm.model) {
-    merged.voice.replyDecisionLlm.model = defaultModelForLlmProvider(merged.voice.replyDecisionLlm.provider);
+  if (merged.voice.mode === "stt_pipeline") {
+    merged.voice.replyDecisionLlm.provider = merged.llm.provider;
+    merged.voice.replyDecisionLlm.model = merged.llm.model;
+  } else {
+    merged.voice.replyDecisionLlm.provider = normalizeLlmProvider(
+      merged.voice?.replyDecisionLlm?.provider || defaultVoiceReplyDecisionLlm.provider || "anthropic"
+    );
+    const replyDecisionModelFallback = String(
+      defaultVoiceReplyDecisionLlm.model || defaultModelForLlmProvider(merged.voice.replyDecisionLlm.provider)
+    )
+      .trim()
+      .slice(0, 120);
+    merged.voice.replyDecisionLlm.model = String(
+      merged.voice?.replyDecisionLlm?.model ||
+        replyDecisionModelFallback ||
+        defaultModelForLlmProvider(merged.voice.replyDecisionLlm.provider)
+    )
+      .trim()
+      .slice(0, 120);
+    if (!merged.voice.replyDecisionLlm.model) {
+      merged.voice.replyDecisionLlm.model = defaultModelForLlmProvider(merged.voice.replyDecisionLlm.provider);
+    }
   }
   const replyDecisionMaxAttemptsRaw = Number(merged.voice?.replyDecisionLlm?.maxAttempts);
   const defaultReplyDecisionMaxAttemptsRaw = Number(defaultVoiceReplyDecisionLlm.maxAttempts);
@@ -424,20 +425,8 @@ export function normalizeSettings(raw) {
   merged.voice.openaiRealtime.outputAudioFormat = normalizeOpenAiRealtimeAudioFormat(
     merged.voice?.openaiRealtime?.outputAudioFormat || defaultVoiceOpenAiRealtime.outputAudioFormat || "pcm16"
   );
-  merged.voice.openaiRealtime.inputSampleRateHz = clamp(
-    Number.isFinite(openAiRealtimeInputSampleRateRaw)
-      ? openAiRealtimeInputSampleRateRaw
-      : Number(defaultVoiceOpenAiRealtime.inputSampleRateHz) || 24000,
-    8000,
-    48000
-  );
-  merged.voice.openaiRealtime.outputSampleRateHz = clamp(
-    Number.isFinite(openAiRealtimeOutputSampleRateRaw)
-      ? openAiRealtimeOutputSampleRateRaw
-      : Number(defaultVoiceOpenAiRealtime.outputSampleRateHz) || 24000,
-    8000,
-    48000
-  );
+  delete merged.voice.openaiRealtime.inputSampleRateHz;
+  delete merged.voice.openaiRealtime.outputSampleRateHz;
   merged.voice.openaiRealtime.inputTranscriptionModel = String(
     merged.voice?.openaiRealtime?.inputTranscriptionModel ||
       defaultVoiceOpenAiRealtime.inputTranscriptionModel ||

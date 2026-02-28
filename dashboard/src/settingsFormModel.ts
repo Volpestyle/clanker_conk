@@ -35,6 +35,8 @@ export function settingsToForm(settings) {
   const defaultInitiative = defaults.initiative;
   const defaultDiscovery = defaults.initiative.discovery;
   const activity = settings?.activity || {};
+  const selectedVoiceMode = settings?.voice?.mode ?? defaultVoice.mode;
+  const useTextLlmForVoiceReplyDecision = selectedVoiceMode === "stt_pipeline";
   return {
     botName: settings?.botName || defaults.botName,
     personaFlavor: settings?.persona?.flavor || defaults.persona.flavor,
@@ -86,15 +88,19 @@ export function settingsToForm(settings) {
     videoContextAsrFallback: settings?.videoContext?.allowAsrFallback ?? defaultVideoContext.allowAsrFallback,
     videoContextMaxAsrSeconds: settings?.videoContext?.maxAsrSeconds ?? defaultVideoContext.maxAsrSeconds,
     voiceEnabled: settings?.voice?.enabled ?? defaultVoice.enabled,
-    voiceMode: settings?.voice?.mode ?? defaultVoice.mode,
+    voiceMode: selectedVoiceMode,
     voiceAllowNsfwHumor: settings?.voice?.allowNsfwHumor ?? defaultVoice.allowNsfwHumor,
     voiceIntentConfidenceThreshold: settings?.voice?.intentConfidenceThreshold ?? defaultVoice.intentConfidenceThreshold,
     voiceMaxSessionMinutes: settings?.voice?.maxSessionMinutes ?? defaultVoice.maxSessionMinutes,
     voiceInactivityLeaveSeconds: settings?.voice?.inactivityLeaveSeconds ?? defaultVoice.inactivityLeaveSeconds,
     voiceMaxSessionsPerDay: settings?.voice?.maxSessionsPerDay ?? defaultVoice.maxSessionsPerDay,
     voiceReplyEagerness: settings?.voice?.replyEagerness ?? defaultVoice.replyEagerness,
-    voiceReplyDecisionLlmProvider: settings?.voice?.replyDecisionLlm?.provider ?? defaultVoice.replyDecisionLlm.provider,
-    voiceReplyDecisionLlmModel: settings?.voice?.replyDecisionLlm?.model ?? defaultVoice.replyDecisionLlm.model,
+    voiceReplyDecisionLlmProvider: useTextLlmForVoiceReplyDecision
+      ? settings?.llm?.provider ?? defaultLlm.provider
+      : settings?.voice?.replyDecisionLlm?.provider ?? defaultVoice.replyDecisionLlm.provider,
+    voiceReplyDecisionLlmModel: useTextLlmForVoiceReplyDecision
+      ? settings?.llm?.model ?? defaultLlm.model
+      : settings?.voice?.replyDecisionLlm?.model ?? defaultVoice.replyDecisionLlm.model,
     voiceAllowedChannelIds: formatList(settings?.voice?.allowedVoiceChannelIds),
     voiceBlockedChannelIds: formatList(settings?.voice?.blockedVoiceChannelIds),
     voiceBlockedUserIds: formatList(settings?.voice?.blockedVoiceUserIds),
@@ -106,8 +112,6 @@ export function settingsToForm(settings) {
     voiceOpenAiRealtimeVoice: settings?.voice?.openaiRealtime?.voice ?? defaultVoiceOpenAiRealtime.voice,
     voiceOpenAiRealtimeInputAudioFormat: settings?.voice?.openaiRealtime?.inputAudioFormat ?? defaultVoiceOpenAiRealtime.inputAudioFormat,
     voiceOpenAiRealtimeOutputAudioFormat: settings?.voice?.openaiRealtime?.outputAudioFormat ?? defaultVoiceOpenAiRealtime.outputAudioFormat,
-    voiceOpenAiRealtimeInputSampleRateHz: settings?.voice?.openaiRealtime?.inputSampleRateHz ?? defaultVoiceOpenAiRealtime.inputSampleRateHz,
-    voiceOpenAiRealtimeOutputSampleRateHz: settings?.voice?.openaiRealtime?.outputSampleRateHz ?? defaultVoiceOpenAiRealtime.outputSampleRateHz,
     voiceOpenAiRealtimeInputTranscriptionModel:
       settings?.voice?.openaiRealtime?.inputTranscriptionModel ?? defaultVoiceOpenAiRealtime.inputTranscriptionModel,
     voiceGeminiRealtimeModel:
@@ -183,6 +187,7 @@ export function settingsToForm(settings) {
 }
 
 export function formToSettingsPatch(form) {
+  const useTextLlmForVoiceReplyDecision = String(form.voiceMode || "").trim() === "stt_pipeline";
   return {
     botName: form.botName.trim(),
     persona: {
@@ -252,8 +257,12 @@ export function formToSettingsPatch(form) {
       maxSessionsPerDay: Number(form.voiceMaxSessionsPerDay),
       replyEagerness: Number(form.voiceReplyEagerness),
       replyDecisionLlm: {
-        provider: String(form.voiceReplyDecisionLlmProvider || "").trim(),
-        model: String(form.voiceReplyDecisionLlmModel || "").trim()
+        provider: useTextLlmForVoiceReplyDecision
+          ? String(form.provider || "").trim()
+          : String(form.voiceReplyDecisionLlmProvider || "").trim(),
+        model: useTextLlmForVoiceReplyDecision
+          ? String(form.model || "").trim()
+          : String(form.voiceReplyDecisionLlmModel || "").trim()
       },
       allowedVoiceChannelIds: parseList(form.voiceAllowedChannelIds),
       blockedVoiceChannelIds: parseList(form.voiceBlockedChannelIds),
@@ -269,8 +278,6 @@ export function formToSettingsPatch(form) {
         voice: String(form.voiceOpenAiRealtimeVoice || "").trim(),
         inputAudioFormat: String(form.voiceOpenAiRealtimeInputAudioFormat || "").trim(),
         outputAudioFormat: String(form.voiceOpenAiRealtimeOutputAudioFormat || "").trim(),
-        inputSampleRateHz: Number(form.voiceOpenAiRealtimeInputSampleRateHz),
-        outputSampleRateHz: Number(form.voiceOpenAiRealtimeOutputSampleRateHz),
         inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim()
       },
       geminiRealtime: {

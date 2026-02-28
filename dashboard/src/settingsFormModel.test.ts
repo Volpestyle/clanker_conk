@@ -86,3 +86,25 @@ test("resolvePresetModelSelection enforces claude-code preset behavior", () => {
   assert.equal(claudeCode.isClaudeCodeProvider, true);
   assert.equal(claudeCode.selectedPresetModel, "opus");
 });
+
+test("formToSettingsPatch forces stt pipeline reply decider to main text llm", () => {
+  const form = settingsToForm({
+    llm: {
+      provider: "claude-code",
+      model: "sonnet"
+    },
+    voice: {
+      mode: "stt_pipeline",
+      replyDecisionLlm: {
+        provider: "openai",
+        model: "gpt-4.1-mini"
+      }
+    }
+  });
+
+  form.voiceReplyDecisionLlmProvider = "openai";
+  form.voiceReplyDecisionLlmModel = "gpt-4.1-mini";
+  const patch = formToSettingsPatch(form);
+  assert.equal(patch.voice.replyDecisionLlm.provider, "claude-code");
+  assert.equal(patch.voice.replyDecisionLlm.model, "sonnet");
+});
