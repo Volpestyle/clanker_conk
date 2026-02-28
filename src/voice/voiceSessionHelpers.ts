@@ -536,6 +536,12 @@ export function normalizeVoiceText(value, maxChars = 1200) {
     .slice(0, Math.max(40, Number(maxChars) || 1200));
 }
 
+export function buildRealtimeTextUtterancePrompt(text, maxLineChars = 1200) {
+  const line = normalizeVoiceText(text, maxLineChars);
+  if (!line) return "";
+  return `Speak this exact line verbatim and nothing else: ${line}`;
+}
+
 export function encodePcm16MonoAsWav(pcmBuffer, sampleRate = 24000) {
   const pcm = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
   const normalizedRate = Math.max(8000, Math.min(48000, Number(sampleRate) || 24000));

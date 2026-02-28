@@ -62,6 +62,7 @@ import {
   REALTIME_MEMORY_FACT_LIMIT,
   SOUNDBOARD_MAX_CANDIDATES,
   dedupeSoundboardCandidates,
+  buildRealtimeTextUtterancePrompt,
   encodePcm16MonoAsWav,
   ensureBotAudioPlaybackReady,
   extractSoundboardDirective,
@@ -1682,13 +1683,7 @@ export class VoiceSessionManager {
     if (!isRealtimeMode(session.mode)) return false;
     const realtimeClient = session.realtimeClient;
     if (!realtimeClient || typeof realtimeClient.requestTextUtterance !== "function") return false;
-    const line = normalizeVoiceText(text, STT_REPLY_MAX_CHARS);
-    if (!line) return false;
-
-    const utterancePrompt = normalizeVoiceText(
-      `You're in live Discord voice chat. Say exactly this line and nothing else: ${line}`,
-      420
-    );
+    const utterancePrompt = buildRealtimeTextUtterancePrompt(text, STT_REPLY_MAX_CHARS);
     if (!utterancePrompt) return false;
 
     try {

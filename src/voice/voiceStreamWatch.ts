@@ -1,6 +1,6 @@
 import { clamp } from "../utils.ts";
 import { getPromptBotName } from "../promptCore.ts";
-import { isRealtimeMode, normalizeVoiceText } from "./voiceSessionHelpers.ts";
+import { buildRealtimeTextUtterancePrompt, isRealtimeMode, normalizeVoiceText } from "./voiceSessionHelpers.ts";
 
 const STREAM_WATCH_AUDIO_QUIET_WINDOW_MS = 2200;
 const STREAM_WATCH_COMMENTARY_PROMPT_MAX_CHARS = 220;
@@ -650,13 +650,7 @@ export async function maybeTriggerStreamWatchCommentary(manager, {
       });
       const line = normalizeVoiceText(generated?.text || "", STREAM_WATCH_COMMENTARY_LINE_MAX_CHARS);
       if (!line) return;
-      const utterancePrompt = normalizeVoiceText(
-        [
-          `You're in Discord VC watching ${speakerName}'s live stream.`,
-          `Speak exactly this one short stream commentary line and nothing else: ${line}`
-        ].join(" "),
-        STREAM_WATCH_COMMENTARY_PROMPT_MAX_CHARS
-      );
+      const utterancePrompt = buildRealtimeTextUtterancePrompt(line, STREAM_WATCH_COMMENTARY_LINE_MAX_CHARS);
       realtimeClient.requestTextUtterance(utterancePrompt);
       fallbackVisionMeta = {
         provider: generated?.provider || null,

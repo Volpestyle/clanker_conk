@@ -424,7 +424,7 @@ test("maybeTriggerStreamWatchCommentary supports vision-fallback text utterance 
   });
 
   assert.equal(utterance.length > 0, true);
-  assert.equal(utterance.includes("Speak exactly this one short stream commentary line"), true);
+  assert.equal(utterance.includes("Speak this exact line verbatim and nothing else"), true);
   assert.equal(createdResponses.length, 1);
   const logged = actions.find((entry) => entry.content === "stream_watch_commentary_requested");
   assert.equal(Boolean(logged), true);
