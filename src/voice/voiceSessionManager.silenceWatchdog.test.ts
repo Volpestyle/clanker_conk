@@ -268,6 +268,42 @@ test("handleSilentResponse replaces pending response when newer inbound audio ex
   assert.equal(logs.some((entry) => String(entry.content).includes("pending_response_replaced_by_newer_input")), true);
 });
 
+test("flushResponseFromBufferedAudio defers commit while realtime turn backlog is still draining", () => {
+  const { manager } = createManager();
+  let commitCalls = 0;
+  let createCalls = 0;
+  const scheduled = [];
+  const session = createRealtimeSession({
+    pendingRealtimeInputBytes: 200_000,
+    realtimeTurnDrainActive: true,
+    pendingRealtimeTurns: [{ userId: "speaker-7" }],
+    realtimeClient: {
+      createAudioResponse() {
+        createCalls += 1;
+      },
+      commitInputAudioBuffer() {
+        commitCalls += 1;
+      },
+      isResponseInProgress() {
+        return false;
+      }
+    }
+  });
+  manager.scheduleResponseFromBufferedAudio = (args) => {
+    scheduled.push(args);
+  };
+
+  manager.flushResponseFromBufferedAudio({
+    session,
+    userId: "speaker-7"
+  });
+
+  assert.equal(commitCalls, 0);
+  assert.equal(createCalls, 0);
+  assert.equal(scheduled.length, 1);
+  assert.equal(scheduled[0]?.userId, "speaker-7");
+});
+
 test("handleSilentResponse retries silent response and rearms watchdog when create is skipped", async () => {
   const { manager, logs } = createManager();
   const session = createRealtimeSession({

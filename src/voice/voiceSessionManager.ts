@@ -1351,6 +1351,14 @@ export class VoiceSessionManager {
     }, BOT_TURN_SILENCE_RESET_MS);
   }
 
+  getRealtimeTurnBacklogSize(session) {
+    if (!session) return 0;
+    const pendingQueueDepth = Array.isArray(session.pendingRealtimeTurns)
+      ? session.pendingRealtimeTurns.length
+      : 0;
+    return Math.max(0, (session.realtimeTurnDrainActive ? 1 : 0) + pendingQueueDepth);
+  }
+
   resolveSpeakingEndFinalizeDelayMs({ session, captureAgeMs }) {
     const normalizedCaptureAgeMs = Math.max(0, Number(captureAgeMs || 0));
     let baseDelayMs = SPEAKING_END_FINALIZE_QUICK_MS;
@@ -1362,9 +1370,7 @@ export class VoiceSessionManager {
     }
 
     const activeCaptureCount = Number(session?.userCaptures?.size || 0);
-    const realtimeTurnBacklog =
-      (session?.realtimeTurnDrainActive ? 1 : 0) +
-      (Array.isArray(session?.pendingRealtimeTurns) ? session.pendingRealtimeTurns.length : 0);
+    const realtimeTurnBacklog = this.getRealtimeTurnBacklogSize(session);
     const sttTurnBacklog = Number(session?.pendingSttTurns || 0);
     const turnBacklog = Math.max(0, realtimeTurnBacklog, sttTurnBacklog);
 
@@ -3766,6 +3772,11 @@ export class VoiceSessionManager {
       Number(session.realtimeInputSampleRateHz) || 24000
     );
     if (pendingInputBytes < minCommitBytes) {
+      return;
+    }
+
+    if (this.getRealtimeTurnBacklogSize(session) > 0) {
+      this.scheduleResponseFromBufferedAudio({ session, userId });
       return;
     }
 
