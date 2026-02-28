@@ -226,6 +226,55 @@ export function transcriptSourceFromEventType(eventType) {
   return "unknown";
 }
 
+export function isFinalRealtimeTranscriptEventType(eventType, source = null) {
+  const normalized = String(eventType || "")
+    .trim()
+    .toLowerCase();
+  const normalizedSource = String(source || "")
+    .trim()
+    .toLowerCase();
+  if (!normalized) {
+    return normalizedSource !== "output";
+  }
+
+  if (normalized.includes("delta") || normalized.includes("partial")) return false;
+  if (normalized === "server_content_text") return false;
+
+  if (normalized.includes("input_audio_transcription")) {
+    return normalized.includes("completed") || normalized === "input_audio_transcription";
+  }
+
+  if (normalized.includes("output_audio_transcription")) {
+    return (
+      normalized.includes("done") ||
+      normalized.includes("completed") ||
+      normalized === "output_audio_transcription"
+    );
+  }
+
+  if (normalized.includes("output_audio_transcript")) {
+    return normalized.includes("done") || normalized.includes("completed");
+  }
+
+  if (normalized.includes("response.output_text")) {
+    return normalized.endsWith(".done") || normalized.includes("completed");
+  }
+
+  if (normalized.includes("response.text")) {
+    return normalized.includes("done") || normalized.includes("completed");
+  }
+
+  if (/audio_transcript/u.test(normalized)) {
+    return !normalized.includes("delta");
+  }
+
+  if (/transcript/u.test(normalized)) {
+    return !normalized.includes("delta");
+  }
+
+  return true;
+}
+
 export function extractSoundboardDirective(rawText) {
   const text = String(rawText || "");
   if (!text) {
@@ -480,11 +529,11 @@ export function formatRealtimeMemoryFacts(facts, maxItems = REALTIME_MEMORY_FACT
     .join(" | ");
 }
 
-export function normalizeVoiceText(value, maxChars = 520) {
+export function normalizeVoiceText(value, maxChars = 1200) {
   return String(value || "")
     .replace(/\s+/g, " ")
     .trim()
-    .slice(0, Math.max(40, Number(maxChars) || 520));
+    .slice(0, Math.max(40, Number(maxChars) || 1200));
 }
 
 export function encodePcm16MonoAsWav(pcmBuffer, sampleRate = 24000) {

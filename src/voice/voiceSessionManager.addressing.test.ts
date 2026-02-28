@@ -382,6 +382,32 @@ test("reply decider allows short clanker wake ping", async () => {
   assert.equal(callCount, 0);
 });
 
+test("shouldPersistUserTranscriptTimelineTurn suppresses low-signal non-addressed fragments", () => {
+  const manager = createManager();
+  const session = {
+    settingsSnapshot: baseSettings()
+  };
+  const keep = manager.shouldPersistUserTranscriptTimelineTurn({
+    session,
+    settings: session.settingsSnapshot,
+    transcript: "Przyjaciele"
+  });
+  assert.equal(keep, false);
+});
+
+test("shouldPersistUserTranscriptTimelineTurn keeps low-signal direct wake-word turns", () => {
+  const manager = createManager();
+  const session = {
+    settingsSnapshot: baseSettings()
+  };
+  const keep = manager.shouldPersistUserTranscriptTimelineTurn({
+    session,
+    settings: session.settingsSnapshot,
+    transcript: "yo clanker"
+  });
+  assert.equal(keep, true);
+});
+
 test("reply decider routes join-window greetings through llm with join context", async () => {
   let callCount = 0;
   const joinContextFlags = [];

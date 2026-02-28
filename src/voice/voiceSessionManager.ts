@@ -71,6 +71,7 @@ import {
   formatSoundboardCandidateLine,
   getRealtimeRuntimeLabel,
   isLikelyVocativeAddressToOtherParticipant,
+  isFinalRealtimeTranscriptEventType,
   isRecoverableRealtimeError,
   isRealtimeMode,
   isVoiceTurnAddressedToBot,
@@ -914,6 +915,7 @@ export class VoiceSessionManager {
       const transcript = String(transcriptText || "").trim();
       if (!transcript) return;
       const transcriptSource = transcriptSourceFromEventType(transcriptEventType);
+      const finalTranscriptEvent = isFinalRealtimeTranscriptEventType(transcriptEventType, transcriptSource);
       const parsedDirective =
         transcriptSource === "output"
           ? extractSoundboardDirective(transcript)
@@ -941,7 +943,17 @@ export class VoiceSessionManager {
       if (session.mode === "openai_realtime" && transcriptSource === "output") {
         session.pendingRealtimeInputBytes = 0;
       }
-      if (transcriptSource === "output" && transcriptForLogs) {
+      const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+      const useNativeRealtimeReply = this.shouldUseNativeRealtimeReply({
+        session,
+        settings: resolvedSettings
+      });
+      if (
+        transcriptSource === "output" &&
+        transcriptForLogs &&
+        finalTranscriptEvent &&
+        useNativeRealtimeReply
+      ) {
         this.recordVoiceTurn(session, {
           role: "assistant",
           userId: this.client.user?.id || null,
@@ -949,10 +961,10 @@ export class VoiceSessionManager {
         });
       }
 
-      if (transcriptSource === "output" && requestedSoundboardRef) {
+      if (transcriptSource === "output" && requestedSoundboardRef && finalTranscriptEvent) {
         this.maybeTriggerAssistantDirectedSoundboard({
           session,
-          settings: settings || session.settingsSnapshot || this.store.getSettings(),
+          settings: resolvedSettings,
           userId: this.client.user?.id || null,
           transcript: transcriptForLogs || transcript,
           requestedRef: requestedSoundboardRef,
@@ -2341,7 +2353,12 @@ export class VoiceSessionManager {
       }
     }
 
-    if (turnTranscript) {
+    const persistRealtimeTranscriptTurn = this.shouldPersistUserTranscriptTimelineTurn({
+      session,
+      settings,
+      transcript: turnTranscript
+    });
+    if (turnTranscript && persistRealtimeTranscriptTurn) {
       this.recordVoiceTurn(session, {
         role: "user",
         userId,
@@ -3240,6 +3257,17 @@ export class VoiceSessionManager {
     return boundedLines.reverse().join("\n");
   }
 
+  shouldPersistUserTranscriptTimelineTurn({ session, settings = null, transcript = "" } = {}) {
+    const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedTranscript) return false;
+    const resolvedSettings = settings || session?.settingsSnapshot || this.store.getSettings();
+    const directAddressed =
+      isVoiceTurnAddressedToBot(normalizedTranscript, resolvedSettings) ||
+      isLikelyBotNameVariantAddress(normalizedTranscript, resolvedSettings?.botName || "");
+    if (directAddressed) return true;
+    return !isLowSignalVoiceFragment(normalizedTranscript);
+  }
+
   recordVoiceTurn(session, { role = "user", userId = null, text = "" } = {}) {
     if (!session || session.ending) return;
     const normalizedContextText = normalizeVoiceText(text, VOICE_DECIDER_HISTORY_MAX_CHARS);
@@ -3877,21 +3905,28 @@ export class VoiceSessionManager {
         clipDurationMs
       }
     });
-    this.recordVoiceTurn(session, {
-      role: "user",
-      userId,
-      text: transcript
-    });
-
-    this.queueVoiceMemoryIngest({
+    const persistSttTranscriptTurn = this.shouldPersistUserTranscriptTimelineTurn({
       session,
       settings,
-      userId,
-      transcript,
-      source: "voice_stt_pipeline_ingest",
-      captureReason,
-      errorPrefix: "voice_stt_memory_ingest_failed"
+      transcript
     });
+    if (persistSttTranscriptTurn) {
+      this.recordVoiceTurn(session, {
+        role: "user",
+        userId,
+        text: transcript
+      });
+
+      this.queueVoiceMemoryIngest({
+        session,
+        settings,
+        userId,
+        transcript,
+        source: "voice_stt_pipeline_ingest",
+        captureReason,
+        errorPrefix: "voice_stt_memory_ingest_failed"
+      });
+    }
     if (staleTurn) {
       this.store.logAction({
         kind: "voice_runtime",

@@ -6,6 +6,7 @@ import {
   extractSoundboardDirective,
   getRealtimeCommitMinimumBytes,
   getRealtimeRuntimeLabel,
+  isFinalRealtimeTranscriptEventType,
   isRecoverableRealtimeError,
   isVoiceTurnAddressedToBot,
   parseResponseDoneModel,
@@ -69,6 +70,33 @@ test("transcriptSourceFromEventType classifies Gemini transcription events", () 
   assert.equal(transcriptSourceFromEventType("input_audio_transcription"), "input");
   assert.equal(transcriptSourceFromEventType("output_audio_transcription"), "output");
   assert.equal(transcriptSourceFromEventType("server_content_text"), "output");
+});
+
+test("isFinalRealtimeTranscriptEventType filters partial transcript events", () => {
+  assert.equal(
+    isFinalRealtimeTranscriptEventType("response.output_audio_transcript.delta", "output"),
+    false
+  );
+  assert.equal(
+    isFinalRealtimeTranscriptEventType("response.output_audio_transcript.done", "output"),
+    true
+  );
+  assert.equal(
+    isFinalRealtimeTranscriptEventType("response.output_text.delta", "output"),
+    false
+  );
+  assert.equal(
+    isFinalRealtimeTranscriptEventType("response.output_text.done", "output"),
+    true
+  );
+  assert.equal(
+    isFinalRealtimeTranscriptEventType("server_content_text", "output"),
+    false
+  );
+  assert.equal(
+    isFinalRealtimeTranscriptEventType("output_audio_transcription", "output"),
+    true
+  );
 });
 
 test("extractSoundboardDirective strips directive and returns selected reference", () => {
