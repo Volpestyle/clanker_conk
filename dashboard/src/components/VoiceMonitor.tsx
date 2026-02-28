@@ -4,8 +4,8 @@ import {
   useVoiceSSE,
   type VoiceSession,
   type VoiceEvent,
-  type VoiceTurn,
-  type RealtimeState
+  type RealtimeState,
+  type VoiceMembershipEvent
 } from "../hooks/useVoiceSSE";
 
 // ---- helpers ----
@@ -69,6 +69,91 @@ const STATE_LABELS: Record<string, string> = {
   idle: "Idle",
   disconnected: "Disconnected"
 };
+
+const WAKE_WINDOW_FALLBACK_MS = 35_000;
+const JOIN_WINDOW_FALLBACK_MS = 25_000;
+
+function parseIsoMs(iso?: string | null): number | null {
+  const normalized = String(iso || "").trim();
+  if (!normalized) return null;
+  const parsed = new Date(normalized).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function formatDurationMs(ms: number | null): string {
+  if (!Number.isFinite(ms)) return "unknown";
+  const normalized = Math.max(0, Math.round(Number(ms)));
+  const seconds = Math.ceil(normalized / 1000);
+  const minutes = Math.floor(seconds / 60);
+  if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+  return `${seconds}s`;
+}
+
+function resolveWakeIndicator(session: VoiceSession): {
+  active: boolean;
+  stateLabel: "Awake" | "Listening";
+} {
+  const wake = session.conversation?.wake || null;
+  if (wake && typeof wake === "object") {
+    const active = Boolean(wake.active);
+    return {
+      active,
+      stateLabel: active ? "Awake" : "Listening"
+    };
+  }
+
+  const now = Date.now();
+  const lastAssistantReplyAtMs = parseIsoMs(session.conversation?.lastAssistantReplyAt);
+  const lastDirectAddressAtMs = parseIsoMs(session.conversation?.lastDirectAddressAt);
+  const msSinceAssistantReply = lastAssistantReplyAtMs != null ? Math.max(0, now - lastAssistantReplyAtMs) : null;
+  const msSinceDirectAddress = lastDirectAddressAtMs != null ? Math.max(0, now - lastDirectAddressAtMs) : null;
+  const active =
+    Boolean(session.focusedSpeaker) ||
+    (msSinceAssistantReply != null && msSinceAssistantReply <= WAKE_WINDOW_FALLBACK_MS) ||
+    (msSinceDirectAddress != null && msSinceDirectAddress <= WAKE_WINDOW_FALLBACK_MS);
+  return {
+    active,
+    stateLabel: active ? "Awake" : "Listening"
+  };
+}
+
+function resolveJoinWindowIndicator(session: VoiceSession): {
+  active: boolean;
+  remainingMs: number | null;
+} {
+  const joinWindow = session.conversation?.joinWindow || null;
+  if (joinWindow && typeof joinWindow === "object") {
+    const windowMs = Number.isFinite(joinWindow.windowMs)
+      ? Math.max(0, Math.round(joinWindow.windowMs))
+      : JOIN_WINDOW_FALLBACK_MS;
+    const ageMs = Number.isFinite(joinWindow.ageMs) ? Math.max(0, Math.round(joinWindow.ageMs)) : null;
+    return {
+      active: Boolean(joinWindow.active),
+      remainingMs: ageMs == null ? null : Math.max(0, windowMs - ageMs)
+    };
+  }
+
+  const deciderJoinWindow = session.conversation?.modelContext?.decider?.joinWindowActive;
+  if (typeof deciderJoinWindow === "boolean") {
+    return {
+      active: deciderJoinWindow,
+      remainingMs: null
+    };
+  }
+
+  const startedAtMs = parseIsoMs(session.startedAt);
+  if (startedAtMs == null) {
+    return {
+      active: false,
+      remainingMs: null
+    };
+  }
+  const ageMs = Math.max(0, Date.now() - startedAtMs);
+  return {
+    active: ageMs <= JOIN_WINDOW_FALLBACK_MS,
+    remainingMs: Math.max(0, JOIN_WINDOW_FALLBACK_MS - ageMs)
+  };
+}
 
 function snippet(text?: string, max = 120): string {
   if (!text) return "";
@@ -315,6 +400,39 @@ function ParticipantList({ session }: { session: VoiceSession }) {
   );
 }
 
+// ---- Membership Changes ----
+
+function MembershipChanges({ session }: { session: VoiceSession }) {
+  const allEvents = Array.isArray(session.membershipEvents) ? session.membershipEvents : [];
+  const events = allEvents.slice(-8).reverse();
+  if (events.length === 0) return null;
+
+  return (
+    <Section title="Membership Changes" badge={allEvents.length} defaultOpen={false}>
+      <div className="vm-membership-list">
+        {events.map((entry: VoiceMembershipEvent, index) => {
+          const eventType = String(entry.eventType || "").toLowerCase() === "join" ? "join" : "leave";
+          return (
+            <div key={`${entry.userId}-${entry.at}-${index}`} className="vm-membership-row">
+              <span
+                className={`vm-membership-type ${
+                  eventType === "join" ? "vm-membership-join" : "vm-membership-leave"
+                }`}
+              >
+                {eventType}
+              </span>
+              <span className="vm-membership-name">
+                {entry.displayName || entry.userId.slice(0, 8)}
+              </span>
+              <span className="vm-membership-time">{relativeTime(entry.at)}</span>
+            </div>
+          );
+        })}
+      </div>
+    </Section>
+  );
+}
+
 // ---- Conversation Context ----
 
 function ConversationContext({ session }: { session: VoiceSession }) {
@@ -331,6 +449,13 @@ function ConversationContext({ session }: { session: VoiceSession }) {
   const deciderAvailableTurns = Number(decider?.availableTurns || trackedTurns);
   const deciderMaxTurns = Number(decider?.maxTurns || 0);
   const deciderSentTurns = Math.min(deciderAvailableTurns, deciderMaxTurns || deciderAvailableTurns);
+  const wakeIndicator = resolveWakeIndicator(session);
+  const joinWindowIndicator = resolveJoinWindowIndicator(session);
+  const joinWindowSummary = joinWindowIndicator.active
+    ? joinWindowIndicator.remainingMs != null
+      ? `${formatDurationMs(joinWindowIndicator.remainingMs)} left`
+      : "active"
+    : "closed";
   const [, setTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 5000);
@@ -366,6 +491,14 @@ function ConversationContext({ session }: { session: VoiceSession }) {
         <div className="vm-convo-context-row">
           <span>Transcript log turns</span>
           <span>{trackedTranscriptTurns}</span>
+        </div>
+        <div className="vm-convo-context-row">
+          <span>Wake mode</span>
+          <span>{wakeIndicator.stateLabel}</span>
+        </div>
+        <div className="vm-convo-context-row">
+          <span>Join window</span>
+          <span>{joinWindowSummary}</span>
         </div>
       </div>
       <div className="vm-convo-feed">
@@ -416,6 +549,13 @@ function SessionCard({ session }: { session: VoiceSession }) {
   const state = deriveBotState(session);
   const pendingTurns = (session.stt?.pendingTurns || 0) + (session.realtime?.pendingTurns || 0);
   const totalPending = pendingTurns + session.pendingDeferredTurns;
+  const wakeIndicator = resolveWakeIndicator(session);
+  const joinWindowIndicator = resolveJoinWindowIndicator(session);
+  const joinWindowPill = joinWindowIndicator.active
+    ? joinWindowIndicator.remainingMs != null
+      ? `${formatDurationMs(joinWindowIndicator.remainingMs)} left`
+      : "Active"
+    : "Closed";
 
   return (
     <div className={`vm-card panel vm-card-${state}`}>
@@ -444,6 +584,20 @@ function SessionCard({ session }: { session: VoiceSession }) {
 
       {/* Turn state indicators */}
       <div className="vm-turn-state">
+        <span
+          className={`vm-ts-pill ${
+            wakeIndicator.active ? "vm-ts-wake-awake" : "vm-ts-wake-listening"
+          }`}
+        >
+          Wake: {wakeIndicator.stateLabel}
+        </span>
+        <span
+          className={`vm-ts-pill ${
+            joinWindowIndicator.active ? "vm-ts-join-active" : "vm-ts-join-inactive"
+          }`}
+        >
+          Join: {joinWindowPill}
+        </span>
         {session.botTurnOpen && <span className="vm-ts-pill vm-ts-speaking">Bot Speaking</span>}
         {session.activeInputStreams > 0 && (
           <span className="vm-ts-pill vm-ts-capturing">
@@ -493,6 +647,9 @@ function SessionCard({ session }: { session: VoiceSession }) {
 
           {/* Participants */}
           <ParticipantList session={session} />
+
+          {/* Membership changes */}
+          <MembershipChanges session={session} />
 
           {/* Conversation context */}
           <ConversationContext session={session} />

@@ -1909,6 +1909,26 @@ td .kind-badge + .kind-badge {
   color: #fb923c;
 }
 
+.vm-ts-wake-awake {
+  background: rgba(74, 222, 128, 0.12);
+  color: #4ade80;
+}
+
+.vm-ts-wake-listening {
+  background: rgba(148, 163, 184, 0.16);
+  color: #94a3b8;
+}
+
+.vm-ts-join-active {
+  background: rgba(34, 211, 238, 0.12);
+  color: #22d3ee;
+}
+
+.vm-ts-join-inactive {
+  background: rgba(100, 116, 139, 0.18);
+  color: #94a3b8;
+}
+
 /* -- collapsible section -- */
 
 .vm-section {
@@ -2040,6 +2060,60 @@ td .kind-badge + .kind-badge {
   font-size: 0.66rem;
   color: var(--ink-3);
   font-family: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+}
+
+/* -- membership changes -- */
+
+.vm-membership-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vm-membership-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.vm-membership-type {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 38px;
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.vm-membership-join {
+  background: rgba(74, 222, 128, 0.12);
+  color: #4ade80;
+}
+
+.vm-membership-leave {
+  background: rgba(248, 113, 113, 0.12);
+  color: #f87171;
+}
+
+.vm-membership-name {
+  font-size: 0.74rem;
+  color: var(--ink-1);
+  font-weight: 600;
+}
+
+.vm-membership-time {
+  font-size: 0.68rem;
+  color: var(--ink-3);
+  font-variant-numeric: tabular-nums;
 }
 
 /* -- conversation context -- */

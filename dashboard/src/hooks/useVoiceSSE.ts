@@ -18,6 +18,14 @@ export type VoiceParticipant = {
   displayName: string;
 };
 
+export type VoiceMembershipEvent = {
+  userId: string;
+  displayName: string;
+  eventType: "join" | "leave" | string;
+  at: string;
+  ageMs: number;
+};
+
 export type RealtimeState = {
   connected?: boolean;
   connectedAt?: string;
@@ -52,6 +60,28 @@ export type VoiceSession = {
     lastAssistantReplyAt: string | null;
     lastDirectAddressAt: string | null;
     lastDirectAddressUserId: string | null;
+    wake: {
+      state: "awake" | "listening" | string;
+      active: boolean;
+      engagementState: string;
+      engagedWithCurrentSpeaker: boolean;
+      recentAssistantReply: boolean;
+      recentDirectAddress: boolean;
+      msSinceAssistantReply: number | null;
+      msSinceDirectAddress: number | null;
+      windowMs: number;
+    };
+    joinWindow: {
+      active: boolean;
+      ageMs: number;
+      windowMs: number;
+    };
+    thoughtEngine: {
+      busy: boolean;
+      nextAttemptAt: string | null;
+      lastAttemptAt: string | null;
+      lastSpokenAt: string | null;
+    };
     modelContext: {
       generation: {
         source: string;
@@ -80,6 +110,7 @@ export type VoiceSession = {
   };
   participants: VoiceParticipant[];
   participantCount: number;
+  membershipEvents: VoiceMembershipEvent[];
   voiceLookupBusyCount: number;
   pendingDeferredTurns: number;
   recentTurns: VoiceTurn[];

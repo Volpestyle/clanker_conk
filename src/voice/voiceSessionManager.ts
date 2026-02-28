@@ -260,10 +260,17 @@ export class VoiceSessionManager {
 
   getRuntimeState() {
     const sessions = [...this.sessions.values()].map((session) => {
+      const now = Date.now();
       const participants = this.getVoiceChannelParticipants(session);
       const membershipEvents = this.getRecentVoiceMembershipEvents(session, {
         maxItems: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
       });
+      const wakeContext = this.buildVoiceConversationContext({
+        session,
+        now
+      });
+      const joinWindowAgeMs = Math.max(0, now - Number(session?.startedAt || 0));
+      const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
       const modelTurns = Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns : [];
       const transcriptTurns = Array.isArray(session.transcriptTurns) ? session.transcriptTurns : [];
       const deferredQueue = Array.isArray(session.pendingDeferredTurns) ? session.pendingDeferredTurns : [];
@@ -309,6 +316,26 @@ export class VoiceSessionManager {
             ? new Date(session.lastDirectAddressAt).toISOString()
             : null,
           lastDirectAddressUserId: session.lastDirectAddressUserId || null,
+          wake: {
+            state: wakeContext?.engaged ? "awake" : "listening",
+            active: Boolean(wakeContext?.engaged),
+            engagementState: wakeContext?.engagementState || "wake_word_biased",
+            engagedWithCurrentSpeaker: Boolean(wakeContext?.engagedWithCurrentSpeaker),
+            recentAssistantReply: Boolean(wakeContext?.recentAssistantReply),
+            recentDirectAddress: Boolean(wakeContext?.recentDirectAddress),
+            msSinceAssistantReply: Number.isFinite(wakeContext?.msSinceAssistantReply)
+              ? Math.round(wakeContext.msSinceAssistantReply)
+              : null,
+            msSinceDirectAddress: Number.isFinite(wakeContext?.msSinceDirectAddress)
+              ? Math.round(wakeContext.msSinceDirectAddress)
+              : null,
+            windowMs: FOCUSED_SPEAKER_CONTINUATION_MS
+          },
+          joinWindow: {
+            active: joinWindowActive,
+            ageMs: Math.round(joinWindowAgeMs),
+            windowMs: JOIN_GREETING_LLM_WINDOW_MS
+          },
           thoughtEngine: {
             busy: Boolean(session.thoughtLoopBusy),
             nextAttemptAt: session.nextThoughtAt ? new Date(session.nextThoughtAt).toISOString() : null,
