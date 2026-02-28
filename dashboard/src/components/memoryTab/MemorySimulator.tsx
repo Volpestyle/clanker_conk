@@ -29,11 +29,10 @@ export default function MemorySimulator({ guilds, notify }: Props) {
 
   const handleSimulate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!guildId || !queryText.trim()) return;
+    if (!guildId || !userId.trim() || !queryText.trim()) return;
     setLoading(true);
     try {
-      const body: Record<string, string> = { guildId, queryText: queryText.trim() };
-      if (userId.trim()) body.userId = userId.trim();
+      const body: Record<string, string> = { guildId, queryText: queryText.trim(), userId: userId.trim() };
       if (channelId.trim()) body.channelId = channelId.trim();
       const data = await api("/api/memory/simulate-slice", { method: "POST", body });
       setResult(data);
@@ -73,7 +72,7 @@ export default function MemorySimulator({ guilds, notify }: Props) {
         </div>
         <div className="memory-form-row">
           <label>
-            User ID <span style={{ color: "var(--ink-3)" }}>(optional)</span>
+            User ID
             <input
               type="text"
               value={userId}
@@ -91,7 +90,7 @@ export default function MemorySimulator({ guilds, notify }: Props) {
             />
           </label>
           <div className="memory-form-action">
-            <button type="submit" className="cta" disabled={loading || !guildId || !queryText.trim()}>
+            <button type="submit" className="cta" disabled={loading || !guildId || !userId.trim() || !queryText.trim()}>
               {loading ? "Simulating..." : "Simulate"}
             </button>
           </div>
