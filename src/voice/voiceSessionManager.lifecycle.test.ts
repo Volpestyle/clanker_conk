@@ -1,6 +1,12 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { PassThrough } from "node:stream";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
+import {
+  AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES,
+  BARGE_IN_MIN_SPEECH_MS,
+  DISCORD_PCM_FRAME_BYTES
+} from "./voiceSessionManager.constants.ts";
 
 function createManager() {
   const messages = [];
@@ -107,6 +113,7 @@ function createSession(overrides = {}) {
     pendingSttTurns: 0,
     recentVoiceTurns: [],
     membershipEvents: [],
+    cleanupHandlers: [],
     realtimeProvider: null,
     realtimeInputSampleRateHz: 24000,
     realtimeOutputSampleRateHz: 24000,
@@ -242,6 +249,155 @@ test("resolveSpeakingEndFinalizeDelayMs adapts delays when room load increases",
     }),
     100
   );
+});
+
+test("maybeInterruptBotForAssertiveSpeech requires sustained capture bytes", () => {
+  const { manager, logs } = createManager();
+  const session = createSession({
+    botTurnOpen: true,
+    userCaptures: new Map([
+      [
+        "user-1",
+        {
+          bytesSent: 4_000,
+          speakingEndFinalizeTimer: null
+        }
+      ]
+    ])
+  });
+
+  const interrupted = manager.maybeInterruptBotForAssertiveSpeech({
+    session,
+    userId: "user-1",
+    source: "test"
+  });
+  assert.equal(interrupted, false);
+  assert.equal(session.botTurnOpen, true);
+  assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
+});
+
+test("maybeInterruptBotForAssertiveSpeech cuts playback after assertive speech", () => {
+  const { manager, logs } = createManager();
+  const stopCalls = [];
+  let streamDestroyed = false;
+  const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
+  const session = createSession({
+    botTurnOpen: true,
+    botTurnResetTimer: setTimeout(() => undefined, 10_000),
+    userCaptures: new Map([
+      [
+        "user-1",
+        {
+          bytesSent: minBytes + 2_400,
+          speakingEndFinalizeTimer: null
+        }
+      ]
+    ]),
+    audioPlayer: {
+      stop(force) {
+        stopCalls.push(force);
+      }
+    },
+    botAudioStream: {
+      destroy() {
+        streamDestroyed = true;
+      }
+    },
+    pendingResponse: {
+      requestId: 9,
+      requestedAt: Date.now() - 1200,
+      retryCount: 0,
+      hardRecoveryAttempted: false,
+      source: "turn_flush",
+      handlingSilence: false,
+      audioReceivedAt: 0
+    },
+    audioPlaybackQueue: {
+      chunks: [Buffer.from([1, 2, 3])],
+      headOffset: 0,
+      queuedBytes: 777_600,
+      pumping: false,
+      timer: null,
+      waitingDrain: false,
+      drainHandler: null,
+      lastWarnAt: 0
+    }
+  });
+
+  const interrupted = manager.maybeInterruptBotForAssertiveSpeech({
+    session,
+    userId: "user-1",
+    source: "test"
+  });
+  assert.equal(interrupted, true);
+  assert.equal(session.botTurnOpen, false);
+  assert.equal(session.audioPlaybackQueue.queuedBytes, 0);
+  assert.equal(stopCalls.length, 1);
+  assert.equal(stopCalls[0], true);
+  assert.equal(streamDestroyed, true);
+  assert.equal(Number(session.pendingResponse?.audioReceivedAt || 0) > 0, true);
+  assert.equal(Number(session.bargeInSuppressionUntil || 0) > Date.now(), true);
+  assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), true);
+});
+
+test("enqueueDiscordPcmForPlayback trims oldest queued audio when hard cap is exceeded", () => {
+  const { manager, logs } = createManager();
+  manager.scheduleAudioPlaybackPump = () => {};
+  const session = createSession({
+    audioPlayer: {
+      state: {
+        status: "playing"
+      }
+    },
+    connection: {
+      subscribe() {}
+    },
+    botAudioStream: {
+      writableLength: 0
+    },
+    audioPlaybackQueue: {
+      chunks: [],
+      headOffset: 0,
+      queuedBytes: 0,
+      pumping: false,
+      timer: null,
+      waitingDrain: false,
+      drainHandler: null,
+      lastWarnAt: 0,
+      lastTrimAt: 0
+    }
+  });
+
+  const oversizedChunk = Buffer.alloc(AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES + DISCORD_PCM_FRAME_BYTES * 3, 7);
+  const queued = manager.enqueueDiscordPcmForPlayback({
+    session,
+    discordPcm: oversizedChunk
+  });
+
+  assert.equal(queued, true);
+  assert.equal(session.audioPlaybackQueue.queuedBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
+  const trimLog = logs.find((entry) => entry?.content === "bot_audio_queue_trimmed");
+  assert.equal(Boolean(trimLog), true);
+  assert.equal(trimLog?.metadata?.hardMaxBufferedBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
+  assert.equal(trimLog?.metadata?.droppedBytes > 0, true);
+});
+
+test("bindBotAudioStreamLifecycle records stream close event", () => {
+  const { manager, logs } = createManager();
+  const stream = new PassThrough();
+  const session = createSession();
+
+  manager.bindBotAudioStreamLifecycle(session, {
+    stream,
+    source: "test_bind"
+  });
+  stream.emit("close");
+
+  const lifecycleLog = logs.find(
+    (entry) => entry?.content === "bot_audio_stream_lifecycle" && entry?.metadata?.source === "test_bind"
+  );
+  assert.equal(Boolean(lifecycleLog), true);
+  assert.equal(lifecycleLog?.metadata?.event, "close");
 });
 
 test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown", () => {

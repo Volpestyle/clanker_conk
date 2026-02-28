@@ -152,10 +152,37 @@ export function parseResponseDoneUsage(event) {
   };
 }
 
-export function ensureBotAudioPlaybackReady({ session, store, botUserId = null }) {
+function snapshotBotAudioStreamState(stream) {
+  if (!stream || typeof stream !== "object") {
+    return {
+      exists: false,
+      destroyed: null,
+      writableEnded: null,
+      writableFinished: null,
+      closed: null,
+      writableLength: 0
+    };
+  }
+
+  return {
+    exists: true,
+    destroyed: Boolean(stream.destroyed),
+    writableEnded: Boolean(stream.writableEnded),
+    writableFinished: Boolean(stream.writableFinished),
+    closed: Boolean(stream.closed),
+    writableLength: Math.max(0, Number(stream.writableLength || 0))
+  };
+}
+
+export function ensureBotAudioPlaybackReady({
+  session,
+  store,
+  botUserId = null,
+  onStreamCreated = null
+}) {
   if (!session || !session.audioPlayer || !session.connection) return false;
 
-  const restartAudioPipeline = (reason) => {
+  const restartAudioPipeline = (reason, extraMetadata = null) => {
     const now = Date.now();
     if (now - Number(session.lastAudioPipelineRepairAt || 0) < 600) {
       return true;
@@ -163,8 +190,14 @@ export function ensureBotAudioPlaybackReady({ session, store, botUserId = null }
     session.lastAudioPipelineRepairAt = now;
 
     try {
+      let createdReplacementStream = false;
       if (!session.botAudioStream || session.botAudioStream.destroyed || session.botAudioStream.writableEnded) {
         session.botAudioStream = createBotAudioPlaybackStream();
+        createdReplacementStream = true;
+      }
+
+      if (createdReplacementStream && typeof onStreamCreated === "function") {
+        onStreamCreated(session.botAudioStream);
       }
 
       const resource = createAudioResource(session.botAudioStream, {
@@ -180,7 +213,10 @@ export function ensureBotAudioPlaybackReady({ session, store, botUserId = null }
         content: "bot_audio_pipeline_restarted",
         metadata: {
           sessionId: session.id,
-          reason
+          reason,
+          streamState: snapshotBotAudioStreamState(session.botAudioStream),
+          lastStreamLifecycle: session.lastBotAudioStreamLifecycle || null,
+          ...(extraMetadata && typeof extraMetadata === "object" ? extraMetadata : {})
         }
       });
       return true;
@@ -193,20 +229,30 @@ export function ensureBotAudioPlaybackReady({ session, store, botUserId = null }
         content: `bot_audio_pipeline_restart_failed: ${String(error?.message || error)}`,
         metadata: {
           sessionId: session.id,
-          reason
+          reason,
+          streamState: snapshotBotAudioStreamState(session.botAudioStream),
+          lastStreamLifecycle: session.lastBotAudioStreamLifecycle || null,
+          ...(extraMetadata && typeof extraMetadata === "object" ? extraMetadata : {})
         }
       });
       return false;
     }
   };
 
+  const playerStatus = session.audioPlayer.state?.status || null;
   if (!session.botAudioStream || session.botAudioStream.destroyed || session.botAudioStream.writableEnded) {
-    return restartAudioPipeline("stream_unavailable");
+    return restartAudioPipeline("stream_unavailable", {
+      streamStateBeforeRestart: snapshotBotAudioStreamState(session.botAudioStream),
+      playerStatus: playerStatus ? String(playerStatus) : null
+    });
   }
 
-  const status = session.audioPlayer.state?.status || null;
+  const status = playerStatus;
   if (status === AudioPlayerStatus.Idle || status === AudioPlayerStatus.AutoPaused) {
-    return restartAudioPipeline(`player_${String(status).toLowerCase()}`);
+    return restartAudioPipeline(`player_${String(status).toLowerCase()}`, {
+      streamStateBeforeRestart: snapshotBotAudioStreamState(session.botAudioStream),
+      playerStatus: String(status)
+    });
   }
 
   return true;

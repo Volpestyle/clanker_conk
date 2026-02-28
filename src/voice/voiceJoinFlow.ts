@@ -474,6 +474,9 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         inactivityTimer: null,
         botTurnResetTimer: null,
         botTurnOpen: false,
+        bargeInSuppressionUntil: 0,
+        bargeInSuppressedAudioChunks: 0,
+        bargeInSuppressedAudioBytes: 0,
         lastBotActivityTouchAt: 0,
         responseFlushTimer: null,
         responseWatchdogTimer: null,
@@ -487,6 +490,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         lastInboundAudioAt: 0,
         pendingRealtimeInputBytes: 0,
         lastAudioPipelineRepairAt: 0,
+        lastBotAudioStreamLifecycle: null,
         nextResponseRequestId: 0,
         pendingResponse: null,
         pendingSttTurns: 0,
@@ -548,7 +552,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           timer: null,
           waitingDrain: false,
           drainHandler: null,
-          lastWarnAt: 0
+          lastWarnAt: 0,
+          lastTrimAt: 0
         },
         cleanupHandlers: [],
         ending: false
@@ -556,6 +561,10 @@ export async function requestJoin(manager, { message, settings, intentConfidence
 
       manager.sessions.set(guildId, session);
       manager.bindAudioPlayerHandlers(session);
+      manager.bindBotAudioStreamLifecycle(session, {
+        stream: botAudioStream,
+        source: "session_start"
+      });
       manager.bindSessionHandlers(session, settings);
       if (isRealtimeMode(runtimeMode)) {
         manager.bindRealtimeHandlers(session, settings);

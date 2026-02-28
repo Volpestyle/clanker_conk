@@ -95,6 +95,8 @@ import { requestJoin } from "./voiceJoinFlow.ts";
 import {
   ACTIVITY_TOUCH_THROTTLE_MS,
   AUDIO_PLAYBACK_PUMP_CHUNK_BYTES,
+  AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES,
+  AUDIO_PLAYBACK_QUEUE_TRIM_LOG_COOLDOWN_MS,
   AUDIO_PLAYBACK_QUEUE_WARN_BYTES,
   AUDIO_PLAYBACK_QUEUE_WARN_COOLDOWN_MS,
   BARGE_IN_ASSERTION_MS,
@@ -197,6 +199,7 @@ export class VoiceSessionManager {
   sessions;
   pendingSessionGuildIds;
   joinLocks;
+  boundBotAudioStreams;
   soundboardDirector;
   onVoiceStateUpdate;
 
@@ -220,6 +223,7 @@ export class VoiceSessionManager {
     this.sessions = new Map();
     this.pendingSessionGuildIds = new Set();
     this.joinLocks = new Map();
+    this.boundBotAudioStreams = new WeakSet();
     this.soundboardDirector = new SoundboardDirector({
       client,
       store,
@@ -956,6 +960,252 @@ export class VoiceSessionManager {
     });
   }
 
+  describeBotAudioStreamState(stream) {
+    if (!stream || typeof stream !== "object") {
+      return {
+        exists: false,
+        destroyed: null,
+        writableEnded: null,
+        writableFinished: null,
+        closed: null,
+        writableLength: 0
+      };
+    }
+
+    return {
+      exists: true,
+      destroyed: Boolean(stream.destroyed),
+      writableEnded: Boolean(stream.writableEnded),
+      writableFinished: Boolean(stream.writableFinished),
+      closed: Boolean(stream.closed),
+      writableLength: Math.max(0, Number(stream.writableLength || 0))
+    };
+  }
+
+  bindBotAudioStreamLifecycle(session, { stream = session?.botAudioStream, source = "unknown" } = {}) {
+    if (!session || !stream || typeof stream.once !== "function") return;
+    if (this.boundBotAudioStreams?.has(stream)) return;
+    this.boundBotAudioStreams?.add(stream);
+    if (!Array.isArray(session.cleanupHandlers)) {
+      session.cleanupHandlers = [];
+    }
+
+    const resolvedSource = String(source || "unknown");
+    const logLifecycle = (event, extraMetadata = null) => {
+      const normalizedEvent = String(event || "unknown");
+      const details = extraMetadata && typeof extraMetadata === "object" ? extraMetadata : {};
+      const streamState = this.describeBotAudioStreamState(stream);
+      const lifecycle = {
+        event: normalizedEvent,
+        source: resolvedSource,
+        at: new Date().toISOString(),
+        error: details.error || null,
+        streamState
+      };
+      session.lastBotAudioStreamLifecycle = lifecycle;
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "bot_audio_stream_lifecycle",
+        metadata: {
+          sessionId: session.id,
+          event: normalizedEvent,
+          source: resolvedSource,
+          error: details.error || null,
+          streamState
+        }
+      });
+    };
+
+    const onClose = () => {
+      logLifecycle("close");
+    };
+    const onFinish = () => {
+      logLifecycle("finish");
+    };
+    const onEnd = () => {
+      logLifecycle("end");
+    };
+    const onError = (error) => {
+      logLifecycle("error", {
+        error: String(error?.message || error || "unknown")
+      });
+    };
+
+    stream.once("close", onClose);
+    stream.once("finish", onFinish);
+    stream.once("end", onEnd);
+    stream.once("error", onError);
+
+    session.cleanupHandlers.push(() => {
+      if (typeof stream.removeListener === "function") {
+        stream.removeListener("close", onClose);
+        stream.removeListener("finish", onFinish);
+        stream.removeListener("end", onEnd);
+        stream.removeListener("error", onError);
+      }
+      this.boundBotAudioStreams?.delete(stream);
+    });
+  }
+
+  isBargeInOutputSuppressed(session, now = Date.now()) {
+    if (!session) return false;
+    const suppressedUntil = Number(session.bargeInSuppressionUntil || 0);
+    if (suppressedUntil <= 0) return false;
+    if (now < suppressedUntil) return true;
+    this.clearBargeInOutputSuppression(session, "timeout");
+    return false;
+  }
+
+  clearBargeInOutputSuppression(session, reason = "cleared") {
+    if (!session) return;
+    const suppressedUntil = Number(session.bargeInSuppressionUntil || 0);
+    if (suppressedUntil <= 0) return;
+    const droppedChunks = Math.max(0, Number(session.bargeInSuppressedAudioChunks || 0));
+    const droppedBytes = Math.max(0, Number(session.bargeInSuppressedAudioBytes || 0));
+
+    session.bargeInSuppressionUntil = 0;
+    session.bargeInSuppressedAudioChunks = 0;
+    session.bargeInSuppressedAudioBytes = 0;
+
+    if (reason === "timeout" && droppedChunks <= 0 && droppedBytes <= 0) return;
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.client.user?.id || null,
+      content: "voice_barge_in_suppression_cleared",
+      metadata: {
+        sessionId: session.id,
+        reason: String(reason || "cleared"),
+        droppedAudioChunks: droppedChunks,
+        droppedAudioBytes: droppedBytes
+      }
+    });
+  }
+
+  maybeInterruptBotForAssertiveSpeech({
+    session,
+    userId = null,
+    source = "speaking_start"
+  }) {
+    if (!session || session.ending) return false;
+    if (!session.botTurnOpen) return false;
+    const normalizedUserId = String(userId || "").trim();
+    if (!normalizedUserId) return false;
+    const capture = session.userCaptures?.get?.(normalizedUserId);
+    if (!capture) return false;
+    if (capture.speakingEndFinalizeTimer) return false;
+    const sampleRateHz = isRealtimeMode(session.mode)
+      ? Number(session.realtimeInputSampleRateHz) || 24000
+      : 24000;
+    const minCaptureBytes = Math.max(2, Math.ceil((sampleRateHz * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000));
+    if (Number(capture.bytesSent || 0) < minCaptureBytes) return false;
+
+    return this.interruptBotSpeechForBargeIn({
+      session,
+      userId: normalizedUserId,
+      source: String(source || "speaking_start"),
+      minCaptureBytes
+    });
+  }
+
+  interruptBotSpeechForBargeIn({
+    session,
+    userId = null,
+    source = "speaking_start",
+    minCaptureBytes = 0
+  }) {
+    if (!session || session.ending) return false;
+
+    const queueState = this.ensureAudioPlaybackQueueState(session);
+    const queuedBytes = Math.max(0, Number(queueState?.queuedBytes || 0));
+    const now = Date.now();
+    const pendingRequestId = Number(session.pendingResponse?.requestId || 0) || null;
+
+    this.clearAudioPlaybackQueue(session);
+    if (session.botTurnResetTimer) {
+      clearTimeout(session.botTurnResetTimer);
+      session.botTurnResetTimer = null;
+    }
+    session.botTurnOpen = false;
+
+    try {
+      session.audioPlayer?.stop?.(true);
+    } catch {
+      // ignore
+    }
+
+    try {
+      session.botAudioStream?.destroy?.();
+    } catch {
+      // ignore
+    }
+    session.botAudioStream = null;
+
+    if (session.pendingResponse && typeof session.pendingResponse === "object") {
+      session.lastAudioDeltaAt = Math.max(Number(session.lastAudioDeltaAt || 0), now);
+      session.pendingResponse.audioReceivedAt = Number(session.lastAudioDeltaAt || now);
+    }
+
+    session.bargeInSuppressionUntil = now + BARGE_IN_SUPPRESSION_MAX_MS;
+    session.bargeInSuppressedAudioChunks = 0;
+    session.bargeInSuppressedAudioBytes = 0;
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: String(userId || "").trim() || null,
+      content: "voice_barge_in_interrupt",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "speaking_start"),
+        queuedBytesDropped: queuedBytes,
+        pendingRequestId,
+        minCaptureBytes: Math.max(0, Number(minCaptureBytes || 0)),
+        suppressionMs: BARGE_IN_SUPPRESSION_MAX_MS
+      }
+    });
+    return true;
+  }
+
+  armAssertiveBargeIn({
+    session,
+    userId = null,
+    source = "speaking_start",
+    delayMs = BARGE_IN_ASSERTION_MS
+  }) {
+    if (!session || session.ending) return;
+    if (!session.botTurnOpen) return;
+    const normalizedUserId = String(userId || "").trim();
+    if (!normalizedUserId) return;
+    const capture = session.userCaptures?.get?.(normalizedUserId);
+    if (!capture) return;
+    if (capture.speakingEndFinalizeTimer) return;
+    if (capture.bargeInAssertTimer) return;
+    const waitMs = Math.max(60, Math.round(Number(delayMs) || BARGE_IN_ASSERTION_MS));
+    capture.bargeInAssertTimer = setTimeout(() => {
+      capture.bargeInAssertTimer = null;
+      const interrupted = this.maybeInterruptBotForAssertiveSpeech({
+        session,
+        userId: normalizedUserId,
+        source: String(source || "speaking_start")
+      });
+      if (interrupted) return;
+      const currentCapture = session.userCaptures?.get?.(normalizedUserId);
+      if (!currentCapture || currentCapture.speakingEndFinalizeTimer || !session.botTurnOpen) return;
+      this.armAssertiveBargeIn({
+        session,
+        userId: normalizedUserId,
+        source: String(source || "speaking_start"),
+        delayMs: Math.max(160, Math.round(BARGE_IN_ASSERTION_MS / 2))
+      });
+    }, waitMs);
+  }
+
   bindRealtimeHandlers(session, settings = session.settingsSnapshot) {
     if (!session?.realtimeClient) return;
     const runtimeLabel = getRealtimeRuntimeLabel(session.mode);
@@ -974,11 +1224,28 @@ export class VoiceSessionManager {
       );
       if (!discordPcm.length) return;
 
+      if (this.isBargeInOutputSuppressed(session)) {
+        session.lastAudioDeltaAt = Date.now();
+        session.bargeInSuppressedAudioChunks = Math.max(0, Number(session.bargeInSuppressedAudioChunks || 0)) + 1;
+        session.bargeInSuppressedAudioBytes = Math.max(0, Number(session.bargeInSuppressedAudioBytes || 0)) + discordPcm.length;
+        const pending = session.pendingResponse;
+        if (pending && typeof pending === "object") {
+          pending.audioReceivedAt = Number(session.lastAudioDeltaAt || Date.now());
+        }
+        return;
+      }
+
       if (
         !ensureBotAudioPlaybackReady({
           session,
           store: this.store,
-          botUserId: this.client.user?.id || null
+          botUserId: this.client.user?.id || null,
+          onStreamCreated: (stream) => {
+            this.bindBotAudioStreamLifecycle(session, {
+              stream,
+              source: "pipeline_restart"
+            });
+          }
         })
       ) {
         return;
@@ -1180,6 +1447,10 @@ export class VoiceSessionManager {
 
     const onResponseDone = (event) => {
       if (session.ending) return;
+      const hadBargeSuppression = this.isBargeInOutputSuppressed(session);
+      if (hadBargeSuppression) {
+        this.clearBargeInOutputSuppression(session, "response_done");
+      }
       const pending = session.pendingResponse;
       const responseId = parseResponseDoneId(event);
       const responseStatus = parseResponseDoneStatus(event);
@@ -1287,7 +1558,8 @@ export class VoiceSessionManager {
         timer: null,
         waitingDrain: false,
         drainHandler: null,
-        lastWarnAt: 0
+        lastWarnAt: 0,
+        lastTrimAt: 0
       };
     }
     return session.audioPlaybackQueue;
@@ -1310,6 +1582,7 @@ export class VoiceSessionManager {
     state.headOffset = 0;
     state.queuedBytes = 0;
     state.lastWarnAt = 0;
+    state.lastTrimAt = 0;
   }
 
   dequeueAudioPlaybackFrame(session, frameBytes = DISCORD_PCM_FRAME_BYTES) {
@@ -1354,6 +1627,41 @@ export class VoiceSessionManager {
     return Buffer.concat(pieces);
   }
 
+  dropAudioPlaybackBytesFromHead(session, maxDropBytes = 0) {
+    const state = this.ensureAudioPlaybackQueueState(session);
+    let remaining = Math.max(0, Math.floor(Number(maxDropBytes) || 0));
+    let droppedBytes = 0;
+
+    while (remaining > 0 && state.chunks.length > 0) {
+      const head = state.chunks[0];
+      if (!Buffer.isBuffer(head) || !head.length) {
+        state.chunks.shift();
+        state.headOffset = 0;
+        continue;
+      }
+
+      const available = head.length - state.headOffset;
+      if (available <= 0) {
+        state.chunks.shift();
+        state.headOffset = 0;
+        continue;
+      }
+
+      const dropNow = Math.min(available, remaining);
+      state.headOffset += dropNow;
+      state.queuedBytes = Math.max(0, Number(state.queuedBytes || 0) - dropNow);
+      remaining -= dropNow;
+      droppedBytes += dropNow;
+
+      if (state.headOffset >= head.length) {
+        state.chunks.shift();
+        state.headOffset = 0;
+      }
+    }
+
+    return droppedBytes;
+  }
+
   scheduleAudioPlaybackPump(session, delayMs = 0) {
     if (!session || session.ending) return;
     const state = this.ensureAudioPlaybackQueueState(session);
@@ -1378,7 +1686,13 @@ export class VoiceSessionManager {
         !ensureBotAudioPlaybackReady({
           session,
           store: this.store,
-          botUserId: this.client.user?.id || null
+          botUserId: this.client.user?.id || null,
+          onStreamCreated: (stream) => {
+            this.bindBotAudioStreamLifecycle(session, {
+              stream,
+              source: "pipeline_restart"
+            });
+          }
         })
       ) {
         this.scheduleAudioPlaybackPump(session, 20);
@@ -1435,7 +1749,13 @@ export class VoiceSessionManager {
       !ensureBotAudioPlaybackReady({
         session,
         store: this.store,
-        botUserId: this.client.user?.id || null
+        botUserId: this.client.user?.id || null,
+        onStreamCreated: (stream) => {
+          this.bindBotAudioStreamLifecycle(session, {
+            stream,
+            source: "pipeline_restart"
+          });
+        }
       })
     ) {
       return false;
@@ -1445,8 +1765,36 @@ export class VoiceSessionManager {
     state.chunks.push(pcm);
     state.queuedBytes = Math.max(0, Number(state.queuedBytes || 0)) + pcm.length;
     const now = Date.now();
+    const streamBufferedBytes = Math.max(0, Number(session.botAudioStream?.writableLength || 0));
+    let totalBufferedBytes = Math.max(0, Number(state.queuedBytes || 0)) + streamBufferedBytes;
+    if (totalBufferedBytes > AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES) {
+      const overflowBytes = totalBufferedBytes - AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES;
+      const droppedBytes = this.dropAudioPlaybackBytesFromHead(session, overflowBytes);
+      if (
+        droppedBytes > 0 &&
+        now - Number(state.lastTrimAt || 0) >= AUDIO_PLAYBACK_QUEUE_TRIM_LOG_COOLDOWN_MS
+      ) {
+        state.lastTrimAt = now;
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.client.user?.id || null,
+          content: "bot_audio_queue_trimmed",
+          metadata: {
+            sessionId: session.id,
+            droppedBytes,
+            queuedBytes: Math.max(0, Number(state.queuedBytes || 0)),
+            streamBufferedBytes,
+            totalBufferedBytesBeforeTrim: totalBufferedBytes,
+            hardMaxBufferedBytes: AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES
+          }
+        });
+      }
+      totalBufferedBytes = Math.max(0, Number(state.queuedBytes || 0)) + streamBufferedBytes;
+    }
     if (
-      state.queuedBytes >= AUDIO_PLAYBACK_QUEUE_WARN_BYTES &&
+      totalBufferedBytes >= AUDIO_PLAYBACK_QUEUE_WARN_BYTES &&
       now - Number(state.lastWarnAt || 0) >= AUDIO_PLAYBACK_QUEUE_WARN_COOLDOWN_MS
     ) {
       state.lastWarnAt = now;
@@ -1458,7 +1806,11 @@ export class VoiceSessionManager {
         content: "bot_audio_queue_backlog",
         metadata: {
           sessionId: session.id,
-          queuedBytes: state.queuedBytes
+          queuedBytes: Math.max(0, Number(state.queuedBytes || 0)),
+          streamBufferedBytes,
+          totalBufferedBytes,
+          warnBufferedBytes: AUDIO_PLAYBACK_QUEUE_WARN_BYTES,
+          hardMaxBufferedBytes: AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES
         }
       });
     }
@@ -2773,12 +3125,21 @@ export class VoiceSessionManager {
         userId: normalizedUserId,
         settings
       });
+      this.armAssertiveBargeIn({
+        session,
+        userId: normalizedUserId,
+        source: "speaking_start"
+      });
     };
 
     const onSpeakingEnd = (userId) => {
       if (String(userId || "") === String(this.client.user?.id || "")) return;
       const capture = session.userCaptures.get(String(userId || ""));
       if (!capture || typeof capture.finalize !== "function") return;
+      if (capture.bargeInAssertTimer) {
+        clearTimeout(capture.bargeInAssertTimer);
+        capture.bargeInAssertTimer = null;
+      }
       if (capture.speakingEndFinalizeTimer) return;
       const captureAgeMs = Math.max(0, Date.now() - Number(capture.startedAt || Date.now()));
       const finalizeDelayMs = this.resolveSpeakingEndFinalizeDelayMs({
@@ -2829,6 +3190,7 @@ export class VoiceSessionManager {
       idleFlushTimer: null,
       maxFlushTimer: null,
       speakingEndFinalizeTimer: null,
+      bargeInAssertTimer: null,
       finalize: null,
       abort: null
     };
@@ -2859,6 +3221,9 @@ export class VoiceSessionManager {
       }
       if (current.speakingEndFinalizeTimer) {
         clearTimeout(current.speakingEndFinalizeTimer);
+      }
+      if (current.bargeInAssertTimer) {
+        clearTimeout(current.bargeInAssertTimer);
       }
 
       try {
@@ -5958,6 +6323,11 @@ export class VoiceSessionManager {
       return;
     }
 
+    if (this.isBargeInOutputSuppressed(session)) {
+      this.scheduleResponseFromBufferedAudio({ session, userId });
+      return;
+    }
+
     // Keep one tracked assistant response in flight at a time.
     if (session.pendingResponse) {
       const pending = session.pendingResponse;
@@ -6392,9 +6762,24 @@ export class VoiceSessionManager {
     session.pendingSttTurns = 0;
     session.pendingRealtimeTurns = [];
     session.pendingDeferredTurns = [];
+    session.bargeInSuppressionUntil = 0;
+    session.bargeInSuppressedAudioChunks = 0;
+    session.bargeInSuppressedAudioBytes = 0;
     this.clearAudioPlaybackQueue(session);
 
     for (const capture of session.userCaptures.values()) {
+      if (capture.idleFlushTimer) {
+        clearTimeout(capture.idleFlushTimer);
+      }
+      if (capture.maxFlushTimer) {
+        clearTimeout(capture.maxFlushTimer);
+      }
+      if (capture.speakingEndFinalizeTimer) {
+        clearTimeout(capture.speakingEndFinalizeTimer);
+      }
+      if (capture.bargeInAssertTimer) {
+        clearTimeout(capture.bargeInAssertTimer);
+      }
       try {
         capture.opusStream.destroy();
       } catch {
