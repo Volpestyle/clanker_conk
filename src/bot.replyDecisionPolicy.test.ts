@@ -354,6 +354,109 @@ test("non-addressed non-initiative turn is skipped when model declines", async (
   });
 });
 
+test("non-addressed initiative turn uses initiative flow guidance in prompt", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+    store.patchSettings({
+      permissions: {
+        initiativeChannelIds: [channelId]
+      }
+    });
+
+    const llmCalls = [];
+    const replyPayloads = [];
+    const channelSendPayloads = [];
+    const typingCallsRef = { count: 0 };
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate(payload) {
+          llmCalls.push(payload);
+          return {
+            text: JSON.stringify({
+              text: "lmao this queue got hands",
+              skip: false,
+              reactionEmoji: null,
+              media: null,
+              webSearchQuery: null,
+              memoryLookupQuery: null,
+              memoryLine: null,
+              automationAction: { operation: "none" },
+              voiceIntent: { intent: "none", confidence: 0, reason: null },
+              screenShareIntent: { action: "none", confidence: 0, reason: null }
+            }),
+            provider: "test",
+            model: "test-model",
+            usage: null,
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanker conk",
+      tag: "clanker conk#0001"
+    };
+
+    const guild = buildGuild();
+    const channel = buildChannel({ guild, channelId, channelSendPayloads, typingCallsRef });
+
+    store.recordMessage({
+      messageId: "bot-context-initiative-1",
+      createdAt: Date.now() - 750,
+      guildId: guild.id,
+      channelId,
+      authorId: "bot-1",
+      authorName: "clanker conk",
+      isBot: true,
+      content: "last bot line",
+      referencedMessageId: null
+    });
+
+    const incoming = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-initiative-1",
+      content: "this match is chaos",
+      replyPayloads
+    });
+
+    const settings = store.getSettings();
+    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const sent = await bot.maybeReplyToMessage(incoming, settings, {
+      source: "message_event",
+      recentMessages,
+      addressSignal: {
+        direct: false,
+        inferred: false,
+        triggered: false,
+        reason: "llm_decides"
+      }
+    });
+
+    assert.equal(sent, true);
+    assert.equal(replyPayloads.length, 0);
+    assert.equal(channelSendPayloads.length, 1);
+    assert.equal(typingCallsRef.count > 0, true);
+
+    const llmPrompt = String(llmCalls[0]?.userPrompt || "");
+    assert.match(llmPrompt, /Reply eagerness hint: 65\/100\./);
+    assert.match(llmPrompt, /In initiative channels/i);
+    assert.match(llmPrompt, /improves the channel flow right now\./i);
+    assert.equal(/justify the interruption risk/i.test(llmPrompt), false);
+  });
+});
+
 test("non-addressed turn is dropped before llm when unsolicited gate is closed", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";

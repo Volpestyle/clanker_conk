@@ -323,34 +323,37 @@ export class LLMService {
       throw new Error("Memory fact extraction requires OPENAI_API_KEY when provider is openai.");
     }
 
-    const response = await this.openai.chat.completions.create({
+    const response = await this.openai.responses.create({
       model,
+      instructions: systemPrompt,
       temperature: 0,
-      max_tokens: 320,
-      response_format: {
-        type: "json_schema",
-        json_schema: {
+      max_output_tokens: 320,
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: userPrompt
+            }
+          ]
+        }
+      ],
+      text: {
+        format: {
+          type: "json_schema",
           name: "memory_fact_extraction",
           strict: true,
           schema: MEMORY_EXTRACTION_SCHEMA
         }
       },
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt }
-      ]
     });
 
-    const text = response.choices?.[0]?.message?.content?.trim() || '{"facts":[]}';
+    const text = extractOpenAiResponseText(response) || '{"facts":[]}';
 
     return {
       text,
-      usage: {
-        inputTokens: Number(response.usage?.prompt_tokens || 0),
-        outputTokens: Number(response.usage?.completion_tokens || 0),
-        cacheWriteTokens: 0,
-        cacheReadTokens: 0
-      }
+      usage: extractOpenAiResponseUsage(response)
     };
   }
 
@@ -700,37 +703,64 @@ export class LLMService {
     }
 
     const { provider, model } = target;
-    const client = provider === "xai" ? this.xai : this.openai;
-    if (!client) {
-      throw new Error(
-        provider === "xai"
-          ? "xAI image generation requires XAI_API_KEY."
-          : "OpenAI image generation requires OPENAI_API_KEY."
-      );
-    }
-
+    const normalizedPrompt = String(prompt || "").slice(0, 3200);
     const size = provider === "openai" ? "1024x1024" : null;
 
     try {
-      const response = await client.images.generate({
-        model,
-        prompt: String(prompt || "").slice(0, 3200),
-        ...(size ? { size } : {})
-      });
-
-      const first = response?.data?.[0];
-      if (!first) {
-        throw new Error("Image API returned no image data.");
-      }
-
       let imageBuffer = null;
-      if (first.b64_json) {
-        imageBuffer = Buffer.from(first.b64_json, "base64");
-      }
+      let imageUrl = null;
 
-      const imageUrl = first.url ? String(first.url) : null;
-      if (!imageBuffer && !imageUrl) {
-        throw new Error("Image API response had neither b64 nor URL.");
+      if (provider === "openai") {
+        if (!this.openai) {
+          throw new Error("OpenAI image generation requires OPENAI_API_KEY.");
+        }
+        const response = await this.openai.responses.create({
+          model,
+          input: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "input_text",
+                  text: normalizedPrompt
+                }
+              ]
+            }
+          ],
+          tool_choice: "required",
+          tools: [
+            {
+              type: "image_generation",
+              output_format: "png",
+              size: normalizeOpenAiImageGenerationSize(size)
+            }
+          ]
+        });
+        const imageBase64 = extractOpenAiImageBase64(response);
+        if (!imageBase64) {
+          throw new Error("Image API returned no image data.");
+        }
+        imageBuffer = Buffer.from(imageBase64, "base64");
+      } else {
+        if (!this.xai) {
+          throw new Error("xAI image generation requires XAI_API_KEY.");
+        }
+        const response = await this.xai.images.generate({
+          model,
+          prompt: normalizedPrompt
+        });
+        const first = response?.data?.[0];
+        if (!first) {
+          throw new Error("Image API returned no image data.");
+        }
+
+        if (first.b64_json) {
+          imageBuffer = Buffer.from(first.b64_json, "base64");
+        }
+        imageUrl = first.url ? String(first.url) : null;
+        if (!imageBuffer && !imageUrl) {
+          throw new Error("Image API response had neither b64 nor URL.");
+        }
       }
 
       const costUsd = estimateImageUsdCost({
@@ -1222,8 +1252,7 @@ export class LLMService {
       throw new Error("OpenAI LLM calls require OPENAI_API_KEY.");
     }
 
-    return this.callOpenAiCompatible({
-      client: this.openai,
+    return this.callOpenAiResponses({
       model,
       systemPrompt,
       userPrompt,
@@ -1247,8 +1276,7 @@ export class LLMService {
       throw new Error("xAI LLM calls require XAI_API_KEY.");
     }
 
-    return this.callOpenAiCompatible({
-      client: this.xai,
+    return this.callXaiChatCompletions({
       model,
       systemPrompt,
       userPrompt,
@@ -1259,8 +1287,61 @@ export class LLMService {
     });
   }
 
-  async callOpenAiCompatible({
-    client,
+  async callOpenAiResponses({
+    model,
+    systemPrompt,
+    userPrompt,
+    imageInputs,
+    contextMessages,
+    temperature,
+    maxOutputTokens
+  }) {
+    const imageParts = imageInputs
+      .map((image) => {
+        const mediaType = String(image?.mediaType || image?.contentType || "").trim().toLowerCase();
+        const base64 = String(image?.dataBase64 || "").trim();
+        const url = String(image?.url || "").trim();
+        const imageUrl = base64 && /^image\/[a-z0-9.+-]+$/i.test(mediaType) ? `data:${mediaType};base64,${base64}` : url;
+        if (!imageUrl) return null;
+        return {
+          type: "input_image",
+          image_url: imageUrl,
+          detail: "auto"
+        };
+      })
+      .filter(Boolean);
+    const userContent = [
+      {
+        type: "input_text",
+        text: userPrompt
+      },
+      ...imageParts
+    ];
+
+    const response = await this.openai.responses.create({
+      model,
+      instructions: systemPrompt,
+      temperature,
+      max_output_tokens: maxOutputTokens,
+      input: [
+        ...contextMessages.map((msg) => ({
+          role: msg.role === "assistant" ? "assistant" : "user",
+          content: String(msg.content || "")
+        })),
+        {
+          role: "user",
+          content: userContent
+        }
+      ]
+    });
+
+    return {
+      text: extractOpenAiResponseText(response),
+      usage: extractOpenAiResponseUsage(response)
+    };
+  }
+
+  async callXaiChatCompletions({
     model,
     systemPrompt,
     userPrompt,
@@ -1301,7 +1382,7 @@ export class LLMService {
       { role: "user", content: userContent }
     ];
 
-    const response = await client.chat.completions.create({
+    const response = await this.xai.chat.completions.create({
       model,
       temperature,
       max_tokens: maxOutputTokens,
@@ -1370,6 +1451,59 @@ export class LLMService {
       }
     };
   }
+}
+
+function extractOpenAiResponseText(response) {
+  const direct = String(response?.output_text || "").trim();
+  if (direct) return direct;
+
+  const output = Array.isArray(response?.output) ? response.output : [];
+  const textParts = [];
+
+  for (const item of output) {
+    if (!item || typeof item !== "object") continue;
+    if (item.type !== "message") continue;
+    const contentParts = Array.isArray(item.content) ? item.content : [];
+    for (const part of contentParts) {
+      if (!part || typeof part !== "object") continue;
+      if (part.type !== "output_text") continue;
+      const text = String(part.text || "").trim();
+      if (text) textParts.push(text);
+    }
+  }
+
+  return textParts.join("\n").trim();
+}
+
+function extractOpenAiResponseUsage(response) {
+  const usage = response?.usage && typeof response.usage === "object" ? response.usage : null;
+  return {
+    inputTokens: Number(usage?.input_tokens || 0),
+    outputTokens: Number(usage?.output_tokens || 0),
+    cacheWriteTokens: 0,
+    cacheReadTokens: Number(usage?.input_tokens_details?.cached_tokens || 0)
+  };
+}
+
+function extractOpenAiImageBase64(response) {
+  const output = Array.isArray(response?.output) ? response.output : [];
+  for (const item of output) {
+    if (!item || typeof item !== "object") continue;
+    if (item.type !== "image_generation_call") continue;
+    const result = String(item.result || "").trim();
+    if (result) return result;
+  }
+  return "";
+}
+
+function normalizeOpenAiImageGenerationSize(value) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "1024x1024") return "1024x1024";
+  if (normalized === "1024x1536") return "1024x1536";
+  if (normalized === "1536x1024") return "1536x1024";
+  return "auto";
 }
 
 function normalizeInlineText(value, maxLen) {

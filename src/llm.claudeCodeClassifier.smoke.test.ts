@@ -429,12 +429,12 @@ test("smoke: claude-code verbose output triggers retry and recovers (incident re
     },
     userId: "speaker-1",
     settings: baseSettings(),
-    transcript: "clanker can you help with this one?"
+    transcript: "can someone help with this one?"
   });
 
   assert.equal(callCount, 2, "should retry after contract violation");
   assert.equal(decision.allow, true);
-  assert.equal(decision.directAddressed, true);
+  assert.equal(decision.directAddressed, false);
 });
 
 test("smoke: claude-code empty response triggers retry (incident repro)", async () => {
