@@ -88,6 +88,15 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
     provider: form.voiceReplyDecisionLlmProvider,
     model: form.voiceReplyDecisionLlmModel
   });
+  const {
+    options: voiceGenerationModelOptions,
+    isClaudeCodeProvider: isVoiceGenerationClaudeCodeProvider,
+    selectedPresetModel: selectedVoiceGenerationPresetModel
+  } = resolvePresetModelSelection({
+    modelCatalog,
+    provider: form.voiceGenerationLlmProvider,
+    model: form.voiceGenerationLlmModel
+  });
   const isVoiceAgentMode = form.voiceMode === "voice_agent";
   const isOpenAiRealtimeMode = form.voiceMode === "openai_realtime";
   const isGeminiRealtimeMode = form.voiceMode === "gemini_realtime";
@@ -129,6 +138,10 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
     setProviderWithPresetFallback("voiceReplyDecisionLlmProvider", "voiceReplyDecisionLlmModel", String(e.target.value || "").trim());
   }
 
+  function setVoiceGenerationProvider(e) {
+    setProviderWithPresetFallback("voiceGenerationLlmProvider", "voiceGenerationLlmModel", String(e.target.value || "").trim());
+  }
+
   function selectModelFieldPreset(modelField, selected) {
     if (selected === CUSTOM_MODEL_OPTION_VALUE) return;
     setForm((current) => ({ ...current, [modelField]: selected }));
@@ -148,6 +161,10 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
 
   function selectVoiceReplyDecisionPresetModel(e) {
     selectModelFieldPreset("voiceReplyDecisionLlmModel", String(e.target.value || ""));
+  }
+
+  function selectVoiceGenerationPresetModel(e) {
+    selectModelFieldPreset("voiceGenerationLlmModel", String(e.target.value || ""));
   }
 
   function submit(e) {
@@ -218,6 +235,11 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
             voiceReplyDecisionModelOptions={voiceReplyDecisionModelOptions}
             isVoiceReplyDecisionClaudeCodeProvider={isVoiceReplyDecisionClaudeCodeProvider}
             selectedVoiceReplyDecisionPresetModel={selectedVoiceReplyDecisionPresetModel}
+            setVoiceGenerationProvider={setVoiceGenerationProvider}
+            selectVoiceGenerationPresetModel={selectVoiceGenerationPresetModel}
+            voiceGenerationModelOptions={voiceGenerationModelOptions}
+            isVoiceGenerationClaudeCodeProvider={isVoiceGenerationClaudeCodeProvider}
+            selectedVoiceGenerationPresetModel={selectedVoiceGenerationPresetModel}
           />
 
           <RateLimitsSettingsSection id="sec-rate" form={form} set={set} />

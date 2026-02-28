@@ -15,7 +15,9 @@ export function normalizeSettings(raw) {
   if (!merged.replyFollowupLlm || typeof merged.replyFollowupLlm !== "object") merged.replyFollowupLlm = {};
   if (merged.memoryLlm && typeof merged.memoryLlm === "object") {
     merged.memoryLlm.provider = normalizeLlmProvider(merged.memoryLlm?.provider);
-    merged.memoryLlm.model = String(merged.memoryLlm?.model || "claude-haiku-4-5").slice(0, 120);
+    merged.memoryLlm.model = String(
+      merged.memoryLlm?.model || defaultModelForLlmProvider(merged.memoryLlm.provider)
+    ).slice(0, 120);
   }
   if (!merged.webSearch || typeof merged.webSearch !== "object") merged.webSearch = {};
   if (!merged.videoContext || typeof merged.videoContext !== "object") merged.videoContext = {};
@@ -113,7 +115,7 @@ export function normalizeSettings(raw) {
   };
 
   merged.llm.provider = normalizeLlmProvider(merged.llm?.provider);
-  merged.llm.model = String(merged.llm?.model || "gpt-4.1-mini").slice(0, 120);
+  merged.llm.model = String(merged.llm?.model || defaultModelForLlmProvider("openai")).slice(0, 120);
   merged.llm.temperature = clamp(Number(merged.llm?.temperature) || 0.9, 0, 2);
   merged.llm.maxOutputTokens = clamp(Number(merged.llm?.maxOutputTokens) || 220, 32, 1400);
   merged.replyFollowupLlm.enabled =
@@ -225,6 +227,9 @@ export function normalizeSettings(raw) {
   if (!merged.voice.sttPipeline || typeof merged.voice.sttPipeline !== "object") {
     merged.voice.sttPipeline = {};
   }
+  if (!merged.voice.generationLlm || typeof merged.voice.generationLlm !== "object") {
+    merged.voice.generationLlm = {};
+  }
   if (!merged.voice.replyDecisionLlm || typeof merged.voice.replyDecisionLlm !== "object") {
     merged.voice.replyDecisionLlm = {};
   }
@@ -267,6 +272,10 @@ export function normalizeSettings(raw) {
     model?: string;
     maxAttempts?: number;
   };
+  type VoiceGenerationDefaults = {
+    provider?: string;
+    model?: string;
+  };
   type VoiceStreamWatchDefaults = {
     enabled?: boolean;
     minCommentaryIntervalSeconds?: number;
@@ -291,6 +300,7 @@ export function normalizeSettings(raw) {
     openaiRealtime?: VoiceOpenAiRealtimeDefaults;
     geminiRealtime?: VoiceGeminiRealtimeDefaults;
     sttPipeline?: VoiceSttPipelineDefaults;
+    generationLlm?: VoiceGenerationDefaults;
     replyDecisionLlm?: VoiceReplyDecisionDefaults;
     streamWatch?: VoiceStreamWatchDefaults;
     soundboard?: VoiceSoundboardDefaults;
@@ -301,6 +311,7 @@ export function normalizeSettings(raw) {
   const defaultVoiceOpenAiRealtime: VoiceOpenAiRealtimeDefaults = defaultVoice.openaiRealtime ?? {};
   const defaultVoiceGeminiRealtime: VoiceGeminiRealtimeDefaults = defaultVoice.geminiRealtime ?? {};
   const defaultVoiceSttPipeline: VoiceSttPipelineDefaults = defaultVoice.sttPipeline ?? {};
+  const defaultVoiceGenerationLlm: VoiceGenerationDefaults = defaultVoice.generationLlm ?? {};
   const defaultVoiceReplyDecisionLlm: VoiceReplyDecisionDefaults = defaultVoice.replyDecisionLlm ?? {};
   const defaultVoiceStreamWatch: VoiceStreamWatchDefaults = defaultVoice.streamWatch ?? {};
   const defaultVoiceSoundboard: VoiceSoundboardDefaults = defaultVoice.soundboard ?? {};
@@ -365,6 +376,23 @@ export function normalizeSettings(raw) {
   merged.voice.replyEagerness = clamp(
     Number.isFinite(voiceEagernessRaw) ? voiceEagernessRaw : 0, 0, 100
   );
+  merged.voice.generationLlm.provider = normalizeLlmProvider(
+    merged.voice?.generationLlm?.provider || defaultVoiceGenerationLlm.provider || "openai"
+  );
+  const defaultVoiceGenerationModel =
+    merged.voice.generationLlm.provider === normalizeLlmProvider(defaultVoiceGenerationLlm.provider)
+      ? String(defaultVoiceGenerationLlm.model || "").trim().slice(0, 120)
+      : "";
+  merged.voice.generationLlm.model = String(
+    merged.voice?.generationLlm?.model ||
+      defaultVoiceGenerationModel ||
+      defaultModelForLlmProvider(merged.voice.generationLlm.provider)
+  )
+    .trim()
+    .slice(0, 120);
+  if (!merged.voice.generationLlm.model) {
+    merged.voice.generationLlm.model = defaultModelForLlmProvider(merged.voice.generationLlm.provider);
+  }
   merged.voice.replyDecisionLlm.enabled =
     merged.voice?.replyDecisionLlm?.enabled !== undefined
       ? Boolean(merged.voice?.replyDecisionLlm?.enabled)

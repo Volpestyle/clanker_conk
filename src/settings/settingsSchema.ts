@@ -102,6 +102,10 @@ export const DEFAULT_SETTINGS = {
     blockedVoiceChannelIds: [],
     blockedVoiceUserIds: [],
     replyEagerness: 0,
+    generationLlm: {
+      provider: "openai",
+      model: "gpt-4.1-mini"
+    },
     replyDecisionLlm: {
       enabled: true,
       provider: "anthropic",

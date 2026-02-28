@@ -40,6 +40,10 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
     voice: {
       mode: "OPENAI_REALTIME",
       realtimeReplyStrategy: "NATIVE",
+      generationLlm: {
+        provider: "not-real",
+        model: ""
+      },
       replyDecisionLlm: {
         provider: "CLAUDE-CODE",
         model: "",
@@ -105,6 +109,8 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
 
   assert.equal(normalized.voice.mode, "openai_realtime");
   assert.equal(normalized.voice.realtimeReplyStrategy, "native");
+  assert.equal(normalized.voice.generationLlm.provider, "openai");
+  assert.equal(normalized.voice.generationLlm.model, "gpt-4.1-mini");
   assert.equal(normalized.voice.replyDecisionLlm.provider, "claude-code");
   assert.equal(normalized.voice.replyDecisionLlm.model, "sonnet");
   assert.equal(normalized.voice.replyDecisionLlm.enabled, true);
@@ -163,7 +169,19 @@ test("normalizeSettings handles memoryLlm defaults and discovery source fallback
   assert.equal(typeof normalized.initiative.discovery.sources.x, "boolean");
 });
 
-test("normalizeSettings keeps stt pipeline reply decider model/provider independent from main llm", () => {
+test("normalizeSettings uses provider-appropriate memoryLlm model fallback", () => {
+  const normalized = normalizeSettings({
+    memoryLlm: {
+      provider: "openai",
+      model: ""
+    }
+  });
+
+  assert.equal(normalized.memoryLlm.provider, "openai");
+  assert.equal(normalized.memoryLlm.model, "gpt-4.1-mini");
+});
+
+test("normalizeSettings keeps stt pipeline voice generation and reply decider independent from main llm", () => {
   const normalized = normalizeSettings({
     llm: {
       provider: "claude-code",
@@ -171,6 +189,10 @@ test("normalizeSettings keeps stt pipeline reply decider model/provider independ
     },
     voice: {
       mode: "stt_pipeline",
+      generationLlm: {
+        provider: "openai",
+        model: "gpt-4.1-mini"
+      },
       replyDecisionLlm: {
         provider: "openai",
         model: "gpt-4.1-mini",
@@ -179,6 +201,8 @@ test("normalizeSettings keeps stt pipeline reply decider model/provider independ
     }
   });
 
+  assert.equal(normalized.voice.generationLlm.provider, "openai");
+  assert.equal(normalized.voice.generationLlm.model, "gpt-4.1-mini");
   assert.equal(normalized.voice.replyDecisionLlm.provider, "openai");
   assert.equal(normalized.voice.replyDecisionLlm.model, "gpt-4.1-mini");
   assert.equal(normalized.voice.replyDecisionLlm.enabled, true);

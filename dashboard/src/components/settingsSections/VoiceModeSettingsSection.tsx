@@ -16,7 +16,12 @@ export function VoiceModeSettingsSection({
   selectVoiceReplyDecisionPresetModel,
   voiceReplyDecisionModelOptions,
   isVoiceReplyDecisionClaudeCodeProvider,
-  selectedVoiceReplyDecisionPresetModel
+  selectedVoiceReplyDecisionPresetModel,
+  setVoiceGenerationProvider,
+  selectVoiceGenerationPresetModel,
+  voiceGenerationModelOptions,
+  isVoiceGenerationClaudeCodeProvider,
+  selectedVoiceGenerationPresetModel
 }) {
   const isRealtimeMode = isVoiceAgentMode || isOpenAiRealtimeMode || isGeminiRealtimeMode;
   const realtimeReplyStrategy = String(form.voiceRealtimeReplyStrategy || "shared_brain")
@@ -134,6 +139,49 @@ export function VoiceModeSettingsSection({
             value={form.voiceReplyEagerness}
             onChange={set("voiceReplyEagerness")}
             style={rangeStyle(form.voiceReplyEagerness)}
+          />
+
+          <h4>Voice Generation LLM</h4>
+          <p>Used for shared-brain voice replies.</p>
+          <div className="split">
+            <div>
+              <label htmlFor="voice-generation-provider">Provider</label>
+              <select
+                id="voice-generation-provider"
+                value={form.voiceGenerationLlmProvider}
+                onChange={setVoiceGenerationProvider}
+              >
+                <option value="openai">openai</option>
+                <option value="anthropic">anthropic</option>
+                <option value="xai">xai (grok)</option>
+                <option value="claude-code">claude code (local)</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="voice-generation-model-preset">Model Preset</label>
+              <select
+                id="voice-generation-model-preset"
+                value={selectedVoiceGenerationPresetModel}
+                onChange={selectVoiceGenerationPresetModel}
+              >
+                {voiceGenerationModelOptions.map((modelId) => (
+                  <option key={modelId} value={modelId}>
+                    {modelId}
+                  </option>
+                ))}
+                {!isVoiceGenerationClaudeCodeProvider && (
+                  <option value={CUSTOM_MODEL_OPTION_VALUE}>custom model (manual)</option>
+                )}
+              </select>
+            </div>
+          </div>
+          <label htmlFor="voice-generation-model">Model ID</label>
+          <input
+            id="voice-generation-model"
+            type="text"
+            value={form.voiceGenerationLlmModel}
+            onChange={set("voiceGenerationLlmModel")}
+            disabled={isVoiceGenerationClaudeCodeProvider}
           />
 
           <h4>Voice Reply Decider</h4>

@@ -30,6 +30,7 @@ export function settingsToForm(settings) {
   const defaultVoiceOpenAiRealtime = defaults.voice.openaiRealtime;
   const defaultVoiceGeminiRealtime = defaults.voice.geminiRealtime;
   const defaultVoiceSttPipeline = defaults.voice.sttPipeline;
+  const defaultVoiceGenerationLlm = defaults.voice.generationLlm;
   const defaultVoiceStreamWatch = defaults.voice.streamWatch;
   const defaultVoiceSoundboard = defaults.voice.soundboard;
   const defaultStartup = defaults.startup;
@@ -102,6 +103,10 @@ export function settingsToForm(settings) {
       settings?.voice?.replyDecisionLlm?.provider ?? defaultVoice.replyDecisionLlm.provider,
     voiceReplyDecisionLlmModel:
       settings?.voice?.replyDecisionLlm?.model ?? defaultVoice.replyDecisionLlm.model,
+    voiceGenerationLlmProvider:
+      settings?.voice?.generationLlm?.provider ?? defaultVoiceGenerationLlm.provider,
+    voiceGenerationLlmModel:
+      settings?.voice?.generationLlm?.model ?? defaultVoiceGenerationLlm.model,
     voiceAllowedChannelIds: formatList(settings?.voice?.allowedVoiceChannelIds),
     voiceBlockedChannelIds: formatList(settings?.voice?.blockedVoiceChannelIds),
     voiceBlockedUserIds: formatList(settings?.voice?.blockedVoiceUserIds),
@@ -261,6 +266,10 @@ export function formToSettingsPatch(form) {
         enabled: Boolean(form.voiceReplyDecisionLlmEnabled),
         provider: String(form.voiceReplyDecisionLlmProvider || "").trim(),
         model: String(form.voiceReplyDecisionLlmModel || "").trim()
+      },
+      generationLlm: {
+        provider: String(form.voiceGenerationLlmProvider || "").trim(),
+        model: String(form.voiceGenerationLlmModel || "").trim()
       },
       allowedVoiceChannelIds: parseList(form.voiceAllowedChannelIds),
       blockedVoiceChannelIds: parseList(form.voiceBlockedChannelIds),

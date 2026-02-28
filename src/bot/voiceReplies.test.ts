@@ -25,6 +25,10 @@ function baseSettings(overrides = {}) {
       enabled: false
     },
     voice: {
+      generationLlm: {
+        provider: "openai",
+        model: "gpt-4.1-mini"
+      },
       soundboard: {
         enabled: false
       }
@@ -53,6 +57,10 @@ function baseSettings(overrides = {}) {
     voice: {
       ...base.voice,
       ...(overrides.voice || {}),
+      generationLlm: {
+        ...base.voice.generationLlm,
+        ...(overrides.voice?.generationLlm || {})
+      },
       soundboard: {
         ...base.voice.soundboard,
         ...(overrides.voice?.soundboard || {})
@@ -356,6 +364,34 @@ test("generateVoiceTurnReply logs voice errors when generation fails", async () 
   assert.equal(logs.length, 1);
   assert.equal(logs[0]?.kind, "voice_error");
   assert.equal(String(logs[0]?.content || "").includes("voice_stt_generation_failed"), true);
+});
+
+test("generateVoiceTurnReply uses voice generation llm provider/model instead of text llm provider/model", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: "copy that"
+  });
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      llm: {
+        provider: "openai",
+        model: "gpt-4.1-mini"
+      },
+      voice: {
+        generationLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "quick status?"
+  });
+
+  assert.equal(generationPayloads.length > 0, true);
+  assert.equal(generationPayloads[0]?.settings?.llm?.provider, "anthropic");
+  assert.equal(generationPayloads[0]?.settings?.llm?.model, "claude-haiku-4-5");
 });
 
 test("generateVoiceTurnReply runs web lookup follow-up with start/complete callbacks", async () => {

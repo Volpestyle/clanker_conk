@@ -13,6 +13,10 @@ import {
   resolveMaxMediaPromptLen,
   serializeForPrompt
 } from "../botHelpers.ts";
+import {
+  defaultModelForLlmProvider,
+  normalizeLlmProvider
+} from "../llm/llmHelpers.ts";
 import { clamp, sanitizeBotText } from "../utils.ts";
 
 export async function composeVoiceOperationalMessage(runtime, {
@@ -248,10 +252,18 @@ export async function generateVoiceTurnReply(runtime, {
     source: "voice_stt_pipeline_generation"
   });
 
+  const voiceGenerationProvider = normalizeLlmProvider(settings?.voice?.generationLlm?.provider);
+  const voiceGenerationModel = String(
+    settings?.voice?.generationLlm?.model || defaultModelForLlmProvider(voiceGenerationProvider)
+  )
+    .trim()
+    .slice(0, 120) || defaultModelForLlmProvider(voiceGenerationProvider);
   const tunedSettings = {
     ...settings,
     llm: {
       ...(settings?.llm || {}),
+      provider: voiceGenerationProvider,
+      model: voiceGenerationModel,
       temperature: clamp(Number(settings?.llm?.temperature) || 0.8, 0, 1.2),
       maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || 220, 40, 180)
     }

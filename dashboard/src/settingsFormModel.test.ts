@@ -32,6 +32,8 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.personaHardLimits, "no hate\nno hate\nkeep it fun");
   assert.equal(form.provider, "openai");
   assert.equal(form.model, "gpt-4.1-mini");
+  assert.equal(form.voiceGenerationLlmProvider, "openai");
+  assert.equal(form.voiceGenerationLlmModel, "gpt-4.1-mini");
   assert.equal(form.initiativeChannels, "1\n2");
   assert.equal(form.allowedChannels, "2\n3");
   assert.equal(form.voiceRealtimeReplyStrategy, "shared_brain");
@@ -109,7 +111,7 @@ test("resolvePresetModelSelection enforces claude-code preset behavior", () => {
   assert.equal(claudeCode.selectedPresetModel, "opus");
 });
 
-test("formToSettingsPatch keeps stt pipeline reply decider independent from main text llm", () => {
+test("formToSettingsPatch keeps stt pipeline voice generation and reply decider independent from main text llm", () => {
   const form = settingsToForm({
     llm: {
       provider: "claude-code",
@@ -117,6 +119,10 @@ test("formToSettingsPatch keeps stt pipeline reply decider independent from main
     },
     voice: {
       mode: "stt_pipeline",
+      generationLlm: {
+        provider: "anthropic",
+        model: "claude-haiku-4-5"
+      },
       replyDecisionLlm: {
         provider: "openai",
         model: "gpt-4.1-mini"
@@ -124,10 +130,14 @@ test("formToSettingsPatch keeps stt pipeline reply decider independent from main
     }
   });
 
+  form.voiceGenerationLlmProvider = "anthropic";
+  form.voiceGenerationLlmModel = "claude-haiku-4-5";
   form.voiceReplyDecisionLlmEnabled = false;
   form.voiceReplyDecisionLlmProvider = "openai";
   form.voiceReplyDecisionLlmModel = "gpt-4.1-mini";
   const patch = formToSettingsPatch(form);
+  assert.equal(patch.voice.generationLlm.provider, "anthropic");
+  assert.equal(patch.voice.generationLlm.model, "claude-haiku-4-5");
   assert.equal(patch.voice.replyDecisionLlm.enabled, false);
   assert.equal(patch.voice.replyDecisionLlm.provider, "openai");
   assert.equal(patch.voice.replyDecisionLlm.model, "gpt-4.1-mini");
