@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { VoiceSessionManager, resolveRealtimeTurnTranscriptionPlan } from "./voiceSessionManager.ts";
+import { STT_TURN_QUEUE_MAX } from "./voiceSessionManager.constants.ts";
 
 function createManager({
   participantCount = 2,
@@ -572,6 +573,30 @@ test("reply decider uses richer compact prompt guidance on first attempt", async
   assert.match(seenUserPrompt, /Current speaker:/);
   assert.match(seenUserPrompt, /Known participants: alice, bob\./);
   assert.match(seenUserPrompt, /Recent turns:/);
+});
+
+test("formatVoiceDecisionHistory keeps newest turns within total char budget", () => {
+  const manager = createManager();
+  const session = {
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    botTurnOpen: false,
+    settingsSnapshot: baseSettings(),
+    recentVoiceTurns: Array.from({ length: 6 }, (_row, index) => ({
+      role: "user",
+      userId: `speaker-${index + 1}`,
+      speakerName: `speaker-${index + 1}`,
+      text: `turn-${index + 1} ${"x".repeat(220)}`,
+      at: Date.now() - (6 - index) * 500
+    }))
+  };
+
+  const history = manager.formatVoiceDecisionHistory(session, 6, 460);
+  assert.equal(history.length <= 460, true);
+  assert.equal(history.includes("turn-6"), true);
+  assert.equal(history.includes("turn-1"), false);
+  assert.equal(history.split("\n").filter(Boolean).length <= 6, true);
 });
 
 test("reply decider skips memory retrieval for unaddressed turns", async () => {
@@ -1524,7 +1549,6 @@ test("runSttPipelineTurn exits before generation when turn admission denies spea
     textChannelId: "chan-1",
     mode: "stt_pipeline",
     ending: false,
-    sttContextMessages: [],
     settingsSnapshot: baseSettings({
       memory: {
         enabled: true
@@ -1583,7 +1607,6 @@ test("runSttPipelineTurn queues bot-turn-open transcripts for deferred flush", a
     textChannelId: "chan-1",
     mode: "stt_pipeline",
     ending: false,
-    sttContextMessages: [],
     settingsSnapshot: baseSettings()
   };
 
@@ -1598,6 +1621,137 @@ test("runSttPipelineTurn queues bot-turn-open transcripts for deferred flush", a
   assert.equal(queuedTurns.length, 1);
   assert.equal(queuedTurns[0]?.source, "stt_pipeline");
   assert.equal(queuedTurns[0]?.transcript, "clanker wait for this point");
+});
+
+test("queueSttPipelineTurn keeps a bounded FIFO backlog while a turn is running", async () => {
+  const runtimeLogs = [];
+  const seenCaptureReasons = [];
+  let releaseFirstTurn = () => undefined;
+  let firstTurnStarted = false;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.runSttPipelineTurn = async ({ captureReason }) => {
+    seenCaptureReasons.push(captureReason);
+    if (!firstTurnStarted) {
+      firstTurnStarted = true;
+      await new Promise((resolve) => {
+        releaseFirstTurn = resolve;
+      });
+    }
+  };
+
+  const session = {
+    id: "session-stt-queue-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "stt_pipeline",
+    ending: false,
+    pendingSttTurns: 0,
+    sttTurnDrainActive: false,
+    pendingSttTurnsQueue: []
+  };
+
+  manager.queueSttPipelineTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([1, 2, 3]),
+    captureReason: "first"
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  const queuedCount = STT_TURN_QUEUE_MAX + 2;
+  for (let index = 0; index < queuedCount; index += 1) {
+    manager.queueSttPipelineTurn({
+      session,
+      userId: "speaker-1",
+      pcmBuffer: Buffer.from([4 + index, 5 + index, 6 + index]),
+      captureReason: `queued-${index + 1}`
+    });
+  }
+  const expectedQueuedReasons = Array.from({ length: queuedCount }, (_row, index) => `queued-${index + 1}`).slice(
+    -STT_TURN_QUEUE_MAX
+  );
+
+  assert.deepEqual(
+    session.pendingSttTurnsQueue.map((turn) => turn.captureReason),
+    expectedQueuedReasons
+  );
+  assert.equal(session.pendingSttTurns, 1 + STT_TURN_QUEUE_MAX);
+  const supersededLogs = runtimeLogs.filter((row) => row?.content === "stt_pipeline_turn_superseded");
+  assert.equal(
+    supersededLogs.length,
+    2
+  );
+  assert.equal(supersededLogs[0]?.metadata?.replacedCaptureReason, "queued-1");
+  assert.equal(supersededLogs[1]?.metadata?.replacedCaptureReason, "queued-2");
+  assert.equal(supersededLogs[0]?.metadata?.maxQueueDepth, STT_TURN_QUEUE_MAX);
+
+  releaseFirstTurn();
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  assert.deepEqual(seenCaptureReasons, ["first", ...expectedQueuedReasons]);
+  assert.equal(session.pendingSttTurns, 0);
+});
+
+test("runSttPipelineTurn transcribes stale queued turns for context but skips reply generation", async () => {
+  const runtimeLogs = [];
+  let transcribeCalls = 0;
+  let decisionCalls = 0;
+  let runReplyCalls = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.llm.transcribeAudio = async () => ({ text: "stale context turn" });
+  manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
+  manager.transcribePcmTurn = async () => {
+    transcribeCalls += 1;
+    return "stale context turn";
+  };
+  manager.evaluateVoiceReplyDecision = async () => {
+    decisionCalls += 1;
+    return {
+      allow: true,
+      reason: "llm_yes",
+      participantCount: 2,
+      directAddressed: false,
+      transcript: "stale context turn"
+    };
+  };
+  manager.runSttPipelineReply = async () => {
+    runReplyCalls += 1;
+  };
+
+  const session = {
+    id: "session-stt-stale-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "stt_pipeline",
+    ending: false,
+    recentVoiceTurns: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.runSttPipelineTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([1, 2, 3, 4]),
+    captureReason: "stream_end",
+    queuedAt: Date.now() - 5_200
+  });
+
+  assert.equal(transcribeCalls, 1);
+  assert.equal(decisionCalls, 0);
+  assert.equal(runReplyCalls, 0);
+  assert.equal(session.recentVoiceTurns.length, 1);
+  assert.equal(session.recentVoiceTurns[0]?.role, "user");
+  assert.equal(session.recentVoiceTurns[0]?.text, "stale context turn");
+  assert.equal(
+    runtimeLogs.some((row) => row?.kind === "voice_runtime" && row?.content === "stt_pipeline_turn_skipped_stale"),
+    true
+  );
 });
 
 test("flushDeferredBotTurnOpenTurns waits for silence before admission", async () => {

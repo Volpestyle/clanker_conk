@@ -101,7 +101,6 @@ function createSession(overrides = {}) {
       ingestedFrameCount: 0
     },
     pendingSttTurns: 0,
-    sttContextMessages: [],
     recentVoiceTurns: [],
     realtimeProvider: null,
     realtimeInputSampleRateHz: 24000,
@@ -127,7 +126,7 @@ test("getRuntimeState summarizes STT and realtime sessions", () => {
       id: "stt-session",
       mode: "stt_pipeline",
       pendingSttTurns: 2,
-      sttContextMessages: [{ role: "user", content: "hello" }],
+      recentVoiceTurns: [{ role: "user", text: "hello" }],
       userCaptures: new Map([["user-a", {}]])
     })
   );

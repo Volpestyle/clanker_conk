@@ -134,9 +134,12 @@ import {
   STT_CONTEXT_MAX_MESSAGES,
   STT_REPLY_MAX_CHARS,
   STT_TRANSCRIPT_MAX_CHARS,
+  STT_TURN_QUEUE_MAX,
+  STT_TURN_STALE_SKIP_MS,
   STT_TTS_CONVERSION_CHUNK_MS,
   STT_TTS_CONVERSION_YIELD_EVERY_CHUNKS,
   VOICE_DECIDER_HISTORY_MAX_CHARS,
+  VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS,
   VOICE_DECIDER_HISTORY_MAX_TURNS,
   VOICE_LOOKUP_BUSY_LOG_COOLDOWN_MS,
   VOICE_LOOKUP_BUSY_MAX_CHARS,
@@ -240,8 +243,8 @@ export class VoiceSessionManager {
       stt: session.mode === "stt_pipeline"
         ? {
             pendingTurns: Number(session.pendingSttTurns || 0),
-            contextMessages: Array.isArray(session.sttContextMessages)
-              ? session.sttContextMessages.length
+            contextMessages: Array.isArray(session.recentVoiceTurns)
+              ? session.recentVoiceTurns.length
               : 0
           }
         : null,
@@ -2700,7 +2703,7 @@ export class VoiceSessionManager {
     }
 
     const botName = getPromptBotName(settings);
-    const recentHistory = this.formatVoiceDecisionHistory(session, 6);
+    const recentHistory = this.formatVoiceDecisionHistory(session, 6, VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS);
     const configuredMaxDecisionAttempts = Number(replyDecisionLlm?.maxAttempts);
     const maxDecisionAttempts = clamp(
       Math.floor(Number.isFinite(configuredMaxDecisionAttempts) ? configuredMaxDecisionAttempts : 1),
@@ -2917,10 +2920,10 @@ export class VoiceSessionManager {
     };
   }
 
-  formatVoiceDecisionHistory(session, maxTurns = 6) {
+  formatVoiceDecisionHistory(session, maxTurns = 6, maxTotalChars = VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS) {
     const turns = Array.isArray(session?.recentVoiceTurns) ? session.recentVoiceTurns : [];
     if (!turns.length) return "";
-    return turns
+    const lines = turns
       .slice(-Math.max(1, Number(maxTurns) || 6))
       .map((turn) => {
         const role = turn?.role === "assistant" ? "assistant" : "user";
@@ -2932,8 +2935,23 @@ export class VoiceSessionManager {
             : String(turn?.speakerName || "someone").trim() || "someone";
         return `${speaker}: "${text}"`;
       })
-      .filter(Boolean)
-      .join("\n");
+      .filter(Boolean);
+
+    const boundedLines = [];
+    let totalChars = 0;
+    for (let index = lines.length - 1; index >= 0; index -= 1) {
+      const line = lines[index];
+      if (!line) continue;
+      const delimiterChars = boundedLines.length > 0 ? 1 : 0;
+      const projectedChars = totalChars + delimiterChars + line.length;
+      if (projectedChars > Math.max(120, Number(maxTotalChars) || VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS)) {
+        break;
+      }
+      boundedLines.push(line);
+      totalChars = projectedChars;
+    }
+
+    return boundedLines.reverse().join("\n");
   }
 
   recordVoiceTurn(session, { role = "user", userId = null, text = "" } = {}) {
@@ -3287,45 +3305,129 @@ export class VoiceSessionManager {
     return String(userName || "").trim();
   }
 
+  getPendingSttTurnQueue(session) {
+    if (!session) return [];
+    const pendingQueue = Array.isArray(session.pendingSttTurnsQueue) ? session.pendingSttTurnsQueue : [];
+    if (!Array.isArray(session.pendingSttTurnsQueue)) {
+      session.pendingSttTurnsQueue = pendingQueue;
+    }
+    return pendingQueue;
+  }
+
+  syncPendingSttTurnCount(session) {
+    if (!session) return;
+    const pendingQueueDepth = Array.isArray(session.pendingSttTurnsQueue) ? session.pendingSttTurnsQueue.length : 0;
+    session.pendingSttTurns = Math.max(0, (session.sttTurnDrainActive ? 1 : 0) + pendingQueueDepth);
+  }
+
   queueSttPipelineTurn({ session, userId, pcmBuffer, captureReason = "stream_end" }) {
     if (!session || session.ending) return;
     if (session.mode !== "stt_pipeline") return;
     if (!pcmBuffer || !pcmBuffer.length) return;
 
-    session.pendingSttTurns = Number(session.pendingSttTurns || 0) + 1;
-    const chain = Promise.resolve(session.sttTurnChain || Promise.resolve());
-    session.sttTurnChain = chain
-      .catch(() => undefined)
-      .then(async () => {
-        await this.runSttPipelineTurn({
-          session,
-          userId,
-          pcmBuffer,
-          captureReason
-        });
-      })
-      .catch((error) => {
-        this.store.logAction({
-          kind: "voice_error",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId,
-          content: `stt_pipeline_turn_failed: ${String(error?.message || error)}`,
-          metadata: {
-            sessionId: session.id
-          }
-        });
-      })
-      .finally(() => {
-        session.pendingSttTurns = Math.max(0, Number(session.pendingSttTurns || 0) - 1);
-      });
+    const pendingQueue = this.getPendingSttTurnQueue(session);
+    const queuedTurn = {
+      session,
+      userId,
+      pcmBuffer,
+      captureReason,
+      queuedAt: Date.now()
+    };
+
+    if (session.sttTurnDrainActive) {
+      if (pendingQueue.length >= STT_TURN_QUEUE_MAX) {
+        const droppedTurn = pendingQueue.shift();
+        if (droppedTurn) {
+          this.store.logAction({
+            kind: "voice_runtime",
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId,
+            content: "stt_pipeline_turn_superseded",
+            metadata: {
+              sessionId: session.id,
+              replacedCaptureReason: String(droppedTurn.captureReason || "stream_end"),
+              replacingCaptureReason: String(captureReason || "stream_end"),
+              replacedQueueAgeMs: Math.max(0, Date.now() - Number(droppedTurn.queuedAt || Date.now())),
+              maxQueueDepth: STT_TURN_QUEUE_MAX
+            }
+          });
+        }
+      }
+      pendingQueue.push(queuedTurn);
+      this.syncPendingSttTurnCount(session);
+      return;
+    }
+
+    if (pendingQueue.length > 0) {
+      if (pendingQueue.length >= STT_TURN_QUEUE_MAX) {
+        pendingQueue.shift();
+      }
+      pendingQueue.push(queuedTurn);
+      const nextTurn = pendingQueue.shift();
+      if (!nextTurn) return;
+      this.drainSttPipelineTurnQueue(nextTurn).catch(() => undefined);
+      return;
+    }
+
+    this.drainSttPipelineTurnQueue(queuedTurn).catch(() => undefined);
   }
 
-  async runSttPipelineTurn({ session, userId, pcmBuffer, captureReason = "stream_end" }) {
+  async drainSttPipelineTurnQueue(initialTurn) {
+    const session = initialTurn?.session;
+    if (!session || session.ending) return;
+    if (session.mode !== "stt_pipeline") return;
+    if (session.sttTurnDrainActive) return;
+    const pendingQueue = this.getPendingSttTurnQueue(session);
+
+    session.sttTurnDrainActive = true;
+    this.syncPendingSttTurnCount(session);
+    let turn = initialTurn;
+
+    try {
+      while (turn && !session.ending) {
+        try {
+          await this.runSttPipelineTurn(turn);
+        } catch (error) {
+          this.store.logAction({
+            kind: "voice_error",
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId: turn.userId,
+            content: `stt_pipeline_turn_failed: ${String(error?.message || error)}`,
+            metadata: {
+              sessionId: session.id
+            }
+          });
+        }
+
+        const nextTurn = pendingQueue.shift();
+        turn = nextTurn || null;
+        this.syncPendingSttTurnCount(session);
+      }
+    } finally {
+      session.sttTurnDrainActive = false;
+      if (session.ending) {
+        session.pendingSttTurnsQueue = [];
+      } else {
+        const pendingTurn = pendingQueue.shift();
+        if (pendingTurn) {
+          this.syncPendingSttTurnCount(session);
+          this.drainSttPipelineTurnQueue(pendingTurn).catch(() => undefined);
+        }
+      }
+      this.syncPendingSttTurnCount(session);
+    }
+  }
+
+  async runSttPipelineTurn({ session, userId, pcmBuffer, captureReason = "stream_end", queuedAt = 0 }) {
     if (!session || session.ending) return;
     if (session.mode !== "stt_pipeline") return;
     if (!pcmBuffer?.length) return;
     if (!this.llm?.transcribeAudio || !this.llm?.synthesizeSpeech) return;
+
+    const queueWaitMs = queuedAt ? Math.max(0, Date.now() - Number(queuedAt || Date.now())) : 0;
+    const staleTurn = queueWaitMs >= STT_TURN_STALE_SKIP_MS;
 
     const settings = session.settingsSnapshot || this.store.getSettings();
     const sttSettings = settings?.voice?.sttPipeline || {};
@@ -3369,6 +3471,22 @@ export class VoiceSessionManager {
       captureReason,
       errorPrefix: "voice_stt_memory_ingest_failed"
     });
+    if (staleTurn) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "stt_pipeline_turn_skipped_stale",
+        metadata: {
+          sessionId: session.id,
+          captureReason: String(captureReason || "stream_end"),
+          queueWaitMs,
+          pcmBytes: pcmBuffer.length
+        }
+      });
+      return;
+    }
 
     const turnDecision = await this.evaluateVoiceReplyDecision({
       session,
@@ -3438,16 +3556,26 @@ export class VoiceSessionManager {
 
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     if (!normalizedTranscript) return;
-    const contextMessages = Array.isArray(session.sttContextMessages)
-      ? session.sttContextMessages
+    const contextTranscript = normalizeVoiceText(normalizedTranscript, STT_REPLY_MAX_CHARS);
+    const contextTurns = Array.isArray(session.recentVoiceTurns)
+      ? session.recentVoiceTurns
           .filter((row) => row && typeof row === "object")
-          .map((row) => ({
-            role: row.role === "assistant" ? "assistant" : "user",
-            content: normalizeVoiceText(row.content, STT_REPLY_MAX_CHARS)
-          }))
-          .filter((row) => row.content)
           .slice(-STT_CONTEXT_MAX_MESSAGES)
       : [];
+    if (contextTurns.length > 0 && contextTranscript) {
+      const lastTurn = contextTurns[contextTurns.length - 1];
+      const lastRole = lastTurn?.role === "assistant" ? "assistant" : "user";
+      const lastContent = normalizeVoiceText(lastTurn?.text, STT_REPLY_MAX_CHARS);
+      if (lastRole === "user" && lastContent && lastContent === contextTranscript) {
+        contextTurns.pop();
+      }
+    }
+    const contextMessages = contextTurns
+      .map((row) => ({
+        role: row.role === "assistant" ? "assistant" : "user",
+        content: normalizeVoiceText(row.text, STT_REPLY_MAX_CHARS)
+      }))
+      .filter((row) => row.content);
     const soundboardCandidateInfo = await this.resolveSoundboardCandidates({
       session,
       settings
@@ -3523,18 +3651,6 @@ export class VoiceSessionManager {
       }
     }
     if (!replyText || session.ending) return;
-
-    session.sttContextMessages = [
-      ...contextMessages,
-      {
-        role: "user",
-        content: normalizedTranscript
-      },
-      {
-        role: "assistant",
-        content: replyText
-      }
-    ].slice(-STT_CONTEXT_MAX_MESSAGES);
 
     const spokeLine = await this.speakVoiceLineWithTts({
       session,
@@ -4256,6 +4372,9 @@ export class VoiceSessionManager {
     if (session.realtimeInstructionRefreshTimer) clearTimeout(session.realtimeInstructionRefreshTimer);
     if (session.deferredTurnFlushTimer) clearTimeout(session.deferredTurnFlushTimer);
     session.pendingResponse = null;
+    session.sttTurnDrainActive = false;
+    session.pendingSttTurnsQueue = [];
+    session.pendingSttTurns = 0;
     session.pendingRealtimeTurns = [];
     session.pendingDeferredTurns = [];
     this.clearAudioPlaybackQueue(session);
