@@ -154,6 +154,7 @@ Use dashboard to:
 
 - Architecture and flow diagrams: `docs/technical-architecture.md`
 - Reply decision policy (text + voice): `docs/reply-decision-flow.md`
+- Replay harness guide (flooding + authoring): `docs/replay-test-suite.md`
 - Initiative discovery product spec: `docs/initiative-discovery-spec.md`
 - Public HTTPS entrypoint + relay design spec: `docs/public-https-entrypoint-spec.md`
 - Screen-share link flow spec: `docs/screen-share-link-spec.md`
