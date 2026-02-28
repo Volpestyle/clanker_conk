@@ -165,7 +165,22 @@ export class Store {
       this.db
         .prepare("INSERT INTO settings(key, value, updated_at) VALUES(?, ?, ?)")
         .run(SETTINGS_KEY, JSON.stringify(defaultSettings), nowIso());
+    } else {
+      const row = this.db.prepare("SELECT value FROM settings WHERE key = ?").get(SETTINGS_KEY);
+      this.rewriteRuntimeSettingsRow(row?.value);
     }
+  }
+
+  rewriteRuntimeSettingsRow(rawValue) {
+    const parsed = safeJsonParse(rawValue, DEFAULT_SETTINGS);
+    const normalized = normalizeSettings(parsed);
+    const normalizedJson = JSON.stringify(normalized);
+    if (normalizedJson === String(rawValue || "")) return normalized;
+
+    this.db
+      .prepare("UPDATE settings SET value = ?, updated_at = ? WHERE key = ?")
+      .run(normalizedJson, nowIso(), SETTINGS_KEY);
+    return normalized;
   }
 
   getSettings() {
