@@ -215,6 +215,21 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
     }));
   }
 
+  function resetPromptGuidanceFields() {
+    setForm((current) => ({
+      ...current,
+      promptCapabilityHonestyLine: defaultForm.promptCapabilityHonestyLine,
+      promptImpossibleActionLine: defaultForm.promptImpossibleActionLine,
+      promptMemoryEnabledLine: defaultForm.promptMemoryEnabledLine,
+      promptMemoryDisabledLine: defaultForm.promptMemoryDisabledLine,
+      promptSkipLine: defaultForm.promptSkipLine,
+      promptTextGuidance: defaultForm.promptTextGuidance,
+      promptVoiceGuidance: defaultForm.promptVoiceGuidance,
+      promptVoiceOperationalGuidance: defaultForm.promptVoiceOperationalGuidance,
+      promptMediaPromptCraftGuidance: defaultForm.promptMediaPromptCraftGuidance
+    }));
+  }
+
   function submit(e) {
     e.preventDefault();
     onSave(formToSettingsPatch(form));
@@ -243,7 +258,12 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
 
         <div className="settings-content">
           <CoreBehaviorSettingsSection id="sec-core" form={form} set={set} />
-          <PromptGuidanceSettingsSection id="sec-prompts" form={form} set={set} />
+          <PromptGuidanceSettingsSection
+            id="sec-prompts"
+            form={form}
+            set={set}
+            onResetPromptGuidance={resetPromptGuidanceFields}
+          />
 
           <LlmConfigurationSettingsSection
             id="sec-llm"

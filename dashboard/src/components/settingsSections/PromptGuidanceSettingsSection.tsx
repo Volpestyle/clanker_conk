@@ -1,12 +1,16 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
 
-export function PromptGuidanceSettingsSection({ id, form, set }) {
+export function PromptGuidanceSettingsSection({ id, form, set, onResetPromptGuidance }) {
   return (
     <SettingsSection id={id} title="Prompt Guidance">
       <p>
         Identity and persona live in Core Behavior. These fields tune reusable prompt guidance and system policy lines.
       </p>
+
+      <button type="button" className="sm" onClick={onResetPromptGuidance}>
+        Reset prompt guidance
+      </button>
 
       <label htmlFor="prompt-capability-honesty-line">Capability honesty line</label>
       <input

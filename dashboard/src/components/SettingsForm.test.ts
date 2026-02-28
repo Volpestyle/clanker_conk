@@ -36,5 +36,6 @@ test("SettingsForm renders sectioned settings layout when settings are provided"
   assert.equal(html.includes(">Settings<"), true);
   assert.equal(html.includes("settings-sidebar"), true);
   assert.equal(html.includes("Core Behavior"), true);
+  assert.equal(html.includes("Reset prompt guidance"), true);
   assert.equal(html.includes("Save settings"), true);
 });
