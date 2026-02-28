@@ -169,6 +169,77 @@ test("getRuntimeState summarizes STT and realtime sessions", () => {
   assert.deepEqual(realtime?.realtime?.state, { connected: true });
 });
 
+test("resolveSpeakingEndFinalizeDelayMs preserves baseline delays in low-load rooms", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    userCaptures: new Map([["speaker-1", {}]]),
+    pendingSttTurns: 0
+  });
+
+  assert.equal(
+    manager.resolveSpeakingEndFinalizeDelayMs({
+      session,
+      captureAgeMs: 120
+    }),
+    620
+  );
+  assert.equal(
+    manager.resolveSpeakingEndFinalizeDelayMs({
+      session,
+      captureAgeMs: 600
+    }),
+    320
+  );
+  assert.equal(
+    manager.resolveSpeakingEndFinalizeDelayMs({
+      session,
+      captureAgeMs: 1200
+    }),
+    140
+  );
+});
+
+test("resolveSpeakingEndFinalizeDelayMs adapts delays when room load increases", () => {
+  const { manager } = createManager();
+
+  const busyRealtimeSession = createSession({
+    mode: "openai_realtime",
+    userCaptures: new Map([
+      ["speaker-1", {}],
+      ["speaker-2", {}]
+    ]),
+    realtimeTurnDrainActive: true,
+    pendingRealtimeTurns: [{ userId: "speaker-3" }]
+  });
+  assert.equal(
+    manager.resolveSpeakingEndFinalizeDelayMs({
+      session: busyRealtimeSession,
+      captureAgeMs: 500
+    }),
+    224
+  );
+
+  const heavySttSession = createSession({
+    mode: "stt_pipeline",
+    userCaptures: new Map([["speaker-1", {}]]),
+    pendingSttTurns: 4
+  });
+  assert.equal(
+    manager.resolveSpeakingEndFinalizeDelayMs({
+      session: heavySttSession,
+      captureAgeMs: 150
+    }),
+    310
+  );
+  assert.equal(
+    manager.resolveSpeakingEndFinalizeDelayMs({
+      session: heavySttSession,
+      captureAgeMs: 1400
+    }),
+    100
+  );
+});
+
 test("requestStatus reports offline and online states", async () => {
   const { manager, messages } = createManager();
 

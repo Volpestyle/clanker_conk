@@ -12,10 +12,13 @@ export function createVoiceReplyRuntime(bot) {
     llm: bot.llm,
     store: bot.store,
     memory: bot.memory,
+    search: bot.search,
     client: bot.client,
     loadRelevantMemoryFacts: (payload) => bot.loadRelevantMemoryFacts(payload),
     buildMediaMemoryFacts: (payload) => bot.buildMediaMemoryFacts(payload),
-    loadPromptMemorySlice: (payload) => bot.loadPromptMemorySlice(payload)
+    loadPromptMemorySlice: (payload) => bot.loadPromptMemorySlice(payload),
+    buildWebSearchContext: (settings, messageText) => bot.buildWebSearchContext(settings, messageText),
+    runModelRequestedWebSearch: (payload) => bot.runModelRequestedWebSearch(payload)
   };
 }
 

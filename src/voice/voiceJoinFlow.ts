@@ -45,8 +45,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: "voice_disabled",
         details: {
           voiceEnabled: Boolean(settings?.voice?.enabled)
-        },
-        fallback: "voice mode is off rn. ask an admin to enable it."
+        }
       });
       return true;
     }
@@ -64,8 +63,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: "requester_blocked",
         details: {
           blockedVoiceUserIdsCount: blockedUsers.length
-        },
-        fallback: "you are blocked from voice controls here."
+        }
       });
       return true;
     }
@@ -81,8 +79,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         messageId: message.id,
         event: "voice_join_request",
         reason: "requester_not_in_voice",
-        details: {},
-        fallback: "join a vc first, then ping me to hop in."
+        details: {}
       });
       return true;
     }
@@ -103,8 +100,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: "channel_blocked",
         details: {
           targetVoiceChannelId
-        },
-        fallback: "that voice channel is blocked for me."
+        }
       });
       return true;
     }
@@ -122,8 +118,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         details: {
           targetVoiceChannelId,
           allowlistedChannelCount: allowedChannels.length
-        },
-        fallback: "i can only join allowlisted voice channels here."
+        }
       });
       return true;
     }
@@ -145,8 +140,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           details: {
             startedLastDay,
             maxSessionsPerDay
-          },
-          fallback: "daily voice session limit hit for now."
+          }
         });
         return true;
       }
@@ -168,7 +162,6 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           details: {
             voiceChannelId: targetVoiceChannelId
           },
-          fallback: "already in your vc.",
           mustNotify: false
         });
         return true;
@@ -198,8 +191,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: "xai_api_key_missing",
         details: {
           mode: runtimeMode
-        },
-        fallback: "voice agent mode needs `XAI_API_KEY`."
+        }
       });
       return true;
     }
@@ -215,8 +207,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: "openai_api_key_missing",
         details: {
           mode: runtimeMode
-        },
-        fallback: "OpenAI realtime mode needs `OPENAI_API_KEY`."
+        }
       });
       return true;
     }
@@ -232,8 +223,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: "gemini_api_key_missing",
         details: {
           mode: runtimeMode
-        },
-        fallback: "Gemini realtime mode needs `GOOGLE_API_KEY`."
+        }
       });
       return true;
     }
@@ -250,8 +240,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           reason: "stt_pipeline_asr_unavailable",
           details: {
             mode: runtimeMode
-          },
-          fallback: "stt pipeline needs `OPENAI_API_KEY` for speech-to-text."
+          }
         });
         return true;
       }
@@ -267,8 +256,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           reason: "stt_pipeline_tts_unavailable",
           details: {
             mode: runtimeMode
-          },
-          fallback: "stt pipeline needs `OPENAI_API_KEY` for text-to-speech."
+          }
         });
         return true;
       }
@@ -284,8 +272,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           reason: "stt_pipeline_brain_unavailable",
           details: {
             mode: runtimeMode
-          },
-          fallback: "stt pipeline brain callback is missing in runtime."
+          }
         });
         return true;
       }
@@ -307,8 +294,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: missingPermissionInfo.reason,
         details: {
           missingPermissions: missingPermissionInfo.missingPermissions || []
-        },
-        fallback: manager.composeMissingPermissionFallback(missingPermissionInfo)
+        }
       });
       return true;
     }
@@ -344,8 +330,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
             details: {
               activeOrPendingSessions,
               maxConcurrentSessions
-            },
-            fallback: "voice session cap reached right now."
+            }
           });
           return true;
         }
@@ -417,8 +402,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         });
 
         const openAiRealtimeSettings = settings.voice?.openaiRealtime || {};
-        realtimeInputSampleRateHz = Number(openAiRealtimeSettings.inputSampleRateHz) || 24000;
-        realtimeOutputSampleRateHz = Number(openAiRealtimeSettings.outputSampleRateHz) || 24000;
+        realtimeInputSampleRateHz = 24000;
+        realtimeOutputSampleRateHz = 24000;
         await realtimeClient.connect({
           model: String(openAiRealtimeSettings.model || "gpt-realtime").trim() || "gpt-realtime",
           voice: String(openAiRealtimeSettings.voice || "alloy").trim() || "alloy",
@@ -543,6 +528,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         },
         focusedSpeakerUserId: null,
         focusedSpeakerAt: 0,
+        voiceLookupBusyCount: 0,
+        lastSuppressedCaptureLogAt: 0,
         baseVoiceInstructions,
         lastOpenAiRealtimeInstructions: "",
         lastOpenAiRealtimeInstructionsAt: 0,
@@ -648,8 +635,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: "join_failed",
         details: {
           error: shortError(errorText)
-        },
-        fallback: `couldn't join voice: ${shortError(errorText)}`
+        }
       });
       return true;
     } finally {

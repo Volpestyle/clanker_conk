@@ -50,7 +50,6 @@ test("optional operational message can skip posting when composer returns [SKIP]
     channel,
     event: "voice_join_request",
     reason: "already_in_channel",
-    fallback: "already in your vc.",
     mustNotify: false
   });
 
@@ -59,7 +58,7 @@ test("optional operational message can skip posting when composer returns [SKIP]
   assert.deepEqual(sentMessages, []);
 });
 
-test("required operational message falls back when composer returns [SKIP]", async () => {
+test("required operational message suppresses [SKIP] output without sending", async () => {
   let seenAllowSkip = null;
   const { manager, channel, sentMessages } = createManager({
     composeOperationalMessage: async (payload) => {
@@ -72,13 +71,12 @@ test("required operational message falls back when composer returns [SKIP]", asy
     channel,
     event: "voice_join_request",
     reason: "requester_not_in_voice",
-    fallback: "join a vc first, then ping me to hop in.",
     mustNotify: true
   });
 
   assert.equal(handled, true);
   assert.equal(seenAllowSkip, false);
-  assert.deepEqual(sentMessages, ["join a vc first, then ping me to hop in."]);
+  assert.deepEqual(sentMessages, []);
 });
 
 test("optional operational message sends composed text when present", async () => {
@@ -90,11 +88,9 @@ test("optional operational message sends composed text when present", async () =
     channel,
     event: "voice_stream_watch_request",
     reason: "watching_started",
-    fallback: "bet, i'm watching your stream.",
     mustNotify: false
   });
 
   assert.equal(handled, true);
   assert.deepEqual(sentMessages, ["say less, doing it"]);
 });
-
