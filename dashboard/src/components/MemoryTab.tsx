@@ -22,7 +22,7 @@ export default function MemoryTab({ markdown, onRefresh, notify }: Props) {
   const [guilds, setGuilds] = useState<Guild[]>([]);
 
   useEffect(() => {
-    api("/api/guilds")
+    api<Guild[]>("/api/guilds")
       .then((data) => setGuilds(data || []))
       .catch(() => {});
   }, []);

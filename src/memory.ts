@@ -1,11 +1,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { clamp01, clampInt } from "./normalization/numbers.ts";
 import {
   buildFactEmbeddingPayload,
   buildHighlightsSection,
   cleanDailyEntryContent,
-  clamp01,
-  clampInt,
   computeChannelScopeScore,
   computeLexicalFactScore,
   computeRecencyScore,

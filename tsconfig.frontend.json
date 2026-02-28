@@ -5,7 +5,7 @@
     "moduleResolution": "Bundler",
     "jsx": "react-jsx",
     "allowImportingTsExtensions": true,
-    "types": ["vite/client", "node", "bun-types"]
+    "types": ["vite/client", "node", "react", "react-dom", "bun-types"]
   },
   "include": ["dashboard/src/**/*.ts", "dashboard/src/**/*.tsx"],
   "exclude": ["node_modules", "dashboard/dist", "dist"]

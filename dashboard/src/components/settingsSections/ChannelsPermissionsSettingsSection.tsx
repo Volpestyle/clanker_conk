@@ -7,7 +7,7 @@ export function ChannelsPermissionsSettingsSection({ id, form, set }) {
       <label htmlFor="initiative-channels">Standalone post channel IDs (only these)</label>
       <textarea
         id="initiative-channels"
-        rows="2"
+        rows={2}
         value={form.initiativeChannels}
         onChange={set("initiativeChannels")}
       />
@@ -15,7 +15,7 @@ export function ChannelsPermissionsSettingsSection({ id, form, set }) {
       <label htmlFor="allowed-channels">Allowed channel IDs (comma/newline)</label>
       <textarea
         id="allowed-channels"
-        rows="3"
+        rows={3}
         value={form.allowedChannels}
         onChange={set("allowedChannels")}
       />
@@ -23,7 +23,7 @@ export function ChannelsPermissionsSettingsSection({ id, form, set }) {
       <label htmlFor="blocked-channels">Blocked channel IDs (comma/newline)</label>
       <textarea
         id="blocked-channels"
-        rows="3"
+        rows={3}
         value={form.blockedChannels}
         onChange={set("blockedChannels")}
       />
@@ -31,7 +31,7 @@ export function ChannelsPermissionsSettingsSection({ id, form, set }) {
       <label htmlFor="blocked-users">Blocked user IDs (comma/newline)</label>
       <textarea
         id="blocked-users"
-        rows="3"
+        rows={3}
         value={form.blockedUsers}
         onChange={set("blockedUsers")}
       />

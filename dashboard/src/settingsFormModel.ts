@@ -50,7 +50,6 @@ export function settingsToForm(settings) {
   const defaultVoiceGenerationLlm = defaults.voice.generationLlm;
   const defaultVoiceStreamWatch = defaults.voice.streamWatch;
   const defaultVoiceSoundboard = defaults.voice.soundboard;
-  const defaultVoiceReplyDecisionPrompts = defaults.voice.replyDecisionLlm?.prompts || {};
   const defaultStartup = defaults.startup;
   const defaultInitiative = defaults.initiative;
   const defaultDiscovery = defaults.initiative.discovery;
@@ -123,16 +122,16 @@ export function settingsToForm(settings) {
       settings?.voice?.replyDecisionLlm?.model ?? defaultVoice.replyDecisionLlm.model,
     voiceReplyDecisionWakeVariantHint:
       settings?.voice?.replyDecisionLlm?.prompts?.wakeVariantHint ??
-      defaultVoiceReplyDecisionPrompts.wakeVariantHint,
+      defaultVoice.replyDecisionLlm?.prompts?.wakeVariantHint,
     voiceReplyDecisionSystemPromptCompact:
       settings?.voice?.replyDecisionLlm?.prompts?.systemPromptCompact ??
-      defaultVoiceReplyDecisionPrompts.systemPromptCompact,
+      defaultVoice.replyDecisionLlm?.prompts?.systemPromptCompact,
     voiceReplyDecisionSystemPromptFull:
       settings?.voice?.replyDecisionLlm?.prompts?.systemPromptFull ??
-      defaultVoiceReplyDecisionPrompts.systemPromptFull,
+      defaultVoice.replyDecisionLlm?.prompts?.systemPromptFull,
     voiceReplyDecisionSystemPromptStrict:
       settings?.voice?.replyDecisionLlm?.prompts?.systemPromptStrict ??
-      defaultVoiceReplyDecisionPrompts.systemPromptStrict,
+      defaultVoice.replyDecisionLlm?.prompts?.systemPromptStrict,
     voiceGenerationLlmProvider:
       settings?.voice?.generationLlm?.provider ?? defaultVoiceGenerationLlm.provider,
     voiceGenerationLlmModel:

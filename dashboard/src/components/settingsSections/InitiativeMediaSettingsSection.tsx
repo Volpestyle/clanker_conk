@@ -186,7 +186,7 @@ export function InitiativeMediaSettingsSection({
               <label htmlFor="initiative-allowed-image-models">Allowed image models (comma/newline list)</label>
               <textarea
                 id="initiative-allowed-image-models"
-                rows="3"
+                rows={3}
                 value={form.initiativeAllowedImageModels}
                 onChange={set("initiativeAllowedImageModels")}
               />
@@ -230,7 +230,7 @@ export function InitiativeMediaSettingsSection({
           <label htmlFor="initiative-allowed-video-models">Allowed video models (comma/newline list)</label>
           <textarea
             id="initiative-allowed-video-models"
-            rows="3"
+            rows={3}
             value={form.initiativeAllowedVideoModels}
             onChange={set("initiativeAllowedVideoModels")}
           />
@@ -415,7 +415,7 @@ export function InitiativeMediaSettingsSection({
               <label htmlFor="initiative-discovery-topics">Preferred topics (comma/newline)</label>
               <textarea
                 id="initiative-discovery-topics"
-                rows="2"
+                rows={2}
                 value={form.initiativeDiscoveryPreferredTopics}
                 onChange={set("initiativeDiscoveryPreferredTopics")}
               />
@@ -425,7 +425,7 @@ export function InitiativeMediaSettingsSection({
                   <label htmlFor="initiative-discovery-reddit">Reddit subreddits</label>
                   <textarea
                     id="initiative-discovery-reddit"
-                    rows="2"
+                    rows={2}
                     value={form.initiativeDiscoveryRedditSubs}
                     onChange={set("initiativeDiscoveryRedditSubs")}
                   />
@@ -437,7 +437,7 @@ export function InitiativeMediaSettingsSection({
                   <label htmlFor="initiative-discovery-youtube">YouTube channel IDs</label>
                   <textarea
                     id="initiative-discovery-youtube"
-                    rows="2"
+                    rows={2}
                     value={form.initiativeDiscoveryYoutubeChannels}
                     onChange={set("initiativeDiscoveryYoutubeChannels")}
                   />
@@ -449,7 +449,7 @@ export function InitiativeMediaSettingsSection({
                   <label htmlFor="initiative-discovery-rss">RSS feed URLs</label>
                   <textarea
                     id="initiative-discovery-rss"
-                    rows="3"
+                    rows={3}
                     value={form.initiativeDiscoveryRssFeeds}
                     onChange={set("initiativeDiscoveryRssFeeds")}
                   />
@@ -461,7 +461,7 @@ export function InitiativeMediaSettingsSection({
                   <label htmlFor="initiative-discovery-x-handles">X handles</label>
                   <textarea
                     id="initiative-discovery-x-handles"
-                    rows="2"
+                    rows={2}
                     value={form.initiativeDiscoveryXHandles}
                     onChange={set("initiativeDiscoveryXHandles")}
                   />

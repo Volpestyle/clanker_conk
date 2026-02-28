@@ -241,7 +241,7 @@ export function VoiceModeSettingsSection({
                 <label htmlFor="voice-reply-decision-wake-variant-hint">Wake-variant rule hint</label>
                 <textarea
                   id="voice-reply-decision-wake-variant-hint"
-                  rows="4"
+                  rows={4}
                   value={form.voiceReplyDecisionWakeVariantHint}
                   onChange={set("voiceReplyDecisionWakeVariantHint")}
                 />
@@ -249,7 +249,7 @@ export function VoiceModeSettingsSection({
                 <label htmlFor="voice-reply-decision-system-prompt-compact">System prompt (compact)</label>
                 <textarea
                   id="voice-reply-decision-system-prompt-compact"
-                  rows="8"
+                  rows={8}
                   value={form.voiceReplyDecisionSystemPromptCompact}
                   onChange={set("voiceReplyDecisionSystemPromptCompact")}
                 />
@@ -257,7 +257,7 @@ export function VoiceModeSettingsSection({
                 <label htmlFor="voice-reply-decision-system-prompt-full">System prompt (full)</label>
                 <textarea
                   id="voice-reply-decision-system-prompt-full"
-                  rows="8"
+                  rows={8}
                   value={form.voiceReplyDecisionSystemPromptFull}
                   onChange={set("voiceReplyDecisionSystemPromptFull")}
                 />
@@ -265,7 +265,7 @@ export function VoiceModeSettingsSection({
                 <label htmlFor="voice-reply-decision-system-prompt-strict">System prompt (strict retry)</label>
                 <textarea
                   id="voice-reply-decision-system-prompt-strict"
-                  rows="5"
+                  rows={5}
                   value={form.voiceReplyDecisionSystemPromptStrict}
                   onChange={set("voiceReplyDecisionSystemPromptStrict")}
                 />
@@ -603,7 +603,7 @@ export function VoiceModeSettingsSection({
               </label>
               <textarea
                 id="voice-sb-preferred"
-                rows="3"
+                rows={3}
                 value={form.voiceSoundboardPreferredSoundIds}
                 onChange={set("voiceSoundboardPreferredSoundIds")}
               />
@@ -613,7 +613,7 @@ export function VoiceModeSettingsSection({
           <label htmlFor="voice-allowed-channels">Allowed voice channel IDs (optional)</label>
           <textarea
             id="voice-allowed-channels"
-            rows="3"
+            rows={3}
             value={form.voiceAllowedChannelIds}
             onChange={set("voiceAllowedChannelIds")}
           />
@@ -621,7 +621,7 @@ export function VoiceModeSettingsSection({
           <label htmlFor="voice-blocked-channels">Blocked voice channel IDs</label>
           <textarea
             id="voice-blocked-channels"
-            rows="3"
+            rows={3}
             value={form.voiceBlockedChannelIds}
             onChange={set("voiceBlockedChannelIds")}
           />
@@ -629,7 +629,7 @@ export function VoiceModeSettingsSection({
           <label htmlFor="voice-blocked-users">Blocked voice user IDs</label>
           <textarea
             id="voice-blocked-users"
-            rows="3"
+            rows={3}
             value={form.voiceBlockedUserIds}
             onChange={set("voiceBlockedUserIds")}
           />

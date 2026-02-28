@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, type ReactNode } from "react";
 import {
   useVoiceSSE,
   type VoiceSession,
@@ -85,7 +85,7 @@ function Section({
   title: string;
   badge?: string | number | null;
   defaultOpen?: boolean;
-  children: React.ReactNode;
+  children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
@@ -102,7 +102,7 @@ function Section({
 
 // ---- Stat Pill ----
 
-function Stat({ label, value, warn }: { label: string; value: React.ReactNode; warn?: boolean }) {
+function Stat({ label, value, warn }: { label: string; value: ReactNode; warn?: boolean }) {
   return (
     <div className={`vm-stat ${warn ? "vm-stat-warn" : ""}`}>
       <span className="vm-stat-label">{label}</span>

@@ -51,7 +51,7 @@ export function PromptGuidanceSettingsSection({ id, form, set }) {
       <label htmlFor="prompt-text-guidance">Text guidance lines (one per line)</label>
       <textarea
         id="prompt-text-guidance"
-        rows="5"
+        rows={5}
         value={form.promptTextGuidance}
         onChange={set("promptTextGuidance")}
       />
@@ -59,7 +59,7 @@ export function PromptGuidanceSettingsSection({ id, form, set }) {
       <label htmlFor="prompt-voice-guidance">Voice guidance lines (one per line)</label>
       <textarea
         id="prompt-voice-guidance"
-        rows="4"
+        rows={4}
         value={form.promptVoiceGuidance}
         onChange={set("promptVoiceGuidance")}
       />
@@ -67,7 +67,7 @@ export function PromptGuidanceSettingsSection({ id, form, set }) {
       <label htmlFor="prompt-voice-operational-guidance">Voice operational guidance lines (one per line)</label>
       <textarea
         id="prompt-voice-operational-guidance"
-        rows="4"
+        rows={4}
         value={form.promptVoiceOperationalGuidance}
         onChange={set("promptVoiceOperationalGuidance")}
       />
@@ -75,7 +75,7 @@ export function PromptGuidanceSettingsSection({ id, form, set }) {
       <label htmlFor="prompt-media-guidance">Media prompt craft guidance</label>
       <textarea
         id="prompt-media-guidance"
-        rows="5"
+        rows={5}
         value={form.promptMediaPromptCraftGuidance}
         onChange={set("promptMediaPromptCraftGuidance")}
       />

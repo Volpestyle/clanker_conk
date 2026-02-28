@@ -11,7 +11,7 @@ export function CoreBehaviorSettingsSection({ id, form, set }) {
       <label htmlFor="persona-flavor">Persona flavor</label>
       <textarea
         id="persona-flavor"
-        rows="3"
+        rows={3}
         value={form.personaFlavor}
         onChange={set("personaFlavor")}
       />
@@ -19,7 +19,7 @@ export function CoreBehaviorSettingsSection({ id, form, set }) {
       <label htmlFor="persona-hard-limits">Persona hard limits (one per line)</label>
       <textarea
         id="persona-hard-limits"
-        rows="4"
+        rows={4}
         value={form.personaHardLimits}
         onChange={set("personaHardLimits")}
       />
