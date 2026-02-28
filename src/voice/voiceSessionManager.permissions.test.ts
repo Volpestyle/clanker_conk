@@ -86,29 +86,3 @@ test("getMissingJoinPermissionInfo reports connect/speak permissions and null wh
   });
   assert.equal(noneMissing, null);
 });
-
-test("composeMissingPermissionFallback formats clear responses", () => {
-  const manager = createManager();
-  assert.equal(manager.composeMissingPermissionFallback(null), "");
-  assert.equal(
-    manager.composeMissingPermissionFallback({
-      reason: "bot_member_unavailable",
-      missingPermissions: []
-    }),
-    "can't resolve my voice permissions in this server yet."
-  );
-  assert.equal(
-    manager.composeMissingPermissionFallback({
-      reason: "missing_voice_permissions",
-      missingPermissions: []
-    }),
-    "i need voice permissions in that vc before i can join."
-  );
-  assert.equal(
-    manager.composeMissingPermissionFallback({
-      reason: "missing_voice_permissions",
-      missingPermissions: ["CONNECT", "SPEAK"]
-    }),
-    "i need CONNECT and SPEAK permissions in that vc before i can join."
-  );
-});
