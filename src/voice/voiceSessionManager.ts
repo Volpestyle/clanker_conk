@@ -3031,6 +3031,7 @@ export class VoiceSessionManager {
       `Current speaker: ${speakerName}.`,
       `Join window active: ${joinWindowActive ? "yes" : "no"}.`,
       `Join window age ms: ${joinWindowAgeMs}.`,
+      "Join-window bias rule: if Join window active is yes and this turn is a short greeting/check-in, default to YES unless another human target is explicit.",
       `Conversation engagement state: ${conversationContext.engagementState}.`,
       `Engaged with current speaker: ${conversationContext.engagedWithCurrentSpeaker ? "yes" : "no"}.`,
       `Current speaker matches focused speaker: ${conversationContext.sameAsFocusedSpeaker ? "yes" : "no"}.`,
@@ -3053,6 +3054,7 @@ export class VoiceSessionManager {
       `Bot name: ${botName}.`,
       `Current speaker: ${speakerName}.`,
       `Join window active: ${joinWindowActive ? "yes" : "no"}.`,
+      "Join-window bias rule: if Join window active is yes and this turn is a short greeting/check-in, default to YES unless another human target is explicit.",
       `Conversation engagement state: ${conversationContext.engagementState}.`,
       `Engaged with current speaker: ${conversationContext.engagedWithCurrentSpeaker ? "yes" : "no"}.`,
       `Current speaker matches focused speaker: ${conversationContext.sameAsFocusedSpeaker ? "yes" : "no"}.`,
@@ -3103,6 +3105,7 @@ export class VoiceSessionManager {
         systemPrompt: systemPromptStrict,
         userPrompt:
           `Join window active: ${joinWindowActive ? "yes" : "no"}.\n` +
+          "Join-window bias rule: if Join window active is yes and this turn is a short greeting/check-in, default to YES unless another human target is explicit.\n" +
           `Conversation engagement state: ${conversationContext.engagementState}.\n` +
           `Directly addressed: ${directAddressed ? "yes" : "no"}.\n` +
           `Transcript: "${normalizedTranscript}".`

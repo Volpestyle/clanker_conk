@@ -385,6 +385,7 @@ test("reply decider allows short clanker wake ping", async () => {
 test("reply decider routes join-window greetings through llm with join context", async () => {
   let callCount = 0;
   const joinContextFlags = [];
+  const joinBiasFlags = [];
   const greetings = [
     "what up",
     "what's up",
@@ -398,6 +399,11 @@ test("reply decider routes join-window greetings through llm with join context",
       callCount += 1;
       const prompt = String(payload?.userPrompt || "");
       joinContextFlags.push(prompt.includes("Join window active: yes."));
+      joinBiasFlags.push(
+        prompt.includes(
+          "Join-window bias rule: if Join window active is yes and this turn is a short greeting/check-in, default to YES unless another human target is explicit."
+        )
+      );
       const transcriptMatch = prompt.match(/Transcript:\s*"([^"]*)"/u);
       const transcript = String(transcriptMatch?.[1] || "").toLowerCase();
       return { text: greetingSet.has(transcript) ? "YES" : "NO" };
@@ -425,6 +431,7 @@ test("reply decider routes join-window greetings through llm with join context",
 
   assert.equal(callCount, greetings.length);
   assert.equal(joinContextFlags.every(Boolean), true);
+  assert.equal(joinBiasFlags.every(Boolean), true);
 });
 
 test("reply decider keeps low-signal greetings out of llm once join window is stale", async () => {
