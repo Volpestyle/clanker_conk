@@ -14,6 +14,10 @@ Modes covered:
 - `openai_realtime`
 - `gemini_realtime`
 
+Notes:
+
+- `stt_pipeline` cases now allow model-directed `[[WEB_SEARCH:...]]` follow-ups when web search is enabled and a provider is configured (`BRAVE_SEARCH_API_KEY` and/or `SERPAPI_API_KEY`).
+
 ## Run simulated (fast local loop)
 
 ```sh

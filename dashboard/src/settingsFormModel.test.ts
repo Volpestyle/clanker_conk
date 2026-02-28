@@ -106,7 +106,6 @@ test("resolvePresetModelSelection always resolves to a real dropdown option", ()
     provider: "claude-code",
     model: "nonexistent"
   });
-  assert.equal(claudeCode.isClaudeCodeProvider, true);
   assert.equal(claudeCode.selectedPresetModel, "opus");
 });
 

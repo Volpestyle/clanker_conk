@@ -721,6 +721,155 @@ test("direct-addressed turn bypasses unsolicited gate and marks response as requ
   });
 });
 
+test("text reply follow-up can run web search and append cited sources", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+    store.patchSettings({
+      webSearch: {
+        enabled: true,
+        maxSearchesPerHour: 8
+      }
+    });
+
+    const llmCalls = [];
+    const searchCalls = [];
+    const replyPayloads = [];
+    const channelSendPayloads = [];
+    const typingCallsRef = { count: 0 };
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate(payload) {
+          llmCalls.push(payload);
+          if (llmCalls.length === 1) {
+            return {
+              text: JSON.stringify({
+                text: "gimme a sec",
+                skip: false,
+                reactionEmoji: null,
+                media: null,
+                webSearchQuery: "latest rust stable version",
+                memoryLookupQuery: null,
+                imageLookupQuery: null,
+                memoryLine: null,
+                automationAction: { operation: "none" },
+                voiceIntent: { intent: "none", confidence: 0, reason: null },
+                screenShareIntent: { action: "none", confidence: 0, reason: null }
+              }),
+              provider: "test",
+              model: "test-model",
+              usage: null,
+              costUsd: 0
+            };
+          }
+
+          return {
+            text: JSON.stringify({
+              text: "latest stable rust is [1]",
+              skip: false,
+              reactionEmoji: null,
+              media: null,
+              webSearchQuery: null,
+              memoryLookupQuery: null,
+              imageLookupQuery: null,
+              memoryLine: null,
+              automationAction: { operation: "none" },
+              voiceIntent: { intent: "none", confidence: 0, reason: null },
+              screenShareIntent: { action: "none", confidence: 0, reason: null }
+            }),
+            provider: "test",
+            model: "test-model",
+            usage: null,
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: {
+        isConfigured() {
+          return true;
+        },
+        async searchAndRead(payload) {
+          searchCalls.push(payload);
+          return {
+            query: String(payload?.query || "").trim(),
+            results: [
+              {
+                title: "Rust 1.90.0",
+                url: "https://blog.rust-lang.org/2025/09/18/Rust-1.90.0.html",
+                domain: "blog.rust-lang.org",
+                snippet: "Rust 1.90.0 is released."
+              }
+            ],
+            fetchedPages: 1,
+            providerUsed: "brave",
+            providerFallbackUsed: false
+          };
+        }
+      },
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanker conk",
+      tag: "clanker conk#0001"
+    };
+
+    const guild = buildGuild();
+    const channel = buildChannel({ guild, channelId, channelSendPayloads, typingCallsRef });
+
+    store.recordMessage({
+      messageId: "bot-context-search-1",
+      createdAt: Date.now() - 750,
+      guildId: guild.id,
+      channelId,
+      authorId: "bot-1",
+      authorName: "clanker conk",
+      isBot: true,
+      content: "last bot line",
+      referencedMessageId: null
+    });
+
+    const incoming = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-web-followup",
+      content: "what rust version is stable right now?",
+      replyPayloads
+    });
+
+    const settings = store.getSettings();
+    const recentMessages = store.getRecentMessages(channelId, settings.memory.maxRecentMessages);
+    const sent = await bot.maybeReplyToMessage(incoming, settings, {
+      source: "message_event",
+      recentMessages,
+      addressSignal: {
+        direct: false,
+        inferred: false,
+        triggered: false,
+        reason: "llm_decides"
+      }
+    });
+
+    assert.equal(sent, true);
+    assert.equal(llmCalls.length, 2);
+    assert.equal(searchCalls.length, 1);
+    assert.equal(searchCalls[0]?.query, "latest rust stable version");
+    assert.equal(replyPayloads.length, 0);
+    assert.equal(channelSendPayloads.length, 1);
+    assert.match(String(channelSendPayloads[0]?.content || ""), /\[1\]\(<https:\/\/blog\.rust-lang\.org\//i);
+    assert.match(String(channelSendPayloads[0]?.content || ""), /Sources:/);
+    assert.match(String(channelSendPayloads[0]?.content || ""), /blog\.rust-lang\.org/i);
+    assert.match(String(llmCalls[1]?.userPrompt || ""), /Live web findings for query/i);
+  });
+});
+
 test("reply follow-up regeneration can use dedicated provider/model override", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";

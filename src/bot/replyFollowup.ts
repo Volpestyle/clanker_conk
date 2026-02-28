@@ -144,6 +144,79 @@ export async function runModelRequestedWebSearch<T extends WebSearchState>(runti
   }
 }
 
+export async function runModelRequestedWebSearchWithTimeout<T extends WebSearchState>({
+  runSearch,
+  webSearch,
+  query,
+  timeoutMs = null
+}: {
+  runSearch: () => Promise<T>;
+  webSearch: T;
+  query: string;
+  timeoutMs?: number | null;
+}): Promise<T> {
+  const normalizedQuery = normalizeDirectiveText(query, MAX_WEB_QUERY_LEN);
+  const baseState = {
+    ...webSearch,
+    requested: true,
+    query: normalizedQuery,
+    used: false
+  } as T;
+  const resolvedTimeoutMs = Math.max(0, Math.floor(Number(timeoutMs) || 0));
+
+  if (!resolvedTimeoutMs) {
+    try {
+      return await runSearch();
+    } catch (error) {
+      return {
+        ...baseState,
+        error: String(error?.message || error || "web lookup failed")
+      } as T;
+    }
+  }
+
+  type WebSearchSuccess<U> = {
+    ok: true;
+    value: U;
+  };
+  type WebSearchFailure = {
+    ok: false;
+    error: Error;
+  };
+  type WebSearchTimeout = {
+    ok: false;
+    timeout: true;
+  };
+
+  const runPromise = Promise.resolve(runSearch()).then(
+    (value): WebSearchSuccess<T> => ({ ok: true, value }),
+    (error): WebSearchFailure => ({ ok: false, error: error instanceof Error ? error : new Error(String(error)) })
+  );
+  const timeoutPromise = new Promise<WebSearchTimeout>((resolve) => {
+    setTimeout(() => {
+      resolve({ ok: false, timeout: true });
+    }, Math.max(50, resolvedTimeoutMs));
+  });
+
+  const result = await Promise.race<WebSearchSuccess<T> | WebSearchFailure | WebSearchTimeout>([
+    runPromise,
+    timeoutPromise
+  ]);
+  if (result?.ok) return result.value;
+  if ("timeout" in result && result.timeout) {
+    return {
+      ...baseState,
+      error: `web lookup timed out after ${Math.max(50, resolvedTimeoutMs)}ms`
+    } as T;
+  }
+  return {
+    ...baseState,
+    error: "error" in result
+      ? String(result.error?.message || result.error || "web lookup failed")
+      : "web lookup failed"
+  } as T;
+}
+
 export async function runModelRequestedMemoryLookup<T extends MemoryLookupState>(runtime, {
   settings,
   memoryLookup,

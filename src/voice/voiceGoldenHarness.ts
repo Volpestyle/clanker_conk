@@ -8,6 +8,16 @@ import { LLMService } from "../llm.ts";
 import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
 import { normalizeSettings } from "../store/settingsNormalization.ts";
 import { parseBooleanFlag } from "../normalization/valueParsers.ts";
+import {
+  isWebSearchOptOutText,
+  parseReplyDirectives,
+  resolveMaxMediaPromptLen
+} from "../botHelpers.ts";
+import {
+  runModelRequestedWebSearch,
+  runModelRequestedWebSearchWithTimeout
+} from "../bot/replyFollowup.ts";
+import { WebSearchService } from "../search.ts";
 import { runJsonJudge } from "../../scripts/replay/core/judge.ts";
 import { summarizeNamedMetricRows, type NumericStats } from "../../scripts/replay/core/metrics.ts";
 import { formatPct, stableNumber } from "../../scripts/replay/core/utils.ts";
@@ -266,6 +276,13 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     userText: "what's the fastest way to reduce build times in this project?",
     expectedAllow: true,
     objective: "Provide a concise practical suggestion even without explicit bot naming."
+  },
+  {
+    id: "fresh-fact-check",
+    title: "Fresh Fact Check",
+    userText: "clanker what's the latest rust stable version right now?",
+    expectedAllow: true,
+    objective: "Use a web lookup if needed for freshness, then answer in one short line."
   }
 ];
 
@@ -348,7 +365,8 @@ function buildHarnessSettings({
       enabled: false
     },
     webSearch: {
-      enabled: false
+      enabled: true,
+      maxSearchesPerHour: 12
     },
     llm: {
       provider: actorProvider,
@@ -409,6 +427,130 @@ function buildJudgeSettings(judge: VoiceGoldenJudgeConfig) {
       maxOutputTokens: 260
     }
   });
+}
+
+type HarnessWebSearchResultRow = {
+  title?: string;
+  url?: string;
+  domain?: string;
+  snippet?: string;
+  pageSummary?: string | null;
+};
+
+type HarnessWebSearchState = {
+  requested: boolean;
+  configured: boolean;
+  enabled: boolean;
+  used: boolean;
+  blockedByBudget: boolean;
+  optedOutByUser: boolean;
+  error: string | null;
+  query: string;
+  results: HarnessWebSearchResultRow[];
+  fetchedPages: number;
+  providerUsed: string | null;
+  providerFallbackUsed: boolean;
+  budget: {
+    canSearch: boolean;
+  };
+};
+
+function buildHarnessWebSearchContext({
+  settings,
+  search,
+  messageText
+}: {
+  settings: Record<string, unknown>;
+  search: WebSearchService | null;
+  messageText: string;
+}): HarnessWebSearchState {
+  const maxPerHour = Math.max(
+    0,
+    Math.floor(Number((settings as { webSearch?: { maxSearchesPerHour?: number } })?.webSearch?.maxSearchesPerHour) || 0)
+  );
+  return {
+    requested: false,
+    configured: Boolean(search?.isConfigured?.()),
+    enabled: Boolean((settings as { webSearch?: { enabled?: boolean } })?.webSearch?.enabled),
+    used: false,
+    blockedByBudget: false,
+    optedOutByUser: isWebSearchOptOutText(messageText),
+    error: null,
+    query: "",
+    results: [],
+    fetchedPages: 0,
+    providerUsed: null,
+    providerFallbackUsed: false,
+    budget: {
+      canSearch: maxPerHour > 0
+    }
+  };
+}
+
+function formatHarnessWebSearchFindings(webSearch: HarnessWebSearchState) {
+  if (!webSearch.used || !Array.isArray(webSearch.results) || !webSearch.results.length) return "";
+  const lines = webSearch.results.slice(0, 5).map((row, index) => {
+    const title = String(row?.title || "Untitled").trim();
+    const summary = String(row?.pageSummary || row?.snippet || "").trim();
+    const domain = String(row?.domain || "").trim();
+    return `[${index + 1}] ${title}${summary ? ` - ${summary}` : ""}${domain ? ` (${domain})` : ""}`;
+  });
+  return lines.filter(Boolean).join("\n");
+}
+
+function buildSttActorPrompt({
+  transcript,
+  webSearch,
+  allowWebSearchDirective
+}: {
+  transcript: string;
+  webSearch: HarnessWebSearchState;
+  allowWebSearchDirective: boolean;
+}) {
+  const lines = [
+    `Speaker transcript: "${String(transcript || "").replace(/\s+/g, " ").trim()}"`,
+    "Reply with one short natural spoken response (max 20 words).",
+    "If this should be skipped, output exactly [SKIP].",
+    "No markdown."
+  ];
+
+  if (allowWebSearchDirective) {
+    if (webSearch.optedOutByUser) {
+      lines.push("The speaker asked not to use web search.");
+      lines.push("Do not output [[WEB_SEARCH:...]].");
+    } else if (!webSearch.enabled) {
+      lines.push("Live web search is disabled for this run.");
+      lines.push("Do not output [[WEB_SEARCH:...]].");
+    } else if (!webSearch.configured) {
+      lines.push("Live web search is unavailable because no provider is configured.");
+      lines.push("Do not output [[WEB_SEARCH:...]].");
+    } else if (!webSearch.budget?.canSearch || webSearch.blockedByBudget) {
+      lines.push("Live web search budget is exhausted right now.");
+      lines.push("Do not output [[WEB_SEARCH:...]].");
+    } else {
+      lines.push("If freshness or exactness requires web lookup, append one trailing [[WEB_SEARCH:<concise query>]].");
+      lines.push("Only use the directive when needed.");
+    }
+  } else {
+    lines.push("Do not output [[WEB_SEARCH:...]].");
+  }
+
+  if (webSearch.requested && !webSearch.used) {
+    if (webSearch.error) {
+      lines.push(`Web lookup failed: ${webSearch.error}`);
+    } else {
+      lines.push("Web lookup returned no useful results.");
+    }
+  } else {
+    const findings = formatHarnessWebSearchFindings(webSearch);
+    if (findings) {
+      lines.push(`Live web findings for query: "${webSearch.query}"`);
+      lines.push(findings);
+      lines.push("If you cite findings, use [1], [2], etc.");
+    }
+  }
+
+  return lines.filter(Boolean).join("\n");
 }
 
 function uniqueLines(values: string[]) {
@@ -594,12 +736,14 @@ async function runLiveSttPipelineCase({
   llm,
   manager,
   settings,
-  caseRow
+  caseRow,
+  search
 }: {
   llm: LLMService;
   manager: VoiceSessionManager;
   settings: Record<string, unknown>;
   caseRow: VoiceGoldenCase;
+  search: WebSearchService | null;
 }): Promise<ModeExecutionResult> {
   const stage = {
     connectMs: 0,
@@ -640,16 +784,32 @@ async function runLiveSttPipelineCase({
   });
   stage.asrMs = performance.now() - asrStarted;
 
+  const normalizedTranscript = String(transcript || caseRow.userText)
+    .replace(/\s+/g, " ")
+    .trim();
+  const mediaPromptLimit = resolveMaxMediaPromptLen(settings);
+  let webSearch = buildHarnessWebSearchContext({
+    settings,
+    search,
+    messageText: normalizedTranscript
+  });
+  const webSearchTimeoutMs = Math.max(
+    500,
+    Math.min(
+      45_000,
+      Math.floor(Number((settings as { voice?: { webSearchTimeoutMs?: number } })?.voice?.webSearchTimeoutMs) || 8_000)
+    )
+  );
+
   const actorStarted = performance.now();
-  const generation = await llm.generate({
+  let generation = await llm.generate({
     settings,
     systemPrompt: manager.buildVoiceInstructions(settings),
-    userPrompt: [
-      `Speaker transcript: "${String(transcript || caseRow.userText).replace(/\s+/g, " ").trim()}"`,
-      "Reply with one short natural spoken response (max 20 words).",
-      "If this should be skipped, output exactly [SKIP].",
-      "No markdown."
-    ].join("\n"),
+    userPrompt: buildSttActorPrompt({
+      transcript: normalizedTranscript,
+      webSearch,
+      allowWebSearchDirective: true
+    }),
     trace: {
       guildId: "voice-golden-guild",
       channelId: "voice-golden-text",
@@ -660,9 +820,53 @@ async function runLiveSttPipelineCase({
       messageId: null
     }
   });
+  let parsed = parseReplyDirectives(generation.text, mediaPromptLimit);
+  if (parsed.webSearchQuery && search) {
+    webSearch = await runModelRequestedWebSearchWithTimeout({
+      runSearch: async () =>
+        await runModelRequestedWebSearch(
+          { llm, search, memory: null },
+          {
+            settings,
+            webSearch,
+            query: parsed.webSearchQuery,
+            trace: {
+              guildId: "voice-golden-guild",
+              channelId: "voice-golden-text",
+              userId: "speaker-1",
+              source: "voice_golden_stt_actor",
+              event: "stt_actor_web_lookup"
+            }
+          }
+        ),
+      webSearch,
+      query: parsed.webSearchQuery,
+      timeoutMs: webSearchTimeoutMs
+    });
+
+    generation = await llm.generate({
+      settings,
+      systemPrompt: manager.buildVoiceInstructions(settings),
+      userPrompt: buildSttActorPrompt({
+        transcript: normalizedTranscript,
+        webSearch,
+        allowWebSearchDirective: false
+      }),
+      trace: {
+        guildId: "voice-golden-guild",
+        channelId: "voice-golden-text",
+        userId: "speaker-1",
+        source: "voice_golden_stt_actor",
+        event: "stt_actor_web_lookup_followup",
+        reason: null,
+        messageId: null
+      }
+    });
+    parsed = parseReplyDirectives(generation.text, mediaPromptLimit);
+  }
   stage.actorMs = performance.now() - actorStarted;
 
-  const responseText = String(generation.text || "")
+  const responseText = String(parsed.text || generation.text || "")
     .replace(/\s+/g, " ")
     .trim();
 
@@ -1237,6 +1441,7 @@ function buildEmptyTimings(decisionMs = 0): StageTimings {
 async function runSingleCase({
   options,
   llm,
+  search,
   judgeSettings,
   mode,
   settings,
@@ -1246,6 +1451,7 @@ async function runSingleCase({
 }: {
   options: VoiceGoldenResolvedOptions;
   llm: LLMService | null;
+  search: WebSearchService | null;
   judgeSettings: Record<string, unknown> | null;
   mode: VoiceGoldenMode;
   settings: Record<string, unknown>;
@@ -1308,7 +1514,8 @@ async function runSingleCase({
               llm,
               manager,
               settings,
-              caseRow
+              caseRow,
+              search
             })
           : await runLiveRealtimeCase({
               llm,
@@ -1407,13 +1614,18 @@ function aggregateModeReport(mode: VoiceGoldenMode, skippedReason: string | null
 export async function runVoiceGoldenHarness(inputOptions: VoiceGoldenHarnessOptions = {}): Promise<VoiceGoldenHarnessReport> {
   const options = resolveDefaults(inputOptions);
   const startedAtIso = new Date().toISOString();
+  const harnessStore = new HarnessStore();
 
   const llm = options.mode === "live" || options.judge.enabled
     ? new LLMService({
         appConfig,
-        store: new HarnessStore()
+        store: harnessStore
       })
     : null;
+  const search = new WebSearchService({
+    appConfig,
+    store: harnessStore
+  });
 
   const judgeSettings = options.judge.enabled ? buildJudgeSettings(options.judge) : null;
 
@@ -1452,6 +1664,7 @@ export async function runVoiceGoldenHarness(inputOptions: VoiceGoldenHarnessOpti
         const row = await runSingleCase({
           options,
           llm,
+          search,
           judgeSettings,
           mode,
           settings,

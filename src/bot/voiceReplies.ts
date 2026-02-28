@@ -17,6 +17,7 @@ import {
   defaultModelForLlmProvider,
   normalizeLlmProvider
 } from "../llm/llmHelpers.ts";
+import { runModelRequestedWebSearchWithTimeout } from "./replyFollowup.ts";
 import { clamp, sanitizeBotText } from "../utils.ts";
 
 export async function composeVoiceOperationalMessage(runtime, {
@@ -361,17 +362,22 @@ export async function generateVoiceTurnReply(runtime, {
           settings,
           overrideMs: webSearchTimeoutMs
         });
-        webSearch = await runVoiceWebSearchWithTimeout(runtime, {
-          settings,
+        webSearch = await runModelRequestedWebSearchWithTimeout({
+          runSearch: async () =>
+            await runtime.runModelRequestedWebSearch({
+              settings,
+              webSearch,
+              query: normalizedQuery,
+              trace: {
+                guildId,
+                channelId,
+                userId,
+                source: "voice_stt_pipeline_generation",
+                event: sessionId ? "voice_session_web_lookup" : "voice_turn_web_lookup"
+              }
+            }),
           webSearch,
           query: normalizedQuery,
-          trace: {
-            guildId,
-            channelId,
-            userId,
-            source: "voice_stt_pipeline_generation",
-            event: sessionId ? "voice_session_web_lookup" : "voice_turn_web_lookup"
-          },
           timeoutMs: lookupTimeoutMs
         });
       } finally {
@@ -467,67 +473,4 @@ function resolveVoiceWebSearchTimeoutMs({ settings, overrideMs }) {
   const configured = Number(settings?.voice?.webSearchTimeoutMs);
   const raw = Number.isFinite(explicit) ? explicit : Number.isFinite(configured) ? configured : 8000;
   return clamp(Math.floor(raw), 500, 45000);
-}
-
-async function runVoiceWebSearchWithTimeout(runtime, {
-  settings,
-  webSearch,
-  query,
-  trace = {},
-  timeoutMs = 8000
-}) {
-  type WebSearchSuccess = {
-    ok: true;
-    value: Record<string, unknown>;
-  };
-  type WebSearchFailure = {
-    ok: false;
-    error: Error;
-  };
-  type WebSearchTimeout = {
-    ok: false;
-    timeout: true;
-  };
-
-  const runPromise = Promise.resolve(
-    runtime.runModelRequestedWebSearch({
-      settings,
-      webSearch,
-      query,
-      trace
-    })
-  ).then(
-    (value): WebSearchSuccess => ({ ok: true, value }),
-    (error): WebSearchFailure => ({ ok: false, error: error instanceof Error ? error : new Error(String(error)) })
-  );
-
-  const timeoutPromise = new Promise<WebSearchTimeout>((resolve) => {
-    setTimeout(() => {
-      resolve({ ok: false, timeout: true });
-    }, Math.max(50, Number(timeoutMs) || 8000));
-  });
-
-  const result = await Promise.race<WebSearchSuccess | WebSearchFailure | WebSearchTimeout>([
-    runPromise,
-    timeoutPromise
-  ]);
-  if (result?.ok && result.value) return result.value;
-  if ("timeout" in result && result.timeout) {
-    return {
-      ...(webSearch || {}),
-      requested: true,
-      query: String(query || "").trim(),
-      used: false,
-      error: `web lookup timed out after ${Math.max(50, Number(timeoutMs) || 8000)}ms`
-    };
-  }
-  return {
-    ...(webSearch || {}),
-    requested: true,
-    query: String(query || "").trim(),
-    used: false,
-    error: "error" in result
-      ? String(result.error?.message || result.error || "web lookup failed")
-      : "web lookup failed"
-  };
 }

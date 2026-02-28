@@ -9,8 +9,7 @@ test("voice golden validation harness passes simulated suite across all modes", 
     iterations: 1,
     judge: {
       enabled: false
-    },
-    maxCases: 6
+    }
   });
 
   assert.equal(report.modeReports.length, VOICE_GOLDEN_MODES.length);

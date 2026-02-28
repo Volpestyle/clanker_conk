@@ -52,7 +52,8 @@ import {
 import {
   maybeRegenerateWithMemoryLookup as maybeRegenerateWithMemoryLookupForReplyFollowup,
   resolveReplyFollowupGenerationSettings as resolveReplyFollowupGenerationSettingsForReplyFollowup,
-  runModelRequestedWebSearch as runModelRequestedWebSearchForReplyFollowup
+  runModelRequestedWebSearch as runModelRequestedWebSearchForReplyFollowup,
+  runModelRequestedWebSearchWithTimeout as runModelRequestedWebSearchWithTimeoutForReplyFollowup
 } from "./bot/replyFollowup.ts";
 import {
   getReplyAddressSignal as getReplyAddressSignalForReplyAdmission,
@@ -966,18 +967,24 @@ export class ClankerBot {
     const followupStartedAtMs = Date.now();
     if (replyDirective.webSearchQuery) {
       usedWebSearchFollowup = true;
-      const followupWebSearch = await runModelRequestedWebSearchForReplyFollowup(
-        { llm: this.llm, search: this.search, memory: this.memory },
-        {
-          settings,
-          webSearch,
-          query: replyDirective.webSearchQuery,
-          trace: {
-            ...replyTrace,
-            source
-          }
-        }
-      );
+      const followupWebSearch = await runModelRequestedWebSearchWithTimeoutForReplyFollowup({
+        runSearch: async () =>
+          await runModelRequestedWebSearchForReplyFollowup(
+            { llm: this.llm, search: this.search, memory: this.memory },
+            {
+              settings,
+              webSearch,
+              query: replyDirective.webSearchQuery,
+              trace: {
+                ...replyTrace,
+                source
+              }
+            }
+          ),
+        webSearch,
+        query: replyDirective.webSearchQuery,
+        timeoutMs: null
+      });
       webSearch = {
         ...webSearch,
         ...followupWebSearch
