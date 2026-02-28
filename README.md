@@ -46,7 +46,7 @@ Fill `.env`:
 - Optional for auto public HTTPS entrypoint:
   - `PUBLIC_HTTPS_ENABLED=true`
   - `PUBLIC_HTTPS_PROVIDER=cloudflared`
-  - optional `PUBLIC_HTTPS_TARGET_URL` (defaults to `http://127.0.0.1:DASHBOARD_PORT`)
+  - optional `PUBLIC_HTTPS_TARGET_URL` (defaults to `http://127.0.0.1:${DASHBOARD_PORT}`)
   - optional `PUBLIC_HTTPS_CLOUDFLARED_BIN` (defaults to `cloudflared`)
   - optional `PUBLIC_SHARE_SESSION_TTL_MINUTES` (default `12`, clamp `2..30`)
 - Optional but recommended for richer video understanding: install `ffmpeg` and `yt-dlp` on your system.
@@ -102,7 +102,7 @@ When tunnel bootstrap succeeds, the public URL appears in:
 Public/private gating defaults:
 - Requests coming through the tunnel host can only hit allowlisted public routes (`/api/voice/stream-ingest/frame`, tokenized `/api/voice/share-session/:token/*`, and `/share/:token`).
 - Dashboard UI/static routes are blocked on tunnel host.
-- Header-token ingest route requires `x-public-api-token: <PUBLIC_API_TOKEN>`.
+- Header-token ingest route accepts `x-dashboard-token: <DASHBOARD_TOKEN>` or `x-public-api-token: <PUBLIC_API_TOKEN>` (when configured).
 - Tokenized share-session routes use their session token in the URL path.
 - Private/local admin APIs use `x-dashboard-token: <DASHBOARD_TOKEN>` and are blocked if public HTTPS is enabled without a dashboard token.
 

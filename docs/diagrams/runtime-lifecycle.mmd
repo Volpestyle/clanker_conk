@@ -16,11 +16,14 @@ sequenceDiagram
     Proc->>Disc: new DiscoveryService()
     Proc->>Memory: refreshMemoryMarkdown() (curation pass)
     Proc->>Bot: new ClankerBot(...)
+    Proc->>Pub: new PublicHttpsEntrypoint()
+    Proc->>Scr: initialize tokenized share-session manager
     Proc->>Dash: createDashboardServer(...)
     Proc->>Bot: start()
     Proc->>Pub: start() (optional cloudflared tunnel)
-    Proc->>Scr: initialize tokenized share-session manager
     Bot->>Discord: login()
     Bot->>Bot: start memory timer (5m)
     Bot->>Bot: start initiative timer (60s tick)
+    Bot->>Bot: start automation timer (60s tick)
+    Bot->>Bot: start gateway watchdog timer (15s tick)
     Bot->>Bot: schedule startup tasks (~4.5s delay)

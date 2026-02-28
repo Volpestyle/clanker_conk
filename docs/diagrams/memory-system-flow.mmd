@@ -21,6 +21,13 @@ flowchart TD
     S --> V[store.searchRelevantMessages]
     U --> W[Inject userFacts and relevantFacts into LLM prompt]
     V --> W
+    R --> AD{memoryLine/selfMemoryLine present}
+    AD -- yes --> AE[memory.rememberDirectiveLine<br/>scope=lore or self]
+    AE --> AF[store.addMemoryFact<br/>subject __lore__ or __self__]
+    AF --> AG[ensureFactVector<br/>upsert memory_fact_vectors_native]
+    AF --> AH[archiveOldFactsForSubject keep=120]
+    AG --> L
+    AH --> L
 
     X[Dashboard or model memory lookup] --> Y[memory.searchDurableFacts]
     Y --> Z[Strict relevance gate hybrid ranking]

@@ -1,6 +1,6 @@
 # Public HTTPS Entrypoint Spec
 
-Updated: February 27, 2026
+Updated: February 28, 2026
 
 ## Goal
 Create a first-class way to expose the local dashboard/API (`localhost:8787`) over public HTTPS so remote users can open share links and send stream frames to the bot process.
@@ -65,15 +65,20 @@ State shape:
   - `GET /share/:token`
 - Non-allowlisted API routes on tunnel host return `404`.
 - Dashboard UI/static routes on tunnel host return `404` unless they are tokenized share pages.
-- Public header-token routes require `x-public-api-token` matching `PUBLIC_API_TOKEN`.
+- Public header-token routes (`/api/voice/stream-ingest/frame`) accept either:
+  - `x-dashboard-token` matching `DASHBOARD_TOKEN`, or
+  - `x-public-api-token` matching `PUBLIC_API_TOKEN`.
+- If neither token is configured, header-token routes return `503`.
 - Private/local admin routes require `x-dashboard-token` when public HTTPS is enabled.
 - Dashboard/API listener defaults to loopback host (`127.0.0.1`) unless explicitly overridden.
+- Frame ingress applies fixed-window rate limiting and declared payload-size checks on public paths.
 
 ### 4. Failure Handling
 - If `cloudflared` is missing or exits unexpectedly:
   - state becomes `error`
   - action log records `bot_error`
-  - automatic retry runs after a short delay
+  - automatic retry runs after a short delay for runtime exits
+  - spawn `ENOENT` (missing binary) blocks automatic retry until operator fixes config/binary and restarts
 
 ### 5. Shutdown Behavior
 - On process shutdown:
@@ -88,7 +93,7 @@ Environment variables:
 - `PUBLIC_HTTPS_PROVIDER` (currently `cloudflared`)
 - `PUBLIC_HTTPS_TARGET_URL` (optional, default `http://127.0.0.1:${DASHBOARD_PORT}`)
 - `PUBLIC_HTTPS_CLOUDFLARED_BIN` (optional, default `cloudflared`)
-- `PUBLIC_API_TOKEN` (required for public header-token API routes)
+- `PUBLIC_API_TOKEN` (optional; enables public-header auth path for allowlisted ingest route)
 - `DASHBOARD_HOST` (optional bind host, default `127.0.0.1`)
 - `DASHBOARD_TOKEN` (required for private/admin APIs when `PUBLIC_HTTPS_ENABLED=true`)
 
@@ -108,7 +113,8 @@ Environment variables:
 1. Install `cloudflared`.
 2. Set `.env`:
    - `PUBLIC_HTTPS_ENABLED=true`
-   - optionally `DASHBOARD_TOKEN=<strong secret>`
+   - `DASHBOARD_TOKEN=<strong secret>` (required for private/admin APIs)
+   - optionally `PUBLIC_API_TOKEN=<strong secret>` (for public-header ingress auth)
 3. Start bot: `npm run start`.
 4. Confirm tunnel:
    - dashboard `Public HTTPS` metric, or

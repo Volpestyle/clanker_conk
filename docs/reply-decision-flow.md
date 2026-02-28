@@ -4,7 +4,7 @@ This document describes the current two-stage reply policy and how text and voic
 
 ## 1) Stage A: Should we even attempt a reply?
 
-### Text (`src/bot.ts`)
+### Text (`src/bot/replyAdmission.ts`, called from `src/bot.ts`)
 
 `shouldAttemptReplyDecision(...)` opens the reply loop when either:
 

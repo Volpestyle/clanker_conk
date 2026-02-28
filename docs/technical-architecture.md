@@ -9,7 +9,7 @@ Code entrypoint:
 
 Core runtime:
 - `src/bot.ts`: Discord event handling and orchestration.
-- `src/bot/*`: extracted bot domains (`automationControl`, `initiativeSchedule`, `queueGateway`, `voiceReplies`).
+- `src/bot/*`: extracted bot domains (`automationControl`, `initiativeSchedule`, `queueGateway`, `replyAdmission`, `replyFollowup`, `startupCatchup`, `voiceReplies`).
 - `src/llm.ts`: model provider abstraction (OpenAI, Anthropic, xAI/Grok, or Claude Code), usage + cost logging, embeddings, image/video generation, ASR, and TTS.
 - `src/llmClaudeCode.ts`: Claude Code CLI invocation/parsing helpers used by `LLMService`.
 - `src/memory.ts`: append-only daily journaling + LLM-based fact extraction + hybrid memory retrieval (lexical + vector).
@@ -44,6 +44,8 @@ Main tables created in `src/store.ts`:
 - `memory_facts`: LLM-extracted durable facts with type/confidence/evidence.
 - `memory_fact_vectors_native`: sqlite-vec-compatible embeddings per fact/model for semantic recall.
 - `shared_links`: external links already posted (for dedupe windows).
+- `automations`: natural-language schedule definitions and next-run state.
+- `automation_runs`: per-run execution history for each automation.
 
 Table relationship diagram (logical relationships):
 
@@ -125,6 +127,10 @@ Dashboard writes:
 - `PUT /api/settings`: saves all settings.
 - `POST /api/memory/refresh`: forces immediate memory markdown regeneration.
 
+Dashboard read APIs also include:
+- `GET /api/automations`: list automations by guild/channel/status/query.
+- `GET /api/automations/runs`: list run history for one automation.
+
 ## 9. Action Log Kinds
 
 Common `actions.kind` values in current runtime:
@@ -135,8 +141,8 @@ Common `actions.kind` values in current runtime:
 - Search + video context: `search_call`, `search_error`, `video_context_call`, `video_context_error`
 - Voice runtime: `voice_session_start`, `voice_session_end`, `voice_turn_in`, `voice_turn_out`, `voice_runtime`, `voice_intent_detected`, `voice_error`
 - Speech services: `asr_call`, `asr_error`, `tts_call`, `tts_error`
-- Automation updates: `automation_created`, `automation_updated`
-- Generic failures: `bot_error`
+- Automation lifecycle: `automation_created`, `automation_updated`, `automation_run`, `automation_error`
+- Runtime + generic failures: `bot_runtime`, `bot_error`
 
 These power the activity stream and metrics/cost widgets in the dashboard.
 

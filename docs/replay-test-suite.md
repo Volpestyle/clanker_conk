@@ -25,19 +25,19 @@ The flooding harness runs this pipeline:
 Recorded replay (no actor LLM calls):
 
 ```bash
-npm run replay:flooding
+node --import tsx scripts/floodingReplayHarness.ts --mode recorded
 ```
 
 Live replay (actor LLM; optional judge):
 
 ```bash
-npm run replay:flooding:live
+node --import tsx scripts/floodingReplayHarness.ts --mode live
 ```
 
 Common scoped run:
 
 ```bash
-npm run replay:flooding -- \
+node --import tsx scripts/floodingReplayHarness.ts --mode recorded \
   --since 2026-02-27T16:20:00.000Z \
   --until 2026-02-27T16:40:00.000Z \
   --channel-id 1052402898140667906 \
@@ -49,7 +49,7 @@ npm run replay:flooding -- \
 Common assertion gates:
 
 ```bash
-npm run replay:flooding -- \
+node --import tsx scripts/floodingReplayHarness.ts --mode recorded \
   --assert-max-unaddressed-send-rate 15 \
   --assert-max-unaddressed-sends 3 \
   --assert-min-addressed-send-rate 70 \
@@ -77,7 +77,7 @@ Use `scripts/floodingReplayHarness.ts` as the template.
 2. Define scenario-specific turn selection queries and metrics.
 3. Keep one decision path per mode (`recorded` vs `live`) and remove unused branches.
 4. Add scenario assertions that encode the behavior you want to protect.
-5. Add `package.json` scripts:
+5. Optionally add `package.json` scripts:
    - `replay:<scenario>`
    - `replay:<scenario>:live`
 6. Validate with a known window:

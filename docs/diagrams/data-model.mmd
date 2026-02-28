@@ -61,7 +61,43 @@ erDiagram
         string source
     }
 
+    AUTOMATIONS {
+        int id PK
+        datetime created_at
+        datetime updated_at
+        string guild_id
+        string channel_id
+        string created_by_user_id
+        string created_by_name
+        string title
+        text instruction
+        text schedule_json
+        datetime next_run_at
+        string status
+        int is_running
+        datetime running_started_at
+        datetime last_run_at
+        text last_error
+        text last_result
+        text match_text
+    }
+
+    AUTOMATION_RUNS {
+        int id PK
+        int automation_id
+        datetime created_at
+        datetime started_at
+        datetime finished_at
+        string status
+        text summary
+        text error
+        string message_id
+        text metadata
+    }
+
     MESSAGES ||--o{ ACTIONS : "message_id (context/trigger)"
     MESSAGES ||--o{ MEMORY_FACTS : "source_message_id"
     MEMORY_FACTS ||--o{ MEMORY_FACT_VECTORS_NATIVE : "fact_id"
     MESSAGES ||--o{ MESSAGES : "referenced_message_id"
+    AUTOMATIONS ||--o{ AUTOMATION_RUNS : "automation_id"
+    MESSAGES ||--o{ AUTOMATION_RUNS : "message_id (automation output)"
