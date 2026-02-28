@@ -87,6 +87,11 @@ export default function App() {
 
       {tab === "activity" && (
         <section className="grid-secondary">
+          {toast.text && (
+            <p className={`status-msg activity-status-msg ${toast.type}`} role="status" aria-live="polite">
+              {toast.text}
+            </p>
+          )}
           <ActionStream actions={actions.data || []} />
           <div className="stack">
             <MemoryViewer
@@ -99,14 +104,14 @@ export default function App() {
         </section>
       )}
 
-      {tab === "settings" && (
+      <section className={tab === "settings" ? "" : "tab-panel-hidden"} aria-hidden={tab !== "settings"}>
         <SettingsForm
           settings={settings.data}
           modelCatalog={llmModels.data}
           onSave={handleSettingsSave}
           toast={toast}
         />
-      )}
+      </section>
     </main>
   );
 }
