@@ -9,8 +9,9 @@ import MemoryTab from "./components/MemoryTab";
 import DailyCost from "./components/DailyCost";
 import PerformancePanel from "./components/PerformancePanel";
 import StaleIndicator from "./components/StaleIndicator";
+import VoiceMonitor from "./components/VoiceMonitor";
 
-type MainTab = "activity" | "memory" | "settings";
+type MainTab = "activity" | "memory" | "voice" | "settings";
 
 export default function App() {
   const [toast, setToast] = useState({ text: "", type: "" });
@@ -85,6 +86,17 @@ export default function App() {
         </button>
         <button
           role="tab"
+          aria-selected={tab === "voice"}
+          className={`main-tab${tab === "voice" ? " active" : ""}`}
+          onClick={() => setTab("voice")}
+        >
+          <span className="main-tab-icon">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="23"/><line x1="8" y1="23" x2="16" y2="23"/></svg>
+          </span>
+          Voice
+        </button>
+        <button
+          role="tab"
           aria-selected={tab === "settings"}
           className={`main-tab${tab === "settings" ? " active" : ""}`}
           onClick={() => setTab("settings")}
@@ -110,6 +122,8 @@ export default function App() {
           </div>
         </section>
       )}
+
+      {tab === "voice" && <VoiceMonitor />}
 
       {tab === "memory" && (
         <MemoryTab

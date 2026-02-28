@@ -35,12 +35,14 @@ export class Store {
   db;
   sqliteVecReady;
   sqliteVecError;
+  onActionLogged;
 
   constructor(dbPath) {
     this.dbPath = dbPath;
     this.db = null;
     this.sqliteVecReady = null;
     this.sqliteVecError = "";
+    this.onActionLogged = null;
   }
 
   init() {
@@ -363,6 +365,14 @@ export class Store {
       metadata: action.metadata,
       createdAt
     });
+
+    if (this.onActionLogged) {
+      try {
+        this.onActionLogged({ ...action, kind: actionKind, createdAt });
+      } catch {
+        // listener must never break store writes
+      }
+    }
   }
 
   countActionsSince(kind, sinceIso) {

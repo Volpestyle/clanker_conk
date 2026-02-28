@@ -68,7 +68,7 @@ export function createDashboardServer({
     const isPublicApiRoute = isAllowedPublicApiPath(req.path);
     const dashboardToken = String(appConfig.dashboardToken || "").trim();
     const publicApiToken = String(appConfig.publicApiToken || "").trim();
-    const presentedDashboardToken = req.get("x-dashboard-token") || "";
+    const presentedDashboardToken = req.get("x-dashboard-token") || req.query?.token || "";
     const presentedPublicToken = req.get("x-public-api-token") || "";
     const isDashboardAuthorized = Boolean(dashboardToken) && presentedDashboardToken === dashboardToken;
     const isPublicApiAuthorized = Boolean(publicApiToken) && presentedPublicToken === publicApiToken;
@@ -266,6 +266,48 @@ export function createDashboardServer({
   app.get("/api/llm/models", (_req, res) => {
     const settings = store.getSettings();
     res.json(getLlmModelCatalog(settings?.llm?.pricing));
+  });
+
+  // ---- Voice SSE live-stream ----
+  const sseClients = new Set();
+
+  store.onActionLogged = (action) => {
+    if (!action?.kind?.startsWith("voice_") || sseClients.size === 0) return;
+    const payload = `event: voice_event\ndata: ${JSON.stringify(action)}\n\n`;
+    for (const client of sseClients) {
+      try { client.res.write(payload); } catch { /* swallow */ }
+    }
+  };
+
+  app.get("/api/voice/events", (req, res) => {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no"
+    });
+
+    const sendState = () => {
+      try {
+        const voiceState = bot.getRuntimeState()?.voice || { activeCount: 0, sessions: [] };
+        res.write(`event: voice_state\ndata: ${JSON.stringify(voiceState)}\n\n`);
+      } catch { /* swallow */ }
+    };
+
+    sendState();
+    const stateInterval = setInterval(sendState, 3_000);
+    const heartbeat = setInterval(() => {
+      try { res.write(": heartbeat\n\n"); } catch { /* swallow */ }
+    }, 15_000);
+
+    const client = { res };
+    sseClients.add(client);
+
+    req.on("close", () => {
+      clearInterval(stateInterval);
+      clearInterval(heartbeat);
+      sseClients.delete(client);
+    });
   });
 
   app.get("/api/memory", async (_req, res, next) => {
