@@ -11,6 +11,7 @@ import { summarizeNamedMetricRows, type NumericStats } from "../../scripts/repla
 import { formatPct, stableNumber } from "../../scripts/replay/core/utils.ts";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
 import { VOICE_RUNTIME_MODES, parseVoiceRuntimeMode } from "./voiceModes.ts";
+import { sleepMs } from "../normalization/time.ts";
 
 export const VOICE_GOLDEN_MODES = VOICE_RUNTIME_MODES;
 
@@ -436,10 +437,6 @@ function hashString(value: string) {
 function simulatedDelayMs(key: string, baseMs: number, spreadMs: number) {
   const hash = hashString(key);
   return baseMs + (hash % Math.max(1, spreadMs));
-}
-
-async function sleepMs(ms: number) {
-  await new Promise((resolve) => setTimeout(resolve, Math.max(0, Math.floor(ms))));
 }
 
 function buildSimulatedDecisionLlm(): DecisionLlm {

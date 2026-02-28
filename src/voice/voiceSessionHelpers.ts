@@ -7,6 +7,7 @@ import {
 import { parseSoundboardReference } from "./soundboardDirector.ts";
 import { AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES } from "./voiceSessionManager.constants.ts";
 import { normalizeVoiceRuntimeMode } from "./voiceModes.ts";
+import { normalizeWhitespaceText } from "../normalization/text.ts";
 
 export const REALTIME_MEMORY_FACT_LIMIT = 8;
 export const SOUNDBOARD_MAX_CANDIDATES = 40;
@@ -647,10 +648,10 @@ export function formatRealtimeMemoryFacts(facts, maxItems = REALTIME_MEMORY_FACT
 }
 
 export function normalizeVoiceText(value, maxChars = 1200) {
-  return String(value || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, Math.max(40, Number(maxChars) || 1200));
+  return normalizeWhitespaceText(value, {
+    maxLen: maxChars,
+    minLen: 40
+  });
 }
 
 export function buildRealtimeTextUtterancePrompt(text, maxLineChars = 1200) {

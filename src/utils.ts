@@ -1,3 +1,5 @@
+import { sleep as sleepShared } from "./normalization/time.ts";
+
 export function nowIso() {
   return new Date().toISOString();
 }
@@ -11,7 +13,7 @@ export function chance(probability) {
 }
 
 export function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return sleepShared(ms);
 }
 
 export function deepMerge(base, patch) {

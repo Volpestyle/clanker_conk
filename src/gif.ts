@@ -1,4 +1,5 @@
 import { clamp } from "./utils.ts";
+import { normalizeWhitespaceText } from "./normalization/text.ts";
 
 const GIPHY_SEARCH_API_URL = "https://api.giphy.com/v1/gifs/search";
 const GIF_TIMEOUT_MS = 8_500;
@@ -151,10 +152,9 @@ function pickRandom(items) {
 }
 
 function sanitizeExternalText(text, maxLen) {
-  return String(text || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, clamp(Number(maxLen) || 120, 1, 5000));
+  return normalizeWhitespaceText(text, {
+    maxLen: clamp(Number(maxLen) || 120, 1, 5000)
+  });
 }
 
 function sanitizeHttpsUrl(rawUrl) {

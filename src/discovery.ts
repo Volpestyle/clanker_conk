@@ -1,5 +1,6 @@
 import { assertPublicUrl, isBlockedHost } from "./urlSafety.ts";
 import { clamp } from "./utils.ts";
+import { normalizeWhitespaceText } from "./normalization/text.ts";
 
 const DISCOVERY_TIMEOUT_MS = 9_000;
 const DISCOVERY_MAX_REDIRECTS = 5;
@@ -787,14 +788,11 @@ function decodeXmlEntities(value) {
 }
 
 function sanitizeExternalText(value, maxLen = 180) {
-  const text = decodeXmlEntities(String(value || ""))
-    .replace(/\s+/g, " ")
-    .replace(/\[([^\]]{2,80})\]\([^)]+\)/g, "$1")
-    .trim();
-
-  if (!text) return "";
-  if (text.length <= maxLen) return text;
-  return `${text.slice(0, maxLen - 1).trimEnd()}…`;
+  return normalizeWhitespaceText(decodeXmlEntities(String(value || "")), {
+    maxLen,
+    ellipsis: true,
+    replacements: [{ pattern: /\[([^\]]{2,80})\]\([^)]+\)/g, replacement: "$1" }]
+  });
 }
 
 function escapeRegex(value) {

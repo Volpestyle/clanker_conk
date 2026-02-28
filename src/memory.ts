@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { clamp01, clampInt } from "./normalization/numbers.ts";
+import { sleepMs } from "./normalization/time.ts";
 import {
   buildFactEmbeddingPayload,
   buildHighlightsSection,
@@ -25,7 +26,6 @@ import {
   passesHybridRelevanceGate,
   resolveDirectiveScopeConfig,
   sanitizeInline,
-  sleepMs
 } from "./memory/memoryHelpers.ts";
 
 const DAILY_FILE_PATTERN = /^\d{4}-\d{2}-\d{2}\.md$/;

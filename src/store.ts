@@ -4,12 +4,14 @@ import { Database } from "bun:sqlite";
 import { load as loadSqliteVec } from "sqlite-vec";
 import { DEFAULT_SETTINGS } from "./settings/settingsSchema.ts";
 import { clamp, deepMerge, nowIso } from "./utils.ts";
+import { normalizeWhitespaceText } from "./normalization/text.ts";
 import {
   buildAutomationMatchText,
   normalizeAutomationInstruction,
   normalizeAutomationTitle
 } from "./automation.ts";
 import { normalizeSettings } from "./store/settingsNormalization.ts";
+import { safeJsonParse } from "./normalization/valueParsers.ts";
 import {
   mapAutomationRow,
   normalizeAutomationRunStatus,
@@ -18,7 +20,6 @@ import {
   normalizeEmbeddingVector,
   normalizeMessageCreatedAt,
   parseEmbeddingBlob,
-  safeJsonParse,
   vectorToBlob
 } from "./store/storeHelpers.ts";
 import {
@@ -40,10 +41,10 @@ const LOOKUP_CONTEXT_MAX_AGE_HOURS = 168;
 const LOOKUP_CONTEXT_MAX_SEARCH_LIMIT = 16;
 
 function normalizeLookupResultText(value, maxChars = LOOKUP_CONTEXT_RESULT_MAX_CHARS) {
-  return String(value || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, Math.max(40, Number(maxChars) || LOOKUP_CONTEXT_RESULT_MAX_CHARS));
+  return normalizeWhitespaceText(value, {
+    maxLen: maxChars,
+    minLen: 40
+  });
 }
 
 function normalizeLookupResultRows(rows, maxResults = LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT) {

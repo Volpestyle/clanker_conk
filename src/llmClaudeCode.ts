@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { safeJsonParse as safeJsonParseValue } from "./normalization/valueParsers.ts";
+import { clampInt } from "./normalization/numbers.ts";
+import { safeJsonParseFromString } from "./normalization/valueParsers.ts";
 
 type ClaudeCliResult = {
   stdout: string;
@@ -15,7 +16,7 @@ type ClaudeCliError = Error & {
 };
 
 export function safeJsonParse(value, fallback = null) {
-  return safeJsonParseValue(value, fallback, { coerceToString: true });
+  return safeJsonParseFromString(value, fallback);
 }
 
 export function runClaudeCli({ args, input, timeoutMs, maxBufferBytes }) {
@@ -445,16 +446,4 @@ export function normalizeClaudeCodeCliError(
       ? `claude-code CLI error: ${error?.message || error} | ${detail.slice(0, 300)}`
       : `claude-code CLI error: ${error?.message || error}`
   };
-}
-
-export function sleepMs(ms) {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
-}
-
-function clampInt(value, min, max) {
-  const parsed = Math.floor(Number(value));
-  if (!Number.isFinite(parsed)) return min;
-  if (parsed < min) return min;
-  if (parsed > max) return max;
-  return parsed;
 }

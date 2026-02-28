@@ -16,9 +16,9 @@ import {
   parseClaudeCodeJsonOutput,
   parseClaudeCodeStreamOutput,
   runClaudeCli,
-  safeJsonParse,
-  sleepMs
+  safeJsonParse
 } from "./llmClaudeCode.ts";
+import { sleepMs } from "./normalization/time.ts";
 import {
   MEMORY_FACT_SUBJECTS,
   MEMORY_FACT_TYPES,
@@ -135,6 +135,25 @@ function appendJsonSchemaInstruction(systemPrompt: string, jsonSchema: string) {
     .join("\n\n");
 }
 
+function buildOpenAiJsonSchemaTextFormat(jsonSchema: string) {
+  const normalizedSchema = String(jsonSchema || "").trim();
+  if (!normalizedSchema) return null;
+
+  const parsedSchema = safeJsonParse(normalizedSchema, null);
+  if (!parsedSchema || typeof parsedSchema !== "object" || Array.isArray(parsedSchema)) {
+    return null;
+  }
+
+  return {
+    format: {
+      type: "json_schema" as const,
+      name: "reply_directive",
+      strict: true,
+      schema: parsedSchema
+    }
+  };
+}
+
 export class LLMService {
   appConfig;
   store;
@@ -190,7 +209,7 @@ export class LLMService {
     const maxOutputTokens = Number(settings?.llm?.maxOutputTokens) || 220;
     const normalizedJsonSchema = String(jsonSchema || "").trim();
     const effectiveSystemPrompt =
-      normalizedJsonSchema && provider !== "claude-code"
+      normalizedJsonSchema && provider !== "claude-code" && provider !== "openai"
         ? appendJsonSchemaInstruction(systemPrompt, normalizedJsonSchema)
         : systemPrompt;
 
@@ -234,7 +253,8 @@ export class LLMService {
                   contextMessages,
                   temperature,
                   maxOutputTokens,
-                  reasoningEffort: settings?.llm?.reasoningEffort
+                  reasoningEffort: settings?.llm?.reasoningEffort,
+                  jsonSchema: normalizedJsonSchema
                 });
 
       const costUsd = estimateUsdCost({
@@ -1332,7 +1352,8 @@ export class LLMService {
     contextMessages,
     temperature,
     maxOutputTokens,
-    reasoningEffort
+    reasoningEffort,
+    jsonSchema = ""
   }) {
     if (!this.openai) {
       throw new Error("OpenAI LLM calls require OPENAI_API_KEY.");
@@ -1346,7 +1367,8 @@ export class LLMService {
       contextMessages,
       temperature,
       maxOutputTokens,
-      reasoningEffort
+      reasoningEffort,
+      jsonSchema
     });
   }
 
@@ -1382,7 +1404,8 @@ export class LLMService {
     contextMessages,
     temperature,
     maxOutputTokens,
-    reasoningEffort
+    reasoningEffort,
+    jsonSchema = ""
   }) {
     const imageParts = imageInputs
       .map((image) => {
@@ -1406,12 +1429,14 @@ export class LLMService {
       ...imageParts
     ];
 
+    const responseFormat = buildOpenAiJsonSchemaTextFormat(jsonSchema);
     const response = await this.openai.responses.create({
       model,
       instructions: systemPrompt,
       ...buildOpenAiTemperatureParam(model, temperature),
       ...buildOpenAiReasoningParam(model, reasoningEffort),
       max_output_tokens: maxOutputTokens,
+      ...(responseFormat ? { text: responseFormat } : {}),
       input: [
         ...contextMessages.map((msg) => ({
           role: msg.role === "assistant" ? "assistant" : "user",

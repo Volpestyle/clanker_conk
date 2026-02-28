@@ -20,6 +20,10 @@ export function parseNumberOrFallback(value: unknown, fallback: number) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+export function safeJsonParseFromString(value: unknown, fallback: unknown) {
+  return safeJsonParse(value, fallback, { coerceToString: true });
+}
+
 export function safeJsonParse(value: unknown, fallback: unknown, { coerceToString = false }: JsonParseOptions = {}) {
   if (coerceToString) {
     try {

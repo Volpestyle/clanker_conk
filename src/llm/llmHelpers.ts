@@ -6,6 +6,7 @@ const XAI_VIDEO_DONE_STATUSES = new Set(["done", "completed", "succeeded", "succ
 import { clamp01, clampInt, clampNumber } from "../normalization/numbers.ts";
 import { extractJsonObjectFromText } from "../normalization/jsonExtraction.ts";
 import { normalizeBoundedStringList } from "../settings/listNormalization.ts";
+import { normalizeWhitespaceText } from "../normalization/text.ts";
 export { clamp01, clampInt, clampNumber };
 
 export function extractOpenAiResponseText(response) {
@@ -62,10 +63,7 @@ export function normalizeOpenAiImageGenerationSize(value) {
 }
 
 export function normalizeInlineText(value, maxLen) {
-  return String(value || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, maxLen);
+  return normalizeWhitespaceText(value, { maxLen });
 }
 
 function normalizeFactType(type) {

@@ -5,6 +5,7 @@ import path from "node:path";
 import { normalizeDiscoveryUrl } from "./discovery.ts";
 import { assertPublicUrl } from "./urlSafety.ts";
 import { clamp } from "./utils.ts";
+import { sleep } from "./normalization/time.ts";
 import {
   dedupeTargets,
   extractTikTokIdFromUrl,
@@ -1166,10 +1167,6 @@ function withAttemptCount(error, attempts) {
 
 function getRetryDelayMs(attempt) {
   return Math.min(900, RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1));
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function safeNumber(value) {

@@ -1,6 +1,7 @@
 import { clamp } from "./utils.ts";
 import { normalizeAutomationSchedule } from "./automation.ts";
 import { normalizeMentionLookupKey } from "./bot/mentionLookup.ts";
+import { normalizeWhitespaceText } from "./normalization/text.ts";
 import { extractJsonObjectFromText } from "./normalization/jsonExtraction.ts";
 
 const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
@@ -854,10 +855,7 @@ export function pickInitiativeMediaDirective(parsed) {
 }
 
 export function normalizeDirectiveText(text, maxLen) {
-  return String(text || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, maxLen);
+  return normalizeWhitespaceText(text, { maxLen });
 }
 
 export function serializeForPrompt(value, maxLen = 1200) {

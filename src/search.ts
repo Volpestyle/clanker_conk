@@ -1,12 +1,14 @@
 import { normalizeDiscoveryUrl } from "./discovery.ts";
 import { assertPublicUrl } from "./urlSafety.ts";
 import { clamp } from "./utils.ts";
+import { normalizeWhitespaceText } from "./normalization/text.ts";
+import { sleep } from "./normalization/time.ts";
 
 const BRAVE_SEARCH_API_URL = "https://api.search.brave.com/res/v1/web/search";
 const SERPAPI_SEARCH_API_URL = "https://serpapi.com/search.json";
 const SEARCH_TIMEOUT_MS = 5_000;
 const FAST_FETCH_TIMEOUT_MS = 8_000;
-const MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
+const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const SEARCH_RETRY_ATTEMPTS = 2;
 const FETCH_RETRY_ATTEMPTS = 2;
 const RETRY_BASE_DELAY_MS = 180;
@@ -228,7 +230,7 @@ export class WebSearchService {
       throw new AttemptError(`unsupported content type: ${contentType || "unknown"}`, attempts);
     }
 
-    const raw = await readResponseBodyLimited(response, MAX_RESPONSE_BYTES);
+    const { text: raw, truncated } = await readResponseBodyLimited(response, MAX_RESPONSE_BYTES);
     if (!raw) {
       throw new AttemptError("empty page response", attempts);
     }
@@ -243,7 +245,7 @@ export class WebSearchService {
         title: null,
         summary,
         attempts,
-        extractionMethod: "fast"
+        extractionMethod: truncated ? "fast_truncated" : "fast"
       };
     }
 
@@ -256,7 +258,7 @@ export class WebSearchService {
       title: extraction.title,
       summary: extraction.summary,
       attempts,
-      extractionMethod: "fast"
+      extractionMethod: truncated ? "fast_truncated" : "fast"
     };
   }
 
@@ -429,7 +431,7 @@ function normalizeWebSearchConfig(rawConfig) {
   return {
     maxResults: clamp(Number.isFinite(maxResultsRaw) ? maxResultsRaw : 5, 1, 10),
     maxPagesToRead: clamp(Number.isFinite(maxPagesRaw) ? maxPagesRaw : 3, 0, 5),
-    maxCharsPerPage: clamp(Number.isFinite(maxCharsRaw) ? maxCharsRaw : 1400, 350, 4000),
+    maxCharsPerPage: clamp(Number.isFinite(maxCharsRaw) ? maxCharsRaw : 6000, 350, 24000),
     safeSearch: cfg.safeSearch !== undefined ? Boolean(cfg.safeSearch) : true,
     recencyDaysDefault: clamp(Number(cfg.recencyDaysDefault) || 30, 1, 365),
     providerOrder: normalizeProviderOrder(cfg.providerOrder),
@@ -461,13 +463,10 @@ function extractDomain(rawUrl) {
 }
 
 function sanitizeExternalText(value, maxLen = 240) {
-  const text = String(value || "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (!text) return "";
-  if (text.length <= maxLen) return text;
-  return `${text.slice(0, Math.max(0, maxLen - 1)).trimEnd()}…`;
+  return normalizeWhitespaceText(value, {
+    maxLen,
+    ellipsis: true
+  });
 }
 
 async function fetchWithRetry({ request, shouldRetryResponse, maxAttempts }) {
@@ -521,10 +520,6 @@ function getRetryDelayMs(attempt) {
   return Math.min(900, RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1));
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 function normalizeSearchUrl(raw) {
   return normalizeDiscoveryUrl(raw);
 }
@@ -538,20 +533,34 @@ async function safeJson(response, attempts, errorMessage) {
 }
 
 async function readResponseBodyLimited(response, maxBytes) {
-  if (!response.body) return "";
+  if (!response.body) {
+    return {
+      text: "",
+      truncated: false
+    };
+  }
   const reader = response.body.getReader();
   let size = 0;
   const chunks = [];
+  let truncated = false;
 
   try {
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
       if (!value) continue;
-      size += value.byteLength;
-      if (size > maxBytes) {
-        throw new Error(`response exceeds max size of ${maxBytes} bytes`);
+      if (size >= maxBytes) {
+        truncated = true;
+        break;
       }
+      const remaining = Math.max(0, maxBytes - size);
+      if (value.byteLength > remaining) {
+        chunks.push(value.subarray(0, remaining));
+        size += remaining;
+        truncated = true;
+        break;
+      }
+      size += value.byteLength;
       chunks.push(value);
     }
   } finally {
@@ -559,7 +568,10 @@ async function readResponseBodyLimited(response, maxBytes) {
   }
 
   const buffer = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
-  return buffer.toString("utf8");
+  return {
+    text: buffer.toString("utf8"),
+    truncated
+  };
 }
 
 function extractReadableContent(html, maxChars) {

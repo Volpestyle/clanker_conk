@@ -1,4 +1,5 @@
 import { clamp01 } from "../normalization/numbers.ts";
+import { normalizeWhitespaceText } from "../normalization/text.ts";
 
 const LORE_SUBJECT = "__lore__";
 const SELF_SUBJECT = "__self__";
@@ -318,11 +319,10 @@ export function cleanDailyEntryContent(content) {
 }
 
 export function sanitizeInline(value, maxLen = 120) {
-  return String(value || "")
-    .replace(/[\r\n|]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, maxLen);
+  return normalizeWhitespaceText(value, {
+    maxLen,
+    replacements: [{ pattern: /[\r\n|]/g, replacement: " " }]
+  });
 }
 
 export function formatDateLocal(date) {
@@ -330,8 +330,4 @@ export function formatDateLocal(date) {
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
-}
-
-export function sleepMs(ms) {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
 }
