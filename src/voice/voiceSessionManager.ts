@@ -1631,26 +1631,24 @@ export class VoiceSessionManager {
     return Buffer.concat(pieces);
   }
 
-  dropAudioPlaybackBytesFromTail(session, maxDropBytes = 0) {
+  dropAudioPlaybackBytesFromHead(session, maxDropBytes = 0) {
     const state = this.ensureAudioPlaybackQueueState(session);
     let remaining = Math.max(0, Math.floor(Number(maxDropBytes) || 0));
     let droppedBytes = 0;
 
     while (remaining > 0 && state.chunks.length > 0) {
-      const tailIndex = state.chunks.length - 1;
-      const tail = state.chunks[tailIndex];
-      if (!Buffer.isBuffer(tail) || !tail.length) {
-        state.chunks.pop();
+      const head = state.chunks[0];
+      if (!Buffer.isBuffer(head) || !head.length) {
+        state.chunks.shift();
         if (state.chunks.length === 0) {
           state.headOffset = 0;
         }
         continue;
       }
 
-      const available =
-        tailIndex === 0 ? Math.max(0, tail.length - state.headOffset) : tail.length;
+      const available = Math.max(0, head.length - state.headOffset);
       if (available <= 0) {
-        state.chunks.pop();
+        state.chunks.shift();
         if (state.chunks.length === 0) {
           state.headOffset = 0;
         }
@@ -1658,14 +1656,14 @@ export class VoiceSessionManager {
       }
 
       const dropNow = Math.min(available, remaining);
-      const keepEnd = tail.length - dropNow;
       if (dropNow >= available) {
-        state.chunks.pop();
+        state.chunks.shift();
+        state.headOffset = 0;
         if (state.chunks.length === 0) {
           state.headOffset = 0;
         }
-      } else if (keepEnd > 0) {
-        state.chunks[tailIndex] = tail.subarray(0, keepEnd);
+      } else {
+        state.headOffset += dropNow;
       }
 
       state.queuedBytes = Math.max(0, Number(state.queuedBytes || 0) - dropNow);
@@ -1781,9 +1779,12 @@ export class VoiceSessionManager {
     const now = Date.now();
     const streamBufferedBytes = Math.max(0, Number(session.botAudioStream?.writableLength || 0));
     let totalBufferedBytes = Math.max(0, Number(state.queuedBytes || 0)) + streamBufferedBytes;
-    if (totalBufferedBytes > AUDIO_PLAYBACK_QUEUE_ABSOLUTE_MAX_BYTES) {
-      const overflowBytes = totalBufferedBytes - AUDIO_PLAYBACK_QUEUE_ABSOLUTE_MAX_BYTES;
-      const droppedBytes = this.dropAudioPlaybackBytesFromTail(session, overflowBytes);
+    const trimTargetBytes = totalBufferedBytes > AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES
+      ? AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES
+      : 0;
+    if (trimTargetBytes > 0) {
+      const overflowBytes = totalBufferedBytes - trimTargetBytes;
+      const droppedBytes = this.dropAudioPlaybackBytesFromHead(session, overflowBytes);
       if (
         droppedBytes > 0 &&
         now - Number(state.lastTrimAt || 0) >= AUDIO_PLAYBACK_QUEUE_TRIM_LOG_COOLDOWN_MS
@@ -1798,7 +1799,8 @@ export class VoiceSessionManager {
           metadata: {
             sessionId: session.id,
             droppedBytes,
-            trimStrategy: "drop_newest",
+            trimStrategy: "drop_oldest",
+            trimTargetBytes,
             queuedBytes: Math.max(0, Number(state.queuedBytes || 0)),
             streamBufferedBytes,
             totalBufferedBytesBeforeTrim: totalBufferedBytes,

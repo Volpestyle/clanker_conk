@@ -181,8 +181,6 @@ export function settingsToForm(settings) {
     voiceXaiRegion: settings?.voice?.xai?.region ?? defaultVoiceXai.region,
     voiceOpenAiRealtimeModel: settings?.voice?.openaiRealtime?.model ?? defaultVoiceOpenAiRealtime.model,
     voiceOpenAiRealtimeVoice: settings?.voice?.openaiRealtime?.voice ?? defaultVoiceOpenAiRealtime.voice,
-    voiceOpenAiRealtimeInputAudioFormat: settings?.voice?.openaiRealtime?.inputAudioFormat ?? defaultVoiceOpenAiRealtime.inputAudioFormat,
-    voiceOpenAiRealtimeOutputAudioFormat: settings?.voice?.openaiRealtime?.outputAudioFormat ?? defaultVoiceOpenAiRealtime.outputAudioFormat,
     voiceOpenAiRealtimeInputTranscriptionModel:
       settings?.voice?.openaiRealtime?.inputTranscriptionModel ?? defaultVoiceOpenAiRealtime.inputTranscriptionModel,
     voiceGeminiRealtimeModel:
@@ -363,8 +361,8 @@ export function formToSettingsPatch(form) {
       openaiRealtime: {
         model: String(form.voiceOpenAiRealtimeModel || "").trim(),
         voice: String(form.voiceOpenAiRealtimeVoice || "").trim(),
-        inputAudioFormat: String(form.voiceOpenAiRealtimeInputAudioFormat || "").trim(),
-        outputAudioFormat: String(form.voiceOpenAiRealtimeOutputAudioFormat || "").trim(),
+        inputAudioFormat: "pcm16",
+        outputAudioFormat: "pcm16",
         inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim()
       },
       geminiRealtime: {

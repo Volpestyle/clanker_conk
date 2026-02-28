@@ -478,16 +478,6 @@ function normalizeOpenAiRealtimeAudioFormat(value, direction = "input") {
     const type = String(value.type || "")
       .trim()
       .toLowerCase();
-    if (type === "audio/pcmu") {
-      return {
-        type: "audio/pcmu"
-      };
-    }
-    if (type === "audio/pcma") {
-      return {
-        type: "audio/pcma"
-      };
-    }
     if (type === "audio/pcm") {
       const rate = Number(value.rate);
       return {
@@ -500,14 +490,10 @@ function normalizeOpenAiRealtimeAudioFormat(value, direction = "input") {
   const normalized = String(value || "")
     .trim()
     .toLowerCase();
-  if (normalized === "g711_ulaw") {
+  if (normalized === "audio/pcm") {
     return {
-      type: "audio/pcmu"
-    };
-  }
-  if (normalized === "g711_alaw") {
-    return {
-      type: "audio/pcma"
+      type: "audio/pcm",
+      rate: 24000
     };
   }
 

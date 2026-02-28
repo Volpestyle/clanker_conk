@@ -299,13 +299,24 @@ export function createDashboardServer({
   });
 
   // ---- Voice SSE live-stream ----
-  const sseClients = new Set<{ res: Response }>();
+  const sseClients = new Set<{ res: Response; blocked: boolean }>();
 
   store.onActionLogged = (action) => {
     if (!action?.kind?.startsWith("voice_") || sseClients.size === 0) return;
     const payload = `event: voice_event\ndata: ${JSON.stringify(action)}\n\n`;
     for (const client of sseClients) {
-      try { client.res.write(payload); } catch { /* swallow */ }
+      if (client.blocked) continue;
+      try {
+        const wrote = client.res.write(payload);
+        if (wrote === false && typeof client.res.once === "function") {
+          client.blocked = true;
+          client.res.once("drain", () => {
+            client.blocked = false;
+          });
+        }
+      } catch {
+        sseClients.delete(client);
+      }
     }
   };
 
@@ -330,7 +341,7 @@ export function createDashboardServer({
       try { res.write(": heartbeat\n\n"); } catch { /* swallow */ }
     }, 15_000);
 
-    const client = { res };
+    const client = { res, blocked: false };
     sseClients.add(client);
 
     req.on("close", () => {

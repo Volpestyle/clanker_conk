@@ -459,26 +459,7 @@ export function VoiceModeSettingsSection({
                 </div>
               </div>
 
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-openai-realtime-input-format">OpenAI input audio format</label>
-                  <input
-                    id="voice-openai-realtime-input-format"
-                    type="text"
-                    value={form.voiceOpenAiRealtimeInputAudioFormat}
-                    onChange={set("voiceOpenAiRealtimeInputAudioFormat")}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="voice-openai-realtime-output-format">OpenAI output audio format</label>
-                  <input
-                    id="voice-openai-realtime-output-format"
-                    type="text"
-                    value={form.voiceOpenAiRealtimeOutputAudioFormat}
-                    onChange={set("voiceOpenAiRealtimeOutputAudioFormat")}
-                  />
-                </div>
-              </div>
+              <p>Audio transport is fixed to `pcm16` for stable Discord playback.</p>
 
               <div className="split">
                 <div>

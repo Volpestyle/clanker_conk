@@ -190,14 +190,37 @@ export function ensureBotAudioPlaybackReady({
     session.lastAudioPipelineRepairAt = now;
 
     try {
+      const previousStream = session.botAudioStream || null;
       let createdReplacementStream = false;
       if (!session.botAudioStream || session.botAudioStream.destroyed || session.botAudioStream.writableEnded) {
         session.botAudioStream = createBotAudioPlaybackStream();
         createdReplacementStream = true;
       }
 
+      if (createdReplacementStream) {
+        const queueState =
+          session.audioPlaybackQueue && typeof session.audioPlaybackQueue === "object"
+            ? session.audioPlaybackQueue
+            : null;
+        if (queueState) {
+          if (
+            queueState.waitingDrain &&
+            queueState.drainHandler &&
+            typeof previousStream?.off === "function"
+          ) {
+            try {
+              previousStream.off("drain", queueState.drainHandler);
+            } catch {
+              // ignore
+            }
+          }
+          queueState.waitingDrain = false;
+          queueState.drainHandler = null;
+        }
+      }
+
       if (createdReplacementStream && typeof onStreamCreated === "function") {
-        onStreamCreated(session.botAudioStream);
+        onStreamCreated(session.botAudioStream, previousStream);
       }
 
       const resource = createAudioResource(session.botAudioStream, {

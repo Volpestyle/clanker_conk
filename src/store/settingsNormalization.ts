@@ -926,11 +926,8 @@ function normalizeRealtimeReplyStrategy(value, fallback = "brain") {
 }
 
 function normalizeOpenAiRealtimeAudioFormat(value) {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "g711_ulaw") return "g711_ulaw";
-  if (normalized === "g711_alaw") return "g711_alaw";
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "audio/pcm") return "pcm16";
   return "pcm16";
 }
 

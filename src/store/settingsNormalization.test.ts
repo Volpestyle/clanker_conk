@@ -136,7 +136,7 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(String(normalized.voice.replyDecisionLlm.prompts?.wakeVariantHint || "").length > 0, true);
   assert.equal(String(normalized.voice.replyDecisionLlm.prompts?.systemPromptStrict || "").length > 0, true);
   assert.equal(normalized.voice.openaiRealtime.inputAudioFormat, "pcm16");
-  assert.equal(normalized.voice.openaiRealtime.outputAudioFormat, "g711_alaw");
+  assert.equal(normalized.voice.openaiRealtime.outputAudioFormat, "pcm16");
   assert.equal(normalized.voice.geminiRealtime.apiBaseUrl, "https://generativelanguage.googleapis.com");
   assert.equal(normalized.voice.geminiRealtime.inputSampleRateHz, 8000);
   assert.equal(normalized.voice.geminiRealtime.outputSampleRateHz, 48000);

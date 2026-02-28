@@ -38,7 +38,7 @@ test("OpenAiRealtimeClient sendSessionUpdate uses GA session audio schema", () =
   assert.equal(Object.hasOwn(outbound.session, "input_audio_transcription"), false);
 });
 
-test("OpenAiRealtimeClient sendSessionUpdate preserves non-PCM GA audio format objects", () => {
+test("OpenAiRealtimeClient sendSessionUpdate normalizes unsupported formats to PCM16 transport", () => {
   const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
   let outbound = null;
   client.send = (payload) => {
@@ -48,16 +48,18 @@ test("OpenAiRealtimeClient sendSessionUpdate preserves non-PCM GA audio format o
     model: "gpt-realtime",
     voice: "alloy",
     instructions: "",
-    inputAudioFormat: { type: "audio/pcmu" },
-    outputAudioFormat: { type: "audio/pcma" },
+    inputAudioFormat: "g711_ulaw",
+    outputAudioFormat: "g711_alaw",
     inputTranscriptionModel: "gpt-4o-mini-transcribe"
   };
 
   client.sendSessionUpdate();
 
   assert.ok(outbound);
-  assert.equal(outbound.session.audio.input.format.type, "audio/pcmu");
-  assert.equal(outbound.session.audio.output.format.type, "audio/pcma");
+  assert.equal(outbound.session.audio.input.format.type, "audio/pcm");
+  assert.equal(outbound.session.audio.input.format.rate, 24000);
+  assert.equal(outbound.session.audio.output.format.type, "audio/pcm");
+  assert.equal(outbound.session.audio.output.format.rate, 24000);
 });
 
 test("OpenAiRealtimeClient tracks response lifecycle", () => {

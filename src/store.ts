@@ -467,11 +467,15 @@ export class Store {
     });
 
     if (this.onActionLogged) {
-      try {
-        this.onActionLogged({ ...action, kind: actionKind, createdAt });
-      } catch {
-        // listener must never break store writes
-      }
+      const listener = this.onActionLogged;
+      const loggedAction = { ...action, kind: actionKind, createdAt };
+      queueMicrotask(() => {
+        try {
+          listener(loggedAction);
+        } catch {
+          // listener must never break store writes
+        }
+      });
     }
   }
 

@@ -341,7 +341,7 @@ test("maybeInterruptBotForAssertiveSpeech cuts playback after assertive speech",
   assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), true);
 });
 
-test("enqueueDiscordPcmForPlayback avoids trimming when only hard cap is exceeded", () => {
+test("enqueueDiscordPcmForPlayback trims oldest queued audio once hard cap is exceeded", () => {
   const { manager, logs } = createManager();
   manager.scheduleAudioPlaybackPump = () => {};
   const session = createSession({
@@ -376,18 +376,17 @@ test("enqueueDiscordPcmForPlayback avoids trimming when only hard cap is exceede
   });
 
   assert.equal(queued, true);
-  assert.equal(
-    session.audioPlaybackQueue.queuedBytes,
-    AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES + DISCORD_PCM_FRAME_BYTES * 3
-  );
+  assert.equal(session.audioPlaybackQueue.queuedBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
   const backlogLog = logs.find((entry) => entry?.content === "bot_audio_queue_backlog");
   assert.equal(Boolean(backlogLog), true);
   assert.equal(backlogLog?.metadata?.hardMaxBufferedBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
   const trimLog = logs.find((entry) => entry?.content === "bot_audio_queue_trimmed");
-  assert.equal(Boolean(trimLog), false);
+  assert.equal(Boolean(trimLog), true);
+  assert.equal(trimLog?.metadata?.trimStrategy, "drop_oldest");
+  assert.equal(trimLog?.metadata?.trimTargetBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
 });
 
-test("enqueueDiscordPcmForPlayback trims newest queued audio when absolute cap is exceeded", () => {
+test("enqueueDiscordPcmForPlayback keeps buffered bytes pinned to hard cap even when absolute cap is exceeded", () => {
   const { manager, logs } = createManager();
   manager.scheduleAudioPlaybackPump = () => {};
   const session = createSession({
@@ -422,13 +421,65 @@ test("enqueueDiscordPcmForPlayback trims newest queued audio when absolute cap i
   });
 
   assert.equal(queued, true);
-  assert.equal(session.audioPlaybackQueue.queuedBytes, AUDIO_PLAYBACK_QUEUE_ABSOLUTE_MAX_BYTES);
+  assert.equal(session.audioPlaybackQueue.queuedBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
   const trimLog = logs.find((entry) => entry?.content === "bot_audio_queue_trimmed");
   assert.equal(Boolean(trimLog), true);
   assert.equal(trimLog?.metadata?.hardMaxBufferedBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
   assert.equal(trimLog?.metadata?.absoluteMaxBufferedBytes, AUDIO_PLAYBACK_QUEUE_ABSOLUTE_MAX_BYTES);
-  assert.equal(trimLog?.metadata?.trimStrategy, "drop_newest");
+  assert.equal(trimLog?.metadata?.trimStrategy, "drop_oldest");
+  assert.equal(trimLog?.metadata?.trimTargetBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
   assert.equal(trimLog?.metadata?.droppedBytes > 0, true);
+});
+
+test("enqueueDiscordPcmForPlayback clears stale drain wait when audio stream is replaced", () => {
+  const { manager } = createManager();
+  manager.scheduleAudioPlaybackPump = () => {};
+  let oldDrainListenerCleared = false;
+
+  const oldStream = {
+    destroyed: true,
+    writableEnded: false,
+    writableLength: 0,
+    off(eventName, handler) {
+      if (eventName === "drain" && typeof handler === "function") {
+        oldDrainListenerCleared = true;
+      }
+    }
+  };
+
+  const session = createSession({
+    audioPlayer: {
+      state: {
+        status: "playing"
+      },
+      play() {}
+    },
+    connection: {
+      subscribe() {}
+    },
+    botAudioStream: oldStream,
+    audioPlaybackQueue: {
+      chunks: [],
+      headOffset: 0,
+      queuedBytes: 0,
+      pumping: false,
+      timer: null,
+      waitingDrain: true,
+      drainHandler: () => {},
+      lastWarnAt: 0,
+      lastTrimAt: 0
+    }
+  });
+
+  const queued = manager.enqueueDiscordPcmForPlayback({
+    session,
+    discordPcm: Buffer.alloc(DISCORD_PCM_FRAME_BYTES, 3)
+  });
+
+  assert.equal(queued, true);
+  assert.equal(oldDrainListenerCleared, true);
+  assert.equal(session.audioPlaybackQueue.waitingDrain, false);
+  assert.equal(session.audioPlaybackQueue.drainHandler, null);
 });
 
 test("bindBotAudioStreamLifecycle records stream close event", () => {
