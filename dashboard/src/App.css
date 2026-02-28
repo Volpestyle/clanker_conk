@@ -103,6 +103,8 @@ body {
   backdrop-filter: blur(16px);
   -webkit-backdrop-filter: blur(16px);
   animation: fadeIn 350ms var(--ease-out);
+  display: flex;
+  flex-direction: column;
 }
 
 /* ---- SKELETON ---- */
@@ -425,7 +427,7 @@ body {
 
 .grid-secondary {
   display: grid;
-  grid-template-columns: 1.4fr 0.6fr;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.6fr);
   gap: 14px;
 }
 
@@ -635,6 +637,7 @@ button.sm {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  padding-bottom: 0;
 }
 
 .settings-title {
@@ -762,11 +765,11 @@ button.sm {
 
 .save-bar {
   position: sticky;
-  bottom: -20px;
+  bottom: 0;
   background: var(--panel-solid);
   border-top: 1px solid var(--line);
   padding: 12px 20px;
-  margin: 8px -20px -20px;
+  margin: 8px -20px 0;
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   z-index: 5;
@@ -954,7 +957,8 @@ button.sm {
 /* ---- ACTION STREAM TABLE ---- */
 
 .table-wrap {
-  max-height: 540px;
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   scrollbar-gutter: stable;
   border-radius: var(--radius-sm);
