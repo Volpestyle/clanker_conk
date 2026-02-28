@@ -21,7 +21,8 @@ export function VoiceModeSettingsSection({
   selectVoiceGenerationPresetModel,
   voiceGenerationModelOptions,
   isVoiceGenerationClaudeCodeProvider,
-  selectedVoiceGenerationPresetModel
+  selectedVoiceGenerationPresetModel,
+  onResetVoiceReplyDecisionPrompts
 }) {
   const isRealtimeMode = isVoiceAgentMode || isOpenAiRealtimeMode || isGeminiRealtimeMode;
   const realtimeReplyStrategy = String(form.voiceRealtimeReplyStrategy || "shared_brain")
@@ -249,6 +250,54 @@ export function VoiceModeSettingsSection({
                 onChange={set("voiceReplyDecisionLlmModel")}
                 disabled={isVoiceReplyDecisionClaudeCodeProvider}
               />
+
+              <details>
+                <summary>Advanced classifier prompts/rules</summary>
+                <p>
+                  These are the YES/NO gate system prompts used before voice replies. Use <code>{"{{botName}}"}</code>{" "}
+                  to reference the configured bot name.
+                </p>
+
+                <label htmlFor="voice-reply-decision-wake-variant-hint">Wake-variant rule hint</label>
+                <textarea
+                  id="voice-reply-decision-wake-variant-hint"
+                  rows="4"
+                  value={form.voiceReplyDecisionWakeVariantHint}
+                  onChange={set("voiceReplyDecisionWakeVariantHint")}
+                />
+
+                <label htmlFor="voice-reply-decision-system-prompt-compact">System prompt (compact)</label>
+                <textarea
+                  id="voice-reply-decision-system-prompt-compact"
+                  rows="8"
+                  value={form.voiceReplyDecisionSystemPromptCompact}
+                  onChange={set("voiceReplyDecisionSystemPromptCompact")}
+                />
+
+                <label htmlFor="voice-reply-decision-system-prompt-full">System prompt (full)</label>
+                <textarea
+                  id="voice-reply-decision-system-prompt-full"
+                  rows="8"
+                  value={form.voiceReplyDecisionSystemPromptFull}
+                  onChange={set("voiceReplyDecisionSystemPromptFull")}
+                />
+
+                <label htmlFor="voice-reply-decision-system-prompt-strict">System prompt (strict retry)</label>
+                <textarea
+                  id="voice-reply-decision-system-prompt-strict"
+                  rows="5"
+                  value={form.voiceReplyDecisionSystemPromptStrict}
+                  onChange={set("voiceReplyDecisionSystemPromptStrict")}
+                />
+
+                <button
+                  type="button"
+                  className="sm"
+                  onClick={onResetVoiceReplyDecisionPrompts}
+                >
+                  Reset decider prompts
+                </button>
+              </details>
             </>
           )}
 

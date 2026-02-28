@@ -1,5 +1,12 @@
+import {
+  VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
+  VOICE_REPLY_DECIDER_SYSTEM_PROMPT_FULL_DEFAULT,
+  VOICE_REPLY_DECIDER_SYSTEM_PROMPT_STRICT_DEFAULT,
+  VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
+} from "../promptCore.ts";
+
 export const PROVIDER_MODEL_FALLBACKS = {
-  openai: ["gpt-4.1-mini"],
+  openai: ["claude-haiku-4-5"],
   anthropic: ["claude-haiku-4-5"],
   xai: ["grok-3-mini-latest"],
   "claude-code": ["sonnet"]
@@ -56,16 +63,16 @@ export const DEFAULT_SETTINGS = {
     replyCoalesceMaxMessages: 6
   },
   llm: {
-    provider: "openai",
-    model: "gpt-4.1-mini",
+    provider: "anthropic",
+    model: "claude-haiku-4-5",
     temperature: 0.9,
     maxOutputTokens: 220,
     pricing: {}
   },
   replyFollowupLlm: {
     enabled: false,
-    provider: "openai",
-    model: "gpt-4.1-mini"
+    provider: "anthropic",
+    model: "claude-haiku-4-5"
   },
   webSearch: {
     enabled: false,
@@ -103,14 +110,20 @@ export const DEFAULT_SETTINGS = {
     blockedVoiceUserIds: [],
     replyEagerness: 0,
     generationLlm: {
-      provider: "openai",
-      model: "gpt-4.1-mini"
+      provider: "anthropic",
+      model: "claude-haiku-4-5"
     },
     replyDecisionLlm: {
       enabled: true,
       provider: "anthropic",
       model: "claude-haiku-4-5",
-      maxAttempts: 1
+      maxAttempts: 1,
+      prompts: {
+        wakeVariantHint: VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT,
+        systemPromptCompact: VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
+        systemPromptFull: VOICE_REPLY_DECIDER_SYSTEM_PROMPT_FULL_DEFAULT,
+        systemPromptStrict: VOICE_REPLY_DECIDER_SYSTEM_PROMPT_STRICT_DEFAULT
+      }
     },
     xai: {
       voice: "Rex",

@@ -1,7 +1,13 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
 import {
-  CUSTOM_MODEL_OPTION_VALUE,
+  GEMINI_REALTIME_MODEL_OPTIONS,
+  OPENAI_REALTIME_MODEL_OPTIONS,
+  OPENAI_TRANSCRIPTION_MODEL_OPTIONS,
+  STT_TRANSCRIPTION_MODEL_OPTIONS,
+  STT_TTS_MODEL_OPTIONS,
   formToSettingsPatch,
+  resolveModelOptions,
+  resolveModelOptionsFromText,
   resolvePresetModelSelection,
   resolveProviderModelOptions,
   settingsToForm
@@ -36,6 +42,7 @@ const SECTION_IDS = SECTIONS.map((s) => s.id);
 export default function SettingsForm({ settings, modelCatalog, onSave, toast }) {
   const [form, setForm] = useState(() => (settings ? settingsToForm(settings) : null));
   const savedFormRef = useRef<string>("");
+  const defaultForm = useMemo(() => settingsToForm({}), []);
 
   useEffect(() => {
     if (!settings) return;
@@ -52,51 +59,63 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
 
   if (!form) return null;
 
+  function resolvePresetSelection(providerField, modelField) {
+    return resolvePresetModelSelection({
+      modelCatalog,
+      provider: form[providerField],
+      model: form[modelField]
+    });
+  }
+
   const {
     options: providerModelOptions,
-    isClaudeCodeProvider,
     selectedPresetModel
-  } = resolvePresetModelSelection({
-    modelCatalog,
-    provider: form.provider,
-    model: form.model
-  });
+  } = resolvePresetSelection("provider", "model");
   const {
     options: replyFollowupModelOptions,
-    isClaudeCodeProvider: isReplyFollowupClaudeCodeProvider,
     selectedPresetModel: selectedReplyFollowupPresetModel
-  } = resolvePresetModelSelection({
-    modelCatalog,
-    provider: form.replyFollowupLlmProvider,
-    model: form.replyFollowupLlmModel
-  });
+  } = resolvePresetSelection("replyFollowupLlmProvider", "replyFollowupLlmModel");
   const {
     options: memoryLlmModelOptions,
-    isClaudeCodeProvider: isMemoryLlmClaudeCodeProvider,
     selectedPresetModel: selectedMemoryLlmPresetModel
-  } = resolvePresetModelSelection({
-    modelCatalog,
-    provider: form.memoryLlmProvider,
-    model: form.memoryLlmModel
-  });
+  } = resolvePresetSelection("memoryLlmProvider", "memoryLlmModel");
   const {
     options: voiceReplyDecisionModelOptions,
-    isClaudeCodeProvider: isVoiceReplyDecisionClaudeCodeProvider,
     selectedPresetModel: selectedVoiceReplyDecisionPresetModel
-  } = resolvePresetModelSelection({
-    modelCatalog,
-    provider: form.voiceReplyDecisionLlmProvider,
-    model: form.voiceReplyDecisionLlmModel
-  });
+  } = resolvePresetSelection("voiceReplyDecisionLlmProvider", "voiceReplyDecisionLlmModel");
   const {
     options: voiceGenerationModelOptions,
-    isClaudeCodeProvider: isVoiceGenerationClaudeCodeProvider,
     selectedPresetModel: selectedVoiceGenerationPresetModel
-  } = resolvePresetModelSelection({
-    modelCatalog,
-    provider: form.voiceGenerationLlmProvider,
-    model: form.voiceGenerationLlmModel
-  });
+  } = resolvePresetSelection("voiceGenerationLlmProvider", "voiceGenerationLlmModel");
+  const openAiRealtimeModelOptions = resolveModelOptions(
+    OPENAI_REALTIME_MODEL_OPTIONS,
+    form.voiceOpenAiRealtimeModel
+  );
+  const openAiTranscriptionModelOptions = resolveModelOptions(
+    OPENAI_TRANSCRIPTION_MODEL_OPTIONS,
+    form.voiceOpenAiRealtimeInputTranscriptionModel
+  );
+  const geminiRealtimeModelOptions = resolveModelOptions(
+    GEMINI_REALTIME_MODEL_OPTIONS,
+    form.voiceGeminiRealtimeModel
+  );
+  const sttTranscriptionModelOptions = resolveModelOptions(
+    STT_TRANSCRIPTION_MODEL_OPTIONS,
+    form.voiceSttTranscriptionModel
+  );
+  const sttTtsModelOptions = resolveModelOptions(
+    STT_TTS_MODEL_OPTIONS,
+    form.voiceSttTtsModel
+  );
+  const initiativeImageModelOptions = resolveModelOptionsFromText(
+    form.initiativeAllowedImageModels,
+    form.initiativeSimpleImageModel,
+    form.initiativeComplexImageModel
+  );
+  const initiativeVideoModelOptions = resolveModelOptionsFromText(
+    form.initiativeAllowedVideoModels,
+    form.initiativeVideoModel
+  );
   const isVoiceAgentMode = form.voiceMode === "voice_agent";
   const isOpenAiRealtimeMode = form.voiceMode === "openai_realtime";
   const isGeminiRealtimeMode = form.voiceMode === "gemini_realtime";
@@ -113,58 +132,50 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
   function setProviderWithPresetFallback(providerField, modelField, provider) {
     setForm((current) => {
       const next = { ...current, [providerField]: provider };
-      if (provider !== "claude-code") return next;
       const options = resolveProviderModelOptions(modelCatalog, provider);
       const currentModel = String(current?.[modelField] || "").trim();
       if (options.includes(currentModel)) return next;
-      next[modelField] = options[0] || "sonnet";
+      next[modelField] = options[0] || currentModel;
       return next;
     });
   }
 
-  function setProvider(e) {
-    setProviderWithPresetFallback("provider", "model", String(e.target.value || "").trim());
+  function createProviderSetter(providerField, modelField) {
+    return (e) => {
+      setProviderWithPresetFallback(providerField, modelField, String(e.target.value || "").trim());
+    };
   }
 
-  function setMemoryLlmProvider(e) {
-    setProviderWithPresetFallback("memoryLlmProvider", "memoryLlmModel", String(e.target.value || "").trim());
-  }
-
-  function setReplyFollowupProvider(e) {
-    setProviderWithPresetFallback("replyFollowupLlmProvider", "replyFollowupLlmModel", String(e.target.value || "").trim());
-  }
-
-  function setVoiceReplyDecisionProvider(e) {
-    setProviderWithPresetFallback("voiceReplyDecisionLlmProvider", "voiceReplyDecisionLlmModel", String(e.target.value || "").trim());
-  }
-
-  function setVoiceGenerationProvider(e) {
-    setProviderWithPresetFallback("voiceGenerationLlmProvider", "voiceGenerationLlmModel", String(e.target.value || "").trim());
-  }
+  const setProvider = createProviderSetter("provider", "model");
+  const setMemoryLlmProvider = createProviderSetter("memoryLlmProvider", "memoryLlmModel");
+  const setReplyFollowupProvider = createProviderSetter("replyFollowupLlmProvider", "replyFollowupLlmModel");
+  const setVoiceReplyDecisionProvider = createProviderSetter("voiceReplyDecisionLlmProvider", "voiceReplyDecisionLlmModel");
+  const setVoiceGenerationProvider = createProviderSetter("voiceGenerationLlmProvider", "voiceGenerationLlmModel");
 
   function selectModelFieldPreset(modelField, selected) {
-    if (selected === CUSTOM_MODEL_OPTION_VALUE) return;
     setForm((current) => ({ ...current, [modelField]: selected }));
   }
 
-  function selectPresetModel(e) {
-    selectModelFieldPreset("model", String(e.target.value || ""));
+  function createPresetSelector(modelField) {
+    return (e) => {
+      selectModelFieldPreset(modelField, String(e.target.value || ""));
+    };
   }
 
-  function selectReplyFollowupPresetModel(e) {
-    selectModelFieldPreset("replyFollowupLlmModel", String(e.target.value || ""));
-  }
+  const selectPresetModel = createPresetSelector("model");
+  const selectReplyFollowupPresetModel = createPresetSelector("replyFollowupLlmModel");
+  const selectMemoryLlmPresetModel = createPresetSelector("memoryLlmModel");
+  const selectVoiceReplyDecisionPresetModel = createPresetSelector("voiceReplyDecisionLlmModel");
+  const selectVoiceGenerationPresetModel = createPresetSelector("voiceGenerationLlmModel");
 
-  function selectMemoryLlmPresetModel(e) {
-    selectModelFieldPreset("memoryLlmModel", String(e.target.value || ""));
-  }
-
-  function selectVoiceReplyDecisionPresetModel(e) {
-    selectModelFieldPreset("voiceReplyDecisionLlmModel", String(e.target.value || ""));
-  }
-
-  function selectVoiceGenerationPresetModel(e) {
-    selectModelFieldPreset("voiceGenerationLlmModel", String(e.target.value || ""));
+  function resetVoiceReplyDecisionPrompts() {
+    setForm((current) => ({
+      ...current,
+      voiceReplyDecisionWakeVariantHint: defaultForm.voiceReplyDecisionWakeVariantHint,
+      voiceReplyDecisionSystemPromptCompact: defaultForm.voiceReplyDecisionSystemPromptCompact,
+      voiceReplyDecisionSystemPromptFull: defaultForm.voiceReplyDecisionSystemPromptFull,
+      voiceReplyDecisionSystemPromptStrict: defaultForm.voiceReplyDecisionSystemPromptStrict
+    }));
   }
 
   function submit(e) {
@@ -204,17 +215,14 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
             setProvider={setProvider}
             selectPresetModel={selectPresetModel}
             providerModelOptions={providerModelOptions}
-            isClaudeCodeProvider={isClaudeCodeProvider}
             selectedPresetModel={selectedPresetModel}
             setReplyFollowupProvider={setReplyFollowupProvider}
             selectReplyFollowupPresetModel={selectReplyFollowupPresetModel}
             replyFollowupModelOptions={replyFollowupModelOptions}
-            isReplyFollowupClaudeCodeProvider={isReplyFollowupClaudeCodeProvider}
             selectedReplyFollowupPresetModel={selectedReplyFollowupPresetModel}
             setMemoryLlmProvider={setMemoryLlmProvider}
             selectMemoryLlmPresetModel={selectMemoryLlmPresetModel}
             memoryLlmModelOptions={memoryLlmModelOptions}
-            isMemoryLlmClaudeCodeProvider={isMemoryLlmClaudeCodeProvider}
             selectedMemoryLlmPresetModel={selectedMemoryLlmPresetModel}
           />
 
@@ -233,13 +241,17 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
             setVoiceReplyDecisionProvider={setVoiceReplyDecisionProvider}
             selectVoiceReplyDecisionPresetModel={selectVoiceReplyDecisionPresetModel}
             voiceReplyDecisionModelOptions={voiceReplyDecisionModelOptions}
-            isVoiceReplyDecisionClaudeCodeProvider={isVoiceReplyDecisionClaudeCodeProvider}
             selectedVoiceReplyDecisionPresetModel={selectedVoiceReplyDecisionPresetModel}
             setVoiceGenerationProvider={setVoiceGenerationProvider}
             selectVoiceGenerationPresetModel={selectVoiceGenerationPresetModel}
             voiceGenerationModelOptions={voiceGenerationModelOptions}
-            isVoiceGenerationClaudeCodeProvider={isVoiceGenerationClaudeCodeProvider}
             selectedVoiceGenerationPresetModel={selectedVoiceGenerationPresetModel}
+            openAiRealtimeModelOptions={openAiRealtimeModelOptions}
+            openAiTranscriptionModelOptions={openAiTranscriptionModelOptions}
+            geminiRealtimeModelOptions={geminiRealtimeModelOptions}
+            sttTranscriptionModelOptions={sttTranscriptionModelOptions}
+            sttTtsModelOptions={sttTtsModelOptions}
+            onResetVoiceReplyDecisionPrompts={resetVoiceReplyDecisionPrompts}
           />
 
           <RateLimitsSettingsSection id="sec-rate" form={form} set={set} />
@@ -252,6 +264,8 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
             showInitiativeAdvanced={showInitiativeAdvanced}
             showInitiativeImageControls={showInitiativeImageControls}
             showInitiativeVideoControls={showInitiativeVideoControls}
+            initiativeImageModelOptions={initiativeImageModelOptions}
+            initiativeVideoModelOptions={initiativeVideoModelOptions}
           />
 
           <ChannelsPermissionsSettingsSection id="sec-channels" form={form} set={set} />

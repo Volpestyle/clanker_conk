@@ -17,7 +17,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
     },
     llm: {
       provider: "openai",
-      model: "gpt-4.1-mini"
+      model: "claude-haiku-4-5"
     },
     permissions: {
       initiativeChannelIds: ["1", "2"],
@@ -31,9 +31,9 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.personaFlavor, "chaotic but kind");
   assert.equal(form.personaHardLimits, "no hate\nno hate\nkeep it fun");
   assert.equal(form.provider, "openai");
-  assert.equal(form.model, "gpt-4.1-mini");
-  assert.equal(form.voiceGenerationLlmProvider, "openai");
-  assert.equal(form.voiceGenerationLlmModel, "gpt-4.1-mini");
+  assert.equal(form.model, "claude-haiku-4-5");
+  assert.equal(form.voiceGenerationLlmProvider, "anthropic");
+  assert.equal(form.voiceGenerationLlmModel, "claude-haiku-4-5");
   assert.equal(form.initiativeChannels, "1\n2");
   assert.equal(form.allowedChannels, "2\n3");
   assert.equal(form.voiceRealtimeReplyStrategy, "shared_brain");
@@ -74,11 +74,11 @@ test("settingsToForm preserves explicit empty prompt overrides", () => {
 test("resolveProviderModelOptions merges catalog values with provider fallback defaults", () => {
   const openai = resolveProviderModelOptions(
     {
-      openai: ["gpt-4.1-mini", "gpt-4.1-mini", "gpt-5.2"]
+      openai: ["claude-haiku-4-5", "claude-haiku-4-5", "gpt-5.2"]
     },
     "openai"
   );
-  assert.deepEqual(openai, ["gpt-4.1-mini", "gpt-5.2"]);
+  assert.deepEqual(openai, ["claude-haiku-4-5", "gpt-5.2"]);
 
   const anthropic = resolveProviderModelOptions(
     {
@@ -92,7 +92,7 @@ test("resolveProviderModelOptions merges catalog values with provider fallback d
 test("resolvePresetModelSelection enforces claude-code preset behavior", () => {
   const nonClaude = resolvePresetModelSelection({
     modelCatalog: {
-      openai: ["gpt-4.1-mini"]
+      openai: ["claude-haiku-4-5"]
     },
     provider: "openai",
     model: "custom-model-not-listed"
@@ -125,7 +125,7 @@ test("formToSettingsPatch keeps stt pipeline voice generation and reply decider 
       },
       replyDecisionLlm: {
         provider: "openai",
-        model: "gpt-4.1-mini"
+        model: "claude-haiku-4-5"
       }
     }
   });
@@ -134,13 +134,21 @@ test("formToSettingsPatch keeps stt pipeline voice generation and reply decider 
   form.voiceGenerationLlmModel = "claude-haiku-4-5";
   form.voiceReplyDecisionLlmEnabled = false;
   form.voiceReplyDecisionLlmProvider = "openai";
-  form.voiceReplyDecisionLlmModel = "gpt-4.1-mini";
+  form.voiceReplyDecisionLlmModel = "claude-haiku-4-5";
+  form.voiceReplyDecisionWakeVariantHint = "wake hint {{botName}}";
+  form.voiceReplyDecisionSystemPromptCompact = "compact {{botName}}";
+  form.voiceReplyDecisionSystemPromptFull = "full {{botName}}";
+  form.voiceReplyDecisionSystemPromptStrict = "strict {{botName}}";
   const patch = formToSettingsPatch(form);
   assert.equal(patch.voice.generationLlm.provider, "anthropic");
   assert.equal(patch.voice.generationLlm.model, "claude-haiku-4-5");
   assert.equal(patch.voice.replyDecisionLlm.enabled, false);
   assert.equal(patch.voice.replyDecisionLlm.provider, "openai");
-  assert.equal(patch.voice.replyDecisionLlm.model, "gpt-4.1-mini");
+  assert.equal(patch.voice.replyDecisionLlm.model, "claude-haiku-4-5");
+  assert.equal(patch.voice.replyDecisionLlm.prompts.wakeVariantHint, "wake hint {{botName}}");
+  assert.equal(patch.voice.replyDecisionLlm.prompts.systemPromptCompact, "compact {{botName}}");
+  assert.equal(patch.voice.replyDecisionLlm.prompts.systemPromptFull, "full {{botName}}");
+  assert.equal(patch.voice.replyDecisionLlm.prompts.systemPromptStrict, "strict {{botName}}");
 });
 
 test("settingsFormModel round-trips realtime reply strategy", () => {

@@ -1,19 +1,36 @@
 import { DEFAULT_SETTINGS, PROVIDER_MODEL_FALLBACKS } from "../../src/settings/settingsSchema.ts";
 import { normalizeLlmProvider } from "../../src/llm/llmHelpers.ts";
+import {
+  formatLineList,
+  normalizeBoundedStringList,
+  parseUniqueLineList,
+  parseUniqueList
+} from "../../src/settings/listNormalization.ts";
 
-export const CUSTOM_MODEL_OPTION_VALUE = "__custom_model__";
+export const OPENAI_REALTIME_MODEL_OPTIONS = Object.freeze([
+  "gpt-realtime",
+  "gpt-realtime-1.5",
+  "gpt-realtime-mini"
+]);
 
-function parseList(val) {
-  return [...new Set(String(val || "").split(/[\n,]/g).map((x) => x.trim()).filter(Boolean))];
-}
+export const OPENAI_TRANSCRIPTION_MODEL_OPTIONS = Object.freeze([
+  "gpt-4o-mini-transcribe",
+  "gpt-4o-transcribe"
+]);
 
-function parseLineList(val) {
-  return [...new Set(String(val || "").split(/\n/g).map((x) => x.trim()).filter(Boolean))];
-}
+export const GEMINI_REALTIME_MODEL_OPTIONS = Object.freeze([
+  "gemini-2.5-flash-native-audio-preview-12-2025",
+  "gemini-2.5-flash"
+]);
 
-function formatList(items) {
-  return (items || []).join("\n");
-}
+export const STT_TRANSCRIPTION_MODEL_OPTIONS = Object.freeze([
+  "gpt-4o-mini-transcribe",
+  "gpt-4o-transcribe"
+]);
+
+export const STT_TTS_MODEL_OPTIONS = Object.freeze([
+  "gpt-4o-mini-tts"
+]);
 
 export function settingsToForm(settings) {
   const defaults = DEFAULT_SETTINGS;
@@ -33,6 +50,7 @@ export function settingsToForm(settings) {
   const defaultVoiceGenerationLlm = defaults.voice.generationLlm;
   const defaultVoiceStreamWatch = defaults.voice.streamWatch;
   const defaultVoiceSoundboard = defaults.voice.soundboard;
+  const defaultVoiceReplyDecisionPrompts = defaults.voice.replyDecisionLlm?.prompts || {};
   const defaultStartup = defaults.startup;
   const defaultInitiative = defaults.initiative;
   const defaultDiscovery = defaults.initiative.discovery;
@@ -41,7 +59,7 @@ export function settingsToForm(settings) {
   return {
     botName: settings?.botName ?? defaults.botName,
     personaFlavor: settings?.persona?.flavor ?? defaults.persona.flavor,
-    personaHardLimits: formatList(settings?.persona?.hardLimits),
+    personaHardLimits: formatLineList(settings?.persona?.hardLimits),
     promptCapabilityHonestyLine: settings?.prompt?.capabilityHonestyLine ?? defaultPrompt.capabilityHonestyLine,
     promptImpossibleActionLine:
       settings?.prompt?.impossibleActionLine ?? defaultPrompt.impossibleActionLine,
@@ -50,9 +68,9 @@ export function settingsToForm(settings) {
     promptMemoryDisabledLine:
       settings?.prompt?.memoryDisabledLine ?? defaultPrompt.memoryDisabledLine,
     promptSkipLine: settings?.prompt?.skipLine ?? defaultPrompt.skipLine,
-    promptTextGuidance: formatList(settings?.prompt?.textGuidance),
-    promptVoiceGuidance: formatList(settings?.prompt?.voiceGuidance),
-    promptVoiceOperationalGuidance: formatList(settings?.prompt?.voiceOperationalGuidance),
+    promptTextGuidance: formatLineList(settings?.prompt?.textGuidance),
+    promptVoiceGuidance: formatLineList(settings?.prompt?.voiceGuidance),
+    promptVoiceOperationalGuidance: formatLineList(settings?.prompt?.voiceOperationalGuidance),
     promptMediaPromptCraftGuidance: settings?.prompt?.mediaPromptCraftGuidance ?? defaultPrompt.mediaPromptCraftGuidance,
     replyLevelInitiative: activity.replyLevelInitiative ?? defaultActivity.replyLevelInitiative,
     replyLevelNonInitiative: activity.replyLevelNonInitiative ?? defaultActivity.replyLevelNonInitiative,
@@ -103,13 +121,25 @@ export function settingsToForm(settings) {
       settings?.voice?.replyDecisionLlm?.provider ?? defaultVoice.replyDecisionLlm.provider,
     voiceReplyDecisionLlmModel:
       settings?.voice?.replyDecisionLlm?.model ?? defaultVoice.replyDecisionLlm.model,
+    voiceReplyDecisionWakeVariantHint:
+      settings?.voice?.replyDecisionLlm?.prompts?.wakeVariantHint ??
+      defaultVoiceReplyDecisionPrompts.wakeVariantHint,
+    voiceReplyDecisionSystemPromptCompact:
+      settings?.voice?.replyDecisionLlm?.prompts?.systemPromptCompact ??
+      defaultVoiceReplyDecisionPrompts.systemPromptCompact,
+    voiceReplyDecisionSystemPromptFull:
+      settings?.voice?.replyDecisionLlm?.prompts?.systemPromptFull ??
+      defaultVoiceReplyDecisionPrompts.systemPromptFull,
+    voiceReplyDecisionSystemPromptStrict:
+      settings?.voice?.replyDecisionLlm?.prompts?.systemPromptStrict ??
+      defaultVoiceReplyDecisionPrompts.systemPromptStrict,
     voiceGenerationLlmProvider:
       settings?.voice?.generationLlm?.provider ?? defaultVoiceGenerationLlm.provider,
     voiceGenerationLlmModel:
       settings?.voice?.generationLlm?.model ?? defaultVoiceGenerationLlm.model,
-    voiceAllowedChannelIds: formatList(settings?.voice?.allowedVoiceChannelIds),
-    voiceBlockedChannelIds: formatList(settings?.voice?.blockedVoiceChannelIds),
-    voiceBlockedUserIds: formatList(settings?.voice?.blockedVoiceUserIds),
+    voiceAllowedChannelIds: formatLineList(settings?.voice?.allowedVoiceChannelIds),
+    voiceBlockedChannelIds: formatLineList(settings?.voice?.blockedVoiceChannelIds),
+    voiceBlockedUserIds: formatLineList(settings?.voice?.blockedVoiceUserIds),
     voiceXaiVoice: settings?.voice?.xai?.voice ?? defaultVoiceXai.voice,
     voiceXaiAudioFormat: settings?.voice?.xai?.audioFormat ?? defaultVoiceXai.audioFormat,
     voiceXaiSampleRateHz: settings?.voice?.xai?.sampleRateHz ?? defaultVoiceXai.sampleRateHz,
@@ -138,7 +168,7 @@ export function settingsToForm(settings) {
     voiceStreamWatchMaxFrameBytes: settings?.voice?.streamWatch?.maxFrameBytes ?? defaultVoiceStreamWatch.maxFrameBytes,
     voiceSoundboardEnabled: settings?.voice?.soundboard?.enabled ?? defaultVoiceSoundboard.enabled,
     voiceSoundboardAllowExternalSounds: settings?.voice?.soundboard?.allowExternalSounds ?? defaultVoiceSoundboard.allowExternalSounds,
-    voiceSoundboardPreferredSoundIds: formatList(settings?.voice?.soundboard?.preferredSoundIds),
+    voiceSoundboardPreferredSoundIds: formatLineList(settings?.voice?.soundboard?.preferredSoundIds),
     maxMessages: settings?.permissions?.maxMessagesPerHour ?? defaultPermissions.maxMessagesPerHour,
     maxReactions: settings?.permissions?.maxReactionsPerHour ?? defaultPermissions.maxReactionsPerHour,
     catchupEnabled: settings?.startup?.catchupEnabled !== false,
@@ -162,8 +192,8 @@ export function settingsToForm(settings) {
     initiativeSimpleImageModel: settings?.initiative?.simpleImageModel ?? defaultInitiative.simpleImageModel,
     initiativeComplexImageModel: settings?.initiative?.complexImageModel ?? defaultInitiative.complexImageModel,
     initiativeVideoModel: settings?.initiative?.videoModel ?? defaultInitiative.videoModel,
-    initiativeAllowedImageModels: formatList(settings?.initiative?.allowedImageModels ?? []),
-    initiativeAllowedVideoModels: formatList(settings?.initiative?.allowedVideoModels ?? []),
+    initiativeAllowedImageModels: formatLineList(settings?.initiative?.allowedImageModels ?? []),
+    initiativeAllowedVideoModels: formatLineList(settings?.initiative?.allowedVideoModels ?? []),
     initiativeDiscoveryEnabled: settings?.initiative?.discovery?.enabled ?? defaultDiscovery.enabled,
     initiativeDiscoveryLinkChance: settings?.initiative?.discovery?.linkChancePercent ?? defaultDiscovery.linkChancePercent,
     initiativeDiscoveryMaxLinks: settings?.initiative?.discovery?.maxLinksPerPost ?? defaultDiscovery.maxLinksPerPost,
@@ -178,17 +208,17 @@ export function settingsToForm(settings) {
     initiativeDiscoverySourceYoutube: settings?.initiative?.discovery?.sources?.youtube ?? defaultDiscovery.sources.youtube,
     initiativeDiscoverySourceRss: settings?.initiative?.discovery?.sources?.rss ?? defaultDiscovery.sources.rss,
     initiativeDiscoverySourceX: settings?.initiative?.discovery?.sources?.x ?? defaultDiscovery.sources.x,
-    initiativeDiscoveryPreferredTopics: formatList(settings?.initiative?.discovery?.preferredTopics),
-    initiativeDiscoveryRedditSubs: formatList(settings?.initiative?.discovery?.redditSubreddits),
-    initiativeDiscoveryYoutubeChannels: formatList(settings?.initiative?.discovery?.youtubeChannelIds),
-    initiativeDiscoveryRssFeeds: formatList(settings?.initiative?.discovery?.rssFeeds),
-    initiativeDiscoveryXHandles: formatList(settings?.initiative?.discovery?.xHandles),
+    initiativeDiscoveryPreferredTopics: formatLineList(settings?.initiative?.discovery?.preferredTopics),
+    initiativeDiscoveryRedditSubs: formatLineList(settings?.initiative?.discovery?.redditSubreddits),
+    initiativeDiscoveryYoutubeChannels: formatLineList(settings?.initiative?.discovery?.youtubeChannelIds),
+    initiativeDiscoveryRssFeeds: formatLineList(settings?.initiative?.discovery?.rssFeeds),
+    initiativeDiscoveryXHandles: formatLineList(settings?.initiative?.discovery?.xHandles),
     initiativeDiscoveryXNitterBase:
       settings?.initiative?.discovery?.xNitterBaseUrl ?? defaultDiscovery.xNitterBaseUrl,
-    initiativeChannels: formatList(settings?.permissions?.initiativeChannelIds),
-    allowedChannels: formatList(settings?.permissions?.allowedChannelIds),
-    blockedChannels: formatList(settings?.permissions?.blockedChannelIds),
-    blockedUsers: formatList(settings?.permissions?.blockedUserIds)
+    initiativeChannels: formatLineList(settings?.permissions?.initiativeChannelIds),
+    allowedChannels: formatLineList(settings?.permissions?.allowedChannelIds),
+    blockedChannels: formatLineList(settings?.permissions?.blockedChannelIds),
+    blockedUsers: formatLineList(settings?.permissions?.blockedUserIds)
   };
 }
 
@@ -197,7 +227,7 @@ export function formToSettingsPatch(form) {
     botName: form.botName.trim(),
     persona: {
       flavor: form.personaFlavor.trim(),
-      hardLimits: parseLineList(form.personaHardLimits)
+      hardLimits: parseUniqueLineList(form.personaHardLimits)
     },
     prompt: {
       capabilityHonestyLine: String(form.promptCapabilityHonestyLine || "").trim(),
@@ -205,9 +235,9 @@ export function formToSettingsPatch(form) {
       memoryEnabledLine: String(form.promptMemoryEnabledLine || "").trim(),
       memoryDisabledLine: String(form.promptMemoryDisabledLine || "").trim(),
       skipLine: String(form.promptSkipLine || "").trim(),
-      textGuidance: parseLineList(form.promptTextGuidance),
-      voiceGuidance: parseLineList(form.promptVoiceGuidance),
-      voiceOperationalGuidance: parseLineList(form.promptVoiceOperationalGuidance),
+      textGuidance: parseUniqueLineList(form.promptTextGuidance),
+      voiceGuidance: parseUniqueLineList(form.promptVoiceGuidance),
+      voiceOperationalGuidance: parseUniqueLineList(form.promptVoiceOperationalGuidance),
       mediaPromptCraftGuidance: String(form.promptMediaPromptCraftGuidance || "").trim()
     },
     activity: {
@@ -238,7 +268,7 @@ export function formToSettingsPatch(form) {
       maxPagesToRead: Number(form.webSearchMaxPages),
       maxCharsPerPage: Number(form.webSearchMaxChars),
       safeSearch: form.webSearchSafeMode,
-      providerOrder: parseList(form.webSearchProviderOrder),
+      providerOrder: parseUniqueList(form.webSearchProviderOrder),
       recencyDaysDefault: Number(form.webSearchRecencyDaysDefault),
       maxConcurrentFetches: Number(form.webSearchMaxConcurrentFetches)
     },
@@ -265,15 +295,21 @@ export function formToSettingsPatch(form) {
       replyDecisionLlm: {
         enabled: Boolean(form.voiceReplyDecisionLlmEnabled),
         provider: String(form.voiceReplyDecisionLlmProvider || "").trim(),
-        model: String(form.voiceReplyDecisionLlmModel || "").trim()
+        model: String(form.voiceReplyDecisionLlmModel || "").trim(),
+        prompts: {
+          wakeVariantHint: String(form.voiceReplyDecisionWakeVariantHint || "").trim(),
+          systemPromptCompact: String(form.voiceReplyDecisionSystemPromptCompact || "").trim(),
+          systemPromptFull: String(form.voiceReplyDecisionSystemPromptFull || "").trim(),
+          systemPromptStrict: String(form.voiceReplyDecisionSystemPromptStrict || "").trim()
+        }
       },
       generationLlm: {
         provider: String(form.voiceGenerationLlmProvider || "").trim(),
         model: String(form.voiceGenerationLlmModel || "").trim()
       },
-      allowedVoiceChannelIds: parseList(form.voiceAllowedChannelIds),
-      blockedVoiceChannelIds: parseList(form.voiceBlockedChannelIds),
-      blockedVoiceUserIds: parseList(form.voiceBlockedUserIds),
+      allowedVoiceChannelIds: parseUniqueList(form.voiceAllowedChannelIds),
+      blockedVoiceChannelIds: parseUniqueList(form.voiceBlockedChannelIds),
+      blockedVoiceUserIds: parseUniqueList(form.voiceBlockedUserIds),
       xai: {
         voice: String(form.voiceXaiVoice || "").trim(),
         audioFormat: String(form.voiceXaiAudioFormat || "").trim(),
@@ -309,7 +345,7 @@ export function formToSettingsPatch(form) {
       soundboard: {
         enabled: form.voiceSoundboardEnabled,
         allowExternalSounds: form.voiceSoundboardAllowExternalSounds,
-        preferredSoundIds: parseList(form.voiceSoundboardPreferredSoundIds)
+        preferredSoundIds: parseUniqueList(form.voiceSoundboardPreferredSoundIds)
       }
     },
     startup: {
@@ -322,10 +358,10 @@ export function formToSettingsPatch(form) {
       allowReplies: form.allowReplies,
       allowInitiativeReplies: form.allowInitiative,
       allowReactions: form.allowReactions,
-      initiativeChannelIds: parseList(form.initiativeChannels),
-      allowedChannelIds: parseList(form.allowedChannels),
-      blockedChannelIds: parseList(form.blockedChannels),
-      blockedUserIds: parseList(form.blockedUsers),
+      initiativeChannelIds: parseUniqueList(form.initiativeChannels),
+      allowedChannelIds: parseUniqueList(form.allowedChannels),
+      blockedChannelIds: parseUniqueList(form.blockedChannels),
+      blockedUserIds: parseUniqueList(form.blockedUsers),
       maxMessagesPerHour: Number(form.maxMessages),
       maxReactionsPerHour: Number(form.maxReactions)
     },
@@ -347,8 +383,8 @@ export function formToSettingsPatch(form) {
       simpleImageModel: form.initiativeSimpleImageModel.trim(),
       complexImageModel: form.initiativeComplexImageModel.trim(),
       videoModel: form.initiativeVideoModel.trim(),
-      allowedImageModels: parseList(form.initiativeAllowedImageModels),
-      allowedVideoModels: parseList(form.initiativeAllowedVideoModels),
+      allowedImageModels: parseUniqueList(form.initiativeAllowedImageModels),
+      allowedVideoModels: parseUniqueList(form.initiativeAllowedVideoModels),
       discovery: {
         enabled: form.initiativeDiscoveryEnabled,
         linkChancePercent: Number(form.initiativeDiscoveryLinkChance),
@@ -359,11 +395,11 @@ export function formToSettingsPatch(form) {
         randomness: Number(form.initiativeDiscoveryRandomness),
         sourceFetchLimit: Number(form.initiativeDiscoveryFetchLimit),
         allowNsfw: form.initiativeDiscoveryAllowNsfw,
-        preferredTopics: parseList(form.initiativeDiscoveryPreferredTopics),
-        redditSubreddits: parseList(form.initiativeDiscoveryRedditSubs),
-        youtubeChannelIds: parseList(form.initiativeDiscoveryYoutubeChannels),
-        rssFeeds: parseList(form.initiativeDiscoveryRssFeeds),
-        xHandles: parseList(form.initiativeDiscoveryXHandles),
+        preferredTopics: parseUniqueList(form.initiativeDiscoveryPreferredTopics),
+        redditSubreddits: parseUniqueList(form.initiativeDiscoveryRedditSubs),
+        youtubeChannelIds: parseUniqueList(form.initiativeDiscoveryYoutubeChannels),
+        rssFeeds: parseUniqueList(form.initiativeDiscoveryRssFeeds),
+        xHandles: parseUniqueList(form.initiativeDiscoveryXHandles),
         xNitterBaseUrl: form.initiativeDiscoveryXNitterBase.trim(),
         sources: {
           reddit: form.initiativeDiscoverySourceReddit,
@@ -384,22 +420,34 @@ export function resolveProviderModelOptions(modelCatalog, provider) {
   const key = normalizeLlmProvider(provider);
   const fromCatalog = Array.isArray(modelCatalog?.[key]) ? modelCatalog[key] : [];
   const fallback = PROVIDER_MODEL_FALLBACKS[key] || [];
-  return [...new Set([...fromCatalog, ...fallback].map((item) => String(item || "").trim()).filter(Boolean))];
+  return normalizeBoundedStringList([...fromCatalog, ...fallback], { maxItems: 80, maxLen: 120 });
+}
+
+export function resolveModelOptions(...sources) {
+  const combined = [];
+  for (const source of sources) {
+    if (Array.isArray(source)) {
+      combined.push(...source);
+      continue;
+    }
+    combined.push(source);
+  }
+  return normalizeBoundedStringList(combined, { maxItems: 80, maxLen: 140 });
+}
+
+export function resolveModelOptionsFromText(value, ...sources) {
+  return resolveModelOptions(parseUniqueLineList(value), ...sources);
 }
 
 export function resolvePresetModelSelection({ modelCatalog, provider, model }) {
   const options = resolveProviderModelOptions(modelCatalog, provider);
-  const isClaudeCodeProvider = normalizeLlmProvider(provider) === "claude-code";
   const normalizedModel = String(model || "").trim();
   const selectedPresetModel = options.includes(normalizedModel)
     ? normalizedModel
-    : isClaudeCodeProvider
-      ? (options[0] || "")
-      : CUSTOM_MODEL_OPTION_VALUE;
+    : (options[0] || "");
 
   return {
     options,
-    isClaudeCodeProvider,
     selectedPresetModel
   };
 }

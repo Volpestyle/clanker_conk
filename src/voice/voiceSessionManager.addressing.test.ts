@@ -44,7 +44,7 @@ function baseSettings(overrides = {}) {
     },
     llm: {
       provider: "openai",
-      model: "gpt-4.1-mini"
+      model: "claude-haiku-4-5"
     },
     voice: {
       replyEagerness: 60,
@@ -148,6 +148,47 @@ test("reply decider sends short three-word complaint turns to llm", async () => 
   assert.equal(decision.allow, false);
   assert.equal(decision.reason, "llm_no");
   assert.equal(callCount, 1);
+});
+
+test("reply decider uses configured advanced classifier system prompt override", async () => {
+  const seenSystemPrompts = [];
+  const manager = createManager({
+    generate: async (payload) => {
+      seenSystemPrompts.push(String(payload?.systemPrompt || ""));
+      return { text: "NO" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      botTurnOpen: false
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          maxAttempts: 1,
+          prompts: {
+            wakeVariantHint: "custom wake hint for {{botName}}",
+            systemPromptCompact: "compact override for {{botName}}",
+            systemPromptFull: "full override for {{botName}}",
+            systemPromptStrict: "strict override for {{botName}}"
+          }
+        }
+      }
+    }),
+    transcript: "how should we do this"
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "llm_no");
+  assert.equal(seenSystemPrompts.length, 1);
+  assert.equal(seenSystemPrompts[0], "compact override for clanker conk");
 });
 
 test("reply decider allows focused speaker followup without another direct address", async () => {
@@ -827,7 +868,7 @@ test("reply decider in stt pipeline uses configured voice decider provider/model
         replyEagerness: 60,
         replyDecisionLlm: {
           provider: "openai",
-          model: "gpt-4.1-mini",
+          model: "claude-haiku-4-5",
           maxAttempts: 1
         }
       }
@@ -838,10 +879,10 @@ test("reply decider in stt pipeline uses configured voice decider provider/model
   assert.equal(decision.allow, false);
   assert.equal(decision.reason, "llm_no");
   assert.equal(decision.llmProvider, "openai");
-  assert.equal(decision.llmModel, "gpt-4.1-mini");
+  assert.equal(decision.llmModel, "claude-haiku-4-5");
   assert.equal(seenDecisionLlmSettings.length, 1);
   assert.equal(seenDecisionLlmSettings[0]?.provider, "openai");
-  assert.equal(seenDecisionLlmSettings[0]?.model, "gpt-4.1-mini");
+  assert.equal(seenDecisionLlmSettings[0]?.model, "claude-haiku-4-5");
 });
 
 test("reply decider can skip classifier call in stt pipeline when disabled", async () => {

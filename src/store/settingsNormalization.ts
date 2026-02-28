@@ -1,7 +1,15 @@
 import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
+import { normalizeBoundedStringList } from "../settings/listNormalization.ts";
 import { defaultModelForLlmProvider, normalizeLlmProvider } from "../llm/llmHelpers.ts";
 import { normalizeProviderOrder } from "../search.ts";
 import { clamp, deepMerge, uniqueIdList } from "../utils.ts";
+import { normalizeVoiceRuntimeMode } from "../voice/voiceModes.ts";
+import {
+  VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
+  VOICE_REPLY_DECIDER_SYSTEM_PROMPT_FULL_DEFAULT,
+  VOICE_REPLY_DECIDER_SYSTEM_PROMPT_STRICT_DEFAULT,
+  VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
+} from "../promptCore.ts";
 
 export function normalizeSettings(raw) {
   const merged = deepMerge(DEFAULT_SETTINGS, raw ?? {});
@@ -14,7 +22,10 @@ export function normalizeSettings(raw) {
   if (!merged.llm || typeof merged.llm !== "object") merged.llm = {};
   if (!merged.replyFollowupLlm || typeof merged.replyFollowupLlm !== "object") merged.replyFollowupLlm = {};
   if (merged.memoryLlm && typeof merged.memoryLlm === "object") {
-    merged.memoryLlm.provider = normalizeLlmProvider(merged.memoryLlm?.provider);
+    merged.memoryLlm.provider = normalizeLlmProvider(
+      merged.memoryLlm?.provider,
+      DEFAULT_SETTINGS.memoryLlm?.provider || "anthropic"
+    );
     merged.memoryLlm.model = String(
       merged.memoryLlm?.model || defaultModelForLlmProvider(merged.memoryLlm.provider)
     ).slice(0, 120);
@@ -114,18 +125,18 @@ export function normalizeSettings(raw) {
     replyCoalesceMaxMessages
   };
 
-  merged.llm.provider = normalizeLlmProvider(merged.llm?.provider);
-  merged.llm.model = String(merged.llm?.model || defaultModelForLlmProvider("openai")).slice(0, 120);
+  merged.llm.provider = normalizeLlmProvider(merged.llm?.provider, DEFAULT_SETTINGS.llm?.provider || "anthropic");
+  merged.llm.model = String(merged.llm?.model || defaultModelForLlmProvider(merged.llm.provider)).slice(0, 120);
   merged.llm.temperature = clamp(Number(merged.llm?.temperature) || 0.9, 0, 2);
   merged.llm.maxOutputTokens = clamp(Number(merged.llm?.maxOutputTokens) || 220, 32, 1400);
   merged.replyFollowupLlm.enabled =
     merged.replyFollowupLlm?.enabled !== undefined
       ? Boolean(merged.replyFollowupLlm?.enabled)
       : Boolean(DEFAULT_SETTINGS.replyFollowupLlm?.enabled);
+  const replyFollowupProviderRaw = String(merged.replyFollowupLlm?.provider || "").trim();
   merged.replyFollowupLlm.provider = normalizeLlmProvider(
-    String(merged.replyFollowupLlm?.provider || "").trim() ||
-      merged.llm.provider ||
-      "openai"
+    replyFollowupProviderRaw,
+    merged.llm.provider || "anthropic"
   );
   merged.replyFollowupLlm.model = String(
     merged.replyFollowupLlm?.model ||
@@ -233,6 +244,9 @@ export function normalizeSettings(raw) {
   if (!merged.voice.replyDecisionLlm || typeof merged.voice.replyDecisionLlm !== "object") {
     merged.voice.replyDecisionLlm = {};
   }
+  if (!merged.voice.replyDecisionLlm.prompts || typeof merged.voice.replyDecisionLlm.prompts !== "object") {
+    merged.voice.replyDecisionLlm.prompts = {};
+  }
   if (!merged.voice.streamWatch || typeof merged.voice.streamWatch !== "object") {
     merged.voice.streamWatch = {};
   }
@@ -271,6 +285,13 @@ export function normalizeSettings(raw) {
     provider?: string;
     model?: string;
     maxAttempts?: number;
+    prompts?: VoiceReplyDecisionPromptDefaults;
+  };
+  type VoiceReplyDecisionPromptDefaults = {
+    wakeVariantHint?: string;
+    systemPromptCompact?: string;
+    systemPromptFull?: string;
+    systemPromptStrict?: string;
   };
   type VoiceGenerationDefaults = {
     provider?: string;
@@ -313,6 +334,8 @@ export function normalizeSettings(raw) {
   const defaultVoiceSttPipeline: VoiceSttPipelineDefaults = defaultVoice.sttPipeline ?? {};
   const defaultVoiceGenerationLlm: VoiceGenerationDefaults = defaultVoice.generationLlm ?? {};
   const defaultVoiceReplyDecisionLlm: VoiceReplyDecisionDefaults = defaultVoice.replyDecisionLlm ?? {};
+  const defaultVoiceReplyDecisionPrompts: VoiceReplyDecisionPromptDefaults =
+    defaultVoiceReplyDecisionLlm.prompts ?? {};
   const defaultVoiceStreamWatch: VoiceStreamWatchDefaults = defaultVoice.streamWatch ?? {};
   const defaultVoiceSoundboard: VoiceSoundboardDefaults = defaultVoice.soundboard ?? {};
   const voiceIntentThresholdRaw = Number(merged.voice?.intentConfidenceThreshold);
@@ -330,7 +353,7 @@ export function normalizeSettings(raw) {
 
   merged.voice.enabled =
     merged.voice?.enabled !== undefined ? Boolean(merged.voice?.enabled) : Boolean(defaultVoice.enabled);
-  merged.voice.mode = normalizeVoiceMode(merged.voice?.mode, defaultVoice.mode);
+  merged.voice.mode = normalizeVoiceRuntimeMode(merged.voice?.mode, "voice_agent");
   merged.voice.realtimeReplyStrategy = normalizeRealtimeReplyStrategy(
     merged.voice?.realtimeReplyStrategy,
     defaultVoice.realtimeReplyStrategy
@@ -376,8 +399,10 @@ export function normalizeSettings(raw) {
   merged.voice.replyEagerness = clamp(
     Number.isFinite(voiceEagernessRaw) ? voiceEagernessRaw : 0, 0, 100
   );
+  const voiceGenerationProviderRaw = String(merged.voice?.generationLlm?.provider || "").trim();
   merged.voice.generationLlm.provider = normalizeLlmProvider(
-    merged.voice?.generationLlm?.provider || defaultVoiceGenerationLlm.provider || "openai"
+    voiceGenerationProviderRaw,
+    defaultVoiceGenerationLlm.provider || "anthropic"
   );
   const defaultVoiceGenerationModel =
     merged.voice.generationLlm.provider === normalizeLlmProvider(defaultVoiceGenerationLlm.provider)
@@ -399,8 +424,10 @@ export function normalizeSettings(raw) {
       : defaultVoiceReplyDecisionLlm?.enabled !== undefined
         ? Boolean(defaultVoiceReplyDecisionLlm.enabled)
         : true;
+  const voiceReplyDecisionProviderRaw = String(merged.voice?.replyDecisionLlm?.provider || "").trim();
   merged.voice.replyDecisionLlm.provider = normalizeLlmProvider(
-    merged.voice?.replyDecisionLlm?.provider || defaultVoiceReplyDecisionLlm.provider || "anthropic"
+    voiceReplyDecisionProviderRaw,
+    defaultVoiceReplyDecisionLlm.provider || "anthropic"
   );
   const defaultReplyDecisionModel =
     merged.voice.replyDecisionLlm.provider === normalizeLlmProvider(defaultVoiceReplyDecisionLlm.provider)
@@ -426,6 +453,26 @@ export function normalizeSettings(raw) {
         : 1,
     1,
     3
+  );
+  merged.voice.replyDecisionLlm.prompts.wakeVariantHint = normalizeLongPromptBlock(
+    merged.voice?.replyDecisionLlm?.prompts?.wakeVariantHint,
+    defaultVoiceReplyDecisionPrompts.wakeVariantHint || VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT,
+    2200
+  );
+  merged.voice.replyDecisionLlm.prompts.systemPromptCompact = normalizeLongPromptBlock(
+    merged.voice?.replyDecisionLlm?.prompts?.systemPromptCompact,
+    defaultVoiceReplyDecisionPrompts.systemPromptCompact || VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
+    10_000
+  );
+  merged.voice.replyDecisionLlm.prompts.systemPromptFull = normalizeLongPromptBlock(
+    merged.voice?.replyDecisionLlm?.prompts?.systemPromptFull,
+    defaultVoiceReplyDecisionPrompts.systemPromptFull || VOICE_REPLY_DECIDER_SYSTEM_PROMPT_FULL_DEFAULT,
+    10_000
+  );
+  merged.voice.replyDecisionLlm.prompts.systemPromptStrict = normalizeLongPromptBlock(
+    merged.voice?.replyDecisionLlm?.prompts?.systemPromptStrict,
+    defaultVoiceReplyDecisionPrompts.systemPromptStrict || VOICE_REPLY_DECIDER_SYSTEM_PROMPT_STRICT_DEFAULT,
+    4000
   );
 
   merged.voice.xai.voice = String(merged.voice?.xai?.voice || defaultVoiceXai.voice || "Rex").slice(0, 60);
@@ -752,17 +799,7 @@ export function normalizeSettings(raw) {
 }
 
 function uniqueStringList(input, maxItems = 20, maxLen = 120) {
-  if (Array.isArray(input)) {
-    return [...new Set(input.map((item) => String(item || "").trim()).filter(Boolean))]
-      .slice(0, Math.max(1, maxItems))
-      .map((item) => item.slice(0, maxLen));
-  }
-
-  if (typeof input !== "string") return [];
-
-  return [...new Set(input.split(/[\n,]/g).map((item) => item.trim()).filter(Boolean))]
-    .slice(0, Math.max(1, maxItems))
-    .map((item) => item.slice(0, maxLen));
+  return normalizeBoundedStringList(input, { maxItems, maxLen });
 }
 
 function isHttpLikeUrl(rawUrl) {
@@ -791,16 +828,6 @@ function normalizeHttpBaseUrl(value, fallback) {
   }
 }
 
-function normalizeVoiceMode(value, fallback = "voice_agent") {
-  const normalized = String(value || fallback || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "gemini_realtime") return "gemini_realtime";
-  if (normalized === "openai_realtime") return "openai_realtime";
-  if (normalized === "stt_pipeline") return "stt_pipeline";
-  return "voice_agent";
-}
-
 function normalizeRealtimeReplyStrategy(value, fallback = "shared_brain") {
   const normalized = String(value || fallback || "")
     .trim()
@@ -820,9 +847,7 @@ function normalizeOpenAiRealtimeAudioFormat(value) {
 
 function normalizeHardLimitList(input, fallback = []) {
   const source = Array.isArray(input) ? input : fallback;
-  return [...new Set(source.map((item) => String(item || "").trim()).filter(Boolean))]
-    .slice(0, 24)
-    .map((item) => item.slice(0, 180));
+  return normalizeBoundedStringList(source, { maxItems: 24, maxLen: 180 });
 }
 
 function normalizePromptLine(value, fallback = "") {
@@ -832,9 +857,25 @@ function normalizePromptLine(value, fallback = "") {
   return resolved.slice(0, 400);
 }
 
+function normalizeLongPromptBlock(value, fallback = "", maxLen = 8000) {
+  const limit = clamp(Number(maxLen) || 8000, 256, 20_000);
+  const candidate = String(value ?? "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trim();
+  if (candidate) return candidate.slice(0, limit);
+  const fallbackText = String(fallback ?? "")
+    .replace(/\r\n?/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trim();
+  return fallbackText.slice(0, limit);
+}
+
 function normalizePromptLineList(input, fallback = []) {
   const source = Array.isArray(input) ? input : fallback;
-  return [...new Set(source.map((item) => String(item || "").trim()).filter(Boolean))]
-    .slice(0, 40)
-    .map((item) => item.slice(0, 240));
+  return normalizeBoundedStringList(source, { maxItems: 40, maxLen: 240 });
 }

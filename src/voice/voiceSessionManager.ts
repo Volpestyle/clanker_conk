@@ -18,7 +18,11 @@ import {
   getPromptMemoryDisabledLine,
   getPromptMemoryEnabledLine,
   getPromptStyle,
-  getPromptVoiceGuidance
+  getPromptVoiceGuidance,
+  VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
+  VOICE_REPLY_DECIDER_SYSTEM_PROMPT_FULL_DEFAULT,
+  VOICE_REPLY_DECIDER_SYSTEM_PROMPT_STRICT_DEFAULT,
+  VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
 } from "../promptCore.ts";
 import { estimateUsdCost } from "../pricing.ts";
 import { clamp } from "../utils.ts";
@@ -2980,12 +2984,15 @@ export class VoiceSessionManager {
       }
     };
 
-    const wakeVariantHint =
-      [
-        "Treat near-phonetic or misspelled tokens that appear to target the bot name as direct address.",
-        "Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" usually indicate direct address.",
-        "Questions like \"is that you <name-ish-token>?\" usually indicate direct address."
-      ].join(" ");
+    const configuredPrompts = replyDecisionLlm?.prompts;
+    const interpolateBotName = (template, fallback) => {
+      const chosen = String(template || "").trim() || String(fallback || "").trim();
+      return chosen.replace(/\{\{\s*botName\s*\}\}/gi, botName);
+    };
+    const wakeVariantHint = interpolateBotName(
+      configuredPrompts?.wakeVariantHint,
+      VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
+    );
 
     const fullContextPromptParts = [
       `Bot name: ${botName}.`,
@@ -3035,49 +3042,18 @@ export class VoiceSessionManager {
       compactContextPromptParts.push(`Recent turns:\n${recentHistory}`);
     }
 
-    const systemPromptCompact = [
-      `You decide if "${botName}" should reply right now in a live Discord voice chat.`,
-      "Output exactly one token: YES or NO.",
-      `Interpret second-person wording ("you", "your", "show me") as potentially aimed at ${botName} unless another person is explicitly targeted.`,
-      "Prefer YES for direct wake-word mentions and likely ASR variants of the bot name.",
-      "Treat near-phonetic or misspelled tokens that appear to target the bot name as direct address.",
-      "Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" should usually be YES.",
-      "Questions like \"is that you <name-ish-token>?\" should usually be YES.",
-      "Do not use rhyme alone as evidence of direct address.",
-      "Generic chatter such as prank/stank/stinky phrasing without a clear name-like callout should usually be NO.",
-      "Priority rule: when Join window active is yes, treat short greetings/check-ins as targeted at the bot unless another human target is explicit.",
-      "Examples of join-window short greetings/check-ins: hi, hey, hello, yo, hola, what's up, what up, salam, marhaba, ciao, bonjour, こんにちは, مرحبا.",
-      "In join window, a single-token greeting/check-in should usually be YES, not filler.",
-      "When conversation engagement state is engaged and current speaker matches engaged flow, lean YES for coherent follow-ups.",
-      "Prefer YES for clear questions/requests that seem aimed at the bot or the current speaker flow.",
-      "If this sounds like a follow-up from an engaged speaker, lean YES.",
-      "Prefer NO for filler/noise, pure acknowledgements, or turns clearly aimed at another human.",
-      "When uncertain and the utterance is a clear question, prefer YES.",
-      "Never output anything except YES or NO."
-    ].join("\n");
-    const systemPromptFull = [
-      `You classify whether "${botName}" should reply now in Discord voice chat.`,
-      "Output exactly one token: YES or NO.",
-      `Interpret second-person wording ("you", "your", "show me") as potentially aimed at ${botName} unless another person is explicitly targeted.`,
-      "If directly addressed, strongly prefer YES unless transcript is too unclear to answer.",
-      "If not directly addressed, use reply eagerness and flow; prefer NO if interruptive or low value.",
-      "In small conversations, prefer YES for clear questions and active back-and-forth.",
-      "Treat likely ASR wake-word variants of the bot name as direct address when context supports it.",
-      "Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" should usually be YES.",
-      "Questions like \"is that you <name-ish-token>?\" should usually be YES.",
-      "Priority rule: when Join window active is yes, treat short greetings/check-ins as aimed at the bot unless another human target is explicit.",
-      "Examples of join-window short greetings/check-ins: hi, hey, hello, yo, hola, what's up, what up, salam, marhaba, ciao, bonjour, こんにちは, مرحبا.",
-      "In join window, a single-token greeting/check-in should usually be YES, not filler.",
-      "When conversation engagement state is engaged and current speaker matches engaged flow, lean YES for coherent follow-ups.",
-      "Do not treat rhyme-only similarity as wake-word evidence.",
-      "Generic prank/stank/stinky chatter without a clear name-like callout should usually be NO.",
-      "Never output anything except YES or NO."
-    ].join("\n");
-    const systemPromptStrict = [
-      "Binary classifier.",
-      "Output exactly one token: YES or NO.",
-      "No punctuation. No explanation."
-    ].join("\n");
+    const systemPromptCompact = interpolateBotName(
+      configuredPrompts?.systemPromptCompact,
+      VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT
+    );
+    const systemPromptFull = interpolateBotName(
+      configuredPrompts?.systemPromptFull,
+      VOICE_REPLY_DECIDER_SYSTEM_PROMPT_FULL_DEFAULT
+    );
+    const systemPromptStrict = interpolateBotName(
+      configuredPrompts?.systemPromptStrict,
+      VOICE_REPLY_DECIDER_SYSTEM_PROMPT_STRICT_DEFAULT
+    );
 
     const decisionProcedure = [
       {

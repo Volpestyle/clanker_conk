@@ -1,3 +1,5 @@
+import { normalizeBoundedStringList } from "./settings/listNormalization.ts";
+
 const DEFAULT_BOT_NAME = "clanker conk";
 const DEFAULT_STYLE = "playful slang";
 
@@ -15,6 +17,57 @@ const DEFAULT_MEDIA_PROMPT_CRAFT_GUIDANCE = [
   "For video prompts, describe the motion arc: what starts, what changes, and how it ends.",
   "Never put text, words, or UI elements in media prompts."
 ].join(" ");
+export const VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT = [
+  "Treat near-phonetic or misspelled tokens that appear to target the bot name as direct address.",
+  "Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" usually indicate direct address.",
+  "Questions like \"is that you <name-ish-token>?\" usually indicate direct address."
+].join(" ");
+
+export const VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT = [
+  "You decide if \"{{botName}}\" should reply right now in a live Discord voice chat.",
+  "Output exactly one token: YES or NO.",
+  "Interpret second-person wording (\"you\", \"your\", \"show me\") as potentially aimed at {{botName}} unless another person is explicitly targeted.",
+  "Prefer YES for direct wake-word mentions and likely ASR variants of the bot name.",
+  "Treat near-phonetic or misspelled tokens that appear to target the bot name as direct address.",
+  "Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" should usually be YES.",
+  "Questions like \"is that you <name-ish-token>?\" should usually be YES.",
+  "Do not use rhyme alone as evidence of direct address.",
+  "Generic chatter such as prank/stank/stinky phrasing without a clear name-like callout should usually be NO.",
+  "Priority rule: when Join window active is yes, treat short greetings/check-ins as targeted at the bot unless another human target is explicit.",
+  "Examples of join-window short greetings/check-ins: hi, hey, hello, yo, hola, what's up, what up, salam, marhaba, ciao, bonjour, こんにちは, مرحبا.",
+  "In join window, a single-token greeting/check-in should usually be YES, not filler.",
+  "When conversation engagement state is engaged and current speaker matches engaged flow, lean YES for coherent follow-ups.",
+  "Prefer YES for clear questions/requests that seem aimed at the bot or the current speaker flow.",
+  "If this sounds like a follow-up from an engaged speaker, lean YES.",
+  "Prefer NO for filler/noise, pure acknowledgements, or turns clearly aimed at another human.",
+  "When uncertain and the utterance is a clear question, prefer YES.",
+  "Never output anything except YES or NO."
+].join("\n");
+
+export const VOICE_REPLY_DECIDER_SYSTEM_PROMPT_FULL_DEFAULT = [
+  "You classify whether \"{{botName}}\" should reply now in Discord voice chat.",
+  "Output exactly one token: YES or NO.",
+  "Interpret second-person wording (\"you\", \"your\", \"show me\") as potentially aimed at {{botName}} unless another person is explicitly targeted.",
+  "If directly addressed, strongly prefer YES unless transcript is too unclear to answer.",
+  "If not directly addressed, use reply eagerness and flow; prefer NO if interruptive or low value.",
+  "In small conversations, prefer YES for clear questions and active back-and-forth.",
+  "Treat likely ASR wake-word variants of the bot name as direct address when context supports it.",
+  "Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" should usually be YES.",
+  "Questions like \"is that you <name-ish-token>?\" should usually be YES.",
+  "Priority rule: when Join window active is yes, treat short greetings/check-ins as aimed at the bot unless another human target is explicit.",
+  "Examples of join-window short greetings/check-ins: hi, hey, hello, yo, hola, what's up, what up, salam, marhaba, ciao, bonjour, こんにちは, مرحبا.",
+  "In join window, a single-token greeting/check-in should usually be YES, not filler.",
+  "When conversation engagement state is engaged and current speaker matches engaged flow, lean YES for coherent follow-ups.",
+  "Do not treat rhyme-only similarity as wake-word evidence.",
+  "Generic prank/stank/stinky chatter without a clear name-like callout should usually be NO.",
+  "Never output anything except YES or NO."
+].join("\n");
+
+export const VOICE_REPLY_DECIDER_SYSTEM_PROMPT_STRICT_DEFAULT = [
+  "Binary classifier.",
+  "Output exactly one token: YES or NO.",
+  "No punctuation. No explanation."
+].join("\n");
 
 export function getPromptBotName(settings, fallback = DEFAULT_BOT_NAME) {
   const configured = String(settings?.botName || "").trim();
@@ -97,7 +150,8 @@ export function buildVoiceToneGuardrails() {
 
 function normalizePromptLineList(source, fallback = []) {
   const list = Array.isArray(source) ? source : Array.isArray(fallback) ? fallback : [];
-  return list
-    .map((line) => String(line || "").trim())
-    .filter(Boolean);
+  return normalizeBoundedStringList(list, {
+    maxItems: Number.MAX_SAFE_INTEGER,
+    maxLen: Number.MAX_SAFE_INTEGER
+  });
 }
