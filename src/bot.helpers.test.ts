@@ -13,6 +13,7 @@ test("parseStructuredReplyOutput reads structured reply JSON", () => {
       memoryLookupQuery: "favorite games",
       imageLookupQuery: "that dog photo from earlier",
       memoryLine: "user likes roguelikes",
+      selfMemoryLine: "i keep replies concise",
       voiceIntent: {
         intent: "join",
         confidence: 0.92,
@@ -29,6 +30,7 @@ test("parseStructuredReplyOutput reads structured reply JSON", () => {
   assert.equal(parsed.memoryLookupQuery, "favorite games");
   assert.equal(parsed.imageLookupQuery, "that dog photo from earlier");
   assert.equal(parsed.memoryLine, "user likes roguelikes");
+  assert.equal(parsed.selfMemoryLine, "i keep replies concise");
   assert.equal(parsed.automationAction.operation, null);
   assert.equal(parsed.voiceIntent.intent, "join");
   assert.equal(parsed.voiceIntent.confidence, 0.92);
@@ -215,4 +217,10 @@ test("parseReplyDirectives parses trailing soundboard directive", () => {
   const parsed = parseReplyDirectives("say less [[SOUNDBOARD:1234567890@555666777]]");
   assert.equal(parsed.text, "say less");
   assert.equal(parsed.soundboardRef, "1234567890@555666777");
+});
+
+test("parseReplyDirectives parses trailing self memory directive", () => {
+  const parsed = parseReplyDirectives("say less [[SELF_MEMORY_LINE:i stay concise in vc]]");
+  assert.equal(parsed.text, "say less");
+  assert.equal(parsed.selfMemoryLine, "i stay concise in vc");
 });

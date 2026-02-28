@@ -100,7 +100,6 @@ import {
   getInitiativePostingIntervalMs,
   pickInitiativeChannel
 } from "./bot/initiativeSchedule.ts";
-import { isBotNameAddressed } from "./voice/voiceSessionHelpers.ts";
 import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
@@ -986,16 +985,19 @@ export class ClankerBot {
     });
 
     const memoryLine = replyDirective.memoryLine;
+    const selfMemoryLine = replyDirective.selfMemoryLine;
     let memorySaved = false;
+    let selfMemorySaved = false;
     if (settings.memory.enabled && memoryLine) {
       try {
-        memorySaved = await this.memory.rememberLine({
+        memorySaved = await this.memory.rememberDirectiveLine({
           line: memoryLine,
           sourceMessageId: message.id,
           userId: message.author.id,
           guildId: message.guildId,
           channelId: message.channelId,
-          sourceText: message.content
+          sourceText: message.content,
+          scope: "lore"
         });
       } catch (error) {
         this.store.logAction({
@@ -1042,6 +1044,30 @@ export class ClankerBot {
       });
       return false;
     }
+
+    if (settings.memory.enabled && selfMemoryLine) {
+      try {
+        selfMemorySaved = await this.memory.rememberDirectiveLine({
+          line: selfMemoryLine,
+          sourceMessageId: `${message.id}-self`,
+          userId: this.client.user?.id || message.author.id,
+          guildId: message.guildId,
+          channelId: message.channelId,
+          sourceText: finalText,
+          scope: "self"
+        });
+      } catch (error) {
+        this.store.logAction({
+          kind: "bot_error",
+          guildId: message.guildId,
+          channelId: message.channelId,
+          messageId: message.id,
+          userId: this.client.user?.id || null,
+          content: `memory_self_directive: ${String(error?.message || error)}`
+        });
+      }
+    }
+
     mentionResolution = await this.resolveDeterministicMentions({
       text: finalText,
       guild: message.guild,
@@ -1227,8 +1253,12 @@ export class ClankerBot {
           remainingAtPromptTime: gifBudget.remaining
         },
         memory: {
-          requestedByModel: Boolean(memoryLine),
-          saved: memorySaved,
+          requestedByModel: Boolean(memoryLine || selfMemoryLine),
+          saved: Boolean(memorySaved || selfMemorySaved),
+          loreRequestedByModel: Boolean(memoryLine),
+          loreSaved: memorySaved,
+          selfRequestedByModel: Boolean(selfMemoryLine),
+          selfSaved: selfMemorySaved,
           lookupRequested: memoryLookup.requested,
           lookupUsed: memoryLookup.used,
           lookupQuery: memoryLookup.query,
@@ -2839,15 +2869,10 @@ export class ClankerBot {
     return settings.permissions.initiativeChannelIds.includes(id);
   }
 
-  isDirectlyAddressed(settings, message) {
+  isDirectlyAddressed(_settings, message) {
     const mentioned = message.mentions?.users?.has(this.client.user.id);
-    const content = String(message.content || "");
-    const namePing = isBotNameAddressed({
-      transcript: content,
-      botName: settings?.botName || ""
-    });
     const isReplyToBot = message.mentions?.repliedUser?.id === this.client.user.id;
-    return Boolean(mentioned || namePing || isReplyToBot);
+    return Boolean(mentioned || isReplyToBot);
   }
 
   async resolveDeterministicMentions({ text, guild, guildId }) {

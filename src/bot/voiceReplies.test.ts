@@ -91,7 +91,7 @@ function createVoiceBot({
       async ingestMessage(payload) {
         ingests.push(payload);
       },
-      async rememberLine(payload) {
+      async rememberDirectiveLine(payload) {
         remembers.push(payload);
       }
     },
@@ -218,7 +218,8 @@ test("generateVoiceTurnReply returns early for empty transcripts", async () => {
 
 test("generateVoiceTurnReply parses memory and soundboard directives", async () => {
   const { bot, ingests, remembers } = createVoiceBot({
-    generationText: "bet [[SOUNDBOARD:airhorn@123]] [[MEMORY_LINE:likes pizza]]"
+    generationText:
+      "bet [[SOUNDBOARD:airhorn@123]] [[MEMORY_LINE:likes pizza]] [[SELF_MEMORY_LINE:i keep replies concise]]"
   });
   const reply = await generateVoiceTurnReply(bot, {
     settings: baseSettings({
@@ -246,9 +247,12 @@ test("generateVoiceTurnReply parses memory and soundboard directives", async () 
 
   assert.equal(reply.text, "bet");
   assert.equal(reply.soundboardRef, "airhorn@123");
-  assert.equal(ingests.length, 1);
-  assert.equal(remembers.length, 1);
+  assert.equal(ingests.length, 0);
+  assert.equal(remembers.length, 2);
   assert.equal(remembers[0]?.line, "likes pizza");
+  assert.equal(remembers[0]?.scope, "lore");
+  assert.equal(remembers[1]?.line, "i keep replies concise");
+  assert.equal(remembers[1]?.scope, "self");
 });
 
 test("generateVoiceTurnReply drops soundboard directive when soundboard is disabled", async () => {

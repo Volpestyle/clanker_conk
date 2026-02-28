@@ -3,11 +3,14 @@ import path from "node:path";
 
 const DAILY_FILE_PATTERN = /^\d{4}-\d{2}-\d{2}\.md$/;
 const LORE_SUBJECT = "__lore__";
+const SELF_SUBJECT = "__self__";
 const FACT_TYPE_LABELS = {
   preference: "Preference",
   profile: "Profile",
   relationship: "Relationship",
-  project: "Project"
+  project: "Project",
+  lore: "Lore",
+  self: "Self"
 };
 const ALLOWED_FACT_TYPES = new Set(["preference", "profile", "relationship", "project", "other", "general"]);
 const MAX_FACTS_PER_MESSAGE = 4;
@@ -16,6 +19,7 @@ const HYBRID_CANDIDATE_MULTIPLIER = 6;
 const HYBRID_MAX_CANDIDATES = 90;
 const HYBRID_MAX_VECTOR_BACKFILL_PER_QUERY = 8;
 const SUBJECT_LORE = LORE_SUBJECT;
+const SUBJECT_SELF = SELF_SUBJECT;
 export class MemoryManager {
   store;
   llm;
@@ -285,7 +289,7 @@ export class MemoryManager {
       limit: 8
     });
     const relevantFacts = await this.selectHybridFacts({
-      subjects: [userId, SUBJECT_LORE],
+      subjects: [userId, SUBJECT_SELF, SUBJECT_LORE],
       guildId: scopeGuildId,
       channelId,
       queryText,
@@ -578,6 +582,7 @@ export class MemoryManager {
 
   async refreshMemoryMarkdown() {
     const peopleSection = this.buildPeopleSection();
+    const selfSection = this.buildSelfSection(6);
     const recentDailyEntries = await this.getRecentDailyEntries({ days: 3, maxEntries: 120 });
     const highlightsSection = buildHighlightsSection(recentDailyEntries, 24);
     const loreSection = this.buildLoreSection(6);
@@ -593,6 +598,9 @@ export class MemoryManager {
       "",
       "## People (Durable Facts)",
       ...(peopleSection.length ? peopleSection : ["- (No stable people facts yet.)"]),
+      "",
+      "## Bot Self Memory",
+      ...(selfSection.length ? selfSection : ["- (No durable self-memory lines yet.)"]),
       "",
       "## Ongoing Lore",
       ...(loreSection.length ? loreSection : ["- (No durable lore lines yet.)"]),
@@ -622,7 +630,7 @@ export class MemoryManager {
     const peopleLines = [];
 
     for (const subjectRow of subjects) {
-      if (subjectRow.subject === LORE_SUBJECT) continue;
+      if (subjectRow.subject === LORE_SUBJECT || subjectRow.subject === SELF_SUBJECT) continue;
       const rows = this.store.getFactsForSubjectScoped(subjectRow.subject, 6, {
         guildId: subjectRow.guild_id
       });
@@ -641,6 +649,22 @@ export class MemoryManager {
     return peopleLines;
   }
 
+  buildSelfSection(maxItems = 6) {
+    const rows = this.store.getFactsForSubjectScoped(SELF_SUBJECT, 32, null);
+    const durableSelfLines = [];
+    const seen = new Set();
+    for (const row of rows) {
+      const normalized = normalizeSelfFactForDisplay(row.fact);
+      if (!normalized) continue;
+      const key = `${row.guild_id || ""}:${normalized.toLowerCase()}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const scopeLabel = row.guild_id ? `[guild:${row.guild_id}] ` : "";
+      durableSelfLines.push(`- ${scopeLabel}${normalized}`);
+    }
+    return durableSelfLines.slice(0, Math.max(1, maxItems));
+  }
+
   buildLoreSection(maxItems = 6) {
     const rows = this.store.getFactsForSubjectScoped(LORE_SUBJECT, 32, null);
     const durableLoreLines = [];
@@ -657,22 +681,31 @@ export class MemoryManager {
     return durableLoreLines.slice(0, Math.max(1, maxItems));
   }
 
-  async rememberLine({ line, sourceMessageId, userId, guildId, channelId = null, sourceText = "" }) {
+  async rememberDirectiveLine({
+    line,
+    sourceMessageId,
+    userId,
+    guildId,
+    channelId = null,
+    sourceText = "",
+    scope = "lore"
+  }) {
     const scopeGuildId = String(guildId || "").trim();
     if (!scopeGuildId) return false;
 
+    const scopeConfig = resolveDirectiveScopeConfig(scope);
     const cleaned = normalizeMemoryLineInput(line);
     if (!cleaned) return false;
     if (isInstructionLikeFactText(cleaned)) return false;
     if (!isTextGroundedInSource(cleaned, sourceText)) return false;
 
-    const factText = `Memory line: ${cleaned}.`;
+    const factText = `${scopeConfig.prefix}: ${cleaned}.`;
     const inserted = this.store.addMemoryFact({
       guildId: scopeGuildId,
       channelId: channelId ? String(channelId) : null,
-      subject: LORE_SUBJECT,
+      subject: scopeConfig.subject,
       fact: factText,
-      factType: "lore",
+      factType: scopeConfig.factType,
       evidenceText: normalizeEvidenceText(sourceText, sourceText),
       sourceMessageId,
       confidence: 0.72
@@ -688,18 +721,18 @@ export class MemoryManager {
     });
     this.store.archiveOldFactsForSubject({
       guildId: scopeGuildId,
-      subject: LORE_SUBJECT,
-      keep: 120
+      subject: scopeConfig.subject,
+      keep: scopeConfig.keep
     });
 
-    const factRow = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, LORE_SUBJECT, factText);
+    const factRow = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, scopeConfig.subject, factText);
     if (factRow) {
       this.ensureFactVector({
         factRow,
         settings: null,
         trace: {
           userId,
-          source: "memory_lore_ingest"
+          source: scopeConfig.traceSource
         }
       }).catch(() => undefined);
     }
@@ -1007,6 +1040,47 @@ function normalizeLoreFactForDisplay(rawFact) {
   }
 
   return cleanFactForMemory(text);
+}
+
+function normalizeSelfFactForDisplay(rawFact) {
+  let text = String(rawFact || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+
+  text = text
+    .replace(/^bot memory:\s*/i, "self memory: ")
+    .replace(/^identity memory:\s*/i, "self memory: ");
+
+  if (!/^self memory:\s*/i.test(text)) {
+    text = `Self memory: ${text}`;
+  }
+
+  return cleanFactForMemory(text);
+}
+
+function resolveDirectiveScopeConfig(scope) {
+  const normalizedScope = String(scope || "lore")
+    .trim()
+    .toLowerCase();
+
+  if (normalizedScope === "self") {
+    return {
+      subject: SELF_SUBJECT,
+      prefix: "Self memory",
+      factType: "self",
+      keep: 120,
+      traceSource: "memory_self_ingest"
+    };
+  }
+
+  return {
+    subject: LORE_SUBJECT,
+    prefix: "Memory line",
+    factType: "lore",
+    keep: 120,
+    traceSource: "memory_lore_ingest"
+  };
 }
 
 function normalizeMemoryLineInput(input) {

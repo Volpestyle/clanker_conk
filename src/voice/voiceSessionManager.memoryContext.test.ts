@@ -185,8 +185,10 @@ test("countHumanVoiceParticipants uses channel members and guild fallback paths"
 });
 
 test("buildVoiceDecisionMemoryContext returns formatted hints and logs failures", async () => {
+  let decisionMemoryCall = null;
   const successMemory = {
-    async buildPromptMemorySlice() {
+    async buildPromptMemorySlice(payload) {
+      decisionMemoryCall = payload;
       return {
         userFacts: [
           {
@@ -217,6 +219,7 @@ test("buildVoiceDecisionMemoryContext returns formatted hints and logs failures"
   });
   assert.equal(typeof ctx, "string");
   assert.equal(ctx.length > 0, true);
+  assert.equal(String(decisionMemoryCall?.channelId || ""), "chan-1");
 
   const failing = createManager({
     memory: {
@@ -240,12 +243,9 @@ test("buildVoiceDecisionMemoryContext returns formatted hints and logs failures"
   assert.equal(failing.logs.some((entry) => String(entry.content).includes("voice_reply_decision_memory_failed")), true);
 });
 
-test("buildOpenAiRealtimeMemorySlice handles ingest/build errors safely", async () => {
+test("buildOpenAiRealtimeMemorySlice handles build errors safely", async () => {
   const { manager, logs } = createManager({
     memory: {
-      async ingestMessage() {
-        throw new Error("ingest failed");
-      },
       async buildPromptMemorySlice() {
         throw new Error("slice failed");
       }
@@ -269,6 +269,5 @@ test("buildOpenAiRealtimeMemorySlice handles ingest/build errors safely", async 
     userFacts: [],
     relevantFacts: []
   });
-  assert.equal(logs.some((entry) => String(entry.content).includes("voice_realtime_memory_ingest_failed")), true);
   assert.equal(logs.some((entry) => String(entry.content).includes("voice_realtime_memory_slice_failed")), true);
 });
