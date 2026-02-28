@@ -6,3 +6,4 @@ dashboard/dist/
 npm-debug.log*
 .DS_Store
 memory/*.md
+*.tsbuildinfo

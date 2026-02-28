@@ -1,3 +1,5 @@
+import { defaultModelForLlmProvider, normalizeLlmProvider } from "../llm/llmHelpers.ts";
+
 const VOICE_LOW_SIGNAL_MIN_ALNUM_CHARS = 10;
 const VOICE_LOW_SIGNAL_MIN_WORDS = 2;
 const LOW_SIGNAL_LLM_MIN_TOKEN_LEN = 5;
@@ -52,20 +54,11 @@ export function shouldUseLlmForLowSignalTurn(transcript = "") {
 }
 
 export function normalizeVoiceReplyDecisionProvider(value) {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "anthropic") return "anthropic";
-  if (normalized === "xai") return "xai";
-  if (normalized === "claude-code") return "claude-code";
-  return "openai";
+  return normalizeLlmProvider(value);
 }
 
 export function defaultVoiceReplyDecisionModel(provider) {
-  if (provider === "anthropic") return "claude-haiku-4-5";
-  if (provider === "xai") return "grok-3-mini-latest";
-  if (provider === "claude-code") return "sonnet";
-  return "gpt-4.1-mini";
+  return defaultModelForLlmProvider(provider);
 }
 
 export function resolveRealtimeTurnTranscriptionPlan({

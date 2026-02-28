@@ -1,4 +1,5 @@
 import { DEFAULT_SETTINGS, PROVIDER_MODEL_FALLBACKS } from "../../src/settings/settingsSchema.ts";
+import { normalizeLlmProvider } from "../../src/llm/llmHelpers.ts";
 
 export const CUSTOM_MODEL_OPTION_VALUE = "__custom_model__";
 
@@ -34,24 +35,24 @@ export function settingsToForm(settings) {
   const defaultStartup = defaults.startup;
   const defaultInitiative = defaults.initiative;
   const defaultDiscovery = defaults.initiative.discovery;
-  const activity = settings?.activity || {};
+  const activity = settings?.activity ?? {};
   const selectedVoiceMode = settings?.voice?.mode ?? defaultVoice.mode;
   return {
-    botName: settings?.botName || defaults.botName,
-    personaFlavor: settings?.persona?.flavor || defaults.persona.flavor,
+    botName: settings?.botName ?? defaults.botName,
+    personaFlavor: settings?.persona?.flavor ?? defaults.persona.flavor,
     personaHardLimits: formatList(settings?.persona?.hardLimits),
-    promptCapabilityHonestyLine: settings?.prompt?.capabilityHonestyLine || defaultPrompt.capabilityHonestyLine,
+    promptCapabilityHonestyLine: settings?.prompt?.capabilityHonestyLine ?? defaultPrompt.capabilityHonestyLine,
     promptImpossibleActionLine:
-      settings?.prompt?.impossibleActionLine || defaultPrompt.impossibleActionLine,
+      settings?.prompt?.impossibleActionLine ?? defaultPrompt.impossibleActionLine,
     promptMemoryEnabledLine:
-      settings?.prompt?.memoryEnabledLine || defaultPrompt.memoryEnabledLine,
+      settings?.prompt?.memoryEnabledLine ?? defaultPrompt.memoryEnabledLine,
     promptMemoryDisabledLine:
-      settings?.prompt?.memoryDisabledLine || defaultPrompt.memoryDisabledLine,
-    promptSkipLine: settings?.prompt?.skipLine || defaultPrompt.skipLine,
+      settings?.prompt?.memoryDisabledLine ?? defaultPrompt.memoryDisabledLine,
+    promptSkipLine: settings?.prompt?.skipLine ?? defaultPrompt.skipLine,
     promptTextGuidance: formatList(settings?.prompt?.textGuidance),
     promptVoiceGuidance: formatList(settings?.prompt?.voiceGuidance),
     promptVoiceOperationalGuidance: formatList(settings?.prompt?.voiceOperationalGuidance),
-    promptMediaPromptCraftGuidance: settings?.prompt?.mediaPromptCraftGuidance || defaultPrompt.mediaPromptCraftGuidance,
+    promptMediaPromptCraftGuidance: settings?.prompt?.mediaPromptCraftGuidance ?? defaultPrompt.mediaPromptCraftGuidance,
     replyLevelInitiative: activity.replyLevelInitiative ?? defaultActivity.replyLevelInitiative,
     replyLevelNonInitiative: activity.replyLevelNonInitiative ?? defaultActivity.replyLevelNonInitiative,
     reactionLevel: activity.reactionLevel ?? defaultActivity.reactionLevel,
@@ -371,7 +372,7 @@ export function formToSettingsPatch(form) {
 }
 
 export function resolveProviderModelOptions(modelCatalog, provider) {
-  const key = normalizeProviderKey(provider);
+  const key = normalizeLlmProvider(provider);
   const fromCatalog = Array.isArray(modelCatalog?.[key]) ? modelCatalog[key] : [];
   const fallback = PROVIDER_MODEL_FALLBACKS[key] || [];
   return [...new Set([...fromCatalog, ...fallback].map((item) => String(item || "").trim()).filter(Boolean))];
@@ -379,7 +380,7 @@ export function resolveProviderModelOptions(modelCatalog, provider) {
 
 export function resolvePresetModelSelection({ modelCatalog, provider, model }) {
   const options = resolveProviderModelOptions(modelCatalog, provider);
-  const isClaudeCodeProvider = String(provider || "").trim() === "claude-code";
+  const isClaudeCodeProvider = normalizeLlmProvider(provider) === "claude-code";
   const normalizedModel = String(model || "").trim();
   const selectedPresetModel = options.includes(normalizedModel)
     ? normalizedModel
@@ -392,14 +393,4 @@ export function resolvePresetModelSelection({ modelCatalog, provider, model }) {
     isClaudeCodeProvider,
     selectedPresetModel
   };
-}
-
-function normalizeProviderKey(provider) {
-  const normalized = String(provider || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "anthropic") return "anthropic";
-  if (normalized === "xai") return "xai";
-  if (normalized === "claude-code") return "claude-code";
-  return "openai";
 }

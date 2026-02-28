@@ -204,6 +204,34 @@ test("reply decider keeps focused speaker followup window for longer turns", asy
   assert.equal(callCount, 0);
 });
 
+test("reply decider allows same-speaker followup after recent bot reply when focus window is stale", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      return { text: "NO" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      botTurnOpen: false,
+      focusedSpeakerUserId: "speaker-1",
+      focusedSpeakerAt: Date.now() - 60_000,
+      lastAudioDeltaAt: Date.now() - 4_000
+    },
+    userId: "speaker-1",
+    settings: baseSettings(),
+    transcript: "show them you man"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "bot_recent_reply_followup");
+  assert.equal(callCount, 0);
+});
+
 test("smoke: focused speaker followup defers to llm when turn vocatively targets another participant", async () => {
   let callCount = 0;
   const manager = createManager({

@@ -768,6 +768,8 @@ export function buildVoiceTurnPrompt({
   relevantFacts = [],
   isEagerTurn = false,
   voiceEagerness = 0,
+  conversationContext = null,
+  botName = "the bot",
   soundboardCandidates = [],
   memoryEnabled = false,
   webSearch = null,
@@ -784,8 +786,35 @@ export function buildVoiceTurnPrompt({
     .map((line) => String(line || "").trim())
     .filter(Boolean)
     .slice(0, 40);
+  const normalizedBotName = String(botName || "the bot").trim() || "the bot";
+  const normalizedConversationContext =
+    conversationContext && typeof conversationContext === "object" ? conversationContext : null;
 
   parts.push(`Incoming live voice transcript from ${speaker}: ${text || "(empty)"}`);
+  parts.push(
+    `Interpret second-person references like \"you\"/\"your\" as likely referring to ${normalizedBotName} unless another human target is explicit.`
+  );
+
+  if (normalizedConversationContext) {
+    parts.push(
+      [
+        "Conversation attention context:",
+        `- State: ${String(normalizedConversationContext.engagementState || "wake_word_biased")}`,
+        `- Engaged with current speaker: ${normalizedConversationContext.engagedWithCurrentSpeaker ? "yes" : "no"}`,
+        `- Current speaker matches focused speaker: ${normalizedConversationContext.sameAsFocusedSpeaker ? "yes" : "no"}`,
+        `- Recent bot reply ms ago: ${
+          Number.isFinite(normalizedConversationContext.msSinceAssistantReply)
+            ? Math.round(normalizedConversationContext.msSinceAssistantReply)
+            : "none"
+        }`,
+        `- Recent direct address ms ago: ${
+          Number.isFinite(normalizedConversationContext.msSinceDirectAddress)
+            ? Math.round(normalizedConversationContext.msSinceDirectAddress)
+            : "none"
+        }`
+      ].join("\n")
+    );
+  }
 
   if (userFacts?.length) {
     parts.push("Known facts about this user:");
@@ -856,6 +885,9 @@ export function buildVoiceTurnPrompt({
     const eagerness = Math.max(0, Math.min(100, Number(voiceEagerness) || 0));
     parts.push(`You were NOT directly addressed. You're considering whether to chime in.`);
     parts.push(`Voice reply eagerness: ${eagerness}/100.`);
+    if (normalizedConversationContext?.engagedWithCurrentSpeaker) {
+      parts.push("You are actively in this speaker's thread. Lean toward a short helpful reply over [SKIP].");
+    }
     parts.push("Only speak up if you can genuinely add value. If not, output exactly [SKIP].");
 
     parts.push(...voiceToneGuardrails);

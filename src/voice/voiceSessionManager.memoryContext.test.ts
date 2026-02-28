@@ -108,6 +108,15 @@ test("updateFocusedSpeakerWindow sets, preserves, and expires focused speaker", 
   });
   assert.equal(session.focusedSpeakerUserId, "user-1");
 
+  manager.updateFocusedSpeakerWindow({
+    session,
+    userId: "user-2",
+    allow: true,
+    directAddressed: false,
+    reason: "llm_yes"
+  });
+  assert.equal(session.focusedSpeakerUserId, "user-2");
+
   session.focusedSpeakerAt = Date.now() - 50_000;
   manager.updateFocusedSpeakerWindow({
     session,

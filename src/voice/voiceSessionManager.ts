@@ -244,6 +244,15 @@ export class VoiceSessionManager {
               since: session.focusedSpeakerAt ? new Date(session.focusedSpeakerAt).toISOString() : null
             }
           : null,
+        conversation: {
+          lastAssistantReplyAt: session.lastAssistantReplyAt
+            ? new Date(session.lastAssistantReplyAt).toISOString()
+            : null,
+          lastDirectAddressAt: session.lastDirectAddressAt
+            ? new Date(session.lastDirectAddressAt).toISOString()
+            : null,
+          lastDirectAddressUserId: session.lastDirectAddressUserId || null
+        },
         participants: participants.map((p) => ({ userId: p.userId, displayName: p.displayName })),
         participantCount: participants.length,
         voiceLookupBusyCount: Number(session.voiceLookupBusyCount || 0),
@@ -1363,6 +1372,7 @@ export class VoiceSessionManager {
 
     if (!session.botTurnOpen) {
       session.botTurnOpen = true;
+      session.lastAssistantReplyAt = now;
       this.store.logAction({
         kind: "voice_turn_out",
         guildId: session.guildId,
@@ -2367,6 +2377,16 @@ export class VoiceSessionManager {
         llmResponse: decision.llmResponse || null,
         llmProvider: decision.llmProvider || null,
         llmModel: decision.llmModel || null,
+        conversationState: decision.conversationContext?.engagementState || null,
+        conversationEngaged: Boolean(decision.conversationContext?.engaged),
+        engagedWithCurrentSpeaker: Boolean(decision.conversationContext?.engagedWithCurrentSpeaker),
+        recentAssistantReply: Boolean(decision.conversationContext?.recentAssistantReply),
+        msSinceAssistantReply: Number.isFinite(decision.conversationContext?.msSinceAssistantReply)
+          ? Math.round(decision.conversationContext.msSinceAssistantReply)
+          : null,
+        msSinceDirectAddress: Number.isFinite(decision.conversationContext?.msSinceDirectAddress)
+          ? Math.round(decision.conversationContext.msSinceDirectAddress)
+          : null,
         error: decision.error || null
       }
     });
@@ -2405,6 +2425,7 @@ export class VoiceSessionManager {
       userId,
       transcript: turnTranscript,
       directAddressed: Boolean(decision.directAddressed),
+      conversationContext: decision.conversationContext || null,
       source: "realtime"
     });
   }
@@ -2533,6 +2554,16 @@ export class VoiceSessionManager {
         llmResponse: decision.llmResponse || null,
         llmProvider: decision.llmProvider || null,
         llmModel: decision.llmModel || null,
+        conversationState: decision.conversationContext?.engagementState || null,
+        conversationEngaged: Boolean(decision.conversationContext?.engaged),
+        engagedWithCurrentSpeaker: Boolean(decision.conversationContext?.engagedWithCurrentSpeaker),
+        recentAssistantReply: Boolean(decision.conversationContext?.recentAssistantReply),
+        msSinceAssistantReply: Number.isFinite(decision.conversationContext?.msSinceAssistantReply)
+          ? Math.round(decision.conversationContext.msSinceAssistantReply)
+          : null,
+        msSinceDirectAddress: Number.isFinite(decision.conversationContext?.msSinceDirectAddress)
+          ? Math.round(decision.conversationContext.msSinceDirectAddress)
+          : null,
         error: decision.error || null
       }
     });
@@ -2557,7 +2588,8 @@ export class VoiceSessionManager {
         settings,
         userId: latestTurn?.userId || null,
         transcript: coalescedTranscript,
-        directAddressed: Boolean(decision.directAddressed)
+        directAddressed: Boolean(decision.directAddressed),
+        conversationContext: decision.conversationContext || null
       });
       return;
     }
@@ -2582,6 +2614,7 @@ export class VoiceSessionManager {
       userId: latestTurn?.userId || null,
       transcript: coalescedTranscript,
       directAddressed: Boolean(decision.directAddressed),
+      conversationContext: decision.conversationContext || null,
       source: "bot_turn_open_deferred_flush"
     });
   }
@@ -2673,6 +2706,66 @@ export class VoiceSessionManager {
       });
   }
 
+  buildVoiceConversationContext({
+    session = null,
+    userId = null,
+    directAddressed = false,
+    addressedToOtherParticipant = false,
+    now = Date.now()
+  } = {}) {
+    const normalizedUserId = String(userId || "").trim();
+    const focusedSpeakerUserId = String(session?.focusedSpeakerUserId || "").trim();
+    const sameAsFocusedSpeaker =
+      Boolean(normalizedUserId) &&
+      Boolean(focusedSpeakerUserId) &&
+      normalizedUserId === focusedSpeakerUserId;
+    const focusedSpeakerAt = Number(session?.focusedSpeakerAt || 0);
+    const msSinceFocusedSpeaker = focusedSpeakerAt > 0 ? Math.max(0, now - focusedSpeakerAt) : null;
+    const focusedSpeakerFresh =
+      sameAsFocusedSpeaker &&
+      Number.isFinite(msSinceFocusedSpeaker) &&
+      msSinceFocusedSpeaker <= FOCUSED_SPEAKER_CONTINUATION_MS;
+
+    const lastAudioDeltaAt = Number(session?.lastAudioDeltaAt || 0);
+    const msSinceAssistantReply = lastAudioDeltaAt > 0 ? Math.max(0, now - lastAudioDeltaAt) : null;
+    const recentAssistantReply =
+      Number.isFinite(msSinceAssistantReply) &&
+      msSinceAssistantReply <= FOCUSED_SPEAKER_CONTINUATION_MS;
+
+    const lastDirectAddressUserId = String(session?.lastDirectAddressUserId || "").trim();
+    const sameAsRecentDirectAddress =
+      Boolean(normalizedUserId) &&
+      Boolean(lastDirectAddressUserId) &&
+      normalizedUserId === lastDirectAddressUserId;
+    const lastDirectAddressAt = Number(session?.lastDirectAddressAt || 0);
+    const msSinceDirectAddress = lastDirectAddressAt > 0 ? Math.max(0, now - lastDirectAddressAt) : null;
+    const recentDirectAddress =
+      Number.isFinite(msSinceDirectAddress) &&
+      msSinceDirectAddress <= FOCUSED_SPEAKER_CONTINUATION_MS;
+
+    const engagedWithCurrentSpeaker =
+      Boolean(directAddressed) ||
+      focusedSpeakerFresh ||
+      (recentAssistantReply && sameAsFocusedSpeaker) ||
+      (recentDirectAddress && sameAsRecentDirectAddress);
+    const engaged =
+      !addressedToOtherParticipant &&
+      (engagedWithCurrentSpeaker || recentAssistantReply || recentDirectAddress);
+
+    return {
+      engagementState: engaged ? "engaged" : "wake_word_biased",
+      engaged,
+      engagedWithCurrentSpeaker,
+      recentAssistantReply,
+      recentDirectAddress,
+      sameAsFocusedSpeaker,
+      sameAsRecentDirectAddress,
+      msSinceAssistantReply: Number.isFinite(msSinceAssistantReply) ? msSinceAssistantReply : null,
+      msSinceDirectAddress: Number.isFinite(msSinceDirectAddress) ? msSinceDirectAddress : null,
+      msSinceFocusedSpeaker: Number.isFinite(msSinceFocusedSpeaker) ? msSinceFocusedSpeaker : null
+    };
+  }
+
   async evaluateVoiceReplyDecision({ session, settings, userId, transcript, source: _source = "stt_pipeline" }) {
     const normalizedTranscript = normalizeVoiceText(transcript, VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS);
     const normalizedUserId = String(userId || "").trim();
@@ -2699,6 +2792,15 @@ export class VoiceSessionManager {
     const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
     const directAddressed = directAddressedByName;
     const replyEagerness = clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
+    const conversationContext = this.buildVoiceConversationContext({
+      session,
+      userId: normalizedUserId,
+      directAddressed,
+      addressedToOtherParticipant,
+      now
+    });
+    const formatAgeMs = (value) =>
+      Number.isFinite(value) ? String(Math.max(0, Math.round(value))) : "none";
 
     if (!normalizedTranscript) {
       return {
@@ -2706,7 +2808,8 @@ export class VoiceSessionManager {
         reason: "missing_transcript",
         participantCount,
         directAddressed,
-        transcript: ""
+        transcript: "",
+        conversationContext
       };
     }
 
@@ -2716,7 +2819,8 @@ export class VoiceSessionManager {
         reason: "bot_turn_open",
         participantCount,
         directAddressed,
-        transcript: normalizedTranscript
+        transcript: normalizedTranscript,
+        conversationContext
       };
     }
 
@@ -2732,7 +2836,8 @@ export class VoiceSessionManager {
           reason: "direct_address_wake_ping",
           participantCount,
           directAddressed,
-          transcript: normalizedTranscript
+          transcript: normalizedTranscript,
+          conversationContext
         };
       }
       if (!lowSignalLlmEligible) {
@@ -2741,7 +2846,8 @@ export class VoiceSessionManager {
           reason: "low_signal_fragment",
           participantCount,
           directAddressed,
-          transcript: normalizedTranscript
+          transcript: normalizedTranscript,
+          conversationContext
         };
       }
     }
@@ -2762,7 +2868,25 @@ export class VoiceSessionManager {
         reason: "focused_speaker_followup",
         participantCount,
         directAddressed,
-        transcript: normalizedTranscript
+        transcript: normalizedTranscript,
+        conversationContext
+      };
+    }
+
+    const botRecentReplyFollowup =
+      !directAddressed &&
+      !addressedToOtherParticipant &&
+      !lowSignalFragment &&
+      Boolean(conversationContext.recentAssistantReply) &&
+      Boolean(conversationContext.sameAsFocusedSpeaker);
+    if (botRecentReplyFollowup) {
+      return {
+        allow: true,
+        reason: "bot_recent_reply_followup",
+        participantCount,
+        directAddressed,
+        transcript: normalizedTranscript,
+        conversationContext
       };
     }
 
@@ -2772,7 +2896,8 @@ export class VoiceSessionManager {
         reason: "direct_address_fast_path",
         participantCount,
         directAddressed,
-        transcript: normalizedTranscript
+        transcript: normalizedTranscript,
+        conversationContext
       };
     }
 
@@ -2782,7 +2907,8 @@ export class VoiceSessionManager {
         reason: "eagerness_disabled_without_direct_address",
         participantCount,
         directAddressed,
-        transcript: normalizedTranscript
+        transcript: normalizedTranscript,
+        conversationContext
       };
     }
 
@@ -2817,7 +2943,8 @@ export class VoiceSessionManager {
         directAddressed,
         transcript: normalizedTranscript,
         llmProvider,
-        llmModel
+        llmModel,
+        conversationContext
       };
     }
 
@@ -2829,7 +2956,8 @@ export class VoiceSessionManager {
         directAddressed,
         transcript: normalizedTranscript,
         llmProvider,
-        llmModel
+        llmModel,
+        conversationContext
       };
     }
 
@@ -2861,11 +2989,18 @@ export class VoiceSessionManager {
 
     const fullContextPromptParts = [
       `Bot name: ${botName}.`,
+      `Second-person references in this transcript ("you", "your") default to ${botName} (YOU) unless another human target is explicit.`,
       `Reply eagerness: ${replyEagerness}/100.`,
       `Human participants in channel: ${participantCount}.`,
       `Current speaker: ${speakerName}.`,
       `Join window active: ${joinWindowActive ? "yes" : "no"}.`,
       `Join window age ms: ${joinWindowAgeMs}.`,
+      `Conversation engagement state: ${conversationContext.engagementState}.`,
+      `Engaged with current speaker: ${conversationContext.engagedWithCurrentSpeaker ? "yes" : "no"}.`,
+      `Current speaker matches focused speaker: ${conversationContext.sameAsFocusedSpeaker ? "yes" : "no"}.`,
+      `Current speaker matches last direct-address speaker: ${conversationContext.sameAsRecentDirectAddress ? "yes" : "no"}.`,
+      `Recent bot reply ms ago: ${formatAgeMs(conversationContext.msSinceAssistantReply)}.`,
+      `Recent direct address ms ago: ${formatAgeMs(conversationContext.msSinceDirectAddress)}.`,
       `Directly addressed: ${directAddressed ? "yes" : "no"}.`,
       `Likely aimed at another participant: ${addressedToOtherParticipant ? "yes" : "no"}.`,
       `Latest transcript: "${normalizedTranscript}".`,
@@ -2882,6 +3017,10 @@ export class VoiceSessionManager {
       `Bot name: ${botName}.`,
       `Current speaker: ${speakerName}.`,
       `Join window active: ${joinWindowActive ? "yes" : "no"}.`,
+      `Conversation engagement state: ${conversationContext.engagementState}.`,
+      `Engaged with current speaker: ${conversationContext.engagedWithCurrentSpeaker ? "yes" : "no"}.`,
+      `Current speaker matches focused speaker: ${conversationContext.sameAsFocusedSpeaker ? "yes" : "no"}.`,
+      `Recent bot reply ms ago: ${formatAgeMs(conversationContext.msSinceAssistantReply)}.`,
       `Directly addressed: ${directAddressed ? "yes" : "no"}.`,
       `Likely aimed at another participant: ${addressedToOtherParticipant ? "yes" : "no"}.`,
       `Reply eagerness: ${replyEagerness}/100.`,
@@ -2899,6 +3038,7 @@ export class VoiceSessionManager {
     const systemPromptCompact = [
       `You decide if "${botName}" should reply right now in a live Discord voice chat.`,
       "Output exactly one token: YES or NO.",
+      `Interpret second-person wording ("you", "your", "show me") as potentially aimed at ${botName} unless another person is explicitly targeted.`,
       "Prefer YES for direct wake-word mentions and likely ASR variants of the bot name.",
       "Treat near-phonetic or misspelled tokens that appear to target the bot name as direct address.",
       "Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" should usually be YES.",
@@ -2908,6 +3048,7 @@ export class VoiceSessionManager {
       "Priority rule: when Join window active is yes, treat short greetings/check-ins as targeted at the bot unless another human target is explicit.",
       "Examples of join-window short greetings/check-ins: hi, hey, hello, yo, hola, what's up, what up, salam, marhaba, ciao, bonjour, こんにちは, مرحبا.",
       "In join window, a single-token greeting/check-in should usually be YES, not filler.",
+      "When conversation engagement state is engaged and current speaker matches engaged flow, lean YES for coherent follow-ups.",
       "Prefer YES for clear questions/requests that seem aimed at the bot or the current speaker flow.",
       "If this sounds like a follow-up from an engaged speaker, lean YES.",
       "Prefer NO for filler/noise, pure acknowledgements, or turns clearly aimed at another human.",
@@ -2917,6 +3058,7 @@ export class VoiceSessionManager {
     const systemPromptFull = [
       `You classify whether "${botName}" should reply now in Discord voice chat.`,
       "Output exactly one token: YES or NO.",
+      `Interpret second-person wording ("you", "your", "show me") as potentially aimed at ${botName} unless another person is explicitly targeted.`,
       "If directly addressed, strongly prefer YES unless transcript is too unclear to answer.",
       "If not directly addressed, use reply eagerness and flow; prefer NO if interruptive or low value.",
       "In small conversations, prefer YES for clear questions and active back-and-forth.",
@@ -2926,6 +3068,7 @@ export class VoiceSessionManager {
       "Priority rule: when Join window active is yes, treat short greetings/check-ins as aimed at the bot unless another human target is explicit.",
       "Examples of join-window short greetings/check-ins: hi, hey, hello, yo, hola, what's up, what up, salam, marhaba, ciao, bonjour, こんにちは, مرحبا.",
       "In join window, a single-token greeting/check-in should usually be YES, not filler.",
+      "When conversation engagement state is engaged and current speaker matches engaged flow, lean YES for coherent follow-ups.",
       "Do not treat rhyme-only similarity as wake-word evidence.",
       "Generic prank/stank/stinky chatter without a clear name-like callout should usually be NO.",
       "Never output anything except YES or NO."
@@ -2955,6 +3098,7 @@ export class VoiceSessionManager {
         systemPrompt: systemPromptStrict,
         userPrompt:
           `Join window active: ${joinWindowActive ? "yes" : "no"}.\n` +
+          `Conversation engagement state: ${conversationContext.engagementState}.\n` +
           `Directly addressed: ${directAddressed ? "yes" : "no"}.\n` +
           `Transcript: "${normalizedTranscript}".`
       }
@@ -3006,7 +3150,8 @@ export class VoiceSessionManager {
             transcript: normalizedTranscript,
             llmResponse: raw,
             llmProvider: resolvedProvider,
-            llmModel: resolvedModel
+            llmModel: resolvedModel,
+            conversationContext
           };
         }
 
@@ -3032,7 +3177,8 @@ export class VoiceSessionManager {
         transcript: normalizedTranscript,
         llmProvider,
         llmModel,
-        error: generationErrors.map((row) => `${row.step}: ${row.error}`).join(" | ")
+        error: generationErrors.map((row) => `${row.step}: ${row.error}`).join(" | "),
+        conversationContext
       };
     }
 
@@ -3047,7 +3193,8 @@ export class VoiceSessionManager {
       llmModel,
       error: generationErrors.length
         ? generationErrors.map((row) => `${row.step}: ${row.error}`).join(" | ")
-        : undefined
+        : undefined,
+      conversationContext
     };
   }
 
@@ -3131,15 +3278,26 @@ export class VoiceSessionManager {
     if (!normalizedUserId) return;
 
     const now = Date.now();
+    const normalizedReason = String(reason || "").trim().toLowerCase();
+    if (Boolean(directAddressed)) {
+      session.lastDirectAddressAt = now;
+      session.lastDirectAddressUserId = normalizedUserId;
+    }
     if (
       Boolean(allow) &&
-      (Boolean(directAddressed) || String(reason || "") === "focused_speaker_followup")
+      (
+        Boolean(directAddressed) ||
+        normalizedReason === "focused_speaker_followup" ||
+        normalizedReason === "bot_recent_reply_followup" ||
+        normalizedReason === "llm_yes" ||
+        normalizedReason === "llm_yes_retry"
+      )
     ) {
       session.focusedSpeakerUserId = normalizedUserId;
       session.focusedSpeakerAt = now;
       return;
     }
-    if (Boolean(directAddressed) && String(reason || "") === "bot_turn_open") {
+    if (Boolean(directAddressed) && normalizedReason === "bot_turn_open") {
       session.focusedSpeakerUserId = normalizedUserId;
       session.focusedSpeakerAt = now;
       return;
@@ -3759,6 +3917,16 @@ export class VoiceSessionManager {
         llmResponse: turnDecision.llmResponse || null,
         llmProvider: turnDecision.llmProvider || null,
         llmModel: turnDecision.llmModel || null,
+        conversationState: turnDecision.conversationContext?.engagementState || null,
+        conversationEngaged: Boolean(turnDecision.conversationContext?.engaged),
+        engagedWithCurrentSpeaker: Boolean(turnDecision.conversationContext?.engagedWithCurrentSpeaker),
+        recentAssistantReply: Boolean(turnDecision.conversationContext?.recentAssistantReply),
+        msSinceAssistantReply: Number.isFinite(turnDecision.conversationContext?.msSinceAssistantReply)
+          ? Math.round(turnDecision.conversationContext.msSinceAssistantReply)
+          : null,
+        msSinceDirectAddress: Number.isFinite(turnDecision.conversationContext?.msSinceDirectAddress)
+          ? Math.round(turnDecision.conversationContext.msSinceDirectAddress)
+          : null,
         error: turnDecision.error || null
       }
     });
@@ -3781,11 +3949,19 @@ export class VoiceSessionManager {
       settings,
       userId,
       transcript,
-      directAddressed: Boolean(turnDecision.directAddressed)
+      directAddressed: Boolean(turnDecision.directAddressed),
+      conversationContext: turnDecision.conversationContext || null
     });
   }
 
-  async runSttPipelineReply({ session, settings, userId, transcript, directAddressed = false }) {
+  async runSttPipelineReply({
+    session,
+    settings,
+    userId,
+    transcript,
+    directAddressed = false,
+    conversationContext = null
+  }) {
     if (!session || session.ending) return;
     if (session.mode !== "stt_pipeline") return;
     if (!this.llm?.synthesizeSpeech) return;
@@ -3824,6 +4000,14 @@ export class VoiceSessionManager {
       .map((entry) => formatSoundboardCandidateLine(entry))
       .filter(Boolean)
       .slice(0, SOUNDBOARD_MAX_CANDIDATES);
+    const resolvedConversationContext =
+      conversationContext && typeof conversationContext === "object"
+        ? conversationContext
+        : this.buildVoiceConversationContext({
+          session,
+          userId,
+          directAddressed: Boolean(directAddressed)
+        });
 
     let replyText = "";
     let requestedSoundboardRef = "";
@@ -3840,6 +4024,7 @@ export class VoiceSessionManager {
         sessionId: session.id,
         isEagerTurn: !directAddressed,
         voiceEagerness: Number(settings?.voice?.replyEagerness) || 0,
+        conversationContext: resolvedConversationContext,
         soundboardCandidates: soundboardCandidateLines,
         onWebLookupStart: async ({ query }) => {
           if (typeof releaseLookupBusy === "function") return;
@@ -3898,7 +4083,9 @@ export class VoiceSessionManager {
     if (!spokeLine) return;
 
     try {
-      session.lastAudioDeltaAt = Date.now();
+      const replyAt = Date.now();
+      session.lastAudioDeltaAt = replyAt;
+      session.lastAssistantReplyAt = replyAt;
       this.recordVoiceTurn(session, {
         role: "assistant",
         userId: this.client.user?.id || null,
@@ -3947,6 +4134,7 @@ export class VoiceSessionManager {
     userId,
     transcript = "",
     directAddressed = false,
+    conversationContext = null,
     source = "realtime"
   }) {
     if (!session || session.ending) return false;
@@ -3999,6 +4187,14 @@ export class VoiceSessionManager {
       .map((entry) => formatSoundboardCandidateLine(entry))
       .filter(Boolean)
       .slice(0, SOUNDBOARD_MAX_CANDIDATES);
+    const resolvedConversationContext =
+      conversationContext && typeof conversationContext === "object"
+        ? conversationContext
+        : this.buildVoiceConversationContext({
+          session,
+          userId,
+          directAddressed: Boolean(directAddressed)
+        });
 
     let releaseLookupBusy = null;
     let generatedPayload = null;
@@ -4013,6 +4209,7 @@ export class VoiceSessionManager {
         sessionId: session.id,
         isEagerTurn: !directAddressed,
         voiceEagerness: Number(settings?.voice?.replyEagerness) || 0,
+        conversationContext: resolvedConversationContext,
         soundboardCandidates: soundboardCandidateLines,
         onWebLookupStart: async ({ query }) => {
           if (typeof releaseLookupBusy === "function") return;
@@ -4072,7 +4269,9 @@ export class VoiceSessionManager {
           sessionId: session.id,
           mode: session.mode,
           source: String(source || "realtime"),
-          usedWebSearchFollowup
+          usedWebSearchFollowup,
+          conversationState: resolvedConversationContext?.engagementState || null,
+          engagedWithCurrentSpeaker: Boolean(resolvedConversationContext?.engagedWithCurrentSpeaker)
         }
       });
       return true;
@@ -4094,6 +4293,8 @@ export class VoiceSessionManager {
       userId: this.client.user?.id || null,
       source: `${String(source || "realtime")}:reply`
     });
+    const replyRequestedAt = Date.now();
+    session.lastAssistantReplyAt = replyRequestedAt;
     if (!requestedRealtimeUtterance) {
       const spokeFallback = await this.speakVoiceLineWithTts({
         session,
@@ -4102,7 +4303,8 @@ export class VoiceSessionManager {
         source: `${String(source || "realtime")}:tts_fallback`
       });
       if (!spokeFallback) return false;
-      session.lastAudioDeltaAt = Date.now();
+      session.lastAudioDeltaAt = replyRequestedAt;
+      session.lastAssistantReplyAt = replyRequestedAt;
     }
 
     this.recordVoiceTurn(session, {

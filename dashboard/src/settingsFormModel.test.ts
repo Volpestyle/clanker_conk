@@ -49,6 +49,26 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.voice.realtimeReplyStrategy, "shared_brain");
 });
 
+test("settingsToForm preserves explicit empty prompt overrides", () => {
+  const form = settingsToForm({
+    prompt: {
+      capabilityHonestyLine: "",
+      impossibleActionLine: "",
+      memoryEnabledLine: "",
+      memoryDisabledLine: "",
+      skipLine: "",
+      mediaPromptCraftGuidance: ""
+    }
+  });
+
+  assert.equal(form.promptCapabilityHonestyLine, "");
+  assert.equal(form.promptImpossibleActionLine, "");
+  assert.equal(form.promptMemoryEnabledLine, "");
+  assert.equal(form.promptMemoryDisabledLine, "");
+  assert.equal(form.promptSkipLine, "");
+  assert.equal(form.promptMediaPromptCraftGuidance, "");
+});
+
 test("resolveProviderModelOptions merges catalog values with provider fallback defaults", () => {
   const openai = resolveProviderModelOptions(
     {

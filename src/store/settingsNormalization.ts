@@ -1,4 +1,5 @@
 import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
+import { defaultModelForLlmProvider, normalizeLlmProvider } from "../llm/llmHelpers.ts";
 import { normalizeProviderOrder } from "../search.ts";
 import { clamp, deepMerge, uniqueIdList } from "../utils.ts";
 
@@ -28,52 +29,42 @@ export function normalizeSettings(raw) {
     DEFAULT_SETTINGS.persona?.hardLimits ?? []
   );
 
-  const defaultPrompt = DEFAULT_SETTINGS.prompt || {
-    capabilityHonestyLine: "Never claim capabilities you do not have.",
-    impossibleActionLine: "If asked to do something impossible, say it casually.",
-    memoryEnabledLine: "You have persistent memory across conversations.",
-    memoryDisabledLine: "Persistent memory is disabled right now.",
-    skipLine: "If you should not send a message, output exactly [SKIP].",
-    textGuidance: [],
-    voiceGuidance: [],
-    voiceOperationalGuidance: [],
-    mediaPromptCraftGuidance: ""
-  };
+  const defaultPrompt = DEFAULT_SETTINGS.prompt;
   merged.prompt.capabilityHonestyLine = normalizePromptLine(
     merged.prompt?.capabilityHonestyLine,
-    defaultPrompt.capabilityHonestyLine || "Never claim capabilities you do not have."
+    defaultPrompt.capabilityHonestyLine
   );
   merged.prompt.impossibleActionLine = normalizePromptLine(
     merged.prompt?.impossibleActionLine,
-    defaultPrompt.impossibleActionLine || "If asked to do something impossible, say it casually."
+    defaultPrompt.impossibleActionLine
   );
   merged.prompt.memoryEnabledLine = normalizePromptLine(
     merged.prompt?.memoryEnabledLine,
-    defaultPrompt.memoryEnabledLine || "You have persistent memory across conversations."
+    defaultPrompt.memoryEnabledLine
   );
   merged.prompt.memoryDisabledLine = normalizePromptLine(
     merged.prompt?.memoryDisabledLine,
-    defaultPrompt.memoryDisabledLine || "Persistent memory is disabled right now."
+    defaultPrompt.memoryDisabledLine
   );
   merged.prompt.skipLine = normalizePromptLine(
     merged.prompt?.skipLine,
-    defaultPrompt.skipLine || "If you should not send a message, output exactly [SKIP]."
+    defaultPrompt.skipLine
   );
   merged.prompt.textGuidance = normalizePromptLineList(
     merged.prompt?.textGuidance,
-    Array.isArray(defaultPrompt.textGuidance) ? defaultPrompt.textGuidance : []
+    defaultPrompt.textGuidance
   );
   merged.prompt.voiceGuidance = normalizePromptLineList(
     merged.prompt?.voiceGuidance,
-    Array.isArray(defaultPrompt.voiceGuidance) ? defaultPrompt.voiceGuidance : []
+    defaultPrompt.voiceGuidance
   );
   merged.prompt.voiceOperationalGuidance = normalizePromptLineList(
     merged.prompt?.voiceOperationalGuidance,
-    Array.isArray(defaultPrompt.voiceOperationalGuidance) ? defaultPrompt.voiceOperationalGuidance : []
+    defaultPrompt.voiceOperationalGuidance
   );
   merged.prompt.mediaPromptCraftGuidance = normalizePromptLine(
     merged.prompt?.mediaPromptCraftGuidance,
-    defaultPrompt.mediaPromptCraftGuidance || ""
+    defaultPrompt.mediaPromptCraftGuidance
   );
 
   const replyLevelInitiative = clamp(
@@ -305,66 +296,14 @@ export function normalizeSettings(raw) {
     soundboard?: VoiceSoundboardDefaults;
   };
 
-  const defaultVoice: VoiceDefaults = DEFAULT_SETTINGS.voice || {
-    enabled: false,
-    mode: "stt_pipeline",
-    realtimeReplyStrategy: "shared_brain",
-    allowNsfwHumor: false,
-    intentConfidenceThreshold: 0.75,
-    maxSessionMinutes: 10,
-    inactivityLeaveSeconds: 90,
-    maxSessionsPerDay: 12,
-    maxConcurrentSessions: 1,
-    xai: {
-      voice: "Rex",
-      audioFormat: "audio/pcm",
-      sampleRateHz: 24000,
-      region: "us-east-1"
-    },
-    openaiRealtime: {
-      model: "gpt-realtime",
-      voice: "alloy",
-      inputAudioFormat: "pcm16",
-      outputAudioFormat: "pcm16",
-      inputTranscriptionModel: "gpt-4o-mini-transcribe"
-    },
-    geminiRealtime: {
-      model: "gemini-2.5-flash-native-audio-preview-12-2025",
-      voice: "Aoede",
-      apiBaseUrl: "https://generativelanguage.googleapis.com",
-      inputSampleRateHz: 16000,
-      outputSampleRateHz: 24000
-    },
-    sttPipeline: {
-      transcriptionModel: "gpt-4o-mini-transcribe",
-      ttsModel: "gpt-4o-mini-tts",
-      ttsVoice: "alloy",
-      ttsSpeed: 1
-    },
-    replyDecisionLlm: {
-      enabled: true,
-      provider: "anthropic",
-      model: "claude-haiku-4-5",
-      maxAttempts: 1
-    },
-    streamWatch: {
-      enabled: false,
-      minCommentaryIntervalSeconds: 8,
-      maxFramesPerMinute: 180,
-      maxFrameBytes: 350000
-    },
-    soundboard: {
-      enabled: false,
-      allowExternalSounds: false
-    }
-  };
-  const defaultVoiceXai: VoiceXaiDefaults = defaultVoice.xai || {};
-  const defaultVoiceOpenAiRealtime: VoiceOpenAiRealtimeDefaults = defaultVoice.openaiRealtime || {};
-  const defaultVoiceGeminiRealtime: VoiceGeminiRealtimeDefaults = defaultVoice.geminiRealtime || {};
-  const defaultVoiceSttPipeline: VoiceSttPipelineDefaults = defaultVoice.sttPipeline || {};
-  const defaultVoiceReplyDecisionLlm: VoiceReplyDecisionDefaults = defaultVoice.replyDecisionLlm || {};
-  const defaultVoiceStreamWatch: VoiceStreamWatchDefaults = defaultVoice.streamWatch || {};
-  const defaultVoiceSoundboard: VoiceSoundboardDefaults = defaultVoice.soundboard || {};
+  const defaultVoice: VoiceDefaults = DEFAULT_SETTINGS.voice;
+  const defaultVoiceXai: VoiceXaiDefaults = defaultVoice.xai ?? {};
+  const defaultVoiceOpenAiRealtime: VoiceOpenAiRealtimeDefaults = defaultVoice.openaiRealtime ?? {};
+  const defaultVoiceGeminiRealtime: VoiceGeminiRealtimeDefaults = defaultVoice.geminiRealtime ?? {};
+  const defaultVoiceSttPipeline: VoiceSttPipelineDefaults = defaultVoice.sttPipeline ?? {};
+  const defaultVoiceReplyDecisionLlm: VoiceReplyDecisionDefaults = defaultVoice.replyDecisionLlm ?? {};
+  const defaultVoiceStreamWatch: VoiceStreamWatchDefaults = defaultVoice.streamWatch ?? {};
+  const defaultVoiceSoundboard: VoiceSoundboardDefaults = defaultVoice.soundboard ?? {};
   const voiceIntentThresholdRaw = Number(merged.voice?.intentConfidenceThreshold);
   const voiceMaxSessionRaw = Number(merged.voice?.maxSessionMinutes);
   const voiceInactivityRaw = Number(merged.voice?.inactivityLeaveSeconds);
@@ -822,23 +761,6 @@ function normalizeHttpBaseUrl(value, fallback) {
   } catch {
     return String(fallback || "https://nitter.net");
   }
-}
-
-function normalizeLlmProvider(value) {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "anthropic") return "anthropic";
-  if (normalized === "xai") return "xai";
-  if (normalized === "claude-code") return "claude-code";
-  return "openai";
-}
-
-function defaultModelForLlmProvider(provider) {
-  if (provider === "anthropic") return "claude-haiku-4-5";
-  if (provider === "xai") return "grok-3-mini-latest";
-  if (provider === "claude-code") return "sonnet";
-  return "gpt-4.1-mini";
 }
 
 function normalizeVoiceMode(value, fallback = "voice_agent") {

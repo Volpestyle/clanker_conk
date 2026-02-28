@@ -182,6 +182,13 @@ export function normalizeLlmProvider(value, fallback = "openai") {
   return "openai";
 }
 
+export function defaultModelForLlmProvider(provider) {
+  if (provider === "anthropic") return "claude-haiku-4-5";
+  if (provider === "xai") return "grok-3-mini-latest";
+  if (provider === "claude-code") return "sonnet";
+  return "gpt-4.1-mini";
+}
+
 export function resolveProviderFallbackOrder(provider) {
   if (provider === "claude-code") return ["claude-code", "anthropic", "openai", "xai"];
   if (provider === "anthropic") return ["anthropic", "openai", "xai", "claude-code"];
