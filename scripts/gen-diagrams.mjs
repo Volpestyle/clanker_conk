@@ -1,12 +1,12 @@
-#!/usr/bin/env node
+#!/usr/bin/env bun
 /**
  * Renders all .mmd files in docs/diagrams/ to high-res PNGs using @mermaid-js/mermaid-cli.
  *
  * Usage:
- *   npm run diagrams            # render all .mmd files
- *   npm run diagrams -- foo.mmd # render a single file
+ *   bun run diagrams            # render all .mmd files
+ *   bun run diagrams -- foo.mmd # render a single file
  *
- * Requires: npx mmdc (installed via @mermaid-js/mermaid-cli devDependency)
+ * Requires: bunx mmdc (installed via @mermaid-js/mermaid-cli devDependency)
  */
 
 import { readdirSync, existsSync } from "fs";
@@ -45,7 +45,7 @@ for (const file of mmdFiles) {
   console.log(`  RENDER  ${file} → ${basename(output)}`);
   try {
     execSync(
-      `npx mmdc -i "${input}" -o "${output}" -s ${SCALE} -t ${THEME} -b ${BG_COLOR}`,
+      `bunx mmdc -i "${input}" -o "${output}" -s ${SCALE} -t ${THEME} -b ${BG_COLOR}`,
       { stdio: "inherit" }
     );
   } catch {
