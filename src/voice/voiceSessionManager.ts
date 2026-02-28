@@ -1628,6 +1628,7 @@ export class VoiceSessionManager {
     );
     const configuredModel = String(thoughtEngine?.model || "").trim().slice(0, 120);
     const model = configuredModel || defaultModelForLlmProvider(provider);
+    const eagerness = clamp(Number(thoughtEngine?.eagerness) || 0, 0, 100);
     const minSilenceSeconds = clamp(
       Number(thoughtEngine?.minSilenceSeconds) || 20,
       VOICE_THOUGHT_LOOP_MIN_SILENCE_SECONDS,
@@ -1643,6 +1644,7 @@ export class VoiceSessionManager {
       enabled,
       provider,
       model,
+      eagerness,
       minSilenceSeconds,
       minSecondsBetweenThoughts
     };
@@ -1827,7 +1829,7 @@ export class VoiceSessionManager {
       return false;
     }
 
-    const thoughtChance = clamp(Number(resolvedSettings?.voice?.replyEagerness) || 0, 0, 100) / 100;
+    const thoughtChance = clamp(Number(thoughtConfig?.eagerness) || 0, 0, 100) / 100;
     const now = Date.now();
     session.lastThoughtAttemptAt = now;
     if (thoughtChance <= 0) {
@@ -1851,7 +1853,7 @@ export class VoiceSessionManager {
           sessionId: session.id,
           mode: session.mode,
           trigger: String(trigger || "timer"),
-          replyEagerness: Math.round(thoughtChance * 100),
+          thoughtEagerness: Math.round(thoughtChance * 100),
           roll: Number(roll.toFixed(5))
         }
       });
@@ -1959,7 +1961,7 @@ export class VoiceSessionManager {
     const thoughtConfig = config || this.resolveVoiceThoughtEngineConfig(settings);
     const participants = this.getVoiceChannelParticipants(session).map((entry) => entry.displayName).filter(Boolean);
     const recentHistory = this.formatVoiceDecisionHistory(session, 6, VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS);
-    const replyEagerness = clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
+    const thoughtEagerness = clamp(Number(thoughtConfig?.eagerness) || 0, 0, 100);
     const silenceMs = Math.max(0, Date.now() - Number(session.lastActivityAt || 0));
     const botName = getPromptBotName(settings);
     const systemPrompt = [
@@ -1967,14 +1969,14 @@ export class VoiceSessionManager {
       "Draft exactly one short natural spoken line that might fit right now.",
       "Thought style: freedom to reflect the social atmosphere. Try to catch a vibe.",
       "It can be funny, insightful, witty, serious, frustrated, or even a short train-of-thought blurb when that still feels socially natural.",
-      "It is valid to reflect the bot's current mood/persona.",
+      "It is valid to be random or to reflect the bot's current mood/persona.",
       "If there is no good line, output exactly [SKIP].",
       "No markdown, no quotes, no meta commentary, no soundboard directives."
     ].join("\n");
     const userPromptParts = [
       `Current humans in VC: ${participants.length || 0}.`,
       participants.length ? `Participant names: ${participants.slice(0, 12).join(", ")}.` : "Participant names: none.",
-      `Reply eagerness setting: ${replyEagerness}/100.`,
+      `Thought eagerness setting: ${thoughtEagerness}/100.`,
       `Silence duration ms: ${Math.max(0, Math.round(silenceMs))}.`,
       "Goal: seed a light initiative line that can keep conversation moving without forcing it."
     ];
@@ -2051,7 +2053,7 @@ export class VoiceSessionManager {
     const participants = this.getVoiceChannelParticipants(session).map((entry) => entry.displayName).filter(Boolean);
     const recentHistory = this.formatVoiceDecisionHistory(session, 8, VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS);
     const silenceMs = Math.max(0, Date.now() - Number(session.lastActivityAt || 0));
-    const replyEagerness = clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
+    const thoughtEagerness = clamp(Number(settings?.voice?.thoughtEngine?.eagerness) || 0, 0, 100);
     const botName = getPromptBotName(settings);
 
     const systemPrompt = [
@@ -2060,7 +2062,7 @@ export class VoiceSessionManager {
     ].join("\n");
     const userPromptParts = [
       `Candidate line: "${normalizedThought}"`,
-      `Reply eagerness: ${replyEagerness}/100.`,
+      `Thought eagerness: ${thoughtEagerness}/100.`,
       `Current human participant count: ${participants.length || 0}.`,
       `Silence duration ms: ${Math.max(0, Math.round(silenceMs))}.`,
       "Decision rule: YES only when saying this now would feel natural and additive; otherwise NO."

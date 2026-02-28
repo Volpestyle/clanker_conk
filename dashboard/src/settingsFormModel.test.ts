@@ -34,6 +34,10 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.model, "claude-haiku-4-5");
   assert.equal(form.voiceGenerationLlmProvider, "anthropic");
   assert.equal(form.voiceGenerationLlmModel, "claude-haiku-4-5");
+  assert.equal(form.voiceThoughtEngineEnabled, true);
+  assert.equal(form.voiceThoughtEngineProvider, "anthropic");
+  assert.equal(form.voiceThoughtEngineModel, "claude-haiku-4-5");
+  assert.equal(form.voiceThoughtEngineEagerness, 0);
   assert.equal(form.initiativeChannels, "1\n2");
   assert.equal(form.allowedChannels, "2\n3");
   assert.equal(form.voiceRealtimeReplyStrategy, "brain");
@@ -49,6 +53,10 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.deepEqual(patch.initiative.discovery.rssFeeds, ["https://one.example/feed"]);
   assert.deepEqual(patch.initiative.discovery.xHandles, ["@alice", "bob"]);
   assert.equal(patch.voice.realtimeReplyStrategy, "brain");
+  assert.equal(patch.voice.thoughtEngine.enabled, true);
+  assert.equal(patch.voice.thoughtEngine.provider, "anthropic");
+  assert.equal(patch.voice.thoughtEngine.model, "claude-haiku-4-5");
+  assert.equal(patch.voice.thoughtEngine.eagerness, 0);
 });
 
 test("settingsToForm preserves explicit empty prompt overrides", () => {

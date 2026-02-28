@@ -44,6 +44,14 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
         provider: "not-real",
         model: ""
       },
+      thoughtEngine: {
+        enabled: "yes",
+        provider: "NOT-REAL",
+        model: "",
+        eagerness: 999,
+        minSilenceSeconds: 1,
+        minSecondsBetweenThoughts: 9999
+      },
       replyDecisionLlm: {
         provider: "CLAUDE-CODE",
         model: "",
@@ -112,6 +120,12 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.voice.realtimeReplyStrategy, "native");
   assert.equal(normalized.voice.generationLlm.provider, "anthropic");
   assert.equal(normalized.voice.generationLlm.model, "claude-haiku-4-5");
+  assert.equal(normalized.voice.thoughtEngine.enabled, true);
+  assert.equal(normalized.voice.thoughtEngine.provider, "anthropic");
+  assert.equal(normalized.voice.thoughtEngine.model, "claude-haiku-4-5");
+  assert.equal(normalized.voice.thoughtEngine.eagerness, 100);
+  assert.equal(normalized.voice.thoughtEngine.minSilenceSeconds, 8);
+  assert.equal(normalized.voice.thoughtEngine.minSecondsBetweenThoughts, 600);
   assert.equal(normalized.voice.replyDecisionLlm.provider, "claude-code");
   assert.equal(normalized.voice.replyDecisionLlm.model, "sonnet");
   assert.equal(normalized.voice.replyDecisionLlm.enabled, true);

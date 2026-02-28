@@ -288,6 +288,7 @@ export function normalizeSettings(raw) {
     enabled?: boolean;
     provider?: string;
     model?: string;
+    eagerness?: number;
     minSilenceSeconds?: number;
     minSecondsBetweenThoughts?: number;
   };
@@ -419,6 +420,17 @@ export function normalizeSettings(raw) {
       : defaultVoiceThoughtEngine?.enabled !== undefined
         ? Boolean(defaultVoiceThoughtEngine.enabled)
         : true;
+  const voiceThoughtEagernessRaw = Number(merged.voice?.thoughtEngine?.eagerness);
+  const defaultVoiceThoughtEagernessRaw = Number(defaultVoiceThoughtEngine.eagerness);
+  merged.voice.thoughtEngine.eagerness = clamp(
+    Number.isFinite(voiceThoughtEagernessRaw)
+      ? voiceThoughtEagernessRaw
+      : Number.isFinite(defaultVoiceThoughtEagernessRaw)
+        ? defaultVoiceThoughtEagernessRaw
+        : 0,
+    0,
+    100
+  );
   const voiceThoughtProviderRaw = String(merged.voice?.thoughtEngine?.provider || "").trim();
   merged.voice.thoughtEngine.provider = normalizeLlmProvider(
     voiceThoughtProviderRaw,

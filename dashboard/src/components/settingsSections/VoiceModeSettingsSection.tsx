@@ -20,6 +20,10 @@ export function VoiceModeSettingsSection({
   selectVoiceGenerationPresetModel,
   voiceGenerationModelOptions,
   selectedVoiceGenerationPresetModel,
+  setVoiceThoughtEngineProvider,
+  selectVoiceThoughtEnginePresetModel,
+  voiceThoughtEngineModelOptions,
+  selectedVoiceThoughtEnginePresetModel,
   xAiVoiceOptions,
   openAiRealtimeModelOptions,
   openAiRealtimeVoiceOptions,
@@ -280,6 +284,90 @@ export function VoiceModeSettingsSection({
                   Reset decider prompts
                 </button>
               </details>
+            </>
+          )}
+
+          <h4>Thought Engine</h4>
+          <p>
+            When VC is quiet, Clank can self-prompt a candidate thought and let the brain decide if it should be spoken.
+          </p>
+          <div className="toggles">
+            <label>
+              <input
+                type="checkbox"
+                checked={form.voiceThoughtEngineEnabled}
+                onChange={set("voiceThoughtEngineEnabled")}
+              />
+              Enable silence thought loop
+            </label>
+          </div>
+          {form.voiceThoughtEngineEnabled && (
+            <>
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-thought-engine-provider">Provider</label>
+                  <select
+                    id="voice-thought-engine-provider"
+                    value={form.voiceThoughtEngineProvider}
+                    onChange={setVoiceThoughtEngineProvider}
+                  >
+                    <LlmProviderOptions />
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="voice-thought-engine-model-preset">Model ID</label>
+                  <select
+                    id="voice-thought-engine-model-preset"
+                    value={selectedVoiceThoughtEnginePresetModel}
+                    onChange={selectVoiceThoughtEnginePresetModel}
+                  >
+                    {voiceThoughtEngineModelOptions.map((modelId) => (
+                      <option key={modelId} value={modelId}>
+                        {modelId}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <label htmlFor="voice-thought-eagerness">
+                Thought eagerness: <strong>{form.voiceThoughtEngineEagerness}%</strong>
+              </label>
+              <input
+                id="voice-thought-eagerness"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value={form.voiceThoughtEngineEagerness}
+                onChange={set("voiceThoughtEngineEagerness")}
+                style={rangeStyle(form.voiceThoughtEngineEagerness)}
+              />
+
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-thought-silence-seconds">Silence seconds before thought attempt</label>
+                  <input
+                    id="voice-thought-silence-seconds"
+                    type="number"
+                    min="8"
+                    max="300"
+                    value={form.voiceThoughtEngineMinSilenceSeconds}
+                    onChange={set("voiceThoughtEngineMinSilenceSeconds")}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="voice-thought-min-gap-seconds">Min seconds between thought attempts</label>
+                  <input
+                    id="voice-thought-min-gap-seconds"
+                    type="number"
+                    min="8"
+                    max="600"
+                    value={form.voiceThoughtEngineMinSecondsBetweenThoughts}
+                    onChange={set("voiceThoughtEngineMinSecondsBetweenThoughts")}
+                  />
+                </div>
+              </div>
             </>
           )}
 

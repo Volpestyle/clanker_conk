@@ -244,6 +244,154 @@ test("resolveSpeakingEndFinalizeDelayMs adapts delays when room load increases",
   );
 });
 
+test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown", () => {
+  const { manager } = createManager();
+  const now = Date.now();
+  const session = createSession({
+    lastActivityAt: now - 5_000,
+    lastThoughtAttemptAt: 0
+  });
+
+  const blockedBySilence = manager.evaluateVoiceThoughtLoopGate({
+    session,
+    settings: {
+      voice: {
+        replyEagerness: 100,
+        thoughtEngine: {
+          enabled: true,
+          eagerness: 100,
+          minSilenceSeconds: 20,
+          minSecondsBetweenThoughts: 20
+        }
+      }
+    },
+    now
+  });
+  assert.equal(blockedBySilence.allow, false);
+  assert.equal(blockedBySilence.reason, "silence_window_not_met");
+
+  const allowed = manager.evaluateVoiceThoughtLoopGate({
+    session: {
+      ...session,
+      lastActivityAt: now - 25_000
+    },
+    settings: {
+      voice: {
+        replyEagerness: 100,
+        thoughtEngine: {
+          enabled: true,
+          eagerness: 100,
+          minSilenceSeconds: 20,
+          minSecondsBetweenThoughts: 20
+        }
+      }
+    },
+    now
+  });
+  assert.equal(allowed.allow, true);
+  assert.equal(allowed.reason, "ok");
+});
+
+test("maybeRunVoiceThoughtLoop speaks approved thought candidates", async () => {
+  const { manager } = createManager();
+  const now = Date.now();
+  const settings = {
+    botName: "clanker conk",
+    voice: {
+      enabled: true,
+      replyEagerness: 100,
+      thoughtEngine: {
+        enabled: true,
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        eagerness: 100,
+        minSilenceSeconds: 20,
+        minSecondsBetweenThoughts: 20
+      }
+    }
+  };
+  const session = createSession({
+    mode: "stt_pipeline",
+    lastActivityAt: now - 25_000,
+    settingsSnapshot: settings
+  });
+
+  const scheduledDelays = [];
+  manager.scheduleVoiceThoughtLoop = ({ delayMs }) => {
+    scheduledDelays.push(delayMs);
+  };
+  manager.generateVoiceThoughtCandidate = async () => "did you know octopuses have three hearts";
+  manager.evaluateVoiceThoughtDecision = async () => ({
+    allow: true,
+    reason: "llm_yes"
+  });
+  let delivered = 0;
+  manager.deliverVoiceThoughtCandidate = async () => {
+    delivered += 1;
+    return true;
+  };
+
+  const originalRandom = Math.random;
+  Math.random = () => 0.01;
+  try {
+    const ran = await manager.maybeRunVoiceThoughtLoop({
+      session,
+      settings,
+      trigger: "test"
+    });
+    assert.equal(ran, true);
+    assert.equal(delivered, 1);
+    assert.equal(session.lastThoughtSpokenAt > 0, true);
+    assert.equal(scheduledDelays.length, 1);
+    assert.equal(scheduledDelays[0], 20_000);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test("maybeRunVoiceThoughtLoop skips generation when eagerness probability roll fails", async () => {
+  const { manager } = createManager();
+  const settings = {
+    botName: "clanker conk",
+    voice: {
+      enabled: true,
+      replyEagerness: 10,
+      thoughtEngine: {
+        enabled: true,
+        provider: "anthropic",
+        model: "claude-haiku-4-5",
+        eagerness: 10,
+        minSilenceSeconds: 20,
+        minSecondsBetweenThoughts: 20
+      }
+    }
+  };
+  const session = createSession({
+    mode: "stt_pipeline",
+    lastActivityAt: Date.now() - 25_000,
+    settingsSnapshot: settings
+  });
+
+  manager.scheduleVoiceThoughtLoop = () => {};
+  manager.generateVoiceThoughtCandidate = async () => {
+    throw new Error("thought generation should not run when probability gate fails");
+  };
+
+  const originalRandom = Math.random;
+  Math.random = () => 0.95;
+  try {
+    const ran = await manager.maybeRunVoiceThoughtLoop({
+      session,
+      settings,
+      trigger: "test"
+    });
+    assert.equal(ran, false);
+    assert.equal(session.lastThoughtAttemptAt > 0, true);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
 test("requestStatus reports offline and online states", async () => {
   const { manager, messages } = createManager();
 

@@ -66,6 +66,7 @@ export function settingsToForm(settings) {
   const defaultVoiceOpenAiRealtime = defaults.voice.openaiRealtime;
   const defaultVoiceGeminiRealtime = defaults.voice.geminiRealtime;
   const defaultVoiceSttPipeline = defaults.voice.sttPipeline;
+  const defaultVoiceThoughtEngine = defaults.voice.thoughtEngine;
   const defaultVoiceGenerationLlm = defaults.voice.generationLlm;
   const defaultVoiceStreamWatch = defaults.voice.streamWatch;
   const defaultVoiceSoundboard = defaults.voice.soundboard;
@@ -134,6 +135,19 @@ export function settingsToForm(settings) {
     voiceInactivityLeaveSeconds: settings?.voice?.inactivityLeaveSeconds ?? defaultVoice.inactivityLeaveSeconds,
     voiceMaxSessionsPerDay: settings?.voice?.maxSessionsPerDay ?? defaultVoice.maxSessionsPerDay,
     voiceReplyEagerness: settings?.voice?.replyEagerness ?? defaultVoice.replyEagerness,
+    voiceThoughtEngineEnabled:
+      settings?.voice?.thoughtEngine?.enabled ?? defaultVoiceThoughtEngine.enabled,
+    voiceThoughtEngineProvider:
+      settings?.voice?.thoughtEngine?.provider ?? defaultVoiceThoughtEngine.provider,
+    voiceThoughtEngineModel:
+      settings?.voice?.thoughtEngine?.model ?? defaultVoiceThoughtEngine.model,
+    voiceThoughtEngineEagerness:
+      settings?.voice?.thoughtEngine?.eagerness ?? defaultVoiceThoughtEngine.eagerness,
+    voiceThoughtEngineMinSilenceSeconds:
+      settings?.voice?.thoughtEngine?.minSilenceSeconds ?? defaultVoiceThoughtEngine.minSilenceSeconds,
+    voiceThoughtEngineMinSecondsBetweenThoughts:
+      settings?.voice?.thoughtEngine?.minSecondsBetweenThoughts ??
+      defaultVoiceThoughtEngine.minSecondsBetweenThoughts,
     voiceReplyDecisionLlmEnabled:
       settings?.voice?.replyDecisionLlm?.enabled ?? defaultVoice.replyDecisionLlm.enabled ?? true,
     voiceReplyDecisionLlmProvider:
@@ -311,6 +325,14 @@ export function formToSettingsPatch(form) {
       inactivityLeaveSeconds: Number(form.voiceInactivityLeaveSeconds),
       maxSessionsPerDay: Number(form.voiceMaxSessionsPerDay),
       replyEagerness: Number(form.voiceReplyEagerness),
+      thoughtEngine: {
+        enabled: Boolean(form.voiceThoughtEngineEnabled),
+        provider: String(form.voiceThoughtEngineProvider || "").trim(),
+        model: String(form.voiceThoughtEngineModel || "").trim(),
+        eagerness: Number(form.voiceThoughtEngineEagerness),
+        minSilenceSeconds: Number(form.voiceThoughtEngineMinSilenceSeconds),
+        minSecondsBetweenThoughts: Number(form.voiceThoughtEngineMinSecondsBetweenThoughts)
+      },
       replyDecisionLlm: {
         enabled: Boolean(form.voiceReplyDecisionLlmEnabled),
         provider: String(form.voiceReplyDecisionLlmProvider || "").trim(),
