@@ -2799,11 +2799,18 @@ export class VoiceSessionManager {
       .trim()
       .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
 
+    const mergedWithGeneration =
+      sessionMode === "stt_pipeline" ||
+      (isRealtimeMode(sessionMode) &&
+        this.resolveRealtimeReplyStrategy({
+          session,
+          settings
+        }) === "shared_brain");
     if (!classifierEnabled) {
       return {
-        allow: sessionMode === "stt_pipeline",
+        allow: mergedWithGeneration,
         reason:
-          sessionMode === "stt_pipeline"
+          mergedWithGeneration
             ? "classifier_disabled_merged_with_generation"
             : "classifier_disabled",
         participantCount,

@@ -19,6 +19,14 @@ export function VoiceModeSettingsSection({
   selectedVoiceReplyDecisionPresetModel
 }) {
   const isRealtimeMode = isVoiceAgentMode || isOpenAiRealtimeMode || isGeminiRealtimeMode;
+  const realtimeReplyStrategy = String(form.voiceRealtimeReplyStrategy || "shared_brain")
+    .trim()
+    .toLowerCase();
+  const classifierMergedWithGeneration =
+    !form.voiceReplyDecisionLlmEnabled &&
+    (isSttPipelineMode || (isRealtimeMode && realtimeReplyStrategy === "shared_brain"));
+  const classifierDisabledNativeRealtime =
+    !form.voiceReplyDecisionLlmEnabled && isRealtimeMode && realtimeReplyStrategy === "native";
   return (
     <SettingsSection id={id} title="Voice Mode" active={form.voiceEnabled}>
       <div className="toggles">
@@ -140,10 +148,15 @@ export function VoiceModeSettingsSection({
               Enable pre-reply classifier LLM step
             </label>
           </div>
-          {isSttPipelineMode && !form.voiceReplyDecisionLlmEnabled && (
+          {classifierMergedWithGeneration && (
             <p>
-              With classifier disabled in STT pipeline mode, reply generation decides whether to speak by returning
-              <code>[SKIP]</code>.
+              With classifier disabled, reply generation decides whether to speak by returning <code>[SKIP]</code>.
+            </p>
+          )}
+          {classifierDisabledNativeRealtime && (
+            <p>
+              Native realtime mode has no shared-brain generation step, so disabling the classifier keeps only
+              deterministic fast-path admissions.
             </p>
           )}
           {form.voiceReplyDecisionLlmEnabled && (

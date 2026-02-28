@@ -851,7 +851,7 @@ test("reply decider can skip classifier call in stt pipeline when disabled", asy
   assert.equal(callCount, 0);
 });
 
-test("reply decider blocks ambiguous realtime turns when classifier is disabled", async () => {
+test("reply decider can skip classifier call in realtime shared-brain mode when disabled", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -871,6 +871,42 @@ test("reply decider blocks ambiguous realtime turns when classifier is disabled"
     settings: baseSettings({
       voice: {
         replyEagerness: 60,
+        replyDecisionLlm: {
+          enabled: false,
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "what should we do next?"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "classifier_disabled_merged_with_generation");
+  assert.equal(callCount, 0);
+});
+
+test("reply decider blocks ambiguous realtime native turns when classifier is disabled", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      return { text: "YES" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        realtimeReplyStrategy: "native",
         replyDecisionLlm: {
           enabled: false,
           provider: "anthropic",
