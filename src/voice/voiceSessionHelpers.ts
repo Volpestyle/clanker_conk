@@ -348,6 +348,8 @@ export function isBotNameAddressed({
   const botTokens = tokenizeWakeTokens(botName);
   if (!botTokens.length) return false;
   if (containsTokenSequence(transcriptTokens, botTokens)) return true;
+  const mergedWakeToken = resolveMergedWakeToken(botTokens);
+  if (mergedWakeToken && transcriptTokens.some((token) => token === mergedWakeToken)) return true;
 
   const primaryWakeToken = resolvePrimaryWakeToken(botTokens);
   return primaryWakeToken ? transcriptTokens.some((token) => token === primaryWakeToken) : false;
@@ -395,6 +397,12 @@ function resolvePrimaryWakeToken(botTokens = []) {
   if (!candidates.length) return null;
   const preferred = candidates.find((token) => !PRIMARY_WAKE_GENERIC_TOKENS.has(token));
   return preferred || candidates[0];
+}
+
+function resolveMergedWakeToken(botTokens = []) {
+  if (!Array.isArray(botTokens) || botTokens.length < 2) return null;
+  const merged = botTokens.join("");
+  return merged.length >= PRIMARY_WAKE_TOKEN_MIN_LEN ? merged : null;
 }
 
 export function shouldAllowVoiceNsfwHumor(settings) {

@@ -58,11 +58,13 @@ const PHONETIC_CODE = new Map([
 
 export function isLikelyBotNameVariantAddress(transcript = "", botName = "") {
   const transcriptTokens = tokenize(transcript);
-  const primaryBotToken = pickPrimaryBotToken(tokenize(botName));
+  const botTokens = tokenize(botName);
+  const primaryBotToken = pickPrimaryBotToken(botTokens);
   if (!transcriptTokens.length || !primaryBotToken) return false;
 
   const match = findVariantTokenMatch(transcriptTokens, primaryBotToken);
   if (!match) return false;
+  if (hasSupportingBotToken(transcriptTokens, botTokens, match)) return true;
 
   if (isGreetingCallout(transcriptTokens, match.index)) return true;
   if (isIsThatYouCallout(transcriptTokens, match.index)) return true;
@@ -72,6 +74,30 @@ export function isLikelyBotNameVariantAddress(transcript = "", botName = "") {
   if (isGreetingCalloutByShape(transcriptTokens, primaryBotToken)) return true;
   if (isIsThatYouCalloutByShape(transcriptTokens, primaryBotToken)) return true;
   if (isDidIJustHearCalloutByShape(transcriptTokens, primaryBotToken)) return true;
+
+  return false;
+}
+
+function hasSupportingBotToken(transcriptTokens = [], botTokens = [], match = null) {
+  const matchedIndex = Number(match?.index);
+  if (!Array.isArray(transcriptTokens) || !Array.isArray(botTokens)) return false;
+  if (!Number.isFinite(matchedIndex) || matchedIndex < 0) return false;
+
+  const primary = String(match?.primaryBotToken || "").trim().toLowerCase();
+  const candidateTokens = botTokens.filter((token) => {
+    const normalized = String(token || "").trim().toLowerCase();
+    if (!normalized || normalized.length < 3) return false;
+    if (normalized === primary) return false;
+    if (GENERIC_BOT_TOKENS.has(normalized)) return false;
+    return true;
+  });
+  if (!candidateTokens.length) return false;
+
+  for (let index = 0; index < transcriptTokens.length; index += 1) {
+    const token = String(transcriptTokens[index] || "").trim().toLowerCase();
+    if (!token || !candidateTokens.includes(token)) continue;
+    if (Math.abs(index - matchedIndex) <= 2) return true;
+  }
 
   return false;
 }
@@ -100,7 +126,7 @@ function findVariantTokenMatch(tokens = [], primaryBotToken = "") {
   for (let index = 0; index < tokens.length; index += 1) {
     const token = String(tokens[index] || "");
     if (isNameLikeCallToken(token, primaryBotToken)) {
-      return { token, index };
+      return { token, index, primaryBotToken };
     }
   }
 

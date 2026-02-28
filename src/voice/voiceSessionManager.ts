@@ -105,10 +105,14 @@ import {
   MIN_RESPONSE_REQUEST_GAP_MS,
   OPENAI_ACTIVE_RESPONSE_RETRY_MS,
   PENDING_SUPERSEDE_MIN_AGE_MS,
+  JOIN_GREETING_LLM_WINDOW_MS,
   REALTIME_CONTEXT_MEMBER_LIMIT,
   REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS,
   REALTIME_INSTRUCTION_REFRESH_DEBOUNCE_MS,
+  REALTIME_TURN_COALESCE_MAX_BYTES,
+  REALTIME_TURN_COALESCE_WINDOW_MS,
   REALTIME_TURN_QUEUE_MAX,
+  REALTIME_TURN_STALE_SKIP_MS,
   RESPONSE_DONE_SILENCE_GRACE_MS,
   RESPONSE_FLUSH_DEBOUNCE_MS,
   RESPONSE_SILENCE_RETRY_DELAY_MS,
@@ -2000,6 +2004,29 @@ export class VoiceSessionManager {
     });
   }
 
+  shouldCoalesceRealtimeTurn(prevTurn, nextTurn) {
+    if (!prevTurn || !nextTurn) return false;
+    const prevUserId = String(prevTurn.userId || "").trim();
+    const nextUserId = String(nextTurn.userId || "").trim();
+    if (!prevUserId || !nextUserId || prevUserId !== nextUserId) return false;
+
+    const prevCaptureReason = String(prevTurn.captureReason || "").trim();
+    const nextCaptureReason = String(nextTurn.captureReason || "").trim();
+    if (!prevCaptureReason || !nextCaptureReason || prevCaptureReason !== nextCaptureReason) return false;
+
+    const prevQueuedAt = Number(prevTurn.queuedAt || 0);
+    const nextQueuedAt = Number(nextTurn.queuedAt || 0);
+    if (!prevQueuedAt || !nextQueuedAt) return false;
+    if (nextQueuedAt - prevQueuedAt > REALTIME_TURN_COALESCE_WINDOW_MS) return false;
+
+    const prevBuffer = Buffer.isBuffer(prevTurn.pcmBuffer) ? prevTurn.pcmBuffer : null;
+    const nextBuffer = Buffer.isBuffer(nextTurn.pcmBuffer) ? nextTurn.pcmBuffer : null;
+    if (!prevBuffer?.length || !nextBuffer?.length) return false;
+    if (prevBuffer.length + nextBuffer.length > REALTIME_TURN_COALESCE_MAX_BYTES) return false;
+
+    return true;
+  }
+
   queueRealtimeTurn({ session, userId, pcmBuffer, captureReason = "stream_end" }) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
@@ -2018,6 +2045,26 @@ export class VoiceSessionManager {
     };
 
     if (session.realtimeTurnDrainActive) {
+      const lastQueuedTurn = pendingQueue[pendingQueue.length - 1] || null;
+      if (this.shouldCoalesceRealtimeTurn(lastQueuedTurn, queuedTurn)) {
+        lastQueuedTurn.pcmBuffer = Buffer.concat([lastQueuedTurn.pcmBuffer, queuedTurn.pcmBuffer]);
+        lastQueuedTurn.captureReason = queuedTurn.captureReason;
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: "realtime_turn_coalesced",
+          metadata: {
+            sessionId: session.id,
+            captureReason: String(captureReason || "stream_end"),
+            combinedBytes: lastQueuedTurn.pcmBuffer.length,
+            queueDepth: pendingQueue.length
+          }
+        });
+        return;
+      }
+
       if (pendingQueue.length >= REALTIME_TURN_QUEUE_MAX) {
         const droppedTurn = pendingQueue.shift();
         if (droppedTurn) {
@@ -2102,6 +2149,28 @@ export class VoiceSessionManager {
     if (!isRealtimeMode(session.mode)) return;
     if (!pcmBuffer?.length) return;
     const queueWaitMs = queuedAt ? Math.max(0, Date.now() - Number(queuedAt || Date.now())) : 0;
+    const pendingQueueDepth = Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns.length : 0;
+    if (
+      pendingQueueDepth > 0 &&
+      queueWaitMs >= REALTIME_TURN_STALE_SKIP_MS &&
+      String(captureReason || "") !== "bot_turn_open_deferred_flush"
+    ) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "realtime_turn_skipped_stale",
+        metadata: {
+          sessionId: session.id,
+          captureReason: String(captureReason || "stream_end"),
+          queueWaitMs,
+          pendingQueueDepth,
+          pcmBytes: pcmBuffer.length
+        }
+      });
+      return;
+    }
 
     const settings = session.settingsSnapshot || this.store.getSettings();
     const preferredModel =
@@ -2482,14 +2551,17 @@ export class VoiceSessionManager {
     const normalizedTranscript = normalizeVoiceText(transcript, VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS);
     const normalizedUserId = String(userId || "").trim();
     const participantCount = this.countHumanVoiceParticipants(session);
-    const directAddressed = normalizedTranscript
+    const now = Date.now();
+    const directAddressedByName = normalizedTranscript
       ? (
         isVoiceTurnAddressedToBot(normalizedTranscript, settings) ||
         isLikelyBotNameVariantAddress(normalizedTranscript, settings?.botName || "")
       )
       : false;
+    const joinWindowAgeMs = Math.max(0, now - Number(session?.startedAt || 0));
+    const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
+    const directAddressed = directAddressedByName;
     const replyEagerness = clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
-    const now = Date.now();
 
     if (!normalizedTranscript) {
       return {
@@ -2513,7 +2585,9 @@ export class VoiceSessionManager {
 
     const lowSignalFragment = isLowSignalVoiceFragment(normalizedTranscript);
     const wakeWordPing = isLikelyWakeWordPing(normalizedTranscript);
-    const lowSignalLlmEligible = !directAddressed && shouldUseLlmForLowSignalTurn(normalizedTranscript);
+    const lowSignalLlmEligible =
+      !directAddressed &&
+      (joinWindowActive || shouldUseLlmForLowSignalTurn(normalizedTranscript));
     if (lowSignalFragment) {
       if (directAddressed && wakeWordPing) {
         return {
@@ -2651,6 +2725,8 @@ export class VoiceSessionManager {
       `Reply eagerness: ${replyEagerness}/100.`,
       `Human participants in channel: ${participantCount}.`,
       `Current speaker: ${speakerName}.`,
+      `Join window active: ${joinWindowActive ? "yes" : "no"}.`,
+      `Join window age ms: ${joinWindowAgeMs}.`,
       `Directly addressed: ${directAddressed ? "yes" : "no"}.`,
       `Latest transcript: "${normalizedTranscript}".`,
       wakeVariantHint
@@ -2665,6 +2741,7 @@ export class VoiceSessionManager {
     const compactContextPromptParts = [
       `Bot name: ${botName}.`,
       `Current speaker: ${speakerName}.`,
+      `Join window active: ${joinWindowActive ? "yes" : "no"}.`,
       `Directly addressed: ${directAddressed ? "yes" : "no"}.`,
       `Reply eagerness: ${replyEagerness}/100.`,
       `Participants: ${participantCount}.`,
@@ -2687,6 +2764,9 @@ export class VoiceSessionManager {
       "Questions like \"is that you <name-ish-token>?\" should usually be YES.",
       "Do not use rhyme alone as evidence of direct address.",
       "Generic chatter such as prank/stank/stinky phrasing without a clear name-like callout should usually be NO.",
+      "Priority rule: when Join window active is yes, treat short greetings/check-ins as targeted at the bot unless another human target is explicit.",
+      "Examples of join-window short greetings/check-ins: hi, hey, hello, yo, hola, what's up, what up, salam, marhaba, ciao, bonjour, こんにちは, مرحبا.",
+      "In join window, a single-token greeting/check-in should usually be YES, not filler.",
       "Prefer YES for clear questions/requests that seem aimed at the bot or the current speaker flow.",
       "If this sounds like a follow-up from an engaged speaker, lean YES.",
       "Prefer NO for filler/noise, pure acknowledgements, or turns clearly aimed at another human.",
@@ -2702,6 +2782,9 @@ export class VoiceSessionManager {
       "Treat likely ASR wake-word variants of the bot name as direct address when context supports it.",
       "Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" should usually be YES.",
       "Questions like \"is that you <name-ish-token>?\" should usually be YES.",
+      "Priority rule: when Join window active is yes, treat short greetings/check-ins as aimed at the bot unless another human target is explicit.",
+      "Examples of join-window short greetings/check-ins: hi, hey, hello, yo, hola, what's up, what up, salam, marhaba, ciao, bonjour, こんにちは, مرحبا.",
+      "In join window, a single-token greeting/check-in should usually be YES, not filler.",
       "Do not treat rhyme-only similarity as wake-word evidence.",
       "Generic prank/stank/stinky chatter without a clear name-like callout should usually be NO.",
       "Never output anything except YES or NO."
@@ -2729,7 +2812,10 @@ export class VoiceSessionManager {
         label: "primary_minimal_context",
         settings: primaryDecisionSettings,
         systemPrompt: systemPromptStrict,
-        userPrompt: `Directly addressed: ${directAddressed ? "yes" : "no"}.\nTranscript: "${normalizedTranscript}".`
+        userPrompt:
+          `Join window active: ${joinWindowActive ? "yes" : "no"}.\n` +
+          `Directly addressed: ${directAddressed ? "yes" : "no"}.\n` +
+          `Transcript: "${normalizedTranscript}".`
       }
     ].slice(0, maxDecisionAttempts);
     const claudeDecisionJsonSchema =

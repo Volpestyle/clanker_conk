@@ -382,6 +382,9 @@ export function buildReplyPrompt({
       "Use conversational continuity: follow-up VC control requests can still be aimed at you even if the user does not repeat your name."
     );
     parts.push(
+      "Use recent turn history to resolve target: if someone just addressed you and follows with a short imperative like 'get in vc now', treat it as likely directed at you unless another explicit target is present."
+    );
+    parts.push(
       "Prioritize who the current message is addressed to over older context when deciding voiceIntent."
     );
     parts.push(

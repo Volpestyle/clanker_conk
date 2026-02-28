@@ -1165,6 +1165,120 @@ test("voice intent dispatcher routes all supported intents to voice session mana
   });
 });
 
+test("smoke: 'clanka look at my screen' initiates a screen-share link message", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+
+    const shareUrl = "https://public.example.com/share/token-123";
+    const llmCalls = [];
+    const replyPayloads = [];
+    const channelSendPayloads = [];
+    const typingCallsRef = { count: 0 };
+    const createSessionCalls = [];
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate(payload) {
+          llmCalls.push(payload);
+          if (String(payload?.trace?.source || "") === "voice_operational_message") {
+            return {
+              text: `bet, open this and start sharing: ${shareUrl}`,
+              provider: "test",
+              model: "test-model",
+              usage: null,
+              costUsd: 0
+            };
+          }
+          return {
+            text: JSON.stringify({
+              text: "[SKIP]",
+              skip: true,
+              reactionEmoji: null,
+              media: null,
+              webSearchQuery: null,
+              memoryLookupQuery: null,
+              memoryLine: null,
+              automationAction: { operation: "none" },
+              voiceIntent: { intent: "none", confidence: 0, reason: null },
+              screenShareIntent: { action: "none", confidence: 0, reason: null }
+            }),
+            provider: "test",
+            model: "test-model",
+            usage: null,
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanker conk",
+      tag: "clanker conk#0001"
+    };
+
+    bot.attachScreenShareSessionManager({
+      async createSession(args) {
+        createSessionCalls.push(args);
+        return {
+          ok: true,
+          shareUrl,
+          expiresInMinutes: 12
+        };
+      }
+    });
+
+    const guild = buildGuild();
+    const channel = buildChannel({ guild, channelId, channelSendPayloads, typingCallsRef });
+    const incoming = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-screen-share-request",
+      content: "clanka look at my screen",
+      replyPayloads
+    });
+
+    const settings = store.getSettings();
+    const sent = await bot.maybeReplyToMessage(incoming, settings, {
+      source: "message_event",
+      forceRespond: true,
+      recentMessages: [],
+      addressSignal: {
+        direct: true,
+        inferred: true,
+        triggered: true,
+        reason: "name_variant"
+      }
+    });
+
+    assert.equal(sent, true);
+    assert.equal(replyPayloads.length, 1);
+    assert.equal(channelSendPayloads.length, 0);
+    assert.equal(createSessionCalls.length, 1);
+    assert.equal(createSessionCalls[0]?.guildId, guild.id);
+    assert.equal(createSessionCalls[0]?.channelId, channel.id);
+    assert.equal(createSessionCalls[0]?.requesterUserId, "user-1");
+    assert.equal(createSessionCalls[0]?.targetUserId, "user-1");
+    assert.equal(createSessionCalls[0]?.source, "message_event");
+    assert.equal(String(replyPayloads[0]?.content || "").includes(shareUrl), true);
+
+    const operationalCall = llmCalls.find(
+      (call) => String(call?.trace?.source || "") === "voice_operational_message"
+    );
+    assert.equal(Boolean(operationalCall), true);
+    assert.match(String(operationalCall?.userPrompt || ""), /voice_screen_share_offer/);
+    assert.match(String(operationalCall?.userPrompt || ""), /linkUrl/);
+  });
+});
+
 test("initiative-channel direct turns can be routed to thread replies when policy chooses reply mode", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";

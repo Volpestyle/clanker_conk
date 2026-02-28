@@ -282,6 +282,107 @@ test("reply decider allows short clanker wake ping", async () => {
   assert.equal(callCount, 0);
 });
 
+test("reply decider routes join-window greetings through llm with join context", async () => {
+  let callCount = 0;
+  const joinContextFlags = [];
+  const greetings = [
+    "what up",
+    "what's up",
+    "hola",
+    "مرحبا",
+    "こんにちは"
+  ];
+  const greetingSet = new Set(greetings.map((entry) => entry.toLowerCase()));
+  const manager = createManager({
+    generate: async (payload) => {
+      callCount += 1;
+      const prompt = String(payload?.userPrompt || "");
+      joinContextFlags.push(prompt.includes("Join window active: yes."));
+      const transcriptMatch = prompt.match(/Transcript:\s*"([^"]*)"/u);
+      const transcript = String(transcriptMatch?.[1] || "").toLowerCase();
+      return { text: greetingSet.has(transcript) ? "YES" : "NO" };
+    }
+  });
+  const session = {
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    botTurnOpen: false,
+    startedAt: Date.now() - 7_000
+  };
+  for (const transcript of greetings) {
+    const decision = await manager.evaluateVoiceReplyDecision({
+      session,
+      userId: "speaker-1",
+      settings: baseSettings(),
+      transcript
+    });
+
+    assert.equal(decision.allow, true, transcript);
+    assert.equal(decision.reason, "llm_yes", transcript);
+    assert.equal(decision.directAddressed, false, transcript);
+  }
+
+  assert.equal(callCount, greetings.length);
+  assert.equal(joinContextFlags.every(Boolean), true);
+});
+
+test("reply decider keeps low-signal greetings out of llm once join window is stale", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      return { text: "YES" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      botTurnOpen: false,
+      startedAt: Date.now() - 90_000
+    },
+    userId: "speaker-1",
+    settings: baseSettings(),
+    transcript: "hola"
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "low_signal_fragment");
+  assert.equal(decision.directAddressed, false);
+  assert.equal(callCount, 0);
+});
+
+test("reply decider only treats join-window what-up greetings as llm-eligible when join window is fresh", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      return { text: "NO" };
+    }
+  });
+  for (const transcript of ["what up", "what's up"]) {
+    const decision = await manager.evaluateVoiceReplyDecision({
+      session: {
+        guildId: "guild-1",
+        textChannelId: "chan-1",
+        voiceChannelId: "voice-1",
+        botTurnOpen: false,
+        startedAt: Date.now() - 90_000
+      },
+      userId: "speaker-1",
+      settings: baseSettings(),
+      transcript
+    });
+
+    assert.equal(decision.allow, false);
+    assert.equal(decision.reason, "llm_no");
+    assert.equal(decision.directAddressed, false);
+  }
+  assert.equal(callCount, 2);
+});
+
 test("reply decider blocks unaddressed turns when eagerness is disabled", async () => {
   const manager = createManager();
   const decision = await manager.evaluateVoiceReplyDecision({
@@ -337,6 +438,7 @@ test("reply decider routes wake-like variants through llm admission", async () =
     { text: "is that u clank?", expected: true },
     { text: "is that you clinker?", expected: true },
     { text: "did i just hear a clanka?", expected: true },
+    { text: "blinker conk.", expected: true },
     { text: "I love the clankers of the world", expected: true },
     { text: "clunker", expected: true },
     { text: "yo clunker", expected: true },
@@ -761,6 +863,40 @@ test("reply decider bypasses LLM for direct-addressed turns", async () => {
   assert.equal(callCount, 0);
 });
 
+test("reply decider treats merged bot-name token as direct-addressed fast path", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      return { text: "NO", provider: "anthropic", model: "claude-haiku-4-5" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      botTurnOpen: false,
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          maxAttempts: 1
+        }
+      }
+    }),
+    transcript: "clankerconk can you help with this"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "direct_address_fast_path");
+  assert.equal(decision.directAddressed, true);
+  assert.equal(callCount, 0);
+});
+
 test("reply decider blocks contract violations after bounded retries", async () => {
   let callCount = 0;
   const manager = createManager({
@@ -1096,6 +1232,89 @@ test("queueRealtimeTurn keeps a bounded FIFO backlog while realtime drain is act
   assert.equal(supersededLogs.length, 1);
   assert.equal(supersededLogs[0]?.metadata?.replacedCaptureReason, "r1");
   assert.equal(supersededLogs[0]?.metadata?.maxQueueDepth, 3);
+});
+
+test("queueRealtimeTurn coalesces adjacent queued turns from the same speaker", () => {
+  const manager = createManager();
+  const session = {
+    id: "session-queue-coalesce-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeTurnDrainActive: true,
+    pendingRealtimeTurns: []
+  };
+
+  manager.queueRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([1, 2, 3]),
+    captureReason: "speaking_end"
+  });
+  manager.queueRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([4, 5]),
+    captureReason: "speaking_end"
+  });
+
+  assert.equal(session.pendingRealtimeTurns.length, 1);
+  assert.equal(Buffer.isBuffer(session.pendingRealtimeTurns[0]?.pcmBuffer), true);
+  assert.equal(session.pendingRealtimeTurns[0]?.pcmBuffer.equals(Buffer.from([1, 2, 3, 4, 5])), true);
+});
+
+test("runRealtimeTurn skips stale queued turns when newer backlog exists", async () => {
+  let transcribeCalls = 0;
+  let decisionCalls = 0;
+  const runtimeLogs = [];
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.transcribePcmTurn = async () => {
+    transcribeCalls += 1;
+    return "hello there";
+  };
+  manager.evaluateVoiceReplyDecision = async () => {
+    decisionCalls += 1;
+    return {
+      allow: true,
+      reason: "llm_yes",
+      participantCount: 2,
+      directAddressed: false,
+      transcript: "hello there"
+    };
+  };
+
+  const session = {
+    id: "session-stale-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    pendingRealtimeTurns: [{ queuedAt: Date.now(), pcmBuffer: Buffer.from([9, 9]), captureReason: "speaking_end" }],
+    realtimeClient: {
+      appendInputAudioPcm() {}
+    },
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([1, 2, 3, 4]),
+    captureReason: "speaking_end",
+    queuedAt: Date.now() - 5_000
+  });
+
+  assert.equal(transcribeCalls, 0);
+  assert.equal(decisionCalls, 0);
+  const staleSkipLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "realtime_turn_skipped_stale"
+  );
+  assert.equal(Boolean(staleSkipLog), true);
 });
 
 test("runRealtimeTurn forwards audio and prepares openai context when reply decision allows turn", async () => {

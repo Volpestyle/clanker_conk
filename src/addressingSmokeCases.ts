@@ -6,6 +6,7 @@ export const ADDRESSING_SMOKE_CASES = [
   { text: "is that u clank?", expected: true },
   { text: "is that you clinker?", expected: true },
   { text: "did i just hear a clanka?", expected: true },
+  { text: "blinker conk.", expected: true },
   { text: "I love the clankers of the world", expected: true },
   { text: "i pulled a prank on him!", expected: false },
   { text: "pranked ya", expected: false },
@@ -13,4 +14,3 @@ export const ADDRESSING_SMOKE_CASES = [
   { text: "get stanked", expected: false },
   { text: "its stinky in here", expected: false }
 ];
-

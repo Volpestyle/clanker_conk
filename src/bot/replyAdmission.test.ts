@@ -35,10 +35,22 @@ test("reply admission treats exact bot-name token commands as direct address", (
   assert.equal(signal.reason, "name_exact");
 });
 
+test("reply admission treats merged bot-name token commands as direct address", () => {
+  const signal = getReplyAddressSignal(
+    BASE_RUNTIME,
+    BASE_SETTINGS,
+    buildMessage("clankerconk can you answer this?"),
+    []
+  );
+
+  assert.equal(signal.direct, true);
+  assert.equal(signal.triggered, true);
+  assert.equal(signal.reason, "name_exact");
+});
+
 test("reply admission text addressing matches shared voice smoke phrase table", () => {
   for (const row of ADDRESSING_SMOKE_CASES) {
     const signal = getReplyAddressSignal(BASE_RUNTIME, BASE_SETTINGS, buildMessage(row.text), []);
     assert.equal(Boolean(signal.triggered), row.expected, row.text);
   }
 });
-

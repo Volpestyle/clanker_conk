@@ -118,6 +118,7 @@ test("isVoiceTurnAddressedToBot matches exact bot-name phrase and primary wake t
   const settings = { botName: "clanker conk" };
   const cases = [
     { text: "yo clanker conk can you answer this?", expected: true },
+    { text: "clankerconk can you answer this?", expected: true },
     { text: "yo clanker can you answer this?", expected: true },
     { text: "clanker?", expected: true },
     { text: "yo conk can you answer this?", expected: false },
@@ -150,6 +151,13 @@ test("isBotNameAddressed normalizes punctuation and accents for exact matching",
   assert.equal(
     isBotNameAddressed({
       transcript: "clanker's still here",
+      botName: "clanker conk"
+    }),
+    true
+  );
+  assert.equal(
+    isBotNameAddressed({
+      transcript: "clankerconk can you help me with this?",
       botName: "clanker conk"
     }),
     true

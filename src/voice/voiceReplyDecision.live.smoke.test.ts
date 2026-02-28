@@ -107,4 +107,23 @@ test("smoke: live voice decision model admits wake-variant turns", { timeout: 30
       `Expected ${row.expected ? "YES" : "NO"} for "${row.text}", got reason="${decision.reason}" llmResponse="${String(decision.llmResponse || "")}".`
     );
   }
+
+  const joinGreetingDecision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "live-smoke-guild",
+      textChannelId: "live-smoke-text",
+      voiceChannelId: "live-smoke-voice",
+      botTurnOpen: false,
+      startedAt: Date.now() - 5_000
+    },
+    userId: "speaker-1",
+    settings,
+    transcript: "hola"
+  });
+
+  assert.equal(
+    joinGreetingDecision.allow,
+    true,
+    `Expected YES for join-window greeting "hola", got reason="${joinGreetingDecision.reason}" llmResponse="${String(joinGreetingDecision.llmResponse || "")}".`
+  );
 });
