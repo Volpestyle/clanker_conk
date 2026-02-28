@@ -80,4 +80,3 @@ Used by `src/voice/voiceGoldenValidation.live.smoke.test.ts`:
 - `openai_realtime`: `OPENAI_API_KEY`
 - `voice_agent`: `XAI_API_KEY` (+ `OPENAI_API_KEY` when `--input-transport audio`)
 - `gemini_realtime`: `GOOGLE_API_KEY` (+ `OPENAI_API_KEY` when `--input-transport audio`)
-

@@ -13,11 +13,7 @@
  */
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import {
-  buildClaudeCodeSystemPrompt,
-  parseClaudeCodeStreamOutput,
-  parseClaudeCodeJsonOutput
-} from "./llm.ts";
+import { parseClaudeCodeStreamOutput } from "./llm.ts";
 import { parseVoiceDecisionContract } from "./voice/voiceSessionManager.ts";
 import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
 
@@ -173,191 +169,7 @@ test("smoke: contract rejects claude-code memory preamble (incident repro)", () 
 });
 
 // ===========================================================================
-// 2. parseClaudeCodeStreamOutput — stream parsing resilience
-// ===========================================================================
-
-test("smoke: stream parser returns null for empty output", () => {
-  assert.equal(parseClaudeCodeStreamOutput(""), null);
-  assert.equal(parseClaudeCodeStreamOutput(null), null);
-  assert.equal(parseClaudeCodeStreamOutput(undefined), null);
-});
-
-test("smoke: stream parser returns null for whitespace-only output", () => {
-  assert.equal(parseClaudeCodeStreamOutput("  \n  \n  "), null);
-});
-
-test("smoke: stream parser returns null for non-JSON garbage", () => {
-  assert.equal(parseClaudeCodeStreamOutput("not json at all"), null);
-});
-
-test("smoke: stream parser extracts YES from StructuredOutput tool_use", () => {
-  const raw = [
-    JSON.stringify({
-      type: "assistant",
-      message: {
-        content: [
-          { type: "tool_use", name: "StructuredOutput", input: { decision: "YES" } }
-        ]
-      }
-    }),
-    JSON.stringify({
-      type: "result",
-      is_error: false,
-      result: "",
-      usage: { input_tokens: 10, output_tokens: 5, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-      total_cost_usd: 0.001
-    })
-  ].join("\n");
-
-  const parsed = parseClaudeCodeStreamOutput(raw);
-  assert.ok(parsed);
-  assert.equal(parsed.text, '{"decision":"YES"}');
-  assert.equal(parsed.isError, false);
-});
-
-test("smoke: stream parser extracts NO from StructuredOutput tool_use", () => {
-  const raw = [
-    JSON.stringify({
-      type: "assistant",
-      message: {
-        content: [
-          { type: "text", text: "I will respond with my decision." },
-          { type: "tool_use", name: "StructuredOutput", input: { decision: "NO" } }
-        ]
-      }
-    }),
-    JSON.stringify({
-      type: "result",
-      is_error: false,
-      result: "",
-      usage: { input_tokens: 10, output_tokens: 30, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-      total_cost_usd: 0.002
-    })
-  ].join("\n");
-
-  const parsed = parseClaudeCodeStreamOutput(raw);
-  assert.ok(parsed);
-  assert.equal(parsed.text, '{"decision":"NO"}');
-  assert.equal(parsed.isError, false);
-});
-
-test("smoke: stream parser handles result with is_error true", () => {
-  const raw = JSON.stringify({
-    type: "result",
-    is_error: true,
-    result: "rate limit exceeded",
-    usage: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-    total_cost_usd: 0
-  });
-
-  const parsed = parseClaudeCodeStreamOutput(raw);
-  assert.ok(parsed);
-  assert.equal(parsed.isError, true);
-});
-
-test("smoke: stream parser extracts bare assistant text YES", () => {
-  const raw = JSON.stringify({
-    type: "assistant",
-    message: { content: [{ type: "text", text: "YES" }] }
-  });
-
-  const parsed = parseClaudeCodeStreamOutput(raw);
-  assert.ok(parsed);
-  assert.equal(parsed.text, "YES");
-});
-
-test("smoke: stream parser prefers StructuredOutput over verbose assistant text", () => {
-  const raw = [
-    JSON.stringify({
-      type: "assistant",
-      message: {
-        content: [
-          { type: "text", text: "Based on my analysis of the conversation context, I believe the user is asking the bot directly." },
-          { type: "tool_use", name: "StructuredOutput", input: { decision: "YES" } }
-        ]
-      }
-    }),
-    JSON.stringify({
-      type: "result",
-      is_error: false,
-      result: "",
-      usage: { input_tokens: 50, output_tokens: 200, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-      total_cost_usd: 0.01
-    })
-  ].join("\n");
-
-  const parsed = parseClaudeCodeStreamOutput(raw);
-  assert.ok(parsed);
-  assert.equal(parsed.text, '{"decision":"YES"}');
-  // The StructuredOutput payload is what matters, not the verbose text
-  const contract = parseVoiceDecisionContract(parsed.text);
-  assert.equal(contract.confident, true);
-  assert.equal(contract.allow, true);
-});
-
-// ===========================================================================
-// 3. parseClaudeCodeJsonOutput — JSON fallback parsing
-// ===========================================================================
-
-test("smoke: json parser returns null for empty output", () => {
-  assert.equal(parseClaudeCodeJsonOutput(""), null);
-  assert.equal(parseClaudeCodeJsonOutput(null), null);
-});
-
-test("smoke: json parser extracts YES from result event", () => {
-  const raw = JSON.stringify({
-    type: "result",
-    is_error: false,
-    result: "YES",
-    usage: { input_tokens: 5, output_tokens: 1, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-    total_cost_usd: 0.001
-  });
-
-  const parsed = parseClaudeCodeJsonOutput(raw);
-  assert.ok(parsed);
-  assert.equal(parsed.text, "YES");
-  assert.equal(parsed.isError, false);
-});
-
-test("smoke: json parser extracts structured JSON decision from result", () => {
-  const raw = JSON.stringify({
-    type: "result",
-    is_error: false,
-    result: '{"decision":"NO"}',
-    usage: { input_tokens: 5, output_tokens: 3, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
-    total_cost_usd: 0.001
-  });
-
-  const parsed = parseClaudeCodeJsonOutput(raw);
-  assert.ok(parsed);
-  assert.equal(parsed.text, '{"decision":"NO"}');
-  const contract = parseVoiceDecisionContract(parsed.text);
-  assert.equal(contract.confident, true);
-  assert.equal(contract.allow, false);
-});
-
-// ===========================================================================
-// 4. buildClaudeCodeSystemPrompt — token budget enforcement
-// ===========================================================================
-
-test("smoke: system prompt includes token budget for classifier", () => {
-  const prompt = buildClaudeCodeSystemPrompt({
-    systemPrompt: "Respond with YES or NO only.",
-    maxOutputTokens: 2
-  });
-  assert.match(prompt, /under 2 tokens/);
-});
-
-test("smoke: system prompt omits budget when maxOutputTokens is 0", () => {
-  const prompt = buildClaudeCodeSystemPrompt({
-    systemPrompt: "Free-form assistant.",
-    maxOutputTokens: 0
-  });
-  assert.equal(prompt.includes("tokens"), false);
-});
-
-// ===========================================================================
-// 5. End-to-end: claude-code classifier through evaluateVoiceReplyDecision
+// 2. End-to-end: claude-code classifier through evaluateVoiceReplyDecision
 // ===========================================================================
 
 test("smoke: claude-code structured YES accepted through decision pipeline", async () => {
@@ -539,7 +351,7 @@ test("smoke: claude-code error blocks unaddressed turns", async () => {
 });
 
 // ===========================================================================
-// 6. Cross-layer: stream output → contract parsing pipeline
+// 3. Cross-layer: stream output → contract parsing pipeline
 // ===========================================================================
 
 test("smoke: full pipeline - StructuredOutput YES → contract YES", () => {

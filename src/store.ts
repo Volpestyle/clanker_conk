@@ -28,7 +28,6 @@ import {
 import { pushPerformanceMetric, summarizeLatencyMetric } from "./store/storePerformance.ts";
 
 const SETTINGS_KEY = "runtime_settings";
-const RESPONSE_TRIGGER_INDEX_STATE_KEY = "__response_trigger_index_last_action_id__";
 
 export class Store {
   dbPath;
@@ -185,7 +184,6 @@ export class Store {
       this.rewriteRuntimeSettingsRow(row?.value);
     }
 
-    this.syncResponseTriggerIndex();
   }
 
   rewriteRuntimeSettingsRow(rawValue) {
@@ -463,76 +461,6 @@ export class Store {
       }
     });
     insertTx(triggerMessageIds, normalizedActionId, String(createdAt || nowIso()));
-  }
-
-  getResponseTriggerIndexCursor() {
-    const row = this.db
-      .prepare("SELECT value FROM settings WHERE key = ? LIMIT 1")
-      .get(RESPONSE_TRIGGER_INDEX_STATE_KEY);
-    const parsed = safeJsonParse(row?.value, null);
-    const rawLastActionId = Number(parsed?.lastActionId);
-    if (!Number.isFinite(rawLastActionId)) return 0;
-    if (rawLastActionId <= 0) return 0;
-    return Math.floor(rawLastActionId);
-  }
-
-  setResponseTriggerIndexCursor(lastActionId) {
-    const normalizedLastActionId = Number(lastActionId);
-    if (!Number.isFinite(normalizedLastActionId) || normalizedLastActionId < 0) return;
-
-    this.db
-      .prepare(
-        `INSERT INTO settings(key, value, updated_at)
-         VALUES(?, ?, ?)
-         ON CONFLICT(key) DO UPDATE SET
-           value = excluded.value,
-           updated_at = excluded.updated_at`
-      )
-      .run(
-        RESPONSE_TRIGGER_INDEX_STATE_KEY,
-        JSON.stringify({ lastActionId: Math.floor(normalizedLastActionId) }),
-        nowIso()
-      );
-  }
-
-  syncResponseTriggerIndex({ batchSize = 500 } = {}) {
-    const boundedBatchSize = clamp(Math.floor(Number(batchSize) || 500), 50, 2000);
-    let cursor = this.getResponseTriggerIndexCursor();
-    const originalCursor = cursor;
-    const selectTrackedActions = this.db.prepare(
-      `SELECT id, created_at, kind, metadata
-       FROM actions
-       WHERE id > ?
-         AND kind IN ('sent_reply', 'sent_message', 'reply_skipped')
-       ORDER BY id ASC
-       LIMIT ?`
-    );
-
-    while (true) {
-      const rows = selectTrackedActions.all(cursor, boundedBatchSize);
-      if (!rows.length) break;
-
-      for (const row of rows) {
-        const actionId = Number(row?.id);
-        if (!Number.isInteger(actionId) || actionId <= 0) continue;
-        const metadata = safeJsonParse(row?.metadata, null);
-        this.indexResponseTriggersForAction({
-          actionId,
-          kind: row?.kind,
-          metadata,
-          createdAt: row?.created_at
-        });
-      }
-
-      const nextCursor = Number(rows[rows.length - 1]?.id || 0);
-      if (!Number.isInteger(nextCursor) || nextCursor <= cursor) break;
-      cursor = nextCursor;
-      if (rows.length < boundedBatchSize) break;
-    }
-
-    if (cursor > originalCursor) {
-      this.setResponseTriggerIndexCursor(cursor);
-    }
   }
 
   hasTriggeredResponse(triggerMessageId) {
