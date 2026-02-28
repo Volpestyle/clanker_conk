@@ -4,6 +4,21 @@ This project currently has one replay harness: [`scripts/floodingReplayHarness.t
 
 Replay harnesses evaluate bot behavior against real conversation history in `data/clanker.db` without running the full Discord runtime loop.
 
+## Replay Framework Layout
+
+Replay harnesses now share a common framework:
+
+- Engine/runtime loop: `scripts/replay/core/engine.ts`
+- Shared DB loading and history priming: `scripts/replay/core/db.ts`
+- Shared helper types/utilities/output: `scripts/replay/core/types.ts`, `scripts/replay/core/utils.ts`, `scripts/replay/core/output.ts`
+- Scenario implementations: `scripts/replay/scenarios/*.ts`
+- Thin CLI entrypoints: `scripts/*ReplayHarness.ts`
+
+Current flooding wiring:
+
+- Entrypoint: `scripts/floodingReplayHarness.ts`
+- Scenario implementation: `scripts/replay/scenarios/flooding.ts`
+
 ## Flooding Replay: How It Works
 
 The flooding harness runs this pipeline:
@@ -25,19 +40,19 @@ The flooding harness runs this pipeline:
 Recorded replay (no actor LLM calls):
 
 ```bash
-node --import tsx scripts/floodingReplayHarness.ts --mode recorded
+bun scripts/floodingReplayHarness.ts --mode recorded
 ```
 
 Live replay (actor LLM; optional judge):
 
 ```bash
-node --import tsx scripts/floodingReplayHarness.ts --mode live
+bun scripts/floodingReplayHarness.ts --mode live
 ```
 
 Common scoped run:
 
 ```bash
-node --import tsx scripts/floodingReplayHarness.ts --mode recorded \
+bun scripts/floodingReplayHarness.ts --mode recorded \
   --since 2026-02-27T16:20:00.000Z \
   --until 2026-02-27T16:40:00.000Z \
   --channel-id 1052402898140667906 \
@@ -49,7 +64,7 @@ node --import tsx scripts/floodingReplayHarness.ts --mode recorded \
 Common assertion gates:
 
 ```bash
-node --import tsx scripts/floodingReplayHarness.ts --mode recorded \
+bun scripts/floodingReplayHarness.ts --mode recorded \
   --assert-max-unaddressed-send-rate 15 \
   --assert-max-unaddressed-sends 3 \
   --assert-min-addressed-send-rate 70 \
@@ -71,16 +86,21 @@ node --import tsx scripts/floodingReplayHarness.ts --mode recorded \
 
 ## Creating a New Replay Harness
 
-Use `scripts/floodingReplayHarness.ts` as the template.
+Use `scripts/replay/scenarios/flooding.ts` as the scenario template.
 
-1. Create `scripts/<scenario>ReplayHarness.ts`.
-2. Define scenario-specific turn selection queries and metrics.
+1. Create `scripts/replay/scenarios/<scenario>.ts`.
+2. Export a `run<Scenario>ReplayHarness(argv)` function that:
+   - parses scenario args,
+   - calls `runReplayEngine(...)`,
+   - evaluates scenario assertions,
+   - prints/writes scenario report output.
 3. Keep one decision path per mode (`recorded` vs `live`) and remove unused branches.
 4. Add scenario assertions that encode the behavior you want to protect.
-5. Optionally add `package.json` scripts:
+5. Create `scripts/<scenario>ReplayHarness.ts` as a thin entrypoint that calls the scenario runner.
+6. Optionally add `package.json` scripts:
    - `replay:<scenario>`
    - `replay:<scenario>:live`
-6. Validate with a known window:
+7. Validate with a known window:
    - Run recorded first to establish baseline behavior.
    - Run live with same window to compare current model behavior.
    - Keep thresholds in CLI assertions so CI/local runs fail fast on regressions.
