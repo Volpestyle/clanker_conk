@@ -238,11 +238,13 @@ export function buildReplyPrompt({
   voiceMode = null,
   screenShare = null,
   videoContext = null,
+  channelMode = "non_initiative",
   maxMediaPromptChars = 900,
   mediaPromptCraftGuidance = null
 }) {
   const parts = [];
   const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance();
+  const normalizedChannelMode = channelMode === "initiative" ? "initiative" : "non_initiative";
 
   parts.push(`Incoming message from ${message.authorName}: ${message.content}`);
   if (imageInputs?.length) {
@@ -326,20 +328,33 @@ export function buildReplyPrompt({
     const eagerness = Math.max(0, Math.min(100, Number(replyEagerness) || 0));
     parts.push(`Reply eagerness hint: ${eagerness}/100.`);
     parts.push("Treat reply eagerness as a soft threshold for when your jump-in contribution is worth it.");
-    if (eagerness <= 25) {
-      parts.push("Be very selective and skip unless you can add clearly strong value.");
-    } else if (eagerness >= 75) {
-      parts.push("You can jump in more often, including lighter/fun contributions that still fit the flow.");
-    } else {
-      parts.push("Use balanced judgment before joining the conversation.");
-    }
     parts.push("Higher eagerness means lower contribution threshold; lower eagerness means higher threshold.");
-    parts.push("Judge value by whether your message is useful, interesting, or funny enough to justify the interruption risk.");
-    parts.push("If unsure whether your contribution is worth it, output exactly [SKIP].");
-    parts.push("Decide if replying adds value right now.");
-    parts.push(
-      "If this message is not really meant for you or would interrupt people talking among themselves, output exactly [SKIP]."
-    );
+    if (normalizedChannelMode === "initiative") {
+      if (eagerness <= 25) {
+        parts.push("In initiative channels, stay selective and skip when a jump-in would feel random or stale.");
+      } else if (eagerness >= 75) {
+        parts.push("In initiative channels, you can join more often with short social glue when it fits.");
+      } else {
+        parts.push("In initiative channels, use balanced judgment and keep momentum without forcing it.");
+      }
+      parts.push("Short acknowledgements, playful riffs, or mood-setting lines are fine when they fit naturally.");
+      parts.push("If this would derail, interrupt, or repeat what was just said, output exactly [SKIP].");
+      parts.push("Decide if replying improves the channel flow right now.");
+    } else {
+      if (eagerness <= 25) {
+        parts.push("Be very selective and skip unless you can add clearly strong value.");
+      } else if (eagerness >= 75) {
+        parts.push("You can jump in more often, including lighter/fun contributions that still fit the flow.");
+      } else {
+        parts.push("Use balanced judgment before joining the conversation.");
+      }
+      parts.push("Judge value by whether your message is useful, interesting, or funny enough to justify the interruption risk.");
+      parts.push("If unsure whether your contribution is worth it, output exactly [SKIP].");
+      parts.push("Decide if replying adds value right now.");
+      parts.push(
+        "If this message is not really meant for you or would interrupt people talking among themselves, output exactly [SKIP]."
+      );
+    }
   }
 
   const reactionLevel = Math.max(0, Math.min(100, Number(reactionEagerness) || 0));
@@ -746,7 +761,9 @@ export function buildVoiceTurnPrompt({
   isEagerTurn = false,
   voiceEagerness = 0,
   soundboardCandidates = [],
-  memoryEnabled = false
+  memoryEnabled = false,
+  webSearch = null,
+  allowWebSearchDirective = false
 }) {
   const parts = [];
   const voiceToneGuardrails = buildVoiceToneGuardrails();
@@ -786,6 +803,45 @@ export function buildVoiceTurnPrompt({
       "If you want a soundboard effect, append exactly one trailing directive: [[SOUNDBOARD:<sound_ref>]] where <sound_ref> matches the list exactly."
     );
     parts.push("If no soundboard effect should play, omit the directive.");
+  }
+
+  if (allowWebSearchDirective) {
+    if (webSearch?.optedOutByUser) {
+      parts.push("The user asked not to use web search.");
+      parts.push("Do not output [[WEB_SEARCH:...]].");
+    } else if (!webSearch?.enabled) {
+      parts.push("Live web lookup is disabled in settings.");
+      parts.push("Do not output [[WEB_SEARCH:...]].");
+    } else if (!webSearch?.configured) {
+      parts.push("Live web lookup is unavailable (provider not configured).");
+      parts.push("Do not output [[WEB_SEARCH:...]].");
+    } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
+      parts.push("Live web lookup is unavailable right now (budget exhausted).");
+      parts.push("Do not output [[WEB_SEARCH:...]].");
+    } else {
+      parts.push("Live web lookup is available.");
+      parts.push(
+        "If your spoken response needs fresh web info for accuracy, output a trailing directive [[WEB_SEARCH:<concise query>]]."
+      );
+      parts.push("Only use one web-search directive when needed.");
+    }
+  } else {
+    parts.push("Do not output [[WEB_SEARCH:...]].");
+  }
+
+  if (webSearch?.requested && !webSearch?.used) {
+    if (webSearch.error) {
+      parts.push(`Web lookup failed: ${webSearch.error}`);
+      parts.push("Answer without claiming live lookup succeeded.");
+    } else if (!webSearch.results?.length) {
+      parts.push("A web lookup was attempted, but no useful results were found.");
+      parts.push("Answer carefully and avoid invented specifics.");
+    }
+  }
+
+  if (webSearch?.used && webSearch.results?.length) {
+    parts.push(`Live web findings for query: "${webSearch.query}"`);
+    parts.push(formatWebSearchFindings(webSearch));
   }
 
   if (isEagerTurn) {

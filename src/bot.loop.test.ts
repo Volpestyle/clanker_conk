@@ -205,8 +205,8 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
       content: "clanker conk, weigh in on this",
       mentions: {
         users: {
-          has() {
-            return false;
+          has(userId) {
+            return String(userId || "") === botUserId;
           }
         },
         repliedUser: null
