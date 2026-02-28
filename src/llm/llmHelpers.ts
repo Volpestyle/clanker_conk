@@ -143,6 +143,17 @@ export function normalizeLlmProvider(value, fallback = "openai") {
   return "openai";
 }
 
+export function normalizeOpenAiReasoningEffort(value, fallback = "") {
+  const normalized = String(value || fallback || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "minimal") return "minimal";
+  if (normalized === "low") return "low";
+  if (normalized === "medium") return "medium";
+  if (normalized === "high") return "high";
+  return "";
+}
+
 export function defaultModelForLlmProvider(provider) {
   if (provider === "anthropic") return "claude-haiku-4-5";
   if (provider === "xai") return "grok-3-mini-latest";

@@ -90,7 +90,6 @@ State shape:
 
 Environment variables:
 - `PUBLIC_HTTPS_ENABLED` (`true|false`, default `false`)
-- `PUBLIC_HTTPS_PROVIDER` (currently `cloudflared`)
 - `PUBLIC_HTTPS_TARGET_URL` (optional, default `http://127.0.0.1:${DASHBOARD_PORT}`)
 - `PUBLIC_HTTPS_CLOUDFLARED_BIN` (optional, default `cloudflared`)
 - `PUBLIC_API_TOKEN` (optional; enables public-header auth path for allowlisted ingest route)

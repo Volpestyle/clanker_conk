@@ -6,6 +6,7 @@ const CLOUDFLARED_PUBLIC_URL_RE = /https:\/\/[a-z0-9-]+\.trycloudflare\.com\b/i;
 const CLOUDFLARED_READY_RE = /\b(registered tunnel connection|connection established)\b/i;
 const CLOUDFLARED_RETRY_DELAY_MS = 5_000;
 const CLOUDFLARED_DEFAULT_BIN = "cloudflared";
+const CLOUDFLARED_PROVIDER = "cloudflared";
 
 export function extractCloudflaredPublicUrl(line) {
   const text = String(line || "");
@@ -53,7 +54,7 @@ export class PublicHttpsEntrypoint {
     this.retryTimer = null;
     this.state = {
       enabled: Boolean(this.appConfig?.publicHttpsEnabled),
-      provider: String(this.appConfig?.publicHttpsProvider || "cloudflared"),
+      provider: CLOUDFLARED_PROVIDER,
       status: this.appConfig?.publicHttpsEnabled ? "idle" : "disabled",
       targetUrl: resolvePublicHttpsTargetUrl(
         this.appConfig?.publicHttpsTargetUrl,
@@ -73,18 +74,6 @@ export class PublicHttpsEntrypoint {
   async start() {
     if (!this.state.enabled) {
       this.state.status = "disabled";
-      return this.getState();
-    }
-    if (this.state.provider !== "cloudflared") {
-      this.state.status = "error";
-      this.state.lastError = `unsupported_public_https_provider:${this.state.provider}`;
-      this.logAction({
-        kind: "bot_error",
-        content: "public_https_entrypoint_provider_unsupported",
-        metadata: {
-          provider: this.state.provider
-        }
-      });
       return this.getState();
     }
     if (this.child) return this.getState();

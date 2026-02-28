@@ -944,6 +944,200 @@ test("reply decider can skip classifier call in realtime brain mode when disable
   assert.equal(callCount, 0);
 });
 
+test("reply decider waits for longer silence on non-direct multi-user realtime turns when classifier is disabled", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      return { text: "YES" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+      lastInboundAudioAt: Date.now() - 280,
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          enabled: false,
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "what should we do next?"
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "awaiting_non_direct_silence_window");
+  assert.equal(callCount, 0);
+  assert.equal(Number.isFinite(decision.msSinceInboundAudio), true);
+  assert.equal(Number.isFinite(decision.requiredSilenceMs), true);
+  assert.equal(Number.isFinite(decision.retryAfterMs), true);
+  assert.ok(Number(decision.retryAfterMs) >= 60);
+});
+
+test("reply decider treats name-variant hints as llm-check candidates instead of silence-gated chatter", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      return { text: "YES" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+      lastInboundAudioAt: Date.now() - 220,
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          enabled: false,
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "clankerconk you there?"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "classifier_disabled_merged_with_generation");
+  assert.equal(decision.directAddressed, false);
+  assert.equal(callCount, 0);
+});
+
+test("reply decider keeps bot awake across speakers after a recent direct address", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      return { text: "YES" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+      lastInboundAudioAt: Date.now() - 320,
+      lastDirectAddressAt: Date.now() - 3_000,
+      lastDirectAddressUserId: "speaker-2"
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          enabled: false,
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "yeah that's what i meant"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "classifier_disabled_merged_with_generation");
+  assert.equal(callCount, 0);
+});
+
+test("reply decider falls back to slow-listen after wake context gets stale", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      return { text: "YES" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+      lastInboundAudioAt: Date.now() - 260,
+      lastDirectAddressAt: Date.now() - 42_000,
+      lastDirectAddressUserId: "speaker-2",
+      lastAudioDeltaAt: Date.now() - 42_000
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          enabled: false,
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "yeah that's what i meant"
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "awaiting_non_direct_silence_window");
+  assert.equal(callCount, 0);
+});
+
+test("reply decider keeps non-bot vocatives in slow-listen mode", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      return { text: "YES" };
+    }
+  });
+  manager.getVoiceChannelParticipants = () => [
+    { userId: "speaker-1", displayName: "speaker one" },
+    { userId: "speaker-2", displayName: "smelly" }
+  ];
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+      lastInboundAudioAt: Date.now() - 220
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          enabled: false,
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "yo smelly can you check that"
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "awaiting_non_direct_silence_window");
+  assert.equal(callCount, 0);
+});
+
 test("reply decider blocks ambiguous realtime native turns when classifier is disabled", async () => {
   let callCount = 0;
   const manager = createManager({
@@ -959,6 +1153,7 @@ test("reply decider blocks ambiguous realtime native turns when classifier is di
       voiceChannelId: "voice-1",
       mode: "openai_realtime",
       botTurnOpen: false,
+      lastInboundAudioAt: Date.now() - 220
     },
     userId: "speaker-1",
     settings: baseSettings({
@@ -998,6 +1193,7 @@ test("reply decider bypasses LLM for direct-addressed turns", async () => {
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
+        replyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5",
@@ -1014,7 +1210,7 @@ test("reply decider bypasses LLM for direct-addressed turns", async () => {
   assert.equal(callCount, 0);
 });
 
-test("reply decider treats merged bot-name token as direct-addressed fast path", async () => {
+test("reply decider routes merged bot-name token through llm admission", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -1032,6 +1228,7 @@ test("reply decider treats merged bot-name token as direct-addressed fast path",
     userId: "speaker-1",
     settings: baseSettings({
       voice: {
+        replyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5",
@@ -1042,10 +1239,10 @@ test("reply decider treats merged bot-name token as direct-addressed fast path",
     transcript: "clankerconk can you help with this"
   });
 
-  assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "direct_address_fast_path");
-  assert.equal(decision.directAddressed, true);
-  assert.equal(callCount, 0);
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "llm_no");
+  assert.equal(decision.directAddressed, false);
+  assert.equal(callCount, 1);
 });
 
 test("reply decider blocks contract violations without retrying", async () => {
@@ -1605,6 +1802,56 @@ test("runRealtimeTurn queues non-direct bot-turn-open turns for deferred flush",
 
   assert.equal(deferredTurns.length, 1);
   assert.equal(Boolean(deferredTurns[0]?.directAddressed), false);
+});
+
+test("runRealtimeTurn defers non-direct turns until silence window is met", async () => {
+  const runtimeLogs = [];
+  const deferredTurns = [];
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.queueDeferredBotTurnOpenTurn = (payload) => {
+    deferredTurns.push(payload);
+  };
+  manager.evaluateVoiceReplyDecision = async () => ({
+    allow: false,
+    reason: "awaiting_non_direct_silence_window",
+    participantCount: 2,
+    directAddressed: false,
+    transcript: "hold up, one sec",
+    retryAfterMs: 950
+  });
+
+  const session = {
+    id: "session-defer-3",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    realtimeClient: {
+      appendInputAudioPcm() {}
+    },
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([12, 13, 14, 15]),
+    captureReason: "stream_end"
+  });
+
+  assert.equal(deferredTurns.length, 1);
+  assert.equal(deferredTurns[0]?.deferReason, "awaiting_non_direct_silence_window");
+  assert.equal(deferredTurns[0]?.flushDelayMs, 950);
+  assert.equal(Boolean(deferredTurns[0]?.directAddressed), false);
+  const addressingLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
+  );
+  assert.equal(Boolean(addressingLog), true);
+  assert.equal(addressingLog?.metadata?.reason, "awaiting_non_direct_silence_window");
 });
 
 test("queueRealtimeTurn keeps only one merged pending turn while realtime drain is active", () => {

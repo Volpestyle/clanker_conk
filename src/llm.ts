@@ -35,6 +35,7 @@ import {
   normalizeExtractedFacts,
   normalizeInlineText,
   normalizeLlmProvider,
+  normalizeOpenAiReasoningEffort,
   normalizeModelAllowlist,
   normalizeOpenAiImageGenerationSize,
   normalizeXaiBaseUrl,
@@ -95,17 +96,6 @@ function buildOpenAiTemperatureParam(model: string, temperature: number) {
   };
 }
 
-function normalizeOpenAiReasoningEffort(value: unknown) {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "minimal") return "minimal";
-  if (normalized === "low") return "low";
-  if (normalized === "medium") return "medium";
-  if (normalized === "high") return "high";
-  return "";
-}
-
 function buildOpenAiReasoningParam(model: string, reasoningEffort: unknown = "") {
   const normalizedModel = String(model || "")
     .trim()
@@ -147,7 +137,7 @@ function buildOpenAiJsonSchemaTextFormat(jsonSchema: string) {
   return {
     format: {
       type: "json_schema" as const,
-      name: "reply_directive",
+      name: "reply_output",
       strict: true,
       schema: parsedSchema
     }
@@ -214,48 +204,17 @@ export class LLMService {
         : systemPrompt;
 
     try {
-      const response =
-        provider === "claude-code"
-          ? await this.callClaudeCode({
-              model,
-              systemPrompt,
-              userPrompt,
-              imageInputs,
-              contextMessages,
-              maxOutputTokens,
-              jsonSchema: normalizedJsonSchema
-            })
-          : provider === "anthropic"
-            ? await this.callAnthropic({
-                model,
-                systemPrompt: effectiveSystemPrompt,
-                userPrompt,
-                imageInputs,
-                contextMessages,
-                temperature,
-                maxOutputTokens
-              })
-            : provider === "xai"
-              ? await this.callXai({
-                  model,
-                  systemPrompt: effectiveSystemPrompt,
-                  userPrompt,
-                  imageInputs,
-                  contextMessages,
-                  temperature,
-                  maxOutputTokens
-                })
-              : await this.callOpenAI({
-                  model,
-                  systemPrompt: effectiveSystemPrompt,
-                  userPrompt,
-                  imageInputs,
-                  contextMessages,
-                  temperature,
-                  maxOutputTokens,
-                  reasoningEffort: settings?.llm?.reasoningEffort,
-                  jsonSchema: normalizedJsonSchema
-                });
+      const response = await this.callChatModel(provider, {
+        model,
+        systemPrompt: effectiveSystemPrompt,
+        userPrompt,
+        imageInputs,
+        contextMessages,
+        temperature,
+        maxOutputTokens,
+        reasoningEffort: settings?.llm?.reasoningEffort,
+        jsonSchema: normalizedJsonSchema
+      });
 
       const costUsd = estimateUsdCost({
         provider,
@@ -309,6 +268,34 @@ export class LLMService {
     }
   }
 
+  async callChatModel(provider, payload) {
+    const handlers = {
+      "claude-code": (args) => this.callClaudeCode(args),
+      anthropic: (args) => this.callAnthropic(args),
+      xai: (args) => this.callXai(args),
+      openai: (args) => this.callOpenAI(args)
+    };
+    const handler = handlers[provider];
+    if (!handler) {
+      throw new Error(`Unsupported LLM provider '${provider}'.`);
+    }
+    return handler(payload);
+  }
+
+  async callMemoryExtractionModel(provider, payload) {
+    const handlers = {
+      "claude-code": (args) => this.callClaudeCodeMemoryExtraction(args),
+      anthropic: (args) => this.callAnthropicMemoryExtraction(args),
+      xai: (args) => this.callXaiMemoryExtraction(args),
+      openai: (args) => this.callOpenAiMemoryExtraction(args)
+    };
+    const handler = handlers[provider];
+    if (!handler) {
+      throw new Error(`Unsupported LLM provider '${provider}'.`);
+    }
+    return handler(payload);
+  }
+
   async extractMemoryFacts({
     settings,
     authorName,
@@ -352,30 +339,11 @@ export class LLMService {
     ].join("\n");
 
     try {
-      const response =
-        provider === "claude-code"
-          ? await this.callClaudeCodeMemoryExtraction({
-              model,
-              systemPrompt,
-              userPrompt
-            })
-          : provider === "anthropic"
-            ? await this.callAnthropicMemoryExtraction({
-                model,
-                systemPrompt,
-                userPrompt
-              })
-            : provider === "xai"
-              ? await this.callXaiMemoryExtraction({
-                  model,
-                  systemPrompt,
-                  userPrompt
-                })
-              : await this.callOpenAiMemoryExtraction({
-                  model,
-                  systemPrompt,
-                  userPrompt
-                });
+      const response = await this.callMemoryExtractionModel(provider, {
+        model,
+        systemPrompt,
+        userPrompt
+      });
 
       const costUsd = estimateUsdCost({
         provider,

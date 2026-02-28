@@ -4,7 +4,7 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "allowImportingTsExtensions": true,
-    "types": ["node", "bun-types"]
+    "types": ["bun-types"]
   },
   "include": ["src/**/*.ts", "vite.config.ts"],
   "exclude": [

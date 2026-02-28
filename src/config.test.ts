@@ -8,7 +8,6 @@ const CONFIG_ENV_KEYS = [
   "DASHBOARD_TOKEN",
   "PUBLIC_API_TOKEN",
   "PUBLIC_HTTPS_ENABLED",
-  "PUBLIC_HTTPS_PROVIDER",
   "PUBLIC_HTTPS_TARGET_URL",
   "PUBLIC_HTTPS_CLOUDFLARED_BIN",
   "PUBLIC_SHARE_SESSION_TTL_MINUTES",
@@ -66,7 +65,6 @@ test("config parses explicit env values", async () => {
       DASHBOARD_PORT: "9191",
       DASHBOARD_HOST: "0.0.0.0",
       PUBLIC_HTTPS_ENABLED: "YES",
-      PUBLIC_HTTPS_PROVIDER: "cloudflared",
       PUBLIC_SHARE_SESSION_TTL_MINUTES: "25",
       DEFAULT_PROVIDER: "claude-code",
       DEFAULT_MODEL_OPENAI: "claude-haiku-4-5",
@@ -82,7 +80,6 @@ test("config parses explicit env values", async () => {
       assert.equal(appConfig.dashboardPort, 9191);
       assert.equal(appConfig.dashboardHost, "0.0.0.0");
       assert.equal(appConfig.publicHttpsEnabled, true);
-      assert.equal(appConfig.publicHttpsProvider, "cloudflared");
       assert.equal(appConfig.publicShareSessionTtlMinutes, 25);
       assert.equal(appConfig.defaultProvider, "claude-code");
       assert.equal(appConfig.defaultOpenAiModel, "claude-haiku-4-5");

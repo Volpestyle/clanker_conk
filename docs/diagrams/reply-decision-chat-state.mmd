@@ -1,0 +1,23 @@
+stateDiagram-v2
+    [*] --> AudioTurnCaptured
+    AudioTurnCaptured --> AdmissionGate : evaluateVoiceReplyDecision
+
+    AdmissionGate --> Denied : missing_transcript / low_signal / llm_no / llm_error
+    AdmissionGate --> Deferred : bot_turn_open or awaiting_non_direct_silence_window
+    AdmissionGate --> Admitted : direct/focused/recent followup or llm_yes
+
+    Deferred --> AudioTurnCaptured : deferred flush retry
+
+    Admitted --> StrategySplit
+    StrategySplit --> NativeRealtimePath : realtimeReplyStrategy=native
+    StrategySplit --> LocalGenerationPath : stt_pipeline or realtime brain
+
+    NativeRealtimePath --> NativeResponseRequested : append audio + schedule response
+
+    LocalGenerationPath --> LocalSkipped : [SKIP] or empty/no playable output
+    LocalGenerationPath --> LocalPlayback : spoken text and/or soundboard
+
+    NativeResponseRequested --> [*]
+    LocalSkipped --> [*]
+    LocalPlayback --> [*]
+    Denied --> [*]

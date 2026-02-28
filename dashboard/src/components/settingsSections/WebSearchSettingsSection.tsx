@@ -71,7 +71,7 @@ export function WebSearchSettingsSection({ id, form, set }) {
                 id="web-search-chars"
                 type="number"
                 min="350"
-                max="4000"
+                max="24000"
                 value={form.webSearchMaxChars}
                 onChange={set("webSearchMaxChars")}
               />

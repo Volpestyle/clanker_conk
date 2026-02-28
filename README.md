@@ -45,7 +45,6 @@ Fill `.env`:
 - Optional for public tunnel stream-ingest access: `PUBLIC_API_TOKEN` (sent as `x-public-api-token`).
 - Optional for auto public HTTPS entrypoint:
   - `PUBLIC_HTTPS_ENABLED=true`
-  - `PUBLIC_HTTPS_PROVIDER=cloudflared`
   - optional `PUBLIC_HTTPS_TARGET_URL` (defaults to `http://127.0.0.1:${DASHBOARD_PORT}`)
   - optional `PUBLIC_HTTPS_CLOUDFLARED_BIN` (defaults to `cloudflared`)
   - optional `PUBLIC_SHARE_SESSION_TTL_MINUTES` (default `12`, clamp `2..30`)
