@@ -184,65 +184,6 @@ test("countHumanVoiceParticipants uses channel members and guild fallback paths"
   assert.equal(fallback, 1);
 });
 
-test("buildVoiceDecisionMemoryContext returns formatted hints and logs failures", async () => {
-  let decisionMemoryCall = null;
-  const successMemory = {
-    async buildPromptMemorySlice(payload) {
-      decisionMemoryCall = payload;
-      return {
-        userFacts: [
-          {
-            fact: "prefers quick answers"
-          }
-        ],
-        relevantFacts: [
-          {
-            fact: "asked about launch windows"
-          }
-        ]
-      };
-    }
-  };
-  const success = createManager({
-    memory: successMemory
-  });
-  const ctx = await success.manager.buildVoiceDecisionMemoryContext({
-    session: createSession(),
-    settings: {
-      memory: {
-        enabled: true
-      }
-    },
-    userId: "user-1",
-    transcript: "what is the launch window?",
-    source: "voice_turn"
-  });
-  assert.equal(typeof ctx, "string");
-  assert.equal(ctx.length > 0, true);
-  assert.equal(String(decisionMemoryCall?.channelId || ""), "chan-1");
-
-  const failing = createManager({
-    memory: {
-      async buildPromptMemorySlice() {
-        throw new Error("memory service down");
-      }
-    }
-  });
-  const failedCtx = await failing.manager.buildVoiceDecisionMemoryContext({
-    session: createSession(),
-    settings: {
-      memory: {
-        enabled: true
-      }
-    },
-    userId: "user-1",
-    transcript: "hello",
-    source: "voice_turn"
-  });
-  assert.equal(failedCtx, "");
-  assert.equal(failing.logs.some((entry) => String(entry.content).includes("voice_reply_decision_memory_failed")), true);
-});
-
 test("buildOpenAiRealtimeMemorySlice handles build errors safely", async () => {
   const { manager, logs } = createManager({
     memory: {

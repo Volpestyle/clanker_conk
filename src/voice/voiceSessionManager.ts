@@ -86,8 +86,10 @@ const MAX_MAX_SESSION_MINUTES = 120;
 const MIN_INACTIVITY_SECONDS = 20;
 const MAX_INACTIVITY_SECONDS = 3600;
 const INPUT_SPEECH_END_SILENCE_MS = 1400;
-const SPEAKING_END_FINALIZE_GRACE_MS = 1200;
+const SPEAKING_END_MICRO_CAPTURE_MS = 260;
 const SPEAKING_END_SHORT_CAPTURE_MS = 900;
+const SPEAKING_END_FINALIZE_MICRO_MS = 620;
+const SPEAKING_END_FINALIZE_SHORT_MS = 320;
 const SPEAKING_END_FINALIZE_QUICK_MS = 140;
 const CAPTURE_IDLE_FLUSH_MS = INPUT_SPEECH_END_SILENCE_MS + 220;
 const CAPTURE_MAX_DURATION_MS = 14_000;
@@ -101,8 +103,9 @@ const MAX_RESPONSE_SILENCE_RETRIES = 2;
 const RESPONSE_DONE_SILENCE_GRACE_MS = 1400;
 const PENDING_SUPERSEDE_MIN_AGE_MS = 1800;
 const REALTIME_TURN_QUEUE_MAX = 3;
-const DIRECT_ADDRESS_BOT_TURN_DEFER_DELAY_MS = BOT_TURN_SILENCE_RESET_MS;
-const MAX_DIRECT_ADDRESS_BOT_TURN_DEFERS = 2;
+const BOT_TURN_DEFERRED_FLUSH_DELAY_MS = BOT_TURN_SILENCE_RESET_MS + 120;
+const BOT_TURN_DEFERRED_QUEUE_MAX = 8;
+const BOT_TURN_DEFERRED_COALESCE_MAX = 5;
 const BOT_DISCONNECT_GRACE_MS = 2500;
 const STT_CONTEXT_MAX_MESSAGES = 10;
 const STT_TRANSCRIPT_MAX_CHARS = 700;
@@ -110,7 +113,6 @@ const STT_REPLY_MAX_CHARS = 520;
 const VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS = 260;
 const VOICE_DECIDER_HISTORY_MAX_TURNS = 8;
 const VOICE_DECIDER_HISTORY_MAX_CHARS = 220;
-const REALTIME_ECHO_SUPPRESSION_MS = 1800;
 const REALTIME_INSTRUCTION_REFRESH_DEBOUNCE_MS = 220;
 const REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS = 420;
 const REALTIME_CONTEXT_MEMBER_LIMIT = 12;
@@ -1363,10 +1365,11 @@ export class VoiceSessionManager {
       if (!capture || typeof capture.finalize !== "function") return;
       if (capture.speakingEndFinalizeTimer) return;
       const captureAgeMs = Math.max(0, Date.now() - Number(capture.startedAt || Date.now()));
-      const finalizeDelayMs =
-        captureAgeMs < SPEAKING_END_SHORT_CAPTURE_MS
-          ? SPEAKING_END_FINALIZE_GRACE_MS
-          : SPEAKING_END_FINALIZE_QUICK_MS;
+      let finalizeDelayMs = SPEAKING_END_FINALIZE_QUICK_MS;
+      if (captureAgeMs < SPEAKING_END_SHORT_CAPTURE_MS) {
+        finalizeDelayMs =
+          captureAgeMs < SPEAKING_END_MICRO_CAPTURE_MS ? SPEAKING_END_FINALIZE_MICRO_MS : SPEAKING_END_FINALIZE_SHORT_MS;
+      }
       capture.speakingEndFinalizeTimer = setTimeout(() => {
         capture.speakingEndFinalizeTimer = null;
         capture.finalize("speaking_end");
@@ -1407,7 +1410,6 @@ export class VoiceSessionManager {
       startedAt: Date.now(),
       bytesSent: 0,
       pcmChunks: [],
-      suppressedNearBotSpeech: false,
       lastActivityTouchAt: 0,
       idleFlushTimer: null,
       maxFlushTimer: null,
@@ -1473,17 +1475,6 @@ export class VoiceSessionManager {
 
     pcmStream.on("data", (chunk) => {
       const now = Date.now();
-      const suppressForEcho =
-        isRealtimeMode(session.mode) &&
-        (session.botTurnOpen ||
-          (Number(session.lastAudioDeltaAt || 0) > 0 &&
-            now - Number(session.lastAudioDeltaAt || 0) < REALTIME_ECHO_SUPPRESSION_MS));
-
-      if (suppressForEcho) {
-        captureState.suppressedNearBotSpeech = true;
-        return;
-      }
-
       const normalizedPcm = convertDiscordPcmToXaiInput(
         chunk,
         isRealtimeMode(session.mode) ? Number(session.realtimeInputSampleRateHz) || 24000 : 24000
@@ -1525,19 +1516,6 @@ export class VoiceSessionManager {
       });
 
       if (captureState.bytesSent <= 0 || session.ending) {
-        if (captureState.suppressedNearBotSpeech && !session.ending) {
-          this.store.logAction({
-            kind: "voice_runtime",
-            guildId: session.guildId,
-            channelId: session.textChannelId,
-            userId,
-            content: "voice_turn_suppressed_near_bot_speech",
-            metadata: {
-              sessionId: session.id,
-              reason: String(reason || "stream_end")
-            }
-          });
-        }
         cleanupCapture();
         return;
       }
@@ -1609,7 +1587,7 @@ export class VoiceSessionManager {
     });
   }
 
-  queueRealtimeTurn({ session, userId, pcmBuffer, captureReason = "stream_end", deferCount = 0 }) {
+  queueRealtimeTurn({ session, userId, pcmBuffer, captureReason = "stream_end" }) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
     if (!pcmBuffer || !pcmBuffer.length) return;
@@ -1623,7 +1601,6 @@ export class VoiceSessionManager {
       userId,
       pcmBuffer,
       captureReason,
-      deferCount: Math.max(0, Number(deferCount || 0)),
       queuedAt: Date.now()
     };
 
@@ -1707,7 +1684,7 @@ export class VoiceSessionManager {
     }
   }
 
-  async runRealtimeTurn({ session, userId, pcmBuffer, captureReason = "stream_end", deferCount = 0, queuedAt = 0 }) {
+  async runRealtimeTurn({ session, userId, pcmBuffer, captureReason = "stream_end", queuedAt = 0 }) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
     if (!pcmBuffer?.length) return;
@@ -1759,36 +1736,15 @@ export class VoiceSessionManager {
         userId,
         text: turnTranscript
       });
-
-      if (settings?.memory?.enabled && this.memory && typeof this.memory.ingestMessage === "function") {
-        try {
-          await this.memory.ingestMessage({
-            messageId: `voice-${String(session.guildId || "guild")}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-            authorId: String(userId || ""),
-            authorName: this.resolveVoiceSpeakerName(session, userId) || "unknown",
-            content: turnTranscript,
-            settings,
-            trace: {
-              guildId: session.guildId,
-              channelId: session.textChannelId,
-              userId: String(userId || ""),
-              source: "voice_realtime_ingest"
-            }
-          });
-        } catch (error) {
-          this.store.logAction({
-            kind: "voice_error",
-            guildId: session.guildId,
-            channelId: session.textChannelId,
-            userId: String(userId || "") || null,
-            content: `voice_realtime_memory_ingest_failed: ${String(error?.message || error)}`,
-            metadata: {
-              sessionId: session.id,
-              captureReason: String(captureReason || "stream_end")
-            }
-          });
-        }
-      }
+      this.queueVoiceMemoryIngest({
+        session,
+        settings,
+        userId,
+        transcript: turnTranscript,
+        source: "voice_realtime_ingest",
+        captureReason,
+        errorPrefix: "voice_realtime_memory_ingest_failed"
+      });
     }
 
     const decision = await this.evaluateVoiceReplyDecision({
@@ -1834,21 +1790,197 @@ export class VoiceSessionManager {
     });
 
     if (!decision.allow) {
-      if (
-        decision.reason === "bot_turn_open" &&
-        Boolean(decision.directAddressed) &&
-        Number(deferCount || 0) < MAX_DIRECT_ADDRESS_BOT_TURN_DEFERS
-      ) {
-        this.deferDirectAddressedRealtimeTurn({
+      if (decision.reason === "bot_turn_open") {
+        this.queueDeferredBotTurnOpenTurn({
           session,
           userId,
+          transcript: decision.transcript || turnTranscript,
           pcmBuffer,
           captureReason,
-          deferCount: Number(deferCount || 0)
+          source: "realtime",
+          directAddressed: Boolean(decision.directAddressed)
         });
       }
       return;
     }
+    await this.forwardRealtimeTurnAudio({
+      session,
+      settings,
+      userId,
+      transcript: turnTranscript,
+      pcmBuffer,
+      captureReason
+    });
+  }
+
+  queueDeferredBotTurnOpenTurn({
+    session,
+    userId = null,
+    transcript = "",
+    pcmBuffer = null,
+    captureReason = "stream_end",
+    source = "voice_turn",
+    directAddressed = false
+  }) {
+    if (!session || session.ending) return;
+    const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedTranscript) return;
+    const pendingQueue = Array.isArray(session.pendingDeferredTurns) ? session.pendingDeferredTurns : [];
+    if (!Array.isArray(session.pendingDeferredTurns)) {
+      session.pendingDeferredTurns = pendingQueue;
+    }
+    if (pendingQueue.length >= BOT_TURN_DEFERRED_QUEUE_MAX) {
+      pendingQueue.shift();
+    }
+    pendingQueue.push({
+      userId: String(userId || "").trim() || null,
+      transcript: normalizedTranscript,
+      pcmBuffer: pcmBuffer?.length ? pcmBuffer : null,
+      captureReason: String(captureReason || "stream_end"),
+      source: String(source || "voice_turn"),
+      directAddressed: Boolean(directAddressed),
+      queuedAt: Date.now()
+    });
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId,
+      content: "voice_turn_deferred_bot_turn_open",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "voice_turn"),
+        mode: session.mode,
+        captureReason: String(captureReason || "stream_end"),
+        directAddressed: Boolean(directAddressed),
+        deferredQueueSize: pendingQueue.length
+      }
+    });
+    this.scheduleDeferredBotTurnOpenFlush({ session });
+  }
+
+  scheduleDeferredBotTurnOpenFlush({ session, delayMs = BOT_TURN_DEFERRED_FLUSH_DELAY_MS }) {
+    if (!session || session.ending) return;
+    if (session.deferredTurnFlushTimer) {
+      clearTimeout(session.deferredTurnFlushTimer);
+    }
+    session.deferredTurnFlushTimer = setTimeout(() => {
+      session.deferredTurnFlushTimer = null;
+      this.flushDeferredBotTurnOpenTurns({ session }).catch(() => undefined);
+    }, Math.max(20, Number(delayMs) || BOT_TURN_DEFERRED_FLUSH_DELAY_MS));
+  }
+
+  async flushDeferredBotTurnOpenTurns({ session }) {
+    if (!session || session.ending) return;
+    const pendingQueue = Array.isArray(session.pendingDeferredTurns) ? session.pendingDeferredTurns : [];
+    if (!pendingQueue.length) return;
+
+    if (session.botTurnOpen || Number(session.userCaptures?.size || 0) > 0) {
+      this.scheduleDeferredBotTurnOpenFlush({ session });
+      return;
+    }
+
+    const deferredTurns = pendingQueue.splice(0, pendingQueue.length);
+    if (!deferredTurns.length) return;
+    const coalescedTurns = deferredTurns.slice(-BOT_TURN_DEFERRED_COALESCE_MAX);
+    const latestTurn = coalescedTurns[coalescedTurns.length - 1];
+    const coalescedTranscript = normalizeVoiceText(
+      coalescedTurns
+        .map((entry) => String(entry?.transcript || "").trim())
+        .filter(Boolean)
+        .join(" "),
+      STT_TRANSCRIPT_MAX_CHARS
+    );
+    if (!coalescedTranscript) return;
+    const coalescedPcmBuffer = isRealtimeMode(session.mode)
+      ? Buffer.concat(
+          coalescedTurns
+            .map((entry) => (entry?.pcmBuffer?.length ? entry.pcmBuffer : null))
+            .filter(Boolean)
+        )
+      : null;
+
+    const settings = session.settingsSnapshot || this.store.getSettings();
+    const decision = await this.evaluateVoiceReplyDecision({
+      session,
+      settings,
+      userId: latestTurn?.userId || null,
+      transcript: coalescedTranscript,
+      source: "bot_turn_open_deferred_flush"
+    });
+    this.updateFocusedSpeakerWindow({
+      session,
+      userId: latestTurn?.userId || null,
+      allow: Boolean(decision.allow),
+      directAddressed: Boolean(decision.directAddressed),
+      reason: decision.reason
+    });
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: latestTurn?.userId || null,
+      content: "voice_turn_addressing",
+      metadata: {
+        sessionId: session.id,
+        mode: session.mode,
+        source: "bot_turn_open_deferred_flush",
+        captureReason: latestTurn?.captureReason || "stream_end",
+        allow: Boolean(decision.allow),
+        reason: decision.reason,
+        participantCount: Number(decision.participantCount || 0),
+        directAddressed: Boolean(decision.directAddressed),
+        transcript: decision.transcript || coalescedTranscript || null,
+        deferredTurnCount: coalescedTurns.length,
+        llmResponse: decision.llmResponse || null,
+        llmProvider: decision.llmProvider || null,
+        llmModel: decision.llmModel || null,
+        error: decision.error || null
+      }
+    });
+    if (!decision.allow) {
+      if (decision.reason === "bot_turn_open") {
+        this.queueDeferredBotTurnOpenTurn({
+          session,
+          userId: latestTurn?.userId || null,
+          transcript: coalescedTranscript,
+          pcmBuffer: coalescedPcmBuffer,
+          captureReason: latestTurn?.captureReason || "stream_end",
+          source: "bot_turn_open_deferred_flush",
+          directAddressed: Boolean(decision.directAddressed)
+        });
+      }
+      return;
+    }
+
+    if (session.mode === "stt_pipeline") {
+      await this.runSttPipelineReply({
+        session,
+        settings,
+        userId: latestTurn?.userId || null,
+        transcript: coalescedTranscript,
+        directAddressed: Boolean(decision.directAddressed)
+      });
+      return;
+    }
+
+    if (!isRealtimeMode(session.mode)) return;
+    if (!coalescedPcmBuffer?.length) return;
+    await this.forwardRealtimeTurnAudio({
+      session,
+      settings,
+      userId: latestTurn?.userId || null,
+      transcript: coalescedTranscript,
+      pcmBuffer: coalescedPcmBuffer,
+      captureReason: "bot_turn_open_deferred_flush"
+    });
+  }
+
+  async forwardRealtimeTurnAudio({ session, settings, userId, transcript = "", pcmBuffer, captureReason = "stream_end" }) {
+    if (!session || session.ending) return;
+    if (!isRealtimeMode(session.mode)) return;
+    if (!pcmBuffer?.length) return;
     try {
       session.realtimeClient.appendInputAudioPcm(pcmBuffer);
       session.pendingRealtimeInputBytes = Math.max(0, Number(session.pendingRealtimeInputBytes || 0)) + pcmBuffer.length;
@@ -1872,46 +2004,59 @@ export class VoiceSessionManager {
         session,
         settings,
         userId,
-        transcript: turnTranscript,
+        transcript,
         captureReason
       });
     }
     this.scheduleResponseFromBufferedAudio({ session, userId });
   }
 
-  deferDirectAddressedRealtimeTurn({ session, userId, pcmBuffer, captureReason = "stream_end", deferCount = 0 }) {
-    if (!session || session.ending) return;
-    if (!pcmBuffer?.length) return;
+  queueVoiceMemoryIngest({
+    session,
+    settings,
+    userId,
+    transcript,
+    source = "voice_stt_pipeline_ingest",
+    captureReason = "stream_end",
+    errorPrefix = "voice_stt_memory_ingest_failed"
+  }) {
+    if (!settings?.memory?.enabled) return;
+    if (!this.memory || typeof this.memory.ingestMessage !== "function") return;
 
-    const nextDeferCount = Math.max(0, Number(deferCount || 0)) + 1;
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId,
-      content: "direct_address_turn_deferred",
-      metadata: {
-        sessionId: session.id,
-        captureReason: String(captureReason || "stream_end"),
-        deferCount: nextDeferCount,
-        maxDefers: MAX_DIRECT_ADDRESS_BOT_TURN_DEFERS,
-        deferDelayMs: DIRECT_ADDRESS_BOT_TURN_DEFER_DELAY_MS
-      }
-    });
+    const normalizedUserId = String(userId || "").trim();
+    const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedUserId || !normalizedTranscript) return;
 
-    setTimeout(() => {
-      if (!session || session.ending) return;
-      this.queueRealtimeTurn({
-        session,
-        userId,
-        pcmBuffer,
-        captureReason,
-        deferCount: nextDeferCount
+    void this.memory
+      .ingestMessage({
+        messageId: `voice-${String(session.guildId || "guild")}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+        authorId: normalizedUserId,
+        authorName: this.resolveVoiceSpeakerName(session, normalizedUserId) || "unknown",
+        content: normalizedTranscript,
+        settings,
+        trace: {
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: normalizedUserId,
+          source: String(source || "voice_stt_pipeline_ingest")
+        }
+      })
+      .catch((error) => {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: normalizedUserId || null,
+          content: `${String(errorPrefix || "voice_stt_memory_ingest_failed")}: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id,
+            captureReason: String(captureReason || "stream_end")
+          }
+        });
       });
-    }, DIRECT_ADDRESS_BOT_TURN_DEFER_DELAY_MS);
   }
 
-  async evaluateVoiceReplyDecision({ session, settings, userId, transcript, source = "voice_turn" }) {
+  async evaluateVoiceReplyDecision({ session, settings, userId, transcript }) {
     const normalizedTranscript = normalizeVoiceText(transcript, VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS);
     const normalizedUserId = String(userId || "").trim();
     const participantCount = this.countHumanVoiceParticipants(session);
@@ -1982,6 +2127,16 @@ export class VoiceSessionManager {
       };
     }
 
+    if (directAddressed) {
+      return {
+        allow: true,
+        reason: "direct_address_fast_path",
+        participantCount,
+        directAddressed,
+        transcript: normalizedTranscript
+      };
+    }
+
     if (!directAddressed && replyEagerness <= 0) {
       return {
         allow: false,
@@ -1999,17 +2154,6 @@ export class VoiceSessionManager {
       .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
 
     if (!this.llm?.generate) {
-      if (directAddressed) {
-        return {
-          allow: true,
-          reason: "direct_address_no_decider",
-          participantCount,
-          directAddressed,
-          transcript: normalizedTranscript,
-          llmProvider,
-          llmModel
-        };
-      }
       return {
         allow: false,
         reason: "llm_generate_unavailable",
@@ -2029,16 +2173,6 @@ export class VoiceSessionManager {
       .slice(0, 10);
     const recentHistory = this.formatVoiceDecisionHistory(session, 6);
     const compactHistory = this.formatVoiceDecisionHistory(session, 3);
-    const shouldLoadMemoryContext = Boolean(directAddressed);
-    const memoryContext = shouldLoadMemoryContext
-      ? await this.buildVoiceDecisionMemoryContext({
-          session,
-          settings,
-          userId,
-          transcript: normalizedTranscript,
-          source
-        })
-      : "";
     const configuredMaxDecisionAttempts = Number(replyDecisionLlm?.maxAttempts);
     const maxDecisionAttempts = clamp(
       Math.floor(Number.isFinite(configuredMaxDecisionAttempts) ? configuredMaxDecisionAttempts : 1),
@@ -2069,9 +2203,6 @@ export class VoiceSessionManager {
     if (recentHistory) {
       fullContextPromptParts.push(`Recent voice turns:\n${recentHistory}`);
     }
-    if (memoryContext) {
-      fullContextPromptParts.push(`Decision context hints (never say these hints): ${memoryContext}`);
-    }
 
     const compactContextPromptParts = [
       `Current speaker: ${speakerName}.`,
@@ -2085,9 +2216,6 @@ export class VoiceSessionManager {
     }
     if (compactHistory) {
       compactContextPromptParts.push(`Recent turns:\n${compactHistory}`);
-    }
-    if (memoryContext) {
-      compactContextPromptParts.push(`Hints: ${memoryContext}`);
     }
 
     const systemPromptCompact = [
@@ -2174,18 +2302,6 @@ export class VoiceSessionManager {
         if (parsed.confident) {
           const resolvedProvider = generation?.provider || llmProvider;
           const resolvedModel = generation?.model || step?.settings?.llm?.model || llmModel;
-          if (directAddressed && !parsed.allow) {
-            return {
-              allow: true,
-              reason: index === 0 ? "direct_address_override_llm_no" : "direct_address_override_llm_no_retry",
-              participantCount,
-              directAddressed,
-              transcript: normalizedTranscript,
-              llmResponse: raw,
-              llmProvider: resolvedProvider,
-              llmModel: resolvedModel
-            };
-          }
           return {
             allow: parsed.allow,
             reason: parsed.allow ? (index === 0 ? "llm_yes" : "llm_yes_retry") : index === 0 ? "llm_no" : "llm_no_retry",
@@ -2211,18 +2327,6 @@ export class VoiceSessionManager {
     }
 
     if (!invalidOutputs.length && generationErrors.length) {
-      if (directAddressed) {
-        return {
-          allow: true,
-          reason: "direct_address_llm_error_fallback",
-          participantCount,
-          directAddressed,
-          transcript: normalizedTranscript,
-          llmProvider,
-          llmModel,
-          error: generationErrors.map((row) => `${row.step}: ${row.error}`).join(" | ")
-        };
-      }
       return {
         allow: false,
         reason: "llm_error",
@@ -2232,22 +2336,6 @@ export class VoiceSessionManager {
         llmProvider,
         llmModel,
         error: generationErrors.map((row) => `${row.step}: ${row.error}`).join(" | ")
-      };
-    }
-
-    if (directAddressed) {
-      return {
-        allow: true,
-        reason: "direct_address_contract_fallback",
-        participantCount,
-        directAddressed,
-        transcript: normalizedTranscript,
-        llmResponse: invalidOutputs.map((row) => `${row.step}=${row.text}`).join(" | "),
-        llmProvider,
-        llmModel,
-        error: generationErrors.length
-          ? generationErrors.map((row) => `${row.step}: ${row.error}`).join(" | ")
-          : undefined
       };
     }
 
@@ -2264,50 +2352,6 @@ export class VoiceSessionManager {
         ? generationErrors.map((row) => `${row.step}: ${row.error}`).join(" | ")
         : undefined
     };
-  }
-
-  async buildVoiceDecisionMemoryContext({ session, settings, userId, transcript = "", source = "voice_turn" }) {
-    if (!settings?.memory?.enabled) return "";
-    if (!this.memory || typeof this.memory.buildPromptMemorySlice !== "function") return "";
-
-    const normalizedUserId = String(userId || "").trim();
-    const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    if (!normalizedUserId || !normalizedTranscript) return "";
-
-    try {
-      const slice = await this.memory.buildPromptMemorySlice({
-        userId: normalizedUserId,
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        queryText: normalizedTranscript,
-        settings,
-        trace: {
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: normalizedUserId,
-          source: "voice_reply_decision_memory",
-          mode: session.mode,
-          trigger: String(source || "voice_turn")
-        }
-      });
-      const allFacts = [
-        ...(Array.isArray(slice?.userFacts) ? slice.userFacts : []),
-        ...(Array.isArray(slice?.relevantFacts) ? slice.relevantFacts : [])
-      ];
-      return formatRealtimeMemoryFacts(allFacts, 4);
-    } catch (error) {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: normalizedUserId,
-        content: `voice_reply_decision_memory_failed: ${String(error?.message || error)}`,
-        metadata: {
-          sessionId: session.id
-        }
-      });
-      return "";
-    }
   }
 
   formatVoiceDecisionHistory(session, maxTurns = 6) {
@@ -2747,35 +2791,15 @@ export class VoiceSessionManager {
       text: transcript
     });
 
-    if (settings?.memory?.enabled && this.memory && typeof this.memory.ingestMessage === "function") {
-      try {
-        await this.memory.ingestMessage({
-          messageId: `voice-${String(session.guildId || "guild")}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-          authorId: String(userId || ""),
-          authorName: this.resolveVoiceSpeakerName(session, userId) || "unknown",
-          content: transcript,
-          settings,
-          trace: {
-            guildId: session.guildId,
-            channelId: session.textChannelId,
-            userId: String(userId || ""),
-            source: "voice_stt_pipeline_ingest"
-          }
-        });
-      } catch (error) {
-        this.store.logAction({
-          kind: "voice_error",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: String(userId || "") || null,
-          content: `voice_stt_memory_ingest_failed: ${String(error?.message || error)}`,
-          metadata: {
-            sessionId: session.id,
-            captureReason: String(captureReason || "stream_end")
-          }
-        });
-      }
-    }
+    this.queueVoiceMemoryIngest({
+      session,
+      settings,
+      userId,
+      transcript,
+      source: "voice_stt_pipeline_ingest",
+      captureReason,
+      errorPrefix: "voice_stt_memory_ingest_failed"
+    });
 
     const turnDecision = await this.evaluateVoiceReplyDecision({
       session,
@@ -2814,10 +2838,38 @@ export class VoiceSessionManager {
         error: turnDecision.error || null
       }
     });
-    if (!turnDecision.allow) return;
+    if (!turnDecision.allow) {
+      if (turnDecision.reason === "bot_turn_open") {
+        this.queueDeferredBotTurnOpenTurn({
+          session,
+          userId,
+          transcript: turnDecision.transcript || transcript,
+          captureReason,
+          source: "stt_pipeline",
+          directAddressed: Boolean(turnDecision.directAddressed)
+        });
+      }
+      return;
+    }
 
+    await this.runSttPipelineReply({
+      session,
+      settings,
+      userId,
+      transcript,
+      directAddressed: Boolean(turnDecision.directAddressed)
+    });
+  }
+
+  async runSttPipelineReply({ session, settings, userId, transcript, directAddressed = false }) {
+    if (!session || session.ending) return;
+    if (session.mode !== "stt_pipeline") return;
+    if (!this.llm?.synthesizeSpeech) return;
     if (typeof this.generateVoiceTurn !== "function") return;
 
+    const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedTranscript) return;
+    const sttSettings = settings?.voice?.sttPipeline || {};
     const contextMessages = Array.isArray(session.sttContextMessages)
       ? session.sttContextMessages
           .filter((row) => row && typeof row === "object")
@@ -2848,10 +2900,10 @@ export class VoiceSessionManager {
         guildId: session.guildId,
         channelId: session.textChannelId,
         userId,
-        transcript,
+        transcript: normalizedTranscript,
         contextMessages,
         sessionId: session.id,
-        isEagerTurn: !turnDecision.directAddressed,
+        isEagerTurn: !directAddressed,
         voiceEagerness: Number(settings?.voice?.replyEagerness) || 0,
         soundboardCandidates: soundboardCandidateLines
       });
@@ -2883,7 +2935,7 @@ export class VoiceSessionManager {
       ...contextMessages,
       {
         role: "user",
-        content: normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS)
+        content: normalizedTranscript
       },
       {
         role: "assistant",
@@ -3480,8 +3532,10 @@ export class VoiceSessionManager {
     if (session.responseWatchdogTimer) clearTimeout(session.responseWatchdogTimer);
     if (session.responseDoneGraceTimer) clearTimeout(session.responseDoneGraceTimer);
     if (session.realtimeInstructionRefreshTimer) clearTimeout(session.realtimeInstructionRefreshTimer);
+    if (session.deferredTurnFlushTimer) clearTimeout(session.deferredTurnFlushTimer);
     session.pendingResponse = null;
     session.pendingRealtimeTurns = [];
+    session.pendingDeferredTurns = [];
     this.clearAudioPlaybackQueue(session);
 
     for (const capture of session.userCaptures.values()) {
