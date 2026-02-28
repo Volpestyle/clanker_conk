@@ -438,6 +438,7 @@ export async function generateVoiceTurnReply(runtime, {
       : allowedDirectives.length
         ? "Do not output markdown or [SKIP]. Optional directives are allowed only as listed."
         : "Do not output directives like [[...]], [SKIP], or markdown.",
+    "Goodbyes do not force exit. You can say goodbye and stay in VC; append [[LEAVE_VC]] only when you choose to end your own session now.",
     allowSoundboardDirective ? "Never mention the soundboard control directive in normal speech." : null
   ]
     .filter(Boolean)

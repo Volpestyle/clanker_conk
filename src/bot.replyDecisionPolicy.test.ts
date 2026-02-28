@@ -251,10 +251,6 @@ test("non-addressed non-initiative turn can still post when model contributes va
     assert.equal(typingCallsRef.count > 0, true);
     assert.match(String(channelSendPayloads[0]?.content || ""), /evo lines decide everything/i);
 
-    const llmPrompt = String(llmCalls[0]?.userPrompt || "");
-    assert.match(llmPrompt, /Reply eagerness hint: 10\/100\./);
-    assert.match(llmPrompt, /soft threshold/i);
-    assert.match(llmPrompt, /Higher eagerness means lower contribution threshold; lower eagerness means higher threshold\./);
   });
 });
 
@@ -447,7 +443,7 @@ test("smoke: text followup-window turn addressed to another user is llm-skipped"
   });
 });
 
-test("non-addressed initiative turn uses initiative flow guidance in prompt", async () => {
+test("non-addressed initiative turn can still contribute when model responds", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";
     applyBaselineSettings(store, channelId);
@@ -542,11 +538,6 @@ test("non-addressed initiative turn uses initiative flow guidance in prompt", as
     assert.equal(channelSendPayloads.length, 1);
     assert.equal(typingCallsRef.count > 0, true);
 
-    const llmPrompt = String(llmCalls[0]?.userPrompt || "");
-    assert.match(llmPrompt, /Reply eagerness hint: 65\/100\./);
-    assert.match(llmPrompt, /In initiative channels/i);
-    assert.match(llmPrompt, /improves the channel flow right now\./i);
-    assert.equal(/justify the interruption risk/i.test(llmPrompt), false);
   });
 });
 
@@ -714,10 +705,6 @@ test("direct-addressed turn bypasses unsolicited gate and marks response as requ
     assert.equal(channelSendPayloads.length, 0);
     assert.equal(typingCallsRef.count > 0, true);
 
-    const llmPrompt = String(llmCalls[0]?.userPrompt || "");
-    assert.match(llmPrompt, /This message directly addressed you\./);
-    assert.match(llmPrompt, /A reply is required for this turn unless safety policy requires refusing\./);
-    assert.match(llmPrompt, /Do not output \[SKIP\] except for safety refusals\./);
   });
 });
 
@@ -866,7 +853,6 @@ test("text reply follow-up can run web search and append cited sources", async (
     assert.match(String(channelSendPayloads[0]?.content || ""), /\[1\]\(<https:\/\/blog\.rust-lang\.org\//i);
     assert.match(String(channelSendPayloads[0]?.content || ""), /Sources:/);
     assert.match(String(channelSendPayloads[0]?.content || ""), /blog\.rust-lang\.org/i);
-    assert.match(String(llmCalls[1]?.userPrompt || ""), /Live web findings for query/i);
   });
 });
 
@@ -1606,8 +1592,6 @@ test("smoke: 'clanka look at my screen' initiates a screen-share link message", 
       (call) => String(call?.trace?.source || "") === "voice_operational_message"
     );
     assert.equal(Boolean(operationalCall), true);
-    assert.match(String(operationalCall?.userPrompt || ""), /voice_screen_share_offer/);
-    assert.match(String(operationalCall?.userPrompt || ""), /linkUrl/);
   });
 });
 

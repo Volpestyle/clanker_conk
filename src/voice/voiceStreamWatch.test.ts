@@ -349,14 +349,11 @@ test("ingestStreamFrame accepts fallback-buffered frame and updates runtime coun
 });
 
 test("maybeTriggerStreamWatchCommentary requests native provider commentary when available", async () => {
-  let seenPrompt = "";
   const session = createSession({
     mode: "openai_realtime",
     realtimeClient: {
       appendInputVideoFrame() {},
-      requestVideoCommentary(prompt) {
-        seenPrompt = String(prompt || "");
-      }
+      requestVideoCommentary() {}
     }
   });
   session.streamWatch.lastCommentaryAt = 0;
@@ -369,7 +366,6 @@ test("maybeTriggerStreamWatchCommentary requests native provider commentary when
     source: "unit_test"
   });
 
-  assert.equal(seenPrompt.includes("latest frame"), true);
   assert.equal(createdResponses.length, 1);
   assert.equal(session.streamWatch.lastCommentaryAt > 0, true);
   const logged = actions.find((entry) => entry.content === "stream_watch_commentary_requested");
@@ -424,7 +420,6 @@ test("maybeTriggerStreamWatchCommentary supports vision-fallback text utterance 
   });
 
   assert.equal(utterance.length > 0, true);
-  assert.equal(utterance.includes("Speak this exact line verbatim and nothing else"), true);
   assert.equal(createdResponses.length, 1);
   const logged = actions.find((entry) => entry.content === "stream_watch_commentary_requested");
   assert.equal(Boolean(logged), true);

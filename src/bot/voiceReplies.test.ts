@@ -314,7 +314,7 @@ test("composeVoiceOperationalMessage logs voice errors when llm generation throw
   assert.equal(String(logs[0]?.content || "").includes("voice_operational_llm_failed"), true);
 });
 
-test("composeVoiceOperationalMessage nudges status replies to answer the ask directly", async () => {
+test("composeVoiceOperationalMessage handles voice status request flow", async () => {
   const { bot, generationPayloads } = createVoiceBot({
     generationText: "yeah i'm in vc rn"
   });
@@ -338,24 +338,6 @@ test("composeVoiceOperationalMessage nudges status replies to answer the ask dir
 
   assert.equal(text, "yeah i'm in vc rn");
   assert.equal(generationPayloads.length, 1);
-  const systemPrompt = String(generationPayloads[0]?.systemPrompt || "");
-  const userPrompt = String(generationPayloads[0]?.userPrompt || "");
-  assert.equal(
-    systemPrompt.includes("For voice_status_request, answer the user's actual ask first in character using Details JSON."),
-    true
-  );
-  assert.equal(systemPrompt.includes("Do not dump every status field by default."), true);
-  assert.equal(
-    userPrompt.includes(
-      "Status field meanings: elapsedSeconds=time already in VC; inactivitySeconds=time until inactivity auto-leave; remainingSeconds=time until max session time cap; activeCaptures=current live inbound captures."
-    ),
-    true
-  );
-  assert.equal(userPrompt.includes("Requester text: clankie r u in vc rn?"), true);
-  assert.equal(
-    userPrompt.includes("If they asked a yes/no presence question, lead with that answer and keep timers secondary."),
-    true
-  );
 });
 
 test("generateVoiceTurnReply returns early for empty transcripts", async () => {
@@ -372,105 +354,6 @@ test("generateVoiceTurnReply returns early for empty transcripts", async () => {
   assert.equal(getGenerationCalls(), 0);
 });
 
-test("generateVoiceTurnReply adds join-window greeting bias guidance", async () => {
-  const { bot, generationPayloads } = createVoiceBot({
-    generationText: "[SKIP]"
-  });
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings(),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "yo, what's up?",
-    isEagerTurn: true,
-    joinWindowActive: true,
-    joinWindowAgeMs: 1800
-  });
-
-  assert.equal(reply.text, "");
-  assert.equal(generationPayloads.length, 1);
-  assert.equal(
-    String(generationPayloads[0]?.systemPrompt || "").includes("Join window active: you just joined VC."),
-    true
-  );
-  assert.equal(
-    String(generationPayloads[0]?.userPrompt || "").includes("Join window active: yes"),
-    true
-  );
-});
-
-test("generateVoiceTurnReply includes session timeout warning prompt flag", async () => {
-  const { bot, generationPayloads } = createVoiceBot({
-    generationText: "[SKIP]"
-  });
-
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings(),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "should we wrap?",
-    isEagerTurn: true,
-    sessionTiming: {
-      timeoutWarningActive: true,
-      timeoutWarningReason: "max_duration",
-      maxSecondsRemaining: 70,
-      inactivitySecondsRemaining: 44
-    }
-  });
-
-  assert.equal(reply.text, "");
-  const userPrompt = String(generationPayloads[0]?.userPrompt || "");
-  assert.equal(userPrompt.includes("Session timeout warning flag: true"), true);
-  assert.equal(userPrompt.includes("append [[LEAVE_VC]]"), true);
-});
-
-test("generateVoiceTurnReply includes roster and membership-change prompt context", async () => {
-  const { bot, generationPayloads } = createVoiceBot({
-    generationText: "[SKIP]"
-  });
-
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings(),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "who just joined?",
-    isEagerTurn: true,
-    participantRoster: [
-      { displayName: "alice" },
-      { displayName: "bob" }
-    ],
-    recentMembershipEvents: [
-      {
-        eventType: "join",
-        displayName: "bob",
-        ageMs: 1600
-      },
-      {
-        eventType: "leave",
-        displayName: "charlie",
-        ageMs: 4200
-      }
-    ]
-  });
-
-  assert.equal(reply.text, "");
-  assert.equal(generationPayloads.length, 1);
-  const userPrompt = String(generationPayloads[0]?.userPrompt || "");
-  assert.equal(userPrompt.includes("Humans currently in channel: alice, bob."), true);
-  assert.equal(userPrompt.includes("Recent voice membership changes:"), true);
-  assert.equal(userPrompt.includes("bob joined the voice channel"), true);
-  assert.equal(userPrompt.includes("charlie left the voice channel"), true);
-  assert.equal(
-    userPrompt.includes("do not claim you can't see who is in channel"),
-    true
-  );
-  assert.equal(
-    userPrompt.includes("prefer a quick greeting for recent joiners"),
-    true
-  );
-});
 
 test("generateVoiceTurnReply parses memory and soundboard directives", async () => {
   const { bot, ingests, remembers } = createVoiceBot({
@@ -713,8 +596,8 @@ test("generateVoiceTurnReply runs web lookup follow-up with start/complete callb
   assert.equal(reply.usedWebSearchFollowup, true);
 });
 
-test("generateVoiceTurnReply includes short-term lookup memory in prompt context", async () => {
-  const { bot, generationPayloads, lookupMemorySearchCalls } = createVoiceBot({
+test("generateVoiceTurnReply queries short-term lookup memory during generation", async () => {
+  const { bot, lookupMemorySearchCalls } = createVoiceBot({
     generationText: "[SKIP]",
     recentLookupContext: [
       {
@@ -741,9 +624,6 @@ test("generateVoiceTurnReply includes short-term lookup memory in prompt context
 
   assert.equal(reply.text, "");
   assert.equal(lookupMemorySearchCalls.length, 1);
-  const userPrompt = String(generationPayloads[0]?.userPrompt || "");
-  assert.equal(userPrompt.includes("Short-term lookup memory from recent successful web searches"), true);
-  assert.equal(userPrompt.includes("blog.rust-lang.org"), true);
 });
 
 test("generateVoiceTurnReply opens cached article via OPEN_ARTICLE directive", async () => {

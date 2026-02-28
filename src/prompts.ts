@@ -1106,6 +1106,9 @@ export function buildVoiceTurnPrompt({
   parts.push(
     "If you intentionally want to leave VC after this turn, append a trailing directive [[LEAVE_VC]]."
   );
+  parts.push(
+    "Another person's goodbye does not require you to leave. You may say goodbye and stay; append [[LEAVE_VC]] only when you intentionally choose to end your own VC session."
+  );
 
   if (webSearch?.requested && !webSearch?.used) {
     if (webSearch.error) {

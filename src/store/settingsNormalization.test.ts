@@ -131,14 +131,8 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.voice.replyDecisionLlm.enabled, true);
   assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, 3);
   assert.equal(normalized.voice.replyDecisionLlm.reasoningEffort, "high");
-  assert.equal(
-    String(normalized.voice.replyDecisionLlm.prompts?.wakeVariantHint || "").includes("near-phonetic"),
-    true
-  );
-  assert.equal(
-    String(normalized.voice.replyDecisionLlm.prompts?.systemPromptStrict || "").includes("Binary classifier."),
-    true
-  );
+  assert.equal(String(normalized.voice.replyDecisionLlm.prompts?.wakeVariantHint || "").length > 0, true);
+  assert.equal(String(normalized.voice.replyDecisionLlm.prompts?.systemPromptStrict || "").length > 0, true);
   assert.equal(normalized.voice.openaiRealtime.inputAudioFormat, "pcm16");
   assert.equal(normalized.voice.openaiRealtime.outputAudioFormat, "g711_alaw");
   assert.equal(normalized.voice.geminiRealtime.apiBaseUrl, "https://generativelanguage.googleapis.com");

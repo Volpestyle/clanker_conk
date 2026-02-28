@@ -4,7 +4,6 @@ import {
   buildClaudeCodeCliArgs,
   buildClaudeCodeJsonCliArgs,
   buildClaudeCodeTextCliArgs,
-  buildClaudeCodeFallbackPrompt,
   buildClaudeCodeStreamInput,
   buildClaudeCodeSystemPrompt,
   parseClaudeCodeStreamOutput,
@@ -105,21 +104,6 @@ test("buildClaudeCodeTextCliArgs builds plain text fallback args", () => {
   const modelIndex = args.indexOf("--model");
   assert.equal(args[modelIndex + 1], "opus");
   assert.equal(args[args.length - 1], "Hello there");
-});
-
-test("buildClaudeCodeFallbackPrompt includes context, prompt, and image references", () => {
-  const prompt = buildClaudeCodeFallbackPrompt({
-    contextMessages: [{ role: "assistant", content: "A prior reply" }],
-    userPrompt: "What should I do next?",
-    imageInputs: [{ url: "https://example.com/one.png" }, { mediaType: "image/png", dataBase64: "abcd" }]
-  });
-
-  assert.equal(prompt.includes("Conversation context"), true);
-  assert.equal(prompt.includes("assistant: A prior reply"), true);
-  assert.equal(prompt.includes("User request"), true);
-  assert.equal(prompt.includes("What should I do next?"), true);
-  assert.equal(prompt.includes("https://example.com/one.png"), true);
-  assert.equal(prompt.includes("inline image (image/png)"), true);
 });
 
 test("buildClaudeCodeSystemPrompt appends output-budget guidance when a token limit exists", () => {

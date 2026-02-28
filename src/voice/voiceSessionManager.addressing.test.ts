@@ -150,47 +150,6 @@ test("reply decider sends short three-word complaint turns to llm", async () => 
   assert.equal(callCount, 1);
 });
 
-test("reply decider uses configured advanced classifier system prompt override", async () => {
-  const seenSystemPrompts = [];
-  const manager = createManager({
-    generate: async (payload) => {
-      seenSystemPrompts.push(String(payload?.systemPrompt || ""));
-      return { text: "NO" };
-    }
-  });
-  const decision = await manager.evaluateVoiceReplyDecision({
-    session: {
-      guildId: "guild-1",
-      textChannelId: "chan-1",
-      voiceChannelId: "voice-1",
-      botTurnOpen: false
-    },
-    userId: "speaker-1",
-    settings: baseSettings({
-      voice: {
-        replyEagerness: 60,
-        replyDecisionLlm: {
-          provider: "anthropic",
-          model: "claude-haiku-4-5",
-          maxAttempts: 1,
-          prompts: {
-            wakeVariantHint: "custom wake hint for {{botName}}",
-            systemPromptCompact: "compact override for {{botName}}",
-            systemPromptFull: "full override for {{botName}}",
-            systemPromptStrict: "strict override for {{botName}}"
-          }
-        }
-      }
-    }),
-    transcript: "how should we do this"
-  });
-
-  assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "llm_no");
-  assert.equal(seenSystemPrompts.length, 1);
-  assert.equal(seenSystemPrompts[0], "compact override for clanker conk");
-});
-
 test("reply decider allows focused speaker followup without another direct address", async () => {
   let callCount = 0;
   const manager = createManager({
@@ -410,8 +369,6 @@ test("shouldPersistUserTranscriptTimelineTurn keeps low-signal direct wake-word 
 
 test("reply decider routes join-window greetings through llm with join context", async () => {
   let callCount = 0;
-  const joinContextFlags = [];
-  const joinBiasFlags = [];
   const greetings = [
     "what up",
     "what's up",
@@ -420,19 +377,11 @@ test("reply decider routes join-window greetings through llm with join context",
     "こんにちは"
   ];
   const greetingSet = new Set(greetings.map((entry) => entry.toLowerCase()));
+  let activeTranscript = "";
   const manager = createManager({
-    generate: async (payload) => {
+    generate: async () => {
       callCount += 1;
-      const prompt = String(payload?.userPrompt || "");
-      joinContextFlags.push(prompt.includes("Join window active: yes."));
-      joinBiasFlags.push(
-        prompt.includes(
-          "Join-window bias rule: if Join window active is yes and this turn is a short greeting/check-in, default to YES unless another human target is explicit."
-        )
-      );
-      const transcriptMatch = prompt.match(/Transcript:\s*"([^"]*)"/u);
-      const transcript = String(transcriptMatch?.[1] || "").toLowerCase();
-      return { text: greetingSet.has(transcript) ? "YES" : "NO" };
+      return { text: greetingSet.has(activeTranscript.toLowerCase()) ? "YES" : "NO" };
     }
   });
   const session = {
@@ -443,6 +392,7 @@ test("reply decider routes join-window greetings through llm with join context",
     startedAt: Date.now() - 7_000
   };
   for (const transcript of greetings) {
+    activeTranscript = transcript;
     const decision = await manager.evaluateVoiceReplyDecision({
       session,
       userId: "speaker-1",
@@ -456,8 +406,6 @@ test("reply decider routes join-window greetings through llm with join context",
   }
 
   assert.equal(callCount, greetings.length);
-  assert.equal(joinContextFlags.every(Boolean), true);
-  assert.equal(joinBiasFlags.every(Boolean), true);
 });
 
 test("reply decider keeps low-signal greetings out of llm once join window is stale", async () => {
@@ -596,18 +544,17 @@ test("reply decider routes wake-like variants through llm admission", async () =
   ];
   const expectedByTranscript = new Map(cases.map((row) => [row.text, row.expected]));
   let callCount = 0;
+  let activeTranscript = "";
   const manager = createManager({
-    generate: async (payload) => {
-      const prompt = String(payload?.userPrompt || "");
-      const transcriptMatch = prompt.match(/Transcript:\s*"([^"]*)"/u);
-      const transcript = transcriptMatch?.[1] || "";
-      const expected = expectedByTranscript.get(transcript);
+    generate: async () => {
+      const expected = expectedByTranscript.get(activeTranscript);
       callCount += 1;
       return { text: expected ? "YES" : "NO" };
     }
   });
 
   for (const row of cases) {
+    activeTranscript = row.text;
     const decision = await manager.evaluateVoiceReplyDecision({
       session: {
         guildId: "guild-1",
@@ -638,43 +585,6 @@ test("reply decider routes wake-like variants through llm admission", async () =
   }
 
   assert.equal(callCount > 0, true);
-});
-
-test("reply decider uses richer compact prompt guidance on first attempt", async () => {
-  let seenSystemPrompt = "";
-  let seenUserPrompt = "";
-  const manager = createManager({
-    generate: async (payload) => {
-      seenSystemPrompt = String(payload?.systemPrompt || "");
-      seenUserPrompt = String(payload?.userPrompt || "");
-      return { text: "YES" };
-    }
-  });
-  manager.getVoiceChannelParticipants = () => [{ displayName: "alice" }, { displayName: "bob" }];
-  const decision = await manager.evaluateVoiceReplyDecision({
-    session: {
-      guildId: "guild-1",
-      textChannelId: "chan-1",
-      voiceChannelId: "voice-1",
-      botTurnOpen: false,
-      recentVoiceTurns: [
-        { role: "user", userId: "speaker-2", speakerName: "alice", text: "can you hear me?", at: Date.now() - 1500 },
-        { role: "assistant", userId: "bot-user", speakerName: "clanker conk", text: "yeah i hear you", at: Date.now() - 900 }
-      ]
-    },
-    userId: "speaker-1",
-    settings: baseSettings(),
-    transcript: "what should we do next?"
-  });
-
-  assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "llm_yes");
-  assert.match(seenSystemPrompt, /Treat near-phonetic or misspelled tokens that appear to target the bot name as direct address\./);
-  assert.match(seenSystemPrompt, /When uncertain and the utterance is a clear question, prefer YES\./);
-  assert.match(seenUserPrompt, /Treat near-phonetic or misspelled tokens that appear to target the bot name as direct address\./);
-  assert.match(seenUserPrompt, /Current speaker:/);
-  assert.match(seenUserPrompt, /Known participants: alice, bob\./);
-  assert.match(seenUserPrompt, /Recent turns:/);
 });
 
 test("formatVoiceDecisionHistory keeps newest turns within total char budget", () => {

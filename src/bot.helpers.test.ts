@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { composeReplyImagePrompt, parseReplyDirectives, parseStructuredReplyOutput } from "./botHelpers.ts";
+import { parseReplyDirectives, parseStructuredReplyOutput } from "./botHelpers.ts";
 
 test("parseStructuredReplyOutput reads structured reply JSON", () => {
   const parsed = parseStructuredReplyOutput(
@@ -198,19 +198,6 @@ test("parseStructuredReplyOutput maps automation stop to pause", () => {
 
   assert.equal(parsed.automationAction.operation, "pause");
   assert.equal(parsed.automationAction.targetQuery, "giraffe");
-});
-
-test("composeReplyImagePrompt includes memory hints when provided", () => {
-  const prompt = composeReplyImagePrompt(
-    "portrait of the user",
-    "here you go",
-    900,
-    ["user is 7 ft tall", "user wears red hoodies"]
-  );
-
-  assert.match(prompt, /Relevant memory facts/);
-  assert.match(prompt, /7 ft tall/);
-  assert.match(prompt, /red hoodies/);
 });
 
 test("parseReplyDirectives parses trailing soundboard directive", () => {

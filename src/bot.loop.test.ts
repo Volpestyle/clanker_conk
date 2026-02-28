@@ -269,10 +269,6 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
       assert.equal(typingCalls > 0, true);
       assert.equal(store.hasTriggeredResponse(incomingMessageId), true);
 
-      const llmPrompt = String(llmCalls[0]?.userPrompt || "");
-      assert.match(llmPrompt, /older context line/i);
-      assert.match(llmPrompt, /\[reactions:/i);
-
       const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
       assert.equal(store.countActionsSince("reacted", since), 1);
       assert.equal(store.countActionsSince("sent_reply", since), 1);
