@@ -11,7 +11,6 @@ export const appConfig = {
   dashboardToken: process.env.DASHBOARD_TOKEN ?? "",
   publicApiToken: process.env.PUBLIC_API_TOKEN ?? "",
   publicHttpsEnabled: parseBooleanFlag(process.env.PUBLIC_HTTPS_ENABLED, false),
-  publicHttpsProvider: normalizePublicHttpsProvider(process.env.PUBLIC_HTTPS_PROVIDER),
   publicHttpsTargetUrl: process.env.PUBLIC_HTTPS_TARGET_URL ?? "",
   publicHttpsCloudflaredBin: process.env.PUBLIC_HTTPS_CLOUDFLARED_BIN ?? "cloudflared",
   publicShareSessionTtlMinutes: parseNumberOrFallback(process.env.PUBLIC_SHARE_SESSION_TTL_MINUTES, 12),
@@ -36,10 +35,6 @@ export function ensureRuntimeEnv() {
   if (!appConfig.discordToken) {
     throw new Error("Missing DISCORD_TOKEN in environment.");
   }
-}
-
-function normalizePublicHttpsProvider(_value) {
-  return "cloudflared";
 }
 
 export function normalizeDashboardHost(value) {
