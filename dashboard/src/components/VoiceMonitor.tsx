@@ -72,6 +72,7 @@ const STATE_LABELS: Record<string, string> = {
 
 const WAKE_WINDOW_FALLBACK_MS = 35_000;
 const JOIN_WINDOW_FALLBACK_MS = 25_000;
+const DEFAULT_JOIN_TEXT_CHANNEL_ID = "1475944808198574205";
 
 function parseIsoMs(iso?: string | null): number | null {
   const normalized = String(iso || "").trim();
@@ -783,6 +784,7 @@ export default function VoiceMonitor() {
   const { voiceState, events, status } = useVoiceSSE();
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedGuildId, setSelectedGuildId] = useState("");
+  const [joinTextChannelId, setJoinTextChannelId] = useState(DEFAULT_JOIN_TEXT_CHANNEL_ID);
   const [joinPending, setJoinPending] = useState(false);
   const [joinStatus, setJoinStatus] = useState<{
     text: string;
@@ -844,6 +846,8 @@ export default function VoiceMonitor() {
         source: "dashboard_voice_tab"
       };
       if (selectedGuildId) payload.guildId = selectedGuildId;
+      const normalizedTextChannelId = joinTextChannelId.trim();
+      if (normalizedTextChannelId) payload.textChannelId = normalizedTextChannelId;
 
       const result = await api<VoiceJoinResponse>("/api/voice/join", {
         method: "POST",
@@ -892,6 +896,19 @@ export default function VoiceMonitor() {
                 </option>
               ))}
             </select>
+          </div>
+          <div className="vm-join-field">
+            <label className="vm-join-label" htmlFor="vm-join-source-channel">
+              Summoned From Channel ID
+            </label>
+            <input
+              id="vm-join-source-channel"
+              type="text"
+              value={joinTextChannelId}
+              onChange={(event) => setJoinTextChannelId(event.target.value)}
+              disabled={joinPending}
+              placeholder={DEFAULT_JOIN_TEXT_CHANNEL_ID}
+            />
           </div>
           <button type="button" onClick={requestVoiceJoin} disabled={joinPending}>
             {joinPending ? "Joining..." : "Join VC"}
