@@ -117,3 +117,90 @@ test("voice transcript ingest writes synthetic message rows for prompt history c
   await memory.runIngestWorker();
   assert.equal(await ingestPromise, true);
 });
+
+test("processIngestMessage routes extracted subjects to author/self/lore memory", async () => {
+  const addedFacts = [];
+  const archivedSubjects = [];
+  const memory = new MemoryManager({
+    store: {
+      addMemoryFact(row) {
+        addedFacts.push(row);
+        return true;
+      },
+      getMemoryFactBySubjectAndFact() {
+        return null;
+      },
+      archiveOldFactsForSubject(row) {
+        archivedSubjects.push(row);
+      },
+      logAction() {
+        return undefined;
+      }
+    },
+    llm: {
+      async extractMemoryFacts() {
+        return [
+          {
+            subject: "author",
+            fact: "I am Alex",
+            type: "profile",
+            confidence: 0.92,
+            evidence: "i am alex"
+          },
+          {
+            subject: "bot",
+            fact: "People call clanker conk clanky",
+            type: "profile",
+            confidence: 0.87,
+            evidence: "people call clanker conk clanky"
+          },
+          {
+            subject: "lore",
+            fact: "Pizza Friday is sacred in this server",
+            type: "other",
+            confidence: 0.8,
+            evidence: "pizza friday is sacred in this server"
+          },
+          {
+            subject: "unknown",
+            fact: "this row should be dropped",
+            type: "other",
+            confidence: 0.7,
+            evidence: "this row should be dropped"
+          }
+        ];
+      }
+    },
+    memoryFilePath: "memory/MEMORY.md"
+  });
+  memory.appendDailyLogEntry = async () => undefined;
+  memory.queueMemoryRefresh = () => undefined;
+
+  await memory.processIngestMessage({
+    messageId: "msg-1",
+    authorId: "user-1",
+    authorName: "alex",
+    content:
+      "I am Alex. People call clanker conk clanky. Pizza Friday is sacred in this server.",
+    settings: {},
+    trace: {
+      guildId: "guild-1",
+      channelId: "chan-1",
+      userId: "user-1"
+    }
+  });
+
+  assert.deepEqual(
+    addedFacts.map((row) => row.subject),
+    ["user-1", "__self__", "__lore__"]
+  );
+  assert.equal(
+    addedFacts.some((row) => String(row.subject || "").trim() === "unknown"),
+    false
+  );
+
+  assert.deepEqual(
+    archivedSubjects.map((row) => `${row.subject}:${row.keep}`).sort(),
+    ["__lore__:120", "__self__:120", "user-1:80"]
+  );
+});

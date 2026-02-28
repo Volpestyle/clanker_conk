@@ -39,6 +39,8 @@ const HYBRID_MAX_CANDIDATES = 90;
 const HYBRID_MAX_VECTOR_BACKFILL_PER_QUERY = 8;
 const QUERY_EMBEDDING_CACHE_TTL_MS = 60 * 1000;
 const QUERY_EMBEDDING_CACHE_MAX_ENTRIES = 256;
+const FACT_RETENTION_DEFAULT = 80;
+const FACT_RETENTION_SELF_LORE = 120;
 const SUBJECT_LORE = LORE_SUBJECT;
 const SUBJECT_SELF = SELF_SUBJECT;
 export class MemoryManager {
@@ -201,6 +203,7 @@ export class MemoryManager {
     if (!cleanedContent) return;
     const scopeGuildId = String(trace?.guildId || "").trim();
     const scopeChannelId = String(trace?.channelId || "").trim();
+    const normalizedAuthorId = String(authorId || "").trim();
 
     let wroteDailyEntry = false;
     try {
@@ -218,6 +221,7 @@ export class MemoryManager {
     }
 
     let insertedAnyFact = false;
+    const insertedSubjects = new Set();
     if (cleanedContent.length >= 4 && scopeGuildId) {
       let extracted = [];
       try {
@@ -234,7 +238,9 @@ export class MemoryManager {
 
       for (const row of extracted) {
         const factText = normalizeStoredFactText(row?.fact);
+        const factSubject = this.resolveExtractedFactSubject(row?.subject, normalizedAuthorId);
         if (!factText) continue;
+        if (!factSubject) continue;
         if (isInstructionLikeFactText(factText)) continue;
         if (!isTextGroundedInSource(factText, cleanedContent)) continue;
 
@@ -242,7 +248,7 @@ export class MemoryManager {
         const inserted = this.store.addMemoryFact({
           guildId: scopeGuildId,
           channelId: scopeChannelId || null,
-          subject: authorId,
+          subject: factSubject,
           fact: factText,
           factType: normalizeFactType(row?.type),
           evidenceText,
@@ -252,14 +258,15 @@ export class MemoryManager {
 
         if (!inserted) continue;
         insertedAnyFact = true;
+        insertedSubjects.add(factSubject);
         this.store.logAction({
           kind: "memory_fact",
-          userId: authorId,
+          userId: normalizedAuthorId,
           messageId,
           content: factText
         });
 
-        const factRow = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, authorId, factText);
+        const factRow = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, factSubject, factText);
         if (factRow) {
           this.ensureFactVector({
             factRow,
@@ -273,17 +280,43 @@ export class MemoryManager {
       }
     }
 
-    if (insertedAnyFact && scopeGuildId && authorId) {
-      this.store.archiveOldFactsForSubject({
-        guildId: scopeGuildId,
-        subject: authorId,
-        keep: 80
-      });
+    if (insertedAnyFact && scopeGuildId && insertedSubjects.size) {
+      for (const subject of insertedSubjects) {
+        this.store.archiveOldFactsForSubject({
+          guildId: scopeGuildId,
+          subject,
+          keep: this.resolveSubjectRetentionLimit(subject)
+        });
+      }
     }
 
     if (wroteDailyEntry || insertedAnyFact) {
       this.queueMemoryRefresh();
     }
+  }
+
+  resolveExtractedFactSubject(rawSubject, authorId) {
+    const normalizedSubject = String(rawSubject || "").trim().toLowerCase();
+    const normalizedAuthorId = String(authorId || "").trim();
+    if (normalizedSubject === "author") {
+      return normalizedAuthorId;
+    }
+    if (normalizedSubject === "bot") {
+      return SUBJECT_SELF;
+    }
+    if (normalizedSubject === "lore") {
+      return SUBJECT_LORE;
+    }
+    return "";
+  }
+
+  resolveSubjectRetentionLimit(subject) {
+    const normalizedSubject = String(subject || "").trim();
+    if (!normalizedSubject) return FACT_RETENTION_DEFAULT;
+    if (normalizedSubject === SUBJECT_SELF || normalizedSubject === SUBJECT_LORE) {
+      return FACT_RETENTION_SELF_LORE;
+    }
+    return FACT_RETENTION_DEFAULT;
   }
 
   async drainIngestQueue({ timeoutMs = 5000 } = {}) {

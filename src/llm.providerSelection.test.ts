@@ -298,6 +298,14 @@ test("callOpenAiMemoryExtraction uses Responses JSON schema format", async () =>
   assert.equal(seenPayload.text?.format?.type, "json_schema");
   assert.equal(seenPayload.text?.format?.name, "memory_fact_extraction");
   assert.equal(seenPayload.text?.format?.strict, true);
+  assert.deepEqual(
+    seenPayload.text?.format?.schema?.properties?.facts?.items?.properties?.subject?.enum,
+    ["author", "bot", "lore"]
+  );
+  assert.deepEqual(
+    seenPayload.text?.format?.schema?.properties?.facts?.items?.required,
+    ["subject", "fact", "type", "confidence", "evidence"]
+  );
 });
 
 test("generateImage uses OpenAI Responses image_generation tool", async () => {

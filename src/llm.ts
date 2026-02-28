@@ -20,6 +20,7 @@ import {
   sleepMs
 } from "./llmClaudeCode.ts";
 import {
+  MEMORY_FACT_SUBJECTS,
   MEMORY_FACT_TYPES,
   clampInt,
   clampNumber,
@@ -69,12 +70,13 @@ const MEMORY_EXTRACTION_SCHEMA = {
         type: "object",
         additionalProperties: false,
         properties: {
+          subject: { type: "string", enum: MEMORY_FACT_SUBJECTS },
           fact: { type: "string", minLength: 1, maxLength: 190 },
           type: { type: "string", enum: MEMORY_FACT_TYPES },
           confidence: { type: "number", minimum: 0, maximum: 1 },
           evidence: { type: "string", minLength: 1, maxLength: 220 }
         },
-        required: ["fact", "type", "confidence", "evidence"]
+        required: ["subject", "fact", "type", "confidence", "evidence"]
       }
     }
   },
@@ -250,12 +252,19 @@ export class LLMService {
     const llmOverride = settings?.memoryLlm ?? settings?.llm ?? {};
     const { provider, model } = this.resolveProviderAndModel(llmOverride);
     const boundedMaxFacts = clampInt(maxFacts, 1, 6);
+    const normalizedBotName = normalizeInlineText(settings?.botName || "the bot", 80) || "the bot";
     const systemPrompt = [
       "You extract durable memory facts from one Discord user message.",
       "Only keep long-lived facts worth remembering later (preferences, identity, recurring relationships, ongoing projects).",
       "Ignore requests, one-off chatter, jokes, threats, instructions, and ephemeral context.",
       "Every fact must be grounded directly in the message text.",
-      `Return strict JSON only with shape: {"facts":[{"fact":"...","type":"preference|profile|relationship|project|other","confidence":0..1,"evidence":"exact short quote"}]}.`,
+      "Classify each fact subject as one of: author, bot, lore.",
+      "Use subject=author for facts about the message author.",
+      `Use subject=bot only for explicit durable facts about ${normalizedBotName} (identity, alias, stable preference, standing commitment).`,
+      `Do not store insults, commands, or one-off taunts about ${normalizedBotName} as bot facts.`,
+      "Use subject=lore for stable shared context not tied to a single person.",
+      "If subject is unclear, omit that fact.",
+      `Return strict JSON only with shape: {"facts":[{"subject":"author|bot|lore","fact":"...","type":"preference|profile|relationship|project|other","confidence":0..1,"evidence":"exact short quote"}]}.`,
       "If there are no durable facts, return {\"facts\":[]}."
     ].join("\n");
     const userPrompt = [
