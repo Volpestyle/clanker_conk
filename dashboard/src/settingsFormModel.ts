@@ -88,6 +88,7 @@ export function settingsToForm(settings) {
     videoContextMaxAsrSeconds: settings?.videoContext?.maxAsrSeconds ?? defaultVideoContext.maxAsrSeconds,
     voiceEnabled: settings?.voice?.enabled ?? defaultVoice.enabled,
     voiceMode: selectedVoiceMode,
+    voiceRealtimeReplyStrategy: settings?.voice?.realtimeReplyStrategy ?? defaultVoice.realtimeReplyStrategy,
     voiceAllowNsfwHumor: settings?.voice?.allowNsfwHumor ?? defaultVoice.allowNsfwHumor,
     voiceIntentConfidenceThreshold: settings?.voice?.intentConfidenceThreshold ?? defaultVoice.intentConfidenceThreshold,
     voiceMaxSessionMinutes: settings?.voice?.maxSessionMinutes ?? defaultVoice.maxSessionMinutes,
@@ -248,6 +249,7 @@ export function formToSettingsPatch(form) {
     voice: {
       enabled: form.voiceEnabled,
       mode: form.voiceMode,
+      realtimeReplyStrategy: String(form.voiceRealtimeReplyStrategy || "").trim(),
       allowNsfwHumor: form.voiceAllowNsfwHumor,
       intentConfidenceThreshold: Number(form.voiceIntentConfidenceThreshold),
       maxSessionMinutes: Number(form.voiceMaxSessionMinutes),

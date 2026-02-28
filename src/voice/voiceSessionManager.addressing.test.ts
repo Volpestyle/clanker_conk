@@ -1573,6 +1573,61 @@ test("runRealtimeTurn uses shared-brain reply generation when admission allows t
   assert.equal(sharedBrainPayloads[0]?.source, "realtime");
 });
 
+test("runRealtimeTurn uses native realtime forwarding when strategy is native", async () => {
+  const sharedBrainPayloads = [];
+  const forwardedPayloads = [];
+  const manager = createManager();
+  manager.evaluateVoiceReplyDecision = async () => ({
+    allow: true,
+    reason: "llm_yes",
+    participantCount: 2,
+    directAddressed: false,
+    transcript: "say it native"
+  });
+  manager.runRealtimeSharedBrainReply = async (payload) => {
+    sharedBrainPayloads.push(payload);
+    return true;
+  };
+  manager.forwardRealtimeTurnAudio = async (payload) => {
+    forwardedPayloads.push(payload);
+    return true;
+  };
+
+  const session = {
+    id: "session-native-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    realtimeClient: {},
+    settingsSnapshot: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        realtimeReplyStrategy: "native",
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    })
+  };
+
+  const pcmBuffer = Buffer.from([8, 9, 10, 11]);
+  await manager.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer,
+    captureReason: "stream_end"
+  });
+
+  assert.equal(sharedBrainPayloads.length, 0);
+  assert.equal(forwardedPayloads.length, 1);
+  assert.equal(forwardedPayloads[0]?.session, session);
+  assert.equal(forwardedPayloads[0]?.pcmBuffer, pcmBuffer);
+  assert.equal(forwardedPayloads[0]?.transcript, "");
+});
+
 test("bindRealtimeHandlers logs OpenAI realtime response.done usage cost", () => {
   const runtimeLogs = [];
   const handlerMap = new Map();
@@ -2272,5 +2327,83 @@ test("flushDeferredBotTurnOpenTurns runs shared-brain realtime reply after one a
   assert.equal(realtimeReplyPayloads[0]?.transcript, "clanker hold up add this too");
   assert.equal(realtimeReplyPayloads[0]?.source, "bot_turn_open_deferred_flush");
   assert.equal(realtimeReplyPayloads[0]?.directAddressed, false);
+  assert.equal(session.pendingDeferredTurns.length, 0);
+});
+
+test("flushDeferredBotTurnOpenTurns forwards native realtime audio after one admission", async () => {
+  const decisionPayloads = [];
+  const forwardedPayloads = [];
+  const manager = createManager();
+  manager.evaluateVoiceReplyDecision = async (payload) => {
+    decisionPayloads.push(payload);
+    return {
+      allow: true,
+      reason: "llm_yes",
+      participantCount: 2,
+      directAddressed: false,
+      transcript: payload.transcript
+    };
+  };
+  manager.forwardRealtimeTurnAudio = async (payload) => {
+    forwardedPayloads.push(payload);
+    return true;
+  };
+  manager.runRealtimeSharedBrainReply = async () => {
+    throw new Error("should_not_use_shared_brain");
+  };
+
+  const firstPcm = Buffer.from([1, 2]);
+  const secondPcm = Buffer.from([3, 4, 5]);
+  const session = {
+    id: "session-realtime-native-defer-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    botTurnOpen: false,
+    userCaptures: new Map(),
+    settingsSnapshot: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        realtimeReplyStrategy: "native",
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    pendingDeferredTurns: [
+      {
+        userId: "speaker-1",
+        transcript: "clanker hold up",
+        pcmBuffer: firstPcm,
+        captureReason: "speaking_end",
+        source: "realtime",
+        directAddressed: true,
+        queuedAt: Date.now() - 30
+      },
+      {
+        userId: "speaker-2",
+        transcript: "add this too",
+        pcmBuffer: secondPcm,
+        captureReason: "speaking_end",
+        source: "realtime",
+        directAddressed: false,
+        queuedAt: Date.now()
+      }
+    ]
+  };
+
+  await manager.flushDeferredBotTurnOpenTurns({ session });
+
+  assert.equal(decisionPayloads.length, 1);
+  assert.equal(decisionPayloads[0]?.transcript, "clanker hold up add this too");
+  assert.equal(forwardedPayloads.length, 1);
+  assert.equal(forwardedPayloads[0]?.transcript, "clanker hold up add this too");
+  const forwardedPcm = Buffer.isBuffer(forwardedPayloads[0]?.pcmBuffer)
+    ? forwardedPayloads[0].pcmBuffer
+    : Buffer.alloc(0);
+  assert.deepEqual([...forwardedPcm], [...Buffer.concat([firstPcm, secondPcm])]);
+  assert.equal(forwardedPayloads[0]?.captureReason, "bot_turn_open_deferred_flush");
   assert.equal(session.pendingDeferredTurns.length, 0);
 });

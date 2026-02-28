@@ -2158,6 +2158,20 @@ export class VoiceSessionManager {
     return Math.round((normalizedBytes / (2 * normalizedRate)) * 1000);
   }
 
+  resolveRealtimeReplyStrategy({ session, settings = null }) {
+    if (!session || !isRealtimeMode(session.mode)) return "shared_brain";
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    const strategy = String(resolvedSettings?.voice?.realtimeReplyStrategy || "shared_brain")
+      .trim()
+      .toLowerCase();
+    if (strategy === "native") return "native";
+    return "shared_brain";
+  }
+
+  shouldUseNativeRealtimeReply({ session, settings = null }) {
+    return this.resolveRealtimeReplyStrategy({ session, settings }) === "native";
+  }
+
   async runRealtimeTurn({ session, userId, pcmBuffer, captureReason = "stream_end", queuedAt = 0 }) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
@@ -2332,17 +2346,31 @@ export class VoiceSessionManager {
       }
     });
 
+    const useNativeRealtimeReply = this.shouldUseNativeRealtimeReply({ session, settings });
     if (!decision.allow) {
       if (decision.reason === "bot_turn_open") {
         this.queueDeferredBotTurnOpenTurn({
           session,
           userId,
           transcript: decision.transcript || turnTranscript,
+          pcmBuffer,
           captureReason,
           source: "realtime",
           directAddressed: Boolean(decision.directAddressed)
         });
       }
+      return;
+    }
+
+    if (useNativeRealtimeReply) {
+      await this.forwardRealtimeTurnAudio({
+        session,
+        settings,
+        userId,
+        transcript: turnTranscript,
+        pcmBuffer,
+        captureReason
+      });
       return;
     }
 
@@ -2360,6 +2388,7 @@ export class VoiceSessionManager {
     session,
     userId = null,
     transcript = "",
+    pcmBuffer = null,
     captureReason = "stream_end",
     source = "voice_turn",
     directAddressed = false
@@ -2377,6 +2406,7 @@ export class VoiceSessionManager {
     pendingQueue.push({
       userId: String(userId || "").trim() || null,
       transcript: normalizedTranscript,
+      pcmBuffer: pcmBuffer?.length ? pcmBuffer : null,
       captureReason: String(captureReason || "stream_end"),
       source: String(source || "voice_turn"),
       directAddressed: Boolean(directAddressed),
@@ -2433,8 +2463,16 @@ export class VoiceSessionManager {
       STT_TRANSCRIPT_MAX_CHARS
     );
     if (!coalescedTranscript) return;
+    const coalescedPcmBuffer = isRealtimeMode(session.mode)
+      ? Buffer.concat(
+          coalescedTurns
+            .map((entry) => (entry?.pcmBuffer?.length ? entry.pcmBuffer : null))
+            .filter(Boolean)
+        )
+      : null;
 
     const settings = session.settingsSnapshot || this.store.getSettings();
+    const useNativeRealtimeReply = this.shouldUseNativeRealtimeReply({ session, settings });
     const decision = await this.evaluateVoiceReplyDecision({
       session,
       settings,
@@ -2479,6 +2517,7 @@ export class VoiceSessionManager {
           session,
           userId: latestTurn?.userId || null,
           transcript: coalescedTranscript,
+          pcmBuffer: coalescedPcmBuffer,
           captureReason: latestTurn?.captureReason || "stream_end",
           source: "bot_turn_open_deferred_flush",
           directAddressed: Boolean(decision.directAddressed)
@@ -2499,6 +2538,19 @@ export class VoiceSessionManager {
     }
 
     if (!isRealtimeMode(session.mode)) return;
+    if (useNativeRealtimeReply) {
+      if (!coalescedPcmBuffer?.length) return;
+      await this.forwardRealtimeTurnAudio({
+        session,
+        settings,
+        userId: latestTurn?.userId || null,
+        transcript: coalescedTranscript,
+        pcmBuffer: coalescedPcmBuffer,
+        captureReason: "bot_turn_open_deferred_flush"
+      });
+      return;
+    }
+
     await this.runRealtimeSharedBrainReply({
       session,
       settings,
@@ -2507,6 +2559,48 @@ export class VoiceSessionManager {
       directAddressed: Boolean(decision.directAddressed),
       source: "bot_turn_open_deferred_flush"
     });
+  }
+
+  async forwardRealtimeTurnAudio({
+    session,
+    settings,
+    userId,
+    transcript = "",
+    pcmBuffer,
+    captureReason = "stream_end"
+  }) {
+    if (!session || session.ending) return false;
+    if (!isRealtimeMode(session.mode)) return false;
+    if (!pcmBuffer?.length) return false;
+    try {
+      session.realtimeClient.appendInputAudioPcm(pcmBuffer);
+      session.pendingRealtimeInputBytes = Math.max(0, Number(session.pendingRealtimeInputBytes || 0)) + pcmBuffer.length;
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: `audio_append_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          mode: session.mode
+        }
+      });
+      return false;
+    }
+
+    if (session.mode === "openai_realtime") {
+      await this.prepareOpenAiRealtimeTurnContext({
+        session,
+        settings,
+        userId,
+        transcript,
+        captureReason
+      });
+    }
+    this.scheduleResponseFromBufferedAudio({ session, userId });
+    return true;
   }
 
   queueVoiceMemoryIngest({
@@ -4132,7 +4226,7 @@ export class VoiceSessionManager {
 
     // Don't commit/request while users are still actively streaming audio chunks.
     // This avoids partial-turn commits that can return no-audio responses.
-    if (session.userCaptures.size > 0) {
+    if (Number(session.userCaptures?.size || 0) > 0) {
       this.scheduleResponseFromBufferedAudio({ session, userId });
       return;
     }
@@ -4375,7 +4469,7 @@ export class VoiceSessionManager {
     pending.handlingSilence = true;
     this.clearResponseSilenceTimers(session);
 
-    if (session.userCaptures.size > 0) {
+    if (Number(session.userCaptures?.size || 0) > 0) {
       pending.handlingSilence = false;
       this.armResponseSilenceWatchdog({
         session,

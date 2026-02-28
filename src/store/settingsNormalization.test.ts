@@ -39,6 +39,7 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
     },
     voice: {
       mode: "OPENAI_REALTIME",
+      realtimeReplyStrategy: "NATIVE",
       replyDecisionLlm: {
         provider: "CLAUDE-CODE",
         model: "",
@@ -103,6 +104,7 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.videoContext.maxAsrSeconds, 15);
 
   assert.equal(normalized.voice.mode, "openai_realtime");
+  assert.equal(normalized.voice.realtimeReplyStrategy, "native");
   assert.equal(normalized.voice.replyDecisionLlm.provider, "claude-code");
   assert.equal(normalized.voice.replyDecisionLlm.model, "sonnet");
   assert.equal(normalized.voice.replyDecisionLlm.enabled, true);
@@ -181,4 +183,5 @@ test("normalizeSettings keeps stt pipeline reply decider model/provider independ
   assert.equal(normalized.voice.replyDecisionLlm.model, "gpt-4.1-mini");
   assert.equal(normalized.voice.replyDecisionLlm.enabled, true);
   assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, 2);
+  assert.equal(normalized.voice.realtimeReplyStrategy, "shared_brain");
 });

@@ -289,6 +289,7 @@ export function normalizeSettings(raw) {
   type VoiceDefaults = {
     enabled?: boolean;
     mode?: string;
+    realtimeReplyStrategy?: string;
     allowNsfwHumor?: boolean;
     intentConfidenceThreshold?: number;
     maxSessionMinutes?: number;
@@ -307,6 +308,7 @@ export function normalizeSettings(raw) {
   const defaultVoice: VoiceDefaults = DEFAULT_SETTINGS.voice || {
     enabled: false,
     mode: "stt_pipeline",
+    realtimeReplyStrategy: "shared_brain",
     allowNsfwHumor: false,
     intentConfidenceThreshold: 0.75,
     maxSessionMinutes: 10,
@@ -379,6 +381,10 @@ export function normalizeSettings(raw) {
   merged.voice.enabled =
     merged.voice?.enabled !== undefined ? Boolean(merged.voice?.enabled) : Boolean(defaultVoice.enabled);
   merged.voice.mode = normalizeVoiceMode(merged.voice?.mode, defaultVoice.mode);
+  merged.voice.realtimeReplyStrategy = normalizeRealtimeReplyStrategy(
+    merged.voice?.realtimeReplyStrategy,
+    defaultVoice.realtimeReplyStrategy
+  );
   merged.voice.allowNsfwHumor =
     merged.voice?.allowNsfwHumor !== undefined
       ? Boolean(merged.voice?.allowNsfwHumor)
@@ -843,6 +849,14 @@ function normalizeVoiceMode(value, fallback = "voice_agent") {
   if (normalized === "openai_realtime") return "openai_realtime";
   if (normalized === "stt_pipeline") return "stt_pipeline";
   return "voice_agent";
+}
+
+function normalizeRealtimeReplyStrategy(value, fallback = "shared_brain") {
+  const normalized = String(value || fallback || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "native") return "native";
+  return "shared_brain";
 }
 
 function normalizeOpenAiRealtimeAudioFormat(value) {

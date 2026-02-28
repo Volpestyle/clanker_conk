@@ -18,6 +18,7 @@ export function VoiceModeSettingsSection({
   isVoiceReplyDecisionClaudeCodeProvider,
   selectedVoiceReplyDecisionPresetModel
 }) {
+  const isRealtimeMode = isVoiceAgentMode || isOpenAiRealtimeMode || isGeminiRealtimeMode;
   return (
     <SettingsSection id={id} title="Voice Mode" active={form.voiceEnabled}>
       <div className="toggles">
@@ -36,6 +37,20 @@ export function VoiceModeSettingsSection({
             <option value="gemini_realtime">Gemini realtime (audio + stream frames)</option>
             <option value="stt_pipeline">STT pipeline (reuse chat LLM + memory)</option>
           </select>
+
+          {isRealtimeMode && (
+            <>
+              <label htmlFor="voice-realtime-reply-strategy">Realtime reply path</label>
+              <select
+                id="voice-realtime-reply-strategy"
+                value={form.voiceRealtimeReplyStrategy}
+                onChange={set("voiceRealtimeReplyStrategy")}
+              >
+                <option value="shared_brain">Shared brain (full transcript + context)</option>
+                <option value="native">Native provider response</option>
+              </select>
+            </>
+          )}
 
           <div className="toggles">
             <label>

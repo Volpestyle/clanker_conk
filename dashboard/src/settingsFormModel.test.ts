@@ -34,6 +34,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.model, "gpt-4.1-mini");
   assert.equal(form.initiativeChannels, "1\n2");
   assert.equal(form.allowedChannels, "2\n3");
+  assert.equal(form.voiceRealtimeReplyStrategy, "shared_brain");
 
   form.personaHardLimits = "no hate\nno hate\nkeep it fun\n";
   form.allowedChannels = "2\n2\n3\n";
@@ -45,6 +46,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.deepEqual(patch.permissions.allowedChannelIds, ["2", "3"]);
   assert.deepEqual(patch.initiative.discovery.rssFeeds, ["https://one.example/feed"]);
   assert.deepEqual(patch.initiative.discovery.xHandles, ["@alice", "bob"]);
+  assert.equal(patch.voice.realtimeReplyStrategy, "shared_brain");
 });
 
 test("resolveProviderModelOptions merges catalog values with provider fallback defaults", () => {
@@ -109,4 +111,17 @@ test("formToSettingsPatch keeps stt pipeline reply decider independent from main
   assert.equal(patch.voice.replyDecisionLlm.enabled, false);
   assert.equal(patch.voice.replyDecisionLlm.provider, "openai");
   assert.equal(patch.voice.replyDecisionLlm.model, "gpt-4.1-mini");
+});
+
+test("settingsFormModel round-trips realtime reply strategy", () => {
+  const form = settingsToForm({
+    voice: {
+      mode: "openai_realtime",
+      realtimeReplyStrategy: "native"
+    }
+  });
+
+  assert.equal(form.voiceRealtimeReplyStrategy, "native");
+  const patch = formToSettingsPatch(form);
+  assert.equal(patch.voice.realtimeReplyStrategy, "native");
 });
