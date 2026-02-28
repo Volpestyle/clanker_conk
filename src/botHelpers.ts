@@ -9,6 +9,7 @@ const GIF_QUERY_DIRECTIVE_RE = /\[\[GIF_QUERY:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const REACTION_DIRECTIVE_RE = /\[\[REACTION:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const WEB_SEARCH_DIRECTIVE_RE = /\[\[WEB_SEARCH:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const MEMORY_LINE_DIRECTIVE_RE = /\[\[MEMORY_LINE:\s*([\s\S]*?)\s*\]\]\s*$/i;
+const SELF_MEMORY_LINE_DIRECTIVE_RE = /\[\[SELF_MEMORY_LINE:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*([\s\S]*?)\s*\]\]\s*$/i;
 const WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
 const DEFAULT_MAX_MEDIA_PROMPT_LEN = 900;
@@ -484,6 +485,7 @@ export function parseReplyDirectives(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_
     reactionEmoji: null,
     webSearchQuery: null,
     memoryLine: null,
+    selfMemoryLine: null,
     soundboardRef: null
   };
 
@@ -567,6 +569,15 @@ export function parseReplyDirectives(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_
       continue;
     }
 
+    const selfMemoryMatch = parsed.text.match(SELF_MEMORY_LINE_DIRECTIVE_RE);
+    if (selfMemoryMatch) {
+      if (!parsed.selfMemoryLine) {
+        parsed.selfMemoryLine = normalizeDirectiveText(selfMemoryMatch[1], MAX_MEMORY_LINE_LEN) || null;
+      }
+      parsed.text = parsed.text.slice(0, selfMemoryMatch.index).trim();
+      continue;
+    }
+
     const soundboardMatch = parsed.text.match(SOUNDBOARD_DIRECTIVE_RE);
     if (soundboardMatch) {
       if (!parsed.soundboardRef) {
@@ -598,6 +609,7 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
       memoryLookupQuery: null,
       imageLookupQuery: null,
       memoryLine: null,
+      selfMemoryLine: null,
       automationAction: {
         operation: null,
         title: null,
@@ -631,6 +643,7 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
   const imageLookupQuery =
     normalizeDirectiveText(parsed?.imageLookupQuery, MAX_IMAGE_LOOKUP_QUERY_LEN) || null;
   const memoryLine = normalizeDirectiveText(parsed?.memoryLine, MAX_MEMORY_LINE_LEN) || null;
+  const selfMemoryLine = normalizeDirectiveText(parsed?.selfMemoryLine, MAX_MEMORY_LINE_LEN) || null;
   const automationAction = normalizeStructuredAutomationAction(parsed?.automationAction);
   const mediaDirective = normalizeStructuredMediaDirective(parsed?.media, maxLen);
   const voiceIntent = normalizeStructuredVoiceIntent(parsed?.voiceIntent);
@@ -648,6 +661,7 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     memoryLookupQuery,
     imageLookupQuery,
     memoryLine,
+    selfMemoryLine,
     automationAction,
     voiceIntent,
     screenShareIntent

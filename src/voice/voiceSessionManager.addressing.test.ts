@@ -247,7 +247,7 @@ test("reply decider allows low-signal direct wake-word pings", async () => {
     },
     userId: "speaker-1",
     settings: baseSettings(),
-    transcript: "clunker"
+    transcript: "clanker"
   });
 
   assert.equal(decision.allow, true);
@@ -256,7 +256,7 @@ test("reply decider allows low-signal direct wake-word pings", async () => {
   assert.equal(callCount, 0);
 });
 
-test("reply decider allows short clunker wake ping", async () => {
+test("reply decider allows short clanker wake ping", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -273,7 +273,7 @@ test("reply decider allows short clunker wake ping", async () => {
     },
     userId: "speaker-1",
     settings: baseSettings(),
-    transcript: "yo clunker"
+    transcript: "yo clanker"
   });
 
   assert.equal(decision.allow, true);
@@ -327,6 +327,54 @@ test("reply decider allows unaddressed turn when model says YES", async () => {
   assert.equal(decision.allow, true);
   assert.equal(decision.reason, "llm_yes");
   assert.equal(decision.directAddressed, false);
+});
+
+test("reply decider routes wake-like variants through llm admission", async () => {
+  const cases = [
+    { text: "clunker", expected: true },
+    { text: "yo clunker", expected: true },
+    { text: "yo clunker can you answer this?", expected: true },
+    { text: "yo clanky can you answer this?", expected: true },
+    { text: "yo clakers can you answer this?", expected: true },
+    { text: "yo clankers can you answer this?", expected: true },
+    { text: "i think clunker can you answer this?", expected: true },
+    { text: "clankerton can you jump in?", expected: true },
+    { text: "clunkeroni can you jump in?", expected: true },
+    { text: "i sent you a link yesterday", expected: false },
+    { text: "Hi cleaner.", expected: false },
+    { text: "cleaner can you jump in?", expected: false },
+    { text: "cleaners can you jump in?", expected: false },
+    { text: "the cleaner is broken again", expected: false },
+    { text: "Very big step up from Paldea. Pretty excited to see what they cook up", expected: false }
+  ];
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      const row = cases[callCount];
+      callCount += 1;
+      return { text: row.expected ? "YES" : "NO" };
+    }
+  });
+
+  for (const row of cases) {
+    const decision = await manager.evaluateVoiceReplyDecision({
+      session: {
+        guildId: "guild-1",
+        textChannelId: "chan-1",
+        voiceChannelId: "voice-1",
+        botTurnOpen: false,
+      },
+      userId: "speaker-1",
+      settings: baseSettings(),
+      transcript: row.text
+    });
+
+    assert.equal(decision.allow, row.expected, row.text);
+    assert.equal(decision.directAddressed, false, row.text);
+    assert.equal(decision.reason, row.expected ? "llm_yes" : "llm_no", row.text);
+  }
+
+  assert.equal(callCount, cases.length);
 });
 
 test("reply decider uses richer compact prompt guidance on first attempt", async () => {
@@ -426,7 +474,7 @@ test("reply decider can load memory hints for direct-address turns", async () =>
         enabled: true
       }
     }),
-    transcript: "clanky what do i usually watch?"
+    transcript: "clanker what do i usually watch?"
   });
 
   assert.equal(decision.allow, true);
@@ -488,7 +536,7 @@ test("reply decider retries contract violation output and accepts YES", async ()
         }
       }
     }),
-    transcript: "clanky what's up?"
+    transcript: "clanker what's up?"
   });
 
   assert.equal(decision.allow, true);
@@ -522,7 +570,7 @@ test("reply decider uses JSON schema contract for claude-code and accepts struct
         }
       }
     }),
-    transcript: "clanky what's up?"
+    transcript: "clanker what's up?"
   });
 
   assert.equal(decision.allow, true);
@@ -559,7 +607,7 @@ test("reply decider fails open when direct-addressed turn gets explicit NO", asy
         }
       }
     }),
-    transcript: "clanky can you help with this"
+    transcript: "clanker can you help with this"
   });
 
   assert.equal(decision.allow, true);
@@ -620,7 +668,7 @@ test("direct address fails open when decider returns contract violations", async
     },
     userId: "speaker-1",
     settings: baseSettings(),
-    transcript: "clanky what happened"
+    transcript: "clanker what happened"
   });
 
   assert.equal(decision.allow, true);
@@ -646,7 +694,7 @@ test("direct address fails open when decider throws errors", async () => {
     },
     userId: "speaker-1",
     settings: baseSettings(),
-    transcript: "clanky can you respond"
+    transcript: "clanker can you respond"
   });
 
   assert.equal(decision.allow, true);
@@ -707,7 +755,7 @@ test("direct address falls back to allow when decider LLM is unavailable", async
     },
     userId: "speaker-1",
     settings: baseSettings(),
-    transcript: "clanky can you explain that"
+    transcript: "clanker can you explain that"
   });
 
   assert.equal(decision.allow, true);
@@ -744,10 +792,20 @@ test("realtime transcription plan keeps mini with full fallback on longer clips"
 test("runRealtimeTurn does not forward audio when reply decision denies turn", async () => {
   const runtimeLogs = [];
   let appendedAudioCalls = 0;
-  const manager = createManager();
+  let memoryIngestCalls = 0;
+  const manager = createManager({
+    memory: {
+      async ingestMessage() {
+        memoryIngestCalls += 1;
+      }
+    }
+  });
   manager.store.logAction = (row) => {
     runtimeLogs.push(row);
   };
+  manager.llm.isAsrReady = () => true;
+  manager.llm.transcribeAudio = async () => ({ text: "side chatter" });
+  manager.transcribePcmTurn = async () => "side chatter";
   manager.evaluateVoiceReplyDecision = async () => ({
     allow: false,
     reason: "llm_no",
@@ -784,6 +842,7 @@ test("runRealtimeTurn does not forward audio when reply decision denies turn", a
   assert.equal(Boolean(addressingLog), true);
   assert.equal(Boolean(addressingLog?.metadata?.allow), false);
   assert.equal(addressingLog?.metadata?.reason, "llm_no");
+  assert.equal(memoryIngestCalls, 1);
 });
 
 test("runRealtimeTurn defers direct-addressed turns when bot audio is already open", async () => {
@@ -981,7 +1040,14 @@ test("runRealtimeTurn forwards audio and prepares openai context when reply deci
 test("runSttPipelineTurn exits before generation when turn admission denies speaking", async () => {
   const runtimeLogs = [];
   let generateVoiceTurnCalls = 0;
-  const manager = createManager();
+  let memoryIngestCalls = 0;
+  const manager = createManager({
+    memory: {
+      async ingestMessage() {
+        memoryIngestCalls += 1;
+      }
+    }
+  });
   manager.store.logAction = (row) => {
     runtimeLogs.push(row);
   };
@@ -1019,6 +1085,7 @@ test("runSttPipelineTurn exits before generation when turn admission denies spea
   });
 
   assert.equal(generateVoiceTurnCalls, 0);
+  assert.equal(memoryIngestCalls, 1);
   const addressingLog = runtimeLogs.find(
     (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
   );

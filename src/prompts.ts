@@ -604,19 +604,25 @@ export function buildReplyPrompt({
       "Use memoryLine only for lasting facts (names, preferences, recurring relationships, long-lived context), not throwaway chatter."
     );
     parts.push("Keep memoryLine concise (under 180 chars) and factual.");
+    parts.push(
+      "If your own reply introduces a durable self fact (stable identity, recurring preference, or explicit standing commitment), set selfMemoryLine."
+    );
+    parts.push("Use selfMemoryLine only for durable facts about you, not temporary mood or throwaway phrasing.");
+    parts.push("Keep selfMemoryLine concise (under 180 chars), concrete, and grounded in your reply text.");
   }
 
   parts.push("Task: write one natural Discord reply to the incoming message.");
   parts.push("Return strict JSON only. Do not output markdown or code fences.");
   parts.push("JSON format:");
   parts.push(
-    "{\"text\":\"reply or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"memoryLine\":null,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
+    "{\"text\":\"reply or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
   );
   parts.push("Set skip=true only when no response should be sent. If skip=true, set text to [SKIP].");
   parts.push("When no reaction is needed, set reactionEmoji to null.");
   parts.push("When no media should be generated, set media to null.");
   parts.push("When no lookup is needed, set webSearchQuery, memoryLookupQuery, and imageLookupQuery to null.");
   parts.push("When no durable fact should be saved, set memoryLine to null.");
+  parts.push("When no durable self fact should be saved, set selfMemoryLine to null.");
   parts.push("When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.");
   parts.push("Set voiceIntent.intent to one of join|leave|status|watch_stream|stop_watching_stream|stream_status|none.");
   parts.push("When not issuing voice control, set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null.");
@@ -712,9 +718,9 @@ export function buildAutomationPrompt({
   parts.push("Return strict JSON only.");
   parts.push("JSON format:");
   parts.push(
-    "{\"text\":\"message or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"memoryLine\":null,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null}}"
+    "{\"text\":\"message or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null}}"
   );
-  parts.push("Set webSearchQuery and memoryLine to null.");
+  parts.push("Set webSearchQuery, memoryLine, and selfMemoryLine to null.");
   if (allowMemoryLookupDirective) {
     if (!memoryLookup?.enabled) {
       parts.push("Durable memory lookup is unavailable for this run. Set memoryLookupQuery to null.");
@@ -739,7 +745,8 @@ export function buildVoiceTurnPrompt({
   relevantFacts = [],
   isEagerTurn = false,
   voiceEagerness = 0,
-  soundboardCandidates = []
+  soundboardCandidates = [],
+  memoryEnabled = false
 }) {
   const parts = [];
   const voiceToneGuardrails = buildVoiceToneGuardrails();
@@ -765,6 +772,13 @@ export function buildVoiceTurnPrompt({
     parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: false, maxItems: 8 }));
   }
 
+  if (memoryEnabled) {
+    parts.push("Optional memory directives:");
+    parts.push("- [[MEMORY_LINE:<durable fact from the speaker turn>]]");
+    parts.push("- [[SELF_MEMORY_LINE:<durable fact about your own stable identity/preference/commitment in your reply>]]");
+    parts.push("Use these only when genuinely durable and grounded. Omit when not needed.");
+  }
+
   if (normalizedSoundboardCandidates.length) {
     parts.push("Optional soundboard refs:");
     parts.push(normalizedSoundboardCandidates.join("\n"));
@@ -785,13 +799,13 @@ export function buildVoiceTurnPrompt({
       "Task: respond as a natural spoken VC reply, or output exactly [SKIP] if you have nothing to add."
     );
     parts.push(
-      "If responding, use plain text only. No directives, tags, or markdown except the optional trailing [[SOUNDBOARD:<sound_ref>]] directive."
+      "If responding, use plain text only. No tags or markdown; only optional trailing directives listed above are allowed."
     );
   } else {
     parts.push(...voiceToneGuardrails);
     parts.push("Task: respond as a natural spoken VC reply.");
     parts.push(
-      "Use plain text only. Do not output directives, tags, markdown, or [SKIP], except the optional trailing [[SOUNDBOARD:<sound_ref>]] directive."
+      "Use plain text only. Do not output tags, markdown, or [SKIP]. Only optional trailing directives listed above are allowed."
     );
   }
 

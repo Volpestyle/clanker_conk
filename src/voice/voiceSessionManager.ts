@@ -29,6 +29,7 @@ import {
   isLowSignalVoiceFragment,
   normalizeVoiceReplyDecisionProvider,
   parseVoiceDecisionContract,
+  shouldUseLlmForLowSignalTurn,
   resolveRealtimeTurnTranscriptionPlan
 } from "./voiceDecisionRuntime.ts";
 import {
@@ -1758,6 +1759,36 @@ export class VoiceSessionManager {
         userId,
         text: turnTranscript
       });
+
+      if (settings?.memory?.enabled && this.memory && typeof this.memory.ingestMessage === "function") {
+        try {
+          await this.memory.ingestMessage({
+            messageId: `voice-${String(session.guildId || "guild")}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+            authorId: String(userId || ""),
+            authorName: this.resolveVoiceSpeakerName(session, userId) || "unknown",
+            content: turnTranscript,
+            settings,
+            trace: {
+              guildId: session.guildId,
+              channelId: session.textChannelId,
+              userId: String(userId || ""),
+              source: "voice_realtime_ingest"
+            }
+          });
+        } catch (error) {
+          this.store.logAction({
+            kind: "voice_error",
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId: String(userId || "") || null,
+            content: `voice_realtime_memory_ingest_failed: ${String(error?.message || error)}`,
+            metadata: {
+              sessionId: session.id,
+              captureReason: String(captureReason || "stream_end")
+            }
+          });
+        }
+      }
     }
 
     const decision = await this.evaluateVoiceReplyDecision({
@@ -1909,8 +1940,10 @@ export class VoiceSessionManager {
     }
 
     const lowSignalFragment = isLowSignalVoiceFragment(normalizedTranscript);
+    const wakeWordPing = isLikelyWakeWordPing(normalizedTranscript);
+    const lowSignalLlmEligible = !directAddressed && shouldUseLlmForLowSignalTurn(normalizedTranscript);
     if (lowSignalFragment) {
-      if (directAddressed && isLikelyWakeWordPing(normalizedTranscript)) {
+      if (directAddressed && wakeWordPing) {
         return {
           allow: true,
           reason: "direct_address_wake_ping",
@@ -1919,13 +1952,15 @@ export class VoiceSessionManager {
           transcript: normalizedTranscript
         };
       }
-      return {
-        allow: false,
-        reason: "low_signal_fragment",
-        participantCount,
-        directAddressed,
-        transcript: normalizedTranscript
-      };
+      if (!lowSignalLlmEligible) {
+        return {
+          allow: false,
+          reason: "low_signal_fragment",
+          participantCount,
+          directAddressed,
+          transcript: normalizedTranscript
+        };
+      }
     }
 
     const focusedSpeakerUserId = String(session?.focusedSpeakerUserId || "").trim();
@@ -2243,7 +2278,7 @@ export class VoiceSessionManager {
       const slice = await this.memory.buildPromptMemorySlice({
         userId: normalizedUserId,
         guildId: session.guildId,
-        channelId: null,
+        channelId: session.textChannelId,
         queryText: normalizedTranscript,
         settings,
         trace: {
@@ -2381,7 +2416,7 @@ export class VoiceSessionManager {
     return 1;
   }
 
-  async prepareOpenAiRealtimeTurnContext({ session, settings, userId, transcript = "", captureReason = "stream_end" }) {
+  async prepareOpenAiRealtimeTurnContext({ session, settings, userId, transcript = "", captureReason: _captureReason = "stream_end" }) {
     if (!session || session.ending) return;
     if (session.mode !== "openai_realtime") return;
 
@@ -2390,8 +2425,7 @@ export class VoiceSessionManager {
       session,
       settings,
       userId,
-      transcript: normalizedTranscript,
-      captureReason
+      transcript: normalizedTranscript
     });
 
     await this.refreshOpenAiRealtimeInstructions({
@@ -2404,7 +2438,7 @@ export class VoiceSessionManager {
     });
   }
 
-  async buildOpenAiRealtimeMemorySlice({ session, settings, userId, transcript = "", captureReason = "stream_end" }) {
+  async buildOpenAiRealtimeMemorySlice({ session, settings, userId, transcript = "" }) {
     const empty = {
       userFacts: [],
       relevantFacts: []
@@ -2417,36 +2451,6 @@ export class VoiceSessionManager {
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     if (!normalizedUserId || !normalizedTranscript) return empty;
 
-    if (typeof this.memory.ingestMessage === "function") {
-      try {
-        await this.memory.ingestMessage({
-          messageId: `voice-${String(session.guildId || "guild")}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-          authorId: normalizedUserId,
-          authorName: this.resolveVoiceSpeakerName(session, normalizedUserId) || "unknown",
-          content: normalizedTranscript,
-          settings,
-          trace: {
-            guildId: session.guildId,
-            channelId: session.textChannelId,
-            userId: normalizedUserId,
-            source: "voice_realtime_ingest"
-          }
-        });
-      } catch (error) {
-        this.store.logAction({
-          kind: "voice_error",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: normalizedUserId,
-          content: `voice_realtime_memory_ingest_failed: ${String(error?.message || error)}`,
-          metadata: {
-            sessionId: session.id,
-            captureReason: String(captureReason || "stream_end")
-          }
-        });
-      }
-    }
-
     if (typeof this.memory.buildPromptMemorySlice !== "function") {
       return empty;
     }
@@ -2455,7 +2459,7 @@ export class VoiceSessionManager {
       const slice = await this.memory.buildPromptMemorySlice({
         userId: normalizedUserId,
         guildId: session.guildId,
-        channelId: null,
+        channelId: session.textChannelId,
         queryText: normalizedTranscript,
         settings,
         trace: {
@@ -2742,6 +2746,36 @@ export class VoiceSessionManager {
       userId,
       text: transcript
     });
+
+    if (settings?.memory?.enabled && this.memory && typeof this.memory.ingestMessage === "function") {
+      try {
+        await this.memory.ingestMessage({
+          messageId: `voice-${String(session.guildId || "guild")}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
+          authorId: String(userId || ""),
+          authorName: this.resolveVoiceSpeakerName(session, userId) || "unknown",
+          content: transcript,
+          settings,
+          trace: {
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId: String(userId || ""),
+            source: "voice_stt_pipeline_ingest"
+          }
+        });
+      } catch (error) {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: String(userId || "") || null,
+          content: `voice_stt_memory_ingest_failed: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id,
+            captureReason: String(captureReason || "stream_end")
+          }
+        });
+      }
+    }
 
     const turnDecision = await this.evaluateVoiceReplyDecision({
       session,

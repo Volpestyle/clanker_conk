@@ -190,6 +190,19 @@ export async function generateVoiceTurnReply(runtime, {
   const allowSoundboardDirective = Boolean(
     settings?.voice?.soundboard?.enabled && normalizedSoundboardCandidates.length
   );
+  const allowMemoryDirectives = Boolean(settings?.memory?.enabled);
+  const allowedDirectives = [
+    ...(allowMemoryDirectives
+      ? [
+          "[[MEMORY_LINE:<durable fact from speaker turn>]]",
+          "[[SELF_MEMORY_LINE:<durable fact about your own stable identity/preference/commitment in your reply>]]"
+        ]
+      : []),
+    ...(allowSoundboardDirective ? ["[[SOUNDBOARD:<sound_ref>]]"] : [])
+  ];
+  const directivesLine = allowedDirectives.length
+    ? `Allowed optional trailing directives: ${allowedDirectives.join(", ")}.`
+    : "Do not output directives like [[...]].";
 
   const guild = runtime.client.guilds.cache.get(String(guildId || ""));
   const speakerName =
@@ -198,40 +211,11 @@ export async function generateVoiceTurnReply(runtime, {
     runtime.client.users?.cache?.get(String(userId || ""))?.username ||
     "unknown";
 
-  if (settings.memory?.enabled && runtime.memory?.ingestMessage && userId) {
-    try {
-      await runtime.memory.ingestMessage({
-        messageId: `voice-${String(guildId || "guild")}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-        authorId: String(userId),
-        authorName: String(speakerName || "unknown"),
-        content: incomingTranscript,
-        settings,
-        trace: {
-          guildId,
-          channelId,
-          userId,
-          source: "voice_stt_pipeline_ingest"
-        }
-      });
-    } catch (error) {
-      runtime.store.logAction({
-        kind: "voice_error",
-        guildId,
-        channelId,
-        userId,
-        content: `voice_stt_memory_ingest_failed: ${String(error?.message || error)}`,
-        metadata: {
-          sessionId
-        }
-      });
-    }
-  }
-
   const memorySlice = await runtime.loadPromptMemorySlice({
     settings,
     userId,
     guildId,
-    channelId: null,
+    channelId,
     queryText: incomingTranscript,
     trace: {
       guildId,
@@ -256,17 +240,15 @@ export async function generateVoiceTurnReply(runtime, {
     "You are speaking in live Discord voice chat.",
     ...voiceToneGuardrails,
     "Output plain spoken text only.",
-    allowSoundboardDirective
-      ? "Optional control: append exactly one trailing [[SOUNDBOARD:<sound_ref>]] directive when you want a soundboard effect."
-      : null,
+    directivesLine,
     isEagerTurn
-      ? allowSoundboardDirective
-        ? "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text and only the optional trailing soundboard directive."
+      ? allowedDirectives.length
+        ? "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text and only optional trailing directives."
         : "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text only, no directives or markdown."
-      : allowSoundboardDirective
-        ? "Do not output directives or markdown, except the optional trailing [[SOUNDBOARD:<sound_ref>]] directive. Do not output [SKIP]."
+      : allowedDirectives.length
+        ? "Do not output markdown or [SKIP]. Optional trailing directives are allowed only as listed."
         : "Do not output directives like [[...]], [SKIP], or markdown.",
-    allowSoundboardDirective ? "Never mention the control directive in normal speech." : null
+    allowSoundboardDirective ? "Never mention the soundboard control directive in normal speech." : null
   ] 
     .filter(Boolean)
     .join("\n");
@@ -277,7 +259,8 @@ export async function generateVoiceTurnReply(runtime, {
     relevantFacts: memorySlice.relevantFacts,
     isEagerTurn,
     voiceEagerness,
-    soundboardCandidates: normalizedSoundboardCandidates
+    soundboardCandidates: normalizedSoundboardCandidates,
+    memoryEnabled: Boolean(settings.memory?.enabled)
   });
 
   try {
@@ -306,15 +289,30 @@ export async function generateVoiceTurnReply(runtime, {
       return { text: "", soundboardRef: null };
     }
 
-    if (settings.memory?.enabled && parsed.memoryLine && runtime.memory?.rememberLine && userId) {
+    if (settings.memory?.enabled && parsed.memoryLine && runtime.memory?.rememberDirectiveLine && userId) {
       await runtime.memory
-        .rememberLine({
+        .rememberDirectiveLine({
           line: parsed.memoryLine,
           sourceMessageId: `voice-${String(guildId || "guild")}-${Date.now()}-memory`,
           userId: String(userId),
           guildId,
           channelId,
-          sourceText: incomingTranscript
+          sourceText: incomingTranscript,
+          scope: "lore"
+        })
+        .catch(() => undefined);
+    }
+
+    if (settings.memory?.enabled && parsed.selfMemoryLine && runtime.memory?.rememberDirectiveLine && userId) {
+      await runtime.memory
+        .rememberDirectiveLine({
+          line: parsed.selfMemoryLine,
+          sourceMessageId: `voice-${String(guildId || "guild")}-${Date.now()}-self-memory`,
+          userId: runtime.client?.user?.id || String(userId),
+          guildId,
+          channelId,
+          sourceText: finalText,
+          scope: "self"
         })
         .catch(() => undefined);
     }
