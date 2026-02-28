@@ -380,7 +380,7 @@ export async function generateVoiceTurnReply(runtime, {
       provider: voiceGenerationProvider,
       model: voiceGenerationModel,
       temperature: clamp(Number(settings?.llm?.temperature) || 0.8, 0, 1.2),
-      maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || 220, 40, 180)
+      maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || 220, 40, 420)
     }
   };
 
