@@ -4,7 +4,7 @@ This suite validates voice-chat behavior across all runtime modes with:
 
 - golden utterance cases
 - admission/response pass-fail scoring
-- optional LLM-as-judge evaluation
+- LLM-as-judge evaluation (enabled by default)
 - performance timing metrics (p50/p95/avg)
 
 Modes covered:
@@ -24,6 +24,8 @@ Notes:
 npm run replay:voice-golden
 # or
 npm run test:voice-golden
+# or (voice golden + text-mode web-search regression)
+npm run test:golden
 ```
 
 ## Run live APIs (real perf)
@@ -34,7 +36,7 @@ npm run replay:voice-golden:live
 npm run test:voice-golden:live
 ```
 
-By default live mode enables judge scoring.
+By default judge scoring is enabled in both simulated and live runs. Use `--no-judge` to disable it.
 
 ## Key CLI flags
 
@@ -43,20 +45,18 @@ bun scripts/voiceGoldenHarness.ts \
   --mode live \
   --modes stt_pipeline,voice_agent,openai_realtime,gemini_realtime \
   --iterations 1 \
-  --judge \
-  --judge-provider openai \
-  --judge-model gpt-5-mini \
-  --decider-provider openai \
-  --decider-model gpt-5-nano \
-  --actor-provider openai \
-  --actor-model gpt-5-mini \
-  --input-transport audio \
-  --timeout-ms 45000 \
+  --judge-provider anthropic \
+  --judge-model claude-haiku-4-5 \
+  --decider-provider anthropic \
+  --decider-model claude-haiku-4-5 \
+  --actor-provider anthropic \
+  --actor-model claude-sonnet-4-5 \
   --out-json data/voice-golden-report.json
 ```
 
 Additional flags:
 
+- `--judge`
 - `--allow-missing-credentials`
 - `--max-cases <n>`
 - `--no-judge`
@@ -69,8 +69,6 @@ Used by `src/voice/voiceGoldenValidation.live.smoke.test.ts`:
 - `LIVE_VOICE_GOLDEN_MODES`
 - `LIVE_VOICE_GOLDEN_ITERATIONS`
 - `LIVE_VOICE_GOLDEN_MAX_CASES`
-- `LIVE_VOICE_GOLDEN_INPUT_TRANSPORT` (`audio` or `text`)
-- `LIVE_VOICE_GOLDEN_TIMEOUT_MS`
 - `LIVE_VOICE_GOLDEN_ALLOW_MISSING_CREDENTIALS`
 - `LIVE_VOICE_GOLDEN_ACTOR_PROVIDER`, `LIVE_VOICE_GOLDEN_ACTOR_MODEL`
 - `LIVE_VOICE_GOLDEN_DECIDER_PROVIDER`, `LIVE_VOICE_GOLDEN_DECIDER_MODEL`
@@ -80,7 +78,7 @@ Used by `src/voice/voiceGoldenValidation.live.smoke.test.ts`:
 
 ## Credential requirements
 
-- `stt_pipeline`: `OPENAI_API_KEY`
-- `openai_realtime`: `OPENAI_API_KEY`
-- `voice_agent`: `XAI_API_KEY` (+ `OPENAI_API_KEY` when `--input-transport audio`)
-- `gemini_realtime`: `GOOGLE_API_KEY` (+ `OPENAI_API_KEY` when `--input-transport audio`)
+- Live mode requires credentials for the providers selected by `--actor-provider` and `--decider-provider`.
+- Judge mode requires credentials for `--judge-provider`.
+- With defaults (`anthropic` actor on `claude-sonnet-4-5`, `anthropic` decider/judge on `claude-haiku-4-5`), set `ANTHROPIC_API_KEY`.
+- For web-search cases, set at least one search provider key: `BRAVE_SEARCH_API_KEY` and/or `SERPAPI_API_KEY`.

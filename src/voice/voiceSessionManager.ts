@@ -35,6 +35,7 @@ import {
   isLowSignalVoiceFragment,
   normalizeVoiceReplyDecisionProvider,
   parseVoiceDecisionContract,
+  resolveVoiceReplyDecisionMaxOutputTokens,
   shouldUseLlmForLowSignalTurn,
   resolveRealtimeTurnTranscriptionPlan
 } from "./voiceDecisionRuntime.ts";
@@ -2980,7 +2981,8 @@ export class VoiceSessionManager {
         provider: llmProvider,
         model: llmModel,
         temperature: 0,
-        maxOutputTokens: 2
+        maxOutputTokens: resolveVoiceReplyDecisionMaxOutputTokens(llmProvider, llmModel),
+        reasoningEffort: String(replyDecisionLlm?.reasoningEffort || "minimal").trim().toLowerCase() || "minimal"
       }
     };
 

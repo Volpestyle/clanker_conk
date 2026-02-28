@@ -18,6 +18,10 @@ function hasProviderCredentials(provider) {
   return Boolean(appConfig.openaiApiKey);
 }
 
+function smokeTimeoutMs(provider) {
+  return provider === "claude-code" ? 60_000 : 30_000;
+}
+
 function createManager(llm) {
   const fakeStore = {
     logAction() {},
@@ -45,10 +49,12 @@ function createManager(llm) {
   return manager;
 }
 
-test("smoke: live voice decision model admits wake-variant turns", { timeout: 30_000 }, async () => {
+const configuredProvider = normalizeVoiceReplyDecisionProvider(process.env.LIVE_VOICE_DECIDER_PROVIDER || "anthropic");
+
+test("smoke: live voice decision model admits wake-variant turns", { timeout: smokeTimeoutMs(configuredProvider) }, async () => {
   if (!envFlag("RUN_LIVE_VOICE_DECIDER_SMOKE")) return;
 
-  const provider = normalizeVoiceReplyDecisionProvider(process.env.LIVE_VOICE_DECIDER_PROVIDER || "anthropic");
+  const provider = configuredProvider;
   const model =
     String(process.env.LIVE_VOICE_DECIDER_MODEL || defaultVoiceReplyDecisionModel(provider)).trim() ||
     defaultVoiceReplyDecisionModel(provider);
@@ -74,15 +80,16 @@ test("smoke: live voice decision model admits wake-variant turns", { timeout: 30
       enabled: false
     },
     llm: {
-      provider: "openai",
-      model: "claude-haiku-4-5"
+      provider: "anthropic",
+      model: "claude-sonnet-4-5"
     },
     voice: {
       replyEagerness: 50,
       replyDecisionLlm: {
         provider,
         model,
-        maxAttempts: 2
+        maxAttempts: 2,
+        reasoningEffort: String(process.env.LIVE_VOICE_DECIDER_REASONING_EFFORT || "minimal").trim().toLowerCase() || "minimal"
       }
     }
   };

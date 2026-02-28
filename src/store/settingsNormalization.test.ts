@@ -47,7 +47,8 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
       replyDecisionLlm: {
         provider: "CLAUDE-CODE",
         model: "",
-        maxAttempts: 9
+        maxAttempts: 9,
+        reasoningEffort: "HIGH"
       },
       openaiRealtime: {
         inputAudioFormat: "bad-format",
@@ -115,6 +116,7 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.voice.replyDecisionLlm.model, "sonnet");
   assert.equal(normalized.voice.replyDecisionLlm.enabled, true);
   assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, 3);
+  assert.equal(normalized.voice.replyDecisionLlm.reasoningEffort, "high");
   assert.equal(
     String(normalized.voice.replyDecisionLlm.prompts?.wakeVariantHint || "").includes("near-phonetic"),
     true
@@ -204,7 +206,8 @@ test("normalizeSettings keeps stt pipeline voice generation and reply decider in
       replyDecisionLlm: {
         provider: "openai",
         model: "claude-haiku-4-5",
-        maxAttempts: 2
+        maxAttempts: 2,
+        reasoningEffort: "not-real"
       }
     }
   });
@@ -215,6 +218,7 @@ test("normalizeSettings keeps stt pipeline voice generation and reply decider in
   assert.equal(normalized.voice.replyDecisionLlm.model, "claude-haiku-4-5");
   assert.equal(normalized.voice.replyDecisionLlm.enabled, true);
   assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, 2);
+  assert.equal(normalized.voice.replyDecisionLlm.reasoningEffort, "minimal");
   assert.equal(normalized.voice.realtimeReplyStrategy, "brain");
 });
 

@@ -1,38 +1,21 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { performance } from "node:perf_hooks";
-import assert from "node:assert/strict";
 import { appConfig } from "../config.ts";
 import { LLMService } from "../llm.ts";
+import { ClankerBot } from "../bot.ts";
 import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
 import { normalizeSettings } from "../store/settingsNormalization.ts";
 import { parseBooleanFlag } from "../normalization/valueParsers.ts";
-import {
-  isWebSearchOptOutText,
-  parseReplyDirectives,
-  resolveMaxMediaPromptLen
-} from "../botHelpers.ts";
-import {
-  runModelRequestedWebSearch,
-  runModelRequestedWebSearchWithTimeout
-} from "../bot/replyFollowup.ts";
 import { WebSearchService } from "../search.ts";
 import { runJsonJudge } from "../../scripts/replay/core/judge.ts";
 import { summarizeNamedMetricRows, type NumericStats } from "../../scripts/replay/core/metrics.ts";
 import { formatPct, stableNumber } from "../../scripts/replay/core/utils.ts";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
-import { encodePcm16MonoAsWav, transcriptSourceFromEventType } from "./voiceSessionHelpers.ts";
-import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
-import { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
-import { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
 import { VOICE_RUNTIME_MODES, parseVoiceRuntimeMode } from "./voiceModes.ts";
 
 export const VOICE_GOLDEN_MODES = VOICE_RUNTIME_MODES;
 
 export type VoiceGoldenMode = (typeof VOICE_GOLDEN_MODES)[number];
 export type VoiceGoldenRunMode = "simulated" | "live";
-export type VoiceGoldenInputTransport = "audio" | "text";
 
 type VoiceGoldenCase = {
   id: string;
@@ -57,8 +40,6 @@ export type VoiceGoldenHarnessOptions = {
   deciderProvider?: string;
   deciderModel?: string;
   judge?: Partial<VoiceGoldenJudgeConfig>;
-  inputTransport?: VoiceGoldenInputTransport;
-  timeoutMs?: number;
   allowMissingCredentials?: boolean;
   maxCases?: number;
 };
@@ -72,8 +53,6 @@ type VoiceGoldenResolvedOptions = {
   deciderProvider: string;
   deciderModel: string;
   judge: VoiceGoldenJudgeConfig;
-  inputTransport: VoiceGoldenInputTransport;
-  timeoutMs: number;
   allowMissingCredentials: boolean;
   maxCases: number;
 };
@@ -163,23 +142,6 @@ export type VoiceGoldenHarnessReport = {
   };
 };
 
-type RealtimeTranscript = {
-  text: string;
-  eventType: string;
-  source: "input" | "output" | "unknown";
-};
-
-type RealtimeClientLike = {
-  connect: (args?: Record<string, unknown>) => Promise<Record<string, unknown>>;
-  close: () => Promise<void>;
-  on: (event: string, handler: (...args: unknown[]) => void) => void;
-  off: (event: string, handler: (...args: unknown[]) => void) => void;
-  appendInputAudioPcm: (audioBuffer: Buffer) => void;
-  commitInputAudioBuffer: () => void;
-  createAudioResponse: () => void;
-  requestTextUtterance: (promptText: string) => void;
-};
-
 type DecisionLlmTrace = {
   guildId: string | null;
   channelId: string | null;
@@ -214,6 +176,7 @@ type HarnessStoreAction = {
   content?: string;
   metadata?: Record<string, unknown>;
   usdCost?: number;
+  createdAt?: string;
 };
 
 class HarnessStore {
@@ -224,13 +187,32 @@ class HarnessStore {
   }
 
   logAction(action: HarnessStoreAction) {
-    this.actions.push(action || {});
+    this.actions.push({
+      ...(action || {}),
+      createdAt:
+        String(action?.createdAt || "").trim() || new Date().toISOString()
+    });
   }
 
   getSettings() {
     return {
       botName: "clanker conk"
     };
+  }
+
+  countActionsSince(kind: string, sinceIso: string) {
+    const targetKind = String(kind || "").trim();
+    const sinceAt = Date.parse(String(sinceIso || ""));
+    if (!targetKind || !Number.isFinite(sinceAt)) return 0;
+
+    let count = 0;
+    for (const action of this.actions) {
+      if (String(action?.kind || "") !== targetKind) continue;
+      const createdAt = Date.parse(String(action?.createdAt || ""));
+      if (!Number.isFinite(createdAt)) continue;
+      if (createdAt >= sinceAt) count += 1;
+    }
+    return count;
   }
 }
 
@@ -286,7 +268,6 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
   }
 ];
 
-const DEFAULT_TIMEOUT_MS = 45_000;
 const DEFAULT_MAX_CASES = VOICE_GOLDEN_CASES.length;
 
 function parseBool(value: unknown, fallback = false) {
@@ -295,10 +276,6 @@ function parseBool(value: unknown, fallback = false) {
 
 function normalizeMode(value: unknown): VoiceGoldenRunMode {
   return String(value || "simulated").trim().toLowerCase() === "live" ? "live" : "simulated";
-}
-
-function normalizeInputTransport(value: unknown): VoiceGoldenInputTransport {
-  return String(value || "audio").trim().toLowerCase() === "text" ? "text" : "audio";
 }
 
 function normalizeVoiceModeList(values: unknown): VoiceGoldenMode[] {
@@ -326,20 +303,18 @@ function resolveDefaults(options: VoiceGoldenHarnessOptions = {}): VoiceGoldenRe
     mode: normalizeMode(options.mode),
     modes: requestedModes.length ? requestedModes : [...VOICE_GOLDEN_MODES],
     iterations: Math.max(1, Math.floor(Number(options.iterations) || 1)),
-    actorProvider: String(options.actorProvider || "openai").trim() || "openai",
-    actorModel: String(options.actorModel || "gpt-5-mini").trim() || "gpt-5-mini",
-    deciderProvider: String(options.deciderProvider || "openai").trim() || "openai",
-    deciderModel: String(options.deciderModel || "gpt-5-nano").trim() || "gpt-5-nano",
+    actorProvider: String(options.actorProvider || "anthropic").trim() || "anthropic",
+    actorModel: String(options.actorModel || "claude-sonnet-4-5").trim() || "claude-sonnet-4-5",
+    deciderProvider: String(options.deciderProvider || "anthropic").trim() || "anthropic",
+    deciderModel: String(options.deciderModel || "claude-haiku-4-5").trim() || "claude-haiku-4-5",
     judge: {
       enabled:
         options.judge?.enabled !== undefined
           ? Boolean(options.judge.enabled)
-          : normalizeMode(options.mode) === "live",
-      provider: String(options.judge?.provider || "openai").trim() || "openai",
-      model: String(options.judge?.model || "gpt-5-mini").trim() || "gpt-5-mini"
+          : true,
+      provider: String(options.judge?.provider || "anthropic").trim() || "anthropic",
+      model: String(options.judge?.model || "claude-haiku-4-5").trim() || "claude-haiku-4-5"
     },
-    inputTransport: normalizeInputTransport(options.inputTransport),
-    timeoutMs: Math.max(5000, Math.floor(Number(options.timeoutMs) || DEFAULT_TIMEOUT_MS)),
     allowMissingCredentials: parseBool(options.allowMissingCredentials, false),
     maxCases: Math.max(1, Math.min(VOICE_GOLDEN_CASES.length, Math.floor(Number(options.maxCases) || DEFAULT_MAX_CASES)))
   };
@@ -377,7 +352,12 @@ function buildHarnessSettings({
     voice: {
       enabled: true,
       mode: voiceMode,
+      realtimeReplyStrategy: "brain",
       replyEagerness: 65,
+      generationLlm: {
+        provider: actorProvider,
+        model: actorModel
+      },
       replyDecisionLlm: {
         enabled: true,
         provider: deciderProvider,
@@ -427,150 +407,6 @@ function buildJudgeSettings(judge: VoiceGoldenJudgeConfig) {
       maxOutputTokens: 260
     }
   });
-}
-
-type HarnessWebSearchResultRow = {
-  title?: string;
-  url?: string;
-  domain?: string;
-  snippet?: string;
-  pageSummary?: string | null;
-};
-
-type HarnessWebSearchState = {
-  requested: boolean;
-  configured: boolean;
-  enabled: boolean;
-  used: boolean;
-  blockedByBudget: boolean;
-  optedOutByUser: boolean;
-  error: string | null;
-  query: string;
-  results: HarnessWebSearchResultRow[];
-  fetchedPages: number;
-  providerUsed: string | null;
-  providerFallbackUsed: boolean;
-  budget: {
-    canSearch: boolean;
-  };
-};
-
-function buildHarnessWebSearchContext({
-  settings,
-  search,
-  messageText
-}: {
-  settings: Record<string, unknown>;
-  search: WebSearchService | null;
-  messageText: string;
-}): HarnessWebSearchState {
-  const maxPerHour = Math.max(
-    0,
-    Math.floor(Number((settings as { webSearch?: { maxSearchesPerHour?: number } })?.webSearch?.maxSearchesPerHour) || 0)
-  );
-  return {
-    requested: false,
-    configured: Boolean(search?.isConfigured?.()),
-    enabled: Boolean((settings as { webSearch?: { enabled?: boolean } })?.webSearch?.enabled),
-    used: false,
-    blockedByBudget: false,
-    optedOutByUser: isWebSearchOptOutText(messageText),
-    error: null,
-    query: "",
-    results: [],
-    fetchedPages: 0,
-    providerUsed: null,
-    providerFallbackUsed: false,
-    budget: {
-      canSearch: maxPerHour > 0
-    }
-  };
-}
-
-function formatHarnessWebSearchFindings(webSearch: HarnessWebSearchState) {
-  if (!webSearch.used || !Array.isArray(webSearch.results) || !webSearch.results.length) return "";
-  const lines = webSearch.results.slice(0, 5).map((row, index) => {
-    const title = String(row?.title || "Untitled").trim();
-    const summary = String(row?.pageSummary || row?.snippet || "").trim();
-    const domain = String(row?.domain || "").trim();
-    return `[${index + 1}] ${title}${summary ? ` - ${summary}` : ""}${domain ? ` (${domain})` : ""}`;
-  });
-  return lines.filter(Boolean).join("\n");
-}
-
-function buildSttActorPrompt({
-  transcript,
-  webSearch,
-  allowWebSearchDirective
-}: {
-  transcript: string;
-  webSearch: HarnessWebSearchState;
-  allowWebSearchDirective: boolean;
-}) {
-  const lines = [
-    `Speaker transcript: "${String(transcript || "").replace(/\s+/g, " ").trim()}"`,
-    "Reply with one short natural spoken response (max 20 words).",
-    "If this should be skipped, output exactly [SKIP].",
-    "No markdown."
-  ];
-
-  if (allowWebSearchDirective) {
-    if (webSearch.optedOutByUser) {
-      lines.push("The speaker asked not to use web search.");
-      lines.push("Do not output [[WEB_SEARCH:...]].");
-    } else if (!webSearch.enabled) {
-      lines.push("Live web search is disabled for this run.");
-      lines.push("Do not output [[WEB_SEARCH:...]].");
-    } else if (!webSearch.configured) {
-      lines.push("Live web search is unavailable because no provider is configured.");
-      lines.push("Do not output [[WEB_SEARCH:...]].");
-    } else if (!webSearch.budget?.canSearch || webSearch.blockedByBudget) {
-      lines.push("Live web search budget is exhausted right now.");
-      lines.push("Do not output [[WEB_SEARCH:...]].");
-    } else {
-      lines.push("If freshness or exactness requires web lookup, append one trailing [[WEB_SEARCH:<concise query>]].");
-      lines.push("Only use the directive when needed.");
-    }
-  } else {
-    lines.push("Do not output [[WEB_SEARCH:...]].");
-  }
-
-  if (webSearch.requested && !webSearch.used) {
-    if (webSearch.error) {
-      lines.push(`Web lookup failed: ${webSearch.error}`);
-    } else {
-      lines.push("Web lookup returned no useful results.");
-    }
-  } else {
-    const findings = formatHarnessWebSearchFindings(webSearch);
-    if (findings) {
-      lines.push(`Live web findings for query: "${webSearch.query}"`);
-      lines.push(findings);
-      lines.push("If you cite findings, use [1], [2], etc.");
-    }
-  }
-
-  return lines.filter(Boolean).join("\n");
-}
-
-function uniqueLines(values: string[]) {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const value of values) {
-    const normalized = String(value || "").replace(/\s+/g, " ").trim();
-    if (!normalized) continue;
-    const key = normalized.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push(normalized);
-  }
-  return out;
-}
-
-function pickBestTranscript(values: string[]) {
-  const normalized = uniqueLines(values);
-  if (!normalized.length) return "";
-  return normalized.sort((a, b) => b.length - a.length)[0] || "";
 }
 
 function buildStageStats(rows: VoiceGoldenCaseResult[]): Record<string, StageStat> {
@@ -643,6 +479,48 @@ function createDecisionRuntime(llm: DecisionLlm) {
   };
 }
 
+function createLiveExecutionRuntime({
+  llm,
+  search,
+  store
+}: {
+  llm: LLMService;
+  search: WebSearchService;
+  store: HarnessStore;
+}) {
+  const bot = new ClankerBot({
+    appConfig: {
+      ...appConfig,
+      disableSimulatedTypingDelay: true
+    },
+    store,
+    llm,
+    memory: null,
+    discovery: null,
+    search,
+    gifs: null,
+    video: null
+  });
+
+  bot.client.user = {
+    id: "bot-user",
+    username: "clanker conk",
+    tag: "clanker conk#0001"
+  };
+
+  const manager = bot.voiceSessionManager;
+  manager.countHumanVoiceParticipants = () => 2;
+  manager.getVoiceChannelParticipants = () => [
+    { userId: "speaker-1", displayName: "alice" },
+    { userId: "speaker-2", displayName: "bob" }
+  ];
+
+  return {
+    bot,
+    manager
+  };
+}
+
 function createDecisionSession(mode: VoiceGoldenMode) {
   return {
     id: `voice-golden-${mode}`,
@@ -692,58 +570,83 @@ async function evaluateDecision({
   };
 }
 
-async function withTempWavFromPcm<T>(pcmBuffer: Buffer, sampleRateHz: number, run: (filePath: string) => Promise<T>) {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "voice-golden-"));
-  const wavPath = path.join(tempDir, "sample.wav");
-  try {
-    await fs.writeFile(wavPath, encodePcm16MonoAsWav(pcmBuffer, sampleRateHz));
-    return await run(wavPath);
-  } finally {
-    await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+function buildExecutionSession(mode: VoiceGoldenMode) {
+  const now = Date.now();
+  const session = {
+    id: `voice-golden-exec-${mode}-${now}-${Math.floor(Math.random() * 1_000_000)}`,
+    guildId: "voice-golden-guild",
+    textChannelId: "voice-golden-text",
+    voiceChannelId: "voice-golden-voice",
+    mode,
+    ending: false,
+    botTurnOpen: false,
+    startedAt: now - 12_000,
+    lastActivityAt: now,
+    userCaptures: new Map(),
+    recentVoiceTurns: [],
+    pendingDeferredTurns: [],
+    soundboard: {
+      playCount: 0,
+      lastPlayedAt: 0
+    },
+    streamWatch: {
+      active: false
+    },
+    voiceLookupBusyCount: 0,
+    lastVoiceLookupBusyAnnouncementAt: 0
+  } as Record<string, unknown>;
+
+  if (mode === "openai_realtime") {
+    session.realtimeClient = {
+      updateInstructions() {
+        return undefined;
+      }
+    };
   }
+
+  return session;
 }
 
-async function synthesizeInputAudio({
-  llm,
-  text,
-  settings,
-  traceSource
+function latestVoiceReplyFromActions({
+  mode,
+  actions
 }: {
-  llm: LLMService;
-  text: string;
-  settings: Record<string, unknown>;
-  traceSource: string;
+  mode: VoiceGoldenMode;
+  actions: HarnessStoreAction[];
 }) {
-  return await llm.synthesizeSpeech({
-    text,
-    model:
-      String((settings as { voice?: { sttPipeline?: { ttsModel?: string } } })?.voice?.sttPipeline?.ttsModel || "gpt-4o-mini-tts") ||
-      "gpt-4o-mini-tts",
-    voice:
-      String((settings as { voice?: { sttPipeline?: { ttsVoice?: string } } })?.voice?.sttPipeline?.ttsVoice || "alloy") || "alloy",
-    speed: Number((settings as { voice?: { sttPipeline?: { ttsSpeed?: number } } })?.voice?.sttPipeline?.ttsSpeed) || 1,
-    responseFormat: "pcm",
-    trace: {
-      guildId: "voice-golden-guild",
-      channelId: "voice-golden-text",
-      userId: "speaker-1",
-      source: traceSource
+  if (mode === "stt_pipeline") {
+    const spoken = [...actions]
+      .reverse()
+      .find((row) => row.kind === "voice_runtime" && row.content === "stt_pipeline_reply_spoken");
+    if (spoken) {
+      return String(spoken.metadata?.replyText || "").trim();
     }
-  });
+    return "";
+  }
+
+  const requested = [...actions]
+    .reverse()
+    .find((row) => row.kind === "voice_runtime" && row.content === "realtime_reply_requested");
+  if (requested) {
+    return String(requested.metadata?.replyText || "").trim();
+  }
+  return "";
 }
 
-async function runLiveSttPipelineCase({
-  llm,
+async function runLiveProductionCase({
   manager,
+  store,
   settings,
+  mode,
   caseRow,
-  search
+  directAddressed
 }: {
-  llm: LLMService;
   manager: VoiceSessionManager;
+  store: HarnessStore;
   settings: Record<string, unknown>;
+  mode: VoiceGoldenMode;
   caseRow: VoiceGoldenCase;
-  search: WebSearchService | null;
+  directAddressed: boolean;
 }): Promise<ModeExecutionResult> {
   const stage = {
     connectMs: 0,
@@ -755,477 +658,55 @@ async function runLiveSttPipelineCase({
     outputAsrMs: 0,
     responseMs: 0
   };
+  const session = buildExecutionSession(mode);
+  const actionStart = store.actions.length;
+  const responseStartedAt = performance.now();
+  const originalSpeakVoiceLineWithTts = manager.speakVoiceLineWithTts.bind(manager);
 
-  const inputPrepStarted = performance.now();
-  const inputAudio = await synthesizeInputAudio({
-    llm,
-    text: caseRow.userText,
-    settings,
-    traceSource: "voice_golden_stt_input_tts"
-  });
-  stage.inputPrepMs = performance.now() - inputPrepStarted;
-
-  const asrStarted = performance.now();
-  const transcript = await withTempWavFromPcm(inputAudio.audioBuffer, 24_000, async (filePath) => {
-    return await llm.transcribeAudio({
-      filePath,
-      model:
-        String(
-          (settings as { voice?: { sttPipeline?: { transcriptionModel?: string } } })?.voice?.sttPipeline
-            ?.transcriptionModel || "gpt-4o-mini-transcribe"
-        ) || "gpt-4o-mini-transcribe",
-      trace: {
-        guildId: "voice-golden-guild",
-        channelId: "voice-golden-text",
-        userId: "speaker-1",
-        source: "voice_golden_stt_input_asr"
-      }
-    });
-  });
-  stage.asrMs = performance.now() - asrStarted;
-
-  const normalizedTranscript = String(transcript || caseRow.userText)
-    .replace(/\s+/g, " ")
-    .trim();
-  const mediaPromptLimit = resolveMaxMediaPromptLen(settings);
-  let webSearch = buildHarnessWebSearchContext({
-    settings,
-    search,
-    messageText: normalizedTranscript
-  });
-  const webSearchTimeoutMs = Math.max(
-    500,
-    Math.min(
-      45_000,
-      Math.floor(Number((settings as { voice?: { webSearchTimeoutMs?: number } })?.voice?.webSearchTimeoutMs) || 8_000)
-    )
-  );
-
-  const actorStarted = performance.now();
-  let generation = await llm.generate({
-    settings,
-    systemPrompt: manager.buildVoiceInstructions(settings),
-    userPrompt: buildSttActorPrompt({
-      transcript: normalizedTranscript,
-      webSearch,
-      allowWebSearchDirective: true
-    }),
-    trace: {
-      guildId: "voice-golden-guild",
-      channelId: "voice-golden-text",
-      userId: "speaker-1",
-      source: "voice_golden_stt_actor",
-      event: "stt_actor_generation",
-      reason: null,
-      messageId: null
+  manager.speakVoiceLineWithTts = async ({ session: activeSession }) => {
+    if (activeSession && typeof activeSession === "object") {
+      (activeSession as { lastAudioDeltaAt?: number }).lastAudioDeltaAt = Date.now();
     }
-  });
-  let parsed = parseReplyDirectives(generation.text, mediaPromptLimit);
-  if (parsed.webSearchQuery && search) {
-    webSearch = await runModelRequestedWebSearchWithTimeout({
-      runSearch: async () =>
-        await runModelRequestedWebSearch(
-          { llm, search, memory: null },
-          {
-            settings,
-            webSearch,
-            query: parsed.webSearchQuery,
-            trace: {
-              guildId: "voice-golden-guild",
-              channelId: "voice-golden-text",
-              userId: "speaker-1",
-              source: "voice_golden_stt_actor",
-              event: "stt_actor_web_lookup"
-            }
-          }
-        ),
-      webSearch,
-      query: parsed.webSearchQuery,
-      timeoutMs: webSearchTimeoutMs
-    });
+    return true;
+  };
 
-    generation = await llm.generate({
-      settings,
-      systemPrompt: manager.buildVoiceInstructions(settings),
-      userPrompt: buildSttActorPrompt({
-        transcript: normalizedTranscript,
-        webSearch,
-        allowWebSearchDirective: false
-      }),
-      trace: {
-        guildId: "voice-golden-guild",
-        channelId: "voice-golden-text",
+  try {
+    if (mode === "stt_pipeline") {
+      await manager.runSttPipelineReply({
+        session,
+        settings,
         userId: "speaker-1",
-        source: "voice_golden_stt_actor",
-        event: "stt_actor_web_lookup_followup",
-        reason: null,
-        messageId: null
-      }
-    });
-    parsed = parseReplyDirectives(generation.text, mediaPromptLimit);
+        transcript: caseRow.userText,
+        directAddressed
+      });
+    } else {
+      await manager.runRealtimeBrainReply({
+        session,
+        settings,
+        userId: "speaker-1",
+        transcript: caseRow.userText,
+        directAddressed,
+        source: "voice_golden_production"
+      });
+    }
+  } finally {
+    manager.speakVoiceLineWithTts = originalSpeakVoiceLineWithTts;
   }
-  stage.actorMs = performance.now() - actorStarted;
 
-  const responseText = String(parsed.text || generation.text || "")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  let audioBytes = 0;
-  if (responseText && responseText !== "[SKIP]") {
-    const ttsStarted = performance.now();
-    const tts = await llm.synthesizeSpeech({
-      text: responseText,
-      model:
-        String((settings as { voice?: { sttPipeline?: { ttsModel?: string } } })?.voice?.sttPipeline?.ttsModel || "gpt-4o-mini-tts") ||
-        "gpt-4o-mini-tts",
-      voice:
-        String((settings as { voice?: { sttPipeline?: { ttsVoice?: string } } })?.voice?.sttPipeline?.ttsVoice || "alloy") || "alloy",
-      speed: Number((settings as { voice?: { sttPipeline?: { ttsSpeed?: number } } })?.voice?.sttPipeline?.ttsSpeed) || 1,
-      responseFormat: "pcm",
-      trace: {
-        guildId: "voice-golden-guild",
-        channelId: "voice-golden-text",
-        userId: "bot-user",
-        source: "voice_golden_stt_output_tts"
-      }
-    });
-    stage.ttsMs = performance.now() - ttsStarted;
-    audioBytes = tts.audioBuffer.length;
-  }
+  stage.responseMs = performance.now() - responseStartedAt;
+  stage.actorMs = stage.responseMs;
+  const actionDelta = store.actions.slice(actionStart);
+  const responseText = latestVoiceReplyFromActions({
+    mode,
+    actions: actionDelta
+  });
 
   return {
-    transcript: String(transcript || "").trim(),
-    responseText: responseText === "[SKIP]" ? "" : responseText,
-    audioBytes,
+    transcript: caseRow.userText,
+    responseText,
+    audioBytes: responseText ? Buffer.byteLength(responseText, "utf8") * 24 : 0,
     stage
   };
-}
-
-function createRealtimeClient({
-  mode,
-  logger,
-  settings
-}: {
-  mode: VoiceGoldenMode;
-  logger: (payload: { level: string; event: string; metadata: Record<string, unknown> | null }) => void;
-  settings: Record<string, unknown>;
-}): RealtimeClientLike {
-  if (mode === "voice_agent") {
-    return new XaiRealtimeClient({
-      apiKey: appConfig.xaiApiKey,
-      logger
-    });
-  }
-  if (mode === "openai_realtime") {
-    return new OpenAiRealtimeClient({
-      apiKey: appConfig.openaiApiKey,
-      logger
-    });
-  }
-  return new GeminiRealtimeClient({
-    apiKey: appConfig.geminiApiKey,
-    baseUrl:
-      String(
-        (settings as { voice?: { geminiRealtime?: { apiBaseUrl?: string } } })?.voice?.geminiRealtime?.apiBaseUrl ||
-          "https://generativelanguage.googleapis.com"
-      ) || "https://generativelanguage.googleapis.com",
-    logger
-  });
-}
-
-async function connectRealtimeClient({
-  mode,
-  client,
-  settings,
-  manager
-}: {
-  mode: VoiceGoldenMode;
-  client: RealtimeClientLike;
-  settings: Record<string, unknown>;
-  manager: VoiceSessionManager;
-}) {
-  const instructions = manager.buildVoiceInstructions(settings);
-  if (mode === "voice_agent") {
-    await client.connect({
-      voice: String((settings as { voice?: { xai?: { voice?: string } } })?.voice?.xai?.voice || "Rex") || "Rex",
-      region:
-        String((settings as { voice?: { xai?: { region?: string } } })?.voice?.xai?.region || "us-east-1") || "us-east-1",
-      inputAudioFormat:
-        String((settings as { voice?: { xai?: { audioFormat?: string } } })?.voice?.xai?.audioFormat || "audio/pcm") ||
-        "audio/pcm",
-      outputAudioFormat:
-        String((settings as { voice?: { xai?: { audioFormat?: string } } })?.voice?.xai?.audioFormat || "audio/pcm") ||
-        "audio/pcm",
-      inputSampleRateHz: Number((settings as { voice?: { xai?: { sampleRateHz?: number } } })?.voice?.xai?.sampleRateHz) || 24_000,
-      outputSampleRateHz: Number((settings as { voice?: { xai?: { sampleRateHz?: number } } })?.voice?.xai?.sampleRateHz) || 24_000,
-      instructions
-    });
-    return;
-  }
-
-  if (mode === "openai_realtime") {
-    await client.connect({
-      model:
-        String((settings as { voice?: { openaiRealtime?: { model?: string } } })?.voice?.openaiRealtime?.model || "gpt-realtime") ||
-        "gpt-realtime",
-      voice:
-        String((settings as { voice?: { openaiRealtime?: { voice?: string } } })?.voice?.openaiRealtime?.voice || "alloy") ||
-        "alloy",
-      inputAudioFormat:
-        String(
-          (settings as { voice?: { openaiRealtime?: { inputAudioFormat?: string } } })?.voice?.openaiRealtime
-            ?.inputAudioFormat || "pcm16"
-        ) || "pcm16",
-      outputAudioFormat:
-        String(
-          (settings as { voice?: { openaiRealtime?: { outputAudioFormat?: string } } })?.voice?.openaiRealtime
-            ?.outputAudioFormat || "pcm16"
-        ) || "pcm16",
-      inputTranscriptionModel:
-        String(
-          (settings as { voice?: { openaiRealtime?: { inputTranscriptionModel?: string } } })?.voice?.openaiRealtime
-            ?.inputTranscriptionModel || "gpt-4o-mini-transcribe"
-        ) || "gpt-4o-mini-transcribe",
-      instructions
-    });
-    return;
-  }
-
-  await client.connect({
-    model:
-      String(
-        (settings as { voice?: { geminiRealtime?: { model?: string } } })?.voice?.geminiRealtime?.model ||
-          "gemini-2.5-flash-native-audio-preview-12-2025"
-      ) || "gemini-2.5-flash-native-audio-preview-12-2025",
-    voice:
-      String((settings as { voice?: { geminiRealtime?: { voice?: string } } })?.voice?.geminiRealtime?.voice || "Aoede") ||
-      "Aoede",
-    inputSampleRateHz:
-      Number((settings as { voice?: { geminiRealtime?: { inputSampleRateHz?: number } } })?.voice?.geminiRealtime?.inputSampleRateHz) ||
-      24_000,
-    outputSampleRateHz:
-      Number((settings as { voice?: { geminiRealtime?: { outputSampleRateHz?: number } } })?.voice?.geminiRealtime?.outputSampleRateHz) ||
-      24_000,
-    instructions
-  });
-}
-
-async function waitForRealtimeResponse({
-  client,
-  timeoutMs,
-  outputSampleRateHz,
-  llm
-}: {
-  client: RealtimeClientLike;
-  timeoutMs: number;
-  outputSampleRateHz: number;
-  llm: LLMService | null;
-}) {
-  const transcripts: RealtimeTranscript[] = [];
-  const outputAudioChunks: Buffer[] = [];
-  let responseDonePayload: Record<string, unknown> | null = null;
-  let errorText = "";
-
-  const onTranscript = (row: { text?: string; eventType?: string }) => {
-    const text = String(row?.text || "").replace(/\s+/g, " ").trim();
-    if (!text) return;
-    const eventType = String(row?.eventType || "").trim();
-    const source = transcriptSourceFromEventType(eventType);
-    transcripts.push({
-      text,
-      eventType,
-      source: source === "input" || source === "output" ? source : "unknown"
-    });
-  };
-
-  const onAudio = (chunkBase64: string) => {
-    const normalized = String(chunkBase64 || "").trim();
-    if (!normalized) return;
-    try {
-      outputAudioChunks.push(Buffer.from(normalized, "base64"));
-    } catch {
-      // ignore malformed base64 chunks
-    }
-  };
-
-  const onError = (event: { message?: string }) => {
-    errorText = String(event?.message || "").trim();
-  };
-
-  const onDone = (event: Record<string, unknown>) => {
-    responseDonePayload = event || null;
-  };
-
-  client.on("transcript", onTranscript);
-  client.on("audio_delta", onAudio);
-  client.on("error_event", onError);
-  client.on("response_done", onDone);
-
-  const startedAt = performance.now();
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error(`Timed out waiting for realtime response after ${timeoutMs}ms.`));
-      }, timeoutMs);
-
-      const poll = () => {
-        if (responseDonePayload) {
-          clearTimeout(timer);
-          resolve();
-          return;
-        }
-        setTimeout(poll, 60);
-      };
-      poll();
-    });
-  } finally {
-    client.off("transcript", onTranscript);
-    client.off("audio_delta", onAudio);
-    client.off("error_event", onError);
-    client.off("response_done", onDone);
-  }
-
-  const responseMs = performance.now() - startedAt;
-  const outputTranscriptRows = transcripts
-    .filter((row) => row.source === "output")
-    .map((row) => row.text);
-  const outputText = pickBestTranscript(outputTranscriptRows);
-  const transcript = outputText || pickBestTranscript(transcripts.map((row) => row.text));
-
-  let outputAsrMs = 0;
-  let fallbackOutputTranscript = outputText;
-  const outputAudioBytes = outputAudioChunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  if (!fallbackOutputTranscript && outputAudioBytes > 0 && llm?.isAsrReady?.()) {
-    const mergedAudio = Buffer.concat(outputAudioChunks);
-    const outputAsrStarted = performance.now();
-    fallbackOutputTranscript = await withTempWavFromPcm(mergedAudio, outputSampleRateHz, async (filePath) => {
-      return await llm.transcribeAudio({
-        filePath,
-        model: "gpt-4o-mini-transcribe",
-        trace: {
-          guildId: "voice-golden-guild",
-          channelId: "voice-golden-text",
-          userId: "bot-user",
-          source: "voice_golden_realtime_output_asr"
-        }
-      });
-    }).catch(() => "");
-    outputAsrMs = performance.now() - outputAsrStarted;
-  }
-
-  return {
-    transcript: String(fallbackOutputTranscript || transcript || "").trim(),
-    audioBytes: outputAudioBytes,
-    responseMs,
-    outputAsrMs,
-    responseDonePayload,
-    errorText
-  };
-}
-
-async function runLiveRealtimeCase({
-  llm,
-  manager,
-  settings,
-  mode,
-  caseRow,
-  inputTransport,
-  timeoutMs
-}: {
-  llm: LLMService;
-  manager: VoiceSessionManager;
-  settings: Record<string, unknown>;
-  mode: VoiceGoldenMode;
-  caseRow: VoiceGoldenCase;
-  inputTransport: VoiceGoldenInputTransport;
-  timeoutMs: number;
-}): Promise<ModeExecutionResult> {
-  assert.notEqual(mode, "stt_pipeline");
-
-  const stage = {
-    connectMs: 0,
-    inputPrepMs: 0,
-    inputSendMs: 0,
-    actorMs: 0,
-    asrMs: 0,
-    ttsMs: 0,
-    outputAsrMs: 0,
-    responseMs: 0
-  };
-
-  const client = createRealtimeClient({
-    mode,
-    settings,
-    logger: ({ level, event, metadata }) => {
-      void level;
-      void event;
-      void metadata;
-    }
-  });
-
-  const connectStarted = performance.now();
-  await connectRealtimeClient({
-    mode,
-    client,
-    settings,
-    manager
-  });
-  stage.connectMs = performance.now() - connectStarted;
-
-  try {
-    let inputAudioBuffer = Buffer.alloc(0);
-    if (inputTransport === "audio") {
-      const inputPrepStarted = performance.now();
-      const inputAudio = await synthesizeInputAudio({
-        llm,
-        text: caseRow.userText,
-        settings,
-        traceSource: `voice_golden_${mode}_input_tts`
-      });
-      inputAudioBuffer = inputAudio.audioBuffer;
-      stage.inputPrepMs = performance.now() - inputPrepStarted;
-    }
-
-    const sendStarted = performance.now();
-    if (inputTransport === "audio") {
-      client.appendInputAudioPcm(inputAudioBuffer);
-      client.commitInputAudioBuffer();
-      client.createAudioResponse();
-    } else {
-      client.requestTextUtterance(caseRow.userText);
-    }
-    stage.inputSendMs = performance.now() - sendStarted;
-
-    const outputSampleRateHz =
-      mode === "voice_agent"
-        ? Number((settings as { voice?: { xai?: { sampleRateHz?: number } } })?.voice?.xai?.sampleRateHz) || 24_000
-        : mode === "openai_realtime"
-          ? 24_000
-          : Number((settings as { voice?: { geminiRealtime?: { outputSampleRateHz?: number } } })?.voice?.geminiRealtime?.outputSampleRateHz) ||
-            24_000;
-
-    const realtimeResult = await waitForRealtimeResponse({
-      client,
-      timeoutMs,
-      outputSampleRateHz,
-      llm
-    });
-
-    stage.responseMs = realtimeResult.responseMs;
-    stage.outputAsrMs = realtimeResult.outputAsrMs;
-    if (realtimeResult.errorText) {
-      throw new Error(realtimeResult.errorText);
-    }
-
-    return {
-      transcript: "",
-      responseText: realtimeResult.transcript,
-      audioBytes: realtimeResult.audioBytes,
-      stage
-    };
-  } finally {
-    await client.close().catch(() => undefined);
-  }
 }
 
 async function runSimulatedCase({
@@ -1274,34 +755,37 @@ async function runSimulatedCase({
   };
 }
 
-function validateModeCredentials({
-  mode,
-  options
-}: {
-  mode: VoiceGoldenMode;
-  options: VoiceGoldenResolvedOptions;
-}) {
-  const missing: string[] = [];
-  if (mode === "stt_pipeline") {
-    if (!appConfig.openaiApiKey) missing.push("OPENAI_API_KEY");
-  }
-  if (mode === "openai_realtime") {
-    if (!appConfig.openaiApiKey) missing.push("OPENAI_API_KEY");
-  }
-  if (mode === "voice_agent") {
-    if (!appConfig.xaiApiKey) missing.push("XAI_API_KEY");
-    if (options.inputTransport === "audio" && !appConfig.openaiApiKey) {
-      missing.push("OPENAI_API_KEY(audio_input)");
-    }
-  }
-  if (mode === "gemini_realtime") {
-    if (!appConfig.geminiApiKey) missing.push("GOOGLE_API_KEY");
-    if (options.inputTransport === "audio" && !appConfig.openaiApiKey) {
-      missing.push("OPENAI_API_KEY(audio_input)");
-    }
+function hasProviderCredentials(provider: string) {
+  const normalized = String(provider || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "openai") return Boolean(appConfig.openaiApiKey);
+  if (normalized === "anthropic") return Boolean(appConfig.anthropicApiKey);
+  if (normalized === "xai") return Boolean(appConfig.xaiApiKey);
+  if (normalized === "claude-code") return true;
+  return false;
+}
+
+function validateHarnessCredentials(options: VoiceGoldenResolvedOptions) {
+  const required = [
+    ...(options.mode === "live"
+      ? [
+          { role: "actor", provider: options.actorProvider },
+          { role: "decider", provider: options.deciderProvider }
+        ]
+      : []),
+    ...(options.judge.enabled ? [{ role: "judge", provider: options.judge.provider }] : [])
+  ];
+  const missing = new Set<string>();
+
+  for (const item of required) {
+    const provider = String(item.provider || "").trim().toLowerCase();
+    if (!provider) continue;
+    if (hasProviderCredentials(provider)) continue;
+    missing.add(`${item.role}:${provider}`);
   }
 
-  return missing;
+  return [...missing];
 }
 
 async function runJudge({
@@ -1441,21 +925,21 @@ function buildEmptyTimings(decisionMs = 0): StageTimings {
 async function runSingleCase({
   options,
   llm,
-  search,
   judgeSettings,
   mode,
   settings,
   manager,
+  executionStore,
   caseRow,
   iteration
 }: {
   options: VoiceGoldenResolvedOptions;
   llm: LLMService | null;
-  search: WebSearchService | null;
   judgeSettings: Record<string, unknown> | null;
   mode: VoiceGoldenMode;
   settings: Record<string, unknown>;
   manager: VoiceSessionManager;
+  executionStore: HarnessStore;
   caseRow: VoiceGoldenCase;
   iteration: number;
 }): Promise<VoiceGoldenCaseResult> {
@@ -1508,24 +992,14 @@ async function runSingleCase({
       if (!llm) {
         throw new Error("Live mode requires an initialized LLM service.");
       }
-      const liveResult =
-        mode === "stt_pipeline"
-          ? await runLiveSttPipelineCase({
-              llm,
-              manager,
-              settings,
-              caseRow,
-              search
-            })
-          : await runLiveRealtimeCase({
-              llm,
-              manager,
-              settings,
-              mode,
-              caseRow,
-              inputTransport: options.inputTransport,
-              timeoutMs: options.timeoutMs
-            });
+      const liveResult = await runLiveProductionCase({
+        manager,
+        store: executionStore,
+        settings,
+        mode,
+        caseRow,
+        directAddressed: Boolean(decisionData.directAddressed)
+      });
 
       transcript = liveResult.transcript || decisionData.transcript || caseRow.userText;
       responseText = liveResult.responseText;
@@ -1614,36 +1088,34 @@ function aggregateModeReport(mode: VoiceGoldenMode, skippedReason: string | null
 export async function runVoiceGoldenHarness(inputOptions: VoiceGoldenHarnessOptions = {}): Promise<VoiceGoldenHarnessReport> {
   const options = resolveDefaults(inputOptions);
   const startedAtIso = new Date().toISOString();
-  const harnessStore = new HarnessStore();
-
-  const llm = options.mode === "live" || options.judge.enabled
-    ? new LLMService({
-        appConfig,
-        store: harnessStore
-      })
-    : null;
-  const search = new WebSearchService({
-    appConfig,
-    store: harnessStore
-  });
 
   const judgeSettings = options.judge.enabled ? buildJudgeSettings(options.judge) : null;
-
+  const missing = validateHarnessCredentials(options);
+  if (missing.length) {
+    if (!options.allowMissingCredentials) {
+      throw new Error(`Missing credentials: ${missing.join(", ")}`);
+    }
+    const modeReports = options.modes.map((mode) =>
+      aggregateModeReport(mode, `missing_credentials:${missing.join(",")}`, [])
+    );
+    return {
+      startedAt: startedAtIso,
+      finishedAt: new Date().toISOString(),
+      options,
+      modeReports,
+      summary: {
+        executed: 0,
+        passed: 0,
+        failed: 0,
+        passRate: 0,
+        stageStats: {}
+      }
+    };
+  }
   const cases = VOICE_GOLDEN_CASES.slice(0, options.maxCases);
   const modeReports: VoiceGoldenModeReport[] = [];
 
   for (const mode of options.modes) {
-    if (options.mode === "live") {
-      const missing = validateModeCredentials({ mode, options });
-      if (missing.length) {
-        if (options.allowMissingCredentials) {
-          modeReports.push(aggregateModeReport(mode, `missing_credentials:${missing.join(",")}`, []));
-          continue;
-        }
-        throw new Error(`Missing credentials for mode "${mode}": ${missing.join(", ")}`);
-      }
-    }
-
     const settings = buildHarnessSettings({
       voiceMode: mode,
       actorProvider: options.actorProvider,
@@ -1652,11 +1124,37 @@ export async function runVoiceGoldenHarness(inputOptions: VoiceGoldenHarnessOpti
       deciderModel: options.deciderModel
     });
 
-    const decisionRuntime = createDecisionRuntime(
-      options.mode === "live" && llm
-        ? llm
-        : buildSimulatedDecisionLlm()
-    );
+    let manager: VoiceSessionManager;
+    let executionStore: HarnessStore;
+    let llm: LLMService | null = null;
+
+    if (options.mode === "live") {
+      executionStore = new HarnessStore();
+      llm = new LLMService({
+        appConfig,
+        store: executionStore
+      });
+      const search = new WebSearchService({
+        appConfig,
+        store: executionStore
+      });
+      const runtime = createLiveExecutionRuntime({
+        llm,
+        search,
+        store: executionStore
+      });
+      manager = runtime.manager;
+    } else {
+      const runtime = createDecisionRuntime(buildSimulatedDecisionLlm());
+      manager = runtime.manager;
+      executionStore = runtime.store;
+      if (options.judge.enabled) {
+        llm = new LLMService({
+          appConfig,
+          store: new HarnessStore()
+        });
+      }
+    }
 
     const results: VoiceGoldenCaseResult[] = [];
     for (let iteration = 1; iteration <= options.iterations; iteration += 1) {
@@ -1664,11 +1162,11 @@ export async function runVoiceGoldenHarness(inputOptions: VoiceGoldenHarnessOpti
         const row = await runSingleCase({
           options,
           llm,
-          search,
           judgeSettings,
           mode,
           settings,
-          manager: decisionRuntime.manager,
+          manager,
+          executionStore,
           caseRow,
           iteration
         });
@@ -1677,7 +1175,7 @@ export async function runVoiceGoldenHarness(inputOptions: VoiceGoldenHarnessOpti
     }
 
     modeReports.push(aggregateModeReport(mode, null, results));
-    await decisionRuntime.manager.dispose("voice_golden_harness_done").catch(() => undefined);
+    await manager.dispose("voice_golden_harness_done").catch(() => undefined);
   }
 
   const allResults = modeReports.flatMap((report) => report.results);
@@ -1708,7 +1206,6 @@ export function printVoiceGoldenHarnessReport(report: VoiceGoldenHarnessReport) 
   console.log(`modes=[${report.options.modes.join(", ")}]`);
   console.log(`iterations=${report.options.iterations}`);
   console.log(`judge=${report.options.judge.enabled ? "on" : "off"}`);
-  console.log(`inputTransport=${report.options.inputTransport}`);
   console.log("");
 
   for (const modeReport of report.modeReports) {

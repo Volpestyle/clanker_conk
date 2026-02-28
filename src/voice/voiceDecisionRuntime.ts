@@ -61,6 +61,17 @@ export function defaultVoiceReplyDecisionModel(provider) {
   return defaultModelForLlmProvider(provider);
 }
 
+export function resolveVoiceReplyDecisionMaxOutputTokens(provider, model) {
+  const normalizedProvider = normalizeVoiceReplyDecisionProvider(provider);
+  const normalizedModel = String(model || "")
+    .trim()
+    .toLowerCase();
+  if (normalizedProvider === "openai" && /^gpt-5(?:$|[-_])/u.test(normalizedModel)) {
+    return 64;
+  }
+  return 2;
+}
+
 export function resolveRealtimeTurnTranscriptionPlan({
   mode,
   configuredModel = "gpt-4o-mini-transcribe",

@@ -13,8 +13,6 @@ type CliArgs = {
   judge: boolean;
   judgeProvider: string;
   judgeModel: string;
-  inputTransport: "audio" | "text";
-  timeoutMs: number;
   allowMissingCredentials: boolean;
   maxCases: number;
   outJsonPath: string;
@@ -24,15 +22,13 @@ const DEFAULT_ARGS: CliArgs = {
   mode: "simulated",
   modes: VOICE_GOLDEN_MODES.join(","),
   iterations: 1,
-  actorProvider: "openai",
-  actorModel: "gpt-5-mini",
-  deciderProvider: "openai",
-  deciderModel: "gpt-5-nano",
-  judge: false,
-  judgeProvider: "openai",
-  judgeModel: "gpt-5-mini",
-  inputTransport: "audio",
-  timeoutMs: 45_000,
+  actorProvider: "anthropic",
+  actorModel: "claude-sonnet-4-5",
+  deciderProvider: "anthropic",
+  deciderModel: "claude-haiku-4-5",
+  judge: true,
+  judgeProvider: "anthropic",
+  judgeModel: "claude-haiku-4-5",
   allowMissingCredentials: false,
   maxCases: 6,
   outJsonPath: ""
@@ -83,12 +79,6 @@ function parseArgs(argv: string[]): CliArgs {
       case "judge-model":
         if (hasValue) out.judgeModel = next;
         break;
-      case "input-transport":
-        if (hasValue) out.inputTransport = next === "text" ? "text" : "audio";
-        break;
-      case "timeout-ms":
-        if (hasValue) out.timeoutMs = Math.max(5_000, Math.floor(Number(next) || 45_000));
-        break;
       case "allow-missing-credentials":
         out.allowMissingCredentials = true;
         break;
@@ -101,10 +91,6 @@ function parseArgs(argv: string[]): CliArgs {
       default:
         break;
     }
-  }
-
-  if (out.mode === "live" && !argv.includes("--no-judge") && !argv.includes("--judge")) {
-    out.judge = true;
   }
 
   return out;
@@ -130,8 +116,6 @@ async function main() {
       provider: args.judgeProvider,
       model: args.judgeModel
     },
-    inputTransport: args.inputTransport,
-    timeoutMs: args.timeoutMs,
     allowMissingCredentials: args.allowMissingCredentials,
     maxCases: args.maxCases
   });

@@ -30,20 +30,16 @@ test("smoke: voice golden validation harness hits live APIs and reports perf", {
     mode: "live",
     modes: envModes("LIVE_VOICE_GOLDEN_MODES"),
     iterations: Math.max(1, Math.floor(envNumber("LIVE_VOICE_GOLDEN_ITERATIONS", 1))),
-    actorProvider: String(process.env.LIVE_VOICE_GOLDEN_ACTOR_PROVIDER || "openai").trim() || "openai",
-    actorModel: String(process.env.LIVE_VOICE_GOLDEN_ACTOR_MODEL || "gpt-5-mini").trim() || "gpt-5-mini",
-    deciderProvider: String(process.env.LIVE_VOICE_GOLDEN_DECIDER_PROVIDER || "openai").trim() || "openai",
-    deciderModel: String(process.env.LIVE_VOICE_GOLDEN_DECIDER_MODEL || "gpt-5-nano").trim() || "gpt-5-nano",
+    actorProvider: String(process.env.LIVE_VOICE_GOLDEN_ACTOR_PROVIDER || "anthropic").trim() || "anthropic",
+    actorModel: String(process.env.LIVE_VOICE_GOLDEN_ACTOR_MODEL || "claude-sonnet-4-5").trim() || "claude-sonnet-4-5",
+    deciderProvider:
+      String(process.env.LIVE_VOICE_GOLDEN_DECIDER_PROVIDER || "anthropic").trim() || "anthropic",
+    deciderModel: String(process.env.LIVE_VOICE_GOLDEN_DECIDER_MODEL || "claude-haiku-4-5").trim() || "claude-haiku-4-5",
     judge: {
       enabled: !envFlag("LIVE_VOICE_GOLDEN_NO_JUDGE"),
-      provider: String(process.env.LIVE_VOICE_GOLDEN_JUDGE_PROVIDER || "openai").trim() || "openai",
-      model: String(process.env.LIVE_VOICE_GOLDEN_JUDGE_MODEL || "gpt-5-mini").trim() || "gpt-5-mini"
+      provider: String(process.env.LIVE_VOICE_GOLDEN_JUDGE_PROVIDER || "anthropic").trim() || "anthropic",
+      model: String(process.env.LIVE_VOICE_GOLDEN_JUDGE_MODEL || "claude-haiku-4-5").trim() || "claude-haiku-4-5"
     },
-    inputTransport:
-      String(process.env.LIVE_VOICE_GOLDEN_INPUT_TRANSPORT || "audio").trim().toLowerCase() === "text"
-        ? "text"
-        : "audio",
-    timeoutMs: Math.max(10_000, Math.floor(envNumber("LIVE_VOICE_GOLDEN_TIMEOUT_MS", 45_000))),
     allowMissingCredentials: envFlag("LIVE_VOICE_GOLDEN_ALLOW_MISSING_CREDENTIALS", false),
     maxCases: Math.max(1, Math.floor(envNumber("LIVE_VOICE_GOLDEN_MAX_CASES", 3)))
   });

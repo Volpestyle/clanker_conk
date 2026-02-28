@@ -118,6 +118,7 @@ export const DEFAULT_SETTINGS = {
       provider: "anthropic",
       model: "claude-haiku-4-5",
       maxAttempts: 1,
+      reasoningEffort: "minimal",
       prompts: {
         wakeVariantHint: VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT,
         systemPromptCompact: VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,

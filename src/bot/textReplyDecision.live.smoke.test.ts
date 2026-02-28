@@ -17,7 +17,7 @@ function envFlag(name) {
 
 function defaultModelForProvider(provider) {
   if (provider === "anthropic") {
-    return String(appConfig.defaultAnthropicModel || defaultModelForLlmProvider("anthropic"));
+    return "claude-sonnet-4-5";
   }
   if (provider === "xai") {
     return String(appConfig.defaultXaiModel || defaultModelForLlmProvider("xai"));

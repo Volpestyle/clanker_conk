@@ -856,6 +856,7 @@ test("reply decider in stt pipeline uses configured voice decider provider/model
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       mode: "stt_pipeline",
+      startedAt: Date.now() - 5_000,
       botTurnOpen: false,
     },
     userId: "speaker-1",
@@ -873,7 +874,7 @@ test("reply decider in stt pipeline uses configured voice decider provider/model
         }
       }
     }),
-    transcript: "what should we do next?"
+    transcript: "hola"
   });
 
   assert.equal(decision.allow, false);
@@ -883,6 +884,51 @@ test("reply decider in stt pipeline uses configured voice decider provider/model
   assert.equal(seenDecisionLlmSettings.length, 1);
   assert.equal(seenDecisionLlmSettings[0]?.provider, "openai");
   assert.equal(seenDecisionLlmSettings[0]?.model, "claude-haiku-4-5");
+  assert.equal(seenDecisionLlmSettings[0]?.maxOutputTokens, 2);
+});
+
+test("reply decider uses higher max output tokens for openai gpt-5 models", async () => {
+  const seenDecisionLlmSettings = [];
+  const manager = createManager({
+    generate: async (payload) => {
+      seenDecisionLlmSettings.push(payload?.settings?.llm || {});
+      return { text: "YES", provider: "openai", model: "gpt-5-mini" };
+    }
+  });
+
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "stt_pipeline",
+      botTurnOpen: false,
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      llm: {
+        provider: "claude-code",
+        model: "sonnet"
+      },
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          provider: "openai",
+          model: "gpt-5-mini",
+          maxAttempts: 1
+        }
+      }
+    }),
+    transcript: "what should we do next?"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "llm_yes");
+  assert.equal(seenDecisionLlmSettings.length, 1);
+  assert.equal(seenDecisionLlmSettings[0]?.provider, "openai");
+  assert.equal(seenDecisionLlmSettings[0]?.model, "gpt-5-mini");
+  assert.equal(seenDecisionLlmSettings[0]?.maxOutputTokens, 64);
+  assert.equal(seenDecisionLlmSettings[0]?.reasoningEffort, "minimal");
 });
 
 test("reply decider can skip classifier call in stt pipeline when disabled", async () => {

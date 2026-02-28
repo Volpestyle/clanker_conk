@@ -285,6 +285,7 @@ export function normalizeSettings(raw) {
     provider?: string;
     model?: string;
     maxAttempts?: number;
+    reasoningEffort?: string;
     prompts?: VoiceReplyDecisionPromptDefaults;
   };
   type VoiceReplyDecisionPromptDefaults = {
@@ -451,8 +452,12 @@ export function normalizeSettings(raw) {
       : Number.isFinite(defaultReplyDecisionMaxAttemptsRaw)
         ? defaultReplyDecisionMaxAttemptsRaw
         : 1,
-    1,
-    3
+      1,
+      3
+  );
+  merged.voice.replyDecisionLlm.reasoningEffort = normalizeOpenAiReasoningEffort(
+    merged.voice?.replyDecisionLlm?.reasoningEffort,
+    defaultVoiceReplyDecisionLlm.reasoningEffort || "minimal"
   );
   merged.voice.replyDecisionLlm.prompts.wakeVariantHint = normalizeLongPromptBlock(
     merged.voice?.replyDecisionLlm?.prompts?.wakeVariantHint,
@@ -843,6 +848,17 @@ function normalizeOpenAiRealtimeAudioFormat(value) {
   if (normalized === "g711_ulaw") return "g711_ulaw";
   if (normalized === "g711_alaw") return "g711_alaw";
   return "pcm16";
+}
+
+function normalizeOpenAiReasoningEffort(value, fallback = "minimal") {
+  const normalized = String(value || fallback || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "minimal") return "minimal";
+  if (normalized === "low") return "low";
+  if (normalized === "medium") return "medium";
+  if (normalized === "high") return "high";
+  return "minimal";
 }
 
 function normalizeHardLimitList(input, fallback = []) {

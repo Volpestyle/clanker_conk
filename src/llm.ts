@@ -83,6 +83,44 @@ const MEMORY_EXTRACTION_SCHEMA = {
   required: ["facts"]
 };
 
+function buildOpenAiTemperatureParam(model: string, temperature: number) {
+  const normalizedModel = String(model || "")
+    .trim()
+    .toLowerCase();
+  if (/^gpt-5(?:$|[-_])/u.test(normalizedModel)) {
+    return {};
+  }
+  return {
+    temperature
+  };
+}
+
+function normalizeOpenAiReasoningEffort(value: unknown) {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "minimal") return "minimal";
+  if (normalized === "low") return "low";
+  if (normalized === "medium") return "medium";
+  if (normalized === "high") return "high";
+  return "";
+}
+
+function buildOpenAiReasoningParam(model: string, reasoningEffort: unknown = "") {
+  const normalizedModel = String(model || "")
+    .trim()
+    .toLowerCase();
+  if (!/^gpt-5(?:$|[-_])/u.test(normalizedModel)) {
+    return {};
+  }
+  const resolvedEffort = normalizeOpenAiReasoningEffort(reasoningEffort) || "low";
+  return {
+    reasoning: {
+      effort: resolvedEffort
+    }
+  };
+}
+
 export class LLMService {
   appConfig;
   store;
@@ -170,14 +208,15 @@ export class LLMService {
                   maxOutputTokens
                 })
               : await this.callOpenAI({
-                model,
-                systemPrompt,
-                userPrompt,
-                imageInputs,
-                contextMessages,
-                temperature,
-                maxOutputTokens
-              });
+                  model,
+                  systemPrompt,
+                  userPrompt,
+                  imageInputs,
+                  contextMessages,
+                  temperature,
+                  maxOutputTokens,
+                  reasoningEffort: settings?.llm?.reasoningEffort
+                });
 
       const costUsd = estimateUsdCost({
         provider,
@@ -352,7 +391,8 @@ export class LLMService {
     const response = await this.openai.responses.create({
       model,
       instructions: systemPrompt,
-      temperature: 0,
+      ...buildOpenAiTemperatureParam(model, 0),
+      ...buildOpenAiReasoningParam(model, "minimal"),
       max_output_tokens: 320,
       input: [
         {
@@ -1272,7 +1312,8 @@ export class LLMService {
     imageInputs,
     contextMessages,
     temperature,
-    maxOutputTokens
+    maxOutputTokens,
+    reasoningEffort
   }) {
     if (!this.openai) {
       throw new Error("OpenAI LLM calls require OPENAI_API_KEY.");
@@ -1285,7 +1326,8 @@ export class LLMService {
       imageInputs,
       contextMessages,
       temperature,
-      maxOutputTokens
+      maxOutputTokens,
+      reasoningEffort
     });
   }
 
@@ -1320,7 +1362,8 @@ export class LLMService {
     imageInputs,
     contextMessages,
     temperature,
-    maxOutputTokens
+    maxOutputTokens,
+    reasoningEffort
   }) {
     const imageParts = imageInputs
       .map((image) => {
@@ -1347,7 +1390,8 @@ export class LLMService {
     const response = await this.openai.responses.create({
       model,
       instructions: systemPrompt,
-      temperature,
+      ...buildOpenAiTemperatureParam(model, temperature),
+      ...buildOpenAiReasoningParam(model, reasoningEffort),
       max_output_tokens: maxOutputTokens,
       input: [
         ...contextMessages.map((msg) => ({
