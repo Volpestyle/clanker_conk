@@ -188,6 +188,8 @@ export async function generateVoiceTurnReply(runtime, {
   joinWindowAgeMs = null,
   voiceEagerness = 0,
   conversationContext = null,
+  participantRoster = [],
+  recentMembershipEvents = [],
   soundboardCandidates = [],
   onWebLookupStart = null,
   onWebLookupComplete = null,
@@ -259,6 +261,33 @@ export async function generateVoiceTurnReply(runtime, {
     guild?.members?.cache?.get(String(userId || ""))?.user?.username ||
     runtime.client.users?.cache?.get(String(userId || ""))?.username ||
     "unknown";
+  const normalizedParticipantRoster = (Array.isArray(participantRoster) ? participantRoster : [])
+    .map((entry) => {
+      if (typeof entry === "string") {
+        return String(entry).trim();
+      }
+      return String(entry?.displayName || entry?.name || "").trim();
+    })
+    .filter(Boolean)
+    .slice(0, 12);
+  const normalizedMembershipEvents = (Array.isArray(recentMembershipEvents) ? recentMembershipEvents : [])
+    .map((entry) => {
+      const eventType = String(entry?.eventType || entry?.event || "")
+        .trim()
+        .toLowerCase();
+      if (eventType !== "join" && eventType !== "leave") return null;
+      const displayName = String(entry?.displayName || entry?.name || "").trim().slice(0, 80);
+      if (!displayName) return null;
+      const ageMsRaw = Number(entry?.ageMs);
+      const ageMs = Number.isFinite(ageMsRaw) ? Math.max(0, Math.round(ageMsRaw)) : null;
+      return {
+        eventType,
+        displayName,
+        ageMs
+      };
+    })
+    .filter(Boolean)
+    .slice(-6);
 
   const memorySlice = await runtime.loadPromptMemorySlice({
     settings,
@@ -357,6 +386,8 @@ export async function generateVoiceTurnReply(runtime, {
       joinWindowActive: effectiveJoinWindowActive,
       joinWindowAgeMs: effectiveJoinWindowAgeMs,
       botName: getPromptBotName(settings),
+      participantRoster: normalizedParticipantRoster,
+      recentMembershipEvents: normalizedMembershipEvents,
       soundboardCandidates: normalizedSoundboardCandidates,
       memoryEnabled: Boolean(settings.memory?.enabled),
       webSearch: webSearchContext,

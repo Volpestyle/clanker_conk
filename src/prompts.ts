@@ -782,6 +782,8 @@ export function buildVoiceTurnPrompt({
   joinWindowActive = false,
   joinWindowAgeMs = null,
   botName = "the bot",
+  participantRoster = [],
+  recentMembershipEvents = [],
   soundboardCandidates = [],
   memoryEnabled = false,
   webSearch = null,
@@ -803,11 +805,58 @@ export function buildVoiceTurnPrompt({
   const normalizedBotName = String(botName || "the bot").trim() || "the bot";
   const normalizedConversationContext =
     conversationContext && typeof conversationContext === "object" ? conversationContext : null;
+  const normalizedParticipantRoster = (Array.isArray(participantRoster) ? participantRoster : [])
+    .map((entry) => {
+      if (typeof entry === "string") {
+        return String(entry).trim();
+      }
+      return String(entry?.displayName || entry?.name || "").trim();
+    })
+    .filter(Boolean)
+    .slice(0, 12);
+  const normalizedMembershipEvents = (Array.isArray(recentMembershipEvents) ? recentMembershipEvents : [])
+    .map((entry) => {
+      const eventType = String(entry?.eventType || entry?.event || "")
+        .trim()
+        .toLowerCase();
+      if (eventType !== "join" && eventType !== "leave") return null;
+      const displayName = String(entry?.displayName || entry?.name || "").trim().slice(0, 80);
+      if (!displayName) return null;
+      const ageMsRaw = Number(entry?.ageMs);
+      const ageMs = Number.isFinite(ageMsRaw) ? Math.max(0, Math.round(ageMsRaw)) : null;
+      return {
+        eventType,
+        displayName,
+        ageMs
+      };
+    })
+    .filter(Boolean)
+    .slice(-6);
 
   parts.push(`Incoming live voice transcript from ${speaker}: ${text || "(empty)"}`);
   parts.push(
     `Interpret second-person references like \"you\"/\"your\" as likely referring to ${normalizedBotName} unless another human target is explicit.`
   );
+  if (normalizedParticipantRoster.length) {
+    parts.push(`Humans currently in channel: ${normalizedParticipantRoster.join(", ")}.`);
+    parts.push("You do have member-list context for this VC; do not claim you can't see who is in channel.");
+  }
+
+  if (normalizedMembershipEvents.length) {
+    parts.push("Recent voice membership changes:");
+    parts.push(
+      normalizedMembershipEvents
+        .map((entry) => {
+          const action = entry.eventType === "join" ? "joined" : "left";
+          const timing = Number.isFinite(entry.ageMs) ? ` (${entry.ageMs}ms ago)` : "";
+          return `- ${entry.displayName} ${action} the voice channel${timing}.`;
+        })
+        .join("\n")
+    );
+    parts.push(
+      "When it fits naturally, prefer a quick greeting for recent joiners and a brief goodbye/acknowledgement for recent leavers."
+    );
+  }
 
   if (normalizedConversationContext) {
     parts.push(

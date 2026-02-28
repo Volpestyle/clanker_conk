@@ -527,6 +527,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         },
         focusedSpeakerUserId: null,
         focusedSpeakerAt: 0,
+        membershipEvents: [],
         voiceLookupBusyCount: 0,
         lastSuppressedCaptureLogAt: 0,
         baseVoiceInstructions,

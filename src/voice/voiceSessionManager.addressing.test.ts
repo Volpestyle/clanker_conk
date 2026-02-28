@@ -1882,6 +1882,10 @@ test("smoke: runRealtimeBrainReply passes join-window context into generation", 
   manager.resolveSoundboardCandidates = async () => ({
     candidates: []
   });
+  manager.getVoiceChannelParticipants = () => [
+    { userId: "speaker-1", displayName: "alice" },
+    { userId: "speaker-2", displayName: "bob" }
+  ];
   manager.prepareOpenAiRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => true;
   manager.generateVoiceTurn = async (payload) => {
@@ -1900,6 +1904,14 @@ test("smoke: runRealtimeBrainReply passes join-window context into generation", 
     startedAt: Date.now() - 2_000,
     realtimeClient: {},
     recentVoiceTurns: [],
+    membershipEvents: [
+      {
+        userId: "speaker-2",
+        displayName: "bob",
+        eventType: "join",
+        at: Date.now() - 1_200
+      }
+    ],
     settingsSnapshot: baseSettings()
   };
 
@@ -1920,6 +1932,13 @@ test("smoke: runRealtimeBrainReply passes join-window context into generation", 
     Number.isFinite(Number(generationPayloads[0]?.joinWindowAgeMs)),
     true
   );
+  assert.deepEqual(
+    generationPayloads[0]?.participantRoster?.map((entry) => entry?.displayName),
+    ["alice", "bob"]
+  );
+  assert.equal(generationPayloads[0]?.recentMembershipEvents?.length, 1);
+  assert.equal(generationPayloads[0]?.recentMembershipEvents?.[0]?.eventType, "join");
+  assert.equal(generationPayloads[0]?.recentMembershipEvents?.[0]?.displayName, "bob");
 });
 
 test("runRealtimeTurn uses native realtime forwarding when strategy is native", async () => {

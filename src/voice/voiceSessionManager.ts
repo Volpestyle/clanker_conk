@@ -147,6 +147,9 @@ import {
   STT_TTS_CONVERSION_CHUNK_MS,
   STT_TTS_CONVERSION_YIELD_EVERY_CHUNKS,
   VOICE_DECIDER_HISTORY_MAX_CHARS,
+  VOICE_MEMBERSHIP_EVENT_FRESH_MS,
+  VOICE_MEMBERSHIP_EVENT_MAX_TRACKED,
+  VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT,
   VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS,
   VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
   VOICE_DECIDER_HISTORY_MAX_TURNS,
@@ -229,6 +232,9 @@ export class VoiceSessionManager {
   getRuntimeState() {
     const sessions = [...this.sessions.values()].map((session) => {
       const participants = this.getVoiceChannelParticipants(session);
+      const membershipEvents = this.getRecentVoiceMembershipEvents(session, {
+        maxItems: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
+      });
       const modelTurns = Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns : [];
       const transcriptTurns = Array.isArray(session.transcriptTurns) ? session.transcriptTurns : [];
       const deferredQueue = Array.isArray(session.pendingDeferredTurns) ? session.pendingDeferredTurns : [];
@@ -284,6 +290,13 @@ export class VoiceSessionManager {
         },
         participants: participants.map((p) => ({ userId: p.userId, displayName: p.displayName })),
         participantCount: participants.length,
+        membershipEvents: membershipEvents.map((entry) => ({
+          userId: entry.userId,
+          displayName: entry.displayName,
+          eventType: entry.eventType,
+          at: new Date(entry.at).toISOString(),
+          ageMs: Math.max(0, Math.round(entry.ageMs))
+        })),
         voiceLookupBusyCount: Number(session.voiceLookupBusyCount || 0),
         pendingDeferredTurns: deferredQueue.length,
         recentTurns: transcriptTurns.slice(-VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS).map((t) => ({
@@ -3648,6 +3661,9 @@ export class VoiceSessionManager {
     const speakerName = this.resolveVoiceSpeakerName(session, speakerUserId);
     const normalizedTranscript = normalizeVoiceText(transcript, REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS);
     const participants = this.getVoiceChannelParticipants(session);
+    const recentMembershipEvents = this.getRecentVoiceMembershipEvents(session, {
+      maxItems: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
+    });
     const guild = this.client.guilds.cache.get(String(session?.guildId || "")) || null;
     const voiceChannel = guild?.channels?.cache?.get(String(session?.voiceChannelId || "")) || null;
     const roster =
@@ -3657,6 +3673,14 @@ export class VoiceSessionManager {
             .map((participant) => participant.displayName)
             .join(", ")
         : "unknown";
+    const membershipSummary = recentMembershipEvents.length
+      ? recentMembershipEvents
+          .map((entry) => {
+            const action = entry.eventType === "join" ? "joined" : "left";
+            return `${entry.displayName} ${action} (${Math.max(0, Math.round(entry.ageMs))}ms ago)`;
+          })
+          .join(" | ")
+      : "none";
     const userFacts = formatRealtimeMemoryFacts(memorySlice?.userFacts, REALTIME_MEMORY_FACT_LIMIT);
     const relevantFacts = formatRealtimeMemoryFacts(memorySlice?.relevantFacts, REALTIME_MEMORY_FACT_LIMIT);
 
@@ -3666,7 +3690,10 @@ export class VoiceSessionManager {
         "Live server context:",
         `- Server: ${String(guild?.name || "unknown").trim() || "unknown"}`,
         `- Voice channel: ${String(voiceChannel?.name || "unknown").trim() || "unknown"}`,
-        `- Humans currently in channel: ${roster}`
+        `- Humans currently in channel: ${roster}`,
+        `- Recent membership changes: ${membershipSummary}`,
+        "- If someone recently joined, a quick natural greeting is usually good.",
+        "- If someone recently left, a brief natural goodbye/acknowledgement is usually good."
       ].join("\n")
     );
 
@@ -3717,6 +3744,86 @@ export class VoiceSessionManager {
     });
 
     return participants.sort((a, b) => a.displayName.localeCompare(b.displayName));
+  }
+
+  getRecentVoiceMembershipEvents(
+    session,
+    { now = Date.now(), maxItems = VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT } = {}
+  ) {
+    const events = Array.isArray(session?.membershipEvents) ? session.membershipEvents : [];
+    const normalizedNow = Number.isFinite(Number(now)) ? Number(now) : Date.now();
+    const boundedMax = clamp(
+      Math.floor(Number(maxItems) || VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT),
+      1,
+      VOICE_MEMBERSHIP_EVENT_MAX_TRACKED
+    );
+
+    return events
+      .map((entry) => {
+        const eventType = String(entry?.eventType || "")
+          .trim()
+          .toLowerCase();
+        if (eventType !== "join" && eventType !== "leave") return null;
+
+        const userId = String(entry?.userId || "").trim();
+        const displayName = String(entry?.displayName || "")
+          .trim()
+          .slice(0, 80);
+        const at = Number(entry?.at || 0);
+        if (!Number.isFinite(at) || at <= 0) return null;
+
+        return {
+          userId,
+          displayName: displayName || "unknown",
+          eventType,
+          at,
+          ageMs: Math.max(0, normalizedNow - at)
+        };
+      })
+      .filter((entry) => entry && entry.ageMs <= VOICE_MEMBERSHIP_EVENT_FRESH_MS)
+      .slice(-boundedMax);
+  }
+
+  recordVoiceMembershipEvent({ session, userId, eventType, displayName = "", at = Date.now() }) {
+    if (!session || session.ending) return null;
+    const normalizedUserId = String(userId || "").trim();
+    const normalizedEventType = String(eventType || "")
+      .trim()
+      .toLowerCase();
+    if (!normalizedUserId) return null;
+    if (normalizedEventType !== "join" && normalizedEventType !== "leave") return null;
+
+    const membershipEvents = Array.isArray(session.membershipEvents) ? session.membershipEvents : [];
+    if (!Array.isArray(session.membershipEvents)) {
+      session.membershipEvents = membershipEvents;
+    }
+
+    const eventAt = Number.isFinite(Number(at)) ? Math.max(0, Number(at)) : Date.now();
+    const resolvedDisplayName =
+      String(displayName || "").trim() || this.resolveVoiceSpeakerName(session, normalizedUserId) || "unknown";
+    const previous = membershipEvents[membershipEvents.length - 1];
+    const duplicate =
+      previous &&
+      String(previous.userId || "").trim() === normalizedUserId &&
+      String(previous.eventType || "").trim().toLowerCase() === normalizedEventType &&
+      eventAt - Number(previous.at || 0) <= 2500;
+    if (duplicate) {
+      return null;
+    }
+
+    const eventRow = {
+      userId: normalizedUserId,
+      displayName: resolvedDisplayName.slice(0, 80),
+      eventType: normalizedEventType,
+      at: eventAt
+    };
+    membershipEvents.push(eventRow);
+    if (membershipEvents.length > VOICE_MEMBERSHIP_EVENT_MAX_TRACKED) {
+      session.membershipEvents = membershipEvents.slice(-VOICE_MEMBERSHIP_EVENT_MAX_TRACKED);
+    } else {
+      session.membershipEvents = membershipEvents;
+    }
+    return eventRow;
   }
 
   resolveVoiceSpeakerName(session, userId) {
@@ -4197,6 +4304,10 @@ export class VoiceSessionManager {
           userId,
           directAddressed: Boolean(directAddressed)
         });
+    const participantRoster = this.getVoiceChannelParticipants(session).slice(0, REALTIME_CONTEXT_MEMBER_LIMIT);
+    const recentMembershipEvents = this.getRecentVoiceMembershipEvents(session, {
+      maxItems: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
+    });
     const joinWindowAgeMs = Math.max(0, Date.now() - Number(session?.startedAt || 0));
     const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
     const generationConversationContext = {
@@ -4224,6 +4335,8 @@ export class VoiceSessionManager {
         joinWindowAgeMs,
         voiceEagerness: Number(settings?.voice?.replyEagerness) || 0,
         conversationContext: generationConversationContext,
+        participantRoster,
+        recentMembershipEvents,
         soundboardCandidates: soundboardCandidateLines,
         onWebLookupStart: async ({ query }) => {
           if (typeof releaseLookupBusy === "function") return;
@@ -4422,6 +4535,10 @@ export class VoiceSessionManager {
           userId,
           directAddressed: Boolean(directAddressed)
         });
+    const participantRoster = this.getVoiceChannelParticipants(session).slice(0, REALTIME_CONTEXT_MEMBER_LIMIT);
+    const recentMembershipEvents = this.getRecentVoiceMembershipEvents(session, {
+      maxItems: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
+    });
     const joinWindowAgeMs = Math.max(0, Date.now() - Number(session?.startedAt || 0));
     const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
     const generationConversationContext = {
@@ -4446,6 +4563,8 @@ export class VoiceSessionManager {
         joinWindowAgeMs,
         voiceEagerness: Number(settings?.voice?.replyEagerness) || 0,
         conversationContext: generationConversationContext,
+        participantRoster,
+        recentMembershipEvents,
         soundboardCandidates: soundboardCandidateLines,
         onWebLookupStart: async ({ query }) => {
           if (typeof releaseLookupBusy === "function") return;
@@ -5272,6 +5391,34 @@ export class VoiceSessionManager {
     const sessionVoiceChannelId = String(session.voiceChannelId || "");
 
     if (stateUserId !== botId) {
+      const stateMember = newState?.member || oldState?.member || null;
+      const stateUserIsBot = Boolean(stateMember?.user?.bot);
+      const movedIntoSession = sessionVoiceChannelId && oldChannelId !== sessionVoiceChannelId && newChannelId === sessionVoiceChannelId;
+      const movedOutOfSession = sessionVoiceChannelId && oldChannelId === sessionVoiceChannelId && newChannelId !== sessionVoiceChannelId;
+      if (!stateUserIsBot && (movedIntoSession || movedOutOfSession)) {
+        const recordedEvent = this.recordVoiceMembershipEvent({
+          session,
+          userId: stateUserId,
+          eventType: movedIntoSession ? "join" : "leave",
+          displayName: stateMember?.displayName || stateMember?.user?.globalName || stateMember?.user?.username || ""
+        });
+        if (recordedEvent) {
+          this.store.logAction({
+            kind: "voice_runtime",
+            guildId,
+            channelId: session.textChannelId,
+            userId: stateUserId,
+            content: "voice_membership_changed",
+            metadata: {
+              sessionId: session.id,
+              eventType: recordedEvent.eventType,
+              memberUserId: recordedEvent.userId,
+              displayName: recordedEvent.displayName,
+              participantCount: this.countHumanVoiceParticipants(session)
+            }
+          });
+        }
+      }
       if (
         session.mode === "openai_realtime" &&
         sessionVoiceChannelId &&

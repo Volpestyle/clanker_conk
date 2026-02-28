@@ -328,6 +328,53 @@ test("generateVoiceTurnReply adds join-window greeting bias guidance", async () 
   );
 });
 
+test("generateVoiceTurnReply includes roster and membership-change prompt context", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: "[SKIP]"
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "who just joined?",
+    isEagerTurn: true,
+    participantRoster: [
+      { displayName: "alice" },
+      { displayName: "bob" }
+    ],
+    recentMembershipEvents: [
+      {
+        eventType: "join",
+        displayName: "bob",
+        ageMs: 1600
+      },
+      {
+        eventType: "leave",
+        displayName: "charlie",
+        ageMs: 4200
+      }
+    ]
+  });
+
+  assert.equal(reply.text, "");
+  assert.equal(generationPayloads.length, 1);
+  const userPrompt = String(generationPayloads[0]?.userPrompt || "");
+  assert.equal(userPrompt.includes("Humans currently in channel: alice, bob."), true);
+  assert.equal(userPrompt.includes("Recent voice membership changes:"), true);
+  assert.equal(userPrompt.includes("bob joined the voice channel"), true);
+  assert.equal(userPrompt.includes("charlie left the voice channel"), true);
+  assert.equal(
+    userPrompt.includes("do not claim you can't see who is in channel"),
+    true
+  );
+  assert.equal(
+    userPrompt.includes("prefer a quick greeting for recent joiners"),
+    true
+  );
+});
+
 test("generateVoiceTurnReply parses memory and soundboard directives", async () => {
   const { bot, ingests, remembers } = createVoiceBot({
     generationText:

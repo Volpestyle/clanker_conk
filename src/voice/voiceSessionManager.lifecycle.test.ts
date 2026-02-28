@@ -7,6 +7,7 @@ function createManager() {
   const endCalls = [];
   const touchCalls = [];
   const offCalls = [];
+  const logs = [];
 
   const client = {
     on() {},
@@ -21,7 +22,9 @@ function createManager() {
   const manager = new VoiceSessionManager({
     client,
     store: {
-      logAction() {},
+      logAction(entry) {
+        logs.push(entry);
+      },
       getSettings() {
         return {
           botName: "clanker conk"
@@ -54,7 +57,8 @@ function createManager() {
     messages,
     endCalls,
     touchCalls,
-    offCalls
+    offCalls,
+    logs
   };
 }
 
@@ -102,6 +106,7 @@ function createSession(overrides = {}) {
     },
     pendingSttTurns: 0,
     recentVoiceTurns: [],
+    membershipEvents: [],
     realtimeProvider: null,
     realtimeInputSampleRateHz: 24000,
     realtimeOutputSampleRateHz: 24000,
@@ -359,6 +364,80 @@ test("reconcileSettings ends blocked sessions and touches allowed sessions", asy
   );
   assert.equal(touchCalls.length, 1);
   assert.equal(touchCalls[0]?.guildId, "guild-allowed");
+});
+
+test("handleVoiceStateUpdate records join/leave membership events and refreshes realtime instructions", async () => {
+  const { manager, logs } = createManager();
+  const refreshCalls = [];
+  manager.scheduleOpenAiRealtimeInstructionRefresh = (payload) => {
+    refreshCalls.push(payload);
+  };
+
+  const session = createSession({
+    mode: "openai_realtime",
+    membershipEvents: []
+  });
+  manager.sessions.set("guild-1", session);
+
+  await manager.handleVoiceStateUpdate(
+    {
+      id: "user-2",
+      guild: { id: "guild-1" },
+      channelId: null,
+      member: {
+        user: { bot: false, username: "bob_user" },
+        displayName: "bob"
+      }
+    },
+    {
+      id: "user-2",
+      guild: { id: "guild-1" },
+      channelId: "voice-1",
+      member: {
+        user: { bot: false, username: "bob_user" },
+        displayName: "bob"
+      }
+    }
+  );
+
+  await manager.handleVoiceStateUpdate(
+    {
+      id: "user-2",
+      guild: { id: "guild-1" },
+      channelId: "voice-1",
+      member: {
+        user: { bot: false, username: "bob_user" },
+        displayName: "bob"
+      }
+    },
+    {
+      id: "user-2",
+      guild: { id: "guild-1" },
+      channelId: null,
+      member: {
+        user: { bot: false, username: "bob_user" },
+        displayName: "bob"
+      }
+    }
+  );
+
+  assert.equal(Array.isArray(session.membershipEvents), true);
+  assert.equal(session.membershipEvents.length, 2);
+  assert.equal(session.membershipEvents[0]?.eventType, "join");
+  assert.equal(session.membershipEvents[1]?.eventType, "leave");
+  assert.equal(session.membershipEvents[0]?.displayName, "bob");
+  assert.equal(session.membershipEvents[1]?.displayName, "bob");
+
+  assert.equal(refreshCalls.length, 2);
+  assert.equal(refreshCalls[0]?.reason, "voice_membership_changed");
+  assert.equal(refreshCalls[1]?.reason, "voice_membership_changed");
+  assert.equal(refreshCalls[0]?.speakerUserId, "user-2");
+  assert.equal(refreshCalls[1]?.speakerUserId, "user-2");
+
+  const membershipLogs = logs.filter((entry) => entry?.content === "voice_membership_changed");
+  assert.equal(membershipLogs.length, 2);
+  assert.equal(membershipLogs[0]?.metadata?.eventType, "join");
+  assert.equal(membershipLogs[1]?.metadata?.eventType, "leave");
 });
 
 test("dispose detaches handlers and clears join locks", async () => {
