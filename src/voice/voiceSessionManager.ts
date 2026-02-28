@@ -199,6 +199,60 @@ import {
   VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS
 } from "./voiceSessionManager.constants.ts";
 
+export function resolveVoiceThoughtTopicalityBias({
+  silenceMs = 0,
+  minSilenceSeconds = 20,
+  minSecondsBetweenThoughts = 20
+} = {}) {
+  const normalizedSilenceMs = Math.max(0, Number(silenceMs) || 0);
+  const normalizedMinSilenceSeconds = clamp(
+    Number(minSilenceSeconds) || 20,
+    VOICE_THOUGHT_LOOP_MIN_SILENCE_SECONDS,
+    VOICE_THOUGHT_LOOP_MAX_SILENCE_SECONDS
+  );
+  const normalizedMinBetweenSeconds = clamp(
+    Number(minSecondsBetweenThoughts) || normalizedMinSilenceSeconds,
+    VOICE_THOUGHT_LOOP_MIN_INTERVAL_SECONDS,
+    VOICE_THOUGHT_LOOP_MAX_INTERVAL_SECONDS
+  );
+  const silenceSeconds = normalizedSilenceMs / 1000;
+  const topicalStartSeconds = normalizedMinSilenceSeconds;
+  const fullDriftSeconds = Math.max(
+    topicalStartSeconds + 18,
+    Math.round(normalizedMinBetweenSeconds * 3),
+    60
+  );
+  const driftProgress = clamp(
+    (silenceSeconds - topicalStartSeconds) / Math.max(1, fullDriftSeconds - topicalStartSeconds),
+    0,
+    1
+  );
+  const topicTetherStrength = Math.round((1 - driftProgress) * 100);
+  const randomInspirationStrength = Math.round(driftProgress * 100);
+  let phase = "anchored";
+  let promptHint = "Keep it clearly tied to the current conversation topic.";
+
+  if (topicTetherStrength < 35) {
+    phase = "ambient";
+    promptHint =
+      "Treat old topic context as stale. Prefer standalone, fresh, lightly inspired lines over callbacks.";
+  } else if (topicTetherStrength < 70) {
+    phase = "blended";
+    promptHint =
+      "Mix in novelty. Keep only loose thematic links to recent dialogue, avoid direct callbacks that require context.";
+  }
+
+  return {
+    silenceSeconds: Number(silenceSeconds.toFixed(2)),
+    topicTetherStrength,
+    randomInspirationStrength,
+    phase,
+    topicalStartSeconds,
+    fullDriftSeconds,
+    promptHint
+  };
+}
+
 export class VoiceSessionManager {
   client;
   store;
@@ -2367,11 +2421,17 @@ export class VoiceSessionManager {
         settings: resolvedSettings,
         thoughtCandidate: thoughtDraft
       });
+      const thoughtTopicalityBias = resolveVoiceThoughtTopicalityBias({
+        silenceMs: Math.max(0, Date.now() - Number(session.lastActivityAt || 0)),
+        minSilenceSeconds: thoughtConfig.minSilenceSeconds,
+        minSecondsBetweenThoughts: thoughtConfig.minSecondsBetweenThoughts
+      });
       const decision = await this.evaluateVoiceThoughtDecision({
         session,
         settings: resolvedSettings,
         thoughtCandidate: thoughtDraft,
-        memoryFacts: thoughtMemoryFacts
+        memoryFacts: thoughtMemoryFacts,
+        topicalityBias: thoughtTopicalityBias
       });
       this.store.logAction({
         kind: "voice_runtime",
@@ -2389,6 +2449,10 @@ export class VoiceSessionManager {
           finalThought: decision.finalThought || null,
           memoryFactCount: Number(decision.memoryFactCount || 0),
           usedMemory: Boolean(decision.usedMemory),
+          topicTetherStrength: thoughtTopicalityBias.topicTetherStrength,
+          randomInspirationStrength: thoughtTopicalityBias.randomInspirationStrength,
+          topicDriftPhase: thoughtTopicalityBias.phase,
+          topicDriftHint: thoughtTopicalityBias.promptHint,
           llmResponse: decision.llmResponse || null,
           llmProvider: decision.llmProvider || null,
           llmModel: decision.llmModel || null,
@@ -2450,6 +2514,11 @@ export class VoiceSessionManager {
     const recentHistory = this.formatVoiceDecisionHistory(session, 6, VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS);
     const thoughtEagerness = clamp(Number(thoughtConfig?.eagerness) || 0, 0, 100);
     const silenceMs = Math.max(0, Date.now() - Number(session.lastActivityAt || 0));
+    const topicalityBias = resolveVoiceThoughtTopicalityBias({
+      silenceMs,
+      minSilenceSeconds: thoughtConfig.minSilenceSeconds,
+      minSecondsBetweenThoughts: thoughtConfig.minSecondsBetweenThoughts
+    });
     const botName = getPromptBotName(settings);
     const systemPrompt = [
       `You are the internal thought engine for ${botName} in live Discord voice chat.`,
@@ -2457,6 +2526,8 @@ export class VoiceSessionManager {
       "Thought style: freedom to reflect the social atmosphere. Try to catch a vibe.",
       "It can be funny, insightful, witty, serious, frustrated, or even a short train-of-thought blurb when that still feels socially natural.",
       "It is valid to be random or to reflect the bot's current mood/persona.",
+      "Topic drift rule: as silence grows, rely less on old-topic callbacks and more on fresh standalone lines.",
+      "When topic tether is low, avoid stale references that require shared context (for example: vague that/they/it callbacks).",
       "If there is no good line, output exactly [SKIP].",
       "No markdown, no quotes, no meta commentary, no soundboard directives."
     ].join("\n");
@@ -2465,6 +2536,10 @@ export class VoiceSessionManager {
       participants.length ? `Participant names: ${participants.slice(0, 12).join(", ")}.` : "Participant names: none.",
       `Thought eagerness setting: ${thoughtEagerness}/100.`,
       `Silence duration ms: ${Math.max(0, Math.round(silenceMs))}.`,
+      `Topic tether strength: ${topicalityBias.topicTetherStrength}/100 (100=strongly topical, 0=fully untethered).`,
+      `Random inspiration strength: ${topicalityBias.randomInspirationStrength}/100.`,
+      `Topic drift phase: ${topicalityBias.phase}.`,
+      `Topic drift guidance: ${topicalityBias.promptHint}`,
       "Goal: seed a light initiative line that can keep conversation moving without forcing it."
     ];
     if (recentHistory) {
@@ -2569,7 +2644,8 @@ export class VoiceSessionManager {
     session,
     settings,
     thoughtCandidate,
-    memoryFacts = []
+    memoryFacts = [],
+    topicalityBias = null
   }) {
     const normalizedThought = normalizeVoiceText(thoughtCandidate, VOICE_THOUGHT_MAX_CHARS);
     if (!normalizedThought) {
@@ -2600,6 +2676,15 @@ export class VoiceSessionManager {
     const participants = this.getVoiceChannelParticipants(session).map((entry) => entry.displayName).filter(Boolean);
     const recentHistory = this.formatVoiceDecisionHistory(session, 8, VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS);
     const silenceMs = Math.max(0, Date.now() - Number(session.lastActivityAt || 0));
+    const resolvedThoughtConfig = this.resolveVoiceThoughtEngineConfig(settings);
+    const resolvedTopicalityBias =
+      topicalityBias && typeof topicalityBias === "object"
+        ? topicalityBias
+        : resolveVoiceThoughtTopicalityBias({
+            silenceMs,
+            minSilenceSeconds: resolvedThoughtConfig.minSilenceSeconds,
+            minSecondsBetweenThoughts: resolvedThoughtConfig.minSecondsBetweenThoughts
+          });
     const thoughtEagerness = clamp(Number(settings?.voice?.thoughtEngine?.eagerness) || 0, 0, 100);
     const ambientMemoryFacts = Array.isArray(memoryFacts) ? memoryFacts : [];
     const ambientMemory = formatRealtimeMemoryFacts(ambientMemoryFacts, VOICE_THOUGHT_MEMORY_SEARCH_LIMIT);
@@ -2611,6 +2696,8 @@ export class VoiceSessionManager {
       "If allow is true, finalThought must contain one short spoken line.",
       "If allow is false, finalThought must be an empty string.",
       "You may improve the draft using memory only when it feels natural and additive.",
+      "Topic drift bias is required: as silence gets older, prefer fresh standalone lines over stale callbacks to earlier topic details.",
+      "When topic tether is low, reject callback-heavy lines that depend on shared old context.",
       "Prefer allow=false over awkward memory references.",
       "No markdown, no extra keys."
     ].join("\n");
@@ -2619,6 +2706,10 @@ export class VoiceSessionManager {
       `Thought eagerness: ${thoughtEagerness}/100.`,
       `Current human participant count: ${participants.length || 0}.`,
       `Silence duration ms: ${Math.max(0, Math.round(silenceMs))}.`,
+      `Topic tether strength: ${resolvedTopicalityBias.topicTetherStrength}/100 (100=strongly topical, 0=fully untethered).`,
+      `Random inspiration strength: ${resolvedTopicalityBias.randomInspirationStrength}/100.`,
+      `Topic drift phase: ${resolvedTopicalityBias.phase}.`,
+      `Topic drift guidance: ${resolvedTopicalityBias.promptHint}`,
       `Final thought hard max chars: ${VOICE_THOUGHT_MAX_CHARS}.`,
       "Decision rule: allow only when saying the final line now would feel natural and additive."
     ];

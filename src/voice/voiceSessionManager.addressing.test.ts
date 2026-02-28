@@ -1,6 +1,10 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { VoiceSessionManager, resolveRealtimeTurnTranscriptionPlan } from "./voiceSessionManager.ts";
+import {
+  VoiceSessionManager,
+  resolveRealtimeTurnTranscriptionPlan,
+  resolveVoiceThoughtTopicalityBias
+} from "./voiceSessionManager.ts";
 import { STT_TURN_QUEUE_MAX, VOICE_TURN_MIN_ASR_CLIP_MS } from "./voiceSessionManager.constants.ts";
 
 function createManager({
@@ -609,6 +613,35 @@ test("formatVoiceDecisionHistory keeps newest turns within total char budget", (
   assert.equal(history.includes("turn-6"), true);
   assert.equal(history.includes("turn-1"), false);
   assert.equal(history.split("\n").filter(Boolean).length <= 6, true);
+});
+
+test("resolveVoiceThoughtTopicalityBias starts anchored and drifts with silence age", () => {
+  const anchored = resolveVoiceThoughtTopicalityBias({
+    silenceMs: 10_000,
+    minSilenceSeconds: 10,
+    minSecondsBetweenThoughts: 20
+  });
+  assert.equal(anchored.topicTetherStrength, 100);
+  assert.equal(anchored.randomInspirationStrength, 0);
+  assert.equal(anchored.phase, "anchored");
+
+  const blended = resolveVoiceThoughtTopicalityBias({
+    silenceMs: 35_000,
+    minSilenceSeconds: 10,
+    minSecondsBetweenThoughts: 20
+  });
+  assert.equal(blended.topicTetherStrength > 35, true);
+  assert.equal(blended.topicTetherStrength < 70, true);
+  assert.equal(blended.phase, "blended");
+
+  const ambient = resolveVoiceThoughtTopicalityBias({
+    silenceMs: 120_000,
+    minSilenceSeconds: 10,
+    minSecondsBetweenThoughts: 20
+  });
+  assert.equal(ambient.topicTetherStrength, 0);
+  assert.equal(ambient.randomInspirationStrength, 100);
+  assert.equal(ambient.phase, "ambient");
 });
 
 test("reply decider skips memory retrieval for unaddressed turns", async () => {
