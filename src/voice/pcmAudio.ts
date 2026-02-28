@@ -2,60 +2,83 @@ function clamp16(value) {
   return Math.max(-32768, Math.min(32767, value));
 }
 
+function toAlignedInt16Samples(input) {
+  const source = Buffer.isBuffer(input) ? input : Buffer.from(input || []);
+  const evenByteLength = source.length - (source.length % 2);
+  if (evenByteLength <= 0) {
+    return new Int16Array(0);
+  }
+
+  const view = source.subarray(0, evenByteLength);
+  if (view.byteOffset % 2 === 0) {
+    return new Int16Array(view.buffer, view.byteOffset, evenByteLength / 2);
+  }
+
+  const aligned = Buffer.from(view);
+  return new Int16Array(aligned.buffer, aligned.byteOffset, aligned.length / 2);
+}
+
+function int16ArrayToBuffer(samples) {
+  if (!samples.length) return Buffer.alloc(0);
+  return Buffer.from(samples.buffer, samples.byteOffset, samples.byteLength);
+}
+
 export function downmixStereo16ToMono16(input) {
-  const frameCount = Math.floor(input.length / 4);
+  const stereoSamples = toAlignedInt16Samples(input);
+  const frameCount = Math.floor(stereoSamples.length / 2);
   if (frameCount <= 0) return Buffer.alloc(0);
 
-  const output = Buffer.alloc(frameCount * 2);
-  for (let i = 0; i < frameCount; i += 1) {
-    const left = input.readInt16LE(i * 4);
-    const right = input.readInt16LE(i * 4 + 2);
-    const mixed = clamp16(Math.round((left + right) / 2));
-    output.writeInt16LE(mixed, i * 2);
+  const monoSamples = new Int16Array(frameCount);
+  for (let index = 0; index < frameCount; index += 1) {
+    const left = stereoSamples[index * 2];
+    const right = stereoSamples[index * 2 + 1];
+    monoSamples[index] = clamp16(Math.round((left + right) / 2));
   }
-  return output;
+
+  return int16ArrayToBuffer(monoSamples);
 }
 
 export function resampleMono16(input, inputSampleRate, outputSampleRate) {
   const inRate = Number(inputSampleRate) || 0;
   const outRate = Number(outputSampleRate) || 0;
   if (inRate <= 0 || outRate <= 0) return Buffer.alloc(0);
-  if (inRate === outRate) return Buffer.from(input);
 
-  const inputSamples = Math.floor(input.length / 2);
-  if (inputSamples <= 1) return Buffer.alloc(0);
+  const inputSamples = toAlignedInt16Samples(input);
+  if (inputSamples.length <= 0) return Buffer.alloc(0);
+  if (inRate === outRate) return int16ArrayToBuffer(inputSamples);
+  if (inputSamples.length <= 1) return Buffer.alloc(0);
 
   const ratio = inRate / outRate;
-  const outputSamples = Math.max(1, Math.floor(inputSamples / ratio));
-  const output = Buffer.alloc(outputSamples * 2);
+  const outputSampleCount = Math.max(1, Math.floor(inputSamples.length / ratio));
+  const outputSamples = new Int16Array(outputSampleCount);
 
-  for (let i = 0; i < outputSamples; i += 1) {
-    const sourcePosition = i * ratio;
+  for (let index = 0; index < outputSampleCount; index += 1) {
+    const sourcePosition = index * ratio;
     const sourceIndex = Math.floor(sourcePosition);
-    const nextIndex = Math.min(sourceIndex + 1, inputSamples - 1);
+    const nextIndex = Math.min(sourceIndex + 1, inputSamples.length - 1);
     const fraction = sourcePosition - sourceIndex;
 
-    const s0 = input.readInt16LE(sourceIndex * 2);
-    const s1 = input.readInt16LE(nextIndex * 2);
-    const sample = clamp16(Math.round(s0 + fraction * (s1 - s0)));
-    output.writeInt16LE(sample, i * 2);
+    const first = inputSamples[sourceIndex];
+    const second = inputSamples[nextIndex];
+    outputSamples[index] = clamp16(Math.round(first + fraction * (second - first)));
   }
 
-  return output;
+  return int16ArrayToBuffer(outputSamples);
 }
 
 export function mono16ToStereo16(input) {
-  const sampleCount = Math.floor(input.length / 2);
+  const inputSamples = toAlignedInt16Samples(input);
+  const sampleCount = inputSamples.length;
   if (sampleCount <= 0) return Buffer.alloc(0);
 
-  const output = Buffer.alloc(sampleCount * 4);
-  for (let i = 0; i < sampleCount; i += 1) {
-    const sample = input.readInt16LE(i * 2);
-    output.writeInt16LE(sample, i * 4);
-    output.writeInt16LE(sample, i * 4 + 2);
+  const outputSamples = new Int16Array(sampleCount * 2);
+  for (let index = 0; index < sampleCount; index += 1) {
+    const sample = inputSamples[index];
+    outputSamples[index * 2] = sample;
+    outputSamples[index * 2 + 1] = sample;
   }
 
-  return output;
+  return int16ArrayToBuffer(outputSamples);
 }
 
 export function convertDiscordPcmToXaiInput(discordPcm, outputSampleRate = 24000) {

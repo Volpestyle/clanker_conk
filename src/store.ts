@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import Database from "better-sqlite3";
+import { Database } from "bun:sqlite";
 import { load as loadSqliteVec } from "sqlite-vec";
 import { DEFAULT_SETTINGS } from "./settings/settingsSchema.ts";
 import { clamp, deepMerge, nowIso } from "./utils.ts";
@@ -40,7 +40,7 @@ export class Store {
   init() {
     fs.mkdirSync(path.dirname(this.dbPath), { recursive: true });
     this.db = new Database(this.dbPath);
-    this.db.pragma("journal_mode = WAL");
+    this.db.exec("PRAGMA journal_mode = WAL;");
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS settings (

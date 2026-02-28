@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { buildVoiceTurnPrompt } from "./prompts.ts";
 import { buildVoiceToneGuardrails } from "./promptCore.ts";

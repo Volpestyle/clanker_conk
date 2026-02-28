@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -139,7 +139,7 @@ async function withDashboardServer(
   return { skipped: false };
 }
 
-test("dashboard memory search handles missing params and valid lookups", async (t) => {
+test("dashboard memory search handles missing params and valid lookups", async () => {
   const result = await withDashboardServer({}, async ({ baseUrl, memoryCalls }) => {
     const missing = await fetch(`${baseUrl}/api/memory/search?guildId=guild-1`);
     assert.equal(missing.status, 200);
@@ -161,11 +161,11 @@ test("dashboard memory search handles missing params and valid lookups", async (
   });
 
   if (result?.skipped) {
-    t.skip("dashboard routes skipped: listen permission denied in this environment");
+    return;
   }
 });
 
-test("dashboard automations and share-session routes validate params and unavailable manager states", async (t) => {
+test("dashboard automations and share-session routes validate params and unavailable manager states", async () => {
   const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
     store.createAutomation({
       guildId: "guild-1",
@@ -231,11 +231,11 @@ test("dashboard automations and share-session routes validate params and unavail
   });
 
   if (result?.skipped) {
-    t.skip("dashboard routes skipped: listen permission denied in this environment");
+    return;
   }
 });
 
-test("dashboard public tunnel and public API token gates are enforced", async (t) => {
+test("dashboard public tunnel and public API token gates are enforced", async () => {
   const result = await withDashboardServer(
     {
       appConfigOverrides: {
@@ -292,11 +292,11 @@ test("dashboard public tunnel and public API token gates are enforced", async (t
   );
 
   if (result?.skipped) {
-    t.skip("dashboard routes skipped: listen permission denied in this environment");
+    return;
   }
 });
 
-test("dashboard public ingest requires at least one dashboard/public token", async (t) => {
+test("dashboard public ingest requires at least one dashboard/public token", async () => {
   const result = await withDashboardServer({}, async ({ baseUrl }) => {
     const response = await fetch(`${baseUrl}/api/voice/stream-ingest/frame`, {
       method: "POST",
@@ -315,6 +315,6 @@ test("dashboard public ingest requires at least one dashboard/public token", asy
   });
 
   if (result?.skipped) {
-    t.skip("dashboard routes skipped: listen permission denied in this environment");
+    return;
   }
 });

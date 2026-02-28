@@ -213,7 +213,7 @@ export class ClankerBot {
   }
 
   registerEvents() {
-    this.client.on("ready", () => {
+    this.client.on("clientReady", () => {
       this.hasConnectedAtLeastOnce = true;
       this.reconnectAttempts = 0;
       this.markGatewayEvent();

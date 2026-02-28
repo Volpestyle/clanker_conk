@@ -118,6 +118,8 @@ const SOUNDBOARD_DECISION_TRANSCRIPT_MAX_CHARS = 280;
 const SOUNDBOARD_CATALOG_REFRESH_MS = 60_000;
 const DISCORD_PCM_FRAME_MS = 20;
 const DISCORD_PCM_FRAME_BYTES = 3840;
+const AUDIO_PLAYBACK_QUEUE_WARN_BYTES = DISCORD_PCM_FRAME_BYTES * 150;
+const AUDIO_PLAYBACK_QUEUE_WARN_COOLDOWN_MS = 5000;
 const STT_TTS_CONVERSION_CHUNK_MS = 120;
 const STT_TTS_CONVERSION_YIELD_EVERY_CHUNKS = 8;
 
@@ -1066,7 +1068,8 @@ export class VoiceSessionManager {
         pumping: false,
         timer: null,
         waitingDrain: false,
-        drainHandler: null
+        drainHandler: null,
+        lastWarnAt: 0
       };
     }
     return session.audioPlaybackQueue;
@@ -1088,6 +1091,7 @@ export class VoiceSessionManager {
     state.chunks = [];
     state.headOffset = 0;
     state.queuedBytes = 0;
+    state.lastWarnAt = 0;
   }
 
   dequeueAudioPlaybackFrame(session, frameBytes = DISCORD_PCM_FRAME_BYTES) {
@@ -1224,6 +1228,24 @@ export class VoiceSessionManager {
     const state = this.ensureAudioPlaybackQueueState(session);
     state.chunks.push(pcm);
     state.queuedBytes = Math.max(0, Number(state.queuedBytes || 0)) + pcm.length;
+    const now = Date.now();
+    if (
+      state.queuedBytes >= AUDIO_PLAYBACK_QUEUE_WARN_BYTES &&
+      now - Number(state.lastWarnAt || 0) >= AUDIO_PLAYBACK_QUEUE_WARN_COOLDOWN_MS
+    ) {
+      state.lastWarnAt = now;
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "bot_audio_queue_backlog",
+        metadata: {
+          sessionId: session.id,
+          queuedBytes: state.queuedBytes
+        }
+      });
+    }
     this.scheduleAudioPlaybackPump(session, 0);
     return true;
   }

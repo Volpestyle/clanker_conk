@@ -57,6 +57,14 @@ export class MemoryManager {
       return existingJob.promise;
     }
 
+    this.recordVoiceTranscriptMessage({
+      messageId: normalizedMessageId,
+      authorId,
+      authorName,
+      content,
+      trace
+    });
+
     if (this.ingestQueue.length >= this.maxIngestQueue) {
       const dropped = this.ingestQueue.shift();
       if (dropped?.messageId) {
@@ -89,6 +97,42 @@ export class MemoryManager {
     this.ingestQueuedJobs.set(normalizedMessageId, job);
     this.runIngestWorker().catch(() => undefined);
     return promise;
+  }
+
+  recordVoiceTranscriptMessage({
+    messageId,
+    authorId,
+    authorName,
+    content,
+    trace = { guildId: null, channelId: null, userId: null, source: null }
+  }) {
+    if (!String(messageId || "").startsWith("voice-")) return;
+    if (typeof this.store?.recordMessage !== "function") return;
+
+    const cleanedContent = cleanDailyEntryContent(content);
+    const normalizedChannelId = String(trace?.channelId || "").trim();
+    const normalizedAuthorId = String(authorId || trace?.userId || "").trim();
+    if (!cleanedContent || !normalizedChannelId || !normalizedAuthorId) return;
+
+    try {
+      this.store.recordMessage({
+        messageId: String(messageId),
+        guildId: String(trace?.guildId || "").trim() || null,
+        channelId: normalizedChannelId,
+        authorId: normalizedAuthorId,
+        authorName: String(authorName || "unknown")
+          .replace(/\s+/g, " ")
+          .trim() || "unknown",
+        isBot: false,
+        content: cleanedContent
+      });
+    } catch (error) {
+      this.logMemoryError("voice_history_record", error, {
+        messageId: String(messageId || ""),
+        userId: normalizedAuthorId,
+        channelId: normalizedChannelId
+      });
+    }
   }
 
   async runIngestWorker() {
