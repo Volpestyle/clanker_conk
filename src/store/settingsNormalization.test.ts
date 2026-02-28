@@ -14,7 +14,13 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
     replyFollowupLlm: {
       enabled: true,
       provider: "not-real",
-      model: ""
+      model: "",
+      maxToolSteps: 99,
+      maxTotalToolCalls: -5,
+      maxWebSearchCalls: 7,
+      maxMemoryLookupCalls: -2,
+      maxImageLookupCalls: 999,
+      toolTimeoutMs: 999999
     },
     webSearch: {
       enabled: true,
@@ -100,6 +106,12 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.llm.maxOutputTokens, 32);
   assert.equal(normalized.replyFollowupLlm.provider, "xai");
   assert.equal(normalized.replyFollowupLlm.model, "grok-3-mini-latest");
+  assert.equal(normalized.replyFollowupLlm.maxToolSteps, 6);
+  assert.equal(normalized.replyFollowupLlm.maxTotalToolCalls, 0);
+  assert.equal(normalized.replyFollowupLlm.maxWebSearchCalls, 6);
+  assert.equal(normalized.replyFollowupLlm.maxMemoryLookupCalls, 0);
+  assert.equal(normalized.replyFollowupLlm.maxImageLookupCalls, 6);
+  assert.equal(normalized.replyFollowupLlm.toolTimeoutMs, 60000);
 
   assert.equal(normalized.webSearch.maxSearchesPerHour, 120);
   assert.equal(normalized.webSearch.maxResults, 1);

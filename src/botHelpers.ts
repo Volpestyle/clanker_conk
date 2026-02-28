@@ -8,15 +8,6 @@ const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
 const IMAGE_PROMPT_DIRECTIVE_RE = /\[\[IMAGE_PROMPT:\s*([^\]]*?)\s*\]\]\s*$/i;
 const COMPLEX_IMAGE_PROMPT_DIRECTIVE_RE = /\[\[COMPLEX_IMAGE_PROMPT:\s*([^\]]*?)\s*\]\]\s*$/i;
 const VIDEO_PROMPT_DIRECTIVE_RE = /\[\[VIDEO_PROMPT:\s*([^\]]*?)\s*\]\]\s*$/i;
-const GIF_QUERY_DIRECTIVE_RE = /\[\[GIF_QUERY:\s*([^\]]*?)\s*\]\]\s*$/i;
-const REACTION_DIRECTIVE_RE = /\[\[REACTION:\s*([^\]]*?)\s*\]\]\s*$/i;
-const WEB_SEARCH_DIRECTIVE_RE = /\[\[WEB_SEARCH:\s*([^\]]*?)\s*\]\]\s*$/i;
-const OPEN_ARTICLE_DIRECTIVE_RE = /\[\[OPEN_ARTICLE:\s*([^\]]*?)\s*\]\]\s*$/i;
-const MEMORY_LINE_DIRECTIVE_RE = /\[\[MEMORY_LINE:\s*([^\]]*?)\s*\]\]\s*$/i;
-const SELF_MEMORY_LINE_DIRECTIVE_RE = /\[\[SELF_MEMORY_LINE:\s*([^\]]*?)\s*\]\]\s*$/i;
-const SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*([^\]]*?)\s*\]\]\s*$/i;
-const SCREEN_SHARE_LINK_DIRECTIVE_RE = /\[\[SCREEN_SHARE_LINK\]\]\s*$/i;
-const LEAVE_VC_DIRECTIVE_RE = /\[\[LEAVE_VC\]\]\s*$/i;
 const WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
 const DEFAULT_MAX_MEDIA_PROMPT_LEN = 900;
 const MAX_MEDIA_PROMPT_FLOOR = 120;
@@ -32,6 +23,7 @@ const MAX_REPLY_TEXT_LEN = 1200;
 const MAX_AUTOMATION_TITLE_LEN = 90;
 const MAX_AUTOMATION_INSTRUCTION_LEN = 360;
 const MAX_AUTOMATION_TARGET_QUERY_LEN = 180;
+const MAX_REPLY_SOUNDBOARD_REFS = 10;
 
 export function resolveMaxMediaPromptLen(settings) {
   const raw = Number(settings?.initiative?.maxMediaPromptChars);
@@ -57,6 +49,144 @@ export const MAX_VIDEO_FALLBACK_MESSAGES = 18;
 const MENTION_CANDIDATE_RE = /(?<![\w<])@([a-z0-9][a-z0-9 ._'-]{0,63})/gi;
 export const MAX_MENTION_CANDIDATES = 8;
 const MAX_MENTION_LOOKUP_VARIANTS = 8;
+
+function emptyStructuredAutomationAction() {
+  return {
+    operation: null,
+    title: null,
+    instruction: null,
+    schedule: null,
+    targetQuery: null,
+    automationId: null,
+    runImmediately: false,
+    targetChannelId: null
+  };
+}
+
+function emptyStructuredVoiceIntent() {
+  return {
+    intent: null,
+    confidence: 0,
+    reason: null
+  };
+}
+
+function emptyStructuredScreenShareIntent() {
+  return {
+    action: null,
+    confidence: 0,
+    reason: null
+  };
+}
+
+export const REPLY_OUTPUT_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    text: { type: "string" },
+    skip: { type: "boolean" },
+    reactionEmoji: { type: ["string", "null"] },
+    media: {
+      anyOf: [
+        { type: "null" },
+        {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            type: {
+              type: "string",
+              enum: ["image_simple", "image_complex", "video", "gif", "none"]
+            },
+            prompt: { type: ["string", "null"] }
+          },
+          required: ["type", "prompt"]
+        }
+      ]
+    },
+    webSearchQuery: { type: ["string", "null"] },
+    memoryLookupQuery: { type: ["string", "null"] },
+    imageLookupQuery: { type: ["string", "null"] },
+    openArticleRef: { type: ["string", "null"] },
+    memoryLine: { type: ["string", "null"] },
+    selfMemoryLine: { type: ["string", "null"] },
+    soundboardRefs: {
+      type: "array",
+      items: {
+        type: "string"
+      }
+    },
+    leaveVoiceChannel: { type: "boolean" },
+    automationAction: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        operation: {
+          type: "string",
+          enum: ["create", "pause", "resume", "delete", "list", "none"]
+        },
+        title: { type: ["string", "null"] },
+        instruction: { type: ["string", "null"] },
+        schedule: { type: ["object", "null"] },
+        targetQuery: { type: ["string", "null"] },
+        automationId: { type: ["number", "null"] },
+        runImmediately: { type: "boolean" },
+        targetChannelId: { type: ["string", "null"] }
+      },
+      required: [
+        "operation",
+        "title",
+        "instruction",
+        "schedule",
+        "targetQuery",
+        "automationId",
+        "runImmediately",
+        "targetChannelId"
+      ]
+    },
+    voiceIntent: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        intent: {
+          type: "string",
+          enum: ["join", "leave", "status", "watch_stream", "stop_watching_stream", "stream_status", "none"]
+        },
+        confidence: { type: "number" },
+        reason: { type: ["string", "null"] }
+      },
+      required: ["intent", "confidence", "reason"]
+    },
+    screenShareIntent: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        action: { type: "string", enum: ["offer_link", "none"] },
+        confidence: { type: "number" },
+        reason: { type: ["string", "null"] }
+      },
+      required: ["action", "confidence", "reason"]
+    }
+  },
+  required: [
+    "text",
+    "skip",
+    "reactionEmoji",
+    "media",
+    "webSearchQuery",
+    "memoryLookupQuery",
+    "imageLookupQuery",
+    "openArticleRef",
+    "memoryLine",
+    "selfMemoryLine",
+    "soundboardRefs",
+    "leaveVoiceChannel",
+    "automationAction",
+    "voiceIntent",
+    "screenShareIntent"
+  ]
+};
+
+export const REPLY_OUTPUT_JSON_SCHEMA = JSON.stringify(REPLY_OUTPUT_SCHEMA);
 
 export function formatReactionSummary(message) {
   const cache = message?.reactions?.cache;
@@ -474,153 +604,6 @@ export function parseInitiativeMediaDirective(rawText, maxLen = DEFAULT_MAX_MEDI
   return parsed;
 }
 
-export function parseReplyDirectives(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
-  const parsed = {
-    text: String(rawText || "").trim(),
-    imagePrompt: null,
-    complexImagePrompt: null,
-    videoPrompt: null,
-    gifQuery: null,
-    mediaDirective: null,
-    reactionEmoji: null,
-    webSearchQuery: null,
-    openArticleRef: null,
-    memoryLine: null,
-    selfMemoryLine: null,
-    soundboardRefs: [],
-    screenShareLinkRequested: false,
-    leaveVoiceChannelRequested: false
-  };
-
-  while (parsed.text) {
-    const complexImageMatch = parsed.text.match(COMPLEX_IMAGE_PROMPT_DIRECTIVE_RE);
-    if (complexImageMatch) {
-      const prompt = normalizeDirectiveText(complexImageMatch[1], maxLen) || null;
-      if (!parsed.complexImagePrompt) {
-        parsed.complexImagePrompt = prompt;
-      }
-      if (!parsed.mediaDirective && prompt) {
-        parsed.mediaDirective = { type: "image_complex", prompt };
-      }
-      parsed.text = parsed.text.slice(0, complexImageMatch.index).trim();
-      continue;
-    }
-
-    const imageMatch = parsed.text.match(IMAGE_PROMPT_DIRECTIVE_RE);
-    if (imageMatch) {
-      const prompt = normalizeDirectiveText(imageMatch[1], maxLen) || null;
-      if (!parsed.imagePrompt) {
-        parsed.imagePrompt = prompt;
-      }
-      if (!parsed.mediaDirective && prompt) {
-        parsed.mediaDirective = { type: "image_simple", prompt };
-      }
-      parsed.text = parsed.text.slice(0, imageMatch.index).trim();
-      continue;
-    }
-
-    const videoMatch = parsed.text.match(VIDEO_PROMPT_DIRECTIVE_RE);
-    if (videoMatch) {
-      const prompt = normalizeDirectiveText(videoMatch[1], maxLen) || null;
-      if (!parsed.videoPrompt) {
-        parsed.videoPrompt = prompt;
-      }
-      if (!parsed.mediaDirective && prompt) {
-        parsed.mediaDirective = { type: "video", prompt };
-      }
-      parsed.text = parsed.text.slice(0, videoMatch.index).trim();
-      continue;
-    }
-
-    const gifMatch = parsed.text.match(GIF_QUERY_DIRECTIVE_RE);
-    if (gifMatch) {
-      const query = normalizeDirectiveText(gifMatch[1], MAX_GIF_QUERY_LEN) || null;
-      if (!parsed.gifQuery) {
-        parsed.gifQuery = query;
-      }
-      if (!parsed.mediaDirective && query) {
-        parsed.mediaDirective = { type: "gif", prompt: query };
-      }
-      parsed.text = parsed.text.slice(0, gifMatch.index).trim();
-      continue;
-    }
-
-    const reactionMatch = parsed.text.match(REACTION_DIRECTIVE_RE);
-    if (reactionMatch) {
-      if (!parsed.reactionEmoji) {
-        parsed.reactionEmoji = normalizeDirectiveText(reactionMatch[1], 64) || null;
-      }
-      parsed.text = parsed.text.slice(0, reactionMatch.index).trim();
-      continue;
-    }
-
-    const webSearchMatch = parsed.text.match(WEB_SEARCH_DIRECTIVE_RE);
-    if (webSearchMatch) {
-      if (!parsed.webSearchQuery) {
-        parsed.webSearchQuery = normalizeDirectiveText(webSearchMatch[1], MAX_WEB_QUERY_LEN) || null;
-      }
-      parsed.text = parsed.text.slice(0, webSearchMatch.index).trim();
-      continue;
-    }
-
-    const openArticleMatch = parsed.text.match(OPEN_ARTICLE_DIRECTIVE_RE);
-    if (openArticleMatch) {
-      if (!parsed.openArticleRef) {
-        parsed.openArticleRef =
-          normalizeDirectiveText(openArticleMatch[1], MAX_OPEN_ARTICLE_REF_LEN) || "first";
-      }
-      parsed.text = parsed.text.slice(0, openArticleMatch.index).trim();
-      continue;
-    }
-
-    const memoryMatch = parsed.text.match(MEMORY_LINE_DIRECTIVE_RE);
-    if (memoryMatch) {
-      if (!parsed.memoryLine) {
-        parsed.memoryLine = normalizeDirectiveText(memoryMatch[1], MAX_MEMORY_LINE_LEN) || null;
-      }
-      parsed.text = parsed.text.slice(0, memoryMatch.index).trim();
-      continue;
-    }
-
-    const selfMemoryMatch = parsed.text.match(SELF_MEMORY_LINE_DIRECTIVE_RE);
-    if (selfMemoryMatch) {
-      if (!parsed.selfMemoryLine) {
-        parsed.selfMemoryLine = normalizeDirectiveText(selfMemoryMatch[1], MAX_MEMORY_LINE_LEN) || null;
-      }
-      parsed.text = parsed.text.slice(0, selfMemoryMatch.index).trim();
-      continue;
-    }
-
-    const soundboardMatch = parsed.text.match(SOUNDBOARD_DIRECTIVE_RE);
-    if (soundboardMatch) {
-      const normalizedRef = normalizeDirectiveText(soundboardMatch[1], MAX_SOUNDBOARD_REF_LEN) || null;
-      if (normalizedRef) {
-        parsed.soundboardRefs.unshift(normalizedRef);
-      }
-      parsed.text = parsed.text.slice(0, soundboardMatch.index).trim();
-      continue;
-    }
-
-    const screenShareMatch = parsed.text.match(SCREEN_SHARE_LINK_DIRECTIVE_RE);
-    if (screenShareMatch) {
-      parsed.screenShareLinkRequested = true;
-      parsed.text = parsed.text.slice(0, screenShareMatch.index).trim();
-      continue;
-    }
-
-    const leaveVcMatch = parsed.text.match(LEAVE_VC_DIRECTIVE_RE);
-    if (leaveVcMatch) {
-      parsed.leaveVoiceChannelRequested = true;
-      parsed.text = parsed.text.slice(0, leaveVcMatch.index).trim();
-      continue;
-    }
-
-    break;
-  }
-
-  return parsed;
-}
-
 export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
   const fallbackText = String(rawText || "").trim();
   const parsed = extractJsonObjectFromText(fallbackText);
@@ -636,28 +619,14 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
       webSearchQuery: null,
       memoryLookupQuery: null,
       imageLookupQuery: null,
+      openArticleRef: null,
       memoryLine: null,
       selfMemoryLine: null,
-      automationAction: {
-        operation: null,
-        title: null,
-        instruction: null,
-        schedule: null,
-        targetQuery: null,
-        automationId: null,
-        runImmediately: false,
-        targetChannelId: null
-      },
-      voiceIntent: {
-        intent: null,
-        confidence: 0,
-        reason: null
-      },
-      screenShareIntent: {
-        action: null,
-        confidence: 0,
-        reason: null
-      }
+      soundboardRefs: [],
+      leaveVoiceChannel: false,
+      automationAction: emptyStructuredAutomationAction(),
+      voiceIntent: emptyStructuredVoiceIntent(),
+      screenShareIntent: emptyStructuredScreenShareIntent()
     };
   }
 
@@ -670,12 +639,28 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     normalizeDirectiveText(parsed?.memoryLookupQuery, MAX_MEMORY_LOOKUP_QUERY_LEN) || null;
   const imageLookupQuery =
     normalizeDirectiveText(parsed?.imageLookupQuery, MAX_IMAGE_LOOKUP_QUERY_LEN) || null;
+  const openArticleRef =
+    normalizeDirectiveText(parsed?.openArticleRef ?? parsed?.openArticle, MAX_OPEN_ARTICLE_REF_LEN) || null;
   const memoryLine = normalizeDirectiveText(parsed?.memoryLine, MAX_MEMORY_LINE_LEN) || null;
   const selfMemoryLine = normalizeDirectiveText(parsed?.selfMemoryLine, MAX_MEMORY_LINE_LEN) || null;
+  const soundboardRefs = normalizeStructuredSoundboardRefs(parsed?.soundboardRefs ?? parsed?.soundboard);
+  const leaveVoiceChannel =
+    parsed?.leaveVoiceChannel === true ||
+    parsed?.leaveVoiceChannelRequested === true;
   const automationAction = normalizeStructuredAutomationAction(parsed?.automationAction);
   const mediaDirective = normalizeStructuredMediaDirective(parsed?.media, maxLen);
   const voiceIntent = normalizeStructuredVoiceIntent(parsed?.voiceIntent);
-  const screenShareIntent = normalizeStructuredScreenShareIntent(parsed?.screenShareIntent ?? parsed?.screenShare);
+  const screenShareIntent = normalizeStructuredScreenShareIntent(
+    parsed?.screenShareIntent ??
+      parsed?.screenShare ??
+      (parsed?.screenShareLinkRequested === true
+        ? {
+            action: "offer_link",
+            confidence: 1,
+            reason: "legacy_screen_share_link_requested"
+          }
+        : null)
+  );
 
   return {
     text: text || "",
@@ -688,8 +673,11 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     webSearchQuery,
     memoryLookupQuery,
     imageLookupQuery,
+    openArticleRef,
     memoryLine,
     selfMemoryLine,
+    soundboardRefs,
+    leaveVoiceChannel,
     automationAction,
     voiceIntent,
     screenShareIntent
@@ -771,6 +759,24 @@ function normalizeStructuredScreenShareIntent(rawIntent) {
     confidence,
     reason
   };
+}
+
+function normalizeStructuredSoundboardRefs(rawRefs) {
+  const values = Array.isArray(rawRefs) ? rawRefs : rawRefs ? [rawRefs] : [];
+  const refs = [];
+  const seen = new Set();
+
+  for (const entry of values) {
+    const normalized = normalizeDirectiveText(entry, MAX_SOUNDBOARD_REF_LEN);
+    if (!normalized) continue;
+    const key = normalized.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    refs.push(normalized);
+    if (refs.length >= MAX_REPLY_SOUNDBOARD_REFS) break;
+  }
+
+  return refs;
 }
 
 function normalizeStructuredAutomationAction(rawAction) {

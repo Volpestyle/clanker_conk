@@ -69,6 +69,98 @@ function baseSettings(overrides = {}) {
   };
 }
 
+function structuredVoiceOutput(overrides: {
+  text?: string;
+  skip?: boolean;
+  reactionEmoji?: string | null;
+  media?: {
+    type?: string | null;
+    prompt?: string | null;
+  } | null;
+  webSearchQuery?: string | null;
+  memoryLookupQuery?: string | null;
+  imageLookupQuery?: string | null;
+  openArticleRef?: string | null;
+  memoryLine?: string | null;
+  selfMemoryLine?: string | null;
+  soundboardRefs?: string[];
+  leaveVoiceChannel?: boolean;
+  automationAction?: {
+    operation?: string;
+    title?: string | null;
+    instruction?: string | null;
+    schedule?: Record<string, unknown> | null;
+    targetQuery?: string | null;
+    automationId?: number | null;
+    runImmediately?: boolean;
+    targetChannelId?: string | null;
+  };
+  voiceIntent?: {
+    intent?: string;
+    confidence?: number;
+    reason?: string | null;
+  };
+  screenShareIntent?: {
+    action?: string;
+    confidence?: number;
+    reason?: string | null;
+  };
+} = {}) {
+  const base = {
+    text: "all good",
+    skip: false,
+    reactionEmoji: null,
+    media: null,
+    webSearchQuery: null,
+    memoryLookupQuery: null,
+    imageLookupQuery: null,
+    openArticleRef: null,
+    memoryLine: null,
+    selfMemoryLine: null,
+    soundboardRefs: [],
+    leaveVoiceChannel: false,
+    automationAction: {
+      operation: "none",
+      title: null,
+      instruction: null,
+      schedule: null,
+      targetQuery: null,
+      automationId: null,
+      runImmediately: false,
+      targetChannelId: null
+    },
+    voiceIntent: {
+      intent: "none",
+      confidence: 0,
+      reason: null
+    },
+    screenShareIntent: {
+      action: "none",
+      confidence: 0,
+      reason: null
+    }
+  };
+
+  const merged = {
+    ...base,
+    ...overrides,
+    automationAction: {
+      ...base.automationAction,
+      ...(overrides.automationAction || {})
+    },
+    voiceIntent: {
+      ...base.voiceIntent,
+      ...(overrides.voiceIntent || {})
+    },
+    screenShareIntent: {
+      ...base.screenShareIntent,
+      ...(overrides.screenShareIntent || {})
+    }
+  };
+
+  return JSON.stringify(merged);
+}
+
 function createVoiceBot({
   generationText = "all good",
   generationError = null,
@@ -355,10 +447,14 @@ test("generateVoiceTurnReply returns early for empty transcripts", async () => {
 });
 
 
-test("generateVoiceTurnReply parses memory and soundboard directives", async () => {
+test("generateVoiceTurnReply parses memory and soundboard tool-call fields", async () => {
   const { bot, ingests, remembers } = createVoiceBot({
-    generationText:
-      "bet [[SOUNDBOARD:airhorn@123]] [[MEMORY_LINE:likes pizza]] [[SELF_MEMORY_LINE:i keep replies concise]]"
+    generationText: structuredVoiceOutput({
+      text: "bet",
+      memoryLine: "likes pizza",
+      selfMemoryLine: "i keep replies concise",
+      soundboardRefs: ["airhorn@123"]
+    })
   });
   const reply = await generateVoiceTurnReply(bot, {
     settings: baseSettings({
@@ -394,9 +490,12 @@ test("generateVoiceTurnReply parses memory and soundboard directives", async () 
   assert.equal(remembers[1]?.scope, "self");
 });
 
-test("generateVoiceTurnReply preserves ordered trailing soundboard directives", async () => {
+test("generateVoiceTurnReply preserves ordered soundboard refs from tool-call payload", async () => {
   const { bot } = createVoiceBot({
-    generationText: "bet [[SOUNDBOARD:airhorn@123]] [[SOUNDBOARD:rimshot@456]]"
+    generationText: structuredVoiceOutput({
+      text: "bet",
+      soundboardRefs: ["airhorn@123", "rimshot@456"]
+    })
   });
   const reply = await generateVoiceTurnReply(bot, {
     settings: baseSettings({
@@ -417,9 +516,12 @@ test("generateVoiceTurnReply preserves ordered trailing soundboard directives", 
   assert.deepEqual(reply.soundboardRefs, ["airhorn@123", "rimshot@456"]);
 });
 
-test("generateVoiceTurnReply drops soundboard directive when soundboard is disabled", async () => {
+test("generateVoiceTurnReply drops soundboard refs when soundboard is disabled", async () => {
   const { bot } = createVoiceBot({
-    generationText: "copy that [[SOUNDBOARD:airhorn@123]]"
+    generationText: structuredVoiceOutput({
+      text: "copy that",
+      soundboardRefs: ["airhorn@123"]
+    })
   });
   const reply = await generateVoiceTurnReply(bot, {
     settings: baseSettings({
@@ -440,9 +542,12 @@ test("generateVoiceTurnReply drops soundboard directive when soundboard is disab
   assert.deepEqual(reply.soundboardRefs, []);
 });
 
-test("generateVoiceTurnReply strips inline soundboard directives when soundboard is disabled", async () => {
+test("generateVoiceTurnReply keeps spoken text and ignores soundboard refs when disabled", async () => {
   const { bot } = createVoiceBot({
-    generationText: "copy [[SOUNDBOARD:airhorn@123]] that"
+    generationText: structuredVoiceOutput({
+      text: "copy that",
+      soundboardRefs: ["airhorn@123"]
+    })
   });
   const reply = await generateVoiceTurnReply(bot, {
     settings: baseSettings({
@@ -465,7 +570,10 @@ test("generateVoiceTurnReply strips inline soundboard directives when soundboard
 
 test("generateVoiceTurnReply strips selected soundboard id and name from spoken text", async () => {
   const { bot } = createVoiceBot({
-    generationText: "playing airhorn@123 now airhorn [[SOUNDBOARD:airhorn@123]]"
+    generationText: structuredVoiceOutput({
+      text: "playing airhorn@123 now airhorn",
+      soundboardRefs: ["airhorn@123"]
+    })
   });
   const reply = await generateVoiceTurnReply(bot, {
     settings: baseSettings({
@@ -488,7 +596,10 @@ test("generateVoiceTurnReply strips selected soundboard id and name from spoken 
 
 test("generateVoiceTurnReply preserves soundboard ref when scrubbed speech becomes empty", async () => {
   const { bot } = createVoiceBot({
-    generationText: "airhorn@123 [[SOUNDBOARD:airhorn@123]]"
+    generationText: structuredVoiceOutput({
+      text: "airhorn@123",
+      soundboardRefs: ["airhorn@123"]
+    })
   });
   const reply = await generateVoiceTurnReply(bot, {
     settings: baseSettings({
@@ -558,8 +669,13 @@ test("generateVoiceTurnReply uses voice generation llm provider/model instead of
 test("generateVoiceTurnReply runs web lookup follow-up with start/complete callbacks", async () => {
   const { bot, webSearchCalls, lookupMemoryWrites, getGenerationCalls } = createVoiceBot({
     generationSequence: [
-      "one sec [[WEB_SEARCH:latest rust stable version]]",
-      "latest stable rust is 1.90"
+      structuredVoiceOutput({
+        text: "one sec",
+        webSearchQuery: "latest rust stable version"
+      }),
+      structuredVoiceOutput({
+        text: "latest stable rust is 1.90"
+      })
     ]
   });
 
@@ -626,11 +742,16 @@ test("generateVoiceTurnReply queries short-term lookup memory during generation"
   assert.equal(lookupMemorySearchCalls.length, 1);
 });
 
-test("generateVoiceTurnReply opens cached article via OPEN_ARTICLE directive", async () => {
+test("generateVoiceTurnReply opens cached article via tool-call field", async () => {
   const { bot, openArticleCalls, getGenerationCalls } = createVoiceBot({
     generationSequence: [
-      "say less [[OPEN_ARTICLE:first]]",
-      "here's what it says"
+      structuredVoiceOutput({
+        text: "say less",
+        openArticleRef: "first"
+      }),
+      structuredVoiceOutput({
+        text: "here's what it says"
+      })
     ],
     recentLookupContext: [
       {
@@ -669,9 +790,16 @@ test("generateVoiceTurnReply opens cached article via OPEN_ARTICLE directive", a
   assert.equal(reply.usedOpenArticleFollowup, true);
 });
 
-test("generateVoiceTurnReply triggers voice screen-share link offer from directive", async () => {
+test("generateVoiceTurnReply triggers voice screen-share link offer from tool-call field", async () => {
   const { bot, screenShareCalls } = createVoiceBot({
-    generationText: "i can check it [[SCREEN_SHARE_LINK]]",
+    generationText: structuredVoiceOutput({
+      text: "i can check it",
+      screenShareIntent: {
+        action: "offer_link",
+        confidence: 0.93,
+        reason: "needs visual context"
+      }
+    }),
     screenShareCapability: {
       enabled: true,
       available: true,
@@ -699,7 +827,9 @@ test("generateVoiceTurnReply triggers voice screen-share link offer from directi
 
 test("generateVoiceTurnReply describes supported-but-unavailable screen-share capability in prompt", async () => {
   const { bot, generationPayloads, screenShareCalls } = createVoiceBot({
-    generationText: "can't pull it up rn",
+    generationText: structuredVoiceOutput({
+      text: "can't pull it up rn"
+    }),
     screenShareCapability: {
       supported: true,
       enabled: true,
@@ -725,12 +855,15 @@ test("generateVoiceTurnReply describes supported-but-unavailable screen-share ca
     userPrompt.includes("VC screen-share link capability exists but is currently unavailable (reason: public_https_starting)."),
     true
   );
-  assert.equal(userPrompt.includes("Do not output [[SCREEN_SHARE_LINK]]."), true);
+  assert.equal(userPrompt.includes("Set screenShareIntent.action=none."), true);
 });
 
-test("generateVoiceTurnReply returns leave request when model emits leave directive", async () => {
+test("generateVoiceTurnReply returns leave request when model sets leaveVoiceChannel", async () => {
   const { bot } = createVoiceBot({
-    generationText: "aight i'ma bounce [[LEAVE_VC]]"
+    generationText: structuredVoiceOutput({
+      text: "aight i'ma bounce",
+      leaveVoiceChannel: true
+    })
   });
 
   const reply = await generateVoiceTurnReply(bot, {

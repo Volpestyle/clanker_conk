@@ -9,8 +9,8 @@ import {
 } from "../promptCore.ts";
 import {
   normalizeSkipSentinel,
-  parseReplyDirectives,
-  resolveMaxMediaPromptLen,
+  parseStructuredReplyOutput,
+  REPLY_OUTPUT_JSON_SCHEMA,
   serializeForPrompt
 } from "../botHelpers.ts";
 import {
@@ -23,7 +23,6 @@ import { clamp, sanitizeBotText } from "../utils.ts";
 const MAX_SOUNDBOARD_LEAK_TOKEN_SCAN = 24;
 const SOUNDBOARD_CANDIDATE_PARSE_LIMIT = 40;
 const SOUNDBOARD_SIMPLE_TOKEN_RE = /^[a-z0-9 _-]+$/i;
-const INLINE_SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*[\s\S]*?\s*\]\]/gi;
 const MAX_VOICE_SOUNDBOARD_REFS = 10;
 const LOOKUP_CONTEXT_PROMPT_LIMIT = 4;
 const LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS = 72;
@@ -194,9 +193,8 @@ export async function composeVoiceOperationalMessage(runtime, {
       }
     });
 
-    const parsed = parseReplyDirectives(generation.text, resolveMaxMediaPromptLen(settings));
     const normalized = sanitizeBotText(
-      normalizeSkipSentinel(parsed.text || generation.text || ""),
+      normalizeSkipSentinel(generation.text || ""),
       outputCharLimit
     );
     if (!normalized) return "";
@@ -261,47 +259,28 @@ export async function generateVoiceTurnReply(runtime, {
     .map((line) => String(line || "").trim())
     .filter(Boolean)
     .slice(0, 40);
-  const allowSoundboardDirective = Boolean(
+  const allowSoundboardToolCall = Boolean(
     settings?.voice?.soundboard?.enabled && normalizedSoundboardCandidates.length
   );
-  const allowMemoryDirectives = Boolean(settings?.memory?.enabled);
-  const allowWebSearchDirective = Boolean(
+  const allowMemoryToolCalls = Boolean(settings?.memory?.enabled);
+  const allowWebSearchToolCall = Boolean(
       typeof runtime.runModelRequestedWebSearch === "function" &&
       typeof runtime.buildWebSearchContext === "function"
   );
-  const allowOpenArticleDirective = Boolean(typeof runtime.search?.readPageSummary === "function");
+  const allowOpenArticleToolCall = Boolean(typeof runtime.search?.readPageSummary === "function");
   const screenShare = resolveVoiceScreenShareCapability(runtime, {
     settings,
     guildId,
     channelId,
     userId
   });
-  const allowScreenShareDirective = Boolean(
+  const allowScreenShareToolCall = Boolean(
     screenShare.available &&
       typeof runtime.offerVoiceScreenShareLink === "function" &&
       guildId &&
       channelId &&
       userId
   );
-  const allowedDirectives = [
-    ...(allowMemoryDirectives
-      ? [
-          "[[MEMORY_LINE:<durable fact from speaker turn>]]",
-          "[[SELF_MEMORY_LINE:<durable fact about your own stable identity/preference/commitment in your reply>]]"
-        ]
-      : []),
-    ...(allowSoundboardDirective ? ["[[SOUNDBOARD:<sound_ref>]]"] : []),
-    ...(allowWebSearchDirective ? ["[[WEB_SEARCH:<concise query>]]"] : []),
-    ...(allowOpenArticleDirective ? ["[[OPEN_ARTICLE:<article_ref>]]"] : []),
-    ...(allowScreenShareDirective ? ["[[SCREEN_SHARE_LINK]]"] : []),
-    "[[LEAVE_VC]]"
-  ];
-  const directivesLine = allowedDirectives.length
-    ? `Allowed optional directives: ${allowedDirectives.join(", ")}.`
-    : "Do not output directives like [[...]].";
-  const soundboardDirectiveLine = allowSoundboardDirective
-    ? "SOUNDBOARD directives may appear inline anywhere in spoken text (including middle/end) to control when each effect plays."
-    : null;
 
   const guild = runtime.client.guilds.cache.get(String(guildId || ""));
   const speakerName =
@@ -381,7 +360,7 @@ export async function generateVoiceTurnReply(runtime, {
     }
   };
 
-  let webSearch = allowWebSearchDirective
+  let webSearch = allowWebSearchToolCall
     ? runtime.buildWebSearchContext(settings, incomingTranscript)
     : {
         requested: false,
@@ -429,30 +408,24 @@ export async function generateVoiceTurnReply(runtime, {
     buildSystemPrompt(settings),
     "You are speaking in live Discord voice chat.",
     ...voiceToneGuardrails,
-    "Output plain spoken text only.",
-    directivesLine,
-    soundboardDirectiveLine,
+    "Return strict JSON only matching the provided schema.",
     effectiveJoinWindowActive
       ? "Join window active: you just joined VC. If this turn sounds like a greeting/check-in, prefer a short acknowledgement over [SKIP] unless clearly aimed at another human."
       : null,
     isEagerTurn
-      ? allowedDirectives.length
-        ? "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text and only optional directives from the allowed list."
-        : "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text only, no directives or markdown."
-      : allowedDirectives.length
-        ? "Do not output markdown or [SKIP]. Optional directives are allowed only as listed."
-        : "Do not output directives like [[...]], [SKIP], or markdown.",
-    "Goodbyes do not force exit. You can say goodbye and stay in VC; append [[LEAVE_VC]] only when you choose to end your own session now.",
-    allowSoundboardDirective ? "Never mention the soundboard control directive in normal speech." : null
+      ? "If responding would be an interruption or you have nothing to add, set skip=true and text to [SKIP]. Otherwise set skip=false and use natural spoken text."
+      : "Do not skip this turn. Set skip=false and provide a spoken response.",
+    "Goodbyes do not force exit. You can say goodbye and stay in VC; set leaveVoiceChannel=true only when you intentionally choose to end your own VC session now.",
+    allowSoundboardToolCall ? "Never mention soundboard control refs in normal speech." : null
   ]
     .filter(Boolean)
     .join("\n");
   const buildVoiceUserPrompt = ({
     webSearchContext = webSearch,
-    allowWebSearch = allowWebSearchDirective,
+    allowWebSearch = allowWebSearchToolCall,
     openArticleCandidatesContext = openArticleCandidates,
     openedArticleContext = openedArticle,
-    allowOpenArticle = allowOpenArticleDirective
+    allowOpenArticle = allowOpenArticleToolCall
   } = {}) =>
     buildVoiceTurnPrompt({
       speakerName,
@@ -469,15 +442,16 @@ export async function generateVoiceTurnReply(runtime, {
       participantRoster: normalizedParticipantRoster,
       recentMembershipEvents: normalizedMembershipEvents,
       soundboardCandidates: normalizedSoundboardCandidates,
-      memoryEnabled: Boolean(settings.memory?.enabled),
       webSearch: webSearchContext,
       recentWebLookups,
       openArticleCandidates: openArticleCandidatesContext,
       openedArticle: openedArticleContext,
-      allowWebSearchDirective: allowWebSearch,
-      allowOpenArticleDirective: allowOpenArticle,
+      allowWebSearchToolCall: allowWebSearch,
+      allowOpenArticleToolCall: allowOpenArticle,
       screenShare,
-      allowScreenShareDirective
+      allowScreenShareToolCall,
+      allowMemoryToolCalls,
+      allowSoundboardToolCall
     });
 
   try {
@@ -486,6 +460,7 @@ export async function generateVoiceTurnReply(runtime, {
       systemPrompt,
       userPrompt: buildVoiceUserPrompt(),
       contextMessages: normalizedContextMessages,
+      jsonSchema: REPLY_OUTPUT_JSON_SCHEMA,
       trace: {
         guildId,
         channelId,
@@ -495,9 +470,9 @@ export async function generateVoiceTurnReply(runtime, {
       }
     });
 
-    let parsed = parseReplyDirectives(generation.text, resolveMaxMediaPromptLen(settings));
+    let parsed = parseStructuredReplyOutput(generation.text);
     if (
-      allowWebSearchDirective &&
+      allowWebSearchToolCall &&
       webSearchAvailableNow &&
       parsed.webSearchQuery &&
       typeof runtime.runModelRequestedWebSearch === "function"
@@ -577,6 +552,7 @@ export async function generateVoiceTurnReply(runtime, {
           openArticleCandidatesContext: openArticleCandidates
         }),
         contextMessages: normalizedContextMessages,
+        jsonSchema: REPLY_OUTPUT_JSON_SCHEMA,
         trace: {
           guildId,
           channelId,
@@ -585,7 +561,7 @@ export async function generateVoiceTurnReply(runtime, {
           event: sessionId ? "voice_session_lookup_followup" : "voice_turn_lookup_followup"
         }
       });
-      parsed = parseReplyDirectives(generation.text, resolveMaxMediaPromptLen(settings));
+      parsed = parseStructuredReplyOutput(generation.text);
     }
 
     openArticleCandidates = buildOpenArticleCandidates({
@@ -593,7 +569,7 @@ export async function generateVoiceTurnReply(runtime, {
       recentWebLookups
     });
 
-    if (allowOpenArticleDirective && parsed.openArticleRef) {
+    if (allowOpenArticleToolCall && parsed.openArticleRef) {
       usedOpenArticleFollowup = true;
       const requestedRef = normalizeOpenArticleRef(parsed.openArticleRef);
       const resolvedOpenArticle = resolveOpenArticleCandidate({
@@ -650,6 +626,7 @@ export async function generateVoiceTurnReply(runtime, {
           allowOpenArticle: false
         }),
         contextMessages: normalizedContextMessages,
+        jsonSchema: REPLY_OUTPUT_JSON_SCHEMA,
         trace: {
           guildId,
           channelId,
@@ -658,11 +635,15 @@ export async function generateVoiceTurnReply(runtime, {
           event: sessionId ? "voice_session_open_article_followup" : "voice_turn_open_article_followup"
         }
       });
-      parsed = parseReplyDirectives(generation.text, resolveMaxMediaPromptLen(settings));
+      parsed = parseStructuredReplyOutput(generation.text);
     }
 
     let usedScreenShareOffer = false;
-    if (allowScreenShareDirective && parsed.screenShareLinkRequested && typeof runtime.offerVoiceScreenShareLink === "function") {
+    if (
+      allowScreenShareToolCall &&
+      parsed.screenShareIntent?.action === "offer_link" &&
+      typeof runtime.offerVoiceScreenShareLink === "function"
+    ) {
       try {
         const offered = await runtime.offerVoiceScreenShareLink({
           settings,
@@ -670,7 +651,7 @@ export async function generateVoiceTurnReply(runtime, {
           channelId,
           requesterUserId: String(userId),
           transcript: incomingTranscript,
-          source: sessionId ? "voice_session_directive" : "voice_turn_directive"
+          source: sessionId ? "voice_session_tool_call" : "voice_turn_tool_call"
         });
         usedScreenShareOffer = Boolean(offered?.offered);
       } catch (error) {
@@ -687,7 +668,7 @@ export async function generateVoiceTurnReply(runtime, {
       }
     }
 
-    const soundboardRefs = allowSoundboardDirective
+    const soundboardRefs = allowSoundboardToolCall
       ? (Array.isArray(parsed.soundboardRefs) ? parsed.soundboardRefs : [])
           .map((entry) =>
             String(entry || "")
@@ -697,14 +678,8 @@ export async function generateVoiceTurnReply(runtime, {
           .filter(Boolean)
           .slice(0, MAX_VOICE_SOUNDBOARD_REFS)
       : [];
-    const leaveVoiceChannelRequested = Boolean(parsed.leaveVoiceChannelRequested);
-    const soundboardSafeText = allowSoundboardDirective
-      ? String(parsed.text || generation.text || "")
-      : String(parsed.text || generation.text || "")
-          .replace(INLINE_SOUNDBOARD_DIRECTIVE_RE, " ")
-          .replace(/\s+/g, " ")
-          .trim();
-    INLINE_SOUNDBOARD_DIRECTIVE_RE.lastIndex = 0;
+    const leaveVoiceChannelRequested = Boolean(parsed.leaveVoiceChannel);
+    const soundboardSafeText = String(parsed.text || generation.text || "");
     const baseText = sanitizeBotText(normalizeSkipSentinel(soundboardSafeText), 520);
     const finalText = sanitizeSoundboardSpeechLeak({
       text: baseText,

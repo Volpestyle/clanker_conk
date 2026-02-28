@@ -30,7 +30,40 @@ test("smoke: voice generation runtime wires screen-share capability hooks", asyn
         async generate(payload) {
           generationPayloads.push(payload);
           return {
-            text: "bet send it [[SCREEN_SHARE_LINK]]"
+            text: JSON.stringify({
+              text: "bet send it",
+              skip: false,
+              reactionEmoji: null,
+              media: null,
+              webSearchQuery: null,
+              memoryLookupQuery: null,
+              imageLookupQuery: null,
+              openArticleRef: null,
+              memoryLine: null,
+              selfMemoryLine: null,
+              soundboardRefs: [],
+              leaveVoiceChannel: false,
+              automationAction: {
+                operation: "none",
+                title: null,
+                instruction: null,
+                schedule: null,
+                targetQuery: null,
+                automationId: null,
+                runImmediately: false,
+                targetChannelId: null
+              },
+              voiceIntent: {
+                intent: "none",
+                confidence: 0,
+                reason: null
+              },
+              screenShareIntent: {
+                action: "offer_link",
+                confidence: 0.95,
+                reason: "speaker asked to share screen"
+              }
+            })
           };
         }
       },

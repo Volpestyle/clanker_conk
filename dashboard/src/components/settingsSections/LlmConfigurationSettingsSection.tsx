@@ -102,6 +102,90 @@ export function LlmConfigurationSettingsSection({
           </select>
         </div>
       </div>
+      <div className="split">
+        <div>
+          <label htmlFor="reply-followup-max-tool-steps">Max loop steps</label>
+          <input
+            id="reply-followup-max-tool-steps"
+            type="number"
+            min="0"
+            max="6"
+            step="1"
+            value={form.replyFollowupMaxToolSteps}
+            onChange={set("replyFollowupMaxToolSteps")}
+            disabled={!form.replyFollowupLlmEnabled}
+          />
+        </div>
+        <div>
+          <label htmlFor="reply-followup-max-total-tool-calls">Max total tool calls</label>
+          <input
+            id="reply-followup-max-total-tool-calls"
+            type="number"
+            min="0"
+            max="12"
+            step="1"
+            value={form.replyFollowupMaxTotalToolCalls}
+            onChange={set("replyFollowupMaxTotalToolCalls")}
+            disabled={!form.replyFollowupLlmEnabled}
+          />
+        </div>
+      </div>
+      <div className="split">
+        <div>
+          <label htmlFor="reply-followup-max-web-search-calls">Max web-search calls</label>
+          <input
+            id="reply-followup-max-web-search-calls"
+            type="number"
+            min="0"
+            max="6"
+            step="1"
+            value={form.replyFollowupMaxWebSearchCalls}
+            onChange={set("replyFollowupMaxWebSearchCalls")}
+            disabled={!form.replyFollowupLlmEnabled}
+          />
+        </div>
+        <div>
+          <label htmlFor="reply-followup-max-memory-lookup-calls">Max memory-lookup calls</label>
+          <input
+            id="reply-followup-max-memory-lookup-calls"
+            type="number"
+            min="0"
+            max="6"
+            step="1"
+            value={form.replyFollowupMaxMemoryLookupCalls}
+            onChange={set("replyFollowupMaxMemoryLookupCalls")}
+            disabled={!form.replyFollowupLlmEnabled}
+          />
+        </div>
+      </div>
+      <div className="split">
+        <div>
+          <label htmlFor="reply-followup-max-image-lookup-calls">Max image-lookup calls</label>
+          <input
+            id="reply-followup-max-image-lookup-calls"
+            type="number"
+            min="0"
+            max="6"
+            step="1"
+            value={form.replyFollowupMaxImageLookupCalls}
+            onChange={set("replyFollowupMaxImageLookupCalls")}
+            disabled={!form.replyFollowupLlmEnabled}
+          />
+        </div>
+        <div>
+          <label htmlFor="reply-followup-tool-timeout-ms">Tool timeout (ms)</label>
+          <input
+            id="reply-followup-tool-timeout-ms"
+            type="number"
+            min="0"
+            max="60000"
+            step="100"
+            value={form.replyFollowupToolTimeoutMs}
+            onChange={set("replyFollowupToolTimeoutMs")}
+            disabled={!form.replyFollowupLlmEnabled}
+          />
+        </div>
+      </div>
 
       <h4>Memory Extraction LLM</h4>
       <p>Used for durable fact extraction (`memory_extract_call`).</p>

@@ -1,4 +1,5 @@
 import {
+  MAX_IMAGE_LOOKUP_QUERY_LEN,
   MAX_MEMORY_LOOKUP_QUERY_LEN,
   MAX_WEB_QUERY_LEN,
   normalizeDirectiveText,
@@ -59,12 +60,109 @@ type ReplyGenerationShape = {
 };
 
 type ReplyFollowupPromptPayload = {
+  webSearch: WebSearchState | null;
   memoryLookup: MemoryLookupState;
   imageLookup: ImageLookupState | null;
   imageInputs: Array<Record<string, unknown>>;
+  allowWebSearchDirective: boolean;
   allowMemoryLookupDirective: boolean;
   allowImageLookupDirective: boolean;
 };
+
+type ReplyFollowupLoopLimits = {
+  maxSteps: number;
+  maxTotalToolCalls: number;
+  maxWebSearchCalls: number;
+  maxMemoryLookupCalls: number;
+  maxImageLookupCalls: number;
+  toolTimeoutMs: number;
+};
+
+const DEFAULT_FOLLOWUP_MAX_STEPS = 2;
+const DEFAULT_FOLLOWUP_MAX_TOTAL_TOOL_CALLS = 3;
+const DEFAULT_FOLLOWUP_MAX_WEB_SEARCH_CALLS = 2;
+const DEFAULT_FOLLOWUP_MAX_MEMORY_LOOKUP_CALLS = 2;
+const DEFAULT_FOLLOWUP_MAX_IMAGE_LOOKUP_CALLS = 2;
+const DEFAULT_FOLLOWUP_TOOL_TIMEOUT_MS = 10_000;
+
+function clampFollowupInt(value: unknown, fallback: number, min: number, max: number) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return fallback;
+  return Math.max(min, Math.min(max, Math.floor(num)));
+}
+
+function resolveReplyFollowupLoopLimits(settings, loopConfig = null): ReplyFollowupLoopLimits {
+  const followupConfig = settings?.replyFollowupLlm || {};
+  const overrides = loopConfig && typeof loopConfig === "object" ? loopConfig : {};
+  return {
+    maxSteps: clampFollowupInt(
+      overrides.maxSteps ?? followupConfig.maxToolSteps,
+      DEFAULT_FOLLOWUP_MAX_STEPS,
+      0,
+      6
+    ),
+    maxTotalToolCalls: clampFollowupInt(
+      overrides.maxTotalToolCalls ?? followupConfig.maxTotalToolCalls,
+      DEFAULT_FOLLOWUP_MAX_TOTAL_TOOL_CALLS,
+      0,
+      12
+    ),
+    maxWebSearchCalls: clampFollowupInt(
+      overrides.maxWebSearchCalls ?? followupConfig.maxWebSearchCalls,
+      DEFAULT_FOLLOWUP_MAX_WEB_SEARCH_CALLS,
+      0,
+      6
+    ),
+    maxMemoryLookupCalls: clampFollowupInt(
+      overrides.maxMemoryLookupCalls ?? followupConfig.maxMemoryLookupCalls,
+      DEFAULT_FOLLOWUP_MAX_MEMORY_LOOKUP_CALLS,
+      0,
+      6
+    ),
+    maxImageLookupCalls: clampFollowupInt(
+      overrides.maxImageLookupCalls ?? followupConfig.maxImageLookupCalls,
+      DEFAULT_FOLLOWUP_MAX_IMAGE_LOOKUP_CALLS,
+      0,
+      6
+    ),
+    toolTimeoutMs: clampFollowupInt(
+      overrides.toolTimeoutMs ?? followupConfig.toolTimeoutMs,
+      DEFAULT_FOLLOWUP_TOOL_TIMEOUT_MS,
+      0,
+      60_000
+    )
+  };
+}
+
+function normalizeLookupQuery(text, maxLen) {
+  return normalizeDirectiveText(text, maxLen);
+}
+
+function buildSuppressedLookupState<T extends Record<string, unknown>>(
+  baseState: T,
+  query: string,
+  reason: string
+): T {
+  return {
+    ...baseState,
+    requested: true,
+    query,
+    used: false,
+    error: reason
+  } as T;
+}
+
+async function runWithOptionalTimeout<T>(task: () => Promise<T>, timeoutMs = 0, onTimeout: () => T): Promise<T> {
+  const boundedTimeoutMs = Math.max(0, Math.floor(Number(timeoutMs) || 0));
+  if (!boundedTimeoutMs) return await task();
+
+  const timeoutPromise = new Promise<T>((resolve) => {
+    setTimeout(() => {
+      resolve(onTimeout());
+    }, Math.max(50, boundedTimeoutMs));
+  });
+  return await Promise.race([task(), timeoutPromise]);
+}
 
 export function resolveReplyFollowupGenerationSettings(settings) {
   const followupConfig = settings?.replyFollowupLlm || {};
@@ -283,6 +381,7 @@ async function runModelRequestedMemoryLookup<T extends MemoryLookupState>(runtim
 export async function maybeRegenerateWithMemoryLookup<
   TGeneration extends ReplyGenerationShape,
   TDirective extends ReplyDirectiveShape,
+  TWebSearch extends WebSearchState | null,
   TMemoryLookup extends MemoryLookupState,
   TImageLookup extends ImageLookupState | null
 >(runtime, {
@@ -291,6 +390,7 @@ export async function maybeRegenerateWithMemoryLookup<
   systemPrompt,
   generation,
   directive,
+  webSearch = null,
   memoryLookup,
   imageLookup = null,
   guildId,
@@ -300,16 +400,19 @@ export async function maybeRegenerateWithMemoryLookup<
   imageInputs = null,
   forceRegenerate = false,
   buildUserPrompt,
+  runModelRequestedWebSearch,
   runModelRequestedImageLookup,
   mergeImageInputs,
   maxModelImageInputs,
-  jsonSchema = ""
+  jsonSchema = "",
+  loopConfig = null
 }: {
   settings: Record<string, unknown>;
   followupSettings?: Record<string, unknown> | null;
   systemPrompt: string;
   generation: TGeneration;
   directive: TDirective;
+  webSearch?: TWebSearch;
   memoryLookup: TMemoryLookup;
   imageLookup?: TImageLookup;
   guildId: string;
@@ -319,9 +422,15 @@ export async function maybeRegenerateWithMemoryLookup<
   imageInputs?: Array<Record<string, unknown>> | null;
   forceRegenerate?: boolean;
   buildUserPrompt: (payload: ReplyFollowupPromptPayload) => string;
+  runModelRequestedWebSearch?: (payload: {
+    webSearch: TWebSearch;
+    query: string;
+    step: number;
+  }) => Promise<TWebSearch>;
   runModelRequestedImageLookup?: (payload: {
     imageLookup: TImageLookup;
     query: string;
+    step: number;
   }) => Promise<TImageLookup>;
   mergeImageInputs?: (payload: {
     baseInputs: Array<Record<string, unknown>>;
@@ -330,66 +439,223 @@ export async function maybeRegenerateWithMemoryLookup<
   }) => Array<Record<string, unknown>>;
   maxModelImageInputs: number;
   jsonSchema?: string;
+  loopConfig?: {
+    maxSteps?: number;
+    maxTotalToolCalls?: number;
+    maxWebSearchCalls?: number;
+    maxMemoryLookupCalls?: number;
+    maxImageLookupCalls?: number;
+    toolTimeoutMs?: number | null;
+  } | null;
 }) {
+  const limits = resolveReplyFollowupLoopLimits(settings, loopConfig);
+  let nextWebSearch = webSearch;
   let nextMemoryLookup = memoryLookup;
   let nextImageLookup = imageLookup;
   let nextGeneration = generation;
   let nextDirective = directive;
+  let usedWebSearch = false;
   let usedMemoryLookup = false;
   let usedImageLookup = false;
   let nextImageInputs = Array.isArray(imageInputs) ? [...imageInputs] : [];
-  let shouldRegenerate = Boolean(forceRegenerate);
+  const seenWebQueries = new Set<string>();
+  const seenMemoryQueries = new Set<string>();
+  const seenImageQueries = new Set<string>();
+  let followupRegenerations = 0;
+  let webSearchCalls = 0;
+  let memoryLookupCalls = 0;
+  let imageLookupCalls = 0;
+  let totalToolCalls = 0;
+  let forceNextRegenerate = Boolean(forceRegenerate);
+  const normalizedJsonSchema = String(jsonSchema || "").trim();
 
-  if (directive?.memoryLookupQuery) {
-    usedMemoryLookup = true;
-    shouldRegenerate = true;
-    nextMemoryLookup = await runModelRequestedMemoryLookup(runtime, {
-      settings,
-      memoryLookup: nextMemoryLookup,
-      query: String(directive.memoryLookupQuery || ""),
-      guildId,
-      channelId,
-      trace
-    }) as TMemoryLookup;
-  }
+  while (followupRegenerations < limits.maxSteps && typeof buildUserPrompt === "function") {
+    const requestedWebQuery = normalizeLookupQuery(nextDirective?.webSearchQuery, MAX_WEB_QUERY_LEN);
+    const requestedMemoryQuery = normalizeLookupQuery(nextDirective?.memoryLookupQuery, MAX_MEMORY_LOOKUP_QUERY_LEN);
+    const requestedImageQuery = normalizeLookupQuery(nextDirective?.imageLookupQuery, MAX_IMAGE_LOOKUP_QUERY_LEN);
+    let shouldRegenerate = forceNextRegenerate;
+    const toolTasks: Array<Promise<void>> = [];
 
-  if (
-    directive?.imageLookupQuery &&
-    nextImageLookup &&
-    typeof runModelRequestedImageLookup === "function"
-  ) {
-    usedImageLookup = true;
-    shouldRegenerate = true;
-    nextImageLookup = await runModelRequestedImageLookup({
-      imageLookup: nextImageLookup,
-      query: String(directive.imageLookupQuery || "")
-    }) as TImageLookup;
-    if (
-      Array.isArray(nextImageLookup?.selectedImageInputs) &&
-      nextImageLookup.selectedImageInputs.length &&
-      typeof mergeImageInputs === "function"
-    ) {
-      nextImageInputs = mergeImageInputs({
-        baseInputs: nextImageInputs,
-        extraInputs: nextImageLookup.selectedImageInputs,
-        maxInputs: maxModelImageInputs
-      });
+    if (requestedWebQuery && nextWebSearch && typeof runModelRequestedWebSearch === "function") {
+      const canRun =
+        webSearchCalls < limits.maxWebSearchCalls &&
+        totalToolCalls < limits.maxTotalToolCalls &&
+        !seenWebQueries.has(requestedWebQuery);
+      if (canRun) {
+        const currentStep = followupRegenerations + 1;
+        toolTasks.push(
+          (async () => {
+            const nextState = await runWithOptionalTimeout(
+              async () =>
+                await runModelRequestedWebSearch({
+                  webSearch: nextWebSearch,
+                  query: requestedWebQuery,
+                  step: currentStep
+                }),
+              limits.toolTimeoutMs,
+              () =>
+                buildSuppressedLookupState(
+                  nextWebSearch as Record<string, unknown>,
+                  requestedWebQuery,
+                  `web lookup timed out after ${Math.max(50, limits.toolTimeoutMs)}ms`
+                ) as TWebSearch
+            );
+            nextWebSearch = nextState;
+            usedWebSearch = true;
+          })()
+        );
+        seenWebQueries.add(requestedWebQuery);
+        webSearchCalls += 1;
+        totalToolCalls += 1;
+        shouldRegenerate = true;
+      } else {
+        nextWebSearch = buildSuppressedLookupState(
+          nextWebSearch as Record<string, unknown>,
+          requestedWebQuery,
+          seenWebQueries.has(requestedWebQuery)
+            ? "Duplicate web lookup query suppressed in this turn."
+            : "Web lookup cap reached for this turn."
+        ) as TWebSearch;
+        shouldRegenerate = true;
+      }
     }
-  }
 
-  if (shouldRegenerate && typeof buildUserPrompt === "function") {
+    if (requestedMemoryQuery) {
+      const canRun =
+        memoryLookupCalls < limits.maxMemoryLookupCalls &&
+        totalToolCalls < limits.maxTotalToolCalls &&
+        !seenMemoryQueries.has(requestedMemoryQuery);
+      if (canRun) {
+        toolTasks.push(
+          (async () => {
+            const nextState = await runWithOptionalTimeout(
+              async () =>
+                await runModelRequestedMemoryLookup(runtime, {
+                  settings,
+                  memoryLookup: nextMemoryLookup,
+                  query: requestedMemoryQuery,
+                  guildId,
+                  channelId,
+                  trace
+                }),
+              limits.toolTimeoutMs,
+              () =>
+                buildSuppressedLookupState(
+                  nextMemoryLookup as Record<string, unknown>,
+                  requestedMemoryQuery,
+                  `memory lookup timed out after ${Math.max(50, limits.toolTimeoutMs)}ms`
+                ) as TMemoryLookup
+            );
+            nextMemoryLookup = nextState as TMemoryLookup;
+            usedMemoryLookup = true;
+          })()
+        );
+        seenMemoryQueries.add(requestedMemoryQuery);
+        memoryLookupCalls += 1;
+        totalToolCalls += 1;
+        shouldRegenerate = true;
+      } else {
+        nextMemoryLookup = buildSuppressedLookupState(
+          nextMemoryLookup as Record<string, unknown>,
+          requestedMemoryQuery,
+          seenMemoryQueries.has(requestedMemoryQuery)
+            ? "Duplicate memory lookup query suppressed in this turn."
+            : "Memory lookup cap reached for this turn."
+        ) as TMemoryLookup;
+        shouldRegenerate = true;
+      }
+    }
+
+    if (
+      requestedImageQuery &&
+      nextImageLookup &&
+      typeof runModelRequestedImageLookup === "function"
+    ) {
+      const canRun =
+        imageLookupCalls < limits.maxImageLookupCalls &&
+        totalToolCalls < limits.maxTotalToolCalls &&
+        !seenImageQueries.has(requestedImageQuery);
+      if (canRun) {
+        const currentStep = followupRegenerations + 1;
+        toolTasks.push(
+          (async () => {
+            const nextState = await runWithOptionalTimeout(
+              async () =>
+                await runModelRequestedImageLookup({
+                  imageLookup: nextImageLookup,
+                  query: requestedImageQuery,
+                  step: currentStep
+                }),
+              limits.toolTimeoutMs,
+              () =>
+                buildSuppressedLookupState(
+                  nextImageLookup as Record<string, unknown>,
+                  requestedImageQuery,
+                  `image lookup timed out after ${Math.max(50, limits.toolTimeoutMs)}ms`
+                ) as TImageLookup
+            );
+            nextImageLookup = nextState as TImageLookup;
+            usedImageLookup = true;
+            if (
+              Array.isArray(nextImageLookup?.selectedImageInputs) &&
+              nextImageLookup.selectedImageInputs.length &&
+              typeof mergeImageInputs === "function"
+            ) {
+              nextImageInputs = mergeImageInputs({
+                baseInputs: nextImageInputs,
+                extraInputs: nextImageLookup.selectedImageInputs,
+                maxInputs: maxModelImageInputs
+              });
+            }
+          })()
+        );
+        seenImageQueries.add(requestedImageQuery);
+        imageLookupCalls += 1;
+        totalToolCalls += 1;
+        shouldRegenerate = true;
+      } else {
+        nextImageLookup = buildSuppressedLookupState(
+          nextImageLookup as Record<string, unknown>,
+          requestedImageQuery,
+          seenImageQueries.has(requestedImageQuery)
+            ? "Duplicate image lookup query suppressed in this turn."
+            : "Image lookup cap reached for this turn."
+        ) as TImageLookup;
+        shouldRegenerate = true;
+      }
+    }
+
+    if (toolTasks.length) {
+      await Promise.all(toolTasks);
+    }
+    if (!shouldRegenerate) break;
+
+    const allowWebSearchDirective =
+      Boolean(nextWebSearch && typeof runModelRequestedWebSearch === "function") &&
+      webSearchCalls < limits.maxWebSearchCalls &&
+      totalToolCalls < limits.maxTotalToolCalls;
+    const allowMemoryLookupDirective =
+      memoryLookupCalls < limits.maxMemoryLookupCalls &&
+      totalToolCalls < limits.maxTotalToolCalls;
+    const allowImageLookupDirective =
+      Boolean(nextImageLookup && typeof runModelRequestedImageLookup === "function") &&
+      imageLookupCalls < limits.maxImageLookupCalls &&
+      totalToolCalls < limits.maxTotalToolCalls;
+
     const followupPrompt = buildUserPrompt({
+      webSearch: nextWebSearch,
       memoryLookup: nextMemoryLookup,
       imageLookup: nextImageLookup,
       imageInputs: nextImageInputs,
-      allowMemoryLookupDirective: false,
-      allowImageLookupDirective: false
+      allowWebSearchDirective,
+      allowMemoryLookupDirective,
+      allowImageLookupDirective
     });
     const followupTrace = {
       ...trace,
       event: String(trace?.event || "llm_followup")
         .trim()
-        .concat(":lookup_followup")
+        .concat(`:lookup_followup:${followupRegenerations + 1}`)
     };
     const generationPayload: {
       settings: Record<string, unknown>;
@@ -407,7 +673,6 @@ export async function maybeRegenerateWithMemoryLookup<
     if (nextImageInputs.length) {
       generationPayload.imageInputs = nextImageInputs;
     }
-    const normalizedJsonSchema = String(jsonSchema || "").trim();
     if (normalizedJsonSchema) {
       generationPayload.jsonSchema = normalizedJsonSchema;
     }
@@ -416,14 +681,20 @@ export async function maybeRegenerateWithMemoryLookup<
       String(nextGeneration.text || ""),
       mediaPromptLimit
     ) as TDirective;
+    followupRegenerations += 1;
+    forceNextRegenerate = false;
   }
 
   return {
     generation: nextGeneration,
     directive: nextDirective,
+    webSearch: nextWebSearch,
     memoryLookup: nextMemoryLookup,
     imageLookup: nextImageLookup,
     imageInputs: nextImageInputs,
+    regenerated: followupRegenerations > 0,
+    followupSteps: followupRegenerations,
+    usedWebSearch,
     usedMemoryLookup,
     usedImageLookup
   };

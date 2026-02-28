@@ -34,6 +34,12 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.model, "claude-haiku-4-5");
   assert.equal(form.voiceGenerationLlmProvider, "anthropic");
   assert.equal(form.voiceGenerationLlmModel, "claude-haiku-4-5");
+  assert.equal(form.replyFollowupMaxToolSteps, 2);
+  assert.equal(form.replyFollowupMaxTotalToolCalls, 3);
+  assert.equal(form.replyFollowupMaxWebSearchCalls, 2);
+  assert.equal(form.replyFollowupMaxMemoryLookupCalls, 2);
+  assert.equal(form.replyFollowupMaxImageLookupCalls, 2);
+  assert.equal(form.replyFollowupToolTimeoutMs, 10000);
   assert.equal(form.voiceThoughtEngineEnabled, true);
   assert.equal(form.voiceThoughtEngineProvider, "anthropic");
   assert.equal(form.voiceThoughtEngineModel, "claude-haiku-4-5");
@@ -47,6 +53,12 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.allowedChannels = "2\n2\n3\n";
   form.initiativeDiscoveryRssFeeds = "https://one.example/feed\nhttps://one.example/feed\n";
   form.initiativeDiscoveryXHandles = "@alice\n@alice\nbob\n";
+  form.replyFollowupMaxToolSteps = 5;
+  form.replyFollowupMaxTotalToolCalls = 11;
+  form.replyFollowupMaxWebSearchCalls = 4;
+  form.replyFollowupMaxMemoryLookupCalls = 3;
+  form.replyFollowupMaxImageLookupCalls = 1;
+  form.replyFollowupToolTimeoutMs = 16000;
 
   const patch = formToSettingsPatch(form);
   assert.deepEqual(patch.persona.hardLimits, ["no hate", "keep it fun"]);
@@ -54,6 +66,12 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.deepEqual(patch.initiative.discovery.rssFeeds, ["https://one.example/feed"]);
   assert.deepEqual(patch.initiative.discovery.xHandles, ["@alice", "bob"]);
   assert.equal(patch.voice.realtimeReplyStrategy, "brain");
+  assert.equal(patch.replyFollowupLlm.maxToolSteps, 5);
+  assert.equal(patch.replyFollowupLlm.maxTotalToolCalls, 11);
+  assert.equal(patch.replyFollowupLlm.maxWebSearchCalls, 4);
+  assert.equal(patch.replyFollowupLlm.maxMemoryLookupCalls, 3);
+  assert.equal(patch.replyFollowupLlm.maxImageLookupCalls, 1);
+  assert.equal(patch.replyFollowupLlm.toolTimeoutMs, 16000);
   assert.equal(patch.voice.thoughtEngine.enabled, true);
   assert.equal(patch.voice.thoughtEngine.provider, "anthropic");
   assert.equal(patch.voice.thoughtEngine.model, "claude-haiku-4-5");

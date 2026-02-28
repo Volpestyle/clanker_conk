@@ -74,7 +74,13 @@ export const DEFAULT_SETTINGS = {
   replyFollowupLlm: {
     enabled: false,
     provider: "anthropic",
-    model: "claude-haiku-4-5"
+    model: "claude-haiku-4-5",
+    maxToolSteps: 2,
+    maxTotalToolCalls: 3,
+    maxWebSearchCalls: 2,
+    maxMemoryLookupCalls: 2,
+    maxImageLookupCalls: 2,
+    toolTimeoutMs: 10_000
   },
   webSearch: {
     enabled: false,

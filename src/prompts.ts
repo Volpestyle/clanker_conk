@@ -744,14 +744,15 @@ export function buildReplyPrompt({
   parts.push("Return strict JSON only. Do not output markdown or code fences.");
   parts.push("JSON format:");
   parts.push(
-    "{\"text\":\"reply or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
+    "{\"text\":\"reply or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"openArticleRef\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"soundboardRefs\":[],\"leaveVoiceChannel\":false,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
   );
   parts.push("Set skip=true only when no response should be sent. If skip=true, set text to [SKIP].");
   parts.push("When no reaction is needed, set reactionEmoji to null.");
   parts.push("When no media should be generated, set media to null.");
-  parts.push("When no lookup is needed, set webSearchQuery, memoryLookupQuery, and imageLookupQuery to null.");
+  parts.push("When no lookup is needed, set webSearchQuery, memoryLookupQuery, imageLookupQuery, and openArticleRef to null.");
   parts.push("When no durable fact should be saved, set memoryLine to null.");
   parts.push("When no durable self fact should be saved, set selfMemoryLine to null.");
+  parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false for text-channel replies.");
   parts.push("When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.");
   parts.push("Set voiceIntent.intent to one of join|leave|status|watch_stream|stop_watching_stream|stream_status|none.");
   parts.push("When not issuing voice control, set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null.");
@@ -847,9 +848,10 @@ export function buildAutomationPrompt({
   parts.push("Return strict JSON only.");
   parts.push("JSON format:");
   parts.push(
-    "{\"text\":\"message or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
+    "{\"text\":\"message or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"openArticleRef\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"soundboardRefs\":[],\"leaveVoiceChannel\":false,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
   );
-  parts.push("Set webSearchQuery, imageLookupQuery, memoryLine, and selfMemoryLine to null.");
+  parts.push("Set webSearchQuery, imageLookupQuery, openArticleRef, memoryLine, and selfMemoryLine to null.");
+  parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false.");
   if (allowMemoryLookupDirective) {
     if (!memoryLookup?.enabled) {
       parts.push("Durable memory lookup is unavailable for this run. Set memoryLookupQuery to null.");
@@ -884,15 +886,16 @@ export function buildVoiceTurnPrompt({
   participantRoster = [],
   recentMembershipEvents = [],
   soundboardCandidates = [],
-  memoryEnabled = false,
   webSearch = null,
   recentWebLookups = [],
   openArticleCandidates = [],
   openedArticle = null,
-  allowWebSearchDirective = false,
-  allowOpenArticleDirective = false,
+  allowWebSearchToolCall = false,
+  allowOpenArticleToolCall = false,
   screenShare = null,
-  allowScreenShareDirective = false
+  allowScreenShareToolCall = false,
+  allowMemoryToolCalls = false,
+  allowSoundboardToolCall = false
 }) {
   const parts = [];
   const voiceToneGuardrails = buildVoiceToneGuardrails();
@@ -1048,7 +1051,7 @@ export function buildVoiceTurnPrompt({
     );
     if (normalizedSessionTiming.timeoutWarningActive) {
       parts.push(
-        "If this feels naturally wrapped up, you may append [[LEAVE_VC]] to end your VC session after this turn."
+        "If this feels naturally wrapped up, you may set leaveVoiceChannel=true to end your VC session after this turn."
       );
     }
   }
@@ -1063,20 +1066,22 @@ export function buildVoiceTurnPrompt({
     parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: false, maxItems: 8 }));
   }
 
-  if (memoryEnabled) {
-    parts.push("Optional memory directives:");
-    parts.push("- [[MEMORY_LINE:<durable fact from the speaker turn>]]");
-    parts.push("- [[SELF_MEMORY_LINE:<durable fact about your own stable identity/preference/commitment in your reply>]]");
-    parts.push("Use these only when genuinely durable and grounded. Omit when not needed.");
+  if (allowMemoryToolCalls) {
+    parts.push("Optional memory tool calls:");
+    parts.push("- Set memoryLine to a durable fact from the speaker turn when genuinely stable and useful.");
+    parts.push("- Set selfMemoryLine to a durable fact about your own stable identity/preference/commitment in your reply when genuinely stable and useful.");
+    parts.push("If not needed, set memoryLine and selfMemoryLine to null.");
+  } else {
+    parts.push("Memory tool calls are unavailable this turn. Set memoryLine and selfMemoryLine to null.");
   }
 
-  if (normalizedSoundboardCandidates.length) {
-    parts.push("Optional soundboard refs:");
+  if (allowSoundboardToolCall && normalizedSoundboardCandidates.length) {
+    parts.push("Soundboard tool call is available.");
+    parts.push("Use soundboardRefs as an ordered array of 0-10 refs from this list:");
     parts.push(normalizedSoundboardCandidates.join("\n"));
-    parts.push(
-      "If you want a soundboard effect, append exactly one trailing directive: [[SOUNDBOARD:<sound_ref>]] where <sound_ref> matches the list exactly."
-    );
-    parts.push("If no soundboard effect should play, omit the directive.");
+    parts.push("If no soundboard effect should play, set soundboardRefs to [].");
+  } else {
+    parts.push("Soundboard tool call is unavailable this turn. Set soundboardRefs to [].");
   }
 
   if (recentWebLookups?.length) {
@@ -1086,43 +1091,41 @@ export function buildVoiceTurnPrompt({
     parts.push("Use this only as lightweight context. For fresh facts, request a new web lookup.");
   }
 
-  if (allowOpenArticleDirective) {
+  if (allowOpenArticleToolCall) {
     if (normalizedOpenArticleCandidates.length) {
       parts.push("Opening cached articles is available for this turn.");
-      parts.push(
-        "If the speaker asks to open/read/click a previously found article, append [[OPEN_ARTICLE:<article_ref>]]."
-      );
+      parts.push("If the speaker asks to open/read/click a previously found article, set openArticleRef.");
       parts.push("Valid cached article refs:");
       parts.push(formatOpenArticleCandidates(normalizedOpenArticleCandidates));
-      parts.push("Use one ref exactly as listed (or use [[OPEN_ARTICLE:first]] for the top cached article).");
+      parts.push("Use one ref exactly as listed (or set openArticleRef to first for the top cached article).");
     } else {
       parts.push("No cached article refs are available right now.");
-      parts.push("Do not output [[OPEN_ARTICLE:...]].");
-    }
-  }
-
-  if (allowWebSearchDirective) {
-    if (webSearch?.optedOutByUser) {
-      parts.push("The user asked not to use web search.");
-      parts.push("Do not output [[WEB_SEARCH:...]].");
-    } else if (!webSearch?.enabled) {
-      parts.push("Live web lookup capability exists but is currently unavailable (disabled in settings).");
-      parts.push("Do not output [[WEB_SEARCH:...]].");
-    } else if (!webSearch?.configured) {
-      parts.push("Live web lookup capability exists but is currently unavailable (provider not configured).");
-      parts.push("Do not output [[WEB_SEARCH:...]].");
-    } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
-      parts.push("Live web lookup capability exists but is currently unavailable (budget exhausted).");
-      parts.push("Do not output [[WEB_SEARCH:...]].");
-    } else {
-      parts.push("Live web lookup is available.");
-      parts.push(
-        "If your spoken response needs fresh web info for accuracy, output a trailing directive [[WEB_SEARCH:<concise query>]]."
-      );
-      parts.push("Only use one web-search directive when needed.");
+      parts.push("Set openArticleRef to null.");
     }
   } else {
-    parts.push("Do not output [[WEB_SEARCH:...]].");
+    parts.push("Open-article tool call is unavailable this turn. Set openArticleRef to null.");
+  }
+
+  if (allowWebSearchToolCall) {
+    if (webSearch?.optedOutByUser) {
+      parts.push("The user asked not to use web search.");
+      parts.push("Set webSearchQuery to null.");
+    } else if (!webSearch?.enabled) {
+      parts.push("Live web lookup capability exists but is currently unavailable (disabled in settings).");
+      parts.push("Set webSearchQuery to null.");
+    } else if (!webSearch?.configured) {
+      parts.push("Live web lookup capability exists but is currently unavailable (provider not configured).");
+      parts.push("Set webSearchQuery to null.");
+    } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
+      parts.push("Live web lookup capability exists but is currently unavailable (budget exhausted).");
+      parts.push("Set webSearchQuery to null.");
+    } else {
+      parts.push("Live web lookup is available.");
+      parts.push("If your spoken response needs fresh web info for accuracy, set webSearchQuery to a concise query.");
+      parts.push("Only request one web lookup when needed.");
+    }
+  } else {
+    parts.push("Web-search tool call is unavailable this turn. Set webSearchQuery to null.");
   }
 
   const screenShareStatus = String(screenShare?.status || "disabled").trim().toLowerCase() || "disabled";
@@ -1139,25 +1142,23 @@ export function buildVoiceTurnPrompt({
   const screenShareReason =
     String(screenShare?.reason || "").trim().toLowerCase() || screenShareStatus || "unavailable";
 
-  if (allowScreenShareDirective) {
+  if (allowScreenShareToolCall) {
     parts.push("VC screen-share link offers are available.");
-    parts.push(
-      "If the speaker asks you to see/watch their screen or stream, append a trailing directive [[SCREEN_SHARE_LINK]]."
-    );
-    parts.push("Only use one screen-share directive when it is clearly useful.");
+    parts.push("If the speaker asks you to see/watch their screen or stream, set screenShareIntent.action=offer_link.");
+    parts.push("Only use one screen-share tool call when it is clearly useful.");
   } else if (screenShareSupported && !screenShareAvailable) {
     parts.push(`VC screen-share link capability exists but is currently unavailable (reason: ${screenShareReason}).`);
     parts.push("If asked, acknowledge the capability exists but is unavailable right now.");
-    parts.push("Do not output [[SCREEN_SHARE_LINK]].");
+    parts.push("Set screenShareIntent.action=none.");
   } else {
-    parts.push("Do not output [[SCREEN_SHARE_LINK]].");
+    parts.push("Screen-share tool call is unavailable this turn. Set screenShareIntent.action=none.");
   }
 
   parts.push(
-    "If you intentionally want to leave VC after this turn, append a trailing directive [[LEAVE_VC]]."
+    "If you intentionally want to leave VC after this turn, set leaveVoiceChannel=true."
   );
   parts.push(
-    "Another person's goodbye does not require you to leave. You may say goodbye and stay; append [[LEAVE_VC]] only when you intentionally choose to end your own VC session."
+    "Another person's goodbye does not require you to leave. You may say goodbye and stay; set leaveVoiceChannel=true only when you intentionally choose to end your own VC session."
   );
 
   if (webSearch?.requested && !webSearch?.used) {
@@ -1217,19 +1218,20 @@ export function buildVoiceTurnPrompt({
     parts.push("Only speak up if you can genuinely add value. If not, output exactly [SKIP].");
 
     parts.push(...voiceToneGuardrails);
-    parts.push(
-      "Task: respond as a natural spoken VC reply, or output exactly [SKIP] if you have nothing to add."
-    );
-    parts.push(
-      "If responding, use plain text only. No tags or markdown; only optional trailing directives listed above are allowed."
-    );
+    parts.push("Task: respond as a natural spoken VC reply, or skip if you have nothing to add.");
   } else {
     parts.push(...voiceToneGuardrails);
     parts.push("Task: respond as a natural spoken VC reply.");
-    parts.push(
-      "Use plain text only. Do not output tags, markdown, or [SKIP]. Only optional trailing directives listed above are allowed."
-    );
   }
+
+  parts.push("Return strict JSON only.");
+  parts.push("JSON format:");
+  parts.push(
+    "{\"text\":\"spoken response or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"openArticleRef\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"soundboardRefs\":[],\"leaveVoiceChannel\":false,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
+  );
+  parts.push("Keep reactionEmoji null, media null, memoryLookupQuery null, imageLookupQuery null, and voiceIntent intent none for voice-turn generation.");
+  parts.push("If you are skipping, set skip=true and text to [SKIP]. Otherwise set skip=false and provide natural spoken text.");
+  parts.push("Never output markdown, tags, or directive syntax like [[...]].");
 
   return parts.join("\n\n");
 }

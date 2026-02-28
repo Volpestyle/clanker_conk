@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { parseReplyDirectives, parseStructuredReplyOutput } from "./botHelpers.ts";
+import { parseStructuredReplyOutput } from "./botHelpers.ts";
 
 test("parseStructuredReplyOutput reads structured reply JSON", () => {
   const parsed = parseStructuredReplyOutput(
@@ -200,40 +200,39 @@ test("parseStructuredReplyOutput maps automation stop to pause", () => {
   assert.equal(parsed.automationAction.targetQuery, "giraffe");
 });
 
-test("parseReplyDirectives parses trailing soundboard directive", () => {
-  const parsed = parseReplyDirectives("say less [[SOUNDBOARD:1234567890@555666777]]");
-  assert.equal(parsed.text, "say less");
-  assert.deepEqual(parsed.soundboardRefs, ["1234567890@555666777"]);
-});
-
-test("parseReplyDirectives preserves ordered trailing soundboard directives", () => {
-  const parsed = parseReplyDirectives(
-    "say less [[SOUNDBOARD:1234567890@555666777]] [[SOUNDBOARD:111222333@444555666]]"
+test("parseStructuredReplyOutput parses voice tool-call fields", () => {
+  const parsed = parseStructuredReplyOutput(
+    JSON.stringify({
+      text: "say less",
+      skip: false,
+      reactionEmoji: null,
+      media: null,
+      webSearchQuery: null,
+      memoryLookupQuery: null,
+      imageLookupQuery: null,
+      openArticleRef: "R1:2",
+      memoryLine: "speaker likes concise updates",
+      selfMemoryLine: "i keep replies concise",
+      soundboardRefs: ["1234567890@555666777", "111222333@444555666"],
+      leaveVoiceChannel: true,
+      automationAction: { operation: "none" },
+      voiceIntent: { intent: "none", confidence: 0, reason: null },
+      screenShareIntent: { action: "offer_link", confidence: 0.88, reason: "needs visual context" }
+    })
   );
-  assert.equal(parsed.text, "say less");
-  assert.deepEqual(parsed.soundboardRefs, ["1234567890@555666777", "111222333@444555666"]);
-});
 
-test("parseReplyDirectives parses trailing self memory directive", () => {
-  const parsed = parseReplyDirectives("say less [[SELF_MEMORY_LINE:i stay concise in vc]]");
-  assert.equal(parsed.text, "say less");
-  assert.equal(parsed.selfMemoryLine, "i stay concise in vc");
-});
-
-test("parseReplyDirectives parses trailing screen-share link directive", () => {
-  const parsed = parseReplyDirectives("bet [[SCREEN_SHARE_LINK]]");
-  assert.equal(parsed.text, "bet");
-  assert.equal(parsed.screenShareLinkRequested, true);
-});
-
-test("parseReplyDirectives parses trailing open-article directive", () => {
-  const parsed = parseReplyDirectives("say less [[OPEN_ARTICLE:R1:2]]");
   assert.equal(parsed.text, "say less");
   assert.equal(parsed.openArticleRef, "R1:2");
+  assert.deepEqual(parsed.soundboardRefs, ["1234567890@555666777", "111222333@444555666"]);
+  assert.equal(parsed.leaveVoiceChannel, true);
+  assert.equal(parsed.memoryLine, "speaker likes concise updates");
+  assert.equal(parsed.selfMemoryLine, "i keep replies concise");
+  assert.equal(parsed.screenShareIntent.action, "offer_link");
 });
 
-test("parseReplyDirectives parses trailing leave-vc directive", () => {
-  const parsed = parseReplyDirectives("aight i'm out [[LEAVE_VC]]");
-  assert.equal(parsed.text, "aight i'm out");
-  assert.equal(parsed.leaveVoiceChannelRequested, true);
+test("parseStructuredReplyOutput normalizes missing voice tool-call fields to safe defaults", () => {
+  const parsed = parseStructuredReplyOutput("just plain text");
+  assert.equal(parsed.openArticleRef, null);
+  assert.deepEqual(parsed.soundboardRefs, []);
+  assert.equal(parsed.leaveVoiceChannel, false);
 });

@@ -105,6 +105,17 @@ export function settingsToForm(settings) {
     replyFollowupLlmEnabled: settings?.replyFollowupLlm?.enabled ?? defaultReplyFollowupLlm.enabled,
     replyFollowupLlmProvider: settings?.replyFollowupLlm?.provider ?? settings?.llm?.provider ?? defaultReplyFollowupLlm.provider,
     replyFollowupLlmModel: settings?.replyFollowupLlm?.model ?? settings?.llm?.model ?? defaultReplyFollowupLlm.model,
+    replyFollowupMaxToolSteps: settings?.replyFollowupLlm?.maxToolSteps ?? defaultReplyFollowupLlm.maxToolSteps,
+    replyFollowupMaxTotalToolCalls:
+      settings?.replyFollowupLlm?.maxTotalToolCalls ?? defaultReplyFollowupLlm.maxTotalToolCalls,
+    replyFollowupMaxWebSearchCalls:
+      settings?.replyFollowupLlm?.maxWebSearchCalls ?? defaultReplyFollowupLlm.maxWebSearchCalls,
+    replyFollowupMaxMemoryLookupCalls:
+      settings?.replyFollowupLlm?.maxMemoryLookupCalls ?? defaultReplyFollowupLlm.maxMemoryLookupCalls,
+    replyFollowupMaxImageLookupCalls:
+      settings?.replyFollowupLlm?.maxImageLookupCalls ?? defaultReplyFollowupLlm.maxImageLookupCalls,
+    replyFollowupToolTimeoutMs:
+      settings?.replyFollowupLlm?.toolTimeoutMs ?? defaultReplyFollowupLlm.toolTimeoutMs,
     memoryLlmProvider: settings?.memoryLlm?.provider ?? defaultMemoryLlm.provider,
     memoryLlmModel: settings?.memoryLlm?.model ?? defaultMemoryLlm.model,
     temperature: settings?.llm?.temperature ?? defaultLlm.temperature,
@@ -288,7 +299,13 @@ export function formToSettingsPatch(form) {
     replyFollowupLlm: {
       enabled: Boolean(form.replyFollowupLlmEnabled),
       provider: String(form.replyFollowupLlmProvider || "").trim(),
-      model: String(form.replyFollowupLlmModel || "").trim()
+      model: String(form.replyFollowupLlmModel || "").trim(),
+      maxToolSteps: Number(form.replyFollowupMaxToolSteps),
+      maxTotalToolCalls: Number(form.replyFollowupMaxTotalToolCalls),
+      maxWebSearchCalls: Number(form.replyFollowupMaxWebSearchCalls),
+      maxMemoryLookupCalls: Number(form.replyFollowupMaxMemoryLookupCalls),
+      maxImageLookupCalls: Number(form.replyFollowupMaxImageLookupCalls),
+      toolTimeoutMs: Number(form.replyFollowupToolTimeoutMs)
     },
     memoryLlm: {
       provider: String(form.memoryLlmProvider || "").trim(),

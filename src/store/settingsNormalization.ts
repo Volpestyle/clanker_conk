@@ -168,6 +168,55 @@ export function normalizeSettings(raw) {
   );
   merged.replyFollowupLlm.provider = normalizedReplyFollowupLlm.provider;
   merged.replyFollowupLlm.model = normalizedReplyFollowupLlm.model;
+  const defaultReplyFollowup = DEFAULT_SETTINGS.replyFollowupLlm || {};
+  const maxToolStepsRaw = Number(merged.replyFollowupLlm?.maxToolSteps);
+  const maxTotalToolCallsRaw = Number(merged.replyFollowupLlm?.maxTotalToolCalls);
+  const maxWebSearchCallsRaw = Number(merged.replyFollowupLlm?.maxWebSearchCalls);
+  const maxMemoryLookupCallsRaw = Number(merged.replyFollowupLlm?.maxMemoryLookupCalls);
+  const maxImageLookupCallsRaw = Number(merged.replyFollowupLlm?.maxImageLookupCalls);
+  const toolTimeoutMsRaw = Number(merged.replyFollowupLlm?.toolTimeoutMs);
+  merged.replyFollowupLlm.maxToolSteps = clamp(
+    Number.isFinite(maxToolStepsRaw)
+      ? maxToolStepsRaw
+      : Number(defaultReplyFollowup.maxToolSteps) || 2,
+    0,
+    6
+  );
+  merged.replyFollowupLlm.maxTotalToolCalls = clamp(
+    Number.isFinite(maxTotalToolCallsRaw)
+      ? maxTotalToolCallsRaw
+      : Number(defaultReplyFollowup.maxTotalToolCalls) || 3,
+    0,
+    12
+  );
+  merged.replyFollowupLlm.maxWebSearchCalls = clamp(
+    Number.isFinite(maxWebSearchCallsRaw)
+      ? maxWebSearchCallsRaw
+      : Number(defaultReplyFollowup.maxWebSearchCalls) || 2,
+    0,
+    6
+  );
+  merged.replyFollowupLlm.maxMemoryLookupCalls = clamp(
+    Number.isFinite(maxMemoryLookupCallsRaw)
+      ? maxMemoryLookupCallsRaw
+      : Number(defaultReplyFollowup.maxMemoryLookupCalls) || 2,
+    0,
+    6
+  );
+  merged.replyFollowupLlm.maxImageLookupCalls = clamp(
+    Number.isFinite(maxImageLookupCallsRaw)
+      ? maxImageLookupCallsRaw
+      : Number(defaultReplyFollowup.maxImageLookupCalls) || 2,
+    0,
+    6
+  );
+  merged.replyFollowupLlm.toolTimeoutMs = clamp(
+    Number.isFinite(toolTimeoutMsRaw)
+      ? toolTimeoutMsRaw
+      : Number(defaultReplyFollowup.toolTimeoutMs) || 10_000,
+    0,
+    60_000
+  );
 
   merged.webSearch.enabled = Boolean(merged.webSearch?.enabled);
   const maxSearchesRaw = Number(merged.webSearch?.maxSearchesPerHour);

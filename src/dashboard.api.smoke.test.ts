@@ -137,7 +137,13 @@ test("dashboard API smoke: health/settings/actions/stats endpoints", async () =>
       replyFollowupLlm: {
         enabled: true,
         provider: "anthropic",
-        model: "claude-haiku-4-5"
+        model: "claude-haiku-4-5",
+        maxToolSteps: 4,
+        maxTotalToolCalls: 9,
+        maxWebSearchCalls: 2,
+        maxMemoryLookupCalls: 3,
+        maxImageLookupCalls: 1,
+        toolTimeoutMs: 15000
       }
     };
     const updateResponse = await fetch(`${baseUrl}/api/settings`, {
@@ -154,12 +160,19 @@ test("dashboard API smoke: health/settings/actions/stats endpoints", async () =>
     assert.equal(updatedSettings.replyFollowupLlm.enabled, true);
     assert.equal(updatedSettings.replyFollowupLlm.provider, "anthropic");
     assert.equal(updatedSettings.replyFollowupLlm.model, "claude-haiku-4-5");
+    assert.equal(updatedSettings.replyFollowupLlm.maxToolSteps, 4);
+    assert.equal(updatedSettings.replyFollowupLlm.maxTotalToolCalls, 9);
+    assert.equal(updatedSettings.replyFollowupLlm.maxWebSearchCalls, 2);
+    assert.equal(updatedSettings.replyFollowupLlm.maxMemoryLookupCalls, 3);
+    assert.equal(updatedSettings.replyFollowupLlm.maxImageLookupCalls, 1);
+    assert.equal(updatedSettings.replyFollowupLlm.toolTimeoutMs, 15000);
     assert.equal(bot.appliedSettings.length, 1);
 
     const persisted = store.getSettings();
     assert.equal(persisted.activity.replyLevelInitiative, 62);
     assert.equal(persisted.activity.replyLevelNonInitiative, 14);
     assert.equal(persisted.replyFollowupLlm.enabled, true);
+    assert.equal(persisted.replyFollowupLlm.maxToolSteps, 4);
 
     const actionsResponse = await fetch(`${baseUrl}/api/actions?limit=25`);
     assert.equal(actionsResponse.status, 200);

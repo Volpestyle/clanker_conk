@@ -34,6 +34,7 @@ import {
   parseStructuredReplyOutput,
   pickInitiativeMediaDirective,
   pickReplyMediaDirective,
+  REPLY_OUTPUT_JSON_SCHEMA,
   resolveMaxMediaPromptLen
 } from "./botHelpers.ts";
 import {
@@ -52,8 +53,7 @@ import {
 import {
   maybeRegenerateWithMemoryLookup as maybeRegenerateWithMemoryLookupForReplyFollowup,
   resolveReplyFollowupGenerationSettings as resolveReplyFollowupGenerationSettingsForReplyFollowup,
-  runModelRequestedWebSearch as runModelRequestedWebSearchForReplyFollowup,
-  runModelRequestedWebSearchWithTimeout as runModelRequestedWebSearchWithTimeoutForReplyFollowup
+  runModelRequestedWebSearch as runModelRequestedWebSearchForReplyFollowup
 } from "./bot/replyFollowup.ts";
 import {
   getReplyAddressSignal as getReplyAddressSignalForReplyAdmission,
@@ -123,103 +123,6 @@ const IS_TEST_PROCESS = /\.test\.[cm]?[jt]sx?$/i.test(String(process.argv?.[1] |
   process.argv.includes("--test");
 const SCREEN_SHARE_EXPLICIT_REQUEST_RE =
   /\b(?:screen\s*share|share\s*(?:my|the)?\s*screen|watch\s*(?:my|the)?\s*screen|see\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*stream|watch\s*(?:my|the)?\s*stream)\b/i;
-const REPLY_DIRECTIVE_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    text: { type: "string" },
-    skip: { type: "boolean" },
-    reactionEmoji: { type: ["string", "null"] },
-    media: {
-      anyOf: [
-        { type: "null" },
-        {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            type: {
-              type: "string",
-              enum: ["image_simple", "image_complex", "video", "gif", "none"]
-            },
-            prompt: { type: ["string", "null"] }
-          },
-          required: ["type", "prompt"]
-        }
-      ]
-    },
-    webSearchQuery: { type: ["string", "null"] },
-    memoryLookupQuery: { type: ["string", "null"] },
-    imageLookupQuery: { type: ["string", "null"] },
-    memoryLine: { type: ["string", "null"] },
-    selfMemoryLine: { type: ["string", "null"] },
-    automationAction: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        operation: {
-          type: "string",
-          enum: ["create", "pause", "resume", "delete", "list", "none"]
-        },
-        title: { type: ["string", "null"] },
-        instruction: { type: ["string", "null"] },
-        schedule: { type: ["object", "null"] },
-        targetQuery: { type: ["string", "null"] },
-        automationId: { type: ["number", "null"] },
-        runImmediately: { type: "boolean" },
-        targetChannelId: { type: ["string", "null"] }
-      },
-      required: [
-        "operation",
-        "title",
-        "instruction",
-        "schedule",
-        "targetQuery",
-        "automationId",
-        "runImmediately",
-        "targetChannelId"
-      ]
-    },
-    voiceIntent: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        intent: {
-          type: "string",
-          enum: ["join", "leave", "status", "watch_stream", "stop_watching_stream", "stream_status", "none"]
-        },
-        confidence: { type: "number" },
-        reason: { type: ["string", "null"] }
-      },
-      required: ["intent", "confidence", "reason"]
-    },
-    screenShareIntent: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        action: { type: "string", enum: ["offer_link", "none"] },
-        confidence: { type: "number" },
-        reason: { type: ["string", "null"] }
-      },
-      required: ["action", "confidence", "reason"]
-    }
-  },
-  required: [
-    "text",
-    "skip",
-    "reactionEmoji",
-    "media",
-    "webSearchQuery",
-    "memoryLookupQuery",
-    "imageLookupQuery",
-    "memoryLine",
-    "selfMemoryLine",
-    "automationAction",
-    "voiceIntent",
-    "screenShareIntent"
-  ]
-};
-const REPLY_DIRECTIVE_JSON_SCHEMA = JSON.stringify(REPLY_DIRECTIVE_SCHEMA);
-
 type ReplyPerformanceSeed = {
   triggerMessageCreatedAtMs?: number | null;
   queuedAtMs?: number | null;
@@ -1324,7 +1227,7 @@ export class ClankerBot {
       systemPrompt,
       userPrompt: initialUserPrompt,
       imageInputs: modelImageInputs,
-      jsonSchema: REPLY_DIRECTIVE_JSON_SCHEMA,
+      jsonSchema: REPLY_OUTPUT_JSON_SCHEMA,
       trace: replyTrace
     });
     performance.llm1Ms = Math.max(0, Date.now() - llm1StartedAtMs);
@@ -1354,95 +1257,88 @@ export class ClankerBot {
     if (automationIntentHandled) return true;
 
     const followupStartedAtMs = Date.now();
-    if (replyDirective.webSearchQuery) {
-      usedWebSearchFollowup = true;
-      const followupWebSearch = await runModelRequestedWebSearchWithTimeoutForReplyFollowup({
-        runSearch: async () =>
+    const followup = await maybeRegenerateWithMemoryLookupForReplyFollowup(
+      { llm: this.llm, search: this.search, memory: this.memory },
+      {
+        settings,
+        followupSettings: followupGenerationSettings,
+        systemPrompt,
+        generation,
+        directive: replyDirective,
+        webSearch,
+        memoryLookup,
+        imageLookup,
+        guildId: message.guildId,
+        channelId: message.channelId,
+        trace: {
+          ...replyTrace,
+          source,
+          event: "reply_followup"
+        },
+        mediaPromptLimit,
+        imageInputs: modelImageInputs,
+        forceRegenerate: false,
+        buildUserPrompt: ({
+          webSearch: nextWebSearch,
+          memoryLookup: nextMemoryLookup,
+          imageLookup: nextImageLookup,
+          imageInputs: nextImageInputs,
+          allowWebSearchDirective,
+          allowMemoryLookupDirective,
+          allowImageLookupDirective
+        }) =>
+          buildReplyPrompt({
+            ...replyPromptBase,
+            imageInputs: nextImageInputs,
+            webSearch: nextWebSearch,
+            memoryLookup: nextMemoryLookup,
+            imageLookup: nextImageLookup,
+            allowWebSearchDirective,
+            allowMemoryLookupDirective,
+            allowImageLookupDirective
+          }),
+        runModelRequestedWebSearch: async ({ webSearch: currentWebSearch, query }) =>
           await runModelRequestedWebSearchForReplyFollowup(
             { llm: this.llm, search: this.search, memory: this.memory },
             {
               settings,
-              webSearch,
-              query: replyDirective.webSearchQuery,
+              webSearch: currentWebSearch,
+              query,
               trace: {
                 ...replyTrace,
                 source
               }
             }
           ),
-        webSearch,
-        query: replyDirective.webSearchQuery,
-        timeoutMs: null
-      });
-      webSearch = {
-        ...webSearch,
-        ...followupWebSearch
-      };
-      if (webSearch.used && Array.isArray(webSearch.results) && webSearch.results.length) {
-        this.rememberRecentLookupContext({
-          guildId: message.guildId,
-          channelId: message.channelId,
-          userId: message.author.id,
-          source,
-          query: webSearch.query || replyDirective.webSearchQuery,
-          provider: webSearch.providerUsed || null,
-          results: webSearch.results
-        });
+        runModelRequestedImageLookup: (payload) => this.runModelRequestedImageLookup(payload),
+        mergeImageInputs: (payload) => this.mergeImageInputs(payload),
+        maxModelImageInputs: MAX_MODEL_IMAGE_INPUTS,
+        jsonSchema: REPLY_OUTPUT_JSON_SCHEMA
       }
+    );
+    generation = followup.generation;
+    replyDirective = followup.directive;
+    webSearch = followup.webSearch || webSearch;
+    memoryLookup = followup.memoryLookup;
+    imageLookup = followup.imageLookup;
+    modelImageInputs = followup.imageInputs;
+    usedWebSearchFollowup = followup.usedWebSearch;
+    usedMemoryLookupFollowup = followup.usedMemoryLookup;
+    usedImageLookupFollowup = followup.usedImageLookup;
+
+    if (usedWebSearchFollowup && webSearch.used && Array.isArray(webSearch.results) && webSearch.results.length) {
+      this.rememberRecentLookupContext({
+        guildId: message.guildId,
+        channelId: message.channelId,
+        userId: message.author.id,
+        source,
+        query: webSearch.query || replyDirective.webSearchQuery,
+        provider: webSearch.providerUsed || null,
+        results: webSearch.results
+      });
     }
 
-    if (usedWebSearchFollowup || replyDirective.memoryLookupQuery || replyDirective.imageLookupQuery) {
-      const followup = await maybeRegenerateWithMemoryLookupForReplyFollowup(
-        { llm: this.llm, search: this.search, memory: this.memory },
-        {
-          settings,
-          followupSettings: followupGenerationSettings,
-          systemPrompt,
-          generation,
-          directive: replyDirective,
-          memoryLookup,
-          imageLookup,
-          guildId: message.guildId,
-          channelId: message.channelId,
-          trace: {
-            ...replyTrace,
-            source,
-            event: "reply_followup"
-          },
-          mediaPromptLimit,
-          imageInputs: modelImageInputs,
-          forceRegenerate: usedWebSearchFollowup,
-          buildUserPrompt: ({
-            memoryLookup: nextMemoryLookup,
-            imageLookup: nextImageLookup,
-            imageInputs: nextImageInputs,
-            allowMemoryLookupDirective,
-            allowImageLookupDirective
-          }) =>
-            buildReplyPrompt({
-              ...replyPromptBase,
-              imageInputs: nextImageInputs,
-              webSearch,
-              memoryLookup: nextMemoryLookup,
-              imageLookup: nextImageLookup,
-              allowWebSearchDirective: false,
-              allowMemoryLookupDirective,
-              allowImageLookupDirective
-            }),
-          runModelRequestedImageLookup: (payload) => this.runModelRequestedImageLookup(payload),
-          mergeImageInputs: (payload) => this.mergeImageInputs(payload),
-          maxModelImageInputs: MAX_MODEL_IMAGE_INPUTS,
-          jsonSchema: REPLY_DIRECTIVE_JSON_SCHEMA
-        }
-      );
-      generation = followup.generation;
-      replyDirective = followup.directive;
-      memoryLookup = followup.memoryLookup;
-      imageLookup = followup.imageLookup;
-      modelImageInputs = followup.imageInputs;
-      usedMemoryLookupFollowup = followup.usedMemoryLookup;
-      usedImageLookupFollowup = followup.usedImageLookup;
-
+    if (followup.regenerated) {
       voiceIntentHandled = await this.maybeHandleStructuredVoiceIntent({
         message,
         settings,
@@ -1462,7 +1358,7 @@ export class ClankerBot {
       });
       if (followupAutomationHandled) return true;
     }
-    if (usedWebSearchFollowup || usedMemoryLookupFollowup || usedImageLookupFollowup) {
+    if (followup.regenerated || usedWebSearchFollowup || usedMemoryLookupFollowup || usedImageLookupFollowup) {
       performance.followupMs = Math.max(0, Date.now() - followupStartedAtMs);
     }
 
@@ -4083,7 +3979,7 @@ export class ClankerBot {
       settings,
       systemPrompt: automationSystemPrompt,
       userPrompt,
-      jsonSchema: REPLY_DIRECTIVE_JSON_SCHEMA,
+      jsonSchema: REPLY_OUTPUT_JSON_SCHEMA,
       trace: {
         guildId: automation.guild_id,
         channelId: automation.channel_id,
@@ -4121,7 +4017,7 @@ export class ClankerBot {
             allowMemoryLookupDirective
           }),
         maxModelImageInputs: MAX_MODEL_IMAGE_INPUTS,
-        jsonSchema: REPLY_DIRECTIVE_JSON_SCHEMA
+        jsonSchema: REPLY_OUTPUT_JSON_SCHEMA
       }
     );
     generation = followup.generation;
