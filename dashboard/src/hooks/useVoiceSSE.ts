@@ -6,6 +6,34 @@ export type VoiceState = {
   sessions: VoiceSession[];
 };
 
+export type VoiceTurn = {
+  role: string;
+  speakerName: string;
+  text: string;
+  at: string | null;
+};
+
+export type VoiceParticipant = {
+  userId: string;
+  displayName: string;
+};
+
+export type RealtimeState = {
+  connected?: boolean;
+  connectedAt?: string;
+  lastEventAt?: string;
+  sessionId?: string;
+  lastError?: string;
+  lastCloseCode?: number;
+  lastCloseReason?: string;
+  lastOutboundEventType?: string;
+  lastOutboundEventAt?: string;
+  activeResponseId?: string;
+  activeResponseStatus?: string;
+  recentOutboundEvents?: Array<{ type: string; at: string; payloadSummary?: string }>;
+  [key: string]: unknown;
+};
+
 export type VoiceSession = {
   sessionId: string;
   guildId: string;
@@ -18,6 +46,13 @@ export type VoiceSession = {
   activeInputStreams: number;
   soundboard: { playCount: number; lastPlayedAt: string | null };
   mode: string;
+  botTurnOpen: boolean;
+  focusedSpeaker: { userId: string; displayName: string | null; since: string | null } | null;
+  participants: VoiceParticipant[];
+  participantCount: number;
+  voiceLookupBusyCount: number;
+  pendingDeferredTurns: number;
+  recentTurns: VoiceTurn[];
   streamWatch: {
     active: boolean;
     targetUserId: string | null;
@@ -33,7 +68,8 @@ export type VoiceSession = {
     outputSampleRateHz: number;
     recentVoiceTurns: number;
     pendingTurns: number;
-    state: unknown;
+    drainActive: boolean;
+    state: RealtimeState | null;
   } | null;
 };
 

@@ -1,10 +1,17 @@
 import { useState, useEffect, useRef } from "react";
-import { useVoiceSSE, type VoiceSession, type VoiceEvent } from "../hooks/useVoiceSSE";
+import {
+  useVoiceSSE,
+  type VoiceSession,
+  type VoiceEvent,
+  type VoiceTurn,
+  type RealtimeState
+} from "../hooks/useVoiceSSE";
 
 // ---- helpers ----
 
-function deriveBotState(s: VoiceSession): "processing" | "listening" | "idle" | "disconnected" {
+function deriveBotState(s: VoiceSession): "processing" | "speaking" | "listening" | "idle" | "disconnected" {
   const pendingTurns = (s.stt?.pendingTurns || 0) + (s.realtime?.pendingTurns || 0);
+  if (s.botTurnOpen) return "speaking";
   if (pendingTurns > 0) return "processing";
   if (s.activeInputStreams > 0) return "listening";
   const connected = s.realtime?.state
@@ -34,15 +41,28 @@ function relativeTime(iso: string): string {
   return `${Math.floor(m / 60)}h ago`;
 }
 
+function timeUntil(iso: string): string {
+  const ms = new Date(iso).getTime() - Date.now();
+  if (ms <= 0) return "expired";
+  const s = Math.ceil(ms / 1000);
+  const m = Math.floor(s / 60);
+  if (m > 0) return `${m}m ${s % 60}s`;
+  return `${s}s`;
+}
+
 const MODE_LABELS: Record<string, string> = {
   voice_agent: "Voice Agent",
   openai: "OpenAI",
+  openai_realtime: "OpenAI RT",
   gemini: "Gemini",
+  gemini_realtime: "Gemini RT",
   xai: "xAI",
+  xai_realtime: "xAI RT",
   stt_pipeline: "STT Pipeline"
 };
 
 const STATE_LABELS: Record<string, string> = {
+  speaking: "Speaking",
   processing: "Processing",
   listening: "Listening",
   idle: "Idle",
@@ -54,10 +74,207 @@ function snippet(text?: string, max = 120): string {
   return text.length > max ? text.slice(0, max) + "..." : text;
 }
 
-// ---- Session Card ----
+// ---- Collapsible Section ----
+
+function Section({
+  title,
+  badge,
+  defaultOpen = true,
+  children
+}: {
+  title: string;
+  badge?: string | number | null;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className={`vm-section ${open ? "vm-section-open" : ""}`}>
+      <button className="vm-section-toggle" onClick={() => setOpen(!open)}>
+        <span className="vm-section-arrow">{open ? "\u25BE" : "\u25B8"}</span>
+        <span className="vm-section-title">{title}</span>
+        {badge != null && <span className="vm-section-badge">{badge}</span>}
+      </button>
+      {open && <div className="vm-section-body">{children}</div>}
+    </div>
+  );
+}
+
+// ---- Stat Pill ----
+
+function Stat({ label, value, warn }: { label: string; value: React.ReactNode; warn?: boolean }) {
+  return (
+    <div className={`vm-stat ${warn ? "vm-stat-warn" : ""}`}>
+      <span className="vm-stat-label">{label}</span>
+      <span className="vm-stat-value">{value}</span>
+    </div>
+  );
+}
+
+// ---- Pipeline Badge ----
+
+function PipelineBadge({ session }: { session: VoiceSession }) {
+  const rt = session.realtime;
+  const stt = session.stt;
+
+  if (rt) {
+    const state = rt.state as RealtimeState | null;
+    const connected = state?.connected !== false;
+    return (
+      <div className="vm-pipeline-row">
+        <span className={`vm-pipe-dot ${connected ? "vm-pipe-ok" : "vm-pipe-err"}`} />
+        <span className="vm-pipe-label">{rt.provider}</span>
+        <span className="vm-pipe-detail">
+          {rt.inputSampleRateHz / 1000}kHz in / {rt.outputSampleRateHz / 1000}kHz out
+        </span>
+        {rt.drainActive && <span className="vm-pipe-tag vm-pipe-draining">draining</span>}
+        {state?.activeResponseId && (
+          <span className="vm-pipe-tag vm-pipe-responding">responding</span>
+        )}
+      </div>
+    );
+  }
+
+  if (stt) {
+    return (
+      <div className="vm-pipeline-row">
+        <span className="vm-pipe-dot vm-pipe-ok" />
+        <span className="vm-pipe-label">STT Pipeline</span>
+        <span className="vm-pipe-detail">{stt.contextMessages} ctx msgs</span>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+// ---- Realtime Connection Detail ----
+
+function RealtimeDetail({ session }: { session: VoiceSession }) {
+  const rt = session.realtime;
+  if (!rt) return null;
+  const state = rt.state as RealtimeState | null;
+  if (!state) return null;
+
+  return (
+    <Section title="Realtime Connection" badge={state.connected ? "connected" : "disconnected"}>
+      <div className="vm-detail-grid">
+        {state.sessionId && <Stat label="Session" value={state.sessionId.slice(0, 12) + "..."} />}
+        {state.connectedAt && <Stat label="Connected" value={relativeTime(state.connectedAt)} />}
+        {state.lastEventAt && <Stat label="Last Event" value={relativeTime(state.lastEventAt)} />}
+        {state.lastOutboundEventType && (
+          <Stat label="Last Sent" value={state.lastOutboundEventType} />
+        )}
+        {state.lastOutboundEventAt && (
+          <Stat label="Sent At" value={relativeTime(state.lastOutboundEventAt)} />
+        )}
+        {state.activeResponseId && (
+          <Stat label="Active Response" value={state.activeResponseId.slice(0, 12) + "..."} />
+        )}
+        {state.activeResponseStatus && (
+          <Stat label="Response Status" value={state.activeResponseStatus} />
+        )}
+        {state.lastError && <Stat label="Last Error" value={state.lastError} warn />}
+        {state.lastCloseCode != null && (
+          <Stat label="Close Code" value={`${state.lastCloseCode} ${state.lastCloseReason || ""}`} warn />
+        )}
+      </div>
+      {state.recentOutboundEvents && state.recentOutboundEvents.length > 0 && (
+        <div className="vm-outbound-events">
+          <span className="vm-mini-label">Recent outbound</span>
+          {state.recentOutboundEvents.map((evt, i) => (
+            <div key={i} className="vm-outbound-row">
+              <span className="vm-outbound-type">{evt.type}</span>
+              <span className="vm-outbound-time">{relativeTime(evt.at)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Section>
+  );
+}
+
+// ---- Participants ----
+
+function ParticipantList({ session }: { session: VoiceSession }) {
+  const ps = session.participants || [];
+  if (ps.length === 0) return null;
+
+  return (
+    <Section title="Participants" badge={session.participantCount}>
+      <div className="vm-participant-list">
+        {ps.map((p) => (
+          <div
+            key={p.userId}
+            className={`vm-participant ${
+              session.focusedSpeaker?.userId === p.userId ? "vm-participant-focused" : ""
+            }`}
+          >
+            <span className="vm-participant-name">{p.displayName}</span>
+            {session.focusedSpeaker?.userId === p.userId && (
+              <span className="vm-participant-tag">focused</span>
+            )}
+            <span className="vm-participant-id">{p.userId.slice(0, 6)}</span>
+          </div>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
+// ---- Conversation Context ----
+
+function ConversationContext({ turns }: { turns: VoiceTurn[] }) {
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (turns.length === 0) return null;
+
+  return (
+    <Section title="Conversation" badge={turns.length}>
+      <div className="vm-convo-feed">
+        {turns.map((t, i) => (
+          <div key={i} className={`vm-convo-msg vm-convo-${t.role}`}>
+            <div className="vm-convo-meta">
+              <span className={`vm-convo-role vm-convo-role-${t.role}`}>
+                {t.role === "assistant" ? "bot" : t.speakerName || t.role}
+              </span>
+              {t.at && <span className="vm-convo-time">{relativeTime(t.at)}</span>}
+            </div>
+            <div className="vm-convo-text">{t.text || "(empty)"}</div>
+          </div>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
+// ---- Stream Watch ----
+
+function StreamWatchDetail({ session }: { session: VoiceSession }) {
+  const sw = session.streamWatch;
+  if (!sw.active) return null;
+
+  return (
+    <Section title="Stream Watch" badge="active">
+      <div className="vm-detail-grid">
+        <Stat label="Target" value={sw.targetUserId?.slice(0, 8) || "none"} />
+        <Stat label="Frames" value={sw.ingestedFrameCount} />
+        {sw.lastFrameAt && <Stat label="Last Frame" value={relativeTime(sw.lastFrameAt)} />}
+        {sw.lastCommentaryAt && <Stat label="Last Commentary" value={relativeTime(sw.lastCommentaryAt)} />}
+      </div>
+    </Section>
+  );
+}
+
+// ---- Expanded Session Card ----
 
 function SessionCard({ session }: { session: VoiceSession }) {
   const [, setTick] = useState(0);
+  const [expanded, setExpanded] = useState(true);
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(id);
@@ -65,37 +282,100 @@ function SessionCard({ session }: { session: VoiceSession }) {
 
   const state = deriveBotState(session);
   const pendingTurns = (session.stt?.pendingTurns || 0) + (session.realtime?.pendingTurns || 0);
+  const totalPending = pendingTurns + session.pendingDeferredTurns;
 
   return (
-    <div className="vm-card panel">
-      <div className="vm-card-header">
+    <div className={`vm-card panel vm-card-${state}`}>
+      {/* Header */}
+      <div className="vm-card-header" onClick={() => setExpanded(!expanded)}>
         <span className={`vm-mode-badge vm-mode-${session.mode}`}>
           {MODE_LABELS[session.mode] || session.mode}
         </span>
         <span className={`vm-state-dot vm-state-${state}`} title={STATE_LABELS[state]} />
         <span className="vm-state-label">{STATE_LABELS[state]}</span>
+        <span className="vm-card-expand">{expanded ? "\u25B4" : "\u25BE"}</span>
       </div>
-      <div className="vm-card-body">
-        <div className="vm-stat">
-          <span className="vm-stat-label">Duration</span>
-          <span className="vm-stat-value">{elapsed(session.startedAt)}</span>
-        </div>
-        <div className="vm-stat">
-          <span className="vm-stat-label">Inputs</span>
-          <span className="vm-stat-value">{session.activeInputStreams}</span>
-        </div>
-        <div className="vm-stat">
-          <span className="vm-stat-label">Pending</span>
-          <span className="vm-stat-value">{pendingTurns}</span>
-        </div>
-        <div className="vm-stat">
-          <span className="vm-stat-label">Soundboard</span>
-          <span className="vm-stat-value">{session.soundboard.playCount}</span>
-        </div>
+
+      {/* Quick stats row - always visible */}
+      <div className="vm-card-quick">
+        <Stat label="Duration" value={elapsed(session.startedAt)} />
+        <Stat label="Humans" value={session.participantCount} />
+        <Stat label="Inputs" value={session.activeInputStreams} />
+        <Stat label="Pending" value={totalPending} warn={totalPending > 2} />
+        <Stat label="Lookups" value={session.voiceLookupBusyCount} warn={session.voiceLookupBusyCount > 0} />
+        <Stat label="Soundboard" value={session.soundboard.playCount} />
       </div>
+
+      {/* Pipeline bar */}
+      <PipelineBadge session={session} />
+
+      {/* Turn state indicators */}
+      <div className="vm-turn-state">
+        {session.botTurnOpen && <span className="vm-ts-pill vm-ts-speaking">Bot Speaking</span>}
+        {session.activeInputStreams > 0 && (
+          <span className="vm-ts-pill vm-ts-capturing">
+            {session.activeInputStreams} Capture{session.activeInputStreams !== 1 ? "s" : ""}
+          </span>
+        )}
+        {session.realtime?.drainActive && (
+          <span className="vm-ts-pill vm-ts-draining">Turn Draining</span>
+        )}
+        {session.pendingDeferredTurns > 0 && (
+          <span className="vm-ts-pill vm-ts-deferred">
+            {session.pendingDeferredTurns} Deferred
+          </span>
+        )}
+        {session.voiceLookupBusyCount > 0 && (
+          <span className="vm-ts-pill vm-ts-lookup">
+            {session.voiceLookupBusyCount} Lookup{session.voiceLookupBusyCount !== 1 ? "s" : ""}
+          </span>
+        )}
+        {session.focusedSpeaker && (
+          <span className="vm-ts-pill vm-ts-focus">
+            Focus: {session.focusedSpeaker.displayName || session.focusedSpeaker.userId.slice(0, 8)}
+          </span>
+        )}
+      </div>
+
+      {/* Expanded detail sections */}
+      {expanded && (
+        <div className="vm-card-detail">
+          {/* Timers */}
+          <Section title="Session Timers" defaultOpen={false}>
+            <div className="vm-detail-grid">
+              <Stat label="Started" value={relativeTime(session.startedAt)} />
+              <Stat label="Last Activity" value={relativeTime(session.lastActivityAt)} />
+              {session.maxEndsAt && <Stat label="Max Duration" value={timeUntil(session.maxEndsAt)} />}
+              {session.inactivityEndsAt && (
+                <Stat label="Inactivity Timeout" value={timeUntil(session.inactivityEndsAt)} warn />
+              )}
+              {session.soundboard.lastPlayedAt && (
+                <Stat label="Last Soundboard" value={relativeTime(session.soundboard.lastPlayedAt)} />
+              )}
+            </div>
+          </Section>
+
+          {/* Realtime connection */}
+          <RealtimeDetail session={session} />
+
+          {/* Participants */}
+          <ParticipantList session={session} />
+
+          {/* Conversation context */}
+          <ConversationContext turns={session.recentTurns || []} />
+
+          {/* Stream watch */}
+          <StreamWatchDetail session={session} />
+        </div>
+      )}
+
+      {/* Footer */}
       <div className="vm-card-footer">
         <span className="vm-card-id" title={session.guildId}>
           {session.guildId.slice(0, 8)}...
+        </span>
+        <span className="vm-card-id" title={session.voiceChannelId}>
+          vc:{session.voiceChannelId.slice(0, 6)}
         </span>
         {session.realtime?.provider && (
           <span className="vm-card-provider">{session.realtime.provider}</span>
@@ -107,20 +387,102 @@ function SessionCard({ session }: { session: VoiceSession }) {
 
 // ---- Event Row ----
 
-function EventRow({ event }: { event: VoiceEvent }) {
+const EVENT_KIND_COLORS: Record<string, string> = {
+  session_start: "#4ade80",
+  session_end: "#f87171",
+  turn_in: "#60a5fa",
+  turn_out: "#bef264",
+  turn_addressing: "#c084fc",
+  soundboard_play: "#fb923c",
+  error: "#f87171",
+  runtime: "#64748b",
+  intent_detected: "#22d3ee"
+};
+
+function EventRow({ event, defaultExpanded }: { event: VoiceEvent; defaultExpanded?: boolean }) {
   const [, setTick] = useState(0);
+  const [expanded, setExpanded] = useState(defaultExpanded || false);
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 5000);
     return () => clearInterval(id);
   }, []);
 
   const kindShort = (event.kind || "").replace(/^voice_/, "");
+  const meta = event.metadata as Record<string, unknown> | undefined;
 
   return (
-    <div className="vm-event-row">
-      <span className="vm-event-time">{relativeTime(event.createdAt)}</span>
-      <span className={`vm-event-badge vm-kind-${kindShort}`}>{kindShort}</span>
-      <span className="vm-event-content">{snippet(event.content)}</span>
+    <div className="vm-event-row-wrap">
+      <div className="vm-event-row" onClick={() => meta && setExpanded(!expanded)}>
+        <span className="vm-event-time">{relativeTime(event.createdAt)}</span>
+        <span
+          className="vm-event-badge"
+          style={{
+            background: `${EVENT_KIND_COLORS[kindShort] || "#64748b"}18`,
+            color: EVENT_KIND_COLORS[kindShort] || "#64748b"
+          }}
+        >
+          {kindShort}
+        </span>
+        <span className="vm-event-content">{snippet(event.content)}</span>
+        {meta && <span className="vm-event-expand-hint">{expanded ? "\u25B4" : "\u22EF"}</span>}
+      </div>
+      {expanded && meta && (
+        <div className="vm-event-meta">
+          {Object.entries(meta).map(([k, v]) => (
+            <div key={k} className="vm-meta-row">
+              <span className="vm-meta-key">{k}</span>
+              <span className="vm-meta-val">
+                {typeof v === "object" ? JSON.stringify(v) : String(v ?? "")}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---- Event Kind Filter ----
+
+const EVENT_KINDS = [
+  "session_start", "session_end", "turn_in", "turn_out",
+  "turn_addressing", "soundboard_play", "error", "runtime", "intent_detected"
+];
+
+function EventFilter({
+  active,
+  onToggle,
+  showRuntime,
+  onToggleRuntime
+}: {
+  active: Set<string>;
+  onToggle: (kind: string) => void;
+  showRuntime: boolean;
+  onToggleRuntime: () => void;
+}) {
+  return (
+    <div className="vm-event-filters">
+      {EVENT_KINDS.map((kind) => {
+        if (kind === "runtime" && !showRuntime) return null;
+        const isActive = active.has(kind);
+        return (
+          <button
+            key={kind}
+            className={`vm-filter-chip ${isActive ? "vm-filter-active" : "vm-filter-inactive"}`}
+            style={{
+              borderColor: isActive ? (EVENT_KIND_COLORS[kind] || "#64748b") : undefined,
+              color: isActive ? (EVENT_KIND_COLORS[kind] || "#64748b") : undefined
+            }}
+            onClick={() => onToggle(kind)}
+          >
+            {kind.replace(/_/g, " ")}
+          </button>
+        );
+      })}
+      <label className="vm-runtime-toggle">
+        <input type="checkbox" checked={showRuntime} onChange={onToggleRuntime} />
+        runtime
+      </label>
     </div>
   );
 }
@@ -130,12 +492,27 @@ function EventRow({ event }: { event: VoiceEvent }) {
 export default function VoiceMonitor() {
   const { voiceState, events, status } = useVoiceSSE();
   const [showRuntime, setShowRuntime] = useState(false);
+  const [activeKinds, setActiveKinds] = useState<Set<string>>(
+    () => new Set(EVENT_KINDS.filter((k) => k !== "runtime"))
+  );
   const timelineRef = useRef<HTMLDivElement>(null);
 
   const sessions = voiceState?.sessions || [];
-  const filteredEvents = showRuntime
-    ? events
-    : events.filter((e) => e.kind !== "voice_runtime");
+
+  const toggleKind = (kind: string) => {
+    setActiveKinds((prev) => {
+      const next = new Set(prev);
+      if (next.has(kind)) next.delete(kind);
+      else next.add(kind);
+      return next;
+    });
+  };
+
+  const filteredEvents = events.filter((e) => {
+    const kindShort = (e.kind || "").replace(/^voice_/, "");
+    if (kindShort === "runtime" && !showRuntime) return false;
+    return activeKinds.has(kindShort);
+  });
 
   return (
     <div className="vm-container">
@@ -152,12 +529,12 @@ export default function VoiceMonitor() {
         )}
       </div>
 
-      {/* Session cards */}
+      {/* Session panels */}
       <section className="vm-sessions">
         {sessions.length === 0 ? (
           <p className="vm-empty">No active voice sessions</p>
         ) : (
-          <div className="vm-card-grid">
+          <div className="vm-card-stack">
             {sessions.map((s) => (
               <SessionCard key={s.sessionId} session={s} />
             ))}
@@ -169,20 +546,21 @@ export default function VoiceMonitor() {
       <section className="vm-timeline panel">
         <div className="vm-timeline-header">
           <h3>Event Timeline</h3>
-          <label className="vm-runtime-toggle">
-            <input
-              type="checkbox"
-              checked={showRuntime}
-              onChange={(e) => setShowRuntime(e.target.checked)}
-            />
-            Show runtime
-          </label>
+          <span className="vm-event-count">{filteredEvents.length} events</span>
         </div>
+        <EventFilter
+          active={activeKinds}
+          onToggle={toggleKind}
+          showRuntime={showRuntime}
+          onToggleRuntime={() => setShowRuntime(!showRuntime)}
+        />
         <div className="vm-timeline-feed" ref={timelineRef}>
           {filteredEvents.length === 0 ? (
             <p className="vm-empty">No voice events yet</p>
           ) : (
-            filteredEvents.map((e, i) => <EventRow key={`${e.createdAt}-${i}`} event={e} />)
+            filteredEvents.map((e, i) => (
+              <EventRow key={`${e.createdAt}-${i}`} event={e} />
+            ))
           )}
         </div>
       </section>

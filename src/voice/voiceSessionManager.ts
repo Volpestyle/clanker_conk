@@ -214,56 +214,81 @@ export class VoiceSessionManager {
   }
 
   getRuntimeState() {
-    const sessions = [...this.sessions.values()].map((session) => ({
-      sessionId: session.id,
-      guildId: session.guildId,
-      voiceChannelId: session.voiceChannelId,
-      textChannelId: session.textChannelId,
-      startedAt: new Date(session.startedAt).toISOString(),
-      lastActivityAt: new Date(session.lastActivityAt).toISOString(),
-      maxEndsAt: session.maxEndsAt ? new Date(session.maxEndsAt).toISOString() : null,
-      inactivityEndsAt: session.inactivityEndsAt ? new Date(session.inactivityEndsAt).toISOString() : null,
-      activeInputStreams: session.userCaptures.size,
-      soundboard: {
-        playCount: session.soundboard?.playCount || 0,
-        lastPlayedAt: session.soundboard?.lastPlayedAt
-          ? new Date(session.soundboard.lastPlayedAt).toISOString()
+    const sessions = [...this.sessions.values()].map((session) => {
+      const participants = this.getVoiceChannelParticipants(session);
+      const recentTurns = Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns : [];
+      const deferredQueue = Array.isArray(session.pendingDeferredTurns) ? session.pendingDeferredTurns : [];
+
+      return {
+        sessionId: session.id,
+        guildId: session.guildId,
+        voiceChannelId: session.voiceChannelId,
+        textChannelId: session.textChannelId,
+        startedAt: new Date(session.startedAt).toISOString(),
+        lastActivityAt: new Date(session.lastActivityAt).toISOString(),
+        maxEndsAt: session.maxEndsAt ? new Date(session.maxEndsAt).toISOString() : null,
+        inactivityEndsAt: session.inactivityEndsAt ? new Date(session.inactivityEndsAt).toISOString() : null,
+        activeInputStreams: session.userCaptures.size,
+        soundboard: {
+          playCount: session.soundboard?.playCount || 0,
+          lastPlayedAt: session.soundboard?.lastPlayedAt
+            ? new Date(session.soundboard.lastPlayedAt).toISOString()
+            : null
+        },
+        mode: session.mode || "voice_agent",
+        botTurnOpen: Boolean(session.botTurnOpen),
+        focusedSpeaker: session.focusedSpeakerUserId
+          ? {
+              userId: session.focusedSpeakerUserId,
+              displayName: participants.find((p) => p.userId === session.focusedSpeakerUserId)?.displayName || null,
+              since: session.focusedSpeakerAt ? new Date(session.focusedSpeakerAt).toISOString() : null
+            }
+          : null,
+        participants: participants.map((p) => ({ userId: p.userId, displayName: p.displayName })),
+        participantCount: participants.length,
+        voiceLookupBusyCount: Number(session.voiceLookupBusyCount || 0),
+        pendingDeferredTurns: deferredQueue.length,
+        recentTurns: recentTurns.slice(-12).map((t) => ({
+          role: t.role,
+          speakerName: t.speakerName || "",
+          text: String(t.text || "").slice(0, 300),
+          at: t.at ? new Date(t.at).toISOString() : null
+        })),
+        streamWatch: {
+          active: Boolean(session.streamWatch?.active),
+          targetUserId: session.streamWatch?.targetUserId || null,
+          requestedByUserId: session.streamWatch?.requestedByUserId || null,
+          lastFrameAt: session.streamWatch?.lastFrameAt
+            ? new Date(session.streamWatch.lastFrameAt).toISOString()
+            : null,
+          lastCommentaryAt: session.streamWatch?.lastCommentaryAt
+            ? new Date(session.streamWatch.lastCommentaryAt).toISOString()
+            : null,
+          ingestedFrameCount: Number(session.streamWatch?.ingestedFrameCount || 0)
+        },
+        stt: session.mode === "stt_pipeline"
+          ? {
+              pendingTurns: Number(session.pendingSttTurns || 0),
+              contextMessages: Array.isArray(session.recentVoiceTurns)
+                ? session.recentVoiceTurns.length
+                : 0
+            }
+          : null,
+        realtime: isRealtimeMode(session.mode)
+          ? {
+              provider: session.realtimeProvider || resolveRealtimeProvider(session.mode),
+              inputSampleRateHz: Number(session.realtimeInputSampleRateHz) || 24000,
+              outputSampleRateHz: Number(session.realtimeOutputSampleRateHz) || 24000,
+              recentVoiceTurns: Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns.length : 0,
+              pendingTurns:
+                (session.realtimeTurnDrainActive ? 1 : 0) +
+                (Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns.length : 0),
+              drainActive: Boolean(session.realtimeTurnDrainActive),
+              state: session.realtimeClient?.getState?.() || null
+            }
           : null
-      },
-      mode: session.mode || "voice_agent",
-      streamWatch: {
-        active: Boolean(session.streamWatch?.active),
-        targetUserId: session.streamWatch?.targetUserId || null,
-        requestedByUserId: session.streamWatch?.requestedByUserId || null,
-        lastFrameAt: session.streamWatch?.lastFrameAt
-          ? new Date(session.streamWatch.lastFrameAt).toISOString()
-          : null,
-        lastCommentaryAt: session.streamWatch?.lastCommentaryAt
-          ? new Date(session.streamWatch.lastCommentaryAt).toISOString()
-          : null,
-        ingestedFrameCount: Number(session.streamWatch?.ingestedFrameCount || 0)
-      },
-      stt: session.mode === "stt_pipeline"
-        ? {
-            pendingTurns: Number(session.pendingSttTurns || 0),
-            contextMessages: Array.isArray(session.recentVoiceTurns)
-              ? session.recentVoiceTurns.length
-              : 0
-          }
-        : null,
-      realtime: isRealtimeMode(session.mode)
-        ? {
-            provider: session.realtimeProvider || resolveRealtimeProvider(session.mode),
-            inputSampleRateHz: Number(session.realtimeInputSampleRateHz) || 24000,
-            outputSampleRateHz: Number(session.realtimeOutputSampleRateHz) || 24000,
-            recentVoiceTurns: Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns.length : 0,
-            pendingTurns:
-              (session.realtimeTurnDrainActive ? 1 : 0) +
-              (Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns.length : 0),
-            state: session.realtimeClient?.getState?.() || null
-          }
-        : null
-    }));
+      };
+    });
 
     return {
       activeCount: sessions.length,
