@@ -22,6 +22,7 @@ import {
 } from "../promptCore.ts";
 import { estimateUsdCost } from "../pricing.ts";
 import { clamp } from "../utils.ts";
+import { isLikelyBotNameVariantAddress } from "../addressingNameVariants.ts";
 import { convertDiscordPcmToXaiInput, convertXaiOutputToDiscordPcm } from "./pcmAudio.ts";
 import { SoundboardDirector } from "./soundboardDirector.ts";
 import {
@@ -2475,7 +2476,12 @@ export class VoiceSessionManager {
     const normalizedTranscript = normalizeVoiceText(transcript, VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS);
     const normalizedUserId = String(userId || "").trim();
     const participantCount = this.countHumanVoiceParticipants(session);
-    const directAddressed = normalizedTranscript ? isVoiceTurnAddressedToBot(normalizedTranscript, settings) : false;
+    const directAddressed = normalizedTranscript
+      ? (
+        isVoiceTurnAddressedToBot(normalizedTranscript, settings) ||
+        isLikelyBotNameVariantAddress(normalizedTranscript, settings?.botName || "")
+      )
+      : false;
     const replyEagerness = clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
     const now = Date.now();
 
@@ -2566,13 +2572,29 @@ export class VoiceSessionManager {
     const sessionMode = String(session?.mode || settings?.voice?.mode || "")
       .trim()
       .toLowerCase();
-    const useTextLlmForDecision = sessionMode === "stt_pipeline";
-    const requestedDecisionProvider = useTextLlmForDecision ? settings?.llm?.provider : replyDecisionLlm?.provider;
+    const classifierEnabled =
+      replyDecisionLlm?.enabled !== undefined ? Boolean(replyDecisionLlm.enabled) : true;
+    const requestedDecisionProvider = replyDecisionLlm?.provider;
     const llmProvider = normalizeVoiceReplyDecisionProvider(requestedDecisionProvider);
-    const requestedDecisionModel = useTextLlmForDecision ? settings?.llm?.model : replyDecisionLlm?.model;
+    const requestedDecisionModel = replyDecisionLlm?.model;
     const llmModel = String(requestedDecisionModel || defaultVoiceReplyDecisionModel(llmProvider))
       .trim()
       .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
+
+    if (!classifierEnabled) {
+      return {
+        allow: sessionMode === "stt_pipeline",
+        reason:
+          sessionMode === "stt_pipeline"
+            ? "classifier_disabled_merged_with_generation"
+            : "classifier_disabled",
+        participantCount,
+        directAddressed,
+        transcript: normalizedTranscript,
+        llmProvider,
+        llmModel
+      };
+    }
 
     if (!this.llm?.generate) {
       return {
@@ -2611,12 +2633,21 @@ export class VoiceSessionManager {
       }
     };
 
+    const wakeVariantHint =
+      [
+        "Treat near-phonetic or misspelled tokens that appear to target the bot name as direct address.",
+        "Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" usually indicate direct address.",
+        "Questions like \"is that you <name-ish-token>?\" usually indicate direct address."
+      ].join(" ");
+
     const fullContextPromptParts = [
+      `Bot name: ${botName}.`,
       `Reply eagerness: ${replyEagerness}/100.`,
       `Human participants in channel: ${participantCount}.`,
       `Current speaker: ${speakerName}.`,
       `Directly addressed: ${directAddressed ? "yes" : "no"}.`,
-      `Latest transcript: "${normalizedTranscript}".`
+      `Latest transcript: "${normalizedTranscript}".`,
+      wakeVariantHint
     ];
     if (participantList.length) {
       fullContextPromptParts.push(`Participants: ${participantList.join(", ")}.`);
@@ -2626,11 +2657,13 @@ export class VoiceSessionManager {
     }
 
     const compactContextPromptParts = [
+      `Bot name: ${botName}.`,
       `Current speaker: ${speakerName}.`,
       `Directly addressed: ${directAddressed ? "yes" : "no"}.`,
       `Reply eagerness: ${replyEagerness}/100.`,
       `Participants: ${participantCount}.`,
-      `Transcript: "${normalizedTranscript}".`
+      `Transcript: "${normalizedTranscript}".`,
+      wakeVariantHint
     ];
     if (participantList.length) {
       compactContextPromptParts.push(`Known participants: ${participantList.join(", ")}.`);
@@ -2643,6 +2676,11 @@ export class VoiceSessionManager {
       `You decide if "${botName}" should reply right now in a live Discord voice chat.`,
       "Output exactly one token: YES or NO.",
       "Prefer YES for direct wake-word mentions and likely ASR variants of the bot name.",
+      "Treat near-phonetic or misspelled tokens that appear to target the bot name as direct address.",
+      "Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" should usually be YES.",
+      "Questions like \"is that you <name-ish-token>?\" should usually be YES.",
+      "Do not use rhyme alone as evidence of direct address.",
+      "Generic chatter such as prank/stank/stinky phrasing without a clear name-like callout should usually be NO.",
       "Prefer YES for clear questions/requests that seem aimed at the bot or the current speaker flow.",
       "If this sounds like a follow-up from an engaged speaker, lean YES.",
       "Prefer NO for filler/noise, pure acknowledgements, or turns clearly aimed at another human.",
@@ -2655,7 +2693,11 @@ export class VoiceSessionManager {
       "If directly addressed, strongly prefer YES unless transcript is too unclear to answer.",
       "If not directly addressed, use reply eagerness and flow; prefer NO if interruptive or low value.",
       "In small conversations, prefer YES for clear questions and active back-and-forth.",
-      "Treat likely ASR wake-word variants (for example clanky/planky/linky) as direct address.",
+      "Treat likely ASR wake-word variants of the bot name as direct address when context supports it.",
+      "Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" should usually be YES.",
+      "Questions like \"is that you <name-ish-token>?\" should usually be YES.",
+      "Do not treat rhyme-only similarity as wake-word evidence.",
+      "Generic prank/stank/stinky chatter without a clear name-like callout should usually be NO.",
       "Never output anything except YES or NO."
     ].join("\n");
     const systemPromptStrict = [

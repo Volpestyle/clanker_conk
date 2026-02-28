@@ -331,6 +331,13 @@ test("reply decider allows unaddressed turn when model says YES", async () => {
 
 test("reply decider routes wake-like variants through llm admission", async () => {
   const cases = [
+    { text: "Yo, what's up, Clink?", expected: true },
+    { text: "yo plink", expected: true },
+    { text: "hi clunky", expected: true },
+    { text: "is that u clank?", expected: true },
+    { text: "is that you clinker?", expected: true },
+    { text: "did i just hear a clanka?", expected: true },
+    { text: "I love the clankers of the world", expected: true },
     { text: "clunker", expected: true },
     { text: "yo clunker", expected: true },
     { text: "yo clunker can you answer this?", expected: true },
@@ -341,18 +348,27 @@ test("reply decider routes wake-like variants through llm admission", async () =
     { text: "clankerton can you jump in?", expected: true },
     { text: "clunkeroni can you jump in?", expected: true },
     { text: "i sent you a link yesterday", expected: false },
+    { text: "i pulled a prank on him!", expected: false },
+    { text: "pranked ya", expected: false },
+    { text: "get pranked", expected: false },
+    { text: "get stanked", expected: false },
+    { text: "its stinky in here", expected: false },
     { text: "Hi cleaner.", expected: false },
     { text: "cleaner can you jump in?", expected: false },
     { text: "cleaners can you jump in?", expected: false },
     { text: "the cleaner is broken again", expected: false },
     { text: "Very big step up from Paldea. Pretty excited to see what they cook up", expected: false }
   ];
+  const expectedByTranscript = new Map(cases.map((row) => [row.text, row.expected]));
   let callCount = 0;
   const manager = createManager({
-    generate: async () => {
-      const row = cases[callCount];
+    generate: async (payload) => {
+      const prompt = String(payload?.userPrompt || "");
+      const transcriptMatch = prompt.match(/Transcript:\s*"([^"]*)"/u);
+      const transcript = transcriptMatch?.[1] || "";
+      const expected = expectedByTranscript.get(transcript);
       callCount += 1;
-      return { text: row.expected ? "YES" : "NO" };
+      return { text: expected ? "YES" : "NO" };
     }
   });
 
@@ -370,11 +386,23 @@ test("reply decider routes wake-like variants through llm admission", async () =
     });
 
     assert.equal(decision.allow, row.expected, row.text);
-    assert.equal(decision.directAddressed, false, row.text);
-    assert.equal(decision.reason, row.expected ? "llm_yes" : "llm_no", row.text);
+    if (row.expected) {
+      const reason = String(decision.reason || "");
+      assert.equal(
+        ["direct_address_fast_path", "direct_address_wake_ping", "llm_yes", "llm_yes_retry"].includes(reason),
+        true,
+        row.text
+      );
+      if (reason === "direct_address_fast_path" || reason === "direct_address_wake_ping") {
+        assert.equal(decision.directAddressed, true, row.text);
+      }
+    } else {
+      assert.equal(decision.directAddressed, false, row.text);
+      assert.equal(decision.reason, "llm_no", row.text);
+    }
   }
 
-  assert.equal(callCount, cases.length);
+  assert.equal(callCount > 0, true);
 });
 
 test("reply decider uses richer compact prompt guidance on first attempt", async () => {
@@ -406,7 +434,9 @@ test("reply decider uses richer compact prompt guidance on first attempt", async
 
   assert.equal(decision.allow, true);
   assert.equal(decision.reason, "llm_yes");
+  assert.match(seenSystemPrompt, /Treat near-phonetic or misspelled tokens that appear to target the bot name as direct address\./);
   assert.match(seenSystemPrompt, /When uncertain and the utterance is a clear question, prefer YES\./);
+  assert.match(seenUserPrompt, /Treat near-phonetic or misspelled tokens that appear to target the bot name as direct address\./);
   assert.match(seenUserPrompt, /Current speaker:/);
   assert.match(seenUserPrompt, /Known participants: alice, bob\./);
   assert.match(seenUserPrompt, /Recent turns:/);
@@ -583,7 +613,7 @@ test("reply decider uses JSON schema contract for claude-code and accepts struct
   assert.equal(seenSchemas[0].includes('"NO"'), true);
 });
 
-test("reply decider in stt pipeline uses main text llm provider/model", async () => {
+test("reply decider in stt pipeline uses configured voice decider provider/model", async () => {
   const seenDecisionLlmSettings = [];
   const manager = createManager({
     generate: async (payload) => {
@@ -620,11 +650,81 @@ test("reply decider in stt pipeline uses main text llm provider/model", async ()
 
   assert.equal(decision.allow, false);
   assert.equal(decision.reason, "llm_no");
-  assert.equal(decision.llmProvider, "claude-code");
-  assert.equal(decision.llmModel, "sonnet");
+  assert.equal(decision.llmProvider, "openai");
+  assert.equal(decision.llmModel, "gpt-4.1-mini");
   assert.equal(seenDecisionLlmSettings.length, 1);
-  assert.equal(seenDecisionLlmSettings[0]?.provider, "claude-code");
-  assert.equal(seenDecisionLlmSettings[0]?.model, "sonnet");
+  assert.equal(seenDecisionLlmSettings[0]?.provider, "openai");
+  assert.equal(seenDecisionLlmSettings[0]?.model, "gpt-4.1-mini");
+});
+
+test("reply decider can skip classifier call in stt pipeline when disabled", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      return { text: "NO" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "stt_pipeline",
+      botTurnOpen: false,
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          enabled: false,
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "what should we do next?"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "classifier_disabled_merged_with_generation");
+  assert.equal(callCount, 0);
+});
+
+test("reply decider blocks ambiguous realtime turns when classifier is disabled", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      return { text: "YES" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          enabled: false,
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "what should we do next?"
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "classifier_disabled");
+  assert.equal(callCount, 0);
 });
 
 test("reply decider bypasses LLM for direct-addressed turns", async () => {

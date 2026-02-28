@@ -104,7 +104,8 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
 
   assert.equal(normalized.voice.mode, "openai_realtime");
   assert.equal(normalized.voice.replyDecisionLlm.provider, "claude-code");
-  assert.equal(normalized.voice.replyDecisionLlm.model, "claude-haiku-4-5");
+  assert.equal(normalized.voice.replyDecisionLlm.model, "sonnet");
+  assert.equal(normalized.voice.replyDecisionLlm.enabled, true);
   assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, 3);
   assert.equal(normalized.voice.openaiRealtime.inputAudioFormat, "pcm16");
   assert.equal(normalized.voice.openaiRealtime.outputAudioFormat, "g711_alaw");
@@ -160,7 +161,7 @@ test("normalizeSettings handles memoryLlm defaults and discovery source fallback
   assert.equal(typeof normalized.initiative.discovery.sources.x, "boolean");
 });
 
-test("normalizeSettings forces stt pipeline reply decider model/provider to main llm", () => {
+test("normalizeSettings keeps stt pipeline reply decider model/provider independent from main llm", () => {
   const normalized = normalizeSettings({
     llm: {
       provider: "claude-code",
@@ -176,7 +177,8 @@ test("normalizeSettings forces stt pipeline reply decider model/provider to main
     }
   });
 
-  assert.equal(normalized.voice.replyDecisionLlm.provider, "claude-code");
-  assert.equal(normalized.voice.replyDecisionLlm.model, "opus");
+  assert.equal(normalized.voice.replyDecisionLlm.provider, "openai");
+  assert.equal(normalized.voice.replyDecisionLlm.model, "gpt-4.1-mini");
+  assert.equal(normalized.voice.replyDecisionLlm.enabled, true);
   assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, 2);
 });

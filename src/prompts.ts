@@ -321,6 +321,11 @@ export function buildReplyPrompt({
   if (directlyAddressed) {
     parts.push("This message directly addressed you.");
   }
+  parts.push("Treat close misspellings/ASR variants of your name as possibly addressed to you only when context supports it.");
+  parts.push("Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" are often directed at you.");
+  parts.push("Questions like \"is that you <name-ish-token>?\" are often directed at you.");
+  parts.push("Do not infer direct address from rhyme alone.");
+  parts.push("Generic prank/stank/stinky chatter without a clear name-like callout is usually not directed at you.");
   if (responseRequired) {
     parts.push("A reply is required for this turn unless safety policy requires refusing.");
     parts.push("Do not output [SKIP] except for safety refusals.");

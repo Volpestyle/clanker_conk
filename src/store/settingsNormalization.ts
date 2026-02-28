@@ -271,6 +271,7 @@ export function normalizeSettings(raw) {
     ttsSpeed?: number;
   };
   type VoiceReplyDecisionDefaults = {
+    enabled?: boolean;
     provider?: string;
     model?: string;
     maxAttempts?: number;
@@ -339,6 +340,7 @@ export function normalizeSettings(raw) {
       ttsSpeed: 1
     },
     replyDecisionLlm: {
+      enabled: true,
       provider: "anthropic",
       model: "claude-haiku-4-5",
       maxAttempts: 1
@@ -418,28 +420,28 @@ export function normalizeSettings(raw) {
   merged.voice.replyEagerness = clamp(
     Number.isFinite(voiceEagernessRaw) ? voiceEagernessRaw : 0, 0, 100
   );
-  if (merged.voice.mode === "stt_pipeline") {
-    merged.voice.replyDecisionLlm.provider = merged.llm.provider;
-    merged.voice.replyDecisionLlm.model = merged.llm.model;
-  } else {
-    merged.voice.replyDecisionLlm.provider = normalizeLlmProvider(
-      merged.voice?.replyDecisionLlm?.provider || defaultVoiceReplyDecisionLlm.provider || "anthropic"
-    );
-    const replyDecisionModelFallback = String(
-      defaultVoiceReplyDecisionLlm.model || defaultModelForLlmProvider(merged.voice.replyDecisionLlm.provider)
-    )
-      .trim()
-      .slice(0, 120);
-    merged.voice.replyDecisionLlm.model = String(
-      merged.voice?.replyDecisionLlm?.model ||
-        replyDecisionModelFallback ||
-        defaultModelForLlmProvider(merged.voice.replyDecisionLlm.provider)
-    )
-      .trim()
-      .slice(0, 120);
-    if (!merged.voice.replyDecisionLlm.model) {
-      merged.voice.replyDecisionLlm.model = defaultModelForLlmProvider(merged.voice.replyDecisionLlm.provider);
-    }
+  merged.voice.replyDecisionLlm.enabled =
+    merged.voice?.replyDecisionLlm?.enabled !== undefined
+      ? Boolean(merged.voice?.replyDecisionLlm?.enabled)
+      : defaultVoiceReplyDecisionLlm?.enabled !== undefined
+        ? Boolean(defaultVoiceReplyDecisionLlm.enabled)
+        : true;
+  merged.voice.replyDecisionLlm.provider = normalizeLlmProvider(
+    merged.voice?.replyDecisionLlm?.provider || defaultVoiceReplyDecisionLlm.provider || "anthropic"
+  );
+  const defaultReplyDecisionModel =
+    merged.voice.replyDecisionLlm.provider === normalizeLlmProvider(defaultVoiceReplyDecisionLlm.provider)
+      ? String(defaultVoiceReplyDecisionLlm.model || "").trim().slice(0, 120)
+      : "";
+  merged.voice.replyDecisionLlm.model = String(
+    merged.voice?.replyDecisionLlm?.model ||
+      defaultReplyDecisionModel ||
+      defaultModelForLlmProvider(merged.voice.replyDecisionLlm.provider)
+  )
+    .trim()
+    .slice(0, 120);
+  if (!merged.voice.replyDecisionLlm.model) {
+    merged.voice.replyDecisionLlm.model = defaultModelForLlmProvider(merged.voice.replyDecisionLlm.provider);
   }
   const replyDecisionMaxAttemptsRaw = Number(merged.voice?.replyDecisionLlm?.maxAttempts);
   const defaultReplyDecisionMaxAttemptsRaw = Number(defaultVoiceReplyDecisionLlm.maxAttempts);

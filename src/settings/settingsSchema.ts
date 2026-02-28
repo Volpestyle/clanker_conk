@@ -102,6 +102,7 @@ export const DEFAULT_SETTINGS = {
     blockedVoiceUserIds: [],
     replyEagerness: 0,
     replyDecisionLlm: {
+      enabled: true,
       provider: "anthropic",
       model: "claude-haiku-4-5",
       maxAttempts: 1

@@ -36,7 +36,6 @@ export function settingsToForm(settings) {
   const defaultDiscovery = defaults.initiative.discovery;
   const activity = settings?.activity || {};
   const selectedVoiceMode = settings?.voice?.mode ?? defaultVoice.mode;
-  const useTextLlmForVoiceReplyDecision = selectedVoiceMode === "stt_pipeline";
   return {
     botName: settings?.botName || defaults.botName,
     personaFlavor: settings?.persona?.flavor || defaults.persona.flavor,
@@ -95,12 +94,12 @@ export function settingsToForm(settings) {
     voiceInactivityLeaveSeconds: settings?.voice?.inactivityLeaveSeconds ?? defaultVoice.inactivityLeaveSeconds,
     voiceMaxSessionsPerDay: settings?.voice?.maxSessionsPerDay ?? defaultVoice.maxSessionsPerDay,
     voiceReplyEagerness: settings?.voice?.replyEagerness ?? defaultVoice.replyEagerness,
-    voiceReplyDecisionLlmProvider: useTextLlmForVoiceReplyDecision
-      ? settings?.llm?.provider ?? defaultLlm.provider
-      : settings?.voice?.replyDecisionLlm?.provider ?? defaultVoice.replyDecisionLlm.provider,
-    voiceReplyDecisionLlmModel: useTextLlmForVoiceReplyDecision
-      ? settings?.llm?.model ?? defaultLlm.model
-      : settings?.voice?.replyDecisionLlm?.model ?? defaultVoice.replyDecisionLlm.model,
+    voiceReplyDecisionLlmEnabled:
+      settings?.voice?.replyDecisionLlm?.enabled ?? defaultVoice.replyDecisionLlm.enabled ?? true,
+    voiceReplyDecisionLlmProvider:
+      settings?.voice?.replyDecisionLlm?.provider ?? defaultVoice.replyDecisionLlm.provider,
+    voiceReplyDecisionLlmModel:
+      settings?.voice?.replyDecisionLlm?.model ?? defaultVoice.replyDecisionLlm.model,
     voiceAllowedChannelIds: formatList(settings?.voice?.allowedVoiceChannelIds),
     voiceBlockedChannelIds: formatList(settings?.voice?.blockedVoiceChannelIds),
     voiceBlockedUserIds: formatList(settings?.voice?.blockedVoiceUserIds),
@@ -187,7 +186,6 @@ export function settingsToForm(settings) {
 }
 
 export function formToSettingsPatch(form) {
-  const useTextLlmForVoiceReplyDecision = String(form.voiceMode || "").trim() === "stt_pipeline";
   return {
     botName: form.botName.trim(),
     persona: {
@@ -257,12 +255,9 @@ export function formToSettingsPatch(form) {
       maxSessionsPerDay: Number(form.voiceMaxSessionsPerDay),
       replyEagerness: Number(form.voiceReplyEagerness),
       replyDecisionLlm: {
-        provider: useTextLlmForVoiceReplyDecision
-          ? String(form.provider || "").trim()
-          : String(form.voiceReplyDecisionLlmProvider || "").trim(),
-        model: useTextLlmForVoiceReplyDecision
-          ? String(form.model || "").trim()
-          : String(form.voiceReplyDecisionLlmModel || "").trim()
+        enabled: Boolean(form.voiceReplyDecisionLlmEnabled),
+        provider: String(form.voiceReplyDecisionLlmProvider || "").trim(),
+        model: String(form.voiceReplyDecisionLlmModel || "").trim()
       },
       allowedVoiceChannelIds: parseList(form.voiceAllowedChannelIds),
       blockedVoiceChannelIds: parseList(form.voiceBlockedChannelIds),

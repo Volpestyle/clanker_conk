@@ -1,4 +1,5 @@
 import { clamp } from "../utils.ts";
+import { isLikelyBotNameVariantAddress } from "../addressingNameVariants.ts";
 
 export function hasBotMessageInRecentWindow({
   botUserId,
@@ -82,14 +83,19 @@ export function shouldAttemptReplyDecision({
 
 export function getReplyAddressSignal(runtime, settings, message, recentMessages = []) {
   const referencedAuthorId = resolveReferencedAuthorId(message, recentMessages);
+  const inferredByNameVariant = isLikelyBotNameVariantAddress(
+    String(message?.content || ""),
+    String(settings?.botName || "")
+  );
   const direct =
     runtime.isDirectlyAddressed(settings, message) ||
-    (referencedAuthorId && referencedAuthorId === runtime.botUserId);
+    (referencedAuthorId && referencedAuthorId === runtime.botUserId) ||
+    inferredByNameVariant;
   return {
     direct: Boolean(direct),
-    inferred: false,
+    inferred: Boolean(inferredByNameVariant),
     triggered: Boolean(direct),
-    reason: direct ? "direct" : "llm_decides"
+    reason: direct ? (inferredByNameVariant ? "name_variant" : "direct") : "llm_decides"
   };
 }
 
