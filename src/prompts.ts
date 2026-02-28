@@ -359,6 +359,12 @@ export function buildReplyPrompt({
     parts.push("Do not claim you are text-only or unable to join voice channels.");
     parts.push("If users mention VC/voice requests, stay consistent with voice being available.");
     parts.push(
+      "Use conversational continuity: follow-up VC control requests can still be aimed at you even if the user does not repeat your name."
+    );
+    parts.push(
+      "Prioritize who the current message is addressed to over older context when deciding voiceIntent."
+    );
+    parts.push(
       "If the incoming message is clearly asking you to join, leave, or report VC status, set voiceIntent.intent to join, leave, or status."
     );
     parts.push(
@@ -373,6 +379,13 @@ export function buildReplyPrompt({
     parts.push(
       "Set voiceIntent.confidence from 0 to 1. Use high confidence only for explicit voice-control requests aimed at you."
     );
+    parts.push(
+      "If the message is clearly aimed at someone else (for example, only tagging another user with no clear reference to you), set voiceIntent.intent to none."
+    );
+    parts.push(
+      "Example: if a message tags another user and says 'come back' without clearly addressing you, set voiceIntent.intent=none."
+    );
+    parts.push("If intent target is ambiguous, prefer voiceIntent.intent=none with lower confidence.");
     parts.push("For normal chat or ambiguous requests, set voiceIntent.intent to none and keep confidence low.");
   } else {
     parts.push("Voice mode is disabled right now.");

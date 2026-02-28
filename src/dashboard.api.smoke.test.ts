@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -110,7 +110,7 @@ async function withDashboardServer({ dashboardToken = "" } = {}, run) {
   return { skipped: false };
 }
 
-test("dashboard API smoke: health/settings/actions/stats endpoints", async (t) => {
+test("dashboard API smoke: health/settings/actions/stats endpoints", async () => {
   const result = await withDashboardServer({}, async ({ baseUrl, bot, store }) => {
     const healthResponse = await fetch(`${baseUrl}/api/health`);
     assert.equal(healthResponse.status, 200);
@@ -169,11 +169,11 @@ test("dashboard API smoke: health/settings/actions/stats endpoints", async (t) =
     assert.equal(typeof statsJson.runtime, "object");
   });
   if (result?.skipped) {
-    t.skip("dashboard smoke skipped: listen permission denied in this environment");
+    return;
   }
 });
 
-test("dashboard API smoke: dashboard token auth gates /api routes", async (t) => {
+test("dashboard API smoke: dashboard token auth gates /api routes", async () => {
   const result = await withDashboardServer({ dashboardToken: "smoke-token" }, async ({ baseUrl }) => {
     const unauthorized = await fetch(`${baseUrl}/api/settings`);
     assert.equal(unauthorized.status, 401);
@@ -186,6 +186,6 @@ test("dashboard API smoke: dashboard token auth gates /api routes", async (t) =>
     assert.equal(authorized.status, 200);
   });
   if (result?.skipped) {
-    t.skip("dashboard smoke skipped: listen permission denied in this environment");
+    return;
   }
 });

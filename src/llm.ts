@@ -1,5 +1,6 @@
-import { createReadStream } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
+import { basename } from "node:path";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { estimateImageUsdCost, estimateUsdCost } from "./pricing.ts";
@@ -1031,9 +1032,11 @@ export class LLMService {
 
     const resolvedModel = String(model || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
     try {
+      const filePathText = String(filePath);
+      const audioBytes = await readFile(filePathText);
       const response = await this.openai.audio.transcriptions.create({
         model: resolvedModel,
-        file: createReadStream(String(filePath)),
+        file: new File([audioBytes], basename(filePathText) || "audio.wav"),
         response_format: "text"
       });
 

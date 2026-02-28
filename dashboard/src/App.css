@@ -347,6 +347,74 @@ body {
   opacity: 0.8;
 }
 
+/* ---- MAIN TABS ---- */
+
+.main-tabs {
+  display: flex;
+  gap: 2px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 4px;
+  box-shadow: var(--shadow);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+.main-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 20px;
+  font-family: "Manrope", "Plus Jakarta Sans", sans-serif;
+  font-size: 0.78rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-3);
+  background: none;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    color var(--transition),
+    background var(--transition),
+    border-color var(--transition),
+    box-shadow var(--transition);
+  position: relative;
+}
+
+.main-tab:hover {
+  color: var(--ink-1);
+  background: rgba(255, 255, 255, 0.02);
+  border-color: transparent;
+}
+
+.main-tab.active {
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-color: rgba(190, 242, 100, 0.12);
+  box-shadow: 0 0 16px rgba(190, 242, 100, 0.06);
+}
+
+.main-tab.active .main-tab-icon {
+  color: var(--accent);
+}
+
+.main-tab-icon {
+  display: flex;
+  align-items: center;
+  color: var(--ink-3);
+  transition: color var(--transition);
+  flex-shrink: 0;
+}
+
+.main-tab:hover .main-tab-icon {
+  color: var(--ink-2);
+}
+
 /* ---- GRID LAYOUTS ---- */
 
 .grid-main {

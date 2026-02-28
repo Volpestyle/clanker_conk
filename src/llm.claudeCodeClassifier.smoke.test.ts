@@ -10,7 +10,7 @@
  *  - contract violation retry & bounded fallback
  *
  */
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   buildClaudeCodeSystemPrompt,

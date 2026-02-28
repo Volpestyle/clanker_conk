@@ -553,7 +553,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           pumping: false,
           timer: null,
           waitingDrain: false,
-          drainHandler: null
+          drainHandler: null,
+          lastWarnAt: 0
         },
         cleanupHandlers: [],
         ending: false
