@@ -230,6 +230,35 @@ export function createDashboardServer({
     });
   });
 
+  app.post("/api/voice/join", async (req, res, next) => {
+    try {
+      if (!bot || typeof bot.requestVoiceJoinFromDashboard !== "function") {
+        return res.status(503).json({
+          ok: false,
+          reason: "voice_join_unavailable"
+        });
+      }
+
+      const result = await bot.requestVoiceJoinFromDashboard({
+        guildId: String(req.body?.guildId || "").trim() || null,
+        requesterUserId: String(req.body?.requesterUserId || "").trim() || null,
+        textChannelId: String(req.body?.textChannelId || "").trim() || null,
+        source: String(req.body?.source || "dashboard_voice_tab").trim() || "dashboard_voice_tab"
+      });
+
+      return res.json(
+        result && typeof result === "object"
+          ? result
+          : {
+              ok: false,
+              reason: "voice_join_unknown"
+            }
+      );
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   app.post(`/api${STREAM_INGEST_API_PATH}`, async (req, res, next) => {
     try {
       const guildId = String(req.body?.guildId || "").trim();

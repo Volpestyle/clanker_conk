@@ -487,6 +487,236 @@ export class ClankerBot {
     return [...this.client.guilds.cache.values()].map((g) => ({ id: g.id, name: g.name }));
   }
 
+  resolveDashboardVoiceJoinRequester(guild, requesterUserId = "") {
+    if (!guild?.voiceStates?.cache) {
+      return {
+        member: null,
+        voiceChannel: null,
+        reason: "no_voice_members_found"
+      };
+    }
+
+    const normalizedRequesterUserId = String(requesterUserId || "").trim();
+    if (normalizedRequesterUserId) {
+      const explicitVoiceState = guild.voiceStates.cache.get(normalizedRequesterUserId) || null;
+      const explicitMember = explicitVoiceState?.member || guild.members?.cache?.get(normalizedRequesterUserId) || null;
+      const explicitVoiceChannel = explicitVoiceState?.channel || explicitMember?.voice?.channel || null;
+      if (explicitMember?.user?.bot) {
+        return {
+          member: null,
+          voiceChannel: null,
+          reason: "requester_is_bot"
+        };
+      }
+      if (explicitMember && explicitVoiceChannel) {
+        return {
+          member: explicitMember,
+          voiceChannel: explicitVoiceChannel,
+          reason: "ok"
+        };
+      }
+      return {
+        member: null,
+        voiceChannel: null,
+        reason: "requester_not_in_voice"
+      };
+    }
+
+    for (const voiceState of guild.voiceStates.cache.values()) {
+      const member = voiceState?.member || null;
+      if (!member || member.user?.bot) continue;
+      const voiceChannel = voiceState?.channel || member.voice?.channel || null;
+      if (!voiceChannel) continue;
+      return {
+        member,
+        voiceChannel,
+        reason: "ok"
+      };
+    }
+
+    return {
+      member: null,
+      voiceChannel: null,
+      reason: "no_voice_members_found"
+    };
+  }
+
+  resolveDashboardVoiceJoinTextChannel({ guild, textChannelId = "" }) {
+    if (!guild?.channels?.cache) return null;
+
+    const normalizedTextChannelId = String(textChannelId || "").trim();
+    const existingSession = this.voiceSessionManager.sessions.get(String(guild.id));
+    const botMember = guild.members?.me || guild.members?.cache?.get(this.client.user?.id || "");
+    const candidateIds = [
+      normalizedTextChannelId,
+      String(existingSession?.textChannelId || "").trim(),
+      String(guild.systemChannelId || "").trim()
+    ];
+    const seenIds = new Set();
+
+    const canSendInChannel = (channel) => {
+      if (!channel || typeof channel.send !== "function") return false;
+      if (typeof channel.isTextBased === "function" && !channel.isTextBased()) return false;
+      if (botMember && typeof channel.permissionsFor === "function") {
+        const permissions = channel.permissionsFor(botMember);
+        if (permissions && typeof permissions.has === "function" && !permissions.has("SendMessages")) {
+          return false;
+        }
+      }
+      return true;
+    };
+
+    for (const candidateId of candidateIds) {
+      if (!candidateId || seenIds.has(candidateId)) continue;
+      seenIds.add(candidateId);
+      const channel = guild.channels.cache.get(candidateId) || null;
+      if (canSendInChannel(channel)) return channel;
+    }
+
+    for (const channel of guild.channels.cache.values()) {
+      if (canSendInChannel(channel)) return channel;
+    }
+
+    return null;
+  }
+
+  async requestVoiceJoinFromDashboard({
+    guildId = null,
+    requesterUserId = null,
+    textChannelId = null,
+    source = "dashboard_voice_tab"
+  } = {}) {
+    const settings = this.store.getSettings();
+    const normalizedGuildId = String(guildId || "").trim();
+    const normalizedRequesterUserId = String(requesterUserId || "").trim();
+    const normalizedTextChannelId = String(textChannelId || "").trim();
+    const normalizedSource = String(source || "dashboard_voice_tab").trim() || "dashboard_voice_tab";
+
+    const guilds = [...this.client.guilds.cache.values()];
+    let targetGuild = null;
+    if (normalizedGuildId) {
+      targetGuild = this.client.guilds.cache.get(normalizedGuildId) || null;
+    } else {
+      for (const guild of guilds) {
+        const resolution = this.resolveDashboardVoiceJoinRequester(guild, normalizedRequesterUserId);
+        if (resolution.member && resolution.voiceChannel) {
+          targetGuild = guild;
+          break;
+        }
+      }
+      if (!targetGuild && guilds.length > 0) {
+        targetGuild = guilds[0];
+      }
+    }
+
+    if (!targetGuild) {
+      return {
+        ok: false,
+        reason: normalizedGuildId ? "guild_not_found" : "no_guild_available",
+        guildId: normalizedGuildId || null,
+        voiceChannelId: null,
+        textChannelId: null,
+        requesterUserId: normalizedRequesterUserId || null
+      };
+    }
+
+    const requesterResolution = this.resolveDashboardVoiceJoinRequester(targetGuild, normalizedRequesterUserId);
+    const targetMember = requesterResolution.member;
+    const targetVoiceChannel = requesterResolution.voiceChannel;
+    if (!targetMember || !targetVoiceChannel) {
+      return {
+        ok: false,
+        reason: requesterResolution.reason || "requester_not_in_voice",
+        guildId: targetGuild.id,
+        voiceChannelId: null,
+        textChannelId: null,
+        requesterUserId: normalizedRequesterUserId || null
+      };
+    }
+
+    const targetTextChannel = this.resolveDashboardVoiceJoinTextChannel({
+      guild: targetGuild,
+      textChannelId: normalizedTextChannelId
+    });
+    if (!targetTextChannel) {
+      return {
+        ok: false,
+        reason: "text_channel_unavailable",
+        guildId: targetGuild.id,
+        voiceChannelId: String(targetVoiceChannel.id || "") || null,
+        textChannelId: normalizedTextChannelId || null,
+        requesterUserId: String(targetMember.id || "") || null
+      };
+    }
+
+    const targetVoiceChannelId = String(targetVoiceChannel.id || "").trim();
+    const existingSession = this.voiceSessionManager.sessions.get(String(targetGuild.id));
+    const alreadyInTargetChannel =
+      Boolean(existingSession) &&
+      existingSession.ending !== true &&
+      String(existingSession.voiceChannelId || "") === targetVoiceChannelId;
+
+    const syntheticMessage = {
+      guild: targetGuild,
+      guildId: String(targetGuild.id || ""),
+      channel: targetTextChannel,
+      channelId: String(targetTextChannel.id || ""),
+      id: null,
+      author: {
+        id: String(targetMember.id || ""),
+        username: String(targetMember?.user?.username || targetMember?.displayName || targetMember?.id || "")
+      },
+      member: targetMember
+    };
+
+    const handled = await this.voiceSessionManager.requestJoin({
+      message: syntheticMessage,
+      settings,
+      intentConfidence: 1
+    });
+
+    const activeSession = this.voiceSessionManager.sessions.get(String(targetGuild.id));
+    const joinedTargetChannel =
+      Boolean(activeSession) &&
+      activeSession.ending !== true &&
+      String(activeSession.voiceChannelId || "") === targetVoiceChannelId;
+
+    const reason = !handled
+      ? "join_not_handled"
+      : joinedTargetChannel
+        ? alreadyInTargetChannel
+          ? "already_in_channel"
+          : "joined"
+        : "voice_join_unconfirmed";
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: targetGuild.id,
+      channelId: String(targetTextChannel.id || "") || null,
+      userId: String(targetMember.id || "") || null,
+      content: "dashboard_voice_join",
+      metadata: {
+        source: normalizedSource,
+        reason,
+        requestedGuildId: normalizedGuildId || null,
+        requestedRequesterUserId: normalizedRequesterUserId || null,
+        requestedTextChannelId: normalizedTextChannelId || null,
+        voiceChannelId: targetVoiceChannelId || null,
+        handled: Boolean(handled),
+        joinedTargetChannel: Boolean(joinedTargetChannel)
+      }
+    });
+
+    return {
+      ok: joinedTargetChannel,
+      reason,
+      guildId: targetGuild.id,
+      voiceChannelId: targetVoiceChannelId || null,
+      textChannelId: String(targetTextChannel.id || "") || null,
+      requesterUserId: String(targetMember.id || "") || null
+    };
+  }
+
   async applyRuntimeSettings(nextSettings = null) {
     const settings = nextSettings || this.store.getSettings();
     await this.voiceSessionManager.reconcileSettings(settings);

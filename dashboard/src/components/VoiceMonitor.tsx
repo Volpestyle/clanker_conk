@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, type ReactNode } from "react";
+import { api } from "../api";
 import {
   useVoiceSSE,
   type VoiceSession,
@@ -72,6 +73,86 @@ const STATE_LABELS: Record<string, string> = {
 function snippet(text?: string, max = 120): string {
   if (!text) return "";
   return text.length > max ? text.slice(0, max) + "..." : text;
+}
+
+type Guild = {
+  id: string;
+  name: string;
+};
+
+type VoiceJoinResponse = {
+  ok: boolean;
+  reason: string;
+  guildId: string | null;
+  voiceChannelId: string | null;
+  textChannelId: string | null;
+  requesterUserId: string | null;
+};
+
+function resolveVoiceJoinStatusMessage(result: VoiceJoinResponse): {
+  text: string;
+  type: "ok" | "error";
+} {
+  if (result.ok) {
+    if (result.reason === "already_in_channel") {
+      return {
+        type: "ok",
+        text: "Already in the target voice channel."
+      };
+    }
+    return {
+      type: "ok",
+      text: "Voice join completed."
+    };
+  }
+
+  if (result.reason === "no_guild_available") {
+    return {
+      type: "error",
+      text: "No guild is available for voice join."
+    };
+  }
+  if (result.reason === "guild_not_found") {
+    return {
+      type: "error",
+      text: "The selected guild was not found."
+    };
+  }
+  if (result.reason === "requester_not_in_voice") {
+    return {
+      type: "error",
+      text: "No matching requester is currently in voice."
+    };
+  }
+  if (result.reason === "requester_is_bot") {
+    return {
+      type: "error",
+      text: "Requester must be a non-bot user in voice."
+    };
+  }
+  if (result.reason === "no_voice_members_found") {
+    return {
+      type: "error",
+      text: "No non-bot members are currently in voice."
+    };
+  }
+  if (result.reason === "text_channel_unavailable") {
+    return {
+      type: "error",
+      text: "No writable text channel was found for voice operations."
+    };
+  }
+  if (result.reason === "join_not_handled" || result.reason === "voice_join_unconfirmed") {
+    return {
+      type: "error",
+      text: "Voice join was requested but did not complete."
+    };
+  }
+
+  return {
+    type: "error",
+    text: "Voice join failed."
+  };
 }
 
 // ---- Collapsible Section ----
@@ -543,6 +624,16 @@ function EventFilter({
 
 export default function VoiceMonitor() {
   const { voiceState, events, status } = useVoiceSSE();
+  const [guilds, setGuilds] = useState<Guild[]>([]);
+  const [selectedGuildId, setSelectedGuildId] = useState("");
+  const [joinPending, setJoinPending] = useState(false);
+  const [joinStatus, setJoinStatus] = useState<{
+    text: string;
+    type: "ok" | "error" | "";
+  }>({
+    text: "",
+    type: ""
+  });
   const [showRuntime, setShowRuntime] = useState(false);
   const [activeKinds, setActiveKinds] = useState<Set<string>>(
     () => new Set(EVENT_KINDS.filter((k) => k !== "runtime"))
@@ -550,6 +641,29 @@ export default function VoiceMonitor() {
   const timelineRef = useRef<HTMLDivElement>(null);
 
   const sessions = voiceState?.sessions || [];
+
+  useEffect(() => {
+    let cancelled = false;
+
+    api<Guild[]>("/api/guilds")
+      .then((rows) => {
+        if (cancelled) return;
+        const nextGuilds = Array.isArray(rows) ? rows : [];
+        setGuilds(nextGuilds);
+        setSelectedGuildId((current) => {
+          if (current && nextGuilds.some((guild) => guild.id === current)) return current;
+          return nextGuilds[0]?.id || "";
+        });
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setGuilds([]);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const toggleKind = (kind: string) => {
     setActiveKinds((prev) => {
@@ -566,6 +680,29 @@ export default function VoiceMonitor() {
     return activeKinds.has(kindShort);
   });
 
+  const requestVoiceJoin = async () => {
+    setJoinPending(true);
+    try {
+      const payload: Record<string, string> = {
+        source: "dashboard_voice_tab"
+      };
+      if (selectedGuildId) payload.guildId = selectedGuildId;
+
+      const result = await api<VoiceJoinResponse>("/api/voice/join", {
+        method: "POST",
+        body: payload
+      });
+      setJoinStatus(resolveVoiceJoinStatusMessage(result));
+    } catch (error: unknown) {
+      setJoinStatus({
+        type: "error",
+        text: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      setJoinPending(false);
+    }
+  };
+
   return (
     <div className="vm-container">
       {/* Connection status */}
@@ -580,6 +717,35 @@ export default function VoiceMonitor() {
           </span>
         )}
       </div>
+
+      <section className="vm-join panel">
+        <div className="vm-join-row">
+          <div className="vm-join-field">
+            <label className="vm-join-label" htmlFor="vm-join-guild">Guild</label>
+            <select
+              id="vm-join-guild"
+              value={selectedGuildId}
+              onChange={(event) => setSelectedGuildId(event.target.value)}
+              disabled={joinPending || guilds.length <= 1}
+            >
+              {guilds.length === 0 && <option value="">Auto-detect</option>}
+              {guilds.map((guild) => (
+                <option key={guild.id} value={guild.id}>
+                  {guild.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button type="button" onClick={requestVoiceJoin} disabled={joinPending}>
+            {joinPending ? "Joining..." : "Join VC"}
+          </button>
+        </div>
+        {joinStatus.text && (
+          <p className={`vm-join-status ${joinStatus.type}`} role="status" aria-live="polite">
+            {joinStatus.text}
+          </p>
+        )}
+      </section>
 
       {/* Session panels */}
       <section className="vm-sessions">

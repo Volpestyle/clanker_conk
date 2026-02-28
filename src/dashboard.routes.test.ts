@@ -323,3 +323,75 @@ test("dashboard public ingest requires at least one dashboard/public token", asy
     return;
   }
 });
+
+test("dashboard voice join returns unavailable when bot does not expose join helper", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl }) => {
+    const response = await fetch(`${baseUrl}/api/voice/join`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        guildId: "guild-1"
+      })
+    });
+
+    assert.equal(response.status, 503);
+    const json = await response.json();
+    assert.equal(json.ok, false);
+    assert.equal(json.reason, "voice_join_unavailable");
+  });
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard voice join forwards payload to bot helper", async () => {
+  const joinCalls = [];
+  const result = await withDashboardServer(
+    {
+      botOverrides: {
+        async requestVoiceJoinFromDashboard(payload) {
+          joinCalls.push(payload);
+          return {
+            ok: true,
+            reason: "joined",
+            guildId: payload.guildId || "guild-1",
+            voiceChannelId: "voice-1",
+            textChannelId: "text-1",
+            requesterUserId: payload.requesterUserId || "user-1"
+          };
+        }
+      }
+    },
+    async ({ baseUrl }) => {
+      const response = await fetch(`${baseUrl}/api/voice/join`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          guildId: "guild-99",
+          requesterUserId: "user-42",
+          textChannelId: "chan-77",
+          source: "test_case"
+        })
+      });
+
+      assert.equal(response.status, 200);
+      const json = await response.json();
+      assert.equal(json.ok, true);
+      assert.equal(json.reason, "joined");
+      assert.equal(joinCalls.length, 1);
+      assert.equal(joinCalls[0]?.guildId, "guild-99");
+      assert.equal(joinCalls[0]?.requesterUserId, "user-42");
+      assert.equal(joinCalls[0]?.textChannelId, "chan-77");
+      assert.equal(joinCalls[0]?.source, "test_case");
+    }
+  );
+
+  if (result?.skipped) {
+    return;
+  }
+});

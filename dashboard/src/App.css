@@ -1649,6 +1649,51 @@ td .kind-badge + .kind-badge {
   font-variant-numeric: tabular-nums;
 }
 
+.vm-join {
+  padding: 14px 16px;
+  gap: 10px;
+}
+
+.vm-join-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.vm-join-field {
+  flex: 1;
+  min-width: 200px;
+}
+
+.vm-join-label {
+  margin: 0 0 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--ink-2);
+}
+
+.vm-join-status {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  font-size: 0.78rem;
+}
+
+.vm-join-status.ok {
+  border-color: rgba(74, 222, 128, 0.3);
+  background: var(--success-dim);
+  color: #9ff0bc;
+}
+
+.vm-join-status.error {
+  border-color: rgba(248, 113, 113, 0.32);
+  background: var(--danger-dim);
+  color: #f9b1b1;
+}
+
 /* -- session cards (expanded panels) -- */
 
 .vm-sessions {
@@ -2286,6 +2331,13 @@ td .kind-badge + .kind-badge {
 }
 
 @media (max-width: 640px) {
+  .vm-join-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .vm-join-row button {
+    width: 100%;
+  }
   .vm-card-quick {
     gap: 8px;
   }
