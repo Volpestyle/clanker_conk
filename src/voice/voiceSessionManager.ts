@@ -65,6 +65,7 @@ import {
   formatRealtimeMemoryFacts,
   formatSoundboardCandidateLine,
   getRealtimeRuntimeLabel,
+  isLikelyVocativeAddressToOtherParticipant,
   isRecoverableRealtimeError,
   isRealtimeMode,
   isVoiceTurnAddressedToBot,
@@ -2551,6 +2552,17 @@ export class VoiceSessionManager {
     const normalizedTranscript = normalizeVoiceText(transcript, VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS);
     const normalizedUserId = String(userId || "").trim();
     const participantCount = this.countHumanVoiceParticipants(session);
+    const speakerName = this.resolveVoiceSpeakerName(session, userId) || "someone";
+    const participantList = this.getVoiceChannelParticipants(session)
+      .map((entry) => entry.displayName)
+      .filter(Boolean)
+      .slice(0, 10);
+    const addressedToOtherParticipant = isLikelyVocativeAddressToOtherParticipant({
+      transcript: normalizedTranscript,
+      participantDisplayNames: participantList,
+      botName: getPromptBotName(settings),
+      speakerName
+    });
     const now = Date.now();
     const directAddressedByName = normalizedTranscript
       ? (
@@ -2617,7 +2629,8 @@ export class VoiceSessionManager {
       focusedSpeakerUserId &&
       normalizedUserId === focusedSpeakerUserId &&
       focusedSpeakerAgeMs >= 0 &&
-      focusedSpeakerAgeMs <= FOCUSED_SPEAKER_CONTINUATION_MS;
+      focusedSpeakerAgeMs <= FOCUSED_SPEAKER_CONTINUATION_MS &&
+      !addressedToOtherParticipant;
     if (focusedSpeakerFollowup) {
       return {
         allow: true,
@@ -2688,12 +2701,7 @@ export class VoiceSessionManager {
       };
     }
 
-    const speakerName = this.resolveVoiceSpeakerName(session, userId) || "someone";
     const botName = getPromptBotName(settings);
-    const participantList = this.getVoiceChannelParticipants(session)
-      .map((entry) => entry.displayName)
-      .filter(Boolean)
-      .slice(0, 10);
     const recentHistory = this.formatVoiceDecisionHistory(session, 6);
     const compactHistory = this.formatVoiceDecisionHistory(session, 3);
     const configuredMaxDecisionAttempts = Number(replyDecisionLlm?.maxAttempts);
@@ -2728,6 +2736,7 @@ export class VoiceSessionManager {
       `Join window active: ${joinWindowActive ? "yes" : "no"}.`,
       `Join window age ms: ${joinWindowAgeMs}.`,
       `Directly addressed: ${directAddressed ? "yes" : "no"}.`,
+      `Likely aimed at another participant: ${addressedToOtherParticipant ? "yes" : "no"}.`,
       `Latest transcript: "${normalizedTranscript}".`,
       wakeVariantHint
     ];
@@ -2743,6 +2752,7 @@ export class VoiceSessionManager {
       `Current speaker: ${speakerName}.`,
       `Join window active: ${joinWindowActive ? "yes" : "no"}.`,
       `Directly addressed: ${directAddressed ? "yes" : "no"}.`,
+      `Likely aimed at another participant: ${addressedToOtherParticipant ? "yes" : "no"}.`,
       `Reply eagerness: ${replyEagerness}/100.`,
       `Participants: ${participantCount}.`,
       `Transcript: "${normalizedTranscript}".`,

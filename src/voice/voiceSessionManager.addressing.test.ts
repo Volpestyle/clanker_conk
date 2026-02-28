@@ -203,6 +203,36 @@ test("reply decider keeps focused speaker followup window for longer turns", asy
   assert.equal(callCount, 0);
 });
 
+test("smoke: focused speaker followup defers to llm when turn vocatively targets another participant", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      return { text: "NO" };
+    }
+  });
+  manager.getVoiceChannelParticipants = () => [{ displayName: "alice" }, { displayName: "joey" }];
+  manager.resolveVoiceSpeakerName = () => "alice";
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      botTurnOpen: false,
+      focusedSpeakerUserId: "speaker-1",
+      focusedSpeakerAt: Date.now()
+    },
+    userId: "speaker-1",
+    settings: baseSettings(),
+    transcript: "hey joey guess what game i'm playing"
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "llm_no");
+  assert.equal(decision.directAddressed, false);
+  assert.equal(callCount, 1);
+});
+
 test("reply decider blocks low-signal focused speaker followup", async () => {
   let callCount = 0;
   const manager = createManager({

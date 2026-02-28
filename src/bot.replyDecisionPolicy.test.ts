@@ -354,6 +354,99 @@ test("non-addressed non-initiative turn is skipped when model declines", async (
   });
 });
 
+test("smoke: text followup-window turn addressed to another user is llm-skipped", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+
+    const llmCalls = [];
+    const replyPayloads = [];
+    const channelSendPayloads = [];
+    const typingCallsRef = { count: 0 };
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate(payload) {
+          llmCalls.push(payload);
+          return {
+            text: JSON.stringify({
+              text: "[SKIP]",
+              skip: true,
+              reactionEmoji: null,
+              media: null,
+              webSearchQuery: null,
+              memoryLookupQuery: null,
+              memoryLine: null,
+              automationAction: { operation: "none" },
+              voiceIntent: { intent: "none", confidence: 0, reason: null },
+              screenShareIntent: { action: "none", confidence: 0, reason: null }
+            }),
+            provider: "test",
+            model: "test-model",
+            usage: null,
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanker conk",
+      tag: "clanker conk#0001"
+    };
+
+    const guild = buildGuild();
+    const channel = buildChannel({ guild, channelId, channelSendPayloads, typingCallsRef });
+    const incoming = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-followup-directed-away",
+      content: "hey joey guess what game i'm playing",
+      replyPayloads
+    });
+
+    const recentMessages = [
+      {
+        message_id: "bot-context-followup",
+        author_id: "bot-1",
+        author_name: "clanker conk",
+        content: "yeah that build looked scuffed",
+        created_at: new Date(Date.now() - 1_200).toISOString()
+      },
+      {
+        message_id: "user-context-followup",
+        author_id: "user-2",
+        author_name: "joey",
+        content: "what game?",
+        created_at: new Date(Date.now() - 900).toISOString()
+      }
+    ];
+
+    const settings = store.getSettings();
+    const addressSignal = bot.getReplyAddressSignal(settings, incoming, recentMessages);
+    assert.equal(Boolean(addressSignal?.triggered), false);
+    const sent = await bot.maybeReplyToMessage(incoming, settings, {
+      source: "message_event",
+      recentMessages,
+      addressSignal
+    });
+
+    assert.equal(sent, false);
+    assert.equal(llmCalls.length, 1);
+    assert.equal(replyPayloads.length, 0);
+    assert.equal(channelSendPayloads.length, 0);
+    assert.equal(typingCallsRef.count, 0);
+  });
+});
+
 test("non-addressed initiative turn uses initiative flow guidance in prompt", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";

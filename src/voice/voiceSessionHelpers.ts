@@ -13,6 +13,15 @@ const SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*([\s\S]*?)\s*\]\]/gi;
 const MAX_SOUNDBOARD_DIRECTIVE_REF_LEN = 180;
 const PRIMARY_WAKE_TOKEN_MIN_LEN = 4;
 const PRIMARY_WAKE_GENERIC_TOKENS = new Set(["bot", "ai", "assistant"]);
+const VOCATIVE_GREETING_TOKENS = new Set([
+  "hey",
+  "hi",
+  "yo",
+  "sup",
+  "hello",
+  "hola"
+]);
+const VOCATIVE_IGNORE_TOKENS = new Set(["guys", "everyone", "all", "chat", "yall", "yaall"]);
 
 export function parseRealtimeErrorPayload(payload) {
   if (!payload || typeof payload !== "object") {
@@ -360,6 +369,47 @@ export function isVoiceTurnAddressedToBot(transcript, settings) {
     transcript,
     botName: settings?.botName || ""
   });
+}
+
+export function isLikelyVocativeAddressToOtherParticipant({
+  transcript = "",
+  participantDisplayNames = [],
+  botName = "",
+  speakerName = ""
+} = {}) {
+  const tokens = tokenizeWakeTokens(transcript);
+  if (tokens.length < 2) return false;
+
+  const botTokens = new Set(tokenizeWakeTokens(botName));
+  const speakerTokens = new Set(tokenizeWakeTokens(speakerName));
+  const participantTokens = new Set();
+  const names = Array.isArray(participantDisplayNames) ? participantDisplayNames : [];
+
+  for (const displayName of names) {
+    const nameTokens = tokenizeWakeTokens(displayName);
+    for (const token of nameTokens) {
+      if (token.length < 3) continue;
+      if (VOCATIVE_IGNORE_TOKENS.has(token)) continue;
+      if (botTokens.has(token)) continue;
+      if (speakerTokens.has(token)) continue;
+      participantTokens.add(token);
+    }
+  }
+  if (!participantTokens.size) return false;
+
+  const firstToken = tokens[0];
+  const secondToken = tokens[1];
+  if (VOCATIVE_GREETING_TOKENS.has(firstToken) && participantTokens.has(secondToken)) {
+    return true;
+  }
+
+  const rawTranscript = String(transcript || "").trim();
+  const leadingVocativeMatch = rawTranscript.match(/^([\p{L}\p{N}]{2,})[,:]/u);
+  if (!leadingVocativeMatch) return false;
+  const leadingToken = normalizeWakeText(String(leadingVocativeMatch[1] || ""));
+  if (!leadingToken) return false;
+  if (botTokens.has(leadingToken)) return false;
+  return participantTokens.has(leadingToken);
 }
 
 function tokenizeWakeTokens(value = "") {
