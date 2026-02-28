@@ -1,6 +1,9 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { isLikelyBotNameVariantAddress } from "./addressingNameVariants.ts";
+import {
+  isLikelyBotNameVariantAddress,
+  scoreBotNameVariantAddress
+} from "./addressingNameVariants.ts";
 
 test("name-variant addressing detects callout-style wake variants without hardcoded bot names", () => {
   const botName = "clanker conk";
@@ -8,6 +11,9 @@ test("name-variant addressing detects callout-style wake variants without hardco
     "Yo, what's up, Clink?",
     "yo plink",
     "hi clunky",
+    "join vc clink",
+    "clank join vc",
+    "join voice clunk",
     "is that u clank?",
     "is that you clinker?",
     "did i just hear a clanka?",
@@ -19,6 +25,8 @@ test("name-variant addressing detects callout-style wake variants without hardco
     "get pranked",
     "get stanked",
     "its stinky in here",
+    "join vc prank",
+    "join voice cleaner",
     "Hi cleaner."
   ];
 
@@ -35,4 +43,16 @@ test("name-variant addressing works with other bot names", () => {
   assert.equal(isLikelyBotNameVariantAddress("yo astra", botName), true);
   assert.equal(isLikelyBotNameVariantAddress("is that you astr0?", botName), true);
   assert.equal(isLikelyBotNameVariantAddress("yo everyone", botName), false);
+});
+
+test("name-variant scoring boosts command-shaped vc requests without forcing non-command matches", () => {
+  const botName = "clanker conk";
+  const commandScore = scoreBotNameVariantAddress("join vc clink", botName);
+  const nonCommandScore = scoreBotNameVariantAddress("the cable made a clink sound", botName);
+
+  assert.equal(commandScore.matched, true);
+  assert.equal(commandScore.matchedToken, "clink");
+  assert.equal(commandScore.signals.includes("voice_command_shape"), true);
+  assert.equal(nonCommandScore.matched, false);
+  assert.equal(commandScore.score > nonCommandScore.score, true);
 });

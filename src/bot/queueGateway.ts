@@ -1,4 +1,5 @@
 import { clamp, sleep } from "../utils.ts";
+import { shouldForceRespondForAddressSignal } from "./replyAdmission.ts";
 
 const REPLY_QUEUE_RATE_LIMIT_WAIT_MS = 15_000;
 const REPLY_QUEUE_SEND_RETRY_BASE_MS = 2_500;
@@ -232,7 +233,14 @@ export async function processReplyQueue(bot, channelId) {
           addressSignal.reason = String(signal.reason || "direct");
         }
       }
-      const forceRespond = burstJobs.some((job) => Boolean(job?.forceRespond || job?.addressSignal?.triggered));
+      const forceRespond = burstJobs.some((job) => {
+        const signal = job?.addressSignal || null;
+        if (job?.forceRespond) {
+          if (!signal || typeof signal !== "object") return true;
+          return shouldForceRespondForAddressSignal(signal);
+        }
+        return shouldForceRespondForAddressSignal(signal);
+      });
       if (forceRespond && !addressSignal.triggered) {
         addressSignal.triggered = true;
         addressSignal.reason = "direct";

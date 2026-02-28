@@ -2,6 +2,13 @@ import { clamp } from "../utils.ts";
 import { isLikelyBotNameVariantAddress } from "../addressingNameVariants.ts";
 import { isBotNameAddressed } from "../voice/voiceSessionHelpers.ts";
 
+export type ReplyAddressSignal = {
+  direct: boolean;
+  inferred: boolean;
+  triggered: boolean;
+  reason: string;
+};
+
 export function hasBotMessageInRecentWindow({
   botUserId,
   recentMessages,
@@ -82,6 +89,15 @@ export function shouldAttemptReplyDecision({
   });
 }
 
+export function shouldForceRespondForAddressSignal(addressSignal: Partial<ReplyAddressSignal> | null = null) {
+  if (!addressSignal || typeof addressSignal !== "object") return false;
+  if (!addressSignal.triggered) return false;
+  const reason = String(addressSignal.reason || "")
+    .trim()
+    .toLowerCase();
+  return reason !== "name_variant";
+}
+
 export function getReplyAddressSignal(runtime, settings, message, recentMessages = []) {
   const referencedAuthorId = resolveReferencedAuthorId(message, recentMessages);
   const inferredByExactName = isBotNameAddressed({
@@ -102,10 +118,10 @@ export function getReplyAddressSignal(runtime, settings, message, recentMessages
     inferred: Boolean(inferredByExactName || inferredByNameVariant),
     triggered: Boolean(direct),
     reason: direct
-      ? inferredByNameVariant
-        ? "name_variant"
-        : inferredByExactName
-          ? "name_exact"
+      ? inferredByExactName
+        ? "name_exact"
+        : inferredByNameVariant
+          ? "name_variant"
           : "direct"
       : "llm_decides"
   };
