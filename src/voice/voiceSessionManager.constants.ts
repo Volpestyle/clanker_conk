@@ -32,6 +32,12 @@ export const REALTIME_TURN_STALE_SKIP_MS = 2200;
 export const REALTIME_TURN_PENDING_MERGE_MAX_BYTES = 24_000 * 2 * 30;
 // Skip trivial micro-clips from speaking_end that frequently hallucinate transcript junk.
 export const VOICE_TURN_MIN_ASR_CLIP_MS = 100;
+// Drop near-silent captures before ASR so Discord speaking blips do not become random transcripts.
+export const VOICE_SILENCE_GATE_MIN_CLIP_MS = 280;
+export const VOICE_SILENCE_GATE_RMS_MAX = 0.003;
+export const VOICE_SILENCE_GATE_PEAK_MAX = 0.012;
+export const VOICE_SILENCE_GATE_ACTIVE_SAMPLE_MIN_ABS = 180;
+export const VOICE_SILENCE_GATE_ACTIVE_RATIO_MAX = 0.01;
 export const VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK = 3;
 export const BOT_TURN_DEFERRED_FLUSH_DELAY_MS = BOT_TURN_SILENCE_RESET_MS + 120;
 export const BOT_TURN_DEFERRED_QUEUE_MAX = 8;

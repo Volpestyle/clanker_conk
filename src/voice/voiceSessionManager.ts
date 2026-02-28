@@ -151,6 +151,11 @@ import {
   VOICE_DECIDER_HISTORY_MAX_TURNS,
   VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS,
   VOICE_LOOKUP_BUSY_LOG_COOLDOWN_MS,
+  VOICE_SILENCE_GATE_ACTIVE_RATIO_MAX,
+  VOICE_SILENCE_GATE_ACTIVE_SAMPLE_MIN_ABS,
+  VOICE_SILENCE_GATE_MIN_CLIP_MS,
+  VOICE_SILENCE_GATE_PEAK_MAX,
+  VOICE_SILENCE_GATE_RMS_MAX,
   VOICE_LOOKUP_BUSY_MAX_CHARS,
   VOICE_TURN_MIN_ASR_CLIP_MS,
   VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS
@@ -2225,6 +2230,59 @@ export class VoiceSessionManager {
     return Math.round((normalizedBytes / (2 * normalizedRate)) * 1000);
   }
 
+  analyzeMonoPcmSignal(pcmBuffer) {
+    const buffer = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
+    const evenByteLength = Math.max(0, buffer.length - (buffer.length % 2));
+    if (evenByteLength <= 0) {
+      return {
+        sampleCount: 0,
+        rms: 0,
+        peak: 0,
+        activeSampleRatio: 0
+      };
+    }
+
+    let sumSquares = 0;
+    let peakAbs = 0;
+    let activeSamples = 0;
+    const sampleCount = evenByteLength / 2;
+    for (let offset = 0; offset < evenByteLength; offset += 2) {
+      const sample = buffer.readInt16LE(offset);
+      const absSample = Math.abs(sample);
+      sumSquares += sample * sample;
+      if (absSample > peakAbs) {
+        peakAbs = absSample;
+      }
+      if (absSample >= VOICE_SILENCE_GATE_ACTIVE_SAMPLE_MIN_ABS) {
+        activeSamples += 1;
+      }
+    }
+
+    const rmsAbs = Math.sqrt(sumSquares / sampleCount);
+    return {
+      sampleCount,
+      rms: rmsAbs / 32768,
+      peak: peakAbs / 32768,
+      activeSampleRatio: activeSamples / sampleCount
+    };
+  }
+
+  evaluatePcmSilenceGate({ pcmBuffer, sampleRateHz = 24000 }) {
+    const clipDurationMs = this.estimatePcm16MonoDurationMs(pcmBuffer?.length || 0, sampleRateHz);
+    const signal = this.analyzeMonoPcmSignal(pcmBuffer);
+    const eligibleForGate = clipDurationMs >= VOICE_SILENCE_GATE_MIN_CLIP_MS;
+    const nearSilentSignal =
+      signal.rms <= VOICE_SILENCE_GATE_RMS_MAX &&
+      signal.peak <= VOICE_SILENCE_GATE_PEAK_MAX &&
+      signal.activeSampleRatio <= VOICE_SILENCE_GATE_ACTIVE_RATIO_MAX;
+
+    return {
+      clipDurationMs,
+      ...signal,
+      drop: Boolean(eligibleForGate && nearSilentSignal)
+    };
+  }
+
   resolveRealtimeReplyStrategy({ session, settings = null }) {
     if (!session || !isRealtimeMode(session.mode)) return "brain";
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
@@ -2280,7 +2338,33 @@ export class VoiceSessionManager {
       pcmByteLength: pcmBuffer.length,
       sampleRateHz
     });
-    const clipDurationMs = this.estimatePcm16MonoDurationMs(pcmBuffer.length, sampleRateHz);
+    const silenceGate = this.evaluatePcmSilenceGate({
+      pcmBuffer,
+      sampleRateHz
+    });
+    const clipDurationMs = silenceGate.clipDurationMs;
+    if (silenceGate.drop) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "voice_turn_dropped_silence_gate",
+        metadata: {
+          sessionId: session.id,
+          source: "realtime",
+          captureReason: String(captureReason || "stream_end"),
+          pcmBytes: pcmBuffer.length,
+          clipDurationMs,
+          rms: Number(silenceGate.rms.toFixed(6)),
+          peak: Number(silenceGate.peak.toFixed(6)),
+          activeSampleRatio: Number(silenceGate.activeSampleRatio.toFixed(6)),
+          queueWaitMs,
+          pendingQueueDepth
+        }
+      });
+      return;
+    }
     const minAsrClipBytes = Math.max(
       2,
       Math.ceil(((VOICE_TURN_MIN_ASR_CLIP_MS / 1000) * sampleRateHz * 2))
@@ -3846,7 +3930,33 @@ export class VoiceSessionManager {
     const transcriptionModelPrimary =
       String(sttSettings?.transcriptionModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
     const sampleRateHz = 24000;
-    const clipDurationMs = this.estimatePcm16MonoDurationMs(pcmBuffer.length, sampleRateHz);
+    const silenceGate = this.evaluatePcmSilenceGate({
+      pcmBuffer,
+      sampleRateHz
+    });
+    const clipDurationMs = silenceGate.clipDurationMs;
+    if (silenceGate.drop) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "voice_turn_dropped_silence_gate",
+        metadata: {
+          sessionId: session.id,
+          source: "stt_pipeline",
+          captureReason: String(captureReason || "stream_end"),
+          pcmBytes: pcmBuffer.length,
+          clipDurationMs,
+          rms: Number(silenceGate.rms.toFixed(6)),
+          peak: Number(silenceGate.peak.toFixed(6)),
+          activeSampleRatio: Number(silenceGate.activeSampleRatio.toFixed(6)),
+          queueWaitMs,
+          pendingQueueDepth
+        }
+      });
+      return;
+    }
     let transcriptionModelFallback = null;
     let transcriptionPlanReason = "configured_model";
     if (transcriptionModelPrimary === "gpt-4o-mini-transcribe") {

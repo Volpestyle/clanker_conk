@@ -1432,6 +1432,61 @@ test("runRealtimeTurn transcribes speaking_end clips above minimum duration thre
   assert.equal(addressingLog?.metadata?.transcript, "yo");
 });
 
+test("runRealtimeTurn drops near-silent clips before ASR", async () => {
+  const runtimeLogs = [];
+  let transcribeCalls = 0;
+  let decisionCalls = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.llm.isAsrReady = () => true;
+  manager.llm.transcribeAudio = async () => ({ text: "unused" });
+  manager.transcribePcmTurn = async () => {
+    transcribeCalls += 1;
+    return "hello";
+  };
+  manager.evaluateVoiceReplyDecision = async () => {
+    decisionCalls += 1;
+    return {
+      allow: false,
+      reason: "llm_no",
+      participantCount: 2,
+      directAddressed: false,
+      transcript: "hello"
+    };
+  };
+
+  const session = {
+    id: "session-silence-gate-rt-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "voice_agent",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    realtimeInputSampleRateHz: 24000,
+    realtimeClient: {
+      appendInputAudioPcm() {}
+    },
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.alloc(96_000, 0),
+    captureReason: "speaking_end"
+  });
+
+  assert.equal(transcribeCalls, 0);
+  assert.equal(decisionCalls, 0);
+  const silenceDrop = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_dropped_silence_gate"
+  );
+  assert.equal(Boolean(silenceDrop), true);
+  assert.equal(silenceDrop?.metadata?.source, "realtime");
+});
+
 test("transcribePcmTurn escalates repeated empty transcripts after configured threshold", async () => {
   const runtimeLogs = [];
   const errorLogs = [];
@@ -2126,6 +2181,57 @@ test("runSttPipelineTurn retries full ASR model after empty mini transcript", as
   assert.equal(addressingLog?.metadata?.transcriptionModelFallback, "gpt-4o-transcribe");
   assert.equal(addressingLog?.metadata?.transcriptionPlanReason, "mini_with_full_fallback_runtime");
   assert.equal(addressingLog?.metadata?.transcript, "fallback stt transcript");
+});
+
+test("runSttPipelineTurn drops near-silent clips before ASR", async () => {
+  const runtimeLogs = [];
+  let transcribeCalls = 0;
+  let decisionCalls = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.llm.transcribeAudio = async () => ({ text: "unused" });
+  manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
+  manager.transcribePcmTurn = async () => {
+    transcribeCalls += 1;
+    return "hello";
+  };
+  manager.evaluateVoiceReplyDecision = async () => {
+    decisionCalls += 1;
+    return {
+      allow: false,
+      reason: "llm_no",
+      participantCount: 2,
+      directAddressed: false,
+      transcript: "hello"
+    };
+  };
+
+  const session = {
+    id: "session-silence-gate-stt-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "stt_pipeline",
+    ending: false,
+    recentVoiceTurns: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.runSttPipelineTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.alloc(96_000, 0),
+    captureReason: "speaking_end"
+  });
+
+  assert.equal(transcribeCalls, 0);
+  assert.equal(decisionCalls, 0);
+  const silenceDrop = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_dropped_silence_gate"
+  );
+  assert.equal(Boolean(silenceDrop), true);
+  assert.equal(silenceDrop?.metadata?.source, "stt_pipeline");
 });
 
 test("runSttPipelineTurn empty transcripts escalate after streak threshold", async () => {
