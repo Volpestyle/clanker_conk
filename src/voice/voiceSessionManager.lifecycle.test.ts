@@ -207,7 +207,7 @@ test("resolveSpeakingEndFinalizeDelayMs preserves baseline delays in low-load ro
       session,
       captureAgeMs: 1200
     }),
-    140
+    1200
   );
 });
 
@@ -248,7 +248,7 @@ test("resolveSpeakingEndFinalizeDelayMs adapts delays when room load increases",
       session: heavySttSession,
       captureAgeMs: 1400
     }),
-    100
+    600
   );
 });
 

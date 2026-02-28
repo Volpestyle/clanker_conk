@@ -9,7 +9,8 @@ export const SPEAKING_END_MICRO_CAPTURE_MS = 260;
 export const SPEAKING_END_SHORT_CAPTURE_MS = 900;
 export const SPEAKING_END_FINALIZE_MICRO_MS = 620;
 export const SPEAKING_END_FINALIZE_SHORT_MS = 320;
-export const SPEAKING_END_FINALIZE_QUICK_MS = 140;
+// Give speakers a longer pause window on normal-length turns so clauses do not cut off mid-thought.
+export const SPEAKING_END_FINALIZE_QUICK_MS = 1200;
 export const SPEAKING_END_FINALIZE_MIN_MS = 100;
 export const SPEAKING_END_ADAPTIVE_BUSY_CAPTURE_COUNT = 3;
 export const SPEAKING_END_ADAPTIVE_HEAVY_CAPTURE_COUNT = 5;
