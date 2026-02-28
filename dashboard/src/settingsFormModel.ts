@@ -64,6 +64,7 @@ export function settingsToForm(settings) {
   const defaultVoice = defaults.voice;
   const defaultVoiceXai = defaults.voice.xai;
   const defaultVoiceOpenAiRealtime = defaults.voice.openaiRealtime;
+  const defaultVoiceElevenLabsRealtime = defaults.voice.elevenLabsRealtime;
   const defaultVoiceGeminiRealtime = defaults.voice.geminiRealtime;
   const defaultVoiceSttPipeline = defaults.voice.sttPipeline;
   const defaultVoiceThoughtEngine = defaults.voice.thoughtEngine;
@@ -195,6 +196,16 @@ export function settingsToForm(settings) {
     voiceOpenAiRealtimeVoice: settings?.voice?.openaiRealtime?.voice ?? defaultVoiceOpenAiRealtime.voice,
     voiceOpenAiRealtimeInputTranscriptionModel:
       settings?.voice?.openaiRealtime?.inputTranscriptionModel ?? defaultVoiceOpenAiRealtime.inputTranscriptionModel,
+    voiceElevenLabsRealtimeAgentId:
+      settings?.voice?.elevenLabsRealtime?.agentId ?? defaultVoiceElevenLabsRealtime.agentId,
+    voiceElevenLabsRealtimeVoiceId:
+      settings?.voice?.elevenLabsRealtime?.voiceId ?? defaultVoiceElevenLabsRealtime.voiceId,
+    voiceElevenLabsRealtimeApiBaseUrl:
+      settings?.voice?.elevenLabsRealtime?.apiBaseUrl ?? defaultVoiceElevenLabsRealtime.apiBaseUrl,
+    voiceElevenLabsRealtimeInputSampleRateHz:
+      settings?.voice?.elevenLabsRealtime?.inputSampleRateHz ?? defaultVoiceElevenLabsRealtime.inputSampleRateHz,
+    voiceElevenLabsRealtimeOutputSampleRateHz:
+      settings?.voice?.elevenLabsRealtime?.outputSampleRateHz ?? defaultVoiceElevenLabsRealtime.outputSampleRateHz,
     voiceGeminiRealtimeModel:
       settings?.voice?.geminiRealtime?.model ?? defaultVoiceGeminiRealtime.model,
     voiceGeminiRealtimeVoice: settings?.voice?.geminiRealtime?.voice ?? defaultVoiceGeminiRealtime.voice,
@@ -398,6 +409,13 @@ export function formToSettingsPatch(form) {
         inputAudioFormat: "pcm16",
         outputAudioFormat: "pcm16",
         inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim()
+      },
+      elevenLabsRealtime: {
+        agentId: String(form.voiceElevenLabsRealtimeAgentId || "").trim(),
+        voiceId: String(form.voiceElevenLabsRealtimeVoiceId || "").trim(),
+        apiBaseUrl: String(form.voiceElevenLabsRealtimeApiBaseUrl || "").trim(),
+        inputSampleRateHz: Number(form.voiceElevenLabsRealtimeInputSampleRateHz),
+        outputSampleRateHz: Number(form.voiceElevenLabsRealtimeOutputSampleRateHz)
       },
       geminiRealtime: {
         model: String(form.voiceGeminiRealtimeModel || "").trim(),

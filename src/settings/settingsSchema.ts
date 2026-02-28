@@ -159,6 +159,7 @@ export const DEFAULT_SETTINGS = {
     },
     elevenLabsRealtime: {
       agentId: "",
+      voiceId: "",
       apiBaseUrl: "https://api.elevenlabs.io",
       inputSampleRateHz: 16000,
       outputSampleRateHz: 16000

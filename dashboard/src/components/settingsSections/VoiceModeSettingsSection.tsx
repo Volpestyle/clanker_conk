@@ -2,6 +2,7 @@ import React from "react";
 import { SettingsSection } from "../SettingsSection";
 import { rangeStyle } from "../../utils";
 import { LlmProviderOptions } from "./LlmProviderOptions";
+import { ElevenLabsVoiceManager } from "./ElevenLabsVoiceManager";
 
 export function VoiceModeSettingsSection({
   id,
@@ -11,6 +12,7 @@ export function VoiceModeSettingsSection({
   isVoiceAgentMode,
   isOpenAiRealtimeMode,
   isGeminiRealtimeMode,
+  isElevenLabsRealtimeMode,
   isSttPipelineMode,
   setVoiceReplyDecisionProvider,
   selectVoiceReplyDecisionPresetModel,
@@ -33,7 +35,8 @@ export function VoiceModeSettingsSection({
   sttTtsModelOptions,
   onResetVoiceReplyDecisionPrompts
 }) {
-  const isRealtimeMode = isVoiceAgentMode || isOpenAiRealtimeMode || isGeminiRealtimeMode;
+  const isRealtimeMode =
+    isVoiceAgentMode || isOpenAiRealtimeMode || isGeminiRealtimeMode || isElevenLabsRealtimeMode;
   const realtimeReplyStrategy = String(form.voiceRealtimeReplyStrategy || "brain")
     .trim()
     .toLowerCase();
@@ -59,6 +62,7 @@ export function VoiceModeSettingsSection({
             <option value="voice_agent">Voice agent (xAI realtime low-latency)</option>
             <option value="openai_realtime">OpenAI realtime (low-latency)</option>
             <option value="gemini_realtime">Gemini realtime (audio + stream frames)</option>
+            <option value="elevenlabs_realtime">ElevenLabs realtime (agent websocket)</option>
             <option value="stt_pipeline">STT pipeline (reuse chat LLM + memory)</option>
           </select>
 
@@ -548,6 +552,68 @@ export function VoiceModeSettingsSection({
                   />
                 </div>
               </div>
+            </>
+          )}
+
+          {isElevenLabsRealtimeMode && (
+            <>
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-elevenlabs-agent-id">ElevenLabs agent ID</label>
+                  <input
+                    id="voice-elevenlabs-agent-id"
+                    type="text"
+                    value={form.voiceElevenLabsRealtimeAgentId}
+                    onChange={set("voiceElevenLabsRealtimeAgentId")}
+                    placeholder="agent_..."
+                  />
+                </div>
+                <div>
+                  <label htmlFor="voice-elevenlabs-api-base-url">ElevenLabs API base URL</label>
+                  <input
+                    id="voice-elevenlabs-api-base-url"
+                    type="text"
+                    value={form.voiceElevenLabsRealtimeApiBaseUrl}
+                    onChange={set("voiceElevenLabsRealtimeApiBaseUrl")}
+                  />
+                </div>
+              </div>
+
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-elevenlabs-input-sample-rate">ElevenLabs input sample rate (Hz)</label>
+                  <input
+                    id="voice-elevenlabs-input-sample-rate"
+                    type="number"
+                    min="8000"
+                    max="48000"
+                    value={form.voiceElevenLabsRealtimeInputSampleRateHz}
+                    onChange={set("voiceElevenLabsRealtimeInputSampleRateHz")}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="voice-elevenlabs-output-sample-rate">ElevenLabs output sample rate (Hz)</label>
+                  <input
+                    id="voice-elevenlabs-output-sample-rate"
+                    type="number"
+                    min="8000"
+                    max="48000"
+                    value={form.voiceElevenLabsRealtimeOutputSampleRateHz}
+                    onChange={set("voiceElevenLabsRealtimeOutputSampleRateHz")}
+                  />
+                </div>
+              </div>
+
+              <h4>ElevenLabs Voice</h4>
+              <p>Select an existing voice or clone a new one from audio samples.</p>
+              <ElevenLabsVoiceManager
+                selectedVoiceId={form.voiceElevenLabsRealtimeVoiceId || ""}
+                onSelectVoice={(voiceId) =>
+                  set("voiceElevenLabsRealtimeVoiceId")({
+                    target: { value: voiceId, type: "text" }
+                  })
+                }
+              />
             </>
           )}
 
