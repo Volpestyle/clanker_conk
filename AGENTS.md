@@ -1,5 +1,14 @@
 # Repository Instructions
 
+- Clanker conk current preferred models (see pricing.ts)
+- Main
+  - sonnett
+  - gpt-5-mini reasoning medium
+  - grok-4
+- Classifiers
+  - haiku
+  - gpt-5-nano reasoning low
+
 - Always remove legacy compatibility paths and dead code as part of the same change.
 - Do not keep backward-compatibility shims, aliases, or old-field fallbacks unless the user explicitly asks for them.
 - Prefer a single source of truth over parallel old/new code paths.
@@ -10,6 +19,7 @@
 - Avoid typecasts to `any` or `unknown`; prefer explicit, concrete types and narrow unions. Use casts only as a last resort with clear justification.
 - Prefer LLM-driven decisions over hardcoded heuristics for conversational behavior; add deterministic heuristics only when explicitly requested or required for guardrails and obvious no-brainer cost savings.
 - Never use hardcoded fallback text or voice lines for bot output. User-visible bot speech/messages must be model-generated unless the user explicitly requests deterministic wording.
+- Bot name is a customizable setting. bot is not always named 'clanker conk'
 
 ## Dashboard UI Preferences
 
@@ -25,13 +35,13 @@ When writing or updating documentation, add/update a diagram when it would mater
 After editing any `.mmd` file, re-render all diagrams:
 
 ```sh
-bun run diagrams
+npm run diagrams
 ```
 
 Or render a single file:
 
 ```sh
-bun run diagrams -- settings-flow.mmd
+npm run diagrams -- settings-flow.mmd
 ```
 
 This runs `@mermaid-js/mermaid-cli` (`mmdc`) at 4x scale to produce crisp PNGs. Commit both the updated `.mmd` source and the regenerated `.png`.
@@ -39,7 +49,7 @@ This runs `@mermaid-js/mermaid-cli` (`mmdc`) at 4x scale to produce crisp PNGs. 
 ### Adding a new diagram
 
 1. Create `docs/diagrams/<name>.mmd` with valid Mermaid syntax.
-2. Run `bun run diagrams -- <name>.mmd` to generate `docs/diagrams/<name>.png`.
+2. Run `npm run diagrams -- <name>.mmd` to generate `docs/diagrams/<name>.png`.
 3. Embed in the target markdown file:
    ```md
    ![Diagram Title](diagrams/<name>.png)
