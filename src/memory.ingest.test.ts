@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import { test } from "bun:test";
 import { MemoryManager } from "./memory.ts";
 
-function createMemoryForIngestTests() {
+function createMemoryForIngestTests(storeOverrides = {}) {
   return new MemoryManager({
     store: {
       logAction() {
         return undefined;
-      }
+      },
+      ...storeOverrides
     },
     llm: {},
     memoryFilePath: "memory/MEMORY.md"
@@ -77,4 +78,42 @@ test("queue overflow resolves dropped job as false", async () => {
 
   assert.equal(await second, true);
   assert.equal(processed, 1);
+});
+
+test("voice transcript ingest writes synthetic message rows for prompt history continuity", async () => {
+  const recorded = [];
+  const memory = createMemoryForIngestTests({
+    recordMessage(row) {
+      recorded.push(row);
+    }
+  });
+  memory.ingestWorkerActive = true;
+  memory.processIngestMessage = async () => undefined;
+
+  const ingestPromise = memory.ingestMessage({
+    messageId: "voice-guild-1-123456",
+    authorId: "user-1",
+    authorName: "  Alice  ",
+    content: "  hey there from vc  ",
+    settings: {},
+    trace: {
+      guildId: "guild-1",
+      channelId: "chan-1",
+      userId: "user-1",
+      source: "voice_realtime_ingest"
+    }
+  });
+
+  assert.equal(recorded.length, 1);
+  assert.equal(recorded[0]?.messageId, "voice-guild-1-123456");
+  assert.equal(recorded[0]?.guildId, "guild-1");
+  assert.equal(recorded[0]?.channelId, "chan-1");
+  assert.equal(recorded[0]?.authorId, "user-1");
+  assert.equal(recorded[0]?.authorName, "Alice");
+  assert.equal(recorded[0]?.isBot, false);
+  assert.equal(recorded[0]?.content, "hey there from vc");
+
+  memory.ingestWorkerActive = false;
+  await memory.runIngestWorker();
+  assert.equal(await ingestPromise, true);
 });

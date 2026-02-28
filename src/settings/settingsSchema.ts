@@ -1,3 +1,10 @@
+export const PROVIDER_MODEL_FALLBACKS = {
+  openai: ["gpt-4.1-mini"],
+  anthropic: ["claude-haiku-4-5"],
+  xai: ["grok-3-mini-latest"],
+  "claude-code": ["sonnet"]
+};
+
 export const DEFAULT_SETTINGS = {
   botName: "clanker conk",
   persona: {
@@ -42,7 +49,7 @@ export const DEFAULT_SETTINGS = {
   },
   activity: {
     replyLevelInitiative: 35,
-    replyLevelNonInitiative: 10,
+    replyLevelNonInitiative: 25,
     reactionLevel: 20,
     minSecondsBetweenMessages: 5,
     replyCoalesceWindowSeconds: 4,
@@ -110,8 +117,6 @@ export const DEFAULT_SETTINGS = {
       voice: "alloy",
       inputAudioFormat: "pcm16",
       outputAudioFormat: "pcm16",
-      inputSampleRateHz: 24000,
-      outputSampleRateHz: 24000,
       inputTranscriptionModel: "gpt-4o-mini-transcribe"
     },
     geminiRealtime: {

@@ -1,6 +1,6 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { XaiRealtimeClient } from "./voice/xaiRealtimeClient.ts";
+import { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
 
 test("XaiRealtimeClient requestTextUtterance sends text item then audio response request", () => {
   const client = new XaiRealtimeClient({ apiKey: "test-key" });

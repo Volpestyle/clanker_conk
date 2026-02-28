@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   isBotNameAddressed,
@@ -10,7 +10,7 @@ import {
   resolveRealtimeProvider,
   resolveVoiceRuntimeMode,
   transcriptSourceFromEventType
-} from "./voice/voiceSessionHelpers.ts";
+} from "./voiceSessionHelpers.ts";
 
 test("isRecoverableRealtimeError matches OpenAI empty commit code", () => {
   const recoverable = isRecoverableRealtimeError({
@@ -67,19 +67,16 @@ test("extractSoundboardDirective strips directive and returns selected reference
   assert.equal(parsed.reference, "1234567890@111222333");
 });
 
-test("isVoiceTurnAddressedToBot balances fuzzy wake detection with false-positive guards", () => {
+test("isVoiceTurnAddressedToBot matches exact bot-name phrase and primary wake token", () => {
   const settings = { botName: "clanker conk" };
   const cases = [
-    { text: "yo clunker can you answer this?", expected: true },
-    { text: "yo clanky can you answer this?", expected: true },
-    { text: "i think clunker can you answer this?", expected: true },
-    { text: "clankerton can you jump in?", expected: true },
-    { text: "clunkeroni can you jump in?", expected: true },
-    { text: "i sent you a link yesterday", expected: false },
-    { text: "Hi cleaner.", expected: false },
-    { text: "cleaner can you jump in?", expected: false },
-    { text: "the cleaner is broken again", expected: false },
-    { text: "Very big step up from Paldea. Pretty excited to see what they cook up", expected: false }
+    { text: "yo clanker conk can you answer this?", expected: true },
+    { text: "yo clanker can you answer this?", expected: true },
+    { text: "clanker?", expected: true },
+    { text: "yo conk can you answer this?", expected: false },
+    { text: "yo clunker can you answer this?", expected: false },
+    { text: "clankerton can you jump in?", expected: false },
+    { text: "i sent you a link yesterday", expected: false }
   ];
 
   for (const row of cases) {
@@ -87,55 +84,34 @@ test("isVoiceTurnAddressedToBot balances fuzzy wake detection with false-positiv
   }
 });
 
-test("isVoiceTurnAddressedToBot follows configured botName without clank hardcoding", () => {
+test("isVoiceTurnAddressedToBot follows configured botName without fuzzy fallbacks", () => {
   const settings = { botName: "sparky bot" };
-  assert.equal(isVoiceTurnAddressedToBot("Sporky, can you help me with this?", settings), true);
-  assert.equal(isVoiceTurnAddressedToBot("clunker can you help me with this?", settings), false);
+  assert.equal(isVoiceTurnAddressedToBot("sparky bot can you help me with this?", settings), true);
+  assert.equal(isVoiceTurnAddressedToBot("sparky can you help me with this?", settings), true);
+  assert.equal(isVoiceTurnAddressedToBot("sporky can you help me with this?", settings), false);
+  assert.equal(isVoiceTurnAddressedToBot("that bot is broken again", settings), false);
 });
 
-test("isBotNameAddressed can run relaxed bot-name fuzzy matching for text messages", () => {
+test("isBotNameAddressed normalizes punctuation and accents for exact matching", () => {
   assert.equal(
     isBotNameAddressed({
-      transcript: "whats up sporky",
-      botName: "sparky bot"
+      transcript: "clánker!!!",
+      botName: "clanker conk"
     }),
     true
   );
   assert.equal(
     isBotNameAddressed({
-      transcript: "clankerton",
-      botName: "sparky bot"
+      transcript: "clanker's still here",
+      botName: "clanker conk"
+    }),
+    true
+  );
+  assert.equal(
+    isBotNameAddressed({
+      transcript: "clunker can you help me with this?",
+      botName: "clanker conk"
     }),
     false
   );
-});
-
-test("isBotNameAddressed stays flexible for custom names while rejecting near misses", () => {
-  const cases = [
-    { transcript: "sparky bot can you help me with this?", botName: "sparky bot", expected: true },
-    { transcript: "clanky can you help me with this?", botName: "clanker conk", expected: true },
-    { transcript: "sporky can you help me with this?", botName: "sparky bot", expected: true },
-    { transcript: "i think sporky can you help me with this?", botName: "sparky bot", expected: true },
-    { transcript: "i like spark plugs in old cars", botName: "sparky bot", expected: false },
-    { transcript: "clankerton", botName: "sparky bot", expected: false },
-    { transcript: "Very big step up from Paldea. Pretty excited to see what they cook up", botName: "clanker conk", expected: false }
-  ];
-
-  for (const row of cases) {
-    assert.equal(
-      isBotNameAddressed({
-        transcript: row.transcript,
-        botName: row.botName
-      }),
-      row.expected,
-      `${row.botName} :: ${row.transcript}`
-    );
-  }
-});
-
-test("isBotNameAddressed accepts nickname suffix variants while rejecting distant variants", () => {
-  const settings = { botName: "clanker conk" };
-  assert.equal(isVoiceTurnAddressedToBot("clankerton", settings), true);
-  assert.equal(isVoiceTurnAddressedToBot("clunkeroni", settings), true);
-  assert.equal(isVoiceTurnAddressedToBot("clinkitity", settings), false);
 });

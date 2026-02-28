@@ -110,7 +110,12 @@ export class PublicHttpsEntrypoint {
     }
 
     await new Promise<void>((resolve) => {
+      let forceKillTimer = null;
       const done = () => {
+        if (forceKillTimer) {
+          clearTimeout(forceKillTimer);
+          forceKillTimer = null;
+        }
         this.cleanupChildHandles();
         resolve();
       };
@@ -120,10 +125,10 @@ export class PublicHttpsEntrypoint {
       } catch {
         done();
       }
-      setTimeout(() => {
-        if (this.child) {
+      forceKillTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) {
           try {
-            this.child.kill("SIGKILL");
+            child.kill("SIGKILL");
           } catch {
             // ignore
           }

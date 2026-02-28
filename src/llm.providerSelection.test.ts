@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -195,4 +195,155 @@ test("fetchXaiJson requires XAI API key", async () => {
     () => service.fetchXaiJson("https://api.x.ai/v1/videos"),
     /Missing XAI_API_KEY/i
   );
+});
+
+test("callOpenAI uses Responses API with max_output_tokens and multimodal input", async () => {
+  const service = createService({
+    openaiApiKey: "test-openai-key"
+  });
+  let seenPayload = null;
+  service.openai = {
+    responses: {
+      async create(payload) {
+        seenPayload = payload;
+        return {
+          output_text: "hello from responses",
+          usage: {
+            input_tokens: 21,
+            output_tokens: 7,
+            input_tokens_details: {
+              cached_tokens: 4
+            }
+          }
+        };
+      }
+    }
+  };
+
+  const result = await service.callOpenAI({
+    model: "gpt-4.1-mini",
+    systemPrompt: "system prompt",
+    userPrompt: "what is in this image?",
+    imageInputs: [
+      {
+        mediaType: "image/png",
+        dataBase64: "Zm9v"
+      }
+    ],
+    contextMessages: [
+      {
+        role: "assistant",
+        content: "previous answer"
+      }
+    ],
+    temperature: 0.5,
+    maxOutputTokens: 123
+  });
+
+  assert.equal(result.text, "hello from responses");
+  assert.deepEqual(result.usage, {
+    inputTokens: 21,
+    outputTokens: 7,
+    cacheWriteTokens: 0,
+    cacheReadTokens: 4
+  });
+  assert.equal(seenPayload.max_output_tokens, 123);
+  assert.equal(Object.hasOwn(seenPayload, "max_tokens"), false);
+  assert.equal(seenPayload.instructions, "system prompt");
+  assert.equal(seenPayload.input?.[0]?.role, "assistant");
+  assert.equal(seenPayload.input?.[0]?.content, "previous answer");
+  assert.equal(seenPayload.input?.[1]?.role, "user");
+  assert.equal(seenPayload.input?.[1]?.content?.[0]?.type, "input_text");
+  assert.equal(seenPayload.input?.[1]?.content?.[1]?.type, "input_image");
+});
+
+test("callOpenAiMemoryExtraction uses Responses JSON schema format", async () => {
+  const service = createService({
+    openaiApiKey: "test-openai-key"
+  });
+  let seenPayload = null;
+  service.openai = {
+    responses: {
+      async create(payload) {
+        seenPayload = payload;
+        return {
+          output_text: "{\"facts\":[]}",
+          usage: {
+            input_tokens: 9,
+            output_tokens: 2,
+            input_tokens_details: {
+              cached_tokens: 0
+            }
+          }
+        };
+      }
+    }
+  };
+
+  const result = await service.callOpenAiMemoryExtraction({
+    model: "gpt-4.1-mini",
+    systemPrompt: "extract durable facts only",
+    userPrompt: "user says they like sci-fi"
+  });
+
+  assert.equal(result.text, "{\"facts\":[]}");
+  assert.deepEqual(result.usage, {
+    inputTokens: 9,
+    outputTokens: 2,
+    cacheWriteTokens: 0,
+    cacheReadTokens: 0
+  });
+  assert.equal(seenPayload.max_output_tokens, 320);
+  assert.equal(seenPayload.instructions, "extract durable facts only");
+  assert.equal(seenPayload.text?.format?.type, "json_schema");
+  assert.equal(seenPayload.text?.format?.name, "memory_fact_extraction");
+  assert.equal(seenPayload.text?.format?.strict, true);
+});
+
+test("generateImage uses OpenAI Responses image_generation tool", async () => {
+  const service = createService({
+    openaiApiKey: "test-openai-key"
+  });
+  let seenPayload = null;
+  const pngBase64 = Buffer.from([137, 80, 78, 71]).toString("base64");
+
+  service.openai = {
+    responses: {
+      async create(payload) {
+        seenPayload = payload;
+        return {
+          output: [
+            {
+              type: "image_generation_call",
+              result: pngBase64
+            }
+          ]
+        };
+      }
+    }
+  };
+
+  const result = await service.generateImage({
+    settings: {
+      initiative: {
+        simpleImageModel: "gpt-image-1.5",
+        allowedImageModels: ["gpt-image-1.5"]
+      }
+    },
+    prompt: "a cat in a hoodie",
+    variant: "simple",
+    trace: { source: "unit_test" }
+  });
+
+  assert.equal(result.provider, "openai");
+  assert.equal(result.model, "gpt-image-1.5");
+  assert.equal(result.imageBuffer?.length > 0, true);
+  assert.equal(result.imageUrl, null);
+  assert.equal(seenPayload.model, "gpt-image-1.5");
+  assert.equal(seenPayload.tool_choice, "required");
+  assert.equal(seenPayload.tools?.[0]?.type, "image_generation");
+  assert.equal(seenPayload.tools?.[0]?.size, "1024x1024");
+  assert.equal(seenPayload.tools?.[0]?.output_format, "png");
+  assert.equal(seenPayload.input?.[0]?.role, "user");
+  assert.equal(seenPayload.input?.[0]?.content?.[0]?.type, "input_text");
 });

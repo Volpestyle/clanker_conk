@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 
 async function withApiModule({ initialToken = "" } = {}, run) {
@@ -17,7 +17,7 @@ async function withApiModule({ initialToken = "" } = {}, run) {
 
   try {
     const stamp = `${Date.now()}-${Math.random()}`;
-    const apiModule = await import(`../dashboard/src/api.ts?${stamp}`);
+    const apiModule = await import(`./api.ts?${stamp}`);
     await run(apiModule, storage);
   } finally {
     globalThis.localStorage = priorLocalStorage;

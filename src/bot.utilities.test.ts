@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { ClankerBot } from "./bot.ts";
 
@@ -81,6 +81,9 @@ function createBot({
     countActionsSince(kind) {
       return Number(countByKind[kind] || 0);
     },
+    hasTriggeredResponse() {
+      return false;
+    },
     logAction(entry) {
       logs.push(entry);
     },
@@ -131,6 +134,49 @@ test("ClankerBot message pacing and action budgets are enforced", () => {
   } finally {
     Date.now = originalNow;
   }
+});
+
+test("ClankerBot direct address requires mention or reply reference", () => {
+  const { bot } = createBot();
+  bot.client.user = { id: "bot-1" };
+
+  const plainNameMessage = {
+    content: "clanker can you check this?",
+    mentions: {
+      users: {
+        has() {
+          return false;
+        }
+      },
+      repliedUser: null
+    }
+  };
+  const mentionMessage = {
+    content: "hey <@bot-1>",
+    mentions: {
+      users: {
+        has(userId) {
+          return userId === "bot-1";
+        }
+      },
+      repliedUser: null
+    }
+  };
+  const replyMessage = {
+    content: "following up",
+    mentions: {
+      users: {
+        has() {
+          return false;
+        }
+      },
+      repliedUser: { id: "bot-1" }
+    }
+  };
+
+  assert.equal(bot.isDirectlyAddressed(baseSettings(), plainNameMessage), false);
+  assert.equal(bot.isDirectlyAddressed(baseSettings(), mentionMessage), true);
+  assert.equal(bot.isDirectlyAddressed(baseSettings(), replyMessage), true);
 });
 
 test("ClankerBot media/search/video budgets and capability fallbacks", () => {
@@ -396,4 +442,209 @@ test("ClankerBot initiative channel picker uses channel allowlist checks", () =>
 
   const picked = bot.pickInitiativeChannel(settings);
   assert.equal(picked?.id, "chan-2");
+});
+
+test("ClankerBot enqueueReplyJob handles dedupe, overflow, and worker errors", async () => {
+  const { bot, logs, store } = createBot();
+  const processCalls = [];
+  bot.processReplyQueue = async (channelId) => {
+    processCalls.push(channelId);
+  };
+
+  const message = {
+    id: "msg-1",
+    channelId: "chan-1",
+    guildId: "guild-1",
+    author: { id: "user-1" },
+    createdTimestamp: Date.now()
+  };
+
+  assert.equal(
+    bot.enqueueReplyJob({
+      message,
+      source: "message_event"
+    }),
+    true
+  );
+  assert.equal(bot.getReplyQueuePendingCount(), 1);
+  assert.deepEqual(processCalls, ["chan-1"]);
+
+  assert.equal(
+    bot.enqueueReplyJob({
+      message
+    }),
+    false
+  );
+
+  store.hasTriggeredResponse = (messageId) => messageId === "msg-triggered";
+  assert.equal(
+    bot.enqueueReplyJob({
+      message: {
+        ...message,
+        id: "msg-triggered"
+      }
+    }),
+    false
+  );
+
+  const overflowQueue = [];
+  for (let index = 0; index < 60; index += 1) {
+    overflowQueue.push({
+      message: {
+        ...message,
+        id: `queued-${index}`
+      },
+      attempts: 0
+    });
+  }
+  bot.replyQueues.set("chan-overflow", overflowQueue);
+  assert.equal(
+    bot.enqueueReplyJob({
+      message: {
+        ...message,
+        id: "msg-overflow",
+        channelId: "chan-overflow"
+      }
+    }),
+    false
+  );
+  assert.equal(logs.some((entry) => String(entry.content).includes("reply_queue_overflow")), true);
+
+  bot.processReplyQueue = async () => {
+    throw new Error("worker crashed");
+  };
+  assert.equal(
+    bot.enqueueReplyJob({
+      message: {
+        ...message,
+        id: "msg-worker-error",
+        channelId: "chan-worker"
+      }
+    }),
+    true
+  );
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(logs.some((entry) => String(entry.content).includes("reply_queue_worker: worker crashed")), true);
+});
+
+test("ClankerBot handleMessage queues reply before memory ingest completes", async () => {
+  let resolveIngest = null;
+  let ingestStarted = false;
+  let ingestSettled = false;
+  const ingestGate = new Promise((resolve) => {
+    resolveIngest = resolve;
+  });
+
+  const { bot, store } = createBot({
+    memory: {
+      async ingestMessage() {
+        ingestStarted = true;
+        await ingestGate;
+        ingestSettled = true;
+      }
+    }
+  });
+  bot.client.user = { id: "bot-1" };
+
+  const recordedMessages = [];
+  store.recordMessage = (entry) => {
+    recordedMessages.push({
+      message_id: String(entry.messageId || ""),
+      channel_id: String(entry.channelId || ""),
+      author_id: String(entry.authorId || ""),
+      author_name: String(entry.authorName || ""),
+      content: String(entry.content || ""),
+      created_at: new Date(entry.createdAt || Date.now()).toISOString()
+    });
+  };
+  store.getRecentMessages = (channelId, limit = 20) =>
+    recordedMessages
+      .filter((row) => row.channel_id === String(channelId || ""))
+      .slice()
+      .reverse()
+      .slice(0, limit);
+
+  const queued = [];
+  bot.enqueueReplyJob = (payload) => {
+    queued.push(payload);
+    return true;
+  };
+
+  const message = {
+    id: "msg-async-1",
+    createdTimestamp: Date.now(),
+    guildId: "guild-1",
+    channelId: "chan-1",
+    guild: { id: "guild-1" },
+    channel: { id: "chan-1" },
+    author: {
+      id: "user-1",
+      username: "alice",
+      bot: false
+    },
+    member: {
+      displayName: "alice"
+    },
+    content: "yo <@bot-1>",
+    mentions: {
+      users: {
+        has(userId) {
+          return String(userId || "") === "bot-1";
+        }
+      },
+      repliedUser: null
+    },
+    reference: null
+  };
+
+  const handlePromise = bot.handleMessage(message);
+  await Promise.resolve();
+  await handlePromise;
+
+  assert.equal(ingestStarted, true);
+  assert.equal(ingestSettled, false);
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0]?.message?.id, "msg-async-1");
+
+  if (resolveIngest) {
+    resolveIngest();
+  }
+  await Promise.resolve();
+  assert.equal(ingestSettled, true);
+});
+
+test("ClankerBot gateway health and reconnect wrappers handle success and failure", async () => {
+  const { bot, logs } = createBot();
+  bot.appConfig.discordToken = "token";
+  let destroyCalls = 0;
+  let loginCalls = 0;
+
+  bot.client.destroy = async () => {
+    destroyCalls += 1;
+  };
+  bot.client.login = async () => {
+    loginCalls += 1;
+    return "ok";
+  };
+  bot.client.isReady = () => false;
+  bot.hasConnectedAtLeastOnce = true;
+  bot.reconnectInFlight = false;
+  bot.isStopping = false;
+  bot.lastGatewayEventAt = Date.now() - 3 * 60_000;
+
+  await bot.ensureGatewayHealthy();
+  assert.equal(destroyCalls, 1);
+  assert.equal(loginCalls, 1);
+  assert.equal(bot.reconnectAttempts, 0);
+  assert.equal(logs.some((entry) => String(entry.content).includes("gateway_reconnect_start")), true);
+
+  bot.client.login = async () => {
+    throw new Error("login failed");
+  };
+  await bot.reconnectGateway("forced_test_failure");
+  assert.equal(bot.reconnectAttempts, 1);
+  assert.equal(bot.reconnectTimeout !== null, true);
+  clearTimeout(bot.reconnectTimeout);
+  bot.reconnectTimeout = null;
+  assert.equal(logs.some((entry) => String(entry.content).includes("gateway_reconnect_failed")), true);
 });

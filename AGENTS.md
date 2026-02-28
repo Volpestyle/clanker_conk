@@ -6,7 +6,10 @@
 - After refactors, delete unused settings, branches, helpers, and UI wiring instead of leaving dormant code behind.
 - Pull inspiration from ../openclaw when designing and coding agentic capabilites for clanker conk
 - Expect parallel in-flight edits from the user or other agents; treat unexpected diffs as active work, and never revert/reset/checkout files you did not explicitly change for the current task.
+- Do not call out unrelated in-flight edits unless they directly interfere with your ability to complete the current task. If you can work around them with low ambiguity, proceed without mentioning them.
 - Avoid typecasts to `any` or `unknown`; prefer explicit, concrete types and narrow unions. Use casts only as a last resort with clear justification.
+- Prefer LLM-driven decisions over hardcoded heuristics for conversational behavior; add deterministic heuristics only when explicitly requested or required for guardrails and obvious no-brainer cost savings.
+- Never use hardcoded fallback text or voice lines for bot output. User-visible bot speech/messages must be model-generated unless the user explicitly requests deterministic wording.
 
 ## Dashboard UI Preferences
 

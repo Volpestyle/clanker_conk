@@ -10,7 +10,7 @@
  *  - contract violation retry & bounded fallback
  *
  */
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   buildClaudeCodeSystemPrompt,
@@ -429,12 +429,12 @@ test("smoke: claude-code verbose output triggers retry and recovers (incident re
     },
     userId: "speaker-1",
     settings: baseSettings(),
-    transcript: "clanky can you help with this one?"
+    transcript: "can someone help with this one?"
   });
 
   assert.equal(callCount, 2, "should retry after contract violation");
   assert.equal(decision.allow, true);
-  assert.equal(decision.directAddressed, true);
+  assert.equal(decision.directAddressed, false);
 });
 
 test("smoke: claude-code empty response triggers retry (incident repro)", async () => {
@@ -513,7 +513,7 @@ test("smoke: claude-code error throws still fail-open for direct address", async
     },
     userId: "speaker-1",
     settings: baseSettings(),
-    transcript: "hey clanky what's going on?"
+    transcript: "hey clanker what's going on?"
   });
 
   assert.equal(decision.allow, true, "direct address must fail-open on error");

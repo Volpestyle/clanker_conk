@@ -1,11 +1,6 @@
-export const CUSTOM_MODEL_OPTION_VALUE = "__custom_model__";
+import { DEFAULT_SETTINGS, PROVIDER_MODEL_FALLBACKS } from "../../src/settings/settingsSchema.ts";
 
-const PROVIDER_MODEL_FALLBACKS = {
-  openai: ["gpt-4.1-mini"],
-  anthropic: ["claude-haiku-4-5"],
-  xai: ["grok-3-mini-latest"],
-  "claude-code": ["sonnet"]
-};
+export const CUSTOM_MODEL_OPTION_VALUE = "__custom_model__";
 
 function parseList(val) {
   return [...new Set(String(val || "").split(/[\n,]/g).map((x) => x.trim()).filter(Boolean))];
@@ -20,152 +15,170 @@ function formatList(items) {
 }
 
 export function settingsToForm(settings) {
+  const defaults = DEFAULT_SETTINGS;
+  const defaultPrompt = defaults.prompt;
+  const defaultActivity = defaults.activity;
+  const defaultPermissions = defaults.permissions;
+  const defaultLlm = defaults.llm;
+  const defaultReplyFollowupLlm = defaults.replyFollowupLlm;
+  const defaultMemoryLlm = defaults.memoryLlm;
+  const defaultWebSearch = defaults.webSearch;
+  const defaultVideoContext = defaults.videoContext;
+  const defaultVoice = defaults.voice;
+  const defaultVoiceXai = defaults.voice.xai;
+  const defaultVoiceOpenAiRealtime = defaults.voice.openaiRealtime;
+  const defaultVoiceGeminiRealtime = defaults.voice.geminiRealtime;
+  const defaultVoiceSttPipeline = defaults.voice.sttPipeline;
+  const defaultVoiceStreamWatch = defaults.voice.streamWatch;
+  const defaultVoiceSoundboard = defaults.voice.soundboard;
+  const defaultStartup = defaults.startup;
+  const defaultInitiative = defaults.initiative;
+  const defaultDiscovery = defaults.initiative.discovery;
   const activity = settings?.activity || {};
+  const selectedVoiceMode = settings?.voice?.mode ?? defaultVoice.mode;
+  const useTextLlmForVoiceReplyDecision = selectedVoiceMode === "stt_pipeline";
   return {
-    botName: settings?.botName || "clanker conk",
-    personaFlavor:
-      settings?.persona?.flavor || "playful, chaotic-good, slangy Gen Z/Gen A energy without being toxic",
+    botName: settings?.botName || defaults.botName,
+    personaFlavor: settings?.persona?.flavor || defaults.persona.flavor,
     personaHardLimits: formatList(settings?.persona?.hardLimits),
-    promptCapabilityHonestyLine:
-      settings?.prompt?.capabilityHonestyLine || "Never claim capabilities you do not have.",
+    promptCapabilityHonestyLine: settings?.prompt?.capabilityHonestyLine || defaultPrompt.capabilityHonestyLine,
     promptImpossibleActionLine:
-      settings?.prompt?.impossibleActionLine ||
-      "If asked to do something impossible, say it casually and suggest a text-only alternative.",
+      settings?.prompt?.impossibleActionLine || defaultPrompt.impossibleActionLine,
     promptMemoryEnabledLine:
-      settings?.prompt?.memoryEnabledLine ||
-      "You have persistent memory across conversations via saved durable facts and logs. Do not claim each conversation starts from zero.",
+      settings?.prompt?.memoryEnabledLine || defaultPrompt.memoryEnabledLine,
     promptMemoryDisabledLine:
-      settings?.prompt?.memoryDisabledLine ||
-      "Persistent memory is disabled right now. Do not claim long-term memory across separate conversations.",
-    promptSkipLine: settings?.prompt?.skipLine || "If you should not send a message, output exactly [SKIP].",
+      settings?.prompt?.memoryDisabledLine || defaultPrompt.memoryDisabledLine,
+    promptSkipLine: settings?.prompt?.skipLine || defaultPrompt.skipLine,
     promptTextGuidance: formatList(settings?.prompt?.textGuidance),
     promptVoiceGuidance: formatList(settings?.prompt?.voiceGuidance),
     promptVoiceOperationalGuidance: formatList(settings?.prompt?.voiceOperationalGuidance),
-    promptMediaPromptCraftGuidance: settings?.prompt?.mediaPromptCraftGuidance || "",
-    replyLevelInitiative: activity.replyLevelInitiative ?? 35,
-    replyLevelNonInitiative: activity.replyLevelNonInitiative ?? 10,
-    reactionLevel: activity.reactionLevel ?? 20,
-    minGap: activity.minSecondsBetweenMessages ?? 20,
-    allowReplies: settings?.permissions?.allowReplies ?? true,
+    promptMediaPromptCraftGuidance: settings?.prompt?.mediaPromptCraftGuidance || defaultPrompt.mediaPromptCraftGuidance,
+    replyLevelInitiative: activity.replyLevelInitiative ?? defaultActivity.replyLevelInitiative,
+    replyLevelNonInitiative: activity.replyLevelNonInitiative ?? defaultActivity.replyLevelNonInitiative,
+    reactionLevel: activity.reactionLevel ?? defaultActivity.reactionLevel,
+    minGap: activity.minSecondsBetweenMessages ?? defaultActivity.minSecondsBetweenMessages,
+    allowReplies: settings?.permissions?.allowReplies ?? defaultPermissions.allowReplies,
     allowInitiative: settings?.permissions?.allowInitiativeReplies !== false,
-    allowReactions: settings?.permissions?.allowReactions ?? true,
-    memoryEnabled: settings?.memory?.enabled ?? true,
-    provider: settings?.llm?.provider ?? "openai",
-    model: settings?.llm?.model ?? "gpt-4.1-mini",
-    replyFollowupLlmEnabled: settings?.replyFollowupLlm?.enabled ?? false,
-    replyFollowupLlmProvider: settings?.replyFollowupLlm?.provider ?? settings?.llm?.provider ?? "openai",
-    replyFollowupLlmModel: settings?.replyFollowupLlm?.model ?? settings?.llm?.model ?? "gpt-4.1-mini",
-    memoryLlmProvider: settings?.memoryLlm?.provider ?? "anthropic",
-    memoryLlmModel: settings?.memoryLlm?.model ?? "claude-haiku-4-5",
-    temperature: settings?.llm?.temperature ?? 0.9,
-    maxTokens: settings?.llm?.maxOutputTokens ?? 220,
-    webSearchEnabled: settings?.webSearch?.enabled ?? false,
-    webSearchSafeMode: settings?.webSearch?.safeSearch ?? true,
-    webSearchPerHour: settings?.webSearch?.maxSearchesPerHour ?? 20,
-    webSearchMaxResults: settings?.webSearch?.maxResults ?? 5,
-    webSearchMaxPages: settings?.webSearch?.maxPagesToRead ?? 3,
-    webSearchMaxChars: settings?.webSearch?.maxCharsPerPage ?? 1400,
-    webSearchProviderOrder: (settings?.webSearch?.providerOrder || ["brave", "serpapi"]).join(","),
-    webSearchRecencyDaysDefault: settings?.webSearch?.recencyDaysDefault ?? 30,
-    webSearchMaxConcurrentFetches: settings?.webSearch?.maxConcurrentFetches ?? 5,
-    videoContextEnabled: settings?.videoContext?.enabled ?? true,
-    videoContextPerHour: settings?.videoContext?.maxLookupsPerHour ?? 12,
-    videoContextMaxVideos: settings?.videoContext?.maxVideosPerMessage ?? 2,
-    videoContextMaxChars: settings?.videoContext?.maxTranscriptChars ?? 1200,
-    videoContextKeyframeInterval: settings?.videoContext?.keyframeIntervalSeconds ?? 8,
-    videoContextMaxKeyframes: settings?.videoContext?.maxKeyframesPerVideo ?? 3,
-    videoContextAsrFallback: settings?.videoContext?.allowAsrFallback ?? false,
-    videoContextMaxAsrSeconds: settings?.videoContext?.maxAsrSeconds ?? 120,
-    voiceEnabled: settings?.voice?.enabled ?? false,
-    voiceMode: settings?.voice?.mode ?? "voice_agent",
-    voiceAllowNsfwHumor: settings?.voice?.allowNsfwHumor ?? true,
-    voiceIntentConfidenceThreshold: settings?.voice?.intentConfidenceThreshold ?? 0.75,
-    voiceMaxSessionMinutes: settings?.voice?.maxSessionMinutes ?? 10,
-    voiceInactivityLeaveSeconds: settings?.voice?.inactivityLeaveSeconds ?? 90,
-    voiceMaxSessionsPerDay: settings?.voice?.maxSessionsPerDay ?? 12,
-    voiceReplyEagerness: settings?.voice?.replyEagerness ?? 0,
-    voiceReplyDecisionLlmProvider: settings?.voice?.replyDecisionLlm?.provider ?? "anthropic",
-    voiceReplyDecisionLlmModel: settings?.voice?.replyDecisionLlm?.model ?? "claude-haiku-4-5",
+    allowReactions: settings?.permissions?.allowReactions ?? defaultPermissions.allowReactions,
+    memoryEnabled: settings?.memory?.enabled ?? defaults.memory.enabled,
+    provider: settings?.llm?.provider ?? defaultLlm.provider,
+    model: settings?.llm?.model ?? defaultLlm.model,
+    replyFollowupLlmEnabled: settings?.replyFollowupLlm?.enabled ?? defaultReplyFollowupLlm.enabled,
+    replyFollowupLlmProvider: settings?.replyFollowupLlm?.provider ?? settings?.llm?.provider ?? defaultReplyFollowupLlm.provider,
+    replyFollowupLlmModel: settings?.replyFollowupLlm?.model ?? settings?.llm?.model ?? defaultReplyFollowupLlm.model,
+    memoryLlmProvider: settings?.memoryLlm?.provider ?? defaultMemoryLlm.provider,
+    memoryLlmModel: settings?.memoryLlm?.model ?? defaultMemoryLlm.model,
+    temperature: settings?.llm?.temperature ?? defaultLlm.temperature,
+    maxTokens: settings?.llm?.maxOutputTokens ?? defaultLlm.maxOutputTokens,
+    webSearchEnabled: settings?.webSearch?.enabled ?? defaultWebSearch.enabled,
+    webSearchSafeMode: settings?.webSearch?.safeSearch ?? defaultWebSearch.safeSearch,
+    webSearchPerHour: settings?.webSearch?.maxSearchesPerHour ?? defaultWebSearch.maxSearchesPerHour,
+    webSearchMaxResults: settings?.webSearch?.maxResults ?? defaultWebSearch.maxResults,
+    webSearchMaxPages: settings?.webSearch?.maxPagesToRead ?? defaultWebSearch.maxPagesToRead,
+    webSearchMaxChars: settings?.webSearch?.maxCharsPerPage ?? defaultWebSearch.maxCharsPerPage,
+    webSearchProviderOrder: (settings?.webSearch?.providerOrder || defaultWebSearch.providerOrder).join(","),
+    webSearchRecencyDaysDefault: settings?.webSearch?.recencyDaysDefault ?? defaultWebSearch.recencyDaysDefault,
+    webSearchMaxConcurrentFetches: settings?.webSearch?.maxConcurrentFetches ?? defaultWebSearch.maxConcurrentFetches,
+    videoContextEnabled: settings?.videoContext?.enabled ?? defaultVideoContext.enabled,
+    videoContextPerHour: settings?.videoContext?.maxLookupsPerHour ?? defaultVideoContext.maxLookupsPerHour,
+    videoContextMaxVideos: settings?.videoContext?.maxVideosPerMessage ?? defaultVideoContext.maxVideosPerMessage,
+    videoContextMaxChars: settings?.videoContext?.maxTranscriptChars ?? defaultVideoContext.maxTranscriptChars,
+    videoContextKeyframeInterval: settings?.videoContext?.keyframeIntervalSeconds ?? defaultVideoContext.keyframeIntervalSeconds,
+    videoContextMaxKeyframes: settings?.videoContext?.maxKeyframesPerVideo ?? defaultVideoContext.maxKeyframesPerVideo,
+    videoContextAsrFallback: settings?.videoContext?.allowAsrFallback ?? defaultVideoContext.allowAsrFallback,
+    videoContextMaxAsrSeconds: settings?.videoContext?.maxAsrSeconds ?? defaultVideoContext.maxAsrSeconds,
+    voiceEnabled: settings?.voice?.enabled ?? defaultVoice.enabled,
+    voiceMode: selectedVoiceMode,
+    voiceAllowNsfwHumor: settings?.voice?.allowNsfwHumor ?? defaultVoice.allowNsfwHumor,
+    voiceIntentConfidenceThreshold: settings?.voice?.intentConfidenceThreshold ?? defaultVoice.intentConfidenceThreshold,
+    voiceMaxSessionMinutes: settings?.voice?.maxSessionMinutes ?? defaultVoice.maxSessionMinutes,
+    voiceInactivityLeaveSeconds: settings?.voice?.inactivityLeaveSeconds ?? defaultVoice.inactivityLeaveSeconds,
+    voiceMaxSessionsPerDay: settings?.voice?.maxSessionsPerDay ?? defaultVoice.maxSessionsPerDay,
+    voiceReplyEagerness: settings?.voice?.replyEagerness ?? defaultVoice.replyEagerness,
+    voiceReplyDecisionLlmProvider: useTextLlmForVoiceReplyDecision
+      ? settings?.llm?.provider ?? defaultLlm.provider
+      : settings?.voice?.replyDecisionLlm?.provider ?? defaultVoice.replyDecisionLlm.provider,
+    voiceReplyDecisionLlmModel: useTextLlmForVoiceReplyDecision
+      ? settings?.llm?.model ?? defaultLlm.model
+      : settings?.voice?.replyDecisionLlm?.model ?? defaultVoice.replyDecisionLlm.model,
     voiceAllowedChannelIds: formatList(settings?.voice?.allowedVoiceChannelIds),
     voiceBlockedChannelIds: formatList(settings?.voice?.blockedVoiceChannelIds),
     voiceBlockedUserIds: formatList(settings?.voice?.blockedVoiceUserIds),
-    voiceXaiVoice: settings?.voice?.xai?.voice ?? "Rex",
-    voiceXaiAudioFormat: settings?.voice?.xai?.audioFormat ?? "audio/pcm",
-    voiceXaiSampleRateHz: settings?.voice?.xai?.sampleRateHz ?? 24000,
-    voiceXaiRegion: settings?.voice?.xai?.region ?? "us-east-1",
-    voiceOpenAiRealtimeModel: settings?.voice?.openaiRealtime?.model ?? "gpt-realtime",
-    voiceOpenAiRealtimeVoice: settings?.voice?.openaiRealtime?.voice ?? "alloy",
-    voiceOpenAiRealtimeInputAudioFormat: settings?.voice?.openaiRealtime?.inputAudioFormat ?? "pcm16",
-    voiceOpenAiRealtimeOutputAudioFormat: settings?.voice?.openaiRealtime?.outputAudioFormat ?? "pcm16",
-    voiceOpenAiRealtimeInputSampleRateHz: settings?.voice?.openaiRealtime?.inputSampleRateHz ?? 24000,
-    voiceOpenAiRealtimeOutputSampleRateHz: settings?.voice?.openaiRealtime?.outputSampleRateHz ?? 24000,
+    voiceXaiVoice: settings?.voice?.xai?.voice ?? defaultVoiceXai.voice,
+    voiceXaiAudioFormat: settings?.voice?.xai?.audioFormat ?? defaultVoiceXai.audioFormat,
+    voiceXaiSampleRateHz: settings?.voice?.xai?.sampleRateHz ?? defaultVoiceXai.sampleRateHz,
+    voiceXaiRegion: settings?.voice?.xai?.region ?? defaultVoiceXai.region,
+    voiceOpenAiRealtimeModel: settings?.voice?.openaiRealtime?.model ?? defaultVoiceOpenAiRealtime.model,
+    voiceOpenAiRealtimeVoice: settings?.voice?.openaiRealtime?.voice ?? defaultVoiceOpenAiRealtime.voice,
+    voiceOpenAiRealtimeInputAudioFormat: settings?.voice?.openaiRealtime?.inputAudioFormat ?? defaultVoiceOpenAiRealtime.inputAudioFormat,
+    voiceOpenAiRealtimeOutputAudioFormat: settings?.voice?.openaiRealtime?.outputAudioFormat ?? defaultVoiceOpenAiRealtime.outputAudioFormat,
     voiceOpenAiRealtimeInputTranscriptionModel:
-      settings?.voice?.openaiRealtime?.inputTranscriptionModel ?? "gpt-4o-mini-transcribe",
+      settings?.voice?.openaiRealtime?.inputTranscriptionModel ?? defaultVoiceOpenAiRealtime.inputTranscriptionModel,
     voiceGeminiRealtimeModel:
-      settings?.voice?.geminiRealtime?.model ?? "gemini-2.5-flash-native-audio-preview-12-2025",
-    voiceGeminiRealtimeVoice: settings?.voice?.geminiRealtime?.voice ?? "Aoede",
+      settings?.voice?.geminiRealtime?.model ?? defaultVoiceGeminiRealtime.model,
+    voiceGeminiRealtimeVoice: settings?.voice?.geminiRealtime?.voice ?? defaultVoiceGeminiRealtime.voice,
     voiceGeminiRealtimeApiBaseUrl:
-      settings?.voice?.geminiRealtime?.apiBaseUrl ?? "https://generativelanguage.googleapis.com",
-    voiceGeminiRealtimeInputSampleRateHz: settings?.voice?.geminiRealtime?.inputSampleRateHz ?? 16000,
-    voiceGeminiRealtimeOutputSampleRateHz: settings?.voice?.geminiRealtime?.outputSampleRateHz ?? 24000,
-    voiceSttTranscriptionModel: settings?.voice?.sttPipeline?.transcriptionModel ?? "gpt-4o-mini-transcribe",
-    voiceSttTtsModel: settings?.voice?.sttPipeline?.ttsModel ?? "gpt-4o-mini-tts",
-    voiceSttTtsVoice: settings?.voice?.sttPipeline?.ttsVoice ?? "alloy",
-    voiceSttTtsSpeed: settings?.voice?.sttPipeline?.ttsSpeed ?? 1,
-    voiceStreamWatchEnabled: settings?.voice?.streamWatch?.enabled ?? true,
+      settings?.voice?.geminiRealtime?.apiBaseUrl ?? defaultVoiceGeminiRealtime.apiBaseUrl,
+    voiceGeminiRealtimeInputSampleRateHz: settings?.voice?.geminiRealtime?.inputSampleRateHz ?? defaultVoiceGeminiRealtime.inputSampleRateHz,
+    voiceGeminiRealtimeOutputSampleRateHz: settings?.voice?.geminiRealtime?.outputSampleRateHz ?? defaultVoiceGeminiRealtime.outputSampleRateHz,
+    voiceSttTranscriptionModel: settings?.voice?.sttPipeline?.transcriptionModel ?? defaultVoiceSttPipeline.transcriptionModel,
+    voiceSttTtsModel: settings?.voice?.sttPipeline?.ttsModel ?? defaultVoiceSttPipeline.ttsModel,
+    voiceSttTtsVoice: settings?.voice?.sttPipeline?.ttsVoice ?? defaultVoiceSttPipeline.ttsVoice,
+    voiceSttTtsSpeed: settings?.voice?.sttPipeline?.ttsSpeed ?? defaultVoiceSttPipeline.ttsSpeed,
+    voiceStreamWatchEnabled: settings?.voice?.streamWatch?.enabled ?? defaultVoiceStreamWatch.enabled,
     voiceStreamWatchMinCommentaryIntervalSeconds:
-      settings?.voice?.streamWatch?.minCommentaryIntervalSeconds ?? 8,
-    voiceStreamWatchMaxFramesPerMinute: settings?.voice?.streamWatch?.maxFramesPerMinute ?? 180,
-    voiceStreamWatchMaxFrameBytes: settings?.voice?.streamWatch?.maxFrameBytes ?? 350000,
-    voiceSoundboardEnabled: settings?.voice?.soundboard?.enabled ?? true,
-    voiceSoundboardAllowExternalSounds: settings?.voice?.soundboard?.allowExternalSounds ?? false,
+      settings?.voice?.streamWatch?.minCommentaryIntervalSeconds ?? defaultVoiceStreamWatch.minCommentaryIntervalSeconds,
+    voiceStreamWatchMaxFramesPerMinute: settings?.voice?.streamWatch?.maxFramesPerMinute ?? defaultVoiceStreamWatch.maxFramesPerMinute,
+    voiceStreamWatchMaxFrameBytes: settings?.voice?.streamWatch?.maxFrameBytes ?? defaultVoiceStreamWatch.maxFrameBytes,
+    voiceSoundboardEnabled: settings?.voice?.soundboard?.enabled ?? defaultVoiceSoundboard.enabled,
+    voiceSoundboardAllowExternalSounds: settings?.voice?.soundboard?.allowExternalSounds ?? defaultVoiceSoundboard.allowExternalSounds,
     voiceSoundboardPreferredSoundIds: formatList(settings?.voice?.soundboard?.preferredSoundIds),
-    maxMessages: settings?.permissions?.maxMessagesPerHour ?? 20,
-    maxReactions: settings?.permissions?.maxReactionsPerHour ?? 24,
+    maxMessages: settings?.permissions?.maxMessagesPerHour ?? defaultPermissions.maxMessagesPerHour,
+    maxReactions: settings?.permissions?.maxReactionsPerHour ?? defaultPermissions.maxReactionsPerHour,
     catchupEnabled: settings?.startup?.catchupEnabled !== false,
-    catchupLookbackHours: settings?.startup?.catchupLookbackHours ?? 6,
-    catchupMaxMessages: settings?.startup?.catchupMaxMessagesPerChannel ?? 20,
-    catchupMaxReplies: settings?.startup?.maxCatchupRepliesPerChannel ?? 2,
-    autonomousInitiativeEnabled: settings?.initiative?.enabled ?? false,
-    initiativePostsPerDay: settings?.initiative?.maxPostsPerDay ?? 6,
-    initiativeMinMinutes: settings?.initiative?.minMinutesBetweenPosts ?? 120,
+    catchupLookbackHours: settings?.startup?.catchupLookbackHours ?? defaultStartup.catchupLookbackHours,
+    catchupMaxMessages: settings?.startup?.catchupMaxMessagesPerChannel ?? defaultStartup.catchupMaxMessagesPerChannel,
+    catchupMaxReplies: settings?.startup?.maxCatchupRepliesPerChannel ?? defaultStartup.maxCatchupRepliesPerChannel,
+    autonomousInitiativeEnabled: settings?.initiative?.enabled ?? defaultInitiative.enabled,
+    initiativePostsPerDay: settings?.initiative?.maxPostsPerDay ?? defaultInitiative.maxPostsPerDay,
+    initiativeMinMinutes: settings?.initiative?.minMinutesBetweenPosts ?? defaultInitiative.minMinutesBetweenPosts,
     initiativePacingMode: settings?.initiative?.pacingMode === "spontaneous" ? "spontaneous" : "even",
-    initiativeSpontaneity: settings?.initiative?.spontaneity ?? 65,
-    initiativeStartupPost: settings?.initiative?.postOnStartup ?? false,
-    initiativeImageEnabled: settings?.initiative?.allowImagePosts ?? false,
-    initiativeVideoEnabled: settings?.initiative?.allowVideoPosts ?? false,
-    replyImageEnabled: settings?.initiative?.allowReplyImages ?? false,
-    replyVideoEnabled: settings?.initiative?.allowReplyVideos ?? false,
-    replyGifEnabled: settings?.initiative?.allowReplyGifs ?? false,
-    maxImagesPerDay: settings?.initiative?.maxImagesPerDay ?? 10,
-    maxVideosPerDay: settings?.initiative?.maxVideosPerDay ?? 6,
-    maxGifsPerDay: settings?.initiative?.maxGifsPerDay ?? 30,
-    initiativeSimpleImageModel: settings?.initiative?.simpleImageModel ?? "gpt-image-1.5",
-    initiativeComplexImageModel: settings?.initiative?.complexImageModel ?? "grok-imagine-image",
-    initiativeVideoModel: settings?.initiative?.videoModel ?? "grok-imagine-video",
+    initiativeSpontaneity: settings?.initiative?.spontaneity ?? defaultInitiative.spontaneity,
+    initiativeStartupPost: settings?.initiative?.postOnStartup ?? defaultInitiative.postOnStartup,
+    initiativeImageEnabled: settings?.initiative?.allowImagePosts ?? defaultInitiative.allowImagePosts,
+    initiativeVideoEnabled: settings?.initiative?.allowVideoPosts ?? defaultInitiative.allowVideoPosts,
+    replyImageEnabled: settings?.initiative?.allowReplyImages ?? defaultInitiative.allowReplyImages,
+    replyVideoEnabled: settings?.initiative?.allowReplyVideos ?? defaultInitiative.allowReplyVideos,
+    replyGifEnabled: settings?.initiative?.allowReplyGifs ?? defaultInitiative.allowReplyGifs,
+    maxImagesPerDay: settings?.initiative?.maxImagesPerDay ?? defaultInitiative.maxImagesPerDay,
+    maxVideosPerDay: settings?.initiative?.maxVideosPerDay ?? defaultInitiative.maxVideosPerDay,
+    maxGifsPerDay: settings?.initiative?.maxGifsPerDay ?? defaultInitiative.maxGifsPerDay,
+    initiativeSimpleImageModel: settings?.initiative?.simpleImageModel ?? defaultInitiative.simpleImageModel,
+    initiativeComplexImageModel: settings?.initiative?.complexImageModel ?? defaultInitiative.complexImageModel,
+    initiativeVideoModel: settings?.initiative?.videoModel ?? defaultInitiative.videoModel,
     initiativeAllowedImageModels: formatList(settings?.initiative?.allowedImageModels ?? []),
     initiativeAllowedVideoModels: formatList(settings?.initiative?.allowedVideoModels ?? []),
-    initiativeDiscoveryEnabled: settings?.initiative?.discovery?.enabled ?? true,
-    initiativeDiscoveryLinkChance: settings?.initiative?.discovery?.linkChancePercent ?? 80,
-    initiativeDiscoveryMaxLinks: settings?.initiative?.discovery?.maxLinksPerPost ?? 2,
-    initiativeDiscoveryMaxCandidates: settings?.initiative?.discovery?.maxCandidatesForPrompt ?? 6,
-    initiativeDiscoveryFreshnessHours: settings?.initiative?.discovery?.freshnessHours ?? 96,
-    initiativeDiscoveryDedupeHours: settings?.initiative?.discovery?.dedupeHours ?? 168,
-    initiativeDiscoveryRandomness: settings?.initiative?.discovery?.randomness ?? 55,
-    initiativeDiscoveryFetchLimit: settings?.initiative?.discovery?.sourceFetchLimit ?? 10,
-    initiativeDiscoveryAllowNsfw: settings?.initiative?.discovery?.allowNsfw ?? false,
-    initiativeDiscoverySourceReddit: settings?.initiative?.discovery?.sources?.reddit ?? true,
-    initiativeDiscoverySourceHackerNews: settings?.initiative?.discovery?.sources?.hackerNews ?? true,
-    initiativeDiscoverySourceYoutube: settings?.initiative?.discovery?.sources?.youtube ?? true,
-    initiativeDiscoverySourceRss: settings?.initiative?.discovery?.sources?.rss ?? true,
-    initiativeDiscoverySourceX: settings?.initiative?.discovery?.sources?.x ?? false,
+    initiativeDiscoveryEnabled: settings?.initiative?.discovery?.enabled ?? defaultDiscovery.enabled,
+    initiativeDiscoveryLinkChance: settings?.initiative?.discovery?.linkChancePercent ?? defaultDiscovery.linkChancePercent,
+    initiativeDiscoveryMaxLinks: settings?.initiative?.discovery?.maxLinksPerPost ?? defaultDiscovery.maxLinksPerPost,
+    initiativeDiscoveryMaxCandidates: settings?.initiative?.discovery?.maxCandidatesForPrompt ?? defaultDiscovery.maxCandidatesForPrompt,
+    initiativeDiscoveryFreshnessHours: settings?.initiative?.discovery?.freshnessHours ?? defaultDiscovery.freshnessHours,
+    initiativeDiscoveryDedupeHours: settings?.initiative?.discovery?.dedupeHours ?? defaultDiscovery.dedupeHours,
+    initiativeDiscoveryRandomness: settings?.initiative?.discovery?.randomness ?? defaultDiscovery.randomness,
+    initiativeDiscoveryFetchLimit: settings?.initiative?.discovery?.sourceFetchLimit ?? defaultDiscovery.sourceFetchLimit,
+    initiativeDiscoveryAllowNsfw: settings?.initiative?.discovery?.allowNsfw ?? defaultDiscovery.allowNsfw,
+    initiativeDiscoverySourceReddit: settings?.initiative?.discovery?.sources?.reddit ?? defaultDiscovery.sources.reddit,
+    initiativeDiscoverySourceHackerNews: settings?.initiative?.discovery?.sources?.hackerNews ?? defaultDiscovery.sources.hackerNews,
+    initiativeDiscoverySourceYoutube: settings?.initiative?.discovery?.sources?.youtube ?? defaultDiscovery.sources.youtube,
+    initiativeDiscoverySourceRss: settings?.initiative?.discovery?.sources?.rss ?? defaultDiscovery.sources.rss,
+    initiativeDiscoverySourceX: settings?.initiative?.discovery?.sources?.x ?? defaultDiscovery.sources.x,
     initiativeDiscoveryPreferredTopics: formatList(settings?.initiative?.discovery?.preferredTopics),
     initiativeDiscoveryRedditSubs: formatList(settings?.initiative?.discovery?.redditSubreddits),
     initiativeDiscoveryYoutubeChannels: formatList(settings?.initiative?.discovery?.youtubeChannelIds),
     initiativeDiscoveryRssFeeds: formatList(settings?.initiative?.discovery?.rssFeeds),
     initiativeDiscoveryXHandles: formatList(settings?.initiative?.discovery?.xHandles),
     initiativeDiscoveryXNitterBase:
-      settings?.initiative?.discovery?.xNitterBaseUrl ?? "https://nitter.net",
+      settings?.initiative?.discovery?.xNitterBaseUrl ?? defaultDiscovery.xNitterBaseUrl,
     initiativeChannels: formatList(settings?.permissions?.initiativeChannelIds),
     allowedChannels: formatList(settings?.permissions?.allowedChannelIds),
     blockedChannels: formatList(settings?.permissions?.blockedChannelIds),
@@ -174,6 +187,7 @@ export function settingsToForm(settings) {
 }
 
 export function formToSettingsPatch(form) {
+  const useTextLlmForVoiceReplyDecision = String(form.voiceMode || "").trim() === "stt_pipeline";
   return {
     botName: form.botName.trim(),
     persona: {
@@ -243,8 +257,12 @@ export function formToSettingsPatch(form) {
       maxSessionsPerDay: Number(form.voiceMaxSessionsPerDay),
       replyEagerness: Number(form.voiceReplyEagerness),
       replyDecisionLlm: {
-        provider: String(form.voiceReplyDecisionLlmProvider || "").trim(),
-        model: String(form.voiceReplyDecisionLlmModel || "").trim()
+        provider: useTextLlmForVoiceReplyDecision
+          ? String(form.provider || "").trim()
+          : String(form.voiceReplyDecisionLlmProvider || "").trim(),
+        model: useTextLlmForVoiceReplyDecision
+          ? String(form.model || "").trim()
+          : String(form.voiceReplyDecisionLlmModel || "").trim()
       },
       allowedVoiceChannelIds: parseList(form.voiceAllowedChannelIds),
       blockedVoiceChannelIds: parseList(form.voiceBlockedChannelIds),
@@ -260,8 +278,6 @@ export function formToSettingsPatch(form) {
         voice: String(form.voiceOpenAiRealtimeVoice || "").trim(),
         inputAudioFormat: String(form.voiceOpenAiRealtimeInputAudioFormat || "").trim(),
         outputAudioFormat: String(form.voiceOpenAiRealtimeOutputAudioFormat || "").trim(),
-        inputSampleRateHz: Number(form.voiceOpenAiRealtimeInputSampleRateHz),
-        outputSampleRateHz: Number(form.voiceOpenAiRealtimeOutputSampleRateHz),
         inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim()
       },
       geminiRealtime: {

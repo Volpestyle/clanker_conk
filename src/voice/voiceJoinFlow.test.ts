@@ -1,6 +1,6 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { requestJoin } from "./voice/voiceJoinFlow.ts";
+import { requestJoin } from "./voiceJoinFlow.ts";
 
 function baseSettings(overrides = {}) {
   const base = {
@@ -104,9 +104,6 @@ function createManager(overrides = {}) {
     },
     getMissingJoinPermissionInfo() {
       return null;
-    },
-    composeMissingPermissionFallback() {
-      return "";
     }
   };
 
@@ -357,9 +354,6 @@ test("requestJoin reports missing permission info from manager checks", async ()
         reason: "missing_voice_permissions",
         missingPermissions: ["CONNECT"]
       };
-    },
-    composeMissingPermissionFallback() {
-      return "need CONNECT";
     }
   });
 

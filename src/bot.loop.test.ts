@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import test from "node:test";
+import { test } from "bun:test";
 import { ClankerBot } from "./bot.ts";
 import { Store } from "./store.ts";
 
@@ -205,8 +205,8 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
       content: "clanker conk, weigh in on this",
       mentions: {
         users: {
-          has() {
-            return false;
+          has(userId) {
+            return String(userId || "") === botUserId;
           }
         },
         repliedUser: null

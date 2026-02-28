@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   enableWatchStreamForUser,
@@ -6,7 +6,7 @@ import {
   initializeStreamWatchState,
   maybeTriggerStreamWatchCommentary,
   resolveStreamWatchVisionProviderSettings
-} from "./voice/voiceStreamWatch.ts";
+} from "./voiceStreamWatch.ts";
 
 function createSettings(overrides = {}) {
   const defaults = {

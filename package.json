@@ -5,28 +5,30 @@
   "type": "module",
   "main": "src/app.ts",
   "scripts": {
-    "prestart": "npm run build:ui",
-    "start": "tsx src/app.ts",
-    "predev": "npm run build:ui",
-    "dev": "tsx watch src/app.ts",
-    "dev:ui": "npx vite",
-    "build:ui": "npx vite build",
+    "prestart": "bun run build:ui",
+    "start": "bun src/app.ts",
+    "predev": "bun run build:ui",
+    "dev": "bun --watch src/app.ts",
+    "dev:ui": "bunx vite",
+    "build:ui": "bunx vite build",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "test": "node --import tsx --test src/*.test.ts",
-    "test:coverage": "node --import tsx --test --experimental-test-coverage --test-coverage-include=\"src/**/*.ts\" --test-coverage-exclude=\"src/**/*.test.ts\" src/*.test.ts",
-    "test:coverage:check": "node --import tsx --test --experimental-test-coverage --test-coverage-include=\"src/**/*.ts\" --test-coverage-exclude=\"src/**/*.test.ts\" --test-coverage-lines=50 --test-coverage-branches=45 --test-coverage-functions=40 src/*.test.ts",
-    "check": "npm run lint && node --import tsx scripts/check-backend.mjs && npx vite build",
+    "test": "bun test ./src ./dashboard/src",
+    "test:coverage": "bun test --coverage ./src ./dashboard/src",
+    "test:coverage:check": "bun test --coverage ./src ./dashboard/src",
+    "replay:flooding": "node --experimental-strip-types scripts/floodingReplayHarness.ts --mode recorded",
+    "replay:flooding:live": "node --experimental-strip-types scripts/floodingReplayHarness.ts --mode live",
+    "check": "bun run lint && bun scripts/check-backend.mjs && bunx vite build",
     "diagrams": "node scripts/gen-diagrams.mjs"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20",
+    "bun": ">=1.3.10"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "@discordjs/voice": "^0.19.0",
     "@snazzah/davey": "^0.1.9",
-    "better-sqlite3": "^11.7.2",
     "discord.js": "^14.18.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
@@ -47,7 +49,6 @@
     "globals": "^16.4.0",
     "typescript": "^5.9.2",
     "typescript-eslint": "^8.44.0",
-    "tsx": "^4.20.5",
     "vite": "^7.3.1"
   }
 }

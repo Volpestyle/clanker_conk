@@ -348,6 +348,28 @@ export class GeminiRealtimeClient extends EventEmitter {
     });
   }
 
+  requestTextUtterance(promptText) {
+    const prompt = String(promptText || "").trim();
+    if (!prompt) return;
+
+    this.pendingResponseActive = true;
+    this.send({
+      clientContent: {
+        turns: [
+          {
+            role: "user",
+            parts: [
+              {
+                text: prompt
+              }
+            ]
+          }
+        ],
+        turnComplete: true
+      }
+    });
+  }
+
   sendRealtimeInput(payload = {}) {
     this.send({
       realtimeInput: payload

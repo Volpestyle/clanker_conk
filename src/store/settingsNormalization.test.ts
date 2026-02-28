@@ -1,6 +1,6 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { normalizeSettings } from "./store/settingsNormalization.ts";
+import { normalizeSettings } from "./settingsNormalization.ts";
 
 test("normalizeSettings clamps and normalizes complex nested settings", () => {
   const normalized = normalizeSettings({
@@ -115,8 +115,8 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, 3);
   assert.equal(normalized.voice.openaiRealtime.inputAudioFormat, "pcm16");
   assert.equal(normalized.voice.openaiRealtime.outputAudioFormat, "g711_alaw");
-  assert.equal(normalized.voice.openaiRealtime.inputSampleRateHz, 8000);
-  assert.equal(normalized.voice.openaiRealtime.outputSampleRateHz, 48000);
+  assert.equal("inputSampleRateHz" in normalized.voice.openaiRealtime, false);
+  assert.equal("outputSampleRateHz" in normalized.voice.openaiRealtime, false);
   assert.equal(normalized.voice.geminiRealtime.apiBaseUrl, "https://generativelanguage.googleapis.com");
   assert.equal(normalized.voice.geminiRealtime.inputSampleRateHz, 8000);
   assert.equal(normalized.voice.geminiRealtime.outputSampleRateHz, 48000);
@@ -170,4 +170,25 @@ test("normalizeSettings handles memoryLlm defaults and discovery source fallback
   assert.equal(typeof normalized.initiative.discovery.sources.youtube, "boolean");
   assert.equal(typeof normalized.initiative.discovery.sources.rss, "boolean");
   assert.equal(typeof normalized.initiative.discovery.sources.x, "boolean");
+});
+
+test("normalizeSettings forces stt pipeline reply decider model/provider to main llm", () => {
+  const normalized = normalizeSettings({
+    llm: {
+      provider: "claude-code",
+      model: "opus"
+    },
+    voice: {
+      mode: "stt_pipeline",
+      replyDecisionLlm: {
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        maxAttempts: 2
+      }
+    }
+  });
+
+  assert.equal(normalized.voice.replyDecisionLlm.provider, "claude-code");
+  assert.equal(normalized.voice.replyDecisionLlm.model, "opus");
+  assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, 2);
 });

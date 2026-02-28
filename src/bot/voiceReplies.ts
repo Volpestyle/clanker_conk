@@ -15,7 +15,7 @@ import {
 } from "../botHelpers.ts";
 import { clamp, sanitizeBotText } from "../utils.ts";
 
-export async function composeVoiceOperationalMessage(bot, {
+export async function composeVoiceOperationalMessage(runtime, {
   settings,
   guildId = null,
   channelId = null,
@@ -24,11 +24,24 @@ export async function composeVoiceOperationalMessage(bot, {
   event = "voice_runtime",
   reason = null,
   details = {},
-  fallbackText = "",
   maxOutputChars = 180,
   allowSkip = false
 }) {
-  if (!bot.llm?.generate || !settings) return "";
+  if (!runtime.llm?.generate || !settings) {
+    runtime.store?.logAction?.({
+      kind: "voice_error",
+      guildId: guildId || null,
+      channelId: channelId || null,
+      messageId: messageId || null,
+      userId: userId || null,
+      content: "voice_operational_llm_unavailable",
+      metadata: {
+        event,
+        reason
+      }
+    });
+    return "";
+  }
   const normalizedEvent = String(event || "voice_runtime")
     .trim()
     .toLowerCase();
@@ -46,11 +59,11 @@ export async function composeVoiceOperationalMessage(bot, {
       maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || operationalMaxOutputTokens, 32, 110)
     }
   };
-  const operationalMemoryFacts = await bot.loadRelevantMemoryFacts({
+  const operationalMemoryFacts = await runtime.loadRelevantMemoryFacts({
     settings,
     guildId,
     channelId,
-    queryText: `${String(event || "")} ${String(reason || "")} ${String(fallbackText || "")}`
+    queryText: `${String(event || "")} ${String(reason || "")}`
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, 280),
@@ -62,7 +75,7 @@ export async function composeVoiceOperationalMessage(bot, {
     },
     limit: 6
   });
-  const operationalMemoryHints = bot.buildMediaMemoryFacts({
+  const operationalMemoryHints = runtime.buildMediaMemoryFacts({
     userFacts: [],
     relevantFacts: operationalMemoryFacts,
     maxItems: 6
@@ -101,7 +114,6 @@ export async function composeVoiceOperationalMessage(bot, {
     operationalMemoryHints.length
       ? `Relevant durable memory (use only if directly useful): ${operationalMemoryHints.join(" | ")}`
       : "",
-    fallbackText ? `Baseline meaning: ${String(fallbackText || "").trim()}` : "",
     isVoiceSessionEnd
       ? "Constraint: one chill sentence, 4-12 words."
       : isScreenShareOffer
@@ -114,7 +126,7 @@ export async function composeVoiceOperationalMessage(bot, {
     .join("\n");
 
   try {
-    const generation = await bot.llm.generate({
+    const generation = await runtime.llm.generate({
       settings: tunedSettings,
       systemPrompt,
       userPrompt,
@@ -138,7 +150,7 @@ export async function composeVoiceOperationalMessage(bot, {
     if (normalized === "[SKIP]") return allowSkip ? "[SKIP]" : "";
     return normalized;
   } catch (error) {
-    bot.store.logAction({
+    runtime.store?.logAction?.({
       kind: "voice_error",
       guildId: guildId || null,
       channelId: channelId || null,
@@ -154,7 +166,7 @@ export async function composeVoiceOperationalMessage(bot, {
   }
 }
 
-export async function generateVoiceTurnReply(bot, {
+export async function generateVoiceTurnReply(runtime, {
   settings,
   guildId = null,
   channelId = null,
@@ -164,9 +176,12 @@ export async function generateVoiceTurnReply(bot, {
   sessionId = null,
   isEagerTurn = false,
   voiceEagerness = 0,
-  soundboardCandidates = []
+  soundboardCandidates = [],
+  onWebLookupStart = null,
+  onWebLookupComplete = null,
+  webSearchTimeoutMs = null
 }) {
-  if (!bot.llm?.generate || !settings) return { text: "" };
+  if (!runtime.llm?.generate || !settings) return { text: "" };
   const incomingTranscript = String(transcript || "")
     .replace(/\s+/g, " ")
     .trim()
@@ -190,48 +205,39 @@ export async function generateVoiceTurnReply(bot, {
   const allowSoundboardDirective = Boolean(
     settings?.voice?.soundboard?.enabled && normalizedSoundboardCandidates.length
   );
+  const allowMemoryDirectives = Boolean(settings?.memory?.enabled);
+  const allowWebSearchDirective = Boolean(
+    settings?.webSearch?.enabled &&
+      runtime.search?.isConfigured?.() &&
+      typeof runtime.runModelRequestedWebSearch === "function" &&
+      typeof runtime.buildWebSearchContext === "function"
+  );
+  const allowedDirectives = [
+    ...(allowMemoryDirectives
+      ? [
+          "[[MEMORY_LINE:<durable fact from speaker turn>]]",
+          "[[SELF_MEMORY_LINE:<durable fact about your own stable identity/preference/commitment in your reply>]]"
+        ]
+      : []),
+    ...(allowSoundboardDirective ? ["[[SOUNDBOARD:<sound_ref>]]"] : []),
+    ...(allowWebSearchDirective ? ["[[WEB_SEARCH:<concise query>]]"] : [])
+  ];
+  const directivesLine = allowedDirectives.length
+    ? `Allowed optional trailing directives: ${allowedDirectives.join(", ")}.`
+    : "Do not output directives like [[...]].";
 
-  const guild = bot.client.guilds.cache.get(String(guildId || ""));
+  const guild = runtime.client.guilds.cache.get(String(guildId || ""));
   const speakerName =
     guild?.members?.cache?.get(String(userId || ""))?.displayName ||
     guild?.members?.cache?.get(String(userId || ""))?.user?.username ||
-    bot.client.users?.cache?.get(String(userId || ""))?.username ||
+    runtime.client.users?.cache?.get(String(userId || ""))?.username ||
     "unknown";
 
-  if (settings.memory?.enabled && bot.memory?.ingestMessage && userId) {
-    try {
-      await bot.memory.ingestMessage({
-        messageId: `voice-${String(guildId || "guild")}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
-        authorId: String(userId),
-        authorName: String(speakerName || "unknown"),
-        content: incomingTranscript,
-        settings,
-        trace: {
-          guildId,
-          channelId,
-          userId,
-          source: "voice_stt_pipeline_ingest"
-        }
-      });
-    } catch (error) {
-      bot.store.logAction({
-        kind: "voice_error",
-        guildId,
-        channelId,
-        userId,
-        content: `voice_stt_memory_ingest_failed: ${String(error?.message || error)}`,
-        metadata: {
-          sessionId
-        }
-      });
-    }
-  }
-
-  const memorySlice = await bot.loadPromptMemorySlice({
+  const memorySlice = await runtime.loadPromptMemorySlice({
     settings,
     userId,
     guildId,
-    channelId: null,
+    channelId,
     queryText: incomingTranscript,
     trace: {
       guildId,
@@ -250,41 +256,67 @@ export async function generateVoiceTurnReply(bot, {
     }
   };
 
+  let webSearch = allowWebSearchDirective
+    ? runtime.buildWebSearchContext(settings, incomingTranscript)
+    : {
+        requested: false,
+        configured: false,
+        enabled: false,
+        used: false,
+        blockedByBudget: false,
+        optedOutByUser: false,
+        error: null,
+        query: "",
+        results: [],
+        fetchedPages: 0,
+        providerUsed: null,
+        providerFallbackUsed: false,
+        budget: {
+          canSearch: false
+        }
+      };
+  let usedWebSearchFollowup = false;
+
   const voiceToneGuardrails = buildVoiceToneGuardrails();
   const systemPrompt = [
     buildSystemPrompt(settings),
     "You are speaking in live Discord voice chat.",
     ...voiceToneGuardrails,
     "Output plain spoken text only.",
-    allowSoundboardDirective
-      ? "Optional control: append exactly one trailing [[SOUNDBOARD:<sound_ref>]] directive when you want a soundboard effect."
-      : null,
+    directivesLine,
     isEagerTurn
-      ? allowSoundboardDirective
-        ? "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text and only the optional trailing soundboard directive."
+      ? allowedDirectives.length
+        ? "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text and only optional trailing directives."
         : "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise, output plain spoken text only, no directives or markdown."
-      : allowSoundboardDirective
-        ? "Do not output directives or markdown, except the optional trailing [[SOUNDBOARD:<sound_ref>]] directive. Do not output [SKIP]."
+      : allowedDirectives.length
+        ? "Do not output markdown or [SKIP]. Optional trailing directives are allowed only as listed."
         : "Do not output directives like [[...]], [SKIP], or markdown.",
-    allowSoundboardDirective ? "Never mention the control directive in normal speech." : null
+    allowSoundboardDirective ? "Never mention the soundboard control directive in normal speech." : null
   ] 
     .filter(Boolean)
     .join("\n");
-  const userPrompt = buildVoiceTurnPrompt({
-    speakerName,
-    transcript: incomingTranscript,
-    userFacts: memorySlice.userFacts,
-    relevantFacts: memorySlice.relevantFacts,
-    isEagerTurn,
-    voiceEagerness,
-    soundboardCandidates: normalizedSoundboardCandidates
-  });
+  const buildVoiceUserPrompt = ({
+    webSearchContext = webSearch,
+    allowWebSearch = allowWebSearchDirective
+  } = {}) =>
+    buildVoiceTurnPrompt({
+      speakerName,
+      transcript: incomingTranscript,
+      userFacts: memorySlice.userFacts,
+      relevantFacts: memorySlice.relevantFacts,
+      isEagerTurn,
+      voiceEagerness,
+      soundboardCandidates: normalizedSoundboardCandidates,
+      memoryEnabled: Boolean(settings.memory?.enabled),
+      webSearch: webSearchContext,
+      allowWebSearchDirective: allowWebSearch
+    });
 
   try {
-    const generation = await bot.llm.generate({
+    let generation = await runtime.llm.generate({
       settings: tunedSettings,
       systemPrompt,
-      userPrompt,
+      userPrompt: buildVoiceUserPrompt(),
       contextMessages: normalizedContextMessages,
       trace: {
         guildId,
@@ -295,7 +327,68 @@ export async function generateVoiceTurnReply(bot, {
       }
     });
 
-    const parsed = parseReplyDirectives(generation.text, resolveMaxMediaPromptLen(settings));
+    let parsed = parseReplyDirectives(generation.text, resolveMaxMediaPromptLen(settings));
+    if (allowWebSearchDirective && parsed.webSearchQuery && typeof runtime.runModelRequestedWebSearch === "function") {
+      usedWebSearchFollowup = true;
+      const normalizedQuery = String(parsed.webSearchQuery || "").trim();
+      let lookupStarted = false;
+      try {
+        if (typeof onWebLookupStart === "function") {
+          lookupStarted = true;
+          await onWebLookupStart({
+            query: normalizedQuery,
+            guildId,
+            channelId,
+            userId
+          });
+        }
+        const lookupTimeoutMs = resolveVoiceWebSearchTimeoutMs({
+          settings,
+          overrideMs: webSearchTimeoutMs
+        });
+        webSearch = await runVoiceWebSearchWithTimeout(runtime, {
+          settings,
+          webSearch,
+          query: normalizedQuery,
+          trace: {
+            guildId,
+            channelId,
+            userId,
+            source: "voice_stt_pipeline_generation",
+            event: sessionId ? "voice_session_web_lookup" : "voice_turn_web_lookup"
+          },
+          timeoutMs: lookupTimeoutMs
+        });
+      } finally {
+        if (lookupStarted && typeof onWebLookupComplete === "function") {
+          await onWebLookupComplete({
+            query: normalizedQuery,
+            guildId,
+            channelId,
+            userId
+          });
+        }
+      }
+
+      generation = await runtime.llm.generate({
+        settings: tunedSettings,
+        systemPrompt,
+        userPrompt: buildVoiceUserPrompt({
+          webSearchContext: webSearch,
+          allowWebSearch: false
+        }),
+        contextMessages: normalizedContextMessages,
+        trace: {
+          guildId,
+          channelId,
+          userId,
+          source: "voice_stt_pipeline_generation",
+          event: sessionId ? "voice_session_lookup_followup" : "voice_turn_lookup_followup"
+        }
+      });
+      parsed = parseReplyDirectives(generation.text, resolveMaxMediaPromptLen(settings));
+    }
+
     const soundboardRef = allowSoundboardDirective
       ? String(parsed.soundboardRef || "")
           .trim()
@@ -306,25 +399,41 @@ export async function generateVoiceTurnReply(bot, {
       return { text: "", soundboardRef: null };
     }
 
-    if (settings.memory?.enabled && parsed.memoryLine && bot.memory?.rememberLine && userId) {
-      await bot.memory
-        .rememberLine({
+    if (settings.memory?.enabled && parsed.memoryLine && runtime.memory?.rememberDirectiveLine && userId) {
+      await runtime.memory
+        .rememberDirectiveLine({
           line: parsed.memoryLine,
           sourceMessageId: `voice-${String(guildId || "guild")}-${Date.now()}-memory`,
           userId: String(userId),
           guildId,
           channelId,
-          sourceText: incomingTranscript
+          sourceText: incomingTranscript,
+          scope: "lore"
+        })
+        .catch(() => undefined);
+    }
+
+    if (settings.memory?.enabled && parsed.selfMemoryLine && runtime.memory?.rememberDirectiveLine && userId) {
+      await runtime.memory
+        .rememberDirectiveLine({
+          line: parsed.selfMemoryLine,
+          sourceMessageId: `voice-${String(guildId || "guild")}-${Date.now()}-self-memory`,
+          userId: runtime.client?.user?.id || String(userId),
+          guildId,
+          channelId,
+          sourceText: finalText,
+          scope: "self"
         })
         .catch(() => undefined);
     }
 
     return {
       text: finalText,
-      soundboardRef
+      soundboardRef,
+      usedWebSearchFollowup
     };
   } catch (error) {
-    bot.store.logAction({
+    runtime.store.logAction({
       kind: "voice_error",
       guildId,
       channelId,
@@ -336,4 +445,56 @@ export async function generateVoiceTurnReply(bot, {
     });
     return { text: "" };
   }
+}
+
+function resolveVoiceWebSearchTimeoutMs({ settings, overrideMs }) {
+  const explicit = Number(overrideMs);
+  const configured = Number(settings?.voice?.webSearchTimeoutMs);
+  const raw = Number.isFinite(explicit) ? explicit : Number.isFinite(configured) ? configured : 8000;
+  return clamp(Math.floor(raw), 500, 45000);
+}
+
+async function runVoiceWebSearchWithTimeout(runtime, {
+  settings,
+  webSearch,
+  query,
+  trace = {},
+  timeoutMs = 8000
+}) {
+  const runPromise = Promise.resolve(
+    runtime.runModelRequestedWebSearch({
+      settings,
+      webSearch,
+      query,
+      trace
+    })
+  ).then(
+    (value) => ({ ok: true, value }),
+    (error) => ({ ok: false, error })
+  );
+
+  const timeoutPromise = new Promise((resolve) => {
+    setTimeout(() => {
+      resolve({ ok: false, timeout: true });
+    }, Math.max(50, Number(timeoutMs) || 8000));
+  });
+
+  const result = await Promise.race([runPromise, timeoutPromise]);
+  if (result?.ok && result.value) return result.value;
+  if (result?.timeout) {
+    return {
+      ...(webSearch || {}),
+      requested: true,
+      query: String(query || "").trim(),
+      used: false,
+      error: `web lookup timed out after ${Math.max(50, Number(timeoutMs) || 8000)}ms`
+    };
+  }
+  return {
+    ...(webSearch || {}),
+    requested: true,
+    query: String(query || "").trim(),
+    used: false,
+    error: String(result?.error?.message || result?.error || "web lookup failed")
+  };
 }

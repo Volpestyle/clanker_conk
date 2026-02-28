@@ -1,13 +1,29 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { ScreenShareSessionManager } from "./screenShareSessionManager.ts";
 
 function createHarness({
+  appConfig = {},
+  publicState = {
+    enabled: true,
+    status: "ready",
+    publicUrl: "https://fancy-cat.trycloudflare.com"
+  },
+  getVoiceSession = () => ({
+    guildId: "guild-1",
+    voiceChannelId: "vc-1",
+    ending: false
+  }),
   isUserInSessionVoiceChannel = () => true,
-  enableWatchStreamForUser = async () => ({ ok: true })
+  enableWatchStreamForUser = async () => ({ ok: true }),
+  ingestVoiceStreamFrame = async () => ({
+    accepted: true,
+    reason: "ok"
+  })
 } = {}) {
   const actions = [];
-  let ingestCalls = 0;
+  const ingestCalls = [];
+  const watchCalls = [];
   const store = {
     getSettings() {
       return {
@@ -24,35 +40,27 @@ function createHarness({
   };
   const bot = {
     voiceSessionManager: {
-      enableWatchStreamForUser,
+      async enableWatchStreamForUser(payload) {
+        watchCalls.push(payload);
+        return await enableWatchStreamForUser(payload);
+      },
       getSession() {
-        return {
-          guildId: "guild-1",
-          voiceChannelId: "vc-1",
-          ending: false
-        };
+        return getVoiceSession();
       },
       isUserInSessionVoiceChannel
     },
-    async ingestVoiceStreamFrame() {
-      ingestCalls += 1;
-      return {
-        accepted: true,
-        reason: "ok"
-      };
+    async ingestVoiceStreamFrame(payload) {
+      ingestCalls.push(payload);
+      return await ingestVoiceStreamFrame(payload, ingestCalls.length);
     }
   };
   const publicHttpsEntrypoint = {
     getState() {
-      return {
-        enabled: true,
-        status: "ready",
-        publicUrl: "https://fancy-cat.trycloudflare.com"
-      };
+      return publicState;
     }
   };
   const manager = new ScreenShareSessionManager({
-    appConfig: {},
+    appConfig,
     store,
     bot,
     publicHttpsEntrypoint
@@ -60,7 +68,9 @@ function createHarness({
   return {
     actions,
     manager,
-    getIngestCalls: () => ingestCalls
+    watchCalls,
+    ingestCalls,
+    getIngestCalls: () => ingestCalls.length
   };
 }
 
@@ -148,4 +158,244 @@ test("ingestFrameByToken rejects and stops session when target leaves VC", async
     .find((entry) => String(entry?.content || "") === "screen_share_session_stopped");
   assert.ok(stopAction);
   assert.equal(stopAction.metadata.reason, "target_user_not_in_same_vc");
+});
+
+test("cleanup and runtime state remove expired sessions and trim oldest overflow", () => {
+  const { manager } = createHarness();
+  const nowMs = Date.now();
+  manager.sessions.set("expired-token", {
+    token: "expired-token",
+    createdAt: 1,
+    expiresAt: nowMs - 1
+  });
+  for (let index = 0; index < 242; index += 1) {
+    manager.sessions.set(`token-${index}`, {
+      token: `token-${index}`,
+      createdAt: index,
+      expiresAt: nowMs + 60_000 + index
+    });
+  }
+
+  manager.cleanupExpiredSessions(nowMs);
+  assert.equal(manager.sessions.has("expired-token"), false);
+  assert.equal(manager.sessions.size, 240);
+  assert.equal(manager.sessions.has("token-0"), false);
+  assert.equal(manager.sessions.has("token-1"), false);
+
+  const runtime = manager.getRuntimeState();
+  assert.equal(runtime.activeCount, 240);
+  assert.equal(runtime.newestExpiresAt, new Date(nowMs + 60_000 + 241).toISOString());
+});
+
+test("link capability and share URL formatting handle missing and present public URL", () => {
+  const { manager } = createHarness({
+    publicState: {
+      enabled: true,
+      status: "starting",
+      publicUrl: ""
+    }
+  });
+  assert.deepEqual(manager.getLinkCapability(), {
+    enabled: false,
+    status: "starting",
+    publicUrl: ""
+  });
+  assert.equal(manager.getPublicShareUrlForToken("abc"), "");
+
+  manager.publicHttpsEntrypoint = {
+    getState() {
+      return {
+        enabled: true,
+        status: "ready",
+        publicUrl: "https://fancy-cat.trycloudflare.com/"
+      };
+    }
+  };
+  assert.equal(
+    manager.getPublicShareUrlForToken("a/b"),
+    "https://fancy-cat.trycloudflare.com/share/a%2Fb"
+  );
+});
+
+test("createSession rejects invalid input and unavailable public HTTPS", async () => {
+  const { manager } = createHarness();
+  const invalid = await manager.createSession({
+    guildId: "",
+    requesterUserId: ""
+  });
+  assert.equal(invalid.ok, false);
+  assert.equal(invalid.reason, "invalid_share_request");
+
+  const noPublic = createHarness({
+    publicState: {
+      enabled: false,
+      status: "disabled",
+      publicUrl: ""
+    }
+  });
+  const unavailable = await noPublic.manager.createSession({
+    guildId: "guild-1",
+    channelId: "channel-1",
+    requesterUserId: "user-1"
+  });
+  assert.equal(unavailable.ok, false);
+  assert.equal(unavailable.reason, "public_https_unavailable");
+});
+
+test("createSession propagates stream-watch failures and clamps ttl and fields on success", async () => {
+  const blocked = createHarness({
+    enableWatchStreamForUser: async () => ({
+      ok: false,
+      reason: "watch_unavailable",
+      fallback: "join voice first"
+    })
+  });
+  const failed = await blocked.manager.createSession({
+    guildId: "guild-1",
+    channelId: "channel-1",
+    requesterUserId: "user-1"
+  });
+  assert.equal(failed.ok, false);
+  assert.equal(failed.reason, "watch_unavailable");
+  assert.equal(failed.message, "join voice first");
+
+  const success = createHarness({
+    appConfig: {
+      publicShareSessionTtlMinutes: 999
+    }
+  });
+  const created = await success.manager.createSession({
+    guildId: "guild-1",
+    channelId: "channel-1",
+    requesterUserId: "user-1",
+    requesterDisplayName: "x".repeat(200),
+    targetUserId: null,
+    source: "z".repeat(200)
+  });
+  assert.equal(created.ok, true);
+  assert.equal(created.expiresInMinutes, 30);
+  assert.equal(created.targetUserId, "user-1");
+  const session = success.manager.getSessionByToken(created.token);
+  assert.equal(session?.requesterDisplayName?.length, 80);
+  assert.equal(session?.source?.length, 80);
+});
+
+test("ingestFrameByToken handles missing sessions, rearm, and unknown ingestor results", async () => {
+  const { manager, watchCalls, ingestCalls } = createHarness({
+    ingestVoiceStreamFrame: async (_payload, callCount) => {
+      if (callCount === 1) {
+        return {
+          accepted: false,
+          reason: "watch_not_active"
+        };
+      }
+      return {
+        accepted: true,
+        reason: "ok"
+      };
+    }
+  });
+  const missing = await manager.ingestFrameByToken({
+    token: "missing-token"
+  });
+  assert.equal(missing.accepted, false);
+  assert.equal(missing.reason, "share_session_not_found");
+
+  const created = await manager.createSession({
+    guildId: "guild-1",
+    channelId: "channel-1",
+    requesterUserId: "user-1",
+    targetUserId: "user-1"
+  });
+  const accepted = await manager.ingestFrameByToken({
+    token: created.token,
+    mimeType: "image/jpeg",
+    dataBase64: "dGVzdA==",
+    source: "test_frame"
+  });
+  assert.equal(accepted.accepted, true);
+  assert.equal(ingestCalls.length, 2);
+  assert.equal(watchCalls.some((call) => call.source === "screen_share_frame_rearm"), true);
+
+  const unknownHarness = createHarness({
+    ingestVoiceStreamFrame: async () => null
+  });
+  const createdUnknown = await unknownHarness.manager.createSession({
+    guildId: "guild-1",
+    channelId: "channel-1",
+    requesterUserId: "user-1"
+  });
+  const unknown = await unknownHarness.manager.ingestFrameByToken({
+    token: createdUnknown.token
+  });
+  assert.equal(unknown.accepted, false);
+  assert.equal(unknown.reason, "unknown");
+});
+
+test("validateSessionVoicePresence and stopSessionByToken handle missing dependencies", () => {
+  const managerWithoutVoice = new ScreenShareSessionManager({
+    appConfig: {},
+    store: {
+      getSettings() {
+        return {};
+      },
+      logAction() {}
+    },
+    bot: {},
+    publicHttpsEntrypoint: {
+      getState() {
+        return {
+          publicUrl: "https://fancy-cat.trycloudflare.com"
+        };
+      }
+    }
+  });
+  const missingVoice = managerWithoutVoice.validateSessionVoicePresence({
+    guildId: "guild-1",
+    requesterUserId: "user-1"
+  });
+  assert.equal(missingVoice.ok, false);
+  assert.equal(missingVoice.reason, "voice_session_not_found");
+
+  const endingVoice = createHarness({
+    getVoiceSession: () => ({
+      guildId: "guild-1",
+      ending: true
+    }),
+    isUserInSessionVoiceChannel: null
+  });
+  const ended = endingVoice.manager.validateSessionVoicePresence({
+    guildId: "guild-1",
+    requesterUserId: "user-1"
+  });
+  assert.equal(ended.ok, false);
+  assert.equal(ended.reason, "voice_session_not_found");
+
+  assert.equal(endingVoice.manager.stopSessionByToken({ token: "missing" }), false);
+});
+
+test("renderSharePage returns branded invalid and valid pages", async () => {
+  const { manager } = createHarness();
+  const invalid = manager.renderSharePage("missing-token");
+  assert.equal(invalid.statusCode, 404);
+  assert.equal(invalid.html.includes("NO SIGNAL"), true);
+  assert.equal(invalid.html.includes("invalid or expired"), true);
+
+  const created = await manager.createSession({
+    guildId: "guild-1",
+    channelId: "channel-1",
+    requesterUserId: "user-1",
+    targetUserId: "user-1"
+  });
+  const valid = manager.renderSharePage(created.token);
+  assert.equal(valid.statusCode, 200);
+  assert.equal(valid.html.includes("<title>clanker conk - screen share</title>"), true);
+  assert.equal(
+    valid.html.includes(`/api/voice/share-session/${encodeURIComponent(created.token)}/frame`),
+    true
+  );
+  assert.equal(
+    valid.html.includes(`/api/voice/share-session/${encodeURIComponent(created.token)}/stop`),
+    true
+  );
 });

@@ -1,6 +1,6 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
+import { VoiceSessionManager } from "./voiceSessionManager.ts";
 
 function createManager({ memory = null } = {}) {
   const logs = [];
@@ -184,68 +184,9 @@ test("countHumanVoiceParticipants uses channel members and guild fallback paths"
   assert.equal(fallback, 1);
 });
 
-test("buildVoiceDecisionMemoryContext returns formatted hints and logs failures", async () => {
-  const successMemory = {
-    async buildPromptMemorySlice() {
-      return {
-        userFacts: [
-          {
-            fact: "prefers quick answers"
-          }
-        ],
-        relevantFacts: [
-          {
-            fact: "asked about launch windows"
-          }
-        ]
-      };
-    }
-  };
-  const success = createManager({
-    memory: successMemory
-  });
-  const ctx = await success.manager.buildVoiceDecisionMemoryContext({
-    session: createSession(),
-    settings: {
-      memory: {
-        enabled: true
-      }
-    },
-    userId: "user-1",
-    transcript: "what is the launch window?",
-    source: "voice_turn"
-  });
-  assert.equal(typeof ctx, "string");
-  assert.equal(ctx.length > 0, true);
-
-  const failing = createManager({
-    memory: {
-      async buildPromptMemorySlice() {
-        throw new Error("memory service down");
-      }
-    }
-  });
-  const failedCtx = await failing.manager.buildVoiceDecisionMemoryContext({
-    session: createSession(),
-    settings: {
-      memory: {
-        enabled: true
-      }
-    },
-    userId: "user-1",
-    transcript: "hello",
-    source: "voice_turn"
-  });
-  assert.equal(failedCtx, "");
-  assert.equal(failing.logs.some((entry) => String(entry.content).includes("voice_reply_decision_memory_failed")), true);
-});
-
-test("buildOpenAiRealtimeMemorySlice handles ingest/build errors safely", async () => {
+test("buildOpenAiRealtimeMemorySlice handles build errors safely", async () => {
   const { manager, logs } = createManager({
     memory: {
-      async ingestMessage() {
-        throw new Error("ingest failed");
-      },
       async buildPromptMemorySlice() {
         throw new Error("slice failed");
       }
@@ -269,6 +210,5 @@ test("buildOpenAiRealtimeMemorySlice handles ingest/build errors safely", async 
     userFacts: [],
     relevantFacts: []
   });
-  assert.equal(logs.some((entry) => String(entry.content).includes("voice_realtime_memory_ingest_failed")), true);
   assert.equal(logs.some((entry) => String(entry.content).includes("voice_realtime_memory_slice_failed")), true);
 });

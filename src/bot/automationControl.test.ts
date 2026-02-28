@@ -1,11 +1,11 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   applyAutomationControlAction,
   composeAutomationControlReply,
   formatAutomationListLine,
   resolveAutomationTargetsForControl
-} from "./bot/automationControl.ts";
+} from "./automationControl.ts";
 
 function baseAutomationRow(overrides = {}) {
   return {
@@ -93,14 +93,13 @@ function createBot(overrides = {}) {
   };
 }
 
-test("composeAutomationControlReply falls back when model text is skipped and appends details", () => {
+test("composeAutomationControlReply suppresses output when model text is skipped", () => {
   const text = composeAutomationControlReply({
     modelText: "[SKIP]",
-    fallbackText: "sounds good",
     detailLines: ["- #1 [active] daily recap", "", "next: tomorrow"]
   });
 
-  assert.equal(text, "sounds good\n- #1 [active] daily recap\nnext: tomorrow");
+  assert.equal(text, "");
 });
 
 test("formatAutomationListLine handles missing channel and paused state", () => {
@@ -187,7 +186,7 @@ test("applyAutomationControlAction list returns an empty-state response", async 
   assert.equal(result?.handled, true);
   assert.equal(result?.metadata?.ok, true);
   assert.equal(result?.metadata?.count, 0);
-  assert.equal(result?.fallbackText, "no scheduled jobs right now.");
+  assert.deepEqual(result?.detailLines, []);
 });
 
 test("applyAutomationControlAction create rejects blocked target channels", async () => {
@@ -307,8 +306,9 @@ test("applyAutomationControlAction resume updates status and schedules cycle", a
   });
 
   assert.equal(result?.metadata?.ok, true);
-  assert.equal(result?.fallbackText, "resumed.");
   assert.equal(result?.metadata?.updatedIds?.[0], 19);
+  assert.equal(Array.isArray(result?.detailLines), true);
+  assert.equal(String(result?.detailLines?.[0] || "").includes("#19"), true);
   assert.equal(updates.length, 1);
   assert.equal(updates[0]?.status, "active");
   assert.equal(typeof updates[0]?.nextRunAt, "string");

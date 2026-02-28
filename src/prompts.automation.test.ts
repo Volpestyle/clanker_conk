@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { buildAutomationPrompt, buildInitiativePrompt, buildReplyPrompt } from "./prompts.ts";
 
@@ -81,6 +81,36 @@ test("buildReplyPrompt treats reply eagerness as a soft contribution threshold",
   assert.match(prompt, /soft threshold/i);
   assert.match(prompt, /Higher eagerness means lower contribution threshold; lower eagerness means higher threshold\./);
   assert.match(prompt, /useful, interesting, or funny enough/i);
+});
+
+test("buildReplyPrompt uses initiative-channel flow guidance for non-required turns", () => {
+  const prompt = buildReplyPrompt({
+    message: {
+      authorName: "alice",
+      content: "pokemon starters look mid"
+    },
+    imageInputs: [],
+    recentMessages: [
+      { author_name: "alice", content: "pokemon starters look mid" },
+      { author_name: "bob", content: "yeah these designs are weird" }
+    ],
+    relevantMessages: [],
+    userFacts: [],
+    relevantFacts: [],
+    emojiHints: [],
+    reactionEmojiOptions: [],
+    replyEagerness: 25,
+    reactionEagerness: 20,
+    channelMode: "initiative",
+    addressing: {
+      directlyAddressed: false,
+      responseRequired: false
+    }
+  });
+
+  assert.match(prompt, /In initiative channels/i);
+  assert.match(prompt, /Decide if replying improves the channel flow right now\./);
+  assert.equal(/justify the interruption risk/i.test(prompt), false);
 });
 
 test("buildReplyPrompt includes history image lookup instructions when enabled", () => {

@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   CUSTOM_MODEL_OPTION_VALUE,
@@ -6,7 +6,7 @@ import {
   resolvePresetModelSelection,
   resolveProviderModelOptions,
   settingsToForm
-} from "../dashboard/src/settingsFormModel.ts";
+} from "./settingsFormModel.ts";
 
 test("settingsFormModel converts settings to form defaults and back to normalized patch", () => {
   const form = settingsToForm({
@@ -85,4 +85,26 @@ test("resolvePresetModelSelection enforces claude-code preset behavior", () => {
   });
   assert.equal(claudeCode.isClaudeCodeProvider, true);
   assert.equal(claudeCode.selectedPresetModel, "opus");
+});
+
+test("formToSettingsPatch forces stt pipeline reply decider to main text llm", () => {
+  const form = settingsToForm({
+    llm: {
+      provider: "claude-code",
+      model: "sonnet"
+    },
+    voice: {
+      mode: "stt_pipeline",
+      replyDecisionLlm: {
+        provider: "openai",
+        model: "gpt-4.1-mini"
+      }
+    }
+  });
+
+  form.voiceReplyDecisionLlmProvider = "openai";
+  form.voiceReplyDecisionLlmModel = "gpt-4.1-mini";
+  const patch = formToSettingsPatch(form);
+  assert.equal(patch.voice.replyDecisionLlm.provider, "claude-code");
+  assert.equal(patch.voice.replyDecisionLlm.model, "sonnet");
 });

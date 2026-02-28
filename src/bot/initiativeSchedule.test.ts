@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   evaluateInitiativeSchedule,
@@ -8,7 +8,7 @@ import {
   getInitiativePacingMode,
   getInitiativePostingIntervalMs,
   pickInitiativeChannel
-} from "./bot/initiativeSchedule.ts";
+} from "./initiativeSchedule.ts";
 
 function baseSettings(overrides = {}) {
   const base = {

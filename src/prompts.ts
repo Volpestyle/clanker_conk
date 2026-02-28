@@ -238,11 +238,13 @@ export function buildReplyPrompt({
   voiceMode = null,
   screenShare = null,
   videoContext = null,
+  channelMode = "non_initiative",
   maxMediaPromptChars = 900,
   mediaPromptCraftGuidance = null
 }) {
   const parts = [];
   const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance();
+  const normalizedChannelMode = channelMode === "initiative" ? "initiative" : "non_initiative";
 
   parts.push(`Incoming message from ${message.authorName}: ${message.content}`);
   if (imageInputs?.length) {
@@ -326,20 +328,33 @@ export function buildReplyPrompt({
     const eagerness = Math.max(0, Math.min(100, Number(replyEagerness) || 0));
     parts.push(`Reply eagerness hint: ${eagerness}/100.`);
     parts.push("Treat reply eagerness as a soft threshold for when your jump-in contribution is worth it.");
-    if (eagerness <= 25) {
-      parts.push("Be very selective and skip unless you can add clearly strong value.");
-    } else if (eagerness >= 75) {
-      parts.push("You can jump in more often, including lighter/fun contributions that still fit the flow.");
-    } else {
-      parts.push("Use balanced judgment before joining the conversation.");
-    }
     parts.push("Higher eagerness means lower contribution threshold; lower eagerness means higher threshold.");
-    parts.push("Judge value by whether your message is useful, interesting, or funny enough to justify the interruption risk.");
-    parts.push("If unsure whether your contribution is worth it, output exactly [SKIP].");
-    parts.push("Decide if replying adds value right now.");
-    parts.push(
-      "If this message is not really meant for you or would interrupt people talking among themselves, output exactly [SKIP]."
-    );
+    if (normalizedChannelMode === "initiative") {
+      if (eagerness <= 25) {
+        parts.push("In initiative channels, stay selective and skip when a jump-in would feel random or stale.");
+      } else if (eagerness >= 75) {
+        parts.push("In initiative channels, you can join more often with short social glue when it fits.");
+      } else {
+        parts.push("In initiative channels, use balanced judgment and keep momentum without forcing it.");
+      }
+      parts.push("Short acknowledgements, playful riffs, or mood-setting lines are fine when they fit naturally.");
+      parts.push("If this would derail, interrupt, or repeat what was just said, output exactly [SKIP].");
+      parts.push("Decide if replying improves the channel flow right now.");
+    } else {
+      if (eagerness <= 25) {
+        parts.push("Be very selective and skip unless you can add clearly strong value.");
+      } else if (eagerness >= 75) {
+        parts.push("You can jump in more often, including lighter/fun contributions that still fit the flow.");
+      } else {
+        parts.push("Use balanced judgment before joining the conversation.");
+      }
+      parts.push("Judge value by whether your message is useful, interesting, or funny enough to justify the interruption risk.");
+      parts.push("If unsure whether your contribution is worth it, output exactly [SKIP].");
+      parts.push("Decide if replying adds value right now.");
+      parts.push(
+        "If this message is not really meant for you or would interrupt people talking among themselves, output exactly [SKIP]."
+      );
+    }
   }
 
   const reactionLevel = Math.max(0, Math.min(100, Number(reactionEagerness) || 0));
@@ -359,6 +374,12 @@ export function buildReplyPrompt({
     parts.push("Do not claim you are text-only or unable to join voice channels.");
     parts.push("If users mention VC/voice requests, stay consistent with voice being available.");
     parts.push(
+      "Use conversational continuity: follow-up VC control requests can still be aimed at you even if the user does not repeat your name."
+    );
+    parts.push(
+      "Prioritize who the current message is addressed to over older context when deciding voiceIntent."
+    );
+    parts.push(
       "If the incoming message is clearly asking you to join, leave, or report VC status, set voiceIntent.intent to join, leave, or status."
     );
     parts.push(
@@ -373,6 +394,13 @@ export function buildReplyPrompt({
     parts.push(
       "Set voiceIntent.confidence from 0 to 1. Use high confidence only for explicit voice-control requests aimed at you."
     );
+    parts.push(
+      "If the message is clearly aimed at someone else (for example, only tagging another user with no clear reference to you), set voiceIntent.intent to none."
+    );
+    parts.push(
+      "Example: if a message tags another user and says 'come back' without clearly addressing you, set voiceIntent.intent=none."
+    );
+    parts.push("If intent target is ambiguous, prefer voiceIntent.intent=none with lower confidence.");
     parts.push("For normal chat or ambiguous requests, set voiceIntent.intent to none and keep confidence low.");
   } else {
     parts.push("Voice mode is disabled right now.");
@@ -591,19 +619,25 @@ export function buildReplyPrompt({
       "Use memoryLine only for lasting facts (names, preferences, recurring relationships, long-lived context), not throwaway chatter."
     );
     parts.push("Keep memoryLine concise (under 180 chars) and factual.");
+    parts.push(
+      "If your own reply introduces a durable self fact (stable identity, recurring preference, or explicit standing commitment), set selfMemoryLine."
+    );
+    parts.push("Use selfMemoryLine only for durable facts about you, not temporary mood or throwaway phrasing.");
+    parts.push("Keep selfMemoryLine concise (under 180 chars), concrete, and grounded in your reply text.");
   }
 
   parts.push("Task: write one natural Discord reply to the incoming message.");
   parts.push("Return strict JSON only. Do not output markdown or code fences.");
   parts.push("JSON format:");
   parts.push(
-    "{\"text\":\"reply or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"memoryLine\":null,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
+    "{\"text\":\"reply or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
   );
   parts.push("Set skip=true only when no response should be sent. If skip=true, set text to [SKIP].");
   parts.push("When no reaction is needed, set reactionEmoji to null.");
   parts.push("When no media should be generated, set media to null.");
   parts.push("When no lookup is needed, set webSearchQuery, memoryLookupQuery, and imageLookupQuery to null.");
   parts.push("When no durable fact should be saved, set memoryLine to null.");
+  parts.push("When no durable self fact should be saved, set selfMemoryLine to null.");
   parts.push("When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.");
   parts.push("Set voiceIntent.intent to one of join|leave|status|watch_stream|stop_watching_stream|stream_status|none.");
   parts.push("When not issuing voice control, set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null.");
@@ -699,9 +733,9 @@ export function buildAutomationPrompt({
   parts.push("Return strict JSON only.");
   parts.push("JSON format:");
   parts.push(
-    "{\"text\":\"message or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"memoryLine\":null,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null}}"
+    "{\"text\":\"message or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null}}"
   );
-  parts.push("Set webSearchQuery and memoryLine to null.");
+  parts.push("Set webSearchQuery, memoryLine, and selfMemoryLine to null.");
   if (allowMemoryLookupDirective) {
     if (!memoryLookup?.enabled) {
       parts.push("Durable memory lookup is unavailable for this run. Set memoryLookupQuery to null.");
@@ -726,7 +760,10 @@ export function buildVoiceTurnPrompt({
   relevantFacts = [],
   isEagerTurn = false,
   voiceEagerness = 0,
-  soundboardCandidates = []
+  soundboardCandidates = [],
+  memoryEnabled = false,
+  webSearch = null,
+  allowWebSearchDirective = false
 }) {
   const parts = [];
   const voiceToneGuardrails = buildVoiceToneGuardrails();
@@ -752,6 +789,13 @@ export function buildVoiceTurnPrompt({
     parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: false, maxItems: 8 }));
   }
 
+  if (memoryEnabled) {
+    parts.push("Optional memory directives:");
+    parts.push("- [[MEMORY_LINE:<durable fact from the speaker turn>]]");
+    parts.push("- [[SELF_MEMORY_LINE:<durable fact about your own stable identity/preference/commitment in your reply>]]");
+    parts.push("Use these only when genuinely durable and grounded. Omit when not needed.");
+  }
+
   if (normalizedSoundboardCandidates.length) {
     parts.push("Optional soundboard refs:");
     parts.push(normalizedSoundboardCandidates.join("\n"));
@@ -759,6 +803,45 @@ export function buildVoiceTurnPrompt({
       "If you want a soundboard effect, append exactly one trailing directive: [[SOUNDBOARD:<sound_ref>]] where <sound_ref> matches the list exactly."
     );
     parts.push("If no soundboard effect should play, omit the directive.");
+  }
+
+  if (allowWebSearchDirective) {
+    if (webSearch?.optedOutByUser) {
+      parts.push("The user asked not to use web search.");
+      parts.push("Do not output [[WEB_SEARCH:...]].");
+    } else if (!webSearch?.enabled) {
+      parts.push("Live web lookup is disabled in settings.");
+      parts.push("Do not output [[WEB_SEARCH:...]].");
+    } else if (!webSearch?.configured) {
+      parts.push("Live web lookup is unavailable (provider not configured).");
+      parts.push("Do not output [[WEB_SEARCH:...]].");
+    } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
+      parts.push("Live web lookup is unavailable right now (budget exhausted).");
+      parts.push("Do not output [[WEB_SEARCH:...]].");
+    } else {
+      parts.push("Live web lookup is available.");
+      parts.push(
+        "If your spoken response needs fresh web info for accuracy, output a trailing directive [[WEB_SEARCH:<concise query>]]."
+      );
+      parts.push("Only use one web-search directive when needed.");
+    }
+  } else {
+    parts.push("Do not output [[WEB_SEARCH:...]].");
+  }
+
+  if (webSearch?.requested && !webSearch?.used) {
+    if (webSearch.error) {
+      parts.push(`Web lookup failed: ${webSearch.error}`);
+      parts.push("Answer without claiming live lookup succeeded.");
+    } else if (!webSearch.results?.length) {
+      parts.push("A web lookup was attempted, but no useful results were found.");
+      parts.push("Answer carefully and avoid invented specifics.");
+    }
+  }
+
+  if (webSearch?.used && webSearch.results?.length) {
+    parts.push(`Live web findings for query: "${webSearch.query}"`);
+    parts.push(formatWebSearchFindings(webSearch));
   }
 
   if (isEagerTurn) {
@@ -772,13 +855,13 @@ export function buildVoiceTurnPrompt({
       "Task: respond as a natural spoken VC reply, or output exactly [SKIP] if you have nothing to add."
     );
     parts.push(
-      "If responding, use plain text only. No directives, tags, or markdown except the optional trailing [[SOUNDBOARD:<sound_ref>]] directive."
+      "If responding, use plain text only. No tags or markdown; only optional trailing directives listed above are allowed."
     );
   } else {
     parts.push(...voiceToneGuardrails);
     parts.push("Task: respond as a natural spoken VC reply.");
     parts.push(
-      "Use plain text only. Do not output directives, tags, markdown, or [SKIP], except the optional trailing [[SOUNDBOARD:<sound_ref>]] directive."
+      "Use plain text only. Do not output tags, markdown, or [SKIP]. Only optional trailing directives listed above are allowed."
     );
   }
 
