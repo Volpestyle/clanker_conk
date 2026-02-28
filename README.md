@@ -27,7 +27,7 @@ Features:
 ```bash
 cd /path/to/clanker_conk-master
 cp .env.example .env
-npm install
+bun install
 ```
 
 Fill `.env`:
@@ -73,7 +73,7 @@ Recommended bot permissions in server:
 ## 3. Run
 
 ```bash
-npm run start
+bun run start
 ```
 
 `start` builds the React dashboard and then starts bot + dashboard together.
@@ -88,7 +88,7 @@ Install `cloudflared` and set:
 PUBLIC_HTTPS_ENABLED=true
 ```
 
-Then start the app normally (`npm run start`). The app will spawn:
+Then start the app normally (`bun run start`). The app will spawn:
 
 ```bash
 cloudflared tunnel --url http://127.0.0.1:<DASHBOARD_PORT> --no-autoupdate
@@ -111,8 +111,8 @@ Public/private gating defaults:
 Example with PM2:
 
 ```bash
-npm install -g pm2
-pm2 start npm --name clanker-conk -- run start
+bun add --global pm2
+pm2 start "bun run start" --name clanker-conk
 pm2 save
 pm2 startup
 ```

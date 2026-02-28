@@ -20,7 +20,7 @@ Create a first-class way to expose the local dashboard/API (`localhost:8787`) ov
 
 ### 1. Optional Public HTTPS Runtime
 When `PUBLIC_HTTPS_ENABLED=true`:
-- Node process starts a child process:
+- Bun process starts a child process:
   - `cloudflared tunnel --url <target> --no-autoupdate`
 - The system watches child output and extracts a `https://*.trycloudflare.com` URL.
 - On URL discovery, runtime state switches to `ready`.
@@ -115,7 +115,7 @@ Environment variables:
    - `PUBLIC_HTTPS_ENABLED=true`
    - `DASHBOARD_TOKEN=<strong secret>` (required for private/admin APIs)
    - optionally `PUBLIC_API_TOKEN=<strong secret>` (for public-header ingress auth)
-3. Start bot: `npm run start`.
+3. Start bot: `bun run start`.
 4. Confirm tunnel:
    - dashboard `Public HTTPS` metric, or
    - `GET /api/public-https`.

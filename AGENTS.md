@@ -8,6 +8,7 @@
 - Classifiers
   - haiku
   - gpt-5-nano reasoning low
+- Runtime/package manager standard: use Bun (`bun`, `bun run`, `bunx`) over Node/NPM (`node`, `npm`, `npx`) unless explicitly requested.
 
 - Always remove legacy compatibility paths and dead code as part of the same change.
 - Do not keep backward-compatibility shims, aliases, or old-field fallbacks unless the user explicitly asks for them.
@@ -36,13 +37,13 @@ When writing or updating documentation, add/update a diagram when it would mater
 After editing any `.mmd` file, re-render all diagrams:
 
 ```sh
-npm run diagrams
+bun run diagrams
 ```
 
 Or render a single file:
 
 ```sh
-npm run diagrams -- settings-flow.mmd
+bun run diagrams -- settings-flow.mmd
 ```
 
 This runs `@mermaid-js/mermaid-cli` (`mmdc`) at 4x scale to produce crisp PNGs. Commit both the updated `.mmd` source and the regenerated `.png`.
@@ -50,7 +51,7 @@ This runs `@mermaid-js/mermaid-cli` (`mmdc`) at 4x scale to produce crisp PNGs. 
 ### Adding a new diagram
 
 1. Create `docs/diagrams/<name>.mmd` with valid Mermaid syntax.
-2. Run `npm run diagrams -- <name>.mmd` to generate `docs/diagrams/<name>.png`.
+2. Run `bun run diagrams -- <name>.mmd` to generate `docs/diagrams/<name>.png`.
 3. Embed in the target markdown file:
    ```md
    ![Diagram Title](diagrams/<name>.png)

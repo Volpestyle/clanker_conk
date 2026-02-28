@@ -16,9 +16,9 @@ function withDiscordToken(value, run) {
 
 test("isDirectExecution only returns true for the current module path", () => {
   const appPath = fileURLToPath(new URL("./app.ts", import.meta.url));
-  assert.equal(isDirectExecution(["node", appPath]), true);
-  assert.equal(isDirectExecution(["node", "/tmp/other-entry.ts"]), false);
-  assert.equal(isDirectExecution(["node"]), false);
+  assert.equal(isDirectExecution(["bun", appPath]), true);
+  assert.equal(isDirectExecution(["bun", "/tmp/other-entry.ts"]), false);
+  assert.equal(isDirectExecution(["bun"]), false);
 });
 
 test("main throws immediately when DISCORD_TOKEN is missing", async () => {

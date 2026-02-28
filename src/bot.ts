@@ -117,7 +117,7 @@ const LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS = 72;
 const LOOKUP_CONTEXT_TTL_HOURS = 48;
 const LOOKUP_CONTEXT_MAX_RESULTS = 5;
 const LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL = 120;
-const IS_NODE_TEST_PROCESS = Boolean(process.env.NODE_TEST_CONTEXT) ||
+const IS_TEST_PROCESS = /\.test\.[cm]?[jt]sx?$/i.test(String(process.argv?.[1] || "")) ||
   process.execArgv.includes("--test") ||
   process.argv.includes("--test");
 const SCREEN_SHARE_EXPLICIT_REQUEST_RE =
@@ -808,7 +808,7 @@ export class ClankerBot {
 
   shouldSkipSimulatedTypingDelay() {
     if (this.appConfig?.disableSimulatedTypingDelay === true) return true;
-    return IS_NODE_TEST_PROCESS;
+    return IS_TEST_PROCESS;
   }
 
   getSimulatedTypingDelayMs(minMs, jitterMs) {

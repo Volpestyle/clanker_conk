@@ -37,25 +37,25 @@ test("searchLookupContext returns relevant short-term lookup memory", async () =
         }
       ]
     });
-    const nodeSaved = store.recordLookupContext({
+    const bunSaved = store.recordLookupContext({
       guildId: "guild-1",
       channelId: "chan-1",
       userId: "user-1",
       source: "reply_web_lookup",
-      query: "node.js release schedule",
+      query: "bun release notes",
       provider: "brave",
       results: [
         {
-          title: "Node.js Releases",
-          url: "https://nodejs.org/en/about/previous-releases",
-          domain: "nodejs.org",
-          snippet: "Node release lifecycle."
+          title: "Bun Release Notes",
+          url: "https://bun.sh/blog",
+          domain: "bun.sh",
+          snippet: "Bun runtime release updates."
         }
       ]
     });
 
     assert.equal(rustSaved, true);
-    assert.equal(nodeSaved, true);
+    assert.equal(bunSaved, true);
 
     const rows = store.searchLookupContext({
       guildId: "guild-1",

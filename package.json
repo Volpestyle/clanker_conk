@@ -30,7 +30,6 @@
     "diagrams": "bun scripts/gen-diagrams.mjs"
   },
   "engines": {
-    "node": ">=20",
     "bun": ">=1.3.10"
   },
   "dependencies": {

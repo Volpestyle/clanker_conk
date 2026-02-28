@@ -21,19 +21,19 @@ Notes:
 ## Run simulated (fast local loop)
 
 ```sh
-npm run replay:voice-golden
+bun run replay:voice-golden
 # or
-npm run test:voice-golden
+bun run test:voice-golden
 # or (voice golden + text-mode web-search regression)
-npm run test:golden
+bun run test:golden
 ```
 
 ## Run live APIs (real perf)
 
 ```sh
-npm run replay:voice-golden:live
+bun run replay:voice-golden:live
 # or
-npm run test:voice-golden:live
+bun run test:voice-golden:live
 ```
 
 By default judge scoring is enabled in both simulated and live runs. Use `--no-judge` to disable it.

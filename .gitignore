@@ -3,7 +3,7 @@ node_modules/
 data/
 dashboard/dist/
 *.log
-npm-debug.log*
+bun-debug.log*
 .DS_Store
 memory/*.md
 *.tsbuildinfo

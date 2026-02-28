@@ -479,7 +479,7 @@ export function createDashboardServer({
   const indexPath = path.join(staticDir, "index.html");
 
   if (!fs.existsSync(indexPath)) {
-    throw new Error("React dashboard build missing at dashboard/dist. Run `npm run build:ui`.");
+    throw new Error("React dashboard build missing at dashboard/dist. Run `bun run build:ui`.");
   }
 
   app.use(express.static(staticDir));
