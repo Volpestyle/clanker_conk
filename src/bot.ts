@@ -587,10 +587,8 @@ export class ClankerBot {
     if (!this.isChannelAllowed(settings, message.channelId)) return;
     if (this.isUserBlocked(settings, message.author.id)) return;
 
-    let memoryIngestMs = null;
     if (settings.memory.enabled) {
-      const ingestStartedAtMs = Date.now();
-      await this.memory.ingestMessage({
+      void this.memory.ingestMessage({
         messageId: message.id,
         authorId: message.author.id,
         authorName: message.member?.displayName || message.author.username,
@@ -601,8 +599,16 @@ export class ClankerBot {
           channelId: message.channelId,
           userId: message.author.id
         }
+      }).catch((error) => {
+        this.store.logAction({
+          kind: "bot_error",
+          guildId: message.guildId,
+          channelId: message.channelId,
+          messageId: message.id,
+          userId: message.author.id,
+          content: `memory_ingest: ${String(error?.message || error)}`
+        });
       });
-      memoryIngestMs = Math.max(0, Date.now() - ingestStartedAtMs);
     }
 
     const recentMessages = this.store.getRecentMessages(
@@ -623,10 +629,7 @@ export class ClankerBot {
       source: "message_event",
       message,
       forceRespond: addressSignal.triggered,
-      addressSignal,
-      performanceSeed: {
-        ingestMs: memoryIngestMs
-      }
+      addressSignal
     });
   }
 

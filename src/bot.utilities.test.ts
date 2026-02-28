@@ -527,6 +527,92 @@ test("ClankerBot enqueueReplyJob handles dedupe, overflow, and worker errors", a
   assert.equal(logs.some((entry) => String(entry.content).includes("reply_queue_worker: worker crashed")), true);
 });
 
+test("ClankerBot handleMessage queues reply before memory ingest completes", async () => {
+  let resolveIngest = null;
+  let ingestStarted = false;
+  let ingestSettled = false;
+  const ingestGate = new Promise((resolve) => {
+    resolveIngest = resolve;
+  });
+
+  const { bot, store } = createBot({
+    memory: {
+      async ingestMessage() {
+        ingestStarted = true;
+        await ingestGate;
+        ingestSettled = true;
+      }
+    }
+  });
+  bot.client.user = { id: "bot-1" };
+
+  const recordedMessages = [];
+  store.recordMessage = (entry) => {
+    recordedMessages.push({
+      message_id: String(entry.messageId || ""),
+      channel_id: String(entry.channelId || ""),
+      author_id: String(entry.authorId || ""),
+      author_name: String(entry.authorName || ""),
+      content: String(entry.content || ""),
+      created_at: new Date(entry.createdAt || Date.now()).toISOString()
+    });
+  };
+  store.getRecentMessages = (channelId, limit = 20) =>
+    recordedMessages
+      .filter((row) => row.channel_id === String(channelId || ""))
+      .slice()
+      .reverse()
+      .slice(0, limit);
+
+  const queued = [];
+  bot.enqueueReplyJob = (payload) => {
+    queued.push(payload);
+    return true;
+  };
+
+  const message = {
+    id: "msg-async-1",
+    createdTimestamp: Date.now(),
+    guildId: "guild-1",
+    channelId: "chan-1",
+    guild: { id: "guild-1" },
+    channel: { id: "chan-1" },
+    author: {
+      id: "user-1",
+      username: "alice",
+      bot: false
+    },
+    member: {
+      displayName: "alice"
+    },
+    content: "yo <@bot-1>",
+    mentions: {
+      users: {
+        has(userId) {
+          return String(userId || "") === "bot-1";
+        }
+      },
+      repliedUser: null
+    },
+    reference: null
+  };
+
+  const handlePromise = bot.handleMessage(message);
+  await Promise.resolve();
+  await handlePromise;
+
+  assert.equal(ingestStarted, true);
+  assert.equal(ingestSettled, false);
+  assert.equal(queued.length, 1);
+  assert.equal(queued[0]?.message?.id, "msg-async-1");
+
+  if (resolveIngest) {
+    resolveIngest();
+  }
+  await Promise.resolve();
+  assert.equal(ingestSettled, true);
+});
+
 test("ClankerBot gateway health and reconnect wrappers handle success and failure", async () => {
   const { bot, logs } = createBot();
   bot.appConfig.discordToken = "token";

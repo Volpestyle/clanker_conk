@@ -3,6 +3,7 @@ import { clamp, sleep } from "../utils.ts";
 const REPLY_QUEUE_RATE_LIMIT_WAIT_MS = 15_000;
 const REPLY_QUEUE_SEND_RETRY_BASE_MS = 2_500;
 const REPLY_QUEUE_SEND_MAX_RETRIES = 2;
+const REPLY_QUEUE_COALESCE_EDGE_GRACE_MS = 250;
 const GATEWAY_STALE_MS = 2 * 60_000;
 const GATEWAY_RECONNECT_BASE_DELAY_MS = 5_000;
 const GATEWAY_RECONNECT_MAX_DELAY_MS = 60_000;
@@ -27,13 +28,29 @@ export function getReplyCoalesceMaxMessages(settings) {
   return clamp(Number(settings.activity?.replyCoalesceMaxMessages) || 1, 1, 20);
 }
 
-export function getReplyCoalesceWaitMs(settings, message) {
+export function getReplyCoalesceWaitMs(settings, message, options = {}) {
   const windowMs = getReplyCoalesceWindowMs(settings);
   if (windowMs <= 0) return 0;
+  const nowMs = Number(options?.nowMs);
+  const currentMs = Number.isFinite(nowMs) ? nowMs : Date.now();
   const createdAtRaw = Number(message?.createdTimestamp);
-  const createdAt = Number.isFinite(createdAtRaw) && createdAtRaw > 0 ? createdAtRaw : Date.now();
-  const ageMs = Date.now() - createdAt;
-  return Math.max(0, windowMs - ageMs);
+  const createdAt = Number.isFinite(createdAtRaw) && createdAtRaw > 0 ? createdAtRaw : currentMs;
+  const ageMs = currentMs - createdAt;
+  const waitMs = Math.max(0, windowMs - ageMs);
+  if (waitMs > 0) return waitMs;
+  if (!options?.allowEdgeGrace) return 0;
+
+  const edgeGraceMs = clamp(
+    Number(options?.edgeGraceMs ?? REPLY_QUEUE_COALESCE_EDGE_GRACE_MS),
+    0,
+    1_000
+  );
+  if (edgeGraceMs <= 0) return 0;
+
+  const overrunMs = ageMs - windowMs;
+  if (overrunMs >= edgeGraceMs) return 0;
+
+  return Math.max(0, edgeGraceMs - overrunMs);
 }
 
 export function dequeueReplyJob(bot, channelId) {
@@ -157,6 +174,15 @@ export async function processReplyQueue(bot, channelId) {
       if (coalesceWaitMs > 0) {
         await sleep(Math.min(coalesceWaitMs, REPLY_QUEUE_RATE_LIMIT_WAIT_MS));
         continue;
+      }
+      if (queue.length <= 1) {
+        const edgeGraceWaitMs = getReplyCoalesceWaitMs(settings, headMessage, {
+          allowEdgeGrace: true
+        });
+        if (edgeGraceWaitMs > 0) {
+          await sleep(Math.min(edgeGraceWaitMs, REPLY_QUEUE_RATE_LIMIT_WAIT_MS));
+          continue;
+        }
       }
 
       const waitMs = getReplyQueueWaitMs(bot, settings);
