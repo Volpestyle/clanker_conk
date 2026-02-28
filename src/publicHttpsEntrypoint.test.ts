@@ -57,30 +57,30 @@ async function waitFor(predicate, timeoutMs = 1_000) {
   }
 }
 
-test("PublicHttpsEntrypoint start handles disabled and unsupported provider states", async () => {
+test("PublicHttpsEntrypoint start handles disabled and enabled states", async () => {
   const disabled = createEntrypoint({
     publicHttpsEnabled: false
   });
   const disabledState = await disabled.entrypoint.start();
   assert.equal(disabledState.status, "disabled");
 
-  const unsupported = createEntrypoint({
+  const enabled = createEntrypoint({
     publicHttpsEnabled: true,
-    publicHttpsProvider: "ngrok"
+    publicHttpsCloudflaredBin: "cloudflared"
   });
-  const unsupportedState = await unsupported.entrypoint.start();
-  assert.equal(unsupportedState.status, "error");
-  assert.equal(unsupportedState.lastError, "unsupported_public_https_provider:ngrok");
-  assert.equal(
-    unsupported.actions.some((entry) => String(entry.content).includes("public_https_entrypoint_provider_unsupported")),
-    true
-  );
+  let calls = 0;
+  enabled.entrypoint.startCloudflared = () => {
+    enabled.entrypoint.state.status = "starting";
+    calls += 1;
+  };
+  const enabledState = await enabled.entrypoint.start();
+  assert.equal(enabledState.status, "starting");
+  assert.equal(calls, 1);
 });
 
 test("PublicHttpsEntrypoint start returns early when child exists and otherwise delegates to startCloudflared", async () => {
   const { entrypoint } = createEntrypoint({
-    publicHttpsEnabled: true,
-    publicHttpsProvider: "cloudflared"
+    publicHttpsEnabled: true
   });
   entrypoint.child = { pid: 111 };
 
@@ -206,7 +206,6 @@ test("PublicHttpsEntrypoint logAction sanitizes output and tolerates missing sto
 test("PublicHttpsEntrypoint startCloudflared captures ENOENT and blocks retries", async () => {
   const { entrypoint, actions } = createEntrypoint({
     publicHttpsEnabled: true,
-    publicHttpsProvider: "cloudflared",
     publicHttpsCloudflaredBin: "__definitely_missing_cloudflared_binary__"
   });
 
@@ -221,7 +220,6 @@ test("PublicHttpsEntrypoint startCloudflared captures ENOENT and blocks retries"
 test("PublicHttpsEntrypoint startCloudflared schedules retry after unexpected close", async () => {
   const { entrypoint, actions } = createEntrypoint({
     publicHttpsEnabled: true,
-    publicHttpsProvider: "cloudflared",
     publicHttpsCloudflaredBin: process.execPath
   });
 

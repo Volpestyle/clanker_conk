@@ -1,6 +1,10 @@
 import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
 import { normalizeBoundedStringList } from "../settings/listNormalization.ts";
-import { defaultModelForLlmProvider, normalizeLlmProvider } from "../llm/llmHelpers.ts";
+import {
+  defaultModelForLlmProvider,
+  normalizeLlmProvider,
+  normalizeOpenAiReasoningEffort
+} from "../llm/llmHelpers.ts";
 import { normalizeProviderOrder } from "../search.ts";
 import { clamp, deepMerge, uniqueIdList } from "../utils.ts";
 import { normalizeVoiceRuntimeMode } from "../voice/voiceModes.ts";
@@ -23,15 +27,23 @@ export function normalizeSettings(raw) {
   if (!merged.memory || typeof merged.memory !== "object") merged.memory = {};
   if (!merged.llm || typeof merged.llm !== "object") merged.llm = {};
   if (!merged.replyFollowupLlm || typeof merged.replyFollowupLlm !== "object") merged.replyFollowupLlm = {};
-  if (merged.memoryLlm && typeof merged.memoryLlm === "object") {
-    merged.memoryLlm.provider = normalizeLlmProvider(
-      merged.memoryLlm?.provider,
-      DEFAULT_SETTINGS.memoryLlm?.provider || "anthropic"
-    );
-    merged.memoryLlm.model = String(
-      merged.memoryLlm?.model || defaultModelForLlmProvider(merged.memoryLlm.provider)
-    ).slice(0, 120);
-  }
+  if (!merged.memoryLlm || typeof merged.memoryLlm !== "object") merged.memoryLlm = {};
+  const defaultMemoryLlmProvider = normalizeLlmProvider(DEFAULT_SETTINGS.memoryLlm?.provider || "anthropic");
+  const normalizedMemoryProviderForDefaults = normalizeLlmProvider(
+    merged.memoryLlm?.provider,
+    defaultMemoryLlmProvider
+  );
+  const defaultMemoryLlmModel =
+    normalizedMemoryProviderForDefaults === defaultMemoryLlmProvider
+      ? String(DEFAULT_SETTINGS.memoryLlm?.model || "").trim()
+      : "";
+  const normalizedMemoryLlm = normalizeProviderModelPair(
+    merged.memoryLlm,
+    defaultMemoryLlmProvider,
+    defaultMemoryLlmModel
+  );
+  merged.memoryLlm.provider = normalizedMemoryLlm.provider;
+  merged.memoryLlm.model = normalizedMemoryLlm.model;
   if (!merged.webSearch || typeof merged.webSearch !== "object") merged.webSearch = {};
   if (!merged.videoContext || typeof merged.videoContext !== "object") merged.videoContext = {};
   if (!merged.voice || typeof merged.voice !== "object") merged.voice = {};
@@ -131,29 +143,31 @@ export function normalizeSettings(raw) {
     replyCoalesceMaxMessages
   };
 
-  merged.llm.provider = normalizeLlmProvider(merged.llm?.provider, DEFAULT_SETTINGS.llm?.provider || "anthropic");
-  merged.llm.model = String(merged.llm?.model || defaultModelForLlmProvider(merged.llm.provider)).slice(0, 120);
+  const defaultLlmProvider = normalizeLlmProvider(DEFAULT_SETTINGS.llm?.provider || "anthropic");
+  const defaultLlmModel =
+    normalizeLlmProvider(merged.llm?.provider, defaultLlmProvider) === defaultLlmProvider
+      ? String(DEFAULT_SETTINGS.llm?.model || "").trim()
+      : "";
+  const normalizedLlm = normalizeProviderModelPair(
+    merged.llm,
+    defaultLlmProvider,
+    defaultLlmModel
+  );
+  merged.llm.provider = normalizedLlm.provider;
+  merged.llm.model = normalizedLlm.model;
   merged.llm.temperature = clamp(Number(merged.llm?.temperature) || 0.9, 0, 2);
   merged.llm.maxOutputTokens = clamp(Number(merged.llm?.maxOutputTokens) || 220, 32, 1400);
   merged.replyFollowupLlm.enabled =
     merged.replyFollowupLlm?.enabled !== undefined
       ? Boolean(merged.replyFollowupLlm?.enabled)
       : Boolean(DEFAULT_SETTINGS.replyFollowupLlm?.enabled);
-  const replyFollowupProviderRaw = String(merged.replyFollowupLlm?.provider || "").trim();
-  merged.replyFollowupLlm.provider = normalizeLlmProvider(
-    replyFollowupProviderRaw,
-    merged.llm.provider || "anthropic"
+  const normalizedReplyFollowupLlm = normalizeProviderModelPair(
+    merged.replyFollowupLlm,
+    merged.llm.provider || "anthropic",
+    merged.llm.model || ""
   );
-  merged.replyFollowupLlm.model = String(
-    merged.replyFollowupLlm?.model ||
-      merged.llm.model ||
-      defaultModelForLlmProvider(merged.replyFollowupLlm.provider)
-  )
-    .trim()
-    .slice(0, 120);
-  if (!merged.replyFollowupLlm.model) {
-    merged.replyFollowupLlm.model = defaultModelForLlmProvider(merged.replyFollowupLlm.provider);
-  }
+  merged.replyFollowupLlm.provider = normalizedReplyFollowupLlm.provider;
+  merged.replyFollowupLlm.model = normalizedReplyFollowupLlm.model;
 
   merged.webSearch.enabled = Boolean(merged.webSearch?.enabled);
   const maxSearchesRaw = Number(merged.webSearch?.maxSearchesPerHour);
@@ -438,24 +452,19 @@ export function normalizeSettings(raw) {
     100
   );
   const voiceThoughtProviderRaw = String(merged.voice?.thoughtEngine?.provider || "").trim();
-  merged.voice.thoughtEngine.provider = normalizeLlmProvider(
-    voiceThoughtProviderRaw,
-    defaultVoiceThoughtEngine.provider || "anthropic"
-  );
+  const defaultVoiceThoughtProvider = normalizeLlmProvider(defaultVoiceThoughtEngine.provider || "anthropic");
+  const voiceThoughtProvider = normalizeLlmProvider(voiceThoughtProviderRaw, defaultVoiceThoughtProvider);
   const defaultVoiceThoughtModel =
-    merged.voice.thoughtEngine.provider === normalizeLlmProvider(defaultVoiceThoughtEngine.provider)
-      ? String(defaultVoiceThoughtEngine.model || "").trim().slice(0, 120)
+    voiceThoughtProvider === defaultVoiceThoughtProvider
+      ? String(defaultVoiceThoughtEngine.model || "").trim()
       : "";
-  merged.voice.thoughtEngine.model = String(
-    merged.voice?.thoughtEngine?.model ||
-      defaultVoiceThoughtModel ||
-      defaultModelForLlmProvider(merged.voice.thoughtEngine.provider)
-  )
-    .trim()
-    .slice(0, 120);
-  if (!merged.voice.thoughtEngine.model) {
-    merged.voice.thoughtEngine.model = defaultModelForLlmProvider(merged.voice.thoughtEngine.provider);
-  }
+  const normalizedVoiceThoughtLlm = normalizeProviderModelPair(
+    merged.voice.thoughtEngine,
+    defaultVoiceThoughtProvider,
+    defaultVoiceThoughtModel
+  );
+  merged.voice.thoughtEngine.provider = normalizedVoiceThoughtLlm.provider;
+  merged.voice.thoughtEngine.model = normalizedVoiceThoughtLlm.model;
   const voiceThoughtTemperatureRaw = Number(merged.voice?.thoughtEngine?.temperature);
   const defaultVoiceThoughtTemperatureRaw = Number(defaultVoiceThoughtEngine.temperature);
   merged.voice.thoughtEngine.temperature = clamp(
@@ -490,24 +499,18 @@ export function normalizeSettings(raw) {
     600
   );
   const voiceGenerationProviderRaw = String(merged.voice?.generationLlm?.provider || "").trim();
-  merged.voice.generationLlm.provider = normalizeLlmProvider(
-    voiceGenerationProviderRaw,
-    defaultVoiceGenerationLlm.provider || "anthropic"
-  );
+  const defaultVoiceGenerationProvider = normalizeLlmProvider(defaultVoiceGenerationLlm.provider || "anthropic");
   const defaultVoiceGenerationModel =
-    merged.voice.generationLlm.provider === normalizeLlmProvider(defaultVoiceGenerationLlm.provider)
-      ? String(defaultVoiceGenerationLlm.model || "").trim().slice(0, 120)
+    normalizeLlmProvider(voiceGenerationProviderRaw, defaultVoiceGenerationProvider) === defaultVoiceGenerationProvider
+      ? String(defaultVoiceGenerationLlm.model || "").trim()
       : "";
-  merged.voice.generationLlm.model = String(
-    merged.voice?.generationLlm?.model ||
-      defaultVoiceGenerationModel ||
-      defaultModelForLlmProvider(merged.voice.generationLlm.provider)
-  )
-    .trim()
-    .slice(0, 120);
-  if (!merged.voice.generationLlm.model) {
-    merged.voice.generationLlm.model = defaultModelForLlmProvider(merged.voice.generationLlm.provider);
-  }
+  const normalizedVoiceGenerationLlm = normalizeProviderModelPair(
+    merged.voice.generationLlm,
+    defaultVoiceGenerationProvider,
+    defaultVoiceGenerationModel
+  );
+  merged.voice.generationLlm.provider = normalizedVoiceGenerationLlm.provider;
+  merged.voice.generationLlm.model = normalizedVoiceGenerationLlm.model;
   merged.voice.replyDecisionLlm.enabled =
     merged.voice?.replyDecisionLlm?.enabled !== undefined
       ? Boolean(merged.voice?.replyDecisionLlm?.enabled)
@@ -515,24 +518,19 @@ export function normalizeSettings(raw) {
         ? Boolean(defaultVoiceReplyDecisionLlm.enabled)
         : true;
   const voiceReplyDecisionProviderRaw = String(merged.voice?.replyDecisionLlm?.provider || "").trim();
-  merged.voice.replyDecisionLlm.provider = normalizeLlmProvider(
-    voiceReplyDecisionProviderRaw,
-    defaultVoiceReplyDecisionLlm.provider || "anthropic"
-  );
+  const defaultVoiceReplyDecisionProvider = normalizeLlmProvider(defaultVoiceReplyDecisionLlm.provider || "anthropic");
   const defaultReplyDecisionModel =
-    merged.voice.replyDecisionLlm.provider === normalizeLlmProvider(defaultVoiceReplyDecisionLlm.provider)
-      ? String(defaultVoiceReplyDecisionLlm.model || "").trim().slice(0, 120)
+    normalizeLlmProvider(voiceReplyDecisionProviderRaw, defaultVoiceReplyDecisionProvider) ===
+    defaultVoiceReplyDecisionProvider
+      ? String(defaultVoiceReplyDecisionLlm.model || "").trim()
       : "";
-  merged.voice.replyDecisionLlm.model = String(
-    merged.voice?.replyDecisionLlm?.model ||
-      defaultReplyDecisionModel ||
-      defaultModelForLlmProvider(merged.voice.replyDecisionLlm.provider)
-  )
-    .trim()
-    .slice(0, 120);
-  if (!merged.voice.replyDecisionLlm.model) {
-    merged.voice.replyDecisionLlm.model = defaultModelForLlmProvider(merged.voice.replyDecisionLlm.provider);
-  }
+  const normalizedVoiceReplyDecisionLlm = normalizeProviderModelPair(
+    merged.voice.replyDecisionLlm,
+    defaultVoiceReplyDecisionProvider,
+    defaultReplyDecisionModel
+  );
+  merged.voice.replyDecisionLlm.provider = normalizedVoiceReplyDecisionLlm.provider;
+  merged.voice.replyDecisionLlm.model = normalizedVoiceReplyDecisionLlm.model;
   const replyDecisionMaxAttemptsRaw = Number(merged.voice?.replyDecisionLlm?.maxAttempts);
   const defaultReplyDecisionMaxAttemptsRaw = Number(defaultVoiceReplyDecisionLlm.maxAttempts);
   merged.voice.replyDecisionLlm.maxAttempts = clamp(
@@ -544,10 +542,11 @@ export function normalizeSettings(raw) {
       1,
       3
   );
+  const defaultReplyDecisionReasoningEffort = defaultVoiceReplyDecisionLlm.reasoningEffort || "minimal";
   merged.voice.replyDecisionLlm.reasoningEffort = normalizeOpenAiReasoningEffort(
     merged.voice?.replyDecisionLlm?.reasoningEffort,
-    defaultVoiceReplyDecisionLlm.reasoningEffort || "minimal"
-  );
+    defaultReplyDecisionReasoningEffort
+  ) || defaultReplyDecisionReasoningEffort;
   merged.voice.replyDecisionLlm.prompts.wakeVariantHint = normalizeLongPromptBlock(
     merged.voice?.replyDecisionLlm?.prompts?.wakeVariantHint,
     defaultVoiceReplyDecisionPrompts.wakeVariantHint || VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT,
@@ -936,17 +935,6 @@ function normalizeOpenAiRealtimeAudioFormat(value) {
   return "pcm16";
 }
 
-function normalizeOpenAiReasoningEffort(value, fallback = "minimal") {
-  const normalized = String(value || fallback || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "minimal") return "minimal";
-  if (normalized === "low") return "low";
-  if (normalized === "medium") return "medium";
-  if (normalized === "high") return "high";
-  return "minimal";
-}
-
 function normalizeHardLimitList(input, fallback = []) {
   const source = Array.isArray(input) ? input : fallback;
   return normalizeBoundedStringList(source, { maxItems: 24, maxLen: 180 });
@@ -980,4 +968,20 @@ function normalizeLongPromptBlock(value, fallback = "", maxLen = 8000) {
 function normalizePromptLineList(input, fallback = []) {
   const source = Array.isArray(input) ? input : fallback;
   return normalizeBoundedStringList(source, { maxItems: 40, maxLen: 240 });
+}
+
+function normalizeProviderModelPair(input, fallbackProvider, fallbackModel = "") {
+  const provider = normalizeLlmProvider(input?.provider, fallbackProvider);
+  const normalizedFallbackModel = String(fallbackModel || "")
+    .trim()
+    .slice(0, 120);
+  const model = String(
+    String(input?.model || "")
+      .trim()
+      .slice(0, 120) || normalizedFallbackModel || defaultModelForLlmProvider(provider)
+  );
+  return {
+    provider,
+    model
+  };
 }
