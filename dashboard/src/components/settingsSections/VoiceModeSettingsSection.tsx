@@ -146,46 +146,50 @@ export function VoiceModeSettingsSection({
               <code>[SKIP]</code>.
             </p>
           )}
-          <div className="split">
-            <div>
-              <label htmlFor="voice-reply-decision-provider">Provider</label>
-              <select
-                id="voice-reply-decision-provider"
-                value={form.voiceReplyDecisionLlmProvider}
-                onChange={setVoiceReplyDecisionProvider}
-              >
-                <option value="openai">openai</option>
-                <option value="anthropic">anthropic</option>
-                <option value="xai">xai (grok)</option>
-                <option value="claude-code">claude code (local)</option>
-              </select>
-            </div>
-            <div>
-              <label htmlFor="voice-reply-decision-model-preset">Model Preset</label>
-              <select
-                id="voice-reply-decision-model-preset"
-                value={selectedVoiceReplyDecisionPresetModel}
-                onChange={selectVoiceReplyDecisionPresetModel}
-              >
-                {voiceReplyDecisionModelOptions.map((modelId) => (
-                  <option key={modelId} value={modelId}>
-                    {modelId}
-                  </option>
-                ))}
-                {!isVoiceReplyDecisionClaudeCodeProvider && (
-                  <option value={CUSTOM_MODEL_OPTION_VALUE}>custom model (manual)</option>
-                )}
-              </select>
-            </div>
-          </div>
-          <label htmlFor="voice-reply-decision-model">Model ID</label>
-          <input
-            id="voice-reply-decision-model"
-            type="text"
-            value={form.voiceReplyDecisionLlmModel}
-            onChange={set("voiceReplyDecisionLlmModel")}
-            disabled={isVoiceReplyDecisionClaudeCodeProvider}
-          />
+          {form.voiceReplyDecisionLlmEnabled && (
+            <>
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-reply-decision-provider">Provider</label>
+                  <select
+                    id="voice-reply-decision-provider"
+                    value={form.voiceReplyDecisionLlmProvider}
+                    onChange={setVoiceReplyDecisionProvider}
+                  >
+                    <option value="openai">openai</option>
+                    <option value="anthropic">anthropic</option>
+                    <option value="xai">xai (grok)</option>
+                    <option value="claude-code">claude code (local)</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="voice-reply-decision-model-preset">Model Preset</label>
+                  <select
+                    id="voice-reply-decision-model-preset"
+                    value={selectedVoiceReplyDecisionPresetModel}
+                    onChange={selectVoiceReplyDecisionPresetModel}
+                  >
+                    {voiceReplyDecisionModelOptions.map((modelId) => (
+                      <option key={modelId} value={modelId}>
+                        {modelId}
+                      </option>
+                    ))}
+                    {!isVoiceReplyDecisionClaudeCodeProvider && (
+                      <option value={CUSTOM_MODEL_OPTION_VALUE}>custom model (manual)</option>
+                    )}
+                  </select>
+                </div>
+              </div>
+              <label htmlFor="voice-reply-decision-model">Model ID</label>
+              <input
+                id="voice-reply-decision-model"
+                type="text"
+                value={form.voiceReplyDecisionLlmModel}
+                onChange={set("voiceReplyDecisionLlmModel")}
+                disabled={isVoiceReplyDecisionClaudeCodeProvider}
+              />
+            </>
+          )}
 
           {isVoiceAgentMode && (
             <>
