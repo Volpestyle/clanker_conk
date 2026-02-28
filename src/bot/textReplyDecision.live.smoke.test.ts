@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { appConfig } from "../config.ts";
 import { LLMService } from "../llm.ts";
 import { ClankerBot } from "../bot.ts";
+import { ADDRESSING_SMOKE_CASES } from "../addressingSmokeCases.ts";
 import { Store } from "../store.ts";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -247,23 +248,8 @@ test("smoke: live text reply admission handles wake variants and prank-like nega
       }
     ];
 
-    const cases = [
-      { text: "Yo, what's up, Clink?", expectAddressed: true },
-      { text: "yo plink", expectAddressed: true },
-      { text: "hi clunky", expectAddressed: true },
-      { text: "is that u clank?", expectAddressed: true },
-      { text: "is that you clinker?", expectAddressed: true },
-      { text: "did i just hear a clanka?", expectAddressed: true },
-      { text: "I love the clankers of the world", expectAddressed: true },
-      { text: "i pulled a prank on him!", expectAddressed: false },
-      { text: "pranked ya", expectAddressed: false },
-      { text: "get pranked", expectAddressed: false },
-      { text: "get stanked", expectAddressed: false },
-      { text: "its stinky in here", expectAddressed: false }
-    ];
-
-    for (let index = 0; index < cases.length; index += 1) {
-      const row = cases[index];
+    for (let index = 0; index < ADDRESSING_SMOKE_CASES.length; index += 1) {
+      const row = ADDRESSING_SMOKE_CASES[index];
       const beforeSendCount = channelSendPayloads.length;
       const message = buildIncomingMessage({
         guild,
@@ -274,7 +260,7 @@ test("smoke: live text reply admission handles wake variants and prank-like nega
       const addressSignal = bot.getReplyAddressSignal(settings, message, staticRecentMessages);
       assert.equal(
         Boolean(addressSignal?.triggered),
-        row.expectAddressed,
+        row.expected,
         `Unexpected admission/addressing signal for "${row.text}".`
       );
 
@@ -285,7 +271,7 @@ test("smoke: live text reply admission handles wake variants and prank-like nega
         forceRespond: Boolean(addressSignal?.triggered)
       });
 
-      if (!row.expectAddressed) {
+      if (!row.expected) {
         assert.equal(replied, false, `Expected skip for non-addressed turn "${row.text}".`);
         const didSend = channelSendPayloads.length > beforeSendCount;
         assert.equal(didSend, false, `Expected no text send for "${row.text}".`);

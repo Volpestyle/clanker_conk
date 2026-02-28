@@ -1,5 +1,6 @@
 import { clamp } from "../utils.ts";
 import { isLikelyBotNameVariantAddress } from "../addressingNameVariants.ts";
+import { isBotNameAddressed } from "../voice/voiceSessionHelpers.ts";
 
 export function hasBotMessageInRecentWindow({
   botUserId,
@@ -83,6 +84,10 @@ export function shouldAttemptReplyDecision({
 
 export function getReplyAddressSignal(runtime, settings, message, recentMessages = []) {
   const referencedAuthorId = resolveReferencedAuthorId(message, recentMessages);
+  const inferredByExactName = isBotNameAddressed({
+    transcript: String(message?.content || ""),
+    botName: String(settings?.botName || "")
+  });
   const inferredByNameVariant = isLikelyBotNameVariantAddress(
     String(message?.content || ""),
     String(settings?.botName || "")
@@ -90,12 +95,19 @@ export function getReplyAddressSignal(runtime, settings, message, recentMessages
   const direct =
     runtime.isDirectlyAddressed(settings, message) ||
     (referencedAuthorId && referencedAuthorId === runtime.botUserId) ||
+    inferredByExactName ||
     inferredByNameVariant;
   return {
     direct: Boolean(direct),
-    inferred: Boolean(inferredByNameVariant),
+    inferred: Boolean(inferredByExactName || inferredByNameVariant),
     triggered: Boolean(direct),
-    reason: direct ? (inferredByNameVariant ? "name_variant" : "direct") : "llm_decides"
+    reason: direct
+      ? inferredByNameVariant
+        ? "name_variant"
+        : inferredByExactName
+          ? "name_exact"
+          : "direct"
+      : "llm_decides"
   };
 }
 

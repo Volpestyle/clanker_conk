@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { appConfig } from "../config.ts";
 import { LLMService } from "../llm.ts";
+import { ADDRESSING_SMOKE_CASES } from "../addressingSmokeCases.ts";
 import { defaultVoiceReplyDecisionModel, normalizeVoiceReplyDecisionProvider } from "./voiceDecisionRuntime.ts";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
 
@@ -87,22 +88,7 @@ test("smoke: live voice decision model admits wake-variant turns", { timeout: 30
       }
     }
   };
-  const cases = [
-    { transcript: "Yo, what's up, Clink?", expected: true },
-    { transcript: "yo plink", expected: true },
-    { transcript: "hi clunky", expected: true },
-    { transcript: "is that u clank?", expected: true },
-    { transcript: "is that you clinker?", expected: true },
-    { transcript: "did i just hear a clanka?", expected: true },
-    { transcript: "I love the clankers of the world", expected: true },
-    { transcript: "i pulled a prank on him!", expected: false },
-    { transcript: "pranked ya", expected: false },
-    { transcript: "get pranked", expected: false },
-    { transcript: "get stanked", expected: false },
-    { transcript: "its stinky in here", expected: false }
-  ];
-
-  for (const row of cases) {
+  for (const row of ADDRESSING_SMOKE_CASES) {
     const decision = await manager.evaluateVoiceReplyDecision({
       session: {
         guildId: "live-smoke-guild",
@@ -112,13 +98,13 @@ test("smoke: live voice decision model admits wake-variant turns", { timeout: 30
       },
       userId: "speaker-1",
       settings,
-      transcript: row.transcript
+      transcript: row.text
     });
 
     assert.equal(
       decision.allow,
       row.expected,
-      `Expected ${row.expected ? "YES" : "NO"} for "${row.transcript}", got reason="${decision.reason}" llmResponse="${String(decision.llmResponse || "")}".`
+      `Expected ${row.expected ? "YES" : "NO"} for "${row.text}", got reason="${decision.reason}" llmResponse="${String(decision.llmResponse || "")}".`
     );
   }
 });
