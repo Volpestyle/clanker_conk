@@ -302,7 +302,8 @@ export async function maybeRegenerateWithMemoryLookup<
   buildUserPrompt,
   runModelRequestedImageLookup,
   mergeImageInputs,
-  maxModelImageInputs
+  maxModelImageInputs,
+  jsonSchema = ""
 }: {
   settings: Record<string, unknown>;
   followupSettings?: Record<string, unknown> | null;
@@ -328,6 +329,7 @@ export async function maybeRegenerateWithMemoryLookup<
     maxInputs: number;
   }) => Array<Record<string, unknown>>;
   maxModelImageInputs: number;
+  jsonSchema?: string;
 }) {
   let nextMemoryLookup = memoryLookup;
   let nextImageLookup = imageLookup;
@@ -395,6 +397,7 @@ export async function maybeRegenerateWithMemoryLookup<
       userPrompt: string;
       trace: ReplyFollowupTrace;
       imageInputs?: Array<Record<string, unknown>>;
+      jsonSchema?: string;
     } = {
       settings: followupSettings || settings,
       systemPrompt,
@@ -403,6 +406,10 @@ export async function maybeRegenerateWithMemoryLookup<
     };
     if (nextImageInputs.length) {
       generationPayload.imageInputs = nextImageInputs;
+    }
+    const normalizedJsonSchema = String(jsonSchema || "").trim();
+    if (normalizedJsonSchema) {
+      generationPayload.jsonSchema = normalizedJsonSchema;
     }
     nextGeneration = await runtime.llm.generate(generationPayload) as TGeneration;
     nextDirective = parseStructuredReplyOutput(

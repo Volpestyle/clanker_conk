@@ -380,6 +380,15 @@ export function buildReplyPrompt({
     parts.push("Do not claim you are text-only or unable to join voice channels.");
     parts.push("If users mention VC/voice requests, stay consistent with voice being available.");
     parts.push(
+      "Hard rule: if a message is an explicit VC command aimed at you (for example: 'join vc', 'join voice', 'hop in vc', 'rejoin vc', 'join again', 'come back'), set voiceIntent.intent=join."
+    );
+    parts.push(
+      "For explicit VC join commands aimed at you, set voiceIntent.confidence to at least 0.9 and do not leave voiceIntent as none."
+    );
+    parts.push(
+      "Do not output playful text-only deflection for explicit VC join commands; route through voiceIntent."
+    );
+    parts.push(
       "Use conversational continuity: follow-up VC control requests can still be aimed at you even if the user does not repeat your name."
     );
     parts.push(

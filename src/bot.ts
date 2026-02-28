@@ -117,6 +117,28 @@ const IS_NODE_TEST_PROCESS = Boolean(process.env.NODE_TEST_CONTEXT) ||
   process.argv.includes("--test");
 const SCREEN_SHARE_EXPLICIT_REQUEST_RE =
   /\b(?:screen\s*share|share\s*(?:my|the)?\s*screen|watch\s*(?:my|the)?\s*screen|see\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*stream|watch\s*(?:my|the)?\s*stream)\b/i;
+const REPLY_DIRECTIVE_JSON_SCHEMA = JSON.stringify({
+  type: "object",
+  additionalProperties: true,
+  properties: {
+    text: { type: "string" },
+    skip: { type: "boolean" },
+    voiceIntent: {
+      type: "object",
+      additionalProperties: true,
+      properties: {
+        intent: {
+          type: "string",
+          enum: ["join", "leave", "status", "watch_stream", "stop_watching_stream", "stream_status", "none"]
+        },
+        confidence: { type: "number" },
+        reason: { type: ["string", "null"] }
+      },
+      required: ["intent", "confidence", "reason"]
+    }
+  },
+  required: ["text", "skip", "voiceIntent"]
+});
 
 type ReplyPerformanceSeed = {
   triggerMessageCreatedAtMs?: number | null;
@@ -943,6 +965,7 @@ export class ClankerBot {
       systemPrompt,
       userPrompt: initialUserPrompt,
       imageInputs: modelImageInputs,
+      jsonSchema: REPLY_DIRECTIVE_JSON_SCHEMA,
       trace: replyTrace
     });
     performance.llm1Ms = Math.max(0, Date.now() - llm1StartedAtMs);
@@ -1038,7 +1061,8 @@ export class ClankerBot {
             }),
           runModelRequestedImageLookup: (payload) => this.runModelRequestedImageLookup(payload),
           mergeImageInputs: (payload) => this.mergeImageInputs(payload),
-          maxModelImageInputs: MAX_MODEL_IMAGE_INPUTS
+          maxModelImageInputs: MAX_MODEL_IMAGE_INPUTS,
+          jsonSchema: REPLY_DIRECTIVE_JSON_SCHEMA
         }
       );
       generation = followup.generation;

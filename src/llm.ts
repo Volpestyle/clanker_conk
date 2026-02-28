@@ -121,6 +121,20 @@ function buildOpenAiReasoningParam(model: string, reasoningEffort: unknown = "")
   };
 }
 
+function appendJsonSchemaInstruction(systemPrompt: string, jsonSchema: string) {
+  const normalizedSchema = String(jsonSchema || "").trim();
+  if (!normalizedSchema) return String(systemPrompt || "");
+
+  const normalizedPrompt = String(systemPrompt || "").trim();
+  return [
+    normalizedPrompt,
+    "Return strict JSON only. Do not output prose or code fences.",
+    `JSON schema:\n${normalizedSchema}`
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 export class LLMService {
   appConfig;
   store;
@@ -174,6 +188,11 @@ export class LLMService {
     const { provider, model } = this.resolveProviderAndModel(settings?.llm ?? {});
     const temperature = Number(settings?.llm?.temperature) || 0.9;
     const maxOutputTokens = Number(settings?.llm?.maxOutputTokens) || 220;
+    const normalizedJsonSchema = String(jsonSchema || "").trim();
+    const effectiveSystemPrompt =
+      normalizedJsonSchema && provider !== "claude-code"
+        ? appendJsonSchemaInstruction(systemPrompt, normalizedJsonSchema)
+        : systemPrompt;
 
     try {
       const response =
@@ -185,12 +204,12 @@ export class LLMService {
               imageInputs,
               contextMessages,
               maxOutputTokens,
-              jsonSchema
+              jsonSchema: normalizedJsonSchema
             })
           : provider === "anthropic"
             ? await this.callAnthropic({
                 model,
-                systemPrompt,
+                systemPrompt: effectiveSystemPrompt,
                 userPrompt,
                 imageInputs,
                 contextMessages,
@@ -200,7 +219,7 @@ export class LLMService {
             : provider === "xai"
               ? await this.callXai({
                   model,
-                  systemPrompt,
+                  systemPrompt: effectiveSystemPrompt,
                   userPrompt,
                   imageInputs,
                   contextMessages,
@@ -209,7 +228,7 @@ export class LLMService {
                 })
               : await this.callOpenAI({
                   model,
-                  systemPrompt,
+                  systemPrompt: effectiveSystemPrompt,
                   userPrompt,
                   imageInputs,
                   contextMessages,

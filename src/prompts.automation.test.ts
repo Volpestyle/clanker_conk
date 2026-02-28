@@ -192,3 +192,30 @@ test("buildReplyPrompt keeps memory citations opt-in for explicit user requests"
   );
   assert.equal(/If useful, cite memory hits inline as \[M1\], \[M2\], etc\./.test(prompt), false);
 });
+
+test("buildReplyPrompt hard-rules explicit VC join commands when voice mode is enabled", () => {
+  const prompt = buildReplyPrompt({
+    message: {
+      authorName: "alice",
+      content: "join vc clanka"
+    },
+    imageInputs: [],
+    recentMessages: [],
+    relevantMessages: [],
+    userFacts: [],
+    relevantFacts: [],
+    emojiHints: [],
+    reactionEmojiOptions: [],
+    voiceMode: {
+      enabled: true
+    },
+    addressing: {
+      directlyAddressed: true,
+      responseRequired: true
+    }
+  });
+
+  assert.match(prompt, /Hard rule: if a message is an explicit VC command aimed at you/i);
+  assert.match(prompt, /set voiceIntent\.intent=join/i);
+  assert.match(prompt, /set voiceIntent\.confidence to at least 0\.9/i);
+});
