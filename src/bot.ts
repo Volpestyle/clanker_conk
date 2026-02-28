@@ -1912,6 +1912,28 @@ export class ClankerBot {
         reason: "missing_share_url"
       };
     }
+    if (created?.reused) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: normalizedGuildId,
+        channelId: normalizedChannelId,
+        userId: normalizedRequesterUserId,
+        content: "screen_share_offer_suppressed_existing_session",
+        metadata: {
+          source: eventSource,
+          transcript: String(transcript || "").slice(0, 220),
+          expiresInMinutes: Number.isFinite(expiresInMinutes) ? expiresInMinutes : null,
+          linkHost: safeUrlHost(linkUrl)
+        }
+      });
+      return {
+        offered: false,
+        reused: true,
+        reason: "already_active_session",
+        linkUrl,
+        expiresInMinutes
+      };
+    }
 
     const offerMessage = await this.composeScreenShareOfferMessage({
       message: syntheticMessage,
@@ -2246,6 +2268,32 @@ export class ClankerBot {
     const linkUrl = String(created.shareUrl || "").trim();
     const expiresInMinutes = Number(created.expiresInMinutes || 0);
     if (!linkUrl) return empty;
+    if (created?.reused) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: message.guildId,
+        channelId: message.channelId,
+        messageId: message.id,
+        userId: message.author?.id || null,
+        content: "screen_share_offer_suppressed_existing_session",
+        metadata: {
+          explicitRequest,
+          intentRequested,
+          confidence,
+          expiresInMinutes,
+          linkHost: safeUrlHost(linkUrl),
+          source
+        }
+      });
+      return {
+        ...empty,
+        explicitRequest,
+        intentRequested,
+        confidence,
+        linkUrl,
+        reason: "already_active_session"
+      };
+    }
 
     this.store.logAction({
       kind: "voice_runtime",

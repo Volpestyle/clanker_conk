@@ -1,10 +1,22 @@
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { clamp } from "./utils.ts";
 
 const DEFAULT_SESSION_TTL_MINUTES = 12;
 const MIN_SESSION_TTL_MINUTES = 2;
 const MAX_SESSION_TTL_MINUTES = 30;
 const MAX_ACTIVE_SESSIONS = 240;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const DASHBOARD_ASSET_DIR = path.resolve(__dirname, "../dashboard/dist/assets");
+const DASHBOARD_STYLESHEET_PREFIX = "index-";
+const DASHBOARD_STYLESHEET_SUFFIX = ".css";
+const DASHBOARD_STYLE_TAG_ID = "share-dashboard-theme";
+const SHARE_PAGE_FALLBACK_FONT_IMPORT = "https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap";
+let cachedDashboardThemeHref = "";
+let dashboardThemeResolved = false;
 
 export class ScreenShareSessionManager {
   appConfig;
@@ -12,6 +24,7 @@ export class ScreenShareSessionManager {
   bot;
   publicHttpsEntrypoint;
   sessions;
+  dashboardThemeHref;
 
   constructor({ appConfig, store, bot, publicHttpsEntrypoint }) {
     this.appConfig = appConfig || {};
@@ -19,6 +32,7 @@ export class ScreenShareSessionManager {
     this.bot = bot;
     this.publicHttpsEntrypoint = publicHttpsEntrypoint;
     this.sessions = new Map();
+    this.dashboardThemeHref = resolveDashboardThemeHref();
   }
 
   getRuntimeState() {
@@ -92,6 +106,32 @@ export class ScreenShareSessionManager {
     return `${shareBaseUrl}/share/${encodeURIComponent(token)}`;
   }
 
+  findReusableSession({
+    guildId,
+    channelId,
+    requesterUserId,
+    targetUserId = null
+  }) {
+    this.cleanupExpiredSessions();
+    const normalizedGuildId = String(guildId || "").trim();
+    const normalizedChannelId = String(channelId || "").trim() || null;
+    const normalizedRequesterUserId = String(requesterUserId || "").trim();
+    const normalizedTargetUserId = String(targetUserId || normalizedRequesterUserId).trim();
+    if (!normalizedGuildId || !normalizedRequesterUserId) return null;
+
+    let newestMatch = null;
+    for (const session of this.sessions.values()) {
+      if (String(session?.guildId || "").trim() !== normalizedGuildId) continue;
+      if (String(session?.requesterUserId || "").trim() !== normalizedRequesterUserId) continue;
+      if (normalizedChannelId && String(session?.channelId || "").trim() !== normalizedChannelId) continue;
+      if (normalizedTargetUserId && String(session?.targetUserId || "").trim() !== normalizedTargetUserId) continue;
+      if (!newestMatch || Number(session?.createdAt || 0) > Number(newestMatch?.createdAt || 0)) {
+        newestMatch = session;
+      }
+    }
+    return newestMatch;
+  }
+
   async createSession({
     guildId,
     channelId,
@@ -105,6 +145,7 @@ export class ScreenShareSessionManager {
     const normalizedChannelId = String(channelId || "").trim() || null;
     const normalizedRequesterUserId = String(requesterUserId || "").trim();
     const normalizedTargetUserId = String(targetUserId || normalizedRequesterUserId).trim();
+    const normalizedSource = String(source || "screen_share_offer").trim().slice(0, 80) || "screen_share_offer";
 
     if (!normalizedGuildId || !normalizedRequesterUserId) {
       return {
@@ -123,13 +164,55 @@ export class ScreenShareSessionManager {
       };
     }
 
+    const reusableSession = this.findReusableSession({
+      guildId: normalizedGuildId,
+      channelId: normalizedChannelId,
+      requesterUserId: normalizedRequesterUserId,
+      targetUserId: normalizedTargetUserId
+    });
+    if (reusableSession) {
+      const voicePresence = this.validateSessionVoicePresence(reusableSession);
+      if (voicePresence.ok) {
+        const shareUrl = `${shareBaseUrl}/share/${encodeURIComponent(reusableSession.token)}`;
+        const remainingMs = Math.max(0, Number(reusableSession.expiresAt || 0) - Date.now());
+        const expiresInMinutes = remainingMs > 0 ? Math.max(1, Math.ceil(remainingMs / 60_000)) : 0;
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: reusableSession.guildId,
+          channelId: reusableSession.channelId,
+          userId: reusableSession.requesterUserId,
+          content: "screen_share_session_reused",
+          metadata: {
+            tokenSuffix: String(reusableSession.token || "").slice(-8),
+            source: normalizedSource,
+            expiresAt: new Date(reusableSession.expiresAt).toISOString(),
+            targetUserId: reusableSession.targetUserId,
+            shareHost: safeUrlHost(shareUrl)
+          }
+        });
+        return {
+          ok: true,
+          reused: true,
+          token: reusableSession.token,
+          shareUrl,
+          expiresAt: new Date(reusableSession.expiresAt).toISOString(),
+          expiresInMinutes,
+          targetUserId: reusableSession.targetUserId
+        };
+      }
+      this.stopSessionByToken({
+        token: reusableSession.token,
+        reason: String(voicePresence.reason || "session_reuse_invalid").slice(0, 80)
+      });
+    }
+
     const settings = this.store.getSettings();
     const watchResult = await this.bot?.voiceSessionManager?.enableWatchStreamForUser?.({
       guildId: normalizedGuildId,
       requesterUserId: normalizedRequesterUserId,
       targetUserId: normalizedTargetUserId,
       settings,
-      source
+      source: normalizedSource
     });
     if (!watchResult?.ok) {
       return {
@@ -157,7 +240,7 @@ export class ScreenShareSessionManager {
       requesterUserId: normalizedRequesterUserId,
       requesterDisplayName: String(requesterDisplayName || "").trim().slice(0, 80) || null,
       targetUserId: normalizedTargetUserId,
-      source: String(source || "screen_share_offer").trim().slice(0, 80) || "screen_share_offer",
+      source: normalizedSource,
       createdAt: nowMs,
       expiresAt,
       lastFrameAt: 0
@@ -314,7 +397,7 @@ export class ScreenShareSessionManager {
     if (!session) {
       return {
         statusCode: 404,
-        html: buildInvalidSharePageHtml("This share link is invalid or expired.")
+        html: buildInvalidSharePageHtml("This share link is invalid or expired.", this.dashboardThemeHref)
       };
     }
 
@@ -332,14 +415,16 @@ export class ScreenShareSessionManager {
         expiresAtIso: new Date(session.expiresAt).toISOString(),
         frameApiPath,
         stopApiPath,
-        keyframeIntervalMs
+        keyframeIntervalMs,
+        dashboardThemeHref: this.dashboardThemeHref
       })
     };
   }
 }
 
-function buildInvalidSharePageHtml(message) {
+function buildInvalidSharePageHtml(message, dashboardThemeHref) {
   const text = String(message || "Invalid link.").slice(0, 220);
+  const safeDashboardThemeHref = String(dashboardThemeHref || cachedDashboardThemeHref || "").trim();
   return [
     "<!doctype html>",
     "<html lang=\"en\">",
@@ -349,42 +434,58 @@ function buildInvalidSharePageHtml(message) {
     "<title>clanker conk - link unavailable</title>",
     "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\" />",
     "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin />",
-    "<link href=\"https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600;700&display=swap\" rel=\"stylesheet\" />",
+    "<link href=\"" + SHARE_PAGE_FALLBACK_FONT_IMPORT + "\" rel=\"stylesheet\" />",
+    safeDashboardThemeHref ? `<link id=\"${DASHBOARD_STYLE_TAG_ID}\" rel=\"stylesheet\" href=\"${escapeHtmlAttr(safeDashboardThemeHref)}\" />` : "",
     "<style>",
-    "*{margin:0;padding:0;box-sizing:border-box}",
-    "body{font-family:'Chakra Petch',system-ui,sans-serif;min-height:100vh;display:grid;place-items:center;background:#080c14;color:#e4ecf7;overflow:hidden}",
-    "body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(20,32,56,.12) 1px,transparent 1px),linear-gradient(90deg,rgba(20,32,56,.12) 1px,transparent 1px);background-size:48px 48px;pointer-events:none}",
-    "body::after{content:'';position:fixed;inset:0;pointer-events:none;background:repeating-linear-gradient(transparent,transparent 2px,rgba(0,0,0,.04) 2px,rgba(0,0,0,.04) 4px)}",
-    ".wrap{position:relative;z-index:1;text-align:center;padding:40px 24px}",
-    ".brand{font-size:10px;font-weight:600;letter-spacing:5px;color:#2a3d5e;text-transform:uppercase;margin-bottom:40px}",
-    ".signal{font-size:clamp(36px,8vw,56px);font-weight:700;letter-spacing:3px;color:#1a2844;text-transform:uppercase;line-height:1.1;margin-bottom:20px;position:relative}",
-    ".signal::before{content:'NO SIGNAL';position:absolute;left:2px;top:2px;color:rgba(0,212,255,.08);clip-path:inset(0 0 50% 0)}",
-    ".signal::after{content:'NO SIGNAL';position:absolute;left:-2px;top:-1px;color:rgba(255,59,79,.06);clip-path:inset(50% 0 0 0)}",
-    ".msg{font-size:14px;color:#3a5178;line-height:1.7;max-width:380px;margin:0 auto 32px}",
-    ".bar{width:80px;height:2px;background:#182742;margin:0 auto;border-radius:1px;overflow:hidden}",
-    ".bar-inner{width:30%;height:100%;background:#2a3d5e;animation:scan 2s ease-in-out infinite}",
-    "@keyframes scan{0%{transform:translateX(-100%)}100%{transform:translateX(360%)}}",
+    "html,body{margin:0;min-height:100vh;background:radial-gradient(ellipse at 18% 0%, rgba(25,55,45,.35) 0%, transparent 55%),radial-gradient(ellipse at 85% 90%, rgba(18,35,38,.3) 0%, transparent 50%),linear-gradient(165deg,#060d0f,#0c1a1e 50%,#152822);background-attachment:fixed;color:var(--ink-0,#e8ede2);}",
+    ".share-shell{min-height:100vh;font-family:'Plus Jakarta Sans',system-ui,sans-serif;display:grid;place-items:center;padding:24px 14px;}",
+    ".share-shell .shell{width:min(640px,100%)}",
+    ".share-shell .eyebrow{color:var(--accent,#bef264);font-family:'Manrope','Plus Jakarta Sans',sans-serif;text-transform:uppercase;font-size:.68rem;letter-spacing:.16em;margin:0 0 4px}",
+    ".share-shell .hero{display:flex;flex-direction:column;gap:4px;padding:20px 22px 16px;border-top:2px solid var(--accent,#bef264)}",
+    ".share-shell .hero-top-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}",
+    ".share-shell .hero h1{margin:0;font-family:'Manrope','Plus Jakarta Sans',sans-serif;font-size:clamp(1.5rem,3vw,2.1rem);font-weight:700;letter-spacing:-0.02em;text-transform:lowercase;background:linear-gradient(135deg,var(--ink-0,#e8ede2) 50%,var(--accent,#bef264));-webkit-background-clip:text;-webkit-text-fill-color:transparent;display:flex;align-items:center;gap:10px}",
+    ".share-shell .sub{color:var(--ink-2,#7b8f82);font-size:.88rem;margin:0}",
+    ".share-shell .panel{background:rgba(8,16,15,.65);border:1px solid rgba(255,255,255,.06);border-radius:12px;padding:20px;box-shadow:var(--shadow,0 4px 24px rgba(0,0,0,.35));backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}",
+    ".share-shell .panel-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px}.share-shell .panel-head h3{margin:0;font-size:1rem}",
+    ".share-shell .status-msg{margin:8px 0 0;padding:9px 11px;border:1px solid rgba(255,255,255,.08);border-radius:8px;background:rgba(10,20,18,.58);color:var(--ink-1,#bcc8be);min-height:38px;white-space:pre-wrap}",
+    ".share-shell .runtime-uptime{color:var(--ink-3,#4f6459);font-size:.78rem;margin-left:auto;letter-spacing:.02em}",
+    ".share-shell .header-status-dot{width:10px;height:10px;min-width:10px;border-radius:50%;background:var(--danger,#f87171);display:inline-block;-webkit-text-fill-color:initial}.share-shell .header-status-dot.online{background:var(--success,#4ade80);box-shadow:0 0 8px rgba(74,222,128,.5);animation:pulse 2s ease-in-out infinite}",
+    ".share-shell button{font:inherit;background:rgba(20,38,36,.8);color:var(--ink-0,#e8ede2);border:1px solid rgba(255,255,255,.06);border-radius:8px;padding:7px 14px;cursor:pointer;font-size:.84rem;font-weight:500;transition:background var(--transition,160ms),border-color var(--transition,160ms)}",
+    ".share-shell button:hover{background:rgba(28,50,46,.8);border-color:rgba(255,255,255,.1)}",
     "</style>",
     "</head>",
-    "<body>",
-    "<div class=\"wrap\">",
-    "<div class=\"brand\">clanker conk</div>",
-    "<div class=\"signal\">NO SIGNAL</div>",
-    "<div class=\"msg\">",
-    escapeHtml(text),
+    "<body class=\"share-shell\">",
+    "<main class=\"shell\">",
+    "<header class=\"hero panel\">",
+    "<div class=\"hero-top-row\">",
+    "<div>",
+    "<p class=\"eyebrow\">Discord Persona Ops</p>",
+    "<h1><span class=\"header-status-dot\"></span>screen share</h1>",
+    "<p class=\"sub\">Screen share link unavailable.</p>",
     "</div>",
-    "<div class=\"bar\"><div class=\"bar-inner\"></div></div>",
     "</div>",
+    "</header>",
+    "<section class=\"panel\">",
+    `<div class=\"activity-status-msg error\">${escapeHtml(text)}</div>`,
+    "</section>",
+    "</main>",
     "</body>",
     "</html>"
   ].join("");
 }
 
-function buildSharePageHtml({ expiresAtIso, frameApiPath, stopApiPath, keyframeIntervalMs }) {
+function buildSharePageHtml({
+  expiresAtIso,
+  frameApiPath,
+  stopApiPath,
+  keyframeIntervalMs,
+  dashboardThemeHref
+}) {
   const safeExpiresAtIso = escapeJsString(String(expiresAtIso || ""));
   const safeFrameApiPath = escapeJsString(String(frameApiPath || ""));
   const safeStopApiPath = escapeJsString(String(stopApiPath || ""));
   const resolvedKeyframeIntervalMs = clamp(Number(keyframeIntervalMs) || 1200, 250, 5000);
+  const safeDashboardThemeHref = String(dashboardThemeHref || "").trim();
 
   return [
     "<!doctype html>",
@@ -395,92 +496,116 @@ function buildSharePageHtml({ expiresAtIso, frameApiPath, stopApiPath, keyframeI
     "<title>clanker conk - screen share</title>",
     "<link rel=\"preconnect\" href=\"https://fonts.googleapis.com\" />",
     "<link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin />",
-    "<link href=\"https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&display=swap\" rel=\"stylesheet\" />",
+    "<link href=\"" + SHARE_PAGE_FALLBACK_FONT_IMPORT + "\" rel=\"stylesheet\" />",
+    safeDashboardThemeHref ? `<link id=\"${DASHBOARD_STYLE_TAG_ID}\" rel=\"stylesheet\" href=\"${escapeHtmlAttr(safeDashboardThemeHref)}\" />` : "",
     "<style>",
-    ":root{--bg:#080c14;--card:#0c1220;--surface:#111a2c;--inset:#0a0f1a;--border:#182742;--border-hi:#1e3355;--text:#e4ecf7;--text-mid:#8b9dc0;--text-dim:#4a5f82;--cyan:#00d4ff;--cyan-g:rgba(0,212,255,.12);--red:#ff3b4f;--red-g:rgba(255,59,79,.12);--amber:#ffb020;--green:#34d399}",
-    "*{margin:0;padding:0;box-sizing:border-box}",
-    "body{font-family:'Chakra Petch',system-ui,sans-serif;background:var(--bg);color:var(--text);min-height:100vh;display:grid;place-items:center;padding:16px}",
-    "body::before{content:'';position:fixed;inset:0;background-image:linear-gradient(rgba(20,32,56,.1) 1px,transparent 1px),linear-gradient(90deg,rgba(20,32,56,.1) 1px,transparent 1px);background-size:52px 52px;mask-image:radial-gradient(ellipse at center,black 0%,transparent 70%);-webkit-mask-image:radial-gradient(ellipse at center,black 0%,transparent 70%);pointer-events:none}",
-    ".card{position:relative;z-index:1;width:min(100%,640px);background:var(--card);border:1px solid var(--border);border-radius:12px;overflow:hidden;box-shadow:0 24px 80px rgba(0,0,0,.5)}",
-    // -- header bar --
-    ".hdr{display:flex;align-items:center;gap:8px;padding:10px 16px;background:var(--surface);border-bottom:1px solid var(--border);font-size:10px;font-weight:600;letter-spacing:2.5px;text-transform:uppercase;color:var(--text-dim)}",
-    ".hdr .logo{color:var(--cyan);font-size:11px;letter-spacing:3px}",
-    ".hdr .sep{color:var(--border-hi);font-weight:400}",
-    // -- video area --
-    ".vid-wrap{position:relative;background:var(--inset);border-bottom:1px solid var(--border);min-height:100px}",
-    ".vid-wrap #preview{display:block;width:100%;max-height:380px;object-fit:contain;background:transparent}",
-    ".vid-wrap::after{content:'';position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(transparent,transparent 2px,rgba(0,0,0,.05) 2px,rgba(0,0,0,.05) 4px)}",
-    ".vid-ph{position:absolute;inset:0;display:grid;place-items:center;color:var(--text-dim);font-size:12px;letter-spacing:1.5px;text-transform:uppercase;transition:opacity .3s}",
-    "[data-state=sharing] .vid-ph,[data-state=stopped] .vid-ph{opacity:0;pointer-events:none}",
-    // -- REC badge --
-    ".rec{position:absolute;top:10px;right:10px;z-index:2;display:none;align-items:center;gap:5px;padding:3px 9px;border-radius:4px;background:rgba(255,59,79,.88);font-size:9px;font-weight:700;letter-spacing:1.5px;color:#fff;text-transform:uppercase;backdrop-filter:blur(4px)}",
-    ".rec .rdot{width:6px;height:6px;border-radius:50%;background:#fff;animation:pulse 1.2s ease-in-out infinite}",
-    "[data-state=sharing] .rec{display:flex}",
+    ":root{--bg-0:#060d0f;--bg-1:#0c1a1e;--bg-2:#152822;--ink-0:#e8ede2;--ink-1:#bcc8be;--ink-2:#7b8f82;--ink-3:#4f6459;--line:rgba(255,255,255,.06);--line-strong:rgba(255,255,255,.1);--panel:rgba(8,16,15,.65);--panel-solid:rgba(10,20,18,.92);--accent:#bef264;--accent-soft:#a3d944;--accent-dim:rgba(190,242,100,.08);--accent-glow:rgba(190,242,100,.15);--danger:#f87171;--danger-dim:rgba(248,113,113,.08);--success:#4ade80;--success-dim:rgba(74,222,128,.06);--warning:#fbbf24;--radius:12px;--radius-sm:8px;--radius-xs:4px;--shadow:0 4px 24px rgba(0,0,0,.35);--shadow-lg:0 12px 40px rgba(0,0,0,.45);--transition:160ms cubic-bezier(0.4,0,0.2,1);--ease-out:cubic-bezier(0,0.2,1);}",
+    "html,body{margin:0;min-height:100vh;background:radial-gradient(ellipse at 18% 0%, rgba(25,55,45,.35) 0%, transparent 55%),radial-gradient(ellipse at 85% 90%, rgba(18,35,38,.3) 0%, transparent 50%),linear-gradient(165deg,var(--bg-0),var(--bg-1) 50%,var(--bg-2));background-attachment:fixed;color:var(--ink-0)}",
+    "*{box-sizing:border-box}",
+    "body{font-family:'Plus Jakarta Sans',system-ui,sans-serif;}",
+    ".shell{width:min(1340px,94vw);margin:0 auto;padding:24px 0 56px;display:flex;flex-direction:column;gap:14px;position:relative;z-index:1}",
+    ".hero{display:flex;flex-direction:column;gap:4px;padding:24px 24px 20px;border-top:2px solid var(--accent)}",
+    ".hero-top-row{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}",
+    ".eyebrow{color:var(--accent);font-family:'Manrope','Plus Jakarta Sans',sans-serif;text-transform:uppercase;font-weight:600;font-size:.68rem;letter-spacing:.16em;margin:0}",
+    ".hero h1{margin:0;font-family:'Manrope','Plus Jakarta Sans',sans-serif;font-size:clamp(1.5rem,3vw,2.1rem);font-weight:700;letter-spacing:-.02em;text-transform:lowercase;background:linear-gradient(135deg,var(--ink-0) 50%,var(--accent));-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;display:flex;align-items:center;gap:10px}",
+    ".sub{color:var(--ink-2);font-size:.88rem;margin:0}",
+    ".panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:20px;box-shadow:var(--shadow);display:flex;flex-direction:column;gap:12px;backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px)}",
+    ".panel-head{display:flex;justify-content:space-between;align-items:center;gap:12px}.panel-head h3{margin:0;font-size:1rem}",
+    ".runtime-label{font-weight:600;font-size:.9rem;color:var(--ink-0)}",
+    ".runtime-uptime{color:var(--ink-3);font-size:.78rem;font-variant-numeric:tabular-nums}",
+    ".grid-main{display:grid;grid-template-columns:1.1fr 1fr;gap:14px}",
+    ".status-dot{width:10px;height:10px;min-width:10px;border-radius:50%;background:var(--ink-3);flex-shrink:0;transition:background 300ms ease,box-shadow 300ms ease}.status-dot.online{background:var(--success);box-shadow:0 0 8px rgba(74,222,128,.5);animation:pulse 2s ease-in-out infinite}",
+    ".header-status-dot{width:10px;height:10px;min-width:10px;border-radius:50%;background:var(--danger);display:inline-block;transition:background 300ms ease,box-shadow 300ms ease;-webkit-text-fill-color:initial}.header-status-dot.online{background:var(--success);box-shadow:0 0 8px rgba(74,222,128,.5);animation:pulse 2s ease-in-out infinite}",
+    ".status-msg{margin:8px 0 0;min-height:1.2rem;font-size:.84rem;color:var(--ink-2);transition:color var(--transition)}",
+    ".share-state{display:flex;align-items:center;gap:8px}.share-state .status-dot{display:block}",
+    ".share-preview{position:relative;min-height:220px;background:var(--bg-2);border:1px solid var(--line);border-radius:var(--radius-sm);display:grid;place-items:center;overflow:hidden}",
+    ".share-preview video{display:block;width:100%;height:auto;max-height:440px;object-fit:contain;background:transparent}",
+    ".share-preview .share-placeholder{position:absolute;inset:0;display:grid;place-items:center;color:var(--ink-3);font-size:.85rem;letter-spacing:.12em;text-transform:uppercase;text-align:center;padding:24px}",
+    ".share-preview .share-rec-pill{position:absolute;top:10px;right:10px;background:var(--danger);color:#fff;border-radius:4px;padding:2px 9px;font-size:9px;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;display:none;align-items:center;gap:5px}",
+    "[data-state=sharing] .share-rec-pill{display:flex}",
+    ".share-rec-pill .share-rec-dot{width:6px;height:6px;border-radius:50%;background:#fff;animation:pulse 1.2s ease-in-out infinite}",
+    ".share-actions{display:flex;gap:8px;flex-wrap:wrap}",
+    ".share-actions .cta{min-width:140px}",
+    ".metric-cluster{display:flex;flex-direction:column;gap:6px}",
+    ".cluster-label{margin:0;color:var(--ink-3);font-size:.66rem;text-transform:uppercase;letter-spacing:.12em;font-weight:600;padding-left:2px}",
+    ".cluster-cards{display:flex;flex-direction:column;gap:6px}",
+    ".metric{padding:12px 14px;border:1px solid var(--line);background:rgba(2,12,11,.3);border-radius:var(--radius-sm)}",
+    ".metric .label{margin:0;color:var(--ink-3);font-size:.66rem;text-transform:uppercase;letter-spacing:.12em;font-weight:600}",
+    ".metric .value{margin:4px 0 0;font-size:1.1rem;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}",
+    ".share-progress{height:3px;background:var(--panel-solid);border-radius:2px;overflow:hidden}",
+    ".share-progress-fill{height:100%;background:var(--accent);transition:width 1s linear,background .5s;width:100%}",
+    ".share-progress-fill.warn{background:var(--warning)}",
+    ".share-progress-fill.crit{background:var(--danger)}",
+    "button{font:inherit;border:1px solid var(--line);background:rgba(20,38,36,.8);color:var(--ink-0);border-radius:var(--radius-sm);padding:7px 14px;cursor:pointer;font-size:.84rem;font-weight:500;transition:background var(--transition),border-color var(--transition),box-shadow var(--transition)}",
+    "button:hover{background:rgba(28,50,46,.8);border-color:var(--line-strong)}",
+    "button:active{transform:none}",
+    "button:focus-visible{outline:none;box-shadow:0 0 0 2px var(--accent-dim)}",
+    ".share-footer{display:flex;align-items:center;gap:10px;flex-wrap:wrap}",
+    ".share-time{display:flex;align-items:center;gap:6px;flex:1;min-width:0}",
+    ".share-time .label{color:var(--ink-3);font-size:.78rem}",
+    ".share-time .value{color:var(--ink-2);font-variant-numeric:tabular-nums}",
     "@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}",
-    // -- stats bar --
-    ".stats{display:flex;align-items:center;gap:14px;padding:9px 16px;border-bottom:1px solid var(--border);font-size:11px;letter-spacing:.5px;color:var(--text-dim)}",
-    ".stats .ind{display:flex;align-items:center;gap:6px}",
-    ".stats .dot{width:7px;height:7px;border-radius:50%;background:var(--text-dim);transition:background .3s,box-shadow .3s}",
-    ".stats .dot.live{background:var(--green);box-shadow:0 0 8px var(--green);animation:pulse 1.2s ease-in-out infinite}",
-    ".stats .dot.stopped{background:var(--red)}",
-    ".stats .dot.expired{background:var(--amber)}",
-    ".stats .itxt{font-weight:600;letter-spacing:1px;transition:color .3s}",
-    ".stats .itxt.live{color:var(--green)}",
-    ".stats .itxt.stopped{color:var(--red)}",
-    ".stats .itxt.expired{color:var(--amber)}",
-    ".stats .spacer{flex:1}",
-    ".stats .lbl{color:var(--text-dim);margin-right:3px}",
-    ".stats .val{color:var(--text-mid);font-weight:500}",
-    ".stats .pipe{color:var(--border-hi);margin:0 2px}",
-    // -- body --
-    ".body{padding:16px}",
-    ".desc{font-size:13px;color:var(--text-mid);line-height:1.55;margin-bottom:14px}",
-    ".desc strong{color:var(--text);font-weight:600}",
-    // -- buttons --
-    ".actions{display:flex;gap:8px;margin-bottom:12px}",
-    ".btn{border:0;border-radius:6px;padding:10px 20px;font-family:'Chakra Petch',system-ui,sans-serif;font-size:12px;font-weight:600;letter-spacing:.8px;cursor:pointer;transition:all .2s;text-transform:uppercase}",
-    ".btn-go{background:var(--cyan);color:var(--bg);box-shadow:0 0 24px var(--cyan-g),inset 0 1px 0 rgba(255,255,255,.15)}",
-    ".btn-go:hover:not(:disabled){background:#2ee0ff;box-shadow:0 0 32px rgba(0,212,255,.22),inset 0 1px 0 rgba(255,255,255,.2)}",
-    ".btn-go:active:not(:disabled){transform:scale(.97)}",
-    ".btn-stop{background:var(--surface);border:1px solid var(--border-hi);color:var(--text-mid)}",
-    ".btn-stop:hover:not(:disabled){background:var(--red-g);border-color:var(--red);color:var(--red)}",
-    ".btn:disabled{opacity:.3;cursor:not-allowed}",
-    // -- status log --
-    "#status{font-family:'SF Mono','Cascadia Code',ui-monospace,monospace;font-size:11px;color:var(--text-dim);padding:8px 12px;border-radius:6px;background:var(--inset);border:1px solid var(--border);white-space:pre-wrap;min-height:18px;line-height:1.4}",
-    // -- time bar --
-    ".tbar{height:3px;background:var(--surface)}",
-    ".tbar-fill{height:100%;background:var(--cyan);transition:width 1s linear,background .5s}",
-    ".tbar-fill.warn{background:var(--amber)}",
-    ".tbar-fill.crit{background:var(--red)}",
-    // -- glow border on sharing --
-    "[data-state=sharing] .card{border-color:rgba(0,212,255,.2);box-shadow:0 24px 80px rgba(0,0,0,.5),0 0 40px rgba(0,212,255,.06)}",
-    "[data-state=stopped] .card{border-color:rgba(255,59,79,.15)}",
+    "@media (max-width: 980px){.grid-main{grid-template-columns:1fr}}",
+    "@media (max-width: 640px){.shell{padding:18px 0 32px;width:min(940px,92vw)}.share-preview{min-height:190px}}",
     "</style>",
     "</head>",
     "<body data-state=\"idle\">",
-    "<main class=\"card\">",
-    "<div class=\"hdr\"><span class=\"logo\">clanker conk</span><span class=\"sep\">/</span><span>screen share</span></div>",
-    "<div class=\"vid-wrap\">",
-    "<div class=\"vid-ph\">select a screen to begin</div>",
-    "<div class=\"rec\"><span class=\"rdot\"></span>REC</div>",
+    "<main class=\"shell\">",
+    "<header class=\"hero panel\">",
+    "<div class=\"hero-top-row\">",
+    "<div>",
+    "<p class=\"eyebrow\">Discord Persona Ops</p>",
+    "<h1><span class=\"header-status-dot\" id=\"header-dot\"></span>screen share</h1>",
+    "<p class=\"sub\">Start a capture, keep this tab active, and share context from the same Discord voice session.</p>",
+    "</div>",
+    "</div>",
+    "</header>",
+    "<section class=\"runtime-banner panel\">",
+    "<span class=\"status-dot\" id=\"ind-dot\"></span>",
+    "<span class=\"runtime-label\" id=\"mode-lbl\">ready</span>",
+    "<span class=\"runtime-uptime\" id=\"countdown\">--:--</span>",
+    "</section>",
+    "<div class=\"grid-main\">",
+    "<section class=\"panel\">",
+    "<div class=\"panel-head\">",
+    "<h3>Screen feed</h3>",
+    "<span class=\"runtime-label\">session controls</span>",
+    "</div>",
+    "<div class=\"share-preview\">",
+    "<div class=\"share-placeholder\" id=\"vid-ph\">select a screen to begin</div>",
+    "<div class=\"share-rec-pill\"><span class=\"share-rec-dot\"></span>REC</div>",
     "<video id=\"preview\" autoplay muted playsinline></video>",
     "</div>",
-    "<div class=\"stats\">",
-    "<div class=\"ind\"><span class=\"dot\" id=\"ind-dot\"></span><span class=\"itxt\" id=\"ind-txt\">READY</span></div>",
-    "<span class=\"spacer\"></span>",
-    "<span class=\"lbl\">time</span><span class=\"val\" id=\"countdown\">--:--</span>",
-    "<span class=\"pipe\">|</span>",
-    "<span class=\"lbl\">frames</span><span class=\"val\" id=\"fcnt\">0</span>",
+    "<div class=\"share-actions\">",
+    "<button id=\"start\" class=\"cta\">Start Sharing</button>",
+    "<button id=\"stop\" disabled>Stop</button>",
     "</div>",
-    "<div class=\"body\">",
-    "<div class=\"desc\">Click <strong>Start Sharing</strong>, pick the app or screen to share, and keep this tab open while clanker watches.</div>",
-    "<div class=\"actions\">",
-    "<button id=\"start\" class=\"btn btn-go\">Start Sharing</button>",
-    "<button id=\"stop\" class=\"btn btn-stop\" disabled>Stop</button>",
+    "<p id=\"status\" class=\"status-msg\">waiting to start</p>",
+    "<div class=\"share-footer\">",
+    "<div class=\"share-time\"><span class=\"label\">frames</span><span class=\"value\" id=\"fcnt\">0</span></div>",
+    "<div class=\"share-time\"><span class=\"label\">status</span><span class=\"value\" id=\"state-lbl\">ready</span></div>",
     "</div>",
-    "<pre id=\"status\">waiting to start</pre>",
+    "<div class=\"share-progress\"><div class=\"share-progress-fill\" id=\"tbar\" style=\"width:100%\"></div></div>",
+    "</section>",
+    "<section class=\"panel\">",
+    "<div class=\"panel-head\">",
+    "<h3>Session details</h3>",
     "</div>",
-    "<div class=\"tbar\"><div class=\"tbar-fill\" id=\"tbar\" style=\"width:100%\"></div></div>",
+    "<div class=\"metric-cluster\">",
+    "<p class=\"cluster-label\">capture settings</p>",
+    "<div class=\"cluster-cards\">",
+    "<article class=\"metric\"><p class=\"label\">FPS target</p><p class=\"value\">2</p></article>",
+    "<article class=\"metric\"><p class=\"label\">Frame payload</p><p class=\"value\">JPEG</p></article>",
+    "</div>",
+    "</div>",
+    "<div class=\"metric-cluster\">",
+    "<p class=\"cluster-label\">instructions</p>",
+    "<div class=\"cluster-cards\">",
+    "<article class=\"metric\"><p class=\"label\">Tip</p><p class=\"value\">Choose one source, then keep this tab open.</p></article>",
+    "</div>",
+    "</div>",
+    "</section>",
+    "</div>",
     "</main>",
     "<script>",
     `const EXPIRES_AT='${safeExpiresAtIso}';`,
@@ -492,9 +617,12 @@ function buildSharePageHtml({ expiresAtIso, frameApiPath, stopApiPath, keyframeI
     "const startBtn=document.getElementById('start');",
     "const stopBtn=document.getElementById('stop');",
     "const preview=document.getElementById('preview');",
+    "const headerDot=document.getElementById('header-dot');",
+    "const modeLbl=document.getElementById('mode-lbl');",
+    "const stateLbl=document.getElementById('state-lbl');",
     "const statusEl=document.getElementById('status');",
     "const indDot=document.getElementById('ind-dot');",
-    "const indTxt=document.getElementById('ind-txt');",
+    "const placeholder=document.getElementById('vid-ph');",
     "const countdownEl=document.getElementById('countdown');",
     "const fcntEl=document.getElementById('fcnt');",
     "const tbar=document.getElementById('tbar');",
@@ -510,9 +638,19 @@ function buildSharePageHtml({ expiresAtIso, frameApiPath, stopApiPath, keyframeI
     "function setStatus(t){statusEl.textContent=String(t||'');}",
     "function setState(s){",
     "document.body.dataset.state=s;",
-    "indDot.className='dot'+(s==='sharing'?' live':s==='stopped'?' stopped':s==='expired'?' expired':'');",
-    "indTxt.className='itxt'+(s==='sharing'?' live':s==='stopped'?' stopped':s==='expired'?' expired':'');",
-    "indTxt.textContent=s==='sharing'?'LIVE':s==='stopped'?'STOPPED':s==='expired'?'EXPIRED':'READY';",
+    "const isLive=s==='sharing';",
+    "if (indDot) {",
+    "  indDot.className='status-dot'+(isLive?' online':'');",
+    "}",
+    "if (headerDot) {",
+    "  headerDot.className='header-status-dot'+(isLive?' online':'');",
+    "}",
+    "if (modeLbl) {",
+    "  modeLbl.textContent=s==='sharing'?'live':s==='stopped'?'stopped':s==='expired'?'expired':'ready';",
+    "}",
+    "if (stateLbl) {",
+    "  stateLbl.textContent=s==='sharing'?'live':s==='stopped'?'stopped':s==='expired'?'expired':'ready';",
+    "}",
     "}",
     "function updateCountdown(){",
     "const rem=Math.max(0,expiresMs-Date.now());",
@@ -520,10 +658,11 @@ function buildSharePageHtml({ expiresAtIso, frameApiPath, stopApiPath, keyframeI
     "const m=Math.floor(rem/60000);const s=Math.floor((rem%60000)/1000);",
     "countdownEl.textContent=String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');",
     "tbar.style.width=pct+'%';",
-    "tbar.className='tbar-fill'+(pct<15?' crit':pct<33?' warn':'');",
+    "tbar.className='share-progress-fill'+(pct<15?' crit':pct<33?' warn':'');",
     "if(rem<=0&&stream){stopShare('session_expired');setState('expired');}",
     "if(rem<=0&&!stream){setState('expired');setStatus('session expired');}",
     "}",
+    "setState('idle');",
     "setInterval(updateCountdown,1000);updateCountdown();",
     "function stopTracks(){if(!stream)return;for(const t of stream.getTracks())t.stop();}",
     "async function stopShare(reason='user_stop'){",
@@ -531,6 +670,9 @@ function buildSharePageHtml({ expiresAtIso, frameApiPath, stopApiPath, keyframeI
     "stopTracks();",
     "stream=null;",
     "preview.srcObject=null;",
+    "if (placeholder) {",
+    "  placeholder.style.display='grid';",
+    "}",
     "startBtn.disabled=false;",
     "stopBtn.disabled=true;",
     "if(reason!=='session_expired')setState('stopped');",
@@ -566,6 +708,9 @@ function buildSharePageHtml({ expiresAtIso, frameApiPath, stopApiPath, keyframeI
     "try{",
     "stream=await navigator.mediaDevices.getDisplayMedia({video:{frameRate:2},audio:false});",
     "preview.srcObject=stream;",
+    "if (placeholder) {",
+    "  placeholder.style.display='none';",
+    "}",
     "await preview.play();",
     "for(const track of stream.getVideoTracks()){track.addEventListener('ended',()=>{stopShare('browser_stream_ended');});}",
     "startBtn.disabled=true;",
@@ -632,4 +777,39 @@ function getLocalShareBaseUrl(appConfig) {
       ? Math.floor(configuredPort)
       : 8787;
   return `http://127.0.0.1:${port}`;
+}
+
+function escapeHtmlAttr(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("\"", "&quot;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll("'", "&#39;");
+}
+
+function resolveDashboardThemeHref() {
+  if (dashboardThemeResolved) {
+    return cachedDashboardThemeHref;
+  }
+  dashboardThemeResolved = true;
+  cachedDashboardThemeHref = resolveDashboardThemeHrefFromDist();
+  return cachedDashboardThemeHref;
+}
+
+function resolveDashboardThemeHrefFromDist() {
+  try {
+    const entries = fs.readdirSync(DASHBOARD_ASSET_DIR);
+    for (const filename of entries) {
+      if (
+        String(filename).startsWith(DASHBOARD_STYLESHEET_PREFIX) &&
+        String(filename).endsWith(DASHBOARD_STYLESHEET_SUFFIX)
+      ) {
+        return `/assets/${filename}`;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+  return "";
 }
