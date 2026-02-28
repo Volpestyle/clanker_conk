@@ -404,6 +404,21 @@ export function buildReplyPrompt({
   } else {
     const eagerness = Math.max(0, Math.min(100, Number(replyEagerness) || 0));
     parts.push(`Reply eagerness hint: ${eagerness}/100.`);
+    if (eagerness <= 25) {
+      parts.push("Low eagerness mode: treat spontaneous insertion as an exception, not the default. Skip unless your input is clearly needed or uniquely valuable.");
+    } else if (eagerness >= 75) {
+      if (eagerness >= 90) {
+        parts.push(
+          "Very high/noisier mode (near 90+): prefer energetic, hype-heavy, playful, or mildly chaotic participation when it fits the room, including more chatter-like inserts."
+        );
+      } else {
+        parts.push(
+          "High eagerness mode: you can interject more often and be more hype-forward, while still checking for basic conversational flow."
+        );
+      }
+    } else {
+      parts.push("Normal eagerness: be selective; prefer [SKIP] unless the contribution is clearly useful and not disruptive.");
+    }
     parts.push("Treat reply eagerness as a soft threshold for when your jump-in contribution is worth it.");
     parts.push("Higher eagerness means lower contribution threshold; lower eagerness means higher threshold.");
     if (normalizedChannelMode === "initiative") {
