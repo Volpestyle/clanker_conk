@@ -351,7 +351,10 @@ export function isBotNameAddressed({
   if (transcriptTokens.length && botWakeTokens.length) {
     for (let tokenIndex = 0; tokenIndex < transcriptTokens.length; tokenIndex += 1) {
       const spokenToken = transcriptTokens[tokenIndex];
-      const matchedWakeToken = botWakeTokens.find((wakeToken) => isLikelyWakeTokenVariant(spokenToken, wakeToken));
+      const spokenCandidates = buildSpokenWakeTokenCandidates(spokenToken);
+      const matchedWakeToken = botWakeTokens.find((wakeToken) =>
+        spokenCandidates.some((candidate) => isLikelyWakeTokenVariant(candidate, wakeToken))
+      );
       if (matchedWakeToken) {
         return true;
       }
@@ -384,6 +387,30 @@ function buildBotWakeTokens(botName = "") {
     }
   }
   return [...expanded];
+}
+
+function buildSpokenWakeTokenCandidates(spokenToken = "") {
+  const normalized = String(spokenToken || "").trim().toLowerCase();
+  if (!normalized) return [];
+
+  const candidates = new Set([normalized]);
+  const withoutPossessive = normalized.replace(/[’']s$/u, "");
+  if (withoutPossessive && withoutPossessive !== normalized) {
+    candidates.add(withoutPossessive);
+  }
+
+  // ASR often pluralizes wake words ("clakers", "clankers") when speakers are clipped.
+  for (const candidate of [...candidates]) {
+    if (candidate.endsWith("ers") && candidate.length >= 6) {
+      candidates.add(candidate.slice(0, -1));
+      continue;
+    }
+    if (candidate.endsWith("s") && candidate.length >= 6 && !candidate.endsWith("ss")) {
+      candidates.add(candidate.slice(0, -1));
+    }
+  }
+
+  return [...candidates];
 }
 
 function isLikelyWakeTokenVariant(spokenToken = "", wakeToken = "") {

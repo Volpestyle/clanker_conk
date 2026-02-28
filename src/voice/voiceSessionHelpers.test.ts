@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   isBotNameAddressed,
@@ -72,12 +72,16 @@ test("isVoiceTurnAddressedToBot balances fuzzy wake detection with false-positiv
   const cases = [
     { text: "yo clunker can you answer this?", expected: true },
     { text: "yo clanky can you answer this?", expected: true },
+    { text: "yo clakers can you answer this?", expected: true },
+    { text: "yo clankers can you answer this?", expected: true },
+    { text: "yo clanker's voice changed again?", expected: true },
     { text: "i think clunker can you answer this?", expected: true },
     { text: "clankerton can you jump in?", expected: true },
     { text: "clunkeroni can you jump in?", expected: true },
     { text: "i sent you a link yesterday", expected: false },
     { text: "Hi cleaner.", expected: false },
     { text: "cleaner can you jump in?", expected: false },
+    { text: "cleaners can you jump in?", expected: false },
     { text: "the cleaner is broken again", expected: false },
     { text: "Very big step up from Paldea. Pretty excited to see what they cook up", expected: false }
   ];

@@ -1,4 +1,4 @@
-import test from "node:test";
+import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { VoiceSessionManager, resolveRealtimeTurnTranscriptionPlan } from "./voiceSessionManager.ts";
 
@@ -784,6 +784,151 @@ test("runRealtimeTurn does not forward audio when reply decision denies turn", a
   assert.equal(Boolean(addressingLog), true);
   assert.equal(Boolean(addressingLog?.metadata?.allow), false);
   assert.equal(addressingLog?.metadata?.reason, "llm_no");
+});
+
+test("runRealtimeTurn defers direct-addressed turns when bot audio is already open", async () => {
+  const runtimeLogs = [];
+  const deferredTurns = [];
+  let appendedAudioCalls = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.deferDirectAddressedRealtimeTurn = (payload) => {
+    deferredTurns.push(payload);
+  };
+  manager.evaluateVoiceReplyDecision = async () => ({
+    allow: false,
+    reason: "bot_turn_open",
+    participantCount: 2,
+    directAddressed: true,
+    transcript: "clanker are you there"
+  });
+
+  const session = {
+    id: "session-defer-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    realtimeClient: {
+      appendInputAudioPcm() {
+        appendedAudioCalls += 1;
+      }
+    },
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([1, 2, 3, 4]),
+    captureReason: "stream_end"
+  });
+
+  assert.equal(appendedAudioCalls, 0);
+  assert.equal(deferredTurns.length, 1);
+  assert.equal(deferredTurns[0]?.session, session);
+  assert.equal(deferredTurns[0]?.deferCount, 0);
+  const addressingLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
+  );
+  assert.equal(Boolean(addressingLog), true);
+  assert.equal(Boolean(addressingLog?.metadata?.allow), false);
+  assert.equal(addressingLog?.metadata?.reason, "bot_turn_open");
+  assert.equal(Boolean(addressingLog?.metadata?.directAddressed), true);
+});
+
+test("runRealtimeTurn skips defer once direct-address bot-turn-open retry budget is exhausted", async () => {
+  const deferredTurns = [];
+  const manager = createManager();
+  manager.deferDirectAddressedRealtimeTurn = (payload) => {
+    deferredTurns.push(payload);
+  };
+  manager.evaluateVoiceReplyDecision = async () => ({
+    allow: false,
+    reason: "bot_turn_open",
+    participantCount: 2,
+    directAddressed: true,
+    transcript: "clanker are you there"
+  });
+
+  const session = {
+    id: "session-defer-2",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    realtimeClient: {
+      appendInputAudioPcm() {}
+    },
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([8, 9, 10, 11]),
+    captureReason: "stream_end",
+    deferCount: 2
+  });
+
+  assert.equal(deferredTurns.length, 0);
+});
+
+test("queueRealtimeTurn keeps a bounded FIFO backlog while realtime drain is active", () => {
+  const runtimeLogs = [];
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  const session = {
+    id: "session-queue-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeTurnDrainActive: true,
+    pendingRealtimeTurns: []
+  };
+
+  manager.queueRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([1]),
+    captureReason: "r1"
+  });
+  manager.queueRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([2]),
+    captureReason: "r2"
+  });
+  manager.queueRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([3]),
+    captureReason: "r3"
+  });
+  manager.queueRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([4]),
+    captureReason: "r4"
+  });
+
+  assert.deepEqual(
+    session.pendingRealtimeTurns.map((turn) => turn.captureReason),
+    ["r2", "r3", "r4"]
+  );
+  const supersededLogs = runtimeLogs.filter(
+    (row) => row?.kind === "voice_runtime" && row?.content === "realtime_turn_superseded"
+  );
+  assert.equal(supersededLogs.length, 1);
+  assert.equal(supersededLogs[0]?.metadata?.replacedCaptureReason, "r1");
+  assert.equal(supersededLogs[0]?.metadata?.maxQueueDepth, 3);
 });
 
 test("runRealtimeTurn forwards audio and prepares openai context when reply decision allows turn", async () => {
