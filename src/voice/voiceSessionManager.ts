@@ -2274,17 +2274,11 @@ export class VoiceSessionManager {
         return false;
       }
 
-      const replyDecisionEnabled =
-        resolvedSettings?.voice?.replyDecisionLlm?.enabled !== undefined
-          ? Boolean(resolvedSettings.voice.replyDecisionLlm.enabled)
-          : true;
-      const thoughtMemoryFacts = replyDecisionEnabled
-        ? await this.loadVoiceThoughtMemoryFacts({
-            session,
-            settings: resolvedSettings,
-            thoughtCandidate: thoughtDraft
-          })
-        : [];
+      const thoughtMemoryFacts = await this.loadVoiceThoughtMemoryFacts({
+        session,
+        settings: resolvedSettings,
+        thoughtCandidate: thoughtDraft
+      });
       const decision = await this.evaluateVoiceThoughtDecision({
         session,
         settings: resolvedSettings,
@@ -2501,17 +2495,6 @@ export class VoiceSessionManager {
     }
 
     const replyDecisionLlm = settings?.voice?.replyDecisionLlm || {};
-    const classifierEnabled =
-      replyDecisionLlm?.enabled !== undefined ? Boolean(replyDecisionLlm.enabled) : true;
-    if (!classifierEnabled) {
-      return {
-        allow: true,
-        reason: "classifier_disabled",
-        finalThought: normalizedThought,
-        usedMemory: false,
-        memoryFactCount: 0
-      };
-    }
     if (!this.llm?.generate) {
       return {
         allow: false,
