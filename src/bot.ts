@@ -1070,10 +1070,13 @@ export class ClankerBot {
     });
   }
 
-  shouldSendAsReply({ isInitiativeChannel = false, shouldThreadReply = false } = {}) {
+  shouldSendAsReply({ isInitiativeChannel = false, shouldThreadReply = false, replyText = "" } = {}) {
     if (!shouldThreadReply) return false;
-    if (!isInitiativeChannel) return true;
-    return chance(0.65);
+    const textLength = String(replyText || "").trim().length;
+    const isShortReply = textLength > 0 && textLength <= 30;
+    if (isShortReply) return chance(0.25);
+    if (!isInitiativeChannel) return chance(0.82);
+    return chance(0.55);
   }
 
   shouldSkipSimulatedTypingDelay() {
@@ -1700,7 +1703,8 @@ export class ClankerBot {
     const canStandalonePost = isInitiativeChannel || !shouldThreadReply;
     const sendAsReply = this.shouldSendAsReply({
       isInitiativeChannel,
-      shouldThreadReply
+      shouldThreadReply,
+      replyText: finalText
     });
     const sendStartedAtMs = Date.now();
     const sent = sendAsReply

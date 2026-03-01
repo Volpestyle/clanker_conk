@@ -410,76 +410,41 @@ export function buildReplyPrompt({
   if (directlyAddressed) {
     parts.push("This message directly addressed you.");
   }
-  parts.push("Treat close misspellings/ASR variants of your name as possibly addressed to you only when context supports it.");
-  parts.push("Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" are often directed at you.");
-  parts.push("Questions like \"is that you <name-ish-token>?\" are often directed at you.");
-  parts.push("Do not infer direct address from rhyme alone.");
-  parts.push("Generic prank/stank/stinky chatter without a clear name-like callout is usually not directed at you.");
   parts.push(
-    "Capability state rule: distinguish between unsupported features and currently unavailable features. If something is disabled/unconfigured/budget-blocked, describe it as currently unavailable with the reason."
+    "If something you can do is currently disabled or budget-blocked, say it is currently unavailable with the reason. Do not claim a supported feature can never work."
   );
-  parts.push("Do not make absolute claims that a supported feature can never work.");
   if (responseRequired) {
     parts.push("A reply is required for this turn unless safety policy requires refusing.");
     parts.push("Do not output [SKIP] except for safety refusals.");
   } else {
     const eagerness = Math.max(0, Math.min(100, Number(replyEagerness) || 0));
-    parts.push(`Reply eagerness hint: ${eagerness}/100.`);
     if (eagerness <= 25) {
-      parts.push("Low eagerness mode: treat spontaneous insertion as an exception, not the default. Skip unless your input is clearly needed or uniquely valuable.");
+      parts.push("You tend to observe more than talk. Only chime in when you genuinely have something to say or someone is clearly talking to you.");
+    } else if (eagerness >= 90) {
+      parts.push("You are an active, social participant who enjoys riffing with people. Jump in when you have something — even lighter contributions are fine.");
     } else if (eagerness >= 75) {
-      if (eagerness >= 90) {
-        parts.push(
-          "Very high/noisier mode (near 90+): you can participate more proactively, including exploratory social inserts, while keeping claims grounded."
-        );
-      } else {
-        parts.push(
-          "High eagerness mode: you can interject more often when it clearly advances the conversation, while still checking flow."
-        );
-      }
+      parts.push("You are pretty engaged in this server. Contribute when you have something that fits the flow.");
     } else {
-      parts.push("Normal eagerness: be selective; prefer [SKIP] unless the contribution is clearly useful and not disruptive.");
+      parts.push("Be selective about when you jump in. If you do not have something genuinely useful, interesting, or funny to add, output [SKIP].");
     }
-    parts.push("Treat reply eagerness as a soft threshold for when your jump-in contribution is worth it.");
-    parts.push("Higher eagerness means lower contribution threshold; lower eagerness means higher threshold.");
     if (normalizedChannelMode === "initiative") {
-      if (eagerness <= 25) {
-        parts.push("In initiative channels, stay selective and skip when a jump-in would feel random or stale.");
-      } else if (eagerness >= 75) {
-        parts.push("In initiative channels, you can join more often with short social glue when it fits.");
-      } else {
-        parts.push("In initiative channels, use balanced judgment and keep momentum without forcing it.");
-      }
-      parts.push("Short acknowledgements or exploratory riffs are fine when they fit naturally.");
-      parts.push("If this would derail, interrupt, or repeat what was just said, output exactly [SKIP].");
-      parts.push("Decide if replying improves the channel flow right now.");
+      parts.push("This is one of your active channels. Short riffs and acknowledgements are fine when they fit naturally.");
+      parts.push("If your reply would derail, interrupt, or just repeat what was said, output [SKIP].");
     } else {
-      if (eagerness <= 25) {
-        parts.push("Be very selective and skip unless you can add clearly strong value.");
-      } else if (eagerness >= 75) {
-        parts.push("You can jump in more often, including lighter/fun contributions that still fit the flow.");
-      } else {
-        parts.push("Use balanced judgment before joining the conversation.");
-      }
-      parts.push("Judge value by whether your message is useful, interesting, or funny enough to justify the interruption risk.");
-      parts.push("If unsure whether your contribution is worth it, output exactly [SKIP].");
-      parts.push("Decide if replying adds value right now.");
-      parts.push(
-        "If this message is not really meant for you or would interrupt people talking among themselves, output exactly [SKIP]."
-      );
+      parts.push("This is not one of your main channels. Only jump in if your message is worth the interruption.");
+      parts.push("If this message is not meant for you or you would be inserting yourself into someone else's conversation, output [SKIP].");
     }
   }
 
   const reactionLevel = Math.max(0, Math.min(100, Number(reactionEagerness) || 0));
-  parts.push(`Reaction eagerness setting: ${reactionLevel}/100.`);
   if (reactionLevel <= 25) {
-    parts.push("React sparingly and only when it clearly adds social value.");
+    parts.push("React sparingly — only when it genuinely adds something.");
   } else if (reactionLevel >= 75) {
-    parts.push("You can react more often, but only when it naturally fits the tone.");
+    parts.push("Feel free to react when it naturally fits the tone.");
   } else {
-    parts.push("Use balanced judgment for reactions.");
+    parts.push("React when it feels right, not by default.");
   }
-  parts.push("If a reaction is useful, set reactionEmoji to exactly one allowed emoji. Otherwise set reactionEmoji to null.");
+  parts.push("If a reaction fits, set reactionEmoji to exactly one allowed emoji. Otherwise set reactionEmoji to null.");
 
   parts.push("=== VOICE CONTROL ===");
   const voiceEnabled = Boolean(voiceMode?.enabled);

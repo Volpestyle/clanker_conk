@@ -781,7 +781,8 @@ export class VoiceSessionManager {
         messageId: message.id,
         event: "voice_leave_request",
         reason: "not_in_voice",
-        details: {}
+        details: {},
+        mustNotify: true
       });
       return true;
     }
@@ -819,7 +820,8 @@ export class VoiceSessionManager {
         messageId: message.id,
         event: "voice_status_request",
         reason: "offline",
-        details: {}
+        details: {},
+        mustNotify: true
       });
       return true;
     }
@@ -854,7 +856,8 @@ export class VoiceSessionManager {
         musicTrackTitle: this.ensureSessionMusicState(session)?.lastTrackTitle || null,
         musicTrackArtists: this.ensureSessionMusicState(session)?.lastTrackArtists || [],
         requestText: requestText || null
-      }
+      },
+      mustNotify: true
     });
 
     return true;
@@ -10361,7 +10364,7 @@ export class VoiceSessionManager {
     event = "voice_runtime",
     reason = null,
     details = {},
-    mustNotify = true
+    mustNotify = false
   }) {
     return await sendOperationalMessage(this, {
       channel,

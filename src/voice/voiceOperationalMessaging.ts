@@ -8,7 +8,7 @@ export async function sendOperationalMessage(manager, {
   event = "voice_runtime",
   reason = null,
   details = {},
-  mustNotify = true
+  mustNotify = false
 }) {
   const resolvedSettings =
     settings || (typeof manager.store?.getSettings === "function" ? manager.store.getSettings() : null);
