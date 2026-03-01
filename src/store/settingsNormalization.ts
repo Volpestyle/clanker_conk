@@ -440,6 +440,7 @@ export function normalizeSettings(raw) {
     replyDecisionLlm?: VoiceReplyDecisionDefaults;
     streamWatch?: VoiceStreamWatchDefaults;
     soundboard?: VoiceSoundboardDefaults;
+    musicTranscriptionEnabled?: boolean;
   };
 
   const defaultVoice: VoiceDefaults = DEFAULT_SETTINGS.voice;
@@ -841,6 +842,11 @@ export function normalizeSettings(raw) {
       ? Boolean(merged.voice?.soundboard?.allowExternalSounds)
       : Boolean(defaultVoiceSoundboard.allowExternalSounds);
   merged.voice.soundboard.preferredSoundIds = uniqueIdList(merged.voice?.soundboard?.preferredSoundIds).slice(0, 40);
+
+  merged.voice.musicTranscriptionEnabled =
+    merged.voice?.musicTranscriptionEnabled !== undefined
+      ? Boolean(merged.voice?.musicTranscriptionEnabled)
+      : Boolean(defaultVoice.musicTranscriptionEnabled);
 
   merged.startup.catchupEnabled =
     merged.startup?.catchupEnabled !== undefined ? Boolean(merged.startup?.catchupEnabled) : true;

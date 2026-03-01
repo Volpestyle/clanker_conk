@@ -190,7 +190,8 @@ export const DEFAULT_SETTINGS = {
       enabled: true,
       allowExternalSounds: false,
       preferredSoundIds: []
-    }
+    },
+    musicTranscriptionEnabled: true
   },
   startup: {
     catchupEnabled: true,

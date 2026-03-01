@@ -1664,6 +1664,13 @@ export class VoiceSessionManager {
       this.clearMusicDisambiguationState(session);
     }
 
+    // Reconnect bot audio pipeline now that music is done
+    ensureBotAudioPlaybackReady({
+      session,
+      store: this.store,
+      botUserId: this.client.user?.id || null
+    });
+
     this.store.logAction({
       kind: stopSucceeded ? "voice_runtime" : "voice_error",
       guildId: session.guildId,
@@ -2054,6 +2061,11 @@ export class VoiceSessionManager {
     if (!this.isMusicPlaybackActive(session)) return false;
     if (!pcmBuffer?.length) return true;
 
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    if (!resolvedSettings?.voice?.musicTranscriptionEnabled) {
+      return true; // music active but transcription disabled — swallow turn silently
+    }
+
     if (!this.llm?.transcribeAudio) {
       this.store.logAction({
         kind: "voice_runtime",
@@ -2130,12 +2142,12 @@ export class VoiceSessionManager {
       return true;
     }
 
-    const stopDecision = await this.evaluateMusicStopIntentFromTranscript({
-      session,
-      settings,
-      userId,
+    // Heuristic-only stop detection — no LLM round-trip.
+    // NOTE: isLikelyMusicStopPhrase uses English-only regex patterns (MUSIC_STOP_VERB_RE,
+    // MUSIC_CUE_RE). Supporting other languages requires a dedicated locale-aware filter function.
+    const shouldStop = this.isLikelyMusicStopPhrase({
       transcript: normalizedTranscript,
-      source
+      settings: resolvedSettings
     });
     this.store.logAction({
       kind: "voice_runtime",
@@ -2148,16 +2160,12 @@ export class VoiceSessionManager {
         source: String(source || "voice_turn"),
         captureReason: String(captureReason || "stream_end"),
         transcript: normalizedTranscript,
-        shouldStop: Boolean(stopDecision.shouldStop),
-        decisionReason: stopDecision.reason,
-        llmProvider: stopDecision.llmProvider || null,
-        llmModel: stopDecision.llmModel || null,
-        llmResponse: stopDecision.llmResponse || null,
-        error: stopDecision.error || null
+        shouldStop,
+        decisionReason: shouldStop ? "heuristic_stop" : "no_stop_cue"
       }
     });
 
-    if (!stopDecision.shouldStop) {
+    if (!shouldStop) {
       return true;
     }
 
@@ -2165,7 +2173,7 @@ export class VoiceSessionManager {
       guildId: session.guildId,
       channelId: session.textChannelId,
       requestedByUserId: userId,
-      settings,
+      settings: resolvedSettings,
       reason: "voice_music_stop_phrase",
       source: `voice_${String(source || "voice_turn")}`,
       requestText: normalizedTranscript,

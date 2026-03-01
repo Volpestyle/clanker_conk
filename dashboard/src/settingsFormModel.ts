@@ -240,6 +240,7 @@ export function settingsToForm(settings) {
     voiceSoundboardEnabled: settings?.voice?.soundboard?.enabled ?? defaultVoiceSoundboard.enabled,
     voiceSoundboardAllowExternalSounds: settings?.voice?.soundboard?.allowExternalSounds ?? defaultVoiceSoundboard.allowExternalSounds,
     voiceSoundboardPreferredSoundIds: formatLineList(settings?.voice?.soundboard?.preferredSoundIds),
+    voiceMusicTranscriptionEnabled: settings?.voice?.musicTranscriptionEnabled ?? defaultVoice.musicTranscriptionEnabled,
     maxMessages: settings?.permissions?.maxMessagesPerHour ?? defaultPermissions.maxMessagesPerHour,
     maxReactions: settings?.permissions?.maxReactionsPerHour ?? defaultPermissions.maxReactionsPerHour,
     catchupEnabled: settings?.startup?.catchupEnabled !== false,
@@ -449,7 +450,8 @@ export function formToSettingsPatch(form) {
         enabled: form.voiceSoundboardEnabled,
         allowExternalSounds: form.voiceSoundboardAllowExternalSounds,
         preferredSoundIds: parseUniqueList(form.voiceSoundboardPreferredSoundIds)
-      }
+      },
+      musicTranscriptionEnabled: Boolean(form.voiceMusicTranscriptionEnabled)
     },
     startup: {
       catchupEnabled: form.catchupEnabled,

@@ -874,6 +874,17 @@ export function VoiceModeSettingsSection({
             </>
           )}
 
+          <div className="toggles">
+            <label>
+              <input
+                type="checkbox"
+                checked={form.voiceMusicTranscriptionEnabled}
+                onChange={set("voiceMusicTranscriptionEnabled")}
+              />
+              Transcribe voice during music (enables "stop music" voice detection)
+            </label>
+          </div>
+
           <label htmlFor="voice-allowed-channels">Allowed voice channel IDs (optional)</label>
           <textarea
             id="voice-allowed-channels"
