@@ -8955,7 +8955,16 @@ export class VoiceSessionManager {
       source: "stt_pipeline_reply",
       preferRealtimeUtterance: false
     });
-    if (!playbackResult.completed) return;
+    if (!playbackResult.completed) {
+      if (playbackPlan.spokenText) {
+        this.recordVoiceTurn(session, {
+          role: "assistant",
+          userId: this.client.user?.id || null,
+          text: `[interrupted] ${playbackPlan.spokenText}`
+        });
+      }
+      return;
+    }
     const spokeLine = Boolean(playbackResult.spokeLine);
 
     try {
@@ -9358,6 +9367,13 @@ export class VoiceSessionManager {
       latencyContext: replyLatencyContext
     });
     if (!playbackResult.completed) {
+      if (playbackPlan.spokenText) {
+        this.recordVoiceTurn(session, {
+          role: "assistant",
+          userId: this.client.user?.id || null,
+          text: `[interrupted] ${playbackPlan.spokenText}`
+        });
+      }
       this.maybeClearActiveReplyInterruptionPolicy(session);
       return false;
     }
