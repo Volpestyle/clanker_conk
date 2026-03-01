@@ -25,6 +25,8 @@ export const BOT_TURN_SILENCE_RESET_MS = 1200;
 export const BARGE_IN_ASSERTION_MS = 1500;
 export const BARGE_IN_MIN_SPEECH_MS = 700;
 export const BARGE_IN_SUPPRESSION_MAX_MS = 12_000;
+export const BARGE_IN_FULL_OVERRIDE_MIN_MS = 2200;
+export const BARGE_IN_RETRY_MAX_AGE_MS = 10_000;
 export const ACTIVITY_TOUCH_THROTTLE_MS = 2000;
 export const RESPONSE_FLUSH_DEBOUNCE_MS = 280;
 export const OPENAI_ACTIVE_RESPONSE_RETRY_MS = 260;
@@ -83,6 +85,8 @@ export const VOICE_DECIDER_HISTORY_MAX_TURNS = 8;
 export const VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS = 220;
 export const VOICE_DECIDER_HISTORY_MAX_CHARS = 220;
 export const VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS = 900;
+// Ignore short low-signal followups immediately after bot speech to avoid noise-driven duplicate replies.
+export const VOICE_LOW_SIGNAL_POST_REPLY_MAX_CLIP_MS = 900;
 export const REALTIME_INSTRUCTION_REFRESH_DEBOUNCE_MS = 220;
 export const REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS = 420;
 export const REALTIME_CONTEXT_MEMBER_LIMIT = 12;

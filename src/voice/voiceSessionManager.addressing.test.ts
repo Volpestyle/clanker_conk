@@ -2306,7 +2306,7 @@ test("runRealtimeBrainReply supersedes stale reply when newer realtime input is 
     settings: session.settingsSnapshot,
     userId: "speaker-1",
     transcript: "older transcript",
-    directAddressed: true,
+    directAddressed: false,
     source: "realtime"
   });
 
@@ -2319,6 +2319,150 @@ test("runRealtimeBrainReply supersedes stale reply when newer realtime input is 
   assert.equal(supersededLog?.metadata?.supersedeReason, "pending_realtime_turn");
   assert.equal(supersededLog?.metadata?.pendingRealtimeQueueDepth, 1);
   assert.equal(supersededLog?.metadata?.supersededCount, 1);
+  assert.equal(session.realtimeReplySupersededCount, 1);
+});
+
+test("runRealtimeBrainReply supersedes assertive direct-address reply when another speaker is queued", async () => {
+  const runtimeLogs = [];
+  let requestedRealtimeUtterances = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [
+    { userId: "speaker-1", displayName: "alice" },
+    { userId: "speaker-2", displayName: "bob" }
+  ];
+  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = () => {
+    requestedRealtimeUtterances += 1;
+    return true;
+  };
+  manager.generateVoiceTurn = async () => ({
+    text: "continuing this answer"
+  });
+
+  const session = {
+    id: "session-realtime-assertive-keep-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 8_000,
+    realtimeClient: {},
+    userCaptures: new Map(),
+    pendingRealtimeTurns: [
+      {
+        session: null,
+        userId: "speaker-2",
+        pcmBuffer: Buffer.from([1, 2, 3]),
+        captureReason: "stream_end",
+        queuedAt: Date.now() - 250
+      }
+    ],
+    realtimeReplySupersededCount: 0,
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "yo clanker keep going",
+    directAddressed: true,
+    conversationContext: {
+      engagementState: "engaged",
+      engaged: true,
+      engagedWithCurrentSpeaker: true
+    },
+    source: "realtime"
+  });
+
+  assert.equal(result, true);
+  assert.equal(requestedRealtimeUtterances, 0);
+  const supersededLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "realtime_reply_superseded_newer_input"
+  );
+  assert.equal(Boolean(supersededLog), true);
+  assert.equal(session.realtimeReplySupersededCount, 1);
+});
+
+test("runRealtimeBrainReply supersedes ALL-target replies when another speaker is queued", async () => {
+  const runtimeLogs = [];
+  let requestedRealtimeUtterances = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [
+    { userId: "speaker-1", displayName: "alice" },
+    { userId: "speaker-2", displayName: "bob" }
+  ];
+  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = () => {
+    requestedRealtimeUtterances += 1;
+    return true;
+  };
+  manager.generateVoiceTurn = async () => ({
+    text: "quick callout to everyone",
+    voiceAddressing: {
+      talkingTo: "ALL",
+      directedConfidence: 0.9
+    }
+  });
+
+  const session = {
+    id: "session-realtime-assertive-all-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 8_000,
+    realtimeClient: {},
+    userCaptures: new Map(),
+    pendingRealtimeTurns: [
+      {
+        session: null,
+        userId: "speaker-2",
+        pcmBuffer: Buffer.from([1, 2, 3]),
+        captureReason: "stream_end",
+        queuedAt: Date.now() - 250
+      }
+    ],
+    realtimeReplySupersededCount: 0,
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "clanker tell everyone",
+    directAddressed: true,
+    conversationContext: {
+      engagementState: "engaged",
+      engaged: true,
+      engagedWithCurrentSpeaker: true
+    },
+    source: "realtime"
+  });
+
+  assert.equal(result, true);
+  assert.equal(requestedRealtimeUtterances, 0);
+  const supersededLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "realtime_reply_superseded_newer_input"
+  );
+  assert.equal(Boolean(supersededLog), true);
   assert.equal(session.realtimeReplySupersededCount, 1);
 });
 

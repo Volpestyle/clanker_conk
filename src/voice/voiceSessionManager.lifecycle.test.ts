@@ -6,6 +6,7 @@ import {
   AUDIO_PLAYBACK_QUEUE_ABSOLUTE_MAX_BYTES,
   AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES,
   AUDIO_PLAYBACK_QUEUE_WARN_BYTES,
+  BARGE_IN_FULL_OVERRIDE_MIN_MS,
   BARGE_IN_MIN_SPEECH_MS,
   DISCORD_PCM_FRAME_BYTES
 } from "./voiceSessionManager.constants.ts";
@@ -120,6 +121,9 @@ function createSession(overrides = {}) {
     realtimeInputSampleRateHz: 24000,
     realtimeOutputSampleRateHz: 24000,
     realtimeClient: null,
+    activeReplyInterruptionPolicy: null,
+    pendingBargeInRetry: null,
+    lastRequestedRealtimeUtterance: null,
     settingsSnapshot: {
       botName: "clanker conk",
       voice: {
@@ -162,6 +166,23 @@ test("getRuntimeState summarizes STT and realtime sessions", () => {
         requestedByUserId: "user-mod",
         lastFrameAt: now - 2_000,
         lastCommentaryAt: now - 4_000,
+        latestFrameAt: now - 2_000,
+        latestFrameMimeType: "image/png",
+        latestFrameDataBase64: "AAAAAA==",
+        frameWindowStartedAt: now - 15_000,
+        acceptedFrameCountInWindow: 5,
+        lastBrainContextAt: now - 3_000,
+        lastBrainContextProvider: "anthropic",
+        lastBrainContextModel: "claude-vision",
+        brainContextEntries: [
+          {
+            text: "enemy near top left minimap",
+            at: now - 3_000,
+            provider: "anthropic",
+            model: "claude-vision",
+            speakerName: "streamer"
+          }
+        ],
         ingestedFrameCount: 8
       },
       realtimeProvider: "openai",
@@ -188,6 +209,12 @@ test("getRuntimeState summarizes STT and realtime sessions", () => {
   assert.equal(realtime?.realtime?.provider, "openai");
   assert.equal(realtime?.realtime?.replySuperseded, 0);
   assert.deepEqual(realtime?.realtime?.state, { connected: true });
+  assert.equal(realtime?.streamWatch?.latestFrameMimeType, "image/png");
+  assert.equal(realtime?.streamWatch?.acceptedFrameCountInWindow, 5);
+  assert.equal(realtime?.streamWatch?.brainContextCount, 1);
+  assert.equal(realtime?.streamWatch?.visualFeed?.length, 1);
+  assert.equal(realtime?.streamWatch?.visualFeed?.[0]?.text, "enemy near top left minimap");
+  assert.equal(realtime?.streamWatch?.brainContextPayload?.notes?.length, 1);
 });
 
 test("resolveSpeakingEndFinalizeDelayMs preserves baseline delays in low-load rooms", () => {
@@ -280,6 +307,81 @@ test("maybeInterruptBotForAssertiveSpeech requires sustained capture bytes", () 
     session,
     userId: "user-1",
     source: "test"
+  });
+  assert.equal(interrupted, false);
+  assert.equal(session.botTurnOpen, true);
+  assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
+});
+
+test("maybeInterruptBotForAssertiveSpeech ignores non-target speaker under assertive reply policy", () => {
+  const { manager, logs } = createManager();
+  const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: true,
+    activeReplyInterruptionPolicy: {
+      assertive: true,
+      scope: "speaker",
+      allowedUserId: "user-1",
+      reason: "engaged_continuation",
+      source: "test"
+    },
+    userCaptures: new Map([
+      [
+        "user-2",
+        {
+          bytesSent: minBytes + 2_400,
+          signalSampleCount: 24_000,
+          signalActiveSampleCount: 1_680,
+          signalPeakAbs: 5_400,
+          speakingEndFinalizeTimer: null
+        }
+      ]
+    ])
+  });
+
+  const interrupted = manager.maybeInterruptBotForAssertiveSpeech({
+    session,
+    userId: "user-2",
+    source: "test_assertive_scope"
+  });
+  assert.equal(interrupted, false);
+  assert.equal(session.botTurnOpen, true);
+  assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
+});
+
+test("maybeInterruptBotForAssertiveSpeech blocks all interruptions when reply targets ALL", () => {
+  const { manager, logs } = createManager();
+  const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: true,
+    activeReplyInterruptionPolicy: {
+      assertive: true,
+      scope: "all",
+      allowedUserId: null,
+      talkingTo: "ALL",
+      reason: "assistant_target_all",
+      source: "test"
+    },
+    userCaptures: new Map([
+      [
+        "user-1",
+        {
+          bytesSent: minBytes + 2_400,
+          signalSampleCount: 24_000,
+          signalActiveSampleCount: 1_680,
+          signalPeakAbs: 5_400,
+          speakingEndFinalizeTimer: null
+        }
+      ]
+    ])
+  });
+
+  const interrupted = manager.maybeInterruptBotForAssertiveSpeech({
+    session,
+    userId: "user-1",
+    source: "test_all_scope"
   });
   assert.equal(interrupted, false);
   assert.equal(session.botTurnOpen, true);
@@ -511,6 +613,86 @@ test("armAssertiveBargeIn schedules interrupt checks while queued playback remai
   assert.equal(callArgs[0]?.userId, "user-1");
   const capture = session.userCaptures.get("user-1");
   assert.equal(capture?.bargeInAssertTimer, null);
+});
+
+test("maybeHandleInterruptedReplyRecovery retries short barge-ins with the prior utterance", () => {
+  const { manager, logs } = createManager();
+  const retryCalls = [];
+  manager.requestRealtimeTextUtterance = (payload) => {
+    retryCalls.push(payload);
+    return true;
+  };
+
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeInputSampleRateHz: 24_000,
+    pendingBargeInRetry: {
+      utteranceText: "let me finish this thought",
+      interruptedByUserId: "user-1",
+      interruptedAt: Date.now() - 400,
+      source: "test",
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "user-1"
+      }
+    }
+  });
+
+  const shortBargePcm = Buffer.alloc(24_000 * 2, 0);
+  const handled = manager.maybeHandleInterruptedReplyRecovery({
+    session,
+    userId: "user-1",
+    pcmBuffer: shortBargePcm,
+    captureReason: "stream_end"
+  });
+
+  assert.equal(handled, true);
+  assert.equal(retryCalls.length, 1);
+  assert.equal(retryCalls[0]?.text, "let me finish this thought");
+  assert.equal(retryCalls[0]?.source, "barge_in_retry");
+  assert.equal(session.pendingBargeInRetry, null);
+  const retryLog = logs.find((entry) => entry?.content === "voice_barge_in_retry_requested");
+  assert.equal(Boolean(retryLog), true);
+});
+
+test("maybeHandleInterruptedReplyRecovery treats long barge-ins as full override and reconsiders transcript", () => {
+  const { manager, logs } = createManager();
+  const retryCalls = [];
+  manager.requestRealtimeTextUtterance = (payload) => {
+    retryCalls.push(payload);
+    return true;
+  };
+
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeInputSampleRateHz: 24_000,
+    pendingBargeInRetry: {
+      utteranceText: "do not replay when fully barged in",
+      interruptedByUserId: "user-1",
+      interruptedAt: Date.now() - 400,
+      source: "test",
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "user-1"
+      }
+    }
+  });
+
+  const longBargePcm = Buffer.alloc(Math.ceil((24_000 * 2 * (BARGE_IN_FULL_OVERRIDE_MIN_MS + 250)) / 1000), 0);
+  const handled = manager.maybeHandleInterruptedReplyRecovery({
+    session,
+    userId: "user-1",
+    pcmBuffer: longBargePcm,
+    captureReason: "stream_end"
+  });
+
+  assert.equal(handled, false);
+  assert.equal(retryCalls.length, 0);
+  assert.equal(session.pendingBargeInRetry, null);
+  const skipLog = logs.find((entry) => entry?.content === "voice_barge_in_retry_skipped_full_override");
+  assert.equal(Boolean(skipLog), true);
 });
 
 test("enqueueDiscordPcmForPlayback keeps full queued audio when hard cap is exceeded", () => {
