@@ -105,6 +105,10 @@ function structuredVoiceOutput(overrides: {
     confidence?: number;
     reason?: string | null;
   };
+  voiceAddressing?: {
+    talkingTo?: string | null;
+    directedConfidence?: number;
+  };
 } = {}) {
   const base = {
     text: "all good",
@@ -138,6 +142,10 @@ function structuredVoiceOutput(overrides: {
       action: "none",
       confidence: 0,
       reason: null
+    },
+    voiceAddressing: {
+      talkingTo: null,
+      directedConfidence: 0
     }
   };
 
@@ -155,6 +163,10 @@ function structuredVoiceOutput(overrides: {
     screenShareIntent: {
       ...base.screenShareIntent,
       ...(overrides.screenShareIntent || {})
+    },
+    voiceAddressing: {
+      ...base.voiceAddressing,
+      ...(overrides.voiceAddressing || {})
     }
   };
 
@@ -488,6 +500,30 @@ test("generateVoiceTurnReply parses memory and soundboard tool-call fields", asy
   assert.equal(remembers[0]?.scope, "lore");
   assert.equal(remembers[1]?.line, "i keep replies concise");
   assert.equal(remembers[1]?.scope, "self");
+});
+
+test("generateVoiceTurnReply returns voice addressing annotation from model output", async () => {
+  const { bot } = createVoiceBot({
+    generationText: structuredVoiceOutput({
+      text: "yo",
+      voiceAddressing: {
+        talkingTo: "assistant",
+        directedConfidence: 0.91
+      }
+    })
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "quick check"
+  });
+
+  assert.equal(reply.text, "yo");
+  assert.equal(reply.voiceAddressing?.talkingTo, "assistant");
+  assert.equal(reply.voiceAddressing?.directedConfidence, 0.91);
 });
 
 test("generateVoiceTurnReply preserves ordered soundboard refs from tool-call payload", async () => {

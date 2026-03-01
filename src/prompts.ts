@@ -889,6 +889,7 @@ export function buildAutomationPrompt({
 export function buildVoiceTurnPrompt({
   speakerName = "unknown",
   transcript = "",
+  directAddressed = false,
   userFacts = [],
   relevantFacts = [],
   isEagerTurn = false,
@@ -924,6 +925,7 @@ export function buildVoiceTurnPrompt({
     .filter(Boolean)
     .slice(0, 40);
   const normalizedBotName = String(botName || "the bot").trim() || "the bot";
+  const normalizedDirectAddressed = Boolean(directAddressed);
   const normalizedConversationContext =
     conversationContext && typeof conversationContext === "object" ? conversationContext : null;
   const normalizedSessionTiming =
@@ -1001,11 +1003,91 @@ export function buildVoiceTurnPrompt({
             .slice(-12)
         }
       : null;
+  const normalizedVoiceAddressingState =
+    normalizedConversationContext?.voiceAddressingState &&
+    typeof normalizedConversationContext.voiceAddressingState === "object"
+      ? {
+          currentSpeakerTarget:
+            String(normalizedConversationContext.voiceAddressingState.currentSpeakerTarget || "")
+              .replace(/\s+/g, " ")
+              .trim()
+              .slice(0, 80) || null,
+          currentSpeakerDirectedConfidence: Number.isFinite(
+            Number(normalizedConversationContext.voiceAddressingState.currentSpeakerDirectedConfidence)
+          )
+            ? Math.max(
+                0,
+                Math.min(1, Number(normalizedConversationContext.voiceAddressingState.currentSpeakerDirectedConfidence))
+              )
+            : 0,
+          lastDirectedToMe:
+            normalizedConversationContext.voiceAddressingState.lastDirectedToMe &&
+            typeof normalizedConversationContext.voiceAddressingState.lastDirectedToMe === "object"
+              ? {
+                  speakerName:
+                    String(normalizedConversationContext.voiceAddressingState.lastDirectedToMe.speakerName || "")
+                      .replace(/\s+/g, " ")
+                      .trim()
+                      .slice(0, 80) || "someone",
+                  ageMs: Number.isFinite(
+                    Number(normalizedConversationContext.voiceAddressingState.lastDirectedToMe.ageMs)
+                  )
+                    ? Math.max(0, Math.round(Number(normalizedConversationContext.voiceAddressingState.lastDirectedToMe.ageMs)))
+                    : null,
+                  directedConfidence: Number.isFinite(
+                    Number(normalizedConversationContext.voiceAddressingState.lastDirectedToMe.directedConfidence)
+                  )
+                    ? Math.max(
+                        0,
+                        Math.min(
+                          1,
+                          Number(normalizedConversationContext.voiceAddressingState.lastDirectedToMe.directedConfidence)
+                        )
+                      )
+                    : 0
+                }
+              : null,
+          recentAddressingGuesses: (
+            Array.isArray(normalizedConversationContext.voiceAddressingState.recentAddressingGuesses)
+              ? normalizedConversationContext.voiceAddressingState.recentAddressingGuesses
+              : []
+          )
+            .map((entry) => ({
+              speakerName:
+                String(entry?.speakerName || "")
+                  .replace(/\s+/g, " ")
+                  .trim()
+                  .slice(0, 80) || "someone",
+              talkingTo:
+                String(entry?.talkingTo || "")
+                  .replace(/\s+/g, " ")
+                  .trim()
+                  .slice(0, 80) || null,
+              directedConfidence: Number.isFinite(Number(entry?.directedConfidence))
+                ? Math.max(0, Math.min(1, Number(entry.directedConfidence)))
+                : 0,
+              ageMs: Number.isFinite(Number(entry?.ageMs)) ? Math.max(0, Math.round(Number(entry.ageMs))) : null
+            }))
+            .slice(-6)
+        }
+      : null;
 
   parts.push(`Incoming live voice transcript from ${speaker}: ${text || "(empty)"}`);
-  parts.push(
-    `Interpret second-person references like "you"/"your" as likely referring to ${normalizedBotName} unless another human target is explicit.`
-  );
+  if (normalizedDirectAddressed) {
+    parts.push("This turn appears directly addressed to you.");
+    parts.push(
+      `Interpret second-person references like "you"/"your" as likely referring to ${normalizedBotName}.`
+    );
+  } else if (normalizedParticipantRoster.length > 1) {
+    parts.push("This turn was not directly addressed to you.");
+    parts.push(
+      `In multi-user voice chat, treat second-person references like "you"/"your" as ambiguous by default; do not assume they refer to ${normalizedBotName} unless context is strong.`
+    );
+  } else {
+    parts.push(
+      `Interpret second-person references like "you"/"your" as likely referring to ${normalizedBotName} unless another human target is explicit.`
+    );
+  }
   parts.push(
     ...buildVoiceSelfContextLines({
       voiceEnabled: true,
@@ -1051,6 +1133,28 @@ export function buildVoiceTurnPrompt({
             ? Math.round(normalizedConversationContext.msSinceDirectAddress)
             : "none"
         }`
+      ].join("\n")
+    );
+  }
+
+  if (normalizedVoiceAddressingState) {
+    parts.push(
+      [
+        "Conversational addressing state (best-effort guesses from recent turns):",
+        `- Current speaker likely talking to: ${normalizedVoiceAddressingState.currentSpeakerTarget || "unknown"}`,
+        `- Current speaker directed-confidence: ${normalizedVoiceAddressingState.currentSpeakerDirectedConfidence.toFixed(2)}`,
+        normalizedVoiceAddressingState.lastDirectedToMe
+          ? `- Last turn directed to you: ${normalizedVoiceAddressingState.lastDirectedToMe.speakerName} (${normalizedVoiceAddressingState.lastDirectedToMe.ageMs ?? "unknown"}ms ago, confidence ${normalizedVoiceAddressingState.lastDirectedToMe.directedConfidence.toFixed(2)})`
+          : "- Last turn directed to you: none in recent context",
+        normalizedVoiceAddressingState.recentAddressingGuesses.length
+          ? "- Recent addressing guesses:\n" +
+            normalizedVoiceAddressingState.recentAddressingGuesses
+              .map(
+                (entry) =>
+                  `  - ${entry.speakerName} -> ${entry.talkingTo || "unknown"} (confidence ${entry.directedConfidence.toFixed(2)}, ${entry.ageMs ?? "unknown"}ms ago)`
+              )
+              .join("\n")
+          : "- Recent addressing guesses: none"
       ].join("\n")
     );
   }
@@ -1269,17 +1373,26 @@ export function buildVoiceTurnPrompt({
 
     parts.push(...voiceToneGuardrails);
     parts.push("Task: respond as a natural spoken VC reply, or skip if you have nothing to add.");
+  } else if (!normalizedDirectAddressed) {
+    parts.push(...voiceToneGuardrails);
+    parts.push("Task: decide whether to respond now or output [SKIP] if a reply would be interruptive, low-value, or likely not meant for you.");
   } else {
     parts.push(...voiceToneGuardrails);
     parts.push("Task: respond as a natural spoken VC reply.");
   }
 
+  parts.push(
+    "Always set voiceAddressing as your best addressing guess for the incoming speaker turn: talkingTo should be \"ME\" when the speaker is likely talking to you, otherwise a participant name when reasonably clear, otherwise null."
+  );
+  parts.push("Set voiceAddressing.directedConfidence to a 0..1 confidence score for that talkingTo guess.");
+
   parts.push("Return strict JSON only.");
   parts.push("JSON format:");
   parts.push(
-    "{\"text\":\"spoken response or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"openArticleRef\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"soundboardRefs\":[],\"leaveVoiceChannel\":false,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
+    "{\"text\":\"spoken response or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"openArticleRef\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"soundboardRefs\":[],\"leaveVoiceChannel\":false,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null},\"voiceAddressing\":{\"talkingTo\":null,\"directedConfidence\":0}}"
   );
   parts.push("Keep reactionEmoji null, media null, memoryLookupQuery null, imageLookupQuery null, and voiceIntent intent none for voice-turn generation.");
+  parts.push("Always include voiceAddressing with both fields.");
   parts.push("If you are skipping, set skip=true and text to [SKIP]. Otherwise set skip=false and provide natural spoken text.");
   parts.push("Never output markdown, tags, or directive syntax like [[...]].");
 
