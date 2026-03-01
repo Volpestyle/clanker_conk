@@ -1,6 +1,8 @@
 import { readFile } from "node:fs/promises";
+import { mkdirSync, writeFileSync, existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
+import { tmpdir } from "node:os";
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
 import { estimateImageUsdCost, estimateUsdCost } from "./pricing.ts";
@@ -51,6 +53,17 @@ const CLAUDE_CODE_MAX_BUFFER_BYTES = 1024 * 1024;
 const CLAUDE_CODE_BRAIN_SESSION_MAX_TURNS = 10_000;
 const CLAUDE_CODE_MEMORY_EXTRACTION_MAX_TURNS = 1;
 const DEFAULT_MEMORY_EMBEDDING_MODEL = "text-embedding-3-small";
+const CLAUDE_CODE_ISOLATED_WORKSPACE = join(tmpdir(), "clanker-conk-brain");
+
+function ensureIsolatedWorkspace(): string {
+  const gitDir = join(CLAUDE_CODE_ISOLATED_WORKSPACE, ".git");
+  if (!existsSync(join(gitDir, "HEAD"))) {
+    mkdirSync(gitDir, { recursive: true });
+    writeFileSync(join(gitDir, "HEAD"), "ref: refs/heads/main\n");
+  }
+  return CLAUDE_CODE_ISOLATED_WORKSPACE;
+}
+
 const XAI_VIDEO_POLL_INTERVAL_MS = 2500;
 const XAI_VIDEO_TIMEOUT_MS = 4 * 60_000;
 const XAI_REQUEST_TIMEOUT_MS = 20_000;
@@ -718,7 +731,8 @@ export class LLMService {
         }),
         input: streamInput,
         timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
-        maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
+        maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES,
+        cwd: ensureIsolatedWorkspace()
       });
 
       const parsed = parseClaudeCodeStreamOutput(stdout);
@@ -759,7 +773,8 @@ export class LLMService {
           model: normalizedModel,
           maxTurns: CLAUDE_CODE_BRAIN_SESSION_MAX_TURNS
         }),
-        maxBufferBytes
+        maxBufferBytes,
+        cwd: ensureIsolatedWorkspace()
       });
       this.claudeCodeBrainModel = normalizedModel;
     }
@@ -1676,6 +1691,7 @@ export {
   buildClaudeCodeStreamInput,
   buildClaudeCodeSystemPrompt,
   buildClaudeCodeTextCliArgs,
+  createClaudeCliStreamSession,
   parseClaudeCodeJsonOutput,
   parseClaudeCodeStreamOutput
 } from "./llmClaudeCode.ts";

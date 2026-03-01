@@ -38,9 +38,12 @@ export function safeJsonParse(value, fallback = null) {
   return safeJsonParseFromString(value, fallback);
 }
 
-export function runClaudeCli({ args, input, timeoutMs, maxBufferBytes }) {
+export function runClaudeCli({ args, input, timeoutMs, maxBufferBytes, cwd = "" }) {
   return new Promise<ClaudeCliResult>((resolve, reject) => {
-    const child = spawn("claude", args, { stdio: ["pipe", "pipe", "pipe"] });
+    const spawnOptions: { stdio: ["pipe", "pipe", "pipe"]; cwd?: string } = { stdio: ["pipe", "pipe", "pipe"] };
+    const normalizedCwd = String(cwd || "").trim();
+    if (normalizedCwd) spawnOptions.cwd = normalizedCwd;
+    const child = spawn("claude", args, spawnOptions);
     let stdout = "";
     let stderr = "";
     let stdoutBytes = 0;
@@ -170,6 +173,7 @@ function buildClaudeCliCommandError({
 class ClaudeCliStreamSession {
   args: string[];
   maxBufferBytes: number;
+  cwd: string;
   child: ReturnType<typeof spawn> | null;
   queue: ClaudeCliStreamJob[];
   activeJob: ClaudeCliStreamJob | null;
@@ -177,9 +181,10 @@ class ClaudeCliStreamSession {
   closed: boolean;
   lastUsedAt: number;
 
-  constructor({ args, maxBufferBytes }: { args: string[]; maxBufferBytes: number }) {
+  constructor({ args, maxBufferBytes, cwd = "" }: { args: string[]; maxBufferBytes: number; cwd?: string }) {
     this.args = Array.isArray(args) ? [...args] : [];
     this.maxBufferBytes = Math.max(4096, Math.floor(Number(maxBufferBytes) || 1024 * 1024));
+    this.cwd = String(cwd || "").trim();
     this.child = null;
     this.queue = [];
     this.activeJob = null;
@@ -256,7 +261,9 @@ class ClaudeCliStreamSession {
     if (this.child) return;
     this.stdoutRemainder = "";
 
-    const child = spawn("claude", this.args, { stdio: ["pipe", "pipe", "pipe"] });
+    const spawnOptions: { stdio: ["pipe", "pipe", "pipe"]; cwd?: string } = { stdio: ["pipe", "pipe", "pipe"] };
+    if (this.cwd) spawnOptions.cwd = this.cwd;
+    const child = spawn("claude", this.args, spawnOptions);
     this.child = child;
 
     child.stdout.on("data", (chunk) => this.handleStdoutChunk(chunk));
@@ -373,17 +380,20 @@ class ClaudeCliStreamSession {
 
 export function createClaudeCliStreamSession({
   args,
-  maxBufferBytes = 1024 * 1024
+  maxBufferBytes = 1024 * 1024,
+  cwd = ""
 }: {
   args: string[];
   maxBufferBytes?: number;
+  cwd?: string;
 }): ClaudeCliStreamSessionLike {
   if (!Array.isArray(args) || !args.length) {
     throw new Error("claude-code stream session requires non-empty CLI args");
   }
   return new ClaudeCliStreamSession({
     args,
-    maxBufferBytes
+    maxBufferBytes,
+    cwd
   });
 }
 
@@ -671,7 +681,9 @@ function buildClaudeCodeBaseCliArgs({
   args.push(
     "--no-session-persistence",
     "--strict-mcp-config",
-    "--tools", ""
+    "--tools", "",
+    "--plugin-dir", "",
+    "--setting-sources", "project,local"
   );
   if (String(inputFormat || "").trim()) {
     args.push("--input-format", String(inputFormat).trim());

@@ -6,6 +6,7 @@ import {
   buildClaudeCodeTextCliArgs,
   buildClaudeCodeStreamInput,
   buildClaudeCodeSystemPrompt,
+  createClaudeCliStreamSession,
   parseClaudeCodeStreamOutput,
   parseClaudeCodeJsonOutput
 } from "./llm.ts";
@@ -79,6 +80,10 @@ test("buildClaudeCodeCliArgs includes stream-json flags, system prompt, and opti
   assert.equal(args.includes("--output-format"), true);
   assert.equal(args.includes("--no-session-persistence"), true);
   assert.equal(args.includes("--strict-mcp-config"), true);
+  assert.equal(args.includes("--plugin-dir"), true);
+  assert.equal(args[args.indexOf("--plugin-dir") + 1], "");
+  assert.equal(args.includes("--setting-sources"), true);
+  assert.equal(args[args.indexOf("--setting-sources") + 1], "project,local");
   assert.equal(args.includes("--system-prompt"), true);
   assert.equal(args.includes("--json-schema"), true);
   const maxTurnsIndex = args.indexOf("--max-turns");
@@ -115,6 +120,10 @@ test("buildClaudeCodeJsonCliArgs includes output-format json and trailing prompt
 
   assert.equal(args.includes("--output-format"), true);
   assert.equal(args.includes("--strict-mcp-config"), true);
+  assert.equal(args.includes("--plugin-dir"), true);
+  assert.equal(args[args.indexOf("--plugin-dir") + 1], "");
+  assert.equal(args.includes("--setting-sources"), true);
+  assert.equal(args[args.indexOf("--setting-sources") + 1], "project,local");
   const outputFormatIndex = args.indexOf("--output-format");
   assert.equal(args[outputFormatIndex + 1], "json");
 
@@ -134,6 +143,10 @@ test("buildClaudeCodeTextCliArgs builds plain text fallback args", () => {
 
   assert.equal(args.includes("--output-format"), false);
   assert.equal(args.includes("--strict-mcp-config"), true);
+  assert.equal(args.includes("--plugin-dir"), true);
+  assert.equal(args[args.indexOf("--plugin-dir") + 1], "");
+  assert.equal(args.includes("--setting-sources"), true);
+  assert.equal(args[args.indexOf("--setting-sources") + 1], "project,local");
   const modelIndex = args.indexOf("--model");
   assert.equal(args[modelIndex + 1], "opus");
   assert.equal(args[args.length - 1], "Hello there");
@@ -301,4 +314,16 @@ test("parseClaudeCodeStreamOutput prefers structured_output on result events", (
   assert.ok(parsed);
   assert.equal(parsed.text, '{"answer":"yes","confidence":0.5}');
   assert.equal(parsed.isError, false);
+});
+
+test("createClaudeCliStreamSession accepts cwd without throwing", () => {
+  const session = createClaudeCliStreamSession({
+    args: buildClaudeCodeCliArgs({ model: "haiku" }),
+    cwd: "/tmp/test-isolation"
+  });
+  assert.ok(session);
+  assert.equal(typeof session.run, "function");
+  assert.equal(typeof session.close, "function");
+  assert.equal(typeof session.isIdle, "function");
+  session.close();
 });
