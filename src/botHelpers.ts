@@ -22,7 +22,7 @@ const MAX_MEMORY_LINE_LEN = 180;
 const MAX_SOUNDBOARD_REF_LEN = 180;
 export const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
 export const MAX_IMAGE_LOOKUP_QUERY_LEN = 220;
-const MAX_REPLY_TEXT_LEN = 1200;
+const MAX_REPLY_TEXT_LEN = 3600;
 const MAX_AUTOMATION_TITLE_LEN = 90;
 const MAX_AUTOMATION_INSTRUCTION_LEN = 360;
 const MAX_AUTOMATION_TARGET_QUERY_LEN = 180;
@@ -1037,6 +1037,26 @@ export function serializeForPrompt(value, maxLen = 1200) {
 
 export function isWebSearchOptOutText(rawText) {
   return WEB_SEARCH_OPTOUT_RE.test(String(rawText || ""));
+}
+
+const DISCORD_MSG_SPLIT_LIMIT = 1900;
+
+export function splitDiscordMessage(text, maxLen = DISCORD_MSG_SPLIT_LIMIT) {
+  if (!text || text.length <= maxLen) return [text];
+  const chunks = [];
+  let remaining = text;
+  while (remaining.length > maxLen) {
+    let idx = remaining.lastIndexOf("\n\n", maxLen);
+    if (idx <= 0) idx = remaining.lastIndexOf(". ", maxLen);
+    if (idx > 0 && remaining[idx] === ".") idx += 1;
+    if (idx <= 0) idx = remaining.lastIndexOf("\n", maxLen);
+    if (idx <= 0) idx = remaining.lastIndexOf(" ", maxLen);
+    if (idx <= 0) idx = maxLen;
+    chunks.push(remaining.slice(0, idx).trimEnd());
+    remaining = remaining.slice(idx).trimStart();
+  }
+  if (remaining) chunks.push(remaining);
+  return chunks;
 }
 
 export function normalizeReactionEmojiToken(emojiToken) {

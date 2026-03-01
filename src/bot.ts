@@ -38,7 +38,8 @@ import {
   pickInitiativeMediaDirective,
   pickReplyMediaDirective,
   REPLY_OUTPUT_JSON_SCHEMA,
-  resolveMaxMediaPromptLen
+  resolveMaxMediaPromptLen,
+  splitDiscordMessage
 } from "./botHelpers.ts";
 import {
   getLocalTimeZoneLabel,
@@ -1707,12 +1708,17 @@ export class ClankerBot {
       replyText: finalText
     });
     const sendStartedAtMs = Date.now();
+    const textChunks = splitDiscordMessage(payload.content);
+    const firstPayload = { ...payload, content: textChunks[0] };
     const sent = sendAsReply
       ? await message.reply({
-          ...payload,
+          ...firstPayload,
           allowedMentions: { repliedUser: false }
         })
-      : await message.channel.send(payload);
+      : await message.channel.send(firstPayload);
+    for (let i = 1; i < textChunks.length; i++) {
+      await message.channel.send({ content: textChunks[i] });
+    }
     const sendMs = Math.max(0, Date.now() - sendStartedAtMs);
     const actionKind = sendAsReply ? "sent_reply" : "sent_message";
     const referencedMessageId = sendAsReply ? message.id : null;
@@ -3922,7 +3928,12 @@ export class ClankerBot {
           } else {
             await channel.sendTyping();
             await sleep(this.getSimulatedTypingDelayMs(350, 1100));
-            const sent = await channel.send(generationResult.payload);
+            const autoChunks = splitDiscordMessage(generationResult.payload.content);
+            const autoFirstPayload = { ...generationResult.payload, content: autoChunks[0] };
+            const sent = await channel.send(autoFirstPayload);
+            for (let i = 1; i < autoChunks.length; i++) {
+              await channel.send({ content: autoChunks[i] });
+            }
             sentMessageId = sent.id;
             summary = generationResult.summary || "posted";
             this.markSpoke();
@@ -4598,7 +4609,12 @@ export class ClankerBot {
       await channel.sendTyping();
       await sleep(this.getSimulatedTypingDelayMs(500, 1200));
 
-      const sent = await channel.send(payload);
+      const initChunks = splitDiscordMessage(payload.content);
+      const initFirstPayload = { ...payload, content: initChunks[0] };
+      const sent = await channel.send(initFirstPayload);
+      for (let i = 1; i < initChunks.length; i++) {
+        await channel.send({ content: initChunks[i] });
+      }
 
       this.markSpoke();
       this.store.recordMessage({

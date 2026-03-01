@@ -407,16 +407,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reservedConcurrencySlot = true;
       }
 
-      connection = joinVoiceChannel({
-        channelId: memberVoiceChannel.id,
-        guildId: message.guild.id,
-        adapterCreator: message.guild.voiceAdapterCreator,
-        selfDeaf: false,
-        selfMute: false
-      });
-
-      await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
-
+      // --- Pre-warm: connect realtime API before joining Discord VC ---
       const initialSoundboardCandidateInfo = await manager.resolveSoundboardCandidates({
         settings,
         guild: message.guild
@@ -511,6 +502,17 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           outputSampleRateHz: realtimeOutputSampleRateHz
         });
       }
+
+      // --- Realtime API is warm — now join Discord VC ---
+      connection = joinVoiceChannel({
+        channelId: memberVoiceChannel.id,
+        guildId: message.guild.id,
+        adapterCreator: message.guild.voiceAdapterCreator,
+        selfDeaf: false,
+        selfMute: false
+      });
+
+      await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
 
       audioPlayer = createAudioPlayer();
       botAudioStream = createBotAudioPlaybackStream();

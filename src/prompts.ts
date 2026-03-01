@@ -248,6 +248,7 @@ export function buildSystemPrompt(settings) {
       : getPromptMemoryDisabledLine(settings),
     getPromptImpossibleActionLine(settings),
     `=== LIMITS ===`,
+    `Discord messages cap at ~1800 characters. Keep replies under that when possible; if you genuinely need more space your message will be automatically split across multiple posts.`,
     ...buildHardLimitsSection(settings),
     `=== OUTPUT ===`,
     getPromptSkipLine(settings)
