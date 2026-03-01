@@ -34,8 +34,6 @@ const OPEN_ARTICLE_RESULTS_PER_ROW = 5;
 const OPEN_ARTICLE_ROW_REF_RE = /^r(\d+):(\d+)$/i;
 const OPEN_ARTICLE_INDEX_REF_RE = /^\d+$/;
 const OPEN_ARTICLE_URL_RE = /^https?:\/\//i;
-const VOICE_MEMORY_CONTEXT_CACHE_TTL_MS = 20 * 60_000;
-const VOICE_MEMORY_CONTEXT_CACHE_MAX_ENTRIES = 200;
 const VOICE_MEMORY_CONTEXT_MAX_FACTS = 24;
 const VOICE_MEMORY_PREFETCH_WAIT_MS = 120;
 const VOICE_MEMORY_FOLLOWUP_WAIT_MS = 240;
@@ -46,13 +44,6 @@ type VoiceMemorySlice = {
   userFacts: VoiceMemoryFact[];
   relevantFacts: VoiceMemoryFact[];
 };
-
-type VoiceMemoryContextCacheEntry = {
-  updatedAtMs: number;
-  slice: VoiceMemorySlice;
-};
-
-const voiceMemoryContextCache = new Map<string, VoiceMemoryContextCacheEntry>();
 
 function emptyVoiceMemorySlice(): VoiceMemorySlice {
   return {
@@ -82,113 +73,6 @@ function normalizeVoiceMemorySlice(value: unknown): VoiceMemorySlice {
     userFacts: normalizeVoiceMemoryFactList(value.userFacts),
     relevantFacts: normalizeVoiceMemoryFactList(value.relevantFacts)
   };
-}
-
-function buildVoiceMemoryFactKey(row: VoiceMemoryFact, index: number): string {
-  const id = Number(row.id);
-  if (Number.isInteger(id) && id > 0) return `id:${id}`;
-  const subject = String(row.subject || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-  const fact = String(row.fact || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .toLowerCase();
-  if (subject || fact) return `${subject}|${fact}`.slice(0, 420);
-  return `idx:${index}`;
-}
-
-function mergeVoiceMemoryFactLists(primary: VoiceMemoryFact[], secondary: VoiceMemoryFact[]): VoiceMemoryFact[] {
-  const merged: VoiceMemoryFact[] = [];
-  const seen = new Set<string>();
-  for (const list of [primary, secondary]) {
-    for (const row of list) {
-      const key = buildVoiceMemoryFactKey(row, merged.length);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      merged.push(row);
-      if (merged.length >= VOICE_MEMORY_CONTEXT_MAX_FACTS) return merged;
-    }
-  }
-  return merged;
-}
-
-function mergeVoiceMemorySlices(base: VoiceMemorySlice, fresh: VoiceMemorySlice): VoiceMemorySlice {
-  return {
-    userFacts: mergeVoiceMemoryFactLists(fresh.userFacts, base.userFacts),
-    relevantFacts: mergeVoiceMemoryFactLists(fresh.relevantFacts, base.relevantFacts)
-  };
-}
-
-function buildVoiceMemoryContextCacheKey({
-  sessionId,
-  guildId,
-  channelId,
-  userId
-}: {
-  sessionId?: string | null;
-  guildId?: string | null;
-  channelId?: string | null;
-  userId?: string | null;
-}): string {
-  const normalizedSessionId = String(sessionId || "").trim();
-  if (normalizedSessionId) return `session:${normalizedSessionId}`;
-
-  const parts = [
-    String(guildId || "").trim(),
-    String(channelId || "").trim(),
-    String(userId || "").trim()
-  ];
-  const joined = parts.filter(Boolean).join("|");
-  return joined ? `scope:${joined}` : "";
-}
-
-function pruneVoiceMemoryContextCache(nowMs = Date.now()) {
-  for (const [key, entry] of voiceMemoryContextCache.entries()) {
-    if (nowMs - Number(entry?.updatedAtMs || 0) > VOICE_MEMORY_CONTEXT_CACHE_TTL_MS) {
-      voiceMemoryContextCache.delete(key);
-    }
-  }
-  if (voiceMemoryContextCache.size <= VOICE_MEMORY_CONTEXT_CACHE_MAX_ENTRIES) return;
-
-  const sortedKeys = [...voiceMemoryContextCache.entries()]
-    .sort((a, b) => Number(a[1]?.updatedAtMs || 0) - Number(b[1]?.updatedAtMs || 0))
-    .map(([key]) => key);
-
-  while (voiceMemoryContextCache.size > VOICE_MEMORY_CONTEXT_CACHE_MAX_ENTRIES) {
-    const oldestKey = sortedKeys.shift();
-    if (!oldestKey) break;
-    voiceMemoryContextCache.delete(oldestKey);
-  }
-}
-
-function readVoiceMemoryContextCache(cacheKey: string): VoiceMemorySlice {
-  if (!cacheKey) return emptyVoiceMemorySlice();
-  const nowMs = Date.now();
-  pruneVoiceMemoryContextCache(nowMs);
-  const entry = voiceMemoryContextCache.get(cacheKey);
-  if (!entry) return emptyVoiceMemorySlice();
-  if (nowMs - Number(entry.updatedAtMs || 0) > VOICE_MEMORY_CONTEXT_CACHE_TTL_MS) {
-    voiceMemoryContextCache.delete(cacheKey);
-    return emptyVoiceMemorySlice();
-  }
-  return normalizeVoiceMemorySlice(entry.slice);
-}
-
-function writeVoiceMemoryContextCache(cacheKey: string, freshSlice: VoiceMemorySlice) {
-  if (!cacheKey) return;
-  const normalizedFresh = normalizeVoiceMemorySlice(freshSlice);
-  const hasFreshFacts = normalizedFresh.userFacts.length > 0 || normalizedFresh.relevantFacts.length > 0;
-  if (!hasFreshFacts) return;
-
-  const existing = readVoiceMemoryContextCache(cacheKey);
-  const merged = mergeVoiceMemorySlices(existing, normalizedFresh);
-  voiceMemoryContextCache.set(cacheKey, {
-    updatedAtMs: Date.now(),
-    slice: merged
-  });
-  pruneVoiceMemoryContextCache();
 }
 
 async function resolveVoiceMemorySliceWithTimeout({
@@ -516,14 +400,8 @@ export async function generateVoiceTurnReply(runtime, {
     .filter(Boolean)
     .slice(-6);
 
-  const memoryCacheKey = buildVoiceMemoryContextCacheKey({
-    sessionId,
-    guildId,
-    channelId,
-    userId
-  });
   const memoryEnabled = Boolean(settings?.memory?.enabled);
-  let promptMemorySlice = memoryEnabled ? readVoiceMemoryContextCache(memoryCacheKey) : emptyVoiceMemorySlice();
+  let promptMemorySlice = emptyVoiceMemorySlice();
   const memorySlicePromise: Promise<VoiceMemorySlice> | null =
     memoryEnabled && typeof runtime.loadPromptMemorySlice === "function"
       ? runtime
@@ -540,14 +418,10 @@ export async function generateVoiceTurnReply(runtime, {
             },
             source: "voice_stt_pipeline_generation"
           })
-          .then((slice) => {
-            const normalizedSlice = normalizeVoiceMemorySlice(slice);
-            writeVoiceMemoryContextCache(memoryCacheKey, normalizedSlice);
-            return normalizeVoiceMemorySlice(mergeVoiceMemorySlices(promptMemorySlice, normalizedSlice));
-          })
-          .catch(() => promptMemorySlice)
+          .then((slice) => normalizeVoiceMemorySlice(slice))
+          .catch(() => emptyVoiceMemorySlice())
       : null;
-  if (!promptMemorySlice.userFacts.length && !promptMemorySlice.relevantFacts.length && memorySlicePromise) {
+  if (memorySlicePromise) {
     promptMemorySlice = await resolveVoiceMemorySliceWithTimeout({
       memorySlicePromise,
       fallbackSlice: promptMemorySlice,

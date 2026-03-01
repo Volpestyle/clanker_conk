@@ -203,6 +203,7 @@ import {
   VOICE_TURN_MIN_ASR_CLIP_MS,
   VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS
 } from "./voiceSessionManager.constants.ts";
+import { loadPromptMemorySliceFromMemory } from "../memory/promptMemorySlice.ts";
 
 export function resolveVoiceThoughtTopicalityBias({
   silenceMs = 0,
@@ -6620,42 +6621,37 @@ export class VoiceSessionManager {
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     if (!normalizedUserId || !normalizedTranscript) return empty;
 
-    if (typeof this.memory.buildPromptMemorySlice !== "function") {
-      return empty;
-    }
-
-    try {
-      const slice = await this.memory.buildPromptMemorySlice({
-        userId: normalizedUserId,
+    const slice = await loadPromptMemorySliceFromMemory({
+      settings,
+      memory: this.memory,
+      userId: normalizedUserId,
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      queryText: normalizedTranscript,
+      trace: {
         guildId: session.guildId,
         channelId: session.textChannelId,
-        queryText: normalizedTranscript,
-        settings,
-        trace: {
+        userId: normalizedUserId
+      },
+      source: "voice_realtime_instruction_context",
+      onError: ({ error }) => {
+        this.store.logAction({
+          kind: "voice_error",
           guildId: session.guildId,
           channelId: session.textChannelId,
           userId: normalizedUserId,
-          source: "voice_realtime_instruction_context"
-        }
-      });
+          content: `voice_realtime_memory_slice_failed: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id
+          }
+        });
+      }
+    });
 
-      return {
-        userFacts: Array.isArray(slice?.userFacts) ? slice.userFacts : [],
-        relevantFacts: Array.isArray(slice?.relevantFacts) ? slice.relevantFacts : []
-      };
-    } catch (error) {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: normalizedUserId,
-        content: `voice_realtime_memory_slice_failed: ${String(error?.message || error)}`,
-        metadata: {
-          sessionId: session.id
-        }
-      });
-      return empty;
-    }
+    return {
+      userFacts: slice.userFacts,
+      relevantFacts: slice.relevantFacts
+    };
   }
 
   scheduleOpenAiRealtimeInstructionRefresh({

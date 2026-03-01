@@ -94,6 +94,7 @@ import {
   resolveOperationalChannel,
   sendToChannel
 } from "./voice/voiceOperationalMessaging.ts";
+import { loadPromptMemorySliceFromMemory } from "./memory/promptMemorySlice.ts";
 
 const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
@@ -3258,46 +3259,25 @@ export class ClankerBot {
     trace = {},
     source = "prompt_memory_slice"
   }) {
-    const empty = { userFacts: [], relevantFacts: [], relevantMessages: [] };
-    if (!settings?.memory?.enabled || !this.memory?.buildPromptMemorySlice) return empty;
-
-    const normalizedGuildId = String(guildId || "").trim();
-    if (!normalizedGuildId) return empty;
-    const normalizedUserId = String(userId || "").trim() || null;
-    const normalizedChannelId = String(channelId || "").trim() || null;
-    const normalizedQuery = String(queryText || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 420);
-
-    try {
-      const slice = await this.memory.buildPromptMemorySlice({
-        userId: normalizedUserId,
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        queryText: normalizedQuery,
-        settings,
-        trace: {
-          ...trace,
-          source
-        }
-      });
-
-      return {
-        userFacts: Array.isArray(slice?.userFacts) ? slice.userFacts : [],
-        relevantFacts: Array.isArray(slice?.relevantFacts) ? slice.relevantFacts : [],
-        relevantMessages: Array.isArray(slice?.relevantMessages) ? slice.relevantMessages : []
-      };
-    } catch (error) {
-      this.store.logAction({
-        kind: "bot_error",
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        userId: normalizedUserId,
-        content: `${source}: ${String(error?.message || error)}`
-      });
-      return empty;
-    }
+    return await loadPromptMemorySliceFromMemory({
+      settings,
+      memory: this.memory,
+      userId,
+      guildId,
+      channelId,
+      queryText,
+      trace,
+      source,
+      onError: ({ error, context }) => {
+        this.store.logAction({
+          kind: "bot_error",
+          guildId: context.guildId,
+          channelId: context.channelId,
+          userId: context.userId,
+          content: `${context.source}: ${String(error?.message || error)}`
+        });
+      }
+    });
   }
 
   buildMediaMemoryFacts({ userFacts = [], relevantFacts = [], maxItems = 5 } = {}) {

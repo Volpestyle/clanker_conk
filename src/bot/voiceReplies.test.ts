@@ -941,7 +941,7 @@ test("generateVoiceTurnReply does not block on unresolved memory lookup", async 
   assert.equal(completed, "quick reply");
 });
 
-test("generateVoiceTurnReply reuses cached memory context across turns", async () => {
+test("generateVoiceTurnReply fetches fresh memory context each turn", async () => {
   let memoryLoadCalls = 0;
   const { bot, generationPayloads } = createVoiceBot({
     generationSequence: [
@@ -994,8 +994,11 @@ test("generateVoiceTurnReply reuses cached memory context across turns", async (
   ]);
 
   assert.equal(String(secondReply?.text || ""), "second pass");
+  const firstPrompt = String(generationPayloads[0]?.userPrompt || "");
   const secondPrompt = String(generationPayloads[1]?.userPrompt || "");
-  assert.equal(secondPrompt.toLowerCase().includes("likes ramen"), true);
+  assert.equal(memoryLoadCalls, 2);
+  assert.equal(firstPrompt.toLowerCase().includes("likes ramen"), true);
+  assert.equal(secondPrompt.toLowerCase().includes("likes ramen"), false);
 });
 
 test("generateVoiceTurnReply triggers voice screen-share link offer from tool-call field", async () => {
