@@ -6,7 +6,8 @@ import {
   type VoiceEvent,
   type RealtimeState,
   type VoiceMembershipEvent,
-  type SessionLatency
+  type SessionLatency,
+  type LatencyTurnEntry
 } from "../hooks/useVoiceSSE";
 import { useVoiceHistory } from "../hooks/useVoiceHistory";
 
@@ -399,12 +400,10 @@ const LATENCY_STAGES = [
 function LatencyPanel({ latency }: { latency: SessionLatency }) {
   if (!latency || latency.recentTurns.length === 0) return null;
 
-  const { recentTurns, averages, turnCount } = latency;
-  const maxTotal = Math.max(...recentTurns.map((t) => Number(t.totalMs) || 0), 1);
+  const { averages, turnCount } = latency;
 
   return (
-    <Section title="Pipeline Latency" badge={`${turnCount} turn${turnCount !== 1 ? "s" : ""}`}>
-      {/* Average pills */}
+    <Section title="Pipeline Latency" badge={`${turnCount} turn${turnCount !== 1 ? "s" : ""}`} defaultOpen={false}>
       <div className="vm-detail-grid">
         {LATENCY_STAGES.map((s) => {
           const val = averages[s.key];
@@ -418,8 +417,6 @@ function LatencyPanel({ latency }: { latency: SessionLatency }) {
           warn={averages.totalMs != null && averages.totalMs > 2000}
         />
       </div>
-
-      {/* Color legend */}
       <div className="vm-latency-legend">
         {LATENCY_STAGES.map((s) => (
           <span key={s.key} className="vm-latency-legend-item">
@@ -428,38 +425,78 @@ function LatencyPanel({ latency }: { latency: SessionLatency }) {
           </span>
         ))}
       </div>
+    </Section>
+  );
+}
 
-      {/* Stacked bar chart */}
-      <div className="vm-latency-chart">
-        {recentTurns.map((turn, i) => {
-          const total = Number(turn.totalMs) || 0;
+function InlineLatencyBar({ entry }: { entry: LatencyTurnEntry }) {
+  const total = Number(entry.totalMs) || 0;
+  return (
+    <div className="vm-latency-inline">
+      <div className="vm-latency-bar-track">
+        {LATENCY_STAGES.map((s) => {
+          const val = Number(entry[s.key]) || 0;
+          if (val <= 0) return null;
+          const pct = (val / Math.max(total, 1)) * 100;
           return (
-            <div key={`${turn.at}-${i}`} className="vm-latency-row">
-              <span className="vm-latency-time">{relativeTime(turn.at)}</span>
-              <div className="vm-latency-bar-track">
-                {LATENCY_STAGES.map((s) => {
-                  const val = Number(turn[s.key]) || 0;
-                  if (val <= 0) return null;
-                  const pct = (val / maxTotal) * 100;
-                  return (
-                    <div
-                      key={s.key}
-                      className="vm-latency-segment"
-                      style={{ width: `${pct}%`, background: s.color }}
-                      title={`${s.label}: ${val}ms`}
-                    />
-                  );
-                })}
-              </div>
-              <span className={`vm-latency-total ${total > 2000 ? "vm-latency-total-warn" : ""}`}>
-                {total}ms
-              </span>
-            </div>
+            <div
+              key={s.key}
+              className="vm-latency-segment"
+              style={{ width: `${pct}%`, background: s.color }}
+              title={`${s.label}: ${val}ms`}
+            />
           );
         })}
       </div>
-    </Section>
+      <div className="vm-latency-inline-labels">
+        {LATENCY_STAGES.map((s) => {
+          const val = Number(entry[s.key]) || 0;
+          if (val <= 0) return null;
+          return (
+            <span key={s.key} className="vm-latency-inline-label" style={{ color: s.color }}>
+              {s.label} {val}ms
+            </span>
+          );
+        })}
+        <span className={`vm-latency-inline-total ${total > 2000 ? "vm-latency-total-warn" : ""}`}>
+          = {total}ms
+        </span>
+      </div>
+    </div>
   );
+}
+
+function matchLatencyToTurns(
+  turns: { role: string; at: string | null }[],
+  latencyTurns: LatencyTurnEntry[]
+): Map<number, LatencyTurnEntry> {
+  const result = new Map<number, LatencyTurnEntry>();
+  if (latencyTurns.length === 0) return result;
+  const used = new Set<number>();
+
+  for (let i = 0; i < turns.length; i++) {
+    const turn = turns[i];
+    if (turn.role !== "assistant" || !turn.at) continue;
+    const turnMs = new Date(turn.at).getTime();
+    if (!Number.isFinite(turnMs)) continue;
+
+    let bestIdx = -1;
+    let bestDiff = Infinity;
+    for (let j = 0; j < latencyTurns.length; j++) {
+      if (used.has(j)) continue;
+      const entryMs = new Date(latencyTurns[j].at).getTime();
+      const diff = Math.abs(entryMs - turnMs);
+      if (diff < bestDiff && diff < 30_000) {
+        bestDiff = diff;
+        bestIdx = j;
+      }
+    }
+    if (bestIdx >= 0) {
+      result.set(i, latencyTurns[bestIdx]);
+      used.add(bestIdx);
+    }
+  }
+  return result;
 }
 
 // ---- Realtime Connection Detail ----
@@ -586,7 +623,7 @@ function MembershipChanges({ session }: { session: VoiceSession }) {
 
 // ---- Conversation Context ----
 
-function ConversationContext({ session }: { session: VoiceSession }) {
+function ConversationContext({ session, latencyTurns }: { session: VoiceSession; latencyTurns: LatencyTurnEntry[] }) {
   const turns = session.recentTurns || [];
   const modelContext = session.conversation?.modelContext || null;
   const generation = modelContext?.generation || null;
@@ -606,7 +643,19 @@ function ConversationContext({ session }: { session: VoiceSession }) {
     return () => clearInterval(id);
   }, []);
 
+  const [expandedLatency, setExpandedLatency] = useState<Set<number>>(new Set());
+  const latencyMap = useMemo(() => matchLatencyToTurns(turns, latencyTurns), [turns, latencyTurns]);
+
   if (turns.length === 0) return null;
+
+  const toggleLatency = (idx: number) => {
+    setExpandedLatency((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  };
 
   return (
     <Section title="Conversation" badge={turns.length}>
@@ -619,17 +668,27 @@ function ConversationContext({ session }: { session: VoiceSession }) {
         </div>
       </div>
       <div className="vm-convo-feed">
-        {turns.map((t, i) => (
-          <div key={i} className={`vm-convo-msg vm-convo-${t.role}`}>
-            <div className="vm-convo-meta">
-              <span className={`vm-convo-role vm-convo-role-${t.role}`}>
-                {t.role === "assistant" ? "bot" : t.speakerName || t.role}
-              </span>
-              {t.at && <span className="vm-convo-time">{relativeTime(t.at)}</span>}
+        {turns.map((t, i) => {
+          const latencyEntry = latencyMap.get(i) || null;
+          const showBar = expandedLatency.has(i);
+          return (
+            <div key={i} className={`vm-convo-msg vm-convo-${t.role}`}>
+              <div className="vm-convo-meta">
+                <span className={`vm-convo-role vm-convo-role-${t.role}`}>
+                  {t.role === "assistant" ? "bot" : t.speakerName || t.role}
+                </span>
+                {t.at && <span className="vm-convo-time">{relativeTime(t.at)}</span>}
+                {latencyEntry && (
+                  <button className="vm-latency-toggle" onClick={() => toggleLatency(i)}>
+                    {showBar ? "hide latency" : `${Number(latencyEntry.totalMs) || 0}ms`}
+                  </button>
+                )}
+              </div>
+              <div className="vm-convo-text">{t.text || "(empty)"}</div>
+              {showBar && latencyEntry && <InlineLatencyBar entry={latencyEntry} />}
             </div>
-            <div className="vm-convo-text">{t.text || "(empty)"}</div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </Section>
   );
@@ -870,7 +929,7 @@ function SessionCard({ session }: { session: VoiceSession }) {
           <MembershipChanges session={session} />
 
           {/* Conversation context */}
-          <ConversationContext session={session} />
+          <ConversationContext session={session} latencyTurns={session.latency?.recentTurns || []} />
 
           {/* Stream watch */}
           <StreamWatchDetail session={session} />

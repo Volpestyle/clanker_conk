@@ -2562,6 +2562,56 @@ td .kind-badge + .kind-badge {
   font-weight: 600;
 }
 
+.vm-latency-toggle {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 5px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: none;
+  color: var(--ink-3);
+  font-size: 0.62rem;
+  font-family: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: all 120ms ease;
+  line-height: 1.5;
+}
+
+.vm-latency-toggle:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.vm-latency-inline {
+  margin-top: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.vm-latency-inline .vm-latency-bar-track {
+  height: 10px;
+}
+
+.vm-latency-inline-labels {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 0.62rem;
+  font-family: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+.vm-latency-inline-label {
+  opacity: 0.85;
+}
+
+.vm-latency-inline-total {
+  color: var(--ink-2);
+  font-weight: 600;
+}
+
 /* -- debug toggle -- */
 
 .vm-debug-toggle {
