@@ -25,6 +25,22 @@ export type VoiceActiveCapture = {
   ageMs: number | null;
 };
 
+export type VoiceVisualFeedEntry = {
+  text: string;
+  at: string | null;
+  provider: string | null;
+  model: string | null;
+  speakerName: string | null;
+};
+
+export type VoiceBrainContextPayload = {
+  prompt: string;
+  notes: string[];
+  lastAt: string | null;
+  provider: string | null;
+  model: string | null;
+} | null;
+
 export type VoiceMembershipEvent = {
   userId: string;
   displayName: string;
@@ -128,7 +144,18 @@ export type VoiceSession = {
     requestedByUserId: string | null;
     lastFrameAt: string | null;
     lastCommentaryAt: string | null;
+    latestFrameAt: string | null;
+    latestFrameMimeType: string | null;
+    latestFrameApproxBytes: number;
+    acceptedFrameCountInWindow: number;
+    frameWindowStartedAt: string | null;
     ingestedFrameCount: number;
+    lastBrainContextAt: string | null;
+    lastBrainContextProvider: string | null;
+    lastBrainContextModel: string | null;
+    brainContextCount: number;
+    visualFeed: VoiceVisualFeedEntry[];
+    brainContextPayload: VoiceBrainContextPayload;
   };
   stt: { pendingTurns: number; contextMessages: number } | null;
   realtime: {

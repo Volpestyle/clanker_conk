@@ -93,6 +93,13 @@ function formatDurationMs(ms: number | null): string {
   return `${seconds}s`;
 }
 
+function formatApproxBytes(bytes: number | null | undefined): string {
+  const normalized = Math.max(0, Number(bytes) || 0);
+  if (normalized < 1024) return `${normalized} B`;
+  if (normalized < 1024 * 1024) return `${(normalized / 1024).toFixed(1)} KB`;
+  return `${(normalized / (1024 * 1024)).toFixed(2)} MB`;
+}
+
 function resolveWakeIndicator(session: VoiceSession): {
   active: boolean;
   stateLabel: "Awake" | "Listening";
@@ -538,16 +545,96 @@ function ConversationContext({ session }: { session: VoiceSession }) {
 
 function StreamWatchDetail({ session }: { session: VoiceSession }) {
   const sw = session.streamWatch;
-  if (!sw.active) return null;
+  const visualFeed = Array.isArray(sw.visualFeed) ? sw.visualFeed : [];
+  const brainContextPayload = sw.brainContextPayload;
+  const hasBrainPayloadNotes = Boolean(
+    brainContextPayload &&
+      Array.isArray(brainContextPayload.notes) &&
+      brainContextPayload.notes.length > 0
+  );
+  const hasAnyStreamWatchData =
+    Boolean(sw.active) ||
+    Number(sw.ingestedFrameCount || 0) > 0 ||
+    visualFeed.length > 0 ||
+    hasBrainPayloadNotes;
+  if (!hasAnyStreamWatchData) return null;
 
   return (
-    <Section title="Stream Watch" badge="active">
+    <Section title="Stream Watch" badge={sw.active ? "active" : "idle"}>
       <div className="vm-detail-grid">
         <Stat label="Target" value={sw.targetUserId?.slice(0, 8) || "none"} />
         <Stat label="Frames" value={sw.ingestedFrameCount} />
+        <Stat label="Window Frames" value={Number(sw.acceptedFrameCountInWindow || 0)} />
+        {sw.frameWindowStartedAt && <Stat label="Window Started" value={relativeTime(sw.frameWindowStartedAt)} />}
         {sw.lastFrameAt && <Stat label="Last Frame" value={relativeTime(sw.lastFrameAt)} />}
+        {sw.latestFrameAt && <Stat label="Latest Frame" value={relativeTime(sw.latestFrameAt)} />}
+        {sw.latestFrameMimeType && <Stat label="Frame Mime" value={sw.latestFrameMimeType} />}
+        {Number(sw.latestFrameApproxBytes || 0) > 0 && (
+          <Stat label="Frame Size" value={formatApproxBytes(sw.latestFrameApproxBytes)} />
+        )}
         {sw.lastCommentaryAt && <Stat label="Last Commentary" value={relativeTime(sw.lastCommentaryAt)} />}
+        {sw.lastBrainContextAt && <Stat label="Last Brain Note" value={relativeTime(sw.lastBrainContextAt)} />}
+        <Stat label="Brain Notes" value={Number(sw.brainContextCount || visualFeed.length)} />
+        {(sw.lastBrainContextProvider || sw.lastBrainContextModel) && (
+          <Stat
+            label="Brain Model"
+            value={[sw.lastBrainContextProvider, sw.lastBrainContextModel].filter(Boolean).join(" / ")}
+          />
+        )}
       </div>
+
+      {visualFeed.length > 0 && (
+        <>
+          <span className="vm-mini-label">Raw Visual Analysis Feed</span>
+          <div className="vm-convo-feed">
+            {visualFeed.slice(-10).reverse().map((entry, index) => (
+              <div key={`${entry.at || "na"}-${index}`} className="vm-convo-msg vm-convo-user">
+                <div className="vm-convo-meta">
+                  <span className="vm-convo-role vm-convo-role-user">
+                    {entry.speakerName || "visual"}
+                  </span>
+                  {(entry.provider || entry.model) && (
+                    <span className="vm-convo-time">
+                      {[entry.provider, entry.model].filter(Boolean).join(" / ")}
+                    </span>
+                  )}
+                  {entry.at && <span className="vm-convo-time">{relativeTime(entry.at)}</span>}
+                </div>
+                <div className="vm-convo-text">{entry.text}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {brainContextPayload && (
+        <>
+          <span className="vm-mini-label">Brain Context Payload</span>
+          <div className="vm-convo-context-summary">
+            <div className="vm-convo-meta">
+              <span className="vm-convo-role vm-convo-role-assistant">Prompt</span>
+              {brainContextPayload.lastAt && (
+                <span className="vm-convo-time">{relativeTime(brainContextPayload.lastAt)}</span>
+              )}
+              {(brainContextPayload.provider || brainContextPayload.model) && (
+                <span className="vm-convo-time">
+                  {[brainContextPayload.provider, brainContextPayload.model].filter(Boolean).join(" / ")}
+                </span>
+              )}
+            </div>
+            <div className="vm-convo-text">{brainContextPayload.prompt || "(none)"}</div>
+          </div>
+          {Array.isArray(brainContextPayload.notes) && brainContextPayload.notes.length > 0 && (
+            <div className="vm-convo-feed">
+              {brainContextPayload.notes.map((note, index) => (
+                <div key={`${index}-${note.slice(0, 18)}`} className="vm-convo-msg vm-convo-assistant">
+                  <div className="vm-convo-text">{note}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
     </Section>
   );
 }
