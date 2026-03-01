@@ -1,6 +1,7 @@
 import { assertPublicUrl, isBlockedHost } from "./urlSafety.ts";
 import { clamp } from "./utils.ts";
 import { normalizeWhitespaceText } from "./normalization/text.ts";
+import { isRedirectStatus } from "./retry.ts";
 
 const DISCOVERY_TIMEOUT_MS = 9_000;
 const DISCOVERY_MAX_REDIRECTS = 5;
@@ -683,11 +684,6 @@ async function fetchDiscoveryResponse({ url, accept, maxRedirects = DISCOVERY_MA
   }
 
   throw new Error(`too many redirects for discovery URL: ${url}`);
-}
-
-function isRedirectStatus(status) {
-  const code = Number(status);
-  return code === 301 || code === 302 || code === 303 || code === 307 || code === 308;
 }
 
 function parseFeed(xml, { maxItems = 10 } = {}) {

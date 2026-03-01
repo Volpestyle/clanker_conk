@@ -16,25 +16,21 @@ import {
   parseVideoTarget,
   type VideoTarget
 } from "./video/videoTargets.ts";
+import {
+  getRetryDelayMs,
+  isRetryableFetchError,
+  isRedirectStatus,
+  shouldRetryHttpStatus,
+  withAttemptCount
+} from "./retry.ts";
 
 const REQUEST_TIMEOUT_MS = 5_500;
 const MAX_FETCH_ATTEMPTS = 3;
 const MAX_FETCH_REDIRECTS = 5;
-const RETRY_BASE_DELAY_MS = 180;
 const CACHE_TTL_MS = 30 * 60 * 1000;
 const YT_DLP_TIMEOUT_MS = 50_000;
 const FFMPEG_TIMEOUT_MS = 45_000;
 const MAX_COMMAND_OUTPUT_BYTES = 8 * 1024 * 1024;
-const RETRYABLE_HTTP_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
-const RETRYABLE_FETCH_ERROR_CODES = new Set([
-  "ECONNRESET",
-  "ENOTFOUND",
-  "ETIMEDOUT",
-  "EAI_AGAIN",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_BODY_TIMEOUT"
-]);
 const VIDEO_USER_AGENT =
   "clanker-conk/0.2 (+video-context; https://github.com/Volpestyle/clanker_conk)";
 
@@ -1056,11 +1052,6 @@ async function fetchPublicResponseWithRedirects({ url, accept, maxRedirects = MA
   throw new Error(`too many redirects for video URL: ${url}`);
 }
 
-function isRedirectStatus(status) {
-  const code = Number(status);
-  return code === 301 || code === 302 || code === 303 || code === 307 || code === 308;
-}
-
 async function runCommand({ command, args, timeoutMs = 30_000 }) {
   return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
     const child = spawn(command, args, {
@@ -1123,50 +1114,6 @@ async function runCommand({ command, args, timeoutMs = 30_000 }) {
       });
     });
   });
-}
-
-function shouldRetryHttpStatus(status) {
-  return RETRYABLE_HTTP_STATUS.has(Number(status));
-}
-
-function isRetryableFetchError(error) {
-  const code = String(error?.code || error?.cause?.code || "").toUpperCase();
-  if (RETRYABLE_FETCH_ERROR_CODES.has(code)) return true;
-
-  const name = String(error?.name || "");
-  if (name === "AbortError" || name === "TimeoutError") return true;
-
-  const message = String(error?.message || "").toLowerCase();
-  return message.includes("timeout") || message.includes("timed out") || message.includes("fetch failed");
-}
-
-function withAttemptCount(error, attempts) {
-  if (error instanceof Error) {
-    const errorWithAttempts: ErrorWithAttempts = error;
-    errorWithAttempts.attempts = Number(attempts || 1);
-    return errorWithAttempts;
-  }
-
-  if (error && typeof error === "object") {
-    try {
-      Object.defineProperty(error, "attempts", {
-        value: Number(attempts || 1),
-        writable: true,
-        configurable: true
-      });
-      return error;
-    } catch {
-      // Fall through to wrapped error.
-    }
-  }
-
-  const wrapped: ErrorWithAttempts = new Error(String(error?.message || error || "unknown error"));
-  wrapped.attempts = Number(attempts || 1);
-  return wrapped;
-}
-
-function getRetryDelayMs(attempt) {
-  return Math.min(900, RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1));
 }
 
 function safeNumber(value) {

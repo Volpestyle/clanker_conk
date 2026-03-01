@@ -287,6 +287,43 @@ test("requestJoin requires API keys for realtime runtime modes", async () => {
   });
   assert.equal(geminiResult, true);
   assert.equal(gemini.operationalMessages.at(-1)?.reason, "gemini_api_key_missing");
+
+  const elevenLabs = createManager();
+  const elevenLabsResult = await requestJoin(elevenLabs.manager, {
+    message: createMessage(),
+    settings: baseSettings({
+      voice: {
+        mode: "elevenlabs_realtime",
+        elevenLabsRealtime: {
+          agentId: "agent_123"
+        }
+      }
+    })
+  });
+  assert.equal(elevenLabsResult, true);
+  assert.equal(elevenLabs.operationalMessages.at(-1)?.reason, "elevenlabs_api_key_missing");
+});
+
+test("requestJoin requires ElevenLabs agent id when mode is elevenlabs_realtime", async () => {
+  const { manager, operationalMessages } = createManager({
+    appConfig: {
+      elevenLabsApiKey: "el-key"
+    }
+  });
+  const result = await requestJoin(manager, {
+    message: createMessage(),
+    settings: baseSettings({
+      voice: {
+        mode: "elevenlabs_realtime",
+        elevenLabsRealtime: {
+          agentId: ""
+        }
+      }
+    })
+  });
+
+  assert.equal(result, true);
+  assert.equal(operationalMessages.at(-1)?.reason, "elevenlabs_agent_id_missing");
 });
 
 test("requestJoin validates stt pipeline dependencies", async () => {

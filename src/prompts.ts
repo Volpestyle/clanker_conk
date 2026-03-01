@@ -1181,10 +1181,9 @@ export function buildVoiceTurnPrompt({
       }.`
     );
     parts.push(
-      "Join-window bias: if this turn is a short greeting/check-in (for example hi/hey/yo/what's up), reply with a brief acknowledgement instead of [SKIP] unless clearly aimed at another human."
+      "Join-window bias: if this turn is a short greeting/check-in (for example hi/hey/yo/sup/what's up), default to a brief acknowledgement instead of [SKIP] even in multi-participant channels, unless clearly aimed at another human."
     );
   }
-
   if (normalizedSessionTiming) {
     parts.push(
       [

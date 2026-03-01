@@ -3,6 +3,12 @@ import { assertPublicUrl } from "./urlSafety.ts";
 import { clamp } from "./utils.ts";
 import { normalizeWhitespaceText } from "./normalization/text.ts";
 import { sleep } from "./normalization/time.ts";
+import {
+  getRetryDelayMs,
+  isRetryableFetchError,
+  shouldRetryHttpStatus,
+  withAttemptCount
+} from "./retry.ts";
 
 const BRAVE_SEARCH_API_URL = "https://api.search.brave.com/res/v1/web/search";
 const SERPAPI_SEARCH_API_URL = "https://serpapi.com/search.json";
@@ -11,17 +17,6 @@ const FAST_FETCH_TIMEOUT_MS = 8_000;
 const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const SEARCH_RETRY_ATTEMPTS = 2;
 const FETCH_RETRY_ATTEMPTS = 2;
-const RETRY_BASE_DELAY_MS = 180;
-const RETRYABLE_HTTP_STATUS = new Set([408, 425, 429, 500, 502, 503, 504]);
-const RETRYABLE_FETCH_ERROR_CODES = new Set([
-  "ECONNRESET",
-  "ENOTFOUND",
-  "ETIMEDOUT",
-  "EAI_AGAIN",
-  "UND_ERR_CONNECT_TIMEOUT",
-  "UND_ERR_HEADERS_TIMEOUT",
-  "UND_ERR_BODY_TIMEOUT"
-]);
 const SEARCH_USER_AGENT =
   "clanker-conk/0.2 (+web-search-v2; https://github.com/Volpestyle/clanker_conk)";
 type ProviderSearchInput = {
@@ -189,7 +184,7 @@ export class WebSearchService {
   }
 
   async readPageSummary(url, maxChars) {
-    const safeUrl = normalizeSearchUrl(url);
+    const safeUrl = normalizeDiscoveryUrl(url);
     if (!safeUrl) {
       throw new Error(`blocked or invalid page URL: ${url}`);
     }
@@ -215,7 +210,7 @@ export class WebSearchService {
       throw new AttemptError(`page fetch HTTP ${response.status}`, attempts);
     }
 
-    const finalUrl = normalizeSearchUrl(response.url);
+      const finalUrl = normalizeDiscoveryUrl(response.url);
     if (!finalUrl) {
       throw new AttemptError(`redirected to blocked URL: ${response.url}`, attempts);
     }
@@ -404,7 +399,7 @@ function normalizeProviderResults(rawItems, provider, maxResults) {
   const seen = new Set();
   const normalized = [];
   for (const entry of rawItems) {
-    const normalizedUrl = normalizeSearchUrl(entry?.url || entry?.link || "");
+      const normalizedUrl = normalizeDiscoveryUrl(entry?.url || entry?.link || "");
     if (!normalizedUrl || seen.has(normalizedUrl)) continue;
     seen.add(normalizedUrl);
 
@@ -488,40 +483,6 @@ async function fetchWithRetry({ request, shouldRetryResponse, maxAttempts }) {
   }
 
   throw withAttemptCount(new Error("Web fetch failed after retries."), maxAttempts);
-}
-
-function shouldRetryHttpStatus(status) {
-  return RETRYABLE_HTTP_STATUS.has(Number(status));
-}
-
-function isRetryableFetchError(error) {
-  const code = String(error?.code || error?.cause?.code || "").toUpperCase();
-  if (RETRYABLE_FETCH_ERROR_CODES.has(code)) return true;
-
-  const name = String(error?.name || "");
-  if (name === "AbortError" || name === "TimeoutError") return true;
-
-  const message = String(error?.message || "").toLowerCase();
-  return message.includes("timeout") || message.includes("timed out") || message.includes("fetch failed");
-}
-
-function withAttemptCount(error, attempts) {
-  if (error instanceof AttemptError) {
-    error.attempts = Number(attempts || 1);
-    return error;
-  }
-
-  const wrapped = new AttemptError(String(error?.message || error || "unknown error"), attempts);
-  if (error instanceof Error && error.stack) wrapped.stack = error.stack;
-  return wrapped;
-}
-
-function getRetryDelayMs(attempt) {
-  return Math.min(900, RETRY_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1));
-}
-
-function normalizeSearchUrl(raw) {
-  return normalizeDiscoveryUrl(raw);
 }
 
 async function safeJson(response, attempts, errorMessage) {

@@ -1,15 +1,7 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { runVoiceGoldenHarness, VOICE_GOLDEN_MODES } from "./voiceGoldenHarness.ts";
-import { parseBooleanFlag, parseNumberOrFallback } from "../normalization/valueParsers.ts";
-
-function envFlag(name: string, fallback = false) {
-  return parseBooleanFlag(process.env[name], fallback);
-}
-
-function envNumber(name: string, fallback: number) {
-  return parseNumberOrFallback(process.env[name], fallback);
-}
+import { createVoiceGoldenCaseProgressLogger, runVoiceGoldenHarness, VOICE_GOLDEN_MODES } from "./voiceGoldenHarness.ts";
+import { envFlag, envNumber } from "../testHelpers.ts";
 
 function envModes(name: string) {
   const raw = String(process.env[name] || "").trim();
@@ -23,12 +15,19 @@ function envModes(name: string) {
     });
 }
 
+function resolveLiveGoldenModes() {
+  if (envFlag("LIVE_VOICE_GOLDEN_BRAIN_ONLY", false)) {
+    return ["voice_agent"] as (typeof VOICE_GOLDEN_MODES)[number][];
+  }
+  return envModes("LIVE_VOICE_GOLDEN_MODES");
+}
+
 test("smoke: voice golden validation harness hits live APIs and reports perf", { timeout: 15 * 60_000 }, async () => {
   if (!envFlag("RUN_LIVE_VOICE_GOLDEN")) return;
 
   const report = await runVoiceGoldenHarness({
     mode: "live",
-    modes: envModes("LIVE_VOICE_GOLDEN_MODES"),
+    modes: resolveLiveGoldenModes(),
     iterations: Math.max(1, Math.floor(envNumber("LIVE_VOICE_GOLDEN_ITERATIONS", 1))),
     actorProvider: String(process.env.LIVE_VOICE_GOLDEN_ACTOR_PROVIDER || "claude-code").trim() || "claude-code",
     actorModel: String(process.env.LIVE_VOICE_GOLDEN_ACTOR_MODEL || "sonnet").trim() || "sonnet",
@@ -40,6 +39,7 @@ test("smoke: voice golden validation harness hits live APIs and reports perf", {
       provider: String(process.env.LIVE_VOICE_GOLDEN_JUDGE_PROVIDER || "claude-code").trim() || "claude-code",
       model: String(process.env.LIVE_VOICE_GOLDEN_JUDGE_MODEL || "sonnet").trim() || "sonnet"
     },
+    onCaseProgress: createVoiceGoldenCaseProgressLogger(),
     allowMissingCredentials: envFlag("LIVE_VOICE_GOLDEN_ALLOW_MISSING_CREDENTIALS", false),
     maxCases: Math.max(1, Math.floor(envNumber("LIVE_VOICE_GOLDEN_MAX_CASES", 3)))
   });

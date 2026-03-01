@@ -1160,6 +1160,8 @@ export class LLMService {
 
   async transcribeAudio({
     filePath,
+    audioBytes = null,
+    fileName = "audio.wav",
     model = "gpt-4o-mini-transcribe",
     language = "",
     prompt = "",
@@ -1180,11 +1182,21 @@ export class LLMService {
       .trim()
       .slice(0, 280);
     try {
-      const filePathText = String(filePath);
-      const audioBytes = await readFile(filePathText);
+      const filePathText = String(filePath || "").trim();
+      const resolvedFileName = String(fileName || "").trim() || "audio.wav";
+      const resolvedAudioBytes = Buffer.isBuffer(audioBytes)
+        ? audioBytes
+        : audioBytes
+          ? Buffer.from(audioBytes)
+          : filePathText
+            ? await readFile(filePathText)
+            : null;
+      if (!resolvedAudioBytes?.length) {
+        throw new Error("ASR transcription requires non-empty audio bytes or file path.");
+      }
       const response = await this.openai.audio.transcriptions.create({
         model: resolvedModel,
-        file: new File([audioBytes], basename(filePathText) || "audio.wav"),
+        file: new File([resolvedAudioBytes], basename(filePathText) || resolvedFileName),
         response_format: "text",
         ...(resolvedLanguage ? { language: resolvedLanguage } : {}),
         ...(resolvedPrompt ? { prompt: resolvedPrompt } : {})

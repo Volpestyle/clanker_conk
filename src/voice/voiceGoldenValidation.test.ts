@@ -2,7 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { runVoiceGoldenHarness, VOICE_GOLDEN_MODES } from "./voiceGoldenHarness.ts";
 
-test("voice golden validation harness passes simulated suite across all modes", { timeout: 30_000 }, async () => {
+test("voice golden validation harness passes simulated suite across all modes", { timeout: 60_000 }, async () => {
   const report = await runVoiceGoldenHarness({
     mode: "simulated",
     modes: [...VOICE_GOLDEN_MODES],

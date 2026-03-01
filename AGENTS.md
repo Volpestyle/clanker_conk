@@ -25,6 +25,13 @@
 - Bot name is a customizable setting. bot is not always named 'clanker conk'
 - Use git commit author `Volpestyle <14805252+Volpestyle@users.noreply.github.com>` for all commits in this repository.
 
+## Testing Philosophy
+
+- Design around Test Driven Development using Golden Test Suites/Harnesses.
+- Golden tests assert the exact behavior we describe — write the expectation first, then implement to satisfy it.
+- When the user explicitly asks to validate smoke/golden behavior, prefer the live suite/path by default (for example `test:voice-golden:live`) unless they explicitly ask for simulated-only.
+- When running live smoke or golden test suites, make sure we use `claude-code` as the provider
+
 ## Dashboard UI Preferences
 
 - No floating toasts. Prefer inline/in-UI alerts (status messages near the action that triggered them).

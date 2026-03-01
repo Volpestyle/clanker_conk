@@ -15,6 +15,26 @@ type ClaudeCliError = Error & {
   stderr?: string;
 };
 
+type ClaudeCliStreamJob = {
+  input: string;
+  timeoutMs: number;
+  stdout: string;
+  stderr: string;
+  stdoutBytes: number;
+  stderrBytes: number;
+  timedOut: boolean;
+  timeout: ReturnType<typeof setTimeout> | null;
+  resolve: (result: ClaudeCliResult) => void;
+  reject: (error: Error) => void;
+};
+
+type ClaudeCliSessionPoolOptions = {
+  maxSessions?: number;
+  maxBufferBytes?: number;
+};
+
+const DEFAULT_CLAUDE_CLI_SESSION_POOL_MAX_SESSIONS = 8;
+
 export function safeJsonParse(value, fallback = null) {
   return safeJsonParseFromString(value, fallback);
 }
@@ -100,6 +120,338 @@ export function runClaudeCli({ args, input, timeoutMs, maxBufferBytes }) {
   });
 }
 
+function appendLimitedText(job: ClaudeCliStreamJob, channel: "stdout" | "stderr", textChunk: string, maxBufferBytes: number) {
+  const normalizedChunk = String(textChunk || "");
+  if (!normalizedChunk) return;
+  const chunkBuffer = Buffer.from(normalizedChunk, "utf8");
+  const chunkLength = chunkBuffer.length;
+
+  if (channel === "stdout") {
+    if (job.stdoutBytes < maxBufferBytes) {
+      const remaining = maxBufferBytes - job.stdoutBytes;
+      job.stdout += chunkBuffer.subarray(0, remaining).toString("utf8");
+    }
+    job.stdoutBytes += chunkLength;
+    return;
+  }
+
+  if (job.stderrBytes < maxBufferBytes) {
+    const remaining = maxBufferBytes - job.stderrBytes;
+    job.stderr += chunkBuffer.subarray(0, remaining).toString("utf8");
+  }
+  job.stderrBytes += chunkLength;
+}
+
+function buildClaudeCliCommandError({
+  args,
+  code,
+  signal,
+  timedOut = false,
+  stdout = "",
+  stderr = ""
+}: {
+  args: string[];
+  code?: number | null;
+  signal?: string | null;
+  timedOut?: boolean;
+  stdout?: string;
+  stderr?: string;
+}) {
+  const error = new Error(
+    timedOut ? "claude CLI timeout" : `Command failed: claude ${Array.isArray(args) ? args.join(" ") : ""}`
+  ) as ClaudeCliError;
+  error.killed = Boolean(timedOut);
+  error.signal = signal ?? null;
+  error.code = typeof code === "number" ? code : code ?? null;
+  error.stdout = String(stdout || "");
+  error.stderr = String(stderr || "");
+  return error;
+}
+
+class ClaudeCliStreamSession {
+  args: string[];
+  maxBufferBytes: number;
+  child: ReturnType<typeof spawn> | null;
+  queue: ClaudeCliStreamJob[];
+  activeJob: ClaudeCliStreamJob | null;
+  stdoutRemainder: string;
+  closed: boolean;
+  lastUsedAt: number;
+
+  constructor({ args, maxBufferBytes }: { args: string[]; maxBufferBytes: number }) {
+    this.args = Array.isArray(args) ? [...args] : [];
+    this.maxBufferBytes = Math.max(4096, Math.floor(Number(maxBufferBytes) || 1024 * 1024));
+    this.child = null;
+    this.queue = [];
+    this.activeJob = null;
+    this.stdoutRemainder = "";
+    this.closed = false;
+    this.lastUsedAt = Date.now();
+  }
+
+  isIdle() {
+    return !this.activeJob && this.queue.length === 0;
+  }
+
+  async run({ input = "", timeoutMs = 30_000 }: { input?: string; timeoutMs?: number }) {
+    if (this.closed) {
+      throw new Error("claude-code session is closed");
+    }
+
+    return await new Promise<ClaudeCliResult>((resolve, reject) => {
+      this.queue.push({
+        input: String(input || ""),
+        timeoutMs: Math.max(1, Math.floor(Number(timeoutMs) || 30_000)),
+        stdout: "",
+        stderr: "",
+        stdoutBytes: 0,
+        stderrBytes: 0,
+        timedOut: false,
+        timeout: null,
+        resolve,
+        reject
+      });
+      this.pump();
+    });
+  }
+
+  close() {
+    this.closed = true;
+    const queuedError = new Error("claude-code session closed");
+    for (const job of this.queue.splice(0)) {
+      job.reject(queuedError);
+    }
+    if (this.activeJob) {
+      this.failActiveJob(queuedError);
+    }
+    this.terminateChild();
+  }
+
+  private pump() {
+    if (this.closed) return;
+    if (this.activeJob) return;
+    if (!this.queue.length) return;
+
+    this.ensureChild();
+    if (!this.child) return;
+
+    const nextJob = this.queue.shift() || null;
+    if (!nextJob) return;
+
+    this.activeJob = nextJob;
+    this.lastUsedAt = Date.now();
+    nextJob.timeout = setTimeout(() => {
+      nextJob.timedOut = true;
+      this.terminateChild();
+    }, nextJob.timeoutMs);
+
+    try {
+      this.child.stdin.write(nextJob.input);
+    } catch (error) {
+      this.failActiveJob(error);
+      this.pump();
+    }
+  }
+
+  private ensureChild() {
+    if (this.child) return;
+    this.stdoutRemainder = "";
+
+    const child = spawn("claude", this.args, { stdio: ["pipe", "pipe", "pipe"] });
+    this.child = child;
+
+    child.stdout.on("data", (chunk) => this.handleStdoutChunk(chunk));
+    child.stderr.on("data", (chunk) => this.handleStderrChunk(chunk));
+    child.on("error", (error) => {
+      this.terminateChild();
+      this.failActiveJob(error);
+      this.pump();
+    });
+    child.on("close", (code, signal) => {
+      this.child = null;
+      this.flushTrailingStdoutLine();
+
+      if (this.activeJob) {
+        const active = this.activeJob;
+        const error = buildClaudeCliCommandError({
+          args: this.args,
+          code,
+          signal,
+          timedOut: active.timedOut,
+          stdout: active.stdout,
+          stderr: active.stderr
+        });
+        this.failActiveJob(error);
+      }
+
+      this.pump();
+    });
+    child.stdin.on("error", () => {});
+  }
+
+  private terminateChild() {
+    if (!this.child) return;
+    const child = this.child;
+    try {
+      child.kill("SIGTERM");
+    } catch {}
+    setTimeout(() => {
+      if (!child.killed) {
+        try {
+          child.kill("SIGKILL");
+        } catch {}
+      }
+    }, 1000);
+  }
+
+  private handleStdoutChunk(chunk: unknown) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk || ""));
+    this.stdoutRemainder += buffer.toString("utf8");
+
+    while (true) {
+      const newlineIndex = this.stdoutRemainder.indexOf("\n");
+      if (newlineIndex < 0) break;
+      const line = this.stdoutRemainder.slice(0, newlineIndex);
+      this.stdoutRemainder = this.stdoutRemainder.slice(newlineIndex + 1);
+      this.handleStdoutLine(line);
+    }
+  }
+
+  private flushTrailingStdoutLine() {
+    if (!this.stdoutRemainder) return;
+    const trailing = this.stdoutRemainder;
+    this.stdoutRemainder = "";
+    this.handleStdoutLine(trailing);
+  }
+
+  private handleStdoutLine(rawLine: string) {
+    const line = String(rawLine || "");
+    const active = this.activeJob;
+    if (!active) return;
+
+    appendLimitedText(active, "stdout", `${line}\n`, this.maxBufferBytes);
+    const parsed = safeJsonParse(line, null);
+    if (!parsed || typeof parsed !== "object" || parsed.type !== "result") return;
+
+    this.finishActiveJob();
+  }
+
+  private handleStderrChunk(chunk: unknown) {
+    if (!this.activeJob) return;
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk || ""));
+    appendLimitedText(this.activeJob, "stderr", buffer.toString("utf8"), this.maxBufferBytes);
+  }
+
+  private finishActiveJob() {
+    const active = this.activeJob;
+    if (!active) return;
+    this.activeJob = null;
+    if (active.timeout) clearTimeout(active.timeout);
+    this.lastUsedAt = Date.now();
+    active.resolve({
+      stdout: active.stdout,
+      stderr: active.stderr
+    });
+    this.pump();
+  }
+
+  private failActiveJob(error: unknown) {
+    const active = this.activeJob;
+    if (!active) return;
+    this.activeJob = null;
+    if (active.timeout) clearTimeout(active.timeout);
+
+    const normalizedError = (error instanceof Error ? error : new Error(String(error || "claude CLI error"))) as ClaudeCliError;
+    if (typeof normalizedError.stdout !== "string") {
+      normalizedError.stdout = active.stdout;
+    }
+    if (typeof normalizedError.stderr !== "string") {
+      normalizedError.stderr = active.stderr;
+    }
+    active.reject(normalizedError);
+  }
+}
+
+class ClaudeCliSessionPool {
+  sessions: Map<string, ClaudeCliStreamSession>;
+  maxSessions: number;
+  defaultMaxBufferBytes: number;
+
+  constructor({ maxSessions = DEFAULT_CLAUDE_CLI_SESSION_POOL_MAX_SESSIONS, maxBufferBytes = 1024 * 1024 }: ClaudeCliSessionPoolOptions = {}) {
+    this.sessions = new Map();
+    this.maxSessions = Math.max(1, Math.floor(Number(maxSessions) || DEFAULT_CLAUDE_CLI_SESSION_POOL_MAX_SESSIONS));
+    this.defaultMaxBufferBytes = Math.max(4096, Math.floor(Number(maxBufferBytes) || 1024 * 1024));
+  }
+
+  async run({
+    args,
+    input = "",
+    timeoutMs = 30_000,
+    maxBufferBytes = this.defaultMaxBufferBytes
+  }: {
+    args: string[];
+    input?: string;
+    timeoutMs?: number;
+    maxBufferBytes?: number;
+  }) {
+    const key = Array.isArray(args) ? args.join("\u001f") : "";
+    if (!key) {
+      throw new Error("claude-code session pool requires non-empty CLI args");
+    }
+
+    const session = this.getOrCreateSession({
+      key,
+      args,
+      maxBufferBytes
+    });
+    return await session.run({ input, timeoutMs });
+  }
+
+  close() {
+    for (const session of this.sessions.values()) {
+      session.close();
+    }
+    this.sessions.clear();
+  }
+
+  private getOrCreateSession({
+    key,
+    args,
+    maxBufferBytes
+  }: {
+    key: string;
+    args: string[];
+    maxBufferBytes: number;
+  }) {
+    const existing = this.sessions.get(key);
+    if (existing) return existing;
+
+    this.evictIdleSessionIfNeeded();
+    const next = new ClaudeCliStreamSession({
+      args,
+      maxBufferBytes
+    });
+    this.sessions.set(key, next);
+    return next;
+  }
+
+  private evictIdleSessionIfNeeded() {
+    if (this.sessions.size < this.maxSessions) return;
+    const idleCandidates = [...this.sessions.entries()]
+      .filter(([, session]) => session.isIdle())
+      .sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
+    const oldestIdle = idleCandidates[0];
+    if (!oldestIdle) return;
+    const [key, session] = oldestIdle;
+    session.close();
+    this.sessions.delete(key);
+  }
+}
+
+export function createClaudeCliSessionPool(options: ClaudeCliSessionPoolOptions = {}) {
+  return new ClaudeCliSessionPool(options);
+}
+
 export function buildAnthropicImageParts(imageInputs) {
   return (Array.isArray(imageInputs) ? imageInputs : [])
     .map((image) => {
@@ -161,12 +513,13 @@ export function buildClaudeCodeStreamInput({
   return `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
 }
 
-export function buildClaudeCodeCliArgs({ model, systemPrompt = "", jsonSchema = "" }) {
+export function buildClaudeCodeCliArgs({ model, systemPrompt = "", jsonSchema = "", maxTurns = 1 }) {
   const args = buildClaudeCodeBaseCliArgs({
     model,
     verbose: true,
     inputFormat: "stream-json",
-    outputFormat: "stream-json"
+    outputFormat: "stream-json",
+    maxTurns
   });
   appendClaudeCodeOptionalCliArgs(args, { systemPrompt, jsonSchema });
   return args;
@@ -369,7 +722,8 @@ function buildClaudeCodeBaseCliArgs({
   model,
   verbose = false,
   inputFormat = "",
-  outputFormat = ""
+  outputFormat = "",
+  maxTurns = 1
 }) {
   const args = ["-p"];
   if (verbose) args.push("--verbose");
@@ -384,7 +738,7 @@ function buildClaudeCodeBaseCliArgs({
   if (String(outputFormat || "").trim()) {
     args.push("--output-format", String(outputFormat).trim());
   }
-  args.push("--model", model, "--max-turns", "1");
+  args.push("--model", model, "--max-turns", String(clampInt(maxTurns, 1, 10000)));
   return args;
 }
 

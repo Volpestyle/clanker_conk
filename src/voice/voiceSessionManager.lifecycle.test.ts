@@ -231,21 +231,21 @@ test("resolveSpeakingEndFinalizeDelayMs preserves baseline delays in low-load ro
       session,
       captureAgeMs: 120
     }),
-    620
+    420
   );
   assert.equal(
     manager.resolveSpeakingEndFinalizeDelayMs({
       session,
       captureAgeMs: 600
     }),
-    320
+    220
   );
   assert.equal(
     manager.resolveSpeakingEndFinalizeDelayMs({
       session,
       captureAgeMs: 1200
     }),
-    1200
+    800
   );
 });
 
@@ -266,7 +266,7 @@ test("resolveSpeakingEndFinalizeDelayMs adapts delays when room load increases",
       session: busyRealtimeSession,
       captureAgeMs: 500
     }),
-    224
+    154
   );
 
   const heavySttSession = createSession({
@@ -279,14 +279,14 @@ test("resolveSpeakingEndFinalizeDelayMs adapts delays when room load increases",
       session: heavySttSession,
       captureAgeMs: 150
     }),
-    310
+    210
   );
   assert.equal(
     manager.resolveSpeakingEndFinalizeDelayMs({
       session: heavySttSession,
       captureAgeMs: 1400
     }),
-    600
+    400
   );
 });
 

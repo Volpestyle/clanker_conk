@@ -8,7 +8,7 @@ export function CoreBehaviorSettingsSection({ id, form, set }) {
       <label htmlFor="bot-name">Bot display name</label>
       <input id="bot-name" type="text" value={form.botName} onChange={set("botName")} />
 
-      <label htmlFor="bot-name-aliases">Bot aliases/nicknames (one per line)</label>
+      <label htmlFor="bot-name-aliases">Bot aliases/nicknames (comma or newline separated)</label>
       <textarea
         id="bot-name-aliases"
         rows={3}

@@ -1100,9 +1100,9 @@ function VoiceHistoryViewer({
 }) {
   const { sessions, selectedSessionId, events, loading, error, toggle } = history;
   const [historyActiveKinds, setHistoryActiveKinds] = useState<Set<string>>(
-    () => new Set(EVENT_KINDS.filter((k) => k !== "runtime"))
+    () => new Set(EVENT_KINDS)
   );
-  const [historyShowRuntime, setHistoryShowRuntime] = useState(false);
+  const [historyShowRuntime, setHistoryShowRuntime] = useState(true);
 
   if (sessions.length === 0) return null;
 
@@ -1202,9 +1202,9 @@ export default function VoiceMonitor() {
     text: "",
     type: ""
   });
-  const [showRuntime, setShowRuntime] = useState(false);
+  const [showRuntime, setShowRuntime] = useState(true);
   const [activeKinds, setActiveKinds] = useState<Set<string>>(
-    () => new Set(EVENT_KINDS.filter((k) => k !== "runtime"))
+    () => new Set(EVENT_KINDS)
   );
   const timelineRef = useRef<HTMLDivElement>(null);
   const prevSessionIdsRef = useRef<Set<string>>(new Set());

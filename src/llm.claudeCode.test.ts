@@ -61,6 +61,8 @@ test("buildClaudeCodeCliArgs includes stream-json flags, system prompt, and opti
   assert.equal(args.includes("--strict-mcp-config"), true);
   assert.equal(args.includes("--system-prompt"), true);
   assert.equal(args.includes("--json-schema"), true);
+  const maxTurnsIndex = args.indexOf("--max-turns");
+  assert.equal(args[maxTurnsIndex + 1], "1");
 
   const modelIndex = args.indexOf("--model");
   assert.equal(args[modelIndex + 1], "haiku");
@@ -70,6 +72,17 @@ test("buildClaudeCodeCliArgs includes stream-json flags, system prompt, and opti
 
   const schemaIndex = args.indexOf("--json-schema");
   assert.equal(args[schemaIndex + 1], '{"type":"object","properties":{"decision":{"type":"string"}}}');
+});
+
+test("buildClaudeCodeCliArgs allows overriding max turns for persistent stream sessions", () => {
+  const args = buildClaudeCodeCliArgs({
+    model: "haiku",
+    systemPrompt: "Binary classifier prompt",
+    jsonSchema: '{"type":"object","properties":{"decision":{"type":"string"}}}',
+    maxTurns: 120
+  });
+  const maxTurnsIndex = args.indexOf("--max-turns");
+  assert.equal(args[maxTurnsIndex + 1], "120");
 });
 
 test("buildClaudeCodeJsonCliArgs includes output-format json and trailing prompt", () => {

@@ -1,5 +1,10 @@
 #!/usr/bin/env bun
-import { runVoiceGoldenHarness, printVoiceGoldenHarnessReport, VOICE_GOLDEN_MODES } from "../src/voice/voiceGoldenHarness.ts";
+import {
+  createVoiceGoldenCaseProgressLogger,
+  runVoiceGoldenHarness,
+  printVoiceGoldenHarnessReport,
+  VOICE_GOLDEN_MODES
+} from "../src/voice/voiceGoldenHarness.ts";
 import { writeJsonReport } from "./replay/core/output.ts";
 
 type CliArgs = {
@@ -116,6 +121,7 @@ async function main() {
       provider: args.judgeProvider,
       model: args.judgeModel
     },
+    onCaseProgress: createVoiceGoldenCaseProgressLogger(),
     allowMissingCredentials: args.allowMissingCredentials,
     maxCases: args.maxCases
   });

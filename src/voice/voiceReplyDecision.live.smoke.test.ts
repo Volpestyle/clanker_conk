@@ -3,13 +3,9 @@ import assert from "node:assert/strict";
 import { appConfig } from "../config.ts";
 import { LLMService } from "../llm.ts";
 import { ADDRESSING_SMOKE_CASES } from "../addressingSmokeCases.ts";
-import { parseBooleanFlag } from "../normalization/valueParsers.ts";
 import { defaultVoiceReplyDecisionModel, normalizeVoiceReplyDecisionProvider } from "./voiceDecisionRuntime.ts";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
-
-function envFlag(name) {
-  return parseBooleanFlag(process.env[name], false);
-}
+import { envFlag } from "../testHelpers.ts";
 
 function hasProviderCredentials(provider) {
   if (provider === "anthropic") return Boolean(appConfig.anthropicApiKey);

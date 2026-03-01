@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import {
   AudioPlayerStatus,
   EndBehaviorType,
@@ -5858,7 +5855,7 @@ export class VoiceSessionManager {
       };
     }
 
-    if (directAddressed && classifierEnabled) {
+    if (directAddressed) {
       return {
         allow: true,
         reason: "direct_address_fast_path",
@@ -8236,12 +8233,11 @@ export class VoiceSessionManager {
       session.asrEmptyTranscriptStreakBySource = {};
     }
     const streaks = session.asrEmptyTranscriptStreakBySource;
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-voice-stt-"));
-    const wavPath = path.join(tempDir, "turn.wav");
+    const wavBytes = encodePcm16MonoAsWav(pcmBuffer, sampleRateHz);
     try {
-      await fs.writeFile(wavPath, encodePcm16MonoAsWav(pcmBuffer, sampleRateHz));
       const transcript = await this.llm.transcribeAudio({
-        filePath: wavPath,
+        audioBytes: wavBytes,
+        fileName: "turn.wav",
         model: resolvedModel,
         language: asrLanguage,
         prompt: asrPrompt,
@@ -8303,8 +8299,6 @@ export class VoiceSessionManager {
         }
       });
       return "";
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
     }
   }
 

@@ -384,7 +384,7 @@ test("renderSharePage returns branded invalid and valid pages", async () => {
   const { manager } = createHarness();
   const invalid = manager.renderSharePage("missing-token");
   assert.equal(invalid.statusCode, 404);
-  assert.equal(invalid.html.includes("NO SIGNAL"), true);
+  assert.equal(invalid.html.includes("Screen share link unavailable."), true);
   assert.equal(invalid.html.includes("invalid or expired"), true);
 
   const created = await manager.createSession({

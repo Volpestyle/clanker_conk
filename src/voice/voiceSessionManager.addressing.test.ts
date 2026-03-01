@@ -1279,6 +1279,44 @@ test("reply decider bypasses LLM for direct-addressed turns", async () => {
   assert.equal(callCount, 0);
 });
 
+test("reply decider keeps direct-address fast-path when classifier is disabled in native realtime mode", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      return { text: "NO", provider: "anthropic", model: "claude-haiku-4-5" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        realtimeReplyStrategy: "native",
+        replyDecisionLlm: {
+          enabled: false,
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          maxAttempts: 1
+        }
+      }
+    }),
+    transcript: "clanker can you help with this"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "direct_address_fast_path");
+  assert.equal(decision.directAddressed, true);
+  assert.equal(callCount, 0);
+});
+
 test("reply decider routes merged bot-name token through llm admission", async () => {
   let callCount = 0;
   const manager = createManager({

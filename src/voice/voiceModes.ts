@@ -2,6 +2,7 @@ export const VOICE_RUNTIME_MODES = [
   "voice_agent",
   "openai_realtime",
   "gemini_realtime",
+  "elevenlabs_realtime",
   "stt_pipeline"
 ] as const;
 
@@ -13,6 +14,7 @@ export function normalizeVoiceRuntimeMode(value: unknown, fallback: VoiceRuntime
     .toLowerCase();
   if (normalized === "openai_realtime") return "openai_realtime";
   if (normalized === "gemini_realtime") return "gemini_realtime";
+  if (normalized === "elevenlabs_realtime") return "elevenlabs_realtime";
   if (normalized === "stt_pipeline") return "stt_pipeline";
   return "voice_agent";
 }
@@ -24,6 +26,7 @@ export function parseVoiceRuntimeMode(value: unknown) {
   if (normalized === "voice_agent") return "voice_agent";
   if (normalized === "openai_realtime") return "openai_realtime";
   if (normalized === "gemini_realtime") return "gemini_realtime";
+  if (normalized === "elevenlabs_realtime") return "elevenlabs_realtime";
   if (normalized === "stt_pipeline") return "stt_pipeline";
   return null;
 }

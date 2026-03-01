@@ -152,6 +152,12 @@ test("transcribeAudio and synthesizeSpeech enforce readiness and log successful 
       trace: { source: "unit_test" }
     });
     assert.equal(transcript, "hello world");
+    const inMemoryTranscript = await service.transcribeAudio({
+      audioBytes: Buffer.from("fake in-memory audio bytes"),
+      fileName: "sample.wav",
+      trace: { source: "unit_test_in_memory" }
+    });
+    assert.equal(inMemoryTranscript, "hello world");
 
     const tts = await service.synthesizeSpeech({
       text: "say less",

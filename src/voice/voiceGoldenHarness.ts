@@ -24,6 +24,9 @@ type VoiceGoldenCase = {
   userText: string;
   expectedAllow: boolean;
   objective: string;
+  participantCount?: number;
+  participantDisplayNames?: string[];
+  sessionAgeMs?: number;
 };
 
 type VoiceGoldenJudgeConfig = {
@@ -43,6 +46,7 @@ type VoiceGoldenHarnessOptions = {
   judge?: Partial<VoiceGoldenJudgeConfig>;
   allowMissingCredentials?: boolean;
   maxCases?: number;
+  onCaseProgress?: (event: VoiceGoldenCaseProgressEvent) => void;
 };
 
 type VoiceGoldenResolvedOptions = {
@@ -143,6 +147,63 @@ type VoiceGoldenHarnessReport = {
   };
 };
 
+export type VoiceGoldenCaseProgressEvent = {
+  phase: "start" | "done";
+  mode: VoiceGoldenMode;
+  iteration: number;
+  modeCaseIndex: number;
+  modeCaseCount: number;
+  globalCaseIndex: number;
+  globalCaseCount: number;
+  caseId: string;
+  caseTitle: string;
+  expectedAllow: boolean;
+  pass?: boolean;
+  decisionAllow?: boolean;
+  decisionReason?: string;
+  error?: string | null;
+  durationMs?: number;
+};
+
+type VoiceGoldenCaseProgressLogger = (event: VoiceGoldenCaseProgressEvent) => void;
+
+function buildVoiceGoldenCaseProgressLine(event: VoiceGoldenCaseProgressEvent): string {
+  const base = [
+    `mode=${event.mode}`,
+    `iteration=${event.iteration}`,
+    `modeCase=${event.modeCaseIndex}/${event.modeCaseCount}`,
+    `globalCase=${event.globalCaseIndex}/${event.globalCaseCount}`,
+    `case=${event.caseId}`
+  ].join(" ");
+
+  if (event.phase === "start") {
+    return `[voice-golden] start ${base}`;
+  }
+
+  const durationMs = Math.max(0, Number(event.durationMs || 0)).toFixed(1);
+  return [
+    "[voice-golden] done",
+    base,
+    `pass=${event.pass ? "yes" : "no"}`,
+    `allow=${event.decisionAllow ? "yes" : "no"}`,
+    `reason=${event.decisionReason || "none"}`,
+    `durationMs=${durationMs}`,
+    `error=${event.error || "none"}`
+  ].join(" ");
+}
+
+export function createVoiceGoldenCaseProgressLogger({
+  log = (line: string) => {
+    console.log(line);
+  }
+}: {
+  log?: (line: string) => void;
+} = {}): VoiceGoldenCaseProgressLogger {
+  return (event) => {
+    log(buildVoiceGoldenCaseProgressLine(event));
+  };
+}
+
 type DecisionLlmTrace = {
   guildId: string | null;
   channelId: string | null;
@@ -240,11 +301,114 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     objective: "Give a short natural acknowledgement suitable for live voice."
   },
   {
-    id: "join-window-greeting",
-    title: "Join Window Greeting",
-    userText: "yo, whats up",
+    id: "join-window-greeting-yo-single",
+    title: "Join Window Greeting Yo (Single)",
+    userText: "yo",
     expectedAllow: true,
-    objective: "Right after join, treat greeting/check-in as worth a short acknowledgement."
+    objective: "Right after join, treat a short greeting as worth a brief acknowledgement.",
+    participantCount: 1,
+    participantDisplayNames: ["alice"],
+    sessionAgeMs: 4_000
+  },
+  {
+    id: "join-window-greeting-yo-multi",
+    title: "Join Window Greeting Yo (Multi)",
+    userText: "yo",
+    expectedAllow: true,
+    objective: "Right after join in a group call, treat a short greeting as worth a brief acknowledgement.",
+    participantCount: 2,
+    participantDisplayNames: ["alice", "bob"],
+    sessionAgeMs: 4_000
+  },
+  {
+    id: "join-window-greeting-hi-single",
+    title: "Join Window Greeting Hi (Single)",
+    userText: "hi",
+    expectedAllow: true,
+    objective: "Right after join, treat a hi greeting as worth a brief acknowledgement.",
+    participantCount: 1,
+    participantDisplayNames: ["alice"],
+    sessionAgeMs: 4_000
+  },
+  {
+    id: "join-window-greeting-hi-multi",
+    title: "Join Window Greeting Hi (Multi)",
+    userText: "hi",
+    expectedAllow: true,
+    objective: "Right after join in a group call, treat a hi greeting as worth a brief acknowledgement.",
+    participantCount: 2,
+    participantDisplayNames: ["alice", "bob"],
+    sessionAgeMs: 4_000
+  },
+  {
+    id: "join-window-greeting-sup-single",
+    title: "Join Window Greeting Sup (Single)",
+    userText: "sup",
+    expectedAllow: true,
+    objective: "Right after join, treat a sup check-in as worth a brief acknowledgement.",
+    participantCount: 1,
+    participantDisplayNames: ["alice"],
+    sessionAgeMs: 4_000
+  },
+  {
+    id: "join-window-greeting-sup-multi",
+    title: "Join Window Greeting Sup (Multi)",
+    userText: "sup",
+    expectedAllow: true,
+    objective: "Right after join in a group call, treat a sup check-in as worth a brief acknowledgement.",
+    participantCount: 2,
+    participantDisplayNames: ["alice", "bob"],
+    sessionAgeMs: 4_000
+  },
+  {
+    id: "join-window-greeting-yo-clanka-single",
+    title: "Join Window Greeting Yo Clanka (Single)",
+    userText: "yo clanka",
+    expectedAllow: true,
+    objective: "Treat likely wake-word variants in greeting form as direct enough to acknowledge.",
+    participantCount: 1,
+    participantDisplayNames: ["alice"],
+    sessionAgeMs: 4_000
+  },
+  {
+    id: "join-window-greeting-yo-clanka-multi",
+    title: "Join Window Greeting Yo Clanka (Multi)",
+    userText: "yo clanka",
+    expectedAllow: true,
+    objective: "In group calls, treat likely wake-word variant greetings as direct enough to acknowledge.",
+    participantCount: 2,
+    participantDisplayNames: ["alice", "bob"],
+    sessionAgeMs: 4_000
+  },
+  {
+    id: "join-window-non-greeting-undirected",
+    title: "Join Window Non-Greeting Undirected",
+    userText: "the build passed on main",
+    expectedAllow: false,
+    objective: "Do not reply to non-greeting, non-directed status chatter during join window.",
+    participantCount: 2,
+    participantDisplayNames: ["alice", "bob"],
+    sessionAgeMs: 4_000
+  },
+  {
+    id: "join-window-non-greeting-undirected-single",
+    title: "Join Window Non-Greeting Undirected (Single)",
+    userText: "the build passed on main",
+    expectedAllow: false,
+    objective: "Do not reply to non-greeting, non-directed status chatter during join window, even in 1:1.",
+    participantCount: 1,
+    participantDisplayNames: ["alice"],
+    sessionAgeMs: 4_000
+  },
+  {
+    id: "join-window-non-greeting-directed-to-other",
+    title: "Join Window Directed To Other Human",
+    userText: "bob can you share the link",
+    expectedAllow: false,
+    objective: "Do not reply when the speaker is clearly addressing another human.",
+    participantCount: 2,
+    participantDisplayNames: ["alice", "bob"],
+    sessionAgeMs: 4_000
   },
   {
     id: "low-signal-lol",
@@ -277,9 +441,53 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
 ];
 
 const DEFAULT_MAX_CASES = VOICE_GOLDEN_CASES.length;
+const DEFAULT_CASE_SESSION_AGE_MS = 40_000;
+const DEFAULT_CASE_PARTICIPANTS = ["alice", "bob"];
+const MAX_CASE_PARTICIPANTS = 10;
 
-function parseBool(value: unknown, fallback = false) {
-  return parseBooleanFlag(value, fallback);
+function normalizeParticipantDisplayNames(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  const dedupe = new Set<string>();
+  const names: string[] = [];
+  for (const item of value) {
+    const raw = String(item || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80);
+    if (!raw) continue;
+    const dedupeKey = raw.toLowerCase();
+    if (dedupe.has(dedupeKey)) continue;
+    dedupe.add(dedupeKey);
+    names.push(raw);
+    if (names.length >= MAX_CASE_PARTICIPANTS) break;
+  }
+  return names;
+}
+
+function resolveCaseContext(caseRow: VoiceGoldenCase | null = null) {
+  const configuredNames = normalizeParticipantDisplayNames(caseRow?.participantDisplayNames);
+  const configuredCount = Number(caseRow?.participantCount);
+  const fallbackCount = configuredNames.length || DEFAULT_CASE_PARTICIPANTS.length;
+  const rawCount = Number.isFinite(configuredCount)
+    ? Math.floor(configuredCount)
+    : fallbackCount;
+  const participantCount = Math.max(1, Math.min(MAX_CASE_PARTICIPANTS, rawCount));
+  const participantDisplayNames =
+    configuredNames.length > 0
+      ? configuredNames.slice(0, participantCount)
+      : DEFAULT_CASE_PARTICIPANTS.slice(0, participantCount);
+  while (participantDisplayNames.length < participantCount) {
+    participantDisplayNames.push(`speaker-${participantDisplayNames.length + 1}`);
+  }
+  const configuredSessionAgeMs = Number(caseRow?.sessionAgeMs);
+  const sessionAgeMs = Number.isFinite(configuredSessionAgeMs)
+    ? Math.max(0, Math.min(300_000, Math.round(configuredSessionAgeMs)))
+    : DEFAULT_CASE_SESSION_AGE_MS;
+  return {
+    participantCount,
+    participantDisplayNames,
+    sessionAgeMs
+  };
 }
 
 function normalizeMode(value: unknown): VoiceGoldenRunMode {
@@ -323,7 +531,7 @@ function resolveDefaults(options: VoiceGoldenHarnessOptions = {}): VoiceGoldenRe
       provider: String(options.judge?.provider || "claude-code").trim() || "claude-code",
       model: String(options.judge?.model || "sonnet").trim() || "sonnet"
     },
-    allowMissingCredentials: parseBool(options.allowMissingCredentials, false),
+    allowMissingCredentials: parseBooleanFlag(options.allowMissingCredentials, false),
     maxCases: Math.max(1, Math.min(VOICE_GOLDEN_CASES.length, Math.floor(Number(options.maxCases) || DEFAULT_MAX_CASES)))
   };
 }
@@ -439,25 +647,96 @@ function simulatedDelayMs(key: string, baseMs: number, spreadMs: number) {
   return baseMs + (hash % Math.max(1, spreadMs));
 }
 
+function isGreetingCheckIn(text: string) {
+  const normalized = String(text || "")
+    .toLowerCase()
+    .replace(/[^a-z0-9'\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) return false;
+  const tokens = normalized.split(" ").filter(Boolean);
+  if (!tokens.length) return false;
+  const firstToken = tokens[0];
+  const firstTwoTokens = tokens.slice(0, 2).join(" ");
+  const shortGreetingTokens = new Set(["yo", "hi", "hey", "hello", "sup", "hola"]);
+  if (shortGreetingTokens.has(firstToken)) return true;
+  if (firstTwoTokens === "what up" || firstTwoTokens === "whats up" || firstTwoTokens === "what's up") {
+    return true;
+  }
+  if (normalized === "whatsup" || normalized === "wassup") return true;
+  return false;
+}
+
+function extractPromptTranscript(prompt: string) {
+  const transcriptMatch = prompt.match(/(?:latest\s+transcript|transcript):\s*"([^"]+)"/u);
+  return String(transcriptMatch?.[1] || "")
+    .trim()
+    .toLowerCase();
+}
+
+function extractPromptFlag({
+  prompt,
+  label
+}: {
+  prompt: string;
+  label: string;
+}) {
+  const normalizedLabel = label
+    .toLowerCase()
+    .replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = prompt.match(new RegExp(`${normalizedLabel}:\\s*(yes|no)`, "u"));
+  return match?.[1] === "yes";
+}
+
 function buildSimulatedDecisionLlm(): DecisionLlm {
   return {
     async generate(payload) {
       const prompt = String(payload?.userPrompt || "").toLowerCase();
-      const transcriptMatch = prompt.match(/transcript:\s*"([^"]+)"/u);
-      const transcript = String(transcriptMatch?.[1] || "").trim().toLowerCase();
+      const transcript = extractPromptTranscript(prompt);
+      const joinWindowActive = extractPromptFlag({
+        prompt,
+        label: "join window active"
+      });
+      const likelyAimedAtOtherParticipant = extractPromptFlag({
+        prompt,
+        label: "likely aimed at another participant"
+      });
+      const directlyAddressed = extractPromptFlag({
+        prompt,
+        label: "directly addressed"
+      });
       if (!transcript) return { text: "NO", provider: "simulated", model: "rule-decider" };
+      if (likelyAimedAtOtherParticipant) {
+        return { text: "NO", provider: "simulated", model: "rule-decider" };
+      }
+      if (directlyAddressed) return { text: "YES", provider: "simulated", model: "rule-decider" };
       if (transcript.includes("clanker")) return { text: "YES", provider: "simulated", model: "rule-decider" };
+      if (joinWindowActive && isGreetingCheckIn(transcript)) {
+        return { text: "YES", provider: "simulated", model: "rule-decider" };
+      }
       if (/[?]/.test(transcript) && transcript.length > 6) {
         return { text: "YES", provider: "simulated", model: "rule-decider" };
       }
-      const lowSignal = transcript.split(/\s+/u).filter(Boolean).length <= 2;
-      return {
-        text: lowSignal ? "NO" : "YES",
-        provider: "simulated",
-        model: "rule-decider"
-      };
+      return { text: "NO", provider: "simulated", model: "rule-decider" };
     }
   };
+}
+
+function applyCaseContextToManager({
+  manager,
+  caseRow
+}: {
+  manager: VoiceSessionManager;
+  caseRow: VoiceGoldenCase | null;
+}) {
+  const context = resolveCaseContext(caseRow);
+  manager.countHumanVoiceParticipants = () => context.participantCount;
+  manager.getVoiceChannelParticipants = () =>
+    context.participantDisplayNames.map((displayName, index) => ({
+      userId: `speaker-${index + 1}`,
+      displayName
+    }));
+  return context;
 }
 
 function createDecisionRuntime(llm: DecisionLlm) {
@@ -475,8 +754,10 @@ function createDecisionRuntime(llm: DecisionLlm) {
     llm,
     memory: null
   });
-  manager.countHumanVoiceParticipants = () => 2;
-  manager.getVoiceChannelParticipants = () => [{ displayName: "alice" }, { displayName: "bob" }];
+  applyCaseContextToManager({
+    manager,
+    caseRow: null
+  });
   return {
     manager,
     store
@@ -513,11 +794,10 @@ function createLiveExecutionRuntime({
   };
 
   const manager = bot.voiceSessionManager;
-  manager.countHumanVoiceParticipants = () => 2;
-  manager.getVoiceChannelParticipants = () => [
-    { userId: "speaker-1", displayName: "alice" },
-    { userId: "speaker-2", displayName: "bob" }
-  ];
+  applyCaseContextToManager({
+    manager,
+    caseRow: null
+  });
 
   return {
     bot,
@@ -525,7 +805,14 @@ function createLiveExecutionRuntime({
   };
 }
 
-function createDecisionSession(mode: VoiceGoldenMode) {
+function createDecisionSession({
+  mode,
+  caseRow
+}: {
+  mode: VoiceGoldenMode;
+  caseRow: VoiceGoldenCase;
+}) {
+  const context = resolveCaseContext(caseRow);
   return {
     id: `voice-golden-${mode}`,
     guildId: "voice-golden-guild",
@@ -533,7 +820,7 @@ function createDecisionSession(mode: VoiceGoldenMode) {
     voiceChannelId: "voice-golden-voice",
     mode,
     botTurnOpen: false,
-    startedAt: Date.now() - 12_000,
+    startedAt: Date.now() - context.sessionAgeMs,
     recentVoiceTurns: []
   };
 }
@@ -542,19 +829,22 @@ async function evaluateDecision({
   manager,
   settings,
   mode,
-  transcript
+  caseRow
 }: {
   manager: VoiceSessionManager;
   settings: Record<string, unknown>;
   mode: VoiceGoldenMode;
-  transcript: string;
+  caseRow: VoiceGoldenCase;
 }) {
   const startedAt = performance.now();
   const decision = await manager.evaluateVoiceReplyDecision({
-    session: createDecisionSession(mode),
+    session: createDecisionSession({
+      mode,
+      caseRow
+    }),
     userId: "speaker-1",
     settings,
-    transcript,
+    transcript: caseRow.userText,
     source: mode === "stt_pipeline" ? "stt_pipeline" : "realtime"
   });
   const decisionMs = performance.now() - startedAt;
@@ -565,7 +855,7 @@ async function evaluateDecision({
       allow: Boolean(decision.allow),
       reason: String(decision.reason || ""),
       directAddressed: Boolean(decision.directAddressed),
-      transcript: String(decision.transcript || transcript || "").trim(),
+      transcript: String(decision.transcript || caseRow.userText || "").trim(),
       llmProvider: String(decision.llmProvider || ""),
       llmModel: String(decision.llmModel || ""),
       llmResponse: String(decision.llmResponse || ""),
@@ -574,8 +864,15 @@ async function evaluateDecision({
   };
 }
 
-function buildExecutionSession(mode: VoiceGoldenMode) {
+function buildExecutionSession({
+  mode,
+  caseRow
+}: {
+  mode: VoiceGoldenMode;
+  caseRow: VoiceGoldenCase;
+}) {
   const now = Date.now();
+  const context = resolveCaseContext(caseRow);
   const session = {
     id: `voice-golden-exec-${mode}-${now}-${Math.floor(Math.random() * 1_000_000)}`,
     guildId: "voice-golden-guild",
@@ -584,7 +881,7 @@ function buildExecutionSession(mode: VoiceGoldenMode) {
     mode,
     ending: false,
     botTurnOpen: false,
-    startedAt: now - 12_000,
+    startedAt: now - context.sessionAgeMs,
     lastActivityAt: now,
     userCaptures: new Map(),
     recentVoiceTurns: [],
@@ -662,7 +959,10 @@ async function runLiveProductionCase({
     outputAsrMs: 0,
     responseMs: 0
   };
-  const session = buildExecutionSession(mode);
+  const session = buildExecutionSession({
+    mode,
+    caseRow
+  });
   const actionStart = store.actions.length;
   const responseStartedAt = performance.now();
   const originalSpeakVoiceLineWithTts = manager.speakVoiceLineWithTts.bind(manager);
@@ -675,6 +975,10 @@ async function runLiveProductionCase({
   };
 
   try {
+    applyCaseContextToManager({
+      manager,
+      caseRow
+    });
     if (mode === "stt_pipeline") {
       await manager.runSttPipelineReply({
         session,
@@ -966,11 +1270,15 @@ async function runSingleCase({
   let timings = buildEmptyTimings(0);
 
   try {
+    applyCaseContextToManager({
+      manager,
+      caseRow
+    });
     const decisionResult = await evaluateDecision({
       manager,
       settings,
       mode,
-      transcript: caseRow.userText
+      caseRow
     });
     decisionData = decisionResult.decision;
     timings = buildEmptyTimings(decisionResult.decisionMs);
@@ -1092,6 +1400,8 @@ function aggregateModeReport(mode: VoiceGoldenMode, skippedReason: string | null
 export async function runVoiceGoldenHarness(inputOptions: VoiceGoldenHarnessOptions = {}): Promise<VoiceGoldenHarnessReport> {
   const options = resolveDefaults(inputOptions);
   const startedAtIso = new Date().toISOString();
+  const onCaseProgress =
+    typeof inputOptions.onCaseProgress === "function" ? inputOptions.onCaseProgress : null;
 
   const judgeSettings = options.judge.enabled ? buildJudgeSettings(options.judge) : null;
   const missing = validateHarnessCredentials(options);
@@ -1118,6 +1428,8 @@ export async function runVoiceGoldenHarness(inputOptions: VoiceGoldenHarnessOpti
   }
   const cases = VOICE_GOLDEN_CASES.slice(0, options.maxCases);
   const modeReports: VoiceGoldenModeReport[] = [];
+  const totalCaseCount = Math.max(0, options.modes.length * options.iterations * cases.length);
+  let globalCaseIndex = 0;
 
   for (const mode of options.modes) {
     const settings = buildHarnessSettings({
@@ -1161,8 +1473,24 @@ export async function runVoiceGoldenHarness(inputOptions: VoiceGoldenHarnessOpti
     }
 
     const results: VoiceGoldenCaseResult[] = [];
+    const modeCaseCount = Math.max(0, options.iterations * cases.length);
+    let modeCaseIndex = 0;
     for (let iteration = 1; iteration <= options.iterations; iteration += 1) {
       for (const caseRow of cases) {
+        modeCaseIndex += 1;
+        globalCaseIndex += 1;
+        onCaseProgress?.({
+          phase: "start",
+          mode,
+          iteration,
+          modeCaseIndex,
+          modeCaseCount,
+          globalCaseIndex,
+          globalCaseCount: totalCaseCount,
+          caseId: caseRow.id,
+          caseTitle: caseRow.title,
+          expectedAllow: Boolean(caseRow.expectedAllow)
+        });
         const row = await runSingleCase({
           options,
           llm,
@@ -1175,6 +1503,23 @@ export async function runVoiceGoldenHarness(inputOptions: VoiceGoldenHarnessOpti
           iteration
         });
         results.push(row);
+        onCaseProgress?.({
+          phase: "done",
+          mode,
+          iteration,
+          modeCaseIndex,
+          modeCaseCount,
+          globalCaseIndex,
+          globalCaseCount: totalCaseCount,
+          caseId: caseRow.id,
+          caseTitle: caseRow.title,
+          expectedAllow: Boolean(caseRow.expectedAllow),
+          pass: Boolean(row.pass),
+          decisionAllow: Boolean(row.decision.allow),
+          decisionReason: String(row.decision.reason || ""),
+          error: row.error,
+          durationMs: Number(row.timings.totalMs || 0)
+        });
       }
     }
 

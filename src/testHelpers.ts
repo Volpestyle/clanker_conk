@@ -1,0 +1,188 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { parseBooleanFlag, parseNumberOrFallback } from "./normalization/valueParsers.ts";
+import { createDashboardServer } from "./dashboard.ts";
+import { Store } from "./store.ts";
+
+type ErrorLike = {
+  code?: unknown;
+  message?: unknown;
+};
+
+type TestDashboardServerOptions = {
+  dashboardToken?: string;
+  appConfigOverrides?: Record<string, unknown>;
+  publicHttpsState?: unknown;
+  botOverrides?: Record<string, unknown>;
+  memoryOverrides?: Record<string, unknown>;
+  screenShareSessionManager?: unknown;
+};
+
+type TestDashboardServerResult = {
+  baseUrl: string;
+  bot: {
+    [key: string]: unknown;
+  };
+  memory: {
+    [key: string]: unknown;
+  };
+  store: Store;
+  ingestCalls: unknown[];
+  memoryCalls: unknown[];
+};
+
+export function isListenPermissionError(error: unknown): boolean {
+  const errorLike = (typeof error === "object" && error !== null ? error : {}) as ErrorLike;
+  const code = String(errorLike.code || "").toUpperCase();
+  const message = String(errorLike.message || "");
+
+  return (
+    code === "EPERM" ||
+    code === "EACCES" ||
+    (code === "EADDRINUSE" && /port\s+0\s+in\s+use/i.test(message)) ||
+    /listen\s+EPERM|listen\s+EACCES/i.test(message)
+  );
+}
+
+export function envFlag(name: string, fallback = false): boolean {
+  return parseBooleanFlag(process.env[name], fallback);
+}
+
+export function envNumber(name: string, fallback: number): number {
+  return parseNumberOrFallback(process.env[name], fallback);
+}
+
+export async function withDashboardServer<T>(
+  {
+    dashboardToken = "",
+    appConfigOverrides = {},
+    publicHttpsState = null,
+    botOverrides = {},
+    memoryOverrides = {},
+    screenShareSessionManager = null
+  }: TestDashboardServerOptions = {},
+  run: (context: TestDashboardServerResult) => Promise<T>
+): Promise<{ skipped: boolean; reason?: string }> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clanker-dashboard-test-"));
+  const dbPath = path.join(dir, "clanker.db");
+  const store = new Store(dbPath);
+  store.init();
+
+  const ingestCalls = [];
+  const memoryCalls = [];
+
+  const appliedSettings: unknown[] = [];
+  const bot = {
+    appliedSettings,
+    async applyRuntimeSettings(nextSettings) {
+      appliedSettings.push(nextSettings);
+      return nextSettings;
+    },
+    getRuntimeState() {
+      return {
+        connected: true,
+        replyQueuePending: 0
+      };
+    },
+    async ingestVoiceStreamFrame(payload) {
+      ingestCalls.push(payload);
+      return {
+        accepted: true,
+        reason: "ok"
+      };
+    },
+    ...botOverrides
+  };
+
+  const memory = {
+    async readMemoryMarkdown() {
+      return "# memory";
+    },
+    async refreshMemoryMarkdown() {
+      return true;
+    },
+    async searchDurableFacts(payload) {
+      memoryCalls.push(payload);
+      return [{ fact: "remember this" }];
+    },
+    ...memoryOverrides
+  };
+
+  const appConfig = {
+    dashboardHost: "127.0.0.1",
+    dashboardPort: 0,
+    dashboardToken,
+    publicApiToken: "",
+    ...appConfigOverrides
+  };
+
+  const publicHttpsEntrypoint = publicHttpsState
+    ? {
+        getState() {
+          return publicHttpsState;
+        }
+      }
+    : null;
+
+  let dashboard = null;
+  let closed = false;
+  try {
+    dashboard = createDashboardServer({
+      appConfig,
+      store,
+      bot,
+      memory,
+      publicHttpsEntrypoint,
+      screenShareSessionManager
+    });
+
+    if (!dashboard.server.listening) {
+      await new Promise((resolve, reject) => {
+        const onListening = () => {
+          dashboard.server.off("error", onError);
+          resolve();
+        };
+        const onError = (error: unknown) => {
+          dashboard.server.off("listening", onListening);
+          reject(error);
+        };
+        dashboard.server.once("listening", onListening);
+        dashboard.server.once("error", onError);
+      });
+    }
+
+    const address = dashboard.server.address();
+    const port = typeof address === "object" && address ? address.port : null;
+    if (!Number.isInteger(port) || port <= 0) {
+      throw new Error("dashboard test server did not provide a valid port");
+    }
+
+    await run({
+      baseUrl: `http://127.0.0.1:${port}`,
+      bot,
+      memory,
+      store,
+      ingestCalls,
+      memoryCalls
+    });
+  } catch (error) {
+    if (isListenPermissionError(error)) {
+      return { skipped: true, reason: "listen_permission_denied" };
+    }
+    throw error;
+  } finally {
+    if (dashboard?.server && !closed) {
+      await new Promise<void>((resolve) => {
+        dashboard.server.close(() => {
+          closed = true;
+          resolve();
+        });
+      }).catch(() => undefined);
+    }
+    store.close();
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+
+  return { skipped: false };
+}

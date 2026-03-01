@@ -9,11 +9,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { defaultModelForLlmProvider, normalizeLlmProvider } from "../llm/llmHelpers.ts";
-import { parseBooleanFlag } from "../normalization/valueParsers.ts";
-
-function envFlag(name) {
-  return parseBooleanFlag(process.env[name], false);
-}
+import { envFlag } from "../testHelpers.ts";
 
 function defaultModelForProvider(provider) {
   if (provider === "anthropic") {
