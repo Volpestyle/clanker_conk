@@ -1,5 +1,6 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
+import { Collapse } from "../Collapse";
 import { rangeStyle } from "../../utils";
 import { LlmProviderOptions } from "./LlmProviderOptions";
 
@@ -54,8 +55,7 @@ export function VoiceModeSettingsSection({
         </label>
       </div>
 
-      {showVoiceAdvanced && (
-        <>
+      <Collapse open={showVoiceAdvanced}>
           <label htmlFor="voice-mode">Voice runtime mode</label>
           <select id="voice-mode" value={form.voiceMode} onChange={set("voiceMode")}>
             <option value="voice_agent">Voice agent (xAI realtime low-latency)</option>
@@ -882,8 +882,7 @@ export function VoiceModeSettingsSection({
             value={form.voiceBlockedUserIds}
             onChange={set("voiceBlockedUserIds")}
           />
-        </>
-      )}
+      </Collapse>
     </SettingsSection>
   );
 }

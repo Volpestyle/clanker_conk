@@ -1,5 +1,6 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
+import { Collapse } from "../Collapse";
 import { rangeStyle } from "../../utils";
 
 export function InitiativeMediaSettingsSection({
@@ -79,8 +80,7 @@ export function InitiativeMediaSettingsSection({
         </label>
       </div>
 
-      {showInitiativeAdvanced && (
-        <>
+      <Collapse open={showInitiativeAdvanced}>
           <div className="split">
             <div>
               <label htmlFor="initiative-posts-per-day">Max initiative posts/day</label>
@@ -134,11 +134,9 @@ export function InitiativeMediaSettingsSection({
               />
             </div>
           </div>
-        </>
-      )}
+      </Collapse>
 
-      {showInitiativeImageControls && (
-        <>
+      <Collapse open={showInitiativeImageControls}>
           <div className="split">
             <div>
               <label htmlFor="max-images-per-day">Max generated images/24h</label>
@@ -192,10 +190,9 @@ export function InitiativeMediaSettingsSection({
               />
             </div>
           </div>
-        </>
-      )}
+      </Collapse>
 
-      {showInitiativeVideoControls && (
+      <Collapse open={showInitiativeVideoControls}>
         <div className="split">
           <div>
             <label htmlFor="max-videos-per-day">Max generated videos/24h</label>
@@ -223,10 +220,7 @@ export function InitiativeMediaSettingsSection({
             </select>
           </div>
         </div>
-      )}
 
-      {showInitiativeVideoControls && (
-        <>
           <label htmlFor="initiative-allowed-video-models">Allowed video models (comma/newline list)</label>
           <textarea
             id="initiative-allowed-video-models"
@@ -234,8 +228,7 @@ export function InitiativeMediaSettingsSection({
             value={form.initiativeAllowedVideoModels}
             onChange={set("initiativeAllowedVideoModels")}
           />
-        </>
-      )}
+      </Collapse>
 
       {form.replyGifEnabled && (
         <div className="split">
@@ -254,8 +247,7 @@ export function InitiativeMediaSettingsSection({
         </div>
       )}
 
-      {showInitiativeAdvanced && (
-        <>
+      <Collapse open={showInitiativeAdvanced}>
           <h4>Creative Discovery</h4>
           <div className="toggles">
             <label>
@@ -477,8 +469,7 @@ export function InitiativeMediaSettingsSection({
               )}
             </>
           )}
-        </>
-      )}
+      </Collapse>
     </SettingsSection>
   );
 }
