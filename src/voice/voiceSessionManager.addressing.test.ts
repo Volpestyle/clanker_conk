@@ -2825,6 +2825,77 @@ test("bindRealtimeHandlers logs OpenAI realtime response.done usage cost", () =>
   });
 });
 
+test("bindRealtimeHandlers persists only final realtime transcript events", () => {
+  const runtimeLogs = [];
+  const handlerMap = new Map();
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+
+  const session = {
+    id: "session-realtime-transcript-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeInputBytes: 1024,
+    pendingResponse: null,
+    responseDoneGraceTimer: null,
+    settingsSnapshot: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        },
+        openaiRealtime: {
+          model: "gpt-realtime-mini"
+        }
+      }
+    }),
+    realtimeClient: {
+      sessionConfig: {
+        model: "gpt-realtime-mini"
+      },
+      on(eventName, handler) {
+        handlerMap.set(eventName, handler);
+      },
+      off(eventName, handler) {
+        if (handlerMap.get(eventName) === handler) {
+          handlerMap.delete(eventName);
+        }
+      }
+    },
+    cleanupHandlers: []
+  };
+
+  manager.bindRealtimeHandlers(session, session.settingsSnapshot);
+
+  const onTranscript = handlerMap.get("transcript");
+  assert.equal(typeof onTranscript, "function");
+  onTranscript({
+    text: "yo",
+    eventType: "response.output_audio_transcript.delta"
+  });
+  onTranscript({
+    text: "yo what's good",
+    eventType: "response.output_audio_transcript.done"
+  });
+
+  const transcriptLogs = runtimeLogs.filter(
+    (row) => row?.kind === "voice_runtime" && row?.content === "openai_realtime_transcript"
+  );
+  assert.equal(transcriptLogs.length, 1);
+  assert.equal(transcriptLogs[0]?.metadata?.transcript, "yo what's good");
+  assert.equal(
+    transcriptLogs[0]?.metadata?.transcriptEventType,
+    "response.output_audio_transcript.done"
+  );
+  assert.equal(transcriptLogs[0]?.metadata?.transcriptSource, "output");
+  assert.equal(session.pendingRealtimeInputBytes, 0);
+});
+
 test("runSttPipelineTurn exits before generation when turn admission denies speaking", async () => {
   const runtimeLogs = [];
   let generateVoiceTurnCalls = 0;
