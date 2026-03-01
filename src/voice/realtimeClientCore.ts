@@ -162,7 +162,9 @@ export async function openRealtimeSocket({
       resolve(ws);
     });
 
-    ws.once("error", (error) => {
+    // Keep this listener attached for the socket lifetime so follow-up
+    // handshake/teardown errors cannot surface as unhandled "error" events.
+    ws.on("error", (error) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
