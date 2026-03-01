@@ -22,6 +22,7 @@ This loop repeats for text replies, voice turns, initiative posts, memory extrac
 
 High-impact knobs:
 - `llm.*`: primary text generation route.
+- `claude-code` provider mode: serialized persistent-brain turns vs stateless API calls (see `docs/claude-code-brain-session-mode.md`).
 - `replyFollowupLlm.*`: optional second-pass generation after lookup/tool directives.
 - `memoryLlm.*`: durable fact extraction route.
 - `voice.generationLlm.*`: voice response generation route (STT/realtime-brain paths).

@@ -12,6 +12,7 @@ Core runtime:
 - `src/bot/*`: extracted bot domains (`automationControl`, `initiativeSchedule`, `queueGateway`, `replyAdmission`, `replyFollowup`, `startupCatchup`, `voiceReplies`).
 - `src/llm.ts`: model provider abstraction (OpenAI, Anthropic, xAI/Grok, or Claude Code), usage + cost logging, embeddings, image/video generation, ASR, and TTS.
 - `src/llmClaudeCode.ts`: Claude Code CLI invocation/parsing helpers used by `LLMService`.
+- `docs/claude-code-brain-session-mode.md`: Claude Code persistent-brain behavior and how it differs from stateless API providers.
 - `src/memory.ts`: append-only daily journaling + LLM-based fact extraction + hybrid memory retrieval (lexical + vector).
 - `src/discovery.ts`: external link discovery for initiative posts.
 - `src/store.ts`: SQLite persistence orchestration.

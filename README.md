@@ -170,6 +170,7 @@ Use dashboard to:
 
 - Architecture and flow diagrams: `docs/technical-architecture.md`
 - LLM orchestration mental model: `docs/llm-orchestration-mental-model.md`
+- Claude Code brain session mode: `docs/claude-code-brain-session-mode.md`
 - Reply decision policy (text + voice): `docs/reply-decision-flow.md`
 - Memory system source of truth: `docs/memory-system.md`
 - Replay harness guide (flooding + authoring): `docs/replay-test-suite.md`

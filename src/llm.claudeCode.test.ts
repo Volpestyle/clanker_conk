@@ -46,6 +46,26 @@ test("buildClaudeCodeStreamInput emits only context and user events (no stream s
   assert.equal(events[2].message.content[1].source.url, "https://example.com/image.png");
 });
 
+test("buildClaudeCodeStreamInput prepends a turn preamble to the final user message when provided", () => {
+  const input = buildClaudeCodeStreamInput({
+    contextMessages: [{ role: "assistant", content: "previous assistant reply" }],
+    userPrompt: "latest user prompt",
+    turnPreamble: "Turn metadata and privacy boundary",
+    imageInputs: []
+  });
+  const events = String(input)
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+
+  assert.equal(events.length, 2);
+  assert.equal(events[1].type, "user");
+  assert.equal(
+    events[1].message.content[0].text,
+    "Turn metadata and privacy boundary\n\nlatest user prompt"
+  );
+});
+
 test("buildClaudeCodeCliArgs includes stream-json flags, system prompt, and optional schema", () => {
   const args = buildClaudeCodeCliArgs({
     model: "haiku",
@@ -238,5 +258,47 @@ test("parseClaudeCodeJsonOutput supports pretty-printed whole JSON output", () =
   const parsed = parseClaudeCodeJsonOutput(raw);
   assert.ok(parsed);
   assert.equal(parsed.text, "NO");
+  assert.equal(parsed.isError, false);
+});
+
+test("parseClaudeCodeJsonOutput prefers structured_output over generic result text", () => {
+  const raw = JSON.stringify({
+    type: "result",
+    is_error: false,
+    result: "Done!",
+    structured_output: { decision: "YES" },
+    usage: {
+      input_tokens: 2,
+      output_tokens: 2,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0
+    },
+    total_cost_usd: 0.01
+  });
+
+  const parsed = parseClaudeCodeJsonOutput(raw);
+  assert.ok(parsed);
+  assert.equal(parsed.text, '{"decision":"YES"}');
+  assert.equal(parsed.isError, false);
+});
+
+test("parseClaudeCodeStreamOutput prefers structured_output on result events", () => {
+  const raw = JSON.stringify({
+    type: "result",
+    is_error: false,
+    result: "Done!",
+    structured_output: { answer: "yes", confidence: 0.5 },
+    usage: {
+      input_tokens: 3,
+      output_tokens: 4,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0
+    },
+    total_cost_usd: 0.02
+  });
+
+  const parsed = parseClaudeCodeStreamOutput(raw);
+  assert.ok(parsed);
+  assert.equal(parsed.text, '{"answer":"yes","confidence":0.5}');
   assert.equal(parsed.isError, false);
 });

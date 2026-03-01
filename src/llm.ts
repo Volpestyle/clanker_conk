@@ -12,7 +12,8 @@ import {
   buildClaudeCodeStreamInput,
   buildClaudeCodeSystemPrompt,
   buildClaudeCodeTextCliArgs,
-  createClaudeCliSessionPool,
+  createClaudeCliStreamSession,
+  type ClaudeCliStreamSessionLike,
   normalizeClaudeCodeCliError,
   parseClaudeCodeJsonOutput,
   parseClaudeCodeStreamOutput,
@@ -47,8 +48,8 @@ import {
 
 const CLAUDE_CODE_TIMEOUT_MS = 30_000;
 const CLAUDE_CODE_MAX_BUFFER_BYTES = 1024 * 1024;
-const CLAUDE_CODE_SESSION_POOL_MAX_SESSIONS = 8;
-const CLAUDE_CODE_STREAM_SESSION_MAX_TURNS = 120;
+const CLAUDE_CODE_BRAIN_SESSION_MAX_TURNS = 10_000;
+const CLAUDE_CODE_MEMORY_EXTRACTION_MAX_TURNS = 1;
 const DEFAULT_MEMORY_EMBEDDING_MODEL = "text-embedding-3-small";
 const XAI_VIDEO_POLL_INTERVAL_MS = 2500;
 const XAI_VIDEO_TIMEOUT_MS = 4 * 60_000;
@@ -147,6 +148,41 @@ function buildOpenAiJsonSchemaTextFormat(jsonSchema: string) {
   };
 }
 
+function buildClaudeCodeTurnPreamble({
+  systemPrompt,
+  trace = {}
+}: {
+  systemPrompt: string;
+  trace?: {
+    guildId?: string | null;
+    channelId?: string | null;
+    userId?: string | null;
+    source?: string | null;
+    event?: string | null;
+    reason?: string | null;
+    messageId?: string | null;
+  };
+}) {
+  const normalizedSystemPrompt = String(systemPrompt || "").trim();
+  const scope = [
+    `guild:${trace?.guildId ? String(trace.guildId) : "none"}`,
+    `channel:${trace?.channelId ? String(trace.channelId) : "none"}`,
+    `user:${trace?.userId ? String(trace.userId) : "none"}`,
+    `source:${trace?.source ? String(trace.source) : "unknown"}`,
+    `event:${trace?.event ? String(trace.event) : "unknown"}`,
+    `reason:${trace?.reason ? String(trace.reason) : "unknown"}`,
+    `message:${trace?.messageId ? String(trace.messageId) : "none"}`
+  ].join(" | ");
+
+  const sections = [
+    "Runtime turn packet for a single serialized bot brain.",
+    `Turn scope: ${scope}`,
+    "Privacy boundary: keep continuity/persona across turns, but do not disclose user-specific or channel-specific details from prior turns unless they are present in the current prompt/context.",
+    normalizedSystemPrompt
+  ].filter(Boolean);
+  return sections.join("\n\n");
+}
+
 export class LLMService {
   appConfig;
   store;
@@ -154,7 +190,8 @@ export class LLMService {
   xai;
   anthropic;
   claudeCodeAvailable;
-  claudeCodeSessionPool;
+  claudeCodeBrainSession: ClaudeCliStreamSessionLike | null;
+  claudeCodeBrainModel: string;
 
   constructor({ appConfig, store }) {
     this.appConfig = appConfig;
@@ -180,10 +217,8 @@ export class LLMService {
       this.claudeCodeAvailable = false;
     }
 
-    this.claudeCodeSessionPool = createClaudeCliSessionPool({
-      maxSessions: CLAUDE_CODE_SESSION_POOL_MAX_SESSIONS,
-      maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
-    });
+    this.claudeCodeBrainSession = null;
+    this.claudeCodeBrainModel = "";
   }
 
   async generate({
@@ -222,7 +257,8 @@ export class LLMService {
         temperature,
         maxOutputTokens,
         reasoningEffort: settings?.llm?.reasoningEffort,
-        jsonSchema: normalizedJsonSchema
+        jsonSchema: normalizedJsonSchema,
+        trace
       });
 
       const costUsd = estimateUsdCost({
@@ -500,36 +536,58 @@ export class LLMService {
     imageInputs = [],
     contextMessages = [],
     maxOutputTokens,
-    jsonSchema = ""
+    jsonSchema = "",
+    trace = {
+      guildId: null,
+      channelId: null,
+      userId: null,
+      source: null,
+      event: null,
+      reason: null,
+      messageId: null
+    }
   }) {
     if (!this.claudeCodeAvailable) {
       throw new Error("claude-code provider requires the 'claude' CLI to be installed.");
     }
 
+    const normalizedJsonSchema = String(jsonSchema || "").trim();
+    const usePersistentBrainStream = !normalizedJsonSchema;
+    const turnPreamble = buildClaudeCodeTurnPreamble({
+      systemPrompt,
+      trace
+    });
     const streamInput = buildClaudeCodeStreamInput({
       contextMessages,
       userPrompt,
-      imageInputs
+      imageInputs,
+      turnPreamble: usePersistentBrainStream ? turnPreamble : ""
     });
-    const claudeSystemPrompt = buildClaudeCodeSystemPrompt({
+    const fallbackSystemPrompt = buildClaudeCodeSystemPrompt({
       systemPrompt,
       maxOutputTokens
-    });
-    const streamArgs = buildClaudeCodeCliArgs({
-      model,
-      systemPrompt: claudeSystemPrompt,
-      jsonSchema,
-      maxTurns: CLAUDE_CODE_STREAM_SESSION_MAX_TURNS
     });
     let streamFailure = "";
 
     try {
-      const { stdout } = await this.runClaudeCodeStream({
-        args: streamArgs,
-        input: streamInput,
-        timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
-        maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
-      });
+      const { stdout } = usePersistentBrainStream
+        ? await this.runClaudeCodeBrainStream({
+            model,
+            input: streamInput,
+            timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
+            maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
+          })
+        : await runClaudeCli({
+            args: buildClaudeCodeCliArgs({
+              model,
+              systemPrompt: fallbackSystemPrompt,
+              jsonSchema: normalizedJsonSchema,
+              maxTurns: 1
+            }),
+            input: streamInput,
+            timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
+            maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
+          });
 
       const parsed = parseClaudeCodeStreamOutput(stdout);
       if (parsed?.isError) {
@@ -561,8 +619,8 @@ export class LLMService {
     });
     const fallbackArgs = buildClaudeCodeJsonCliArgs({
       model,
-      systemPrompt: claudeSystemPrompt,
-      jsonSchema,
+      systemPrompt: fallbackSystemPrompt,
+      jsonSchema: normalizedJsonSchema,
       prompt: fallbackPrompt
     });
     let jsonFallbackFailure = "";
@@ -603,8 +661,8 @@ export class LLMService {
 
     const textFallbackArgs = buildClaudeCodeTextCliArgs({
       model,
-      systemPrompt: claudeSystemPrompt,
-      jsonSchema,
+      systemPrompt: fallbackSystemPrompt,
+      jsonSchema: normalizedJsonSchema,
       prompt: fallbackPrompt
     });
     try {
@@ -651,12 +709,12 @@ export class LLMService {
     });
 
     try {
-      const { stdout } = await this.runClaudeCodeStream({
+      const { stdout } = await runClaudeCli({
         args: buildClaudeCodeCliArgs({
           model,
           systemPrompt,
           jsonSchema: schemaJson,
-          maxTurns: CLAUDE_CODE_STREAM_SESSION_MAX_TURNS
+          maxTurns: CLAUDE_CODE_MEMORY_EXTRACTION_MAX_TURNS
         }),
         input: streamInput,
         timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
@@ -683,27 +741,40 @@ export class LLMService {
     }
   }
 
-  async runClaudeCodeStream({ args, input, timeoutMs, maxBufferBytes }) {
-    if (this.claudeCodeSessionPool && typeof this.claudeCodeSessionPool.run === "function") {
-      return await this.claudeCodeSessionPool.run({
-        args,
-        input,
-        timeoutMs,
-        maxBufferBytes
-      });
+  async runClaudeCodeBrainStream({ model, input, timeoutMs, maxBufferBytes }) {
+    const normalizedModel = String(model || "").trim();
+    if (!normalizedModel) {
+      throw new Error("claude-code brain stream requires a model");
     }
 
-    return await runClaudeCli({
-      args,
+    if (
+      !this.claudeCodeBrainSession ||
+      this.claudeCodeBrainModel !== normalizedModel
+    ) {
+      if (this.claudeCodeBrainSession) {
+        this.claudeCodeBrainSession.close();
+      }
+      this.claudeCodeBrainSession = createClaudeCliStreamSession({
+        args: buildClaudeCodeCliArgs({
+          model: normalizedModel,
+          maxTurns: CLAUDE_CODE_BRAIN_SESSION_MAX_TURNS
+        }),
+        maxBufferBytes
+      });
+      this.claudeCodeBrainModel = normalizedModel;
+    }
+
+    return await this.claudeCodeBrainSession.run({
       input,
-      timeoutMs,
-      maxBufferBytes
+      timeoutMs
     });
   }
 
   close() {
-    if (!this.claudeCodeSessionPool || typeof this.claudeCodeSessionPool.close !== "function") return;
-    this.claudeCodeSessionPool.close();
+    if (!this.claudeCodeBrainSession || typeof this.claudeCodeBrainSession.close !== "function") return;
+    this.claudeCodeBrainSession.close();
+    this.claudeCodeBrainSession = null;
+    this.claudeCodeBrainModel = "";
   }
 
   isEmbeddingReady() {

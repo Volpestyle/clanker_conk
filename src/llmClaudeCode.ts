@@ -28,12 +28,11 @@ type ClaudeCliStreamJob = {
   reject: (error: Error) => void;
 };
 
-type ClaudeCliSessionPoolOptions = {
-  maxSessions?: number;
-  maxBufferBytes?: number;
+export type ClaudeCliStreamSessionLike = {
+  run: (payload: { input?: string; timeoutMs?: number }) => Promise<ClaudeCliResult>;
+  close: () => void;
+  isIdle: () => boolean;
 };
-
-const DEFAULT_CLAUDE_CLI_SESSION_POOL_MAX_SESSIONS = 8;
 
 export function safeJsonParse(value, fallback = null) {
   return safeJsonParseFromString(value, fallback);
@@ -372,84 +371,20 @@ class ClaudeCliStreamSession {
   }
 }
 
-class ClaudeCliSessionPool {
-  sessions: Map<string, ClaudeCliStreamSession>;
-  maxSessions: number;
-  defaultMaxBufferBytes: number;
-
-  constructor({ maxSessions = DEFAULT_CLAUDE_CLI_SESSION_POOL_MAX_SESSIONS, maxBufferBytes = 1024 * 1024 }: ClaudeCliSessionPoolOptions = {}) {
-    this.sessions = new Map();
-    this.maxSessions = Math.max(1, Math.floor(Number(maxSessions) || DEFAULT_CLAUDE_CLI_SESSION_POOL_MAX_SESSIONS));
-    this.defaultMaxBufferBytes = Math.max(4096, Math.floor(Number(maxBufferBytes) || 1024 * 1024));
+export function createClaudeCliStreamSession({
+  args,
+  maxBufferBytes = 1024 * 1024
+}: {
+  args: string[];
+  maxBufferBytes?: number;
+}): ClaudeCliStreamSessionLike {
+  if (!Array.isArray(args) || !args.length) {
+    throw new Error("claude-code stream session requires non-empty CLI args");
   }
-
-  async run({
-    args,
-    input = "",
-    timeoutMs = 30_000,
-    maxBufferBytes = this.defaultMaxBufferBytes
-  }: {
-    args: string[];
-    input?: string;
-    timeoutMs?: number;
-    maxBufferBytes?: number;
-  }) {
-    const key = Array.isArray(args) ? args.join("\u001f") : "";
-    if (!key) {
-      throw new Error("claude-code session pool requires non-empty CLI args");
-    }
-
-    const session = this.getOrCreateSession({
-      key,
-      args,
-      maxBufferBytes
-    });
-    return await session.run({ input, timeoutMs });
-  }
-
-  close() {
-    for (const session of this.sessions.values()) {
-      session.close();
-    }
-    this.sessions.clear();
-  }
-
-  private getOrCreateSession({
-    key,
+  return new ClaudeCliStreamSession({
     args,
     maxBufferBytes
-  }: {
-    key: string;
-    args: string[];
-    maxBufferBytes: number;
-  }) {
-    const existing = this.sessions.get(key);
-    if (existing) return existing;
-
-    this.evictIdleSessionIfNeeded();
-    const next = new ClaudeCliStreamSession({
-      args,
-      maxBufferBytes
-    });
-    this.sessions.set(key, next);
-    return next;
-  }
-
-  private evictIdleSessionIfNeeded() {
-    if (this.sessions.size < this.maxSessions) return;
-    const idleCandidates = [...this.sessions.entries()]
-      .filter(([, session]) => session.isIdle())
-      .sort((a, b) => a[1].lastUsedAt - b[1].lastUsedAt);
-    const oldestIdle = idleCandidates[0];
-    if (!oldestIdle) return;
-    const [key, session] = oldestIdle;
-    session.close();
-    this.sessions.delete(key);
-  }
-}
-
-export function createClaudeCliSessionPool(options: ClaudeCliSessionPoolOptions = {}) {
-  return new ClaudeCliSessionPool(options);
+  });
 }
 
 export function buildAnthropicImageParts(imageInputs) {
@@ -483,7 +418,8 @@ export function buildAnthropicImageParts(imageInputs) {
 export function buildClaudeCodeStreamInput({
   contextMessages = [],
   userPrompt,
-  imageInputs = []
+  imageInputs = [],
+  turnPreamble = ""
 }) {
   const events = [];
 
@@ -499,7 +435,7 @@ export function buildClaudeCodeStreamInput({
     });
   }
 
-  const userText = String(userPrompt || "");
+  const userText = [String(turnPreamble || "").trim(), String(userPrompt || "").trim()].filter(Boolean).join("\n\n");
   const imageParts = buildAnthropicImageParts(imageInputs);
   const userContent = [{ type: "text", text: userText }, ...imageParts];
   events.push({
@@ -643,6 +579,10 @@ export function parseClaudeCodeStreamOutput(rawOutput) {
     }
 
     if (event.type === "result") {
+      const structuredOutputText = serializeClaudeCodeStructuredOutput(event.structured_output);
+      if (structuredOutputText) {
+        lastStructuredOutputText = structuredOutputText;
+      }
       lastResult = event;
     }
   }
@@ -710,7 +650,8 @@ export function parseClaudeCodeJsonOutput(rawOutput) {
   if (!lastResult) return null;
 
   const usage = lastResult.usage || {};
-  const resultText = String(lastResult.result || "").trim();
+  const resultText =
+    serializeClaudeCodeStructuredOutput(lastResult.structured_output) || String(lastResult.result || "").trim();
   return buildClaudeCodeParsedResult({
     result: lastResult,
     usage,
