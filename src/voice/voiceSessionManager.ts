@@ -1519,153 +1519,13 @@ export class VoiceSessionManager {
     session.activeReplyInterruptionPolicy = null;
   }
 
-  getRealtimeReplySupersedeState({
-    session,
-    generationStartedAt = 0,
-    interruptionPolicy = null
-  }) {
-    const normalizedPolicy = this.normalizeReplyInterruptionPolicy(interruptionPolicy);
-    const activeCaptureUserIds = session?.userCaptures instanceof Map
-      ? [...session.userCaptures.keys()].map((entry) => String(entry || "").trim()).filter(Boolean)
-      : [];
-    const pendingRealtimeTurns = Array.isArray(session?.pendingRealtimeTurns) ? session.pendingRealtimeTurns : [];
-    const sampleRateHz = isRealtimeMode(session?.mode)
-      ? Number(session?.realtimeInputSampleRateHz) || 24000
-      : 24000;
-    const pendingRealtimeTurnSummaries = pendingRealtimeTurns.map((entry) => {
-      const userId = String(entry?.userId || "").trim();
-      const rawPcmBuffer = entry?.pcmBuffer;
-      const pcmBuffer = Buffer.isBuffer(rawPcmBuffer)
-        ? rawPcmBuffer
-        : rawPcmBuffer && ArrayBuffer.isView(rawPcmBuffer)
-          ? Buffer.from(rawPcmBuffer.buffer, rawPcmBuffer.byteOffset, rawPcmBuffer.byteLength)
-          : null;
-      const silenceGate = pcmBuffer?.length
-        ? this.evaluatePcmSilenceGate({
-            pcmBuffer,
-            sampleRateHz
-          })
-        : null;
-      return {
-        userId,
-        eligibleForSupersede: !silenceGate?.drop
-      };
-    });
-    const totalPendingRealtimeQueueDepth = pendingRealtimeTurnSummaries.length;
-    const pendingRealtimeTurnUserIds = pendingRealtimeTurnSummaries
-      .filter((entry) => entry.eligibleForSupersede)
-      .map((entry) => entry.userId)
-      .filter(Boolean);
-
-    const activeCaptureCount = activeCaptureUserIds.length;
-    const pendingRealtimeQueueDepth = pendingRealtimeTurnUserIds.length;
-    const pendingNearSilentQueueDepth = Math.max(0, totalPendingRealtimeQueueDepth - pendingRealtimeQueueDepth);
-    const interruptingActiveCaptureCount = activeCaptureUserIds.filter((captureUserId) =>
-      this.isUserAllowedToInterruptReply({
-        policy: normalizedPolicy,
-        userId: captureUserId
-      })
-    ).length;
-    const interruptingPendingQueueDepth = pendingRealtimeTurnUserIds.filter((turnUserId) =>
-      this.isUserAllowedToInterruptReply({
-        policy: normalizedPolicy,
-        userId: turnUserId
-      })
-    ).length;
-    const normalizedGenerationStartedAt = Math.max(0, Number(generationStartedAt) || 0);
-    const lastInboundAudioAt = Math.max(0, Number(session?.lastInboundAudioAt || 0));
-    const rawNewerInboundAudio = normalizedGenerationStartedAt > 0 && lastInboundAudioAt > normalizedGenerationStartedAt;
-    const newerInboundAudio = rawNewerInboundAudio;
-    const shouldSupersede =
-      interruptingActiveCaptureCount > 0 ||
-      interruptingPendingQueueDepth > 0 ||
-      newerInboundAudio;
-    return {
-      shouldSupersede,
-      activeCaptureCount,
-      pendingRealtimeQueueDepth,
-      totalPendingRealtimeQueueDepth,
-      pendingNearSilentQueueDepth,
-      interruptingActiveCaptureCount,
-      interruptingPendingQueueDepth,
-      ignoredActiveCaptureCount: Math.max(0, activeCaptureCount - interruptingActiveCaptureCount),
-      ignoredPendingQueueDepth: Math.max(0, pendingRealtimeQueueDepth - interruptingPendingQueueDepth),
-      newerInboundAudio,
-      rawNewerInboundAudio,
-      generationStartedAt: normalizedGenerationStartedAt,
-      lastInboundAudioAt,
-      interruptionPolicy: normalizedPolicy
-    };
-  }
-
-  recordRealtimeReplySuperseded({
-    session,
-    source = "realtime",
-    supersedeState = null
-  }) {
-    if (!session || session.ending) return;
-    const normalizedSupersedeState =
-      supersedeState && typeof supersedeState === "object" ? supersedeState : {};
-    const activeCaptureCount = Number(normalizedSupersedeState.activeCaptureCount || 0);
-    const pendingRealtimeQueueDepth = Number(normalizedSupersedeState.pendingRealtimeQueueDepth || 0);
-    const totalPendingRealtimeQueueDepth = Number(normalizedSupersedeState.totalPendingRealtimeQueueDepth || 0);
-    const pendingNearSilentQueueDepth = Number(normalizedSupersedeState.pendingNearSilentQueueDepth || 0);
-    const interruptingActiveCaptureCount = Number(normalizedSupersedeState.interruptingActiveCaptureCount || 0);
-    const interruptingPendingQueueDepth = Number(normalizedSupersedeState.interruptingPendingQueueDepth || 0);
-    const ignoredActiveCaptureCount = Number(normalizedSupersedeState.ignoredActiveCaptureCount || 0);
-    const ignoredPendingQueueDepth = Number(normalizedSupersedeState.ignoredPendingQueueDepth || 0);
-    const newerInboundAudio = Boolean(normalizedSupersedeState.newerInboundAudio);
-    const rawNewerInboundAudio = Boolean(normalizedSupersedeState.rawNewerInboundAudio);
-    const interruptionPolicy = this.normalizeReplyInterruptionPolicy(normalizedSupersedeState.interruptionPolicy);
-    const supersedeReason = newerInboundAudio
-      ? "newer_inbound_audio"
-      : interruptingPendingQueueDepth > 0
-        ? "pending_realtime_turn"
-        : interruptingActiveCaptureCount > 0
-          ? "active_user_capture"
-          : pendingRealtimeQueueDepth > 0
-            ? "pending_realtime_turn_ignored_by_policy"
-            : "active_user_capture_ignored_by_policy";
-    const nextCount = Math.max(0, Number(session.realtimeReplySupersededCount || 0)) + 1;
-    session.realtimeReplySupersededCount = nextCount;
-
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: this.client.user?.id || null,
-      content: "realtime_reply_superseded_newer_input",
-      metadata: {
-        sessionId: session.id,
-        source: String(source || "realtime"),
-        supersedeReason,
-        activeCaptureCount,
-        pendingRealtimeQueueDepth,
-        totalPendingRealtimeQueueDepth,
-        pendingNearSilentQueueDepth,
-        interruptingActiveCaptureCount,
-        interruptingPendingQueueDepth,
-        ignoredActiveCaptureCount,
-        ignoredPendingQueueDepth,
-        newerInboundAudio,
-        rawNewerInboundAudio,
-        generationStartedAt: Number(normalizedSupersedeState.generationStartedAt || 0) || null,
-        lastInboundAudioAt: Number(normalizedSupersedeState.lastInboundAudioAt || 0) || null,
-        interruptionPolicyScope: interruptionPolicy?.scope || null,
-        interruptionPolicyReason: interruptionPolicy?.reason || null,
-        interruptionPolicyAllowedUserId: interruptionPolicy?.allowedUserId || null,
-        interruptionPolicyTalkingTo: interruptionPolicy?.talkingTo || null,
-        supersededCount: nextCount
-      }
-    });
-  }
-
   maybeInterruptBotForAssertiveSpeech({
     session,
     userId = null,
     source = "speaking_start"
   }) {
     if (!session || session.ending) return false;
+    if (isRealtimeMode(session.mode)) return false;
     if (!this.isBargeInInterruptTargetActive(session)) return false;
     const normalizedUserId = String(userId || "").trim();
     if (!normalizedUserId) return false;
@@ -1857,6 +1717,7 @@ export class VoiceSessionManager {
     delayMs = null
   }) {
     if (!session || session.ending) return;
+    if (isRealtimeMode(session.mode)) return;
     if (!this.isBargeInInterruptTargetActive(session)) return;
     const normalizedUserId = String(userId || "").trim();
     if (!normalizedUserId) return;
@@ -7832,19 +7693,6 @@ export class VoiceSessionManager {
       generatedVoiceAddressing,
       source: String(source || "realtime")
     });
-    const supersedeAfterGeneration = this.getRealtimeReplySupersedeState({
-      session,
-      generationStartedAt,
-      interruptionPolicy: replyInterruptionPolicy
-    });
-    if (supersedeAfterGeneration.shouldSupersede) {
-      this.recordRealtimeReplySuperseded({
-        session,
-        source: String(source || "realtime"),
-        supersedeState: supersedeAfterGeneration
-      });
-      return true;
-    }
     const playbackPlan = this.buildVoiceReplyPlaybackPlan({
       replyText,
       trailingSoundboardRefs: requestedSoundboardRefs
@@ -7908,20 +7756,6 @@ export class VoiceSessionManager {
           }
         });
       });
-    }
-
-    const supersedeBeforePlayback = this.getRealtimeReplySupersedeState({
-      session,
-      generationStartedAt,
-      interruptionPolicy: replyInterruptionPolicy
-    });
-    if (supersedeBeforePlayback.shouldSupersede) {
-      this.recordRealtimeReplySuperseded({
-        session,
-        source: String(source || "realtime"),
-        supersedeState: supersedeBeforePlayback
-      });
-      return true;
     }
 
     const replyRequestedAt = Date.now();

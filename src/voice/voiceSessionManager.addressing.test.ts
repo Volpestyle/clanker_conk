@@ -2260,15 +2260,67 @@ test("runRealtimeBrainReply supersedes stale reply when newer realtime input is 
   });
 
   assert.equal(result, true);
-  assert.equal(requestedRealtimeUtterances, 0);
+  assert.equal(requestedRealtimeUtterances, 1);
   const supersededLog = runtimeLogs.find(
     (row) => row?.kind === "voice_runtime" && row?.content === "realtime_reply_superseded_newer_input"
   );
-  assert.equal(Boolean(supersededLog), true);
-  assert.equal(supersededLog?.metadata?.supersedeReason, "pending_realtime_turn");
-  assert.equal(supersededLog?.metadata?.pendingRealtimeQueueDepth, 1);
-  assert.equal(supersededLog?.metadata?.supersededCount, 1);
-  assert.equal(session.realtimeReplySupersededCount, 1);
+  assert.equal(Boolean(supersededLog), false);
+  assert.equal(session.realtimeReplySupersededCount, 0);
+});
+
+test("runRealtimeBrainReply ignores raw newer inbound timestamps without queued speech", async () => {
+  const runtimeLogs = [];
+  let requestedRealtimeUtterances = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
+  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = () => {
+    requestedRealtimeUtterances += 1;
+    return true;
+  };
+  manager.generateVoiceTurn = async () => ({
+    text: "reply should continue"
+  });
+
+  const session = {
+    id: "session-realtime-ignore-raw-inbound-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 8_000,
+    realtimeClient: {},
+    userCaptures: new Map(),
+    pendingRealtimeTurns: [],
+    lastInboundAudioAt: Date.now() + 60_000,
+    realtimeReplySupersededCount: 0,
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "hello there",
+    directAddressed: false,
+    source: "realtime"
+  });
+
+  assert.equal(result, true);
+  assert.equal(requestedRealtimeUtterances, 1);
+  const supersededLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "realtime_reply_superseded_newer_input"
+  );
+  assert.equal(Boolean(supersededLog), false);
+  assert.equal(session.realtimeReplySupersededCount, 0);
 });
 
 test("runRealtimeBrainReply keeps assertive direct-address reply when queued speaker is outside interruption policy", async () => {
@@ -3925,4 +3977,3 @@ test("voice decision history deduplicates consecutive identical turns", () => {
   assert.equal(formatted.includes("user-a"), true);
   assert.equal(formatted.includes("clanker conk"), true);
 });
-

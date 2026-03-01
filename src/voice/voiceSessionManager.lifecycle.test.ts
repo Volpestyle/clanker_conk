@@ -293,6 +293,7 @@ test("resolveSpeakingEndFinalizeDelayMs adapts delays when room load increases",
 test("maybeInterruptBotForAssertiveSpeech requires sustained capture bytes", () => {
   const { manager, logs } = createManager();
   const session = createSession({
+    mode: "stt_pipeline",
     botTurnOpen: true,
     userCaptures: new Map([
       [
@@ -397,6 +398,7 @@ test("maybeInterruptBotForAssertiveSpeech cuts playback after assertive speech",
   let streamDestroyed = false;
   const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
   const session = createSession({
+    mode: "stt_pipeline",
     botTurnOpen: true,
     botTurnResetTimer: setTimeout(() => undefined, 10_000),
     userCaptures: new Map([
@@ -508,6 +510,46 @@ test("maybeInterruptBotForAssertiveSpeech ignores near-silent captures", () => {
   assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
 });
 
+test("maybeInterruptBotForAssertiveSpeech ignores assertive captures in realtime mode", () => {
+  const { manager, logs } = createManager();
+  const stopCalls = [];
+  const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: true,
+    userCaptures: new Map([
+      [
+        "user-1",
+        {
+          bytesSent: minBytes + 2_400,
+          signalSampleCount: 24_000,
+          signalActiveSampleCount: 1_680,
+          signalPeakAbs: 5_400,
+          speakingEndFinalizeTimer: null
+        }
+      ]
+    ]),
+    audioPlayer: {
+      stop(force) {
+        stopCalls.push(force);
+      }
+    },
+    botAudioStream: {
+      destroy() {}
+    }
+  });
+
+  const interrupted = manager.maybeInterruptBotForAssertiveSpeech({
+    session,
+    userId: "user-1",
+    source: "test_realtime_mode"
+  });
+  assert.equal(interrupted, false);
+  assert.equal(session.botTurnOpen, true);
+  assert.equal(stopCalls.length, 0);
+  assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
+});
+
 test("maybeInterruptBotForAssertiveSpeech interrupts queued playback even when botTurnOpen already reset", () => {
   const { manager, logs } = createManager();
   const stopCalls = [];
@@ -515,6 +557,7 @@ test("maybeInterruptBotForAssertiveSpeech interrupts queued playback even when b
   const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
   const queuedBytes = DISCORD_PCM_FRAME_BYTES * 16;
   const session = createSession({
+    mode: "stt_pipeline",
     botTurnOpen: false,
     userCaptures: new Map([
       [
@@ -570,6 +613,7 @@ test("maybeInterruptBotForAssertiveSpeech interrupts queued playback even when b
 test("armAssertiveBargeIn schedules interrupt checks while queued playback remains", async () => {
   const { manager } = createManager();
   const session = createSession({
+    mode: "stt_pipeline",
     botTurnOpen: false,
     userCaptures: new Map([
       [
