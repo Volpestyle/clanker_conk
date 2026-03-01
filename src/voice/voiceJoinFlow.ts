@@ -12,10 +12,12 @@ import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 import { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
 import { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
 import { ElevenLabsRealtimeClient } from "./elevenLabsRealtimeClient.ts";
+import { getRealtimeConnectErrorDiagnostics } from "./realtimeClientCore.ts";
 import {
   createBotAudioPlaybackStream,
   SOUNDBOARD_MAX_CANDIDATES,
   isRealtimeMode,
+  resolveVoiceAsrLanguageGuidance,
   resolveRealtimeProvider,
   resolveVoiceRuntimeMode,
   shortError
@@ -439,6 +441,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         });
 
         const openAiRealtimeSettings = settings.voice?.openaiRealtime || {};
+        const voiceAsrGuidance = resolveVoiceAsrLanguageGuidance(settings);
         realtimeInputSampleRateHz = 24000;
         realtimeOutputSampleRateHz = 24000;
         await realtimeClient.connect({
@@ -449,7 +452,9 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           outputAudioFormat: String(openAiRealtimeSettings.outputAudioFormat || "pcm16").trim() || "pcm16",
           inputTranscriptionModel:
             String(openAiRealtimeSettings.inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() ||
-            "gpt-4o-mini-transcribe"
+            "gpt-4o-mini-transcribe",
+          inputTranscriptionLanguage: voiceAsrGuidance.language,
+          inputTranscriptionPrompt: voiceAsrGuidance.prompt
         });
       } else if (runtimeMode === "gemini_realtime") {
         const geminiRealtimeSettings = settings.voice?.geminiRealtime || {};
@@ -667,12 +672,18 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       return true;
     } catch (error) {
       const errorText = String(error?.message || error);
+      const connectDiagnostics = getRealtimeConnectErrorDiagnostics(error);
       manager.store.logAction({
         kind: "voice_error",
         guildId,
         channelId: message.channelId,
         userId,
-        content: `voice_join_failed: ${errorText}`
+        content: `voice_join_failed: ${errorText}`,
+        metadata: connectDiagnostics
+          ? {
+              connectDiagnostics
+            }
+          : undefined
       });
 
       if (realtimeClient) {

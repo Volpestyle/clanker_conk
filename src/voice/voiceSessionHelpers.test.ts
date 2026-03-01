@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   createBotAudioPlaybackStream,
+  ensureBotAudioPlaybackReady,
   isBotNameAddressed,
   extractSoundboardDirective,
   parseSoundboardDirectiveSequence,
@@ -13,6 +14,7 @@ import {
   parseResponseDoneModel,
   parseResponseDoneUsage,
   resolveRealtimeProvider,
+  resolveVoiceAsrLanguageGuidance,
   resolveVoiceRuntimeMode,
   transcriptSourceFromEventType
 } from "./voiceSessionHelpers.ts";
@@ -31,6 +33,59 @@ test("createBotAudioPlaybackStream configures a larger writable high-water mark"
   const stream = createBotAudioPlaybackStream();
   assert.equal(stream.writableHighWaterMark, AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES);
   stream.destroy();
+});
+
+test("ensureBotAudioPlaybackReady bypasses repair cooldown when stream is unavailable", () => {
+  const playCalls = [];
+  const subscribeCalls = [];
+  const logCalls = [];
+  const session = {
+    id: "session-repair-bypass",
+    guildId: "guild-1",
+    textChannelId: "channel-1",
+    audioPlayer: {
+      state: {
+        status: "playing"
+      },
+      play(resource) {
+        playCalls.push(resource);
+      }
+    },
+    connection: {
+      subscribe(player) {
+        subscribeCalls.push(player);
+      }
+    },
+    botAudioStream: {
+      destroyed: true,
+      writableEnded: false,
+      closed: false,
+      writableLength: 0
+    },
+    audioPlaybackQueue: {
+      waitingDrain: false,
+      drainHandler: null
+    },
+    lastAudioPipelineRepairAt: Date.now(),
+    audioPipelineRestartTimestamps: [],
+    lastAudioPipelineRestartAlarmAt: 0
+  };
+
+  const ready = ensureBotAudioPlaybackReady({
+    session,
+    store: {
+      logAction(entry) {
+        logCalls.push(entry);
+      }
+    },
+    botUserId: "bot-user"
+  });
+
+  assert.equal(ready, true);
+  assert.equal(Boolean(session.botAudioStream?.destroyed), false);
+  assert.equal(playCalls.length, 1);
+  assert.equal(subscribeCalls.length, 1);
+  assert.equal(logCalls.some((row) => row?.content === "bot_audio_pipeline_restarted"), true);
 });
 
 test("isRecoverableRealtimeError does not match unrelated realtime errors", () => {
@@ -59,6 +114,31 @@ test("getRealtimeCommitMinimumBytes enforces OpenAI minimum audio window", () =>
 test("getRealtimeCommitMinimumBytes uses passthrough minimum for non-openai modes", () => {
   assert.equal(getRealtimeCommitMinimumBytes("voice_agent", 24_000), 1);
   assert.equal(getRealtimeCommitMinimumBytes("gemini_realtime", 24_000), 1);
+  assert.equal(getRealtimeCommitMinimumBytes("elevenlabs_realtime", 24_000), 1);
+});
+
+test("resolveVoiceAsrLanguageGuidance supports auto and fixed language modes", () => {
+  const autoGuidance = resolveVoiceAsrLanguageGuidance({
+    voice: {
+      asrLanguageMode: "auto",
+      asrLanguageHint: "EN"
+    }
+  });
+  assert.equal(autoGuidance.mode, "auto");
+  assert.equal(autoGuidance.hint, "en");
+  assert.equal(autoGuidance.language, "");
+  assert.equal(autoGuidance.prompt.includes("Language hint: en"), true);
+
+  const fixedGuidance = resolveVoiceAsrLanguageGuidance({
+    voice: {
+      asrLanguageMode: "fixed",
+      asrLanguageHint: "en-US"
+    }
+  });
+  assert.equal(fixedGuidance.mode, "fixed");
+  assert.equal(fixedGuidance.hint, "en-us");
+  assert.equal(fixedGuidance.language, "en-us");
+  assert.equal(fixedGuidance.prompt, "");
 });
 
 test("Gemini realtime mode resolves to gemini provider and label", () => {
@@ -67,10 +147,18 @@ test("Gemini realtime mode resolves to gemini provider and label", () => {
   assert.equal(getRealtimeRuntimeLabel("gemini_realtime"), "gemini_realtime");
 });
 
+test("ElevenLabs realtime mode resolves to elevenlabs provider and label", () => {
+  assert.equal(resolveVoiceRuntimeMode({ voice: { mode: "elevenlabs_realtime" } }), "elevenlabs_realtime");
+  assert.equal(resolveRealtimeProvider("elevenlabs_realtime"), "elevenlabs");
+  assert.equal(getRealtimeRuntimeLabel("elevenlabs_realtime"), "elevenlabs_realtime");
+});
+
 test("transcriptSourceFromEventType classifies Gemini transcription events", () => {
   assert.equal(transcriptSourceFromEventType("input_audio_transcription"), "input");
   assert.equal(transcriptSourceFromEventType("output_audio_transcription"), "output");
   assert.equal(transcriptSourceFromEventType("server_content_text"), "output");
+  assert.equal(transcriptSourceFromEventType("user_transcript"), "input");
+  assert.equal(transcriptSourceFromEventType("agent_response"), "output");
 });
 
 test("isFinalRealtimeTranscriptEventType filters partial transcript events", () => {

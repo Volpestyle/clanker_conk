@@ -19,6 +19,7 @@ export const SOUNDBOARD_MAX_CANDIDATES = 40;
 const OPENAI_REALTIME_MIN_COMMIT_AUDIO_MS = 100;
 const SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*([\s\S]*?)\s*\]\]/gi;
 const MAX_SOUNDBOARD_DIRECTIVE_REF_LEN = 180;
+const ASR_LANGUAGE_BIAS_PROMPT_MAX_LEN = 280;
 const PRIMARY_WAKE_TOKEN_MIN_LEN = 4;
 const PRIMARY_WAKE_GENERIC_TOKENS = new Set(["bot", "ai", "assistant"]);
 const VOCATIVE_GREETING_TOKENS = new Set([
@@ -30,6 +31,7 @@ const VOCATIVE_GREETING_TOKENS = new Set([
   "hola"
 ]);
 const VOCATIVE_IGNORE_TOKENS = new Set(["guys", "everyone", "all", "chat", "yall", "yaall"]);
+const VOICE_ASR_LANGUAGE_MODES = new Set(["auto", "fixed"]);
 
 export function createBotAudioPlaybackStream() {
   return new PassThrough({
@@ -690,6 +692,44 @@ export function shouldAllowVoiceNsfwHumor(settings) {
   if (voiceFlag === true) return true;
   if (voiceFlag === false) return false;
   return false;
+}
+
+export function normalizeVoiceAsrLanguageMode(mode = "", fallback = "auto") {
+  const normalizedMode = String(mode || fallback || "auto")
+    .trim()
+    .toLowerCase();
+  return VOICE_ASR_LANGUAGE_MODES.has(normalizedMode) ? normalizedMode : "auto";
+}
+
+export function normalizeVoiceAsrLanguageHint(hint = "", fallback = "") {
+  if (hint === undefined || hint === null) {
+    return normalizeVoiceAsrLanguageHint(fallback, "");
+  }
+  const normalizedHint = String(hint || "")
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, "-");
+  if (!normalizedHint) return "";
+  if (!/^[a-z]{2,3}(?:-[a-z0-9]{2,8}){0,2}$/u.test(normalizedHint)) {
+    return normalizeVoiceAsrLanguageHint(fallback, "");
+  }
+  return normalizedHint.slice(0, 24);
+}
+
+export function resolveVoiceAsrLanguageGuidance(settings = null) {
+  const mode = normalizeVoiceAsrLanguageMode(settings?.voice?.asrLanguageMode, "auto");
+  const hint = normalizeVoiceAsrLanguageHint(settings?.voice?.asrLanguageHint, "en");
+  const fixedLanguage = mode === "fixed" ? hint : "";
+  const promptHint = hint
+    ? `Language hint: ${hint}. Prefer this language when uncertain, but transcribe the actual spoken language.`
+    : "";
+  const prompt = mode === "auto" ? promptHint.slice(0, ASR_LANGUAGE_BIAS_PROMPT_MAX_LEN) : "";
+  return {
+    mode,
+    hint,
+    language: fixedLanguage || "",
+    prompt
+  };
 }
 
 export function formatRealtimeMemoryFacts(facts, maxItems = REALTIME_MEMORY_FACT_LIMIT) {

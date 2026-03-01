@@ -93,6 +93,7 @@ import {
   parseResponseDoneModel,
   parseResponseDoneStatus,
   parseResponseDoneUsage,
+  resolveVoiceAsrLanguageGuidance,
   resolveRealtimeProvider,
   shortError,
   shouldAllowVoiceNsfwHumor,
@@ -1539,12 +1540,37 @@ export class VoiceSessionManager {
       ? [...session.userCaptures.keys()].map((entry) => String(entry || "").trim()).filter(Boolean)
       : [];
     const pendingRealtimeTurns = Array.isArray(session?.pendingRealtimeTurns) ? session.pendingRealtimeTurns : [];
-    const pendingRealtimeTurnUserIds = pendingRealtimeTurns
-      .map((entry) => String(entry?.userId || "").trim())
+    const sampleRateHz = isRealtimeMode(session?.mode)
+      ? Number(session?.realtimeInputSampleRateHz) || 24000
+      : 24000;
+    const pendingRealtimeTurnSummaries = pendingRealtimeTurns.map((entry) => {
+      const userId = String(entry?.userId || "").trim();
+      const rawPcmBuffer = entry?.pcmBuffer;
+      const pcmBuffer = Buffer.isBuffer(rawPcmBuffer)
+        ? rawPcmBuffer
+        : rawPcmBuffer && ArrayBuffer.isView(rawPcmBuffer)
+          ? Buffer.from(rawPcmBuffer.buffer, rawPcmBuffer.byteOffset, rawPcmBuffer.byteLength)
+          : null;
+      const silenceGate = pcmBuffer?.length
+        ? this.evaluatePcmSilenceGate({
+            pcmBuffer,
+            sampleRateHz
+          })
+        : null;
+      return {
+        userId,
+        eligibleForSupersede: !silenceGate?.drop
+      };
+    });
+    const totalPendingRealtimeQueueDepth = pendingRealtimeTurnSummaries.length;
+    const pendingRealtimeTurnUserIds = pendingRealtimeTurnSummaries
+      .filter((entry) => entry.eligibleForSupersede)
+      .map((entry) => entry.userId)
       .filter(Boolean);
 
     const activeCaptureCount = activeCaptureUserIds.length;
     const pendingRealtimeQueueDepth = pendingRealtimeTurnUserIds.length;
+    const pendingNearSilentQueueDepth = Math.max(0, totalPendingRealtimeQueueDepth - pendingRealtimeQueueDepth);
     const interruptingActiveCaptureCount = activeCaptureUserIds.filter((captureUserId) =>
       this.isUserAllowedToInterruptReply({
         policy: normalizedPolicy,
@@ -1561,11 +1587,16 @@ export class VoiceSessionManager {
     const lastInboundAudioAt = Math.max(0, Number(session?.lastInboundAudioAt || 0));
     const rawNewerInboundAudio = normalizedGenerationStartedAt > 0 && lastInboundAudioAt > normalizedGenerationStartedAt;
     const newerInboundAudio = rawNewerInboundAudio;
-    const shouldSupersede = activeCaptureCount > 0 || pendingRealtimeQueueDepth > 0 || newerInboundAudio;
+    const shouldSupersede =
+      interruptingActiveCaptureCount > 0 ||
+      interruptingPendingQueueDepth > 0 ||
+      newerInboundAudio;
     return {
       shouldSupersede,
       activeCaptureCount,
       pendingRealtimeQueueDepth,
+      totalPendingRealtimeQueueDepth,
+      pendingNearSilentQueueDepth,
       interruptingActiveCaptureCount,
       interruptingPendingQueueDepth,
       ignoredActiveCaptureCount: Math.max(0, activeCaptureCount - interruptingActiveCaptureCount),
@@ -1588,6 +1619,8 @@ export class VoiceSessionManager {
       supersedeState && typeof supersedeState === "object" ? supersedeState : {};
     const activeCaptureCount = Number(normalizedSupersedeState.activeCaptureCount || 0);
     const pendingRealtimeQueueDepth = Number(normalizedSupersedeState.pendingRealtimeQueueDepth || 0);
+    const totalPendingRealtimeQueueDepth = Number(normalizedSupersedeState.totalPendingRealtimeQueueDepth || 0);
+    const pendingNearSilentQueueDepth = Number(normalizedSupersedeState.pendingNearSilentQueueDepth || 0);
     const interruptingActiveCaptureCount = Number(normalizedSupersedeState.interruptingActiveCaptureCount || 0);
     const interruptingPendingQueueDepth = Number(normalizedSupersedeState.interruptingPendingQueueDepth || 0);
     const ignoredActiveCaptureCount = Number(normalizedSupersedeState.ignoredActiveCaptureCount || 0);
@@ -1619,6 +1652,8 @@ export class VoiceSessionManager {
         supersedeReason,
         activeCaptureCount,
         pendingRealtimeQueueDepth,
+        totalPendingRealtimeQueueDepth,
+        pendingNearSilentQueueDepth,
         interruptingActiveCaptureCount,
         interruptingPendingQueueDepth,
         ignoredActiveCaptureCount,
@@ -4811,6 +4846,7 @@ export class VoiceSessionManager {
     }
 
     const settings = session.settingsSnapshot || this.store.getSettings();
+    const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
     const preferredModel =
       session.mode === "openai_realtime"
         ? settings?.voice?.openaiRealtime?.inputTranscriptionModel
@@ -4892,7 +4928,9 @@ export class VoiceSessionManager {
         traceSource: "voice_realtime_turn_decider",
         errorPrefix: "voice_realtime_transcription_failed",
         emptyTranscriptRuntimeEvent: "voice_realtime_transcription_empty",
-        emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK
+        emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
+        asrLanguage: asrLanguageGuidance.language,
+        asrPrompt: asrLanguageGuidance.prompt
       });
 
       if (
@@ -4921,7 +4959,9 @@ export class VoiceSessionManager {
           errorPrefix: "voice_realtime_transcription_fallback_failed",
           emptyTranscriptRuntimeEvent: "voice_realtime_transcription_empty",
           emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
-          suppressEmptyTranscriptLogs: true
+          suppressEmptyTranscriptLogs: true,
+          asrLanguage: asrLanguageGuidance.language,
+          asrPrompt: asrLanguageGuidance.prompt
         });
         if (turnTranscript) {
           usedFallbackModelForTranscript = true;
@@ -7150,6 +7190,7 @@ export class VoiceSessionManager {
     }
 
     const settings = session.settingsSnapshot || this.store.getSettings();
+    const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
     const sttSettings = settings?.voice?.sttPipeline || {};
     const transcriptionModelPrimary =
       String(sttSettings?.transcriptionModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
@@ -7199,7 +7240,9 @@ export class VoiceSessionManager {
       traceSource: "voice_stt_pipeline_turn",
       errorPrefix: "stt_pipeline_transcription_failed",
       emptyTranscriptRuntimeEvent: "voice_stt_transcription_empty",
-      emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK
+      emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
+      asrLanguage: asrLanguageGuidance.language,
+      asrPrompt: asrLanguageGuidance.prompt
     });
     if (
       !transcript &&
@@ -7217,7 +7260,9 @@ export class VoiceSessionManager {
         errorPrefix: "stt_pipeline_transcription_fallback_failed",
         emptyTranscriptRuntimeEvent: "voice_stt_transcription_empty",
         emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
-        suppressEmptyTranscriptLogs: true
+        suppressEmptyTranscriptLogs: true,
+        asrLanguage: asrLanguageGuidance.language,
+        asrPrompt: asrLanguageGuidance.prompt
       });
       if (transcript) {
         usedFallbackModelForTranscript = true;
@@ -7972,6 +8017,11 @@ export class VoiceSessionManager {
       trailingSoundboardRefs: requestedSoundboardRefs
     });
     if (!playbackPlan.spokenText && playbackPlan.soundboardRefs.length === 0 && !leaveVoiceChannelRequested) {
+      const skipCause = !replyText
+        ? "empty_reply_text"
+        : replyText === "[SKIP]"
+          ? "model_skip"
+          : "no_playback_steps";
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
@@ -7991,6 +8041,8 @@ export class VoiceSessionManager {
             : 0,
           soundboardRefs: [],
           leaveVoiceChannelRequested,
+          skipCause,
+          replyTextPreview: replyText ? replyText.slice(0, 220) : null,
           joinWindowActive,
           joinWindowAgeMs: Math.round(joinWindowAgeMs),
           conversationState: resolvedConversationContext?.engagementState || null,
@@ -8172,7 +8224,9 @@ export class VoiceSessionManager {
     errorPrefix = "stt_pipeline_transcription_failed",
     emptyTranscriptRuntimeEvent = "voice_transcription_empty",
     emptyTranscriptErrorStreakThreshold = 1,
-    suppressEmptyTranscriptLogs = false
+    suppressEmptyTranscriptLogs = false,
+    asrLanguage = "",
+    asrPrompt = ""
   }) {
     if (!this.llm?.transcribeAudio || !pcmBuffer?.length) return "";
     const resolvedModel = String(model || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
@@ -8189,6 +8243,8 @@ export class VoiceSessionManager {
       const transcript = await this.llm.transcribeAudio({
         filePath: wavPath,
         model: resolvedModel,
+        language: asrLanguage,
+        prompt: asrPrompt,
         trace: {
           guildId: session.guildId,
           channelId: session.textChannelId,
@@ -8219,6 +8275,8 @@ export class VoiceSessionManager {
           metadata: {
             sessionId: session.id,
             model: resolvedModel,
+            language: String(asrLanguage || "").trim() || null,
+            prompt: String(asrPrompt || "").trim() || null,
             captureReason: String(captureReason || "stream_end"),
             source,
             emptyTranscript: true,
@@ -8238,6 +8296,8 @@ export class VoiceSessionManager {
         metadata: {
           sessionId: session.id,
           model: resolvedModel,
+          language: String(asrLanguage || "").trim() || null,
+          prompt: String(asrPrompt || "").trim() || null,
           captureReason: String(captureReason || "stream_end"),
           source
         }

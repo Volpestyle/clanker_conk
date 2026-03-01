@@ -108,6 +108,8 @@ export const DEFAULT_SETTINGS = {
     enabled: false,
     mode: "voice_agent",
     realtimeReplyStrategy: "brain",
+    asrLanguageMode: "auto",
+    asrLanguageHint: "en",
     allowNsfwHumor: true,
     intentConfidenceThreshold: 0.75,
     maxSessionMinutes: 30,

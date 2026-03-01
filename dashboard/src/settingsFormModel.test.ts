@@ -54,6 +54,8 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.voiceStreamWatchBrainContextEnabled, true);
   assert.equal(form.voiceStreamWatchBrainContextMinIntervalSeconds, 4);
   assert.equal(form.voiceStreamWatchBrainContextMaxEntries, 8);
+  assert.equal(form.voiceAsrLanguageMode, "auto");
+  assert.equal(form.voiceAsrLanguageHint, "en");
   assert.equal(
     form.voiceStreamWatchBrainContextPrompt,
     "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or casual shout-out commentary."
@@ -81,6 +83,8 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.voiceStreamWatchBrainContextMinIntervalSeconds = 6;
   form.voiceStreamWatchBrainContextMaxEntries = 5;
   form.voiceStreamWatchBrainContextPrompt = "Use stream snapshots as context for replies.";
+  form.voiceAsrLanguageMode = "fixed";
+  form.voiceAsrLanguageHint = "en-us";
 
   const patch = formToSettingsPatch(form);
   assert.deepEqual(patch.botNameAliases, ["clank", "conk"]);
@@ -103,6 +107,8 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.voice.streamWatch.brainContextMinIntervalSeconds, 6);
   assert.equal(patch.voice.streamWatch.brainContextMaxEntries, 5);
   assert.equal(patch.voice.streamWatch.brainContextPrompt, "Use stream snapshots as context for replies.");
+  assert.equal(patch.voice.asrLanguageMode, "fixed");
+  assert.equal(patch.voice.asrLanguageHint, "en-us");
   assert.equal(patch.voice.thoughtEngine.enabled, true);
   assert.equal(patch.voice.thoughtEngine.provider, "anthropic");
   assert.equal(patch.voice.thoughtEngine.model, "claude-haiku-4-5");
@@ -134,6 +140,14 @@ test("settingsToForm preserves explicit empty prompt overrides", () => {
   assert.equal(form.promptVoiceGuidance, "");
   assert.equal(form.promptVoiceOperationalGuidance, "");
   assert.equal(form.promptMediaPromptCraftGuidance, "");
+});
+
+test("formToSettingsPatch parses bot aliases from comma-separated single-line input", () => {
+  const form = settingsToForm({});
+  form.botNameAliases = "clank, conk, clank";
+
+  const patch = formToSettingsPatch(form);
+  assert.deepEqual(patch.botNameAliases, ["clank", "conk"]);
 });
 
 test("settingsToForm uses default prompt guidance lists when omitted", () => {

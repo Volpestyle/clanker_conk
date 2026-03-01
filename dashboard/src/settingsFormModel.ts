@@ -142,6 +142,8 @@ export function settingsToForm(settings) {
     voiceEnabled: settings?.voice?.enabled ?? defaultVoice.enabled,
     voiceMode: selectedVoiceMode,
     voiceRealtimeReplyStrategy: settings?.voice?.realtimeReplyStrategy ?? defaultVoice.realtimeReplyStrategy,
+    voiceAsrLanguageMode: settings?.voice?.asrLanguageMode ?? defaultVoice.asrLanguageMode,
+    voiceAsrLanguageHint: settings?.voice?.asrLanguageHint ?? defaultVoice.asrLanguageHint,
     voiceAllowNsfwHumor: settings?.voice?.allowNsfwHumor ?? defaultVoice.allowNsfwHumor,
     voiceIntentConfidenceThreshold: settings?.voice?.intentConfidenceThreshold ?? defaultVoice.intentConfidenceThreshold,
     voiceMaxSessionMinutes: settings?.voice?.maxSessionMinutes ?? defaultVoice.maxSessionMinutes,
@@ -298,7 +300,7 @@ export function settingsToForm(settings) {
 export function formToSettingsPatch(form) {
   return {
     botName: form.botName.trim(),
-    botNameAliases: parseUniqueLineList(form.botNameAliases),
+    botNameAliases: parseUniqueList(form.botNameAliases),
     persona: {
       flavor: form.personaFlavor.trim(),
       hardLimits: parseUniqueLineList(form.personaHardLimits)
@@ -366,6 +368,8 @@ export function formToSettingsPatch(form) {
       enabled: form.voiceEnabled,
       mode: form.voiceMode,
       realtimeReplyStrategy: String(form.voiceRealtimeReplyStrategy || "").trim(),
+      asrLanguageMode: String(form.voiceAsrLanguageMode || "").trim(),
+      asrLanguageHint: String(form.voiceAsrLanguageHint || "").trim(),
       allowNsfwHumor: form.voiceAllowNsfwHumor,
       intentConfidenceThreshold: Number(form.voiceIntentConfidenceThreshold),
       maxSessionMinutes: Number(form.voiceMaxSessionMinutes),

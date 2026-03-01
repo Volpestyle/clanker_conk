@@ -12,6 +12,7 @@ import {
   buildClaudeCodeStreamInput,
   buildClaudeCodeSystemPrompt,
   buildClaudeCodeTextCliArgs,
+  createClaudeCliSessionPool,
   normalizeClaudeCodeCliError,
   parseClaudeCodeJsonOutput,
   parseClaudeCodeStreamOutput,
@@ -46,6 +47,8 @@ import {
 
 const CLAUDE_CODE_TIMEOUT_MS = 30_000;
 const CLAUDE_CODE_MAX_BUFFER_BYTES = 1024 * 1024;
+const CLAUDE_CODE_SESSION_POOL_MAX_SESSIONS = 8;
+const CLAUDE_CODE_STREAM_SESSION_MAX_TURNS = 120;
 const DEFAULT_MEMORY_EMBEDDING_MODEL = "text-embedding-3-small";
 const XAI_VIDEO_POLL_INTERVAL_MS = 2500;
 const XAI_VIDEO_TIMEOUT_MS = 4 * 60_000;
@@ -151,6 +154,7 @@ export class LLMService {
   xai;
   anthropic;
   claudeCodeAvailable;
+  claudeCodeSessionPool;
 
   constructor({ appConfig, store }) {
     this.appConfig = appConfig;
@@ -175,6 +179,11 @@ export class LLMService {
     } catch {
       this.claudeCodeAvailable = false;
     }
+
+    this.claudeCodeSessionPool = createClaudeCliSessionPool({
+      maxSessions: CLAUDE_CODE_SESSION_POOL_MAX_SESSIONS,
+      maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
+    });
   }
 
   async generate({
@@ -509,12 +518,13 @@ export class LLMService {
     const streamArgs = buildClaudeCodeCliArgs({
       model,
       systemPrompt: claudeSystemPrompt,
-      jsonSchema
+      jsonSchema,
+      maxTurns: CLAUDE_CODE_STREAM_SESSION_MAX_TURNS
     });
     let streamFailure = "";
 
     try {
-      const { stdout } = await runClaudeCli({
+      const { stdout } = await this.runClaudeCodeStream({
         args: streamArgs,
         input: streamInput,
         timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
@@ -641,11 +651,12 @@ export class LLMService {
     });
 
     try {
-      const { stdout } = await runClaudeCli({
+      const { stdout } = await this.runClaudeCodeStream({
         args: buildClaudeCodeCliArgs({
           model,
           systemPrompt,
-          jsonSchema: schemaJson
+          jsonSchema: schemaJson,
+          maxTurns: CLAUDE_CODE_STREAM_SESSION_MAX_TURNS
         }),
         input: streamInput,
         timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
@@ -670,6 +681,29 @@ export class LLMService {
       });
       throw new Error(normalizedError.message);
     }
+  }
+
+  async runClaudeCodeStream({ args, input, timeoutMs, maxBufferBytes }) {
+    if (this.claudeCodeSessionPool && typeof this.claudeCodeSessionPool.run === "function") {
+      return await this.claudeCodeSessionPool.run({
+        args,
+        input,
+        timeoutMs,
+        maxBufferBytes
+      });
+    }
+
+    return await runClaudeCli({
+      args,
+      input,
+      timeoutMs,
+      maxBufferBytes
+    });
+  }
+
+  close() {
+    if (!this.claudeCodeSessionPool || typeof this.claudeCodeSessionPool.close !== "function") return;
+    this.claudeCodeSessionPool.close();
   }
 
   isEmbeddingReady() {
@@ -1127,6 +1161,8 @@ export class LLMService {
   async transcribeAudio({
     filePath,
     model = "gpt-4o-mini-transcribe",
+    language = "",
+    prompt = "",
     trace = { guildId: null, channelId: null, userId: null, source: null }
   }) {
     if (!this.openai) {
@@ -1134,13 +1170,24 @@ export class LLMService {
     }
 
     const resolvedModel = String(model || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
+    const resolvedLanguage = String(language || "")
+      .trim()
+      .toLowerCase()
+      .replace(/_/g, "-")
+      .slice(0, 24);
+    const resolvedPrompt = String(prompt || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 280);
     try {
       const filePathText = String(filePath);
       const audioBytes = await readFile(filePathText);
       const response = await this.openai.audio.transcriptions.create({
         model: resolvedModel,
         file: new File([audioBytes], basename(filePathText) || "audio.wav"),
-        response_format: "text"
+        response_format: "text",
+        ...(resolvedLanguage ? { language: resolvedLanguage } : {}),
+        ...(resolvedPrompt ? { prompt: resolvedPrompt } : {})
       });
 
       const text =
@@ -1159,6 +1206,8 @@ export class LLMService {
         content: resolvedModel,
         metadata: {
           model: resolvedModel,
+          language: resolvedLanguage || null,
+          prompt: resolvedPrompt || null,
           source: trace.source || "unknown"
         }
       });
@@ -1173,6 +1222,8 @@ export class LLMService {
         content: String(error?.message || error),
         metadata: {
           model: resolvedModel,
+          language: resolvedLanguage || null,
+          prompt: resolvedPrompt || null,
           source: trace.source || "unknown"
         }
       });

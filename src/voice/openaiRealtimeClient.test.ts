@@ -31,11 +31,40 @@ test("OpenAiRealtimeClient sendSessionUpdate uses GA session audio schema", () =
   assert.equal(outbound.session.audio.output.format.rate, 24000);
   assert.equal(outbound.session.audio.output.voice, "alloy");
   assert.equal(outbound.session.audio.input.transcription.model, "gpt-4o-mini-transcribe");
+  assert.equal(Object.hasOwn(outbound.session.audio.input.transcription, "language"), false);
+  assert.equal(Object.hasOwn(outbound.session.audio.input.transcription, "prompt"), false);
   assert.equal(Object.hasOwn(outbound.session, "voice"), false);
   assert.equal(Object.hasOwn(outbound.session, "modalities"), false);
   assert.equal(Object.hasOwn(outbound.session, "input_audio_format"), false);
   assert.equal(Object.hasOwn(outbound.session, "output_audio_format"), false);
   assert.equal(Object.hasOwn(outbound.session, "input_audio_transcription"), false);
+});
+
+test("OpenAiRealtimeClient sendSessionUpdate includes transcription language guidance when configured", () => {
+  const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
+  let outbound = null;
+  client.send = (payload) => {
+    outbound = payload;
+  };
+  client.sessionConfig = {
+    model: "gpt-realtime",
+    voice: "alloy",
+    instructions: "",
+    inputAudioFormat: "pcm16",
+    outputAudioFormat: "pcm16",
+    inputTranscriptionModel: "gpt-4o-mini-transcribe",
+    inputTranscriptionLanguage: "en",
+    inputTranscriptionPrompt: "Language hint: en. Prefer this language when uncertain."
+  };
+
+  client.sendSessionUpdate();
+
+  assert.ok(outbound);
+  assert.equal(outbound.session.audio.input.transcription.language, "en");
+  assert.equal(
+    outbound.session.audio.input.transcription.prompt,
+    "Language hint: en. Prefer this language when uncertain."
+  );
 });
 
 test("OpenAiRealtimeClient sendSessionUpdate normalizes unsupported formats to PCM16 transport", () => {

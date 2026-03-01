@@ -47,6 +47,8 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
     voice: {
       mode: "OPENAI_REALTIME",
       realtimeReplyStrategy: "NATIVE",
+      asrLanguageMode: "FIXED",
+      asrLanguageHint: "EN_us",
       generationLlm: {
         provider: "not-real",
         model: ""
@@ -140,6 +142,8 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
 
   assert.equal(normalized.voice.mode, "openai_realtime");
   assert.equal(normalized.voice.realtimeReplyStrategy, "native");
+  assert.equal(normalized.voice.asrLanguageMode, "fixed");
+  assert.equal(normalized.voice.asrLanguageHint, "en-us");
   assert.equal(normalized.voice.generationLlm.useTextModel, false);
   assert.equal(normalized.voice.generationLlm.provider, "anthropic");
   assert.equal(normalized.voice.generationLlm.model, "claude-haiku-4-5");
@@ -356,4 +360,33 @@ test("normalizeSettings allows longer persona flavor values", () => {
     }
   });
   assert.equal(normalizedOverLimit.persona.flavor.length, PERSONA_FLAVOR_MAX_CHARS);
+});
+
+test("normalizeSettings supports auto/fixed voice ASR language guidance", () => {
+  const autoHint = normalizeSettings({
+    voice: {
+      asrLanguageMode: "auto",
+      asrLanguageHint: "EN"
+    }
+  });
+  assert.equal(autoHint.voice.asrLanguageMode, "auto");
+  assert.equal(autoHint.voice.asrLanguageHint, "en");
+
+  const fixedHint = normalizeSettings({
+    voice: {
+      asrLanguageMode: "fixed",
+      asrLanguageHint: "en-US"
+    }
+  });
+  assert.equal(fixedHint.voice.asrLanguageMode, "fixed");
+  assert.equal(fixedHint.voice.asrLanguageHint, "en-us");
+
+  const invalid = normalizeSettings({
+    voice: {
+      asrLanguageMode: "not-real",
+      asrLanguageHint: "!!!!!!"
+    }
+  });
+  assert.equal(invalid.voice.asrLanguageMode, "auto");
+  assert.equal(invalid.voice.asrLanguageHint, "en");
 });

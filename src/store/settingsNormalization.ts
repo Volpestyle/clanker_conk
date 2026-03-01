@@ -416,6 +416,8 @@ export function normalizeSettings(raw) {
     enabled?: boolean;
     mode?: string;
     realtimeReplyStrategy?: string;
+    asrLanguageMode?: string;
+    asrLanguageHint?: string;
     allowNsfwHumor?: boolean;
     intentConfidenceThreshold?: number;
     maxSessionMinutes?: number;
@@ -468,6 +470,14 @@ export function normalizeSettings(raw) {
   merged.voice.enabled =
     merged.voice?.enabled !== undefined ? Boolean(merged.voice?.enabled) : Boolean(defaultVoice.enabled);
   merged.voice.mode = normalizeVoiceRuntimeMode(merged.voice?.mode, "voice_agent");
+  merged.voice.asrLanguageMode = normalizeVoiceAsrLanguageMode(
+    merged.voice?.asrLanguageMode,
+    defaultVoice.asrLanguageMode || "auto"
+  );
+  merged.voice.asrLanguageHint = normalizeVoiceAsrLanguageHint(
+    merged.voice?.asrLanguageHint,
+    defaultVoice.asrLanguageHint || "en"
+  );
   merged.voice.realtimeReplyStrategy = normalizeRealtimeReplyStrategy(
     merged.voice?.realtimeReplyStrategy,
     defaultVoice.realtimeReplyStrategy
@@ -1082,6 +1092,29 @@ function normalizeRealtimeReplyStrategy(value, fallback = "brain") {
     .toLowerCase();
   if (normalized === "native") return "native";
   return "brain";
+}
+
+function normalizeVoiceAsrLanguageMode(value, fallback = "auto") {
+  const normalized = String(value || fallback || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "fixed") return "fixed";
+  return "auto";
+}
+
+function normalizeVoiceAsrLanguageHint(value, fallback = "en") {
+  if (value === undefined || value === null) {
+    return normalizeVoiceAsrLanguageHint(fallback, "");
+  }
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/_/g, "-");
+  if (!normalized) return "";
+  if (!/^[a-z]{2,3}(?:-[a-z0-9]{2,8}){0,2}$/u.test(normalized)) {
+    return normalizeVoiceAsrLanguageHint(fallback, "");
+  }
+  return normalized.slice(0, 24);
 }
 
 function normalizeStreamWatchCommentaryPath(value, fallback = "auto") {

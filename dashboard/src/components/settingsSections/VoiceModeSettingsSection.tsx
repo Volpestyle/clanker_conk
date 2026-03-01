@@ -79,6 +79,34 @@ export function VoiceModeSettingsSection({
             </>
           )}
 
+          <div className="split">
+            <div>
+              <label htmlFor="voice-asr-language-mode">ASR language mode</label>
+              <select
+                id="voice-asr-language-mode"
+                value={form.voiceAsrLanguageMode}
+                onChange={set("voiceAsrLanguageMode")}
+              >
+                <option value="auto">Auto detect (allow switching)</option>
+                <option value="fixed">Fixed language</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="voice-asr-language-hint">ASR language hint (BCP-47, e.g. en, en-us)</label>
+              <input
+                id="voice-asr-language-hint"
+                type="text"
+                value={form.voiceAsrLanguageHint}
+                onChange={set("voiceAsrLanguageHint")}
+                placeholder="en"
+              />
+            </div>
+          </div>
+          <p>
+            Auto mode keeps multilingual switching and uses the hint only for ambiguity bias. Fixed mode forces that
+            language for transcription.
+          </p>
+
           <div className="toggles">
             <label>
               <input

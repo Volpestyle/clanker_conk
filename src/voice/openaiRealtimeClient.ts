@@ -76,7 +76,9 @@ export class OpenAiRealtimeClient extends EventEmitter {
     instructions = "",
     inputAudioFormat = "pcm16",
     outputAudioFormat = "pcm16",
-    inputTranscriptionModel = "gpt-4o-mini-transcribe"
+    inputTranscriptionModel = "gpt-4o-mini-transcribe",
+    inputTranscriptionLanguage = "",
+    inputTranscriptionPrompt = ""
   } = {}) {
     if (!this.apiKey) {
       throw new Error("Missing OPENAI_API_KEY for OpenAI realtime voice runtime.");
@@ -95,6 +97,15 @@ export class OpenAiRealtimeClient extends EventEmitter {
     const resolvedOutputAudioFormat = normalizeOpenAiRealtimeAudioFormat(outputAudioFormat, "output");
     const resolvedInputTranscriptionModel =
       String(inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
+    const resolvedInputTranscriptionLanguage = String(inputTranscriptionLanguage || "")
+      .trim()
+      .toLowerCase()
+      .replace(/_/g, "-")
+      .slice(0, 24);
+    const resolvedInputTranscriptionPrompt = String(inputTranscriptionPrompt || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 280);
     const ws = await this.openSocket(this.buildRealtimeUrl(resolvedModel));
     markRealtimeConnected(this, ws);
 
@@ -124,7 +135,9 @@ export class OpenAiRealtimeClient extends EventEmitter {
       instructions: String(instructions || ""),
       inputAudioFormat: resolvedInputAudioFormat,
       outputAudioFormat: resolvedOutputAudioFormat,
-      inputTranscriptionModel: resolvedInputTranscriptionModel
+      inputTranscriptionModel: resolvedInputTranscriptionModel,
+      inputTranscriptionLanguage: resolvedInputTranscriptionLanguage,
+      inputTranscriptionPrompt: resolvedInputTranscriptionPrompt
     };
     this.latestVideoFrame = null;
     this.sendSessionUpdate();
@@ -439,7 +452,9 @@ export class OpenAiRealtimeClient extends EventEmitter {
             transcription: compactObject({
               model:
                 String(session.inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() ||
-                "gpt-4o-mini-transcribe"
+                "gpt-4o-mini-transcribe",
+              language: String(session.inputTranscriptionLanguage || "").trim() || null,
+              prompt: String(session.inputTranscriptionPrompt || "").trim() || null
             })
           }),
           output: compactObject({
@@ -607,6 +622,10 @@ function summarizeOutboundPayload(payload) {
       outputAudioFormat: audio?.output?.format || null,
       outputVoice: audio?.output?.voice || null,
       inputTranscriptionModel: audio?.input?.transcription?.model || null,
+      inputTranscriptionLanguage: audio?.input?.transcription?.language || null,
+      inputTranscriptionPromptChars: audio?.input?.transcription?.prompt
+        ? String(audio.input.transcription.prompt).length
+        : 0,
       instructionsChars: session.instructions ? String(session.instructions).length : 0
     });
   }
