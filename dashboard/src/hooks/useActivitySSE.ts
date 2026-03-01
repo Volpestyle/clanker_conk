@@ -6,6 +6,17 @@ export type ActivitySSEStatus = "connecting" | "open" | "closed";
 type ActivityAction = {
   id?: number;
   created_at?: string;
+  createdAt?: string;
+  guild_id?: string;
+  guildId?: string;
+  channel_id?: string;
+  channelId?: string;
+  message_id?: string;
+  messageId?: string;
+  user_id?: string;
+  userId?: string;
+  usd_cost?: number;
+  usdCost?: number;
   kind?: string;
   content?: string;
   metadata?: unknown;
@@ -19,6 +30,36 @@ type ActivitySnapshot = {
 
 const MAX_ACTIONS = 220;
 const RECONNECT_DELAY_MS = 3_000;
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function normalizeOptionalNumber(value: unknown): number | undefined {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function normalizeActivityAction(action: ActivityAction): ActivityAction {
+  const createdAt = normalizeOptionalString(action.created_at) ?? normalizeOptionalString(action.createdAt);
+  const guildId = normalizeOptionalString(action.guild_id) ?? normalizeOptionalString(action.guildId);
+  const channelId = normalizeOptionalString(action.channel_id) ?? normalizeOptionalString(action.channelId);
+  const messageId = normalizeOptionalString(action.message_id) ?? normalizeOptionalString(action.messageId);
+  const userId = normalizeOptionalString(action.user_id) ?? normalizeOptionalString(action.userId);
+  const usdCost = normalizeOptionalNumber(action.usd_cost ?? action.usdCost);
+
+  return {
+    ...action,
+    created_at: createdAt,
+    guild_id: guildId,
+    channel_id: channelId,
+    message_id: messageId,
+    user_id: userId,
+    usd_cost: usdCost
+  };
+}
 
 export function useActivitySSE() {
   const [actions, setActions] = useState<ActivityAction[]>([]);
@@ -42,7 +83,11 @@ export function useActivitySSE() {
     es.addEventListener("activity_snapshot", (event: MessageEvent) => {
       try {
         const payload = JSON.parse(event.data) as ActivitySnapshot;
-        setActions(Array.isArray(payload?.actions) ? payload.actions.slice(0, MAX_ACTIONS) : []);
+        setActions(
+          Array.isArray(payload?.actions)
+            ? payload.actions.slice(0, MAX_ACTIONS).map(normalizeActivityAction)
+            : []
+        );
         setStats(payload?.stats ?? null);
         setLastSuccess(Date.now());
       } catch {
@@ -52,7 +97,7 @@ export function useActivitySSE() {
 
     es.addEventListener("action_event", (event: MessageEvent) => {
       try {
-        const action = JSON.parse(event.data) as ActivityAction;
+        const action = normalizeActivityAction(JSON.parse(event.data) as ActivityAction);
         setActions((previous) => {
           const actionId = Number(action?.id || 0);
           if (actionId > 0 && previous.some((row) => Number(row?.id || 0) === actionId)) {
