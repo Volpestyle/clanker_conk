@@ -10,8 +10,6 @@ import { clamp, deepMerge, uniqueIdList } from "../utils.ts";
 import { normalizeVoiceRuntimeMode } from "../voice/voiceModes.ts";
 import {
   VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
-  VOICE_REPLY_DECIDER_SYSTEM_PROMPT_FULL_DEFAULT,
-  VOICE_REPLY_DECIDER_SYSTEM_PROMPT_STRICT_DEFAULT,
   VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
 } from "../promptCore.ts";
 
@@ -380,15 +378,12 @@ export function normalizeSettings(raw) {
     enabled?: boolean;
     provider?: string;
     model?: string;
-    maxAttempts?: number;
     reasoningEffort?: string;
     prompts?: VoiceReplyDecisionPromptDefaults;
   };
   type VoiceReplyDecisionPromptDefaults = {
     wakeVariantHint?: string;
     systemPromptCompact?: string;
-    systemPromptFull?: string;
-    systemPromptStrict?: string;
   };
   type VoiceGenerationDefaults = {
     useTextModel?: boolean;
@@ -628,17 +623,7 @@ export function normalizeSettings(raw) {
   );
   merged.voice.replyDecisionLlm.provider = normalizedVoiceReplyDecisionLlm.provider;
   merged.voice.replyDecisionLlm.model = normalizedVoiceReplyDecisionLlm.model;
-  const replyDecisionMaxAttemptsRaw = Number(merged.voice?.replyDecisionLlm?.maxAttempts);
-  const defaultReplyDecisionMaxAttemptsRaw = Number(defaultVoiceReplyDecisionLlm.maxAttempts);
-  merged.voice.replyDecisionLlm.maxAttempts = clamp(
-    Number.isFinite(replyDecisionMaxAttemptsRaw)
-      ? replyDecisionMaxAttemptsRaw
-      : Number.isFinite(defaultReplyDecisionMaxAttemptsRaw)
-        ? defaultReplyDecisionMaxAttemptsRaw
-        : 1,
-      1,
-      3
-  );
+  delete merged.voice.replyDecisionLlm.maxAttempts;
   const defaultReplyDecisionReasoningEffort = defaultVoiceReplyDecisionLlm.reasoningEffort || "minimal";
   merged.voice.replyDecisionLlm.reasoningEffort = normalizeOpenAiReasoningEffort(
     merged.voice?.replyDecisionLlm?.reasoningEffort,
@@ -654,16 +639,8 @@ export function normalizeSettings(raw) {
     defaultVoiceReplyDecisionPrompts.systemPromptCompact || VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
     10_000
   );
-  merged.voice.replyDecisionLlm.prompts.systemPromptFull = normalizeLongPromptBlock(
-    merged.voice?.replyDecisionLlm?.prompts?.systemPromptFull,
-    defaultVoiceReplyDecisionPrompts.systemPromptFull || VOICE_REPLY_DECIDER_SYSTEM_PROMPT_FULL_DEFAULT,
-    10_000
-  );
-  merged.voice.replyDecisionLlm.prompts.systemPromptStrict = normalizeLongPromptBlock(
-    merged.voice?.replyDecisionLlm?.prompts?.systemPromptStrict,
-    defaultVoiceReplyDecisionPrompts.systemPromptStrict || VOICE_REPLY_DECIDER_SYSTEM_PROMPT_STRICT_DEFAULT,
-    4000
-  );
+  delete merged.voice.replyDecisionLlm.prompts.systemPromptFull;
+  delete merged.voice.replyDecisionLlm.prompts.systemPromptStrict;
 
   merged.voice.xai.voice = String(merged.voice?.xai?.voice || defaultVoiceXai.voice || "Rex").slice(0, 60);
   merged.voice.xai.audioFormat = String(merged.voice?.xai?.audioFormat || defaultVoiceXai.audioFormat || "audio/pcm")

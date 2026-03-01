@@ -154,7 +154,7 @@ test("reply decider sends short three-word complaint turns to llm", async () => 
   assert.equal(callCount, 1);
 });
 
-test("reply decider allows focused speaker followup without another direct address", async () => {
+test("reply decider allows same-speaker followup after recent bot reply to direct-addressed speaker", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -168,62 +168,8 @@ test("reply decider allows focused speaker followup without another direct addre
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      focusedSpeakerUserId: "speaker-1",
-      focusedSpeakerAt: Date.now()
-    },
-    userId: "speaker-1",
-    settings: baseSettings(),
-    transcript: "what about the one before that"
-  });
-
-  assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "focused_speaker_followup");
-  assert.equal(callCount, 0);
-});
-
-test("reply decider keeps focused speaker followup window for longer turns", async () => {
-  let callCount = 0;
-  const manager = createManager({
-    generate: async () => {
-      callCount += 1;
-      return { text: "NO" };
-    }
-  });
-  const decision = await manager.evaluateVoiceReplyDecision({
-    session: {
-      guildId: "guild-1",
-      textChannelId: "chan-1",
-      voiceChannelId: "voice-1",
-      botTurnOpen: false,
-      focusedSpeakerUserId: "speaker-1",
-      focusedSpeakerAt: Date.now() - 15_000
-    },
-    userId: "speaker-1",
-    settings: baseSettings(),
-    transcript: "you still owe us the answer"
-  });
-
-  assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "focused_speaker_followup");
-  assert.equal(callCount, 0);
-});
-
-test("reply decider allows same-speaker followup after recent bot reply when focus window is stale", async () => {
-  let callCount = 0;
-  const manager = createManager({
-    generate: async () => {
-      callCount += 1;
-      return { text: "NO" };
-    }
-  });
-  const decision = await manager.evaluateVoiceReplyDecision({
-    session: {
-      guildId: "guild-1",
-      textChannelId: "chan-1",
-      voiceChannelId: "voice-1",
-      botTurnOpen: false,
-      focusedSpeakerUserId: "speaker-1",
-      focusedSpeakerAt: Date.now() - 60_000,
+      lastDirectAddressUserId: "speaker-1",
+      lastDirectAddressAt: Date.now() - 4_000,
       lastAudioDeltaAt: Date.now() - 4_000
     },
     userId: "speaker-1",
@@ -236,37 +182,7 @@ test("reply decider allows same-speaker followup after recent bot reply when foc
   assert.equal(callCount, 0);
 });
 
-test("smoke: focused speaker followup defers to llm when turn vocatively targets another participant", async () => {
-  let callCount = 0;
-  const manager = createManager({
-    generate: async () => {
-      callCount += 1;
-      return { text: "NO" };
-    }
-  });
-  manager.getVoiceChannelParticipants = () => [{ displayName: "alice" }, { displayName: "joey" }];
-  manager.resolveVoiceSpeakerName = () => "alice";
-  const decision = await manager.evaluateVoiceReplyDecision({
-    session: {
-      guildId: "guild-1",
-      textChannelId: "chan-1",
-      voiceChannelId: "voice-1",
-      botTurnOpen: false,
-      focusedSpeakerUserId: "speaker-1",
-      focusedSpeakerAt: Date.now()
-    },
-    userId: "speaker-1",
-    settings: baseSettings(),
-    transcript: "hey joey guess what game i'm playing"
-  });
-
-  assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "llm_no");
-  assert.equal(decision.directAddressed, false);
-  assert.equal(callCount, 1);
-});
-
-test("reply decider blocks low-signal focused speaker followup", async () => {
+test("reply decider blocks low-signal fragments even from recently direct-addressed speaker", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -280,8 +196,8 @@ test("reply decider blocks low-signal focused speaker followup", async () => {
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
-      focusedSpeakerUserId: "speaker-1",
-      focusedSpeakerAt: Date.now()
+      lastDirectAddressUserId: "speaker-1",
+      lastDirectAddressAt: Date.now()
     },
     userId: "speaker-1",
     settings: baseSettings(),
@@ -611,7 +527,7 @@ test("reply decider routes wake-like variants through llm admission", async () =
     if (row.expected) {
       const reason = String(decision.reason || "");
       assert.equal(
-        ["direct_address_fast_path", "direct_address_wake_ping", "llm_yes", "llm_yes_retry"].includes(reason),
+        ["direct_address_fast_path", "direct_address_wake_ping", "llm_yes"].includes(reason),
         true,
         row.text
       );
@@ -778,15 +694,12 @@ test("reply decider still uses LLM in one-human sessions", async () => {
   assert.equal(callCount, 1);
 });
 
-test("reply decider retries hard failures and accepts YES", async () => {
+test("reply decider returns llm_error on hard failure without retrying", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
       callCount += 1;
-      if (callCount === 1) {
-        throw new Error("temporary classifier provider error");
-      }
-      return { text: "YES" };
+      throw new Error("classifier provider error");
     }
   });
   const decision = await manager.evaluateVoiceReplyDecision({
@@ -802,18 +715,17 @@ test("reply decider retries hard failures and accepts YES", async () => {
         replyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
-          model: "claude-haiku-4-5",
-          maxAttempts: 2
+          model: "claude-haiku-4-5"
         }
       }
     }),
     transcript: "what's up with this queue?"
   });
 
-  assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "llm_yes_retry");
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "llm_error");
   assert.equal(decision.directAddressed, false);
-  assert.equal(callCount, 2);
+  assert.equal(callCount, 1);
 });
 
 test("reply decider uses JSON schema contract for claude-code and accepts structured YES", async () => {
@@ -882,7 +794,7 @@ test("reply decider in stt pipeline uses configured voice decider provider/model
         replyDecisionLlm: {
           provider: "openai",
           model: "claude-haiku-4-5",
-          maxAttempts: 1
+
         }
       }
     }),
@@ -927,7 +839,7 @@ test("reply decider uses higher max output tokens for openai gpt-5 models", asyn
         replyDecisionLlm: {
           provider: "openai",
           model: "gpt-5-mini",
-          maxAttempts: 1
+
         }
       }
     }),
@@ -1266,7 +1178,7 @@ test("reply decider bypasses LLM for direct-addressed turns", async () => {
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5",
-          maxAttempts: 1
+
         }
       }
     }),
@@ -1304,7 +1216,7 @@ test("reply decider keeps direct-address fast-path when classifier is disabled i
           enabled: false,
           provider: "anthropic",
           model: "claude-haiku-4-5",
-          maxAttempts: 1
+
         }
       }
     }),
@@ -1339,7 +1251,7 @@ test("reply decider routes merged bot-name token through llm admission", async (
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5",
-          maxAttempts: 1
+
         }
       }
     }),
@@ -1373,8 +1285,7 @@ test("reply decider blocks contract violations without retrying", async () => {
         replyEagerness: 60,
         replyDecisionLlm: {
           provider: "anthropic",
-          model: "claude-haiku-4-5",
-          maxAttempts: 3
+          model: "claude-haiku-4-5"
         }
       }
     }),
@@ -4001,8 +3912,6 @@ test("voice decision history deduplicates consecutive identical turns", () => {
     mode: "openai_realtime",
     ending: false,
     recentVoiceTurns: [],
-    focusedSpeakerUserId: null,
-    focusedSpeakerAt: 0,
     settingsSnapshot: { botName: "clanker conk" }
   };
 
@@ -4017,40 +3926,3 @@ test("voice decision history deduplicates consecutive identical turns", () => {
   assert.equal(formatted.includes("clanker conk"), true);
 });
 
-test("focused speaker window sets, preserves, and expires on addressed turns", () => {
-  const manager = createManager();
-  const session = {
-    id: "session-1",
-    guildId: "guild-1",
-    textChannelId: "chan-1",
-    voiceChannelId: "voice-1",
-    mode: "openai_realtime",
-    ending: false,
-    recentVoiceTurns: [],
-    focusedSpeakerUserId: "old-user",
-    focusedSpeakerAt: Date.now() - 40_000,
-    settingsSnapshot: { botName: "clanker conk" }
-  };
-
-  manager.updateFocusedSpeakerWindow({
-    session, userId: "user-1", allow: true, directAddressed: true, reason: "llm_yes"
-  });
-  assert.equal(session.focusedSpeakerUserId, "user-1");
-
-  manager.updateFocusedSpeakerWindow({
-    session, userId: "user-2", allow: false, directAddressed: false, reason: "llm_no"
-  });
-  assert.equal(session.focusedSpeakerUserId, "user-1");
-
-  manager.updateFocusedSpeakerWindow({
-    session, userId: "user-2", allow: true, directAddressed: false, reason: "llm_yes"
-  });
-  assert.equal(session.focusedSpeakerUserId, "user-2");
-
-  session.focusedSpeakerAt = Date.now() - 50_000;
-  manager.updateFocusedSpeakerWindow({
-    session, userId: "user-2", allow: false, directAddressed: false, reason: "llm_no"
-  });
-  assert.equal(session.focusedSpeakerUserId, null);
-  assert.equal(session.focusedSpeakerAt, 0);
-});

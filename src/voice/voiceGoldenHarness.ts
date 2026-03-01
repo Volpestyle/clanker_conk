@@ -577,8 +577,7 @@ function buildHarnessSettings({
       replyDecisionLlm: {
         enabled: true,
         provider: deciderProvider,
-        model: deciderModel,
-        maxAttempts: 2
+        model: deciderModel
       },
       xai: {
         voice: "Rex",

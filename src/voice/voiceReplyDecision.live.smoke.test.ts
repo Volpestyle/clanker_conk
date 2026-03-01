@@ -84,7 +84,6 @@ test("smoke: live voice decision model admits wake-variant turns", { timeout: sm
       replyDecisionLlm: {
         provider,
         model,
-        maxAttempts: 2,
         reasoningEffort: String(process.env.LIVE_VOICE_DECIDER_REASONING_EFFORT || "minimal").trim().toLowerCase() || "minimal"
       }
     }

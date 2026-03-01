@@ -1122,7 +1122,7 @@ export function buildVoiceTurnPrompt({
         "Conversation attention context:",
         `- State: ${String(normalizedConversationContext.engagementState || "wake_word_biased")}`,
         `- Engaged with current speaker: ${normalizedConversationContext.engagedWithCurrentSpeaker ? "yes" : "no"}`,
-        `- Current speaker matches focused speaker: ${normalizedConversationContext.sameAsFocusedSpeaker ? "yes" : "no"}`,
+        `- Current speaker matches last direct-address speaker: ${normalizedConversationContext.sameAsRecentDirectAddress ? "yes" : "no"}`,
         `- Recent bot reply ms ago: ${
           Number.isFinite(normalizedConversationContext.msSinceAssistantReply)
             ? Math.round(normalizedConversationContext.msSinceAssistantReply)

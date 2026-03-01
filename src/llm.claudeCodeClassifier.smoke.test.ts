@@ -58,8 +58,7 @@ function baseSettings(overrides = {}) {
       replyEagerness: 60,
       replyDecisionLlm: {
         provider: "claude-code",
-        model: "haiku",
-        maxAttempts: 2
+        model: "haiku"
       }
     },
     ...overrides
@@ -270,7 +269,7 @@ test("smoke: claude-code empty response is contract violation without retry", as
   assert.equal(decision.reason, "llm_contract_violation");
 });
 
-test("smoke: claude-code hard errors are bounded by maxAttempts", async () => {
+test("smoke: claude-code hard error returns llm_error after single call", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -289,15 +288,14 @@ test("smoke: claude-code hard errors are bounded by maxAttempts", async () => {
         replyEagerness: 60,
         replyDecisionLlm: {
           provider: "claude-code",
-          model: "haiku",
-          maxAttempts: 3
+          model: "haiku"
         }
       }
     }),
     transcript: "so what about the next sprint?"
   });
 
-  assert.equal(callCount, 3, "must stop after maxAttempts");
+  assert.equal(callCount, 1, "must stop after single call");
   assert.equal(decision.allow, false);
   assert.equal(decision.reason, "llm_error");
 });
@@ -339,8 +337,7 @@ test("smoke: claude-code error blocks unaddressed turns", async () => {
         replyEagerness: 60,
         replyDecisionLlm: {
           provider: "claude-code",
-          model: "haiku",
-          maxAttempts: 1
+          model: "haiku"
         }
       }
     }),

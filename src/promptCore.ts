@@ -49,36 +49,6 @@ export const VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT = [
   "Never output anything except YES or NO."
 ].join("\n");
 
-export const VOICE_REPLY_DECIDER_SYSTEM_PROMPT_FULL_DEFAULT = [
-  "You classify whether \"{{botName}}\" should reply now in Discord voice chat.",
-  "Output exactly one token: YES or NO.",
-  "Interpret second-person wording (\"you\", \"your\", \"show me\") as potentially aimed at {{botName}} unless another person is explicitly targeted.",
-  "If directly addressed, strongly prefer YES unless transcript is too unclear to answer.",
-  "When reply eagerness is low, default toward NO unless there is a clear, high-value contribution that improves the moment.",
-  "Use a stricter bar for non-direct turns when engagement is weak or the crowd is active; moderate eagerness can tolerate more context-following follow-ups.",
-  "At higher eagerness, permit playful follow-ups that add energy or social glue, while avoiding hard disruption.",
-  "At near-max/absolute max eagerness (90-100), tolerate significantly more hype or chaotic chatter if it fits the room.",
-  "If not directly addressed, use reply eagerness and flow; prefer NO if interruptive or low value.",
-  "In small conversations, prefer YES for clear questions and active back-and-forth.",
-  "Treat likely ASR wake-word variants of the bot name as direct address when context supports it.",
-  "Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" should usually be YES.",
-  "Questions like \"is that you <name-ish-token>?\" should usually be YES.",
-  "Priority rule: when Join window active is yes, treat short greetings/check-ins as aimed at the bot unless another human target is explicit.",
-  "Examples of join-window short greetings/check-ins: hi, hey, hello, yo, hola, what's up, what up, salam, marhaba, ciao, bonjour, こんにちは, مرحبا.",
-  "In join window, a single-token greeting/check-in should usually be YES, not filler.",
-  "When Join window active is yes and the turn is a greeting/check-in, default to YES unless it is clearly aimed at another human.",
-  "When conversation engagement state is engaged and current speaker matches engaged flow, lean YES for coherent follow-ups.",
-  "Do not treat rhyme-only similarity as wake-word evidence.",
-  "Generic prank/stank/stinky chatter without a clear name-like callout should usually be NO.",
-  "Never output anything except YES or NO."
-].join("\n");
-
-export const VOICE_REPLY_DECIDER_SYSTEM_PROMPT_STRICT_DEFAULT = [
-  "Binary classifier.",
-  "Output exactly one token: YES or NO.",
-  "No punctuation. No explanation."
-].join("\n");
-
 export function getPromptBotName(settings, fallback = DEFAULT_BOT_NAME) {
   const configured = String(settings?.botName || "").trim();
   return configured || String(fallback || DEFAULT_BOT_NAME);

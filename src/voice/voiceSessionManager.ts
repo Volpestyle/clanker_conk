@@ -17,8 +17,6 @@ import {
   getPromptStyle,
   getPromptVoiceGuidance,
   VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
-  VOICE_REPLY_DECIDER_SYSTEM_PROMPT_FULL_DEFAULT,
-  VOICE_REPLY_DECIDER_SYSTEM_PROMPT_STRICT_DEFAULT,
   VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
 } from "../promptCore.ts";
 import { estimateUsdCost } from "../pricing.ts";
@@ -105,6 +103,7 @@ import {
   AUDIO_PLAYBACK_QUEUE_WARN_BYTES,
   AUDIO_PLAYBACK_QUEUE_WARN_COOLDOWN_MS,
   BARGE_IN_ASSERTION_MS,
+  BARGE_IN_ASSERTION_IDLE_MS,
   BARGE_IN_FULL_OVERRIDE_MIN_MS,
   BARGE_IN_MIN_SPEECH_MS,
   BARGE_IN_RETRY_MAX_AGE_MS,
@@ -121,7 +120,7 @@ import {
   CAPTURE_NEAR_SILENCE_ABORT_PEAK_MAX,
   CAPTURE_MAX_DURATION_MS,
   DISCORD_PCM_FRAME_BYTES,
-  FOCUSED_SPEAKER_CONTINUATION_MS,
+  RECENT_ENGAGEMENT_WINDOW_MS,
   INPUT_SPEECH_END_SILENCE_MS,
   LEAVE_DIRECTIVE_PLAYBACK_MAX_WAIT_MS,
   LEAVE_DIRECTIVE_PLAYBACK_NO_SIGNAL_GRACE_MS,
@@ -460,13 +459,6 @@ export class VoiceSessionManager {
         },
         mode: session.mode || "voice_agent",
         botTurnOpen: Boolean(session.botTurnOpen),
-        focusedSpeaker: session.focusedSpeakerUserId
-          ? {
-              userId: session.focusedSpeakerUserId,
-              displayName: participants.find((p) => p.userId === session.focusedSpeakerUserId)?.displayName || null,
-              since: session.focusedSpeakerAt ? new Date(session.focusedSpeakerAt).toISOString() : null
-            }
-          : null,
         conversation: {
           lastAssistantReplyAt: session.lastAssistantReplyAt
             ? new Date(session.lastAssistantReplyAt).toISOString()
@@ -488,7 +480,7 @@ export class VoiceSessionManager {
             msSinceDirectAddress: Number.isFinite(wakeContext?.msSinceDirectAddress)
               ? Math.round(wakeContext.msSinceDirectAddress)
               : null,
-            windowMs: FOCUSED_SPEAKER_CONTINUATION_MS
+            windowMs: RECENT_ENGAGEMENT_WINDOW_MS
           },
           joinWindow: {
             active: joinWindowActive,
@@ -1847,11 +1839,22 @@ export class VoiceSessionManager {
     return true;
   }
 
+  isAudioActivelyFlowing(session) {
+    if (!session || session.ending) return false;
+    const queue = session.audioPlaybackQueue;
+    if (queue && (queue.pumping || queue.waitingDrain || queue.queuedBytes > 0)) return true;
+    const streamBuffered = Number(session.botAudioStream?.writableLength || 0);
+    if (streamBuffered > 0) return true;
+    const msSinceLastDelta = Date.now() - Number(session.lastAudioDeltaAt || 0);
+    if (msSinceLastDelta < 200) return true;
+    return false;
+  }
+
   armAssertiveBargeIn({
     session,
     userId = null,
     source = "speaking_start",
-    delayMs = BARGE_IN_ASSERTION_MS
+    delayMs = null
   }) {
     if (!session || session.ending) return;
     if (!this.isBargeInInterruptTargetActive(session)) return;
@@ -1861,7 +1864,10 @@ export class VoiceSessionManager {
     if (!capture) return;
     if (capture.speakingEndFinalizeTimer) return;
     if (capture.bargeInAssertTimer) return;
-    const waitMs = Math.max(60, Math.round(Number(delayMs) || BARGE_IN_ASSERTION_MS));
+    const audioActivelyFlowing = this.isAudioActivelyFlowing(session);
+    const effectiveDelayMs = delayMs != null
+      ? Math.max(60, Math.round(Number(delayMs)))
+      : (audioActivelyFlowing ? BARGE_IN_ASSERTION_MS : BARGE_IN_ASSERTION_IDLE_MS);
     capture.bargeInAssertTimer = setTimeout(() => {
       capture.bargeInAssertTimer = null;
       const interrupted = this.maybeInterruptBotForAssertiveSpeech({
@@ -1876,9 +1882,9 @@ export class VoiceSessionManager {
         session,
         userId: normalizedUserId,
         source: String(source || "speaking_start"),
-        delayMs: Math.max(160, Math.round(BARGE_IN_ASSERTION_MS / 2))
+        delayMs: BARGE_IN_ASSERTION_IDLE_MS
       });
-    }, waitMs);
+    }, effectiveDelayMs);
   }
 
   bindRealtimeHandlers(session, settings = session.settingsSnapshot) {
@@ -5033,13 +5039,10 @@ export class VoiceSessionManager {
         clipDurationMs
       }
     });
-    this.updateFocusedSpeakerWindow({
-      session,
-      userId,
-      allow: Boolean(decision.allow),
-      directAddressed: Boolean(decision.directAddressed),
-      reason: decision.reason
-    });
+    if (decision.directAddressed && session && !session.ending) {
+      session.lastDirectAddressAt = Date.now();
+      session.lastDirectAddressUserId = userId;
+    }
     const decisionVoiceAddressing = this.normalizeVoiceAddressingAnnotation({
       rawAddressing: decision?.voiceAddressing,
       directAddressed: Boolean(decision.directAddressed),
@@ -5283,13 +5286,10 @@ export class VoiceSessionManager {
       transcript: coalescedTranscript,
       source: "bot_turn_open_deferred_flush"
     });
-    this.updateFocusedSpeakerWindow({
-      session,
-      userId: latestTurn?.userId || null,
-      allow: Boolean(decision.allow),
-      directAddressed: Boolean(decision.directAddressed),
-      reason: decision.reason
-    });
+    if (decision.directAddressed && session && !session.ending) {
+      session.lastDirectAddressAt = Date.now();
+      session.lastDirectAddressUserId = latestTurn?.userId || null;
+    }
     const decisionVoiceAddressing = this.normalizeVoiceAddressingAnnotation({
       rawAddressing: decision?.voiceAddressing,
       directAddressed: Boolean(decision.directAddressed),
@@ -5517,23 +5517,12 @@ export class VoiceSessionManager {
     now = Date.now()
   } = {}) {
     const normalizedUserId = String(userId || "").trim();
-    const focusedSpeakerUserId = String(session?.focusedSpeakerUserId || "").trim();
-    const sameAsFocusedSpeaker =
-      Boolean(normalizedUserId) &&
-      Boolean(focusedSpeakerUserId) &&
-      normalizedUserId === focusedSpeakerUserId;
-    const focusedSpeakerAt = Number(session?.focusedSpeakerAt || 0);
-    const msSinceFocusedSpeaker = focusedSpeakerAt > 0 ? Math.max(0, now - focusedSpeakerAt) : null;
-    const focusedSpeakerFresh =
-      sameAsFocusedSpeaker &&
-      Number.isFinite(msSinceFocusedSpeaker) &&
-      msSinceFocusedSpeaker <= FOCUSED_SPEAKER_CONTINUATION_MS;
 
     const lastAudioDeltaAt = Number(session?.lastAudioDeltaAt || 0);
     const msSinceAssistantReply = lastAudioDeltaAt > 0 ? Math.max(0, now - lastAudioDeltaAt) : null;
     const recentAssistantReply =
       Number.isFinite(msSinceAssistantReply) &&
-      msSinceAssistantReply <= FOCUSED_SPEAKER_CONTINUATION_MS;
+      msSinceAssistantReply <= RECENT_ENGAGEMENT_WINDOW_MS;
 
     const lastDirectAddressUserId = String(session?.lastDirectAddressUserId || "").trim();
     const sameAsRecentDirectAddress =
@@ -5544,12 +5533,11 @@ export class VoiceSessionManager {
     const msSinceDirectAddress = lastDirectAddressAt > 0 ? Math.max(0, now - lastDirectAddressAt) : null;
     const recentDirectAddress =
       Number.isFinite(msSinceDirectAddress) &&
-      msSinceDirectAddress <= FOCUSED_SPEAKER_CONTINUATION_MS;
+      msSinceDirectAddress <= RECENT_ENGAGEMENT_WINDOW_MS;
 
     const engagedWithCurrentSpeaker =
       Boolean(directAddressed) ||
-      focusedSpeakerFresh ||
-      (recentAssistantReply && sameAsFocusedSpeaker) ||
+      (recentAssistantReply && sameAsRecentDirectAddress) ||
       (recentDirectAddress && sameAsRecentDirectAddress);
     const engaged =
       !addressedToOtherParticipant &&
@@ -5561,11 +5549,9 @@ export class VoiceSessionManager {
       engagedWithCurrentSpeaker,
       recentAssistantReply,
       recentDirectAddress,
-      sameAsFocusedSpeaker,
       sameAsRecentDirectAddress,
       msSinceAssistantReply: Number.isFinite(msSinceAssistantReply) ? msSinceAssistantReply : null,
-      msSinceDirectAddress: Number.isFinite(msSinceDirectAddress) ? msSinceDirectAddress : null,
-      msSinceFocusedSpeaker: Number.isFinite(msSinceFocusedSpeaker) ? msSinceFocusedSpeaker : null
+      msSinceDirectAddress: Number.isFinite(msSinceDirectAddress) ? msSinceDirectAddress : null
     };
   }
 
@@ -5813,20 +5799,16 @@ export class VoiceSessionManager {
       }
     }
 
-    const focusedSpeakerUserId = String(session?.focusedSpeakerUserId || "").trim();
-    const focusedSpeakerAgeMs = now - Number(session?.focusedSpeakerAt || 0);
-    const focusedSpeakerFollowup =
+    const botRecentReplyFollowup =
       !directAddressed &&
-      normalizedUserId &&
-      focusedSpeakerUserId &&
-      normalizedUserId === focusedSpeakerUserId &&
-      focusedSpeakerAgeMs >= 0 &&
-      focusedSpeakerAgeMs <= FOCUSED_SPEAKER_CONTINUATION_MS &&
-      !addressedToOtherParticipant;
-    if (focusedSpeakerFollowup) {
+      !addressedToOtherParticipant &&
+      !lowSignalFragment &&
+      Boolean(conversationContext.recentAssistantReply) &&
+      Boolean(conversationContext.sameAsRecentDirectAddress);
+    if (botRecentReplyFollowup) {
       return {
         allow: true,
-        reason: "focused_speaker_followup",
+        reason: "bot_recent_reply_followup",
         participantCount,
         directAddressed,
         directAddressConfidence,
@@ -5836,16 +5818,30 @@ export class VoiceSessionManager {
       };
     }
 
-    const botRecentReplyFollowup =
+    const configuredCrossSpeakerWakeMs = Number(settings?.voice?.crossSpeakerWakeMs);
+    const crossSpeakerWakeMs = clamp(
+      Number.isFinite(configuredCrossSpeakerWakeMs)
+        ? Math.round(configuredCrossSpeakerWakeMs)
+        : DIRECT_ADDRESS_CROSS_SPEAKER_WAKE_MS,
+      1200,
+      20_000
+    );
+    const msSinceDirectAddress = Number(conversationContext?.msSinceDirectAddress || 0);
+    const directAddressWakeAcrossSpeakers =
+      Boolean(conversationContext?.recentDirectAddress) &&
+      !conversationContext?.sameAsRecentDirectAddress &&
+      Number.isFinite(msSinceDirectAddress) &&
+      msSinceDirectAddress <= crossSpeakerWakeMs;
+    const crossSpeakerWakeFastPath =
+      classifierEnabled &&
       !directAddressed &&
       !addressedToOtherParticipant &&
       !lowSignalFragment &&
-      Boolean(conversationContext.recentAssistantReply) &&
-      Boolean(conversationContext.sameAsFocusedSpeaker);
-    if (botRecentReplyFollowup) {
+      directAddressWakeAcrossSpeakers;
+    if (crossSpeakerWakeFastPath) {
       return {
         allow: true,
-        reason: "bot_recent_reply_followup",
+        reason: "cross_speaker_wake",
         participantCount,
         directAddressed,
         directAddressConfidence,
@@ -5898,23 +5894,9 @@ export class VoiceSessionManager {
           session,
           settings
         }) === "brain");
-    const configuredCrossSpeakerWakeMs = Number(settings?.voice?.crossSpeakerWakeMs);
-    const crossSpeakerWakeMs = clamp(
-      Number.isFinite(configuredCrossSpeakerWakeMs)
-        ? Math.round(configuredCrossSpeakerWakeMs)
-        : DIRECT_ADDRESS_CROSS_SPEAKER_WAKE_MS,
-      1200,
-      20_000
-    );
     const lastInboundAudioAt = Number(session?.lastInboundAudioAt || 0);
     const msSinceInboundAudio =
       lastInboundAudioAt > 0 ? Math.max(0, now - lastInboundAudioAt) : null;
-    const msSinceDirectAddress = Number(conversationContext?.msSinceDirectAddress || 0);
-    const directAddressWakeAcrossSpeakers =
-      Boolean(conversationContext?.recentDirectAddress) &&
-      !conversationContext?.sameAsRecentDirectAddress &&
-      Number.isFinite(msSinceDirectAddress) &&
-      msSinceDirectAddress <= crossSpeakerWakeMs;
     const wakeModeActive =
       Boolean(conversationContext?.recentAssistantReply) ||
       Boolean(conversationContext?.sameAsRecentDirectAddress) ||
@@ -5998,13 +5980,7 @@ export class VoiceSessionManager {
             voiceAddressingState.recentAddressingGuesses.length > 0)
       )
     });
-    const configuredMaxDecisionAttempts = Number(replyDecisionLlm?.maxAttempts);
-    const maxDecisionAttempts = clamp(
-      Math.floor(Number.isFinite(configuredMaxDecisionAttempts) ? configuredMaxDecisionAttempts : 1),
-      1,
-      3
-    );
-    const primaryDecisionSettings = {
+    const decisionSettings = {
       ...settings,
       llm: {
         ...(settings?.llm || {}),
@@ -6026,44 +6002,6 @@ export class VoiceSessionManager {
       VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
     );
 
-    const fullContextPromptParts = [
-      `Bot name: ${botName}.`,
-      `Second-person references in this transcript ("you", "your") default to ${botName} (YOU) unless another human target is explicit.`,
-      `Reply eagerness: ${replyEagerness}/100.`,
-      `Human participants in channel: ${participantCount}.`,
-      `Current speaker: ${speakerName}.`,
-      `Join window active: ${joinWindowActive ? "yes" : "no"}.`,
-      `Join window age ms: ${joinWindowAgeMs}.`,
-      "Join-window bias rule: if Join window active is yes and this turn is a short greeting/check-in, default to YES unless another human target is explicit.",
-      `Conversation engagement state: ${conversationContext.engagementState}.`,
-      `Engaged with current speaker: ${conversationContext.engagedWithCurrentSpeaker ? "yes" : "no"}.`,
-      `Current speaker matches focused speaker: ${conversationContext.sameAsFocusedSpeaker ? "yes" : "no"}.`,
-      `Current speaker matches last direct-address speaker: ${conversationContext.sameAsRecentDirectAddress ? "yes" : "no"}.`,
-      `Recent bot reply ms ago: ${formatAgeMs(conversationContext.msSinceAssistantReply)}.`,
-      `Recent direct address ms ago: ${formatAgeMs(conversationContext.msSinceDirectAddress)}.`,
-      `Directly addressed: ${directAddressed ? "yes" : "no"}.`,
-      `Direct-address confidence: ${directAddressConfidence.toFixed(3)} (threshold ${directAddressThreshold.toFixed(2)}).`,
-      `Likely aimed at another participant: ${addressedToOtherParticipant ? "yes" : "no"}.`,
-      `Latest transcript: "${normalizedTranscript}".`,
-      wakeVariantHint
-    ];
-    if (voiceAddressingState) {
-      fullContextPromptParts.push(
-        `Current speaker addressing guess: ${voiceAddressingState.currentSpeakerTarget || "unknown"} (confidence ${Number(voiceAddressingState.currentSpeakerDirectedConfidence || 0).toFixed(2)}).`
-      );
-      if (voiceAddressingState.lastDirectedToMe) {
-        fullContextPromptParts.push(
-          `Last directed-to-me turn: ${voiceAddressingState.lastDirectedToMe.speakerName} ${formatAgeMs(voiceAddressingState.lastDirectedToMe.ageMs)}ms ago (confidence ${Number(voiceAddressingState.lastDirectedToMe.directedConfidence || 0).toFixed(2)}).`
-        );
-      }
-    }
-    if (participantList.length) {
-      fullContextPromptParts.push(`Participants: ${participantList.join(", ")}.`);
-    }
-    if (recentHistory) {
-      fullContextPromptParts.push(`Recent voice turns:\n${recentHistory}`);
-    }
-
     const compactContextPromptParts = [
       `Bot name: ${botName}.`,
       `Current speaker: ${speakerName}.`,
@@ -6071,7 +6009,6 @@ export class VoiceSessionManager {
       "Join-window bias rule: if Join window active is yes and this turn is a short greeting/check-in, default to YES unless another human target is explicit.",
       `Conversation engagement state: ${conversationContext.engagementState}.`,
       `Engaged with current speaker: ${conversationContext.engagedWithCurrentSpeaker ? "yes" : "no"}.`,
-      `Current speaker matches focused speaker: ${conversationContext.sameAsFocusedSpeaker ? "yes" : "no"}.`,
       `Recent bot reply ms ago: ${formatAgeMs(conversationContext.msSinceAssistantReply)}.`,
       `Directly addressed: ${directAddressed ? "yes" : "no"}.`,
       `Direct-address confidence: ${directAddressConfidence.toFixed(3)} (threshold ${directAddressThreshold.toFixed(2)}).`,
@@ -6097,41 +6034,7 @@ export class VoiceSessionManager {
       configuredPrompts?.systemPromptCompact,
       VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT
     );
-    const systemPromptFull = interpolateBotName(
-      configuredPrompts?.systemPromptFull,
-      VOICE_REPLY_DECIDER_SYSTEM_PROMPT_FULL_DEFAULT
-    );
-    const systemPromptStrict = interpolateBotName(
-      configuredPrompts?.systemPromptStrict,
-      VOICE_REPLY_DECIDER_SYSTEM_PROMPT_STRICT_DEFAULT
-    );
 
-    const decisionProcedure = [
-      {
-        label: "primary_compact_context",
-        settings: primaryDecisionSettings,
-        systemPrompt: systemPromptCompact,
-        userPrompt: compactContextPromptParts.join("\n")
-      },
-      {
-        label: "primary_full_context",
-        settings: primaryDecisionSettings,
-        systemPrompt: systemPromptFull,
-        userPrompt: fullContextPromptParts.join("\n\n")
-      },
-      {
-        label: "primary_minimal_context",
-        settings: primaryDecisionSettings,
-        systemPrompt: systemPromptStrict,
-        userPrompt:
-          `Join window active: ${joinWindowActive ? "yes" : "no"}.\n` +
-          "Join-window bias rule: if Join window active is yes and this turn is a short greeting/check-in, default to YES unless another human target is explicit.\n" +
-          `Conversation engagement state: ${conversationContext.engagementState}.\n` +
-          `Directly addressed: ${directAddressed ? "yes" : "no"}.\n` +
-          `Direct-address confidence: ${directAddressConfidence.toFixed(3)} (threshold ${directAddressThreshold.toFixed(2)}).\n` +
-          `Transcript: "${normalizedTranscript}".`
-      }
-    ].slice(0, maxDecisionAttempts);
     const claudeDecisionJsonSchema =
       llmProvider === "claude-code"
         ? JSON.stringify({
@@ -6147,59 +6050,55 @@ export class VoiceSessionManager {
           })
         : "";
 
-    const invalidOutputs = [];
-    const generationErrors = [];
-    for (let index = 0; index < decisionProcedure.length; index += 1) {
-      const step = decisionProcedure[index];
-      try {
-        const generation = await this.llm.generate({
-          settings: step.settings,
-          systemPrompt: step.systemPrompt,
-          userPrompt: step.userPrompt,
-          contextMessages: [],
-          jsonSchema: claudeDecisionJsonSchema,
-          trace: {
-            guildId: session.guildId,
-            channelId: session.textChannelId,
-            userId,
-            source: "voice_reply_decision",
-            event: step.label
-          }
-        });
-        const raw = String(generation?.text || "").trim();
-        const parsed = parseVoiceDecisionContract(raw);
-        if (parsed.confident) {
-          const resolvedProvider = generation?.provider || llmProvider;
-          const resolvedModel = generation?.model || step?.settings?.llm?.model || llmModel;
-          return {
-            allow: parsed.allow,
-            reason: parsed.allow ? (index === 0 ? "llm_yes" : "llm_yes_retry") : index === 0 ? "llm_no" : "llm_no_retry",
-            participantCount,
-            directAddressed,
-            directAddressConfidence,
-            directAddressThreshold,
-            transcript: normalizedTranscript,
-            llmResponse: raw,
-            llmProvider: resolvedProvider,
-            llmModel: resolvedModel,
-            conversationContext
-          };
+    try {
+      const generation = await this.llm.generate({
+        settings: decisionSettings,
+        systemPrompt: systemPromptCompact,
+        userPrompt: compactContextPromptParts.join("\n"),
+        contextMessages: [],
+        jsonSchema: claudeDecisionJsonSchema,
+        trace: {
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          source: "voice_reply_decision",
+          event: "compact_context"
         }
-
-        invalidOutputs.push({
-          step: step.label,
-          text: raw || "(empty)"
-        });
-        break;
-      } catch (error) {
-        generationErrors.push({
-          step: step.label,
-          error: String(error?.message || error)
-        });
+      });
+      const raw = String(generation?.text || "").trim();
+      const parsed = parseVoiceDecisionContract(raw);
+      if (parsed.confident) {
+        const resolvedProvider = generation?.provider || llmProvider;
+        const resolvedModel = generation?.model || decisionSettings?.llm?.model || llmModel;
+        return {
+          allow: parsed.allow,
+          reason: parsed.allow ? "llm_yes" : "llm_no",
+          participantCount,
+          directAddressed,
+          directAddressConfidence,
+          directAddressThreshold,
+          transcript: normalizedTranscript,
+          llmResponse: raw,
+          llmProvider: resolvedProvider,
+          llmModel: resolvedModel,
+          conversationContext
+        };
       }
-    }
 
-    if (!invalidOutputs.length && generationErrors.length) {
+      return {
+        allow: false,
+        reason: "llm_contract_violation",
+        participantCount,
+        directAddressed,
+        directAddressConfidence,
+        directAddressThreshold,
+        transcript: normalizedTranscript,
+        llmResponse: raw || "(empty)",
+        llmProvider,
+        llmModel,
+        conversationContext
+      };
+    } catch (error) {
       return {
         allow: false,
         reason: "llm_error",
@@ -6210,27 +6109,10 @@ export class VoiceSessionManager {
         transcript: normalizedTranscript,
         llmProvider,
         llmModel,
-        error: generationErrors.map((row) => `${row.step}: ${row.error}`).join(" | "),
+        error: String(error?.message || error),
         conversationContext
       };
     }
-
-    return {
-      allow: false,
-      reason: "llm_contract_violation",
-      participantCount,
-      directAddressed,
-      directAddressConfidence,
-      directAddressThreshold,
-      transcript: normalizedTranscript,
-      llmResponse: invalidOutputs.map((row) => `${row.step}=${row.text}`).join(" | "),
-      llmProvider,
-      llmModel,
-      error: generationErrors.length
-        ? generationErrors.map((row) => `${row.step}: ${row.error}`).join(" | ")
-        : undefined,
-      conversationContext
-    };
   }
 
   formatVoiceDecisionHistory(session, maxTurns = 6, maxTotalChars = VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS) {
@@ -6567,49 +6449,6 @@ export class VoiceSessionManager {
         : { generation: null, decider: null };
     current[key] = summary && typeof summary === "object" ? summary : null;
     session.modelContextSummary = current;
-  }
-
-  updateFocusedSpeakerWindow({
-    session = null,
-    userId = null,
-    allow = false,
-    directAddressed = false,
-    reason = ""
-  } = {}) {
-    if (!session || session.ending) return;
-    const normalizedUserId = String(userId || "").trim();
-    if (!normalizedUserId) return;
-
-    const now = Date.now();
-    const normalizedReason = String(reason || "").trim().toLowerCase();
-    if (directAddressed) {
-      session.lastDirectAddressAt = now;
-      session.lastDirectAddressUserId = normalizedUserId;
-    }
-    if (
-      allow &&
-      (
-        directAddressed ||
-        normalizedReason === "focused_speaker_followup" ||
-        normalizedReason === "bot_recent_reply_followup" ||
-        normalizedReason === "llm_yes" ||
-        normalizedReason === "llm_yes_retry"
-      )
-    ) {
-      session.focusedSpeakerUserId = normalizedUserId;
-      session.focusedSpeakerAt = now;
-      return;
-    }
-    if (directAddressed && normalizedReason === "bot_turn_open") {
-      session.focusedSpeakerUserId = normalizedUserId;
-      session.focusedSpeakerAt = now;
-      return;
-    }
-
-    if (now - Number(session.focusedSpeakerAt || 0) > FOCUSED_SPEAKER_CONTINUATION_MS) {
-      session.focusedSpeakerUserId = null;
-      session.focusedSpeakerAt = 0;
-    }
   }
 
   countHumanVoiceParticipants(session) {
@@ -7369,13 +7208,10 @@ export class VoiceSessionManager {
         clipDurationMs
       }
     });
-    this.updateFocusedSpeakerWindow({
-      session,
-      userId,
-      allow: Boolean(turnDecision.allow),
-      directAddressed: Boolean(turnDecision.directAddressed),
-      reason: turnDecision.reason
-    });
+    if (turnDecision.directAddressed && session && !session.ending) {
+      session.lastDirectAddressAt = Date.now();
+      session.lastDirectAddressUserId = userId;
+    }
     const turnVoiceAddressing = this.normalizeVoiceAddressingAnnotation({
       rawAddressing: turnDecision?.voiceAddressing,
       directAddressed: Boolean(turnDecision.directAddressed),

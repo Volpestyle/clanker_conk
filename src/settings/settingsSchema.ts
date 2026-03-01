@@ -1,7 +1,5 @@
 import {
   VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
-  VOICE_REPLY_DECIDER_SYSTEM_PROMPT_FULL_DEFAULT,
-  VOICE_REPLY_DECIDER_SYSTEM_PROMPT_STRICT_DEFAULT,
   VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
 } from "../promptCore.ts";
 
@@ -138,13 +136,10 @@ export const DEFAULT_SETTINGS = {
       enabled: true,
       provider: "anthropic",
       model: "claude-haiku-4-5",
-      maxAttempts: 1,
       reasoningEffort: "minimal",
       prompts: {
         wakeVariantHint: VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT,
-        systemPromptCompact: VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
-        systemPromptFull: VOICE_REPLY_DECIDER_SYSTEM_PROMPT_FULL_DEFAULT,
-        systemPromptStrict: VOICE_REPLY_DECIDER_SYSTEM_PROMPT_STRICT_DEFAULT
+        systemPromptCompact: VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT
       }
     },
     xai: {
