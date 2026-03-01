@@ -624,7 +624,10 @@ function MembershipChanges({ session }: { session: VoiceSession }) {
 // ---- Conversation Context ----
 
 function ConversationContext({ session, latencyTurns }: { session: VoiceSession; latencyTurns: LatencyTurnEntry[] }) {
-  const turns = session.recentTurns || [];
+  const turns = useMemo(
+    () => (Array.isArray(session.recentTurns) ? session.recentTurns : []),
+    [session.recentTurns]
+  );
   const modelContext = session.conversation?.modelContext || null;
   const generation = modelContext?.generation || null;
   const decider = modelContext?.decider || null;
@@ -633,7 +636,6 @@ function ConversationContext({ session, latencyTurns }: { session: VoiceSession;
   const trackedTranscriptTurns = Number(modelContext?.trackedTranscriptTurns || turns.length);
   const generationAvailableTurns = Number(generation?.availableTurns || trackedTurns);
   const generationSentTurns = Number(generation?.sentTurns || 0);
-  const generationMaxTurns = Number(generation?.maxTurns || 0);
   const deciderAvailableTurns = Number(decider?.availableTurns || trackedTurns);
   const deciderMaxTurns = Number(decider?.maxTurns || 0);
   const deciderSentTurns = Math.min(deciderAvailableTurns, deciderMaxTurns || deciderAvailableTurns);
@@ -792,6 +794,89 @@ function StreamWatchDetail({ session }: { session: VoiceSession }) {
   );
 }
 
+// ---- Music Detail ----
+
+function formatTrackDuration(seconds: number | null): string {
+  if (!Number.isFinite(seconds) || seconds == null || seconds < 0) return "--:--";
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function MusicDetail({ session }: { session: VoiceSession }) {
+  const music = session.music;
+  if (!music) return null;
+
+  const hasNowPlaying = music.active && music.lastTrackTitle;
+  const hasDisambiguation = music.disambiguationActive && music.pendingResults.length > 0;
+  const hasPendingSearch = Boolean(music.pendingQuery) && !hasDisambiguation;
+  const hasAnyData = hasNowPlaying || hasDisambiguation || hasPendingSearch ||
+    music.lastTrackTitle || music.lastCommandAt;
+
+  if (!hasAnyData) return null;
+
+  return (
+    <Section title="Music" badge={music.active ? "playing" : music.disambiguationActive ? "choosing" : "idle"} defaultOpen>
+      {/* Now playing */}
+      {music.lastTrackTitle && (
+        <div className="vm-music-now-playing">
+          <div>
+            <div className="vm-music-track-title">
+              {music.lastTrackUrl ? (
+                <a href={music.lastTrackUrl} target="_blank" rel="noopener noreferrer">{music.lastTrackTitle}</a>
+              ) : (
+                music.lastTrackTitle
+              )}
+            </div>
+            {music.lastTrackArtists.length > 0 && (
+              <div className="vm-music-track-artists">{music.lastTrackArtists.join(", ")}</div>
+            )}
+          </div>
+          {music.provider && <span className="vm-music-provider-badge">{music.provider}</span>}
+        </div>
+      )}
+
+      {/* Disambiguation */}
+      {hasDisambiguation && (
+        <div className="vm-music-disambiguation">
+          <div className="vm-music-disambiguation-query">
+            Choosing: &ldquo;{music.pendingQuery}&rdquo;
+            {music.pendingPlatform && ` on ${music.pendingPlatform}`}
+          </div>
+          <div className="vm-music-disambiguation-list">
+            {music.pendingResults.map((r) => (
+              <div key={r.id} className="vm-music-result-row">
+                <span className="vm-music-result-title">{r.title}</span>
+                <span className="vm-music-result-artist">{r.artist}</span>
+                <span className="vm-music-result-duration">{formatTrackDuration(r.durationSeconds)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Pending search */}
+      {hasPendingSearch && (
+        <div className="vm-music-pending">
+          <span className="vm-music-pending-label">Searching</span>
+          &ldquo;{music.pendingQuery}&rdquo;
+          {music.pendingPlatform && ` on ${music.pendingPlatform}`}
+        </div>
+      )}
+
+      {/* Stats grid */}
+      <div className="vm-detail-grid">
+        {music.lastCommandAt && <Stat label="Last Command" value={relativeTime(music.lastCommandAt)} />}
+        {music.lastCommandReason && <Stat label="Reason" value={music.lastCommandReason} />}
+        {music.source && <Stat label="Source" value={music.source} />}
+        {music.lastRequestText && <Stat label="Request" value={snippet(music.lastRequestText, 60)} />}
+        {music.startedAt && <Stat label="Started" value={relativeTime(music.startedAt)} />}
+        {music.stoppedAt && <Stat label="Stopped" value={relativeTime(music.stoppedAt)} />}
+      </div>
+    </Section>
+  );
+}
+
 // ---- Expanded Session Card ----
 
 function SessionCard({ session }: { session: VoiceSession }) {
@@ -891,6 +976,15 @@ function SessionCard({ session }: { session: VoiceSession }) {
             {session.voiceLookupBusyCount} Lookup{session.voiceLookupBusyCount !== 1 ? "s" : ""}
           </span>
         )}
+        {session.music?.active && (
+          <span className="vm-ts-pill vm-ts-music-playing">Music: Playing</span>
+        )}
+        {!session.music?.active && session.music?.disambiguationActive && (
+          <span className="vm-ts-pill vm-ts-music-searching">Music: Choosing</span>
+        )}
+        {!session.music?.active && !session.music?.disambiguationActive && session.music?.pendingQuery && (
+          <span className="vm-ts-pill vm-ts-music-searching">Music: Searching</span>
+        )}
         {session.focusedSpeaker && (
           <span className="vm-ts-pill vm-ts-focus">
             Focus: {session.focusedSpeaker.displayName || session.focusedSpeaker.userId.slice(0, 8)}
@@ -933,6 +1027,9 @@ function SessionCard({ session }: { session: VoiceSession }) {
 
           {/* Stream watch */}
           <StreamWatchDetail session={session} />
+
+          {/* Music */}
+          <MusicDetail session={session} />
         </div>
       )}
 

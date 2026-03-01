@@ -588,6 +588,27 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           latestFrameDataBase64: "",
           latestFrameAt: 0
         },
+        music: {
+          active: false,
+          startedAt: 0,
+          stoppedAt: 0,
+          provider: null,
+          source: null,
+          lastTrackId: null,
+          lastTrackTitle: null,
+          lastTrackArtists: [],
+          lastTrackUrl: null,
+          lastQuery: null,
+          lastRequestedByUserId: null,
+          lastRequestText: null,
+          lastCommandAt: 0,
+          lastCommandReason: null,
+          pendingQuery: null,
+          pendingPlatform: "auto",
+          pendingResults: [],
+          pendingRequestedByUserId: null,
+          pendingRequestedAt: 0
+        },
         soundboard: {
           playCount: 0,
           lastPlayedAt: 0,

@@ -335,12 +335,19 @@ export function buildReplyPrompt({
       parts.push(`Memory lookup for "${memoryLookup.query || message?.content || ""}" found no durable matches.`);
       parts.push("Say that no strong memory match was found if the user asked what you remember.");
     } else {
-      parts.push(`Memory lookup results for "${memoryLookup.query || message?.content || ""}":`);
+      const isFullMemory = memoryLookup.query === "__ALL__";
+      if (isFullMemory) {
+        parts.push("Full memory dump (all stored facts):");
+      } else {
+        parts.push(`Memory lookup results for "${memoryLookup.query || message?.content || ""}":`);
+      }
       parts.push(formatMemoryLookupResults(memoryLookup.results));
-      parts.push("Reference memory naturally without source tags by default.");
-      parts.push(
-        "Only cite memory hits inline as [M1], [M2], etc. when the user explicitly asks for memory citations, sources, or proof."
-      );
+      if (!isFullMemory) {
+        parts.push("Reference memory naturally without source tags by default.");
+        parts.push(
+          "Only cite memory hits inline as [M1], [M2], etc. when the user explicitly asks for memory citations, sources, or proof."
+        );
+      }
     }
   }
 
@@ -508,6 +515,41 @@ export function buildReplyPrompt({
       "If the user asks whether stream watch is on/off, set voiceIntent.intent to stream_status."
     );
     parts.push(
+      "If the user clearly asks you to play music or a song in VC, set voiceIntent.intent to play_music."
+    );
+    parts.push(
+      "If the user clearly asks you to stop music, set voiceIntent.intent to stop_music."
+    );
+    parts.push(
+      "If the user clearly asks you to pause music, set voiceIntent.intent to pause_music."
+    );
+    const musicDisambiguationActive = Boolean(voiceMode?.musicDisambiguation?.active);
+    const musicDisambiguationOptions = Array.isArray(voiceMode?.musicDisambiguation?.options)
+      ? voiceMode.musicDisambiguation.options
+      : [];
+    if (musicDisambiguationActive && musicDisambiguationOptions.length > 0) {
+      const pendingQuery = String(voiceMode?.musicDisambiguation?.query || "").trim() || null;
+      const pendingPlatform = String(voiceMode?.musicDisambiguation?.platform || "auto").trim().toLowerCase() || "auto";
+      parts.push(
+        `There is a pending music disambiguation request${pendingQuery ? ` for query "${pendingQuery}"` : ""} on platform ${pendingPlatform}.`
+      );
+      parts.push(
+        [
+          "Pending music options (use exact ids for selectedResultId):",
+          ...musicDisambiguationOptions.slice(0, 5).map((entry, index) => {
+            const id = String(entry?.id || "").trim();
+            const title = String(entry?.title || "").trim() || "unknown";
+            const artist = String(entry?.artist || "").trim() || "unknown";
+            const platform = String(entry?.platform || "").trim().toLowerCase() || "unknown";
+            return `${index + 1}. id=${id}; title=${title}; artist=${artist}; platform=${platform}`;
+          })
+        ].join("\n")
+      );
+      parts.push(
+        "If the user picks one of those options (by number or by naming it), set voiceIntent.intent=play_music and voiceIntent.selectedResultId to that exact id."
+      );
+    }
+    parts.push(
       "Set voiceIntent.confidence from 0 to 1. Use high confidence only for explicit voice-control requests aimed at you."
     );
     parts.push(
@@ -610,6 +652,7 @@ export function buildReplyPrompt({
       parts.push(
         "If the user asks what you remember (or asks for stored facts) and current memory context is insufficient, set memoryLookupQuery to a concise lookup query."
       );
+      parts.push("If the user asks to see ALL memory or EVERYTHING you remember, set memoryLookupQuery to \"__ALL__\".");
       parts.push("Use memoryLookupQuery only when needed and keep it under 220 characters.");
     }
   }
@@ -759,8 +802,8 @@ export function buildReplyPrompt({
   parts.push("Return strict JSON only. Do not output markdown or code fences.");
   parts.push("JSON format:");
   parts.push(
-    "{\"text\":\"reply or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"openArticleRef\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"soundboardRefs\":[],\"leaveVoiceChannel\":false,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
-  );
+    "{\"text\":\"reply or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"openArticleRef\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"soundboardRefs\":[],\"leaveVoiceChannel\":false,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null,\"query\":null,\"platform\":null,\"searchResults\":null,\"selectedResultId\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
+    );
   parts.push("Set skip=true only when no response should be sent. If skip=true, set text to [SKIP].");
   parts.push("When no reaction is needed, set reactionEmoji to null.");
   parts.push("When no media should be generated, set media to null.");
@@ -769,8 +812,13 @@ export function buildReplyPrompt({
   parts.push("When no durable self fact should be saved, set selfMemoryLine to null.");
   parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false for text-channel replies.");
   parts.push("When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.");
-  parts.push("Set voiceIntent.intent to one of join|leave|status|watch_stream|stop_watching_stream|stream_status|none.");
-  parts.push("When not issuing voice control, set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null.");
+  parts.push(
+    "Set voiceIntent.intent to one of join|leave|status|watch_stream|stop_watching_stream|stream_status|play_music|stop_music|pause_music|none."
+  );
+  parts.push("When voiceIntent.intent is play_music, set voiceIntent.query to the song name the user wants to play.");
+  parts.push("Set voiceIntent.platform to youtube|soundcloud|auto when intent is play_music. Use auto to search all platforms.");
+  parts.push("When searchResults are provided (from a previous music search), set voiceIntent.selectedResultId to the ID of the track to play.");
+  parts.push("When not issuing voice control, set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null, and other voiceIntent fields to null.");
   parts.push("Set screenShareIntent.action to one of offer_link|none.");
   parts.push("When not offering a share link, set screenShareIntent.action=none, screenShareIntent.confidence=0, screenShareIntent.reason=null.");
 
@@ -828,9 +876,16 @@ export function buildAutomationPrompt({
     } else if (!memoryLookup.results?.length) {
       parts.push(`Memory lookup for "${memoryLookup.query || taskInstruction}" found no durable matches.`);
     } else {
-      parts.push(`Memory lookup results for "${memoryLookup.query || taskInstruction}":`);
+      const isFullMemory = memoryLookup.query === "__ALL__";
+      if (isFullMemory) {
+        parts.push("Full memory dump (all stored facts):");
+      } else {
+        parts.push(`Memory lookup results for "${memoryLookup.query || taskInstruction}":`);
+      }
       parts.push(formatMemoryLookupResults(memoryLookup.results));
-      parts.push("If useful, reference these facts naturally in output/media.");
+      if (!isFullMemory) {
+        parts.push("If useful, reference these facts naturally in output/media.");
+      }
     }
   }
   parts.push("When the task references a person (like 'me'), use durable memory facts if they are relevant.");
@@ -863,8 +918,8 @@ export function buildAutomationPrompt({
   parts.push("Return strict JSON only.");
   parts.push("JSON format:");
   parts.push(
-    "{\"text\":\"message or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"openArticleRef\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"soundboardRefs\":[],\"leaveVoiceChannel\":false,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
-  );
+    "{\"text\":\"message or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"openArticleRef\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"soundboardRefs\":[],\"leaveVoiceChannel\":false,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null,\"query\":null,\"platform\":null,\"searchResults\":null,\"selectedResultId\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
+    );
   parts.push("Set webSearchQuery, imageLookupQuery, openArticleRef, memoryLine, and selfMemoryLine to null.");
   parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false.");
   if (allowMemoryLookupDirective) {
@@ -879,7 +934,7 @@ export function buildAutomationPrompt({
     parts.push("Set memoryLookupQuery to null.");
   }
   parts.push("Set automationAction.operation=none.");
-  parts.push("Set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null.");
+  parts.push("Set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null, and other voiceIntent fields to null.");
   parts.push("Set screenShareIntent.action=none, screenShareIntent.confidence=0, screenShareIntent.reason=null.");
   parts.push("Use [SKIP] only when sending nothing is clearly best.");
 
@@ -1388,8 +1443,8 @@ export function buildVoiceTurnPrompt({
   parts.push("Return strict JSON only.");
   parts.push("JSON format:");
   parts.push(
-    "{\"text\":\"spoken response or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"openArticleRef\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"soundboardRefs\":[],\"leaveVoiceChannel\":false,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null},\"voiceAddressing\":{\"talkingTo\":null,\"directedConfidence\":0}}"
-  );
+    "{\"text\":\"spoken response or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"openArticleRef\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"soundboardRefs\":[],\"leaveVoiceChannel\":false,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null,\"query\":null,\"platform\":null,\"searchResults\":null,\"selectedResultId\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null},\"voiceAddressing\":{\"talkingTo\":null,\"directedConfidence\":0}}"
+    );
   parts.push("Keep reactionEmoji null, media null, memoryLookupQuery null, imageLookupQuery null, and voiceIntent intent none for voice-turn generation.");
   parts.push("Always include voiceAddressing with both fields.");
   parts.push("If you are skipping, set skip=true and text to [SKIP]. Otherwise set skip=false and provide natural spoken text.");

@@ -1541,6 +1541,18 @@ test("voice intent dispatcher routes all supported intents to voice session mana
       called.push("stream_status");
       return true;
     };
+    bot.voiceSessionManager.requestPlayMusic = async () => {
+      called.push("play_music");
+      return true;
+    };
+    bot.voiceSessionManager.requestStopMusic = async () => {
+      called.push("stop_music");
+      return true;
+    };
+    bot.voiceSessionManager.requestPauseMusic = async () => {
+      called.push("pause_music");
+      return true;
+    };
 
     const message = {
       id: "msg-intent-dispatch",
@@ -1556,7 +1568,10 @@ test("voice intent dispatcher routes all supported intents to voice session mana
       "status",
       "watch_stream",
       "stop_watching_stream",
-      "stream_status"
+      "stream_status",
+      "play_music",
+      "stop_music",
+      "pause_music"
     ];
 
     for (const intent of intents) {

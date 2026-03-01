@@ -4,7 +4,7 @@ import {
   getVoiceConnection,
   VoiceConnectionStatus
 } from "@discordjs/voice";
-import { PermissionFlagsBits } from "discord.js";
+import { PermissionFlagsBits, type ChatInputCommandInteraction } from "discord.js";
 import prism from "prism-media";
 import {
   buildVoiceToneGuardrails,
@@ -40,6 +40,9 @@ import {
   resolveRealtimeTurnTranscriptionPlan
 } from "./voiceDecisionRuntime.ts";
 import { defaultModelForLlmProvider, normalizeLlmProvider } from "../llm/llmHelpers.ts";
+import { createMusicPlaybackProvider } from "./musicPlayback.ts";
+import { createMusicSearchProvider } from "./musicSearch.ts";
+import { createDiscordMusicPlayer } from "./musicPlayer.ts";
 import {
   enableWatchStreamForUser,
   getStreamWatchBrainContextForPrompt,
@@ -277,6 +280,118 @@ function normalizeVoiceAddressingTargetToken(value = "") {
   return normalized;
 }
 
+const MUSIC_STOP_VERB_RE = /\b(?:stop|pause|halt|end|quit|shut\s*off)\b/i;
+const MUSIC_CUE_RE = /\b(?:music|song|songs|track|tracks|playback|playing)\b/i;
+const MUSIC_PLAY_VERB_RE = /\b(?:play|start|queue|put\s+on|spin)\b/i;
+const MUSIC_PLAY_QUERY_RE =
+  /\b(?:play|start|queue|put\s+on|spin)\b\s+(.+)$/i;
+const MUSIC_DISAMBIGUATION_MAX_RESULTS = 5;
+const MUSIC_DISAMBIGUATION_TTL_MS = 10 * 60 * 1000;
+
+function normalizeInlineText(value: unknown = "", maxChars = STT_TRANSCRIPT_MAX_CHARS) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, Math.max(1, Number(maxChars) || STT_TRANSCRIPT_MAX_CHARS));
+}
+
+type MusicSelectionResult = {
+  id: string;
+  title: string;
+  artist: string;
+  platform: "youtube" | "soundcloud" | "discord" | "auto";
+  externalUrl: string | null;
+  durationSeconds: number | null;
+};
+
+type MusicDisambiguationPayload = {
+  session?: Record<string, unknown> | null;
+  query?: string;
+  platform?: string;
+  results?: Array<Record<string, unknown>>;
+  requestedByUserId?: string | null;
+};
+
+type MusicTextCommandMessage = {
+  guild?: { id?: string | null } | null;
+  guildId?: string | null;
+  channel?: unknown;
+  channelId?: string | null;
+  author?: { id?: string | null } | null;
+  id?: string | null;
+  content?: string | null;
+};
+
+type MusicTextRequestPayload = {
+  message?: MusicTextCommandMessage | null;
+  settings?: Record<string, unknown> | null;
+};
+
+type VoiceAddressingAnnotation = {
+  talkingTo: string | null;
+  directedConfidence: number;
+  source: string | null;
+  reason: string | null;
+};
+
+type VoiceAddressingState = {
+  currentSpeakerTarget: string | null;
+  currentSpeakerDirectedConfidence: number;
+  lastDirectedToMe: {
+    speakerName: string;
+    directedConfidence: number;
+    ageMs: number | null;
+  } | null;
+  recentAddressingGuesses: Array<{
+    speakerName: string;
+    talkingTo: string | null;
+    directedConfidence: number;
+    ageMs: number | null;
+  }>;
+};
+
+type VoiceConversationContext = {
+  engagementState: string;
+  engaged: boolean;
+  engagedWithCurrentSpeaker: boolean;
+  recentAssistantReply: boolean;
+  recentDirectAddress: boolean;
+  sameAsRecentDirectAddress: boolean;
+  msSinceAssistantReply: number | null;
+  msSinceDirectAddress: number | null;
+  voiceAddressingState?: VoiceAddressingState | null;
+  currentTurnAddressing?: VoiceAddressingAnnotation | null;
+};
+
+type VoiceReplyDecision = {
+  allow: boolean;
+  reason: string;
+  participantCount: number;
+  directAddressed: boolean;
+  directAddressConfidence: number;
+  directAddressThreshold: number;
+  transcript: string;
+  conversationContext: VoiceConversationContext;
+  voiceAddressing?: VoiceAddressingAnnotation | null;
+  llmResponse?: string | null;
+  llmProvider?: string | null;
+  llmModel?: string | null;
+  error?: string | null;
+  retryAfterMs?: number | null;
+  requiredSilenceMs?: number | null;
+  msSinceInboundAudio?: number | null;
+  outputLockReason?: string | null;
+};
+
+type VoiceTimelineTurn = {
+  role: "assistant" | "user";
+  userId: string | null;
+  speakerName: string;
+  text: string;
+  at: number;
+  addressing?: VoiceAddressingAnnotation;
+};
+
 export class VoiceSessionManager {
   client;
   store;
@@ -290,6 +405,9 @@ export class VoiceSessionManager {
   joinLocks;
   boundBotAudioStreams;
   soundboardDirector;
+  musicPlayback;
+  musicSearch;
+  musicPlayer;
   onVoiceStateUpdate;
 
   constructor({
@@ -318,6 +436,9 @@ export class VoiceSessionManager {
       store,
       appConfig
     });
+    this.musicPlayback = createMusicPlaybackProvider(this.appConfig || {});
+    this.musicSearch = createMusicSearchProvider(this.appConfig || {});
+    this.musicPlayer = createDiscordMusicPlayer();
     this.onVoiceStateUpdate = (oldState, newState) => {
       this.handleVoiceStateUpdate(oldState, newState).catch((error) => {
         this.store.logAction({
@@ -580,6 +701,7 @@ export class VoiceSessionManager {
               }
             : null
         },
+        music: this.snapshotMusicRuntimeState(session),
         stt: session.mode === "stt_pipeline"
           ? {
               pendingTurns: Number(session.pendingSttTurns || 0),
@@ -724,10 +846,1324 @@ export class VoiceSessionManager {
         activeCaptures: session.userCaptures.size,
         streamWatchActive: Boolean(session.streamWatch?.active),
         streamWatchTargetUserId: session.streamWatch?.targetUserId || null,
+        musicActive: this.isMusicPlaybackActive(session),
+        musicProvider: this.ensureSessionMusicState(session)?.provider || null,
+        musicTrackTitle: this.ensureSessionMusicState(session)?.lastTrackTitle || null,
+        musicTrackArtists: this.ensureSessionMusicState(session)?.lastTrackArtists || [],
         requestText: requestText || null
       }
     });
 
+    return true;
+  }
+
+  ensureSessionMusicState(session) {
+    if (!session || typeof session !== "object") return null;
+    const current = session.music && typeof session.music === "object" ? session.music : {};
+    const next = {
+      active: Boolean(current.active),
+      startedAt: Math.max(0, Number(current.startedAt || 0)),
+      stoppedAt: Math.max(0, Number(current.stoppedAt || 0)),
+      provider: String(current.provider || "").trim() || null,
+      source: String(current.source || "").trim() || null,
+      lastTrackId: String(current.lastTrackId || "").trim() || null,
+      lastTrackTitle: String(current.lastTrackTitle || "").trim() || null,
+      lastTrackArtists: Array.isArray(current.lastTrackArtists)
+        ? current.lastTrackArtists.map((entry) => String(entry || "").trim()).filter(Boolean).slice(0, 8)
+        : [],
+      lastTrackUrl: String(current.lastTrackUrl || "").trim() || null,
+      lastQuery: String(current.lastQuery || "").trim() || null,
+      lastRequestedByUserId: String(current.lastRequestedByUserId || "").trim() || null,
+      lastRequestText: String(current.lastRequestText || "").trim() || null,
+      lastCommandAt: Math.max(0, Number(current.lastCommandAt || 0)),
+      lastCommandReason: String(current.lastCommandReason || "").trim() || null,
+      pendingQuery: String(current.pendingQuery || "").trim() || null,
+      pendingPlatform: this.normalizeMusicPlatformToken(current.pendingPlatform, "auto"),
+      pendingResults: Array.isArray(current.pendingResults)
+        ? current.pendingResults
+            .map((entry) => this.normalizeMusicSelectionResult(entry))
+            .filter(Boolean)
+            .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS)
+        : [],
+      pendingRequestedByUserId: String(current.pendingRequestedByUserId || "").trim() || null,
+      pendingRequestedAt: Math.max(0, Number(current.pendingRequestedAt || 0))
+    };
+    session.music = next;
+    return next;
+  }
+
+  snapshotMusicRuntimeState(session) {
+    const music = this.ensureSessionMusicState(session);
+    if (!music) return null;
+    return {
+      active: Boolean(music.active),
+      provider: music.provider || null,
+      source: music.source || null,
+      startedAt: music.startedAt > 0 ? new Date(music.startedAt).toISOString() : null,
+      stoppedAt: music.stoppedAt > 0 ? new Date(music.stoppedAt).toISOString() : null,
+      lastTrackId: music.lastTrackId || null,
+      lastTrackTitle: music.lastTrackTitle || null,
+      lastTrackArtists: Array.isArray(music.lastTrackArtists) ? music.lastTrackArtists : [],
+      lastTrackUrl: music.lastTrackUrl || null,
+      lastQuery: music.lastQuery || null,
+      lastRequestedByUserId: music.lastRequestedByUserId || null,
+      lastRequestText: music.lastRequestText || null,
+      lastCommandAt: music.lastCommandAt > 0 ? new Date(music.lastCommandAt).toISOString() : null,
+      lastCommandReason: music.lastCommandReason || null,
+      pendingQuery: music.pendingQuery || null,
+      pendingPlatform: music.pendingPlatform || null,
+      pendingRequestedByUserId: music.pendingRequestedByUserId || null,
+      pendingRequestedAt: music.pendingRequestedAt > 0 ? new Date(music.pendingRequestedAt).toISOString() : null,
+      pendingResults: Array.isArray(music.pendingResults) ? music.pendingResults : [],
+      disambiguationActive: this.isMusicDisambiguationActive(music)
+    };
+  }
+
+  isMusicPlaybackActive(session) {
+    const music = this.ensureSessionMusicState(session);
+    return Boolean(music?.active);
+  }
+
+  normalizeMusicPlatformToken(value: unknown = "", fallback: "youtube" | "soundcloud" | "discord" | "auto" | null = null) {
+    const token = String(value || "")
+      .trim()
+      .toLowerCase();
+    if (token === "youtube" || token === "soundcloud" || token === "discord" || token === "auto") {
+      return token;
+    }
+    return fallback;
+  }
+
+  normalizeMusicSelectionResult(rawResult: Record<string, unknown> | null = null): MusicSelectionResult | null {
+    if (!rawResult || typeof rawResult !== "object") return null;
+    const id = normalizeInlineText(rawResult.id, 180);
+    const title = normalizeInlineText(rawResult.title, 220);
+    const artist = normalizeInlineText(rawResult.artist, 220);
+    const platform = this.normalizeMusicPlatformToken(rawResult.platform, null);
+    if (!id || !title || !artist || !platform) return null;
+    const externalUrl = normalizeInlineText(rawResult.externalUrl || rawResult.url, 260) || null;
+    const durationRaw = Number(rawResult.durationSeconds);
+    const durationSeconds = Number.isFinite(durationRaw) && durationRaw >= 0 ? Math.floor(durationRaw) : null;
+    return {
+      id,
+      title,
+      artist,
+      platform,
+      externalUrl,
+      durationSeconds
+    };
+  }
+
+  isMusicDisambiguationActive(musicState = null) {
+    const music = musicState && typeof musicState === "object" ? musicState : null;
+    if (!music) return false;
+    const pendingAt = Math.max(0, Number(music.pendingRequestedAt || 0));
+    if (!pendingAt) return false;
+    const ageMs = Math.max(0, Date.now() - pendingAt);
+    if (ageMs > MUSIC_DISAMBIGUATION_TTL_MS) return false;
+    return Array.isArray(music.pendingResults) && music.pendingResults.length > 0;
+  }
+
+  clearMusicDisambiguationState(session) {
+    const music = this.ensureSessionMusicState(session);
+    if (!music) return;
+    music.pendingQuery = null;
+    music.pendingPlatform = "auto";
+    music.pendingResults = [];
+    music.pendingRequestedByUserId = null;
+    music.pendingRequestedAt = 0;
+  }
+
+  setMusicDisambiguationState({
+    session,
+    query = "",
+    platform = "auto",
+    results = [],
+    requestedByUserId = null
+  }: MusicDisambiguationPayload = {}) {
+    const music = this.ensureSessionMusicState(session);
+    if (!music) return null;
+    const normalizedResults = (Array.isArray(results) ? results : [])
+      .map((entry) => this.normalizeMusicSelectionResult(entry))
+      .filter(Boolean)
+      .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS);
+    if (!normalizedResults.length) {
+      this.clearMusicDisambiguationState(session);
+      return null;
+    }
+    music.pendingQuery = normalizeInlineText(query, 120) || null;
+    music.pendingPlatform = this.normalizeMusicPlatformToken(platform, "auto");
+    music.pendingResults = normalizedResults;
+    music.pendingRequestedByUserId = String(requestedByUserId || "").trim() || null;
+    music.pendingRequestedAt = Date.now();
+    return music.pendingResults;
+  }
+
+  findPendingMusicSelectionById(session, selectedResultId = "") {
+    const music = this.ensureSessionMusicState(session);
+    if (!music || !this.isMusicDisambiguationActive(music)) return null;
+    const targetId = normalizeInlineText(selectedResultId, 180);
+    if (!targetId) return null;
+    const normalizedTarget = targetId.toLowerCase();
+    return (
+      (Array.isArray(music.pendingResults) ? music.pendingResults : []).find((entry) => {
+        const entryId = String(entry?.id || "")
+          .trim()
+          .toLowerCase();
+        return Boolean(entryId) && entryId === normalizedTarget;
+      }) || null
+    );
+  }
+
+  getMusicDisambiguationPromptContext(session): {
+    active: true;
+    query: string | null;
+    platform: "youtube" | "soundcloud" | "discord" | "auto";
+    requestedByUserId: string | null;
+    options: MusicSelectionResult[];
+  } | null {
+    const music = this.ensureSessionMusicState(session);
+    if (!music || !this.isMusicDisambiguationActive(music)) return null;
+    return {
+      active: true,
+      query: music.pendingQuery || null,
+      platform: this.normalizeMusicPlatformToken(music.pendingPlatform, "auto") || "auto",
+      requestedByUserId: music.pendingRequestedByUserId || null,
+      options: (Array.isArray(music.pendingResults) ? music.pendingResults : [])
+        .map((entry) => this.normalizeMusicSelectionResult(entry))
+        .filter((entry): entry is MusicSelectionResult => Boolean(entry))
+        .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS)
+    };
+  }
+
+  hasBotNameCueForTranscript({ transcript = "", settings = null } = {}) {
+    const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedTranscript) return false;
+
+    const resolvedSettings = settings || this.store.getSettings();
+    const botName = getPromptBotName(resolvedSettings);
+    const aliases = Array.isArray(resolvedSettings?.botNameAliases) ? resolvedSettings.botNameAliases : [];
+    const primaryToken = String(botName || "")
+      .replace(/[^a-z0-9\s]+/gi, " ")
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .at(0) || "";
+    const shortPrimaryToken = primaryToken.length >= 5 ? primaryToken.slice(0, 5) : "";
+    const candidateNames = [
+      botName,
+      ...aliases,
+      primaryToken,
+      shortPrimaryToken
+    ]
+      .map((entry) => String(entry || "").trim())
+      .filter(Boolean);
+
+    for (const candidate of candidateNames) {
+      if (hasBotNameCue({ transcript: normalizedTranscript, botName: candidate })) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  isLikelyMusicStopPhrase({ transcript = "", settings = null } = {}) {
+    const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedTranscript) return false;
+    if (!MUSIC_STOP_VERB_RE.test(normalizedTranscript)) return false;
+    if (MUSIC_CUE_RE.test(normalizedTranscript)) return true;
+    if (this.hasBotNameCueForTranscript({ transcript: normalizedTranscript, settings })) return true;
+    const tokenCount = normalizedTranscript.split(/\s+/).filter(Boolean).length;
+    return tokenCount <= 3;
+  }
+
+  isLikelyMusicPlayPhrase({ transcript = "", settings = null } = {}) {
+    const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedTranscript) return false;
+    if (!MUSIC_PLAY_VERB_RE.test(normalizedTranscript)) return false;
+    if (MUSIC_CUE_RE.test(normalizedTranscript)) return true;
+    return this.hasBotNameCueForTranscript({ transcript: normalizedTranscript, settings });
+  }
+
+  extractMusicPlayQuery(transcript = "") {
+    const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedTranscript) return "";
+
+    const quotedMatch = normalizedTranscript.match(/["'“”]([^"'“”]{2,120})["'“”]/);
+    if (quotedMatch && quotedMatch[1]) {
+      return normalizeInlineText(quotedMatch[1], 120);
+    }
+
+    const playMatch = normalizedTranscript.match(MUSIC_PLAY_QUERY_RE);
+    const candidate = playMatch?.[1] ? String(playMatch[1]) : "";
+    if (!candidate) return "";
+
+    const cleaned = candidate
+      .replace(/\b(?:in\s+vc|in\s+voice|in\s+discord|right\s+now|rn|please|plz|for\s+me|for\s+us|thanks?)\b/gi, " ")
+      .replace(/\b(?:music|song|songs|track|tracks)\b/gi, " ")
+      .replace(/[^\w\s'"&+-]+/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+    if (!cleaned) return "";
+    if (/^(?:something|anything|some|a|the|please|plz)$/i.test(cleaned)) return "";
+    return cleaned.slice(0, 120);
+  }
+
+  haltSessionOutputForMusicPlayback(session, reason = "music_playback_started") {
+    if (!session || session.ending) return;
+    this.clearPendingResponse(session);
+    this.clearAudioPlaybackQueue(session);
+    this.clearBargeInOutputSuppression(session, "music_playback_started");
+    if (session.botTurnResetTimer) {
+      clearTimeout(session.botTurnResetTimer);
+      session.botTurnResetTimer = null;
+    }
+    session.botTurnOpen = false;
+    session.pendingBargeInRetry = null;
+    session.lastRequestedRealtimeUtterance = null;
+    session.activeReplyInterruptionPolicy = null;
+    session.pendingDeferredTurns = [];
+
+    try {
+      session.audioPlayer?.stop?.(true);
+    } catch {
+      // ignore
+    }
+    try {
+      session.botAudioStream?.destroy?.();
+    } catch {
+      // ignore
+    }
+    session.botAudioStream = null;
+    this.abortActiveInboundCaptures({
+      session,
+      reason: "music_playback_active"
+    });
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.client.user?.id || null,
+      content: "voice_music_output_halted",
+      metadata: {
+        sessionId: session.id,
+        reason: String(reason || "music_playback_started")
+      }
+    });
+  }
+
+  async requestPlayMusic({
+    message = null,
+    guildId = null,
+    channel = null,
+    channelId = null,
+    requestedByUserId = null,
+    settings = null,
+    query = "",
+    trackId = null,
+    platform = "auto",
+    searchResults = null,
+    reason = "nl_play_music",
+    source = "text_voice_intent",
+    mustNotify = true
+  } = {}) {
+    const resolvedGuildId = String(guildId || message?.guild?.id || message?.guildId || "").trim();
+    if (!resolvedGuildId) return false;
+    const session = this.sessions.get(resolvedGuildId);
+    const resolvedChannel = channel || message?.channel || null;
+    const resolvedChannelIdFromChannel =
+      resolvedChannel && typeof resolvedChannel === "object" && "id" in resolvedChannel
+        ? String((resolvedChannel as { id?: string | null }).id || "").trim()
+        : "";
+    const resolvedChannelId = String(
+      channelId || message?.channelId || resolvedChannelIdFromChannel || session?.textChannelId || ""
+    ).trim();
+    const resolvedUserId = String(requestedByUserId || message?.author?.id || "").trim() || null;
+    const resolvedSettings = settings || session?.settingsSnapshot || this.store.getSettings();
+    const requestText = normalizeInlineText(message?.content || "", 220) || null;
+
+    if (!session) {
+      await this.sendOperationalMessage({
+        channel: resolvedChannel,
+        settings: resolvedSettings,
+        guildId: resolvedGuildId,
+        channelId: resolvedChannelId || null,
+        userId: resolvedUserId || null,
+        messageId: message?.id || null,
+        event: "voice_music_request",
+        reason: "not_in_voice",
+        details: {
+          source: String(source || "text_voice_intent"),
+          requestText
+        },
+        mustNotify
+      });
+      return true;
+    }
+
+    const music = this.ensureSessionMusicState(session);
+    const playbackProviderConfigured = Boolean(this.musicPlayback?.isConfigured?.());
+    const resolvedPlatform = this.normalizeMusicPlatformToken(platform, "auto");
+    const resolvedQuery = normalizeInlineText(query || this.extractMusicPlayQuery(message?.content || ""), 120) || "";
+    const resolvedTrackId = normalizeInlineText(trackId, 180) || null;
+    const normalizedProvidedResults = (Array.isArray(searchResults) ? searchResults : [])
+      .map((entry) => this.normalizeMusicSelectionResult(entry))
+      .filter(Boolean)
+      .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS);
+    const disambiguationFromPrompt = this.getMusicDisambiguationPromptContext(session);
+
+    const requestDisambiguation = async (candidateResults = []) => {
+      const options = candidateResults
+        .map((entry) => this.normalizeMusicSelectionResult(entry))
+        .filter(Boolean)
+        .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS);
+      if (!options.length) return false;
+
+      this.setMusicDisambiguationState({
+        session,
+        query: resolvedQuery,
+        platform: resolvedPlatform,
+        results: options,
+        requestedByUserId: resolvedUserId
+      });
+
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: resolvedUserId || this.client.user?.id || null,
+        content: "voice_music_disambiguation_required",
+        metadata: {
+          sessionId: session.id,
+          source: String(source || "text_voice_intent"),
+          query: resolvedQuery || null,
+          platform: resolvedPlatform || "auto",
+          optionCount: options.length,
+          options
+        }
+      });
+
+      await this.sendOperationalMessage({
+        channel: resolvedChannel,
+        settings: resolvedSettings,
+        guildId: resolvedGuildId,
+        channelId: resolvedChannelId || session.textChannelId || null,
+        userId: resolvedUserId || null,
+        messageId: message?.id || null,
+        event: "voice_music_request",
+        reason: "disambiguation_required",
+        details: {
+          source: String(source || "text_voice_intent"),
+          query: resolvedQuery || null,
+          platform: resolvedPlatform || "auto",
+          optionCount: options.length,
+          options
+        },
+        mustNotify
+      });
+      return true;
+    };
+
+    let selectedResult = resolvedTrackId ? this.findPendingMusicSelectionById(session, resolvedTrackId) : null;
+    if (!selectedResult && resolvedTrackId) {
+      selectedResult =
+        normalizedProvidedResults.find((entry) => String(entry.id || "") === resolvedTrackId) ||
+        (Array.isArray(disambiguationFromPrompt?.options)
+          ? disambiguationFromPrompt.options.find((entry) => String(entry?.id || "") === resolvedTrackId)
+          : null) ||
+        null;
+    }
+
+    if (!resolvedTrackId && normalizedProvidedResults.length > 1) {
+      const handled = await requestDisambiguation(normalizedProvidedResults);
+      if (handled) return true;
+    }
+    if (!resolvedTrackId && !selectedResult && normalizedProvidedResults.length === 1) {
+      selectedResult = normalizedProvidedResults[0];
+    }
+
+    if (!resolvedTrackId && !selectedResult && resolvedQuery && this.musicSearch?.isConfigured?.()) {
+      const searchResponse = await this.musicSearch.search(resolvedQuery, {
+        platform: resolvedPlatform || "auto",
+        limit: MUSIC_DISAMBIGUATION_MAX_RESULTS
+      });
+      const normalizedSearchResults = (Array.isArray(searchResponse?.results) ? searchResponse.results : [])
+        .map((entry) =>
+          this.normalizeMusicSelectionResult({
+            id: entry.id,
+            title: entry.title,
+            artist: entry.artist,
+            platform: entry.platform,
+            externalUrl: entry.externalUrl,
+            durationSeconds: entry.durationSeconds
+          })
+        )
+        .filter(Boolean)
+        .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS);
+
+      if (normalizedSearchResults.length > 1) {
+        const handled = await requestDisambiguation(normalizedSearchResults);
+        if (handled) return true;
+      } else if (normalizedSearchResults.length === 1) {
+        selectedResult = normalizedSearchResults[0];
+      }
+    }
+
+    if (!selectedResult && !playbackProviderConfigured) {
+      await this.sendOperationalMessage({
+        channel: resolvedChannel,
+        settings: resolvedSettings,
+        guildId: resolvedGuildId,
+        channelId: resolvedChannelId || session.textChannelId || null,
+        userId: resolvedUserId || null,
+        messageId: message?.id || null,
+        event: "voice_music_request",
+        reason: "music_provider_unconfigured",
+        details: {
+          provider: this.musicPlayback?.provider || "none",
+          source: String(source || "text_voice_intent"),
+          query: resolvedQuery || null,
+          requestText
+        },
+        mustNotify
+      });
+      return true;
+    }
+
+    let playbackQuery = resolvedQuery;
+    let playbackTrackId = resolvedTrackId;
+    if (selectedResult) {
+      const selectedId = String(selectedResult.id || "").trim();
+      if (!selectedId) {
+        playbackQuery = normalizeInlineText(`${selectedResult.title} ${selectedResult.artist}`, 120) || playbackQuery;
+      } else {
+        playbackTrackId = selectedId || playbackTrackId;
+        if (!playbackQuery) {
+          playbackQuery = normalizeInlineText(`${selectedResult.title} ${selectedResult.artist}`, 120);
+        }
+      }
+    }
+
+    const selectedResultPlatform = this.normalizeMusicPlatformToken(selectedResult?.platform, null);
+    const useDiscordStreaming = Boolean(
+      selectedResult && (
+        selectedResultPlatform === "youtube" ||
+        selectedResultPlatform === "soundcloud" ||
+        selectedResultPlatform === "discord"
+      )
+    );
+
+    let playbackResult: { ok: boolean; provider: string; reason: string; message: string; status: number; track: { id: string; title: string; artistNames: string[]; externalUrl: string | null } | null; query: string | null } | null = null;
+
+    if (useDiscordStreaming) {
+      const discordResult = await this.playMusicViaDiscord(session, selectedResult);
+      if (!discordResult.ok) {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: resolvedUserId || this.client.user?.id || null,
+          content: "voice_music_start_failed",
+          metadata: {
+            sessionId: session.id,
+            provider: "discord",
+            reason: discordResult.error || "discord_playback_failed",
+            source: String(source || "text_voice_intent"),
+            query: playbackQuery || null,
+            requestedTrackId: selectedResult?.id || null,
+            selectedResultId: selectedResult?.id || null,
+            selectedResultPlatform: selectedResult?.platform || null,
+            error: discordResult.error || null
+          }
+        });
+        await this.sendOperationalMessage({
+          channel: resolvedChannel,
+          settings: resolvedSettings,
+          guildId: resolvedGuildId,
+          channelId: resolvedChannelId || session.textChannelId || null,
+          userId: resolvedUserId || null,
+          messageId: message?.id || null,
+          event: "voice_music_request",
+          reason: discordResult.error || "discord_playback_failed",
+          details: {
+            source: String(source || "text_voice_intent"),
+            query: playbackQuery || null,
+            selectedResultId: selectedResult?.id || null,
+            selectedResultPlatform: selectedResult?.platform || null,
+            provider: "discord",
+            error: discordResult.error || null
+          },
+          mustNotify
+        });
+        return true;
+      }
+      playbackResult = {
+        ok: true,
+        provider: "discord",
+        reason: "started",
+        message: "playing",
+        status: 200,
+        track: {
+          id: selectedResult.id,
+          title: selectedResult.title,
+          artistNames: selectedResult.artist ? [selectedResult.artist] : [],
+          externalUrl: selectedResult.externalUrl
+        },
+        query: playbackQuery
+      };
+    } else {
+      playbackResult = await this.musicPlayback.startPlayback({
+        query: playbackQuery,
+        trackId: playbackTrackId
+      });
+    }
+    if (!playbackResult.ok) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: resolvedUserId || this.client.user?.id || null,
+        content: "voice_music_start_failed",
+        metadata: {
+          sessionId: session.id,
+          provider: playbackResult.provider,
+          reason: playbackResult.reason,
+          source: String(source || "text_voice_intent"),
+          query: playbackResult.query || playbackQuery || null,
+          requestedTrackId: playbackTrackId,
+          selectedResultId: selectedResult?.id || null,
+          selectedResultPlatform: selectedResult?.platform || null,
+          status: Number(playbackResult.status || 0),
+          message: playbackResult.message || null
+        }
+      });
+      await this.sendOperationalMessage({
+        channel: resolvedChannel,
+        settings: resolvedSettings,
+        guildId: resolvedGuildId,
+        channelId: resolvedChannelId || session.textChannelId || null,
+        userId: resolvedUserId || null,
+        messageId: message?.id || null,
+        event: "voice_music_request",
+        reason: playbackResult.reason || "music_playback_failed",
+        details: {
+          source: String(source || "text_voice_intent"),
+          query: playbackResult.query || playbackQuery || null,
+          requestedTrackId: playbackTrackId,
+          selectedResultId: selectedResult?.id || null,
+          selectedResultPlatform: selectedResult?.platform || null,
+          provider: playbackResult.provider,
+          status: Number(playbackResult.status || 0),
+          error: playbackResult.message || null
+        },
+        mustNotify
+      });
+      return true;
+    }
+
+    if (music) {
+      music.active = true;
+      music.startedAt = Date.now();
+      music.stoppedAt = 0;
+      music.provider = playbackResult.provider || null;
+      music.source = String(source || "text_voice_intent");
+      music.lastTrackId = playbackResult.track?.id || null;
+      music.lastTrackTitle = playbackResult.track?.title || null;
+      music.lastTrackArtists = Array.isArray(playbackResult.track?.artistNames)
+        ? playbackResult.track.artistNames
+        : [];
+      music.lastTrackUrl = playbackResult.track?.externalUrl || null;
+      music.lastQuery = playbackResult.query || playbackQuery || null;
+      music.lastRequestedByUserId = resolvedUserId || null;
+      music.lastRequestText = requestText;
+      music.lastCommandAt = Date.now();
+      music.lastCommandReason = String(reason || "nl_play_music");
+      this.clearMusicDisambiguationState(session);
+    }
+
+    this.haltSessionOutputForMusicPlayback(session, "music_playback_started");
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: resolvedUserId || this.client.user?.id || null,
+      content: "voice_music_started",
+      metadata: {
+        sessionId: session.id,
+        provider: playbackResult.provider,
+        source: String(source || "text_voice_intent"),
+        reason: String(reason || "nl_play_music"),
+        query: playbackResult.query || playbackQuery || null,
+        requestedTrackId: playbackTrackId,
+        selectedResultId: selectedResult?.id || null,
+        selectedResultPlatform: selectedResult?.platform || null,
+        trackId: playbackResult.track?.id || null,
+        trackTitle: playbackResult.track?.title || null,
+        trackArtists: playbackResult.track?.artistNames || [],
+        trackUrl: playbackResult.track?.externalUrl || null
+      }
+    });
+    await this.sendOperationalMessage({
+      channel: resolvedChannel,
+      settings: resolvedSettings,
+      guildId: resolvedGuildId,
+      channelId: resolvedChannelId || session.textChannelId || null,
+      userId: resolvedUserId || null,
+      messageId: message?.id || null,
+      event: "voice_music_request",
+      reason: "started",
+      details: {
+        source: String(source || "text_voice_intent"),
+        provider: playbackResult.provider,
+        query: playbackResult.query || playbackQuery || null,
+        requestedTrackId: playbackTrackId,
+        selectedResultId: selectedResult?.id || null,
+        selectedResultPlatform: selectedResult?.platform || null,
+        trackTitle: playbackResult.track?.title || null,
+        trackArtists: playbackResult.track?.artistNames || [],
+        trackUrl: playbackResult.track?.externalUrl || null
+      },
+      mustNotify
+    });
+    return true;
+  }
+
+  async playMusicViaDiscord(session: { guildId: string }, track: { id: string; title: string; artist: string; platform: string; externalUrl: string | null }) {
+    if (!session?.guildId) {
+      return { ok: false, error: "no session" };
+    }
+
+    const guild = this.client.guilds.cache.get(session.guildId);
+    if (!guild) {
+      return { ok: false, error: "guild not found" };
+    }
+
+    const existingConnection = getVoiceConnection(session.guildId);
+    if (!existingConnection) {
+      return { ok: false, error: "not connected to voice" };
+    }
+
+    this.musicPlayer.setConnection(existingConnection);
+
+    const searchResult = {
+      id: track.id,
+      title: track.title,
+      artist: track.artist,
+      platform: track.platform as "youtube" | "soundcloud",
+      streamUrl: null,
+      durationSeconds: null,
+      thumbnailUrl: null,
+      externalUrl: track.externalUrl || ""
+    };
+
+    const result = await this.musicPlayer.play(searchResult);
+    return { ok: result.ok, error: result.error };
+  }
+
+  async requestStopMusic({
+    message = null,
+    guildId = null,
+    channel = null,
+    channelId = null,
+    requestedByUserId = null,
+    settings = null,
+    reason = "nl_stop_music",
+    source = "text_voice_intent",
+    requestText = "",
+    mustNotify = true
+  } = {}) {
+    const resolvedGuildId = String(guildId || message?.guild?.id || message?.guildId || "").trim();
+    if (!resolvedGuildId) return false;
+    const session = this.sessions.get(resolvedGuildId);
+    const resolvedChannel = channel || message?.channel || null;
+    const resolvedChannelIdFromChannel =
+      resolvedChannel && typeof resolvedChannel === "object" && "id" in resolvedChannel
+        ? String((resolvedChannel as { id?: string | null }).id || "").trim()
+        : "";
+    const resolvedChannelId = String(
+      channelId || message?.channelId || resolvedChannelIdFromChannel || session?.textChannelId || ""
+    ).trim();
+    const resolvedUserId = String(requestedByUserId || message?.author?.id || "").trim() || null;
+    const resolvedSettings = settings || session?.settingsSnapshot || this.store.getSettings();
+    const normalizedRequestText = normalizeInlineText(requestText || message?.content || "", 220) || null;
+
+    if (!session) {
+      await this.sendOperationalMessage({
+        channel: resolvedChannel,
+        settings: resolvedSettings,
+        guildId: resolvedGuildId,
+        channelId: resolvedChannelId || null,
+        userId: resolvedUserId || null,
+        messageId: message?.id || null,
+        event: "voice_music_request",
+        reason: "not_in_voice",
+        details: {
+          source: String(source || "text_voice_intent"),
+          requestText: normalizedRequestText
+        },
+        mustNotify
+      });
+      return true;
+    }
+
+    const music = this.ensureSessionMusicState(session);
+    const wasActive = Boolean(music?.active);
+    const playerWasPlaying = Boolean(this.musicPlayer?.isPlaying?.());
+    const playerWasPaused = Boolean(this.musicPlayer?.isPaused?.());
+    const playerWasActive = playerWasPlaying || playerWasPaused;
+
+    if (this.musicPlayer) {
+      this.musicPlayer.stop();
+    }
+
+    const playbackResult = this.musicPlayback?.isConfigured?.()
+      ? await this.musicPlayback.stopPlayback()
+      : {
+          ok: false,
+          provider: this.musicPlayback?.provider || "none",
+          reason: "music_provider_unconfigured",
+          message: "music provider not configured",
+          status: 0,
+          track: null,
+          query: null
+        };
+    const usingDiscordPlayer =
+      String(music?.provider || "")
+        .trim()
+        .toLowerCase() === "discord" || playerWasActive;
+    const stopSucceeded = Boolean(playbackResult.ok) || !wasActive || usingDiscordPlayer;
+    const resolvedProvider = usingDiscordPlayer
+      ? "discord"
+      : playbackResult.provider || this.musicPlayback?.provider || "none";
+    const stopResultReason =
+      stopSucceeded && !playbackResult.ok
+        ? usingDiscordPlayer
+          ? "discord_player_stopped"
+          : "already_stopped"
+        : playbackResult.reason || null;
+    if (music) {
+      music.active = false;
+      music.stoppedAt = Date.now();
+      if (!music.provider) {
+        music.provider = resolvedProvider || null;
+      }
+      music.source = String(source || "text_voice_intent");
+      music.lastRequestedByUserId = resolvedUserId || music.lastRequestedByUserId || null;
+      music.lastRequestText = normalizedRequestText;
+      music.lastCommandAt = Date.now();
+      music.lastCommandReason = String(reason || "nl_stop_music");
+      this.clearMusicDisambiguationState(session);
+    }
+
+    this.store.logAction({
+      kind: stopSucceeded ? "voice_runtime" : "voice_error",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: resolvedUserId || this.client.user?.id || null,
+      content: stopSucceeded ? "voice_music_stopped" : "voice_music_stop_failed",
+      metadata: {
+        sessionId: session.id,
+        provider: resolvedProvider,
+        source: String(source || "text_voice_intent"),
+        reason: String(reason || "nl_stop_music"),
+        stopResultReason,
+        status: Number(playbackResult.status || 0),
+        error: stopSucceeded ? null : playbackResult.message || null,
+        previouslyActive: wasActive,
+        requestText: normalizedRequestText
+      }
+    });
+
+    await this.sendOperationalMessage({
+      channel: resolvedChannel,
+      settings: resolvedSettings,
+      guildId: resolvedGuildId,
+      channelId: resolvedChannelId || session.textChannelId || null,
+      userId: resolvedUserId || null,
+      messageId: message?.id || null,
+      event: "voice_music_request",
+      reason: stopSucceeded ? (wasActive ? "stopped" : "already_stopped") : playbackResult.reason || "music_stop_failed",
+      details: {
+        source: String(source || "text_voice_intent"),
+        provider: resolvedProvider,
+        stopResultReason,
+        status: Number(playbackResult.status || 0),
+        error: stopSucceeded ? null : playbackResult.message || null,
+        previouslyActive: wasActive,
+        requestText: normalizedRequestText
+      },
+      mustNotify
+    });
+    return true;
+  }
+
+  async requestPauseMusic({
+    message = null,
+    guildId = null,
+    channel = null,
+    channelId = null,
+    requestedByUserId = null,
+    settings = null,
+    reason = "nl_pause_music",
+    source = "text_voice_intent",
+    requestText = "",
+    mustNotify = true
+  }: {
+    message?: MusicTextCommandMessage | null;
+    guildId?: string | null;
+    channel?: unknown;
+    channelId?: string | null;
+    requestedByUserId?: string | null;
+    settings?: Record<string, unknown> | null;
+    reason?: string;
+    source?: string;
+    requestText?: string;
+    mustNotify?: boolean;
+  } = {}) {
+    const resolvedGuildId = String(guildId || message?.guild?.id || message?.guildId || "").trim();
+    if (!resolvedGuildId) return false;
+    const session = this.sessions.get(resolvedGuildId);
+    const resolvedChannel = channel || message?.channel || null;
+    const resolvedChannelIdFromChannel =
+      resolvedChannel && typeof resolvedChannel === "object" && "id" in resolvedChannel
+        ? String((resolvedChannel as { id?: string | null }).id || "").trim()
+        : "";
+    const resolvedChannelId = String(
+      channelId || message?.channelId || resolvedChannelIdFromChannel || session?.textChannelId || ""
+    ).trim();
+    const resolvedUserId = String(requestedByUserId || message?.author?.id || "").trim() || null;
+    const resolvedSettings = settings || session?.settingsSnapshot || this.store.getSettings();
+    const normalizedRequestText = normalizeInlineText(requestText || message?.content || "", 220) || null;
+
+    if (!session) {
+      await this.sendOperationalMessage({
+        channel: resolvedChannel,
+        settings: resolvedSettings,
+        guildId: resolvedGuildId,
+        channelId: resolvedChannelId || null,
+        userId: resolvedUserId || null,
+        messageId: message?.id || null,
+        event: "voice_music_request",
+        reason: "not_in_voice",
+        details: {
+          source: String(source || "text_voice_intent"),
+          requestText: normalizedRequestText
+        },
+        mustNotify
+      });
+      return true;
+    }
+
+    const music = this.ensureSessionMusicState(session);
+    const wasPlaying = Boolean(this.musicPlayer?.isPlaying?.());
+    const wasPaused = Boolean(this.musicPlayer?.isPaused?.());
+    if (wasPlaying) {
+      this.musicPlayer.pause();
+    }
+    const paused = wasPlaying || wasPaused;
+    if (!paused) {
+      return await this.requestStopMusic({
+        message,
+        guildId: resolvedGuildId,
+        channel: resolvedChannel,
+        channelId: resolvedChannelId || session.textChannelId || null,
+        requestedByUserId: resolvedUserId,
+        settings: resolvedSettings,
+        reason: String(reason || "nl_pause_music"),
+        source: String(source || "text_voice_intent"),
+        requestText: normalizedRequestText || "",
+        mustNotify
+      });
+    }
+
+    if (music) {
+      if (!music.provider) {
+        music.provider = "discord";
+      }
+      music.active = true;
+      music.source = String(source || "text_voice_intent");
+      music.lastRequestedByUserId = resolvedUserId || music.lastRequestedByUserId || null;
+      music.lastRequestText = normalizedRequestText;
+      music.lastCommandAt = Date.now();
+      music.lastCommandReason = String(reason || "nl_pause_music");
+    }
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: resolvedUserId || this.client.user?.id || null,
+      content: "voice_music_paused",
+      metadata: {
+        sessionId: session.id,
+        provider: music?.provider || "discord",
+        source: String(source || "text_voice_intent"),
+        reason: String(reason || "nl_pause_music"),
+        requestText: normalizedRequestText
+      }
+    });
+
+    await this.sendOperationalMessage({
+      channel: resolvedChannel,
+      settings: resolvedSettings,
+      guildId: resolvedGuildId,
+      channelId: resolvedChannelId || session.textChannelId || null,
+      userId: resolvedUserId || null,
+      messageId: message?.id || null,
+      event: "voice_music_request",
+      reason: "paused",
+      details: {
+        provider: music?.provider || "discord",
+        source: String(source || "text_voice_intent"),
+        requestText: normalizedRequestText
+      },
+      mustNotify
+    });
+    return true;
+  }
+
+  async maybeHandleMusicTextSelectionRequest({
+    message = null,
+    settings = null
+  }: MusicTextRequestPayload = {}) {
+    if (!message?.guild) return false;
+    const guildId = String(message.guild.id || message.guildId || "").trim();
+    if (!guildId) return false;
+    const session = this.sessions.get(guildId);
+    if (!session) return false;
+
+    const disambiguation = this.getMusicDisambiguationPromptContext(session);
+    if (!disambiguation?.active || !Array.isArray(disambiguation.options) || !disambiguation.options.length) {
+      return false;
+    }
+
+    const text = normalizeInlineText(message?.content || "", STT_TRANSCRIPT_MAX_CHARS);
+    if (!text) return false;
+    const normalizedText = text.toLowerCase();
+
+    if (/^(?:cancel|nevermind|never mind|nvm|forget it)$/i.test(text)) {
+      this.clearMusicDisambiguationState(session);
+      await this.sendOperationalMessage({
+        channel: message.channel || null,
+        settings: settings || session.settingsSnapshot || this.store.getSettings(),
+        guildId,
+        channelId: message.channelId || session.textChannelId || null,
+        userId: message.author?.id || null,
+        messageId: message.id || null,
+        event: "voice_music_request",
+        reason: "disambiguation_cancelled",
+        details: {
+          source: "text_disambiguation_failsafe",
+          requestText: text
+        },
+        mustNotify: true
+      });
+      return true;
+    }
+
+    const options = disambiguation.options;
+    const parsedIndex = Number.parseInt(text, 10);
+    let selected: MusicSelectionResult | null = null;
+    if (Number.isFinite(parsedIndex) && String(parsedIndex) === text && parsedIndex >= 1) {
+      selected = options[parsedIndex - 1] || null;
+    }
+
+    if (!selected) {
+      selected = options.find((entry) => {
+        const idToken = String(entry?.id || "").trim().toLowerCase();
+        return Boolean(idToken) && normalizedText === idToken;
+      }) || null;
+    }
+
+    if (!selected) return false;
+
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    await this.requestPlayMusic({
+      message,
+      settings: resolvedSettings,
+      query: disambiguation.query || "",
+      platform: disambiguation.platform || "auto",
+      trackId: selected.id,
+      searchResults: options,
+      reason: "text_music_disambiguation_selection",
+      source: "text_disambiguation_failsafe",
+      mustNotify: true
+    });
+    return true;
+  }
+
+  async maybeHandleMusicTextStopRequest({
+    message = null,
+    settings = null
+  }: MusicTextRequestPayload = {}) {
+    if (!message?.guild) return false;
+    const guildId = String(message.guild.id || message.guildId || "").trim();
+    if (!guildId) return false;
+    const session = this.sessions.get(guildId);
+    if (!session || !this.isMusicPlaybackActive(session)) return false;
+
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    const text = normalizeInlineText(message?.content || "", STT_TRANSCRIPT_MAX_CHARS);
+    if (!text) return false;
+
+    const hasMusicStopCue = this.isLikelyMusicStopPhrase({
+      transcript: text,
+      settings: resolvedSettings
+    });
+    if (!hasMusicStopCue) return false;
+
+    await this.requestStopMusic({
+      message,
+      settings: resolvedSettings,
+      reason: "text_music_stop_failsafe",
+      source: "text_failsafe",
+      requestText: text,
+      mustNotify: true
+    });
+    return true;
+  }
+
+  async evaluateMusicStopIntentFromTranscript({
+    session,
+    settings,
+    userId,
+    transcript = "",
+    source = "voice_music_turn"
+  }) {
+    const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    const candidate = this.isLikelyMusicStopPhrase({
+      transcript: normalizedTranscript,
+      settings
+    });
+    if (!candidate) {
+      return {
+        shouldStop: false,
+        reason: "no_stop_cue",
+        llmProvider: null,
+        llmModel: null,
+        llmResponse: null,
+        error: null
+      };
+    }
+
+    if (!this.llm?.generate) {
+      return {
+        shouldStop: true,
+        reason: "heuristic_stop_without_llm",
+        llmProvider: null,
+        llmModel: null,
+        llmResponse: null,
+        error: null
+      };
+    }
+
+    const replyDecisionLlm = settings?.voice?.replyDecisionLlm || {};
+    const llmProvider = normalizeVoiceReplyDecisionProvider(replyDecisionLlm?.provider);
+    const llmModel = String(replyDecisionLlm?.model || defaultVoiceReplyDecisionModel(llmProvider))
+      .trim()
+      .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
+    const decisionSettings = {
+      ...settings,
+      llm: {
+        ...(settings?.llm || {}),
+        provider: llmProvider,
+        model: llmModel,
+        temperature: 0,
+        maxOutputTokens: resolveVoiceReplyDecisionMaxOutputTokens(llmProvider, llmModel),
+        reasoningEffort: String(replyDecisionLlm?.reasoningEffort || "minimal").trim().toLowerCase() || "minimal"
+      }
+    };
+
+    const systemPrompt = [
+      "You are a strict classifier for voice-chat music controls.",
+      "Context: music playback is currently active.",
+      "Decide if the speaker is instructing the bot to stop or pause the music right now.",
+      "Output exactly YES or NO.",
+      "Answer YES for direct stop/pause commands like 'hey bot stop', 'stop music', 'pause', 'stop playing'.",
+      "Answer NO when the speaker is not asking the bot to stop music."
+    ].join("\n");
+    const userPrompt = [
+      `Bot name: ${getPromptBotName(settings)}`,
+      `Transcript: "${normalizedTranscript}"`
+    ].join("\n");
+
+    try {
+      const generation = await this.llm.generate({
+        settings: decisionSettings,
+        systemPrompt,
+        userPrompt,
+        contextMessages: [],
+        trace: {
+          guildId: session?.guildId || null,
+          channelId: session?.textChannelId || null,
+          userId: userId || null,
+          source: "voice_music_stop_classifier",
+          event: String(source || "voice_music_turn")
+        }
+      });
+      const llmResponse = String(generation?.text || "").trim();
+      const parsed = parseVoiceDecisionContract(llmResponse);
+      if (parsed.confident) {
+        return {
+          shouldStop: Boolean(parsed.allow),
+          reason: parsed.allow ? "llm_yes" : "llm_no",
+          llmProvider: generation?.provider || llmProvider,
+          llmModel: generation?.model || llmModel,
+          llmResponse,
+          error: null
+        };
+      }
+      return {
+        shouldStop: true,
+        reason: "llm_contract_violation_fallback_yes",
+        llmProvider: generation?.provider || llmProvider,
+        llmModel: generation?.model || llmModel,
+        llmResponse,
+        error: null
+      };
+    } catch (error) {
+      return {
+        shouldStop: true,
+        reason: "llm_error_fallback_yes",
+        llmProvider,
+        llmModel,
+        llmResponse: null,
+        error: String(error?.message || error)
+      };
+    }
+  }
+
+  async maybeHandleMusicPlaybackTurn({
+    session,
+    settings,
+    userId,
+    pcmBuffer,
+    captureReason = "stream_end",
+    source = "voice_turn"
+  }) {
+    if (!session || session.ending) return false;
+    if (!this.isMusicPlaybackActive(session)) return false;
+    if (!pcmBuffer?.length) return true;
+
+    if (!this.llm?.transcribeAudio) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "voice_music_turn_ignored_no_asr",
+        metadata: {
+          sessionId: session.id,
+          source: String(source || "voice_turn"),
+          captureReason: String(captureReason || "stream_end")
+        }
+      });
+      return true;
+    }
+
+    const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
+    const sampleRateHz = source === "stt_pipeline" ? 24000 : Number(session.realtimeInputSampleRateHz) || 24000;
+    const preferredModel = source === "stt_pipeline"
+      ? settings?.voice?.sttPipeline?.transcriptionModel
+      : settings?.voice?.openaiRealtime?.inputTranscriptionModel || settings?.voice?.sttPipeline?.transcriptionModel;
+    const primaryModel = String(preferredModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
+    const fallbackModel = primaryModel === "gpt-4o-mini-transcribe" ? "gpt-4o-transcribe" : "";
+
+    let transcript = await this.transcribePcmTurn({
+      session,
+      userId,
+      pcmBuffer,
+      model: primaryModel,
+      sampleRateHz,
+      captureReason,
+      traceSource: `voice_music_stop_${String(source || "voice_turn")}`,
+      errorPrefix: "voice_music_transcription_failed",
+      emptyTranscriptRuntimeEvent: "voice_music_transcription_empty",
+      emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
+      asrLanguage: asrLanguageGuidance.language,
+      asrPrompt: asrLanguageGuidance.prompt
+    });
+
+    if (!transcript && fallbackModel && fallbackModel !== primaryModel) {
+      transcript = await this.transcribePcmTurn({
+        session,
+        userId,
+        pcmBuffer,
+        model: fallbackModel,
+        sampleRateHz,
+        captureReason,
+        traceSource: `voice_music_stop_${String(source || "voice_turn")}_fallback`,
+        errorPrefix: "voice_music_transcription_fallback_failed",
+        emptyTranscriptRuntimeEvent: "voice_music_transcription_empty",
+        emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
+        suppressEmptyTranscriptLogs: true,
+        asrLanguage: asrLanguageGuidance.language,
+        asrPrompt: asrLanguageGuidance.prompt
+      });
+    }
+
+    const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedTranscript) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "voice_music_turn_ignored_empty_transcript",
+        metadata: {
+          sessionId: session.id,
+          source: String(source || "voice_turn"),
+          captureReason: String(captureReason || "stream_end"),
+          primaryModel,
+          fallbackModel: fallbackModel || null
+        }
+      });
+      return true;
+    }
+
+    const stopDecision = await this.evaluateMusicStopIntentFromTranscript({
+      session,
+      settings,
+      userId,
+      transcript: normalizedTranscript,
+      source
+    });
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId,
+      content: "voice_music_stop_check",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "voice_turn"),
+        captureReason: String(captureReason || "stream_end"),
+        transcript: normalizedTranscript,
+        shouldStop: Boolean(stopDecision.shouldStop),
+        decisionReason: stopDecision.reason,
+        llmProvider: stopDecision.llmProvider || null,
+        llmModel: stopDecision.llmModel || null,
+        llmResponse: stopDecision.llmResponse || null,
+        error: stopDecision.error || null
+      }
+    });
+
+    if (!stopDecision.shouldStop) {
+      return true;
+    }
+
+    await this.requestStopMusic({
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      requestedByUserId: userId,
+      settings,
+      reason: "voice_music_stop_phrase",
+      source: `voice_${String(source || "voice_turn")}`,
+      requestText: normalizedTranscript,
+      mustNotify: false
+    });
     return true;
   }
 
@@ -2323,6 +3759,7 @@ export class VoiceSessionManager {
       return {
         locked: true,
         reason: "session_inactive",
+        musicActive: false,
         botTurnOpen: false,
         pendingResponse: false,
         openAiActiveResponse: false,
@@ -2339,10 +3776,12 @@ export class VoiceSessionManager {
     const queuedBytes = Math.max(0, Number(queueState?.queuedBytes || 0));
     const queueBusy = Boolean(queueState?.pumping || queueState?.waitingDrain);
     const streamBufferedBytes = Math.max(0, Number(session.botAudioStream?.writableLength || 0));
+    const musicActive = this.isMusicPlaybackActive(session);
     const botTurnOpen = Boolean(session.botTurnOpen);
     const pendingResponse = Boolean(session.pendingResponse && typeof session.pendingResponse === "object");
     const openAiActiveResponse = this.isOpenAiRealtimeResponseActive(session);
     const locked =
+      musicActive ||
       botTurnOpen ||
       pendingResponse ||
       openAiActiveResponse ||
@@ -2351,7 +3790,9 @@ export class VoiceSessionManager {
       streamBufferedBytes > 0;
 
     let reason = "idle";
-    if (pendingResponse) {
+    if (musicActive) {
+      reason = "music_playback_active";
+    } else if (pendingResponse) {
       reason = "pending_response";
     } else if (openAiActiveResponse) {
       reason = "openai_active_response";
@@ -2368,6 +3809,7 @@ export class VoiceSessionManager {
     return {
       locked,
       reason,
+      musicActive,
       botTurnOpen,
       pendingResponse,
       openAiActiveResponse,
@@ -4710,6 +6152,16 @@ export class VoiceSessionManager {
     }
 
     const settings = session.settingsSnapshot || this.store.getSettings();
+    const consumedByMusicMode = await this.maybeHandleMusicPlaybackTurn({
+      session,
+      settings,
+      userId,
+      pcmBuffer,
+      captureReason,
+      source: "realtime"
+    });
+    if (consumedByMusicMode) return;
+
     const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
     const preferredModel =
       session.mode === "openai_realtime"
@@ -5376,7 +6828,7 @@ export class VoiceSessionManager {
     directAddressed = false,
     addressedToOtherParticipant = false,
     now = Date.now()
-  } = {}) {
+  } = {}): VoiceConversationContext {
     const normalizedUserId = String(userId || "").trim();
 
     const lastAudioDeltaAt = Number(session?.lastAudioDeltaAt || 0);
@@ -5423,7 +6875,7 @@ export class VoiceSessionManager {
     transcript,
     source: _source = "stt_pipeline",
     transcriptionContext = null
-  }) {
+  }): Promise<VoiceReplyDecision> {
     const normalizedTranscript = normalizeVoiceText(transcript, VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS);
     const normalizedUserId = String(userId || "").trim();
     const participantCount = this.countHumanVoiceParticipants(session);
@@ -6030,7 +7482,7 @@ export class VoiceSessionManager {
     directedConfidence = Number.NaN,
     source = "",
     reason = null
-  } = {}) {
+  } = {}): VoiceAddressingAnnotation | null {
     const input = rawAddressing && typeof rawAddressing === "object" ? rawAddressing : null;
     const talkingToToken = normalizeVoiceAddressingTargetToken(input?.talkingTo ?? input?.target ?? "");
     let talkingTo = talkingToToken || null;
@@ -6070,7 +7522,10 @@ export class VoiceSessionManager {
     };
   }
 
-  mergeVoiceAddressingAnnotation(existing, incoming) {
+  mergeVoiceAddressingAnnotation(
+    existing: VoiceAddressingAnnotation | null = null,
+    incoming: VoiceAddressingAnnotation | null = null
+  ): VoiceAddressingAnnotation | null {
     const current = existing && typeof existing === "object" ? existing : null;
     const next = incoming && typeof incoming === "object" ? incoming : null;
     if (!next) return current;
@@ -6168,7 +7623,12 @@ export class VoiceSessionManager {
     return true;
   }
 
-  buildVoiceAddressingState({ session = null, userId = null, now = Date.now(), maxItems = 6 } = {}) {
+  buildVoiceAddressingState({
+    session = null,
+    userId = null,
+    now = Date.now(),
+    maxItems = 6
+  } = {}): VoiceAddressingState | null {
     const sourceTurns = Array.isArray(session?.transcriptTurns) ? session.transcriptTurns : [];
     if (!sourceTurns.length) return null;
 
@@ -6271,7 +7731,7 @@ export class VoiceSessionManager {
     const normalizedAddressing = this.normalizeVoiceAddressingAnnotation({
       rawAddressing: addressing
     });
-    const modelTurnEntry = {
+    const modelTurnEntry: VoiceTimelineTurn = {
       role: normalizedRole,
       userId: normalizedUserId,
       speakerName: normalizedSpeakerName,
@@ -6281,7 +7741,7 @@ export class VoiceSessionManager {
     if (normalizedAddressing) {
       modelTurnEntry.addressing = normalizedAddressing;
     }
-    const transcriptTurnEntry = {
+    const transcriptTurnEntry: VoiceTimelineTurn = {
       role: normalizedRole,
       userId: normalizedUserId,
       speakerName: normalizedSpeakerName,
@@ -6887,6 +8347,16 @@ export class VoiceSessionManager {
     }
 
     const settings = session.settingsSnapshot || this.store.getSettings();
+    const consumedByMusicMode = await this.maybeHandleMusicPlaybackTurn({
+      session,
+      settings,
+      userId,
+      pcmBuffer,
+      captureReason,
+      source: "stt_pipeline"
+    });
+    if (consumedByMusicMode) return;
+
     const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
     const sttSettings = settings?.voice?.sttPipeline || {};
     const transcriptionModelPrimary =
@@ -8424,6 +9894,32 @@ export class VoiceSessionManager {
     if (!session) return false;
     if (session.ending) return false;
 
+    const music = this.ensureSessionMusicState(session);
+    const musicWasActive = Boolean(music?.active);
+    if (musicWasActive) {
+      try {
+        const playbackResult = this.musicPlayback?.isConfigured?.()
+          ? await this.musicPlayback.stopPlayback()
+          : null;
+        if (music) {
+          music.active = false;
+          music.stoppedAt = Date.now();
+          music.lastCommandAt = Date.now();
+          music.lastCommandReason = "session_end";
+          if (!music.provider) {
+            music.provider = playbackResult?.provider || this.musicPlayback?.provider || null;
+          }
+        }
+      } catch {
+        if (music) {
+          music.active = false;
+          music.stoppedAt = Date.now();
+          music.lastCommandAt = Date.now();
+          music.lastCommandReason = "session_end";
+        }
+      }
+    }
+
     session.ending = true;
     this.sessions.delete(String(guildId));
 
@@ -8831,6 +10327,116 @@ export class VoiceSessionManager {
       reason: "missing_voice_permissions",
       missingPermissions
     };
+  }
+
+  async handleMusicSlashCommand(
+    interaction: ChatInputCommandInteraction,
+    settings: Record<string, unknown> | null
+  ) {
+    const command = interaction.commandName;
+    const guild = interaction.guild;
+    const user = interaction.user;
+
+    if (!guild) {
+      await interaction.reply({ content: "This command must be used in a server.", ephemeral: true });
+      return;
+    }
+
+    const guildId = guild.id;
+    const session = this.sessions.get(guildId);
+
+    if (command === "play") {
+      const query = interaction.options.getString("query", true);
+      await interaction.deferReply();
+      await this.requestPlayMusic({
+        guildId,
+        channel: interaction.channel,
+        channelId: interaction.channelId,
+        requestedByUserId: user.id,
+        settings,
+        query,
+        reason: "slash_command_play",
+        source: "slash_command",
+        mustNotify: false
+      });
+
+      const updatedSession = this.sessions.get(guildId);
+      if (updatedSession) {
+        const disambiguation = this.getMusicDisambiguationPromptContext(updatedSession);
+        if (disambiguation?.active && disambiguation.options?.length > 0) {
+          const optionsList = disambiguation.options
+            .map((opt, i) => `${i + 1}. **${opt.title}** - ${opt.artist || "Unknown"}`)
+            .join("\n");
+          await interaction.editReply(
+            `Multiple results found for "${disambiguation.query}". Reply with the number to select:\n${optionsList}`
+          );
+          return;
+        }
+        const music = this.ensureSessionMusicState(updatedSession);
+        if (music?.active) {
+          const nowPlaying = String(music.lastTrackTitle || "").trim() || query;
+          await interaction.editReply(`Playing: ${nowPlaying}`);
+          return;
+        }
+      }
+
+      await interaction.editReply("Could not start music playback.");
+    } else if (command === "stop") {
+      if (!session || !this.isMusicPlaybackActive(session)) {
+        await interaction.reply({ content: "No music is currently playing.", ephemeral: true });
+        return;
+      }
+      await interaction.deferReply();
+      await this.requestStopMusic({
+        guildId,
+        channel: interaction.channel,
+        channelId: interaction.channelId,
+        requestedByUserId: user.id,
+        settings,
+        reason: "slash_command_stop",
+        source: "slash_command",
+        mustNotify: false
+      });
+      await interaction.editReply("Music stopped.");
+    } else if (command === "pause") {
+      if (!session || !this.isMusicPlaybackActive(session)) {
+        await interaction.reply({ content: "No music is currently playing.", ephemeral: true });
+        return;
+      }
+      if (this.musicPlayer?.isPaused()) {
+        await interaction.reply({ content: "Music is already paused.", ephemeral: true });
+        return;
+      }
+      await interaction.deferReply();
+      await this.requestPauseMusic({
+        guildId,
+        channel: interaction.channel,
+        channelId: interaction.channelId,
+        requestedByUserId: user.id,
+        settings,
+        reason: "slash_command_pause",
+        source: "slash_command",
+        mustNotify: false
+      });
+      await interaction.editReply("Music paused.");
+    } else if (command === "resume") {
+      if (!session || !this.isMusicPlaybackActive(session)) {
+        await interaction.reply({ content: "No music is currently playing.", ephemeral: true });
+        return;
+      }
+      if (!this.musicPlayer?.isPaused()) {
+        await interaction.reply({ content: "Music is not paused.", ephemeral: true });
+        return;
+      }
+      this.musicPlayer?.resume();
+      await interaction.reply("Music resumed.");
+    } else if (command === "skip") {
+      if (!session || !this.isMusicPlaybackActive(session)) {
+        await interaction.reply({ content: "No music is currently playing.", ephemeral: true });
+        return;
+      }
+      await interaction.reply("Skip is not implemented yet.");
+    }
   }
 
 }

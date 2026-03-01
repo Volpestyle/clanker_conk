@@ -115,6 +115,27 @@ function createSession(overrides = {}) {
       lastCommentaryAt: 0,
       ingestedFrameCount: 0
     },
+    music: {
+      active: false,
+      startedAt: 0,
+      stoppedAt: 0,
+      provider: null,
+      source: null,
+      lastTrackId: null,
+      lastTrackTitle: null,
+      lastTrackArtists: [],
+      lastTrackUrl: null,
+      lastQuery: null,
+      lastRequestedByUserId: null,
+      lastRequestText: null,
+      lastCommandAt: 0,
+      lastCommandReason: null,
+      pendingQuery: null,
+      pendingPlatform: "auto",
+      pendingResults: [],
+      pendingRequestedByUserId: null,
+      pendingRequestedAt: 0
+    },
     pendingSttTurns: 0,
     recentVoiceTurns: [],
     membershipEvents: [],
@@ -1388,6 +1409,12 @@ test("requestStatus reports offline and online states", async () => {
         lastFrameAt: Date.now() - 1_000,
         lastCommentaryAt: Date.now() - 2_000,
         ingestedFrameCount: 3
+      },
+      music: {
+        active: true,
+        provider: "youtube",
+        lastTrackTitle: "lone star",
+        lastTrackArtists: ["artist a"]
       }
     })
   );
@@ -1402,7 +1429,100 @@ test("requestStatus reports offline and online states", async () => {
   assert.equal(messages.at(-1)?.reason, "online");
   assert.equal(messages.at(-1)?.details?.activeCaptures, 2);
   assert.equal(messages.at(-1)?.details?.streamWatchActive, true);
+  assert.equal(messages.at(-1)?.details?.musicActive, true);
+  assert.equal(messages.at(-1)?.details?.musicProvider, "youtube");
+  assert.equal(messages.at(-1)?.details?.musicTrackTitle, "lone star");
+  assert.deepEqual(messages.at(-1)?.details?.musicTrackArtists, ["artist a"]);
   assert.equal(messages.at(-1)?.details?.requestText, "clankie r u in vc rn?");
+});
+
+test("getReplyOutputLockState locks output while music playback is active", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    music: {
+      active: true
+    }
+  });
+
+  const lockState = manager.getReplyOutputLockState(session);
+  assert.equal(lockState.locked, true);
+  assert.equal(lockState.reason, "music_playback_active");
+  assert.equal(lockState.musicActive, true);
+});
+
+test("maybeHandleMusicTextStopRequest routes stop phrase from text chat", async () => {
+  const { manager } = createManager();
+  const stopCalls = [];
+  manager.requestStopMusic = async (payload) => {
+    stopCalls.push(payload);
+    return true;
+  };
+  manager.sessions.set(
+    "guild-1",
+    createSession({
+      music: {
+        active: true
+      }
+    })
+  );
+
+  const handled = await manager.maybeHandleMusicTextStopRequest({
+    message: createMessage({
+      content: "clank stop music"
+    }),
+    settings: null
+  });
+  assert.equal(handled, true);
+  assert.equal(stopCalls.length, 1);
+  assert.equal(stopCalls[0]?.reason, "text_music_stop_failsafe");
+});
+
+test("maybeHandleMusicTextSelectionRequest routes numeric disambiguation picks", async () => {
+  const { manager } = createManager();
+  const playCalls = [];
+  manager.requestPlayMusic = async (payload) => {
+    playCalls.push(payload);
+    return true;
+  };
+  manager.sessions.set(
+    "guild-1",
+    createSession({
+      music: {
+        pendingQuery: "all caps",
+        pendingPlatform: "auto",
+        pendingRequestedAt: Date.now(),
+        pendingResults: [
+          {
+            id: "youtube:abc111",
+            title: "all caps",
+            artist: "mf doom",
+            platform: "youtube",
+            externalUrl: "https://youtube.com/watch?v=abc111",
+            durationSeconds: 140
+          },
+          {
+            id: "youtube:def222",
+            title: "all caps",
+            artist: "madvillain",
+            platform: "youtube",
+            externalUrl: "https://youtube.com/watch?v=def222",
+            durationSeconds: 150
+          }
+        ]
+      }
+    })
+  );
+
+  const handled = await manager.maybeHandleMusicTextSelectionRequest({
+    message: createMessage({
+      content: "2"
+    }),
+    settings: null
+  });
+  assert.equal(handled, true);
+  assert.equal(playCalls.length, 1);
+  assert.equal(playCalls[0]?.trackId, "youtube:def222");
+  assert.equal(playCalls[0]?.reason, "text_music_disambiguation_selection");
 });
 
 test("requestLeave sends not_in_voice or ends active session", async () => {

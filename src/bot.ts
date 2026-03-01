@@ -1,8 +1,11 @@
 import {
   Client,
   GatewayIntentBits,
-  Partials
+  Partials,
+  REST,
+  Routes
 } from "discord.js";
+import { musicCommands } from "./voice/musicCommands.ts";
 import {
   buildAutomationPrompt,
   buildInitiativePrompt,
@@ -269,11 +272,19 @@ export class ClankerBot {
   }
 
   registerEvents() {
-    this.client.on("clientReady", () => {
+    this.client.on("clientReady", async () => {
       this.hasConnectedAtLeastOnce = true;
       this.reconnectAttempts = 0;
       this.markGatewayEvent();
       console.log(`Logged in as ${this.client.user?.tag || "unknown"}`);
+
+      try {
+        const rest = new REST({ version: "10" }).setToken(this.appConfig.discordToken);
+        await rest.put(Routes.applicationCommands(this.client.user?.id || ""), { body: musicCommands });
+        console.log("[musicCommands] Registered slash commands");
+      } catch (error) {
+        console.error("[musicCommands] Failed to register slash commands:", error);
+      }
     });
 
     this.client.on("shardResume", () => {
@@ -329,6 +340,19 @@ export class ClankerBot {
           userId: message.author?.id,
           content: String(error?.message || error)
         });
+      }
+    });
+
+    this.client.on("interactionCreate", async (interaction) => {
+      if (!interaction.isChatInputCommand()) return;
+      const { commandName } = interaction;
+      if (["play", "stop", "pause", "resume", "skip"].includes(commandName)) {
+        try {
+          await this.voiceSessionManager.handleMusicSlashCommand(interaction, this.store.getSettings());
+        } catch (error) {
+          console.error("[musicCommands] Error handling slash command:", error);
+          await interaction.reply({ content: "An error occurred processing your command.", ephemeral: true });
+        }
       }
     });
 
@@ -875,6 +899,16 @@ export class ClankerBot {
     if (String(message.author.id) === String(this.client.user?.id || "")) return;
     if (!this.isChannelAllowed(settings, message.channelId)) return;
     if (this.isUserBlocked(settings, message.author.id)) return;
+    const musicSelectionHandled = await this.voiceSessionManager.maybeHandleMusicTextSelectionRequest({
+      message,
+      settings
+    });
+    if (musicSelectionHandled) return;
+    const musicStopHandled = await this.voiceSessionManager.maybeHandleMusicTextStopRequest({
+      message,
+      settings
+    });
+    if (musicStopHandled) return;
 
     if (settings.memory.enabled) {
       void this.memory.ingestMessage({
@@ -1179,6 +1213,11 @@ export class ClankerBot {
             .map((entry) => String(entry?.displayName || "").trim())
             .filter(Boolean)
         : [];
+    const musicDisambiguation =
+      inVoiceChannelNow &&
+      typeof this.voiceSessionManager?.getMusicDisambiguationPromptContext === "function"
+        ? this.voiceSessionManager.getMusicDisambiguationPromptContext(activeVoiceSession)
+        : null;
 
     const systemPrompt = buildSystemPrompt(settings);
     const replyPromptBase = {
@@ -1218,7 +1257,8 @@ export class ClankerBot {
       voiceMode: {
         enabled: Boolean(settings?.voice?.enabled),
         activeSession: inVoiceChannelNow,
-        participantRoster: activeVoiceParticipantRoster
+        participantRoster: activeVoiceParticipantRoster,
+        musicDisambiguation
       },
       recentWebLookups,
       screenShare: screenShareCapability,
@@ -1794,10 +1834,10 @@ export class ClankerBot {
   }
 
   getVoiceScreenShareCapability({
-    settings = null,
-    guildId = null,
-    channelId = null,
-    requesterUserId = null
+    settings: _settings = null,
+    guildId: _guildId = null,
+    channelId: _channelId = null,
+    requesterUserId: _requesterUserId = null
   } = {}) {
     const manager = this.screenShareSessionManager;
     if (!manager || typeof manager.getLinkCapability !== "function") {
@@ -2084,6 +2124,41 @@ export class ClankerBot {
       return await this.voiceSessionManager.requestStreamWatchStatus({
         message,
         settings
+      });
+    }
+
+    if (intent.intent === "play_music") {
+      const query = String(intent.query || "").trim();
+      const trackId = String(intent.selectedResultId || "").trim() || null;
+      const platform = String(intent.platform || "").trim().toLowerCase() || "auto";
+      const searchResults = Array.isArray(intent.searchResults) ? intent.searchResults : null;
+      return await this.voiceSessionManager.requestPlayMusic({
+        message,
+        settings,
+        query,
+        trackId,
+        platform,
+        searchResults,
+        reason: "nl_play_music",
+        source: "text_voice_intent"
+      });
+    }
+
+    if (intent.intent === "stop_music") {
+      return await this.voiceSessionManager.requestStopMusic({
+        message,
+        settings,
+        reason: "nl_stop_music",
+        source: "text_voice_intent"
+      });
+    }
+
+    if (intent.intent === "pause_music") {
+      return await this.voiceSessionManager.requestPauseMusic({
+        message,
+        settings,
+        reason: "nl_pause_music",
+        source: "text_voice_intent"
       });
     }
 

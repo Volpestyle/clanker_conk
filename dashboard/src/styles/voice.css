@@ -1039,3 +1039,131 @@
   color: var(--ink-2);
   border-color: var(--ink-3);
 }
+
+/* -- music panel -- */
+
+.vm-ts-music-playing {
+  background: rgba(244, 114, 182, 0.12);
+  color: #f472b6;
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.vm-ts-music-searching {
+  background: rgba(251, 191, 36, 0.12);
+  color: #fbbf24;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.vm-music-now-playing {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid rgba(244, 114, 182, 0.2);
+  border-radius: var(--radius-xs);
+  background: rgba(244, 114, 182, 0.04);
+}
+
+.vm-music-track-title {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--ink-0);
+}
+
+.vm-music-track-title a {
+  color: #f472b6;
+  text-decoration: none;
+}
+
+.vm-music-track-title a:hover {
+  text-decoration: underline;
+}
+
+.vm-music-track-artists {
+  font-size: 0.74rem;
+  color: var(--ink-2);
+}
+
+.vm-music-provider-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-size: 0.62rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: rgba(244, 114, 182, 0.12);
+  color: #f472b6;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.vm-music-disambiguation {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vm-music-disambiguation-query {
+  font-size: 0.76rem;
+  color: var(--ink-1);
+  font-weight: 600;
+}
+
+.vm-music-disambiguation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.vm-music-result-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 8px;
+  align-items: center;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: rgba(255, 255, 255, 0.02);
+  font-size: 0.74rem;
+}
+
+.vm-music-result-title {
+  color: var(--ink-0);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vm-music-result-artist {
+  color: var(--ink-2);
+  font-size: 0.7rem;
+}
+
+.vm-music-result-duration {
+  color: var(--ink-3);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+  font-family: "JetBrains Mono", "SF Mono", "Fira Code", monospace;
+}
+
+.vm-music-pending {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid rgba(251, 191, 36, 0.2);
+  border-radius: var(--radius-xs);
+  background: rgba(251, 191, 36, 0.04);
+  font-size: 0.76rem;
+  color: var(--ink-1);
+}
+
+.vm-music-pending-label {
+  font-weight: 600;
+  color: #fbbf24;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}

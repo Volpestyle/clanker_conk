@@ -98,6 +98,47 @@ test("parseStructuredReplyOutput accepts stream watch voice intents", () => {
   assert.equal(parsed.voiceIntent.reason, "explicit stream watch request");
 });
 
+test("parseStructuredReplyOutput accepts music control voice intents", () => {
+  const play = parseStructuredReplyOutput(
+    JSON.stringify({
+      text: "playing now",
+      skip: false,
+      voiceIntent: {
+        intent: "play_music",
+        confidence: 0.96,
+        reason: "explicit play request",
+        query: "mf doom all caps",
+        platform: "youtube",
+        selectedResultId: "track:123"
+      }
+    })
+  );
+  assert.equal(play.voiceIntent.intent, "play_music");
+  assert.equal(play.voiceIntent.confidence, 0.96);
+  assert.equal(play.voiceIntent.reason, "explicit play request");
+  assert.equal(play.voiceIntent.query, "mf doom all caps");
+  assert.equal(play.voiceIntent.platform, "youtube");
+  assert.equal(play.voiceIntent.selectedResultId, "track:123");
+
+  const pause = parseStructuredReplyOutput(
+    JSON.stringify({
+      text: "paused",
+      skip: false,
+      voiceIntent: {
+        intent: "pause_music",
+        confidence: 0.9,
+        reason: "explicit pause request"
+      }
+    })
+  );
+  assert.equal(pause.voiceIntent.intent, "pause_music");
+  assert.equal(pause.voiceIntent.confidence, 0.9);
+  assert.equal(pause.voiceIntent.reason, "explicit pause request");
+  assert.equal(pause.voiceIntent.query, null);
+  assert.equal(pause.voiceIntent.platform, null);
+  assert.equal(pause.voiceIntent.selectedResultId, null);
+});
+
 test("parseStructuredReplyOutput accepts screen share offer intent", () => {
   const parsed = parseStructuredReplyOutput(
     JSON.stringify({
@@ -253,4 +294,8 @@ test("parseStructuredReplyOutput normalizes missing voice tool-call fields to sa
   assert.equal(parsed.openArticleRef, null);
   assert.deepEqual(parsed.soundboardRefs, []);
   assert.equal(parsed.leaveVoiceChannel, false);
+  assert.equal(parsed.voiceIntent.query, null);
+  assert.equal(parsed.voiceIntent.platform, null);
+  assert.equal(parsed.voiceIntent.searchResults, null);
+  assert.equal(parsed.voiceIntent.selectedResultId, null);
 });

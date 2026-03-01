@@ -21,6 +21,13 @@ const CONFIG_ENV_KEYS = [
   "SERPAPI_API_KEY",
   "GIPHY_API_KEY",
   "GIPHY_RATING",
+  "YOUTUBE_API_KEY",
+  "SOUNDCLOUD_CLIENT_ID",
+  "SPOTIFY_CLIENT_ID",
+  "SPOTIFY_CLIENT_SECRET",
+  "SPOTIFY_REFRESH_TOKEN",
+  "SPOTIFY_DEVICE_ID",
+  "SPOTIFY_MARKET",
   "DEFAULT_PROVIDER",
   "DEFAULT_MODEL_OPENAI",
   "DEFAULT_MODEL_ANTHROPIC",
@@ -73,7 +80,9 @@ test("config parses explicit env values", async () => {
       DEFAULT_MODEL_XAI: "grok-4-latest",
       DEFAULT_MODEL_CLAUDE_CODE: "opus",
       GIPHY_RATING: "PG",
-      XAI_BASE_URL: "https://x.ai/custom"
+      XAI_BASE_URL: "https://x.ai/custom",
+      YOUTUBE_API_KEY: "youtube-api-key",
+      SOUNDCLOUD_CLIENT_ID: "soundcloud-client-id"
     },
     async () => {
       const { appConfig, ensureRuntimeEnv } = await importFreshConfig("explicit");
@@ -89,6 +98,8 @@ test("config parses explicit env values", async () => {
       assert.equal(appConfig.defaultClaudeCodeModel, "opus");
       assert.equal(appConfig.giphyRating, "PG");
       assert.equal(appConfig.xaiBaseUrl, "https://x.ai/custom");
+      assert.equal(appConfig.youtubeApiKey, "youtube-api-key");
+      assert.equal(appConfig.soundcloudClientId, "soundcloud-client-id");
       assert.doesNotThrow(() => ensureRuntimeEnv());
     }
   );

@@ -193,6 +193,28 @@ export type VoiceSession = {
     drainActive: boolean;
     state: RealtimeState | null;
   } | null;
+  music: {
+    active: boolean;
+    provider: string | null;
+    source: string | null;
+    startedAt: string | null;
+    stoppedAt: string | null;
+    lastTrackId: string | null;
+    lastTrackTitle: string | null;
+    lastTrackArtists: string[];
+    lastTrackUrl: string | null;
+    lastQuery: string | null;
+    lastRequestText: string | null;
+    lastRequestedByUserId: string | null;
+    lastCommandAt: string | null;
+    lastCommandReason: string | null;
+    pendingQuery: string | null;
+    pendingPlatform: string | null;
+    pendingRequestedByUserId: string | null;
+    pendingRequestedAt: string | null;
+    pendingResults: { id: string; title: string; artist: string; platform: string; externalUrl: string | null; durationSeconds: number | null }[];
+    disambiguationActive: boolean;
+  } | null;
   latency: SessionLatency;
 };
 

@@ -25,6 +25,9 @@ const MAX_AUTOMATION_INSTRUCTION_LEN = 360;
 const MAX_AUTOMATION_TARGET_QUERY_LEN = 180;
 const MAX_REPLY_SOUNDBOARD_REFS = 10;
 const MAX_VOICE_ADDRESSING_TARGET_LEN = 80;
+const MAX_VOICE_INTENT_QUERY_LEN = 180;
+const MAX_VOICE_INTENT_SELECTED_RESULT_ID_LEN = 180;
+const MAX_VOICE_INTENT_MUSIC_RESULT_FIELD_LEN = 220;
 
 export function resolveMaxMediaPromptLen(settings) {
   const raw = Number(settings?.initiative?.maxMediaPromptChars);
@@ -39,10 +42,14 @@ const REPLY_VOICE_INTENT_TYPES = new Set([
   "watch_stream",
   "stop_watching_stream",
   "stream_status",
+  "play_music",
+  "stop_music",
+  "pause_music",
   "none"
 ]);
 const REPLY_AUTOMATION_OPERATION_TYPES = new Set(["create", "pause", "resume", "delete", "list", "none"]);
 const MAX_VOICE_INTENT_REASON_LEN = 180;
+const REPLY_MUSIC_PLATFORM_TYPES = new Set(["youtube", "soundcloud", "auto"]);
 const REPLY_SCREEN_SHARE_ACTION_TYPES = new Set(["offer_link", "none"]);
 const MAX_SCREEN_SHARE_REASON_LEN = 180;
 export const MAX_VIDEO_TARGET_SCAN = 8;
@@ -68,7 +75,11 @@ function emptyStructuredVoiceIntent() {
   return {
     intent: null,
     confidence: 0,
-    reason: null
+    reason: null,
+    query: null,
+    platform: null,
+    searchResults: null,
+    selectedResultId: null
   };
 }
 
@@ -157,10 +168,40 @@ export const REPLY_OUTPUT_SCHEMA = {
       properties: {
         intent: {
           type: "string",
-          enum: ["join", "leave", "status", "watch_stream", "stop_watching_stream", "stream_status", "none"]
+          enum: [
+            "join",
+            "leave",
+            "status",
+            "watch_stream",
+            "stop_watching_stream",
+            "stream_status",
+            "play_music",
+            "stop_music",
+            "pause_music",
+            "none"
+          ]
         },
         confidence: { type: "number" },
-        reason: { type: ["string", "null"] }
+        reason: { type: ["string", "null"] },
+        query: { type: ["string", "null"] },
+        platform: { type: ["string", "null"] },
+        searchResults: {
+          type: ["array", "null"],
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              id: { type: "string" },
+              title: { type: "string" },
+              artist: { type: "string" },
+              platform: { type: "string" },
+              url: { type: ["string", "null"] },
+              durationSeconds: { type: ["number", "null"] }
+            },
+            required: ["id", "title", "artist", "platform", "url", "durationSeconds"]
+          }
+        },
+        selectedResultId: { type: ["string", "null"] }
       },
       required: ["intent", "confidence", "reason"]
     },
@@ -721,32 +762,70 @@ function normalizeStructuredMediaDirective(rawMedia, maxLen = DEFAULT_MAX_MEDIA_
 
 function normalizeStructuredVoiceIntent(rawIntent) {
   if (!rawIntent || typeof rawIntent !== "object") {
-    return {
-      intent: null,
-      confidence: 0,
-      reason: null
-    };
+    return emptyStructuredVoiceIntent();
   }
 
   const intentLabel = String(rawIntent.intent || "")
     .trim()
     .toLowerCase();
   if (!REPLY_VOICE_INTENT_TYPES.has(intentLabel)) {
-    return {
-      intent: null,
-      confidence: 0,
-      reason: null
-    };
+    return emptyStructuredVoiceIntent();
   }
 
   const confidenceRaw = Number(rawIntent.confidence);
   const confidence = Number.isFinite(confidenceRaw) ? clamp(confidenceRaw, 0, 1) : 0;
   const reason = normalizeDirectiveText(rawIntent.reason, MAX_VOICE_INTENT_REASON_LEN) || null;
+  const query = normalizeDirectiveText(rawIntent.query, MAX_VOICE_INTENT_QUERY_LEN) || null;
+  const rawPlatform = String(rawIntent.platform || "")
+    .trim()
+    .toLowerCase();
+  const platform = REPLY_MUSIC_PLATFORM_TYPES.has(rawPlatform) ? rawPlatform : null;
+  const selectedResultId =
+    normalizeDirectiveText(rawIntent.selectedResultId, MAX_VOICE_INTENT_SELECTED_RESULT_ID_LEN) || null;
+  const searchResults = normalizeStructuredMusicSearchResults(rawIntent.searchResults);
 
   return {
     intent: intentLabel === "none" ? null : intentLabel,
     confidence,
-    reason
+    reason,
+    query: intentLabel === "play_music" ? query : null,
+    platform: intentLabel === "play_music" ? platform : null,
+    searchResults: intentLabel === "play_music" ? searchResults : null,
+    selectedResultId: intentLabel === "play_music" ? selectedResultId : null
+  };
+}
+
+function normalizeStructuredMusicSearchResults(rawResults) {
+  if (!Array.isArray(rawResults)) return null;
+  const results = rawResults
+    .map((entry) => normalizeStructuredMusicSearchResult(entry))
+    .filter(Boolean)
+    .slice(0, 8);
+  return results.length ? results : null;
+}
+
+function normalizeStructuredMusicSearchResult(rawResult) {
+  if (!rawResult || typeof rawResult !== "object") return null;
+  const id = normalizeDirectiveText(rawResult.id, MAX_VOICE_INTENT_SELECTED_RESULT_ID_LEN) || null;
+  const title = normalizeDirectiveText(rawResult.title, MAX_VOICE_INTENT_MUSIC_RESULT_FIELD_LEN) || null;
+  const artist = normalizeDirectiveText(rawResult.artist, MAX_VOICE_INTENT_MUSIC_RESULT_FIELD_LEN) || null;
+  const rawPlatform = String(rawResult.platform || "")
+    .trim()
+    .toLowerCase();
+  const platform = REPLY_MUSIC_PLATFORM_TYPES.has(rawPlatform) ? rawPlatform : null;
+  const url = normalizeDirectiveText(rawResult.url, MAX_VOICE_INTENT_MUSIC_RESULT_FIELD_LEN) || null;
+  const durationRaw = Number(rawResult.durationSeconds);
+  const durationSeconds =
+    Number.isFinite(durationRaw) && durationRaw >= 0 ? Math.floor(durationRaw) : null;
+
+  if (!id || !title || !artist || !platform) return null;
+  return {
+    id,
+    title,
+    artist,
+    platform,
+    url,
+    durationSeconds
   };
 }
 
@@ -790,7 +869,7 @@ function normalizeStructuredVoiceAddressing(rawAddressing) {
     rawAddressing.talkingTo ?? rawAddressing.target ?? rawAddressing.talkTo,
     MAX_VOICE_ADDRESSING_TARGET_LEN
   );
-  let talkingTo = rawTalkingTo || null;
+  const talkingTo = rawTalkingTo || null;
 
   const confidenceRaw = Number(
     rawAddressing.directedConfidence ??

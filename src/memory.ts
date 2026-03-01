@@ -376,7 +376,8 @@ export class MemoryManager {
     const scopeGuildId = String(guildId || "").trim();
     if (!scopeGuildId) return [];
 
-    const boundedLimit = clampInt(limit, 1, 24);
+    const isFullMemoryQuery = queryText === "__ALL__";
+    const boundedLimit = isFullMemoryQuery ? clampInt(limit, 1, 100) : clampInt(limit, 1, 24);
     const candidateLimit = Math.min(
       HYBRID_MAX_CANDIDATES * 2,
       Math.max(boundedLimit * HYBRID_CANDIDATE_MULTIPLIER * 2, boundedLimit)
@@ -386,6 +387,24 @@ export class MemoryManager {
       limit: candidateLimit
     });
     if (!candidates.length) return [];
+
+    if (isFullMemoryQuery) {
+      return candidates.slice(0, boundedLimit).map((row) => ({
+        id: row.id,
+        created_at: row.created_at,
+        guild_id: row.guild_id,
+        channel_id: row.channel_id,
+        subject: row.subject,
+        fact: row.fact,
+        fact_type: row.fact_type,
+        evidence_text: row.evidence_text,
+        source_message_id: row.source_message_id,
+        confidence: row.confidence,
+        score: row._score,
+        semanticScore: row._semanticScore,
+        lexicalScore: row._lexicalScore
+      }));
+    }
 
     const ranked = await this.rankHybridCandidates({
       candidates,
