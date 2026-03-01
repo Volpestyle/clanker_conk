@@ -86,11 +86,8 @@ export function dequeueReplyBurst(bot, channelId, settings) {
   if (windowMs <= 0 || maxMessages <= 1) return burst;
 
   const firstMessage = firstJob.message;
-  const firstAuthorId = String(firstMessage?.author?.id || "").trim();
-  if (!firstAuthorId) return burst;
-
   const firstCreatedAtRaw = Number(firstMessage?.createdTimestamp);
-  const firstCreatedAt = Number.isFinite(firstCreatedAtRaw) && firstCreatedAtRaw > 0
+  let lastAcceptedCreatedAt = Number.isFinite(firstCreatedAtRaw) && firstCreatedAtRaw > 0
     ? firstCreatedAtRaw
     : Date.now();
 
@@ -105,18 +102,16 @@ export function dequeueReplyBurst(bot, channelId, settings) {
       continue;
     }
 
-    const candidateAuthorId = String(candidateMessage.author?.id || "").trim();
-    if (candidateAuthorId !== firstAuthorId) break;
-
     const candidateCreatedAtRaw = Number(candidateMessage.createdTimestamp);
     const candidateCreatedAt = Number.isFinite(candidateCreatedAtRaw) && candidateCreatedAtRaw > 0
       ? candidateCreatedAtRaw
-      : firstCreatedAt;
-    if (Math.abs(candidateCreatedAt - firstCreatedAt) > windowMs) break;
+      : lastAcceptedCreatedAt;
+    if (Math.abs(candidateCreatedAt - lastAcceptedCreatedAt) > windowMs) break;
 
     const nextJob = dequeueReplyJob(bot, channelId);
     if (!nextJob) break;
     burst.push(nextJob);
+    lastAcceptedCreatedAt = candidateCreatedAt;
   }
 
   return burst;
@@ -177,7 +172,8 @@ export async function processReplyQueue(bot, channelId) {
         continue;
       }
 
-      const coalesceWaitMs = getReplyCoalesceWaitMs(settings, headMessage);
+      const coalesceAnchorMessage = queue[queue.length - 1]?.message || headMessage;
+      const coalesceWaitMs = getReplyCoalesceWaitMs(settings, coalesceAnchorMessage);
       if (coalesceWaitMs > 0) {
         await sleep(Math.min(coalesceWaitMs, REPLY_QUEUE_RATE_LIMIT_WAIT_MS));
         continue;

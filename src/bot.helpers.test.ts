@@ -1,6 +1,12 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { parseStructuredReplyOutput } from "./botHelpers.ts";
+import {
+  composeInitiativeImagePrompt,
+  composeInitiativeVideoPrompt,
+  composeReplyImagePrompt,
+  composeReplyVideoPrompt,
+  parseStructuredReplyOutput
+} from "./botHelpers.ts";
 
 test("parseStructuredReplyOutput reads structured reply JSON", () => {
   const parsed = parseStructuredReplyOutput(
@@ -51,6 +57,47 @@ test("parseStructuredReplyOutput falls back to plain text when output is not JSO
   assert.equal(parsed.voiceIntent.reason, null);
   assert.equal(parsed.voiceAddressing.talkingTo, null);
   assert.equal(parsed.voiceAddressing.directedConfidence, 0);
+});
+
+test("compose media prompts fall back to contextual defaults when no prompt is provided", () => {
+  const initiativeImage = composeInitiativeImagePrompt("", "", 900, []);
+  const initiativeVideo = composeInitiativeVideoPrompt("", "", 900, []);
+  const replyImage = composeReplyImagePrompt("", "", 900, []);
+  const replyVideo = composeReplyVideoPrompt("", "", 900, []);
+
+  assert.match(initiativeImage, /Scene: general chat mood\./);
+  assert.match(initiativeVideo, /Scene: general chat mood\./);
+  assert.match(replyImage, /Scene: chat reaction\./);
+  assert.match(replyImage, /Conversational context \(do not render as text\): chat context\./);
+  assert.match(replyVideo, /Scene: chat reaction\./);
+  assert.match(replyVideo, /Conversational context \(do not render as text\): chat context\./);
+});
+
+test("parseStructuredReplyOutput recovers text from truncated fenced JSON", () => {
+  const parsed = parseStructuredReplyOutput(`\`\`\`json
+{
+  "text": "nah corbexx you're actually unhinged and i respect it lmaooo. \\\"penjamin\\\" mode activated.\\n\\ncan't be grinding your brain 24/7",
+  "skip": false,
+  "reactionEmoji": "lmao:1063357443737931876",
+  "automationAction": {
+    "operation": "none",
+`);
+
+  assert.equal(
+    parsed.text,
+    "nah corbexx you're actually unhinged and i respect it lmaooo. \"penjamin\" mode activated. can't be grinding your brain 24/7"
+  );
+});
+
+test("parseStructuredReplyOutput recovers skip from truncated fenced JSON", () => {
+  const parsed = parseStructuredReplyOutput(`\`\`\`json
+{
+  "text": "ignored",
+  "skip": true,
+  "reactionEmoji": null,
+`);
+
+  assert.equal(parsed.text, "[SKIP]");
 });
 
 test("parseStructuredReplyOutput honors skip flag", () => {

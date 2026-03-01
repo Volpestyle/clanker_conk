@@ -9,6 +9,7 @@ import { normalizeProviderOrder } from "../search.ts";
 import { clamp, deepMerge, uniqueIdList } from "../utils.ts";
 import { normalizeVoiceRuntimeMode } from "../voice/voiceModes.ts";
 import {
+  DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT,
   VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
   VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
 } from "../promptCore.ts";
@@ -95,6 +96,11 @@ export function normalizeSettings(raw) {
     merged.prompt?.voiceOperationalGuidance,
     defaultPrompt.voiceOperationalGuidance
   );
+  merged.prompt.voiceLookupBusySystemPrompt = normalizeLongPromptBlock(
+    merged.prompt?.voiceLookupBusySystemPrompt,
+    defaultPrompt.voiceLookupBusySystemPrompt ?? DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT,
+    4000
+  );
   merged.prompt.mediaPromptCraftGuidance = normalizeLongPromptBlock(
     merged.prompt?.mediaPromptCraftGuidance,
     defaultPrompt.mediaPromptCraftGuidance,
@@ -159,7 +165,12 @@ export function normalizeSettings(raw) {
   merged.llm.provider = normalizedLlm.provider;
   merged.llm.model = normalizedLlm.model;
   merged.llm.temperature = clamp(Number(merged.llm?.temperature) || 0.9, 0, 2);
-  merged.llm.maxOutputTokens = clamp(Number(merged.llm?.maxOutputTokens) || 220, 32, 1400);
+  const defaultLlmMaxOutputTokens = Number(DEFAULT_SETTINGS.llm?.maxOutputTokens) || 1500;
+  const configuredLlmMaxOutputTokens = Number(merged.llm?.maxOutputTokens);
+  const normalizedLlmMaxOutputTokens = Number.isFinite(configuredLlmMaxOutputTokens)
+    ? Math.floor(configuredLlmMaxOutputTokens)
+    : Math.floor(defaultLlmMaxOutputTokens);
+  merged.llm.maxOutputTokens = Math.max(32, normalizedLlmMaxOutputTokens);
   merged.replyFollowupLlm.enabled =
     merged.replyFollowupLlm?.enabled !== undefined
       ? Boolean(merged.replyFollowupLlm?.enabled)

@@ -1,5 +1,6 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
+import { FullPromptPreview } from "../FullPromptPreview";
 
 export function PromptGuidanceSettingsSection({ id, form, set, onResetPromptGuidance }) {
   return (
@@ -7,10 +8,15 @@ export function PromptGuidanceSettingsSection({ id, form, set, onResetPromptGuid
       <p>
         Identity and persona live in Core Behavior. These fields tune reusable prompt guidance and system policy lines.
       </p>
+      <p>
+        Template variable supported in these fields: <code>{"{{botName}}"}</code>.
+      </p>
 
       <button type="button" className="sm" onClick={onResetPromptGuidance}>
         Reset prompt guidance
       </button>
+
+      <FullPromptPreview form={form} />
 
       <label htmlFor="prompt-capability-honesty-line">Capability honesty line</label>
       <input
@@ -74,6 +80,14 @@ export function PromptGuidanceSettingsSection({ id, form, set, onResetPromptGuid
         rows={4}
         value={form.promptVoiceOperationalGuidance}
         onChange={set("promptVoiceOperationalGuidance")}
+      />
+
+      <label htmlFor="prompt-voice-lookup-busy-system-prompt">Voice lookup busy-line system prompt</label>
+      <textarea
+        id="prompt-voice-lookup-busy-system-prompt"
+        rows={4}
+        value={form.promptVoiceLookupBusySystemPrompt}
+        onChange={set("promptVoiceLookupBusySystemPrompt")}
       />
 
       <label htmlFor="prompt-media-guidance">Media prompt craft guidance</label>

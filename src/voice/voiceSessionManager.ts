@@ -9,13 +9,16 @@ import prism from "prism-media";
 import {
   buildVoiceToneGuardrails,
   buildHardLimitsSection,
+  DEFAULT_PROMPT_VOICE_GUIDANCE,
   getPromptBotName,
   getPromptCapabilityHonestyLine,
   getPromptImpossibleActionLine,
+  getPromptVoiceLookupBusySystemPrompt,
   getPromptMemoryDisabledLine,
   getPromptMemoryEnabledLine,
   getPromptStyle,
   getPromptVoiceGuidance,
+  interpolatePromptTemplate,
   VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
   VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
 } from "../promptCore.ts";
@@ -4881,12 +4884,9 @@ export class VoiceSessionManager {
         maxOutputTokens: clamp(Number(settings?.llm?.maxOutputTokens) || 28, 8, 40)
       }
     };
-    const systemPrompt = [
-      `You are ${getPromptBotName(settings)} speaking in live Discord VC.`,
-      "Output one short spoken line only (4-12 words).",
-      "Line must clearly indicate you're checking something on the web right now.",
-      "Keep it casual and natural. No markdown, no tags, no directives."
-    ].join("\n");
+    const systemPrompt = interpolatePromptTemplate(getPromptVoiceLookupBusySystemPrompt(settings), {
+      botName: getPromptBotName(settings)
+    });
     const userPrompt = [
       normalizedQuery ? `Lookup query: ${normalizedQuery}` : "Lookup query: (not specified)",
       "Write one quick filler line before lookup results are ready."
@@ -7308,7 +7308,7 @@ export class VoiceSessionManager {
     const configuredPrompts = replyDecisionLlm?.prompts;
     const interpolateBotName = (template, fallback) => {
       const chosen = String(template || "").trim() || String(fallback || "").trim();
-      return chosen.replace(/\{\{\s*botName\s*\}\}/gi, botName);
+      return interpolatePromptTemplate(chosen, { botName });
     };
     const wakeVariantHint = interpolateBotName(
       configuredPrompts?.wakeVariantHint,
@@ -10207,7 +10207,7 @@ export class VoiceSessionManager {
 
   buildVoiceInstructions(settings, { soundboardCandidates = [] } = {}) {
     const botName = getPromptBotName(settings);
-    const style = getPromptStyle(settings, "playful slang");
+    const style = getPromptStyle(settings);
     const allowNsfwHumor = shouldAllowVoiceNsfwHumor(settings);
     const memoryEnabled = Boolean(settings?.memory?.enabled);
     const soundboardEnabled = Boolean(settings?.voice?.soundboard?.enabled);
@@ -10216,11 +10216,7 @@ export class VoiceSessionManager {
       .filter(Boolean)
       .slice(0, SOUNDBOARD_MAX_CANDIDATES);
     const voiceToneGuardrails = buildVoiceToneGuardrails();
-    const voiceGuidance = getPromptVoiceGuidance(settings, [
-      "Talk like a person hanging out, not like an assistant.",
-      "You're chill, but eager to be helpful whenever it makes sense.",
-      "Use occasional slang naturally (not every sentence)."
-    ]);
+    const voiceGuidance = getPromptVoiceGuidance(settings, DEFAULT_PROMPT_VOICE_GUIDANCE);
     const lines = [
       `You are ${botName}, a real-feeling regular in a Discord server, speaking in live voice chat.`,
       `Stay in-character as ${botName}. Style: ${style}.`,
@@ -10236,7 +10232,7 @@ export class VoiceSessionManager {
             "You have persistent memory across conversations via saved durable facts. Do not claim each conversation starts from zero."
           )
         : getPromptMemoryDisabledLine(settings),
-      getPromptImpossibleActionLine(settings, "If asked to do something impossible, say it casually."),
+      getPromptImpossibleActionLine(settings),
       ...buildHardLimitsSection(settings, { maxItems: 12 })
     ];
 

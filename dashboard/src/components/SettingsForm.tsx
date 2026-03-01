@@ -12,7 +12,8 @@ import {
   resolveModelOptionsFromText,
   resolvePresetModelSelection,
   resolveProviderModelOptions,
-  settingsToForm
+  settingsToForm,
+  settingsToFormPreserving
 } from "../settingsFormModel";
 import { useActiveSection } from "../hooks/useActiveSection";
 import { CoreBehaviorSettingsSection } from "./settingsSections/CoreBehaviorSettingsSection";
@@ -53,11 +54,13 @@ export default function SettingsForm({
   const savedFormRef = useRef<string>("");
   const defaultForm = useMemo(() => settingsToForm({}), []);
   const effectiveForm = form ?? defaultForm;
+  const formRef = useRef(form);
+  formRef.current = form;
 
   useEffect(() => {
     if (!settings) return;
-    const next = settingsToForm(settings);
-    setForm((current) => ({ ...(current || {}), ...next }));
+    const next = settingsToFormPreserving(settings, formRef.current);
+    setForm(next);
     savedFormRef.current = JSON.stringify(next);
   }, [settings]);
 
@@ -244,6 +247,7 @@ export default function SettingsForm({
       promptTextGuidance: defaultForm.promptTextGuidance,
       promptVoiceGuidance: defaultForm.promptVoiceGuidance,
       promptVoiceOperationalGuidance: defaultForm.promptVoiceOperationalGuidance,
+      promptVoiceLookupBusySystemPrompt: defaultForm.promptVoiceLookupBusySystemPrompt,
       promptMediaPromptCraftGuidance: defaultForm.promptMediaPromptCraftGuidance
     }));
   }

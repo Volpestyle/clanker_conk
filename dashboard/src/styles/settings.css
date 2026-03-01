@@ -128,6 +128,36 @@
   padding: 2px 14px 14px;
 }
 
+.prompt-template-preview-wrap {
+  margin-top: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(4, 12, 10, 0.45);
+}
+
+.prompt-template-preview-meta,
+.prompt-template-preview-warning {
+  margin: 0;
+  font-size: 0.75rem;
+  color: var(--ink-2);
+}
+
+.prompt-template-preview-warning {
+  margin-top: 4px;
+  color: #f5cc83;
+}
+
+.prompt-template-preview {
+  margin: 6px 0 0;
+  font-family: "JetBrains Mono", "Fira Code", "SF Mono", Menlo, Consolas, monospace;
+  font-size: 0.76rem;
+  line-height: 1.45;
+  color: var(--ink-1);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 /* -- sticky save bar -- */
 
 .save-bar {
@@ -170,6 +200,71 @@
 }
 .collapse-wrap.open { grid-template-rows: 1fr; }
 .collapse-wrap > .collapse-inner { min-height: 0; overflow: hidden; }
+
+/* -- full prompt preview -- */
+
+.full-prompt-preview-wrap {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: rgba(6, 14, 13, 0.2);
+  margin: 8px 0;
+}
+
+.full-prompt-preview-toggle {
+  width: 100%;
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 0.8rem;
+  font-weight: 500;
+  color: var(--ink-2);
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.full-prompt-preview-toggle:hover {
+  color: var(--ink-0);
+}
+
+.full-prompt-preview-content {
+  padding: 0 12px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.full-prompt-scenario {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.full-prompt-scenario-title {
+  font-size: 0.72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent);
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.full-prompt-scenario-content {
+  font-size: 0.75rem;
+  color: var(--ink-1);
+  padding: 10px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "IBM Plex Mono", monospace;
+  line-height: 1.5;
+  max-height: 200px;
+  overflow-y: auto;
+}
 
 /* -- responsive -- */
 

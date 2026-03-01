@@ -222,6 +222,20 @@ test("normalizeSettings handles memoryLlm defaults and discovery source fallback
   assert.equal(typeof normalized.initiative.discovery.sources.x, "boolean");
 });
 
+test("normalizeSettings defaults llm maxOutputTokens to 1500 and preserves high values", () => {
+  const defaulted = normalizeSettings({
+    llm: {}
+  });
+  assert.equal(defaulted.llm.maxOutputTokens, 1500);
+
+  const highValue = normalizeSettings({
+    llm: {
+      maxOutputTokens: 9_999
+    }
+  });
+  assert.equal(highValue.llm.maxOutputTokens, 9_999);
+});
+
 test("normalizeSettings forces voice generation llm to text llm when useTextModel is enabled", () => {
   const normalized = normalizeSettings({
     llm: {

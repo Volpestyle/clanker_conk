@@ -54,7 +54,6 @@ export function LlmConfigurationSettingsSection({
             id="max-tokens"
             type="number"
             min="32"
-            max="1400"
             step="1"
             value={form.maxTokens}
             onChange={set("maxTokens")}

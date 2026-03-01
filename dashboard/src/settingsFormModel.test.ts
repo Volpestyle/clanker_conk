@@ -5,7 +5,8 @@ import {
   resolveModelOptionsFromText,
   resolvePresetModelSelection,
   resolveProviderModelOptions,
-  settingsToForm
+  settingsToForm,
+  settingsToFormPreserving
 } from "./settingsFormModel.ts";
 
 test("settingsFormModel converts settings to form defaults and back to normalized patch", () => {
@@ -58,7 +59,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.voiceAsrLanguageHint, "en");
   assert.equal(
     form.voiceStreamWatchBrainContextPrompt,
-    "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or casual shout-out commentary."
+    "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or observational shout-out commentary."
   );
   assert.equal(form.initiativeChannels, "1\n2");
   assert.equal(form.allowedChannels, "2\n3");
@@ -127,6 +128,7 @@ test("settingsToForm preserves explicit empty prompt overrides", () => {
       textGuidance: [],
       voiceGuidance: [],
       voiceOperationalGuidance: [],
+      voiceLookupBusySystemPrompt: "",
       mediaPromptCraftGuidance: ""
     }
   });
@@ -139,6 +141,7 @@ test("settingsToForm preserves explicit empty prompt overrides", () => {
   assert.equal(form.promptTextGuidance, "");
   assert.equal(form.promptVoiceGuidance, "");
   assert.equal(form.promptVoiceOperationalGuidance, "");
+  assert.equal(form.promptVoiceLookupBusySystemPrompt, "");
   assert.equal(form.promptMediaPromptCraftGuidance, "");
 });
 
@@ -280,4 +283,36 @@ test("settingsFormModel round-trips elevenlabs realtime settings", () => {
   assert.equal(patch.voice.elevenLabsRealtime.apiBaseUrl, "https://api.elevenlabs.io");
   assert.equal(patch.voice.elevenLabsRealtime.inputSampleRateHz, 16000);
   assert.equal(patch.voice.elevenLabsRealtime.outputSampleRateHz, 22050);
+});
+
+test("settingsToFormPreserving keeps user's comma format for aliases on reload", () => {
+  const currentForm = settingsToForm({ botNameAliases: ["clank", "conk"] });
+  // user edits to comma-separated
+  currentForm.botNameAliases = "clank, conk";
+
+  // server returns the same values after save
+  const preserved = settingsToFormPreserving({ botNameAliases: ["clank", "conk"] }, currentForm);
+  assert.equal(preserved.botNameAliases, "clank, conk");
+
+  // parsing still yields the correct array
+  const patch = formToSettingsPatch(preserved);
+  assert.deepEqual(patch.botNameAliases, ["clank", "conk"]);
+});
+
+test("settingsToFormPreserving updates value when server content actually changed", () => {
+  const currentForm = settingsToForm({ botNameAliases: ["clank", "conk"] });
+  currentForm.botNameAliases = "clank, conk";
+
+  // server returns different values (e.g. another admin added an alias)
+  const preserved = settingsToFormPreserving({ botNameAliases: ["clank", "conk", "clanky"] }, currentForm);
+  assert.equal(preserved.botNameAliases, "clank\nconk\nclanky");
+});
+
+test("settingsToFormPreserving preserves newline format when user prefers it", () => {
+  const currentForm = settingsToForm({ botNameAliases: ["a", "b"] });
+  // user keeps newlines
+  currentForm.botNameAliases = "a\nb";
+
+  const preserved = settingsToFormPreserving({ botNameAliases: ["a", "b"] }, currentForm);
+  assert.equal(preserved.botNameAliases, "a\nb");
 });

@@ -1,10 +1,30 @@
 import { normalizeBoundedStringList } from "./settings/listNormalization.ts";
 
 const DEFAULT_BOT_NAME = "clanker conk";
-const DEFAULT_STYLE = "playful slang";
+const PROMPT_TEMPLATE_TOKEN_RE = /\{\{\s*([a-zA-Z0-9_.-]+)\s*\}\}/g;
+export const DEFAULT_PROMPT_STYLE = "playful slang, open, honest, exploratory";
+export const DEFAULT_PROMPT_TEXT_GUIDANCE = [
+  "Write like a person in chat, not like an assistant.",
+  "Be open and direct; avoid roleplaying or performative banter.",
+  "Be honest about uncertainty and ask exploratory follow-ups when useful.",
+  "Default to short messages but go longer when the conversation calls for it.",
+  "Use server emoji tokens in text only when necessary and when they enhance the message."
+];
+export const DEFAULT_PROMPT_VOICE_GUIDANCE = [
+  "Talk like a person hanging out, not like an assistant.",
+  "Be open, direct, and helpful whenever it makes sense.",
+  "Ask short exploratory follow-ups when they unblock the conversation."
+];
+export const DEFAULT_PROMPT_VOICE_OPERATIONAL_GUIDANCE = [
+  "Keep it clear and simple. No overexplaining.",
+  "Clearly state what happened and why, especially when a request is blocked.",
+  "If relevant, mention required permissions/settings plainly.",
+  "Avoid dramatic wording, blame, apology spirals, and long postmortems."
+];
 
 const PROMPT_CAPABILITY_HONESTY_LINE = "Never claim capabilities you do not have.";
-const DEFAULT_IMPOSSIBLE_ACTION_LINE = "If asked to do something impossible, say it casually and suggest a text-only alternative.";
+export const DEFAULT_PROMPT_IMPOSSIBLE_ACTION_LINE =
+  "If asked to do something impossible, say it plainly and suggest a practical text-only alternative.";
 const DEFAULT_MEMORY_ENABLED_LINE =
   "You have persistent memory across conversations via saved durable facts and logs. Do not claim each conversation starts from zero.";
 const DEFAULT_MEMORY_DISABLED_LINE =
@@ -17,6 +37,11 @@ const DEFAULT_MEDIA_PROMPT_CRAFT_GUIDANCE = [
   "For video prompts, describe the motion arc: what starts, what changes, and how it ends.",
   "Never put text, words, or UI elements in media prompts."
 ].join(" ");
+export const DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT = [
+  "Output one short spoken line only (4-12 words).",
+  "Line must clearly indicate you're checking something on the web right now.",
+  "Keep it natural and direct. No markdown, no tags, no directives."
+].join("\n");
 export const VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT = [
   "Treat near-phonetic or misspelled tokens that appear to target the bot name as direct address.",
   "Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" usually indicate direct address.",
@@ -29,8 +54,8 @@ export const VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT = [
   "Interpret second-person wording (\"you\", \"your\", \"show me\") as potentially aimed at {{botName}} unless another person is explicitly targeted.",
   "When reply eagerness is low, be conservative and prefer NO unless the turn clearly warrants interruption-free contribution.",
   "At medium eagerness, balance responsiveness with restraint; only insert when it adds clear value.",
-  "At high eagerness, you can be more available for follow-ups and playful tone.",
-  "At near-max/absolute max eagerness (90-100), allow more hype, playful, and slightly chaotic social inserts when context allows.",
+  "At high eagerness, you can be more available for follow-ups while staying clear and grounded.",
+  "At near-max/absolute max eagerness (90-100), allow more proactive social inserts when context allows, while keeping claims accurate.",
   "Prefer YES for direct wake-word mentions and likely ASR variants of the bot name.",
   "Treat near-phonetic or misspelled tokens that appear to target the bot name as direct address.",
   "Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" should usually be YES.",
@@ -49,63 +74,122 @@ export const VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT = [
   "Never output anything except YES or NO."
 ].join("\n");
 
+export function interpolatePromptTemplate(template, variables = {}) {
+  const input = String(template || "");
+  if (!input) return "";
+  const normalizedVariables = normalizeTemplateVariables(variables);
+
+  return input.replace(PROMPT_TEMPLATE_TOKEN_RE, (match, key) => {
+    const normalizedKey = String(key || "")
+      .trim()
+      .toLowerCase();
+    if (!normalizedKey || !Object.prototype.hasOwnProperty.call(normalizedVariables, normalizedKey)) {
+      return match;
+    }
+    return normalizedVariables[normalizedKey];
+  });
+}
+
 export function getPromptBotName(settings, fallback = DEFAULT_BOT_NAME) {
   const configured = String(settings?.botName || "").trim();
   return configured || String(fallback || DEFAULT_BOT_NAME);
 }
 
-export function getPromptStyle(settings, fallback = DEFAULT_STYLE) {
+export function getPromptStyle(settings, fallback = DEFAULT_PROMPT_STYLE) {
   const configured = String(settings?.persona?.flavor || "").trim();
-  return configured || String(fallback || DEFAULT_STYLE);
+  const resolved = configured || String(fallback || DEFAULT_PROMPT_STYLE);
+  return interpolatePromptTemplate(resolved, {
+    botName: getPromptBotName(settings)
+  });
 }
 
 export function getPromptCapabilityHonestyLine(settings, fallback = PROMPT_CAPABILITY_HONESTY_LINE) {
   const configured = String(settings?.prompt?.capabilityHonestyLine || "").trim();
-  return configured || String(fallback || PROMPT_CAPABILITY_HONESTY_LINE);
+  const resolved = configured || String(fallback || PROMPT_CAPABILITY_HONESTY_LINE);
+  return interpolatePromptTemplate(resolved, {
+    botName: getPromptBotName(settings)
+  });
 }
 
-export function getPromptImpossibleActionLine(settings, fallback = DEFAULT_IMPOSSIBLE_ACTION_LINE) {
+export function getPromptImpossibleActionLine(settings, fallback = DEFAULT_PROMPT_IMPOSSIBLE_ACTION_LINE) {
   const configured = String(settings?.prompt?.impossibleActionLine || "").trim();
-  return configured || String(fallback || DEFAULT_IMPOSSIBLE_ACTION_LINE);
+  const resolved = configured || String(fallback || DEFAULT_PROMPT_IMPOSSIBLE_ACTION_LINE);
+  return interpolatePromptTemplate(resolved, {
+    botName: getPromptBotName(settings)
+  });
 }
 
 export function getPromptMemoryEnabledLine(settings, fallback = DEFAULT_MEMORY_ENABLED_LINE) {
   const configured = String(settings?.prompt?.memoryEnabledLine || "").trim();
-  return configured || String(fallback || DEFAULT_MEMORY_ENABLED_LINE);
+  const resolved = configured || String(fallback || DEFAULT_MEMORY_ENABLED_LINE);
+  return interpolatePromptTemplate(resolved, {
+    botName: getPromptBotName(settings)
+  });
 }
 
 export function getPromptMemoryDisabledLine(settings, fallback = DEFAULT_MEMORY_DISABLED_LINE) {
   const configured = String(settings?.prompt?.memoryDisabledLine || "").trim();
-  return configured || String(fallback || DEFAULT_MEMORY_DISABLED_LINE);
+  const resolved = configured || String(fallback || DEFAULT_MEMORY_DISABLED_LINE);
+  return interpolatePromptTemplate(resolved, {
+    botName: getPromptBotName(settings)
+  });
 }
 
 export function getPromptSkipLine(settings, fallback = DEFAULT_SKIP_LINE) {
   const configured = String(settings?.prompt?.skipLine || "").trim();
-  return configured || String(fallback || DEFAULT_SKIP_LINE);
+  const resolved = configured || String(fallback || DEFAULT_SKIP_LINE);
+  return interpolatePromptTemplate(resolved, {
+    botName: getPromptBotName(settings)
+  });
 }
 
 export function getPromptTextGuidance(settings, fallback = []) {
-  return normalizePromptLineList(settings?.prompt?.textGuidance, fallback);
+  const botName = getPromptBotName(settings);
+  return normalizePromptLineList(settings?.prompt?.textGuidance, fallback).map((line) =>
+    interpolatePromptTemplate(line, { botName })
+  );
 }
 
 export function getPromptVoiceGuidance(settings, fallback = []) {
-  return normalizePromptLineList(settings?.prompt?.voiceGuidance, fallback);
+  const botName = getPromptBotName(settings);
+  return normalizePromptLineList(settings?.prompt?.voiceGuidance, fallback).map((line) =>
+    interpolatePromptTemplate(line, { botName })
+  );
 }
 
 export function getPromptVoiceOperationalGuidance(settings, fallback = []) {
-  return normalizePromptLineList(settings?.prompt?.voiceOperationalGuidance, fallback);
+  const botName = getPromptBotName(settings);
+  return normalizePromptLineList(settings?.prompt?.voiceOperationalGuidance, fallback).map((line) =>
+    interpolatePromptTemplate(line, { botName })
+  );
 }
 
 export function getMediaPromptCraftGuidance(settings, fallback = DEFAULT_MEDIA_PROMPT_CRAFT_GUIDANCE) {
   const configured = String(settings?.prompt?.mediaPromptCraftGuidance || "").trim();
-  return configured || String(fallback || DEFAULT_MEDIA_PROMPT_CRAFT_GUIDANCE);
+  const resolved = configured || String(fallback || DEFAULT_MEDIA_PROMPT_CRAFT_GUIDANCE);
+  return interpolatePromptTemplate(resolved, {
+    botName: getPromptBotName(settings)
+  });
+}
+
+export function getPromptVoiceLookupBusySystemPrompt(
+  settings,
+  fallback = DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT
+) {
+  const configured = String(settings?.prompt?.voiceLookupBusySystemPrompt || "").trim();
+  const resolved = configured || String(fallback || DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT);
+  return interpolatePromptTemplate(resolved, {
+    botName: getPromptBotName(settings)
+  });
 }
 
 function getPromptHardLimits(settings, { maxItems = null } = {}) {
+  const botName = getPromptBotName(settings);
   const source = Array.isArray(settings?.persona?.hardLimits) ? settings.persona.hardLimits : [];
   const limits = source
     .map((line) => String(line || "").trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map((line) => interpolatePromptTemplate(line, { botName }));
   if (!Number.isFinite(Number(maxItems))) return limits;
   const count = Math.max(0, Math.floor(Number(maxItems)));
   return limits.slice(0, count);
@@ -159,7 +243,7 @@ export function buildVoiceSelfContextLines({
 
 export function buildVoiceToneGuardrails() {
   return [
-    "Match your normal text-chat persona in voice: same attitude, slang level, and casual cadence.",
+    "Match your normal text-chat persona in voice: same directness, honesty, and exploratory mindset.",
     "Keep turns tight: one clear idea, usually one short sentence.",
     "Use a second short sentence only when needed for clarity or when asked for detail.",
     "In voice, avoid chat-only shorthand acronyms (for example lmao, fr, ngl); use natural spoken phrasing instead.",
@@ -175,3 +259,55 @@ function normalizePromptLineList(source, fallback = []) {
     maxLen: Number.MAX_SAFE_INTEGER
   });
 }
+
+function normalizeTemplateVariables(variables = {}) {
+  const out = Object.create(null);
+  if (!variables || typeof variables !== "object") return out;
+  for (const [rawKey, rawValue] of Object.entries(variables)) {
+    const key = String(rawKey || "")
+      .trim()
+      .toLowerCase();
+    if (!key) continue;
+    out[key] = String(rawValue || "");
+  }
+  return out;
+}
+
+export const REPLY_JSON_SCHEMA = `{
+  "text": "reply text or [SKIP]",
+  "skip": false,
+  "reactionEmoji": "emoji or null",
+  "media": "media object or null",
+  "webSearchQuery": "search query or null",
+  "memoryLookupQuery": "lookup query or null",
+  "imageLookupQuery": "lookup query or null",
+  "openArticleRef": "article ref or null",
+  "memoryLine": "fact to save or null",
+  "selfMemoryLine": "self-fact to save or null",
+  "soundboardRefs": [],
+  "leaveVoiceChannel": false,
+  "automationAction": {
+    "operation": "none|create|pause|resume|delete|list",
+    "title": "string or null",
+    "instruction": "string or null",
+    "schedule": "schedule object or null",
+    "targetQuery": "string or null",
+    "automationId": "string or null",
+    "runImmediately": false,
+    "targetChannelId": "string or null"
+  },
+  "voiceIntent": {
+    "intent": "join|leave|status|watch_stream|stop_watching_stream|stream_status|play_music|stop_music|pause_music|none",
+    "confidence": 0,
+    "reason": "string or null",
+    "query": "string or null",
+    "platform": "youtube|soundcloud|auto or null",
+    "searchResults": "array or null",
+    "selectedResultId": "string or null"
+  },
+  "screenShareIntent": {
+    "action": "offer_link|none",
+    "confidence": 0,
+    "reason": "string or null"
+  }
+}`;

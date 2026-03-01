@@ -93,6 +93,8 @@ export function settingsToForm(settings) {
     promptVoiceGuidance: formatLineList(settings?.prompt?.voiceGuidance ?? defaultPrompt.voiceGuidance),
     promptVoiceOperationalGuidance:
       formatLineList(settings?.prompt?.voiceOperationalGuidance ?? defaultPrompt.voiceOperationalGuidance),
+    promptVoiceLookupBusySystemPrompt:
+      settings?.prompt?.voiceLookupBusySystemPrompt ?? defaultPrompt.voiceLookupBusySystemPrompt,
     promptMediaPromptCraftGuidance: settings?.prompt?.mediaPromptCraftGuidance ?? defaultPrompt.mediaPromptCraftGuidance,
     replyLevelInitiative: activity.replyLevelInitiative ?? defaultActivity.replyLevelInitiative,
     replyLevelNonInitiative: activity.replyLevelNonInitiative ?? defaultActivity.replyLevelNonInitiative,
@@ -308,6 +310,7 @@ export function formToSettingsPatch(form) {
       textGuidance: parseUniqueLineList(form.promptTextGuidance),
       voiceGuidance: parseUniqueLineList(form.promptVoiceGuidance),
       voiceOperationalGuidance: parseUniqueLineList(form.promptVoiceOperationalGuidance),
+      voiceLookupBusySystemPrompt: String(form.promptVoiceLookupBusySystemPrompt || "").trim(),
       mediaPromptCraftGuidance: String(form.promptMediaPromptCraftGuidance || "").trim()
     },
     activity: {
@@ -514,6 +517,46 @@ export function formToSettingsPatch(form) {
       enabled: form.memoryEnabled
     }
   };
+}
+
+const LIST_FORM_KEYS: ReadonlySet<string> = new Set([
+  "botNameAliases",
+  "personaHardLimits",
+  "promptTextGuidance",
+  "promptVoiceGuidance",
+  "promptVoiceOperationalGuidance",
+  "voiceAllowedChannelIds",
+  "voiceBlockedChannelIds",
+  "voiceBlockedUserIds",
+  "voiceSoundboardPreferredSoundIds",
+  "initiativeAllowedImageModels",
+  "initiativeAllowedVideoModels",
+  "initiativeDiscoveryPreferredTopics",
+  "initiativeDiscoveryRedditSubs",
+  "initiativeDiscoveryYoutubeChannels",
+  "initiativeDiscoveryRssFeeds",
+  "initiativeDiscoveryXHandles",
+  "initiativeChannels",
+  "allowedChannels",
+  "blockedChannels",
+  "blockedUsers"
+]);
+
+export function settingsToFormPreserving(settings, currentForm) {
+  const next = settingsToForm(settings);
+  if (!currentForm) return next;
+  const result = { ...next };
+  for (const key of LIST_FORM_KEYS) {
+    const cur = currentForm[key];
+    const nxt = result[key];
+    if (typeof cur !== "string" || typeof nxt !== "string" || cur === nxt) continue;
+    const curParsed = parseUniqueList(cur);
+    const nxtParsed = parseUniqueList(nxt);
+    if (curParsed.length === nxtParsed.length && curParsed.every((v, i) => v === nxtParsed[i])) {
+      result[key] = cur;
+    }
+  }
+  return result;
 }
 
 export function resolveProviderModelOptions(modelCatalog, provider) {

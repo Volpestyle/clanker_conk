@@ -1225,6 +1225,7 @@ export class ClankerBot {
         authorName: message.member?.displayName || message.author.username,
         content: message.content
       },
+      triggerMessageIds,
       recentMessages,
       relevantMessages: memorySlice.relevantMessages,
       userFacts: memorySlice.userFacts,
@@ -1591,7 +1592,12 @@ export class ClankerBot {
       const imageResult = await this.maybeAttachGeneratedImage({
         settings,
         text: finalText,
-        prompt: composeReplyImagePrompt(imagePrompt, finalText, mediaPromptLimit, replyMediaMemoryFacts),
+        prompt: composeReplyImagePrompt(
+          imagePrompt,
+          finalText,
+          mediaPromptLimit,
+          replyMediaMemoryFacts
+        ),
         variant: "simple",
         trace: {
           guildId: message.guildId,
@@ -1636,7 +1642,12 @@ export class ClankerBot {
       const videoResult = await this.maybeAttachGeneratedVideo({
         settings,
         text: finalText,
-        prompt: composeReplyVideoPrompt(videoPrompt, finalText, mediaPromptLimit, replyMediaMemoryFacts),
+        prompt: composeReplyVideoPrompt(
+          videoPrompt,
+          finalText,
+          mediaPromptLimit,
+          replyMediaMemoryFacts
+        ),
         trace: {
           guildId: message.guildId,
           channelId: message.channelId,

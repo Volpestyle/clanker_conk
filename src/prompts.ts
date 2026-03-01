@@ -2,6 +2,7 @@ import {
   buildHardLimitsSection,
   buildVoiceSelfContextLines,
   buildVoiceToneGuardrails,
+  DEFAULT_PROMPT_TEXT_GUIDANCE,
   getMediaPromptCraftGuidance,
   getPromptBotName,
   getPromptCapabilityHonestyLine,
@@ -10,7 +11,8 @@ import {
   getPromptMemoryEnabledLine,
   getPromptSkipLine,
   getPromptStyle,
-  getPromptTextGuidance
+  getPromptTextGuidance,
+  REPLY_JSON_SCHEMA
 } from "./promptCore.ts";
 
 function stripEmojiForPrompt(text) {
@@ -232,30 +234,29 @@ function formatImageLookupResults(results) {
 
 export function buildSystemPrompt(settings) {
   const memoryEnabled = Boolean(settings?.memory?.enabled);
-  const textGuidance = getPromptTextGuidance(settings, [
-    "Write like a person in chat, not like an assistant.",
-    "Use occasional slang naturally (not every sentence).",
-    "You're chill, but eager to be helpful whenever it makes sense.",
-    "Default to short messages but go longer when the conversation calls for it.",
-    "Use server emoji tokens in text only when necessary and when they enhance the message."
-  ]);
+  const textGuidance = getPromptTextGuidance(settings, DEFAULT_PROMPT_TEXT_GUIDANCE);
 
   return [
+    `=== PERSONA ===`,
     `You are ${getPromptBotName(settings)}, a real-feeling regular in a Discord server.`,
-    `Style: ${getPromptStyle(settings, "playful slang")}.`,
+    `Style: ${getPromptStyle(settings)}.`,
     ...textGuidance,
+    `=== CAPABILITIES ===`,
     getPromptCapabilityHonestyLine(settings),
     memoryEnabled
       ? getPromptMemoryEnabledLine(settings)
       : getPromptMemoryDisabledLine(settings),
     getPromptImpossibleActionLine(settings),
+    `=== LIMITS ===`,
     ...buildHardLimitsSection(settings),
+    `=== OUTPUT ===`,
     getPromptSkipLine(settings)
   ].join("\n");
 }
 
 export function buildReplyPrompt({
   message,
+  triggerMessageIds = [],
   imageInputs,
   recentMessages,
   relevantMessages,
@@ -295,12 +296,20 @@ export function buildReplyPrompt({
   const parts = [];
   const mediaGuidance = String(mediaPromptCraftGuidance || "").trim() || getMediaPromptCraftGuidance(null);
   const normalizedChannelMode = channelMode === "initiative" ? "initiative" : "non_initiative";
+  const triggerCount = Array.isArray(triggerMessageIds) ? triggerMessageIds.length : 0;
 
-  parts.push(`Incoming message from ${message.authorName}: ${message.content}`);
+  parts.push("=== LATEST MESSAGE (TURN ANCHOR) ===");
+  parts.push(`Message from ${message.authorName}: ${message.content}`);
+  if (triggerCount > 1) {
+    parts.push(`This reply turn was coalesced from ${triggerCount} recent messages in a short burst.`);
+    parts.push(
+      "You may respond to only the latest message or combine multiple recent messages when they are clearly part of one thread."
+    );
+  }
   if (imageInputs?.length) {
     parts.push(
       [
-        "Incoming image attachments:",
+        "Attachments:",
         ...imageInputs.map((image) => {
           const name = image.filename || "(unnamed)";
           const type = image.contentType || "unknown";
@@ -309,21 +318,21 @@ export function buildReplyPrompt({
       ].join("\n")
     );
   }
-  parts.push("Recent channel messages:");
+  parts.push("=== RECENT MESSAGES ===");
   parts.push(formatRecentChat(recentMessages));
 
   if (relevantMessages?.length) {
-    parts.push("Relevant past messages:");
+    parts.push("=== RELEVANT PAST MESSAGES ===");
     parts.push(formatRecentChat(relevantMessages));
   }
 
   if (userFacts?.length) {
-    parts.push("Known facts about this user:");
+    parts.push("=== USER FACTS ===");
     parts.push(formatMemoryFacts(userFacts, { includeType: false, includeProvenance: true, maxItems: 8 }));
   }
 
   if (relevantFacts?.length) {
-    parts.push("Relevant durable memory:");
+    parts.push("=== DURABLE MEMORY ===");
     parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: true, maxItems: 10 }));
   }
 
@@ -352,6 +361,7 @@ export function buildReplyPrompt({
   }
 
   if (imageLookup?.requested) {
+    parts.push("=== IMAGE LOOKUP RESULTS ===");
     if (imageLookup.error) {
       parts.push(`History image lookup failed: ${imageLookup.error}`);
       parts.push("Answer from currently available context and avoid pretending you saw an older image.");
@@ -366,19 +376,23 @@ export function buildReplyPrompt({
   }
 
   if (recentWebLookups?.length) {
-    parts.push("Short-term lookup memory from recent successful web searches (may be stale):");
+    parts.push("=== RECENT LOOKUP MEMORY ===");
+    parts.push("Recent successful web searches (may be stale):");
     parts.push(formatRecentLookupContext(recentWebLookups));
     parts.push("If the user asks what source you used earlier, reference these cached domains/URLs directly.");
     parts.push("Use this as background context only. If freshness matters, run a new live web lookup.");
   }
 
   if (emojiHints?.length) {
-    parts.push(`Server emoji options: ${emojiHints.join(", ")}`);
+    parts.push(`=== EMOJI OPTIONS ===`);
+    parts.push(`Server emoji: ${emojiHints.join(", ")}`);
   }
   if (reactionEmojiOptions?.length) {
-    parts.push("Allowed reaction emojis (use exactly one if reacting):");
+    parts.push("Allowed reactions:");
     parts.push(formatEmojiChoices(reactionEmojiOptions));
   }
+
+  parts.push("=== RESPONSE DECISION ===");
 
   const directlyAddressed = Boolean(addressing?.directlyAddressed);
   const directAddressConfidence = Number(addressing?.directAddressConfidence);
@@ -416,11 +430,11 @@ export function buildReplyPrompt({
     } else if (eagerness >= 75) {
       if (eagerness >= 90) {
         parts.push(
-          "Very high/noisier mode (near 90+): prefer energetic, hype-heavy, playful, or mildly chaotic participation when it fits the room, including more chatter-like inserts."
+          "Very high/noisier mode (near 90+): you can participate more proactively, including exploratory social inserts, while keeping claims grounded."
         );
       } else {
         parts.push(
-          "High eagerness mode: you can interject more often and be more hype-forward, while still checking for basic conversational flow."
+          "High eagerness mode: you can interject more often when it clearly advances the conversation, while still checking flow."
         );
       }
     } else {
@@ -436,7 +450,7 @@ export function buildReplyPrompt({
       } else {
         parts.push("In initiative channels, use balanced judgment and keep momentum without forcing it.");
       }
-      parts.push("Short acknowledgements, playful riffs, or mood-setting lines are fine when they fit naturally.");
+      parts.push("Short acknowledgements or exploratory riffs are fine when they fit naturally.");
       parts.push("If this would derail, interrupt, or repeat what was just said, output exactly [SKIP].");
       parts.push("Decide if replying improves the channel flow right now.");
     } else {
@@ -467,6 +481,7 @@ export function buildReplyPrompt({
   }
   parts.push("If a reaction is useful, set reactionEmoji to exactly one allowed emoji. Otherwise set reactionEmoji to null.");
 
+  parts.push("=== VOICE CONTROL ===");
   const voiceEnabled = Boolean(voiceMode?.enabled);
   const inVoiceChannel = voiceEnabled && Boolean(voiceMode?.activeSession);
   const voiceParticipantRoster = Array.isArray(voiceMode?.participantRoster) ? voiceMode.participantRoster : [];
@@ -491,7 +506,7 @@ export function buildReplyPrompt({
       "For explicit VC join commands aimed at you, set voiceIntent.confidence to at least 0.9 and do not leave voiceIntent as none."
     );
     parts.push(
-      "Do not output playful text-only deflection for explicit VC join commands; route through voiceIntent."
+      "Do not output text-only deflection for explicit VC join commands; route through voiceIntent."
     );
     parts.push(
       "Use conversational continuity: follow-up VC control requests can still be aimed at you even if the user does not repeat your name."
@@ -566,6 +581,8 @@ export function buildReplyPrompt({
     parts.push("Set voiceIntent.intent to none.");
   }
 
+  parts.push("=== SCREEN SHARE ===");
+
   const screenShareStatus = String(screenShare?.status || "disabled").trim().toLowerCase() || "disabled";
   const screenShareEnabled = Boolean(screenShare?.enabled);
   const screenShareAvailable =
@@ -599,6 +616,8 @@ export function buildReplyPrompt({
     parts.push("Set screenShareIntent.action to none.");
   }
 
+  parts.push("=== AUTOMATION ===");
+
   if (allowAutomationDirective) {
     const tzLabel = String(automationTimeZoneLabel || "").trim() || "local server time";
     parts.push(`Automations are available for this guild. Scheduler timezone: ${tzLabel}.`);
@@ -615,6 +634,8 @@ export function buildReplyPrompt({
     parts.push("If user asks to see what is scheduled, set automationAction.operation=list.");
     parts.push("When no automation control is requested, set automationAction.operation=none.");
   }
+
+  parts.push("=== WEB SEARCH ===");
 
   if (allowWebSearchDirective) {
     if (webSearch?.optedOutByUser) {
@@ -642,6 +663,8 @@ export function buildReplyPrompt({
       parts.push("Use webSearchQuery only when needed and keep it under 220 characters.");
     }
   }
+
+  parts.push("=== MEMORY LOOKUP ===");
 
   if (allowMemoryLookupDirective) {
     if (!memoryLookup?.enabled) {
@@ -676,6 +699,8 @@ export function buildReplyPrompt({
       parts.push("Do not claim you cannot review earlier shared images when history lookup is available.");
     }
   }
+
+  parts.push("=== WEB SEARCH RESULTS ===");
 
   if (webSearch?.requested && !webSearch.used) {
     if (webSearch.optedOutByUser) {
@@ -712,6 +737,8 @@ export function buildReplyPrompt({
     parts.push("If citations are not needed, answer naturally without citation clutter.");
   }
 
+  parts.push("=== VIDEO CONTEXT ===");
+
   if (videoContext?.requested && !videoContext.used) {
     if (!videoContext.enabled) {
       parts.push("Video link understanding capability exists but is currently unavailable (disabled in settings).");
@@ -733,6 +760,8 @@ export function buildReplyPrompt({
     parts.push("If you reference video details, cite source IDs inline like [V1] or [V2].");
     parts.push("Treat transcripts and keyframes as partial context. Avoid overclaiming what happened in the full video.");
   }
+
+  parts.push("=== MEDIA GENERATION ===");
 
   const remainingImages = Math.max(0, Math.floor(Number(remainingReplyImages) || 0));
   const remainingVideos = Math.max(0, Math.floor(Number(remainingReplyVideos) || 0));
@@ -765,6 +794,7 @@ export function buildReplyPrompt({
     parts.push("Set media to null.");
   }
 
+  parts.push("=== GIFS ===");
   const remainingGifs = Math.max(0, Math.floor(Number(remainingReplyGifs) || 0));
   if (allowReplyGifs && remainingGifs > 0) {
     parts.push(`Reply GIF lookup is available (${remainingGifs} GIF lookup(s) left in the rolling 24h budget).`);
@@ -785,6 +815,8 @@ export function buildReplyPrompt({
     parts.push("Set at most one media object for this reply.");
   }
 
+  parts.push("=== MEMORY SAVING ===");
+
   if (allowMemoryDirective) {
     parts.push("If the incoming message contains durable info worth keeping, set memoryLine to a concise fact.");
     parts.push(
@@ -798,12 +830,13 @@ export function buildReplyPrompt({
     parts.push("Keep selfMemoryLine concise (under 180 chars), concrete, and grounded in your reply text.");
   }
 
-  parts.push("Task: write one natural Discord reply to the incoming message.");
+  parts.push("=== OUTPUT FORMAT ===");
+  parts.push("Task: write one natural Discord reply for this turn.");
+  parts.push("If recent messages are one coherent thread, you may combine and answer multiple messages in one reply.");
+  parts.push("If recent messages are unrelated, prioritize the latest message and keep the reply focused.");
   parts.push("Return strict JSON only. Do not output markdown or code fences.");
   parts.push("JSON format:");
-  parts.push(
-    "{\"text\":\"reply or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"openArticleRef\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"soundboardRefs\":[],\"leaveVoiceChannel\":false,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null,\"query\":null,\"platform\":null,\"searchResults\":null,\"selectedResultId\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
-    );
+  parts.push(REPLY_JSON_SCHEMA);
   parts.push("Set skip=true only when no response should be sent. If skip=true, set text to [SKIP].");
   parts.push("When no reaction is needed, set reactionEmoji to null.");
   parts.push("When no media should be generated, set media to null.");
@@ -851,22 +884,23 @@ export function buildAutomationPrompt({
     .trim()
     .slice(0, 360);
 
+  parts.push("=== AUTOMATION TASK ===");
   parts.push("You are executing a scheduled automation task.");
   parts.push(`Target channel: #${String(channelName || "channel").trim() || "channel"}.`);
   parts.push(`Task instruction: ${taskInstruction || "(missing instruction)"}`);
   parts.push("Keep the output in normal persona voice. No robotic framing.");
-  parts.push("Recent channel context:");
+  parts.push("=== RECENT MESSAGES ===");
   parts.push(formatRecentChat(recentMessages));
   if (relevantMessages?.length) {
-    parts.push("Relevant past messages:");
+    parts.push("=== RELEVANT PAST MESSAGES ===");
     parts.push(formatRecentChat(relevantMessages));
   }
   if (userFacts?.length) {
-    parts.push("Known facts about the automation owner:");
+    parts.push("=== USER FACTS ===");
     parts.push(formatMemoryFacts(userFacts, { includeType: false, includeProvenance: true, maxItems: 8 }));
   }
   if (relevantFacts?.length) {
-    parts.push("Relevant durable memory:");
+    parts.push("=== DURABLE MEMORY ===");
     parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: true, maxItems: 10 }));
   }
   if (memoryLookup?.requested) {
@@ -894,6 +928,8 @@ export function buildAutomationPrompt({
   const videoSlots = Math.max(0, Math.floor(Number(remainingVideos) || 0));
   const gifSlots = Math.max(0, Math.floor(Number(remainingGifs) || 0));
 
+  parts.push("=== MEDIA GENERATION ===");
+
   if ((allowSimpleImagePosts || allowComplexImagePosts || allowVideoPosts) && (imageSlots > 0 || videoSlots > 0)) {
     parts.push("Media generation is available for this automation run.");
     if (allowSimpleImagePosts && imageSlots > 0) {
@@ -915,11 +951,10 @@ export function buildAutomationPrompt({
     parts.push("GIF lookup is available this run. Use media {\"type\":\"gif\",\"prompt\":\"short query\"} when it helps.");
   }
 
+  parts.push("=== OUTPUT FORMAT ===");
   parts.push("Return strict JSON only.");
   parts.push("JSON format:");
-  parts.push(
-    "{\"text\":\"message or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"openArticleRef\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"soundboardRefs\":[],\"leaveVoiceChannel\":false,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null,\"query\":null,\"platform\":null,\"searchResults\":null,\"selectedResultId\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null}}"
-    );
+  parts.push(REPLY_JSON_SCHEMA);
   parts.push("Set webSearchQuery, imageLookupQuery, openArticleRef, memoryLine, and selfMemoryLine to null.");
   parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false.");
   if (allowMemoryLookupDirective) {
@@ -1537,7 +1572,7 @@ export function buildInitiativePrompt({
   }
 
   parts.push("Task: write one standalone Discord message that feels timely and human.");
-  parts.push("Keep it playful, non-spammy, and slightly surprising.");
+  parts.push("Keep it open, honest, non-spammy, and slightly surprising.");
   parts.push("If there is genuinely nothing good to post, output exactly [SKIP].");
 
   return parts.join("\n\n");

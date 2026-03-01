@@ -28,7 +28,7 @@ function createSettings(overrides = {}) {
         brainContextMinIntervalSeconds: 4,
         brainContextMaxEntries: 8,
         brainContextPrompt:
-          "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or casual shout-out commentary."
+          "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or observational shout-out commentary."
       }
     }
   };

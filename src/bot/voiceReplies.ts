@@ -1,6 +1,7 @@
 import { buildSystemPrompt, buildVoiceTurnPrompt } from "../prompts.ts";
 import {
   buildHardLimitsSection,
+  DEFAULT_PROMPT_VOICE_OPERATIONAL_GUIDANCE,
   getPromptBotName,
   getPromptCapabilityHonestyLine,
   getPromptVoiceOperationalGuidance,
@@ -198,16 +199,14 @@ export async function composeVoiceOperationalMessage(runtime, {
     relevantFacts: operationalMemoryFacts,
     maxItems: 6
   });
-  const operationalGuidance = getPromptVoiceOperationalGuidance(settings, [
-    "Keep it chill and simple. No overexplaining.",
-    "Clearly state what happened and why, especially when a request is blocked.",
-    "If relevant, mention required permissions/settings plainly.",
-    "Avoid dramatic wording, blame, apology spirals, and long postmortems."
-  ]);
+  const operationalGuidance = getPromptVoiceOperationalGuidance(
+    settings,
+    DEFAULT_PROMPT_VOICE_OPERATIONAL_GUIDANCE
+  );
 
   const systemPrompt = [
     `You are ${getPromptBotName(settings)}, a Discord regular posting a voice-mode update.`,
-    `Style: ${getPromptStyle(settings, "laid-back, concise, low-drama chat tone")}.`,
+    `Style: ${getPromptStyle(settings)}.`,
     allowSkip
       ? "Write one short user-facing message for the text channel only if it's actually helpful."
       : "Write exactly one short user-facing message for the text channel.",

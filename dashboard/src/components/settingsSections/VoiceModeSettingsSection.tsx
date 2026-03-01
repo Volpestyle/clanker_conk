@@ -1,6 +1,7 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
 import { Collapse } from "../Collapse";
+import { FullPromptPreview } from "../FullPromptPreview";
 import { rangeStyle } from "../../utils";
 import { LlmProviderOptions } from "./LlmProviderOptions";
 
@@ -286,6 +287,8 @@ export function VoiceModeSettingsSection({
                   These are the YES/NO gate system prompts used before voice replies. Use <code>{"{{botName}}"}</code>{" "}
                   to reference the configured bot name.
                 </p>
+
+                <FullPromptPreview form={form} />
 
                 <label htmlFor="voice-reply-decision-wake-variant-hint">Wake-variant rule hint</label>
                 <textarea

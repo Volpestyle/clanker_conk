@@ -1,4 +1,10 @@
 import {
+  DEFAULT_PROMPT_IMPOSSIBLE_ACTION_LINE,
+  DEFAULT_PROMPT_STYLE,
+  DEFAULT_PROMPT_TEXT_GUIDANCE,
+  DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT,
+  DEFAULT_PROMPT_VOICE_OPERATIONAL_GUIDANCE,
+  DEFAULT_PROMPT_VOICE_GUIDANCE,
   VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
   VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
 } from "../promptCore.ts";
@@ -14,7 +20,7 @@ export const DEFAULT_SETTINGS = {
   botName: "clanker conk",
   botNameAliases: [],
   persona: {
-    flavor: "playful, chaotic-good, slangy Gen Z/Gen A energy without being toxic",
+    flavor: DEFAULT_PROMPT_STYLE,
     hardLimits: [
       "Cannot play non-text games.",
       "Cannot perform real-world actions.",
@@ -23,30 +29,21 @@ export const DEFAULT_SETTINGS = {
   },
   prompt: {
     capabilityHonestyLine: "Never claim capabilities you do not have.",
-    impossibleActionLine: "If asked to do something impossible, say it casually and suggest a text-only alternative.",
+    impossibleActionLine: DEFAULT_PROMPT_IMPOSSIBLE_ACTION_LINE,
     memoryEnabledLine:
       "You have persistent memory across conversations via saved durable facts and logs. Do not claim each conversation starts from zero.",
     memoryDisabledLine:
       "Persistent memory is disabled right now. Do not claim long-term memory across separate conversations.",
     skipLine: "If you should not send a message, output exactly [SKIP].",
-    textGuidance: [
-      "Write like a person in chat, not like an assistant.",
-      "Use occasional slang naturally (not every sentence).",
-      "You're chill, but eager to be helpful whenever it makes sense.",
-      "Default to short messages but go longer when the conversation calls for it.",
-      "Use server emoji tokens in text only when necessary and when they enhance the message."
-    ],
+    textGuidance: [...DEFAULT_PROMPT_TEXT_GUIDANCE],
     voiceGuidance: [
-      "If the frame appears to be gameplay, react like live play-by-play with energy and specific on-screen details.",
-      "If the frame is not gameplay, give casual shout-outs and observational commentary about what the streamer is watching.",
+      ...DEFAULT_PROMPT_VOICE_GUIDANCE,
+      "If the frame appears to be gameplay, react like live play-by-play with specific on-screen details.",
+      "If the frame is not gameplay, give observational commentary about what the streamer is watching.",
       "Only describe what is visible right now; if uncertain, say that plainly."
     ],
-    voiceOperationalGuidance: [
-      "Keep it chill and simple. No overexplaining.",
-      "Clearly state what happened and why, especially when a request is blocked.",
-      "If relevant, mention required permissions/settings plainly.",
-      "Avoid dramatic wording, blame, apology spirals, and long postmortems."
-    ],
+    voiceOperationalGuidance: [...DEFAULT_PROMPT_VOICE_OPERATIONAL_GUIDANCE],
+    voiceLookupBusySystemPrompt: DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT,
     mediaPromptCraftGuidance: [
       "Write media prompts as vivid scene descriptions, not abstract concepts.",
       "Include: subject/action, visual style or medium (photo, illustration, 3D render, pixel art, etc.), lighting/mood, camera angle or framing, and color palette when relevant.",
@@ -67,7 +64,7 @@ export const DEFAULT_SETTINGS = {
     provider: "anthropic",
     model: "claude-haiku-4-5",
     temperature: 0.9,
-    maxOutputTokens: 220,
+    maxOutputTokens: 1500,
     pricing: {}
   },
   replyFollowupLlm: {
@@ -187,7 +184,7 @@ export const DEFAULT_SETTINGS = {
       brainContextMinIntervalSeconds: 4,
       brainContextMaxEntries: 8,
       brainContextPrompt:
-        "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or casual shout-out commentary."
+        "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or observational shout-out commentary."
     },
     soundboard: {
       enabled: true,

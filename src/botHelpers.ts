@@ -8,6 +8,9 @@ const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
 const IMAGE_PROMPT_DIRECTIVE_RE = /\[\[IMAGE_PROMPT:\s*([^\]]*?)\s*\]\]\s*$/i;
 const COMPLEX_IMAGE_PROMPT_DIRECTIVE_RE = /\[\[COMPLEX_IMAGE_PROMPT:\s*([^\]]*?)\s*\]\]\s*$/i;
 const VIDEO_PROMPT_DIRECTIVE_RE = /\[\[VIDEO_PROMPT:\s*([^\]]*?)\s*\]\]\s*$/i;
+const STRUCTURED_REPLY_CODE_FENCE_OPEN_RE = /^```(?:json)?\s*/i;
+const STRUCTURED_REPLY_TEXT_FIELD_RE = /"text"\s*:\s*"((?:\\.|[^"\\])*)"/s;
+const STRUCTURED_REPLY_SKIP_TRUE_RE = /"skip"\s*:\s*true\b/i;
 const WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
 const DEFAULT_MAX_MEDIA_PROMPT_LEN = 900;
 const MAX_MEDIA_PROMPT_FLOOR = 120;
@@ -462,7 +465,7 @@ export function composeInitiativeImagePrompt(
 
   return [
     "Create a vivid, shareable image for a Discord post.",
-    `Scene: ${requested || "a timely playful internet moment"}.`,
+    `Scene: ${requested || topic || "general chat mood"}.`,
     `Mood/topic context (do not render as text): ${topic || "general chat mood"}.`,
     memoryHints || null,
     "Style guidance:",
@@ -497,7 +500,7 @@ export function composeInitiativeVideoPrompt(
 
   return [
     "Create a short, dynamic, shareable video clip for a Discord post.",
-    `Scene: ${requested || "a timely playful internet moment"}.`,
+    `Scene: ${requested || topic || "general chat mood"}.`,
     `Mood/topic context (do not render as text): ${topic || "general chat mood"}.`,
     memoryHints || null,
     "Style guidance:",
@@ -559,8 +562,8 @@ export function composeReplyImagePrompt(
 
   return [
     "Create a vivid image to accompany a Discord chat reply.",
-    `Scene: ${requested || "a playful visual reaction"}.`,
-    `Conversational context (do not render as text): ${context || "casual chat"}.`,
+    `Scene: ${requested || context || "chat reaction"}.`,
+    `Conversational context (do not render as text): ${context || "chat context"}.`,
     memoryHints || null,
     "Style guidance:",
     "- Describe a concrete scene with a clear subject, action, and setting.",
@@ -591,8 +594,8 @@ export function composeReplyVideoPrompt(
 
   return [
     "Create a short, dynamic video clip to accompany a Discord chat reply.",
-    `Scene: ${requested || "a playful visual reaction with motion"}.`,
-    `Conversational context (do not render as text): ${context || "casual chat"}.`,
+    `Scene: ${requested || context || "chat reaction"}.`,
+    `Conversational context (do not render as text): ${context || "chat context"}.`,
     memoryHints || null,
     "Style guidance:",
     "- Describe a concrete motion arc: what starts, what changes, how it ends.",
@@ -666,8 +669,9 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
   const fallbackText = String(rawText || "").trim();
   const parsed = extractJsonObjectFromText(fallbackText);
   if (!parsed) {
+    const recoveredText = recoverStructuredReplyText(fallbackText);
     return {
-      text: fallbackText,
+      text: recoveredText || fallbackText,
       imagePrompt: null,
       complexImagePrompt: null,
       videoPrompt: null,
@@ -743,6 +747,42 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     screenShareIntent,
     voiceAddressing
   };
+}
+
+function recoverStructuredReplyText(rawText) {
+  const candidate = stripStructuredReplyCodeFence(rawText);
+  if (!candidate) return null;
+  if (STRUCTURED_REPLY_SKIP_TRUE_RE.test(candidate)) return "[SKIP]";
+  const textMatch = candidate.match(STRUCTURED_REPLY_TEXT_FIELD_RE);
+  if (!textMatch) return null;
+  const decoded = decodeJsonStringField(textMatch[1]);
+  return normalizeDirectiveText(decoded, MAX_REPLY_TEXT_LEN) || null;
+}
+
+function stripStructuredReplyCodeFence(rawText) {
+  const raw = String(rawText || "").trim();
+  if (!raw) return "";
+  if (!STRUCTURED_REPLY_CODE_FENCE_OPEN_RE.test(raw)) return raw;
+  const withoutOpenFence = raw.replace(STRUCTURED_REPLY_CODE_FENCE_OPEN_RE, "");
+  const closingFenceIndex = withoutOpenFence.lastIndexOf("```");
+  if (closingFenceIndex < 0) return withoutOpenFence.trim();
+  return withoutOpenFence.slice(0, closingFenceIndex).trim();
+}
+
+function decodeJsonStringField(rawValue) {
+  const encoded = String(rawValue || "");
+  if (!encoded) return "";
+  try {
+    const decoded = JSON.parse(`"${encoded}"`);
+    return typeof decoded === "string" ? decoded : encoded;
+  } catch {
+    return encoded
+      .replace(/\\n/g, "\n")
+      .replace(/\\r/g, "\r")
+      .replace(/\\t/g, "\t")
+      .replace(/\\"/g, "\"")
+      .replace(/\\\\/g, "\\");
+  }
 }
 
 function normalizeStructuredMediaDirective(rawMedia, maxLen = DEFAULT_MAX_MEDIA_PROMPT_LEN) {
