@@ -13,6 +13,72 @@ const TRUNCATED_VALUE = "[TRUNCATED]";
 const SENSITIVE_KEY_PATTERN =
   /(api[-_]?key|token|secret|authorization|password|cookie|session|bearer|private[-_]?key)/i;
 
+// ── ANSI helpers ───────────────────────────────────────────────────────
+const RESET = "\x1b[0m";
+const BOLD = "\x1b[1m";
+const DIM = "\x1b[2m";
+const RED = "\x1b[31m";
+const GREEN = "\x1b[32m";
+const YELLOW = "\x1b[33m";
+const CYAN = "\x1b[36m";
+const MAGENTA = "\x1b[35m";
+const WHITE = "\x1b[37m";
+const BG_RED = "\x1b[41m";
+const BG_GREEN = "\x1b[42m";
+const BG_CYAN = "\x1b[46m";
+const BG_MAGENTA = "\x1b[45m";
+const BG_YELLOW = "\x1b[43m";
+const BG_BLUE = "\x1b[44m";
+const BLACK = "\x1b[30m";
+
+const AGENT_STYLES = {
+  voice: { bg: BG_CYAN, fg: BLACK },
+  bot: { bg: BG_GREEN, fg: BLACK },
+  memory: { bg: BG_MAGENTA, fg: BLACK },
+  automation: { bg: BG_YELLOW, fg: BLACK },
+  initiative: { bg: BG_BLUE, fg: WHITE },
+  runtime: { bg: `\x1b[100m`, fg: WHITE } // bright-black bg
+};
+
+function formatAgentBadge(agent) {
+  const style = AGENT_STYLES[agent] || AGENT_STYLES.runtime;
+  const label = ` ${(agent || "runtime").padEnd(10)} `;
+  return `${style.bg}${style.fg}${BOLD}${label}${RESET}`;
+}
+
+function formatMetadataInline(metadata) {
+  if (!metadata || typeof metadata !== "object") return "";
+  const entries = Object.entries(metadata);
+  if (entries.length === 0) return "";
+  const parts = [];
+  for (const [k, v] of entries) {
+    if (v === null || v === undefined) continue;
+    const val = typeof v === "object" ? JSON.stringify(v) : String(v);
+    if (val.length > 80) continue; // skip bulky values
+    parts.push(`${DIM}${k}${RESET}${DIM}=${RESET}${val}`);
+  }
+  return parts.length > 0 ? `  ${parts.join("  ")}` : "";
+}
+
+function formatPrettyLine(payload) {
+  const time = (payload.ts || "").slice(11, 19); // HH:MM:SS
+  const isError = payload.level === "error";
+
+  const timePart = `${DIM}${time}${RESET}`;
+  const agentPart = formatAgentBadge(payload.agent);
+  const eventText = payload.event || payload.kind || "?";
+  const eventPart = isError
+    ? `${BG_RED}${WHITE}${BOLD} ${eventText} ${RESET}`
+    : `${BOLD}${WHITE}${eventText}${RESET}`;
+  const metaPart = formatMetadataInline(payload.metadata);
+  const costPart =
+    payload.usd_cost > 0
+      ? `  ${YELLOW}$${payload.usd_cost.toFixed(4)}${RESET}`
+      : "";
+
+  return `${timePart} ${agentPart} ${eventPart}${metaPart}${costPart}\n`;
+}
+
 function truncateString(value, maxLength = MAX_STRING_LENGTH) {
   const text = String(value ?? "");
   if (!text) return "";
@@ -234,7 +300,7 @@ export class RuntimeActionLogger {
 
     if (this.writeToStdout) {
       try {
-        process.stdout.write(line);
+        process.stdout.write(formatPrettyLine(payload));
       } catch {
         // stdout failures should not interrupt runtime behavior
       }
