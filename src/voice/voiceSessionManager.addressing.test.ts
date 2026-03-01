@@ -96,7 +96,7 @@ test("reply decider skips llm for low-signal unaddressed fragments", async () =>
     },
     userId: "speaker-1",
     settings: baseSettings(),
-    transcript: "yo"
+    transcript: "hmm"
   });
 
   assert.equal(decision.allow, false);
@@ -201,7 +201,7 @@ test("reply decider blocks low-signal fragments even from recently direct-addres
     },
     userId: "speaker-1",
     settings: baseSettings(),
-    transcript: "Ha!"
+    transcript: "hmm"
   });
 
   assert.equal(decision.allow, false);
@@ -1018,6 +1018,7 @@ test("reply decider keeps bot awake across speakers after a recent direct addres
       mode: "openai_realtime",
       botTurnOpen: false,
       lastInboundAudioAt: Date.now() - 320,
+      lastAudioDeltaAt: Date.now() - 2_000,
       lastDirectAddressAt: Date.now() - 3_000,
       lastDirectAddressUserId: "speaker-2"
     },
@@ -2528,6 +2529,138 @@ test("runRealtimeBrainReply ignores near-silent queued turns for supersede check
   );
   assert.equal(Boolean(supersededLog), false);
   assert.equal(session.realtimeReplySupersededCount, 0);
+});
+
+test("runRealtimeBrainReply does not supersede stale playback on active capture alone", async () => {
+  const runtimeLogs = [];
+  let requestedRealtimeUtterances = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
+  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = () => {
+    requestedRealtimeUtterances += 1;
+    return true;
+  };
+  manager.generateVoiceTurn = async () => ({
+    text: "old reply should not play"
+  });
+
+  const session = {
+    id: "session-realtime-supersede-active-capture-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 8_000,
+    realtimeClient: {},
+    realtimeInputSampleRateHz: 24_000,
+    userCaptures: new Map([
+      [
+        "speaker-2",
+        {
+          startedAt: Date.now() - 320,
+          bytesSent: 4800,
+          signalSampleCount: 2400,
+          signalActiveSampleCount: 1800,
+          signalPeakAbs: 12000
+        }
+      ]
+    ]),
+    pendingRealtimeTurns: [],
+    realtimeReplySupersededCount: 0,
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "older transcript",
+    directAddressed: false,
+    source: "realtime"
+  });
+
+  assert.equal(result, true);
+  assert.equal(requestedRealtimeUtterances, 1);
+  const supersededLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "realtime_reply_superseded_newer_input"
+  );
+  assert.equal(Boolean(supersededLog), false);
+  assert.equal(session.realtimeReplySupersededCount, 0);
+});
+
+test("runRealtimeBrainReply supersedes stale playback when a newer finalized realtime turn is queued", async () => {
+  const runtimeLogs = [];
+  let requestedRealtimeUtterances = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
+  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = () => {
+    requestedRealtimeUtterances += 1;
+    return true;
+  };
+  manager.generateVoiceTurn = async (_payload) => {
+    session.pendingRealtimeTurns.push({
+      session: null,
+      userId: "speaker-2",
+      pcmBuffer: Buffer.alloc(6_000, 0x7f),
+      captureReason: "stream_end",
+      queuedAt: Date.now(),
+      finalizedAt: Date.now() + 5
+    });
+    return {
+      text: "old reply should be superseded"
+    };
+  };
+
+  const session = {
+    id: "session-realtime-supersede-finalized-turn-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 8_000,
+    realtimeClient: {},
+    realtimeInputSampleRateHz: 24_000,
+    userCaptures: new Map(),
+    pendingRealtimeTurns: [],
+    realtimeReplySupersededCount: 0,
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "older transcript",
+    directAddressed: false,
+    source: "realtime"
+  });
+
+  assert.equal(result, false);
+  assert.equal(requestedRealtimeUtterances, 0);
+  const supersededLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "realtime_reply_superseded_newer_input"
+  );
+  assert.equal(Boolean(supersededLog), true);
+  assert.equal(supersededLog?.metadata?.supersedeReason, "newer_finalized_realtime_turn");
+  assert.equal(session.realtimeReplySupersededCount, 1);
 });
 
 test("runRealtimeBrainReply ends VC when model requests leave directive", async () => {

@@ -3294,15 +3294,10 @@ export class VoiceSessionManager {
         session.pendingRealtimeInputBytes = 0;
       }
       const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-      const useNativeRealtimeReply = this.shouldUseNativeRealtimeReply({
-        session,
-        settings: resolvedSettings
-      });
       if (
         transcriptSource === "output" &&
         transcriptForLogs &&
-        finalTranscriptEvent &&
-        useNativeRealtimeReply
+        finalTranscriptEvent
       ) {
         this.recordVoiceTurn(session, {
           role: "assistant",
@@ -5034,6 +5029,116 @@ export class VoiceSessionManager {
     };
   }
 
+  summarizeRealtimeInterruptingQueue({
+    session = null,
+    finalizedAfterMs = 0
+  } = {}) {
+    const pendingQueue = Array.isArray(session?.pendingRealtimeTurns) ? session.pendingRealtimeTurns : [];
+    if (!pendingQueue.length) {
+      return {
+        pendingInterruptingQueueDepth: 0,
+        pendingNearSilentQueueDepth: 0,
+        totalPendingRealtimeQueueDepth: 0,
+        consideredPendingRealtimeQueueDepth: 0,
+        oldestConsideredFinalizedAt: null,
+        newestConsideredFinalizedAt: null
+      };
+    }
+
+    const finalizedAfter = Math.max(0, Number(finalizedAfterMs || 0));
+    const sampleRateHz = Number(session?.realtimeInputSampleRateHz) || 24000;
+    let pendingInterruptingQueueDepth = 0;
+    let pendingNearSilentQueueDepth = 0;
+    let consideredPendingRealtimeQueueDepth = 0;
+    let oldestConsideredFinalizedAt = Number.POSITIVE_INFINITY;
+    let newestConsideredFinalizedAt = 0;
+
+    for (const queuedTurn of pendingQueue) {
+      const turnFinalizedAt = Math.max(0, Number(queuedTurn?.finalizedAt || 0));
+      if (finalizedAfter > 0 && turnFinalizedAt > 0 && turnFinalizedAt <= finalizedAfter) {
+        continue;
+      }
+      const pcmBuffer = Buffer.isBuffer(queuedTurn?.pcmBuffer) ? queuedTurn.pcmBuffer : null;
+      if (!pcmBuffer?.length) continue;
+      consideredPendingRealtimeQueueDepth += 1;
+      if (turnFinalizedAt > 0) {
+        if (turnFinalizedAt < oldestConsideredFinalizedAt) {
+          oldestConsideredFinalizedAt = turnFinalizedAt;
+        }
+        if (turnFinalizedAt > newestConsideredFinalizedAt) {
+          newestConsideredFinalizedAt = turnFinalizedAt;
+        }
+      }
+      const clipDurationMs = this.estimatePcm16MonoDurationMs(pcmBuffer.length, sampleRateHz);
+      if (clipDurationMs < VOICE_TURN_MIN_ASR_CLIP_MS) continue;
+      const silenceGate = this.evaluatePcmSilenceGate({
+        pcmBuffer,
+        sampleRateHz
+      });
+      if (silenceGate.drop) {
+        pendingNearSilentQueueDepth += 1;
+        continue;
+      }
+      pendingInterruptingQueueDepth += 1;
+    }
+
+    return {
+      pendingInterruptingQueueDepth,
+      pendingNearSilentQueueDepth,
+      totalPendingRealtimeQueueDepth: pendingQueue.length,
+      consideredPendingRealtimeQueueDepth,
+      oldestConsideredFinalizedAt: Number.isFinite(oldestConsideredFinalizedAt)
+        ? Math.max(0, Math.round(oldestConsideredFinalizedAt))
+        : null,
+      newestConsideredFinalizedAt: newestConsideredFinalizedAt > 0
+        ? Math.max(0, Math.round(newestConsideredFinalizedAt))
+        : null
+    };
+  }
+
+  maybeSupersedeRealtimeReplyBeforePlayback({
+    session = null,
+    source = "voice_reply",
+    speechStep = 0,
+    generationStartedAtMs = 0
+  } = {}) {
+    if (!session || session.ending) return false;
+    if (!isRealtimeMode(session.mode)) return false;
+    const generationStartedAt = Math.max(0, Number(generationStartedAtMs || 0));
+    const pendingSummary = this.summarizeRealtimeInterruptingQueue({
+      session,
+      finalizedAfterMs: generationStartedAt
+    });
+    const hasInterruptingNewerInput = pendingSummary.pendingInterruptingQueueDepth > 0;
+    if (!hasInterruptingNewerInput) return false;
+
+    session.realtimeReplySupersededCount =
+      Math.max(0, Number(session.realtimeReplySupersededCount || 0)) + 1;
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.client.user?.id || null,
+      content: "realtime_reply_superseded_newer_input",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "voice_reply"),
+        supersedeReason: "newer_finalized_realtime_turn",
+        generationStartedAt: generationStartedAt > 0 ? generationStartedAt : null,
+        pendingRealtimeQueueDepth: pendingSummary.pendingInterruptingQueueDepth,
+        totalPendingRealtimeQueueDepth: pendingSummary.totalPendingRealtimeQueueDepth,
+        consideredPendingRealtimeQueueDepth: pendingSummary.consideredPendingRealtimeQueueDepth,
+        pendingNearSilentQueueDepth: pendingSummary.pendingNearSilentQueueDepth,
+        oldestConsideredFinalizedAt: pendingSummary.oldestConsideredFinalizedAt,
+        newestConsideredFinalizedAt: pendingSummary.newestConsideredFinalizedAt,
+        speechStep: Math.max(0, Number(speechStep || 0)),
+        supersededCount: Math.max(0, Number(session.realtimeReplySupersededCount || 0))
+      }
+    });
+    this.maybeClearActiveReplyInterruptionPolicy(session);
+    return true;
+  }
+
   async playVoiceReplyInOrder({
     session,
     settings,
@@ -5085,6 +5190,21 @@ export class VoiceSessionManager {
         speechStep += 1;
         const speechSource = `${String(source || "voice_reply")}:speech_${speechStep}`;
         if (preferRealtimeUtterance) {
+          if (
+            this.maybeSupersedeRealtimeReplyBeforePlayback({
+              session,
+              source: speechSource,
+              speechStep,
+              generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0)
+            })
+          ) {
+            return {
+              completed: false,
+              spokeLine,
+              requestedRealtimeUtterance,
+              playedSoundboardCount
+            };
+          }
           const requested = this.requestRealtimeTextUtterance({
             session,
             text: segmentText,
@@ -5104,6 +5224,21 @@ export class VoiceSessionManager {
               });
             }
             continue;
+          }
+          if (
+            this.maybeSupersedeRealtimeReplyBeforePlayback({
+              session,
+              source: speechSource,
+              speechStep,
+              generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0)
+            })
+          ) {
+            return {
+              completed: false,
+              spokeLine,
+              requestedRealtimeUtterance,
+              playedSoundboardCount
+            };
           }
         }
         const spoke = await this.speakVoiceLineWithTts({
@@ -9245,7 +9380,7 @@ export class VoiceSessionManager {
       session.lastAudioDeltaAt = replyRequestedAt;
       session.lastAssistantReplyAt = replyRequestedAt;
     }
-    if (playbackPlan.spokenText) {
+    if (playbackPlan.spokenText && !requestedRealtimeUtterance) {
       this.recordVoiceTurn(session, {
         role: "assistant",
         userId: this.client.user?.id || null,
