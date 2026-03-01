@@ -303,22 +303,6 @@ export function VoiceModeSettingsSection({
                   onChange={set("voiceReplyDecisionSystemPromptCompact")}
                 />
 
-                <label htmlFor="voice-reply-decision-system-prompt-full">System prompt (full)</label>
-                <textarea
-                  id="voice-reply-decision-system-prompt-full"
-                  rows={8}
-                  value={form.voiceReplyDecisionSystemPromptFull}
-                  onChange={set("voiceReplyDecisionSystemPromptFull")}
-                />
-
-                <label htmlFor="voice-reply-decision-system-prompt-strict">System prompt (strict retry)</label>
-                <textarea
-                  id="voice-reply-decision-system-prompt-strict"
-                  rows={5}
-                  value={form.voiceReplyDecisionSystemPromptStrict}
-                  onChange={set("voiceReplyDecisionSystemPromptStrict")}
-                />
-
                 <button
                   type="button"
                   className="sm"

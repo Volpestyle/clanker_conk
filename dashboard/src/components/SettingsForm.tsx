@@ -229,9 +229,7 @@ export default function SettingsForm({
     setForm((current) => ({
       ...current,
       voiceReplyDecisionWakeVariantHint: defaultForm.voiceReplyDecisionWakeVariantHint,
-      voiceReplyDecisionSystemPromptCompact: defaultForm.voiceReplyDecisionSystemPromptCompact,
-      voiceReplyDecisionSystemPromptFull: defaultForm.voiceReplyDecisionSystemPromptFull,
-      voiceReplyDecisionSystemPromptStrict: defaultForm.voiceReplyDecisionSystemPromptStrict
+      voiceReplyDecisionSystemPromptCompact: defaultForm.voiceReplyDecisionSystemPromptCompact
     }));
   }
 

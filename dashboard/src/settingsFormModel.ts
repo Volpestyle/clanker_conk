@@ -177,12 +177,6 @@ export function settingsToForm(settings) {
     voiceReplyDecisionSystemPromptCompact:
       settings?.voice?.replyDecisionLlm?.prompts?.systemPromptCompact ??
       defaultVoice.replyDecisionLlm?.prompts?.systemPromptCompact,
-    voiceReplyDecisionSystemPromptFull:
-      settings?.voice?.replyDecisionLlm?.prompts?.systemPromptFull ??
-      defaultVoice.replyDecisionLlm?.prompts?.systemPromptFull,
-    voiceReplyDecisionSystemPromptStrict:
-      settings?.voice?.replyDecisionLlm?.prompts?.systemPromptStrict ??
-      defaultVoice.replyDecisionLlm?.prompts?.systemPromptStrict,
     voiceGenerationLlmUseTextModel:
       settings?.voice?.generationLlm?.useTextModel ?? defaultVoiceGenerationLlm.useTextModel,
     voiceGenerationLlmProvider:
@@ -391,9 +385,7 @@ export function formToSettingsPatch(form) {
         model: String(form.voiceReplyDecisionLlmModel || "").trim(),
         prompts: {
           wakeVariantHint: String(form.voiceReplyDecisionWakeVariantHint || "").trim(),
-          systemPromptCompact: String(form.voiceReplyDecisionSystemPromptCompact || "").trim(),
-          systemPromptFull: String(form.voiceReplyDecisionSystemPromptFull || "").trim(),
-          systemPromptStrict: String(form.voiceReplyDecisionSystemPromptStrict || "").trim()
+          systemPromptCompact: String(form.voiceReplyDecisionSystemPromptCompact || "").trim()
         }
       },
       generationLlm: {

@@ -231,8 +231,6 @@ test("formToSettingsPatch keeps stt pipeline voice generation and reply decider 
   form.voiceReplyDecisionLlmModel = "claude-haiku-4-5";
   form.voiceReplyDecisionWakeVariantHint = "wake hint {{botName}}";
   form.voiceReplyDecisionSystemPromptCompact = "compact {{botName}}";
-  form.voiceReplyDecisionSystemPromptFull = "full {{botName}}";
-  form.voiceReplyDecisionSystemPromptStrict = "strict {{botName}}";
   const patch = formToSettingsPatch(form);
   assert.equal(patch.voice.generationLlm.useTextModel, false);
   assert.equal(patch.voice.generationLlm.provider, "anthropic");
@@ -242,8 +240,6 @@ test("formToSettingsPatch keeps stt pipeline voice generation and reply decider 
   assert.equal(patch.voice.replyDecisionLlm.model, "claude-haiku-4-5");
   assert.equal(patch.voice.replyDecisionLlm.prompts.wakeVariantHint, "wake hint {{botName}}");
   assert.equal(patch.voice.replyDecisionLlm.prompts.systemPromptCompact, "compact {{botName}}");
-  assert.equal(patch.voice.replyDecisionLlm.prompts.systemPromptFull, "full {{botName}}");
-  assert.equal(patch.voice.replyDecisionLlm.prompts.systemPromptStrict, "strict {{botName}}");
 });
 
 test("settingsFormModel round-trips realtime reply strategy", () => {
