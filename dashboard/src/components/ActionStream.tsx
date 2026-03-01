@@ -125,6 +125,44 @@ function normalizeFollowupPrompts(value: unknown): string[] {
   return value.map((entry) => normalizePromptText(entry));
 }
 
+function ToolBadges({ metadata }: { metadata: unknown }) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const m = metadata as Record<string, unknown>;
+  const badges: { label: string; cls: string }[] = [];
+
+  const webSearchUsed = Boolean((m.webSearch as Record<string, unknown>)?.used);
+  const memoryUsed = Boolean(
+    (m.memory as Record<string, unknown>)?.saved ||
+    (m.memory as Record<string, unknown>)?.lookupUsed
+  );
+  const imageUsed = Boolean((m.imageLookup as Record<string, unknown>)?.used);
+  const gifUsed = Boolean((m.gif as Record<string, unknown>)?.used);
+  const videoUsed = Boolean((m.video as Record<string, unknown>)?.used);
+
+  const llm = (m.llm || {}) as Record<string, unknown>;
+
+  if (webSearchUsed) badges.push({ label: "Web Search", cls: "as-tool-badge-web" });
+  else if (llm.usedWebSearchFollowup) badges.push({ label: "Web Followup", cls: "as-tool-badge-web" });
+
+  if (memoryUsed) badges.push({ label: "Memory", cls: "as-tool-badge-memory" });
+  else if (llm.usedMemoryLookupFollowup) badges.push({ label: "Memory Followup", cls: "as-tool-badge-memory" });
+
+  if (imageUsed) badges.push({ label: "Image", cls: "as-tool-badge-image" });
+  else if (llm.usedImageLookupFollowup) badges.push({ label: "Image Followup", cls: "as-tool-badge-image" });
+
+  if (gifUsed) badges.push({ label: "GIF", cls: "as-tool-badge-gif" });
+  if (videoUsed) badges.push({ label: "Video", cls: "as-tool-badge-video" });
+
+  if (badges.length === 0) return null;
+  return (
+    <span className="as-tool-badges">
+      {badges.map((b) => (
+        <span key={b.label} className={`as-tool-badge ${b.cls}`}>{b.label}</span>
+      ))}
+    </span>
+  );
+}
+
 export default function ActionStream({ actions }) {
   const [filter, setFilter] = useState("all");
   const [expandedRowKey, setExpandedRowKey] = useState("");
@@ -337,7 +375,10 @@ export default function ActionStream({ actions }) {
                       )}
                     </td>
                     <td className="col-channel">{action.channel_id || "-"}</td>
-                    <td className="col-content">{String(action.content || "").slice(0, 180) || "-"}</td>
+                    <td className="col-content">
+                      {String(action.content || "").slice(0, 180) || "-"}
+                      <ToolBadges metadata={action.metadata} />
+                    </td>
                     <td className="col-cost">${Number(action.usd_cost || 0).toFixed(6)}</td>
                   </tr>
                   {isExpanded && (

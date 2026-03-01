@@ -342,6 +342,34 @@ td .kind-badge + .kind-badge {
   }
 }
 
+/* ---- TOOL BADGES ---- */
+
+.as-tool-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.as-tool-badge {
+  display: inline-block;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.as-tool-badge-web       { background: rgba(96, 165, 250, 0.12); color: #60a5fa; }
+.as-tool-badge-memory    { background: rgba(168, 130, 255, 0.12); color: #a882ff; }
+.as-tool-badge-image     { background: rgba(244, 114, 182, 0.12); color: #f472b6; }
+.as-tool-badge-gif       { background: rgba(251, 191, 36, 0.12); color: #fbbf24; }
+.as-tool-badge-video     { background: rgba(34, 211, 238, 0.12); color: #22d3ee; }
+.as-tool-badge-soundboard { background: rgba(251, 146, 60, 0.12); color: #fb923c; }
+
 @media (max-width: 640px) {
   .action-detail-grid {
     grid-template-columns: 1fr;

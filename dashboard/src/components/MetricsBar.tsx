@@ -44,6 +44,7 @@ export default function MetricsBar({ stats }) {
         { label: "Drop-ins (24h)", value: String(Number(s?.last24h?.sent_message || 0) + Number(s?.last24h?.initiative_post || 0)) },
         { label: "Reactions (24h)", value: String(s?.last24h?.reacted || 0) },
         { label: "Searches (24h)", value: String(s?.last24h?.search_call || 0) },
+        { label: "Memory (24h)", value: String(s?.last24h?.memory_extract_call || 0) },
       ]
     },
     {
@@ -60,6 +61,7 @@ export default function MetricsBar({ stats }) {
         { label: "Total Cost", value: `$${Number(s?.totalCostUsd || 0).toFixed(6)}` },
         { label: "Video Ctx (24h)", value: String(s?.last24h?.video_context_call || 0) },
         { label: "GIFs (24h)", value: String(s?.last24h?.gif_call || 0) },
+        { label: "Images (24h)", value: String(s?.last24h?.image_call || 0) },
         { label: "Public HTTPS", value: publicHttpsValue },
         { label: "Share Sessions", value: String(screenShareActive) },
       ]
