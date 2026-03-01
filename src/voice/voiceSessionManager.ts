@@ -7131,39 +7131,6 @@ export class VoiceSessionManager {
       };
     }
 
-    const configuredCrossSpeakerWakeMs = Number(settings?.voice?.crossSpeakerWakeMs);
-    const crossSpeakerWakeMs = clamp(
-      Number.isFinite(configuredCrossSpeakerWakeMs)
-        ? Math.round(configuredCrossSpeakerWakeMs)
-        : DIRECT_ADDRESS_CROSS_SPEAKER_WAKE_MS,
-      1200,
-      20_000
-    );
-    const msSinceDirectAddress = Number(conversationContext?.msSinceDirectAddress || 0);
-    const directAddressWakeAcrossSpeakers =
-      Boolean(conversationContext?.recentDirectAddress) &&
-      !conversationContext?.sameAsRecentDirectAddress &&
-      Number.isFinite(msSinceDirectAddress) &&
-      msSinceDirectAddress <= crossSpeakerWakeMs;
-    const crossSpeakerWakeFastPath =
-      classifierEnabled &&
-      !directAddressed &&
-      !addressedToOtherParticipant &&
-      !lowSignalFragment &&
-      directAddressWakeAcrossSpeakers;
-    if (crossSpeakerWakeFastPath) {
-      return {
-        allow: true,
-        reason: "cross_speaker_wake",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        conversationContext
-      };
-    }
-
     if (directAddressed) {
       return {
         allow: true,
@@ -7212,8 +7179,7 @@ export class VoiceSessionManager {
       lastInboundAudioAt > 0 ? Math.max(0, now - lastInboundAudioAt) : null;
     const wakeModeActive =
       Boolean(conversationContext?.recentAssistantReply) ||
-      Boolean(conversationContext?.sameAsRecentDirectAddress) ||
-      directAddressWakeAcrossSpeakers;
+      Boolean(conversationContext?.sameAsRecentDirectAddress);
     const shouldDelayNonDirectMergedRealtimeReply =
       !classifierEnabled &&
       isRealtimeMode(sessionMode) &&
