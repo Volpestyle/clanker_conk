@@ -28,6 +28,40 @@ export function FullPromptPreview({ form }) {
   const skipLine = interpolatePromptTemplate(form.promptSkipLine, { botName });
   const mediaGuidance = interpolatePromptTemplate(form.promptMediaPromptCraftGuidance, { botName });
 
+  const userPromptPreview = `=== LATEST MESSAGE (TURN ANCHOR) ===
+Message from {{user}}: {{message content}}
+{{#if has images}}
+Attachments:
+- {{filename}} ({{type}})
+{{/if}}
+
+=== RECENT MESSAGES ===
+{{recent message 1}}
+{{recent message 2}}
+...
+
+=== RELEVANT PAST MESSAGES ===
+{{relevant message 1}}
+...
+
+=== USER FACTS ===
+{{user fact 1}}
+...
+
+=== DURABLE MEMORY ===
+{{memory fact 1}}
+...
+
+=== EMOJI OPTIONS ===
+Server emoji: {{emoji1}}, {{emoji2}}
+
+=== RESPONSE DECISION ===
+Direct-address confidence: {{confidence}} (threshold {{threshold}}).
+{{#if addressed}}This message directly addressed you.{{/if}}
+A reply is required for this turn unless safety policy requires refusing.
+Reply eagerness hint: {{eagerness}}/100.
+Low eagerness mode: treat spontaneous insertion as an exception, not the default.`;
+
   const hasAnyPrompts =
     voiceLookupBusy ||
     voiceReplyWakeVariant ||
@@ -67,6 +101,7 @@ export function FullPromptPreview({ form }) {
           <ScenarioSection title="Memory Disabled" prompt={memoryDisabled} />
           <ScenarioSection title="Skip Directive" prompt={skipLine} />
           <ScenarioSection title="Media Guidance" prompt={mediaGuidance} />
+          <ScenarioSection title="User Prompt Structure" prompt={userPromptPreview} />
         </div>
       )}
     </div>
