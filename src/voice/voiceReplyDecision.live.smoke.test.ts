@@ -49,7 +49,7 @@ function createManager(llm) {
   return manager;
 }
 
-const configuredProvider = normalizeVoiceReplyDecisionProvider(process.env.LIVE_VOICE_DECIDER_PROVIDER || "anthropic");
+const configuredProvider = normalizeVoiceReplyDecisionProvider(process.env.LIVE_VOICE_DECIDER_PROVIDER || "claude-code");
 
 test("smoke: live voice decision model admits wake-variant turns", { timeout: smokeTimeoutMs(configuredProvider) }, async () => {
   if (!envFlag("RUN_LIVE_VOICE_DECIDER_SMOKE")) return;
@@ -80,8 +80,8 @@ test("smoke: live voice decision model admits wake-variant turns", { timeout: sm
       enabled: false
     },
     llm: {
-      provider: "anthropic",
-      model: "claude-sonnet-4-5"
+      provider: "claude-code",
+      model: "sonnet"
     },
     voice: {
       replyEagerness: 50,

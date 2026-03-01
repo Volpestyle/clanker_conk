@@ -2322,7 +2322,7 @@ test("runRealtimeBrainReply supersedes stale reply when newer realtime input is 
   assert.equal(session.realtimeReplySupersededCount, 1);
 });
 
-test("runRealtimeBrainReply supersedes assertive direct-address reply when another speaker is queued", async () => {
+test("runRealtimeBrainReply keeps assertive direct-address reply when queued speaker is outside interruption policy", async () => {
   const runtimeLogs = [];
   let requestedRealtimeUtterances = 0;
   const manager = createManager();
@@ -2384,15 +2384,15 @@ test("runRealtimeBrainReply supersedes assertive direct-address reply when anoth
   });
 
   assert.equal(result, true);
-  assert.equal(requestedRealtimeUtterances, 0);
+  assert.equal(requestedRealtimeUtterances, 1);
   const supersededLog = runtimeLogs.find(
     (row) => row?.kind === "voice_runtime" && row?.content === "realtime_reply_superseded_newer_input"
   );
-  assert.equal(Boolean(supersededLog), true);
-  assert.equal(session.realtimeReplySupersededCount, 1);
+  assert.equal(Boolean(supersededLog), false);
+  assert.equal(session.realtimeReplySupersededCount, 0);
 });
 
-test("runRealtimeBrainReply supersedes ALL-target replies when another speaker is queued", async () => {
+test("runRealtimeBrainReply keeps ALL-target replies when queued speaker cannot interrupt", async () => {
   const runtimeLogs = [];
   let requestedRealtimeUtterances = 0;
   const manager = createManager();
@@ -2458,12 +2458,75 @@ test("runRealtimeBrainReply supersedes ALL-target replies when another speaker i
   });
 
   assert.equal(result, true);
-  assert.equal(requestedRealtimeUtterances, 0);
+  assert.equal(requestedRealtimeUtterances, 1);
   const supersededLog = runtimeLogs.find(
     (row) => row?.kind === "voice_runtime" && row?.content === "realtime_reply_superseded_newer_input"
   );
-  assert.equal(Boolean(supersededLog), true);
-  assert.equal(session.realtimeReplySupersededCount, 1);
+  assert.equal(Boolean(supersededLog), false);
+  assert.equal(session.realtimeReplySupersededCount, 0);
+});
+
+test("runRealtimeBrainReply ignores near-silent queued turns for supersede checks", async () => {
+  const runtimeLogs = [];
+  let requestedRealtimeUtterances = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
+  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = () => {
+    requestedRealtimeUtterances += 1;
+    return true;
+  };
+  manager.generateVoiceTurn = async () => ({
+    text: "hello back"
+  });
+
+  const session = {
+    id: "session-realtime-supersede-silent-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 8_000,
+    realtimeClient: {},
+    realtimeInputSampleRateHz: 24_000,
+    userCaptures: new Map(),
+    pendingRealtimeTurns: [
+      {
+        session: null,
+        userId: "speaker-2",
+        pcmBuffer: Buffer.alloc(24_000, 0),
+        captureReason: "speaking_end",
+        queuedAt: Date.now() - 250
+      }
+    ],
+    realtimeReplySupersededCount: 0,
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "hello",
+    directAddressed: false,
+    source: "realtime"
+  });
+
+  assert.equal(result, true);
+  assert.equal(requestedRealtimeUtterances, 1);
+  const supersededLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "realtime_reply_superseded_newer_input"
+  );
+  assert.equal(Boolean(supersededLog), false);
+  assert.equal(session.realtimeReplySupersededCount, 0);
 });
 
 test("runRealtimeBrainReply ends VC when model requests leave directive", async () => {
@@ -3888,4 +3951,68 @@ test("flushDeferredBotTurnOpenTurns forwards native realtime audio after one adm
   assert.deepEqual([...forwardedPcm], [...Buffer.concat([firstPcm, secondPcm])]);
   assert.equal(forwardedPayloads[0]?.captureReason, "bot_turn_open_deferred_flush");
   assert.equal(session.pendingDeferredTurns.length, 0);
+});
+
+test("voice decision history deduplicates consecutive identical turns", () => {
+  const manager = createManager();
+  const session = {
+    id: "session-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    ending: false,
+    recentVoiceTurns: [],
+    focusedSpeakerUserId: null,
+    focusedSpeakerAt: 0,
+    settingsSnapshot: { botName: "clanker conk" }
+  };
+
+  manager.resolveVoiceSpeakerName = (_session, userId) => `user-${String(userId || "")}`;
+  manager.recordVoiceTurn(session, { role: "user", userId: "a", text: "first turn" });
+  manager.recordVoiceTurn(session, { role: "user", userId: "a", text: "first turn" });
+  manager.recordVoiceTurn(session, { role: "assistant", text: "second turn" });
+
+  assert.equal(session.recentVoiceTurns.length, 2);
+  const formatted = manager.formatVoiceDecisionHistory(session, 6);
+  assert.equal(formatted.includes("user-a"), true);
+  assert.equal(formatted.includes("clanker conk"), true);
+});
+
+test("focused speaker window sets, preserves, and expires on addressed turns", () => {
+  const manager = createManager();
+  const session = {
+    id: "session-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    ending: false,
+    recentVoiceTurns: [],
+    focusedSpeakerUserId: "old-user",
+    focusedSpeakerAt: Date.now() - 40_000,
+    settingsSnapshot: { botName: "clanker conk" }
+  };
+
+  manager.updateFocusedSpeakerWindow({
+    session, userId: "user-1", allow: true, directAddressed: true, reason: "llm_yes"
+  });
+  assert.equal(session.focusedSpeakerUserId, "user-1");
+
+  manager.updateFocusedSpeakerWindow({
+    session, userId: "user-2", allow: false, directAddressed: false, reason: "llm_no"
+  });
+  assert.equal(session.focusedSpeakerUserId, "user-1");
+
+  manager.updateFocusedSpeakerWindow({
+    session, userId: "user-2", allow: true, directAddressed: false, reason: "llm_yes"
+  });
+  assert.equal(session.focusedSpeakerUserId, "user-2");
+
+  session.focusedSpeakerAt = Date.now() - 50_000;
+  manager.updateFocusedSpeakerWindow({
+    session, userId: "user-2", allow: false, directAddressed: false, reason: "llm_no"
+  });
+  assert.equal(session.focusedSpeakerUserId, null);
+  assert.equal(session.focusedSpeakerAt, 0);
 });

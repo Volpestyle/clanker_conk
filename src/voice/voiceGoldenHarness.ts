@@ -311,17 +311,17 @@ function resolveDefaults(options: VoiceGoldenHarnessOptions = {}): VoiceGoldenRe
     mode: normalizeMode(options.mode),
     modes: requestedModes.length ? requestedModes : [...VOICE_GOLDEN_MODES],
     iterations: Math.max(1, Math.floor(Number(options.iterations) || 1)),
-    actorProvider: String(options.actorProvider || "anthropic").trim() || "anthropic",
-    actorModel: String(options.actorModel || "claude-sonnet-4-5").trim() || "claude-sonnet-4-5",
-    deciderProvider: String(options.deciderProvider || "anthropic").trim() || "anthropic",
-    deciderModel: String(options.deciderModel || "claude-haiku-4-5").trim() || "claude-haiku-4-5",
+    actorProvider: String(options.actorProvider || "claude-code").trim() || "claude-code",
+    actorModel: String(options.actorModel || "sonnet").trim() || "sonnet",
+    deciderProvider: String(options.deciderProvider || "claude-code").trim() || "claude-code",
+    deciderModel: String(options.deciderModel || "sonnet").trim() || "sonnet",
     judge: {
       enabled:
         options.judge?.enabled !== undefined
           ? Boolean(options.judge.enabled)
           : true,
-      provider: String(options.judge?.provider || "anthropic").trim() || "anthropic",
-      model: String(options.judge?.model || "claude-haiku-4-5").trim() || "claude-haiku-4-5"
+      provider: String(options.judge?.provider || "claude-code").trim() || "claude-code",
+      model: String(options.judge?.model || "sonnet").trim() || "sonnet"
     },
     allowMissingCredentials: parseBool(options.allowMissingCredentials, false),
     maxCases: Math.max(1, Math.min(VOICE_GOLDEN_CASES.length, Math.floor(Number(options.maxCases) || DEFAULT_MAX_CASES)))

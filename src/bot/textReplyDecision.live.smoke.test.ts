@@ -134,7 +134,7 @@ function buildIncomingMessage({
 test("smoke: live text reply admission handles wake variants and prank-like negatives", { timeout: 30_000 }, async () => {
   if (!envFlag("RUN_LIVE_TEXT_REPLY_SMOKE")) return;
 
-  const provider = normalizeLlmProvider(process.env.LIVE_TEXT_SMOKE_PROVIDER || "anthropic");
+  const provider = normalizeLlmProvider(process.env.LIVE_TEXT_SMOKE_PROVIDER || "claude-code");
   const model = String(process.env.LIVE_TEXT_SMOKE_MODEL || defaultModelForProvider(provider)).trim()
     || defaultModelForProvider(provider);
 

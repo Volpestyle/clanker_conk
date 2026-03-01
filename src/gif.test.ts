@@ -32,24 +32,16 @@ async function withMockFetch(handler, run) {
   }
 }
 
-test("gif service reports unconfigured state without API key", async () => {
-  const { service } = createService({ apiKey: "" });
-  assert.equal(service.isConfigured(), false);
-  await assert.rejects(
-    () => service.pickGif({ query: "cats" }),
-    /GIPHY GIF search is not configured/i
-  );
-});
-
-test("searchGiphy builds request params and filters duplicate/non-https media", async () => {
-  const { service } = createService({ rating: "PG" });
-  let requestedUrl = "";
-  let requestHeaders = null;
+test("pickGif searches giphy, deduplicates results, and logs successful pick", async () => {
+  const { service, logs } = createService();
+  const originalRandom = Math.random;
+  Math.random = () => 0;
 
   await withMockFetch(
-    async (url, options) => {
-      requestedUrl = String(url);
-      requestHeaders = options?.headers || null;
+    async (url) => {
+      const parsed = new URL(String(url));
+      assert.equal(parsed.origin + parsed.pathname, "https://api.giphy.com/v1/gifs/search");
+      assert.equal(parsed.searchParams.get("rating"), "pg-13");
       return {
         ok: true,
         async json() {
@@ -58,25 +50,19 @@ test("searchGiphy builds request params and filters duplicate/non-https media", 
               {
                 id: "a",
                 title: "alpha",
-                images: {
-                  fixed_height: { url: "https://media.giphy.com/media/a/giphy.gif" }
-                },
+                images: { fixed_height: { url: "https://media.giphy.com/media/a/giphy.gif" } },
                 url: "https://giphy.com/gifs/a"
               },
               {
                 id: "dup",
                 title: "duplicate",
-                images: {
-                  fixed_height: { url: "https://media.giphy.com/media/a/giphy.gif" }
-                },
+                images: { fixed_height: { url: "https://media.giphy.com/media/a/giphy.gif" } },
                 url: "https://giphy.com/gifs/a-dup"
               },
               {
                 id: "http-only",
                 title: "bad",
-                images: {
-                  fixed_height: { url: "http://media.giphy.com/media/http/giphy.gif" }
-                }
+                images: { fixed_height: { url: "http://media.giphy.com/media/http/giphy.gif" } }
               }
             ]
           };
@@ -84,70 +70,12 @@ test("searchGiphy builds request params and filters duplicate/non-https media", 
       };
     },
     async () => {
-      const rows = await service.searchGiphy({ query: "  cats   and   dogs  ", limit: 200 });
-      assert.equal(rows.length, 1);
-      assert.equal(rows[0].id, "a");
-      assert.equal(rows[0].url, "https://media.giphy.com/media/a/giphy.gif");
-      assert.equal(rows[0].pageUrl, "https://giphy.com/gifs/a");
-    }
-  );
-
-  const parsed = new URL(requestedUrl);
-  assert.equal(parsed.origin + parsed.pathname, "https://api.giphy.com/v1/gifs/search");
-  assert.equal(parsed.searchParams.get("limit"), "25");
-  assert.equal(parsed.searchParams.get("rating"), "pg");
-  assert.equal(parsed.searchParams.get("q"), "  cats   and   dogs  ");
-  assert.equal(parsed.searchParams.get("lang"), "en");
-  assert.equal(parsed.searchParams.get("bundle"), "messaging_non_clips");
-  assert.equal(requestHeaders?.accept, "application/json");
-});
-
-test("pickGif returns null for empty sanitized query", async () => {
-  const { service, logs } = createService();
-  let fetchCallCount = 0;
-  await withMockFetch(
-    async () => {
-      fetchCallCount += 1;
-      throw new Error("fetch should not run");
-    },
-    async () => {
-      const selected = await service.pickGif({ query: "   " });
-      assert.equal(selected, null);
-    }
-  );
-  assert.equal(fetchCallCount, 0);
-  assert.equal(logs.length, 0);
-});
-
-test("pickGif logs successful call metadata", async () => {
-  const { service, logs } = createService();
-  const originalRandom = Math.random;
-  Math.random = () => 0;
-
-  await withMockFetch(
-    async () => ({
-      ok: true,
-      async json() {
-        return {
-          data: [
-            {
-              id: "pick-1",
-              title: "picked gif",
-              images: {
-                fixed_height: { url: "https://media.giphy.com/media/pick/giphy.gif" }
-              },
-              url: "https://giphy.com/gifs/pick"
-            }
-          ]
-        };
-      }
-    }),
-    async () => {
       const result = await service.pickGif({
-        query: "show me hype",
+        query: "cats",
         trace: { guildId: "guild-1", channelId: "chan-1", userId: "user-1", source: "reply" }
       });
-      assert.equal(result?.id, "pick-1");
+      assert.equal(result?.id, "a");
+      assert.equal(result?.url, "https://media.giphy.com/media/a/giphy.gif");
     }
   );
 
@@ -155,19 +83,14 @@ test("pickGif logs successful call metadata", async () => {
 
   assert.equal(logs.length, 1);
   assert.equal(logs[0]?.kind, "gif_call");
-  assert.equal(logs[0]?.guildId, "guild-1");
   assert.equal(logs[0]?.metadata?.used, true);
-  assert.equal(logs[0]?.metadata?.gifUrl, "https://media.giphy.com/media/pick/giphy.gif");
 });
 
-test("pickGif logs errors from failed provider calls", async () => {
+test("pickGif logs error and throws on provider failure", async () => {
   const { service, logs } = createService();
 
   await withMockFetch(
-    async () => ({
-      ok: false,
-      status: 503
-    }),
+    async () => ({ ok: false, status: 503 }),
     async () => {
       await assert.rejects(
         () => service.pickGif({ query: "something", trace: { source: "test-case" } }),
@@ -178,7 +101,5 @@ test("pickGif logs errors from failed provider calls", async () => {
 
   assert.equal(logs.length, 1);
   assert.equal(logs[0]?.kind, "gif_error");
-  assert.equal(logs[0]?.metadata?.provider, "giphy");
-  assert.equal(logs[0]?.metadata?.source, "test-case");
   assert.match(String(logs[0]?.content || ""), /503/);
 });

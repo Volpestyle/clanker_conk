@@ -30,15 +30,15 @@ test("smoke: voice golden validation harness hits live APIs and reports perf", {
     mode: "live",
     modes: envModes("LIVE_VOICE_GOLDEN_MODES"),
     iterations: Math.max(1, Math.floor(envNumber("LIVE_VOICE_GOLDEN_ITERATIONS", 1))),
-    actorProvider: String(process.env.LIVE_VOICE_GOLDEN_ACTOR_PROVIDER || "anthropic").trim() || "anthropic",
-    actorModel: String(process.env.LIVE_VOICE_GOLDEN_ACTOR_MODEL || "claude-sonnet-4-5").trim() || "claude-sonnet-4-5",
+    actorProvider: String(process.env.LIVE_VOICE_GOLDEN_ACTOR_PROVIDER || "claude-code").trim() || "claude-code",
+    actorModel: String(process.env.LIVE_VOICE_GOLDEN_ACTOR_MODEL || "sonnet").trim() || "sonnet",
     deciderProvider:
-      String(process.env.LIVE_VOICE_GOLDEN_DECIDER_PROVIDER || "anthropic").trim() || "anthropic",
-    deciderModel: String(process.env.LIVE_VOICE_GOLDEN_DECIDER_MODEL || "claude-haiku-4-5").trim() || "claude-haiku-4-5",
+      String(process.env.LIVE_VOICE_GOLDEN_DECIDER_PROVIDER || "claude-code").trim() || "claude-code",
+    deciderModel: String(process.env.LIVE_VOICE_GOLDEN_DECIDER_MODEL || "sonnet").trim() || "sonnet",
     judge: {
       enabled: !envFlag("LIVE_VOICE_GOLDEN_NO_JUDGE"),
-      provider: String(process.env.LIVE_VOICE_GOLDEN_JUDGE_PROVIDER || "anthropic").trim() || "anthropic",
-      model: String(process.env.LIVE_VOICE_GOLDEN_JUDGE_MODEL || "claude-haiku-4-5").trim() || "claude-haiku-4-5"
+      provider: String(process.env.LIVE_VOICE_GOLDEN_JUDGE_PROVIDER || "claude-code").trim() || "claude-code",
+      model: String(process.env.LIVE_VOICE_GOLDEN_JUDGE_MODEL || "sonnet").trim() || "sonnet"
     },
     allowMissingCredentials: envFlag("LIVE_VOICE_GOLDEN_ALLOW_MISSING_CREDENTIALS", false),
     maxCases: Math.max(1, Math.floor(envNumber("LIVE_VOICE_GOLDEN_MAX_CASES", 3)))
