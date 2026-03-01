@@ -89,7 +89,7 @@ Key guardrails:
 ## 6. Latency-Critical Model Choices
 
 This architecture doc keeps only a summary view. Canonical tuning guidance lives in:
-- `docs/reply-decision-flow.md` section `6) Latency-First Model Tuning`.
+- `docs/reply-and-context-flow.md` section `8) Latency-First Model Tuning`.
 
 High-impact latency levers:
 - `llm.provider` + `llm.model` for primary reply generation.
