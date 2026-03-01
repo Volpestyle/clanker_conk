@@ -519,6 +519,10 @@ export function formToSettingsPatch(form) {
   };
 }
 
+export function sanitizeAliasListInput(value) {
+  return formatLineList(parseUniqueList(value));
+}
+
 const LIST_FORM_KEYS: ReadonlySet<string> = new Set([
   "botNameAliases",
   "personaHardLimits",

@@ -12,6 +12,7 @@ import {
   resolveModelOptionsFromText,
   resolvePresetModelSelection,
   resolveProviderModelOptions,
+  sanitizeAliasListInput,
   settingsToForm,
   settingsToFormPreserving
 } from "../settingsFormModel";
@@ -187,6 +188,18 @@ export default function SettingsForm({
     return (e) => setForm((f) => ({ ...f, [key]: e.target.type === "checkbox" ? e.target.checked : e.target.value }));
   }
 
+  function sanitizeBotNameAliases() {
+    setForm((current) => {
+      if (!current) return current;
+      const normalized = sanitizeAliasListInput(current.botNameAliases);
+      if (normalized === String(current.botNameAliases || "").trim()) return current;
+      return {
+        ...current,
+        botNameAliases: normalized
+      };
+    });
+  }
+
   function setProviderWithPresetFallback(providerField, modelField, provider) {
     setForm((current) => {
       const next = { ...current, [providerField]: provider };
@@ -279,7 +292,12 @@ export default function SettingsForm({
         </nav>
 
         <div className="settings-content">
-          <CoreBehaviorSettingsSection id="sec-core" form={form} set={set} />
+          <CoreBehaviorSettingsSection
+            id="sec-core"
+            form={form}
+            set={set}
+            onSanitizeBotNameAliases={sanitizeBotNameAliases}
+          />
           <PromptGuidanceSettingsSection
             id="sec-prompts"
             form={form}

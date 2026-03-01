@@ -2,7 +2,7 @@ import React from "react";
 import { SettingsSection } from "../SettingsSection";
 import { rangeStyle } from "../../utils";
 
-export function CoreBehaviorSettingsSection({ id, form, set }) {
+export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAliases }) {
   return (
     <SettingsSection id={id} title="Core Behavior">
       <label htmlFor="bot-name">Bot display name</label>
@@ -14,6 +14,7 @@ export function CoreBehaviorSettingsSection({ id, form, set }) {
         rows={3}
         value={form.botNameAliases}
         onChange={set("botNameAliases")}
+        onBlur={onSanitizeBotNameAliases}
       />
 
       <label htmlFor="persona-flavor">Persona flavor</label>

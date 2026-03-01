@@ -80,6 +80,51 @@ export function VoiceModeSettingsSection({
             </>
           )}
 
+          {usesBrainGeneration && (
+            <>
+              <h4>Brain LLM</h4>
+              <p>Used for voice reply generation when the reply path is set to Brain.</p>
+              <div className="toggles">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={form.voiceGenerationLlmUseTextModel}
+                    onChange={set("voiceGenerationLlmUseTextModel")}
+                  />
+                  Use text model
+                </label>
+              </div>
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-generation-provider">Provider</label>
+                  <select
+                    id="voice-generation-provider"
+                    value={form.voiceGenerationLlmProvider}
+                    onChange={setVoiceGenerationProvider}
+                    disabled={form.voiceGenerationLlmUseTextModel}
+                  >
+                    <LlmProviderOptions />
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="voice-generation-model-preset">Model ID</label>
+                  <select
+                    id="voice-generation-model-preset"
+                    value={selectedVoiceGenerationPresetModel}
+                    onChange={selectVoiceGenerationPresetModel}
+                    disabled={form.voiceGenerationLlmUseTextModel}
+                  >
+                    {voiceGenerationModelOptions.map((modelId) => (
+                      <option key={modelId} value={modelId}>
+                        {modelId}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </>
+          )}
+
           <div className="split">
             <div>
               <label htmlFor="voice-asr-language-mode">ASR language mode</label>
@@ -183,51 +228,6 @@ export function VoiceModeSettingsSection({
             onChange={set("voiceReplyEagerness")}
             style={rangeStyle(form.voiceReplyEagerness)}
           />
-
-          {usesBrainGeneration && (
-            <>
-              <h4>Brain LLM</h4>
-              <p>Used for voice reply generation when the reply path is set to Brain.</p>
-              <div className="toggles">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={form.voiceGenerationLlmUseTextModel}
-                    onChange={set("voiceGenerationLlmUseTextModel")}
-                  />
-                  Use text model
-                </label>
-              </div>
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-generation-provider">Provider</label>
-                  <select
-                    id="voice-generation-provider"
-                    value={form.voiceGenerationLlmProvider}
-                    onChange={setVoiceGenerationProvider}
-                    disabled={form.voiceGenerationLlmUseTextModel}
-                  >
-                    <LlmProviderOptions />
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="voice-generation-model-preset">Model ID</label>
-                  <select
-                    id="voice-generation-model-preset"
-                    value={selectedVoiceGenerationPresetModel}
-                    onChange={selectVoiceGenerationPresetModel}
-                    disabled={form.voiceGenerationLlmUseTextModel}
-                  >
-                    {voiceGenerationModelOptions.map((modelId) => (
-                      <option key={modelId} value={modelId}>
-                        {modelId}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-            </>
-          )}
 
           <h4>Voice Reply Decider</h4>
           <p>Controls when Clank should chime in during VC.</p>

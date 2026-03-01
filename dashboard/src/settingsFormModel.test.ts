@@ -5,6 +5,7 @@ import {
   resolveModelOptionsFromText,
   resolvePresetModelSelection,
   resolveProviderModelOptions,
+  sanitizeAliasListInput,
   settingsToForm,
   settingsToFormPreserving
 } from "./settingsFormModel.ts";
@@ -151,6 +152,13 @@ test("formToSettingsPatch parses bot aliases from comma-separated single-line in
 
   const patch = formToSettingsPatch(form);
   assert.deepEqual(patch.botNameAliases, ["clank", "conk"]);
+});
+
+test("sanitizeAliasListInput removes duplicate aliases and normalizes separators", () => {
+  assert.equal(
+    sanitizeAliasListInput("clank, conk\nclank,clanky\nconk"),
+    "clank\nconk\nclanky"
+  );
 });
 
 test("settingsToForm uses default prompt guidance lists when omitted", () => {
