@@ -1084,13 +1084,9 @@ export class ClankerBot {
     return IS_TEST_PROCESS;
   }
 
-  getSimulatedTypingDelayMs(minMs, jitterMs, charCount = 0) {
+  getSimulatedTypingDelayMs(minMs, jitterMs) {
     if (this.shouldSkipSimulatedTypingDelay()) return 0;
-    const normalizedCharCount = Math.max(0, Math.floor(Number(charCount) || 0));
-    const perCharMs = clamp(12 + Math.floor(Math.random() * 8), 10, 22);
-    const lengthMs = normalizedCharCount * perCharMs;
-    const baseMs = normalizedCharCount <= 20 ? Math.floor(minMs * 0.5) : minMs;
-    return clamp(baseMs + lengthMs + Math.floor(Math.random() * jitterMs), 200, 8000);
+    return minMs + Math.floor(Math.random() * jitterMs);
   }
 
   async maybeReplyToMessage(message, settings, options: ReplyAttemptOptions = {}) {
@@ -1700,8 +1696,7 @@ export class ClankerBot {
 
     const typingStartedAtMs = Date.now();
     await message.channel.sendTyping();
-    const replyCharCount = String(payload?.content || finalText || "").length;
-    await sleep(this.getSimulatedTypingDelayMs(400, 1200, replyCharCount));
+    await sleep(this.getSimulatedTypingDelayMs(600, 1800));
     const typingDelayMs = Math.max(0, Date.now() - typingStartedAtMs);
 
     const shouldThreadReply = addressed || options.forceRespond;
