@@ -559,6 +559,37 @@ export async function generateVoiceTurnReply(runtime, {
       allowSoundboardToolCall
     });
 
+  const generationContextSnapshot = {
+    capturedAt: new Date().toISOString(),
+    incomingTranscript,
+    speakerName,
+    directAddressed: Boolean(directAddressed),
+    isEagerTurn: Boolean(isEagerTurn),
+    contextMessages: normalizedContextMessages,
+    conversationContext: conversationContext || null,
+    participantRoster: normalizedParticipantRoster,
+    membershipEvents: normalizedMembershipEvents,
+    memoryFacts: {
+      userFacts: promptMemorySlice.userFacts,
+      relevantFacts: promptMemorySlice.relevantFacts
+    },
+    sessionTiming: sessionTiming || null,
+    tools: {
+      soundboard: allowSoundboardToolCall,
+      webSearch: allowWebSearchToolCall,
+      openArticle: allowOpenArticleToolCall,
+      screenShare: allowScreenShareToolCall,
+      memory: allowMemoryToolCalls
+    },
+    soundboardCandidateCount: normalizedSoundboardCandidates.length,
+    llmConfig: {
+      provider: tunedSettings.llm.provider,
+      model: tunedSettings.llm.model,
+      temperature: tunedSettings.llm.temperature,
+      maxOutputTokens: tunedSettings.llm.maxOutputTokens
+    }
+  };
+
   try {
     let generation = await runtime.llm.generate({
       settings: tunedSettings,
@@ -811,7 +842,8 @@ export async function generateVoiceTurnReply(runtime, {
         usedWebSearchFollowup,
         usedOpenArticleFollowup,
         usedScreenShareOffer,
-        voiceAddressing
+        voiceAddressing,
+        generationContextSnapshot
       };
     }
     if (!finalText || finalText === "[SKIP]") {
@@ -821,7 +853,8 @@ export async function generateVoiceTurnReply(runtime, {
         usedWebSearchFollowup,
         usedOpenArticleFollowup,
         usedScreenShareOffer,
-        voiceAddressing
+        voiceAddressing,
+        generationContextSnapshot
       };
       if (leaveVoiceChannelRequested) {
         return {
@@ -866,7 +899,8 @@ export async function generateVoiceTurnReply(runtime, {
       usedWebSearchFollowup,
       usedOpenArticleFollowup,
       usedScreenShareOffer,
-      voiceAddressing
+      voiceAddressing,
+      generationContextSnapshot
     };
     if (leaveVoiceChannelRequested) {
       return {
@@ -886,7 +920,7 @@ export async function generateVoiceTurnReply(runtime, {
         sessionId
       }
     });
-    return { text: "" };
+    return { text: "", generationContextSnapshot: null };
   }
 }
 

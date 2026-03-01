@@ -7,7 +7,8 @@ import {
   type RealtimeState,
   type VoiceMembershipEvent,
   type SessionLatency,
-  type LatencyTurnEntry
+  type LatencyTurnEntry,
+  type GenerationContextSnapshot
 } from "../hooks/useVoiceSSE";
 import { useVoiceHistory } from "../hooks/useVoiceHistory";
 
@@ -696,6 +697,210 @@ function ConversationContext({ session, latencyTurns }: { session: VoiceSession;
   );
 }
 
+// ---- Generation Context Viewer ----
+
+function GenerationContextViewer({ session }: { session: VoiceSession }) {
+  const ctx = session.lastGenerationContext;
+  const isNativeMode =
+    session.mode === "openai_realtime" ||
+    session.mode === "gemini_realtime" ||
+    session.mode === "elevenlabs_realtime" ||
+    session.mode === "xai_realtime";
+
+  if (isNativeMode && !ctx) {
+    return (
+      <Section title="LLM Brain Context" defaultOpen={false}>
+        <p className="vm-gen-ctx-native">Native mode — context managed by provider.</p>
+      </Section>
+    );
+  }
+
+  if (!ctx) return null;
+
+  const conversationCtx = ctx.conversationContext || {};
+  const memoryFacts = ctx.memoryFacts || { userFacts: [], relevantFacts: [] };
+  const userFactCount = Array.isArray(memoryFacts.userFacts) ? memoryFacts.userFacts.length : 0;
+  const relevantFactCount = Array.isArray(memoryFacts.relevantFacts) ? memoryFacts.relevantFacts.length : 0;
+  const totalFacts = userFactCount + relevantFactCount;
+  const visionNotes = Array.isArray(conversationCtx.streamWatchBrainContext)
+    ? conversationCtx.streamWatchBrainContext
+    : [];
+  const tools = ctx.tools;
+  const toolEntries: [string, boolean][] = [
+    ["soundboard", Boolean(tools?.soundboard)],
+    ["webSearch", Boolean(tools?.webSearch)],
+    ["openArticle", Boolean(tools?.openArticle)],
+    ["screenShare", Boolean(tools?.screenShare)],
+    ["memory", Boolean(tools?.memory)]
+  ];
+  const addressing = conversationCtx.addressing || null;
+  const timing = ctx.sessionTiming || {};
+
+  return (
+    <Section
+      title="LLM Brain Context"
+      badge={ctx.source || null}
+      defaultOpen={false}
+    >
+      {/* Header meta */}
+      <div className="vm-gen-ctx-meta">
+        <span>{ctx.llmConfig?.provider}/{ctx.llmConfig?.model}</span>
+        {" · "}temp {ctx.llmConfig?.temperature}{" · "}
+        max {ctx.llmConfig?.maxOutputTokens} tok
+        {ctx.capturedAt && <>{" · "}{relativeTime(ctx.capturedAt)}</>}
+      </div>
+
+      {/* Incoming transcript */}
+      <div className="vm-gen-ctx-block">
+        <span className="vm-mini-label">
+          Incoming Transcript
+          {ctx.directAddressed && <span className="vm-gen-ctx-tag vm-gen-ctx-tag-direct">direct</span>}
+          {ctx.isEagerTurn && <span className="vm-gen-ctx-tag vm-gen-ctx-tag-eager">eager</span>}
+        </span>
+        <div className="vm-gen-ctx-transcript">
+          <strong>{ctx.speakerName}:</strong> {ctx.incomingTranscript || "(empty)"}
+        </div>
+      </div>
+
+      {/* Context window (conversation history sent to LLM) */}
+      {ctx.contextMessages && ctx.contextMessages.length > 0 && (
+        <div className="vm-gen-ctx-block">
+          <span className="vm-mini-label">Context Window ({ctx.contextMessages.length} messages)</span>
+          <div className="vm-convo-feed">
+            {ctx.contextMessages.map((m, i) => (
+              <div key={i} className={`vm-convo-msg vm-convo-${m.role}`}>
+                <div className="vm-convo-meta">
+                  <span className={`vm-convo-role vm-convo-role-${m.role}`}>
+                    {m.role === "assistant" ? "bot" : m.role}
+                  </span>
+                </div>
+                <div className="vm-convo-text">{m.content || "(empty)"}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Engagement context */}
+      <div className="vm-gen-ctx-block">
+        <span className="vm-mini-label">Engagement</span>
+        <div className="vm-detail-grid">
+          {conversationCtx.engagementState && (
+            <Stat label="State" value={conversationCtx.engagementState} />
+          )}
+          {conversationCtx.engaged != null && (
+            <Stat label="Engaged" value={conversationCtx.engaged ? "yes" : "no"} />
+          )}
+          {conversationCtx.joinWindowActive != null && (
+            <Stat label="Join Window" value={conversationCtx.joinWindowActive ? "active" : "closed"} />
+          )}
+        </div>
+      </div>
+
+      {/* Participant roster */}
+      {ctx.participantRoster && ctx.participantRoster.length > 0 && (
+        <div className="vm-gen-ctx-block">
+          <span className="vm-mini-label">Participant Roster ({ctx.participantRoster.length})</span>
+          <div className="vm-convo-text">{ctx.participantRoster.join(", ")}</div>
+        </div>
+      )}
+
+      {/* Memory facts */}
+      {totalFacts > 0 && (
+        <div className="vm-gen-ctx-block">
+          <span className="vm-mini-label">Memory Facts ({totalFacts})</span>
+          <div className="vm-gen-ctx-facts">
+            {userFactCount > 0 && (
+              <>
+                <div className="vm-gen-ctx-fact" style={{ fontWeight: 600, color: "var(--ink-2)" }}>
+                  User Facts ({userFactCount})
+                </div>
+                {memoryFacts.userFacts.map((f, i) => (
+                  <div key={`u${i}`} className="vm-gen-ctx-fact">
+                    {Object.entries(f).map(([k, v]) => `${k}: ${String(v)}`).join(" · ")}
+                  </div>
+                ))}
+              </>
+            )}
+            {relevantFactCount > 0 && (
+              <>
+                <div className="vm-gen-ctx-fact" style={{ fontWeight: 600, color: "var(--ink-2)" }}>
+                  Relevant Facts ({relevantFactCount})
+                </div>
+                {memoryFacts.relevantFacts.map((f, i) => (
+                  <div key={`r${i}`} className="vm-gen-ctx-fact">
+                    {Object.entries(f).map(([k, v]) => `${k}: ${String(v)}`).join(" · ")}
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Vision notes */}
+      {visionNotes.length > 0 && (
+        <div className="vm-gen-ctx-block">
+          <span className="vm-mini-label">Vision Notes ({visionNotes.length})</span>
+          <div className="vm-gen-ctx-facts">
+            {visionNotes.map((note, i) => (
+              <div key={i} className="vm-gen-ctx-fact">{String(note)}</div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Session timing */}
+      {(timing.maxRemainingMs != null || timing.inactivityRemainingMs != null) && (
+        <div className="vm-gen-ctx-block">
+          <span className="vm-mini-label">Session Timing</span>
+          <div className="vm-detail-grid">
+            {timing.maxRemainingMs != null && (
+              <Stat label="Max Remaining" value={`${Math.round(Number(timing.maxRemainingMs) / 1000)}s`} />
+            )}
+            {timing.inactivityRemainingMs != null && (
+              <Stat label="Inactivity Remaining" value={`${Math.round(Number(timing.inactivityRemainingMs) / 1000)}s`} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Addressing */}
+      {addressing && (
+        <div className="vm-gen-ctx-block">
+          <span className="vm-mini-label">Addressing</span>
+          <div className="vm-detail-grid">
+            {addressing.talkingTo && <Stat label="Target" value={String(addressing.talkingTo)} />}
+            {addressing.confidence != null && (
+              <Stat label="Confidence" value={Number(addressing.confidence).toFixed(2)} />
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Tools available */}
+      <div className="vm-gen-ctx-block">
+        <span className="vm-mini-label">Tools</span>
+        <div className="vm-gen-ctx-tools">
+          {toolEntries.map(([name, on]) => (
+            <span
+              key={name}
+              className={`vm-gen-ctx-tool ${on ? "vm-gen-ctx-tool-on" : "vm-gen-ctx-tool-off"}`}
+            >
+              {name}
+            </span>
+          ))}
+        </div>
+        {ctx.soundboardCandidateCount > 0 && (
+          <div style={{ fontSize: "0.68rem", color: "var(--ink-3)", marginTop: 4 }}>
+            {ctx.soundboardCandidateCount} soundboard candidates loaded
+          </div>
+        )}
+      </div>
+    </Section>
+  );
+}
+
 // ---- Stream Watch ----
 
 function StreamWatchDetail({ session }: { session: VoiceSession }) {
@@ -1024,6 +1229,9 @@ function SessionCard({ session }: { session: VoiceSession }) {
 
           {/* Conversation context */}
           <ConversationContext session={session} latencyTurns={session.latency?.recentTurns || []} />
+
+          {/* LLM Brain Context */}
+          <GenerationContextViewer session={session} />
 
           {/* Stream watch */}
           <StreamWatchDetail session={session} />

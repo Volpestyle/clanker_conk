@@ -658,6 +658,7 @@ export class VoiceSessionManager {
                 }
               : null
         })),
+        lastGenerationContext: session.lastGenerationContext || null,
         streamWatch: {
           active: Boolean(session.streamWatch?.active),
           targetUserId: session.streamWatch?.targetUserId || null,
@@ -8901,6 +8902,13 @@ export class VoiceSessionManager {
               leaveVoiceChannelRequested: false,
               voiceAddressing: null
             };
+      if (generatedPayload?.generationContextSnapshot) {
+        session.lastGenerationContext = {
+          ...generatedPayload.generationContextSnapshot,
+          source: "stt_pipeline",
+          mode: session.mode || "stt_pipeline"
+        };
+      }
       replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
       requestedSoundboardRefs = this.normalizeSoundboardRefs(generatedPayload?.soundboardRefs);
       usedWebSearchFollowup = Boolean(generatedPayload?.usedWebSearchFollowup);
@@ -9227,6 +9235,13 @@ export class VoiceSessionManager {
               leaveVoiceChannelRequested: false,
               voiceAddressing: null
             };
+      if (generatedPayload?.generationContextSnapshot) {
+        session.lastGenerationContext = {
+          ...generatedPayload.generationContextSnapshot,
+          source: String(source || "realtime"),
+          mode: session.mode || "realtime"
+        };
+      }
       generatedVoiceAddressing = this.normalizeVoiceAddressingAnnotation({
         rawAddressing: generatedPayload?.voiceAddressing,
         directAddressed: Boolean(directAddressed),

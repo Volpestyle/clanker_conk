@@ -49,6 +49,47 @@ export type VoiceMembershipEvent = {
   ageMs: number;
 };
 
+export type GenerationContextSnapshot = {
+  capturedAt: string;
+  source: string;
+  mode: string;
+  incomingTranscript: string;
+  speakerName: string;
+  directAddressed: boolean;
+  isEagerTurn: boolean;
+  contextMessages: { role: string; content: string }[];
+  conversationContext: {
+    engagementState?: string;
+    engaged?: boolean;
+    joinWindowActive?: boolean;
+    joinWindowAgeMs?: number | null;
+    streamWatchBrainContext?: string[];
+    addressing?: { talkingTo?: string | null; confidence?: number } | null;
+    [key: string]: unknown;
+  } | null;
+  participantRoster: string[];
+  membershipEvents: { eventType: string; displayName: string; ageMs: number | null }[];
+  memoryFacts: {
+    userFacts: Record<string, unknown>[];
+    relevantFacts: Record<string, unknown>[];
+  };
+  sessionTiming: { maxRemainingMs?: number | null; inactivityRemainingMs?: number | null; [key: string]: unknown } | null;
+  tools: {
+    soundboard: boolean;
+    webSearch: boolean;
+    openArticle: boolean;
+    screenShare: boolean;
+    memory: boolean;
+  };
+  soundboardCandidateCount: number;
+  llmConfig: {
+    provider: string;
+    model: string;
+    temperature: number;
+    maxOutputTokens: number;
+  };
+};
+
 export type RealtimeState = {
   connected?: boolean;
   connectedAt?: string;
@@ -163,6 +204,7 @@ export type VoiceSession = {
   voiceLookupBusyCount: number;
   pendingDeferredTurns: number;
   recentTurns: VoiceTurn[];
+  lastGenerationContext: GenerationContextSnapshot | null;
   streamWatch: {
     active: boolean;
     targetUserId: string | null;
