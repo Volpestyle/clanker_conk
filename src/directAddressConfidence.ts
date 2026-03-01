@@ -13,7 +13,7 @@ const DIRECT_ADDRESS_JSON_SCHEMA = JSON.stringify({
 });
 
 export const DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD = 0.62;
-const GENERIC_NAME_TOKENS = new Set(["bot", "assistant", "ai", "the"]);
+const EN_GENERIC_NAME_TOKENS = new Set(["bot", "assistant", "ai", "the"]);
 
 type LlmTrace = {
   guildId?: string | null;
@@ -405,7 +405,7 @@ function tokenize(value = "") {
 
 function pickPrimaryBotToken(tokens: string[] = []) {
   if (!Array.isArray(tokens) || !tokens.length) return "";
-  const filtered = tokens.filter((token) => token.length >= 4 && !GENERIC_NAME_TOKENS.has(token));
+  const filtered = tokens.filter((token) => token.length >= 4 && !EN_GENERIC_NAME_TOKENS.has(token));
   const candidates = filtered.length ? filtered : tokens.filter((token) => token.length >= 4);
   if (!candidates.length) return "";
   return [...candidates].sort((left, right) => right.length - left.length)[0] || "";

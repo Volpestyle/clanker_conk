@@ -5,7 +5,7 @@ const VOICE_LOW_SIGNAL_MIN_WORDS = 2;
 const LOW_SIGNAL_LLM_MIN_TOKEN_LEN = 5;
 const OPENAI_REALTIME_SHORT_CLIP_ASR_MS = 1200;
 const PCM16_MONO_BYTES_PER_SAMPLE = 2;
-const ENGLISH_LOW_SIGNAL_GUARD_TOKENS = new Set(["yo", "hi", "sup", "ey", "oi", "oy", "ha"]);
+const EN_LOW_SIGNAL_GUARD_TOKENS = new Set(["yo", "hi", "sup", "ey", "oi", "oy", "ha"]);
 
 export function isLowSignalVoiceFragment(transcript = "") {
   const normalized = String(transcript || "").trim();
@@ -22,7 +22,7 @@ export function isLowSignalVoiceFragment(transcript = "") {
   if (
     normalizedTokens.length > 0 &&
     normalizedTokens.length <= 2 &&
-    normalizedTokens.every((token) => ENGLISH_LOW_SIGNAL_GUARD_TOKENS.has(token))
+    normalizedTokens.every((token) => EN_LOW_SIGNAL_GUARD_TOKENS.has(token))
   ) {
     return false;
   }

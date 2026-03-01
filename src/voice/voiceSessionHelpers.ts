@@ -21,8 +21,8 @@ const SOUNDBOARD_DIRECTIVE_RE = /\[\[SOUNDBOARD:\s*([\s\S]*?)\s*\]\]/gi;
 const MAX_SOUNDBOARD_DIRECTIVE_REF_LEN = 180;
 const ASR_LANGUAGE_BIAS_PROMPT_MAX_LEN = 280;
 const PRIMARY_WAKE_TOKEN_MIN_LEN = 4;
-const PRIMARY_WAKE_GENERIC_TOKENS = new Set(["bot", "ai", "assistant"]);
-const VOCATIVE_GREETING_TOKENS = new Set([
+const EN_WAKE_PRIMARY_GENERIC_TOKENS = new Set(["bot", "ai", "assistant"]);
+const EN_VOCATIVE_GREETING_TOKENS = new Set([
   "hey",
   "hi",
   "yo",
@@ -30,7 +30,7 @@ const VOCATIVE_GREETING_TOKENS = new Set([
   "hello",
   "hola"
 ]);
-const VOCATIVE_IGNORE_TOKENS = new Set(["guys", "everyone", "all", "chat", "yall", "yaall"]);
+const EN_VOCATIVE_IGNORE_TOKENS = new Set(["guys", "everyone", "all", "chat", "yall", "yaall"]);
 const VOICE_ASR_LANGUAGE_MODES = new Set(["auto", "fixed"]);
 
 export function createBotAudioPlaybackStream() {
@@ -621,7 +621,7 @@ export function isLikelyVocativeAddressToOtherParticipant({
     const nameTokens = tokenizeWakeTokens(displayName);
     for (const token of nameTokens) {
       if (token.length < 3) continue;
-      if (VOCATIVE_IGNORE_TOKENS.has(token)) continue;
+      if (EN_VOCATIVE_IGNORE_TOKENS.has(token)) continue;
       if (botTokens.has(token)) continue;
       if (speakerTokens.has(token)) continue;
       participantTokens.add(token);
@@ -631,7 +631,7 @@ export function isLikelyVocativeAddressToOtherParticipant({
 
   const firstToken = tokens[0];
   const secondToken = tokens[1];
-  if (VOCATIVE_GREETING_TOKENS.has(firstToken) && participantTokens.has(secondToken)) {
+  if (EN_VOCATIVE_GREETING_TOKENS.has(firstToken) && participantTokens.has(secondToken)) {
     return true;
   }
 
@@ -677,7 +677,7 @@ function containsTokenSequence(tokens = [], sequence = []) {
 function resolvePrimaryWakeToken(botTokens = []) {
   const candidates = botTokens.filter((token) => token.length >= PRIMARY_WAKE_TOKEN_MIN_LEN);
   if (!candidates.length) return null;
-  const preferred = candidates.find((token) => !PRIMARY_WAKE_GENERIC_TOKENS.has(token));
+  const preferred = candidates.find((token) => !EN_WAKE_PRIMARY_GENERIC_TOKENS.has(token));
   return preferred || candidates[0];
 }
 

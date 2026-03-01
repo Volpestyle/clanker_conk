@@ -165,13 +165,22 @@ Use dashboard to:
 - `memory/YYYY-MM-DD.md` grows append-only with user-message journal entries.
 - `memory/MEMORY.md` is periodically curated from durable facts plus recent daily logs.
 - Personality is intentionally slangy and playful but constrained by explicit limitations.
+- Supported language handling note:
+  - Core admission/intent routing is LLM-driven, so non-English input can still be handled there.
+  - English-only heuristic fast paths remain for specific detections and are intentionally limited to reduce false positives:
+    - `src/voice/voiceDecisionRuntime.ts`: `EN_LOW_SIGNAL_GUARD_TOKENS` (`yo/hi/sup/ey/oi/oy/ha`) and question-word regex (`who/what/when/where/why/how/...`).
+    - `src/directAddressConfidence.ts`: `EN_GENERIC_NAME_TOKENS`.
+    - `src/voice/voiceSessionHelpers.ts`: wake/vocative heuristics around `EN_VOCATIVE_GREETING_TOKENS`, `EN_VOCATIVE_IGNORE_TOKENS`, `resolvePrimaryWakeToken`, and `resolveMergedWakeToken`.
+    - `src/voice/voiceSessionManager.ts`: music intent regexes (`EN_MUSIC_STOP_VERB_RE`, `EN_MUSIC_CUE_RE`, `EN_MUSIC_PLAY_VERB_RE`, `EN_MUSIC_PLAY_QUERY_RE`) and related cleaning regexes in `extractMusicPlayQuery`.
+    - `src/memory/memoryHelpers.ts`: English phrase-based memory text cleanup and instruction-like filters (`cleanFactForMemory`, `isInstructionLikeFactText`).
+    - `src/botHelpers.ts`: `EN_WEB_SEARCH_OPTOUT_RE` (`do not/search/no ... google/search/look up`).
 
 ## 6. Technical Docs
 
 - Architecture and flow diagrams: `docs/technical-architecture.md`
 - LLM orchestration mental model: `docs/llm-orchestration-mental-model.md`
 - Claude Code brain session mode: `docs/claude-code-brain-session-mode.md`
-- Reply decision policy (text + voice): `docs/reply-decision-flow.md`
+- Reply decision & conversation context flow: `docs/reply-and-context-flow.md`
 - Memory system source of truth: `docs/memory-system.md`
 - Replay harness guide (flooding + authoring): `docs/replay-test-suite.md`
 - Voice golden validation suite: `docs/voice-golden-test-suite.md`

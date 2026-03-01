@@ -283,10 +283,10 @@ function normalizeVoiceAddressingTargetToken(value = "") {
   return normalized;
 }
 
-const MUSIC_STOP_VERB_RE = /\b(?:stop|pause|halt|end|quit|shut\s*off)\b/i;
-const MUSIC_CUE_RE = /\b(?:music|song|songs|track|tracks|playback|playing)\b/i;
-const MUSIC_PLAY_VERB_RE = /\b(?:play|start|queue|put\s+on|spin)\b/i;
-const MUSIC_PLAY_QUERY_RE =
+const EN_MUSIC_STOP_VERB_RE = /\b(?:stop|pause|halt|end|quit|shut\s*off)\b/i;
+const EN_MUSIC_CUE_RE = /\b(?:music|song|songs|track|tracks|playback|playing)\b/i;
+const EN_MUSIC_PLAY_VERB_RE = /\b(?:play|start|queue|put\s+on|spin)\b/i;
+const EN_MUSIC_PLAY_QUERY_RE =
   /\b(?:play|start|queue|put\s+on|spin)\b\s+(.+)$/i;
 const MUSIC_DISAMBIGUATION_MAX_RESULTS = 5;
 const MUSIC_DISAMBIGUATION_TTL_MS = 10 * 60 * 1000;
@@ -1077,8 +1077,8 @@ export class VoiceSessionManager {
   isLikelyMusicStopPhrase({ transcript = "", settings = null } = {}) {
     const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     if (!normalizedTranscript) return false;
-    if (!MUSIC_STOP_VERB_RE.test(normalizedTranscript)) return false;
-    if (MUSIC_CUE_RE.test(normalizedTranscript)) return true;
+    if (!EN_MUSIC_STOP_VERB_RE.test(normalizedTranscript)) return false;
+    if (EN_MUSIC_CUE_RE.test(normalizedTranscript)) return true;
     if (this.hasBotNameCueForTranscript({ transcript: normalizedTranscript, settings })) return true;
     const tokenCount = normalizedTranscript.split(/\s+/).filter(Boolean).length;
     return tokenCount <= 3;
@@ -1087,8 +1087,8 @@ export class VoiceSessionManager {
   isLikelyMusicPlayPhrase({ transcript = "", settings = null } = {}) {
     const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     if (!normalizedTranscript) return false;
-    if (!MUSIC_PLAY_VERB_RE.test(normalizedTranscript)) return false;
-    if (MUSIC_CUE_RE.test(normalizedTranscript)) return true;
+    if (!EN_MUSIC_PLAY_VERB_RE.test(normalizedTranscript)) return false;
+    if (EN_MUSIC_CUE_RE.test(normalizedTranscript)) return true;
     return this.hasBotNameCueForTranscript({ transcript: normalizedTranscript, settings });
   }
 
@@ -1101,7 +1101,7 @@ export class VoiceSessionManager {
       return normalizeInlineText(quotedMatch[1], 120);
     }
 
-    const playMatch = normalizedTranscript.match(MUSIC_PLAY_QUERY_RE);
+    const playMatch = normalizedTranscript.match(EN_MUSIC_PLAY_QUERY_RE);
     const candidate = playMatch?.[1] ? String(playMatch[1]) : "";
     if (!candidate) return "";
 
@@ -2143,8 +2143,8 @@ export class VoiceSessionManager {
     }
 
     // Heuristic-only stop detection — no LLM round-trip.
-    // NOTE: isLikelyMusicStopPhrase uses English-only regex patterns (MUSIC_STOP_VERB_RE,
-    // MUSIC_CUE_RE). Supporting other languages requires a dedicated locale-aware filter function.
+    // NOTE: isLikelyMusicStopPhrase uses English-only regex patterns (EN_MUSIC_STOP_VERB_RE,
+    // EN_MUSIC_CUE_RE). Supporting other languages requires a dedicated locale-aware filter function.
     const shouldStop = this.isLikelyMusicStopPhrase({
       transcript: normalizedTranscript,
       settings: resolvedSettings

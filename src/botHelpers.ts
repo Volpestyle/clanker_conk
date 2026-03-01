@@ -11,7 +11,7 @@ const VIDEO_PROMPT_DIRECTIVE_RE = /\[\[VIDEO_PROMPT:\s*([^\]]*?)\s*\]\]\s*$/i;
 const STRUCTURED_REPLY_CODE_FENCE_OPEN_RE = /^```(?:json)?\s*/i;
 const STRUCTURED_REPLY_TEXT_FIELD_RE = /"text"\s*:\s*"((?:\\.|[^"\\])*)"/s;
 const STRUCTURED_REPLY_SKIP_TRUE_RE = /"skip"\s*:\s*true\b/i;
-const WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
+const EN_WEB_SEARCH_OPTOUT_RE = /\b(?:do\s*not|don't|dont|no)\b[\w\s,]{0,24}\b(?:google|search|look\s*up)\b/i;
 const DEFAULT_MAX_MEDIA_PROMPT_LEN = 900;
 const MAX_MEDIA_PROMPT_FLOOR = 120;
 const MAX_MEDIA_PROMPT_CEILING = 2000;
@@ -1036,7 +1036,7 @@ export function serializeForPrompt(value, maxLen = 1200) {
 }
 
 export function isWebSearchOptOutText(rawText) {
-  return WEB_SEARCH_OPTOUT_RE.test(String(rawText || ""));
+  return EN_WEB_SEARCH_OPTOUT_RE.test(String(rawText || ""));
 }
 
 const DISCORD_MSG_SPLIT_LIMIT = 1900;
