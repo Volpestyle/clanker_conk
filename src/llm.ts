@@ -253,7 +253,7 @@ export class LLMService {
   }) {
     const { provider, model } = this.resolveProviderAndModel(settings?.llm ?? {});
     const temperature = Number(settings?.llm?.temperature) || 0.9;
-    const maxOutputTokens = Number(settings?.llm?.maxOutputTokens) || 220;
+    const maxOutputTokens = Number(settings?.llm?.maxOutputTokens) || 1500;
     const normalizedJsonSchema = String(jsonSchema || "").trim();
     const effectiveSystemPrompt =
       normalizedJsonSchema && provider !== "claude-code" && provider !== "openai"
