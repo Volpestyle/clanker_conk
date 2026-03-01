@@ -1,35 +1,41 @@
-# Initiative Creative Discovery Spec
+# Initiative Creative Discovery
 
-## Goal
-Make initiative channels feel alive and surprising by letting the bot discover fresh external content and turn it into native-feeling Discord posts.
+## Purpose
 
-## Outcomes
-- Higher-quality initiative posts with real links and timely topics.
-- Fewer repeats via persistent shared-link dedupe.
-- Full control from dashboard without code edits.
+The discovery subsystem enriches initiative posts with fresh external content by fetching, filtering, and ranking candidate links from configured sources. This enables initiative channels to surface timely topics and real links instead of generating content purely from the model's training data.
 
-## Product Behavior
-1. On each initiative cycle that is due, bot gathers candidate links from enabled sources.
-2. Discovery candidates are filtered by freshness window and repost-avoid window.
+## Design Properties
+
+- Initiative posts include real links and timely topics when discovery is enabled.
+- Persistent shared-link dedupe prevents repeat posts of the same URL.
+- All controls are exposed through the dashboard settings UI with no code changes required.
+
+## Runtime Behavior
+
+1. On each initiative cycle that is due, `DiscoveryService.collect()` gathers candidate links from enabled sources.
+2. Candidates are filtered by freshness window and repost-avoid window.
 3. Highest-scoring candidates are injected into the initiative prompt as optional inspiration.
-4. Bot writes one natural standalone message; if configured, it must include at least one discovered link.
-5. Any links actually posted are recorded for dedupe on later cycles.
+4. The bot generates one standalone message; if `requireLink` is enabled, the post must include at least one discovered link.
+5. Any links actually posted are recorded in the `shared_links` table for dedupe on later cycles.
 
-## Supported Sources (v1)
+## Supported Sources
+
 - Reddit hot feed (`r/...`)
 - Hacker News top stories
 - YouTube channel RSS
 - Generic RSS feeds
 - X handles via Nitter RSS (optional)
 
-## Ranking Heuristics (v1)
+## Ranking Heuristics
+
 - Source quality weight
-- Topic overlap with recent channel messages + preferred topics
+- Topic overlap with recent channel messages and preferred topics
 - Freshness decay
 - Optional popularity boost
 - Configurable randomness factor
 
-## Safety & Guardrails
+## Safety and Guardrails
+
 - HTTP/HTTPS only.
 - Local/private hostnames blocked (`localhost`, RFC1918 IP ranges).
 - Tracking query params stripped from URLs.
@@ -37,37 +43,43 @@ Make initiative channels feel alive and surprising by letting the bot discover f
 - Hard caps on source fetch size and prompt candidate count.
 
 ## Dashboard Controls
+
 Under `Autonomous Initiative Posts -> Creative Discovery`:
-- Enable discovery
-- Chance that initiative post should include links
-- Max links/post
-- Candidate count injected into prompt
-- Freshness window (hours)
-- Repost-avoid window (hours)
-- Discovery randomness
-- Source fetch limit
-- Source toggles
-- Preferred topics
-- Source lists (subreddits, YouTube channel IDs, RSS feeds, X handles, Nitter base URL)
+
+- `discovery.enabled`: master toggle.
+- `discovery.linkChancePercent`: probability that an initiative post should include links.
+- `discovery.maxLinksPerPost`: upper bound on links per post.
+- `discovery.candidateCount`: number of candidates injected into the prompt.
+- `discovery.freshnessWindowHours`: maximum age of candidate content.
+- `discovery.repostAvoidWindowHours`: dedupe cooldown after posting a link.
+- `discovery.randomness`: randomness factor applied during ranking.
+- `discovery.sourceFetchLimit`: per-source fetch cap.
+- Source toggles and source lists (subreddits, YouTube channel IDs, RSS feeds, X handles, Nitter base URL).
+- Preferred topics.
 
 ## Data Model
-- New table: `shared_links`
-  - `url` (PK)
-  - `first_shared_at`
-  - `last_shared_at`
-  - `share_count`
-  - `source`
+
+`shared_links` table:
+
+- `url` (PK)
+- `first_shared_at`
+- `last_shared_at`
+- `share_count`
+- `source`
 
 ## Observability
-- `initiative_post` metadata now includes:
-  - discovery enablement
-  - required-link flag
-  - topic seeds
-  - candidate and selected counts
-  - used links
-  - source reports/errors
 
-## Rollout Notes
-- Start with discovery enabled + `linkChancePercent` around `65-80`.
-- Keep `maxLinksPerPost=1-2` for non-spammy channel behavior.
-- Keep freshness between `48-120` hours based on channel velocity.
+`initiative_post` action metadata includes:
+
+- Discovery enablement flag
+- Required-link flag
+- Topic seeds
+- Candidate and selected counts
+- Used links
+- Source reports and errors
+
+## Tuning Guidance
+
+- Recommended starting point: discovery enabled with `linkChancePercent` around `65-80`.
+- `maxLinksPerPost=1-2` avoids spammy channel behavior.
+- Freshness window between `48-120` hours, adjusted based on channel velocity.

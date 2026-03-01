@@ -1,20 +1,22 @@
-# Screen Share Link Spec
+# Screen Share Link
 
 Updated: February 28, 2026
 
-## Goal
-Let the bot send a temporary clickable link in Discord that opens a browser screen-share page and streams frames to the bot voice session.
+## Purpose
 
-## UX Flow
-1. User asks the bot to look at their screen (or model decides a visual would help).
-2. Reply model sets `screenShareIntent.action=offer_link`.
-3. Bot creates a short-lived tokenized share session.
-4. Bot replies with a tokenized share URL:
-   - local fallback: `http://127.0.0.1:<DASHBOARD_PORT>/share/<token>`
-   - public tunnel (when enabled): `https://.../share/<token>`
-5. User opens link and clicks `Start Sharing`.
-6. Browser captures display frames and posts them to `/api/voice/share-session/:token/frame`.
-7. Bot ingests frames through existing stream-watch flow and comments in VC.
+The screen-share link system enables the bot to send a temporary clickable link in Discord that opens a browser-based screen capture page. Captured frames are streamed back to the bot voice session for visual commentary.
+
+## Runtime Flow
+
+1. A channel member requests screen sharing, or the model determines a visual would be helpful.
+2. The reply model sets `screenShareIntent.action=offer_link`.
+3. The bot creates a short-lived tokenized share session via `ScreenShareSessionManager`.
+4. The bot replies with a tokenized share URL:
+   - Local fallback: `http://127.0.0.1:<DASHBOARD_PORT>/share/<token>`
+   - Public tunnel (when enabled): `https://.../share/<token>`
+5. The link opens a browser capture page; clicking `Start Sharing` begins frame transmission.
+6. The browser posts display frames to `/api/voice/share-session/:token/frame`.
+7. Frames are ingested through the existing stream-watch flow and the bot comments in the voice channel.
 
 ## Scope
 - Structured reply support for `screenShareIntent`.
@@ -30,7 +32,7 @@ Let the bot send a temporary clickable link in Discord that opens a browser scre
   - requester in same VC
   - stream watch enabled
   - `voice.mode` supports stream-watch commentary:
-    `openai_realtime`, `gemini_realtime`, or `voice_agent` with a configured vision fallback provider
+    `openai_realtime`, `gemini_realtime`, `elevenlabs_realtime`, or `voice_agent` with a configured vision fallback provider (`anthropic`, `xai`, or `claude-code`)
 - Frame ingest revalidates requester/target VC presence and auto-stops the share session if either leaves.
 - Public ingress route-gating and token/header auth rules are defined in `docs/public-https-entrypoint-spec.md`.
 - When public HTTPS is disabled, share links are localhost-only and intended for the machine running the bot.

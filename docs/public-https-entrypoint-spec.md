@@ -1,9 +1,10 @@
-# Public HTTPS Entrypoint Spec
+# Public HTTPS Entrypoint
 
 Updated: February 28, 2026
 
-## Goal
-Create a first-class way to expose the local dashboard/API (`localhost:8787`) over public HTTPS so remote users can open share links and send stream frames to the bot process.
+## Purpose
+
+The public HTTPS entrypoint exposes the local dashboard/API (`localhost:8787`) over public HTTPS via Cloudflare Quick Tunnel, enabling remote access to share links and stream-frame ingest endpoints.
 
 ## Scope
 - Add optional runtime-managed public HTTPS entrypoint via Cloudflare Quick Tunnel (`cloudflared`).
@@ -12,11 +13,12 @@ Create a first-class way to expose the local dashboard/API (`localhost:8787`) ov
 - Keep frame ingest routes authenticated via either private admin token, public API token, or short-lived share-session token.
 
 ## Non-Goals
+
 - Native Discord Go Live capture from bot APIs.
 - Building a custom reverse proxy/TLS terminator.
 - Replacing tunnel providers with a plugin system.
 
-## Product Behavior
+## Runtime Behavior
 
 ### 1. Optional Public HTTPS Runtime
 When `PUBLIC_HTTPS_ENABLED=true`:
@@ -63,7 +65,7 @@ State shape:
   - tokenized `POST /api/voice/share-session/:token/frame`
   - tokenized `POST /api/voice/share-session/:token/stop`
   - `GET /share/:token`
-- Non-allowlisted API routes on tunnel host return `404`.
+- Non-allowlisted API routes on tunnel host (without a valid token) return `404`.
 - Dashboard UI/static routes on tunnel host return `404` unless they are tokenized share pages.
 - Public header-token routes (`/api/voice/stream-ingest/frame`) accept either:
   - `x-dashboard-token` matching `DASHBOARD_TOKEN`, or
@@ -99,7 +101,7 @@ Environment variables:
 ## Security Model
 - Public HTTPS entrypoint does not bypass API auth.
 - Stream ingest endpoint requires either private admin auth (`DASHBOARD_TOKEN`) or public ingress auth (`PUBLIC_API_TOKEN`).
-- Operators should treat tunnel URL as untrusted public entrypoint and keep token secret.
+- The tunnel URL should be treated as an untrusted public entrypoint; tokens must be kept secret.
 
 ## Observability
 - Action stream includes:
@@ -108,14 +110,15 @@ Environment variables:
   - spawn/exit/log failures (`bot_error`)
 - Dashboard metrics include a `Public HTTPS` card showing current state/URL host.
 
-## Runbook
+## Setup
+
 1. Install `cloudflared`.
 2. Set `.env`:
    - `PUBLIC_HTTPS_ENABLED=true`
    - `DASHBOARD_TOKEN=<strong secret>` (required for private/admin APIs)
    - optionally `PUBLIC_API_TOKEN=<strong secret>` (for public-header ingress auth)
-3. Start bot: `bun run start`.
+3. Start the bot: `bun run start`.
 4. Confirm tunnel:
-   - dashboard `Public HTTPS` metric, or
+   - Dashboard `Public HTTPS` metric, or
    - `GET /api/public-https`.
-5. Use returned HTTPS origin for remote share workflows.
+5. The returned HTTPS origin is used for remote share workflows.

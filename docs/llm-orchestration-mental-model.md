@@ -1,9 +1,8 @@
 # LLM Orchestration Mental Model
 
-This repo is best understood as **conditional prompt engineering plus model routing**.
+The system is best understood as **conditional prompt engineering plus model routing**.
 
-Your framing is correct with one precision:
-- "weights" in this system are runtime **routing/policy knobs** (provider, model, effort, token budget, gates), not neural-network training weights.
+Key distinction: "weights" in this system refer to runtime **routing/policy knobs** (provider, model, effort, token budget, gates), not neural-network training weights.
 
 ## 1. Mental Model in One Line
 
@@ -54,10 +53,10 @@ The system uses two layers of conditions:
 
 ## 6. Practical Interpretation
 
-Treat the repo like a policy engine around model calls:
-- prompts are the policy surface,
-- settings are the routing weights,
-- conditions are the control logic,
-- outputs are contract-checked actions.
+The repo operates as a policy engine around model calls:
+- Prompts define the policy surface.
+- Settings define the routing weights.
+- Conditions define the control logic.
+- Outputs are contract-checked actions.
 
-That mental model is accurate for day-to-day tuning and refactors.
+This mental model holds for day-to-day tuning and refactors.

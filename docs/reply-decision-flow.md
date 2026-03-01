@@ -35,10 +35,11 @@ This document describes the current two-stage reply policy and how text and voic
 
 Current addressing signal reasons:
 
-- `direct`: explicit mention/reply-thread style direct address.
-- `name_exact`: exact/merged bot-name token match.
+- `direct`: explicit mention or reply-thread direct address.
+- `name_exact`: exact bot-name token match.
+- `name_alias`: exact match on a configured bot-name alias.
 - `llm_direct_address`: LLM confidence classifier marked the turn as likely directed at the bot.
-- `llm_decides`: no direct signal.
+- `llm_decides`: no direct signal; deferred to LLM evaluation.
 
 Important nuance: force-respond is only automatic for high-certainty direct signals; `llm_direct_address` does not auto-force (`shouldForceRespondForAddressSignal`).
 

@@ -1,6 +1,6 @@
 # Replay Test Suite
 
-This project currently has two offline behavior-validation harnesses:
+The project includes two offline behavior-validation harnesses:
 
 - Flooding replay harness: [`scripts/floodingReplayHarness.ts`](../scripts/floodingReplayHarness.ts)
 - Voice golden harness: [`scripts/voiceGoldenHarness.ts`](../scripts/voiceGoldenHarness.ts) (covered in `docs/voice-golden-test-suite.md`)
@@ -107,7 +107,7 @@ Use `scripts/replay/scenarios/flooding.ts` as the scenario template.
    - evaluates scenario assertions,
    - prints/writes scenario report output.
 3. Keep one decision path per mode (`recorded` vs `live`) and remove unused branches.
-4. Add scenario assertions that encode the behavior you want to protect.
+4. Add scenario assertions that encode the behavior the harness should protect.
 5. Create `scripts/<scenario>ReplayHarness.ts` as a thin entrypoint that calls the scenario runner.
 6. Optionally add `package.json` scripts:
    - `replay:<scenario>`

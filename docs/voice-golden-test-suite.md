@@ -13,6 +13,7 @@ Modes covered:
 - `voice_agent` (xAI realtime)
 - `openai_realtime`
 - `gemini_realtime`
+- `elevenlabs_realtime`
 
 Notes:
 
@@ -43,7 +44,7 @@ By default judge scoring is enabled in both simulated and live runs. Use `--no-j
 ```sh
 bun scripts/voiceGoldenHarness.ts \
   --mode live \
-  --modes stt_pipeline,voice_agent,openai_realtime,gemini_realtime \
+  --modes stt_pipeline,voice_agent,openai_realtime,gemini_realtime,elevenlabs_realtime \
   --iterations 1 \
   --judge-provider anthropic \
   --judge-model claude-haiku-4-5 \
