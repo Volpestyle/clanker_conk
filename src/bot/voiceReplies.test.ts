@@ -177,6 +177,10 @@ function createVoiceBot({
   generationText = "all good",
   generationError = null,
   generationSequence = null,
+  loadPromptMemorySlice = async () => ({
+    userFacts: [],
+    relevantFacts: []
+  }),
   searchConfigured = true,
   openArticleRead = async (url) => ({
     title: "opened article",
@@ -266,11 +270,8 @@ function createVoiceBot({
     buildMediaMemoryFacts() {
       return [];
     },
-    async loadPromptMemorySlice() {
-      return {
-        userFacts: [],
-        relevantFacts: []
-      };
+    async loadPromptMemorySlice(payload) {
+      return await loadPromptMemorySlice(payload);
     },
     loadRecentLookupContext(payload) {
       lookupMemorySearchCalls.push(payload);
@@ -777,6 +778,65 @@ test("generateVoiceTurnReply runs web lookup follow-up with start/complete callb
   assert.equal(reply.usedWebSearchFollowup, true);
 });
 
+test("generateVoiceTurnReply does not block web lookup on async start callback completion", async () => {
+  const eventOrder: string[] = [];
+  const { bot } = createVoiceBot({
+    generationSequence: [
+      structuredVoiceOutput({
+        text: "one sec",
+        webSearchQuery: "latest rust stable version"
+      }),
+      structuredVoiceOutput({
+        text: "latest stable rust is 1.90"
+      })
+    ],
+    runWebSearch: async ({ webSearch, query }) => {
+      eventOrder.push("search");
+      return {
+        ...(webSearch || {}),
+        requested: true,
+        query: String(query || "").trim(),
+        used: true,
+        results: [
+          {
+            title: "sample result",
+            url: "https://example.com",
+            domain: "example.com",
+            snippet: "sample"
+          }
+        ]
+      };
+    }
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      webSearch: {
+        enabled: true
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "what's the latest rust stable?",
+    onWebLookupStart: async () => {
+      eventOrder.push("start");
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      eventOrder.push("start_done");
+    },
+    onWebLookupComplete: async () => {
+      eventOrder.push("done");
+    }
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 70));
+  assert.equal(reply.usedWebSearchFollowup, true);
+  assert.equal(eventOrder.includes("start"), true);
+  assert.equal(eventOrder.includes("search"), true);
+  assert.equal(eventOrder.includes("start_done"), true);
+  assert.equal(eventOrder.indexOf("search") < eventOrder.indexOf("start_done"), true);
+});
+
 test("generateVoiceTurnReply queries short-term lookup memory during generation", async () => {
   const { bot, lookupMemorySearchCalls } = createVoiceBot({
     generationText: "[SKIP]",
@@ -853,6 +913,89 @@ test("generateVoiceTurnReply opens cached article via tool-call field", async ()
   assert.equal(Number(openArticleCalls[0]?.maxChars) >= 12000, true);
   assert.equal(reply.text, "here's what it says");
   assert.equal(reply.usedOpenArticleFollowup, true);
+});
+
+test("generateVoiceTurnReply does not block on unresolved memory lookup", async () => {
+  const { bot } = createVoiceBot({
+    generationText: structuredVoiceOutput({
+      text: "quick reply"
+    }),
+    loadPromptMemorySlice: async () => await new Promise(() => undefined)
+  });
+
+  const completed = await Promise.race([
+    generateVoiceTurnReply(bot, {
+      settings: baseSettings({
+        memory: {
+          enabled: true
+        }
+      }),
+      guildId: "guild-1",
+      channelId: "text-1",
+      userId: "user-1",
+      transcript: "what do you remember?"
+    }).then((reply) => String(reply?.text || "")),
+    new Promise<string>((resolve) => setTimeout(() => resolve("__timeout__"), 350))
+  ]);
+
+  assert.equal(completed, "quick reply");
+});
+
+test("generateVoiceTurnReply reuses cached memory context across turns", async () => {
+  let memoryLoadCalls = 0;
+  const { bot, generationPayloads } = createVoiceBot({
+    generationSequence: [
+      structuredVoiceOutput({
+        text: "first pass"
+      }),
+      structuredVoiceOutput({
+        text: "second pass"
+      })
+    ],
+    loadPromptMemorySlice: async () => {
+      memoryLoadCalls += 1;
+      if (memoryLoadCalls === 1) {
+        return {
+          userFacts: [{ subject: "author", fact: "likes ramen" }],
+          relevantFacts: []
+        };
+      }
+      return await new Promise(() => undefined);
+    }
+  });
+
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      memory: {
+        enabled: true
+      }
+    }),
+    sessionId: "voice-session-1",
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "anything i like?"
+  });
+
+  const secondReply = await Promise.race([
+    generateVoiceTurnReply(bot, {
+      settings: baseSettings({
+        memory: {
+          enabled: true
+        }
+      }),
+      sessionId: "voice-session-1",
+      guildId: "guild-1",
+      channelId: "text-1",
+      userId: "user-1",
+      transcript: "and now?"
+    }),
+    new Promise<{ text: string }>((resolve) => setTimeout(() => resolve({ text: "__timeout__" }), 350))
+  ]);
+
+  assert.equal(String(secondReply?.text || ""), "second pass");
+  const secondPrompt = String(generationPayloads[1]?.userPrompt || "");
+  assert.equal(secondPrompt.toLowerCase().includes("likes ramen"), true);
 });
 
 test("generateVoiceTurnReply triggers voice screen-share link offer from tool-call field", async () => {

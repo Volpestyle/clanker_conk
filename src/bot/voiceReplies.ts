@@ -34,6 +34,205 @@ const OPEN_ARTICLE_RESULTS_PER_ROW = 5;
 const OPEN_ARTICLE_ROW_REF_RE = /^r(\d+):(\d+)$/i;
 const OPEN_ARTICLE_INDEX_REF_RE = /^\d+$/;
 const OPEN_ARTICLE_URL_RE = /^https?:\/\//i;
+const VOICE_MEMORY_CONTEXT_CACHE_TTL_MS = 20 * 60_000;
+const VOICE_MEMORY_CONTEXT_CACHE_MAX_ENTRIES = 200;
+const VOICE_MEMORY_CONTEXT_MAX_FACTS = 24;
+const VOICE_MEMORY_PREFETCH_WAIT_MS = 120;
+const VOICE_MEMORY_FOLLOWUP_WAIT_MS = 240;
+
+type VoiceMemoryFact = Record<string, unknown>;
+
+type VoiceMemorySlice = {
+  userFacts: VoiceMemoryFact[];
+  relevantFacts: VoiceMemoryFact[];
+};
+
+type VoiceMemoryContextCacheEntry = {
+  updatedAtMs: number;
+  slice: VoiceMemorySlice;
+};
+
+const voiceMemoryContextCache = new Map<string, VoiceMemoryContextCacheEntry>();
+
+function emptyVoiceMemorySlice(): VoiceMemorySlice {
+  return {
+    userFacts: [],
+    relevantFacts: []
+  };
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function normalizeVoiceMemoryFactList(value: unknown): VoiceMemoryFact[] {
+  const rows = Array.isArray(value) ? value : [];
+  const normalized: VoiceMemoryFact[] = [];
+  for (const row of rows) {
+    if (!isPlainRecord(row)) continue;
+    normalized.push({ ...row });
+    if (normalized.length >= VOICE_MEMORY_CONTEXT_MAX_FACTS) break;
+  }
+  return normalized;
+}
+
+function normalizeVoiceMemorySlice(value: unknown): VoiceMemorySlice {
+  if (!isPlainRecord(value)) return emptyVoiceMemorySlice();
+  return {
+    userFacts: normalizeVoiceMemoryFactList(value.userFacts),
+    relevantFacts: normalizeVoiceMemoryFactList(value.relevantFacts)
+  };
+}
+
+function buildVoiceMemoryFactKey(row: VoiceMemoryFact, index: number): string {
+  const id = Number(row.id);
+  if (Number.isInteger(id) && id > 0) return `id:${id}`;
+  const subject = String(row.subject || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  const fact = String(row.fact || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  if (subject || fact) return `${subject}|${fact}`.slice(0, 420);
+  return `idx:${index}`;
+}
+
+function mergeVoiceMemoryFactLists(primary: VoiceMemoryFact[], secondary: VoiceMemoryFact[]): VoiceMemoryFact[] {
+  const merged: VoiceMemoryFact[] = [];
+  const seen = new Set<string>();
+  for (const list of [primary, secondary]) {
+    for (const row of list) {
+      const key = buildVoiceMemoryFactKey(row, merged.length);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      merged.push(row);
+      if (merged.length >= VOICE_MEMORY_CONTEXT_MAX_FACTS) return merged;
+    }
+  }
+  return merged;
+}
+
+function mergeVoiceMemorySlices(base: VoiceMemorySlice, fresh: VoiceMemorySlice): VoiceMemorySlice {
+  return {
+    userFacts: mergeVoiceMemoryFactLists(fresh.userFacts, base.userFacts),
+    relevantFacts: mergeVoiceMemoryFactLists(fresh.relevantFacts, base.relevantFacts)
+  };
+}
+
+function buildVoiceMemoryContextCacheKey({
+  sessionId,
+  guildId,
+  channelId,
+  userId
+}: {
+  sessionId?: string | null;
+  guildId?: string | null;
+  channelId?: string | null;
+  userId?: string | null;
+}): string {
+  const normalizedSessionId = String(sessionId || "").trim();
+  if (normalizedSessionId) return `session:${normalizedSessionId}`;
+
+  const parts = [
+    String(guildId || "").trim(),
+    String(channelId || "").trim(),
+    String(userId || "").trim()
+  ];
+  const joined = parts.filter(Boolean).join("|");
+  return joined ? `scope:${joined}` : "";
+}
+
+function pruneVoiceMemoryContextCache(nowMs = Date.now()) {
+  for (const [key, entry] of voiceMemoryContextCache.entries()) {
+    if (nowMs - Number(entry?.updatedAtMs || 0) > VOICE_MEMORY_CONTEXT_CACHE_TTL_MS) {
+      voiceMemoryContextCache.delete(key);
+    }
+  }
+  if (voiceMemoryContextCache.size <= VOICE_MEMORY_CONTEXT_CACHE_MAX_ENTRIES) return;
+
+  const sortedKeys = [...voiceMemoryContextCache.entries()]
+    .sort((a, b) => Number(a[1]?.updatedAtMs || 0) - Number(b[1]?.updatedAtMs || 0))
+    .map(([key]) => key);
+
+  while (voiceMemoryContextCache.size > VOICE_MEMORY_CONTEXT_CACHE_MAX_ENTRIES) {
+    const oldestKey = sortedKeys.shift();
+    if (!oldestKey) break;
+    voiceMemoryContextCache.delete(oldestKey);
+  }
+}
+
+function readVoiceMemoryContextCache(cacheKey: string): VoiceMemorySlice {
+  if (!cacheKey) return emptyVoiceMemorySlice();
+  const nowMs = Date.now();
+  pruneVoiceMemoryContextCache(nowMs);
+  const entry = voiceMemoryContextCache.get(cacheKey);
+  if (!entry) return emptyVoiceMemorySlice();
+  if (nowMs - Number(entry.updatedAtMs || 0) > VOICE_MEMORY_CONTEXT_CACHE_TTL_MS) {
+    voiceMemoryContextCache.delete(cacheKey);
+    return emptyVoiceMemorySlice();
+  }
+  return normalizeVoiceMemorySlice(entry.slice);
+}
+
+function writeVoiceMemoryContextCache(cacheKey: string, freshSlice: VoiceMemorySlice) {
+  if (!cacheKey) return;
+  const normalizedFresh = normalizeVoiceMemorySlice(freshSlice);
+  const hasFreshFacts = normalizedFresh.userFacts.length > 0 || normalizedFresh.relevantFacts.length > 0;
+  if (!hasFreshFacts) return;
+
+  const existing = readVoiceMemoryContextCache(cacheKey);
+  const merged = mergeVoiceMemorySlices(existing, normalizedFresh);
+  voiceMemoryContextCache.set(cacheKey, {
+    updatedAtMs: Date.now(),
+    slice: merged
+  });
+  pruneVoiceMemoryContextCache();
+}
+
+async function resolveVoiceMemorySliceWithTimeout({
+  memorySlicePromise,
+  fallbackSlice,
+  maxWaitMs = 0
+}: {
+  memorySlicePromise: Promise<VoiceMemorySlice> | null;
+  fallbackSlice: VoiceMemorySlice;
+  maxWaitMs?: number;
+}): Promise<VoiceMemorySlice> {
+  if (!memorySlicePromise) return fallbackSlice;
+  const boundedWaitMs = Math.max(0, Math.floor(Number(maxWaitMs) || 0));
+  if (!boundedWaitMs) return fallbackSlice;
+
+  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      memorySlicePromise.catch(() => fallbackSlice),
+      new Promise<VoiceMemorySlice>((resolve) => {
+        timeoutHandle = setTimeout(() => resolve(fallbackSlice), boundedWaitMs);
+      })
+    ]);
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
+  }
+}
+
+function runAsyncCallback(callback: unknown, payload: Record<string, unknown>) {
+  if (typeof callback !== "function") return;
+  try {
+    const maybePromise = callback(payload);
+    if (
+      maybePromise &&
+      typeof maybePromise === "object" &&
+      "catch" in maybePromise &&
+      typeof maybePromise.catch === "function"
+    ) {
+      maybePromise.catch(() => undefined);
+    }
+  } catch {
+    // callback errors should not block voice generation
+  }
+}
 
 export async function composeVoiceOperationalMessage(runtime, {
   settings,
@@ -317,19 +516,44 @@ export async function generateVoiceTurnReply(runtime, {
     .filter(Boolean)
     .slice(-6);
 
-  const memorySlice = await runtime.loadPromptMemorySlice({
-    settings,
-    userId,
+  const memoryCacheKey = buildVoiceMemoryContextCacheKey({
+    sessionId,
     guildId,
     channelId,
-    queryText: incomingTranscript,
-    trace: {
-      guildId,
-      channelId,
-      userId
-    },
-    source: "voice_stt_pipeline_generation"
+    userId
   });
+  const memoryEnabled = Boolean(settings?.memory?.enabled);
+  let promptMemorySlice = memoryEnabled ? readVoiceMemoryContextCache(memoryCacheKey) : emptyVoiceMemorySlice();
+  const memorySlicePromise: Promise<VoiceMemorySlice> | null =
+    memoryEnabled && typeof runtime.loadPromptMemorySlice === "function"
+      ? runtime
+          .loadPromptMemorySlice({
+            settings,
+            userId,
+            guildId,
+            channelId,
+            queryText: incomingTranscript,
+            trace: {
+              guildId,
+              channelId,
+              userId
+            },
+            source: "voice_stt_pipeline_generation"
+          })
+          .then((slice) => {
+            const normalizedSlice = normalizeVoiceMemorySlice(slice);
+            writeVoiceMemoryContextCache(memoryCacheKey, normalizedSlice);
+            return normalizeVoiceMemorySlice(mergeVoiceMemorySlices(promptMemorySlice, normalizedSlice));
+          })
+          .catch(() => promptMemorySlice)
+      : null;
+  if (!promptMemorySlice.userFacts.length && !promptMemorySlice.relevantFacts.length && memorySlicePromise) {
+    promptMemorySlice = await resolveVoiceMemorySliceWithTimeout({
+      memorySlicePromise,
+      fallbackSlice: promptMemorySlice,
+      maxWaitMs: VOICE_MEMORY_PREFETCH_WAIT_MS
+    });
+  }
   const recentWebLookupsRaw =
     typeof runtime.loadRecentLookupContext === "function"
       ? runtime.loadRecentLookupContext({
@@ -438,8 +662,8 @@ export async function generateVoiceTurnReply(runtime, {
       speakerName,
       transcript: incomingTranscript,
       directAddressed,
-      userFacts: memorySlice.userFacts,
-      relevantFacts: memorySlice.relevantFacts,
+      userFacts: promptMemorySlice.userFacts,
+      relevantFacts: promptMemorySlice.relevantFacts,
       isEagerTurn,
       voiceEagerness,
       conversationContext,
@@ -491,7 +715,7 @@ export async function generateVoiceTurnReply(runtime, {
       try {
         if (typeof onWebLookupStart === "function") {
           lookupStarted = true;
-          await onWebLookupStart({
+          runAsyncCallback(onWebLookupStart, {
             query: normalizedQuery,
             guildId,
             channelId,
@@ -538,7 +762,7 @@ export async function generateVoiceTurnReply(runtime, {
         }
       } finally {
         if (lookupStarted && typeof onWebLookupComplete === "function") {
-          await onWebLookupComplete({
+          runAsyncCallback(onWebLookupComplete, {
             query: normalizedQuery,
             guildId,
             channelId,
@@ -549,6 +773,11 @@ export async function generateVoiceTurnReply(runtime, {
       openArticleCandidates = buildOpenArticleCandidates({
         webSearch,
         recentWebLookups
+      });
+      promptMemorySlice = await resolveVoiceMemorySliceWithTimeout({
+        memorySlicePromise,
+        fallbackSlice: promptMemorySlice,
+        maxWaitMs: VOICE_MEMORY_FOLLOWUP_WAIT_MS
       });
 
       generation = await runtime.llm.generate({
@@ -622,6 +851,11 @@ export async function generateVoiceTurnReply(runtime, {
           error: "could not resolve that article ref from cached lookup results"
         };
       }
+      promptMemorySlice = await resolveVoiceMemorySliceWithTimeout({
+        memorySlicePromise,
+        fallbackSlice: promptMemorySlice,
+        maxWaitMs: VOICE_MEMORY_FOLLOWUP_WAIT_MS
+      });
 
       generation = await runtime.llm.generate({
         settings: tunedSettings,
