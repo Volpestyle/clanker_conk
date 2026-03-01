@@ -2680,7 +2680,7 @@ test("runRealtimeTurn uses native realtime forwarding when strategy is native", 
   assert.equal(forwardedPayloads[0]?.transcript, "");
 });
 
-test("runRealtimeTurn uses brain strategy when soundboard is enabled", async () => {
+test("runRealtimeTurn keeps native strategy when soundboard is enabled", async () => {
   const brainPayloads = [];
   const forwardedPayloads = [];
   const manager = createManager();
@@ -2731,10 +2731,11 @@ test("runRealtimeTurn uses brain strategy when soundboard is enabled", async () 
     captureReason: "stream_end"
   });
 
-  assert.equal(brainPayloads.length, 1);
-  assert.equal(forwardedPayloads.length, 0);
-  assert.equal(brainPayloads[0]?.session, session);
-  assert.equal(brainPayloads[0]?.source, "realtime");
+  assert.equal(brainPayloads.length, 0);
+  assert.equal(forwardedPayloads.length, 1);
+  assert.equal(forwardedPayloads[0]?.session, session);
+  assert.equal(forwardedPayloads[0]?.pcmBuffer, pcmBuffer);
+  assert.equal(forwardedPayloads[0]?.transcript, "");
 });
 
 test("bindRealtimeHandlers logs OpenAI realtime response.done usage cost", () => {

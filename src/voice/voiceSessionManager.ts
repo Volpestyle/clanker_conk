@@ -1296,6 +1296,39 @@ export class VoiceSessionManager {
     const maybeRepairPlayback = (triggerEvent) => {
       if (!session || session.ending) return;
       if (stream !== session.botAudioStream) return;
+      const queueState =
+        session.audioPlaybackQueue && typeof session.audioPlaybackQueue === "object"
+          ? session.audioPlaybackQueue
+          : null;
+      const queuedBytes = Math.max(0, Number(queueState?.queuedBytes || 0));
+      const streamBufferedBytes = Math.max(0, Number(stream?.writableLength || 0));
+      const hasPendingResponse = Boolean(session.pendingResponse && typeof session.pendingResponse === "object");
+      const hasActiveRealtimeResponse = this.isOpenAiRealtimeResponseActive(session);
+      const hasPlaybackDemand =
+        Boolean(session.botTurnOpen) ||
+        hasPendingResponse ||
+        hasActiveRealtimeResponse ||
+        queuedBytes > 0 ||
+        streamBufferedBytes > 0;
+      if (!hasPlaybackDemand) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.client.user?.id || null,
+          content: "bot_audio_stream_lifecycle_repair_skipped_idle",
+          metadata: {
+            sessionId: session.id,
+            triggerEvent: String(triggerEvent || "unknown"),
+            queuedBytes,
+            streamBufferedBytes,
+            botTurnOpen: Boolean(session.botTurnOpen),
+            pendingResponse: hasPendingResponse,
+            openAiActiveResponse: hasActiveRealtimeResponse
+          }
+        });
+        return;
+      }
       ensureBotAudioPlaybackReady({
         session,
         store: this.store,
@@ -4715,9 +4748,6 @@ export class VoiceSessionManager {
       .trim()
       .toLowerCase();
     if (strategy === "native") {
-      if (resolvedSettings?.voice?.soundboard?.enabled) {
-        return "brain";
-      }
       return "native";
     }
     return "brain";

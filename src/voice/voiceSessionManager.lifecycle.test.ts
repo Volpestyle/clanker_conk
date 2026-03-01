@@ -1,5 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
 import {
@@ -979,6 +980,113 @@ test("bindBotAudioStreamLifecycle records stream close event", () => {
   );
   assert.equal(Boolean(lifecycleLog), true);
   assert.equal(lifecycleLog?.metadata?.event, "close");
+});
+
+test("bindBotAudioStreamLifecycle skips repair when stream closes while playback is idle", () => {
+  const { manager, logs } = createManager();
+  const stream = new PassThrough();
+  const session = createSession({
+    botAudioStream: stream,
+    botTurnOpen: false,
+    pendingResponse: null,
+    realtimeClient: {
+      isResponseInProgress() {
+        return false;
+      }
+    },
+    audioPlayer: {
+      state: {
+        status: "playing"
+      },
+      play() {}
+    },
+    connection: {
+      subscribe() {}
+    },
+    audioPlaybackQueue: {
+      chunks: [],
+      headOffset: 0,
+      queuedBytes: 0,
+      pumping: false,
+      timer: null,
+      waitingDrain: false,
+      drainHandler: null,
+      lastWarnAt: 0,
+      lastTrimAt: 0
+    }
+  });
+
+  manager.bindBotAudioStreamLifecycle(session, {
+    stream,
+    source: "test_idle_close"
+  });
+  stream.emit("close");
+
+  assert.equal(logs.some((entry) => entry?.content === "bot_audio_stream_lifecycle"), true);
+  assert.equal(logs.some((entry) => entry?.content === "bot_audio_stream_lifecycle_repair_skipped_idle"), true);
+  assert.equal(logs.some((entry) => entry?.content === "bot_audio_stream_lifecycle_repair_attempted"), false);
+  assert.equal(logs.some((entry) => entry?.content === "bot_audio_pipeline_restarted"), false);
+});
+
+test("bindBotAudioStreamLifecycle repairs stream on error when playback demand is active", () => {
+  const { manager, logs } = createManager();
+  const stream = Object.assign(new EventEmitter(), {
+    destroyed: false,
+    writableEnded: false,
+    writableFinished: false,
+    closed: false,
+    writableLength: 0,
+    destroy(error = null) {
+      this.destroyed = true;
+      if (error) {
+        this.emit("error", error);
+      }
+      this.closed = true;
+      this.emit("close");
+    }
+  });
+  const session = createSession({
+    botAudioStream: stream,
+    botTurnOpen: true,
+    pendingResponse: {
+      requestId: 42
+    },
+    realtimeClient: {
+      isResponseInProgress() {
+        return true;
+      }
+    },
+    audioPlayer: {
+      state: {
+        status: "playing"
+      },
+      play() {}
+    },
+    connection: {
+      subscribe() {}
+    },
+    audioPlaybackQueue: {
+      chunks: [],
+      headOffset: 0,
+      queuedBytes: 0,
+      pumping: false,
+      timer: null,
+      waitingDrain: false,
+      drainHandler: null,
+      lastWarnAt: 0,
+      lastTrimAt: 0
+    }
+  });
+
+  manager.bindBotAudioStreamLifecycle(session, {
+    stream,
+    source: "test_active_error"
+  });
+  stream.destroy(new Error("Premature close"));
+
+  assert.equal(logs.some((entry) => entry?.content === "bot_audio_stream_lifecycle_repair_attempted"), true);
+  assert.equal(logs.some((entry) => entry?.content === "bot_audio_pipeline_restarted"), true);
+  assert.equal(session.botAudioStream === stream, false);
 });
 
 test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown", () => {

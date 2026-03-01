@@ -225,7 +225,12 @@ export function ensureBotAudioPlaybackReady({
 
   const restartAudioPipeline = (reason, extraMetadata = null) => {
     const now = Date.now();
-    if (now - Number(session.lastAudioPipelineRepairAt || 0) < 600) {
+    const streamUnavailable =
+      !session.botAudioStream ||
+      session.botAudioStream.destroyed ||
+      session.botAudioStream.writableEnded ||
+      session.botAudioStream.closed;
+    if (now - Number(session.lastAudioPipelineRepairAt || 0) < 600 && !streamUnavailable) {
       return true;
     }
     session.lastAudioPipelineRepairAt = now;
