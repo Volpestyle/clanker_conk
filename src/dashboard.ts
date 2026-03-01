@@ -3,7 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import express from "express";
 import type { Response } from "express";
-import { appConfig, normalizeDashboardHost } from "./config.ts";
+import { normalizeDashboardHost } from "./config.ts";
 import { getLlmModelCatalog } from "./pricing.ts";
 import { classifyApiAccessPath, isAllowedPublicApiPath, isPublicTunnelRequestHost } from "./publicIngressAccess.ts";
 
@@ -26,6 +26,17 @@ export function createDashboardServer({
 }) {
   const app = express();
   const publicFrameIngressRateLimit = new Map();
+  const getStatsPayload = () => {
+    const botRuntime = bot.getRuntimeState();
+    return {
+      stats: store.getStats(),
+      runtime: {
+        ...botRuntime,
+        publicHttps: publicHttpsEntrypoint?.getState?.() || null,
+        screenShare: screenShareSessionManager?.getRuntimeState?.() || null
+      }
+    };
+  };
 
   app.use((req, res, next) => {
     if (!isPublicFrameIngressPath(req.path)) return next();
@@ -138,15 +149,7 @@ export function createDashboardServer({
   });
 
   app.get("/api/stats", (_req, res) => {
-    const botRuntime = bot.getRuntimeState();
-    res.json({
-      stats: store.getStats(),
-      runtime: {
-        ...botRuntime,
-        publicHttps: publicHttpsEntrypoint?.getState?.() || null,
-        screenShare: screenShareSessionManager?.getRuntimeState?.() || null
-      }
-    });
+    res.json(getStatsPayload());
   });
 
   app.get("/api/public-https", (_req, res) => {
@@ -380,27 +383,109 @@ export function createDashboardServer({
     }
   });
 
-  // ---- Voice SSE live-stream ----
-  const sseClients = new Set<{ res: Response; blocked: boolean }>();
-
-  store.onActionLogged = (action) => {
-    if (!action?.kind?.startsWith("voice_") || sseClients.size === 0) return;
-    const payload = `event: voice_event\ndata: ${JSON.stringify(action)}\n\n`;
-    for (const client of sseClients) {
-      if (client.blocked) continue;
+  // ---- Dashboard/Voice SSE live-stream ----
+  const voiceSseClients = new Set<{ res: Response; blocked: boolean }>();
+  const activitySseClients = new Set<{ res: Response; blocked: boolean }>();
+  const writeSseEvent = (client: { res: Response; blocked: boolean }, eventName: string, payload: unknown) => {
+    if (!client || client.blocked) return;
+    try {
+      const wirePayload = `event: ${String(eventName || "message")}\ndata: ${JSON.stringify(payload)}\n\n`;
+      const wrote = client.res.write(wirePayload);
+      if (wrote === false && typeof client.res.once === "function") {
+        client.blocked = true;
+        client.res.once("drain", () => {
+          client.blocked = false;
+        });
+      }
+    } catch {
+      // caller handles client cleanup
+      throw new Error("sse_write_failed");
+    }
+  };
+  const broadcastSseEvent = (
+    clients: Set<{ res: Response; blocked: boolean }>,
+    eventName: string,
+    payload: unknown
+  ) => {
+    if (!clients || clients.size === 0) return;
+    for (const client of clients) {
       try {
-        const wrote = client.res.write(payload);
-        if (wrote === false && typeof client.res.once === "function") {
-          client.blocked = true;
-          client.res.once("drain", () => {
-            client.blocked = false;
-          });
-        }
+        writeSseEvent(client, eventName, payload);
       } catch {
-        sseClients.delete(client);
+        clients.delete(client);
       }
     }
   };
+
+  const previousActionListener = typeof store.onActionLogged === "function" ? store.onActionLogged : null;
+  store.onActionLogged = (action) => {
+    if (previousActionListener) {
+      try {
+        previousActionListener(action);
+      } catch {
+        // keep dashboard listener resilient
+      }
+    }
+
+    if (activitySseClients.size > 0) {
+      broadcastSseEvent(activitySseClients, "action_event", action);
+      broadcastSseEvent(activitySseClients, "stats_update", getStatsPayload());
+    }
+    if (action?.kind?.startsWith("voice_") && voiceSseClients.size > 0) {
+      broadcastSseEvent(voiceSseClients, "voice_event", action);
+    }
+  };
+
+  app.get("/api/activity/events", (_req, res) => {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no"
+    });
+
+    const client = { res, blocked: false };
+    activitySseClients.add(client);
+
+    const sendSnapshot = () => {
+      writeSseEvent(client, "activity_snapshot", {
+        actions: store.getRecentActions(220),
+        stats: getStatsPayload()
+      });
+    };
+    const sendStats = () => {
+      writeSseEvent(client, "stats_update", getStatsPayload());
+    };
+
+    try {
+      sendSnapshot();
+    } catch {
+      activitySseClients.delete(client);
+      return res.end();
+    }
+
+    const statsInterval = setInterval(() => {
+      try {
+        sendStats();
+      } catch {
+        activitySseClients.delete(client);
+      }
+    }, 3_000);
+
+    const heartbeat = setInterval(() => {
+      try {
+        res.write(": heartbeat\n\n");
+      } catch {
+        // swallowed; close handler will clean up
+      }
+    }, 15_000);
+
+    _req.on("close", () => {
+      clearInterval(statsInterval);
+      clearInterval(heartbeat);
+      activitySseClients.delete(client);
+    });
+  });
 
   app.get("/api/voice/events", (req, res) => {
     res.writeHead(200, {
@@ -424,12 +509,12 @@ export function createDashboardServer({
     }, 15_000);
 
     const client = { res, blocked: false };
-    sseClients.add(client);
+    voiceSseClients.add(client);
 
     req.on("close", () => {
       clearInterval(stateInterval);
       clearInterval(heartbeat);
-      sseClients.delete(client);
+      voiceSseClients.delete(client);
     });
   });
 

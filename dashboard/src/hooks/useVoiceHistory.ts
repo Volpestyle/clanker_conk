@@ -12,6 +12,12 @@ export type HistorySession = {
   endReason: string;
 };
 
+function extractSessionId(metadata: unknown): string {
+  if (!metadata || typeof metadata !== "object") return "";
+  const rawSessionId = (metadata as { sessionId?: unknown }).sessionId;
+  return String(rawSessionId || "").trim();
+}
+
 export function useVoiceHistory() {
   const [sessions, setSessions] = useState<HistorySession[]>([]);
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -70,5 +76,35 @@ export function useVoiceHistory() {
     fetchSessions();
   }, [fetchSessions]);
 
-  return { sessions, selectedSessionId, events, loading, error, toggle, refresh };
+  const ingestLiveEvent = useCallback((event: VoiceEvent | null | undefined) => {
+    const liveEvent = event && typeof event === "object" ? event : null;
+    if (!liveEvent) return;
+    if (!selectedSessionId) return;
+    const sessionId = extractSessionId(liveEvent.metadata);
+    if (!sessionId || sessionId !== selectedSessionId) return;
+
+    setEvents((previous) => {
+      const createdAt = String(liveEvent.createdAt || "").trim();
+      const kind = String(liveEvent.kind || "").trim();
+      const content = String(liveEvent.content || "").trim();
+      const alreadyPresent = previous.some((row) => {
+        const rowCreatedAt = String(row?.createdAt || "").trim();
+        const rowKind = String(row?.kind || "").trim();
+        const rowContent = String(row?.content || "").trim();
+        return rowCreatedAt === createdAt && rowKind === kind && rowContent === content;
+      });
+      if (alreadyPresent) return previous;
+
+      const next = [...previous, liveEvent];
+      next.sort((a, b) => {
+        const aAt = String(a?.createdAt || "");
+        const bAt = String(b?.createdAt || "");
+        if (aAt === bAt) return 0;
+        return aAt > bAt ? 1 : -1;
+      });
+      return next;
+    });
+  }, [selectedSessionId]);
+
+  return { sessions, selectedSessionId, events, loading, error, toggle, refresh, ingestLiveEvent };
 }

@@ -1,6 +1,7 @@
 import { useState, useCallback, type ReactNode } from "react";
 import { api } from "./api";
 import { usePolling } from "./hooks/usePolling";
+import { useActivitySSE } from "./hooks/useActivitySSE";
 import Header from "./components/Header";
 import MetricsBar from "./components/MetricsBar";
 import SettingsForm from "./components/SettingsForm";
@@ -72,12 +73,10 @@ export default function App() {
     setTimeout(() => setToast({ text: "", type: "" }), 4000);
   }, []);
 
-  const stats = usePolling(() => api("/api/stats"), 10_000);
-  const actions = usePolling(() => api("/api/actions?limit=220"), 10_000);
+  const activity = useActivitySSE();
   const memory = usePolling(() => api("/api/memory"), 30_000);
   const settings = usePolling(() => api("/api/settings"), 0);
   const llmModels = usePolling(() => api("/api/llm/models"), 0);
-  const reloadStats = stats.reload;
   const reloadMemory = memory.reload;
   const reloadSettings = settings.reload;
 
@@ -85,12 +84,11 @@ export default function App() {
     try {
       await api("/api/settings", { method: "PUT", body: patch });
       reloadSettings();
-      reloadStats();
       notify("Settings saved");
     } catch (err) {
       notify(err.message, "error");
     }
-  }, [reloadSettings, reloadStats, notify]);
+  }, [reloadSettings, notify]);
 
   const handleMemoryRefresh = useCallback(async () => {
     try {
@@ -102,14 +100,14 @@ export default function App() {
     }
   }, [reloadMemory, notify]);
 
-  const isReady = stats.data?.runtime?.isReady ?? false;
+  const isReady = activity.stats?.runtime?.isReady ?? false;
 
   return (
     <main className="shell">
       <Header isReady={isReady} />
 
-      <MetricsBar stats={stats.data} />
-      <StaleIndicator lastSuccess={stats.lastSuccess} />
+      <MetricsBar stats={activity.stats} />
+      <StaleIndicator lastSuccess={activity.lastSuccess} />
 
       <nav className="main-tabs" role="tablist">
         {MAIN_TABS.map((mainTab) => (
@@ -133,10 +131,10 @@ export default function App() {
               {toast.text}
             </p>
           )}
-          <ActionStream actions={actions.data || []} />
+          <ActionStream actions={activity.actions} />
           <div className="stack">
-            <PerformancePanel performance={stats.data?.stats?.performance} />
-            <DailyCost rows={stats.data?.stats?.dailyCost} />
+            <PerformancePanel performance={activity.stats?.stats?.performance} />
+            <DailyCost rows={activity.stats?.stats?.dailyCost} />
           </div>
         </section>
       )}

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type ReactNode } from "react";
+import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { api } from "../api";
 import {
   useVoiceSSE,
@@ -58,6 +58,8 @@ const MODE_LABELS: Record<string, string> = {
   openai_realtime: "OpenAI RT",
   gemini: "Gemini",
   gemini_realtime: "Gemini RT",
+  elevenlabs: "ElevenLabs",
+  elevenlabs_realtime: "ElevenLabs RT",
   xai: "xAI",
   xai_realtime: "xAI RT",
   stt_pipeline: "STT Pipeline"
@@ -339,6 +341,11 @@ function RealtimeDetail({ session }: { session: VoiceSession }) {
   return (
     <Section title="Realtime Connection" badge={state.connected ? "connected" : "disconnected"}>
       <div className="vm-detail-grid">
+        <Stat
+          label="Superseded"
+          value={Number(rt.replySuperseded || 0)}
+          warn={Number(rt.replySuperseded || 0) > 0}
+        />
         {state.sessionId && <Stat label="Session" value={state.sessionId.slice(0, 12) + "..."} />}
         {state.connectedAt && <Stat label="Connected" value={relativeTime(state.connectedAt)} />}
         {state.lastEventAt && <Stat label="Last Event" value={relativeTime(state.lastEventAt)} />}
@@ -577,6 +584,13 @@ function SessionCard({ session }: { session: VoiceSession }) {
         <Stat label="Humans" value={session.participantCount} />
         <Stat label="Inputs" value={session.activeInputStreams} />
         <Stat label="Pending" value={totalPending} warn={totalPending > 2} />
+        {session.realtime && (
+          <Stat
+            label="Superseded"
+            value={Number(session.realtime.replySuperseded || 0)}
+            warn={Number(session.realtime.replySuperseded || 0) > 0}
+          />
+        )}
         <Stat label="Lookups" value={session.voiceLookupBusyCount} warn={session.voiceLookupBusyCount > 0} />
         <Stat label="Soundboard" value={session.soundboard.playCount} />
       </div>
@@ -914,6 +928,7 @@ function formatDuration(seconds: number): string {
 export default function VoiceMonitor() {
   const { voiceState, events, status } = useVoiceSSE();
   const history = useVoiceHistory();
+  const { refresh: refreshHistory, ingestLiveEvent } = history;
   const [guilds, setGuilds] = useState<Guild[]>([]);
   const [selectedGuildId, setSelectedGuildId] = useState("");
   const [joinTextChannelId, setJoinTextChannelId] = useState(DEFAULT_JOIN_TEXT_CHANNEL_ID);
@@ -931,18 +946,34 @@ export default function VoiceMonitor() {
   );
   const timelineRef = useRef<HTMLDivElement>(null);
   const prevSessionIdsRef = useRef<Set<string>>(new Set());
+  const lastProcessedLiveEventKeyRef = useRef("");
 
-  const sessions = voiceState?.sessions || [];
+  const sessions = useMemo(() => voiceState?.sessions || [], [voiceState?.sessions]);
 
   // Auto-refresh history when a live session disappears
   useEffect(() => {
     const currentIds = new Set(sessions.map((s) => s.sessionId));
     const prevIds = prevSessionIdsRef.current;
     if (prevIds.size > 0 && currentIds.size < prevIds.size) {
-      history.refresh();
+      refreshHistory();
     }
     prevSessionIdsRef.current = currentIds;
-  }, [sessions, history]);
+  }, [sessions, refreshHistory]);
+
+  // Keep history panels synced with live voice events.
+  useEffect(() => {
+    const latestEvent = events[0];
+    if (!latestEvent) return;
+    const key = `${String(latestEvent.createdAt || "")}|${String(latestEvent.kind || "")}|${String(latestEvent.content || "")}`;
+    if (!key || key === lastProcessedLiveEventKeyRef.current) return;
+    lastProcessedLiveEventKeyRef.current = key;
+
+    ingestLiveEvent(latestEvent);
+    const normalizedKind = String(latestEvent.kind || "").trim().toLowerCase();
+    if (normalizedKind === "voice_session_start" || normalizedKind === "voice_session_end") {
+      refreshHistory();
+    }
+  }, [events, ingestLiveEvent, refreshHistory]);
 
   useEffect(() => {
     let cancelled = false;
