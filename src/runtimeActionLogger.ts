@@ -6,12 +6,9 @@ const MAX_STRING_LENGTH = 2_000;
 const MAX_DEPTH = 6;
 const MAX_ARRAY_LENGTH = 80;
 const MAX_OBJECT_KEYS = 80;
-const REDACTED_VALUE = "[REDACTED]";
 const OMISSION_VALUE = "[OMITTED]";
 const CIRCULAR_VALUE = "[CIRCULAR]";
 const TRUNCATED_VALUE = "[TRUNCATED]";
-const SENSITIVE_KEY_PATTERN =
-  /(api[-_]?key|token|secret|authorization|password|cookie|session|bearer|private[-_]?key)/i;
 
 // ── ANSI helpers ───────────────────────────────────────────────────────
 const RESET = "\x1b[0m";
@@ -95,10 +92,6 @@ function isPlainObject(value) {
 }
 
 function sanitizeValue(value, { depth = 0, keyName = "", seen = new WeakSet() } = {}) {
-  if (keyName && SENSITIVE_KEY_PATTERN.test(String(keyName))) {
-    return REDACTED_VALUE;
-  }
-
   if (value === null) return null;
   if (value === undefined) return null;
 
