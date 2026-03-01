@@ -57,7 +57,7 @@ export const DEFAULT_SETTINGS = {
     replyLevelNonInitiative: 25,
     reactionLevel: 20,
     minSecondsBetweenMessages: 5,
-    replyCoalesceWindowSeconds: 4,
+    replyCoalesceWindowSeconds: 6,
     replyCoalesceMaxMessages: 6
   },
   llm: {

@@ -132,7 +132,7 @@ export function normalizeSettings(raw) {
   const replyCoalesceWindowSeconds = clamp(
     Number.isFinite(replyCoalesceWindowSecondsRaw)
       ? replyCoalesceWindowSecondsRaw
-      : Number(DEFAULT_SETTINGS.activity?.replyCoalesceWindowSeconds) || 4,
+      : Number(DEFAULT_SETTINGS.activity?.replyCoalesceWindowSeconds) || 6,
     0,
     20
   );
