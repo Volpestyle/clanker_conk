@@ -12,6 +12,7 @@ import { Store } from "./store.ts";
 import { VideoContextService } from "./video.ts";
 import { PublicHttpsEntrypoint } from "./publicHttpsEntrypoint.ts";
 import { ScreenShareSessionManager } from "./screenShareSessionManager.ts";
+import { RuntimeActionLogger } from "./runtimeActionLogger.ts";
 
 export async function main() {
   ensureRuntimeEnv();
@@ -21,6 +22,12 @@ export async function main() {
 
   const store = new Store(dbPath);
   store.init();
+  const runtimeActionLogger = new RuntimeActionLogger({
+    enabled: appConfig.runtimeStructuredLogsEnabled,
+    writeToStdout: appConfig.runtimeStructuredLogsStdout,
+    logFilePath: appConfig.runtimeStructuredLogsFilePath
+  });
+  runtimeActionLogger.attachToStore(store);
 
   const llm = new LLMService({ appConfig, store });
   const discovery = new DiscoveryService({ store });
@@ -71,6 +78,10 @@ export async function main() {
     }
 
     await new Promise((resolve) => dashboard.server.close(resolve));
+    if (typeof llm.close === "function") {
+      llm.close();
+    }
+    runtimeActionLogger.close();
     store.close();
     process.exit(0);
   };

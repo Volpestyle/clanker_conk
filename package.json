@@ -26,6 +26,8 @@
     "replay:flooding:live": "bun scripts/floodingReplayHarness.ts --mode live",
     "replay:voice-golden": "bun scripts/voiceGoldenHarness.ts --mode simulated",
     "replay:voice-golden:live": "bun scripts/voiceGoldenHarness.ts --mode live",
+    "logs:loki:up": "docker compose -f docker-compose.loki.yml up -d",
+    "logs:loki:down": "docker compose -f docker-compose.loki.yml down",
     "check": "bun run lint && bun run typecheck && bun scripts/check-backend.mjs && bunx vite build",
     "diagrams": "bun scripts/gen-diagrams.mjs"
   },

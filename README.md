@@ -21,6 +21,7 @@ Features:
 - Dashboard UI for settings, permissions, logs, memory, and cost tracking.
 - Dashboard automation visibility endpoints: `/api/automations` and `/api/automations/runs`.
 - Two-layer memory with append-only daily logs and curated `memory/MEMORY.md` distillation.
+- Structured runtime JSON action logs (stdout + file) with local Loki/Promtail/Grafana stack support.
 
 ## 1. Setup
 
@@ -43,6 +44,10 @@ Populate `.env`:
 - Optional for live web search: `BRAVE_SEARCH_API_KEY` (primary) and/or `SERPAPI_API_KEY` (fallback).
 - Optional for model-directed GIF replies: `GIPHY_API_KEY` (and optional `GIPHY_RATING`, default `pg-13`).
 - Optional bind host for dashboard/API (defaults to loopback only): `DASHBOARD_HOST` (default `127.0.0.1`).
+- Optional structured runtime logs for local debugging/Loki:
+  - `RUNTIME_STRUCTURED_LOGS_ENABLED` (default `true`)
+  - `RUNTIME_STRUCTURED_LOGS_STDOUT` (default `true`)
+  - `RUNTIME_STRUCTURED_LOGS_FILE_PATH` (default `data/logs/runtime-actions.ndjson`)
 - Required for private dashboard/admin API access when public HTTPS is enabled: `DASHBOARD_TOKEN` (sent as `x-dashboard-token`).
 - Optional for public tunnel stream-ingest access: `PUBLIC_API_TOKEN` (sent as `x-public-api-token`).
 - Optional for auto public HTTPS entrypoint:
@@ -123,6 +128,17 @@ Windows host sleep settings (for WSL users):
 - Set **Sleep** to **Never** while plugged in.
 - Allow display-off if needed; only system sleep needs to be disabled.
 
+## 3.3 Local Loki Runtime Logs
+
+```bash
+bun run logs:loki:up
+bun run start
+```
+
+- Grafana: `http://localhost:3000` (`admin` / `admin`)
+- Default Loki query: `{job="clanker_runtime"}`
+- Full setup details: `docs/logs.md`
+
 ## 4. Configure in dashboard
 
 Use dashboard to:
@@ -161,3 +177,4 @@ Use dashboard to:
 - Initiative creative discovery: `docs/initiative-discovery-spec.md`
 - Public HTTPS entrypoint: `docs/public-https-entrypoint-spec.md`
 - Screen-share link flow: `docs/screen-share-link-spec.md`
+- Runtime logs + local Loki: `docs/logs.md`
