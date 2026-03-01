@@ -165,6 +165,20 @@ type DiscoveryLinkCandidate = {
   source?: string;
 };
 
+type ReplyPromptCapture = {
+  systemPrompt: string;
+  initialUserPrompt: string;
+  followupUserPrompts: string[];
+};
+
+type LoggedReplyPrompts = {
+  hiddenByDefault: true;
+  systemPrompt: string;
+  initialUserPrompt: string;
+  followupUserPrompts: string[];
+  followupSteps: number;
+};
+
 export class ClankerBot {
   appConfig;
   store;
@@ -1222,6 +1236,11 @@ export class ClankerBot {
       allowMemoryLookupDirective: true,
       allowImageLookupDirective: true
     });
+    const replyPromptCapture = createReplyPromptCapture({
+      systemPrompt,
+      initialUserPrompt
+    });
+    let replyPrompts = buildLoggedReplyPrompts(replyPromptCapture, 0);
 
     const llm1StartedAtMs = Date.now();
     let generation = await this.llm.generate({
@@ -1254,7 +1273,8 @@ export class ClankerBot {
       source,
       triggerMessageIds,
       addressing: addressSignal,
-      performance
+      performance,
+      replyPrompts
     });
     if (automationIntentHandled) return true;
 
@@ -1288,8 +1308,8 @@ export class ClankerBot {
           allowWebSearchDirective,
           allowMemoryLookupDirective,
           allowImageLookupDirective
-        }) =>
-          buildReplyPrompt({
+        }) => {
+          const followupUserPrompt = buildReplyPrompt({
             ...replyPromptBase,
             imageInputs: nextImageInputs,
             webSearch: nextWebSearch,
@@ -1298,7 +1318,10 @@ export class ClankerBot {
             allowWebSearchDirective,
             allowMemoryLookupDirective,
             allowImageLookupDirective
-          }),
+          });
+          appendReplyFollowupPrompt(replyPromptCapture, followupUserPrompt);
+          return followupUserPrompt;
+        },
         runModelRequestedWebSearch: async ({ webSearch: currentWebSearch, query }) =>
           await runModelRequestedWebSearchForReplyFollowup(
             { llm: this.llm, search: this.search, memory: this.memory },
@@ -1327,6 +1350,7 @@ export class ClankerBot {
     usedWebSearchFollowup = followup.usedWebSearch;
     usedMemoryLookupFollowup = followup.usedMemoryLookup;
     usedImageLookupFollowup = followup.usedImageLookup;
+    replyPrompts = buildLoggedReplyPrompts(replyPromptCapture, followup.followupSteps);
 
     if (usedWebSearchFollowup && webSearch.used && Array.isArray(webSearch.results) && webSearch.results.length) {
       this.rememberRecentLookupContext({
@@ -1356,7 +1380,8 @@ export class ClankerBot {
         source,
         triggerMessageIds,
         addressing: addressSignal,
-        performance
+        performance,
+        replyPrompts
       });
       if (followupAutomationHandled) return true;
     }
@@ -1447,7 +1472,8 @@ export class ClankerBot {
         reason: modelProducedSkip ? "llm_skip" : "empty_reply",
         reaction,
         screenShareOffer,
-        performance
+        performance,
+        prompts: replyPrompts
       });
       return false;
     }
@@ -1607,7 +1633,8 @@ export class ClankerBot {
         reason: "empty_reply_after_media",
         reaction,
         screenShareOffer,
-        performance
+        performance,
+        prompts: replyPrompts
       });
       return false;
     }
@@ -1658,6 +1685,7 @@ export class ClankerBot {
         triggerMessageIds,
         source,
         addressing: addressSignal,
+        replyPrompts,
         sendAsReply,
         canStandalonePost,
         image: {
@@ -2069,7 +2097,8 @@ export class ClankerBot {
     source,
     triggerMessageIds = [],
     addressing = null,
-    performance = null
+    performance = null,
+    replyPrompts = null
   }) {
     const automationAction = replyDirective?.automationAction;
     const operation = String(automationAction?.operation || "").trim();
@@ -2156,6 +2185,7 @@ export class ClankerBot {
         sendAsReply: true,
         canStandalonePost: this.isInitiativeChannel(settings, message.channelId),
         addressing,
+        replyPrompts,
         automationControl: resultMetadata || null,
         llm: {
           provider: generation?.provider || null,
@@ -2567,6 +2597,7 @@ export class ClankerBot {
     reaction,
     screenShareOffer = null,
     performance = null,
+    prompts = null,
     extraMetadata = null
   }) {
     const llmMetadata = generation
@@ -2590,6 +2621,7 @@ export class ClankerBot {
         triggerMessageIds,
         source,
         addressing: addressSignal,
+        replyPrompts: prompts,
         reaction,
         screenShareOffer,
         llm: llmMetadata,
@@ -4823,6 +4855,57 @@ export class ClankerBot {
 
     return parts.join(" ").replace(/\s+/g, " ").trim();
   }
+}
+
+function createReplyPromptCapture({
+  systemPrompt = "",
+  initialUserPrompt = ""
+}: {
+  systemPrompt?: string;
+  initialUserPrompt?: string;
+} = {}): ReplyPromptCapture {
+  return {
+    systemPrompt: String(systemPrompt || ""),
+    initialUserPrompt: String(initialUserPrompt || ""),
+    followupUserPrompts: []
+  };
+}
+
+function appendReplyFollowupPrompt(
+  capture: ReplyPromptCapture | null = null,
+  userPrompt = ""
+) {
+  if (!capture || typeof capture !== "object") return;
+  if (!Array.isArray(capture.followupUserPrompts)) {
+    capture.followupUserPrompts = [];
+  }
+  capture.followupUserPrompts.push(String(userPrompt || ""));
+}
+
+function buildLoggedReplyPrompts(
+  capture: ReplyPromptCapture | null = null,
+  followupSteps = 0
+): LoggedReplyPrompts | null {
+  if (!capture || typeof capture !== "object") return null;
+  const systemPrompt = String(capture.systemPrompt || "");
+  const initialUserPrompt = String(capture.initialUserPrompt || "");
+  const followupUserPrompts = Array.isArray(capture.followupUserPrompts)
+    ? capture.followupUserPrompts.map((prompt) => String(prompt || ""))
+    : [];
+  const resolvedFollowupSteps = Math.max(
+    0,
+    Number.isFinite(Number(followupSteps))
+      ? Math.floor(Number(followupSteps))
+      : followupUserPrompts.length
+  );
+
+  return {
+    hiddenByDefault: true,
+    systemPrompt,
+    initialUserPrompt,
+    followupUserPrompts,
+    followupSteps: resolvedFollowupSteps
+  };
 }
 
 function safeUrlHost(rawUrl) {

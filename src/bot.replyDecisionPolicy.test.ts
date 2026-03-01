@@ -250,6 +250,13 @@ test("non-addressed non-initiative turn can still post when model contributes va
     assert.equal(channelSendPayloads.length, 1);
     assert.equal(typingCallsRef.count > 0, true);
     assert.match(String(channelSendPayloads[0]?.content || ""), /evo lines decide everything/i);
+    const sentAction = store.getRecentActions(12).find(
+      (row) => row.kind === "sent_message" && row.message_id !== "bot-context-1"
+    );
+    assert.equal(sentAction?.metadata?.replyPrompts?.hiddenByDefault, true);
+    assert.equal(typeof sentAction?.metadata?.replyPrompts?.systemPrompt, "string");
+    assert.equal(typeof sentAction?.metadata?.replyPrompts?.initialUserPrompt, "string");
+    assert.deepEqual(sentAction?.metadata?.replyPrompts?.followupUserPrompts, []);
 
   });
 });
@@ -347,6 +354,10 @@ test("non-addressed non-initiative turn is skipped when model declines", async (
     );
     assert.equal(Boolean(skipped), true);
     assert.equal(skipped?.content, "llm_skip");
+    assert.equal(skipped?.metadata?.replyPrompts?.hiddenByDefault, true);
+    assert.equal(typeof skipped?.metadata?.replyPrompts?.systemPrompt, "string");
+    assert.equal(typeof skipped?.metadata?.replyPrompts?.initialUserPrompt, "string");
+    assert.deepEqual(skipped?.metadata?.replyPrompts?.followupUserPrompts, []);
   });
 });
 

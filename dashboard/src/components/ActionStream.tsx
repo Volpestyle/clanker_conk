@@ -96,6 +96,35 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+function getReplyPrompts(metadata: unknown) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const candidate = (metadata as { replyPrompts?: unknown }).replyPrompts;
+  if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return null;
+  return candidate as {
+    hiddenByDefault?: unknown;
+    systemPrompt?: unknown;
+    initialUserPrompt?: unknown;
+    followupUserPrompts?: unknown;
+    followupSteps?: unknown;
+  };
+}
+
+function withoutReplyPrompts(metadata: unknown) {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return metadata;
+  const { replyPrompts: _replyPrompts, ...rest } = metadata as Record<string, unknown>;
+  return rest;
+}
+
+function normalizePromptText(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  return String(value);
+}
+
+function normalizeFollowupPrompts(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((entry) => normalizePromptText(entry));
+}
+
 export default function ActionStream({ actions }) {
   const [filter, setFilter] = useState("all");
   const [expandedRowKey, setExpandedRowKey] = useState("");
@@ -269,6 +298,13 @@ export default function ActionStream({ actions }) {
             {rows.map((action, i) => {
               const rowKey = getRowKey(action, i);
               const isExpanded = expandedRowKey === rowKey;
+              const replyPrompts = getReplyPrompts(action.metadata);
+              const metadataWithoutPrompts = withoutReplyPrompts(action.metadata);
+              const systemPrompt = normalizePromptText(replyPrompts?.systemPrompt);
+              const initialUserPrompt = normalizePromptText(replyPrompts?.initialUserPrompt);
+              const followupUserPrompts = normalizeFollowupPrompts(replyPrompts?.followupUserPrompts);
+              const followupSteps = Math.max(0, Math.floor(Number(replyPrompts?.followupSteps) || 0));
+              const hasPromptLog = Boolean(replyPrompts);
 
               return (
                 <Fragment key={rowKey}>
@@ -344,8 +380,37 @@ export default function ActionStream({ actions }) {
 
                           <div className="action-detail-block">
                             <h4>Metadata</h4>
-                            <pre>{toPrettyJson(action.metadata)}</pre>
+                            <pre>{toPrettyJson(metadataWithoutPrompts)}</pre>
                           </div>
+
+                          {hasPromptLog && (
+                            <details className="action-detail-block">
+                              <summary>Reply prompts (hidden by default)</summary>
+                              <div className="action-detail-block">
+                                <h4>System Prompt</h4>
+                                <pre>{systemPrompt || "(empty)"}</pre>
+                              </div>
+                              <div className="action-detail-block">
+                                <h4>Initial User Prompt</h4>
+                                <pre>{initialUserPrompt || "(empty)"}</pre>
+                              </div>
+                              <div className="action-detail-block">
+                                <h4>Follow-up User Prompts ({Math.max(followupSteps, followupUserPrompts.length)})</h4>
+                                {followupUserPrompts.length === 0 ? (
+                                  <pre>(none)</pre>
+                                ) : (
+                                  <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                                    {followupUserPrompts.map((prompt, index) => (
+                                      <div key={`${rowKey}-followup-${index}`}>
+                                        <h4>Step {index + 1}</h4>
+                                        <pre>{prompt || "(empty)"}</pre>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </details>
+                          )}
                         </div>
                       </td>
                     </tr>
