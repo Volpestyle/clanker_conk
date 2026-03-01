@@ -179,6 +179,7 @@ test("getRuntimeState summarizes STT and realtime sessions", () => {
 
   const realtime = runtime.sessions.find((row) => row.sessionId === "realtime-session");
   assert.equal(realtime?.realtime?.provider, "openai");
+  assert.equal(realtime?.realtime?.replySuperseded, 0);
   assert.deepEqual(realtime?.realtime?.state, { connected: true });
 });
 
@@ -394,6 +395,115 @@ test("maybeInterruptBotForAssertiveSpeech ignores near-silent captures", () => {
   assert.equal(session.botTurnOpen, true);
   assert.equal(stopCalls.length, 0);
   assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
+});
+
+test("maybeInterruptBotForAssertiveSpeech interrupts queued playback even when botTurnOpen already reset", () => {
+  const { manager, logs } = createManager();
+  const stopCalls = [];
+  let streamDestroyed = false;
+  const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
+  const queuedBytes = DISCORD_PCM_FRAME_BYTES * 16;
+  const session = createSession({
+    botTurnOpen: false,
+    userCaptures: new Map([
+      [
+        "user-1",
+        {
+          bytesSent: minBytes + 2_400,
+          signalSampleCount: 24_000,
+          signalActiveSampleCount: 1_680,
+          signalPeakAbs: 5_400,
+          speakingEndFinalizeTimer: null
+        }
+      ]
+    ]),
+    audioPlayer: {
+      stop(force) {
+        stopCalls.push(force);
+      }
+    },
+    botAudioStream: {
+      writableLength: DISCORD_PCM_FRAME_BYTES * 4,
+      destroy() {
+        streamDestroyed = true;
+      }
+    },
+    audioPlaybackQueue: {
+      chunks: [Buffer.alloc(queuedBytes, 1)],
+      headOffset: 0,
+      queuedBytes,
+      pumping: false,
+      timer: null,
+      waitingDrain: false,
+      drainHandler: null,
+      lastWarnAt: 0
+    }
+  });
+
+  const interrupted = manager.maybeInterruptBotForAssertiveSpeech({
+    session,
+    userId: "user-1",
+    source: "test_queued_audio"
+  });
+  assert.equal(interrupted, true);
+  assert.equal(stopCalls.length, 1);
+  assert.equal(stopCalls[0], true);
+  assert.equal(streamDestroyed, true);
+  assert.equal(session.audioPlaybackQueue.queuedBytes, 0);
+  const interruptLog = logs.find((entry) => entry?.content === "voice_barge_in_interrupt");
+  assert.equal(Boolean(interruptLog), true);
+  assert.equal(interruptLog?.metadata?.source, "test_queued_audio");
+  assert.equal(interruptLog?.metadata?.queuedBytesDropped, queuedBytes);
+});
+
+test("armAssertiveBargeIn schedules interrupt checks while queued playback remains", async () => {
+  const { manager } = createManager();
+  const session = createSession({
+    botTurnOpen: false,
+    userCaptures: new Map([
+      [
+        "user-1",
+        {
+          bytesSent: DISCORD_PCM_FRAME_BYTES * 20,
+          signalSampleCount: 24_000,
+          signalActiveSampleCount: 1_680,
+          signalPeakAbs: 5_400,
+          speakingEndFinalizeTimer: null,
+          bargeInAssertTimer: null
+        }
+      ]
+    ]),
+    audioPlaybackQueue: {
+      chunks: [Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 8, 1)],
+      headOffset: 0,
+      queuedBytes: DISCORD_PCM_FRAME_BYTES * 8,
+      pumping: false,
+      timer: null,
+      waitingDrain: false,
+      drainHandler: null,
+      lastWarnAt: 0
+    }
+  });
+
+  const callArgs = [];
+  manager.maybeInterruptBotForAssertiveSpeech = (args) => {
+    callArgs.push(args);
+    return true;
+  };
+
+  manager.armAssertiveBargeIn({
+    session,
+    userId: "user-1",
+    source: "queued_playback",
+    delayMs: 20
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 70));
+  assert.equal(callArgs.length, 1);
+  assert.equal(callArgs[0]?.source, "queued_playback");
+  assert.equal(callArgs[0]?.userId, "user-1");
+  const capture = session.userCaptures.get("user-1");
+  assert.equal(capture?.bargeInAssertTimer, null);
 });
 
 test("enqueueDiscordPcmForPlayback keeps full queued audio when hard cap is exceeded", () => {

@@ -330,6 +330,10 @@ export class VoiceSessionManager {
         session,
         now
       });
+      const addressingState = this.buildVoiceAddressingState({
+        session,
+        now
+      });
       const joinWindowAgeMs = Math.max(0, now - Number(session?.startedAt || 0));
       const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
       const modelTurns = Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns : [];
@@ -407,6 +411,7 @@ export class VoiceSessionManager {
               ? new Date(session.lastThoughtSpokenAt).toISOString()
               : null
           },
+          addressing: addressingState,
           modelContext: {
             generation: generationSummary,
             decider: deciderSummary,
@@ -430,7 +435,18 @@ export class VoiceSessionManager {
           role: t.role,
           speakerName: t.speakerName || "",
           text: String(t.text || ""),
-          at: t.at ? new Date(t.at).toISOString() : null
+          at: t.at ? new Date(t.at).toISOString() : null,
+          addressing:
+            t?.addressing && typeof t.addressing === "object"
+              ? {
+                  talkingTo: t.addressing.talkingTo || null,
+                  directedConfidence: Number.isFinite(Number(t.addressing.directedConfidence))
+                    ? Number(clamp(Number(t.addressing.directedConfidence), 0, 1).toFixed(3))
+                    : 0,
+                  source: t.addressing.source || null,
+                  reason: t.addressing.reason || null
+                }
+              : null
         })),
         streamWatch: {
           active: Boolean(session.streamWatch?.active),
@@ -462,6 +478,7 @@ export class VoiceSessionManager {
               inputSampleRateHz: Number(session.realtimeInputSampleRateHz) || 24000,
               outputSampleRateHz: Number(session.realtimeOutputSampleRateHz) || 24000,
               recentVoiceTurns: modelTurns.length,
+              replySuperseded: Math.max(0, Number(session.realtimeReplySupersededCount || 0)),
               pendingTurns:
                 (session.realtimeTurnDrainActive ? 1 : 0) +
                 (Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns.length : 0),
@@ -1192,13 +1209,80 @@ export class VoiceSessionManager {
     });
   }
 
+  isBargeInInterruptTargetActive(session) {
+    if (!session || session.ending) return false;
+    if (this.isBargeInOutputSuppressed(session)) return false;
+    return this.getReplyOutputLockState(session).locked;
+  }
+
+  getRealtimeReplySupersedeState({
+    session,
+    generationStartedAt = 0
+  }) {
+    const activeCaptureCount = Number(session?.userCaptures?.size || 0);
+    const pendingRealtimeQueueDepth = Array.isArray(session?.pendingRealtimeTurns)
+      ? session.pendingRealtimeTurns.length
+      : 0;
+    const normalizedGenerationStartedAt = Math.max(0, Number(generationStartedAt) || 0);
+    const lastInboundAudioAt = Math.max(0, Number(session?.lastInboundAudioAt || 0));
+    const newerInboundAudio = normalizedGenerationStartedAt > 0 && lastInboundAudioAt > normalizedGenerationStartedAt;
+    const shouldSupersede = activeCaptureCount > 0 || pendingRealtimeQueueDepth > 0 || newerInboundAudio;
+    return {
+      shouldSupersede,
+      activeCaptureCount,
+      pendingRealtimeQueueDepth,
+      newerInboundAudio,
+      generationStartedAt: normalizedGenerationStartedAt,
+      lastInboundAudioAt
+    };
+  }
+
+  recordRealtimeReplySuperseded({
+    session,
+    source = "realtime",
+    supersedeState = null
+  }) {
+    if (!session || session.ending) return;
+    const normalizedSupersedeState =
+      supersedeState && typeof supersedeState === "object" ? supersedeState : {};
+    const activeCaptureCount = Number(normalizedSupersedeState.activeCaptureCount || 0);
+    const pendingRealtimeQueueDepth = Number(normalizedSupersedeState.pendingRealtimeQueueDepth || 0);
+    const newerInboundAudio = Boolean(normalizedSupersedeState.newerInboundAudio);
+    const supersedeReason = newerInboundAudio
+      ? "newer_inbound_audio"
+      : pendingRealtimeQueueDepth > 0
+        ? "pending_realtime_turn"
+        : "active_user_capture";
+    const nextCount = Math.max(0, Number(session.realtimeReplySupersededCount || 0)) + 1;
+    session.realtimeReplySupersededCount = nextCount;
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.client.user?.id || null,
+      content: "realtime_reply_superseded_newer_input",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "realtime"),
+        supersedeReason,
+        activeCaptureCount,
+        pendingRealtimeQueueDepth,
+        newerInboundAudio,
+        generationStartedAt: Number(normalizedSupersedeState.generationStartedAt || 0) || null,
+        lastInboundAudioAt: Number(normalizedSupersedeState.lastInboundAudioAt || 0) || null,
+        supersededCount: nextCount
+      }
+    });
+  }
+
   maybeInterruptBotForAssertiveSpeech({
     session,
     userId = null,
     source = "speaking_start"
   }) {
     if (!session || session.ending) return false;
-    if (!session.botTurnOpen) return false;
+    if (!this.isBargeInInterruptTargetActive(session)) return false;
     const normalizedUserId = String(userId || "").trim();
     if (!normalizedUserId) return false;
     const capture = session.userCaptures?.get?.(normalizedUserId);
@@ -1335,7 +1419,7 @@ export class VoiceSessionManager {
     delayMs = BARGE_IN_ASSERTION_MS
   }) {
     if (!session || session.ending) return;
-    if (!session.botTurnOpen) return;
+    if (!this.isBargeInInterruptTargetActive(session)) return;
     const normalizedUserId = String(userId || "").trim();
     if (!normalizedUserId) return;
     const capture = session.userCaptures?.get?.(normalizedUserId);
@@ -4219,6 +4303,24 @@ export class VoiceSessionManager {
       directAddressed: Boolean(decision.directAddressed),
       reason: decision.reason
     });
+    const decisionVoiceAddressing = this.normalizeVoiceAddressingAnnotation({
+      rawAddressing: decision?.voiceAddressing,
+      directAddressed: Boolean(decision.directAddressed),
+      directedConfidence: Number(decision.directAddressConfidence),
+      source: "decision",
+      reason: decision.reason
+    });
+    this.annotateLatestVoiceTurnAddressing({
+      session,
+      role: "user",
+      userId,
+      text: decision.transcript || turnTranscript,
+      addressing: decisionVoiceAddressing
+    });
+    const decisionAddressingState = this.buildVoiceAddressingState({
+      session,
+      userId
+    });
 
     this.store.logAction({
       kind: "voice_runtime",
@@ -4236,6 +4338,18 @@ export class VoiceSessionManager {
         reason: decision.reason,
         participantCount: Number(decision.participantCount || 0),
         directAddressed: Boolean(decision.directAddressed),
+        talkingTo: decisionVoiceAddressing?.talkingTo || null,
+        directedConfidence: Number.isFinite(Number(decisionVoiceAddressing?.directedConfidence))
+          ? Number(clamp(Number(decisionVoiceAddressing.directedConfidence), 0, 1).toFixed(3))
+          : 0,
+        addressingSource: decisionVoiceAddressing?.source || null,
+        addressingReason: decisionVoiceAddressing?.reason || null,
+        currentSpeakerTarget: decisionAddressingState?.currentSpeakerTarget || null,
+        currentSpeakerDirectedConfidence: Number.isFinite(
+          Number(decisionAddressingState?.currentSpeakerDirectedConfidence)
+        )
+          ? Number(clamp(Number(decisionAddressingState.currentSpeakerDirectedConfidence), 0, 1).toFixed(3))
+          : 0,
         transcript: decision.transcript || turnTranscript || null,
         transcriptionModelPrimary: transcriptionPlan.primaryModel,
         transcriptionModelFallback: resolvedFallbackModel || null,
@@ -4308,6 +4422,7 @@ export class VoiceSessionManager {
       userId,
       transcript: turnTranscript,
       directAddressed: Boolean(decision.directAddressed),
+      directAddressConfidence: Number(decision.directAddressConfidence),
       conversationContext: decision.conversationContext || null,
       source: "realtime"
     });
@@ -4430,6 +4545,24 @@ export class VoiceSessionManager {
       directAddressed: Boolean(decision.directAddressed),
       reason: decision.reason
     });
+    const decisionVoiceAddressing = this.normalizeVoiceAddressingAnnotation({
+      rawAddressing: decision?.voiceAddressing,
+      directAddressed: Boolean(decision.directAddressed),
+      directedConfidence: Number(decision.directAddressConfidence),
+      source: "decision",
+      reason: decision.reason
+    });
+    this.annotateLatestVoiceTurnAddressing({
+      session,
+      role: "user",
+      userId: latestTurn?.userId || null,
+      text: decision.transcript || coalescedTranscript,
+      addressing: decisionVoiceAddressing
+    });
+    const decisionAddressingState = this.buildVoiceAddressingState({
+      session,
+      userId: latestTurn?.userId || null
+    });
 
     this.store.logAction({
       kind: "voice_runtime",
@@ -4446,6 +4579,18 @@ export class VoiceSessionManager {
         reason: decision.reason,
         participantCount: Number(decision.participantCount || 0),
         directAddressed: Boolean(decision.directAddressed),
+        talkingTo: decisionVoiceAddressing?.talkingTo || null,
+        directedConfidence: Number.isFinite(Number(decisionVoiceAddressing?.directedConfidence))
+          ? Number(clamp(Number(decisionVoiceAddressing.directedConfidence), 0, 1).toFixed(3))
+          : 0,
+        addressingSource: decisionVoiceAddressing?.source || null,
+        addressingReason: decisionVoiceAddressing?.reason || null,
+        currentSpeakerTarget: decisionAddressingState?.currentSpeakerTarget || null,
+        currentSpeakerDirectedConfidence: Number.isFinite(
+          Number(decisionAddressingState?.currentSpeakerDirectedConfidence)
+        )
+          ? Number(clamp(Number(decisionAddressingState.currentSpeakerDirectedConfidence), 0, 1).toFixed(3))
+          : 0,
         transcript: decision.transcript || coalescedTranscript || null,
         deferredTurnCount: coalescedTurns.length,
         llmResponse: decision.llmResponse || null,
@@ -4500,6 +4645,7 @@ export class VoiceSessionManager {
         userId: latestTurn?.userId || null,
         transcript: coalescedTranscript,
         directAddressed: Boolean(decision.directAddressed),
+        directAddressConfidence: Number(decision.directAddressConfidence),
         conversationContext: decision.conversationContext || null
       });
       return;
@@ -4525,6 +4671,7 @@ export class VoiceSessionManager {
       userId: latestTurn?.userId || null,
       transcript: coalescedTranscript,
       directAddressed: Boolean(decision.directAddressed),
+      directAddressConfidence: Number(decision.directAddressConfidence),
       conversationContext: decision.conversationContext || null,
       source: "bot_turn_open_deferred_flush"
     });
@@ -4661,7 +4808,7 @@ export class VoiceSessionManager {
       (recentDirectAddress && sameAsRecentDirectAddress);
     const engaged =
       !addressedToOtherParticipant &&
-      (engagedWithCurrentSpeaker || recentAssistantReply || recentDirectAddress);
+      engagedWithCurrentSpeaker;
 
     return {
       engagementState: engaged ? "engaged" : "wake_word_biased",
@@ -4813,13 +4960,29 @@ export class VoiceSessionManager {
       directAddressConfidence >= directAddressThreshold;
     const usedFallbackModel = Boolean(transcriptionContext?.usedFallbackModel);
     const replyEagerness = clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
-    const conversationContext = this.buildVoiceConversationContext({
+    const baseConversationContext = this.buildVoiceConversationContext({
       session,
       userId: normalizedUserId,
       directAddressed,
       addressedToOtherParticipant,
       now
     });
+    const voiceAddressingState = this.buildVoiceAddressingState({
+      session,
+      userId: normalizedUserId,
+      now
+    });
+    const currentTurnAddressing = this.normalizeVoiceAddressingAnnotation({
+      directAddressed,
+      directedConfidence: directAddressConfidence,
+      source: "decision",
+      reason: directAddressAssessment?.reason || null
+    });
+    const conversationContext = {
+      ...baseConversationContext,
+      voiceAddressingState,
+      currentTurnAddressing
+    };
     const formatAgeMs = (value) =>
       Number.isFinite(value) ? String(Math.max(0, Math.round(value))) : "none";
     const configuredNonDirectSilenceMs = Number(settings?.voice?.nonDirectReplyMinSilenceMs);
@@ -5083,7 +5246,12 @@ export class VoiceSessionManager {
       directAddressed: Boolean(directAddressed),
       directAddressConfidence: Number(directAddressConfidence.toFixed(3)),
       directAddressThreshold: Number(directAddressThreshold.toFixed(2)),
-      joinWindowActive
+      joinWindowActive,
+      hasAddressingState: Boolean(
+        voiceAddressingState?.currentSpeakerTarget ||
+          (Array.isArray(voiceAddressingState?.recentAddressingGuesses) &&
+            voiceAddressingState.recentAddressingGuesses.length > 0)
+      )
     });
     const configuredMaxDecisionAttempts = Number(replyDecisionLlm?.maxAttempts);
     const maxDecisionAttempts = clamp(
@@ -5134,6 +5302,16 @@ export class VoiceSessionManager {
       `Latest transcript: "${normalizedTranscript}".`,
       wakeVariantHint
     ];
+    if (voiceAddressingState) {
+      fullContextPromptParts.push(
+        `Current speaker addressing guess: ${voiceAddressingState.currentSpeakerTarget || "unknown"} (confidence ${Number(voiceAddressingState.currentSpeakerDirectedConfidence || 0).toFixed(2)}).`
+      );
+      if (voiceAddressingState.lastDirectedToMe) {
+        fullContextPromptParts.push(
+          `Last directed-to-me turn: ${voiceAddressingState.lastDirectedToMe.speakerName} ${formatAgeMs(voiceAddressingState.lastDirectedToMe.ageMs)}ms ago (confidence ${Number(voiceAddressingState.lastDirectedToMe.directedConfidence || 0).toFixed(2)}).`
+        );
+      }
+    }
     if (participantList.length) {
       fullContextPromptParts.push(`Participants: ${participantList.join(", ")}.`);
     }
@@ -5158,6 +5336,11 @@ export class VoiceSessionManager {
       `Transcript: "${normalizedTranscript}".`,
       wakeVariantHint
     ];
+    if (voiceAddressingState) {
+      compactContextPromptParts.push(
+        `Current speaker addressing guess: ${voiceAddressingState.currentSpeakerTarget || "unknown"} (confidence ${Number(voiceAddressingState.currentSpeakerDirectedConfidence || 0).toFixed(2)}).`
+      );
+    }
     if (participantList.length) {
       compactContextPromptParts.push(`Known participants: ${participantList.join(", ")}.`);
     }
@@ -5318,7 +5501,21 @@ export class VoiceSessionManager {
           role === "assistant"
             ? getPromptBotName(session?.settingsSnapshot || this.store.getSettings())
             : String(turn?.speakerName || "someone").trim() || "someone";
-        return `${speaker}: "${text}"`;
+        const addressing =
+          turn?.addressing && typeof turn.addressing === "object" ? turn.addressing : null;
+        const talkingTo =
+          String(addressing?.talkingTo || "")
+            .replace(/\s+/g, " ")
+            .trim()
+            .slice(0, 80) || null;
+        const directedConfidenceRaw = Number(addressing?.directedConfidence);
+        const directedConfidence = Number.isFinite(directedConfidenceRaw)
+          ? clamp(directedConfidenceRaw, 0, 1)
+          : 0;
+        const addressingSuffix = talkingTo
+          ? ` [to ${talkingTo}; confidence ${directedConfidence.toFixed(2)}]`
+          : "";
+        return `${speaker}: "${text}"${addressingSuffix}`;
       })
       .filter(Boolean);
 
@@ -5339,6 +5536,219 @@ export class VoiceSessionManager {
     return boundedLines.reverse().join("\n");
   }
 
+  normalizeVoiceAddressingAnnotation({
+    rawAddressing = null,
+    directAddressed = false,
+    directedConfidence = Number.NaN,
+    source = "",
+    reason = null
+  } = {}) {
+    const input = rawAddressing && typeof rawAddressing === "object" ? rawAddressing : null;
+    const talkingToToken = String(input?.talkingTo ?? input?.target ?? "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 80);
+
+    let talkingTo = talkingToToken || null;
+
+    const confidenceRaw = Number(
+      input?.directedConfidence ?? input?.confidence ?? directedConfidence
+    );
+    let normalizedDirectedConfidence = Number.isFinite(confidenceRaw)
+      ? clamp(confidenceRaw, 0, 1)
+      : 0;
+
+    if (directAddressed && !talkingTo) {
+      talkingTo = "ME";
+    }
+    if (directAddressed && talkingTo === "ME") {
+      normalizedDirectedConfidence = Math.max(normalizedDirectedConfidence, 0.72);
+    }
+
+    if (!talkingTo && normalizedDirectedConfidence <= 0) return null;
+
+    const normalizedSource = String(source || "")
+      .replace(/\s+/g, "_")
+      .trim()
+      .toLowerCase()
+      .slice(0, 48);
+    const normalizedReason =
+      String(reason || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 140) || null;
+
+    return {
+      talkingTo,
+      directedConfidence: Number(normalizedDirectedConfidence.toFixed(3)),
+      source: normalizedSource || null,
+      reason: normalizedReason
+    };
+  }
+
+  mergeVoiceAddressingAnnotation(existing, incoming) {
+    const current = existing && typeof existing === "object" ? existing : null;
+    const next = incoming && typeof incoming === "object" ? incoming : null;
+    if (!next) return current;
+    if (!current) return next;
+
+    const currentTarget = String(current.talkingTo || "").trim();
+    const nextTarget = String(next.talkingTo || "").trim();
+    const currentConfidence = Number.isFinite(Number(current.directedConfidence))
+      ? clamp(Number(current.directedConfidence), 0, 1)
+      : 0;
+    const nextConfidence = Number.isFinite(Number(next.directedConfidence))
+      ? clamp(Number(next.directedConfidence), 0, 1)
+      : 0;
+    const nextSource = String(next.source || "").trim().toLowerCase();
+    const shouldReplace =
+      (nextTarget && !currentTarget) ||
+      nextConfidence > currentConfidence + 0.02 ||
+      (nextSource === "generation" && nextTarget && nextConfidence >= currentConfidence - 0.05);
+
+    return shouldReplace
+      ? {
+          ...current,
+          ...next
+        }
+      : current;
+  }
+
+  findLatestVoiceTurnIndex(rows, { role = "user", userId = null, text = null, textMaxChars = STT_TRANSCRIPT_MAX_CHARS }) {
+    const source = Array.isArray(rows) ? rows : [];
+    if (!source.length) return -1;
+    const normalizedRole = role === "assistant" ? "assistant" : "user";
+    const normalizedUserId = String(userId || "").trim() || null;
+    const normalizedText = text ? normalizeVoiceText(text, textMaxChars) : "";
+
+    for (let index = source.length - 1; index >= 0; index -= 1) {
+      const row = source[index];
+      if (!row || typeof row !== "object") continue;
+      const rowRole = row.role === "assistant" ? "assistant" : "user";
+      if (rowRole !== normalizedRole) continue;
+      if (String(row.userId || "") !== String(normalizedUserId || "")) continue;
+      if (normalizedText) {
+        const rowText = normalizeVoiceText(row.text || "", textMaxChars);
+        if (!rowText || rowText !== normalizedText) continue;
+      }
+      return index;
+    }
+    return -1;
+  }
+
+  annotateLatestVoiceTurnAddressing({
+    session = null,
+    role = "user",
+    userId = null,
+    text = "",
+    addressing = null
+  } = {}) {
+    if (!session || session.ending) return false;
+    const normalizedAddressing =
+      addressing && typeof addressing === "object"
+        ? this.normalizeVoiceAddressingAnnotation({ rawAddressing: addressing })
+        : null;
+    if (!normalizedAddressing) return false;
+
+    const modelTurns = Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns : [];
+    const transcriptTurns = Array.isArray(session.transcriptTurns) ? session.transcriptTurns : [];
+    const modelTurnIndex = this.findLatestVoiceTurnIndex(modelTurns, {
+      role,
+      userId,
+      text,
+      textMaxChars: VOICE_DECIDER_HISTORY_MAX_CHARS
+    });
+    const transcriptTurnIndex = this.findLatestVoiceTurnIndex(transcriptTurns, {
+      role,
+      userId,
+      text,
+      textMaxChars: STT_TRANSCRIPT_MAX_CHARS
+    });
+    if (modelTurnIndex < 0 && transcriptTurnIndex < 0) return false;
+
+    if (modelTurnIndex >= 0) {
+      const current = modelTurns[modelTurnIndex]?.addressing;
+      modelTurns[modelTurnIndex] = {
+        ...modelTurns[modelTurnIndex],
+        addressing: this.mergeVoiceAddressingAnnotation(current, normalizedAddressing)
+      };
+    }
+    if (transcriptTurnIndex >= 0) {
+      const current = transcriptTurns[transcriptTurnIndex]?.addressing;
+      transcriptTurns[transcriptTurnIndex] = {
+        ...transcriptTurns[transcriptTurnIndex],
+        addressing: this.mergeVoiceAddressingAnnotation(current, normalizedAddressing)
+      };
+    }
+
+    return true;
+  }
+
+  buildVoiceAddressingState({ session = null, userId = null, now = Date.now(), maxItems = 6 } = {}) {
+    const sourceTurns = Array.isArray(session?.transcriptTurns) ? session.transcriptTurns : [];
+    if (!sourceTurns.length) return null;
+
+    const normalizedUserId = String(userId || "").trim();
+    const normalizedMaxItems = Math.max(1, Math.min(12, Math.floor(Number(maxItems) || 6)));
+    const annotatedRows = sourceTurns
+      .filter((row) => row && typeof row === "object" && (row.role === "user" || row.role === "assistant"))
+      .map((row) => {
+        const normalized = this.normalizeVoiceAddressingAnnotation({
+          rawAddressing: row?.addressing
+        });
+        if (!normalized) return null;
+        const atRaw = Number(row?.at || 0);
+        const at = atRaw > 0 ? atRaw : null;
+        const ageMs = at ? Math.max(0, now - at) : null;
+        return {
+          role: row.role === "assistant" ? "assistant" : "user",
+          userId: String(row?.userId || "").trim() || null,
+          speakerName: String(row?.speakerName || "").trim() || "someone",
+          talkingTo: normalized.talkingTo || null,
+          directedConfidence: Number(normalized.directedConfidence || 0),
+          at,
+          ageMs
+        };
+      })
+      .filter(Boolean);
+    if (!annotatedRows.length) return null;
+
+    const recentAddressingGuesses = annotatedRows
+      .slice(-normalizedMaxItems)
+      .map((row) => ({
+        speakerName: row.speakerName,
+        talkingTo: row.talkingTo || null,
+        directedConfidence: Number(clamp(Number(row.directedConfidence) || 0, 0, 1).toFixed(3)),
+        ageMs: Number.isFinite(row.ageMs) ? Math.round(row.ageMs) : null
+      }));
+
+    const currentSpeakerRow = normalizedUserId
+      ? [...annotatedRows]
+          .reverse()
+          .find((row) => row.role === "user" && String(row.userId || "") === normalizedUserId) || null
+      : null;
+    const lastDirectedToMeRow =
+      [...annotatedRows]
+        .reverse()
+        .find((row) => row.role === "user" && row.talkingTo === "ME" && Number(row.directedConfidence || 0) > 0) ||
+      null;
+
+    return {
+      currentSpeakerTarget: currentSpeakerRow?.talkingTo || null,
+      currentSpeakerDirectedConfidence: Number(
+        clamp(Number(currentSpeakerRow?.directedConfidence) || 0, 0, 1).toFixed(3)
+      ),
+      lastDirectedToMe: lastDirectedToMeRow
+        ? {
+            speakerName: lastDirectedToMeRow.speakerName,
+            directedConfidence: Number(clamp(Number(lastDirectedToMeRow.directedConfidence) || 0, 0, 1).toFixed(3)),
+            ageMs: Number.isFinite(lastDirectedToMeRow.ageMs) ? Math.round(lastDirectedToMeRow.ageMs) : null
+          }
+        : null,
+      recentAddressingGuesses
+    };
+  }
+
   shouldPersistUserTranscriptTimelineTurn({ session = null, settings = null, transcript = "" } = {}) {
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     if (!normalizedTranscript) return false;
@@ -5348,7 +5758,7 @@ export class VoiceSessionManager {
     return !isLowSignalVoiceFragment(normalizedTranscript);
   }
 
-  recordVoiceTurn(session, { role = "user", userId = null, text = "" } = {}) {
+  recordVoiceTurn(session, { role = "user", userId = null, text = "", addressing = null } = {}) {
     if (!session || session.ending) return;
     const normalizedContextText = normalizeVoiceText(text, VOICE_DECIDER_HISTORY_MAX_CHARS);
     const normalizedTranscriptText = normalizeVoiceText(text, STT_TRANSCRIPT_MAX_CHARS);
@@ -5374,25 +5784,36 @@ export class VoiceSessionManager {
 
     const nextAt = Date.now();
     const normalizedSpeakerName = String(speakerName || "").trim() || "someone";
+    const normalizedAddressing = this.normalizeVoiceAddressingAnnotation({
+      rawAddressing: addressing
+    });
+    const modelTurnEntry = {
+      role: normalizedRole,
+      userId: normalizedUserId,
+      speakerName: normalizedSpeakerName,
+      text: normalizedContextText,
+      at: nextAt
+    };
+    if (normalizedAddressing) {
+      modelTurnEntry.addressing = normalizedAddressing;
+    }
+    const transcriptTurnEntry = {
+      role: normalizedRole,
+      userId: normalizedUserId,
+      speakerName: normalizedSpeakerName,
+      text: normalizedTranscriptText,
+      at: nextAt
+    };
+    if (normalizedAddressing) {
+      transcriptTurnEntry.addressing = normalizedAddressing;
+    }
     session.recentVoiceTurns = [
       ...turns,
-      {
-        role: normalizedRole,
-        userId: normalizedUserId,
-        speakerName: normalizedSpeakerName,
-        text: normalizedContextText,
-        at: nextAt
-      }
+      modelTurnEntry
     ].slice(-VOICE_DECIDER_HISTORY_MAX_TURNS);
     session.transcriptTurns = [
       ...transcriptTurns,
-      {
-        role: normalizedRole,
-        userId: normalizedUserId,
-        speakerName: normalizedSpeakerName,
-        text: normalizedTranscriptText,
-        at: nextAt
-      }
+      transcriptTurnEntry
     ].slice(-VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS);
   }
 
@@ -6214,6 +6635,24 @@ export class VoiceSessionManager {
       directAddressed: Boolean(turnDecision.directAddressed),
       reason: turnDecision.reason
     });
+    const turnVoiceAddressing = this.normalizeVoiceAddressingAnnotation({
+      rawAddressing: turnDecision?.voiceAddressing,
+      directAddressed: Boolean(turnDecision.directAddressed),
+      directedConfidence: Number(turnDecision.directAddressConfidence),
+      source: "decision",
+      reason: turnDecision.reason
+    });
+    this.annotateLatestVoiceTurnAddressing({
+      session,
+      role: "user",
+      userId,
+      text: turnDecision.transcript || transcript,
+      addressing: turnVoiceAddressing
+    });
+    const turnAddressingState = this.buildVoiceAddressingState({
+      session,
+      userId
+    });
 
     this.store.logAction({
       kind: "voice_runtime",
@@ -6230,6 +6669,18 @@ export class VoiceSessionManager {
         reason: turnDecision.reason,
         participantCount: Number(turnDecision.participantCount || 0),
         directAddressed: Boolean(turnDecision.directAddressed),
+        talkingTo: turnVoiceAddressing?.talkingTo || null,
+        directedConfidence: Number.isFinite(Number(turnVoiceAddressing?.directedConfidence))
+          ? Number(clamp(Number(turnVoiceAddressing.directedConfidence), 0, 1).toFixed(3))
+          : 0,
+        addressingSource: turnVoiceAddressing?.source || null,
+        addressingReason: turnVoiceAddressing?.reason || null,
+        currentSpeakerTarget: turnAddressingState?.currentSpeakerTarget || null,
+        currentSpeakerDirectedConfidence: Number.isFinite(
+          Number(turnAddressingState?.currentSpeakerDirectedConfidence)
+        )
+          ? Number(clamp(Number(turnAddressingState.currentSpeakerDirectedConfidence), 0, 1).toFixed(3))
+          : 0,
         transcript: turnDecision.transcript || transcript || null,
         transcriptionModelPrimary,
         transcriptionModelFallback,
@@ -6287,6 +6738,7 @@ export class VoiceSessionManager {
       userId,
       transcript,
       directAddressed: Boolean(turnDecision.directAddressed),
+      directAddressConfidence: Number(turnDecision.directAddressConfidence),
       conversationContext: turnDecision.conversationContext || null
     });
   }
@@ -6297,6 +6749,7 @@ export class VoiceSessionManager {
     userId,
     transcript,
     directAddressed = false,
+    directAddressConfidence = Number.NaN,
     conversationContext = null
   }) {
     if (!session || session.ending) return;
@@ -6360,17 +6813,24 @@ export class VoiceSessionManager {
     const recentMembershipEvents = this.getRecentVoiceMembershipEvents(session, {
       maxItems: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
     });
-    const joinWindowAgeMs = Math.max(0, Date.now() - Number(session?.startedAt || 0));
+    const contextNow = Date.now();
+    const joinWindowAgeMs = Math.max(0, contextNow - Number(session?.startedAt || 0));
     const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
     const sessionTiming = this.buildVoiceSessionTimingContext(session);
     const streamWatchBrainContext = this.getStreamWatchBrainContextForPrompt(session, settings);
+    const voiceAddressingState = this.buildVoiceAddressingState({
+      session,
+      userId,
+      now: contextNow
+    });
     const generationConversationContext = {
       ...(resolvedConversationContext || {}),
       joinWindowActive,
       joinWindowAgeMs: Math.round(joinWindowAgeMs),
       sessionTimeoutWarningActive: Boolean(sessionTiming?.timeoutWarningActive),
       sessionTimeoutWarningReason: String(sessionTiming?.timeoutWarningReason || "none"),
-      streamWatchBrainContext
+      streamWatchBrainContext,
+      voiceAddressingState
     };
 
     let replyText = "";
@@ -6379,6 +6839,7 @@ export class VoiceSessionManager {
     let usedOpenArticleFollowup = false;
     let usedScreenShareOffer = false;
     let leaveVoiceChannelRequested = false;
+    let generatedVoiceAddressing = null;
     let releaseLookupBusy = null;
     try {
       const generated = await this.generateVoiceTurn({
@@ -6387,6 +6848,7 @@ export class VoiceSessionManager {
         channelId: session.textChannelId,
         userId,
         transcript: normalizedTranscript,
+        directAddressed: Boolean(directAddressed),
         contextMessages,
         sessionId: session.id,
         isEagerTurn: !directAddressed && !generationConversationContext?.engaged,
@@ -6424,7 +6886,8 @@ export class VoiceSessionManager {
               usedWebSearchFollowup: false,
               usedOpenArticleFollowup: false,
               usedScreenShareOffer: false,
-              leaveVoiceChannelRequested: false
+              leaveVoiceChannelRequested: false,
+              voiceAddressing: null
             };
       replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
       requestedSoundboardRefs = this.normalizeSoundboardRefs(generatedPayload?.soundboardRefs);
@@ -6432,6 +6895,22 @@ export class VoiceSessionManager {
       usedOpenArticleFollowup = Boolean(generatedPayload?.usedOpenArticleFollowup);
       usedScreenShareOffer = Boolean(generatedPayload?.usedScreenShareOffer);
       leaveVoiceChannelRequested = Boolean(generatedPayload?.leaveVoiceChannelRequested);
+      generatedVoiceAddressing = this.normalizeVoiceAddressingAnnotation({
+        rawAddressing: generatedPayload?.voiceAddressing,
+        directAddressed: Boolean(directAddressed),
+        directedConfidence: Number(directAddressConfidence),
+        source: "generation",
+        reason: "voice_generation"
+      });
+      if (generatedVoiceAddressing) {
+        this.annotateLatestVoiceTurnAddressing({
+          session,
+          role: "user",
+          userId,
+          text: normalizedTranscript,
+          addressing: generatedVoiceAddressing
+        });
+      }
     } catch (error) {
       this.store.logAction({
         kind: "voice_error",
@@ -6502,6 +6981,10 @@ export class VoiceSessionManager {
           usedWebSearchFollowup,
           usedOpenArticleFollowup,
           usedScreenShareOffer,
+          talkingTo: generatedVoiceAddressing?.talkingTo || null,
+          directedConfidence: Number.isFinite(Number(generatedVoiceAddressing?.directedConfidence))
+            ? Number(clamp(Number(generatedVoiceAddressing.directedConfidence), 0, 1).toFixed(3))
+            : 0,
           leaveVoiceChannelRequested,
           joinWindowActive,
           joinWindowAgeMs: Math.round(joinWindowAgeMs),
@@ -6560,6 +7043,7 @@ export class VoiceSessionManager {
     userId,
     transcript = "",
     directAddressed = false,
+    directAddressConfidence = Number.NaN,
     conversationContext = null,
     source = "realtime"
   }) {
@@ -6636,21 +7120,30 @@ export class VoiceSessionManager {
     const recentMembershipEvents = this.getRecentVoiceMembershipEvents(session, {
       maxItems: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
     });
-    const joinWindowAgeMs = Math.max(0, Date.now() - Number(session?.startedAt || 0));
+    const contextNow = Date.now();
+    const joinWindowAgeMs = Math.max(0, contextNow - Number(session?.startedAt || 0));
     const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
     const sessionTiming = this.buildVoiceSessionTimingContext(session);
     const streamWatchBrainContext = this.getStreamWatchBrainContextForPrompt(session, settings);
+    const voiceAddressingState = this.buildVoiceAddressingState({
+      session,
+      userId,
+      now: contextNow
+    });
     const generationConversationContext = {
       ...(resolvedConversationContext || {}),
       joinWindowActive,
       joinWindowAgeMs: Math.round(joinWindowAgeMs),
       sessionTimeoutWarningActive: Boolean(sessionTiming?.timeoutWarningActive),
       sessionTimeoutWarningReason: String(sessionTiming?.timeoutWarningReason || "none"),
-      streamWatchBrainContext
+      streamWatchBrainContext,
+      voiceAddressingState
     };
 
+    const generationStartedAt = Date.now();
     let releaseLookupBusy = null;
     let generatedPayload = null;
+    let generatedVoiceAddressing = null;
     try {
       const generated = await this.generateVoiceTurn({
         settings,
@@ -6658,6 +7151,7 @@ export class VoiceSessionManager {
         channelId: session.textChannelId,
         userId,
         transcript: normalizedTranscript,
+        directAddressed: Boolean(directAddressed),
         contextMessages,
         sessionId: session.id,
         isEagerTurn: !directAddressed && !generationConversationContext?.engaged,
@@ -6695,8 +7189,25 @@ export class VoiceSessionManager {
               usedWebSearchFollowup: false,
               usedOpenArticleFollowup: false,
               usedScreenShareOffer: false,
-              leaveVoiceChannelRequested: false
+              leaveVoiceChannelRequested: false,
+              voiceAddressing: null
             };
+      generatedVoiceAddressing = this.normalizeVoiceAddressingAnnotation({
+        rawAddressing: generatedPayload?.voiceAddressing,
+        directAddressed: Boolean(directAddressed),
+        directedConfidence: Number(directAddressConfidence),
+        source: "generation",
+        reason: "voice_generation"
+      });
+      if (generatedVoiceAddressing) {
+        this.annotateLatestVoiceTurnAddressing({
+          session,
+          role: "user",
+          userId,
+          text: normalizedTranscript,
+          addressing: generatedVoiceAddressing
+        });
+      }
     } catch (error) {
       this.store.logAction({
         kind: "voice_error",
@@ -6722,6 +7233,18 @@ export class VoiceSessionManager {
     const usedOpenArticleFollowup = Boolean(generatedPayload?.usedOpenArticleFollowup);
     const usedScreenShareOffer = Boolean(generatedPayload?.usedScreenShareOffer);
     const leaveVoiceChannelRequested = Boolean(generatedPayload?.leaveVoiceChannelRequested);
+    const supersedeAfterGeneration = this.getRealtimeReplySupersedeState({
+      session,
+      generationStartedAt
+    });
+    if (supersedeAfterGeneration.shouldSupersede) {
+      this.recordRealtimeReplySuperseded({
+        session,
+        source: String(source || "realtime"),
+        supersedeState: supersedeAfterGeneration
+      });
+      return true;
+    }
     const playbackPlan = this.buildVoiceReplyPlaybackPlan({
       replyText,
       trailingSoundboardRefs: requestedSoundboardRefs
@@ -6740,6 +7263,10 @@ export class VoiceSessionManager {
           usedWebSearchFollowup,
           usedOpenArticleFollowup,
           usedScreenShareOffer,
+          talkingTo: generatedVoiceAddressing?.talkingTo || null,
+          directedConfidence: Number.isFinite(Number(generatedVoiceAddressing?.directedConfidence))
+            ? Number(clamp(Number(generatedVoiceAddressing.directedConfidence), 0, 1).toFixed(3))
+            : 0,
           soundboardRefs: [],
           leaveVoiceChannelRequested,
           joinWindowActive,
@@ -6762,6 +7289,18 @@ export class VoiceSessionManager {
         transcript: normalizedTranscript,
         captureReason: String(source || "realtime")
       });
+      const supersedeAfterContext = this.getRealtimeReplySupersedeState({
+        session,
+        generationStartedAt
+      });
+      if (supersedeAfterContext.shouldSupersede) {
+        this.recordRealtimeReplySuperseded({
+          session,
+          source: String(source || "realtime"),
+          supersedeState: supersedeAfterContext
+        });
+        return true;
+      }
     }
 
     const replyRequestedAt = Date.now();
@@ -6804,6 +7343,10 @@ export class VoiceSessionManager {
         usedWebSearchFollowup,
         usedOpenArticleFollowup,
         usedScreenShareOffer,
+        talkingTo: generatedVoiceAddressing?.talkingTo || null,
+        directedConfidence: Number.isFinite(Number(generatedVoiceAddressing?.directedConfidence))
+          ? Number(clamp(Number(generatedVoiceAddressing.directedConfidence), 0, 1).toFixed(3))
+          : 0,
         leaveVoiceChannelRequested,
         joinWindowActive,
         joinWindowAgeMs: Math.round(joinWindowAgeMs),

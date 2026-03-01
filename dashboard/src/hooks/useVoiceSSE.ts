@@ -128,6 +128,7 @@ export type VoiceSession = {
     inputSampleRateHz: number;
     outputSampleRateHz: number;
     recentVoiceTurns: number;
+    replySuperseded: number;
     pendingTurns: number;
     drainActive: boolean;
     state: RealtimeState | null;

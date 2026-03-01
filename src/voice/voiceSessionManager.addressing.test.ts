@@ -468,6 +468,42 @@ test("reply decider only treats join-window what-up greetings as llm-eligible wh
   assert.equal(callCount, 2);
 });
 
+test("reply decider blocks short low-signal clips right after a bot reply", async () => {
+  const manager = createManager();
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+      startedAt: Date.now() - 8_000,
+      lastAudioDeltaAt: Date.now() - 1_400
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          enabled: false,
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "Guten士",
+    transcriptionContext: {
+      captureReason: "speaking_end",
+      clipDurationMs: 460,
+      usedFallbackModel: false
+    }
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "low_signal_recent_reply_clip");
+  assert.equal(Number.isFinite(Number(decision.retryAfterMs)), true);
+});
+
 test("reply decider blocks unaddressed turns when eagerness is disabled", async () => {
   const manager = createManager();
   const decision = await manager.evaluateVoiceReplyDecision({
@@ -1572,6 +1608,69 @@ test("runRealtimeTurn transcribes speaking_end clips above minimum duration thre
   assert.equal(addressingLog?.metadata?.transcript, "yo");
 });
 
+test("runRealtimeTurn blocks duplicate followup replies for short low-signal clips after bot speech", async () => {
+  const runtimeLogs = [];
+  let transcribeCalls = 0;
+  let replyCalls = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.llm.isAsrReady = () => true;
+  manager.llm.transcribeAudio = async () => ({ text: "unused" });
+  manager.transcribePcmTurn = async () => {
+    transcribeCalls += 1;
+    return "Guten士";
+  };
+  manager.runRealtimeBrainReply = async () => {
+    replyCalls += 1;
+  };
+
+  const session = {
+    id: "session-low-signal-recent-reply-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    realtimeInputSampleRateHz: 24000,
+    startedAt: Date.now() - 8_000,
+    lastAudioDeltaAt: Date.now() - 1_500,
+    realtimeClient: {
+      appendInputAudioPcm() {}
+    },
+    settingsSnapshot: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          enabled: false,
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    })
+  };
+
+  await manager.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.alloc(22_080, 1),
+    captureReason: "speaking_end"
+  });
+
+  assert.equal(transcribeCalls, 1);
+  assert.equal(replyCalls, 0);
+  const addressingLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
+  );
+  assert.equal(Boolean(addressingLog), true);
+  assert.equal(addressingLog?.metadata?.reason, "low_signal_recent_reply_clip");
+  assert.equal(
+    runtimeLogs.some((row) => row?.kind === "voice_runtime" && row?.content === "realtime_reply_requested"),
+    false
+  );
+});
+
 test("runRealtimeTurn drops near-silent clips before ASR", async () => {
   const runtimeLogs = [];
   let transcribeCalls = 0;
@@ -2158,6 +2257,71 @@ test("smoke: runRealtimeBrainReply passes join-window context into generation", 
   assert.equal(generationPayloads[0]?.conversationContext?.streamWatchBrainContext?.notes?.length, 1);
 });
 
+test("runRealtimeBrainReply supersedes stale reply when newer realtime input is queued", async () => {
+  const runtimeLogs = [];
+  let requestedRealtimeUtterances = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
+  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = () => {
+    requestedRealtimeUtterances += 1;
+    return true;
+  };
+  manager.generateVoiceTurn = async () => ({
+    text: "this should be superseded"
+  });
+
+  const session = {
+    id: "session-realtime-supersede-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 8_000,
+    realtimeClient: {},
+    userCaptures: new Map(),
+    pendingRealtimeTurns: [
+      {
+        session: null,
+        userId: "speaker-2",
+        pcmBuffer: Buffer.from([1, 2, 3]),
+        captureReason: "stream_end",
+        queuedAt: Date.now() - 250
+      }
+    ],
+    realtimeReplySupersededCount: 0,
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "older transcript",
+    directAddressed: true,
+    source: "realtime"
+  });
+
+  assert.equal(result, true);
+  assert.equal(requestedRealtimeUtterances, 0);
+  const supersededLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "realtime_reply_superseded_newer_input"
+  );
+  assert.equal(Boolean(supersededLog), true);
+  assert.equal(supersededLog?.metadata?.supersedeReason, "pending_realtime_turn");
+  assert.equal(supersededLog?.metadata?.pendingRealtimeQueueDepth, 1);
+  assert.equal(supersededLog?.metadata?.supersededCount, 1);
+  assert.equal(session.realtimeReplySupersededCount, 1);
+});
+
 test("runRealtimeBrainReply ends VC when model requests leave directive", async () => {
   const manager = createManager();
   const endCalls = [];
@@ -2643,6 +2807,107 @@ test("runSttPipelineReply triggers soundboard even when generated speech is empt
   assert.equal(spokenLines.length, 0);
   assert.equal(soundboardCalls.length, 1);
   assert.equal(soundboardCalls[0]?.requestedRef, "airhorn@123");
+});
+
+test("runSttPipelineReply passes addressing state into generation and persists model addressing guess", async () => {
+  const manager = createManager();
+  const generationPayloads = [];
+  manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
+  manager.resolveSoundboardCandidates = async () => ({
+    source: "preferred",
+    candidates: []
+  });
+  manager.generateVoiceTurn = async (payload) => {
+    generationPayloads.push(payload);
+    return {
+      text: "yup",
+      voiceAddressing: {
+        talkingTo: "ME",
+        directedConfidence: 0.88
+      }
+    };
+  };
+  manager.speakVoiceLineWithTts = async () => true;
+
+  const now = Date.now();
+  const session = {
+    id: "session-stt-addressing-state-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "stt_pipeline",
+    ending: false,
+    recentVoiceTurns: [
+      {
+        role: "user",
+        userId: "speaker-1",
+        speakerName: "alice",
+        text: "earlier note",
+        at: now - 9_000,
+        addressing: { talkingTo: "bob", directedConfidence: 0.61 }
+      },
+      {
+        role: "user",
+        userId: "speaker-2",
+        speakerName: "bob",
+        text: "clanker can you jump in",
+        at: now - 6_000,
+        addressing: { talkingTo: "ME", directedConfidence: 0.9 }
+      },
+      {
+        role: "user",
+        userId: "speaker-1",
+        speakerName: "alice",
+        text: "what do you think",
+        at: now - 1_200
+      }
+    ],
+    transcriptTurns: [
+      {
+        role: "user",
+        userId: "speaker-1",
+        speakerName: "alice",
+        text: "earlier note",
+        at: now - 9_000,
+        addressing: { talkingTo: "bob", directedConfidence: 0.61 }
+      },
+      {
+        role: "user",
+        userId: "speaker-2",
+        speakerName: "bob",
+        text: "clanker can you jump in",
+        at: now - 6_000,
+        addressing: { talkingTo: "ME", directedConfidence: 0.9 }
+      },
+      {
+        role: "user",
+        userId: "speaker-1",
+        speakerName: "alice",
+        text: "what do you think",
+        at: now - 1_200
+      }
+    ],
+    settingsSnapshot: baseSettings()
+  };
+
+  await manager.runSttPipelineReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "what do you think",
+    directAddressed: false
+  });
+
+  assert.equal(generationPayloads.length, 1);
+  assert.equal(generationPayloads[0]?.conversationContext?.voiceAddressingState?.currentSpeakerTarget, "bob");
+  assert.equal(
+    generationPayloads[0]?.conversationContext?.voiceAddressingState?.recentAddressingGuesses?.length >= 2,
+    true
+  );
+  const updatedTurn = session.transcriptTurns.find(
+    (row) => row?.role === "user" && row?.userId === "speaker-1" && row?.text === "what do you think"
+  );
+  assert.equal(updatedTurn?.addressing?.talkingTo, "ME");
+  assert.equal(updatedTurn?.addressing?.directedConfidence, 0.88);
 });
 
 test("runSttPipelineReply plays inline soundboard directives in spoken order", async () => {
