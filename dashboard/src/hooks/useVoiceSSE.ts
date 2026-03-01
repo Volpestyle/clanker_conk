@@ -65,6 +65,31 @@ export type RealtimeState = {
   [key: string]: unknown;
 };
 
+export type LatencyTurnEntry = {
+  at: string;
+  finalizedToAsrStartMs: number | null;
+  asrToGenerationStartMs: number | null;
+  generationToReplyRequestMs: number | null;
+  replyRequestToAudioStartMs: number | null;
+  totalMs: number | null;
+  queueWaitMs: number | null;
+  pendingQueueDepth: number | null;
+};
+
+export type LatencyAverages = {
+  finalizedToAsrStartMs: number | null;
+  asrToGenerationStartMs: number | null;
+  generationToReplyRequestMs: number | null;
+  replyRequestToAudioStartMs: number | null;
+  totalMs: number | null;
+};
+
+export type SessionLatency = {
+  recentTurns: LatencyTurnEntry[];
+  averages: LatencyAverages;
+  turnCount: number;
+} | null;
+
 export type VoiceSession = {
   sessionId: string;
   guildId: string;
@@ -168,6 +193,7 @@ export type VoiceSession = {
     drainActive: boolean;
     state: RealtimeState | null;
   } | null;
+  latency: SessionLatency;
 };
 
 export type VoiceEvent = {

@@ -598,6 +598,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           lastDirectiveKey: "",
           lastDirectiveAt: 0
         },
+        latencyStages: [],
         focusedSpeakerUserId: null,
         focusedSpeakerAt: 0,
         membershipEvents: [],

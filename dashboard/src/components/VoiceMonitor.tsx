@@ -5,7 +5,8 @@ import {
   type VoiceSession,
   type VoiceEvent,
   type RealtimeState,
-  type VoiceMembershipEvent
+  type VoiceMembershipEvent,
+  type SessionLatency
 } from "../hooks/useVoiceSSE";
 import { useVoiceHistory } from "../hooks/useVoiceHistory";
 
@@ -178,6 +179,48 @@ function resolveCaptureTargetName(capture: { userId: string; displayName: string
   return userId ? userId.slice(0, 8) : "unknown";
 }
 
+function isFinalHistoryTranscriptEventType(eventType: unknown, source: unknown): boolean {
+  const normalized = String(eventType || "")
+    .trim()
+    .toLowerCase();
+  const normalizedSource = String(source || "")
+    .trim()
+    .toLowerCase();
+
+  if (!normalized) {
+    return normalizedSource !== "output";
+  }
+  if (normalized.includes("delta") || normalized.includes("partial")) return false;
+  if (normalized === "server_content_text") return false;
+
+  if (normalized.includes("input_audio_transcription")) {
+    return normalized.includes("completed") || normalized === "input_audio_transcription";
+  }
+  if (normalized.includes("output_audio_transcription")) {
+    return (
+      normalized.includes("done") ||
+      normalized.includes("completed") ||
+      normalized === "output_audio_transcription"
+    );
+  }
+  if (normalized.includes("output_audio_transcript")) {
+    return normalized.includes("done") || normalized.includes("completed");
+  }
+  if (normalized.includes("response.output_text")) {
+    return normalized.endsWith(".done") || normalized.includes("completed");
+  }
+  if (normalized.includes("response.text")) {
+    return normalized.includes("done") || normalized.includes("completed");
+  }
+  if (/audio_transcript/u.test(normalized)) {
+    return !normalized.includes("delta");
+  }
+  if (/transcript/u.test(normalized)) {
+    return !normalized.includes("delta");
+  }
+  return true;
+}
+
 type Guild = {
   id: string;
   name: string;
@@ -344,52 +387,137 @@ function PipelineBadge({ session }: { session: VoiceSession }) {
   return null;
 }
 
+// ---- Latency Panel ----
+
+const LATENCY_STAGES = [
+  { key: "finalizedToAsrStartMs" as const, label: "ASR Wait", color: "#60a5fa" },
+  { key: "asrToGenerationStartMs" as const, label: "LLM Think", color: "#fbbf24" },
+  { key: "generationToReplyRequestMs" as const, label: "Reply Prep", color: "#c084fc" },
+  { key: "replyRequestToAudioStartMs" as const, label: "TTS", color: "#4ade80" }
+];
+
+function LatencyPanel({ latency }: { latency: SessionLatency }) {
+  if (!latency || latency.recentTurns.length === 0) return null;
+
+  const { recentTurns, averages, turnCount } = latency;
+  const maxTotal = Math.max(...recentTurns.map((t) => Number(t.totalMs) || 0), 1);
+
+  return (
+    <Section title="Pipeline Latency" badge={`${turnCount} turn${turnCount !== 1 ? "s" : ""}`}>
+      {/* Average pills */}
+      <div className="vm-detail-grid">
+        {LATENCY_STAGES.map((s) => {
+          const val = averages[s.key];
+          return val != null ? (
+            <Stat key={s.key} label={`Avg ${s.label}`} value={`${val}ms`} />
+          ) : null;
+        })}
+        <Stat
+          label="Avg Total"
+          value={averages.totalMs != null ? `${averages.totalMs}ms` : "–"}
+          warn={averages.totalMs != null && averages.totalMs > 2000}
+        />
+      </div>
+
+      {/* Color legend */}
+      <div className="vm-latency-legend">
+        {LATENCY_STAGES.map((s) => (
+          <span key={s.key} className="vm-latency-legend-item">
+            <span className="vm-latency-swatch" style={{ background: s.color }} />
+            {s.label}
+          </span>
+        ))}
+      </div>
+
+      {/* Stacked bar chart */}
+      <div className="vm-latency-chart">
+        {recentTurns.map((turn, i) => {
+          const total = Number(turn.totalMs) || 0;
+          return (
+            <div key={`${turn.at}-${i}`} className="vm-latency-row">
+              <span className="vm-latency-time">{relativeTime(turn.at)}</span>
+              <div className="vm-latency-bar-track">
+                {LATENCY_STAGES.map((s) => {
+                  const val = Number(turn[s.key]) || 0;
+                  if (val <= 0) return null;
+                  const pct = (val / maxTotal) * 100;
+                  return (
+                    <div
+                      key={s.key}
+                      className="vm-latency-segment"
+                      style={{ width: `${pct}%`, background: s.color }}
+                      title={`${s.label}: ${val}ms`}
+                    />
+                  );
+                })}
+              </div>
+              <span className={`vm-latency-total ${total > 2000 ? "vm-latency-total-warn" : ""}`}>
+                {total}ms
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </Section>
+  );
+}
+
 // ---- Realtime Connection Detail ----
 
 function RealtimeDetail({ session }: { session: VoiceSession }) {
   const rt = session.realtime;
+  const [showDebug, setShowDebug] = useState(false);
   if (!rt) return null;
   const state = rt.state as RealtimeState | null;
   if (!state) return null;
 
   return (
-    <Section title="Realtime Connection" badge={state.connected ? "connected" : "disconnected"}>
+    <Section title="Realtime Connection" badge={state.connected ? "connected" : "disconnected"} defaultOpen={false}>
       <div className="vm-detail-grid">
         <Stat
           label="Superseded"
           value={Number(rt.replySuperseded || 0)}
           warn={Number(rt.replySuperseded || 0) > 0}
         />
-        {state.sessionId && <Stat label="Session" value={state.sessionId.slice(0, 12) + "..."} />}
-        {state.connectedAt && <Stat label="Connected" value={relativeTime(state.connectedAt)} />}
-        {state.lastEventAt && <Stat label="Last Event" value={relativeTime(state.lastEventAt)} />}
-        {state.lastOutboundEventType && (
-          <Stat label="Last Sent" value={state.lastOutboundEventType} />
-        )}
-        {state.lastOutboundEventAt && (
-          <Stat label="Sent At" value={relativeTime(state.lastOutboundEventAt)} />
-        )}
-        {state.activeResponseId && (
-          <Stat label="Active Response" value={state.activeResponseId.slice(0, 12) + "..."} />
-        )}
-        {state.activeResponseStatus && (
-          <Stat label="Response Status" value={state.activeResponseStatus} />
-        )}
         {state.lastError && <Stat label="Last Error" value={state.lastError} warn />}
         {state.lastCloseCode != null && (
           <Stat label="Close Code" value={`${state.lastCloseCode} ${state.lastCloseReason || ""}`} warn />
         )}
       </div>
-      {state.recentOutboundEvents && state.recentOutboundEvents.length > 0 && (
-        <div className="vm-outbound-events">
-          <span className="vm-mini-label">Recent outbound</span>
-          {state.recentOutboundEvents.map((evt, i) => (
-            <div key={i} className="vm-outbound-row">
-              <span className="vm-outbound-type">{evt.type}</span>
-              <span className="vm-outbound-time">{relativeTime(evt.at)}</span>
+      <button className="vm-debug-toggle" onClick={() => setShowDebug(!showDebug)}>
+        {showDebug ? "− hide debug" : "+ show debug"}
+      </button>
+      {showDebug && (
+        <>
+          <div className="vm-detail-grid">
+            {state.sessionId && <Stat label="Session" value={state.sessionId.slice(0, 12) + "..."} />}
+            {state.connectedAt && <Stat label="Connected" value={relativeTime(state.connectedAt)} />}
+            {state.lastEventAt && <Stat label="Last Event" value={relativeTime(state.lastEventAt)} />}
+            {state.lastOutboundEventType && (
+              <Stat label="Last Sent" value={state.lastOutboundEventType} />
+            )}
+            {state.lastOutboundEventAt && (
+              <Stat label="Sent At" value={relativeTime(state.lastOutboundEventAt)} />
+            )}
+            {state.activeResponseId && (
+              <Stat label="Active Response" value={state.activeResponseId.slice(0, 12) + "..."} />
+            )}
+            {state.activeResponseStatus && (
+              <Stat label="Response Status" value={state.activeResponseStatus} />
+            )}
+          </div>
+          {state.recentOutboundEvents && state.recentOutboundEvents.length > 0 && (
+            <div className="vm-outbound-events">
+              <span className="vm-mini-label">Recent outbound</span>
+              {state.recentOutboundEvents.map((evt, i) => (
+                <div key={i} className="vm-outbound-row">
+                  <span className="vm-outbound-type">{evt.type}</span>
+                  <span className="vm-outbound-time">{relativeTime(evt.at)}</span>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
+          )}
+        </>
       )}
     </Section>
   );
@@ -472,13 +600,6 @@ function ConversationContext({ session }: { session: VoiceSession }) {
   const deciderAvailableTurns = Number(decider?.availableTurns || trackedTurns);
   const deciderMaxTurns = Number(decider?.maxTurns || 0);
   const deciderSentTurns = Math.min(deciderAvailableTurns, deciderMaxTurns || deciderAvailableTurns);
-  const wakeIndicator = resolveWakeIndicator(session);
-  const joinWindowIndicator = resolveJoinWindowIndicator(session);
-  const joinWindowSummary = joinWindowIndicator.active
-    ? joinWindowIndicator.remainingMs != null
-      ? `${formatDurationMs(joinWindowIndicator.remainingMs)} left`
-      : "active"
-    : "closed";
   const [, setTick] = useState(0);
   useEffect(() => {
     const id = setInterval(() => setTick((t) => t + 1), 5000);
@@ -491,37 +612,10 @@ function ConversationContext({ session }: { session: VoiceSession }) {
     <Section title="Conversation" badge={turns.length}>
       <div className="vm-convo-context-summary">
         <div className="vm-convo-context-row">
-          <span>Generation context</span>
+          <span>gen {generationSentTurns}/{generationAvailableTurns || 0} | dec {deciderSentTurns}/{deciderAvailableTurns || 0}</span>
           <span>
-            {generationSentTurns}/{generationAvailableTurns || 0}
-            {generationMaxTurns > 0 ? ` (max ${generationMaxTurns})` : ""}
+            tracked {trackedTurns}{trackedTurnLimit > 0 ? `/${trackedTurnLimit}` : ""} / transcript {trackedTranscriptTurns}
           </span>
-        </div>
-        <div className="vm-convo-context-row">
-          <span>Decider context</span>
-          <span>
-            {deciderSentTurns}/{deciderAvailableTurns || 0}
-            {deciderMaxTurns > 0 ? ` (max ${deciderMaxTurns})` : ""}
-          </span>
-        </div>
-        <div className="vm-convo-context-row">
-          <span>Tracked turns</span>
-          <span>
-            {trackedTurns}
-            {trackedTurnLimit > 0 ? ` (limit ${trackedTurnLimit})` : ""}
-          </span>
-        </div>
-        <div className="vm-convo-context-row">
-          <span>Transcript log turns</span>
-          <span>{trackedTranscriptTurns}</span>
-        </div>
-        <div className="vm-convo-context-row">
-          <span>Wake mode</span>
-          <span>{wakeIndicator.stateLabel}</span>
-        </div>
-        <div className="vm-convo-context-row">
-          <span>Join window</span>
-          <span>{joinWindowSummary}</span>
         </div>
       </div>
       <div className="vm-convo-feed">
@@ -748,6 +842,9 @@ function SessionCard({ session }: { session: VoiceSession }) {
       {/* Expanded detail sections */}
       {expanded && (
         <div className="vm-card-detail">
+          {/* Pipeline latency */}
+          <LatencyPanel latency={session.latency} />
+
           {/* Timers */}
           <Section title="Session Timers" defaultOpen={false}>
             <div className="vm-detail-grid">
@@ -768,22 +865,6 @@ function SessionCard({ session }: { session: VoiceSession }) {
 
           {/* Participants */}
           <ParticipantList session={session} />
-
-          {activeCaptures.length > 0 && (
-            <Section title="Active Transcription Targets" badge={activeCaptures.length} defaultOpen={false}>
-              <div className="vm-participant-list">
-                {activeCaptures.map((capture, index) => (
-                  <div key={`${capture.userId}-${index}`} className="vm-participant">
-                    <span className="vm-participant-name">{resolveCaptureTargetName(capture)}</span>
-                    {capture.startedAt && (
-                      <span className="vm-participant-tag">{relativeTime(capture.startedAt)}</span>
-                    )}
-                    <span className="vm-participant-id">{capture.userId.slice(0, 6)}</span>
-                  </div>
-                ))}
-              </div>
-            </Section>
-          )}
 
           {/* Membership changes */}
           <MembershipChanges session={session} />
@@ -920,7 +1001,8 @@ function HistoryTranscript({ events }: { events: VoiceEvent[] }) {
   const turns = events
     .filter((e) => {
       const meta = e.metadata as Record<string, unknown> | undefined;
-      return e.kind === "voice_runtime" && meta?.transcript;
+      if (e.kind !== "voice_runtime" || !meta?.transcript) return false;
+      return isFinalHistoryTranscriptEventType(meta.transcriptEventType, meta.transcriptSource);
     })
     .map((e) => {
       const meta = e.metadata as Record<string, unknown>;

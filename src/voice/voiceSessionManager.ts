@@ -607,7 +607,36 @@ export class VoiceSessionManager {
               drainActive: Boolean(session.realtimeTurnDrainActive),
               state: session.realtimeClient?.getState?.() || null
             }
-          : null
+          : null,
+        latency: (() => {
+          const stages = Array.isArray(session.latencyStages) ? session.latencyStages : [];
+          if (stages.length === 0) return null;
+          const recentTurns = stages.slice(-8).reverse().map((e) => ({
+            at: new Date(e.at).toISOString(),
+            finalizedToAsrStartMs: e.finalizedToAsrStartMs ?? null,
+            asrToGenerationStartMs: e.asrToGenerationStartMs ?? null,
+            generationToReplyRequestMs: e.generationToReplyRequestMs ?? null,
+            replyRequestToAudioStartMs: e.replyRequestToAudioStartMs ?? null,
+            totalMs: e.totalMs ?? null,
+            queueWaitMs: e.queueWaitMs ?? null,
+            pendingQueueDepth: e.pendingQueueDepth ?? null
+          }));
+          const avg = (field) => {
+            const vals = stages.map((e) => e[field]).filter((v) => Number.isFinite(v) && v >= 0);
+            return vals.length > 0 ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
+          };
+          return {
+            recentTurns,
+            averages: {
+              finalizedToAsrStartMs: avg("finalizedToAsrStartMs"),
+              asrToGenerationStartMs: avg("asrToGenerationStartMs"),
+              generationToReplyRequestMs: avg("generationToReplyRequestMs"),
+              replyRequestToAudioStartMs: avg("replyRequestToAudioStartMs"),
+              totalMs: avg("totalMs")
+            },
+            turnCount: stages.length
+          };
+        })()
       };
     });
 
@@ -1858,20 +1887,22 @@ export class VoiceSessionManager {
             };
       const transcriptForLogs = String(parsedDirective?.text || transcript).trim();
       const requestedSoundboardRefs = this.normalizeSoundboardRefs(parsedDirective?.references || []);
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: this.client.user?.id || null,
-        content: `${runtimeLabel}_transcript`,
-        metadata: {
-          sessionId: session.id,
-          transcript: transcriptForLogs || transcript,
-          transcriptEventType: transcriptEventType || null,
-          transcriptSource,
-          soundboardRefs: requestedSoundboardRefs.length ? requestedSoundboardRefs : null
-        }
-      });
+      if (finalTranscriptEvent) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.client.user?.id || null,
+          content: `${runtimeLabel}_transcript`,
+          metadata: {
+            sessionId: session.id,
+            transcript: transcriptForLogs || transcript,
+            transcriptEventType: transcriptEventType || null,
+            transcriptSource,
+            soundboardRefs: requestedSoundboardRefs.length ? requestedSoundboardRefs : null
+          }
+        });
+      }
 
       if (session.mode === "openai_realtime" && transcriptSource === "output") {
         session.pendingRealtimeInputBytes = 0;
@@ -4643,6 +4674,38 @@ export class VoiceSessionManager {
         replyRequestToAudioStartMs: metrics.replyRequestToAudioStartMs
       }
     });
+
+    if (String(stage || "").toLowerCase() === "audio_started") {
+      const totalMs = [
+        metrics.finalizedToAsrStartMs,
+        metrics.asrToGenerationStartMs,
+        metrics.generationToReplyRequestMs,
+        metrics.replyRequestToAudioStartMs
+      ].reduce((sum, v) => sum + (Number.isFinite(v) ? v : 0), 0);
+
+      const entry = {
+        at: Date.now(),
+        stage: String(stage),
+        source: String(source || "realtime"),
+        finalizedToAsrStartMs: metrics.finalizedToAsrStartMs,
+        asrToGenerationStartMs: metrics.asrToGenerationStartMs,
+        generationToReplyRequestMs: metrics.generationToReplyRequestMs,
+        replyRequestToAudioStartMs: metrics.replyRequestToAudioStartMs,
+        totalMs,
+        queueWaitMs: Number.isFinite(Number(queueWaitMs))
+          ? Math.max(0, Math.round(Number(queueWaitMs)))
+          : null,
+        pendingQueueDepth: Number.isFinite(Number(pendingQueueDepth))
+          ? Math.max(0, Math.round(Number(pendingQueueDepth)))
+          : null
+      };
+
+      if (!Array.isArray(session.latencyStages)) session.latencyStages = [];
+      session.latencyStages.push(entry);
+      if (session.latencyStages.length > 12) {
+        session.latencyStages = session.latencyStages.slice(-12);
+      }
+    }
   }
 
   resolveRealtimeReplyStrategy({ session, settings = null }) {
