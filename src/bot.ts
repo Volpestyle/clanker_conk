@@ -1070,10 +1070,13 @@ export class ClankerBot {
     });
   }
 
-  shouldSendAsReply({ isInitiativeChannel = false, shouldThreadReply = false } = {}) {
+  shouldSendAsReply({ isInitiativeChannel = false, shouldThreadReply = false, replyText = "" } = {}) {
     if (!shouldThreadReply) return false;
-    if (!isInitiativeChannel) return true;
-    return chance(0.65);
+    const textLength = String(replyText || "").trim().length;
+    const isShortReply = textLength > 0 && textLength <= 30;
+    if (isShortReply) return chance(0.25);
+    if (!isInitiativeChannel) return chance(0.82);
+    return chance(0.55);
   }
 
   shouldSkipSimulatedTypingDelay() {
@@ -1081,9 +1084,13 @@ export class ClankerBot {
     return IS_TEST_PROCESS;
   }
 
-  getSimulatedTypingDelayMs(minMs, jitterMs) {
+  getSimulatedTypingDelayMs(minMs, jitterMs, charCount = 0) {
     if (this.shouldSkipSimulatedTypingDelay()) return 0;
-    return minMs + Math.floor(Math.random() * jitterMs);
+    const normalizedCharCount = Math.max(0, Math.floor(Number(charCount) || 0));
+    const perCharMs = clamp(12 + Math.floor(Math.random() * 8), 10, 22);
+    const lengthMs = normalizedCharCount * perCharMs;
+    const baseMs = normalizedCharCount <= 20 ? Math.floor(minMs * 0.5) : minMs;
+    return clamp(baseMs + lengthMs + Math.floor(Math.random() * jitterMs), 200, 8000);
   }
 
   async maybeReplyToMessage(message, settings, options: ReplyAttemptOptions = {}) {
@@ -1693,14 +1700,16 @@ export class ClankerBot {
 
     const typingStartedAtMs = Date.now();
     await message.channel.sendTyping();
-    await sleep(this.getSimulatedTypingDelayMs(600, 1800));
+    const replyCharCount = String(payload?.content || finalText || "").length;
+    await sleep(this.getSimulatedTypingDelayMs(400, 1200, replyCharCount));
     const typingDelayMs = Math.max(0, Date.now() - typingStartedAtMs);
 
     const shouldThreadReply = addressed || options.forceRespond;
     const canStandalonePost = isInitiativeChannel || !shouldThreadReply;
     const sendAsReply = this.shouldSendAsReply({
       isInitiativeChannel,
-      shouldThreadReply
+      shouldThreadReply,
+      replyText: finalText
     });
     const sendStartedAtMs = Date.now();
     const sent = sendAsReply

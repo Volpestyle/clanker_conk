@@ -64,7 +64,7 @@ export const DEFAULT_SETTINGS = {
     provider: "anthropic",
     model: "claude-haiku-4-5",
     temperature: 0.9,
-    maxOutputTokens: 1500,
+    maxOutputTokens: 800,
     pricing: {}
   },
   replyFollowupLlm: {

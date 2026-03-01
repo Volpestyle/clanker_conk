@@ -165,7 +165,7 @@ export function normalizeSettings(raw) {
   merged.llm.provider = normalizedLlm.provider;
   merged.llm.model = normalizedLlm.model;
   merged.llm.temperature = clamp(Number(merged.llm?.temperature) || 0.9, 0, 2);
-  const defaultLlmMaxOutputTokens = Number(DEFAULT_SETTINGS.llm?.maxOutputTokens) || 1500;
+  const defaultLlmMaxOutputTokens = Number(DEFAULT_SETTINGS.llm?.maxOutputTokens) || 800;
   const configuredLlmMaxOutputTokens = Number(merged.llm?.maxOutputTokens);
   const normalizedLlmMaxOutputTokens = Number.isFinite(configuredLlmMaxOutputTokens)
     ? Math.floor(configuredLlmMaxOutputTokens)

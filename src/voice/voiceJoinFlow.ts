@@ -61,7 +61,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: "voice_disabled",
         details: {
           voiceEnabled: Boolean(settings?.voice?.enabled)
-        }
+        },
+        mustNotify: true
       });
       return true;
     }
@@ -79,7 +80,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: "requester_blocked",
         details: {
           blockedVoiceUserIdsCount: blockedUsers.length
-        }
+        },
+        mustNotify: true
       });
       return true;
     }
@@ -95,7 +97,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         messageId: message.id,
         event: "voice_join_request",
         reason: "requester_not_in_voice",
-        details: {}
+        details: {},
+        mustNotify: true
       });
       return true;
     }
@@ -116,7 +119,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: "channel_blocked",
         details: {
           targetVoiceChannelId
-        }
+        },
+        mustNotify: true
       });
       return true;
     }
@@ -134,7 +138,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         details: {
           targetVoiceChannelId,
           allowlistedChannelCount: allowedChannels.length
-        }
+        },
+        mustNotify: true
       });
       return true;
     }
@@ -156,7 +161,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           details: {
             startedLastDay,
             maxSessionsPerDay
-          }
+          },
+          mustNotify: true
         });
         return true;
       }
@@ -207,7 +213,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: "xai_api_key_missing",
         details: {
           mode: runtimeMode
-        }
+        },
+        mustNotify: true
       });
       return true;
     }
@@ -223,7 +230,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: "openai_api_key_missing",
         details: {
           mode: runtimeMode
-        }
+        },
+        mustNotify: true
       });
       return true;
     }
@@ -239,7 +247,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: "gemini_api_key_missing",
         details: {
           mode: runtimeMode
-        }
+        },
+        mustNotify: true
       });
       return true;
     }
@@ -255,7 +264,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: "elevenlabs_api_key_missing",
         details: {
           mode: runtimeMode
-        }
+        },
+        mustNotify: true
       });
       return true;
     }
@@ -274,7 +284,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           reason: "elevenlabs_agent_id_missing",
           details: {
             mode: runtimeMode
-          }
+          },
+          mustNotify: true
         });
         return true;
       }
@@ -292,7 +303,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           reason: "stt_pipeline_asr_unavailable",
           details: {
             mode: runtimeMode
-          }
+          },
+          mustNotify: true
         });
         return true;
       }
@@ -308,7 +320,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           reason: "stt_pipeline_tts_unavailable",
           details: {
             mode: runtimeMode
-          }
+          },
+          mustNotify: true
         });
         return true;
       }
@@ -324,7 +337,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           reason: "stt_pipeline_brain_unavailable",
           details: {
             mode: runtimeMode
-          }
+          },
+          mustNotify: true
         });
         return true;
       }
@@ -346,7 +360,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: missingPermissionInfo.reason,
         details: {
           missingPermissions: missingPermissionInfo.missingPermissions || []
-        }
+        },
+        mustNotify: true
       });
       return true;
     }
@@ -382,7 +397,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
             details: {
               activeOrPendingSessions,
               maxConcurrentSessions
-            }
+            },
+            mustNotify: true
           });
           return true;
         }
@@ -744,7 +760,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reason: "join_failed",
         details: {
           error: shortError(errorText)
-        }
+        },
+        mustNotify: true
       });
       return true;
     } finally {

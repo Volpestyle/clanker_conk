@@ -222,11 +222,11 @@ test("normalizeSettings handles memoryLlm defaults and discovery source fallback
   assert.equal(typeof normalized.initiative.discovery.sources.x, "boolean");
 });
 
-test("normalizeSettings defaults llm maxOutputTokens to 1500 and preserves high values", () => {
+test("normalizeSettings defaults llm maxOutputTokens to 800 and preserves high values", () => {
   const defaulted = normalizeSettings({
     llm: {}
   });
-  assert.equal(defaulted.llm.maxOutputTokens, 1500);
+  assert.equal(defaulted.llm.maxOutputTokens, 800);
 
   const highValue = normalizeSettings({
     llm: {

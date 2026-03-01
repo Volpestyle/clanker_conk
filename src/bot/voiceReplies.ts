@@ -512,7 +512,7 @@ export async function generateVoiceTurnReply(runtime, {
     ...voiceToneGuardrails,
     "Return strict JSON only matching the provided schema.",
     effectiveJoinWindowActive
-      ? "Join window active: you just joined VC. For short greetings/check-ins (hi/hey/yo/sup/what's up), default to a brief acknowledgement (skip=false) even in multi-person channels, unless clearly aimed at another human."
+      ? "Join window active: you just joined VC. You can acknowledge a direct greeting naturally, but read the room first — do not jump in on every hello, especially if people are mid-conversation."
       : null,
     directAddressed
       ? "This speaker directly addressed you. Prefer skip=false with a response unless the transcript is too unclear."
