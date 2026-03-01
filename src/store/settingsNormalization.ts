@@ -172,7 +172,7 @@ export function normalizeSettings(raw) {
   merged.replyFollowupLlm.provider = normalizedReplyFollowupLlm.provider;
   merged.replyFollowupLlm.model = normalizedReplyFollowupLlm.model;
   delete merged.replyFollowupLlm.useTextModel;
-  const defaultReplyFollowup = DEFAULT_SETTINGS.replyFollowupLlm || {};
+  const defaultReplyFollowup = DEFAULT_SETTINGS.replyFollowupLlm;
   const maxToolStepsRaw = Number(merged.replyFollowupLlm?.maxToolSteps);
   const maxTotalToolCallsRaw = Number(merged.replyFollowupLlm?.maxTotalToolCalls);
   const maxWebSearchCallsRaw = Number(merged.replyFollowupLlm?.maxWebSearchCalls);

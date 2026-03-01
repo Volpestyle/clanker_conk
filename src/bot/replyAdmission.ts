@@ -115,7 +115,7 @@ export async function getReplyAddressSignal(
   settings,
   message,
   recentMessages = []
-) {
+): Promise<ReplyAddressSignal> {
   const referencedAuthorId = resolveReferencedAuthorId(message, recentMessages);
   const directByPlatform =
     runtime.isDirectlyAddressed(settings, message) ||

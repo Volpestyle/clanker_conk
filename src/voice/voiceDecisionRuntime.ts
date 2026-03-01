@@ -242,7 +242,7 @@ export function parseVoiceThoughtDecisionContract(rawText) {
 
   const allow = String(tokenMatch[1] || "").toUpperCase() === "YES";
   let remainder = unwrapped.slice(tokenMatch[0].length).trim();
-  remainder = remainder.replace(/^[:\-]\s*/, "");
+  remainder = remainder.replace(/^[:-]\s*/, "");
   let usedMemory = false;
   const usedMemoryMatch = remainder.match(/\bused[_\s-]?memory\s*[:=]\s*(true|false|yes|no|1|0)\b/i);
   if (usedMemoryMatch) {

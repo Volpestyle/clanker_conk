@@ -138,7 +138,7 @@ export async function withDashboardServer<T>(
     });
 
     if (!dashboard.server.listening) {
-      await new Promise((resolve, reject) => {
+      await new Promise<void>((resolve, reject) => {
         const onListening = () => {
           dashboard.server.off("error", onError);
           resolve();

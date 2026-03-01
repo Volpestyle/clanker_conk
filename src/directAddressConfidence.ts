@@ -254,7 +254,7 @@ function resolveAddressingModelConfig({
     mode === "voice" && Object.keys(voiceReplyDecision).length > 0
       ? normalizeLlmProvider(
           voiceReplyDecision.provider,
-          llmSettings.provider || "anthropic"
+          String(llmSettings.provider || "anthropic")
         )
       : normalizeLlmProvider(
           provider || llmSettings.provider,
