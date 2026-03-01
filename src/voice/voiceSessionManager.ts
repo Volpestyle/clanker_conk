@@ -117,6 +117,9 @@ import {
   BOT_TURN_DEFERRED_QUEUE_MAX,
   BOT_TURN_SILENCE_RESET_MS,
   CAPTURE_IDLE_FLUSH_MS,
+  CAPTURE_NEAR_SILENCE_ABORT_ACTIVE_RATIO_MAX,
+  CAPTURE_NEAR_SILENCE_ABORT_MIN_AGE_MS,
+  CAPTURE_NEAR_SILENCE_ABORT_PEAK_MAX,
   CAPTURE_MAX_DURATION_MS,
   DISCORD_PCM_FRAME_BYTES,
   FOCUSED_SPEAKER_CONTINUATION_MS,
@@ -1261,8 +1264,36 @@ export class VoiceSessionManager {
       });
     };
 
+    const maybeRepairPlayback = (triggerEvent) => {
+      if (!session || session.ending) return;
+      if (stream !== session.botAudioStream) return;
+      ensureBotAudioPlaybackReady({
+        session,
+        store: this.store,
+        botUserId: this.client.user?.id || null,
+        onStreamCreated: (replacementStream) => {
+          this.bindBotAudioStreamLifecycle(session, {
+            stream: replacementStream,
+            source: "stream_lifecycle_repair"
+          });
+        }
+      });
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "bot_audio_stream_lifecycle_repair_attempted",
+        metadata: {
+          sessionId: session.id,
+          triggerEvent: String(triggerEvent || "unknown")
+        }
+      });
+    };
+
     const onClose = () => {
       logLifecycle("close");
+      maybeRepairPlayback("close");
     };
     const onFinish = () => {
       logLifecycle("finish");
@@ -1274,6 +1305,7 @@ export class VoiceSessionManager {
       logLifecycle("error", {
         error: String(error?.message || error || "unknown")
       });
+      maybeRepairPlayback("error");
     };
 
     stream.once("close", onClose);
@@ -2409,6 +2441,37 @@ export class VoiceSessionManager {
       session.lastBotActivityTouchAt = now;
     }
 
+    const pendingResponse =
+      session.pendingResponse && typeof session.pendingResponse === "object"
+        ? session.pendingResponse
+        : null;
+    const pendingLatencyContext =
+      pendingResponse?.latencyContext && typeof pendingResponse.latencyContext === "object"
+        ? pendingResponse.latencyContext
+        : null;
+    if (pendingLatencyContext && Number(pendingLatencyContext.audioStartedAtMs || 0) <= 0) {
+      pendingLatencyContext.audioStartedAtMs = now;
+      this.logVoiceLatencyStage({
+        session,
+        userId: this.client.user?.id || null,
+        stage: "audio_started",
+        source: pendingLatencyContext.source || pendingResponse?.source || "realtime",
+        captureReason: pendingLatencyContext.captureReason || null,
+        requestId: pendingResponse?.requestId || null,
+        queueWaitMs: pendingLatencyContext.queueWaitMs,
+        pendingQueueDepth: pendingLatencyContext.pendingQueueDepth,
+        finalizedAtMs: pendingLatencyContext.finalizedAtMs,
+        asrStartedAtMs: pendingLatencyContext.asrStartedAtMs,
+        asrCompletedAtMs: pendingLatencyContext.asrCompletedAtMs,
+        generationStartedAtMs: pendingLatencyContext.generationStartedAtMs,
+        replyRequestedAtMs:
+          Number(pendingLatencyContext.replyRequestedAtMs || 0) ||
+          Number(pendingResponse?.requestedAt || 0) ||
+          0,
+        audioStartedAtMs: now
+      });
+    }
+
     if (!session.botTurnOpen) {
       session.botTurnOpen = true;
       session.lastAssistantReplyAt = now;
@@ -3435,7 +3498,8 @@ export class VoiceSessionManager {
     text,
     userId = null,
     source = "voice_text_utterance",
-    interruptionPolicy = null
+    interruptionPolicy = null,
+    latencyContext = null
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
@@ -3455,7 +3519,8 @@ export class VoiceSessionManager {
         resetRetryState: true,
         emitCreateEvent: false,
         interruptionPolicy: normalizedInterruptionPolicy,
-        utteranceText: normalizeVoiceText(text, STT_REPLY_MAX_CHARS)
+        utteranceText: normalizeVoiceText(text, STT_REPLY_MAX_CHARS),
+        latencyContext
       });
       session.pendingBargeInRetry = null;
       session.lastRequestedRealtimeUtterance = {
@@ -3556,7 +3621,8 @@ export class VoiceSessionManager {
     playbackSteps = [],
     source = "voice_reply",
     preferRealtimeUtterance = false,
-    interruptionPolicy = null
+    interruptionPolicy = null,
+    latencyContext = null
   }) {
     if (!session || session.ending) {
       return {
@@ -3604,7 +3670,8 @@ export class VoiceSessionManager {
             text: segmentText,
             userId: this.client.user?.id || null,
             source: speechSource,
-            interruptionPolicy
+            interruptionPolicy,
+            latencyContext
           });
           if (requested) {
             spokeLine = true;
@@ -4040,12 +4107,28 @@ export class VoiceSessionManager {
         captureState.lastActivityTouchAt = now;
       }
 
+      const captureAgeMs = Math.max(0, now - Number(captureState.startedAt || now));
+      const signalSampleCount = Math.max(0, Number(captureState.signalSampleCount || 0));
+      if (captureAgeMs >= CAPTURE_NEAR_SILENCE_ABORT_MIN_AGE_MS && signalSampleCount > 0) {
+        const activeSampleCount = Math.max(0, Number(captureState.signalActiveSampleCount || 0));
+        const activeSampleRatio = activeSampleCount / signalSampleCount;
+        const peak = Math.max(0, Number(captureState.signalPeakAbs || 0)) / 32768;
+        if (
+          activeSampleRatio <= CAPTURE_NEAR_SILENCE_ABORT_ACTIVE_RATIO_MAX &&
+          peak <= CAPTURE_NEAR_SILENCE_ABORT_PEAK_MAX
+        ) {
+          finalizeUserTurn("near_silence_early_abort");
+          return;
+        }
+      }
+
     });
 
     let captureFinalized = false;
     const finalizeUserTurn = (reason = "stream_end") => {
       if (captureFinalized) return;
       captureFinalized = true;
+      const finalizedAt = Date.now();
 
       this.store.logAction({
         kind: "voice_runtime",
@@ -4057,7 +4140,7 @@ export class VoiceSessionManager {
           sessionId: session.id,
           reason: String(reason || "stream_end"),
           bytesSent: captureState.bytesSent,
-          durationMs: Math.max(0, Date.now() - captureState.startedAt)
+          durationMs: Math.max(0, finalizedAt - captureState.startedAt)
         }
       });
 
@@ -4087,7 +4170,8 @@ export class VoiceSessionManager {
             session,
             userId,
             pcmBuffer,
-            captureReason: reason
+            captureReason: reason,
+            finalizedAt
           });
         }
       }
@@ -4262,17 +4346,25 @@ export class VoiceSessionManager {
       mergedBuffer = Buffer.concat([existingBuffer, incomingBuffer], combinedBytes);
     }
 
+    const existingFinalizedAt = Math.max(0, Number(existingTurn.finalizedAt || 0));
+    const incomingFinalizedAt = Math.max(0, Number(incomingTurn.finalizedAt || 0));
+    const mergedFinalizedAt =
+      existingFinalizedAt > 0 && incomingFinalizedAt > 0
+        ? Math.min(existingFinalizedAt, incomingFinalizedAt)
+        : Math.max(existingFinalizedAt, incomingFinalizedAt);
+
     return {
       ...existingTurn,
       ...incomingTurn,
       pcmBuffer: mergedBuffer,
       queuedAt: Number(incomingTurn.queuedAt || Date.now()),
+      finalizedAt: mergedFinalizedAt || 0,
       mergedTurnCount: Math.max(1, Number(existingTurn.mergedTurnCount || 1)) + 1,
       droppedHeadBytes
     };
   }
 
-  queueRealtimeTurn({ session, userId, pcmBuffer, captureReason = "stream_end" }) {
+  queueRealtimeTurn({ session, userId, pcmBuffer, captureReason = "stream_end", finalizedAt = 0 }) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
     if (!pcmBuffer || !pcmBuffer.length) return;
@@ -4280,13 +4372,16 @@ export class VoiceSessionManager {
     if (!Array.isArray(session.pendingRealtimeTurns)) {
       session.pendingRealtimeTurns = pendingQueue;
     }
+    const queuedAt = Date.now();
+    const normalizedFinalizedAt = Math.max(0, Number(finalizedAt || 0)) || queuedAt;
 
     const queuedTurn = {
       session,
       userId,
       pcmBuffer,
       captureReason,
-      queuedAt: Date.now(),
+      queuedAt,
+      finalizedAt: normalizedFinalizedAt,
       mergedTurnCount: 1,
       droppedHeadBytes: 0
     };
@@ -4470,6 +4565,86 @@ export class VoiceSessionManager {
     );
   }
 
+  computeLatencyMs(startMs = 0, endMs = 0) {
+    const normalizedStart = Number(startMs || 0);
+    const normalizedEnd = Number(endMs || 0);
+    if (!Number.isFinite(normalizedStart) || !Number.isFinite(normalizedEnd)) return null;
+    if (normalizedStart <= 0 || normalizedEnd <= 0) return null;
+    if (normalizedEnd < normalizedStart) return null;
+    return Math.max(0, Math.round(normalizedEnd - normalizedStart));
+  }
+
+  buildVoiceLatencyStageMetrics({
+    finalizedAtMs = 0,
+    asrStartedAtMs = 0,
+    asrCompletedAtMs = 0,
+    generationStartedAtMs = 0,
+    replyRequestedAtMs = 0,
+    audioStartedAtMs = 0
+  } = {}) {
+    return {
+      finalizedToAsrStartMs: this.computeLatencyMs(finalizedAtMs, asrStartedAtMs),
+      asrToGenerationStartMs: this.computeLatencyMs(asrCompletedAtMs, generationStartedAtMs),
+      generationToReplyRequestMs: this.computeLatencyMs(generationStartedAtMs, replyRequestedAtMs),
+      replyRequestToAudioStartMs: this.computeLatencyMs(replyRequestedAtMs, audioStartedAtMs)
+    };
+  }
+
+  logVoiceLatencyStage(payload = null) {
+    const {
+      session = null,
+      userId = null,
+      stage = "unknown",
+      source = "realtime",
+      captureReason = null,
+      requestId = null,
+      queueWaitMs = null,
+      pendingQueueDepth = null,
+      finalizedAtMs = 0,
+      asrStartedAtMs = 0,
+      asrCompletedAtMs = 0,
+      generationStartedAtMs = 0,
+      replyRequestedAtMs = 0,
+      audioStartedAtMs = 0
+    } = payload && typeof payload === "object" ? payload : {};
+    if (!session || session.ending) return;
+    const metrics = this.buildVoiceLatencyStageMetrics({
+      finalizedAtMs,
+      asrStartedAtMs,
+      asrCompletedAtMs,
+      generationStartedAtMs,
+      replyRequestedAtMs,
+      audioStartedAtMs
+    });
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: userId || this.client.user?.id || null,
+      content: "voice_latency_stage",
+      metadata: {
+        sessionId: session.id,
+        mode: session.mode,
+        stage: String(stage || "unknown"),
+        source: String(source || "realtime"),
+        captureReason: captureReason ? String(captureReason) : null,
+        requestId: Number.isFinite(Number(requestId)) && Number(requestId) > 0
+          ? Number(requestId)
+          : null,
+        queueWaitMs: Number.isFinite(Number(queueWaitMs))
+          ? Math.max(0, Math.round(Number(queueWaitMs)))
+          : null,
+        pendingQueueDepth: Number.isFinite(Number(pendingQueueDepth))
+          ? Math.max(0, Math.round(Number(pendingQueueDepth)))
+          : null,
+        finalizedToAsrStartMs: metrics.finalizedToAsrStartMs,
+        asrToGenerationStartMs: metrics.asrToGenerationStartMs,
+        generationToReplyRequestMs: metrics.generationToReplyRequestMs,
+        replyRequestToAudioStartMs: metrics.replyRequestToAudioStartMs
+      }
+    });
+  }
+
   resolveRealtimeReplyStrategy({ session, settings = null }) {
     if (!session || !isRealtimeMode(session.mode)) return "brain";
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
@@ -4489,11 +4664,19 @@ export class VoiceSessionManager {
     return this.resolveRealtimeReplyStrategy({ session, settings }) === "native";
   }
 
-  async runRealtimeTurn({ session, userId, pcmBuffer, captureReason = "stream_end", queuedAt = 0 }) {
+  async runRealtimeTurn({
+    session,
+    userId,
+    pcmBuffer,
+    captureReason = "stream_end",
+    queuedAt = 0,
+    finalizedAt = 0
+  }) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
     if (!pcmBuffer?.length) return;
     const queueWaitMs = queuedAt ? Math.max(0, Date.now() - Number(queuedAt || Date.now())) : 0;
+    const finalizedAtMs = Math.max(0, Number(finalizedAt || 0)) || Math.max(0, Number(queuedAt || 0));
     const pendingQueueDepth = Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns.length : 0;
     if (
       pendingQueueDepth > 0 &&
@@ -4566,6 +4749,8 @@ export class VoiceSessionManager {
       pcmBuffer.length < minAsrClipBytes;
     const skipShortClipAsr = Boolean(isShortSpeakingEndClip);
     let turnTranscript = "";
+    let asrStartedAtMs = 0;
+    let asrCompletedAtMs = 0;
     let resolvedFallbackModel = transcriptionPlan.fallbackModel || null;
     let resolvedTranscriptionPlanReason = transcriptionPlan.reason;
     let usedFallbackModelForTranscript = false;
@@ -4586,6 +4771,7 @@ export class VoiceSessionManager {
         }
       });
     } else if (this.llm?.isAsrReady?.() && this.llm?.transcribeAudio) {
+      asrStartedAtMs = Date.now();
       turnTranscript = await this.transcribePcmTurn({
         session,
         userId,
@@ -4631,6 +4817,7 @@ export class VoiceSessionManager {
           usedFallbackModelForTranscript = true;
         }
       }
+      asrCompletedAtMs = Date.now();
     }
 
     if (
@@ -4827,7 +5014,15 @@ export class VoiceSessionManager {
       directAddressed: Boolean(decision.directAddressed),
       directAddressConfidence: Number(decision.directAddressConfidence),
       conversationContext: decision.conversationContext || null,
-      source: "realtime"
+      source: "realtime",
+      latencyContext: {
+        finalizedAtMs,
+        asrStartedAtMs,
+        asrCompletedAtMs,
+        queueWaitMs,
+        pendingQueueDepth,
+        captureReason: String(captureReason || "stream_end")
+      }
     });
   }
 
@@ -7444,7 +7639,8 @@ export class VoiceSessionManager {
     directAddressed = false,
     directAddressConfidence = Number.NaN,
     conversationContext = null,
-    source = "realtime"
+    source = "realtime",
+    latencyContext = null
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
@@ -7538,6 +7734,19 @@ export class VoiceSessionManager {
       streamWatchBrainContext,
       voiceAddressingState
     };
+    const normalizedLatencyContext =
+      latencyContext && typeof latencyContext === "object" ? latencyContext : {};
+    const latencyFinalizedAtMs = Math.max(0, Number(normalizedLatencyContext.finalizedAtMs || 0));
+    const latencyAsrStartedAtMs = Math.max(0, Number(normalizedLatencyContext.asrStartedAtMs || 0));
+    const latencyAsrCompletedAtMs = Math.max(0, Number(normalizedLatencyContext.asrCompletedAtMs || 0));
+    const latencyQueueWaitMs = Number.isFinite(Number(normalizedLatencyContext.queueWaitMs))
+      ? Math.max(0, Math.round(Number(normalizedLatencyContext.queueWaitMs)))
+      : null;
+    const latencyPendingQueueDepth = Number.isFinite(Number(normalizedLatencyContext.pendingQueueDepth))
+      ? Math.max(0, Math.round(Number(normalizedLatencyContext.pendingQueueDepth)))
+      : null;
+    const latencyCaptureReason =
+      String(normalizedLatencyContext.captureReason || "").trim() || null;
 
     const generationStartedAt = Date.now();
     let releaseLookupBusy = null;
@@ -7690,29 +7899,54 @@ export class VoiceSessionManager {
     }
 
     if (playbackPlan.spokenText && session.mode === "openai_realtime") {
-      await this.prepareOpenAiRealtimeTurnContext({
+      void this.prepareOpenAiRealtimeTurnContext({
         session,
         settings,
         userId,
         transcript: normalizedTranscript,
         captureReason: String(source || "realtime")
-      });
-      const supersedeAfterContext = this.getRealtimeReplySupersedeState({
-        session,
-        generationStartedAt,
-        interruptionPolicy: replyInterruptionPolicy
-      });
-      if (supersedeAfterContext.shouldSupersede) {
-        this.recordRealtimeReplySuperseded({
-          session,
-          source: String(source || "realtime"),
-          supersedeState: supersedeAfterContext
+      }).catch((error) => {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.client.user?.id || null,
+          content: `openai_realtime_turn_context_refresh_failed: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id,
+            source: String(source || "realtime")
+          }
         });
-        return true;
-      }
+      });
+    }
+
+    const supersedeBeforePlayback = this.getRealtimeReplySupersedeState({
+      session,
+      generationStartedAt,
+      interruptionPolicy: replyInterruptionPolicy
+    });
+    if (supersedeBeforePlayback.shouldSupersede) {
+      this.recordRealtimeReplySuperseded({
+        session,
+        source: String(source || "realtime"),
+        supersedeState: supersedeBeforePlayback
+      });
+      return true;
     }
 
     const replyRequestedAt = Date.now();
+    const replyLatencyContext = {
+      finalizedAtMs: latencyFinalizedAtMs,
+      asrStartedAtMs: latencyAsrStartedAtMs,
+      asrCompletedAtMs: latencyAsrCompletedAtMs,
+      generationStartedAtMs: generationStartedAt,
+      replyRequestedAtMs: replyRequestedAt,
+      audioStartedAtMs: 0,
+      source: String(source || "realtime"),
+      captureReason: latencyCaptureReason,
+      queueWaitMs: latencyQueueWaitMs,
+      pendingQueueDepth: latencyPendingQueueDepth
+    };
     this.setActiveReplyInterruptionPolicy(session, replyInterruptionPolicy);
     session.lastAssistantReplyAt = replyRequestedAt;
     const playbackResult = await this.playVoiceReplyInOrder({
@@ -7722,12 +7956,30 @@ export class VoiceSessionManager {
       playbackSteps: playbackPlan.steps,
       source: `${String(source || "realtime")}:reply`,
       preferRealtimeUtterance: true,
-      interruptionPolicy: replyInterruptionPolicy
+      interruptionPolicy: replyInterruptionPolicy,
+      latencyContext: replyLatencyContext
     });
     if (!playbackResult.completed) {
       this.maybeClearActiveReplyInterruptionPolicy(session);
       return false;
     }
+    const pendingRequestId = Number(session.pendingResponse?.requestId || 0) || null;
+    this.logVoiceLatencyStage({
+      session,
+      userId: this.client.user?.id || null,
+      stage: "reply_requested",
+      source: String(source || "realtime"),
+      captureReason: latencyCaptureReason,
+      requestId: pendingRequestId,
+      queueWaitMs: latencyQueueWaitMs,
+      pendingQueueDepth: latencyPendingQueueDepth,
+      finalizedAtMs: latencyFinalizedAtMs,
+      asrStartedAtMs: latencyAsrStartedAtMs,
+      asrCompletedAtMs: latencyAsrCompletedAtMs,
+      generationStartedAtMs: generationStartedAt,
+      replyRequestedAtMs: replyRequestedAt,
+      audioStartedAtMs: 0
+    });
     const requestedRealtimeUtterance = Boolean(playbackResult.requestedRealtimeUtterance);
     if (playbackResult.spokeLine && !requestedRealtimeUtterance) {
       session.lastAudioDeltaAt = replyRequestedAt;
@@ -7750,6 +8002,7 @@ export class VoiceSessionManager {
         sessionId: session.id,
         mode: session.mode,
         source: String(source || "realtime"),
+        requestId: pendingRequestId,
         replyText: playbackPlan.spokenText || null,
         requestedRealtimeUtterance,
         soundboardRefs: playbackPlan.soundboardRefs,
@@ -7996,7 +8249,8 @@ export class VoiceSessionManager {
     resetRetryState = false,
     emitCreateEvent = true,
     interruptionPolicy = undefined,
-    utteranceText = undefined
+    utteranceText = undefined,
+    latencyContext = undefined
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
@@ -8030,6 +8284,32 @@ export class VoiceSessionManager {
     const utteranceTextSeed = utteranceText === undefined ? previous?.utteranceText || "" : utteranceText || "";
     const normalizedUtteranceText =
       normalizeVoiceText(utteranceTextSeed, STT_REPLY_MAX_CHARS) || null;
+    const latencyContextSeed =
+      latencyContext === undefined
+        ? previous?.latencyContext || null
+        : latencyContext;
+    const normalizedLatencyContext =
+      latencyContextSeed && typeof latencyContextSeed === "object"
+        ? {
+            finalizedAtMs: Math.max(0, Number(latencyContextSeed.finalizedAtMs || 0)),
+            asrStartedAtMs: Math.max(0, Number(latencyContextSeed.asrStartedAtMs || 0)),
+            asrCompletedAtMs: Math.max(0, Number(latencyContextSeed.asrCompletedAtMs || 0)),
+            generationStartedAtMs: Math.max(0, Number(latencyContextSeed.generationStartedAtMs || 0)),
+            replyRequestedAtMs: Math.max(
+              0,
+              Number(latencyContextSeed.replyRequestedAtMs || 0)
+            ) || now,
+            audioStartedAtMs: Math.max(0, Number(latencyContextSeed.audioStartedAtMs || 0)),
+            source: String(latencyContextSeed.source || source || "turn_flush"),
+            captureReason: String(latencyContextSeed.captureReason || "").trim() || null,
+            queueWaitMs: Number.isFinite(Number(latencyContextSeed.queueWaitMs))
+              ? Math.max(0, Math.round(Number(latencyContextSeed.queueWaitMs)))
+              : null,
+            pendingQueueDepth: Number.isFinite(Number(latencyContextSeed.pendingQueueDepth))
+              ? Math.max(0, Math.round(Number(latencyContextSeed.pendingQueueDepth)))
+              : null
+          }
+        : null;
 
     session.pendingResponse = {
       requestId,
@@ -8041,7 +8321,8 @@ export class VoiceSessionManager {
       handlingSilence: false,
       audioReceivedAt: 0,
       interruptionPolicy: normalizedInterruptionPolicy,
-      utteranceText: normalizedUtteranceText
+      utteranceText: normalizedUtteranceText,
+      latencyContext: normalizedLatencyContext
     };
     session.lastResponseRequestAt = now;
     this.setActiveReplyInterruptionPolicy(session, normalizedInterruptionPolicy);

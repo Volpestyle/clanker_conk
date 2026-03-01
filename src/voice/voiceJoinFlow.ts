@@ -545,6 +545,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         realtimeReplySupersededCount: 0,
         pendingRealtimeInputBytes: 0,
         lastAudioPipelineRepairAt: 0,
+        audioPipelineRestartTimestamps: [],
+        lastAudioPipelineRestartAlarmAt: 0,
         lastBotAudioStreamLifecycle: null,
         nextResponseRequestId: 0,
         pendingResponse: null,

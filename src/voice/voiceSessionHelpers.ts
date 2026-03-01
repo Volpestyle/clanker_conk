@@ -5,7 +5,12 @@ import {
   StreamType
 } from "@discordjs/voice";
 import { parseSoundboardReference } from "./soundboardDirector.ts";
-import { AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES } from "./voiceSessionManager.constants.ts";
+import {
+  AUDIO_PIPELINE_RESTART_RATE_LOG_COOLDOWN_MS,
+  AUDIO_PIPELINE_RESTART_RATE_THRESHOLD,
+  AUDIO_PIPELINE_RESTART_RATE_WINDOW_MS,
+  AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES
+} from "./voiceSessionManager.constants.ts";
 import { normalizeVoiceRuntimeMode } from "./voiceModes.ts";
 import { normalizeWhitespaceText } from "../normalization/text.ts";
 
@@ -183,6 +188,41 @@ export function ensureBotAudioPlaybackReady({
 }) {
   if (!session || !session.audioPlayer || !session.connection) return false;
 
+  const maybeLogRestartRateAlarm = (now) => {
+    const restartWindowMs = Math.max(5_000, Number(AUDIO_PIPELINE_RESTART_RATE_WINDOW_MS) || 60_000);
+    const restartThreshold = Math.max(2, Number(AUDIO_PIPELINE_RESTART_RATE_THRESHOLD) || 4);
+    const restartLogCooldownMs = Math.max(
+      5_000,
+      Number(AUDIO_PIPELINE_RESTART_RATE_LOG_COOLDOWN_MS) || 45_000
+    );
+    const restartTimestamps = Array.isArray(session.audioPipelineRestartTimestamps)
+      ? session.audioPipelineRestartTimestamps
+      : [];
+    session.audioPipelineRestartTimestamps = restartTimestamps;
+    restartTimestamps.push(now);
+    const windowStart = now - restartWindowMs;
+    while (restartTimestamps.length > 0 && Number(restartTimestamps[0] || 0) < windowStart) {
+      restartTimestamps.shift();
+    }
+    if (restartTimestamps.length < restartThreshold) return;
+    if (now - Number(session.lastAudioPipelineRestartAlarmAt || 0) < restartLogCooldownMs) return;
+    session.lastAudioPipelineRestartAlarmAt = now;
+
+    store?.logAction?.({
+      kind: "voice_error",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: botUserId,
+      content: "bot_audio_pipeline_restart_rate_high",
+      metadata: {
+        sessionId: session.id,
+        restartCountInWindow: restartTimestamps.length,
+        restartWindowMs,
+        restartThreshold
+      }
+    });
+  };
+
   const restartAudioPipeline = (reason, extraMetadata = null) => {
     const now = Date.now();
     if (now - Number(session.lastAudioPipelineRepairAt || 0) < 600) {
@@ -193,7 +233,12 @@ export function ensureBotAudioPlaybackReady({
     try {
       const previousStream = session.botAudioStream || null;
       let createdReplacementStream = false;
-      if (!session.botAudioStream || session.botAudioStream.destroyed || session.botAudioStream.writableEnded) {
+      if (
+        !session.botAudioStream ||
+        session.botAudioStream.destroyed ||
+        session.botAudioStream.writableEnded ||
+        session.botAudioStream.closed
+      ) {
         session.botAudioStream = createBotAudioPlaybackStream();
         createdReplacementStream = true;
       }
@@ -243,6 +288,7 @@ export function ensureBotAudioPlaybackReady({
           ...(extraMetadata && typeof extraMetadata === "object" ? extraMetadata : {})
         }
       });
+      maybeLogRestartRateAlarm(now);
       return true;
     } catch (error) {
       store?.logAction?.({
@@ -264,7 +310,12 @@ export function ensureBotAudioPlaybackReady({
   };
 
   const playerStatus = session.audioPlayer.state?.status || null;
-  if (!session.botAudioStream || session.botAudioStream.destroyed || session.botAudioStream.writableEnded) {
+  if (
+    !session.botAudioStream ||
+    session.botAudioStream.destroyed ||
+    session.botAudioStream.writableEnded ||
+    session.botAudioStream.closed
+  ) {
     return restartAudioPipeline("stream_unavailable", {
       streamStateBeforeRestart: snapshotBotAudioStreamState(session.botAudioStream),
       playerStatus: playerStatus ? String(playerStatus) : null
@@ -286,6 +337,9 @@ export function transcriptSourceFromEventType(eventType) {
   const normalized = String(eventType || "").trim();
   if (!normalized) return "unknown";
   if (normalized === "conversation.item.input_audio_transcription.completed") return "input";
+  if (normalized === "user_transcript") return "input";
+  if (normalized === "agent_response") return "output";
+  if (normalized === "agent_response_correction") return "output";
   if (normalized.includes("input_audio_transcription")) return "input";
   if (normalized.includes("output_audio_transcription")) return "output";
   if (normalized.includes("server_content_text")) return "output";
@@ -440,6 +494,7 @@ export function resolveRealtimeProvider(mode) {
   if (normalized === "voice_agent") return "xai";
   if (normalized === "openai_realtime") return "openai";
   if (normalized === "gemini_realtime") return "gemini";
+  if (normalized === "elevenlabs_realtime") return "elevenlabs";
   return null;
 }
 
@@ -452,6 +507,7 @@ export function getRealtimeRuntimeLabel(mode) {
   if (provider === "xai") return "xai";
   if (provider === "openai") return "openai_realtime";
   if (provider === "gemini") return "gemini_realtime";
+  if (provider === "elevenlabs") return "elevenlabs_realtime";
   return "realtime";
 }
 
