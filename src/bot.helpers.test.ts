@@ -49,6 +49,8 @@ test("parseStructuredReplyOutput falls back to plain text when output is not JSO
   assert.equal(parsed.voiceIntent.intent, null);
   assert.equal(parsed.voiceIntent.confidence, 0);
   assert.equal(parsed.voiceIntent.reason, null);
+  assert.equal(parsed.voiceAddressing.talkingTo, null);
+  assert.equal(parsed.voiceAddressing.directedConfidence, 0);
 });
 
 test("parseStructuredReplyOutput honors skip flag", () => {
@@ -122,6 +124,22 @@ test("parseStructuredReplyOutput accepts screen share offer intent", () => {
   assert.equal(parsed.screenShareIntent.action, "offer_link");
   assert.equal(parsed.screenShareIntent.confidence, 0.88);
   assert.equal(parsed.screenShareIntent.reason, "needs visual context");
+});
+
+test("parseStructuredReplyOutput preserves model-provided voice addressing target", () => {
+  const parsed = parseStructuredReplyOutput(
+    JSON.stringify({
+      text: "yup",
+      skip: false,
+      voiceAddressing: {
+        talkingTo: "assistant",
+        directedConfidence: 1.4
+      }
+    })
+  );
+
+  assert.equal(parsed.voiceAddressing.talkingTo, "assistant");
+  assert.equal(parsed.voiceAddressing.directedConfidence, 1);
 });
 
 test("parseStructuredReplyOutput normalizes invalid voice intent payload", () => {

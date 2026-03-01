@@ -223,6 +223,7 @@ export async function generateVoiceTurnReply(runtime, {
   channelId = null,
   userId = null,
   transcript = "",
+  directAddressed = false,
   contextMessages = [],
   sessionId = null,
   isEagerTurn = false,
@@ -416,9 +417,11 @@ export async function generateVoiceTurnReply(runtime, {
     effectiveJoinWindowActive
       ? "Join window active: you just joined VC. If this turn sounds like a greeting/check-in, prefer a short acknowledgement over [SKIP] unless clearly aimed at another human."
       : null,
-    isEagerTurn
-      ? "If responding would be an interruption or you have nothing to add, set skip=true and text to [SKIP]. Otherwise set skip=false and use natural spoken text."
-      : "Do not skip this turn. Set skip=false and provide a spoken response.",
+    directAddressed
+      ? "This speaker directly addressed you. Prefer skip=false with a response unless the transcript is too unclear."
+      : isEagerTurn
+        ? "If responding would be an interruption or you have nothing to add, set skip=true and text to [SKIP]. Otherwise set skip=false and use natural spoken text."
+        : "You are not directly addressed. Reply only if you can add clear value; otherwise set skip=true and text to [SKIP].",
     "Goodbyes do not force exit. You can say goodbye and stay in VC; set leaveVoiceChannel=true only when you intentionally choose to end your own VC session now.",
     allowSoundboardToolCall ? "Never mention soundboard control refs in normal speech." : null
   ]
@@ -434,6 +437,7 @@ export async function generateVoiceTurnReply(runtime, {
     buildVoiceTurnPrompt({
       speakerName,
       transcript: incomingTranscript,
+      directAddressed,
       userFacts: memorySlice.userFacts,
       relevantFacts: memorySlice.relevantFacts,
       isEagerTurn,
@@ -683,6 +687,9 @@ export async function generateVoiceTurnReply(runtime, {
           .slice(0, MAX_VOICE_SOUNDBOARD_REFS)
       : [];
     const leaveVoiceChannelRequested = Boolean(parsed.leaveVoiceChannel);
+    const voiceAddressing = normalizeGeneratedVoiceAddressing(parsed.voiceAddressing, {
+      directAddressed: Boolean(directAddressed)
+    });
     const soundboardSafeText = String(parsed.text || generation.text || "");
     const baseText = sanitizeBotText(normalizeSkipSentinel(soundboardSafeText), 520);
     const finalText = sanitizeSoundboardSpeechLeak({
@@ -696,7 +703,8 @@ export async function generateVoiceTurnReply(runtime, {
         soundboardRefs: [],
         usedWebSearchFollowup,
         usedOpenArticleFollowup,
-        usedScreenShareOffer
+        usedScreenShareOffer,
+        voiceAddressing
       };
     }
     if (!finalText || finalText === "[SKIP]") {
@@ -705,7 +713,8 @@ export async function generateVoiceTurnReply(runtime, {
         soundboardRefs,
         usedWebSearchFollowup,
         usedOpenArticleFollowup,
-        usedScreenShareOffer
+        usedScreenShareOffer,
+        voiceAddressing
       };
       if (leaveVoiceChannelRequested) {
         return {
@@ -749,7 +758,8 @@ export async function generateVoiceTurnReply(runtime, {
       soundboardRefs,
       usedWebSearchFollowup,
       usedOpenArticleFollowup,
-      usedScreenShareOffer
+      usedScreenShareOffer,
+      voiceAddressing
     };
     if (leaveVoiceChannelRequested) {
       return {
@@ -771,6 +781,31 @@ export async function generateVoiceTurnReply(runtime, {
     });
     return { text: "" };
   }
+}
+
+function normalizeGeneratedVoiceAddressing(rawAddressing, { directAddressed = false } = {}) {
+  const normalizedRaw = rawAddressing && typeof rawAddressing === "object" ? rawAddressing : null;
+  const talkingToToken = String(normalizedRaw?.talkingTo || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+
+  let talkingTo = talkingToToken || null;
+
+  const directedConfidenceRaw = Number(normalizedRaw?.directedConfidence);
+  let directedConfidence = Number.isFinite(directedConfidenceRaw) ? clamp(directedConfidenceRaw, 0, 1) : 0;
+
+  if (directAddressed && !talkingTo) {
+    talkingTo = "ME";
+  }
+  if (directAddressed && talkingTo === "ME") {
+    directedConfidence = Math.max(directedConfidence, 0.72);
+  }
+
+  return {
+    talkingTo,
+    directedConfidence
+  };
 }
 
 function resolveVoiceScreenShareCapability(runtime, { settings, guildId, channelId, userId }) {

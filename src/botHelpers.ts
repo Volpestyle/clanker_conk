@@ -24,6 +24,7 @@ const MAX_AUTOMATION_TITLE_LEN = 90;
 const MAX_AUTOMATION_INSTRUCTION_LEN = 360;
 const MAX_AUTOMATION_TARGET_QUERY_LEN = 180;
 const MAX_REPLY_SOUNDBOARD_REFS = 10;
+const MAX_VOICE_ADDRESSING_TARGET_LEN = 80;
 
 export function resolveMaxMediaPromptLen(settings) {
   const raw = Number(settings?.initiative?.maxMediaPromptChars);
@@ -76,6 +77,13 @@ function emptyStructuredScreenShareIntent() {
     action: null,
     confidence: 0,
     reason: null
+  };
+}
+
+function emptyStructuredVoiceAddressing() {
+  return {
+    talkingTo: null,
+    directedConfidence: 0
   };
 }
 
@@ -165,6 +173,15 @@ export const REPLY_OUTPUT_SCHEMA = {
         reason: { type: ["string", "null"] }
       },
       required: ["action", "confidence", "reason"]
+    },
+    voiceAddressing: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        talkingTo: { type: ["string", "null"] },
+        directedConfidence: { type: "number" }
+      },
+      required: ["talkingTo", "directedConfidence"]
     }
   },
   required: [
@@ -626,7 +643,8 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
       leaveVoiceChannel: false,
       automationAction: emptyStructuredAutomationAction(),
       voiceIntent: emptyStructuredVoiceIntent(),
-      screenShareIntent: emptyStructuredScreenShareIntent()
+      screenShareIntent: emptyStructuredScreenShareIntent(),
+      voiceAddressing: emptyStructuredVoiceAddressing()
     };
   }
 
@@ -661,6 +679,7 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
           }
         : null)
   );
+  const voiceAddressing = normalizeStructuredVoiceAddressing(parsed?.voiceAddressing);
 
   return {
     text: text || "",
@@ -680,7 +699,8 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     leaveVoiceChannel,
     automationAction,
     voiceIntent,
-    screenShareIntent
+    screenShareIntent,
+    voiceAddressing
   };
 }
 
@@ -758,6 +778,30 @@ function normalizeStructuredScreenShareIntent(rawIntent) {
     action: actionLabel === "none" ? null : actionLabel,
     confidence,
     reason
+  };
+}
+
+function normalizeStructuredVoiceAddressing(rawAddressing) {
+  if (!rawAddressing || typeof rawAddressing !== "object") {
+    return emptyStructuredVoiceAddressing();
+  }
+
+  const rawTalkingTo = normalizeDirectiveText(
+    rawAddressing.talkingTo ?? rawAddressing.target ?? rawAddressing.talkTo,
+    MAX_VOICE_ADDRESSING_TARGET_LEN
+  );
+  let talkingTo = rawTalkingTo || null;
+
+  const confidenceRaw = Number(
+    rawAddressing.directedConfidence ??
+      rawAddressing.confidence ??
+      rawAddressing.score
+  );
+  const directedConfidence = Number.isFinite(confidenceRaw) ? clamp(confidenceRaw, 0, 1) : 0;
+
+  return {
+    talkingTo,
+    directedConfidence
   };
 }
 
