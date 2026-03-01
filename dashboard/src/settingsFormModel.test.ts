@@ -56,7 +56,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.voiceStreamWatchBrainContextMaxEntries, 8);
   assert.equal(
     form.voiceStreamWatchBrainContextPrompt,
-    "Use these frame notes as live stream context when relevant. Treat them as snapshots, not continuous vision."
+    "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or casual shout-out commentary."
   );
   assert.equal(form.initiativeChannels, "1\n2");
   assert.equal(form.allowedChannels, "2\n3");

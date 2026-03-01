@@ -39,9 +39,9 @@ export const DEFAULT_SETTINGS = {
       "Use server emoji tokens in text only when necessary and when they enhance the message."
     ],
     voiceGuidance: [
-      "Talk like a person hanging out, not like an assistant.",
-      "You're chill, but eager to be helpful whenever it makes sense.",
-      "Use occasional slang naturally (not every sentence)."
+      "If the frame appears to be gameplay, react like live play-by-play with energy and specific on-screen details.",
+      "If the frame is not gameplay, give casual shout-outs and observational commentary about what the streamer is watching.",
+      "Only describe what is visible right now; if uncertain, say that plainly."
     ],
     voiceOperationalGuidance: [
       "Keep it chill and simple. No overexplaining.",
@@ -190,7 +190,7 @@ export const DEFAULT_SETTINGS = {
       brainContextMinIntervalSeconds: 4,
       brainContextMaxEntries: 8,
       brainContextPrompt:
-        "Use these frame notes as live stream context when relevant. Treat them as snapshots, not continuous vision."
+        "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or casual shout-out commentary."
     },
     soundboard: {
       enabled: true,

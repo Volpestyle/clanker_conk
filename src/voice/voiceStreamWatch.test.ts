@@ -28,7 +28,7 @@ function createSettings(overrides = {}) {
         brainContextMinIntervalSeconds: 4,
         brainContextMaxEntries: 8,
         brainContextPrompt:
-          "Use these frame notes as live stream context when relevant. Treat them as snapshots, not continuous vision."
+          "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or casual shout-out commentary."
       }
     }
   };

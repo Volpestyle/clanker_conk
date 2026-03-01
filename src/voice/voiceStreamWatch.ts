@@ -11,7 +11,7 @@ const STREAM_WATCH_VISION_MAX_OUTPUT_TOKENS = 72;
 const STREAM_WATCH_COMMENTARY_PATH_AUTO = "auto";
 const STREAM_WATCH_COMMENTARY_PATH_ANTHROPIC_KEYFRAMES = "anthropic_keyframes";
 const DEFAULT_STREAM_WATCH_BRAIN_CONTEXT_PROMPT =
-  "Use these frame notes as live stream context when relevant. Treat them as snapshots, not continuous vision.";
+  "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or casual shout-out commentary.";
 
 function normalizeStreamWatchCommentaryPath(value, fallback = STREAM_WATCH_COMMENTARY_PATH_AUTO) {
   const normalized = String(value || "")
