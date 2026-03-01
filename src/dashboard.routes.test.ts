@@ -347,6 +347,67 @@ test("dashboard voice join returns unavailable when bot does not expose join hel
   }
 });
 
+test("dashboard settings refresh reapplies runtime settings and reports active sessions", async () => {
+  const applyCalls = [];
+  const result = await withDashboardServer(
+    {
+      botOverrides: {
+        async applyRuntimeSettings(settings) {
+          applyCalls.push(settings);
+        },
+        getRuntimeState() {
+          return {
+            connected: true,
+            replyQueuePending: 0,
+            voice: {
+              activeCount: 2
+            }
+          };
+        }
+      }
+    },
+    async ({ baseUrl, store }) => {
+      const response = await fetch(`${baseUrl}/api/settings/refresh`, {
+        method: "POST"
+      });
+      assert.equal(response.status, 200);
+      const json = await response.json();
+      assert.equal(json.ok, true);
+      assert.equal(json.reason, "settings_refreshed");
+      assert.equal(json.activeVoiceSessions, 2);
+      assert.equal(applyCalls.length, 1);
+      assert.deepEqual(applyCalls[0], store.getSettings());
+    }
+  );
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard settings refresh returns unavailable when bot runtime apply is missing", async () => {
+  const result = await withDashboardServer(
+    {
+      botOverrides: {
+        applyRuntimeSettings: null
+      }
+    },
+    async ({ baseUrl }) => {
+      const response = await fetch(`${baseUrl}/api/settings/refresh`, {
+        method: "POST"
+      });
+      assert.equal(response.status, 503);
+      const json = await response.json();
+      assert.equal(json.ok, false);
+      assert.equal(json.reason, "settings_refresh_unavailable");
+    }
+  );
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
 test("dashboard voice join forwards payload to bot helper", async () => {
   const joinCalls = [];
   const result = await withDashboardServer(

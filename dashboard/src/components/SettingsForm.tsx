@@ -41,7 +41,14 @@ const SECTIONS = [
 
 const SECTION_IDS = SECTIONS.map((s) => s.id);
 
-export default function SettingsForm({ settings, modelCatalog, onSave, toast }) {
+export default function SettingsForm({
+  settings,
+  modelCatalog,
+  onSave,
+  onRefreshRuntime,
+  refreshRuntimeBusy = false,
+  toast
+}) {
   const [form, setForm] = useState(() => (settings ? settingsToForm(settings) : null));
   const savedFormRef = useRef<string>("");
   const defaultForm = useMemo(() => settingsToForm({}), []);
@@ -350,10 +357,25 @@ export default function SettingsForm({ settings, modelCatalog, onSave, toast }) 
       </div>
 
       <div className="save-bar">
-        <button type="submit" className="cta">
-          Save settings
-          {isDirty && <span className="unsaved-dot" />}
-        </button>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "stretch" }}>
+          <button type="submit" className="cta" style={{ marginTop: 0, width: "auto", flex: "1 1 220px" }}>
+            Save settings
+            {isDirty && <span className="unsaved-dot" />}
+          </button>
+          <button
+            type="button"
+            style={{
+              flex: "1 1 220px",
+              marginTop: 0,
+              opacity: refreshRuntimeBusy ? 0.65 : 1,
+              cursor: refreshRuntimeBusy ? "not-allowed" : "pointer"
+            }}
+            onClick={onRefreshRuntime}
+            disabled={refreshRuntimeBusy}
+          >
+            {refreshRuntimeBusy ? "Refreshing..." : "Refresh active VC session"}
+          </button>
+        </div>
         {toast.text && (
           <p className={`status-msg ${toast.type}`}>{toast.text}</p>
         )}

@@ -143,6 +143,33 @@ export function createDashboardServer({
     }
   });
 
+  app.post("/api/settings/refresh", async (_req, res, next) => {
+    try {
+      if (!bot || typeof bot.applyRuntimeSettings !== "function") {
+        return res.status(503).json({
+          ok: false,
+          reason: "settings_refresh_unavailable"
+        });
+      }
+
+      const settings = store.getSettings();
+      await bot.applyRuntimeSettings(settings);
+      const runtimeState =
+        typeof bot.getRuntimeState === "function"
+          ? bot.getRuntimeState()
+          : null;
+      const activeVoiceSessions = Number(runtimeState?.voice?.activeCount) || 0;
+
+      return res.json({
+        ok: true,
+        reason: "settings_refreshed",
+        activeVoiceSessions
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   app.get("/api/actions", (req, res) => {
     const limit = parseBoundedInt(req.query.limit, 200, 1, 1000);
     res.json(store.getRecentActions(limit));

@@ -67,6 +67,7 @@ const MAIN_TABS: MainTabDefinition[] = [
 export default function App() {
   const [toast, setToast] = useState({ text: "", type: "" });
   const [tab, setTab] = useState<MainTab>("activity");
+  const [settingsRefreshBusy, setSettingsRefreshBusy] = useState(false);
 
   const notify = useCallback((text, type = "ok") => {
     setToast({ text, type });
@@ -99,6 +100,29 @@ export default function App() {
       notify(err.message, "error");
     }
   }, [reloadMemory, notify]);
+
+  const handleSettingsRefresh = useCallback(async () => {
+    setSettingsRefreshBusy(true);
+    try {
+      const result = await api<{ ok?: boolean; activeVoiceSessions?: number }>("/api/settings/refresh", {
+        method: "POST"
+      });
+      const activeVoiceSessions = Math.max(0, Number(result?.activeVoiceSessions) || 0);
+      if (activeVoiceSessions > 0) {
+        notify(
+          activeVoiceSessions === 1
+            ? "Applied settings to 1 active VC session"
+            : `Applied settings to ${activeVoiceSessions} active VC sessions`
+        );
+      } else {
+        notify("Settings refreshed (no active VC sessions)");
+      }
+    } catch (err) {
+      notify(err.message, "error");
+    } finally {
+      setSettingsRefreshBusy(false);
+    }
+  }, [notify]);
 
   const isReady = activity.stats?.runtime?.isReady ?? false;
 
@@ -154,6 +178,8 @@ export default function App() {
           settings={settings.data}
           modelCatalog={llmModels.data}
           onSave={handleSettingsSave}
+          onRefreshRuntime={handleSettingsRefresh}
+          refreshRuntimeBusy={settingsRefreshBusy}
           toast={toast}
         />
       </section>
