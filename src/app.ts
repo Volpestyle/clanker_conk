@@ -60,7 +60,11 @@ export async function main() {
 
   let closing = false;
   const shutdown = async (signal) => {
-    if (closing) return;
+    if (closing) {
+      console.warn(`Received ${signal} during shutdown. Forcing immediate exit.`);
+      process.exit(1);
+      return;
+    }
     closing = true;
 
     console.log(`Shutting down (${signal})...`);
@@ -77,7 +81,7 @@ export async function main() {
       // ignore
     }
 
-    await new Promise((resolve) => dashboard.server.close(resolve));
+    await closeHttpServerWithTimeout(dashboard.server, 4_000);
     if (typeof llm.close === "function") {
       llm.close();
     }
@@ -107,4 +111,44 @@ export async function runCli() {
 
 if (isDirectExecution()) {
   void runCli();
+}
+
+async function closeHttpServerWithTimeout(server, timeoutMs = 4_000) {
+  if (!server || typeof server.close !== "function") return;
+
+  await new Promise((resolve) => {
+    let resolved = false;
+    const finish = () => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timer);
+      resolve(undefined);
+    };
+
+    const timer = setTimeout(() => {
+      try {
+        if (typeof server.closeIdleConnections === "function") {
+          server.closeIdleConnections();
+        }
+      } catch {
+        // ignore
+      }
+      try {
+        if (typeof server.closeAllConnections === "function") {
+          server.closeAllConnections();
+        }
+      } catch {
+        // ignore
+      }
+      finish();
+    }, Math.max(100, Number(timeoutMs) || 4_000));
+
+    try {
+      server.close(() => {
+        finish();
+      });
+    } catch {
+      finish();
+    }
+  });
 }
