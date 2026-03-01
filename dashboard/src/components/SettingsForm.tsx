@@ -357,23 +357,37 @@ export default function SettingsForm({
       </div>
 
       <div className="save-bar">
-        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "stretch" }}>
-          <button type="submit" className="cta" style={{ marginTop: 0, width: "auto", flex: "1 1 220px" }}>
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+          <button type="submit" className="cta" style={{ marginTop: 0, width: "auto", flex: "1 1 auto", minWidth: 0 }}>
             Save settings
             {isDirty && <span className="unsaved-dot" />}
           </button>
           <button
             type="button"
             style={{
-              flex: "1 1 220px",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              flex: "0 0 auto",
               marginTop: 0,
+              padding: "6px 10px",
+              whiteSpace: "nowrap",
+              fontSize: "0.76rem",
+              fontWeight: 600,
               opacity: refreshRuntimeBusy ? 0.65 : 1,
               cursor: refreshRuntimeBusy ? "not-allowed" : "pointer"
             }}
             onClick={onRefreshRuntime}
             disabled={refreshRuntimeBusy}
+            title="Apply current settings to active VC sessions"
+            aria-label="Refresh active VC sessions"
           >
-            {refreshRuntimeBusy ? "Refreshing..." : "Refresh active VC session"}
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <polyline points="23 4 23 10 17 10" />
+              <polyline points="1 20 1 14 7 14" />
+              <path d="M3.51 9a9 9 0 0 1 14.13-3.36L23 10M1 14l5.36 4.36A9 9 0 0 0 20.49 15" />
+            </svg>
+            <span>{refreshRuntimeBusy ? "Syncing" : "Live"}</span>
           </button>
         </div>
         {toast.text && (

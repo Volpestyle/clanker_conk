@@ -164,6 +164,13 @@ function snippet(text?: string, max = 120): string {
   return text.length > max ? text.slice(0, max) + "..." : text;
 }
 
+function resolveCaptureTargetName(capture: { userId: string; displayName: string | null }): string {
+  const displayName = String(capture?.displayName || "").trim();
+  if (displayName) return displayName;
+  const userId = String(capture?.userId || "").trim();
+  return userId ? userId.slice(0, 8) : "unknown";
+}
+
 type Guild = {
   id: string;
   name: string;
@@ -565,6 +572,17 @@ function SessionCard({ session }: { session: VoiceSession }) {
       ? `${formatDurationMs(joinWindowIndicator.remainingMs)} left`
       : "Active"
     : "Closed";
+  const activeCaptures = Array.isArray(session.activeCaptures) ? session.activeCaptures : [];
+  const transcribingSummary = activeCaptures.length > 0
+    ? activeCaptures
+        .slice(0, 3)
+        .map((capture) => resolveCaptureTargetName(capture))
+        .join(", ")
+    : "";
+  const transcribingSummaryWithOverflow =
+    activeCaptures.length <= 3
+      ? transcribingSummary
+      : `${transcribingSummary} +${activeCaptures.length - 3}`;
 
   return (
     <div className={`vm-card panel vm-card-${state}`}>
@@ -617,7 +635,7 @@ function SessionCard({ session }: { session: VoiceSession }) {
         {session.botTurnOpen && <span className="vm-ts-pill vm-ts-speaking">Bot Speaking</span>}
         {session.activeInputStreams > 0 && (
           <span className="vm-ts-pill vm-ts-capturing">
-            {session.activeInputStreams} Capture{session.activeInputStreams !== 1 ? "s" : ""}
+            Transcribing: {transcribingSummaryWithOverflow || `${session.activeInputStreams} capture(s)`}
           </span>
         )}
         {session.realtime?.drainActive && (
@@ -663,6 +681,22 @@ function SessionCard({ session }: { session: VoiceSession }) {
 
           {/* Participants */}
           <ParticipantList session={session} />
+
+          {activeCaptures.length > 0 && (
+            <Section title="Active Transcription Targets" badge={activeCaptures.length} defaultOpen={false}>
+              <div className="vm-participant-list">
+                {activeCaptures.map((capture, index) => (
+                  <div key={`${capture.userId}-${index}`} className="vm-participant">
+                    <span className="vm-participant-name">{resolveCaptureTargetName(capture)}</span>
+                    {capture.startedAt && (
+                      <span className="vm-participant-tag">{relativeTime(capture.startedAt)}</span>
+                    )}
+                    <span className="vm-participant-id">{capture.userId.slice(0, 6)}</span>
+                  </div>
+                ))}
+              </div>
+            </Section>
+          )}
 
           {/* Membership changes */}
           <MembershipChanges session={session} />

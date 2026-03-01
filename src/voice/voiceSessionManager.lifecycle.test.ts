@@ -133,6 +133,10 @@ function createSession(overrides = {}) {
 test("getRuntimeState summarizes STT and realtime sessions", () => {
   const { manager } = createManager();
   const now = Date.now();
+  manager.client.users.cache.set("user-a", {
+    id: "user-a",
+    username: "alice"
+  });
 
   manager.sessions.set(
     "guild-1",
@@ -176,6 +180,9 @@ test("getRuntimeState summarizes STT and realtime sessions", () => {
   const stt = runtime.sessions.find((row) => row.sessionId === "stt-session");
   assert.equal(stt?.stt?.pendingTurns, 2);
   assert.equal(stt?.realtime, null);
+  assert.equal(stt?.activeCaptures?.length, 1);
+  assert.equal(stt?.activeCaptures?.[0]?.userId, "user-a");
+  assert.equal(stt?.activeCaptures?.[0]?.displayName, "alice");
 
   const realtime = runtime.sessions.find((row) => row.sessionId === "realtime-session");
   assert.equal(realtime?.realtime?.provider, "openai");

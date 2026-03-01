@@ -18,6 +18,13 @@ export type VoiceParticipant = {
   displayName: string;
 };
 
+export type VoiceActiveCapture = {
+  userId: string;
+  displayName: string | null;
+  startedAt: string | null;
+  ageMs: number | null;
+};
+
 export type VoiceMembershipEvent = {
   userId: string;
   displayName: string;
@@ -52,6 +59,7 @@ export type VoiceSession = {
   maxEndsAt: string | null;
   inactivityEndsAt: string | null;
   activeInputStreams: number;
+  activeCaptures: VoiceActiveCapture[];
   soundboard: { playCount: number; lastPlayedAt: string | null };
   mode: string;
   botTurnOpen: boolean;

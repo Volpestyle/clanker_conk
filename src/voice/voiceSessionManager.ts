@@ -323,9 +323,51 @@ export class VoiceSessionManager {
     const sessions = [...this.sessions.values()].map((session) => {
       const now = Date.now();
       const participants = this.getVoiceChannelParticipants(session);
+      const participantDisplayByUserId = new Map(
+        participants.map((entry) => [String(entry?.userId || ""), String(entry?.displayName || "")])
+      );
       const membershipEvents = this.getRecentVoiceMembershipEvents(session, {
         maxItems: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
       });
+      const activeCaptureEntries = session.userCaptures instanceof Map
+        ? [...session.userCaptures.entries()]
+        : [];
+      const activeCaptures = activeCaptureEntries
+        .map(([rawUserId, rawCapture]) => {
+          const userId = String(rawUserId || "").trim();
+          if (!userId) return null;
+          const capture = rawCapture && typeof rawCapture === "object" ? rawCapture : {};
+          const startedAtMs = Number(capture?.startedAt || 0);
+          const startedAt = Number.isFinite(startedAtMs) && startedAtMs > 0
+            ? new Date(startedAtMs).toISOString()
+            : null;
+          const ageMs = Number.isFinite(startedAtMs) && startedAtMs > 0
+            ? Math.max(0, Math.round(now - startedAtMs))
+            : null;
+          const participantDisplayName = String(participantDisplayByUserId.get(userId) || "").trim();
+          const membershipDisplayName = String(
+            membershipEvents
+              .slice()
+              .reverse()
+              .find((entry) => String(entry?.userId || "") === userId)
+              ?.displayName || ""
+          ).trim();
+          const cachedUser = this.client?.users?.cache?.get?.(userId) || null;
+          const cachedDisplayName = String(
+            cachedUser?.displayName ||
+              cachedUser?.globalName ||
+              cachedUser?.username ||
+              ""
+          ).trim();
+          const displayName = participantDisplayName || membershipDisplayName || cachedDisplayName || null;
+          return {
+            userId,
+            displayName,
+            startedAt,
+            ageMs
+          };
+        })
+        .filter(Boolean);
       const wakeContext = this.buildVoiceConversationContext({
         session,
         now
@@ -358,6 +400,7 @@ export class VoiceSessionManager {
         maxEndsAt: session.maxEndsAt ? new Date(session.maxEndsAt).toISOString() : null,
         inactivityEndsAt: session.inactivityEndsAt ? new Date(session.inactivityEndsAt).toISOString() : null,
         activeInputStreams: session.userCaptures.size,
+        activeCaptures,
         soundboard: {
           playCount: session.soundboard?.playCount || 0,
           lastPlayedAt: session.soundboard?.lastPlayedAt
