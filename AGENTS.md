@@ -68,9 +68,29 @@ This runs `@mermaid-js/mermaid-cli` (`mmdc`) at 4x scale to produce crisp PNGs. 
    ```
 4. Commit the `.mmd`, `.png`, and updated `.md` together.
 
-### Conventions
+## Code Hygiene (Desloppifying)
 
-- Never use inline ```` ```mermaid ```` blocks in markdown — always use rendered PNGs.
-- Keep the `<!-- source: ... -->` comment below each image so readers can find and edit the source.
-- Diagram filenames should be kebab-case and match the section they illustrate (e.g. `runtime-lifecycle.mmd`, `data-model.mmd`).
-- Current diagrams: `runtime-lifecycle`, `data-model`, `settings-flow`, `message-event-flow`, `initiative-post-flow`, `memory-system-flow`.
+When the codebase accumulates AI-generated cruft, follow this protocol:
+
+### Audit Phase
+
+Run analysis tools to identify issues, prioritized by impact:
+
+- **High**: Bugs, security issues, type safety violations, `any`/`unknown` casts
+- **Medium**: Duplicate code, dead code, unused imports/variables, inconsistent naming
+- **Low**: Formatting, style inconsistencies
+
+### Cleanup Workflow
+
+1. Run linters and type checkers to surface issues
+2. Categorize findings by severity (see above)
+3. Fix incrementally — one category at a time, with tests between changes
+4. Remove legacy compatibility paths, dead code, and unused branches as part of the same change
+5. Verify fixes with `bun run typecheck` and existing test suite
+
+### Principles
+
+- Prefer single source of truth over parallel old/new code paths
+- After refactors, delete unused settings, branches, helpers, and UI wiring
+- Avoid `any`/`unknown` casts; use explicit, concrete types
+- Use agents with file-level context rather than whole-repo context for targeted fixes
