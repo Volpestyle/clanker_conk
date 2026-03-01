@@ -1376,7 +1376,8 @@ export default function VoiceMonitor() {
     setJoinPending(true);
     try {
       const payload: Record<string, string> = {
-        source: "dashboard_voice_tab"
+        source: "dashboard_voice_tab",
+        requesterUserId: "830574404453793842"
       };
       if (selectedGuildId) payload.guildId = selectedGuildId;
       const normalizedTextChannelId = joinTextChannelId.trim();
