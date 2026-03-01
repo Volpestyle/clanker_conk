@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
 import {
+  ACTIVITY_TOUCH_MIN_SPEECH_MS,
   AUDIO_PLAYBACK_QUEUE_ABSOLUTE_MAX_BYTES,
   AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES,
   AUDIO_PLAYBACK_QUEUE_WARN_BYTES,
@@ -614,6 +615,88 @@ test("armAssertiveBargeIn schedules interrupt checks while queued playback remai
   assert.equal(callArgs[0]?.userId, "user-1");
   const capture = session.userCaptures.get("user-1");
   assert.equal(capture?.bargeInAssertTimer, null);
+});
+
+test("isCaptureEligibleForActivityTouch requires both speech window and non-silent signal", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeInputSampleRateHz: 24_000
+  });
+  const minSpeechBytes = Math.max(2, Math.ceil((24_000 * 2 * ACTIVITY_TOUCH_MIN_SPEECH_MS) / 1000));
+
+  const underWindowCapture = {
+    bytesSent: Math.max(2, minSpeechBytes - 2),
+    signalSampleCount: 24_000,
+    signalActiveSampleCount: 2_000,
+    signalPeakAbs: 6_000
+  };
+  assert.equal(
+    manager.isCaptureEligibleForActivityTouch({
+      session,
+      capture: underWindowCapture
+    }),
+    false
+  );
+
+  const nearSilentCapture = {
+    bytesSent: minSpeechBytes + 2,
+    signalSampleCount: 24_000,
+    signalActiveSampleCount: 120,
+    signalPeakAbs: 150
+  };
+  assert.equal(
+    manager.isCaptureEligibleForActivityTouch({
+      session,
+      capture: nearSilentCapture
+    }),
+    false
+  );
+
+  const speechLikeCapture = {
+    bytesSent: minSpeechBytes + 2,
+    signalSampleCount: 24_000,
+    signalActiveSampleCount: 2_000,
+    signalPeakAbs: 6_000
+  };
+  assert.equal(
+    manager.isCaptureEligibleForActivityTouch({
+      session,
+      capture: speechLikeCapture
+    }),
+    true
+  );
+});
+
+test("bindSessionHandlers does not touch activity on speaking.start before speech is confirmed", () => {
+  const { manager, touchCalls } = createManager();
+  const speaking = new EventEmitter();
+  const connectionStateEmitter = new EventEmitter();
+  const startCalls = [];
+  const bargeCalls = [];
+  manager.startInboundCapture = (payload) => {
+    startCalls.push(payload);
+  };
+  manager.armAssertiveBargeIn = (payload) => {
+    bargeCalls.push(payload);
+  };
+
+  const session = createSession({
+    cleanupHandlers: [],
+    connection: {
+      receiver: { speaking },
+      on: connectionStateEmitter.on.bind(connectionStateEmitter),
+      off: connectionStateEmitter.off.bind(connectionStateEmitter)
+    }
+  });
+
+  manager.bindSessionHandlers(session, session.settingsSnapshot);
+  speaking.emit("start", "speaker-1");
+
+  assert.equal(startCalls.length, 1);
+  assert.equal(startCalls[0]?.userId, "speaker-1");
+  assert.equal(bargeCalls.length, 1);
+  assert.equal(touchCalls.length, 0);
 });
 
 test("maybeHandleInterruptedReplyRecovery retries short barge-ins with the prior utterance", () => {

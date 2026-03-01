@@ -100,6 +100,7 @@ import {
 } from "./voiceSessionHelpers.ts";
 import { requestJoin } from "./voiceJoinFlow.ts";
 import {
+  ACTIVITY_TOUCH_MIN_SPEECH_MS,
   ACTIVITY_TOUCH_THROTTLE_MS,
   AUDIO_PLAYBACK_PUMP_CHUNK_BYTES,
   AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES,
@@ -1684,6 +1685,19 @@ export class VoiceSessionManager {
       activeSampleRatio <= VOICE_SILENCE_GATE_ACTIVE_RATIO_MAX &&
       peak <= VOICE_SILENCE_GATE_PEAK_MAX;
     return !nearSilentSignal;
+  }
+
+  isCaptureEligibleForActivityTouch({ session, capture }) {
+    if (!session || !capture || typeof capture !== "object") return false;
+    const sampleRateHz = isRealtimeMode(session.mode)
+      ? Number(session.realtimeInputSampleRateHz) || 24000
+      : 24000;
+    const minSpeechBytes = Math.max(
+      2,
+      Math.ceil((sampleRateHz * 2 * ACTIVITY_TOUCH_MIN_SPEECH_MS) / 1000)
+    );
+    if (Number(capture.bytesSent || 0) < minSpeechBytes) return false;
+    return this.isCaptureSignalAssertive(capture);
   }
 
   hasAssertiveInboundCapture(session) {
@@ -3971,7 +3985,6 @@ export class VoiceSessionManager {
 
     const onSpeakingStart = (userId) => {
       if (String(userId || "") === String(this.client.user?.id || "")) return;
-      this.touchActivity(session.guildId, settings);
       if (this.isInboundCaptureSuppressed(session)) {
         const now = Date.now();
         if (now - Number(session.lastSuppressedCaptureLogAt || 0) >= VOICE_LOOKUP_BUSY_LOG_COOLDOWN_MS) {
@@ -4167,7 +4180,10 @@ export class VoiceSessionManager {
       scheduleIdleFlush();
 
       session.lastInboundAudioAt = now;
-      if (now - captureState.lastActivityTouchAt >= ACTIVITY_TOUCH_THROTTLE_MS) {
+      if (
+        this.isCaptureEligibleForActivityTouch({ session, capture: captureState }) &&
+        now - captureState.lastActivityTouchAt >= ACTIVITY_TOUCH_THROTTLE_MS
+      ) {
         this.touchActivity(session.guildId, settings);
         captureState.lastActivityTouchAt = now;
       }
