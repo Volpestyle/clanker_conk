@@ -874,6 +874,7 @@ export function VoiceModeSettingsSection({
             </>
           )}
 
+          <h4>Music</h4>
           <div className="toggles">
             <label>
               <input
