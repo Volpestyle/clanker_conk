@@ -39,6 +39,26 @@ const LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL_DEFAULT = 120;
 const LOOKUP_CONTEXT_MAX_TTL_HOURS = 168;
 const LOOKUP_CONTEXT_MAX_AGE_HOURS = 168;
 const LOOKUP_CONTEXT_MAX_SEARCH_LIMIT = 16;
+const ACTION_LOG_RETENTION_DAYS_DEFAULT = 14;
+const ACTION_LOG_RETENTION_DAYS_MIN = 1;
+const ACTION_LOG_RETENTION_DAYS_MAX = 3650;
+const ACTION_LOG_MAX_ROWS_DEFAULT = 120_000;
+const ACTION_LOG_MAX_ROWS_MIN = 1000;
+const ACTION_LOG_MAX_ROWS_RUNTIME_MIN = 1;
+const ACTION_LOG_MAX_ROWS_MAX = 5_000_000;
+const ACTION_LOG_PRUNE_EVERY_WRITES_DEFAULT = 250;
+const ACTION_LOG_PRUNE_EVERY_WRITES_MIN = 1;
+const ACTION_LOG_PRUNE_EVERY_WRITES_MAX = 10_000;
+
+function resolveEnvBoundedInt(rawValue, fallback, min, max) {
+  const parsed = Math.floor(Number(rawValue));
+  if (!Number.isFinite(parsed)) return fallback;
+  return clamp(parsed, min, max);
+}
+
+function resolveStoreEnvInt(name, fallback, min, max) {
+  return resolveEnvBoundedInt(process.env[name], fallback, min, max);
+}
 
 function normalizeLookupResultText(value, maxChars = LOOKUP_CONTEXT_RESULT_MAX_CHARS) {
   return normalizeWhitespaceText(value, {
@@ -122,6 +142,10 @@ export class Store {
   sqliteVecReady;
   sqliteVecError;
   onActionLogged;
+  actionLogRetentionDays;
+  actionLogMaxRows;
+  actionLogPruneEveryWrites;
+  actionWritesSincePrune;
 
   constructor(dbPath) {
     this.dbPath = dbPath;
@@ -129,6 +153,25 @@ export class Store {
     this.sqliteVecReady = null;
     this.sqliteVecError = "";
     this.onActionLogged = null;
+    this.actionLogRetentionDays = resolveStoreEnvInt(
+      "ACTION_LOG_RETENTION_DAYS",
+      ACTION_LOG_RETENTION_DAYS_DEFAULT,
+      ACTION_LOG_RETENTION_DAYS_MIN,
+      ACTION_LOG_RETENTION_DAYS_MAX
+    );
+    this.actionLogMaxRows = resolveStoreEnvInt(
+      "ACTION_LOG_MAX_ROWS",
+      ACTION_LOG_MAX_ROWS_DEFAULT,
+      ACTION_LOG_MAX_ROWS_MIN,
+      ACTION_LOG_MAX_ROWS_MAX
+    );
+    this.actionLogPruneEveryWrites = resolveStoreEnvInt(
+      "ACTION_LOG_PRUNE_EVERY_WRITES",
+      ACTION_LOG_PRUNE_EVERY_WRITES_DEFAULT,
+      ACTION_LOG_PRUNE_EVERY_WRITES_MIN,
+      ACTION_LOG_PRUNE_EVERY_WRITES_MAX
+    );
+    this.actionWritesSincePrune = 0;
   }
 
   init() {
@@ -287,6 +330,7 @@ export class Store {
       this.rewriteRuntimeSettingsRow(row?.value);
     }
 
+    this.pruneActionLog({ now: nowIso() });
   }
 
   rewriteRuntimeSettingsRow(rawValue) {
@@ -429,6 +473,84 @@ export class Store {
       .all(String(guildId), since, clamp(limit, 1, 50));
   }
 
+  maybePruneActionLog({ now = nowIso() } = {}) {
+    this.actionWritesSincePrune += 1;
+    if (this.actionWritesSincePrune < this.actionLogPruneEveryWrites) return;
+    this.actionWritesSincePrune = 0;
+    this.pruneActionLog({
+      now
+    });
+  }
+
+  pruneActionLog({
+    now = nowIso(),
+    maxAgeDays = this.actionLogRetentionDays,
+    maxRows = this.actionLogMaxRows
+  } = {}) {
+    const nowText = String(now || nowIso());
+    const nowMs = Date.parse(nowText);
+    const referenceMs = Number.isFinite(nowMs) ? nowMs : Date.now();
+    const boundedMaxAgeDays = clamp(
+      Math.floor(Number(maxAgeDays) || this.actionLogRetentionDays),
+      ACTION_LOG_RETENTION_DAYS_MIN,
+      ACTION_LOG_RETENTION_DAYS_MAX
+    );
+    const boundedMaxRows = clamp(
+      Math.floor(Number(maxRows) || this.actionLogMaxRows),
+      ACTION_LOG_MAX_ROWS_RUNTIME_MIN,
+      ACTION_LOG_MAX_ROWS_MAX
+    );
+    const cutoffIso = new Date(referenceMs - boundedMaxAgeDays * 24 * 60 * 60 * 1000).toISOString();
+
+    let deletedActions = Number(
+      this.db
+        .prepare(
+          `DELETE FROM actions
+           WHERE created_at < ?`
+        )
+        .run(cutoffIso)?.changes || 0
+    );
+
+    const oldestKeptRow = this.db
+      .prepare(
+        `SELECT id
+         FROM actions
+         ORDER BY id DESC
+         LIMIT 1 OFFSET ?`
+      )
+      .get(Math.max(0, boundedMaxRows - 1));
+    const oldestKeptId = Number(oldestKeptRow?.id || 0);
+    if (Number.isInteger(oldestKeptId) && oldestKeptId > 0) {
+      deletedActions += Number(
+        this.db
+          .prepare(
+            `DELETE FROM actions
+             WHERE id < ?`
+          )
+          .run(oldestKeptId)?.changes || 0
+      );
+    }
+
+    const deletedResponseTriggers = Number(
+      this.db
+        .prepare(
+          `DELETE FROM response_triggers
+           WHERE created_at < ?
+              OR NOT EXISTS (
+                SELECT 1
+                FROM actions
+                WHERE actions.id = response_triggers.action_id
+              )`
+        )
+        .run(cutoffIso)?.changes || 0
+    );
+
+    return {
+      deletedActions,
+      deletedResponseTriggers
+    };
+  }
+
   logAction(action) {
     const metadata = action.metadata ? JSON.stringify(action.metadata) : null;
     const createdAt = nowIso();
@@ -466,6 +588,11 @@ export class Store {
       metadata: action.metadata,
       createdAt
     });
+    try {
+      this.maybePruneActionLog({ now: createdAt });
+    } catch {
+      // maintenance must never break action writes
+    }
 
     if (this.onActionLogged) {
       const listener = this.onActionLogged;
