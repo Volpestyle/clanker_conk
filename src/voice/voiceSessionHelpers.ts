@@ -16,10 +16,7 @@ import {
   normalizeVoiceProvider,
   normalizeBrainProvider,
   normalizeTranscriberProvider,
-  VOICE_RUNTIME_MODES,
-  type VoiceProvider,
-  type BrainProvider,
-  type TranscriberProvider
+  VOICE_RUNTIME_MODES
 } from "./voiceModes.ts";
 
 type VoiceRuntimeMode = (typeof VOICE_RUNTIME_MODES)[number];

@@ -143,19 +143,19 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.voice.brainProvider, "native");
   assert.equal(normalized.voice.asrLanguageMode, "fixed");
   assert.equal(normalized.voice.asrLanguageHint, "en-us");
-  assert.equal(normalized.voice.generationLlm.useTextModel, false);
-  assert.equal(normalized.voice.generationLlm.provider, "anthropic");
-  assert.equal(normalized.voice.generationLlm.model, "claude-haiku-4-5");
+  assert.equal(normalized.voice.generationLlm.useTextModel, true);
+  assert.equal(normalized.voice.generationLlm.provider, "xai");
+  assert.equal(normalized.voice.generationLlm.model, "grok-3-mini-latest");
   assert.equal(normalized.voice.thoughtEngine.enabled, true);
   assert.equal(normalized.voice.thoughtEngine.provider, "anthropic");
-  assert.equal(normalized.voice.thoughtEngine.model, "claude-haiku-4-5");
+  assert.equal(normalized.voice.thoughtEngine.model, "claude-sonnet-4-6");
   assert.equal(normalized.voice.thoughtEngine.temperature, 2);
   assert.equal(normalized.voice.thoughtEngine.eagerness, 100);
   assert.equal(normalized.voice.thoughtEngine.minSilenceSeconds, 8);
   assert.equal(normalized.voice.thoughtEngine.minSecondsBetweenThoughts, 600);
   assert.equal(normalized.voice.replyDecisionLlm.provider, "claude-code");
   assert.equal(normalized.voice.replyDecisionLlm.model, "sonnet");
-  assert.equal(normalized.voice.replyDecisionLlm.enabled, true);
+  assert.equal(normalized.voice.replyDecisionLlm.enabled, false);
   assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, undefined);
   assert.equal(normalized.voice.replyDecisionLlm.reasoningEffort, "high");
   assert.equal(String(normalized.voice.replyDecisionLlm.prompts?.wakeVariantHint || "").length > 0, true);
@@ -235,11 +235,11 @@ test("normalizeSettings handles memoryLlm defaults and discovery source fallback
   assert.equal(typeof normalized.initiative.discovery.sources.x, "boolean");
 });
 
-test("normalizeSettings defaults llm maxOutputTokens to 800 and preserves high values", () => {
+test("normalizeSettings defaults llm maxOutputTokens to 2500 and preserves high values", () => {
   const defaulted = normalizeSettings({
     llm: {}
   });
-  assert.equal(defaulted.llm.maxOutputTokens, 800);
+  assert.equal(defaulted.llm.maxOutputTokens, 2500);
 
   const highValue = normalizeSettings({
     llm: {
@@ -317,10 +317,12 @@ test("normalizeSettings keeps stt pipeline voice generation and reply decider in
     voice: {
       mode: "stt_pipeline",
       generationLlm: {
+        useTextModel: false,
         provider: "openai",
         model: "claude-haiku-4-5"
       },
       replyDecisionLlm: {
+        enabled: true,
         provider: "openai",
         model: "claude-haiku-4-5",
         reasoningEffort: "not-real"
@@ -336,7 +338,6 @@ test("normalizeSettings keeps stt pipeline voice generation and reply decider in
   assert.equal(normalized.voice.replyDecisionLlm.enabled, true);
   assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, undefined);
   assert.equal(normalized.voice.replyDecisionLlm.reasoningEffort, "minimal");
-  assert.equal(normalized.voice.realtimeReplyStrategy, "brain");
 });
 
 test("normalizeSettings preserves custom voice decider prompt overrides", () => {

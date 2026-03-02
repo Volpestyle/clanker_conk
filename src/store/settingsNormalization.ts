@@ -8,7 +8,6 @@ import {
 import { normalizeProviderOrder } from "../search.ts";
 import { clamp, deepMerge, uniqueIdList } from "../utils.ts";
 import {
-  normalizeVoiceRuntimeMode,
   normalizeVoiceProvider,
   normalizeBrainProvider,
   normalizeTranscriberProvider
@@ -1094,14 +1093,6 @@ function normalizeHttpBaseUrl(value, fallback) {
   } catch {
     return String(fallback || "https://nitter.net");
   }
-}
-
-function normalizeRealtimeReplyStrategy(value, fallback = "brain") {
-  const normalized = String(value || fallback || "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "native") return "native";
-  return "brain";
 }
 
 function normalizeVoiceAsrLanguageMode(value, fallback = "auto") {
