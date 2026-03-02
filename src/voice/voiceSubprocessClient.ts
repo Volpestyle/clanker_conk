@@ -83,6 +83,7 @@ export class VoiceSubprocessClient extends EventEmitter {
 
     await new Promise<void>((resolve, reject) => {
       const timer = setTimeout(() => {
+        this.destroy();
         reject(new Error(`voice subprocess ready timeout after ${timeoutMs}ms`));
       }, timeoutMs);
 
@@ -218,8 +219,8 @@ export class VoiceSubprocessClient extends EventEmitter {
     this._send({ type: "stop_playback" });
   }
 
-  subscribeUser(userId: string, silenceDurationMs: number = 700) {
-    this._send({ type: "subscribe_user", userId, silenceDurationMs });
+  subscribeUser(userId: string, silenceDurationMs: number = 700, sampleRate: number = 24000) {
+    this._send({ type: "subscribe_user", userId, silenceDurationMs, sampleRate });
   }
 
   unsubscribeUser(userId: string) {

@@ -36,6 +36,7 @@ let botAudioStream: PcmJitterBuffer | null = null;
 let adapterMethods: { onVoiceServerUpdate: (data: any) => void; onVoiceStateUpdate: (data: any) => void } | null = null;
 const userSubscriptions = new Map<string, { opusStream: any; decoder: any; pcmStream: any }>();
 let defaultSilenceDurationMs = 700;
+let defaultSampleRate = 24000;
 
 // Music child processes — tracked for explicit cleanup on stop/skip
 let musicProcesses: { pid: number; kill: () => void }[] = [];
@@ -56,15 +57,15 @@ class PcmJitterBuffer extends Readable {
   private bufferedBytes = 0;
   private partial: Buffer | null = null; // leftover bytes < one frame
   private lastPushAt = 0;
-  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+  private _reading = false;
 
   constructor() {
-    super({ highWaterMark: FRAME_SIZE * 10 });
+    // 50 frames high watermark (1 second of audio)
+    super({ highWaterMark: FRAME_SIZE * 50 });
   }
 
   pushPcm(chunk: Buffer) {
     this.lastPushAt = Date.now();
-    this.resetIdleTimer();
 
     // Prepend any leftover partial frame from previous push
     if (this.partial) {
@@ -85,22 +86,27 @@ class PcmJitterBuffer extends Readable {
     if (offset < chunk.length) {
       this.partial = Buffer.from(chunk.subarray(offset));
     }
+
+    this._tryPush();
   }
 
-  private resetIdleTimer() {
-    if (this.idleTimer) clearTimeout(this.idleTimer);
-    this.idleTimer = setTimeout(() => {
-      // No real audio for too long — end the stream gracefully so
-      // silencePaddingFrames can produce a clean tail-off.
-      this.finish();
-    }, SILENCE_TIMEOUT_MS);
-  }
-
-  finish() {
-    if (this.idleTimer) {
-      clearTimeout(this.idleTimer);
-      this.idleTimer = null;
+  private _tryPush() {
+    while (this._reading && this.chunks.length > 0) {
+      const frame = this.chunks.shift()!;
+      this.bufferedBytes -= FRAME_SIZE;
+      this._reading = this.push(frame);
     }
+  }
+
+  getBufferedChunks(): Buffer[] {
+    const res = [...this.chunks];
+    if (this.partial) res.push(this.partial);
+    return res;
+  }
+
+  // Finish is no longer called by an idle timer.
+  // We keep the stream open indefinitely.
+  finish() {
     // Flush any partial frame padded with silence
     if (this.partial && this.partial.length > 0) {
       const padded = Buffer.alloc(FRAME_SIZE, 0);
@@ -110,34 +116,24 @@ class PcmJitterBuffer extends Readable {
       this.partial = null;
     }
     // Push remaining buffered frames, then EOF
-    while (this.chunks.length) {
+    while (this.chunks.length > 0) {
       const frame = this.chunks.shift()!;
       this.bufferedBytes -= FRAME_SIZE;
-      if (!this.push(frame)) return; // backpressure — _read will drain the rest
+      this.push(frame); // force push to clear the buffer
     }
     this.push(null);
   }
 
   override _read() {
-    if (this.chunks.length) {
-      const frame = this.chunks.shift()!;
-      this.bufferedBytes -= FRAME_SIZE;
-      this.push(frame);
-    } else {
-      // Buffer empty but stream still active — return silence to keep
-      // the AudioPlayer in "playing" state.
-      this.push(SILENCE_FRAME);
-    }
+    this._reading = true;
+    this._tryPush();
   }
 
   override _destroy(err: Error | null, cb: (err: Error | null) => void) {
-    if (this.idleTimer) {
-      clearTimeout(this.idleTimer);
-      this.idleTimer = null;
-    }
     this.chunks = [];
     this.bufferedBytes = 0;
     this.partial = null;
+    this._reading = false;
     cb(err);
   }
 }
@@ -180,7 +176,24 @@ function resetPlayback() {
 }
 
 function ensurePlaybackStream() {
-  if (botAudioStream && !botAudioStream.destroyed && !botAudioStream.readableEnded) return true;
+  if (botAudioStream && !botAudioStream.destroyed && !botAudioStream.readableEnded) {
+    if (audioPlayer && audioPlayer.state.status === AudioPlayerStatus.Idle) {
+      const oldChunks = botAudioStream.getBufferedChunks();
+      try { botAudioStream.destroy(); } catch { /* ignore */ }
+      
+      botAudioStream = new PcmJitterBuffer();
+      for (const chunk of oldChunks) {
+        botAudioStream.pushPcm(chunk);
+      }
+      const resource = createAudioResource(botAudioStream, {
+        inputType: StreamType.Raw,
+        silencePaddingFrames: 250
+      });
+      audioPlayer.play(resource);
+      return true;
+    }
+    return true;
+  }
   if (!audioPlayer || !connection) return false;
 
   botAudioStream = new PcmJitterBuffer();
@@ -289,7 +302,7 @@ function handleJoin(msg: any) {
         send({ type: "speaking_start", userId: String(userId) });
         // Auto-subscribe: eliminates the IPC round-trip that caused
         // subscribe_user to arrive too late (after the user's speech).
-        handleSubscribeUser(String(userId), defaultSilenceDurationMs);
+        handleSubscribeUser(String(userId), defaultSilenceDurationMs, defaultSampleRate);
       });
       speaking.on("end", (userId: string) => {
         send({ type: "speaking_end", userId: String(userId) });
@@ -321,7 +334,7 @@ function handleVoiceState(data: any) {
 
 // --- User audio capture (voice receiver) ---
 
-function handleSubscribeUser(userId: string, silenceDurationMs: number) {
+function handleSubscribeUser(userId: string, silenceDurationMs: number, sampleRate: number = 24000) {
   if (!connection) return;
   if (userSubscriptions.has(userId)) return;
 
@@ -348,8 +361,8 @@ function handleSubscribeUser(userId: string, silenceDurationMs: number) {
   });
 
   pcmStream.on("data", (chunk: Buffer) => {
-    // Convert to mono 24kHz (standard ASR input rate) and send to main process
-    const monoChunk = convertDiscordPcmToXaiInput(chunk, 24000);
+    // Convert to mono and send to main process at the requested sample rate
+    const monoChunk = convertDiscordPcmToXaiInput(chunk, sampleRate);
     if (monoChunk.length) {
       send({
         type: "user_audio",
@@ -532,9 +545,10 @@ process.on("message", (msg: any) => {
       handleStopPlayback();
       break;
     case "subscribe_user":
-      // Update default silence duration for future auto-subscriptions
+      // Update defaults for future auto-subscriptions
       defaultSilenceDurationMs = Number(msg.silenceDurationMs) || 700;
-      handleSubscribeUser(msg.userId, defaultSilenceDurationMs);
+      defaultSampleRate = Number(msg.sampleRate) || 24000;
+      handleSubscribeUser(msg.userId, defaultSilenceDurationMs, defaultSampleRate);
       break;
     case "unsubscribe_user":
       handleUnsubscribeUser(msg.userId);
@@ -566,7 +580,7 @@ process.on("disconnect", () => {
   handleDestroy();
 });
 
-process.on("uncaughtException", (err) => {
+process.on("uncaughtException", (err: any) => {
   const msg = String(err?.message || err);
   console.error("[subprocess] uncaught exception:", err);
   sendError(`uncaught_exception: ${msg}`);
@@ -576,7 +590,7 @@ process.on("uncaughtException", (err) => {
   handleDestroy();
 });
 
-process.on("unhandledRejection", (err) => {
+process.on("unhandledRejection", (err: any) => {
   console.error("[subprocess] unhandled rejection:", err);
   sendError(`unhandled_rejection: ${String(err?.message || err)}`);
 });
