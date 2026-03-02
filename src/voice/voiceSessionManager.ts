@@ -22,6 +22,14 @@ import {
   VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
   VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
 } from "../promptCore.ts";
+const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
+const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
+  "whisper-1",
+  "gpt-4o-mini-transcribe-2025-12-15",
+  "gpt-4o-mini-transcribe",
+  "gpt-4o-transcribe",
+  "gpt-4o-transcribe-latest"
+]);
 import { estimateUsdCost } from "../pricing.ts";
 import { clamp } from "../utils.ts";
 import {
@@ -95,6 +103,7 @@ import {
   parseResponseDoneModel,
   parseResponseDoneStatus,
   parseResponseDoneUsage,
+  resolveBrainProvider,
   resolveVoiceAsrLanguageGuidance,
   resolveRealtimeProvider,
   shortError,
@@ -134,6 +143,7 @@ import {
   LEAVE_DIRECTIVE_REALTIME_AUDIO_START_WAIT_MS,
   MAX_INACTIVITY_SECONDS,
   MAX_MAX_SESSION_MINUTES,
+  OPENAI_REALTIME_MAX_SESSION_MINUTES,
   MAX_RESPONSE_SILENCE_RETRIES,
   MIN_INACTIVITY_SECONDS,
   MIN_MAX_SESSION_MINUTES,
@@ -492,6 +502,17 @@ type VoiceToolRuntimeSessionLike = {
   awaitingToolOutputs?: boolean;
   [key: string]: unknown;
 };
+
+function normalizeOpenAiRealtimeTranscriptionModel(
+  value,
+  fallback = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+) {
+  const normalized =
+    String(value || "").trim() || String(fallback || "").trim() || OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
+  return OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS.has(normalized)
+    ? normalized
+    : OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
+}
 
 export class VoiceSessionManager {
   client;
@@ -2668,7 +2689,7 @@ export class VoiceSessionManager {
       ? settings?.voice?.sttPipeline?.transcriptionModel
       : settings?.voice?.openaiRealtime?.inputTranscriptionModel || settings?.voice?.sttPipeline?.transcriptionModel;
     const primaryModel = String(preferredModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
-    const fallbackModel = primaryModel === "gpt-4o-mini-transcribe" ? "gpt-4o-transcribe" : "";
+    const fallbackModel = primaryModel === "gpt-4o-mini-transcribe" ? "whisper-1" : "";
 
     let transcript = await this.transcribePcmTurn({
       session,
@@ -3155,10 +3176,13 @@ export class VoiceSessionManager {
   }
 
   startSessionTimers(session, settings) {
+    const maxSessionMinutesCap = session?.mode === "openai_realtime"
+      ? OPENAI_REALTIME_MAX_SESSION_MINUTES
+      : MAX_MAX_SESSION_MINUTES;
     const maxSessionMinutes = clamp(
       Number(settings.voice?.maxSessionMinutes) || 30,
       MIN_MAX_SESSION_MINUTES,
-      MAX_MAX_SESSION_MINUTES
+      maxSessionMinutesCap
     );
     const maxDurationMs = maxSessionMinutes * 60_000;
 
@@ -3642,6 +3666,7 @@ export class VoiceSessionManager {
 
     const queueState = this.ensureAudioPlaybackQueueState(session);
     const queuedBytes = Math.max(0, Number(queueState?.queuedBytes || 0));
+    const streamBufferedBytes = Math.max(0, Number(session.botAudioStream?.writableLength || 0));
     const now = Date.now();
     const pendingRequestId = Number(session.pendingResponse?.requestId || 0) || null;
     const interruptionPolicy = this.normalizeReplyInterruptionPolicy(
@@ -3654,6 +3679,12 @@ export class VoiceSessionManager {
     let responseCancelAttempted = false;
     let responseCancelSucceeded = false;
     let responseCancelError = null;
+    let truncateAttempted = false;
+    let truncateSucceeded = false;
+    let truncateError = null;
+    let truncateItemId = null;
+    let truncateContentIndex = 0;
+    let truncateAudioEndMs = 0;
 
     const cancelActiveResponse = session.realtimeClient?.cancelActiveResponse;
     if (typeof cancelActiveResponse === "function") {
@@ -3662,6 +3693,31 @@ export class VoiceSessionManager {
         responseCancelSucceeded = Boolean(cancelActiveResponse.call(session.realtimeClient));
       } catch (error) {
         responseCancelError = shortError(error);
+      }
+    }
+
+    const truncateConversationItem = session.realtimeClient?.truncateConversationItem;
+    if (session.mode === "openai_realtime" && typeof truncateConversationItem === "function") {
+      const latestItemId = String(session.lastOpenAiAssistantAudioItemId || "").trim();
+      if (latestItemId) {
+        truncateAttempted = true;
+        truncateItemId = latestItemId;
+        truncateContentIndex = Math.max(0, Number(session.lastOpenAiAssistantAudioItemContentIndex || 0));
+        const estimatedReceivedMs = Math.max(0, Number(session.lastOpenAiAssistantAudioItemReceivedMs || 0));
+        const unplayedBytes = queuedBytes + streamBufferedBytes;
+        const estimatedUnplayedMs = this.estimateDiscordPcmPlaybackDurationMs(unplayedBytes);
+        truncateAudioEndMs = Math.max(0, Math.round(estimatedReceivedMs - estimatedUnplayedMs));
+        try {
+          truncateSucceeded = Boolean(
+            truncateConversationItem.call(session.realtimeClient, {
+              itemId: latestItemId,
+              contentIndex: truncateContentIndex,
+              audioEndMs: truncateAudioEndMs
+            })
+          );
+        } catch (error) {
+          truncateError = shortError(error);
+        }
       }
     }
 
@@ -3716,6 +3772,7 @@ export class VoiceSessionManager {
         sessionId: session.id,
         source: String(source || "speaking_start"),
         queuedBytesDropped: queuedBytes,
+        streamBufferedBytesDropped: streamBufferedBytes,
         pendingRequestId,
         minCaptureBytes: Math.max(0, Number(minCaptureBytes || 0)),
         suppressionMs: BARGE_IN_SUPPRESSION_MAX_MS,
@@ -3724,7 +3781,13 @@ export class VoiceSessionManager {
         retryInterruptionPolicyAllowedUserId: interruptionPolicy?.allowedUserId || null,
         responseCancelAttempted,
         responseCancelSucceeded,
-        responseCancelError
+        responseCancelError,
+        truncateAttempted,
+        truncateSucceeded,
+        truncateError,
+        truncateItemId,
+        truncateContentIndex: truncateAttempted ? truncateContentIndex : null,
+        truncateAudioEndMs: truncateAttempted ? truncateAudioEndMs : null
       }
     });
     return true;
@@ -3779,6 +3842,27 @@ export class VoiceSessionManager {
     }, effectiveDelayMs);
   }
 
+  trackOpenAiRealtimeAssistantAudioEvent(session, event) {
+    if (!session || session.ending) return;
+    if (session.mode !== "openai_realtime") return;
+    if (!event || typeof event !== "object") return;
+    const eventType = String(event.type || "").trim();
+    if (eventType !== "response.output_audio.delta" && eventType !== "response.output_audio.done") return;
+
+    const itemId = normalizeInlineText(event.item_id || event.item?.id || event.output_item?.id, 180);
+    if (!itemId) return;
+    const contentIndexRaw = Number(event.content_index ?? event.contentIndex ?? 0);
+    const contentIndex =
+      Number.isFinite(contentIndexRaw) && contentIndexRaw >= 0 ? Math.floor(contentIndexRaw) : 0;
+    const previousItemId = String(session.lastOpenAiAssistantAudioItemId || "");
+    const previousContentIndex = Math.max(0, Number(session.lastOpenAiAssistantAudioItemContentIndex || 0));
+    if (itemId !== previousItemId || contentIndex !== previousContentIndex) {
+      session.lastOpenAiAssistantAudioItemReceivedMs = 0;
+    }
+    session.lastOpenAiAssistantAudioItemId = itemId;
+    session.lastOpenAiAssistantAudioItemContentIndex = contentIndex;
+  }
+
   bindRealtimeHandlers(session, settings = session.settingsSnapshot) {
     if (!session?.realtimeClient) return;
     this.ensureSessionToolRuntimeState(session);
@@ -3791,6 +3875,15 @@ export class VoiceSessionManager {
         return;
       }
       if (!chunk || !chunk.length) return;
+      if (session.mode === "openai_realtime" && session.lastOpenAiAssistantAudioItemId) {
+        session.lastOpenAiAssistantAudioItemReceivedMs = Math.max(
+          0,
+          Number(session.lastOpenAiAssistantAudioItemReceivedMs || 0)
+        ) + this.estimatePcm16MonoDurationMs(
+          chunk.length,
+          Number(session.realtimeOutputSampleRateHz) || 24000
+        );
+      }
 
       const discordPcm = convertXaiOutputToDiscordPcm(
         chunk,
@@ -4114,6 +4207,7 @@ export class VoiceSessionManager {
       if (!session || session.ending) return;
       if (!event || typeof event !== "object") return;
       if (session.mode !== "openai_realtime") return;
+      this.trackOpenAiRealtimeAssistantAudioEvent(session, event);
       this.handleOpenAiRealtimeFunctionCallEvent({
         session,
         settings,
@@ -6187,6 +6281,7 @@ export class VoiceSessionManager {
         bytesSent: 0,
         partialText: "",
         finalSegments: [],
+        finalSegmentEntries: [],
         lastUpdateAt: 0
       }
     };
@@ -6239,10 +6334,14 @@ export class VoiceSessionManager {
     const model = String(
       session.openAiPerUserAsrModel ||
         resolvedSettings?.voice?.openaiRealtime?.inputTranscriptionModel ||
-        "gpt-4o-mini-transcribe"
+        OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
     )
       .trim()
-      .slice(0, 120) || "gpt-4o-mini-transcribe";
+      .slice(0, 120);
+    const normalizedModel = normalizeOpenAiRealtimeTranscriptionModel(
+      model,
+      OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+    );
     const language = String(
       session.openAiPerUserAsrLanguage || voiceAsrGuidance.language || ""
     )
@@ -6269,11 +6368,33 @@ export class VoiceSessionManager {
 
         const eventType = String(payload?.eventType || "").trim();
         const isFinal = Boolean(payload?.final);
+        const itemId = normalizeInlineText(payload?.itemId, 180);
+        const previousItemId = normalizeInlineText(payload?.previousItemId, 180) || null;
         const now = Date.now();
         asrState.lastTranscriptAt = now;
         asrState.utterance.lastUpdateAt = now;
         if (isFinal) {
-          asrState.utterance.finalSegments.push(transcript);
+          if (itemId) {
+            const entries = Array.isArray(asrState.utterance.finalSegmentEntries)
+              ? asrState.utterance.finalSegmentEntries
+              : [];
+            const nextEntry = {
+              itemId,
+              previousItemId,
+              text: transcript,
+              receivedAt: now
+            };
+            const existingIndex = entries.findIndex((entry) => String(entry?.itemId || "") === itemId);
+            if (existingIndex >= 0) {
+              entries[existingIndex] = nextEntry;
+            } else {
+              entries.push(nextEntry);
+            }
+            asrState.utterance.finalSegmentEntries = entries;
+            asrState.utterance.finalSegments = this.orderOpenAiAsrFinalSegments(entries);
+          } else {
+            asrState.utterance.finalSegments.push(transcript);
+          }
           asrState.utterance.partialText = "";
         } else {
           asrState.utterance.partialText = transcript;
@@ -6299,7 +6420,9 @@ export class VoiceSessionManager {
               sessionId: session.id,
               speakerName,
               transcript,
-              eventType: eventType || null
+              eventType: eventType || null,
+              itemId: itemId || null,
+              previousItemId
             }
           });
         }
@@ -6338,9 +6461,9 @@ export class VoiceSessionManager {
       });
 
       await client.connect({
-        model,
+        model: normalizedModel,
         inputAudioFormat: "pcm16",
-        inputTranscriptionModel: model,
+        inputTranscriptionModel: normalizedModel,
         inputTranscriptionLanguage: language,
         inputTranscriptionPrompt: prompt
       });
@@ -6413,7 +6536,10 @@ export class VoiceSessionManager {
         break;
       }
     }
-    state.pendingAudioBytes = 0;
+    state.pendingAudioBytes = state.pendingAudioChunks.reduce(
+      (total, pendingChunk) => total + Number(pendingChunk?.length || 0),
+      0
+    );
   }
 
   beginOpenAiAsrUtterance({
@@ -6439,6 +6565,7 @@ export class VoiceSessionManager {
       bytesSent: 0,
       partialText: "",
       finalSegments: [],
+      finalSegmentEntries: [],
       lastUpdateAt: 0
     };
     asrState.lastPartialText = "";
@@ -6500,6 +6627,57 @@ export class VoiceSessionManager {
     });
   }
 
+  orderOpenAiAsrFinalSegments(entries = []) {
+    const normalizedEntries = Array.isArray(entries)
+      ? entries
+          .map((entry, index) => ({
+            itemId: normalizeInlineText(entry?.itemId, 180),
+            previousItemId: normalizeInlineText(entry?.previousItemId, 180) || null,
+            text: normalizeVoiceText(entry?.text || "", STT_TRANSCRIPT_MAX_CHARS),
+            receivedAt: Math.max(0, Number(entry?.receivedAt || 0)),
+            index
+          }))
+          .filter((entry) => entry.itemId && entry.text)
+      : [];
+    if (normalizedEntries.length <= 1) {
+      return normalizedEntries.map((entry) => entry.text);
+    }
+
+    const byId = new Map();
+    for (const entry of normalizedEntries) {
+      byId.set(entry.itemId, entry);
+    }
+    const sorted = [...byId.values()].sort((a, b) => {
+      const delta = Number(a.receivedAt || 0) - Number(b.receivedAt || 0);
+      if (delta !== 0) return delta;
+      return Number(a.index || 0) - Number(b.index || 0);
+    });
+
+    const placed = new Set();
+    const ordered = [];
+    while (ordered.length < sorted.length) {
+      let progressed = false;
+      for (const entry of sorted) {
+        if (placed.has(entry.itemId)) continue;
+        const previousItemId = String(entry.previousItemId || "");
+        if (!previousItemId || !byId.has(previousItemId) || placed.has(previousItemId)) {
+          placed.add(entry.itemId);
+          ordered.push(entry.text);
+          progressed = true;
+        }
+      }
+      if (progressed) continue;
+      // Fall back to arrival order if chain is incomplete/cyclic.
+      for (const entry of sorted) {
+        if (placed.has(entry.itemId)) continue;
+        placed.add(entry.itemId);
+        ordered.push(entry.text);
+      }
+    }
+
+    return ordered;
+  }
+
   async waitForOpenAiAsrTranscriptSettle({
     session,
     asrState
@@ -6555,7 +6733,31 @@ export class VoiceSessionManager {
       userId
     });
     if (!asrState || asrState.closing) return null;
-    if (Number(asrState.utterance?.bytesSent || 0) <= 0) {
+    const transcriptionModelPrimary = normalizeOpenAiRealtimeTranscriptionModel(
+      session.openAiPerUserAsrModel,
+      OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+    );
+    const utteranceBytesSent = Math.max(0, Number(asrState.utterance?.bytesSent || 0));
+    const minCommitBytes = getRealtimeCommitMinimumBytes(
+      session.mode,
+      Number(session.realtimeInputSampleRateHz) || 24000
+    );
+    if (utteranceBytesSent < minCommitBytes) {
+      if (utteranceBytesSent > 0) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: String(userId || "").trim() || null,
+          content: "openai_realtime_asr_commit_skipped_small_buffer",
+          metadata: {
+            sessionId: session.id,
+            utteranceBytesSent,
+            minCommitBytes,
+            captureReason: String(captureReason || "stream_end")
+          }
+        });
+      }
       this.scheduleOpenAiAsrSessionIdleClose({
         session,
         userId
@@ -6564,7 +6766,7 @@ export class VoiceSessionManager {
         transcript: "",
         asrStartedAtMs: 0,
         asrCompletedAtMs: 0,
-        transcriptionModelPrimary: String(session.openAiPerUserAsrModel || "gpt-4o-mini-transcribe"),
+        transcriptionModelPrimary,
         transcriptionModelFallback: null,
         transcriptionPlanReason: "openai_realtime_per_user_transcription",
         usedFallbackModel: false,
@@ -6600,9 +6802,6 @@ export class VoiceSessionManager {
       asrState
     });
     const asrCompletedAtMs = Date.now();
-    const transcriptionModelPrimary = String(
-      session.openAiPerUserAsrModel || "gpt-4o-mini-transcribe"
-    ).trim() || "gpt-4o-mini-transcribe";
 
     this.scheduleOpenAiAsrSessionIdleClose({
       session,
@@ -6773,7 +6972,7 @@ export class VoiceSessionManager {
         clearTimeout(activeCapture.speakingEndFinalizeTimer);
         activeCapture.speakingEndFinalizeTimer = null;
       }
-      if (useOpenAiPerUserAsr) {
+      if (useOpenAiPerUserAsr && !activeCapture) {
         this.beginOpenAiAsrUtterance({
           session,
           settings,
@@ -7453,6 +7652,12 @@ export class VoiceSessionManager {
     return Math.round((normalizedBytes / (2 * normalizedRate)) * 1000);
   }
 
+  estimateDiscordPcmPlaybackDurationMs(pcmByteLength) {
+    const normalizedBytes = Math.max(0, Number(pcmByteLength) || 0);
+    const bytesPerSecond = 48_000 * 2 * 2;
+    return Math.round((normalizedBytes / bytesPerSecond) * 1000);
+  }
+
   analyzeMonoPcmSignal(pcmBuffer) {
     const buffer = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
     const evenByteLength = Math.max(0, buffer.length - (buffer.length % 2));
@@ -7646,7 +7851,16 @@ export class VoiceSessionManager {
   resolveRealtimeReplyStrategy({ session, settings = null }) {
     if (!session || !isRealtimeMode(session.mode)) return "brain";
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    const brainProvider = resolvedSettings?.voice?.brainProvider;
+    const configuredStrategy = String(resolvedSettings?.voice?.realtimeReplyStrategy || "")
+      .trim()
+      .toLowerCase();
+    if (configuredStrategy === "native") {
+      return "native";
+    }
+    if (configuredStrategy === "brain") {
+      return "brain";
+    }
+    const brainProvider = resolveBrainProvider(resolvedSettings);
     if (brainProvider && brainProvider !== "native") {
       return "brain";
     }
@@ -7831,7 +8045,7 @@ export class VoiceSessionManager {
         session.mode === "voice_agent" &&
         transcriptionPlan.primaryModel === "gpt-4o-mini-transcribe"
       ) {
-        resolvedFallbackModel = "gpt-4o-transcribe";
+        resolvedFallbackModel = "whisper-1";
         resolvedTranscriptionPlanReason = "mini_with_full_fallback_runtime";
       }
 
@@ -11368,7 +11582,7 @@ export class VoiceSessionManager {
     let transcriptionModelFallback = null;
     let transcriptionPlanReason = "configured_model";
     if (transcriptionModelPrimary === "gpt-4o-mini-transcribe") {
-      transcriptionModelFallback = "gpt-4o-transcribe";
+      transcriptionModelFallback = "whisper-1";
       transcriptionPlanReason = "mini_with_full_fallback_runtime";
     }
     let usedFallbackModelForTranscript = false;
@@ -12581,6 +12795,11 @@ export class VoiceSessionManager {
     }
 
     const now = Date.now();
+    if (session.mode === "openai_realtime") {
+      session.lastOpenAiAssistantAudioItemId = null;
+      session.lastOpenAiAssistantAudioItemContentIndex = 0;
+      session.lastOpenAiAssistantAudioItemReceivedMs = 0;
+    }
     const requestId = Number(session.nextResponseRequestId || 0) + 1;
     session.nextResponseRequestId = requestId;
     const previous = session.pendingResponse;

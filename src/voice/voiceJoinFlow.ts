@@ -20,14 +20,30 @@ import {
   resolveVoiceAsrLanguageGuidance,
   resolveRealtimeProvider,
   resolveVoiceRuntimeMode,
-  resolveBrainProvider,
   shortError
 } from "./voiceSessionHelpers.ts";
 
 const MIN_MAX_SESSION_MINUTES = 1;
 const MAX_MAX_SESSION_MINUTES = 120;
+const OPENAI_REALTIME_MAX_SESSION_MINUTES = 60;
 const MIN_INACTIVITY_SECONDS = 20;
 const MAX_INACTIVITY_SECONDS = 3600;
+const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
+const OPENAI_REALTIME_DEFAULT_SESSION_MODEL = "gpt-realtime";
+const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
+  "whisper-1",
+  "gpt-4o-mini-transcribe-2025-12-15",
+  "gpt-4o-mini-transcribe",
+  "gpt-4o-transcribe",
+  "gpt-4o-transcribe-latest"
+]);
+const OPENAI_REALTIME_SUPPORTED_SESSION_MODELS = new Set([
+  "gpt-realtime",
+  "gpt-realtime-1.5",
+  "gpt-realtime-mini",
+  "gpt-4o-realtime-preview",
+  "gpt-4o-mini-realtime-preview"
+]);
 
 function createRealtimeRuntimeLogger(manager, { guildId, channelId, botUserId }) {
   return ({ level, event, metadata }) => {
@@ -40,6 +56,22 @@ function createRealtimeRuntimeLogger(manager, { guildId, channelId, botUserId })
       metadata
     });
   };
+}
+
+function normalizeOpenAiRealtimeTranscriptionModel(value, fallback = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL) {
+  const normalized =
+    String(value || "").trim() || String(fallback || "").trim() || OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
+  return OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS.has(normalized)
+    ? normalized
+    : OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
+}
+
+function normalizeOpenAiRealtimeSessionModel(value, fallback = OPENAI_REALTIME_DEFAULT_SESSION_MODEL) {
+  const normalized =
+    String(value || "").trim() || String(fallback || "").trim() || OPENAI_REALTIME_DEFAULT_SESSION_MODEL;
+  return OPENAI_REALTIME_SUPPORTED_SESSION_MODELS.has(normalized)
+    ? normalized
+    : OPENAI_REALTIME_DEFAULT_SESSION_MODEL;
 }
 
 export async function requestJoin(manager, { message, settings, intentConfidence = null }) {
@@ -367,10 +399,13 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       return true;
     }
 
+    const maxSessionMinutesCap = runtimeMode === "openai_realtime"
+      ? OPENAI_REALTIME_MAX_SESSION_MINUTES
+      : MAX_MAX_SESSION_MINUTES;
     const maxSessionMinutes = clamp(
       Number(settings.voice?.maxSessionMinutes) || 30,
       MIN_MAX_SESSION_MINUTES,
-      MAX_MAX_SESSION_MINUTES
+      maxSessionMinutesCap
     );
 
     let connection = null;
@@ -381,7 +416,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
     let realtimeInputSampleRateHz = 24000;
     let realtimeOutputSampleRateHz = 24000;
     let openAiPerUserAsrEnabled = false;
-    let openAiPerUserAsrModel = "gpt-4o-mini-transcribe";
+    let openAiPerUserAsrModel = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
     let openAiPerUserAsrLanguage = "";
     let openAiPerUserAsrPrompt = "";
 
@@ -453,29 +488,38 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         });
 
         const openAiRealtimeSettings = settings.voice?.openaiRealtime || {};
-        const brainProvider = resolveBrainProvider(settings);
-        const openAiPerUserAsrBridgeEnabled = brainProvider !== "native" || openAiRealtimeSettings.usePerUserAsrBridge !== false;
+        const openAiReplyStrategy = manager.resolveRealtimeReplyStrategy({
+          session: { mode: runtimeMode },
+          settings
+        });
+        const openAiPerUserAsrBridgeEnabled =
+          openAiReplyStrategy === "brain" && openAiRealtimeSettings.usePerUserAsrBridge !== false;
         const voiceAsrGuidance = resolveVoiceAsrLanguageGuidance(settings);
         openAiPerUserAsrEnabled = openAiPerUserAsrBridgeEnabled;
-        openAiPerUserAsrModel =
-          String(openAiRealtimeSettings.inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() ||
-          "gpt-4o-mini-transcribe";
+        openAiPerUserAsrModel = normalizeOpenAiRealtimeTranscriptionModel(
+          openAiRealtimeSettings.inputTranscriptionModel,
+          OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+        );
         openAiPerUserAsrLanguage = voiceAsrGuidance.language;
         openAiPerUserAsrPrompt = voiceAsrGuidance.prompt;
         realtimeInputSampleRateHz = 24000;
         realtimeOutputSampleRateHz = 24000;
         await realtimeClient.connect({
-          model: String(openAiRealtimeSettings.model || "gpt-realtime").trim() || "gpt-realtime",
+          model: normalizeOpenAiRealtimeSessionModel(
+            openAiRealtimeSettings.model,
+            OPENAI_REALTIME_DEFAULT_SESSION_MODEL
+          ),
           voice: String(openAiRealtimeSettings.voice || "alloy").trim() || "alloy",
           instructions: baseVoiceInstructions,
           inputAudioFormat: String(openAiRealtimeSettings.inputAudioFormat || "pcm16").trim() || "pcm16",
           outputAudioFormat: String(openAiRealtimeSettings.outputAudioFormat || "pcm16").trim() || "pcm16",
           inputTranscriptionModel:
-            String(openAiRealtimeSettings.inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() ||
-            "gpt-4o-mini-transcribe",
+            normalizeOpenAiRealtimeTranscriptionModel(
+              openAiRealtimeSettings.inputTranscriptionModel,
+              OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+            ),
           inputTranscriptionLanguage: voiceAsrGuidance.language,
           inputTranscriptionPrompt: voiceAsrGuidance.prompt,
-          turnDetection: null,
           tools: manager.buildOpenAiRealtimeFunctionTools({
             session: null,
             settings
@@ -608,6 +652,9 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         openAiPendingToolCalls: new Map(),
         openAiToolCallExecutions: new Map(),
         openAiToolResponseDebounceTimer: null,
+        lastOpenAiAssistantAudioItemId: null,
+        lastOpenAiAssistantAudioItemContentIndex: 0,
+        lastOpenAiAssistantAudioItemReceivedMs: 0,
         openAiToolDefinitions: [],
         lastOpenAiRealtimeToolHash: "",
         lastOpenAiRealtimeToolRefreshAt: 0,

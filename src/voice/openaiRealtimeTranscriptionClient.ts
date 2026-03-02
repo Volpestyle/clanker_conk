@@ -12,6 +12,14 @@ import {
 } from "./realtimeClientCore.ts";
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
+const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
+  "whisper-1",
+  "gpt-4o-mini-transcribe-2025-12-15",
+  "gpt-4o-mini-transcribe",
+  "gpt-4o-transcribe",
+  "gpt-4o-transcribe-latest"
+]);
 
 const TRANSCRIPT_DELTA_TYPES = new Set([
   "conversation.item.input_audio_transcription.delta"
@@ -37,6 +45,7 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
   lastOutboundEvent;
   recentOutboundEvents;
   sessionConfig;
+  committedInputAudioItems;
 
   constructor({ apiKey, baseUrl = DEFAULT_OPENAI_BASE_URL, logger = null }) {
     super();
@@ -55,12 +64,13 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
     this.lastOutboundEvent = null;
     this.recentOutboundEvents = [];
     this.sessionConfig = null;
+    this.committedInputAudioItems = new Map();
   }
 
   async connect({
-    model = "gpt-4o-mini-transcribe",
+    model = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
     inputAudioFormat = "pcm16",
-    inputTranscriptionModel = "gpt-4o-mini-transcribe",
+    inputTranscriptionModel = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
     inputTranscriptionLanguage = "",
     inputTranscriptionPrompt = ""
   } = {}) {
@@ -72,10 +82,15 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
       return this.getState();
     }
 
-    const resolvedModel = String(model || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
+    const resolvedModel = normalizeOpenAiRealtimeTranscriptionModel(
+      model,
+      OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+    );
     const resolvedInputAudioFormat = normalizeOpenAiRealtimeAudioFormat(inputAudioFormat);
-    const resolvedInputTranscriptionModel =
-      String(inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
+    const resolvedInputTranscriptionModel = normalizeOpenAiRealtimeTranscriptionModel(
+      inputTranscriptionModel,
+      OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+    );
     const resolvedInputTranscriptionLanguage = String(inputTranscriptionLanguage || "")
       .trim()
       .toLowerCase()
@@ -86,6 +101,7 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
       .trim()
       .slice(0, 280);
 
+    this.committedInputAudioItems.clear();
     const ws = await this.openSocket(this.buildRealtimeUrl(resolvedModel));
     markRealtimeConnected(this, ws);
 
@@ -117,13 +133,19 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
     return this.getState();
   }
 
-  buildRealtimeUrl(model) {
+  buildRealtimeUrl(model = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL) {
     const base = normalizeOpenAiBaseUrl(this.baseUrl);
     const url = new URL(base);
     url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
     const basePath = url.pathname.replace(/\/+$/, "");
     url.pathname = `${basePath}/realtime`;
-    url.searchParams.set("model", String(model || "gpt-4o-mini-transcribe"));
+    url.searchParams.set(
+      "model",
+      normalizeOpenAiRealtimeTranscriptionModel(
+        model,
+        OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+      )
+    );
     return url.toString();
   }
 
@@ -151,7 +173,33 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
     if (!event || typeof event !== "object") return;
     this.emit("event", event);
 
-    if (event.type === "session.created" || event.type === "session.updated") {
+    if (event.type === "input_audio_buffer.committed") {
+      const itemId = normalizeRealtimeItemId(event.item_id || event.item?.id);
+      if (!itemId) return;
+      const previousItemId = normalizeRealtimeItemId(event.previous_item_id);
+      this.committedInputAudioItems.set(itemId, {
+        previousItemId: previousItemId || null,
+        at: Date.now()
+      });
+      // Bound memory for long sessions.
+      if (this.committedInputAudioItems.size > 320) {
+        const overflow = this.committedInputAudioItems.size - 320;
+        let dropped = 0;
+        for (const staleItemId of this.committedInputAudioItems.keys()) {
+          this.committedInputAudioItems.delete(staleItemId);
+          dropped += 1;
+          if (dropped >= overflow) break;
+        }
+      }
+      return;
+    }
+
+    if (
+      event.type === "session.created" ||
+      event.type === "session.updated" ||
+      event.type === "transcription_session.created" ||
+      event.type === "transcription_session.updated"
+    ) {
       this.sessionId = event.session?.id || this.sessionId;
       this.log("info", "openai_realtime_asr_session_updated", { sessionId: this.sessionId });
       return;
@@ -180,6 +228,10 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
 
     const eventType = String(event.type || "");
     if (TRANSCRIPT_DELTA_TYPES.has(eventType) || TRANSCRIPT_FINAL_TYPES.has(eventType)) {
+      const itemId = normalizeRealtimeItemId(event.item_id || event.item?.id);
+      const previousItemId =
+        normalizeRealtimeItemId(event.previous_item_id) ||
+        (itemId ? this.committedInputAudioItems.get(itemId)?.previousItemId || null : null);
       const transcript =
         event.transcript ||
         event.text ||
@@ -191,7 +243,9 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
       this.emit("transcript", {
         text: normalizedTranscript,
         eventType,
-        final: TRANSCRIPT_FINAL_TYPES.has(eventType)
+        final: TRANSCRIPT_FINAL_TYPES.has(eventType),
+        itemId: itemId || null,
+        previousItemId: previousItemId || null
       });
       return;
     }
@@ -254,16 +308,21 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
     this.send({
       type: "session.update",
       session: compactObject({
-        type: "realtime",
-        model: String(session.model || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe",
-        output_modalities: ["text"],
+        type: "transcription",
+        model: normalizeOpenAiRealtimeTranscriptionModel(
+          session.model,
+          OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+        ),
         audio: compactObject({
           input: compactObject({
             format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat),
+            noise_reduction: { type: "near_field" },
+            turn_detection: { type: "server_vad", threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500 },
             transcription: compactObject({
-              model:
-                String(session.inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() ||
-                "gpt-4o-mini-transcribe",
+              model: normalizeOpenAiRealtimeTranscriptionModel(
+                session.inputTranscriptionModel,
+                "gpt-4o-transcribe"
+              ),
               language: String(session.inputTranscriptionLanguage || "").trim() || null,
               prompt: String(session.inputTranscriptionPrompt || "").trim() || null
             })
@@ -331,6 +390,19 @@ function normalizeOpenAiRealtimeAudioFormat(value) {
   };
 }
 
+function normalizeOpenAiRealtimeTranscriptionModel(value, fallback = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL) {
+  const normalized =
+    String(value || "").trim() || String(fallback || "").trim() || OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
+  if (OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS.has(normalized)) return normalized;
+  return OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
+}
+
+function normalizeRealtimeItemId(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  return normalized.slice(0, 180);
+}
+
 function summarizeOutboundPayload(payload) {
   if (!payload || typeof payload !== "object") return null;
   const type = String(payload.type || "unknown");
@@ -355,7 +427,6 @@ function summarizeOutboundPayload(payload) {
       type,
       sessionType: session.type || null,
       model: session.model || null,
-      outputModalities: Array.isArray(session.output_modalities) ? session.output_modalities.slice(0, 4) : null,
       inputFormat: audio?.input?.format || null,
       inputTranscriptionModel: audio?.input?.transcription?.model || null
     });

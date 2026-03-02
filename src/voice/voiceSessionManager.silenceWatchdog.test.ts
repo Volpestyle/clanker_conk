@@ -77,6 +77,12 @@ test("flushResponseFromBufferedAudio emits response.create for OpenAI native rep
   const creates = [];
   const session = createRealtimeSession({
     pendingRealtimeInputBytes: 5_000,
+    settingsSnapshot: {
+      botName: "clanker conk",
+      voice: {
+        realtimeReplyStrategy: "native"
+      }
+    },
     realtimeClient: {
       createAudioResponse() {
         creates.push("create");
@@ -109,6 +115,7 @@ test("flushResponseFromBufferedAudio skips response.create for OpenAI brain repl
     settingsSnapshot: {
       botName: "clanker conk",
       voice: {
+        realtimeReplyStrategy: "brain",
         brainProvider: "anthropic"
       }
     },

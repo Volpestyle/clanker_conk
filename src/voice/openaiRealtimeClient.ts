@@ -14,6 +14,22 @@ import {
 } from "./realtimeClientCore.ts";
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
+const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
+const OPENAI_REALTIME_DEFAULT_SESSION_MODEL = "gpt-realtime";
+const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
+  "whisper-1",
+  "gpt-4o-mini-transcribe-2025-12-15",
+  "gpt-4o-mini-transcribe",
+  "gpt-4o-transcribe",
+  "gpt-4o-transcribe-latest"
+]);
+const OPENAI_REALTIME_SUPPORTED_SESSION_MODELS = new Set([
+  "gpt-realtime",
+  "gpt-realtime-1.5",
+  "gpt-realtime-mini",
+  "gpt-4o-realtime-preview",
+  "gpt-4o-mini-realtime-preview"
+]);
 
 const AUDIO_DELTA_TYPES = new Set([
   "response.output_audio.delta"
@@ -71,17 +87,16 @@ export class OpenAiRealtimeClient extends EventEmitter {
   }
 
   async connect({
-    model = "gpt-realtime",
+    model = OPENAI_REALTIME_DEFAULT_SESSION_MODEL,
     voice = "",
     instructions = "",
-    inputAudioFormat = "pcm16",
-    outputAudioFormat = "pcm16",
-    inputTranscriptionModel = "gpt-4o-mini-transcribe",
+      inputAudioFormat = "pcm16",
+      outputAudioFormat = "pcm16",
+      inputTranscriptionModel = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
     inputTranscriptionLanguage = "",
     inputTranscriptionPrompt = "",
     tools = [],
     toolChoice = "auto",
-    turnDetection = null
   } = {}) {
     if (!this.apiKey) {
       throw new Error("Missing OPENAI_API_KEY for OpenAI realtime voice runtime.");
@@ -91,7 +106,10 @@ export class OpenAiRealtimeClient extends EventEmitter {
       return this.getState();
     }
 
-    const resolvedModel = String(model || "gpt-realtime").trim() || "gpt-realtime";
+    const resolvedModel = normalizeOpenAiRealtimeSessionModel(
+      model,
+      OPENAI_REALTIME_DEFAULT_SESSION_MODEL
+    );
     const resolvedVoice = String(voice || "").trim();
     if (!resolvedVoice) {
       throw new Error("OpenAI realtime voice is required (configure voice.openaiRealtime.voice).");
@@ -99,7 +117,10 @@ export class OpenAiRealtimeClient extends EventEmitter {
     const resolvedInputAudioFormat = normalizeOpenAiRealtimeAudioFormat(inputAudioFormat, "input");
     const resolvedOutputAudioFormat = normalizeOpenAiRealtimeAudioFormat(outputAudioFormat, "output");
     const resolvedInputTranscriptionModel =
-      String(inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
+      normalizeOpenAiRealtimeTranscriptionModel(
+        inputTranscriptionModel,
+        OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+      );
     const resolvedInputTranscriptionLanguage = String(inputTranscriptionLanguage || "")
       .trim()
       .toLowerCase()
@@ -144,12 +165,7 @@ export class OpenAiRealtimeClient extends EventEmitter {
       inputTranscriptionLanguage: resolvedInputTranscriptionLanguage,
       inputTranscriptionPrompt: resolvedInputTranscriptionPrompt,
       tools: resolvedTools,
-      toolChoice: resolvedToolChoice,
-      turnDetection: turnDetection
-        ? {
-            ...turnDetection
-          }
-        : null
+      toolChoice: resolvedToolChoice
     };
     this.latestVideoFrame = null;
     this.sendSessionUpdate();
@@ -163,7 +179,10 @@ export class OpenAiRealtimeClient extends EventEmitter {
     url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
     const basePath = url.pathname.replace(/\/+$/, "");
     url.pathname = `${basePath}/realtime`;
-    url.searchParams.set("model", String(model || "gpt-realtime"));
+    url.searchParams.set("model", normalizeOpenAiRealtimeSessionModel(
+      model,
+      OPENAI_REALTIME_DEFAULT_SESSION_MODEL
+    ));
     return url.toString();
   }
 
@@ -320,6 +339,24 @@ export class OpenAiRealtimeClient extends EventEmitter {
     }
 
     this.clearActiveResponse("cancelled");
+    return true;
+  }
+
+  truncateConversationItem({
+    itemId = "",
+    contentIndex = 0,
+    audioEndMs = 0
+  } = {}) {
+    const normalizedItemId = String(itemId || "").trim();
+    if (!normalizedItemId) return false;
+    const normalizedContentIndex = Math.max(0, Math.floor(Number(contentIndex) || 0));
+    const normalizedAudioEndMs = Math.max(0, Math.floor(Number(audioEndMs) || 0));
+    this.send({
+      type: "conversation.item.truncate",
+      item_id: normalizedItemId,
+      content_index: normalizedContentIndex,
+      audio_end_ms: normalizedAudioEndMs
+    });
     return true;
   }
 
@@ -500,16 +537,22 @@ export class OpenAiRealtimeClient extends EventEmitter {
     const normalizedTools = normalizeRealtimeTools(session.tools);
     const sessionPayload: Record<string, unknown> = compactObject({
       type: "realtime",
-      model: String(session.model || "gpt-realtime").trim() || "gpt-realtime",
-      instructions: String(session.instructions || ""),
+      model: String(session.model || OPENAI_REALTIME_DEFAULT_SESSION_MODEL).trim() || OPENAI_REALTIME_DEFAULT_SESSION_MODEL,
       output_modalities: ["audio"],
+      instructions: String(session.instructions || ""),
       audio: compactObject({
         input: compactObject({
-          format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat, "input"),
+          format: {
+            type: "audio/pcm",
+            rate: 24000
+          },
+          turn_detection: null,
           transcription: compactObject({
             model:
-              String(session.inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() ||
-              "gpt-4o-mini-transcribe",
+              normalizeOpenAiRealtimeTranscriptionModel(
+                session.inputTranscriptionModel,
+                OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+              ),
             language: String(session.inputTranscriptionLanguage || "").trim() || null,
             prompt: String(session.inputTranscriptionPrompt || "").trim() || null
           })
@@ -522,9 +565,6 @@ export class OpenAiRealtimeClient extends EventEmitter {
       tools: normalizedTools.length ? normalizedTools : undefined,
       tool_choice: normalizedTools.length ? normalizeRealtimeToolChoice(session.toolChoice) : undefined
     });
-    if (session.turnDetection === null) {
-      sessionPayload.turn_detection = null;
-    }
     this.send({
       type: "session.update",
       session: sessionPayload
@@ -571,6 +611,20 @@ function normalizeOpenAiBaseUrl(value) {
   const raw = String(value || DEFAULT_OPENAI_BASE_URL).trim();
   const normalized = raw || DEFAULT_OPENAI_BASE_URL;
   return normalized.replace(/\/+$/, "");
+}
+
+function normalizeOpenAiRealtimeTranscriptionModel(value, fallback = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL) {
+  const normalized = String(value || "").trim() || String(fallback || "").trim() || OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
+  if (OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS.has(normalized)) return normalized;
+  return OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
+}
+
+function normalizeOpenAiRealtimeSessionModel(value, fallback = OPENAI_REALTIME_DEFAULT_SESSION_MODEL) {
+  const normalized =
+    String(value || "").trim() || String(fallback || "").trim() || OPENAI_REALTIME_DEFAULT_SESSION_MODEL;
+  return OPENAI_REALTIME_SUPPORTED_SESSION_MODELS.has(normalized)
+    ? normalized
+    : OPENAI_REALTIME_DEFAULT_SESSION_MODEL;
 }
 
 function normalizeOpenAiRealtimeAudioFormat(value, direction = "input") {
@@ -627,17 +681,48 @@ function normalizeRealtimeTools(value) {
       .trim()
       .toLowerCase();
     if (type !== "function") continue;
+    const sourceParameters =
+      entry.parameters && typeof entry.parameters === "object" && !Array.isArray(entry.parameters)
+        ? { ...entry.parameters }
+        : null;
+    let normalizedParameters = sourceParameters;
+    if (!normalizedParameters) {
+      normalizedParameters = {
+        type: "object",
+        properties: {},
+        additionalProperties: true
+      };
+    }
+
+    if (!Object.hasOwn(normalizedParameters, "type")) {
+      normalizedParameters = {
+        ...normalizedParameters,
+        type: "object"
+      };
+    }
+
+    const normalizedType = String(normalizedParameters.type || "object")
+      .trim()
+      .toLowerCase();
+
+    if (normalizedType === "object" && !Object.hasOwn(normalizedParameters, "properties")) {
+      normalizedParameters = {
+        ...normalizedParameters,
+        properties: {}
+      };
+    }
+
+    if (!Object.hasOwn(normalizedParameters, "additionalProperties")) {
+      normalizedParameters = {
+        ...normalizedParameters,
+        additionalProperties: true
+      };
+    }
     normalized.push(compactObject({
       type: "function",
       name,
       description: String(entry.description || "").trim().slice(0, 800) || undefined,
-      parameters:
-        entry.parameters && typeof entry.parameters === "object" && !Array.isArray(entry.parameters)
-          ? entry.parameters
-          : {
-              type: "object",
-              additionalProperties: true
-            }
+      parameters: normalizedParameters
     }));
   }
   return normalized.slice(0, 64);
@@ -742,6 +827,21 @@ function summarizeOutboundPayload(payload) {
     });
   }
 
+  if (type === "conversation.item.truncate") {
+    return compactObject({
+      type,
+      itemId: String(payload.item_id || "").trim() || null,
+      contentIndex:
+        Number.isFinite(Number(payload.content_index)) && Number(payload.content_index) >= 0
+          ? Math.floor(Number(payload.content_index))
+          : 0,
+      audioEndMs:
+        Number.isFinite(Number(payload.audio_end_ms)) && Number(payload.audio_end_ms) >= 0
+          ? Math.floor(Number(payload.audio_end_ms))
+          : 0
+    });
+  }
+
   if (type === "session.update") {
     const session = payload.session && typeof payload.session === "object" ? payload.session : {};
     const audio = session.audio && typeof session.audio === "object" ? session.audio : {};
@@ -749,7 +849,6 @@ function summarizeOutboundPayload(payload) {
       type,
       sessionType: session.type || null,
       model: session.model || null,
-      outputModalities: Array.isArray(session.output_modalities) ? session.output_modalities.slice(0, 4) : null,
       inputAudioFormat: audio?.input?.format || null,
       outputAudioFormat: audio?.output?.format || null,
       outputVoice: audio?.output?.voice || null,
@@ -761,7 +860,6 @@ function summarizeOutboundPayload(payload) {
       instructionsChars: session.instructions ? String(session.instructions).length : 0,
       toolCount: Array.isArray(session.tools) ? session.tools.length : 0,
       toolChoice: session.tool_choice || null,
-      turnDetection: Object.hasOwn(session, "turn_detection") ? session.turn_detection : undefined
     });
   }
 

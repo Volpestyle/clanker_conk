@@ -631,6 +631,66 @@ test("maybeInterruptBotForAssertiveSpeech interrupts queued playback even when b
   assert.equal(interruptLog?.metadata?.queuedBytesDropped, queuedBytes);
 });
 
+test("interruptBotSpeechForBargeIn truncates OpenAI assistant audio to played duration", () => {
+  const { manager, logs } = createManager();
+  const truncateCalls = [];
+  const queueBytes = DISCORD_PCM_FRAME_BYTES * 10;
+  const streamBytes = DISCORD_PCM_FRAME_BYTES * 5;
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: true,
+    pendingResponse: {
+      requestId: 12,
+      utteranceText: "continuation"
+    },
+    lastOpenAiAssistantAudioItemId: "item_abc",
+    lastOpenAiAssistantAudioItemContentIndex: 0,
+    lastOpenAiAssistantAudioItemReceivedMs: 2000,
+    audioPlayer: {
+      stop() {}
+    },
+    botAudioStream: {
+      writableLength: streamBytes,
+      destroy() {}
+    },
+    realtimeClient: {
+      cancelActiveResponse() {
+        return true;
+      },
+      truncateConversationItem(payload) {
+        truncateCalls.push(payload);
+        return true;
+      }
+    },
+    audioPlaybackQueue: {
+      chunks: [Buffer.alloc(queueBytes, 1)],
+      headOffset: 0,
+      queuedBytes: queueBytes,
+      pumping: false,
+      timer: null,
+      waitingDrain: false,
+      drainHandler: null,
+      lastWarnAt: 0
+    }
+  });
+
+  const interrupted = manager.interruptBotSpeechForBargeIn({
+    session,
+    userId: "user-1",
+    source: "truncate_test"
+  });
+
+  assert.equal(interrupted, true);
+  assert.equal(truncateCalls.length, 1);
+  assert.equal(truncateCalls[0]?.itemId, "item_abc");
+  assert.equal(truncateCalls[0]?.contentIndex, 0);
+  assert.equal(truncateCalls[0]?.audioEndMs, 1700);
+  const interruptLog = logs.find((entry) => entry?.content === "voice_barge_in_interrupt");
+  assert.equal(Boolean(interruptLog), true);
+  assert.equal(interruptLog?.metadata?.truncateAttempted, true);
+  assert.equal(interruptLog?.metadata?.truncateSucceeded, true);
+});
+
 test("armAssertiveBargeIn schedules interrupt checks while queued playback remains", async () => {
   const { manager } = createManager();
   const session = createSession({
@@ -762,6 +822,49 @@ test("bindSessionHandlers does not touch activity on speaking.start before speec
   assert.equal(startCalls[0]?.userId, "speaker-1");
   assert.equal(bargeCalls.length, 1);
   assert.equal(touchCalls.length, 0);
+});
+
+test("bindSessionHandlers does not restart per-user OpenAI ASR on repeated speaking.start for same capture", () => {
+  const { manager } = createManager();
+  manager.appConfig.openaiApiKey = "test-openai-key";
+  const speaking = new EventEmitter();
+  const connectionStateEmitter = new EventEmitter();
+  const beginCalls = [];
+  manager.beginOpenAiAsrUtterance = (payload) => {
+    beginCalls.push(payload);
+  };
+  manager.startInboundCapture = ({ session, userId }) => {
+    if (!session.userCaptures.has(userId)) {
+      session.userCaptures.set(userId, {
+        speakingEndFinalizeTimer: null
+      });
+    }
+  };
+  manager.armAssertiveBargeIn = () => {};
+
+  const session = createSession({
+    mode: "openai_realtime",
+    cleanupHandlers: [],
+    settingsSnapshot: {
+      botName: "clanker conk",
+      voice: {
+        enabled: true,
+        brainProvider: "anthropic"
+      }
+    },
+    connection: {
+      receiver: { speaking },
+      on: connectionStateEmitter.on.bind(connectionStateEmitter),
+      off: connectionStateEmitter.off.bind(connectionStateEmitter)
+    }
+  });
+
+  manager.bindSessionHandlers(session, session.settingsSnapshot);
+  speaking.emit("start", "speaker-1");
+  speaking.emit("start", "speaker-1");
+
+  assert.equal(beginCalls.length, 1);
+  assert.equal(beginCalls[0]?.userId, "speaker-1");
 });
 
 test("maybeHandleInterruptedReplyRecovery retries short barge-ins with the prior utterance", () => {

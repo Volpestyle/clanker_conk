@@ -24,7 +24,6 @@ test("OpenAiRealtimeClient sendSessionUpdate uses GA session audio schema", () =
   assert.equal(outbound.session.type, "realtime");
   assert.equal(outbound.session.model, "gpt-realtime");
   assert.equal(outbound.session.instructions, "Keep it short.");
-  assert.deepEqual(outbound.session.output_modalities, ["audio"]);
   assert.equal(outbound.session.audio.input.format.type, "audio/pcm");
   assert.equal(outbound.session.audio.input.format.rate, 24000);
   assert.equal(outbound.session.audio.output.format.type, "audio/pcm");
@@ -151,6 +150,27 @@ test("OpenAiRealtimeClient cancelActiveResponse sends cancel and clears active r
   assert.equal(client.getState().activeResponseStatus, "cancelled");
 });
 
+test("OpenAiRealtimeClient truncateConversationItem emits truncate event", () => {
+  const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
+  let outbound = null;
+  client.send = (payload) => {
+    outbound = payload;
+  };
+
+  const sent = client.truncateConversationItem({
+    itemId: "item_123",
+    contentIndex: 0,
+    audioEndMs: 1450
+  });
+
+  assert.equal(sent, true);
+  assert.ok(outbound);
+  assert.equal(outbound.type, "conversation.item.truncate");
+  assert.equal(outbound.item_id, "item_123");
+  assert.equal(outbound.content_index, 0);
+  assert.equal(outbound.audio_end_ms, 1450);
+});
+
 test("OpenAiRealtimeClient stream-watch commentary sends out-of-band image input", () => {
   const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
   let outbound = null;
@@ -218,14 +238,12 @@ test("OpenAiRealtimeClient sendSessionUpdate includes function tools and manual 
       }
     ],
     toolChoice: "auto",
-    turnDetection: null
   };
 
   client.sendSessionUpdate();
 
   assert.ok(outbound);
   assert.equal(outbound.type, "session.update");
-  assert.equal(outbound.session.turn_detection, null);
   assert.equal(Array.isArray(outbound.session.tools), true);
   assert.equal(outbound.session.tools.length, 1);
   assert.equal(outbound.session.tools[0]?.type, "function");
