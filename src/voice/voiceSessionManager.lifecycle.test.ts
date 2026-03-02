@@ -958,7 +958,7 @@ test("maybeHandleInterruptedReplyRecovery treats long barge-ins as full override
   assert.equal(Boolean(skipLog), true);
 });
 
-test("enqueueDiscordPcmForPlayback writes directly to stream and activates idle player", () => {
+test("enqueueDiscordPcmForPlayback pre-buffers then activates idle player", () => {
   const { manager } = createManager();
   const playCalls = [];
   let writeCalls = 0;
@@ -985,14 +985,22 @@ test("enqueueDiscordPcmForPlayback writes directly to stream and activates idle 
     botAudioStream: stream
   });
 
-  const queued = manager.enqueueDiscordPcmForPlayback({
+  // A single frame (1 Opus packet) doesn't meet the pre-buffer threshold.
+  manager.enqueueDiscordPcmForPlayback({
     session,
     discordPcm: Buffer.alloc(DISCORD_PCM_FRAME_BYTES, 5)
   });
-
-  assert.equal(queued, true);
   assert.equal(writeCalls, 1);
-  assert.equal(playCalls.length, 1);
+  assert.equal(playCalls.length, 0, "player should not activate below pre-buffer threshold");
+
+  // Writing enough frames to meet the threshold triggers activation.
+  const queued = manager.enqueueDiscordPcmForPlayback({
+    session,
+    discordPcm: Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 5, 5)
+  });
+  assert.equal(queued, true);
+  assert.equal(writeCalls, 2);
+  assert.equal(playCalls.length, 1, "player should activate once queue reaches threshold");
   stream.destroy();
 });
 

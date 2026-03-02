@@ -22,6 +22,7 @@ import {
   VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
   VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
 } from "../promptCore.ts";
+const AUDIO_DEBUG = !!process.env.AUDIO_DEBUG;
 const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
   "whisper-1",
@@ -112,6 +113,9 @@ import { requestJoin } from "./voiceJoinFlow.ts";
 import {
   ACTIVITY_TOUCH_MIN_SPEECH_MS,
   ACTIVITY_TOUCH_THROTTLE_MS,
+  AUDIO_DELTA_DRAIN_YIELD_INTERVAL,
+  AUDIO_PLAYBACK_PRE_BUFFER_FALLBACK_MS,
+  AUDIO_PLAYBACK_PRE_BUFFER_PACKETS,
   AUDIO_PLAYBACK_STREAM_OVERFLOW_BYTES,
   BARGE_IN_ASSERTION_MS,
   BARGE_IN_ASSERTION_IDLE_MS,
@@ -156,6 +160,7 @@ import {
   RESPONSE_FLUSH_DEBOUNCE_MS,
   RESPONSE_SILENCE_RETRY_DELAY_MS,
   OPENAI_ASR_SESSION_IDLE_TTL_MS,
+  OPENAI_ASR_BRIDGE_MAX_WAIT_MS,
   OPENAI_ASR_TRANSCRIPT_STABLE_MS,
   OPENAI_ASR_TRANSCRIPT_WAIT_MAX_MS,
   OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS,
@@ -3316,6 +3321,12 @@ export class VoiceSessionManager {
       if (oldState.status !== AudioPlayerStatus.Playing && newState.status === AudioPlayerStatus.Playing) {
         session.lastActivityAt = Date.now();
       }
+      if (AUDIO_DEBUG && oldState.status !== newState.status) {
+        const queue = Math.max(0, Number(session.botAudioStream?.queuedPackets || 0));
+        console.log(
+          `[audio-player] ${oldState.status} → ${newState.status} queue=${queue}`
+        );
+      }
     };
 
     const onError = (error) => {
@@ -3866,28 +3877,31 @@ export class VoiceSessionManager {
     if (!session?.realtimeClient) return;
     this.ensureSessionToolRuntimeState(session);
     const runtimeLabel = getRealtimeRuntimeLabel(session.mode);
-    const onAudioDelta = (audioBase64) => {
-      let chunk = null;
-      try {
-        chunk = Buffer.from(String(audioBase64 || ""), "base64");
-      } catch {
-        return;
-      }
-      if (!chunk || !chunk.length) return;
-      if (session.mode === "openai_realtime" && session.lastOpenAiAssistantAudioItemId) {
-        session.lastOpenAiAssistantAudioItemReceivedMs = Math.max(
-          0,
-          Number(session.lastOpenAiAssistantAudioItemReceivedMs || 0)
-        ) + this.estimatePcm16MonoDurationMs(
-          chunk.length,
-          Number(session.realtimeOutputSampleRateHz) || 24000
-        );
-      }
+    // -- Audio delta async drain ------------------------------------------------
+    // Bun's WebSocket delivers batches of messages synchronously, causing the
+    // heavy work (resample + Opus encode) to block the event loop for seconds.
+    // This starves Discord.js's 20 ms audio cycle, so all packets are later
+    // dispatched in a rapid burst that Discord's jitter buffer can't smooth.
+    //
+    // Fix: Bun delivers all WebSocket audio_delta messages in a single
+    // synchronous batch.  The heavy work (resample + Opus encode) must NOT
+    // block the event loop for the entire batch — the Discord.js audio cycle
+    // (a 20 ms setTimeout timer) needs to fire between processing batches so
+    // packets are dispatched at a steady pace instead of in one burst.
+    //
+    // Key insight: `await new Promise(r => setTimeout(r, 0))` inside an async
+    // loop does NOT yield in Bun (or Node) because the async continuation is a
+    // microtask, and microtasks drain completely before the event loop returns
+    // to the timer phase.  This is spec-level microtask starvation.
+    //
+    // Solution: pure callback-based chunking with setTimeout(fn, 1).  Each
+    // batch continuation is a real macrotask, guaranteed to interleave with
+    // the audio cycle's setTimeout timer.
+    const audioDeltaQueue: { chunk: Buffer; sampleRate: number }[] = [];
+    let audioDeltaDraining = false;
 
-      const discordPcm = convertXaiOutputToDiscordPcm(
-        chunk,
-        Number(session.realtimeOutputSampleRateHz) || 24000
-      );
+    const processOneAudioDelta = (chunk: Buffer, sampleRate: number) => {
+      const discordPcm = convertXaiOutputToDiscordPcm(chunk, sampleRate);
       if (!discordPcm.length) return;
 
       if (this.isBargeInOutputSuppressed(session)) {
@@ -3921,6 +3935,59 @@ export class VoiceSessionManager {
           pending.audioReceivedAt = session.lastAudioDeltaAt;
         }
         this.clearResponseSilenceTimers(session);
+      }
+    };
+
+    // Callback-based drain: process AUDIO_DELTA_DRAIN_YIELD_INTERVAL chunks
+    // per macrotask, then schedule the next batch via setTimeout(fn, 1).
+    // This avoids async/await microtask starvation and guarantees the 20 ms
+    // audio cycle timer can fire between batches.
+    const drainAudioDeltaBatch = () => {
+      if (session.ending) {
+        audioDeltaDraining = false;
+        return;
+      }
+      let processed = 0;
+      while (audioDeltaQueue.length > 0 && !session.ending) {
+        const entry = audioDeltaQueue.shift()!;
+        processOneAudioDelta(entry.chunk, entry.sampleRate);
+        processed++;
+        if (processed >= AUDIO_DELTA_DRAIN_YIELD_INTERVAL) {
+          // Yield as a real macrotask — audio cycle timer fires before us.
+          setTimeout(drainAudioDeltaBatch, 1);
+          return;
+        }
+      }
+      // Queue fully drained.
+      audioDeltaDraining = false;
+    };
+
+    const onAudioDelta = (audioBase64) => {
+      let chunk = null;
+      try {
+        chunk = Buffer.from(String(audioBase64 || ""), "base64");
+      } catch {
+        return;
+      }
+      if (!chunk || !chunk.length) return;
+
+      // Duration tracking stays synchronous — used for truncation estimates
+      // when barge-in interrupts the response mid-stream.
+      const sampleRate = Number(session.realtimeOutputSampleRateHz) || 24000;
+      if (session.mode === "openai_realtime" && session.lastOpenAiAssistantAudioItemId) {
+        session.lastOpenAiAssistantAudioItemReceivedMs = Math.max(
+          0,
+          Number(session.lastOpenAiAssistantAudioItemReceivedMs || 0)
+        ) + this.estimatePcm16MonoDurationMs(chunk.length, sampleRate);
+      }
+
+      // Enqueue for callback-based processing — the heavy work (resample +
+      // Opus encode) runs in drainAudioDeltaBatch which yields every N chunks
+      // via setTimeout so the Discord.js audio cycle can dispatch packets.
+      audioDeltaQueue.push({ chunk, sampleRate });
+      if (!audioDeltaDraining) {
+        audioDeltaDraining = true;
+        setTimeout(drainAudioDeltaBatch, 1);
       }
     };
 
@@ -4227,11 +4294,16 @@ export class VoiceSessionManager {
       session.realtimeClient.off("socket_error", onSocketError);
       session.realtimeClient.off("response_done", onResponseDone);
       session.realtimeClient.off("event", onEvent);
+      audioDeltaQueue.length = 0;
     });
   }
 
   resetBotAudioPlayback(session) {
     if (!session) return;
+    if (session._preBufferFallbackTimer) {
+      clearTimeout(session._preBufferFallbackTimer);
+      session._preBufferFallbackTimer = null;
+    }
     try { session.botAudioStream?.destroy?.(); } catch { /* ignore */ }
     session.botAudioStream = null;
     this.maybeClearActiveReplyInterruptionPolicy(session);
@@ -4346,12 +4418,16 @@ export class VoiceSessionManager {
       this.resetBotAudioPlayback(session);
     }
 
+    // Step 1: Ensure the audio stream exists (without activating the player).
+    // We write PCM data first so the Opus queue is primed before the player
+    // starts its 20 ms read loop — otherwise the first reads return null and
+    // the listener hears silence frames at the start of every response.
     if (
       !ensureBotAudioPlaybackReady({
         session,
         store: this.store,
         botUserId: this.client.user?.id || null,
-        activatePlayback: true,
+        activatePlayback: false,
         onStreamCreated: (stream) => {
           this.bindBotAudioStreamLifecycle(session, {
             stream,
@@ -4363,12 +4439,56 @@ export class VoiceSessionManager {
       return false;
     }
 
+    // Step 2: Write PCM (synchronously encodes to Opus and fills the queue).
     try {
       session.botAudioStream.write(pcm);
     } catch {
       session.botAudioStream = null;
       return false;
     }
+
+    // Step 3: Activate the player once the queue reaches the pre-buffer
+    // threshold. This gives the player a ~100 ms head-start so brief gaps
+    // in OpenAI audio delivery don't produce audible silence.
+    const playerStatus = session.audioPlayer?.state?.status;
+    if (playerStatus === AudioPlayerStatus.Idle) {
+      const queueBefore = Math.max(0, Number(session.botAudioStream?.queuedPackets || 0));
+      ensureBotAudioPlaybackReady({
+        session,
+        activatePlayback: true,
+        minQueueDepth: AUDIO_PLAYBACK_PRE_BUFFER_PACKETS
+      });
+      const playerStatusAfter = session.audioPlayer?.state?.status;
+      if (AUDIO_DEBUG && playerStatusAfter !== AudioPlayerStatus.Idle) {
+        console.log(
+          `[audio-prebuffer] activated player queue=${queueBefore} threshold=${AUDIO_PLAYBACK_PRE_BUFFER_PACKETS} status=${playerStatusAfter}`
+        );
+      }
+
+      // Fallback: if the threshold isn't met (very short response), schedule
+      // a delayed activation so audio still plays.
+      if (
+        session.audioPlayer?.state?.status === AudioPlayerStatus.Idle &&
+        !session._preBufferFallbackTimer
+      ) {
+        session._preBufferFallbackTimer = setTimeout(() => {
+          session._preBufferFallbackTimer = null;
+          const fbQueue = Math.max(0, Number(session.botAudioStream?.queuedPackets || 0));
+          if (session.audioPlayer?.state?.status === AudioPlayerStatus.Idle) {
+            if (AUDIO_DEBUG) console.log(`[audio-prebuffer] fallback activation queue=${fbQueue}`);
+            ensureBotAudioPlaybackReady({ session, activatePlayback: true });
+          }
+        }, AUDIO_PLAYBACK_PRE_BUFFER_FALLBACK_MS);
+      }
+    }
+    if (
+      session.audioPlayer?.state?.status !== AudioPlayerStatus.Idle &&
+      session._preBufferFallbackTimer
+    ) {
+      clearTimeout(session._preBufferFallbackTimer);
+      session._preBufferFallbackTimer = null;
+    }
+
     return true;
   }
 
@@ -4449,7 +4569,9 @@ export class VoiceSessionManager {
 
       chunkCount += 1;
       if (chunkCount % STT_TTS_CONVERSION_YIELD_EVERY_CHUNKS === 0) {
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        // Use 1ms (not 0) to force a real macrotask boundary — setTimeout(0)
+        // resolves as a microtask continuation and starves other timers in Bun.
+        await new Promise((resolve) => setTimeout(resolve, 1));
       }
     }
 
@@ -8023,13 +8145,11 @@ export class VoiceSessionManager {
           captureReason: reason
         });
         if (!handledInterruptedReply && useOpenAiPerUserAsr) {
-          void (async () => {
-            const asrResult = await this.commitOpenAiAsrUtterance({
-              session,
-              settings,
-              userId,
-              captureReason: reason
-            });
+          const asrBridgeMaxWaitMs = Math.max(120, Number(OPENAI_ASR_BRIDGE_MAX_WAIT_MS) || 700);
+          let bridgeForwarded = false;
+          const forwardAsrBridgeTurn = (asrResult, source) => {
+            if (bridgeForwarded || session.ending) return false;
+            bridgeForwarded = true;
             this.queueRealtimeTurnFromAsrBridge({
               session,
               userId,
@@ -8037,51 +8157,91 @@ export class VoiceSessionManager {
               captureReason: reason,
               finalizedAt,
               asrResult,
-              source: "per_user"
+              source
             });
-          })().catch((error) => {
+            return true;
+          };
+
+          const fallbackTimer = setTimeout(() => {
+            const forwarded = forwardAsrBridgeTurn(null, "per_user_timeout_fallback");
+            if (!forwarded) return;
             this.store.logAction({
-              kind: "voice_error",
+              kind: "voice_runtime",
               guildId: session.guildId,
               channelId: session.textChannelId,
               userId,
-              content: `openai_realtime_asr_turn_failed: ${String(error?.message || error)}`,
+              content: "openai_realtime_asr_bridge_timeout_fallback",
               metadata: {
                 sessionId: session.id,
-                captureReason: String(reason || "stream_end")
+                captureReason: String(reason || "stream_end"),
+                source: "per_user",
+                waitMs: asrBridgeMaxWaitMs
               }
             });
-            this.queueRealtimeTurnFromAsrBridge({
-              session,
-              userId,
-              pcmBuffer,
-              captureReason: reason,
-              finalizedAt,
-              asrResult: null,
-              source: "per_user_error"
-            });
-          });
+          }, asrBridgeMaxWaitMs);
+
+          void (async () => {
+            try {
+              const asrResult = await this.commitOpenAiAsrUtterance({
+                session,
+                settings,
+                userId,
+                captureReason: reason
+              });
+              clearTimeout(fallbackTimer);
+              const forwarded = forwardAsrBridgeTurn(asrResult, "per_user");
+              if (forwarded) return;
+              const lateTranscript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
+              if (!lateTranscript) return;
+              this.store.logAction({
+                kind: "voice_runtime",
+                guildId: session.guildId,
+                channelId: session.textChannelId,
+                userId,
+                content: "openai_realtime_asr_bridge_late_result_ignored",
+                metadata: {
+                  sessionId: session.id,
+                  captureReason: String(reason || "stream_end"),
+                  source: "per_user",
+                  transcriptChars: lateTranscript.length
+                }
+              });
+            } catch (error) {
+              clearTimeout(fallbackTimer);
+              this.store.logAction({
+                kind: "voice_error",
+                guildId: session.guildId,
+                channelId: session.textChannelId,
+                userId,
+                content: `openai_realtime_asr_turn_failed: ${String(error?.message || error)}`,
+                metadata: {
+                  sessionId: session.id,
+                  captureReason: String(reason || "stream_end")
+                }
+              });
+              forwardAsrBridgeTurn(null, "per_user_error");
+            }
+          })();
           return;
         }
         if (!handledInterruptedReply && useOpenAiSharedAsr) {
-          void (async () => {
-            const hasSharedAsrAudio = Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) > 0;
-            if (!hasSharedAsrAudio) {
-              this.queueRealtimeTurn({
-                session,
-                userId,
-                pcmBuffer,
-                captureReason: reason,
-                finalizedAt
-              });
-              return;
-            }
-            const asrResult = await this.commitOpenAiSharedAsrUtterance({
+          const hasSharedAsrAudio = Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) > 0;
+          if (!hasSharedAsrAudio) {
+            this.queueRealtimeTurn({
               session,
-              settings,
               userId,
-              captureReason: reason
+              pcmBuffer,
+              captureReason: reason,
+              finalizedAt
             });
+            return;
+          }
+
+          const asrBridgeMaxWaitMs = Math.max(120, Number(OPENAI_ASR_BRIDGE_MAX_WAIT_MS) || 700);
+          let bridgeForwarded = false;
+          const forwardAsrBridgeTurn = (asrResult, source) => {
+            if (bridgeForwarded || session.ending) return false;
+            bridgeForwarded = true;
             this.queueRealtimeTurnFromAsrBridge({
               session,
               userId,
@@ -8089,30 +8249,71 @@ export class VoiceSessionManager {
               captureReason: reason,
               finalizedAt,
               asrResult,
-              source: "shared"
+              source
             });
-          })().catch((error) => {
+            return true;
+          };
+
+          const fallbackTimer = setTimeout(() => {
+            const forwarded = forwardAsrBridgeTurn(null, "shared_timeout_fallback");
+            if (!forwarded) return;
             this.store.logAction({
-              kind: "voice_error",
+              kind: "voice_runtime",
               guildId: session.guildId,
               channelId: session.textChannelId,
               userId,
-              content: `openai_realtime_asr_turn_failed: ${String(error?.message || error)}`,
+              content: "openai_realtime_asr_bridge_timeout_fallback",
               metadata: {
                 sessionId: session.id,
-                captureReason: String(reason || "stream_end")
+                captureReason: String(reason || "stream_end"),
+                source: "shared",
+                waitMs: asrBridgeMaxWaitMs
               }
             });
-            this.queueRealtimeTurnFromAsrBridge({
-              session,
-              userId,
-              pcmBuffer,
-              captureReason: reason,
-              finalizedAt,
-              asrResult: null,
-              source: "shared_error"
-            });
-          });
+          }, asrBridgeMaxWaitMs);
+
+          void (async () => {
+            try {
+              const asrResult = await this.commitOpenAiSharedAsrUtterance({
+                session,
+                settings,
+                userId,
+                captureReason: reason
+              });
+              clearTimeout(fallbackTimer);
+              const forwarded = forwardAsrBridgeTurn(asrResult, "shared");
+              if (forwarded) return;
+              const lateTranscript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
+              if (!lateTranscript) return;
+              this.store.logAction({
+                kind: "voice_runtime",
+                guildId: session.guildId,
+                channelId: session.textChannelId,
+                userId,
+                content: "openai_realtime_asr_bridge_late_result_ignored",
+                metadata: {
+                  sessionId: session.id,
+                  captureReason: String(reason || "stream_end"),
+                  source: "shared",
+                  transcriptChars: lateTranscript.length
+                }
+              });
+            } catch (error) {
+              clearTimeout(fallbackTimer);
+              this.store.logAction({
+                kind: "voice_error",
+                guildId: session.guildId,
+                channelId: session.textChannelId,
+                userId,
+                content: `openai_realtime_asr_turn_failed: ${String(error?.message || error)}`,
+                metadata: {
+                  sessionId: session.id,
+                  captureReason: String(reason || "stream_end")
+                }
+              });
+              forwardAsrBridgeTurn(null, "shared_error");
+            }
+          })();
           return;
         }
         if (!handledInterruptedReply) {

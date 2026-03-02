@@ -572,7 +572,15 @@ export async function requestJoin(manager, { message, settings, intentConfidence
 
       await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
 
-      audioPlayer = createAudioPlayer();
+      audioPlayer = createAudioPlayer({
+        behaviors: {
+          // Bun + OpenAI bursty audio delivery can easily cause 100ms+ gaps
+          // between Opus packets.  The default maxMissedFrames (5 = 100ms)
+          // triggers stop() which destroys the playStream and all buffered
+          // audio.  250 frames = 5 seconds of tolerance.
+          maxMissedFrames: 250
+        }
+      });
       // Don't create stream or play resource yet — ensureBotAudioPlaybackReady
       // will lazily create the PassThrough + AudioResource when the first audio
       // chunk arrives, avoiding the negative-timeout timing skew from an idle player.

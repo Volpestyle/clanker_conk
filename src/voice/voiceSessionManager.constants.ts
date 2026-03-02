@@ -41,9 +41,14 @@ export const RESPONSE_SILENCE_RETRY_DELAY_MS = 5200;
 export const MAX_RESPONSE_SILENCE_RETRIES = 2;
 export const RESPONSE_DONE_SILENCE_GRACE_MS = 1400;
 export const PENDING_SUPERSEDE_MIN_AGE_MS = 1800;
-export const OPENAI_ASR_SESSION_IDLE_TTL_MS = 15_000;
-export const OPENAI_ASR_TRANSCRIPT_STABLE_MS = 250;
-export const OPENAI_ASR_TRANSCRIPT_WAIT_MAX_MS = 1_600;
+// Keep ASR sessions warm longer to avoid reconnect penalties between turns.
+export const OPENAI_ASR_SESSION_IDLE_TTL_MS = 60_000;
+// Return ASR text sooner once transcript updates settle.
+export const OPENAI_ASR_TRANSCRIPT_STABLE_MS = 120;
+export const OPENAI_ASR_TRANSCRIPT_WAIT_MAX_MS = 700;
+// Deadline for waiting on per-user/shared ASR bridge before falling back to
+// local turn processing so first-reply latency is not blocked by slow ASR.
+export const OPENAI_ASR_BRIDGE_MAX_WAIT_MS = 700;
 export const OPENAI_TOOL_CALL_EVENT_MAX = 180;
 export const OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS = 24_000;
 export const OPENAI_TOOL_RESPONSE_DEBOUNCE_MS = 140;
@@ -112,5 +117,14 @@ export const DISCORD_PCM_FRAME_BYTES = 3840;
 export const AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES = DISCORD_PCM_FRAME_BYTES * 15;
 // Hard cap on stream.writableLength before we destroy + recreate (~600ms).
 export const AUDIO_PLAYBACK_STREAM_OVERFLOW_BYTES = DISCORD_PCM_FRAME_BYTES * 30;
+// Pre-buffer Opus packets before starting the AudioPlayer so its first reads
+// always return data. Each packet = 20ms; 5 packets = 100ms head-start.
+export const AUDIO_PLAYBACK_PRE_BUFFER_PACKETS = 5;
+// Fallback: if the pre-buffer threshold isn't met within this window
+// (e.g. a very short response), start playback anyway.
+export const AUDIO_PLAYBACK_PRE_BUFFER_FALLBACK_MS = 300;
 export const STT_TTS_CONVERSION_CHUNK_MS = 120;
 export const STT_TTS_CONVERSION_YIELD_EVERY_CHUNKS = 8;
+// Yield the event loop every N audio delta chunks during the async drain
+// so the Discord.js 20 ms audio cycle can fire between Opus encodes.
+export const AUDIO_DELTA_DRAIN_YIELD_INTERVAL = 3;

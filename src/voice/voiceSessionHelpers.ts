@@ -1,5 +1,4 @@
 import { EventEmitter } from "node:events";
-import { Readable } from "node:stream";
 import {
   AudioPlayerStatus,
   createAudioResource,
@@ -41,6 +40,7 @@ const EN_VOCATIVE_GREETING_TOKENS = new Set([
 const EN_VOCATIVE_IGNORE_TOKENS = new Set(["guys", "everyone", "all", "chat", "yall", "yaall"]);
 const VOICE_ASR_LANGUAGE_MODES = new Set(["auto", "fixed"]);
 const OPUS_FRAME_SAMPLES = 960;
+const AUDIO_DEBUG = !!process.env.AUDIO_DEBUG;
 
 /**
  * PCM-to-Opus bridge that bypasses Bun's broken stream.pipeline().
@@ -55,8 +55,125 @@ const OPUS_SET_BITRATE = 4002;
 const OPUS_SET_FEC = 4012;
 const OPUS_BITRATE = 64000;
 
+/**
+ * Minimal Readable-like stream backed by a plain array queue.
+ * Bun's Readable in object-mode has bugs (read() returning null when data
+ * exists, wrong `readable` property, etc.) so we implement only the subset
+ * that Discord.js AudioPlayer actually calls:
+ *   .read()  .readable  .readableEnded  .readableObjectMode  .destroyed
+ *   .on/.once/.off/.removeListener  .destroy()
+ */
+class OpusPacketReadable extends EventEmitter {
+  _queue: Buffer[] = [];
+  readable = true;
+  readableEnded = false;
+  readableObjectMode = true;
+  destroyed = false;
+
+  // Diagnostic counters
+  _totalPushed = 0;
+  _totalRead = 0;
+  _underruns = 0;
+  _peakQueue = 0;
+  _createdAt = Date.now();
+
+  // Read-timing diagnostics (behind AUDIO_DEBUG)
+  _lastReadAt = 0;
+  _readIntervalMin = Infinity;
+  _readIntervalMax = 0;
+  _readIntervalSum = 0;
+  _readIntervalCount = 0;
+  _burstReads = 0;       // reads < 5ms apart (audio cycle catching up)
+  _stallReads = 0;       // reads > 50ms apart (event loop blocked)
+
+  // Push-timing diagnostics (behind AUDIO_DEBUG)
+  _lastPushAt = 0;
+  _pushBursts = 0;       // pushes < 2ms apart (WebSocket batching)
+  _pushGapMax = 0;       // largest gap between pushes
+
+  get queuedPackets() {
+    return this._queue.length;
+  }
+
+  read() {
+    if (this.destroyed) return null;
+    const packet = this._queue.shift() ?? null;
+    if (packet !== null) {
+      this._totalRead++;
+      if (AUDIO_DEBUG) {
+        const now = Date.now();
+        if (this._lastReadAt > 0) {
+          const gap = now - this._lastReadAt;
+          if (gap < this._readIntervalMin) this._readIntervalMin = gap;
+          if (gap > this._readIntervalMax) this._readIntervalMax = gap;
+          this._readIntervalSum += gap;
+          this._readIntervalCount++;
+          if (gap < 5) this._burstReads++;
+          if (gap > 50) this._stallReads++;
+        }
+        this._lastReadAt = now;
+      }
+    } else {
+      this._underruns++;
+    }
+    return packet;
+  }
+
+  push(packet: Buffer | null) {
+    if (this.destroyed) return;
+    if (packet === null) {
+      this.readableEnded = true;
+      this.readable = false;
+      this.emit("end");
+      return;
+    }
+    this._totalPushed++;
+    if (AUDIO_DEBUG) {
+      const now = Date.now();
+      if (this._lastPushAt > 0) {
+        const gap = now - this._lastPushAt;
+        if (gap < 2) this._pushBursts++;
+        if (gap > this._pushGapMax) this._pushGapMax = gap;
+      }
+      this._lastPushAt = now;
+    }
+    const wasEmpty = this._queue.length === 0;
+    this._queue.push(packet);
+    if (this._queue.length > this._peakQueue) {
+      this._peakQueue = this._queue.length;
+    }
+    if (wasEmpty) {
+      this.emit("readable");
+    }
+  }
+
+  destroy() {
+    if (this.destroyed) return;
+    if (AUDIO_DEBUG) {
+      const lifetimeMs = Date.now() - this._createdAt;
+      const remaining = this._queue.length;
+      const avgInterval = this._readIntervalCount > 0
+        ? (this._readIntervalSum / this._readIntervalCount).toFixed(1)
+        : "n/a";
+      console.log(
+        `[opus-queue] destroyed pushed=${this._totalPushed} read=${this._totalRead}` +
+        ` underruns=${this._underruns} peak=${this._peakQueue}` +
+        ` remaining=${remaining} lifetimeMs=${lifetimeMs}` +
+        ` readTiming={min=${this._readIntervalMin === Infinity ? "n/a" : this._readIntervalMin}` +
+        ` max=${this._readIntervalMax} avg=${avgInterval}` +
+        ` bursts=${this._burstReads} stalls=${this._stallReads}}` +
+        ` pushTiming={bursts=${this._pushBursts} gapMax=${this._pushGapMax}}`
+      );
+    }
+    this.destroyed = true;
+    this.readable = false;
+    this._queue.length = 0;
+    this.emit("close");
+  }
+}
+
 class OpusPcmBridge extends EventEmitter {
-  readable;
+  readable: OpusPacketReadable;
   destroyed = false;
   writableEnded = false;
   writableFinished = false;
@@ -71,11 +188,11 @@ class OpusPcmBridge extends EventEmitter {
     this._encoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO);
     try { this._encoder.encoderCTL(OPUS_SET_BITRATE, OPUS_BITRATE); } catch { /* ignore */ }
     try { this._encoder.encoderCTL(OPUS_SET_FEC, 1); } catch { /* ignore */ }
-    this.readable = new Readable({ objectMode: true, read() {} });
+    this.readable = new OpusPacketReadable();
 
-    // When AudioPlayer destroys the readable side (e.g. maxMissedFrames or
-    // state transition to Idle), propagate to the bridge so health checks
-    // see destroyed === true and recreate the stream.
+    // When AudioPlayer destroys the readable side (e.g. state transition
+    // to Idle), propagate to the bridge so health checks see
+    // destroyed === true and recreate the stream.
     this.readable.once("close", () => {
       if (!this.destroyed) {
         this.destroyed = true;
@@ -94,6 +211,11 @@ class OpusPcmBridge extends EventEmitter {
   get writableLength() {
     if (this.destroyed) return 0;
     return this._pcmBuffer.length;
+  }
+
+  get queuedPackets() {
+    if (this.destroyed) return 0;
+    return this.readable.queuedPackets;
   }
 
   write(chunk) {
@@ -280,7 +402,8 @@ export function ensureBotAudioPlaybackReady({
   store = null,
   botUserId = null,
   onStreamCreated = null,
-  activatePlayback = true
+  activatePlayback = true,
+  minQueueDepth = 0
 }) {
   if (!session || !session.audioPlayer || !session.connection) return false;
 
@@ -299,12 +422,28 @@ export function ensureBotAudioPlaybackReady({
 
   if (activatePlayback) {
     const status = session.audioPlayer.state?.status;
-    if (status === AudioPlayerStatus.Idle || status === AudioPlayerStatus.AutoPaused) {
-      const resource = createAudioResource(session.botAudioStream.readable, {
-        inputType: StreamType.Opus
-      });
-      session.audioPlayer.play(resource);
-      session.connection.subscribe(session.audioPlayer);
+    // Only restart from Idle.  AutoPaused auto-resumes when the Readable has
+    // data — calling play() while AutoPaused would create a new AudioResource
+    // and Discord.js destroys the *old* resource's playStream (our Readable),
+    // wiping all buffered Opus packets and causing mid-response audio gaps.
+    if (status === AudioPlayerStatus.Idle) {
+      const queueDepth = Math.max(0, Number(session.botAudioStream?.queuedPackets || 0));
+      if (queueDepth >= minQueueDepth) {
+        const resource = createAudioResource(session.botAudioStream.readable, {
+          inputType: StreamType.Opus
+        });
+        session.audioPlayer.play(resource);
+        session.connection.subscribe(session.audioPlayer);
+        // Discord.js createAudioResource attaches once("readable") to set
+        // resource.started, and play() attaches once("readable") for the
+        // Buffering→Playing transition. Because we pre-buffered Opus packets
+        // before creating the resource, the initial "readable" event was
+        // emitted and missed. Re-emit synchronously so both listeners fire
+        // and the player transitions to Playing immediately.
+        if (queueDepth > 0 && !session.botAudioStream.readable.destroyed) {
+          session.botAudioStream.readable.emit("readable");
+        }
+      }
     }
   }
   return true;
