@@ -76,8 +76,9 @@ function startSilenceKeepAlive() {
       try { botAudioStream.end(); } catch { /* ignore */ }
       return;
     }
-    // Only write silence when there's a gap (>40ms since last real write)
-    if (elapsed > 40) {
+    // Write silence when there's a gap — keeps the AudioPlayer in "playing"
+    // state so it doesn't transition to buffering mid-stream.
+    if (elapsed > 18) {
       try { botAudioStream.write(SILENCE_FRAME); } catch { /* ignore */ }
     }
   }, 20);

@@ -8938,10 +8938,15 @@ export class VoiceSessionManager {
     const isNonSpeechCapture =
       String(captureReason || "") === "idle_timeout" ||
       String(captureReason || "") === "near_silence_early_abort";
+    const idleSignalIsNoise =
+      !hasTranscriptOverride &&
+      silenceGate.rms <= VOICE_FALLBACK_NOISE_GATE_RMS_MAX &&
+      silenceGate.peak <= VOICE_FALLBACK_NOISE_GATE_PEAK_MAX &&
+      silenceGate.activeSampleRatio <= VOICE_FALLBACK_NOISE_GATE_ACTIVE_RATIO_MAX;
     if (
       turnTranscript &&
       isNonSpeechCapture &&
-      isLowSignalVoiceFragment(turnTranscript)
+      idleSignalIsNoise
     ) {
       this.store.logAction({
         kind: "voice_runtime",
