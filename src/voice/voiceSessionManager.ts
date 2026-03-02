@@ -67,6 +67,7 @@ import {
   sendOperationalMessage,
   sendToChannel
 } from "./voiceOperationalMessaging.ts";
+import { OpenAiRealtimeTranscriptionClient } from "./openaiRealtimeTranscriptionClient.ts";
 import {
   REALTIME_MEMORY_FACT_LIMIT,
   SOUNDBOARD_MAX_CANDIDATES,
@@ -150,6 +151,12 @@ import {
   RESPONSE_DONE_SILENCE_GRACE_MS,
   RESPONSE_FLUSH_DEBOUNCE_MS,
   RESPONSE_SILENCE_RETRY_DELAY_MS,
+  OPENAI_ASR_SESSION_IDLE_TTL_MS,
+  OPENAI_ASR_TRANSCRIPT_STABLE_MS,
+  OPENAI_ASR_TRANSCRIPT_WAIT_MAX_MS,
+  OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS,
+  OPENAI_TOOL_CALL_EVENT_MAX,
+  OPENAI_TOOL_RESPONSE_DEBOUNCE_MS,
   SOUNDBOARD_CATALOG_REFRESH_MS,
   SOUNDBOARD_DECISION_TRANSCRIPT_MAX_CHARS,
   SPEAKING_END_ADAPTIVE_BUSY_BACKLOG,
@@ -203,6 +210,7 @@ import {
   VOICE_SILENCE_GATE_MIN_CLIP_MS,
   VOICE_SILENCE_GATE_PEAK_MAX,
   VOICE_SILENCE_GATE_RMS_MAX,
+  VOICE_MEMORY_WRITE_MAX_PER_MINUTE,
   VOICE_LOOKUP_BUSY_MAX_CHARS,
   VOICE_TURN_MIN_ASR_CLIP_MS,
   VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS
@@ -290,6 +298,16 @@ const EN_MUSIC_PLAY_QUERY_RE =
   /\b(?:play|start|queue|put\s+on|spin)\b\s+(.+)$/i;
 const MUSIC_DISAMBIGUATION_MAX_RESULTS = 5;
 const MUSIC_DISAMBIGUATION_TTL_MS = 10 * 60 * 1000;
+const MEMORY_NAMESPACE_USER_RE = /^user:([a-z0-9_-]{2,64})$/i;
+const MEMORY_NAMESPACE_GUILD_RE = /^guild:([a-z0-9_-]{2,64})$/i;
+const MEMORY_SENSITIVE_PATTERN_RE =
+  /\b(?:sk-[a-z0-9]{20,}|api[_-]?key|token|password|passphrase|authorization|secret)\b/i;
+const OPENAI_FUNCTION_CALL_ITEM_TYPES = new Set([
+  "response.output_item.added",
+  "response.output_item.done",
+  "response.function_call_arguments.delta",
+  "response.function_call_arguments.done"
+]);
 
 function normalizeInlineText(value: unknown = "", maxChars = STT_TRANSCRIPT_MAX_CHARS) {
   return String(value || "")
@@ -395,12 +413,94 @@ type VoiceTimelineTurn = {
   addressing?: VoiceAddressingAnnotation;
 };
 
+type VoiceRealtimeToolDescriptor = {
+  toolType: "function" | "mcp";
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  serverName?: string | null;
+};
+
+type VoiceToolCallEvent = {
+  callId: string;
+  toolName: string;
+  toolType: "function" | "mcp";
+  arguments: Record<string, unknown>;
+  startedAt: string;
+  completedAt: string | null;
+  runtimeMs: number | null;
+  success: boolean;
+  outputSummary: string | null;
+  error: string | null;
+  sourceEventType?: string | null;
+};
+
+type VoiceMcpServerStatus = {
+  serverName: string;
+  connected: boolean;
+  tools: Array<{ name: string; description: string; inputSchema?: Record<string, unknown> }>;
+  lastError: string | null;
+  lastConnectedAt: string | null;
+  lastCallAt: string | null;
+  baseUrl: string;
+  toolPath: string;
+  timeoutMs: number;
+  headers: Record<string, string>;
+};
+
+type VoiceRealtimeToolSettings = {
+  webSearch?: {
+    enabled?: boolean;
+    maxResults?: number;
+    recencyDaysDefault?: number;
+  };
+  voice?: {
+    realtimeReplyStrategy?: string;
+  };
+  [key: string]: unknown;
+};
+
+type VoiceToolRuntimeSessionLike = {
+  ending?: boolean;
+  mode?: string;
+  realtimeClient?: {
+    updateTools?: (payload: {
+      tools: Array<{
+        type: "function";
+        name: string;
+        description: string;
+        parameters: Record<string, unknown>;
+      }>;
+      toolChoice?: "auto" | "none" | "required" | { type: "function"; name: string };
+    }) => void;
+  } | null;
+  mcpStatus?: VoiceMcpServerStatus[];
+  settingsSnapshot?: VoiceRealtimeToolSettings | null;
+  openAiToolDefinitions?: VoiceRealtimeToolDescriptor[];
+  lastOpenAiRealtimeToolHash?: string | null;
+  lastOpenAiRealtimeToolRefreshAt?: number | null;
+  guildId?: string;
+  textChannelId?: string;
+  id?: string;
+  openAiToolResponseDebounceTimer?: ReturnType<typeof setTimeout> | null;
+  openAiToolCallExecutions?: Map<string, Promise<void>>;
+  openAiPendingToolCalls?: Map<string, unknown>;
+  toolMusicTrackCatalog?: Map<string, unknown>;
+  memoryWriteWindow?: number[];
+  toolCallEvents?: VoiceToolCallEvent[];
+  musicQueueState?: Record<string, unknown>;
+  lastOpenAiToolCallerUserId?: string | null;
+  awaitingToolOutputs?: boolean;
+  [key: string]: unknown;
+};
+
 export class VoiceSessionManager {
   client;
   store;
   appConfig;
   llm;
   memory;
+  search;
   composeOperationalMessage;
   generateVoiceTurn;
   sessions;
@@ -419,6 +519,7 @@ export class VoiceSessionManager {
     appConfig,
     llm = null,
     memory = null,
+    search = null,
     composeOperationalMessage = null,
     generateVoiceTurn = null
   }) {
@@ -427,6 +528,7 @@ export class VoiceSessionManager {
     this.appConfig = appConfig;
     this.llm = llm || null;
     this.memory = memory || null;
+    this.search = search || null;
     this.composeOperationalMessage =
       typeof composeOperationalMessage === "function" ? composeOperationalMessage : null;
     this.generateVoiceTurn = typeof generateVoiceTurn === "function" ? generateVoiceTurn : null;
@@ -705,6 +807,91 @@ export class VoiceSessionManager {
               }
             : null
         },
+        asrSessions: (() => {
+          const asrMap = session.openAiAsrSessions instanceof Map ? session.openAiAsrSessions : null;
+          if (!asrMap || asrMap.size === 0) return null;
+          return [...asrMap.entries()].map(([uid, asr]) => {
+            const ws = asr?.client?.ws;
+            const connected = Boolean(ws && ws.readyState === 1);
+            const idleTtlMs = Math.max(
+              1_000,
+              Number(session.openAiAsrSessionIdleTtlMs || OPENAI_ASR_SESSION_IDLE_TTL_MS)
+            );
+            const lastActivityMs = Math.max(
+              Number(asr.lastAudioAt || 0),
+              Number(asr.lastTranscriptAt || 0)
+            );
+            const idleMs = lastActivityMs > 0 ? Math.max(0, now - lastActivityMs) : null;
+            return {
+              userId: String(uid || ""),
+              displayName: participantDisplayByUserId.get(String(uid || "")) || null,
+              connected,
+              closing: Boolean(asr.closing),
+              connectedAt: asr.connectedAt > 0 ? new Date(asr.connectedAt).toISOString() : null,
+              lastAudioAt: asr.lastAudioAt > 0 ? new Date(asr.lastAudioAt).toISOString() : null,
+              lastTranscriptAt: asr.lastTranscriptAt > 0 ? new Date(asr.lastTranscriptAt).toISOString() : null,
+              idleMs,
+              idleTtlMs,
+              hasIdleTimer: Boolean(asr.idleTimer),
+              pendingAudioBytes: Number(asr.pendingAudioBytes || 0),
+              pendingAudioChunks: Array.isArray(asr.pendingAudioChunks) ? asr.pendingAudioChunks.length : 0,
+              utterance: asr.utterance ? {
+                partialText: String(asr.utterance.partialText || "").slice(0, 200),
+                finalSegments: Array.isArray(asr.utterance.finalSegments) ? asr.utterance.finalSegments.length : 0,
+                bytesSent: Number(asr.utterance.bytesSent || 0)
+              } : null,
+              model: String(
+                asr.client?.sessionConfig?.inputTranscriptionModel ||
+                session.openAiPerUserAsrModel ||
+                ""
+              ).trim() || null,
+              sessionId: asr.client?.sessionId || null
+            };
+          });
+        })(),
+        brainTools: (() => {
+          const tools = Array.isArray(session.openAiToolDefinitions) ? session.openAiToolDefinitions : [];
+          if (!tools.length) return null;
+          return tools.map((tool) => ({
+            name: String(tool?.name || ""),
+            toolType: tool?.toolType === "mcp" ? "mcp" : "function",
+            serverName: tool?.serverName || null,
+            description: String(tool?.description || "")
+          }));
+        })(),
+        toolCalls: (() => {
+          const events = Array.isArray(session.toolCallEvents) ? session.toolCallEvents : [];
+          if (!events.length) return null;
+          return events.slice(-OPENAI_TOOL_CALL_EVENT_MAX).map((entry) => ({
+            callId: String(entry?.callId || ""),
+            toolName: String(entry?.toolName || ""),
+            toolType: entry?.toolType === "mcp" ? "mcp" : "function",
+            arguments: entry?.arguments && typeof entry.arguments === "object" ? entry.arguments : {},
+            startedAt: String(entry?.startedAt || ""),
+            completedAt: entry?.completedAt ? String(entry.completedAt) : null,
+            runtimeMs: Number.isFinite(Number(entry?.runtimeMs)) ? Math.round(Number(entry.runtimeMs)) : null,
+            success: Boolean(entry?.success),
+            outputSummary: entry?.outputSummary ? String(entry.outputSummary) : null,
+            error: entry?.error ? String(entry.error) : null
+          }));
+        })(),
+        mcpStatus: (() => {
+          const rows = Array.isArray(session.mcpStatus) ? session.mcpStatus : [];
+          if (!rows.length) return null;
+          return rows.map((row) => ({
+            serverName: String(row?.serverName || ""),
+            connected: Boolean(row?.connected),
+            tools: Array.isArray(row?.tools)
+              ? row.tools.map((tool) => ({
+                  name: String(tool?.name || ""),
+                  description: String(tool?.description || "")
+                }))
+              : [],
+            lastError: row?.lastError ? String(row.lastError) : null,
+            lastConnectedAt: row?.lastConnectedAt ? String(row.lastConnectedAt) : null,
+            lastCallAt: row?.lastCallAt ? String(row.lastCallAt) : null
+          }));
+        })(),
         music: this.snapshotMusicRuntimeState(session),
         stt: session.mode === "stt_pipeline"
           ? {
@@ -901,6 +1088,7 @@ export class VoiceSessionManager {
 
   snapshotMusicRuntimeState(session) {
     const music = this.ensureSessionMusicState(session);
+    const queueState = this.ensureToolMusicQueueState(session);
     if (!music) return null;
     return {
       active: Boolean(music.active),
@@ -922,7 +1110,20 @@ export class VoiceSessionManager {
       pendingRequestedByUserId: music.pendingRequestedByUserId || null,
       pendingRequestedAt: music.pendingRequestedAt > 0 ? new Date(music.pendingRequestedAt).toISOString() : null,
       pendingResults: Array.isArray(music.pendingResults) ? music.pendingResults : [],
-      disambiguationActive: this.isMusicDisambiguationActive(music)
+      disambiguationActive: this.isMusicDisambiguationActive(music),
+      queueState: queueState
+        ? {
+            tracks: queueState.tracks.map((track) => ({
+              id: track.id,
+              title: track.title,
+              artist: track.artist || null,
+              source: track.source
+            })),
+            nowPlayingIndex: queueState.nowPlayingIndex,
+            isPaused: queueState.isPaused,
+            volume: queueState.volume
+          }
+        : null
     };
   }
 
@@ -1041,6 +1242,386 @@ export class VoiceSessionManager {
         .filter((entry): entry is MusicSelectionResult => Boolean(entry))
         .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS)
     };
+  }
+
+  ensureSessionToolRuntimeState(session) {
+    if (!session || typeof session !== "object") return null;
+    if (!Array.isArray(session.toolCallEvents)) {
+      session.toolCallEvents = [];
+    }
+    if (!(session.openAiPendingToolCalls instanceof Map)) {
+      session.openAiPendingToolCalls = new Map();
+    }
+    if (!(session.openAiToolCallExecutions instanceof Map)) {
+      session.openAiToolCallExecutions = new Map();
+    }
+    if (!(session.toolMusicTrackCatalog instanceof Map)) {
+      session.toolMusicTrackCatalog = new Map();
+    }
+    if (!Array.isArray(session.memoryWriteWindow)) {
+      session.memoryWriteWindow = [];
+    }
+    if (!session.mcpStatus || !Array.isArray(session.mcpStatus)) {
+      session.mcpStatus = this.getVoiceMcpServerStatuses().map((entry) => ({
+        ...entry
+      }));
+    }
+    return session;
+  }
+
+  ensureToolMusicQueueState(session) {
+    if (!session || typeof session !== "object") return null;
+    const current =
+      session.musicQueueState && typeof session.musicQueueState === "object"
+        ? session.musicQueueState
+        : {};
+    const tracks = Array.isArray(current.tracks) ? current.tracks : [];
+    const normalizedTracks = tracks
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return null;
+        const id = normalizeInlineText(entry.id, 180);
+        const title = normalizeInlineText(entry.title, 220);
+        if (!id || !title) return null;
+        return {
+          id,
+          title,
+          artist: normalizeInlineText(entry.artist, 220) || null,
+          durationMs: Number.isFinite(Number(entry.durationMs))
+            ? Math.max(0, Math.round(Number(entry.durationMs)))
+            : null,
+          source:
+            String(entry.source || "")
+              .trim()
+              .toLowerCase() === "sc"
+              ? "sc"
+              : "yt",
+          streamUrl: normalizeInlineText(entry.streamUrl, 300) || null,
+          platform: this.normalizeMusicPlatformToken(entry.platform, "youtube") || "youtube",
+          externalUrl: normalizeInlineText(entry.externalUrl, 300) || null
+        };
+      })
+      .filter(Boolean);
+    const normalizedNowPlayingIndexRaw = Number(current.nowPlayingIndex);
+    const normalizedNowPlayingIndex =
+      Number.isInteger(normalizedNowPlayingIndexRaw) &&
+      normalizedNowPlayingIndexRaw >= 0 &&
+      normalizedNowPlayingIndexRaw < normalizedTracks.length
+        ? normalizedNowPlayingIndexRaw
+        : null;
+    const next = {
+      guildId: String(session.guildId || "").trim(),
+      voiceChannelId: String(session.voiceChannelId || "").trim(),
+      tracks: normalizedTracks,
+      nowPlayingIndex: normalizedNowPlayingIndex,
+      isPaused: Boolean(current.isPaused),
+      volume: Number.isFinite(Number(current.volume))
+        ? clamp(Number(current.volume), 0, 1)
+        : 1
+    };
+    session.musicQueueState = next;
+    return next;
+  }
+
+  getVoiceMcpServerStatuses() {
+    const servers = Array.isArray(this.appConfig?.voiceMcpServers) ? this.appConfig.voiceMcpServers : [];
+    return servers
+      .map((server) => {
+        if (!server || typeof server !== "object") return null;
+        const serverName = normalizeInlineText(server.serverName || server.name, 80);
+        const baseUrl = normalizeInlineText(server.baseUrl, 280);
+        if (!serverName || !baseUrl) return null;
+        const toolRows = Array.isArray(server.tools)
+          ? server.tools
+              .map((tool) => {
+                if (!tool || typeof tool !== "object") return null;
+                const toolName = normalizeInlineText(tool.name, 120);
+                if (!toolName) return null;
+                return {
+                  name: toolName,
+                  description: normalizeInlineText(tool.description, 800) || "",
+                  inputSchema:
+                    tool.inputSchema && typeof tool.inputSchema === "object" && !Array.isArray(tool.inputSchema)
+                      ? tool.inputSchema
+                      : undefined
+                };
+              })
+              .filter(Boolean)
+          : [];
+        const headers =
+          server.headers && typeof server.headers === "object" && !Array.isArray(server.headers)
+            ? Object.fromEntries(
+                Object.entries(server.headers)
+                  .map(([headerName, headerValue]) => [
+                    normalizeInlineText(headerName, 120),
+                    normalizeInlineText(headerValue, 320)
+                  ])
+                  .filter(([headerName, headerValue]) => Boolean(headerName) && Boolean(headerValue))
+              )
+            : {};
+        return {
+          serverName,
+          connected: true,
+          tools: toolRows,
+          lastError: null,
+          lastConnectedAt: null,
+          lastCallAt: null,
+          baseUrl,
+          toolPath: normalizeInlineText(server.toolPath, 220) || "/tools/call",
+          timeoutMs: clamp(Math.floor(Number(server.timeoutMs) || 10_000), 500, 60_000),
+          headers
+        };
+      })
+      .filter((entry): entry is VoiceMcpServerStatus => Boolean(entry));
+  }
+
+  resolveVoiceRealtimeToolDescriptors({
+    session,
+    settings
+  }: {
+    session?: VoiceToolRuntimeSessionLike | null;
+    settings?: VoiceRealtimeToolSettings | null;
+  } = {}): VoiceRealtimeToolDescriptor[] {
+    const localTools: VoiceRealtimeToolDescriptor[] = [
+      {
+        toolType: "function",
+        name: "memory_search",
+        description: "Search durable memory facts by semantic relevance.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            top_k: { type: "integer", minimum: 1, maximum: 20 },
+            namespace: { type: "string" },
+            filters: {
+              type: "object",
+              properties: {
+                tags: {
+                  type: "array",
+                  items: { type: "string" }
+                }
+              },
+              additionalProperties: false
+            }
+          },
+          required: ["query"],
+          additionalProperties: false
+        }
+      },
+      {
+        toolType: "function",
+        name: "memory_write",
+        description: "Store durable memory facts with dedupe and safety limits.",
+        parameters: {
+          type: "object",
+          properties: {
+            namespace: { type: "string" },
+            items: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  text: { type: "string" },
+                  tags: { type: "array", items: { type: "string" } },
+                  metadata: {
+                    type: "object",
+                    properties: {
+                      authorSpeakerId: { type: "string" }
+                    },
+                    additionalProperties: true
+                  }
+                },
+                required: ["text"],
+                additionalProperties: true
+              },
+              minItems: 1,
+              maxItems: 8
+            },
+            dedupe: {
+              type: "object",
+              properties: {
+                strategy: { type: "string" },
+                threshold: { type: "number", minimum: 0, maximum: 1 }
+              },
+              additionalProperties: false
+            }
+          },
+          required: ["items"],
+          additionalProperties: false
+        }
+      },
+      {
+        toolType: "function",
+        name: "music_search",
+        description: "Search for music tracks to queue or play.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            max_results: { type: "integer", minimum: 1, maximum: 10 }
+          },
+          required: ["query"],
+          additionalProperties: false
+        }
+      },
+      {
+        toolType: "function",
+        name: "music_queue_add",
+        description: "Add one or more track IDs to the voice music queue.",
+        parameters: {
+          type: "object",
+          properties: {
+            tracks: {
+              type: "array",
+              items: { type: "string" },
+              minItems: 1,
+              maxItems: 12
+            },
+            position: {
+              oneOf: [
+                { type: "string", enum: ["end"] },
+                { type: "integer", minimum: 0 }
+              ]
+            }
+          },
+          required: ["tracks"],
+          additionalProperties: false
+        }
+      },
+      {
+        toolType: "function",
+        name: "music_play",
+        description: "Start playing queue track by index, or resume current playback.",
+        parameters: {
+          type: "object",
+          properties: {
+            index: { type: "integer", minimum: 0 }
+          },
+          additionalProperties: false
+        }
+      },
+      {
+        toolType: "function",
+        name: "music_pause",
+        description: "Pause music playback.",
+        parameters: {
+          type: "object",
+          additionalProperties: false
+        }
+      },
+      {
+        toolType: "function",
+        name: "music_resume",
+        description: "Resume paused music playback.",
+        parameters: {
+          type: "object",
+          additionalProperties: false
+        }
+      },
+      {
+        toolType: "function",
+        name: "music_skip",
+        description: "Skip current track and advance to next queued track.",
+        parameters: {
+          type: "object",
+          additionalProperties: false
+        }
+      },
+      {
+        toolType: "function",
+        name: "music_now_playing",
+        description: "Read now-playing and queue status.",
+        parameters: {
+          type: "object",
+          additionalProperties: false
+        }
+      },
+      {
+        toolType: "function",
+        name: "web_search",
+        description: "Run live web search and return condensed results.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string" },
+            recency_days: { type: "integer", minimum: 1, maximum: 3650 },
+            max_results: { type: "integer", minimum: 1, maximum: 8 }
+          },
+          required: ["query"],
+          additionalProperties: false
+        }
+      }
+    ];
+
+    const sessionState = this.ensureSessionToolRuntimeState(session);
+    const mcpTools = (Array.isArray(sessionState?.mcpStatus) ? sessionState.mcpStatus : [])
+      .flatMap((server) => {
+        const serverName = normalizeInlineText(server?.serverName, 80);
+        if (!serverName) return [];
+        return (Array.isArray(server?.tools) ? server.tools : [])
+          .map((tool) => {
+            if (!tool || typeof tool !== "object") return null;
+            const name = normalizeInlineText(tool.name, 120);
+            if (!name) return null;
+            return {
+              toolType: "mcp",
+              name,
+              description: normalizeInlineText(tool.description, 800) || `MCP tool ${name}`,
+              parameters:
+                tool.inputSchema && typeof tool.inputSchema === "object"
+                  ? tool.inputSchema
+                  : {
+                      type: "object",
+                      additionalProperties: true
+                    },
+              serverName
+            };
+          })
+          .filter((entry): entry is VoiceRealtimeToolDescriptor => Boolean(entry));
+      });
+
+    const includeWebSearch = Boolean(settings?.webSearch?.enabled);
+    const filteredLocalTools = includeWebSearch
+      ? localTools
+      : localTools.filter((entry) => entry.name !== "web_search");
+    return [
+      ...filteredLocalTools,
+      ...mcpTools
+    ];
+  }
+
+  buildOpenAiRealtimeFunctionTools({
+    session,
+    settings
+  }: {
+    session?: VoiceToolRuntimeSessionLike | null;
+    settings?: VoiceRealtimeToolSettings | null;
+  } = {}) {
+    return this.resolveVoiceRealtimeToolDescriptors({ session, settings }).map((entry) => ({
+      type: "function",
+      name: entry.name,
+      description: entry.description,
+      parameters: entry.parameters,
+      toolType: entry.toolType,
+      serverName: entry.serverName || null
+    }));
+  }
+
+  recordVoiceToolCallEvent({
+    session,
+    event
+  }: {
+    session?: VoiceToolRuntimeSessionLike | null;
+    event?: VoiceToolCallEvent | null;
+  } = {}) {
+    if (!session || !event) return;
+    this.ensureSessionToolRuntimeState(session);
+    const events = Array.isArray(session.toolCallEvents) ? session.toolCallEvents : [];
+    events.push(event);
+    if (events.length > OPENAI_TOOL_CALL_EVENT_MAX) {
+      session.toolCallEvents = events.slice(-OPENAI_TOOL_CALL_EVENT_MAX);
+    } else {
+      session.toolCallEvents = events;
+    }
   }
 
   hasBotNameCueForTranscript({ transcript = "", settings = null } = {}) {
@@ -3201,6 +3782,7 @@ export class VoiceSessionManager {
 
   bindRealtimeHandlers(session, settings = session.settingsSnapshot) {
     if (!session?.realtimeClient) return;
+    this.ensureSessionToolRuntimeState(session);
     const runtimeLabel = getRealtimeRuntimeLabel(session.mode);
     const onAudioDelta = (audioBase64) => {
       let chunk = null;
@@ -3465,6 +4047,9 @@ export class VoiceSessionManager {
             })
           : 0;
       const hadAudio = pending ? this.pendingResponseHasAudio(session, pending) : false;
+      const hasInFlightToolCalls =
+        Boolean(session.awaitingToolOutputs) ||
+        (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0);
 
       this.store.logAction({
         kind: "voice_runtime",
@@ -3496,6 +4081,11 @@ export class VoiceSessionManager {
         return;
       }
 
+      if (hasInFlightToolCalls) {
+        this.clearPendingResponse(session);
+        return;
+      }
+
       if (session.responseDoneGraceTimer) {
         clearTimeout(session.responseDoneGraceTimer);
       }
@@ -3521,12 +4111,35 @@ export class VoiceSessionManager {
       }, RESPONSE_DONE_SILENCE_GRACE_MS);
     };
 
+    const onEvent = (event) => {
+      if (!session || session.ending) return;
+      if (!event || typeof event !== "object") return;
+      if (session.mode !== "openai_realtime") return;
+      this.handleOpenAiRealtimeFunctionCallEvent({
+        session,
+        settings,
+        event
+      }).catch((error) => {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.client.user?.id || null,
+          content: `openai_realtime_tool_event_failed: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id
+          }
+        });
+      });
+    };
+
     session.realtimeClient.on("audio_delta", onAudioDelta);
     session.realtimeClient.on("transcript", onTranscript);
     session.realtimeClient.on("error_event", onErrorEvent);
     session.realtimeClient.on("socket_closed", onSocketClosed);
     session.realtimeClient.on("socket_error", onSocketError);
     session.realtimeClient.on("response_done", onResponseDone);
+    session.realtimeClient.on("event", onEvent);
 
     session.cleanupHandlers.push(() => {
       session.realtimeClient.off("audio_delta", onAudioDelta);
@@ -3535,6 +4148,7 @@ export class VoiceSessionManager {
       session.realtimeClient.off("socket_closed", onSocketClosed);
       session.realtimeClient.off("socket_error", onSocketError);
       session.realtimeClient.off("response_done", onResponseDone);
+      session.realtimeClient.off("event", onEvent);
     });
   }
 
@@ -4850,6 +5464,21 @@ export class VoiceSessionManager {
     source = "voice_web_lookup"
   }) {
     if (!session || session.ending) return;
+    if (isRealtimeMode(session.mode)) {
+      const realtimePrompt = this.buildVoiceLookupBusyRealtimePrompt({
+        settings,
+        query
+      });
+      const requested = this.requestRealtimePromptUtterance({
+        session,
+        prompt: realtimePrompt,
+        userId,
+        source: `${String(source || "voice_web_lookup")}:busy_utterance`,
+        utteranceText: null
+      });
+      if (requested) return;
+    }
+
     const line = await this.generateVoiceLookupBusyLine({
       session,
       settings,
@@ -4920,22 +5549,49 @@ export class VoiceSessionManager {
     }
   }
 
-  requestRealtimeTextUtterance({
+  buildVoiceLookupBusyRealtimePrompt({
+    settings,
+    query = ""
+  }) {
+    const normalizedQuery = normalizeVoiceText(query, 80);
+    const systemPrompt = interpolatePromptTemplate(getPromptVoiceLookupBusySystemPrompt(settings), {
+      botName: getPromptBotName(settings)
+    });
+    return [
+      systemPrompt,
+      normalizedQuery ? `Lookup query: ${normalizedQuery}` : "Lookup query: (not specified)",
+      "Respond with one short spoken line only."
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  requestRealtimePromptUtterance({
     session,
-    text,
+    prompt,
     userId = null,
-    source = "voice_text_utterance",
+    source = "voice_prompt_utterance",
     interruptionPolicy = null,
-    latencyContext = null
+    latencyContext = null,
+    utteranceText = null
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
     if (Number(session.userCaptures?.size || 0) > 0) return false;
     const realtimeClient = session.realtimeClient;
     if (!realtimeClient || typeof realtimeClient.requestTextUtterance !== "function") return false;
-    const utterancePrompt = buildRealtimeTextUtterancePrompt(text, STT_REPLY_MAX_CHARS);
+
+    const utterancePrompt = String(prompt || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, STT_REPLY_MAX_CHARS + 420);
     if (!utterancePrompt) return false;
+
     const normalizedInterruptionPolicy = this.normalizeReplyInterruptionPolicy(interruptionPolicy);
+    const normalizedUtteranceText =
+      utteranceText === null
+        ? null
+        : normalizeVoiceText(String(utteranceText || ""), STT_REPLY_MAX_CHARS) || null;
 
     try {
       realtimeClient.requestTextUtterance(utterancePrompt);
@@ -4946,14 +5602,14 @@ export class VoiceSessionManager {
         resetRetryState: true,
         emitCreateEvent: false,
         interruptionPolicy: normalizedInterruptionPolicy,
-        utteranceText: normalizeVoiceText(text, STT_REPLY_MAX_CHARS),
+        utteranceText: normalizedUtteranceText,
         latencyContext
       });
       session.pendingBargeInRetry = null;
       session.lastRequestedRealtimeUtterance = {
-        utteranceText: normalizeVoiceText(text, STT_REPLY_MAX_CHARS) || null,
+        utteranceText: normalizedUtteranceText,
         requestedAt: Date.now(),
-        source: String(source || "voice_text_utterance"),
+        source: String(source || "voice_prompt_utterance"),
         interruptionPolicy: normalizedInterruptionPolicy
       };
       return true;
@@ -4966,11 +5622,34 @@ export class VoiceSessionManager {
         content: `voice_text_utterance_failed: ${String(error?.message || error)}`,
         metadata: {
           sessionId: session.id,
-          source: String(source || "voice_text_utterance")
+          source: String(source || "voice_prompt_utterance")
         }
       });
       return false;
     }
+  }
+
+  requestRealtimeTextUtterance({
+    session,
+    text,
+    userId = null,
+    source = "voice_text_utterance",
+    interruptionPolicy = null,
+    latencyContext = null
+  }) {
+    const normalizedLine = normalizeVoiceText(text, STT_REPLY_MAX_CHARS);
+    if (!normalizedLine) return false;
+    const utterancePrompt = buildRealtimeTextUtterancePrompt(normalizedLine, STT_REPLY_MAX_CHARS);
+    if (!utterancePrompt) return false;
+    return this.requestRealtimePromptUtterance({
+      session,
+      prompt: utterancePrompt,
+      userId,
+      source,
+      interruptionPolicy,
+      latencyContext,
+      utteranceText: normalizedLine
+    });
   }
 
   normalizeSoundboardRefs(soundboardRefs = []) {
@@ -5447,7 +6126,606 @@ export class VoiceSessionManager {
     return true;
   }
 
+  shouldUseOpenAiPerUserTranscription({
+    session = null,
+    settings = null
+  }: {
+    session?: {
+      ending?: boolean;
+      mode?: string;
+      settingsSnapshot?: Record<string, unknown> | null;
+    } | null;
+    settings?: Record<string, unknown> | null;
+  } = {}) {
+    if (!session || session.ending) return false;
+    if (session.mode !== "openai_realtime") return false;
+    if (!this.appConfig?.openaiApiKey) return false;
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    if (this.resolveRealtimeReplyStrategy({
+      session,
+      settings: resolvedSettings
+    }) !== "brain") {
+      return false;
+    }
+    if (resolvedSettings?.voice?.openaiRealtime?.usePerUserAsrBridge === false) {
+      return false;
+    }
+    return true;
+  }
+
+  getOpenAiAsrSessionMap(session) {
+    if (!session || session.ending) return null;
+    if (!(session.openAiAsrSessions instanceof Map)) {
+      session.openAiAsrSessions = new Map();
+    }
+    return session.openAiAsrSessions;
+  }
+
+  getOrCreateOpenAiAsrSessionState({ session, userId }) {
+    const sessionMap = this.getOpenAiAsrSessionMap(session);
+    const normalizedUserId = String(userId || "").trim();
+    if (!sessionMap || !normalizedUserId) return null;
+    const existing = sessionMap.get(normalizedUserId);
+    if (existing && typeof existing === "object") {
+      return existing;
+    }
+
+    const state = {
+      userId: normalizedUserId,
+      client: null,
+      connectPromise: null,
+      closing: false,
+      pendingAudioChunks: [],
+      pendingAudioBytes: 0,
+      connectedAt: 0,
+      lastAudioAt: 0,
+      lastTranscriptAt: 0,
+      lastPartialLogAt: 0,
+      lastPartialText: "",
+      idleTimer: null,
+      utterance: {
+        startedAt: 0,
+        bytesSent: 0,
+        partialText: "",
+        finalSegments: [],
+        lastUpdateAt: 0
+      }
+    };
+    sessionMap.set(normalizedUserId, state);
+    return state;
+  }
+
+  createOpenAiAsrRuntimeLogger(session, userId) {
+    return ({ level, event, metadata }) => {
+      this.store.logAction({
+        kind: level === "warn" ? "voice_error" : "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: String(userId || "").trim() || this.client.user?.id || null,
+        content: event,
+        metadata: {
+          sessionId: session.id,
+          ...(metadata && typeof metadata === "object" ? metadata : {})
+        }
+      });
+    };
+  }
+
+  async ensureOpenAiAsrSessionConnected({
+    session,
+    settings = null,
+    userId
+  }) {
+    if (!session || session.ending) return null;
+    if (!this.shouldUseOpenAiPerUserTranscription({ session, settings })) return null;
+    const asrState = this.getOrCreateOpenAiAsrSessionState({
+      session,
+      userId
+    });
+    if (!asrState) return null;
+    if (asrState.closing) return null;
+
+    const ws = asrState.client?.ws;
+    if (ws && ws.readyState === 1) {
+      return asrState;
+    }
+
+    if (asrState.connectPromise) {
+      await asrState.connectPromise.catch(() => undefined);
+      return asrState.client ? asrState : null;
+    }
+
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    const voiceAsrGuidance = resolveVoiceAsrLanguageGuidance(resolvedSettings);
+    const model = String(
+      session.openAiPerUserAsrModel ||
+        resolvedSettings?.voice?.openaiRealtime?.inputTranscriptionModel ||
+        "gpt-4o-mini-transcribe"
+    )
+      .trim()
+      .slice(0, 120) || "gpt-4o-mini-transcribe";
+    const language = String(
+      session.openAiPerUserAsrLanguage || voiceAsrGuidance.language || ""
+    )
+      .trim()
+      .toLowerCase()
+      .replace(/_/g, "-")
+      .slice(0, 24);
+    const prompt = String(session.openAiPerUserAsrPrompt || voiceAsrGuidance.prompt || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 280);
+
+    const runtimeLogger = this.createOpenAiAsrRuntimeLogger(session, userId);
+    const client = new OpenAiRealtimeTranscriptionClient({
+      apiKey: this.appConfig.openaiApiKey,
+      logger: runtimeLogger
+    });
+    asrState.client = client;
+    asrState.connectPromise = (async () => {
+      client.on("transcript", (payload) => {
+        if (session.ending) return;
+        const transcript = normalizeVoiceText(payload?.text || "", STT_TRANSCRIPT_MAX_CHARS);
+        if (!transcript) return;
+
+        const eventType = String(payload?.eventType || "").trim();
+        const isFinal = Boolean(payload?.final);
+        const now = Date.now();
+        asrState.lastTranscriptAt = now;
+        asrState.utterance.lastUpdateAt = now;
+        if (isFinal) {
+          asrState.utterance.finalSegments.push(transcript);
+          asrState.utterance.partialText = "";
+        } else {
+          asrState.utterance.partialText = transcript;
+        }
+
+        const speakerName = this.resolveVoiceSpeakerName(session, userId) || "someone";
+        const shouldLogPartial =
+          !isFinal &&
+          transcript !== asrState.lastPartialText &&
+          now - Number(asrState.lastPartialLogAt || 0) >= 180;
+        if (isFinal || shouldLogPartial) {
+          if (!isFinal) {
+            asrState.lastPartialLogAt = now;
+            asrState.lastPartialText = transcript;
+          }
+          this.store.logAction({
+            kind: "voice_runtime",
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId: String(userId || "").trim() || null,
+            content: isFinal ? "openai_realtime_asr_final_segment" : "openai_realtime_asr_partial_segment",
+            metadata: {
+              sessionId: session.id,
+              speakerName,
+              transcript,
+              eventType: eventType || null
+            }
+          });
+        }
+      });
+
+      client.on("error_event", (payload) => {
+        if (session.ending) return;
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: String(userId || "").trim() || null,
+          content: `openai_realtime_asr_error: ${String(payload?.message || "unknown error")}`,
+          metadata: {
+            sessionId: session.id,
+            code: payload?.code || null,
+            param: payload?.param || null
+          }
+        });
+      });
+
+      client.on("socket_closed", (payload) => {
+        if (session.ending) return;
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: String(userId || "").trim() || null,
+          content: "openai_realtime_asr_socket_closed",
+          metadata: {
+            sessionId: session.id,
+            code: Number(payload?.code || 0) || null,
+            reason: String(payload?.reason || "").trim() || null
+          }
+        });
+      });
+
+      await client.connect({
+        model,
+        inputAudioFormat: "pcm16",
+        inputTranscriptionModel: model,
+        inputTranscriptionLanguage: language,
+        inputTranscriptionPrompt: prompt
+      });
+      asrState.connectedAt = Date.now();
+      await this.flushPendingOpenAiAsrAudio({
+        session,
+        userId,
+        asrState
+      });
+    })();
+
+    try {
+      await asrState.connectPromise;
+      return asrState;
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: String(userId || "").trim() || null,
+        content: `openai_realtime_asr_connect_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id
+        }
+      });
+      await this.closeOpenAiAsrSession({
+        session,
+        userId,
+        reason: "connect_failed"
+      });
+      return null;
+    } finally {
+      asrState.connectPromise = null;
+    }
+  }
+
+  async flushPendingOpenAiAsrAudio({
+    session,
+    userId,
+    asrState = null
+  }) {
+    const state = asrState && typeof asrState === "object"
+      ? asrState
+      : this.getOrCreateOpenAiAsrSessionState({
+        session,
+        userId
+      });
+    if (!state || state.closing) return;
+    const client = state.client;
+    if (!client || !client.ws || client.ws.readyState !== 1) return;
+    const chunks = Array.isArray(state.pendingAudioChunks) ? state.pendingAudioChunks : [];
+    if (!chunks.length) return;
+
+    while (chunks.length > 0) {
+      const chunk = chunks.shift();
+      if (!chunk?.length) continue;
+      try {
+        client.appendInputAudioPcm(chunk);
+      } catch (error) {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: String(userId || "").trim() || null,
+          content: `openai_realtime_asr_audio_append_failed: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id
+          }
+        });
+        break;
+      }
+    }
+    state.pendingAudioBytes = 0;
+  }
+
+  beginOpenAiAsrUtterance({
+    session,
+    settings = null,
+    userId
+  }) {
+    if (!session || session.ending) return;
+    if (!this.shouldUseOpenAiPerUserTranscription({ session, settings })) return;
+    const asrState = this.getOrCreateOpenAiAsrSessionState({
+      session,
+      userId
+    });
+    if (!asrState) return;
+
+    if (asrState.idleTimer) {
+      clearTimeout(asrState.idleTimer);
+      asrState.idleTimer = null;
+    }
+
+    asrState.utterance = {
+      startedAt: Date.now(),
+      bytesSent: 0,
+      partialText: "",
+      finalSegments: [],
+      lastUpdateAt: 0
+    };
+    asrState.lastPartialText = "";
+    asrState.lastPartialLogAt = 0;
+    try {
+      asrState.client?.clearInputAudioBuffer?.();
+    } catch {
+      // ignore
+    }
+
+    void this.ensureOpenAiAsrSessionConnected({
+      session,
+      settings,
+      userId
+    });
+  }
+
+  appendAudioToOpenAiAsr({
+    session,
+    settings = null,
+    userId,
+    pcmChunk
+  }) {
+    if (!session || session.ending) return;
+    if (!this.shouldUseOpenAiPerUserTranscription({ session, settings })) return;
+    const asrState = this.getOrCreateOpenAiAsrSessionState({
+      session,
+      userId
+    });
+    if (!asrState || asrState.closing) return;
+    const chunk = Buffer.isBuffer(pcmChunk) ? pcmChunk : Buffer.from(pcmChunk || []);
+    if (!chunk.length) return;
+    asrState.lastAudioAt = Date.now();
+    asrState.utterance.bytesSent = Math.max(0, Number(asrState.utterance?.bytesSent || 0)) + chunk.length;
+
+    const queue = Array.isArray(asrState.pendingAudioChunks) ? asrState.pendingAudioChunks : [];
+    asrState.pendingAudioChunks = queue;
+    queue.push(chunk);
+    asrState.pendingAudioBytes = Math.max(0, Number(asrState.pendingAudioBytes || 0)) + chunk.length;
+    const maxBufferedBytes = 24_000 * 2 * 10;
+    if (asrState.pendingAudioBytes > maxBufferedBytes && queue.length > 1) {
+      while (queue.length > 1 && asrState.pendingAudioBytes > maxBufferedBytes) {
+        const dropped = queue.shift();
+        asrState.pendingAudioBytes = Math.max(0, asrState.pendingAudioBytes - Number(dropped?.length || 0));
+      }
+    }
+
+    void this.ensureOpenAiAsrSessionConnected({
+      session,
+      settings,
+      userId
+    }).then((state) => {
+      if (!state) return;
+      void this.flushPendingOpenAiAsrAudio({
+        session,
+        userId,
+        asrState: state
+      });
+    });
+  }
+
+  async waitForOpenAiAsrTranscriptSettle({
+    session,
+    userId,
+    asrState
+  }) {
+    if (!session || session.ending || !asrState) return "";
+    const stableWindowMs = Math.max(
+      100,
+      Number(session.openAiAsrTranscriptStableMs || OPENAI_ASR_TRANSCRIPT_STABLE_MS)
+    );
+    const maxWaitMs = Math.max(
+      stableWindowMs + 120,
+      Number(session.openAiAsrTranscriptWaitMaxMs || OPENAI_ASR_TRANSCRIPT_WAIT_MAX_MS)
+    );
+    const startedAt = Date.now();
+    while (Date.now() - startedAt <= maxWaitMs) {
+      if (session.ending) return "";
+      const now = Date.now();
+      const lastUpdateAt = Math.max(0, Number(asrState.utterance?.lastUpdateAt || 0));
+      const stable = lastUpdateAt > 0 ? now - lastUpdateAt >= stableWindowMs : false;
+      const finalText = normalizeVoiceText(
+        Array.isArray(asrState.utterance?.finalSegments)
+          ? asrState.utterance.finalSegments.join(" ")
+          : "",
+        STT_TRANSCRIPT_MAX_CHARS
+      );
+      const partialText = normalizeVoiceText(asrState.utterance?.partialText || "", STT_TRANSCRIPT_MAX_CHARS);
+      if (finalText && stable) return finalText;
+      if (!finalText && partialText && stable) return partialText;
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+
+    const finalText = normalizeVoiceText(
+      Array.isArray(asrState.utterance?.finalSegments)
+        ? asrState.utterance.finalSegments.join(" ")
+        : "",
+      STT_TRANSCRIPT_MAX_CHARS
+    );
+    if (finalText) return finalText;
+    return normalizeVoiceText(asrState.utterance?.partialText || "", STT_TRANSCRIPT_MAX_CHARS);
+  }
+
+  async commitOpenAiAsrUtterance({
+    session,
+    settings = null,
+    userId,
+    captureReason = "stream_end"
+  }) {
+    if (!session || session.ending) return null;
+    if (!this.shouldUseOpenAiPerUserTranscription({ session, settings })) return null;
+    const asrState = await this.ensureOpenAiAsrSessionConnected({
+      session,
+      settings,
+      userId
+    });
+    if (!asrState || asrState.closing) return null;
+    if (Number(asrState.utterance?.bytesSent || 0) <= 0) {
+      this.scheduleOpenAiAsrSessionIdleClose({
+        session,
+        userId
+      });
+      return {
+        transcript: "",
+        asrStartedAtMs: 0,
+        asrCompletedAtMs: 0,
+        transcriptionModelPrimary: String(session.openAiPerUserAsrModel || "gpt-4o-mini-transcribe"),
+        transcriptionModelFallback: null,
+        transcriptionPlanReason: "openai_realtime_per_user_transcription",
+        usedFallbackModel: false,
+        captureReason: String(captureReason || "stream_end")
+      };
+    }
+
+    await this.flushPendingOpenAiAsrAudio({
+      session,
+      userId,
+      asrState
+    });
+
+    const asrStartedAtMs = Date.now();
+    try {
+      asrState.client?.commitInputAudioBuffer?.();
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: String(userId || "").trim() || null,
+        content: `openai_realtime_asr_commit_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id
+        }
+      });
+      return null;
+    }
+
+    const transcript = await this.waitForOpenAiAsrTranscriptSettle({
+      session,
+      userId,
+      asrState
+    });
+    const asrCompletedAtMs = Date.now();
+    const transcriptionModelPrimary = String(
+      session.openAiPerUserAsrModel || "gpt-4o-mini-transcribe"
+    ).trim() || "gpt-4o-mini-transcribe";
+
+    this.scheduleOpenAiAsrSessionIdleClose({
+      session,
+      userId
+    });
+    asrState.utterance.bytesSent = 0;
+
+    if (!transcript) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: String(userId || "").trim() || null,
+        content: "voice_realtime_transcription_empty",
+        metadata: {
+          sessionId: session.id,
+          source: "openai_realtime_asr",
+          model: transcriptionModelPrimary,
+          captureReason: String(captureReason || "stream_end")
+        }
+      });
+    }
+
+    return {
+      transcript,
+      asrStartedAtMs,
+      asrCompletedAtMs,
+      transcriptionModelPrimary,
+      transcriptionModelFallback: null,
+      transcriptionPlanReason: "openai_realtime_per_user_transcription",
+      usedFallbackModel: false,
+      captureReason: String(captureReason || "stream_end")
+    };
+  }
+
+  scheduleOpenAiAsrSessionIdleClose({
+    session,
+    userId
+  }) {
+    if (!session || session.ending) return;
+    const asrState = this.getOrCreateOpenAiAsrSessionState({
+      session,
+      userId
+    });
+    if (!asrState) return;
+    if (asrState.idleTimer) {
+      clearTimeout(asrState.idleTimer);
+      asrState.idleTimer = null;
+    }
+    const ttlMs = Math.max(
+      1_000,
+      Number(session.openAiAsrSessionIdleTtlMs || OPENAI_ASR_SESSION_IDLE_TTL_MS)
+    );
+    asrState.idleTimer = setTimeout(() => {
+      asrState.idleTimer = null;
+      this.closeOpenAiAsrSession({
+        session,
+        userId,
+        reason: "idle_ttl"
+      }).catch(() => undefined);
+    }, ttlMs);
+  }
+
+  async closeOpenAiAsrSession({
+    session,
+    userId,
+    reason = "manual"
+  }) {
+    if (!session) return;
+    const sessionMap = this.getOpenAiAsrSessionMap(session);
+    const normalizedUserId = String(userId || "").trim();
+    if (!sessionMap || !normalizedUserId) return;
+    const state = sessionMap.get(normalizedUserId);
+    if (!state) return;
+    state.closing = true;
+
+    if (state.idleTimer) {
+      clearTimeout(state.idleTimer);
+      state.idleTimer = null;
+    }
+    sessionMap.delete(normalizedUserId);
+
+    try {
+      await state.client?.close?.();
+    } catch {
+      // ignore
+    }
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: normalizedUserId,
+      content: "openai_realtime_asr_session_closed",
+      metadata: {
+        sessionId: session.id,
+        reason: String(reason || "manual")
+      }
+    });
+  }
+
+  async closeAllOpenAiAsrSessions(session, reason = "session_end") {
+    if (!session) return;
+    const sessionMap = this.getOpenAiAsrSessionMap(session);
+    if (!sessionMap || sessionMap.size <= 0) return;
+    const userIds = [...sessionMap.keys()];
+    for (const userId of userIds) {
+      await this.closeOpenAiAsrSession({
+        session,
+        userId,
+        reason
+      });
+    }
+  }
+
   bindSessionHandlers(session, settings) {
+    const useOpenAiPerUserAsr = this.shouldUseOpenAiPerUserTranscription({
+      session,
+      settings
+    });
     const onStateChange = (_oldState, newState) => {
       if (session.ending) return;
       if (
@@ -5498,6 +6776,21 @@ export class VoiceSessionManager {
         clearTimeout(activeCapture.speakingEndFinalizeTimer);
         activeCapture.speakingEndFinalizeTimer = null;
       }
+      if (useOpenAiPerUserAsr) {
+        this.beginOpenAiAsrUtterance({
+          session,
+          settings,
+          userId: normalizedUserId
+        });
+      }
+      if (isRealtimeMode(session.mode) && this.isBargeInInterruptTargetActive(session)) {
+        this.interruptBotSpeechForBargeIn({
+          session,
+          userId: normalizedUserId,
+          source: "speaking_start",
+          minCaptureBytes: 0
+        });
+      }
       this.startInboundCapture({
         session,
         userId: normalizedUserId,
@@ -5541,6 +6834,10 @@ export class VoiceSessionManager {
   startInboundCapture({ session, userId, settings = session?.settingsSnapshot }) {
     if (!session || !userId) return;
     if (session.userCaptures.has(userId)) return;
+    const useOpenAiPerUserAsr = this.shouldUseOpenAiPerUserTranscription({
+      session,
+      settings
+    });
 
     const opusStream = session.connection.receiver.subscribe(userId, {
       end: {
@@ -5661,6 +6958,14 @@ export class VoiceSessionManager {
         captureState.signalPeakAbs = peakAbs;
       }
       captureState.pcmChunks.push(normalizedPcm);
+      if (useOpenAiPerUserAsr) {
+        this.appendAudioToOpenAiAsr({
+          session,
+          settings,
+          userId,
+          pcmChunk: normalizedPcm
+        });
+      }
       if (captureState.speakingEndFinalizeTimer) {
         clearTimeout(captureState.speakingEndFinalizeTimer);
         captureState.speakingEndFinalizeTimer = null;
@@ -5715,6 +7020,12 @@ export class VoiceSessionManager {
 
       if (captureState.bytesSent <= 0 || session.ending) {
         cleanupCapture();
+        if (useOpenAiPerUserAsr) {
+          this.scheduleOpenAiAsrSessionIdleClose({
+            session,
+            userId
+          });
+        }
         return;
       }
 
@@ -5734,6 +7045,48 @@ export class VoiceSessionManager {
           pcmBuffer,
           captureReason: reason
         });
+        if (!handledInterruptedReply && useOpenAiPerUserAsr) {
+          void (async () => {
+            const asrResult = await this.commitOpenAiAsrUtterance({
+              session,
+              settings,
+              userId,
+              captureReason: reason
+            });
+            if (!asrResult || !asrResult.transcript) return;
+            const clipDurationMs = this.estimatePcm16MonoDurationMs(
+              pcmBuffer.length,
+              Number(session.realtimeInputSampleRateHz) || 24000
+            );
+            this.queueRealtimeTurn({
+              session,
+              userId,
+              captureReason: reason,
+              finalizedAt,
+              transcriptOverride: asrResult.transcript,
+              clipDurationMsOverride: clipDurationMs,
+              asrStartedAtMsOverride: asrResult.asrStartedAtMs,
+              asrCompletedAtMsOverride: asrResult.asrCompletedAtMs,
+              transcriptionModelPrimaryOverride: asrResult.transcriptionModelPrimary,
+              transcriptionModelFallbackOverride: asrResult.transcriptionModelFallback,
+              transcriptionPlanReasonOverride: asrResult.transcriptionPlanReason,
+              usedFallbackModelForTranscriptOverride: asrResult.usedFallbackModel
+            });
+          })().catch((error) => {
+            this.store.logAction({
+              kind: "voice_error",
+              guildId: session.guildId,
+              channelId: session.textChannelId,
+              userId,
+              content: `openai_realtime_asr_turn_failed: ${String(error?.message || error)}`,
+              metadata: {
+                sessionId: session.id,
+                captureReason: String(reason || "stream_end")
+              }
+            });
+          });
+          return;
+        }
         if (!handledInterruptedReply) {
           this.queueRealtimeTurn({
             session,
@@ -5763,6 +7116,12 @@ export class VoiceSessionManager {
         }
       });
       cleanupCapture();
+      if (useOpenAiPerUserAsr) {
+        this.scheduleOpenAiAsrSessionIdleClose({
+          session,
+          userId
+        });
+      }
     };
     captureState.maxFlushTimer = setTimeout(() => {
       finalizeUserTurn("max_duration");
@@ -5902,17 +7261,30 @@ export class VoiceSessionManager {
 
     const existingBuffer = Buffer.isBuffer(existingTurn.pcmBuffer) ? existingTurn.pcmBuffer : Buffer.alloc(0);
     const incomingBuffer = Buffer.isBuffer(incomingTurn.pcmBuffer) ? incomingTurn.pcmBuffer : Buffer.alloc(0);
-    if (!incomingBuffer.length) return existingTurn;
+    const existingTranscript = normalizeVoiceText(existingTurn.transcriptOverride || "", STT_TRANSCRIPT_MAX_CHARS);
+    const incomingTranscript = normalizeVoiceText(incomingTurn.transcriptOverride || "", STT_TRANSCRIPT_MAX_CHARS);
+    const mergedTranscript = normalizeVoiceText(
+      [existingTranscript, incomingTranscript].filter(Boolean).join(" "),
+      STT_TRANSCRIPT_MAX_CHARS
+    );
 
-    const combinedBytes = existingBuffer.length + incomingBuffer.length;
-    const maxMergeBytes = Math.max(1, Number(REALTIME_TURN_PENDING_MERGE_MAX_BYTES) || combinedBytes);
-    const droppedHeadBytes = Math.max(0, combinedBytes - maxMergeBytes);
-    let mergedBuffer = null;
-    if (droppedHeadBytes > 0) {
-      const mergedWindow = Buffer.concat([existingBuffer, incomingBuffer], combinedBytes).subarray(droppedHeadBytes);
-      mergedBuffer = Buffer.from(mergedWindow);
+    if (!incomingBuffer.length && !incomingTranscript) return existingTurn;
+
+    let combinedBytes = existingBuffer.length + incomingBuffer.length;
+    let droppedHeadBytes = 0;
+    let mergedBuffer = existingBuffer;
+    if (incomingBuffer.length > 0) {
+      const maxMergeBytes = Math.max(1, Number(REALTIME_TURN_PENDING_MERGE_MAX_BYTES) || combinedBytes);
+      droppedHeadBytes = Math.max(0, combinedBytes - maxMergeBytes);
+      if (droppedHeadBytes > 0) {
+        const mergedWindow = Buffer.concat([existingBuffer, incomingBuffer], combinedBytes).subarray(droppedHeadBytes);
+        mergedBuffer = Buffer.from(mergedWindow);
+      } else {
+        mergedBuffer = Buffer.concat([existingBuffer, incomingBuffer], combinedBytes);
+      }
     } else {
-      mergedBuffer = Buffer.concat([existingBuffer, incomingBuffer], combinedBytes);
+      combinedBytes = existingBuffer.length;
+      mergedBuffer = existingBuffer;
     }
 
     const existingFinalizedAt = Math.max(0, Number(existingTurn.finalizedAt || 0));
@@ -5926,6 +7298,7 @@ export class VoiceSessionManager {
       ...existingTurn,
       ...incomingTurn,
       pcmBuffer: mergedBuffer,
+      transcriptOverride: mergedTranscript || null,
       queuedAt: Number(incomingTurn.queuedAt || Date.now()),
       finalizedAt: mergedFinalizedAt || 0,
       mergedTurnCount: Math.max(1, Number(existingTurn.mergedTurnCount || 1)) + 1,
@@ -5933,10 +7306,26 @@ export class VoiceSessionManager {
     };
   }
 
-  queueRealtimeTurn({ session, userId, pcmBuffer, captureReason = "stream_end", finalizedAt = 0 }) {
+  queueRealtimeTurn({
+    session,
+    userId,
+    pcmBuffer = null,
+    captureReason = "stream_end",
+    finalizedAt = 0,
+    transcriptOverride = "",
+    clipDurationMsOverride = Number.NaN,
+    asrStartedAtMsOverride = 0,
+    asrCompletedAtMsOverride = 0,
+    transcriptionModelPrimaryOverride = "",
+    transcriptionModelFallbackOverride = null,
+    transcriptionPlanReasonOverride = "",
+    usedFallbackModelForTranscriptOverride = false
+  }) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
-    if (!pcmBuffer || !pcmBuffer.length) return;
+    const normalizedPcmBuffer = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
+    const normalizedTranscriptOverride = normalizeVoiceText(transcriptOverride || "", STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedPcmBuffer.length && !normalizedTranscriptOverride) return;
     const pendingQueue = Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns : [];
     if (!Array.isArray(session.pendingRealtimeTurns)) {
       session.pendingRealtimeTurns = pendingQueue;
@@ -5947,10 +7336,21 @@ export class VoiceSessionManager {
     const queuedTurn = {
       session,
       userId,
-      pcmBuffer,
+      pcmBuffer: normalizedPcmBuffer.length ? normalizedPcmBuffer : Buffer.alloc(0),
       captureReason,
       queuedAt,
       finalizedAt: normalizedFinalizedAt,
+      transcriptOverride: normalizedTranscriptOverride || null,
+      clipDurationMsOverride: Number.isFinite(Number(clipDurationMsOverride))
+        ? Math.max(0, Math.round(Number(clipDurationMsOverride)))
+        : null,
+      asrStartedAtMsOverride: Math.max(0, Number(asrStartedAtMsOverride || 0)),
+      asrCompletedAtMsOverride: Math.max(0, Number(asrCompletedAtMsOverride || 0)),
+      transcriptionModelPrimaryOverride: String(transcriptionModelPrimaryOverride || "").trim() || null,
+      transcriptionModelFallbackOverride:
+        String(transcriptionModelFallbackOverride || "").trim() || null,
+      transcriptionPlanReasonOverride: String(transcriptionPlanReasonOverride || "").trim() || null,
+      usedFallbackModelForTranscriptOverride: Boolean(usedFallbackModelForTranscriptOverride),
       mergedTurnCount: 1,
       droppedHeadBytes: 0
     };
@@ -6249,13 +7649,11 @@ export class VoiceSessionManager {
   resolveRealtimeReplyStrategy({ session, settings = null }) {
     if (!session || !isRealtimeMode(session.mode)) return "brain";
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    const strategy = String(resolvedSettings?.voice?.realtimeReplyStrategy || "brain")
-      .trim()
-      .toLowerCase();
-    if (strategy === "native") {
-      return "native";
+    const brainProvider = resolvedSettings?.voice?.brainProvider;
+    if (brainProvider && brainProvider !== "native") {
+      return "brain";
     }
-    return "brain";
+    return "native";
   }
 
   shouldUseNativeRealtimeReply({ session, settings = null }) {
@@ -6265,14 +7663,25 @@ export class VoiceSessionManager {
   async runRealtimeTurn({
     session,
     userId,
-    pcmBuffer,
+    pcmBuffer = null,
     captureReason = "stream_end",
     queuedAt = 0,
-    finalizedAt = 0
+    finalizedAt = 0,
+    transcriptOverride = "",
+    clipDurationMsOverride = Number.NaN,
+    asrStartedAtMsOverride = 0,
+    asrCompletedAtMsOverride = 0,
+    transcriptionModelPrimaryOverride = "",
+    transcriptionModelFallbackOverride = null,
+    transcriptionPlanReasonOverride = "",
+    usedFallbackModelForTranscriptOverride = false
   }) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
-    if (!pcmBuffer?.length) return;
+    const normalizedPcmBuffer = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
+    const normalizedTranscriptOverride = normalizeVoiceText(transcriptOverride, STT_TRANSCRIPT_MAX_CHARS);
+    const hasTranscriptOverride = Boolean(normalizedTranscriptOverride);
+    if (!normalizedPcmBuffer?.length && !hasTranscriptOverride) return;
     const queueWaitMs = queuedAt ? Math.max(0, Date.now() - Number(queuedAt || Date.now())) : 0;
     const finalizedAtMs = Math.max(0, Number(finalizedAt || 0)) || Math.max(0, Number(queuedAt || 0));
     const pendingQueueDepth = Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns.length : 0;
@@ -6292,7 +7701,7 @@ export class VoiceSessionManager {
           captureReason: String(captureReason || "stream_end"),
           queueWaitMs,
           pendingQueueDepth,
-          pcmBytes: pcmBuffer.length
+          pcmBytes: normalizedPcmBuffer.length
         }
       });
       return;
@@ -6303,7 +7712,7 @@ export class VoiceSessionManager {
       session,
       settings,
       userId,
-      pcmBuffer,
+      pcmBuffer: normalizedPcmBuffer,
       captureReason,
       source: "realtime"
     });
@@ -6316,18 +7725,39 @@ export class VoiceSessionManager {
         : settings?.voice?.sttPipeline?.transcriptionModel;
     const transcriptionModel = String(preferredModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
     const sampleRateHz = Number(session.realtimeInputSampleRateHz) || 24000;
-    const transcriptionPlan = resolveRealtimeTurnTranscriptionPlan({
-      mode: session.mode,
-      configuredModel: transcriptionModel,
-      pcmByteLength: pcmBuffer.length,
-      sampleRateHz
-    });
-    const silenceGate = this.evaluatePcmSilenceGate({
-      pcmBuffer,
-      sampleRateHz
-    });
+    const transcriptionPlan = hasTranscriptOverride
+      ? {
+          primaryModel:
+            String(transcriptionModelPrimaryOverride || transcriptionModel).trim() || transcriptionModel,
+          fallbackModel:
+            String(transcriptionModelFallbackOverride || "").trim() || null,
+          reason:
+            String(transcriptionPlanReasonOverride || "openai_realtime_per_user_transcription").trim() ||
+            "openai_realtime_per_user_transcription"
+        }
+      : resolveRealtimeTurnTranscriptionPlan({
+        mode: session.mode,
+        configuredModel: transcriptionModel,
+        pcmByteLength: normalizedPcmBuffer.length,
+        sampleRateHz
+      });
+    const silenceGate = hasTranscriptOverride
+      ? {
+          clipDurationMs: Number.isFinite(Number(clipDurationMsOverride))
+            ? Math.max(0, Math.round(Number(clipDurationMsOverride)))
+            : 0,
+          sampleCount: 0,
+          rms: 0,
+          peak: 0,
+          activeSampleRatio: 0,
+          drop: false
+        }
+      : this.evaluatePcmSilenceGate({
+        pcmBuffer: normalizedPcmBuffer,
+        sampleRateHz
+      });
     const clipDurationMs = silenceGate.clipDurationMs;
-    if (silenceGate.drop) {
+    if (!hasTranscriptOverride && silenceGate.drop) {
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
@@ -6338,7 +7768,7 @@ export class VoiceSessionManager {
           sessionId: session.id,
           source: "realtime",
           captureReason: String(captureReason || "stream_end"),
-          pcmBytes: pcmBuffer.length,
+          pcmBytes: normalizedPcmBuffer.length,
           clipDurationMs,
           rms: Number(silenceGate.rms.toFixed(6)),
           peak: Number(silenceGate.peak.toFixed(6)),
@@ -6355,14 +7785,16 @@ export class VoiceSessionManager {
     );
     const isShortSpeakingEndClip =
       String(captureReason || "stream_end") === "speaking_end" &&
-      pcmBuffer.length < minAsrClipBytes;
-    const skipShortClipAsr = Boolean(isShortSpeakingEndClip);
-    let turnTranscript = "";
-    let asrStartedAtMs = 0;
-    let asrCompletedAtMs = 0;
+      normalizedPcmBuffer.length < minAsrClipBytes;
+    const skipShortClipAsr = Boolean(!hasTranscriptOverride && isShortSpeakingEndClip);
+    let turnTranscript = hasTranscriptOverride ? normalizedTranscriptOverride : "";
+    let asrStartedAtMs = hasTranscriptOverride ? Math.max(0, Number(asrStartedAtMsOverride || 0)) : 0;
+    let asrCompletedAtMs = hasTranscriptOverride ? Math.max(0, Number(asrCompletedAtMsOverride || 0)) : 0;
     let resolvedFallbackModel = transcriptionPlan.fallbackModel || null;
     let resolvedTranscriptionPlanReason = transcriptionPlan.reason;
-    let usedFallbackModelForTranscript = false;
+    let usedFallbackModelForTranscript = hasTranscriptOverride
+      ? Boolean(usedFallbackModelForTranscriptOverride)
+      : false;
     if (skipShortClipAsr) {
       this.store.logAction({
         kind: "voice_runtime",
@@ -6373,18 +7805,18 @@ export class VoiceSessionManager {
         metadata: {
           sessionId: session.id,
           captureReason: String(captureReason || "stream_end"),
-          pcmBytes: pcmBuffer.length,
+          pcmBytes: normalizedPcmBuffer.length,
           clipDurationMs,
           minAsrClipMs: VOICE_TURN_MIN_ASR_CLIP_MS,
           minAsrClipBytes
         }
       });
-    } else if (this.llm?.isAsrReady?.() && this.llm?.transcribeAudio) {
+    } else if (!hasTranscriptOverride && this.llm?.isAsrReady?.() && this.llm?.transcribeAudio) {
       asrStartedAtMs = Date.now();
       turnTranscript = await this.transcribePcmTurn({
         session,
         userId,
-        pcmBuffer,
+        pcmBuffer: normalizedPcmBuffer,
         model: transcriptionPlan.primaryModel,
         sampleRateHz,
         captureReason,
@@ -6414,7 +7846,7 @@ export class VoiceSessionManager {
         turnTranscript = await this.transcribePcmTurn({
           session,
           userId,
-          pcmBuffer,
+          pcmBuffer: normalizedPcmBuffer,
           model: resolvedFallbackModel,
           sampleRateHz,
           captureReason,
@@ -6434,6 +7866,7 @@ export class VoiceSessionManager {
     }
 
     if (
+      !hasTranscriptOverride &&
       turnTranscript &&
       this.shouldDropFallbackLowSignalTurn({
         transcript: turnTranscript,
@@ -6593,7 +8026,7 @@ export class VoiceSessionManager {
           session,
           userId,
           transcript: decision.transcript || turnTranscript,
-          pcmBuffer,
+          pcmBuffer: normalizedPcmBuffer.length ? normalizedPcmBuffer : null,
           captureReason,
           source: "realtime",
           directAddressed: Boolean(decision.directAddressed),
@@ -6605,13 +8038,38 @@ export class VoiceSessionManager {
     }
 
     if (useNativeRealtimeReply) {
+      if (!normalizedPcmBuffer?.length) {
+        return;
+      }
       await this.forwardRealtimeTurnAudio({
         session,
         settings,
         userId,
         transcript: turnTranscript,
-        pcmBuffer,
+        pcmBuffer: normalizedPcmBuffer,
         captureReason
+      });
+      return;
+    }
+
+    if (this.shouldUseOpenAiPerUserTranscription({ session, settings })) {
+      await this.forwardOpenAiRealtimeTextTurnToBrain({
+        session,
+        settings,
+        userId,
+        transcript: turnTranscript,
+        captureReason,
+        source: "realtime_transcript_turn",
+        directAddressed: Boolean(decision.directAddressed),
+        conversationContext: decision.conversationContext || null,
+        latencyContext: {
+          finalizedAtMs,
+          asrStartedAtMs,
+          asrCompletedAtMs,
+          queueWaitMs,
+          pendingQueueDepth,
+          captureReason: String(captureReason || "stream_end")
+        }
       });
       return;
     }
@@ -6870,6 +8328,20 @@ export class VoiceSessionManager {
       return;
     }
 
+    if (this.shouldUseOpenAiPerUserTranscription({ session, settings })) {
+      await this.forwardOpenAiRealtimeTextTurnToBrain({
+        session,
+        settings,
+        userId: latestTurn?.userId || null,
+        transcript: coalescedTranscript,
+        captureReason: "bot_turn_open_deferred_flush",
+        source: "bot_turn_open_deferred_flush",
+        directAddressed: Boolean(decision.directAddressed),
+        conversationContext: decision.conversationContext || null
+      });
+      return;
+    }
+
     await this.runRealtimeBrainReply({
       session,
       settings,
@@ -6880,6 +8352,100 @@ export class VoiceSessionManager {
       conversationContext: decision.conversationContext || null,
       source: "bot_turn_open_deferred_flush"
     });
+  }
+
+  async forwardOpenAiRealtimeTextTurnToBrain({
+    session,
+    settings,
+    userId,
+    transcript = "",
+    captureReason = "stream_end",
+    source = "openai_realtime_text_turn",
+    directAddressed = false,
+    conversationContext = null,
+    latencyContext = null
+  }) {
+    if (!session || session.ending) return false;
+    if (session.mode !== "openai_realtime") return false;
+    const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedTranscript) return false;
+    if (!session.realtimeClient || typeof session.realtimeClient.requestTextUtterance !== "function") {
+      return false;
+    }
+
+    const normalizedUserId = String(userId || "").trim() || null;
+    this.ensureSessionToolRuntimeState(session);
+    if (normalizedUserId) {
+      session.lastOpenAiToolCallerUserId = normalizedUserId;
+    }
+    const speakerName =
+      this.resolveVoiceSpeakerName(session, normalizedUserId) || normalizedUserId || "someone";
+    const labeledTranscript = normalizeVoiceText(
+      `(${speakerName}): ${normalizedTranscript}`,
+      STT_REPLY_MAX_CHARS
+    );
+    if (!labeledTranscript) return false;
+
+    await this.prepareOpenAiRealtimeTurnContext({
+      session,
+      settings,
+      userId: normalizedUserId,
+      transcript: normalizedTranscript,
+      captureReason
+    });
+
+    const replyInterruptionPolicy = this.buildReplyInterruptionPolicy({
+      session,
+      userId: normalizedUserId,
+      directAddressed: Boolean(directAddressed),
+      conversationContext: conversationContext && typeof conversationContext === "object" ? conversationContext : null,
+      source: String(source || "openai_realtime_text_turn")
+    });
+    try {
+      session.realtimeClient.requestTextUtterance(labeledTranscript);
+      this.createTrackedAudioResponse({
+        session,
+        userId: normalizedUserId,
+        source: String(source || "openai_realtime_text_turn"),
+        resetRetryState: true,
+        emitCreateEvent: false,
+        interruptionPolicy: replyInterruptionPolicy,
+        utteranceText: null,
+        latencyContext
+      });
+      session.pendingBargeInRetry = null;
+      session.lastRequestedRealtimeUtterance = null;
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: normalizedUserId,
+        content: "openai_realtime_text_turn_forwarded",
+        metadata: {
+          sessionId: session.id,
+          source: String(source || "openai_realtime_text_turn"),
+          captureReason: String(captureReason || "stream_end"),
+          transcript: normalizedTranscript,
+          labeledTranscript,
+          speakerName
+        }
+      });
+      return true;
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: normalizedUserId,
+        content: `openai_realtime_text_turn_forward_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          source: String(source || "openai_realtime_text_turn"),
+          captureReason: String(captureReason || "stream_end")
+        }
+      });
+      return false;
+    }
   }
 
   async forwardRealtimeTurnAudio({
@@ -7980,6 +9546,1274 @@ export class VoiceSessionManager {
     };
   }
 
+  async refreshOpenAiRealtimeTools({
+    session,
+    settings,
+    reason = "voice_context_refresh"
+  }: {
+    session?: VoiceToolRuntimeSessionLike | null;
+    settings?: VoiceRealtimeToolSettings | null;
+    reason?: string;
+  } = {}) {
+    if (!session || session.ending) return;
+    if (session.mode !== "openai_realtime") return;
+    const realtimeClient = session.realtimeClient;
+    if (!realtimeClient || typeof realtimeClient.updateTools !== "function") return;
+
+    this.ensureSessionToolRuntimeState(session);
+    const previousMcpStatuses = new Map<string, VoiceMcpServerStatus>();
+    for (const entry of Array.isArray(session.mcpStatus) ? session.mcpStatus : []) {
+      const serverName = String(entry?.serverName || "");
+      if (!serverName) continue;
+      previousMcpStatuses.set(serverName, entry);
+    }
+    session.mcpStatus = this.getVoiceMcpServerStatuses().map((entry) => {
+      const previous = previousMcpStatuses.get(String(entry.serverName || ""));
+      return {
+        ...entry,
+        lastError: previous?.lastError || null,
+        lastConnectedAt: previous?.lastConnectedAt || entry.lastConnectedAt || null,
+        lastCallAt: previous?.lastCallAt || entry.lastCallAt || null
+      };
+    });
+
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    const tools = this.buildOpenAiRealtimeFunctionTools({
+      session,
+      settings: resolvedSettings
+    });
+    const nextToolHash = JSON.stringify(
+      tools.map((tool) => ({
+        name: tool.name,
+        toolType: tool.toolType,
+        serverName: tool.serverName || null,
+        description: tool.description,
+        parameters: tool.parameters
+      }))
+    );
+    if (String(session.lastOpenAiRealtimeToolHash || "") === nextToolHash) return;
+
+    try {
+      realtimeClient.updateTools({
+        tools: tools.map((tool) => ({
+          type: "function",
+          name: tool.name,
+          description: tool.description,
+          parameters: tool.parameters
+        })),
+        toolChoice: "auto"
+      });
+      session.openAiToolDefinitions = tools;
+      session.lastOpenAiRealtimeToolHash = nextToolHash;
+      session.lastOpenAiRealtimeToolRefreshAt = Date.now();
+
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "openai_realtime_tools_updated",
+        metadata: {
+          sessionId: session.id,
+          reason: String(reason || "voice_context_refresh"),
+          localToolCount: tools.filter((tool) => tool.toolType === "function").length,
+          mcpToolCount: tools.filter((tool) => tool.toolType === "mcp").length,
+          toolNames: tools.map((tool) => tool.name)
+        }
+      });
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: `openai_realtime_tools_update_failed: ${String(error?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          reason: String(reason || "voice_context_refresh")
+        }
+      });
+    }
+  }
+
+  extractOpenAiFunctionCallEnvelope(event) {
+    if (!event || typeof event !== "object") return null;
+    const eventType = String(event.type || "").trim();
+    if (!OPENAI_FUNCTION_CALL_ITEM_TYPES.has(eventType)) return null;
+
+    const item =
+      event.item && typeof event.item === "object"
+        ? event.item
+        : event.output_item && typeof event.output_item === "object"
+          ? event.output_item
+          : null;
+    const itemType = String(item?.type || "").trim().toLowerCase();
+    if (item && itemType && itemType !== "function_call") return null;
+
+    const callId = normalizeInlineText(event.call_id || item?.call_id, 180);
+    const name = normalizeInlineText(event.name || item?.name, 120);
+    if (!callId && !name) return null;
+
+    if (eventType === "response.function_call_arguments.delta") {
+      const delta = String(event.delta || "").slice(0, OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS);
+      return {
+        phase: "delta",
+        eventType,
+        callId: callId || null,
+        name: name || null,
+        argumentsFragment: delta
+      };
+    }
+
+    if (eventType === "response.function_call_arguments.done") {
+      const argumentsText = String(event.arguments || "").slice(0, OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS);
+      return {
+        phase: "done",
+        eventType,
+        callId: callId || null,
+        name: name || null,
+        argumentsFragment: argumentsText
+      };
+    }
+
+    const itemArguments = String(item?.arguments || event.arguments || "").slice(0, OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS);
+    return {
+      phase: eventType === "response.output_item.done" ? "done" : "added",
+      eventType,
+      callId: callId || null,
+      name: name || null,
+      argumentsFragment: itemArguments
+    };
+  }
+
+  scheduleOpenAiRealtimeToolFollowupResponse({
+    session,
+    userId = null
+  }: {
+    session?: VoiceToolRuntimeSessionLike | null;
+    userId?: string | null;
+  } = {}) {
+    if (!session || session.ending) return;
+    if (session.mode !== "openai_realtime") return;
+    if (session.openAiToolResponseDebounceTimer) {
+      clearTimeout(session.openAiToolResponseDebounceTimer);
+      session.openAiToolResponseDebounceTimer = null;
+    }
+
+    session.openAiToolResponseDebounceTimer = setTimeout(() => {
+      session.openAiToolResponseDebounceTimer = null;
+      if (!session || session.ending) return;
+      if (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0) return;
+      session.awaitingToolOutputs = false;
+
+      const created = this.createTrackedAudioResponse({
+        session,
+        userId: userId || session.lastOpenAiToolCallerUserId || null,
+        source: "tool_call_followup",
+        resetRetryState: true,
+        emitCreateEvent: true
+      });
+      if (!created) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.client.user?.id || null,
+          content: "openai_realtime_tool_followup_skipped",
+          metadata: {
+            sessionId: session.id
+          }
+        });
+      }
+    }, OPENAI_TOOL_RESPONSE_DEBOUNCE_MS);
+  }
+
+  async handleOpenAiRealtimeFunctionCallEvent({ session, settings, event }) {
+    if (!session || session.ending) return;
+    if (session.mode !== "openai_realtime") return;
+    const envelope = this.extractOpenAiFunctionCallEnvelope(event);
+    if (!envelope) return;
+    const runtimeSession = this.ensureSessionToolRuntimeState(session);
+    if (!runtimeSession) return;
+
+    const pendingCalls = runtimeSession.openAiPendingToolCalls;
+    const executions = runtimeSession.openAiToolCallExecutions;
+    const normalizedCallId = normalizeInlineText(envelope.callId, 180);
+    const normalizedName = normalizeInlineText(envelope.name, 120);
+    if (!normalizedCallId) return;
+
+    const existing = pendingCalls.get(normalizedCallId) || null;
+    const pendingCall = existing && typeof existing === "object"
+      ? existing
+      : {
+          callId: normalizedCallId,
+          name: normalizedName || "",
+          argumentsText: "",
+          done: false,
+          startedAtMs: Date.now(),
+          sourceEventType: envelope.eventType
+        };
+    if (normalizedName && !pendingCall.name) {
+      pendingCall.name = normalizedName;
+    }
+
+    const fragment = String(envelope.argumentsFragment || "");
+    if (fragment) {
+      if (envelope.phase === "delta") {
+        pendingCall.argumentsText = `${String(pendingCall.argumentsText || "")}${fragment}`.slice(
+          0,
+          OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS
+        );
+      } else {
+        pendingCall.argumentsText = fragment.slice(0, OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS);
+      }
+    }
+
+    if (envelope.phase === "done") {
+      pendingCall.done = true;
+    }
+    pendingCalls.set(normalizedCallId, pendingCall);
+    if (!pendingCall.done) return;
+    if (executions.has(normalizedCallId)) return;
+
+    executions.set(normalizedCallId, {
+      startedAtMs: Date.now(),
+      toolName: pendingCall.name
+    });
+    session.awaitingToolOutputs = true;
+
+    await this.executeOpenAiRealtimeFunctionCall({
+      session,
+      settings,
+      pendingCall
+    });
+  }
+
+  parseOpenAiRealtimeToolArguments(argumentsText = "") {
+    const normalizedText = String(argumentsText || "")
+      .trim()
+      .slice(0, OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS);
+    if (!normalizedText) return {};
+    try {
+      const parsed = JSON.parse(normalizedText);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+      return parsed;
+    } catch {
+      return {};
+    }
+  }
+
+  resolveOpenAiRealtimeToolDescriptor(session, toolName = "") {
+    const normalizedToolName = normalizeInlineText(toolName, 120);
+    if (!normalizedToolName) return null;
+    const configuredTools = Array.isArray(session?.openAiToolDefinitions)
+      ? session.openAiToolDefinitions
+      : this.buildOpenAiRealtimeFunctionTools({
+        session,
+        settings: session?.settingsSnapshot || this.store.getSettings()
+      });
+    return configuredTools.find((tool) => String(tool?.name || "") === normalizedToolName) || null;
+  }
+
+  summarizeVoiceToolOutput(output: unknown = null) {
+    if (output == null) return null;
+    if (typeof output === "string") {
+      return normalizeInlineText(output, 280) || null;
+    }
+    try {
+      return normalizeInlineText(JSON.stringify(output), 280) || null;
+    } catch {
+      return normalizeInlineText(String(output), 280) || null;
+    }
+  }
+
+  async executeOpenAiRealtimeFunctionCall({
+    session,
+    settings,
+    pendingCall
+  }) {
+    if (!session || session.ending) return;
+    const callId = normalizeInlineText(pendingCall?.callId, 180);
+    const toolName = normalizeInlineText(pendingCall?.name, 120);
+    if (!callId) return;
+    const startedAtMs = Date.now();
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    const callArgs = this.parseOpenAiRealtimeToolArguments(pendingCall?.argumentsText || "");
+    const toolDescriptor = this.resolveOpenAiRealtimeToolDescriptor(session, toolName);
+    const toolType = toolDescriptor?.toolType === "mcp" ? "mcp" : "function";
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.client.user?.id || null,
+      content: "openai_realtime_tool_call_started",
+      metadata: {
+        sessionId: session.id,
+        callId,
+        toolName: toolName || null,
+        toolType,
+        arguments: callArgs
+      }
+    });
+
+    let success = false;
+    let output: unknown = null;
+    let errorMessage = "";
+    try {
+      if (!toolDescriptor) {
+        throw new Error(`unknown_tool:${toolName || "unnamed"}`);
+      }
+
+      if (toolDescriptor.toolType === "mcp") {
+        output = await this.executeMcpVoiceToolCall({
+          session,
+          settings: resolvedSettings,
+          toolDescriptor,
+          args: callArgs
+        });
+      } else {
+        output = await this.executeLocalVoiceToolCall({
+          session,
+          settings: resolvedSettings,
+          toolName: toolDescriptor.name,
+          args: callArgs
+        });
+      }
+      success = true;
+    } catch (error) {
+      success = false;
+      errorMessage = String(error?.message || error);
+      output = {
+        ok: false,
+        error: {
+          message: errorMessage
+        }
+      };
+    }
+
+    const runtimeMs = Math.max(0, Date.now() - startedAtMs);
+    const outputSummary = this.summarizeVoiceToolOutput(output);
+    const eventPayload: VoiceToolCallEvent = {
+      callId,
+      toolName: toolName || toolDescriptor?.name || "unknown_tool",
+      toolType,
+      arguments: callArgs,
+      startedAt: new Date(startedAtMs).toISOString(),
+      completedAt: new Date().toISOString(),
+      runtimeMs,
+      success,
+      outputSummary,
+      error: success ? null : errorMessage,
+      sourceEventType: String(pendingCall?.sourceEventType || "")
+    };
+    this.recordVoiceToolCallEvent({
+      session,
+      event: eventPayload
+    });
+
+    try {
+      if (typeof session.realtimeClient?.sendFunctionCallOutput === "function") {
+        let serializedOutput = "";
+        if (typeof output === "string") {
+          serializedOutput = output;
+        } else {
+          try {
+            serializedOutput = JSON.stringify(output ?? null);
+          } catch {
+            serializedOutput = String(output ?? "");
+          }
+        }
+        session.realtimeClient.sendFunctionCallOutput({
+          callId,
+          output: serializedOutput
+        });
+      }
+    } catch (sendError) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: `openai_realtime_tool_output_send_failed: ${String(sendError?.message || sendError)}`,
+        metadata: {
+          sessionId: session.id,
+          callId,
+          toolName: toolName || null
+        }
+      });
+    }
+
+    this.store.logAction({
+      kind: success ? "voice_runtime" : "voice_error",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.client.user?.id || null,
+      content: success ? "openai_realtime_tool_call_completed" : "openai_realtime_tool_call_failed",
+      metadata: {
+        sessionId: session.id,
+        callId,
+        toolName: toolName || null,
+        toolType,
+        runtimeMs,
+        outputSummary,
+        error: success ? null : errorMessage
+      }
+    });
+
+    if (session.openAiPendingToolCalls instanceof Map) {
+      session.openAiPendingToolCalls.delete(callId);
+    }
+    if (session.openAiToolCallExecutions instanceof Map) {
+      session.openAiToolCallExecutions.delete(callId);
+    }
+    if (!(session.openAiToolCallExecutions instanceof Map) || session.openAiToolCallExecutions.size <= 0) {
+      this.scheduleOpenAiRealtimeToolFollowupResponse({
+        session,
+        userId: session.lastOpenAiToolCallerUserId || null
+      });
+    }
+  }
+
+  resolveVoiceMemoryNamespaceScope({
+    session,
+    namespace = "",
+    authorSpeakerId = null
+  }: {
+    session?: VoiceToolRuntimeSessionLike | null;
+    namespace?: string;
+    authorSpeakerId?: string | null;
+  } = {}) {
+    const normalizedNamespace = normalizeInlineText(namespace, 120);
+    const normalizedAuthorSpeakerId = normalizeInlineText(authorSpeakerId, 80) || null;
+    if (normalizedNamespace && MEMORY_NAMESPACE_USER_RE.test(normalizedNamespace)) {
+      const userMatch = normalizedNamespace.match(MEMORY_NAMESPACE_USER_RE);
+      const namespaceUserId = normalizeInlineText(userMatch?.[1], 80);
+      if (!namespaceUserId) {
+        return {
+          ok: false,
+          reason: "invalid_user_namespace"
+        };
+      }
+      if (normalizedAuthorSpeakerId && normalizedAuthorSpeakerId !== namespaceUserId) {
+        return {
+          ok: false,
+          reason: "user_namespace_mismatch"
+        };
+      }
+      return {
+        ok: true,
+        namespace: `user:${namespaceUserId}`,
+        guildId: String(session?.guildId || "").trim(),
+        subject: namespaceUserId,
+        factTypeDefault: "profile"
+      };
+    }
+
+    if (normalizedNamespace && MEMORY_NAMESPACE_GUILD_RE.test(normalizedNamespace)) {
+      const guildMatch = normalizedNamespace.match(MEMORY_NAMESPACE_GUILD_RE);
+      const namespaceGuildId = normalizeInlineText(guildMatch?.[1], 80);
+      if (!namespaceGuildId) {
+        return {
+          ok: false,
+          reason: "invalid_guild_namespace"
+        };
+      }
+      if (namespaceGuildId !== String(session?.guildId || "").trim()) {
+        return {
+          ok: false,
+          reason: "guild_namespace_mismatch"
+        };
+      }
+      return {
+        ok: true,
+        namespace: `guild:${namespaceGuildId}`,
+        guildId: namespaceGuildId,
+        subject: "lore",
+        factTypeDefault: "general"
+      };
+    }
+
+    return {
+      ok: true,
+      namespace: `guild:${String(session?.guildId || "").trim()}`,
+      guildId: String(session?.guildId || "").trim(),
+      subject: "lore",
+      factTypeDefault: "general"
+    };
+  }
+
+  async executeVoiceMemorySearchTool({
+    session,
+    settings,
+    args
+  }) {
+    if (!this.memory || typeof this.memory.searchDurableFacts !== "function") {
+      return {
+        ok: false,
+        matches: [],
+        error: "memory_unavailable"
+      };
+    }
+
+    const query = normalizeInlineText(args?.query, 240);
+    if (!query) {
+      return {
+        ok: false,
+        matches: [],
+        error: "query_required"
+      };
+    }
+    const topK = clamp(Math.floor(Number(args?.top_k || 6)), 1, 20);
+    const scope = this.resolveVoiceMemoryNamespaceScope({
+      session,
+      namespace: args?.namespace
+    });
+    if (!scope?.ok) {
+      return {
+        ok: false,
+        matches: [],
+        error: String(scope?.reason || "invalid_namespace")
+      };
+    }
+    const tags = Array.isArray(args?.filters?.tags)
+      ? args.filters.tags.map((entry) => normalizeInlineText(entry, 40)).filter(Boolean)
+      : [];
+
+    const rows = await this.memory.searchDurableFacts({
+      guildId: scope.guildId,
+      channelId: session.textChannelId,
+      queryText: query,
+      settings,
+      trace: {
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: session.lastOpenAiToolCallerUserId || null,
+        source: "voice_realtime_tool_memory_search"
+      },
+      limit: clamp(topK * 2, 1, 40)
+    });
+
+    const filtered = (Array.isArray(rows) ? rows : [])
+      .filter((row) => {
+        if (scope.subject && String(row?.subject || "").trim() !== scope.subject) return false;
+        if (tags.length > 0 && !tags.includes(String(row?.fact_type || "").trim())) return false;
+        return true;
+      })
+      .slice(0, topK)
+      .map((row) => ({
+        id: String(row?.id || ""),
+        text: normalizeInlineText(row?.fact, 420) || "",
+        score: Number.isFinite(Number(row?.score))
+          ? Number(Number(row.score).toFixed(3))
+          : Number.isFinite(Number(row?.semanticScore))
+            ? Number(Number(row.semanticScore).toFixed(3))
+            : 0,
+        metadata: {
+          createdAt: String(row?.created_at || ""),
+          tags: [String(row?.fact_type || "").trim()].filter(Boolean)
+        }
+      }));
+
+    return {
+      ok: true,
+      namespace: scope.namespace,
+      matches: filtered
+    };
+  }
+
+  async executeVoiceMemoryWriteTool({
+    session,
+    settings,
+    args
+  }) {
+    if (!this.memory || typeof this.memory.ensureFactVector !== "function") {
+      return {
+        ok: false,
+        written: [],
+        skipped: [],
+        error: "memory_unavailable"
+      };
+    }
+    const runtimeSession = this.ensureSessionToolRuntimeState(session);
+    if (!runtimeSession) {
+      return {
+        ok: false,
+        written: [],
+        skipped: [],
+        error: "session_unavailable"
+      };
+    }
+
+    const now = Date.now();
+    const recentWindow = (Array.isArray(runtimeSession.memoryWriteWindow) ? runtimeSession.memoryWriteWindow : [])
+      .map((value) => Number(value))
+      .filter((value) => Number.isFinite(value) && now - value <= 60_000);
+    runtimeSession.memoryWriteWindow = recentWindow;
+    const remainingWriteCapacity = Math.max(0, VOICE_MEMORY_WRITE_MAX_PER_MINUTE - recentWindow.length);
+    if (remainingWriteCapacity <= 0) {
+      return {
+        ok: false,
+        written: [],
+        skipped: [],
+        error: "write_rate_limited"
+      };
+    }
+
+    const dedupeThreshold = clamp(Number(args?.dedupe?.threshold), 0, 1) || 0.9;
+    const sourceItems = Array.isArray(args?.items) ? args.items : [];
+    const items = sourceItems
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return null;
+        const text = normalizeInlineText(entry.text, 360);
+        if (!text) return null;
+        const tags = Array.isArray(entry.tags)
+          ? entry.tags.map((tag) => normalizeInlineText(tag, 40)).filter(Boolean).slice(0, 6)
+          : [];
+        const authorSpeakerId = normalizeInlineText(entry?.metadata?.authorSpeakerId, 80) || null;
+        return {
+          text,
+          tags,
+          authorSpeakerId
+        };
+      })
+      .filter(Boolean)
+      .slice(0, 8);
+    if (!items.length) {
+      return {
+        ok: false,
+        written: [],
+        skipped: [],
+        error: "items_required"
+      };
+    }
+
+    const written = [];
+    const skipped = [];
+    let writesCommitted = 0;
+
+    for (const item of items) {
+      const scope = this.resolveVoiceMemoryNamespaceScope({
+        session,
+        namespace: args?.namespace,
+        authorSpeakerId: item.authorSpeakerId
+      });
+      if (!scope?.ok) {
+        skipped.push({
+          text: item.text,
+          reason: String(scope?.reason || "invalid_namespace")
+        });
+        continue;
+      }
+      if (MEMORY_SENSITIVE_PATTERN_RE.test(item.text)) {
+        skipped.push({
+          text: item.text,
+          reason: "sensitive_content"
+        });
+        continue;
+      }
+
+      const potentialDuplicates = typeof this.memory.searchDurableFacts === "function"
+        ? await this.memory.searchDurableFacts({
+          guildId: scope.guildId,
+          channelId: session.textChannelId,
+          queryText: item.text,
+          settings,
+          trace: {
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId: session.lastOpenAiToolCallerUserId || null,
+            source: "voice_realtime_tool_memory_dedupe"
+          },
+          limit: 8
+        })
+        : [];
+      const hasDuplicate = (Array.isArray(potentialDuplicates) ? potentialDuplicates : []).some((row) => {
+        if (scope.subject && String(row?.subject || "").trim() !== scope.subject) return false;
+        const score = Math.max(
+          Number.isFinite(Number(row?.score)) ? Number(row.score) : 0,
+          Number.isFinite(Number(row?.semanticScore)) ? Number(row.semanticScore) : 0
+        );
+        return score >= dedupeThreshold;
+      });
+      if (hasDuplicate) {
+        skipped.push({
+          text: item.text,
+          reason: "duplicate"
+        });
+        continue;
+      }
+
+      const sourceMessageId = `voice-tool-${session.id}-${Date.now()}-${written.length + skipped.length + 1}`;
+      const factType = item.tags[0] || scope.factTypeDefault || "general";
+      const inserted = this.store.addMemoryFact({
+        guildId: scope.guildId,
+        channelId: session.textChannelId,
+        subject: scope.subject,
+        fact: item.text,
+        factType,
+        evidenceText: item.text,
+        sourceMessageId,
+        confidence: 0.8
+      });
+      if (!inserted) {
+        skipped.push({
+          text: item.text,
+          reason: "write_failed"
+        });
+        continue;
+      }
+
+      const factRow = this.store.getMemoryFactBySubjectAndFact(scope.guildId, scope.subject, item.text);
+      if (factRow) {
+        await this.memory.ensureFactVector({
+          factRow,
+          settings,
+          trace: {
+            guildId: scope.guildId,
+            channelId: session.textChannelId,
+            userId: session.lastOpenAiToolCallerUserId || null,
+            source: "voice_realtime_tool_memory_write"
+          }
+        });
+      }
+      written.push({
+        id: String(factRow?.id || sourceMessageId),
+        status: "inserted"
+      });
+      writesCommitted += 1;
+      if (writesCommitted >= remainingWriteCapacity) break;
+    }
+
+    if (written.length > 0 && typeof this.memory.queueMemoryRefresh === "function") {
+      await this.memory.queueMemoryRefresh();
+    }
+    if (written.length > 0) {
+      for (let i = 0; i < writesCommitted; i += 1) {
+        runtimeSession.memoryWriteWindow.push(now);
+      }
+      runtimeSession.memoryWriteWindow = runtimeSession.memoryWriteWindow
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && now - value <= 60_000);
+    }
+
+    return {
+      ok: true,
+      namespace: this.resolveVoiceMemoryNamespaceScope({
+        session,
+        namespace: args?.namespace
+      })?.namespace || `guild:${String(session.guildId || "").trim()}`,
+      dedupeThreshold,
+      written,
+      skipped
+    };
+  }
+
+  async executeVoiceMusicSearchTool({ session, args }) {
+    const query = normalizeInlineText(args?.query, 180);
+    if (!query) {
+      return {
+        ok: false,
+        tracks: [],
+        error: "query_required"
+      };
+    }
+    const maxResults = clamp(Math.floor(Number(args?.max_results || 5)), 1, 10);
+    const searchResponse = await this.musicSearch.search(query, {
+      platform: "auto",
+      limit: maxResults
+    });
+    const runtimeSession = this.ensureSessionToolRuntimeState(session);
+    const catalog = runtimeSession?.toolMusicTrackCatalog instanceof Map
+      ? runtimeSession.toolMusicTrackCatalog
+      : new Map();
+    if (runtimeSession && !(runtimeSession.toolMusicTrackCatalog instanceof Map)) {
+      runtimeSession.toolMusicTrackCatalog = catalog;
+    }
+    const tracks = (Array.isArray(searchResponse?.results) ? searchResponse.results : [])
+      .slice(0, maxResults)
+      .map((row) => {
+        const normalized = this.normalizeMusicSelectionResult({
+          id: row.id,
+          title: row.title,
+          artist: row.artist,
+          platform: row.platform,
+          externalUrl: row.externalUrl,
+          durationSeconds: row.durationSeconds
+        });
+        if (!normalized) return null;
+        catalog.set(normalized.id, normalized);
+        return {
+          id: normalized.id,
+          title: normalized.title,
+          artist: normalized.artist,
+          durationMs: Number.isFinite(Number(normalized.durationSeconds))
+            ? Math.max(0, Math.round(Number(normalized.durationSeconds) * 1000))
+            : null,
+          source: normalized.platform === "soundcloud" ? "sc" : "yt",
+          streamUrl: normalized.externalUrl || null
+        };
+      })
+      .filter(Boolean);
+
+    return {
+      ok: true,
+      query,
+      tracks
+    };
+  }
+
+  async executeVoiceMusicQueueAddTool({ session, args }) {
+    const queueState = this.ensureToolMusicQueueState(session);
+    const runtimeSession = this.ensureSessionToolRuntimeState(session);
+    if (!queueState || !runtimeSession) {
+      return {
+        ok: false,
+        queue_length: 0,
+        added: [],
+        error: "queue_unavailable"
+      };
+    }
+    const requestedTrackIds = Array.isArray(args?.tracks)
+      ? args.tracks.map((entry) => normalizeInlineText(entry, 180)).filter(Boolean).slice(0, 12)
+      : [];
+    if (!requestedTrackIds.length) {
+      return {
+        ok: false,
+        queue_length: queueState.tracks.length,
+        added: [],
+        error: "tracks_required"
+      };
+    }
+    const catalog = runtimeSession.toolMusicTrackCatalog instanceof Map ? runtimeSession.toolMusicTrackCatalog : new Map();
+    const resolvedTracks = requestedTrackIds
+      .map((trackId) => {
+        const fromCatalog = catalog.get(trackId);
+        if (!fromCatalog) return null;
+        return {
+          id: fromCatalog.id,
+          title: fromCatalog.title,
+          artist: fromCatalog.artist,
+          durationMs: Number.isFinite(Number(fromCatalog.durationSeconds))
+            ? Math.max(0, Math.round(Number(fromCatalog.durationSeconds) * 1000))
+            : null,
+          source: fromCatalog.platform === "soundcloud" ? "sc" : "yt",
+          streamUrl: fromCatalog.externalUrl || null,
+          platform: fromCatalog.platform,
+          externalUrl: fromCatalog.externalUrl
+        };
+      })
+      .filter(Boolean);
+    if (!resolvedTracks.length) {
+      return {
+        ok: false,
+        queue_length: queueState.tracks.length,
+        added: [],
+        error: "unknown_track_ids"
+      };
+    }
+
+    const positionRaw = args?.position;
+    const insertAt = typeof positionRaw === "number"
+      ? clamp(Math.floor(Number(positionRaw)), 0, queueState.tracks.length)
+      : queueState.tracks.length;
+    queueState.tracks.splice(insertAt, 0, ...resolvedTracks);
+    if (queueState.nowPlayingIndex == null && queueState.tracks.length > 0) {
+      queueState.nowPlayingIndex = 0;
+    }
+    return {
+      ok: true,
+      queue_length: queueState.tracks.length,
+      added: resolvedTracks.map((entry) => entry.id),
+      queue_state: {
+        tracks: queueState.tracks.map((entry) => ({
+          id: entry.id,
+          title: entry.title,
+          artist: entry.artist,
+          source: entry.source
+        })),
+        nowPlayingIndex: queueState.nowPlayingIndex,
+        isPaused: queueState.isPaused
+      }
+    };
+  }
+
+  async playVoiceQueueTrackByIndex({ session, settings, index }) {
+    const queueState = this.ensureToolMusicQueueState(session);
+    if (!queueState) {
+      return {
+        ok: false,
+        error: "queue_unavailable"
+      };
+    }
+    const normalizedIndex = Number.isInteger(Number(index))
+      ? clamp(Math.floor(Number(index)), 0, Math.max(0, queueState.tracks.length - 1))
+      : queueState.nowPlayingIndex != null
+        ? clamp(Math.floor(Number(queueState.nowPlayingIndex)), 0, Math.max(0, queueState.tracks.length - 1))
+        : 0;
+    const track = queueState.tracks[normalizedIndex];
+    if (!track) {
+      return {
+        ok: false,
+        error: "track_not_found"
+      };
+    }
+
+    const selectedTrack = {
+      id: track.id,
+      title: track.title,
+      artist: track.artist || "Unknown",
+      platform: this.normalizeMusicPlatformToken(track.platform, "youtube") || "youtube",
+      externalUrl: track.externalUrl || track.streamUrl || null,
+      durationSeconds: Number.isFinite(Number(track.durationMs))
+        ? Math.max(0, Math.round(Number(track.durationMs) / 1000))
+        : null
+    };
+    await this.requestPlayMusic({
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      requestedByUserId: session.lastOpenAiToolCallerUserId || null,
+      settings,
+      query: normalizeInlineText(`${track.title} ${track.artist || ""}`, 120),
+      trackId: track.id,
+      searchResults: [selectedTrack],
+      reason: "voice_tool_music_play",
+      source: "voice_tool_call",
+      mustNotify: false
+    });
+    queueState.nowPlayingIndex = normalizedIndex;
+    queueState.isPaused = false;
+    return {
+      ok: true,
+      now_playing: {
+        ...track
+      },
+      index: normalizedIndex
+    };
+  }
+
+  buildVoiceQueueStatePayload(session) {
+    const queueState = this.ensureToolMusicQueueState(session);
+    if (!queueState) return null;
+    return {
+      guildId: queueState.guildId,
+      voiceChannelId: queueState.voiceChannelId,
+      tracks: queueState.tracks.map((track) => ({
+        id: track.id,
+        title: track.title,
+        artist: track.artist || null,
+        durationMs: track.durationMs,
+        source: track.source,
+        streamUrl: track.streamUrl || null
+      })),
+      nowPlayingIndex: queueState.nowPlayingIndex,
+      isPaused: queueState.isPaused,
+      volume: queueState.volume
+    };
+  }
+
+  async executeVoiceWebSearchTool({ session, settings, args }) {
+    const query = normalizeInlineText(args?.query, 240);
+    if (!query) {
+      return {
+        ok: false,
+        results: [],
+        answer: "",
+        error: "query_required"
+      };
+    }
+    if (!this.search || typeof this.search.searchAndRead !== "function") {
+      return {
+        ok: false,
+        results: [],
+        answer: "",
+        error: "web_search_unavailable"
+      };
+    }
+
+    const maxResults = clamp(Math.floor(Number(args?.max_results || 5)), 1, 8);
+    const recencyDays = clamp(Math.floor(Number(args?.recency_days || settings?.webSearch?.recencyDaysDefault || 30)), 1, 3650);
+    const toolSettings = {
+      ...(settings || {}),
+      webSearch: {
+        ...((settings && typeof settings === "object" ? settings.webSearch : {}) || {}),
+        enabled: true,
+        maxResults,
+        recencyDaysDefault: recencyDays
+      }
+    };
+
+    const searchResult = await this.search.searchAndRead({
+      settings: toolSettings,
+      query,
+      trace: {
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: session.lastOpenAiToolCallerUserId || null,
+        source: "voice_realtime_tool_web_search"
+      }
+    });
+    const rows = (Array.isArray(searchResult?.results) ? searchResult.results : [])
+      .slice(0, maxResults)
+      .map((row) => ({
+        title: normalizeInlineText(row?.title || row?.pageTitle, 220) || "",
+        snippet: normalizeInlineText(row?.snippet || row?.pageSummary, 420) || "",
+        url: normalizeInlineText(row?.url, 300) || "",
+        source: normalizeInlineText(row?.provider, 60) || searchResult?.providerUsed || "web"
+      }));
+    const answer = rows
+      .slice(0, 3)
+      .map((row) => row.snippet)
+      .filter(Boolean)
+      .join(" ")
+      .slice(0, 1200);
+    return {
+      ok: true,
+      query,
+      recency_days: recencyDays,
+      results: rows,
+      answer
+    };
+  }
+
+  async executeLocalVoiceToolCall({
+    session,
+    settings,
+    toolName,
+    args
+  }) {
+    const normalizedToolName = normalizeInlineText(toolName, 120);
+    if (!normalizedToolName) {
+      throw new Error("missing_tool_name");
+    }
+    if (normalizedToolName === "memory_search") {
+      return await this.executeVoiceMemorySearchTool({
+        session,
+        settings,
+        args
+      });
+    }
+    if (normalizedToolName === "memory_write") {
+      return await this.executeVoiceMemoryWriteTool({
+        session,
+        settings,
+        args
+      });
+    }
+    if (normalizedToolName === "music_search") {
+      return await this.executeVoiceMusicSearchTool({
+        session,
+        args
+      });
+    }
+    if (normalizedToolName === "music_queue_add") {
+      return await this.executeVoiceMusicQueueAddTool({
+        session,
+        args
+      });
+    }
+    if (normalizedToolName === "music_play") {
+      return await this.playVoiceQueueTrackByIndex({
+        session,
+        settings,
+        index: Number(args?.index)
+      });
+    }
+    if (normalizedToolName === "music_pause") {
+      await this.requestPauseMusic({
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        requestedByUserId: session.lastOpenAiToolCallerUserId || null,
+        settings,
+        reason: "voice_tool_music_pause",
+        source: "voice_tool_call",
+        mustNotify: false
+      });
+      const queueState = this.ensureToolMusicQueueState(session);
+      if (queueState) queueState.isPaused = true;
+      return {
+        ok: true,
+        queue_state: this.buildVoiceQueueStatePayload(session)
+      };
+    }
+    if (normalizedToolName === "music_resume") {
+      if (this.musicPlayer?.isPaused?.()) {
+        this.musicPlayer.resume();
+      } else if (this.ensureSessionMusicState(session)?.active) {
+        this.musicPlayer?.resume?.();
+      }
+      const queueState = this.ensureToolMusicQueueState(session);
+      if (queueState) queueState.isPaused = false;
+      return {
+        ok: true,
+        queue_state: this.buildVoiceQueueStatePayload(session)
+      };
+    }
+    if (normalizedToolName === "music_skip") {
+      const queueState = this.ensureToolMusicQueueState(session);
+      if (!queueState || queueState.nowPlayingIndex == null) {
+        await this.requestStopMusic({
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          requestedByUserId: session.lastOpenAiToolCallerUserId || null,
+          settings,
+          reason: "voice_tool_music_skip_without_queue",
+          source: "voice_tool_call",
+          mustNotify: false
+        });
+        return {
+          ok: true,
+          queue_state: this.buildVoiceQueueStatePayload(session)
+        };
+      }
+      const nextIndex = queueState.nowPlayingIndex + 1;
+      await this.requestStopMusic({
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        requestedByUserId: session.lastOpenAiToolCallerUserId || null,
+        settings,
+        reason: "voice_tool_music_skip",
+        source: "voice_tool_call",
+        mustNotify: false
+      });
+      if (nextIndex < queueState.tracks.length) {
+        return await this.playVoiceQueueTrackByIndex({
+          session,
+          settings,
+          index: nextIndex
+        });
+      }
+      queueState.nowPlayingIndex = null;
+      queueState.isPaused = false;
+      return {
+        ok: true,
+        queue_state: this.buildVoiceQueueStatePayload(session)
+      };
+    }
+    if (normalizedToolName === "music_now_playing") {
+      const queueState = this.ensureToolMusicQueueState(session);
+      const nowTrack =
+        queueState && queueState.nowPlayingIndex != null ? queueState.tracks[queueState.nowPlayingIndex] || null : null;
+      const musicState = this.ensureSessionMusicState(session);
+      return {
+        ok: true,
+        now_playing: nowTrack
+          ? {
+              ...nowTrack
+            }
+          : musicState?.lastTrackTitle
+            ? {
+                id: musicState.lastTrackId || null,
+                title: musicState.lastTrackTitle,
+                artist: Array.isArray(musicState.lastTrackArtists) ? musicState.lastTrackArtists.join(", ") : null,
+                source: String(musicState.provider || "").trim().toLowerCase() === "discord" ? "yt" : "yt",
+                streamUrl: musicState.lastTrackUrl || null
+              }
+            : null,
+        queue_state: this.buildVoiceQueueStatePayload(session)
+      };
+    }
+    if (normalizedToolName === "web_search") {
+      return await this.executeVoiceWebSearchTool({
+        session,
+        settings,
+        args
+      });
+    }
+    throw new Error(`unsupported_tool:${normalizedToolName}`);
+  }
+
+  updateVoiceMcpStatus(session, serverName, updates = {}) {
+    if (!session || !serverName) return;
+    this.ensureSessionToolRuntimeState(session);
+    const rows = Array.isArray(session.mcpStatus) ? session.mcpStatus : [];
+    const index = rows.findIndex((row) => String(row?.serverName || "") === String(serverName));
+    if (index < 0) return;
+    rows[index] = {
+      ...rows[index],
+      ...(updates && typeof updates === "object" ? updates : {})
+    };
+    session.mcpStatus = rows;
+  }
+
+  async executeMcpVoiceToolCall({
+    session,
+    settings: _settings,
+    toolDescriptor,
+    args
+  }) {
+    const serverName = normalizeInlineText(toolDescriptor?.serverName, 80);
+    const toolName = normalizeInlineText(toolDescriptor?.name, 120);
+    if (!serverName || !toolName) {
+      throw new Error("invalid_mcp_tool_descriptor");
+    }
+    const serverStatus = (Array.isArray(session?.mcpStatus) ? session.mcpStatus : [])
+      .find((entry) => String(entry?.serverName || "") === serverName) || null;
+    if (!serverStatus) {
+      throw new Error(`mcp_server_not_found:${serverName}`);
+    }
+
+    const baseUrl = String(serverStatus.baseUrl || "").trim().replace(/\/+$/, "");
+    const toolPath = String(serverStatus.toolPath || "/tools/call").trim() || "/tools/call";
+    const targetUrl = `${baseUrl}${toolPath.startsWith("/") ? "" : "/"}${toolPath}`;
+    const timeoutMs = clamp(Math.floor(Number(serverStatus.timeoutMs || 10_000)), 500, 60_000);
+    const headers = {
+      "content-type": "application/json",
+      ...(serverStatus.headers && typeof serverStatus.headers === "object" ? serverStatus.headers : {})
+    };
+
+    try {
+      const response = await fetch(targetUrl, {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          toolName,
+          arguments: args && typeof args === "object" ? args : {}
+        }),
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+      const bodyText = await response.text().catch(() => "");
+      let payload: Record<string, unknown> | null = null;
+      if (bodyText) {
+        try {
+          payload = JSON.parse(bodyText);
+        } catch {
+          payload = {
+            output: bodyText
+          };
+        }
+      }
+      if (!response.ok) {
+        const errorMessage = normalizeInlineText(payload?.error || payload?.message || bodyText, 400) || `HTTP_${response.status}`;
+        this.updateVoiceMcpStatus(session, serverName, {
+          connected: false,
+          lastError: errorMessage,
+          lastCallAt: new Date().toISOString()
+        });
+        throw new Error(errorMessage);
+      }
+      this.updateVoiceMcpStatus(session, serverName, {
+        connected: true,
+        lastError: null,
+        lastCallAt: new Date().toISOString(),
+        lastConnectedAt: new Date().toISOString()
+      });
+      return {
+        ok: payload?.ok === false ? false : true,
+        output: Object.hasOwn(payload || {}, "output") ? payload?.output : payload,
+        error: payload?.error || null
+      };
+    } catch (error) {
+      const message = String(error?.message || error);
+      this.updateVoiceMcpStatus(session, serverName, {
+        connected: false,
+        lastError: message,
+        lastCallAt: new Date().toISOString()
+      });
+      throw error;
+    }
+  }
+
   scheduleOpenAiRealtimeInstructionRefresh({
     session,
     settings,
@@ -8022,6 +10856,11 @@ export class VoiceSessionManager {
     if (!session.realtimeClient || typeof session.realtimeClient.updateInstructions !== "function") return;
 
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    await this.refreshOpenAiRealtimeTools({
+      session,
+      settings: resolvedSettings,
+      reason
+    });
     const instructions = this.buildOpenAiRealtimeInstructions({
       session,
       settings: resolvedSettings,
@@ -8129,6 +10968,33 @@ export class VoiceSessionManager {
           "Durable memory context:",
           userFacts ? `- Known facts about active speaker: ${userFacts}` : null,
           relevantFacts ? `- Other relevant memory: ${relevantFacts}` : null
+        ]
+          .filter(Boolean)
+          .join("\n")
+      );
+    }
+
+    const configuredTools = Array.isArray(session.openAiToolDefinitions) ? session.openAiToolDefinitions : [];
+    if (configuredTools.length > 0) {
+      const localToolNames = configuredTools
+        .filter((tool) => tool?.toolType !== "mcp")
+        .map((tool) => String(tool?.name || "").trim())
+        .filter(Boolean)
+        .slice(0, 16);
+      const mcpToolNames = configuredTools
+        .filter((tool) => tool?.toolType === "mcp")
+        .map((tool) => String(tool?.name || "").trim())
+        .filter(Boolean)
+        .slice(0, 16);
+      sections.push(
+        [
+          "Tooling policy:",
+          localToolNames.length > 0 ? `- Local tools: ${localToolNames.join(", ")}` : null,
+          mcpToolNames.length > 0 ? `- MCP tools: ${mcpToolNames.join(", ")}` : null,
+          "- Use tools when they improve factuality or action execution.",
+          "- For memory writes, only store concise durable facts and avoid secrets.",
+          "- For music controls, prefer queue-aware tools over guessing current state.",
+          "- If a tool fails, explain the failure briefly and continue naturally."
         ]
           .filter(Boolean)
           .join("\n")
@@ -10074,6 +12940,7 @@ export class VoiceSessionManager {
     if (session.responseWatchdogTimer) clearTimeout(session.responseWatchdogTimer);
     if (session.responseDoneGraceTimer) clearTimeout(session.responseDoneGraceTimer);
     if (session.realtimeInstructionRefreshTimer) clearTimeout(session.realtimeInstructionRefreshTimer);
+    if (session.openAiToolResponseDebounceTimer) clearTimeout(session.openAiToolResponseDebounceTimer);
     if (session.deferredTurnFlushTimer) clearTimeout(session.deferredTurnFlushTimer);
     if (session.voiceLookupBusyAnnounceTimer) clearTimeout(session.voiceLookupBusyAnnounceTimer);
     this.clearVoiceThoughtLoopTimer(session);
@@ -10084,6 +12951,9 @@ export class VoiceSessionManager {
     session.pendingSttTurns = 0;
     session.pendingRealtimeTurns = [];
     session.pendingDeferredTurns = [];
+    session.awaitingToolOutputs = false;
+    session.openAiPendingToolCalls = new Map();
+    session.openAiToolCallExecutions = new Map();
     session.pendingBargeInRetry = null;
     session.lastRequestedRealtimeUtterance = null;
     session.activeReplyInterruptionPolicy = null;
@@ -10123,6 +12993,7 @@ export class VoiceSessionManager {
       }
     }
     session.userCaptures.clear();
+    await this.closeAllOpenAiAsrSessions(session, "session_end");
 
     for (const cleanup of session.cleanupHandlers || []) {
       try {

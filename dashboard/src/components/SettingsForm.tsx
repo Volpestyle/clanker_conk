@@ -140,11 +140,11 @@ export default function SettingsForm({
     effectiveForm.initiativeAllowedVideoModels,
     effectiveForm.initiativeVideoModel
   );
-  const isVoiceAgentMode = effectiveForm.voiceMode === "voice_agent";
-  const isOpenAiRealtimeMode = effectiveForm.voiceMode === "openai_realtime";
-  const isGeminiRealtimeMode = effectiveForm.voiceMode === "gemini_realtime";
-  const isElevenLabsRealtimeMode = effectiveForm.voiceMode === "elevenlabs_realtime";
-  const isSttPipelineMode = effectiveForm.voiceMode === "stt_pipeline";
+  const isVoiceAgentMode = effectiveForm.voiceProvider === "xai";
+  const isOpenAiRealtimeMode = effectiveForm.voiceProvider === "openai";
+  const isGeminiRealtimeMode = effectiveForm.voiceProvider === "gemini";
+  const isElevenLabsRealtimeMode = effectiveForm.voiceProvider === "elevenlabs";
+  const isSttPipelineMode = false;
   const showVoiceAdvanced = effectiveForm.voiceEnabled;
   const showInitiativeAdvanced = effectiveForm.autonomousInitiativeEnabled;
   const showInitiativeImageControls = effectiveForm.initiativeImageEnabled || effectiveForm.replyImageEnabled;

@@ -41,7 +41,12 @@ export function VoiceModeSettingsSection({
   const realtimeReplyStrategy = String(form.voiceRealtimeReplyStrategy || "brain")
     .trim()
     .toLowerCase();
-  const usesBrainGeneration = isSttPipelineMode || (isRealtimeMode && realtimeReplyStrategy === "brain");
+  const openAiPerUserAsrBridge =
+    isOpenAiRealtimeMode &&
+    realtimeReplyStrategy === "brain" &&
+    Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge);
+  const usesBrainGeneration =
+    isSttPipelineMode || (isRealtimeMode && realtimeReplyStrategy === "brain" && !openAiPerUserAsrBridge);
   const classifierMergedWithGeneration =
     !form.voiceReplyDecisionLlmEnabled &&
     usesBrainGeneration;
@@ -458,6 +463,24 @@ export function VoiceModeSettingsSection({
 
           {isOpenAiRealtimeMode && (
             <>
+              <div className="toggles">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge)}
+                    onChange={set("voiceOpenAiRealtimeUsePerUserAsrBridge")}
+                    disabled={realtimeReplyStrategy !== "brain"}
+                  />
+                  Use OpenAI per-user ASR bridge (bypass local voice LLM)
+                </label>
+              </div>
+              <p>
+                {realtimeReplyStrategy === "brain"
+                  ? openAiPerUserAsrBridge
+                    ? "Enabled: speaker transcripts are forwarded as labeled text into OpenAI runtime."
+                    : "Disabled: per-speaker transcripts go through the local voice brain."
+                  : "Native reply path does not use this setting."}
+              </p>
               <div className="split">
                 <div>
                   <label htmlFor="voice-openai-realtime-model">OpenAI realtime model</label>
@@ -755,6 +778,30 @@ export function VoiceModeSettingsSection({
                   step="50"
                   value={form.voiceStreamWatchKeyframeIntervalMs}
                   onChange={set("voiceStreamWatchKeyframeIntervalMs")}
+                />
+              </div>
+              <div>
+                <label htmlFor="voice-stream-watch-share-page-max-width-px">Share-page max width (px)</label>
+                <input
+                  id="voice-stream-watch-share-page-max-width-px"
+                  type="number"
+                  min="640"
+                  max="1920"
+                  step="40"
+                  value={form.voiceStreamWatchSharePageMaxWidthPx}
+                  onChange={set("voiceStreamWatchSharePageMaxWidthPx")}
+                />
+              </div>
+              <div>
+                <label htmlFor="voice-stream-watch-share-page-jpeg-quality">Share-page JPEG quality</label>
+                <input
+                  id="voice-stream-watch-share-page-jpeg-quality"
+                  type="number"
+                  min="0.5"
+                  max="0.75"
+                  step="0.05"
+                  value={form.voiceStreamWatchSharePageJpegQuality}
+                  onChange={set("voiceStreamWatchSharePageJpegQuality")}
                 />
               </div>
             </div>

@@ -2935,6 +2935,127 @@ test("runRealtimeTurn keeps native strategy when soundboard is enabled", async (
   assert.equal(forwardedPayloads[0]?.transcript, "");
 });
 
+test("runRealtimeTurn forwards per-user ASR transcript turns into OpenAI room-brain text flow", async () => {
+  const brainPayloads = [];
+  const audioForwardPayloads = [];
+  const textForwardPayloads = [];
+  const manager = createManager();
+  manager.appConfig.openaiApiKey = "test-key";
+  manager.evaluateVoiceReplyDecision = async () => ({
+    allow: true,
+    reason: "llm_yes",
+    participantCount: 2,
+    directAddressed: true,
+    directAddressConfidence: 0.94,
+    transcript: "we should ship tonight",
+    conversationContext: {
+      engagementState: "engaged",
+      engaged: true,
+      engagedWithCurrentSpeaker: true
+    }
+  });
+  manager.runRealtimeBrainReply = async (payload) => {
+    brainPayloads.push(payload);
+    return true;
+  };
+  manager.forwardRealtimeTurnAudio = async (payload) => {
+    audioForwardPayloads.push(payload);
+    return true;
+  };
+  manager.forwardOpenAiRealtimeTextTurnToBrain = async (payload) => {
+    textForwardPayloads.push(payload);
+    return true;
+  };
+
+  const session = {
+    id: "session-openai-text-turn-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    openAiPerUserAsrEnabled: true,
+    pendingRealtimeInputBytes: 0,
+    realtimeClient: {},
+    settingsSnapshot: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        realtimeReplyStrategy: "brain",
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    })
+  };
+
+  await manager.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: null,
+    transcriptOverride: "we should ship tonight",
+    captureReason: "speaking_end",
+    transcriptionModelPrimaryOverride: "gpt-4o-mini-transcribe",
+    transcriptionPlanReasonOverride: "openai_realtime_per_user_transcription"
+  });
+
+  assert.equal(textForwardPayloads.length, 1);
+  assert.equal(textForwardPayloads[0]?.transcript, "we should ship tonight");
+  assert.equal(textForwardPayloads[0]?.source, "realtime_transcript_turn");
+  assert.equal(brainPayloads.length, 0);
+  assert.equal(audioForwardPayloads.length, 0);
+});
+
+test("shouldUseOpenAiPerUserTranscription follows strategy and setting", () => {
+  const manager = createManager();
+  manager.appConfig.openaiApiKey = "test-key";
+
+  const bridgeDisabledSettings = baseSettings({
+    voice: {
+      realtimeReplyStrategy: "brain",
+      openaiRealtime: {
+        usePerUserAsrBridge: false
+      }
+    }
+  });
+  const bridgeEnabledSettings = baseSettings({
+    voice: {
+      realtimeReplyStrategy: "brain",
+      openaiRealtime: {
+        usePerUserAsrBridge: true
+      }
+    }
+  });
+  const nativeSettings = baseSettings({
+    voice: {
+      realtimeReplyStrategy: "native",
+      openaiRealtime: {
+        usePerUserAsrBridge: true
+      }
+    }
+  });
+
+  const session = {
+    id: "session-openai-bridge-mode-test",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false
+  };
+
+  assert.equal(
+    manager.shouldUseOpenAiPerUserTranscription({ session, settings: bridgeDisabledSettings }),
+    false
+  );
+  assert.equal(
+    manager.shouldUseOpenAiPerUserTranscription({ session, settings: bridgeEnabledSettings }),
+    true
+  );
+  assert.equal(
+    manager.shouldUseOpenAiPerUserTranscription({ session, settings: nativeSettings }),
+    false
+  );
+});
+
 test("bindRealtimeHandlers logs OpenAI realtime response.done usage cost", () => {
   const runtimeLogs = [];
   const handlerMap = new Map();
@@ -4109,4 +4230,207 @@ test("voice decision history deduplicates consecutive identical turns", () => {
   const formatted = manager.formatVoiceDecisionHistory(session, 6);
   assert.equal(formatted.includes("user-a"), true);
   assert.equal(formatted.includes("clanker conk"), true);
+});
+
+test("refreshOpenAiRealtimeTools registers local and MCP tool definitions", async () => {
+  const manager = createManager();
+  manager.appConfig.voiceMcpServers = [
+    {
+      serverName: "ops_tools",
+      baseUrl: "https://mcp.local",
+      toolPath: "/tools/call",
+      timeoutMs: 5000,
+      headers: {},
+      tools: [
+        {
+          name: "server_status",
+          description: "Fetch service health.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              service: {
+                type: "string"
+              }
+            },
+            required: ["service"]
+          }
+        }
+      ]
+    }
+  ];
+
+  let updatedToolsPayload = null;
+  const session = {
+    id: "session-openai-tools-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeClient: {
+      updateTools(payload) {
+        updatedToolsPayload = payload;
+      }
+    }
+  };
+  await manager.refreshOpenAiRealtimeTools({
+    session,
+    settings: baseSettings({
+      webSearch: {
+        enabled: true
+      }
+    }),
+    reason: "test"
+  });
+
+  assert.ok(updatedToolsPayload);
+  const toolNames = Array.isArray(updatedToolsPayload?.tools)
+    ? updatedToolsPayload.tools.map((entry) => entry?.name)
+    : [];
+  assert.equal(toolNames.includes("memory_search"), true);
+  assert.equal(toolNames.includes("memory_write"), true);
+  assert.equal(toolNames.includes("music_search"), true);
+  assert.equal(toolNames.includes("server_status"), true);
+  const descriptorRows = Array.isArray(session.openAiToolDefinitions) ? session.openAiToolDefinitions : [];
+  const mcpDescriptor = descriptorRows.find((entry) => entry?.name === "server_status");
+  assert.equal(mcpDescriptor?.toolType, "mcp");
+});
+
+test("handleOpenAiRealtimeFunctionCallEvent executes music_now_playing and sends function output", async () => {
+  const manager = createManager();
+  manager.scheduleOpenAiRealtimeToolFollowupResponse = () => {};
+
+  const sentFunctionOutputs = [];
+  const session = {
+    id: "session-openai-tool-call-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    ending: false,
+    musicQueueState: {
+      guildId: "guild-1",
+      voiceChannelId: "voice-1",
+      tracks: [
+        {
+          id: "youtube:abc",
+          title: "Track A",
+          artist: "Artist A",
+          durationMs: 120000,
+          source: "yt",
+          streamUrl: null,
+          platform: "youtube",
+          externalUrl: "https://youtube.com/watch?v=abc"
+        }
+      ],
+      nowPlayingIndex: 0,
+      isPaused: false,
+      volume: 1
+    },
+    realtimeClient: {
+      sendFunctionCallOutput(payload) {
+        sentFunctionOutputs.push(payload);
+      }
+    }
+  };
+
+  session.openAiToolDefinitions = manager.buildOpenAiRealtimeFunctionTools({
+    session,
+    settings: baseSettings({
+      webSearch: {
+        enabled: true
+      }
+    })
+  });
+
+  await manager.handleOpenAiRealtimeFunctionCallEvent({
+    session,
+    settings: baseSettings(),
+    event: {
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        call_id: "call_music_1",
+        name: "music_now_playing",
+        arguments: "{}"
+      }
+    }
+  });
+
+  assert.equal(sentFunctionOutputs.length, 1);
+  assert.equal(sentFunctionOutputs[0]?.callId, "call_music_1");
+  const outputPayload = JSON.parse(String(sentFunctionOutputs[0]?.output || "{}"));
+  assert.equal(outputPayload?.ok, true);
+  assert.equal(outputPayload?.queue_state?.tracks?.length, 1);
+  assert.equal(outputPayload?.now_playing?.title, "Track A");
+  const toolEvents = Array.isArray(session.toolCallEvents) ? session.toolCallEvents : [];
+  assert.equal(toolEvents.length, 1);
+  assert.equal(toolEvents[0]?.toolName, "music_now_playing");
+});
+
+test("executeVoiceMemoryWriteTool enforces write limit per fact across calls", async () => {
+  let addFactCalls = 0;
+  const manager = createManager({
+    memory: {
+      async searchDurableFacts() {
+        return [];
+      },
+      async ensureFactVector() {},
+      async queueMemoryRefresh() {}
+    }
+  });
+  manager.store.addMemoryFact = () => {
+    addFactCalls += 1;
+    return true;
+  };
+  manager.store.getMemoryFactBySubjectAndFact = (_guildId, _subject, fact) => ({
+    id: `fact-${String(fact || "").replace(/\s+/g, "-")}`
+  });
+
+  const now = Date.now();
+  const session = {
+    id: "session-memory-write-limit-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    lastOpenAiToolCallerUserId: "speaker-1",
+    memoryWriteWindow: [now - 5_000, now - 4_000, now - 3_000, now - 2_000]
+  };
+
+  const firstResult = await manager.executeVoiceMemoryWriteTool({
+    session,
+    settings: baseSettings({
+      memory: {
+        enabled: true
+      }
+    }),
+    args: {
+      namespace: "guild:guild-1",
+      items: [
+        { text: "one" },
+        { text: "two" },
+        { text: "three" }
+      ]
+    }
+  });
+  assert.equal(firstResult?.ok, true);
+  assert.equal(firstResult?.written?.length, 1);
+  assert.equal(addFactCalls, 1);
+  assert.equal(Array.isArray(session.memoryWriteWindow), true);
+  assert.equal(session.memoryWriteWindow.length, 5);
+
+  const secondResult = await manager.executeVoiceMemoryWriteTool({
+    session,
+    settings: baseSettings({
+      memory: {
+        enabled: true
+      }
+    }),
+    args: {
+      namespace: "guild:guild-1",
+      items: [{ text: "four" }]
+    }
+  });
+  assert.equal(secondResult?.ok, false);
+  assert.equal(secondResult?.error, "write_rate_limited");
 });

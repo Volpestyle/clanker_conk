@@ -58,13 +58,14 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.voiceStreamWatchBrainContextMaxEntries, 8);
   assert.equal(form.voiceAsrLanguageMode, "auto");
   assert.equal(form.voiceAsrLanguageHint, "en");
+  assert.equal(form.voiceOpenAiRealtimeUsePerUserAsrBridge, true);
   assert.equal(
     form.voiceStreamWatchBrainContextPrompt,
     "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or observational shout-out commentary."
   );
   assert.equal(form.initiativeChannels, "1\n2");
   assert.equal(form.allowedChannels, "2\n3");
-  assert.equal(form.voiceRealtimeReplyStrategy, "brain");
+  assert.equal(form.voiceBrainProvider, "native");
 
   form.personaHardLimits = "no hate\nno hate\nkeep it fun\n";
   form.botNameAliases = "clank\nconk\nclank\n";
@@ -87,6 +88,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.voiceStreamWatchBrainContextPrompt = "Use stream snapshots as context for replies.";
   form.voiceAsrLanguageMode = "fixed";
   form.voiceAsrLanguageHint = "en-us";
+  form.voiceOpenAiRealtimeUsePerUserAsrBridge = false;
 
   const patch = formToSettingsPatch(form);
   assert.deepEqual(patch.botNameAliases, ["clank", "conk"]);
@@ -94,7 +96,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.deepEqual(patch.permissions.allowedChannelIds, ["2", "3"]);
   assert.deepEqual(patch.initiative.discovery.rssFeeds, ["https://one.example/feed"]);
   assert.deepEqual(patch.initiative.discovery.xHandles, ["@alice", "bob"]);
-  assert.equal(patch.voice.realtimeReplyStrategy, "brain");
+  assert.equal(patch.voice.brainProvider, "native");
   assert.equal(patch.replyFollowupLlm.maxToolSteps, 5);
   assert.equal(patch.replyFollowupLlm.maxTotalToolCalls, 11);
   assert.equal(patch.replyFollowupLlm.maxWebSearchCalls, 4);
@@ -109,6 +111,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.voice.streamWatch.brainContextMinIntervalSeconds, 6);
   assert.equal(patch.voice.streamWatch.brainContextMaxEntries, 5);
   assert.equal(patch.voice.streamWatch.brainContextPrompt, "Use stream snapshots as context for replies.");
+  assert.equal(patch.voice.openaiRealtime.usePerUserAsrBridge, false);
   assert.equal(patch.voice.asrLanguageMode, "fixed");
   assert.equal(patch.voice.asrLanguageHint, "en-us");
   assert.equal(patch.voice.thoughtEngine.enabled, true);
@@ -253,17 +256,17 @@ test("formToSettingsPatch keeps stt pipeline voice generation and reply decider 
   assert.equal(patch.voice.replyDecisionLlm.prompts.systemPromptCompact, "compact {{botName}}");
 });
 
-test("settingsFormModel round-trips realtime reply strategy", () => {
+test("settingsFormModel round-trips voice provider and brain provider", () => {
   const form = settingsToForm({
     voice: {
-      mode: "openai_realtime",
-      realtimeReplyStrategy: "native"
+      voiceProvider: "openai",
+      brainProvider: "anthropic"
     }
   });
 
-  assert.equal(form.voiceRealtimeReplyStrategy, "native");
+  assert.equal(form.voiceBrainProvider, "anthropic");
   const patch = formToSettingsPatch(form);
-  assert.equal(patch.voice.realtimeReplyStrategy, "native");
+  assert.equal(patch.voice.brainProvider, "anthropic");
 });
 
 test("settingsFormModel round-trips elevenlabs realtime settings", () => {
@@ -279,14 +282,14 @@ test("settingsFormModel round-trips elevenlabs realtime settings", () => {
     }
   });
 
-  assert.equal(form.voiceMode, "elevenlabs_realtime");
+  assert.equal(form.voiceProvider, "elevenlabs");
   assert.equal(form.voiceElevenLabsRealtimeAgentId, "agent_123");
   assert.equal(form.voiceElevenLabsRealtimeApiBaseUrl, "https://api.elevenlabs.io");
   assert.equal(form.voiceElevenLabsRealtimeInputSampleRateHz, 16000);
   assert.equal(form.voiceElevenLabsRealtimeOutputSampleRateHz, 22050);
 
   const patch = formToSettingsPatch(form);
-  assert.equal(patch.voice.mode, "elevenlabs_realtime");
+  assert.equal(patch.voice.voiceProvider, "elevenlabs");
   assert.equal(patch.voice.elevenLabsRealtime.agentId, "agent_123");
   assert.equal(patch.voice.elevenLabsRealtime.apiBaseUrl, "https://api.elevenlabs.io");
   assert.equal(patch.voice.elevenLabsRealtime.inputSampleRateHz, 16000);

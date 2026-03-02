@@ -14,6 +14,13 @@ function createHarness({
     voiceChannelId: "vc-1",
     ending: false
   }),
+  settings = {
+    voice: {
+      streamWatch: {
+        enabled: true
+      }
+    }
+  },
   isUserInSessionVoiceChannel = () => true,
   enableWatchStreamForUser = async () => ({ ok: true }),
   ingestVoiceStreamFrame = async () => ({
@@ -26,13 +33,7 @@ function createHarness({
   const watchCalls = [];
   const store = {
     getSettings() {
-      return {
-        voice: {
-          streamWatch: {
-            enabled: true
-          }
-        }
-      };
+      return settings;
     },
     logAction(action) {
       actions.push(action);
@@ -405,4 +406,33 @@ test("renderSharePage returns branded invalid and valid pages", async () => {
     true
   );
   assert.equal(valid.html.includes("const FRAME_INTERVAL_MS=1200;"), true);
+  assert.equal(valid.html.includes("const MAX_WIDTH=960;"), true);
+  assert.equal(valid.html.includes("const JPEG_QUALITY=0.62;"), true);
+  assert.equal(valid.html.includes("TERMINAL_REASONS"), true);
+});
+
+test("renderSharePage clamps capture interval and image encoding settings", async () => {
+  const { manager } = createHarness({
+    settings: {
+      voice: {
+        streamWatch: {
+          enabled: true,
+          keyframeIntervalMs: 150,
+          sharePageMaxWidthPx: 4_000,
+          sharePageJpegQuality: 0.99
+        }
+      }
+    }
+  });
+  const created = await manager.createSession({
+    guildId: "guild-1",
+    channelId: "channel-1",
+    requesterUserId: "user-1",
+    targetUserId: "user-1"
+  });
+  const valid = manager.renderSharePage(created.token);
+  assert.equal(valid.statusCode, 200);
+  assert.equal(valid.html.includes("const FRAME_INTERVAL_MS=500;"), true);
+  assert.equal(valid.html.includes("const MAX_WIDTH=1920;"), true);
+  assert.equal(valid.html.includes("const JPEG_QUALITY=0.75;"), true);
 });

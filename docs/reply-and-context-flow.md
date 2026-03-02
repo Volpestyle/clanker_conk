@@ -76,7 +76,7 @@ So text keeps a second backstop: policy gate first, then model-level skip.
 ### Voice
 
 - `stt_pipeline`: after Stage A, generation runs with `isEagerTurn` for non-direct turns; generation can still return `[SKIP]`/empty and produce no spoken reply.
-- realtime + `voice.realtimeReplyStrategy = brain`: same second-stage generation/skip behavior as STT.
+- realtime + `voice.realtimeReplyStrategy = brain`: same second-stage generation/skip behavior as STT for providers that use local generation (xAI/gemini/elevenlabs/voice-agent) and OpenAI when the per-user ASR bridge is disabled.
 - realtime + `voice.realtimeReplyStrategy = native`: Stage A is the primary gate before forwarding audio to native realtime response creation (no local `[SKIP]` stage).
 
 Join-window greetings are a special case: generation can be force-retried to avoid silence right after join.
@@ -88,13 +88,15 @@ Three distinct voice paths exist. The critical architectural difference is **who
 | Aspect | STT Pipeline | Realtime + Brain (default) | Realtime + Native |
 |---|---|---|---|
 | **ASR** | Your own transcription (`voice.sttPipeline.transcriptionModel`) | Realtime API (OpenAI/xAI/Gemini/ElevenLabs) | Realtime API |
-| **Thinking** | Your LLM (`voice.generationLlm`) | Your LLM (`voice.generationLlm`) | Realtime API |
+| **Thinking** | Your LLM (`voice.generationLlm`) | Your LLM (`voice.generationLlm`) or OpenAI realtime request flow when `voice.openaiRealtime.usePerUserAsrBridge = true` | Realtime API |
 | **TTS** | Your own synthesis (`voice.sttPipeline.ttsModel`) | Realtime API (`requestTextUtterance`) | Realtime API |
 | **Context control** | Full — you build it | Full — you build it | Black box — server manages |
 | **Skip backstop** | Yes (`[SKIP]`/empty) | Yes (`[SKIP]`/empty) | No — Stage A only |
 | **Setting** | `voice.mode = stt_pipeline` | `voice.realtimeReplyStrategy = brain` | `voice.realtimeReplyStrategy = native` |
 
-**STT Pipeline** and **Realtime + Brain** share the same generation path (`generateVoiceTurnReply` in `src/bot/voiceReplies.ts`). The only difference is the I/O layer: STT pipeline handles ASR and TTS locally, while realtime + brain delegates voice I/O to the realtime WebSocket API.
+**STT Pipeline** and **Realtime + Brain** share the same generation path (`generateVoiceTurnReply` in `src/bot/voiceReplies.ts`) when local generation is selected. The only difference is the I/O layer: STT pipeline handles ASR and TTS locally, while realtime + brain delegates voice I/O to the realtime WebSocket API.
+
+For OpenAI realtime with `voice.openaiRealtime.usePerUserAsrBridge = true`, the runtime switches to OpenAI-native ASR, labeled transcript injection, and request/response handling inside OpenAI realtime (`requestTextUtterance`), so `voice.generationLlm` is bypassed.
 
 **Realtime + Native** bypasses local generation entirely. Audio is forwarded to the realtime API which handles ASR, reasoning, and TTS end-to-end. You lose context control and skip capability, but gain lower latency.
 

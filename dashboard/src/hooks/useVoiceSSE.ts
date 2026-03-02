@@ -90,6 +90,57 @@ export type GenerationContextSnapshot = {
   };
 };
 
+export type AsrSessionSnapshot = {
+  userId: string;
+  displayName: string | null;
+  connected: boolean;
+  closing: boolean;
+  connectedAt: string | null;
+  lastAudioAt: string | null;
+  lastTranscriptAt: string | null;
+  idleMs: number | null;
+  idleTtlMs: number;
+  hasIdleTimer: boolean;
+  pendingAudioBytes: number;
+  pendingAudioChunks: number;
+  utterance: {
+    partialText: string;
+    finalSegments: number;
+    bytesSent: number;
+  } | null;
+  model: string | null;
+  sessionId: string | null;
+};
+
+export type BrainToolEntry = {
+  name: string;
+  toolType: "function" | "mcp";
+  serverName: string | null;
+  description: string;
+};
+
+export type ToolCallEvent = {
+  callId: string;
+  toolName: string;
+  toolType: "function" | "mcp";
+  arguments: Record<string, unknown>;
+  startedAt: string;
+  completedAt: string | null;
+  runtimeMs: number | null;
+  success: boolean;
+  outputSummary: string | null;
+  error: string | null;
+};
+
+export type McpServerStatus = {
+  serverName: string;
+  connected: boolean;
+  tools: { name: string; description: string }[];
+  lastError: string | null;
+  lastConnectedAt: string | null;
+  lastCallAt: string | null;
+};
+
 export type RealtimeState = {
   connected?: boolean;
   connectedAt?: string;
@@ -224,6 +275,10 @@ export type VoiceSession = {
     visualFeed: VoiceVisualFeedEntry[];
     brainContextPayload: VoiceBrainContextPayload;
   };
+  asrSessions: AsrSessionSnapshot[] | null;
+  brainTools: BrainToolEntry[] | null;
+  toolCalls: ToolCallEvent[] | null;
+  mcpStatus: McpServerStatus[] | null;
   stt: { pendingTurns: number; contextMessages: number } | null;
   realtime: {
     provider: string;

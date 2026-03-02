@@ -1279,3 +1279,331 @@
   color: var(--ink-3);
   padding: 8px 0;
 }
+
+/* ---- Per-User ASR Sessions ---- */
+
+.vm-asr-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 8px;
+}
+
+.vm-asr-card {
+  background: rgba(30, 41, 59, 0.45);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.vm-asr-card.vm-asr-connected {
+  border-color: rgba(74, 222, 128, 0.25);
+}
+
+.vm-asr-card.vm-asr-disconnected {
+  border-color: rgba(100, 116, 139, 0.3);
+  opacity: 0.7;
+}
+
+.vm-asr-card.vm-asr-closing {
+  border-color: rgba(251, 191, 36, 0.3);
+  opacity: 0.6;
+}
+
+.vm-asr-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vm-asr-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.vm-asr-dot.vm-asr-connected {
+  background: var(--success);
+  box-shadow: 0 0 4px rgba(74, 222, 128, 0.4);
+}
+
+.vm-asr-dot.vm-asr-disconnected {
+  background: #64748b;
+}
+
+.vm-asr-dot.vm-asr-closing {
+  background: var(--warning);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.vm-asr-name {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-1);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vm-asr-model {
+  margin-left: auto;
+  font-size: 0.62rem;
+  color: var(--ink-3);
+  opacity: 0.7;
+  white-space: nowrap;
+}
+
+.vm-asr-partial {
+  font-size: 0.7rem;
+  color: var(--accent);
+  opacity: 0.85;
+  font-style: italic;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vm-asr-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.vm-asr-stat {
+  font-size: 0.62rem;
+  color: var(--ink-3);
+}
+
+.vm-asr-stat-warn {
+  color: var(--warning);
+}
+
+.vm-asr-idle-bar-wrap {
+  position: relative;
+  height: 14px;
+  background: rgba(100, 116, 139, 0.15);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 2px;
+}
+
+.vm-asr-idle-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  background: rgba(251, 191, 36, 0.25);
+  transition: width 1s linear;
+  border-radius: 3px;
+}
+
+.vm-asr-idle-label {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  height: 100%;
+  padding: 0 6px;
+  font-size: 0.58rem;
+  color: var(--ink-3);
+  white-space: nowrap;
+}
+
+/* ---- Brain Tools Config ---- */
+
+.vm-tools-group {
+  margin-bottom: 6px;
+}
+
+.vm-tools-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.vm-tool-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.64rem;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  cursor: default;
+}
+
+.vm-tool-fn {
+  background: rgba(96, 165, 250, 0.12);
+  color: #60a5fa;
+}
+
+.vm-tool-mcp {
+  background: rgba(192, 132, 252, 0.12);
+  color: #c084fc;
+}
+
+/* ---- Tool Call Log ---- */
+
+.vm-toolcall-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+
+.vm-toolcall-row {
+  background: rgba(30, 41, 59, 0.35);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 6px 8px;
+}
+
+.vm-toolcall-row.vm-toolcall-fail {
+  border-color: rgba(248, 113, 113, 0.25);
+}
+
+.vm-toolcall-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.vm-toolcall-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.vm-toolcall-ok {
+  background: var(--success);
+}
+
+.vm-toolcall-err {
+  background: var(--danger);
+}
+
+.vm-toolcall-name {
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: var(--ink-1);
+}
+
+.vm-toolcall-runtime {
+  font-size: 0.62rem;
+  color: var(--ink-3);
+  margin-left: auto;
+}
+
+.vm-toolcall-slow {
+  color: var(--warning);
+}
+
+.vm-toolcall-time {
+  font-size: 0.6rem;
+  color: var(--ink-3);
+  opacity: 0.7;
+}
+
+.vm-toolcall-args {
+  font-size: 0.62rem;
+  color: var(--ink-3);
+  font-family: var(--mono, monospace);
+  margin-top: 2px;
+  word-break: break-all;
+}
+
+.vm-toolcall-error {
+  font-size: 0.66rem;
+  color: var(--danger);
+  margin-top: 3px;
+}
+
+.vm-toolcall-output {
+  font-size: 0.62rem;
+  color: var(--ink-3);
+  opacity: 0.8;
+  margin-top: 2px;
+  font-style: italic;
+}
+
+/* ---- MCP Panel ---- */
+
+.vm-mcp-server {
+  background: rgba(30, 41, 59, 0.35);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 8px 10px;
+  margin-bottom: 6px;
+}
+
+.vm-mcp-server:last-child {
+  margin-bottom: 0;
+}
+
+.vm-mcp-connected {
+  border-color: rgba(74, 222, 128, 0.2);
+}
+
+.vm-mcp-disconnected {
+  border-color: rgba(100, 116, 139, 0.3);
+  opacity: 0.7;
+}
+
+.vm-mcp-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.vm-mcp-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.vm-mcp-dot-ok {
+  background: var(--success);
+  box-shadow: 0 0 4px rgba(74, 222, 128, 0.4);
+}
+
+.vm-mcp-dot-err {
+  background: #64748b;
+}
+
+.vm-mcp-name {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--ink-1);
+}
+
+.vm-mcp-tool-count {
+  margin-left: auto;
+  font-size: 0.62rem;
+  color: var(--ink-3);
+}
+
+.vm-mcp-error {
+  font-size: 0.66rem;
+  color: var(--danger);
+  margin-top: 4px;
+}
+
+.vm-mcp-meta {
+  display: flex;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.vm-mcp-meta-item {
+  font-size: 0.6rem;
+  color: var(--ink-3);
+  opacity: 0.7;
+}

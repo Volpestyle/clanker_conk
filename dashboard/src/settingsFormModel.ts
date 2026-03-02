@@ -75,7 +75,7 @@ export function settingsToForm(settings) {
   const defaultInitiative = defaults.initiative;
   const defaultDiscovery = defaults.initiative.discovery;
   const activity = settings?.activity ?? {};
-  const selectedVoiceMode = settings?.voice?.mode ?? defaultVoice.mode;
+  const selectedVoiceProvider = settings?.voice?.voiceProvider ?? defaultVoice.voiceProvider;
   return {
     botName: settings?.botName ?? defaults.botName,
     botNameAliases: formatLineList(settings?.botNameAliases ?? defaults.botNameAliases),
@@ -142,8 +142,8 @@ export function settingsToForm(settings) {
     videoContextAsrFallback: settings?.videoContext?.allowAsrFallback ?? defaultVideoContext.allowAsrFallback,
     videoContextMaxAsrSeconds: settings?.videoContext?.maxAsrSeconds ?? defaultVideoContext.maxAsrSeconds,
     voiceEnabled: settings?.voice?.enabled ?? defaultVoice.enabled,
-    voiceMode: selectedVoiceMode,
-    voiceRealtimeReplyStrategy: settings?.voice?.realtimeReplyStrategy ?? defaultVoice.realtimeReplyStrategy,
+    voiceProvider: selectedVoiceProvider,
+    voiceBrainProvider: settings?.voice?.brainProvider ?? defaultVoice.brainProvider,
     voiceAsrLanguageMode: settings?.voice?.asrLanguageMode ?? defaultVoice.asrLanguageMode,
     voiceAsrLanguageHint: settings?.voice?.asrLanguageHint ?? defaultVoice.asrLanguageHint,
     voiceAllowNsfwHumor: settings?.voice?.allowNsfwHumor ?? defaultVoice.allowNsfwHumor,
@@ -196,6 +196,8 @@ export function settingsToForm(settings) {
     voiceOpenAiRealtimeVoice: settings?.voice?.openaiRealtime?.voice ?? defaultVoiceOpenAiRealtime.voice,
     voiceOpenAiRealtimeInputTranscriptionModel:
       settings?.voice?.openaiRealtime?.inputTranscriptionModel ?? defaultVoiceOpenAiRealtime.inputTranscriptionModel,
+    voiceOpenAiRealtimeUsePerUserAsrBridge:
+      settings?.voice?.openaiRealtime?.usePerUserAsrBridge ?? defaultVoiceOpenAiRealtime.usePerUserAsrBridge,
     voiceElevenLabsRealtimeAgentId:
       settings?.voice?.elevenLabsRealtime?.agentId ?? defaultVoiceElevenLabsRealtime.agentId,
     voiceElevenLabsRealtimeVoiceId:
@@ -237,6 +239,10 @@ export function settingsToForm(settings) {
       settings?.voice?.streamWatch?.brainContextMaxEntries ?? defaultVoiceStreamWatch.brainContextMaxEntries,
     voiceStreamWatchBrainContextPrompt:
       settings?.voice?.streamWatch?.brainContextPrompt ?? defaultVoiceStreamWatch.brainContextPrompt,
+    voiceStreamWatchSharePageMaxWidthPx:
+      settings?.voice?.streamWatch?.sharePageMaxWidthPx ?? defaultVoiceStreamWatch.sharePageMaxWidthPx,
+    voiceStreamWatchSharePageJpegQuality:
+      settings?.voice?.streamWatch?.sharePageJpegQuality ?? defaultVoiceStreamWatch.sharePageJpegQuality,
     voiceSoundboardEnabled: settings?.voice?.soundboard?.enabled ?? defaultVoiceSoundboard.enabled,
     voiceSoundboardAllowExternalSounds: settings?.voice?.soundboard?.allowExternalSounds ?? defaultVoiceSoundboard.allowExternalSounds,
     voiceSoundboardPreferredSoundIds: formatLineList(settings?.voice?.soundboard?.preferredSoundIds),
@@ -364,8 +370,9 @@ export function formToSettingsPatch(form) {
     },
     voice: {
       enabled: form.voiceEnabled,
-      mode: form.voiceMode,
-      realtimeReplyStrategy: String(form.voiceRealtimeReplyStrategy || "").trim(),
+      voiceProvider: String(form.voiceProvider || "openai").trim(),
+      brainProvider: String(form.voiceBrainProvider || "native").trim(),
+      transcriberProvider: "openai",
       asrLanguageMode: String(form.voiceAsrLanguageMode || "").trim(),
       asrLanguageHint: String(form.voiceAsrLanguageHint || "").trim(),
       allowNsfwHumor: form.voiceAllowNsfwHumor,
@@ -411,7 +418,8 @@ export function formToSettingsPatch(form) {
         voice: String(form.voiceOpenAiRealtimeVoice || "").trim(),
         inputAudioFormat: "pcm16",
         outputAudioFormat: "pcm16",
-        inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim()
+        inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
+        usePerUserAsrBridge: Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge)
       },
       elevenLabsRealtime: {
         agentId: String(form.voiceElevenLabsRealtimeAgentId || "").trim(),
@@ -444,7 +452,9 @@ export function formToSettingsPatch(form) {
         brainContextEnabled: Boolean(form.voiceStreamWatchBrainContextEnabled),
         brainContextMinIntervalSeconds: Number(form.voiceStreamWatchBrainContextMinIntervalSeconds),
         brainContextMaxEntries: Number(form.voiceStreamWatchBrainContextMaxEntries),
-        brainContextPrompt: String(form.voiceStreamWatchBrainContextPrompt || "").trim()
+        brainContextPrompt: String(form.voiceStreamWatchBrainContextPrompt || "").trim(),
+        sharePageMaxWidthPx: Number(form.voiceStreamWatchSharePageMaxWidthPx),
+        sharePageJpegQuality: Number(form.voiceStreamWatchSharePageJpegQuality)
       },
       soundboard: {
         enabled: form.voiceSoundboardEnabled,

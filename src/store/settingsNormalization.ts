@@ -7,7 +7,12 @@ import {
 } from "../llm/llmHelpers.ts";
 import { normalizeProviderOrder } from "../search.ts";
 import { clamp, deepMerge, uniqueIdList } from "../utils.ts";
-import { normalizeVoiceRuntimeMode } from "../voice/voiceModes.ts";
+import {
+  normalizeVoiceRuntimeMode,
+  normalizeVoiceProvider,
+  normalizeBrainProvider,
+  normalizeTranscriberProvider
+} from "../voice/voiceModes.ts";
 import {
   DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT,
   VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
@@ -356,6 +361,7 @@ export function normalizeSettings(raw) {
     inputAudioFormat?: string;
     outputAudioFormat?: string;
     inputTranscriptionModel?: string;
+    usePerUserAsrBridge?: boolean;
   };
   type VoiceElevenLabsRealtimeDefaults = {
     agentId?: string;
@@ -420,8 +426,9 @@ export function normalizeSettings(raw) {
   };
   type VoiceDefaults = {
     enabled?: boolean;
-    mode?: string;
-    realtimeReplyStrategy?: string;
+    voiceProvider?: string;
+    brainProvider?: string;
+    transcriberProvider?: string;
     asrLanguageMode?: string;
     asrLanguageHint?: string;
     allowNsfwHumor?: boolean;
@@ -476,7 +483,16 @@ export function normalizeSettings(raw) {
 
   merged.voice.enabled =
     merged.voice?.enabled !== undefined ? Boolean(merged.voice?.enabled) : Boolean(defaultVoice.enabled);
-  merged.voice.mode = normalizeVoiceRuntimeMode(merged.voice?.mode, "voice_agent");
+  merged.voice.voiceProvider = normalizeVoiceProvider(merged.voice?.voiceProvider, "openai");
+  merged.voice.brainProvider = normalizeBrainProvider(
+    merged.voice?.brainProvider,
+    merged.voice?.voiceProvider,
+    "native"
+  );
+  merged.voice.transcriberProvider = normalizeTranscriberProvider(
+    merged.voice?.transcriberProvider,
+    "openai"
+  );
   merged.voice.asrLanguageMode = normalizeVoiceAsrLanguageMode(
     merged.voice?.asrLanguageMode,
     defaultVoice.asrLanguageMode || "auto"
@@ -484,10 +500,6 @@ export function normalizeSettings(raw) {
   merged.voice.asrLanguageHint = normalizeVoiceAsrLanguageHint(
     merged.voice?.asrLanguageHint,
     defaultVoice.asrLanguageHint || "en"
-  );
-  merged.voice.realtimeReplyStrategy = normalizeRealtimeReplyStrategy(
-    merged.voice?.realtimeReplyStrategy,
-    defaultVoice.realtimeReplyStrategy
   );
   merged.voice.allowNsfwHumor =
     merged.voice?.allowNsfwHumor !== undefined
@@ -689,6 +701,10 @@ export function normalizeSettings(raw) {
   )
     .trim()
     .slice(0, 120);
+  merged.voice.openaiRealtime.usePerUserAsrBridge =
+    merged.voice?.openaiRealtime?.usePerUserAsrBridge !== undefined
+      ? Boolean(merged.voice?.openaiRealtime?.usePerUserAsrBridge)
+      : Boolean(defaultVoiceOpenAiRealtime.usePerUserAsrBridge);
   merged.voice.elevenLabsRealtime.agentId = String(
     merged.voice?.elevenLabsRealtime?.agentId || defaultVoiceElevenLabsRealtime.agentId || ""
   )
