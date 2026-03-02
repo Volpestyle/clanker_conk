@@ -867,6 +867,54 @@ test("bindSessionHandlers does not restart per-user OpenAI ASR on repeated speak
   assert.equal(beginCalls[0]?.userId, "speaker-1");
 });
 
+test("bindSessionHandlers starts shared OpenAI ASR only for the first concurrent speaker", () => {
+  const { manager } = createManager();
+  manager.appConfig.openaiApiKey = "test-openai-key";
+  const speaking = new EventEmitter();
+  const connectionStateEmitter = new EventEmitter();
+  const beginCalls = [];
+  manager.beginOpenAiSharedAsrUtterance = (payload) => {
+    beginCalls.push(payload);
+    return true;
+  };
+  manager.startInboundCapture = ({ session, userId }) => {
+    if (!session.userCaptures.has(userId)) {
+      session.userCaptures.set(userId, {
+        speakingEndFinalizeTimer: null
+      });
+    }
+  };
+  manager.armAssertiveBargeIn = () => {};
+
+  const session = createSession({
+    mode: "openai_realtime",
+    cleanupHandlers: [],
+    settingsSnapshot: {
+      botName: "clanker conk",
+      voice: {
+        enabled: true,
+        brainProvider: "anthropic",
+        realtimeReplyStrategy: "brain",
+        openaiRealtime: {
+          usePerUserAsrBridge: false
+        }
+      }
+    },
+    connection: {
+      receiver: { speaking },
+      on: connectionStateEmitter.on.bind(connectionStateEmitter),
+      off: connectionStateEmitter.off.bind(connectionStateEmitter)
+    }
+  });
+
+  manager.bindSessionHandlers(session, session.settingsSnapshot);
+  speaking.emit("start", "speaker-1");
+  speaking.emit("start", "speaker-2");
+
+  assert.equal(beginCalls.length, 1);
+  assert.equal(beginCalls[0]?.userId, "speaker-1");
+});
+
 test("maybeHandleInterruptedReplyRecovery retries short barge-ins with the prior utterance", () => {
   const { manager, logs } = createManager();
   const retryCalls = [];

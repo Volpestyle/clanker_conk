@@ -79,7 +79,7 @@ test("reply decider blocks turns when transcript is missing", async () => {
   assert.equal(decision.reason, "missing_transcript");
 });
 
-test("reply decider skips llm for low-signal unaddressed fragments", async () => {
+test("reply decider routes low-signal unaddressed fragments through llm", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -99,9 +99,9 @@ test("reply decider skips llm for low-signal unaddressed fragments", async () =>
     transcript: "hmm"
   });
 
-  assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "low_signal_fragment");
-  assert.equal(callCount, 0);
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "llm_yes");
+  assert.equal(callCount, 1);
 });
 
 test("reply decider treats multilingual question punctuation as high-signal", async () => {
@@ -182,7 +182,7 @@ test("reply decider allows same-speaker followup after recent bot reply to direc
   assert.equal(callCount, 0);
 });
 
-test("reply decider blocks low-signal fragments even from recently direct-addressed speaker", async () => {
+test("reply decider routes low-signal fragments through llm for recently addressed speaker", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -204,12 +204,12 @@ test("reply decider blocks low-signal fragments even from recently direct-addres
     transcript: "hmm"
   });
 
-  assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "low_signal_fragment");
-  assert.equal(callCount, 0);
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "llm_yes");
+  assert.equal(callCount, 1);
 });
 
-test("reply decider allows low-signal direct wake-word pings", async () => {
+test("reply decider allows direct wake-word pings via direct-address fast path", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -230,7 +230,7 @@ test("reply decider allows low-signal direct wake-word pings", async () => {
   });
 
   assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "direct_address_wake_ping");
+  assert.equal(decision.reason, "direct_address_fast_path");
   assert.equal(decision.directAddressed, true);
   assert.equal(callCount, 0);
 });
@@ -256,7 +256,7 @@ test("reply decider allows short clanker wake ping", async () => {
   });
 
   assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "direct_address_wake_ping");
+  assert.equal(decision.reason, "direct_address_fast_path");
   assert.equal(decision.directAddressed, true);
   assert.equal(callCount, 0);
 });
@@ -328,7 +328,7 @@ test("reply decider routes join-window greetings through llm with join context",
   assert.equal(callCount, greetings.length);
 });
 
-test("reply decider keeps low-signal greetings out of llm once join window is stale", async () => {
+test("reply decider still routes low-signal greetings through llm once join window is stale", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -349,10 +349,10 @@ test("reply decider keeps low-signal greetings out of llm once join window is st
     transcript: "hola"
   });
 
-  assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "low_signal_fragment");
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "llm_yes");
   assert.equal(decision.directAddressed, false);
-  assert.equal(callCount, 0);
+  assert.equal(callCount, 1);
 });
 
 test("reply decider only treats join-window what-up greetings as llm-eligible when join window is fresh", async () => {
@@ -384,7 +384,7 @@ test("reply decider only treats join-window what-up greetings as llm-eligible wh
   assert.equal(callCount, 2);
 });
 
-test("reply decider blocks short low-signal clips right after a bot reply", async () => {
+test("reply decider in merged realtime mode allows short clips through generation path", async () => {
   const manager = createManager();
   const decision = await manager.evaluateVoiceReplyDecision({
     session: {
@@ -415,9 +415,8 @@ test("reply decider blocks short low-signal clips right after a bot reply", asyn
     }
   });
 
-  assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "low_signal_recent_reply_clip");
-  assert.equal(Number.isFinite(Number(decision.retryAfterMs)), true);
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "classifier_disabled_merged_with_generation");
 });
 
 test("reply decider blocks unaddressed turns when eagerness is disabled", async () => {
@@ -527,11 +526,11 @@ test("reply decider routes wake-like variants through llm admission", async () =
     if (row.expected) {
       const reason = String(decision.reason || "");
       assert.equal(
-        ["direct_address_fast_path", "direct_address_wake_ping", "llm_yes"].includes(reason),
+        ["direct_address_fast_path", "llm_yes"].includes(reason),
         true,
         row.text
       );
-      if (reason === "direct_address_fast_path" || reason === "direct_address_wake_ping") {
+      if (reason === "direct_address_fast_path") {
         assert.equal(decision.directAddressed, true, row.text);
       }
     } else {
@@ -1367,7 +1366,7 @@ test("realtime transcription plan upgrades short mini clips to full model", () =
     sampleRateHz: 24000
   });
 
-  assert.equal(plan.primaryModel, "gpt-4o-transcribe");
+  assert.equal(plan.primaryModel, "gpt-4o-mini-transcribe");
   assert.equal(plan.fallbackModel, null);
   assert.equal(plan.reason, "short_clip_prefers_full_model");
 });
@@ -1381,7 +1380,7 @@ test("realtime transcription plan keeps mini with full fallback on longer clips"
   });
 
   assert.equal(plan.primaryModel, "gpt-4o-mini-transcribe");
-  assert.equal(plan.fallbackModel, "gpt-4o-transcribe");
+  assert.equal(plan.fallbackModel, "whisper-1");
   assert.equal(plan.reason, "mini_with_full_fallback");
 });
 
@@ -1428,12 +1427,12 @@ test("runRealtimeTurn in voice_agent retries full ASR model after empty mini tra
     captureReason: "stream_end"
   });
 
-  assert.deepEqual(attemptedModels, ["gpt-4o-mini-transcribe", "gpt-4o-transcribe"]);
+  assert.deepEqual(attemptedModels, ["gpt-4o-mini-transcribe", "whisper-1"]);
   const addressingLog = runtimeLogs.find(
     (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
   );
   assert.equal(Boolean(addressingLog), true);
-  assert.equal(addressingLog?.metadata?.transcriptionModelFallback, "gpt-4o-transcribe");
+  assert.equal(addressingLog?.metadata?.transcriptionModelFallback, "whisper-1");
   assert.equal(addressingLog?.metadata?.transcriptionPlanReason, "mini_with_full_fallback_runtime");
   assert.equal(addressingLog?.metadata?.transcript, "fallback transcript");
 });
@@ -1558,7 +1557,7 @@ test("runRealtimeTurn transcribes speaking_end clips above minimum duration thre
   assert.equal(addressingLog?.metadata?.transcript, "yo");
 });
 
-test("runRealtimeTurn blocks duplicate followup replies for short low-signal clips after bot speech", async () => {
+test("runRealtimeTurn forwards short post-reply clips through merged realtime generation", async () => {
   const runtimeLogs = [];
   let transcribeCalls = 0;
   let replyCalls = 0;
@@ -1609,16 +1608,12 @@ test("runRealtimeTurn blocks duplicate followup replies for short low-signal cli
   });
 
   assert.equal(transcribeCalls, 1);
-  assert.equal(replyCalls, 0);
+  assert.equal(replyCalls, 1);
   const addressingLog = runtimeLogs.find(
     (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
   );
   assert.equal(Boolean(addressingLog), true);
-  assert.equal(addressingLog?.metadata?.reason, "low_signal_recent_reply_clip");
-  assert.equal(
-    runtimeLogs.some((row) => row?.kind === "voice_runtime" && row?.content === "realtime_reply_requested"),
-    false
-  );
+  assert.equal(addressingLog?.metadata?.reason, "classifier_disabled_merged_with_generation");
 });
 
 test("runRealtimeTurn drops near-silent clips before ASR", async () => {
@@ -3005,6 +3000,78 @@ test("runRealtimeTurn forwards per-user ASR transcript turns into OpenAI room-br
   assert.equal(audioForwardPayloads.length, 0);
 });
 
+test("runRealtimeTurn forwards shared ASR transcript turns into OpenAI room-brain text flow", async () => {
+  const brainPayloads = [];
+  const audioForwardPayloads = [];
+  const textForwardPayloads = [];
+  const manager = createManager();
+  manager.appConfig.openaiApiKey = "test-key";
+  manager.evaluateVoiceReplyDecision = async () => ({
+    allow: true,
+    reason: "llm_yes",
+    participantCount: 2,
+    directAddressed: true,
+    directAddressConfidence: 0.94,
+    transcript: "shared mode transcript",
+    conversationContext: {
+      engagementState: "engaged",
+      engaged: true,
+      engagedWithCurrentSpeaker: true
+    }
+  });
+  manager.runRealtimeBrainReply = async (payload) => {
+    brainPayloads.push(payload);
+    return true;
+  };
+  manager.forwardRealtimeTurnAudio = async (payload) => {
+    audioForwardPayloads.push(payload);
+    return true;
+  };
+  manager.forwardOpenAiRealtimeTextTurnToBrain = async (payload) => {
+    textForwardPayloads.push(payload);
+    return true;
+  };
+
+  const session = {
+    id: "session-openai-shared-text-turn-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    realtimeClient: {},
+    settingsSnapshot: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        realtimeReplyStrategy: "brain",
+        openaiRealtime: {
+          usePerUserAsrBridge: false
+        },
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    })
+  };
+
+  await manager.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: null,
+    transcriptOverride: "shared mode transcript",
+    captureReason: "speaking_end",
+    transcriptionModelPrimaryOverride: "gpt-4o-mini-transcribe",
+    transcriptionPlanReasonOverride: "openai_realtime_shared_transcription"
+  });
+
+  assert.equal(textForwardPayloads.length, 1);
+  assert.equal(textForwardPayloads[0]?.transcript, "shared mode transcript");
+  assert.equal(textForwardPayloads[0]?.source, "realtime_transcript_turn");
+  assert.equal(brainPayloads.length, 0);
+  assert.equal(audioForwardPayloads.length, 0);
+});
+
 test("shouldUseOpenAiPerUserTranscription follows strategy and setting", () => {
   const manager = createManager();
   manager.appConfig.openaiApiKey = "test-key";
@@ -3052,6 +3119,57 @@ test("shouldUseOpenAiPerUserTranscription follows strategy and setting", () => {
   );
   assert.equal(
     manager.shouldUseOpenAiPerUserTranscription({ session, settings: nativeSettings }),
+    false
+  );
+});
+
+test("shouldUseOpenAiSharedTranscription follows strategy and setting", () => {
+  const manager = createManager();
+  manager.appConfig.openaiApiKey = "test-key";
+
+  const bridgeDisabledSettings = baseSettings({
+    voice: {
+      realtimeReplyStrategy: "brain",
+      openaiRealtime: {
+        usePerUserAsrBridge: false
+      }
+    }
+  });
+  const bridgeEnabledSettings = baseSettings({
+    voice: {
+      realtimeReplyStrategy: "brain",
+      openaiRealtime: {
+        usePerUserAsrBridge: true
+      }
+    }
+  });
+  const nativeSettings = baseSettings({
+    voice: {
+      realtimeReplyStrategy: "native",
+      openaiRealtime: {
+        usePerUserAsrBridge: false
+      }
+    }
+  });
+
+  const session = {
+    id: "session-openai-shared-bridge-mode-test",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false
+  };
+
+  assert.equal(
+    manager.shouldUseOpenAiSharedTranscription({ session, settings: bridgeDisabledSettings }),
+    true
+  );
+  assert.equal(
+    manager.shouldUseOpenAiSharedTranscription({ session, settings: bridgeEnabledSettings }),
+    false
+  );
+  assert.equal(
+    manager.shouldUseOpenAiSharedTranscription({ session, settings: nativeSettings }),
     false
   );
 });
@@ -3618,13 +3736,13 @@ test("runSttPipelineTurn retries full ASR model after empty mini transcript", as
     captureReason: "stream_end"
   });
 
-  assert.deepEqual(attemptedModels, ["gpt-4o-mini-transcribe", "gpt-4o-transcribe"]);
+  assert.deepEqual(attemptedModels, ["gpt-4o-mini-transcribe", "whisper-1"]);
   const addressingLog = runtimeLogs.find(
     (row) => row?.kind === "voice_runtime" && row?.content === "voice_turn_addressing"
   );
   assert.equal(Boolean(addressingLog), true);
   assert.equal(addressingLog?.metadata?.mode, "stt_pipeline");
-  assert.equal(addressingLog?.metadata?.transcriptionModelFallback, "gpt-4o-transcribe");
+  assert.equal(addressingLog?.metadata?.transcriptionModelFallback, "whisper-1");
   assert.equal(addressingLog?.metadata?.transcriptionPlanReason, "mini_with_full_fallback_runtime");
   assert.equal(addressingLog?.metadata?.transcript, "fallback stt transcript");
 });

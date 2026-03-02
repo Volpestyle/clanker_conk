@@ -416,6 +416,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
     let realtimeInputSampleRateHz = 24000;
     let realtimeOutputSampleRateHz = 24000;
     let openAiPerUserAsrEnabled = false;
+    let openAiSharedAsrEnabled = false;
     let openAiPerUserAsrModel = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
     let openAiPerUserAsrLanguage = "";
     let openAiPerUserAsrPrompt = "";
@@ -496,6 +497,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           openAiReplyStrategy === "brain" && openAiRealtimeSettings.usePerUserAsrBridge !== false;
         const voiceAsrGuidance = resolveVoiceAsrLanguageGuidance(settings);
         openAiPerUserAsrEnabled = openAiPerUserAsrBridgeEnabled;
+        openAiSharedAsrEnabled = openAiReplyStrategy === "brain" && !openAiPerUserAsrBridgeEnabled;
         openAiPerUserAsrModel = normalizeOpenAiRealtimeTranscriptionModel(
           openAiRealtimeSettings.inputTranscriptionModel,
           OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
@@ -646,6 +648,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         pendingRealtimeTurns: [],
         openAiAsrSessions: new Map(),
         openAiPerUserAsrEnabled,
+        openAiSharedAsrEnabled,
+        openAiSharedAsrState: null,
         openAiPerUserAsrModel,
         openAiPerUserAsrLanguage,
         openAiPerUserAsrPrompt,
