@@ -365,6 +365,10 @@ export class Store {
     return this.setSettings(merged);
   }
 
+  resetSettings() {
+    return this.setSettings(DEFAULT_SETTINGS);
+  }
+
   recordMessage(message) {
     const createdAt = normalizeMessageCreatedAt(
       message?.createdAt ?? message?.created_at ?? message?.createdTimestamp

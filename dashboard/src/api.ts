@@ -33,3 +33,7 @@ export async function api<T = unknown>(url: string, options: ApiOptions = {}): P
 
   return res.json() as Promise<T>;
 }
+
+export async function resetSettings(): Promise<unknown> {
+  return api("/api/settings/reset", { method: "POST" });
+}

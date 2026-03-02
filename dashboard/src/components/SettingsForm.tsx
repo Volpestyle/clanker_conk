@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
+import { resetSettings } from "../api";
 import {
   GEMINI_REALTIME_MODEL_OPTIONS,
   OPENAI_REALTIME_MODEL_OPTIONS,
@@ -270,6 +271,19 @@ export default function SettingsForm({
     onSave(formToSettingsPatch(form));
   }
 
+  async function resetAllSettings() {
+    if (!window.confirm("Reset all settings to defaults? This cannot be undone.")) {
+      return;
+    }
+    try {
+      const defaults = await resetSettings();
+      setForm(settingsToForm(defaults));
+      savedFormRef.current = JSON.stringify(settingsToForm(defaults));
+    } catch (err) {
+      console.error("Failed to reset settings:", err);
+    }
+  }
+
   function scrollTo(id: string) {
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
@@ -408,6 +422,28 @@ export default function SettingsForm({
               <path d="M3.51 9a9 9 0 0 1 14.13-3.36L23 10M1 14l5.36 4.36A9 9 0 0 0 20.49 15" />
             </svg>
             <span>{refreshRuntimeBusy ? "Syncing" : "Live"}</span>
+          </button>
+          <button
+            type="button"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              flex: "0 0 auto",
+              marginTop: 0,
+              padding: "6px 10px",
+              whiteSpace: "nowrap",
+              fontSize: "0.76rem",
+              fontWeight: 600,
+              background: "transparent",
+              color: "var(--text-muted)",
+              border: "1px solid var(--border)"
+            }}
+            onClick={resetAllSettings}
+            title="Reset all settings to defaults"
+            aria-label="Reset all settings to defaults"
+          >
+            Reset defaults
           </button>
         </div>
         {toast.text && (
