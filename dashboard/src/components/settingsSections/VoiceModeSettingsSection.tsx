@@ -41,7 +41,12 @@ export function VoiceModeSettingsSection({
   const realtimeReplyStrategy = String(form.voiceRealtimeReplyStrategy || "brain")
     .trim()
     .toLowerCase();
-  const usesBrainGeneration = isSttPipelineMode || (isRealtimeMode && realtimeReplyStrategy === "brain");
+  const openAiPerUserAsrBridge =
+    isOpenAiRealtimeMode &&
+    realtimeReplyStrategy === "brain" &&
+    Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge);
+  const usesBrainGeneration =
+    isSttPipelineMode || (isRealtimeMode && realtimeReplyStrategy === "brain" && !openAiPerUserAsrBridge);
   const classifierMergedWithGeneration =
     !form.voiceReplyDecisionLlmEnabled &&
     usesBrainGeneration;
@@ -458,6 +463,24 @@ export function VoiceModeSettingsSection({
 
           {isOpenAiRealtimeMode && (
             <>
+              <div className="toggles">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge)}
+                    onChange={set("voiceOpenAiRealtimeUsePerUserAsrBridge")}
+                    disabled={realtimeReplyStrategy !== "brain"}
+                  />
+                  Use OpenAI per-user ASR bridge (bypass local voice LLM)
+                </label>
+              </div>
+              <p>
+                {realtimeReplyStrategy === "brain"
+                  ? openAiPerUserAsrBridge
+                    ? "Enabled: speaker transcripts are forwarded as labeled text into OpenAI runtime."
+                    : "Disabled: per-speaker transcripts go through the local voice brain."
+                  : "Native reply path does not use this setting."}
+              </p>
               <div className="split">
                 <div>
                   <label htmlFor="voice-openai-realtime-model">OpenAI realtime model</label>
