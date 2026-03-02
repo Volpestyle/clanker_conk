@@ -60,8 +60,9 @@ class PcmJitterBuffer extends Readable {
   private _reading = false;
 
   constructor() {
-    // 50 frames high watermark (1 second of audio)
-    super({ highWaterMark: FRAME_SIZE * 50 });
+    // High watermark here doesn't actually stop AudioPlayer from calling read
+    // but we use it to cap the array growth just in case. 
+    super({ highWaterMark: FRAME_SIZE * 250 }); // Allow 5 seconds of audio buffer
   }
 
   pushPcm(chunk: Buffer) {
@@ -178,6 +179,7 @@ function resetPlayback() {
 function ensurePlaybackStream() {
   if (botAudioStream && !botAudioStream.destroyed && !botAudioStream.readableEnded) {
     if (audioPlayer && audioPlayer.state.status === AudioPlayerStatus.Idle) {
+      // Create new buffer, copy old chunks
       const oldChunks = botAudioStream.getBufferedChunks();
       try { botAudioStream.destroy(); } catch { /* ignore */ }
       
@@ -190,7 +192,11 @@ function ensurePlaybackStream() {
         silencePaddingFrames: 250
       });
       audioPlayer.play(resource);
-      return true;
+      // Synchronously emit readable so the Discord AudioPlayer correctly
+      // transitions out of Buffering state into Playing without getting stuck.
+      if (oldChunks.length > 0) {
+        botAudioStream.emit("readable");
+      }
     }
     return true;
   }
@@ -199,34 +205,58 @@ function ensurePlaybackStream() {
   botAudioStream = new PcmJitterBuffer();
   const resource = createAudioResource(botAudioStream, {
     inputType: StreamType.Raw,
-    // After the jitter buffer signals EOF, silencePaddingFrames produces
-    // a clean tail-off instead of an abrupt cut.
     silencePaddingFrames: 250
   });
   audioPlayer.play(resource);
   return true;
 }
 
-function handleAudio(pcmBase64: string, sampleRate: number) {
-  if (!audioPlayer || !connection) return;
+// --- Async Audio Processing Queue ---
+// Process audio chunks asynchronously to avoid blocking the event loop
+// during large burst arrivals (e.g., from OpenAI/xAI).
+const audioDeltaQueue: { pcmBase64: string; sampleRate: number }[] = [];
+let isDrainingAudio = false;
 
-  let rawPcm: Buffer;
-  try {
-    rawPcm = Buffer.from(pcmBase64, "base64");
-  } catch {
-    return;
+function drainAudioQueue() {
+  let processed = 0;
+  // Process up to 10 chunks per tick to yield the event loop
+  // The Mac event loop can run very fast, causing us to queue too much audio
+  // to the PcmJitterBuffer too quickly, bypassing its intended backpressure.
+  while (audioDeltaQueue.length > 0) {
+    const { pcmBase64, sampleRate } = audioDeltaQueue.shift()!;
+    
+    let rawPcm: Buffer;
+    try {
+      rawPcm = Buffer.from(pcmBase64, "base64");
+    } catch {
+      continue;
+    }
+    if (rawPcm.length) {
+      const discordPcm = convertXaiOutputToDiscordPcm(rawPcm, sampleRate);
+      if (discordPcm.length) {
+        if (ensurePlaybackStream()) {
+          if (botAudioStream && !botAudioStream.destroyed && !botAudioStream.readableEnded) {
+            botAudioStream.pushPcm(discordPcm);
+          }
+        }
+      }
+    }
+
+    processed++;
+    if (processed >= 10) {
+      // 1ms yield to give the AudioPlayer timer a chance to run
+      setTimeout(drainAudioQueue, 1);
+      return;
+    }
   }
-  if (!rawPcm.length) return;
+  isDrainingAudio = false;
+}
 
-  // Convert from provider sample rate to Discord format (48kHz stereo s16le)
-  const discordPcm = convertXaiOutputToDiscordPcm(rawPcm, sampleRate);
-  if (!discordPcm.length) return;
-
-  // Ensure stream exists and push PCM into the jitter buffer.
-  if (!ensurePlaybackStream()) return;
-
-  if (botAudioStream && !botAudioStream.destroyed && !botAudioStream.readableEnded) {
-    botAudioStream.pushPcm(discordPcm);
+function handleAudio(pcmBase64: string, sampleRate: number) {
+  audioDeltaQueue.push({ pcmBase64, sampleRate });
+  if (!isDrainingAudio) {
+    isDrainingAudio = true;
+    setTimeout(drainAudioQueue, 1);
   }
 }
 
@@ -269,7 +299,9 @@ function handleJoin(msg: any) {
       decryptionFailureTolerance: 200
     });
 
-    audioPlayer = createAudioPlayer();
+    audioPlayer = createAudioPlayer({
+      behaviors: { maxMissedFrames: 250 }
+    });
     connection.subscribe(audioPlayer);
 
     // Audio player state tracking
@@ -445,7 +477,9 @@ function handleMusicPlay(msg: any) {
       });
 
       if (!audioPlayer) {
-        audioPlayer = createAudioPlayer();
+        audioPlayer = createAudioPlayer({
+      behaviors: { maxMissedFrames: 250 }
+    });
         connection.subscribe(audioPlayer);
       }
       audioPlayer.play(resource);
@@ -475,7 +509,9 @@ function handleMusicPlay(msg: any) {
       });
 
       if (!audioPlayer) {
-        audioPlayer = createAudioPlayer();
+        audioPlayer = createAudioPlayer({
+      behaviors: { maxMissedFrames: 250 }
+    });
         connection.subscribe(audioPlayer);
       }
       audioPlayer.play(resource);

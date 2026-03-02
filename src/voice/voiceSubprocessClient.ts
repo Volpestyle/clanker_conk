@@ -211,8 +211,40 @@ export class VoiceSubprocessClient extends EventEmitter {
 
   // --- Public API ---
 
+  private audioBatchPcm: Buffer[] = [];
+  private audioBatchTimer: ReturnType<typeof setTimeout> | null = null;
+  private currentSampleRate: number = 24000;
+
+  private _flushAudioBatch() {
+    this.audioBatchTimer = null;
+    if (this.audioBatchPcm.length === 0) return;
+
+    // Buffer.concat can block the event loop if the array is huge
+    // But sending multiple IPC messages also blocks. Let's chunk the IPC messages
+    // to a maximum size if it gets too large, but 10ms of accumulation shouldn't be huge.
+    const batchedPcm = Buffer.concat(this.audioBatchPcm);
+    this.audioBatchPcm = [];
+
+    this._send({
+      type: "audio",
+      pcmBase64: batchedPcm.toString("base64"),
+      sampleRate: this.currentSampleRate
+    });
+  }
+
   sendAudio(pcmBase64: string, sampleRate: number = 24000) {
-    this._send({ type: "audio", pcmBase64, sampleRate });
+    this.currentSampleRate = sampleRate;
+    try {
+      const buf = Buffer.from(pcmBase64, "base64");
+      if (buf.length) this.audioBatchPcm.push(buf);
+    } catch {
+      return;
+    }
+
+    if (!this.audioBatchTimer) {
+      // Very fast flush to keep latency low, but batching sync event loop drops
+      this.audioBatchTimer = setTimeout(() => this._flushAudioBatch(), 5);
+    }
   }
 
   stopPlayback() {
@@ -246,6 +278,11 @@ export class VoiceSubprocessClient extends EventEmitter {
   destroy() {
     if (this.destroyed) return;
     this.destroyed = true;
+
+    if (this.audioBatchTimer) {
+      clearTimeout(this.audioBatchTimer);
+      this.audioBatchTimer = null;
+    }
 
     this._send({ type: "destroy" });
     this._cleanupAdapter();
