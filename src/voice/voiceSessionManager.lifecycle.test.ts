@@ -1391,6 +1391,13 @@ test("bindBotAudioStreamLifecycle skips repair when stream closes while playback
 
 test("bindBotAudioStreamLifecycle repairs stream on error when playback demand is active", () => {
   const { manager, logs } = createManager();
+  const pumpCalls = [];
+  manager.scheduleAudioPlaybackPump = (session, delayMs = 0) => {
+    pumpCalls.push({
+      session,
+      delayMs
+    });
+  };
   const stream = Object.assign(new EventEmitter(), {
     destroyed: false,
     writableEnded: false,
@@ -1427,9 +1434,9 @@ test("bindBotAudioStreamLifecycle repairs stream on error when playback demand i
       subscribe() {}
     },
     audioPlaybackQueue: {
-      chunks: [],
+      chunks: [Buffer.alloc(DISCORD_PCM_FRAME_BYTES)],
       headOffset: 0,
-      queuedBytes: 0,
+      queuedBytes: DISCORD_PCM_FRAME_BYTES,
       pumping: false,
       timer: null,
       waitingDrain: false,
@@ -1448,6 +1455,11 @@ test("bindBotAudioStreamLifecycle repairs stream on error when playback demand i
   assert.equal(logs.some((entry) => entry?.content === "bot_audio_stream_lifecycle_repair_attempted"), true);
   assert.equal(logs.some((entry) => entry?.content === "bot_audio_pipeline_restarted"), true);
   assert.equal(session.botAudioStream === stream, false);
+  assert.equal(pumpCalls.length, 1);
+  assert.equal(pumpCalls[0]?.session, session);
+  assert.equal(pumpCalls[0]?.delayMs, 0);
+  const repairLog = logs.find((entry) => entry?.content === "bot_audio_stream_lifecycle_repair_attempted");
+  assert.equal(repairLog?.metadata?.resumedQueuedPlayback, true);
 });
 
 test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown", () => {

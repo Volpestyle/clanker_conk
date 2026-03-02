@@ -3421,7 +3421,7 @@ export class VoiceSessionManager {
         });
         return;
       }
-      ensureBotAudioPlaybackReady({
+      const repaired = ensureBotAudioPlaybackReady({
         session,
         store: this.store,
         botUserId: this.client.user?.id || null,
@@ -3432,6 +3432,12 @@ export class VoiceSessionManager {
           });
         }
       });
+      const refreshedQueueState = this.ensureAudioPlaybackQueueState(session);
+      const refreshedQueuedBytes = Math.max(0, Number(refreshedQueueState?.queuedBytes || 0));
+      const resumePumpScheduled = repaired && refreshedQueuedBytes > 0;
+      if (resumePumpScheduled) {
+        this.scheduleAudioPlaybackPump(session, 0);
+      }
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
@@ -3440,7 +3446,9 @@ export class VoiceSessionManager {
         content: "bot_audio_stream_lifecycle_repair_attempted",
         metadata: {
           sessionId: session.id,
-          triggerEvent: String(triggerEvent || "unknown")
+          triggerEvent: String(triggerEvent || "unknown"),
+          repaired: Boolean(repaired),
+          resumedQueuedPlayback: resumePumpScheduled
         }
       });
     };
@@ -8771,14 +8779,8 @@ export class VoiceSessionManager {
     if (configuredStrategy === "native") {
       return "native";
     }
-    if (configuredStrategy === "brain") {
-      return "brain";
-    }
     const brainProvider = resolveBrainProvider(resolvedSettings);
-    if (brainProvider && brainProvider !== "native") {
-      return "brain";
-    }
-    return "native";
+    return brainProvider && brainProvider !== "native" ? "brain" : "native";
   }
 
   shouldUseNativeRealtimeReply({ session, settings = null }) {
