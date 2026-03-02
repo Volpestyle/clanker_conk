@@ -1585,7 +1585,7 @@ function HistoryTranscript({ events }: { events: VoiceEvent[] }) {
     .map((e) => {
       const meta = e.metadata as Record<string, unknown>;
       return {
-        role: String(meta.transcriptSource || "user"),
+        role: String(meta.transcriptSource || "user").includes("output") ? "output" : "user",
         text: String(meta.transcript || ""),
         at: e.createdAt
       };

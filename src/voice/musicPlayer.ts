@@ -1,18 +1,12 @@
-import {
-  AudioPlayer,
-  AudioPlayerStatus,
-  createAudioPlayer,
-  createAudioResource,
-  demuxProbe,
-  StreamType,
-  VoiceConnection,
-  type AudioResource
-} from "@discordjs/voice";
-import { spawn } from "node:child_process";
-import { Readable } from "node:stream";
+/**
+ * Music player that delegates playback to the Node.js voice subprocess
+ * via the VoiceSubprocessClient IPC layer.
+ *
+ * The subprocess owns yt-dlp/ffmpeg pipelines and the AudioPlayer; this
+ * class tracks state and proxies commands.
+ */
+import type { VoiceSubprocessClient } from "./voiceSubprocessClient.ts";
 import type { MusicSearchResult } from "./musicSearch.ts";
-
-type YtdlFunction = (url: string, options?: Record<string, unknown>) => Readable;
 
 export type MusicPlayerStatus = {
   playing: boolean;
@@ -27,36 +21,49 @@ export type MusicPlayerResult = {
   track: MusicSearchResult | null;
 };
 
-type MusicPlayerConfig = {
-  ytdlOptions?: {
-    filter?: "audioonly" | "videoandaudio";
-    quality?: "highestaudio" | "lowestaudio";
-  };
-};
-
 export class DiscordMusicPlayer {
-  private player: AudioPlayer | null = null;
-  private connection: VoiceConnection | null = null;
+  private subprocessClient: VoiceSubprocessClient | null = null;
   private currentTrack: MusicSearchResult | null = null;
-  private config: MusicPlayerConfig;
+  private _playing = false;
+  private _paused = false;
 
-  constructor(config: MusicPlayerConfig = {}) {
-    this.config = config;
-  }
+  constructor() {}
 
-  setConnection(connection: VoiceConnection): void {
-    this.connection = connection;
-    if (this.player) {
-      connection.subscribe(this.player);
+  /** Bind to the current session's subprocess client. */
+  setSubprocessClient(client: VoiceSubprocessClient | null): void {
+    // Clean up old listeners
+    if (this.subprocessClient) {
+      this.subprocessClient.off("musicIdle", this._onMusicIdle);
+      this.subprocessClient.off("musicError", this._onMusicError);
+    }
+
+    this.subprocessClient = client;
+
+    if (client) {
+      client.on("musicIdle", this._onMusicIdle);
+      client.on("musicError", this._onMusicError);
     }
   }
 
+  private _onMusicIdle = () => {
+    this._playing = false;
+    this._paused = false;
+    this.currentTrack = null;
+  };
+
+  private _onMusicError = (message: string) => {
+    console.error(`[musicPlayer] subprocess error: ${message}`);
+    this._playing = false;
+    this._paused = false;
+    this.currentTrack = null;
+  };
+
   isPlaying(): boolean {
-    return this.player?.state.status === AudioPlayerStatus.Playing;
+    return this._playing && !this._paused;
   }
 
   isPaused(): boolean {
-    return this.player?.state.status === AudioPlayerStatus.Paused;
+    return this._paused;
   }
 
   getStatus(): MusicPlayerStatus {
@@ -69,63 +76,63 @@ export class DiscordMusicPlayer {
   }
 
   async play(track: MusicSearchResult): Promise<MusicPlayerResult> {
-    if (!this.connection) {
+    if (!this.subprocessClient?.isAlive) {
       return { ok: false, error: "no voice connection", track: null };
     }
 
     try {
-      this.stop();
-
       const streamUrl = this.getStreamUrl(track);
       if (!streamUrl) {
         return { ok: false, error: "could not resolve stream URL", track };
       }
 
-      const resource = await this.createAudioResource(streamUrl, track);
-      if (!resource) {
-        return { ok: false, error: "failed to create audio resource", track };
-      }
-
-      this.player = createAudioPlayer();
+      // Delegate to subprocess — it handles yt-dlp, ffmpeg, and AudioPlayer.
+      // The subprocess calls resetPlayback() internally before starting.
+      this.subprocessClient.musicPlay(streamUrl);
       this.currentTrack = track;
+      this._playing = true;
+      this._paused = false;
 
-      this.player.on(AudioPlayerStatus.Idle, () => {
-        this.currentTrack = null;
-      });
-
-      this.player.on("error", (error: Error) => {
-        console.error("Music player error:", error);
-        this.currentTrack = null;
-      });
-
-      this.player.play(resource as AudioResource);
-      this.connection.subscribe(this.player);
-
-      console.log(`[musicPlayer] Now playing: ${track.title} (${track.platform})`);
+      console.log(`[musicPlayer] Now playing via subprocess: ${track.title} (${track.platform})`);
       return { ok: true, error: null, track };
     } catch (error) {
-      return { ok: false, error: String(error?.message || error), track };
+      return { ok: false, error: String((error as any)?.message || error), track };
     }
   }
 
   stop(): void {
-    if (this.player) {
+    if (this.subprocessClient?.isAlive) {
       try {
-        this.player.stop();
+        this.subprocessClient.musicStop();
       } catch {
         // ignore
       }
-      this.player = null;
     }
+    this._playing = false;
+    this._paused = false;
     this.currentTrack = null;
   }
 
   pause(): void {
-    this.player?.pause();
+    if (this.subprocessClient?.isAlive) {
+      try {
+        this.subprocessClient.musicPause();
+        this._paused = true;
+      } catch {
+        // ignore
+      }
+    }
   }
 
   resume(): void {
-    this.player?.unpause();
+    if (this.subprocessClient?.isAlive) {
+      try {
+        this.subprocessClient.musicResume();
+        this._paused = false;
+      } catch {
+        // ignore
+      }
+    }
   }
 
   private getStreamUrl(track: MusicSearchResult): string | null {
@@ -144,222 +151,8 @@ export class DiscordMusicPlayer {
 
     return track.externalUrl;
   }
-
-  private async createAudioResource(
-    url: string,
-    track: MusicSearchResult
-  ): Promise<AudioResource | null> {
-    try {
-      if (url.includes("youtube.com") || url.includes("youtu.be")) {
-        return this.createYouTubeResource(url, track);
-      }
-
-      return this.createDirectStreamResource(url, track);
-    } catch (error) {
-      console.error("Failed to create audio resource:", error);
-      return null;
-    }
-  }
-
-  private async createYouTubeResource(
-    url: string,
-    track: MusicSearchResult
-  ): Promise<AudioResource | null> {
-    try {
-      console.log(`[musicPlayer] Starting yt-dlp stream for: ${track.title || url}`);
-      return await this.createYtDlpStreamResource(url, track);
-    } catch (error) {
-      console.warn("[musicPlayer] yt-dlp failed, trying ytdl-core fallback:", error);
-      try {
-        return await this.createYtdlCoreResource(url, track);
-      } catch (ytdlError) {
-        console.warn("[musicPlayer] ytdl-core fallback also failed, using direct URL:", ytdlError);
-        return this.createDirectStreamResource(url, track);
-      }
-    }
-  }
-
-  private async createYtDlpStreamResource(
-    url: string,
-    track: MusicSearchResult
-  ): Promise<AudioResource | null> {
-    return new Promise((resolve, reject) => {
-      const ytdlp = spawn("yt-dlp", [
-        "--no-warnings",
-        "--quiet",
-        "--no-playlist",
-        "--extractor-args",
-        "youtube:player_client=android",
-        "-f",
-        "bestaudio/best",
-        "-o",
-        "-",
-        url
-      ]);
-
-      const ffmpeg = spawn("ffmpeg", [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-i",
-        "pipe:0",
-        "-f",
-        "opus",
-        "-ac",
-        "2",
-        "-ar",
-        "48000",
-        "-b:a",
-        "128k",
-        "pipe:1"
-      ]);
-
-      let ffmpegOutput: Buffer | null = Buffer.alloc(0);
-      let ffmpegError = "";
-
-      ffmpeg.stdout.on("data", (chunk: Buffer) => {
-        ffmpegOutput = Buffer.concat([ffmpegOutput!, chunk]);
-      });
-
-      ffmpeg.stderr.on("data", (data: Buffer) => {
-        ffmpegError += data.toString();
-      });
-
-      ytdlp.on("error", (err: Error) => {
-        console.error("yt-dlp spawn error:", err.message);
-        reject(err);
-      });
-
-      ffmpeg.on("error", (err: Error) => {
-        console.error("ffmpeg spawn error:", err.message);
-        reject(err);
-      });
-
-      ytdlp.on("close", (code: number | null) => {
-        if (code !== 0 && code !== null) {
-          console.error(`yt-dlp exited with code ${code}: ${ffmpegError}`);
-          reject(new Error(`yt-dlp exited with code ${code}`));
-        }
-      });
-
-      ffmpeg.on("close", (code: number | null) => {
-        if (code === 0 && ffmpegOutput && ffmpegOutput.length > 0) {
-          console.log(`[musicPlayer] yt-dlp stream ready: ${ffmpegOutput.length} bytes`);
-          const stream = this.bufferToStream(ffmpegOutput);
-          resolve(createAudioResource(stream, {
-            metadata: track,
-            inputType: "opus" as StreamType,
-            inlineVolume: true
-          }) as AudioResource);
-        } else if (code !== 0) {
-          reject(new Error(`ffmpeg exited with code ${code}: ${ffmpegError}`));
-        }
-      });
-
-      ytdlp.stdout.pipe(ffmpeg.stdin);
-    });
-  }
-
-  private async createYtdlCoreResource(
-    url: string,
-    track: MusicSearchResult
-  ): Promise<AudioResource | null> {
-    const ytdl = await this.getYtdl();
-    if (!ytdl) {
-      throw new Error("ytdl-core not available");
-    }
-
-    const options = this.config.ytdlOptions || {
-      filter: "audioonly",
-      quality: "highestaudio"
-    };
-
-    const stream = ytdl(url, options);
-    const probed = await demuxProbe(stream);
-
-    return createAudioResource(probed.stream, {
-      metadata: track,
-      inputType: probed.type,
-      inlineVolume: true
-    }) as AudioResource;
-  }
-
-  private bufferToStream(buffer: Buffer): Readable {
-    return Readable.from([buffer]);
-  }
-
-  private async createDirectStreamResource(
-    url: string,
-    track: MusicSearchResult
-  ): Promise<AudioResource | null> {
-    try {
-      const response = await fetch(url, {
-        headers: {
-          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        }
-      });
-
-      if (!response.ok || !response.body) {
-        return null;
-      }
-
-      const contentType = response.headers.get("content-type") || "";
-      let inputType: StreamType = StreamType.Raw;
-
-      if (contentType.includes("mpeg") || contentType.includes("mp3")) {
-        inputType = "mp3" as StreamType;
-      } else if (contentType.includes("ogg")) {
-        inputType = "ogg/opus" as StreamType;
-      } else if (contentType.includes("webm")) {
-        inputType = "webm/opus" as StreamType;
-      }
-
-      const nodeStream = this.webToNodeStream(response.body);
-      return createAudioResource(nodeStream as Readable, {
-        metadata: track,
-        inputType
-      }) as AudioResource;
-    } catch (error) {
-      console.error("Direct stream resource creation failed:", error);
-      return null;
-    }
-  }
-
-  private webToNodeStream(webStream: ReadableStream<Uint8Array>): Readable {
-    const reader = webStream.getReader();
-    const nodeStream = new Readable({
-      read() {
-        reader.read().then(({ done, value }: { done: boolean; value?: Uint8Array }) => {
-          if (done) {
-            this.push(null);
-          } else {
-            this.push(Buffer.from(value));
-          }
-        }).catch((err: Error) => this.destroy(err));
-      }
-    });
-    return nodeStream;
-  }
-
-  private ytdlModule: YtdlFunction | null = null;
-
-  private async getYtdl(): Promise<YtdlFunction | null> {
-    if (this.ytdlModule) {
-      return this.ytdlModule;
-    }
-
-    try {
-      const module = await import("ytdl-core");
-      const resolved = typeof module.default === "function" ? module.default : null;
-      this.ytdlModule = resolved;
-      return this.ytdlModule;
-    } catch {
-      console.warn("ytdl-core not installed, YouTube playback will use URL direct streaming");
-      return null;
-    }
-  }
 }
 
-export function createDiscordMusicPlayer(config?: MusicPlayerConfig): DiscordMusicPlayer {
-  return new DiscordMusicPlayer(config);
+export function createDiscordMusicPlayer(): DiscordMusicPlayer {
+  return new DiscordMusicPlayer();
 }

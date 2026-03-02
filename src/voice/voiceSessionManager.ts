@@ -1,11 +1,4 @@
-import {
-  AudioPlayerStatus,
-  EndBehaviorType,
-  getVoiceConnection,
-  VoiceConnectionStatus
-} from "@discordjs/voice";
 import { PermissionFlagsBits, type ChatInputCommandInteraction } from "discord.js";
-import prism from "prism-media";
 import {
   buildVoiceToneGuardrails,
   buildHardLimitsSection,
@@ -38,7 +31,6 @@ import {
   hasBotNameCue,
   scoreDirectAddressConfidence
 } from "../directAddressConfidence.ts";
-import { convertDiscordPcmToXaiInput, convertXaiOutputToDiscordPcm } from "./pcmAudio.ts";
 import { SoundboardDirector } from "./soundboardDirector.ts";
 import {
   defaultVoiceReplyDecisionModel,
@@ -81,7 +73,6 @@ import {
   dedupeSoundboardCandidates,
   buildRealtimeTextUtterancePrompt,
   encodePcm16MonoAsWav,
-  ensureBotAudioPlaybackReady,
   extractSoundboardDirective,
   findMentionedSoundboardReference,
   getRealtimeCommitMinimumBytes,
@@ -113,10 +104,6 @@ import { requestJoin } from "./voiceJoinFlow.ts";
 import {
   ACTIVITY_TOUCH_MIN_SPEECH_MS,
   ACTIVITY_TOUCH_THROTTLE_MS,
-  AUDIO_DELTA_DRAIN_YIELD_INTERVAL,
-  AUDIO_PLAYBACK_PRE_BUFFER_FALLBACK_MS,
-  AUDIO_PLAYBACK_PRE_BUFFER_PACKETS,
-  AUDIO_PLAYBACK_STREAM_OVERFLOW_BYTES,
   BARGE_IN_ASSERTION_MS,
   BARGE_IN_ASSERTION_IDLE_MS,
   BARGE_IN_FULL_OVERRIDE_MIN_MS,
@@ -133,7 +120,6 @@ import {
   CAPTURE_NEAR_SILENCE_ABORT_MIN_AGE_MS,
   CAPTURE_NEAR_SILENCE_ABORT_PEAK_MAX,
   CAPTURE_MAX_DURATION_MS,
-  DISCORD_PCM_FRAME_BYTES,
   RECENT_ENGAGEMENT_WINDOW_MS,
   INPUT_SPEECH_END_SILENCE_MS,
   LEAVE_DIRECTIVE_PLAYBACK_MAX_WAIT_MS,
@@ -187,8 +173,6 @@ import {
   STT_TURN_COALESCE_WINDOW_MS,
   STT_TURN_QUEUE_MAX,
   STT_TURN_STALE_SKIP_MS,
-  STT_TTS_CONVERSION_CHUNK_MS,
-  STT_TTS_CONVERSION_YIELD_EVERY_CHUNKS,
   VOICE_DECIDER_HISTORY_MAX_CHARS,
   VOICE_MEMBERSHIP_EVENT_FRESH_MS,
   VOICE_MEMBERSHIP_EVENT_MAX_TRACKED,
@@ -525,7 +509,6 @@ export class VoiceSessionManager {
   sessions;
   pendingSessionGuildIds;
   joinLocks;
-  boundBotAudioStreams;
   soundboardDirector;
   musicPlayback;
   musicSearch;
@@ -554,7 +537,6 @@ export class VoiceSessionManager {
     this.sessions = new Map();
     this.pendingSessionGuildIds = new Set();
     this.joinLocks = new Map();
-    this.boundBotAudioStreams = new WeakSet();
     this.soundboardDirector = new SoundboardDirector({
       client,
       store,
@@ -624,9 +606,9 @@ export class VoiceSessionManager {
           const cachedUser = this.client?.users?.cache?.get?.(userId) || null;
           const cachedDisplayName = String(
             cachedUser?.displayName ||
-              cachedUser?.globalName ||
-              cachedUser?.username ||
-              ""
+            cachedUser?.globalName ||
+            cachedUser?.username ||
+            ""
           ).trim();
           const displayName = participantDisplayName || membershipDisplayName || cachedDisplayName || null;
           return {
@@ -770,13 +752,13 @@ export class VoiceSessionManager {
           addressing:
             t?.addressing && typeof t.addressing === "object"
               ? {
-                  talkingTo: t.addressing.talkingTo || null,
-                  directedConfidence: Number.isFinite(Number(t.addressing.directedConfidence))
-                    ? Number(clamp(Number(t.addressing.directedConfidence), 0, 1).toFixed(3))
-                    : 0,
-                  source: t.addressing.source || null,
-                  reason: t.addressing.reason || null
-                }
+                talkingTo: t.addressing.talkingTo || null,
+                directedConfidence: Number.isFinite(Number(t.addressing.directedConfidence))
+                  ? Number(clamp(Number(t.addressing.directedConfidence), 0, 1).toFixed(3))
+                  : 0,
+                source: t.addressing.source || null,
+                reason: t.addressing.reason || null
+              }
               : null
         })),
         lastGenerationContext: session.lastGenerationContext || null,
@@ -811,19 +793,19 @@ export class VoiceSessionManager {
           visualFeed: streamWatchVisualFeed,
           brainContextPayload: streamWatchBrainContext
             ? {
-                prompt: String(streamWatchBrainContext.prompt || "").trim(),
-                notes: Array.isArray(streamWatchBrainContext.notes)
-                  ? streamWatchBrainContext.notes
-                      .map((note) => String(note || "").trim())
-                      .filter(Boolean)
-                      .slice(-24)
-                  : [],
-                lastAt: Number(streamWatchBrainContext.lastAt || 0)
-                  ? new Date(Number(streamWatchBrainContext.lastAt)).toISOString()
-                  : null,
-                provider: streamWatchBrainContext.provider || null,
-                model: streamWatchBrainContext.model || null
-              }
+              prompt: String(streamWatchBrainContext.prompt || "").trim(),
+              notes: Array.isArray(streamWatchBrainContext.notes)
+                ? streamWatchBrainContext.notes
+                  .map((note) => String(note || "").trim())
+                  .filter(Boolean)
+                  .slice(-24)
+                : [],
+              lastAt: Number(streamWatchBrainContext.lastAt || 0)
+                ? new Date(Number(streamWatchBrainContext.lastAt)).toISOString()
+                : null,
+              provider: streamWatchBrainContext.provider || null,
+              model: streamWatchBrainContext.model || null
+            }
             : null
         },
         asrSessions: (() => {
@@ -904,15 +886,15 @@ export class VoiceSessionManager {
             speakerByItemIds: shared.itemIdToUserId instanceof Map ? shared.itemIdToUserId.size : 0,
             utterance: shared.utterance
               ? {
-                  partialText: String(shared.utterance.partialText || "").slice(0, 200),
-                  finalSegments: Array.isArray(shared.utterance.finalSegments) ? shared.utterance.finalSegments.length : 0,
-                  bytesSent: Number(shared.utterance.bytesSent || 0)
-                }
+                partialText: String(shared.utterance.partialText || "").slice(0, 200),
+                finalSegments: Array.isArray(shared.utterance.finalSegments) ? shared.utterance.finalSegments.length : 0,
+                bytesSent: Number(shared.utterance.bytesSent || 0)
+              }
               : null,
             model: String(
               shared.client?.sessionConfig?.inputTranscriptionModel ||
-                session.openAiPerUserAsrModel ||
-                ""
+              session.openAiPerUserAsrModel ||
+              ""
             ).trim() || null,
             sessionId: shared.client?.sessionId || null
           };
@@ -951,9 +933,9 @@ export class VoiceSessionManager {
             connected: Boolean(row?.connected),
             tools: Array.isArray(row?.tools)
               ? row.tools.map((tool) => ({
-                  name: String(tool?.name || ""),
-                  description: String(tool?.description || "")
-                }))
+                name: String(tool?.name || ""),
+                description: String(tool?.description || "")
+              }))
               : [],
             lastError: row?.lastError ? String(row.lastError) : null,
             lastConnectedAt: row?.lastConnectedAt ? String(row.lastConnectedAt) : null,
@@ -963,23 +945,23 @@ export class VoiceSessionManager {
         music: this.snapshotMusicRuntimeState(session),
         stt: session.mode === "stt_pipeline"
           ? {
-              pendingTurns: Number(session.pendingSttTurns || 0),
-              contextMessages: modelTurns.length
-            }
+            pendingTurns: Number(session.pendingSttTurns || 0),
+            contextMessages: modelTurns.length
+          }
           : null,
         realtime: isRealtimeMode(session.mode)
           ? {
-              provider: session.realtimeProvider || resolveRealtimeProvider(session.mode),
-              inputSampleRateHz: Number(session.realtimeInputSampleRateHz) || 24000,
-              outputSampleRateHz: Number(session.realtimeOutputSampleRateHz) || 24000,
-              recentVoiceTurns: modelTurns.length,
-              replySuperseded: Math.max(0, Number(session.realtimeReplySupersededCount || 0)),
-              pendingTurns:
-                (session.realtimeTurnDrainActive ? 1 : 0) +
-                (Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns.length : 0),
-              drainActive: Boolean(session.realtimeTurnDrainActive),
-              state: session.realtimeClient?.getState?.() || null
-            }
+            provider: session.realtimeProvider || resolveRealtimeProvider(session.mode),
+            inputSampleRateHz: Number(session.realtimeInputSampleRateHz) || 24000,
+            outputSampleRateHz: Number(session.realtimeOutputSampleRateHz) || 24000,
+            recentVoiceTurns: modelTurns.length,
+            replySuperseded: Math.max(0, Number(session.realtimeReplySupersededCount || 0)),
+            pendingTurns:
+              (session.realtimeTurnDrainActive ? 1 : 0) +
+              (Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns.length : 0),
+            drainActive: Boolean(session.realtimeTurnDrainActive),
+            state: session.realtimeClient?.getState?.() || null
+          }
           : null,
         latency: (() => {
           const stages = Array.isArray(session.latencyStages) ? session.latencyStages : [];
@@ -1143,9 +1125,9 @@ export class VoiceSessionManager {
       pendingPlatform: this.normalizeMusicPlatformToken(current.pendingPlatform, "auto"),
       pendingResults: Array.isArray(current.pendingResults)
         ? current.pendingResults
-            .map((entry) => this.normalizeMusicSelectionResult(entry))
-            .filter(Boolean)
-            .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS)
+          .map((entry) => this.normalizeMusicSelectionResult(entry))
+          .filter(Boolean)
+          .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS)
         : [],
       pendingRequestedByUserId: String(current.pendingRequestedByUserId || "").trim() || null,
       pendingRequestedAt: Math.max(0, Number(current.pendingRequestedAt || 0))
@@ -1181,16 +1163,16 @@ export class VoiceSessionManager {
       disambiguationActive: this.isMusicDisambiguationActive(music),
       queueState: queueState
         ? {
-            tracks: queueState.tracks.map((track) => ({
-              id: track.id,
-              title: track.title,
-              artist: track.artist || null,
-              source: track.source
-            })),
-            nowPlayingIndex: queueState.nowPlayingIndex,
-            isPaused: queueState.isPaused,
-            volume: queueState.volume
-          }
+          tracks: queueState.tracks.map((track) => ({
+            id: track.id,
+            title: track.title,
+            artist: track.artist || null,
+            source: track.source
+          })),
+          nowPlayingIndex: queueState.nowPlayingIndex,
+          isPaused: queueState.isPaused,
+          volume: queueState.volume
+        }
         : null
     };
   }
@@ -1372,8 +1354,8 @@ export class VoiceSessionManager {
     const normalizedNowPlayingIndexRaw = Number(current.nowPlayingIndex);
     const normalizedNowPlayingIndex =
       Number.isInteger(normalizedNowPlayingIndexRaw) &&
-      normalizedNowPlayingIndexRaw >= 0 &&
-      normalizedNowPlayingIndexRaw < normalizedTracks.length
+        normalizedNowPlayingIndexRaw >= 0 &&
+        normalizedNowPlayingIndexRaw < normalizedTracks.length
         ? normalizedNowPlayingIndexRaw
         : null;
     const next = {
@@ -1400,31 +1382,31 @@ export class VoiceSessionManager {
         if (!serverName || !baseUrl) return null;
         const toolRows = Array.isArray(server.tools)
           ? server.tools
-              .map((tool) => {
-                if (!tool || typeof tool !== "object") return null;
-                const toolName = normalizeInlineText(tool.name, 120);
-                if (!toolName) return null;
-                return {
-                  name: toolName,
-                  description: normalizeInlineText(tool.description, 800) || "",
-                  inputSchema:
-                    tool.inputSchema && typeof tool.inputSchema === "object" && !Array.isArray(tool.inputSchema)
-                      ? tool.inputSchema
-                      : undefined
-                };
-              })
-              .filter(Boolean)
+            .map((tool) => {
+              if (!tool || typeof tool !== "object") return null;
+              const toolName = normalizeInlineText(tool.name, 120);
+              if (!toolName) return null;
+              return {
+                name: toolName,
+                description: normalizeInlineText(tool.description, 800) || "",
+                inputSchema:
+                  tool.inputSchema && typeof tool.inputSchema === "object" && !Array.isArray(tool.inputSchema)
+                    ? tool.inputSchema
+                    : undefined
+              };
+            })
+            .filter(Boolean)
           : [];
         const headers =
           server.headers && typeof server.headers === "object" && !Array.isArray(server.headers)
             ? Object.fromEntries(
-                Object.entries(server.headers)
-                  .map(([headerName, headerValue]) => [
-                    normalizeInlineText(headerName, 120),
-                    normalizeInlineText(headerValue, 320)
-                  ])
-                  .filter(([headerName, headerValue]) => Boolean(headerName) && Boolean(headerValue))
-              )
+              Object.entries(server.headers)
+                .map(([headerName, headerValue]) => [
+                  normalizeInlineText(headerName, 120),
+                  normalizeInlineText(headerValue, 320)
+                ])
+                .filter(([headerName, headerValue]) => Boolean(headerName) && Boolean(headerValue))
+            )
             : {};
         return {
           serverName,
@@ -1638,9 +1620,9 @@ export class VoiceSessionManager {
                 tool.inputSchema && typeof tool.inputSchema === "object"
                   ? tool.inputSchema
                   : {
-                      type: "object",
-                      additionalProperties: true
-                    },
+                    type: "object",
+                    additionalProperties: true
+                  },
               serverName
             };
           })
@@ -1781,11 +1763,7 @@ export class VoiceSessionManager {
     session.activeReplyInterruptionPolicy = null;
     session.pendingDeferredTurns = [];
 
-    try {
-      session.audioPlayer?.stop?.(true);
-    } catch {
-      // ignore
-    }
+    this.resetBotAudioPlayback(session);
     this.abortActiveInboundCaptures({
       session,
       reason: "music_playback_active"
@@ -2180,7 +2158,7 @@ export class VoiceSessionManager {
     return true;
   }
 
-  async playMusicViaDiscord(session: { guildId: string }, track: { id: string; title: string; artist: string; platform: string; externalUrl: string | null }) {
+  async playMusicViaDiscord(session: any, track: { id: string; title: string; artist: string; platform: string; externalUrl: string | null }) {
     if (!session?.guildId) {
       return { ok: false, error: "no session" };
     }
@@ -2190,12 +2168,9 @@ export class VoiceSessionManager {
       return { ok: false, error: "guild not found" };
     }
 
-    const existingConnection = getVoiceConnection(session.guildId);
-    if (!existingConnection) {
+    if (!session.subprocessClient?.isAlive) {
       return { ok: false, error: "not connected to voice" };
     }
-
-    this.musicPlayer.setConnection(existingConnection);
 
     const searchResult = {
       id: track.id,
@@ -2271,14 +2246,14 @@ export class VoiceSessionManager {
     const playbackResult = this.musicPlayback?.isConfigured?.()
       ? await this.musicPlayback.stopPlayback()
       : {
-          ok: false,
-          provider: this.musicPlayback?.provider || "none",
-          reason: "music_provider_unconfigured",
-          message: "music provider not configured",
-          status: 0,
-          track: null,
-          query: null
-        };
+        ok: false,
+        provider: this.musicPlayback?.provider || "none",
+        reason: "music_provider_unconfigured",
+        message: "music provider not configured",
+        status: 0,
+        track: null,
+        query: null
+      };
     const usingDiscordPlayer =
       String(music?.provider || "")
         .trim()
@@ -2307,19 +2282,7 @@ export class VoiceSessionManager {
       this.clearMusicDisambiguationState(session);
     }
 
-    // Reconnect bot audio pipeline now that music is done
-    ensureBotAudioPlaybackReady({
-      session,
-      store: this.store,
-      botUserId: this.client.user?.id || null,
-      activatePlayback: false,
-      onStreamCreated: (stream) => {
-        this.bindBotAudioStreamLifecycle(session, {
-          stream,
-          source: "music_stop_reconnect"
-        });
-      }
-    });
+    // No-op: subprocess manages its own audio pipeline after music stop.
 
     this.store.logAction({
       kind: stopSucceeded ? "voice_runtime" : "voice_error",
@@ -2989,12 +2952,12 @@ export class VoiceSessionManager {
       byReference || byMention
         ? null
         : candidates.find((entry) => String(entry?.name || "").trim().toLowerCase() === normalizedRef.toLowerCase()) ||
-          candidates.find((entry) =>
-            String(entry?.name || "")
-              .trim()
-              .toLowerCase()
-              .includes(normalizedRef.toLowerCase())
-          );
+        candidates.find((entry) =>
+          String(entry?.name || "")
+            .trim()
+            .toLowerCase()
+            .includes(normalizedRef.toLowerCase())
+        );
     const matched = byReference || byMention || byName || null;
 
     this.store.logAction({
@@ -3317,129 +3280,39 @@ export class VoiceSessionManager {
     };
   }
 
-  bindAudioPlayerHandlers(session) {
-    const onStateChange = (oldState, newState) => {
-      if (oldState.status !== AudioPlayerStatus.Playing && newState.status === AudioPlayerStatus.Playing) {
+  bindSubprocessHandlers(session) {
+    if (!session?.subprocessClient) return;
+
+    const onPlayerState = (status) => {
+      session.playerState = status;
+      if (status === "playing") {
         session.lastActivityAt = Date.now();
       }
-      if (AUDIO_DEBUG && oldState.status !== newState.status) {
-        const queue = Math.max(0, Number(session.botAudioStream?.queuedPackets || 0));
-        console.log(
-          `[audio-player] ${oldState.status} → ${newState.status} queue=${queue}`
-        );
+      if (AUDIO_DEBUG) {
+        console.log(`[subprocess:audio-player] → ${status}`);
       }
     };
 
-    const onError = (error) => {
-      const resourceMeta = error?.resource
-        ? { playbackDuration: error.resource.playbackDuration, started: error.resource.started }
-        : null;
+    const onError = (message) => {
       this.store.logAction({
         kind: "voice_error",
         guildId: session.guildId,
         channelId: session.textChannelId,
         userId: this.client.user?.id || null,
-        content: "audio_player_error",
-        metadata: {
-          sessionId: session.id,
-          error: String(error?.message || error || "unknown"),
-          resource: resourceMeta
-        }
-      });
-      if (!session.ending) {
-        this.resetBotAudioPlayback(session);
-      }
-    };
-
-    session.audioPlayer.on("stateChange", onStateChange);
-    session.audioPlayer.on("error", onError);
-    session.cleanupHandlers.push(() => {
-      session.audioPlayer.off("stateChange", onStateChange);
-      session.audioPlayer.off("error", onError);
-    });
-  }
-
-  describeBotAudioStreamState(stream) {
-    if (!stream || typeof stream !== "object") {
-      return {
-        exists: false,
-        destroyed: null,
-        writableEnded: null,
-        writableFinished: null,
-        closed: null,
-        writableLength: 0
-      };
-    }
-
-    return {
-      exists: true,
-      destroyed: Boolean(stream.destroyed),
-      writableEnded: Boolean(stream.writableEnded),
-      writableFinished: Boolean(stream.writableFinished),
-      closed: Boolean(stream.closed),
-      writableLength: Math.max(0, Number(stream.writableLength || 0))
-    };
-  }
-
-  bindBotAudioStreamLifecycle(session, { stream = session?.botAudioStream, source = "unknown" } = {}) {
-    if (!session || !stream || typeof stream.once !== "function") return;
-    if (this.boundBotAudioStreams?.has(stream)) return;
-    this.boundBotAudioStreams?.add(stream);
-    if (!Array.isArray(session.cleanupHandlers)) {
-      session.cleanupHandlers = [];
-    }
-
-    const resolvedSource = String(source || "unknown");
-    const logLifecycle = (event, extraMetadata = null) => {
-      const normalizedEvent = String(event || "unknown");
-      const details = extraMetadata && typeof extraMetadata === "object" ? extraMetadata : {};
-      const streamState = this.describeBotAudioStreamState(stream);
-      const lifecycle = {
-        event: normalizedEvent,
-        source: resolvedSource,
-        at: new Date().toISOString(),
-        error: details.error || null,
-        streamState
-      };
-      session.lastBotAudioStreamLifecycle = lifecycle;
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: this.client.user?.id || null,
-        content: "bot_audio_stream_lifecycle",
-        metadata: {
-          sessionId: session.id,
-          event: normalizedEvent,
-          source: resolvedSource,
-          error: details.error || null,
-          streamState
-        }
+        content: "subprocess_error",
+        metadata: { sessionId: session.id, error: String(message || "unknown") }
       });
     };
 
-    const onClose = () => logLifecycle("close");
-    const onFinish = () => logLifecycle("finish");
-    const onEnd = () => logLifecycle("end");
-    const onError = (error) => {
-      logLifecycle("error", {
-        error: String(error?.message || error || "unknown")
-      });
-    };
+    // Note: connectionState and crashed handlers are registered in
+    // bindSessionHandlers to avoid duplicate endSession calls.
 
-    stream.once("close", onClose);
-    stream.once("finish", onFinish);
-    stream.once("end", onEnd);
-    stream.once("error", onError);
+    session.subprocessClient.on("playerState", onPlayerState);
+    session.subprocessClient.on("error", onError);
 
     session.cleanupHandlers.push(() => {
-      if (typeof stream.removeListener === "function") {
-        stream.removeListener("close", onClose);
-        stream.removeListener("finish", onFinish);
-        stream.removeListener("end", onEnd);
-        stream.removeListener("error", onError);
-      }
-      this.boundBotAudioStreams?.delete(stream);
+      session.subprocessClient?.off("playerState", onPlayerState);
+      session.subprocessClient?.off("error", onError);
     });
   }
 
@@ -3689,7 +3562,7 @@ export class VoiceSessionManager {
   }) {
     if (!session || session.ending) return false;
 
-    const streamBufferedBytes = Math.max(0, Number(session.botAudioStream?.writableLength || 0));
+    const streamBufferedBytes = 0;
     const now = Date.now();
     const pendingRequestId = Number(session.pendingResponse?.requestId || 0) || null;
     const interruptionPolicy = this.normalizeReplyInterruptionPolicy(
@@ -3750,12 +3623,6 @@ export class VoiceSessionManager {
     }
     session.botTurnOpen = false;
 
-    try {
-      session.audioPlayer?.stop?.(true);
-    } catch {
-      // ignore
-    }
-
     if (session.pendingResponse && typeof session.pendingResponse === "object") {
       session.lastAudioDeltaAt = Math.max(Number(session.lastAudioDeltaAt || 0), now);
       session.pendingResponse.audioReceivedAt = Number(session.lastAudioDeltaAt || now);
@@ -3809,8 +3676,7 @@ export class VoiceSessionManager {
 
   isAudioActivelyFlowing(session) {
     if (!session || session.ending) return false;
-    const streamBuffered = Number(session.botAudioStream?.writableLength || 0);
-    if (streamBuffered > 0) return true;
+    // With subprocess, we can't check stream buffer; rely on recent audio delta timing.
     const msSinceLastDelta = Date.now() - Number(session.lastAudioDeltaAt || 0);
     return msSinceLastDelta < 200;
   }
@@ -3878,37 +3744,35 @@ export class VoiceSessionManager {
     if (!session?.realtimeClient) return;
     this.ensureSessionToolRuntimeState(session);
     const runtimeLabel = getRealtimeRuntimeLabel(session.mode);
-    // -- Audio delta async drain ------------------------------------------------
-    // Bun's WebSocket delivers batches of messages synchronously, causing the
-    // heavy work (resample + Opus encode) to block the event loop for seconds.
-    // This starves Discord.js's 20 ms audio cycle, so all packets are later
-    // dispatched in a rapid burst that Discord's jitter buffer can't smooth.
-    //
-    // Fix: Bun delivers all WebSocket audio_delta messages in a single
-    // synchronous batch.  The heavy work (resample + Opus encode) must NOT
-    // block the event loop for the entire batch — the Discord.js audio cycle
-    // (a 20 ms setTimeout timer) needs to fire between processing batches so
-    // packets are dispatched at a steady pace instead of in one burst.
-    //
-    // Key insight: `await new Promise(r => setTimeout(r, 0))` inside an async
-    // loop does NOT yield in Bun (or Node) because the async continuation is a
-    // microtask, and microtasks drain completely before the event loop returns
-    // to the timer phase.  This is spec-level microtask starvation.
-    //
-    // Solution: pure callback-based chunking with setTimeout(fn, 1).  Each
-    // batch continuation is a real macrotask, guaranteed to interleave with
-    // the audio cycle's setTimeout timer.
-    const audioDeltaQueue: { chunk: Buffer; sampleRate: number }[] = [];
-    let audioDeltaDraining = false;
+    // -- Audio delta → subprocess ------------------------------------------------
+    // Audio deltas are forwarded directly to the Node.js subprocess which
+    // handles resampling, Opus encoding, and playback via its own event loop.
+    // No queue or yield logic is needed in the main process.
 
-    const processOneAudioDelta = (chunk: Buffer, sampleRate: number) => {
-      const discordPcm = convertXaiOutputToDiscordPcm(chunk, sampleRate);
-      if (!discordPcm.length) return;
+    const onAudioDelta = (audioBase64) => {
+      const b64Str = String(audioBase64 || "");
+      if (!b64Str.length) return;
+      // Compute PCM byte count from base64 length without allocating a Buffer.
+      // base64 encodes 3 bytes into 4 chars; padding '=' chars reduce decoded size.
+      const padding = b64Str.endsWith("==") ? 2 : b64Str.endsWith("=") ? 1 : 0;
+      const pcmByteLength = Math.floor((b64Str.length * 3) / 4) - padding;
+      if (pcmByteLength <= 0) return;
+
+      const sampleRate = Number(session.realtimeOutputSampleRateHz) || 24000;
+
+      // Duration tracking stays synchronous — used for truncation estimates
+      // when barge-in interrupts the response mid-stream.
+      if (session.mode === "openai_realtime" && session.lastOpenAiAssistantAudioItemId) {
+        session.lastOpenAiAssistantAudioItemReceivedMs = Math.max(
+          0,
+          Number(session.lastOpenAiAssistantAudioItemReceivedMs || 0)
+        ) + this.estimatePcm16MonoDurationMs(pcmByteLength, sampleRate);
+      }
 
       if (this.isBargeInOutputSuppressed(session)) {
         session.lastAudioDeltaAt = Date.now();
         session.bargeInSuppressedAudioChunks = Math.max(0, Number(session.bargeInSuppressedAudioChunks || 0)) + 1;
-        session.bargeInSuppressedAudioBytes = Math.max(0, Number(session.bargeInSuppressedAudioBytes || 0)) + discordPcm.length;
+        session.bargeInSuppressedAudioBytes = Math.max(0, Number(session.bargeInSuppressedAudioBytes || 0)) + pcmByteLength;
         const pending = session.pendingResponse;
         if (pending && typeof pending === "object") {
           pending.audioReceivedAt = Number(session.lastAudioDeltaAt || Date.now());
@@ -3917,14 +3781,15 @@ export class VoiceSessionManager {
       }
 
       session.lastAudioDeltaAt = Date.now();
-      if (
-        !this.enqueueDiscordPcmForPlayback({
-          session,
-          discordPcm
-        })
-      ) {
+
+      // Send raw PCM to subprocess — it handles conversion + Opus encoding.
+      if (!session.subprocessClient?.isAlive) return;
+      try {
+        session.subprocessClient.sendAudio(b64Str, sampleRate);
+      } catch {
         return;
       }
+
       this.markBotTurnOut(session, settings);
       if (session.mode === "openai_realtime") {
         session.pendingRealtimeInputBytes = 0;
@@ -3936,59 +3801,6 @@ export class VoiceSessionManager {
           pending.audioReceivedAt = session.lastAudioDeltaAt;
         }
         this.clearResponseSilenceTimers(session);
-      }
-    };
-
-    // Callback-based drain: process AUDIO_DELTA_DRAIN_YIELD_INTERVAL chunks
-    // per macrotask, then schedule the next batch via setTimeout(fn, 1).
-    // This avoids async/await microtask starvation and guarantees the 20 ms
-    // audio cycle timer can fire between batches.
-    const drainAudioDeltaBatch = () => {
-      if (session.ending) {
-        audioDeltaDraining = false;
-        return;
-      }
-      let processed = 0;
-      while (audioDeltaQueue.length > 0 && !session.ending) {
-        const entry = audioDeltaQueue.shift()!;
-        processOneAudioDelta(entry.chunk, entry.sampleRate);
-        processed++;
-        if (processed >= AUDIO_DELTA_DRAIN_YIELD_INTERVAL) {
-          // Yield as a real macrotask — audio cycle timer fires before us.
-          setTimeout(drainAudioDeltaBatch, 1);
-          return;
-        }
-      }
-      // Queue fully drained.
-      audioDeltaDraining = false;
-    };
-
-    const onAudioDelta = (audioBase64) => {
-      let chunk = null;
-      try {
-        chunk = Buffer.from(String(audioBase64 || ""), "base64");
-      } catch {
-        return;
-      }
-      if (!chunk || !chunk.length) return;
-
-      // Duration tracking stays synchronous — used for truncation estimates
-      // when barge-in interrupts the response mid-stream.
-      const sampleRate = Number(session.realtimeOutputSampleRateHz) || 24000;
-      if (session.mode === "openai_realtime" && session.lastOpenAiAssistantAudioItemId) {
-        session.lastOpenAiAssistantAudioItemReceivedMs = Math.max(
-          0,
-          Number(session.lastOpenAiAssistantAudioItemReceivedMs || 0)
-        ) + this.estimatePcm16MonoDurationMs(chunk.length, sampleRate);
-      }
-
-      // Enqueue for callback-based processing — the heavy work (resample +
-      // Opus encode) runs in drainAudioDeltaBatch which yields every N chunks
-      // via setTimeout so the Discord.js audio cycle can dispatch packets.
-      audioDeltaQueue.push({ chunk, sampleRate });
-      if (!audioDeltaDraining) {
-        audioDeltaDraining = true;
-        setTimeout(drainAudioDeltaBatch, 1);
       }
     };
 
@@ -4005,9 +3817,9 @@ export class VoiceSessionManager {
         transcriptSource === "output"
           ? parseSoundboardDirectiveSequence(transcript)
           : {
-              text: transcript,
-              references: []
-            };
+            text: transcript,
+            references: []
+          };
       const transcriptForLogs = String(parsedDirective?.text || transcript).trim();
       const requestedSoundboardRefs = this.normalizeSoundboardRefs(parsedDirective?.references || []);
       if (finalTranscriptEvent) {
@@ -4175,21 +3987,21 @@ export class VoiceSessionManager {
       const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
       const resolvedResponseModel = session.mode === "openai_realtime"
         ? parseResponseDoneModel(event) ||
-          String(session.realtimeClient?.sessionConfig?.model || "").trim() ||
-          String(resolvedSettings?.voice?.openaiRealtime?.model || "gpt-realtime").trim() ||
-          "gpt-realtime"
+        String(session.realtimeClient?.sessionConfig?.model || "").trim() ||
+        String(resolvedSettings?.voice?.openaiRealtime?.model || "gpt-realtime").trim() ||
+        "gpt-realtime"
         : parseResponseDoneModel(event);
       const responseUsdCost =
         session.mode === "openai_realtime" && responseUsage
           ? estimateUsdCost({
-              provider: "openai",
-              model: resolvedResponseModel || "gpt-realtime",
-              inputTokens: Number(responseUsage.inputTokens || 0),
-              outputTokens: Number(responseUsage.outputTokens || 0),
-              cacheReadTokens: Number(responseUsage.cacheReadTokens || 0),
-              cacheWriteTokens: 0,
-              customPricing: resolvedSettings?.llm?.pricing
-            })
+            provider: "openai",
+            model: resolvedResponseModel || "gpt-realtime",
+            inputTokens: Number(responseUsage.inputTokens || 0),
+            outputTokens: Number(responseUsage.outputTokens || 0),
+            cacheReadTokens: Number(responseUsage.cacheReadTokens || 0),
+            cacheWriteTokens: 0,
+            customPricing: resolvedSettings?.llm?.pricing
+          })
           : 0;
       const hadAudio = pending ? this.pendingResponseHasAudio(session, pending) : false;
       const hasInFlightToolCalls =
@@ -4295,18 +4107,12 @@ export class VoiceSessionManager {
       session.realtimeClient.off("socket_error", onSocketError);
       session.realtimeClient.off("response_done", onResponseDone);
       session.realtimeClient.off("event", onEvent);
-      audioDeltaQueue.length = 0;
     });
   }
 
   resetBotAudioPlayback(session) {
     if (!session) return;
-    if (session._preBufferFallbackTimer) {
-      clearTimeout(session._preBufferFallbackTimer);
-      session._preBufferFallbackTimer = null;
-    }
-    try { session.botAudioStream?.destroy?.(); } catch { /* ignore */ }
-    session.botAudioStream = null;
+    try { session.subprocessClient?.stopPlayback(); } catch { /* ignore */ }
     this.maybeClearActiveReplyInterruptionPolicy(session);
   }
 
@@ -4322,12 +4128,12 @@ export class VoiceSessionManager {
 
     const pendingRefreshState =
       session.openAiTurnContextRefreshState &&
-      typeof session.openAiTurnContextRefreshState === "object"
+        typeof session.openAiTurnContextRefreshState === "object"
         ? session.openAiTurnContextRefreshState
         : {
-            inFlight: false,
-            pending: null
-          };
+          inFlight: false,
+          pending: null
+        };
     session.openAiTurnContextRefreshState = pendingRefreshState;
     pendingRefreshState.pending = {
       settings: settings || session.settingsSnapshot || this.store.getSettings(),
@@ -4391,108 +4197,6 @@ export class VoiceSessionManager {
     void runQueuedRefresh();
   }
 
-  enqueueDiscordPcmForPlayback({ session, discordPcm }) {
-    if (!session || session.ending) return false;
-    const pcm = Buffer.isBuffer(discordPcm) ? discordPcm : Buffer.from(discordPcm || []);
-    if (!pcm.length) return false;
-
-    const streamBuffered = Math.max(0, Number(session.botAudioStream?.writableLength || 0));
-    const interruptionPolicy = this.normalizeReplyInterruptionPolicy(
-      session.pendingResponse?.interruptionPolicy || session.activeReplyInterruptionPolicy
-    );
-    const assertiveUserId = this.findAssertiveInboundCaptureUserId(session, interruptionPolicy);
-    if (
-      assertiveUserId &&
-      session.botTurnOpen &&
-      !this.isBargeInOutputSuppressed(session) &&
-      streamBuffered + pcm.length >= AUDIO_PLAYBACK_STREAM_OVERFLOW_BYTES
-    ) {
-      this.interruptBotSpeechForBargeIn({
-        session,
-        userId: assertiveUserId,
-        source: "stream_overflow_guard"
-      });
-      return false;
-    }
-
-    if (streamBuffered > AUDIO_PLAYBACK_STREAM_OVERFLOW_BYTES) {
-      this.resetBotAudioPlayback(session);
-    }
-
-    // Step 1: Ensure the audio stream exists (without activating the player).
-    // We write PCM data first so the Opus queue is primed before the player
-    // starts its 20 ms read loop — otherwise the first reads return null and
-    // the listener hears silence frames at the start of every response.
-    if (
-      !ensureBotAudioPlaybackReady({
-        session,
-        store: this.store,
-        botUserId: this.client.user?.id || null,
-        activatePlayback: false,
-        onStreamCreated: (stream) => {
-          this.bindBotAudioStreamLifecycle(session, {
-            stream,
-            source: "lazy_init"
-          });
-        }
-      })
-    ) {
-      return false;
-    }
-
-    // Step 2: Write PCM (synchronously encodes to Opus and fills the queue).
-    try {
-      session.botAudioStream.write(pcm);
-    } catch {
-      session.botAudioStream = null;
-      return false;
-    }
-
-    // Step 3: Activate the player once the queue reaches the pre-buffer
-    // threshold. This gives the player a ~100 ms head-start so brief gaps
-    // in OpenAI audio delivery don't produce audible silence.
-    const playerStatus = session.audioPlayer?.state?.status;
-    if (playerStatus === AudioPlayerStatus.Idle) {
-      const queueBefore = Math.max(0, Number(session.botAudioStream?.queuedPackets || 0));
-      ensureBotAudioPlaybackReady({
-        session,
-        activatePlayback: true,
-        minQueueDepth: AUDIO_PLAYBACK_PRE_BUFFER_PACKETS
-      });
-      const playerStatusAfter = session.audioPlayer?.state?.status;
-      if (AUDIO_DEBUG && playerStatusAfter !== AudioPlayerStatus.Idle) {
-        console.log(
-          `[audio-prebuffer] activated player queue=${queueBefore} threshold=${AUDIO_PLAYBACK_PRE_BUFFER_PACKETS} status=${playerStatusAfter}`
-        );
-      }
-
-      // Fallback: if the threshold isn't met (very short response), schedule
-      // a delayed activation so audio still plays.
-      if (
-        session.audioPlayer?.state?.status === AudioPlayerStatus.Idle &&
-        !session._preBufferFallbackTimer
-      ) {
-        session._preBufferFallbackTimer = setTimeout(() => {
-          session._preBufferFallbackTimer = null;
-          const fbQueue = Math.max(0, Number(session.botAudioStream?.queuedPackets || 0));
-          if (session.audioPlayer?.state?.status === AudioPlayerStatus.Idle) {
-            if (AUDIO_DEBUG) console.log(`[audio-prebuffer] fallback activation queue=${fbQueue}`);
-            ensureBotAudioPlaybackReady({ session, activatePlayback: true });
-          }
-        }, AUDIO_PLAYBACK_PRE_BUFFER_FALLBACK_MS);
-      }
-    }
-    if (
-      session.audioPlayer?.state?.status !== AudioPlayerStatus.Idle &&
-      session._preBufferFallbackTimer
-    ) {
-      clearTimeout(session._preBufferFallbackTimer);
-      session._preBufferFallbackTimer = null;
-    }
-
-    return true;
-  }
-
   getReplyOutputLockState(session) {
     if (!session || session.ending) {
       return {
@@ -4506,7 +4210,7 @@ export class VoiceSessionManager {
       };
     }
 
-    const streamBufferedBytes = Math.max(0, Number(session.botAudioStream?.writableLength || 0));
+    const streamBufferedBytes = 0; // Subprocess manages its own stream buffer
     const musicActive = this.isMusicPlaybackActive(session);
     const botTurnOpen = Boolean(session.botTurnOpen);
     const pendingResponse = Boolean(session.pendingResponse && typeof session.pendingResponse === "object");
@@ -4515,8 +4219,7 @@ export class VoiceSessionManager {
       musicActive ||
       botTurnOpen ||
       pendingResponse ||
-      openAiActiveResponse ||
-      streamBufferedBytes > 0;
+      openAiActiveResponse;
 
     let reason = "idle";
     if (musicActive) {
@@ -4527,8 +4230,6 @@ export class VoiceSessionManager {
       reason = "openai_active_response";
     } else if (botTurnOpen) {
       reason = "bot_turn_open";
-    } else if (streamBufferedBytes > 0) {
-      reason = "stream_buffered_audio";
     }
 
     return {
@@ -4551,32 +4252,18 @@ export class VoiceSessionManager {
     const pcm = Buffer.isBuffer(ttsPcm) ? ttsPcm : Buffer.from(ttsPcm || []);
     if (!pcm.length) return false;
 
+    if (!session.subprocessClient?.isAlive) return false;
+
+    // Send the entire TTS PCM buffer to the subprocess which handles
+    // conversion and Opus encoding with Node's reliable event loop.
     const sampleRate = Math.max(8_000, Math.floor(Number(inputSampleRateHz) || 24_000));
-    const chunkBytesRaw = Math.floor((sampleRate * 2 * STT_TTS_CONVERSION_CHUNK_MS) / 1000);
-    const chunkBytes = Math.max(2, chunkBytesRaw - (chunkBytesRaw % 2));
-
-    let queuedAny = false;
-    let chunkCount = 0;
-    for (let offset = 0; offset < pcm.length; offset += chunkBytes) {
-      if (session.ending) break;
-      const chunk = pcm.subarray(offset, Math.min(offset + chunkBytes, pcm.length));
-      const discordPcm = convertXaiOutputToDiscordPcm(chunk, sampleRate);
-      if (discordPcm.length) {
-        queuedAny = this.enqueueDiscordPcmForPlayback({
-          session,
-          discordPcm
-        }) || queuedAny;
-      }
-
-      chunkCount += 1;
-      if (chunkCount % STT_TTS_CONVERSION_YIELD_EVERY_CHUNKS === 0) {
-        // Use 1ms (not 0) to force a real macrotask boundary — setTimeout(0)
-        // resolves as a microtask continuation and starves other timers in Bun.
-        await new Promise((resolve) => setTimeout(resolve, 1));
-      }
+    try {
+      session.subprocessClient.sendAudio(pcm.toString("base64"), sampleRate);
+    } catch {
+      return false;
     }
 
-    return queuedAny;
+    return true;
   }
 
   markBotTurnOut(session, settings = session.settingsSnapshot) {
@@ -4701,9 +4388,6 @@ export class VoiceSessionManager {
       string,
       {
         abort?: (reason?: string) => void;
-        opusStream?: { destroy?: () => void };
-        decoder?: { destroy?: () => void };
-        pcmStream?: { destroy?: () => void };
       }
     ]> = [];
     if (session.userCaptures instanceof Map) {
@@ -4721,18 +4405,9 @@ export class VoiceSessionManager {
         continue;
       }
 
+      // Unsubscribe from subprocess audio for this user
       try {
-        capture?.opusStream?.destroy?.();
-      } catch {
-        // ignore
-      }
-      try {
-        capture?.decoder?.destroy?.();
-      } catch {
-        // ignore
-      }
-      try {
-        capture?.pcmStream?.destroy?.();
+        session.subprocessClient?.unsubscribeUser(String(userId || ""));
       } catch {
         // ignore
       }
@@ -5276,10 +4951,10 @@ export class VoiceSessionManager {
       topicalityBias && typeof topicalityBias === "object"
         ? topicalityBias
         : resolveVoiceThoughtTopicalityBias({
-            silenceMs,
-            minSilenceSeconds: resolvedThoughtConfig.minSilenceSeconds,
-            minSecondsBetweenThoughts: resolvedThoughtConfig.minSecondsBetweenThoughts
-          });
+          silenceMs,
+          minSilenceSeconds: resolvedThoughtConfig.minSilenceSeconds,
+          minSecondsBetweenThoughts: resolvedThoughtConfig.minSecondsBetweenThoughts
+        });
     const thoughtEagerness = clamp(Number(settings?.voice?.thoughtEngine?.eagerness) || 0, 0, 100);
     const ambientMemoryFacts = Array.isArray(memoryFacts) ? memoryFacts : [];
     const ambientMemory = formatRealtimeMemoryFacts(ambientMemoryFacts, VOICE_THOUGHT_MEMORY_SEARCH_LIMIT);
@@ -6110,17 +5785,16 @@ export class VoiceSessionManager {
     while (!session.ending) {
       const now = Date.now();
       if (now >= deadlineAt) break;
-      const streamBuffered = Math.max(0, Number(session.botAudioStream?.writableLength || 0));
       const botTurnOpen = Boolean(session.botTurnOpen);
       const pending = session.pendingResponse;
       const pendingHasAudio = pending ? this.pendingResponseHasAudio(session, pending) : false;
       const hasPostRequestAudio = Number(session.lastAudioDeltaAt || 0) >= audioRequestedAt;
 
-      if (botTurnOpen || streamBuffered > 0 || pendingHasAudio || hasPostRequestAudio) {
+      if (botTurnOpen || pendingHasAudio || hasPostRequestAudio) {
         observedPlayback = true;
       }
 
-      if (observedPlayback && !botTurnOpen && streamBuffered <= 0) {
+      if (observedPlayback && !botTurnOpen && (session.playerState === "idle" || session.playerState === "buffering")) {
         break;
       }
 
@@ -6152,7 +5826,7 @@ export class VoiceSessionManager {
         timedOutOnStart,
         elapsedMs: Math.max(0, Date.now() - waitStartedAt),
         botTurnOpen: Boolean(session.botTurnOpen),
-        streamBufferedBytes: Math.max(0, Number(session.botAudioStream?.writableLength || 0))
+        streamBufferedBytes: 0
       }
     });
   }
@@ -6414,8 +6088,8 @@ export class VoiceSessionManager {
     const voiceAsrGuidance = resolveVoiceAsrLanguageGuidance(resolvedSettings);
     const model = String(
       session.openAiPerUserAsrModel ||
-        resolvedSettings?.voice?.openaiRealtime?.inputTranscriptionModel ||
-        OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+      resolvedSettings?.voice?.openaiRealtime?.inputTranscriptionModel ||
+      OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
     )
       .trim()
       .slice(0, 120);
@@ -6734,7 +6408,7 @@ export class VoiceSessionManager {
       settings,
       userId
     }).then((state) => {
-        if (!state) return;
+      if (!state) return;
       void this.flushPendingOpenAiAsrAudio({
         session,
         userId,
@@ -6747,14 +6421,14 @@ export class VoiceSessionManager {
   orderOpenAiAsrFinalSegments(entries = []) {
     const normalizedEntries = Array.isArray(entries)
       ? entries
-          .map((entry, index) => ({
-            itemId: normalizeInlineText(entry?.itemId, 180),
-            previousItemId: normalizeInlineText(entry?.previousItemId, 180) || null,
-            text: normalizeVoiceText(entry?.text || "", STT_TRANSCRIPT_MAX_CHARS),
-            receivedAt: Math.max(0, Number(entry?.receivedAt || 0)),
-            index
-          }))
-          .filter((entry) => entry.itemId && entry.text)
+        .map((entry, index) => ({
+          itemId: normalizeInlineText(entry?.itemId, 180),
+          previousItemId: normalizeInlineText(entry?.previousItemId, 180) || null,
+          text: normalizeVoiceText(entry?.text || "", STT_TRANSCRIPT_MAX_CHARS),
+          receivedAt: Math.max(0, Number(entry?.receivedAt || 0)),
+          index
+        }))
+        .filter((entry) => entry.itemId && entry.text)
       : [];
     if (normalizedEntries.length <= 1) {
       return normalizedEntries.map((entry) => entry.text);
@@ -6911,6 +6585,13 @@ export class VoiceSessionManager {
       asrState,
       utteranceId: trackedUtteranceId
     });
+
+    if (trackedUtterance) {
+      trackedUtterance.finalSegments = [];
+      trackedUtterance.finalSegmentEntries = [];
+      trackedUtterance.partialText = "";
+      trackedUtterance.lastUpdateAt = 0;
+    }
 
     const asrStartedAtMs = Date.now();
     try {
@@ -7240,8 +6921,8 @@ export class VoiceSessionManager {
     const voiceAsrGuidance = resolveVoiceAsrLanguageGuidance(resolvedSettings);
     const model = String(
       session.openAiPerUserAsrModel ||
-        resolvedSettings?.voice?.openaiRealtime?.inputTranscriptionModel ||
-        OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+      resolvedSettings?.voice?.openaiRealtime?.inputTranscriptionModel ||
+      OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
     )
       .trim()
       .slice(0, 120);
@@ -7893,12 +7574,11 @@ export class VoiceSessionManager {
       session,
       settings
     });
-    const onStateChange = (_oldState, newState) => {
+
+    // Connection state from subprocess
+    const onConnectionState = (status) => {
       if (session.ending) return;
-      if (
-        newState?.status === VoiceConnectionStatus.Destroyed ||
-        newState?.status === VoiceConnectionStatus.Disconnected
-      ) {
+      if (status === "destroyed" || status === "disconnected") {
         this.endSession({
           guildId: session.guildId,
           reason: "connection_lost",
@@ -7908,14 +7588,30 @@ export class VoiceSessionManager {
       }
     };
 
-    session.connection.on("stateChange", onStateChange);
-    session.cleanupHandlers.push(() => {
-      session.connection.off("stateChange", onStateChange);
-    });
+    // Subprocess crash handler
+    const onCrashed = ({ code, signal }) => {
+      if (session.ending) return;
+      console.error(
+        `[voiceSessionManager] subprocess crashed code=${code} signal=${signal} guild=${session.guildId}`
+      );
+      this.endSession({
+        guildId: session.guildId,
+        reason: "subprocess_crashed",
+        announcement: "voice subprocess crashed, i'm out.",
+        settings
+      }).catch(() => undefined);
+    };
 
-    const speaking = session.connection.receiver?.speaking;
-    if (!speaking?.on) return;
+    if (session.subprocessClient) {
+      session.subprocessClient.on("connectionState", onConnectionState);
+      session.subprocessClient.on("crashed", onCrashed);
+      session.cleanupHandlers.push(() => {
+        session.subprocessClient?.off("connectionState", onConnectionState);
+        session.subprocessClient?.off("crashed", onCrashed);
+      });
+    }
 
+    // Speaking events from subprocess (forwarded from voice receiver)
     const onSpeakingStart = (userId) => {
       if (String(userId || "") === String(this.client.user?.id || "")) return;
       if (this.isInboundCaptureSuppressed(session)) {
@@ -7989,12 +7685,14 @@ export class VoiceSessionManager {
       }, finalizeDelayMs);
     };
 
-    speaking.on("start", onSpeakingStart);
-    speaking.on("end", onSpeakingEnd);
-    session.cleanupHandlers.push(() => {
-      speaking.removeListener("start", onSpeakingStart);
-      speaking.removeListener("end", onSpeakingEnd);
-    });
+    if (session.subprocessClient) {
+      session.subprocessClient.on("speakingStart", onSpeakingStart);
+      session.subprocessClient.on("speakingEnd", onSpeakingEnd);
+      session.cleanupHandlers.push(() => {
+        session.subprocessClient?.off("speakingStart", onSpeakingStart);
+        session.subprocessClient?.off("speakingEnd", onSpeakingEnd);
+      });
+    }
   }
 
   startInboundCapture({ session, userId, settings = session?.settingsSnapshot }) {
@@ -8009,25 +7707,13 @@ export class VoiceSessionManager {
       settings
     });
 
-    const opusStream = session.connection.receiver.subscribe(userId, {
-      end: {
-        behavior: EndBehaviorType.AfterSilence,
-        duration: INPUT_SPEECH_END_SILENCE_MS
-      }
-    });
+    // Subprocess auto-subscribes on speaking_start; this call updates
+    // the default silence duration for future auto-subscriptions.
+    const sampleRate = isRealtimeMode(session.mode) ? Number(session.realtimeInputSampleRateHz) || 24000 : 24000;
+    session.subprocessClient?.subscribeUser(userId, INPUT_SPEECH_END_SILENCE_MS, sampleRate);
 
-    const decoder = new prism.opus.Decoder({
-      rate: 48000,
-      channels: 2,
-      frameSize: 960
-    });
-
-    const pcmStream = opusStream.pipe(decoder);
     const captureState = {
       userId,
-      opusStream,
-      decoder,
-      pcmStream,
       startedAt: Date.now(),
       bytesSent: 0,
       signalSampleCount: 0,
@@ -8041,7 +7727,8 @@ export class VoiceSessionManager {
       speakingEndFinalizeTimer: null,
       bargeInAssertTimer: null,
       finalize: null,
-      abort: null
+      abort: null,
+      removeSubprocessListeners: null
     };
 
     session.userCaptures.set(userId, captureState);
@@ -8075,23 +7762,22 @@ export class VoiceSessionManager {
         clearTimeout(current.bargeInAssertTimer);
       }
 
+      // Remove per-capture IPC listeners so they don't accumulate across captures
       try {
-        current.opusStream.destroy();
+        current.removeSubprocessListeners?.();
       } catch {
         // ignore
       }
 
-      try {
-        current.decoder.destroy?.();
-      } catch {
-        // ignore
-      }
-
-      try {
-        current.pcmStream.destroy();
-      } catch {
-        // ignore
-      }
+      // Do NOT unsubscribe from the subprocess here.  The subprocess manages
+      // its own subscription lifecycle via AfterSilence — when the user stops
+      // speaking, the opus stream ends naturally and the subscription is removed.
+      //
+      // Sending unsubscribe_user from the main process created a race condition:
+      // if the user starts speaking again between AfterSilence cleanup and the
+      // arrival of our unsubscribe IPC, the auto-subscribe creates a fresh
+      // subscription that our stale unsubscribe then destroys — leaving no
+      // active subscription for the new speech.
     };
 
     const scheduleIdleFlush = () => {
@@ -8103,12 +7789,16 @@ export class VoiceSessionManager {
       }, CAPTURE_IDLE_FLUSH_MS);
     };
 
-    pcmStream.on("data", (chunk) => {
+    // Subprocess userAudio handler — receives already-converted mono PCM
+    const onUserAudio = (audioUserId, pcmBase64) => {
+      if (String(audioUserId || "") !== userId) return;
       const now = Date.now();
-      const normalizedPcm = convertDiscordPcmToXaiInput(
-        chunk,
-        isRealtimeMode(session.mode) ? Number(session.realtimeInputSampleRateHz) || 24000 : 24000
-      );
+      let normalizedPcm;
+      try {
+        normalizedPcm = Buffer.from(String(pcmBase64 || ""), "base64");
+      } catch {
+        return;
+      }
       if (!normalizedPcm.length) return;
       captureState.bytesSent += normalizedPcm.length;
       const sampleCount = Math.floor(normalizedPcm.length / 2);
@@ -8203,7 +7893,7 @@ export class VoiceSessionManager {
         }
       }
 
-    });
+    };
 
     let captureFinalized = false;
     const finalizeUserTurn = (reason = "stream_end") => {
@@ -8242,6 +7932,68 @@ export class VoiceSessionManager {
       }
 
       const pcmBuffer = Buffer.concat(captureState.pcmChunks);
+
+      // Silence gate: drop near-silent captures that slipped past the
+      // in-flight near-silence abort (e.g., very short VAD false positives
+      // or receiver buffer burst artifacts).
+      const captureDurationMs = Math.max(0, finalizedAt - captureState.startedAt);
+      const sampleRateHz = isRealtimeMode(session.mode)
+        ? Number(session.realtimeInputSampleRateHz) || 24000
+        : 24000;
+      const silenceGate = this.evaluatePcmSilenceGate({ pcmBuffer, sampleRateHz });
+      const audioDurationMs = silenceGate.clipDurationMs;
+      // A capture whose wall-clock time is <25% of its audio duration
+      // means opus packets were delivered in a burst from the receiver
+      // buffer — not from live speech.
+      const isBurstArtifact = audioDurationMs > 200 && captureDurationMs < audioDurationMs * 0.25;
+
+      if (silenceGate.drop) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: "voice_turn_dropped_silence_gate",
+          metadata: {
+            sessionId: session.id,
+            reason: String(reason || "stream_end"),
+            bytesSent: captureState.bytesSent,
+            captureDurationMs,
+            audioDurationMs,
+            rms: silenceGate.rms,
+            peak: silenceGate.peak,
+            activeSampleRatio: silenceGate.activeSampleRatio,
+            isBurstArtifact,
+            silenceGateDrop: silenceGate.drop
+          }
+        });
+        cleanupCapture();
+        if (useOpenAiPerUserAsr) {
+          this.scheduleOpenAiAsrSessionIdleClose({ session, userId });
+        } else if (useOpenAiSharedAsr) {
+          this.releaseOpenAiSharedAsrActiveUser(session, userId);
+          this.scheduleOpenAiSharedAsrSessionIdleClose(session);
+        }
+        return;
+      }
+      
+      if (isBurstArtifact) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: "voice_turn_burst_artifact_processed",
+          metadata: {
+            sessionId: session.id,
+            reason: String(reason || "stream_end"),
+            bytesSent: captureState.bytesSent,
+            captureDurationMs,
+            audioDurationMs
+          }
+        });
+      }
+
       cleanupCapture();
       if (session.mode === "stt_pipeline") {
         this.queueSttPipelineTurn({
@@ -8474,47 +8226,31 @@ export class VoiceSessionManager {
       finalizeUserTurn("max_duration");
     }, CAPTURE_MAX_DURATION_MS);
 
-    opusStream.once("error", (error) => {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId,
-        content: `inbound_audio_receive_error: ${String(error?.message || error)}`,
-        metadata: {
-          sessionId: session.id
-        }
-      });
-      finalizeUserTurn("receive_error");
-    });
-    decoder.once("error", (error) => {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId,
-        content: `inbound_audio_decode_error: ${String(error?.message || error)}`,
-        metadata: {
-          sessionId: session.id
-        }
-      });
-      finalizeUserTurn("decode_error");
-    });
-    pcmStream.once("end", finalizeUserTurn);
-    pcmStream.once("close", finalizeUserTurn);
-    pcmStream.once("error", (error) => {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId,
-        content: `inbound_audio_stream_error: ${String(error?.message || error)}`,
-        metadata: {
-          sessionId: session.id
-        }
-      });
-      finalizeUserTurn();
-    });
+    // Listen for user audio and stream-end from subprocess
+    const onUserAudioEnd = (audioUserId) => {
+      if (String(audioUserId || "") !== userId) return;
+      // Subprocess AfterSilence stream ended — finalize if not already done.
+      if (!captureFinalized) {
+        finalizeUserTurn("stream_end");
+      }
+    };
+
+    // Removes the per-capture IPC listeners. Called both from cleanupCapture
+    // (when the individual capture ends) and from session cleanup (as a safety net).
+    let listenersRemoved = false;
+    const removeListeners = () => {
+      if (listenersRemoved) return;
+      listenersRemoved = true;
+      session.subprocessClient?.off("userAudio", onUserAudio);
+      session.subprocessClient?.off("userAudioEnd", onUserAudioEnd);
+    };
+    captureState.removeSubprocessListeners = removeListeners;
+
+    if (session.subprocessClient) {
+      session.subprocessClient.on("userAudio", onUserAudio);
+      session.subprocessClient.on("userAudioEnd", onUserAudioEnd);
+      session.cleanupHandlers.push(removeListeners);
+    }
   }
 
   maybeHandleInterruptedReplyRecovery({
@@ -8616,14 +8352,14 @@ export class VoiceSessionManager {
     const transcript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
     if (!transcript) {
       const sampleRateHz = Number(session.realtimeInputSampleRateHz) || 24000;
-        const minFallbackBytes = Math.max(
-          2,
-          Math.ceil(((VOICE_TURN_MIN_ASR_CLIP_MS / 1000) * sampleRateHz * 2))
-        );
-        const shouldDropFallbackPcm = normalizedPcmBuffer.length < minFallbackBytes;
-        if (shouldDropFallbackPcm) {
-          this.store.logAction({
-            kind: "voice_runtime",
+      const minFallbackBytes = Math.max(
+        2,
+        Math.ceil(((VOICE_TURN_MIN_ASR_CLIP_MS / 1000) * sampleRateHz * 2))
+      );
+      const shouldDropFallbackPcm = normalizedPcmBuffer.length < minFallbackBytes;
+      if (shouldDropFallbackPcm) {
+        this.store.logAction({
+          kind: "voice_runtime",
           guildId: session.guildId,
           channelId: session.textChannelId,
           userId,
@@ -9165,14 +8901,14 @@ export class VoiceSessionManager {
     const sampleRateHz = Number(session.realtimeInputSampleRateHz) || 24000;
     const transcriptionPlan = hasTranscriptOverride
       ? {
-          primaryModel:
-            String(transcriptionModelPrimaryOverride || transcriptionModel).trim() || transcriptionModel,
-          fallbackModel:
-            String(transcriptionModelFallbackOverride || "").trim() || null,
-          reason:
-            String(transcriptionPlanReasonOverride || "openai_realtime_per_user_transcription").trim() ||
-            "openai_realtime_per_user_transcription"
-        }
+        primaryModel:
+          String(transcriptionModelPrimaryOverride || transcriptionModel).trim() || transcriptionModel,
+        fallbackModel:
+          String(transcriptionModelFallbackOverride || "").trim() || null,
+        reason:
+          String(transcriptionPlanReasonOverride || "openai_realtime_per_user_transcription").trim() ||
+          "openai_realtime_per_user_transcription"
+      }
       : resolveRealtimeTurnTranscriptionPlan({
         mode: session.mode,
         configuredModel: transcriptionModel,
@@ -9181,15 +8917,15 @@ export class VoiceSessionManager {
       });
     const silenceGate = hasTranscriptOverride
       ? {
-          clipDurationMs: Number.isFinite(Number(clipDurationMsOverride))
-            ? Math.max(0, Math.round(Number(clipDurationMsOverride)))
-            : 0,
-          sampleCount: 0,
-          rms: 0,
-          peak: 0,
-          activeSampleRatio: 0,
-          drop: false
-        }
+        clipDurationMs: Number.isFinite(Number(clipDurationMsOverride))
+          ? Math.max(0, Math.round(Number(clipDurationMsOverride)))
+          : 0,
+        sampleCount: 0,
+        rms: 0,
+        peak: 0,
+        activeSampleRatio: 0,
+        drop: false
+      }
       : this.evaluatePcmSilenceGate({
         pcmBuffer: normalizedPcmBuffer,
         sampleRateHz
@@ -9331,6 +9067,41 @@ export class VoiceSessionManager {
           transcriptionModelPrimary: transcriptionPlan.primaryModel,
           transcriptionModelFallback: resolvedFallbackModel || null,
           transcriptionUsedFallbackModel: true
+        }
+      });
+      return;
+    }
+
+    const isNonSpeechCapture =
+      String(captureReason || "") === "idle_timeout" ||
+      String(captureReason || "") === "near_silence_early_abort";
+    const idleSignalIsNoise =
+      !hasTranscriptOverride &&
+      silenceGate.rms <= VOICE_FALLBACK_NOISE_GATE_RMS_MAX &&
+      silenceGate.peak <= VOICE_FALLBACK_NOISE_GATE_PEAK_MAX &&
+      silenceGate.activeSampleRatio <= VOICE_FALLBACK_NOISE_GATE_ACTIVE_RATIO_MAX;
+    if (
+      turnTranscript &&
+      isNonSpeechCapture &&
+      idleSignalIsNoise
+    ) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "voice_turn_dropped_idle_hallucination",
+        metadata: {
+          sessionId: session.id,
+          source: "realtime",
+          captureReason: String(captureReason || "stream_end"),
+          transcript: turnTranscript,
+          clipDurationMs,
+          rms: Number(silenceGate.rms.toFixed(6)),
+          peak: Number(silenceGate.peak.toFixed(6)),
+          activeSampleRatio: Number(silenceGate.activeSampleRatio.toFixed(6)),
+          transcriptionModelPrimary: transcriptionPlan.primaryModel,
+          hasTranscriptOverride
         }
       });
       return;
@@ -9627,10 +9398,10 @@ export class VoiceSessionManager {
     if (!coalescedTranscript) return;
     const coalescedPcmBuffer = isRealtimeMode(session.mode)
       ? Buffer.concat(
-          coalescedTurns
-            .map((entry) => (entry?.pcmBuffer?.length ? entry.pcmBuffer : null))
-            .filter(Boolean)
-        )
+        coalescedTurns
+          .map((entry) => (entry?.pcmBuffer?.length ? entry.pcmBuffer : null))
+          .filter(Boolean)
+      )
       : null;
 
     const settings = session.settingsSnapshot || this.store.getSettings();
@@ -9853,6 +9624,19 @@ export class VoiceSessionManager {
       });
       session.pendingBargeInRetry = null;
       session.lastRequestedRealtimeUtterance = null;
+      
+      session.lastGenerationContext = {
+        capturedAt: new Date().toISOString(),
+        incomingTranscript: normalizedTranscript,
+        speakerName,
+        directAddressed: Boolean(directAddressed),
+        isEagerTurn: false,
+        contextMessages: [],
+        conversationContext: null,
+        userFacts: [],
+        relevantFacts: []
+      };
+
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
@@ -10120,34 +9904,34 @@ export class VoiceSessionManager {
       nameCueDetected;
     const directAddressAssessment = shouldRunAddressClassifier
       ? await scoreDirectAddressConfidence({
-          llm: this.llm,
-          settings,
-          transcript: normalizedTranscript,
-          botName: getPromptBotName(settings),
-          mode: "voice",
-          speakerName,
-          participantNames: participantList,
-          threshold: DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
-          fallbackConfidence: deterministicDirectAddressed ? 0.92 : 0,
-          trace: {
-            guildId: session?.guildId || null,
-            channelId: session?.textChannelId || null,
-            userId: normalizedUserId || null,
-            source: "voice_direct_address",
-            event: String(_source || "stt_pipeline")
-          }
-        })
+        llm: this.llm,
+        settings,
+        transcript: normalizedTranscript,
+        botName: getPromptBotName(settings),
+        mode: "voice",
+        speakerName,
+        participantNames: participantList,
+        threshold: DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
+        fallbackConfidence: deterministicDirectAddressed ? 0.92 : 0,
+        trace: {
+          guildId: session?.guildId || null,
+          channelId: session?.textChannelId || null,
+          userId: normalizedUserId || null,
+          source: "voice_direct_address",
+          event: String(_source || "stt_pipeline")
+        }
+      })
       : {
-          confidence: deterministicDirectAddressed ? 0.92 : 0,
-          threshold: DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
-          addressed: deterministicDirectAddressed,
-          reason: deterministicDirectAddressed ? "deterministic_wake_phrase" : "deterministic_not_direct",
-          source: "fallback",
-          llmProvider: null,
-          llmModel: null,
-          llmResponse: null,
-          error: null
-        };
+        confidence: deterministicDirectAddressed ? 0.92 : 0,
+        threshold: DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
+        addressed: deterministicDirectAddressed,
+        reason: deterministicDirectAddressed ? "deterministic_wake_phrase" : "deterministic_not_direct",
+        source: "fallback",
+        llmProvider: null,
+        llmModel: null,
+        llmResponse: null,
+        error: null
+      };
     const directAddressConfidence = Number(directAddressAssessment.confidence) || 0;
     const directAddressThreshold = Number(directAddressAssessment.threshold) || DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD;
     const directAddressed =
@@ -10349,8 +10133,8 @@ export class VoiceSessionManager {
       joinWindowActive,
       hasAddressingState: Boolean(
         voiceAddressingState?.currentSpeakerTarget ||
-          (Array.isArray(voiceAddressingState?.recentAddressingGuesses) &&
-            voiceAddressingState.recentAddressingGuesses.length > 0)
+        (Array.isArray(voiceAddressingState?.recentAddressingGuesses) &&
+          voiceAddressingState.recentAddressingGuesses.length > 0)
       )
     });
     const decisionSettings = {
@@ -10411,16 +10195,16 @@ export class VoiceSessionManager {
     const claudeDecisionJsonSchema =
       llmProvider === "claude-code"
         ? JSON.stringify({
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              decision: {
-                type: "string",
-                enum: ["YES", "NO"]
-              }
-            },
-            required: ["decision"]
-          })
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            decision: {
+              type: "string",
+              enum: ["YES", "NO"]
+            }
+          },
+          required: ["decision"]
+        })
         : "";
 
     try {
@@ -10607,9 +10391,9 @@ export class VoiceSessionManager {
 
     return shouldReplace
       ? {
-          ...current,
-          ...next
-        }
+        ...current,
+        ...next
+      }
       : current;
   }
 
@@ -10728,8 +10512,8 @@ export class VoiceSessionManager {
 
     const currentSpeakerRow = normalizedUserId
       ? [...annotatedRows]
-          .reverse()
-          .find((row) => row.role === "user" && String(row.userId || "") === normalizedUserId) || null
+        .reverse()
+        .find((row) => row.role === "user" && String(row.userId || "") === normalizedUserId) || null
       : null;
     const lastDirectedToMeRow =
       [...annotatedRows]
@@ -10744,10 +10528,10 @@ export class VoiceSessionManager {
       ),
       lastDirectedToMe: lastDirectedToMeRow
         ? {
-            speakerName: lastDirectedToMeRow.speakerName,
-            directedConfidence: Number(clamp(Number(lastDirectedToMeRow.directedConfidence) || 0, 0, 1).toFixed(3)),
-            ageMs: Number.isFinite(lastDirectedToMeRow.ageMs) ? Math.round(lastDirectedToMeRow.ageMs) : null
-          }
+          speakerName: lastDirectedToMeRow.speakerName,
+          directedConfidence: Number(clamp(Number(lastDirectedToMeRow.directedConfidence) || 0, 0, 1).toFixed(3)),
+          ageMs: Number.isFinite(lastDirectedToMeRow.ageMs) ? Math.round(lastDirectedToMeRow.ageMs) : null
+        }
         : null,
       recentAddressingGuesses
     };
@@ -11127,13 +10911,13 @@ export class VoiceSessionManager {
     const pendingCall = existing && typeof existing === "object"
       ? existing
       : {
-          callId: normalizedCallId,
-          name: normalizedName || "",
-          argumentsText: "",
-          done: false,
-          startedAtMs: Date.now(),
-          sourceEventType: envelope.eventType
-        };
+        callId: normalizedCallId,
+        name: normalizedName || "",
+        argumentsText: "",
+        done: false,
+        startedAtMs: Date.now(),
+        sourceEventType: envelope.eventType
+      };
     if (normalizedName && !pendingCall.name) {
       pendingCall.name = normalizedName;
     }
@@ -12080,16 +11864,16 @@ export class VoiceSessionManager {
         ok: true,
         now_playing: nowTrack
           ? {
-              ...nowTrack
-            }
+            ...nowTrack
+          }
           : musicState?.lastTrackTitle
             ? {
-                id: musicState.lastTrackId || null,
-                title: musicState.lastTrackTitle,
-                artist: Array.isArray(musicState.lastTrackArtists) ? musicState.lastTrackArtists.join(", ") : null,
-                source: String(musicState.provider || "").trim().toLowerCase() === "discord" ? "yt" : "yt",
-                streamUrl: musicState.lastTrackUrl || null
-              }
+              id: musicState.lastTrackId || null,
+              title: musicState.lastTrackTitle,
+              artist: Array.isArray(musicState.lastTrackArtists) ? musicState.lastTrackArtists.join(", ") : null,
+              source: String(musicState.provider || "").trim().toLowerCase() === "discord" ? "yt" : "yt",
+              streamUrl: musicState.lastTrackUrl || null
+            }
             : null,
         queue_state: this.buildVoiceQueueStatePayload(session)
       };
@@ -12303,17 +12087,17 @@ export class VoiceSessionManager {
     const roster =
       participants.length > 0
         ? participants
-            .slice(0, REALTIME_CONTEXT_MEMBER_LIMIT)
-            .map((participant) => participant.displayName)
-            .join(", ")
+          .slice(0, REALTIME_CONTEXT_MEMBER_LIMIT)
+          .map((participant) => participant.displayName)
+          .join(", ")
         : "unknown";
     const membershipSummary = recentMembershipEvents.length
       ? recentMembershipEvents
-          .map((entry) => {
-            const action = entry.eventType === "join" ? "joined" : "left";
-            return `${entry.displayName} ${action} (${Math.max(0, Math.round(entry.ageMs))}ms ago)`;
-          })
-          .join(" | ")
+        .map((entry) => {
+          const action = entry.eventType === "join" ? "joined" : "left";
+          return `${entry.displayName} ${action} (${Math.max(0, Math.round(entry.ageMs))}ms ago)`;
+        })
+        .join(" | ")
       : "none";
     const userFacts = formatRealtimeMemoryFacts(memorySlice?.userFacts, REALTIME_MEMORY_FACT_LIMIT);
     const relevantFacts = formatRealtimeMemoryFacts(memorySlice?.relevantFacts, REALTIME_MEMORY_FACT_LIMIT);
@@ -13030,8 +12814,8 @@ export class VoiceSessionManager {
     const contextTranscript = normalizeVoiceText(normalizedTranscript, STT_REPLY_MAX_CHARS);
     const contextTurns = Array.isArray(session.recentVoiceTurns)
       ? session.recentVoiceTurns
-          .filter((row) => row && typeof row === "object")
-          .slice(-STT_CONTEXT_MAX_MESSAGES)
+        .filter((row) => row && typeof row === "object")
+        .slice(-STT_CONTEXT_MAX_MESSAGES)
       : [];
     if (contextTurns.length > 0 && contextTranscript) {
       const lastTurn = contextTurns[contextTurns.length - 1];
@@ -13149,14 +12933,14 @@ export class VoiceSessionManager {
         generated && typeof generated === "object"
           ? generated
           : {
-              text: generated,
-              soundboardRefs: [],
-              usedWebSearchFollowup: false,
-              usedOpenArticleFollowup: false,
-              usedScreenShareOffer: false,
-              leaveVoiceChannelRequested: false,
-              voiceAddressing: null
-            };
+            text: generated,
+            soundboardRefs: [],
+            usedWebSearchFollowup: false,
+            usedOpenArticleFollowup: false,
+            usedScreenShareOffer: false,
+            leaveVoiceChannelRequested: false,
+            voiceAddressing: null
+          };
       if (generatedPayload?.generationContextSnapshot) {
         session.lastGenerationContext = {
           ...generatedPayload.generationContextSnapshot,
@@ -13354,8 +13138,8 @@ export class VoiceSessionManager {
     const contextTranscript = normalizeVoiceText(normalizedTranscript, STT_REPLY_MAX_CHARS);
     const contextTurns = Array.isArray(session.recentVoiceTurns)
       ? session.recentVoiceTurns
-          .filter((row) => row && typeof row === "object")
-          .slice(-STT_CONTEXT_MAX_MESSAGES)
+        .filter((row) => row && typeof row === "object")
+        .slice(-STT_CONTEXT_MAX_MESSAGES)
       : [];
     if (contextTurns.length > 0 && contextTranscript) {
       const lastTurn = contextTurns[contextTurns.length - 1];
@@ -13482,14 +13266,14 @@ export class VoiceSessionManager {
         generated && typeof generated === "object"
           ? generated
           : {
-              text: generated,
-              soundboardRefs: [],
-              usedWebSearchFollowup: false,
-              usedOpenArticleFollowup: false,
-              usedScreenShareOffer: false,
-              leaveVoiceChannelRequested: false,
-              voiceAddressing: null
-            };
+            text: generated,
+            soundboardRefs: [],
+            usedWebSearchFollowup: false,
+            usedOpenArticleFollowup: false,
+            usedScreenShareOffer: false,
+            leaveVoiceChannelRequested: false,
+            voiceAddressing: null
+          };
       if (generatedPayload?.generationContextSnapshot) {
         session.lastGenerationContext = {
           ...generatedPayload.generationContextSnapshot,
@@ -13988,24 +13772,24 @@ export class VoiceSessionManager {
     const normalizedLatencyContext =
       latencyContextSeed && typeof latencyContextSeed === "object"
         ? {
-            finalizedAtMs: Math.max(0, Number(latencyContextSeed.finalizedAtMs || 0)),
-            asrStartedAtMs: Math.max(0, Number(latencyContextSeed.asrStartedAtMs || 0)),
-            asrCompletedAtMs: Math.max(0, Number(latencyContextSeed.asrCompletedAtMs || 0)),
-            generationStartedAtMs: Math.max(0, Number(latencyContextSeed.generationStartedAtMs || 0)),
-            replyRequestedAtMs: Math.max(
-              0,
-              Number(latencyContextSeed.replyRequestedAtMs || 0)
-            ) || now,
-            audioStartedAtMs: Math.max(0, Number(latencyContextSeed.audioStartedAtMs || 0)),
-            source: String(latencyContextSeed.source || source || "turn_flush"),
-            captureReason: String(latencyContextSeed.captureReason || "").trim() || null,
-            queueWaitMs: Number.isFinite(Number(latencyContextSeed.queueWaitMs))
-              ? Math.max(0, Math.round(Number(latencyContextSeed.queueWaitMs)))
-              : null,
-            pendingQueueDepth: Number.isFinite(Number(latencyContextSeed.pendingQueueDepth))
-              ? Math.max(0, Math.round(Number(latencyContextSeed.pendingQueueDepth)))
-              : null
-          }
+          finalizedAtMs: Math.max(0, Number(latencyContextSeed.finalizedAtMs || 0)),
+          asrStartedAtMs: Math.max(0, Number(latencyContextSeed.asrStartedAtMs || 0)),
+          asrCompletedAtMs: Math.max(0, Number(latencyContextSeed.asrCompletedAtMs || 0)),
+          generationStartedAtMs: Math.max(0, Number(latencyContextSeed.generationStartedAtMs || 0)),
+          replyRequestedAtMs: Math.max(
+            0,
+            Number(latencyContextSeed.replyRequestedAtMs || 0)
+          ) || now,
+          audioStartedAtMs: Math.max(0, Number(latencyContextSeed.audioStartedAtMs || 0)),
+          source: String(latencyContextSeed.source || source || "turn_flush"),
+          captureReason: String(latencyContextSeed.captureReason || "").trim() || null,
+          queueWaitMs: Number.isFinite(Number(latencyContextSeed.queueWaitMs))
+            ? Math.max(0, Math.round(Number(latencyContextSeed.queueWaitMs)))
+            : null,
+          pendingQueueDepth: Number.isFinite(Number(latencyContextSeed.pendingQueueDepth))
+            ? Math.max(0, Math.round(Number(latencyContextSeed.pendingQueueDepth)))
+            : null
+        }
         : null;
 
     session.pendingResponse = {
@@ -14366,21 +14150,6 @@ export class VoiceSessionManager {
       if (capture.bargeInAssertTimer) {
         clearTimeout(capture.bargeInAssertTimer);
       }
-      try {
-        capture.opusStream.destroy();
-      } catch {
-        // ignore
-      }
-      try {
-        capture.decoder.destroy?.();
-      } catch {
-        // ignore
-      }
-      try {
-        capture.pcmStream.destroy();
-      } catch {
-        // ignore
-      }
     }
     session.userCaptures.clear();
     await this.closeAllOpenAiAsrSessions(session, "session_end");
@@ -14395,36 +14164,17 @@ export class VoiceSessionManager {
     }
 
     try {
-      session.botAudioStream?.end?.();
-    } catch {
-      // ignore
-    }
-
-    try {
-      session.audioPlayer?.stop?.(true);
-    } catch {
-      // ignore
-    }
-
-    try {
       await session.realtimeClient?.close?.();
     } catch {
       // ignore
     }
 
+    // Destroy subprocess — this handles connection teardown, audio player
+    // stop, and all stream cleanup inside the Node.js subprocess.
     try {
-      session.connection?.destroy?.();
+      session.subprocessClient?.destroy();
     } catch {
       // ignore
-    }
-
-    const fallbackConnection = getVoiceConnection(String(guildId));
-    if (fallbackConnection && fallbackConnection !== session.connection) {
-      try {
-        fallbackConnection.destroy();
-      } catch {
-        // ignore
-      }
     }
 
     const durationSeconds = Math.max(0, Math.floor((Date.now() - session.startedAt) / 1000));
@@ -14633,9 +14383,9 @@ export class VoiceSessionManager {
       getPromptCapabilityHonestyLine(settings),
       memoryEnabled
         ? getPromptMemoryEnabledLine(
-            settings,
-            "You have persistent memory across conversations via saved durable facts. Do not claim each conversation starts from zero."
-          )
+          settings,
+          "You have persistent memory across conversations via saved durable facts. Do not claim each conversation starts from zero."
+        )
         : getPromptMemoryDisabledLine(settings),
       getPromptImpossibleActionLine(settings),
       ...buildHardLimitsSection(settings, { maxItems: 12 }),

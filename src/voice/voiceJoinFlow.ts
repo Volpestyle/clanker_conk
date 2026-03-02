@@ -1,11 +1,6 @@
 import { randomUUID } from "node:crypto";
-import {
-  createAudioPlayer,
-  entersState,
-  joinVoiceChannel,
-  VoiceConnectionStatus
-} from "@discordjs/voice";
 import { clamp } from "../utils.ts";
+import { VoiceSubprocessClient } from "./voiceSubprocessClient.ts";
 import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 import { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
 import { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
@@ -405,10 +400,9 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       maxSessionMinutesCap
     );
 
-    let connection = null;
+    let subprocessClient: VoiceSubprocessClient | null = null;
+    let subprocessSpawnPromise: Promise<VoiceSubprocessClient> | null = null;
     let realtimeClient = null;
-    let audioPlayer = null;
-    let botAudioStream = null;
     let reservedConcurrencySlot = false;
     let realtimeInputSampleRateHz = 24000;
     let realtimeOutputSampleRateHz = 24000;
@@ -445,7 +439,15 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         reservedConcurrencySlot = true;
       }
 
-      // --- Pre-warm: connect realtime API before joining Discord VC ---
+      // --- Spawn subprocess early so it boots in parallel with API connect ---
+      subprocessSpawnPromise = VoiceSubprocessClient.spawn(
+        String(message.guild.id),
+        String(memberVoiceChannel.id),
+        message.guild,
+        { selfDeaf: false, selfMute: false }
+      );
+
+      // --- Pre-warm: connect realtime API while subprocess boots ---
       const initialSoundboardCandidateInfo = await manager.resolveSoundboardCandidates({
         settings,
         guild: message.guild
@@ -561,30 +563,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         });
       }
 
-      // --- Realtime API is warm — now join Discord VC ---
-      connection = joinVoiceChannel({
-        channelId: memberVoiceChannel.id,
-        guildId: message.guild.id,
-        adapterCreator: message.guild.voiceAdapterCreator,
-        selfDeaf: false,
-        selfMute: false
-      });
-
-      await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
-
-      audioPlayer = createAudioPlayer({
-        behaviors: {
-          // Bun + OpenAI bursty audio delivery can easily cause 100ms+ gaps
-          // between Opus packets.  The default maxMissedFrames (5 = 100ms)
-          // triggers stop() which destroys the playStream and all buffered
-          // audio.  250 frames = 5 seconds of tolerance.
-          maxMissedFrames: 250
-        }
-      });
-      // Don't create stream or play resource yet — ensureBotAudioPlaybackReady
-      // will lazily create the PassThrough + AudioResource when the first audio
-      // chunk arrives, avoiding the negative-timeout timing skew from an idle player.
-      connection.subscribe(audioPlayer);
+      // --- Await subprocess that was spawning in parallel with API connect ---
+      subprocessClient = await subprocessSpawnPromise;
 
       const now = Date.now();
       const session = {
@@ -603,10 +583,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           generation: null,
           decider: null
         },
-        connection,
+        subprocessClient,
         realtimeClient,
-        audioPlayer,
-        botAudioStream: null,
         startedAt: now,
         lastActivityAt: now,
         maxEndsAt: null,
@@ -631,10 +609,6 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         lastInboundAudioAt: 0,
         realtimeReplySupersededCount: 0,
         pendingRealtimeInputBytes: 0,
-        lastAudioPipelineRepairAt: 0,
-        audioPipelineRestartTimestamps: [],
-        lastAudioPipelineRestartAlarmAt: 0,
-        lastBotAudioStreamLifecycle: null,
         nextResponseRequestId: 0,
         pendingResponse: null,
         activeReplyInterruptionPolicy: null,
@@ -751,9 +725,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       };
 
       manager.sessions.set(guildId, session);
-      manager.bindAudioPlayerHandlers(session);
-      // Stream lifecycle binding deferred — ensureBotAudioPlaybackReady will
-      // create and bind the stream when the first audio chunk needs playback.
+      manager.bindSubprocessHandlers(session);
+      manager.musicPlayer?.setSubprocessClient?.(session.subprocessClient);
       manager.bindSessionHandlers(session, settings);
       if (isRealtimeMode(runtimeMode)) {
         manager.bindRealtimeHandlers(session, settings);
@@ -824,25 +797,20 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         await realtimeClient.close().catch(() => undefined);
       }
 
-      if (botAudioStream) {
+      // If the realtime API connect failed, the subprocess may still be
+      // booting in the background. Await and clean it up to avoid leaks.
+      if (!subprocessClient && subprocessSpawnPromise) {
         try {
-          botAudioStream.end();
+          const spawnedClient = await subprocessSpawnPromise;
+          spawnedClient.destroy();
         } catch {
-          // ignore
+          // subprocess also failed — nothing to clean up
         }
       }
 
-      if (audioPlayer) {
+      if (subprocessClient) {
         try {
-          audioPlayer.stop(true);
-        } catch {
-          // ignore
-        }
-      }
-
-      if (connection) {
-        try {
-          connection.destroy();
+          subprocessClient.destroy();
         } catch {
           // ignore
         }
