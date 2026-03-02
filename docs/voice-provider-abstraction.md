@@ -1,121 +1,208 @@
-# V2 Voice Chat System — Technical Overview
+# V2 Voice Chat System — Provider Abstraction and Runtime Architecture
+
+This document now covers both:
+1. provider abstraction and swappability
+2. how the shipped runtime actually delivers end-to-end voice chat (source of truth: code in `src/voice/*`)
 
 ## Design Philosophy
 
-The v2 voice chat system is built on the principle of **component swappability** — the voice pipeline is decomposed into three independent, configurable pieces:
+The v2 system keeps voice chat split into independently swappable layers:
+1. `Voice/TTS provider`
+2. `Brain provider`
+3. `Transcriber provider` (currently OpenAI)
 
-1. **Voice/TTS Provider** — determines the output voice and audio format
-2. **Brain Provider** — determines the reasoning engine that drives conversation
-3. **Transcriber Provider** — converts incoming speech to text (currently fixed to OpenAI)
+This is encoded in:
+- `src/voice/voiceModes.ts`
+- `src/voice/voiceSessionHelpers.ts`
 
-This means you can mix and match components without being locked into a single vendor's full stack.
+Provider resolution path:
 
-## Core Architecture
-
-### Data Flow
-
-```
-Discord Audio (Opus) 
-    → Transcriber (OpenAI)
-    → Brain (reasoning + tool execution)  
-    → Voice Provider (TTS output)
-    → Discord
+```ts
+voiceProvider = resolveVoiceProvider(settings)        // default: "openai"
+brainProvider = resolveBrainProvider(settings)        // default: "native"
+transcriberProvider = resolveTranscriberProvider(...) // default: "openai"
+runtimeMode = resolveVoiceRuntimeMode(settings)       // openai/xai/gemini/elevenlabs + legacy mode fallback
 ```
 
-### Provider Selection
+## Runtime Modes and Brain Strategy
 
-The system resolves providers through a series of resolution functions (in `voiceSessionHelpers.ts`):
+`src/voice/voiceModes.ts` defines runtime modes:
+- `voice_agent`
+- `openai_realtime`
+- `gemini_realtime`
+- `elevenlabs_realtime`
+- `stt_pipeline`
 
-```typescript
-// Resolution chain
-voiceProvider = resolveVoiceProvider(settings)  // default: "openai"
-brainProvider = resolveBrainProvider(settings)   // default: "native" (use voice's built-in brain)
-transcriberProvider = resolveTranscriberProvider(settings)  // default: "openai"
-```
+`src/voice/voiceSessionManager.ts` decides reply strategy:
+- `brainProvider !== "native"` => `brain` strategy
+- else => `native` strategy
 
-When `brainProvider` is `"native"`, it uses the brain bundled with the selected voice provider. Setting it to an explicit provider (e.g., `"anthropic"`, `"xai"`) lets you swap the reasoning engine independently.
+Key implication:
+- In `openai_realtime + brain`, we can run per-speaker OpenAI transcription fan-out, inject labeled text into the OpenAI realtime session, and let that brain do tool calling.
+- In `native`, we forward audio and let provider-native realtime flow handle response generation.
 
-### Settings Schema
+## How Overall Voice Chat Is Achieved (Code-Backed)
 
-```typescript
-voice: {
-  voiceProvider: "openai" | "xai" | "gemini" | "elevenlabs",  // output voice
-  brainProvider: "native" | "openai" | "anthropic" | "xai" | "gemini",  // reasoning
-  transcriberProvider: "openai",  // STT (extensible in future)
-  
-  // Provider-specific configs (each provider has its own section)
-  openaiRealtime: { model, voice, inputTranscriptionModel, usePerUserAsrBridge },
-  xai: { voice, audioFormat, sampleRateHz, region },
-  geminiRealtime: { model, voice, apiBaseUrl },
-  elevenLabsRealtime: { agentId, voiceId, apiBaseUrl },
-}
-```
+### 1) Session bootstrap and wiring
 
-## Key Components
+In `src/voice/voiceJoinFlow.ts`, join flow does all of the following in one place:
+- Resolves runtime mode and provider clients.
+- Connects provider realtime client.
+- For OpenAI, sets `turnDetection: null` and initializes tool schema via `buildOpenAiRealtimeFunctionTools(...)`.
+- Joins Discord voice, creates audio player and raw bot audio stream.
+- Initializes per-session runtime state:
+  - `openAiAsrSessions` (per-user ASR map)
+  - `openAiPendingToolCalls` / `openAiToolCallExecutions`
+  - `mcpStatus`
+  - `memoryWriteWindow`
+  - `musicQueueState`
+  - barge-in suppression counters
+- Binds realtime handlers and schedules instruction/tool refresh.
 
-### voiceModes.ts
-Defines the valid provider values and normalization functions:
-- `VOICE_PROVIDERS` — valid output voice options
-- `BRAIN_PROVIDERS` — valid reasoning engine options  
-- `TRANSCRIBER_PROVIDERS` — valid transcription options (extensible)
-- Normalization functions ensure valid values with sensible defaults
+### 2) Per-speaker transcription (Option B, no mixed mono)
 
-### voiceSessionHelpers.ts
-Contains resolution functions that compute the effective provider from settings:
-- `resolveVoiceProvider()` — gets the voice provider, defaults to "openai"
-- `resolveBrainProvider()` — resolves brain, handling "native" shorthand
-- `resolveTranscriberProvider()` — resolves transcriber (currently always OpenAI)
-- `resolveVoiceRuntimeMode()` — derives the runtime mode for backwards compatibility
+In `src/voice/voiceSessionManager.ts`:
+- `onSpeakingStart` calls `beginOpenAiAsrUtterance(...)` when per-user ASR bridge is active.
+- `startInboundCapture(...)` subscribes to Discord receiver per user (`connection.receiver.subscribe(userId)`), decodes Opus to PCM, normalizes/resamples PCM, and streams chunks.
+- Each speaker has one ASR state in `openAiAsrSessions: Map<userId, state>`.
+- `ensureOpenAiAsrSessionConnected(...)` creates one `OpenAiRealtimeTranscriptionClient` per active speaker and keeps it warm briefly.
+- `appendAudioToOpenAiAsr(...)` streams audio.
+- `commitOpenAiAsrUtterance(...)` commits utterance, waits for transcript settle window, and returns transcript metadata.
+- The finalized transcript is forwarded into turn processing through `queueRealtimeTurn(..., transcriptOverride: ...)`.
 
-### voiceJoinFlow.ts
-The main entry point for starting a voice session. Uses the resolved providers to:
-- Instantiate the appropriate realtime client
-- Configure per-user ASR (always enabled for OpenAI in brain mode)
-- Pass tools and instructions to the brain
+ASR session client details are in `src/voice/openaiRealtimeTranscriptionClient.ts`:
+- uses OpenAI realtime transcription websocket
+- emits partial/final transcript from `conversation.item.input_audio_transcription.*`
 
-### voiceSessionManager.ts
-Handles the runtime behavior:
-- `resolveRealtimeReplyStrategy()` — determines whether to use native or custom brain based on `brainProvider`
-- Tool execution and memory integration
+### 3) Turn manager and routing
 
-### Dashboard Integration
-The settings form (`settingsFormModel.ts`, `SettingsForm.tsx`) exposes the new provider fields, allowing users to select voice and brain providers from dropdowns.
+`runRealtimeTurn(...)` in `src/voice/voiceSessionManager.ts` performs:
+- silence/short-clip gating
+- transcription (or uses transcript override from per-user ASR)
+- reply admission decision (`evaluateVoiceReplyDecision(...)`)
+- branch:
+  - `native` strategy => `forwardRealtimeTurnAudio(...)`
+  - `brain` strategy + OpenAI per-user ASR => `forwardOpenAiRealtimeTextTurnToBrain(...)`
+  - `brain` strategy without per-user bridge => `runRealtimeBrainReply(...)`
 
-## Provider Behavior
+### 4) Brain session input format and instruction refresh
 
-| Voice Provider | Brain "native" behavior | Brain explicit behavior |
-|----------------|------------------------|-------------------------|
-| `openai` | GPT-4o Realtime (brain + voice) | OpenAI API + OpenAI TTS |
-| `xai` | Grok Voice Agent | xAI API + xAI voice |
-| `gemini` | Gemini 2.5 Flash | Gemini API + Gemini voice |
-| `elevenlabs` | ElevenLabs Agent | N/A (ElevenLabs is full-stack) |
+`forwardOpenAiRealtimeTextTurnToBrain(...)`:
+- labels transcript as `(<speakerName>): <text>`
+- refreshes context-aware instructions and tool config before request
+- sends turn into OpenAI realtime via `realtimeClient.requestTextUtterance(...)`
+
+`refreshOpenAiRealtimeInstructions(...)` and `prepareOpenAiRealtimeTurnContext(...)` refresh:
+- participant/membership context
+- memory slice
+- tool policy context
+
+### 5) Tool calling loop (Realtime brain)
+
+OpenAI realtime client (`src/voice/openaiRealtimeClient.ts`) supports:
+- `conversation.item.create` for user text
+- `response.create` for explicit generation
+- `conversation.item.create` `function_call_output` for tool results
+
+Runtime loop in `src/voice/voiceSessionManager.ts`:
+- `bindRealtimeHandlers(...)` routes raw provider events to `handleOpenAiRealtimeFunctionCallEvent(...)`.
+- Function-call envelopes are parsed from OpenAI function-call delta/done events.
+- Arguments are accumulated until done.
+- Tool execution dispatch:
+  - local function tools via `executeLocalVoiceToolCall(...)`
+  - MCP tools via `executeMcpVoiceToolCall(...)`
+- Output is returned with `sendFunctionCallOutput(...)`.
+- Follow-up response is scheduled via `scheduleOpenAiRealtimeToolFollowupResponse(...)`.
+
+### 6) Local tool surface: memory + music + web
+
+`resolveVoiceRealtimeToolDescriptors(...)` defines local function tools:
+- `memory_search`
+- `memory_write`
+- `music_search`
+- `music_queue_add`
+- `music_play`
+- `music_pause`
+- `music_resume`
+- `music_skip`
+- `music_now_playing`
+- `web_search` (when enabled)
+
+### 7) Vector memory write behavior (no approvals)
+
+`memory_write` is a local function tool (not gated by MCP approval flow). In `executeVoiceMemoryWriteTool(...)`:
+- rate limit: `VOICE_MEMORY_WRITE_MAX_PER_MINUTE = 5`
+- dedupe threshold default: `0.9`
+- namespace guardrails enforced by `resolveVoiceMemoryNamespaceScope(...)`
+  - `user:<id>` and `guild:<id>` validation
+  - mismatch rejection
+- sensitive-pattern rejection (`MEMORY_SENSITIVE_PATTERN_RE`)
+- writes fact row + ensures vector embedding (`memory.ensureFactVector(...)`)
+- records write window for rate limiting
+
+This matches the "read + write, no human approval" requirement while still enforcing technical guardrails.
+
+### 8) MCP integration for governance and extensions
+
+MCP servers are represented as runtime server status rows in `mcpStatus`.
+`resolveVoiceRealtimeToolDescriptors(...)` merges MCP-discovered tools into the effective tool list with `toolType: "mcp"`.
+
+MCP call path:
+- `executeMcpVoiceToolCall(...)` posts `{ toolName, arguments }` to configured MCP server tool endpoint.
+- Success/failure updates per-server health (`lastError`, `lastCallAt`, `connected`).
+
+### 9) Music queue controls and output routing
+
+Queue/tool behavior in `src/voice/voiceSessionManager.ts`:
+- queue state in `musicQueueState`
+- search/catalog in `executeVoiceMusicSearchTool(...)`
+- enqueue in `executeVoiceMusicQueueAddTool(...)`
+- playback in `playVoiceQueueTrackByIndex(...)`
+- pause/resume/skip/now-playing in `executeLocalVoiceToolCall(...)`
+
+When music playback starts, `haltSessionOutputForMusicPlayback(...)`:
+- clears pending assistant response/output queue
+- stops/destroys bot speech stream
+- aborts inbound captures while music is active
+
+### 10) Barge-in and interruption behavior
+
+When a human starts speaking and bot output is active:
+- `interruptBotSpeechForBargeIn(...)` cancels active response if possible
+- clears queued audio and stops player immediately
+- stores retry candidate (`pendingBargeInRetry`) when appropriate
+- starts suppression window (`BARGE_IN_SUPPRESSION_MAX_MS`)
+
+If conditions allow, `maybeHandleInterruptedReplyRecovery(...)` can retry the interrupted assistant utterance for brief interruptions.
+
+## Mapping to the Original Iterated Spec
+
+Status against the spec in this repo:
+
+1. `Option B per-speaker transcription`: implemented for OpenAI realtime brain path via per-user ASR sessions (`openAiAsrSessions` + `OpenAiRealtimeTranscriptionClient`).
+2. `Queue controls`: implemented as local tools (`music_search`, `music_queue_add`, `music_play`, `music_pause`, `music_resume`, `music_skip`, `music_now_playing`).
+3. `Vector memory read + write, no approvals`: implemented as local function tools (`memory_search`, `memory_write`) with guardrails.
+4. `MCP tool surface + governance`: implemented via merged MCP tool descriptors and explicit MCP call runtime.
+5. `Realtime brain session does tool calling`: implemented in OpenAI realtime event/tool loop.
+6. `One transcription session per speaker`: implemented in per-user ASR map lifecycle and capture integration.
 
 ## Backwards Compatibility
 
-The system maintains backwards compatibility through:
-1. `resolveVoiceRuntimeMode()` falls back to checking `settings.voice.mode` if `voiceProvider` isn't set
-2. Existing configs with `mode: "openai_realtime"` continue to work
-3. The `brainProvider: "native"` shorthand preserves the "use bundled brain" behavior
+Compatibility behavior is still preserved:
+1. `resolveVoiceRuntimeMode()` honors legacy `settings.voice.mode`.
+2. Older mode values continue to map to equivalent runtime behavior.
+3. `brainProvider: "native"` keeps provider-native brain behavior.
 
 ## Screen Share Integration
 
-Screen share (streamWatch) is independent of voice/brain providers:
+Screen share stays provider-agnostic and is layered onto the same brain/runtime path:
+- frame ingestion and context handling: `src/voice/voiceStreamWatch.ts`
+- realtime commentary uses existing `requestTextUtterance` flow when available
+- works across current realtime providers through shared session orchestration
 
-1. **Separate config** — `settings.voice.streamWatch` controls it (enabled, frame rate, autonomous commentary, brain context)
+## Extensibility
 
-2. **Vision input to brain** — frames are sent to the brain as `input_image` content parts. The brain doesn't care which voice provider is outputting — it just receives images and generates a response.
-
-3. **Works with any brain** — since screen share just sends vision input to whatever brain is active, it works with:
-   - OpenAI brain (native)
-   - Anthropic brain (if you swap it in)
-   - xAI, Gemini, etc.
-
-```
-Screen share frames → input_image → [any brain] → text response → [any voice provider] → audio output
-```
-
-## Extensibility Points
-
-- **New voice providers** — add to `VOICE_PROVIDERS` in `voiceModes.ts` + add config section in settings schema
-- **New brain providers** — add to `BRAIN_PROVIDERS`, implement client if needed
-- **New transcriber** — add to `TRANSCRIBER_PROVIDERS` (e.g., Deepgram, Whisper)
+- Add voice providers in `src/voice/voiceModes.ts` and map runtime in `resolveVoiceRuntimeMode(...)`.
+- Add brain providers by extending provider resolution and reply strategy handling.
+- Add transcriber providers by extending `TRANSCRIBER_PROVIDERS` and per-turn transcription plumbing.
+- Add new local or MCP tools by extending `resolveVoiceRealtimeToolDescriptors(...)`.
