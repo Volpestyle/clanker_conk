@@ -3005,6 +3005,57 @@ test("runRealtimeTurn forwards per-user ASR transcript turns into OpenAI room-br
   assert.equal(audioForwardPayloads.length, 0);
 });
 
+test("shouldUseOpenAiPerUserTranscription follows strategy and setting", () => {
+  const manager = createManager();
+  manager.appConfig.openaiApiKey = "test-key";
+
+  const bridgeDisabledSettings = baseSettings({
+    voice: {
+      realtimeReplyStrategy: "brain",
+      openaiRealtime: {
+        usePerUserAsrBridge: false
+      }
+    }
+  });
+  const bridgeEnabledSettings = baseSettings({
+    voice: {
+      realtimeReplyStrategy: "brain",
+      openaiRealtime: {
+        usePerUserAsrBridge: true
+      }
+    }
+  });
+  const nativeSettings = baseSettings({
+    voice: {
+      realtimeReplyStrategy: "native",
+      openaiRealtime: {
+        usePerUserAsrBridge: true
+      }
+    }
+  });
+
+  const session = {
+    id: "session-openai-bridge-mode-test",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false
+  };
+
+  assert.equal(
+    manager.shouldUseOpenAiPerUserTranscription({ session, settings: bridgeDisabledSettings }),
+    false
+  );
+  assert.equal(
+    manager.shouldUseOpenAiPerUserTranscription({ session, settings: bridgeEnabledSettings }),
+    true
+  );
+  assert.equal(
+    manager.shouldUseOpenAiPerUserTranscription({ session, settings: nativeSettings }),
+    false
+  );
+});
+
 test("bindRealtimeHandlers logs OpenAI realtime response.done usage cost", () => {
   const runtimeLogs = [];
   const handlerMap = new Map();

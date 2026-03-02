@@ -452,9 +452,16 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         });
 
         const openAiRealtimeSettings = settings.voice?.openaiRealtime || {};
+        const openAiReplyStrategy = String(
+          settings?.voice?.realtimeReplyStrategy || "brain"
+        )
+          .trim()
+          .toLowerCase();
+        const openAiPerUserAsrBridgeEnabled =
+          openAiReplyStrategy === "brain" &&
+          (openAiRealtimeSettings.usePerUserAsrBridge !== false);
         const voiceAsrGuidance = resolveVoiceAsrLanguageGuidance(settings);
-        openAiPerUserAsrEnabled =
-          String(settings?.voice?.realtimeReplyStrategy || "brain").trim().toLowerCase() === "brain";
+        openAiPerUserAsrEnabled = openAiPerUserAsrBridgeEnabled;
         openAiPerUserAsrModel =
           String(openAiRealtimeSettings.inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() ||
           "gpt-4o-mini-transcribe";

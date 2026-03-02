@@ -6136,7 +6136,6 @@ export class VoiceSessionManager {
     session?: {
       ending?: boolean;
       mode?: string;
-      openAiPerUserAsrEnabled?: boolean;
       settingsSnapshot?: Record<string, unknown> | null;
     } | null;
     settings?: Record<string, unknown> | null;
@@ -6144,14 +6143,17 @@ export class VoiceSessionManager {
     if (!session || session.ending) return false;
     if (session.mode !== "openai_realtime") return false;
     if (!this.appConfig?.openaiApiKey) return false;
-    if (session.openAiPerUserAsrEnabled !== undefined) {
-      return Boolean(session.openAiPerUserAsrEnabled);
-    }
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    return this.resolveRealtimeReplyStrategy({
+    if (this.resolveRealtimeReplyStrategy({
       session,
       settings: resolvedSettings
-    }) === "brain";
+    }) !== "brain") {
+      return false;
+    }
+    if (resolvedSettings?.voice?.openaiRealtime?.usePerUserAsrBridge === false) {
+      return false;
+    }
+    return true;
   }
 
   getOpenAiAsrSessionMap(session) {
