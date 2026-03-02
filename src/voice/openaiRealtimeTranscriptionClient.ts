@@ -15,10 +15,10 @@ const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
   "whisper-1",
-  "gpt-4o-mini-transcribe-2025-12-15",
-  "gpt-4o-mini-transcribe",
+  "gpt-4o-transcribe-latest",
   "gpt-4o-transcribe",
-  "gpt-4o-transcribe-latest"
+  "gpt-4o-mini-transcribe-2025-12-15",
+  "gpt-4o-mini-transcribe"
 ]);
 
 const TRANSCRIPT_DELTA_TYPES = new Set([
@@ -82,13 +82,9 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
       return this.getState();
     }
 
-    const resolvedModel = normalizeOpenAiRealtimeTranscriptionModel(
-      model,
-      OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
-    );
     const resolvedInputAudioFormat = normalizeOpenAiRealtimeAudioFormat(inputAudioFormat);
     const resolvedInputTranscriptionModel = normalizeOpenAiRealtimeTranscriptionModel(
-      inputTranscriptionModel,
+      inputTranscriptionModel || model,
       OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
     );
     const resolvedInputTranscriptionLanguage = String(inputTranscriptionLanguage || "")
@@ -102,7 +98,7 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
       .slice(0, 280);
 
     this.committedInputAudioItems.clear();
-    const ws = await this.openSocket(this.buildRealtimeUrl(resolvedModel));
+    const ws = await this.openSocket(this.buildRealtimeUrl());
     markRealtimeConnected(this, ws);
 
     ws.on("message", (payload) => {
@@ -123,7 +119,6 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
     });
 
     this.sessionConfig = {
-      model: resolvedModel,
       inputAudioFormat: resolvedInputAudioFormat,
       inputTranscriptionModel: resolvedInputTranscriptionModel,
       inputTranscriptionLanguage: resolvedInputTranscriptionLanguage,
@@ -133,19 +128,13 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
     return this.getState();
   }
 
-  buildRealtimeUrl(model = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL) {
+  buildRealtimeUrl() {
     const base = normalizeOpenAiBaseUrl(this.baseUrl);
     const url = new URL(base);
     url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
     const basePath = url.pathname.replace(/\/+$/, "");
     url.pathname = `${basePath}/realtime`;
-    url.searchParams.set(
-      "model",
-      normalizeOpenAiRealtimeTranscriptionModel(
-        model,
-        OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
-      )
-    );
+    url.searchParams.set("intent", "transcription");
     return url.toString();
   }
 
@@ -200,7 +189,11 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
       event.type === "transcription_session.created" ||
       event.type === "transcription_session.updated"
     ) {
-      this.sessionId = event.session?.id || this.sessionId;
+      this.sessionId =
+        event.session?.id ||
+        event.transcription_session?.id ||
+        (typeof event.id === "string" ? event.id : null) ||
+        this.sessionId;
       this.log("info", "openai_realtime_asr_session_updated", { sessionId: this.sessionId });
       return;
     }
@@ -309,10 +302,6 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
       type: "session.update",
       session: compactObject({
         type: "transcription",
-        model: normalizeOpenAiRealtimeTranscriptionModel(
-          session.model,
-          OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
-        ),
         audio: compactObject({
           input: compactObject({
             format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat),
@@ -321,13 +310,15 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
             transcription: compactObject({
               model: normalizeOpenAiRealtimeTranscriptionModel(
                 session.inputTranscriptionModel,
-                "gpt-4o-transcribe"
+                OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
               ),
               language: String(session.inputTranscriptionLanguage || "").trim() || null,
               prompt: String(session.inputTranscriptionPrompt || "").trim() || null
             })
           })
-        })
+        }),
+        // Include logprobs so downstream can compute transcript confidence when needed.
+        include: ["item.input_audio_transcription.logprobs"]
       })
     });
   }
@@ -377,7 +368,7 @@ function normalizeOpenAiRealtimeAudioFormat(value) {
   const normalized = String(value || "")
     .trim()
     .toLowerCase();
-  if (normalized === "audio/pcm") {
+  if (normalized === "audio/pcm" || normalized === "pcm16") {
     return {
       type: "audio/pcm",
       rate: 24000
@@ -426,7 +417,6 @@ function summarizeOutboundPayload(payload) {
     return compactObject({
       type,
       sessionType: session.type || null,
-      model: session.model || null,
       inputFormat: audio?.input?.format || null,
       inputTranscriptionModel: audio?.input?.transcription?.model || null
     });

@@ -106,6 +106,24 @@ test("isRecoverableRealtimeError matches active response collision code", () => 
   assert.equal(recoverable, true);
 });
 
+test("isRecoverableRealtimeError matches response cancel race code", () => {
+  const recoverable = isRecoverableRealtimeError({
+    mode: "openai_realtime",
+    code: "response_cancel_not_active",
+    message: "Cancellation failed: no active response found"
+  });
+  assert.equal(recoverable, true);
+});
+
+test("isRecoverableRealtimeError matches response cancel race message", () => {
+  const recoverable = isRecoverableRealtimeError({
+    mode: "openai_realtime",
+    code: "unknown_error",
+    message: "Cancellation failed: no active response found"
+  });
+  assert.equal(recoverable, true);
+});
+
 test("getRealtimeCommitMinimumBytes enforces OpenAI minimum audio window", () => {
   assert.equal(getRealtimeCommitMinimumBytes("openai_realtime", 24_000), 4_800);
   assert.equal(getRealtimeCommitMinimumBytes("openai_realtime", 16_000), 3_200);

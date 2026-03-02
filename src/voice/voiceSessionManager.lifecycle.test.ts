@@ -1164,6 +1164,68 @@ test("enqueueDiscordPcmForPlayback does not interrupt for near-silent active cap
   assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
 });
 
+test("enqueueDiscordPcmForPlayback overflow guard respects interruption policy speaker lock", () => {
+  const { manager, logs } = createManager();
+  manager.scheduleAudioPlaybackPump = () => {};
+  const stopCalls = [];
+
+  const session = createSession({
+    botTurnOpen: true,
+    activeReplyInterruptionPolicy: {
+      assertive: true,
+      scope: "speaker",
+      allowedUserId: "user-1"
+    },
+    userCaptures: new Map([
+      [
+        "user-2",
+        {
+          bytesSent: DISCORD_PCM_FRAME_BYTES * 40,
+          signalSampleCount: 32_000,
+          signalActiveSampleCount: 2_500,
+          signalPeakAbs: 7_000
+        }
+      ]
+    ]),
+    audioPlayer: {
+      state: {
+        status: "playing"
+      },
+      stop(force) {
+        stopCalls.push(force);
+      }
+    },
+    connection: {
+      subscribe() {}
+    },
+    botAudioStream: {
+      writableLength: 0,
+      destroy() {}
+    },
+    audioPlaybackQueue: {
+      chunks: [Buffer.alloc(DISCORD_PCM_FRAME_BYTES, 1)],
+      headOffset: 0,
+      queuedBytes: AUDIO_PLAYBACK_QUEUE_WARN_BYTES - DISCORD_PCM_FRAME_BYTES,
+      pumping: false,
+      timer: null,
+      waitingDrain: false,
+      drainHandler: null,
+      lastWarnAt: 0,
+      lastTrimAt: 0
+    }
+  });
+
+  const queued = manager.enqueueDiscordPcmForPlayback({
+    session,
+    discordPcm: Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 2)
+  });
+
+  assert.equal(queued, true);
+  assert.equal(session.botTurnOpen, true);
+  assert.equal(stopCalls.length, 0);
+  assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
+});
+
 test("enqueueDiscordPcmForPlayback clears stale drain wait when audio stream is replaced", () => {
   const { manager } = createManager();
   manager.scheduleAudioPlaybackPump = () => {};

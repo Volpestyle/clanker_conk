@@ -25,10 +25,10 @@ import {
 const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
   "whisper-1",
-  "gpt-4o-mini-transcribe-2025-12-15",
-  "gpt-4o-mini-transcribe",
+  "gpt-4o-transcribe-latest",
   "gpt-4o-transcribe",
-  "gpt-4o-transcribe-latest"
+  "gpt-4o-mini-transcribe-2025-12-15",
+  "gpt-4o-mini-transcribe"
 ]);
 import { estimateUsdCost } from "../pricing.ts";
 import { clamp } from "../utils.ts";
@@ -3639,21 +3639,36 @@ export class VoiceSessionManager {
     return this.isCaptureSignalAssertive(capture);
   }
 
-  hasAssertiveInboundCapture(session) {
-    if (!session || !(session.userCaptures instanceof Map) || session.userCaptures.size <= 0) return false;
+  findAssertiveInboundCaptureUserId(session, interruptionPolicy = null) {
+    if (!session || !(session.userCaptures instanceof Map) || session.userCaptures.size <= 0) return null;
+    const normalizedInterruptionPolicy = this.normalizeReplyInterruptionPolicy(interruptionPolicy);
     const sampleRateHz = isRealtimeMode(session.mode)
       ? Number(session.realtimeInputSampleRateHz) || 24000
       : 24000;
     const minCaptureBytes = Math.max(2, Math.ceil((sampleRateHz * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000));
 
-    for (const capture of session.userCaptures.values()) {
+    for (const [captureUserId, capture] of session.userCaptures.entries()) {
       if (!capture || typeof capture !== "object") continue;
+      const normalizedCaptureUserId = String(capture.userId || captureUserId || "").trim();
+      if (!normalizedCaptureUserId) continue;
       if (capture.speakingEndFinalizeTimer) continue;
       if (Number(capture.bytesSent || 0) < minCaptureBytes) continue;
       if (!this.isCaptureSignalAssertive(capture)) continue;
-      return true;
+      if (
+        !this.isUserAllowedToInterruptReply({
+          policy: normalizedInterruptionPolicy,
+          userId: normalizedCaptureUserId
+        })
+      ) {
+        continue;
+      }
+      return normalizedCaptureUserId;
     }
-    return false;
+    return null;
+  }
+
+  hasAssertiveInboundCapture(session, interruptionPolicy = null) {
+    return Boolean(this.findAssertiveInboundCaptureUserId(session, interruptionPolicy));
   }
 
   interruptBotSpeechForBargeIn({
@@ -4360,41 +4375,44 @@ export class VoiceSessionManager {
         return;
       }
 
-      while (!session.ending && Array.isArray(state.chunks) && state.chunks.length) {
-        const chunk = this.dequeueAudioPlaybackFrame(session, AUDIO_PLAYBACK_PUMP_CHUNK_BYTES);
-        if (!chunk.length) break;
+      const chunk = this.dequeueAudioPlaybackFrame(session, AUDIO_PLAYBACK_PUMP_CHUNK_BYTES);
+      if (!chunk.length) return;
 
-        try {
-          const wrote = session.botAudioStream.write(chunk);
-          if (wrote === false && typeof session.botAudioStream?.once === "function") {
-            if (!state.waitingDrain) {
-              state.waitingDrain = true;
-              const onDrain = () => {
-                state.waitingDrain = false;
-                state.drainHandler = null;
-                if (!session.ending) {
-                  this.scheduleAudioPlaybackPump(session, 0);
-                }
-              };
-              state.drainHandler = onDrain;
-              session.botAudioStream.once("drain", onDrain);
-            }
-            return;
+      try {
+        const wrote = session.botAudioStream.write(chunk);
+        if (wrote === false && typeof session.botAudioStream?.once === "function") {
+          if (!state.waitingDrain) {
+            state.waitingDrain = true;
+            const onDrain = () => {
+              state.waitingDrain = false;
+              state.drainHandler = null;
+              if (!session.ending) {
+                this.scheduleAudioPlaybackPump(session, 0);
+              }
+            };
+            state.drainHandler = onDrain;
+            session.botAudioStream.once("drain", onDrain);
           }
-        } catch (error) {
-          this.store.logAction({
-            kind: "voice_error",
-            guildId: session.guildId,
-            channelId: session.textChannelId,
-            userId: this.client.user?.id || null,
-            content: `bot_audio_stream_write_failed: ${String(error?.message || error)}`,
-            metadata: {
-              sessionId: session.id
-            }
-          });
-          this.clearAudioPlaybackQueue(session);
           return;
         }
+      } catch (error) {
+        this.store.logAction({
+          kind: "voice_error",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: this.client.user?.id || null,
+          content: `bot_audio_stream_write_failed: ${String(error?.message || error)}`,
+          metadata: {
+            sessionId: session.id
+          }
+        });
+        this.clearAudioPlaybackQueue(session);
+        return;
+      }
+
+      if (!session.ending && Array.isArray(state.chunks) && state.chunks.length > 0) {
+        const chunkDurationMs = Math.max(1, this.estimateDiscordPcmPlaybackDurationMs(chunk.length));
+        this.scheduleAudioPlaybackPump(session, chunkDurationMs);
       }
     } finally {
       state.pumping = false;
@@ -4426,17 +4444,25 @@ export class VoiceSessionManager {
     const streamBufferedBytesBeforeEnqueue = Math.max(0, Number(session.botAudioStream?.writableLength || 0));
     const projectedBufferedBytes =
       Math.max(0, Number(state.queuedBytes || 0)) + streamBufferedBytesBeforeEnqueue + pcm.length;
+    const interruptionPolicy = this.normalizeReplyInterruptionPolicy(
+      session.pendingResponse?.interruptionPolicy || session.activeReplyInterruptionPolicy
+    );
+    const assertiveCaptureUserId = this.findAssertiveInboundCaptureUserId(session, interruptionPolicy);
     if (
-      this.hasAssertiveInboundCapture(session) &&
+      assertiveCaptureUserId &&
       session.botTurnOpen &&
       !this.isBargeInOutputSuppressed(session) &&
       projectedBufferedBytes >= AUDIO_PLAYBACK_QUEUE_WARN_BYTES
     ) {
+      const sampleRateHz = isRealtimeMode(session.mode)
+        ? Number(session.realtimeInputSampleRateHz) || 24000
+        : 24000;
+      const minCaptureBytes = Math.max(2, Math.ceil((sampleRateHz * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000));
       const interrupted = this.interruptBotSpeechForBargeIn({
         session,
-        userId: null,
+        userId: assertiveCaptureUserId,
         source: "playback_queue_overflow_guard",
-        minCaptureBytes: 0
+        minCaptureBytes
       });
       if (interrupted) return false;
     }
@@ -6353,7 +6379,6 @@ export class VoiceSessionManager {
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, 280);
-
     const runtimeLogger = this.createOpenAiAsrRuntimeLogger(session, userId);
     const client = new OpenAiRealtimeTranscriptionClient({
       apiKey: this.appConfig.openaiApiKey,
@@ -6979,14 +7004,6 @@ export class VoiceSessionManager {
           userId: normalizedUserId
         });
       }
-      if (isRealtimeMode(session.mode) && this.isBargeInInterruptTargetActive(session)) {
-        this.interruptBotSpeechForBargeIn({
-          session,
-          userId: normalizedUserId,
-          source: "speaking_start",
-          minCaptureBytes: 0
-        });
-      }
       this.startInboundCapture({
         session,
         userId: normalizedUserId,
@@ -7175,6 +7192,31 @@ export class VoiceSessionManager {
       ) {
         this.touchActivity(session.guildId, settings);
         captureState.lastActivityTouchAt = now;
+      }
+
+      if (isRealtimeMode(session.mode) && this.isBargeInInterruptTargetActive(session)) {
+        const interruptionPolicy = this.normalizeReplyInterruptionPolicy(
+          session.pendingResponse?.interruptionPolicy || session.activeReplyInterruptionPolicy
+        );
+        const canInterrupt = this.isUserAllowedToInterruptReply({
+          policy: interruptionPolicy,
+          userId
+        });
+        if (canInterrupt && this.isCaptureSignalAssertive(captureState)) {
+          const sampleRateHz = Number(session.realtimeInputSampleRateHz) || 24000;
+          const minCaptureBytes = Math.max(
+            2,
+            Math.ceil((sampleRateHz * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000)
+          );
+          if (Number(captureState.bytesSent || 0) >= minCaptureBytes) {
+            this.interruptBotSpeechForBargeIn({
+              session,
+              userId,
+              source: "speaking_data",
+              minCaptureBytes
+            });
+          }
+        }
       }
 
       const captureAgeMs = Math.max(0, now - Number(captureState.startedAt || now));

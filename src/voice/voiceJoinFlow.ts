@@ -32,10 +32,10 @@ const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 const OPENAI_REALTIME_DEFAULT_SESSION_MODEL = "gpt-realtime";
 const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
   "whisper-1",
-  "gpt-4o-mini-transcribe-2025-12-15",
-  "gpt-4o-mini-transcribe",
+  "gpt-4o-transcribe-latest",
   "gpt-4o-transcribe",
-  "gpt-4o-transcribe-latest"
+  "gpt-4o-mini-transcribe-2025-12-15",
+  "gpt-4o-mini-transcribe"
 ]);
 const OPENAI_REALTIME_SUPPORTED_SESSION_MODELS = new Set([
   "gpt-realtime",

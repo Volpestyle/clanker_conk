@@ -2,14 +2,13 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { OpenAiRealtimeTranscriptionClient } from "./openaiRealtimeTranscriptionClient.ts";
 
-test("OpenAiRealtimeTranscriptionClient sendSessionUpdate uses text transcription schema", () => {
+test("OpenAiRealtimeTranscriptionClient sendSessionUpdate uses transcription session shape", () => {
   const client = new OpenAiRealtimeTranscriptionClient({ apiKey: "test-key" });
   let outbound = null;
   client.send = (payload) => {
     outbound = payload;
   };
   client.sessionConfig = {
-    model: "gpt-realtime",
     inputAudioFormat: "pcm16",
     inputTranscriptionModel: "gpt-4o-mini-transcribe",
     inputTranscriptionLanguage: "en",
@@ -26,16 +25,16 @@ test("OpenAiRealtimeTranscriptionClient sendSessionUpdate uses text transcriptio
   assert.equal(outbound.session.audio.input.transcription.model, "gpt-4o-mini-transcribe");
   assert.equal(outbound.session.audio.input.transcription.language, "en");
   assert.equal(outbound.session.audio.input.transcription.prompt, "Prefer English.");
+  assert.deepEqual(outbound.session.include, ["item.input_audio_transcription.logprobs"]);
 });
 
-test("OpenAiRealtimeTranscriptionClient keeps gpt-4o-transcribe when configured", () => {
+test("OpenAiRealtimeTranscriptionClient keeps gpt-4o-transcribe as input transcription model", () => {
   const client = new OpenAiRealtimeTranscriptionClient({ apiKey: "test-key" });
   let outbound = null;
   client.send = (payload) => {
     outbound = payload;
   };
   client.sessionConfig = {
-    model: "gpt-4o-transcribe",
     inputAudioFormat: "pcm16",
     inputTranscriptionModel: "gpt-4o-transcribe",
     inputTranscriptionLanguage: "en",
@@ -46,7 +45,6 @@ test("OpenAiRealtimeTranscriptionClient keeps gpt-4o-transcribe when configured"
 
   assert.ok(outbound);
   assert.equal(outbound.type, "session.update");
-  assert.equal(outbound.session.type, "transcription");
   assert.equal(outbound.session.audio.input.transcription.model, "gpt-4o-transcribe");
 });
 
@@ -57,7 +55,6 @@ test("OpenAiRealtimeTranscriptionClient normalizes unsupported ASR model values"
     outbound = payload;
   };
   client.sessionConfig = {
-    model: "gpt-4o-mini-transcribe",
     inputAudioFormat: "pcm16",
     inputTranscriptionModel: "not-a-real-model",
     inputTranscriptionLanguage: "en",
@@ -68,7 +65,6 @@ test("OpenAiRealtimeTranscriptionClient normalizes unsupported ASR model values"
 
   assert.ok(outbound);
   assert.equal(outbound.type, "session.update");
-  assert.equal(outbound.session.type, "transcription");
   assert.equal(outbound.session.audio.input.transcription.model, "gpt-4o-mini-transcribe");
 });
 
@@ -131,8 +127,9 @@ test("OpenAiRealtimeTranscriptionClient carries item linkage metadata for transc
   assert.equal(received[0]?.previousItemId, "item_001");
 });
 
-test("OpenAiRealtimeTranscriptionClient buildRealtimeUrl uses configured transcription model", () => {
+test("OpenAiRealtimeTranscriptionClient buildRealtimeUrl uses transcription intent", () => {
   const client = new OpenAiRealtimeTranscriptionClient({ apiKey: "test-key" });
-  const url = client.buildRealtimeUrl("gpt-4o-transcribe");
-  assert.equal(url.includes("model=gpt-4o-transcribe"), true);
+  const url = client.buildRealtimeUrl();
+  assert.equal(url.includes("intent=transcription"), true);
+  assert.equal(url.includes("model="), false);
 });

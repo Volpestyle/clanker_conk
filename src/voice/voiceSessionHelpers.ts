@@ -98,12 +98,14 @@ export function isRecoverableRealtimeError({ mode, code, message }) {
     .toLowerCase();
   if (normalizedCode === "input_audio_buffer_commit_empty") return true;
   if (normalizedCode === "conversation_already_has_active_response") return true;
+  if (normalizedCode === "response_cancel_not_active") return true;
 
   const normalizedMessage = String(message || "")
     .trim()
     .toLowerCase();
   if (!normalizedMessage) return false;
   if (normalizedMessage.includes("active response in progress")) return true;
+  if (normalizedMessage.includes("no active response found")) return true;
   return normalizedMessage.includes("input audio buffer") && normalizedMessage.includes("buffer too small");
 }
 
@@ -504,11 +506,7 @@ export function resolveVoiceProvider(settings) {
 
 export function resolveBrainProvider(settings) {
   const voiceProvider = resolveVoiceProvider(settings);
-  const brainSetting = settings?.voice?.brainProvider;
-  if (brainSetting && brainSetting !== "native") {
-    return normalizeBrainProvider(brainSetting, voiceProvider, "native");
-  }
-  return normalizeBrainProvider("native", voiceProvider, "native");
+  return normalizeBrainProvider(settings?.voice?.brainProvider, voiceProvider, "openai");
 }
 
 export function resolveTranscriberProvider(settings) {

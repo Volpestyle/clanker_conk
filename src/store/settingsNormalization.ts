@@ -18,6 +18,15 @@ import {
   VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
 } from "../promptCore.ts";
 
+const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
+const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
+  "whisper-1",
+  "gpt-4o-transcribe-latest",
+  "gpt-4o-transcribe",
+  "gpt-4o-mini-transcribe-2025-12-15",
+  "gpt-4o-mini-transcribe"
+]);
+
 export const PERSONA_FLAVOR_MAX_CHARS = 2_000;
 
 export function normalizeSettings(raw) {
@@ -486,7 +495,7 @@ export function normalizeSettings(raw) {
   merged.voice.brainProvider = normalizeBrainProvider(
     merged.voice?.brainProvider,
     merged.voice?.voiceProvider,
-    "native"
+    "openai"
   );
   merged.voice.transcriberProvider = normalizeTranscriberProvider(
     merged.voice?.transcriberProvider,
@@ -694,12 +703,13 @@ export function normalizeSettings(raw) {
     merged.voice?.openaiRealtime?.outputAudioFormat || defaultVoiceOpenAiRealtime.outputAudioFormat || "pcm16"
   );
   merged.voice.openaiRealtime.inputTranscriptionModel = String(
-    merged.voice?.openaiRealtime?.inputTranscriptionModel ||
-      defaultVoiceOpenAiRealtime.inputTranscriptionModel ||
-      "gpt-4o-mini-transcribe"
-  )
-    .trim()
-    .slice(0, 120);
+    normalizeOpenAiRealtimeTranscriptionModel(
+      merged.voice?.openaiRealtime?.inputTranscriptionModel ||
+        defaultVoiceOpenAiRealtime.inputTranscriptionModel ||
+        OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
+      OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+    )
+  ).slice(0, 120);
   merged.voice.openaiRealtime.usePerUserAsrBridge =
     merged.voice?.openaiRealtime?.usePerUserAsrBridge !== undefined
       ? Boolean(merged.voice?.openaiRealtime?.usePerUserAsrBridge)
@@ -1130,6 +1140,13 @@ function normalizeOpenAiRealtimeAudioFormat(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "audio/pcm") return "pcm16";
   return "pcm16";
+}
+
+function normalizeOpenAiRealtimeTranscriptionModel(value, fallback = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL) {
+  const normalized =
+    String(value || "").trim() || String(fallback || "").trim() || OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
+  if (OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS.has(normalized)) return normalized;
+  return OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
 }
 
 function normalizeHardLimitList(input, fallback = []) {
