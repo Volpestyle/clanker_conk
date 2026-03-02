@@ -214,6 +214,25 @@ test("parseStructuredReplyOutput accepts screen share offer intent", () => {
   assert.equal(parsed.screenShareIntent.reason, "needs visual context");
 });
 
+test("parseStructuredReplyOutput ignores deprecated screen share aliases", () => {
+  const parsed = parseStructuredReplyOutput(
+    JSON.stringify({
+      text: "old payload",
+      skip: false,
+      screenShare: {
+        action: "offer_link",
+        confidence: 1,
+        reason: "deprecated alias"
+      },
+      screenShareLinkRequested: true
+    })
+  );
+
+  assert.equal(parsed.screenShareIntent.action, null);
+  assert.equal(parsed.screenShareIntent.confidence, 0);
+  assert.equal(parsed.screenShareIntent.reason, null);
+});
+
 test("parseStructuredReplyOutput preserves model-provided voice addressing target", () => {
   const parsed = parseStructuredReplyOutput(
     JSON.stringify({

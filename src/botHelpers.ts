@@ -713,17 +713,7 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
   const automationAction = normalizeStructuredAutomationAction(parsed?.automationAction);
   const mediaDirective = normalizeStructuredMediaDirective(parsed?.media, maxLen);
   const voiceIntent = normalizeStructuredVoiceIntent(parsed?.voiceIntent);
-  const screenShareIntent = normalizeStructuredScreenShareIntent(
-    parsed?.screenShareIntent ??
-      parsed?.screenShare ??
-      (parsed?.screenShareLinkRequested === true
-        ? {
-            action: "offer_link",
-            confidence: 1,
-            reason: "legacy_screen_share_link_requested"
-          }
-        : null)
-  );
+  const screenShareIntent = normalizeStructuredScreenShareIntent(parsed?.screenShareIntent);
   const voiceAddressing = normalizeStructuredVoiceAddressing(parsed?.voiceAddressing);
 
   return {
