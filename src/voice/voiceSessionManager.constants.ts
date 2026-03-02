@@ -123,8 +123,3 @@ export const AUDIO_PLAYBACK_PRE_BUFFER_PACKETS = 5;
 // Fallback: if the pre-buffer threshold isn't met within this window
 // (e.g. a very short response), start playback anyway.
 export const AUDIO_PLAYBACK_PRE_BUFFER_FALLBACK_MS = 300;
-export const STT_TTS_CONVERSION_CHUNK_MS = 120;
-export const STT_TTS_CONVERSION_YIELD_EVERY_CHUNKS = 8;
-// Yield the event loop every N audio delta chunks during the async drain
-// so the Discord.js 20 ms audio cycle can fire between Opus encodes.
-export const AUDIO_DELTA_DRAIN_YIELD_INTERVAL = 3;
