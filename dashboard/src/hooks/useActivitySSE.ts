@@ -25,7 +25,28 @@ type ActivityAction = {
 
 type ActivitySnapshot = {
   actions?: ActivityAction[];
-  stats?: any;
+  stats?: ActivityStats | null;
+};
+
+type ActivityStats = Record<string, unknown> & {
+  runtime?: {
+    isReady?: boolean;
+    publicHttps?: {
+      enabled?: boolean;
+      publicUrl?: string;
+      status?: string;
+    };
+    guildCount?: number;
+    [key: string]: unknown;
+  };
+  stats?: {
+    performance?: unknown;
+    last24h?: Record<string, unknown>;
+    dailyCost?: unknown;
+    totalCostUsd?: number;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
 };
 
 const MAX_ACTIONS = 220;
@@ -63,7 +84,7 @@ function normalizeActivityAction(action: ActivityAction): ActivityAction {
 
 export function useActivitySSE() {
   const [actions, setActions] = useState<ActivityAction[]>([]);
-  const [stats, setStats] = useState<any>(null);
+  const [stats, setStats] = useState<ActivityStats | null>(null);
   const [status, setStatus] = useState<ActivitySSEStatus>("connecting");
   const [lastSuccess, setLastSuccess] = useState<number | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);

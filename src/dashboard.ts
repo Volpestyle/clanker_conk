@@ -170,6 +170,16 @@ export function createDashboardServer({
     }
   });
 
+  app.post("/api/settings/reset", async (_req, res, next) => {
+    try {
+      const nextSettings = store.resetSettings();
+      await bot.applyRuntimeSettings(nextSettings);
+      res.json(nextSettings);
+    } catch (error) {
+      next(error);
+    }
+  });
+
   app.get("/api/actions", (req, res) => {
     const limit = parseBoundedInt(req.query.limit, 200, 1, 1000);
     res.json(store.getRecentActions(limit));

@@ -116,7 +116,6 @@ import {
   BARGE_IN_RETRY_MAX_AGE_MS,
   BARGE_IN_SUPPRESSION_MAX_MS,
   BOT_DISCONNECT_GRACE_MS,
-  DIRECT_ADDRESS_CROSS_SPEAKER_WAKE_MS,
   BOT_TURN_DEFERRED_COALESCE_MAX,
   BOT_TURN_DEFERRED_FLUSH_DELAY_MS,
   BOT_TURN_DEFERRED_QUEUE_MAX,
@@ -6503,7 +6502,6 @@ export class VoiceSessionManager {
 
   async waitForOpenAiAsrTranscriptSettle({
     session,
-    userId,
     asrState
   }) {
     if (!session || session.ending || !asrState) return "";
@@ -6599,7 +6597,6 @@ export class VoiceSessionManager {
 
     const transcript = await this.waitForOpenAiAsrTranscriptSettle({
       session,
-      userId,
       asrState
     });
     const asrCompletedAtMs = Date.now();
@@ -12526,12 +12523,15 @@ export class VoiceSessionManager {
     try {
       session.realtimeClient.commitInputAudioBuffer();
       session.pendingRealtimeInputBytes = 0;
+      // OpenAI manual turn handling requires an explicit response.create after commit.
+      const emitCreateEvent =
+        session.mode !== "openai_realtime" || this.shouldUseNativeRealtimeReply({ session });
       const created = this.createTrackedAudioResponse({
         session,
         userId,
         source: "turn_flush",
         resetRetryState: true,
-        emitCreateEvent: session.mode !== "openai_realtime"
+        emitCreateEvent
       });
       if (!created) {
         this.scheduleResponseFromBufferedAudio({ session, userId });

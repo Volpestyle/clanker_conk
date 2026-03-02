@@ -71,6 +71,70 @@ function createRealtimeSession(overrides = {}) {
   };
 }
 
+test("flushResponseFromBufferedAudio emits response.create for OpenAI native reply turns", () => {
+  const { manager } = createManager();
+  const commits = [];
+  const creates = [];
+  const session = createRealtimeSession({
+    pendingRealtimeInputBytes: 5_000,
+    realtimeClient: {
+      createAudioResponse() {
+        creates.push("create");
+      },
+      commitInputAudioBuffer() {
+        commits.push("commit");
+      },
+      isResponseInProgress() {
+        return false;
+      }
+    }
+  });
+
+  manager.flushResponseFromBufferedAudio({
+    session,
+    userId: "speaker-native"
+  });
+
+  assert.equal(commits.length, 1);
+  assert.equal(creates.length, 1);
+  assert.equal(Number(session.pendingResponse?.requestId || 0) > 0, true);
+});
+
+test("flushResponseFromBufferedAudio skips response.create for OpenAI brain reply turns", () => {
+  const { manager } = createManager();
+  const commits = [];
+  const creates = [];
+  const session = createRealtimeSession({
+    pendingRealtimeInputBytes: 5_000,
+    settingsSnapshot: {
+      botName: "clanker conk",
+      voice: {
+        brainProvider: "anthropic"
+      }
+    },
+    realtimeClient: {
+      createAudioResponse() {
+        creates.push("create");
+      },
+      commitInputAudioBuffer() {
+        commits.push("commit");
+      },
+      isResponseInProgress() {
+        return false;
+      }
+    }
+  });
+
+  manager.flushResponseFromBufferedAudio({
+    session,
+    userId: "speaker-brain"
+  });
+
+  assert.equal(commits.length, 1);
+  assert.equal(creates.length, 0);
+  assert.equal(Number(session.pendingResponse?.requestId || 0) > 0, true);
+});
+
 test("silent response triggers retry and rearms watchdog", async () => {
   const { manager, logs } = createManager();
   const session = createRealtimeSession({

@@ -7,12 +7,7 @@ import {
   type RealtimeState,
   type VoiceMembershipEvent,
   type SessionLatency,
-  type LatencyTurnEntry,
-  type GenerationContextSnapshot,
-  type AsrSessionSnapshot,
-  type BrainToolEntry,
-  type ToolCallEvent,
-  type McpServerStatus
+  type LatencyTurnEntry
 } from "../hooks/useVoiceSSE";
 import { useVoiceHistory } from "../hooks/useVoiceHistory";
 

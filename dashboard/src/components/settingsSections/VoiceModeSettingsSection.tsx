@@ -38,20 +38,21 @@ export function VoiceModeSettingsSection({
 }) {
   const isRealtimeMode =
     isVoiceAgentMode || isOpenAiRealtimeMode || isGeminiRealtimeMode || isElevenLabsRealtimeMode;
-  const realtimeReplyStrategy = String(form.voiceRealtimeReplyStrategy || "brain")
+  const brainProvider = String(form.voiceBrainProvider || "native")
     .trim()
     .toLowerCase();
+  const usesBrainLlm = brainProvider !== "native";
   const openAiPerUserAsrBridge =
     isOpenAiRealtimeMode &&
-    realtimeReplyStrategy === "brain" &&
+    usesBrainLlm &&
     Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge);
   const usesBrainGeneration =
-    isSttPipelineMode || (isRealtimeMode && realtimeReplyStrategy === "brain" && !openAiPerUserAsrBridge);
+    isSttPipelineMode || (isRealtimeMode && usesBrainLlm && !openAiPerUserAsrBridge);
   const classifierMergedWithGeneration =
     !form.voiceReplyDecisionLlmEnabled &&
     usesBrainGeneration;
   const classifierDisabledNativeRealtime =
-    !form.voiceReplyDecisionLlmEnabled && isRealtimeMode && realtimeReplyStrategy === "native";
+    !form.voiceReplyDecisionLlmEnabled && isRealtimeMode && !usesBrainLlm;
   return (
     <SettingsSection id={id} title="Voice Mode" active={form.voiceEnabled}>
       <div className="toggles">
@@ -63,24 +64,26 @@ export function VoiceModeSettingsSection({
 
       <Collapse open={showVoiceAdvanced}>
           <label htmlFor="voice-mode">Voice runtime mode</label>
-          <select id="voice-mode" value={form.voiceMode} onChange={set("voiceMode")}>
-            <option value="voice_agent">Voice agent (xAI realtime low-latency)</option>
-            <option value="openai_realtime">OpenAI realtime (low-latency)</option>
-            <option value="gemini_realtime">Gemini realtime (audio + stream frames)</option>
-            <option value="elevenlabs_realtime">ElevenLabs realtime (agent websocket)</option>
-            <option value="stt_pipeline">STT pipeline (reuse chat LLM + memory)</option>
+          <select id="voice-mode" value={form.voiceProvider} onChange={set("voiceProvider")}>
+            <option value="xai">xAI realtime (low-latency)</option>
+            <option value="openai">OpenAI realtime (low-latency)</option>
+            <option value="gemini">Gemini realtime (audio + stream frames)</option>
+            <option value="elevenlabs">ElevenLabs realtime (agent websocket)</option>
           </select>
 
           {isRealtimeMode && (
             <>
-              <label htmlFor="voice-realtime-reply-strategy">Realtime reply path</label>
+              <label htmlFor="voice-brain-provider">Brain provider</label>
               <select
-                id="voice-realtime-reply-strategy"
-                value={form.voiceRealtimeReplyStrategy}
-                onChange={set("voiceRealtimeReplyStrategy")}
+                id="voice-brain-provider"
+                value={form.voiceBrainProvider}
+                onChange={set("voiceBrainProvider")}
               >
-                <option value="brain">Brain (our LLM reply generation)</option>
-                <option value="native">Native realtime provider response</option>
+                <option value="native">Native (realtime provider handles replies)</option>
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="xai">xAI</option>
+                <option value="gemini">Gemini</option>
               </select>
             </>
           )}
@@ -469,17 +472,17 @@ export function VoiceModeSettingsSection({
                     type="checkbox"
                     checked={Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge)}
                     onChange={set("voiceOpenAiRealtimeUsePerUserAsrBridge")}
-                    disabled={realtimeReplyStrategy !== "brain"}
+                    disabled={!usesBrainLlm}
                   />
                   Use OpenAI per-user ASR bridge (bypass local voice LLM)
                 </label>
               </div>
               <p>
-                {realtimeReplyStrategy === "brain"
+                {usesBrainLlm
                   ? openAiPerUserAsrBridge
                     ? "Enabled: speaker transcripts are forwarded as labeled text into OpenAI runtime."
                     : "Disabled: per-speaker transcripts go through the local voice brain."
-                  : "Native reply path does not use this setting."}
+                  : "Native brain provider does not use this setting."}
               </p>
               <div className="split">
                 <div>

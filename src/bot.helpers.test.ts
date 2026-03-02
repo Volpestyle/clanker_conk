@@ -76,7 +76,7 @@ test("compose media prompts fall back to contextual defaults when no prompt is p
 test("parseStructuredReplyOutput recovers text from truncated fenced JSON", () => {
   const parsed = parseStructuredReplyOutput(`\`\`\`json
 {
-  "text": "nah corbexx you're actually unhinged and i respect it lmaooo. \\\"penjamin\\\" mode activated.\\n\\ncan't be grinding your brain 24/7",
+  "text": "nah corbexx you're actually unhinged and i respect it lmaooo. 'penjamin' mode activated.\\n\\ncan't be grinding your brain 24/7",
   "skip": false,
   "reactionEmoji": "lmao:1063357443737931876",
   "automationAction": {
@@ -85,7 +85,7 @@ test("parseStructuredReplyOutput recovers text from truncated fenced JSON", () =
 
   assert.equal(
     parsed.text,
-    "nah corbexx you're actually unhinged and i respect it lmaooo. \"penjamin\" mode activated. can't be grinding your brain 24/7"
+    "nah corbexx you're actually unhinged and i respect it lmaooo. 'penjamin' mode activated. can't be grinding your brain 24/7"
   );
 });
 
