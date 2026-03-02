@@ -140,7 +140,7 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.videoContext.maxAsrSeconds, 15);
 
   assert.equal(normalized.voice.voiceProvider, "openai");
-  assert.equal(normalized.voice.brainProvider, "native");
+  assert.equal(normalized.voice.brainProvider, "openai");
   assert.equal(normalized.voice.asrLanguageMode, "fixed");
   assert.equal(normalized.voice.asrLanguageHint, "en-us");
   assert.equal(normalized.voice.generationLlm.useTextModel, true);

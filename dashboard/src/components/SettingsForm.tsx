@@ -5,8 +5,6 @@ import {
   OPENAI_REALTIME_MODEL_OPTIONS,
   OPENAI_REALTIME_VOICE_OPTIONS,
   OPENAI_TRANSCRIPTION_MODEL_OPTIONS,
-  STT_TRANSCRIPTION_MODEL_OPTIONS,
-  STT_TTS_MODEL_OPTIONS,
   XAI_VOICE_OPTIONS,
   formToSettingsPatch,
   resolveModelOptions,
@@ -124,14 +122,6 @@ export default function SettingsForm({
     GEMINI_REALTIME_MODEL_OPTIONS,
     effectiveForm.voiceGeminiRealtimeModel
   );
-  const sttTranscriptionModelOptions = resolveModelOptions(
-    STT_TRANSCRIPTION_MODEL_OPTIONS,
-    effectiveForm.voiceSttTranscriptionModel
-  );
-  const sttTtsModelOptions = resolveModelOptions(
-    STT_TTS_MODEL_OPTIONS,
-    effectiveForm.voiceSttTtsModel
-  );
   const initiativeImageModelOptions = resolveModelOptionsFromText(
     effectiveForm.initiativeAllowedImageModels,
     effectiveForm.initiativeSimpleImageModel,
@@ -145,7 +135,6 @@ export default function SettingsForm({
   const isOpenAiRealtimeMode = effectiveForm.voiceProvider === "openai";
   const isGeminiRealtimeMode = effectiveForm.voiceProvider === "gemini";
   const isElevenLabsRealtimeMode = effectiveForm.voiceProvider === "elevenlabs";
-  const isSttPipelineMode = false;
   const showVoiceAdvanced = effectiveForm.voiceEnabled;
   const showInitiativeAdvanced = effectiveForm.autonomousInitiativeEnabled;
   const showInitiativeImageControls = effectiveForm.initiativeImageEnabled || effectiveForm.replyImageEnabled;
@@ -349,7 +338,6 @@ export default function SettingsForm({
             isOpenAiRealtimeMode={isOpenAiRealtimeMode}
             isGeminiRealtimeMode={isGeminiRealtimeMode}
             isElevenLabsRealtimeMode={isElevenLabsRealtimeMode}
-            isSttPipelineMode={isSttPipelineMode}
             setVoiceReplyDecisionProvider={setVoiceReplyDecisionProvider}
             selectVoiceReplyDecisionPresetModel={selectVoiceReplyDecisionPresetModel}
             voiceReplyDecisionModelOptions={voiceReplyDecisionModelOptions}
@@ -367,8 +355,6 @@ export default function SettingsForm({
             openAiRealtimeVoiceOptions={openAiRealtimeVoiceOptions}
             openAiTranscriptionModelOptions={openAiTranscriptionModelOptions}
             geminiRealtimeModelOptions={geminiRealtimeModelOptions}
-            sttTranscriptionModelOptions={sttTranscriptionModelOptions}
-            sttTtsModelOptions={sttTtsModelOptions}
             onResetVoiceReplyDecisionPrompts={resetVoiceReplyDecisionPrompts}
           />
 

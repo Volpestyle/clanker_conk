@@ -63,8 +63,7 @@ const MODE_LABELS: Record<string, string> = {
   elevenlabs: "ElevenLabs",
   elevenlabs_realtime: "ElevenLabs RT",
   xai: "xAI",
-  xai_realtime: "xAI RT",
-  stt_pipeline: "STT Pipeline"
+  xai_realtime: "xAI RT"
 };
 
 const STATE_LABELS: Record<string, string> = {
@@ -343,7 +342,6 @@ function Stat({ label, value, warn }: { label: string; value: ReactNode; warn?: 
 
 function PipelineBadge({ session }: { session: VoiceSession }) {
   const rt = session.realtime;
-  const stt = session.stt;
   const context = session.conversation?.modelContext;
   const generationContext = context?.generation;
   const trackedTurns = Number(context?.trackedTurns || 0);
@@ -369,18 +367,6 @@ function PipelineBadge({ session }: { session: VoiceSession }) {
         {state?.activeResponseId && (
           <span className="vm-pipe-tag vm-pipe-responding">responding</span>
         )}
-      </div>
-    );
-  }
-
-  if (stt) {
-    return (
-      <div className="vm-pipeline-row">
-        <span className="vm-pipe-dot vm-pipe-ok" />
-        <span className="vm-pipe-label">STT Pipeline</span>
-        <span className="vm-pipe-detail">
-          ctx {sentTurns}/{Math.max(trackedTurns, Number(stt.contextMessages || 0))}
-        </span>
       </div>
     );
   }

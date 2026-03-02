@@ -155,7 +155,6 @@
 .vm-mode-elevenlabs_realtime { background: rgba(244, 114, 182, 0.12); color: #f472b6; }
 .vm-mode-xai            { background: rgba(248, 113, 113, 0.12); color: #f87171; }
 .vm-mode-xai_realtime   { background: rgba(248, 113, 113, 0.12); color: #f87171; }
-.vm-mode-stt_pipeline   { background: rgba(168, 130, 255, 0.12); color: #a882ff; }
 
 .vm-state-dot {
   width: 8px;

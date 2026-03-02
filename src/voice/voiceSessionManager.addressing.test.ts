@@ -2110,6 +2110,93 @@ test("runRealtimeTurn uses brain reply generation when admission allows turn", a
   assert.equal(brainPayloads[0]?.source, "realtime");
 });
 
+test("forwardOpenAiRealtimeTextTurnToBrain does not block on turn-context refresh", async () => {
+  const requestCalls = [];
+  let releaseContextRefresh = () => undefined;
+  const manager = createManager();
+  manager.createTrackedAudioResponse = () => true;
+  manager.prepareOpenAiRealtimeTurnContext = async () => {
+    await new Promise((resolve) => {
+      releaseContextRefresh = resolve;
+    });
+  };
+
+  const session = {
+    id: "session-forward-nonblocking-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeClient: {
+      requestTextUtterance(promptText) {
+        requestCalls.push(promptText);
+      }
+    },
+    settingsSnapshot: baseSettings()
+  };
+
+  const forwardCall = manager.forwardOpenAiRealtimeTextTurnToBrain({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "what's up",
+    captureReason: "stream_end",
+    source: "realtime_transcript_turn",
+    directAddressed: true
+  });
+
+  const result = await Promise.race([
+    forwardCall,
+    new Promise((resolve) => setTimeout(() => resolve("timeout"), 80))
+  ]);
+
+  assert.equal(result, true);
+  assert.equal(requestCalls.length, 1);
+  releaseContextRefresh();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
+test("forwardRealtimeTurnAudio schedules response without waiting for turn-context refresh", async () => {
+  let releaseContextRefresh = () => undefined;
+  let scheduledCalls = 0;
+  const manager = createManager();
+  manager.prepareOpenAiRealtimeTurnContext = async () => {
+    await new Promise((resolve) => {
+      releaseContextRefresh = resolve;
+    });
+  };
+  manager.scheduleResponseFromBufferedAudio = () => {
+    scheduledCalls += 1;
+  };
+
+  const session = {
+    id: "session-forward-audio-nonblocking-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    realtimeClient: {
+      appendInputAudioPcm() {}
+    },
+    settingsSnapshot: baseSettings()
+  };
+
+  const forwarded = await manager.forwardRealtimeTurnAudio({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "hello",
+    pcmBuffer: Buffer.from([1, 2, 3, 4]),
+    captureReason: "stream_end"
+  });
+
+  assert.equal(forwarded, true);
+  assert.equal(scheduledCalls, 1);
+  releaseContextRefresh();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+});
+
 test("smoke: runRealtimeBrainReply passes join-window context into generation", async () => {
   const generationPayloads = [];
   const manager = createManager();

@@ -14,7 +14,7 @@ Features:
 - Optional Grok Imagine image/video generation for complex visuals and clips.
 - Video link understanding for YouTube/TikTok/embedded video links (captions first, optional ASR fallback, optional keyframes).
 - NL-controlled Discord voice sessions (join/leave/status) with session limits and runtime guards.
-- Voice runtime mode selector: `voice_agent` (xAI realtime), `openai_realtime` (OpenAI Realtime), `gemini_realtime` (Gemini Live API), `elevenlabs_realtime` (ElevenLabs Agents websocket), or `stt_pipeline` (STT -> brain LLM -> TTS).
+- Voice runtime mode selector: `voice_agent` (xAI realtime), `openai_realtime` (OpenAI Realtime), `gemini_realtime` (Gemini Live API), or `elevenlabs_realtime` (ElevenLabs Agents websocket).
 - Stream-watch voice controls (`watch_stream`, `stop_watching_stream`, `stream_status`) with external frame ingest path.
 - Model-directed screen-share link offers (`screenShareIntent`) with temporary browser capture links (localhost fallback or public HTTPS).
 - Optional auto-managed public HTTPS dashboard entrypoint via Cloudflare Quick Tunnel.
@@ -154,7 +154,7 @@ Use dashboard to:
 - Allowed image/video generation models, simple/complex image routing models, and per-24h media budgets.
 - LLM provider and model selection.
 - Optional dedicated provider/model for reply follow-up regenerations (web/memory lookup passes).
-- Voice runtime mode (`voice_agent`, `openai_realtime`, `gemini_realtime`, `elevenlabs_realtime`, or `stt_pipeline`) and provider-specific realtime/STT/TTS settings (`voice.elevenLabsRealtime.agentId` is required for ElevenLabs mode).
+- Voice runtime mode (`voice_agent`, `openai_realtime`, `gemini_realtime`, or `elevenlabs_realtime`) and provider-specific realtime settings (`voice.elevenLabsRealtime.agentId` is required for ElevenLabs mode). Legacy/stored `stt_pipeline` settings are handled in normalization and runtime-only mode paths.
 - Stream-watch ingest guardrails; `/api/voice/stream-ingest/frame` for external relay (`DASHBOARD_TOKEN` or `PUBLIC_API_TOKEN`) or tokenized `/api/voice/share-session/:token/frame`.
 - Accumulated API spend tracking.
 - Bot actions and memory inspection.

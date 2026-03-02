@@ -111,7 +111,7 @@ export const DEFAULT_SETTINGS = {
   voice: {
     enabled: true,
     voiceProvider: "openai",
-    brainProvider: "native",
+    brainProvider: "openai",
     transcriberProvider: "openai",
     asrLanguageMode: "auto",
     asrLanguageHint: "en",
@@ -157,10 +157,10 @@ export const DEFAULT_SETTINGS = {
     },
     openaiRealtime: {
       model: "gpt-realtime",
-      voice: "alloy",
+      voice: "marin",
       inputAudioFormat: "pcm16",
       outputAudioFormat: "pcm16",
-      inputTranscriptionModel: "gpt-4o-mini-transcribe",
+      inputTranscriptionModel: "gpt-4o-transcribe",
       usePerUserAsrBridge: true
     },
     elevenLabsRealtime: {

@@ -306,7 +306,9 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
           input: compactObject({
             format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat),
             noise_reduction: { type: "near_field" },
-            turn_detection: { type: "server_vad", threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 500 },
+            // Turn boundaries are controlled by Discord speaking lifecycle + explicit
+            // input_audio_buffer.commit, so keep realtime VAD disabled here.
+            turn_detection: null,
             transcription: compactObject({
               model: normalizeOpenAiRealtimeTranscriptionModel(
                 session.inputTranscriptionModel,

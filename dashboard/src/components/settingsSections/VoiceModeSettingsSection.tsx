@@ -14,7 +14,6 @@ export function VoiceModeSettingsSection({
   isOpenAiRealtimeMode,
   isGeminiRealtimeMode,
   isElevenLabsRealtimeMode,
-  isSttPipelineMode,
   setVoiceReplyDecisionProvider,
   selectVoiceReplyDecisionPresetModel,
   voiceReplyDecisionModelOptions,
@@ -32,13 +31,11 @@ export function VoiceModeSettingsSection({
   openAiRealtimeVoiceOptions,
   openAiTranscriptionModelOptions,
   geminiRealtimeModelOptions,
-  sttTranscriptionModelOptions,
-  sttTtsModelOptions,
   onResetVoiceReplyDecisionPrompts
 }) {
   const isRealtimeMode =
     isVoiceAgentMode || isOpenAiRealtimeMode || isGeminiRealtimeMode || isElevenLabsRealtimeMode;
-  const brainProvider = String(form.voiceBrainProvider || "native")
+  const brainProvider = String(form.voiceBrainProvider || "openai")
     .trim()
     .toLowerCase();
   const usesBrainLlm = brainProvider !== "native";
@@ -46,8 +43,7 @@ export function VoiceModeSettingsSection({
     isOpenAiRealtimeMode &&
     usesBrainLlm &&
     Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge);
-  const usesBrainGeneration =
-    isSttPipelineMode || (isRealtimeMode && usesBrainLlm && !openAiPerUserAsrBridge);
+  const usesBrainGeneration = isRealtimeMode && usesBrainLlm && !openAiPerUserAsrBridge;
   const classifierMergedWithGeneration =
     !form.voiceReplyDecisionLlmEnabled &&
     usesBrainGeneration;
@@ -76,10 +72,9 @@ export function VoiceModeSettingsSection({
               <label htmlFor="voice-brain-provider">Brain provider</label>
               <select
                 id="voice-brain-provider"
-                value={form.voiceBrainProvider}
+                value={form.voiceBrainProvider || "openai"}
                 onChange={set("voiceBrainProvider")}
               >
-                <option value="native">Native (realtime provider handles replies)</option>
                 <option value="openai">OpenAI</option>
                 <option value="anthropic">Anthropic</option>
                 <option value="xai">xAI</option>
@@ -652,65 +647,6 @@ export function VoiceModeSettingsSection({
                     max="48000"
                     value={form.voiceElevenLabsRealtimeOutputSampleRateHz}
                     onChange={set("voiceElevenLabsRealtimeOutputSampleRateHz")}
-                  />
-                </div>
-              </div>
-            </>
-          )}
-
-          {isSttPipelineMode && (
-            <>
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-stt-transcribe-model">STT model</label>
-                  <select
-                    id="voice-stt-transcribe-model"
-                    value={form.voiceSttTranscriptionModel}
-                    onChange={set("voiceSttTranscriptionModel")}
-                  >
-                    {sttTranscriptionModelOptions.map((modelId) => (
-                      <option key={modelId} value={modelId}>
-                        {modelId}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="voice-stt-tts-model">TTS model</label>
-                  <select
-                    id="voice-stt-tts-model"
-                    value={form.voiceSttTtsModel}
-                    onChange={set("voiceSttTtsModel")}
-                  >
-                    {sttTtsModelOptions.map((modelId) => (
-                      <option key={modelId} value={modelId}>
-                        {modelId}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-stt-tts-voice">TTS voice</label>
-                  <input
-                    id="voice-stt-tts-voice"
-                    type="text"
-                    value={form.voiceSttTtsVoice}
-                    onChange={set("voiceSttTtsVoice")}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="voice-stt-tts-speed">TTS speed</label>
-                  <input
-                    id="voice-stt-tts-speed"
-                    type="number"
-                    min="0.25"
-                    max="2"
-                    step="0.05"
-                    value={form.voiceSttTtsSpeed}
-                    onChange={set("voiceSttTtsSpeed")}
                   />
                 </div>
               </div>

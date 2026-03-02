@@ -379,13 +379,13 @@ Discord bots **cannot natively view Go Live / screen share streams**. Discord ha
 
 ### 9.2 Implemented Vision Options
 
-#### Attachment Vision (existing)
+#### Attachment Vision
 
 User drops a screenshot into Discord → Bot downloads attachment → Sends to Realtime as `input_image` → Responds in voice.
 
 **Use case:** Quick "look at this" with minimal friction.
 
-#### Companion Web Screen Share (active development)
+#### Companion Web Screen Share 
 
 1. User triggers screen share offer (via command or tool call)
 2. Bot replies with one-time link (`/share/<token>`) via `ScreenShareSessionManager`

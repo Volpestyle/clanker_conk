@@ -65,7 +65,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   );
   assert.equal(form.initiativeChannels, "1\n2");
   assert.equal(form.allowedChannels, "2\n3");
-  assert.equal(form.voiceBrainProvider, "native");
+  assert.equal(form.voiceBrainProvider, "openai");
 
   form.personaHardLimits = "no hate\nno hate\nkeep it fun\n";
   form.botNameAliases = "clank\nconk\nclank\n";
@@ -96,7 +96,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.deepEqual(patch.permissions.allowedChannelIds, ["2", "3"]);
   assert.deepEqual(patch.initiative.discovery.rssFeeds, ["https://one.example/feed"]);
   assert.deepEqual(patch.initiative.discovery.xHandles, ["@alice", "bob"]);
-  assert.equal(patch.voice.brainProvider, "native");
+  assert.equal(patch.voice.brainProvider, "openai");
   assert.equal(patch.replyFollowupLlm.maxToolSteps, 5);
   assert.equal(patch.replyFollowupLlm.maxTotalToolCalls, 11);
   assert.equal(patch.replyFollowupLlm.maxWebSearchCalls, 4);
@@ -216,44 +216,6 @@ test("resolveModelOptionsFromText normalizes model lists for dropdown options", 
     ["", "grok-imagine-image"]
   );
   assert.deepEqual(options, ["gpt-image-1.5", "grok-imagine-image"]);
-});
-
-test("formToSettingsPatch keeps stt pipeline voice generation and reply decider independent from main text llm", () => {
-  const form = settingsToForm({
-    llm: {
-      provider: "claude-code",
-      model: "sonnet"
-    },
-    voice: {
-      mode: "stt_pipeline",
-      generationLlm: {
-        provider: "anthropic",
-        model: "claude-haiku-4-5"
-      },
-      replyDecisionLlm: {
-        provider: "openai",
-        model: "claude-haiku-4-5"
-      }
-    }
-  });
-
-  form.voiceGenerationLlmProvider = "anthropic";
-  form.voiceGenerationLlmModel = "claude-haiku-4-5";
-  form.voiceGenerationLlmUseTextModel = false;
-  form.voiceReplyDecisionLlmEnabled = false;
-  form.voiceReplyDecisionLlmProvider = "openai";
-  form.voiceReplyDecisionLlmModel = "claude-haiku-4-5";
-  form.voiceReplyDecisionWakeVariantHint = "wake hint {{botName}}";
-  form.voiceReplyDecisionSystemPromptCompact = "compact {{botName}}";
-  const patch = formToSettingsPatch(form);
-  assert.equal(patch.voice.generationLlm.useTextModel, false);
-  assert.equal(patch.voice.generationLlm.provider, "anthropic");
-  assert.equal(patch.voice.generationLlm.model, "claude-haiku-4-5");
-  assert.equal(patch.voice.replyDecisionLlm.enabled, false);
-  assert.equal(patch.voice.replyDecisionLlm.provider, "openai");
-  assert.equal(patch.voice.replyDecisionLlm.model, "claude-haiku-4-5");
-  assert.equal(patch.voice.replyDecisionLlm.prompts.wakeVariantHint, "wake hint {{botName}}");
-  assert.equal(patch.voice.replyDecisionLlm.prompts.systemPromptCompact, "compact {{botName}}");
 });
 
 test("settingsFormModel round-trips voice provider and brain provider", () => {

@@ -1658,10 +1658,11 @@ export class LLMService {
       { role: "user", content: userContent }
     ];
 
+    const resolvedTemperature = Math.max(0, Math.min(Number(temperature) || 0, 1));
     const response = await this.anthropic.messages.create({
       model,
       system: systemPrompt,
-      temperature,
+      temperature: resolvedTemperature,
       max_tokens: maxOutputTokens,
       messages
     });

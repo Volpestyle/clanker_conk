@@ -25,22 +25,16 @@ export const OPENAI_REALTIME_VOICE_OPTIONS = Object.freeze([
 ]);
 
 export const OPENAI_TRANSCRIPTION_MODEL_OPTIONS = Object.freeze([
+  "whisper-1",
+  "gpt-4o-mini-transcribe-2025-12-15",
   "gpt-4o-mini-transcribe",
-  "gpt-4o-transcribe"
+  "gpt-4o-transcribe",
+  "gpt-4o-transcribe-latest"
 ]);
 
 export const GEMINI_REALTIME_MODEL_OPTIONS = Object.freeze([
   "gemini-2.5-flash-native-audio-preview-12-2025",
   "gemini-2.5-flash"
-]);
-
-export const STT_TRANSCRIPTION_MODEL_OPTIONS = Object.freeze([
-  "gpt-4o-mini-transcribe",
-  "gpt-4o-transcribe"
-]);
-
-export const STT_TTS_MODEL_OPTIONS = Object.freeze([
-  "gpt-4o-mini-tts"
 ]);
 
 export const XAI_VOICE_OPTIONS = Object.freeze([
@@ -66,7 +60,6 @@ export function settingsToForm(settings) {
   const defaultVoiceOpenAiRealtime = defaults.voice.openaiRealtime;
   const defaultVoiceElevenLabsRealtime = defaults.voice.elevenLabsRealtime;
   const defaultVoiceGeminiRealtime = defaults.voice.geminiRealtime;
-  const defaultVoiceSttPipeline = defaults.voice.sttPipeline;
   const defaultVoiceThoughtEngine = defaults.voice.thoughtEngine;
   const defaultVoiceGenerationLlm = defaults.voice.generationLlm;
   const defaultVoiceStreamWatch = defaults.voice.streamWatch;
@@ -215,10 +208,6 @@ export function settingsToForm(settings) {
       settings?.voice?.geminiRealtime?.apiBaseUrl ?? defaultVoiceGeminiRealtime.apiBaseUrl,
     voiceGeminiRealtimeInputSampleRateHz: settings?.voice?.geminiRealtime?.inputSampleRateHz ?? defaultVoiceGeminiRealtime.inputSampleRateHz,
     voiceGeminiRealtimeOutputSampleRateHz: settings?.voice?.geminiRealtime?.outputSampleRateHz ?? defaultVoiceGeminiRealtime.outputSampleRateHz,
-    voiceSttTranscriptionModel: settings?.voice?.sttPipeline?.transcriptionModel ?? defaultVoiceSttPipeline.transcriptionModel,
-    voiceSttTtsModel: settings?.voice?.sttPipeline?.ttsModel ?? defaultVoiceSttPipeline.ttsModel,
-    voiceSttTtsVoice: settings?.voice?.sttPipeline?.ttsVoice ?? defaultVoiceSttPipeline.ttsVoice,
-    voiceSttTtsSpeed: settings?.voice?.sttPipeline?.ttsSpeed ?? defaultVoiceSttPipeline.ttsSpeed,
     voiceStreamWatchEnabled: settings?.voice?.streamWatch?.enabled ?? defaultVoiceStreamWatch.enabled,
     voiceStreamWatchMinCommentaryIntervalSeconds:
       settings?.voice?.streamWatch?.minCommentaryIntervalSeconds ?? defaultVoiceStreamWatch.minCommentaryIntervalSeconds,
@@ -371,7 +360,10 @@ export function formToSettingsPatch(form) {
     voice: {
       enabled: form.voiceEnabled,
       voiceProvider: String(form.voiceProvider || "openai").trim(),
-      brainProvider: String(form.voiceBrainProvider || "native").trim(),
+      brainProvider:
+        String(form.voiceBrainProvider || "openai").trim().toLowerCase() === "native"
+          ? "openai"
+          : String(form.voiceBrainProvider || "openai").trim(),
       transcriberProvider: "openai",
       asrLanguageMode: String(form.voiceAsrLanguageMode || "").trim(),
       asrLanguageHint: String(form.voiceAsrLanguageHint || "").trim(),
@@ -434,12 +426,6 @@ export function formToSettingsPatch(form) {
         apiBaseUrl: String(form.voiceGeminiRealtimeApiBaseUrl || "").trim(),
         inputSampleRateHz: Number(form.voiceGeminiRealtimeInputSampleRateHz),
         outputSampleRateHz: Number(form.voiceGeminiRealtimeOutputSampleRateHz)
-      },
-      sttPipeline: {
-        transcriptionModel: String(form.voiceSttTranscriptionModel || "").trim(),
-        ttsModel: String(form.voiceSttTtsModel || "").trim(),
-        ttsVoice: String(form.voiceSttTtsVoice || "").trim(),
-        ttsSpeed: Number(form.voiceSttTtsSpeed)
       },
       streamWatch: {
         enabled: form.voiceStreamWatchEnabled,

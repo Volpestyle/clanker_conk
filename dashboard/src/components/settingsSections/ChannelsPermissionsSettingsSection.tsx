@@ -12,6 +12,7 @@ export function ChannelsPermissionsSettingsSection({ id, form, set }) {
         onChange={set("initiativeChannels")}
       />
 
+      <h4>Text channels & users</h4>
       <label htmlFor="allowed-channels">Allowed channel IDs (comma/newline)</label>
       <textarea
         id="allowed-channels"
@@ -34,6 +35,31 @@ export function ChannelsPermissionsSettingsSection({ id, form, set }) {
         rows={3}
         value={form.blockedUsers}
         onChange={set("blockedUsers")}
+      />
+
+      <h4>Voice channels & users</h4>
+      <label htmlFor="voice-allowed-channels">Allowed voice channel IDs (optional)</label>
+      <textarea
+        id="voice-allowed-channels"
+        rows={3}
+        value={form.voiceAllowedChannelIds}
+        onChange={set("voiceAllowedChannelIds")}
+      />
+
+      <label htmlFor="voice-blocked-channels">Blocked voice channel IDs</label>
+      <textarea
+        id="voice-blocked-channels"
+        rows={3}
+        value={form.voiceBlockedChannelIds}
+        onChange={set("voiceBlockedChannelIds")}
+      />
+
+      <label htmlFor="voice-blocked-users">Blocked voice user IDs</label>
+      <textarea
+        id="voice-blocked-users"
+        rows={3}
+        value={form.voiceBlockedUserIds}
+        onChange={set("voiceBlockedUserIds")}
       />
     </SettingsSection>
   );

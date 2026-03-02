@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
+import { createBotAudioPlaybackStream } from "./voiceSessionHelpers.ts";
 import {
   ACTIVITY_TOUCH_MIN_SPEECH_MS,
   AUDIO_PLAYBACK_STREAM_OVERFLOW_BYTES,
@@ -961,7 +962,7 @@ test("enqueueDiscordPcmForPlayback writes directly to stream and activates idle 
   const { manager } = createManager();
   const playCalls = [];
   let writeCalls = 0;
-  const stream = new PassThrough();
+  const stream = createBotAudioPlaybackStream();
   const originalWrite = stream.write.bind(stream);
   stream.write = (...args) => {
     writeCalls += 1;

@@ -1,3 +1,15 @@
+// Bun's timer loop drifts so nextTime - Date.now() can go negative inside
+// @discordjs/voice's audio cycle, which breaks audio playback entirely.
+// Clamp all setTimeout delays to >= 0 before any voice code is imported.
+// See https://github.com/oven-sh/bun/issues/11313
+if (!(globalThis as Record<string, unknown>).__bunTimeoutClamp) {
+  const origSetTimeout = globalThis.setTimeout.bind(globalThis);
+  globalThis.setTimeout = ((handler: TimerHandler, timeout = 0, ...args: unknown[]) =>
+    origSetTimeout(handler, Math.max(0, timeout), ...args)
+  ) as typeof setTimeout;
+  (globalThis as Record<string, unknown>).__bunTimeoutClamp = true;
+}
+
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { appConfig, ensureRuntimeEnv } from "./config.ts";

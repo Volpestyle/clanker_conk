@@ -764,6 +764,16 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       }
       manager.startSessionTimers(session, settings);
 
+      // Pre-warm per-user ASR WebSocket so the first utterance doesn't
+      // pay the ~1-4 s connection cost.
+      if (openAiPerUserAsrEnabled && typeof manager.ensureOpenAiAsrSessionConnected === "function") {
+        void manager.ensureOpenAiAsrSessionConnected({
+          session,
+          settings,
+          userId
+        });
+      }
+
       manager.store.logAction({
         kind: "voice_session_start",
         guildId,

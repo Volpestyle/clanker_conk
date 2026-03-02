@@ -19,7 +19,7 @@ Provider resolution path:
 
 ```ts
 voiceProvider = resolveVoiceProvider(settings)        // default: "openai"
-brainProvider = resolveBrainProvider(settings)        // default: "native"
+brainProvider = resolveBrainProvider(settings)        // default: "openai"
 transcriberProvider = resolveTranscriberProvider(...) // default: "openai"
 runtimeMode = resolveVoiceRuntimeMode(settings)       // openai/xai/gemini/elevenlabs + legacy mode fallback
 ```

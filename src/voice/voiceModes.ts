@@ -19,11 +19,12 @@ export function normalizeVoiceProvider(value: unknown, fallback: VoiceProvider =
 export function normalizeBrainProvider(
   value: unknown,
   voiceProvider: unknown,
-  fallback: BrainProvider = "native"
+  fallback: BrainProvider = "openai"
 ): BrainProvider {
-  const normalized = String(value || fallback || "")
+  const normalizedInput = String(value || fallback || "")
     .trim()
     .toLowerCase();
+  const normalized = normalizedInput === "native" ? "openai" : normalizedInput;
   if (BRAIN_PROVIDERS.includes(normalized as BrainProvider)) {
     return normalized as BrainProvider;
   }

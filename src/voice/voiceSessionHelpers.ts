@@ -1,12 +1,15 @@
-import { PassThrough } from "node:stream";
+import { EventEmitter } from "node:events";
+import { Readable } from "node:stream";
 import {
   AudioPlayerStatus,
   createAudioResource,
   StreamType
 } from "@discordjs/voice";
+import OpusScript from "opusscript";
 import { parseSoundboardReference } from "./soundboardDirector.ts";
 import {
-  AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES
+  AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES,
+  DISCORD_PCM_FRAME_BYTES
 } from "./voiceSessionManager.constants.ts";
 import {
   normalizeVoiceRuntimeMode,
@@ -37,11 +40,116 @@ const EN_VOCATIVE_GREETING_TOKENS = new Set([
 ]);
 const EN_VOCATIVE_IGNORE_TOKENS = new Set(["guys", "everyone", "all", "chat", "yall", "yaall"]);
 const VOICE_ASR_LANGUAGE_MODES = new Set(["auto", "fixed"]);
+const OPUS_FRAME_SAMPLES = 960;
+
+/**
+ * PCM-to-Opus bridge that bypasses Bun's broken stream.pipeline().
+ *
+ * Accepts stereo 48 kHz 16-bit PCM via write(), encodes each 20 ms frame
+ * with opusscript, and pushes the resulting Opus packets into an internal
+ * object-mode Readable. Pass `.readable` to createAudioResource with
+ * StreamType.Opus so Discord.js wraps the single stream directly (no
+ * pipeline call).
+ */
+const OPUS_SET_BITRATE = 4002;
+const OPUS_SET_FEC = 4012;
+const OPUS_BITRATE = 64000;
+
+class OpusPcmBridge extends EventEmitter {
+  readable;
+  destroyed = false;
+  writableEnded = false;
+  writableFinished = false;
+  closed = false;
+  writableHighWaterMark;
+  _encoder;
+  _pcmBuffer = Buffer.alloc(0);
+
+  constructor(highWaterMark) {
+    super();
+    this.writableHighWaterMark = highWaterMark;
+    this._encoder = new OpusScript(48000, 2, OpusScript.Application.AUDIO);
+    try { this._encoder.encoderCTL(OPUS_SET_BITRATE, OPUS_BITRATE); } catch { /* ignore */ }
+    try { this._encoder.encoderCTL(OPUS_SET_FEC, 1); } catch { /* ignore */ }
+    this.readable = new Readable({ objectMode: true, read() {} });
+
+    // When AudioPlayer destroys the readable side (e.g. maxMissedFrames or
+    // state transition to Idle), propagate to the bridge so health checks
+    // see destroyed === true and recreate the stream.
+    this.readable.once("close", () => {
+      if (!this.destroyed) {
+        this.destroyed = true;
+        this.closed = true;
+        this._cleanup();
+        this.emit("close");
+      }
+    });
+  }
+
+  // Report only the PCM remainder awaiting encoding. The Opus packets
+  // already pushed to `readable` are on the *read* side (consumed by
+  // AudioPlayer at 20 ms ticks) and must NOT inflate this value —
+  // the overflow guard threshold (30 frames / 600 ms) was calibrated
+  // for write-side back-pressure only.
+  get writableLength() {
+    if (this.destroyed) return 0;
+    return this._pcmBuffer.length;
+  }
+
+  write(chunk) {
+    if (this.destroyed || this.writableEnded) return false;
+    this._pcmBuffer = Buffer.concat([this._pcmBuffer, chunk]);
+    this._drainFrames();
+    return this.writableLength < this.writableHighWaterMark;
+  }
+
+  _drainFrames() {
+    while (this._pcmBuffer.length >= DISCORD_PCM_FRAME_BYTES) {
+      const frame = this._pcmBuffer.subarray(0, DISCORD_PCM_FRAME_BYTES);
+      this._pcmBuffer = this._pcmBuffer.subarray(DISCORD_PCM_FRAME_BYTES);
+      try {
+        const opusPacket = this._encoder.encode(frame, OPUS_FRAME_SAMPLES);
+        if (!this.readable.destroyed) {
+          this.readable.push(Buffer.from(opusPacket));
+        }
+      } catch {
+        // skip frame on encode error
+      }
+    }
+  }
+
+  end() {
+    if (this.writableEnded) return;
+    this.writableEnded = true;
+    this.writableFinished = true;
+    this._drainFrames();
+    if (!this.readable.destroyed) {
+      this.readable.push(null);
+    }
+    this.emit("finish");
+    this.emit("end");
+  }
+
+  destroy() {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this.closed = true;
+    this._cleanup();
+    if (!this.readable.destroyed) {
+      this.readable.destroy();
+    }
+    this.emit("close");
+  }
+
+  _cleanup() {
+    this._pcmBuffer = Buffer.alloc(0);
+    try { this._encoder?.delete?.(); } catch { /* ignore */ }
+    this._encoder = null;
+  }
+}
 
 export function createBotAudioPlaybackStream() {
-  return new PassThrough({
-    highWaterMark: AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES
-  });
+  return new OpusPcmBridge(AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES);
 }
 
 export function parseRealtimeErrorPayload(payload) {
@@ -192,8 +300,8 @@ export function ensureBotAudioPlaybackReady({
   if (activatePlayback) {
     const status = session.audioPlayer.state?.status;
     if (status === AudioPlayerStatus.Idle || status === AudioPlayerStatus.AutoPaused) {
-      const resource = createAudioResource(session.botAudioStream, {
-        inputType: StreamType.Raw
+      const resource = createAudioResource(session.botAudioStream.readable, {
+        inputType: StreamType.Opus
       });
       session.audioPlayer.play(resource);
       session.connection.subscribe(session.audioPlayer);

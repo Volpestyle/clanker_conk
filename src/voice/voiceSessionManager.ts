@@ -3318,9 +3318,32 @@ export class VoiceSessionManager {
       }
     };
 
+    const onError = (error) => {
+      const resourceMeta = error?.resource
+        ? { playbackDuration: error.resource.playbackDuration, started: error.resource.started }
+        : null;
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "audio_player_error",
+        metadata: {
+          sessionId: session.id,
+          error: String(error?.message || error || "unknown"),
+          resource: resourceMeta
+        }
+      });
+      if (!session.ending) {
+        this.resetBotAudioPlayback(session);
+      }
+    };
+
     session.audioPlayer.on("stateChange", onStateChange);
+    session.audioPlayer.on("error", onError);
     session.cleanupHandlers.push(() => {
       session.audioPlayer.off("stateChange", onStateChange);
+      session.audioPlayer.off("error", onError);
     });
   }
 

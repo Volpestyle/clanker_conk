@@ -2,7 +2,6 @@ import { defaultModelForLlmProvider, normalizeLlmProvider } from "../llm/llmHelp
 
 const VOICE_LOW_SIGNAL_MIN_ALNUM_CHARS = 10;
 const VOICE_LOW_SIGNAL_MIN_WORDS = 2;
-const LOW_SIGNAL_LLM_MIN_TOKEN_LEN = 5;
 const OPENAI_REALTIME_SHORT_CLIP_ASR_MS = 1200;
 const PCM16_MONO_BYTES_PER_SAMPLE = 2;
 const EN_LOW_SIGNAL_GUARD_TOKENS = new Set(["yo", "hi", "sup", "ey", "oi", "oy", "ha"]);
@@ -37,33 +36,6 @@ export function isLowSignalVoiceFragment(transcript = "") {
   }
 
   return true;
-}
-
-export function isLikelyWakeWordPing(transcript = "") {
-  const normalized = String(transcript || "")
-    .toLowerCase()
-    .trim();
-  if (!normalized) return false;
-
-  const tokenCount = normalized
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .split(/\s+/u)
-    .filter(Boolean).length;
-  return tokenCount > 0 && tokenCount <= 3;
-}
-
-export function shouldUseLlmForLowSignalTurn(transcript = "") {
-  const normalized = String(transcript || "")
-    .toLowerCase()
-    .trim();
-  if (!normalized) return false;
-
-  const tokens = normalized
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .split(/\s+/u)
-    .filter(Boolean);
-  if (!tokens.length || tokens.length > 3) return false;
-  return tokens.some((token) => token.length >= LOW_SIGNAL_LLM_MIN_TOKEN_LEN);
 }
 
 export function normalizeVoiceReplyDecisionProvider(value) {
@@ -111,7 +83,7 @@ export function resolveRealtimeTurnTranscriptionPlan({
   const clipDurationMs = estimatePcm16MonoDurationMs(pcmByteLength, sampleRateHz);
   if (clipDurationMs > 0 && clipDurationMs <= OPENAI_REALTIME_SHORT_CLIP_ASR_MS) {
     return {
-      primaryModel: "gpt-4o-transcribe",
+      primaryModel: "gpt-4o-mini-transcribe",
       fallbackModel: null,
       reason: "short_clip_prefers_full_model"
     };
@@ -119,7 +91,7 @@ export function resolveRealtimeTurnTranscriptionPlan({
 
   return {
     primaryModel: normalizedModel,
-    fallbackModel: "gpt-4o-transcribe",
+    fallbackModel: "whisper-1",
     reason: "mini_with_full_fallback"
   };
 }
