@@ -237,6 +237,10 @@ export function settingsToForm(settings) {
       settings?.voice?.streamWatch?.brainContextMaxEntries ?? defaultVoiceStreamWatch.brainContextMaxEntries,
     voiceStreamWatchBrainContextPrompt:
       settings?.voice?.streamWatch?.brainContextPrompt ?? defaultVoiceStreamWatch.brainContextPrompt,
+    voiceStreamWatchSharePageMaxWidthPx:
+      settings?.voice?.streamWatch?.sharePageMaxWidthPx ?? defaultVoiceStreamWatch.sharePageMaxWidthPx,
+    voiceStreamWatchSharePageJpegQuality:
+      settings?.voice?.streamWatch?.sharePageJpegQuality ?? defaultVoiceStreamWatch.sharePageJpegQuality,
     voiceSoundboardEnabled: settings?.voice?.soundboard?.enabled ?? defaultVoiceSoundboard.enabled,
     voiceSoundboardAllowExternalSounds: settings?.voice?.soundboard?.allowExternalSounds ?? defaultVoiceSoundboard.allowExternalSounds,
     voiceSoundboardPreferredSoundIds: formatLineList(settings?.voice?.soundboard?.preferredSoundIds),
@@ -444,7 +448,9 @@ export function formToSettingsPatch(form) {
         brainContextEnabled: Boolean(form.voiceStreamWatchBrainContextEnabled),
         brainContextMinIntervalSeconds: Number(form.voiceStreamWatchBrainContextMinIntervalSeconds),
         brainContextMaxEntries: Number(form.voiceStreamWatchBrainContextMaxEntries),
-        brainContextPrompt: String(form.voiceStreamWatchBrainContextPrompt || "").trim()
+        brainContextPrompt: String(form.voiceStreamWatchBrainContextPrompt || "").trim(),
+        sharePageMaxWidthPx: Number(form.voiceStreamWatchSharePageMaxWidthPx),
+        sharePageJpegQuality: Number(form.voiceStreamWatchSharePageJpegQuality)
       },
       soundboard: {
         enabled: form.voiceSoundboardEnabled,

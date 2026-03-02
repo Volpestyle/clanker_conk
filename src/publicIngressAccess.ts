@@ -1,7 +1,7 @@
 const STREAM_INGEST_API_PATH = "/voice/stream-ingest/frame";
 const PUBLIC_API_HEADER_ALLOWLIST = new Set([STREAM_INGEST_API_PATH, `${STREAM_INGEST_API_PATH}/`]);
 const SHARE_SESSION_TOKEN_PATH_RE =
-  /^\/voice\/share-session\/[a-z0-9_-]{16,}(?:\/(?:frame|stop))?\/?$/i;
+  /^\/voice\/share-session\/[a-z0-9_-]{16,}\/(?:frame|stop)\/?$/i;
 
 const API_ACCESS_KIND = {
   private: "private",

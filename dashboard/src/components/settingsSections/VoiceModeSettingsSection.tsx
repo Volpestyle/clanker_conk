@@ -757,6 +757,30 @@ export function VoiceModeSettingsSection({
                   onChange={set("voiceStreamWatchKeyframeIntervalMs")}
                 />
               </div>
+              <div>
+                <label htmlFor="voice-stream-watch-share-page-max-width-px">Share-page max width (px)</label>
+                <input
+                  id="voice-stream-watch-share-page-max-width-px"
+                  type="number"
+                  min="640"
+                  max="1920"
+                  step="40"
+                  value={form.voiceStreamWatchSharePageMaxWidthPx}
+                  onChange={set("voiceStreamWatchSharePageMaxWidthPx")}
+                />
+              </div>
+              <div>
+                <label htmlFor="voice-stream-watch-share-page-jpeg-quality">Share-page JPEG quality</label>
+                <input
+                  id="voice-stream-watch-share-page-jpeg-quality"
+                  type="number"
+                  min="0.5"
+                  max="0.75"
+                  step="0.05"
+                  value={form.voiceStreamWatchSharePageJpegQuality}
+                  onChange={set("voiceStreamWatchSharePageJpegQuality")}
+                />
+              </div>
             </div>
           )}
 

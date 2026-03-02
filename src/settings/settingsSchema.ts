@@ -184,7 +184,9 @@ export const DEFAULT_SETTINGS = {
       brainContextMinIntervalSeconds: 4,
       brainContextMaxEntries: 8,
       brainContextPrompt:
-        "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or observational shout-out commentary."
+        "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or observational shout-out commentary.",
+      sharePageMaxWidthPx: 960,
+      sharePageJpegQuality: 0.62
     },
     soundboard: {
       enabled: true,

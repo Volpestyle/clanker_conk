@@ -8,6 +8,15 @@ const DEFAULT_SESSION_TTL_MINUTES = 12;
 const MIN_SESSION_TTL_MINUTES = 2;
 const MAX_SESSION_TTL_MINUTES = 30;
 const MAX_ACTIVE_SESSIONS = 240;
+const DEFAULT_SHARE_KEYFRAME_INTERVAL_MS = 1200;
+const MIN_SHARE_KEYFRAME_INTERVAL_MS = 500;
+const MAX_SHARE_KEYFRAME_INTERVAL_MS = 2000;
+const DEFAULT_SHARE_CAPTURE_MAX_WIDTH_PX = 960;
+const MIN_SHARE_CAPTURE_MAX_WIDTH_PX = 640;
+const MAX_SHARE_CAPTURE_MAX_WIDTH_PX = 1920;
+const DEFAULT_SHARE_CAPTURE_JPEG_QUALITY = 0.62;
+const MIN_SHARE_CAPTURE_JPEG_QUALITY = 0.5;
+const MAX_SHARE_CAPTURE_JPEG_QUALITY = 0.75;
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const DASHBOARD_ASSET_DIR = path.resolve(__dirname, "../dashboard/dist/assets");
@@ -402,10 +411,24 @@ export class ScreenShareSessionManager {
     }
 
     const settings = this.store.getSettings();
+    const streamWatchSettings =
+      settings?.voice?.streamWatch && typeof settings.voice.streamWatch === "object"
+        ? settings.voice.streamWatch
+        : {};
     const keyframeIntervalMs = clamp(
-      Number(settings?.voice?.streamWatch?.keyframeIntervalMs) || 1200,
-      250,
-      5000
+      Number(streamWatchSettings.keyframeIntervalMs) || DEFAULT_SHARE_KEYFRAME_INTERVAL_MS,
+      MIN_SHARE_KEYFRAME_INTERVAL_MS,
+      MAX_SHARE_KEYFRAME_INTERVAL_MS
+    );
+    const captureMaxWidthPx = clamp(
+      Number(streamWatchSettings.sharePageMaxWidthPx) || DEFAULT_SHARE_CAPTURE_MAX_WIDTH_PX,
+      MIN_SHARE_CAPTURE_MAX_WIDTH_PX,
+      MAX_SHARE_CAPTURE_MAX_WIDTH_PX
+    );
+    const captureJpegQuality = clamp(
+      Number(streamWatchSettings.sharePageJpegQuality) || DEFAULT_SHARE_CAPTURE_JPEG_QUALITY,
+      MIN_SHARE_CAPTURE_JPEG_QUALITY,
+      MAX_SHARE_CAPTURE_JPEG_QUALITY
     );
     const frameApiPath = `/api/voice/share-session/${encodeURIComponent(session.token)}/frame`;
     const stopApiPath = `/api/voice/share-session/${encodeURIComponent(session.token)}/stop`;
@@ -416,6 +439,8 @@ export class ScreenShareSessionManager {
         frameApiPath,
         stopApiPath,
         keyframeIntervalMs,
+        captureMaxWidthPx,
+        captureJpegQuality,
         dashboardThemeHref: this.dashboardThemeHref
       })
     };
@@ -479,13 +504,35 @@ function buildSharePageHtml({
   frameApiPath,
   stopApiPath,
   keyframeIntervalMs,
+  captureMaxWidthPx,
+  captureJpegQuality,
   dashboardThemeHref
 }) {
   const safeExpiresAtIso = escapeJsString(String(expiresAtIso || ""));
   const safeFrameApiPath = escapeJsString(String(frameApiPath || ""));
   const safeStopApiPath = escapeJsString(String(stopApiPath || ""));
-  const resolvedKeyframeIntervalMs = clamp(Number(keyframeIntervalMs) || 1200, 250, 5000);
+  const resolvedKeyframeIntervalMs = clamp(
+    Number(keyframeIntervalMs) || DEFAULT_SHARE_KEYFRAME_INTERVAL_MS,
+    MIN_SHARE_KEYFRAME_INTERVAL_MS,
+    MAX_SHARE_KEYFRAME_INTERVAL_MS
+  );
+  const resolvedCaptureMaxWidthPx = clamp(
+    Number(captureMaxWidthPx) || DEFAULT_SHARE_CAPTURE_MAX_WIDTH_PX,
+    MIN_SHARE_CAPTURE_MAX_WIDTH_PX,
+    MAX_SHARE_CAPTURE_MAX_WIDTH_PX
+  );
+  const resolvedCaptureJpegQuality = clamp(
+    Number(captureJpegQuality) || DEFAULT_SHARE_CAPTURE_JPEG_QUALITY,
+    MIN_SHARE_CAPTURE_JPEG_QUALITY,
+    MAX_SHARE_CAPTURE_JPEG_QUALITY
+  );
+  const resolvedCaptureJpegPercent = Math.round(resolvedCaptureJpegQuality * 100);
+  const resolvedTargetFps = Number(
+    (1000 / resolvedKeyframeIntervalMs).toFixed(resolvedKeyframeIntervalMs >= 1000 ? 1 : 2)
+  );
   const safeDashboardThemeHref = String(dashboardThemeHref || "").trim();
+  const safeFpsTarget = escapeHtml(String(resolvedTargetFps));
+  const safeFramePayload = escapeHtml(`JPEG ${resolvedCaptureJpegPercent}% · max ${resolvedCaptureMaxWidthPx}px`);
 
   return [
     "<!doctype html>",
@@ -594,8 +641,8 @@ function buildSharePageHtml({
     "<div class=\"metric-cluster\">",
     "<p class=\"cluster-label\">capture settings</p>",
     "<div class=\"cluster-cards\">",
-    "<article class=\"metric\"><p class=\"label\">FPS target</p><p class=\"value\">2</p></article>",
-    "<article class=\"metric\"><p class=\"label\">Frame payload</p><p class=\"value\">JPEG</p></article>",
+    `<article class="metric"><p class="label">FPS target</p><p class="value">${safeFpsTarget}</p></article>`,
+    `<article class="metric"><p class="label">Frame payload</p><p class="value">${safeFramePayload}</p></article>`,
     "</div>",
     "</div>",
     "<div class=\"metric-cluster\">",
@@ -612,8 +659,14 @@ function buildSharePageHtml({
     `const FRAME_API_PATH='${safeFrameApiPath}';`,
     `const STOP_API_PATH='${safeStopApiPath}';`,
     `const FRAME_INTERVAL_MS=${Math.floor(resolvedKeyframeIntervalMs)};`,
-    "const MAX_WIDTH=960;",
-    "const JPEG_QUALITY=0.62;",
+    `const MAX_WIDTH=${Math.floor(resolvedCaptureMaxWidthPx)};`,
+    `const JPEG_QUALITY=${Number(resolvedCaptureJpegQuality.toFixed(2))};`,
+    "const MIN_DYNAMIC_WIDTH=480;",
+    "const MIN_DYNAMIC_JPEG_QUALITY=0.5;",
+    "const DOWNSCALE_MULTIPLIER=0.82;",
+    "const UPSCALE_MULTIPLIER=1.08;",
+    "const UPSCALE_SUCCESS_FRAMES=20;",
+    "const TERMINAL_REASONS=new Set(['share_session_not_found','voice_session_not_found','requester_not_in_same_vc','target_user_not_in_same_vc']);",
     "const startBtn=document.getElementById('start');",
     "const stopBtn=document.getElementById('stop');",
     "const preview=document.getElementById('preview');",
@@ -633,6 +686,9 @@ function buildSharePageHtml({
     "let timer=null;",
     "let sending=false;",
     "let frameCount=0;",
+    "let dynamicMaxWidth=MAX_WIDTH;",
+    "let dynamicJpegQuality=JPEG_QUALITY;",
+    "let adaptiveSuccessFrames=0;",
     "let canvas=document.createElement('canvas');",
     "let ctx=canvas.getContext('2d');",
     "function setStatus(t){statusEl.textContent=String(t||'');}",
@@ -659,13 +715,15 @@ function buildSharePageHtml({
     "countdownEl.textContent=String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');",
     "tbar.style.width=pct+'%';",
     "tbar.className='share-progress-fill'+(pct<15?' crit':pct<33?' warn':'');",
-    "if(rem<=0&&stream){stopShare('session_expired');setState('expired');}",
-    "if(rem<=0&&!stream){setState('expired');setStatus('session expired');}",
+    "if(rem<=0&&stream){stopShare('session_expired',{allowRestart:false,nextState:'expired'});}",
+    "if(rem<=0&&!stream){setState('expired');setStatus('session expired');startBtn.disabled=true;stopBtn.disabled=true;}",
     "}",
     "setState('idle');",
     "setInterval(updateCountdown,1000);updateCountdown();",
     "function stopTracks(){if(!stream)return;for(const t of stream.getTracks())t.stop();}",
-    "async function stopShare(reason='user_stop'){",
+    "async function stopShare(reason='user_stop',opts={}){",
+    "const allowRestart=opts&&typeof opts==='object'&&opts.allowRestart===false?false:true;",
+    "const nextState=opts&&typeof opts==='object'&&typeof opts.nextState==='string'?opts.nextState:'';",
     "if(timer){clearInterval(timer);timer=null;}",
     "stopTracks();",
     "stream=null;",
@@ -673,9 +731,9 @@ function buildSharePageHtml({
     "if (placeholder) {",
     "  placeholder.style.display='grid';",
     "}",
-    "startBtn.disabled=false;",
+    "startBtn.disabled=!allowRestart;",
     "stopBtn.disabled=true;",
-    "if(reason!=='session_expired')setState('stopped');",
+    "if(nextState){setState(nextState);}else if(reason!=='session_expired'){setState('stopped');}",
     "try{await fetch(STOP_API_PATH,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({reason})});}catch{}",
     "setStatus('stopped \\u00b7 '+reason);",
     "}",
@@ -685,20 +743,55 @@ function buildSharePageHtml({
     "if(!videoTrack)return;",
     "const vw=preview.videoWidth||0;const vh=preview.videoHeight||0;",
     "if(vw<2||vh<2)return;",
-    "const scale=Math.min(1,MAX_WIDTH/vw);",
+    "const effectiveMaxWidth=Math.max(MIN_DYNAMIC_WIDTH,Math.floor(dynamicMaxWidth));",
+    "const scale=Math.min(1,effectiveMaxWidth/vw);",
     "canvas.width=Math.max(2,Math.floor(vw*scale));",
     "canvas.height=Math.max(2,Math.floor(vh*scale));",
     "ctx.drawImage(preview,0,0,canvas.width,canvas.height);",
     "sending=true;",
     "try{",
-    "const blob=await new Promise((r)=>canvas.toBlob(r,'image/jpeg',JPEG_QUALITY));",
+    "const blob=await new Promise((r)=>canvas.toBlob(r,'image/jpeg',dynamicJpegQuality));",
     "if(!blob)throw new Error('frame_encode_failed');",
     "const dataUrl=await new Promise((r,j)=>{const f=new FileReader();f.onload=()=>r(String(f.result||''));f.onerror=()=>j(new Error('read_failed'));f.readAsDataURL(blob);});",
     "const base64=String(dataUrl).split(',')[1]||'';",
     "const res=await fetch(FRAME_API_PATH,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mimeType:'image/jpeg',dataBase64:base64,source:'share_page'})});",
     "let body={};try{body=await res.json();}catch{}",
-    "if(!res.ok||body.accepted===false){setStatus('frame rejected \\u00b7 '+(body.reason||res.status));return;}",
+    "if(!res.ok||body.accepted===false){",
+    "const rejectionReason=String(body.reason||res.status||'unknown').trim();",
+    "if(TERMINAL_REASONS.has(rejectionReason)){",
+    "await stopShare('session_closed_'+rejectionReason,{allowRestart:false,nextState:'expired'});",
+    "setStatus('session ended \\u00b7 '+rejectionReason);",
+    "return;",
+    "}",
+    "if(rejectionReason==='frame_too_large'){",
+    "const previousWidth=Math.max(MIN_DYNAMIC_WIDTH,Math.floor(dynamicMaxWidth));",
+    "const previousQuality=dynamicJpegQuality;",
+    "dynamicMaxWidth=Math.max(MIN_DYNAMIC_WIDTH,Math.floor(dynamicMaxWidth*DOWNSCALE_MULTIPLIER));",
+    "dynamicJpegQuality=Math.max(MIN_DYNAMIC_JPEG_QUALITY,Number((dynamicJpegQuality-0.04).toFixed(2)));",
+    "adaptiveSuccessFrames=0;",
+    "const widthChanged=dynamicMaxWidth<previousWidth;",
+    "const qualityChanged=dynamicJpegQuality<previousQuality;",
+    "if(widthChanged||qualityChanged){",
+    "setStatus('frame too large \\u00b7 auto downscaled to '+String(dynamicMaxWidth)+'px @ q'+String(dynamicJpegQuality));",
+    "}else{",
+    "setStatus('frame too large \\u00b7 already at minimum scale');",
+    "}",
+    "return;",
+    "}",
+    "setStatus('frame rejected \\u00b7 '+rejectionReason);",
+    "return;",
+    "}",
     "frameCount++;fcntEl.textContent=String(frameCount);",
+    "adaptiveSuccessFrames++;",
+    "if(adaptiveSuccessFrames>=UPSCALE_SUCCESS_FRAMES&&(dynamicMaxWidth<MAX_WIDTH||dynamicJpegQuality<JPEG_QUALITY)){",
+    "const nextWidth=Math.min(MAX_WIDTH,Math.floor(dynamicMaxWidth*UPSCALE_MULTIPLIER));",
+    "const nextQuality=Math.min(JPEG_QUALITY,Number((dynamicJpegQuality+0.02).toFixed(2)));",
+    "if(nextWidth>dynamicMaxWidth||nextQuality>dynamicJpegQuality){",
+    "dynamicMaxWidth=nextWidth;",
+    "dynamicJpegQuality=nextQuality;",
+    "}",
+    "adaptiveSuccessFrames=0;",
+    "}",
     "setStatus('sharing live \\u00b7 '+new Date().toLocaleTimeString());",
     "}catch(err){setStatus('send error \\u00b7 '+(err&&err.message?err.message:String(err)));}",
     "finally{sending=false;}",
@@ -715,6 +808,9 @@ function buildSharePageHtml({
     "for(const track of stream.getVideoTracks()){track.addEventListener('ended',()=>{stopShare('browser_stream_ended');});}",
     "startBtn.disabled=true;",
     "stopBtn.disabled=false;",
+    "dynamicMaxWidth=MAX_WIDTH;",
+    "dynamicJpegQuality=JPEG_QUALITY;",
+    "adaptiveSuccessFrames=0;",
     "setState('sharing');",
     "setStatus('capturing screen...');",
     "timer=setInterval(sendCurrentFrame,FRAME_INTERVAL_MS);",
