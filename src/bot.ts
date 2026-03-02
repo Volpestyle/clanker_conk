@@ -261,6 +261,7 @@ export class ClankerBot {
       appConfig: this.appConfig,
       llm: this.llm,
       memory: this.memory,
+      search: this.search,
       composeOperationalMessage: (payload) => this.composeVoiceOperationalMessage(payload),
       generateVoiceTurn: (payload) => this.generateVoiceTurnReply(payload)
     });

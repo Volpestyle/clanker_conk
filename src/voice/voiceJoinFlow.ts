@@ -379,6 +379,10 @@ export async function requestJoin(manager, { message, settings, intentConfidence
     let reservedConcurrencySlot = false;
     let realtimeInputSampleRateHz = 24000;
     let realtimeOutputSampleRateHz = 24000;
+    let openAiPerUserAsrEnabled = false;
+    let openAiPerUserAsrModel = "gpt-4o-mini-transcribe";
+    let openAiPerUserAsrLanguage = "";
+    let openAiPerUserAsrPrompt = "";
 
     try {
       const maxConcurrentSessions = clamp(Number(settings.voice?.maxConcurrentSessions) || 1, 1, 3);
@@ -449,6 +453,13 @@ export async function requestJoin(manager, { message, settings, intentConfidence
 
         const openAiRealtimeSettings = settings.voice?.openaiRealtime || {};
         const voiceAsrGuidance = resolveVoiceAsrLanguageGuidance(settings);
+        openAiPerUserAsrEnabled =
+          String(settings?.voice?.realtimeReplyStrategy || "brain").trim().toLowerCase() === "brain";
+        openAiPerUserAsrModel =
+          String(openAiRealtimeSettings.inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() ||
+          "gpt-4o-mini-transcribe";
+        openAiPerUserAsrLanguage = voiceAsrGuidance.language;
+        openAiPerUserAsrPrompt = voiceAsrGuidance.prompt;
         realtimeInputSampleRateHz = 24000;
         realtimeOutputSampleRateHz = 24000;
         await realtimeClient.connect({
@@ -461,7 +472,13 @@ export async function requestJoin(manager, { message, settings, intentConfidence
             String(openAiRealtimeSettings.inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() ||
             "gpt-4o-mini-transcribe",
           inputTranscriptionLanguage: voiceAsrGuidance.language,
-          inputTranscriptionPrompt: voiceAsrGuidance.prompt
+          inputTranscriptionPrompt: voiceAsrGuidance.prompt,
+          turnDetection: null,
+          tools: manager.buildOpenAiRealtimeFunctionTools({
+            session: null,
+            settings
+          }),
+          toolChoice: "auto"
         });
       } else if (runtimeMode === "gemini_realtime") {
         const geminiRealtimeSettings = settings.voice?.geminiRealtime || {};
@@ -581,6 +598,31 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         pendingSttTurnsQueue: [],
         realtimeTurnDrainActive: false,
         pendingRealtimeTurns: [],
+        openAiAsrSessions: new Map(),
+        openAiPerUserAsrEnabled,
+        openAiPerUserAsrModel,
+        openAiPerUserAsrLanguage,
+        openAiPerUserAsrPrompt,
+        openAiPendingToolCalls: new Map(),
+        openAiToolCallExecutions: new Map(),
+        openAiToolResponseDebounceTimer: null,
+        openAiToolDefinitions: [],
+        lastOpenAiRealtimeToolHash: "",
+        lastOpenAiRealtimeToolRefreshAt: 0,
+        lastOpenAiToolCallerUserId: null,
+        awaitingToolOutputs: false,
+        toolCallEvents: [],
+        mcpStatus: manager.getVoiceMcpServerStatuses(),
+        toolMusicTrackCatalog: new Map(),
+        memoryWriteWindow: [],
+        musicQueueState: {
+          guildId,
+          voiceChannelId: targetVoiceChannelId,
+          tracks: [],
+          nowPlayingIndex: null,
+          isPaused: false,
+          volume: 1
+        },
         pendingDeferredTurns: [],
         deferredTurnFlushTimer: null,
         thoughtLoopTimer: null,
@@ -677,6 +719,11 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         manager.bindRealtimeHandlers(session, settings);
       }
       if (runtimeMode === "openai_realtime") {
+        await manager.refreshOpenAiRealtimeTools({
+          session,
+          settings,
+          reason: "session_start"
+        });
         manager.scheduleOpenAiRealtimeInstructionRefresh({
           session,
           settings,

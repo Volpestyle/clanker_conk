@@ -78,7 +78,10 @@ export class OpenAiRealtimeClient extends EventEmitter {
     outputAudioFormat = "pcm16",
     inputTranscriptionModel = "gpt-4o-mini-transcribe",
     inputTranscriptionLanguage = "",
-    inputTranscriptionPrompt = ""
+    inputTranscriptionPrompt = "",
+    tools = [],
+    toolChoice = "auto",
+    turnDetection = null
   } = {}) {
     if (!this.apiKey) {
       throw new Error("Missing OPENAI_API_KEY for OpenAI realtime voice runtime.");
@@ -106,6 +109,8 @@ export class OpenAiRealtimeClient extends EventEmitter {
       .replace(/\s+/g, " ")
       .trim()
       .slice(0, 280);
+    const resolvedToolChoice = normalizeRealtimeToolChoice(toolChoice);
+    const resolvedTools = normalizeRealtimeTools(tools);
     const ws = await this.openSocket(this.buildRealtimeUrl(resolvedModel));
     markRealtimeConnected(this, ws);
 
@@ -137,7 +142,14 @@ export class OpenAiRealtimeClient extends EventEmitter {
       outputAudioFormat: resolvedOutputAudioFormat,
       inputTranscriptionModel: resolvedInputTranscriptionModel,
       inputTranscriptionLanguage: resolvedInputTranscriptionLanguage,
-      inputTranscriptionPrompt: resolvedInputTranscriptionPrompt
+      inputTranscriptionPrompt: resolvedInputTranscriptionPrompt,
+      tools: resolvedTools,
+      toolChoice: resolvedToolChoice,
+      turnDetection: turnDetection
+        ? {
+            ...turnDetection
+          }
+        : null
     };
     this.latestVideoFrame = null;
     this.sendSessionUpdate();
@@ -373,6 +385,36 @@ export class OpenAiRealtimeClient extends EventEmitter {
     this.createAudioResponse();
   }
 
+  sendFunctionCallOutput({
+    callId = "",
+    output = ""
+  } = {}) {
+    const normalizedCallId = String(callId || "").trim();
+    if (!normalizedCallId) {
+      throw new Error("OpenAI realtime function_call_output requires a callId.");
+    }
+
+    let normalizedOutput = "";
+    if (typeof output === "string") {
+      normalizedOutput = output;
+    } else {
+      try {
+        normalizedOutput = JSON.stringify(output ?? null);
+      } catch {
+        normalizedOutput = String(output ?? "");
+      }
+    }
+
+    this.send({
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: normalizedCallId,
+        output: normalizedOutput
+      }
+    });
+  }
+
   updateInstructions(instructions = "") {
     if (!this.sessionConfig || typeof this.sessionConfig !== "object") {
       throw new Error("OpenAI realtime session config is not initialized.");
@@ -381,6 +423,22 @@ export class OpenAiRealtimeClient extends EventEmitter {
     this.sessionConfig = {
       ...this.sessionConfig,
       instructions: String(instructions || "")
+    };
+    this.sendSessionUpdate();
+  }
+
+  updateTools({
+    tools = [],
+    toolChoice = "auto"
+  } = {}) {
+    if (!this.sessionConfig || typeof this.sessionConfig !== "object") {
+      throw new Error("OpenAI realtime session config is not initialized.");
+    }
+
+    this.sessionConfig = {
+      ...this.sessionConfig,
+      tools: normalizeRealtimeTools(tools),
+      toolChoice: normalizeRealtimeToolChoice(toolChoice)
     };
     this.sendSessionUpdate();
   }
@@ -439,30 +497,37 @@ export class OpenAiRealtimeClient extends EventEmitter {
     if (!resolvedVoice) {
       throw new Error("OpenAI realtime voice is required (configure voice.openaiRealtime.voice).");
     }
+    const normalizedTools = normalizeRealtimeTools(session.tools);
+    const sessionPayload: Record<string, unknown> = compactObject({
+      type: "realtime",
+      model: String(session.model || "gpt-realtime").trim() || "gpt-realtime",
+      instructions: String(session.instructions || ""),
+      output_modalities: ["audio"],
+      audio: compactObject({
+        input: compactObject({
+          format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat, "input"),
+          transcription: compactObject({
+            model:
+              String(session.inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() ||
+              "gpt-4o-mini-transcribe",
+            language: String(session.inputTranscriptionLanguage || "").trim() || null,
+            prompt: String(session.inputTranscriptionPrompt || "").trim() || null
+          })
+        }),
+        output: compactObject({
+          format: normalizeOpenAiRealtimeAudioFormat(session.outputAudioFormat, "output"),
+          voice: resolvedVoice
+        })
+      }),
+      tools: normalizedTools.length ? normalizedTools : undefined,
+      tool_choice: normalizedTools.length ? normalizeRealtimeToolChoice(session.toolChoice) : undefined
+    });
+    if (session.turnDetection === null) {
+      sessionPayload.turn_detection = null;
+    }
     this.send({
       type: "session.update",
-      session: compactObject({
-        type: "realtime",
-        model: String(session.model || "gpt-realtime").trim() || "gpt-realtime",
-        instructions: String(session.instructions || ""),
-        output_modalities: ["audio"],
-        audio: compactObject({
-          input: compactObject({
-            format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat, "input"),
-            transcription: compactObject({
-              model:
-                String(session.inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() ||
-                "gpt-4o-mini-transcribe",
-              language: String(session.inputTranscriptionLanguage || "").trim() || null,
-              prompt: String(session.inputTranscriptionPrompt || "").trim() || null
-            })
-          }),
-          output: compactObject({
-            format: normalizeOpenAiRealtimeAudioFormat(session.outputAudioFormat, "output"),
-            voice: resolvedVoice
-          })
-        })
-      })
+      session: sessionPayload
     });
   }
 
@@ -551,6 +616,42 @@ function normalizeImageMimeType(value) {
   return "image/jpeg";
 }
 
+function normalizeRealtimeTools(value) {
+  if (!Array.isArray(value)) return [];
+  const normalized = [];
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") continue;
+    const name = String(entry.name || "").trim().slice(0, 120);
+    if (!name) continue;
+    const type = String(entry.type || "function")
+      .trim()
+      .toLowerCase();
+    if (type !== "function") continue;
+    normalized.push(compactObject({
+      type: "function",
+      name,
+      description: String(entry.description || "").trim().slice(0, 800) || undefined,
+      parameters:
+        entry.parameters && typeof entry.parameters === "object" && !Array.isArray(entry.parameters)
+          ? entry.parameters
+          : {
+              type: "object",
+              additionalProperties: true
+            }
+    }));
+  }
+  return normalized.slice(0, 64);
+}
+
+function normalizeRealtimeToolChoice(value) {
+  const normalized = String(value || "auto")
+    .trim()
+    .toLowerCase();
+  if (normalized === "required") return "required";
+  if (normalized === "none") return "none";
+  return "auto";
+}
+
 function summarizeOutboundPayload(payload) {
   if (!payload || typeof payload !== "object") return null;
   const type = String(payload.type || "unknown");
@@ -610,6 +711,37 @@ function summarizeOutboundPayload(payload) {
     });
   }
 
+  if (type === "conversation.item.create") {
+    const item = payload.item && typeof payload.item === "object" ? payload.item : {};
+    const itemType = String(item.type || "unknown").trim() || "unknown";
+    if (itemType === "function_call_output") {
+      return compactObject({
+        type,
+        itemType,
+        callId: String(item.call_id || "").trim() || null,
+        outputChars: String(item.output || "").length || 0
+      });
+    }
+    if (itemType === "message") {
+      const content = Array.isArray(item.content) ? item.content : [];
+      const inputTextChars = content.reduce((sum, entry) => {
+        if (!entry || typeof entry !== "object") return sum;
+        if (String(entry.type || "").trim().toLowerCase() !== "input_text") return sum;
+        return sum + String(entry.text || "").length;
+      }, 0);
+      return compactObject({
+        type,
+        itemType,
+        role: String(item.role || "").trim() || null,
+        inputTextChars
+      });
+    }
+    return compactObject({
+      type,
+      itemType
+    });
+  }
+
   if (type === "session.update") {
     const session = payload.session && typeof payload.session === "object" ? payload.session : {};
     const audio = session.audio && typeof session.audio === "object" ? session.audio : {};
@@ -626,7 +758,10 @@ function summarizeOutboundPayload(payload) {
       inputTranscriptionPromptChars: audio?.input?.transcription?.prompt
         ? String(audio.input.transcription.prompt).length
         : 0,
-      instructionsChars: session.instructions ? String(session.instructions).length : 0
+      instructionsChars: session.instructions ? String(session.instructions).length : 0,
+      toolCount: Array.isArray(session.tools) ? session.tools.length : 0,
+      toolChoice: session.tool_choice || null,
+      turnDetection: Object.hasOwn(session, "turn_detection") ? session.turn_detection : undefined
     });
   }
 

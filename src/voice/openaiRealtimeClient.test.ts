@@ -187,3 +187,70 @@ test("OpenAiRealtimeClient stream-watch commentary requires a buffered frame", (
     /No stream-watch frame buffered/
   );
 });
+
+test("OpenAiRealtimeClient sendSessionUpdate includes function tools and manual turn detection", () => {
+  const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
+  let outbound = null;
+  client.send = (payload) => {
+    outbound = payload;
+  };
+  client.sessionConfig = {
+    model: "gpt-realtime",
+    voice: "alloy",
+    instructions: "Use tools when needed.",
+    inputAudioFormat: "pcm16",
+    outputAudioFormat: "pcm16",
+    inputTranscriptionModel: "gpt-4o-mini-transcribe",
+    tools: [
+      {
+        type: "function",
+        name: "memory_search",
+        description: "Search memory",
+        parameters: {
+          type: "object",
+          properties: {
+            query: {
+              type: "string"
+            }
+          },
+          required: ["query"]
+        }
+      }
+    ],
+    toolChoice: "auto",
+    turnDetection: null
+  };
+
+  client.sendSessionUpdate();
+
+  assert.ok(outbound);
+  assert.equal(outbound.type, "session.update");
+  assert.equal(outbound.session.turn_detection, null);
+  assert.equal(Array.isArray(outbound.session.tools), true);
+  assert.equal(outbound.session.tools.length, 1);
+  assert.equal(outbound.session.tools[0]?.type, "function");
+  assert.equal(outbound.session.tools[0]?.name, "memory_search");
+  assert.equal(outbound.session.tool_choice, "auto");
+});
+
+test("OpenAiRealtimeClient sendFunctionCallOutput emits function_call_output item", () => {
+  const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
+  let outbound = null;
+  client.send = (payload) => {
+    outbound = payload;
+  };
+
+  client.sendFunctionCallOutput({
+    callId: "call_123",
+    output: {
+      ok: true,
+      items: 2
+    }
+  });
+
+  assert.ok(outbound);
+  assert.equal(outbound.type, "conversation.item.create");
+  assert.equal(outbound.item?.type, "function_call_output");
+  assert.equal(outbound.item?.call_id, "call_123");
+  assert.equal(outbound.item?.output, JSON.stringify({ ok: true, items: 2 }));
+});

@@ -32,6 +32,7 @@ export const appConfig = {
   defaultXaiModel: process.env.DEFAULT_MODEL_XAI ?? "grok-3-mini-latest",
   defaultClaudeCodeModel: process.env.DEFAULT_MODEL_CLAUDE_CODE ?? "sonnet",
   defaultMemoryEmbeddingModel: process.env.DEFAULT_MEMORY_EMBEDDING_MODEL ?? "text-embedding-3-small",
+  voiceMcpServers: parseVoiceMcpServers(process.env.VOICE_MCP_SERVERS_JSON),
   runtimeStructuredLogsEnabled: parseBooleanFlag(process.env.RUNTIME_STRUCTURED_LOGS_ENABLED, true),
   runtimeStructuredLogsStdout: parseBooleanFlag(process.env.RUNTIME_STRUCTURED_LOGS_STDOUT, true),
   runtimeStructuredLogsFilePath:
@@ -47,4 +48,62 @@ export function ensureRuntimeEnv() {
 export function normalizeDashboardHost(value) {
   const normalized = String(value || "").trim();
   return normalized || "127.0.0.1";
+}
+
+function parseVoiceMcpServers(rawValue) {
+  const text = String(rawValue || "").trim();
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .map((entry) => {
+        if (!entry || typeof entry !== "object") return null;
+        const serverName = String(entry.serverName || entry.name || "").trim().slice(0, 80);
+        const baseUrl = String(entry.baseUrl || "").trim().replace(/\/+$/, "");
+        if (!serverName || !baseUrl) return null;
+        const tools = Array.isArray(entry.tools)
+          ? entry.tools
+              .map((tool) => {
+                if (!tool || typeof tool !== "object") return null;
+                const name = String(tool.name || "").trim().slice(0, 120);
+                if (!name) return null;
+                const description = String(tool.description || "").trim().slice(0, 800);
+                const inputSchema =
+                  tool.inputSchema && typeof tool.inputSchema === "object" && !Array.isArray(tool.inputSchema)
+                    ? tool.inputSchema
+                    : {
+                        type: "object",
+                        additionalProperties: true
+                      };
+                return {
+                  name,
+                  description,
+                  inputSchema
+                };
+              })
+              .filter(Boolean)
+          : [];
+        const headers =
+          entry.headers && typeof entry.headers === "object" && !Array.isArray(entry.headers)
+            ? Object.fromEntries(
+                Object.entries(entry.headers).map(([headerName, headerValue]) => [
+                  String(headerName || "").trim().slice(0, 120),
+                  String(headerValue || "").trim().slice(0, 300)
+                ])
+              )
+            : {};
+        return {
+          serverName,
+          baseUrl,
+          toolPath: String(entry.toolPath || "/tools/call").trim() || "/tools/call",
+          timeoutMs: Math.max(500, Math.min(60_000, Math.round(Number(entry.timeoutMs) || 10_000))),
+          headers,
+          tools
+        };
+      })
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
 }
