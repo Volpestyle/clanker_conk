@@ -8,7 +8,11 @@ import {
   type VoiceMembershipEvent,
   type SessionLatency,
   type LatencyTurnEntry,
-  type GenerationContextSnapshot
+  type GenerationContextSnapshot,
+  type AsrSessionSnapshot,
+  type BrainToolEntry,
+  type ToolCallEvent,
+  type McpServerStatus
 } from "../hooks/useVoiceSSE";
 import { useVoiceHistory } from "../hooks/useVoiceHistory";
 
@@ -500,6 +504,82 @@ function matchLatencyToTurns(
   return result;
 }
 
+// ---- Per-User ASR Sessions ----
+
+function AsrSessionsPanel({ session }: { session: VoiceSession }) {
+  const asrSessions = session.asrSessions;
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (!asrSessions || asrSessions.length === 0) return null;
+
+  return (
+    <Section
+      title="Per-User ASR"
+      badge={`${asrSessions.filter((a) => a.connected).length}/${asrSessions.length}`}
+      defaultOpen
+    >
+      <div className="vm-asr-grid">
+        {asrSessions.map((asr) => {
+          const name = asr.displayName || asr.userId.slice(0, 8);
+          const idlePct = asr.idleMs != null && asr.idleTtlMs > 0
+            ? Math.min(1, asr.idleMs / asr.idleTtlMs)
+            : 0;
+          const idleLabel = asr.idleMs != null ? `${(asr.idleMs / 1000).toFixed(1)}s` : null;
+          const statusClass = asr.closing
+            ? "vm-asr-closing"
+            : asr.connected
+              ? "vm-asr-connected"
+              : "vm-asr-disconnected";
+
+          return (
+            <div key={asr.userId} className={`vm-asr-card ${statusClass}`}>
+              <div className="vm-asr-header">
+                <span className={`vm-asr-dot ${statusClass}`} />
+                <span className="vm-asr-name" title={asr.userId}>{name}</span>
+                {asr.model && <span className="vm-asr-model">{asr.model}</span>}
+              </div>
+              {asr.utterance && asr.utterance.partialText && (
+                <div className="vm-asr-partial" title={asr.utterance.partialText}>
+                  {snippet(asr.utterance.partialText, 80)}
+                </div>
+              )}
+              <div className="vm-asr-stats">
+                {asr.connectedAt && (
+                  <span className="vm-asr-stat">up {elapsed(asr.connectedAt)}</span>
+                )}
+                {asr.lastTranscriptAt && (
+                  <span className="vm-asr-stat">last {relativeTime(asr.lastTranscriptAt)}</span>
+                )}
+                {asr.pendingAudioChunks > 0 && (
+                  <span className="vm-asr-stat vm-asr-stat-warn">
+                    buf {asr.pendingAudioChunks} ({formatApproxBytes(asr.pendingAudioBytes)})
+                  </span>
+                )}
+                {asr.utterance && asr.utterance.finalSegments > 0 && (
+                  <span className="vm-asr-stat">{asr.utterance.finalSegments} seg</span>
+                )}
+              </div>
+              {asr.hasIdleTimer && idleLabel && (
+                <div className="vm-asr-idle-bar-wrap">
+                  <div
+                    className="vm-asr-idle-bar"
+                    style={{ width: `${Math.round(idlePct * 100)}%` }}
+                  />
+                  <span className="vm-asr-idle-label">idle {idleLabel} / {(asr.idleTtlMs / 1000).toFixed(0)}s</span>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Section>
+  );
+}
+
 // ---- Realtime Connection Detail ----
 
 function RealtimeDetail({ session }: { session: VoiceSession }) {
@@ -901,7 +981,148 @@ function GenerationContextViewer({ session }: { session: VoiceSession }) {
   );
 }
 
-// ---- Stream Watch ----
+// ---- Brain Tools Config ----
+
+function BrainToolsConfig({ session }: { session: VoiceSession }) {
+  const tools = session.brainTools;
+  if (!tools || tools.length === 0) return null;
+
+  const fnTools = tools.filter((t) => t.toolType === "function");
+  const mcpTools = tools.filter((t) => t.toolType === "mcp");
+
+  return (
+    <Section title="Brain Tools" badge={tools.length} defaultOpen={false}>
+      {fnTools.length > 0 && (
+        <div className="vm-tools-group">
+          <span className="vm-mini-label">Function Tools ({fnTools.length})</span>
+          <div className="vm-tools-list">
+            {fnTools.map((t) => (
+              <span key={t.name} className="vm-tool-chip vm-tool-fn" title={t.description}>
+                {t.name}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {mcpTools.length > 0 && (
+        <div className="vm-tools-group">
+          <span className="vm-mini-label">MCP Tools ({mcpTools.length})</span>
+          <div className="vm-tools-list">
+            {mcpTools.map((t) => (
+              <span
+                key={`${t.serverName || "mcp"}-${t.name}`}
+                className="vm-tool-chip vm-tool-mcp"
+                title={`${t.serverName ? `[${t.serverName}] ` : ""}${t.description}`}
+              >
+                {t.serverName ? `${t.serverName}/${t.name}` : t.name}
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+    </Section>
+  );
+}
+
+// ---- Tool Call Log ----
+
+function ToolCallLog({ session }: { session: VoiceSession }) {
+  const calls = session.toolCalls;
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 2000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (!calls || calls.length === 0) return null;
+
+  return (
+    <Section title="Tool Calls" badge={calls.length} defaultOpen={false}>
+      <div className="vm-toolcall-list">
+        {calls.slice().reverse().map((call) => {
+          const argsPreview = (() => {
+            try {
+              const raw = JSON.stringify(call.arguments);
+              return raw.length > 80 ? raw.slice(0, 80) + "..." : raw;
+            } catch {
+              return "{}";
+            }
+          })();
+
+          return (
+            <div key={call.callId} className={`vm-toolcall-row ${call.success ? "" : "vm-toolcall-fail"}`}>
+              <div className="vm-toolcall-header">
+                <span className={`vm-toolcall-dot ${call.success ? "vm-toolcall-ok" : "vm-toolcall-err"}`} />
+                <span className="vm-toolcall-name">{call.toolName}</span>
+                <span className={`vm-tool-chip ${call.toolType === "mcp" ? "vm-tool-mcp" : "vm-tool-fn"}`}>
+                  {call.toolType}
+                </span>
+                {call.runtimeMs != null && (
+                  <span className={`vm-toolcall-runtime ${call.runtimeMs > 3000 ? "vm-toolcall-slow" : ""}`}>
+                    {call.runtimeMs}ms
+                  </span>
+                )}
+                {call.startedAt && (
+                  <span className="vm-toolcall-time">{relativeTime(call.startedAt)}</span>
+                )}
+              </div>
+              <div className="vm-toolcall-args">{argsPreview}</div>
+              {call.error && <div className="vm-toolcall-error">{call.error}</div>}
+              {call.outputSummary && !call.error && (
+                <div className="vm-toolcall-output">{snippet(call.outputSummary, 120)}</div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Section>
+  );
+}
+
+// ---- MCP Panel ----
+
+function McpPanel({ session }: { session: VoiceSession }) {
+  const servers = session.mcpStatus;
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 5000);
+    return () => clearInterval(id);
+  }, []);
+
+  if (!servers || servers.length === 0) return null;
+
+  const connectedCount = servers.filter((s) => s.connected).length;
+
+  return (
+    <Section title="MCP Servers" badge={`${connectedCount}/${servers.length}`} defaultOpen={false}>
+      {servers.map((server) => (
+        <div key={server.serverName} className={`vm-mcp-server ${server.connected ? "vm-mcp-connected" : "vm-mcp-disconnected"}`}>
+          <div className="vm-mcp-header">
+            <span className={`vm-mcp-dot ${server.connected ? "vm-mcp-dot-ok" : "vm-mcp-dot-err"}`} />
+            <span className="vm-mcp-name">{server.serverName}</span>
+            <span className="vm-mcp-tool-count">{server.tools.length} tool{server.tools.length !== 1 ? "s" : ""}</span>
+          </div>
+          {server.lastError && <div className="vm-mcp-error">{server.lastError}</div>}
+          {server.tools.length > 0 && (
+            <div className="vm-tools-list">
+              {server.tools.map((tool) => (
+                <span key={tool.name} className="vm-tool-chip vm-tool-mcp" title={tool.description}>
+                  {tool.name}
+                </span>
+              ))}
+            </div>
+          )}
+          <div className="vm-mcp-meta">
+            {server.lastConnectedAt && <span className="vm-mcp-meta-item">connected {relativeTime(server.lastConnectedAt)}</span>}
+            {server.lastCallAt && <span className="vm-mcp-meta-item">last call {relativeTime(server.lastCallAt)}</span>}
+          </div>
+        </div>
+      ))}
+    </Section>
+  );
+}
+
+// ---- Screen Share ----
 
 function StreamWatchDetail({ session }: { session: VoiceSession }) {
   const sw = session.streamWatch;
@@ -920,7 +1141,7 @@ function StreamWatchDetail({ session }: { session: VoiceSession }) {
   if (!hasAnyStreamWatchData) return null;
 
   return (
-    <Section title="Stream Watch" badge={sw.active ? "active" : "idle"}>
+    <Section title="Screen Share" badge={sw.active ? "active" : "idle"}>
       <div className="vm-detail-grid">
         <Stat label="Target" value={sw.targetUserId?.slice(0, 8) || "none"} />
         <Stat label="Frames" value={sw.ingestedFrameCount} />
@@ -1221,6 +1442,9 @@ function SessionCard({ session }: { session: VoiceSession }) {
           {/* Realtime connection */}
           <RealtimeDetail session={session} />
 
+          {/* Per-User ASR Sessions */}
+          <AsrSessionsPanel session={session} />
+
           {/* Participants */}
           <ParticipantList session={session} />
 
@@ -1233,7 +1457,16 @@ function SessionCard({ session }: { session: VoiceSession }) {
           {/* LLM Brain Context */}
           <GenerationContextViewer session={session} />
 
-          {/* Stream watch */}
+          {/* Brain Tools */}
+          <BrainToolsConfig session={session} />
+
+          {/* Tool Call Log */}
+          <ToolCallLog session={session} />
+
+          {/* MCP Servers */}
+          <McpPanel session={session} />
+
+          {/* Screen Share */}
           <StreamWatchDetail session={session} />
 
           {/* Music */}

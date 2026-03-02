@@ -545,6 +545,123 @@ export function createDashboardServer({
     });
   });
 
+  app.get("/api/voice/state", (_req, res) => {
+    try {
+      const voiceState = bot.getRuntimeState()?.voice || { activeCount: 0, sessions: [] };
+      return res.json(voiceState);
+    } catch (error) {
+      return res.status(500).json({
+        error: String(error?.message || error)
+      });
+    }
+  });
+
+  app.get("/api/voice/asr-sessions", (_req, res) => {
+    try {
+      const voiceState = bot.getRuntimeState()?.voice || { sessions: [] };
+      const sessions = Array.isArray(voiceState?.sessions) ? voiceState.sessions : [];
+      const asrSessions = sessions.flatMap((session) => {
+        const sessionId = String(session?.sessionId || "").trim();
+        const rows = Array.isArray(session?.asrSessions) ? session.asrSessions : [];
+        return rows.map((row) => ({
+          sessionId,
+          userId: String(row?.userId || ""),
+          displayName: row?.displayName ? String(row.displayName) : null,
+          connected: Boolean(row?.connected),
+          createdAt: row?.connectedAt ? String(row.connectedAt) : null,
+          lastTranscriptAt: row?.lastTranscriptAt ? String(row.lastTranscriptAt) : null,
+          idleTimerEndsAt:
+            Number.isFinite(Number(row?.idleMs)) && Number.isFinite(Number(row?.idleTtlMs))
+              ? new Date(Date.now() + Math.max(0, Number(row.idleTtlMs) - Number(row.idleMs))).toISOString()
+              : null,
+          closedReason: row?.connected ? null : row?.closing ? "error" : "idle_ttl"
+        }));
+      });
+      return res.json({
+        sessions: asrSessions
+      });
+    } catch (error) {
+      return res.status(500).json({
+        error: String(error?.message || error)
+      });
+    }
+  });
+
+  app.get("/api/voice/tool-events", (_req, res) => {
+    try {
+      const voiceState = bot.getRuntimeState()?.voice || { sessions: [] };
+      const sessions = Array.isArray(voiceState?.sessions) ? voiceState.sessions : [];
+      const events = sessions.flatMap((session) => {
+        const sessionId = String(session?.sessionId || "").trim();
+        const rows = Array.isArray(session?.toolCalls) ? session.toolCalls : [];
+        return rows.map((row) => ({
+          sessionId,
+          callId: String(row?.callId || ""),
+          toolName: String(row?.toolName || ""),
+          toolType: String(row?.toolType || "function"),
+          arguments: row?.arguments && typeof row.arguments === "object" ? row.arguments : {},
+          startedAt: row?.startedAt ? String(row.startedAt) : null,
+          completedAt: row?.completedAt ? String(row.completedAt) : null,
+          runtimeMs: Number.isFinite(Number(row?.runtimeMs)) ? Math.round(Number(row.runtimeMs)) : null,
+          success: Boolean(row?.success),
+          outputSummary: row?.outputSummary ? String(row.outputSummary) : null,
+          error: row?.error ? String(row.error) : null
+        }));
+      });
+      return res.json({
+        events
+      });
+    } catch (error) {
+      return res.status(500).json({
+        error: String(error?.message || error)
+      });
+    }
+  });
+
+  app.get("/api/mcp/status", (_req, res) => {
+    try {
+      const voiceState = bot.getRuntimeState()?.voice || { sessions: [] };
+      const sessions = Array.isArray(voiceState?.sessions) ? voiceState.sessions : [];
+      const byName = new Map();
+      for (const session of sessions) {
+        const rows = Array.isArray(session?.mcpStatus) ? session.mcpStatus : [];
+        for (const row of rows) {
+          const serverName = String(row?.serverName || "").trim();
+          if (!serverName) continue;
+          const existing = byName.get(serverName) || null;
+          const candidate = {
+            serverName,
+            connected: Boolean(row?.connected),
+            tools: Array.isArray(row?.tools)
+              ? row.tools.map((tool) => ({
+                  name: String(tool?.name || ""),
+                  description: String(tool?.description || "")
+                }))
+              : [],
+            lastError: row?.lastError ? String(row.lastError) : null
+          };
+          if (!existing) {
+            byName.set(serverName, candidate);
+            continue;
+          }
+          byName.set(serverName, {
+            ...existing,
+            connected: Boolean(existing.connected || candidate.connected),
+            tools: existing.tools.length > 0 ? existing.tools : candidate.tools,
+            lastError: existing.lastError || candidate.lastError
+          });
+        }
+      }
+      return res.json({
+        servers: [...byName.values()]
+      });
+    } catch (error) {
+      return res.status(500).json({
+        error: String(error?.message || error)
+      });
+    }
+  });
+
   app.get("/api/voice/history/sessions", (_req, res, next) => {
     try {
       const limit = Number(_req.query.limit) || 3;
