@@ -20,6 +20,7 @@ import {
   resolveVoiceAsrLanguageGuidance,
   resolveRealtimeProvider,
   resolveVoiceRuntimeMode,
+  resolveBrainProvider,
   shortError
 } from "./voiceSessionHelpers.ts";
 
@@ -452,14 +453,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         });
 
         const openAiRealtimeSettings = settings.voice?.openaiRealtime || {};
-        const openAiReplyStrategy = String(
-          settings?.voice?.realtimeReplyStrategy || "brain"
-        )
-          .trim()
-          .toLowerCase();
-        const openAiPerUserAsrBridgeEnabled =
-          openAiReplyStrategy === "brain" &&
-          (openAiRealtimeSettings.usePerUserAsrBridge !== false);
+        const brainProvider = resolveBrainProvider(settings);
+        const openAiPerUserAsrBridgeEnabled = brainProvider !== "native" || openAiRealtimeSettings.usePerUserAsrBridge !== false;
         const voiceAsrGuidance = resolveVoiceAsrLanguageGuidance(settings);
         openAiPerUserAsrEnabled = openAiPerUserAsrBridgeEnabled;
         openAiPerUserAsrModel =

@@ -45,8 +45,8 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
       maxAsrSeconds: 2
     },
     voice: {
-      mode: "OPENAI_REALTIME",
-      realtimeReplyStrategy: "NATIVE",
+      voiceProvider: "openai",
+      brainProvider: "native",
       asrLanguageMode: "FIXED",
       asrLanguageHint: "EN_us",
       generationLlm: {
@@ -139,8 +139,8 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.videoContext.maxKeyframesPerVideo, 8);
   assert.equal(normalized.videoContext.maxAsrSeconds, 15);
 
-  assert.equal(normalized.voice.mode, "openai_realtime");
-  assert.equal(normalized.voice.realtimeReplyStrategy, "native");
+  assert.equal(normalized.voice.voiceProvider, "openai");
+  assert.equal(normalized.voice.brainProvider, "native");
   assert.equal(normalized.voice.asrLanguageMode, "fixed");
   assert.equal(normalized.voice.asrLanguageHint, "en-us");
   assert.equal(normalized.voice.generationLlm.useTextModel, false);
@@ -276,10 +276,10 @@ test("normalizeSettings forces voice generation llm to text llm when useTextMode
   assert.equal("useTextModel" in normalized.replyFollowupLlm, false);
 });
 
-test("normalizeSettings normalizes elevenlabs realtime mode settings", () => {
+test("normalizeSettings normalizes elevenlabs voice provider settings", () => {
   const normalized = normalizeSettings({
     voice: {
-      mode: "ELEVENLABS_REALTIME",
+      voiceProvider: "elevenlabs",
       elevenLabsRealtime: {
         agentId: "   agent_abc   ",
         apiBaseUrl: "ftp://not-allowed.example/path",
@@ -289,7 +289,7 @@ test("normalizeSettings normalizes elevenlabs realtime mode settings", () => {
     }
   });
 
-  assert.equal(normalized.voice.mode, "elevenlabs_realtime");
+  assert.equal(normalized.voice.voiceProvider, "elevenlabs");
   assert.equal(normalized.voice.elevenLabsRealtime.agentId, "agent_abc");
   assert.equal(normalized.voice.elevenLabsRealtime.apiBaseUrl, "https://api.elevenlabs.io");
   assert.equal(normalized.voice.elevenLabsRealtime.inputSampleRateHz, 48000);

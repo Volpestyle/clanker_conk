@@ -75,7 +75,7 @@ export function settingsToForm(settings) {
   const defaultInitiative = defaults.initiative;
   const defaultDiscovery = defaults.initiative.discovery;
   const activity = settings?.activity ?? {};
-  const selectedVoiceMode = settings?.voice?.mode ?? defaultVoice.mode;
+  const selectedVoiceProvider = settings?.voice?.voiceProvider ?? defaultVoice.voiceProvider;
   return {
     botName: settings?.botName ?? defaults.botName,
     botNameAliases: formatLineList(settings?.botNameAliases ?? defaults.botNameAliases),
@@ -142,8 +142,8 @@ export function settingsToForm(settings) {
     videoContextAsrFallback: settings?.videoContext?.allowAsrFallback ?? defaultVideoContext.allowAsrFallback,
     videoContextMaxAsrSeconds: settings?.videoContext?.maxAsrSeconds ?? defaultVideoContext.maxAsrSeconds,
     voiceEnabled: settings?.voice?.enabled ?? defaultVoice.enabled,
-    voiceMode: selectedVoiceMode,
-    voiceRealtimeReplyStrategy: settings?.voice?.realtimeReplyStrategy ?? defaultVoice.realtimeReplyStrategy,
+    voiceProvider: selectedVoiceProvider,
+    voiceBrainProvider: settings?.voice?.brainProvider ?? defaultVoice.brainProvider,
     voiceAsrLanguageMode: settings?.voice?.asrLanguageMode ?? defaultVoice.asrLanguageMode,
     voiceAsrLanguageHint: settings?.voice?.asrLanguageHint ?? defaultVoice.asrLanguageHint,
     voiceAllowNsfwHumor: settings?.voice?.allowNsfwHumor ?? defaultVoice.allowNsfwHumor,
@@ -370,8 +370,9 @@ export function formToSettingsPatch(form) {
     },
     voice: {
       enabled: form.voiceEnabled,
-      mode: form.voiceMode,
-      realtimeReplyStrategy: String(form.voiceRealtimeReplyStrategy || "").trim(),
+      voiceProvider: String(form.voiceProvider || "openai").trim(),
+      brainProvider: String(form.voiceBrainProvider || "native").trim(),
+      transcriberProvider: "openai",
       asrLanguageMode: String(form.voiceAsrLanguageMode || "").trim(),
       asrLanguageHint: String(form.voiceAsrLanguageHint || "").trim(),
       allowNsfwHumor: form.voiceAllowNsfwHumor,

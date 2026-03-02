@@ -11,7 +11,18 @@ import {
   AUDIO_PIPELINE_RESTART_RATE_WINDOW_MS,
   AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES
 } from "./voiceSessionManager.constants.ts";
-import { normalizeVoiceRuntimeMode } from "./voiceModes.ts";
+import {
+  normalizeVoiceRuntimeMode,
+  normalizeVoiceProvider,
+  normalizeBrainProvider,
+  normalizeTranscriberProvider,
+  VOICE_RUNTIME_MODES,
+  type VoiceProvider,
+  type BrainProvider,
+  type TranscriberProvider
+} from "./voiceModes.ts";
+
+type VoiceRuntimeMode = (typeof VOICE_RUNTIME_MODES)[number];
 import { normalizeWhitespaceText } from "../normalization/text.ts";
 
 export const REALTIME_MEMORY_FACT_LIMIT = 8;
@@ -490,8 +501,35 @@ export function shortError(text) {
     .slice(0, 220);
 }
 
+export function resolveVoiceProvider(settings) {
+  return normalizeVoiceProvider(settings?.voice?.voiceProvider, "openai");
+}
+
+export function resolveBrainProvider(settings) {
+  const voiceProvider = resolveVoiceProvider(settings);
+  const brainSetting = settings?.voice?.brainProvider;
+  if (brainSetting && brainSetting !== "native") {
+    return normalizeBrainProvider(brainSetting, voiceProvider, "native");
+  }
+  return normalizeBrainProvider("native", voiceProvider, "native");
+}
+
+export function resolveTranscriberProvider(settings) {
+  return normalizeTranscriberProvider(settings?.voice?.transcriberProvider, "openai");
+}
+
 export function resolveVoiceRuntimeMode(settings) {
-  return normalizeVoiceRuntimeMode(settings?.voice?.mode);
+  if (settings?.voice?.mode) {
+    return normalizeVoiceRuntimeMode(settings.voice.mode);
+  }
+  const voiceProvider = resolveVoiceProvider(settings);
+  const modeMap = {
+    openai: "openai_realtime",
+    xai: "voice_agent",
+    gemini: "gemini_realtime",
+    elevenlabs: "elevenlabs_realtime"
+  };
+  return (modeMap[voiceProvider] || "openai_realtime") as VoiceRuntimeMode;
 }
 
 export function resolveRealtimeProvider(mode) {

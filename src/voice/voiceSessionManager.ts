@@ -1579,10 +1579,7 @@ export class VoiceSessionManager {
           .filter((entry): entry is VoiceRealtimeToolDescriptor => Boolean(entry));
       });
 
-    const includeWebSearch = Boolean(
-      settings?.webSearch?.enabled ||
-      String(settings?.voice?.realtimeReplyStrategy || "brain").trim().toLowerCase() === "brain"
-    );
+    const includeWebSearch = Boolean(settings?.webSearch?.enabled);
     const filteredLocalTools = includeWebSearch
       ? localTools
       : localTools.filter((entry) => entry.name !== "web_search");
@@ -7652,13 +7649,11 @@ export class VoiceSessionManager {
   resolveRealtimeReplyStrategy({ session, settings = null }) {
     if (!session || !isRealtimeMode(session.mode)) return "brain";
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    const strategy = String(resolvedSettings?.voice?.realtimeReplyStrategy || "brain")
-      .trim()
-      .toLowerCase();
-    if (strategy === "native") {
-      return "native";
+    const brainProvider = resolvedSettings?.voice?.brainProvider;
+    if (brainProvider && brainProvider !== "native") {
+      return "brain";
     }
-    return "brain";
+    return "native";
   }
 
   shouldUseNativeRealtimeReply({ session, settings = null }) {

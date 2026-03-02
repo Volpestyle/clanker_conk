@@ -121,8 +121,9 @@ export const DEFAULT_SETTINGS = {
   },
   voice: {
     enabled: true,
-    mode: "openai_realtime",
-    realtimeReplyStrategy: "brain",
+    voiceProvider: "openai",
+    brainProvider: "native",
+    transcriberProvider: "openai",
     asrLanguageMode: "auto",
     asrLanguageHint: "en",
     allowNsfwHumor: true,
