@@ -170,7 +170,8 @@ export const DEFAULT_SETTINGS = {
       voice: "alloy",
       inputAudioFormat: "pcm16",
       outputAudioFormat: "pcm16",
-      inputTranscriptionModel: "gpt-4o-mini-transcribe"
+      inputTranscriptionModel: "gpt-4o-mini-transcribe",
+      usePerUserAsrBridge: true
     },
     elevenLabsRealtime: {
       agentId: "",

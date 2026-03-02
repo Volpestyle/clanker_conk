@@ -196,6 +196,8 @@ export function settingsToForm(settings) {
     voiceOpenAiRealtimeVoice: settings?.voice?.openaiRealtime?.voice ?? defaultVoiceOpenAiRealtime.voice,
     voiceOpenAiRealtimeInputTranscriptionModel:
       settings?.voice?.openaiRealtime?.inputTranscriptionModel ?? defaultVoiceOpenAiRealtime.inputTranscriptionModel,
+    voiceOpenAiRealtimeUsePerUserAsrBridge:
+      settings?.voice?.openaiRealtime?.usePerUserAsrBridge ?? defaultVoiceOpenAiRealtime.usePerUserAsrBridge,
     voiceElevenLabsRealtimeAgentId:
       settings?.voice?.elevenLabsRealtime?.agentId ?? defaultVoiceElevenLabsRealtime.agentId,
     voiceElevenLabsRealtimeVoiceId:
@@ -415,7 +417,8 @@ export function formToSettingsPatch(form) {
         voice: String(form.voiceOpenAiRealtimeVoice || "").trim(),
         inputAudioFormat: "pcm16",
         outputAudioFormat: "pcm16",
-        inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim()
+        inputTranscriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
+        usePerUserAsrBridge: Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge)
       },
       elevenLabsRealtime: {
         agentId: String(form.voiceElevenLabsRealtimeAgentId || "").trim(),

@@ -163,6 +163,7 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.voice.replyDecisionLlm.prompts?.systemPromptFull, undefined);
   assert.equal(normalized.voice.openaiRealtime.inputAudioFormat, "pcm16");
   assert.equal(normalized.voice.openaiRealtime.outputAudioFormat, "pcm16");
+  assert.equal(normalized.voice.openaiRealtime.usePerUserAsrBridge, true);
   assert.equal(normalized.voice.geminiRealtime.apiBaseUrl, "https://generativelanguage.googleapis.com");
   assert.equal(normalized.voice.geminiRealtime.inputSampleRateHz, 8000);
   assert.equal(normalized.voice.geminiRealtime.outputSampleRateHz, 48000);
@@ -186,6 +187,18 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.initiative.discovery.xNitterBaseUrl, "https://nitter.example");
   assert.equal(normalized.initiative.discovery.sources.reddit, false);
   assert.equal(normalized.initiative.discovery.sources.x, true);
+});
+
+test("normalizeSettings respects explicit false for openaiRealtime usePerUserAsrBridge", () => {
+  const normalized = normalizeSettings({
+    voice: {
+      openaiRealtime: {
+        usePerUserAsrBridge: false
+      }
+    }
+  });
+
+  assert.equal(normalized.voice.openaiRealtime.usePerUserAsrBridge, false);
 });
 
 test("normalizeSettings handles memoryLlm defaults and discovery source fallbacks", () => {

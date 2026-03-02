@@ -356,6 +356,7 @@ export function normalizeSettings(raw) {
     inputAudioFormat?: string;
     outputAudioFormat?: string;
     inputTranscriptionModel?: string;
+    usePerUserAsrBridge?: boolean;
   };
   type VoiceElevenLabsRealtimeDefaults = {
     agentId?: string;
@@ -689,6 +690,10 @@ export function normalizeSettings(raw) {
   )
     .trim()
     .slice(0, 120);
+  merged.voice.openaiRealtime.usePerUserAsrBridge =
+    merged.voice?.openaiRealtime?.usePerUserAsrBridge !== undefined
+      ? Boolean(merged.voice?.openaiRealtime?.usePerUserAsrBridge)
+      : Boolean(defaultVoiceOpenAiRealtime.usePerUserAsrBridge);
   merged.voice.elevenLabsRealtime.agentId = String(
     merged.voice?.elevenLabsRealtime?.agentId || defaultVoiceElevenLabsRealtime.agentId || ""
   )

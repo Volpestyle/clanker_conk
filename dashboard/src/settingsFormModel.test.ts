@@ -58,6 +58,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.voiceStreamWatchBrainContextMaxEntries, 8);
   assert.equal(form.voiceAsrLanguageMode, "auto");
   assert.equal(form.voiceAsrLanguageHint, "en");
+  assert.equal(form.voiceOpenAiRealtimeUsePerUserAsrBridge, true);
   assert.equal(
     form.voiceStreamWatchBrainContextPrompt,
     "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or observational shout-out commentary."
@@ -87,6 +88,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.voiceStreamWatchBrainContextPrompt = "Use stream snapshots as context for replies.";
   form.voiceAsrLanguageMode = "fixed";
   form.voiceAsrLanguageHint = "en-us";
+  form.voiceOpenAiRealtimeUsePerUserAsrBridge = false;
 
   const patch = formToSettingsPatch(form);
   assert.deepEqual(patch.botNameAliases, ["clank", "conk"]);
@@ -109,6 +111,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.voice.streamWatch.brainContextMinIntervalSeconds, 6);
   assert.equal(patch.voice.streamWatch.brainContextMaxEntries, 5);
   assert.equal(patch.voice.streamWatch.brainContextPrompt, "Use stream snapshots as context for replies.");
+  assert.equal(patch.voice.openaiRealtime.usePerUserAsrBridge, false);
   assert.equal(patch.voice.asrLanguageMode, "fixed");
   assert.equal(patch.voice.asrLanguageHint, "en-us");
   assert.equal(patch.voice.thoughtEngine.enabled, true);
