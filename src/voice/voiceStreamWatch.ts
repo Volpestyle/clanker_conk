@@ -138,15 +138,8 @@ function appendStreamWatchBrainContextEntry({
 function isStreamWatchPlaybackBusy(session) {
   if (!session || session.ending) return false;
   if (session.botTurnOpen) return true;
-  const queueState =
-    session.audioPlaybackQueue && typeof session.audioPlaybackQueue === "object"
-      ? session.audioPlaybackQueue
-      : null;
-  if (!queueState) return false;
-  const queuedBytes = Math.max(0, Number(queueState.queuedBytes || 0));
-  const queueActive = Boolean(queueState.pumping || queueState.waitingDrain);
-  const streamBufferedBytes = Math.max(0, Number(session.botAudioStream?.writableLength || 0));
-  return queueActive || queuedBytes > 0 || streamBufferedBytes > 0;
+  const streamBuffered = Math.max(0, Number(session.botAudioStream?.writableLength || 0));
+  return streamBuffered > 0;
 }
 
 async function sendStreamWatchOfflineMessage(manager, { message, settings, guildId, requesterId }) {

@@ -617,7 +617,7 @@ test("maybeTriggerStreamWatchCommentary can update brain context without speakin
   );
 });
 
-test("maybeTriggerStreamWatchCommentary skips while playback queue is busy", async () => {
+test("maybeTriggerStreamWatchCommentary skips while playback stream is busy", async () => {
   let requestTextUtteranceCalls = 0;
   const session = createSession({
     mode: "voice_agent",
@@ -640,14 +640,11 @@ test("maybeTriggerStreamWatchCommentary skips while playback queue is busy", asy
       latestFrameDataBase64: "AAAA",
       latestFrameAt: Date.now()
     },
-    audioPlaybackQueue: {
-      chunks: [],
-      headOffset: 0,
-      queuedBytes: 96_000,
-      pumping: false,
-      timer: null,
-      waitingDrain: false,
-      drainHandler: null
+    botAudioStream: {
+      writableLength: 96_000,
+      destroyed: false,
+      writableEnded: false,
+      destroy() {}
     }
   });
   const { manager, actions, createdResponses } = createManager({

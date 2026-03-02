@@ -5,9 +5,7 @@ import { PassThrough } from "node:stream";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
 import {
   ACTIVITY_TOUCH_MIN_SPEECH_MS,
-  AUDIO_PLAYBACK_QUEUE_ABSOLUTE_MAX_BYTES,
-  AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES,
-  AUDIO_PLAYBACK_QUEUE_WARN_BYTES,
+  AUDIO_PLAYBACK_STREAM_OVERFLOW_BYTES,
   BARGE_IN_FULL_OVERRIDE_MIN_MS,
   BARGE_IN_MIN_SPEECH_MS,
   DISCORD_PCM_FRAME_BYTES
@@ -458,16 +456,6 @@ test("maybeInterruptBotForAssertiveSpeech cuts playback after assertive speech",
       source: "turn_flush",
       handlingSilence: false,
       audioReceivedAt: 0
-    },
-    audioPlaybackQueue: {
-      chunks: [Buffer.from([1, 2, 3])],
-      headOffset: 0,
-      queuedBytes: 777_600,
-      pumping: false,
-      timer: null,
-      waitingDrain: false,
-      drainHandler: null,
-      lastWarnAt: 0
     }
   });
 
@@ -478,7 +466,7 @@ test("maybeInterruptBotForAssertiveSpeech cuts playback after assertive speech",
   });
   assert.equal(interrupted, true);
   assert.equal(session.botTurnOpen, false);
-  assert.equal(session.audioPlaybackQueue.queuedBytes, 0);
+  assert.equal(session.botAudioStream, null);
   assert.equal(stopCalls.length, 1);
   assert.equal(stopCalls[0], true);
   assert.equal(cancelCalls.length, 1);
@@ -576,7 +564,6 @@ test("maybeInterruptBotForAssertiveSpeech interrupts queued playback even when b
   const stopCalls = [];
   let streamDestroyed = false;
   const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
-  const queuedBytes = DISCORD_PCM_FRAME_BYTES * 16;
   const session = createSession({
     mode: "stt_pipeline",
     botTurnOpen: false,
@@ -602,16 +589,6 @@ test("maybeInterruptBotForAssertiveSpeech interrupts queued playback even when b
       destroy() {
         streamDestroyed = true;
       }
-    },
-    audioPlaybackQueue: {
-      chunks: [Buffer.alloc(queuedBytes, 1)],
-      headOffset: 0,
-      queuedBytes,
-      pumping: false,
-      timer: null,
-      waitingDrain: false,
-      drainHandler: null,
-      lastWarnAt: 0
     }
   });
 
@@ -624,17 +601,15 @@ test("maybeInterruptBotForAssertiveSpeech interrupts queued playback even when b
   assert.equal(stopCalls.length, 1);
   assert.equal(stopCalls[0], true);
   assert.equal(streamDestroyed, true);
-  assert.equal(session.audioPlaybackQueue.queuedBytes, 0);
+  assert.equal(session.botAudioStream, null);
   const interruptLog = logs.find((entry) => entry?.content === "voice_barge_in_interrupt");
   assert.equal(Boolean(interruptLog), true);
   assert.equal(interruptLog?.metadata?.source, "test_queued_audio");
-  assert.equal(interruptLog?.metadata?.queuedBytesDropped, queuedBytes);
 });
 
 test("interruptBotSpeechForBargeIn truncates OpenAI assistant audio to played duration", () => {
   const { manager, logs } = createManager();
   const truncateCalls = [];
-  const queueBytes = DISCORD_PCM_FRAME_BYTES * 10;
   const streamBytes = DISCORD_PCM_FRAME_BYTES * 5;
   const session = createSession({
     mode: "openai_realtime",
@@ -661,16 +636,6 @@ test("interruptBotSpeechForBargeIn truncates OpenAI assistant audio to played du
         truncateCalls.push(payload);
         return true;
       }
-    },
-    audioPlaybackQueue: {
-      chunks: [Buffer.alloc(queueBytes, 1)],
-      headOffset: 0,
-      queuedBytes: queueBytes,
-      pumping: false,
-      timer: null,
-      waitingDrain: false,
-      drainHandler: null,
-      lastWarnAt: 0
     }
   });
 
@@ -684,14 +649,15 @@ test("interruptBotSpeechForBargeIn truncates OpenAI assistant audio to played du
   assert.equal(truncateCalls.length, 1);
   assert.equal(truncateCalls[0]?.itemId, "item_abc");
   assert.equal(truncateCalls[0]?.contentIndex, 0);
-  assert.equal(truncateCalls[0]?.audioEndMs, 1700);
+  // 2000ms received - 100ms unplayed (5 frames * 20ms) = 1900ms
+  assert.equal(truncateCalls[0]?.audioEndMs, 1900);
   const interruptLog = logs.find((entry) => entry?.content === "voice_barge_in_interrupt");
   assert.equal(Boolean(interruptLog), true);
   assert.equal(interruptLog?.metadata?.truncateAttempted, true);
   assert.equal(interruptLog?.metadata?.truncateSucceeded, true);
 });
 
-test("armAssertiveBargeIn schedules interrupt checks while queued playback remains", async () => {
+test("armAssertiveBargeIn schedules interrupt checks while buffered playback remains", async () => {
   const { manager } = createManager();
   const session = createSession({
     mode: "stt_pipeline",
@@ -709,15 +675,11 @@ test("armAssertiveBargeIn schedules interrupt checks while queued playback remai
         }
       ]
     ]),
-    audioPlaybackQueue: {
-      chunks: [Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 8, 1)],
-      headOffset: 0,
-      queuedBytes: DISCORD_PCM_FRAME_BYTES * 8,
-      pumping: false,
-      timer: null,
-      waitingDrain: false,
-      drainHandler: null,
-      lastWarnAt: 0
+    botAudioStream: {
+      writableLength: DISCORD_PCM_FRAME_BYTES * 8,
+      destroyed: false,
+      writableEnded: false,
+      destroy() {}
     }
   });
 
@@ -995,95 +957,201 @@ test("maybeHandleInterruptedReplyRecovery treats long barge-ins as full override
   assert.equal(Boolean(skipLog), true);
 });
 
-test("enqueueDiscordPcmForPlayback keeps full queued audio when hard cap is exceeded", () => {
-  const { manager, logs } = createManager();
-  manager.scheduleAudioPlaybackPump = () => {};
+test("enqueueDiscordPcmForPlayback writes directly to stream and activates idle player", () => {
+  const { manager } = createManager();
+  const playCalls = [];
+  let writeCalls = 0;
+  const stream = new PassThrough();
+  const originalWrite = stream.write.bind(stream);
+  stream.write = (...args) => {
+    writeCalls += 1;
+    return originalWrite(...args);
+  };
+
   const session = createSession({
     audioPlayer: {
       state: {
-        status: "playing"
+        status: "idle"
+      },
+      play(resource) {
+        playCalls.push(resource);
+        this.state.status = "playing";
       }
     },
     connection: {
       subscribe() {}
     },
-    botAudioStream: {
-      writableLength: 0
-    },
-    audioPlaybackQueue: {
-      chunks: [],
-      headOffset: 0,
-      queuedBytes: 0,
-      pumping: false,
-      timer: null,
-      waitingDrain: false,
-      drainHandler: null,
-      lastWarnAt: 0,
-      lastTrimAt: 0
-    }
+    botAudioStream: stream
   });
 
-  const oversizedChunk = Buffer.alloc(AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES + DISCORD_PCM_FRAME_BYTES * 3, 7);
   const queued = manager.enqueueDiscordPcmForPlayback({
     session,
-    discordPcm: oversizedChunk
+    discordPcm: Buffer.alloc(DISCORD_PCM_FRAME_BYTES, 5)
   });
 
   assert.equal(queued, true);
-  assert.equal(session.audioPlaybackQueue.queuedBytes, oversizedChunk.length);
-  const backlogLog = logs.find((entry) => entry?.content === "bot_audio_queue_backlog");
-  assert.equal(Boolean(backlogLog), true);
-  assert.equal(backlogLog?.metadata?.hardMaxBufferedBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
-  const trimLog = logs.find((entry) => entry?.content === "bot_audio_queue_trimmed");
-  assert.equal(Boolean(trimLog), false);
+  assert.equal(writeCalls, 1);
+  assert.equal(playCalls.length, 1);
+  stream.destroy();
 });
 
-test("enqueueDiscordPcmForPlayback preserves queued bytes even when above legacy absolute cap", () => {
-  const { manager, logs } = createManager();
-  manager.scheduleAudioPlaybackPump = () => {};
+test("enqueueDiscordPcmForPlayback resets stream when overflow threshold exceeded", () => {
+  const { manager } = createManager();
+  let streamDestroyed = false;
   const session = createSession({
     audioPlayer: {
-      state: {
-        status: "playing"
-      }
+      state: { status: "playing" },
+      play() {}
     },
     connection: {
       subscribe() {}
     },
     botAudioStream: {
-      writableLength: 0
-    },
-    audioPlaybackQueue: {
-      chunks: [],
-      headOffset: 0,
-      queuedBytes: 0,
-      pumping: false,
-      timer: null,
-      waitingDrain: false,
-      drainHandler: null,
-      lastWarnAt: 0,
-      lastTrimAt: 0
+      writableLength: AUDIO_PLAYBACK_STREAM_OVERFLOW_BYTES + 1,
+      destroy() { streamDestroyed = true; },
+      write: () => true
     }
   });
 
-  const oversizedChunk = Buffer.alloc(AUDIO_PLAYBACK_QUEUE_ABSOLUTE_MAX_BYTES + DISCORD_PCM_FRAME_BYTES * 5, 9);
   const queued = manager.enqueueDiscordPcmForPlayback({
     session,
-    discordPcm: oversizedChunk
+    discordPcm: Buffer.alloc(DISCORD_PCM_FRAME_BYTES, 5)
   });
 
   assert.equal(queued, true);
-  assert.equal(session.audioPlaybackQueue.queuedBytes, oversizedChunk.length);
-  const trimLog = logs.find((entry) => entry?.content === "bot_audio_queue_trimmed");
-  assert.equal(Boolean(trimLog), false);
-  const backlogLog = logs.find((entry) => entry?.content === "bot_audio_queue_backlog");
-  assert.equal(Boolean(backlogLog), true);
-  assert.equal(backlogLog?.metadata?.hardMaxBufferedBytes, AUDIO_PLAYBACK_QUEUE_HARD_MAX_BYTES);
+  assert.equal(streamDestroyed, true);
 });
 
-test("enqueueDiscordPcmForPlayback interrupts bot output when user speech would overflow playback queue", () => {
+test("queueRealtimeTurnFromAsrBridge falls back to PCM when ASR transcript is empty", () => {
   const { manager, logs } = createManager();
-  manager.scheduleAudioPlaybackPump = () => {};
+  const queuedTurns = [];
+  manager.queueRealtimeTurn = (payload) => {
+    queuedTurns.push(payload);
+  };
+  const session = createSession({
+    mode: "openai_realtime"
+  });
+  const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 6);
+
+  const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
+    session,
+    userId: "speaker-1",
+    pcmBuffer,
+    captureReason: "stream_end",
+    finalizedAt: Date.now(),
+    asrResult: {
+      transcript: ""
+    },
+    source: "per_user"
+  });
+
+  assert.equal(usedTranscript, false);
+  assert.equal(queuedTurns.length, 1);
+  assert.equal(queuedTurns[0]?.pcmBuffer, pcmBuffer);
+  assert.equal(queuedTurns[0]?.captureReason, "stream_end");
+  const fallbackLog = logs.find((entry) => entry?.content === "openai_realtime_asr_bridge_fallback_pcm");
+  assert.equal(Boolean(fallbackLog), true);
+  assert.equal(fallbackLog?.metadata?.source, "per_user");
+});
+
+test("queueRealtimeTurnFromAsrBridge forwards receive_error fallback audio when capture is sizable", () => {
+  const { manager, logs } = createManager();
+  const queuedTurns = [];
+  manager.queueRealtimeTurn = (payload) => {
+    queuedTurns.push(payload);
+  };
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeInputSampleRateHz: 24_000
+  });
+
+  const droppedNearSilence = manager.queueRealtimeTurnFromAsrBridge({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.alloc(DISCORD_PCM_FRAME_BYTES, 2),
+    captureReason: "near_silence_early_abort",
+    finalizedAt: Date.now(),
+    asrResult: {
+      transcript: ""
+    },
+    source: "per_user"
+  });
+  const droppedReceiveError = manager.queueRealtimeTurnFromAsrBridge({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 2),
+    captureReason: "receive_error",
+    finalizedAt: Date.now(),
+    asrResult: null,
+    source: "per_user_error"
+  });
+  const droppedTinyClip = manager.queueRealtimeTurnFromAsrBridge({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.alloc(1600, 2),
+    captureReason: "stream_end",
+    finalizedAt: Date.now(),
+    asrResult: {
+      transcript: ""
+    },
+    source: "per_user"
+  });
+
+  assert.equal(droppedNearSilence, false);
+  assert.equal(droppedReceiveError, false);
+  assert.equal(droppedTinyClip, false);
+  assert.equal(queuedTurns.length, 1);
+  assert.equal(queuedTurns[0]?.pcmBuffer?.length, DISCORD_PCM_FRAME_BYTES * 2);
+  assert.equal(queuedTurns[0]?.captureReason, "receive_error");
+  const droppedLogs = logs.filter((entry) => entry?.content === "openai_realtime_asr_bridge_fallback_dropped");
+  assert.equal(droppedLogs.length, 2);
+  const fallbackLog = logs.find((entry) => entry?.content === "openai_realtime_asr_bridge_fallback_pcm");
+  assert.equal(Boolean(fallbackLog), true);
+  assert.equal(fallbackLog?.metadata?.captureReason, "receive_error");
+});
+
+test("queueRealtimeTurnFromAsrBridge forwards transcript metadata when ASR transcript exists", () => {
+  const { manager, logs } = createManager();
+  const queuedTurns = [];
+  manager.queueRealtimeTurn = (payload) => {
+    queuedTurns.push(payload);
+  };
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeInputSampleRateHz: 24_000
+  });
+  const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 4);
+
+  const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
+    session,
+    userId: "speaker-1",
+    pcmBuffer,
+    captureReason: "speaking_end",
+    finalizedAt: Date.now(),
+    asrResult: {
+      transcript: "hello from asr",
+      asrStartedAtMs: 1000,
+      asrCompletedAtMs: 1125,
+      transcriptionModelPrimary: "gpt-4o-mini-transcribe",
+      transcriptionModelFallback: "whisper-1",
+      transcriptionPlanReason: "openai_realtime_per_user_transcription",
+      usedFallbackModel: true
+    },
+    source: "per_user"
+  });
+
+  assert.equal(usedTranscript, true);
+  assert.equal(queuedTurns.length, 1);
+  assert.equal(queuedTurns[0]?.transcriptOverride, "hello from asr");
+  assert.equal(queuedTurns[0]?.transcriptionModelPrimaryOverride, "gpt-4o-mini-transcribe");
+  assert.equal(queuedTurns[0]?.transcriptionModelFallbackOverride, "whisper-1");
+  assert.equal(queuedTurns[0]?.transcriptionPlanReasonOverride, "openai_realtime_per_user_transcription");
+  assert.equal(queuedTurns[0]?.usedFallbackModelForTranscriptOverride, true);
+  assert.equal(logs.some((entry) => entry?.content === "openai_realtime_asr_bridge_fallback_pcm"), false);
+});
+
+test("enqueueDiscordPcmForPlayback interrupts bot output when stream would overflow", () => {
+  const { manager, logs } = createManager();
   const stopCalls = [];
   let streamDestroyed = false;
 
@@ -1101,21 +1169,14 @@ test("enqueueDiscordPcmForPlayback interrupts bot output when user speech would 
       ]
     ]),
     audioPlayer: {
-      state: {
-        status: "playing"
-      },
-      stop(force) {
-        stopCalls.push(force);
-      }
+      state: { status: "playing" },
+      stop(force) { stopCalls.push(force); }
     },
-    connection: {
-      subscribe() {}
-    },
+    connection: { subscribe() {} },
     botAudioStream: {
-      writableLength: 0,
-      destroy() {
-        streamDestroyed = true;
-      }
+      writableLength: AUDIO_PLAYBACK_STREAM_OVERFLOW_BYTES - DISCORD_PCM_FRAME_BYTES,
+      write() { return true; },
+      destroy() { streamDestroyed = true; }
     },
     pendingResponse: {
       requestId: 17,
@@ -1125,17 +1186,6 @@ test("enqueueDiscordPcmForPlayback interrupts bot output when user speech would 
       source: "turn_flush",
       handlingSilence: false,
       audioReceivedAt: 0
-    },
-    audioPlaybackQueue: {
-      chunks: [Buffer.alloc(DISCORD_PCM_FRAME_BYTES, 1)],
-      headOffset: 0,
-      queuedBytes: AUDIO_PLAYBACK_QUEUE_WARN_BYTES - DISCORD_PCM_FRAME_BYTES,
-      pumping: false,
-      timer: null,
-      waitingDrain: false,
-      drainHandler: null,
-      lastWarnAt: 0,
-      lastTrimAt: 0
     }
   });
 
@@ -1146,18 +1196,16 @@ test("enqueueDiscordPcmForPlayback interrupts bot output when user speech would 
 
   assert.equal(queued, false);
   assert.equal(session.botTurnOpen, false);
-  assert.equal(session.audioPlaybackQueue.queuedBytes, 0);
   assert.equal(stopCalls.length, 1);
   assert.equal(stopCalls[0], true);
   assert.equal(streamDestroyed, true);
   const interruptLog = logs.find((entry) => entry?.content === "voice_barge_in_interrupt");
   assert.equal(Boolean(interruptLog), true);
-  assert.equal(interruptLog?.metadata?.source, "playback_queue_overflow_guard");
+  assert.equal(interruptLog?.metadata?.source, "stream_overflow_guard");
 });
 
 test("enqueueDiscordPcmForPlayback does not interrupt for near-silent active capture", () => {
   const { manager, logs } = createManager();
-  manager.scheduleAudioPlaybackPump = () => {};
   const stopCalls = [];
 
   const session = createSession({
@@ -1174,30 +1222,14 @@ test("enqueueDiscordPcmForPlayback does not interrupt for near-silent active cap
       ]
     ]),
     audioPlayer: {
-      state: {
-        status: "playing"
-      },
-      stop(force) {
-        stopCalls.push(force);
-      }
+      state: { status: "playing" },
+      stop(force) { stopCalls.push(force); }
     },
-    connection: {
-      subscribe() {}
-    },
+    connection: { subscribe() {} },
     botAudioStream: {
-      writableLength: 0,
+      writableLength: AUDIO_PLAYBACK_STREAM_OVERFLOW_BYTES - DISCORD_PCM_FRAME_BYTES,
+      write() { return true; },
       destroy() {}
-    },
-    audioPlaybackQueue: {
-      chunks: [Buffer.alloc(DISCORD_PCM_FRAME_BYTES, 1)],
-      headOffset: 0,
-      queuedBytes: AUDIO_PLAYBACK_QUEUE_WARN_BYTES - DISCORD_PCM_FRAME_BYTES,
-      pumping: false,
-      timer: null,
-      waitingDrain: false,
-      drainHandler: null,
-      lastWarnAt: 0,
-      lastTrimAt: 0
     }
   });
 
@@ -1214,7 +1246,6 @@ test("enqueueDiscordPcmForPlayback does not interrupt for near-silent active cap
 
 test("enqueueDiscordPcmForPlayback overflow guard respects interruption policy speaker lock", () => {
   const { manager, logs } = createManager();
-  manager.scheduleAudioPlaybackPump = () => {};
   const stopCalls = [];
 
   const session = createSession({
@@ -1236,30 +1267,14 @@ test("enqueueDiscordPcmForPlayback overflow guard respects interruption policy s
       ]
     ]),
     audioPlayer: {
-      state: {
-        status: "playing"
-      },
-      stop(force) {
-        stopCalls.push(force);
-      }
+      state: { status: "playing" },
+      stop(force) { stopCalls.push(force); }
     },
-    connection: {
-      subscribe() {}
-    },
+    connection: { subscribe() {} },
     botAudioStream: {
-      writableLength: 0,
+      writableLength: AUDIO_PLAYBACK_STREAM_OVERFLOW_BYTES - DISCORD_PCM_FRAME_BYTES,
+      write() { return true; },
       destroy() {}
-    },
-    audioPlaybackQueue: {
-      chunks: [Buffer.alloc(DISCORD_PCM_FRAME_BYTES, 1)],
-      headOffset: 0,
-      queuedBytes: AUDIO_PLAYBACK_QUEUE_WARN_BYTES - DISCORD_PCM_FRAME_BYTES,
-      pumping: false,
-      timer: null,
-      waitingDrain: false,
-      drainHandler: null,
-      lastWarnAt: 0,
-      lastTrimAt: 0
     }
   });
 
@@ -1274,43 +1289,18 @@ test("enqueueDiscordPcmForPlayback overflow guard respects interruption policy s
   assert.equal(logs.some((entry) => entry?.content === "voice_barge_in_interrupt"), false);
 });
 
-test("enqueueDiscordPcmForPlayback clears stale drain wait when audio stream is replaced", () => {
+test("enqueueDiscordPcmForPlayback lazily creates stream when botAudioStream is destroyed", () => {
   const { manager } = createManager();
-  manager.scheduleAudioPlaybackPump = () => {};
-  let oldDrainListenerCleared = false;
-
-  const oldStream = {
-    destroyed: true,
-    writableEnded: false,
-    writableLength: 0,
-    off(eventName, handler) {
-      if (eventName === "drain" && typeof handler === "function") {
-        oldDrainListenerCleared = true;
-      }
-    }
-  };
-
   const session = createSession({
     audioPlayer: {
-      state: {
-        status: "playing"
-      },
-      play() {}
+      state: { status: "idle" },
+      play() { this.state.status = "playing"; }
     },
-    connection: {
-      subscribe() {}
-    },
-    botAudioStream: oldStream,
-    audioPlaybackQueue: {
-      chunks: [],
-      headOffset: 0,
-      queuedBytes: 0,
-      pumping: false,
-      timer: null,
-      waitingDrain: true,
-      drainHandler: () => {},
-      lastWarnAt: 0,
-      lastTrimAt: 0
+    connection: { subscribe() {} },
+    botAudioStream: {
+      destroyed: true,
+      writableEnded: false,
+      writableLength: 0
     }
   });
 
@@ -1320,9 +1310,9 @@ test("enqueueDiscordPcmForPlayback clears stale drain wait when audio stream is 
   });
 
   assert.equal(queued, true);
-  assert.equal(oldDrainListenerCleared, true);
-  assert.equal(session.audioPlaybackQueue.waitingDrain, false);
-  assert.equal(session.audioPlaybackQueue.drainHandler, null);
+  assert.equal(Boolean(session.botAudioStream), true);
+  assert.equal(session.botAudioStream.destroyed, false);
+  session.botAudioStream.destroy();
 });
 
 test("bindBotAudioStreamLifecycle records stream close event", () => {
@@ -1343,38 +1333,18 @@ test("bindBotAudioStreamLifecycle records stream close event", () => {
   assert.equal(lifecycleLog?.metadata?.event, "close");
 });
 
-test("bindBotAudioStreamLifecycle skips repair when stream closes while playback is idle", () => {
+test("bindBotAudioStreamLifecycle logs close event without auto-repair", () => {
   const { manager, logs } = createManager();
   const stream = new PassThrough();
   const session = createSession({
     botAudioStream: stream,
     botTurnOpen: false,
     pendingResponse: null,
-    realtimeClient: {
-      isResponseInProgress() {
-        return false;
-      }
-    },
     audioPlayer: {
-      state: {
-        status: "playing"
-      },
+      state: { status: "playing" },
       play() {}
     },
-    connection: {
-      subscribe() {}
-    },
-    audioPlaybackQueue: {
-      chunks: [],
-      headOffset: 0,
-      queuedBytes: 0,
-      pumping: false,
-      timer: null,
-      waitingDrain: false,
-      drainHandler: null,
-      lastWarnAt: 0,
-      lastTrimAt: 0
-    }
+    connection: { subscribe() {} }
   });
 
   manager.bindBotAudioStreamLifecycle(session, {
@@ -1384,20 +1354,12 @@ test("bindBotAudioStreamLifecycle skips repair when stream closes while playback
   stream.emit("close");
 
   assert.equal(logs.some((entry) => entry?.content === "bot_audio_stream_lifecycle"), true);
-  assert.equal(logs.some((entry) => entry?.content === "bot_audio_stream_lifecycle_repair_skipped_idle"), true);
+  // Simplified lifecycle no longer attempts auto-repair
   assert.equal(logs.some((entry) => entry?.content === "bot_audio_stream_lifecycle_repair_attempted"), false);
-  assert.equal(logs.some((entry) => entry?.content === "bot_audio_pipeline_restarted"), false);
 });
 
-test("bindBotAudioStreamLifecycle repairs stream on error when playback demand is active", () => {
+test("bindBotAudioStreamLifecycle logs error event on stream", () => {
   const { manager, logs } = createManager();
-  const pumpCalls = [];
-  manager.scheduleAudioPlaybackPump = (session, delayMs = 0) => {
-    pumpCalls.push({
-      session,
-      delayMs
-    });
-  };
   const stream = Object.assign(new EventEmitter(), {
     destroyed: false,
     writableEnded: false,
@@ -1406,9 +1368,7 @@ test("bindBotAudioStreamLifecycle repairs stream on error when playback demand i
     writableLength: 0,
     destroy(error = null) {
       this.destroyed = true;
-      if (error) {
-        this.emit("error", error);
-      }
+      if (error) this.emit("error", error);
       this.closed = true;
       this.emit("close");
     }
@@ -1416,34 +1376,12 @@ test("bindBotAudioStreamLifecycle repairs stream on error when playback demand i
   const session = createSession({
     botAudioStream: stream,
     botTurnOpen: true,
-    pendingResponse: {
-      requestId: 42
-    },
-    realtimeClient: {
-      isResponseInProgress() {
-        return true;
-      }
-    },
+    pendingResponse: { requestId: 42 },
     audioPlayer: {
-      state: {
-        status: "playing"
-      },
+      state: { status: "playing" },
       play() {}
     },
-    connection: {
-      subscribe() {}
-    },
-    audioPlaybackQueue: {
-      chunks: [Buffer.alloc(DISCORD_PCM_FRAME_BYTES)],
-      headOffset: 0,
-      queuedBytes: DISCORD_PCM_FRAME_BYTES,
-      pumping: false,
-      timer: null,
-      waitingDrain: false,
-      drainHandler: null,
-      lastWarnAt: 0,
-      lastTrimAt: 0
-    }
+    connection: { subscribe() {} }
   });
 
   manager.bindBotAudioStreamLifecycle(session, {
@@ -1452,14 +1390,11 @@ test("bindBotAudioStreamLifecycle repairs stream on error when playback demand i
   });
   stream.destroy(new Error("Premature close"));
 
-  assert.equal(logs.some((entry) => entry?.content === "bot_audio_stream_lifecycle_repair_attempted"), true);
-  assert.equal(logs.some((entry) => entry?.content === "bot_audio_pipeline_restarted"), true);
-  assert.equal(session.botAudioStream === stream, false);
-  assert.equal(pumpCalls.length, 1);
-  assert.equal(pumpCalls[0]?.session, session);
-  assert.equal(pumpCalls[0]?.delayMs, 0);
-  const repairLog = logs.find((entry) => entry?.content === "bot_audio_stream_lifecycle_repair_attempted");
-  assert.equal(repairLog?.metadata?.resumedQueuedPlayback, true);
+  const errorLog = logs.find(
+    (entry) => entry?.content === "bot_audio_stream_lifecycle" && entry?.metadata?.event === "error"
+  );
+  assert.equal(Boolean(errorLog), true);
+  assert.equal(errorLog?.metadata?.error, "Premature close");
 });
 
 test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown", () => {

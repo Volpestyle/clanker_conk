@@ -1,10 +1,8 @@
 import { randomUUID } from "node:crypto";
 import {
   createAudioPlayer,
-  createAudioResource,
   entersState,
   joinVoiceChannel,
-  StreamType,
   VoiceConnectionStatus
 } from "@discordjs/voice";
 import { clamp } from "../utils.ts";
@@ -14,7 +12,6 @@ import { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
 import { ElevenLabsRealtimeClient } from "./elevenLabsRealtimeClient.ts";
 import { getRealtimeConnectErrorDiagnostics } from "./realtimeClientCore.ts";
 import {
-  createBotAudioPlaybackStream,
   SOUNDBOARD_MAX_CANDIDATES,
   isRealtimeMode,
   resolveVoiceAsrLanguageGuidance,
@@ -489,15 +486,11 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         });
 
         const openAiRealtimeSettings = settings.voice?.openaiRealtime || {};
-        const openAiReplyStrategy = manager.resolveRealtimeReplyStrategy({
-          session: { mode: runtimeMode },
-          settings
-        });
         const openAiPerUserAsrBridgeEnabled =
-          openAiReplyStrategy === "brain" && openAiRealtimeSettings.usePerUserAsrBridge !== false;
+          openAiRealtimeSettings.usePerUserAsrBridge !== false;
         const voiceAsrGuidance = resolveVoiceAsrLanguageGuidance(settings);
         openAiPerUserAsrEnabled = openAiPerUserAsrBridgeEnabled;
-        openAiSharedAsrEnabled = openAiReplyStrategy === "brain" && !openAiPerUserAsrBridgeEnabled;
+        openAiSharedAsrEnabled = !openAiPerUserAsrBridgeEnabled;
         openAiPerUserAsrModel = normalizeOpenAiRealtimeTranscriptionModel(
           openAiRealtimeSettings.inputTranscriptionModel,
           OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
@@ -580,11 +573,9 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       await entersState(connection, VoiceConnectionStatus.Ready, 15_000);
 
       audioPlayer = createAudioPlayer();
-      botAudioStream = createBotAudioPlaybackStream();
-      const audioResource = createAudioResource(botAudioStream, {
-        inputType: StreamType.Raw
-      });
-      audioPlayer.play(audioResource);
+      // Don't create stream or play resource yet — ensureBotAudioPlaybackReady
+      // will lazily create the PassThrough + AudioResource when the first audio
+      // chunk arrives, avoiding the negative-timeout timing skew from an idle player.
       connection.subscribe(audioPlayer);
 
       const now = Date.now();
@@ -607,7 +598,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         connection,
         realtimeClient,
         audioPlayer,
-        botAudioStream,
+        botAudioStream: null,
         startedAt: now,
         lastActivityAt: now,
         maxEndsAt: null,
@@ -745,28 +736,16 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         lastOpenAiRealtimeInstructions: "",
         lastOpenAiRealtimeInstructionsAt: 0,
         realtimeInstructionRefreshTimer: null,
+        openAiTurnContextRefreshState: null,
         settingsSnapshot: settings,
-        audioPlaybackQueue: {
-          chunks: [],
-          headOffset: 0,
-          queuedBytes: 0,
-          pumping: false,
-          timer: null,
-          waitingDrain: false,
-          drainHandler: null,
-          lastWarnAt: 0,
-          lastTrimAt: 0
-        },
         cleanupHandlers: [],
         ending: false
       };
 
       manager.sessions.set(guildId, session);
       manager.bindAudioPlayerHandlers(session);
-      manager.bindBotAudioStreamLifecycle(session, {
-        stream: botAudioStream,
-        source: "session_start"
-      });
+      // Stream lifecycle binding deferred — ensureBotAudioPlaybackReady will
+      // create and bind the stream when the first audio chunk needs playback.
       manager.bindSessionHandlers(session, settings);
       if (isRealtimeMode(runtimeMode)) {
         manager.bindRealtimeHandlers(session, settings);

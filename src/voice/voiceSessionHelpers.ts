@@ -6,9 +6,6 @@ import {
 } from "@discordjs/voice";
 import { parseSoundboardReference } from "./soundboardDirector.ts";
 import {
-  AUDIO_PIPELINE_RESTART_RATE_LOG_COOLDOWN_MS,
-  AUDIO_PIPELINE_RESTART_RATE_THRESHOLD,
-  AUDIO_PIPELINE_RESTART_RATE_WINDOW_MS,
   AUDIO_PLAYBACK_STREAM_HIGH_WATER_MARK_BYTES
 } from "./voiceSessionManager.constants.ts";
 import {
@@ -170,183 +167,38 @@ export function parseResponseDoneUsage(event) {
   };
 }
 
-function snapshotBotAudioStreamState(stream) {
-  if (!stream || typeof stream !== "object") {
-    return {
-      exists: false,
-      destroyed: null,
-      writableEnded: null,
-      writableFinished: null,
-      closed: null,
-      writableLength: 0
-    };
-  }
-
-  return {
-    exists: true,
-    destroyed: Boolean(stream.destroyed),
-    writableEnded: Boolean(stream.writableEnded),
-    writableFinished: Boolean(stream.writableFinished),
-    closed: Boolean(stream.closed),
-    writableLength: Math.max(0, Number(stream.writableLength || 0))
-  };
-}
-
 export function ensureBotAudioPlaybackReady({
   session,
-  store,
+  store = null,
   botUserId = null,
-  onStreamCreated = null
+  onStreamCreated = null,
+  activatePlayback = true
 }) {
   if (!session || !session.audioPlayer || !session.connection) return false;
 
-  const maybeLogRestartRateAlarm = (now) => {
-    const restartWindowMs = Math.max(5_000, Number(AUDIO_PIPELINE_RESTART_RATE_WINDOW_MS) || 60_000);
-    const restartThreshold = Math.max(2, Number(AUDIO_PIPELINE_RESTART_RATE_THRESHOLD) || 4);
-    const restartLogCooldownMs = Math.max(
-      5_000,
-      Number(AUDIO_PIPELINE_RESTART_RATE_LOG_COOLDOWN_MS) || 45_000
-    );
-    const restartTimestamps = Array.isArray(session.audioPipelineRestartTimestamps)
-      ? session.audioPipelineRestartTimestamps
-      : [];
-    session.audioPipelineRestartTimestamps = restartTimestamps;
-    restartTimestamps.push(now);
-    const windowStart = now - restartWindowMs;
-    while (restartTimestamps.length > 0 && Number(restartTimestamps[0] || 0) < windowStart) {
-      restartTimestamps.shift();
+  const streamOk = session.botAudioStream
+    && !session.botAudioStream.destroyed
+    && !session.botAudioStream.writableEnded
+    && typeof session.botAudioStream.write === "function";
+
+  if (!streamOk) {
+    const prev = session.botAudioStream;
+    session.botAudioStream = createBotAudioPlaybackStream();
+    if (typeof onStreamCreated === "function") {
+      onStreamCreated(session.botAudioStream, prev);
     }
-    if (restartTimestamps.length < restartThreshold) return;
-    if (now - Number(session.lastAudioPipelineRestartAlarmAt || 0) < restartLogCooldownMs) return;
-    session.lastAudioPipelineRestartAlarmAt = now;
+  }
 
-    store?.logAction?.({
-      kind: "voice_error",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: botUserId,
-      content: "bot_audio_pipeline_restart_rate_high",
-      metadata: {
-        sessionId: session.id,
-        restartCountInWindow: restartTimestamps.length,
-        restartWindowMs,
-        restartThreshold
-      }
-    });
-  };
-
-  const restartAudioPipeline = (reason, extraMetadata = null) => {
-    const now = Date.now();
-    const streamUnavailable =
-      !session.botAudioStream ||
-      session.botAudioStream.destroyed ||
-      session.botAudioStream.writableEnded ||
-      session.botAudioStream.closed;
-    if (now - Number(session.lastAudioPipelineRepairAt || 0) < 600 && !streamUnavailable) {
-      return true;
-    }
-    session.lastAudioPipelineRepairAt = now;
-
-    try {
-      const previousStream = session.botAudioStream || null;
-      let createdReplacementStream = false;
-      if (
-        !session.botAudioStream ||
-        session.botAudioStream.destroyed ||
-        session.botAudioStream.writableEnded ||
-        session.botAudioStream.closed
-      ) {
-        session.botAudioStream = createBotAudioPlaybackStream();
-        createdReplacementStream = true;
-      }
-
-      if (createdReplacementStream) {
-        const queueState =
-          session.audioPlaybackQueue && typeof session.audioPlaybackQueue === "object"
-            ? session.audioPlaybackQueue
-            : null;
-        if (queueState) {
-          if (
-            queueState.waitingDrain &&
-            queueState.drainHandler &&
-            typeof previousStream?.off === "function"
-          ) {
-            try {
-              previousStream.off("drain", queueState.drainHandler);
-            } catch {
-              // ignore
-            }
-          }
-          queueState.waitingDrain = false;
-          queueState.drainHandler = null;
-        }
-      }
-
-      if (createdReplacementStream && typeof onStreamCreated === "function") {
-        onStreamCreated(session.botAudioStream, previousStream);
-      }
-
+  if (activatePlayback) {
+    const status = session.audioPlayer.state?.status;
+    if (status === AudioPlayerStatus.Idle || status === AudioPlayerStatus.AutoPaused) {
       const resource = createAudioResource(session.botAudioStream, {
         inputType: StreamType.Raw
       });
       session.audioPlayer.play(resource);
       session.connection.subscribe(session.audioPlayer);
-      store?.logAction?.({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: botUserId,
-        content: "bot_audio_pipeline_restarted",
-        metadata: {
-          sessionId: session.id,
-          reason,
-          streamState: snapshotBotAudioStreamState(session.botAudioStream),
-          lastStreamLifecycle: session.lastBotAudioStreamLifecycle || null,
-          ...(extraMetadata && typeof extraMetadata === "object" ? extraMetadata : {})
-        }
-      });
-      maybeLogRestartRateAlarm(now);
-      return true;
-    } catch (error) {
-      store?.logAction?.({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: botUserId,
-        content: `bot_audio_pipeline_restart_failed: ${String(error?.message || error)}`,
-        metadata: {
-          sessionId: session.id,
-          reason,
-          streamState: snapshotBotAudioStreamState(session.botAudioStream),
-          lastStreamLifecycle: session.lastBotAudioStreamLifecycle || null,
-          ...(extraMetadata && typeof extraMetadata === "object" ? extraMetadata : {})
-        }
-      });
-      return false;
     }
-  };
-
-  const playerStatus = session.audioPlayer.state?.status || null;
-  if (
-    !session.botAudioStream ||
-    session.botAudioStream.destroyed ||
-    session.botAudioStream.writableEnded ||
-    session.botAudioStream.closed
-  ) {
-    return restartAudioPipeline("stream_unavailable", {
-      streamStateBeforeRestart: snapshotBotAudioStreamState(session.botAudioStream),
-      playerStatus: playerStatus ? String(playerStatus) : null
-    });
   }
-
-  const status = playerStatus;
-  if (status === AudioPlayerStatus.Idle || status === AudioPlayerStatus.AutoPaused) {
-    return restartAudioPipeline(`player_${String(status).toLowerCase()}`, {
-      streamStateBeforeRestart: snapshotBotAudioStreamState(session.botAudioStream),
-      playerStatus: String(status)
-    });
-  }
-
   return true;
 }
 
