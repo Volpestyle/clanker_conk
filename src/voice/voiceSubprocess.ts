@@ -22,7 +22,7 @@ import {
   type VoiceConnection
 } from "@discordjs/voice";
 import { spawn as spawnChild, type ChildProcess } from "node:child_process";
-import { PassThrough } from "node:stream";
+import { Readable } from "node:stream";
 import prism from "prism-media";
 import { convertXaiOutputToDiscordPcm, convertDiscordPcmToXaiInput } from "./pcmAudio.ts";
 
@@ -32,7 +32,7 @@ const AUDIO_DEBUG = !!process.env.AUDIO_DEBUG;
 
 let connection: VoiceConnection | null = null;
 let audioPlayer: AudioPlayer | null = null;
-let botAudioStream: PassThrough | null = null;
+let botAudioStream: PcmJitterBuffer | null = null;
 let adapterMethods: { onVoiceServerUpdate: (data: any) => void; onVoiceStateUpdate: (data: any) => void } | null = null;
 const userSubscriptions = new Map<string, { opusStream: any; decoder: any; pcmStream: any }>();
 let defaultSilenceDurationMs = 700;
@@ -40,12 +40,107 @@ let defaultSilenceDurationMs = 700;
 // Music child processes — tracked for explicit cleanup on stop/skip
 let musicProcesses: { pid: number; kill: () => void }[] = [];
 
-// Silence keep-alive: fills gaps between audio deltas so the AudioPlayer
-// doesn't transition to idle when the PassThrough temporarily has no data.
-let silenceKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
-let lastRealAudioWriteAt = 0;
-const SILENCE_FRAME = Buffer.alloc(3840, 0); // 20ms silence at 48kHz stereo s16le
-const SILENCE_KEEPALIVE_TIMEOUT_MS = 5000; // Stop pumping after 5s of no real audio
+const FRAME_SIZE = 3840; // 20ms at 48kHz stereo s16le
+const SILENCE_FRAME = Buffer.alloc(FRAME_SIZE, 0);
+const SILENCE_TIMEOUT_MS = 5000; // End stream after 5s of no real audio
+
+// --- Pull-based jitter buffer ---
+// Replaces the old PassThrough + setInterval silence pump.
+// The AudioPlayer calls _read() every ~20ms to pull the next frame.
+// When the buffer is empty, it returns silence to keep the player in
+// "playing" state. After SILENCE_TIMEOUT_MS of no real audio, it signals
+// EOF so silencePaddingFrames can produce a clean tail-off.
+
+class PcmJitterBuffer extends Readable {
+  private chunks: Buffer[] = [];
+  private bufferedBytes = 0;
+  private partial: Buffer | null = null; // leftover bytes < one frame
+  private lastPushAt = 0;
+  private idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor() {
+    super({ highWaterMark: FRAME_SIZE * 10 });
+  }
+
+  pushPcm(chunk: Buffer) {
+    this.lastPushAt = Date.now();
+    this.resetIdleTimer();
+
+    // Prepend any leftover partial frame from previous push
+    if (this.partial) {
+      chunk = Buffer.concat([this.partial, chunk]);
+      this.partial = null;
+    }
+
+    // Slice into frame-aligned chunks for clean _read() pulls
+    let offset = 0;
+    while (offset + FRAME_SIZE <= chunk.length) {
+      const frame = chunk.subarray(offset, offset + FRAME_SIZE);
+      this.chunks.push(frame);
+      this.bufferedBytes += FRAME_SIZE;
+      offset += FRAME_SIZE;
+    }
+
+    // Stash any remainder for the next pushPcm call
+    if (offset < chunk.length) {
+      this.partial = Buffer.from(chunk.subarray(offset));
+    }
+  }
+
+  private resetIdleTimer() {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = setTimeout(() => {
+      // No real audio for too long — end the stream gracefully so
+      // silencePaddingFrames can produce a clean tail-off.
+      this.finish();
+    }, SILENCE_TIMEOUT_MS);
+  }
+
+  finish() {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+    // Flush any partial frame padded with silence
+    if (this.partial && this.partial.length > 0) {
+      const padded = Buffer.alloc(FRAME_SIZE, 0);
+      this.partial.copy(padded);
+      this.chunks.push(padded);
+      this.bufferedBytes += FRAME_SIZE;
+      this.partial = null;
+    }
+    // Push remaining buffered frames, then EOF
+    while (this.chunks.length) {
+      const frame = this.chunks.shift()!;
+      this.bufferedBytes -= FRAME_SIZE;
+      if (!this.push(frame)) return; // backpressure — _read will drain the rest
+    }
+    this.push(null);
+  }
+
+  override _read() {
+    if (this.chunks.length) {
+      const frame = this.chunks.shift()!;
+      this.bufferedBytes -= FRAME_SIZE;
+      this.push(frame);
+    } else {
+      // Buffer empty but stream still active — return silence to keep
+      // the AudioPlayer in "playing" state.
+      this.push(SILENCE_FRAME);
+    }
+  }
+
+  override _destroy(err: Error | null, cb: (err: Error | null) => void) {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
+    this.chunks = [];
+    this.bufferedBytes = 0;
+    this.partial = null;
+    cb(err);
+  }
+}
 
 // --- IPC helpers ---
 
@@ -59,38 +154,6 @@ function sendError(message: string) {
   send({ type: "error", message });
 }
 
-// --- Silence keep-alive pump ---
-
-function startSilenceKeepAlive() {
-  if (silenceKeepAliveTimer) return;
-  silenceKeepAliveTimer = setInterval(() => {
-    if (!botAudioStream || botAudioStream.destroyed || botAudioStream.writableEnded) {
-      stopSilenceKeepAlive();
-      return;
-    }
-    const elapsed = Date.now() - lastRealAudioWriteAt;
-    if (elapsed > SILENCE_KEEPALIVE_TIMEOUT_MS) {
-      // No real audio for too long — end the stream gracefully so
-      // silencePaddingFrames can produce a clean tail-off.
-      stopSilenceKeepAlive();
-      try { botAudioStream.end(); } catch { /* ignore */ }
-      return;
-    }
-    // Write silence when there's a gap — keeps the AudioPlayer in "playing"
-    // state so it doesn't transition to buffering mid-stream.
-    if (elapsed > 18) {
-      try { botAudioStream.write(SILENCE_FRAME); } catch { /* ignore */ }
-    }
-  }, 20);
-}
-
-function stopSilenceKeepAlive() {
-  if (silenceKeepAliveTimer) {
-    clearInterval(silenceKeepAliveTimer);
-    silenceKeepAliveTimer = null;
-  }
-}
-
 // --- Audio playback pipeline ---
 
 function killMusicProcesses() {
@@ -101,7 +164,6 @@ function killMusicProcesses() {
 }
 
 function resetPlayback() {
-  stopSilenceKeepAlive();
   // Remove stale .once(Idle) listeners before stopping, so a forced idle
   // transition doesn't fire handlers from the previous track.
   if (audioPlayer) {
@@ -118,17 +180,14 @@ function resetPlayback() {
 }
 
 function ensurePlaybackStream() {
-  if (botAudioStream && !botAudioStream.destroyed && !botAudioStream.writableEnded) return true;
+  if (botAudioStream && !botAudioStream.destroyed && !botAudioStream.readableEnded) return true;
   if (!audioPlayer || !connection) return false;
 
-  botAudioStream = new PassThrough();
-  // Use StreamType.Raw — write 48kHz stereo s16le PCM and let Discord.js
-  // handle Opus encoding internally via prism-media.  A binary PassThrough
-  // is incompatible with StreamType.Opus which expects individual Opus
-  // packets from an object-mode stream.
+  botAudioStream = new PcmJitterBuffer();
   const resource = createAudioResource(botAudioStream, {
     inputType: StreamType.Raw,
-    // Keep the resource alive across gaps between audio deltas (~5s).
+    // After the jitter buffer signals EOF, silencePaddingFrames produces
+    // a clean tail-off instead of an abrupt cut.
     silencePaddingFrames: 250
   });
   audioPlayer.play(resource);
@@ -150,14 +209,11 @@ function handleAudio(pcmBase64: string, sampleRate: number) {
   const discordPcm = convertXaiOutputToDiscordPcm(rawPcm, sampleRate);
   if (!discordPcm.length) return;
 
-  // Ensure stream exists and write raw PCM — Discord.js encodes to Opus.
+  // Ensure stream exists and push PCM into the jitter buffer.
   if (!ensurePlaybackStream()) return;
 
-  lastRealAudioWriteAt = Date.now();
-  startSilenceKeepAlive();
-
-  if (botAudioStream && !botAudioStream.destroyed && !botAudioStream.writableEnded) {
-    botAudioStream.write(discordPcm);
+  if (botAudioStream && !botAudioStream.destroyed && !botAudioStream.readableEnded) {
+    botAudioStream.pushPcm(discordPcm);
   }
 }
 
