@@ -200,6 +200,15 @@ impl DaveManager {
                 self.consecutive_failures = 0;
                 Ok(decrypted)
             }
+            Err(DecryptError::DecryptionFailed(
+                DecryptorDecryptError::UnencryptedWhenPassthroughDisabled,
+            )) => {
+                // Some live sessions can briefly deliver plaintext Opus even while
+                // protocol_version remains non-zero. Treat these frames as passthrough
+                // instead of dropping the user audio stream.
+                self.consecutive_failures = 0;
+                Ok(frame.to_vec())
+            }
             Err(e) => Err(anyhow::anyhow!("decrypt: {:?}", e)),
         }
     }

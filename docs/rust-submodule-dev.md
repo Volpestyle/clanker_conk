@@ -177,7 +177,7 @@ The decoded PCM feeds into the same outbound audio buffer as TTS, so DAVE encryp
 - **Root cause 1**: OP22 (Prepare Transition) was completely ignored — no OP32 response sent. Discord waits for OP32 before sending OP23 (Execute Transition), so transitions stalled and keys diverged.
 - **Root cause 2**: OP30 (Welcome) failure (`AlreadyInGroup`) sent OP32 anyway instead of triggering recovery. discord.js calls `recoverFromInvalidTransition()` which reinits the session and sends OP31 + OP26.
 - **Root cause 3**: No decrypt failure recovery — discord.js tracks consecutive failures and after 36 packets reinitializes the DAVE session.
-- **Fix**: Implemented full transition lifecycle matching discord.js: OP22→OP32 response, OP23 execute, OP29/OP30 with pending transitions and recovery, UDP recv failure tracking with OP31+OP26 reinit.
+- **Fix**: Implemented full transition lifecycle matching discord.js: OP21→OP23 response, OP22 execute, OP29/OP30 with pending transitions and recovery, UDP recv failure tracking with OP31+OP26 reinit.
 
 ### 2026-03-03: OP30 AlreadyInGroup causes WebSocket 4006
 - **Symptom**: After implementing OP30 recovery, Discord closes the WebSocket with `code=4006 reason=Session is no longer valid` immediately after the bot sends OP31+OP26.
@@ -207,6 +207,16 @@ The decoded PCM feeds into the same outbound audio buffer as TTS, so DAVE encryp
 - **Effect 2**: OP22 (`DaveExecuteTransition` with `{transition_id}`) was misinterpreted as PrepareTransition. The bot called `prepare_transition()` with `pv=0` (missing field defaulted) instead of `execute_transition()`. The transition was never finalized.
 - **Effect 3**: The bot was sending OP32 (non-existent opcode) instead of OP23 (`DaveTransitionReady`) to acknowledge transitions. Discord ignored the OP32 and never sent `DaveExecuteTransition` for subsequent transitions.
 - **Fix**: Corrected opcode mapping to match `discord-api-types/voice/v8`: OP21=PrepareTransition, OP22=ExecuteTransition, OP23=TransitionReady (client→server), OP24=PrepareEpoch. Updated all OP32 sends to OP23.
+
+### 2026-03-03: Long-lived call regression — plaintext frames during pv=1
+- **Symptom**: Join/greeting/transcription worked, then after ~20-60s inbound user audio dropped with repeated `UnencryptedWhenPassthroughDisabled` and `no magic marker` logs.
+- **Root cause**: Live sessions can intermittently deliver plaintext Opus frames while the local DAVE session still reports `protocol_version=1`. Strictly treating `UnencryptedWhenPassthroughDisabled` as fatal caused sustained frame drops.
+- **Fix**: In `DaveManager::decrypt`, treat `DecryptorDecryptError::UnencryptedWhenPassthroughDisabled` as passthrough (`Ok(frame.to_vec())`) for pv>0 as well, resetting consecutive failure count.
+
+### 2026-03-03: ASR capture gaps when speaking events are missed
+- **Symptom**: User could speak and davey ratchet logs appeared, but no new `voice_activity_started`/ASR turn followed; session logged `voice_turn_finalized bytesSent=0` and `voice_turn_skipped_empty_capture`.
+- **Root cause**: The JS session manager started captures only from `speaking_start`. In some runs, `user_audio` frames arrived without a matching `speaking_start`, so no capture/ASR bridge was opened.
+- **Fix**: Added a `userAudio` fallback in `voiceSessionManager` that starts capture when audio arrives for a user with no active capture (`voice_capture_started_from_audio_fallback`).
 
 ## Build Commands
 
