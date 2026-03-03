@@ -898,7 +898,7 @@ test("shared ASR hands off to waiting speaker after commit", () => {
     return true;
   };
   manager.scheduleOpenAiSharedAsrSessionIdleClose = () => {};
-  manager.shouldUseOpenAiSharedTranscription = () => true;
+  manager.shouldUseSharedTranscription = () => true;
 
   const session = createSession({
     mode: "openai_realtime",
@@ -949,7 +949,7 @@ test("shared ASR handoff skipped when no waiting captures", () => {
     beginCalls.push(payload);
     return true;
   };
-  manager.shouldUseOpenAiSharedTranscription = () => true;
+  manager.shouldUseSharedTranscription = () => true;
 
   const session = createSession({
     mode: "openai_realtime",
@@ -988,7 +988,7 @@ test("shared ASR handoff skips captures that already had ASR audio", () => {
     return true;
   };
   manager.scheduleOpenAiSharedAsrSessionIdleClose = () => {};
-  manager.shouldUseOpenAiSharedTranscription = () => true;
+  manager.shouldUseSharedTranscription = () => true;
 
   const session = createSession({
     mode: "openai_realtime",
@@ -1045,7 +1045,7 @@ test("shared ASR handoff skips zero-audio captures and selects buffered speaker"
     appendCalls.push(payload);
     return true;
   };
-  manager.shouldUseOpenAiSharedTranscription = () => true;
+  manager.shouldUseSharedTranscription = () => true;
 
   const session = createSession({
     mode: "openai_realtime",
@@ -2053,7 +2053,7 @@ test("reconcileSettings ends blocked sessions and touches allowed sessions", asy
 test("handleVoiceStateUpdate records join/leave membership events and refreshes realtime instructions", async () => {
   const { manager, logs } = createManager();
   const refreshCalls = [];
-  manager.scheduleOpenAiRealtimeInstructionRefresh = (payload) => {
+  manager.scheduleRealtimeInstructionRefresh = (payload) => {
     refreshCalls.push(payload);
   };
 

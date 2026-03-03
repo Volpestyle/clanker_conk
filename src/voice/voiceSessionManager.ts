@@ -9081,6 +9081,10 @@ export class VoiceSessionManager {
   resolveRealtimeReplyStrategy({ session, settings = null }) {
     if (!session || !isRealtimeMode(session.mode)) return "brain";
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    // Prefer new replyPath setting, fall back to legacy realtimeReplyStrategy
+    const replyPath = String(resolvedSettings?.voice?.replyPath || "").trim().toLowerCase();
+    if (replyPath === "native") return "native";
+    if (replyPath === "bridge" || replyPath === "brain") return "brain";
     const configuredStrategy = String(resolvedSettings?.voice?.realtimeReplyStrategy || "")
       .trim()
       .toLowerCase();

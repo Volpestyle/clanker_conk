@@ -2110,12 +2110,12 @@ test("runRealtimeTurn uses brain reply generation when admission allows turn", a
   assert.equal(brainPayloads[0]?.source, "realtime");
 });
 
-test("forwardOpenAiRealtimeTextTurnToBrain does not block on turn-context refresh", async () => {
+test("forwardRealtimeTextTurnToBrain does not block on turn-context refresh", async () => {
   const requestCalls = [];
   let releaseContextRefresh = () => undefined;
   const manager = createManager();
   manager.createTrackedAudioResponse = () => true;
-  manager.prepareOpenAiRealtimeTurnContext = async () => {
+  manager.prepareRealtimeTurnContext = async () => {
     await new Promise((resolve) => {
       releaseContextRefresh = resolve;
     });
@@ -2135,7 +2135,7 @@ test("forwardOpenAiRealtimeTextTurnToBrain does not block on turn-context refres
     settingsSnapshot: baseSettings()
   };
 
-  const forwardCall = manager.forwardOpenAiRealtimeTextTurnToBrain({
+  const forwardCall = manager.forwardRealtimeTextTurnToBrain({
     session,
     settings: session.settingsSnapshot,
     userId: "speaker-1",
@@ -2160,7 +2160,7 @@ test("forwardRealtimeTurnAudio schedules response without waiting for turn-conte
   let releaseContextRefresh = () => undefined;
   let scheduledCalls = 0;
   const manager = createManager();
-  manager.prepareOpenAiRealtimeTurnContext = async () => {
+  manager.prepareRealtimeTurnContext = async () => {
     await new Promise((resolve) => {
       releaseContextRefresh = resolve;
     });
@@ -2207,7 +2207,7 @@ test("smoke: runRealtimeBrainReply passes join-window context into generation", 
     { userId: "speaker-1", displayName: "alice" },
     { userId: "speaker-2", displayName: "bob" }
   ];
-  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => true;
   manager.generateVoiceTurn = async (payload) => {
     generationPayloads.push(payload);
@@ -2300,7 +2300,7 @@ test("runRealtimeBrainReply supersedes stale reply when newer realtime input is 
     candidates: []
   });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => {
     requestedRealtimeUtterances += 1;
     return true;
@@ -2362,7 +2362,7 @@ test("runRealtimeBrainReply ignores raw newer inbound timestamps without queued 
     candidates: []
   });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => {
     requestedRealtimeUtterances += 1;
     return true;
@@ -2420,7 +2420,7 @@ test("runRealtimeBrainReply keeps assertive direct-address reply when queued spe
     { userId: "speaker-1", displayName: "alice" },
     { userId: "speaker-2", displayName: "bob" }
   ];
-  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => {
     requestedRealtimeUtterances += 1;
     return true;
@@ -2490,7 +2490,7 @@ test("runRealtimeBrainReply keeps ALL-target replies when queued speaker cannot 
     { userId: "speaker-1", displayName: "alice" },
     { userId: "speaker-2", displayName: "bob" }
   ];
-  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => {
     requestedRealtimeUtterances += 1;
     return true;
@@ -2561,7 +2561,7 @@ test("runRealtimeBrainReply ignores near-silent queued turns for supersede check
     candidates: []
   });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => {
     requestedRealtimeUtterances += 1;
     return true;
@@ -2624,7 +2624,7 @@ test("runRealtimeBrainReply does not supersede stale playback on active capture 
     candidates: []
   });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => {
     requestedRealtimeUtterances += 1;
     return true;
@@ -2690,7 +2690,7 @@ test("runRealtimeBrainReply supersedes stale playback when a newer finalized rea
     candidates: []
   });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => {
     requestedRealtimeUtterances += 1;
     return true;
@@ -2753,7 +2753,7 @@ test("runRealtimeBrainReply ends VC when model requests leave directive", async 
     candidates: []
   });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => true;
   manager.generateVoiceTurn = async () => ({
     text: "aight, peace out",
@@ -2805,7 +2805,7 @@ test("runRealtimeBrainReply plays inline and trailing soundboard directives in o
     candidates: []
   });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.prepareRealtimeTurnContext = async () => {};
   manager.generateVoiceTurn = async () => ({
     text: "yo [[SOUNDBOARD:airhorn@123]] done",
     soundboardRefs: ["rimshot@456"]
@@ -2863,7 +2863,7 @@ test("runRealtimeBrainReply treats engaged thread turns as non-eager even withou
     candidates: []
   });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.prepareOpenAiRealtimeTurnContext = async () => {};
+  manager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => true;
   manager.generateVoiceTurn = async (payload) => {
     generationPayloads.push(payload);
@@ -3044,7 +3044,7 @@ test("runRealtimeTurn forwards per-user ASR transcript turns into OpenAI room-br
     audioForwardPayloads.push(payload);
     return true;
   };
-  manager.forwardOpenAiRealtimeTextTurnToBrain = async (payload) => {
+  manager.forwardRealtimeTextTurnToBrain = async (payload) => {
     textForwardPayloads.push(payload);
     return true;
   };
@@ -3055,7 +3055,7 @@ test("runRealtimeTurn forwards per-user ASR transcript turns into OpenAI room-br
     textChannelId: "chan-1",
     mode: "openai_realtime",
     ending: false,
-    openAiPerUserAsrEnabled: true,
+    perUserAsrEnabled: true,
     pendingRealtimeInputBytes: 0,
     realtimeClient: {},
     settingsSnapshot: baseSettings({
@@ -3114,7 +3114,7 @@ test("runRealtimeTurn forwards shared ASR transcript turns into OpenAI room-brai
     audioForwardPayloads.push(payload);
     return true;
   };
-  manager.forwardOpenAiRealtimeTextTurnToBrain = async (payload) => {
+  manager.forwardRealtimeTextTurnToBrain = async (payload) => {
     textForwardPayloads.push(payload);
     return true;
   };
@@ -3159,7 +3159,7 @@ test("runRealtimeTurn forwards shared ASR transcript turns into OpenAI room-brai
   assert.equal(audioForwardPayloads.length, 0);
 });
 
-test("shouldUseOpenAiPerUserTranscription follows strategy and setting", () => {
+test("shouldUsePerUserTranscription follows strategy and setting", () => {
   const manager = createManager();
   manager.appConfig.openaiApiKey = "test-key";
 
@@ -3197,20 +3197,20 @@ test("shouldUseOpenAiPerUserTranscription follows strategy and setting", () => {
   };
 
   assert.equal(
-    manager.shouldUseOpenAiPerUserTranscription({ session, settings: bridgeDisabledSettings }),
+    manager.shouldUsePerUserTranscription({ session, settings: bridgeDisabledSettings }),
     false
   );
   assert.equal(
-    manager.shouldUseOpenAiPerUserTranscription({ session, settings: bridgeEnabledSettings }),
+    manager.shouldUsePerUserTranscription({ session, settings: bridgeEnabledSettings }),
     true
   );
   assert.equal(
-    manager.shouldUseOpenAiPerUserTranscription({ session, settings: nativeSettings }),
+    manager.shouldUsePerUserTranscription({ session, settings: nativeSettings }),
     false
   );
 });
 
-test("shouldUseOpenAiSharedTranscription follows strategy and setting", () => {
+test("shouldUseSharedTranscription follows strategy and setting", () => {
   const manager = createManager();
   manager.appConfig.openaiApiKey = "test-key";
 
@@ -3248,15 +3248,15 @@ test("shouldUseOpenAiSharedTranscription follows strategy and setting", () => {
   };
 
   assert.equal(
-    manager.shouldUseOpenAiSharedTranscription({ session, settings: bridgeDisabledSettings }),
+    manager.shouldUseSharedTranscription({ session, settings: bridgeDisabledSettings }),
     true
   );
   assert.equal(
-    manager.shouldUseOpenAiSharedTranscription({ session, settings: bridgeEnabledSettings }),
+    manager.shouldUseSharedTranscription({ session, settings: bridgeEnabledSettings }),
     false
   );
   assert.equal(
-    manager.shouldUseOpenAiSharedTranscription({ session, settings: nativeSettings }),
+    manager.shouldUseSharedTranscription({ session, settings: nativeSettings }),
     false
   );
 });
@@ -4437,7 +4437,7 @@ test("voice decision history deduplicates consecutive identical turns", () => {
   assert.equal(formatted.includes("clanker conk"), true);
 });
 
-test("refreshOpenAiRealtimeTools registers local and MCP tool definitions", async () => {
+test("refreshRealtimeTools registers local and MCP tool definitions", async () => {
   const manager = createManager();
   manager.appConfig.voiceMcpServers = [
     {
@@ -4477,7 +4477,7 @@ test("refreshOpenAiRealtimeTools registers local and MCP tool definitions", asyn
       }
     }
   };
-  await manager.refreshOpenAiRealtimeTools({
+  await manager.refreshRealtimeTools({
     session,
     settings: baseSettings({
       webSearch: {
@@ -4538,7 +4538,7 @@ test("handleOpenAiRealtimeFunctionCallEvent executes music_now_playing and sends
     }
   };
 
-  session.openAiToolDefinitions = manager.buildOpenAiRealtimeFunctionTools({
+  session.openAiToolDefinitions = manager.buildRealtimeFunctionTools({
     session,
     settings: baseSettings({
       webSearch: {

@@ -14,6 +14,7 @@ import {
   resolveVoiceRuntimeMode,
   shortError
 } from "./voiceSessionHelpers.ts";
+import { providerSupports } from "./voiceModes.ts";
 
 const MIN_MAX_SESSION_MINUTES = 1;
 const MAX_MAX_SESSION_MINUTES = 120;
@@ -406,8 +407,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
     let reservedConcurrencySlot = false;
     let realtimeInputSampleRateHz = 24000;
     let realtimeOutputSampleRateHz = 24000;
-    let openAiPerUserAsrEnabled = false;
-    let openAiSharedAsrEnabled = false;
+    let perUserAsrEnabled = false;
+    let sharedAsrEnabled = false;
     let openAiPerUserAsrModel = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
     let openAiPerUserAsrLanguage = "";
     let openAiPerUserAsrPrompt = "";
@@ -487,18 +488,6 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           logger: realtimeRuntimeLogger
         });
 
-        const openAiRealtimeSettings = settings.voice?.openaiRealtime || {};
-        const openAiPerUserAsrBridgeEnabled =
-          openAiRealtimeSettings.usePerUserAsrBridge !== false;
-        const voiceAsrGuidance = resolveVoiceAsrLanguageGuidance(settings);
-        openAiPerUserAsrEnabled = openAiPerUserAsrBridgeEnabled;
-        openAiSharedAsrEnabled = !openAiPerUserAsrBridgeEnabled;
-        openAiPerUserAsrModel = normalizeOpenAiRealtimeTranscriptionModel(
-          openAiRealtimeSettings.inputTranscriptionModel,
-          OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
-        );
-        openAiPerUserAsrLanguage = voiceAsrGuidance.language;
-        openAiPerUserAsrPrompt = voiceAsrGuidance.prompt;
         realtimeInputSampleRateHz = 24000;
         realtimeOutputSampleRateHz = 24000;
         await realtimeClient.connect({
@@ -517,7 +506,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
             ),
           inputTranscriptionLanguage: voiceAsrGuidance.language,
           inputTranscriptionPrompt: voiceAsrGuidance.prompt,
-          tools: manager.buildOpenAiRealtimeFunctionTools({
+          tools: manager.buildRealtimeFunctionTools({
             session: null,
             settings
           }),
@@ -561,6 +550,26 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           inputSampleRateHz: realtimeInputSampleRateHz,
           outputSampleRateHz: realtimeOutputSampleRateHz
         });
+      }
+
+      // --- ASR bridge setup (provider-agnostic) ---
+      // ASR transcription uses OpenAI regardless of the reply provider.
+      // Enable per-user or shared ASR when the provider supports it and
+      // the OpenAI API key is available.
+      if (manager.appConfig?.openaiApiKey && isRealtimeMode(runtimeMode)) {
+        const openAiRealtimeSettings = settings.voice?.openaiRealtime || {};
+        const voiceAsrGuidance = resolveVoiceAsrLanguageGuidance(settings);
+        const usePerUser = providerSupports(runtimeMode, "perUserAsr") &&
+          openAiRealtimeSettings.usePerUserAsrBridge !== false;
+        const useShared = providerSupports(runtimeMode, "sharedAsr") && !usePerUser;
+        perUserAsrEnabled = usePerUser;
+        sharedAsrEnabled = useShared;
+        openAiPerUserAsrModel = normalizeOpenAiRealtimeTranscriptionModel(
+          openAiRealtimeSettings.inputTranscriptionModel,
+          OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
+        );
+        openAiPerUserAsrLanguage = voiceAsrGuidance.language;
+        openAiPerUserAsrPrompt = voiceAsrGuidance.prompt;
       }
 
       // --- Await subprocess that was spawning in parallel with API connect ---
@@ -620,8 +629,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         realtimeTurnDrainActive: false,
         pendingRealtimeTurns: [],
         openAiAsrSessions: new Map(),
-        openAiPerUserAsrEnabled,
-        openAiSharedAsrEnabled,
+        perUserAsrEnabled,
+        sharedAsrEnabled,
         openAiSharedAsrState: null,
         openAiPerUserAsrModel,
         openAiPerUserAsrLanguage,
@@ -731,13 +740,15 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       if (isRealtimeMode(runtimeMode)) {
         manager.bindRealtimeHandlers(session, settings);
       }
-      if (runtimeMode === "openai_realtime") {
-        await manager.refreshOpenAiRealtimeTools({
+      if (providerSupports(runtimeMode, "updateTools")) {
+        await manager.refreshRealtimeTools({
           session,
           settings,
           reason: "session_start"
         });
-        manager.scheduleOpenAiRealtimeInstructionRefresh({
+      }
+      if (providerSupports(runtimeMode, "updateInstructions")) {
+        manager.scheduleRealtimeInstructionRefresh({
           session,
           settings,
           reason: "session_start"
@@ -747,7 +758,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
 
       // Pre-warm per-user ASR WebSocket so the first utterance doesn't
       // pay the ~1-4 s connection cost.
-      if (openAiPerUserAsrEnabled && typeof manager.ensureOpenAiAsrSessionConnected === "function") {
+      if (perUserAsrEnabled && typeof manager.ensureOpenAiAsrSessionConnected === "function") {
         void manager.ensureOpenAiAsrSessionConnected({
           session,
           settings,
