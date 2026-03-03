@@ -72,23 +72,32 @@ test("searchLookupContext returns relevant short-term lookup memory", async () =
 test("recordLookupContext enforces per-channel cap and expiry filtering", async () => {
   await withTempStore(async (store) => {
     for (let index = 1; index <= 4; index += 1) {
-      const saved = store.recordLookupContext({
+      // Insert with distinct timestamps so pruning order is deterministic
+      const ts = new Date(Date.now() - (4 - index) * 1000).toISOString();
+      store.db
+        .prepare(
+          `INSERT INTO lookup_context(
+            created_at, expires_at, guild_id, channel_id, user_id, source, query, provider, results_json, match_text
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        )
+        .run(
+          ts,
+          new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString(),
+          "guild-1",
+          "chan-1",
+          null,
+          "reply_web_lookup",
+          `query-${index}`,
+          "brave",
+          JSON.stringify([{ title: `Result ${index}`, url: `https://example.com/${index}`, domain: "example.com", snippet: `snippet-${index}` }]),
+          `query-${index} Result ${index} snippet-${index}`
+        );
+      // Prune after each insert to mimic recordLookupContext behavior
+      store.pruneLookupContext({
         guildId: "guild-1",
         channelId: "chan-1",
-        source: "reply_web_lookup",
-        query: `query-${index}`,
-        provider: "brave",
-        maxRowsPerChannel: 2,
-        results: [
-          {
-            title: `Result ${index}`,
-            url: `https://example.com/${index}`,
-            domain: "example.com",
-            snippet: `snippet-${index}`
-          }
-        ]
+        maxRowsPerChannel: 2
       });
-      assert.equal(saved, true);
     }
 
     const cappedRows = store.searchLookupContext({

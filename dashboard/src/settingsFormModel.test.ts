@@ -36,9 +36,9 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.personaHardLimits, "no hate\nno hate\nkeep it fun");
   assert.equal(form.provider, "openai");
   assert.equal(form.model, "claude-haiku-4-5");
-  assert.equal(form.voiceGenerationLlmUseTextModel, false);
+  assert.equal(form.voiceGenerationLlmUseTextModel, true);
   assert.equal(form.voiceGenerationLlmProvider, "anthropic");
-  assert.equal(form.voiceGenerationLlmModel, "claude-haiku-4-5");
+  assert.equal(form.voiceGenerationLlmModel, "claude-sonnet-4-6");
   assert.equal(form.replyFollowupMaxToolSteps, 2);
   assert.equal(form.replyFollowupMaxTotalToolCalls, 3);
   assert.equal(form.replyFollowupMaxWebSearchCalls, 2);
@@ -47,9 +47,9 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.replyFollowupToolTimeoutMs, 10000);
   assert.equal(form.voiceThoughtEngineEnabled, true);
   assert.equal(form.voiceThoughtEngineProvider, "anthropic");
-  assert.equal(form.voiceThoughtEngineModel, "claude-haiku-4-5");
-  assert.equal(form.voiceThoughtEngineTemperature, 0.8);
-  assert.equal(form.voiceThoughtEngineEagerness, 0);
+  assert.equal(form.voiceThoughtEngineModel, "claude-sonnet-4-6");
+  assert.equal(form.voiceThoughtEngineTemperature, 1.2);
+  assert.equal(form.voiceThoughtEngineEagerness, 50);
   assert.equal(form.voiceStreamWatchCommentaryPath, "auto");
   assert.equal(form.voiceStreamWatchKeyframeIntervalMs, 1200);
   assert.equal(form.voiceStreamWatchAutonomousCommentaryEnabled, true);
@@ -116,9 +116,9 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.voice.asrLanguageHint, "en-us");
   assert.equal(patch.voice.thoughtEngine.enabled, true);
   assert.equal(patch.voice.thoughtEngine.provider, "anthropic");
-  assert.equal(patch.voice.thoughtEngine.model, "claude-haiku-4-5");
-  assert.equal(patch.voice.thoughtEngine.temperature, 0.8);
-  assert.equal(patch.voice.thoughtEngine.eagerness, 0);
+  assert.equal(patch.voice.thoughtEngine.model, "claude-sonnet-4-6");
+  assert.equal(patch.voice.thoughtEngine.temperature, 1.2);
+  assert.equal(patch.voice.thoughtEngine.eagerness, 50);
 });
 
 test("settingsToForm preserves explicit empty prompt overrides", () => {
@@ -234,7 +234,7 @@ test("settingsFormModel round-trips voice provider and brain provider", () => {
 test("settingsFormModel round-trips elevenlabs realtime settings", () => {
   const form = settingsToForm({
     voice: {
-      mode: "elevenlabs_realtime",
+      voiceProvider: "elevenlabs",
       elevenLabsRealtime: {
         agentId: "agent_123",
         apiBaseUrl: "https://api.elevenlabs.io",

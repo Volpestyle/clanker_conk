@@ -23,6 +23,7 @@
     "test:text-reply:live": "RUN_LIVE_TEXT_REPLY_SMOKE=1 bun test ./src/bot/textReplyDecision.live.smoke.test.ts",
     "test:e2e": "bun test ./tests/e2e",
     "test:e2e:voice": "RUN_E2E_VOICE_PHYSICAL=1 bun test ./tests/e2e/voicePhysicalHarness.test.ts",
+    "test:e2e:text": "RUN_E2E_TEXT=1 bun test ./tests/e2e/textHarness.test.ts",
     "test:coverage": "bun test --coverage ./src ./dashboard/src --test-name-pattern \"^(?!smoke: .*live)\"",
     "test:coverage:check": "bun test --coverage ./src ./dashboard/src --test-name-pattern \"^(?!smoke: .*live)\"",
     "replay:flooding": "bun scripts/floodingReplayHarness.ts --mode recorded",
@@ -42,18 +43,14 @@
     "@anthropic-ai/sdk": "^0.39.0",
     "@discordjs/opus": "^0.10.0",
     "@discordjs/voice": "^0.19.0",
-    "@snazzah/davey": "^0.1.9",
     "discord.js": "^14.18.0",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "openai": "^4.80.0",
-    "opusscript": "^0.0.8",
-    "prism-media": "^1.3.5",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "sqlite-vec": "^0.1.7-alpha.2",
-    "ws": "^8.19.0",
-    "ytdl-core": "^4.11.5"
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.36.0",

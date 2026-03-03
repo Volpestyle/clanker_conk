@@ -157,20 +157,15 @@ test("reply decider lets brain decide short three-word complaint turns", async (
   assert.equal(callCount, 0);
 });
 
-test("reply decider allows same-speaker followup after recent bot reply to direct-addressed speaker", async () => {
-  let callCount = 0;
-  const manager = createManager({
-    generate: async () => {
-      callCount += 1;
-      return { text: "NO" };
-    }
-  });
+test("reply decider lets brain decide same-speaker followup after recent bot reply", async () => {
+  const manager = createManager();
   const decision = await manager.evaluateVoiceReplyDecision({
     session: {
       guildId: "guild-1",
       textChannelId: "chan-1",
       voiceChannelId: "voice-1",
       botTurnOpen: false,
+      mode: "stt_pipeline",
       lastDirectAddressUserId: "speaker-1",
       lastDirectAddressAt: Date.now() - 4_000,
       lastAudioDeltaAt: Date.now() - 4_000
@@ -181,8 +176,7 @@ test("reply decider allows same-speaker followup after recent bot reply to direc
   });
 
   assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "bot_recent_reply_followup");
-  assert.equal(callCount, 0);
+  assert.equal(decision.reason, "brain_decides");
 });
 
 test("reply decider lets brain decide low-signal fragments for recently addressed speaker", async () => {
