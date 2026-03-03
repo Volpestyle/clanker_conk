@@ -6,7 +6,7 @@ mod voice_conn;
 use std::collections::{HashMap, VecDeque};
 use std::io::{self, BufRead, Write};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -314,15 +314,100 @@ impl AudioSendState {
 // Music player (yt-dlp + ffmpeg → raw PCM)
 // ---------------------------------------------------------------------------
 
+#[derive(Debug)]
+enum MusicEvent {
+    Idle,
+    Error(String),
+}
+
+#[derive(Clone, Debug)]
+struct UserCaptureState {
+    sample_rate: u32,
+    silence_duration_ms: u32,
+    stream_active: bool,
+    last_audio_at: Option<time::Instant>,
+}
+
+impl UserCaptureState {
+    fn new(sample_rate: u32, silence_duration_ms: u32) -> Self {
+        Self {
+            sample_rate: normalize_sample_rate(sample_rate),
+            silence_duration_ms: normalize_silence_duration_ms(silence_duration_ms),
+            stream_active: false,
+            last_audio_at: None,
+        }
+    }
+
+    fn touch_audio(&mut self, now: time::Instant) {
+        self.stream_active = true;
+        self.last_audio_at = Some(now);
+    }
+}
+
+fn normalize_sample_rate(sample_rate: u32) -> u32 {
+    sample_rate.clamp(8_000, 48_000)
+}
+
+fn normalize_silence_duration_ms(duration_ms: u32) -> u32 {
+    duration_ms.clamp(100, 5_000)
+}
+
+fn clear_audio_send_buffer(audio_send_state: &Arc<Mutex<Option<AudioSendState>>>) {
+    let mut guard = audio_send_state.lock();
+    if let Some(ref mut state) = *guard {
+        state.clear();
+    }
+}
+
+fn drain_music_pcm_queue(music_pcm_rx: &crossbeam::Receiver<Vec<i16>>) {
+    while music_pcm_rx.try_recv().is_ok() {}
+}
+
+fn emit_playback_armed(reason: &str, audio_send_state: &Arc<Mutex<Option<AudioSendState>>>) {
+    if audio_send_state.lock().is_some() {
+        send_msg(&OutMsg::PlaybackArmed {
+            reason: reason.to_string(),
+        });
+    }
+}
+
+fn start_music_pipeline(
+    url: &str,
+    music_player: &mut Option<MusicPlayer>,
+    music_pcm_rx: &crossbeam::Receiver<Vec<i16>>,
+    music_pcm_tx: &crossbeam::Sender<Vec<i16>>,
+    music_event_tx: &mpsc::Sender<MusicEvent>,
+    audio_send_state: &Arc<Mutex<Option<AudioSendState>>>,
+) {
+    if let Some(ref mut player) = music_player {
+        player.stop();
+    }
+    *music_player = None;
+    drain_music_pcm_queue(music_pcm_rx);
+    clear_audio_send_buffer(audio_send_state);
+    *music_player = Some(MusicPlayer::start(
+        url,
+        music_pcm_tx.clone(),
+        music_event_tx.clone(),
+    ));
+}
+
 struct MusicPlayer {
     stop: Arc<AtomicBool>,
+    child_pid: Arc<AtomicU32>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
 impl MusicPlayer {
-    fn start(url: &str, pcm_tx: crossbeam::Sender<Vec<i16>>) -> Self {
+    fn start(
+        url: &str,
+        pcm_tx: crossbeam::Sender<Vec<i16>>,
+        music_event_tx: mpsc::Sender<MusicEvent>,
+    ) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stop_clone = stop.clone();
+        let child_pid = Arc::new(AtomicU32::new(0));
+        let child_pid_thread = child_pid.clone();
         let url = url.to_string();
 
         let thread = std::thread::spawn(move || {
@@ -341,16 +426,26 @@ impl MusicPlayer {
             let mut child = match child {
                 Ok(c) => c,
                 Err(e) => {
-                    send_msg(&OutMsg::MusicError {
-                        message: format!("yt-dlp/ffmpeg spawn failed: {}", e),
-                    });
+                    let _ = music_event_tx.blocking_send(MusicEvent::Error(format!(
+                        "yt-dlp/ffmpeg spawn failed: {}",
+                        e
+                    )));
                     return;
                 }
             };
+            child_pid_thread.store(child.id(), Ordering::SeqCst);
 
             let stdout = match child.stdout.take() {
                 Some(s) => s,
-                None => return,
+                None => {
+                    let _ = music_event_tx.blocking_send(MusicEvent::Error(
+                        "music pipeline missing stdout".to_string(),
+                    ));
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    child_pid_thread.store(0, Ordering::SeqCst);
+                    return;
+                }
             };
 
             let mut reader = io::BufReader::with_capacity(48000 * 2, stdout); // 0.5s buffer
@@ -375,23 +470,55 @@ impl MusicPlayer {
             }
 
             let _ = child.kill();
-            let _ = child.wait();
+            let wait_result = child.wait();
+            child_pid_thread.store(0, Ordering::SeqCst);
 
             if !stop_clone.load(Ordering::Relaxed) {
-                send_msg(&OutMsg::MusicIdle);
+                match wait_result {
+                    Ok(status) if status.success() => {
+                        let _ = music_event_tx.blocking_send(MusicEvent::Idle);
+                    }
+                    Ok(status) => {
+                        let _ = music_event_tx.blocking_send(MusicEvent::Error(format!(
+                            "music pipeline exited with status {}",
+                            status
+                        )));
+                    }
+                    Err(error) => {
+                        let _ = music_event_tx.blocking_send(MusicEvent::Error(format!(
+                            "music pipeline wait failed: {}",
+                            error
+                        )));
+                    }
+                }
             }
         });
 
         MusicPlayer {
             stop,
+            child_pid,
             thread: Some(thread),
         }
     }
 
     fn stop(&mut self) {
         self.stop.store(true, Ordering::SeqCst);
-        if let Some(t) = self.thread.take() {
-            let _ = t.join();
+        let pid = self.child_pid.load(Ordering::SeqCst);
+        if pid > 0 {
+            let _ = std::process::Command::new("kill")
+                .args(["-TERM", &pid.to_string()])
+                .status();
+        }
+        self.child_pid.store(0, Ordering::SeqCst);
+        if let Some(thread) = self.thread.take() {
+            if thread.is_finished() {
+                let _ = thread.join();
+            } else {
+                // Avoid blocking the async runtime thread on a stuck join.
+                std::thread::spawn(move || {
+                    let _ = thread.join();
+                });
+            }
         }
     }
 }
@@ -408,6 +535,10 @@ impl Drop for MusicPlayer {
 
 #[tokio::main]
 async fn main() {
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls crypto provider");
+
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -475,7 +606,17 @@ async fn main() {
 
     // Music → PCM channel (feeds into audio_send_state)
     let (music_pcm_tx, music_pcm_rx) = crossbeam::bounded::<Vec<i16>>(500);
+    let (music_event_tx, mut music_event_rx) = mpsc::channel::<MusicEvent>(32);
     let mut music_player: Option<MusicPlayer> = None;
+    let mut music_active = false;
+    let mut music_paused = false;
+    let mut active_music_url: Option<String> = None;
+    let mut pending_music_url: Option<String> = None;
+    let mut pending_music_received_at: Option<time::Instant> = None;
+    let mut pending_music_audio_seen = false;
+    let mut pending_music_last_audio_at: Option<time::Instant> = None;
+    let mut pending_music_waiting_for_drain = false;
+    let mut pending_music_drain_started_at: Option<time::Instant> = None;
 
     // Opus decoder for inbound audio (stereo 48kHz)
     let mut opus_decoder =
@@ -484,7 +625,9 @@ async fn main() {
     // SSRC → user_id mapping (mirrored from voice_conn's Speaking events)
     let mut ssrc_map: HashMap<u32, u64> = HashMap::new();
     let mut self_user_id: Option<u64> = None;
-    let mut recv_sample_rate: u32 = 24000;
+    let mut default_recv_sample_rate = default_sample_rate();
+    let mut default_silence_duration_ms = default_silence_duration();
+    let mut user_capture_states: HashMap<u64, UserCaptureState> = HashMap::new();
 
     loop {
         tokio::select! {
@@ -520,13 +663,18 @@ async fn main() {
                     }
 
                     InMsg::VoiceServer { data } => {
-                        if let Some(ep) = data.get("endpoint").and_then(|v| v.as_str()) {
-                            pending_conn.endpoint = Some(ep.to_string());
+                        let ep = data.get("endpoint").and_then(|v| v.as_str()).map(String::from);
+                        let has_token = data.get("token").and_then(|v| v.as_str()).is_some();
+                        info!(
+                            "IPC voice_server: endpoint={:?} token={} connected={}",
+                            ep, if has_token { "present" } else { "missing" }, voice_conn.is_some()
+                        );
+                        if let Some(ref e) = ep {
+                            pending_conn.endpoint = Some(e.clone());
                         }
                         if let Some(tk) = data.get("token").and_then(|v| v.as_str()) {
                             pending_conn.token = Some(tk.to_string());
                         }
-                        debug!("voice_server: endpoint={:?}", pending_conn.endpoint);
                         try_connect(
                             &pending_conn, guild_id, channel_id, self_user_id,
                             &voice_event_tx, &dave, &mut voice_conn, &audio_send_state,
@@ -534,14 +682,34 @@ async fn main() {
                     }
 
                     InMsg::VoiceState { data } => {
-                        if let Some(sid) = data.get("session_id").and_then(|v| v.as_str()) {
-                            pending_conn.session_id = Some(sid.to_string());
+                        let new_sid = data.get("session_id").and_then(|v| v.as_str()).map(String::from);
+                        let old_sid = pending_conn.session_id.clone();
+                        let new_uid = data.get("user_id").and_then(|v| v.as_str()).and_then(|s| s.parse::<u64>().ok());
+                        let new_channel = data.get("channel_id").and_then(|v| v.as_str()).map(String::from);
+                        info!(
+                            "IPC voice_state: session_id={:?} prev_session_id={:?} channel_id={:?} user_id={:?} connected={}",
+                            new_sid, old_sid, new_channel, new_uid, voice_conn.is_some()
+                        );
+
+                        if let Some(ref sid) = new_sid {
+                            // Detect session credential refresh while already connected
+                            if voice_conn.is_some() && old_sid.as_deref() != Some(sid.as_str()) {
+                                warn!(
+                                    "Session ID changed while connected: {:?} -> {:?}, tearing down for reconnect",
+                                    old_sid, new_sid
+                                );
+                                if let Some(ref conn) = voice_conn {
+                                    conn.shutdown();
+                                }
+                                voice_conn = None;
+                                *audio_send_state.lock() = None;
+                            }
+                            pending_conn.session_id = Some(sid.clone());
                         }
-                        if let Some(uid) = data.get("user_id").and_then(|v| v.as_str()).and_then(|s| s.parse::<u64>().ok()) {
+                        if let Some(uid) = new_uid {
                             pending_conn.user_id = Some(uid);
                             self_user_id = Some(uid);
                         }
-                        debug!("voice_state: session_id={:?} user_id={:?}", pending_conn.session_id, self_user_id);
                         try_connect(
                             &pending_conn, guild_id, channel_id, self_user_id,
                             &voice_event_tx, &dave, &mut voice_conn, &audio_send_state,
@@ -549,6 +717,18 @@ async fn main() {
                     }
 
                     InMsg::Audio { pcm_base64, sample_rate } => {
+                        let now = time::Instant::now();
+                        if pending_music_url.is_some() {
+                            pending_music_audio_seen = true;
+                            pending_music_last_audio_at = Some(now);
+                        }
+
+                        // Preserve Node behavior: while music is actively playing,
+                        // drop bot TTS audio deltas instead of mixing streams.
+                        if music_active && !music_paused {
+                            continue;
+                        }
+
                         let engine = base64::engine::general_purpose::STANDARD;
                         if let Ok(raw) = engine.decode(&pcm_base64) {
                             let samples = convert_llm_to_48k_mono(&raw, sample_rate);
@@ -566,37 +746,81 @@ async fn main() {
                             mp.stop();
                         }
                         music_player = None;
+                        music_active = false;
+                        music_paused = false;
+                        active_music_url = None;
+                        pending_music_url = None;
+                        pending_music_received_at = None;
+                        pending_music_audio_seen = false;
+                        pending_music_last_audio_at = None;
+                        pending_music_waiting_for_drain = false;
+                        pending_music_drain_started_at = None;
+                        drain_music_pcm_queue(&music_pcm_rx);
+                        clear_audio_send_buffer(&audio_send_state);
+                        send_msg(&OutMsg::PlayerState {
+                            status: "idle".into(),
+                        });
+                        emit_playback_armed("stop_playback", &audio_send_state);
+                    }
 
-                        let mut guard = audio_send_state.lock();
-                        if let Some(ref mut state) = *guard {
-                            state.clear();
+                    InMsg::SubscribeUser {
+                        user_id,
+                        silence_duration_ms,
+                        sample_rate,
+                    } => {
+                        default_recv_sample_rate = normalize_sample_rate(sample_rate);
+                        default_silence_duration_ms = normalize_silence_duration_ms(silence_duration_ms);
+                        if let Ok(uid) = user_id.parse::<u64>() {
+                            let state = user_capture_states.entry(uid).or_insert_with(|| {
+                                UserCaptureState::new(
+                                    default_recv_sample_rate,
+                                    default_silence_duration_ms,
+                                )
+                            });
+                            state.sample_rate = default_recv_sample_rate;
+                            state.silence_duration_ms = default_silence_duration_ms;
                         }
-                        send_msg(&OutMsg::PlayerState { status: "idle".into() });
                     }
 
-                    InMsg::SubscribeUser { sample_rate, .. } => {
-                        recv_sample_rate = sample_rate;
-                    }
-
-                    InMsg::UnsubscribeUser { .. } => {
-                        // VoiceTick-style capture is always on; filtering is in main process
+                    InMsg::UnsubscribeUser { user_id } => {
+                        if let Ok(uid) = user_id.parse::<u64>() {
+                            if let Some(state) = user_capture_states.remove(&uid) {
+                                if state.stream_active {
+                                    send_msg(&OutMsg::UserAudioEnd {
+                                        user_id: uid.to_string(),
+                                    });
+                                }
+                            }
+                        }
                     }
 
                     InMsg::MusicPlay { url } => {
-                        // Stop existing music
+                        let normalized_url = url.trim().to_string();
+                        if normalized_url.is_empty() {
+                            send_msg(&OutMsg::MusicError {
+                                message: "music_play missing url".to_string(),
+                            });
+                            continue;
+                        }
+
                         if let Some(ref mut mp) = music_player {
                             mp.stop();
                         }
-                        // Clear TTS buffer
-                        {
-                            let mut guard = audio_send_state.lock();
-                            if let Some(ref mut state) = *guard {
-                                state.clear();
-                            }
-                        }
-                        music_player = Some(MusicPlayer::start(&url, music_pcm_tx.clone()));
-                        send_msg(&OutMsg::PlayerState { status: "playing".into() });
-                        info!("music_play url={}", url);
+                        music_player = None;
+                        music_active = false;
+                        music_paused = false;
+                        active_music_url = Some(normalized_url.clone());
+                        pending_music_url = Some(normalized_url.clone());
+                        pending_music_received_at = Some(time::Instant::now());
+                        pending_music_audio_seen = false;
+                        pending_music_last_audio_at = None;
+                        pending_music_waiting_for_drain = false;
+                        pending_music_drain_started_at = None;
+                        drain_music_pcm_queue(&music_pcm_rx);
+                        info!(
+                            "music_play queued pending start url={} (waiting for announcement drain)",
+                            normalized_url
+                        );
                     }
 
                     InMsg::MusicStop => {
@@ -604,18 +828,70 @@ async fn main() {
                             mp.stop();
                         }
                         music_player = None;
+                        music_active = false;
+                        music_paused = false;
+                        active_music_url = None;
+                        pending_music_url = None;
+                        pending_music_received_at = None;
+                        pending_music_audio_seen = false;
+                        pending_music_last_audio_at = None;
+                        pending_music_waiting_for_drain = false;
+                        pending_music_drain_started_at = None;
+                        drain_music_pcm_queue(&music_pcm_rx);
+                        clear_audio_send_buffer(&audio_send_state);
+                        send_msg(&OutMsg::PlayerState {
+                            status: "idle".into(),
+                        });
                         send_msg(&OutMsg::MusicIdle);
+                        emit_playback_armed("music_stop", &audio_send_state);
                     }
 
-                    InMsg::MusicPause | InMsg::MusicResume => {
-                        // yt-dlp piped playback doesn't support pause/resume easily.
-                        // For now, pause = stop.
-                        if matches!(msg, InMsg::MusicPause) {
-                            if let Some(ref mut mp) = music_player {
-                                mp.stop();
-                            }
-                            music_player = None;
-                            send_msg(&OutMsg::PlayerState { status: "paused".into() });
+                    InMsg::MusicPause => {
+                        pending_music_url = None;
+                        pending_music_received_at = None;
+                        pending_music_audio_seen = false;
+                        pending_music_last_audio_at = None;
+                        pending_music_waiting_for_drain = false;
+                        pending_music_drain_started_at = None;
+                        if music_player.is_some() {
+                            music_paused = true;
+                            music_active = false;
+                            clear_audio_send_buffer(&audio_send_state);
+                            send_msg(&OutMsg::PlayerState {
+                                status: "paused".into(),
+                            });
+                            emit_playback_armed("music_pause", &audio_send_state);
+                        }
+                    }
+
+                    InMsg::MusicResume => {
+                        pending_music_url = None;
+                        pending_music_received_at = None;
+                        pending_music_audio_seen = false;
+                        pending_music_last_audio_at = None;
+                        pending_music_waiting_for_drain = false;
+                        pending_music_drain_started_at = None;
+
+                        if music_player.is_some() {
+                            music_paused = false;
+                            music_active = true;
+                            send_msg(&OutMsg::PlayerState {
+                                status: "playing".into(),
+                            });
+                        } else if let Some(url) = active_music_url.clone() {
+                            start_music_pipeline(
+                                &url,
+                                &mut music_player,
+                                &music_pcm_rx,
+                                &music_pcm_tx,
+                                &music_event_tx,
+                                &audio_send_state,
+                            );
+                            music_paused = false;
+                            music_active = true;
+                            send_msg(&OutMsg::PlayerState {
+                                status: "playing".into(),
+                            });
                         }
                     }
 
@@ -656,6 +932,19 @@ async fn main() {
                             continue; // skip bot's own speaking events
                         }
 
+                        let now = time::Instant::now();
+                        let state = user_capture_states.entry(user_id).or_insert_with(|| {
+                            UserCaptureState::new(
+                                default_recv_sample_rate,
+                                default_silence_duration_ms,
+                            )
+                        });
+                        if speaking {
+                            state.touch_audio(now);
+                        } else if state.stream_active && state.last_audio_at.is_none() {
+                            state.last_audio_at = Some(now);
+                        }
+
                         let uid_str = user_id.to_string();
                         if speaking {
                             send_msg(&OutMsg::SpeakingStart { user_id: uid_str });
@@ -667,11 +956,24 @@ async fn main() {
                     VoiceEvent::OpusReceived { ssrc, opus_frame } => {
                         let uid = match ssrc_map.get(&ssrc) {
                             Some(&uid) => uid,
-                            None => continue,
+                            None => {
+                                debug!("Dropped Opus frame from unknown ssrc: {}", ssrc);
+                                continue;
+                            }
                         };
                         if self_user_id == Some(uid) {
                             continue; // skip bot's own audio
                         }
+
+                        let target_sample_rate = user_capture_states
+                            .entry(uid)
+                            .or_insert_with(|| {
+                                UserCaptureState::new(
+                                    default_recv_sample_rate,
+                                    default_silence_duration_ms,
+                                )
+                            })
+                            .sample_rate;
 
                         // Opus decode → stereo i16 48kHz
                         let mut pcm_stereo = vec![0i16; 5760]; // max Opus frame
@@ -686,17 +988,20 @@ async fn main() {
                                 let total_samples = samples_per_channel * 2; // stereo
                                 let decoded = &pcm_stereo[..total_samples];
 
-                                let llm_pcm = convert_decoded_to_llm(decoded, recv_sample_rate);
+                                let llm_pcm = convert_decoded_to_llm(decoded, target_sample_rate);
                                 if !llm_pcm.is_empty() {
                                     let engine = base64::engine::general_purpose::STANDARD;
                                     send_msg(&OutMsg::UserAudio {
                                         user_id: uid.to_string(),
                                         pcm_base64: engine.encode(&llm_pcm),
                                     });
+                                    if let Some(state) = user_capture_states.get_mut(&uid) {
+                                        state.touch_audio(time::Instant::now());
+                                    }
                                 }
                             }
                             Err(e) => {
-                                debug!("Opus decode error for ssrc={}: {:?}", ssrc, e);
+                                error!("Opus decode error for ssrc={}: {:?}", ssrc, e);
                             }
                         }
                     }
@@ -708,6 +1013,20 @@ async fn main() {
                     VoiceEvent::Disconnected { reason } => {
                         warn!("Voice disconnected: {}", reason);
                         send_msg(&OutMsg::ConnectionState { status: "disconnected".into() });
+                        if let Some(ref mut mp) = music_player {
+                            mp.stop();
+                        }
+                        music_player = None;
+                        music_active = false;
+                        music_paused = false;
+                        active_music_url = None;
+                        pending_music_url = None;
+                        pending_music_received_at = None;
+                        pending_music_audio_seen = false;
+                        pending_music_last_audio_at = None;
+                        pending_music_waiting_for_drain = false;
+                        pending_music_drain_started_at = None;
+                        drain_music_pcm_queue(&music_pcm_rx);
                         voice_conn = None;
                         *audio_send_state.lock() = None;
                     }
@@ -719,13 +1038,144 @@ async fn main() {
                 }
             }
 
+            // ---- Music pipeline events (from worker thread) ----
+            Some(event) = music_event_rx.recv() => {
+                match event {
+                    MusicEvent::Idle => {
+                        if let Some(ref mut mp) = music_player {
+                            mp.stop();
+                        }
+                        music_player = None;
+                        music_active = false;
+                        music_paused = false;
+                        drain_music_pcm_queue(&music_pcm_rx);
+                        send_msg(&OutMsg::PlayerState {
+                            status: "idle".into(),
+                        });
+                        send_msg(&OutMsg::MusicIdle);
+                        emit_playback_armed("music_idle", &audio_send_state);
+                    }
+                    MusicEvent::Error(message) => {
+                        if let Some(ref mut mp) = music_player {
+                            mp.stop();
+                        }
+                        music_player = None;
+                        music_active = false;
+                        music_paused = false;
+                        drain_music_pcm_queue(&music_pcm_rx);
+                        send_msg(&OutMsg::MusicError { message });
+                        send_msg(&OutMsg::PlayerState {
+                            status: "idle".into(),
+                        });
+                        emit_playback_armed("music_error", &audio_send_state);
+                    }
+                }
+            }
+
             // ---- 20ms audio send tick ----
             _ = send_interval.tick() => {
-                // Drain music PCM into the audio send buffer
-                while let Ok(chunk) = music_pcm_rx.try_recv() {
-                    let mut guard = audio_send_state.lock();
-                    if let Some(ref mut state) = *guard {
-                        state.push_pcm(chunk);
+                let now = time::Instant::now();
+
+                // Emit user_audio_end when we've had enough silence after
+                // speaking/audio updates. This mirrors Node AfterSilence-driven
+                // stream end semantics used by the main-process turn logic.
+                for (user_id, state) in user_capture_states.iter_mut() {
+                    if !state.stream_active {
+                        continue;
+                    }
+                    let Some(last_audio_at) = state.last_audio_at else {
+                        state.last_audio_at = Some(now);
+                        continue;
+                    };
+                    let silent_for_ms =
+                        now.duration_since(last_audio_at).as_millis() as u64;
+                    if silent_for_ms >= u64::from(state.silence_duration_ms) {
+                        state.stream_active = false;
+                        state.last_audio_at = None;
+                        send_msg(&OutMsg::UserAudioEnd {
+                            user_id: user_id.to_string(),
+                        });
+                    }
+                }
+
+                // Deferred music start: allow announcement audio to complete
+                // before we commit the music pipeline.
+                if let Some(url) = pending_music_url.clone() {
+                    let mut start_music = false;
+                    let mut reason = "pending_unknown";
+                    if let Some(received_at) = pending_music_received_at {
+                        let elapsed_ms = now.duration_since(received_at).as_millis() as u64;
+                        if elapsed_ms > 15_000 {
+                            start_music = true;
+                            reason = "pending_safety_timeout";
+                        } else if !pending_music_audio_seen {
+                            if elapsed_ms > 5_000 {
+                                start_music = true;
+                                reason = "pending_no_announcement_audio";
+                            }
+                        } else {
+                            let last_audio_at = pending_music_last_audio_at.unwrap_or(received_at);
+                            let gap_ms = now.duration_since(last_audio_at).as_millis() as u64;
+                            if !pending_music_waiting_for_drain && gap_ms > 500 {
+                                pending_music_waiting_for_drain = true;
+                                pending_music_drain_started_at = Some(now);
+                            }
+                            if pending_music_waiting_for_drain {
+                                let audio_buffer_empty = {
+                                    let guard = audio_send_state.lock();
+                                    guard
+                                        .as_ref()
+                                        .map_or(true, |state| state.pcm_buffer.is_empty())
+                                };
+                                let drain_elapsed_ms = pending_music_drain_started_at
+                                    .map(|started| now.duration_since(started).as_millis() as u64)
+                                    .unwrap_or(0);
+                                if audio_buffer_empty {
+                                    start_music = true;
+                                    reason = "pending_announcement_drain_complete";
+                                } else if drain_elapsed_ms > 5_000 {
+                                    start_music = true;
+                                    reason = "pending_drain_timeout";
+                                }
+                            }
+                        }
+                    } else {
+                        start_music = true;
+                        reason = "pending_missing_timestamp";
+                    }
+
+                    if start_music {
+                        start_music_pipeline(
+                            &url,
+                            &mut music_player,
+                            &music_pcm_rx,
+                            &music_pcm_tx,
+                            &music_event_tx,
+                            &audio_send_state,
+                        );
+                        pending_music_url = None;
+                        pending_music_received_at = None;
+                        pending_music_audio_seen = false;
+                        pending_music_last_audio_at = None;
+                        pending_music_waiting_for_drain = false;
+                        pending_music_drain_started_at = None;
+                        active_music_url = Some(url.clone());
+                        music_active = true;
+                        music_paused = false;
+                        send_msg(&OutMsg::PlayerState {
+                            status: "playing".into(),
+                        });
+                        info!("music_play committed url={} reason={}", url, reason);
+                    }
+                }
+
+                // Drain music PCM into the audio send buffer only while active.
+                if music_active && !music_paused {
+                    while let Ok(chunk) = music_pcm_rx.try_recv() {
+                        let mut guard = audio_send_state.lock();
+                        if let Some(ref mut state) = *guard {
+                            state.push_pcm(chunk);
+                        }
                     }
                 }
 

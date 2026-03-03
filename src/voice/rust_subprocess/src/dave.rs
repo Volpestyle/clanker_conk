@@ -17,11 +17,11 @@ pub struct CommitResponse {
 }
 
 impl DaveManager {
-    pub fn new(protocol_version: u16, user_id: u64, channel_id: u64) -> Result<Self> {
-        let pv = NonZeroU16::new(protocol_version)
-            .context("DAVE protocol version must be non-zero")?;
+    pub fn new(protocol_version: u16, user_id: u64, channel_id: u64) -> Result<(Self, Vec<u8>)> {
+        let pv =
+            NonZeroU16::new(protocol_version).context("DAVE protocol version must be non-zero")?;
 
-        let session = DaveSession::new(pv, user_id, channel_id, None)
+        let mut session = DaveSession::new(pv, user_id, channel_id, None)
             .map_err(|e| anyhow::anyhow!("DaveSession::new failed: {:?}", e))?;
 
         info!(
@@ -29,12 +29,18 @@ impl DaveManager {
             protocol_version, user_id, channel_id
         );
 
-        Ok(Self {
-            session,
-            ready: false,
-            user_id,
-            channel_id,
-        })
+        let pkg = session.create_key_package()
+            .map_err(|e| anyhow::anyhow!("create_key_package: {:?}", e))?;
+
+        Ok((
+            Self {
+                session,
+                ready: false,
+                user_id,
+                channel_id,
+            },
+            pkg
+        ))
     }
 
     pub fn set_external_sender(&mut self, data: &[u8]) -> Result<()> {

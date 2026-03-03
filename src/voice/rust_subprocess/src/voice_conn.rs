@@ -135,15 +135,23 @@ impl TransportCrypto {
 
     /// Decrypt a received RTP payload.
     /// `packet` is the full UDP datagram, `header_size` is the RTP header length.
-    fn decrypt(&self, packet: &[u8], header_size: usize) -> Result<Vec<u8>> {
-        // Layout: [rtp_header | ciphertext + 16-byte tag | 4-byte BE nonce]
-        if packet.len() < header_size + 4 + 16 {
+    fn decrypt(&self, packet: &[u8], _header_size: usize) -> Result<Vec<u8>> {
+        // Layout: [rtp_header_for_aad | ciphertext + 16-byte tag | 4-byte BE nonce]
+        if packet.len() < 16 + 4 + 16 {
             bail!("Packet too small for transport decryption");
         }
-        let rtp_header = &packet[..header_size];
+        
+        // In "aead_aes256_gcm_rtpsize", the AAD is just the first 12 bytes, 
+        // plus 4 bytes if the extension bit (X) is set.
+        let mut aad_size = 12;
+        if (packet[0] >> 4) & 0x01 != 0 {
+            aad_size += 4;
+        }
+        
+        let rtp_header = &packet[..aad_size];
         let nonce_start = packet.len() - 4;
         let nonce_raw = &packet[nonce_start..];
-        let ct_with_tag = &packet[header_size..nonce_start];
+        let ct_with_tag = &packet[aad_size..nonce_start];
 
         let mut nonce_12 = [0u8; 12];
         nonce_12[0..4].copy_from_slice(nonce_raw);
@@ -204,7 +212,7 @@ pub struct VoiceConnection {
     shutdown: Arc<AtomicBool>,
     udp_socket: Arc<UdpSocket>,
     crypto: Arc<TransportCrypto>,
-    sequence: AtomicU32,
+    rtp_sequence: AtomicU32,
     timestamp: AtomicU32,
 }
 
@@ -220,9 +228,7 @@ impl VoiceConnection {
         event_tx: mpsc::Sender<VoiceEvent>,
         dave: Arc<Mutex<Option<DaveManager>>>,
     ) -> Result<Self> {
-        let ep = endpoint
-            .trim_start_matches("wss://")
-            .trim_end_matches('/');
+        let ep = endpoint.trim_start_matches("wss://").trim_end_matches('/');
         let ws_url = format!("wss://{}/?v=8", ep);
         info!("Connecting voice WS: {}", ws_url);
 
@@ -250,17 +256,21 @@ impl VoiceConnection {
             .await
             .context("Send Identify")?;
 
+        // Handshake overflow buffer: messages that arrive during the handshake
+        // but aren't the target opcode (e.g. DAVE OP21/OP25) get buffered here
+        // and replayed into the ws_read_loop once background tasks are spawned.
+        let mut handshake_overflow: HandshakeOverflow = Vec::new();
+
         // ---- OP2 Ready ----
-        let (ssrc, voice_ip, voice_port, modes) = recv_ready(&mut ws_read).await?;
+        let (ssrc, voice_ip, voice_port, modes) =
+            recv_ready(&mut ws_read, &mut handshake_overflow).await?;
         info!(
             "Voice Ready: ssrc={} udp={}:{} modes={:?}",
             ssrc, voice_ip, voice_port, modes
         );
 
         // ---- UDP socket + IP discovery ----
-        let udp = UdpSocket::bind("0.0.0.0:0")
-            .await
-            .context("UDP bind")?;
+        let udp = UdpSocket::bind("0.0.0.0:0").await.context("UDP bind")?;
         let voice_addr: SocketAddr = format!("{}:{}", voice_ip, voice_port)
             .parse()
             .context("Parse voice UDP addr")?;
@@ -302,15 +312,39 @@ impl VoiceConnection {
             .context("Send Select Protocol")?;
 
         // ---- OP4 Session Description ----
-        let secret_key = recv_session_description(&mut ws_read).await?;
+        let (secret_key, dave_pv) =
+            recv_session_description(&mut ws_read, &mut handshake_overflow).await?;
         let crypto = Arc::new(TransportCrypto::new(&secret_key)?);
         info!("Voice session established, transport crypto ready");
+
+        if dave_pv > 0 {
+            match DaveManager::new(dave_pv, user_id, channel_id) {
+                Ok((dm, pkg)) => {
+                    *dave.lock() = Some(dm);
+                    info!("DaveManager initialized with protocol version {}", dave_pv);
+                    
+                    // Transmit DAVE KeyPackage (`OP26`) to Discord Voice Server
+                    // so the Voice Server will initiate `OP25 ExternalSender`
+                    let mut op26_payload = vec![26u8];
+                    op26_payload.extend_from_slice(&pkg);
+                    ws_write
+                        .send(Message::Binary(op26_payload))
+                        .await
+                        .context("Send DAVE KeyPackage OP26")?;
+                    info!("Sent DAVE OP26 KeyPackage to Discord ({} bytes)", pkg.len());
+                }
+                Err(e) => {
+                    error!("Failed to initialize DaveManager: {}", e);
+                }
+            }
+        }
 
         // ---- Spawn background tasks ----
         let shutdown = Arc::new(AtomicBool::new(false));
         let (ws_cmd_tx, ws_cmd_rx) = mpsc::channel::<WsCommand>(128);
         let udp = Arc::new(udp);
         let ssrc_map: Arc<Mutex<HashMap<u32, u64>>> = Arc::new(Mutex::new(HashMap::new()));
+        let ws_sequence = Arc::new(AtomicU32::new(0));
 
         // WS read loop (handles Speaking updates, DAVE opcodes, etc.)
         {
@@ -319,16 +353,59 @@ impl VoiceConnection {
             let dave = dave.clone();
             let ws_cmd_tx = ws_cmd_tx.clone();
             let ssrc_map = ssrc_map.clone();
+            let ws_sequence = ws_sequence.clone();
+            if !handshake_overflow.is_empty() {
+                info!(
+                    "Replaying {} buffered handshake messages into read loop",
+                    handshake_overflow.len()
+                );
+            }
             tokio::spawn(async move {
-                ws_read_loop(ws_read, event_tx, ws_cmd_tx, dave, ssrc_map, shutdown, user_id, channel_id).await;
+                // Replay messages that arrived during handshake but weren't the target
+                // opcode (critical for DAVE OP21/OP25 Discord may interleave with Ready/Session Description).
+                for (i, msg) in handshake_overflow.into_iter().enumerate() {
+                    match msg {
+                        Message::Text(ref text) => {
+                            if let Ok(v) = serde_json::from_str::<Value>(text) {
+                                let op = v["op"].as_u64().unwrap_or(u64::MAX);
+                                info!("Replay [{}]: Text OP={}", i, op);
+                                let d = &v["d"];
+                                handle_text_opcode(
+                                    op, d, &event_tx, &ws_cmd_tx, &dave, &ssrc_map,
+                                    user_id, channel_id, &ws_sequence,
+                                )
+                                .await;
+                            } else {
+                                info!("Replay [{}]: Invalid Text", i);
+                            }
+                        }
+                        Message::Binary(ref data) if data.len() >= 3 => {
+                            let seq = u16::from_be_bytes([data[0], data[1]]);
+                            let op = data[2];
+                            info!("Replay [{}]: Binary OP={} seq={} len={}", i, op, seq, data.len());
+                            handle_binary_opcode(data, &event_tx, &ws_cmd_tx, &dave).await;
+                        }
+                        Message::Binary(_) => {
+                            info!("Replay [{}]: Empty Binary", i);
+                        }
+                        _ => {
+                            info!("Replay [{}]: Other message type", i);
+                        }
+                    }
+                }
+                ws_read_loop(
+                    ws_read, event_tx, ws_cmd_tx, dave, ssrc_map, shutdown, user_id, channel_id, ws_sequence,
+                )
+                .await;
             });
         }
 
         // WS write loop (heartbeat + outgoing commands)
         {
             let shutdown = shutdown.clone();
+            let ws_sequence = ws_sequence.clone();
             tokio::spawn(async move {
-                ws_write_loop(ws_write, ws_cmd_rx, shutdown, heartbeat_interval).await;
+                ws_write_loop(ws_write, ws_cmd_rx, shutdown, heartbeat_interval, ws_sequence).await;
             });
         }
 
@@ -349,9 +426,12 @@ impl VoiceConnection {
         let _ = ws_cmd_tx
             .send(WsCommand::SendJson(json!({
                 "op": 5,
-                "d": { "speaking": 5, "delay": 0, "ssrc": ssrc }
+                "d": { "speaking": 1, "delay": 0, "ssrc": ssrc }
             })))
             .await;
+
+        // Signal ready to the main loop
+        let _ = event_tx.send(VoiceEvent::Ready { ssrc }).await;
 
         Ok(VoiceConnection {
             ws_cmd_tx,
@@ -359,7 +439,7 @@ impl VoiceConnection {
             shutdown,
             udp_socket: udp,
             crypto,
-            sequence: AtomicU32::new(0),
+            rtp_sequence: AtomicU32::new(0),
             timestamp: AtomicU32::new(0),
         })
     }
@@ -367,7 +447,7 @@ impl VoiceConnection {
     /// Build an RTP packet, transport-encrypt, and send via UDP.
     /// `opus_payload` should already be DAVE-encrypted if DAVE is active.
     pub async fn send_rtp_frame(&self, opus_payload: &[u8]) -> Result<()> {
-        let seq = self.sequence.fetch_add(1, Ordering::SeqCst) as u16;
+        let seq = self.rtp_sequence.fetch_add(1, Ordering::SeqCst) as u16;
         let ts = self.timestamp.fetch_add(960, Ordering::SeqCst); // 20ms @ 48kHz
         let header = build_rtp_header(seq, ts, self.ssrc);
 
@@ -377,15 +457,12 @@ impl VoiceConnection {
         packet.extend_from_slice(&header);
         packet.extend_from_slice(&encrypted);
 
-        self.udp_socket
-            .send(&packet)
-            .await
-            .context("UDP send")?;
+        self.udp_socket.send(&packet).await.context("UDP send")?;
         Ok(())
     }
 
     pub async fn set_speaking(&self, speaking: bool) {
-        let flags: u32 = if speaking { 5 } else { 0 }; // MICROPHONE | PRIORITY
+        let flags: u32 = if speaking { 1 } else { 0 }; // MICROPHONE
         let _ = self
             .ws_cmd_tx
             .send(WsCommand::SendJson(json!({
@@ -403,6 +480,12 @@ impl VoiceConnection {
 // ---------------------------------------------------------------------------
 // Handshake helpers (synchronous WS reads during connect)
 // ---------------------------------------------------------------------------
+
+/// Messages received during the handshake that weren't the target opcode.
+/// These are buffered and replayed into the ws_read_loop so DAVE opcodes
+/// (OP21 text, OP25/27/29/30 binary) that arrive between Ready and Session
+/// Description aren't silently dropped.
+type HandshakeOverflow = Vec<Message>;
 
 async fn recv_hello(
     ws: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
@@ -425,6 +508,7 @@ async fn recv_hello(
 
 async fn recv_ready(
     ws: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
+    overflow: &mut HandshakeOverflow,
 ) -> Result<(u32, String, u16, Vec<String>)> {
     let deadline = time::Instant::now() + Duration::from_secs(10);
     loop {
@@ -433,28 +517,42 @@ async fn recv_ready(
             .context("Timeout waiting for OP2 Ready")?
             .context("WS stream ended")?
             .context("WS error")?;
-        if let Message::Text(text) = msg {
-            let v: Value = serde_json::from_str(&text)?;
-            if v["op"].as_u64() == Some(2) {
-                let d = &v["d"];
-                let ssrc = d["ssrc"].as_u64().context("missing ssrc")? as u32;
-                let ip = d["ip"].as_str().context("missing ip")?.to_string();
-                let port = d["port"].as_u64().context("missing port")? as u16;
-                let modes: Vec<String> = d["modes"]
-                    .as_array()
-                    .context("missing modes")?
-                    .iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect();
-                return Ok((ssrc, ip, port, modes));
+        match &msg {
+            Message::Text(text) => {
+                let v: Value = serde_json::from_str(text)?;
+                if v["op"].as_u64() == Some(2) {
+                    let d = &v["d"];
+                    let ssrc = d["ssrc"].as_u64().context("missing ssrc")? as u32;
+                    let ip = d["ip"].as_str().context("missing ip")?.to_string();
+                    let port = d["port"].as_u64().context("missing port")? as u16;
+                    let modes: Vec<String> = d["modes"]
+                        .as_array()
+                        .context("missing modes")?
+                        .iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect();
+                    return Ok((ssrc, ip, port, modes));
+                }
+                debug!("Handshake (waiting OP2): buffered text op={}", v["op"]);
+                overflow.push(msg);
             }
+            Message::Binary(data) => {
+                debug!(
+                    "Handshake (waiting OP2): buffered binary opcode={} ({} bytes)",
+                    data.first().copied().unwrap_or(0),
+                    data.len()
+                );
+                overflow.push(msg);
+            }
+            _ => {}
         }
     }
 }
 
 async fn recv_session_description(
     ws: &mut (impl StreamExt<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin),
-) -> Result<Vec<u8>> {
+    overflow: &mut HandshakeOverflow,
+) -> Result<(Vec<u8>, u16)> {
     let deadline = time::Instant::now() + Duration::from_secs(10);
     loop {
         let msg = time::timeout_at(deadline, ws.next())
@@ -462,17 +560,31 @@ async fn recv_session_description(
             .context("Timeout waiting for OP4 Session Description")?
             .context("WS stream ended")?
             .context("WS error")?;
-        if let Message::Text(text) = msg {
-            let v: Value = serde_json::from_str(&text)?;
-            if v["op"].as_u64() == Some(4) {
-                let key: Vec<u8> = v["d"]["secret_key"]
-                    .as_array()
-                    .context("missing secret_key")?
-                    .iter()
-                    .map(|b| b.as_u64().unwrap_or(0) as u8)
-                    .collect();
-                return Ok(key);
+        match &msg {
+            Message::Text(text) => {
+                let v: Value = serde_json::from_str(text)?;
+                if v["op"].as_u64() == Some(4) {
+                    let key: Vec<u8> = v["d"]["secret_key"]
+                        .as_array()
+                        .context("missing secret_key")?
+                        .iter()
+                        .map(|b| b.as_u64().unwrap_or(0) as u8)
+                        .collect();
+                    let dave_pv = v["d"]["dave_protocol_version"].as_u64().unwrap_or(0) as u16;
+                    return Ok((key, dave_pv));
+                }
+                debug!("Handshake (waiting OP4): buffered text op={}", v["op"]);
+                overflow.push(msg);
             }
+            Message::Binary(data) => {
+                debug!(
+                    "Handshake (waiting OP4): buffered binary opcode={} ({} bytes)",
+                    data.first().copied().unwrap_or(0),
+                    data.len()
+                );
+                overflow.push(msg);
+            }
+            _ => {}
         }
     }
 }
@@ -481,6 +593,7 @@ async fn recv_session_description(
 // Background tasks
 // ---------------------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 async fn ws_read_loop(
     mut ws_read: futures_util::stream::SplitStream<WsStream>,
     event_tx: mpsc::Sender<VoiceEvent>,
@@ -490,6 +603,7 @@ async fn ws_read_loop(
     shutdown: Arc<AtomicBool>,
     bot_user_id: u64,
     channel_id: u64,
+    ws_sequence: Arc<AtomicU32>,
 ) {
     while let Some(msg) = ws_read.next().await {
         if shutdown.load(Ordering::Relaxed) {
@@ -501,10 +615,24 @@ async fn ws_read_loop(
                     Ok(v) => v,
                     Err(_) => continue,
                 };
+                
+                // Track WebSocket sequence numbers for OP3 Heartbeat
+                if let Some(s) = v["seq"].as_u64() {
+                    ws_sequence.store(s as u32, Ordering::Relaxed);
+                }
+
                 let op = v["op"].as_u64().unwrap_or(u64::MAX);
                 let d = &v["d"];
                 handle_text_opcode(
-                    op, d, &event_tx, &ws_cmd_tx, &dave, &ssrc_map, bot_user_id, channel_id,
+                    op,
+                    d,
+                    &event_tx,
+                    &ws_cmd_tx,
+                    &dave,
+                    &ssrc_map,
+                    bot_user_id,
+                    channel_id,
+                    &ws_sequence,
                 )
                 .await;
             }
@@ -514,11 +642,17 @@ async fn ws_read_loop(
                 }
                 handle_binary_opcode(&data, &event_tx, &ws_cmd_tx, &dave).await;
             }
-            Ok(Message::Close(_)) => {
+            Ok(Message::Close(frame)) => {
+                let reason = match frame {
+                    Some(cf) => format!(
+                        "WebSocket closed by server: code={} reason={}",
+                        cf.code, cf.reason
+                    ),
+                    None => "WebSocket closed by server (no close frame)".into(),
+                };
+                warn!("{}", reason);
                 let _ = event_tx
-                    .send(VoiceEvent::Disconnected {
-                        reason: "WebSocket closed by server".into(),
-                    })
+                    .send(VoiceEvent::Disconnected { reason })
                     .await;
                 break;
             }
@@ -541,11 +675,12 @@ async fn handle_text_opcode(
     op: u64,
     d: &Value,
     event_tx: &mpsc::Sender<VoiceEvent>,
-    _ws_cmd_tx: &mpsc::Sender<WsCommand>,
+    ws_cmd_tx: &mpsc::Sender<WsCommand>,
     dave: &Arc<Mutex<Option<DaveManager>>>,
     ssrc_map: &Arc<Mutex<HashMap<u32, u64>>>,
     bot_user_id: u64,
     channel_id: u64,
+    _ws_sequence: &Arc<AtomicU32>,
 ) {
     match op {
         // Heartbeat ACK
@@ -573,10 +708,7 @@ async fn handle_text_opcode(
         }
         // Client disconnect
         12 => {
-            if let Some(uid) = d["user_id"]
-                .as_str()
-                .and_then(|s| s.parse::<u64>().ok())
-            {
+            if let Some(uid) = d["user_id"].as_str().and_then(|s| s.parse::<u64>().ok()) {
                 ssrc_map.lock().retain(|_, v| *v != uid);
             }
         }
@@ -587,12 +719,30 @@ async fn handle_text_opcode(
             info!("DAVE: prepare epoch pv={} epoch={}", pv, epoch);
 
             if pv > 0 {
-                let mut guard = dave.lock();
-                if guard.is_none() {
-                    match DaveManager::new(pv, bot_user_id, channel_id) {
-                        Ok(dm) => *guard = Some(dm),
-                        Err(e) => error!("Failed to create DaveManager: {}", e),
+                let pkg_to_send = {
+                    let mut guard = dave.lock();
+                    if guard.is_none() {
+                        match DaveManager::new(pv, bot_user_id, channel_id) {
+                            Ok((dm, pkg)) => {
+                                *guard = Some(dm);
+                                Some(pkg)
+                            }
+                            Err(e) => {
+                                error!("Failed to create DaveManager: {}", e);
+                                None
+                            }
+                        }
+                    } else {
+                        None
                     }
+                };
+
+                // Now that the MutexGuard is fully dropped, send the payload if we have one
+                if let Some(pkg) = pkg_to_send {
+                    let mut op26_payload = vec![26u8];
+                    op26_payload.extend_from_slice(&pkg);
+                    let _ = ws_cmd_tx.send(WsCommand::SendBinary(op26_payload)).await;
+                    info!("OP21: Sent DAVE OP26 KeyPackage to Discord ({} bytes)", pkg.len());
                 }
             }
         }
@@ -623,14 +773,25 @@ async fn handle_binary_opcode(
     ws_cmd_tx: &mpsc::Sender<WsCommand>,
     dave: &Arc<Mutex<Option<DaveManager>>>,
 ) {
-    // Binary frames: first byte is the opcode, rest is payload
-    let opcode = data[0];
-    let payload = &data[1..];
+    // Incoming binary frames from Discord Voice WebSocket have the format:
+    // [ seq (2 bytes, BE) | opcode (1 byte) | payload (N bytes) ]
+    if data.len() < 3 {
+        warn!("Received truncated binary frame (len {})", data.len());
+        return;
+    }
+
+    let seq = u16::from_be_bytes([data[0], data[1]]);
+    let opcode = data[2];
+    let payload = &data[3..];
+    info!("Handling binary opcode: {} (seq: {})", opcode, seq);
 
     match opcode {
         // OP25: MLS External Sender Package (server → client)
         25 => {
-            debug!("DAVE binary OP25: external sender ({} bytes)", payload.len());
+            info!(
+                "DAVE binary OP25: external sender ({} bytes)",
+                payload.len()
+            );
             let response = {
                 let mut guard = dave.lock();
                 if let Some(ref mut dm) = *guard {
@@ -660,15 +821,25 @@ async fn handle_binary_opcode(
         }
         // OP27: MLS Proposals (server → client)
         27 => {
-            debug!("DAVE binary OP27: proposals ({} bytes)", payload.len());
+            if payload.len() < 1 {
+                warn!("DAVE binary OP27: truncated payload");
+                return;
+            }
+            let optype = payload[0];
+            let proposals_payload = &payload[1..];
+            info!("DAVE binary OP27: proposals (optype: {}, {} bytes)", optype, proposals_payload.len());
+            
+            let operation = if optype == 0 {
+                davey::ProposalsOperationType::APPEND
+            } else {
+                davey::ProposalsOperationType::REVOKE
+            };
+
             let response = {
                 let mut guard = dave.lock();
                 if let Some(ref mut dm) = *guard {
-                    match dm.process_proposals(
-                        davey::ProposalsOperationType::APPEND,
-                        payload,
-                        None,
-                    ) {
+                    match dm.process_proposals(operation, proposals_payload, None)
+                    {
                         Ok(Some(cr)) => Some(cr.data),
                         Ok(None) => {
                             debug!("DAVE: no commit needed for proposals");
@@ -693,11 +864,22 @@ async fn handle_binary_opcode(
         }
         // OP29: MLS Announce Commit Transition (server → client)
         29 => {
-            debug!("DAVE binary OP29: announce commit ({} bytes)", payload.len());
+            if payload.len() < 2 {
+                warn!("DAVE binary OP29: truncated payload");
+                return;
+            }
+            let transition_id = u16::from_be_bytes([payload[0], payload[1]]);
+            let commit_payload = &payload[2..];
+            
+            info!(
+                "DAVE binary OP29: announce commit (transition_id: {}, {} bytes)",
+                transition_id,
+                commit_payload.len()
+            );
             let ready = {
                 let mut guard = dave.lock();
                 if let Some(ref mut dm) = *guard {
-                    if let Err(e) = dm.process_commit(payload) {
+                    if let Err(e) = dm.process_commit(commit_payload) {
                         error!("DAVE process_commit: {}", e);
                     }
                     dm.is_ready()
@@ -705,17 +887,35 @@ async fn handle_binary_opcode(
                     false
                 }
             };
+            
+            // Send transition ready
+            let payload = serde_json::json!({
+                "op": 32, // DaveTransitionReady
+                "d": {
+                    "transition_id": transition_id
+                }
+            });
+            let _ = ws_cmd_tx.send(WsCommand::SendJson(payload)).await;
+            debug!("DAVE: sent transition ready OP32 for transition {}", transition_id);
+            
             if ready {
                 let _ = event_tx.send(VoiceEvent::DaveReady).await;
             }
         }
         // OP30: MLS Welcome (server → client)
         30 => {
-            debug!("DAVE binary OP30: welcome ({} bytes)", payload.len());
+            if payload.len() < 2 {
+                warn!("DAVE binary OP30: truncated payload");
+                return;
+            }
+            let transition_id = u16::from_be_bytes([payload[0], payload[1]]);
+            let welcome_payload = &payload[2..];
+
+            info!("DAVE binary OP30: welcome (transition_id: {}, {} bytes)", transition_id, welcome_payload.len());
             let ready = {
                 let mut guard = dave.lock();
                 if let Some(ref mut dm) = *guard {
-                    if let Err(e) = dm.process_welcome(payload) {
+                    if let Err(e) = dm.process_welcome(welcome_payload) {
                         error!("DAVE process_welcome: {}", e);
                     }
                     dm.is_ready()
@@ -723,6 +923,17 @@ async fn handle_binary_opcode(
                     false
                 }
             };
+            
+            // Send transition ready
+            let payload = serde_json::json!({
+                "op": 32, // DaveTransitionReady
+                "d": {
+                    "transition_id": transition_id
+                }
+            });
+            let _ = ws_cmd_tx.send(WsCommand::SendJson(payload)).await;
+            debug!("DAVE: sent transition ready OP32 for transition {}", transition_id);
+
             if ready {
                 let _ = event_tx.send(VoiceEvent::DaveReady).await;
             }
@@ -749,10 +960,13 @@ async fn ws_write_loop(
     mut cmd_rx: mpsc::Receiver<WsCommand>,
     shutdown: Arc<AtomicBool>,
     heartbeat_interval_ms: f64,
+    ws_sequence: Arc<AtomicU32>,
 ) {
     let hb_dur = Duration::from_millis(heartbeat_interval_ms as u64);
     let mut hb_interval = time::interval(hb_dur);
-    hb_interval.tick().await; // consume immediate first tick
+    // Consume first immediate tick so we don't send a heartbeat instantly.
+    // Discord expects the first heartbeat after heartbeat_interval * jitter.
+    hb_interval.tick().await;
 
     loop {
         tokio::select! {
@@ -762,7 +976,17 @@ async fn ws_write_loop(
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_millis() as u64;
-                let hb = json!({ "op": 3, "d": ts });
+                
+                // Read the latest sequence from the AtomicU32 shared state, defaulting to 0 if not set yet.
+                let seq = ws_sequence.load(Ordering::Relaxed);
+                
+                let hb = json!({ 
+                    "op": 3, 
+                    "d": {
+                        "t": ts,
+                        "seq_ack": seq
+                    }
+                });
                 if ws_write.send(Message::Text(hb.to_string())).await.is_err() {
                     break;
                 }
@@ -802,19 +1026,40 @@ async fn udp_recv_loop(
         }
         let n = match socket.recv(&mut buf).await {
             Ok(n) => n,
-            Err(_) => continue,
+            Err(e) => {
+                debug!("UDP recv error: {}", e);
+                continue;
+            }
         };
         let packet = &buf[..n];
 
         let (_seq, _ts, ssrc, header_size) = match parse_rtp_header(packet) {
             Some(h) => h,
-            None => continue,
+            None => {
+                debug!("UDP drop: failed to parse RTP header");
+                continue;
+            }
         };
 
         // Transport decrypt
-        let opus_or_dave = match crypto.decrypt(packet, header_size) {
+        let decrypted = match crypto.decrypt(packet, header_size) {
             Ok(p) => p,
-            Err(_) => continue, // silently drop corrupt packets
+            Err(e) => {
+                debug!("UDP drop: Transport crypto decrypt failed: {}", e);
+                continue;
+            }
+        };
+
+        // In aead_aes256_gcm_rtpsize, the RTP extension DATA is encrypted
+        // alongside the opus payload. The AAD only covers the first 12 bytes
+        // (or 16 if X bit set). So the decrypted result starts with
+        // (header_size - aad_size) bytes of extension data we must skip.
+        let aad_size: usize = if (packet[0] >> 4) & 0x01 != 0 { 16 } else { 12 };
+        let ext_data_len = header_size.saturating_sub(aad_size);
+        let opus_or_dave = if ext_data_len > 0 && decrypted.len() > ext_data_len {
+            decrypted[ext_data_len..].to_vec()
+        } else {
+            decrypted
         };
 
         // DAVE decrypt (if session active)
@@ -822,7 +1067,17 @@ async fn udp_recv_loop(
         let opus_frame = if let Some(uid) = user_id {
             let mut guard = dave.lock();
             if let Some(ref mut dm) = *guard {
-                dm.decrypt(uid, &opus_or_dave).unwrap_or(opus_or_dave)
+                if dm.is_ready() {
+                    match dm.decrypt(uid, &opus_or_dave) {
+                        Ok(decrypted) => decrypted,
+                        Err(e) => {
+                            debug!("UDP drop: DAVE decrypt failed for {}: {}", uid, e);
+                            opus_or_dave
+                        }
+                    }
+                } else {
+                    opus_or_dave
+                }
             } else {
                 opus_or_dave
             }
