@@ -9337,6 +9337,43 @@ export class VoiceSessionManager {
       return;
     }
 
+    // Guard: ASR bridge was active but returned empty → PCM fallback produced transcript
+    // This catches hallucinations from non-speech audio (coughs, throat clears, mic bumps)
+    // where the ASR buffer race caused empty commit and gpt-4o-transcribe hallucinated.
+    const asrBridgeWasActive = session.perUserAsrEnabled || session.sharedAsrEnabled;
+    if (
+      asrBridgeWasActive &&
+      !hasTranscriptOverride &&
+      turnTranscript &&
+      clipDurationMs > 0 &&
+      clipDurationMs <= VOICE_FALLBACK_NOISE_GATE_MAX_CLIP_MS &&
+      silenceGate.rms <= VOICE_FALLBACK_NOISE_GATE_RMS_MAX &&
+      silenceGate.peak <= VOICE_FALLBACK_NOISE_GATE_PEAK_MAX &&
+      silenceGate.activeSampleRatio <= VOICE_FALLBACK_NOISE_GATE_ACTIVE_RATIO_MAX
+    ) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "voice_turn_dropped_asr_bridge_fallback_hallucination",
+        metadata: {
+          sessionId: session.id,
+          source: "realtime",
+          captureReason: String(captureReason || "stream_end"),
+          transcript: turnTranscript,
+          clipDurationMs,
+          rms: Number(silenceGate.rms.toFixed(6)),
+          peak: Number(silenceGate.peak.toFixed(6)),
+          activeSampleRatio: Number(silenceGate.activeSampleRatio.toFixed(6)),
+          transcriptionModelPrimary: transcriptionPlan.primaryModel,
+          transcriptionModelFallback: resolvedFallbackModel || null,
+          hasTranscriptOverride
+        }
+      });
+      return;
+    }
+
     const isNonSpeechCapture =
       String(captureReason || "") === "idle_timeout" ||
       String(captureReason || "") === "near_silence_early_abort";
