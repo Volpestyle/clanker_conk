@@ -148,6 +148,8 @@ export class XaiRealtimeClient extends EventEmitter {
     });
   }
 
+  _responseInProgress = false;
+
   handleIncoming(payload) {
     let event = null;
 
@@ -165,6 +167,10 @@ export class XaiRealtimeClient extends EventEmitter {
       this.sessionId = event.session?.id || this.sessionId;
       this.log("info", "xai_realtime_session_created", { sessionId: this.sessionId });
       return;
+    }
+
+    if (event.type === "response.created") {
+      this._responseInProgress = true;
     }
 
     if (event.type === "error") {
@@ -222,6 +228,7 @@ export class XaiRealtimeClient extends EventEmitter {
     }
 
     if (event.type === "response.done") {
+      this._responseInProgress = false;
       this.emit("response_done", event);
     }
   }
@@ -283,6 +290,24 @@ export class XaiRealtimeClient extends EventEmitter {
       }
     });
     this.createAudioResponse();
+  }
+
+  updateInstructions(instructions: string) {
+    this.send({
+      type: "session.update",
+      session: { instructions }
+    });
+  }
+
+  updateTools(tools: Array<{ type: string; name: string; description: string; parameters: object }>) {
+    this.send({
+      type: "session.update",
+      session: { tools }
+    });
+  }
+
+  isResponseInProgress(): boolean {
+    return this._responseInProgress;
   }
 
   send(payload) {

@@ -350,6 +350,8 @@ export class GeminiRealtimeClient extends EventEmitter {
     });
   }
 
+  // Gemini Live API does not support mid-session instruction updates over WS.
+  // This stores the instructions locally so they're used on next reconnect/setup.
   updateInstructions(instructions = "") {
     if (!this.sessionConfig || typeof this.sessionConfig !== "object") {
       throw new Error("Gemini realtime session config is not initialized.");
