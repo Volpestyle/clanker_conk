@@ -9717,6 +9717,19 @@ export class VoiceSessionManager {
     );
     if (!labeledTranscript) return false;
 
+    // Cancel any in-flight response so the model sees all user messages and
+    // generates a single contextual reply instead of queuing separate responses.
+    if (this.isOpenAiRealtimeResponseActive(session)) {
+      try {
+        const cancel = session.realtimeClient?.cancelActiveResponse;
+        if (typeof cancel === "function") {
+          cancel.call(session.realtimeClient);
+        }
+      } catch { /* best-effort */ }
+      try { session.subprocessClient?.stopPlayback(); } catch { /* ignore */ }
+      this.clearPendingResponse(session);
+    }
+
     this.queueOpenAiRealtimeTurnContextRefresh({
       session,
       settings,
@@ -11650,7 +11663,7 @@ export class VoiceSessionManager {
     };
   }
 
-  async executeVoiceMusicQueueAddTool({ session, args }) {
+  async executeVoiceMusicQueueAddTool({ session, settings, args }) {
     const queueState = this.ensureToolMusicQueueState(session);
     const runtimeSession = this.ensureSessionToolRuntimeState(session);
     if (!queueState || !runtimeSession) {
@@ -11700,6 +11713,7 @@ export class VoiceSessionManager {
       };
     }
 
+    const wasEmpty = queueState.tracks.length === 0;
     const positionRaw = args?.position;
     const insertAt = typeof positionRaw === "number"
       ? clamp(Math.floor(Number(positionRaw)), 0, queueState.tracks.length)
@@ -11708,10 +11722,19 @@ export class VoiceSessionManager {
     if (queueState.nowPlayingIndex == null && queueState.tracks.length > 0) {
       queueState.nowPlayingIndex = 0;
     }
+
+    // Auto-play: if queue was empty and nothing is currently playing, start playback
+    const shouldAutoPlay = wasEmpty && !this.isMusicPlaybackActive(session) && !queueState.isPaused;
+    if (shouldAutoPlay && settings) {
+      const playIndex = queueState.nowPlayingIndex ?? 0;
+      this.playVoiceQueueTrackByIndex({ session, settings, index: playIndex }).catch(() => undefined);
+    }
+
     return {
       ok: true,
       queue_length: queueState.tracks.length,
       added: resolvedTracks.map((entry) => entry.id),
+      auto_playing: shouldAutoPlay,
       queue_state: {
         tracks: queueState.tracks.map((entry) => ({
           id: entry.id,
@@ -11896,6 +11919,7 @@ export class VoiceSessionManager {
     if (normalizedToolName === "music_queue_add") {
       return await this.executeVoiceMusicQueueAddTool({
         session,
+        settings,
         args
       });
     }
