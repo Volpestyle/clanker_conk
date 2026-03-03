@@ -3445,16 +3445,21 @@ export class VoiceSessionManager {
 
     const settings = session.settingsSnapshot || this.store.getSettings();
     const botName = getPromptBotName(settings);
-    const participantCount = this.countHumanVoiceParticipants(session);
+    const participants = this.getVoiceChannelParticipants(session);
+    const summoner = participants.find(p => p.userId === session.requestedByUserId);
+    const participantNames = participants.map(p => p.displayName).filter(Boolean);
 
     const greetingPrompt = [
       `You are ${botName}. You just joined a voice channel.`,
-      participantCount > 0
-        ? `There ${participantCount === 1 ? "is 1 person" : `are ${participantCount} people`} here.`
+      summoner
+        ? `${summoner.displayName} summoned you.`
+        : null,
+      participantNames.length > 0
+        ? `People here: ${participantNames.join(", ")}.`
         : "Nobody else is here yet.",
       "Say a brief, casual greeting to announce your presence.",
       "Keep it to one short sentence. Be natural — match the vibe of the channel."
-    ].join(" ");
+    ].filter(Boolean).join(" ");
 
     const spoke = this.requestRealtimePromptUtterance({
       session,
@@ -12329,9 +12334,11 @@ export class VoiceSessionManager {
     const channel = guild.channels?.cache?.get(voiceChannelId) || null;
     if (!channel?.members || typeof channel.members.forEach !== "function") return [];
 
+    const selfBotId = String(this.client.user?.id || "");
     const participants = [];
     channel.members.forEach((member) => {
-      if (!member || member.user?.bot) return;
+      if (!member) return;
+      if (member.id === selfBotId) return;
       const displayName = String(member.displayName || member.user?.globalName || member.user?.username || "").trim();
       if (!displayName) return;
       participants.push({
@@ -14395,10 +14402,9 @@ export class VoiceSessionManager {
 
     if (stateUserId !== botId) {
       const stateMember = newState?.member || oldState?.member || null;
-      const stateUserIsBot = Boolean(stateMember?.user?.bot);
       const movedIntoSession = sessionVoiceChannelId && oldChannelId !== sessionVoiceChannelId && newChannelId === sessionVoiceChannelId;
       const movedOutOfSession = sessionVoiceChannelId && oldChannelId === sessionVoiceChannelId && newChannelId !== sessionVoiceChannelId;
-      if (!stateUserIsBot && (movedIntoSession || movedOutOfSession)) {
+      if (movedIntoSession || movedOutOfSession) {
         const recordedEvent = this.recordVoiceMembershipEvent({
           session,
           userId: stateUserId,
