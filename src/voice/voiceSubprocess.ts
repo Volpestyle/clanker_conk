@@ -43,6 +43,7 @@ let defaultSampleRate = 24000;
 let musicProcesses: { pid: number; kill: () => void }[] = [];
 let musicActive = false;
 let pausedMusicResource: AudioResource<null> | null = null;
+let activeMusicUrl: string | null = null;
 let pendingMusicUrl: string | null = null;
 let pendingMusicReceivedAt = 0;
 let pendingMusicAudioSeen = false;
@@ -179,6 +180,7 @@ function killMusicProcesses() {
 function resetPlayback() {
   musicActive = false;
   pausedMusicResource = null;
+  activeMusicUrl = null;
   pendingMusicUrl = null;
   pendingMusicReceivedAt = 0;
   pendingMusicAudioSeen = false;
@@ -546,6 +548,8 @@ function startMusicPlayback(url: string) {
     return;
   }
 
+  activeMusicUrl = url;
+
   try {
     const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
 
@@ -805,15 +809,8 @@ function handleMusicPause() {
 }
 
 function handleMusicResume() {
-  if (!pausedMusicResource || !audioPlayer) {
-    if (AUDIO_DEBUG) {
-      const ts = new Date().toISOString().slice(11, 23);
-      console.log(`[subprocess:music] ${ts} resume requested but no paused resource — no-op`);
-    }
-    return;
-  }
+  if (!audioPlayer) return;
 
-  musicActive = true;
   // Flush any queued bot audio so it doesn't leak into the music stream.
   audioDeltaQueue.length = 0;
   isDrainingAudio = false;
@@ -821,14 +818,34 @@ function handleMusicResume() {
   const resource = pausedMusicResource;
   pausedMusicResource = null;
 
-  audioPlayer.play(resource);
+  // Check if the saved resource's stream is still alive.
+  const resourceAlive = resource?.readable && !resource.readable.destroyed && !resource.readable.readableEnded;
 
-  // Re-register the Idle listener for when the track finishes naturally.
-  audioPlayer.once(AudioPlayerStatus.Idle, () => {
-    musicActive = false;
-    send({ type: "music_idle" });
-    armVoicePlayback("music_idle");
-  });
+  if (resourceAlive) {
+    // Stream is still alive — replay it directly.
+    musicActive = true;
+    audioPlayer.play(resource);
+
+    audioPlayer.once(AudioPlayerStatus.Idle, () => {
+      musicActive = false;
+      send({ type: "music_idle" });
+      armVoicePlayback("music_idle");
+    });
+  } else if (activeMusicUrl) {
+    // Resource ended (pipeline died during pause) — restart from the URL.
+    if (AUDIO_DEBUG) {
+      const ts = new Date().toISOString().slice(11, 23);
+      console.log(`[subprocess:music] ${ts} resume: saved resource ended — restarting pipeline for ${activeMusicUrl}`);
+    }
+    killMusicProcesses();
+    musicActive = true;
+    startMusicPlayback(activeMusicUrl);
+  } else {
+    if (AUDIO_DEBUG) {
+      const ts = new Date().toISOString().slice(11, 23);
+      console.log(`[subprocess:music] ${ts} resume requested but no resource or URL — no-op`);
+    }
+  }
 }
 
 // --- Destroy ---
