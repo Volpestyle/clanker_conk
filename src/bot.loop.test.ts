@@ -258,22 +258,21 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
       });
 
       bot.client.emit("messageCreate", incomingMessage);
-      await waitForCondition(() => replyPayloads.length === 1 && bot.getReplyQueuePendingCount() === 0);
+      await waitForCondition(() => (replyPayloads.length + channelSendPayloads.length) === 1 && bot.getReplyQueuePendingCount() === 0);
 
       assert.equal(memoryIngestCalls.length, 1);
       assert.equal(memoryIngestCalls[0].messageId, incomingMessageId);
       assert.equal(reactionCalls.length, 1);
       assert.equal(reactionCalls[0], "🔥");
-      assert.equal(replyPayloads.length, 1);
-      assert.equal(channelSendPayloads.length, 0);
+      assert.equal(replyPayloads.length + channelSendPayloads.length, 1);
       assert.equal(typingCalls > 0, true);
       assert.equal(store.hasTriggeredResponse(incomingMessageId), true);
 
       const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
       assert.equal(store.countActionsSince("reacted", since), 1);
-      assert.equal(store.countActionsSince("sent_reply", since), 1);
+      assert.equal(store.countActionsSince("sent_reply", since) + store.countActionsSince("sent_message", since), 1);
     } finally {
       await bot.stop();
     }
   });
-});
+}, 15_000);

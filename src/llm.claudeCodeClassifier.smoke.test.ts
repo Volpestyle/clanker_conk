@@ -168,41 +168,35 @@ test("smoke: contract rejects claude-code memory preamble (incident repro)", () 
 });
 
 // ===========================================================================
-// 2. End-to-end: claude-code classifier through evaluateVoiceReplyDecision
+// 2. End-to-end: brain_decides flow through evaluateVoiceReplyDecision
 // ===========================================================================
 
-test("smoke: claude-code structured YES accepted through decision pipeline", async () => {
-  const seenPayloads = [];
+test("smoke: non-addressed turn in stt_pipeline mode returns brain_decides", async () => {
+  let callCount = 0;
   const manager = createManager({
-    generate: async (payload) => {
-      seenPayloads.push(payload);
-      return { text: '{"decision":"YES"}', provider: "claude-code", model: "haiku" };
+    generate: async () => {
+      callCount += 1;
+      return { text: "NO" };
     }
   });
   const decision = await manager.evaluateVoiceReplyDecision({
     session: {
       guildId: "g1", textChannelId: "c1", voiceChannelId: "v1",
-      botTurnOpen: false
+      botTurnOpen: false,
+      mode: "stt_pipeline"
     },
     userId: "speaker-1",
     settings: baseSettings(),
     transcript: "what's the weather like?"
   });
 
+  assert.equal(callCount, 0, "reply decision classifier should not be called");
   assert.equal(decision.allow, true);
-  assert.equal(decision.reason, "llm_yes");
-  // Verify JSON schema was sent
-  assert.ok(seenPayloads[0]?.jsonSchema);
-  const schema = JSON.parse(seenPayloads[0].jsonSchema);
-  assert.deepEqual(schema.properties.decision.enum, ["YES", "NO"]);
+  assert.equal(decision.reason, "brain_decides");
 });
 
-test("smoke: claude-code structured NO accepted through decision pipeline", async () => {
-  const manager = createManager({
-    generate: async () => {
-      return { text: '{"decision":"NO"}', provider: "claude-code", model: "haiku" };
-    }
-  });
+test("smoke: non-addressed turn without brain session returns no_brain_session", async () => {
+  const manager = createManager();
   const decision = await manager.evaluateVoiceReplyDecision({
     session: {
       guildId: "g1", textChannelId: "c1", voiceChannelId: "v1",
@@ -214,98 +208,11 @@ test("smoke: claude-code structured NO accepted through decision pipeline", asyn
   });
 
   assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "llm_no");
+  assert.equal(decision.reason, "no_brain_session");
 });
 
-test("smoke: claude-code verbose output fails contract without retry", async () => {
-  let callCount = 0;
-  const manager = createManager({
-    generate: async () => {
-      callCount += 1;
-      // Simulate the incident: verbose output instead of YES/NO
-      return {
-        text: "Based on my analysis of this conversation, I think the bot should respond because the user seems to be asking a question directly.",
-        provider: "claude-code",
-        model: "haiku"
-      };
-    }
-  });
-  const decision = await manager.evaluateVoiceReplyDecision({
-    session: {
-      guildId: "g1", textChannelId: "c1", voiceChannelId: "v1",
-      botTurnOpen: false
-    },
-    userId: "speaker-1",
-    settings: baseSettings(),
-    transcript: "can someone help with this one?"
-  });
-
-  assert.equal(callCount, 1, "should not retry contract violations");
-  assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "llm_contract_violation");
-  assert.equal(decision.directAddressed, false);
-});
-
-test("smoke: claude-code empty response is contract violation without retry", async () => {
-  let callCount = 0;
-  const manager = createManager({
-    generate: async () => {
-      callCount += 1;
-      return { text: "", provider: "claude-code", model: "haiku" };
-    }
-  });
-  const decision = await manager.evaluateVoiceReplyDecision({
-    session: {
-      guildId: "g1", textChannelId: "c1", voiceChannelId: "v1",
-      botTurnOpen: false
-    },
-    userId: "speaker-1",
-    settings: baseSettings(),
-    transcript: "did you guys see that game last night?"
-  });
-
-  assert.equal(callCount, 1, "should not retry contract violations");
-  assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "llm_contract_violation");
-});
-
-test("smoke: claude-code hard error returns llm_error after single call", async () => {
-  let callCount = 0;
-  const manager = createManager({
-    generate: async () => {
-      callCount += 1;
-      throw new Error("claude-code stream failure");
-    }
-  });
-  const decision = await manager.evaluateVoiceReplyDecision({
-    session: {
-      guildId: "g1", textChannelId: "c1", voiceChannelId: "v1",
-      botTurnOpen: false
-    },
-    userId: "speaker-1",
-    settings: baseSettings({
-      voice: {
-        replyEagerness: 60,
-        replyDecisionLlm: {
-          provider: "claude-code",
-          model: "haiku"
-        }
-      }
-    }),
-    transcript: "so what about the next sprint?"
-  });
-
-  assert.equal(callCount, 1, "must stop after single call");
-  assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "llm_error");
-});
-
-test("smoke: claude-code error throws still fail-open for direct address", async () => {
-  const manager = createManager({
-    generate: async () => {
-      throw new Error("claude-code returned an empty or invalid stream response");
-    }
-  });
+test("smoke: direct address still allowed via fast path regardless of mode", async () => {
+  const manager = createManager();
   const decision = await manager.evaluateVoiceReplyDecision({
     session: {
       guildId: "g1", textChannelId: "c1", voiceChannelId: "v1",
@@ -316,35 +223,9 @@ test("smoke: claude-code error throws still fail-open for direct address", async
     transcript: "hey clanker what's going on?"
   });
 
-  assert.equal(decision.allow, true, "direct address must fail-open on error");
+  assert.equal(decision.allow, true, "direct address must be allowed via fast path");
   assert.equal(decision.directAddressed, true);
-});
-
-test("smoke: claude-code error blocks unaddressed turns", async () => {
-  const manager = createManager({
-    generate: async () => {
-      throw new Error("claude-code returned an empty or invalid stream response");
-    }
-  });
-  const decision = await manager.evaluateVoiceReplyDecision({
-    session: {
-      guildId: "g1", textChannelId: "c1", voiceChannelId: "v1",
-      botTurnOpen: false
-    },
-    userId: "speaker-1",
-    settings: baseSettings({
-      voice: {
-        replyEagerness: 60,
-        replyDecisionLlm: {
-          provider: "claude-code",
-          model: "haiku"
-        }
-      }
-    }),
-    transcript: "anyone have thoughts on this?"
-  });
-
-  assert.equal(decision.allow, false, "unaddressed turns must block on error");
+  assert.equal(decision.reason, "direct_address_fast_path");
 });
 
 // ===========================================================================

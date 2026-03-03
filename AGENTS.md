@@ -2,15 +2,15 @@
 
 - Clanker conk current preferred models (see pricing.ts)
 - Main
-  - sonnett
+  - sonnet
   - gpt-5-mini reasoning medium
   - grok-4
 - Classifiers
   - haiku
   - gpt-5-nano reasoning low
-- Use `docs/llm-orchestration-mental-model.md` as the canonical guide for how to think about, reason about, and expand LLM routing/decision orchestration in this bot.
-- Refer to docs\openai-realtime-transcription.md when working with openai realtime transcripton or ASR.
-- Refer to docs\openai-realtime-speech.md when working with openai realtime speech.
+
+- Refer to docs/openai/openai-realtime-transcription.md when working with openai realtime transcripton or ASR.
+- Refer to docs/openai/openai-realtime-speech.md when working with openai realtime speech.
 - Runtime/package manager standard: use Bun (`bun`, `bun run`, `bunx`) over Node/NPM (`node`, `npm`, `npx`) unless explicitly requested.
 - Do not run smoke tests unless the user explicitly directs you to run them, since they incur cost.
 - For runtime debugging and incident analysis, prefer Grafana/Loki log exploration first; see `docs/logs.md` for setup and query workflow.
@@ -34,6 +34,8 @@
 - Golden tests assert the exact behavior we describe — write the expectation first, then implement to satisfy it.
 - When the user explicitly asks to validate smoke/golden behavior, prefer the live suite/path by default (for example `test:voice-golden:live`) unless they explicitly ask for simulated-only.
 - When running live smoke or golden test suites, make sure we use `claude-code` as the provider
+- E2E Discord bot-to-bot tests (`tests/e2e/`) validate the physical voice layer but require separate bot tokens and test guild setup (see `docs/e2e-testing.md`)
+- Do not run E2E tests unless the user explicitly directs it, since they require live Discord infrastructure
 
 ## Dashboard UI Preferences
 
@@ -65,10 +67,13 @@ This runs `@mermaid-js/mermaid-cli` (`mmdc`) at 4x scale to produce crisp PNGs. 
 1. Create `docs/diagrams/<name>.mmd` with valid Mermaid syntax.
 2. Run `bun run diagrams -- <name>.mmd` to generate `docs/diagrams/<name>.png`.
 3. Embed in the target markdown file:
+
    ```md
    ![Diagram Title](diagrams/<name>.png)
+
    <!-- source: docs/diagrams/<name>.mmd -->
    ```
+
 4. Commit the `.mmd`, `.png`, and updated `.md` together.
 
 ## Code Hygiene (Desloppifying)

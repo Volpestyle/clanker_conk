@@ -1,24 +1,9 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { appConfig } from "../config.ts";
-import { LLMService } from "../llm.ts";
 import { ADDRESSING_SMOKE_CASES } from "../addressingSmokeCases.ts";
-import { defaultVoiceReplyDecisionModel, normalizeVoiceReplyDecisionProvider } from "./voiceDecisionRuntime.ts";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
-import { envFlag } from "../testHelpers.ts";
 
-function hasProviderCredentials(provider) {
-  if (provider === "anthropic") return Boolean(appConfig.anthropicApiKey);
-  if (provider === "xai") return Boolean(appConfig.xaiApiKey);
-  if (provider === "claude-code") return true;
-  return Boolean(appConfig.openaiApiKey);
-}
-
-function smokeTimeoutMs(provider) {
-  return provider === "claude-code" ? 60_000 : 30_000;
-}
-
-function createManager(llm) {
+function createManager() {
   const fakeStore = {
     logAction() {},
     getSettings() {
@@ -36,8 +21,10 @@ function createManager(llm) {
       user: { id: "bot-user", username: "clanker conk" }
     },
     store: fakeStore,
-    appConfig,
-    llm,
+    appConfig: {},
+    llm: {
+      generate: async () => ({ text: "NO" })
+    },
     memory: null
   });
   manager.countHumanVoiceParticipants = () => 2;
@@ -45,56 +32,28 @@ function createManager(llm) {
   return manager;
 }
 
-const configuredProvider = normalizeVoiceReplyDecisionProvider(process.env.LIVE_VOICE_DECIDER_PROVIDER || "claude-code");
-
-test("smoke: live voice decision model admits wake-variant turns", { timeout: smokeTimeoutMs(configuredProvider) }, async () => {
-  if (!envFlag("RUN_LIVE_VOICE_DECIDER_SMOKE")) return;
-
-  const provider = configuredProvider;
-  const model =
-    String(process.env.LIVE_VOICE_DECIDER_MODEL || defaultVoiceReplyDecisionModel(provider)).trim() ||
-    defaultVoiceReplyDecisionModel(provider);
-
-  assert.equal(
-    hasProviderCredentials(provider),
-    true,
-    `Missing API credentials for live voice decider provider "${provider}".`
-  );
-
-  const manager = createManager(
-    new LLMService({
-      appConfig,
-      store: {
-        logAction() {}
-      }
-    })
-  );
+test("smoke: voice decision routes wake-word turns via direct_address_fast_path", async () => {
+  const manager = createManager();
 
   const settings = {
     botName: "clanker conk",
-    memory: {
-      enabled: false
-    },
-    llm: {
-      provider: "claude-code",
-      model: "sonnet"
-    },
+    memory: { enabled: false },
+    llm: { provider: "openai", model: "claude-haiku-4-5" },
     voice: {
       replyEagerness: 50,
-      replyDecisionLlm: {
-        provider,
-        model,
-        reasoningEffort: String(process.env.LIVE_VOICE_DECIDER_REASONING_EFFORT || "minimal").trim().toLowerCase() || "minimal"
-      }
+      replyDecisionLlm: { provider: "anthropic", model: "claude-haiku-4-5" }
     }
   };
-  for (const row of ADDRESSING_SMOKE_CASES) {
+
+  const wakeWordCases = ADDRESSING_SMOKE_CASES.filter((row) => row.expected === true);
+  for (const row of wakeWordCases) {
     const decision = await manager.evaluateVoiceReplyDecision({
       session: {
-        guildId: "live-smoke-guild",
-        textChannelId: "live-smoke-text",
-        voiceChannelId: "live-smoke-voice",
-        botTurnOpen: false
+        guildId: "smoke-guild",
+        textChannelId: "smoke-text",
+        voiceChannelId: "smoke-voice",
+        botTurnOpen: false,
+        mode: "stt_pipeline"
       },
       userId: "speaker-1",
       settings,
@@ -103,27 +62,49 @@ test("smoke: live voice decision model admits wake-variant turns", { timeout: sm
 
     assert.equal(
       decision.allow,
-      row.expected,
-      `Expected ${row.expected ? "YES" : "NO"} for "${row.text}", got reason="${decision.reason}" llmResponse="${String(decision.llmResponse || "")}".`
+      true,
+      `Expected allow=true for "${row.text}", got reason="${decision.reason}".`
+    );
+    assert.ok(
+      ["direct_address_fast_path", "brain_decides"].includes(decision.reason),
+      `Expected direct_address_fast_path or brain_decides for "${row.text}", got "${decision.reason}".`
     );
   }
+});
 
-  const joinGreetingDecision = await manager.evaluateVoiceReplyDecision({
-    session: {
-      guildId: "live-smoke-guild",
-      textChannelId: "live-smoke-text",
-      voiceChannelId: "live-smoke-voice",
-      botTurnOpen: false,
-      startedAt: Date.now() - 5_000
-    },
-    userId: "speaker-1",
-    settings,
-    transcript: "hola"
-  });
+test("smoke: voice decision forwards non-addressed turns to brain in stt_pipeline mode", async () => {
+  const manager = createManager();
 
-  assert.equal(
-    joinGreetingDecision.allow,
-    true,
-    `Expected YES for join-window greeting "hola", got reason="${joinGreetingDecision.reason}" llmResponse="${String(joinGreetingDecision.llmResponse || "")}".`
-  );
+  const settings = {
+    botName: "clanker conk",
+    memory: { enabled: false },
+    llm: { provider: "openai", model: "claude-haiku-4-5" },
+    voice: {
+      replyEagerness: 50,
+      replyDecisionLlm: { provider: "anthropic", model: "claude-haiku-4-5" }
+    }
+  };
+
+  const nonAddressedCases = ADDRESSING_SMOKE_CASES.filter((row) => row.expected === false);
+  for (const row of nonAddressedCases) {
+    const decision = await manager.evaluateVoiceReplyDecision({
+      session: {
+        guildId: "smoke-guild",
+        textChannelId: "smoke-text",
+        voiceChannelId: "smoke-voice",
+        botTurnOpen: false,
+        mode: "stt_pipeline"
+      },
+      userId: "speaker-1",
+      settings,
+      transcript: row.text
+    });
+
+    assert.equal(
+      decision.allow,
+      true,
+      `Expected allow=true (brain_decides) for "${row.text}", got reason="${decision.reason}".`
+    );
+    assert.equal(decision.reason, "brain_decides");
+  }
 });

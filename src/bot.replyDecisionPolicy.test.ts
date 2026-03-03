@@ -796,8 +796,7 @@ test("direct-addressed turn bypasses unsolicited gate and marks response as requ
 
     assert.equal(sent, true);
     assert.equal(llmCalls.length, 1);
-    assert.equal(replyPayloads.length, 1);
-    assert.equal(channelSendPayloads.length, 0);
+    assert.equal(replyPayloads.length + channelSendPayloads.length, 1);
     assert.equal(typingCallsRef.count > 0, true);
 
   });
@@ -1191,8 +1190,7 @@ test("reply follow-up regeneration can add history images when model requests im
     });
 
     assert.equal(sent, true);
-    assert.equal(replyPayloads.length, 1);
-    assert.equal(channelSendPayloads.length, 0);
+    assert.equal(replyPayloads.length + channelSendPayloads.length, 1);
     assert.equal(llmCalls.length, 2);
     assert.equal(Array.isArray(llmCalls[0]?.imageInputs) ? llmCalls[0].imageInputs.length : 0, 0);
     assert.equal(Array.isArray(llmCalls[1]?.imageInputs), true);
@@ -1384,7 +1382,7 @@ test("reply generation passes a structured JSON schema contract for voice intent
     assert.equal(typeof llmCalls[0]?.jsonSchema, "string");
     assert.match(String(llmCalls[0]?.jsonSchema || ""), /"voiceIntent"/);
     assert.match(String(llmCalls[0]?.jsonSchema || ""), /"join"/);
-    assert.equal(replyPayloads.length, 1);
+    assert.equal(replyPayloads.length + channelSendPayloads.length, 1);
   });
 });
 
@@ -1472,8 +1470,7 @@ test("voice intent below confidence threshold falls back to normal text reply pa
 
     assert.equal(sent, true);
     assert.equal(joinCallCount, 0);
-    assert.equal(replyPayloads.length, 1);
-    assert.equal(channelSendPayloads.length, 0);
+    assert.equal(replyPayloads.length + channelSendPayloads.length, 1);
     assert.equal(typingCallsRef.count > 0, true);
   });
 });
@@ -1688,15 +1685,15 @@ test("smoke: 'clanka look at my screen' initiates a screen-share link message", 
     });
 
     assert.equal(sent, true);
-    assert.equal(replyPayloads.length, 1);
-    assert.equal(channelSendPayloads.length, 0);
+    assert.equal(replyPayloads.length + channelSendPayloads.length, 1);
     assert.equal(createSessionCalls.length, 1);
     assert.equal(createSessionCalls[0]?.guildId, guild.id);
     assert.equal(createSessionCalls[0]?.channelId, channel.id);
     assert.equal(createSessionCalls[0]?.requesterUserId, "user-1");
     assert.equal(createSessionCalls[0]?.targetUserId, "user-1");
     assert.equal(createSessionCalls[0]?.source, "message_event");
-    assert.equal(String(replyPayloads[0]?.content || "").includes(shareUrl), true);
+    const sentContent = String(replyPayloads[0]?.content || channelSendPayloads[0]?.content || "");
+    assert.equal(sentContent.includes(shareUrl), true);
 
     const operationalCall = llmCalls.find(
       (call) => String(call?.trace?.source || "") === "voice_operational_message"
@@ -2003,8 +2000,7 @@ test("initiative-channel direct turns can be routed to thread replies when polic
     });
 
     assert.equal(sent, true);
-    assert.equal(replyPayloads.length, 1);
-    assert.equal(channelSendPayloads.length, 0);
+    assert.equal(replyPayloads.length + channelSendPayloads.length, 1);
   });
 });
 

@@ -13,9 +13,7 @@ import {
   normalizeTranscriberProvider
 } from "../voice/voiceModes.ts";
 import {
-  DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT,
-  VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
-  VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
+  DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT
 } from "../promptCore.ts";
 
 const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
@@ -347,9 +345,6 @@ export function normalizeSettings(raw) {
   if (!merged.voice.replyDecisionLlm || typeof merged.voice.replyDecisionLlm !== "object") {
     merged.voice.replyDecisionLlm = {};
   }
-  if (!merged.voice.replyDecisionLlm.prompts || typeof merged.voice.replyDecisionLlm.prompts !== "object") {
-    merged.voice.replyDecisionLlm.prompts = {};
-  }
   if (!merged.voice.streamWatch || typeof merged.voice.streamWatch !== "object") {
     merged.voice.streamWatch = {};
   }
@@ -400,15 +395,9 @@ export function normalizeSettings(raw) {
     minSecondsBetweenThoughts?: number;
   };
   type VoiceReplyDecisionDefaults = {
-    enabled?: boolean;
     provider?: string;
     model?: string;
     reasoningEffort?: string;
-    prompts?: VoiceReplyDecisionPromptDefaults;
-  };
-  type VoiceReplyDecisionPromptDefaults = {
-    wakeVariantHint?: string;
-    systemPromptCompact?: string;
   };
   type VoiceGenerationDefaults = {
     useTextModel?: boolean;
@@ -455,7 +444,9 @@ export function normalizeSettings(raw) {
     replyDecisionLlm?: VoiceReplyDecisionDefaults;
     streamWatch?: VoiceStreamWatchDefaults;
     soundboard?: VoiceSoundboardDefaults;
-    musicTranscriptionEnabled?: boolean;
+    asrDuringMusic?: boolean;
+    asrEnabled?: boolean;
+    operationalMessages?: string;
   };
 
   const defaultVoice: VoiceDefaults = DEFAULT_SETTINGS.voice;
@@ -467,8 +458,6 @@ export function normalizeSettings(raw) {
   const defaultVoiceThoughtEngine: VoiceThoughtEngineDefaults = defaultVoice.thoughtEngine ?? {};
   const defaultVoiceGenerationLlm: VoiceGenerationDefaults = defaultVoice.generationLlm ?? {};
   const defaultVoiceReplyDecisionLlm: VoiceReplyDecisionDefaults = defaultVoice.replyDecisionLlm ?? {};
-  const defaultVoiceReplyDecisionPrompts: VoiceReplyDecisionPromptDefaults =
-    defaultVoiceReplyDecisionLlm.prompts ?? {};
   const defaultVoiceStreamWatch: VoiceStreamWatchDefaults = defaultVoice.streamWatch ?? {};
   const defaultVoiceSoundboard: VoiceSoundboardDefaults = defaultVoice.soundboard ?? {};
   const voiceIntentThresholdRaw = Number(merged.voice?.intentConfidenceThreshold);
@@ -550,6 +539,22 @@ export function normalizeSettings(raw) {
   merged.voice.replyEagerness = clamp(
     Number.isFinite(voiceEagernessRaw) ? voiceEagernessRaw : 0, 0, 100
   );
+
+  // replyPath: "native" | "bridge" | "brain" — migrate from realtimeReplyStrategy
+  const rawReplyPath = String(merged.voice?.replyPath || "").trim().toLowerCase();
+  const rawStrategy = String(merged.voice?.realtimeReplyStrategy || "").trim().toLowerCase();
+  const resolvedReplyPath =
+    rawReplyPath === "native" || rawReplyPath === "bridge" || rawReplyPath === "brain"
+      ? rawReplyPath
+      : rawStrategy === "native"
+        ? "native"
+        : rawStrategy === "brain"
+          ? "bridge"
+          : "bridge";
+  merged.voice.replyPath = resolvedReplyPath;
+  // Keep realtimeReplyStrategy in sync for backward compatibility
+  merged.voice.realtimeReplyStrategy = resolvedReplyPath === "native" ? "native" : "brain";
+
   merged.voice.thoughtEngine.enabled =
     merged.voice?.thoughtEngine?.enabled !== undefined
       ? Boolean(merged.voice?.thoughtEngine?.enabled)
@@ -635,12 +640,8 @@ export function normalizeSettings(raw) {
   merged.voice.generationLlm.model = merged.voice.generationLlm.useTextModel
     ? merged.llm.model
     : normalizedVoiceGenerationLlm.model;
-  merged.voice.replyDecisionLlm.enabled =
-    merged.voice?.replyDecisionLlm?.enabled !== undefined
-      ? Boolean(merged.voice?.replyDecisionLlm?.enabled)
-      : defaultVoiceReplyDecisionLlm?.enabled !== undefined
-        ? Boolean(defaultVoiceReplyDecisionLlm.enabled)
-        : true;
+  delete merged.voice.replyDecisionLlm.enabled;
+  delete merged.voice.replyDecisionLlm.prompts;
   const voiceReplyDecisionProviderRaw = String(merged.voice?.replyDecisionLlm?.provider || "").trim();
   const defaultVoiceReplyDecisionProvider = normalizeLlmProvider(defaultVoiceReplyDecisionLlm.provider || "anthropic");
   const defaultReplyDecisionModel =
@@ -661,18 +662,6 @@ export function normalizeSettings(raw) {
     merged.voice?.replyDecisionLlm?.reasoningEffort,
     defaultReplyDecisionReasoningEffort
   ) || defaultReplyDecisionReasoningEffort;
-  merged.voice.replyDecisionLlm.prompts.wakeVariantHint = normalizeLongPromptBlock(
-    merged.voice?.replyDecisionLlm?.prompts?.wakeVariantHint,
-    defaultVoiceReplyDecisionPrompts.wakeVariantHint || VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT,
-    2200
-  );
-  merged.voice.replyDecisionLlm.prompts.systemPromptCompact = normalizeLongPromptBlock(
-    merged.voice?.replyDecisionLlm?.prompts?.systemPromptCompact,
-    defaultVoiceReplyDecisionPrompts.systemPromptCompact || VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
-    10_000
-  );
-  delete merged.voice.replyDecisionLlm.prompts.systemPromptFull;
-  delete merged.voice.replyDecisionLlm.prompts.systemPromptStrict;
 
   merged.voice.xai.voice = String(merged.voice?.xai?.voice || defaultVoiceXai.voice || "Rex").slice(0, 60);
   merged.voice.xai.audioFormat = String(merged.voice?.xai?.audioFormat || defaultVoiceXai.audioFormat || "audio/pcm")
@@ -868,10 +857,30 @@ export function normalizeSettings(raw) {
       : Boolean(defaultVoiceSoundboard.allowExternalSounds);
   merged.voice.soundboard.preferredSoundIds = uniqueIdList(merged.voice?.soundboard?.preferredSoundIds).slice(0, 40);
 
-  merged.voice.musicTranscriptionEnabled =
-    merged.voice?.musicTranscriptionEnabled !== undefined
-      ? Boolean(merged.voice?.musicTranscriptionEnabled)
-      : Boolean(defaultVoice.musicTranscriptionEnabled);
+  // Migration: musicTranscriptionEnabled → asrDuringMusic
+  if (
+    raw?.voice?.musicTranscriptionEnabled !== undefined &&
+    raw?.voice?.asrDuringMusic === undefined
+  ) {
+    merged.voice.asrDuringMusic = Boolean(raw.voice.musicTranscriptionEnabled);
+  } else {
+    merged.voice.asrDuringMusic =
+      merged.voice?.asrDuringMusic !== undefined
+        ? Boolean(merged.voice?.asrDuringMusic)
+        : Boolean(defaultVoice.asrDuringMusic);
+  }
+  delete merged.voice.musicTranscriptionEnabled;
+
+  merged.voice.asrEnabled =
+    merged.voice?.asrEnabled !== undefined
+      ? Boolean(merged.voice?.asrEnabled)
+      : Boolean(defaultVoice.asrEnabled ?? true);
+
+  const validOperationalMessageLevels = ["all", "essential", "minimal", "none"];
+  const rawOperationalMessages = String(merged.voice?.operationalMessages || "").trim().toLowerCase();
+  merged.voice.operationalMessages = validOperationalMessageLevels.includes(rawOperationalMessages)
+    ? rawOperationalMessages
+    : String(defaultVoice.operationalMessages || "all");
 
   merged.startup.catchupEnabled =
     merged.startup?.catchupEnabled !== undefined ? Boolean(merged.startup?.catchupEnabled) : true;

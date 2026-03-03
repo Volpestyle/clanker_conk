@@ -11,9 +11,7 @@ import {
   getPromptMemoryEnabledLine,
   getPromptStyle,
   getPromptVoiceGuidance,
-  interpolatePromptTemplate,
-  VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
-  VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
+  interpolatePromptTemplate
 } from "../promptCore.ts";
 const AUDIO_DEBUG = !!process.env.AUDIO_DEBUG;
 const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
@@ -28,8 +26,7 @@ import { estimateUsdCost } from "../pricing.ts";
 import { clamp } from "../utils.ts";
 import {
   DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
-  hasBotNameCue,
-  scoreDirectAddressConfidence
+  hasBotNameCue
 } from "../directAddressConfidence.ts";
 import { SoundboardDirector } from "./soundboardDirector.ts";
 import {
@@ -210,6 +207,7 @@ import {
   VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS
 } from "./voiceSessionManager.constants.ts";
 import { loadPromptMemorySliceFromMemory } from "../memory/promptMemorySlice.ts";
+import { providerSupports } from "./voiceModes.ts";
 
 export function resolveVoiceThoughtTopicalityBias({
   silenceMs = 0,
@@ -1113,37 +1111,29 @@ export class VoiceSessionManager {
 
   ensureSessionMusicState(session) {
     if (!session || typeof session !== "object") return null;
-    const current = session.music && typeof session.music === "object" ? session.music : {};
-    const next = {
-      active: Boolean(current.active),
-      startedAt: Math.max(0, Number(current.startedAt || 0)),
-      stoppedAt: Math.max(0, Number(current.stoppedAt || 0)),
-      provider: String(current.provider || "").trim() || null,
-      source: String(current.source || "").trim() || null,
-      lastTrackId: String(current.lastTrackId || "").trim() || null,
-      lastTrackTitle: String(current.lastTrackTitle || "").trim() || null,
-      lastTrackArtists: Array.isArray(current.lastTrackArtists)
-        ? current.lastTrackArtists.map((entry) => String(entry || "").trim()).filter(Boolean).slice(0, 8)
-        : [],
-      lastTrackUrl: String(current.lastTrackUrl || "").trim() || null,
-      lastQuery: String(current.lastQuery || "").trim() || null,
-      lastRequestedByUserId: String(current.lastRequestedByUserId || "").trim() || null,
-      lastRequestText: String(current.lastRequestText || "").trim() || null,
-      lastCommandAt: Math.max(0, Number(current.lastCommandAt || 0)),
-      lastCommandReason: String(current.lastCommandReason || "").trim() || null,
-      pendingQuery: String(current.pendingQuery || "").trim() || null,
-      pendingPlatform: this.normalizeMusicPlatformToken(current.pendingPlatform, "auto"),
-      pendingResults: Array.isArray(current.pendingResults)
-        ? current.pendingResults
-          .map((entry) => this.normalizeMusicSelectionResult(entry))
-          .filter(Boolean)
-          .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS)
-        : [],
-      pendingRequestedByUserId: String(current.pendingRequestedByUserId || "").trim() || null,
-      pendingRequestedAt: Math.max(0, Number(current.pendingRequestedAt || 0))
+    if (session.music && typeof session.music === "object") return session.music;
+    session.music = {
+      active: false,
+      startedAt: 0,
+      stoppedAt: 0,
+      provider: null,
+      source: null,
+      lastTrackId: null,
+      lastTrackTitle: null,
+      lastTrackArtists: [],
+      lastTrackUrl: null,
+      lastQuery: null,
+      lastRequestedByUserId: null,
+      lastRequestText: null,
+      lastCommandAt: 0,
+      lastCommandReason: null,
+      pendingQuery: null,
+      pendingPlatform: "auto",
+      pendingResults: [],
+      pendingRequestedByUserId: null,
+      pendingRequestedAt: 0
     };
-    session.music = next;
-    return next;
+    return session.music;
   }
 
   snapshotMusicRuntimeState(session) {
@@ -1190,6 +1180,14 @@ export class VoiceSessionManager {
   isMusicPlaybackActive(session) {
     const music = this.ensureSessionMusicState(session);
     return Boolean(music?.active);
+  }
+
+
+  isAsrActive(session, settings = null) {
+    const resolved = settings || session?.settingsSnapshot || this.store.getSettings();
+    if (!resolved?.voice?.asrEnabled) return false;
+    if (this.isMusicPlaybackActive(session) && !resolved?.voice?.asrDuringMusic) return false;
+    return true;
   }
 
   normalizeMusicPlatformToken(value: unknown = "", fallback: "youtube" | "soundcloud" | "discord" | "auto" | null = null) {
@@ -1649,7 +1647,7 @@ export class VoiceSessionManager {
     ];
   }
 
-  buildOpenAiRealtimeFunctionTools({
+  buildRealtimeFunctionTools({
     session,
     settings
   }: {
@@ -2316,26 +2314,35 @@ export class VoiceSessionManager {
       }
     });
 
-    await this.sendOperationalMessage({
-      channel: resolvedChannel,
-      settings: resolvedSettings,
-      guildId: resolvedGuildId,
-      channelId: resolvedChannelId || session.textChannelId || null,
-      userId: resolvedUserId || null,
-      messageId: message?.id || null,
-      event: "voice_music_request",
-      reason: stopSucceeded ? (wasActive ? "stopped" : "already_stopped") : playbackResult.reason || "music_stop_failed",
-      details: {
-        source: String(source || "text_voice_intent"),
-        provider: resolvedProvider,
-        stopResultReason,
-        status: Number(playbackResult.status || 0),
-        error: stopSucceeded ? null : playbackResult.message || null,
-        previouslyActive: wasActive,
-        requestText: normalizedRequestText
-      },
-      mustNotify
-    });
+    // When a voice tool triggers stop on already-idle music, suppress the
+    // operational text-channel message entirely — the voice AI already
+    // responds vocally and a text message like "nothing was playing" breaks
+    // continuity.
+    const suppressOperationalMessage =
+      !wasActive && String(source || "") === "voice_tool_call";
+
+    if (!suppressOperationalMessage) {
+      await this.sendOperationalMessage({
+        channel: resolvedChannel,
+        settings: resolvedSettings,
+        guildId: resolvedGuildId,
+        channelId: resolvedChannelId || session.textChannelId || null,
+        userId: resolvedUserId || null,
+        messageId: message?.id || null,
+        event: "voice_music_request",
+        reason: stopSucceeded ? (wasActive ? "stopped" : "already_stopped") : playbackResult.reason || "music_stop_failed",
+        details: {
+          source: String(source || "text_voice_intent"),
+          provider: resolvedProvider,
+          stopResultReason,
+          status: Number(playbackResult.status || 0),
+          error: stopSucceeded ? null : playbackResult.message || null,
+          previouslyActive: wasActive,
+          requestText: normalizedRequestText
+        },
+        mustNotify
+      });
+    }
     return true;
   }
 
@@ -2690,8 +2697,8 @@ export class VoiceSessionManager {
     if (!pcmBuffer?.length) return true;
 
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    if (!resolvedSettings?.voice?.musicTranscriptionEnabled) {
-      return true; // music active but transcription disabled — swallow turn silently
+    if (!resolvedSettings?.voice?.asrDuringMusic) {
+      return true; // music active but ASR during music disabled — swallow turn silently
     }
 
     if (!this.llm?.transcribeAudio) {
@@ -2794,6 +2801,11 @@ export class VoiceSessionManager {
     });
 
     if (!shouldStop) {
+      // Wake-word addressed turns during music fall through to the normal
+      // reply pipeline so the bot can answer while music plays.
+      if (isVoiceTurnAddressedToBot(normalizedTranscript, resolvedSettings)) {
+        return false;
+      }
       return true;
     }
 
@@ -3203,7 +3215,7 @@ export class VoiceSessionManager {
   }
 
   startSessionTimers(session, settings) {
-    const maxSessionMinutesCap = session?.mode === "openai_realtime"
+    const maxSessionMinutesCap = isRealtimeMode(session?.mode)
       ? OPENAI_REALTIME_MAX_SESSION_MINUTES
       : MAX_MAX_SESSION_MINUTES;
     const maxSessionMinutes = clamp(
@@ -3326,25 +3338,56 @@ export class VoiceSessionManager {
       session.playbackArmed = true;
       session.playbackArmedReason = reason;
       session.playbackArmedAt = Date.now();
-      if (reason !== "connection_ready") return;
-      if (session.joinGreetingScheduled) return;
+      if (reason !== "connection_ready") {
+        this.logJoinGreetingState(session, "voice_join_greeting_not_scheduled", {
+          reason: "playback_armed_reason_mismatch",
+          playbackArmedReason: String(reason || "unknown")
+        });
+        return;
+      }
+      if (session.joinGreetingScheduled) {
+        this.logJoinGreetingState(session, "voice_join_greeting_not_scheduled", {
+          reason: "already_scheduled"
+        });
+        return;
+      }
       session.joinGreetingScheduled = true;
       // Schedule a deferred greeting — if the user speaks first the
       // normal reply pipeline handles it (with join-window bias) and
       // cancels this timer. If nobody talks, the bot announces itself.
+      this.logJoinGreetingState(session, "voice_join_greeting_scheduled", {
+        delayMs: 3000
+      });
       session.joinGreetingTimer = setTimeout(() => {
         session.joinGreetingTimer = null;
         this.maybeFireJoinGreeting(session);
       }, 3000);
     };
 
+    const onMusicIdle = () => {
+      const music = this.ensureSessionMusicState(session);
+      if (music) {
+        music.active = false;
+        music.stoppedAt = Date.now();
+      }
+    };
+
     session.subprocessClient.on("playerState", onPlayerState);
     session.subprocessClient.on("playbackArmed", onPlaybackArmed);
+    session.subprocessClient.on("musicIdle", onMusicIdle);
     session.subprocessClient.on("error", onError);
+
+    // Replay sticky playback-armed state in case the subprocess emitted it
+    // before handlers were attached (join bootstrap race).
+    const armedReason = session.subprocessClient.getPlaybackArmedReason?.();
+    if (armedReason) {
+      onPlaybackArmed(armedReason);
+    }
 
     session.cleanupHandlers.push(() => {
       session.subprocessClient?.off("playerState", onPlayerState);
       session.subprocessClient?.off("playbackArmed", onPlaybackArmed);
+      session.subprocessClient?.off("musicIdle", onMusicIdle);
       session.subprocessClient?.off("error", onError);
       if (session.joinGreetingTimer) {
         clearTimeout(session.joinGreetingTimer);
@@ -3354,29 +3397,69 @@ export class VoiceSessionManager {
   }
 
   maybeFireJoinGreeting(session) {
-    if (!session || session.ending) return;
-    if (!isRealtimeMode(session.mode)) return;
+    if (!session) return;
+    if (session.ending) {
+      this.logJoinGreetingState(session, "voice_join_greeting_skipped", {
+        reason: "session_ending"
+      });
+      return;
+    }
+    if (!isRealtimeMode(session.mode)) {
+      this.logJoinGreetingState(session, "voice_join_greeting_skipped", {
+        reason: "mode_not_realtime",
+        mode: session.mode
+      });
+      return;
+    }
     // Skip if someone is currently talking
-    if (Number(session.userCaptures?.size || 0) > 0) return;
+    if (Number(session.userCaptures?.size || 0) > 0) {
+      this.logJoinGreetingState(session, "voice_join_greeting_skipped", {
+        reason: "active_user_capture",
+        userCaptureCount: Number(session.userCaptures?.size || 0)
+      });
+      return;
+    }
     // Skip if the bot already spoke (user greeted first, normal pipeline handled it)
-    if (session.lastAssistantReplyAt) return;
+    if (session.lastAssistantReplyAt) {
+      this.logJoinGreetingState(session, "voice_join_greeting_skipped", {
+        reason: "assistant_already_replied",
+        lastAssistantReplyAt: Number(session.lastAssistantReplyAt || 0)
+      });
+      return;
+    }
     // Skip if a user turn is queued/draining (user speech arrived, response incoming)
-    if (session.realtimeTurnDrainActive) return;
+    if (session.realtimeTurnDrainActive) {
+      this.logJoinGreetingState(session, "voice_join_greeting_skipped", {
+        reason: "turn_drain_active"
+      });
+      return;
+    }
     const pendingQueue = Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns : [];
-    if (pendingQueue.length > 0) return;
+    if (pendingQueue.length > 0) {
+      this.logJoinGreetingState(session, "voice_join_greeting_skipped", {
+        reason: "pending_turns",
+        pendingTurns: pendingQueue.length
+      });
+      return;
+    }
 
     const settings = session.settingsSnapshot || this.store.getSettings();
     const botName = getPromptBotName(settings);
-    const participantCount = this.countHumanVoiceParticipants(session);
+    const participants = this.getVoiceChannelParticipants(session);
+    const summoner = participants.find(p => p.userId === session.requestedByUserId);
+    const participantNames = participants.map(p => p.displayName).filter(Boolean);
 
     const greetingPrompt = [
       `You are ${botName}. You just joined a voice channel.`,
-      participantCount > 0
-        ? `There ${participantCount === 1 ? "is 1 person" : `are ${participantCount} people`} here.`
+      summoner
+        ? `${summoner.displayName} summoned you.`
+        : null,
+      participantNames.length > 0
+        ? `People here: ${participantNames.join(", ")}.`
         : "Nobody else is here yet.",
       "Say a brief, casual greeting to announce your presence.",
       "Keep it to one short sentence. Be natural — match the vibe of the channel."
-    ].join(" ");
+    ].filter(Boolean).join(" ");
 
     const spoke = this.requestRealtimePromptUtterance({
       session,
@@ -3387,19 +3470,32 @@ export class VoiceSessionManager {
 
     if (spoke) {
       session.lastAssistantReplyAt = Date.now();
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: this.client.user?.id || null,
-        content: "voice_join_greeting_fired",
-        metadata: {
-          sessionId: session.id,
-          mode: session.mode,
-          participantCount
-        }
+      this.logJoinGreetingState(session, "voice_join_greeting_fired", {
+        participantCount
+      });
+    } else {
+      this.logJoinGreetingState(session, "voice_join_greeting_skipped", {
+        reason: "prompt_utterance_not_sent",
+        participantCount,
+        realtimeResponseActive: this.isRealtimeResponseActive(session)
       });
     }
+  }
+
+  logJoinGreetingState(session, content, metadata = {}) {
+    if (!session) return;
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.client.user?.id || null,
+      content,
+      metadata: {
+        sessionId: session.id,
+        mode: session.mode,
+        ...metadata
+      }
+    });
   }
 
   isBargeInOutputSuppressed(session, now = Date.now()) {
@@ -3679,7 +3775,7 @@ export class VoiceSessionManager {
     }
 
     const truncateConversationItem = session.realtimeClient?.truncateConversationItem;
-    if (session.mode === "openai_realtime" && typeof truncateConversationItem === "function") {
+    if (isRealtimeMode(session.mode) && typeof truncateConversationItem === "function") {
       const latestItemId = String(session.lastOpenAiAssistantAudioItemId || "").trim();
       if (latestItemId) {
         truncateAttempted = true;
@@ -3708,6 +3804,18 @@ export class VoiceSessionManager {
       session.botTurnResetTimer = null;
     }
     session.botTurnOpen = false;
+
+    // Unduck music immediately on barge-in so the user hears it while speaking.
+    if (session._realtimeMusicDucked) {
+      if (session._realtimeUnduckTimer) {
+        clearTimeout(session._realtimeUnduckTimer);
+        session._realtimeUnduckTimer = null;
+      }
+      session._realtimeMusicDucked = false;
+      if (this.isMusicPlaybackActive(session) && this.musicPlayer?.isDucked?.()) {
+        this.musicPlayer?.unduck(300);
+      }
+    }
 
     if (session.pendingResponse && typeof session.pendingResponse === "object") {
       session.lastAudioDeltaAt = Math.max(Number(session.lastAudioDeltaAt || 0), now);
@@ -3807,7 +3915,7 @@ export class VoiceSessionManager {
 
   trackOpenAiRealtimeAssistantAudioEvent(session, event) {
     if (!session || session.ending) return;
-    if (session.mode !== "openai_realtime") return;
+    if (!isRealtimeMode(session.mode)) return;
     if (!event || typeof event !== "object") return;
     const eventType = String(event.type || "").trim();
     if (eventType !== "response.output_audio.delta" && eventType !== "response.output_audio.done") return;
@@ -3848,7 +3956,7 @@ export class VoiceSessionManager {
 
       // Duration tracking stays synchronous — used for truncation estimates
       // when barge-in interrupts the response mid-stream.
-      if (session.mode === "openai_realtime" && session.lastOpenAiAssistantAudioItemId) {
+      if (isRealtimeMode(session.mode) && session.lastOpenAiAssistantAudioItemId) {
         session.lastOpenAiAssistantAudioItemReceivedMs = Math.max(
           0,
           Number(session.lastOpenAiAssistantAudioItemReceivedMs || 0)
@@ -3868,6 +3976,22 @@ export class VoiceSessionManager {
 
       session.lastAudioDeltaAt = Date.now();
 
+      // Duck music when realtime TTS starts speaking — playVoiceReplyInOrder
+      // handles ducking for the STT pipeline, but realtime audio arrives here
+      // directly and bypasses that path.
+      if (
+        !session._realtimeMusicDucked &&
+        this.isMusicPlaybackActive(session) &&
+        !this.musicPlayer?.isPaused?.()
+      ) {
+        if (session._realtimeUnduckTimer) {
+          clearTimeout(session._realtimeUnduckTimer);
+          session._realtimeUnduckTimer = null;
+        }
+        this.musicPlayer?.duck(300);
+        session._realtimeMusicDucked = true;
+      }
+
       // Send raw PCM to subprocess — it handles conversion + Opus encoding.
       if (!session.subprocessClient?.isAlive) return;
       try {
@@ -3877,7 +4001,7 @@ export class VoiceSessionManager {
       }
 
       this.markBotTurnOut(session, settings);
-      if (session.mode === "openai_realtime") {
+      if (isRealtimeMode(session.mode)) {
         session.pendingRealtimeInputBytes = 0;
       }
 
@@ -3925,7 +4049,7 @@ export class VoiceSessionManager {
         });
       }
 
-      if (session.mode === "openai_realtime" && transcriptSource === "output") {
+      if (isRealtimeMode(session.mode) && transcriptSource === "output") {
         session.pendingRealtimeInputBytes = 0;
       }
       const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
@@ -3991,7 +4115,7 @@ export class VoiceSessionManager {
         const isActiveResponseCollision =
           normalizedCode === "conversation_already_has_active_response" ||
           /active response in progress/i.test(String(details.message || ""));
-        const hasActiveResponse = this.isOpenAiRealtimeResponseActive(session);
+        const hasActiveResponse = this.isRealtimeResponseActive(session);
         session.pendingRealtimeInputBytes = 0;
         const pending = session.pendingResponse;
         if (
@@ -4071,16 +4195,17 @@ export class VoiceSessionManager {
       const responseStatus = parseResponseDoneStatus(event);
       const responseUsage = parseResponseDoneUsage(event);
       const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-      const resolvedResponseModel = session.mode === "openai_realtime"
+      const realtimeProvider = resolveRealtimeProvider(session.mode);
+      const resolvedResponseModel = isRealtimeMode(session.mode)
         ? parseResponseDoneModel(event) ||
         String(session.realtimeClient?.sessionConfig?.model || "").trim() ||
         String(resolvedSettings?.voice?.openaiRealtime?.model || "gpt-realtime").trim() ||
         "gpt-realtime"
         : parseResponseDoneModel(event);
       const responseUsdCost =
-        session.mode === "openai_realtime" && responseUsage
+        isRealtimeMode(session.mode) && responseUsage
           ? estimateUsdCost({
-            provider: "openai",
+            provider: realtimeProvider || "openai",
             model: resolvedResponseModel || "gpt-realtime",
             inputTokens: Number(responseUsage.inputTokens || 0),
             outputTokens: Number(responseUsage.outputTokens || 0),
@@ -4120,6 +4245,20 @@ export class VoiceSessionManager {
       if (!pending) return;
 
       if (hadAudio) {
+        // Schedule music unduck after the subprocess finishes playing
+        // buffered audio (~BOT_TURN_SILENCE_RESET_MS after last delta).
+        if (session._realtimeMusicDucked) {
+          if (session._realtimeUnduckTimer) clearTimeout(session._realtimeUnduckTimer);
+          session._realtimeUnduckTimer = setTimeout(() => {
+            session._realtimeUnduckTimer = null;
+            if (session._realtimeMusicDucked) {
+              session._realtimeMusicDucked = false;
+              if (this.isMusicPlaybackActive(session) && this.musicPlayer?.isDucked?.()) {
+                this.musicPlayer?.unduck(300);
+              }
+            }
+          }, BOT_TURN_SILENCE_RESET_MS);
+        }
         this.clearPendingResponse(session);
         return;
       }
@@ -4157,7 +4296,7 @@ export class VoiceSessionManager {
     const onEvent = (event) => {
       if (!session || session.ending) return;
       if (!event || typeof event !== "object") return;
-      if (session.mode !== "openai_realtime") return;
+      if (!isRealtimeMode(session.mode)) return;
       this.trackOpenAiRealtimeAssistantAudioEvent(session, event);
       this.handleOpenAiRealtimeFunctionCallEvent({
         session,
@@ -4202,7 +4341,7 @@ export class VoiceSessionManager {
     this.maybeClearActiveReplyInterruptionPolicy(session);
   }
 
-  queueOpenAiRealtimeTurnContextRefresh({
+  queueRealtimeTurnContextRefresh({
     session,
     settings,
     userId,
@@ -4210,7 +4349,7 @@ export class VoiceSessionManager {
     captureReason = "stream_end"
   }) {
     if (!session || session.ending) return;
-    if (session.mode !== "openai_realtime") return;
+    if (!providerSupports(session.mode || "", "updateInstructions")) return;
 
     const pendingRefreshState =
       session.openAiTurnContextRefreshState &&
@@ -4236,7 +4375,7 @@ export class VoiceSessionManager {
           const queued = pendingRefreshState.pending;
           pendingRefreshState.pending = null;
           if (!queued) break;
-          await this.prepareOpenAiRealtimeTurnContext({
+          await this.prepareRealtimeTurnContext({
             session,
             settings: queued.settings,
             userId: queued.userId,
@@ -4265,7 +4404,7 @@ export class VoiceSessionManager {
           return;
         }
         if (pendingRefreshState.pending) {
-          this.queueOpenAiRealtimeTurnContextRefresh({
+          this.queueRealtimeTurnContextRefresh({
             session,
             settings: pendingRefreshState.pending.settings,
             userId: pendingRefreshState.pending.userId,
@@ -4300,7 +4439,7 @@ export class VoiceSessionManager {
     const musicActive = this.isMusicPlaybackActive(session);
     const botTurnOpen = Boolean(session.botTurnOpen);
     const pendingResponse = Boolean(session.pendingResponse && typeof session.pendingResponse === "object");
-    const openAiActiveResponse = this.isOpenAiRealtimeResponseActive(session);
+    const openAiActiveResponse = this.isRealtimeResponseActive(session);
     const locked =
       musicActive ||
       botTurnOpen ||
@@ -4595,6 +4734,14 @@ export class VoiceSessionManager {
       return {
         allow: false,
         reason: "thought_engine_disabled",
+        retryAfterMs: thoughtConfig.minSilenceSeconds * 1000
+      };
+    }
+
+    if (this.isMusicPlaybackActive(session)) {
+      return {
+        allow: false,
+        reason: "music_playback_active",
         retryAfterMs: thoughtConfig.minSilenceSeconds * 1000
       };
     }
@@ -5720,124 +5867,121 @@ export class VoiceSessionManager {
       };
     }
 
+    // Duck music while the bot speaks, unduck after.
+    const musicWasPlaying = this.isMusicPlaybackActive(session) && !this.musicPlayer?.isPaused?.();
+    if (musicWasPlaying) {
+      await this.musicPlayer?.duck(300);
+    }
+
     const requiresOrderedPlayback = steps.some((entry) => entry?.type === "soundboard");
     let speechStep = 0;
     let soundboardStep = 0;
     let spokeLine = false;
     let requestedRealtimeUtterance = false;
     let playedSoundboardCount = 0;
+    let completed = true;
 
-    for (const step of steps) {
-      if (session.ending) {
-        return {
-          completed: false,
-          spokeLine,
-          requestedRealtimeUtterance,
-          playedSoundboardCount
-        };
-      }
-      if (!step || typeof step !== "object") continue;
-      if (step.type === "speech") {
-        const segmentText = normalizeVoiceText(step.text, STT_REPLY_MAX_CHARS);
-        if (!segmentText) continue;
-        speechStep += 1;
-        const speechSource = `${String(source || "voice_reply")}:speech_${speechStep}`;
-        if (preferRealtimeUtterance) {
-          if (
-            this.maybeSupersedeRealtimeReplyBeforePlayback({
-              session,
-              source: speechSource,
-              speechStep,
-              generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0)
-            })
-          ) {
-            return {
-              completed: false,
-              spokeLine,
-              requestedRealtimeUtterance,
-              playedSoundboardCount
-            };
-          }
-          const requested = this.requestRealtimeTextUtterance({
-            session,
-            text: segmentText,
-            userId: this.client.user?.id || null,
-            source: speechSource,
-            interruptionPolicy,
-            latencyContext
-          });
-          if (requested) {
-            spokeLine = true;
-            requestedRealtimeUtterance = true;
-            if (requiresOrderedPlayback) {
-              await this.waitForLeaveDirectivePlayback({
+    try {
+      for (const step of steps) {
+        if (session.ending) {
+          completed = false;
+          break;
+        }
+        if (!step || typeof step !== "object") continue;
+        if (step.type === "speech") {
+          const segmentText = normalizeVoiceText(step.text, STT_REPLY_MAX_CHARS);
+          if (!segmentText) continue;
+          speechStep += 1;
+          const speechSource = `${String(source || "voice_reply")}:speech_${speechStep}`;
+          if (preferRealtimeUtterance) {
+            if (
+              this.maybeSupersedeRealtimeReplyBeforePlayback({
                 session,
-                expectRealtimeAudio: true,
-                source: speechSource
-              });
+                source: speechSource,
+                speechStep,
+                generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0)
+              })
+            ) {
+              completed = false;
+              break;
             }
-            continue;
-          }
-          if (
-            this.maybeSupersedeRealtimeReplyBeforePlayback({
+            const requested = this.requestRealtimeTextUtterance({
               session,
+              text: segmentText,
+              userId: this.client.user?.id || null,
               source: speechSource,
-              speechStep,
-              generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0)
-            })
-          ) {
-            return {
-              completed: false,
-              spokeLine,
-              requestedRealtimeUtterance,
-              playedSoundboardCount
-            };
+              interruptionPolicy,
+              latencyContext
+            });
+            if (requested) {
+              spokeLine = true;
+              requestedRealtimeUtterance = true;
+              if (requiresOrderedPlayback) {
+                await this.waitForLeaveDirectivePlayback({
+                  session,
+                  expectRealtimeAudio: true,
+                  source: speechSource
+                });
+              }
+              continue;
+            }
+            if (
+              this.maybeSupersedeRealtimeReplyBeforePlayback({
+                session,
+                source: speechSource,
+                speechStep,
+                generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0)
+              })
+            ) {
+              completed = false;
+              break;
+            }
           }
-        }
-        const spoke = await this.speakVoiceLineWithTts({
-          session,
-          settings,
-          text: segmentText,
-          source: `${speechSource}:tts_fallback`
-        });
-        if (!spoke) {
-          return {
-            completed: false,
-            spokeLine,
-            requestedRealtimeUtterance,
-            playedSoundboardCount
-          };
-        }
-        spokeLine = true;
-        if (requiresOrderedPlayback) {
-          await this.waitForLeaveDirectivePlayback({
+          const spoke = await this.speakVoiceLineWithTts({
             session,
-            expectRealtimeAudio: false,
-            source: speechSource
+            settings,
+            text: segmentText,
+            source: `${speechSource}:tts_fallback`
           });
+          if (!spoke) {
+            completed = false;
+            break;
+          }
+          spokeLine = true;
+          if (requiresOrderedPlayback) {
+            await this.waitForLeaveDirectivePlayback({
+              session,
+              expectRealtimeAudio: false,
+              source: speechSource
+            });
+          }
+          continue;
         }
-        continue;
+        if (step.type === "soundboard") {
+          const requestedRef = String(step.reference || "")
+            .trim()
+            .slice(0, 180);
+          if (!requestedRef) continue;
+          soundboardStep += 1;
+          await this.maybeTriggerAssistantDirectedSoundboard({
+            session,
+            settings,
+            userId: this.client.user?.id || null,
+            transcript: spokenText,
+            requestedRef,
+            source: `${String(source || "voice_reply")}:soundboard_${soundboardStep}`
+          });
+          playedSoundboardCount += 1;
+        }
       }
-      if (step.type === "soundboard") {
-        const requestedRef = String(step.reference || "")
-          .trim()
-          .slice(0, 180);
-        if (!requestedRef) continue;
-        soundboardStep += 1;
-        await this.maybeTriggerAssistantDirectedSoundboard({
-          session,
-          settings,
-          userId: this.client.user?.id || null,
-          transcript: spokenText,
-          requestedRef,
-          source: `${String(source || "voice_reply")}:soundboard_${soundboardStep}`
-        });
-        playedSoundboardCount += 1;
+    } finally {
+      if (musicWasPlaying && this.isMusicPlaybackActive(session) && this.musicPlayer?.isDucked?.()) {
+        this.musicPlayer?.unduck(300);
       }
     }
 
     return {
-      completed: true,
+      completed,
       spokeLine,
       requestedRealtimeUtterance,
       playedSoundboardCount
@@ -5977,7 +6121,7 @@ export class VoiceSessionManager {
     return true;
   }
 
-  shouldUseOpenAiPerUserTranscription({
+  shouldUsePerUserTranscription({
     session = null,
     settings = null
   }: {
@@ -5989,7 +6133,7 @@ export class VoiceSessionManager {
     settings?: Record<string, unknown> | null;
   } = {}) {
     if (!session || session.ending) return false;
-    if (session.mode !== "openai_realtime") return false;
+    if (!providerSupports(session.mode || "", "perUserAsr")) return false;
     if (!this.appConfig?.openaiApiKey) return false;
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
     if (this.resolveRealtimeReplyStrategy({
@@ -6004,7 +6148,7 @@ export class VoiceSessionManager {
     return true;
   }
 
-  shouldUseOpenAiSharedTranscription({
+  shouldUseSharedTranscription({
     session = null,
     settings = null
   }: {
@@ -6016,7 +6160,7 @@ export class VoiceSessionManager {
     settings?: Record<string, unknown> | null;
   } = {}) {
     if (!session || session.ending) return false;
-    if (session.mode !== "openai_realtime") return false;
+    if (!providerSupports(session.mode || "", "sharedAsr")) return false;
     if (!this.appConfig?.openaiApiKey) return false;
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
     if (this.resolveRealtimeReplyStrategy({
@@ -6031,7 +6175,7 @@ export class VoiceSessionManager {
     return true;
   }
 
-  shouldUseOpenAiRealtimeTranscriptBridge({
+  shouldUseRealtimeTranscriptBridge({
     session = null,
     settings = null
   }: {
@@ -6043,8 +6187,8 @@ export class VoiceSessionManager {
     settings?: Record<string, unknown> | null;
   } = {}) {
     return (
-      this.shouldUseOpenAiPerUserTranscription({ session, settings }) ||
-      this.shouldUseOpenAiSharedTranscription({ session, settings })
+      this.shouldUsePerUserTranscription({ session, settings }) ||
+      this.shouldUseSharedTranscription({ session, settings })
     );
   }
 
@@ -6152,7 +6296,7 @@ export class VoiceSessionManager {
     userId
   }) {
     if (!session || session.ending) return null;
-    if (!this.shouldUseOpenAiPerUserTranscription({ session, settings })) return null;
+    if (!this.shouldUsePerUserTranscription({ session, settings })) return null;
     const asrState = this.getOrCreateOpenAiAsrSessionState({
       session,
       userId
@@ -6412,7 +6556,7 @@ export class VoiceSessionManager {
     userId
   }) {
     if (!session || session.ending) return;
-    if (!this.shouldUseOpenAiPerUserTranscription({ session, settings })) return;
+    if (!this.shouldUsePerUserTranscription({ session, settings })) return;
     const asrState = this.getOrCreateOpenAiAsrSessionState({
       session,
       userId
@@ -6457,7 +6601,7 @@ export class VoiceSessionManager {
     pcmChunk
   }) {
     if (!session || session.ending) return;
-    if (!this.shouldUseOpenAiPerUserTranscription({ session, settings })) return;
+    if (!this.shouldUsePerUserTranscription({ session, settings })) return;
     const asrState = this.getOrCreateOpenAiAsrSessionState({
       session,
       userId
@@ -6610,7 +6754,7 @@ export class VoiceSessionManager {
     captureReason = "stream_end"
   }) {
     if (!session || session.ending) return null;
-    if (!this.shouldUseOpenAiPerUserTranscription({ session, settings })) return null;
+    if (!this.shouldUsePerUserTranscription({ session, settings })) return null;
     const asrState = await this.ensureOpenAiAsrSessionConnected({
       session,
       settings,
@@ -6989,7 +7133,7 @@ export class VoiceSessionManager {
     settings = null
   }) {
     if (!session || session.ending) return null;
-    if (!this.shouldUseOpenAiSharedTranscription({ session, settings })) return null;
+    if (!this.shouldUseSharedTranscription({ session, settings })) return null;
     const asrState = this.getOpenAiSharedAsrState(session);
     if (!asrState || asrState.closing) return null;
 
@@ -7265,7 +7409,7 @@ export class VoiceSessionManager {
     userId
   }) {
     if (!session || session.ending) return false;
-    if (!this.shouldUseOpenAiSharedTranscription({ session, settings })) return false;
+    if (!this.shouldUseSharedTranscription({ session, settings })) return false;
     const asrState = this.getOpenAiSharedAsrState(session);
     const normalizedUserId = String(userId || "").trim();
     if (!asrState || !normalizedUserId) return false;
@@ -7310,7 +7454,7 @@ export class VoiceSessionManager {
     pcmChunk
   }) {
     if (!session || session.ending) return false;
-    if (!this.shouldUseOpenAiSharedTranscription({ session, settings })) return false;
+    if (!this.shouldUseSharedTranscription({ session, settings })) return false;
     const asrState = this.getOpenAiSharedAsrState(session);
     const normalizedUserId = String(userId || "").trim();
     if (!asrState || asrState.closing || !normalizedUserId) return false;
@@ -7366,7 +7510,7 @@ export class VoiceSessionManager {
     captureReason = "stream_end"
   }) {
     if (!session || session.ending) return null;
-    if (!this.shouldUseOpenAiSharedTranscription({ session, settings })) return null;
+    if (!this.shouldUseSharedTranscription({ session, settings })) return null;
     const asrState = await this.ensureOpenAiSharedAsrSessionConnected({
       session,
       settings
@@ -7432,6 +7576,13 @@ export class VoiceSessionManager {
       asrState,
       utteranceId: trackedUtteranceId
     });
+
+    if (trackedUtterance) {
+      trackedUtterance.finalSegments = [];
+      trackedUtterance.finalSegmentEntries = [];
+      trackedUtterance.partialText = "";
+      trackedUtterance.lastUpdateAt = 0;
+    }
 
     const asrStartedAtMs = Date.now();
     try {
@@ -7550,7 +7701,7 @@ export class VoiceSessionManager {
 
   tryHandoffSharedAsrToWaitingCapture({ session, settings = null }) {
     if (!session || session.ending) return false;
-    if (!this.shouldUseOpenAiSharedTranscription({ session, settings })) return false;
+    if (!this.shouldUseSharedTranscription({ session, settings })) return false;
     const asrState = this.getOpenAiSharedAsrState(session);
     if (!asrState || asrState.closing) return false;
     if (asrState.userId) return false;
@@ -7652,11 +7803,11 @@ export class VoiceSessionManager {
   }
 
   bindSessionHandlers(session, settings) {
-    const useOpenAiPerUserAsr = this.shouldUseOpenAiPerUserTranscription({
+    const useOpenAiPerUserAsr = this.shouldUsePerUserTranscription({
       session,
       settings
     });
-    const useOpenAiSharedAsr = this.shouldUseOpenAiSharedTranscription({
+    const useOpenAiSharedAsr = this.shouldUseSharedTranscription({
       session,
       settings
     });
@@ -7719,6 +7870,7 @@ export class VoiceSessionManager {
         }
         return;
       }
+      if (!this.isAsrActive(session, settings)) return;
       const normalizedUserId = String(userId || "");
       const activeCapture = session.userCaptures.get(normalizedUserId);
       if (activeCapture?.speakingEndFinalizeTimer) {
@@ -7771,12 +7923,34 @@ export class VoiceSessionManager {
       }, finalizeDelayMs);
     };
 
+    const onClientDisconnect = (disconnectUserId) => {
+      const normalizedUserId = String(disconnectUserId || "").trim();
+      if (!normalizedUserId) return;
+      if (normalizedUserId === String(this.client.user?.id || "")) return;
+      const capture = session.userCaptures?.get?.(normalizedUserId);
+      if (!capture) return;
+      // Immediately finalize — the user has left the channel, no point waiting
+      if (capture.speakingEndFinalizeTimer) {
+        clearTimeout(capture.speakingEndFinalizeTimer);
+        capture.speakingEndFinalizeTimer = null;
+      }
+      if (capture.bargeInAssertTimer) {
+        clearTimeout(capture.bargeInAssertTimer);
+        capture.bargeInAssertTimer = null;
+      }
+      if (typeof capture.finalize === "function") {
+        capture.finalize("client_disconnect");
+      }
+    };
+
     if (session.subprocessClient) {
       session.subprocessClient.on("speakingStart", onSpeakingStart);
       session.subprocessClient.on("speakingEnd", onSpeakingEnd);
+      session.subprocessClient.on("clientDisconnect", onClientDisconnect);
       session.cleanupHandlers.push(() => {
         session.subprocessClient?.off("speakingStart", onSpeakingStart);
         session.subprocessClient?.off("speakingEnd", onSpeakingEnd);
+        session.subprocessClient?.off("clientDisconnect", onClientDisconnect);
       });
     }
   }
@@ -7784,11 +7958,11 @@ export class VoiceSessionManager {
   startInboundCapture({ session, userId, settings = session?.settingsSnapshot }) {
     if (!session || !userId) return;
     if (session.userCaptures.has(userId)) return;
-    const useOpenAiPerUserAsr = this.shouldUseOpenAiPerUserTranscription({
+    const useOpenAiPerUserAsr = this.shouldUsePerUserTranscription({
       session,
       settings
     });
-    const useOpenAiSharedAsr = this.shouldUseOpenAiSharedTranscription({
+    const useOpenAiSharedAsr = this.shouldUseSharedTranscription({
       session,
       settings
     });
@@ -8002,6 +8176,19 @@ export class VoiceSessionManager {
       });
 
       if (captureState.bytesSent <= 0 || session.ending) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: "voice_turn_skipped_empty_capture",
+          metadata: {
+            sessionId: session.id,
+            reason: String(reason || "stream_end"),
+            bytesSent: Number(captureState.bytesSent || 0),
+            ending: Boolean(session.ending)
+          }
+        });
         cleanupCapture();
         if (useOpenAiPerUserAsr) {
           this.scheduleOpenAiAsrSessionIdleClose({
@@ -8062,7 +8249,7 @@ export class VoiceSessionManager {
         }
         return;
       }
-      
+
       if (isBurstArtifact) {
         this.store.logAction({
           kind: "voice_runtime",
@@ -8942,6 +9129,10 @@ export class VoiceSessionManager {
   resolveRealtimeReplyStrategy({ session, settings = null }) {
     if (!session || !isRealtimeMode(session.mode)) return "brain";
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    // Prefer new replyPath setting, fall back to legacy realtimeReplyStrategy
+    const replyPath = String(resolvedSettings?.voice?.replyPath || "").trim().toLowerCase();
+    if (replyPath === "native") return "native";
+    if (replyPath === "bridge" || replyPath === "brain") return "brain";
     const configuredStrategy = String(resolvedSettings?.voice?.realtimeReplyStrategy || "")
       .trim()
       .toLowerCase();
@@ -9016,7 +9207,7 @@ export class VoiceSessionManager {
 
     const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
     const preferredModel =
-      session.mode === "openai_realtime"
+      isRealtimeMode(session.mode)
         ? settings?.voice?.openaiRealtime?.inputTranscriptionModel
         : settings?.voice?.sttPipeline?.transcriptionModel;
     const transcriptionModel = String(preferredModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
@@ -9189,6 +9380,43 @@ export class VoiceSessionManager {
           transcriptionModelPrimary: transcriptionPlan.primaryModel,
           transcriptionModelFallback: resolvedFallbackModel || null,
           transcriptionUsedFallbackModel: true
+        }
+      });
+      return;
+    }
+
+    // Guard: ASR bridge was active but returned empty → PCM fallback produced transcript
+    // This catches hallucinations from non-speech audio (coughs, throat clears, mic bumps)
+    // where the ASR buffer race caused empty commit and gpt-4o-transcribe hallucinated.
+    const asrBridgeWasActive = session.perUserAsrEnabled || session.sharedAsrEnabled;
+    if (
+      asrBridgeWasActive &&
+      !hasTranscriptOverride &&
+      turnTranscript &&
+      clipDurationMs > 0 &&
+      clipDurationMs <= VOICE_FALLBACK_NOISE_GATE_MAX_CLIP_MS &&
+      silenceGate.rms <= VOICE_FALLBACK_NOISE_GATE_RMS_MAX &&
+      silenceGate.peak <= VOICE_FALLBACK_NOISE_GATE_PEAK_MAX &&
+      silenceGate.activeSampleRatio <= VOICE_FALLBACK_NOISE_GATE_ACTIVE_RATIO_MAX
+    ) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "voice_turn_dropped_asr_bridge_fallback_hallucination",
+        metadata: {
+          sessionId: session.id,
+          source: "realtime",
+          captureReason: String(captureReason || "stream_end"),
+          transcript: turnTranscript,
+          clipDurationMs,
+          rms: Number(silenceGate.rms.toFixed(6)),
+          peak: Number(silenceGate.peak.toFixed(6)),
+          activeSampleRatio: Number(silenceGate.activeSampleRatio.toFixed(6)),
+          transcriptionModelPrimary: transcriptionPlan.primaryModel,
+          transcriptionModelFallback: resolvedFallbackModel || null,
+          hasTranscriptOverride
         }
       });
       return;
@@ -9383,8 +9611,8 @@ export class VoiceSessionManager {
       return;
     }
 
-    if (this.shouldUseOpenAiRealtimeTranscriptBridge({ session, settings })) {
-      await this.forwardOpenAiRealtimeTextTurnToBrain({
+    if (this.shouldUseRealtimeTranscriptBridge({ session, settings })) {
+      await this.forwardRealtimeTextTurnToBrain({
         session,
         settings,
         userId,
@@ -9659,8 +9887,8 @@ export class VoiceSessionManager {
       return;
     }
 
-    if (this.shouldUseOpenAiRealtimeTranscriptBridge({ session, settings })) {
-      await this.forwardOpenAiRealtimeTextTurnToBrain({
+    if (this.shouldUseRealtimeTranscriptBridge({ session, settings })) {
+      await this.forwardRealtimeTextTurnToBrain({
         session,
         settings,
         userId: latestTurn?.userId || null,
@@ -9685,7 +9913,7 @@ export class VoiceSessionManager {
     });
   }
 
-  async forwardOpenAiRealtimeTextTurnToBrain({
+  async forwardRealtimeTextTurnToBrain({
     session,
     settings,
     userId,
@@ -9697,7 +9925,7 @@ export class VoiceSessionManager {
     latencyContext = null
   }) {
     if (!session || session.ending) return false;
-    if (session.mode !== "openai_realtime") return false;
+    if (!providerSupports(session.mode || "", "textInput")) return false;
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     if (!normalizedTranscript) return false;
     if (!session.realtimeClient || typeof session.realtimeClient.requestTextUtterance !== "function") {
@@ -9719,7 +9947,7 @@ export class VoiceSessionManager {
 
     // Cancel any in-flight response so the model sees all user messages and
     // generates a single contextual reply instead of queuing separate responses.
-    if (this.isOpenAiRealtimeResponseActive(session)) {
+    if (this.isRealtimeResponseActive(session)) {
       try {
         const cancel = session.realtimeClient?.cancelActiveResponse;
         if (typeof cancel === "function") {
@@ -9730,7 +9958,7 @@ export class VoiceSessionManager {
       this.clearPendingResponse(session);
     }
 
-    this.queueOpenAiRealtimeTurnContextRefresh({
+    this.queueRealtimeTurnContextRefresh({
       session,
       settings,
       userId: normalizedUserId,
@@ -9759,7 +9987,7 @@ export class VoiceSessionManager {
       });
       session.pendingBargeInRetry = null;
       session.lastRequestedRealtimeUtterance = null;
-      
+
       session.lastGenerationContext = {
         capturedAt: new Date().toISOString(),
         incomingTranscript: normalizedTranscript,
@@ -9834,8 +10062,8 @@ export class VoiceSessionManager {
       return false;
     }
 
-    if (session.mode === "openai_realtime") {
-      this.queueOpenAiRealtimeTurnContextRefresh({
+    if (providerSupports(session.mode || "", "updateInstructions")) {
+      this.queueRealtimeTurnContextRefresh({
         session,
         settings,
         userId,
@@ -9983,12 +10211,6 @@ export class VoiceSessionManager {
     const directAddressedByWakePhrase = normalizedTranscript
       ? isVoiceTurnAddressedToBot(normalizedTranscript, settings)
       : false;
-    const joinWindowAgeMs = Math.max(0, now - Number(session?.startedAt || 0));
-    const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
-    const replyDecisionLlm = settings?.voice?.replyDecisionLlm || {};
-    const classifierEnabled =
-      replyDecisionLlm?.enabled !== undefined ? Boolean(replyDecisionLlm.enabled) : true;
-
     const normalizeWakeTokens = (value = "") =>
       String(value || "")
         .trim()
@@ -10032,47 +10254,26 @@ export class VoiceSessionManager {
       transcript: normalizedTranscript,
       botName: getPromptBotName(settings)
     });
-    const shouldRunAddressClassifier =
-      classifierEnabled &&
-      !deterministicDirectAddressed &&
-      !mergedWakeTokenAddressed &&
-      nameCueDetected;
-    const directAddressAssessment = shouldRunAddressClassifier
-      ? await scoreDirectAddressConfidence({
-        llm: this.llm,
-        settings,
-        transcript: normalizedTranscript,
-        botName: getPromptBotName(settings),
-        mode: "voice",
-        speakerName,
-        participantNames: participantList,
-        threshold: DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
-        fallbackConfidence: deterministicDirectAddressed ? 0.92 : 0,
-        trace: {
-          guildId: session?.guildId || null,
-          channelId: session?.textChannelId || null,
-          userId: normalizedUserId || null,
-          source: "voice_direct_address",
-          event: String(_source || "stt_pipeline")
-        }
-      })
-      : {
-        confidence: deterministicDirectAddressed ? 0.92 : 0,
-        threshold: DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
-        addressed: deterministicDirectAddressed,
-        reason: deterministicDirectAddressed ? "deterministic_wake_phrase" : "deterministic_not_direct",
-        source: "fallback",
-        llmProvider: null,
-        llmModel: null,
-        llmResponse: null,
-        error: null
-      };
+    const directAddressAssessment = {
+      confidence: deterministicDirectAddressed ? 0.92 : 0,
+      threshold: DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
+      addressed: deterministicDirectAddressed,
+      reason: deterministicDirectAddressed ? "deterministic_wake_phrase" : "deterministic_not_direct",
+      source: "fallback",
+      llmProvider: null,
+      llmModel: null,
+      llmResponse: null,
+      error: null
+    };
     const directAddressConfidence = Number(directAddressAssessment.confidence) || 0;
     const directAddressThreshold = Number(directAddressAssessment.threshold) || DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD;
     const directAddressed =
       !addressedToOtherParticipant &&
       directAddressConfidence >= directAddressThreshold;
-    const replyEagerness = clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
+    const musicActive = this.isMusicPlaybackActive(session);
+    const replyEagerness = musicActive
+      ? 0
+      : clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
     const baseConversationContext = this.buildVoiceConversationContext({
       session,
       userId: normalizedUserId,
@@ -10096,8 +10297,6 @@ export class VoiceSessionManager {
       voiceAddressingState,
       currentTurnAddressing
     };
-    const formatAgeMs = (value) =>
-      Number.isFinite(value) ? String(Math.max(0, Math.round(value))) : "none";
     const configuredNonDirectSilenceMs = Number(settings?.voice?.nonDirectReplyMinSilenceMs);
     const nonDirectReplyMinSilenceMs = clamp(
       Number.isFinite(configuredNonDirectSilenceMs)
@@ -10120,27 +10319,6 @@ export class VoiceSessionManager {
         conversationContext,
         retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS,
         outputLockReason: replyOutputLockState.reason
-      };
-    }
-
-    const lowSignalFragment = isLowSignalVoiceFragment(normalizedTranscript);
-
-    const botRecentReplyFollowup =
-      !directAddressed &&
-      !addressedToOtherParticipant &&
-      !lowSignalFragment &&
-      Boolean(conversationContext.recentAssistantReply) &&
-      Boolean(conversationContext.sameAsRecentDirectAddress);
-    if (botRecentReplyFollowup) {
-      return {
-        allow: true,
-        reason: "bot_recent_reply_followup",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        conversationContext
       };
     }
 
@@ -10173,12 +10351,6 @@ export class VoiceSessionManager {
     const sessionMode = String(session?.mode || settings?.voice?.mode || "")
       .trim()
       .toLowerCase();
-    const requestedDecisionProvider = replyDecisionLlm?.provider;
-    const llmProvider = normalizeVoiceReplyDecisionProvider(requestedDecisionProvider);
-    const requestedDecisionModel = replyDecisionLlm?.model;
-    const llmModel = String(requestedDecisionModel || defaultVoiceReplyDecisionModel(llmProvider))
-      .trim()
-      .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
 
     const mergedWithGeneration =
       sessionMode === "stt_pipeline" ||
@@ -10194,7 +10366,6 @@ export class VoiceSessionManager {
       Boolean(conversationContext?.recentAssistantReply) ||
       Boolean(conversationContext?.sameAsRecentDirectAddress);
     const shouldDelayNonDirectMergedRealtimeReply =
-      !classifierEnabled &&
       isRealtimeMode(sessionMode) &&
       mergedWithGeneration &&
       participantCount > 1 &&
@@ -10211,200 +10382,23 @@ export class VoiceSessionManager {
         directAddressConfidence,
         directAddressThreshold,
         transcript: normalizedTranscript,
-        llmProvider,
-        llmModel,
         conversationContext,
         msSinceInboundAudio,
         requiredSilenceMs: nonDirectReplyMinSilenceMs,
         retryAfterMs: Math.max(60, nonDirectReplyMinSilenceMs - Number(msSinceInboundAudio || 0))
       };
     }
-    if (!classifierEnabled) {
-      return {
-        allow: mergedWithGeneration,
-        reason:
-          mergedWithGeneration
-            ? "classifier_disabled_merged_with_generation"
-            : "classifier_disabled",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        llmProvider,
-        llmModel,
-        conversationContext
-      };
-    }
 
-    if (!this.llm?.generate) {
-      return {
-        allow: false,
-        reason: "llm_generate_unavailable",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        llmProvider,
-        llmModel,
-        conversationContext
-      };
-    }
-
-    const botName = getPromptBotName(settings);
-    const recentHistory = this.formatVoiceDecisionHistory(session, 6, VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS);
-    const trackedTurnCount = Array.isArray(session?.recentVoiceTurns) ? session.recentVoiceTurns.length : 0;
-    this.updateModelContextSummary(session, "decider", {
-      source: String(_source || "stt_pipeline"),
-      capturedAt: new Date(now).toISOString(),
-      availableTurns: trackedTurnCount,
-      maxTurns: VOICE_DECIDER_HISTORY_MAX_TURNS,
-      promptHistoryChars: recentHistory.length,
-      transcriptChars: normalizedTranscript.length,
-      directAddressed: Boolean(directAddressed),
-      directAddressConfidence: Number(directAddressConfidence.toFixed(3)),
-      directAddressThreshold: Number(directAddressThreshold.toFixed(2)),
-      joinWindowActive,
-      hasAddressingState: Boolean(
-        voiceAddressingState?.currentSpeakerTarget ||
-        (Array.isArray(voiceAddressingState?.recentAddressingGuesses) &&
-          voiceAddressingState.recentAddressingGuesses.length > 0)
-      )
-    });
-    const decisionSettings = {
-      ...settings,
-      llm: {
-        ...(settings?.llm || {}),
-        provider: llmProvider,
-        model: llmModel,
-        temperature: 0,
-        maxOutputTokens: resolveVoiceReplyDecisionMaxOutputTokens(llmProvider, llmModel),
-        reasoningEffort: String(replyDecisionLlm?.reasoningEffort || "minimal").trim().toLowerCase() || "minimal"
-      }
+    return {
+      allow: mergedWithGeneration,
+      reason: mergedWithGeneration ? "brain_decides" : "no_brain_session",
+      participantCount,
+      directAddressed,
+      directAddressConfidence,
+      directAddressThreshold,
+      transcript: normalizedTranscript,
+      conversationContext
     };
-
-    const configuredPrompts = replyDecisionLlm?.prompts;
-    const interpolateBotName = (template, fallback) => {
-      const chosen = String(template || "").trim() || String(fallback || "").trim();
-      return interpolatePromptTemplate(chosen, { botName });
-    };
-    const wakeVariantHint = interpolateBotName(
-      configuredPrompts?.wakeVariantHint,
-      VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
-    );
-
-    const compactContextPromptParts = [
-      `Bot name: ${botName}.`,
-      `Current speaker: ${speakerName}.`,
-      `Join window active: ${joinWindowActive ? "yes" : "no"}.`,
-      "Join-window bias rule: if Join window active is yes and this turn is a short greeting/check-in, default to YES unless another human target is explicit.",
-      `Conversation engagement state: ${conversationContext.engagementState}.`,
-      `Engaged with current speaker: ${conversationContext.engagedWithCurrentSpeaker ? "yes" : "no"}.`,
-      `Recent bot reply ms ago: ${formatAgeMs(conversationContext.msSinceAssistantReply)}.`,
-      `Directly addressed: ${directAddressed ? "yes" : "no"}.`,
-      `Direct-address confidence: ${directAddressConfidence.toFixed(3)} (threshold ${directAddressThreshold.toFixed(2)}).`,
-      `Likely aimed at another participant: ${addressedToOtherParticipant ? "yes" : "no"}.`,
-      `Reply eagerness: ${replyEagerness}/100.`,
-      `Participants: ${participantCount}.`,
-      `Transcript: "${normalizedTranscript}".`,
-      wakeVariantHint
-    ];
-    if (voiceAddressingState) {
-      compactContextPromptParts.push(
-        `Current speaker addressing guess: ${voiceAddressingState.currentSpeakerTarget || "unknown"} (confidence ${Number(voiceAddressingState.currentSpeakerDirectedConfidence || 0).toFixed(2)}).`
-      );
-    }
-    if (participantList.length) {
-      compactContextPromptParts.push(`Known participants: ${participantList.join(", ")}.`);
-    }
-    if (recentHistory) {
-      compactContextPromptParts.push(`Recent turns:\n${recentHistory}`);
-    }
-
-    const systemPromptCompact = interpolateBotName(
-      configuredPrompts?.systemPromptCompact,
-      VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT
-    );
-
-    const claudeDecisionJsonSchema =
-      llmProvider === "claude-code"
-        ? JSON.stringify({
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            decision: {
-              type: "string",
-              enum: ["YES", "NO"]
-            }
-          },
-          required: ["decision"]
-        })
-        : "";
-
-    try {
-      const generation = await this.llm.generate({
-        settings: decisionSettings,
-        systemPrompt: systemPromptCompact,
-        userPrompt: compactContextPromptParts.join("\n"),
-        contextMessages: [],
-        jsonSchema: claudeDecisionJsonSchema,
-        trace: {
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId,
-          source: "voice_reply_decision",
-          event: "compact_context"
-        }
-      });
-      const raw = String(generation?.text || "").trim();
-      const parsed = parseVoiceDecisionContract(raw);
-      if (parsed.confident) {
-        const resolvedProvider = generation?.provider || llmProvider;
-        const resolvedModel = generation?.model || decisionSettings?.llm?.model || llmModel;
-        return {
-          allow: parsed.allow,
-          reason: parsed.allow ? "llm_yes" : "llm_no",
-          participantCount,
-          directAddressed,
-          directAddressConfidence,
-          directAddressThreshold,
-          transcript: normalizedTranscript,
-          llmResponse: raw,
-          llmProvider: resolvedProvider,
-          llmModel: resolvedModel,
-          conversationContext
-        };
-      }
-
-      return {
-        allow: false,
-        reason: "llm_contract_violation",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        llmResponse: raw || "(empty)",
-        llmProvider,
-        llmModel,
-        conversationContext
-      };
-    } catch (error) {
-      return {
-        allow: false,
-        reason: "llm_error",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        llmProvider,
-        llmModel,
-        error: String(error?.message || error),
-        conversationContext
-      };
-    }
   }
 
   formatVoiceDecisionHistory(session, maxTurns = 6, maxTotalChars = VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS) {
@@ -10778,19 +10772,19 @@ export class VoiceSessionManager {
     return 1;
   }
 
-  async prepareOpenAiRealtimeTurnContext({ session, settings, userId, transcript = "", captureReason: _captureReason = "stream_end" }) {
+  async prepareRealtimeTurnContext({ session, settings, userId, transcript = "", captureReason: _captureReason = "stream_end" }) {
     if (!session || session.ending) return;
-    if (session.mode !== "openai_realtime") return;
+    if (!providerSupports(session.mode || "", "updateInstructions")) return;
 
     const normalizedTranscript = normalizeVoiceText(transcript, REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS);
-    const memorySlice = await this.buildOpenAiRealtimeMemorySlice({
+    const memorySlice = await this.buildRealtimeMemorySlice({
       session,
       settings,
       userId,
       transcript: normalizedTranscript
     });
 
-    await this.refreshOpenAiRealtimeInstructions({
+    await this.refreshRealtimeInstructions({
       session,
       settings,
       reason: "turn_context",
@@ -10800,7 +10794,7 @@ export class VoiceSessionManager {
     });
   }
 
-  async buildOpenAiRealtimeMemorySlice({ session, settings, userId, transcript = "" }) {
+  async buildRealtimeMemorySlice({ session, settings, userId, transcript = "" }) {
     const empty = {
       userFacts: [],
       relevantFacts: []
@@ -10846,7 +10840,7 @@ export class VoiceSessionManager {
     };
   }
 
-  async refreshOpenAiRealtimeTools({
+  async refreshRealtimeTools({
     session,
     settings,
     reason = "voice_context_refresh"
@@ -10856,7 +10850,7 @@ export class VoiceSessionManager {
     reason?: string;
   } = {}) {
     if (!session || session.ending) return;
-    if (session.mode !== "openai_realtime") return;
+    if (!providerSupports(session.mode || "", "updateTools")) return;
     const realtimeClient = session.realtimeClient;
     if (!realtimeClient || typeof realtimeClient.updateTools !== "function") return;
 
@@ -10878,7 +10872,7 @@ export class VoiceSessionManager {
     });
 
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    const tools = this.buildOpenAiRealtimeFunctionTools({
+    const tools = this.buildRealtimeFunctionTools({
       session,
       settings: resolvedSettings
     });
@@ -10994,7 +10988,7 @@ export class VoiceSessionManager {
     userId?: string | null;
   } = {}) {
     if (!session || session.ending) return;
-    if (session.mode !== "openai_realtime") return;
+    if (!providerSupports(session.mode || "", "updateTools")) return;
     if (session.openAiToolResponseDebounceTimer) {
       clearTimeout(session.openAiToolResponseDebounceTimer);
       session.openAiToolResponseDebounceTimer = null;
@@ -11030,7 +11024,7 @@ export class VoiceSessionManager {
 
   async handleOpenAiRealtimeFunctionCallEvent({ session, settings, event }) {
     if (!session || session.ending) return;
-    if (session.mode !== "openai_realtime") return;
+    if (!providerSupports(session.mode || "", "updateTools")) return;
     const envelope = this.extractOpenAiFunctionCallEnvelope(event);
     if (!envelope) return;
     const runtimeSession = this.ensureSessionToolRuntimeState(session);
@@ -11108,7 +11102,7 @@ export class VoiceSessionManager {
     if (!normalizedToolName) return null;
     const configuredTools = Array.isArray(session?.openAiToolDefinitions)
       ? session.openAiToolDefinitions
-      : this.buildOpenAiRealtimeFunctionTools({
+      : this.buildRealtimeFunctionTools({
         session,
         settings: session?.settingsSnapshot || this.store.getSettings()
       });
@@ -12129,7 +12123,7 @@ export class VoiceSessionManager {
     }
   }
 
-  scheduleOpenAiRealtimeInstructionRefresh({
+  scheduleRealtimeInstructionRefresh({
     session,
     settings,
     reason = "voice_context_refresh",
@@ -12138,7 +12132,7 @@ export class VoiceSessionManager {
     memorySlice = null
   }) {
     if (!session || session.ending) return;
-    if (session.mode !== "openai_realtime") return;
+    if (!providerSupports(session.mode || "", "updateInstructions")) return;
 
     if (session.realtimeInstructionRefreshTimer) {
       clearTimeout(session.realtimeInstructionRefreshTimer);
@@ -12147,7 +12141,7 @@ export class VoiceSessionManager {
 
     session.realtimeInstructionRefreshTimer = setTimeout(() => {
       session.realtimeInstructionRefreshTimer = null;
-      this.refreshOpenAiRealtimeInstructions({
+      this.refreshRealtimeInstructions({
         session,
         settings: settings || session.settingsSnapshot || this.store.getSettings(),
         reason,
@@ -12158,7 +12152,7 @@ export class VoiceSessionManager {
     }, REALTIME_INSTRUCTION_REFRESH_DEBOUNCE_MS);
   }
 
-  async refreshOpenAiRealtimeInstructions({
+  async refreshRealtimeInstructions({
     session,
     settings,
     reason = "voice_context_refresh",
@@ -12167,16 +12161,16 @@ export class VoiceSessionManager {
     memorySlice = null
   }) {
     if (!session || session.ending) return;
-    if (session.mode !== "openai_realtime") return;
+    if (!providerSupports(session.mode || "", "updateInstructions")) return;
     if (!session.realtimeClient || typeof session.realtimeClient.updateInstructions !== "function") return;
 
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    await this.refreshOpenAiRealtimeTools({
+    await this.refreshRealtimeTools({
       session,
       settings: resolvedSettings,
       reason
     });
-    const instructions = this.buildOpenAiRealtimeInstructions({
+    const instructions = this.buildRealtimeInstructions({
       session,
       settings: resolvedSettings,
       speakerUserId,
@@ -12223,7 +12217,7 @@ export class VoiceSessionManager {
     }
   }
 
-  buildOpenAiRealtimeInstructions({ session, settings, speakerUserId = null, transcript = "", memorySlice = null }) {
+  buildRealtimeInstructions({ session, settings, speakerUserId = null, transcript = "", memorySlice = null }) {
     const baseInstructions = String(session?.baseVoiceInstructions || this.buildVoiceInstructions(settings)).trim();
     const speakerName = this.resolveVoiceSpeakerName(session, speakerUserId);
     const normalizedTranscript = normalizeVoiceText(transcript, REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS);
@@ -12340,9 +12334,11 @@ export class VoiceSessionManager {
     const channel = guild.channels?.cache?.get(voiceChannelId) || null;
     if (!channel?.members || typeof channel.members.forEach !== "function") return [];
 
+    const selfBotId = String(this.client.user?.id || "");
     const participants = [];
     channel.members.forEach((member) => {
-      if (!member || member.user?.bot) return;
+      if (!member) return;
+      if (member.id === selfBotId) return;
       const displayName = String(member.displayName || member.user?.globalName || member.user?.username || "").trim();
       if (!displayName) return;
       participants.push({
@@ -13523,8 +13519,8 @@ export class VoiceSessionManager {
       return true;
     }
 
-    if (playbackPlan.spokenText && session.mode === "openai_realtime") {
-      void this.prepareOpenAiRealtimeTurnContext({
+    if (playbackPlan.spokenText && providerSupports(session.mode || "", "updateInstructions")) {
+      void this.prepareRealtimeTurnContext({
         session,
         settings,
         userId,
@@ -13830,7 +13826,7 @@ export class VoiceSessionManager {
       return;
     }
 
-    if (this.isOpenAiRealtimeResponseActive(session)) {
+    if (this.isRealtimeResponseActive(session)) {
       session.responseFlushTimer = setTimeout(() => {
         session.responseFlushTimer = null;
         this.flushResponseFromBufferedAudio({ session, userId });
@@ -13841,9 +13837,10 @@ export class VoiceSessionManager {
     try {
       session.realtimeClient.commitInputAudioBuffer();
       session.pendingRealtimeInputBytes = 0;
-      // OpenAI manual turn handling requires an explicit response.create after commit.
+      // When a provider supports textInput and the session is NOT using native
+      // reply, the bridge path sends requestTextUtterance instead of response.create.
       const emitCreateEvent =
-        session.mode !== "openai_realtime" || this.shouldUseNativeRealtimeReply({ session });
+        !providerSupports(session.mode || "", "textInput") || this.shouldUseNativeRealtimeReply({ session });
       const created = this.createTrackedAudioResponse({
         session,
         userId,
@@ -13884,8 +13881,12 @@ export class VoiceSessionManager {
     if (session.joinGreetingTimer) {
       clearTimeout(session.joinGreetingTimer);
       session.joinGreetingTimer = null;
+      this.logJoinGreetingState(session, "voice_join_greeting_canceled", {
+        reason: "bot_spoke_for_other_reason",
+        source: String(source || "turn_flush")
+      });
     }
-    if (emitCreateEvent && this.isOpenAiRealtimeResponseActive(session)) {
+    if (emitCreateEvent && this.isRealtimeResponseActive(session)) {
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
@@ -13904,7 +13905,7 @@ export class VoiceSessionManager {
     }
 
     const now = Date.now();
-    if (session.mode === "openai_realtime") {
+    if (isRealtimeMode(session.mode)) {
       session.lastOpenAiAssistantAudioItemId = null;
       session.lastOpenAiAssistantAudioItemContentIndex = 0;
       session.lastOpenAiAssistantAudioItemReceivedMs = 0;
@@ -13997,8 +13998,8 @@ export class VoiceSessionManager {
     this.maybeClearActiveReplyInterruptionPolicy(session);
   }
 
-  isOpenAiRealtimeResponseActive(session) {
-    if (!session || session.mode !== "openai_realtime") return false;
+  isRealtimeResponseActive(session) {
+    if (!session || !isRealtimeMode(session.mode)) return false;
     const checker = session.realtimeClient?.isResponseInProgress;
     if (typeof checker !== "function") return false;
     try {
@@ -14401,10 +14402,9 @@ export class VoiceSessionManager {
 
     if (stateUserId !== botId) {
       const stateMember = newState?.member || oldState?.member || null;
-      const stateUserIsBot = Boolean(stateMember?.user?.bot);
       const movedIntoSession = sessionVoiceChannelId && oldChannelId !== sessionVoiceChannelId && newChannelId === sessionVoiceChannelId;
       const movedOutOfSession = sessionVoiceChannelId && oldChannelId === sessionVoiceChannelId && newChannelId !== sessionVoiceChannelId;
-      if (!stateUserIsBot && (movedIntoSession || movedOutOfSession)) {
+      if (movedIntoSession || movedOutOfSession) {
         const recordedEvent = this.recordVoiceMembershipEvent({
           session,
           userId: stateUserId,
@@ -14429,11 +14429,11 @@ export class VoiceSessionManager {
         }
       }
       if (
-        session.mode === "openai_realtime" &&
+        providerSupports(session.mode || "", "updateInstructions") &&
         sessionVoiceChannelId &&
         (oldChannelId === sessionVoiceChannelId || newChannelId === sessionVoiceChannelId)
       ) {
-        this.scheduleOpenAiRealtimeInstructionRefresh({
+        this.scheduleRealtimeInstructionRefresh({
           session,
           settings: session.settingsSnapshot,
           reason: "voice_membership_changed",
@@ -14466,7 +14466,7 @@ export class VoiceSessionManager {
           if (liveChannelId) {
             liveSession.voiceChannelId = liveChannelId;
             liveSession.lastActivityAt = Date.now();
-            this.scheduleOpenAiRealtimeInstructionRefresh({
+            this.scheduleRealtimeInstructionRefresh({
               session: liveSession,
               settings: liveSession.settingsSnapshot,
               reason: "voice_channel_recovered"
@@ -14515,7 +14515,7 @@ export class VoiceSessionManager {
     if (String(newState.channelId) !== session.voiceChannelId) {
       session.voiceChannelId = String(newState.channelId);
       session.lastActivityAt = Date.now();
-      this.scheduleOpenAiRealtimeInstructionRefresh({
+      this.scheduleRealtimeInstructionRefresh({
         session,
         settings: session.settingsSnapshot,
         reason: "voice_channel_changed"
@@ -14752,6 +14752,99 @@ export class VoiceSessionManager {
       }
       await interaction.reply("Skip is not implemented yet.");
     }
+  }
+
+  async handleClankSlashCommand(
+    interaction: ChatInputCommandInteraction,
+    settings: Record<string, unknown> | null
+  ) {
+    const guild = interaction.guild;
+    const user = interaction.user;
+    if (!guild) {
+      await interaction.reply({ content: "This command must be used in a server.", ephemeral: true });
+      return;
+    }
+    const guildId = guild.id;
+    const session = this.sessions.get(guildId);
+    if (!session || session.ending) {
+      await interaction.reply({ content: "No active voice session in this server.", ephemeral: true });
+      return;
+    }
+    if (session.mode !== "stt_pipeline") {
+      await interaction.reply({ content: "The /clank command is only available in STT pipeline voice mode.", ephemeral: true });
+      return;
+    }
+
+    const message = interaction.options.getString("message", true);
+    const normalizedMessage = normalizeVoiceText(message, STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedMessage) {
+      await interaction.reply({ content: "Message cannot be empty.", ephemeral: true });
+      return;
+    }
+
+    await interaction.deferReply();
+    try {
+      await this.injectTextTurn({
+        session,
+        settings: settings || session.settingsSnapshot || this.store.getSettings(),
+        userId: user.id,
+        text: normalizedMessage,
+        source: "slash_command_clank"
+      });
+      await interaction.editReply(`Processing: "${normalizedMessage}"`);
+    } catch (error) {
+      await interaction.editReply(`Failed to process message: ${String(error?.message || error)}`);
+    }
+  }
+
+  async injectTextTurn({
+    session,
+    settings = null,
+    userId,
+    text,
+    source = "text_injection"
+  }) {
+    if (!session || session.ending) return;
+    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
+    const normalizedText = normalizeVoiceText(text, STT_TRANSCRIPT_MAX_CHARS);
+    if (!normalizedText) return;
+
+    this.recordVoiceTurn(session, {
+      role: "user",
+      userId,
+      text: normalizedText
+    });
+
+    session.lastActivityAt = Date.now();
+    session.lastDirectAddressAt = Date.now();
+    session.lastDirectAddressUserId = userId;
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId,
+      content: "voice_text_turn_injected",
+      metadata: {
+        sessionId: session.id,
+        source,
+        textLength: normalizedText.length
+      }
+    });
+
+    await this.runSttPipelineReply({
+      session,
+      settings: resolvedSettings,
+      userId,
+      transcript: normalizedText,
+      directAddressed: true,
+      directAddressConfidence: 1.0,
+      conversationContext: this.buildVoiceConversationContext({
+        session,
+        userId,
+        directAddressed: true
+      })
+    });
   }
 
 }

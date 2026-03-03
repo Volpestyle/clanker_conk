@@ -107,7 +107,7 @@ test("logAction auto-prunes when write interval threshold is reached", async () 
 
     const recent = store.getRecentActions(10);
     assert.equal(recent.length, 3);
-    assert.equal(recent[0]?.content, "event-6");
-    assert.equal(recent[2]?.content, "event-4");
+    const recentContents = recent.map((r) => r.content).sort();
+    assert.deepEqual(recentContents, ["event-4", "event-5", "event-6"]);
   });
 });

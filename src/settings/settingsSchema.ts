@@ -140,14 +140,9 @@ export const DEFAULT_SETTINGS = {
       model: "claude-sonnet-4-6"
     },
     replyDecisionLlm: {
-      enabled: false,
       provider: "anthropic",
       model: "claude-haiku-4-5",
-      reasoningEffort: "minimal",
-      prompts: {
-        wakeVariantHint: "Treat near-phonetic or misspelled tokens that appear to target the bot name as direct address. Short callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" usually indicate direct address. Questions like \"is that you <name-ish-token>?\" usually indicate direct address.",
-        systemPromptCompact: "You decide if \"{{botName}}\" should reply right now in a live Discord voice chat.\nOutput exactly one token: YES or NO.\nInterpret second-person wording (\"you\", \"your\", \"show me\") as potentially aimed at {{botName}} unless another person is explicitly targeted.\nWhen reply eagerness is low, be conservative and prefer NO unless the turn clearly warrants interruption-free contribution.\nAt medium eagerness, balance responsiveness with restraint; only insert when it adds clear value.\nAt high eagerness, you can be more available for follow-ups while staying clear and grounded.\nAt near-max/absolute max eagerness (90-100), allow more proactive social inserts when context allows, while keeping claims accurate.\nPrefer YES for direct wake-word mentions and likely ASR variants of the bot name.\nTreat near-phonetic or misspelled tokens that appear to target the bot name as direct address.\nShort callouts like \"yo <name-ish-token>\" or \"hi <name-ish-token>\" should usually be YES.\nQuestions like \"is that you <name-ish-token>?\" should usually be YES.\nDo not use rhyme alone as evidence of direct address.\nGeneric chatter such as prank/stank/stinky phrasing without a clear name-like callout should usually be NO.\nPriority rule: when Join window active is yes, treat short greetings/check-ins as targeted at the bot unless another human target is explicit.\nExamples of join-window short greetings/check-ins: hi, hey, hello, yo, hola, what's up, what up, salam, marhaba, ciao, bonjour, こんにちは, مرحبا.\nIn join window, a single-token greeting/check-in should usually be YES, not filler.\nWhen Join window active is yes and the turn is a greeting/check-in, default to YES unless it is clearly aimed at another human.\nWhen conversation engagement state is engaged and current speaker matches engaged flow, lean YES for coherent follow-ups.\nPrefer YES for clear questions/requests that seem aimed at the bot or the current speaker flow.\nIf this sounds like a follow-up from an engaged speaker, lean YES.\nPrefer NO for filler/noise, pure acknowledgements, or turns clearly aimed at another human.\nWhen uncertain and the utterance is a clear question, prefer YES.\nNever output anything except YES or NO."
-      }
+      reasoningEffort: "minimal"
     },
     xai: {
       voice: "Rex",
@@ -204,7 +199,10 @@ export const DEFAULT_SETTINGS = {
       allowExternalSounds: false,
       preferredSoundIds: []
     },
-    musicTranscriptionEnabled: true
+    replyPath: "bridge",
+    asrDuringMusic: true,
+    asrEnabled: true,
+    operationalMessages: "all"
   },
   startup: {
     catchupEnabled: true,

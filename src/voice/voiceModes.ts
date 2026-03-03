@@ -76,3 +76,61 @@ export function parseVoiceRuntimeMode(value: unknown) {
   if (normalized === "stt_pipeline") return "stt_pipeline";
   return null;
 }
+
+// ---------------------------------------------------------------------------
+// Realtime provider capability map
+// ---------------------------------------------------------------------------
+
+export interface ProviderCapabilities {
+  textInput: boolean;
+  updateInstructions: boolean;
+  updateTools: boolean;
+  cancelResponse: boolean;
+  perUserAsr: boolean;
+  sharedAsr: boolean;
+}
+
+/**
+ * Declares what each realtime runtime mode supports.
+ * Keys are VoiceRuntimeMode values (what `session.mode` holds).
+ */
+export const REALTIME_PROVIDER_CAPABILITIES: Record<string, ProviderCapabilities> = {
+  openai_realtime: {
+    textInput: true,
+    updateInstructions: true,
+    updateTools: true,
+    cancelResponse: true,
+    perUserAsr: true,
+    sharedAsr: true,
+  },
+  voice_agent: {
+    textInput: true,
+    updateInstructions: true,
+    updateTools: true,
+    cancelResponse: true,
+    perUserAsr: false,
+    sharedAsr: true,
+  },
+  gemini_realtime: {
+    textInput: true,
+    updateInstructions: true,
+    updateTools: false,
+    cancelResponse: false,
+    perUserAsr: false,
+    sharedAsr: true,
+  },
+  elevenlabs_realtime: {
+    textInput: true,
+    updateInstructions: false,
+    updateTools: false,
+    cancelResponse: false,
+    perUserAsr: false,
+    sharedAsr: true,
+  },
+};
+
+export function providerSupports(mode: string, cap: keyof ProviderCapabilities): boolean {
+  const caps = REALTIME_PROVIDER_CAPABILITIES[mode];
+  if (!caps) return false;
+  return caps[cap];
+}

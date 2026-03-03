@@ -136,6 +136,7 @@ export function settingsToForm(settings) {
     videoContextMaxAsrSeconds: settings?.videoContext?.maxAsrSeconds ?? defaultVideoContext.maxAsrSeconds,
     voiceEnabled: settings?.voice?.enabled ?? defaultVoice.enabled,
     voiceProvider: selectedVoiceProvider,
+    voiceReplyPath: settings?.voice?.replyPath ?? (settings?.voice?.realtimeReplyStrategy === "native" ? "native" : "bridge"),
     voiceBrainProvider: settings?.voice?.brainProvider ?? defaultVoice.brainProvider,
     voiceAsrLanguageMode: settings?.voice?.asrLanguageMode ?? defaultVoice.asrLanguageMode,
     voiceAsrLanguageHint: settings?.voice?.asrLanguageHint ?? defaultVoice.asrLanguageHint,
@@ -160,18 +161,10 @@ export function settingsToForm(settings) {
     voiceThoughtEngineMinSecondsBetweenThoughts:
       settings?.voice?.thoughtEngine?.minSecondsBetweenThoughts ??
       defaultVoiceThoughtEngine.minSecondsBetweenThoughts,
-    voiceReplyDecisionLlmEnabled:
-      settings?.voice?.replyDecisionLlm?.enabled ?? defaultVoice.replyDecisionLlm.enabled ?? true,
     voiceReplyDecisionLlmProvider:
       settings?.voice?.replyDecisionLlm?.provider ?? defaultVoice.replyDecisionLlm.provider,
     voiceReplyDecisionLlmModel:
       settings?.voice?.replyDecisionLlm?.model ?? defaultVoice.replyDecisionLlm.model,
-    voiceReplyDecisionWakeVariantHint:
-      settings?.voice?.replyDecisionLlm?.prompts?.wakeVariantHint ??
-      defaultVoice.replyDecisionLlm?.prompts?.wakeVariantHint,
-    voiceReplyDecisionSystemPromptCompact:
-      settings?.voice?.replyDecisionLlm?.prompts?.systemPromptCompact ??
-      defaultVoice.replyDecisionLlm?.prompts?.systemPromptCompact,
     voiceGenerationLlmUseTextModel:
       settings?.voice?.generationLlm?.useTextModel ?? defaultVoiceGenerationLlm.useTextModel,
     voiceGenerationLlmProvider:
@@ -235,7 +228,9 @@ export function settingsToForm(settings) {
     voiceSoundboardEnabled: settings?.voice?.soundboard?.enabled ?? defaultVoiceSoundboard.enabled,
     voiceSoundboardAllowExternalSounds: settings?.voice?.soundboard?.allowExternalSounds ?? defaultVoiceSoundboard.allowExternalSounds,
     voiceSoundboardPreferredSoundIds: formatLineList(settings?.voice?.soundboard?.preferredSoundIds),
-    voiceMusicTranscriptionEnabled: settings?.voice?.musicTranscriptionEnabled ?? defaultVoice.musicTranscriptionEnabled,
+    voiceAsrDuringMusic: settings?.voice?.asrDuringMusic ?? defaultVoice.asrDuringMusic ?? true,
+    voiceAsrEnabled: settings?.voice?.asrEnabled ?? defaultVoice.asrEnabled ?? true,
+    voiceOperationalMessages: settings?.voice?.operationalMessages ?? defaultVoice.operationalMessages ?? "all",
     maxMessages: settings?.permissions?.maxMessagesPerHour ?? defaultPermissions.maxMessagesPerHour,
     maxReactions: settings?.permissions?.maxReactionsPerHour ?? defaultPermissions.maxReactionsPerHour,
     catchupEnabled: settings?.startup?.catchupEnabled !== false,
@@ -360,6 +355,7 @@ export function formToSettingsPatch(form) {
     voice: {
       enabled: form.voiceEnabled,
       voiceProvider: String(form.voiceProvider || "openai").trim(),
+      replyPath: String(form.voiceReplyPath || "bridge").trim().toLowerCase(),
       brainProvider:
         String(form.voiceBrainProvider || "openai").trim().toLowerCase() === "native"
           ? "openai"
@@ -383,13 +379,8 @@ export function formToSettingsPatch(form) {
         minSecondsBetweenThoughts: Number(form.voiceThoughtEngineMinSecondsBetweenThoughts)
       },
       replyDecisionLlm: {
-        enabled: Boolean(form.voiceReplyDecisionLlmEnabled),
         provider: String(form.voiceReplyDecisionLlmProvider || "").trim(),
-        model: String(form.voiceReplyDecisionLlmModel || "").trim(),
-        prompts: {
-          wakeVariantHint: String(form.voiceReplyDecisionWakeVariantHint || "").trim(),
-          systemPromptCompact: String(form.voiceReplyDecisionSystemPromptCompact || "").trim()
-        }
+        model: String(form.voiceReplyDecisionLlmModel || "").trim()
       },
       generationLlm: {
         useTextModel: Boolean(form.voiceGenerationLlmUseTextModel),
@@ -447,7 +438,9 @@ export function formToSettingsPatch(form) {
         allowExternalSounds: form.voiceSoundboardAllowExternalSounds,
         preferredSoundIds: parseUniqueList(form.voiceSoundboardPreferredSoundIds)
       },
-      musicTranscriptionEnabled: Boolean(form.voiceMusicTranscriptionEnabled)
+      asrDuringMusic: Boolean(form.voiceAsrDuringMusic),
+      asrEnabled: Boolean(form.voiceAsrEnabled),
+      operationalMessages: String(form.voiceOperationalMessages || "all").trim().toLowerCase()
     },
     startup: {
       catchupEnabled: form.catchupEnabled,
