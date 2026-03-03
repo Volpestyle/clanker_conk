@@ -2422,7 +2422,9 @@ export class VoiceSessionManager {
       if (!music.provider) {
         music.provider = "discord";
       }
-      music.active = true;
+      // Mark inactive so the session unlocks — bot can converse while
+      // music is paused.  Resume will re-activate.
+      music.active = false;
       music.source = String(source || "text_voice_intent");
       music.lastRequestedByUserId = resolvedUserId || music.lastRequestedByUserId || null;
       music.lastRequestText = normalizedRequestText;
@@ -11924,9 +11926,13 @@ export class VoiceSessionManager {
     if (normalizedToolName === "music_resume") {
       if (this.musicPlayer?.isPaused?.()) {
         this.musicPlayer.resume();
-      } else if (this.ensureSessionMusicState(session)?.active) {
+      } else if (this.ensureSessionMusicState(session)?.lastTrackId) {
         this.musicPlayer?.resume?.();
       }
+      // Re-lock the session so bot goes quiet while music plays
+      const musicState = this.ensureSessionMusicState(session);
+      if (musicState) musicState.active = true;
+      this.haltSessionOutputForMusicPlayback(session, "music_resumed");
       const queueState = this.ensureToolMusicQueueState(session);
       if (queueState) queueState.isPaused = false;
       return {
