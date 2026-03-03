@@ -196,6 +196,7 @@ export type VoiceSession = {
   soundboard: { playCount: number; lastPlayedAt: string | null };
   mode: string;
   botTurnOpen: boolean;
+  playbackArm: { armed: boolean; reason: string | null; armedAt: string | null } | null;
   focusedSpeaker: { userId: string; displayName: string | null; since: string | null } | null;
   conversation: {
     lastAssistantReplyAt: string | null;
@@ -216,6 +217,8 @@ export type VoiceSession = {
       active: boolean;
       ageMs: number;
       windowMs: number;
+      greetingScheduled?: boolean;
+      greetingTimerActive?: boolean;
     };
     thoughtEngine: {
       busy: boolean;
@@ -288,6 +291,7 @@ export type VoiceSession = {
     replySuperseded: number;
     pendingTurns: number;
     drainActive: boolean;
+    coalesceActive?: boolean;
     state: RealtimeState | null;
   } | null;
   music: {

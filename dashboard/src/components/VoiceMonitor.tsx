@@ -1364,6 +1364,22 @@ function SessionCard({ session }: { session: VoiceSession }) {
         >
           Join: {joinWindowPill}
         </span>
+        {session.playbackArm != null && (
+          <span className={`vm-ts-pill ${session.playbackArm.armed ? "vm-ts-dave-armed" : "vm-ts-dave-pending"}`}>
+            DAVE: {session.playbackArm.armed ? "Armed" : "Handshake"}
+          </span>
+        )}
+        {session.conversation?.joinWindow?.greetingTimerActive && (
+          <span className="vm-ts-pill vm-ts-greeting-waiting">Greeting: Waiting</span>
+        )}
+        {session.conversation?.joinWindow?.greetingScheduled &&
+          !session.conversation?.joinWindow?.greetingTimerActive &&
+          !session.conversation?.lastAssistantReplyAt && (
+          <span className="vm-ts-pill vm-ts-greeting-cancelled">Greeting: Cancelled</span>
+        )}
+        {session.realtime?.coalesceActive && (
+          <span className="vm-ts-pill vm-ts-coalescing">Coalescing</span>
+        )}
         {session.botTurnOpen && <span className="vm-ts-pill vm-ts-speaking">Bot Speaking</span>}
         {session.activeInputStreams > 0 && (
           <span className="vm-ts-pill vm-ts-capturing">

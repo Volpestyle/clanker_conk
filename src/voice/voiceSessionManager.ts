@@ -688,6 +688,11 @@ export class VoiceSessionManager {
         },
         mode: session.mode || "voice_agent",
         botTurnOpen: Boolean(session.botTurnOpen),
+        playbackArm: {
+          armed: Boolean(session.playbackArmed),
+          reason: session.playbackArmedReason || null,
+          armedAt: session.playbackArmedAt ? new Date(session.playbackArmedAt).toISOString() : null,
+        },
         conversation: {
           lastAssistantReplyAt: session.lastAssistantReplyAt
             ? new Date(session.lastAssistantReplyAt).toISOString()
@@ -714,7 +719,9 @@ export class VoiceSessionManager {
           joinWindow: {
             active: joinWindowActive,
             ageMs: Math.round(joinWindowAgeMs),
-            windowMs: JOIN_GREETING_LLM_WINDOW_MS
+            windowMs: JOIN_GREETING_LLM_WINDOW_MS,
+            greetingScheduled: Boolean(session.joinGreetingScheduled),
+            greetingTimerActive: Boolean(session.joinGreetingTimer),
           },
           thoughtEngine: {
             busy: Boolean(session.thoughtLoopBusy),
@@ -962,6 +969,7 @@ export class VoiceSessionManager {
               (session.realtimeTurnDrainActive ? 1 : 0) +
               (Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns.length : 0),
             drainActive: Boolean(session.realtimeTurnDrainActive),
+            coalesceActive: Boolean(session.realtimeTurnCoalesceTimer),
             state: session.realtimeClient?.getState?.() || null
           }
           : null,
@@ -1753,7 +1761,11 @@ export class VoiceSessionManager {
   haltSessionOutputForMusicPlayback(session, reason = "music_playback_started") {
     if (!session || session.ending) return;
     this.clearPendingResponse(session);
-    this.resetBotAudioPlayback(session);
+    // Clear main-process reply state WITHOUT sending stop_playback IPC —
+    // the subprocess's handleMusicPlay already resets playback before
+    // starting music. Sending stop_playback here would kill the music
+    // process that just started.
+    this.maybeClearActiveReplyInterruptionPolicy(session);
     this.clearBargeInOutputSuppression(session, "music_playback_started");
     if (session.botTurnResetTimer) {
       clearTimeout(session.botTurnResetTimer);
@@ -1765,7 +1777,6 @@ export class VoiceSessionManager {
     session.activeReplyInterruptionPolicy = null;
     session.pendingDeferredTurns = [];
 
-    this.resetBotAudioPlayback(session);
     this.abortActiveInboundCaptures({
       session,
       reason: "music_playback_active"
@@ -3309,13 +3320,84 @@ export class VoiceSessionManager {
     // Note: connectionState and crashed handlers are registered in
     // bindSessionHandlers to avoid duplicate endSession calls.
 
+    const onPlaybackArmed = (reason) => {
+      session.playbackArmed = true;
+      session.playbackArmedReason = reason;
+      session.playbackArmedAt = Date.now();
+      if (reason !== "connection_ready") return;
+      if (session.joinGreetingScheduled) return;
+      session.joinGreetingScheduled = true;
+      // Schedule a deferred greeting — if the user speaks first the
+      // normal reply pipeline handles it (with join-window bias) and
+      // cancels this timer. If nobody talks, the bot announces itself.
+      session.joinGreetingTimer = setTimeout(() => {
+        session.joinGreetingTimer = null;
+        this.maybeFireJoinGreeting(session);
+      }, 3000);
+    };
+
     session.subprocessClient.on("playerState", onPlayerState);
+    session.subprocessClient.on("playbackArmed", onPlaybackArmed);
     session.subprocessClient.on("error", onError);
 
     session.cleanupHandlers.push(() => {
       session.subprocessClient?.off("playerState", onPlayerState);
+      session.subprocessClient?.off("playbackArmed", onPlaybackArmed);
       session.subprocessClient?.off("error", onError);
+      if (session.joinGreetingTimer) {
+        clearTimeout(session.joinGreetingTimer);
+        session.joinGreetingTimer = null;
+      }
     });
+  }
+
+  maybeFireJoinGreeting(session) {
+    if (!session || session.ending) return;
+    if (!isRealtimeMode(session.mode)) return;
+    // Skip if someone is currently talking
+    if (Number(session.userCaptures?.size || 0) > 0) return;
+    // Skip if the bot already spoke (user greeted first, normal pipeline handled it)
+    if (session.lastAssistantReplyAt) return;
+    // Skip if a user turn is queued/draining (user speech arrived, response incoming)
+    if (session.realtimeTurnDrainActive) return;
+    const pendingQueue = Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns : [];
+    if (pendingQueue.length > 0) return;
+
+    const settings = session.settingsSnapshot || this.store.getSettings();
+    const botName = getPromptBotName(settings);
+    const participantCount = this.countHumanVoiceParticipants(session);
+
+    const greetingPrompt = [
+      `You are ${botName}. You just joined a voice channel.`,
+      participantCount > 0
+        ? `There ${participantCount === 1 ? "is 1 person" : `are ${participantCount} people`} here.`
+        : "Nobody else is here yet.",
+      "Say a brief, casual greeting to announce your presence.",
+      "Keep it to one short sentence. Be natural — match the vibe of the channel."
+    ].join(" ");
+
+    const spoke = this.requestRealtimePromptUtterance({
+      session,
+      prompt: greetingPrompt,
+      userId: this.client.user?.id || null,
+      source: "voice_join_greeting"
+    });
+
+    if (spoke) {
+      session.lastAssistantReplyAt = Date.now();
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "voice_join_greeting_fired",
+        metadata: {
+          sessionId: session.id,
+          mode: session.mode,
+          participantCount
+        }
+      });
+    }
   }
 
   isBargeInOutputSuppressed(session, now = Date.now()) {
@@ -13768,6 +13850,11 @@ export class VoiceSessionManager {
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
+    // Cancel deferred join greeting — bot is about to speak for another reason.
+    if (session.joinGreetingTimer) {
+      clearTimeout(session.joinGreetingTimer);
+      session.joinGreetingTimer = null;
+    }
     if (emitCreateEvent && this.isOpenAiRealtimeResponseActive(session)) {
       this.store.logAction({
         kind: "voice_runtime",
@@ -14164,6 +14251,10 @@ export class VoiceSessionManager {
     if (session.realtimeTurnCoalesceTimer) {
       clearTimeout(session.realtimeTurnCoalesceTimer);
       session.realtimeTurnCoalesceTimer = null;
+    }
+    if (session.joinGreetingTimer) {
+      clearTimeout(session.joinGreetingTimer);
+      session.joinGreetingTimer = null;
     }
     session.pendingDeferredTurns = [];
     session.awaitingToolOutputs = false;

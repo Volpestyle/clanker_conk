@@ -335,6 +335,34 @@
   color: #94a3b8;
 }
 
+.vm-ts-dave-pending {
+  background: rgba(248, 113, 113, 0.15);
+  color: #f87171;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.vm-ts-dave-armed {
+  background: rgba(74, 222, 128, 0.12);
+  color: #4ade80;
+}
+
+.vm-ts-greeting-waiting {
+  background: rgba(251, 191, 36, 0.12);
+  color: #fbbf24;
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.vm-ts-greeting-cancelled {
+  background: rgba(148, 163, 184, 0.16);
+  color: #94a3b8;
+}
+
+.vm-ts-coalescing {
+  background: rgba(168, 130, 255, 0.12);
+  color: #a882ff;
+  animation: pulse 0.8s ease-in-out infinite;
+}
+
 /* -- collapsible section -- */
 
 .vm-section {
