@@ -575,7 +575,6 @@ function buildHarnessSettings({
         model: actorModel
       },
       replyDecisionLlm: {
-        enabled: true,
         provider: deciderProvider,
         model: deciderModel
       },

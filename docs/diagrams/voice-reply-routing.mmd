@@ -6,7 +6,7 @@ flowchart TD
     D -- too short/silent --> DROP[Drop capture]
     D -- passes --> E[Transcription]
 
-    E --> F[evaluateVoiceReplyDecision\naddressing classifier]
+    E --> F[evaluateVoiceReplyDecision\ndeterministic gates + brain decides]
     F -- "deny: bot_turn_open\neagerness too low\nsilence window needed" --> SKIP[Skip / defer turn]
     F -- allow --> G{resolveRealtimeReplyStrategy}
 

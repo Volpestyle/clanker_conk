@@ -155,12 +155,10 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.voice.thoughtEngine.minSecondsBetweenThoughts, 600);
   assert.equal(normalized.voice.replyDecisionLlm.provider, "claude-code");
   assert.equal(normalized.voice.replyDecisionLlm.model, "sonnet");
-  assert.equal(normalized.voice.replyDecisionLlm.enabled, false);
+  assert.equal(normalized.voice.replyDecisionLlm.enabled, undefined);
   assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, undefined);
   assert.equal(normalized.voice.replyDecisionLlm.reasoningEffort, "high");
-  assert.equal(String(normalized.voice.replyDecisionLlm.prompts?.wakeVariantHint || "").length > 0, true);
-  assert.equal(normalized.voice.replyDecisionLlm.prompts?.systemPromptStrict, undefined);
-  assert.equal(normalized.voice.replyDecisionLlm.prompts?.systemPromptFull, undefined);
+  assert.equal(normalized.voice.replyDecisionLlm.prompts, undefined);
   assert.equal(normalized.voice.openaiRealtime.inputAudioFormat, "pcm16");
   assert.equal(normalized.voice.openaiRealtime.outputAudioFormat, "pcm16");
   assert.equal(normalized.voice.openaiRealtime.usePerUserAsrBridge, true);
@@ -322,7 +320,6 @@ test("normalizeSettings keeps stt pipeline voice generation and reply decider in
         model: "claude-haiku-4-5"
       },
       replyDecisionLlm: {
-        enabled: true,
         provider: "openai",
         model: "claude-haiku-4-5",
         reasoningEffort: "not-real"
@@ -335,27 +332,26 @@ test("normalizeSettings keeps stt pipeline voice generation and reply decider in
   assert.equal(normalized.voice.generationLlm.useTextModel, false);
   assert.equal(normalized.voice.replyDecisionLlm.provider, "openai");
   assert.equal(normalized.voice.replyDecisionLlm.model, "claude-haiku-4-5");
-  assert.equal(normalized.voice.replyDecisionLlm.enabled, true);
+  assert.equal(normalized.voice.replyDecisionLlm.enabled, undefined);
   assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, undefined);
   assert.equal(normalized.voice.replyDecisionLlm.reasoningEffort, "minimal");
 });
 
-test("normalizeSettings preserves custom voice decider prompt overrides", () => {
+test("normalizeSettings strips removed replyDecisionLlm fields", () => {
   const normalized = normalizeSettings({
     voice: {
       replyDecisionLlm: {
+        enabled: true,
         prompts: {
-          wakeVariantHint: "custom wake rule for {{botName}}",
-          systemPromptCompact: "compact {{botName}}"
+          wakeVariantHint: "custom wake rule",
+          systemPromptCompact: "compact prompt"
         }
       }
     }
   });
 
-  assert.equal(normalized.voice.replyDecisionLlm.prompts.wakeVariantHint, "custom wake rule for {{botName}}");
-  assert.equal(normalized.voice.replyDecisionLlm.prompts.systemPromptCompact, "compact {{botName}}");
-  assert.equal(normalized.voice.replyDecisionLlm.prompts.systemPromptFull, undefined);
-  assert.equal(normalized.voice.replyDecisionLlm.prompts.systemPromptStrict, undefined);
+  assert.equal(normalized.voice.replyDecisionLlm.enabled, undefined);
+  assert.equal(normalized.voice.replyDecisionLlm.prompts, undefined);
 });
 
 test("normalizeSettings preserves long media prompt craft guidance blocks", () => {

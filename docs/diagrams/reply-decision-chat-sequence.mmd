@@ -3,18 +3,14 @@ sequenceDiagram
     participant Speaker as Voice Participant
     participant Voice as VoiceSessionManager
     participant Decider as evaluateVoiceReplyDecision
-    participant DecideLLM as voice.replyDecisionLlm
     participant GenLLM as voice generation LLM
     participant Playback as Voice Playback/Realtime Client
     participant Store as Store
 
     Speaker->>Voice: audio turn captured
     Voice->>Voice: transcribe turn
-    Voice->>Decider: Stage A admission
-    alt heuristics unresolved
-      Decider->>DecideLLM: YES/NO classifier call
-      DecideLLM-->>Decider: decision contract
-    end
+    Voice->>Decider: Stage A admission (deterministic gates)
+    Note over Decider: wake word, followup, eagerness,<br/>silence window, then brain_decides
     Decider-->>Voice: allow/deny + reason
     Voice->>Store: log voice_turn_addressing
 

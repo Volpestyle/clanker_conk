@@ -11,9 +11,7 @@ import {
   getPromptMemoryEnabledLine,
   getPromptStyle,
   getPromptVoiceGuidance,
-  interpolatePromptTemplate,
-  VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT,
-  VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
+  interpolatePromptTemplate
 } from "../promptCore.ts";
 const AUDIO_DEBUG = !!process.env.AUDIO_DEBUG;
 const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
@@ -28,8 +26,7 @@ import { estimateUsdCost } from "../pricing.ts";
 import { clamp } from "../utils.ts";
 import {
   DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
-  hasBotNameCue,
-  scoreDirectAddressConfidence
+  hasBotNameCue
 } from "../directAddressConfidence.ts";
 import { SoundboardDirector } from "./soundboardDirector.ts";
 import {
@@ -10214,12 +10211,6 @@ export class VoiceSessionManager {
     const directAddressedByWakePhrase = normalizedTranscript
       ? isVoiceTurnAddressedToBot(normalizedTranscript, settings)
       : false;
-    const joinWindowAgeMs = Math.max(0, now - Number(session?.startedAt || 0));
-    const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
-    const replyDecisionLlm = settings?.voice?.replyDecisionLlm || {};
-    const classifierEnabled =
-      replyDecisionLlm?.enabled !== undefined ? Boolean(replyDecisionLlm.enabled) : true;
-
     const normalizeWakeTokens = (value = "") =>
       String(value || "")
         .trim()
@@ -10263,41 +10254,17 @@ export class VoiceSessionManager {
       transcript: normalizedTranscript,
       botName: getPromptBotName(settings)
     });
-    const shouldRunAddressClassifier =
-      classifierEnabled &&
-      !deterministicDirectAddressed &&
-      !mergedWakeTokenAddressed &&
-      nameCueDetected;
-    const directAddressAssessment = shouldRunAddressClassifier
-      ? await scoreDirectAddressConfidence({
-        llm: this.llm,
-        settings,
-        transcript: normalizedTranscript,
-        botName: getPromptBotName(settings),
-        mode: "voice",
-        speakerName,
-        participantNames: participantList,
-        threshold: DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
-        fallbackConfidence: deterministicDirectAddressed ? 0.92 : 0,
-        trace: {
-          guildId: session?.guildId || null,
-          channelId: session?.textChannelId || null,
-          userId: normalizedUserId || null,
-          source: "voice_direct_address",
-          event: String(_source || "stt_pipeline")
-        }
-      })
-      : {
-        confidence: deterministicDirectAddressed ? 0.92 : 0,
-        threshold: DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
-        addressed: deterministicDirectAddressed,
-        reason: deterministicDirectAddressed ? "deterministic_wake_phrase" : "deterministic_not_direct",
-        source: "fallback",
-        llmProvider: null,
-        llmModel: null,
-        llmResponse: null,
-        error: null
-      };
+    const directAddressAssessment = {
+      confidence: deterministicDirectAddressed ? 0.92 : 0,
+      threshold: DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
+      addressed: deterministicDirectAddressed,
+      reason: deterministicDirectAddressed ? "deterministic_wake_phrase" : "deterministic_not_direct",
+      source: "fallback",
+      llmProvider: null,
+      llmModel: null,
+      llmResponse: null,
+      error: null
+    };
     const directAddressConfidence = Number(directAddressAssessment.confidence) || 0;
     const directAddressThreshold = Number(directAddressAssessment.threshold) || DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD;
     const directAddressed =
@@ -10327,8 +10294,6 @@ export class VoiceSessionManager {
       voiceAddressingState,
       currentTurnAddressing
     };
-    const formatAgeMs = (value) =>
-      Number.isFinite(value) ? String(Math.max(0, Math.round(value))) : "none";
     const configuredNonDirectSilenceMs = Number(settings?.voice?.nonDirectReplyMinSilenceMs);
     const nonDirectReplyMinSilenceMs = clamp(
       Number.isFinite(configuredNonDirectSilenceMs)
@@ -10429,12 +10394,6 @@ export class VoiceSessionManager {
     const sessionMode = String(session?.mode || settings?.voice?.mode || "")
       .trim()
       .toLowerCase();
-    const requestedDecisionProvider = replyDecisionLlm?.provider;
-    const llmProvider = normalizeVoiceReplyDecisionProvider(requestedDecisionProvider);
-    const requestedDecisionModel = replyDecisionLlm?.model;
-    const llmModel = String(requestedDecisionModel || defaultVoiceReplyDecisionModel(llmProvider))
-      .trim()
-      .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
 
     const mergedWithGeneration =
       sessionMode === "stt_pipeline" ||
@@ -10450,7 +10409,6 @@ export class VoiceSessionManager {
       Boolean(conversationContext?.recentAssistantReply) ||
       Boolean(conversationContext?.sameAsRecentDirectAddress);
     const shouldDelayNonDirectMergedRealtimeReply =
-      !classifierEnabled &&
       isRealtimeMode(sessionMode) &&
       mergedWithGeneration &&
       participantCount > 1 &&
@@ -10467,200 +10425,23 @@ export class VoiceSessionManager {
         directAddressConfidence,
         directAddressThreshold,
         transcript: normalizedTranscript,
-        llmProvider,
-        llmModel,
         conversationContext,
         msSinceInboundAudio,
         requiredSilenceMs: nonDirectReplyMinSilenceMs,
         retryAfterMs: Math.max(60, nonDirectReplyMinSilenceMs - Number(msSinceInboundAudio || 0))
       };
     }
-    if (!classifierEnabled) {
-      return {
-        allow: mergedWithGeneration,
-        reason:
-          mergedWithGeneration
-            ? "classifier_disabled_merged_with_generation"
-            : "classifier_disabled",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        llmProvider,
-        llmModel,
-        conversationContext
-      };
-    }
 
-    if (!this.llm?.generate) {
-      return {
-        allow: false,
-        reason: "llm_generate_unavailable",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        llmProvider,
-        llmModel,
-        conversationContext
-      };
-    }
-
-    const botName = getPromptBotName(settings);
-    const recentHistory = this.formatVoiceDecisionHistory(session, 6, VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS);
-    const trackedTurnCount = Array.isArray(session?.recentVoiceTurns) ? session.recentVoiceTurns.length : 0;
-    this.updateModelContextSummary(session, "decider", {
-      source: String(_source || "stt_pipeline"),
-      capturedAt: new Date(now).toISOString(),
-      availableTurns: trackedTurnCount,
-      maxTurns: VOICE_DECIDER_HISTORY_MAX_TURNS,
-      promptHistoryChars: recentHistory.length,
-      transcriptChars: normalizedTranscript.length,
-      directAddressed: Boolean(directAddressed),
-      directAddressConfidence: Number(directAddressConfidence.toFixed(3)),
-      directAddressThreshold: Number(directAddressThreshold.toFixed(2)),
-      joinWindowActive,
-      hasAddressingState: Boolean(
-        voiceAddressingState?.currentSpeakerTarget ||
-        (Array.isArray(voiceAddressingState?.recentAddressingGuesses) &&
-          voiceAddressingState.recentAddressingGuesses.length > 0)
-      )
-    });
-    const decisionSettings = {
-      ...settings,
-      llm: {
-        ...(settings?.llm || {}),
-        provider: llmProvider,
-        model: llmModel,
-        temperature: 0,
-        maxOutputTokens: resolveVoiceReplyDecisionMaxOutputTokens(llmProvider, llmModel),
-        reasoningEffort: String(replyDecisionLlm?.reasoningEffort || "minimal").trim().toLowerCase() || "minimal"
-      }
+    return {
+      allow: mergedWithGeneration,
+      reason: mergedWithGeneration ? "brain_decides" : "no_brain_session",
+      participantCount,
+      directAddressed,
+      directAddressConfidence,
+      directAddressThreshold,
+      transcript: normalizedTranscript,
+      conversationContext
     };
-
-    const configuredPrompts = replyDecisionLlm?.prompts;
-    const interpolateBotName = (template, fallback) => {
-      const chosen = String(template || "").trim() || String(fallback || "").trim();
-      return interpolatePromptTemplate(chosen, { botName });
-    };
-    const wakeVariantHint = interpolateBotName(
-      configuredPrompts?.wakeVariantHint,
-      VOICE_REPLY_DECIDER_WAKE_VARIANT_HINT_DEFAULT
-    );
-
-    const compactContextPromptParts = [
-      `Bot name: ${botName}.`,
-      `Current speaker: ${speakerName}.`,
-      `Join window active: ${joinWindowActive ? "yes" : "no"}.`,
-      "Join-window bias rule: if Join window active is yes and this turn is a short greeting/check-in, default to YES unless another human target is explicit.",
-      `Conversation engagement state: ${conversationContext.engagementState}.`,
-      `Engaged with current speaker: ${conversationContext.engagedWithCurrentSpeaker ? "yes" : "no"}.`,
-      `Recent bot reply ms ago: ${formatAgeMs(conversationContext.msSinceAssistantReply)}.`,
-      `Directly addressed: ${directAddressed ? "yes" : "no"}.`,
-      `Direct-address confidence: ${directAddressConfidence.toFixed(3)} (threshold ${directAddressThreshold.toFixed(2)}).`,
-      `Likely aimed at another participant: ${addressedToOtherParticipant ? "yes" : "no"}.`,
-      `Reply eagerness: ${replyEagerness}/100.`,
-      `Participants: ${participantCount}.`,
-      `Transcript: "${normalizedTranscript}".`,
-      wakeVariantHint
-    ];
-    if (voiceAddressingState) {
-      compactContextPromptParts.push(
-        `Current speaker addressing guess: ${voiceAddressingState.currentSpeakerTarget || "unknown"} (confidence ${Number(voiceAddressingState.currentSpeakerDirectedConfidence || 0).toFixed(2)}).`
-      );
-    }
-    if (participantList.length) {
-      compactContextPromptParts.push(`Known participants: ${participantList.join(", ")}.`);
-    }
-    if (recentHistory) {
-      compactContextPromptParts.push(`Recent turns:\n${recentHistory}`);
-    }
-
-    const systemPromptCompact = interpolateBotName(
-      configuredPrompts?.systemPromptCompact,
-      VOICE_REPLY_DECIDER_SYSTEM_PROMPT_COMPACT_DEFAULT
-    );
-
-    const claudeDecisionJsonSchema =
-      llmProvider === "claude-code"
-        ? JSON.stringify({
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            decision: {
-              type: "string",
-              enum: ["YES", "NO"]
-            }
-          },
-          required: ["decision"]
-        })
-        : "";
-
-    try {
-      const generation = await this.llm.generate({
-        settings: decisionSettings,
-        systemPrompt: systemPromptCompact,
-        userPrompt: compactContextPromptParts.join("\n"),
-        contextMessages: [],
-        jsonSchema: claudeDecisionJsonSchema,
-        trace: {
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId,
-          source: "voice_reply_decision",
-          event: "compact_context"
-        }
-      });
-      const raw = String(generation?.text || "").trim();
-      const parsed = parseVoiceDecisionContract(raw);
-      if (parsed.confident) {
-        const resolvedProvider = generation?.provider || llmProvider;
-        const resolvedModel = generation?.model || decisionSettings?.llm?.model || llmModel;
-        return {
-          allow: parsed.allow,
-          reason: parsed.allow ? "llm_yes" : "llm_no",
-          participantCount,
-          directAddressed,
-          directAddressConfidence,
-          directAddressThreshold,
-          transcript: normalizedTranscript,
-          llmResponse: raw,
-          llmProvider: resolvedProvider,
-          llmModel: resolvedModel,
-          conversationContext
-        };
-      }
-
-      return {
-        allow: false,
-        reason: "llm_contract_violation",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        llmResponse: raw || "(empty)",
-        llmProvider,
-        llmModel,
-        conversationContext
-      };
-    } catch (error) {
-      return {
-        allow: false,
-        reason: "llm_error",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        llmProvider,
-        llmModel,
-        error: String(error?.message || error),
-        conversationContext
-      };
-    }
   }
 
   formatVoiceDecisionHistory(session, maxTurns = 6, maxTotalChars = VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS) {

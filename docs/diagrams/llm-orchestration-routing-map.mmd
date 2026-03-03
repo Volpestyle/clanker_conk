@@ -4,7 +4,7 @@ flowchart LR
       K2[replyFollowupLlm.enabled\nreplyFollowupLlm.provider/model]
       K3[memoryLlm.provider/model]
       K4[voice.generationLlm.provider/model]
-      K5[voice.replyDecisionLlm.enabled\nprovider/model/maxAttempts]
+      K5[voice.replyDecisionLlm\nprovider/model\nmusic stop + thought engine]
       K6[activity.* / permissions.* / voice gating]
     end
 
@@ -13,7 +13,7 @@ flowchart LR
       C2[Text follow-up regeneration\nafter lookup directives]
       C3[Memory fact extraction]
       C4[Voice generation\nSTT + realtime brain]
-      C5[Voice reply decision\nYES/NO classifier]
+      C5[Voice music stop +\nthought engine decisions]
     end
 
     subgraph O[Outcomes]

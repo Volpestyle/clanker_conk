@@ -161,18 +161,10 @@ export function settingsToForm(settings) {
     voiceThoughtEngineMinSecondsBetweenThoughts:
       settings?.voice?.thoughtEngine?.minSecondsBetweenThoughts ??
       defaultVoiceThoughtEngine.minSecondsBetweenThoughts,
-    voiceReplyDecisionLlmEnabled:
-      settings?.voice?.replyDecisionLlm?.enabled ?? defaultVoice.replyDecisionLlm.enabled ?? true,
     voiceReplyDecisionLlmProvider:
       settings?.voice?.replyDecisionLlm?.provider ?? defaultVoice.replyDecisionLlm.provider,
     voiceReplyDecisionLlmModel:
       settings?.voice?.replyDecisionLlm?.model ?? defaultVoice.replyDecisionLlm.model,
-    voiceReplyDecisionWakeVariantHint:
-      settings?.voice?.replyDecisionLlm?.prompts?.wakeVariantHint ??
-      defaultVoice.replyDecisionLlm?.prompts?.wakeVariantHint,
-    voiceReplyDecisionSystemPromptCompact:
-      settings?.voice?.replyDecisionLlm?.prompts?.systemPromptCompact ??
-      defaultVoice.replyDecisionLlm?.prompts?.systemPromptCompact,
     voiceGenerationLlmUseTextModel:
       settings?.voice?.generationLlm?.useTextModel ?? defaultVoiceGenerationLlm.useTextModel,
     voiceGenerationLlmProvider:
@@ -388,13 +380,8 @@ export function formToSettingsPatch(form) {
         minSecondsBetweenThoughts: Number(form.voiceThoughtEngineMinSecondsBetweenThoughts)
       },
       replyDecisionLlm: {
-        enabled: Boolean(form.voiceReplyDecisionLlmEnabled),
         provider: String(form.voiceReplyDecisionLlmProvider || "").trim(),
-        model: String(form.voiceReplyDecisionLlmModel || "").trim(),
-        prompts: {
-          wakeVariantHint: String(form.voiceReplyDecisionWakeVariantHint || "").trim(),
-          systemPromptCompact: String(form.voiceReplyDecisionSystemPromptCompact || "").trim()
-        }
+        model: String(form.voiceReplyDecisionLlmModel || "").trim()
       },
       generationLlm: {
         useTextModel: Boolean(form.voiceGenerationLlmUseTextModel),
