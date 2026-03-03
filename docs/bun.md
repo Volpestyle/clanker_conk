@@ -452,3 +452,112 @@ _drainFrames() ── opusscript.encode(frame, 960) ──▶ OpusPacketReadable
   constantly trigger stream destruction.
 - **Lifecycle:** OpusPacketReadable `close` propagates to bridge `destroyed`
   flag.  `destroy()` deletes the opusscript encoder to free WASM memory.
+
+---
+
+## Platform history: WSL → macOS and the Node subprocess detour
+
+### Context
+
+All bugs above were discovered while running on **Windows 11 + WSL2** (Ubuntu)
+with Bun 1.3.10.  The cumulative impact — pipeline crashes, object-mode
+Readable failures, timer drift, event loop stalls from WebSocket batching,
+and 8-13× higher CPU for voice dispatch — led us to move the entire Discord
+voice layer into a **Node.js child process** (`voiceSubprocess.ts` /
+`voiceSubprocessClient.ts`), communicating over IPC.  That approach
+side-stepped every Bun bug by running `@discordjs/voice` in Node where it
+works natively.
+
+When the project moved to **macOS (Apple Silicon, Darwin ARM64)**, we
+revisited whether the subprocess was still necessary.  The answer: the
+underlying Bun bugs are **runtime-level, not platform-specific**, so macOS
+doesn't magically fix them.  However, macOS ARM64 provides enough raw
+single-threaded performance headroom that the workarounds documented above
+are sufficient without the subprocess — at least for typical load (1-3
+concurrent speakers + TTS).
+
+We reverted to the `bun-only-voice` branch (pre-subprocess baseline +
+cherry-picked ASR improvements) and kept all workarounds in place.
+
+### Upstream bug status (as of Bun 1.3.10, March 2026)
+
+| Bug | Bun issue | Status | Platform-specific? |
+|---|---|---|---|
+| `stream.pipeline()` premature close | [#11313](https://github.com/oven-sh/bun/issues/11313) | **Open** | No |
+| Object-mode `Readable.read()` null | (no dedicated issue) | **Unfixed** | No |
+| `setTimeout` negative delay | [#11313](https://github.com/oven-sh/bun/issues/11313) | **Open** | No |
+| WebSocket batch + microtask starvation | [#8972](https://github.com/oven-sh/bun/issues/8972) + JS spec | **Open** (spec-level for microtasks) | No |
+| 8-13× CPU for voice streaming | [#26415](https://github.com/oven-sh/bun/issues/26415) | **Open** | No (worse on WSL) |
+
+None of these are fixed.  The workarounds remain necessary on any platform
+running Bun 1.3.10.
+
+### What the Node subprocess solved (and why we backed it out)
+
+The subprocess (`voiceSubprocess.ts`) moved `VoiceConnection`, `AudioPlayer`,
+Opus encoding, and the voice receiver into a `child_process.fork()` running
+under Node.  IPC messages carried:
+
+- Audio deltas (base64 PCM → subprocess for encoding + playback)
+- Voice adapter OP4 packets (gateway ↔ subprocess)
+- User audio subscriptions (subprocess auto-subscribed on `speaking_start`)
+- Music playback commands (play/stop/skip delegated to subprocess)
+
+**Pros:** Perfect 20ms dispatch timing, no event loop contention, no Bun
+stream bugs, dramatically lower CPU.
+
+**Cons:** ~500ms-3s added join latency (subprocess spawn), IPC serialization
+overhead for every audio delta, complex lifecycle management (orphan process
+cleanup, listener leak tracking, race conditions between subscribe/unsubscribe
+IPC messages), and the DAVE E2EE decryption handshake needed special handling
+in the subprocess.
+
+On macOS with the Bun workarounds functioning well, the complexity cost of the
+subprocess outweighed its benefits.  We backed it out and returned to a
+single-process Bun architecture.
+
+### What stays, what's removable, what to watch
+
+**Keep (still necessary):**
+
+| Component | Why |
+|---|---|
+| `OpusPacketReadable` | Bun object-mode Readable still broken; ~100 lines, rock-solid |
+| `OpusPcmBridge` | Bypasses `stream.pipeline()` which is still broken; controls Opus encoding directly |
+| `audioDeltaQueue` + callback drain (`setTimeout(fn, 1)`) | Microtask starvation is JS spec behavior, not just Bun; correct pattern regardless of runtime |
+| `maxMissedFrames: 250` | Defensive against bursty OpenAI delivery; harmless overhead |
+| Pre-buffer (5 packets / 300ms fallback) | Good audio engineering, not a workaround |
+
+**Possibly removable (test first):**
+
+| Component | Condition for removal |
+|---|---|
+| `setTimeout` clamp polyfill (`app.ts`) | If no `TimeoutNegativeWarning` observed on macOS ARM64 after extended testing; only 6 lines, low priority to remove |
+
+**Tunable for macOS ARM64:**
+
+| Constant | Current | Notes |
+|---|---|---|
+| `AUDIO_DELTA_DRAIN_YIELD_INTERVAL` | 3 | Could bump to 5-8 on M-series; more chunks per macrotask = lower total latency, but must not starve the 20ms audio cycle |
+
+**Watch under load:**
+
+The 8-13× CPU issue ([#26415](https://github.com/oven-sh/bun/issues/26415))
+is less visible on Apple Silicon due to higher single-core performance, but
+will resurface under heavy load (4+ concurrent speakers, music + TTS
+simultaneously, long voice sessions).  If audio quality degrades under load,
+the Node subprocess architecture is preserved on the `master` branch as a
+fallback.
+
+### Decision framework: when to go back to the subprocess
+
+Re-evaluate the subprocess if any of the following occur:
+
+1. **Audio dispatch timing degrades** — `AUDIO_DEBUG=1` shows `readTiming.bursts`
+   climbing above 50% of total reads during normal operation
+2. **CPU spikes** — voice process consistently above 15% CPU on M-series during
+   active sessions (compare against Node baseline)
+3. **Bun upgrades break workarounds** — a Bun update changes stream or timer
+   behavior in a way that invalidates OpusPcmBridge/OpusPacketReadable
+4. **Multi-guild scaling** — bot joins 3+ voice channels simultaneously and
+   event loop contention becomes audible
