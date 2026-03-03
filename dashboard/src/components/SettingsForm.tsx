@@ -64,7 +64,7 @@ export default function SettingsForm({
     savedFormRef.current = JSON.stringify(next);
   }, [settings]);
 
-  const activeSection = useActiveSection(SECTION_IDS);
+  const { activeId: activeSection, setClickedId } = useActiveSection(SECTION_IDS);
   const isDirty = useMemo(() => {
     if (!form || !savedFormRef.current) return false;
     return JSON.stringify(form) !== savedFormRef.current;
@@ -274,6 +274,7 @@ export default function SettingsForm({
   }
 
   function scrollTo(id: string) {
+    setClickedId(id);
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 

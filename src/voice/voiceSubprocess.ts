@@ -42,15 +42,10 @@ let defaultSampleRate = 24000;
 let musicProcesses: { pid: number; kill: () => void }[] = [];
 
 const FRAME_SIZE = 3840; // 20ms at 48kHz stereo s16le
-const SILENCE_FRAME = Buffer.alloc(FRAME_SIZE, 0);
-const SILENCE_TIMEOUT_MS = 5000; // End stream after 5s of no real audio
 
 // --- Pull-based jitter buffer ---
 // Replaces the old PassThrough + setInterval silence pump.
 // The AudioPlayer calls _read() every ~20ms to pull the next frame.
-// When the buffer is empty, it returns silence to keep the player in
-// "playing" state. After SILENCE_TIMEOUT_MS of no real audio, it signals
-// EOF so silencePaddingFrames can produce a clean tail-off.
 
 class PcmJitterBuffer extends Readable {
   private chunks: Buffer[] = [];
@@ -60,8 +55,9 @@ class PcmJitterBuffer extends Readable {
   private _reading = false;
 
   constructor() {
-    // 50 frames high watermark (1 second of audio)
-    super({ highWaterMark: FRAME_SIZE * 50 });
+    // High watermark here doesn't actually stop AudioPlayer from calling read
+    // but we use it to cap the array growth just in case. 
+    super({ highWaterMark: FRAME_SIZE * 250 }); // Allow 5 seconds of audio buffer
   }
 
   pushPcm(chunk: Buffer) {
@@ -88,6 +84,14 @@ class PcmJitterBuffer extends Readable {
     }
 
     this._tryPush();
+
+    // When the AudioPlayer is in Buffering state it does NOT call _read(),
+    // so _reading stays false and _tryPush() is a no-op — the "readable"
+    // event that Buffering→Playing depends on never fires.
+    // Emit "readable" so the AudioPlayer can transition to Playing.
+    if (!this._reading && this.chunks.length > 0) {
+      this.emit("readable");
+    }
   }
 
   private _tryPush() {
@@ -102,6 +106,12 @@ class PcmJitterBuffer extends Readable {
     const res = [...this.chunks];
     if (this.partial) res.push(this.partial);
     return res;
+  }
+
+  clearBufferedAudio() {
+    this.chunks = [];
+    this.bufferedBytes = 0;
+    this.partial = null;
   }
 
   // Finish is no longer called by an idle timer.
@@ -190,48 +200,137 @@ function ensurePlaybackStream() {
         silencePaddingFrames: 250
       });
       audioPlayer.play(resource);
-      return true;
+      if (AUDIO_DEBUG) {
+        const ts = new Date().toISOString().slice(11, 23);
+        console.log(`[subprocess:audio] ${ts} player.play() called (recycled stream)  oldChunks=${oldChunks.length}  playerStatus=${audioPlayer.state.status}`);
+      }
     }
     return true;
   }
   if (!audioPlayer || !connection) return false;
 
+  if (AUDIO_DEBUG && !firstAudioPlayedAt) {
+    const ts = new Date().toISOString().slice(11, 23);
+    console.log(`[subprocess:audio] ${ts} ensurePlaybackStream: creating fresh stream...`);
+  }
   botAudioStream = new PcmJitterBuffer();
+  if (AUDIO_DEBUG && !firstAudioPlayedAt) {
+    const ts = new Date().toISOString().slice(11, 23);
+    console.log(`[subprocess:audio] ${ts} ensurePlaybackStream: PcmJitterBuffer created, calling createAudioResource...`);
+  }
   const resource = createAudioResource(botAudioStream, {
     inputType: StreamType.Raw,
-    // After the jitter buffer signals EOF, silencePaddingFrames produces
-    // a clean tail-off instead of an abrupt cut.
     silencePaddingFrames: 250
   });
+  if (AUDIO_DEBUG && !firstAudioPlayedAt) {
+    const ts = new Date().toISOString().slice(11, 23);
+    console.log(`[subprocess:audio] ${ts} ensurePlaybackStream: resource created, calling audioPlayer.play()...`);
+  }
   audioPlayer.play(resource);
+  if (AUDIO_DEBUG) {
+    const ts = new Date().toISOString().slice(11, 23);
+    console.log(`[subprocess:audio] ${ts} player.play() called (fresh stream)  playerStatus=${audioPlayer.state.status}`);
+  }
   return true;
 }
 
-function handleAudio(pcmBase64: string, sampleRate: number) {
-  if (!audioPlayer || !connection) return;
-
-  let rawPcm: Buffer;
-  try {
-    rawPcm = Buffer.from(pcmBase64, "base64");
-  } catch {
-    return;
+function armVoicePlayback(reason: string) {
+  if (!audioPlayer || !connection) return false;
+  const armed = ensurePlaybackStream();
+  if (armed && AUDIO_DEBUG) {
+    const ts = new Date().toISOString().slice(11, 23);
+    console.log(`[subprocess:audio] ${ts} voice playback armed  reason=${reason}  playerStatus=${audioPlayer.state.status}`);
   }
-  if (!rawPcm.length) return;
+  return armed;
+}
 
-  // Convert from provider sample rate to Discord format (48kHz stereo s16le)
-  const discordPcm = convertXaiOutputToDiscordPcm(rawPcm, sampleRate);
-  if (!discordPcm.length) return;
+// --- Async Audio Processing Queue ---
+// Process audio chunks asynchronously to avoid blocking the event loop
+// during large burst arrivals (e.g., from OpenAI/xAI).
+const audioDeltaQueue: { pcmBase64: string; sampleRate: number }[] = [];
+let isDrainingAudio = false;
 
-  // Ensure stream exists and push PCM into the jitter buffer.
-  if (!ensurePlaybackStream()) return;
+function drainAudioQueue() {
+  if (AUDIO_DEBUG && !firstAudioPlayedAt) {
+    const ts = new Date().toISOString().slice(11, 23);
+    console.log(`[subprocess:audio] ${ts} drainAudioQueue ENTER  queueDepth=${audioDeltaQueue.length}`);
+  }
+  let processed = 0;
+  while (audioDeltaQueue.length > 0) {
+    const { pcmBase64, sampleRate } = audioDeltaQueue.shift()!;
+    
+    let rawPcm: Buffer;
+    try {
+      rawPcm = Buffer.from(pcmBase64, "base64");
+    } catch {
+      continue;
+    }
+    if (rawPcm.length) {
+      if (AUDIO_DEBUG && !firstAudioPlayedAt) {
+        const ts = new Date().toISOString().slice(11, 23);
+        console.log(`[subprocess:audio] ${ts} pre-convert  rawBytes=${rawPcm.length}  sampleRate=${sampleRate}`);
+      }
+      const discordPcm = convertXaiOutputToDiscordPcm(rawPcm, sampleRate);
+      if (AUDIO_DEBUG && !firstAudioPlayedAt) {
+        const ts = new Date().toISOString().slice(11, 23);
+        console.log(`[subprocess:audio] ${ts} post-convert  discordPcmBytes=${discordPcm.length}`);
+      }
+      if (discordPcm.length) {
+        if (AUDIO_DEBUG && !firstAudioPlayedAt) {
+          const ts = new Date().toISOString().slice(11, 23);
+          console.log(`[subprocess:audio] ${ts} pre-ensurePlaybackStream  hasStream=${!!botAudioStream}  hasPlayer=${!!audioPlayer}  hasConn=${!!connection}`);
+        }
+        if (ensurePlaybackStream()) {
+          if (botAudioStream && !botAudioStream.destroyed && !botAudioStream.readableEnded) {
+            botAudioStream.pushPcm(discordPcm);
+            if (AUDIO_DEBUG && !firstAudioPlayedAt) {
+              firstAudioPlayedAt = Date.now();
+              const ts = new Date().toISOString().slice(11, 23);
+              const ipcToPlayMs = firstAudioReceivedAt ? firstAudioPlayedAt - firstAudioReceivedAt : -1;
+              console.log(`[subprocess:audio] ${ts} first chunk pushed to jitter buffer  pcmBytes=${discordPcm.length}  ipcToPlayMs=${ipcToPlayMs}  playerStatus=${audioPlayer?.state.status}`);
+            }
+          }
+        }
+      }
+    }
 
-  if (botAudioStream && !botAudioStream.destroyed && !botAudioStream.readableEnded) {
-    botAudioStream.pushPcm(discordPcm);
+    processed++;
+    if (processed >= 10) {
+      setTimeout(drainAudioQueue, 1);
+      return;
+    }
+  }
+  isDrainingAudio = false;
+}
+
+let firstAudioReceivedAt = 0;
+let firstAudioPlayedAt = 0;
+
+let audioChunksReceived = 0;
+
+function handleAudio(pcmBase64: string, sampleRate: number) {
+  audioChunksReceived++;
+  if (AUDIO_DEBUG && audioChunksReceived <= 3) {
+    if (!firstAudioReceivedAt) firstAudioReceivedAt = Date.now();
+    const ts = new Date().toISOString().slice(11, 23);
+    console.log(`[subprocess:audio] ${ts} IPC audio #${audioChunksReceived}  isDraining=${isDrainingAudio}  queueDepth=${audioDeltaQueue.length}  hasPlayer=${!!audioPlayer}  hasConnection=${!!connection}  playerStatus=${audioPlayer?.state?.status ?? "null"}`);
+  }
+  audioDeltaQueue.push({ pcmBase64, sampleRate });
+  if (!isDrainingAudio) {
+    isDrainingAudio = true;
+    // Drain synchronously on the IPC message tick — setTimeout(…, 1)
+    // gets starved for 10-20s when the DAVE E2EE handshake is running
+    // synchronous native crypto on the event loop.
+    drainAudioQueue();
   }
 }
 
 function handleStopPlayback() {
   resetPlayback();
+  armVoicePlayback("stop_playback");
+  firstAudioReceivedAt = 0;
+  firstAudioPlayedAt = 0;
+  audioChunksReceived = 0;
   send({ type: "player_state", status: "idle" });
 }
 
@@ -269,13 +368,16 @@ function handleJoin(msg: any) {
       decryptionFailureTolerance: 200
     });
 
-    audioPlayer = createAudioPlayer();
+    audioPlayer = createAudioPlayer({
+      behaviors: { maxMissedFrames: 250 }
+    });
     connection.subscribe(audioPlayer);
 
     // Audio player state tracking
     audioPlayer.on("stateChange", (oldState, newState) => {
       if (AUDIO_DEBUG && oldState.status !== newState.status) {
-        console.log(`[subprocess:audio-player] ${oldState.status} → ${newState.status}`);
+        const ts = new Date().toISOString().slice(11, 23);
+        console.log(`[subprocess:audio-player] ${ts} ${oldState.status} → ${newState.status}`);
       }
       send({ type: "player_state", status: newState.status });
     });
@@ -291,6 +393,7 @@ function handleJoin(msg: any) {
 
       if (newState.status === VoiceConnectionStatus.Ready) {
         send({ type: "ready" });
+        armVoicePlayback("connection_ready");
       }
     });
 
@@ -445,13 +548,16 @@ function handleMusicPlay(msg: any) {
       });
 
       if (!audioPlayer) {
-        audioPlayer = createAudioPlayer();
+        audioPlayer = createAudioPlayer({
+      behaviors: { maxMissedFrames: 250 }
+    });
         connection.subscribe(audioPlayer);
       }
       audioPlayer.play(resource);
 
       audioPlayer.once(AudioPlayerStatus.Idle, () => {
         send({ type: "music_idle" });
+        armVoicePlayback("music_idle");
       });
 
       ytdlp.on("error", (err: any) => {
@@ -475,13 +581,16 @@ function handleMusicPlay(msg: any) {
       });
 
       if (!audioPlayer) {
-        audioPlayer = createAudioPlayer();
+        audioPlayer = createAudioPlayer({
+      behaviors: { maxMissedFrames: 250 }
+    });
         connection.subscribe(audioPlayer);
       }
       audioPlayer.play(resource);
 
       audioPlayer.once(AudioPlayerStatus.Idle, () => {
         send({ type: "music_idle" });
+        armVoicePlayback("music_idle");
       });
 
       ffmpeg.on("error", (err: any) => {
@@ -495,6 +604,7 @@ function handleMusicPlay(msg: any) {
 
 function handleMusicStop() {
   resetPlayback();
+  armVoicePlayback("music_stop");
   send({ type: "music_idle" });
 }
 
