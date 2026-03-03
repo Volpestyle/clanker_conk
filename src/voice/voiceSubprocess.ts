@@ -40,6 +40,7 @@ let defaultSampleRate = 24000;
 
 // Music child processes — tracked for explicit cleanup on stop/skip
 let musicProcesses: { pid: number; kill: () => void }[] = [];
+let musicActive = false;
 
 const FRAME_SIZE = 3840; // 20ms at 48kHz stereo s16le
 
@@ -170,6 +171,7 @@ function killMusicProcesses() {
 }
 
 function resetPlayback() {
+  musicActive = false;
   // Remove stale .once(Idle) listeners before stopping, so a forced idle
   // transition doesn't fire handlers from the previous track.
   if (audioPlayer) {
@@ -237,9 +239,12 @@ function ensurePlaybackStream() {
 function armVoicePlayback(reason: string) {
   if (!audioPlayer || !connection) return false;
   const armed = ensurePlaybackStream();
-  if (armed && AUDIO_DEBUG) {
-    const ts = new Date().toISOString().slice(11, 23);
-    console.log(`[subprocess:audio] ${ts} voice playback armed  reason=${reason}  playerStatus=${audioPlayer.state.status}`);
+  if (armed) {
+    if (AUDIO_DEBUG) {
+      const ts = new Date().toISOString().slice(11, 23);
+      console.log(`[subprocess:audio] ${ts} voice playback armed  reason=${reason}  playerStatus=${audioPlayer.state.status}`);
+    }
+    send({ type: "playback_armed", reason });
   }
   return armed;
 }
@@ -309,6 +314,13 @@ let firstAudioPlayedAt = 0;
 let audioChunksReceived = 0;
 
 function handleAudio(pcmBase64: string, sampleRate: number) {
+  if (musicActive) {
+    if (AUDIO_DEBUG) {
+      const ts = new Date().toISOString().slice(11, 23);
+      console.log(`[subprocess:audio] ${ts} bot audio dropped — music active`);
+    }
+    return;
+  }
   audioChunksReceived++;
   if (AUDIO_DEBUG && audioChunksReceived <= 3) {
     if (!firstAudioReceivedAt) firstAudioReceivedAt = Date.now();
@@ -519,6 +531,10 @@ function handleMusicPlay(msg: any) {
   }
 
   resetPlayback();
+  musicActive = true;
+  // Flush any bot audio that was already queued from in-flight IPC messages.
+  audioDeltaQueue.length = 0;
+  isDrainingAudio = false;
 
   try {
     const isYouTube = url.includes("youtube.com") || url.includes("youtu.be");
@@ -534,12 +550,23 @@ function handleMusicPlay(msg: any) {
       const ffmpeg = spawnChild("ffmpeg", [
         "-hide_banner", "-loglevel", "error",
         "-i", "pipe:0",
-        "-f", "opus", "-ac", "2", "-ar", "48000", "-b:a", "128k",
+        "-f", "ogg", "-c:a", "libopus", "-ac", "2", "-ar", "48000", "-b:a", "128k",
         "pipe:1"
       ]);
 
       trackMusicProcess(ytdlp);
       trackMusicProcess(ffmpeg);
+
+      // Swallow EPIPE on pipes — expected when processes are killed mid-stream.
+      ytdlp.stdout.on("error", (err: NodeJS.ErrnoException) => {
+        if (AUDIO_DEBUG) console.log(`[subprocess:music] ytdlp.stdout error: ${err.code || err.message}`);
+      });
+      ffmpeg.stdin.on("error", (err: NodeJS.ErrnoException) => {
+        if (AUDIO_DEBUG) console.log(`[subprocess:music] ffmpeg.stdin error: ${err.code || err.message}`);
+      });
+      ffmpeg.stdout.on("error", (err: NodeJS.ErrnoException) => {
+        if (AUDIO_DEBUG) console.log(`[subprocess:music] ffmpeg.stdout error: ${err.code || err.message}`);
+      });
 
       ytdlp.stdout.pipe(ffmpeg.stdin);
 
@@ -556,6 +583,7 @@ function handleMusicPlay(msg: any) {
       audioPlayer.play(resource);
 
       audioPlayer.once(AudioPlayerStatus.Idle, () => {
+        musicActive = false;
         send({ type: "music_idle" });
         armVoicePlayback("music_idle");
       });
@@ -570,11 +598,15 @@ function handleMusicPlay(msg: any) {
       const ffmpeg = spawnChild("ffmpeg", [
         "-hide_banner", "-loglevel", "error",
         "-i", url,
-        "-f", "opus", "-ac", "2", "-ar", "48000", "-b:a", "128k",
+        "-f", "ogg", "-c:a", "libopus", "-ac", "2", "-ar", "48000", "-b:a", "128k",
         "pipe:1"
       ]);
 
       trackMusicProcess(ffmpeg);
+
+      ffmpeg.stdout.on("error", (err: NodeJS.ErrnoException) => {
+        if (AUDIO_DEBUG) console.log(`[subprocess:music] ffmpeg.stdout error: ${err.code || err.message}`);
+      });
 
       const resource = createAudioResource(ffmpeg.stdout, {
         inputType: StreamType.OggOpus
@@ -589,6 +621,7 @@ function handleMusicPlay(msg: any) {
       audioPlayer.play(resource);
 
       audioPlayer.once(AudioPlayerStatus.Idle, () => {
+        musicActive = false;
         send({ type: "music_idle" });
         armVoicePlayback("music_idle");
       });
@@ -692,11 +725,16 @@ process.on("disconnect", () => {
 
 process.on("uncaughtException", (err: any) => {
   const msg = String(err?.message || err);
+  const code = String(err?.code || "");
   console.error("[subprocess] uncaught exception:", err);
   sendError(`uncaught_exception: ${msg}`);
   // DAVE decryption errors are transient during the E2EE handshake —
   // don't crash the subprocess for these.
   if (/decrypt/i.test(msg)) return;
+  // Pipe/stream errors from killed child processes (yt-dlp, ffmpeg) are
+  // expected when music playback ends or is stopped mid-stream.
+  if (code === "EPIPE" || code === "ECONNRESET" || code === "ERR_STREAM_DESTROYED") return;
+  if (/EPIPE|ECONNRESET|ERR_STREAM_DESTROYED/i.test(msg)) return;
   handleDestroy();
 });
 

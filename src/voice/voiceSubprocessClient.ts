@@ -152,6 +152,9 @@ export class VoiceSubprocessClient extends EventEmitter {
       case "player_state":
         this.emit("playerState", msg.status);
         break;
+      case "playback_armed":
+        this.emit("playbackArmed", msg.reason);
+        break;
       case "speaking_start":
         this.emit("speakingStart", msg.userId);
         break;
