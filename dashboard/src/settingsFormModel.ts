@@ -102,6 +102,10 @@ export function settingsToForm(settings) {
     allowInitiative: settings?.permissions?.allowInitiativeReplies !== false,
     allowReactions: settings?.permissions?.allowReactions ?? defaultPermissions.allowReactions,
     memoryEnabled: settings?.memory?.enabled ?? defaults.memory.enabled,
+    adaptiveDirectivesEnabled:
+      settings?.adaptiveDirectives?.enabled ?? defaults.adaptiveDirectives.enabled,
+    automationsEnabled:
+      settings?.automations?.enabled ?? defaults.automations.enabled,
     memoryReflectionStrategy:
       settings?.memory?.reflection?.strategy ?? defaults.memory.reflection.strategy,
     provider: settings?.llm?.provider ?? defaultLlm.provider,
@@ -535,6 +539,12 @@ export function formToSettingsPatch(form) {
           ? "one_pass_main"
           : "two_pass_extract_then_main"
       }
+    },
+    adaptiveDirectives: {
+      enabled: Boolean(form.adaptiveDirectivesEnabled)
+    },
+    automations: {
+      enabled: Boolean(form.automationsEnabled)
     }
   };
 }

@@ -32,6 +32,7 @@ type ContinuityLoaderArgs = {
   loadPromptMemorySlice?: ((payload: ConversationContinuityPayload) => Promise<unknown>) | null;
   loadRecentLookupContext?: ((payload: Record<string, unknown>) => unknown) | null;
   loadRecentConversationHistory?: ((payload: Record<string, unknown>) => unknown) | null;
+  loadAdaptiveDirectives?: ((payload: Record<string, unknown>) => unknown) | null;
 };
 
 function normalizeQueryText(value: unknown, maxChars = 420) {
@@ -144,7 +145,8 @@ export async function loadConversationContinuityContext({
   memoryTimeoutMs = 0,
   loadPromptMemorySlice = null,
   loadRecentLookupContext = null,
-  loadRecentConversationHistory = null
+  loadRecentConversationHistory = null,
+  loadAdaptiveDirectives = null
 }: ContinuityLoaderArgs) {
   const normalizedGuildId = String(guildId || "").trim();
   const normalizedChannelId = String(channelId || "").trim() || null;
@@ -200,10 +202,22 @@ export async function loadConversationContinuityContext({
     recentConversationHistoryRaw,
     recentMessages
   );
+  const adaptiveDirectivesRaw =
+    normalizedGuildId &&
+    typeof loadAdaptiveDirectives === "function"
+      ? loadAdaptiveDirectives({
+        guildId: normalizedGuildId,
+        queryText: normalizedQueryText
+      })
+      : [];
+  const adaptiveDirectives = Array.isArray(adaptiveDirectivesRaw)
+    ? adaptiveDirectivesRaw
+    : [];
 
   return {
     memorySlice,
     recentWebLookups,
-    recentConversationHistory
+    recentConversationHistory,
+    adaptiveDirectives
   };
 }

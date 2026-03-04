@@ -30,6 +30,8 @@ export function normalizeSettings(raw) {
   if (!merged.permissions || typeof merged.permissions !== "object") merged.permissions = {};
   if (!merged.initiative || typeof merged.initiative !== "object") merged.initiative = {};
   if (!merged.memory || typeof merged.memory !== "object") merged.memory = {};
+  if (!merged.adaptiveDirectives || typeof merged.adaptiveDirectives !== "object") merged.adaptiveDirectives = {};
+  if (!merged.automations || typeof merged.automations !== "object") merged.automations = {};
   if (!merged.llm || typeof merged.llm !== "object") merged.llm = {};
   if (!merged.replyFollowupLlm || typeof merged.replyFollowupLlm !== "object") merged.replyFollowupLlm = {};
   if (!merged.memoryLlm || typeof merged.memoryLlm !== "object") merged.memoryLlm = {};
@@ -1143,6 +1145,14 @@ export function normalizeSettings(raw) {
   };
 
   merged.memory.enabled = Boolean(merged.memory?.enabled);
+  merged.adaptiveDirectives.enabled =
+    merged.adaptiveDirectives?.enabled !== undefined
+      ? Boolean(merged.adaptiveDirectives?.enabled)
+      : Boolean(DEFAULT_SETTINGS.adaptiveDirectives?.enabled);
+  merged.automations.enabled =
+    merged.automations?.enabled !== undefined
+      ? Boolean(merged.automations?.enabled)
+      : Boolean(DEFAULT_SETTINGS.automations?.enabled);
   merged.memory.maxRecentMessages = clamp(Number(merged.memory?.maxRecentMessages) || 35, 10, 120);
   merged.memory.embeddingModel = String(merged.memory?.embeddingModel || "text-embedding-3-small").slice(0, 120);
 

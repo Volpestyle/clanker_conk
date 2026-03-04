@@ -317,6 +317,7 @@ export async function generateVoiceTurnReply(runtime, {
     settings?.voice?.soundboard?.enabled && normalizedSoundboardCandidates.length
   );
   const allowMemoryToolCalls = Boolean(settings?.memory?.enabled);
+  const allowAdaptiveDirectiveToolCalls = Boolean(settings?.adaptiveDirectives?.enabled);
   const allowWebSearchToolCall = Boolean(
     typeof runtime.search?.searchAndRead === "function"
   );
@@ -393,11 +394,22 @@ export async function generateVoiceTurnReply(runtime, {
     loadRecentConversationHistory:
       typeof runtime.loadRecentConversationHistory === "function"
         ? (payload) => runtime.loadRecentConversationHistory(payload)
+        : null,
+    loadAdaptiveDirectives:
+      allowAdaptiveDirectiveToolCalls &&
+      typeof runtime.store?.searchAdaptiveStyleNotesForPrompt === "function"
+        ? (payload) =>
+            runtime.store.searchAdaptiveStyleNotesForPrompt({
+              guildId: String(payload.guildId || "").trim(),
+              queryText: String(payload.queryText || ""),
+              limit: 8
+            })
         : null
   });
   const promptMemorySlice = normalizeVoiceMemorySlice(continuity.memorySlice);
   const recentWebLookups = continuity.recentWebLookups;
   const recentConversationHistory = continuity.recentConversationHistory;
+  const adaptiveDirectives = Array.isArray(continuity.adaptiveDirectives) ? continuity.adaptiveDirectives : [];
 
   const voiceGenerationUsesTextModel = Boolean(settings?.voice?.generationLlm?.useTextModel);
   const voiceGenerationProvider = normalizeLlmProvider(
@@ -465,7 +477,9 @@ export async function generateVoiceTurnReply(runtime, {
 
   const voiceToneGuardrails = buildVoiceToneGuardrails();
   const systemPrompt = [
-    buildSystemPrompt(settings),
+    buildSystemPrompt(settings, {
+      adaptiveDirectives
+    }),
     "You are speaking in live Discord voice chat.",
     ...voiceToneGuardrails,
     "Return strict JSON only matching the provided schema.",
@@ -515,6 +529,7 @@ export async function generateVoiceTurnReply(runtime, {
       screenShare,
       allowScreenShareToolCall,
       allowMemoryToolCalls,
+      allowAdaptiveDirectiveToolCalls,
       allowSoundboardToolCall
     });
 
@@ -539,7 +554,8 @@ export async function generateVoiceTurnReply(runtime, {
       webSearch: allowWebSearchToolCall,
       openArticle: allowOpenArticleToolCall,
       screenShare: allowScreenShareToolCall,
-      memory: allowMemoryToolCalls
+      memory: allowMemoryToolCalls,
+      adaptiveDirectives: allowAdaptiveDirectiveToolCalls
     },
     soundboardCandidateCount: normalizedSoundboardCandidates.length,
     llmConfig: {
@@ -562,6 +578,7 @@ export async function generateVoiceTurnReply(runtime, {
     const voiceReplyTools = buildReplyToolSet(settings as Record<string, unknown>, {
       webSearchAvailable: allowWebSearchToolCall && webSearchAvailableNow,
       memoryAvailable: allowMemoryToolCalls,
+      adaptiveDirectivesAvailable: allowAdaptiveDirectiveToolCalls,
       imageLookupAvailable: false,
       openArticleAvailable: allowOpenArticleToolCall && openArticleCandidates.length > 0
     });

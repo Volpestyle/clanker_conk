@@ -28,6 +28,91 @@ test("dashboard memory search handles missing params and valid lookups", async (
   }
 });
 
+test("dashboard adaptive directive routes add, edit, remove, and expose audit history", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl }) => {
+    const emptyNotes = await fetch(`${baseUrl}/api/memory/adaptive-directives?guildId=guild-1`);
+    assert.equal(emptyNotes.status, 200);
+    const emptyNotesJson = await emptyNotes.json();
+    assert.deepEqual(emptyNotesJson.notes, []);
+
+    const added = await fetch(`${baseUrl}/api/memory/adaptive-directives`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        guildId: "guild-1",
+        directiveKind: "behavior",
+        noteText: "Use \"type shit\" occasionally in casual replies."
+      })
+    });
+    assert.equal(added.status, 200);
+    const addedJson = await added.json();
+    assert.equal(addedJson.ok, true);
+    assert.equal(addedJson.status, "added");
+    const noteId = Number(addedJson.note?.id);
+    assert.equal(Number.isInteger(noteId), true);
+
+    const updated = await fetch(`${baseUrl}/api/memory/adaptive-directives/${noteId}`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        guildId: "guild-1",
+        directiveKind: "guidance",
+        noteText: "Use \"type shit\" occasionally in casual replies. Keep it natural and not every message."
+      })
+    });
+    assert.equal(updated.status, 200);
+    const updatedJson = await updated.json();
+    assert.equal(updatedJson.ok, true);
+    assert.equal(updatedJson.status, "edited");
+
+    const listed = await fetch(`${baseUrl}/api/memory/adaptive-directives?guildId=guild-1`);
+    assert.equal(listed.status, 200);
+    const listedJson = await listed.json();
+    assert.equal(Array.isArray(listedJson.notes), true);
+    assert.equal(listedJson.notes.length, 1);
+    assert.equal(listedJson.notes[0]?.directiveKind, "guidance");
+    assert.equal(String(listedJson.notes[0]?.noteText).includes("Keep it natural"), true);
+
+    const removed = await fetch(`${baseUrl}/api/memory/adaptive-directives/${noteId}/remove`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        guildId: "guild-1",
+        removalReason: "user asked to stop"
+      })
+    });
+    assert.equal(removed.status, 200);
+    const removedJson = await removed.json();
+    assert.equal(removedJson.ok, true);
+    assert.equal(removedJson.status, "removed");
+
+    const afterRemove = await fetch(`${baseUrl}/api/memory/adaptive-directives?guildId=guild-1`);
+    const afterRemoveJson = await afterRemove.json();
+    assert.deepEqual(afterRemoveJson.notes, []);
+
+    const audit = await fetch(`${baseUrl}/api/memory/adaptive-directives/audit?guildId=guild-1&limit=10`);
+    assert.equal(audit.status, 200);
+    const auditJson = await audit.json();
+    assert.equal(Array.isArray(auditJson.events), true);
+    assert.equal(auditJson.events.length, 3);
+    assert.deepEqual(
+      auditJson.events.map((event) => event.eventType),
+      ["removed", "edited", "added"]
+    );
+    assert.equal(auditJson.events[1]?.directiveKind, "guidance");
+  });
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
 test("dashboard memory reflections returns recent reflection runs with extracted and saved facts", async () => {
   const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
     store.logAction({

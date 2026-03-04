@@ -1511,6 +1511,7 @@ export class ClankerBot {
     performance = null,
     replyPrompts = null
   }) {
+    if (!settings?.automations?.enabled) return false;
     const automationAction = replyDirective?.automationAction;
     const operation = String(automationAction?.operation || "").trim();
     if (!operation) return false;
@@ -3388,6 +3389,8 @@ export class ClankerBot {
   }
 
   async maybeRunAutomationCycle() {
+    const settings = this.store.getSettings();
+    if (!settings?.automations?.enabled) return;
     if (this.automationCycleRunning) return;
     this.automationCycleRunning = true;
 
@@ -3631,6 +3634,7 @@ export class ClankerBot {
     const automationReplyTools = buildReplyToolSet(settings, {
       webSearchAvailable: false,
       memoryAvailable: settings.memory?.enabled,
+      adaptiveDirectivesAvailable: false,
       imageLookupAvailable: false,
       openArticleAvailable: false
     });

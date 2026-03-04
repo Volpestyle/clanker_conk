@@ -21,6 +21,7 @@ import { getRecentVoiceSessions, getVoiceSessionEvents } from "./store/storeVoic
 import { getReplyPerformanceStats, getStats } from "./store/storeStats.ts";
 import { createAutomation, getAutomationById, countAutomations, listAutomations, getMostRecentAutomations, findAutomationsByQuery, setAutomationStatus, claimDueAutomations, finalizeAutomationRun, recordAutomationRun, getAutomationRuns } from "./store/storeAutomation.ts";
 import { addMemoryFact, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactBySubjectAndFact, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject } from "./store/storeMemory.ts";
+import { addAdaptiveStyleNote, getActiveAdaptiveStyleNotes, getAdaptiveStyleNoteAuditLog, removeAdaptiveStyleNote, searchAdaptiveStyleNotesForPrompt, updateAdaptiveStyleNote } from "./store/storeAdaptiveDirectives.ts";
 
 export const SETTINGS_KEY = "runtime_settings";
 export const ACTION_LOG_RETENTION_DAYS_DEFAULT = 14;
@@ -167,6 +168,41 @@ export class Store {
         match_text TEXT NOT NULL
       );
 
+      CREATE TABLE IF NOT EXISTS adaptive_style_notes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        guild_id TEXT NOT NULL,
+        directive_kind TEXT NOT NULL DEFAULT 'guidance',
+        note_text TEXT NOT NULL,
+        created_by_user_id TEXT,
+        created_by_name TEXT,
+        updated_by_user_id TEXT,
+        updated_by_name TEXT,
+        source_message_id TEXT,
+        source_text TEXT,
+        is_active INTEGER NOT NULL DEFAULT 1,
+        removed_at TEXT,
+        removed_by_user_id TEXT,
+        removed_by_name TEXT,
+        removal_reason TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS adaptive_style_note_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at TEXT NOT NULL,
+        note_id INTEGER,
+        guild_id TEXT NOT NULL,
+        directive_kind TEXT NOT NULL DEFAULT 'guidance',
+        event_type TEXT NOT NULL,
+        actor_user_id TEXT,
+        actor_name TEXT,
+        note_text TEXT NOT NULL,
+        detail_text TEXT,
+        source_message_id TEXT,
+        metadata TEXT
+      );
+
       CREATE TABLE IF NOT EXISTS automations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         created_at TEXT NOT NULL,
@@ -215,12 +251,36 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_shared_links_last_shared_at ON shared_links(last_shared_at DESC);
       CREATE INDEX IF NOT EXISTS idx_lookup_context_scope_time ON lookup_context(guild_id, channel_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_lookup_context_expires ON lookup_context(expires_at);
+      CREATE INDEX IF NOT EXISTS idx_adaptive_style_notes_scope_active ON adaptive_style_notes(guild_id, is_active, updated_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_adaptive_style_events_scope_time ON adaptive_style_note_events(guild_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_automations_scope_status_next ON automations(guild_id, status, next_run_at);
       CREATE INDEX IF NOT EXISTS idx_automations_running_next ON automations(is_running, next_run_at);
       CREATE INDEX IF NOT EXISTS idx_automations_match_text ON automations(guild_id, match_text);
       CREATE INDEX IF NOT EXISTS idx_automation_runs_job_time ON automation_runs(automation_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_response_triggers_action_id ON response_triggers(action_id);
     `);
+    try {
+      const noteColumns = new Set(
+        this.db
+          .prepare("PRAGMA table_info(adaptive_style_notes)")
+          .all()
+          .map((row) => String(row?.name || ""))
+      );
+      if (!noteColumns.has("directive_kind")) {
+        this.db.exec("ALTER TABLE adaptive_style_notes ADD COLUMN directive_kind TEXT NOT NULL DEFAULT 'guidance';");
+      }
+      const eventColumns = new Set(
+        this.db
+          .prepare("PRAGMA table_info(adaptive_style_note_events)")
+          .all()
+          .map((row) => String(row?.name || ""))
+      );
+      if (!eventColumns.has("directive_kind")) {
+        this.db.exec("ALTER TABLE adaptive_style_note_events ADD COLUMN directive_kind TEXT NOT NULL DEFAULT 'guidance';");
+      }
+    } catch {
+      // schema maintenance must not block startup
+    }
     this.ensureSqliteVecReady();
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_memory_scope_subject ON memory_facts(guild_id, subject, created_at DESC);
@@ -390,6 +450,54 @@ export class Store {
     maxAgeHours?;
   }) {
     return searchLookupContext(this, opts);
+  }
+
+  getActiveAdaptiveStyleNotes(guildId, limit = 24) {
+    return getActiveAdaptiveStyleNotes(this, guildId, limit);
+  }
+
+  searchAdaptiveStyleNotesForPrompt(opts: { guildId; queryText?; limit? }) {
+    return searchAdaptiveStyleNotesForPrompt(this, opts);
+  }
+
+  getAdaptiveStyleNoteAuditLog(guildId, limit = 100) {
+    return getAdaptiveStyleNoteAuditLog(this, guildId, limit);
+  }
+
+  addAdaptiveStyleNote(opts: {
+    guildId;
+    directiveKind?;
+    noteText;
+    actorUserId?;
+    actorName?;
+    sourceMessageId?;
+    sourceText?;
+    source?;
+  }) {
+    return addAdaptiveStyleNote(this, opts);
+  }
+
+  updateAdaptiveStyleNote(opts: {
+    noteId;
+    guildId;
+    directiveKind?;
+    noteText;
+    actorUserId?;
+    actorName?;
+    source?;
+  }) {
+    return updateAdaptiveStyleNote(this, opts);
+  }
+
+  removeAdaptiveStyleNote(opts: {
+    noteId;
+    guildId;
+    actorUserId?;
+    actorName?;
+    removalReason?;
+    source?;
+  }) {
+    return removeAdaptiveStyleNote(this, opts);
   }
 
   getRecentVoiceSessions(limit = 3, opts: { sinceIso?: string | null } = {}) {

@@ -90,7 +90,23 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
         </label>
         <label>
           <input type="checkbox" checked={form.memoryEnabled} onChange={set("memoryEnabled")} />
-          Memory enabled
+          Durable memory enabled
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.adaptiveDirectivesEnabled}
+            onChange={set("adaptiveDirectivesEnabled")}
+          />
+          Adaptive directives enabled
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={form.automationsEnabled}
+            onChange={set("automationsEnabled")}
+          />
+          Automations enabled
         </label>
       </div>
     </SettingsSection>

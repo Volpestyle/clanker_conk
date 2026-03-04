@@ -12,6 +12,11 @@ Durable memory has three layers:
 
 Additionally, `memory/MEMORY.md` is a periodically regenerated snapshot for operator/dashboard inspection — not consumed by the model.
 
+This is only the durable-fact memory system. Two adjacent persistence layers now sit beside it:
+
+1. **Conversation history** (`messages` table): saved text chat, saved voice transcripts, and saved assistant spoken turns. Queried through `conversation_search` for “what did we say earlier?” continuity.
+2. **Adaptive directives** (`adaptive_style_notes`, `adaptive_style_note_events`): persistent server-level instructions about how the bot should talk or act in future conversations. Queried separately from durable facts so style/behavior guidance does not pollute `memory_facts`.
+
 ## Flow Diagram
 
 ![Memory System Flow](diagrams/memory-system-flow.png)
@@ -23,9 +28,10 @@ Additionally, `memory/MEMORY.md` is a periodically regenerated snapshot for oper
 - `src/memory/memoryHelpers.ts`: fact normalization, grounding checks, scoring helpers, directive scope config.
 - `src/memory/dailyReflection.ts`: end-of-day reflection logic — reads daily journal, runs LLM distillation, writes durable facts.
 - `src/store.ts`: `memory_facts` and `memory_fact_vectors_native` schema + query/update methods.
+- `src/store/storeAdaptiveDirectives.ts`: adaptive directive storage, prompt-time retrieval, and audit-log helpers.
 - `src/llm.ts`: embedding API calls, reflection LLM calls.
 - `src/tools/replyTools.ts`: `memory_write` and `memory_search` tool definitions + execution handlers (used by text chat brain).
-- `src/voice/voiceToolCalls.ts`: `memory_search` and `memory_write` voice tool definitions + execution handlers (used by OpenAI Realtime brain).
+- `src/voice/voiceToolCalls.ts`: `memory_search`, `memory_write`, and adaptive-directive voice tool definitions + execution handlers (used by OpenAI Realtime brain).
 - `src/bot.ts`: message ingest trigger, memory slice loading, reflection job scheduling.
 - `src/bot/voiceReplies.ts` and `src/voice/voiceSessionManager.ts`: voice transcript ingestion + memory context loading.
 - `src/dashboard.ts`: `/api/memory`, `/api/memory/refresh`, `/api/memory/search`.
@@ -106,11 +112,13 @@ Both paths produce the same kind of durable facts in `memory_facts`. Reflection 
 
 **Settings:**
 
+- `memory.enabled` (default `true`): master switch for durable memory journaling and fact retrieval/write behavior.
 - `memory.reflection.enabled` (default `true`): master switch.
-- `memory.reflection.intervalHours` (default `24`): how often reflection runs.
-- `memory.reflection.model`: LLM model for reflection (defaults to `memoryLlm` settings).
+- `memory.reflection.hour` / `memory.reflection.minute`: daily reflection schedule time.
 - `memory.reflection.maxFactsPerReflection`: cap on facts produced per run (default `20`).
 - `memory.dailyLogRetentionDays` (default `30`): prune journals older than this after reflection.
+- `adaptiveDirectives.enabled` (default `true`): independently enables/disables adaptive directive retrieval and conversational directive save/remove behavior.
+- `automations.enabled` (default `true`): independently enables/disables recurring automation control plus scheduled execution.
 
 ### Fact creation via `memory_write` tool
 
@@ -207,6 +215,25 @@ Relevance gate:
 - Without semantic: requires lexical >= 0.24 or combined >= 0.62.
 - Strict mode (`searchDurableFacts`) returns no hits if all candidates fail gate.
 
+## Adaptive Directives vs Durable Memory
+
+Adaptive directives are intentionally not stored in `memory_facts`.
+
+- `memory_facts`: durable facts about users, the bot, or guild lore
+- `messages`: prior text/voice conversation history
+- `adaptive_style_notes`: persistent instructions about how the bot should talk or act later
+
+Examples:
+- Durable memory: `James likes Nvidia.`
+- Conversation history: `Two days ago we talked about NVDA being around $181.`
+- Adaptive directive: `Use "type shit" occasionally in casual replies.` or `Send a GIF to Tiny Conk whenever they say "what the heli."`
+
+Adaptive directives are split into:
+- `guidance`: broad style/tone/persona/operating guidance, which can stay lightly active across turns
+- `behavior`: recurring trigger/action behavior, which is retrieved into prompt context only when the current turn appears relevant
+
+That retrieval split is what keeps behavior directives useful without bloating every prompt with every saved action rule.
+
 ## Markdown Files in `memory/`
 
 ### Daily logs: `memory/YYYY-MM-DD.md`
@@ -237,10 +264,11 @@ From defaults + normalization:
   Note: this controls short-term chat context windows, not durable fact count.
 - `memory.embeddingModel` (default `"text-embedding-3-small"`)
 - `memory.reflection.enabled` (default `true`): enable/disable daily reflection.
-- `memory.reflection.intervalHours` (default `24`): reflection job frequency.
-- `memory.reflection.model`: LLM model for reflection pass (defaults to `memoryLlm` config).
+- `memory.reflection.hour` / `memory.reflection.minute`: daily reflection schedule time.
 - `memory.reflection.maxFactsPerReflection` (default `20`): cap on facts per reflection run.
 - `memory.dailyLogRetentionDays` (default `30`): prune reflected journals older than this.
+- `adaptiveDirectives.enabled` (default `true`): toggle adaptive directive retrieval/write behavior separately from durable memory.
+- `automations.enabled` (default `true`): toggle recurring automation control and scheduler execution separately from durable memory.
 - `memoryLlm` provider/model config controls the model used for reflection and tool-triggered operations.
 
 ## APIs and Observability

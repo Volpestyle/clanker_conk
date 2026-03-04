@@ -46,6 +46,8 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.replyFollowupMaxImageLookupCalls, 2);
   assert.equal(form.replyFollowupToolTimeoutMs, 10000);
   assert.equal(form.memoryReflectionStrategy, "two_pass_extract_then_main");
+  assert.equal(form.adaptiveDirectivesEnabled, true);
+  assert.equal(form.automationsEnabled, true);
   assert.equal(form.voiceThoughtEngineEnabled, true);
   assert.equal(form.voiceThoughtEngineProvider, "anthropic");
   assert.equal(form.voiceThoughtEngineModel, "claude-sonnet-4-6");
@@ -82,6 +84,8 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.replyFollowupMaxImageLookupCalls = 1;
   form.replyFollowupToolTimeoutMs = 16000;
   form.memoryReflectionStrategy = "one_pass_main";
+  form.adaptiveDirectivesEnabled = false;
+  form.automationsEnabled = false;
   form.voiceGenerationLlmUseTextModel = true;
   form.voiceStreamWatchCommentaryPath = "anthropic_keyframes";
   form.voiceStreamWatchKeyframeIntervalMs = 1750;
@@ -110,6 +114,8 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.replyFollowupLlm.maxImageLookupCalls, 1);
   assert.equal(patch.replyFollowupLlm.toolTimeoutMs, 16000);
   assert.equal(patch.memory.reflection.strategy, "one_pass_main");
+  assert.equal(patch.adaptiveDirectives.enabled, false);
+  assert.equal(patch.automations.enabled, false);
   assert.equal(patch.voice.generationLlm.useTextModel, true);
   assert.equal(patch.voice.streamWatch.commentaryPath, "anthropic_keyframes");
   assert.equal(patch.voice.streamWatch.keyframeIntervalMs, 1750);

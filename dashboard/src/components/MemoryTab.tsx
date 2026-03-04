@@ -4,8 +4,9 @@ import MemorySnapshot from "./memoryTab/MemorySnapshot";
 import MemorySearch from "./memoryTab/MemorySearch";
 import MemorySimulator from "./memoryTab/MemorySimulator";
 import MemoryReflections from "./memoryTab/MemoryReflections";
+import MemoryAdaptiveDirectives from "./memoryTab/MemoryAdaptiveDirectives";
 
-type SubTab = "snapshot" | "reflections" | "search" | "simulator";
+type SubTab = "snapshot" | "directives" | "reflections" | "search" | "simulator";
 
 interface Guild {
   id: string;
@@ -38,6 +39,12 @@ export default function MemoryTab({ markdown, onRefresh, notify }: Props) {
           Snapshot
         </button>
         <button
+          className={`filter-pill${subTab === "directives" ? " active" : ""}`}
+          onClick={() => setSubTab("directives")}
+        >
+          Directives
+        </button>
+        <button
           className={`filter-pill${subTab === "reflections" ? " active" : ""}`}
           onClick={() => setSubTab("reflections")}
         >
@@ -58,6 +65,9 @@ export default function MemoryTab({ markdown, onRefresh, notify }: Props) {
       </div>
       {subTab === "snapshot" && (
         <MemorySnapshot markdown={markdown} onRefresh={onRefresh} />
+      )}
+      {subTab === "directives" && (
+        <MemoryAdaptiveDirectives guilds={guilds} />
       )}
       {subTab === "reflections" && (
         <MemoryReflections guilds={guilds} />

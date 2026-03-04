@@ -72,6 +72,7 @@ export function buildReplyPrompt({
   allowMemoryLookupDirective = false,
   allowImageLookupDirective = false,
   allowMemoryDirective = false,
+  allowAdaptiveDirective = false,
   allowAutomationDirective = false,
   automationTimeZoneLabel = "",
   voiceMode = null,
@@ -121,6 +122,11 @@ export function buildReplyPrompt({
     parts.push("Use this for continuity when it clearly matches the current topic. If the user asks about older or less certain history, use conversation_search.");
   }
   parts.push("Conversation-history lookup is available for recalling prior text/voice exchanges. If the user asks what was said earlier or what you talked about before, use conversation_search.");
+  if (allowAdaptiveDirective) {
+    parts.push("Adaptive directive persistence is available for server-level guidance and recurring behavior instructions. If a user explicitly asks you to change how you talk, operate under a standing instruction, or perform a recurring trigger/action behavior in future conversations, use adaptive_directive_add or adaptive_directive_remove instead of memory_write.");
+  } else {
+    parts.push("Adaptive directives are unavailable right now. Do not claim you can save standing behavior changes for later.");
+  }
 
   if (userFacts?.length) {
     parts.push("=== USER FACTS ===");
@@ -656,6 +662,9 @@ export function buildReplyPrompt({
     );
     parts.push(
       "Do not save requests, dares, jokes, insults, toxic phrasing, or instructions about how you should talk/behave in future situations."
+    );
+    parts.push(
+      "Future talking-style requests and recurring trigger/action behaviors belong in adaptive_directive_add / adaptive_directive_remove, not durable memory."
     );
     parts.push(
       "Use your own judgment: if a memory candidate is not a genuine durable fact, leave memoryLine as null."

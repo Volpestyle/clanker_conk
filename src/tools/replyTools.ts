@@ -1,6 +1,10 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { normalizeDirectiveText } from "../botHelpers.ts";
 import {
+  executeSharedAdaptiveDirectiveAdd,
+  executeSharedAdaptiveDirectiveRemove
+} from "../adaptiveDirectives/adaptiveDirectiveToolRuntime.ts";
+import {
   executeSharedMemoryToolSearch,
   executeSharedMemoryToolWrite
 } from "../memory/memoryToolRuntime.ts";
@@ -82,6 +86,40 @@ type ReplyToolRuntime = {
       before?: number;
       after?: number;
     }) => Array<Record<string, unknown>>;
+    getActiveAdaptiveStyleNotes?: (guildId: string, limit?: number) => Array<Record<string, unknown>>;
+    searchAdaptiveStyleNotesForPrompt?: (opts: {
+      guildId: string;
+      queryText?: string;
+      limit?: number;
+    }) => Array<Record<string, unknown>>;
+    addAdaptiveStyleNote?: (opts: {
+      guildId: string;
+      directiveKind?: string;
+      noteText: string;
+      actorUserId?: string | null;
+      actorName?: string | null;
+      sourceMessageId?: string | null;
+      sourceText?: string | null;
+      source?: string;
+    }) => {
+      ok: boolean;
+      error?: string;
+      status?: string;
+      note?: Record<string, unknown> | null;
+    };
+    removeAdaptiveStyleNote?: (opts: {
+      noteId: number;
+      guildId: string;
+      actorUserId?: string | null;
+      actorName?: string | null;
+      removalReason?: string | null;
+      source?: string;
+    }) => {
+      ok: boolean;
+      error?: string;
+      status?: string;
+      note?: Record<string, unknown> | null;
+    };
   };
 };
 
@@ -93,6 +131,7 @@ type ReplyToolContext = {
   sourceMessageId: string;
   sourceText: string;
   botUserId?: string;
+  actorName?: string;
   trace?: Record<string, unknown>;
 };
 
@@ -194,6 +233,49 @@ const CONVERSATION_SEARCH_TOOL: ReplyToolDefinition = {
   }
 };
 
+const ADAPTIVE_STYLE_ADD_TOOL: ReplyToolDefinition = {
+  name: "adaptive_directive_add",
+  description:
+    "Persist a server-level adaptive directive for future conversations. Use for style guidance, operating guidance, or recurring trigger/action behavior, like how to talk or when to send a GIF/reaction. Keep the directive concise, usually 1-2 sentences max.",
+  input_schema: {
+    type: "object",
+    properties: {
+      kind: {
+        type: "string",
+        description: "Directive kind: `guidance` for style/tone/persona guidance, or `behavior` for recurring trigger/action behavior."
+      },
+      note: {
+        type: "string",
+        description: "The persistent directive to save (max 420 chars)."
+      }
+    },
+    required: ["note"]
+  }
+};
+
+const ADAPTIVE_STYLE_REMOVE_TOOL: ReplyToolDefinition = {
+  name: "adaptive_directive_remove",
+  description:
+    "Remove an active server-level adaptive directive when someone explicitly asks you to stop using it or undo a prior recurring behavior. Prefer `note_ref` from the prompt when available.",
+  input_schema: {
+    type: "object",
+    properties: {
+      note_ref: {
+        type: "string",
+        description: "Preferred exact note reference from prompt context, like `S12`."
+      },
+      target: {
+        type: "string",
+        description: "Fallback text describing the directive to remove."
+      },
+      reason: {
+        type: "string",
+        description: "Short reason or quoted request for removal."
+      }
+    }
+  }
+};
+
 const IMAGE_LOOKUP_TOOL: ReplyToolDefinition = {
   name: "image_lookup",
   description:
@@ -231,6 +313,8 @@ const ALL_REPLY_TOOLS: ReplyToolDefinition[] = [
   WEB_SEARCH_TOOL,
   MEMORY_SEARCH_TOOL,
   MEMORY_WRITE_TOOL,
+  ADAPTIVE_STYLE_ADD_TOOL,
+  ADAPTIVE_STYLE_REMOVE_TOOL,
   CONVERSATION_SEARCH_TOOL,
   IMAGE_LOOKUP_TOOL,
   OPEN_ARTICLE_TOOL
@@ -243,6 +327,11 @@ function isMemoryEnabled(settings: Record<string, unknown>): boolean {
   return Boolean(memory?.enabled);
 }
 
+function isAdaptiveDirectivesEnabled(settings: Record<string, unknown>): boolean {
+  const adaptiveDirectives = settings?.adaptiveDirectives as Record<string, unknown> | undefined;
+  return Boolean(adaptiveDirectives?.enabled);
+}
+
 function isWebSearchEnabled(settings: Record<string, unknown>): boolean {
   const webSearch = settings?.webSearch as Record<string, unknown> | undefined;
   return Boolean(webSearch?.enabled);
@@ -253,6 +342,7 @@ export function buildReplyToolSet(
   capabilities: {
     webSearchAvailable?: boolean;
     memoryAvailable?: boolean;
+    adaptiveDirectivesAvailable?: boolean;
     conversationSearchAvailable?: boolean;
     imageLookupAvailable?: boolean;
     openArticleAvailable?: boolean;
@@ -271,6 +361,12 @@ export function buildReplyToolSet(
   if (capabilities.memoryAvailable !== false && memoryEnabled) {
     tools.push(MEMORY_SEARCH_TOOL);
     tools.push(MEMORY_WRITE_TOOL);
+  }
+
+  const adaptiveDirectivesEnabled = isAdaptiveDirectivesEnabled(settings);
+  if (capabilities.adaptiveDirectivesAvailable !== false && adaptiveDirectivesEnabled) {
+    tools.push(ADAPTIVE_STYLE_ADD_TOOL);
+    tools.push(ADAPTIVE_STYLE_REMOVE_TOOL);
   }
 
   if (capabilities.conversationSearchAvailable !== false) {
@@ -305,6 +401,10 @@ export async function executeReplyTool(
       return executeMemoryWrite(input, runtime, context);
     case "conversation_search":
       return executeConversationSearch(input, runtime, context);
+    case "adaptive_directive_add":
+      return executeAdaptiveStyleAdd(input, runtime, context);
+    case "adaptive_directive_remove":
+      return executeAdaptiveStyleRemove(input, runtime, context);
     case "image_lookup":
       return executeImageLookup(input, context);
     case "open_article":
@@ -519,6 +619,85 @@ async function executeMemoryWrite(
       isError: true
     };
   }
+}
+
+async function executeAdaptiveStyleAdd(
+  input: ReplyToolCallInput,
+  runtime: ReplyToolRuntime,
+  context: ReplyToolContext
+): Promise<ReplyToolResult> {
+  if (!runtime.store?.getActiveAdaptiveStyleNotes || !runtime.store?.addAdaptiveStyleNote) {
+    return { content: "Adaptive directives are not available.", isError: true };
+  }
+  const result = await executeSharedAdaptiveDirectiveAdd({
+    runtime: {
+      store: {
+        getActiveAdaptiveStyleNotes: runtime.store.getActiveAdaptiveStyleNotes,
+        addAdaptiveStyleNote: runtime.store.addAdaptiveStyleNote,
+        removeAdaptiveStyleNote: runtime.store.removeAdaptiveStyleNote || (() => ({ ok: false, error: "unavailable" }))
+      }
+    },
+    guildId: context.guildId,
+    actorUserId: context.userId,
+    actorName: context.actorName || null,
+    sourceMessageId: context.sourceMessageId,
+    sourceText: context.sourceText,
+    directiveKind: typeof input?.kind === "string" ? input.kind : null,
+    noteText: input?.note,
+    source: "reply_tool"
+  });
+  if (!result.ok) {
+    return {
+      content: `Adaptive directive add failed: ${String(result.error || "unknown_error")}`,
+      isError: true
+    };
+  }
+  const noteText = String(result.note?.noteText || input?.note || "").trim();
+  const kindLabel = String(result.note?.directiveKind || input?.kind || "guidance").trim();
+  if (result.status === "duplicate_active") {
+    return { content: `Adaptive directive already active [${kindLabel}]: ${noteText}` };
+  }
+  if (result.status === "reactivated") {
+    return { content: `Reactivated adaptive directive [${kindLabel}]: ${noteText}` };
+  }
+  return { content: `Saved adaptive directive [${kindLabel}]: ${noteText}` };
+}
+
+async function executeAdaptiveStyleRemove(
+  input: ReplyToolCallInput,
+  runtime: ReplyToolRuntime,
+  context: ReplyToolContext
+): Promise<ReplyToolResult> {
+  if (!runtime.store?.getActiveAdaptiveStyleNotes || !runtime.store?.removeAdaptiveStyleNote) {
+    return { content: "Adaptive directives are not available.", isError: true };
+  }
+  const result = await executeSharedAdaptiveDirectiveRemove({
+    runtime: {
+      store: {
+        getActiveAdaptiveStyleNotes: runtime.store.getActiveAdaptiveStyleNotes,
+        addAdaptiveStyleNote: runtime.store.addAdaptiveStyleNote || (() => ({ ok: false, error: "unavailable" })),
+        removeAdaptiveStyleNote: runtime.store.removeAdaptiveStyleNote
+      }
+    },
+    guildId: context.guildId,
+    actorUserId: context.userId,
+    actorName: context.actorName || null,
+    sourceMessageId: context.sourceMessageId,
+    sourceText: context.sourceText,
+    noteRef: input?.note_ref,
+    target: input?.target,
+    removalReason: input?.reason,
+    source: "reply_tool"
+  });
+  if (!result.ok) {
+    return {
+      content: `Adaptive directive remove failed: ${String(result.error || "unknown_error")}`,
+      isError: true
+    };
+  }
+  return {
+    content: `Removed adaptive directive (${String(result.matchReason || "match")}): ${String(result.note?.noteText || "").trim()}`
+  };
 }
 
 async function executeImageLookup(

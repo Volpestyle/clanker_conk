@@ -97,9 +97,20 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
     recentMessages,
     loadPromptMemorySlice: (payload) => bot.loadPromptMemorySlice(payload),
     loadRecentLookupContext: (payload) => bot.getRecentLookupContextForPrompt(payload),
-    loadRecentConversationHistory: (payload) => bot.getConversationHistoryForPrompt(payload)
+    loadRecentConversationHistory: (payload) => bot.getConversationHistoryForPrompt(payload),
+    loadAdaptiveDirectives:
+      Boolean(settings?.adaptiveDirectives?.enabled) &&
+      typeof bot.store?.searchAdaptiveStyleNotesForPrompt === "function"
+        ? (payload) =>
+            bot.store.searchAdaptiveStyleNotesForPrompt({
+              guildId: String(payload.guildId || "").trim(),
+              queryText: String(payload.queryText || ""),
+              limit: 8
+            })
+        : null
   });
   const memorySlice = continuity.memorySlice;
+  const adaptiveDirectives = Array.isArray(continuity.adaptiveDirectives) ? continuity.adaptiveDirectives : [];
   performance.memorySliceMs = Math.max(0, Date.now() - memorySliceStartedAtMs);
   const replyMediaMemoryFacts = bot.buildMediaMemoryFacts({
     userFacts: memorySlice.userFacts,
@@ -170,7 +181,9 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
       ? bot.voiceSessionManager.getMusicPromptContext(activeVoiceSession)
       : null;
   
-  const systemPrompt = buildSystemPrompt(settings);
+  const systemPrompt = buildSystemPrompt(settings, {
+    adaptiveDirectives
+  });
   const replyPromptBase = {
     message: {
       authorName: message.member?.displayName || message.author.username,
@@ -204,7 +217,8 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
       responseRequired: Boolean(options.forceRespond)
     },
     allowMemoryDirective: settings.memory.enabled,
-    allowAutomationDirective: true,
+    allowAdaptiveDirective: Boolean(settings?.adaptiveDirectives?.enabled),
+    allowAutomationDirective: Boolean(settings?.automations?.enabled),
     automationTimeZoneLabel: getLocalTimeZoneLabel(),
     voiceMode: {
       enabled: Boolean(settings?.voice?.enabled),
@@ -268,6 +282,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
       !webSearch?.blockedByBudget &&
       webSearch?.budget?.canSearch !== false,
     memoryAvailable: Boolean(settings?.memory?.enabled),
+    adaptiveDirectivesAvailable: Boolean(settings?.adaptiveDirectives?.enabled),
     imageLookupAvailable: Boolean(imageLookup?.enabled),
     openArticleAvailable: false
   });
@@ -284,6 +299,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     sourceMessageId: message.id,
     sourceText: message.content,
     botUserId: bot.client.user?.id || undefined,
+    actorName: message.member?.displayName || message.author?.username || undefined,
     trace: {
       ...replyTrace,
       source

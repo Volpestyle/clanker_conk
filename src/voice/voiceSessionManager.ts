@@ -225,7 +225,7 @@ import {
 import { loadPromptMemorySliceFromMemory } from "../memory/promptMemorySlice.ts";
 import { providerSupports } from "./voiceModes.ts";
 import { ensureSessionToolRuntimeState, getVoiceMcpServerStatuses, resolveVoiceRealtimeToolDescriptors, buildRealtimeFunctionTools, recordVoiceToolCallEvent, parseOpenAiRealtimeToolArguments, resolveOpenAiRealtimeToolDescriptor, summarizeVoiceToolOutput, executeOpenAiRealtimeFunctionCall, refreshRealtimeTools, executeVoiceMemorySearchTool, executeVoiceMemoryWriteTool, executeVoiceAdaptiveStyleAddTool, executeVoiceAdaptiveStyleRemoveTool, executeVoiceConversationSearchTool, executeVoiceMusicSearchTool, executeVoiceMusicQueueAddTool, executeVoiceMusicQueueNextTool, executeVoiceMusicPlayNowTool, executeVoiceWebSearchTool, executeLocalVoiceToolCall, executeMcpVoiceToolCall } from "./voiceToolCalls.ts";
-import { formatAdaptiveStyleNotes, formatConversationWindows, formatRecentLookupContext } from "../prompts/promptFormatters.ts";
+import { formatAdaptiveDirectives, formatConversationWindows, formatRecentLookupContext } from "../prompts/promptFormatters.ts";
 import {
   loadConversationContinuityContext
 } from "../bot/conversationContinuity.ts";
@@ -10117,9 +10117,14 @@ export class VoiceSessionManager {
   async buildRealtimeMemorySlice({ session, settings, userId, transcript = "" }) {
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     if (!normalizedTranscript) {
-      const adaptiveStyleNotes =
-        this.store && typeof this.store.getActiveAdaptiveStyleNotes === "function"
-          ? this.store.getActiveAdaptiveStyleNotes(String(session?.guildId || "").trim(), 8)
+      const adaptiveDirectives =
+        Boolean(settings?.adaptiveDirectives?.enabled) &&
+        this.store && typeof this.store.searchAdaptiveStyleNotesForPrompt === "function"
+          ? this.store.searchAdaptiveStyleNotesForPrompt({
+              guildId: String(session?.guildId || "").trim(),
+              queryText: "",
+              limit: 8
+            })
           : [];
       return {
         userFacts: [],
@@ -10127,7 +10132,7 @@ export class VoiceSessionManager {
         relevantMessages: [],
         recentConversationHistory: [],
         recentWebLookups: [],
-        adaptiveStyleNotes
+        adaptiveDirectives
       };
     }
 
@@ -10199,9 +10204,15 @@ export class VoiceSessionManager {
                 after: 1
               })
           : null,
-      loadAdaptiveStyleNotes:
-        this.store && typeof this.store.getActiveAdaptiveStyleNotes === "function"
-          ? (payload) => this.store.getActiveAdaptiveStyleNotes(String(payload.guildId || "").trim(), 8)
+      loadAdaptiveDirectives:
+        Boolean(settings?.adaptiveDirectives?.enabled) &&
+        this.store && typeof this.store.searchAdaptiveStyleNotesForPrompt === "function"
+          ? (payload) =>
+              this.store.searchAdaptiveStyleNotesForPrompt({
+                guildId: String(payload.guildId || "").trim(),
+                queryText: String(payload.queryText || ""),
+                limit: 8
+              })
           : null
     });
   }
@@ -10621,7 +10632,7 @@ export class VoiceSessionManager {
     const relevantFacts = formatRealtimeMemoryFacts(memorySlice?.relevantFacts, REALTIME_MEMORY_FACT_LIMIT);
     const recentConversationHistory = formatConversationWindows(memorySlice?.recentConversationHistory);
     const recentWebLookups = formatRecentLookupContext(memorySlice?.recentWebLookups);
-    const adaptiveStyleNotes = formatAdaptiveStyleNotes(memorySlice?.adaptiveStyleNotes, 8);
+    const adaptiveDirectives = formatAdaptiveDirectives(memorySlice?.adaptiveDirectives, 8);
     const activeVoiceCommandState = this.ensureVoiceCommandState(session);
     const musicDisambiguation = this.getMusicDisambiguationPromptContext(session);
 
@@ -10695,12 +10706,12 @@ export class VoiceSessionManager {
       );
     }
 
-    if (Array.isArray(memorySlice?.adaptiveStyleNotes) && memorySlice.adaptiveStyleNotes.length > 0) {
+    if (Array.isArray(memorySlice?.adaptiveDirectives) && memorySlice.adaptiveDirectives.length > 0) {
       sections.push(
         [
-          "Adaptive style notes:",
-          "- These are active persistent server-level style instructions.",
-          adaptiveStyleNotes
+          "Adaptive directives:",
+          "- Guidance directives shape tone/persona. Behavior directives define recurring trigger/action behavior when the current turn matches.",
+          adaptiveDirectives
         ].join("\n")
       );
     }
@@ -10778,7 +10789,9 @@ export class VoiceSessionManager {
           "- Use tools when they improve factuality or action execution.",
           "- Use conversation_search when the speaker asks what was said earlier or asks you to remember a prior exchange.",
           "- For memory writes, only store concise durable facts and avoid secrets.",
-          "- If someone explicitly asks you to start or stop talking a certain way in future conversations, use adaptive_style_add or adaptive_style_remove instead of memory_write.",
+          settings?.adaptiveDirectives?.enabled
+            ? "- If someone explicitly asks you to change how you talk, follow a standing instruction, or perform a recurring trigger/action behavior in future conversations, use adaptive_directive_add or adaptive_directive_remove instead of memory_write."
+            : "- Adaptive directives are disabled right now. Do not imply you can save standing behavior changes for later.",
           "- For music controls, use music_play_now for immediate playback, music_queue_next to place a track after the current one, music_queue_add to append, and music_stop to stop playback.",
           "- Do not emulate play-now by chaining music_queue_add and music_skip.",
           "- Do not use music_skip as a substitute for music_stop.",

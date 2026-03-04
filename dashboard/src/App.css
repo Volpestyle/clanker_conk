@@ -1069,6 +1069,87 @@ button.sm {
   color: #f4beb4;
 }
 
+.memory-style-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.memory-style-sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+}
+
+.memory-style-section {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: rgba(8, 20, 18, 0.6);
+  padding: 14px;
+}
+
+.memory-style-section-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.memory-style-section-head h4 {
+  margin: 0;
+}
+
+.memory-style-textarea {
+  width: 100%;
+  min-height: 88px;
+  resize: vertical;
+  margin-top: 6px;
+}
+
+.memory-style-note-list,
+.memory-style-audit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.memory-style-note-card,
+.memory-style-audit-card {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: rgba(6, 16, 15, 0.72);
+  padding: 12px;
+}
+
+.memory-style-note-meta,
+.memory-style-audit-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 10px;
+  color: var(--ink-2);
+  font-size: 0.76rem;
+}
+
+.memory-style-note-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.memory-style-audit-text,
+.memory-style-audit-detail {
+  margin: 0;
+  font-size: 0.84rem;
+}
+
+.memory-style-audit-detail {
+  margin-top: 8px;
+  color: var(--ink-2);
+  font-size: 0.76rem;
+}
+
 .memory-reflection-list {
   display: flex;
   flex-direction: column;

@@ -369,6 +369,174 @@ export function attachVoiceRoutes(app: any, deps: any) {
     }
   });
 
+  app.get("/api/memory/adaptive-directives", (req, res, next) => {
+    try {
+      const guildId = String(req.query.guildId || "").trim();
+      const limit = parseBoundedInt(req.query.limit, 50, 1, 200);
+      if (!guildId) {
+        return res.json({
+          guildId,
+          notes: [],
+          limit
+        });
+      }
+      return res.json({
+        guildId,
+        limit,
+        notes:
+          typeof store.getActiveAdaptiveStyleNotes === "function"
+            ? store.getActiveAdaptiveStyleNotes(guildId, limit)
+            : []
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get("/api/memory/adaptive-directives/audit", (req, res, next) => {
+    try {
+      const guildId = String(req.query.guildId || "").trim();
+      const limit = parseBoundedInt(req.query.limit, 100, 1, 500);
+      if (!guildId) {
+        return res.json({
+          guildId,
+          events: [],
+          limit
+        });
+      }
+      return res.json({
+        guildId,
+        limit,
+        events:
+          typeof store.getAdaptiveStyleNoteAuditLog === "function"
+            ? store.getAdaptiveStyleNoteAuditLog(guildId, limit)
+            : []
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post("/api/memory/adaptive-directives", (req, res, next) => {
+    try {
+      const adaptiveDirectivesEnabled = Boolean(store.getSettings?.()?.adaptiveDirectives?.enabled);
+      if (!adaptiveDirectivesEnabled) {
+        return res.status(503).json({
+          ok: false,
+          reason: "adaptive_directives_disabled"
+        });
+      }
+      const guildId = String(req.body?.guildId || "").trim();
+      const noteText = String(req.body?.noteText || "").trim();
+      const directiveKind = String(req.body?.directiveKind || "guidance").trim() || "guidance";
+      const actorName = String(req.body?.actorName || "dashboard").trim() || "dashboard";
+      if (!guildId || !noteText) {
+        return res.status(400).json({
+          ok: false,
+          reason: !guildId ? "guild_id_required" : "note_text_required"
+        });
+      }
+      const result = store.addAdaptiveStyleNote({
+        guildId,
+        directiveKind,
+        noteText,
+        actorName,
+        source: "dashboard"
+      });
+      if (!result?.ok) {
+        return res.status(400).json({
+          ok: false,
+          reason: String(result?.error || "adaptive_directive_add_failed")
+        });
+      }
+      return res.json(result);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.patch("/api/memory/adaptive-directives/:noteId", (req, res, next) => {
+    try {
+      const adaptiveDirectivesEnabled = Boolean(store.getSettings?.()?.adaptiveDirectives?.enabled);
+      if (!adaptiveDirectivesEnabled) {
+        return res.status(503).json({
+          ok: false,
+          reason: "adaptive_directives_disabled"
+        });
+      }
+      const guildId = String(req.body?.guildId || "").trim();
+      const noteId = Number(req.params.noteId);
+      const noteText = String(req.body?.noteText || "").trim();
+      const directiveKind = String(req.body?.directiveKind || "guidance").trim() || "guidance";
+      const actorName = String(req.body?.actorName || "dashboard").trim() || "dashboard";
+      if (!guildId || !Number.isInteger(noteId) || noteId <= 0 || !noteText) {
+        return res.status(400).json({
+          ok: false,
+          reason: !guildId
+            ? "guild_id_required"
+            : !Number.isInteger(noteId) || noteId <= 0
+              ? "note_id_required"
+              : "note_text_required"
+        });
+      }
+      const result = store.updateAdaptiveStyleNote({
+        noteId,
+        guildId,
+        directiveKind,
+        noteText,
+        actorName,
+        source: "dashboard"
+      });
+      if (!result?.ok) {
+        return res.status(result?.error === "note_not_found" ? 404 : 400).json({
+          ok: false,
+          reason: String(result?.error || "adaptive_directive_update_failed")
+        });
+      }
+      return res.json(result);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post("/api/memory/adaptive-directives/:noteId/remove", (req, res, next) => {
+    try {
+      const adaptiveDirectivesEnabled = Boolean(store.getSettings?.()?.adaptiveDirectives?.enabled);
+      if (!adaptiveDirectivesEnabled) {
+        return res.status(503).json({
+          ok: false,
+          reason: "adaptive_directives_disabled"
+        });
+      }
+      const guildId = String(req.body?.guildId || "").trim();
+      const noteId = Number(req.params.noteId);
+      const actorName = String(req.body?.actorName || "dashboard").trim() || "dashboard";
+      const removalReason = String(req.body?.removalReason || "").trim();
+      if (!guildId || !Number.isInteger(noteId) || noteId <= 0) {
+        return res.status(400).json({
+          ok: false,
+          reason: !guildId ? "guild_id_required" : "note_id_required"
+        });
+      }
+      const result = store.removeAdaptiveStyleNote({
+        noteId,
+        guildId,
+        actorName,
+        removalReason,
+        source: "dashboard"
+      });
+      if (!result?.ok) {
+        return res.status(result?.error === "note_not_found" ? 404 : 400).json({
+          ok: false,
+          reason: String(result?.error || "adaptive_directive_remove_failed")
+        });
+      }
+      return res.json(result);
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   app.get("/api/memory/reflections", (req, res, next) => {
     try {
       const limit = parseBoundedInt(req.query.limit, 20, 1, 100);

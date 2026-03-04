@@ -70,6 +70,13 @@ Conversation continuity is split into two retrieval layers:
 
 This keeps default prompts small while still letting the model explicitly look up earlier exchanges when continuity matters.
 
+A third persistence layer now exists for recurring bot behavior:
+- `adaptive_directive_add` / `adaptive_directive_remove`: server-level persistent directives that shape how the bot talks and acts across future turns.
+- `guidance` directives: broad style/tone/persona/operating guidance.
+- `behavior` directives: recurring trigger/action behavior, such as sending a GIF or calling out a specific user when the current turn matches.
+
+Unlike durable memory facts, adaptive directives are injected into prompts directly. Guidance directives can stay broadly active, while behavior directives are retrieved query-by-query so they only enter context when the current turn is relevant.
+
 ### How Tools Are Invoked
 
 **Text chat path:** The brain calls `llm.chatWithTools()` with the full tool set. The LLM returns `tool_use` blocks, the bot executes them, appends results, and loops until the LLM returns a text-only response. Implemented in `replyTools.ts` (inline tools) and dedicated agents like `browseAgent.ts` (agent loops).
@@ -102,6 +109,8 @@ Main tables created in `src/store.ts`:
 - `actions`: event log (replies, reactions, initiative posts, llm/image calls, errors) with `usd_cost`.
 - `memory_facts`: LLM-extracted durable facts with type/confidence/evidence.
 - `memory_fact_vectors_native`: sqlite-vec-compatible embeddings per fact/model for semantic recall.
+- `adaptive_style_notes`: active persistent adaptive directives, including `directive_kind` (`guidance` or `behavior`), audit metadata, and soft-delete fields.
+- `adaptive_style_note_events`: append-only audit log of directive adds/edits/reactivations/removals.
 - `shared_links`: external links already posted (for dedupe windows).
 - `automations`: natural-language schedule definitions and next-run state.
 - `automation_runs`: per-run execution history for each automation.
@@ -188,6 +197,8 @@ Dashboard writes:
 Dashboard read APIs also include:
 - `GET /api/automations`: list automations by guild/channel/status/query.
 - `GET /api/automations/runs`: list run history for one automation.
+- `GET /api/memory/adaptive-directives`: list active adaptive directives for one guild.
+- `GET /api/memory/adaptive-directives/audit`: list adaptive directive audit events for one guild.
 - `POST /api/memory/simulate-slice`: simulate retrieval slices for memory prompt tuning.
 
 ## 11. Action Log Kinds
@@ -197,6 +208,7 @@ Common `actions.kind` values in current runtime:
 - Reactions: `reacted`, `voice_soundboard_play`
 - LLM + media generation: `llm_call`, `llm_error`, `image_call`, `image_error`, `video_call`, `video_error`, `gif_call`, `gif_error`
 - Memory pipeline: `memory_fact`, `memory_extract_call`, `memory_extract_error`, `memory_embedding_call`, `memory_embedding_error`
+- Adaptive directives: `adaptive_style_note` (current internal action-log kind for directive lifecycle events)
 - Search + video context: `search_call`, `search_error`, `video_context_call`, `video_context_error`
 - Agent tools: `browser_browse_call`, `browser_tool_step`
 - Voice runtime: `voice_session_start`, `voice_session_end`, `voice_turn_in`, `voice_turn_out`, `voice_runtime`, `voice_intent_detected`, `voice_error`

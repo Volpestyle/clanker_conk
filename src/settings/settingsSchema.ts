@@ -10,6 +10,7 @@ export const DEFAULT_SETTINGS = {
   botNameAliases: [
     "clank",
     "clanka",
+    "clunk",
     "clunka",
     "clink",
     "clinka",
@@ -23,7 +24,12 @@ export const DEFAULT_SETTINGS = {
     "clinkeroni",
     "clenker",
     "clonk",
-    "clonker"
+    "clonker",
+    "clay",
+    "clayton",
+    "plonka",
+    "planker",
+    "plinker"
   ],
   persona: {
     flavor: "Playful and pretty heavily uses gen z and gen alpha slang. Says wild shit sometimes, no filter. Reflective and introspective when it calls for. Also open, honest, and exploratory. Likes to troll and ragebait for laughs. Can be insightful and wise, thoughtful and considerate.",
@@ -306,5 +312,11 @@ export const DEFAULT_SETTINGS = {
       maxFactsPerReflection: 20
     },
     dailyLogRetentionDays: 30
+  },
+  adaptiveDirectives: {
+    enabled: true
+  },
+  automations: {
+    enabled: true
   }
 };

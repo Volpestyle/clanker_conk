@@ -100,8 +100,20 @@ Assistant spoken replies are also persisted into shared message history, so text
 
 `refreshRealtimeInstructions(...)` and `prepareRealtimeTurnContext(...)` refresh:
 - participant/membership context
-- memory slice
+- shared continuity context
 - tool policy context
+
+That shared continuity context is provider-agnostic and now includes:
+- durable memory facts (`memory_search` retrieval layer)
+- recent conversation windows from persisted text + voice history
+- recent lookup continuity from shared web-search cache
+- adaptive directives, which are persistent server-level “how to talk / how to act” rules shared with the text runtime
+
+Adaptive directives are intentionally split by kind:
+- `guidance`: always-light style/persona/operating guidance
+- `behavior`: recurring trigger/action instructions, only retrieved into prompt context when the current turn looks relevant
+
+This keeps native realtime, realtime bridge, and STT-pipeline generation aligned on one continuity model without bloating every prompt with every saved directive.
 
 ### 5) Tool calling loop (Realtime brain)
 
@@ -126,6 +138,8 @@ Runtime loop in `src/voice/voiceSessionManager.ts`:
 - `conversation_search`
 - `memory_search`
 - `memory_write`
+- `adaptive_directive_add`
+- `adaptive_directive_remove`
 - `music_search`
 - `music_play_now`
 - `music_queue_next`
@@ -140,6 +154,11 @@ Runtime loop in `src/voice/voiceSessionManager.ts`:
 `conversation_search` is intentionally separate from `memory_search`:
 - `conversation_search` recalls prior exchanges from persisted text/voice history.
 - `memory_search` recalls durable long-lived facts extracted from that history.
+
+`adaptive_directive_add` / `adaptive_directive_remove` are intentionally separate from both:
+- they persist standing bot behavior guidance, not facts
+- they are auditable and editable from the dashboard
+- they apply across text and voice because they feed the shared continuity/prompt layer rather than a provider-specific path
 
 This keeps the realtime prompt compact while still allowing explicit recall of earlier conversation when the speaker asks about something from minutes, hours, or days ago.
 

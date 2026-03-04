@@ -229,6 +229,20 @@ test("normalizeSettings preserves explicit commandOnlyMode", () => {
   assert.equal(normalized.voice.commandOnlyMode, true);
 });
 
+test("normalizeSettings preserves explicit adaptive directive and automation toggles", () => {
+  const normalized = normalizeSettings({
+    adaptiveDirectives: {
+      enabled: false
+    },
+    automations: {
+      enabled: false
+    }
+  });
+
+  assert.equal(normalized.adaptiveDirectives.enabled, false);
+  assert.equal(normalized.automations.enabled, false);
+});
+
 test("normalizeSettings handles memoryLlm defaults and discovery source fallbacks", () => {
   const normalized = normalizeSettings({
     memoryLlm: {},

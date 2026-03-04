@@ -1,6 +1,10 @@
 // Extracted Tool Call Methods
 import { runBrowseAgent } from "../agents/browseAgent.ts";
 import {
+  executeSharedAdaptiveDirectiveAdd,
+  executeSharedAdaptiveDirectiveRemove
+} from "../adaptiveDirectives/adaptiveDirectiveToolRuntime.ts";
+import {
   executeSharedMemoryToolSearch,
   executeSharedMemoryToolWrite
 } from "../memory/memoryToolRuntime.ts";
@@ -165,6 +169,37 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
           }
         },
         required: ["items"],
+        additionalProperties: false
+      }
+    },
+    {
+      toolType: "function",
+      name: "adaptive_directive_add",
+      description: "Persist a server-level adaptive directive for future conversations. Use for style guidance, operating guidance, or recurring trigger/action behavior, like how to talk or when to send a GIF/reaction.",
+      parameters: {
+        type: "object",
+        properties: {
+          kind: {
+            type: "string",
+            enum: ["guidance", "behavior"]
+          },
+          note: { type: "string" }
+        },
+        required: ["note"],
+        additionalProperties: false
+      }
+    },
+    {
+      toolType: "function",
+      name: "adaptive_directive_remove",
+      description: "Remove a previously saved server-level adaptive directive when someone explicitly asks you to stop using it.",
+      parameters: {
+        type: "object",
+        properties: {
+          note_ref: { type: "string" },
+          target: { type: "string" },
+          reason: { type: "string" }
+        },
         additionalProperties: false
       }
     },
@@ -386,10 +421,16 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
 
   const includeWebSearch = Boolean(settings?.webSearch?.enabled);
   const includeMemory = Boolean(settings?.memory?.enabled);
+  const adaptiveDirectivesSettings =
+    settings?.adaptiveDirectives && typeof settings.adaptiveDirectives === "object"
+      ? settings.adaptiveDirectives as { enabled?: boolean }
+      : null;
+  const includeAdaptiveDirectives = Boolean(adaptiveDirectivesSettings?.enabled);
   const includeBrowser = Boolean(settings?.browser?.enabled);
   const filteredLocalTools = localTools.filter((entry) => {
     if (entry.name === "web_search" && !includeWebSearch) return false;
     if ((entry.name === "memory_search" || entry.name === "memory_write") && !includeMemory) return false;
+    if ((entry.name === "adaptive_directive_add" || entry.name === "adaptive_directive_remove") && !includeAdaptiveDirectives) return false;
     if (entry.name === "browser_browse" && !includeBrowser) return false;
     return true;
   });
@@ -869,6 +910,67 @@ export async function executeVoiceMemoryWriteTool(manager: any, {
   return result;
 }
 
+export async function executeVoiceAdaptiveStyleAddTool(manager: any, {
+  session,
+  args
+}) {
+  if (
+    !manager.store ||
+    typeof manager.store.getActiveAdaptiveStyleNotes !== "function" ||
+    typeof manager.store.addAdaptiveStyleNote !== "function" ||
+    typeof manager.resolveVoiceSpeakerName !== "function"
+  ) {
+    return {
+      ok: false,
+      error: "adaptive_directive_unavailable"
+    };
+  }
+  return await executeSharedAdaptiveDirectiveAdd({
+    runtime: {
+      store: manager.store
+    },
+    guildId: String(session?.guildId || "").trim(),
+    actorUserId: session?.lastOpenAiToolCallerUserId || null,
+    actorName: manager.resolveVoiceSpeakerName(session, session?.lastOpenAiToolCallerUserId || null),
+    sourceMessageId: `voice-tool-${String(session?.id || "session")}`,
+    sourceText: "",
+    noteText: args?.note,
+    directiveKind: args?.kind,
+    source: "voice_tool"
+  });
+}
+
+export async function executeVoiceAdaptiveStyleRemoveTool(manager: any, {
+  session,
+  args
+}) {
+  if (
+    !manager.store ||
+    typeof manager.store.getActiveAdaptiveStyleNotes !== "function" ||
+    typeof manager.store.removeAdaptiveStyleNote !== "function" ||
+    typeof manager.resolveVoiceSpeakerName !== "function"
+  ) {
+    return {
+      ok: false,
+      error: "adaptive_directive_unavailable"
+    };
+  }
+  return await executeSharedAdaptiveDirectiveRemove({
+    runtime: {
+      store: manager.store
+    },
+    guildId: String(session?.guildId || "").trim(),
+    actorUserId: session?.lastOpenAiToolCallerUserId || null,
+    actorName: manager.resolveVoiceSpeakerName(session, session?.lastOpenAiToolCallerUserId || null),
+    sourceMessageId: `voice-tool-${String(session?.id || "session")}`,
+    sourceText: "",
+    noteRef: args?.note_ref,
+    target: args?.target,
+    removalReason: args?.reason,
+    source: "voice_tool"
+  });
+}
+
 export async function executeVoiceMusicSearchTool(manager: any, { session, args }) {
   const query = normalizeInlineText(args?.query, 180);
   if (!query) {
@@ -1295,6 +1397,18 @@ export async function executeLocalVoiceToolCall(manager: any, {
     return await manager.executeVoiceMemoryWriteTool({
       session,
       settings,
+      args
+    });
+  }
+  if (normalizedToolName === "adaptive_directive_add") {
+    return await manager.executeVoiceAdaptiveStyleAddTool({
+      session,
+      args
+    });
+  }
+  if (normalizedToolName === "adaptive_directive_remove") {
+    return await manager.executeVoiceAdaptiveStyleRemoveTool({
+      session,
       args
     });
   }

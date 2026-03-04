@@ -37,6 +37,7 @@ export function buildVoiceTurnPrompt({
   screenShare = null,
   allowScreenShareToolCall = false,
   allowMemoryToolCalls = false,
+  allowAdaptiveDirectiveToolCalls = false,
   allowSoundboardToolCall = false
 }) {
   const parts = [];
@@ -350,6 +351,7 @@ export function buildVoiceTurnPrompt({
     parts.push("- Set memoryLine to a durable fact from the speaker turn when genuinely stable and useful.");
     parts.push("- Set selfMemoryLine to a durable fact about your own stable identity/preference/commitment in your reply when genuinely stable and useful.");
     parts.push("- Do not save requests, insults, jokes, toxic phrasing, or rules about how you should talk/behave later.");
+    parts.push("- Persistent style/tone requests, standing operating guidance, and recurring trigger/action behaviors belong in adaptive_directive_add / adaptive_directive_remove, not memoryLine or selfMemoryLine.");
     parts.push("- Use your own judgment: if it is not a genuine durable memory, leave memoryLine and selfMemoryLine null.");
     parts.push("If not needed, set memoryLine and selfMemoryLine to null.");
   } else {
@@ -380,6 +382,11 @@ export function buildVoiceTurnPrompt({
 
   parts.push("Conversation-history lookup is available.");
   parts.push("If the speaker asks what was said earlier, what you talked about before, or asks you to remember a past exchange, use conversation_search.");
+  if (allowAdaptiveDirectiveToolCalls) {
+    parts.push("If someone explicitly asks you to change how you talk, follow a standing instruction, or perform a recurring trigger/action behavior in future conversations, use adaptive_directive_add or adaptive_directive_remove.");
+  } else {
+    parts.push("Adaptive directives are unavailable this turn. Do not imply you can save standing behavior changes right now.");
+  }
 
   if (allowOpenArticleToolCall) {
     if (normalizedOpenArticleCandidates.length) {

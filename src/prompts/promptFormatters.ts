@@ -11,7 +11,26 @@ import {
   getPromptTextGuidance
 } from "../promptCore.ts";
 
-export function buildSystemPrompt(settings) {
+export function formatAdaptiveDirectives(notes, maxItems = 8) {
+  const rows = Array.isArray(notes) ? notes : [];
+  if (!rows.length) return "(no adaptive directives)";
+  return rows
+    .slice(0, Math.max(1, Number(maxItems) || 8))
+    .map((row) => {
+      const noteId = Number(row?.id);
+      const directiveKind = String(row?.directiveKind || row?.directive_kind || "guidance").trim().toLowerCase() || "guidance";
+      const noteText = String(row?.noteText || row?.note_text || "")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!noteText) return "";
+      const ref = Number.isInteger(noteId) ? ` [S${noteId}]` : "";
+      return `-${ref} [${directiveKind}] ${noteText}`;
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+export function buildSystemPrompt(settings, { adaptiveDirectives = [] } = {}) {
   const memoryEnabled = Boolean(settings?.memory?.enabled);
   const textGuidance = getPromptTextGuidance(settings, DEFAULT_PROMPT_TEXT_GUIDANCE);
 
@@ -20,6 +39,11 @@ export function buildSystemPrompt(settings) {
     `You are ${getPromptBotName(settings)}, a real-feeling regular in a Discord server.`,
     `Style: ${getPromptStyle(settings)}.`,
     ...textGuidance,
+    adaptiveDirectives.length > 0 ? `=== ADAPTIVE DIRECTIVES ===` : null,
+    adaptiveDirectives.length > 0
+      ? "These are active persistent server-level directives saved from prior conversation or dashboard edits. Guidance directives shape tone/persona. Behavior directives describe recurring trigger/action behavior. Follow them when relevant unless they conflict with hard limits or the current request."
+      : null,
+    adaptiveDirectives.length > 0 ? formatAdaptiveDirectives(adaptiveDirectives, 8) : null,
     `=== CAPABILITIES ===`,
     getPromptCapabilityHonestyLine(settings),
     memoryEnabled
