@@ -730,6 +730,8 @@ async fn main() {
                     Err(_) => break,
                 }
             }
+            // Stdin closed (pipe broken, likely parent died)
+            let _ = ipc_msg_tx.blocking_send(InMsg::Destroy);
         });
     }
 

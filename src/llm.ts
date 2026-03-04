@@ -31,6 +31,7 @@ import {
   extractOpenAiImageBase64,
   extractOpenAiResponseText,
   extractOpenAiResponseUsage,
+  extractOpenAiToolCalls,
   extractXaiVideoUrl,
   inferProviderFromModel,
   isXaiVideoDone,
@@ -249,12 +250,14 @@ export class LLMService {
       reason: null,
       messageId: null
     },
-    jsonSchema = ""
+    jsonSchema = "",
+    tools = []
   }) {
     const { provider, model } = this.resolveProviderAndModel(settings?.llm ?? {});
     const temperature = Number(settings?.llm?.temperature) || 0.9;
     const maxOutputTokens = Number(settings?.llm?.maxOutputTokens) || 800;
     const normalizedJsonSchema = String(jsonSchema || "").trim();
+    const normalizedTools = Array.isArray(tools) ? tools : [];
     const effectiveSystemPrompt =
       normalizedJsonSchema && provider !== "claude-code" && provider !== "openai"
         ? appendJsonSchemaInstruction(systemPrompt, normalizedJsonSchema)
@@ -271,7 +274,8 @@ export class LLMService {
         maxOutputTokens,
         reasoningEffort: settings?.llm?.reasoningEffort,
         jsonSchema: normalizedJsonSchema,
-        trace
+        trace,
+        tools: normalizedTools
       });
 
       const costUsd = estimateUsdCost({
@@ -295,6 +299,7 @@ export class LLMService {
           model,
           usage: response.usage,
           inputImages: imageInputs.length,
+          toolCallCount: (response.toolCalls || []).length,
           source: trace.source ? String(trace.source) : null,
           event: trace.event ? String(trace.event) : null,
           reason: trace.reason ? String(trace.reason) : null,
@@ -305,6 +310,8 @@ export class LLMService {
 
       return {
         text: response.text,
+        toolCalls: response.toolCalls || [],
+        rawContent: response.rawContent || null,
         provider,
         model,
         usage: response.usage,
@@ -1470,7 +1477,8 @@ export class LLMService {
     temperature,
     maxOutputTokens,
     reasoningEffort,
-    jsonSchema = ""
+    jsonSchema = "",
+    tools = []
   }) {
     if (!this.openai) {
       throw new Error("OpenAI LLM calls require OPENAI_API_KEY.");
@@ -1485,7 +1493,8 @@ export class LLMService {
       temperature,
       maxOutputTokens,
       reasoningEffort,
-      jsonSchema
+      jsonSchema,
+      tools
     });
   }
 
@@ -1496,7 +1505,8 @@ export class LLMService {
     imageInputs,
     contextMessages,
     temperature,
-    maxOutputTokens
+    maxOutputTokens,
+    tools = []
   }) {
     if (!this.xai) {
       throw new Error("xAI LLM calls require XAI_API_KEY.");
@@ -1509,7 +1519,8 @@ export class LLMService {
       imageInputs,
       contextMessages,
       temperature,
-      maxOutputTokens
+      maxOutputTokens,
+      tools
     });
   }
 
@@ -1522,7 +1533,8 @@ export class LLMService {
     temperature,
     maxOutputTokens,
     reasoningEffort,
-    jsonSchema = ""
+    jsonSchema = "",
+    tools = []
   }) {
     const imageParts = imageInputs
       .map((image) => {
@@ -1546,7 +1558,17 @@ export class LLMService {
       ...imageParts
     ];
 
-    const responseFormat = buildOpenAiJsonSchemaTextFormat(jsonSchema);
+    const normalizedTools = Array.isArray(tools) ? tools : [];
+    const openAiTools = normalizedTools.length
+      ? normalizedTools.map((t) => ({
+          type: "function" as const,
+          name: t.name,
+          description: t.description,
+          parameters: t.input_schema,
+          strict: false
+        }))
+      : [];
+    const responseFormat = !openAiTools.length ? buildOpenAiJsonSchemaTextFormat(jsonSchema) : null;
     const response = await this.openai.responses.create({
       model,
       instructions: systemPrompt,
@@ -1554,6 +1576,7 @@ export class LLMService {
       ...buildOpenAiReasoningParam(model, reasoningEffort),
       max_output_tokens: maxOutputTokens,
       ...(responseFormat ? { text: responseFormat } : {}),
+      ...(openAiTools.length ? { tools: openAiTools } : {}),
       input: [
         ...contextMessages.map((msg) => ({
           role: msg.role === "assistant" ? "assistant" : "user",
@@ -1566,8 +1589,13 @@ export class LLMService {
       ]
     });
 
+    const text = extractOpenAiResponseText(response);
+    const toolCalls = extractOpenAiToolCalls(response);
+
     return {
-      text: extractOpenAiResponseText(response),
+      text,
+      toolCalls,
+      rawContent: toolCalls.length ? response.output : null,
       usage: extractOpenAiResponseUsage(response)
     };
   }
@@ -1579,7 +1607,8 @@ export class LLMService {
     imageInputs,
     contextMessages,
     temperature,
-    maxOutputTokens
+    maxOutputTokens,
+    tools = []
   }) {
     const imageParts = imageInputs
       .map((image) => {
@@ -1613,17 +1642,37 @@ export class LLMService {
       { role: "user", content: userContent }
     ];
 
+    const normalizedTools = Array.isArray(tools) ? tools : [];
+    const xaiTools = normalizedTools.length
+      ? normalizedTools.map((t) => ({
+          type: "function" as const,
+          function: {
+            name: t.name,
+            description: t.description,
+            parameters: t.input_schema
+          }
+        }))
+      : [];
     const response = await this.xai.chat.completions.create({
       model,
       temperature,
       max_tokens: maxOutputTokens,
-      messages
+      messages,
+      ...(xaiTools.length ? { tools: xaiTools } : {})
     });
 
-    const text = response.choices?.[0]?.message?.content?.trim() || "";
+    const choice = response.choices?.[0];
+    const text = choice?.message?.content?.trim() || "";
+    const toolCalls = (choice?.message?.tool_calls || []).map((tc) => ({
+      id: tc.id || `xai-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      name: tc.function?.name || "",
+      input: safeJsonParse(tc.function?.arguments || "{}", {})
+    }));
 
     return {
       text,
+      toolCalls,
+      rawContent: toolCalls.length ? choice?.message : null,
       usage: {
         inputTokens: Number(response.usage?.prompt_tokens || 0),
         outputTokens: Number(response.usage?.completion_tokens || 0),
@@ -1640,7 +1689,8 @@ export class LLMService {
     imageInputs,
     contextMessages,
     temperature,
-    maxOutputTokens
+    maxOutputTokens,
+    tools = []
   }) {
     const imageParts = buildAnthropicImageParts(imageInputs);
     const userContent = imageParts.length
@@ -1659,12 +1709,23 @@ export class LLMService {
     ];
 
     const resolvedTemperature = Math.max(0, Math.min(Number(temperature) || 0, 1));
+    const normalizedTools = Array.isArray(tools) ? tools : [];
+    const toolsParam = normalizedTools.length
+      ? {
+          tools: normalizedTools.map((t) => ({
+            name: t.name,
+            description: t.description,
+            input_schema: t.input_schema
+          }))
+        }
+      : {};
     const response = await this.anthropic.messages.create({
       model,
       system: systemPrompt,
       temperature: resolvedTemperature,
       max_tokens: maxOutputTokens,
-      messages
+      messages,
+      ...toolsParam
     });
 
     const text = response.content
@@ -1673,14 +1734,116 @@ export class LLMService {
       .join("\n")
       .trim();
 
+    const toolCalls = response.content
+      .filter((item) => item.type === "tool_use")
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        input: item.input
+      }));
+
     return {
       text,
+      toolCalls,
+      rawContent: toolCalls.length ? response.content : null,
+      stopReason: response.stop_reason || "end_turn",
       usage: {
         inputTokens: Number(response.usage?.input_tokens || 0),
         outputTokens: Number(response.usage?.output_tokens || 0),
         cacheWriteTokens: Number(response.usage?.cache_creation_input_tokens || 0),
         cacheReadTokens: Number(response.usage?.cache_read_input_tokens || 0)
       }
+    };
+  }
+
+  async chatWithTools({
+    model = "claude-sonnet-4-5-20250929",
+    systemPrompt,
+    messages,
+    tools,
+    maxOutputTokens = 4096,
+    temperature = 0.7,
+    trace = {
+      guildId: null as string | null,
+      channelId: null as string | null,
+      userId: null as string | null,
+      source: null as string | null
+    }
+  }: {
+    model?: string;
+    systemPrompt: string;
+    messages: Anthropic.MessageParam[];
+    tools: Array<{
+      name: string;
+      description: string;
+      input_schema: Anthropic.Tool.InputSchema;
+    }>;
+    maxOutputTokens?: number;
+    temperature?: number;
+    trace?: {
+      guildId?: string | null;
+      channelId?: string | null;
+      userId?: string | null;
+      source?: string | null;
+    };
+  }): Promise<{
+    content: Anthropic.ContentBlock[];
+    stopReason: string;
+    usage: { inputTokens: number; outputTokens: number; cacheWriteTokens: number; cacheReadTokens: number };
+    costUsd: number;
+  }> {
+    if (!this.anthropic) {
+      throw new Error("chatWithTools requires ANTHROPIC_API_KEY.");
+    }
+
+    const resolvedModel = String(model || "claude-sonnet-4-5-20250929").trim();
+    const resolvedTemperature = Math.max(0, Math.min(Number(temperature) || 0, 1));
+
+    const response = await this.anthropic.messages.create({
+      model: resolvedModel,
+      system: systemPrompt,
+      temperature: resolvedTemperature,
+      max_tokens: maxOutputTokens,
+      messages,
+      tools
+    });
+
+    const usage = {
+      inputTokens: Number(response.usage?.input_tokens || 0),
+      outputTokens: Number(response.usage?.output_tokens || 0),
+      cacheWriteTokens: Number(response.usage?.cache_creation_input_tokens || 0),
+      cacheReadTokens: Number(response.usage?.cache_read_input_tokens || 0)
+    };
+
+    const costUsd = estimateUsdCost({
+      provider: "anthropic",
+      model: resolvedModel,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      cacheWriteTokens: usage.cacheWriteTokens,
+      cacheReadTokens: usage.cacheReadTokens
+    });
+
+    this.store.logAction({
+      kind: "llm_tool_call",
+      guildId: trace.guildId || null,
+      channelId: trace.channelId || null,
+      userId: trace.userId || null,
+      content: `anthropic:${resolvedModel}`,
+      metadata: {
+        provider: "anthropic",
+        model: resolvedModel,
+        usage,
+        source: trace.source || null
+      },
+      usdCost: costUsd
+    });
+
+    return {
+      content: response.content,
+      stopReason: response.stop_reason || "end_turn",
+      usage,
+      costUsd
     };
   }
 }

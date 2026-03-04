@@ -4451,6 +4451,9 @@ test("refreshRealtimeTools registers local and MCP tool definitions", async () =
   await manager.refreshRealtimeTools({
     session,
     settings: baseSettings({
+      memory: {
+        enabled: true
+      },
       webSearch: {
         enabled: true
       }

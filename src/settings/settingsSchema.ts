@@ -276,6 +276,13 @@ export const DEFAULT_SETTINGS = {
     temperature: 0,
     maxOutputTokens: 320
   },
+  browser: {
+    enabled: false,
+    maxBrowseCallsPerHour: 10,
+    maxStepsPerTask: 15,
+    stepTimeoutMs: 30_000,
+    sessionTimeoutMs: 300_000
+  },
   memory: {
     enabled: true,
     maxRecentMessages: 35,

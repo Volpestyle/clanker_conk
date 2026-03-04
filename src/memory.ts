@@ -15,13 +15,11 @@ import {
   isInstructionLikeFactText,
   isTextGroundedInSource,
   normalizeEvidenceText,
-  normalizeFactType,
   normalizeHighlightText,
   normalizeLoreFactForDisplay,
   normalizeMemoryLineInput,
   normalizeQueryEmbeddingText,
   normalizeSelfFactForDisplay,
-  normalizeStoredFactText,
   parseDailyEntryLine,
   passesHybridRelevanceGate,
   resolveDirectiveScopeConfig,
@@ -31,7 +29,6 @@ import {
 const DAILY_FILE_PATTERN = /^\d{4}-\d{2}-\d{2}\.md$/;
 const LORE_SUBJECT = "__lore__";
 const SELF_SUBJECT = "__self__";
-const MAX_FACTS_PER_MESSAGE = 4;
 const HYBRID_FACT_LIMIT = 10;
 const HYBRID_CANDIDATE_MULTIPLIER = 6;
 const HYBRID_MAX_CANDIDATES = 90;
@@ -197,16 +194,13 @@ export class MemoryManager {
     authorId,
     authorName,
     content,
-    settings,
     trace = { guildId: null, channelId: null, userId: null, source: null }
   }) {
     const cleanedContent = cleanDailyEntryContent(content);
     if (!cleanedContent) return;
     const scopeGuildId = String(trace?.guildId || "").trim();
     const scopeChannelId = String(trace?.channelId || "").trim();
-    const normalizedAuthorId = String(authorId || "").trim();
 
-    let wroteDailyEntry = false;
     try {
       await this.appendDailyLogEntry({
         messageId,
@@ -216,99 +210,10 @@ export class MemoryManager {
         channelId: scopeChannelId,
         content: cleanedContent
       });
-      wroteDailyEntry = true;
+      this.queueMemoryRefresh();
     } catch (error) {
       this.logMemoryError("daily_log_write", error, { messageId, userId: authorId });
     }
-
-    let insertedAnyFact = false;
-    const insertedSubjects = new Set();
-    if (cleanedContent.length >= 4 && scopeGuildId) {
-      let extracted = [];
-      try {
-        extracted = await this.llm.extractMemoryFacts({
-          settings,
-          authorName,
-          messageContent: cleanedContent,
-          maxFacts: MAX_FACTS_PER_MESSAGE,
-          trace
-        });
-      } catch (error) {
-        this.logMemoryError("fact_extraction", error, { messageId, userId: authorId });
-      }
-
-      for (const row of extracted) {
-        const factText = normalizeStoredFactText(row?.fact);
-        const factSubject = this.resolveExtractedFactSubject(row?.subject, normalizedAuthorId);
-        if (!factText) continue;
-        if (!factSubject) continue;
-        if (isInstructionLikeFactText(factText)) continue;
-        if (!isTextGroundedInSource(factText, cleanedContent)) continue;
-
-        const evidenceText = normalizeEvidenceText(row?.evidence, cleanedContent);
-        const inserted = this.store.addMemoryFact({
-          guildId: scopeGuildId,
-          channelId: scopeChannelId || null,
-          subject: factSubject,
-          fact: factText,
-          factType: normalizeFactType(row?.type),
-          evidenceText,
-          sourceMessageId: messageId,
-          confidence: clamp01(row?.confidence, 0.5)
-        });
-
-        if (!inserted) continue;
-        insertedAnyFact = true;
-        insertedSubjects.add(factSubject);
-        this.store.logAction({
-          kind: "memory_fact",
-          userId: normalizedAuthorId,
-          messageId,
-          content: factText
-        });
-
-        const factRow = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, factSubject, factText);
-        if (factRow) {
-          this.ensureFactVector({
-            factRow,
-            settings,
-            trace: {
-              ...trace,
-              source: "memory_fact_ingest"
-            }
-          }).catch(() => undefined);
-        }
-      }
-    }
-
-    if (insertedAnyFact && scopeGuildId && insertedSubjects.size) {
-      for (const subject of insertedSubjects) {
-        this.store.archiveOldFactsForSubject({
-          guildId: scopeGuildId,
-          subject,
-          keep: this.resolveSubjectRetentionLimit(subject)
-        });
-      }
-    }
-
-    if (wroteDailyEntry || insertedAnyFact) {
-      this.queueMemoryRefresh();
-    }
-  }
-
-  resolveExtractedFactSubject(rawSubject, authorId) {
-    const normalizedSubject = String(rawSubject || "").trim().toLowerCase();
-    const normalizedAuthorId = String(authorId || "").trim();
-    if (normalizedSubject === "author") {
-      return normalizedAuthorId;
-    }
-    if (normalizedSubject === "bot") {
-      return SUBJECT_SELF;
-    }
-    if (normalizedSubject === "lore") {
-      return SUBJECT_LORE;
-    }
-    return "";
   }
 
   resolveSubjectRetentionLimit(subject) {
@@ -895,12 +800,16 @@ export class MemoryManager {
     guildId,
     channelId = null,
     sourceText = "",
-    scope = "lore"
+    scope = "lore",
+    subjectOverride = null
   }) {
     const scopeGuildId = String(guildId || "").trim();
     if (!scopeGuildId) return false;
 
     const scopeConfig = resolveDirectiveScopeConfig(scope);
+    const subject = subjectOverride ? String(subjectOverride).trim() : scopeConfig.subject;
+    if (!subject) return false;
+
     const cleaned = normalizeMemoryLineInput(line);
     if (!cleaned) return false;
     if (isInstructionLikeFactText(cleaned)) return false;
@@ -910,7 +819,7 @@ export class MemoryManager {
     const inserted = this.store.addMemoryFact({
       guildId: scopeGuildId,
       channelId: channelId ? String(channelId) : null,
-      subject: scopeConfig.subject,
+      subject,
       fact: factText,
       factType: scopeConfig.factType,
       evidenceText: normalizeEvidenceText(sourceText, sourceText),
@@ -928,11 +837,11 @@ export class MemoryManager {
     });
     this.store.archiveOldFactsForSubject({
       guildId: scopeGuildId,
-      subject: scopeConfig.subject,
+      subject,
       keep: scopeConfig.keep
     });
 
-    const factRow = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, scopeConfig.subject, factText);
+    const factRow = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, subject, factText);
     if (factRow) {
       this.ensureFactVector({
         factRow,

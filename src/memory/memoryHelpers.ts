@@ -235,6 +235,16 @@ export function resolveDirectiveScopeConfig(scope) {
     };
   }
 
+  if (normalizedScope === "user") {
+    return {
+      subject: null,
+      prefix: "User memory",
+      factType: "preference",
+      keep: 80,
+      traceSource: "memory_user_ingest"
+    };
+  }
+
   return {
     subject: LORE_SUBJECT,
     prefix: "Memory line",

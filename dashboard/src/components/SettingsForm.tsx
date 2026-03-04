@@ -20,6 +20,7 @@ import { CoreBehaviorSettingsSection } from "./settingsSections/CoreBehaviorSett
 import { PromptGuidanceSettingsSection } from "./settingsSections/PromptGuidanceSettingsSection";
 import { LlmConfigurationSettingsSection } from "./settingsSections/LlmConfigurationSettingsSection";
 import { WebSearchSettingsSection } from "./settingsSections/WebSearchSettingsSection";
+import { BrowserSettingsSection } from "./settingsSections/BrowserSettingsSection";
 import { VideoContextSettingsSection } from "./settingsSections/VideoContextSettingsSection";
 import { VoiceModeSettingsSection } from "./settingsSections/VoiceModeSettingsSection";
 import { RateLimitsSettingsSection } from "./settingsSections/RateLimitsSettingsSection";
@@ -32,6 +33,7 @@ const SECTIONS = [
   { id: "sec-prompts", label: "Prompts" },
   { id: "sec-llm", label: "LLM Config" },
   { id: "sec-search", label: "Web Search" },
+  { id: "sec-browser", label: "Browser" },
   { id: "sec-video", label: "Video Context" },
   { id: "sec-voice", label: "Voice Mode" },
   { id: "sec-rate", label: "Rate Limits" },
@@ -328,6 +330,7 @@ export default function SettingsForm({
           />
 
           <WebSearchSettingsSection id="sec-search" form={form} set={set} />
+          <BrowserSettingsSection id="sec-browser" form={form} set={set} />
           <VideoContextSettingsSection id="sec-video" form={form} set={set} />
 
           <VoiceModeSettingsSection

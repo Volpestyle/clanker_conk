@@ -6,6 +6,8 @@ import {
   Routes
 } from "discord.js";
 import { clankCommand } from "./commands/clankCommand.ts";
+import { browseCommand } from "./commands/browseCommand.ts";
+import { runBrowseAgent } from "./agents/browseAgent.ts";
 import { musicCommands } from "./voice/musicCommands.ts";
 import {
   buildAutomationPrompt,
@@ -56,10 +58,10 @@ import {
   resolveDeterministicMentions as resolveDeterministicMentionsForMentions
 } from "./bot/mentions.ts";
 import {
-  maybeRegenerateWithMemoryLookup as maybeRegenerateWithMemoryLookupForReplyFollowup,
-  resolveReplyFollowupGenerationSettings as resolveReplyFollowupGenerationSettingsForReplyFollowup,
-  runModelRequestedWebSearch as runModelRequestedWebSearchForReplyFollowup
-} from "./bot/replyFollowup.ts";
+  buildReplyToolSet,
+  executeReplyTool
+} from "./tools/replyTools.ts";
+import type { ReplyToolRuntime, ReplyToolContext } from "./tools/replyTools.ts";
 import {
   getReplyAddressSignal as getReplyAddressSignalForReplyAdmission,
   hasBotMessageInRecentWindow as hasBotMessageInRecentWindowForReplyAdmission,
@@ -95,6 +97,7 @@ import {
   pickInitiativeChannel
 } from "./bot/initiativeSchedule.ts";
 import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
+import type { BrowserManager } from "./services/BrowserManager.ts";
 import {
   resolveOperationalChannel,
   sendToChannel
@@ -211,12 +214,13 @@ export class ClankerBot {
   reconnectAttempts;
   replyQueues;
   replyQueueWorkers;
-  replyQueuedMessageIds;
-  screenShareSessionManager;
-  client;
-  voiceSessionManager;
+  replyQueuedMessageIds: Set<string>;
+  screenShareSessionManager: any;
+  client: any;
+  voiceSessionManager: VoiceSessionManager;
+  browserManager: BrowserManager | null;
 
-  constructor({ appConfig, store, llm, memory, discovery, search, gifs, video }) {
+  constructor({ appConfig, store, llm, memory, discovery, search, gifs, video, browserManager = null }) {
     this.appConfig = appConfig;
     this.store = store;
     this.llm = llm;
@@ -225,6 +229,7 @@ export class ClankerBot {
     this.search = search;
     this.gifs = gifs;
     this.video = video;
+    this.browserManager = browserManager;
 
     this.lastBotMessageAt = 0;
     this.memoryTimer = null;
@@ -263,6 +268,7 @@ export class ClankerBot {
       llm: this.llm,
       memory: this.memory,
       search: this.search,
+      browserManager: this.browserManager,
       composeOperationalMessage: (payload) => this.composeVoiceOperationalMessage(payload),
       generateVoiceTurn: (payload) => this.generateVoiceTurnReply(payload)
     });
@@ -283,7 +289,7 @@ export class ClankerBot {
 
       try {
         const rest = new REST({ version: "10" }).setToken(this.appConfig.discordToken);
-        await rest.put(Routes.applicationCommands(this.client.user?.id || ""), { body: [...musicCommands, clankCommand] });
+        await rest.put(Routes.applicationCommands(this.client.user?.id || ""), { body: [...musicCommands, clankCommand, browseCommand] });
         console.log("[slashCommands] Registered slash commands");
       } catch (error) {
         console.error("[musicCommands] Failed to register slash commands:", error);
@@ -362,6 +368,66 @@ export class ClankerBot {
         } catch (error) {
           console.error("[slashCommands] Error handling clank command:", error);
           await interaction.reply({ content: "An error occurred processing your command.", ephemeral: true });
+        }
+      } else if (commandName === "browse") {
+        await interaction.deferReply();
+        const task = interaction.options.getString("task", true);
+
+        if (!this.browserManager) {
+          await interaction.editReply("Browser agent is currently unavailable on this server.");
+          return;
+        }
+
+        try {
+          const settings = this.store.getSettings();
+          const maxSteps = Math.max(1, Math.min(30, Number(settings?.browser?.maxStepsPerTask) || 15));
+          const stepTimeoutMs = Math.max(5000, Math.min(120000, Number(settings?.browser?.stepTimeoutMs) || 30000));
+
+          const result = await runBrowseAgent({
+            llm: this.llm,
+            browserManager: this.browserManager,
+            store: this.store,
+            sessionKey: interaction.guildId || interaction.channelId || interaction.id,
+            instruction: task,
+            maxSteps,
+            stepTimeoutMs,
+            trace: {
+              guildId: interaction.guildId,
+              channelId: interaction.channelId,
+              userId: interaction.user.id,
+              source: "slash_command_browse"
+            }
+          });
+
+          this.store.logAction({
+            kind: "browser_browse_call",
+            guildId: interaction.guildId,
+            channelId: interaction.channelId,
+            userId: interaction.user.id,
+            content: task.slice(0, 200),
+            metadata: {
+              steps: result.steps,
+              hitStepLimit: result.hitStepLimit,
+              totalCostUsd: result.totalCostUsd,
+              source: "slash_command_browse"
+            },
+            usdCost: result.totalCostUsd
+          });
+
+          let responseText = result.text;
+          if (result.hitStepLimit) {
+            responseText += "\n\n*(Note: I reached my maximum step limit before finishing the task completely.)*";
+          }
+
+          if (responseText.length > 2000) {
+            await interaction.editReply(responseText.substring(0, 1997) + "...");
+          } else {
+            await interaction.editReply(responseText);
+          }
+        } catch (error) {
+          console.error("[slashCommands] Error handling browse command:", error);
+          const message = error instanceof Error ? error.message : String(error);
+          await interaction.editReply(`An error occurred while browsing: ${message}`);
         }
       }
     });
@@ -490,6 +556,9 @@ export class ClankerBot {
     this.replyQueuedMessageIds.clear();
     if (this.memory?.drainIngestQueue) {
       await this.memory.drainIngestQueue({ timeoutMs: 4000 }).catch(() => undefined);
+    }
+    if (this.browserManager?.closeAll) {
+      await this.browserManager.closeAll().catch(() => undefined);
     }
     await this.voiceSessionManager.dispose("shutdown");
     await this.client.destroy();
@@ -993,11 +1062,6 @@ export class ClankerBot {
         this.buildWebSearchContext(runtimeSettings, messageText),
       loadRecentLookupContext: (payload) => this.getRecentLookupContextForPrompt(payload),
       rememberRecentLookupContext: (payload) => this.rememberRecentLookupContext(payload),
-      runModelRequestedWebSearch: (payload) =>
-        runModelRequestedWebSearchForReplyFollowup(
-          { llm: this.llm, search: this.search, memory: this.memory },
-          payload
-        ),
       getVoiceScreenShareCapability: (payload) => this.getVoiceScreenShareCapability(payload),
       offerVoiceScreenShareLink: (payload) => this.offerVoiceScreenShareLink(payload)
     };
@@ -1049,11 +1113,6 @@ export class ClankerBot {
         this.buildWebSearchContext(runtimeSettings, messageText),
       loadRecentLookupContext: (payload) => this.getRecentLookupContextForPrompt(payload),
       rememberRecentLookupContext: (payload) => this.rememberRecentLookupContext(payload),
-      runModelRequestedWebSearch: (payload) =>
-        runModelRequestedWebSearchForReplyFollowup(
-          { llm: this.llm, search: this.search, memory: this.memory },
-          payload
-        ),
       getVoiceScreenShareCapability: (payload) => this.getVoiceScreenShareCapability(payload),
       offerVoiceScreenShareLink: (payload) => this.offerVoiceScreenShareLink(payload)
     };
@@ -1222,13 +1281,13 @@ export class ClankerBot {
     const activeVoiceParticipantRoster =
       inVoiceChannelNow && typeof this.voiceSessionManager?.getVoiceChannelParticipants === "function"
         ? this.voiceSessionManager
-            .getVoiceChannelParticipants(activeVoiceSession)
-            .map((entry) => String(entry?.displayName || "").trim())
-            .filter(Boolean)
+          .getVoiceChannelParticipants(activeVoiceSession)
+          .map((entry) => String(entry?.displayName || "").trim())
+          .filter(Boolean)
         : [];
     const musicDisambiguation =
       inVoiceChannelNow &&
-      typeof this.voiceSessionManager?.getMusicDisambiguationPromptContext === "function"
+        typeof this.voiceSessionManager?.getMusicDisambiguationPromptContext === "function"
         ? this.voiceSessionManager.getMusicDisambiguationPromptContext(activeVoiceSession)
         : null;
 
@@ -1297,21 +1356,125 @@ export class ClankerBot {
     });
     let replyPrompts = buildLoggedReplyPrompts(replyPromptCapture, 0);
 
+    const replyTools = buildReplyToolSet(settings, {
+      webSearchAvailable:
+        Boolean(webSearch?.enabled) &&
+        Boolean(webSearch?.configured) &&
+        !webSearch?.blockedByBudget &&
+        Boolean(webSearch?.budget?.canSearch),
+      memoryAvailable: settings.memory.enabled,
+      imageLookupAvailable: Boolean(imageLookup?.enabled && imageLookup?.candidates?.length),
+      openArticleAvailable: false
+    });
+
     const llm1StartedAtMs = Date.now();
+    const toolRuntime: ReplyToolRuntime = {
+      search: this.search,
+      memory: this.memory,
+      store: this.store
+    };
+    const toolContext: ReplyToolContext = {
+      settings,
+      guildId: message.guildId,
+      channelId: message.channelId,
+      userId: message.author.id,
+      sourceMessageId: message.id,
+      sourceText: message.content,
+      botUserId: this.client.user?.id || undefined,
+      trace: replyTrace
+    };
+
+    let contextMessages: Array<{ role: string; content: unknown }> = [];
     let generation = await this.llm.generate({
       settings,
       systemPrompt,
       userPrompt: initialUserPrompt,
       imageInputs: modelImageInputs,
-      jsonSchema: REPLY_OUTPUT_JSON_SCHEMA,
+      contextMessages,
+      jsonSchema: replyTools.length ? "" : REPLY_OUTPUT_JSON_SCHEMA,
+      tools: replyTools,
       trace: replyTrace
     });
     performance.llm1Ms = Math.max(0, Date.now() - llm1StartedAtMs);
     let usedWebSearchFollowup = false;
     let usedMemoryLookupFollowup = false;
     let usedImageLookupFollowup = false;
-    const followupGenerationSettings = resolveReplyFollowupGenerationSettingsForReplyFollowup(settings);
     const mediaPromptLimit = resolveMaxMediaPromptLen(settings);
+
+    const TOOL_LOOP_MAX_STEPS = 2;
+    const TOOL_LOOP_MAX_CALLS = 3;
+    let toolLoopSteps = 0;
+    let totalToolCalls = 0;
+
+    while (
+      generation.toolCalls?.length > 0 &&
+      toolLoopSteps < TOOL_LOOP_MAX_STEPS &&
+      totalToolCalls < TOOL_LOOP_MAX_CALLS
+    ) {
+      const assistantContent = generation.rawContent || [
+        { type: "text", text: generation.text || "" }
+      ];
+      contextMessages = [
+        ...contextMessages,
+        { role: "user", content: initialUserPrompt },
+        { role: "assistant", content: assistantContent }
+      ];
+
+      const toolResultMessages: Array<{ type: string; tool_use_id: string; content: string }> = [];
+      for (const toolCall of generation.toolCalls) {
+        if (totalToolCalls >= TOOL_LOOP_MAX_CALLS) break;
+        totalToolCalls += 1;
+
+        const result = await executeReplyTool(
+          toolCall.name,
+          toolCall.input as Record<string, unknown>,
+          toolRuntime,
+          toolContext
+        );
+
+        if (toolCall.name === "web_search" && !result.isError) {
+          usedWebSearchFollowup = true;
+        }
+        if (toolCall.name === "memory_search" && !result.isError) {
+          usedMemoryLookupFollowup = true;
+        }
+        if (toolCall.name === "image_lookup" && !result.isError) {
+          usedImageLookupFollowup = true;
+        }
+
+        toolResultMessages.push({
+          type: "tool_result",
+          tool_use_id: toolCall.id,
+          content: result.content
+        });
+      }
+
+      contextMessages = [
+        ...contextMessages,
+        { role: "user", content: toolResultMessages }
+      ];
+
+      generation = await this.llm.generate({
+        settings,
+        systemPrompt,
+        userPrompt: "",
+        imageInputs: modelImageInputs,
+        contextMessages,
+        jsonSchema: "",
+        tools: replyTools,
+        trace: {
+          ...replyTrace,
+          event: `reply_tool_loop:${toolLoopSteps + 1}`
+        }
+      });
+      toolLoopSteps += 1;
+    }
+
+    if (toolLoopSteps > 0) {
+      performance.followupMs = Math.max(0, Date.now() - llm1StartedAtMs - (performance.llm1Ms || 0));
+    }
+    replyPrompts = buildLoggedReplyPrompts(replyPromptCapture, toolLoopSteps);
+
     let replyDirective = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
     let voiceIntentHandled = await this.maybeHandleStructuredVoiceIntent({
       message,
@@ -1333,117 +1496,6 @@ export class ClankerBot {
     });
     if (automationIntentHandled) return true;
 
-    const followupStartedAtMs = Date.now();
-    const followup = await maybeRegenerateWithMemoryLookupForReplyFollowup(
-      { llm: this.llm, search: this.search, memory: this.memory },
-      {
-        settings,
-        followupSettings: followupGenerationSettings,
-        systemPrompt,
-        generation,
-        directive: replyDirective,
-        webSearch,
-        memoryLookup,
-        imageLookup,
-        guildId: message.guildId,
-        channelId: message.channelId,
-        trace: {
-          ...replyTrace,
-          source,
-          event: "reply_followup"
-        },
-        mediaPromptLimit,
-        imageInputs: modelImageInputs,
-        forceRegenerate: false,
-        buildUserPrompt: ({
-          webSearch: nextWebSearch,
-          memoryLookup: nextMemoryLookup,
-          imageLookup: nextImageLookup,
-          imageInputs: nextImageInputs,
-          allowWebSearchDirective,
-          allowMemoryLookupDirective,
-          allowImageLookupDirective
-        }) => {
-          const followupUserPrompt = buildReplyPrompt({
-            ...replyPromptBase,
-            imageInputs: nextImageInputs,
-            webSearch: nextWebSearch,
-            memoryLookup: nextMemoryLookup,
-            imageLookup: nextImageLookup,
-            allowWebSearchDirective,
-            allowMemoryLookupDirective,
-            allowImageLookupDirective
-          });
-          appendReplyFollowupPrompt(replyPromptCapture, followupUserPrompt);
-          return followupUserPrompt;
-        },
-        runModelRequestedWebSearch: async ({ webSearch: currentWebSearch, query }) =>
-          await runModelRequestedWebSearchForReplyFollowup(
-            { llm: this.llm, search: this.search, memory: this.memory },
-            {
-              settings,
-              webSearch: currentWebSearch,
-              query,
-              trace: {
-                ...replyTrace,
-                source
-              }
-            }
-          ),
-        runModelRequestedImageLookup: (payload) => this.runModelRequestedImageLookup(payload),
-        mergeImageInputs: (payload) => this.mergeImageInputs(payload),
-        maxModelImageInputs: MAX_MODEL_IMAGE_INPUTS,
-        jsonSchema: REPLY_OUTPUT_JSON_SCHEMA
-      }
-    );
-    generation = followup.generation;
-    replyDirective = followup.directive;
-    webSearch = followup.webSearch || webSearch;
-    memoryLookup = followup.memoryLookup;
-    imageLookup = followup.imageLookup;
-    modelImageInputs = followup.imageInputs;
-    usedWebSearchFollowup = followup.usedWebSearch;
-    usedMemoryLookupFollowup = followup.usedMemoryLookup;
-    usedImageLookupFollowup = followup.usedImageLookup;
-    replyPrompts = buildLoggedReplyPrompts(replyPromptCapture, followup.followupSteps);
-
-    if (usedWebSearchFollowup && webSearch.used && Array.isArray(webSearch.results) && webSearch.results.length) {
-      this.rememberRecentLookupContext({
-        guildId: message.guildId,
-        channelId: message.channelId,
-        userId: message.author.id,
-        source,
-        query: webSearch.query || replyDirective.webSearchQuery,
-        provider: webSearch.providerUsed || null,
-        results: webSearch.results
-      });
-    }
-
-    if (followup.regenerated) {
-      voiceIntentHandled = await this.maybeHandleStructuredVoiceIntent({
-        message,
-        settings,
-        replyDirective
-      });
-      if (voiceIntentHandled) return true;
-
-      const followupAutomationHandled = await this.maybeHandleStructuredAutomationIntent({
-        message,
-        settings,
-        replyDirective,
-        generation,
-        source,
-        triggerMessageIds,
-        addressing: addressSignal,
-        performance,
-        replyPrompts
-      });
-      if (followupAutomationHandled) return true;
-    }
-    if (followup.regenerated || usedWebSearchFollowup || usedMemoryLookupFollowup || usedImageLookupFollowup) {
-      performance.followupMs = Math.max(0, Date.now() - followupStartedAtMs);
-    }
-
     const reaction = await this.maybeApplyReplyReaction({
       message,
       settings,
@@ -1456,32 +1508,9 @@ export class ClankerBot {
       addressing: addressSignal
     });
 
-    const memoryLine = replyDirective.memoryLine;
-    const selfMemoryLine = replyDirective.selfMemoryLine;
     let memorySaved = false;
     let selfMemorySaved = false;
-    if (settings.memory.enabled && memoryLine) {
-      try {
-        memorySaved = await this.memory.rememberDirectiveLine({
-          line: memoryLine,
-          sourceMessageId: message.id,
-          userId: message.author.id,
-          guildId: message.guildId,
-          channelId: message.channelId,
-          sourceText: message.content,
-          scope: "lore"
-        });
-      } catch (error) {
-        this.store.logAction({
-          kind: "bot_error",
-          guildId: message.guildId,
-          channelId: message.channelId,
-          messageId: message.id,
-          userId: message.author.id,
-          content: `memory_directive: ${String(error?.message || error)}`
-        });
-      }
-    }
+    let userMemorySaved = false;
 
     const mediaDirective = pickReplyMediaDirective(replyDirective);
     let finalText = sanitizeBotText(replyDirective.text || "");
@@ -1531,29 +1560,6 @@ export class ClankerBot {
         prompts: replyPrompts
       });
       return false;
-    }
-
-    if (settings.memory.enabled && selfMemoryLine) {
-      try {
-        selfMemorySaved = await this.memory.rememberDirectiveLine({
-          line: selfMemoryLine,
-          sourceMessageId: `${message.id}-self`,
-          userId: this.client.user?.id || message.author.id,
-          guildId: message.guildId,
-          channelId: message.channelId,
-          sourceText: finalText,
-          scope: "self"
-        });
-      } catch (error) {
-        this.store.logAction({
-          kind: "bot_error",
-          guildId: message.guildId,
-          channelId: message.channelId,
-          messageId: message.id,
-          userId: this.client.user?.id || null,
-          content: `memory_self_directive: ${String(error?.message || error)}`
-        });
-      }
     }
 
     mentionResolution = await resolveDeterministicMentionsForMentions(
@@ -1721,9 +1727,9 @@ export class ClankerBot {
     const firstPayload = { ...payload, content: textChunks[0] };
     const sent = sendAsReply
       ? await message.reply({
-          ...firstPayload,
-          allowedMentions: { repliedUser: false }
-        })
+        ...firstPayload,
+        allowedMentions: { repliedUser: false }
+      })
       : await message.channel.send(firstPayload);
     for (let i = 1; i < textChunks.length; i++) {
       await message.channel.send({ content: textChunks[i] });
@@ -1791,17 +1797,8 @@ export class ClankerBot {
           remainingAtPromptTime: gifBudget.remaining
         },
         memory: {
-          requestedByModel: Boolean(memoryLine || selfMemoryLine),
-          saved: Boolean(memorySaved || selfMemorySaved),
-          loreRequestedByModel: Boolean(memoryLine),
-          loreSaved: memorySaved,
-          selfRequestedByModel: Boolean(selfMemoryLine),
-          selfSaved: selfMemorySaved,
-          lookupRequested: memoryLookup.requested,
-          lookupUsed: memoryLookup.used,
-          lookupQuery: memoryLookup.query,
-          lookupResultCount: memoryLookup.results?.length || 0,
-          lookupError: memoryLookup.error || null
+          toolCallsUsed: usedMemoryLookupFollowup,
+          saved: Boolean(memorySaved || selfMemorySaved || userMemorySaved)
         },
         imageLookup: {
           requested: imageLookup.requested,
@@ -2708,12 +2705,12 @@ export class ClankerBot {
   }) {
     const llmMetadata = generation
       ? {
-          provider: generation.provider,
-          model: generation.model,
-          usage: generation.usage,
-          costUsd: generation.costUsd,
-          usedWebSearchFollowup
-        }
+        provider: generation.provider,
+        model: generation.model,
+        usage: generation.usage,
+        costUsd: generation.costUsd,
+        usedWebSearchFollowup
+      }
       : null;
     this.store.logAction({
       kind: "reply_skipped",
@@ -2846,6 +2843,20 @@ export class ClankerBot {
     };
   }
 
+  getBrowserBudgetState(settings) {
+    const maxPerHour = clamp(Number(settings.browser?.maxBrowseCallsPerHour) || 0, 0, 60);
+    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const used = this.store.countActionsSince("browser_browse_call", since1h);
+    const remaining = Math.max(0, maxPerHour - used);
+
+    return {
+      maxPerHour,
+      used,
+      remaining,
+      canBrowse: maxPerHour > 0 && remaining > 0
+    };
+  }
+
   getVideoContextBudgetState(settings) {
     const maxPerHour = clamp(Number(settings.videoContext?.maxLookupsPerHour) || 0, 0, 120);
     const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
@@ -2897,11 +2908,11 @@ export class ClankerBot {
     const fallbackTargets =
       !directTargets.length && looksLikeVideoFollowupMessage(messageText)
         ? extractRecentVideoTargets({
-            videoService: this.video,
-            recentMessages,
-            maxMessages: MAX_VIDEO_FALLBACK_MESSAGES,
-            maxTargets: MAX_VIDEO_TARGET_SCAN
-          })
+          videoService: this.video,
+          recentMessages,
+          maxMessages: MAX_VIDEO_FALLBACK_MESSAGES,
+          maxTargets: MAX_VIDEO_TARGET_SCAN
+        })
         : [];
     const detectedTargets = directTargets.length ? directTargets : fallbackTargets;
     if (!detectedTargets.length) return base;
@@ -4102,57 +4113,109 @@ export class ClankerBot {
     const userPrompt = buildAutomationPrompt({
       ...promptBase,
       memoryLookup,
-      allowMemoryLookupDirective: true
+      allowMemoryLookupDirective: false
     });
     const automationSystemPrompt = buildSystemPrompt(settings);
+
+    const automationTrace = {
+      guildId: automation.guild_id,
+      channelId: automation.channel_id,
+      userId: this.client.user?.id || null,
+      source: "automation_run",
+      event: `automation:${automation.id}`
+    };
+    const automationReplyTools = buildReplyToolSet(settings, {
+      webSearchAvailable: false,
+      memoryAvailable: settings.memory?.enabled,
+      imageLookupAvailable: false,
+      openArticleAvailable: false
+    });
+    const automationToolRuntime: ReplyToolRuntime = {
+      search: this.search,
+      memory: this.memory,
+      store: this.store
+    };
+    const automationToolContext: ReplyToolContext = {
+      settings,
+      guildId: automation.guild_id,
+      channelId: automation.channel_id,
+      userId: this.client.user?.id || "",
+      sourceMessageId: `automation:${automation.id}`,
+      sourceText: String(automation.instruction || ""),
+      botUserId: this.client.user?.id || undefined,
+      trace: automationTrace
+    };
+
+    let automationContextMessages: Array<{ role: string; content: unknown }> = [];
     let generation = await this.llm.generate({
       settings,
       systemPrompt: automationSystemPrompt,
       userPrompt,
-      jsonSchema: REPLY_OUTPUT_JSON_SCHEMA,
-      trace: {
-        guildId: automation.guild_id,
-        channelId: automation.channel_id,
-        userId: this.client.user?.id || null,
-        source: "automation_run",
-        event: `automation:${automation.id}`
-      }
+      contextMessages: automationContextMessages,
+      jsonSchema: automationReplyTools.length ? "" : REPLY_OUTPUT_JSON_SCHEMA,
+      tools: automationReplyTools,
+      trace: automationTrace
     });
-    let directive = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
-    const followupGenerationSettings = resolveReplyFollowupGenerationSettingsForReplyFollowup(settings);
-    const followup = await maybeRegenerateWithMemoryLookupForReplyFollowup(
-      { llm: this.llm, search: this.search, memory: this.memory },
-      {
-        settings,
-        followupSettings: followupGenerationSettings,
-        systemPrompt: automationSystemPrompt,
-        generation,
-        directive,
-        memoryLookup,
-        guildId: automation.guild_id,
-        channelId: automation.channel_id,
-        trace: {
-          guildId: automation.guild_id,
-          channelId: automation.channel_id,
-          userId: this.client.user?.id || null,
-          source: "automation_run",
-          event: `automation:${automation.id}`
-        },
-        mediaPromptLimit,
-        forceRegenerate: false,
-        buildUserPrompt: ({ memoryLookup: nextMemoryLookup, allowMemoryLookupDirective }) =>
-          buildAutomationPrompt({
-            ...promptBase,
-            memoryLookup: nextMemoryLookup,
-            allowMemoryLookupDirective
-          }),
-        maxModelImageInputs: MAX_MODEL_IMAGE_INPUTS,
-        jsonSchema: REPLY_OUTPUT_JSON_SCHEMA
+
+    const AUTOMATION_TOOL_LOOP_MAX_STEPS = 2;
+    const AUTOMATION_TOOL_LOOP_MAX_CALLS = 3;
+    let automationToolLoopSteps = 0;
+    let automationTotalToolCalls = 0;
+
+    while (
+      generation.toolCalls?.length > 0 &&
+      automationToolLoopSteps < AUTOMATION_TOOL_LOOP_MAX_STEPS &&
+      automationTotalToolCalls < AUTOMATION_TOOL_LOOP_MAX_CALLS
+    ) {
+      const assistantContent = generation.rawContent || [
+        { type: "text", text: generation.text || "" }
+      ];
+      automationContextMessages = [
+        ...automationContextMessages,
+        { role: "user", content: userPrompt },
+        { role: "assistant", content: assistantContent }
+      ];
+
+      const toolResultMessages: Array<{ type: string; tool_use_id: string; content: string }> = [];
+      for (const toolCall of generation.toolCalls) {
+        if (automationTotalToolCalls >= AUTOMATION_TOOL_LOOP_MAX_CALLS) break;
+        automationTotalToolCalls += 1;
+
+        const result = await executeReplyTool(
+          toolCall.name,
+          toolCall.input as Record<string, unknown>,
+          automationToolRuntime,
+          automationToolContext
+        );
+
+        toolResultMessages.push({
+          type: "tool_result",
+          tool_use_id: toolCall.id,
+          content: result.content
+        });
       }
-    );
-    generation = followup.generation;
-    directive = followup.directive;
-    memoryLookup = followup.memoryLookup;
+
+      automationContextMessages = [
+        ...automationContextMessages,
+        { role: "user", content: toolResultMessages }
+      ];
+
+      generation = await this.llm.generate({
+        settings,
+        systemPrompt: automationSystemPrompt,
+        userPrompt: "",
+        contextMessages: automationContextMessages,
+        jsonSchema: "",
+        tools: automationReplyTools,
+        trace: {
+          ...automationTrace,
+          event: `automation:${automation.id}:tool_loop:${automationToolLoopSteps + 1}`
+        }
+      });
+      automationToolLoopSteps += 1;
+    }
+
+    let directive = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
 
     let finalText = sanitizeBotText(normalizeSkipSentinel(directive.text || ""), 1200);
     if (!finalText) {
@@ -4370,13 +4433,13 @@ export class ClankerBot {
       const recent = await this.hydrateRecentMessages(channel, settings.memory.maxRecentMessages);
       const recentMessages = recent.length
         ? recent
-            .slice()
-            .reverse()
-            .slice(0, settings.memory.maxRecentMessages)
-            .map((msg) => ({
-              author_name: msg.member?.displayName || msg.author?.username || "unknown",
-              content: String(msg.content || "").trim()
-            }))
+          .slice()
+          .reverse()
+          .slice(0, settings.memory.maxRecentMessages)
+          .map((msg) => ({
+            author_name: msg.member?.displayName || msg.author?.username || "unknown",
+            content: String(msg.content || "").trim()
+          }))
         : this.store.getRecentMessages(channel.id, settings.memory.maxRecentMessages);
       const initiativeMemoryQuery = recentMessages
         .slice(0, 6)

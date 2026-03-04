@@ -22,6 +22,7 @@ import { MemoryManager } from "./memory.ts";
 import { WebSearchService } from "./search.ts";
 import { Store } from "./store.ts";
 import { VideoContextService } from "./video.ts";
+import { BrowserManager } from "./services/BrowserManager.ts";
 import { PublicHttpsEntrypoint } from "./publicHttpsEntrypoint.ts";
 import { ScreenShareSessionManager } from "./screenShareSessionManager.ts";
 import { RuntimeActionLogger } from "./runtimeActionLogger.ts";
@@ -48,8 +49,9 @@ export async function main() {
   const video = new VideoContextService({ store, llm });
   const memory = new MemoryManager({ store, llm, memoryFilePath });
   await memory.refreshMemoryMarkdown();
+  const browserManager = new BrowserManager({ maxConcurrentSessions: 2, sessionTimeoutMs: 300_000 });
 
-  const bot = new ClankerBot({ appConfig, store, llm, memory, discovery, search, gifs, video });
+  const bot = new ClankerBot({ appConfig, store, llm, memory, discovery, search, gifs, video, browserManager });
   const publicHttpsEntrypoint = new PublicHttpsEntrypoint({ appConfig, store });
   const screenShareSessionManager = new ScreenShareSessionManager({
     appConfig,

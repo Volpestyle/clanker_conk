@@ -275,12 +275,6 @@ export const REPLY_JSON_SCHEMA = `{
   "skip": false,
   "reactionEmoji": "emoji or null",
   "media": "media object or null",
-  "webSearchQuery": "search query or null",
-  "memoryLookupQuery": "lookup query or null",
-  "imageLookupQuery": "lookup query or null",
-  "openArticleRef": "article ref or null",
-  "memoryLine": "fact to save or null",
-  "selfMemoryLine": "self-fact to save or null",
   "soundboardRefs": [],
   "leaveVoiceChannel": false,
   "automationAction": {

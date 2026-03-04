@@ -601,69 +601,20 @@ export function buildReplyPrompt({
     parts.push("When no automation control is requested, set automationAction.operation=none.");
   }
 
-  parts.push("=== WEB SEARCH ===");
-
-  if (allowWebSearchDirective) {
-    if (webSearch?.optedOutByUser) {
-      parts.push("The user explicitly asked not to use web search.");
-      parts.push("Set webSearchQuery to null and do not claim live lookup.");
-    } else if (!webSearch?.enabled) {
-      parts.push("Live web lookup capability exists but is currently unavailable (disabled in settings).");
-      parts.push("Set webSearchQuery to null.");
-      parts.push("Do not claim you searched the web.");
-    } else if (!webSearch?.configured) {
-      parts.push("Live web lookup capability exists but is currently unavailable (no search provider is configured).");
-      parts.push("Set webSearchQuery to null.");
-      parts.push("Do not claim you searched the web.");
-    } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
-      parts.push("Live web lookup capability exists but is currently unavailable (hourly search budget exhausted).");
-      parts.push("Set webSearchQuery to null.");
-      parts.push("Do not claim you searched the web.");
-    } else {
-      parts.push("Live web lookup is available.");
-      parts.push("Web search is supported right now.");
-      parts.push("Do not claim you cannot search the web or that you are unable to browse.");
-      parts.push(
-        "If better accuracy depends on live web info, set webSearchQuery to a concise query."
-      );
-      parts.push("Use webSearchQuery only when needed and keep it under 220 characters.");
-    }
+  parts.push("=== AVAILABLE TOOLS ===");
+  parts.push("You have tools available for web search, memory search, memory storage, and image lookup. Call them when needed before producing your final reply.");
+  if (webSearch?.optedOutByUser) {
+    parts.push("The user explicitly asked not to use web search. Do not use the web_search tool.");
+  } else if (!webSearch?.enabled || !webSearch?.configured) {
+    parts.push("Web search is currently unavailable. Do not claim you searched the web.");
+  } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
+    parts.push("Web search budget is exhausted. Do not claim you searched the web.");
   }
 
-  parts.push("=== MEMORY LOOKUP ===");
-
-  if (allowMemoryLookupDirective) {
-    if (!memoryLookup?.enabled) {
-      parts.push("Durable memory lookup capability exists but is currently unavailable for this turn.");
-      parts.push("Set memoryLookupQuery to null.");
-    } else {
-      parts.push("Durable memory lookup is available for this turn.");
-      parts.push(
-        "If the user asks what you remember (or asks for stored facts) and current memory context is insufficient, set memoryLookupQuery to a concise lookup query."
-      );
-      parts.push("If the user asks to see ALL memory or EVERYTHING you remember, set memoryLookupQuery to \"__ALL__\".");
-      parts.push("Use memoryLookupQuery only when needed and keep it under 220 characters.");
-    }
-  }
-
-  if (allowImageLookupDirective) {
-    if (!imageLookup?.enabled) {
-      parts.push("History image lookup capability exists but is currently unavailable for this turn.");
-      parts.push("Set imageLookupQuery to null.");
-    } else if (!imageLookup?.candidates?.length) {
-      parts.push("History image lookup capability is available, but no recent image references were found.");
-      parts.push("Set imageLookupQuery to null.");
-    } else {
-      parts.push("History image lookup is available for this turn.");
-      parts.push("Recent image references from message history:");
-      parts.push(formatImageLookupCandidates(imageLookup.candidates));
-      parts.push(
-        "If the user refers to an earlier image/photo and current image attachments are insufficient, set imageLookupQuery to a concise lookup query."
-      );
-      parts.push("Use imageLookupQuery only when needed and keep it under 220 characters.");
-      parts.push("If no historical image lookup is needed, set imageLookupQuery to null.");
-      parts.push("Do not claim you cannot review earlier shared images when history lookup is available.");
-    }
+  if (imageLookup?.enabled && imageLookup?.candidates?.length) {
+    parts.push("Recent image references from message history:");
+    parts.push(formatImageLookupCandidates(imageLookup.candidates));
+    parts.push("Use the image_lookup tool if the user refers to an earlier image/photo.");
   }
 
   parts.push("=== WEB SEARCH RESULTS ===");
@@ -781,34 +732,17 @@ export function buildReplyPrompt({
     parts.push("Set at most one media object for this reply.");
   }
 
-  parts.push("=== MEMORY SAVING ===");
-
-  if (allowMemoryDirective) {
-    parts.push("If the incoming message contains durable info worth keeping, set memoryLine to a concise fact.");
-    parts.push(
-      "Use memoryLine only for lasting facts (names, preferences, recurring relationships, long-lived context), not throwaway chatter."
-    );
-    parts.push("Keep memoryLine concise (under 180 chars) and factual.");
-    parts.push(
-      "If your own reply introduces a durable self fact (stable identity, recurring preference, or explicit standing commitment), set selfMemoryLine."
-    );
-    parts.push("Use selfMemoryLine only for durable facts about you, not temporary mood or throwaway phrasing.");
-    parts.push("Keep selfMemoryLine concise (under 180 chars), concrete, and grounded in your reply text.");
-  }
-
   parts.push("=== OUTPUT FORMAT ===");
   parts.push("Task: write one natural Discord reply for this turn.");
   parts.push("If recent messages are one coherent thread, you may combine and answer multiple messages in one reply.");
   parts.push("If recent messages are unrelated, prioritize the latest message and keep the reply focused.");
+  parts.push("Use tools (web_search, memory_search, memory_write) as needed before producing your final JSON reply.");
   parts.push("Return strict JSON only. Do not output markdown or code fences.");
   parts.push("JSON format:");
   parts.push(REPLY_JSON_SCHEMA);
   parts.push("Set skip=true only when no response should be sent. If skip=true, set text to [SKIP].");
   parts.push("When no reaction is needed, set reactionEmoji to null.");
   parts.push("When no media should be generated, set media to null.");
-  parts.push("When no lookup is needed, set webSearchQuery, memoryLookupQuery, imageLookupQuery, and openArticleRef to null.");
-  parts.push("When no durable fact should be saved, set memoryLine to null.");
-  parts.push("When no durable self fact should be saved, set selfMemoryLine to null.");
   parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false for text-channel replies.");
   parts.push("When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.");
   parts.push(
@@ -921,19 +855,7 @@ export function buildAutomationPrompt({
   parts.push("Return strict JSON only.");
   parts.push("JSON format:");
   parts.push(REPLY_JSON_SCHEMA);
-  parts.push("Set webSearchQuery, imageLookupQuery, openArticleRef, memoryLine, and selfMemoryLine to null.");
   parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false.");
-  if (allowMemoryLookupDirective) {
-    if (!memoryLookup?.enabled) {
-      parts.push("Durable memory lookup is unavailable for this run. Set memoryLookupQuery to null.");
-    } else {
-      parts.push("Durable memory lookup is available.");
-      parts.push("If memory context is insufficient for the task, set memoryLookupQuery to a concise query.");
-      parts.push("If not needed, set memoryLookupQuery to null.");
-    }
-  } else {
-    parts.push("Set memoryLookupQuery to null.");
-  }
   parts.push("Set automationAction.operation=none.");
   parts.push("Set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null, and other voiceIntent fields to null.");
   parts.push("Set screenShareIntent.action=none, screenShareIntent.confidence=0, screenShareIntent.reason=null.");
@@ -1276,12 +1198,7 @@ export function buildVoiceTurnPrompt({
   }
 
   if (allowMemoryToolCalls) {
-    parts.push("Optional memory tool calls:");
-    parts.push("- Set memoryLine to a durable fact from the speaker turn when genuinely stable and useful.");
-    parts.push("- Set selfMemoryLine to a durable fact about your own stable identity/preference/commitment in your reply when genuinely stable and useful.");
-    parts.push("If not needed, set memoryLine and selfMemoryLine to null.");
-  } else {
-    parts.push("Memory tool calls are unavailable this turn. Set memoryLine and selfMemoryLine to null.");
+    parts.push("Memory tools (memory_search, memory_write) are available. Use them as tool calls when needed.");
   }
 
   if (allowSoundboardToolCall && normalizedSoundboardCandidates.length) {
@@ -1300,41 +1217,22 @@ export function buildVoiceTurnPrompt({
     parts.push("Use this only as lightweight context. For fresh facts, request a new web lookup.");
   }
 
-  if (allowOpenArticleToolCall) {
-    if (normalizedOpenArticleCandidates.length) {
-      parts.push("Opening cached articles is available for this turn.");
-      parts.push("If the speaker asks to open/read/click a previously found article, set openArticleRef.");
-      parts.push("Valid cached article refs:");
-      parts.push(formatOpenArticleCandidates(normalizedOpenArticleCandidates));
-      parts.push("Use one ref exactly as listed (or set openArticleRef to first for the top cached article).");
-    } else {
-      parts.push("No cached article refs are available right now.");
-      parts.push("Set openArticleRef to null.");
-    }
-  } else {
-    parts.push("Open-article tool call is unavailable this turn. Set openArticleRef to null.");
+  if (allowOpenArticleToolCall && normalizedOpenArticleCandidates.length) {
+    parts.push("Opening cached articles is available via the open_article tool.");
+    parts.push("Valid cached article refs:");
+    parts.push(formatOpenArticleCandidates(normalizedOpenArticleCandidates));
   }
 
   if (allowWebSearchToolCall) {
     if (webSearch?.optedOutByUser) {
-      parts.push("The user asked not to use web search.");
-      parts.push("Set webSearchQuery to null.");
-    } else if (!webSearch?.enabled) {
-      parts.push("Live web lookup capability exists but is currently unavailable (disabled in settings).");
-      parts.push("Set webSearchQuery to null.");
-    } else if (!webSearch?.configured) {
-      parts.push("Live web lookup capability exists but is currently unavailable (provider not configured).");
-      parts.push("Set webSearchQuery to null.");
+      parts.push("The user asked not to use web search. Do not use the web_search tool.");
+    } else if (!webSearch?.enabled || !webSearch?.configured) {
+      parts.push("Web search is currently unavailable.");
     } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
-      parts.push("Live web lookup capability exists but is currently unavailable (budget exhausted).");
-      parts.push("Set webSearchQuery to null.");
+      parts.push("Web search budget is exhausted.");
     } else {
-      parts.push("Live web lookup is available.");
-      parts.push("If your spoken response needs fresh web info for accuracy, set webSearchQuery to a concise query.");
-      parts.push("Only request one web lookup when needed.");
+      parts.push("Live web lookup is available via the web_search tool. Use it when your spoken response needs fresh web info.");
     }
-  } else {
-    parts.push("Web-search tool call is unavailable this turn. Set webSearchQuery to null.");
   }
 
   const screenShareStatus = String(screenShare?.status || "disabled").trim().toLowerCase() || "disabled";
@@ -1441,12 +1339,13 @@ export function buildVoiceTurnPrompt({
   );
   parts.push("Set voiceAddressing.directedConfidence to a 0..1 confidence score for that talkingTo guess.");
 
+  parts.push("Use tools (web_search, memory_search, memory_write, open_article) as needed before producing your final JSON reply.");
   parts.push("Return strict JSON only.");
   parts.push("JSON format:");
   parts.push(
-    "{\"text\":\"spoken response or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"openArticleRef\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"soundboardRefs\":[],\"leaveVoiceChannel\":false,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null,\"query\":null,\"platform\":null,\"searchResults\":null,\"selectedResultId\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null},\"voiceAddressing\":{\"talkingTo\":null,\"directedConfidence\":0}}"
+    "{\"text\":\"spoken response or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"soundboardRefs\":[],\"leaveVoiceChannel\":false,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null,\"query\":null,\"platform\":null,\"searchResults\":null,\"selectedResultId\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null},\"voiceAddressing\":{\"talkingTo\":null,\"directedConfidence\":0}}"
     );
-  parts.push("Keep reactionEmoji null, media null, memoryLookupQuery null, imageLookupQuery null, and voiceIntent intent none for voice-turn generation.");
+  parts.push("Keep reactionEmoji null, media null, and voiceIntent intent none for voice-turn generation.");
   parts.push("Always include voiceAddressing with both fields.");
   parts.push("If you are skipping, set skip=true and text to [SKIP]. Otherwise set skip=false and provide natural spoken text.");
   parts.push("Never output markdown, tags, or directive syntax like [[...]].");

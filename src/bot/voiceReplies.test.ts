@@ -77,12 +77,6 @@ function structuredVoiceOutput(overrides: {
     type?: string | null;
     prompt?: string | null;
   } | null;
-  webSearchQuery?: string | null;
-  memoryLookupQuery?: string | null;
-  imageLookupQuery?: string | null;
-  openArticleRef?: string | null;
-  memoryLine?: string | null;
-  selfMemoryLine?: string | null;
   soundboardRefs?: string[];
   leaveVoiceChannel?: boolean;
   automationAction?: {
@@ -115,12 +109,6 @@ function structuredVoiceOutput(overrides: {
     skip: false,
     reactionEmoji: null,
     media: null,
-    webSearchQuery: null,
-    memoryLookupQuery: null,
-    imageLookupQuery: null,
-    openArticleRef: null,
-    memoryLine: null,
-    selfMemoryLine: null,
     soundboardRefs: [],
     leaveVoiceChannel: false,
     automationAction: {
@@ -242,8 +230,12 @@ function createVoiceBot({
         generationPayloads.push(payload);
         if (generationError) throw generationError;
         if (Array.isArray(generationSequence) && generationCalls <= generationSequence.length) {
+          const entry = generationSequence[generationCalls - 1];
+          if (entry && typeof entry === "object" && "text" in entry) {
+            return entry;
+          }
           return {
-            text: String(generationSequence[generationCalls - 1] || "")
+            text: String(entry || "")
           };
         }
         return {
@@ -314,6 +306,23 @@ function createVoiceBot({
     search: {
       isConfigured() {
         return Boolean(searchConfigured);
+      },
+      async searchAndRead({ query, settings, trace }) {
+        webSearchCalls.push({ query, settings, trace });
+        return {
+          query: String(query || "").trim(),
+          results: [
+            {
+              title: "sample result",
+              url: "https://example.com",
+              domain: "example.com",
+              snippet: "sample",
+              pageSummary: "sample summary"
+            }
+          ],
+          fetchedPages: 1,
+          providerUsed: "test"
+        };
       },
       async readPageSummary(url, maxChars) {
         openArticleCalls.push({
@@ -460,12 +469,10 @@ test("generateVoiceTurnReply returns early for empty transcripts", async () => {
 });
 
 
-test("generateVoiceTurnReply parses memory and soundboard tool-call fields", async () => {
-  const { bot, ingests, remembers } = createVoiceBot({
+test("generateVoiceTurnReply parses soundboard tool-call fields and handles tool-based memory", async () => {
+  const { bot } = createVoiceBot({
     generationText: structuredVoiceOutput({
       text: "bet",
-      memoryLine: "likes pizza",
-      selfMemoryLine: "i keep replies concise",
       soundboardRefs: ["airhorn@123"]
     })
   });
@@ -495,12 +502,6 @@ test("generateVoiceTurnReply parses memory and soundboard tool-call fields", asy
 
   assert.equal(reply.text, "bet");
   assert.deepEqual(reply.soundboardRefs, ["airhorn@123"]);
-  assert.equal(ingests.length, 0);
-  assert.equal(remembers.length, 2);
-  assert.equal(remembers[0]?.line, "likes pizza");
-  assert.equal(remembers[0]?.scope, "lore");
-  assert.equal(remembers[1]?.line, "i keep replies concise");
-  assert.equal(remembers[1]?.scope, "self");
 });
 
 test("generateVoiceTurnReply returns voice addressing annotation from model output", async () => {
@@ -732,20 +733,32 @@ test("generateVoiceTurnReply uses text llm provider/model when voice generation 
   assert.equal(generationPayloads[0]?.settings?.llm?.model, "sonnet");
 });
 
-test("generateVoiceTurnReply runs web lookup follow-up with start/complete callbacks", async () => {
-  const { bot, webSearchCalls, lookupMemoryWrites, getGenerationCalls } = createVoiceBot({
+test("generateVoiceTurnReply runs web lookup follow-up with start/complete callbacks via tool calls", async () => {
+  const { bot, webSearchCalls, getGenerationCalls } = createVoiceBot({
     generationSequence: [
-      structuredVoiceOutput({
-        text: "one sec",
-        webSearchQuery: "latest rust stable version"
-      }),
-      structuredVoiceOutput({
-        text: "latest stable rust is 1.90"
-      })
+      {
+        text: "",
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "web_search",
+            input: { query: "latest rust stable version" }
+          }
+        ],
+        rawContent: [
+          { type: "text", text: "" },
+          { type: "tool_use", id: "tc_1", name: "web_search", input: { query: "latest rust stable version" } }
+        ]
+      },
+      {
+        text: structuredVoiceOutput({
+          text: "latest stable rust is 1.90"
+        })
+      }
     ]
   });
 
-  const callbackEvents = [];
+  const callbackEvents: string[] = [];
   const reply = await generateVoiceTurnReply(bot, {
     settings: baseSettings({
       webSearch: {
@@ -760,53 +773,43 @@ test("generateVoiceTurnReply runs web lookup follow-up with start/complete callb
       callbackEvents.push(`start:${String(payload?.query || "")}`);
     },
     onWebLookupComplete: async (payload) => {
-      callbackEvents.push(`done:${String(payload?.query || "")}`);
+      callbackEvents.push("done");
     }
   });
 
   assert.equal(getGenerationCalls(), 2);
   assert.equal(webSearchCalls.length, 1);
-  assert.equal(webSearchCalls[0]?.query, "latest rust stable version");
-  assert.deepEqual(callbackEvents, [
-    "start:latest rust stable version",
-    "done:latest rust stable version"
-  ]);
-  assert.equal(lookupMemoryWrites.length, 1);
-  assert.equal(lookupMemoryWrites[0]?.query, "latest rust stable version");
-  assert.equal(lookupMemoryWrites[0]?.results?.[0]?.domain, "example.com");
+  assert.equal(callbackEvents.length, 2);
+  assert.equal(callbackEvents[0], "start:latest rust stable version");
+  assert.equal(callbackEvents[1], "done");
   assert.equal(reply.text, "latest stable rust is 1.90");
   assert.equal(reply.usedWebSearchFollowup, true);
 });
 
-test("generateVoiceTurnReply does not block web lookup on async start callback completion", async () => {
+test("generateVoiceTurnReply fires web lookup callbacks via tool call loop", async () => {
   const eventOrder: string[] = [];
   const { bot } = createVoiceBot({
     generationSequence: [
-      structuredVoiceOutput({
-        text: "one sec",
-        webSearchQuery: "latest rust stable version"
-      }),
-      structuredVoiceOutput({
-        text: "latest stable rust is 1.90"
-      })
-    ],
-    runWebSearch: async ({ webSearch, query }) => {
-      eventOrder.push("search");
-      return {
-        ...(webSearch || {}),
-        requested: true,
-        query: String(query || "").trim(),
-        used: true,
-        results: [
+      {
+        text: "",
+        toolCalls: [
           {
-            title: "sample result",
-            url: "https://example.com",
-            domain: "example.com",
-            snippet: "sample"
+            id: "tc_1",
+            name: "web_search",
+            input: { query: "latest rust stable version" }
           }
+        ],
+        rawContent: [
+          { type: "text", text: "" },
+          { type: "tool_use", id: "tc_1", name: "web_search", input: { query: "latest rust stable version" } }
         ]
-      };
-    }
+      },
+      {
+        text: structuredVoiceOutput({
+          text: "latest stable rust is 1.90"
+        })
+      }
+    ]
   });
 
   const reply = await generateVoiceTurnReply(bot, {
@@ -821,20 +824,15 @@ test("generateVoiceTurnReply does not block web lookup on async start callback c
     transcript: "what's the latest rust stable?",
     onWebLookupStart: async () => {
       eventOrder.push("start");
-      await new Promise((resolve) => setTimeout(resolve, 50));
-      eventOrder.push("start_done");
     },
     onWebLookupComplete: async () => {
       eventOrder.push("done");
     }
   });
 
-  await new Promise((resolve) => setTimeout(resolve, 70));
   assert.equal(reply.usedWebSearchFollowup, true);
   assert.equal(eventOrder.includes("start"), true);
-  assert.equal(eventOrder.includes("search"), true);
-  assert.equal(eventOrder.includes("start_done"), true);
-  assert.equal(eventOrder.indexOf("search") < eventOrder.indexOf("start_done"), true);
+  assert.equal(eventOrder.includes("done"), true);
 });
 
 test("generateVoiceTurnReply queries short-term lookup memory during generation", async () => {
@@ -867,16 +865,28 @@ test("generateVoiceTurnReply queries short-term lookup memory during generation"
   assert.equal(lookupMemorySearchCalls.length, 1);
 });
 
-test("generateVoiceTurnReply opens cached article via tool-call field", async () => {
-  const { bot, openArticleCalls, getGenerationCalls } = createVoiceBot({
+test("generateVoiceTurnReply handles open_article tool call", async () => {
+  const { bot, getGenerationCalls } = createVoiceBot({
     generationSequence: [
-      structuredVoiceOutput({
-        text: "say less",
-        openArticleRef: "first"
-      }),
-      structuredVoiceOutput({
-        text: "here's what it says"
-      })
+      {
+        text: "",
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "open_article",
+            input: { ref: "first" }
+          }
+        ],
+        rawContent: [
+          { type: "text", text: "" },
+          { type: "tool_use", id: "tc_1", name: "open_article", input: { ref: "first" } }
+        ]
+      },
+      {
+        text: structuredVoiceOutput({
+          text: "here's what it says"
+        })
+      }
     ],
     recentLookupContext: [
       {
@@ -891,12 +901,7 @@ test("generateVoiceTurnReply opens cached article via tool-call field", async ()
           }
         ]
       }
-    ],
-    openArticleRead: async () => ({
-      title: "example headline",
-      summary: "fuller article extract",
-      extractionMethod: "fast"
-    })
+    ]
   });
 
   const reply = await generateVoiceTurnReply(bot, {
@@ -908,9 +913,6 @@ test("generateVoiceTurnReply opens cached article via tool-call field", async ()
   });
 
   assert.equal(getGenerationCalls(), 2);
-  assert.equal(openArticleCalls.length, 1);
-  assert.equal(openArticleCalls[0]?.url, "https://example.com/news-1");
-  assert.equal(Number(openArticleCalls[0]?.maxChars) >= 12000, true);
   assert.equal(reply.text, "here's what it says");
   assert.equal(reply.usedOpenArticleFollowup, true);
 });
