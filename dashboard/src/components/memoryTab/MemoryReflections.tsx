@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
 
 interface Guild {
@@ -107,7 +107,7 @@ export default function MemoryReflections({ guilds }: { guilds: Guild[] }) {
   const [rerunKey, setRerunKey] = useState("");
   const [rerunStatus, setRerunStatus] = useState("");
 
-  const loadRuns = async (nextLimit = limit) => {
+  const loadRuns = useCallback(async (nextLimit = limit) => {
     setLoading(true);
     setError("");
     try {
@@ -118,7 +118,7 @@ export default function MemoryReflections({ guilds }: { guilds: Guild[] }) {
     } finally {
       setLoading(false);
     }
-  };
+  }, [limit]);
 
   const handleRerun = async (run: ReflectionRun) => {
     const dateKey = String(run.dateKey || "").trim();
@@ -146,8 +146,8 @@ export default function MemoryReflections({ guilds }: { guilds: Guild[] }) {
   };
 
   useEffect(() => {
-    void loadRuns(limit);
-  }, [limit]);
+    void loadRuns();
+  }, [loadRuns]);
 
   const guildNameFor = (guildId?: string) =>
     guilds.find((guild) => guild.id === guildId)?.name || guildId || "Unknown guild";
@@ -168,7 +168,7 @@ export default function MemoryReflections({ guilds }: { guilds: Guild[] }) {
               ))}
             </select>
           </label>
-          <button type="button" className="sm" onClick={() => void loadRuns(limit)} disabled={loading}>
+          <button type="button" className="sm" onClick={() => void loadRuns()} disabled={loading}>
             {loading ? "Loading..." : "Refresh"}
           </button>
         </div>

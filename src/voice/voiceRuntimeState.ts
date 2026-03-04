@@ -10,8 +10,7 @@ import {
 } from "./voiceSessionManager.constants.ts";
 import {
     isRealtimeMode,
-    resolveRealtimeProvider,
-    normalizeVoiceText
+    resolveRealtimeProvider
 } from "./voiceSessionHelpers.ts";
 import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 

@@ -3,43 +3,9 @@ export const LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT = 5;
 import fs from "node:fs";
 import path from "node:path";
 import { Database } from "bun:sqlite";
-import { load as loadSqliteVec } from "sqlite-vec";
 import { DEFAULT_SETTINGS } from "./settings/settingsSchema.ts";
-import { clamp, deepMerge, nowIso } from "./utils.ts";
-import {
-  buildAutomationMatchText,
-  normalizeAutomationInstruction,
-  normalizeAutomationTitle
-} from "./automation.ts";
+import { clamp, nowIso } from "./utils.ts";
 import { normalizeSettings } from "./store/settingsNormalization.ts";
-import { safeJsonParse } from "./normalization/valueParsers.ts";
-import {
-  mapAutomationRow,
-  normalizeAutomationRunStatus,
-  normalizeAutomationStatus,
-  normalizeAutomationStatusFilter,
-  normalizeEmbeddingVector,
-  normalizeMessageCreatedAt,
-  parseEmbeddingBlob,
-  vectorToBlob,
-  normalizeLookupResultText,
-  normalizeLookupResultRows,
-  buildLookupContextMatchText,
-  scoreLookupContextRow,
-  LOOKUP_CONTEXT_QUERY_MAX_CHARS,
-  LOOKUP_CONTEXT_SOURCE_MAX_CHARS,
-  LOOKUP_CONTEXT_PROVIDER_MAX_CHARS,
-  LOOKUP_CONTEXT_RESULT_MAX_CHARS,
-  LOOKUP_CONTEXT_MATCH_TEXT_MAX_CHARS,
-  LOOKUP_CONTEXT_MAX_TTL_HOURS,
-  LOOKUP_CONTEXT_MAX_AGE_HOURS,
-  LOOKUP_CONTEXT_MAX_SEARCH_LIMIT
-} from "./store/storeHelpers.ts";
-import {
-  normalizeResponseTriggerMessageIds,
-  shouldTrackResponseTriggerKind
-} from "./store/responseTriggers.ts";
-import { pushPerformanceMetric, summarizeLatencyMetric } from "./store/storePerformance.ts";
 import { rewriteRuntimeSettingsRow, getSettings, setSettings, patchSettings, resetSettings } from "./store/storeSettings.ts";
 import { recordMessage, getRecentMessages, getRecentMessagesAcrossGuild, searchRelevantMessages, getActiveChannels } from "./store/storeMessages.ts";
 import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, countInitiativePostsSince, getRecentActions, getRecentMemoryReflections, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted } from "./store/storeActionLog.ts";

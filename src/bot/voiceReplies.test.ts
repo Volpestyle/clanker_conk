@@ -772,7 +772,7 @@ test("generateVoiceTurnReply runs web lookup follow-up with start/complete callb
     onWebLookupStart: async (payload) => {
       callbackEvents.push(`start:${String(payload?.query || "")}`);
     },
-    onWebLookupComplete: async (payload) => {
+    onWebLookupComplete: async (_payload) => {
       callbackEvents.push("done");
     }
   });

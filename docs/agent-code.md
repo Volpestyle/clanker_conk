@@ -1,4 +1,6 @@
-# Claude Code Orchestrator Spec
+# Claude Code Orchestrator Design Spec
+
+Status as of March 4, 2026: this document is aspirational. The current runtime does not expose a `code_task` tool, does not register `src/agents/codeAgent.ts`, and does not use `BOT_OWNER_DISCORD_ID`. Keep this doc as a future design reference, not a description of shipped behavior.
 
 ## Overview
 

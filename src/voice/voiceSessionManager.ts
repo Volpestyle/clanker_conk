@@ -3451,6 +3451,7 @@ export class VoiceSessionManager {
     pendingRefreshState.inFlight = true;
 
     const runQueuedRefresh = async () => {
+      let nextRefresh: typeof pendingRefreshState.pending = null;
       try {
         while (!session.ending) {
           const queued = pendingRefreshState.pending;
@@ -3482,21 +3483,21 @@ export class VoiceSessionManager {
           if (session.openAiTurnContextRefreshState === pendingRefreshState) {
             session.openAiTurnContextRefreshState = null;
           }
-          return;
-        }
-        if (pendingRefreshState.pending) {
-          this.queueRealtimeTurnContextRefresh({
-            session,
-            settings: pendingRefreshState.pending.settings,
-            userId: pendingRefreshState.pending.userId,
-            transcript: pendingRefreshState.pending.transcript,
-            captureReason: pendingRefreshState.pending.captureReason
-          });
-          return;
-        }
-        if (session.openAiTurnContextRefreshState === pendingRefreshState) {
+        } else if (pendingRefreshState.pending) {
+          nextRefresh = pendingRefreshState.pending;
+        } else if (session.openAiTurnContextRefreshState === pendingRefreshState) {
           session.openAiTurnContextRefreshState = null;
         }
+      }
+
+      if (nextRefresh) {
+        this.queueRealtimeTurnContextRefresh({
+          session,
+          settings: nextRefresh.settings,
+          userId: nextRefresh.userId,
+          transcript: nextRefresh.transcript,
+          captureReason: nextRefresh.captureReason
+        });
       }
     };
 
@@ -6079,7 +6080,7 @@ export class VoiceSessionManager {
   }
 
   resolveOpenAiSharedAsrSpeakerUserId({
-    session,
+    session: _session,
     asrState,
     itemId = "",
     fallbackUserId = null

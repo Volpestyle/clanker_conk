@@ -21,13 +21,6 @@ function findFfmpeg(): string {
   return env.FFMPEG_PATH || "ffmpeg";
 }
 
-async function getPcmDurationMs(path: string, sampleRate = 48000, channels = 1): Promise<number> {
-  const { stat } = await import("node:fs/promises");
-  const { size } = await stat(path);
-  const bytesPerSample = 2; // s16le
-  return Math.round((size / bytesPerSample / channels / sampleRate) * 1000);
-}
-
 async function getWavDurationMs(path: string): Promise<number> {
   const { stat } = await import("node:fs/promises");
   const { size } = await stat(path);

@@ -1,13 +1,4 @@
 // Extracted LLM Provider Methods
-import {
-  normalizeOpenAiReasoningEffort,
-  parseMemoryExtractionJson
-} from "./llmHelpers.ts";
-import {
-  buildOpenAiTemperatureParam,
-  buildOpenAiReasoningParam,
-  buildOpenAiJsonSchemaTextFormat
-} from "../llm.ts";
 import { buildAnthropicImageParts } from "../llmClaudeCode.ts";
 
 export async function callAnthropicMemoryExtraction(llm: any, { model, systemPrompt, userPrompt }) {

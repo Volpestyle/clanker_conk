@@ -3536,7 +3536,7 @@ export class ClankerBot {
       userFacts: memorySlice.userFacts,
       relevantFacts: memorySlice.relevantFacts
     });
-    let memoryLookup = this.buildMemoryLookupContext({ settings });
+    const memoryLookup = this.buildMemoryLookupContext({ settings });
     const promptBase = {
       instruction: automation.instruction,
       channelName: channel.name || "channel",
@@ -3662,7 +3662,7 @@ export class ClankerBot {
       automationToolLoopSteps += 1;
     }
 
-    let directive = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
+    const directive = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
 
     let finalText = sanitizeBotText(normalizeSkipSentinel(directive.text || ""), 1200);
     if (!finalText) {

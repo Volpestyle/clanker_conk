@@ -1,10 +1,10 @@
 # clanker conk
 
-A Discord bot that lives in your server as a genuine participant — not a command-response machine, but a personality with tools.
+A Discord bot that lives in your server as a genuine participant, not a command-response machine but a personality with tools.
 
-The core idea: give an LLM brain a growing set of capabilities (voice, browsing, code execution, memory, web search, media generation) and let it compose them naturally through conversation. You don't invoke features with slash commands (though you can). You talk to the bot — in voice or text — and it figures out which tools to chain together to do what you're asking.
+The core idea: give an LLM brain a growing set of capabilities (voice, browsing, memory, web search, media generation) and let it compose them naturally through conversation. You don't invoke features with slash commands (though you can). You talk to the bot in voice or text and it figures out which tools to chain together to do what you're asking.
 
-Ask it to check your GitHub issues and fix one? It browses the issue page, spawns Claude Code to write the fix, creates a PR, and tells you it's done. Ask it what song is playing in a stream it's watching? It looks at the screen, searches the web, and queues it up. No rigid workflows — the brain orchestrates.
+Ask it to check your GitHub issues? It can browse the page and summarize them. Ask it what song is playing in a stream it's watching? It can look at the screen, search the web, and queue it up. No rigid workflows, the brain orchestrates.
 
 ## Capabilities
 
@@ -16,7 +16,6 @@ Ask it to check your GitHub issues and fix one? It browses the issue page, spawn
 **Tools the Brain Can Use**
 - Web search (Brave, SerpApi) with page inspection
 - Headless browser agent for navigating and interacting with websites
-- Claude Code orchestrator for coding tasks on the host machine (owner-only)
 - Persistent memory system (append-only journals + curated facts + vector search)
 - Image generation (GPT Image, Grok Imagine)
 - Video generation (Grok Imagine Video)
@@ -55,14 +54,13 @@ bun install
 | `BRAVE_SEARCH_API_KEY` | Primary web search |
 | `SERPAPI_API_KEY` | Fallback web search |
 | `GIPHY_API_KEY` | GIF replies |
-| `BOT_OWNER_DISCORD_ID` | Required for Claude Code orchestrator (owner-only features) |
 | `DASHBOARD_HOST` | Dashboard bind address (default `127.0.0.1`) |
 | `DASHBOARD_TOKEN` | Private dashboard/admin API auth |
 | `PUBLIC_API_TOKEN` | Public tunnel stream-ingest auth |
 | `PUBLIC_HTTPS_ENABLED` | Enable Cloudflare Quick Tunnel |
 
 For voice features, install `ffmpeg` and `yt-dlp` on the host.
-For Claude Code orchestrator, ensure `claude` CLI is on `PATH`.
+For the optional `claude-code` brain provider, ensure `claude` CLI is on `PATH`.
 
 ### Provider Notes
 
@@ -122,7 +120,7 @@ Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details 
 | Doc | Description |
 |-----|-------------|
 | `docs/technical-architecture.md` | System architecture, data model, runtime flows |
-| `docs/agent-code.md` | Claude Code orchestrator spec |
+| `docs/agent-code.md` | Design doc for a possible future Claude Code orchestrator |
 | `docs/agent-browser.md` | Browser agent spec |
 | `docs/realtime-voice-agent-spec.md` | Voice architecture and tool strategy |
 | `docs/claude-code-brain-session-mode.md` | Claude Code as LLM brain provider |

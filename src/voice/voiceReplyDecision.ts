@@ -228,7 +228,7 @@ export async function evaluateVoiceReplyDecision(manager: any, {
   userId,
   transcript,
   source: _source = "stt_pipeline",
-  transcriptionContext = null
+  transcriptionContext: _transcriptionContext = null
 }): Promise<VoiceReplyDecision> {
   const normalizedTranscript = normalizeVoiceText(transcript, VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS);
   const normalizedUserId = String(userId || "").trim();

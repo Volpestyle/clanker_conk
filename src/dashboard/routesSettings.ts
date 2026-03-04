@@ -1,9 +1,7 @@
-import { parseBoundedInt } from "../dashboard.ts";
 import { getLlmModelCatalog } from "../pricing.ts";
-import { STREAM_INGEST_API_PATH } from "../dashboard.ts";
 
 export function attachSettingsRoutes(app: any, deps: any) {
-  const { store, bot, memory, appConfig, publicHttpsEntrypoint, screenShareSessionManager, getStatsPayload, voiceSseClients, activitySseClients, writeSseEvent, broadcastSseEvent } = deps;
+  const { store, bot, appConfig } = deps;
   
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true });

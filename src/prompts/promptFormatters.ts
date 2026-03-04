@@ -1,9 +1,6 @@
 import {
   buildHardLimitsSection,
-  buildVoiceSelfContextLines,
-  buildVoiceToneGuardrails,
   DEFAULT_PROMPT_TEXT_GUIDANCE,
-  getMediaPromptCraftGuidance,
   getPromptBotName,
   getPromptCapabilityHonestyLine,
   getPromptImpossibleActionLine,
@@ -11,8 +8,7 @@ import {
   getPromptMemoryEnabledLine,
   getPromptSkipLine,
   getPromptStyle,
-  getPromptTextGuidance,
-  REPLY_JSON_SCHEMA
+  getPromptTextGuidance
 } from "../promptCore.ts";
 
 export function buildSystemPrompt(settings) {
@@ -254,4 +250,3 @@ export function formatImageLookupResults(results) {
     })
     .join("\n");
 }
-

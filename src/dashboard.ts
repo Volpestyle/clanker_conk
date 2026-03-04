@@ -4,7 +4,6 @@ import { fileURLToPath } from "node:url";
 import express from "express";
 import type { Response } from "express";
 import { normalizeDashboardHost } from "./config.ts";
-import { getLlmModelCatalog } from "./pricing.ts";
 import { classifyApiAccessPath, isAllowedPublicApiPath, isPublicTunnelRequestHost } from "./publicIngressAccess.ts";
 import { attachSettingsRoutes } from "./dashboard/routesSettings.ts";
 import { attachMetricsRoutes } from "./dashboard/routesMetrics.ts";

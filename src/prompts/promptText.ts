@@ -1,31 +1,16 @@
 import {
-  buildHardLimitsSection,
   buildVoiceSelfContextLines,
-  buildVoiceToneGuardrails,
-  DEFAULT_PROMPT_TEXT_GUIDANCE,
   getMediaPromptCraftGuidance,
-  getPromptBotName,
-  getPromptCapabilityHonestyLine,
-  getPromptImpossibleActionLine,
-  getPromptMemoryDisabledLine,
-  getPromptMemoryEnabledLine,
-  getPromptSkipLine,
-  getPromptStyle,
-  getPromptTextGuidance,
   REPLY_JSON_SCHEMA
 } from "../promptCore.ts";
 
 import {
-  buildSystemPrompt,
-  stripEmojiForPrompt,
   formatRecentChat,
   formatEmojiChoices,
   formatDiscoveryFindings,
   formatWebSearchFindings,
   formatRecentLookupContext,
-  formatOpenArticleCandidates,
   formatVideoFindings,
-  renderPromptMemoryFact,
   formatMemoryFacts,
   formatMemoryLookupResults,
   formatImageLookupCandidates,

@@ -24,11 +24,10 @@ Core runtime:
 
 Agents:
 - `src/agents/browseAgent.ts`: headless browser agent — LLM + browser tool loop for navigating websites and extracting information.
-- `src/agents/codeAgent.ts`: Claude Code orchestrator — spawns Claude Code CLI with full tool access to perform coding tasks on the host machine.
 
 Tool definitions:
 - `src/tools/browserTools.ts`: browser tool schemas + execution wrappers for the browse agent.
-- `src/tools/replyTools.ts`: tool schemas available to the text chat brain (web search, memory, image lookup, code task, etc.).
+- `src/tools/replyTools.ts`: tool schemas available to the text chat brain (web search, memory, image lookup, open-article lookup, etc.).
 - `src/voice/voiceToolCalls.ts`: voice tool definitions + execution handlers for all tools available in voice sessions.
 
 Control plane:
@@ -57,7 +56,6 @@ Brain (LLM with tool-use)
     ├── memory_search / memory_write   →  persistent facts + vector recall
     ├── web_search                     →  live web search + page inspection
     ├── browser_browse                 →  headless browser agent (navigate, click, extract)
-    ├── code_task                      →  Claude Code CLI (read/write files, run commands, git, PRs)
     ├── music_*                        →  queue management + playback control
     ├── image/video/gif generation     →  media creation via model APIs
     └── MCP tools                      →  extensible third-party capabilities
@@ -71,23 +69,21 @@ Each tool is available in both voice and text paths. The brain sees the same too
 
 **Voice path:** Tools are registered as OpenAI Realtime function definitions. The Realtime brain emits `response.function_call_arguments.done` events, the bot executes the tool via `voiceToolCalls.ts` handlers, and sends results back with `conversation.item.create`. The brain continues the conversation with the result.
 
-**Agent tools (browser, code):** These are tools that themselves contain an agentic loop. When the brain calls `browser_browse`, it spawns a `browseAgent` that runs its own multi-step LLM + browser tool cycle. When it calls `code_task`, it spawns a Claude Code CLI process that runs autonomously. The brain gets back a final result — it doesn't manage the inner loop.
+**Agent tools:** Some tools themselves contain an inner agent loop. When the brain calls `browser_browse`, it spawns a `browseAgent` that runs its own multi-step LLM + browser tool cycle. The brain gets back a final result — it doesn't manage the inner loop directly.
 
-### Owner-Only Tools
+### Host-Access Tools
 
-Some tools grant access to the host machine (filesystem, shell). These are gated by `BOT_OWNER_DISCORD_ID` — an env var containing the bot owner's Discord user ID. The tool is not registered in the brain's tool list unless the current user matches this ID.
-
-Currently owner-only: `code_task` (Claude Code orchestrator). See `docs/agent-code.md`.
+No host-access coding tool is currently registered in the runtime. `docs/agent-code.md` is a forward-looking design doc for a possible future `code_task` integration, not current behavior.
 
 ### Tool Composition Example
 
-A user says "go check my open GitHub issues and work on #42":
+A user says "go check my open GitHub issues":
 
 1. Brain calls `browser_browse` → navigates to the GitHub issues page → extracts the issue list
 2. Brain reports the issues back to the user
-3. User says "work on 42"
-4. Brain calls `code_task` → Claude Code reads the issue, writes the fix, creates a branch, opens a PR
-5. Brain reports the PR link back to the user
+3. User asks follow-up questions about one of the issues
+4. Brain optionally calls `browser_browse` again or combines the result with `memory_search`
+5. Brain reports the answer back to the user
 
 No step here is hardcoded. The brain chose which tools to use and in what order based on the conversation.
 
@@ -195,7 +191,7 @@ Common `actions.kind` values in current runtime:
 - LLM + media generation: `llm_call`, `llm_error`, `image_call`, `image_error`, `video_call`, `video_error`, `gif_call`, `gif_error`
 - Memory pipeline: `memory_fact`, `memory_extract_call`, `memory_extract_error`, `memory_embedding_call`, `memory_embedding_error`
 - Search + video context: `search_call`, `search_error`, `video_context_call`, `video_context_error`
-- Agent tools: `browser_browse_call`, `browser_tool_step`, `code_agent_call`
+- Agent tools: `browser_browse_call`, `browser_tool_step`
 - Voice runtime: `voice_session_start`, `voice_session_end`, `voice_turn_in`, `voice_turn_out`, `voice_runtime`, `voice_intent_detected`, `voice_error`
 - Speech services: `asr_call`, `asr_error`, `tts_call`, `tts_error`
 - Automation lifecycle: `automation_created`, `automation_updated`, `automation_run`, `automation_error`

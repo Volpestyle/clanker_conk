@@ -1,9 +1,7 @@
 import { parseBoundedInt } from "../dashboard.ts";
-import { getLlmModelCatalog } from "../pricing.ts";
-import { STREAM_INGEST_API_PATH } from "../dashboard.ts";
 
 export function attachMetricsRoutes(app: any, deps: any) {
-  const { store, bot, memory, appConfig, publicHttpsEntrypoint, screenShareSessionManager, getStatsPayload, voiceSseClients, activitySseClients, writeSseEvent, broadcastSseEvent } = deps;
+  const { store, publicHttpsEntrypoint, getStatsPayload, activitySseClients, writeSseEvent } = deps;
   
   app.get("/api/actions", (req, res) => {
     const limit = parseBoundedInt(req.query.limit, 200, 1, 1000);

@@ -909,10 +909,8 @@ test("shared ASR hands off to waiting speaker after commit", () => {
   manager.appConfig.openaiApiKey = "test-openai-key";
   const beginCalls = [];
   const appendCalls = [];
-  let activeAsrUserId = null;
   manager.beginOpenAiSharedAsrUtterance = (payload) => {
     beginCalls.push(payload);
-    activeAsrUserId = payload.userId;
     return true;
   };
   manager.appendAudioToOpenAiSharedAsr = (payload) => {

@@ -317,7 +317,7 @@ export async function generateVoiceTurnReply(runtime, {
   soundboardCandidates = [],
   onWebLookupStart = null,
   onWebLookupComplete = null,
-  webSearchTimeoutMs = null
+  webSearchTimeoutMs: _webSearchTimeoutMs = null
 }) {
   if (!runtime.llm?.generate || !settings) return { text: "" };
   const incomingTranscript = String(transcript || "")
@@ -459,7 +459,7 @@ export async function generateVoiceTurnReply(runtime, {
     }
   };
 
-  let webSearch = allowWebSearchToolCall && typeof runtime.buildWebSearchContext === "function"
+  const webSearch = allowWebSearchToolCall && typeof runtime.buildWebSearchContext === "function"
     ? runtime.buildWebSearchContext(settings, incomingTranscript)
     : {
       requested: false,
@@ -485,11 +485,11 @@ export async function generateVoiceTurnReply(runtime, {
     !webSearch?.blockedByBudget &&
     webSearch?.budget?.canSearch !== false
   );
-  let openArticleCandidates = buildOpenArticleCandidates({
+  const openArticleCandidates = buildOpenArticleCandidates({
     webSearch,
     recentWebLookups
   });
-  let openedArticle = null;
+  const openedArticle = null;
   let usedWebSearchFollowup = false;
   let usedOpenArticleFollowup = false;
   const effectiveJoinWindowActive =
@@ -719,7 +719,7 @@ export async function generateVoiceTurnReply(runtime, {
       });
     }
 
-    let parsed = parseStructuredReplyOutput(generation.text);
+    const parsed = parseStructuredReplyOutput(generation.text);
 
     let usedScreenShareOffer = false;
     if (

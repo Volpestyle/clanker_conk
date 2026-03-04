@@ -39,9 +39,6 @@ export function VoiceModeSettingsSection({
   const isBridgePath = replyPath === "bridge";
   const isBrainPath = replyPath === "brain";
   const isNativePath = replyPath === "native";
-  const brainProvider = String(form.voiceBrainProvider || "openai")
-    .trim()
-    .toLowerCase();
   const openAiRealtimeTranscriptionMethodOptions = OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS;
   const openAiRealtimeTranscriptionMethod = String(
     form.voiceOpenAiRealtimeTranscriptionMethod || "realtime_bridge"

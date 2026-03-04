@@ -1,13 +1,8 @@
 // Extracted LLM Provider Methods
 import {
-  normalizeOpenAiReasoningEffort,
   normalizeInlineText,
-  parseMemoryExtractionJson
 } from "./llmHelpers.ts";
 import {
-  buildOpenAiTemperatureParam,
-  buildOpenAiReasoningParam,
-  buildOpenAiJsonSchemaTextFormat,
   type XaiJsonRequestOptions,
   XAI_REQUEST_TIMEOUT_MS
 } from "../llm.ts";

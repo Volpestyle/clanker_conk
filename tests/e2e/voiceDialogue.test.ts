@@ -4,7 +4,6 @@ import { env } from "node:process";
 import {
   beginTemporaryE2EEagerness50,
   DriverBot,
-  type DriverBotConfig,
   getE2EConfig,
   hasDialogueE2EConfig,
   getFixturePath,

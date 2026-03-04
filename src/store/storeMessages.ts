@@ -1,5 +1,5 @@
 // Extracted Store Methods
-import { clamp, nowIso } from "../utils.ts";
+import { clamp } from "../utils.ts";
 import { normalizeMessageCreatedAt } from "./storeHelpers.ts";
 
 export function recordMessage(store: any, message) {
