@@ -8154,8 +8154,12 @@ export class VoiceSessionManager {
       // arrival of our unsubscribe IPC, the auto-subscribe creates a fresh
       // subscription that our stale unsubscribe then destroys — leaving no
       // active subscription for the new speech.
+    };
 
-      // All captures resolved — if join greeting is still pending, fire it now.
+    // Called after a capture resolves with no usable speech (empty, silence-
+    // gated, or suppressed). If this was the last capture and a join greeting
+    // is still pending, fire it now.
+    const maybeTriggerJoinGreeting = () => {
       if (session.joinGreetingPending && session.userCaptures.size === 0) {
         this.fireJoinGreeting(session);
       }
@@ -8322,6 +8326,7 @@ export class VoiceSessionManager {
           }
         });
         cleanupCapture();
+        maybeTriggerJoinGreeting();
         if (useOpenAiPerUserAsr) {
           this.scheduleOpenAiAsrSessionIdleClose({
             session,
@@ -8373,6 +8378,7 @@ export class VoiceSessionManager {
           }
         });
         cleanupCapture();
+        maybeTriggerJoinGreeting();
         if (useOpenAiPerUserAsr) {
           this.scheduleOpenAiAsrSessionIdleClose({ session, userId });
         } else if (useOpenAiSharedAsr) {
@@ -8615,6 +8621,7 @@ export class VoiceSessionManager {
         }
       });
       cleanupCapture();
+      maybeTriggerJoinGreeting();
       if (useOpenAiPerUserAsr) {
         this.scheduleOpenAiAsrSessionIdleClose({
           session,
