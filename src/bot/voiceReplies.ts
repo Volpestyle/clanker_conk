@@ -165,9 +165,9 @@ export async function composeVoiceOperationalMessage(runtime, {
   const outputCharLimit = clamp(Number(maxOutputChars) || 180, 80, 700);
   const statusRequesterText = isVoiceStatusRequest
     ? String(detailsPayload?.requestText || "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 220)
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 220)
     : "";
 
   const tunedSettings = {
@@ -347,8 +347,8 @@ export async function generateVoiceTurnReply(runtime, {
   );
   const allowMemoryToolCalls = Boolean(settings?.memory?.enabled);
   const allowWebSearchToolCall = Boolean(
-      typeof runtime.runModelRequestedWebSearch === "function" &&
-      typeof runtime.buildWebSearchContext === "function"
+    typeof runtime.runModelRequestedWebSearch === "function" &&
+    typeof runtime.buildWebSearchContext === "function"
   );
   const allowOpenArticleToolCall = Boolean(typeof runtime.search?.readPageSummary === "function");
   const screenShare = resolveVoiceScreenShareCapability(runtime, {
@@ -359,10 +359,10 @@ export async function generateVoiceTurnReply(runtime, {
   });
   const allowScreenShareToolCall = Boolean(
     screenShare.available &&
-      typeof runtime.offerVoiceScreenShareLink === "function" &&
-      guildId &&
-      channelId &&
-      userId
+    typeof runtime.offerVoiceScreenShareLink === "function" &&
+    guildId &&
+    channelId &&
+    userId
   );
 
   const guild = runtime.client.guilds.cache.get(String(guildId || ""));
@@ -404,21 +404,21 @@ export async function generateVoiceTurnReply(runtime, {
   const memorySlicePromise: Promise<VoiceMemorySlice> | null =
     memoryEnabled && typeof runtime.loadPromptMemorySlice === "function"
       ? runtime
-          .loadPromptMemorySlice({
-            settings,
-            userId,
+        .loadPromptMemorySlice({
+          settings,
+          userId,
+          guildId,
+          channelId,
+          queryText: incomingTranscript,
+          trace: {
             guildId,
             channelId,
-            queryText: incomingTranscript,
-            trace: {
-              guildId,
-              channelId,
-              userId
-            },
-            source: "voice_stt_pipeline_generation"
-          })
-          .then((slice) => normalizeVoiceMemorySlice(slice))
-          .catch(() => emptyVoiceMemorySlice())
+            userId
+          },
+          source: "voice_stt_pipeline_generation"
+        })
+        .then((slice) => normalizeVoiceMemorySlice(slice))
+        .catch(() => emptyVoiceMemorySlice())
       : null;
   if (memorySlicePromise) {
     promptMemorySlice = await resolveVoiceMemorySliceWithTimeout({
@@ -430,12 +430,12 @@ export async function generateVoiceTurnReply(runtime, {
   const recentWebLookupsRaw =
     typeof runtime.loadRecentLookupContext === "function"
       ? runtime.loadRecentLookupContext({
-          guildId,
-          channelId,
-          queryText: incomingTranscript,
-          limit: LOOKUP_CONTEXT_PROMPT_LIMIT,
-          maxAgeHours: LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS
-        })
+        guildId,
+        channelId,
+        queryText: incomingTranscript,
+        limit: LOOKUP_CONTEXT_PROMPT_LIMIT,
+        maxAgeHours: LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS
+      })
       : [];
   const recentWebLookups = Array.isArray(recentWebLookupsRaw)
     ? recentWebLookupsRaw
@@ -447,7 +447,7 @@ export async function generateVoiceTurnReply(runtime, {
   );
   const voiceGenerationModel = String(
     (voiceGenerationUsesTextModel ? settings?.llm?.model : settings?.voice?.generationLlm?.model) ||
-      defaultModelForLlmProvider(voiceGenerationProvider)
+    defaultModelForLlmProvider(voiceGenerationProvider)
   )
     .trim()
     .slice(0, 120) || defaultModelForLlmProvider(voiceGenerationProvider);
@@ -465,28 +465,28 @@ export async function generateVoiceTurnReply(runtime, {
   let webSearch = allowWebSearchToolCall
     ? runtime.buildWebSearchContext(settings, incomingTranscript)
     : {
-        requested: false,
-        configured: false,
-        enabled: false,
-        used: false,
-        blockedByBudget: false,
-        optedOutByUser: false,
-        error: null,
-        query: "",
-        results: [],
-        fetchedPages: 0,
-        providerUsed: null,
-        providerFallbackUsed: false,
-        budget: {
-          canSearch: false
-        }
-      };
+      requested: false,
+      configured: false,
+      enabled: false,
+      used: false,
+      blockedByBudget: false,
+      optedOutByUser: false,
+      error: null,
+      query: "",
+      results: [],
+      fetchedPages: 0,
+      providerUsed: null,
+      providerFallbackUsed: false,
+      budget: {
+        canSearch: false
+      }
+    };
   const webSearchAvailableNow = Boolean(
     webSearch?.enabled &&
-      webSearch?.configured &&
-      !webSearch?.optedOutByUser &&
-      !webSearch?.blockedByBudget &&
-      webSearch?.budget?.canSearch !== false
+    webSearch?.configured &&
+    !webSearch?.optedOutByUser &&
+    !webSearch?.blockedByBudget &&
+    webSearch?.budget?.canSearch !== false
   );
   let openArticleCandidates = buildOpenArticleCandidates({
     webSearch,
@@ -816,13 +816,13 @@ export async function generateVoiceTurnReply(runtime, {
 
     const soundboardRefs = allowSoundboardToolCall
       ? (Array.isArray(parsed.soundboardRefs) ? parsed.soundboardRefs : [])
-          .map((entry) =>
-            String(entry || "")
-              .trim()
-              .slice(0, 180)
-          )
-          .filter(Boolean)
-          .slice(0, MAX_VOICE_SOUNDBOARD_REFS)
+        .map((entry) =>
+          String(entry || "")
+            .trim()
+            .slice(0, 180)
+        )
+        .filter(Boolean)
+        .slice(0, MAX_VOICE_SOUNDBOARD_REFS)
       : [];
     const leaveVoiceChannelRequested = Boolean(parsed.leaveVoiceChannel);
     const voiceAddressing = normalizeGeneratedVoiceAddressing(parsed.voiceAddressing, {
@@ -889,6 +889,21 @@ export async function generateVoiceTurnReply(runtime, {
           channelId,
           sourceText: finalText,
           scope: "self"
+        })
+        .catch(() => undefined);
+    }
+
+    if (settings.memory?.enabled && parsed.userMemoryLine && runtime.memory?.rememberDirectiveLine && userId) {
+      await runtime.memory
+        .rememberDirectiveLine({
+          line: parsed.userMemoryLine,
+          sourceMessageId: `voice-${String(guildId || "guild")}-${Date.now()}-user-memory`,
+          userId: String(userId),
+          guildId,
+          channelId,
+          sourceText: incomingTranscript,
+          scope: "user",
+          subjectOverride: String(userId)
         })
         .catch(() => undefined);
     }

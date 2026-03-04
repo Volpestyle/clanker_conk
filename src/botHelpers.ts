@@ -131,6 +131,7 @@ export const REPLY_OUTPUT_SCHEMA = {
     openArticleRef: { type: ["string", "null"] },
     memoryLine: { type: ["string", "null"] },
     selfMemoryLine: { type: ["string", "null"] },
+    userMemoryLine: { type: ["string", "null"] },
     soundboardRefs: {
       type: "array",
       items: {
@@ -239,6 +240,7 @@ export const REPLY_OUTPUT_SCHEMA = {
     "openArticleRef",
     "memoryLine",
     "selfMemoryLine",
+    "userMemoryLine",
     "soundboardRefs",
     "leaveVoiceChannel",
     "automationAction",

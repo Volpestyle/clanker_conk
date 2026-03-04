@@ -121,6 +121,7 @@ function structuredVoiceOutput(overrides: {
     openArticleRef: null,
     memoryLine: null,
     selfMemoryLine: null,
+    userMemoryLine: null,
     soundboardRefs: [],
     leaveVoiceChannel: false,
     automationAction: {

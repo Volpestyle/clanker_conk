@@ -784,16 +784,18 @@ export function buildReplyPrompt({
   parts.push("=== MEMORY SAVING ===");
 
   if (allowMemoryDirective) {
-    parts.push("If the incoming message contains durable info worth keeping, set memoryLine to a concise fact.");
     parts.push(
-      "Use memoryLine only for lasting facts (names, preferences, recurring relationships, long-lived context), not throwaway chatter."
+      "If the speaker reveals a durable fact about themselves (preference, identity, name, recurring interest, relationship), set userMemoryLine to a concise fact about them."
     );
-    parts.push("Keep memoryLine concise (under 180 chars) and factual.");
+    parts.push("Use userMemoryLine for lasting personal facts, not throwaway chatter. Keep under 180 chars and factual.");
+    parts.push(
+      "If the incoming message contains durable shared context or lore not tied to one person, set memoryLine to a concise fact."
+    );
+    parts.push("Use memoryLine for general shared knowledge (server lore, group context, recurring topics). Keep under 180 chars.");
     parts.push(
       "If your own reply introduces a durable self fact (stable identity, recurring preference, or explicit standing commitment), set selfMemoryLine."
     );
-    parts.push("Use selfMemoryLine only for durable facts about you, not temporary mood or throwaway phrasing.");
-    parts.push("Keep selfMemoryLine concise (under 180 chars), concrete, and grounded in your reply text.");
+    parts.push("Use selfMemoryLine only for durable facts about you, not temporary mood or throwaway phrasing. Keep under 180 chars.");
   }
 
   parts.push("=== OUTPUT FORMAT ===");
@@ -807,8 +809,7 @@ export function buildReplyPrompt({
   parts.push("When no reaction is needed, set reactionEmoji to null.");
   parts.push("When no media should be generated, set media to null.");
   parts.push("When no lookup is needed, set webSearchQuery, memoryLookupQuery, imageLookupQuery, and openArticleRef to null.");
-  parts.push("When no durable fact should be saved, set memoryLine to null.");
-  parts.push("When no durable self fact should be saved, set selfMemoryLine to null.");
+  parts.push("When no durable fact should be saved, set memoryLine, selfMemoryLine, and userMemoryLine to null.");
   parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false for text-channel replies.");
   parts.push("When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.");
   parts.push(
@@ -1277,11 +1278,12 @@ export function buildVoiceTurnPrompt({
 
   if (allowMemoryToolCalls) {
     parts.push("Optional memory tool calls:");
-    parts.push("- Set memoryLine to a durable fact from the speaker turn when genuinely stable and useful.");
+    parts.push("- Set userMemoryLine to a durable personal fact about the speaker (preference, identity, name, recurring interest) when genuinely stable and useful.");
+    parts.push("- Set memoryLine to durable shared lore or context not tied to one person when genuinely stable and useful.");
     parts.push("- Set selfMemoryLine to a durable fact about your own stable identity/preference/commitment in your reply when genuinely stable and useful.");
-    parts.push("If not needed, set memoryLine and selfMemoryLine to null.");
+    parts.push("If not needed, set memoryLine, selfMemoryLine, and userMemoryLine to null.");
   } else {
-    parts.push("Memory tool calls are unavailable this turn. Set memoryLine and selfMemoryLine to null.");
+    parts.push("Memory tool calls are unavailable this turn. Set memoryLine, selfMemoryLine, and userMemoryLine to null.");
   }
 
   if (allowSoundboardToolCall && normalizedSoundboardCandidates.length) {

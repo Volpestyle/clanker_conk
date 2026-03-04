@@ -1222,13 +1222,13 @@ export class ClankerBot {
     const activeVoiceParticipantRoster =
       inVoiceChannelNow && typeof this.voiceSessionManager?.getVoiceChannelParticipants === "function"
         ? this.voiceSessionManager
-            .getVoiceChannelParticipants(activeVoiceSession)
-            .map((entry) => String(entry?.displayName || "").trim())
-            .filter(Boolean)
+          .getVoiceChannelParticipants(activeVoiceSession)
+          .map((entry) => String(entry?.displayName || "").trim())
+          .filter(Boolean)
         : [];
     const musicDisambiguation =
       inVoiceChannelNow &&
-      typeof this.voiceSessionManager?.getMusicDisambiguationPromptContext === "function"
+        typeof this.voiceSessionManager?.getMusicDisambiguationPromptContext === "function"
         ? this.voiceSessionManager.getMusicDisambiguationPromptContext(activeVoiceSession)
         : null;
 
@@ -1458,8 +1458,10 @@ export class ClankerBot {
 
     const memoryLine = replyDirective.memoryLine;
     const selfMemoryLine = replyDirective.selfMemoryLine;
+    const userMemoryLine = replyDirective.userMemoryLine;
     let memorySaved = false;
     let selfMemorySaved = false;
+    let userMemorySaved = false;
     if (settings.memory.enabled && memoryLine) {
       try {
         memorySaved = await this.memory.rememberDirectiveLine({
@@ -1479,6 +1481,29 @@ export class ClankerBot {
           messageId: message.id,
           userId: message.author.id,
           content: `memory_directive: ${String(error?.message || error)}`
+        });
+      }
+    }
+    if (settings.memory.enabled && userMemoryLine) {
+      try {
+        userMemorySaved = await this.memory.rememberDirectiveLine({
+          line: userMemoryLine,
+          sourceMessageId: message.id,
+          userId: message.author.id,
+          guildId: message.guildId,
+          channelId: message.channelId,
+          sourceText: message.content,
+          scope: "user",
+          subjectOverride: message.author.id
+        });
+      } catch (error) {
+        this.store.logAction({
+          kind: "bot_error",
+          guildId: message.guildId,
+          channelId: message.channelId,
+          messageId: message.id,
+          userId: message.author.id,
+          content: `memory_user_directive: ${String(error?.message || error)}`
         });
       }
     }
@@ -1721,9 +1746,9 @@ export class ClankerBot {
     const firstPayload = { ...payload, content: textChunks[0] };
     const sent = sendAsReply
       ? await message.reply({
-          ...firstPayload,
-          allowedMentions: { repliedUser: false }
-        })
+        ...firstPayload,
+        allowedMentions: { repliedUser: false }
+      })
       : await message.channel.send(firstPayload);
     for (let i = 1; i < textChunks.length; i++) {
       await message.channel.send({ content: textChunks[i] });
@@ -1791,12 +1816,14 @@ export class ClankerBot {
           remainingAtPromptTime: gifBudget.remaining
         },
         memory: {
-          requestedByModel: Boolean(memoryLine || selfMemoryLine),
-          saved: Boolean(memorySaved || selfMemorySaved),
+          requestedByModel: Boolean(memoryLine || selfMemoryLine || userMemoryLine),
+          saved: Boolean(memorySaved || selfMemorySaved || userMemorySaved),
           loreRequestedByModel: Boolean(memoryLine),
           loreSaved: memorySaved,
           selfRequestedByModel: Boolean(selfMemoryLine),
           selfSaved: selfMemorySaved,
+          userRequestedByModel: Boolean(userMemoryLine),
+          userSaved: userMemorySaved,
           lookupRequested: memoryLookup.requested,
           lookupUsed: memoryLookup.used,
           lookupQuery: memoryLookup.query,
@@ -2708,12 +2735,12 @@ export class ClankerBot {
   }) {
     const llmMetadata = generation
       ? {
-          provider: generation.provider,
-          model: generation.model,
-          usage: generation.usage,
-          costUsd: generation.costUsd,
-          usedWebSearchFollowup
-        }
+        provider: generation.provider,
+        model: generation.model,
+        usage: generation.usage,
+        costUsd: generation.costUsd,
+        usedWebSearchFollowup
+      }
       : null;
     this.store.logAction({
       kind: "reply_skipped",
@@ -2897,11 +2924,11 @@ export class ClankerBot {
     const fallbackTargets =
       !directTargets.length && looksLikeVideoFollowupMessage(messageText)
         ? extractRecentVideoTargets({
-            videoService: this.video,
-            recentMessages,
-            maxMessages: MAX_VIDEO_FALLBACK_MESSAGES,
-            maxTargets: MAX_VIDEO_TARGET_SCAN
-          })
+          videoService: this.video,
+          recentMessages,
+          maxMessages: MAX_VIDEO_FALLBACK_MESSAGES,
+          maxTargets: MAX_VIDEO_TARGET_SCAN
+        })
         : [];
     const detectedTargets = directTargets.length ? directTargets : fallbackTargets;
     if (!detectedTargets.length) return base;
@@ -4370,13 +4397,13 @@ export class ClankerBot {
       const recent = await this.hydrateRecentMessages(channel, settings.memory.maxRecentMessages);
       const recentMessages = recent.length
         ? recent
-            .slice()
-            .reverse()
-            .slice(0, settings.memory.maxRecentMessages)
-            .map((msg) => ({
-              author_name: msg.member?.displayName || msg.author?.username || "unknown",
-              content: String(msg.content || "").trim()
-            }))
+          .slice()
+          .reverse()
+          .slice(0, settings.memory.maxRecentMessages)
+          .map((msg) => ({
+            author_name: msg.member?.displayName || msg.author?.username || "unknown",
+            content: String(msg.content || "").trim()
+          }))
         : this.store.getRecentMessages(channel.id, settings.memory.maxRecentMessages);
       const initiativeMemoryQuery = recentMessages
         .slice(0, 6)
