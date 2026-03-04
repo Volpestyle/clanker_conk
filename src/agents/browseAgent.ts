@@ -205,6 +205,7 @@ export class BrowserAgentSession implements SubAgentSession {
   readonly id: string;
   readonly type = "browser" as const;
   readonly createdAt: number;
+  readonly ownerUserId: string | null;
   lastUsedAt: number;
   status: SubAgentSession["status"];
 
@@ -228,6 +229,7 @@ export class BrowserAgentSession implements SubAgentSession {
     this.id = generateSessionId("browser", options.scopeKey);
     this.createdAt = Date.now();
     this.lastUsedAt = Date.now();
+    this.ownerUserId = options.trace.userId ?? null;
     this.status = "idle";
 
     this.llm = options.llm;

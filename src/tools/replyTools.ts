@@ -667,6 +667,10 @@ async function executeBrowserBrowse(
     if (!session) {
       return { content: `Browser session '${sessionId}' not found or expired.`, isError: true };
     }
+    // Verify the caller owns this session
+    if (session.ownerUserId && session.ownerUserId !== context.userId) {
+      return { content: `Not authorized to continue browser session '${sessionId}'.`, isError: true };
+    }
     try {
       const turnResult = await session.runTurn(query);
       const sessionNote = `\n\n[session_id: ${session.id}]`;
@@ -1002,6 +1006,10 @@ async function executeCodeTask(
     const session = runtime.subAgentSessions.manager.get(sessionId);
     if (!session) {
       return { content: `Code session '${sessionId}' not found or expired.`, isError: true };
+    }
+    // Verify the caller owns this session
+    if (session.ownerUserId && session.ownerUserId !== context.userId) {
+      return { content: `Not authorized to continue code session '${sessionId}'.`, isError: true };
     }
     try {
       const turnResult = await session.runTurn(task);

@@ -28,6 +28,8 @@ export interface SubAgentSession {
   readonly id: string;
   readonly type: "code" | "browser";
   readonly createdAt: number;
+  /** The userId that created this session (for authorization checks). */
+  readonly ownerUserId: string | null;
   lastUsedAt: number;
   status: "idle" | "running" | "completed" | "error" | "cancelled";
 

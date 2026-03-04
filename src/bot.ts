@@ -250,7 +250,10 @@ export class ClankerBot {
     this.nextReflectionRunAt = null;
     this.screenShareSessionManager = null;
     this.activeBrowserTasks = new BrowserTaskRegistry();
-    this.subAgentSessions = new SubAgentSessionManager();
+    this.subAgentSessions = new SubAgentSessionManager({
+      idleTimeoutMs: Number(appConfig?.subAgentOrchestration?.sessionIdleTimeoutMs) || 300_000,
+      maxSessions: Number(appConfig?.subAgentOrchestration?.maxConcurrentSessions) || 20
+    });
     this.subAgentSessions.startSweep();
 
     this.client = new Client({
@@ -3010,6 +3013,12 @@ export class ClankerBot {
 
     const maxParallel = Number(settings?.codeAgent?.maxParallelTasks) || 2;
     if (getActiveCodeAgentTaskCount() >= maxParallel) return null;
+
+    // Enforce hourly task budget (same check as tryRunCodeAgentTask)
+    const maxPerHour = Number(settings?.codeAgent?.maxTasksPerHour) || 10;
+    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const used = this.store.countActionsSince("code_agent_call", since1h);
+    if (used >= maxPerHour) return null;
 
     const cwd = cwdOverride || resolveCodeAgentCwd(
       String(settings?.codeAgent?.defaultCwd || ""),

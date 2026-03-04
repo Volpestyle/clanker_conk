@@ -190,6 +190,7 @@ export class CodeAgentSession implements SubAgentSession {
   readonly id: string;
   readonly type = "code" as const;
   readonly createdAt: number;
+  readonly ownerUserId: string | null;
   lastUsedAt: number;
   status: SubAgentSession["status"];
 
@@ -206,6 +207,7 @@ export class CodeAgentSession implements SubAgentSession {
     this.id = generateSessionId("code", scopeKey);
     this.createdAt = Date.now();
     this.lastUsedAt = Date.now();
+    this.ownerUserId = trace.userId ?? null;
     this.status = "idle";
     this.timeoutMs = timeoutMs;
     this.trace = trace;
