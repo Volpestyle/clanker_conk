@@ -117,6 +117,11 @@ export function settingsToForm(settings) {
     memoryLlmModel: settings?.memoryLlm?.model ?? defaultMemoryLlm.model,
     temperature: settings?.llm?.temperature ?? defaultLlm.temperature,
     maxTokens: settings?.llm?.maxOutputTokens ?? defaultLlm.maxOutputTokens,
+    browserEnabled: settings?.browser?.enabled ?? defaults.browser.enabled,
+    browserMaxPerHour: settings?.browser?.maxBrowseCallsPerHour ?? defaults.browser.maxBrowseCallsPerHour,
+    browserMaxSteps: settings?.browser?.maxStepsPerTask ?? defaults.browser.maxStepsPerTask,
+    browserStepTimeoutMs: settings?.browser?.stepTimeoutMs ?? defaults.browser.stepTimeoutMs,
+    browserSessionTimeoutMs: settings?.browser?.sessionTimeoutMs ?? defaults.browser.sessionTimeoutMs,
     webSearchEnabled: settings?.webSearch?.enabled ?? defaultWebSearch.enabled,
     webSearchSafeMode: settings?.webSearch?.safeSearch ?? defaultWebSearch.safeSearch,
     webSearchPerHour: settings?.webSearch?.maxSearchesPerHour ?? defaultWebSearch.maxSearchesPerHour,
@@ -330,6 +335,13 @@ export function formToSettingsPatch(form) {
     memoryLlm: {
       provider: String(form.memoryLlmProvider || "").trim(),
       model: String(form.memoryLlmModel || "").trim()
+    },
+    browser: {
+      enabled: form.browserEnabled,
+      maxBrowseCallsPerHour: Number(form.browserMaxPerHour),
+      maxStepsPerTask: Number(form.browserMaxSteps),
+      stepTimeoutMs: Number(form.browserStepTimeoutMs),
+      sessionTimeoutMs: Number(form.browserSessionTimeoutMs)
     },
     webSearch: {
       enabled: form.webSearchEnabled,

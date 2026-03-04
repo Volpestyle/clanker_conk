@@ -1,4 +1,6 @@
 import { PermissionFlagsBits, type ChatInputCommandInteraction } from "discord.js";
+import { runBrowseAgent } from "../agents/browseAgent.ts";
+import type { BrowserManager } from "../services/BrowserManager.ts";
 import {
   buildVoiceToneGuardrails,
   buildHardLimitsSection,
@@ -523,6 +525,7 @@ export class VoiceSessionManager {
     llm = null,
     memory = null,
     search = null,
+    browserManager = null,
     composeOperationalMessage = null,
     generateVoiceTurn = null
   }) {
@@ -532,6 +535,7 @@ export class VoiceSessionManager {
     this.llm = llm || null;
     this.memory = memory || null;
     this.search = search || null;
+    this.browserManager = browserManager || null;
     this.composeOperationalMessage =
       typeof composeOperationalMessage === "function" ? composeOperationalMessage : null;
     this.generateVoiceTurn = typeof generateVoiceTurn === "function" ? generateVoiceTurn : null;
@@ -1608,6 +1612,19 @@ export class VoiceSessionManager {
           required: ["query"],
           additionalProperties: false
         }
+      },
+      {
+        toolType: "function",
+        name: "browser_browse",
+        description: "Browse a webpage interactively — navigate, click, type, and extract information.",
+        parameters: {
+          type: "object",
+          properties: {
+            query: { type: "string", description: "Task description, e.g. 'go to hackernews.com and get the top 5 stories'" }
+          },
+          required: ["query"],
+          additionalProperties: false
+        }
       }
     ];
 
@@ -1642,6 +1659,7 @@ export class VoiceSessionManager {
     const includeMemory = Boolean(settings?.memory?.enabled);
     const filteredLocalTools = localTools.filter((entry) => {
       if (entry.name === "web_search" && !includeWebSearch) return false;
+      if (entry.name === "browser_browse" && !settings?.browser?.enabled) return false;
       if ((entry.name === "memory_search" || entry.name === "memory_write") && !includeMemory) return false;
       return true;
     });
@@ -11893,6 +11911,65 @@ export class VoiceSessionManager {
     };
   }
 
+  async executeVoiceBrowserBrowseTool({ session, settings, args }) {
+    const instruction = normalizeInlineText(args?.query, 500);
+    if (!instruction) {
+      return { ok: false, text: "", error: "query_required" };
+    }
+    if (!this.browserManager) {
+      return { ok: false, text: "", error: "browser_unavailable" };
+    }
+    if (!this.llm) {
+      return { ok: false, text: "", error: "llm_unavailable" };
+    }
+
+    const maxSteps = clamp(Number(settings?.browser?.maxStepsPerTask) || 15, 1, 30);
+    const stepTimeoutMs = clamp(Number(settings?.browser?.stepTimeoutMs) || 30_000, 5_000, 120_000);
+
+    try {
+      const result = await runBrowseAgent({
+        llm: this.llm,
+        browserManager: this.browserManager,
+        store: this.store,
+        sessionKey: session.guildId,
+        instruction,
+        maxSteps,
+        stepTimeoutMs,
+        trace: {
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId: session.lastOpenAiToolCallerUserId || null,
+          source: "voice_realtime_tool_browser_browse"
+        }
+      });
+
+      this.store.logAction({
+        kind: "browser_browse_call",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: session.lastOpenAiToolCallerUserId || null,
+        content: instruction.slice(0, 200),
+        metadata: {
+          steps: result.steps,
+          hitStepLimit: result.hitStepLimit,
+          totalCostUsd: result.totalCostUsd,
+          source: "voice_realtime_tool_browser_browse"
+        },
+        usdCost: result.totalCostUsd
+      });
+
+      return {
+        ok: true,
+        text: result.text,
+        steps: result.steps,
+        hit_step_limit: result.hitStepLimit
+      };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      return { ok: false, text: "", error: message };
+    }
+  }
+
   async executeLocalVoiceToolCall({
     session,
     settings,
@@ -12037,6 +12114,13 @@ export class VoiceSessionManager {
     }
     if (normalizedToolName === "web_search") {
       return await this.executeVoiceWebSearchTool({
+        session,
+        settings,
+        args
+      });
+    }
+    if (normalizedToolName === "browser_browse") {
+      return await this.executeVoiceBrowserBrowseTool({
         session,
         settings,
         args

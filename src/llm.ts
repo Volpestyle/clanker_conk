@@ -1683,6 +1683,97 @@ export class LLMService {
       }
     };
   }
+
+  async chatWithTools({
+    model = "claude-sonnet-4-5-20250929",
+    systemPrompt,
+    messages,
+    tools,
+    maxOutputTokens = 4096,
+    temperature = 0.7,
+    trace = {
+      guildId: null as string | null,
+      channelId: null as string | null,
+      userId: null as string | null,
+      source: null as string | null
+    }
+  }: {
+    model?: string;
+    systemPrompt: string;
+    messages: Anthropic.MessageParam[];
+    tools: Array<{
+      name: string;
+      description: string;
+      input_schema: Anthropic.Tool.InputSchema;
+    }>;
+    maxOutputTokens?: number;
+    temperature?: number;
+    trace?: {
+      guildId?: string | null;
+      channelId?: string | null;
+      userId?: string | null;
+      source?: string | null;
+    };
+  }): Promise<{
+    content: Anthropic.ContentBlock[];
+    stopReason: string;
+    usage: { inputTokens: number; outputTokens: number; cacheWriteTokens: number; cacheReadTokens: number };
+    costUsd: number;
+  }> {
+    if (!this.anthropic) {
+      throw new Error("chatWithTools requires ANTHROPIC_API_KEY.");
+    }
+
+    const resolvedModel = String(model || "claude-sonnet-4-5-20250929").trim();
+    const resolvedTemperature = Math.max(0, Math.min(Number(temperature) || 0, 1));
+
+    const response = await this.anthropic.messages.create({
+      model: resolvedModel,
+      system: systemPrompt,
+      temperature: resolvedTemperature,
+      max_tokens: maxOutputTokens,
+      messages,
+      tools
+    });
+
+    const usage = {
+      inputTokens: Number(response.usage?.input_tokens || 0),
+      outputTokens: Number(response.usage?.output_tokens || 0),
+      cacheWriteTokens: Number(response.usage?.cache_creation_input_tokens || 0),
+      cacheReadTokens: Number(response.usage?.cache_read_input_tokens || 0)
+    };
+
+    const costUsd = estimateUsdCost({
+      provider: "anthropic",
+      model: resolvedModel,
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      cacheWriteTokens: usage.cacheWriteTokens,
+      cacheReadTokens: usage.cacheReadTokens
+    });
+
+    this.store.logAction({
+      kind: "llm_tool_call",
+      guildId: trace.guildId || null,
+      channelId: trace.channelId || null,
+      userId: trace.userId || null,
+      content: `anthropic:${resolvedModel}`,
+      metadata: {
+        provider: "anthropic",
+        model: resolvedModel,
+        usage,
+        source: trace.source || null
+      },
+      usdCost: costUsd
+    });
+
+    return {
+      content: response.content,
+      stopReason: response.stop_reason || "end_turn",
+      usage,
+      costUsd
+    };
+  }
 }
 
 export {

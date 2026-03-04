@@ -55,6 +55,7 @@ export function normalizeSettings(raw) {
   merged.memoryLlm.provider = normalizedMemoryLlm.provider;
   merged.memoryLlm.model = normalizedMemoryLlm.model;
   if (!merged.webSearch || typeof merged.webSearch !== "object") merged.webSearch = {};
+  if (!merged.browser || typeof merged.browser !== "object") merged.browser = {};
   if (!merged.videoContext || typeof merged.videoContext !== "object") merged.videoContext = {};
   if (!merged.voice || typeof merged.voice !== "object") merged.voice = {};
   if (!merged.prompt || typeof merged.prompt !== "object") merged.prompt = {};
@@ -269,6 +270,40 @@ export function normalizeSettings(raw) {
     Number.isFinite(maxConcurrentFetchesRaw) ? maxConcurrentFetchesRaw : 5,
     1,
     10
+  );
+
+  merged.browser.enabled = Boolean(merged.browser?.enabled);
+  const browserMaxPerHourRaw = Number(merged.browser?.maxBrowseCallsPerHour);
+  const browserMaxStepsRaw = Number(merged.browser?.maxStepsPerTask);
+  const browserStepTimeoutRaw = Number(merged.browser?.stepTimeoutMs);
+  const browserSessionTimeoutRaw = Number(merged.browser?.sessionTimeoutMs);
+  merged.browser.maxBrowseCallsPerHour = clamp(
+    Number.isFinite(browserMaxPerHourRaw)
+      ? browserMaxPerHourRaw
+      : Number(DEFAULT_SETTINGS.browser?.maxBrowseCallsPerHour) || 10,
+    1,
+    60
+  );
+  merged.browser.maxStepsPerTask = clamp(
+    Number.isFinite(browserMaxStepsRaw)
+      ? browserMaxStepsRaw
+      : Number(DEFAULT_SETTINGS.browser?.maxStepsPerTask) || 15,
+    1,
+    30
+  );
+  merged.browser.stepTimeoutMs = clamp(
+    Number.isFinite(browserStepTimeoutRaw)
+      ? browserStepTimeoutRaw
+      : Number(DEFAULT_SETTINGS.browser?.stepTimeoutMs) || 30_000,
+    5_000,
+    120_000
+  );
+  merged.browser.sessionTimeoutMs = clamp(
+    Number.isFinite(browserSessionTimeoutRaw)
+      ? browserSessionTimeoutRaw
+      : Number(DEFAULT_SETTINGS.browser?.sessionTimeoutMs) || 300_000,
+    30_000,
+    600_000
   );
 
   merged.videoContext.enabled =

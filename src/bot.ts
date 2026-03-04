@@ -216,7 +216,7 @@ export class ClankerBot {
   client;
   voiceSessionManager;
 
-  constructor({ appConfig, store, llm, memory, discovery, search, gifs, video }) {
+  constructor({ appConfig, store, llm, memory, discovery, search, gifs, video, browserManager = null }) {
     this.appConfig = appConfig;
     this.store = store;
     this.llm = llm;
@@ -225,6 +225,7 @@ export class ClankerBot {
     this.search = search;
     this.gifs = gifs;
     this.video = video;
+    this.browserManager = browserManager;
 
     this.lastBotMessageAt = 0;
     this.memoryTimer = null;
@@ -263,6 +264,7 @@ export class ClankerBot {
       llm: this.llm,
       memory: this.memory,
       search: this.search,
+      browserManager: this.browserManager,
       composeOperationalMessage: (payload) => this.composeVoiceOperationalMessage(payload),
       generateVoiceTurn: (payload) => this.generateVoiceTurnReply(payload)
     });
@@ -490,6 +492,9 @@ export class ClankerBot {
     this.replyQueuedMessageIds.clear();
     if (this.memory?.drainIngestQueue) {
       await this.memory.drainIngestQueue({ timeoutMs: 4000 }).catch(() => undefined);
+    }
+    if (this.browserManager?.closeAll) {
+      await this.browserManager.closeAll().catch(() => undefined);
     }
     await this.voiceSessionManager.dispose("shutdown");
     await this.client.destroy();
@@ -2870,6 +2875,20 @@ export class ClankerBot {
       errorCount,
       remaining,
       canSearch: maxPerHour > 0 && remaining > 0
+    };
+  }
+
+  getBrowserBudgetState(settings) {
+    const maxPerHour = clamp(Number(settings.browser?.maxBrowseCallsPerHour) || 0, 0, 60);
+    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const used = this.store.countActionsSince("browser_browse_call", since1h);
+    const remaining = Math.max(0, maxPerHour - used);
+
+    return {
+      maxPerHour,
+      used,
+      remaining,
+      canBrowse: maxPerHour > 0 && remaining > 0
     };
   }
 

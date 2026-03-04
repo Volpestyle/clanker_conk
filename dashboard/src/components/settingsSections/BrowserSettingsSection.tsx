@@ -1,0 +1,75 @@
+import React from "react";
+import { SettingsSection } from "../SettingsSection";
+
+export function BrowserSettingsSection({ id, form, set }) {
+  return (
+    <SettingsSection id={id} title="Browser Agent" active={form.browserEnabled}>
+      <div className="toggles">
+        <label>
+          <input
+            type="checkbox"
+            checked={form.browserEnabled}
+            onChange={set("browserEnabled")}
+          />
+          Enable browser agent for voice tool calls
+        </label>
+      </div>
+
+      {form.browserEnabled && (
+        <>
+          <div className="split">
+            <div>
+              <label htmlFor="browser-max-per-hour">Max browse calls/hour</label>
+              <input
+                id="browser-max-per-hour"
+                type="number"
+                min="1"
+                max="60"
+                value={form.browserMaxPerHour}
+                onChange={set("browserMaxPerHour")}
+              />
+            </div>
+            <div>
+              <label htmlFor="browser-max-steps">Max steps/task</label>
+              <input
+                id="browser-max-steps"
+                type="number"
+                min="1"
+                max="30"
+                value={form.browserMaxSteps}
+                onChange={set("browserMaxSteps")}
+              />
+            </div>
+          </div>
+
+          <div className="split">
+            <div>
+              <label htmlFor="browser-step-timeout">Step timeout (ms)</label>
+              <input
+                id="browser-step-timeout"
+                type="number"
+                min="5000"
+                max="120000"
+                step="1000"
+                value={form.browserStepTimeoutMs}
+                onChange={set("browserStepTimeoutMs")}
+              />
+            </div>
+            <div>
+              <label htmlFor="browser-session-timeout">Session timeout (ms)</label>
+              <input
+                id="browser-session-timeout"
+                type="number"
+                min="30000"
+                max="600000"
+                step="1000"
+                value={form.browserSessionTimeoutMs}
+                onChange={set("browserSessionTimeoutMs")}
+              />
+            </div>
+          </div>
+        </>
+      )}
+    </SettingsSection>
+  );
+}
