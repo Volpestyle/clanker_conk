@@ -3,6 +3,16 @@ import { normalizeWhitespaceText } from "../normalization/text.ts";
 
 const LORE_SUBJECT = "__lore__";
 const SELF_SUBJECT = "__self__";
+type DirectiveScope = "lore" | "self" | "user";
+
+type DirectiveScopeConfig = {
+  scope: DirectiveScope;
+  subject: string | null;
+  prefix: string;
+  factType: string;
+  keep: number;
+  traceSource: string;
+};
 
 const FACT_TYPE_LABELS = {
   preference: "Preference",
@@ -275,13 +285,14 @@ export function normalizeSelfFactForDisplay(rawFact) {
   return cleanFactForMemory(text);
 }
 
-export function resolveDirectiveScopeConfig(scope) {
+export function resolveDirectiveScopeConfig(scope: string | null | undefined): DirectiveScopeConfig {
   const normalizedScope = String(scope || "lore")
     .trim()
-    .toLowerCase();
+    .toLowerCase() as DirectiveScope;
 
   if (normalizedScope === "self") {
     return {
+      scope: "self",
       subject: SELF_SUBJECT,
       prefix: "Self memory",
       factType: "self",
@@ -292,6 +303,7 @@ export function resolveDirectiveScopeConfig(scope) {
 
   if (normalizedScope === "user") {
     return {
+      scope: "user",
       subject: null,
       prefix: "User memory",
       factType: "preference",
@@ -301,6 +313,7 @@ export function resolveDirectiveScopeConfig(scope) {
   }
 
   return {
+    scope: "lore",
     subject: LORE_SUBJECT,
     prefix: "Memory line",
     factType: "lore",

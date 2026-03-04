@@ -1,4 +1,5 @@
 import {
+  MAX_BROWSER_BROWSE_QUERY_LEN,
   MAX_IMAGE_LOOKUP_QUERY_LEN,
   MAX_MEMORY_LOOKUP_QUERY_LEN,
   MAX_WEB_QUERY_LEN,
@@ -40,6 +41,23 @@ type MemoryLookupState = {
   [key: string]: unknown;
 };
 
+type BrowserBrowseState = {
+  configured?: boolean;
+  enabled?: boolean;
+  requested?: boolean;
+  query?: string;
+  used?: boolean;
+  blockedByBudget?: boolean;
+  text?: string;
+  steps?: number;
+  hitStepLimit?: boolean;
+  error?: string | null;
+  budget?: {
+    canBrowse?: boolean;
+  };
+  [key: string]: unknown;
+};
+
 type ImageLookupState = {
   enabled?: boolean;
   requested?: boolean;
@@ -61,10 +79,12 @@ type ReplyGenerationShape = {
 
 type ReplyFollowupPromptPayload = {
   webSearch: WebSearchState | null;
+  browserBrowse: BrowserBrowseState | null;
   memoryLookup: MemoryLookupState;
   imageLookup: ImageLookupState | null;
   imageInputs: Array<Record<string, unknown>>;
   allowWebSearchDirective: boolean;
+  allowBrowserBrowseDirective: boolean;
   allowMemoryLookupDirective: boolean;
   allowImageLookupDirective: boolean;
 };
@@ -382,6 +402,7 @@ export async function maybeRegenerateWithMemoryLookup<
   TGeneration extends ReplyGenerationShape,
   TDirective extends ReplyDirectiveShape,
   TWebSearch extends WebSearchState | null,
+  TBrowserBrowse extends BrowserBrowseState | null,
   TMemoryLookup extends MemoryLookupState,
   TImageLookup extends ImageLookupState | null
 >(runtime, {
@@ -391,6 +412,7 @@ export async function maybeRegenerateWithMemoryLookup<
   generation,
   directive,
   webSearch = null,
+  browserBrowse = null,
   memoryLookup,
   imageLookup = null,
   guildId,
@@ -401,6 +423,7 @@ export async function maybeRegenerateWithMemoryLookup<
   forceRegenerate = false,
   buildUserPrompt,
   runModelRequestedWebSearch,
+  runModelRequestedBrowserBrowse,
   runModelRequestedImageLookup,
   mergeImageInputs,
   maxModelImageInputs,
@@ -413,6 +436,7 @@ export async function maybeRegenerateWithMemoryLookup<
   generation: TGeneration;
   directive: TDirective;
   webSearch?: TWebSearch;
+  browserBrowse?: TBrowserBrowse;
   memoryLookup: TMemoryLookup;
   imageLookup?: TImageLookup;
   guildId: string;
@@ -427,6 +451,11 @@ export async function maybeRegenerateWithMemoryLookup<
     query: string;
     step: number;
   }) => Promise<TWebSearch>;
+  runModelRequestedBrowserBrowse?: (payload: {
+    browserBrowse: TBrowserBrowse;
+    query: string;
+    step: number;
+  }) => Promise<TBrowserBrowse>;
   runModelRequestedImageLookup?: (payload: {
     imageLookup: TImageLookup;
     query: string;
@@ -450,19 +479,23 @@ export async function maybeRegenerateWithMemoryLookup<
 }) {
   const limits = resolveReplyFollowupLoopLimits(settings, loopConfig);
   let nextWebSearch = webSearch;
+  let nextBrowserBrowse = browserBrowse;
   let nextMemoryLookup = memoryLookup;
   let nextImageLookup = imageLookup;
   let nextGeneration = generation;
   let nextDirective = directive;
   let usedWebSearch = false;
+  let usedBrowserBrowse = false;
   let usedMemoryLookup = false;
   let usedImageLookup = false;
   let nextImageInputs = Array.isArray(imageInputs) ? [...imageInputs] : [];
   const seenWebQueries = new Set<string>();
+  const seenBrowserQueries = new Set<string>();
   const seenMemoryQueries = new Set<string>();
   const seenImageQueries = new Set<string>();
   let followupRegenerations = 0;
   let webSearchCalls = 0;
+  let browserBrowseCalls = 0;
   let memoryLookupCalls = 0;
   let imageLookupCalls = 0;
   let totalToolCalls = 0;
@@ -471,6 +504,7 @@ export async function maybeRegenerateWithMemoryLookup<
 
   while (followupRegenerations < limits.maxSteps && typeof buildUserPrompt === "function") {
     const requestedWebQuery = normalizeLookupQuery(nextDirective?.webSearchQuery, MAX_WEB_QUERY_LEN);
+    const requestedBrowserQuery = normalizeLookupQuery(nextDirective?.browserBrowseQuery, MAX_BROWSER_BROWSE_QUERY_LEN);
     const requestedMemoryQuery = normalizeLookupQuery(nextDirective?.memoryLookupQuery, MAX_MEMORY_LOOKUP_QUERY_LEN);
     const requestedImageQuery = normalizeLookupQuery(nextDirective?.imageLookupQuery, MAX_IMAGE_LOOKUP_QUERY_LEN);
     let shouldRegenerate = forceNextRegenerate;
@@ -516,6 +550,54 @@ export async function maybeRegenerateWithMemoryLookup<
             ? "Duplicate web lookup query suppressed in this turn."
             : "Web lookup cap reached for this turn."
         ) as TWebSearch;
+        shouldRegenerate = true;
+      }
+    }
+
+    if (
+      requestedBrowserQuery &&
+      nextBrowserBrowse &&
+      typeof runModelRequestedBrowserBrowse === "function"
+    ) {
+      const canRun =
+        browserBrowseCalls < 1 &&
+        totalToolCalls < limits.maxTotalToolCalls &&
+        !seenBrowserQueries.has(requestedBrowserQuery);
+      if (canRun) {
+        const currentStep = followupRegenerations + 1;
+        toolTasks.push(
+          (async () => {
+            const nextState = await runWithOptionalTimeout(
+              async () =>
+                await runModelRequestedBrowserBrowse({
+                  browserBrowse: nextBrowserBrowse,
+                  query: requestedBrowserQuery,
+                  step: currentStep
+                }),
+              limits.toolTimeoutMs,
+              () =>
+                buildSuppressedLookupState(
+                  nextBrowserBrowse as Record<string, unknown>,
+                  requestedBrowserQuery,
+                  `browser browse timed out after ${Math.max(50, limits.toolTimeoutMs)}ms`
+                ) as TBrowserBrowse
+            );
+            nextBrowserBrowse = nextState as TBrowserBrowse;
+            usedBrowserBrowse = true;
+          })()
+        );
+        seenBrowserQueries.add(requestedBrowserQuery);
+        browserBrowseCalls += 1;
+        totalToolCalls += 1;
+        shouldRegenerate = true;
+      } else {
+        nextBrowserBrowse = buildSuppressedLookupState(
+          nextBrowserBrowse as Record<string, unknown>,
+          requestedBrowserQuery,
+          seenBrowserQueries.has(requestedBrowserQuery)
+            ? "Duplicate browser browse query suppressed in this turn."
+            : "Browser browse cap reached for this turn."
+        ) as TBrowserBrowse;
         shouldRegenerate = true;
       }
     }
@@ -634,6 +716,10 @@ export async function maybeRegenerateWithMemoryLookup<
       Boolean(nextWebSearch && typeof runModelRequestedWebSearch === "function") &&
       webSearchCalls < limits.maxWebSearchCalls &&
       totalToolCalls < limits.maxTotalToolCalls;
+    const allowBrowserBrowseDirective =
+      Boolean(nextBrowserBrowse && typeof runModelRequestedBrowserBrowse === "function") &&
+      browserBrowseCalls < 1 &&
+      totalToolCalls < limits.maxTotalToolCalls;
     const allowMemoryLookupDirective =
       memoryLookupCalls < limits.maxMemoryLookupCalls &&
       totalToolCalls < limits.maxTotalToolCalls;
@@ -644,10 +730,12 @@ export async function maybeRegenerateWithMemoryLookup<
 
     const followupPrompt = buildUserPrompt({
       webSearch: nextWebSearch,
+      browserBrowse: nextBrowserBrowse,
       memoryLookup: nextMemoryLookup,
       imageLookup: nextImageLookup,
       imageInputs: nextImageInputs,
       allowWebSearchDirective,
+      allowBrowserBrowseDirective,
       allowMemoryLookupDirective,
       allowImageLookupDirective
     });
@@ -689,12 +777,14 @@ export async function maybeRegenerateWithMemoryLookup<
     generation: nextGeneration,
     directive: nextDirective,
     webSearch: nextWebSearch,
+    browserBrowse: nextBrowserBrowse,
     memoryLookup: nextMemoryLookup,
     imageLookup: nextImageLookup,
     imageInputs: nextImageInputs,
     regenerated: followupRegenerations > 0,
     followupSteps: followupRegenerations,
     usedWebSearch,
+    usedBrowserBrowse,
     usedMemoryLookup,
     usedImageLookup
   };

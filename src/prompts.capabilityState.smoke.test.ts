@@ -2,7 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { buildReplyPrompt } from "./prompts.ts";
 
-test("smoke: reply prompt distinguishes supported-but-unavailable ability states", () => {
+test("smoke: reply prompt surfaces interactive browser capability state", () => {
   const prompt = buildReplyPrompt({
     message: {
       authorName: "alice",
@@ -47,6 +47,21 @@ test("smoke: reply prompt distinguishes supported-but-unavailable ability states
         canSearch: true
       }
     },
+    browserBrowse: {
+      requested: false,
+      configured: true,
+      enabled: false,
+      used: false,
+      blockedByBudget: false,
+      error: null,
+      query: "",
+      text: "",
+      steps: 0,
+      hitStepLimit: false,
+      budget: {
+        canBrowse: true
+      }
+    },
     recentWebLookups: [],
     memoryLookup: {
       enabled: false
@@ -56,6 +71,7 @@ test("smoke: reply prompt distinguishes supported-but-unavailable ability states
       candidates: []
     },
     allowWebSearchDirective: true,
+    allowBrowserBrowseDirective: true,
     allowMemoryLookupDirective: true,
     allowImageLookupDirective: true,
     allowMemoryDirective: false,
@@ -91,32 +107,10 @@ test("smoke: reply prompt distinguishes supported-but-unavailable ability states
   });
 
   assert.equal(
-    prompt.includes("Web search is currently unavailable."),
+    prompt.includes("Interactive browser capability exists but is currently unavailable (disabled in settings)."),
     true
   );
-  assert.equal(
-    prompt.includes(
-      "Video link understanding capability exists but is currently unavailable (disabled in settings)."
-    ),
-    true
-  );
-  assert.equal(
-    prompt.includes("Reply image/video generation capability exists but is currently unavailable for this turn."),
-    true
-  );
-  assert.equal(
-    prompt.includes(
-      "Reply GIF lookup capability exists but is currently unavailable (missing GIPHY configuration)."
-    ),
-    true
-  );
-  assert.equal(prompt.includes("Voice control capability exists but is currently disabled in settings."), true);
-  assert.equal(
-    prompt.includes(
-      "Screen-share link capability exists but is currently unavailable (reason: public_https_starting)."
-    ),
-    true
-  );
+  assert.equal(prompt.includes("Set browserBrowseQuery to null."), true);
 });
 
 test("smoke: reply prompt surfaces current voice music state", () => {

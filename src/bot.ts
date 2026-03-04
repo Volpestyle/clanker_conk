@@ -17,6 +17,7 @@ import {
 } from "./prompts.ts";
 import { getMediaPromptCraftGuidance } from "./promptCore.ts";
 import {
+  MAX_BROWSER_BROWSE_QUERY_LEN,
   MAX_GIF_QUERY_LEN,
   MAX_IMAGE_LOOKUP_QUERY_LEN,
   MAX_VIDEO_FALLBACK_MESSAGES,
@@ -2478,6 +2479,26 @@ export class ClankerBot {
     };
   }
 
+  buildBrowserBrowseContext(settings) {
+    const configured = Boolean(this.browserManager);
+    const enabled = Boolean(settings?.browser?.enabled);
+    const budget = this.getBrowserBudgetState(settings);
+
+    return {
+      requested: false,
+      configured,
+      enabled,
+      used: false,
+      blockedByBudget: false,
+      error: null,
+      query: "",
+      text: "",
+      steps: 0,
+      hitStepLimit: false,
+      budget
+    };
+  }
+
   buildMemoryLookupContext({ settings }) {
     const enabled = Boolean(settings?.memory?.enabled && this.memory?.searchDurableFacts);
     return {
@@ -2667,6 +2688,100 @@ export class ClankerBot {
         contentType: item.contentType
       }))
     };
+  }
+
+  async runModelRequestedBrowserBrowse({
+    settings,
+    browserBrowse,
+    query,
+    guildId,
+    channelId = null,
+    userId = null,
+    source = "reply_message"
+  }) {
+    const normalizedQuery = normalizeDirectiveText(query, MAX_BROWSER_BROWSE_QUERY_LEN);
+    const state = {
+      ...browserBrowse,
+      requested: true,
+      used: false,
+      blockedByBudget: false,
+      query: normalizedQuery,
+      text: "",
+      steps: 0,
+      hitStepLimit: false,
+      error: null
+    };
+
+    if (!state.enabled || !state.configured || !this.browserManager) {
+      return state;
+    }
+    if (!state.budget?.canBrowse) {
+      return {
+        ...state,
+        blockedByBudget: true
+      };
+    }
+    if (!normalizedQuery) {
+      return {
+        ...state,
+        error: "Missing browser browse query."
+      };
+    }
+    if (!this.llm) {
+      return {
+        ...state,
+        error: "llm_unavailable"
+      };
+    }
+
+    const maxSteps = clamp(Number(settings?.browser?.maxStepsPerTask) || 15, 1, 30);
+    const stepTimeoutMs = clamp(Number(settings?.browser?.stepTimeoutMs) || 30_000, 5_000, 120_000);
+
+    try {
+      const result = await runBrowseAgent({
+        llm: this.llm,
+        browserManager: this.browserManager,
+        store: this.store,
+        sessionKey: `reply:${String(guildId || "dm")}:${Date.now()}`,
+        instruction: normalizedQuery,
+        maxSteps,
+        stepTimeoutMs,
+        trace: {
+          guildId,
+          channelId,
+          userId,
+          source: `${source}_browser_browse`
+        }
+      });
+
+      this.store.logAction({
+        kind: "browser_browse_call",
+        guildId,
+        channelId,
+        userId,
+        content: normalizedQuery.slice(0, 200),
+        metadata: {
+          steps: result.steps,
+          hitStepLimit: result.hitStepLimit,
+          totalCostUsd: result.totalCostUsd,
+          source
+        },
+        usdCost: result.totalCostUsd
+      });
+
+      return {
+        ...state,
+        used: true,
+        text: result.text,
+        steps: result.steps,
+        hitStepLimit: result.hitStepLimit
+      };
+    } catch (error) {
+      return {
+        ...state,
+        error: String(error?.message || error)
+      };
+    }
   }
 
   mergeImageInputs({ baseInputs = [], extraInputs = [], maxInputs = MAX_MODEL_IMAGE_INPUTS } = {}) {

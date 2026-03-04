@@ -21,6 +21,7 @@ export const MAX_GIF_QUERY_LEN = 120;
 const MAX_SOUNDBOARD_REF_LEN = 180;
 export const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
 export const MAX_IMAGE_LOOKUP_QUERY_LEN = 220;
+export const MAX_BROWSER_BROWSE_QUERY_LEN = 500;
 const MAX_OPEN_ARTICLE_REF_LEN = 260;
 const MAX_MEMORY_WRITE_LINE_LEN = 180;
 const MAX_REPLY_TEXT_LEN = 3600;
@@ -134,6 +135,7 @@ export const REPLY_OUTPUT_SCHEMA = {
       ]
     },
     webSearchQuery: { type: ["string", "null"] },
+    browserBrowseQuery: { type: ["string", "null"] },
     memoryLookupQuery: { type: ["string", "null"] },
     imageLookupQuery: { type: ["string", "null"] },
     openArticleRef: { type: ["string", "null"] },
@@ -244,6 +246,7 @@ export const REPLY_OUTPUT_SCHEMA = {
     "reactionEmoji",
     "media",
     "webSearchQuery",
+    "browserBrowseQuery",
     "memoryLookupQuery",
     "imageLookupQuery",
     "openArticleRef",
@@ -689,6 +692,7 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
       mediaDirective: null,
       reactionEmoji: null,
       webSearchQuery: null,
+      browserBrowseQuery: null,
       memoryLookupQuery: null,
       imageLookupQuery: null,
       openArticleRef: null,
@@ -726,6 +730,7 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     mediaDirective,
     reactionEmoji,
     webSearchQuery: normalizeDirectiveText(parsed?.webSearchQuery, MAX_WEB_QUERY_LEN) || null,
+    browserBrowseQuery: normalizeDirectiveText(parsed?.browserBrowseQuery, MAX_BROWSER_BROWSE_QUERY_LEN) || null,
     memoryLookupQuery: normalizeDirectiveText(parsed?.memoryLookupQuery, MAX_MEMORY_LOOKUP_QUERY_LEN) || null,
     imageLookupQuery: normalizeDirectiveText(parsed?.imageLookupQuery, MAX_IMAGE_LOOKUP_QUERY_LEN) || null,
     openArticleRef: normalizeDirectiveText(parsed?.openArticleRef, MAX_OPEN_ARTICLE_REF_LEN) || null,

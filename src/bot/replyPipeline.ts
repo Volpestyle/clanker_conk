@@ -145,6 +145,7 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
   const gifBudget = bot.getGifBudgetState(settings);
   const gifsConfigured = Boolean(bot.gifs?.isConfigured?.());
   let webSearch = bot.buildWebSearchContext(settings, message.content);
+  let browserBrowse = bot.buildBrowserBrowseContext(settings);
   const recentWebLookups = bot.getRecentLookupContextForPrompt({
     guildId: message.guildId,
     channelId: message.channelId,
@@ -257,9 +258,11 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
     ...replyPromptBase,
     imageInputs: modelImageInputs,
     webSearch,
+    browserBrowse,
     memoryLookup,
     imageLookup,
     allowWebSearchDirective: true,
+    allowBrowserBrowseDirective: true,
     allowMemoryLookupDirective: true,
     allowImageLookupDirective: true
   });
@@ -275,7 +278,7 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
     isInitiativeChannel, replyEagerness, reactionEmojiOptions, source, performance,
     memorySlice, replyMediaMemoryFacts, attachmentImageInputs, imageBudget, videoBudget,
     mediaCapabilities, simpleImageCapabilityReady, complexImageCapabilityReady, imageCapabilityReady,
-    videoCapabilityReady, gifBudget, gifsConfigured, webSearch, recentWebLookups, memoryLookup,
+    videoCapabilityReady, gifBudget, gifsConfigured, webSearch, browserBrowse, recentWebLookups, memoryLookup,
     videoContext, modelImageInputs, imageLookup, replyTrace, screenShareCapability,
     activeVoiceSession, inVoiceChannelNow, activeVoiceParticipantRoster, musicState, musicDisambiguation,
     systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture, replyPrompts
@@ -289,7 +292,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     isInitiativeChannel, replyEagerness, reactionEmojiOptions, source, performance,
     memorySlice, replyMediaMemoryFacts, attachmentImageInputs, imageBudget, videoBudget,
     mediaCapabilities, simpleImageCapabilityReady, complexImageCapabilityReady, imageCapabilityReady,
-    videoCapabilityReady, gifBudget, gifsConfigured, webSearch, recentWebLookups, memoryLookup,
+    videoCapabilityReady, gifBudget, gifsConfigured, webSearch, browserBrowse, recentWebLookups, memoryLookup,
     videoContext, modelImageInputs, imageLookup, replyTrace, screenShareCapability,
     activeVoiceSession, inVoiceChannelNow, activeVoiceParticipantRoster, musicState, musicDisambiguation,
     systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture, replyPrompts
@@ -306,6 +309,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
   });
   performance.llm1Ms = Math.max(0, Date.now() - llm1StartedAtMs);
   let usedWebSearchFollowup = false;
+  let usedBrowserBrowseFollowup = false;
   let usedMemoryLookupFollowup = false;
   let usedImageLookupFollowup = false;
   const followupGenerationSettings = resolveReplyFollowupGenerationSettingsForReplyFollowup(settings);
@@ -341,6 +345,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
       generation,
       directive: replyDirective,
       webSearch,
+      browserBrowse,
       memoryLookup,
       imageLookup,
       guildId: message.guildId,
@@ -355,10 +360,12 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
       forceRegenerate: false,
       buildUserPrompt: ({
         webSearch: nextWebSearch,
+        browserBrowse: nextBrowserBrowse,
         memoryLookup: nextMemoryLookup,
         imageLookup: nextImageLookup,
         imageInputs: nextImageInputs,
         allowWebSearchDirective,
+        allowBrowserBrowseDirective,
         allowMemoryLookupDirective,
         allowImageLookupDirective
       }) => {
@@ -366,9 +373,11 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
           ...replyPromptBase,
           imageInputs: nextImageInputs,
           webSearch: nextWebSearch,
+          browserBrowse: nextBrowserBrowse,
           memoryLookup: nextMemoryLookup,
           imageLookup: nextImageLookup,
           allowWebSearchDirective,
+          allowBrowserBrowseDirective,
           allowMemoryLookupDirective,
           allowImageLookupDirective
         });
@@ -388,6 +397,16 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
             }
           }
         ),
+      runModelRequestedBrowserBrowse: async ({ browserBrowse: currentBrowserBrowse, query }) =>
+        await bot.runModelRequestedBrowserBrowse({
+          settings,
+          browserBrowse: currentBrowserBrowse,
+          query,
+          guildId: message.guildId,
+          channelId: message.channelId,
+          userId: message.author.id,
+          source
+        }),
       runModelRequestedImageLookup: (payload) => bot.runModelRequestedImageLookup(payload),
       mergeImageInputs: (payload) => bot.mergeImageInputs(payload),
       maxModelImageInputs: MAX_MODEL_IMAGE_INPUTS,
@@ -397,10 +416,12 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
   generation = followup.generation;
   replyDirective = followup.directive;
   webSearch = followup.webSearch || webSearch;
+  browserBrowse = followup.browserBrowse || browserBrowse;
   memoryLookup = followup.memoryLookup;
   imageLookup = followup.imageLookup;
   modelImageInputs = followup.imageInputs;
   usedWebSearchFollowup = followup.usedWebSearch;
+  usedBrowserBrowseFollowup = followup.usedBrowserBrowse;
   usedMemoryLookupFollowup = followup.usedMemoryLookup;
   usedImageLookupFollowup = followup.usedImageLookup;
   replyPrompts = buildLoggedReplyPrompts(replyPromptCapture, followup.followupSteps);
@@ -438,16 +459,22 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     });
     if (followupAutomationHandled) return { handledByIntent: true };
   }
-  if (followup.regenerated || usedWebSearchFollowup || usedMemoryLookupFollowup || usedImageLookupFollowup) {
+  if (
+    followup.regenerated ||
+    usedWebSearchFollowup ||
+    usedBrowserBrowseFollowup ||
+    usedMemoryLookupFollowup ||
+    usedImageLookupFollowup
+  ) {
     performance.followupMs = Math.max(0, Date.now() - followupStartedAtMs);
   }
   
 
   return {
     handledByIntent: false,
-    generation, usedWebSearchFollowup, usedMemoryLookupFollowup, usedImageLookupFollowup,
+    generation, usedWebSearchFollowup, usedBrowserBrowseFollowup, usedMemoryLookupFollowup, usedImageLookupFollowup,
     followupGenerationSettings, mediaPromptLimit, replyDirective,
-    webSearch, memoryLookup, imageLookup, modelImageInputs, replyPrompts
+    webSearch, browserBrowse, memoryLookup, imageLookup, modelImageInputs, replyPrompts
   };
 }
 

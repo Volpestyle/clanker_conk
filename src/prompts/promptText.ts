@@ -76,10 +76,12 @@ export function buildReplyPrompt({
   reactionEagerness = 20,
   addressing = null,
   webSearch = null,
+  browserBrowse = null,
   recentWebLookups = [],
   memoryLookup = null,
   imageLookup = null,
   allowWebSearchDirective = false,
+  allowBrowserBrowseDirective = false,
   allowMemoryLookupDirective = false,
   allowImageLookupDirective = false,
   allowMemoryDirective = false,
@@ -450,11 +452,36 @@ export function buildReplyPrompt({
     } else {
       parts.push("Live web lookup is available.");
       parts.push("Web search is supported right now.");
-      parts.push("Do not claim you cannot search the web or that you are unable to browse.");
+      parts.push("Do not claim you cannot search the web.");
       parts.push(
         "If better accuracy depends on live web info, set webSearchQuery to a concise query."
       );
       parts.push("Use webSearchQuery only when needed and keep it under 220 characters.");
+    }
+  }
+
+  parts.push("=== BROWSER ===");
+
+  if (allowBrowserBrowseDirective) {
+    if (!browserBrowse?.enabled) {
+      parts.push("Interactive browser capability exists but is currently unavailable (disabled in settings).");
+      parts.push("Set browserBrowseQuery to null.");
+      parts.push("Do not claim you can browse sites interactively right now.");
+    } else if (!browserBrowse?.configured) {
+      parts.push("Interactive browser capability exists but is currently unavailable (browser runtime is not configured).");
+      parts.push("Set browserBrowseQuery to null.");
+      parts.push("Do not claim you can browse sites interactively right now.");
+    } else if (browserBrowse?.blockedByBudget || !browserBrowse?.budget?.canBrowse) {
+      parts.push("Interactive browser capability exists but is currently unavailable (hourly browser budget exhausted).");
+      parts.push("Set browserBrowseQuery to null.");
+      parts.push("Do not claim you browsed the site.");
+    } else {
+      parts.push("Interactive browser browsing is available.");
+      parts.push("Prefer webSearchQuery for simple current facts.");
+      parts.push(
+        "Use browserBrowseQuery only when you need actual site navigation or interaction, such as checking listings, moving through a live page flow, or extracting page-specific details."
+      );
+      parts.push("If interactive browsing is needed, set browserBrowseQuery to a concise task under 500 characters.");
     }
   }
 
@@ -529,6 +556,22 @@ export function buildReplyPrompt({
       "If citations would help (for example user asked for proof/sources or the claim is precise), use source IDs inline like [1] or [2]."
     );
     parts.push("If citations are not needed, answer naturally without citation clutter.");
+  }
+
+  parts.push("=== BROWSER RESULTS ===");
+
+  if (browserBrowse?.requested) {
+    if (browserBrowse.error) {
+      parts.push(`Interactive browser task failed: ${browserBrowse.error}`);
+      parts.push("Do not claim you successfully browsed the site.");
+    } else if (!browserBrowse.used || !browserBrowse.text) {
+      parts.push("An interactive browser task was attempted, but it did not return a useful result.");
+      parts.push("Answer carefully and avoid invented browsing details.");
+    } else {
+      parts.push(`Interactive browser result for "${browserBrowse.query || message?.content || ""}":`);
+      parts.push(String(browserBrowse.text || ""));
+      parts.push("Use this result directly and mention uncertainty if the browsing result was incomplete.");
+    }
   }
 
   parts.push("=== VIDEO CONTEXT ===");
@@ -643,7 +686,9 @@ export function buildReplyPrompt({
   parts.push("Set skip=true only when no response should be sent. If skip=true, set text to [SKIP].");
   parts.push("When no reaction is needed, set reactionEmoji to null.");
   parts.push("When no media should be generated, set media to null.");
-  parts.push("When no lookup is needed, set webSearchQuery, memoryLookupQuery, imageLookupQuery, and openArticleRef to null.");
+  parts.push(
+    "When no lookup is needed, set webSearchQuery, browserBrowseQuery, memoryLookupQuery, imageLookupQuery, and openArticleRef to null."
+  );
   parts.push("When no durable fact should be saved, set memoryLine to null.");
   parts.push("When no durable self fact should be saved, set selfMemoryLine to null.");
   parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false for text-channel replies.");
@@ -848,7 +893,7 @@ export function buildAutomationPrompt({
   parts.push("Return strict JSON only.");
   parts.push("JSON format:");
   parts.push(REPLY_JSON_SCHEMA);
-  parts.push("Set webSearchQuery, imageLookupQuery, openArticleRef, memoryLine, and selfMemoryLine to null.");
+  parts.push("Set webSearchQuery, browserBrowseQuery, imageLookupQuery, openArticleRef, memoryLine, and selfMemoryLine to null.");
   parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false.");
   if (allowMemoryLookupDirective) {
     if (!memoryLookup?.enabled) {
