@@ -87,3 +87,90 @@ test("runBrowseAgent forwards step timeout to browser tools and preserves multi-
   assert.equal(result.totalCostUsd, 0.03);
   assert.equal(result.hitStepLimit, false);
 });
+
+test("runBrowseAgent throws AbortError when signal is aborted before or during loop", async () => {
+  const browserManager = {
+    async open() { return "opened"; },
+    async close() { }
+  } as unknown as BrowserManager;
+
+  const store = { logAction() { } };
+  const controller = new AbortController();
+
+  const llm = {
+    async chatWithTools() {
+      controller.abort(); // Abort during the first LLM chat
+      return {
+        content: [{ type: "tool_call", id: "t1", name: "browser_open", input: { url: "foo" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 1, outputTokens: 1 },
+        costUsd: 0.01
+      };
+    }
+  } as unknown as LLMService;
+
+  const agentPromise = runBrowseAgent({
+    llm,
+    browserManager,
+    store,
+    sessionKey: "session-2",
+    instruction: "test abort",
+    provider: "anthropic",
+    model: "claude",
+    maxSteps: 3,
+    stepTimeoutMs: 1000,
+    trace: {},
+    signal: controller.signal
+  });
+
+  await assert.rejects(agentPromise, /AbortError/);
+});
+
+test("runBrowseAgent propagates AbortError when a browser tool is cancelled in flight", async () => {
+  const controller = new AbortController();
+  const closeCalls: string[] = [];
+
+  const llm = {
+    async chatWithTools() {
+      return {
+        content: [{ type: "tool_call", id: "t1", name: "browser_open", input: { url: "https://example.com" } }],
+        stopReason: "tool_use",
+        usage: { inputTokens: 1, outputTokens: 1, cacheWriteTokens: 0, cacheReadTokens: 0 },
+        costUsd: 0.01
+      };
+    }
+  } as unknown as LLMService;
+
+  const browserManager = {
+    async open(_sessionKey: string, _url: string, _timeoutMs = 0, signal?: AbortSignal) {
+      return await new Promise<string>((_resolve, reject) => {
+        signal?.addEventListener("abort", () => {
+          reject(new Error("AbortError: browser_open cancelled"));
+        }, { once: true });
+        controller.abort("cancel browser_open");
+      });
+    },
+    async close(sessionKey: string) {
+      closeCalls.push(sessionKey);
+    }
+  } as unknown as BrowserManager;
+
+  const store = { logAction() { } };
+
+  const agentPromise = runBrowseAgent({
+    llm,
+    browserManager,
+    store,
+    sessionKey: "session-3",
+    instruction: "open example.com",
+    provider: "anthropic",
+    model: "claude",
+    maxSteps: 3,
+    stepTimeoutMs: 1000,
+    trace: {},
+    signal: controller.signal
+  });
+
+  await assert.rejects(agentPromise, /AbortError/);
+  assert.deepEqual(closeCalls, ["session-3"]);
+});

@@ -22,125 +22,127 @@ export const BROWSER_AGENT_TOOL_DEFINITIONS: Array<{
   description: string;
   input_schema: Anthropic.Tool.InputSchema;
 }> = [
-  {
-    name: "browser_open",
-    description: "Opens a URL in the headless browser and returns the initial snapshot. Always use this first before interacting with a page.",
-    input_schema: {
-      type: "object",
-      properties: {
-        url: { type: "string", description: "The fully qualified URL to open (e.g. https://example.com)" }
-      },
-      required: ["url"]
-    }
-  },
-  {
-    name: "browser_snapshot",
-    description: "Takes a snapshot of the current page's accessibility tree, showing interactive elements with refs (e.g. @e1).",
-    input_schema: {
-      type: "object",
-      properties: {
-        interactive_only: {
-          type: "boolean",
-          description: "If true, only returns interactive elements. Default true."
+    {
+      name: "browser_open",
+      description: "Opens a URL in the headless browser and returns the initial snapshot. Always use this first before interacting with a page.",
+      input_schema: {
+        type: "object",
+        properties: {
+          url: { type: "string", description: "The fully qualified URL to open (e.g. https://example.com)" }
+        },
+        required: ["url"]
+      }
+    },
+    {
+      name: "browser_snapshot",
+      description: "Takes a snapshot of the current page's accessibility tree, showing interactive elements with refs (e.g. @e1).",
+      input_schema: {
+        type: "object",
+        properties: {
+          interactive_only: {
+            type: "boolean",
+            description: "If true, only returns interactive elements. Default true."
+          }
         }
       }
-    }
-  },
-  {
-    name: "browser_click",
-    description: "Clicks an element on the active page via its reference ID. Returns the new snapshot after the click.",
-    input_schema: {
-      type: "object",
-      properties: {
-        ref: { type: "string", description: "The reference ID of the element (e.g. @e4)" }
-      },
-      required: ["ref"]
-    }
-  },
-  {
-    name: "browser_type",
-    description: "Types text into an input element.",
-    input_schema: {
-      type: "object",
-      properties: {
-        ref: { type: "string", description: "The reference ID of the input field (e.g. @e2)" },
-        text: { type: "string", description: "The text to type" },
-        pressEnter: { type: "boolean", description: "Press Enter after typing (default true)" }
-      },
-      required: ["ref", "text"]
-    }
-  },
-  {
-    name: "browser_scroll",
-    description: "Scrolls the page up or down.",
-    input_schema: {
-      type: "object",
-      properties: {
-        direction: { type: "string", enum: ["up", "down"], description: "Scroll direction" },
-        pixels: { type: "number", description: "Pixels to scroll (default 800)" }
-      },
-      required: ["direction"]
-    }
-  },
-  {
-    name: "browser_extract",
-    description: "Extracts raw text content from the page or a specific element.",
-    input_schema: {
-      type: "object",
-      properties: {
-        ref: { type: "string", description: "Optional element reference. Omit for full page text." }
+    },
+    {
+      name: "browser_click",
+      description: "Clicks an element on the active page via its reference ID. Returns the new snapshot after the click.",
+      input_schema: {
+        type: "object",
+        properties: {
+          ref: { type: "string", description: "The reference ID of the element (e.g. @e4)" }
+        },
+        required: ["ref"]
+      }
+    },
+    {
+      name: "browser_type",
+      description: "Types text into an input element.",
+      input_schema: {
+        type: "object",
+        properties: {
+          ref: { type: "string", description: "The reference ID of the input field (e.g. @e2)" },
+          text: { type: "string", description: "The text to type" },
+          pressEnter: { type: "boolean", description: "Press Enter after typing (default true)" }
+        },
+        required: ["ref", "text"]
+      }
+    },
+    {
+      name: "browser_scroll",
+      description: "Scrolls the page up or down.",
+      input_schema: {
+        type: "object",
+        properties: {
+          direction: { type: "string", enum: ["up", "down"], description: "Scroll direction" },
+          pixels: { type: "number", description: "Pixels to scroll (default 800)" }
+        },
+        required: ["direction"]
+      }
+    },
+    {
+      name: "browser_extract",
+      description: "Extracts raw text content from the page or a specific element.",
+      input_schema: {
+        type: "object",
+        properties: {
+          ref: { type: "string", description: "Optional element reference. Omit for full page text." }
+        }
+      }
+    },
+    {
+      name: "browser_screenshot",
+      description: "Captures a screenshot of the current page and returns it as a base64 data URL.",
+      input_schema: {
+        type: "object",
+        properties: {}
+      }
+    },
+    {
+      name: "browser_close",
+      description: "Force closes the browser session.",
+      input_schema: {
+        type: "object",
+        properties: {}
       }
     }
-  },
-  {
-    name: "browser_screenshot",
-    description: "Captures a screenshot of the current page and returns it as a base64 data URL.",
-    input_schema: {
-      type: "object",
-      properties: {}
-    }
-  },
-  {
-    name: "browser_close",
-    description: "Force closes the browser session.",
-    input_schema: {
-      type: "object",
-      properties: {}
-    }
-  }
-];
+  ];
 
 export async function executeBrowserTool(
   browserManager: BrowserManager,
   sessionKey: string,
   toolName: string,
   params: BrowserToolParams,
-  stepTimeoutMs?: number
+  stepTimeoutMs?: number,
+  signal?: AbortSignal
 ): Promise<string> {
   try {
     switch (toolName) {
       case "browser_open":
-        return await browserManager.open(sessionKey, (params as BrowserOpenParams).url, stepTimeoutMs);
+        return await browserManager.open(sessionKey, (params as BrowserOpenParams).url, stepTimeoutMs, signal);
       case "browser_snapshot":
         return await browserManager.snapshot(
           sessionKey,
           (params as BrowserSnapshotParams).interactive_only !== false,
-          stepTimeoutMs
+          stepTimeoutMs,
+          signal
         );
       case "browser_click":
-        return await browserManager.click(sessionKey, (params as BrowserClickParams).ref, stepTimeoutMs);
+        return await browserManager.click(sessionKey, (params as BrowserClickParams).ref, stepTimeoutMs, signal);
       case "browser_type": {
         const p = params as BrowserTypeParams;
-        return await browserManager.type(sessionKey, p.ref, p.text, p.pressEnter !== false, stepTimeoutMs);
+        return await browserManager.type(sessionKey, p.ref, p.text, p.pressEnter !== false, stepTimeoutMs, signal);
       }
       case "browser_scroll": {
         const p = params as BrowserScrollParams;
-        return await browserManager.scroll(sessionKey, p.direction, p.pixels, stepTimeoutMs);
+        return await browserManager.scroll(sessionKey, p.direction, p.pixels, stepTimeoutMs, signal);
       }
       case "browser_extract":
-        return await browserManager.extract(sessionKey, (params as BrowserExtractParams).ref, stepTimeoutMs);
+        return await browserManager.extract(sessionKey, (params as BrowserExtractParams).ref, stepTimeoutMs, signal);
       case "browser_screenshot":
-        return await browserManager.screenshot(sessionKey, stepTimeoutMs);
+        return await browserManager.screenshot(sessionKey, stepTimeoutMs, signal);
       case "browser_close":
         await browserManager.close(sessionKey);
         return "Browser closed successfully.";

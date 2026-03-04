@@ -7,7 +7,6 @@ import {
 } from "discord.js";
 import { clankCommand } from "./commands/clankCommand.ts";
 import { browseCommand } from "./commands/browseCommand.ts";
-import { runBrowseAgent } from "./agents/browseAgent.ts";
 import { musicCommands } from "./voice/musicCommands.ts";
 import {
   buildAutomationPrompt,
@@ -109,6 +108,13 @@ import {
 import { VoiceSessionManager } from "./voice/voiceSessionManager.ts";
 import type { BrowserManager } from "./services/BrowserManager.ts";
 import {
+  BrowserTaskRegistry,
+  buildBrowserTaskScopeKey,
+  isAbortError,
+  runBrowserBrowseTask
+} from "./tools/browserTaskRuntime.ts";
+import type { ActiveBrowserTask } from "./tools/browserTaskRuntime.ts";
+import {
   resolveOperationalChannel,
   sendToChannel
 } from "./voice/voiceOperationalMessaging.ts";
@@ -201,7 +207,7 @@ export class ClankerBot {
   client: any;
   voiceSessionManager: VoiceSessionManager;
   browserManager: BrowserManager | null;
-  activeBrowserTasks: Map<string, AbortController>;
+  activeBrowserTasks: BrowserTaskRegistry;
 
   constructor({ appConfig, store, llm, memory, discovery, search, gifs, video, browserManager = null }) {
     this.appConfig = appConfig;
@@ -237,7 +243,7 @@ export class ClankerBot {
     this.reflectionTimer = null;
     this.nextReflectionRunAt = null;
     this.screenShareSessionManager = null;
-    this.activeBrowserTasks = new Map();
+    this.activeBrowserTasks = new BrowserTaskRegistry();
 
     this.client = new Client({
       intents: [
@@ -361,8 +367,9 @@ export class ClankerBot {
         }
       } else if (commandName === "browse") {
         await interaction.deferReply();
-        const task = interaction.options.getString("task", true);
+        const browseInstruction = interaction.options.getString("task", true);
         const settings = this.store.getSettings();
+        let activeBrowserTask: ActiveBrowserTask | null = null;
 
         if (!this.browserManager) {
           await interaction.editReply("Browser agent is currently unavailable on this server.");
@@ -378,17 +385,18 @@ export class ClankerBot {
           const browserLlmModel = String(settings?.browser?.llm?.model || "claude-sonnet-4-5-20250929").trim();
           const maxSteps = Math.max(1, Math.min(30, Number(settings?.browser?.maxStepsPerTask) || 15));
           const stepTimeoutMs = Math.max(5000, Math.min(120000, Number(settings?.browser?.stepTimeoutMs) || 30000));
-          const taskKey = String(interaction.guildId || interaction.channelId || interaction.id);
+          const scopeKey = buildBrowserTaskScopeKey({
+            guildId: interaction.guildId,
+            channelId: interaction.channelId
+          });
+          activeBrowserTask = this.activeBrowserTasks.beginTask(scopeKey);
 
-          const abortController = new AbortController();
-          this.activeBrowserTasks.set(taskKey, abortController);
-
-          const result = await runBrowseAgent({
+          const result = await runBrowserBrowseTask({
             llm: this.llm,
             browserManager: this.browserManager,
             store: this.store,
-            sessionKey: interaction.guildId || interaction.channelId || interaction.id,
-            instruction: task,
+            sessionKey: `slash:${activeBrowserTask.taskId}`,
+            instruction: browseInstruction,
             provider: browserLlmProvider,
             model: browserLlmModel,
             maxSteps,
@@ -399,22 +407,8 @@ export class ClankerBot {
               userId: interaction.user.id,
               source: "slash_command_browse"
             },
-            signal: abortController.signal
-          });
-
-          this.store.logAction({
-            kind: "browser_browse_call",
-            guildId: interaction.guildId,
-            channelId: interaction.channelId,
-            userId: interaction.user.id,
-            content: task.slice(0, 200),
-            metadata: {
-              steps: result.steps,
-              hitStepLimit: result.hitStepLimit,
-              totalCostUsd: result.totalCostUsd,
-              source: "slash_command_browse"
-            },
-            usdCost: result.totalCostUsd
+            logSource: "slash_command_browse",
+            signal: activeBrowserTask.abortController.signal
           });
 
           let responseText = result.text;
@@ -430,14 +424,13 @@ export class ClankerBot {
         } catch (error) {
           console.error("[slashCommands] Error handling browse command:", error);
           const message = error instanceof Error ? error.message : String(error);
-          if (message.includes("AbortError")) {
+          if (isAbortError(error)) {
             await interaction.editReply("Browser session was cancelled.").catch(() => undefined);
           } else {
             await interaction.editReply(`An error occurred while browsing: ${message}`).catch(() => undefined);
           }
         } finally {
-          const taskKey = String(interaction.guildId || interaction.channelId || interaction.id);
-          this.activeBrowserTasks.delete(taskKey);
+          this.activeBrowserTasks.clear(activeBrowserTask);
         }
       }
     });
@@ -1010,11 +1003,12 @@ export class ClankerBot {
 
     const lowerText = text.toLowerCase().trim();
     if (lowerText === "stop" || lowerText === "cancel" || lowerText === "never mind" || lowerText === "nevermind") {
-      const taskKey = String(message.guildId || message.channelId || "dm");
-      const activeTask = this.activeBrowserTasks.get(taskKey);
-      if (activeTask) {
-        activeTask.abort("User requested cancellation via text");
-        this.activeBrowserTasks.delete(taskKey);
+      const scopeKey = buildBrowserTaskScopeKey({
+        guildId: message.guildId,
+        channelId: message.channelId
+      });
+      const cancelled = this.activeBrowserTasks.abort(scopeKey, "User requested cancellation via text");
+      if (cancelled) {
         await message.reply("Cancelled the active browser session.").catch(() => undefined);
         return;
       }
@@ -2812,16 +2806,18 @@ export class ClankerBot {
     const browserLlmProvider = String(settings?.browser?.llm?.provider || "anthropic").trim();
     const browserLlmModel = String(settings?.browser?.llm?.model || "claude-sonnet-4-5-20250929").trim();
 
-    const taskKey = String(guildId || channelId || "dm");
-    const abortController = new AbortController();
-    this.activeBrowserTasks.set(taskKey, abortController);
+    const scopeKey = buildBrowserTaskScopeKey({
+      guildId,
+      channelId
+    });
+    const activeBrowserTask = this.activeBrowserTasks.beginTask(scopeKey);
 
     try {
-      const result = await runBrowseAgent({
+      const result = await runBrowserBrowseTask({
         llm: this.llm,
         browserManager: this.browserManager,
         store: this.store,
-        sessionKey: `reply:${String(guildId || "dm")}:${Date.now()}`,
+        sessionKey: `reply:${activeBrowserTask.taskId}`,
         instruction: normalizedQuery,
         provider: browserLlmProvider,
         model: browserLlmModel,
@@ -2833,22 +2829,8 @@ export class ClankerBot {
           userId,
           source: `${source}_browser_browse`
         },
-        signal: abortController.signal
-      });
-
-      this.store.logAction({
-        kind: "browser_browse_call",
-        guildId,
-        channelId,
-        userId,
-        content: normalizedQuery.slice(0, 200),
-        metadata: {
-          steps: result.steps,
-          hitStepLimit: result.hitStepLimit,
-          totalCostUsd: result.totalCostUsd,
-          source
-        },
-        usdCost: result.totalCostUsd
+        logSource: source,
+        signal: activeBrowserTask.abortController.signal
       });
 
       return {
@@ -2859,7 +2841,7 @@ export class ClankerBot {
         hitStepLimit: result.hitStepLimit
       };
     } catch (error) {
-      if (error?.message?.includes("AbortError")) {
+      if (isAbortError(error)) {
         return {
           ...state,
           error: "Browser session cancelled by user."
@@ -2870,8 +2852,7 @@ export class ClankerBot {
         error: String(error?.message || error)
       };
     } finally {
-      const taskKey = String(guildId || channelId || "dm");
-      this.activeBrowserTasks.delete(taskKey);
+      this.activeBrowserTasks.clear(activeBrowserTask);
     }
   }
 

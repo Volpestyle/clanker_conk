@@ -10119,12 +10119,12 @@ export class VoiceSessionManager {
     if (!normalizedTranscript) {
       const adaptiveDirectives =
         Boolean(settings?.adaptiveDirectives?.enabled) &&
-        this.store && typeof this.store.searchAdaptiveStyleNotesForPrompt === "function"
+          this.store && typeof this.store.searchAdaptiveStyleNotesForPrompt === "function"
           ? this.store.searchAdaptiveStyleNotesForPrompt({
-              guildId: String(session?.guildId || "").trim(),
-              queryText: "",
-              limit: 8
-            })
+            guildId: String(session?.guildId || "").trim(),
+            queryText: "",
+            limit: 8
+          })
           : [];
       return {
         userFacts: [],
@@ -10137,7 +10137,7 @@ export class VoiceSessionManager {
     }
 
     if (session?.pendingMemoryIngest) {
-      try { await session.pendingMemoryIngest; } catch {}
+      try { await session.pendingMemoryIngest; } catch { }
       session.pendingMemoryIngest = null;
     }
 
@@ -10157,62 +10157,62 @@ export class VoiceSessionManager {
       loadPromptMemorySlice:
         this.memory && typeof this.memory === "object"
           ? (payload: ConversationContinuityPayload) =>
-              loadPromptMemorySliceFromMemory({
-                settings: payload.settings,
-                memory: this.memory,
-                userId: String(payload.userId || "").trim() || null,
-                guildId: String(payload.guildId || "").trim(),
-                channelId: String(payload.channelId || "").trim() || null,
-                queryText: String(payload.queryText || ""),
-                trace: payload.trace || {},
-                source: String(payload.source || "voice_realtime_instruction_context"),
-                onError: ({ error }) => {
-                  this.store.logAction({
-                    kind: "voice_error",
-                    guildId: session.guildId,
-                    channelId: session.textChannelId,
-                    userId: normalizedUserId,
-                    content: `voice_realtime_memory_slice_failed: ${String(error?.message || error)}`,
-                    metadata: {
-                      sessionId: session.id
-                    }
-                  });
-                }
-              })
+            loadPromptMemorySliceFromMemory({
+              settings: payload.settings,
+              memory: this.memory,
+              userId: String(payload.userId || "").trim() || null,
+              guildId: String(payload.guildId || "").trim(),
+              channelId: String(payload.channelId || "").trim() || null,
+              queryText: String(payload.queryText || ""),
+              trace: payload.trace || {},
+              source: String(payload.source || "voice_realtime_instruction_context"),
+              onError: ({ error }) => {
+                this.store.logAction({
+                  kind: "voice_error",
+                  guildId: session.guildId,
+                  channelId: session.textChannelId,
+                  userId: normalizedUserId,
+                  content: `voice_realtime_memory_slice_failed: ${String(error?.message || error)}`,
+                  metadata: {
+                    sessionId: session.id
+                  }
+                });
+              }
+            })
           : null,
       loadRecentLookupContext:
         this.store && typeof this.store.searchLookupContext === "function"
           ? (payload) =>
-              this.store.searchLookupContext({
-                guildId: String(payload.guildId || "").trim(),
-                channelId: String(payload.channelId || "").trim() || null,
-                queryText: String(payload.queryText || ""),
-                limit: Number(payload.limit) || undefined,
-                maxAgeHours: Number(payload.maxAgeHours) || undefined
-              })
+            this.store.searchLookupContext({
+              guildId: String(payload.guildId || "").trim(),
+              channelId: String(payload.channelId || "").trim() || null,
+              queryText: String(payload.queryText || ""),
+              limit: Number(payload.limit) || undefined,
+              maxAgeHours: Number(payload.maxAgeHours) || undefined
+            })
           : null,
       loadRecentConversationHistory:
         this.store && typeof this.store.searchConversationWindows === "function"
           ? (payload) =>
-              this.store.searchConversationWindows({
-                guildId: String(payload.guildId || "").trim(),
-                channelId: String(payload.channelId || "").trim() || null,
-                queryText: String(payload.queryText || ""),
-                limit: Number(payload.limit) || undefined,
-                maxAgeHours: Number(payload.maxAgeHours) || undefined,
-                before: 1,
-                after: 1
-              })
+            this.store.searchConversationWindows({
+              guildId: String(payload.guildId || "").trim(),
+              channelId: String(payload.channelId || "").trim() || null,
+              queryText: String(payload.queryText || ""),
+              limit: Number(payload.limit) || undefined,
+              maxAgeHours: Number(payload.maxAgeHours) || undefined,
+              before: 1,
+              after: 1
+            })
           : null,
       loadAdaptiveDirectives:
         Boolean(settings?.adaptiveDirectives?.enabled) &&
-        this.store && typeof this.store.searchAdaptiveStyleNotesForPrompt === "function"
+          this.store && typeof this.store.searchAdaptiveStyleNotesForPrompt === "function"
           ? (payload) =>
-              this.store.searchAdaptiveStyleNotesForPrompt({
-                guildId: String(payload.guildId || "").trim(),
-                queryText: String(payload.queryText || ""),
-                limit: 8
-              })
+            this.store.searchAdaptiveStyleNotesForPrompt({
+              guildId: String(payload.guildId || "").trim(),
+              queryText: String(payload.queryText || ""),
+              limit: 8
+            })
           : null
     });
   }
@@ -12534,6 +12534,18 @@ export class VoiceSessionManager {
   clearPendingResponse(session) {
     if (!session) return;
     this.clearResponseSilenceTimers(session);
+
+    if (session.openAiPendingToolAbortControllers) {
+      for (const controller of session.openAiPendingToolAbortControllers.values()) {
+        try {
+          controller.abort("Pending response cleared");
+        } catch {
+          // ignore
+        }
+      }
+      session.openAiPendingToolAbortControllers.clear();
+    }
+
     session.pendingResponse = null;
     this.maybeClearActiveReplyInterruptionPolicy(session);
     this.recheckDeferredVoiceActions({
@@ -13401,6 +13413,7 @@ export class VoiceSessionManager {
     settings;
     toolName;
     args;
+    signal?: AbortSignal;
   }) {
     return executeLocalVoiceToolCall(this, opts);
   }

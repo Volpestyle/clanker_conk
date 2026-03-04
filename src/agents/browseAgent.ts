@@ -1,6 +1,7 @@
 import type { LLMService, ToolLoopContentBlock, ToolLoopMessage } from "../llm.ts";
 import type { BrowserManager } from "../services/BrowserManager.ts";
 import { BROWSER_AGENT_TOOL_DEFINITIONS, executeBrowserTool } from "../tools/browserTools.ts";
+import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
 
 const BROWSE_AGENT_SYSTEM_PROMPT = `You are a web browsing agent.
 Your goal is to complete the user's instruction by navigating the web, interacting with pages, and extracting the final answer or result.
@@ -22,15 +23,17 @@ interface BrowseAgentTrace {
 interface BrowseAgentOptions {
   llm: LLMService;
   browserManager: BrowserManager;
-  store: { logAction: (entry: {
-    kind: string;
-    guildId?: string | null;
-    channelId?: string | null;
-    userId?: string | null;
-    content?: string;
-    metadata?: Record<string, unknown>;
-    usdCost?: number;
-  }) => void };
+  store: {
+    logAction: (entry: {
+      kind: string;
+      guildId?: string | null;
+      channelId?: string | null;
+      userId?: string | null;
+      content?: string;
+      metadata?: Record<string, unknown>;
+      usdCost?: number;
+    }) => void
+  };
   sessionKey: string;
   instruction: string;
   provider: string;
@@ -38,6 +41,7 @@ interface BrowseAgentOptions {
   maxSteps: number;
   stepTimeoutMs: number;
   trace: BrowseAgentTrace;
+  signal?: AbortSignal;
 }
 
 interface BrowseAgentResult {
@@ -58,7 +62,8 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
     model,
     maxSteps,
     stepTimeoutMs,
-    trace
+    trace,
+    signal
   } = options;
 
   const messages: ToolLoopMessage[] = [
@@ -72,6 +77,7 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
 
   try {
     while (step < maxSteps) {
+      throwIfAborted(signal, "Browse agent run cancelled");
       step++;
 
       const response = await llm.chatWithTools({
@@ -82,7 +88,8 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
         tools: BROWSER_AGENT_TOOL_DEFINITIONS,
         maxOutputTokens: 4096,
         temperature: 0.7,
-        trace
+        trace,
+        signal
       });
 
       totalCostUsd += response.costUsd;
@@ -121,7 +128,8 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
           sessionKey,
           toolCall.name,
           toolCall.input as Record<string, unknown>,
-          stepTimeoutMs
+          stepTimeoutMs,
+          signal
         );
 
         toolResults.push({

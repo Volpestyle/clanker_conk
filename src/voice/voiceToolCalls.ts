@@ -1,5 +1,4 @@
 // Extracted Tool Call Methods
-import { runBrowseAgent } from "../agents/browseAgent.ts";
 import {
   executeSharedAdaptiveDirectiveAdd,
   executeSharedAdaptiveDirectiveRemove
@@ -24,6 +23,7 @@ import {
   MEMORY_SENSITIVE_PATTERN_RE,
 } from "./voiceSessionManager.constants.ts";
 import { providerSupports } from "./voiceModes.ts";
+import { isAbortError, runBrowserBrowseTask } from "../tools/browserTaskRuntime.ts";
 
 export function ensureSessionToolRuntimeState(manager: any, session) {
   if (!session || typeof session !== "object") return null;
@@ -528,6 +528,12 @@ export async function executeOpenAiRealtimeFunctionCall(manager: any, {
   const toolDescriptor = manager.resolveOpenAiRealtimeToolDescriptor(session, toolName);
   const toolType = toolDescriptor?.toolType === "mcp" ? "mcp" : "function";
 
+  const abortController = new AbortController();
+  if (!session.openAiPendingToolAbortControllers) {
+    session.openAiPendingToolAbortControllers = new Map();
+  }
+  session.openAiPendingToolAbortControllers.set(callId, abortController);
+
   manager.store.logAction({
     kind: "voice_runtime",
     guildId: session.guildId,
@@ -563,7 +569,8 @@ export async function executeOpenAiRealtimeFunctionCall(manager: any, {
         session,
         settings: resolvedSettings,
         toolName: toolDescriptor.name,
-        args: callArgs
+        args: callArgs,
+        signal: abortController.signal
       });
     }
     success = true;
@@ -576,6 +583,8 @@ export async function executeOpenAiRealtimeFunctionCall(manager: any, {
         message: errorMessage
       }
     };
+  } finally {
+    session.openAiPendingToolAbortControllers?.delete(callId);
   }
 
   const runtimeMs = Math.max(0, Date.now() - startedAtMs);
@@ -1317,7 +1326,7 @@ export async function executeVoiceWebSearchTool(manager: any, { session, setting
   };
 }
 
-export async function executeVoiceBrowserBrowseTool(manager: any, { session, settings, args }) {
+export async function executeVoiceBrowserBrowseTool(manager: any, { session, settings, args, signal }: { session: any, settings: any, args: any, signal?: AbortSignal }) {
   const instruction = normalizeInlineText(args?.query, 500);
   if (!instruction) {
     return { ok: false, text: "", error: "query_required" };
@@ -1335,11 +1344,11 @@ export async function executeVoiceBrowserBrowseTool(manager: any, { session, set
   const browserLlmModel = String(settings?.browser?.llm?.model || "claude-sonnet-4-5-20250929").trim();
 
   try {
-    const result = await runBrowseAgent({
+    const result = await runBrowserBrowseTask({
       llm: manager.llm,
       browserManager: manager.browserManager,
       store: manager.store,
-      sessionKey: session.guildId,
+      sessionKey: `voice:${String(session.id || session.guildId || "unknown")}:${Date.now()}`,
       instruction,
       provider: browserLlmProvider,
       model: browserLlmModel,
@@ -1350,22 +1359,9 @@ export async function executeVoiceBrowserBrowseTool(manager: any, { session, set
         channelId: session.textChannelId,
         userId: session.lastOpenAiToolCallerUserId || null,
         source: "voice_realtime_tool_browser_browse"
-      }
-    });
-
-    manager.store.logAction({
-      kind: "browser_browse_call",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: session.lastOpenAiToolCallerUserId || null,
-      content: instruction.slice(0, 200),
-      metadata: {
-        steps: result.steps,
-        hitStepLimit: result.hitStepLimit,
-        totalCostUsd: result.totalCostUsd,
-        source: "voice_realtime_tool_browser_browse"
       },
-      usdCost: result.totalCostUsd
+      logSource: "voice_realtime_tool_browser_browse",
+      signal
     });
 
     return {
@@ -1375,7 +1371,11 @@ export async function executeVoiceBrowserBrowseTool(manager: any, { session, set
       hit_step_limit: result.hitStepLimit
     };
   } catch (error: unknown) {
-    const message = error instanceof Error ? error.message : String(error);
+    const message = isAbortError(error)
+      ? "Browser session cancelled."
+      : error instanceof Error
+        ? error.message
+        : String(error);
     return { ok: false, text: "", error: message };
   }
 }
@@ -1384,8 +1384,9 @@ export async function executeLocalVoiceToolCall(manager: any, {
   session,
   settings,
   toolName,
-  args
-}) {
+  args,
+  signal
+}: { session: any, settings: any, toolName: any, args: any, signal?: AbortSignal }) {
   const normalizedToolName = normalizeInlineText(toolName, 120);
   if (!normalizedToolName) {
     throw new Error("missing_tool_name");
@@ -1611,7 +1612,8 @@ export async function executeLocalVoiceToolCall(manager: any, {
     return await executeVoiceBrowserBrowseTool(manager, {
       session,
       settings,
-      args
+      args,
+      signal
     });
   }
   throw new Error(`unsupported_tool:${normalizedToolName}`);
