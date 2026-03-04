@@ -118,7 +118,7 @@ const MEMORY_SEARCH_TOOL: ReplyToolDefinition = {
 const MEMORY_WRITE_TOOL: ReplyToolDefinition = {
   name: "memory_write",
   description:
-    "Store one or more durable facts to long-term memory. Use for lasting personal facts about the user (scope=user), shared lore (scope=lore), or stable self-facts about you (scope=self). Only store genuinely durable facts, not throwaway chatter.",
+    "Store one or more durable facts to long-term memory. Use for lasting personal facts about the user (scope=user), shared lore (scope=lore), or stable self-facts about you (scope=self). Only store genuinely durable facts, not throwaway chatter, requests, insults, or future-behavior rules.",
   input_schema: {
     type: "object",
     properties: {

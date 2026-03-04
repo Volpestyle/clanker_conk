@@ -987,5 +987,6 @@ export class MemoryManager {
 export const __memoryTestables = {
   computeChannelScopeScore,
   passesHybridRelevanceGate,
+  isInstructionLikeFactText,
   isTextGroundedInSource
 };

@@ -369,6 +369,8 @@ export function buildVoiceTurnPrompt({
     parts.push("Optional memory tool calls:");
     parts.push("- Set memoryLine to a durable fact from the speaker turn when genuinely stable and useful.");
     parts.push("- Set selfMemoryLine to a durable fact about your own stable identity/preference/commitment in your reply when genuinely stable and useful.");
+    parts.push("- Do not save requests, insults, jokes, toxic phrasing, or rules about how you should talk/behave later.");
+    parts.push("- Use your own judgment: if it is not a genuine durable memory, leave memoryLine and selfMemoryLine null.");
     parts.push("If not needed, set memoryLine and selfMemoryLine to null.");
   } else {
     parts.push("Memory tool calls are unavailable this turn. Set memoryLine and selfMemoryLine to null.");
@@ -543,4 +545,3 @@ export function buildVoiceTurnPrompt({
 
   return parts.join("\n\n");
 }
-

@@ -14,6 +14,25 @@ const FACT_TYPE_LABELS = {
 };
 
 const ALLOWED_FACT_TYPES = new Set(["preference", "profile", "relationship", "project", "other", "general"]);
+// English-only fallback heuristics for filtering obvious instruction-like memory writes.
+// These are guardrails, not the primary memory decision-maker.
+const EN_MEMORY_BEHAVIOR_VERB_RE =
+  /\b(?:call|say|reply|respond|greet|address|refer to|talk to|treat|insult|mock|roast|flame|trash|dog|clown on)\b/i;
+const EN_MEMORY_FUTURE_BEHAVIOR_RE =
+  /\b(?:every time|each time|whenever|any time|from now on|going forward|next time)\b/i;
+const EN_MEMORY_MODAL_DIRECTIVE_RE =
+  /\b(?:you|i|we)\s+(?:should|must|need to|have to|gotta|will)\s+(?:always\s+)?(?:call|say|reply|respond|greet|address|refer to|talk to|treat|insult|mock|roast|flame|trash|dog|clown on)\b/i;
+const EN_MEMORY_IMPERATIVE_DIRECTIVE_RE =
+  /\b(?:make sure|be sure|start|keep)\s+(?:you\s+)?(?:call|saying|say|reply|respond|greet|address|referring to|refer to|talk to|treat|insult|mock|roast|flame|trash|dog|clown on)\b/i;
+const EN_MEMORY_BEHAVIOR_RULE_RE =
+  /\b(?:always|never)\s+(?:call|say|reply|respond|greet|address|refer to|talk to|treat|insult|mock|roast|flame|trash|dog|clown on)\b/i;
+const EN_MEMORY_ABUSIVE_LABEL_RE = /\b(?:bitch|bih|idiot|moron|stupid|dumbass|loser|clown|bozo)\b/i;
+const EN_MEMORY_PREFIX_NOISE_RE =
+  /^(?:remember(?: this| that| this one)?|important|note this|log this|save this|dont forget|don't forget|keep in mind|worth remembering|fyi)\b[\s:,-]*/i;
+const EN_MEMORY_LINE_LABEL_RE = /^(?:memory line|remember line)\s*:\s*/i;
+const EN_MEMORY_LEADING_THAT_RE = /^that\s+/i;
+const EN_MEMORY_OUTPUT_RULE_RE = /(?:always|never)\s+(?:reply|respond|say|output)/;
+const EN_MEMORY_SECRET_RE = /(?:api key|token|password|credential|secret)/;
 
 export function normalizeStoredFactText(rawFact) {
   const compact = String(rawFact || "")
@@ -262,9 +281,9 @@ export function normalizeMemoryLineInput(input) {
   if (!text) return "";
 
   text = text
-    .replace(/^(?:remember(?: this)?|important|note this|dont forget|don't forget|keep in mind|fyi)\b[\s:,-]*/i, "")
-    .replace(/^(?:memory line|remember line)\s*:\s*/i, "")
-    .replace(/^that\s+/i, "")
+    .replace(EN_MEMORY_PREFIX_NOISE_RE, "")
+    .replace(EN_MEMORY_LINE_LABEL_RE, "")
+    .replace(EN_MEMORY_LEADING_THAT_RE, "")
     .replace(/[.!?]+$/g, "")
     .trim();
 
@@ -278,8 +297,13 @@ export function isInstructionLikeFactText(line) {
   if (/\[\[[\s\S]*\]\]/.test(text)) return true;
   if (/(?:system|developer|prompt|instruction|policy|jailbreak|override)/.test(text)) return true;
   if (/(?:ignore|disregard|bypass)\s+(?:previous|prior|earlier)/.test(text)) return true;
-  if (/(?:always|never)\s+(?:reply|respond|say|output)/.test(text)) return true;
-  if (/(?:api key|token|password|credential|secret)/.test(text)) return true;
+  if (EN_MEMORY_OUTPUT_RULE_RE.test(text)) return true;
+  if (EN_MEMORY_SECRET_RE.test(text)) return true;
+  if (EN_MEMORY_MODAL_DIRECTIVE_RE.test(text)) return true;
+  if (EN_MEMORY_IMPERATIVE_DIRECTIVE_RE.test(text)) return true;
+  if (EN_MEMORY_BEHAVIOR_RULE_RE.test(text)) return true;
+  if (EN_MEMORY_BEHAVIOR_VERB_RE.test(text) && EN_MEMORY_FUTURE_BEHAVIOR_RE.test(text)) return true;
+  if (EN_MEMORY_ABUSIVE_LABEL_RE.test(text) && EN_MEMORY_BEHAVIOR_VERB_RE.test(text)) return true;
   return false;
 }
 

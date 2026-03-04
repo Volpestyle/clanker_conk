@@ -1,5 +1,6 @@
 // Extracted Tool Call Methods
 import { runBrowseAgent } from "../agents/browseAgent.ts";
+import { isInstructionLikeFactText } from "../memory/memoryHelpers.ts";
 import { clamp } from "../utils.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
 import type {
@@ -24,6 +25,9 @@ export function ensureSessionToolRuntimeState(manager: any, session) {
   }
   if (!(session.openAiPendingToolCalls instanceof Map)) {
     session.openAiPendingToolCalls = new Map();
+  }
+  if (!(session.openAiCompletedToolCallIds instanceof Map)) {
+    session.openAiCompletedToolCallIds = new Map();
   }
   if (!(session.openAiToolCallExecutions instanceof Map)) {
     session.openAiToolCallExecutions = new Map();
@@ -130,7 +134,7 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
     {
       toolType: "function",
       name: "memory_write",
-      description: "Store durable memory facts with dedupe and safety limits.",
+      description: "Store durable memory facts with dedupe and safety limits. Save only genuine long-lived facts, never insults, requests, or future-behavior rules.",
       parameters: {
         type: "object",
         properties: {
@@ -209,13 +213,41 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
     },
     {
       toolType: "function",
-      name: "music_play",
-      description: "Start playing queue track by index, or resume current playback.",
+      name: "music_play_now",
+      description: "Start playing a specific track immediately.",
       parameters: {
         type: "object",
         properties: {
-          index: { type: "integer", minimum: 0 }
+          track_id: { type: "string" }
         },
+        required: ["track_id"],
+        additionalProperties: false
+      }
+    },
+    {
+      toolType: "function",
+      name: "music_queue_next",
+      description: "Insert one or more track IDs immediately after the current track.",
+      parameters: {
+        type: "object",
+        properties: {
+          tracks: {
+            type: "array",
+            items: { type: "string" },
+            minItems: 1,
+            maxItems: 12
+          }
+        },
+        required: ["tracks"],
+        additionalProperties: false
+      }
+    },
+    {
+      toolType: "function",
+      name: "music_stop",
+      description: "Stop playback and clear the active queue.",
+      parameters: {
+        type: "object",
         additionalProperties: false
       }
     },
@@ -537,6 +569,15 @@ export async function executeOpenAiRealtimeFunctionCall(manager: any, {
   if (session.openAiPendingToolCalls instanceof Map) {
     session.openAiPendingToolCalls.delete(callId);
   }
+  if (session.openAiCompletedToolCallIds instanceof Map) {
+    session.openAiCompletedToolCallIds.set(callId, Date.now());
+    const completedRows = [...session.openAiCompletedToolCallIds.entries()]
+      .sort((a, b) => a[1] - b[1])
+      .slice(-256);
+    session.openAiCompletedToolCallIds = new Map(
+      completedRows.filter(([, completedAtMs]) => Date.now() - completedAtMs <= 10 * 60 * 1000)
+    );
+  }
   if (session.openAiToolCallExecutions instanceof Map) {
     session.openAiToolCallExecutions.delete(callId);
   }
@@ -807,6 +848,13 @@ export async function executeVoiceMemoryWriteTool(manager: any, {
       });
       continue;
     }
+    if (isInstructionLikeFactText(item.text)) {
+      skipped.push({
+        text: item.text,
+        reason: "instruction_like"
+      });
+      continue;
+    }
 
     const potentialDuplicates = typeof manager.memory.searchDurableFacts === "function"
       ? await manager.memory.searchDurableFacts({
@@ -1043,6 +1091,149 @@ export async function executeVoiceMusicQueueAddTool(manager: any, { session, set
   };
 }
 
+export async function executeVoiceMusicQueueNextTool(manager: any, { session, settings, args }) {
+  const queueState = manager.ensureToolMusicQueueState(session);
+  const runtimeSession = manager.ensureSessionToolRuntimeState(session);
+  if (!queueState || !runtimeSession) {
+    return {
+      ok: false,
+      queue_length: 0,
+      added: [],
+      error: "queue_unavailable"
+    };
+  }
+  const requestedTrackIds = Array.isArray(args?.tracks)
+    ? args.tracks.map((entry) => normalizeInlineText(entry, 180)).filter(Boolean).slice(0, 12)
+    : [];
+  if (!requestedTrackIds.length) {
+    return {
+      ok: false,
+      queue_length: queueState.tracks.length,
+      added: [],
+      error: "tracks_required"
+    };
+  }
+  const catalog = runtimeSession.toolMusicTrackCatalog instanceof Map ? runtimeSession.toolMusicTrackCatalog : new Map();
+  const resolvedTracks = requestedTrackIds
+    .map((trackId) => {
+      const fromCatalog = catalog.get(trackId);
+      if (!fromCatalog) return null;
+      return {
+        id: fromCatalog.id,
+        title: fromCatalog.title,
+        artist: fromCatalog.artist,
+        durationMs: Number.isFinite(Number(fromCatalog.durationSeconds))
+          ? Math.max(0, Math.round(Number(fromCatalog.durationSeconds) * 1000))
+          : null,
+        source: fromCatalog.platform === "soundcloud" ? "sc" : "yt",
+        streamUrl: fromCatalog.externalUrl || null,
+        platform: fromCatalog.platform,
+        externalUrl: fromCatalog.externalUrl
+      };
+    })
+    .filter(Boolean);
+  if (!resolvedTracks.length) {
+    return {
+      ok: false,
+      queue_length: queueState.tracks.length,
+      added: [],
+      error: "unknown_track_ids"
+    };
+  }
+
+  const insertAt = queueState.nowPlayingIndex == null
+    ? queueState.tracks.length
+    : clamp(queueState.nowPlayingIndex + 1, 0, queueState.tracks.length);
+  queueState.tracks.splice(insertAt, 0, ...resolvedTracks);
+  if (queueState.nowPlayingIndex == null && queueState.tracks.length > 0) {
+    queueState.nowPlayingIndex = 0;
+  }
+
+  const shouldAutoPlay = !manager.isMusicPlaybackActive(session) && !queueState.isPaused;
+  if (shouldAutoPlay && settings) {
+    const playIndex = queueState.nowPlayingIndex ?? 0;
+    await manager.playVoiceQueueTrackByIndex({ session, settings, index: playIndex });
+  }
+
+  return {
+    ok: true,
+    queue_length: queueState.tracks.length,
+    added: resolvedTracks.map((entry) => entry.id),
+    inserted_after_index: queueState.nowPlayingIndex,
+    auto_playing: shouldAutoPlay,
+    queue_state: manager.buildVoiceQueueStatePayload(session)
+  };
+}
+
+export async function executeVoiceMusicPlayNowTool(manager: any, { session, settings, args }) {
+  const queueState = manager.ensureToolMusicQueueState(session);
+  const runtimeSession = manager.ensureSessionToolRuntimeState(session);
+  const trackId = normalizeInlineText(args?.track_id, 180);
+  if (!queueState || !runtimeSession) {
+    return {
+      ok: false,
+      error: "queue_unavailable"
+    };
+  }
+  if (!trackId) {
+    return {
+      ok: false,
+      error: "track_id_required"
+    };
+  }
+  const catalog = runtimeSession.toolMusicTrackCatalog instanceof Map ? runtimeSession.toolMusicTrackCatalog : new Map();
+  const selectedTrack = catalog.get(trackId);
+  if (!selectedTrack) {
+    return {
+      ok: false,
+      error: "unknown_track_id"
+    };
+  }
+
+  const replacementTrack = {
+    id: selectedTrack.id,
+    title: selectedTrack.title,
+    artist: selectedTrack.artist,
+    durationMs: Number.isFinite(Number(selectedTrack.durationSeconds))
+      ? Math.max(0, Math.round(Number(selectedTrack.durationSeconds) * 1000))
+      : null,
+    source: selectedTrack.platform === "soundcloud" ? "sc" : "yt",
+    streamUrl: selectedTrack.externalUrl || null,
+    platform: selectedTrack.platform,
+    externalUrl: selectedTrack.externalUrl
+  };
+  const trailingTracks = queueState.nowPlayingIndex == null
+    ? []
+    : queueState.tracks.slice(Math.max(0, queueState.nowPlayingIndex + 1));
+  queueState.tracks = [replacementTrack, ...trailingTracks];
+  queueState.nowPlayingIndex = 0;
+  queueState.isPaused = false;
+
+  await manager.requestPlayMusic({
+    guildId: session.guildId,
+    channelId: session.textChannelId,
+    requestedByUserId: session.lastOpenAiToolCallerUserId || null,
+    settings,
+    query: normalizeInlineText(`${selectedTrack.title} ${selectedTrack.artist || ""}`, 120),
+    trackId: selectedTrack.id,
+    searchResults: [selectedTrack],
+    reason: "voice_tool_music_play_now",
+    source: "voice_tool_call",
+    mustNotify: false
+  });
+
+  return {
+    ok: true,
+    now_playing: {
+      id: replacementTrack.id,
+      title: replacementTrack.title,
+      artist: replacementTrack.artist,
+      source: replacementTrack.source
+    },
+    queue_state: manager.buildVoiceQueueStatePayload(session)
+  };
+}
+
 export async function executeVoiceWebSearchTool(manager: any, { session, settings, args }) {
   const query = normalizeInlineText(args?.query, 240);
   if (!query) {
@@ -1203,12 +1394,35 @@ export async function executeLocalVoiceToolCall(manager: any, {
       args
     });
   }
-  if (normalizedToolName === "music_play") {
-    return await manager.playVoiceQueueTrackByIndex({
+  if (normalizedToolName === "music_queue_next") {
+    return await manager.executeVoiceMusicQueueNextTool({
       session,
       settings,
-      index: Number(args?.index)
+      args
     });
+  }
+  if (normalizedToolName === "music_play_now") {
+    return await manager.executeVoiceMusicPlayNowTool({
+      session,
+      settings,
+      args
+    });
+  }
+  if (normalizedToolName === "music_stop") {
+    await manager.requestStopMusic({
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      requestedByUserId: session.lastOpenAiToolCallerUserId || null,
+      settings,
+      reason: "voice_tool_music_stop",
+      source: "voice_tool_call",
+      clearQueue: true,
+      mustNotify: false
+    });
+    return {
+      ok: true,
+      queue_state: manager.buildVoiceQueueStatePayload(session)
+    };
   }
   if (normalizedToolName === "music_pause") {
     await manager.requestPauseMusic({
