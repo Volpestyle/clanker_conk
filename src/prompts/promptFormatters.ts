@@ -58,6 +58,38 @@ export function formatRecentChat(messages) {
     .join("\n");
 }
 
+function formatConversationWindowAge(ageMinutes) {
+  const normalizedAge = Number(ageMinutes);
+  if (!Number.isFinite(normalizedAge)) return "recent";
+  if (normalizedAge < 60) return `${Math.max(0, Math.round(normalizedAge))}m ago`;
+  if (normalizedAge < 24 * 60) return `${Math.max(1, Math.round(normalizedAge / 60))}h ago`;
+  return `${Math.max(1, Math.round(normalizedAge / (24 * 60)))}d ago`;
+}
+
+export function formatConversationWindows(windows) {
+  const rows = Array.isArray(windows) ? windows : [];
+  if (!rows.length) return "(no matching conversation history)";
+
+  return rows
+    .slice(0, 4)
+    .map((window, index) => {
+      const ageLabel = formatConversationWindowAge(window?.ageMinutes);
+      const lines = (Array.isArray(window?.messages) ? window.messages : [])
+        .slice(0, 5)
+        .map((message) => {
+          const authorName = String(message?.author_name || message?.authorName || "unknown").trim() || "unknown";
+          const rawText = String(message?.content || "").trim();
+          const normalizedText =
+            message?.is_bot === 1 || message?.is_bot === true ? stripEmojiForPrompt(rawText) : rawText;
+          const text = normalizedText.replace(/\s+/g, " ").trim() || "(empty)";
+          return `  - ${authorName}: ${text}`;
+        })
+        .join("\n");
+      return `- [C${index + 1}] ${ageLabel}\n${lines}`;
+    })
+    .join("\n");
+}
+
 export function formatEmojiChoices(emojiOptions) {
   if (!emojiOptions?.length) return "(no emoji options available)";
   return emojiOptions.map((emoji) => `- ${emoji}`).join("\n");

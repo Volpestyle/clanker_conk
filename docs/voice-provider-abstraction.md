@@ -72,6 +72,7 @@ In `src/voice/voiceSessionManager.ts`:
 - `appendAudioToOpenAiAsr(...)` streams audio.
 - `commitOpenAiAsrUtterance(...)` commits utterance, waits for transcript settle window, and returns transcript metadata.
 - The finalized transcript is forwarded into turn processing through `queueRealtimeTurn(..., transcriptOverride: ...)`.
+- User transcripts that survive low-signal filtering are also persisted into shared message history, so later text or voice turns can recall them through conversation-history search.
 
 ASR session client details are in `src/voice/openaiRealtimeTranscriptionClient.ts`:
 - uses OpenAI realtime transcription websocket
@@ -87,6 +88,8 @@ ASR session client details are in `src/voice/openaiRealtimeTranscriptionClient.t
   - `native` strategy => `forwardRealtimeTurnAudio(...)`
   - `brain` strategy + transcript bridge active => `forwardRealtimeTextTurnToBrain(...)`
   - `brain` strategy without transcript bridge => `runRealtimeBrainReply(...)`
+
+Assistant spoken replies are also persisted into shared message history, so text and voice share one searchable conversation record instead of two disconnected timelines.
 
 ### 4) Brain session input format and instruction refresh
 
@@ -120,6 +123,7 @@ Runtime loop in `src/voice/voiceSessionManager.ts`:
 ### 6) Local tool surface: memory + music + web
 
 `resolveVoiceRealtimeToolDescriptors(...)` (in `src/voice/voiceToolCalls.ts`) defines local function tools:
+- `conversation_search`
 - `memory_search`
 - `memory_write`
 - `music_search`
@@ -132,6 +136,12 @@ Runtime loop in `src/voice/voiceSessionManager.ts`:
 - `music_skip`
 - `music_now_playing`
 - `web_search` (when enabled)
+
+`conversation_search` is intentionally separate from `memory_search`:
+- `conversation_search` recalls prior exchanges from persisted text/voice history.
+- `memory_search` recalls durable long-lived facts extracted from that history.
+
+This keeps the realtime prompt compact while still allowing explicit recall of earlier conversation when the speaker asks about something from minutes, hours, or days ago.
 
 ### 7) Vector memory write behavior (no approvals)
 

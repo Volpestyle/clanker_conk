@@ -56,6 +56,10 @@ import {
   resolveDeterministicMentions as resolveDeterministicMentionsForMentions
 } from "./bot/mentions.ts";
 import {
+  CONVERSATION_HISTORY_PROMPT_LIMIT,
+  CONVERSATION_HISTORY_PROMPT_MAX_AGE_HOURS,
+  CONVERSATION_HISTORY_PROMPT_WINDOW_AFTER,
+  CONVERSATION_HISTORY_PROMPT_WINDOW_BEFORE,
   LOOKUP_CONTEXT_PROMPT_LIMIT,
   LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS,
   MAX_MODEL_IMAGE_INPUTS,
@@ -1048,6 +1052,7 @@ export class ClankerBot {
       loadPromptMemorySlice: (payload) => this.loadPromptMemorySlice(payload),
       buildWebSearchContext: (runtimeSettings, messageText) =>
         this.buildWebSearchContext(runtimeSettings, messageText),
+      loadRecentConversationHistory: (payload) => this.getConversationHistoryForPrompt(payload),
       loadRecentLookupContext: (payload) => this.getRecentLookupContextForPrompt(payload),
       rememberRecentLookupContext: (payload) => this.rememberRecentLookupContext(payload),
       getVoiceScreenShareCapability: (payload) => this.getVoiceScreenShareCapability(payload),
@@ -1099,6 +1104,7 @@ export class ClankerBot {
       loadPromptMemorySlice: (payload) => this.loadPromptMemorySlice(payload),
       buildWebSearchContext: (runtimeSettings, messageText) =>
         this.buildWebSearchContext(runtimeSettings, messageText),
+      loadRecentConversationHistory: (payload) => this.getConversationHistoryForPrompt(payload),
       loadRecentLookupContext: (payload) => this.getRecentLookupContextForPrompt(payload),
       rememberRecentLookupContext: (payload) => this.rememberRecentLookupContext(payload),
       getVoiceScreenShareCapability: (payload) => this.getVoiceScreenShareCapability(payload),
@@ -2358,6 +2364,57 @@ export class ClankerBot {
         channelId: normalizedChannelId,
         userId: this.client.user?.id || null,
         content: `lookup_context_search: ${String(error?.message || error)}`
+      });
+      return [];
+    }
+  }
+
+  /**
+   * @param {{
+   *   guildId?: string | null;
+   *   channelId?: string | null;
+   *   queryText?: string;
+   *   limit?: number;
+   *   maxAgeHours?: number;
+   *   before?: number;
+   *   after?: number;
+   * }} options
+   */
+  getConversationHistoryForPrompt({
+    guildId = null,
+    channelId = null,
+    queryText = "",
+    limit = CONVERSATION_HISTORY_PROMPT_LIMIT,
+    maxAgeHours = CONVERSATION_HISTORY_PROMPT_MAX_AGE_HOURS,
+    before = CONVERSATION_HISTORY_PROMPT_WINDOW_BEFORE,
+    after = CONVERSATION_HISTORY_PROMPT_WINDOW_AFTER
+  } = {}) {
+    if (!this.store || typeof this.store.searchConversationWindows !== "function") return [];
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) return [];
+    const normalizedChannelId = String(channelId || "").trim() || null;
+    const normalizedQuery = String(queryText || "")
+      .replace(/\s+/g, " ")
+      .trim()
+      .slice(0, 320);
+    if (!normalizedQuery) return [];
+    try {
+      return this.store.searchConversationWindows({
+        guildId: normalizedGuildId,
+        channelId: normalizedChannelId,
+        queryText: normalizedQuery,
+        limit,
+        maxAgeHours,
+        before,
+        after
+      });
+    } catch (error) {
+      this.store.logAction({
+        kind: "bot_error",
+        guildId: normalizedGuildId,
+        channelId: normalizedChannelId,
+        userId: this.client.user?.id || null,
+        content: `conversation_history_search: ${String(error?.message || error)}`
       });
       return [];
     }

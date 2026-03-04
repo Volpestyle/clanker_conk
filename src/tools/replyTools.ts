@@ -4,9 +4,11 @@ import {
   executeSharedMemoryToolSearch,
   executeSharedMemoryToolWrite
 } from "../memory/memoryToolRuntime.ts";
+import { formatConversationWindows } from "../prompts/promptFormatters.ts";
 
 const MAX_WEB_QUERY_LEN = 220;
 const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
+const MAX_CONVERSATION_LOOKUP_QUERY_LEN = 220;
 const MAX_IMAGE_LOOKUP_QUERY_LEN = 220;
 const MAX_OPEN_ARTICLE_REF_LEN = 260;
 
@@ -71,6 +73,15 @@ type ReplyToolRuntime = {
   };
   store?: {
     logAction: (opts: Record<string, unknown>) => void;
+    searchConversationWindows?: (opts: {
+      guildId: string;
+      channelId?: string | null;
+      queryText: string;
+      limit?: number;
+      maxAgeHours?: number;
+      before?: number;
+      after?: number;
+    }) => Array<Record<string, unknown>>;
   };
 };
 
@@ -155,6 +166,34 @@ const MEMORY_WRITE_TOOL: ReplyToolDefinition = {
   }
 };
 
+const CONVERSATION_SEARCH_TOOL: ReplyToolDefinition = {
+  name: "conversation_search",
+  description:
+    "Search past conversation history across saved text chat and voice transcripts. Returns short windows of what people previously said. Use for continuity and recall of prior exchanges, not for durable facts.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        description: "Concise lookup query describing the earlier conversation to find (max 220 chars)"
+      },
+      scope: {
+        type: "string",
+        description: "Search scope: `channel` for the current channel history or `guild` for all saved channels in this server."
+      },
+      top_k: {
+        type: "integer",
+        description: "Number of conversation windows to return (1-4)"
+      },
+      max_age_hours: {
+        type: "integer",
+        description: "Maximum age of messages to consider in hours (1-720)"
+      }
+    },
+    required: ["query"]
+  }
+};
+
 const IMAGE_LOOKUP_TOOL: ReplyToolDefinition = {
   name: "image_lookup",
   description:
@@ -192,6 +231,7 @@ const ALL_REPLY_TOOLS: ReplyToolDefinition[] = [
   WEB_SEARCH_TOOL,
   MEMORY_SEARCH_TOOL,
   MEMORY_WRITE_TOOL,
+  CONVERSATION_SEARCH_TOOL,
   IMAGE_LOOKUP_TOOL,
   OPEN_ARTICLE_TOOL
 ];
@@ -213,6 +253,7 @@ export function buildReplyToolSet(
   capabilities: {
     webSearchAvailable?: boolean;
     memoryAvailable?: boolean;
+    conversationSearchAvailable?: boolean;
     imageLookupAvailable?: boolean;
     openArticleAvailable?: boolean;
   } = {}
@@ -230,6 +271,10 @@ export function buildReplyToolSet(
   if (capabilities.memoryAvailable !== false && memoryEnabled) {
     tools.push(MEMORY_SEARCH_TOOL);
     tools.push(MEMORY_WRITE_TOOL);
+  }
+
+  if (capabilities.conversationSearchAvailable !== false) {
+    tools.push(CONVERSATION_SEARCH_TOOL);
   }
 
   if (capabilities.imageLookupAvailable) {
@@ -258,12 +303,60 @@ export async function executeReplyTool(
       return executeMemorySearch(input, runtime, context);
     case "memory_write":
       return executeMemoryWrite(input, runtime, context);
+    case "conversation_search":
+      return executeConversationSearch(input, runtime, context);
     case "image_lookup":
       return executeImageLookup(input, context);
     case "open_article":
       return executeOpenArticle(input, runtime, context);
     default:
       return { content: `Unknown tool: ${toolName}`, isError: true };
+  }
+}
+
+async function executeConversationSearch(
+  input: ReplyToolCallInput,
+  runtime: ReplyToolRuntime,
+  context: ReplyToolContext
+): Promise<ReplyToolResult> {
+  if (!runtime.store?.searchConversationWindows) {
+    return { content: "Conversation history search is not available.", isError: true };
+  }
+
+  const query = normalizeDirectiveText(
+    String(input?.query || ""),
+    MAX_CONVERSATION_LOOKUP_QUERY_LEN
+  );
+  if (!query) {
+    return { content: "Missing or empty conversation search query.", isError: true };
+  }
+
+  const scope = String(input?.scope || "channel").trim().toLowerCase();
+  const searchChannelId = scope === "guild" ? null : context.channelId;
+  const topK = Math.max(1, Math.min(4, Math.floor(Number(input?.top_k) || 3)));
+  const maxAgeHours = Math.max(1, Math.min(24 * 30, Math.floor(Number(input?.max_age_hours) || 24 * 7)));
+
+  try {
+    const windows = runtime.store.searchConversationWindows({
+      guildId: context.guildId,
+      channelId: searchChannelId,
+      queryText: query,
+      limit: topK,
+      maxAgeHours,
+      before: 1,
+      after: 1
+    });
+    if (!Array.isArray(windows) || !windows.length) {
+      return { content: `No conversation history found for: "${query}"` };
+    }
+    return {
+      content: `Conversation history for "${query}":\n${formatConversationWindows(windows)}`
+    };
+  } catch (error) {
+    return {
+      content: `Conversation history search failed: ${String((error as Error)?.message || error)}`,
+      isError: true
+    };
   }
 }
 

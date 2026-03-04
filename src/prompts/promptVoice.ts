@@ -5,6 +5,7 @@ import {
 
 import {
   formatWebSearchFindings,
+  formatConversationWindows,
   formatRecentLookupContext,
   formatOpenArticleCandidates,
   formatMemoryFacts
@@ -27,6 +28,7 @@ export function buildVoiceTurnPrompt({
   recentMembershipEvents = [],
   soundboardCandidates = [],
   webSearch = null,
+  recentConversationHistory = [],
   recentWebLookups = [],
   openArticleCandidates = [],
   openedArticle = null,
@@ -363,12 +365,21 @@ export function buildVoiceTurnPrompt({
     parts.push("Soundboard tool call is unavailable this turn. Set soundboardRefs to [].");
   }
 
+  if (recentConversationHistory?.length) {
+    parts.push("Relevant past conversation windows from shared text/voice history:");
+    parts.push(formatConversationWindows(recentConversationHistory));
+    parts.push("Use this for continuity when it clearly matches the current turn.");
+  }
+
   if (recentWebLookups?.length) {
     parts.push("Short-term lookup memory from recent successful web searches (may be stale):");
     parts.push(formatRecentLookupContext(recentWebLookups));
     parts.push("If the speaker asks what source you used earlier, mention these cached domains/URLs.");
     parts.push("Use this only as lightweight context. For fresh facts, request a new web lookup.");
   }
+
+  parts.push("Conversation-history lookup is available.");
+  parts.push("If the speaker asks what was said earlier, what you talked about before, or asks you to remember a past exchange, use conversation_search.");
 
   if (allowOpenArticleToolCall) {
     if (normalizedOpenArticleCandidates.length) {

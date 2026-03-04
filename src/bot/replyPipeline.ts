@@ -23,8 +23,6 @@ import {
 } from "./replyFollowup.ts";
 import { resolveDeterministicMentions as resolveDeterministicMentionsForMentions } from "./mentions.ts";
 import {
-  LOOKUP_CONTEXT_PROMPT_LIMIT,
-  LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS,
   MAX_MODEL_IMAGE_INPUTS,
   UNICODE_REACTIONS,
   appendReplyFollowupPrompt,
@@ -33,6 +31,7 @@ import {
   createReplyPromptCapture,
   finalizeReplyPerformanceSample
 } from "./replyPipelineShared.ts";
+import { loadConversationContinuityContext } from "./conversationContinuity.ts";
 
 
 
@@ -83,7 +82,7 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
   });
   
   const memorySliceStartedAtMs = Date.now();
-  const memorySlice = await bot.loadPromptMemorySlice({
+  const continuity = await loadConversationContinuityContext({
     settings,
     userId: message.author.id,
     guildId: message.guildId,
@@ -94,8 +93,13 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
       channelId: message.channelId,
       userId: message.author.id
     },
-    source
+    source,
+    recentMessages,
+    loadPromptMemorySlice: (payload) => bot.loadPromptMemorySlice(payload),
+    loadRecentLookupContext: (payload) => bot.getRecentLookupContextForPrompt(payload),
+    loadRecentConversationHistory: (payload) => bot.getConversationHistoryForPrompt(payload)
   });
+  const memorySlice = continuity.memorySlice;
   performance.memorySliceMs = Math.max(0, Date.now() - memorySliceStartedAtMs);
   const replyMediaMemoryFacts = bot.buildMediaMemoryFacts({
     userFacts: memorySlice.userFacts,
@@ -113,13 +117,8 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
   const gifsConfigured = Boolean(bot.gifs?.isConfigured?.());
   const webSearch = bot.buildWebSearchContext(settings, message.content);
   const browserBrowse = bot.buildBrowserBrowseContext(settings);
-  const recentWebLookups = bot.getRecentLookupContextForPrompt({
-    guildId: message.guildId,
-    channelId: message.channelId,
-    queryText: message.content,
-    limit: LOOKUP_CONTEXT_PROMPT_LIMIT,
-    maxAgeHours: LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS
-  });
+  const recentWebLookups = continuity.recentWebLookups;
+  const recentConversationHistory = continuity.recentConversationHistory;
   const memoryLookup = bot.buildMemoryLookupContext({ settings });
   const videoContext = await bot.buildVideoReplyContext({
     settings,
@@ -214,6 +213,7 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
       musicState,
       musicDisambiguation
     },
+    recentConversationHistory,
     recentWebLookups,
     screenShare: screenShareCapability,
     videoContext,
@@ -245,7 +245,7 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
     isInitiativeChannel, replyEagerness, reactionEmojiOptions, source, performance,
     memorySlice, replyMediaMemoryFacts, attachmentImageInputs, imageBudget, videoBudget,
     mediaCapabilities, simpleImageCapabilityReady, complexImageCapabilityReady, imageCapabilityReady,
-    videoCapabilityReady, gifBudget, gifsConfigured, webSearch, browserBrowse, recentWebLookups, memoryLookup,
+    videoCapabilityReady, gifBudget, gifsConfigured, webSearch, browserBrowse, recentConversationHistory, recentWebLookups, memoryLookup,
     videoContext, modelImageInputs, imageLookup, replyTrace, screenShareCapability,
     activeVoiceSession, inVoiceChannelNow, activeVoiceParticipantRoster, musicState, musicDisambiguation,
     systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture, replyPrompts
@@ -881,7 +881,7 @@ export async function sendReplyMessage(bot: any, message: any, settings: any, op
   } = ctx;
   const {
     generation, usedWebSearchFollowup, usedMemoryLookupFollowup, usedImageLookupFollowup,
-    webSearch, imageLookup, replyPrompts
+    webSearch, imageLookup, memoryLookup, replyPrompts
   } = llmResult;
   const {
     reaction, memorySaved, selfMemorySaved,
@@ -978,7 +978,14 @@ export async function sendReplyMessage(bot: any, message: any, settings: any, op
       },
       memory: {
         toolCallsUsed: usedMemoryLookupFollowup,
-        saved: Boolean(memorySaved || selfMemorySaved)
+        saved: Boolean(memorySaved || selfMemorySaved),
+        query: memoryLookup?.query || null,
+        results: (memoryLookup?.results || []).map((r: Record<string, unknown>) => ({
+          fact: r.fact,
+          fact_type: r.fact_type,
+          subject: r.subject,
+          confidence: r.confidence
+        }))
       },
       imageLookup: {
         requested: imageLookup.requested,
@@ -986,7 +993,13 @@ export async function sendReplyMessage(bot: any, message: any, settings: any, op
         query: imageLookup.query,
         candidateCount: imageLookup.candidates?.length || 0,
         resultCount: imageLookup.results?.length || 0,
-        error: imageLookup.error || null
+        error: imageLookup.error || null,
+        results: (imageLookup.results || []).map((r: Record<string, unknown>) => ({
+          filename: r.filename,
+          authorName: r.authorName,
+          url: r.url,
+          matchReason: r.matchReason
+        }))
       },
       mentions: mentionResolution,
       reaction,
@@ -1022,7 +1035,13 @@ export async function sendReplyMessage(bot: any, message: any, settings: any, op
         maxPerHour: videoContext.budget?.maxPerHour ?? null,
         remainingAtPromptTime: videoContext.budget?.remaining ?? null,
         enabled: videoContext.enabled,
-        errorCount: videoContext.errors?.length || 0
+        errorCount: videoContext.errors?.length || 0,
+        videos: (videoContext.videos || []).map((v: Record<string, unknown>) => ({
+          title: v.title,
+          url: v.url,
+          provider: v.provider,
+          channel: v.channel
+        }))
       },
       llm: {
         provider: generation.provider,

@@ -7,7 +7,14 @@ import { DEFAULT_SETTINGS } from "./settings/settingsSchema.ts";
 import { clamp, nowIso } from "./utils.ts";
 import { normalizeSettings } from "./store/settingsNormalization.ts";
 import { rewriteRuntimeSettingsRow, getSettings, setSettings, patchSettings, resetSettings } from "./store/storeSettings.ts";
-import { recordMessage, getRecentMessages, getRecentMessagesAcrossGuild, searchRelevantMessages, getActiveChannels } from "./store/storeMessages.ts";
+import {
+  recordMessage,
+  getRecentMessages,
+  getRecentMessagesAcrossGuild,
+  searchRelevantMessages,
+  searchConversationWindows,
+  getActiveChannels
+} from "./store/storeMessages.ts";
 import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, countInitiativePostsSince, getRecentActions, getRecentMemoryReflections, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted } from "./store/storeActionLog.ts";
 import { wasLinkSharedSince, recordSharedLink, pruneLookupContext, recordLookupContext, searchLookupContext } from "./store/storeLookups.ts";
 import { getRecentVoiceSessions, getVoiceSessionEvents } from "./store/storeVoice.ts";
@@ -276,6 +283,18 @@ export class Store {
 
   searchRelevantMessages(channelId, queryText, limit = 8) {
     return searchRelevantMessages(this, channelId, queryText, limit);
+  }
+
+  searchConversationWindows(opts: {
+    guildId;
+    channelId?;
+    queryText?;
+    limit?;
+    maxAgeHours?;
+    before?;
+    after?;
+  }) {
+    return searchConversationWindows(this, opts);
   }
 
   getActiveChannels(guildId, hours = 24, limit = 10) {

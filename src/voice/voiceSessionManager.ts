@@ -224,7 +224,12 @@ import {
 } from "./voiceSessionManager.constants.ts";
 import { loadPromptMemorySliceFromMemory } from "../memory/promptMemorySlice.ts";
 import { providerSupports } from "./voiceModes.ts";
-import { ensureSessionToolRuntimeState, getVoiceMcpServerStatuses, resolveVoiceRealtimeToolDescriptors, buildRealtimeFunctionTools, recordVoiceToolCallEvent, parseOpenAiRealtimeToolArguments, resolveOpenAiRealtimeToolDescriptor, summarizeVoiceToolOutput, executeOpenAiRealtimeFunctionCall, refreshRealtimeTools, executeVoiceMemorySearchTool, executeVoiceMemoryWriteTool, executeVoiceMusicSearchTool, executeVoiceMusicQueueAddTool, executeVoiceMusicQueueNextTool, executeVoiceMusicPlayNowTool, executeVoiceWebSearchTool, executeLocalVoiceToolCall, executeMcpVoiceToolCall } from "./voiceToolCalls.ts";
+import { ensureSessionToolRuntimeState, getVoiceMcpServerStatuses, resolveVoiceRealtimeToolDescriptors, buildRealtimeFunctionTools, recordVoiceToolCallEvent, parseOpenAiRealtimeToolArguments, resolveOpenAiRealtimeToolDescriptor, summarizeVoiceToolOutput, executeOpenAiRealtimeFunctionCall, refreshRealtimeTools, executeVoiceMemorySearchTool, executeVoiceMemoryWriteTool, executeVoiceConversationSearchTool, executeVoiceMusicSearchTool, executeVoiceMusicQueueAddTool, executeVoiceMusicQueueNextTool, executeVoiceMusicPlayNowTool, executeVoiceWebSearchTool, executeLocalVoiceToolCall, executeMcpVoiceToolCall } from "./voiceToolCalls.ts";
+import { formatConversationWindows, formatRecentLookupContext } from "../prompts/promptFormatters.ts";
+import {
+  loadConversationContinuityContext
+} from "../bot/conversationContinuity.ts";
+import type { ConversationContinuityPayload } from "../bot/conversationContinuity.ts";
 
 export function resolveVoiceThoughtTopicalityBias({
   silenceMs = 0,
@@ -9593,6 +9598,27 @@ export class VoiceSessionManager {
     return !isLowSignalVoiceFragment(normalizedTranscript);
   }
 
+  persistAssistantVoiceTimelineTurn(session, text = "", createdAtMs = Date.now()) {
+    if (!session || session.ending) return;
+    if (!this.store || typeof this.store.recordMessage !== "function") return;
+    const normalizedText = normalizeVoiceText(text, STT_REPLY_MAX_CHARS);
+    const normalizedChannelId = String(session.textChannelId || "").trim();
+    const botUserId = String(this.client.user?.id || "").trim();
+    if (!normalizedText || !normalizedChannelId || !botUserId) return;
+
+    this.store.recordMessage({
+      messageId: `voice-assistant-${String(session.id || "session")}-${String(createdAtMs)}`,
+      createdAt: createdAtMs,
+      guildId: String(session.guildId || "").trim() || null,
+      channelId: normalizedChannelId,
+      authorId: botUserId,
+      authorName: getPromptBotName(session.settingsSnapshot || this.store.getSettings()),
+      isBot: true,
+      content: normalizedText,
+      referencedMessageId: null
+    });
+  }
+
   recordVoiceTurn(session, { role = "user", userId = null, text = "", addressing = null } = {}) {
     if (!session || session.ending) return;
     const normalizedContextText = normalizeVoiceText(text, VOICE_DECIDER_HISTORY_MAX_CHARS);
@@ -9650,6 +9676,9 @@ export class VoiceSessionManager {
       ...transcriptTurns,
       transcriptTurnEntry
     ].slice(-VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS);
+    if (normalizedRole === "assistant") {
+      this.persistAssistantVoiceTimelineTurn(session, normalizedTranscriptText, nextAt);
+    }
   }
 
   updateModelContextSummary(session, section, summary = null) {
@@ -9713,26 +9742,25 @@ export class VoiceSessionManager {
   }
 
   async buildRealtimeMemorySlice({ session, settings, userId, transcript = "" }) {
-    const empty = {
-      userFacts: [],
-      relevantFacts: []
-    };
-
-    if (!settings?.memory?.enabled) return empty;
-    if (!this.memory || typeof this.memory !== "object") return empty;
-
-    const normalizedUserId = String(userId || "").trim();
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    if (!normalizedUserId || !normalizedTranscript) return empty;
+    if (!normalizedTranscript) {
+      return {
+        userFacts: [],
+        relevantFacts: [],
+        relevantMessages: [],
+        recentConversationHistory: [],
+        recentWebLookups: []
+      };
+    }
 
     if (session?.pendingMemoryIngest) {
       try { await session.pendingMemoryIngest; } catch {}
       session.pendingMemoryIngest = null;
     }
 
-    const slice = await loadPromptMemorySliceFromMemory({
+    const normalizedUserId = String(userId || "").trim() || null;
+    return await loadConversationContinuityContext({
       settings,
-      memory: this.memory,
       userId: normalizedUserId,
       guildId: session.guildId,
       channelId: session.textChannelId,
@@ -9743,24 +9771,57 @@ export class VoiceSessionManager {
         userId: normalizedUserId
       },
       source: "voice_realtime_instruction_context",
-      onError: ({ error }) => {
-        this.store.logAction({
-          kind: "voice_error",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: normalizedUserId,
-          content: `voice_realtime_memory_slice_failed: ${String(error?.message || error)}`,
-          metadata: {
-            sessionId: session.id
-          }
-        });
-      }
+      loadPromptMemorySlice:
+        this.memory && typeof this.memory === "object"
+          ? (payload: ConversationContinuityPayload) =>
+              loadPromptMemorySliceFromMemory({
+                settings: payload.settings,
+                memory: this.memory,
+                userId: String(payload.userId || "").trim() || null,
+                guildId: String(payload.guildId || "").trim(),
+                channelId: String(payload.channelId || "").trim() || null,
+                queryText: String(payload.queryText || ""),
+                trace: payload.trace || {},
+                source: String(payload.source || "voice_realtime_instruction_context"),
+                onError: ({ error }) => {
+                  this.store.logAction({
+                    kind: "voice_error",
+                    guildId: session.guildId,
+                    channelId: session.textChannelId,
+                    userId: normalizedUserId,
+                    content: `voice_realtime_memory_slice_failed: ${String(error?.message || error)}`,
+                    metadata: {
+                      sessionId: session.id
+                    }
+                  });
+                }
+              })
+          : null,
+      loadRecentLookupContext:
+        this.store && typeof this.store.searchLookupContext === "function"
+          ? (payload) =>
+              this.store.searchLookupContext({
+                guildId: String(payload.guildId || "").trim(),
+                channelId: String(payload.channelId || "").trim() || null,
+                queryText: String(payload.queryText || ""),
+                limit: Number(payload.limit) || undefined,
+                maxAgeHours: Number(payload.maxAgeHours) || undefined
+              })
+          : null,
+      loadRecentConversationHistory:
+        this.store && typeof this.store.searchConversationWindows === "function"
+          ? (payload) =>
+              this.store.searchConversationWindows({
+                guildId: String(payload.guildId || "").trim(),
+                channelId: String(payload.channelId || "").trim() || null,
+                queryText: String(payload.queryText || ""),
+                limit: Number(payload.limit) || undefined,
+                maxAgeHours: Number(payload.maxAgeHours) || undefined,
+                before: 1,
+                after: 1
+              })
+          : null
     });
-
-    return {
-      userFacts: slice.userFacts,
-      relevantFacts: slice.relevantFacts
-    };
   }
 
   extractOpenAiFunctionCallEnvelope(event) {
@@ -10113,6 +10174,9 @@ export class VoiceSessionManager {
           transcriptChars: transcript ? String(transcript).length : 0,
           userFactCount: Array.isArray(memorySlice?.userFacts) ? memorySlice.userFacts.length : 0,
           relevantFactCount: Array.isArray(memorySlice?.relevantFacts) ? memorySlice.relevantFacts.length : 0,
+          conversationWindowCount: Array.isArray(memorySlice?.recentConversationHistory)
+            ? memorySlice.recentConversationHistory.length
+            : 0,
           instructionsChars: instructions.length
         }
       });
@@ -10173,6 +10237,8 @@ export class VoiceSessionManager {
       : "none";
     const userFacts = formatRealtimeMemoryFacts(memorySlice?.userFacts, REALTIME_MEMORY_FACT_LIMIT);
     const relevantFacts = formatRealtimeMemoryFacts(memorySlice?.relevantFacts, REALTIME_MEMORY_FACT_LIMIT);
+    const recentConversationHistory = formatConversationWindows(memorySlice?.recentConversationHistory);
+    const recentWebLookups = formatRecentLookupContext(memorySlice?.recentWebLookups);
     const activeVoiceCommandState = this.ensureVoiceCommandState(session);
     const musicDisambiguation = this.getMusicDisambiguationPromptContext(session);
 
@@ -10216,6 +10282,26 @@ export class VoiceSessionManager {
         ]
           .filter(Boolean)
           .join("\n")
+      );
+    }
+
+    if (Array.isArray(memorySlice?.recentConversationHistory) && memorySlice.recentConversationHistory.length > 0) {
+      sections.push(
+        [
+          "Recent conversation continuity:",
+          "- These windows come from persisted shared text/voice history.",
+          recentConversationHistory
+        ].join("\n")
+      );
+    }
+
+    if (Array.isArray(memorySlice?.recentWebLookups) && memorySlice.recentWebLookups.length > 0) {
+      sections.push(
+        [
+          "Recent lookup continuity:",
+          "- These are recent successful web searches from the shared text/voice conversation.",
+          recentWebLookups
+        ].join("\n")
       );
     }
 
@@ -10290,6 +10376,7 @@ export class VoiceSessionManager {
           localToolNames.length > 0 ? `- Local tools: ${localToolNames.join(", ")}` : null,
           mcpToolNames.length > 0 ? `- MCP tools: ${mcpToolNames.join(", ")}` : null,
           "- Use tools when they improve factuality or action execution.",
+          "- Use conversation_search when the speaker asks what was said earlier or asks you to remember a prior exchange.",
           "- For memory writes, only store concise durable facts and avoid secrets.",
           "- For music controls, use music_play_now for immediate playback, music_queue_next to place a track after the current one, music_queue_add to append, and music_stop to stop playback.",
           "- Do not emulate play-now by chaining music_queue_add and music_skip.",
@@ -12859,6 +12946,13 @@ export class VoiceSessionManager {
     args;
   }) {
     return executeVoiceMemoryWriteTool(this, opts);
+  }
+
+  async executeVoiceConversationSearchTool(opts: {
+    session;
+    args;
+  }) {
+    return executeVoiceConversationSearchTool(this, opts);
   }
 
   async executeVoiceMusicSearchTool(opts: { session; args }) {

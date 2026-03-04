@@ -5,6 +5,7 @@ import { normalizeVoiceText } from "./voiceSessionHelpers.ts";
 
 function createManager({ memory = null }: { memory?: unknown } = {}) {
   const logs: unknown[] = [];
+  const recordedMessages: Array<Record<string, unknown>> = [];
 
   const client = {
     on() {},
@@ -20,6 +21,9 @@ function createManager({ memory = null }: { memory?: unknown } = {}) {
       logAction(entry: unknown) {
         logs.push(entry);
       },
+      recordMessage(entry: Record<string, unknown>) {
+        recordedMessages.push(entry);
+      },
       getSettings() {
         return { botName: "clanker conk" };
       }
@@ -33,7 +37,7 @@ function createManager({ memory = null }: { memory?: unknown } = {}) {
     memory
   });
 
-  return { manager, logs };
+  return { manager, logs, recordedMessages };
 }
 
 // --- Fix 1: Memory tools gated by settings.memory.enabled ---
@@ -113,6 +117,29 @@ test("normalizeVoiceText truncates text exceeding maxChars", () => {
   const long = "a".repeat(2000);
   const result = normalizeVoiceText(long, 100);
   assert.equal(result.length, 100);
+});
+
+test("assistant voice turns are persisted into searchable message history", () => {
+  const { manager, recordedMessages } = createManager();
+  const session = {
+    id: "session-1",
+    guildId: "guild-1",
+    textChannelId: "text-1",
+    ending: false,
+    settingsSnapshot: { botName: "clanker conk" },
+    recentVoiceTurns: [],
+    transcriptTurns: []
+  };
+
+  manager.recordVoiceTurn(session, {
+    role: "assistant",
+    text: "nvda was around 181 earlier"
+  });
+
+  assert.equal(recordedMessages.length, 1);
+  assert.equal(recordedMessages[0]?.isBot, true);
+  assert.equal(recordedMessages[0]?.channelId, "text-1");
+  assert.equal(recordedMessages[0]?.content, "nvda was around 181 earlier");
 });
 
 // --- Fix 3: Pending ingestion awaited before memory slice ---

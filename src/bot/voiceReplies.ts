@@ -24,13 +24,12 @@ import {
 } from "../tools/replyTools.ts";
 import type { ReplyToolRuntime, ReplyToolContext } from "../tools/replyTools.ts";
 import { clamp, sanitizeBotText } from "../utils.ts";
+import { loadConversationContinuityContext } from "./conversationContinuity.ts";
 
 const MAX_SOUNDBOARD_LEAK_TOKEN_SCAN = 24;
 const SOUNDBOARD_CANDIDATE_PARSE_LIMIT = 40;
 const SOUNDBOARD_SIMPLE_TOKEN_RE = /^[a-z0-9 _-]+$/i;
 const MAX_VOICE_SOUNDBOARD_REFS = 10;
-const LOOKUP_CONTEXT_PROMPT_LIMIT = 4;
-const LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS = 72;
 const OPEN_ARTICLE_MAX_CANDIDATES = 12;
 const OPEN_ARTICLE_ROW_LIMIT = 4;
 const OPEN_ARTICLE_RESULTS_PER_ROW = 5;
@@ -72,32 +71,6 @@ function normalizeVoiceMemorySlice(value: unknown): VoiceMemorySlice {
     userFacts: normalizeVoiceMemoryFactList(value.userFacts),
     relevantFacts: normalizeVoiceMemoryFactList(value.relevantFacts)
   };
-}
-
-async function resolveVoiceMemorySliceWithTimeout({
-  memorySlicePromise,
-  fallbackSlice,
-  maxWaitMs = 0
-}: {
-  memorySlicePromise: Promise<VoiceMemorySlice> | null;
-  fallbackSlice: VoiceMemorySlice;
-  maxWaitMs?: number;
-}): Promise<VoiceMemorySlice> {
-  if (!memorySlicePromise) return fallbackSlice;
-  const boundedWaitMs = Math.max(0, Math.floor(Number(maxWaitMs) || 0));
-  if (!boundedWaitMs) return fallbackSlice;
-
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
-  try {
-    return await Promise.race([
-      memorySlicePromise.catch(() => fallbackSlice),
-      new Promise<VoiceMemorySlice>((resolve) => {
-        timeoutHandle = setTimeout(() => resolve(fallbackSlice), boundedWaitMs);
-      })
-    ]);
-  } finally {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
-  }
 }
 
 function runAsyncCallback(callback: unknown, payload: Record<string, unknown>) {
@@ -396,47 +369,35 @@ export async function generateVoiceTurnReply(runtime, {
     .filter(Boolean)
     .slice(-6);
 
-  const memoryEnabled = Boolean(settings?.memory?.enabled);
-  let promptMemorySlice = emptyVoiceMemorySlice();
-  const memorySlicePromise: Promise<VoiceMemorySlice> | null =
-    memoryEnabled && typeof runtime.loadPromptMemorySlice === "function"
-      ? runtime
-        .loadPromptMemorySlice({
-          settings,
-          userId,
-          guildId,
-          channelId,
-          queryText: incomingTranscript,
-          trace: {
-            guildId,
-            channelId,
-            userId
-          },
-          source: "voice_stt_pipeline_generation"
-        })
-        .then((slice) => normalizeVoiceMemorySlice(slice))
-        .catch(() => emptyVoiceMemorySlice())
-      : null;
-  if (memorySlicePromise) {
-    promptMemorySlice = await resolveVoiceMemorySliceWithTimeout({
-      memorySlicePromise,
-      fallbackSlice: promptMemorySlice,
-      maxWaitMs: VOICE_MEMORY_PREFETCH_WAIT_MS
-    });
-  }
-  const recentWebLookupsRaw =
-    typeof runtime.loadRecentLookupContext === "function"
-      ? runtime.loadRecentLookupContext({
-        guildId,
-        channelId,
-        queryText: incomingTranscript,
-        limit: LOOKUP_CONTEXT_PROMPT_LIMIT,
-        maxAgeHours: LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS
-      })
-      : [];
-  const recentWebLookups = Array.isArray(recentWebLookupsRaw)
-    ? recentWebLookupsRaw
-    : [];
+  const continuity = await loadConversationContinuityContext({
+    settings,
+    userId,
+    guildId,
+    channelId,
+    queryText: incomingTranscript,
+    trace: {
+      guildId,
+      channelId,
+      userId
+    },
+    source: "voice_stt_pipeline_generation",
+    memoryTimeoutMs: VOICE_MEMORY_PREFETCH_WAIT_MS,
+    loadPromptMemorySlice:
+      typeof runtime.loadPromptMemorySlice === "function"
+        ? (payload) => runtime.loadPromptMemorySlice(payload)
+        : null,
+    loadRecentLookupContext:
+      typeof runtime.loadRecentLookupContext === "function"
+        ? (payload) => runtime.loadRecentLookupContext(payload)
+        : null,
+    loadRecentConversationHistory:
+      typeof runtime.loadRecentConversationHistory === "function"
+        ? (payload) => runtime.loadRecentConversationHistory(payload)
+        : null
+  });
+  const promptMemorySlice = normalizeVoiceMemorySlice(continuity.memorySlice);
+  const recentWebLookups = continuity.recentWebLookups;
+  const recentConversationHistory = continuity.recentConversationHistory;
 
   const voiceGenerationUsesTextModel = Boolean(settings?.voice?.generationLlm?.useTextModel);
   const voiceGenerationProvider = normalizeLlmProvider(
@@ -545,6 +506,7 @@ export async function generateVoiceTurnReply(runtime, {
       recentMembershipEvents: normalizedMembershipEvents,
       soundboardCandidates: normalizedSoundboardCandidates,
       webSearch: webSearchContext,
+      recentConversationHistory,
       recentWebLookups,
       openArticleCandidates: openArticleCandidatesContext,
       openedArticle: openedArticleContext,
@@ -570,6 +532,7 @@ export async function generateVoiceTurnReply(runtime, {
       userFacts: promptMemorySlice.userFacts,
       relevantFacts: promptMemorySlice.relevantFacts
     },
+    recentConversationHistory,
     sessionTiming: sessionTiming || null,
     tools: {
       soundboard: allowSoundboardToolCall,

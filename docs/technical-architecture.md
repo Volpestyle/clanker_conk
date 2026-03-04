@@ -27,8 +27,8 @@ Agents:
 
 Tool definitions:
 - `src/tools/browserTools.ts`: browser tool schemas + execution wrappers for the browse agent.
-- `src/tools/replyTools.ts`: tool schemas available to the text chat brain (web search, memory, image lookup, open-article lookup, etc.).
-- `src/voice/voiceToolCalls.ts`: voice tool definitions + execution handlers for all tools available in voice sessions.
+- `src/tools/replyTools.ts`: tool schemas available to the text chat brain (`conversation_search`, web search, memory, image lookup, open-article lookup, etc.).
+- `src/voice/voiceToolCalls.ts`: voice tool definitions + execution handlers for all tools available in voice sessions, including shared conversation-history recall.
 
 Control plane:
 - `src/dashboard.ts`: REST API and static dashboard hosting, including tunnel-host public/private route gating.
@@ -53,6 +53,7 @@ User (voice or text)
     │
     ▼
 Brain (LLM with tool-use)
+    ├── conversation_search            →  persisted text + voice conversation recall
     ├── memory_search / memory_write   →  persistent facts + vector recall
     ├── web_search                     →  live web search + page inspection
     ├── browser_browse                 →  headless browser agent (navigate, click, extract)
@@ -62,6 +63,12 @@ Brain (LLM with tool-use)
 ```
 
 Each tool is available in both voice and text paths. The brain sees the same tool set regardless of input modality — what changes is how results are delivered (spoken audio vs text message).
+
+Conversation continuity is split into two retrieval layers:
+- `conversation_search`: recall of prior exchanges from persisted message history, across text chat and voice transcripts.
+- `memory_search`: durable long-lived facts/preferences/lore extracted from conversation and stored in `memory_facts`.
+
+This keeps default prompts small while still letting the model explicitly look up earlier exchanges when continuity matters.
 
 ### How Tools Are Invoked
 
@@ -91,7 +98,7 @@ No step here is hardcoded. The brain chose which tools to use and in what order 
 
 Main tables created in `src/store.ts`:
 - `settings`: single `runtime_settings` JSON blob.
-- `messages`: normalized message history (user + bot messages).
+- `messages`: normalized message history across text chat, persisted user voice transcripts, and persisted assistant spoken turns.
 - `actions`: event log (replies, reactions, initiative posts, llm/image calls, errors) with `usd_cost`.
 - `memory_facts`: LLM-extracted durable facts with type/confidence/evidence.
 - `memory_fact_vectors_native`: sqlite-vec-compatible embeddings per fact/model for semantic recall.

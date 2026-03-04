@@ -175,6 +175,7 @@ function createVoiceBot({
     summary: `opened ${String(url || "")}`.trim(),
     extractionMethod: "fast"
   }),
+  recentConversationHistory = [],
   recentLookupContext = [],
   screenShareCapability = {
     enabled: false,
@@ -264,6 +265,9 @@ function createVoiceBot({
     },
     async loadPromptMemorySlice(payload) {
       return await loadPromptMemorySlice(payload);
+    },
+    loadRecentConversationHistory() {
+      return recentConversationHistory;
     },
     loadRecentLookupContext(payload) {
       lookupMemorySearchCalls.push(payload);
@@ -552,6 +556,49 @@ test("generateVoiceTurnReply preserves ordered soundboard refs from tool-call pa
 
   assert.equal(reply.text, "bet");
   assert.deepEqual(reply.soundboardRefs, ["airhorn@123", "rimshot@456"]);
+});
+
+test("generateVoiceTurnReply injects recent conversation history into the prompt", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: structuredVoiceOutput({
+      text: "nvda was around 181"
+    }),
+    recentConversationHistory: [
+      {
+        ageMinutes: 5,
+        messages: [
+          {
+            author_name: "alice",
+            content: "what was nvda at earlier today?",
+            is_bot: 0
+          },
+          {
+            author_name: "clanker conk",
+            content: "NVDA was around 181 earlier.",
+            is_bot: 1
+          }
+        ]
+      }
+    ]
+  });
+
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "what do you think about that nvidia stock price"
+  });
+
+  assert.equal(generationPayloads.length > 0, true);
+  assert.equal(
+    String(generationPayloads[0]?.userPrompt || "").includes("Relevant past conversation windows from shared text/voice history:"),
+    true
+  );
+  assert.equal(
+    String(generationPayloads[0]?.userPrompt || "").includes("NVDA was around 181 earlier."),
+    true
+  );
 });
 
 test("generateVoiceTurnReply drops soundboard refs when soundboard is disabled", async () => {

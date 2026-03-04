@@ -6,6 +6,7 @@ import {
 
 import {
   formatRecentChat,
+  formatConversationWindows,
   formatEmojiChoices,
   formatDiscoveryFindings,
   formatWebSearchFindings,
@@ -62,6 +63,7 @@ export function buildReplyPrompt({
   addressing = null,
   webSearch = null,
   browserBrowse = null,
+  recentConversationHistory = [],
   recentWebLookups = [],
   memoryLookup = null,
   imageLookup = null,
@@ -111,6 +113,14 @@ export function buildReplyPrompt({
     parts.push("=== RELEVANT PAST MESSAGES ===");
     parts.push(formatRecentChat(relevantMessages));
   }
+
+  if (recentConversationHistory?.length) {
+    parts.push("=== RECENT CONVERSATION CONTINUITY ===");
+    parts.push("Relevant past conversation windows from shared text/voice history:");
+    parts.push(formatConversationWindows(recentConversationHistory));
+    parts.push("Use this for continuity when it clearly matches the current topic. If the user asks about older or less certain history, use conversation_search.");
+  }
+  parts.push("Conversation-history lookup is available for recalling prior text/voice exchanges. If the user asks what was said earlier or what you talked about before, use conversation_search.");
 
   if (userFacts?.length) {
     parts.push("=== USER FACTS ===");

@@ -170,6 +170,25 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
     },
     {
       toolType: "function",
+      name: "conversation_search",
+      description: "Search past conversation history across saved text chat and voice transcripts. Use for recalling what was said earlier, not for durable facts.",
+      parameters: {
+        type: "object",
+        properties: {
+          query: { type: "string" },
+          scope: {
+            type: "string",
+            enum: ["channel", "guild"]
+          },
+          top_k: { type: "integer", minimum: 1, maximum: 4 },
+          max_age_hours: { type: "integer", minimum: 1, maximum: 720 }
+        },
+        required: ["query"],
+        additionalProperties: false
+      }
+    },
+    {
+      toolType: "function",
       name: "music_search",
       description: "Search for music tracks to queue or play.",
       parameters: {
@@ -735,6 +754,45 @@ export async function executeVoiceMemorySearchTool(manager: any, {
   });
 }
 
+export async function executeVoiceConversationSearchTool(manager: any, {
+  session,
+  args
+}) {
+  if (!manager.store || typeof manager.store.searchConversationWindows !== "function") {
+    return {
+      ok: false,
+      matches: [],
+      error: "conversation_history_unavailable"
+    };
+  }
+
+  const query = normalizeInlineText(args?.query, 220);
+  if (!query) {
+    return {
+      ok: false,
+      matches: [],
+      error: "query_required"
+    };
+  }
+
+  const scope = String(args?.scope || "channel").trim().toLowerCase();
+  const searchChannelId = scope === "guild" ? null : session?.textChannelId || null;
+  const matches = manager.store.searchConversationWindows({
+    guildId: String(session?.guildId || "").trim(),
+    channelId: searchChannelId,
+    queryText: query,
+    limit: clamp(Math.floor(Number(args?.top_k || 3)), 1, 4),
+    maxAgeHours: clamp(Math.floor(Number(args?.max_age_hours || 24 * 7)), 1, 24 * 30),
+    before: 1,
+    after: 1
+  });
+
+  return {
+    ok: true,
+    matches: Array.isArray(matches) ? matches : []
+  };
+}
+
 export async function executeVoiceMemoryWriteTool(manager: any, {
   session,
   settings,
@@ -1237,6 +1295,12 @@ export async function executeLocalVoiceToolCall(manager: any, {
     return await manager.executeVoiceMemoryWriteTool({
       session,
       settings,
+      args
+    });
+  }
+  if (normalizedToolName === "conversation_search") {
+    return await manager.executeVoiceConversationSearchTool({
+      session,
       args
     });
   }
