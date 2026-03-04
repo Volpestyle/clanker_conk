@@ -4,12 +4,13 @@ This document describes how durable memory works in runtime, based on current co
 
 ## Scope
 
-Durable memory has two storage layers:
+Durable memory has three layers:
 
-1. SQLite facts + vectors (used by runtime retrieval and prompts).
-2. Markdown journals/snapshot files under `memory/` (operator-facing inspection).
+1. **Daily journals** (`memory/YYYY-MM-DD.md`): append-only logs of every message and voice transcript. Raw material.
+2. **Daily reflection**: an LLM pass that reviews each day's journal and distills it into durable facts. The bridge between raw logs and long-term memory.
+3. **SQLite facts + vectors** (`memory_facts`, `memory_fact_vectors_native`): the durable knowledge base used by runtime retrieval and prompts.
 
-Important: runtime prompts do **not** read `memory/MEMORY.md` directly. Prompt memory comes from SQLite retrieval.
+Additionally, `memory/MEMORY.md` is a periodically regenerated snapshot for operator/dashboard inspection — not consumed by the model.
 
 ## Flow Diagram
 
@@ -18,10 +19,14 @@ Important: runtime prompts do **not** read `memory/MEMORY.md` directly. Prompt m
 
 ## Key Files
 
-- `src/memory.ts`: ingestion queue, daily journaling, fact extraction, hybrid retrieval/ranking, markdown refresh.
+- `src/memory.ts`: ingestion queue, daily journaling, daily reflection job, directive writes (`rememberDirectiveLine`), hybrid retrieval/ranking, markdown refresh.
+- `src/memory/memoryHelpers.ts`: fact normalization, grounding checks, scoring helpers, directive scope config.
+- `src/memory/dailyReflection.ts`: end-of-day reflection logic — reads daily journal, runs LLM distillation, writes durable facts.
 - `src/store.ts`: `memory_facts` and `memory_fact_vectors_native` schema + query/update methods.
-- `src/llm.ts`: memory fact extraction call + embedding API calls.
-- `src/bot.ts`: message ingest, memory slice loading, memory lookup directives, lore/self directive writes.
+- `src/llm.ts`: embedding API calls, reflection LLM calls.
+- `src/tools/replyTools.ts`: `memory_write` and `memory_search` tool definitions + execution handlers (used by text chat brain).
+- `src/voice/voiceToolCalls.ts`: `memory_search` and `memory_write` voice tool definitions + execution handlers (used by OpenAI Realtime brain).
+- `src/bot.ts`: message ingest trigger, memory slice loading, reflection job scheduling.
 - `src/bot/voiceReplies.ts` and `src/voice/voiceSessionManager.ts`: voice transcript ingestion + memory context loading.
 - `src/dashboard.ts`: `/api/memory`, `/api/memory/refresh`, `/api/memory/search`.
 
@@ -50,6 +55,7 @@ Created in `Store.init()` (`src/store.ts`) with key fields:
 
 - `src/app.ts` initializes `MemoryManager` and calls `refreshMemoryMarkdown()` once at startup.
 - `src/bot.ts` starts a 5-minute timer calling `refreshMemoryMarkdown()`.
+- `src/bot.ts` starts the daily reflection scheduler (checks if reflection is due on each tick).
 - On shutdown, bot drains pending ingest jobs (`drainIngestQueue`) before exit.
 
 ### Message ingest pipeline (text chat)
@@ -63,11 +69,9 @@ Triggered in `ClankerBot.handleMessage()` when `settings.memory.enabled` is true
 3. Worker runs `processIngestMessage(...)` sequentially:
    - Cleans content (trim/collapse, max 320 chars; empty/too short dropped).
    - Appends one line to `memory/YYYY-MM-DD.md`.
-   - If content length >= 4 and guild scope exists, calls `llm.extractMemoryFacts(...)` (max 4 facts/message).
-   - Normalizes and filters extracted facts, then upserts via `store.addMemoryFact(...)`.
-   - Starts async embedding generation for inserted facts.
-   - Archives older active facts for that user (`keep: 80`).
    - Schedules markdown refresh (`queueMemoryRefresh`, debounced by `pendingWrite` + 1s delay).
+
+Note: `processIngestMessage` does **not** perform automatic fact extraction. Durable facts are only created through explicit `memory_write` tool calls (see below).
 
 ### Message ingest pipeline (voice transcripts)
 
@@ -78,38 +82,66 @@ Voice paths also feed durable memory using synthetic message IDs:
 
 Both call `memory.ingestMessage(...)` with `trace.source` indicating voice pipeline origin.
 
-### Explicit directive writes from replies (lore + self)
+### Daily reflection
 
-If model output includes `memoryLine` or `selfMemoryLine`, bot calls `memory.rememberDirectiveLine(...)`:
+The reflection job is the bridge between raw journal logs and durable memory. It runs once per day (configurable) and reviews the day's journal to decide what's worth remembering long-term.
 
-- `memoryLine` path:
-  - Stored under subject `__lore__`.
-  - Fact text becomes `Memory line: <normalized line>.`
-  - `fact_type = "lore"`, `confidence = 0.72`.
-- `selfMemoryLine` path:
-  - Stored under subject `__self__`.
-  - Fact text becomes `Self memory: <normalized line>.`
-  - `fact_type = "self"`, `confidence = 0.72`.
-- Archives directive facts to keep latest `120` per scope.
-- Triggers async embedding + markdown refresh.
+**How it works:**
 
-This path is used in both text reply generation (`src/bot.ts`) and voice turn generation (`src/bot/voiceReplies.ts`).
+1. Job triggers at the configured time (default: end of day, or on a configurable interval).
+2. Reads the current day's journal file (`memory/YYYY-MM-DD.md`).
+3. Sends the full journal to an LLM with a reflection prompt: "Review this day's conversations. Extract durable facts worth remembering — things about people, ongoing projects, important events, preferences, and recurring topics. Ignore throwaway chatter, greetings, and ephemeral requests."
+4. LLM returns structured facts with scope (user/lore/self) and subject attribution.
+5. Each fact is written through the same `rememberDirectiveLine` path as `memory_write` tool calls — same grounding checks, same dedup, same archiving.
+6. Reflected journals are marked as processed. Journals older than `memory.dailyLogRetentionDays` are pruned.
 
-## Extraction and Safety Guards
+**Why reflection exists alongside `memory_write`:**
 
-Fact extraction prompt lives in `LLMService.extractMemoryFacts(...)` and asks for durable, grounded facts only.
+Two complementary paths to durable memory:
 
-Post-extraction filters in `src/memory.ts` enforce:
+- **`memory_write` (real-time)**: the brain notices something important mid-conversation and stores it immediately. Fast, but depends on the brain's in-the-moment judgment — things slip through, especially in fast-moving voice sessions.
+- **Daily reflection (batch)**: reviews the full day with hindsight. Catches patterns, repeated topics, and facts the brain didn't think to store in real time. Sees the forest, not just the trees.
 
-- Fact normalization and length bounds.
+Both paths produce the same kind of durable facts in `memory_facts`. Reflection just has better context for deciding what matters.
+
+**Settings:**
+
+- `memory.reflection.enabled` (default `true`): master switch.
+- `memory.reflection.intervalHours` (default `24`): how often reflection runs.
+- `memory.reflection.model`: LLM model for reflection (defaults to `memoryLlm` settings).
+- `memory.reflection.maxFactsPerReflection`: cap on facts produced per run (default `20`).
+- `memory.dailyLogRetentionDays` (default `30`): prune journals older than this after reflection.
+
+### Fact creation via `memory_write` tool
+
+Durable facts are created when the brain decides to call the `memory_write` tool during conversation. This replaces the previous `memoryLine`/`selfMemoryLine` JSON directive fields.
+
+**Tool definition** (`src/tools/replyTools.ts`): accepts an `items` array, each with `text` and `scope`:
+
+- `scope = "lore"` → stored under subject `__lore__`, prefix `"Memory line"`, `fact_type = "lore"`, keep latest 120.
+- `scope = "self"` → stored under subject `__self__`, prefix `"Self memory"`, `fact_type = "self"`, keep latest 120.
+- `scope = "user"` → stored under the speaker's user ID as subject, prefix `"User memory"`, `fact_type = "preference"`, keep latest 80.
+
+All scopes share: `confidence = 0.72`, grounding check against source text, instruction-like text rejection.
+
+**Execution path**: tool call → `executeMemoryWrite()` in `replyTools.ts` → `memory.rememberDirectiveLine({ line, scope, subjectOverride, ... })` → `store.addMemoryFact(...)` → async embedding → archive old facts → markdown refresh.
+
+**Scope config** is resolved by `resolveDirectiveScopeConfig()` in `memoryHelpers.ts`.
+
+This path is used in both text chat (via `replyTools.ts`) and voice chat (via `voiceToolCalls.ts`), where equivalent `memory_write` and `memory_search` tools are registered as OpenAI Realtime function tools.
+
+## Safety Guards
+
+Facts written through `memory_write` are filtered in `memory.rememberDirectiveLine()` and `memoryHelpers.ts`:
+
+- Input normalization and length bounds (`normalizeMemoryLineInput`).
 - Fact type normalization (`preference|profile|relationship|project|other`; `general` collapses to `other`).
-- Instruction/prompt-injection-like text rejection (`system`, `developer`, `ignore previous`, secrets, etc.).
+- Instruction/prompt-injection-like text rejection (`isInstructionLikeFactText` — rejects `system`, `developer`, `ignore previous`, secrets, etc.).
 - Grounding requirement (`isTextGroundedInSource`):
   - Exact compact-substring pass, or
   - token-overlap threshold (about 45% minimum, with short-line special case).
-- Evidence accepted only if also grounded in source text.
 
-If extraction/embedding fails, errors are logged and ingestion continues without crashing the message loop.
+If embedding fails, errors are logged and the fact is still stored (embedding backfill happens on next retrieval query).
 
 ## Embeddings
 
@@ -181,6 +213,8 @@ Relevance gate:
 
 - Append-only journal lines: timestamp, author, and scoped message text.
 - Header is initialized once per day/file.
+- Consumed by the daily reflection job to produce durable facts.
+- Pruned after `memory.dailyLogRetentionDays` (default 30 days) once reflection has processed them.
 
 ### Snapshot: `memory/MEMORY.md`
 
@@ -199,10 +233,15 @@ Used for dashboard/operator inspection, not direct model context.
 From defaults + normalization:
 
 - `memory.enabled` (default `true`)
-- `memory.maxRecentMessages` (default `35`, clamped `10..120`)  
+- `memory.maxRecentMessages` (default `35`, clamped `10..120`)
   Note: this controls short-term chat context windows, not durable fact count.
 - `memory.embeddingModel` (default `"text-embedding-3-small"`)
-- `memoryLlm` provider/model config controls extraction model route.
+- `memory.reflection.enabled` (default `true`): enable/disable daily reflection.
+- `memory.reflection.intervalHours` (default `24`): reflection job frequency.
+- `memory.reflection.model`: LLM model for reflection pass (defaults to `memoryLlm` config).
+- `memory.reflection.maxFactsPerReflection` (default `20`): cap on facts per reflection run.
+- `memory.dailyLogRetentionDays` (default `30`): prune reflected journals older than this.
+- `memoryLlm` provider/model config controls the model used for reflection and tool-triggered operations.
 
 ## APIs and Observability
 
@@ -216,8 +255,9 @@ Dashboard API:
 Action log kinds used by memory pipeline:
 
 - `memory_fact`
-- `memory_extract_call`, `memory_extract_error`
+- `memory_reflection_call`, `memory_reflection_error`
 - `memory_embedding_call`, `memory_embedding_error`
+- `memory_log_prune`
 - plus `bot_error`/`voice_error` entries for pipeline failures.
 
 ## Practical Notes

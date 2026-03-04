@@ -18,10 +18,10 @@ This is encoded in:
 Provider resolution path:
 
 ```ts
-voiceProvider = resolveVoiceProvider(settings)        // default: "openai"
-brainProvider = resolveBrainProvider(settings)        // default: "openai"
+voiceProvider = resolveVoiceProvider(settings)        // default: "openai" (via voiceSessionHelpers.ts)
+brainProvider = resolveBrainProvider(settings)        // default: "openai" (via voiceSessionHelpers.ts)
 transcriberProvider = resolveTranscriberProvider(...) // default: "openai"
-runtimeMode = resolveVoiceRuntimeMode(settings)       // openai/xai/gemini/elevenlabs + legacy mode fallback
+runtimeMode = resolveVoiceRuntimeMode(settings)       // openai/xai/gemini/elevenlabs + legacy mode fallback (via voiceSessionHelpers.ts)
 ```
 
 ## Runtime Modes and Brain Strategy
@@ -33,7 +33,7 @@ runtimeMode = resolveVoiceRuntimeMode(settings)       // openai/xai/gemini/eleve
 - `elevenlabs_realtime`
 - `stt_pipeline`
 
-`src/voice/voiceSessionManager.ts` decides reply strategy via `resolveRealtimeReplyStrategy()`:
+`src/voice/voiceReplyDecision.ts` decides reply strategy via `resolveRealtimeReplyStrategy()` (integrated into `voiceSessionManager.ts` flow):
 - `voice.replyPath == "native"` => `native` strategy
 - `voice.replyPath == "bridge"` or `"brain"` => `brain` strategy
 - Falls back to legacy `brainProvider` check if `replyPath` is not set
@@ -82,7 +82,7 @@ ASR session client details are in `src/voice/openaiRealtimeTranscriptionClient.t
 `runRealtimeTurn(...)` in `src/voice/voiceSessionManager.ts` performs:
 - silence/short-clip gating
 - transcription (or uses transcript override from per-user ASR)
-- reply admission decision (`evaluateVoiceReplyDecision(...)`)
+- reply admission decision (`evaluateVoiceReplyDecision(...)` in `voiceReplyDecision.ts`)
 - branch:
   - `native` strategy => `forwardRealtimeTurnAudio(...)`
   - `brain` strategy + transcript bridge active => `forwardRealtimeTextTurnToBrain(...)`
@@ -111,7 +111,7 @@ Runtime loop in `src/voice/voiceSessionManager.ts`:
 - `bindRealtimeHandlers(...)` routes raw provider events to the function-call handler.
 - Function-call envelopes are parsed from OpenAI function-call delta/done events.
 - Arguments are accumulated until done.
-- Tool execution dispatch:
+- Tool execution dispatch (managed in `src/voice/voiceToolCalls.ts`):
   - local function tools via `executeLocalVoiceToolCall(...)`
   - MCP tools via `executeMcpVoiceToolCall(...)`
 - Output is returned with `sendFunctionCallOutput(...)`.
@@ -119,7 +119,7 @@ Runtime loop in `src/voice/voiceSessionManager.ts`:
 
 ### 6) Local tool surface: memory + music + web
 
-`resolveVoiceRealtimeToolDescriptors(...)` defines local function tools:
+`resolveVoiceRealtimeToolDescriptors(...)` (in `src/voice/voiceToolCalls.ts`) defines local function tools:
 - `memory_search`
 - `memory_write`
 - `music_search`
@@ -135,7 +135,7 @@ Runtime loop in `src/voice/voiceSessionManager.ts`:
 
 ### 7) Vector memory write behavior (no approvals)
 
-`memory_write` is a local function tool (not gated by MCP approval flow). In `executeVoiceMemoryWriteTool(...)`:
+`memory_write` is a local function tool (not gated by MCP approval flow). In `executeVoiceMemoryWriteTool(...)` (via `src/voice/voiceToolCalls.ts`):
 - rate limit: `VOICE_MEMORY_WRITE_MAX_PER_MINUTE = 5`
 - dedupe threshold default: `0.9`
 - namespace guardrails enforced by `resolveVoiceMemoryNamespaceScope(...)`
@@ -150,7 +150,7 @@ This matches the "read + write, no human approval" requirement while still enfor
 ### 8) MCP integration for governance and extensions
 
 MCP servers are represented as runtime server status rows in `mcpStatus`.
-`resolveVoiceRealtimeToolDescriptors(...)` merges MCP-discovered tools into the effective tool list with `toolType: "mcp"`.
+`resolveVoiceRealtimeToolDescriptors(...)` (in `src/voice/voiceToolCalls.ts`) merges MCP-discovered tools into the effective tool list with `toolType: "mcp"`.
 
 MCP call path:
 - `executeMcpVoiceToolCall(...)` posts `{ toolName, arguments }` to configured MCP server tool endpoint.
@@ -158,13 +158,13 @@ MCP call path:
 
 ### 9) Music queue controls and output routing
 
-Queue/tool behavior in `src/voice/voiceSessionManager.ts`:
+Queue/tool behavior managed via `src/voice/voiceToolCalls.ts` and `src/voice/voiceMusicPlayback.ts`:
 - queue state in `musicQueueState`
 - search/catalog in `executeVoiceMusicSearchTool(...)`
 - immediate playback in `executeVoiceMusicPlayNowTool(...)`
 - insert-next queueing in `executeVoiceMusicQueueNextTool(...)`
 - append queueing in `executeVoiceMusicQueueAddTool(...)`
-- stop + queue reset in `requestStopMusic(..., clearQueue: true)`
+- stop + queue reset in `requestStopMusic(..., clearQueue: true)` (via `voiceMusicPlayback.ts`)
 - pause/resume/skip/now-playing in `executeLocalVoiceToolCall(...)`
 
 Command-only music follow-up behavior:
@@ -174,7 +174,7 @@ Command-only music follow-up behavior:
 - numeric/cancel clarification replies are resolved directly in runtime via `maybeHandlePendingMusicDisambiguationTurn(...)`
 - duplicate OpenAI function-call completions are ignored via `openAiCompletedToolCallIds`
 
-When music playback starts, `haltSessionOutputForMusicPlayback(...)`:
+When music playback starts, `haltSessionOutputForMusicPlayback(...)` (in `src/voice/voiceMusicPlayback.ts`):
 - clears pending assistant response/output queue
 - stops/destroys bot speech stream
 - aborts inbound captures while music is active

@@ -22,6 +22,15 @@ Core runtime:
 - `src/publicHttpsEntrypoint.ts`: optional Cloudflare Quick Tunnel runtime for exposing local dashboard/API over public HTTPS.
 - `src/screenShareSessionManager.ts`: tokenized browser screen-share session lifecycle and frame relay into voice stream-watch ingest.
 
+Agents:
+- `src/agents/browseAgent.ts`: headless browser agent — LLM + browser tool loop for navigating websites and extracting information.
+- `src/agents/codeAgent.ts`: Claude Code orchestrator — spawns Claude Code CLI with full tool access to perform coding tasks on the host machine.
+
+Tool definitions:
+- `src/tools/browserTools.ts`: browser tool schemas + execution wrappers for the browse agent.
+- `src/tools/replyTools.ts`: tool schemas available to the text chat brain (web search, memory, image lookup, code task, etc.).
+- `src/voice/voiceToolCalls.ts`: voice tool definitions + execution handlers for all tools available in voice sessions.
+
 Control plane:
 - `src/dashboard.ts`: REST API and static dashboard hosting, including tunnel-host public/private route gating.
 - `dashboard/src/*`: React dashboard (polling stats/actions/memory/settings and writing settings back).
@@ -36,7 +45,53 @@ Storage:
 ![Runtime Lifecycle](diagrams/runtime-lifecycle.png)
 <!-- source: docs/diagrams/runtime-lifecycle.mmd -->
 
-## 3. Data Model (SQLite)
+## 3. Tool Orchestration
+
+The central architectural idea: the brain is an LLM with a growing set of tools, and it composes them through natural conversation. There are no hardcoded workflows — the brain decides which tools to chain based on what the user is asking.
+
+```
+User (voice or text)
+    │
+    ▼
+Brain (LLM with tool-use)
+    ├── memory_search / memory_write   →  persistent facts + vector recall
+    ├── web_search                     →  live web search + page inspection
+    ├── browser_browse                 →  headless browser agent (navigate, click, extract)
+    ├── code_task                      →  Claude Code CLI (read/write files, run commands, git, PRs)
+    ├── music_*                        →  queue management + playback control
+    ├── image/video/gif generation     →  media creation via model APIs
+    └── MCP tools                      →  extensible third-party capabilities
+```
+
+Each tool is available in both voice and text paths. The brain sees the same tool set regardless of input modality — what changes is how results are delivered (spoken audio vs text message).
+
+### How Tools Are Invoked
+
+**Text chat path:** The brain calls `llm.chatWithTools()` with the full tool set. The LLM returns `tool_use` blocks, the bot executes them, appends results, and loops until the LLM returns a text-only response. Implemented in `replyTools.ts` (inline tools) and dedicated agents like `browseAgent.ts` (agent loops).
+
+**Voice path:** Tools are registered as OpenAI Realtime function definitions. The Realtime brain emits `response.function_call_arguments.done` events, the bot executes the tool via `voiceToolCalls.ts` handlers, and sends results back with `conversation.item.create`. The brain continues the conversation with the result.
+
+**Agent tools (browser, code):** These are tools that themselves contain an agentic loop. When the brain calls `browser_browse`, it spawns a `browseAgent` that runs its own multi-step LLM + browser tool cycle. When it calls `code_task`, it spawns a Claude Code CLI process that runs autonomously. The brain gets back a final result — it doesn't manage the inner loop.
+
+### Owner-Only Tools
+
+Some tools grant access to the host machine (filesystem, shell). These are gated by `BOT_OWNER_DISCORD_ID` — an env var containing the bot owner's Discord user ID. The tool is not registered in the brain's tool list unless the current user matches this ID.
+
+Currently owner-only: `code_task` (Claude Code orchestrator). See `docs/agent-code.md`.
+
+### Tool Composition Example
+
+A user says "go check my open GitHub issues and work on #42":
+
+1. Brain calls `browser_browse` → navigates to the GitHub issues page → extracts the issue list
+2. Brain reports the issues back to the user
+3. User says "work on 42"
+4. Brain calls `code_task` → Claude Code reads the issue, writes the fix, creates a branch, opens a PR
+5. Brain reports the PR link back to the user
+
+No step here is hardcoded. The brain chose which tools to use and in what order based on the conversation.
+
+## 4. Data Model (SQLite)
 
 Main tables created in `src/store.ts`:
 - `settings`: single `runtime_settings` JSON blob.
@@ -59,7 +114,7 @@ Cost aggregation:
 - `llm_call` rows store `usd_cost`.
 - `/api/stats` uses `Store.getStats()` to sum total and daily LLM spend.
 
-## 4. Settings Flow
+## 5. Settings Flow
 
 Settings are patched through dashboard API and normalized in `Store.patchSettings()` / `normalizeSettings()`:
 - clamping numeric ranges,
@@ -72,7 +127,7 @@ The bot reads settings at decision time (`store.getSettings()`), so updates appl
 ![Settings Flow](diagrams/settings-flow.png)
 <!-- source: docs/diagrams/settings-flow.mmd -->
 
-## 5. Message Event Flow (Replies + Reactions)
+## 6. Message Event Flow (Replies + Reactions)
 
 Entrypoint: Discord `messageCreate` handler in `ClankerBot`.
 
@@ -86,7 +141,7 @@ Key guardrails:
 - minimum seconds between bot messages.
 - direct-address and recent-bot-context gating for unsolicited replies (with LLM skip as backstop).
 
-## 6. Latency-Critical Model Choices
+## 7. Latency-Critical Model Choices
 
 High-impact latency levers:
 - `llm.provider` + `llm.model` for primary reply generation.
@@ -97,7 +152,7 @@ Validation signals:
 - `Store.getReplyPerformanceStats()` (`memorySliceMs`, `llm1Ms`, `followupMs`).
 - voice `voice_turn_addressing` runtime logs.
 
-## 7. Initiative Post Flow
+## 8. Initiative Post Flow
 
 Initiative logic runs every 60 seconds, but posting depends on schedule rules and caps.
 
@@ -108,14 +163,14 @@ Scheduling modes:
 - `even`: post only when elapsed time exceeds `max(minMinutesBetweenPosts, 24h/maxPostsPerDay)`.
 - `spontaneous`: after min gap, uses probabilistic ramps + force-due bound.
 
-## 8. Discovery Subsystem (Initiative Creativity)
+## 9. Discovery Subsystem (Initiative Creativity)
 
 `DiscoveryService.collect()` builds topic seeds, fetches enabled sources in parallel, filters/ranks candidates, and provides a shortlist to initiative prompting.
 
 Canonical discovery behavior, controls, and rollout guidance live in:
 - `docs/initiative-discovery-spec.md`.
 
-## 9. Dashboard Read/Write Patterns
+## 10. Dashboard Read/Write Patterns
 
 Dashboard polling:
 - `/api/stats` every 10s
@@ -132,7 +187,7 @@ Dashboard read APIs also include:
 - `GET /api/automations/runs`: list run history for one automation.
 - `POST /api/memory/simulate-slice`: simulate retrieval slices for memory prompt tuning.
 
-## 10. Action Log Kinds
+## 11. Action Log Kinds
 
 Common `actions.kind` values in current runtime:
 - Messaging/initiative: `sent_reply`, `sent_message`, `reply_skipped`, `initiative_post`, `automation_post`
@@ -140,6 +195,7 @@ Common `actions.kind` values in current runtime:
 - LLM + media generation: `llm_call`, `llm_error`, `image_call`, `image_error`, `video_call`, `video_error`, `gif_call`, `gif_error`
 - Memory pipeline: `memory_fact`, `memory_extract_call`, `memory_extract_error`, `memory_embedding_call`, `memory_embedding_error`
 - Search + video context: `search_call`, `search_error`, `video_context_call`, `video_context_error`
+- Agent tools: `browser_browse_call`, `browser_tool_step`, `code_agent_call`
 - Voice runtime: `voice_session_start`, `voice_session_end`, `voice_turn_in`, `voice_turn_out`, `voice_runtime`, `voice_intent_detected`, `voice_error`
 - Speech services: `asr_call`, `asr_error`, `tts_call`, `tts_error`
 - Automation lifecycle: `automation_created`, `automation_updated`, `automation_run`, `automation_error`
@@ -147,7 +203,7 @@ Common `actions.kind` values in current runtime:
 
 These power the activity stream and metrics/cost widgets in the dashboard.
 
-## 11. Failure Behavior
+## 12. Failure Behavior
 
 - LLM failures are logged (`llm_error`) and bubble to caller; bot-level wrappers log `bot_error`.
 - Reaction failures (permission/emoji issues) are swallowed.
