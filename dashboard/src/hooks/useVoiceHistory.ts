@@ -26,7 +26,7 @@ export function useVoiceHistory() {
   const [error, setError] = useState<string | null>(null);
 
   const fetchSessions = useCallback(() => {
-    api<HistorySession[]>("/api/voice/history/sessions?limit=3")
+    api<HistorySession[]>("/api/voice/history/sessions?sinceHours=24&limit=100")
       .then((rows) => setSessions(Array.isArray(rows) ? rows : []))
       .catch(() => setSessions([]));
   }, []);

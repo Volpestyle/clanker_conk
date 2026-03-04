@@ -340,8 +340,8 @@ export class Store {
     return countInitiativePostsSince(this, sinceIso);
   }
 
-  getRecentActions(limit = 200) {
-    return getRecentActions(this, limit);
+  getRecentActions(limit = 200, opts: { kinds?: string[]; sinceIso?: string | null } = {}) {
+    return getRecentActions(this, limit, opts);
   }
 
   getRecentMemoryReflections(limit = 20) {
@@ -407,8 +407,8 @@ export class Store {
     return searchLookupContext(this, opts);
   }
 
-  getRecentVoiceSessions(limit = 3) {
-    return getRecentVoiceSessions(this, limit);
+  getRecentVoiceSessions(limit = 3, opts: { sinceIso?: string | null } = {}) {
+    return getRecentVoiceSessions(this, limit, opts);
   }
 
   getVoiceSessionEvents(sessionId: string, limit = 500) {

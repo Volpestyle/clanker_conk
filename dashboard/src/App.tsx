@@ -1,4 +1,4 @@
-import { useState, useCallback, type ReactNode } from "react";
+import { useState, useCallback, useMemo, type ReactNode } from "react";
 import { api } from "./api";
 import { usePolling } from "./hooks/usePolling";
 import { useActivitySSE } from "./hooks/useActivitySSE";
@@ -85,6 +85,10 @@ export default function App() {
   }, []);
 
   const activity = useActivitySSE();
+  const textActions = usePolling(
+    () => api("/api/actions?kinds=sent_reply,sent_message&sinceHours=24&limit=1000"),
+    30_000
+  );
   const memory = usePolling(() => api("/api/memory"), 30_000);
   const settings = usePolling(() => api("/api/settings"), 0);
   const llmModels = usePolling(() => api("/api/llm/models"), 0);
@@ -135,6 +139,29 @@ export default function App() {
   }, [notify]);
 
   const isReady = activity.stats?.runtime?.isReady ?? false;
+  const mergedTextActions = useMemo(() => {
+    const persisted = Array.isArray(textActions.data) ? textActions.data : [];
+    const live = Array.isArray(activity.actions)
+      ? activity.actions.filter((action) => action?.kind === "sent_reply" || action?.kind === "sent_message")
+      : [];
+    const merged = new Map<string, Record<string, unknown>>();
+
+    for (const action of [...live, ...persisted]) {
+      const actionId = Number(action?.id || 0);
+      const key = actionId > 0
+        ? `id:${actionId}`
+        : `${String(action?.created_at || "")}:${String(action?.message_id || "")}:${String(action?.kind || "")}`;
+      if (!merged.has(key)) {
+        merged.set(key, action);
+      }
+    }
+
+    return [...merged.values()].sort((a, b) => {
+      const aTime = Date.parse(String(a?.created_at || ""));
+      const bTime = Date.parse(String(b?.created_at || ""));
+      return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+    });
+  }, [activity.actions, textActions.data]);
 
   return (
     <main className="shell">
@@ -173,7 +200,7 @@ export default function App() {
         </section>
       )}
 
-      {tab === "text" && <TextTab actions={activity.actions} />}
+      {tab === "text" && <TextTab actions={mergedTextActions} />}
 
       {tab === "voice" && <VoiceMonitor />}
 

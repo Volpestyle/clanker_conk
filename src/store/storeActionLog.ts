@@ -170,17 +170,41 @@ export function countInitiativePostsSince(store: any, sinceIso) {
   return Number(row?.count ?? 0);
 }
 
-export function getRecentActions(store: any, limit = 200) {
+export function getRecentActions(
+  store: any,
+  limit = 200,
+  opts: { kinds?: string[]; sinceIso?: string | null } = {}
+) {
   const parsedLimit = Number(limit);
   const boundedLimit = clamp(Number.isFinite(parsedLimit) ? Math.floor(parsedLimit) : 200, 1, 1000);
+  const normalizedKinds = [...new Set(
+    (Array.isArray(opts?.kinds) ? opts.kinds : [])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  )];
+  const normalizedSinceIso = String(opts?.sinceIso || "").trim();
+  const conditions: string[] = [];
+  const params: Array<string | number> = [];
+
+  if (normalizedKinds.length) {
+    conditions.push(`kind IN (${normalizedKinds.map(() => "?").join(", ")})`);
+    params.push(...normalizedKinds);
+  }
+  if (normalizedSinceIso) {
+    conditions.push("created_at >= ?");
+    params.push(normalizedSinceIso);
+  }
+
+  const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const rows = store.db
     .prepare(
       `SELECT id, created_at, guild_id, channel_id, message_id, user_id, kind, content, metadata, usd_cost
          FROM actions
+         ${whereClause}
          ORDER BY created_at DESC
          LIMIT ?`
     )
-    .all(boundedLimit);
+    .all(...params, boundedLimit);
 
   return rows.map((row) => ({
     ...row,

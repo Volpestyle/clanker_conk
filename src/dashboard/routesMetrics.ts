@@ -7,7 +7,16 @@ export function attachMetricsRoutes(app: any, deps: any) {
   
   app.get("/api/actions", (req, res) => {
     const limit = parseBoundedInt(req.query.limit, 200, 1, 1000);
-    res.json(store.getRecentActions(limit));
+    const kinds = String(req.query.kinds || "")
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const sinceHoursRaw = Number(req.query.sinceHours);
+    const sinceIso =
+      Number.isFinite(sinceHoursRaw) && sinceHoursRaw > 0
+        ? new Date(Date.now() - sinceHoursRaw * 60 * 60 * 1000).toISOString()
+        : null;
+    res.json(store.getRecentActions(limit, { kinds, sinceIso }));
   });
 
   app.get("/api/stats", (_req, res) => {

@@ -200,10 +200,6 @@ export function LlmConfigurationSettingsSection({
         <option value="two_pass_extract_then_main">2-pass: memory LLM extracts, main LLM decides what to save</option>
         <option value="one_pass_main">1-pass: main LLM reads the journal and decides what to save</option>
       </select>
-      <p>
-        1-pass uses the main LLM for the whole reflection. 2-pass uses the memory LLM as a cheaper extractor first,
-        then asks the main LLM which candidates should become durable memory.
-      </p>
       <div className="split">
         <div>
           <label htmlFor="memory-llm-provider">Provider</label>

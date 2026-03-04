@@ -2,18 +2,24 @@
 import { clamp } from "../utils.ts";
 import { safeJsonParse } from "../normalization/valueParsers.ts";
 
-export function getRecentVoiceSessions(store: any, limit = 3) {
-const boundedLimit = clamp(Math.floor(Number(limit) || 3), 1, 20);
-const fetchLimit = boundedLimit * 6;
+export function getRecentVoiceSessions(
+  store: any,
+  limit = 3,
+  opts: { sinceIso?: string | null } = {}
+) {
+const boundedLimit = clamp(Math.floor(Number(limit) || 3), 1, 200);
+const normalizedSinceIso = String(opts?.sinceIso || "").trim();
+const whereClause = normalizedSinceIso
+  ? `WHERE kind IN ('voice_session_start', 'voice_session_end') AND created_at >= ?`
+  : `WHERE kind IN ('voice_session_start', 'voice_session_end')`;
 const rows = store.db
   .prepare(
     `SELECT id, created_at, guild_id, kind, content, metadata
          FROM actions
-         WHERE kind IN ('voice_session_start', 'voice_session_end')
-         ORDER BY created_at DESC
-         LIMIT ?`
+         ${whereClause}
+         ORDER BY created_at DESC`
   )
-  .all(fetchLimit);
+  .all(...(normalizedSinceIso ? [normalizedSinceIso] : []));
 
 const starts = new Map<string, { guildId: string; mode: string; startedAt: string }>();
 const ends = new Map<string, { endedAt: string; durationSeconds: number; endReason: string }>();
