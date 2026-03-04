@@ -236,6 +236,10 @@ export interface VoiceSessionStreamWatchState {
     lastFrameAt: number;
     lastCommentaryAt: number;
     lastCommentaryNote: string | null;
+    lastMemoryRecapAt: number;
+    lastMemoryRecapText: string | null;
+    lastMemoryRecapDurableSaved: boolean;
+    lastMemoryRecapReason: string | null;
     lastBrainContextAt: number;
     lastBrainContextProvider: string | null;
     lastBrainContextModel: string | null;

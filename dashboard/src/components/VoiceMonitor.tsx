@@ -1117,6 +1117,8 @@ function StreamWatchDetail({ session }: { session: VoiceSession }) {
   const hasAnyStreamWatchData =
     Boolean(sw.active) ||
     Number(sw.ingestedFrameCount || 0) > 0 ||
+    Boolean(sw.lastCommentaryNote) ||
+    Boolean(sw.lastMemoryRecapText) ||
     visualFeed.length > 0 ||
     hasBrainPayloadNotes;
   if (!hasAnyStreamWatchData) return null;
@@ -1125,6 +1127,7 @@ function StreamWatchDetail({ session }: { session: VoiceSession }) {
     <Section title="Screen Share" badge={sw.active ? "active" : "idle"}>
       <div className="vm-detail-grid">
         <Stat label="Target" value={sw.targetUserId?.slice(0, 8) || "none"} />
+        <Stat label="Requested By" value={sw.requestedByUserId?.slice(0, 8) || "none"} />
         <Stat label="Frames" value={sw.ingestedFrameCount} />
         <Stat label="Window Frames" value={Number(sw.acceptedFrameCountInWindow || 0)} />
         {sw.frameWindowStartedAt && <Stat label="Window Started" value={relativeTime(sw.frameWindowStartedAt)} />}
@@ -1135,8 +1138,12 @@ function StreamWatchDetail({ session }: { session: VoiceSession }) {
           <Stat label="Frame Size" value={formatApproxBytes(sw.latestFrameApproxBytes)} />
         )}
         {sw.lastCommentaryAt && <Stat label="Last Commentary" value={relativeTime(sw.lastCommentaryAt)} />}
+        {sw.lastMemoryRecapAt && <Stat label="Last Recap" value={relativeTime(sw.lastMemoryRecapAt)} />}
         {sw.lastBrainContextAt && <Stat label="Last Brain Note" value={relativeTime(sw.lastBrainContextAt)} />}
         <Stat label="Brain Notes" value={Number(sw.brainContextCount || visualFeed.length)} />
+        {(sw.lastMemoryRecapText || sw.lastMemoryRecapAt) && (
+          <Stat label="Recap Saved" value={sw.lastMemoryRecapDurableSaved ? "durable" : "journal only"} />
+        )}
         {(sw.lastBrainContextProvider || sw.lastBrainContextModel) && (
           <Stat
             label="Brain Model"
@@ -1144,6 +1151,36 @@ function StreamWatchDetail({ session }: { session: VoiceSession }) {
           />
         )}
       </div>
+
+      {(sw.lastCommentaryNote || sw.lastCommentaryAt) && (
+        <>
+          <span className="vm-mini-label">Last Spoken Screen Commentary</span>
+          <div className="vm-convo-context-summary">
+            <div className="vm-convo-meta">
+              <span className="vm-convo-role vm-convo-role-assistant">spoken</span>
+              {sw.lastCommentaryAt && <span className="vm-convo-time">{relativeTime(sw.lastCommentaryAt)}</span>}
+            </div>
+            <div className="vm-convo-text">{sw.lastCommentaryNote || "(no saved line)"}</div>
+          </div>
+        </>
+      )}
+
+      {(sw.lastMemoryRecapText || sw.lastMemoryRecapAt || sw.lastMemoryRecapReason) && (
+        <>
+          <span className="vm-mini-label">Persisted Screen-Share Recap</span>
+          <div className="vm-convo-context-summary">
+            <div className="vm-convo-meta">
+              <span className="vm-convo-role vm-convo-role-assistant">memory recap</span>
+              {sw.lastMemoryRecapAt && <span className="vm-convo-time">{relativeTime(sw.lastMemoryRecapAt)}</span>}
+              {sw.lastMemoryRecapReason && <span className="vm-convo-time">{sw.lastMemoryRecapReason}</span>}
+              <span className="vm-convo-time">
+                {sw.lastMemoryRecapDurableSaved ? "durable fact saved" : "journaled only"}
+              </span>
+            </div>
+            <div className="vm-convo-text">{sw.lastMemoryRecapText || "(no recap text)"}</div>
+          </div>
+        </>
+      )}
 
       {visualFeed.length > 0 && (
         <>

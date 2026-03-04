@@ -304,6 +304,10 @@ export function initializeStreamWatchState(manager, { session, requesterUserId, 
   session.streamWatch.lastFrameAt = 0;
   session.streamWatch.lastCommentaryAt = 0;
   session.streamWatch.lastCommentaryNote = null;
+  session.streamWatch.lastMemoryRecapAt = 0;
+  session.streamWatch.lastMemoryRecapText = null;
+  session.streamWatch.lastMemoryRecapDurableSaved = false;
+  session.streamWatch.lastMemoryRecapReason = null;
   session.streamWatch.lastBrainContextAt = 0;
   session.streamWatch.lastBrainContextProvider = null;
   session.streamWatch.lastBrainContextModel = null;
@@ -762,6 +766,11 @@ async function persistStreamWatchRecapToMemory(manager, {
       durableSaved
     }
   });
+
+  session.streamWatch.lastMemoryRecapAt = Date.now();
+  session.streamWatch.lastMemoryRecapText = recap.recap;
+  session.streamWatch.lastMemoryRecapDurableSaved = durableSaved;
+  session.streamWatch.lastMemoryRecapReason = String(reason || "watching_stopped");
 
   return {
     recap: recap.recap,

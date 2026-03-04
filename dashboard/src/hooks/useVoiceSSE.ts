@@ -265,6 +265,11 @@ export type VoiceSession = {
     requestedByUserId: string | null;
     lastFrameAt: string | null;
     lastCommentaryAt: string | null;
+    lastCommentaryNote: string | null;
+    lastMemoryRecapAt: string | null;
+    lastMemoryRecapText: string | null;
+    lastMemoryRecapDurableSaved: boolean;
+    lastMemoryRecapReason: string | null;
     latestFrameAt: string | null;
     latestFrameMimeType: string | null;
     latestFrameApproxBytes: number;

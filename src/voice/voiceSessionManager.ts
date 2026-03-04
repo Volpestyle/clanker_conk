@@ -869,6 +869,13 @@ export class VoiceSessionManager {
           lastCommentaryAt: session.streamWatch?.lastCommentaryAt
             ? new Date(session.streamWatch.lastCommentaryAt).toISOString()
             : null,
+          lastCommentaryNote: session.streamWatch?.lastCommentaryNote || null,
+          lastMemoryRecapAt: session.streamWatch?.lastMemoryRecapAt
+            ? new Date(session.streamWatch.lastMemoryRecapAt).toISOString()
+            : null,
+          lastMemoryRecapText: session.streamWatch?.lastMemoryRecapText || null,
+          lastMemoryRecapDurableSaved: Boolean(session.streamWatch?.lastMemoryRecapDurableSaved),
+          lastMemoryRecapReason: session.streamWatch?.lastMemoryRecapReason || null,
           latestFrameAt: session.streamWatch?.latestFrameAt
             ? new Date(session.streamWatch.latestFrameAt).toISOString()
             : null,

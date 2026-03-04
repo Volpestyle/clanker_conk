@@ -187,6 +187,11 @@ test("getRuntimeState summarizes STT and realtime sessions", () => {
         requestedByUserId: "user-mod",
         lastFrameAt: now - 2_000,
         lastCommentaryAt: now - 4_000,
+        lastCommentaryNote: "wild clutch moment on screen",
+        lastMemoryRecapAt: now - 1_000,
+        lastMemoryRecapText: "Streamer recently screen-shared a combat HUD and minimap pressure.",
+        lastMemoryRecapDurableSaved: true,
+        lastMemoryRecapReason: "share_page_stop",
         latestFrameAt: now - 2_000,
         latestFrameMimeType: "image/png",
         latestFrameDataBase64: "AAAAAA==",
@@ -233,6 +238,10 @@ test("getRuntimeState summarizes STT and realtime sessions", () => {
   assert.equal(realtime?.streamWatch?.latestFrameMimeType, "image/png");
   assert.equal(realtime?.streamWatch?.acceptedFrameCountInWindow, 5);
   assert.equal(realtime?.streamWatch?.brainContextCount, 1);
+  assert.equal(realtime?.streamWatch?.lastCommentaryNote, "wild clutch moment on screen");
+  assert.equal(realtime?.streamWatch?.lastMemoryRecapText, "Streamer recently screen-shared a combat HUD and minimap pressure.");
+  assert.equal(realtime?.streamWatch?.lastMemoryRecapDurableSaved, true);
+  assert.equal(realtime?.streamWatch?.lastMemoryRecapReason, "share_page_stop");
   assert.equal(realtime?.streamWatch?.visualFeed?.length, 1);
   assert.equal(realtime?.streamWatch?.visualFeed?.[0]?.text, "enemy near top left minimap");
   assert.equal(realtime?.streamWatch?.brainContextPayload?.notes?.length, 1);
