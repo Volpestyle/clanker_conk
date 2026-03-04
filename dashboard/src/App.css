@@ -564,6 +564,46 @@ select {
   -webkit-appearance: none;
 }
 
+/* ---- RADIO GROUPS ---- */
+
+input[type="radio"] {
+  width: auto;
+  min-width: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+input[type="radio"]:focus {
+  box-shadow: none;
+}
+
+.radio-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.radio-group label {
+  margin: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  cursor: pointer;
+  padding: 5px 8px;
+  border-radius: var(--radius-xs);
+  transition: background var(--transition);
+  font-size: 0.84rem;
+  line-height: 1.4;
+}
+
+.radio-group label:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
 /* ---- TOGGLE SWITCHES ---- */
 
 input[type="checkbox"] {

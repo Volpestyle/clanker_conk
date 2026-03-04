@@ -78,7 +78,7 @@ export function VoiceModeSettingsSection({
                     onChange={set("voiceReplyPath")}
                   />
                   <strong>Native</strong>
-                  <span> &mdash; Raw audio in &rarr; realtime model &rarr; audio out. Fastest, but no text context or tools.</span>
+                  <span> &mdash; Audio &rarr; realtime model &rarr; audio out. Fastest, but no text context or tools.</span>
                 </label>
                 <label>
                   <input
@@ -100,7 +100,7 @@ export function VoiceModeSettingsSection({
                     onChange={set("voiceReplyPath")}
                   />
                   <strong>Full Brain</strong>
-                  <span> &mdash; Audio &rarr; ASR &rarr; text LLM &rarr; TTS &rarr; audio out. Maximum control, any text model. Requires OpenAI API key for ASR + TTS provider.</span>
+                  <span> &mdash; Audio &rarr; ASR transcript &rarr; text LLM &rarr; TTS &rarr; audio out. Maximum control, any text model. Requires OpenAI API key for ASR + TTS provider.</span>
                 </label>
               </div>
 
