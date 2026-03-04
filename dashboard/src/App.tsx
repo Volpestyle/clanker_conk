@@ -11,8 +11,9 @@ import DailyCost from "./components/DailyCost";
 import PerformancePanel from "./components/PerformancePanel";
 import StaleIndicator from "./components/StaleIndicator";
 import VoiceMonitor from "./components/VoiceMonitor";
+import TextTab from "./components/TextTab";
 
-type MainTab = "activity" | "memory" | "voice" | "settings";
+type MainTab = "activity" | "text" | "memory" | "voice" | "settings";
 
 interface MainTabDefinition {
   id: MainTab;
@@ -27,6 +28,15 @@ const MAIN_TABS: MainTabDefinition[] = [
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" />
+      </svg>
+    )
+  },
+  {
+    id: "text",
+    label: "Text",
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
       </svg>
     )
   },
@@ -162,6 +172,8 @@ export default function App() {
           </div>
         </section>
       )}
+
+      {tab === "text" && <TextTab actions={activity.actions} />}
 
       {tab === "voice" && <VoiceMonitor />}
 

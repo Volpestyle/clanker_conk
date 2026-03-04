@@ -5,6 +5,7 @@ import "./App.css";
 import "./styles/settings.css";
 import "./styles/voice.css";
 import "./styles/action-stream.css";
+import "./styles/text-tab.css";
 
 createRoot(document.getElementById("root")).render(
   <StrictMode>
