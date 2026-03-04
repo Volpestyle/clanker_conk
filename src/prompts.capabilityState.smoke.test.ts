@@ -91,17 +91,7 @@ test("smoke: reply prompt distinguishes supported-but-unavailable ability states
   });
 
   assert.equal(
-    prompt.includes(
-      "Live web lookup capability exists but is currently unavailable (disabled in settings)."
-    ),
-    true
-  );
-  assert.equal(
-    prompt.includes("Durable memory lookup capability exists but is currently unavailable for this turn."),
-    true
-  );
-  assert.equal(
-    prompt.includes("History image lookup capability exists but is currently unavailable for this turn."),
+    prompt.includes("Web search is currently unavailable."),
     true
   );
   assert.equal(

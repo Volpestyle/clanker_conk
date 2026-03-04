@@ -41,6 +41,31 @@ export function extractOpenAiResponseUsage(response) {
   };
 }
 
+export function extractOpenAiToolCalls(response) {
+  const output = Array.isArray(response?.output) ? response.output : [];
+  const toolCalls = [];
+  for (const item of output) {
+    if (!item || typeof item !== "object") continue;
+    if (item.type !== "function_call") continue;
+    const name = String(item.name || "").trim();
+    const callId = String(item.call_id || item.id || "").trim();
+    let input = {};
+    if (typeof item.arguments === "string") {
+      try {
+        input = JSON.parse(item.arguments);
+      } catch {
+        input = {};
+      }
+    } else if (item.arguments && typeof item.arguments === "object") {
+      input = item.arguments;
+    }
+    if (name) {
+      toolCalls.push({ id: callId, name, input });
+    }
+  }
+  return toolCalls;
+}
+
 export function extractOpenAiImageBase64(response) {
   const output = Array.isArray(response?.output) ? response.output : [];
   for (const item of output) {

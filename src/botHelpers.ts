@@ -17,8 +17,6 @@ const MAX_MEDIA_PROMPT_FLOOR = 120;
 const MAX_MEDIA_PROMPT_CEILING = 2000;
 export const MAX_WEB_QUERY_LEN = 220;
 export const MAX_GIF_QUERY_LEN = 120;
-const MAX_OPEN_ARTICLE_REF_LEN = 260;
-const MAX_MEMORY_LINE_LEN = 180;
 const MAX_SOUNDBOARD_REF_LEN = 180;
 export const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
 export const MAX_IMAGE_LOOKUP_QUERY_LEN = 220;
@@ -125,13 +123,6 @@ export const REPLY_OUTPUT_SCHEMA = {
         }
       ]
     },
-    webSearchQuery: { type: ["string", "null"] },
-    memoryLookupQuery: { type: ["string", "null"] },
-    imageLookupQuery: { type: ["string", "null"] },
-    openArticleRef: { type: ["string", "null"] },
-    memoryLine: { type: ["string", "null"] },
-    selfMemoryLine: { type: ["string", "null"] },
-    userMemoryLine: { type: ["string", "null"] },
     soundboardRefs: {
       type: "array",
       items: {
@@ -234,13 +225,6 @@ export const REPLY_OUTPUT_SCHEMA = {
     "skip",
     "reactionEmoji",
     "media",
-    "webSearchQuery",
-    "memoryLookupQuery",
-    "imageLookupQuery",
-    "openArticleRef",
-    "memoryLine",
-    "selfMemoryLine",
-    "userMemoryLine",
     "soundboardRefs",
     "leaveVoiceChannel",
     "automationAction",
@@ -680,12 +664,6 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
       gifQuery: null,
       mediaDirective: null,
       reactionEmoji: null,
-      webSearchQuery: null,
-      memoryLookupQuery: null,
-      imageLookupQuery: null,
-      openArticleRef: null,
-      memoryLine: null,
-      selfMemoryLine: null,
       soundboardRefs: [],
       leaveVoiceChannel: false,
       automationAction: emptyStructuredAutomationAction(),
@@ -699,15 +677,6 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
   const skip = parsed?.skip === true;
   const text = skip ? "[SKIP]" : baseText;
   const reactionEmoji = normalizeDirectiveText(parsed?.reactionEmoji, 64) || null;
-  const webSearchQuery = normalizeDirectiveText(parsed?.webSearchQuery, MAX_WEB_QUERY_LEN) || null;
-  const memoryLookupQuery =
-    normalizeDirectiveText(parsed?.memoryLookupQuery, MAX_MEMORY_LOOKUP_QUERY_LEN) || null;
-  const imageLookupQuery =
-    normalizeDirectiveText(parsed?.imageLookupQuery, MAX_IMAGE_LOOKUP_QUERY_LEN) || null;
-  const openArticleRef =
-    normalizeDirectiveText(parsed?.openArticleRef ?? parsed?.openArticle, MAX_OPEN_ARTICLE_REF_LEN) || null;
-  const memoryLine = normalizeDirectiveText(parsed?.memoryLine, MAX_MEMORY_LINE_LEN) || null;
-  const selfMemoryLine = normalizeDirectiveText(parsed?.selfMemoryLine, MAX_MEMORY_LINE_LEN) || null;
   const soundboardRefs = normalizeStructuredSoundboardRefs(parsed?.soundboardRefs ?? parsed?.soundboard);
   const leaveVoiceChannel =
     parsed?.leaveVoiceChannel === true ||
@@ -726,12 +695,6 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     gifQuery: mediaDirective?.type === "gif" ? mediaDirective.prompt : null,
     mediaDirective,
     reactionEmoji,
-    webSearchQuery,
-    memoryLookupQuery,
-    imageLookupQuery,
-    openArticleRef,
-    memoryLine,
-    selfMemoryLine,
     soundboardRefs,
     leaveVoiceChannel,
     automationAction,

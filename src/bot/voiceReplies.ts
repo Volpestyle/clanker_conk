@@ -18,7 +18,11 @@ import {
   defaultModelForLlmProvider,
   normalizeLlmProvider
 } from "../llm/llmHelpers.ts";
-import { runModelRequestedWebSearchWithTimeout } from "./replyFollowup.ts";
+import {
+  buildReplyToolSet,
+  executeReplyTool
+} from "../tools/replyTools.ts";
+import type { ReplyToolRuntime, ReplyToolContext } from "../tools/replyTools.ts";
 import { clamp, sanitizeBotText } from "../utils.ts";
 
 const MAX_SOUNDBOARD_LEAK_TOKEN_SCAN = 24;
@@ -27,17 +31,11 @@ const SOUNDBOARD_SIMPLE_TOKEN_RE = /^[a-z0-9 _-]+$/i;
 const MAX_VOICE_SOUNDBOARD_REFS = 10;
 const LOOKUP_CONTEXT_PROMPT_LIMIT = 4;
 const LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS = 72;
-const OPEN_ARTICLE_DEFAULT_MAX_CHARS = 12_000;
-const OPEN_ARTICLE_REF_MAX_LEN = 260;
 const OPEN_ARTICLE_MAX_CANDIDATES = 12;
 const OPEN_ARTICLE_ROW_LIMIT = 4;
 const OPEN_ARTICLE_RESULTS_PER_ROW = 5;
-const OPEN_ARTICLE_ROW_REF_RE = /^r(\d+):(\d+)$/i;
-const OPEN_ARTICLE_INDEX_REF_RE = /^\d+$/;
-const OPEN_ARTICLE_URL_RE = /^https?:\/\//i;
 const VOICE_MEMORY_CONTEXT_MAX_FACTS = 24;
 const VOICE_MEMORY_PREFETCH_WAIT_MS = 120;
-const VOICE_MEMORY_FOLLOWUP_WAIT_MS = 240;
 
 type VoiceMemoryFact = Record<string, unknown>;
 
@@ -347,8 +345,7 @@ export async function generateVoiceTurnReply(runtime, {
   );
   const allowMemoryToolCalls = Boolean(settings?.memory?.enabled);
   const allowWebSearchToolCall = Boolean(
-    typeof runtime.runModelRequestedWebSearch === "function" &&
-    typeof runtime.buildWebSearchContext === "function"
+    typeof runtime.search?.searchAndRead === "function"
   );
   const allowOpenArticleToolCall = Boolean(typeof runtime.search?.readPageSummary === "function");
   const screenShare = resolveVoiceScreenShareCapability(runtime, {
@@ -462,7 +459,7 @@ export async function generateVoiceTurnReply(runtime, {
     }
   };
 
-  let webSearch = allowWebSearchToolCall
+  let webSearch = allowWebSearchToolCall && typeof runtime.buildWebSearchContext === "function"
     ? runtime.buildWebSearchContext(settings, incomingTranscript)
     : {
       requested: false,
@@ -591,198 +588,138 @@ export async function generateVoiceTurnReply(runtime, {
   };
 
   try {
+    const voiceTrace = {
+      guildId,
+      channelId,
+      userId,
+      source: "voice_stt_pipeline_generation",
+      event: sessionId ? "voice_session" : "voice_turn"
+    };
+
+    const voiceReplyTools = buildReplyToolSet(settings as Record<string, unknown>, {
+      webSearchAvailable: allowWebSearchToolCall && webSearchAvailableNow,
+      memoryAvailable: allowMemoryToolCalls,
+      imageLookupAvailable: false,
+      openArticleAvailable: allowOpenArticleToolCall && openArticleCandidates.length > 0
+    });
+
+    const voiceToolRuntime: ReplyToolRuntime = {
+      search: runtime.search,
+      memory: runtime.memory,
+      store: runtime.store
+    };
+    const voiceToolContext: ReplyToolContext = {
+      settings: settings as Record<string, unknown>,
+      guildId: String(guildId || ""),
+      channelId: channelId ? String(channelId) : null,
+      userId: String(userId || ""),
+      sourceMessageId: `voice-${String(guildId || "guild")}-${Date.now()}`,
+      sourceText: incomingTranscript,
+      botUserId: runtime.client?.user?.id || undefined,
+      trace: voiceTrace
+    };
+
+    const initialUserPrompt = buildVoiceUserPrompt();
+    let voiceContextMessages: Array<{ role: string; content: unknown }> = [
+      ...normalizedContextMessages
+    ];
+
     let generation = await runtime.llm.generate({
       settings: tunedSettings,
       systemPrompt,
-      userPrompt: buildVoiceUserPrompt(),
-      contextMessages: normalizedContextMessages,
-      jsonSchema: REPLY_OUTPUT_JSON_SCHEMA,
-      trace: {
+      userPrompt: initialUserPrompt,
+      contextMessages: voiceContextMessages,
+      jsonSchema: voiceReplyTools.length ? "" : REPLY_OUTPUT_JSON_SCHEMA,
+      tools: voiceReplyTools,
+      trace: voiceTrace
+    });
+
+    const VOICE_TOOL_LOOP_MAX_STEPS = 2;
+    const VOICE_TOOL_LOOP_MAX_CALLS = 3;
+    let voiceToolLoopSteps = 0;
+    let voiceTotalToolCalls = 0;
+    let webLookupStarted = false;
+
+    while (
+      generation.toolCalls?.length > 0 &&
+      voiceToolLoopSteps < VOICE_TOOL_LOOP_MAX_STEPS &&
+      voiceTotalToolCalls < VOICE_TOOL_LOOP_MAX_CALLS
+    ) {
+      const assistantContent = generation.rawContent || [
+        { type: "text", text: generation.text || "" }
+      ];
+      voiceContextMessages = [
+        ...voiceContextMessages,
+        { role: "user", content: initialUserPrompt },
+        { role: "assistant", content: assistantContent }
+      ];
+
+      const toolResultMessages: Array<{ type: string; tool_use_id: string; content: string }> = [];
+      for (const toolCall of generation.toolCalls) {
+        if (voiceTotalToolCalls >= VOICE_TOOL_LOOP_MAX_CALLS) break;
+        voiceTotalToolCalls += 1;
+
+        if (toolCall.name === "web_search" && !webLookupStarted && typeof onWebLookupStart === "function") {
+          webLookupStarted = true;
+          runAsyncCallback(onWebLookupStart, {
+            query: String((toolCall.input as Record<string, unknown>)?.query || ""),
+            guildId,
+            channelId,
+            userId
+          });
+        }
+
+        const result = await executeReplyTool(
+          toolCall.name,
+          toolCall.input as Record<string, unknown>,
+          voiceToolRuntime,
+          voiceToolContext
+        );
+
+        if (toolCall.name === "web_search" && !result.isError) {
+          usedWebSearchFollowup = true;
+        }
+        if (toolCall.name === "open_article" && !result.isError) {
+          usedOpenArticleFollowup = true;
+        }
+
+        toolResultMessages.push({
+          type: "tool_result",
+          tool_use_id: toolCall.id,
+          content: result.content
+        });
+      }
+
+      voiceContextMessages = [
+        ...voiceContextMessages,
+        { role: "user", content: toolResultMessages }
+      ];
+
+      generation = await runtime.llm.generate({
+        settings: tunedSettings,
+        systemPrompt,
+        userPrompt: "",
+        contextMessages: voiceContextMessages,
+        jsonSchema: "",
+        tools: voiceReplyTools,
+        trace: {
+          ...voiceTrace,
+          event: `${sessionId ? "voice_session" : "voice_turn"}:tool_loop:${voiceToolLoopSteps + 1}`
+        }
+      });
+      voiceToolLoopSteps += 1;
+    }
+
+    if (webLookupStarted && typeof onWebLookupComplete === "function") {
+      runAsyncCallback(onWebLookupComplete, {
+        query: "",
         guildId,
         channelId,
-        userId,
-        source: "voice_stt_pipeline_generation",
-        event: sessionId ? "voice_session" : "voice_turn"
-      }
-    });
+        userId
+      });
+    }
 
     let parsed = parseStructuredReplyOutput(generation.text);
-    if (
-      allowWebSearchToolCall &&
-      webSearchAvailableNow &&
-      parsed.webSearchQuery &&
-      typeof runtime.runModelRequestedWebSearch === "function"
-    ) {
-      usedWebSearchFollowup = true;
-      const normalizedQuery = String(parsed.webSearchQuery || "").trim();
-      let lookupStarted = false;
-      try {
-        if (typeof onWebLookupStart === "function") {
-          lookupStarted = true;
-          runAsyncCallback(onWebLookupStart, {
-            query: normalizedQuery,
-            guildId,
-            channelId,
-            userId
-          });
-        }
-        const lookupTimeoutMs = resolveVoiceWebSearchTimeoutMs({
-          settings,
-          overrideMs: webSearchTimeoutMs
-        });
-        webSearch = await runModelRequestedWebSearchWithTimeout({
-          runSearch: async () =>
-            await runtime.runModelRequestedWebSearch({
-              settings,
-              webSearch,
-              query: normalizedQuery,
-              trace: {
-                guildId,
-                channelId,
-                userId,
-                source: "voice_stt_pipeline_generation",
-                event: sessionId ? "voice_session_web_lookup" : "voice_turn_web_lookup"
-              }
-            }),
-          webSearch,
-          query: normalizedQuery,
-          timeoutMs: lookupTimeoutMs
-        });
-        if (
-          webSearch?.used &&
-          Array.isArray(webSearch?.results) &&
-          webSearch.results.length > 0 &&
-          typeof runtime.rememberRecentLookupContext === "function"
-        ) {
-          runtime.rememberRecentLookupContext({
-            guildId,
-            channelId,
-            userId,
-            source: sessionId ? "voice_session_web_lookup" : "voice_turn_web_lookup",
-            query: webSearch.query || normalizedQuery,
-            provider: webSearch.providerUsed || null,
-            results: webSearch.results
-          });
-        }
-      } finally {
-        if (lookupStarted && typeof onWebLookupComplete === "function") {
-          runAsyncCallback(onWebLookupComplete, {
-            query: normalizedQuery,
-            guildId,
-            channelId,
-            userId
-          });
-        }
-      }
-      openArticleCandidates = buildOpenArticleCandidates({
-        webSearch,
-        recentWebLookups
-      });
-      promptMemorySlice = await resolveVoiceMemorySliceWithTimeout({
-        memorySlicePromise,
-        fallbackSlice: promptMemorySlice,
-        maxWaitMs: VOICE_MEMORY_FOLLOWUP_WAIT_MS
-      });
-
-      generation = await runtime.llm.generate({
-        settings: tunedSettings,
-        systemPrompt,
-        userPrompt: buildVoiceUserPrompt({
-          webSearchContext: webSearch,
-          allowWebSearch: false,
-          openArticleCandidatesContext: openArticleCandidates
-        }),
-        contextMessages: normalizedContextMessages,
-        jsonSchema: REPLY_OUTPUT_JSON_SCHEMA,
-        trace: {
-          guildId,
-          channelId,
-          userId,
-          source: "voice_stt_pipeline_generation",
-          event: sessionId ? "voice_session_lookup_followup" : "voice_turn_lookup_followup"
-        }
-      });
-      parsed = parseStructuredReplyOutput(generation.text);
-    }
-
-    openArticleCandidates = buildOpenArticleCandidates({
-      webSearch,
-      recentWebLookups
-    });
-
-    if (allowOpenArticleToolCall && parsed.openArticleRef) {
-      usedOpenArticleFollowup = true;
-      const requestedRef = normalizeOpenArticleRef(parsed.openArticleRef);
-      const resolvedOpenArticle = resolveOpenArticleCandidate({
-        ref: requestedRef,
-        candidates: openArticleCandidates
-      });
-
-      if (resolvedOpenArticle) {
-        let openArticleError = "";
-        let openArticleResult = null;
-        try {
-          openArticleResult = await runtime.search.readPageSummary(
-            resolvedOpenArticle.url,
-            resolveVoiceOpenArticleMaxChars(settings)
-          );
-        } catch (error) {
-          openArticleError = String(error?.message || error);
-        }
-
-        const openedContent = String(openArticleResult?.summary || "").trim();
-        openedArticle = {
-          ref: resolvedOpenArticle.ref,
-          title: String(openArticleResult?.title || resolvedOpenArticle.title || "").trim() || null,
-          url: resolvedOpenArticle.url,
-          domain: resolvedOpenArticle.domain,
-          query: resolvedOpenArticle.query,
-          extractionMethod: String(openArticleResult?.extractionMethod || "").trim() || null,
-          content: openedContent,
-          error:
-            openArticleError ||
-            (openedContent ? "" : "opened article had no usable text")
-        };
-      } else {
-        openedArticle = {
-          ref: requestedRef,
-          title: null,
-          url: "",
-          domain: "",
-          query: "",
-          extractionMethod: null,
-          content: "",
-          error: "could not resolve that article ref from cached lookup results"
-        };
-      }
-      promptMemorySlice = await resolveVoiceMemorySliceWithTimeout({
-        memorySlicePromise,
-        fallbackSlice: promptMemorySlice,
-        maxWaitMs: VOICE_MEMORY_FOLLOWUP_WAIT_MS
-      });
-
-      generation = await runtime.llm.generate({
-        settings: tunedSettings,
-        systemPrompt,
-        userPrompt: buildVoiceUserPrompt({
-          webSearchContext: webSearch,
-          allowWebSearch: false,
-          openArticleCandidatesContext: openArticleCandidates,
-          openedArticleContext: openedArticle,
-          allowOpenArticle: false
-        }),
-        contextMessages: normalizedContextMessages,
-        jsonSchema: REPLY_OUTPUT_JSON_SCHEMA,
-        trace: {
-          guildId,
-          channelId,
-          userId,
-          source: "voice_stt_pipeline_generation",
-          event: sessionId ? "voice_session_open_article_followup" : "voice_turn_open_article_followup"
-        }
-      });
-      parsed = parseStructuredReplyOutput(generation.text);
-    }
 
     let usedScreenShareOffer = false;
     if (
@@ -863,49 +800,6 @@ export async function generateVoiceTurnReply(runtime, {
         };
       }
       return response;
-    }
-
-    if (settings.memory?.enabled && parsed.memoryLine && runtime.memory?.rememberDirectiveLine && userId) {
-      await runtime.memory
-        .rememberDirectiveLine({
-          line: parsed.memoryLine,
-          sourceMessageId: `voice-${String(guildId || "guild")}-${Date.now()}-memory`,
-          userId: String(userId),
-          guildId,
-          channelId,
-          sourceText: incomingTranscript,
-          scope: "lore"
-        })
-        .catch(() => undefined);
-    }
-
-    if (settings.memory?.enabled && parsed.selfMemoryLine && runtime.memory?.rememberDirectiveLine && userId) {
-      await runtime.memory
-        .rememberDirectiveLine({
-          line: parsed.selfMemoryLine,
-          sourceMessageId: `voice-${String(guildId || "guild")}-${Date.now()}-self-memory`,
-          userId: runtime.client?.user?.id || String(userId),
-          guildId,
-          channelId,
-          sourceText: finalText,
-          scope: "self"
-        })
-        .catch(() => undefined);
-    }
-
-    if (settings.memory?.enabled && parsed.userMemoryLine && runtime.memory?.rememberDirectiveLine && userId) {
-      await runtime.memory
-        .rememberDirectiveLine({
-          line: parsed.userMemoryLine,
-          sourceMessageId: `voice-${String(guildId || "guild")}-${Date.now()}-user-memory`,
-          userId: String(userId),
-          guildId,
-          channelId,
-          sourceText: incomingTranscript,
-          scope: "user",
-          subjectOverride: String(userId)
-        })
-        .catch(() => undefined);
     }
 
     const response = {
@@ -1000,29 +894,6 @@ function resolveVoiceScreenShareCapability(runtime, { settings, guildId, channel
   };
 }
 
-function resolveVoiceWebSearchTimeoutMs({ settings, overrideMs }) {
-  const explicit = Number(overrideMs);
-  const configured = Number(settings?.voice?.webSearchTimeoutMs);
-  const raw = Number.isFinite(explicit) ? explicit : Number.isFinite(configured) ? configured : 8000;
-  return clamp(Math.floor(raw), 500, 45000);
-}
-
-function resolveVoiceOpenArticleMaxChars(settings) {
-  const configured = Number(settings?.webSearch?.maxCharsPerPage);
-  const atLeastDefault = Number.isFinite(configured)
-    ? Math.max(Math.floor(configured), OPEN_ARTICLE_DEFAULT_MAX_CHARS)
-    : OPEN_ARTICLE_DEFAULT_MAX_CHARS;
-  return clamp(atLeastDefault, 2_000, 24_000);
-}
-
-function normalizeOpenArticleRef(rawRef) {
-  const normalized = String(rawRef || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, OPEN_ARTICLE_REF_MAX_LEN);
-  return normalized || "first";
-}
-
 function buildOpenArticleCandidates({ webSearch, recentWebLookups }) {
   const candidates = [];
   const seenUrls = new Set();
@@ -1089,35 +960,6 @@ function buildOpenArticleCandidates({ webSearch, recentWebLookups }) {
     });
   }
   return withAliases.slice(0, OPEN_ARTICLE_MAX_CANDIDATES);
-}
-
-function resolveOpenArticleCandidate({ ref, candidates }) {
-  const normalizedRef = normalizeOpenArticleRef(ref).toLowerCase();
-  const rows = Array.isArray(candidates) ? candidates : [];
-  if (!rows.length) return null;
-
-  if (normalizedRef === "first") {
-    return rows.find((row) => String(row?.ref || "").toLowerCase() === "first") || rows[0];
-  }
-
-  const exact = rows.find((row) => String(row?.ref || "").toLowerCase() === normalizedRef);
-  if (exact) return exact;
-
-  if (OPEN_ARTICLE_URL_RE.test(normalizedRef)) {
-    return rows.find((row) => String(row?.url || "").toLowerCase() === normalizedRef) || null;
-  }
-
-  if (OPEN_ARTICLE_INDEX_REF_RE.test(normalizedRef)) {
-    const wantedIndex = Number(normalizedRef);
-    if (Number.isInteger(wantedIndex) && wantedIndex > 0) {
-      const indexedRows = rows.filter((row) =>
-        OPEN_ARTICLE_ROW_REF_RE.test(String(row?.ref || ""))
-      );
-      return indexedRows[wantedIndex - 1] || null;
-    }
-  }
-
-  return null;
 }
 
 function sanitizeSoundboardSpeechLeak({

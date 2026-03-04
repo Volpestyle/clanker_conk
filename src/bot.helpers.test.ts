@@ -15,11 +15,6 @@ test("parseStructuredReplyOutput reads structured reply JSON", () => {
       skip: false,
       reactionEmoji: "🔥",
       media: { type: "gif", prompt: "cat dance" },
-      webSearchQuery: "latest bitcoin price",
-      memoryLookupQuery: "favorite games",
-      imageLookupQuery: "that dog photo from earlier",
-      memoryLine: "user likes roguelikes",
-      selfMemoryLine: "i keep replies concise",
       voiceIntent: {
         intent: "join",
         confidence: 0.92,
@@ -32,11 +27,6 @@ test("parseStructuredReplyOutput reads structured reply JSON", () => {
   assert.equal(parsed.reactionEmoji, "🔥");
   assert.equal(parsed.gifQuery, "cat dance");
   assert.equal(parsed.mediaDirective?.type, "gif");
-  assert.equal(parsed.webSearchQuery, "latest bitcoin price");
-  assert.equal(parsed.memoryLookupQuery, "favorite games");
-  assert.equal(parsed.imageLookupQuery, "that dog photo from earlier");
-  assert.equal(parsed.memoryLine, "user likes roguelikes");
-  assert.equal(parsed.selfMemoryLine, "i keep replies concise");
   assert.equal(parsed.automationAction.operation, null);
   assert.equal(parsed.voiceIntent.intent, "join");
   assert.equal(parsed.voiceIntent.confidence, 0.92);
@@ -48,9 +38,6 @@ test("parseStructuredReplyOutput falls back to plain text when output is not JSO
 
   assert.equal(parsed.text, "just reply text");
   assert.equal(parsed.mediaDirective, null);
-  assert.equal(parsed.webSearchQuery, null);
-  assert.equal(parsed.memoryLookupQuery, null);
-  assert.equal(parsed.imageLookupQuery, null);
   assert.equal(parsed.automationAction.operation, null);
   assert.equal(parsed.voiceIntent.intent, null);
   assert.equal(parsed.voiceIntent.confidence, 0);
@@ -332,12 +319,6 @@ test("parseStructuredReplyOutput parses voice tool-call fields", () => {
       skip: false,
       reactionEmoji: null,
       media: null,
-      webSearchQuery: null,
-      memoryLookupQuery: null,
-      imageLookupQuery: null,
-      openArticleRef: "R1:2",
-      memoryLine: "speaker likes concise updates",
-      selfMemoryLine: "i keep replies concise",
       soundboardRefs: ["1234567890@555666777", "111222333@444555666"],
       leaveVoiceChannel: true,
       automationAction: { operation: "none" },
@@ -347,17 +328,13 @@ test("parseStructuredReplyOutput parses voice tool-call fields", () => {
   );
 
   assert.equal(parsed.text, "say less");
-  assert.equal(parsed.openArticleRef, "R1:2");
   assert.deepEqual(parsed.soundboardRefs, ["1234567890@555666777", "111222333@444555666"]);
   assert.equal(parsed.leaveVoiceChannel, true);
-  assert.equal(parsed.memoryLine, "speaker likes concise updates");
-  assert.equal(parsed.selfMemoryLine, "i keep replies concise");
   assert.equal(parsed.screenShareIntent.action, "offer_link");
 });
 
 test("parseStructuredReplyOutput normalizes missing voice tool-call fields to safe defaults", () => {
   const parsed = parseStructuredReplyOutput("just plain text");
-  assert.equal(parsed.openArticleRef, null);
   assert.deepEqual(parsed.soundboardRefs, []);
   assert.equal(parsed.leaveVoiceChannel, false);
   assert.equal(parsed.voiceIntent.query, null);
