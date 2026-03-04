@@ -8,6 +8,7 @@ import {
 import { clankCommand } from "./commands/clankCommand.ts";
 import { browseCommand } from "./commands/browseCommand.ts";
 import { musicCommands } from "./voice/musicCommands.ts";
+import { ImageCaptionCache } from "./vision/imageCaptionCache.ts";
 import {
   buildAutomationPrompt,
   buildDiscoveryPrompt,
@@ -208,6 +209,7 @@ export class ClankerBot {
   voiceSessionManager: VoiceSessionManager;
   browserManager: BrowserManager | null;
   activeBrowserTasks: BrowserTaskRegistry;
+  imageCaptionCache: ImageCaptionCache;
 
   constructor({ appConfig, store, llm, memory, discovery, search, gifs, video, browserManager = null }) {
     this.appConfig = appConfig;
@@ -244,6 +246,10 @@ export class ClankerBot {
     this.nextReflectionRunAt = null;
     this.screenShareSessionManager = null;
     this.activeBrowserTasks = new BrowserTaskRegistry();
+    this.imageCaptionCache = new ImageCaptionCache({
+      maxEntries: 200,
+      defaultTtlMs: 60 * 60 * 1000 // 1 hour
+    });
 
     this.client = new Client({
       intents: [
@@ -2600,6 +2606,60 @@ export class ClankerBot {
     };
   }
 
+  /**
+   * Kick off async captioning for uncaptioned image candidates.
+   * Fire-and-forget — errors are silently swallowed.
+   */
+  captionRecentHistoryImages({ candidates = [], settings = null, trace = null } = {}) {
+    const list = Array.isArray(candidates) ? candidates : [];
+    const maxPerBatch = Math.min(list.length, 5);
+    let scheduled = 0;
+
+    for (const candidate of list) {
+      if (scheduled >= maxPerBatch) break;
+      if (!candidate?.url) continue;
+      if (this.imageCaptionCache.has(candidate.url)) continue;
+
+      scheduled++;
+      this.imageCaptionCache
+        .getOrCaption({
+          url: candidate.url,
+          llm: this.llm,
+          settings,
+          mimeType: candidate.contentType || "",
+          trace: trace || {
+            guildId: null,
+            channelId: null,
+            userId: null,
+            source: "history_image_caption"
+          }
+        })
+        .catch(() => { });
+    }
+  }
+
+  /**
+   * Build auto-include image inputs from recent history candidates.
+   * Returns the top N candidates as direct vision inputs for the LLM.
+   */
+  getAutoIncludeImageInputs({ candidates = [], maxImages = 3 } = {}) {
+    const list = Array.isArray(candidates) ? candidates : [];
+    const cap = Math.max(0, Math.min(Number(maxImages) || 3, 6));
+    const inputs = [];
+
+    for (const candidate of list) {
+      if (inputs.length >= cap) break;
+      if (!candidate?.url) continue;
+      inputs.push({
+        url: candidate.url,
+        filename: candidate.filename || "(unnamed)",
+        contentType: candidate.contentType || ""
+      });
+    }
+
+    return inputs;
+  }
+
   extractHistoryImageCandidates({ recentMessages = [], excluded = new Set() } = {}) {
     const rows = Array.isArray(recentMessages) ? recentMessages : [];
     const seen = excluded instanceof Set ? new Set(excluded) : new Set();
@@ -2623,6 +2683,14 @@ export class ClankerBot {
 
         const parsed = parseHistoryImageReference(url);
         const contentSansUrl = content.replace(url, " ").replace(/\s+/g, " ").trim();
+        // Enrich context with cached vision caption if available
+        const cachedCaption = this.imageCaptionCache?.get(url);
+        const captionText = cachedCaption?.caption || "";
+        const baseContext = contentSansUrl.slice(0, 180);
+        const enrichedContext = captionText
+          ? (baseContext ? `${baseContext} [caption: ${captionText}]` : `[caption: ${captionText}]`).slice(0, 360)
+          : baseContext;
+
         candidates.push({
           messageId: String(row?.message_id || "").trim() || null,
           authorName: String(row?.author_name || "unknown").trim() || "unknown",
@@ -2630,8 +2698,9 @@ export class ClankerBot {
           url,
           filename: parsed.filename || "(unnamed)",
           contentType: parsed.contentType || "",
-          context: contentSansUrl.slice(0, 180),
-          recencyRank: candidates.length
+          context: enrichedContext,
+          recencyRank: candidates.length,
+          hasCachedCaption: Boolean(cachedCaption)
         });
       }
     }
@@ -4183,15 +4252,15 @@ export class ClankerBot {
       const recent = await this.hydrateRecentMessages(channel, settings.memory.maxRecentMessages);
       const recentMessages = recent.length
         ? recent
-            .slice()
-            .reverse()
-            .slice(0, settings.memory.maxRecentMessages)
-            .map((msg) => ({
-              author_name: msg.member?.displayName || msg.author?.username || "unknown",
-              content: String(msg.content || "").trim(),
-              created_at: new Date(msg.createdTimestamp).toISOString(),
-              is_bot: Boolean(msg.author?.bot)
-            }))
+          .slice()
+          .reverse()
+          .slice(0, settings.memory.maxRecentMessages)
+          .map((msg) => ({
+            author_name: msg.member?.displayName || msg.author?.username || "unknown",
+            content: String(msg.content || "").trim(),
+            created_at: new Date(msg.createdTimestamp).toISOString(),
+            is_bot: Boolean(msg.author?.bot)
+          }))
         : this.store.getRecentMessages(channel.id, settings.memory.maxRecentMessages);
       const discoveryMemoryQuery = recentMessages
         .slice(0, 6)
