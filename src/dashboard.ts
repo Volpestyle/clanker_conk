@@ -147,9 +147,6 @@ export function createDashboardServer({
       throw new Error("sse_write_failed");
     }
   };
-    attachSettingsRoutes(app, { store, bot, memory, appConfig, publicHttpsEntrypoint, screenShareSessionManager, getStatsPayload, voiceSseClients, activitySseClients });
-    attachMetricsRoutes(app, { store, bot, memory, appConfig, publicHttpsEntrypoint, screenShareSessionManager, getStatsPayload, voiceSseClients, activitySseClients, writeSseEvent, broadcastSseEvent });
-    attachVoiceRoutes(app, { store, bot, memory, appConfig, publicHttpsEntrypoint, screenShareSessionManager, getStatsPayload, voiceSseClients, activitySseClients });
   const broadcastSseEvent = (
     clients: Set<{ res: Response; blocked: boolean }>,
     eventName: string,
@@ -164,6 +161,9 @@ export function createDashboardServer({
       }
     }
   };
+    attachSettingsRoutes(app, { store, bot, memory, appConfig, publicHttpsEntrypoint, screenShareSessionManager, getStatsPayload, voiceSseClients, activitySseClients });
+    attachMetricsRoutes(app, { store, bot, memory, appConfig, publicHttpsEntrypoint, screenShareSessionManager, getStatsPayload, voiceSseClients, activitySseClients, writeSseEvent, broadcastSseEvent });
+    attachVoiceRoutes(app, { store, bot, memory, appConfig, publicHttpsEntrypoint, screenShareSessionManager, getStatsPayload, voiceSseClients, activitySseClients });
 
   const previousActionListener = typeof store.onActionLogged === "function" ? store.onActionLogged : null;
   store.onActionLogged = (action) => {

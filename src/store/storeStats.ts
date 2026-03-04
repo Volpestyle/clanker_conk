@@ -1,6 +1,7 @@
 // Extracted Store Methods
-import { nowIso } from "../utils.ts";
-import { LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL_DEFAULT, LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT } from "../store.ts";
+import { clamp } from "../utils.ts";
+import { safeJsonParse } from "../normalization/valueParsers.ts";
+import { pushPerformanceMetric, summarizeLatencyMetric } from "./storePerformance.ts";
 
 export function getReplyPerformanceStats(store: any, { windowHours = 24, maxSamples = 4000 } = {}) {
 const boundedHours = clamp(Math.floor(Number(windowHours) || 24), 1, 168);

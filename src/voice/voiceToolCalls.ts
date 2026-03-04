@@ -2,6 +2,20 @@
 import { runBrowseAgent } from "../agents/browseAgent.ts";
 import { clamp } from "../utils.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
+import type {
+  VoiceMcpServerStatus,
+  VoiceToolRuntimeSessionLike,
+  VoiceRealtimeToolSettings,
+  VoiceRealtimeToolDescriptor,
+  VoiceToolCallEvent,
+} from "./voiceSessionTypes.ts";
+import {
+  OPENAI_TOOL_CALL_EVENT_MAX,
+  OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS,
+  VOICE_MEMORY_WRITE_MAX_PER_MINUTE,
+  MEMORY_SENSITIVE_PATTERN_RE,
+} from "./voiceSessionManager.constants.ts";
+import { providerSupports } from "./voiceModes.ts";
 
 export function ensureSessionToolRuntimeState(manager: any, session) {
   if (!session || typeof session !== "object") return null;

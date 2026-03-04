@@ -7,6 +7,8 @@ import {
 import { getMediaPromptCraftGuidance } from "../promptCore.ts";
 import {
   REPLY_OUTPUT_JSON_SCHEMA,
+  composeReplyImagePrompt,
+  composeReplyVideoPrompt,
   embedWebSearchSources,
   emptyMentionResolution,
   parseStructuredReplyOutput,

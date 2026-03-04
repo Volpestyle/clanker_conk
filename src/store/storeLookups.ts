@@ -1,6 +1,19 @@
 // Extracted Store Methods
-import { nowIso } from "../utils.ts";
+import { clamp, nowIso } from "../utils.ts";
 import { LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL_DEFAULT, LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT } from "../store.ts";
+import { safeJsonParse } from "../normalization/valueParsers.ts";
+import {
+  normalizeLookupResultText,
+  normalizeLookupResultRows,
+  buildLookupContextMatchText,
+  scoreLookupContextRow,
+  LOOKUP_CONTEXT_QUERY_MAX_CHARS,
+  LOOKUP_CONTEXT_SOURCE_MAX_CHARS,
+  LOOKUP_CONTEXT_PROVIDER_MAX_CHARS,
+  LOOKUP_CONTEXT_MAX_TTL_HOURS,
+  LOOKUP_CONTEXT_MAX_AGE_HOURS,
+  LOOKUP_CONTEXT_MAX_SEARCH_LIMIT
+} from "./storeHelpers.ts";
 
 export function wasLinkSharedSince(store: any, url, sinceIso) {
 const normalizedUrl = String(url || "").trim();

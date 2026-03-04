@@ -6,7 +6,6 @@ import { Database } from "bun:sqlite";
 import { load as loadSqliteVec } from "sqlite-vec";
 import { DEFAULT_SETTINGS } from "./settings/settingsSchema.ts";
 import { clamp, deepMerge, nowIso } from "./utils.ts";
-import { normalizeWhitespaceText } from "./normalization/text.ts";
 import {
   buildAutomationMatchText,
   normalizeAutomationInstruction,
@@ -22,7 +21,19 @@ import {
   normalizeEmbeddingVector,
   normalizeMessageCreatedAt,
   parseEmbeddingBlob,
-  vectorToBlob
+  vectorToBlob,
+  normalizeLookupResultText,
+  normalizeLookupResultRows,
+  buildLookupContextMatchText,
+  scoreLookupContextRow,
+  LOOKUP_CONTEXT_QUERY_MAX_CHARS,
+  LOOKUP_CONTEXT_SOURCE_MAX_CHARS,
+  LOOKUP_CONTEXT_PROVIDER_MAX_CHARS,
+  LOOKUP_CONTEXT_RESULT_MAX_CHARS,
+  LOOKUP_CONTEXT_MATCH_TEXT_MAX_CHARS,
+  LOOKUP_CONTEXT_MAX_TTL_HOURS,
+  LOOKUP_CONTEXT_MAX_AGE_HOURS,
+  LOOKUP_CONTEXT_MAX_SEARCH_LIMIT
 } from "./store/storeHelpers.ts";
 import {
   normalizeResponseTriggerMessageIds,
@@ -38,16 +49,7 @@ import { getReplyPerformanceStats, getStats } from "./store/storeStats.ts";
 import { createAutomation, getAutomationById, countAutomations, listAutomations, getMostRecentAutomations, findAutomationsByQuery, setAutomationStatus, claimDueAutomations, finalizeAutomationRun, recordAutomationRun, getAutomationRuns } from "./store/storeAutomation.ts";
 import { addMemoryFact, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactBySubjectAndFact, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject } from "./store/storeMemory.ts";
 
-const SETTINGS_KEY = "runtime_settings";
-const LOOKUP_CONTEXT_QUERY_MAX_CHARS = 220;
-const LOOKUP_CONTEXT_SOURCE_MAX_CHARS = 120;
-const LOOKUP_CONTEXT_PROVIDER_MAX_CHARS = 64;
-const LOOKUP_CONTEXT_RESULT_MAX_CHARS = 420;
-const LOOKUP_CONTEXT_MATCH_TEXT_MAX_CHARS = 1800;
-
-const LOOKUP_CONTEXT_MAX_TTL_HOURS = 168;
-const LOOKUP_CONTEXT_MAX_AGE_HOURS = 168;
-const LOOKUP_CONTEXT_MAX_SEARCH_LIMIT = 16;
+export const SETTINGS_KEY = "runtime_settings";
 export const ACTION_LOG_RETENTION_DAYS_DEFAULT = 14;
 export const ACTION_LOG_RETENTION_DAYS_MIN = 1;
 export const ACTION_LOG_RETENTION_DAYS_MAX = 3650;
@@ -69,81 +71,6 @@ function resolveStoreEnvInt(name, fallback, min, max) {
   return resolveEnvBoundedInt(process.env[name], fallback, min, max);
 }
 
-function normalizeLookupResultText(value, maxChars = LOOKUP_CONTEXT_RESULT_MAX_CHARS) {
-  return normalizeWhitespaceText(value, {
-    maxLen: maxChars,
-    minLen: 40
-  });
-}
-
-function normalizeLookupResultRows(rows, maxResults = LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT) {
-  const source = Array.isArray(rows) ? rows : [];
-  const boundedMaxResults = clamp(
-    Math.floor(Number(maxResults) || LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT),
-    1,
-    10
-  );
-  const normalizedRows = [];
-  for (const row of source) {
-    if (normalizedRows.length >= boundedMaxResults) break;
-    const url = normalizeLookupResultText(row?.url, 420);
-    if (!url) continue;
-    normalizedRows.push({
-      title: normalizeLookupResultText(row?.title, 180),
-      url,
-      domain: normalizeLookupResultText(row?.domain, 120),
-      snippet: normalizeLookupResultText(row?.snippet, 260),
-      pageSummary: normalizeLookupResultText(row?.pageSummary, 320)
-    });
-  }
-  return normalizedRows;
-}
-
-function buildLookupContextMatchText({ query, results = [] }) {
-  const normalizedQuery = normalizeLookupResultText(query, LOOKUP_CONTEXT_QUERY_MAX_CHARS);
-  const resultRows = Array.isArray(results) ? results : [];
-  const segments = [normalizedQuery];
-  for (const row of resultRows) {
-    const title = normalizeLookupResultText(row?.title, 180);
-    const domain = normalizeLookupResultText(row?.domain, 120);
-    const snippet = normalizeLookupResultText(row?.snippet, 220);
-    const pageSummary = normalizeLookupResultText(row?.pageSummary, 220);
-    if (title) segments.push(title);
-    if (domain) segments.push(domain);
-    if (snippet) segments.push(snippet);
-    if (pageSummary) segments.push(pageSummary);
-  }
-  return segments
-    .join(" ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, LOOKUP_CONTEXT_MATCH_TEXT_MAX_CHARS);
-}
-
-function scoreLookupContextRow(row, tokens = []) {
-  const normalizedTokens = Array.isArray(tokens) ? tokens : [];
-  if (!normalizedTokens.length) return 0;
-  const query = String(row?.query || "")
-    .toLowerCase()
-    .trim();
-  const matchText = String(row?.match_text || "")
-    .toLowerCase()
-    .trim();
-  if (!query && !matchText) return 0;
-
-  let score = 0;
-  for (const token of normalizedTokens) {
-    if (!token) continue;
-    if (query.includes(token)) {
-      score += 3;
-      continue;
-    }
-    if (matchText.includes(token)) {
-      score += 1;
-    }
-  }
-  return score;
-}
 
 export class Store {
   dbPath;
@@ -350,222 +277,210 @@ export class Store {
   }
 
   rewriteRuntimeSettingsRow(rawValue) {
-    return rewriteRuntimeSettingsRow(this, ...arguments);
+    return rewriteRuntimeSettingsRow(this, rawValue);
   }
 
   getSettings() {
-    return getSettings(this, ...arguments);
+    return getSettings(this);
   }
 
   setSettings(next) {
-    return setSettings(this, ...arguments);
+    return setSettings(this, next);
   }
 
   patchSettings(patch) {
-    return patchSettings(this, ...arguments);
+    return patchSettings(this, patch);
   }
 
   resetSettings() {
-    return resetSettings(this, ...arguments);
+    return resetSettings(this);
   }
 
   recordMessage(message) {
-    return recordMessage(this, ...arguments);
+    return recordMessage(this, message);
   }
 
   getRecentMessages(channelId, limit = 40) {
-    return getRecentMessages(this, ...arguments);
+    return getRecentMessages(this, channelId, limit);
   }
 
   getRecentMessagesAcrossGuild(guildId, limit = 120) {
-    return getRecentMessagesAcrossGuild(this, ...arguments);
+    return getRecentMessagesAcrossGuild(this, guildId, limit);
   }
 
   searchRelevantMessages(channelId, queryText, limit = 8) {
-    return searchRelevantMessages(this, ...arguments);
+    return searchRelevantMessages(this, channelId, queryText, limit);
   }
 
   getActiveChannels(guildId, hours = 24, limit = 10) {
-    return getActiveChannels(this, ...arguments);
+    return getActiveChannels(this, guildId, hours, limit);
   }
 
-  maybePruneActionLog({ now = nowIso() } = {}) {
-    return maybePruneActionLog(this, ...arguments);
+  maybePruneActionLog(opts: { now?: string } = {}) {
+    return maybePruneActionLog(this, opts);
   }
 
-  pruneActionLog({
-    now = nowIso(),
-    maxAgeDays = this.actionLogRetentionDays,
-    maxRows = this.actionLogMaxRows
-  } = {}) {
-    return pruneActionLog(this, ...arguments);
+  pruneActionLog(opts: { now?: string; maxAgeDays?: number; maxRows?: number } = {}) {
+    return pruneActionLog(this, opts);
   }
 
   logAction(action) {
-    return logAction(this, ...arguments);
+    return logAction(this, action);
   }
 
   countActionsSince(kind, sinceIso) {
-    return countActionsSince(this, ...arguments);
+    return countActionsSince(this, kind, sinceIso);
   }
 
   getLastActionTime(kind) {
-    return getLastActionTime(this, ...arguments);
+    return getLastActionTime(this, kind);
   }
 
   countInitiativePostsSince(sinceIso) {
-    return countInitiativePostsSince(this, ...arguments);
+    return countInitiativePostsSince(this, sinceIso);
   }
 
   getRecentActions(limit = 200) {
-    return getRecentActions(this, ...arguments);
+    return getRecentActions(this, limit);
   }
 
-  indexResponseTriggersForAction({
-    actionId,
-    kind,
-    metadata,
-    createdAt = nowIso()
+  indexResponseTriggersForAction(opts: {
+    actionId;
+    kind;
+    metadata;
+    createdAt?: string;
   }) {
-    return indexResponseTriggersForAction(this, ...arguments);
+    return indexResponseTriggersForAction(this, opts);
   }
 
   hasTriggeredResponse(triggerMessageId) {
-    return hasTriggeredResponse(this, ...arguments);
+    return hasTriggeredResponse(this, triggerMessageId);
   }
 
   wasLinkSharedSince(url, sinceIso) {
-    return wasLinkSharedSince(this, ...arguments);
+    return wasLinkSharedSince(this, url, sinceIso);
   }
 
-  recordSharedLink({ url, source = null }) {
-    return recordSharedLink(this, ...arguments);
+  recordSharedLink(opts: { url; source? }) {
+    return recordSharedLink(this, opts);
   }
 
-  pruneLookupContext({
-    now = nowIso(),
-    guildId = null,
-    channelId = null,
-    maxRowsPerChannel = LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL_DEFAULT
+  pruneLookupContext(opts: {
+    now?: string;
+    guildId?: string | null;
+    channelId?: string | null;
+    maxRowsPerChannel?: number;
   } = {}) {
-    return pruneLookupContext(this, ...arguments);
+    return pruneLookupContext(this, opts);
   }
 
-  recordLookupContext({
-    guildId,
-    channelId = null,
-    userId = null,
-    source = null,
-    query,
-    provider = null,
-    results = [],
-    ttlHours = 48,
-    maxResults = LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT,
-    maxRowsPerChannel = LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL_DEFAULT
+  recordLookupContext(opts: {
+    guildId;
+    channelId?;
+    userId?;
+    source?;
+    query;
+    provider?;
+    results?;
+    ttlHours?;
+    maxResults?;
+    maxRowsPerChannel?;
   }) {
-    return recordLookupContext(this, ...arguments);
+    return recordLookupContext(this, opts);
   }
 
-  searchLookupContext({
-    guildId,
-    channelId = null,
-    queryText = "",
-    limit = 4,
-    maxAgeHours = 72
+  searchLookupContext(opts: {
+    guildId;
+    channelId?;
+    queryText?;
+    limit?;
+    maxAgeHours?;
   }) {
-    return searchLookupContext(this, ...arguments);
+    return searchLookupContext(this, opts);
   }
 
   getRecentVoiceSessions(limit = 3) {
-    return getRecentVoiceSessions(this, ...arguments);
+    return getRecentVoiceSessions(this, limit);
   }
 
   getVoiceSessionEvents(sessionId: string, limit = 500) {
-    return getVoiceSessionEvents(this, ...arguments);
+    return getVoiceSessionEvents(this, sessionId, limit);
   }
 
-  getReplyPerformanceStats({ windowHours = 24, maxSamples = 4000 } = {}) {
-    return getReplyPerformanceStats(this, ...arguments);
+  getReplyPerformanceStats(opts: { windowHours?: number; maxSamples?: number } = {}) {
+    return getReplyPerformanceStats(this, opts);
   }
 
   getStats() {
-    return getStats(this, ...arguments);
+    return getStats(this);
   }
 
-  createAutomation({
-    guildId,
-    channelId,
-    createdByUserId,
-    createdByName = "",
-    title,
-    instruction,
-    schedule,
-    nextRunAt = null
+  createAutomation(opts: {
+    guildId;
+    channelId;
+    createdByUserId;
+    createdByName?;
+    title;
+    instruction;
+    schedule;
+    nextRunAt?;
   }) {
-    return createAutomation(this, ...arguments);
+    return createAutomation(this, opts);
   }
 
   getAutomationById(automationId, guildId = null) {
-    return getAutomationById(this, ...arguments);
+    return getAutomationById(this, automationId, guildId);
   }
 
-  countAutomations({ guildId, statuses = ["active", "paused"] }) {
-    return countAutomations(this, ...arguments);
+  countAutomations(opts: { guildId; statuses? }) {
+    return countAutomations(this, opts);
   }
 
-  listAutomations({
-    guildId,
-    channelId = null,
-    statuses = ["active", "paused"],
-    query = "",
-    limit = 20
+  listAutomations(opts: {
+    guildId;
+    channelId?;
+    statuses?;
+    query?;
+    limit?;
   }) {
-    return listAutomations(this, ...arguments);
+    return listAutomations(this, opts);
   }
 
-  getMostRecentAutomations({
-    guildId,
-    channelId = null,
-    statuses = ["active", "paused"],
-    limit = 8
+  getMostRecentAutomations(opts: {
+    guildId;
+    channelId?;
+    statuses?;
+    limit?;
   }) {
-    return getMostRecentAutomations(this, ...arguments);
+    return getMostRecentAutomations(this, opts);
   }
 
-  findAutomationsByQuery({
-    guildId,
-    channelId = null,
-    query = "",
-    statuses = ["active", "paused"],
-    limit = 8
+  findAutomationsByQuery(opts: {
+    guildId;
+    channelId?;
+    query?;
+    statuses?;
+    limit?;
   }) {
-    return findAutomationsByQuery(this, ...arguments);
+    return findAutomationsByQuery(this, opts);
   }
 
-  setAutomationStatus({
-    automationId,
-    guildId,
-    status,
-    nextRunAt = null,
-    lastError = null,
-    lastResult = null
+  setAutomationStatus(opts: {
+    automationId;
+    guildId;
+    status;
+    nextRunAt?;
+    lastError?;
+    lastResult?;
   }) {
-    return setAutomationStatus(this, ...arguments);
+    return setAutomationStatus(this, opts);
   }
 
-  claimDueAutomations({ now = nowIso(), limit = 4 }: { now?: string; limit?: number } = {}) {
-    return claimDueAutomations(this, ...arguments);
+  claimDueAutomations(opts: { now?: string; limit?: number } = {}) {
+    return claimDueAutomations(this, opts);
   }
 
-  finalizeAutomationRun({
-    automationId,
-    guildId,
-    status = "active",
-    nextRunAt = null,
-    lastRunAt = null,
-    lastError = null,
-    lastResult = null
-  }: {
+  finalizeAutomationRun(opts: {
     automationId?: number | string;
     guildId?: string;
     status?: string;
@@ -574,84 +489,80 @@ export class Store {
     lastError?: string | null;
     lastResult?: string | null;
   } = {}) {
-    return finalizeAutomationRun(this, ...arguments);
+    return finalizeAutomationRun(this, opts);
   }
 
-  recordAutomationRun({
-    automationId,
-    startedAt = null,
-    finishedAt = null,
-    status = "ok",
-    summary = "",
-    error = "",
-    messageId = null,
-    metadata = null
+  recordAutomationRun(opts: {
+    automationId;
+    startedAt?;
+    finishedAt?;
+    status?;
+    summary?;
+    error?;
+    messageId?;
+    metadata?;
   }) {
-    return recordAutomationRun(this, ...arguments);
+    return recordAutomationRun(this, opts);
   }
 
-  getAutomationRuns({
-    automationId,
-    guildId,
-    limit = 20
-  }: {
+  getAutomationRuns(opts: {
     automationId?: number | string;
     guildId?: string;
     limit?: number;
   } = {}) {
-    return getAutomationRuns(this, ...arguments);
+    return getAutomationRuns(this, opts);
   }
 
   addMemoryFact(fact) {
-    return addMemoryFact(this, ...arguments);
+    return addMemoryFact(this, fact);
   }
 
   getFactsForSubjectScoped(subject, limit = 12, scope = null) {
-    return getFactsForSubjectScoped(this, ...arguments);
+    return getFactsForSubjectScoped(this, subject, limit, scope);
   }
 
   getFactsForSubjects(subjects, limit = 80, scope = null) {
-    return getFactsForSubjects(this, ...arguments);
+    return getFactsForSubjects(this, subjects, limit, scope);
   }
 
-  getFactsForScope({ guildId, limit = 120, subjectIds = null }) {
-    return getFactsForScope(this, ...arguments);
+  getFactsForScope(opts: { guildId; limit?; subjectIds? }) {
+    return getFactsForScope(this, opts);
   }
 
-  getFactsForSubjectsScoped({
-    guildId = null,
-    subjectIds = [],
-    perSubjectLimit = 6,
-    totalLimit = 600
+  getFactsForSubjectsScoped(opts: {
+    guildId?;
+    subjectIds?;
+    perSubjectLimit?;
+    totalLimit?;
   } = {}) {
-    return getFactsForSubjectsScoped(this, ...arguments);
+    return getFactsForSubjectsScoped(this, opts);
   }
 
   getMemoryFactBySubjectAndFact(guildId, subject, fact) {
-    return getMemoryFactBySubjectAndFact(this, ...arguments);
+    return getMemoryFactBySubjectAndFact(this, guildId, subject, fact);
   }
 
   ensureSqliteVecReady() {
-    return ensureSqliteVecReady(this, ...arguments);
+    return ensureSqliteVecReady(this);
   }
 
-  upsertMemoryFactVectorNative({ factId, model, embedding, updatedAt = nowIso() }) {
-    return upsertMemoryFactVectorNative(this, ...arguments);
+  upsertMemoryFactVectorNative(opts: { factId; model; embedding; updatedAt? }) {
+    return upsertMemoryFactVectorNative(this, opts);
   }
 
   getMemoryFactVectorNative(factId, model) {
-    return getMemoryFactVectorNative(this, ...arguments);
+    return getMemoryFactVectorNative(this, factId, model);
   }
 
-  getMemoryFactVectorNativeScores({ factIds, model, queryEmbedding }) {
-    return getMemoryFactVectorNativeScores(this, ...arguments);
+  getMemoryFactVectorNativeScores(opts: { factIds; model; queryEmbedding }) {
+    return getMemoryFactVectorNativeScores(this, opts);
   }
 
   getMemorySubjects(limit = 80, scope = null) {
-    return getMemorySubjects(this, ...arguments);
+    return getMemorySubjects(this, limit, scope);
   }
 
-  archiveOldFactsForSubject({ guildId, subject, factType = null, keep = 60 }) {
-    return archiveOldFactsForSubject(this, ...arguments);
+  archiveOldFactsForSubject(opts: { guildId; subject; factType?; keep? }) {
+    return archiveOldFactsForSubject(this, opts);
   }
 }

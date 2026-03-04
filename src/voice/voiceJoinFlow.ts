@@ -15,6 +15,7 @@ import {
   shortError
 } from "./voiceSessionHelpers.ts";
 import { providerSupports } from "./voiceModes.ts";
+import type { VoiceSession } from "./voiceSessionTypes.ts";
 
 const MIN_MAX_SESSION_MINUTES = 1;
 const MAX_MAX_SESSION_MINUTES = 120;
@@ -576,7 +577,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       subprocessClient = await subprocessSpawnPromise;
 
       const now = Date.now();
-      const session = {
+      const session: VoiceSession = {
         id: randomUUID(),
         guildId,
         voiceChannelId: targetVoiceChannelId,
@@ -713,7 +714,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
               : [],
           catalogFetchedAt:
             String(initialSoundboardCandidateInfo?.source || "") === "guild_catalog" ||
-            String(initialSoundboardCandidateInfo?.source || "") === "none"
+              String(initialSoundboardCandidateInfo?.source || "") === "none"
               ? now
               : 0,
           lastDirectiveKey: "",
@@ -799,8 +800,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         content: `voice_join_failed: ${errorText}`,
         metadata: connectDiagnostics
           ? {
-              connectDiagnostics
-            }
+            connectDiagnostics
+          }
           : undefined
       });
 

@@ -1,6 +1,7 @@
 // Extracted Store Methods
-import { nowIso } from "../utils.ts";
-import { LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL_DEFAULT, LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT } from "../store.ts";
+import { clamp, nowIso } from "../utils.ts";
+import { load as loadSqliteVec } from "sqlite-vec";
+import { normalizeEmbeddingVector, vectorToBlob, parseEmbeddingBlob } from "./storeHelpers.ts";
 
 export function addMemoryFact(store: any, fact) {
 const guildId = String(fact.guildId || "").trim();

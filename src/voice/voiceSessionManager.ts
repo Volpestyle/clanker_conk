@@ -295,8 +295,6 @@ const MUSIC_DISAMBIGUATION_MAX_RESULTS = 5;
 const MUSIC_DISAMBIGUATION_TTL_MS = 10 * 60 * 1000;
 const MEMORY_NAMESPACE_USER_RE = /^user:([a-z0-9_-]{2,64})$/i;
 const MEMORY_NAMESPACE_GUILD_RE = /^guild:([a-z0-9_-]{2,64})$/i;
-const MEMORY_SENSITIVE_PATTERN_RE =
-  /\b(?:sk-[a-z0-9]{20,}|api[_-]?key|token|password|passphrase|authorization|secret)\b/i;
 const OPENAI_FUNCTION_CALL_ITEM_TYPES = new Set([
   "response.output_item.added",
   "response.output_item.done",
@@ -13561,119 +13559,106 @@ export class VoiceSessionManager {
   }
 
     ensureSessionToolRuntimeState(session) {
-        return ensureSessionToolRuntimeState(this, ...arguments);
+        return ensureSessionToolRuntimeState(this, session);
     }
 
     getVoiceMcpServerStatuses() {
-        return getVoiceMcpServerStatuses(this, ...arguments);
+        return getVoiceMcpServerStatuses(this);
     }
 
-    resolveVoiceRealtimeToolDescriptors({
-            session,
-            settings
-          }: {
+    resolveVoiceRealtimeToolDescriptors(opts: {
             session?: VoiceToolRuntimeSessionLike | null;
             settings?: VoiceRealtimeToolSettings | null;
             } = {}) {
-        return resolveVoiceRealtimeToolDescriptors(this, ...arguments);
+        return resolveVoiceRealtimeToolDescriptors(this, opts);
     }
 
-    buildRealtimeFunctionTools({
-            session,
-            settings
-          }: {
+    buildRealtimeFunctionTools(opts: {
             session?: VoiceToolRuntimeSessionLike | null;
             settings?: VoiceRealtimeToolSettings | null;
             } = {}) {
-        return buildRealtimeFunctionTools(this, ...arguments);
+        return buildRealtimeFunctionTools(this, opts);
     }
 
-    recordVoiceToolCallEvent({
-            session,
-            event
-          }: {
+    recordVoiceToolCallEvent(opts: {
             session?: VoiceToolRuntimeSessionLike | null;
             event?: VoiceToolCallEvent | null;
             } = {}) {
-        return recordVoiceToolCallEvent(this, ...arguments);
+        return recordVoiceToolCallEvent(this, opts);
     }
 
     parseOpenAiRealtimeToolArguments(argumentsText = "") {
-        return parseOpenAiRealtimeToolArguments(this, ...arguments);
+        return parseOpenAiRealtimeToolArguments(this, argumentsText);
     }
 
     resolveOpenAiRealtimeToolDescriptor(session, toolName = "") {
-        return resolveOpenAiRealtimeToolDescriptor(this, ...arguments);
+        return resolveOpenAiRealtimeToolDescriptor(this, session, toolName);
     }
 
     summarizeVoiceToolOutput(output: unknown = null) {
-        return summarizeVoiceToolOutput(this, ...arguments);
+        return summarizeVoiceToolOutput(this, output);
     }
 
-    async executeOpenAiRealtimeFunctionCall({
-            session,
-            settings,
-            pendingCall
+    async executeOpenAiRealtimeFunctionCall(opts: {
+            session;
+            settings;
+            pendingCall;
           }) {
-        return executeOpenAiRealtimeFunctionCall(this, ...arguments);
+        return executeOpenAiRealtimeFunctionCall(this, opts);
     }
 
-    async refreshRealtimeTools({
-            session,
-            settings,
-            reason = "voice_context_refresh"
-          }: {
+    async refreshRealtimeTools(opts: {
             session?: VoiceToolRuntimeSessionLike | null;
             settings?: VoiceRealtimeToolSettings | null;
             reason?: string;
             } = {}) {
-        return refreshRealtimeTools(this, ...arguments);
+        return refreshRealtimeTools(this, opts);
     }
 
-    async executeVoiceMemorySearchTool({
-            session,
-            settings,
-            args
+    async executeVoiceMemorySearchTool(opts: {
+            session;
+            settings;
+            args;
           }) {
-        return executeVoiceMemorySearchTool(this, ...arguments);
+        return executeVoiceMemorySearchTool(this, opts);
     }
 
-    async executeVoiceMemoryWriteTool({
-            session,
-            settings,
-            args
+    async executeVoiceMemoryWriteTool(opts: {
+            session;
+            settings;
+            args;
           }) {
-        return executeVoiceMemoryWriteTool(this, ...arguments);
+        return executeVoiceMemoryWriteTool(this, opts);
     }
 
-    async executeVoiceMusicSearchTool({ session, args }) {
-        return executeVoiceMusicSearchTool(this, ...arguments);
+    async executeVoiceMusicSearchTool(opts: { session; args }) {
+        return executeVoiceMusicSearchTool(this, opts);
     }
 
-    async executeVoiceMusicQueueAddTool({ session, settings, args }) {
-        return executeVoiceMusicQueueAddTool(this, ...arguments);
+    async executeVoiceMusicQueueAddTool(opts: { session; settings; args }) {
+        return executeVoiceMusicQueueAddTool(this, opts);
     }
 
-    async executeVoiceWebSearchTool({ session, settings, args }) {
-        return executeVoiceWebSearchTool(this, ...arguments);
+    async executeVoiceWebSearchTool(opts: { session; settings; args }) {
+        return executeVoiceWebSearchTool(this, opts);
     }
 
-    async executeLocalVoiceToolCall({
-            session,
-            settings,
-            toolName,
-            args
+    async executeLocalVoiceToolCall(opts: {
+            session;
+            settings;
+            toolName;
+            args;
           }) {
-        return executeLocalVoiceToolCall(this, ...arguments);
+        return executeLocalVoiceToolCall(this, opts);
     }
 
-    async executeMcpVoiceToolCall({
-            session,
-            settings: _settings,
-            toolDescriptor,
-            args
+    async executeMcpVoiceToolCall(opts: {
+            session;
+            settings;
+            toolDescriptor;
+            args;
           }) {
-        return executeMcpVoiceToolCall(this, ...arguments);
+        return executeMcpVoiceToolCall(this, opts);
     }
 }
 

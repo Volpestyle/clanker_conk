@@ -1,6 +1,9 @@
 // Extracted Store Methods
-import { nowIso } from "../utils.ts";
-import { LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL_DEFAULT, LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT } from "../store.ts";
+import { deepMerge, nowIso } from "../utils.ts";
+import { SETTINGS_KEY } from "../store.ts";
+import { safeJsonParse } from "../normalization/valueParsers.ts";
+import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
+import { normalizeSettings } from "./settingsNormalization.ts";
 
 export function rewriteRuntimeSettingsRow(store: any, rawValue) {
 const parsed = safeJsonParse(rawValue, DEFAULT_SETTINGS);

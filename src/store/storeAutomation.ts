@@ -1,6 +1,13 @@
 // Extracted Store Methods
-import { nowIso } from "../utils.ts";
-import { LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL_DEFAULT, LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT } from "../store.ts";
+import { clamp, nowIso } from "../utils.ts";
+import { safeJsonParse } from "../normalization/valueParsers.ts";
+import { normalizeAutomationTitle, normalizeAutomationInstruction, buildAutomationMatchText } from "../automation.ts";
+import {
+  mapAutomationRow,
+  normalizeAutomationStatusFilter,
+  normalizeAutomationStatus,
+  normalizeAutomationRunStatus
+} from "./storeHelpers.ts";
 
 export function createAutomation(store: any, {
     guildId,
