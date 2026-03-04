@@ -210,6 +210,7 @@ export class ClankerBot {
   browserManager: BrowserManager | null;
   activeBrowserTasks: BrowserTaskRegistry;
   imageCaptionCache: ImageCaptionCache;
+  private captionTimestamps: number[];
 
   constructor({ appConfig, store, llm, memory, discovery, search, gifs, video, browserManager = null }) {
     this.appConfig = appConfig;
@@ -250,6 +251,7 @@ export class ClankerBot {
       maxEntries: 200,
       defaultTtlMs: 60 * 60 * 1000 // 1 hour
     });
+    this.captionTimestamps = [];
 
     this.client = new Client({
       intents: [
@@ -2615,12 +2617,23 @@ export class ClankerBot {
     const maxPerBatch = Math.min(list.length, 5);
     let scheduled = 0;
 
+    // Enforce hourly caption budget
+    const maxPerHour = Number((settings as Record<string, any>)?.vision?.maxCaptionsPerHour);
+    const budgetCap = Number.isFinite(maxPerHour) ? maxPerHour : 60;
+    const now = Date.now();
+    const oneHourAgo = now - 60 * 60 * 1000;
+    this.captionTimestamps = this.captionTimestamps.filter((t) => t > oneHourAgo);
+    const remainingBudget = Math.max(0, budgetCap - this.captionTimestamps.length);
+    if (remainingBudget === 0) return;
+
     for (const candidate of list) {
       if (scheduled >= maxPerBatch) break;
+      if (scheduled >= remainingBudget) break;
       if (!candidate?.url) continue;
       if (this.imageCaptionCache.has(candidate.url)) continue;
 
       scheduled++;
+      this.captionTimestamps.push(now);
       this.imageCaptionCache
         .getOrCaption({
           url: candidate.url,
