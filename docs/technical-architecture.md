@@ -62,7 +62,7 @@ Brain (LLM with tool-use)
     └── MCP tools                      →  extensible third-party capabilities
 ```
 
-Each tool is available in both voice and text paths. The brain sees the same tool set regardless of input modality — what changes is how results are delivered (spoken audio vs text message).
+Most conversational tools are shared across both voice and text paths. The brain generally sees the same core tool surface regardless of input modality — `conversation_search`, memory tools, web search, adaptive directives, and `browser_browse` all work in both text and voice conversational flows. A few tools remain modality-specific when the capability only makes sense in one runtime (for example realtime voice transport controls or voice-only playback controls).
 
 Conversation continuity is split into two retrieval layers:
 - `conversation_search`: recall of prior exchanges from persisted message history, across text chat and voice transcripts.
@@ -79,11 +79,16 @@ Unlike durable memory facts, adaptive directives are injected into prompts direc
 
 ### How Tools Are Invoked
 
-**Text chat path:** The brain calls `llm.chatWithTools()` with the full tool set. The LLM returns `tool_use` blocks, the bot executes them, appends results, and loops until the LLM returns a text-only response. Implemented in `replyTools.ts` (inline tools) and dedicated agents like `browseAgent.ts` (agent loops).
+**Text chat path:** The brain calls `llm.chatWithTools()` with the text reply tool set. The LLM returns `tool_use` blocks, the bot executes them, appends results, and loops until the LLM returns a text-only response. Implemented in `replyTools.ts` (inline tools) and dedicated agents like `browseAgent.ts` (agent loops).
 
 **Voice path:** Tools are registered as OpenAI Realtime function definitions. The Realtime brain emits `response.function_call_arguments.done` events, the bot executes the tool via `voiceToolCalls.ts` handlers, and sends results back with `conversation.item.create`. The brain continues the conversation with the result.
 
 **Agent tools:** Some tools themselves contain an inner agent loop. When the brain calls `browser_browse`, it spawns a `browseAgent` that runs its own multi-step LLM + browser tool cycle. The brain gets back a final result — it doesn't manage the inner loop directly.
+
+`browser_browse` now uses a shared browser-task runtime across text and voice:
+- `src/tools/browserTaskRuntime.ts`: channel-scoped task registry, abort classification, and shared `runBrowserBrowseTask(...)` wrapper.
+- Text and voice both pass through that runtime, so cancellation semantics, error normalization, and logging stay aligned.
+- Automation runs currently opt out of `browser_browse` on purpose, even though they use the same generic reply-tool plumbing.
 
 ### Host-Access Tools
 

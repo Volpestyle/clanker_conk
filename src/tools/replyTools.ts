@@ -14,6 +14,7 @@ const MAX_WEB_QUERY_LEN = 220;
 const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
 const MAX_CONVERSATION_LOOKUP_QUERY_LEN = 220;
 const MAX_IMAGE_LOOKUP_QUERY_LEN = 220;
+const MAX_BROWSER_BROWSE_QUERY_LEN = 500;
 const MAX_OPEN_ARTICLE_REF_LEN = 260;
 
 interface ReplyToolDefinition {
@@ -48,6 +49,23 @@ type ReplyToolRuntime = {
       title?: string;
       summary?: string;
       extractionMethod?: string;
+    }>;
+  };
+  browser?: {
+    browse: (opts: {
+      settings: Record<string, unknown>;
+      query: string;
+      guildId: string;
+      channelId: string | null;
+      userId: string | null;
+      source: string;
+    }) => Promise<{
+      used?: boolean;
+      text?: string;
+      steps?: number;
+      hitStepLimit?: boolean;
+      error?: string | null;
+      blockedByBudget?: boolean;
     }>;
   };
   memory?: {
@@ -147,6 +165,22 @@ const WEB_SEARCH_TOOL: ReplyToolDefinition = {
       query: {
         type: "string",
         description: "Concise search query (max 220 chars)"
+      }
+    },
+    required: ["query"]
+  }
+};
+
+const BROWSER_BROWSE_TOOL: ReplyToolDefinition = {
+  name: "browser_browse",
+  description:
+    "Browse the web interactively with a headless browser agent and report back with the result. Use for tasks that need clicking, navigating, scrolling, or reading dynamic page content beyond normal web search.",
+  input_schema: {
+    type: "object",
+    properties: {
+      query: {
+        type: "string",
+        description: "Instruction for what to browse and find out (max 500 chars)"
       }
     },
     required: ["query"]
@@ -311,6 +345,7 @@ const OPEN_ARTICLE_TOOL: ReplyToolDefinition = {
 
 const ALL_REPLY_TOOLS: ReplyToolDefinition[] = [
   WEB_SEARCH_TOOL,
+  BROWSER_BROWSE_TOOL,
   MEMORY_SEARCH_TOOL,
   MEMORY_WRITE_TOOL,
   ADAPTIVE_STYLE_ADD_TOOL,
@@ -337,10 +372,16 @@ function isWebSearchEnabled(settings: Record<string, unknown>): boolean {
   return Boolean(webSearch?.enabled);
 }
 
+function isBrowserBrowseEnabled(settings: Record<string, unknown>): boolean {
+  const browser = settings?.browser as Record<string, unknown> | undefined;
+  return Boolean(browser?.enabled);
+}
+
 export function buildReplyToolSet(
   settings: Record<string, unknown>,
   capabilities: {
     webSearchAvailable?: boolean;
+    browserBrowseAvailable?: boolean;
     memoryAvailable?: boolean;
     adaptiveDirectivesAvailable?: boolean;
     conversationSearchAvailable?: boolean;
@@ -355,6 +396,13 @@ export function buildReplyToolSet(
     isWebSearchEnabled(settings)
   ) {
     tools.push(WEB_SEARCH_TOOL);
+  }
+
+  if (
+    capabilities.browserBrowseAvailable !== false &&
+    isBrowserBrowseEnabled(settings)
+  ) {
+    tools.push(BROWSER_BROWSE_TOOL);
   }
 
   const memoryEnabled = isMemoryEnabled(settings);
@@ -395,6 +443,8 @@ export async function executeReplyTool(
   switch (toolName) {
     case "web_search":
       return executeWebSearch(input, runtime, context);
+    case "browser_browse":
+      return executeBrowserBrowse(input, runtime, context);
     case "memory_search":
       return executeMemorySearch(input, runtime, context);
     case "memory_write":
@@ -508,6 +558,66 @@ async function executeWebSearch(
   } catch (error) {
     return {
       content: `Web search failed: ${String((error as Error)?.message || error)}`,
+      isError: true
+    };
+  }
+}
+
+async function executeBrowserBrowse(
+  input: ReplyToolCallInput,
+  runtime: ReplyToolRuntime,
+  context: ReplyToolContext
+): Promise<ReplyToolResult> {
+  const query = normalizeDirectiveText(
+    String(input?.query || ""),
+    MAX_BROWSER_BROWSE_QUERY_LEN
+  );
+  if (!query) {
+    return { content: "Missing or empty browser browse query.", isError: true };
+  }
+  if (!runtime.browser?.browse) {
+    return { content: "Browser browsing is not available.", isError: true };
+  }
+
+  try {
+    const result = await runtime.browser.browse({
+      settings: context.settings,
+      query,
+      guildId: context.guildId,
+      channelId: context.channelId,
+      userId: context.userId,
+      source: String(context.trace?.source || "reply_tool_browser_browse")
+    });
+
+    if (result?.blockedByBudget) {
+      return {
+        content: "Browser browsing is currently blocked by budget limits.",
+        isError: true
+      };
+    }
+    if (result?.error) {
+      return {
+        content: `Browser browse failed: ${String(result.error)}`,
+        isError: true
+      };
+    }
+
+    const summary = String(result?.text || "").trim();
+    const steps = Number(result?.steps || 0);
+    const hitStepLimit = Boolean(result?.hitStepLimit);
+    const suffix = [
+      steps > 0 ? `Steps: ${steps}` : "",
+      hitStepLimit ? "Hit step limit." : ""
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    return {
+      content: suffix ? `${summary}\n\n${suffix}` : summary || "Browser browse completed with no text result."
+    };
+  } catch (error) {
+    return {
+      content: `Browser browse failed: ${String((error as Error)?.message || error)}`,
       isError: true
     };
   }

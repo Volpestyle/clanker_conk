@@ -3687,6 +3687,7 @@ export class ClankerBot {
     };
     const automationReplyTools = buildReplyToolSet(settings, {
       webSearchAvailable: false,
+      browserBrowseAvailable: false,
       memoryAvailable: settings.memory?.enabled,
       adaptiveDirectivesAvailable: false,
       imageLookupAvailable: false,

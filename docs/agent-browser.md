@@ -1,271 +1,175 @@
-# Discord Bot Browser Integration Spec
+# Browser Agent Runtime
+
+This document describes the shipped browser-agent system: how `browser_browse` works today, how it is configured, and how cancellation behaves across text and voice.
 
 ## Overview
 
-Add headless browser capabilities to an existing LLM-powered Discord bot using `agent-browser` (Vercel Labs) as a Rust CLI that talks to its own browser daemon/session layer — alongside the existing Rust voice subprocess.
+The browser agent is a headless browsing capability built on `agent-browser`:
 
----
+- `src/services/BrowserManager.ts`: wraps `agent-browser` CLI commands and logical session lifecycle.
+- `src/tools/browserTools.ts`: low-level browser tool schemas and execution wrappers (`browser_open`, `browser_click`, `browser_extract`, etc.).
+- `src/agents/browseAgent.ts`: inner LLM tool loop that drives those browser tools until it reaches a final answer.
+- `src/tools/browserTaskRuntime.ts`: shared task runtime used by both text and voice for task registration, cancellation, and normalized browser-browse execution.
 
-## Current Architecture (Assumed)
+At the top level, the main brain does not directly drive `browser_open` / `browser_click`. It calls the higher-level `browser_browse` tool, and that tool launches the inner browse agent.
 
-```
-Discord Gateway
-    │
-    ▼
-Bot Process (Node/TS)
-    ├── Message Handler → LLM (tool-use enabled)
-    ├── Voice Subprocess (Rust)
-    └── [NEW] Browser Subprocess (agent-browser)
-```
+## Where It Is Available
 
----
+`browser_browse` is available in:
 
-## Phase 1: Install & Bootstrap agent-browser
+- `/browse` slash command
+- text reply tool loop
+- voice tool loop
 
-**Goal:** Get agent-browser running as a managed subprocess.
+It is intentionally not enabled for automation runs right now, even though automations use the same general reply-tool loop.
 
-### Tasks
+## Runtime Flow
 
-1. Install agent-browser globally on the host or bundle the Rust binary
-   ```bash
-   npm install -g agent-browser
-   agent-browser install  # downloads Chromium
-   ```
-2. Create a `BrowserManager` service class that:
-   - Spawns `agent-browser` commands via `child_process.execFile`
-   - Uses `--session <name>` on every call so each task targets an isolated agent-browser session
-   - Manages session lifecycle in app code (open/close/cleanup of logical browser contexts)
-   - Handles timeouts and cleanup (kill stale sessions after N minutes)
-   - Caps concurrent browser sessions (start with 1-2 max)
-3. Verify basic lifecycle:
-   ```
-   agent-browser open https://example.com
-   agent-browser snapshot -i
-   agent-browser close
-   ```
+### 1. Top-level tool call
 
-### Deliverables
-- `src/services/BrowserManager.ts`
-- Health check: bot can open a page and return a snapshot on command
+The top-level brain decides it needs interactive browsing and calls:
 
----
-
-## Phase 2: Define LLM Tool Schemas
-
-**Goal:** Give the LLM a clean set of browser tools it can invoke.
-
-### Tool Definitions
-
-| Tool | Parameters | Returns |
-|------|-----------|---------|
-| `browser_open` | `url: string` | Page title, URL confirmation |
-| `browser_snapshot` | `interactive_only?: boolean` | Accessibility tree with element refs (@e1, @e2...) |
-| `browser_click` | `ref: string` | Updated snapshot or confirmation |
-| `browser_type` | `ref: string, text: string` | Confirmation |
-| `browser_scroll` | `direction: "up" \| "down", pixels?: number` | Updated snapshot |
-| `browser_extract` | `ref?: string` | Text content of element or page |
-| `browser_screenshot` | — | Base64 image data URL (for vision-capable models) |
-| `browser_close` | — | Confirmation |
-
-### Design Decisions
-
-- **Snapshot as primary state representation.** Use `snapshot -i` (interactive elements only) as default — ~200-400 tokens vs 3000-5000 for full DOM. Fall back to full snapshot or screenshot only when the LLM explicitly requests it.
-- **Ref-based interaction.** The LLM references elements by `@e1`, `@e2` etc. from the snapshot. No CSS selectors, no XPaths — keeps tool calls simple and reliable.
-- **No compound actions.** Each tool does one thing. The LLM chains them. This keeps the failure surface small and makes debugging easy.
-- **Per-step timeouts are real inputs.** The timeout passed into the browse loop must be forwarded into every `agent-browser` command so browser hangs do not ignore caller configuration.
-
-### Deliverables
-- `src/tools/browserTools.ts` — tool definitions + execution wrappers
-- Tool schemas registered with your LLM provider (Claude tool_use, OpenAI function calling, etc.)
-
----
-
-## Phase 3: Agent Loop
-
-**Goal:** Wire the LLM into a browse → observe → act → observe loop.
-
-### Flow
-
-```
-User: "go to hackernews and get me the top 5 stories"
-         │
-         ▼
-   ┌─────────────────────┐
-   │  LLM decides:       │
-   │  browser_open(url)   │
-   └──────────┬──────────┘
-              │
-              ▼
-   ┌─────────────────────┐
-   │  Execute action      │
-   │  Return new state    │
-   └──────────┬──────────┘
-              │
-              ▼
-   ┌─────────────────────┐
-   │  LLM sees snapshot   │◄──── loop (max N steps)
-   │  Decides next action │
-   └──────────┬──────────┘
-              │
-         (repeats until LLM returns final answer)
-              │
-              ▼
-   Discord reply with results
+```text
+browser_browse({ query: "go find ..." })
 ```
 
-### Key Parameters
+That top-level tool exists in:
 
-| Parameter | Starting Value | Notes |
-|-----------|---------------|-------|
-| Max steps per task | 15 | Hard cap to prevent runaway token burn |
-| Step timeout | 30s | Kill step if browser hangs |
-| Session timeout | 5min | Auto-close forgotten sessions |
-| Snapshot mode | interactive (-i) | Compact by default |
-| Max concurrent sessions | 2 | Per-server or global |
+- text replies via `src/tools/replyTools.ts`
+- OpenAI realtime voice tool definitions via `src/voice/voiceToolCalls.ts`
 
-### Agent Loop Pseudocode
+### 2. Shared browser task runtime
 
-```typescript
-async function browseAgent(task: string, maxSteps = 15, stepTimeoutMs = 30_000): Promise<string> {
-  const messages = [
-    { role: "system", content: BROWSER_AGENT_SYSTEM_PROMPT },
-    { role: "user", content: task }
-  ];
+Both text and voice pass through:
 
-  for (let step = 0; step < maxSteps; step++) {
-    const response = await llm.chat(messages, { tools: browserTools });
+- `runBrowserBrowseTask(...)` in `src/tools/browserTaskRuntime.ts`
 
-    if (response.type === "text") {
-      // LLM is done — return final answer
-      return response.content;
-    }
+This shared runtime is responsible for:
 
-    if (response.type === "tool_use") {
-      const result = await executeBrowserTool(response.tool, response.params, stepTimeoutMs);
-      messages.push({ role: "assistant", content: response });
-      messages.push({ role: "tool", content: result });
-    }
-  }
+- starting the browse-agent run
+- normalizing abort/cancel errors
+- logging `browser_browse_call`
+- keeping task lifecycle behavior aligned across modalities
 
-  await browserManager.close();
-  return "I hit the step limit. Here's what I found so far: ...";
-}
-```
+### 3. Inner browse-agent loop
 
-### System Prompt (Browser Agent)
+The shared runtime then calls:
 
-```
-You have access to a headless browser. You can navigate websites, 
-interact with elements, and extract information.
+- `runBrowseAgent(...)` in `src/agents/browseAgent.ts`
 
-When you receive a snapshot, elements are labeled with refs like @e1, @e2.
-Use these refs to interact — e.g. browser_click({ ref: "@e3" }).
+That loop:
 
-Rules:
-- Always snapshot after navigating or clicking to see the new state
-- Use interactive-only snapshots by default
-- Extract data before closing the browser
-- If a page requires scrolling, scroll and re-snapshot
-- Minimize steps — plan your path before acting
-- When done, return your findings as a clear answer
-```
+- calls `llm.chatWithTools(...)`
+- exposes the low-level browser tool set from `src/tools/browserTools.ts`
+- executes tool calls through `BrowserManager`
+- appends tool results back into the loop
+- stops when the model returns plain text
 
-### Deliverables
-- `src/agents/browseAgent.ts` — the agent loop
-- System prompt tuned for your LLM of choice
+### 4. Low-level browser execution
 
----
+`BrowserManager` converts each low-level browser action into an `agent-browser` CLI call such as:
 
-## Phase 4: Discord Integration
+- `open`
+- `snapshot`
+- `click`
+- `type`
+- `scroll`
+- `extract`
+- `screenshot`
+- `close`
 
-**Goal:** Expose browser capabilities through Discord commands/messages.
+Each call uses `--session <sessionKey>` so the browser task operates in an isolated logical session.
 
-### Trigger Options
+## Cancellation Model
 
-1. **Slash command:** `/browse <task>` — explicit invocation
-2. **Natural language:** LLM decides when browsing is needed based on the message (e.g., "what's on the front page of HN right now?")
-3. **Hybrid:** Start with slash command, graduate to natural language once stable
+Recent work unified cancellation across text and voice.
 
-### UX Considerations
+### Shared principles
 
-- **Deferred replies.** Browser tasks take 10-60s. Use Discord's deferred interaction response immediately, then edit with progress updates.
-- **Progress messages.** Stream step summaries back:
-  ```
-  🌐 Opening hackernews.com...
-  📸 Found 30 stories, extracting top 5...
-  ✅ Done!
-  ```
-- **Timeout messaging.** If hitting the step limit, return partial results with a note that the task was cut short.
-- **Permissions.** Consider restricting browser commands to specific roles or channels to avoid abuse.
+- Every active `browser_browse` task gets an `AbortController`.
+- The abort signal is threaded through:
+  - top-level text/voice tool entrypoint
+  - shared browser task runtime
+  - `runBrowseAgent(...)`
+  - `executeBrowserTool(...)`
+  - `BrowserManager`
+  - `execFile(..., { signal })` for the underlying `agent-browser` process
+- Abort errors are normalized so callers consistently see a cancellation instead of a generic subprocess failure.
 
-### Deliverables
-- `/browse` slash command handler
-- Progress update middleware
-- Permission checks
+### Text path
 
----
+Text browser tasks are scoped by guild + channel through `BrowserTaskRegistry`:
 
-## Phase 5: Safety & Resource Management
+- only one active browser task is tracked per channel scope
+- a plain `stop`, `cancel`, `never mind`, or `nevermind` in that same channel aborts the active browser task
+- one channel’s cancellation does not cancel another channel’s browser task
 
-**Goal:** Don't let the browser burn money, get exploited, or crash the host.
+This is implemented in:
 
-### Guardrails
+- `src/bot.ts`
+- `src/tools/browserTaskRuntime.ts`
 
-| Concern | Mitigation |
-|---------|------------|
-| Token burn | Max steps cap (15), snapshot size limit, prefer `-i` mode |
-| Runaway sessions | Session timeout (5min), cleanup on bot restart |
-| Malicious URLs | URL allowlist/blocklist, no `file://` or `localhost` |
-| Resource exhaustion | Max concurrent sessions, memory monitoring |
-| Sensitive data | Never fill payment forms, passwords, or PII via browser |
-| Abuse | Rate limit per user (e.g., 5 browse tasks/hour) |
-| Cost tracking | Log token count per browse session, alert on threshold |
+### Voice path
 
-### Docker Isolation (Optional, Recommended for Production)
+OpenAI realtime voice tool calls also create abort controllers per pending call:
 
-Run agent-browser inside a Docker container with:
-- No host network access (use bridge with restricted egress)
-- Read-only filesystem except for temp dirs
-- Memory and CPU limits
-- No access to bot credentials or secrets
+- pending tool-call controllers are stored on the voice session
+- when a pending response is cleared or torn down, those controllers are aborted
+- `browser_browse` receives the same signal and stops the underlying browse task eagerly
 
----
+This is implemented in:
 
-## Phase 6: Enhancements (Future)
+- `src/voice/voiceToolCalls.ts`
+- `src/voice/voiceSessionManager.ts`
 
-| Enhancement | Description |
-|-------------|-------------|
-| Screenshot fallback | When snapshot is ambiguous, take a screenshot and use vision model |
-| Session persistence | Keep browser open across messages for multi-turn workflows |
-| Cookie/auth profiles | Logged-in sessions for sites that need auth |
-| Caching | Cache snapshots for pages visited recently |
-| Parallel browsing | Open multiple tabs for comparison tasks |
-| Streaming results | Send extracted data to Discord as it's found, not all at end |
+## Settings
 
----
+Browser-agent settings live under `settings.browser`.
 
-## Tech Stack Summary
+Important fields:
 
-| Component | Technology |
-|-----------|-----------|
-| Bot runtime | Node.js / TypeScript |
-| Browser engine | agent-browser (Rust CLI + Chromium) |
-| LLM | Claude / GPT-4 (tool-use API) |
-| Voice | Existing Rust subprocess |
-| Process management | child_process.execFile / spawn |
-| Discord | discord.js |
+- `browser.enabled`
+- `browser.maxStepsPerTask`
+- `browser.stepTimeoutMs`
+- `browser.llm.provider`
+- `browser.llm.model`
 
----
+These are edited in the dashboard Browser Agent section.
 
-## Milestones
+The browser agent uses its own configurable LLM provider/model instead of always inheriting the main chat brain model.
 
-| # | Milestone | Est. Effort | Dependency |
-|---|-----------|-------------|------------|
-| 1 | agent-browser installed and callable from Node | 1-2 hours | None |
-| 2 | Tool schemas defined and wired to LLM | 2-3 hours | M1 |
-| 3 | Agent loop working end-to-end in terminal | 3-4 hours | M2 |
-| 4 | Discord slash command with progress updates | 2-3 hours | M3 |
-| 5 | Safety guardrails and rate limiting | 2-3 hours | M4 |
-| 6 | Docker isolation (optional) | 3-4 hours | M5 |
+## Limits and Guardrails
 
-**Total estimated effort: ~2-3 days to a working MVP (M1-M4)**
+Current guardrails include:
+
+- per-task max step cap
+- per-step timeout
+- channel-scoped active-task tracking
+- browser usage budget checks before `browser_browse` runs
+- public-URL enforcement in `BrowserManager`
+- concurrent browser session cap in `BrowserManager`
+
+## Observability
+
+Browser-agent activity is visible via action-log kinds:
+
+- `browser_browse_call`
+- `browser_tool_step`
+
+The dashboard text history also surfaces richer tool-result detail for browser-adjacent tool usage alongside other tool calls.
+
+## Testing
+
+Current focused coverage includes:
+
+- `src/agents/browseAgent.test.ts`
+- `src/tools/browserTaskRuntime.test.ts`
+- `src/voice/voiceToolCalls.test.ts`
+
+Those tests cover:
+
+- timeout forwarding
+- abort during the LLM loop
+- abort during an in-flight browser tool call
+- channel-scoped task registry behavior
+- voice-path signal propagation

@@ -321,6 +321,10 @@ export async function generateVoiceTurnReply(runtime, {
   const allowWebSearchToolCall = Boolean(
     typeof runtime.search?.searchAndRead === "function"
   );
+  const allowBrowserBrowseToolCall = Boolean(
+    typeof runtime.runModelRequestedBrowserBrowse === "function" &&
+    typeof runtime.buildBrowserBrowseContext === "function"
+  );
   const allowOpenArticleToolCall = Boolean(typeof runtime.search?.readPageSummary === "function");
   const screenShare = resolveVoiceScreenShareCapability(runtime, {
     settings,
@@ -458,6 +462,29 @@ export async function generateVoiceTurnReply(runtime, {
     !webSearch?.blockedByBudget &&
     webSearch?.budget?.canSearch !== false
   );
+  const browserBrowse = allowBrowserBrowseToolCall
+    ? runtime.buildBrowserBrowseContext(settings)
+    : {
+      requested: false,
+      configured: false,
+      enabled: false,
+      used: false,
+      blockedByBudget: false,
+      error: null,
+      query: "",
+      text: "",
+      steps: 0,
+      hitStepLimit: false,
+      budget: {
+        canBrowse: false
+      }
+    };
+  const browserBrowseAvailableNow = Boolean(
+    browserBrowse?.enabled &&
+    browserBrowse?.configured &&
+    !browserBrowse?.blockedByBudget &&
+    browserBrowse?.budget?.canBrowse !== false
+  );
   const openArticleCandidates = buildOpenArticleCandidates({
     webSearch,
     recentWebLookups
@@ -552,6 +579,7 @@ export async function generateVoiceTurnReply(runtime, {
     tools: {
       soundboard: allowSoundboardToolCall,
       webSearch: allowWebSearchToolCall,
+      browserBrowse: allowBrowserBrowseToolCall,
       openArticle: allowOpenArticleToolCall,
       screenShare: allowScreenShareToolCall,
       memory: allowMemoryToolCalls,
@@ -577,6 +605,7 @@ export async function generateVoiceTurnReply(runtime, {
 
     const voiceReplyTools = buildReplyToolSet(settings as Record<string, unknown>, {
       webSearchAvailable: allowWebSearchToolCall && webSearchAvailableNow,
+      browserBrowseAvailable: allowBrowserBrowseToolCall && browserBrowseAvailableNow,
       memoryAvailable: allowMemoryToolCalls,
       adaptiveDirectivesAvailable: allowAdaptiveDirectiveToolCalls,
       imageLookupAvailable: false,
@@ -585,6 +614,18 @@ export async function generateVoiceTurnReply(runtime, {
 
     const voiceToolRuntime: ReplyToolRuntime = {
       search: runtime.search,
+      browser: {
+        browse: async ({ settings: toolSettings, query, guildId, channelId, userId, source }) =>
+          await runtime.runModelRequestedBrowserBrowse({
+            settings: toolSettings,
+            browserBrowse,
+            query,
+            guildId,
+            channelId,
+            userId,
+            source
+          })
+      },
       memory: runtime.memory,
       store: runtime.store
     };

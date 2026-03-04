@@ -281,6 +281,11 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
       !webSearch?.optedOutByUser &&
       !webSearch?.blockedByBudget &&
       webSearch?.budget?.canSearch !== false,
+    browserBrowseAvailable:
+      Boolean(browserBrowse?.enabled) &&
+      Boolean(browserBrowse?.configured) &&
+      !browserBrowse?.blockedByBudget &&
+      browserBrowse?.budget?.canBrowse !== false,
     memoryAvailable: Boolean(settings?.memory?.enabled),
     adaptiveDirectivesAvailable: Boolean(settings?.adaptiveDirectives?.enabled),
     imageLookupAvailable: Boolean(imageLookup?.enabled),
@@ -288,6 +293,20 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
   });
   const replyToolRuntime = {
     search: bot.search,
+    browser: {
+      browse: async ({ settings: toolSettings, query, guildId, channelId, userId, source }) => {
+        browserBrowse = await bot.runModelRequestedBrowserBrowse({
+          settings: toolSettings,
+          browserBrowse,
+          query,
+          guildId,
+          channelId,
+          userId,
+          source
+        });
+        return browserBrowse;
+      }
+    },
     memory: bot.memory,
     store: bot.store
   };
@@ -396,6 +415,8 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
 
       if (toolCall.name === "memory_search" && !result.isError) {
         usedMemoryLookupFollowup = true;
+      } else if (toolCall.name === "browser_browse" && !result.isError) {
+        usedBrowserBrowseFollowup = Boolean(browserBrowse?.used);
       } else if (toolCall.name === "image_lookup" && !result.isError) {
         imageLookup = await bot.runModelRequestedImageLookup({
           imageLookup,
