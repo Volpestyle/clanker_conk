@@ -277,7 +277,9 @@ export class ClankerBot {
       search: this.search,
       browserManager: this.browserManager,
       composeOperationalMessage: (payload) => this.composeVoiceOperationalMessage(payload),
-      generateVoiceTurn: (payload) => this.generateVoiceTurnReply(payload)
+      generateVoiceTurn: (payload) => this.generateVoiceTurnReply(payload),
+      getVoiceScreenShareCapability: (payload) => this.getVoiceScreenShareCapability(payload),
+      offerVoiceScreenShareLink: (payload) => this.offerVoiceScreenShareLink(payload)
     });
 
     this.registerEvents();
