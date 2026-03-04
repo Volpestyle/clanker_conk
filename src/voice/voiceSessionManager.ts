@@ -3538,12 +3538,10 @@ export class VoiceSessionManager {
       session.playbackArmedReason = reason;
       session.playbackArmedAt = Date.now();
       if (reason !== "connection_ready") return;
-      // If instructions are already set, fire greeting immediately.
-      // Otherwise mark pending — refreshRealtimeInstructions will fire it.
+      session.joinGreetingPending = true;
+      // If instructions are already set, start the observation grace window.
       if (session.lastOpenAiRealtimeInstructions && !session.lastAssistantReplyAt) {
-        this.fireJoinGreeting(session);
-      } else {
-        session.joinGreetingPending = true;
+        this.scheduleJoinGreetingGrace(session);
       }
     };
 
@@ -3573,6 +3571,17 @@ export class VoiceSessionManager {
       session.subprocessClient?.off("musicIdle", onMusicIdle);
       session.subprocessClient?.off("error", onError);
     });
+  }
+
+  scheduleJoinGreetingGrace(session) {
+    if (!session || session.ending) return;
+    if (session.joinGreetingGraceTimer) return; // already scheduled
+    // Short observation window — gives time for inbound audio packets to
+    // arrive and create captures before we decide the room is silent.
+    session.joinGreetingGraceTimer = setTimeout(() => {
+      session.joinGreetingGraceTimer = null;
+      this.fireJoinGreeting(session);
+    }, 2500);
   }
 
   fireJoinGreeting(session) {
@@ -11141,9 +11150,9 @@ export class VoiceSessionManager {
         }
       });
 
-      // Fire pending join greeting now that instructions are set.
+      // Start greeting observation window now that instructions are set.
       if (session.joinGreetingPending && session.playbackArmed && !session.lastAssistantReplyAt) {
-        this.fireJoinGreeting(session);
+        this.scheduleJoinGreetingGrace(session);
       }
     } catch (error) {
       this.store.logAction({
@@ -12861,6 +12870,10 @@ export class VoiceSessionManager {
     if (!isRealtimeMode(session.mode)) return false;
     // Clear pending join greeting — bot is about to speak for another reason.
     session.joinGreetingPending = false;
+    if (session.joinGreetingGraceTimer) {
+      clearTimeout(session.joinGreetingGraceTimer);
+      session.joinGreetingGraceTimer = null;
+    }
     if (emitCreateEvent && this.isRealtimeResponseActive(session)) {
       this.store.logAction({
         kind: "voice_runtime",
@@ -13259,6 +13272,10 @@ export class VoiceSessionManager {
       session.realtimeTurnCoalesceTimer = null;
     }
     session.joinGreetingPending = false;
+    if (session.joinGreetingGraceTimer) {
+      clearTimeout(session.joinGreetingGraceTimer);
+      session.joinGreetingGraceTimer = null;
+    }
     session.pendingDeferredTurns = [];
     session.awaitingToolOutputs = false;
     session.openAiPendingToolCalls = new Map();

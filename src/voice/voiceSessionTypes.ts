@@ -367,6 +367,7 @@ export interface VoiceSession {
     playbackArmedReason?: string | null;
     playbackArmedAt?: number;
     joinGreetingPending?: boolean;
+    joinGreetingGraceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     lastGenerationContext?: any;
     openAiAsrSessionIdleTtlMs?: number;
     realtimeTurnCoalesceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
