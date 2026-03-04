@@ -18,6 +18,7 @@ export const EN_MUSIC_QUERY_EMPTY_RE = /^(?:something|anything|some|a|the|please
 export const MUSIC_DISAMBIGUATION_MAX_RESULTS = 5;
 export const MUSIC_DISAMBIGUATION_TTL_MS = 10 * 60 * 1000;
 export const VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK = 5;
+const MUSIC_ENGAGEMENT_FOLLOWUP_MS = 10_000;
 
 import type {
   MusicSelectionResult,
@@ -1250,9 +1251,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
   if (!pcmBuffer?.length) return true;
 
   const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
-  if (!resolvedSettings?.voice?.asrDuringMusic) {
-    return true; // music active but ASR during music disabled — swallow turn silently
-  }
+  const asrDuringMusic = Boolean(resolvedSettings?.voice?.asrDuringMusic);
 
   if (!manager.llm?.transcribeAudio) {
     manager.store.logAction({
@@ -1355,6 +1354,17 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
     transcript: normalizedTranscript,
     settings: resolvedSettings
   });
+  const lastReplyAt = Number(session.lastAudioDeltaAt || 0);
+  const lastWakerId = String(session.lastDirectAddressUserId || "").trim();
+  const normalizedUserId = String(userId || "").trim();
+  const engagementFollowup =
+    !shouldStop &&
+    !directAddressedToBot &&
+    normalizedUserId !== "" &&
+    normalizedUserId === lastWakerId &&
+    lastReplyAt > 0 &&
+    (Date.now() - lastReplyAt) <= MUSIC_ENGAGEMENT_FOLLOWUP_MS;
+
   manager.store.logAction({
     kind: "voice_runtime",
     guildId: session.guildId,
@@ -1367,15 +1377,23 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
       captureReason: String(captureReason || "stream_end"),
       transcript: normalizedTranscript,
       shouldStop,
-      decisionReason: shouldStop ? "heuristic_stop" : "no_stop_cue"
+      directAddressedToBot,
+      engagementFollowup,
+      asrDuringMusic,
+      decisionReason: shouldStop
+        ? "heuristic_stop"
+        : directAddressedToBot
+          ? "direct_address"
+          : engagementFollowup
+            ? "engagement_followup"
+            : disambiguationResolutionTurn
+              ? "disambiguation"
+              : "swallowed"
     }
   });
 
   if (!shouldStop) {
-    // During command-only playback mode, keep a short speaker-locked
-    // follow-up window so actual disambiguation replies like "the second one" do not
-    // require the wake word again.
-    if (directAddressedToBot || disambiguationResolutionTurn) {
+    if (directAddressedToBot || disambiguationResolutionTurn || engagementFollowup) {
       return false;
     }
     return true;

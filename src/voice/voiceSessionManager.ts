@@ -1471,7 +1471,8 @@ export class VoiceSessionManager {
   isAsrActive(session, settings = null) {
     const resolved = settings || session?.settingsSnapshot || this.store.getSettings();
     if (!resolved?.voice?.asrEnabled) return false;
-    if (this.isMusicPlaybackActive(session) && !resolved?.voice?.asrDuringMusic) return false;
+    // PCM capture stays open during music — the music gate downstream
+    // (maybeHandleMusicPlaybackTurn) decides which turns to act on vs swallow.
     return true;
   }
 
