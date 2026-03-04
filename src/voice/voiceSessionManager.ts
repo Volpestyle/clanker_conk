@@ -483,6 +483,7 @@ type VoiceToolRuntimeSessionLike = {
   musicQueueState?: Record<string, unknown>;
   lastOpenAiToolCallerUserId?: string | null;
   awaitingToolOutputs?: boolean;
+  pendingMemoryIngest?: Promise<unknown> | null;
   [key: string]: unknown;
 };
 
@@ -1638,9 +1639,12 @@ export class VoiceSessionManager {
       });
 
     const includeWebSearch = Boolean(settings?.webSearch?.enabled);
-    const filteredLocalTools = includeWebSearch
-      ? localTools
-      : localTools.filter((entry) => entry.name !== "web_search");
+    const includeMemory = Boolean(settings?.memory?.enabled);
+    const filteredLocalTools = localTools.filter((entry) => {
+      if (entry.name === "web_search" && !includeWebSearch) return false;
+      if ((entry.name === "memory_search" || entry.name === "memory_write") && !includeMemory) return false;
+      return true;
+    });
     return [
       ...filteredLocalTools,
       ...mcpTools
@@ -3471,12 +3475,12 @@ export class VoiceSessionManager {
     if (spoke) {
       session.lastAssistantReplyAt = Date.now();
       this.logJoinGreetingState(session, "voice_join_greeting_fired", {
-        participantCount
+        participantCount: participants.length
       });
     } else {
       this.logJoinGreetingState(session, "voice_join_greeting_skipped", {
         reason: "prompt_utterance_not_sent",
-        participantCount,
+        participantCount: participants.length,
         realtimeResponseActive: this.isRealtimeResponseActive(session)
       });
     }
@@ -10091,7 +10095,7 @@ export class VoiceSessionManager {
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     if (!normalizedUserId || !normalizedTranscript) return;
 
-    void this.memory
+    const ingestPromise = this.memory
       .ingestMessage({
         messageId: `voice-${String(session.guildId || "guild")}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`,
         authorId: normalizedUserId,
@@ -10118,6 +10122,10 @@ export class VoiceSessionManager {
           }
         });
       });
+
+    if (session) {
+      session.pendingMemoryIngest = ingestPromise;
+    }
   }
 
   buildVoiceConversationContext({
@@ -10806,6 +10814,11 @@ export class VoiceSessionManager {
     const normalizedUserId = String(userId || "").trim();
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     if (!normalizedUserId || !normalizedTranscript) return empty;
+
+    if (session?.pendingMemoryIngest) {
+      try { await session.pendingMemoryIngest; } catch {}
+      session.pendingMemoryIngest = null;
+    }
 
     const slice = await loadPromptMemorySliceFromMemory({
       settings,
