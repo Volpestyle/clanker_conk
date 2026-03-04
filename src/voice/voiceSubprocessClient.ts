@@ -7,8 +7,9 @@
  */
 
 import { EventEmitter } from "node:events";
-import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
+
+type VoiceSubprocess = ReturnType<typeof Bun.spawn<"pipe", "pipe", "inherit">>;
 
 const AUDIO_DEBUG = !!process.env.AUDIO_DEBUG;
 
@@ -16,7 +17,7 @@ export class VoiceSubprocessClient extends EventEmitter {
   private static liveClients = new Set<VoiceSubprocessClient>();
   private static processExitHandlersInstalled = false;
 
-  private child: ChildProcess | null = null;
+  private child: VoiceSubprocess | null = null;
   private guildId: string;
   private channelId: string;
   private guild: any;
@@ -25,6 +26,9 @@ export class VoiceSubprocessClient extends EventEmitter {
   private adapterCleanup: (() => void) | null = null;
   private stdoutBuffer: Buffer = Buffer.alloc(0);
   private lastPlaybackArmedReason: string | null = null;
+  private stdoutReaderController: AbortController | null = null;
+  private _resolveExitWaiter: (() => void) | null = null;
+  private _exitWaiterPromise: Promise<void> | null = null;
 
   constructor(guildId: string, channelId: string, guild: any) {
     super();
@@ -58,8 +62,7 @@ export class VoiceSubprocessClient extends EventEmitter {
 
     // Prefer the pre-built Rust binary; fall back to cargo run for development.
     const releaseBin = path.join(subprocessDir, "target", "release", "voice_subprocess");
-    const fs = await import("node:fs");
-    const usePrebuilt = fs.existsSync(releaseBin);
+    const usePrebuilt = await Bun.file(releaseBin).exists();
 
     const spawnEnv = {
       ...process.env,
@@ -70,83 +73,48 @@ export class VoiceSubprocessClient extends EventEmitter {
       OPUS_NO_PKG: "1",
     };
 
-    if (usePrebuilt) {
-      this.child = spawn(releaseBin, [], {
-        cwd: subprocessDir,
-        stdio: ["pipe", "pipe", "inherit"],
-        env: spawnEnv
-      });
-    } else {
-      console.warn(
-        "[voiceSubprocessClient] Pre-built binary not found, using cargo run --release (slow first start)"
-      );
-      this.child = spawn("cargo", ["run", "--release"], {
-        cwd: subprocessDir,
-        stdio: ["pipe", "pipe", "inherit"],
-        env: spawnEnv
-      });
+    // Set up exit-waiter before spawning so _handleExit can resolve it
+    this._exitWaiterPromise = new Promise<void>((resolve) => {
+      this._resolveExitWaiter = resolve;
+    });
+
+    try {
+      if (usePrebuilt) {
+        this.child = Bun.spawn([releaseBin], {
+          cwd: subprocessDir,
+          stdin: "pipe",
+          stdout: "pipe",
+          stderr: "inherit",
+          env: spawnEnv,
+          onExit: (_proc, exitCode, signalCode) => {
+            this._handleExit(exitCode, signalCode);
+          },
+        });
+      } else {
+        console.warn(
+          "[voiceSubprocessClient] Pre-built binary not found, using cargo run --release (slow first start)"
+        );
+        this.child = Bun.spawn(["cargo", "run", "--release"], {
+          cwd: subprocessDir,
+          stdin: "pipe",
+          stdout: "pipe",
+          stderr: "inherit",
+          env: spawnEnv,
+          onExit: (_proc, exitCode, signalCode) => {
+            this._handleExit(exitCode, signalCode);
+          },
+        });
+      }
+    } catch (err) {
+      console.error("[voiceSubprocessClient] subprocess spawn error:", err);
+      this.emit("error", `spawn_error: ${String((err as Error)?.message || err)}`);
+      this._resolveExitWaiter?.();
+      throw err;
     }
+
     VoiceSubprocessClient.liveClients.add(this);
 
-    this.child.stdout?.on("data", (data: Buffer) => {
-      this.stdoutBuffer = Buffer.concat([this.stdoutBuffer, data]);
-
-      while (this.stdoutBuffer.length >= 5) {
-        const format = this.stdoutBuffer.readUInt8(0);
-        const length = this.stdoutBuffer.readUInt32LE(1);
-
-        if (this.stdoutBuffer.length >= 5 + length) {
-          const payload = this.stdoutBuffer.subarray(5, 5 + length);
-          this.stdoutBuffer = this.stdoutBuffer.subarray(5 + length);
-
-          if (format === 0) {
-            try {
-              const msg = JSON.parse(payload.toString("utf8"));
-              this._handleMessage(msg);
-            } catch {
-              // ignore non-json payload
-            }
-          } else if (format === 1) {
-            // Binary audio frame: [8-byte user_id][2-byte peak][4-byte active][4-byte total][PCM...]
-            if (payload.length >= 18) {
-              const audioUserId = payload.readBigUInt64LE(0).toString();
-              const signalPeakAbs = payload.readUInt16LE(8);
-              const signalActiveSampleCount = payload.readUInt32LE(10);
-              const signalSampleCount = payload.readUInt32LE(14);
-              const pcmBuffer = payload.subarray(18);
-
-              this.emit(
-                "userAudio",
-                audioUserId,
-                pcmBuffer, // Passing raw Buffer now instead of base64 string
-                signalPeakAbs,
-                signalActiveSampleCount,
-                signalSampleCount
-              );
-            }
-          }
-        } else {
-          break;
-        }
-      }
-    });
-
-    this.child.on("exit", (code, signal) => {
-      if (!this.destroyed) {
-        console.error(
-          `[voiceSubprocessClient] subprocess exited unexpectedly code=${code} signal=${signal}`
-        );
-        this.emit("crashed", { code, signal });
-      }
-      VoiceSubprocessClient.liveClients.delete(this);
-      this._cleanupAdapter();
-      this.child = null;
-    });
-
-    this.child.on("error", (err) => {
-      console.error("[voiceSubprocessClient] subprocess spawn error:", err);
-      this.emit("error", `spawn_error: ${String(err?.message || err)}`);
-    });
+    this._startStdoutReader();
 
     this._setupAdapterProxy();
 
@@ -180,6 +148,91 @@ export class VoiceSubprocessClient extends EventEmitter {
         selfMute: opts.selfMute ?? false
       });
     });
+  }
+
+  private _handleExit(exitCode: number | null, signalCode: number | null) {
+    if (!this.destroyed) {
+      console.error(
+        `[voiceSubprocessClient] subprocess exited unexpectedly code=${exitCode} signal=${signalCode}`
+      );
+      this.emit("crashed", { code: exitCode, signal: signalCode });
+    }
+    VoiceSubprocessClient.liveClients.delete(this);
+    this._cleanupAdapter();
+    this.child = null;
+    this._resolveExitWaiter?.();
+  }
+
+  private _startStdoutReader() {
+    const child = this.child;
+    if (!child) return;
+
+    this.stdoutReaderController = new AbortController();
+    const signal = this.stdoutReaderController.signal;
+    const reader = child.stdout.getReader();
+
+    const read = async () => {
+      try {
+        while (!signal.aborted) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            const buf = Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+            this._processStdoutChunk(buf);
+          }
+        }
+      } catch {
+        // reader cancelled or stream closed — expected during destroy
+      } finally {
+        try { reader.releaseLock(); } catch { /* ignore */ }
+      }
+    };
+
+    // Fire-and-forget — errors are caught inside
+    void read();
+  }
+
+  private _processStdoutChunk(data: Buffer) {
+    this.stdoutBuffer = Buffer.concat([this.stdoutBuffer, data]);
+
+    while (this.stdoutBuffer.length >= 5) {
+      const format = this.stdoutBuffer.readUInt8(0);
+      const length = this.stdoutBuffer.readUInt32LE(1);
+
+      if (this.stdoutBuffer.length >= 5 + length) {
+        const payload = this.stdoutBuffer.subarray(5, 5 + length);
+        this.stdoutBuffer = this.stdoutBuffer.subarray(5 + length);
+
+        if (format === 0) {
+          try {
+            const msg = JSON.parse(payload.toString("utf8"));
+            this._handleMessage(msg);
+          } catch {
+            // ignore non-json payload
+          }
+        } else if (format === 1) {
+          // Binary audio frame: [8-byte user_id][2-byte peak][4-byte active][4-byte total][PCM...]
+          if (payload.length >= 18) {
+            const audioUserId = payload.readBigUInt64LE(0).toString();
+            const signalPeakAbs = payload.readUInt16LE(8);
+            const signalActiveSampleCount = payload.readUInt32LE(10);
+            const signalSampleCount = payload.readUInt32LE(14);
+            const pcmBuffer = payload.subarray(18);
+
+            this.emit(
+              "userAudio",
+              audioUserId,
+              pcmBuffer,
+              signalPeakAbs,
+              signalActiveSampleCount,
+              signalSampleCount
+            );
+          }
+        }
+      } else {
+        break;
+      }
+    }
   }
 
   private adapterCallbackCount = { voiceState: 0, voiceServer: 0, op4Forward: 0 };
@@ -321,9 +374,10 @@ export class VoiceSubprocessClient extends EventEmitter {
   }
 
   private _send(msg: any) {
-    if (!this.child || this.child.killed || !this.child.stdin) return;
+    if (!this.child || this.child.killed) return;
     try {
       this.child.stdin.write(JSON.stringify(msg) + "\n");
+      this.child.stdin.flush();
     } catch (err) {
       if (AUDIO_DEBUG) {
         console.error("[voiceSubprocessClient] IPC send error:", err);
@@ -435,6 +489,9 @@ export class VoiceSubprocessClient extends EventEmitter {
     this.stdoutBuffer = Buffer.alloc(0);
     this._cleanupAdapter();
 
+    // Abort the stdout reader loop
+    this.stdoutReaderController?.abort();
+
     const child = this.child;
     if (!child) {
       VoiceSubprocessClient.liveClients.delete(this);
@@ -452,12 +509,12 @@ export class VoiceSubprocessClient extends EventEmitter {
         resolve();
       };
 
-      child.once("exit", finish);
-      child.once("error", finish);
+      // Wait for the onExit callback to fire (via _handleExit → _resolveExitWaiter)
+      this._exitWaiterPromise?.then(finish);
 
       this._send({ type: "destroy" });
       try {
-        child.stdin?.end();
+        child.stdin.end();
       } catch {
         // ignore
       }

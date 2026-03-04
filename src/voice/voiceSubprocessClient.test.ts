@@ -1,32 +1,58 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
 import { VoiceSubprocessClient } from "./voiceSubprocessClient.ts";
 
-class FakeChildProcess extends EventEmitter {
+class FakeSubprocess {
   exitCode: number | null = null;
-  signalCode: NodeJS.Signals | null = null;
+  signalCode: number | null = null;
   killed = false;
   stdin = {
     end: () => undefined,
-    write: () => true
+    write: () => true,
+    flush: () => undefined,
+  };
+  stdout = {
+    getReader: () => ({
+      read: () => new Promise<{ done: true; value: undefined }>((resolve) => {
+        // Never resolves until cancelled — simulates an idle stream
+        this._cancelStdoutReader = () => resolve({ done: true, value: undefined });
+      }),
+      releaseLock: () => undefined,
+    }),
   };
 
-  kill(signal: NodeJS.Signals): boolean {
+  private _resolveExitWaiter: (() => void) | null = null;
+  private _cancelStdoutReader: (() => void) | null = null;
+
+  _injectExitWaiter(resolve: () => void) {
+    this._resolveExitWaiter = resolve;
+  }
+
+  kill(signal: NodeJS.Signals): void {
     this.killed = true;
     this.signalCode = signal;
+    // Simulate async exit notification
     queueMicrotask(() => {
-      this.emit("exit", null, signal);
+      this._cancelStdoutReader?.();
+      this._resolveExitWaiter?.();
     });
-    return true;
   }
 }
 
 test("VoiceSubprocessClient destroy waits for child exit", async () => {
   const client = new VoiceSubprocessClient("guild-1", "channel-1", null);
-  const child = new FakeChildProcess();
+  const child = new FakeSubprocess();
+
+  // Wire up the exit-waiter that _handleExit would normally resolve
+  let resolveExitWaiter!: () => void;
+  const exitWaiterPromise = new Promise<void>((resolve) => {
+    resolveExitWaiter = resolve;
+  });
+  child._injectExitWaiter(resolveExitWaiter);
 
   Reflect.set(client, "child", child);
+  Reflect.set(client, "_resolveExitWaiter", resolveExitWaiter);
+  Reflect.set(client, "_exitWaiterPromise", exitWaiterPromise);
 
   const startedAt = Date.now();
   await client.destroy();
