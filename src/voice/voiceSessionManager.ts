@@ -7733,7 +7733,40 @@ export class VoiceSessionManager {
         this.scheduleOpenAiSharedAsrSessionIdleClose(session);
       }
 
-      if (!transcript) {
+      // If the committed buffer was empty (race with new utterance clearing
+      // it, or server-side discard), fall back to the streaming transcript
+      // that the tracked utterance accumulated via realtime deltas.
+      let resolvedTranscript = transcript;
+      if (!resolvedTranscript && trackedUtterance) {
+        const streamingFinal = normalizeVoiceText(
+          Array.isArray(trackedUtterance.finalSegments)
+            ? trackedUtterance.finalSegments.join(" ")
+            : "",
+          STT_TRANSCRIPT_MAX_CHARS
+        );
+        const streamingPartial = normalizeVoiceText(
+          trackedUtterance.partialText || "",
+          STT_TRANSCRIPT_MAX_CHARS
+        );
+        resolvedTranscript = streamingFinal || streamingPartial;
+        if (resolvedTranscript) {
+          this.store.logAction({
+            kind: "voice_runtime",
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId: normalizedUserId,
+            content: "openai_realtime_asr_streaming_fallback_used",
+            metadata: {
+              sessionId: session.id,
+              transcriptChars: resolvedTranscript.length,
+              source: streamingFinal ? "final_segments" : "partial_text",
+              captureReason: String(captureReason || "stream_end")
+            }
+          });
+        }
+      }
+
+      if (!resolvedTranscript) {
         this.store.logAction({
           kind: "voice_runtime",
           guildId: session.guildId,
@@ -7750,7 +7783,7 @@ export class VoiceSessionManager {
       }
 
       return {
-        transcript,
+        transcript: resolvedTranscript,
         asrStartedAtMs,
         asrCompletedAtMs,
         transcriptionModelPrimary,
@@ -8529,6 +8562,14 @@ export class VoiceSessionManager {
             });
             return true;
           };
+
+          // Mark commit in-flight synchronously so a new utterance's
+          // beginOpenAiSharedAsrUtterance won't clear the buffer before
+          // the async commit runs.
+          const sharedAsrState = this.getOpenAiSharedAsrState(session);
+          if (sharedAsrState) {
+            sharedAsrState.isCommittingAsr = true;
+          }
 
           const fallbackTimer = setTimeout(() => {
             const forwarded = forwardAsrBridgeTurn(null, "shared_timeout_fallback");
