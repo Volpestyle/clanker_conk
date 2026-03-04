@@ -143,7 +143,8 @@ function createSession(overrides = {}) {
     realtimeOutputSampleRateHz: 24000,
     realtimeClient: null,
     activeReplyInterruptionPolicy: null,
-    pendingBargeInRetry: null,
+    deferredVoiceActions: {},
+    deferredVoiceActionTimers: {},
     lastRequestedRealtimeUtterance: null,
     settingsSnapshot: {
       botName: "clanker conk",
@@ -1243,15 +1244,29 @@ test("maybeHandleInterruptedReplyRecovery retries short barge-ins with the prior
   const session = createSession({
     mode: "openai_realtime",
     realtimeInputSampleRateHz: 24_000,
-    pendingBargeInRetry: {
-      utteranceText: "let me finish this thought",
-      interruptedByUserId: "user-1",
-      interruptedAt: Date.now() - 400,
-      source: "test",
-      interruptionPolicy: {
-        assertive: true,
-        scope: "speaker",
-        allowedUserId: "user-1"
+    deferredVoiceActions: {
+      interrupted_reply: {
+        type: "interrupted_reply",
+        goal: "complete_interrupted_reply",
+        freshnessPolicy: "retry_then_regenerate",
+        status: "deferred",
+        createdAt: Date.now() - 400,
+        updatedAt: Date.now() - 400,
+        notBeforeAt: 0,
+        expiresAt: Date.now() + 5_000,
+        reason: "barge_in_interrupt",
+        revision: 1,
+        payload: {
+          utteranceText: "let me finish this thought",
+          interruptedByUserId: "user-1",
+          interruptedAt: Date.now() - 400,
+          source: "test",
+          interruptionPolicy: {
+            assertive: true,
+            scope: "speaker",
+            allowedUserId: "user-1"
+          }
+        }
       }
     }
   });
@@ -1268,7 +1283,7 @@ test("maybeHandleInterruptedReplyRecovery retries short barge-ins with the prior
   assert.equal(retryCalls.length, 1);
   assert.equal(retryCalls[0]?.text, "let me finish this thought");
   assert.equal(retryCalls[0]?.source, "barge_in_retry");
-  assert.equal(session.pendingBargeInRetry, null);
+  assert.equal(Boolean(session.deferredVoiceActions?.interrupted_reply), false);
   const retryLog = logs.find((entry) => entry?.content === "voice_barge_in_retry_requested");
   assert.equal(Boolean(retryLog), true);
 });
@@ -1284,15 +1299,29 @@ test("maybeHandleInterruptedReplyRecovery treats long barge-ins as full override
   const session = createSession({
     mode: "openai_realtime",
     realtimeInputSampleRateHz: 24_000,
-    pendingBargeInRetry: {
-      utteranceText: "do not replay when fully barged in",
-      interruptedByUserId: "user-1",
-      interruptedAt: Date.now() - 400,
-      source: "test",
-      interruptionPolicy: {
-        assertive: true,
-        scope: "speaker",
-        allowedUserId: "user-1"
+    deferredVoiceActions: {
+      interrupted_reply: {
+        type: "interrupted_reply",
+        goal: "complete_interrupted_reply",
+        freshnessPolicy: "retry_then_regenerate",
+        status: "deferred",
+        createdAt: Date.now() - 400,
+        updatedAt: Date.now() - 400,
+        notBeforeAt: 0,
+        expiresAt: Date.now() + 5_000,
+        reason: "barge_in_interrupt",
+        revision: 1,
+        payload: {
+          utteranceText: "do not replay when fully barged in",
+          interruptedByUserId: "user-1",
+          interruptedAt: Date.now() - 400,
+          source: "test",
+          interruptionPolicy: {
+            assertive: true,
+            scope: "speaker",
+            allowedUserId: "user-1"
+          }
+        }
       }
     }
   });
@@ -1307,7 +1336,7 @@ test("maybeHandleInterruptedReplyRecovery treats long barge-ins as full override
 
   assert.equal(handled, false);
   assert.equal(retryCalls.length, 0);
-  assert.equal(session.pendingBargeInRetry, null);
+  assert.equal(Boolean(session.deferredVoiceActions?.interrupted_reply), false);
   const skipLog = logs.find((entry) => entry?.content === "voice_barge_in_retry_skipped_full_override");
   assert.equal(Boolean(skipLog), true);
 });
@@ -1341,6 +1370,119 @@ test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript instead of queue
   assert.equal(Boolean(droppedLog), true);
   assert.equal(droppedLog?.metadata?.source, "per_user");
   assert.equal(droppedLog?.metadata?.pcmBytes, pcmBuffer.length);
+});
+
+test("queueRealtimeTurnFromAsrBridge refires pending join greeting after empty ASR drop", () => {
+  const { manager, logs } = createManager();
+  const queuedTurns = [];
+  const createdResponses = [];
+  manager.queueRealtimeTurn = (payload) => {
+    queuedTurns.push(payload);
+  };
+  manager.createTrackedAudioResponse = (payload) => {
+    createdResponses.push(payload);
+    return true;
+  };
+  const session = createSession({
+    mode: "openai_realtime",
+    playbackArmed: true,
+    startedAt: Date.now() - 2_000,
+    deferredVoiceActions: {
+      join_greeting: {
+        type: "join_greeting",
+        status: "deferred",
+        createdAt: Date.now() - 500,
+        updatedAt: Date.now() - 500,
+        notBeforeAt: 0,
+        expiresAt: Date.now() + 5_000,
+        reason: "capture_resolved",
+        revision: 1
+      }
+    },
+    lastAssistantReplyAt: 0,
+    userCaptures: new Map()
+  });
+  const pcmBuffer = Buffer.alloc(DISCORD_PCM_FRAME_BYTES * 2, 6);
+
+  const usedTranscript = manager.queueRealtimeTurnFromAsrBridge({
+    session,
+    userId: "speaker-1",
+    pcmBuffer,
+    captureReason: "stream_end",
+    finalizedAt: Date.now(),
+    asrResult: {
+      transcript: ""
+    },
+    source: "per_user"
+  });
+
+  assert.equal(usedTranscript, false);
+  assert.equal(queuedTurns.length, 0);
+  assert.equal(createdResponses.length, 1);
+  assert.equal(createdResponses[0]?.source, "voice_join_greeting");
+  assert.equal(Boolean(session.deferredVoiceActions?.join_greeting), false);
+  assert.equal(Number(session.lastAssistantReplyAt || 0) > 0, true);
+  assert.equal(logs.some((entry) => entry?.content === "voice_join_greeting_fired"), true);
+});
+
+test("createTrackedAudioResponse clears deferred join greeting when newer bot speech starts", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    mode: "openai_realtime",
+    deferredVoiceActions: {
+      join_greeting: {
+        type: "join_greeting",
+        status: "deferred",
+        createdAt: Date.now() - 500,
+        updatedAt: Date.now() - 500,
+        notBeforeAt: 0,
+        expiresAt: Date.now() + 5_000,
+        reason: "capture_resolved",
+        revision: 1
+      }
+    }
+  });
+
+  const created = manager.createTrackedAudioResponse({
+    session,
+    source: "openai_realtime_text_turn",
+    emitCreateEvent: false
+  });
+
+  assert.equal(created, true);
+  assert.equal(Boolean(session.deferredVoiceActions?.join_greeting), false);
+  manager.clearPendingResponse(session);
+});
+
+test("buildRealtimeInstructions softens deferred join greeting into a re-evaluation prompt", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    mode: "openai_realtime",
+    startedAt: Date.now() - 2_000,
+    deferredVoiceActions: {
+      join_greeting: {
+        type: "join_greeting",
+        status: "deferred",
+        createdAt: Date.now() - 1_500,
+        updatedAt: Date.now() - 500,
+        notBeforeAt: 0,
+        expiresAt: Date.now() + 5_000,
+        reason: "capture_resolved",
+        revision: 2
+      }
+    }
+  });
+
+  const instructions = manager.buildRealtimeInstructions({
+    session,
+    settings: session.settingsSnapshot,
+    speakerUserId: null,
+    transcript: "",
+    memorySlice: null
+  });
+
+  assert.equal(instructions.includes("Re-evaluate whether a brief casual greeting still fits right now."), true);
+  assert.equal(instructions.includes("If the moment has passed or the room has clearly moved on, you may skip."), true);
 });
 
 test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript for all capture reasons", () => {

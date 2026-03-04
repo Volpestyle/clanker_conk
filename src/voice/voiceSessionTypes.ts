@@ -221,6 +221,77 @@ export interface VoiceSessionMusicState {
     pendingRequestedAt: number;
 }
 
+export type DeferredVoiceActionType = "join_greeting" | "interrupted_reply" | "queued_user_turns";
+
+export type DeferredVoiceActionStatus = "scheduled" | "deferred";
+
+export type DeferredVoiceActionFreshnessPolicy =
+    | "retry_exact"
+    | "regenerate_from_goal"
+    | "retry_then_regenerate";
+
+export interface DeferredVoiceActionBase {
+    type: DeferredVoiceActionType;
+    goal: string;
+    freshnessPolicy: DeferredVoiceActionFreshnessPolicy;
+    status: DeferredVoiceActionStatus;
+    createdAt: number;
+    updatedAt: number;
+    notBeforeAt: number;
+    expiresAt: number;
+    reason: string;
+    revision: number;
+}
+
+export interface DeferredJoinGreetingAction extends DeferredVoiceActionBase {
+    type: "join_greeting";
+    goal: "announce_join";
+    freshnessPolicy: "regenerate_from_goal";
+    payload: {
+        trigger: string | null;
+    };
+}
+
+export interface DeferredInterruptedReplyAction extends DeferredVoiceActionBase {
+    type: "interrupted_reply";
+    goal: "complete_interrupted_reply";
+    freshnessPolicy: "retry_then_regenerate";
+    payload: {
+        utteranceText: string | null;
+        interruptedByUserId: string | null;
+        interruptedAt: number;
+        source: string | null;
+        interruptionPolicy: any;
+    };
+}
+
+export interface DeferredQueuedUserTurn {
+    userId: string | null;
+    transcript: string;
+    pcmBuffer: Buffer | null;
+    captureReason: string;
+    source: string;
+    directAddressed: boolean;
+    deferReason: string;
+    flushDelayMs: number;
+    queuedAt: number;
+}
+
+export interface DeferredQueuedUserTurnsAction extends DeferredVoiceActionBase {
+    type: "queued_user_turns";
+    goal: "respond_to_deferred_user_turns";
+    freshnessPolicy: "regenerate_from_goal";
+    payload: {
+        turns: DeferredQueuedUserTurn[];
+        nextFlushAt: number;
+    };
+}
+
+export type DeferredVoiceAction =
+    | DeferredJoinGreetingAction
+    | DeferredInterruptedReplyAction
+    | DeferredQueuedUserTurnsAction;
+
 export interface VoiceCommandState {
     userId: string | null;
     domain: string | null;
@@ -306,7 +377,6 @@ export interface VoiceSession {
     nextResponseRequestId: number;
     pendingResponse: any;
     activeReplyInterruptionPolicy: any;
-    pendingBargeInRetry: any;
     lastRequestedRealtimeUtterance: any;
     pendingSttTurns: number;
     sttTurnDrainActive: boolean;
@@ -345,8 +415,6 @@ export interface VoiceSession {
         isPaused: boolean;
         volume: number;
     };
-    pendingDeferredTurns: any[];
-    deferredTurnFlushTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     thoughtLoopTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     thoughtLoopBusy: boolean;
     nextThoughtAt: number;
@@ -371,8 +439,8 @@ export interface VoiceSession {
     playbackArmed?: boolean;
     playbackArmedReason?: string | null;
     playbackArmedAt?: number;
-    joinGreetingPending?: boolean;
-    joinGreetingGraceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
+    deferredVoiceActions?: Partial<Record<DeferredVoiceActionType, DeferredVoiceAction>>;
+    deferredVoiceActionTimers?: Partial<Record<DeferredVoiceActionType, ReturnType<typeof setTimeout> | NodeJS.Timeout | null>>;
     lastGenerationContext?: any;
     openAiAsrSessionIdleTtlMs?: number;
     realtimeTurnCoalesceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;

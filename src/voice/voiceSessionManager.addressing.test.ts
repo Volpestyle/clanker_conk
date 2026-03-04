@@ -4612,24 +4612,42 @@ test("flushDeferredBotTurnOpenTurns waits for silence before admission", async (
     ending: false,
     botTurnOpen: false,
     userCaptures: new Map([["speaker-1", {}]]),
-    pendingDeferredTurns: [
-      {
-        userId: "speaker-1",
-        transcript: "clanker what about this",
-        pcmBuffer: null,
-        captureReason: "speaking_end",
-        source: "stt_pipeline",
-        directAddressed: true,
-        queuedAt: Date.now()
+    deferredVoiceActions: {
+      queued_user_turns: {
+        type: "queued_user_turns",
+        goal: "respond_to_deferred_user_turns",
+        freshnessPolicy: "regenerate_from_goal",
+        status: "scheduled",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        notBeforeAt: Date.now(),
+        expiresAt: 0,
+        reason: "bot_turn_open",
+        revision: 1,
+        payload: {
+          turns: [
+            {
+              userId: "speaker-1",
+              transcript: "clanker what about this",
+              pcmBuffer: null,
+              captureReason: "speaking_end",
+              source: "stt_pipeline",
+              directAddressed: true,
+              queuedAt: Date.now()
+            }
+          ],
+          nextFlushAt: Date.now()
+        }
       }
-    ]
+    },
+    deferredVoiceActionTimers: {}
   };
 
   await manager.flushDeferredBotTurnOpenTurns({ session });
 
   assert.equal(decisionCalls, 0);
   assert.equal(scheduledFlushCalls, 1);
-  assert.equal(session.pendingDeferredTurns.length, 1);
+  assert.equal(manager.getDeferredQueuedUserTurns(session).length, 1);
 });
 
 test("flushDeferredBotTurnOpenTurns coalesces deferred transcripts into one admission", async () => {
@@ -4658,26 +4676,44 @@ test("flushDeferredBotTurnOpenTurns coalesces deferred transcripts into one admi
     botTurnOpen: false,
     userCaptures: new Map(),
     settingsSnapshot: baseSettings(),
-    pendingDeferredTurns: [
-      {
-        userId: "speaker-1",
-        transcript: "clanker hold on",
-        pcmBuffer: null,
-        captureReason: "speaking_end",
-        source: "stt_pipeline",
-        directAddressed: true,
-        queuedAt: Date.now() - 20
-      },
-      {
-        userId: "speaker-2",
-        transcript: "what about the rust panic trace",
-        pcmBuffer: null,
-        captureReason: "speaking_end",
-        source: "stt_pipeline",
-        directAddressed: false,
-        queuedAt: Date.now()
+    deferredVoiceActions: {
+      queued_user_turns: {
+        type: "queued_user_turns",
+        goal: "respond_to_deferred_user_turns",
+        freshnessPolicy: "regenerate_from_goal",
+        status: "scheduled",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        notBeforeAt: Date.now(),
+        expiresAt: 0,
+        reason: "bot_turn_open",
+        revision: 1,
+        payload: {
+          turns: [
+            {
+              userId: "speaker-1",
+              transcript: "clanker hold on",
+              pcmBuffer: null,
+              captureReason: "speaking_end",
+              source: "stt_pipeline",
+              directAddressed: true,
+              queuedAt: Date.now() - 20
+            },
+            {
+              userId: "speaker-2",
+              transcript: "what about the rust panic trace",
+              pcmBuffer: null,
+              captureReason: "speaking_end",
+              source: "stt_pipeline",
+              directAddressed: false,
+              queuedAt: Date.now()
+            }
+          ],
+          nextFlushAt: Date.now()
+        }
       }
-    ]
+    },
+    deferredVoiceActionTimers: {}
   };
 
   await manager.flushDeferredBotTurnOpenTurns({ session });
@@ -4692,7 +4728,7 @@ test("flushDeferredBotTurnOpenTurns coalesces deferred transcripts into one admi
     replyPayloads[0]?.transcript,
     "clanker hold on what about the rust panic trace"
   );
-  assert.equal(session.pendingDeferredTurns.length, 0);
+  assert.equal(manager.getDeferredQueuedUserTurns(session).length, 0);
 });
 
 test("flushDeferredBotTurnOpenTurns runs brain realtime reply after one admission", async () => {
@@ -4722,26 +4758,44 @@ test("flushDeferredBotTurnOpenTurns runs brain realtime reply after one admissio
     botTurnOpen: false,
     userCaptures: new Map(),
     settingsSnapshot: baseSettings(),
-    pendingDeferredTurns: [
-      {
-        userId: "speaker-1",
-        transcript: "clanker hold up",
-        pcmBuffer: Buffer.from([1, 2]),
-        captureReason: "speaking_end",
-        source: "realtime",
-        directAddressed: true,
-        queuedAt: Date.now() - 30
-      },
-      {
-        userId: "speaker-2",
-        transcript: "add this too",
-        pcmBuffer: Buffer.from([3, 4, 5]),
-        captureReason: "speaking_end",
-        source: "realtime",
-        directAddressed: false,
-        queuedAt: Date.now()
+    deferredVoiceActions: {
+      queued_user_turns: {
+        type: "queued_user_turns",
+        goal: "respond_to_deferred_user_turns",
+        freshnessPolicy: "regenerate_from_goal",
+        status: "scheduled",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        notBeforeAt: Date.now(),
+        expiresAt: 0,
+        reason: "bot_turn_open",
+        revision: 1,
+        payload: {
+          turns: [
+            {
+              userId: "speaker-1",
+              transcript: "clanker hold up",
+              pcmBuffer: Buffer.from([1, 2]),
+              captureReason: "speaking_end",
+              source: "realtime",
+              directAddressed: true,
+              queuedAt: Date.now() - 30
+            },
+            {
+              userId: "speaker-2",
+              transcript: "add this too",
+              pcmBuffer: Buffer.from([3, 4, 5]),
+              captureReason: "speaking_end",
+              source: "realtime",
+              directAddressed: false,
+              queuedAt: Date.now()
+            }
+          ],
+          nextFlushAt: Date.now()
+        }
       }
-    ]
+    },
+    deferredVoiceActionTimers: {}
   };
 
   await manager.flushDeferredBotTurnOpenTurns({ session });
@@ -4752,7 +4806,7 @@ test("flushDeferredBotTurnOpenTurns runs brain realtime reply after one admissio
   assert.equal(realtimeReplyPayloads[0]?.transcript, "clanker hold up add this too");
   assert.equal(realtimeReplyPayloads[0]?.source, "bot_turn_open_deferred_flush");
   assert.equal(realtimeReplyPayloads[0]?.directAddressed, false);
-  assert.equal(session.pendingDeferredTurns.length, 0);
+  assert.equal(manager.getDeferredQueuedUserTurns(session).length, 0);
 });
 
 test("flushDeferredBotTurnOpenTurns forwards native realtime audio after one admission", async () => {
@@ -4797,26 +4851,44 @@ test("flushDeferredBotTurnOpenTurns forwards native realtime audio after one adm
         }
       }
     }),
-    pendingDeferredTurns: [
-      {
-        userId: "speaker-1",
-        transcript: "clanker hold up",
-        pcmBuffer: firstPcm,
-        captureReason: "speaking_end",
-        source: "realtime",
-        directAddressed: true,
-        queuedAt: Date.now() - 30
-      },
-      {
-        userId: "speaker-2",
-        transcript: "add this too",
-        pcmBuffer: secondPcm,
-        captureReason: "speaking_end",
-        source: "realtime",
-        directAddressed: false,
-        queuedAt: Date.now()
+    deferredVoiceActions: {
+      queued_user_turns: {
+        type: "queued_user_turns",
+        goal: "respond_to_deferred_user_turns",
+        freshnessPolicy: "regenerate_from_goal",
+        status: "scheduled",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        notBeforeAt: Date.now(),
+        expiresAt: 0,
+        reason: "bot_turn_open",
+        revision: 1,
+        payload: {
+          turns: [
+            {
+              userId: "speaker-1",
+              transcript: "clanker hold up",
+              pcmBuffer: firstPcm,
+              captureReason: "speaking_end",
+              source: "realtime",
+              directAddressed: true,
+              queuedAt: Date.now() - 30
+            },
+            {
+              userId: "speaker-2",
+              transcript: "add this too",
+              pcmBuffer: secondPcm,
+              captureReason: "speaking_end",
+              source: "realtime",
+              directAddressed: false,
+              queuedAt: Date.now()
+            }
+          ],
+          nextFlushAt: Date.now()
+        }
       }
-    ]
+    },
+    deferredVoiceActionTimers: {}
   };
 
   await manager.flushDeferredBotTurnOpenTurns({ session });
@@ -4830,7 +4902,7 @@ test("flushDeferredBotTurnOpenTurns forwards native realtime audio after one adm
     : Buffer.alloc(0);
   assert.deepEqual([...forwardedPcm], [...Buffer.concat([firstPcm, secondPcm])]);
   assert.equal(forwardedPayloads[0]?.captureReason, "bot_turn_open_deferred_flush");
-  assert.equal(session.pendingDeferredTurns.length, 0);
+  assert.equal(manager.getDeferredQueuedUserTurns(session).length, 0);
 });
 
 test("voice decision history deduplicates consecutive identical turns", () => {

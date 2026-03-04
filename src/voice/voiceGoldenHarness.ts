@@ -918,7 +918,8 @@ function buildExecutionSession({
     lastActivityAt: now,
     userCaptures: new Map(),
     recentVoiceTurns: [],
-    pendingDeferredTurns: [],
+    deferredVoiceActions: {},
+    deferredVoiceActionTimers: {},
     soundboard: {
       playCount: 0,
       lastPlayedAt: 0

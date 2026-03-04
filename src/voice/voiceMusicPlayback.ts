@@ -333,10 +333,9 @@ export function haltSessionOutputForMusicPlayback(manager: any, session, reason 
     session.botTurnResetTimer = null;
   }
   session.botTurnOpen = false;
-  session.pendingBargeInRetry = null;
   session.lastRequestedRealtimeUtterance = null;
   session.activeReplyInterruptionPolicy = null;
-  session.pendingDeferredTurns = [];
+  manager.clearAllDeferredVoiceActions(session);
 
   manager.abortActiveInboundCaptures({
     session,

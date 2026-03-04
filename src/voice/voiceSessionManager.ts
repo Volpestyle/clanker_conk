@@ -224,12 +224,13 @@ import {
 } from "./voiceSessionManager.constants.ts";
 import { loadPromptMemorySliceFromMemory } from "../memory/promptMemorySlice.ts";
 import { providerSupports } from "./voiceModes.ts";
-import { ensureSessionToolRuntimeState, getVoiceMcpServerStatuses, resolveVoiceRealtimeToolDescriptors, buildRealtimeFunctionTools, recordVoiceToolCallEvent, parseOpenAiRealtimeToolArguments, resolveOpenAiRealtimeToolDescriptor, summarizeVoiceToolOutput, executeOpenAiRealtimeFunctionCall, refreshRealtimeTools, executeVoiceMemorySearchTool, executeVoiceMemoryWriteTool, executeVoiceConversationSearchTool, executeVoiceMusicSearchTool, executeVoiceMusicQueueAddTool, executeVoiceMusicQueueNextTool, executeVoiceMusicPlayNowTool, executeVoiceWebSearchTool, executeLocalVoiceToolCall, executeMcpVoiceToolCall } from "./voiceToolCalls.ts";
-import { formatConversationWindows, formatRecentLookupContext } from "../prompts/promptFormatters.ts";
+import { ensureSessionToolRuntimeState, getVoiceMcpServerStatuses, resolveVoiceRealtimeToolDescriptors, buildRealtimeFunctionTools, recordVoiceToolCallEvent, parseOpenAiRealtimeToolArguments, resolveOpenAiRealtimeToolDescriptor, summarizeVoiceToolOutput, executeOpenAiRealtimeFunctionCall, refreshRealtimeTools, executeVoiceMemorySearchTool, executeVoiceMemoryWriteTool, executeVoiceAdaptiveStyleAddTool, executeVoiceAdaptiveStyleRemoveTool, executeVoiceConversationSearchTool, executeVoiceMusicSearchTool, executeVoiceMusicQueueAddTool, executeVoiceMusicQueueNextTool, executeVoiceMusicPlayNowTool, executeVoiceWebSearchTool, executeLocalVoiceToolCall, executeMcpVoiceToolCall } from "./voiceToolCalls.ts";
+import { formatAdaptiveStyleNotes, formatConversationWindows, formatRecentLookupContext } from "../prompts/promptFormatters.ts";
 import {
   loadConversationContinuityContext
 } from "../bot/conversationContinuity.ts";
 import type { ConversationContinuityPayload } from "../bot/conversationContinuity.ts";
+import type { DeferredQueuedUserTurn, DeferredQueuedUserTurnsAction } from "./voiceSessionTypes.ts";
 
 export function resolveVoiceThoughtTopicalityBias({
   silenceMs = 0,
@@ -719,7 +720,7 @@ export class VoiceSessionManager {
       const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
       const modelTurns = Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns : [];
       const transcriptTurns = Array.isArray(session.transcriptTurns) ? session.transcriptTurns : [];
-      const deferredQueue = Array.isArray(session.pendingDeferredTurns) ? session.pendingDeferredTurns : [];
+      const deferredQueue = this.getDeferredQueuedUserTurns(session);
       const generationSummary =
         session.modelContextSummary && typeof session.modelContextSummary === "object"
           ? session.modelContextSummary.generation || null
@@ -806,7 +807,7 @@ export class VoiceSessionManager {
             active: joinWindowActive,
             ageMs: Math.round(joinWindowAgeMs),
             windowMs: JOIN_GREETING_LLM_WINDOW_MS,
-            greetingPending: Boolean(session.joinGreetingPending),
+            greetingPending: Boolean(this.getDeferredVoiceAction(session, "join_greeting")),
           },
           thoughtEngine: {
             busy: Boolean(session.thoughtLoopBusy),
@@ -2519,7 +2520,18 @@ export class VoiceSessionManager {
       session.playbackArmedReason = reason;
       session.playbackArmedAt = Date.now();
       if (reason !== "connection_ready") return;
-      session.joinGreetingPending = true;
+      this.setDeferredVoiceAction(session, {
+        type: "join_greeting",
+        goal: "announce_join",
+        freshnessPolicy: "regenerate_from_goal",
+        status: "scheduled",
+        reason: "connection_ready",
+        notBeforeAt: Date.now() + 2500,
+        expiresAt: Number(session.startedAt || 0) + JOIN_GREETING_LLM_WINDOW_MS,
+        payload: {
+          trigger: "connection_ready"
+        }
+      });
       // If instructions are already set, start the observation grace window.
       if (session.lastOpenAiRealtimeInstructions && !session.lastAssistantReplyAt) {
         this.scheduleJoinGreetingGrace(session);
@@ -2559,29 +2571,300 @@ export class VoiceSessionManager {
     });
   }
 
-  scheduleJoinGreetingGrace(session) {
-    if (!session || session.ending) return;
-    if (session.joinGreetingGraceTimer) return; // already scheduled
-    // Short observation window — gives time for inbound audio packets to
-    // arrive and create captures before we decide the room is silent.
-    session.joinGreetingGraceTimer = setTimeout(() => {
-      session.joinGreetingGraceTimer = null;
-      this.fireJoinGreeting(session);
-    }, 2500);
+  getDeferredVoiceActions(session) {
+    if (!session || typeof session !== "object") return {};
+    const existing = session.deferredVoiceActions;
+    if (existing && typeof existing === "object") {
+      return existing;
+    }
+    const actions = {};
+    session.deferredVoiceActions = actions;
+    return actions;
   }
 
-  fireJoinGreeting(session) {
-    if (!session || session.ending) return;
-    if (!isRealtimeMode(session.mode)) return;
-    if (session.lastAssistantReplyAt) return;
-    // Wait for active captures to resolve — if they produce a transcript the
-    // normal reply pipeline will set lastAssistantReplyAt and we skip the
-    // greeting. If they turn out to be ambient noise, cleanupCapture re-calls us.
-    if (Number(session.userCaptures?.size || 0) > 0) {
-      session.joinGreetingPending = true;
-      return;
+  getDeferredVoiceActionTimers(session) {
+    if (!session || typeof session !== "object") return {};
+    const existing = session.deferredVoiceActionTimers;
+    if (existing && typeof existing === "object") {
+      return existing;
     }
-    session.joinGreetingPending = false;
+    const timers = {};
+    session.deferredVoiceActionTimers = timers;
+    return timers;
+  }
+
+  getDeferredVoiceAction(session, type) {
+    if (!session) return null;
+    const actions = this.getDeferredVoiceActions(session);
+    const action = actions[type];
+    return action && typeof action === "object" ? action : null;
+  }
+
+  upsertDeferredVoiceAction(session, actionInput: {
+    type?: string;
+    goal?: string;
+    freshnessPolicy?: string;
+    status?: string;
+    notBeforeAt?: number;
+    expiresAt?: number;
+    reason?: string;
+    payload?: Record<string, unknown>;
+  } = {}) {
+    if (!session || session.ending) return null;
+    const normalizedType = String(actionInput.type || "").trim();
+    if (!normalizedType) return null;
+    const now = Date.now();
+    const actions = this.getDeferredVoiceActions(session);
+    const existing = this.getDeferredVoiceAction(session, normalizedType);
+    const action = {
+      type: normalizedType,
+      goal: String(actionInput.goal || existing?.goal || "").trim() || normalizedType,
+      freshnessPolicy: String(actionInput.freshnessPolicy || existing?.freshnessPolicy || "regenerate_from_goal").trim(),
+      status: actionInput.status === "scheduled" ? "scheduled" : "deferred",
+      createdAt: Math.max(0, Number(existing?.createdAt || 0)) || now,
+      updatedAt: now,
+      notBeforeAt: Math.max(0, Number(actionInput.notBeforeAt ?? existing?.notBeforeAt ?? 0)),
+      expiresAt: Math.max(0, Number(actionInput.expiresAt ?? existing?.expiresAt ?? 0)),
+      reason: String(actionInput.reason || existing?.reason || "deferred").trim() || "deferred",
+      revision: Math.max(0, Number(existing?.revision || 0)) + 1,
+      payload:
+        actionInput.payload && typeof actionInput.payload === "object"
+          ? actionInput.payload
+          : existing?.payload && typeof existing.payload === "object"
+            ? existing.payload
+            : {}
+    };
+    actions[normalizedType] = action;
+    return action;
+  }
+
+  setDeferredVoiceAction(session, payload = {}) {
+    return this.upsertDeferredVoiceAction(session, payload);
+  }
+
+  getDeferredQueuedUserTurnsAction(session): DeferredQueuedUserTurnsAction | null {
+    const action = this.getDeferredVoiceAction(session, "queued_user_turns");
+    if (!action || typeof action !== "object") return null;
+    const payload = action.payload && typeof action.payload === "object" ? action.payload : null;
+    if (!payload || !Array.isArray(payload.turns)) return null;
+    return action as DeferredQueuedUserTurnsAction;
+  }
+
+  getDeferredQueuedUserTurns(session): DeferredQueuedUserTurn[] {
+    const action = this.getDeferredQueuedUserTurnsAction(session);
+    return Array.isArray(action?.payload?.turns) ? action.payload.turns : [];
+  }
+
+  clearDeferredVoiceActionTimer(session, type) {
+    if (!session) return;
+    const timers = this.getDeferredVoiceActionTimers(session);
+    const timer = timers[type];
+    if (timer) {
+      clearTimeout(timer);
+    }
+    timers[type] = null;
+  }
+
+  clearDeferredVoiceAction(session, type) {
+    if (!session) return;
+    const normalizedType = String(type || "").trim();
+    if (!normalizedType) return;
+    this.clearDeferredVoiceActionTimer(session, normalizedType);
+    const actions = this.getDeferredVoiceActions(session);
+    delete actions[normalizedType];
+  }
+
+  clearAllDeferredVoiceActions(session) {
+    if (!session) return;
+    const actions = this.getDeferredVoiceActions(session);
+    for (const type of Object.keys(actions)) {
+      this.clearDeferredVoiceAction(session, type);
+    }
+  }
+
+  scheduleDeferredVoiceActionRecheck(session, {
+    type,
+    delayMs = 0,
+    reason = "scheduled_recheck"
+  }) {
+    if (!session || session.ending) return;
+    const normalizedType = String(type || "").trim();
+    if (!normalizedType) return;
+    const action = this.getDeferredVoiceAction(session, normalizedType);
+    if (!action) return;
+    this.clearDeferredVoiceActionTimer(session, normalizedType);
+    const timers = this.getDeferredVoiceActionTimers(session);
+    timers[normalizedType] = setTimeout(() => {
+      timers[normalizedType] = null;
+      this.recheckDeferredVoiceActions({
+        session,
+        reason,
+        preferredTypes: [normalizedType]
+      });
+    }, Math.max(0, Number(delayMs) || 0));
+  }
+
+  scheduleJoinGreetingGrace(session) {
+    if (!session || session.ending) return;
+    const action = this.getDeferredVoiceAction(session, "join_greeting");
+    if (!action || session.lastAssistantReplyAt) return;
+    const delayMs = Math.max(0, Number(action.notBeforeAt || 0) - Date.now());
+    this.scheduleDeferredVoiceActionRecheck(session, {
+      type: "join_greeting",
+      delayMs,
+      reason: "join_greeting_grace"
+    });
+  }
+
+  recheckDeferredVoiceActions({
+    session,
+    reason = "manual",
+    preferredTypes = null,
+    context = null
+  }) {
+    if (!session || session.ending) return false;
+    const actionPriority = ["interrupted_reply", "queued_user_turns", "join_greeting"];
+    const knownActions = this.getDeferredVoiceActions(session);
+    const types = Array.isArray(preferredTypes) && preferredTypes.length > 0
+      ? preferredTypes
+      : actionPriority.filter((type) => Boolean(knownActions[type]));
+    for (const type of types) {
+      if (type === "queued_user_turns" && this.recheckDeferredQueuedUserTurns(session, {
+        action: this.getDeferredQueuedUserTurnsAction(session),
+        reason
+      })) {
+        return true;
+      }
+      if (type === "join_greeting" && this.recheckDeferredJoinGreeting(session, {
+        action: this.getDeferredVoiceAction(session, type),
+        reason
+      })) {
+        return true;
+      }
+      if (type === "interrupted_reply" && this.recheckDeferredInterruptedReply(session, {
+        action: this.getDeferredVoiceAction(session, type),
+        reason,
+        context
+      })) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  recheckDeferredQueuedUserTurns(session, {
+    action = null,
+    reason = "manual"
+  }: {
+    action?: DeferredQueuedUserTurnsAction | null;
+    reason?: string;
+  } = {}) {
+    if (!session || session.ending) return false;
+    const queuedTurnsAction = action && typeof action === "object"
+      ? action
+      : this.getDeferredQueuedUserTurnsAction(session);
+    if (!queuedTurnsAction) return false;
+
+    const pendingQueue = Array.isArray(queuedTurnsAction?.payload?.turns)
+      ? queuedTurnsAction.payload.turns
+      : [];
+    if (!pendingQueue.length) {
+      this.clearDeferredVoiceAction(session, "queued_user_turns");
+      return false;
+    }
+
+    const now = Date.now();
+    const notBeforeAt = Math.max(0, Number(queuedTurnsAction.notBeforeAt || 0));
+    if (notBeforeAt > now) {
+      this.scheduleDeferredBotTurnOpenFlush({
+        session,
+        delayMs: notBeforeAt - now,
+        reason
+      });
+      return false;
+    }
+
+    const replyOutputLockState = this.getReplyOutputLockState(session);
+    if (replyOutputLockState.locked || Number(session.userCaptures?.size || 0) > 0) {
+      this.scheduleDeferredBotTurnOpenFlush({
+        session,
+        reason
+      });
+      return false;
+    }
+
+    this.clearDeferredVoiceAction(session, "queued_user_turns");
+    void this.flushDeferredBotTurnOpenTurns({
+      session,
+      deferredTurns: pendingQueue,
+      reason
+    });
+    return true;
+  }
+
+  fireJoinGreeting(session, reason = "manual") {
+    return this.recheckDeferredVoiceActions({
+      session,
+      reason,
+      preferredTypes: ["join_greeting"]
+    });
+  }
+
+  recheckDeferredJoinGreeting(session, {
+    action = null,
+    reason = "manual"
+  } = {}) {
+    if (!session || session.ending) return false;
+    const joinGreetingAction = action && typeof action === "object"
+      ? action
+      : this.getDeferredVoiceAction(session, "join_greeting");
+    if (!joinGreetingAction) return false;
+    if (!isRealtimeMode(session.mode) || !session.playbackArmed || session.lastAssistantReplyAt) {
+      this.clearDeferredVoiceAction(session, "join_greeting");
+      return false;
+    }
+
+    const now = Date.now();
+    const joinWindowAgeMs = Math.max(0, now - Number(session?.startedAt || 0));
+    const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
+    const expiresAt = Math.max(0, Number(joinGreetingAction.expiresAt || 0));
+    if (!joinWindowActive || (expiresAt > 0 && now >= expiresAt)) {
+      this.clearDeferredVoiceAction(session, "join_greeting");
+      return false;
+    }
+
+    const notBeforeAt = Math.max(0, Number(joinGreetingAction.notBeforeAt || 0));
+    if (notBeforeAt > now) {
+      this.scheduleDeferredVoiceActionRecheck(session, {
+        type: "join_greeting",
+        delayMs: notBeforeAt - now,
+        reason
+      });
+      return false;
+    }
+
+    if (
+      Number(session.userCaptures?.size || 0) > 0 ||
+      session.pendingResponse ||
+      this.isRealtimeResponseActive(session) ||
+      Boolean(session.awaitingToolOutputs) ||
+      (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0)
+    ) {
+      this.setDeferredVoiceAction(session, {
+        type: "join_greeting",
+        goal: "announce_join",
+        freshnessPolicy: "regenerate_from_goal",
+        status: "deferred",
+        reason,
+        notBeforeAt: 0,
+        expiresAt,
+        payload: {
+          trigger: String(joinGreetingAction?.payload?.trigger || joinGreetingAction.reason || "join").trim() || null
+        }
+      });
+      return false;
+    }
+
     this.createTrackedAudioResponse({
       session,
       source: "voice_join_greeting",
@@ -2589,14 +2872,116 @@ export class VoiceSessionManager {
       resetRetryState: true
     });
     session.lastAssistantReplyAt = Date.now();
+    this.clearDeferredVoiceAction(session, "join_greeting");
     this.store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,
       channelId: session.textChannelId,
       userId: this.client.user?.id || null,
       content: "voice_join_greeting_fired",
-      metadata: { sessionId: session.id, mode: session.mode }
+      metadata: {
+        sessionId: session.id,
+        mode: session.mode,
+        deferredActionReason: String(joinGreetingAction.reason || "deferred"),
+        recheckReason: String(reason || "manual")
+      }
     });
+    return true;
+  }
+
+  recheckDeferredInterruptedReply(session, {
+    action = null,
+    reason = "manual",
+    context = null
+  } = {}) {
+    if (!session || session.ending) return false;
+    const interruptedReplyAction = action && typeof action === "object"
+      ? action
+      : this.getDeferredVoiceAction(session, "interrupted_reply");
+    if (!interruptedReplyAction) return false;
+    if (!isRealtimeMode(session.mode)) {
+      this.clearDeferredVoiceAction(session, "interrupted_reply");
+      return false;
+    }
+
+    const interruptedAt = Math.max(0, Number(interruptedReplyAction?.payload?.interruptedAt || 0));
+    const now = Date.now();
+    if (!interruptedAt || now - interruptedAt > BARGE_IN_RETRY_MAX_AGE_MS) {
+      this.clearDeferredVoiceAction(session, "interrupted_reply");
+      return false;
+    }
+
+    const normalizedUserId = String(context?.userId || "").trim();
+    const interruptedByUserId = String(interruptedReplyAction?.payload?.interruptedByUserId || "").trim();
+    if (!normalizedUserId || !interruptedByUserId || normalizedUserId !== interruptedByUserId) {
+      return false;
+    }
+
+    if (Number(session.userCaptures?.size || 0) > 0) {
+      return false;
+    }
+
+    const sampleRateHz = Number(session.realtimeInputSampleRateHz) || 24000;
+    const captureByteLength = Buffer.isBuffer(context?.pcmBuffer)
+      ? context.pcmBuffer.length
+      : Buffer.from(context?.pcmBuffer || []).length;
+    const bargeDurationMs = this.estimatePcm16MonoDurationMs(captureByteLength, sampleRateHz);
+    const fullOverride = bargeDurationMs >= BARGE_IN_FULL_OVERRIDE_MIN_MS;
+    if (fullOverride) {
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: normalizedUserId,
+        content: "voice_barge_in_retry_skipped_full_override",
+        metadata: {
+          sessionId: session.id,
+          captureReason: String(context?.captureReason || "stream_end"),
+          bargeDurationMs,
+          fullOverrideMinMs: BARGE_IN_FULL_OVERRIDE_MIN_MS
+        }
+      });
+      this.clearDeferredVoiceAction(session, "interrupted_reply");
+      return false;
+    }
+
+    const retryText = normalizeVoiceText(interruptedReplyAction?.payload?.utteranceText || "", STT_REPLY_MAX_CHARS);
+    const interruptionPolicy = this.normalizeReplyInterruptionPolicy(
+      interruptedReplyAction?.payload?.interruptionPolicy
+    );
+    if (!retryText) {
+      this.clearDeferredVoiceAction(session, "interrupted_reply");
+      return false;
+    }
+
+    const retried = this.requestRealtimeTextUtterance({
+      session,
+      text: retryText,
+      userId: this.client.user?.id || null,
+      source: "barge_in_retry",
+      interruptionPolicy
+    });
+    if (!retried) return false;
+
+    this.clearDeferredVoiceAction(session, "interrupted_reply");
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: this.client.user?.id || null,
+      content: "voice_barge_in_retry_requested",
+      metadata: {
+        sessionId: session.id,
+        captureReason: String(context?.captureReason || "stream_end"),
+        bargeDurationMs,
+        fullOverrideMinMs: BARGE_IN_FULL_OVERRIDE_MIN_MS,
+        interruptionPolicyScope: interruptionPolicy?.scope || null,
+        interruptionPolicyAllowedUserId: interruptionPolicy?.allowedUserId || null,
+        freshnessPolicy: interruptedReplyAction?.freshnessPolicy || null,
+        deferredActionReason: String(reason || "manual")
+      }
+    });
+    return true;
   }
 
   isBargeInOutputSuppressed(session, now = Date.now()) {
@@ -2926,15 +3311,24 @@ export class VoiceSessionManager {
     }
 
     if (isRealtimeMode(session.mode) && retryUtteranceText) {
-      session.pendingBargeInRetry = {
-        utteranceText: retryUtteranceText,
-        interruptedByUserId: String(userId || "").trim() || null,
-        interruptedAt: now,
-        source: String(source || "speaking_start"),
-        interruptionPolicy
-      };
+      this.setDeferredVoiceAction(session, {
+        type: "interrupted_reply",
+        goal: "complete_interrupted_reply",
+        freshnessPolicy: "retry_then_regenerate",
+        status: "deferred",
+        reason: "barge_in_interrupt",
+        notBeforeAt: 0,
+        expiresAt: now + BARGE_IN_RETRY_MAX_AGE_MS,
+        payload: {
+          utteranceText: retryUtteranceText,
+          interruptedByUserId: String(userId || "").trim() || null,
+          interruptedAt: now,
+          source: String(source || "speaking_start"),
+          interruptionPolicy
+        }
+      });
     } else {
-      session.pendingBargeInRetry = null;
+      this.clearDeferredVoiceAction(session, "interrupted_reply");
     }
 
     session.bargeInSuppressionUntil = now + BARGE_IN_SUPPRESSION_MAX_MS;
@@ -3905,7 +4299,7 @@ export class VoiceSessionManager {
         retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
       };
     }
-    if (Array.isArray(session.pendingDeferredTurns) && session.pendingDeferredTurns.length > 0) {
+    if (this.getDeferredQueuedUserTurns(session).length > 0) {
       return {
         allow: false,
         reason: "pending_deferred_turns",
@@ -4708,7 +5102,6 @@ export class VoiceSessionManager {
         utteranceText: normalizedUtteranceText,
         latencyContext
       });
-      session.pendingBargeInRetry = null;
       session.lastRequestedRealtimeUtterance = {
         utteranceText: normalizedUtteranceText,
         requestedAt: Date.now(),
@@ -7180,8 +7573,8 @@ export class VoiceSessionManager {
     // gated, or suppressed). If this was the last capture and a join greeting
     // is still pending, fire it now.
     const maybeTriggerJoinGreeting = () => {
-      if (session.joinGreetingPending && session.userCaptures.size === 0) {
-        this.fireJoinGreeting(session);
+      if (this.getDeferredVoiceAction(session, "join_greeting") && session.userCaptures.size === 0) {
+        this.fireJoinGreeting(session, "capture_resolved");
       }
     };
 
@@ -7699,81 +8092,16 @@ export class VoiceSessionManager {
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
-
-    const pendingRetry = session.pendingBargeInRetry && typeof session.pendingBargeInRetry === "object"
-      ? session.pendingBargeInRetry
-      : null;
-    if (!pendingRetry) return false;
-
-    const now = Date.now();
-    const interruptedAt = Number(pendingRetry.interruptedAt || 0);
-    if (!interruptedAt || now - interruptedAt > BARGE_IN_RETRY_MAX_AGE_MS) {
-      session.pendingBargeInRetry = null;
-      return false;
-    }
-
-    const normalizedUserId = String(userId || "").trim();
-    const interruptedByUserId = String(pendingRetry.interruptedByUserId || "").trim();
-    if (!normalizedUserId || !interruptedByUserId || normalizedUserId !== interruptedByUserId) {
-      return false;
-    }
-
-    const sampleRateHz = Number(session.realtimeInputSampleRateHz) || 24000;
-    const captureByteLength = Buffer.isBuffer(pcmBuffer) ? pcmBuffer.length : Buffer.from(pcmBuffer || []).length;
-    const bargeDurationMs = this.estimatePcm16MonoDurationMs(captureByteLength, sampleRateHz);
-    const fullOverride = bargeDurationMs >= BARGE_IN_FULL_OVERRIDE_MIN_MS;
-    if (Number(session.userCaptures?.size || 0) > 0) {
-      return false;
-    }
-
-    if (fullOverride) {
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: normalizedUserId,
-        content: "voice_barge_in_retry_skipped_full_override",
-        metadata: {
-          sessionId: session.id,
-          captureReason: String(captureReason || "stream_end"),
-          bargeDurationMs,
-          fullOverrideMinMs: BARGE_IN_FULL_OVERRIDE_MIN_MS
-        }
-      });
-      session.pendingBargeInRetry = null;
-      return false;
-    }
-
-    const retryText = normalizeVoiceText(pendingRetry.utteranceText || "", STT_REPLY_MAX_CHARS);
-    const interruptionPolicy = this.normalizeReplyInterruptionPolicy(pendingRetry.interruptionPolicy);
-    session.pendingBargeInRetry = null;
-    if (!retryText) return false;
-
-    const retried = this.requestRealtimeTextUtterance({
+    return this.recheckDeferredVoiceActions({
       session,
-      text: retryText,
-      userId: this.client.user?.id || null,
-      source: "barge_in_retry",
-      interruptionPolicy
-    });
-    if (!retried) return false;
-
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: this.client.user?.id || null,
-      content: "voice_barge_in_retry_requested",
-      metadata: {
-        sessionId: session.id,
-        captureReason: String(captureReason || "stream_end"),
-        bargeDurationMs,
-        fullOverrideMinMs: BARGE_IN_FULL_OVERRIDE_MIN_MS,
-        interruptionPolicyScope: interruptionPolicy?.scope || null,
-        interruptionPolicyAllowedUserId: interruptionPolicy?.allowedUserId || null
+      reason: "barge_in_capture_resolved",
+      preferredTypes: ["interrupted_reply"],
+      context: {
+        userId,
+        pcmBuffer,
+        captureReason
       }
     });
-    return true;
   }
 
   queueRealtimeTurnFromAsrBridge({
@@ -7807,6 +8135,11 @@ export class VoiceSessionManager {
           clipDurationMs,
           asrResultAvailable: Boolean(asrResult)
         }
+      });
+      this.recheckDeferredVoiceActions({
+        session,
+        reason: "empty_asr_bridge_drop",
+        preferredTypes: ["join_greeting"]
       });
       return false;
     }
@@ -8799,10 +9132,7 @@ export class VoiceSessionManager {
     const normalizedFlushDelayMs = Number.isFinite(Number(flushDelayMs))
       ? Math.max(20, Math.round(Number(flushDelayMs)))
       : BOT_TURN_DEFERRED_FLUSH_DELAY_MS;
-    const pendingQueue = Array.isArray(session.pendingDeferredTurns) ? session.pendingDeferredTurns : [];
-    if (!Array.isArray(session.pendingDeferredTurns)) {
-      session.pendingDeferredTurns = pendingQueue;
-    }
+    const pendingQueue = this.getDeferredQueuedUserTurns(session).slice();
     if (pendingQueue.length >= BOT_TURN_DEFERRED_QUEUE_MAX) {
       pendingQueue.shift();
     }
@@ -8816,6 +9146,20 @@ export class VoiceSessionManager {
       deferReason: normalizedDeferReason,
       flushDelayMs: normalizedFlushDelayMs,
       queuedAt: Date.now()
+    });
+    const nextFlushAt = Date.now() + normalizedFlushDelayMs;
+    this.setDeferredVoiceAction(session, {
+      type: "queued_user_turns",
+      goal: "respond_to_deferred_user_turns",
+      freshnessPolicy: "regenerate_from_goal",
+      status: "deferred",
+      reason: normalizedDeferReason,
+      notBeforeAt: nextFlushAt,
+      expiresAt: 0,
+      payload: {
+        turns: pendingQueue,
+        nextFlushAt
+      }
     });
     this.store.logAction({
       kind: "voice_runtime",
@@ -8836,35 +9180,64 @@ export class VoiceSessionManager {
     });
     this.scheduleDeferredBotTurnOpenFlush({
       session,
-      delayMs: normalizedFlushDelayMs
+      delayMs: normalizedFlushDelayMs,
+      reason: normalizedDeferReason
     });
   }
 
-  scheduleDeferredBotTurnOpenFlush({ session, delayMs = BOT_TURN_DEFERRED_FLUSH_DELAY_MS }) {
+  scheduleDeferredBotTurnOpenFlush({
+    session,
+    delayMs = BOT_TURN_DEFERRED_FLUSH_DELAY_MS,
+    reason = "bot_turn_open_deferred"
+  }) {
     if (!session || session.ending) return;
-    if (session.deferredTurnFlushTimer) {
-      clearTimeout(session.deferredTurnFlushTimer);
-    }
-    session.deferredTurnFlushTimer = setTimeout(() => {
-      session.deferredTurnFlushTimer = null;
-      this.flushDeferredBotTurnOpenTurns({ session }).catch(() => undefined);
-    }, Math.max(20, Number(delayMs) || BOT_TURN_DEFERRED_FLUSH_DELAY_MS));
-  }
-
-  async flushDeferredBotTurnOpenTurns({ session }) {
-    if (!session || session.ending) return;
-    const pendingQueue = Array.isArray(session.pendingDeferredTurns) ? session.pendingDeferredTurns : [];
-    if (!pendingQueue.length) return;
-
-    const replyOutputLockState = this.getReplyOutputLockState(session);
-    if (replyOutputLockState.locked || Number(session.userCaptures?.size || 0) > 0) {
-      this.scheduleDeferredBotTurnOpenFlush({ session });
+    const pendingQueue = this.getDeferredQueuedUserTurns(session);
+    if (!pendingQueue.length) {
+      this.clearDeferredVoiceAction(session, "queued_user_turns");
       return;
     }
+    const normalizedDelayMs = Math.max(20, Number(delayMs) || BOT_TURN_DEFERRED_FLUSH_DELAY_MS);
+    const nextFlushAt = Date.now() + normalizedDelayMs;
+    this.setDeferredVoiceAction(session, {
+      type: "queued_user_turns",
+      goal: "respond_to_deferred_user_turns",
+      freshnessPolicy: "regenerate_from_goal",
+      status: "scheduled",
+      reason,
+      notBeforeAt: nextFlushAt,
+      expiresAt: 0,
+      payload: {
+        turns: pendingQueue,
+        nextFlushAt
+      }
+    });
+    this.scheduleDeferredVoiceActionRecheck(session, {
+      type: "queued_user_turns",
+      delayMs: normalizedDelayMs,
+      reason
+    });
+  }
 
-    const deferredTurns = pendingQueue.splice(0, pendingQueue.length);
-    if (!deferredTurns.length) return;
-    const coalescedTurns = deferredTurns.slice(-BOT_TURN_DEFERRED_COALESCE_MAX);
+  async flushDeferredBotTurnOpenTurns({
+    session,
+    deferredTurns = null,
+    reason = "bot_turn_open_deferred_flush"
+  }) {
+    if (!session || session.ending) return;
+    const pendingQueue = Array.isArray(deferredTurns) ? deferredTurns : this.getDeferredQueuedUserTurns(session).slice();
+    if (!pendingQueue.length) return;
+    if (!Array.isArray(deferredTurns)) {
+      const replyOutputLockState = this.getReplyOutputLockState(session);
+      if (replyOutputLockState.locked || Number(session.userCaptures?.size || 0) > 0) {
+        this.scheduleDeferredBotTurnOpenFlush({ session, reason });
+        return;
+      }
+    }
+    if (!Array.isArray(deferredTurns)) {
+      this.clearDeferredVoiceAction(session, "queued_user_turns");
+    }
+    const deferredTurnsToFlush = pendingQueue;
+    const coalescedTurns = deferredTurnsToFlush.slice(-BOT_TURN_DEFERRED_COALESCE_MAX);
     const latestTurn = coalescedTurns[coalescedTurns.length - 1];
     const coalescedTranscript = normalizeVoiceText(
       coalescedTurns
@@ -8925,6 +9298,7 @@ export class VoiceSessionManager {
         mode: session.mode,
         source: "bot_turn_open_deferred_flush",
         captureReason: latestTurn?.captureReason || "stream_end",
+        deferredActionReason: reason,
         allow: Boolean(decision.allow),
         reason: decision.reason,
         participantCount: Number(decision.participantCount || 0),
@@ -9109,7 +9483,6 @@ export class VoiceSessionManager {
         utteranceText: null,
         latencyContext
       });
-      session.pendingBargeInRetry = null;
       session.lastRequestedRealtimeUtterance = null;
 
       session.lastGenerationContext = {
@@ -9744,12 +10117,17 @@ export class VoiceSessionManager {
   async buildRealtimeMemorySlice({ session, settings, userId, transcript = "" }) {
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     if (!normalizedTranscript) {
+      const adaptiveStyleNotes =
+        this.store && typeof this.store.getActiveAdaptiveStyleNotes === "function"
+          ? this.store.getActiveAdaptiveStyleNotes(String(session?.guildId || "").trim(), 8)
+          : [];
       return {
         userFacts: [],
         relevantFacts: [],
         relevantMessages: [],
         recentConversationHistory: [],
-        recentWebLookups: []
+        recentWebLookups: [],
+        adaptiveStyleNotes
       };
     }
 
@@ -9820,6 +10198,10 @@ export class VoiceSessionManager {
                 before: 1,
                 after: 1
               })
+          : null,
+      loadAdaptiveStyleNotes:
+        this.store && typeof this.store.getActiveAdaptiveStyleNotes === "function"
+          ? (payload) => this.store.getActiveAdaptiveStyleNotes(String(payload.guildId || "").trim(), 8)
           : null
     });
   }
@@ -10182,7 +10564,7 @@ export class VoiceSessionManager {
       });
 
       // Start greeting observation window now that instructions are set.
-      if (session.joinGreetingPending && session.playbackArmed && !session.lastAssistantReplyAt) {
+      if (this.getDeferredVoiceAction(session, "join_greeting") && session.playbackArmed && !session.lastAssistantReplyAt) {
         this.scheduleJoinGreetingGrace(session);
       }
     } catch (error) {
@@ -10239,6 +10621,7 @@ export class VoiceSessionManager {
     const relevantFacts = formatRealtimeMemoryFacts(memorySlice?.relevantFacts, REALTIME_MEMORY_FACT_LIMIT);
     const recentConversationHistory = formatConversationWindows(memorySlice?.recentConversationHistory);
     const recentWebLookups = formatRecentLookupContext(memorySlice?.recentWebLookups);
+    const adaptiveStyleNotes = formatAdaptiveStyleNotes(memorySlice?.adaptiveStyleNotes, 8);
     const activeVoiceCommandState = this.ensureVoiceCommandState(session);
     const musicDisambiguation = this.getMusicDisambiguationPromptContext(session);
 
@@ -10257,8 +10640,15 @@ export class VoiceSessionManager {
 
     const joinWindowAgeMs = Math.max(0, Date.now() - Number(session?.startedAt || 0));
     const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
+    const deferredJoinGreeting = this.getDeferredVoiceAction(session, "join_greeting");
     if (joinWindowActive && !session.lastAssistantReplyAt) {
-      sections.push("You just joined this voice channel. Say a brief, casual greeting to announce your presence. Keep it to one short sentence. Be natural.");
+      if (deferredJoinGreeting?.status === "deferred") {
+        sections.push(
+          "You recently joined this voice channel, but your greeting was deferred while you waited for better timing. Re-evaluate whether a brief casual greeting still fits right now. If the moment has passed or the room has clearly moved on, you may skip."
+        );
+      } else {
+        sections.push("You just joined this voice channel. Say a brief, casual greeting to announce your presence. Keep it to one short sentence. Be natural.");
+      }
     }
 
     if (speakerName || normalizedTranscript) {
@@ -10301,6 +10691,16 @@ export class VoiceSessionManager {
           "Recent lookup continuity:",
           "- These are recent successful web searches from the shared text/voice conversation.",
           recentWebLookups
+        ].join("\n")
+      );
+    }
+
+    if (Array.isArray(memorySlice?.adaptiveStyleNotes) && memorySlice.adaptiveStyleNotes.length > 0) {
+      sections.push(
+        [
+          "Adaptive style notes:",
+          "- These are active persistent server-level style instructions.",
+          adaptiveStyleNotes
         ].join("\n")
       );
     }
@@ -10378,6 +10778,7 @@ export class VoiceSessionManager {
           "- Use tools when they improve factuality or action execution.",
           "- Use conversation_search when the speaker asks what was said earlier or asks you to remember a prior exchange.",
           "- For memory writes, only store concise durable facts and avoid secrets.",
+          "- If someone explicitly asks you to start or stop talking a certain way in future conversations, use adaptive_style_add or adaptive_style_remove instead of memory_write.",
           "- For music controls, use music_play_now for immediate playback, music_queue_next to place a track after the current one, music_queue_add to append, and music_stop to stop playback.",
           "- Do not emulate play-now by chaining music_queue_add and music_skip.",
           "- Do not use music_skip as a substitute for music_stop.",
@@ -12010,12 +12411,8 @@ export class VoiceSessionManager {
   }) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
-    // Clear pending join greeting — bot is about to speak for another reason.
-    session.joinGreetingPending = false;
-    if (session.joinGreetingGraceTimer) {
-      clearTimeout(session.joinGreetingGraceTimer);
-      session.joinGreetingGraceTimer = null;
-    }
+    // Any fresh bot response supersedes older deferred voice intents.
+    this.clearAllDeferredVoiceActions(session);
     if (emitCreateEvent && this.isRealtimeResponseActive(session)) {
       this.store.logAction({
         kind: "voice_runtime",
@@ -12126,6 +12523,10 @@ export class VoiceSessionManager {
     this.clearResponseSilenceTimers(session);
     session.pendingResponse = null;
     this.maybeClearActiveReplyInterruptionPolicy(session);
+    this.recheckDeferredVoiceActions({
+      session,
+      reason: "pending_response_cleared"
+    });
   }
 
   isRealtimeResponseActive(session) {
@@ -12400,7 +12801,6 @@ export class VoiceSessionManager {
     if (session.responseDoneGraceTimer) clearTimeout(session.responseDoneGraceTimer);
     if (session.realtimeInstructionRefreshTimer) clearTimeout(session.realtimeInstructionRefreshTimer);
     if (session.openAiToolResponseDebounceTimer) clearTimeout(session.openAiToolResponseDebounceTimer);
-    if (session.deferredTurnFlushTimer) clearTimeout(session.deferredTurnFlushTimer);
     if (session.voiceLookupBusyAnnounceTimer) clearTimeout(session.voiceLookupBusyAnnounceTimer);
     this.clearVoiceThoughtLoopTimer(session);
     session.thoughtLoopBusy = false;
@@ -12413,17 +12813,11 @@ export class VoiceSessionManager {
       clearTimeout(session.realtimeTurnCoalesceTimer);
       session.realtimeTurnCoalesceTimer = null;
     }
-    session.joinGreetingPending = false;
-    if (session.joinGreetingGraceTimer) {
-      clearTimeout(session.joinGreetingGraceTimer);
-      session.joinGreetingGraceTimer = null;
-    }
-    session.pendingDeferredTurns = [];
+    this.clearAllDeferredVoiceActions(session);
     session.awaitingToolOutputs = false;
     session.openAiPendingToolCalls = new Map();
     session.openAiToolCallExecutions = new Map();
     session.openAiTurnContextRefreshState = null;
-    session.pendingBargeInRetry = null;
     session.lastRequestedRealtimeUtterance = null;
     session.activeReplyInterruptionPolicy = null;
     session.voiceLookupBusyAnnounceTimer = null;
@@ -12946,6 +13340,20 @@ export class VoiceSessionManager {
     args;
   }) {
     return executeVoiceMemoryWriteTool(this, opts);
+  }
+
+  async executeVoiceAdaptiveStyleAddTool(opts: {
+    session;
+    args;
+  }) {
+    return executeVoiceAdaptiveStyleAddTool(this, opts);
+  }
+
+  async executeVoiceAdaptiveStyleRemoveTool(opts: {
+    session;
+    args;
+  }) {
+    return executeVoiceAdaptiveStyleRemoveTool(this, opts);
   }
 
   async executeVoiceConversationSearchTool(opts: {

@@ -629,7 +629,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         nextResponseRequestId: 0,
         pendingResponse: null,
         activeReplyInterruptionPolicy: null,
-        pendingBargeInRetry: null,
+        deferredVoiceActions: {},
+        deferredVoiceActionTimers: {},
         lastRequestedRealtimeUtterance: null,
         pendingSttTurns: 0,
         sttTurnDrainActive: false,
@@ -668,8 +669,6 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           isPaused: false,
           volume: 1
         },
-        pendingDeferredTurns: [],
-        deferredTurnFlushTimer: null,
         thoughtLoopTimer: null,
         thoughtLoopBusy: false,
         nextThoughtAt: 0,
