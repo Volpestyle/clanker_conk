@@ -3551,6 +3551,11 @@ export class VoiceSessionManager {
         music.active = false;
         music.stoppedAt = Date.now();
       }
+      this.scheduleRealtimeInstructionRefresh({
+        session,
+        settings: session.settingsSnapshot || this.store.getSettings(),
+        reason: "music_idle"
+      });
     };
 
     session.subprocessClient.on("playerState", onPlayerState);
@@ -11321,6 +11326,27 @@ export class VoiceSessionManager {
           .filter(Boolean)
           .join("\n")
       );
+    }
+
+    const musicContext = this.getMusicPromptContext(session);
+    if (musicContext && musicContext.playbackState !== "idle") {
+      const musicLines = ["Music playback:"];
+      musicLines.push(`- Status: ${musicContext.playbackState}`);
+      if (musicContext.currentTrack) {
+        const artists = musicContext.currentTrack.artists.length
+          ? musicContext.currentTrack.artists.join(", ")
+          : "unknown artist";
+        musicLines.push(`- Now playing: ${musicContext.currentTrack.title} by ${artists}`);
+      } else if (musicContext.lastTrack && musicContext.playbackState === "stopped") {
+        const artists = musicContext.lastTrack.artists.length
+          ? musicContext.lastTrack.artists.join(", ")
+          : "unknown artist";
+        musicLines.push(`- Last played: ${musicContext.lastTrack.title} by ${artists}`);
+      }
+      if (musicContext.queueLength > 0) {
+        musicLines.push(`- Queue: ${musicContext.queueLength} track(s)`);
+      }
+      sections.push(musicLines.join("\n"));
     }
 
     const configuredTools = Array.isArray(session.openAiToolDefinitions) ? session.openAiToolDefinitions : [];
