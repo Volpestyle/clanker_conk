@@ -93,6 +93,14 @@ export const BROWSER_AGENT_TOOL_DEFINITIONS: Array<{
     }
   },
   {
+    name: "browser_screenshot",
+    description: "Captures a screenshot of the current page and returns it as a base64 data URL.",
+    input_schema: {
+      type: "object",
+      properties: {}
+    }
+  },
+  {
     name: "browser_close",
     description: "Force closes the browser session.",
     input_schema: {
@@ -106,26 +114,33 @@ export async function executeBrowserTool(
   browserManager: BrowserManager,
   sessionKey: string,
   toolName: string,
-  params: BrowserToolParams
+  params: BrowserToolParams,
+  stepTimeoutMs?: number
 ): Promise<string> {
   try {
     switch (toolName) {
       case "browser_open":
-        return await browserManager.open(sessionKey, (params as BrowserOpenParams).url);
+        return await browserManager.open(sessionKey, (params as BrowserOpenParams).url, stepTimeoutMs);
       case "browser_snapshot":
-        return await browserManager.snapshot(sessionKey, (params as BrowserSnapshotParams).interactive_only !== false);
+        return await browserManager.snapshot(
+          sessionKey,
+          (params as BrowserSnapshotParams).interactive_only !== false,
+          stepTimeoutMs
+        );
       case "browser_click":
-        return await browserManager.click(sessionKey, (params as BrowserClickParams).ref);
+        return await browserManager.click(sessionKey, (params as BrowserClickParams).ref, stepTimeoutMs);
       case "browser_type": {
         const p = params as BrowserTypeParams;
-        return await browserManager.type(sessionKey, p.ref, p.text, p.pressEnter !== false);
+        return await browserManager.type(sessionKey, p.ref, p.text, p.pressEnter !== false, stepTimeoutMs);
       }
       case "browser_scroll": {
         const p = params as BrowserScrollParams;
-        return await browserManager.scroll(sessionKey, p.direction, p.pixels);
+        return await browserManager.scroll(sessionKey, p.direction, p.pixels, stepTimeoutMs);
       }
       case "browser_extract":
-        return await browserManager.extract(sessionKey, (params as BrowserExtractParams).ref);
+        return await browserManager.extract(sessionKey, (params as BrowserExtractParams).ref, stepTimeoutMs);
+      case "browser_screenshot":
+        return await browserManager.screenshot(sessionKey, stepTimeoutMs);
       case "browser_close":
         await browserManager.close(sessionKey);
         return "Browser closed successfully.";

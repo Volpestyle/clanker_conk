@@ -1,3 +1,6 @@
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { promisify } from "node:util";
 import { execFile } from "node:child_process";
 import { assertPublicUrl } from "../urlSafety.ts";
@@ -7,6 +10,10 @@ const execFileAsync = promisify(execFile);
 const DEFAULT_STEP_TIMEOUT_MS = 30_000;
 const DEFAULT_SESSION_TIMEOUT_MS = 300_000;
 const STALE_CHECK_INTERVAL_MS = 60_000;
+
+export function buildAgentBrowserArgs(sessionKey: string, args: string[]): string[] {
+  return ["--session", sessionKey, ...args];
+}
 
 interface BrowserSession {
   sessionKey: string;
@@ -52,8 +59,12 @@ export class BrowserManager {
     if (session) session.lastActiveAt = Date.now();
   }
 
-  private runAgentBrowser(args: string[], timeoutMs = DEFAULT_STEP_TIMEOUT_MS): Promise<{ stdout: string; stderr: string }> {
-    return execFileAsync("agent-browser", args, { timeout: timeoutMs }).then(
+  private runAgentBrowser(
+    sessionKey: string,
+    args: string[],
+    timeoutMs = DEFAULT_STEP_TIMEOUT_MS
+  ): Promise<{ stdout: string; stderr: string }> {
+    return execFileAsync("agent-browser", buildAgentBrowserArgs(sessionKey, args), { timeout: timeoutMs }).then(
       ({ stdout, stderr }) => ({ stdout: stdout.trim(), stderr: stderr.trim() }),
       (error: unknown) => {
         const err = error as { stderr?: string; stdout?: string; message?: string };
@@ -63,55 +74,67 @@ export class BrowserManager {
     );
   }
 
-  async open(sessionKey: string, url: string): Promise<string> {
+  async open(sessionKey: string, url: string, timeoutMs = DEFAULT_STEP_TIMEOUT_MS): Promise<string> {
     await assertPublicUrl(url);
     this.getOrCreateSession(sessionKey);
-    const { stdout } = await this.runAgentBrowser(["open", url]);
+    const { stdout } = await this.runAgentBrowser(sessionKey, ["open", url], timeoutMs);
     return stdout;
   }
 
-  async snapshot(sessionKey: string, interactiveOnly = true): Promise<string> {
+  async snapshot(sessionKey: string, interactiveOnly = true, timeoutMs = DEFAULT_STEP_TIMEOUT_MS): Promise<string> {
     this.touchSession(sessionKey);
     const args = interactiveOnly ? ["snapshot", "-i"] : ["snapshot"];
-    const { stdout } = await this.runAgentBrowser(args);
+    const { stdout } = await this.runAgentBrowser(sessionKey, args, timeoutMs);
     return stdout;
   }
 
-  async click(sessionKey: string, ref: string): Promise<string> {
+  async click(sessionKey: string, ref: string, timeoutMs = DEFAULT_STEP_TIMEOUT_MS): Promise<string> {
     this.touchSession(sessionKey);
-    const { stdout } = await this.runAgentBrowser(["click", ref]);
+    const { stdout } = await this.runAgentBrowser(sessionKey, ["click", ref], timeoutMs);
     return stdout;
   }
 
-  async type(sessionKey: string, ref: string, text: string, pressEnter = true): Promise<string> {
+  async type(sessionKey: string, ref: string, text: string, pressEnter = true, timeoutMs = DEFAULT_STEP_TIMEOUT_MS): Promise<string> {
     this.touchSession(sessionKey);
-    const { stdout } = await this.runAgentBrowser(["type", ref, text]);
+    const { stdout } = await this.runAgentBrowser(sessionKey, ["type", ref, text], timeoutMs);
     if (pressEnter) {
-      await this.runAgentBrowser(["enter"]);
+      await this.runAgentBrowser(sessionKey, ["press", "Enter"], timeoutMs);
     }
     return stdout;
   }
 
-  async scroll(sessionKey: string, direction: "up" | "down", pixels?: number): Promise<string> {
+  async scroll(sessionKey: string, direction: "up" | "down", pixels?: number, timeoutMs = DEFAULT_STEP_TIMEOUT_MS): Promise<string> {
     this.touchSession(sessionKey);
-    const cmd = direction === "up" ? "scroll-up" : "scroll-down";
-    const args = pixels ? [cmd, String(pixels)] : [cmd];
-    const { stdout } = await this.runAgentBrowser(args);
+    const args = pixels ? ["scroll", direction, String(pixels)] : ["scroll", direction];
+    const { stdout } = await this.runAgentBrowser(sessionKey, args, timeoutMs);
     return stdout;
   }
 
-  async extract(sessionKey: string, ref?: string): Promise<string> {
+  async extract(sessionKey: string, ref?: string, timeoutMs = DEFAULT_STEP_TIMEOUT_MS): Promise<string> {
     this.touchSession(sessionKey);
     if (ref) {
-      const { stdout } = await this.runAgentBrowser(["extract", ref]);
+      const { stdout } = await this.runAgentBrowser(sessionKey, ["extract", ref], timeoutMs);
       return stdout;
     }
-    return await this.snapshot(sessionKey, false);
+    return await this.snapshot(sessionKey, false, timeoutMs);
+  }
+
+  async screenshot(sessionKey: string, timeoutMs = DEFAULT_STEP_TIMEOUT_MS): Promise<string> {
+    this.touchSession(sessionKey);
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), "agent-browser-"));
+    const screenshotPath = path.join(tempDir, "screenshot.png");
+    try {
+      await this.runAgentBrowser(sessionKey, ["screenshot", screenshotPath], timeoutMs);
+      const png = await readFile(screenshotPath);
+      return `data:image/png;base64,${png.toString("base64")}`;
+    } finally {
+      await rm(tempDir, { recursive: true, force: true }).catch(() => undefined);
+    }
   }
 
   async close(sessionKey: string): Promise<void> {
     try {
-      await this.runAgentBrowser(["close"]);
+      await this.runAgentBrowser(sessionKey, ["close"]);
     } catch {
       // ignore close errors
     } finally {

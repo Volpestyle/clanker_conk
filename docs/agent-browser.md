@@ -2,7 +2,7 @@
 
 ## Overview
 
-Add headless browser capabilities to an existing LLM-powered Discord bot using `agent-browser` (Vercel Labs) as a Rust CLI sidecar — alongside the existing Rust voice subprocess.
+Add headless browser capabilities to an existing LLM-powered Discord bot using `agent-browser` (Vercel Labs) as a Rust CLI that talks to its own browser daemon/session layer — alongside the existing Rust voice subprocess.
 
 ---
 
@@ -33,7 +33,8 @@ Bot Process (Node/TS)
    ```
 2. Create a `BrowserManager` service class that:
    - Spawns `agent-browser` commands via `child_process.execFile`
-   - Manages sessions (open/close browser contexts)
+   - Uses `--session <name>` on every call so each task targets an isolated agent-browser session
+   - Manages session lifecycle in app code (open/close/cleanup of logical browser contexts)
    - Handles timeouts and cleanup (kill stale sessions after N minutes)
    - Caps concurrent browser sessions (start with 1-2 max)
 3. Verify basic lifecycle:
@@ -63,7 +64,7 @@ Bot Process (Node/TS)
 | `browser_type` | `ref: string, text: string` | Confirmation |
 | `browser_scroll` | `direction: "up" \| "down", pixels?: number` | Updated snapshot |
 | `browser_extract` | `ref?: string` | Text content of element or page |
-| `browser_screenshot` | — | Base64 image (for vision-capable models) |
+| `browser_screenshot` | — | Base64 image data URL (for vision-capable models) |
 | `browser_close` | — | Confirmation |
 
 ### Design Decisions
@@ -71,6 +72,7 @@ Bot Process (Node/TS)
 - **Snapshot as primary state representation.** Use `snapshot -i` (interactive elements only) as default — ~200-400 tokens vs 3000-5000 for full DOM. Fall back to full snapshot or screenshot only when the LLM explicitly requests it.
 - **Ref-based interaction.** The LLM references elements by `@e1`, `@e2` etc. from the snapshot. No CSS selectors, no XPaths — keeps tool calls simple and reliable.
 - **No compound actions.** Each tool does one thing. The LLM chains them. This keeps the failure surface small and makes debugging easy.
+- **Per-step timeouts are real inputs.** The timeout passed into the browse loop must be forwarded into every `agent-browser` command so browser hangs do not ignore caller configuration.
 
 ### Deliverables
 - `src/tools/browserTools.ts` — tool definitions + execution wrappers
@@ -124,7 +126,7 @@ User: "go to hackernews and get me the top 5 stories"
 ### Agent Loop Pseudocode
 
 ```typescript
-async function browseAgent(task: string, maxSteps = 15): Promise<string> {
+async function browseAgent(task: string, maxSteps = 15, stepTimeoutMs = 30_000): Promise<string> {
   const messages = [
     { role: "system", content: BROWSER_AGENT_SYSTEM_PROMPT },
     { role: "user", content: task }
@@ -139,7 +141,7 @@ async function browseAgent(task: string, maxSteps = 15): Promise<string> {
     }
 
     if (response.type === "tool_use") {
-      const result = await executeBrowserTool(response.tool, response.params);
+      const result = await executeBrowserTool(response.tool, response.params, stepTimeoutMs);
       messages.push({ role: "assistant", content: response });
       messages.push({ role: "tool", content: result });
     }

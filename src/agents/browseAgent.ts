@@ -93,10 +93,13 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
       );
 
       if (toolCalls.length === 0) {
-        const textBlock = response.content.find(
+        const textBlocks = response.content.filter(
           (block): block is Anthropic.TextBlock => block.type === "text"
         );
-        finalText = textBlock?.text || "The agent finished without returning text.";
+        finalText = textBlocks
+          .map((block) => block.text.trim())
+          .filter(Boolean)
+          .join("\n\n") || "The agent finished without returning text.";
         break;
       }
 
@@ -120,7 +123,8 @@ export async function runBrowseAgent(options: BrowseAgentOptions): Promise<Brows
           browserManager,
           sessionKey,
           toolCall.name,
-          toolCall.input as Record<string, unknown>
+          toolCall.input as Record<string, unknown>,
+          stepTimeoutMs
         );
 
         toolResults.push({
