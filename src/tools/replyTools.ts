@@ -313,7 +313,7 @@ const CONVERSATION_SEARCH_TOOL: ReplyToolDefinition = {
 const ADAPTIVE_STYLE_ADD_TOOL: ReplyToolDefinition = {
   name: "adaptive_directive_add",
   description:
-    "Persist a server-level adaptive directive for future conversations. Use for style guidance, operating guidance, or recurring trigger/action behavior, like how to talk or when to send a GIF/reaction. Keep the directive concise, usually 1-2 sentences max.",
+    "Save a persistent server-level directive so you remember it in future conversations. You MUST call this whenever someone uses language like 'always', 'never', 'from now on', 'every time', 'start calling me', 'stop doing', or any request that implies a standing rule — even casual ones like 'call me pookie' or 'talk like a pirate'. Covers style/tone, nicknames, recurring triggers/actions, and operating instructions. Keep the note concise (1-2 sentences).",
   input_schema: {
     type: "object",
     properties: {
@@ -333,7 +333,7 @@ const ADAPTIVE_STYLE_ADD_TOOL: ReplyToolDefinition = {
 const ADAPTIVE_STYLE_REMOVE_TOOL: ReplyToolDefinition = {
   name: "adaptive_directive_remove",
   description:
-    "Remove an active server-level adaptive directive when someone explicitly asks you to stop using it or undo a prior recurring behavior. Prefer `note_ref` from the prompt when available.",
+    "Remove a saved directive. Call this when someone says to stop doing something you previously saved — 'stop calling me pookie', 'don't do that anymore', 'go back to normal', etc. Use `note_ref` from the active directives in your prompt when available, otherwise describe the directive in `target`.",
   input_schema: {
     type: "object",
     properties: {

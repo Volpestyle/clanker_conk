@@ -123,7 +123,7 @@ export function buildReplyPrompt({
   }
   parts.push("Conversation-history lookup is available for recalling prior text/voice exchanges. If the user asks what was said earlier or what you talked about before, use conversation_search.");
   if (allowAdaptiveDirective) {
-    parts.push("Adaptive directive persistence is available for server-level guidance and recurring behavior instructions. If a user explicitly asks you to change how you talk, operate under a standing instruction, or perform a recurring trigger/action behavior in future conversations, use adaptive_directive_add or adaptive_directive_remove instead of memory_write.");
+    parts.push("When someone asks you to always/never do something, call them a nickname, change how you talk, or follow any standing rule — even casually — you MUST call adaptive_directive_add to persist it. Don't just comply in the moment; save it so you remember next conversation. Use adaptive_directive_remove when asked to undo one.");
   } else {
     parts.push("Adaptive directives are unavailable right now. Do not claim you can save standing behavior changes for later.");
   }
