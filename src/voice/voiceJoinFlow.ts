@@ -646,6 +646,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         openAiPendingToolCalls: new Map(),
         openAiToolCallExecutions: new Map(),
         openAiToolResponseDebounceTimer: null,
+        openAiCompletedToolCallIds: new Map(),
         lastOpenAiAssistantAudioItemId: null,
         lastOpenAiAssistantAudioItemContentIndex: 0,
         lastOpenAiAssistantAudioItemReceivedMs: 0,
@@ -658,6 +659,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         mcpStatus: manager.getVoiceMcpServerStatuses(),
         toolMusicTrackCatalog: new Map(),
         memoryWriteWindow: [],
+        voiceCommandState: null,
         musicQueueState: {
           guildId,
           voiceChannelId: targetVoiceChannelId,
@@ -708,6 +710,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           lastCommandReason: null,
           pendingQuery: null,
           pendingPlatform: "auto",
+          pendingAction: "play_now",
           pendingResults: [],
           pendingRequestedByUserId: null,
           pendingRequestedAt: 0

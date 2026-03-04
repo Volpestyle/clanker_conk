@@ -1812,6 +1812,147 @@ test("maybeHandleMusicTextSelectionRequest routes numeric disambiguation picks",
   assert.equal(playCalls[0]?.reason, "text_music_disambiguation_selection");
 });
 
+test("maybeHandlePendingMusicDisambiguationTurn ignores non-requesting speakers", async () => {
+  const { manager } = createManager();
+  const playCalls = [];
+  manager.requestPlayMusic = async (payload) => {
+    playCalls.push(payload);
+    return true;
+  };
+  manager.sessions.set(
+    "guild-1",
+    createSession({
+      music: {
+        pendingQuery: "all caps",
+        pendingPlatform: "auto",
+        pendingAction: "play_now",
+        pendingRequestedByUserId: "user-1",
+        pendingRequestedAt: Date.now(),
+        pendingResults: [
+          {
+            id: "youtube:abc111",
+            title: "all caps",
+            artist: "mf doom",
+            platform: "youtube",
+            externalUrl: "https://youtube.com/watch?v=abc111",
+            durationSeconds: 140
+          },
+          {
+            id: "youtube:def222",
+            title: "all caps",
+            artist: "madvillain",
+            platform: "youtube",
+            externalUrl: "https://youtube.com/watch?v=def222",
+            durationSeconds: 150
+          }
+        ]
+      }
+    })
+  );
+
+  const handled = await manager.maybeHandlePendingMusicDisambiguationTurn({
+    session: manager.sessions.get("guild-1"),
+    settings: null,
+    userId: "user-2",
+    transcript: "2",
+    source: "voice_disambiguation"
+  });
+
+  assert.equal(handled, false);
+  assert.equal(playCalls.length, 0);
+});
+
+test("maybeHandlePendingMusicDisambiguationTurn clears pending state on cancel", async () => {
+  const { manager, messages } = createManager();
+  manager.sessions.set(
+    "guild-1",
+    createSession({
+      voiceCommandState: {
+        userId: "user-1",
+        domain: "music",
+        intent: "music_disambiguation",
+        startedAt: Date.now(),
+        expiresAt: Date.now() + 10_000
+      },
+      music: {
+        pendingQuery: "all caps",
+        pendingPlatform: "auto",
+        pendingAction: "play_now",
+        pendingRequestedByUserId: "user-1",
+        pendingRequestedAt: Date.now(),
+        pendingResults: [
+          {
+            id: "youtube:abc111",
+            title: "all caps",
+            artist: "mf doom",
+            platform: "youtube",
+            externalUrl: "https://youtube.com/watch?v=abc111",
+            durationSeconds: 140
+          }
+        ]
+      }
+    })
+  );
+
+  const session = manager.sessions.get("guild-1");
+  const handled = await manager.maybeHandlePendingMusicDisambiguationTurn({
+    session,
+    settings: null,
+    userId: "user-1",
+    transcript: "never mind",
+    source: "voice_disambiguation",
+    mustNotify: true
+  });
+
+  assert.equal(handled, true);
+  assert.equal(manager.getMusicDisambiguationPromptContext(session), null);
+  assert.equal(manager.ensureVoiceCommandState(session), null);
+  assert.equal(messages.at(-1)?.reason, "disambiguation_cancelled");
+});
+
+test("requestStopMusic clears queue state when clearQueue is true", async () => {
+  const { manager } = createManager();
+  const session = createSession({
+    music: {
+      active: true,
+      provider: "discord"
+    },
+    musicQueueState: {
+      guildId: "guild-1",
+      voiceChannelId: "voice-1",
+      tracks: [
+        {
+          id: "youtube:abc111",
+          title: "all caps",
+          artist: "mf doom",
+          durationMs: 140000,
+          source: "yt",
+          streamUrl: null,
+          platform: "youtube",
+          externalUrl: "https://youtube.com/watch?v=abc111"
+        }
+      ],
+      nowPlayingIndex: 0,
+      isPaused: false,
+      volume: 1
+    }
+  });
+  manager.sessions.set("guild-1", session);
+
+  await manager.requestStopMusic({
+    guildId: "guild-1",
+    requestedByUserId: "user-1",
+    settings: null,
+    reason: "test_stop",
+    source: "test",
+    clearQueue: true,
+    mustNotify: false
+  });
+
+  assert.equal(session.musicQueueState.tracks.length, 0);
+  assert.equal(session.musicQueueState.nowPlayingIndex, null);
+});
+
 test("requestLeave sends not_in_voice or ends active session", async () => {
   const { manager, messages, endCalls } = createManager();
 
