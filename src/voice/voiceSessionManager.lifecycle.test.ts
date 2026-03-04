@@ -1105,6 +1105,68 @@ test("shared ASR committed events resolve waiters by commit user instead of FIFO
   assert.equal(asrState.itemIdToUserId.get("item-speaker-2"), "speaker-2");
 });
 
+test("commitOpenAiSharedAsrUtterance preserves already-received final segments when commit item is empty", async () => {
+  const { manager, logs } = createManager();
+  manager.appConfig.openaiApiKey = "test-openai-key";
+  manager.shouldUseSharedTranscription = () => true;
+  manager.ensureOpenAiSharedAsrSessionConnected = async ({ session }) => session.openAiSharedAsrState;
+  manager.flushPendingOpenAiSharedAsrAudio = async () => {};
+  manager.waitForOpenAiSharedAsrCommittedItem = async () => "";
+  manager.tryHandoffSharedAsrToWaitingCapture = () => false;
+  manager.scheduleOpenAiSharedAsrSessionIdleClose = () => {};
+
+  let commitCalls = 0;
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeInputSampleRateHz: 24_000,
+    openAiSharedAsrState: {
+      userId: "speaker-1",
+      client: {
+        commitInputAudioBuffer() {
+          commitCalls += 1;
+        }
+      },
+      closing: false,
+      idleTimer: null,
+      pendingAudioChunks: [],
+      pendingAudioBytes: 0,
+      isCommittingAsr: false,
+      committingUtteranceId: 0,
+      pendingCommitResolvers: [],
+      pendingCommitRequests: [],
+      itemIdToUserId: new Map(),
+      finalTranscriptsByItemId: new Map(),
+      utterance: {
+        id: 1,
+        startedAt: Date.now() - 1_000,
+        bytesSent: DISCORD_PCM_FRAME_BYTES * 2,
+        partialText: "",
+        finalSegments: ["What's goin'?"],
+        finalSegmentEntries: [
+          {
+            itemId: "item_1",
+            previousItemId: null,
+            text: "What's goin'?",
+            receivedAt: Date.now() - 300
+          }
+        ],
+        lastUpdateAt: Date.now() - 300
+      }
+    }
+  });
+
+  const result = await manager.commitOpenAiSharedAsrUtterance({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    captureReason: "stream_end"
+  });
+
+  assert.equal(commitCalls, 1);
+  assert.equal(result?.transcript, "What's goin'?");
+  assert.equal(logs.some((entry) => entry?.content === "voice_realtime_transcription_empty"), false);
+});
+
 test("maybeHandleInterruptedReplyRecovery retries short barge-ins with the prior utterance", () => {
   const { manager, logs } = createManager();
   const retryCalls = [];

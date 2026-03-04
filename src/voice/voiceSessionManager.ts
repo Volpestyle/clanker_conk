@@ -6537,13 +6537,6 @@ export class VoiceSessionManager {
       utteranceId: trackedUtteranceId
     });
 
-    if (trackedUtterance) {
-      trackedUtterance.finalSegments = [];
-      trackedUtterance.finalSegmentEntries = [];
-      trackedUtterance.partialText = "";
-      trackedUtterance.lastUpdateAt = 0;
-    }
-
     const asrStartedAtMs = Date.now();
     try {
       asrState.client?.commitInputAudioBuffer?.();
@@ -7297,13 +7290,6 @@ export class VoiceSessionManager {
       asrState,
       utteranceId: trackedUtteranceId
     });
-
-    if (trackedUtterance) {
-      trackedUtterance.finalSegments = [];
-      trackedUtterance.finalSegmentEntries = [];
-      trackedUtterance.partialText = "";
-      trackedUtterance.lastUpdateAt = 0;
-    }
 
     const asrStartedAtMs = Date.now();
     try {
