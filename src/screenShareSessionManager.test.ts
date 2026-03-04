@@ -23,6 +23,7 @@ function createHarness({
   },
   isUserInSessionVoiceChannel = () => true,
   enableWatchStreamForUser = async () => ({ ok: true }),
+  stopWatchStreamForUser = async () => ({ ok: true, reason: "watching_stopped" }),
   ingestVoiceStreamFrame = async () => ({
     accepted: true,
     reason: "ok"
@@ -44,6 +45,9 @@ function createHarness({
       async enableWatchStreamForUser(payload) {
         watchCalls.push(payload);
         return await enableWatchStreamForUser(payload);
+      },
+      async stopWatchStreamForUser(payload) {
+        return await stopWatchStreamForUser(payload);
       },
       getSession() {
         return getVoiceSession();
@@ -339,7 +343,7 @@ test("ingestFrameByToken handles missing sessions, rearm, and unknown ingestor r
   assert.equal(unknown.reason, "unknown");
 });
 
-test("validateSessionVoicePresence and stopSessionByToken handle missing dependencies", () => {
+test("validateSessionVoicePresence and stopSessionByToken handle missing dependencies", async () => {
   const managerWithoutVoice = new ScreenShareSessionManager({
     appConfig: {},
     store: {
@@ -378,7 +382,37 @@ test("validateSessionVoicePresence and stopSessionByToken handle missing depende
   assert.equal(ended.ok, false);
   assert.equal(ended.reason, "voice_session_not_found");
 
-  assert.equal(endingVoice.manager.stopSessionByToken({ token: "missing" }), false);
+  assert.equal(await endingVoice.manager.stopSessionByToken({ token: "missing" }), false);
+});
+
+test("stopSessionByToken stops the underlying voice watch session when available", async () => {
+  const stopCalls = [];
+  const { manager } = createHarness({
+    stopWatchStreamForUser: async (payload) => {
+      stopCalls.push(payload);
+      return {
+        ok: true,
+        reason: "watching_stopped"
+      };
+    }
+  });
+  const created = await manager.createSession({
+    guildId: "guild-1",
+    channelId: "channel-1",
+    requesterUserId: "user-1",
+    targetUserId: "user-1"
+  });
+
+  const stopped = await manager.stopSessionByToken({
+    token: created.token,
+    reason: "manual_stop"
+  });
+
+  assert.equal(stopped, true);
+  assert.equal(stopCalls.length, 1);
+  assert.equal(stopCalls[0]?.guildId, "guild-1");
+  assert.equal(stopCalls[0]?.requesterUserId, "user-1");
+  assert.equal(stopCalls[0]?.targetUserId, "user-1");
 });
 
 test("renderSharePage returns branded invalid and valid pages", async () => {

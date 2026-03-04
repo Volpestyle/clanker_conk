@@ -2,10 +2,12 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
   enableWatchStreamForUser,
+  getStreamWatchBrainContextForPrompt,
   ingestStreamFrame,
   initializeStreamWatchState,
   maybeTriggerStreamWatchCommentary,
-  resolveStreamWatchVisionProviderSettings
+  resolveStreamWatchVisionProviderSettings,
+  stopWatchStreamForUser
 } from "./voiceStreamWatch.ts";
 
 function createSettings(overrides = {}) {
@@ -65,6 +67,7 @@ function createSession(overrides = {}) {
       requestedByUserId: "user-1",
       lastFrameAt: 0,
       lastCommentaryAt: 0,
+      lastCommentaryNote: null,
       lastBrainContextAt: 0,
       lastBrainContextProvider: null,
       lastBrainContextModel: null,
@@ -91,12 +94,15 @@ function createManager({
   session = null,
   settings = createSettings(),
   llm = {},
+  memory = {},
   guildVoiceMembers = ["user-1"]
 } = {}) {
   const actions = [];
   const operationalMessages = [];
   const touchCalls = [];
   const createdResponses = [];
+  const memoryIngests = [];
+  const memoryWrites = [];
   const manager = {
     sessions: new Map(),
     sendOperationalMessage: async (payload) => {
@@ -123,6 +129,20 @@ function createManager({
         };
       },
       ...llm
+    },
+    memory: {
+      async ingestMessage(payload) {
+        memoryIngests.push(payload);
+        return true;
+      },
+      async rememberDirectiveLineDetailed(payload) {
+        memoryWrites.push(payload);
+        return {
+          ok: true,
+          reason: "added_new"
+        };
+      },
+      ...memory
     },
     client: {
       user: {
@@ -167,7 +187,9 @@ function createManager({
     actions,
     operationalMessages,
     touchCalls,
-    createdResponses
+    createdResponses,
+    memoryIngests,
+    memoryWrites
   };
 }
 
@@ -179,6 +201,7 @@ test("initializeStreamWatchState resets stream-watch counters and frame buffers"
       requestedByUserId: null,
       lastFrameAt: 100,
       lastCommentaryAt: 100,
+      lastCommentaryNote: "old note",
       lastBrainContextAt: 100,
       lastBrainContextProvider: "anthropic",
       lastBrainContextModel: "claude-haiku-4-5",
@@ -203,6 +226,7 @@ test("initializeStreamWatchState resets stream-watch counters and frame buffers"
   assert.equal(session.streamWatch.requestedByUserId, "requester-1");
   assert.equal(session.streamWatch.lastFrameAt, 0);
   assert.equal(session.streamWatch.lastCommentaryAt, 0);
+  assert.equal(session.streamWatch.lastCommentaryNote, null);
   assert.equal(session.streamWatch.lastBrainContextAt, 0);
   assert.equal(session.streamWatch.lastBrainContextProvider, null);
   assert.equal(session.streamWatch.lastBrainContextModel, null);
@@ -213,6 +237,44 @@ test("initializeStreamWatchState resets stream-watch counters and frame buffers"
   assert.equal(session.streamWatch.latestFrameMimeType, null);
   assert.equal(session.streamWatch.latestFrameDataBase64, "");
   assert.equal(session.streamWatch.latestFrameAt, 0);
+});
+
+test("getStreamWatchBrainContextForPrompt retains recent notes after screen share stops", () => {
+  const now = Date.now();
+  const session = createSession({
+    streamWatch: {
+      active: false,
+      targetUserId: null,
+      requestedByUserId: "user-1",
+      lastFrameAt: now - 5_000,
+      lastCommentaryAt: now - 4_000,
+      lastCommentaryNote: "boss fight HUD visible",
+      lastBrainContextAt: now - 3_000,
+      lastBrainContextProvider: "anthropic",
+      lastBrainContextModel: "claude-haiku-4-5",
+      brainContextEntries: [
+        {
+          text: "boss fight HUD visible",
+          at: now - 3_000,
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          speakerName: "alice"
+        }
+      ],
+      ingestedFrameCount: 4,
+      acceptedFrameCountInWindow: 4,
+      frameWindowStartedAt: now - 10_000,
+      latestFrameMimeType: null,
+      latestFrameDataBase64: "",
+      latestFrameAt: 0
+    }
+  });
+
+  const context = getStreamWatchBrainContextForPrompt(session, createSettings());
+  assert.equal(Boolean(context), true);
+  assert.equal(context?.active, false);
+  assert.equal(context?.notes.length, 1);
+  assert.equal(String(context?.notes[0] || "").includes("boss fight HUD visible"), true);
 });
 
 test("resolveStreamWatchVisionProviderSettings picks first configured provider in priority order", () => {
@@ -465,6 +527,7 @@ test("maybeTriggerStreamWatchCommentary supports vision-fallback text utterance 
   assert.equal(Boolean(logged), true);
   assert.equal(logged?.metadata?.commentaryPath, "vision_fallback_text_utterance");
   assert.equal(logged?.metadata?.visionProvider, "anthropic");
+  assert.equal(session.streamWatch.lastCommentaryNote, "looks like a wild clutch moment");
 });
 
 test("maybeTriggerStreamWatchCommentary forces anthropic keyframe fallback when configured", async () => {
@@ -615,6 +678,237 @@ test("maybeTriggerStreamWatchCommentary can update brain context without speakin
     actions.some((entry) => entry.content === "stream_watch_commentary_requested"),
     false
   );
+});
+
+test("maybeTriggerStreamWatchCommentary respects structured analysis that says not to comment", async () => {
+  let requestVideoCommentaryCalls = 0;
+  const now = Date.now();
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: false,
+    realtimeClient: {
+      appendInputVideoFrame() {},
+      requestVideoCommentary() {
+        requestVideoCommentaryCalls += 1;
+      }
+    },
+    streamWatch: {
+      active: true,
+      targetUserId: "user-1",
+      requestedByUserId: "user-1",
+      lastFrameAt: now,
+      lastCommentaryAt: 0,
+      lastCommentaryNote: null,
+      lastBrainContextAt: 0,
+      lastBrainContextProvider: null,
+      lastBrainContextModel: null,
+      brainContextEntries: [],
+      ingestedFrameCount: 0,
+      acceptedFrameCountInWindow: 0,
+      frameWindowStartedAt: 0,
+      latestFrameMimeType: "image/png",
+      latestFrameDataBase64: "AAAA",
+      latestFrameAt: now
+    }
+  });
+  const { manager, actions, createdResponses } = createManager({
+    session,
+    llm: {
+      isProviderConfigured(provider) {
+        return provider === "anthropic";
+      },
+      async generate({ trace }) {
+        if (trace?.source === "voice_stream_watch_brain_context") {
+          return {
+            text: JSON.stringify({
+              note: "inventory menu still open",
+              sceneChanged: true,
+              shouldComment: false
+            }),
+            provider: "anthropic",
+            model: "claude-haiku-4-5"
+          };
+        }
+        return {
+          text: "inventory menu still open",
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        };
+      }
+    }
+  });
+
+  await maybeTriggerStreamWatchCommentary(manager, {
+    session,
+    settings: createSettings(),
+    streamerUserId: "user-1",
+    source: "unit_test"
+  });
+
+  assert.equal(requestVideoCommentaryCalls, 0);
+  assert.equal(createdResponses.length, 0);
+  assert.equal(
+    actions.some((entry) => entry.content === "stream_watch_brain_context_updated"),
+    true
+  );
+  assert.equal(actions.some((entry) => entry.content === "stream_watch_commentary_requested"), false);
+});
+
+test("maybeTriggerStreamWatchCommentary skips autonomous commentary when the scene note is unchanged", async () => {
+  let requestVideoCommentaryCalls = 0;
+  const now = Date.now();
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: false,
+    realtimeClient: {
+      appendInputVideoFrame() {},
+      requestVideoCommentary() {
+        requestVideoCommentaryCalls += 1;
+      }
+    },
+    streamWatch: {
+      active: true,
+      targetUserId: "user-1",
+      requestedByUserId: "user-1",
+      lastFrameAt: now,
+      lastCommentaryAt: 0,
+      lastCommentaryNote: "same HUD and minimap visible",
+      lastBrainContextAt: 0,
+      lastBrainContextProvider: "anthropic",
+      lastBrainContextModel: "claude-haiku-4-5",
+      brainContextEntries: [
+        {
+          text: "same HUD and minimap visible",
+          at: now - 5_000,
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          speakerName: "alice"
+        }
+      ],
+      ingestedFrameCount: 0,
+      acceptedFrameCountInWindow: 0,
+      frameWindowStartedAt: 0,
+      latestFrameMimeType: "image/png",
+      latestFrameDataBase64: "AAAA",
+      latestFrameAt: now
+    }
+  });
+  const { manager, actions, createdResponses } = createManager({
+    session,
+    llm: {
+      isProviderConfigured(provider) {
+        return provider === "anthropic";
+      },
+      async generate() {
+        return {
+          text: "same HUD and minimap visible",
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        };
+      }
+    }
+  });
+
+  await maybeTriggerStreamWatchCommentary(manager, {
+    session,
+    settings: createSettings(),
+    streamerUserId: "user-1",
+    source: "unit_test"
+  });
+
+  assert.equal(requestVideoCommentaryCalls, 0);
+  assert.equal(createdResponses.length, 0);
+  assert.equal(actions.some((entry) => entry.content === "stream_watch_commentary_requested"), false);
+  assert.equal(
+    actions.some((entry) => entry.content === "stream_watch_brain_context_updated"),
+    true
+  );
+});
+
+test("stopWatchStreamForUser persists a screen-share recap to memory and preserves prompt notes", async () => {
+  const now = Date.now();
+  const session = createSession({
+    streamWatch: {
+      active: true,
+      targetUserId: "user-1",
+      requestedByUserId: "user-1",
+      lastFrameAt: now,
+      lastCommentaryAt: now - 5_000,
+      lastCommentaryNote: "boss fight HUD visible",
+      lastBrainContextAt: now - 3_000,
+      lastBrainContextProvider: "anthropic",
+      lastBrainContextModel: "claude-haiku-4-5",
+      brainContextEntries: [
+        {
+          text: "boss fight HUD visible",
+          at: now - 4_000,
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          speakerName: "alice"
+        },
+        {
+          text: "health bar flashing during boss phase",
+          at: now - 2_000,
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          speakerName: "alice"
+        }
+      ],
+      ingestedFrameCount: 4,
+      acceptedFrameCountInWindow: 4,
+      frameWindowStartedAt: now - 10_000,
+      latestFrameMimeType: "image/png",
+      latestFrameDataBase64: "AAAA",
+      latestFrameAt: now
+    }
+  });
+  const settings = createSettings({
+    memory: {
+      enabled: true
+    }
+  });
+  const { manager, memoryIngests, memoryWrites } = createManager({
+    session,
+    settings,
+    llm: {
+      async generate({ trace }) {
+        if (trace?.source === "voice_stream_watch_memory_recap") {
+          return {
+            text: JSON.stringify({
+              shouldStore: true,
+              recap: "Alice recently screen-shared a boss fight HUD with a flashing health bar."
+            }),
+            provider: "openai",
+            model: "gpt-4o-mini"
+          };
+        }
+        return {
+          text: "unused"
+        };
+      }
+    }
+  });
+
+  const stopped = await stopWatchStreamForUser(manager, {
+    guildId: "guild-1",
+    requesterUserId: "user-1",
+    targetUserId: "user-1",
+    settings,
+    reason: "share_page_stop"
+  });
+
+  assert.equal(stopped.ok, true);
+  assert.equal(session.streamWatch.active, false);
+  assert.equal(session.streamWatch.targetUserId, null);
+  assert.equal(session.streamWatch.latestFrameDataBase64, "");
+  assert.equal(memoryIngests.length, 1);
+  assert.equal(String(memoryIngests[0]?.content || "").includes("Screen share recap:"), true);
+  assert.equal(memoryWrites.length, 1);
+  assert.equal(memoryWrites[0]?.line, "Alice recently screen-shared a boss fight HUD with a flashing health bar.");
+  const context = getStreamWatchBrainContextForPrompt(session, settings);
+  assert.equal(Boolean(context), true);
+  assert.equal(context?.active, false);
+  assert.equal(context?.notes.length, 2);
 });
 
 test("maybeTriggerStreamWatchCommentary skips while playback stream is busy", async () => {

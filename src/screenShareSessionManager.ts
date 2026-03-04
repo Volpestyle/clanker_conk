@@ -209,7 +209,7 @@ export class ScreenShareSessionManager {
           targetUserId: reusableSession.targetUserId
         };
       }
-      this.stopSessionByToken({
+      await this.stopSessionByToken({
         token: reusableSession.token,
         reason: String(voicePresence.reason || "session_reuse_invalid").slice(0, 80)
       });
@@ -293,7 +293,7 @@ export class ScreenShareSessionManager {
 
     const voicePresence = this.validateSessionVoicePresence(session);
     if (!voicePresence.ok) {
-      this.stopSessionByToken({
+      await this.stopSessionByToken({
         token: session.token,
         reason: voicePresence.reason
       });
@@ -383,10 +383,20 @@ export class ScreenShareSessionManager {
     return { ok: true };
   }
 
-  stopSessionByToken({ token, reason = "stopped_by_user" }) {
+  async stopSessionByToken({ token, reason = "stopped_by_user" }) {
     const session = this.getSessionByToken(token);
     if (!session) return false;
     this.sessions.delete(session.token);
+    const settings = this.store.getSettings();
+    const voiceStopResult = typeof this.bot?.voiceSessionManager?.stopWatchStreamForUser === "function"
+      ? await this.bot.voiceSessionManager.stopWatchStreamForUser({
+          guildId: session.guildId,
+          requesterUserId: session.requesterUserId,
+          targetUserId: session.targetUserId,
+          settings,
+          reason: String(reason || "stopped_by_user")
+        }).catch(() => null)
+      : null;
     this.store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,
@@ -395,7 +405,8 @@ export class ScreenShareSessionManager {
       content: "screen_share_session_stopped",
       metadata: {
         tokenSuffix: String(session.token || "").slice(-8),
-        reason: String(reason || "stopped_by_user").slice(0, 80)
+        reason: String(reason || "stopped_by_user").slice(0, 80),
+        voiceWatchStopReason: voiceStopResult?.reason || null
       }
     });
     return true;

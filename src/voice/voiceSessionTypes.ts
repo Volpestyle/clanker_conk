@@ -235,6 +235,7 @@ export interface VoiceSessionStreamWatchState {
     requestedByUserId: string | null;
     lastFrameAt: number;
     lastCommentaryAt: number;
+    lastCommentaryNote: string | null;
     lastBrainContextAt: number;
     lastBrainContextProvider: string | null;
     lastBrainContextModel: string | null;

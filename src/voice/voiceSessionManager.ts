@@ -61,6 +61,7 @@ import {
   requestStreamWatchStatus,
   requestWatchStream,
   resolveStreamWatchVisionProviderSettings,
+  stopWatchStreamForUser,
   supportsStreamWatchCommentary,
   supportsStreamWatchBrainContext,
   supportsVisionFallbackStreamWatchCommentary
@@ -3145,6 +3146,22 @@ export class VoiceSessionManager {
 
   async requestStopWatchingStream({ message, settings }) {
     return await requestStopWatchingStream(this, { message, settings });
+  }
+
+  async stopWatchStreamForUser({
+    guildId,
+    requesterUserId = null,
+    targetUserId = null,
+    settings = null,
+    reason = "screen_share_session_stopped"
+  }) {
+    return await stopWatchStreamForUser(this, {
+      guildId,
+      requesterUserId,
+      targetUserId,
+      settings,
+      reason
+    });
   }
 
   async requestStreamWatchStatus({ message, settings }) {
@@ -11295,6 +11312,8 @@ export class VoiceSessionManager {
     const normalizedTranscript = normalizeVoiceText(transcript, REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS);
     const streamWatchBrainContext = this.getStreamWatchBrainContextForPrompt(session, settings);
     const hasScreenFrameContext = Array.isArray(streamWatchBrainContext?.notes) && streamWatchBrainContext.notes.length > 0;
+    const hasActiveScreenFrameContext = hasScreenFrameContext && Boolean(streamWatchBrainContext?.active);
+    const hasRecentScreenFrameMemory = hasScreenFrameContext && !Boolean(streamWatchBrainContext?.active);
     const screenShareCapability = this.getVoiceScreenShareCapability({
       settings,
       guildId: session?.guildId || null,
@@ -11452,13 +11471,22 @@ export class VoiceSessionManager {
       );
     }
 
-    if (hasScreenFrameContext) {
+    if (hasActiveScreenFrameContext) {
       sections.push(
         [
           "Visual context:",
           "- You currently have screen-share frame snapshots for this conversation.",
           "- You may comment only on what those snapshots show.",
           "- Do not imply you have a continuous live view beyond the provided frame context."
+        ].join("\n")
+      );
+    } else if (hasRecentScreenFrameMemory) {
+      sections.push(
+        [
+          "Visual context:",
+          "- You do not currently see the user's screen.",
+          "- You do retain notes from an earlier screen-share in this conversation.",
+          "- If asked, answer only from those earlier notes and make clear they are not a live view."
         ].join("\n")
       );
     } else {
@@ -11502,10 +11530,12 @@ export class VoiceSessionManager {
     if (hasScreenFrameContext) {
       sections.push(
         [
-          "Screen-share stream frame context:",
+          hasActiveScreenFrameContext ? "Screen-share stream frame context:" : "Recent screen-share memory:",
           `- Guidance: ${String(streamWatchBrainContext.prompt || "").trim()}`,
           ...streamWatchBrainContext.notes.slice(-8).map((note) => `- ${note}`),
-          "- Treat these notes as snapshots, not a continuous feed."
+          hasActiveScreenFrameContext
+            ? "- Treat these notes as snapshots, not a continuous feed."
+            : "- Treat these notes as earlier snapshots, not a current live view."
         ]
           .filter(Boolean)
           .join("\n")

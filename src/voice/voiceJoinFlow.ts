@@ -682,6 +682,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           requestedByUserId: null,
           lastFrameAt: 0,
           lastCommentaryAt: 0,
+          lastCommentaryNote: null,
           lastBrainContextAt: 0,
           lastBrainContextProvider: null,
           lastBrainContextModel: null,

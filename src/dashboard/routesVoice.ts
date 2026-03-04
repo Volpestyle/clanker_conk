@@ -60,7 +60,7 @@ export function attachVoiceRoutes(app: any, deps: any) {
     }
   });
 
-  app.post("/api/voice/share-session/:token/stop", (req, res) => {
+  app.post("/api/voice/share-session/:token/stop", async (req, res) => {
     if (!screenShareSessionManager) {
       return res.status(503).json({
         ok: false,
@@ -75,7 +75,7 @@ export function attachVoiceRoutes(app: any, deps: any) {
         reason: "share_session_token_required"
       });
     }
-    const stopped = screenShareSessionManager.stopSessionByToken({ token, reason });
+    const stopped = await screenShareSessionManager.stopSessionByToken({ token, reason });
     return res.json({
       ok: Boolean(stopped),
       reason: stopped ? "ok" : "share_session_not_found"
@@ -295,8 +295,13 @@ export function attachVoiceRoutes(app: any, deps: any) {
 
   app.get("/api/voice/history/sessions", (_req, res, next) => {
     try {
-      const limit = Number(_req.query.limit) || 3;
-      res.json(store.getRecentVoiceSessions(limit));
+      const limit = parseBoundedInt(_req.query.limit, 100, 1, 200);
+      const sinceHoursRaw = Number(_req.query.sinceHours);
+      const sinceIso =
+        Number.isFinite(sinceHoursRaw) && sinceHoursRaw > 0
+          ? new Date(Date.now() - sinceHoursRaw * 60 * 60 * 1000).toISOString()
+          : null;
+      res.json(store.getRecentVoiceSessions(limit, { sinceIso }));
     } catch (error) {
       next(error);
     }

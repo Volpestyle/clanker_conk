@@ -1,5 +1,6 @@
 import { clamp } from "../utils.ts";
 import { getPromptBotName } from "../promptCore.ts";
+import { safeJsonParseFromString } from "../normalization/valueParsers.ts";
 import { buildRealtimeTextUtterancePrompt, isRealtimeMode, normalizeVoiceText } from "./voiceSessionHelpers.ts";
 
 const STREAM_WATCH_AUDIO_QUIET_WINDOW_MS = 2200;
@@ -12,6 +13,25 @@ const STREAM_WATCH_COMMENTARY_PATH_AUTO = "auto";
 const STREAM_WATCH_COMMENTARY_PATH_ANTHROPIC_KEYFRAMES = "anthropic_keyframes";
 const DEFAULT_STREAM_WATCH_BRAIN_CONTEXT_PROMPT =
   "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or observational shout-out commentary.";
+const STREAM_WATCH_FRAME_ANALYSIS_JSON_SCHEMA = JSON.stringify({
+  type: "object",
+  properties: {
+    note: { type: "string" },
+    sceneChanged: { type: "boolean" },
+    shouldComment: { type: "boolean" }
+  },
+  required: ["note", "sceneChanged", "shouldComment"],
+  additionalProperties: false
+});
+const STREAM_WATCH_MEMORY_RECAP_JSON_SCHEMA = JSON.stringify({
+  type: "object",
+  properties: {
+    shouldStore: { type: "boolean" },
+    recap: { type: "string" }
+  },
+  required: ["shouldStore", "recap"],
+  additionalProperties: false
+});
 
 function normalizeStreamWatchCommentaryPath(value, fallback = STREAM_WATCH_COMMENTARY_PATH_AUTO) {
   const normalized = String(value || "")
@@ -80,6 +100,21 @@ function getStreamWatchBrainContextEntries(session, maxEntries = 8) {
     })
     .filter(Boolean)
     .slice(-boundedMax);
+}
+
+function getLatestStreamWatchBrainContextEntry(session) {
+  const entries = getStreamWatchBrainContextEntries(session, 24);
+  return entries[entries.length - 1] || null;
+}
+
+function buildStreamWatchNotesText(session, maxEntries = 6) {
+  return getStreamWatchBrainContextEntries(session, maxEntries)
+    .slice(-Math.max(1, Number(maxEntries) || 6))
+    .map((entry, index) => {
+      const speakerPrefix = entry.speakerName ? `${entry.speakerName}: ` : "";
+      return `${index + 1}. ${speakerPrefix}${entry.text}`;
+    })
+    .join("\n");
 }
 
 function appendStreamWatchBrainContextEntry({
@@ -268,6 +303,7 @@ export function initializeStreamWatchState(manager, { session, requesterUserId, 
   session.streamWatch.requestedByUserId = String(requesterUserId || "").trim() || null;
   session.streamWatch.lastFrameAt = 0;
   session.streamWatch.lastCommentaryAt = 0;
+  session.streamWatch.lastCommentaryNote = null;
   session.streamWatch.lastBrainContextAt = 0;
   session.streamWatch.lastBrainContextProvider = null;
   session.streamWatch.lastBrainContextModel = null;
@@ -283,7 +319,6 @@ export function initializeStreamWatchState(manager, { session, requesterUserId, 
 export function getStreamWatchBrainContextForPrompt(session, settings = null) {
   if (!session || session.ending) return null;
   const streamWatch = session.streamWatch || {};
-  if (!streamWatch.active) return null;
 
   const brainContextSettings = resolveStreamWatchBrainContextSettings(settings);
   if (!brainContextSettings.enabled) return null;
@@ -310,7 +345,8 @@ export function getStreamWatchBrainContextForPrompt(session, settings = null) {
     notes,
     lastAt: Number(last?.at || 0) || null,
     provider: last?.provider || streamWatch.lastBrainContextProvider || null,
-    model: last?.model || streamWatch.lastBrainContextModel || null
+    model: last?.model || streamWatch.lastBrainContextModel || null,
+    active: Boolean(streamWatch.active)
   };
 }
 
@@ -358,8 +394,6 @@ export function supportsVisionFallbackStreamWatchCommentary(manager, { session =
 export function supportsStreamWatchBrainContext(manager, { session = null, settings = null } = {}) {
   if (!session || session.ending) return false;
   if (!manager.llm || typeof manager.llm.generate !== "function") return false;
-  const commentaryPath = resolveStreamWatchCommentaryPath(settings);
-  if (commentaryPath !== STREAM_WATCH_COMMENTARY_PATH_ANTHROPIC_KEYFRAMES) return false;
   return Boolean(resolveStreamWatchVisionProviderSettings(manager, settings));
 }
 
@@ -476,15 +510,21 @@ async function generateVisionFallbackStreamWatchBrainContext(manager, {
   if (!providerSettings) return null;
   const speakerName = manager.resolveVoiceSpeakerName(session, streamerUserId) || "the streamer";
   const brainContextSettings = resolveStreamWatchBrainContextSettings(settings);
+  const previousNote = getLatestStreamWatchBrainContextEntry(session)?.text || "";
   const systemPrompt = [
     `You are ${getPromptBotName(settings)} preparing private stream-watch notes for your own voice brain.`,
     "You are looking at one still frame from a live stream.",
     "Never claim you cannot see the stream.",
-    "Return exactly one short factual note (max 16 words).",
+    "Return strict JSON only.",
+    "The note must be one short factual private note, max 16 words.",
+    "sceneChanged should be true only when the visible scene meaningfully changed from the previous private note.",
+    "shouldComment should be true only if an unsolicited casual spoken comment would feel natural and useful right now.",
+    "Menus, static HUDs, unchanged desktop views, and near-identical frames should usually set both booleans false.",
     "Do not write dialogue or commands."
   ].join(" ");
   const userPrompt = [
     `Frame from ${speakerName}'s stream.`,
+    previousNote ? `Previous private note: ${previousNote}` : "Previous private note: none.",
     String(brainContextSettings.prompt || DEFAULT_STREAM_WATCH_BRAIN_CONTEXT_PROMPT),
     "Focus only on what is visible now. Mention uncertainty briefly if needed."
   ].join(" ");
@@ -507,15 +547,26 @@ async function generateVisionFallbackStreamWatchBrainContext(manager, {
       channelId: session.textChannelId,
       userId: manager.client.user?.id || null,
       source: "voice_stream_watch_brain_context"
-    }
+    },
+    jsonSchema: STREAM_WATCH_FRAME_ANALYSIS_JSON_SCHEMA
   });
 
   const rawText = String(generated?.text || "").trim();
-  const oneLine = rawText.split(/\r?\n/)[0] || "";
+  const parsed = safeJsonParseFromString(rawText, null);
+  const parsedNote = parsed && typeof parsed === "object" ? parsed.note : "";
+  const oneLine = String(parsedNote || rawText).split(/\r?\n/)[0] || "";
   const text = normalizeVoiceText(oneLine, STREAM_WATCH_BRAIN_CONTEXT_LINE_MAX_CHARS);
   if (!text) return null;
+  const sceneChanged = parsed && typeof parsed === "object" && typeof parsed.sceneChanged === "boolean"
+    ? parsed.sceneChanged
+    : !previousNote || previousNote.toLowerCase() !== text.toLowerCase();
+  const shouldComment = parsed && typeof parsed === "object" && typeof parsed.shouldComment === "boolean"
+    ? parsed.shouldComment
+    : sceneChanged;
   return {
     text,
+    sceneChanged,
+    shouldComment,
     provider: generated?.provider || providerSettings.provider || null,
     model: generated?.model || providerSettings.model || null
   };
@@ -537,6 +588,8 @@ async function maybeRefreshStreamWatchBrainContext(manager, {
 
   const bufferedFrame = String(session.streamWatch?.latestFrameDataBase64 || "").trim();
   if (!bufferedFrame) return null;
+  const previousEntries = getStreamWatchBrainContextEntries(session, brainContextSettings.maxEntries);
+  const previousLast = previousEntries[previousEntries.length - 1] || null;
   const generated = await generateVisionFallbackStreamWatchBrainContext(manager, {
     session,
     settings,
@@ -576,8 +629,186 @@ async function maybeRefreshStreamWatchBrainContext(manager, {
 
   return {
     note: stored.text,
+    changed: !previousLast || previousLast.text.toLowerCase() !== stored.text.toLowerCase(),
+    shouldComment: generated?.shouldComment !== undefined ? Boolean(generated.shouldComment) : true,
+    sceneChanged: generated?.sceneChanged !== undefined
+      ? Boolean(generated.sceneChanged)
+      : !previousLast || previousLast.text.toLowerCase() !== stored.text.toLowerCase(),
     provider: generated?.provider || null,
     model: generated?.model || null
+  };
+}
+
+async function generateStreamWatchMemoryRecap(manager, {
+  session,
+  settings,
+  reason = "watching_stopped"
+}) {
+  const notesText = buildStreamWatchNotesText(session, 6);
+  if (!notesText) return null;
+  const speakerName = manager.resolveVoiceSpeakerName(session, session.streamWatch?.targetUserId) || "the streamer";
+  const systemPrompt = [
+    `You are ${getPromptBotName(settings)} summarizing an ended screen share for memory.`,
+    "You will receive private notes captured during one screen-share session.",
+    "Return strict JSON only.",
+    "recap must be one concise grounded sentence, max 22 words.",
+    "shouldStore should be true if the recap is useful future continuity for this conversation or likely relevant later.",
+    "Avoid filler, speculation, and talk about the bot."
+  ].join(" ");
+  const userPrompt = [
+    `Speaker: ${speakerName}`,
+    `Stop reason: ${String(reason || "watching_stopped")}`,
+    "Screen-share notes:",
+    notesText
+  ].join("\n");
+
+  try {
+    const generated = await manager.llm.generate({
+      settings,
+      systemPrompt,
+      userPrompt,
+      trace: {
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: manager.client.user?.id || null,
+        source: "voice_stream_watch_memory_recap"
+      },
+      jsonSchema: STREAM_WATCH_MEMORY_RECAP_JSON_SCHEMA
+    });
+    const parsed = safeJsonParseFromString(String(generated?.text || ""), null);
+    const recap = normalizeVoiceText(parsed?.recap || "", 190);
+    if (!recap) return null;
+    return {
+      recap,
+      shouldStore: parsed?.shouldStore !== undefined ? Boolean(parsed.shouldStore) : true
+    };
+  } catch {
+    const latestNote = getLatestStreamWatchBrainContextEntry(session)?.text || "";
+    const recap = normalizeVoiceText(
+      `${speakerName} recently screen-shared ${latestNote || "their current screen context"}.`,
+      190
+    );
+    return recap
+      ? {
+          recap,
+          shouldStore: true
+        }
+      : null;
+  }
+}
+
+async function persistStreamWatchRecapToMemory(manager, {
+  session,
+  settings,
+  reason = "watching_stopped"
+}) {
+  if (!session || session.ending) return null;
+  if (!settings?.memory?.enabled) return null;
+  if (!manager.memory || typeof manager.memory !== "object") return null;
+  if (typeof manager.memory.ingestMessage !== "function") return null;
+
+  const recap = await generateStreamWatchMemoryRecap(manager, {
+    session,
+    settings,
+    reason
+  });
+  if (!recap?.recap) return null;
+
+  const messageId = `voice-screen-share-recap-${session.id}-${Date.now()}`;
+  const authorId = String(manager.client.user?.id || "bot");
+  const authorName = String(settings?.botName || manager.client.user?.username || "bot");
+  const logContent = normalizeVoiceText(`Screen share recap: ${recap.recap}`, 320);
+  if (logContent) {
+    await manager.memory.ingestMessage({
+      messageId,
+      authorId,
+      authorName,
+      content: logContent,
+      settings,
+      trace: {
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: authorId,
+        source: "voice_stream_watch_memory_recap"
+      }
+    });
+  }
+
+  let durableSaved = false;
+  if (recap.shouldStore && typeof manager.memory.rememberDirectiveLineDetailed === "function") {
+    const saved = await manager.memory.rememberDirectiveLineDetailed({
+      line: recap.recap,
+      sourceMessageId: messageId,
+      userId: authorId,
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      sourceText: recap.recap,
+      scope: "lore",
+      validationMode: "strict"
+    });
+    durableSaved = Boolean(saved?.ok);
+  }
+
+  manager.store.logAction({
+    kind: "voice_runtime",
+    guildId: session.guildId,
+    channelId: session.textChannelId,
+    userId: authorId,
+    content: "stream_watch_memory_recap_saved",
+    metadata: {
+      sessionId: session.id,
+      reason: String(reason || "watching_stopped"),
+      recap: recap.recap,
+      durableSaved
+    }
+  });
+
+  return {
+    recap: recap.recap,
+    durableSaved
+  };
+}
+
+async function finalizeStreamWatchState(manager, {
+  session,
+  settings,
+  reason = "watching_stopped",
+  preserveBrainContext = true,
+  persistMemory = true
+}) {
+  if (!session || session.ending) {
+    return {
+      ok: false,
+      reason: "session_not_found"
+    };
+  }
+  const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
+  const memoryRecap = persistMemory
+    ? await persistStreamWatchRecapToMemory(manager, {
+        session,
+        settings: resolvedSettings,
+        reason
+      })
+    : null;
+
+  session.streamWatch.active = false;
+  session.streamWatch.targetUserId = null;
+  session.streamWatch.requestedByUserId = null;
+  session.streamWatch.latestFrameMimeType = null;
+  session.streamWatch.latestFrameDataBase64 = "";
+  session.streamWatch.latestFrameAt = 0;
+
+  if (!preserveBrainContext) {
+    session.streamWatch.lastBrainContextAt = 0;
+    session.streamWatch.lastBrainContextProvider = null;
+    session.streamWatch.lastBrainContextModel = null;
+    session.streamWatch.brainContextEntries = [];
+  }
+
+  return {
+    ok: true,
+    reason: "watching_stopped",
+    memoryRecap
   };
 }
 
@@ -684,15 +915,13 @@ export async function requestStopWatchingStream(manager, { message, settings }) 
     return true;
   }
 
-  session.streamWatch.active = false;
-  session.streamWatch.targetUserId = null;
-  session.streamWatch.latestFrameMimeType = null;
-  session.streamWatch.latestFrameDataBase64 = "";
-  session.streamWatch.latestFrameAt = 0;
-  session.streamWatch.lastBrainContextAt = 0;
-  session.streamWatch.lastBrainContextProvider = null;
-  session.streamWatch.lastBrainContextModel = null;
-  session.streamWatch.brainContextEntries = [];
+  const stopResult = await finalizeStreamWatchState(manager, {
+    session,
+    settings,
+    reason: "watching_stopped",
+    preserveBrainContext: true,
+    persistMemory: true
+  });
 
   await manager.sendOperationalMessage({
     channel: message.channel,
@@ -706,7 +935,68 @@ export async function requestStopWatchingStream(manager, { message, settings }) 
     details: {},
     mustNotify: false
   });
-  return true;
+  return Boolean(stopResult?.ok);
+}
+
+export async function stopWatchStreamForUser(manager, {
+  guildId,
+  requesterUserId = null,
+  targetUserId = null,
+  settings = null,
+  reason = "screen_share_session_stopped"
+}) {
+  const normalizedGuildId = String(guildId || "").trim();
+  if (!normalizedGuildId) {
+    return {
+      ok: false,
+      reason: "guild_id_required"
+    };
+  }
+
+  const session = manager.sessions.get(normalizedGuildId);
+  if (!session || session.ending) {
+    return {
+      ok: false,
+      reason: "session_not_found"
+    };
+  }
+  if (!session.streamWatch?.active) {
+    return {
+      ok: false,
+      reason: "already_stopped"
+    };
+  }
+
+  const normalizedRequesterId = String(requesterUserId || "").trim();
+  const normalizedTargetUserId = String(targetUserId || "").trim();
+  if (
+    normalizedRequesterId &&
+    session.streamWatch?.requestedByUserId &&
+    String(session.streamWatch.requestedByUserId) !== normalizedRequesterId
+  ) {
+    return {
+      ok: false,
+      reason: "requester_mismatch"
+    };
+  }
+  if (
+    normalizedTargetUserId &&
+    session.streamWatch?.targetUserId &&
+    String(session.streamWatch.targetUserId) !== normalizedTargetUserId
+  ) {
+    return {
+      ok: false,
+      reason: "target_user_mismatch"
+    };
+  }
+
+  return await finalizeStreamWatchState(manager, {
+    session,
+    settings,
+    reason,
+    preserveBrainContext: true,
+    persistMemory: true
+  });
 }
 
 export async function requestStreamWatchStatus(manager, { message, settings }) {
@@ -943,10 +1233,11 @@ export async function maybeTriggerStreamWatchCommentary(manager, {
   const streamWatchSettings = resolvedSettings?.voice?.streamWatch || {};
   const commentaryPath = resolveStreamWatchCommentaryPath(resolvedSettings);
   const forceAnthropicKeyframes = commentaryPath === STREAM_WATCH_COMMENTARY_PATH_ANTHROPIC_KEYFRAMES;
+  let brainContextUpdate = null;
 
-  if (forceAnthropicKeyframes) {
+  if (supportsStreamWatchBrainContext(manager, { session, settings: resolvedSettings })) {
     try {
-      await maybeRefreshStreamWatchBrainContext(manager, {
+      brainContextUpdate = await maybeRefreshStreamWatchBrainContext(manager, {
         session,
         settings: resolvedSettings,
         streamerUserId,
@@ -972,6 +1263,9 @@ export async function maybeTriggerStreamWatchCommentary(manager, {
       ? Boolean(streamWatchSettings.autonomousCommentaryEnabled)
       : true;
   if (!autonomousCommentaryEnabled) return;
+  if (brainContextUpdate && (brainContextUpdate.sceneChanged === false || brainContextUpdate.shouldComment === false)) {
+    return;
+  }
 
   if (session.userCaptures.size > 0) return;
   if (session.pendingResponse) return;
@@ -1004,6 +1298,16 @@ export async function maybeTriggerStreamWatchCommentary(manager, {
 
   try {
     let fallbackVisionMeta = null;
+    const latestContextNote = normalizeVoiceText(
+      brainContextUpdate?.note || session.streamWatch?.brainContextEntries?.[session.streamWatch.brainContextEntries.length - 1]?.text || "",
+      STREAM_WATCH_BRAIN_CONTEXT_LINE_MAX_CHARS
+    );
+    if (
+      latestContextNote &&
+      String(session.streamWatch?.lastCommentaryNote || "").trim().toLowerCase() === latestContextNote.toLowerCase()
+    ) {
+      return;
+    }
     if (!forceAnthropicKeyframes && typeof realtimeClient.requestVideoCommentary === "function") {
       realtimeClient.requestVideoCommentary(nativePrompt);
     } else if (typeof realtimeClient.requestTextUtterance === "function") {
@@ -1037,6 +1341,7 @@ export async function maybeTriggerStreamWatchCommentary(manager, {
     });
     if (!created) return;
     session.streamWatch.lastCommentaryAt = now;
+    session.streamWatch.lastCommentaryNote = latestContextNote || null;
     manager.store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,
