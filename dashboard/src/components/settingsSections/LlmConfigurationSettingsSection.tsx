@@ -186,12 +186,33 @@ export function LlmConfigurationSettingsSection({
         </div>
       </div>
 
-      <h4>Memory Extraction LLM</h4>
-      <p>Used for durable fact extraction (`memory_extract_call`).</p>
+      <h4>Memory Reflection Extractor LLM</h4>
+      <p>
+        Used for the extraction pass of daily reflection. Live conversation memory writes come from the main model via
+        `memory_write`, not this setting.
+      </p>
+      <label htmlFor="memory-reflection-strategy">Daily reflection strategy</label>
+      <select
+        id="memory-reflection-strategy"
+        value={form.memoryReflectionStrategy}
+        onChange={set("memoryReflectionStrategy")}
+      >
+        <option value="two_pass_extract_then_main">2-pass: memory LLM extracts, main LLM decides what to save</option>
+        <option value="one_pass_main">1-pass: main LLM reads the journal and decides what to save</option>
+      </select>
+      <p>
+        1-pass uses the main LLM for the whole reflection. 2-pass uses the memory LLM as a cheaper extractor first,
+        then asks the main LLM which candidates should become durable memory.
+      </p>
       <div className="split">
         <div>
           <label htmlFor="memory-llm-provider">Provider</label>
-          <select id="memory-llm-provider" value={form.memoryLlmProvider} onChange={setMemoryLlmProvider}>
+          <select
+            id="memory-llm-provider"
+            value={form.memoryLlmProvider}
+            onChange={setMemoryLlmProvider}
+            disabled={form.memoryReflectionStrategy === "one_pass_main"}
+          >
             <LlmProviderOptions />
           </select>
         </div>
@@ -201,6 +222,7 @@ export function LlmConfigurationSettingsSection({
             id="memory-llm-model-preset"
             value={selectedMemoryLlmPresetModel}
             onChange={selectMemoryLlmPresetModel}
+            disabled={form.memoryReflectionStrategy === "one_pass_main"}
           >
             {memoryLlmModelOptions.map((modelId) => (
               <option key={modelId} value={modelId}>

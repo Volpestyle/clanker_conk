@@ -1164,6 +1164,7 @@ export function normalizeSettings(raw) {
   }
   const defaultMemoryReflection = DEFAULT_SETTINGS.memory?.reflection || {
     enabled: true,
+    strategy: "two_pass_extract_then_main",
     hour: 4,
     minute: 0,
     maxFactsPerReflection: 20
@@ -1172,6 +1173,10 @@ export function normalizeSettings(raw) {
     merged.memory.reflection?.enabled !== undefined
       ? Boolean(merged.memory.reflection?.enabled)
       : Boolean(defaultMemoryReflection.enabled);
+  merged.memory.reflection.strategy =
+    String(merged.memory.reflection?.strategy || "").trim().toLowerCase() === "one_pass_main"
+      ? "one_pass_main"
+      : "two_pass_extract_then_main";
   merged.memory.reflection.hour = clamp(
     Number(merged.memory.reflection?.hour) || Number(defaultMemoryReflection.hour) || 4,
     0,

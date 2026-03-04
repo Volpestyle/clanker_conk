@@ -42,7 +42,7 @@ import {
 import { pushPerformanceMetric, summarizeLatencyMetric } from "./store/storePerformance.ts";
 import { rewriteRuntimeSettingsRow, getSettings, setSettings, patchSettings, resetSettings } from "./store/storeSettings.ts";
 import { recordMessage, getRecentMessages, getRecentMessagesAcrossGuild, searchRelevantMessages, getActiveChannels } from "./store/storeMessages.ts";
-import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, countInitiativePostsSince, getRecentActions, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted } from "./store/storeActionLog.ts";
+import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, countInitiativePostsSince, getRecentActions, getRecentMemoryReflections, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted } from "./store/storeActionLog.ts";
 import { wasLinkSharedSince, recordSharedLink, pruneLookupContext, recordLookupContext, searchLookupContext } from "./store/storeLookups.ts";
 import { getRecentVoiceSessions, getVoiceSessionEvents } from "./store/storeVoice.ts";
 import { getReplyPerformanceStats, getStats } from "./store/storeStats.ts";
@@ -342,6 +342,10 @@ export class Store {
 
   getRecentActions(limit = 200) {
     return getRecentActions(this, limit);
+  }
+
+  getRecentMemoryReflections(limit = 20) {
+    return getRecentMemoryReflections(this, limit);
   }
 
   indexResponseTriggersForAction(opts: {

@@ -23,10 +23,14 @@ type VoiceGoldenCase = {
   title: string;
   userText: string;
   expectedAllow: boolean;
+  expectedResponse?: "non_empty" | "empty";
   objective: string;
   participantCount?: number;
   participantDisplayNames?: string[];
   sessionAgeMs?: number;
+  recentAssistantReplyMs?: number;
+  recentDirectAddressMs?: number;
+  recentDirectAddressUserId?: string;
 };
 
 type VoiceGoldenJudgeConfig = {
@@ -277,6 +281,27 @@ class HarnessStore {
 
 const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
   {
+    id: "wake-ping",
+    title: "Wake Ping",
+    userText: "yo clanker",
+    expectedAllow: true,
+    objective: "Give a short natural acknowledgement suitable for live voice."
+  },
+  {
+    id: "wake-ping-laughter-followup",
+    title: "Wake Ping Laughter Followup",
+    userText: "haha",
+    expectedAllow: true,
+    expectedResponse: "empty",
+    objective: "After a recent direct wake ping and bot acknowledgement, skip pure laughter/backchannel follow-up instead of filling space.",
+    participantCount: 1,
+    participantDisplayNames: ["alice"],
+    sessionAgeMs: 8_000,
+    recentAssistantReplyMs: 3_000,
+    recentDirectAddressMs: 4_000,
+    recentDirectAddressUserId: "speaker-1"
+  },
+  {
     id: "direct-question",
     title: "Direct Question",
     userText: "clanker can you explain in one sentence why rust ownership matters?",
@@ -289,13 +314,6 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     userText: "clankerconk are you there right now?",
     expectedAllow: true,
     objective: "Acknowledge the direct callout and respond briefly."
-  },
-  {
-    id: "wake-ping",
-    title: "Wake Ping",
-    userText: "yo clanker",
-    expectedAllow: true,
-    objective: "Give a short natural acknowledgement suitable for live voice."
   },
   {
     id: "join-window-greeting-yo-single",
@@ -483,8 +501,20 @@ function resolveCaseContext(caseRow: VoiceGoldenCase | null = null) {
   return {
     participantCount,
     participantDisplayNames,
-    sessionAgeMs
+    sessionAgeMs,
+    recentAssistantReplyMs: Number.isFinite(Number(caseRow?.recentAssistantReplyMs))
+      ? Math.max(0, Math.min(sessionAgeMs, Math.round(Number(caseRow?.recentAssistantReplyMs))))
+      : null,
+    recentDirectAddressMs: Number.isFinite(Number(caseRow?.recentDirectAddressMs))
+      ? Math.max(0, Math.min(sessionAgeMs, Math.round(Number(caseRow?.recentDirectAddressMs))))
+      : null,
+    recentDirectAddressUserId:
+      String(caseRow?.recentDirectAddressUserId || "").trim() || null
   };
+}
+
+function resolveExpectedResponse(caseRow: VoiceGoldenCase) {
+  return caseRow.expectedResponse || (caseRow.expectedAllow ? "non_empty" : "empty");
 }
 
 function normalizeMode(value: unknown): VoiceGoldenRunMode {
@@ -808,6 +838,7 @@ function createDecisionSession({
   caseRow: VoiceGoldenCase;
 }) {
   const context = resolveCaseContext(caseRow);
+  const now = Date.now();
   return {
     id: `voice-golden-${mode}`,
     guildId: "voice-golden-guild",
@@ -815,7 +846,12 @@ function createDecisionSession({
     voiceChannelId: "voice-golden-voice",
     mode,
     botTurnOpen: false,
-    startedAt: Date.now() - context.sessionAgeMs,
+    startedAt: now - context.sessionAgeMs,
+    lastAudioDeltaAt:
+      context.recentAssistantReplyMs != null ? now - context.recentAssistantReplyMs : 0,
+    lastDirectAddressAt:
+      context.recentDirectAddressMs != null ? now - context.recentDirectAddressMs : 0,
+    lastDirectAddressUserId: context.recentDirectAddressUserId || "",
     recentVoiceTurns: []
   };
 }
@@ -874,6 +910,11 @@ function buildExecutionSession({
     ending: false,
     botTurnOpen: false,
     startedAt: now - context.sessionAgeMs,
+    lastAudioDeltaAt:
+      context.recentAssistantReplyMs != null ? now - context.recentAssistantReplyMs : 0,
+    lastDirectAddressAt:
+      context.recentDirectAddressMs != null ? now - context.recentDirectAddressMs : 0,
+    lastDirectAddressUserId: context.recentDirectAddressUserId || "",
     lastActivityAt: now,
     userCaptures: new Map(),
     recentVoiceTurns: [],
@@ -1034,7 +1075,7 @@ async function runSimulatedCase({
 
   const transcript = caseRow.userText;
   const responseText =
-    decisionAllow
+    decisionAllow && resolveExpectedResponse(caseRow) === "non_empty"
       ? `simulated reply (${mode}): ${caseRow.objective.slice(0, 90)}`
       : "";
 
@@ -1121,6 +1162,7 @@ async function runJudge({
     `Case: ${caseRow.id} (${caseRow.title})`,
     `User utterance: ${caseRow.userText}`,
     `Expectation shouldAllow: ${caseRow.expectedAllow ? "true" : "false"}`,
+    `Expectation response: ${resolveExpectedResponse(caseRow)}`,
     `Case objective: ${caseRow.objective}`,
     `Observed decision.allow: ${decision.allow ? "true" : "false"}`,
     `Observed decision.reason: ${decision.reason}`,
@@ -1129,8 +1171,8 @@ async function runJudge({
     `Timings totalMs=${timings.totalMs.toFixed(1)} decisionMs=${timings.decisionMs.toFixed(1)} responseMs=${timings.responseMs.toFixed(1)}`,
     "Scoring rules:",
     "1) A failing admission expectation is a hard fail.",
-    "2) If shouldAllow=true, response should be non-empty and reasonably aligned with objective.",
-    "3) If shouldAllow=false, empty response is expected.",
+    "2) If expected response is non_empty, response should be non-empty and reasonably aligned with objective.",
+    "3) If expected response is empty, the correct behavior is an empty response or [SKIP]-equivalent silence.",
     'Output schema: {"pass":true|false,"score":0..100,"confidence":0..1,"summary":"...","issues":["..."]}'
   ].join("\n");
 
@@ -1165,7 +1207,7 @@ async function runJudge({
     onParseError: (rawText) => {
       const deterministicPass =
         decision.allow === caseRow.expectedAllow &&
-        (caseRow.expectedAllow ? Boolean(responseText.trim()) : !responseText.trim());
+        (resolveExpectedResponse(caseRow) === "non_empty" ? Boolean(responseText.trim()) : !responseText.trim());
       return {
         pass: deterministicPass,
         score: deterministicPass ? 75 : 25,
@@ -1190,7 +1232,8 @@ function buildDeterministicJudge({
   error: string | null;
 }): JudgeResult {
   const admissionMatches = decision.allow === caseRow.expectedAllow;
-  const responseMatches = caseRow.expectedAllow ? Boolean(responseText.trim()) : !responseText.trim();
+  const responseMatches =
+    resolveExpectedResponse(caseRow) === "non_empty" ? Boolean(responseText.trim()) : !responseText.trim();
   const pass = admissionMatches && responseMatches && !error;
   const issues: string[] = [];
   if (!admissionMatches) issues.push("admission_mismatch");

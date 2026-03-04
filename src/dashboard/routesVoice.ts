@@ -365,6 +365,51 @@ export function attachVoiceRoutes(app: any, deps: any) {
     }
   });
 
+  app.get("/api/memory/reflections", (req, res, next) => {
+    try {
+      const limit = parseBoundedInt(req.query.limit, 20, 1, 100);
+      return res.json({
+        runs: store.getRecentMemoryReflections(limit)
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.post("/api/memory/reflections/rerun", async (req, res, next) => {
+    try {
+      if (!memory || typeof memory.rerunDailyReflection !== "function") {
+        return res.status(503).json({
+          ok: false,
+          reason: "memory_reflection_rerun_unavailable"
+        });
+      }
+
+      const dateKey = String(req.body?.dateKey || "").trim();
+      const guildId = String(req.body?.guildId || "").trim();
+      if (!dateKey || !guildId) {
+        return res.status(400).json({
+          ok: false,
+          reason: !dateKey ? "date_key_required" : "guild_id_required"
+        });
+      }
+
+      await memory.rerunDailyReflection({
+        dateKey,
+        guildId,
+        settings: store.getSettings()
+      });
+
+      return res.json({
+        ok: true,
+        dateKey,
+        guildId
+      });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
   app.post("/api/memory/simulate-slice", async (req, res, next) => {
     try {
       const userId = String(req.body?.userId || "").trim() || null;

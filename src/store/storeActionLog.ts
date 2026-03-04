@@ -188,6 +188,139 @@ export function getRecentActions(store: any, limit = 200) {
   }));
 }
 
+export function getRecentMemoryReflections(store: any, limit = 20) {
+  const parsedLimit = Number(limit);
+  const boundedLimit = clamp(Number.isFinite(parsedLimit) ? Math.floor(parsedLimit) : 20, 1, 100);
+  const rows = store.db
+    .prepare(
+      `SELECT id, created_at, guild_id, channel_id, message_id, user_id, kind, content, metadata, usd_cost
+         FROM actions
+         WHERE kind IN ('memory_reflection_start', 'memory_reflection_complete', 'memory_reflection_error')
+         ORDER BY created_at DESC
+         LIMIT ?`
+    )
+    .all(Math.max(60, boundedLimit * 6));
+
+  const runs = new Map();
+  for (const row of rows) {
+    const metadata = safeJsonParse(row.metadata, null) || {};
+    const dateKey = String(metadata?.dateKey || "").trim();
+    const guildId = String(metadata?.guildId || row.guild_id || "").trim();
+    const runId = String(metadata?.runId || "").trim() || `${dateKey}:${guildId}`;
+    if (!dateKey || !guildId) continue;
+
+    const existing = runs.get(runId) || {
+      runId: runId.includes(":") ? null : runId,
+      dateKey,
+      guildId,
+      channelId: row.channel_id ? String(row.channel_id) : null,
+      status: "running",
+      startedAt: null,
+      completedAt: null,
+      erroredAt: null,
+      durationMs: null,
+      strategy: null,
+      provider: null,
+      model: null,
+      extractorProvider: null,
+      extractorModel: null,
+      adjudicatorProvider: null,
+      adjudicatorModel: null,
+      usdCost: 0,
+      maxFacts: null,
+      journalEntryCount: null,
+      authorCount: null,
+      factsExtracted: 0,
+      factsSelected: 0,
+      factsAdded: 0,
+      factsSaved: 0,
+      factsSkipped: 0,
+      extractedFacts: [],
+      selectedFacts: [],
+      savedFacts: [],
+      skippedFacts: [],
+      rawResponseText: null,
+      usage: null,
+      reflectionPasses: [],
+      startContent: null,
+      completionContent: null,
+      errorContent: null
+    };
+
+    existing.strategy = existing.strategy || (metadata?.strategy ? String(metadata.strategy) : null);
+    existing.provider = existing.provider || (metadata?.provider ? String(metadata.provider) : null);
+    existing.model = existing.model || (metadata?.model ? String(metadata.model) : null);
+    existing.extractorProvider =
+      existing.extractorProvider || (metadata?.extractorProvider ? String(metadata.extractorProvider) : null);
+    existing.extractorModel =
+      existing.extractorModel || (metadata?.extractorModel ? String(metadata.extractorModel) : null);
+    existing.adjudicatorProvider =
+      existing.adjudicatorProvider || (metadata?.adjudicatorProvider ? String(metadata.adjudicatorProvider) : null);
+    existing.adjudicatorModel =
+      existing.adjudicatorModel || (metadata?.adjudicatorModel ? String(metadata.adjudicatorModel) : null);
+    existing.maxFacts =
+      existing.maxFacts ?? (Number.isFinite(Number(metadata?.maxFacts)) ? Math.round(Number(metadata.maxFacts)) : null);
+    existing.journalEntryCount =
+      existing.journalEntryCount ??
+      (Number.isFinite(Number(metadata?.journalEntryCount)) ? Math.round(Number(metadata.journalEntryCount)) : null);
+    existing.authorCount =
+      existing.authorCount ?? (Number.isFinite(Number(metadata?.authorCount)) ? Math.round(Number(metadata.authorCount)) : null);
+
+    if (row.kind === "memory_reflection_start") {
+      existing.startedAt = existing.startedAt || String(row.created_at || "");
+      existing.startContent = existing.startContent || (row.content ? String(row.content) : null);
+    } else if (row.kind === "memory_reflection_complete") {
+      existing.status = "completed";
+      existing.completedAt = existing.completedAt || String(row.created_at || "");
+      existing.completionContent = existing.completionContent || (row.content ? String(row.content) : null);
+      existing.usdCost = Number.isFinite(Number(row.usd_cost)) ? Number(row.usd_cost) : 0;
+      existing.factsExtracted = Math.max(0, Number(metadata?.factsExtracted) || 0);
+      existing.factsSelected = Math.max(0, Number(metadata?.factsSelected) || 0);
+      existing.factsAdded = Math.max(0, Number(metadata?.factsAdded) || 0);
+      existing.factsSaved = Math.max(0, Number(metadata?.factsSaved) || 0);
+      existing.factsSkipped = Math.max(0, Number(metadata?.factsSkipped) || 0);
+      existing.extractedFacts = Array.isArray(metadata?.extractedFacts) ? metadata.extractedFacts : [];
+      existing.selectedFacts = Array.isArray(metadata?.selectedFacts) ? metadata.selectedFacts : [];
+      existing.savedFacts = Array.isArray(metadata?.savedFacts) ? metadata.savedFacts : [];
+      existing.skippedFacts = Array.isArray(metadata?.skippedFacts) ? metadata.skippedFacts : [];
+      existing.rawResponseText =
+        existing.rawResponseText || (metadata?.rawResponseText ? String(metadata.rawResponseText) : null);
+      existing.usage = metadata?.usage && typeof metadata.usage === "object" ? metadata.usage : null;
+      existing.reflectionPasses = Array.isArray(metadata?.reflectionPasses) ? metadata.reflectionPasses : [];
+    } else if (row.kind === "memory_reflection_error") {
+      if (existing.status !== "completed") {
+        existing.status = "error";
+      }
+      existing.erroredAt = existing.erroredAt || String(row.created_at || "");
+      existing.errorContent = existing.errorContent || (row.content ? String(row.content) : null);
+    }
+
+    runs.set(runId, existing);
+  }
+
+  const sorted = [...runs.values()]
+    .map((run) => {
+      const startedAtMs = Date.parse(String(run.startedAt || ""));
+      const completedAtMs = Date.parse(String(run.completedAt || ""));
+      const erroredAtMs = Date.parse(String(run.erroredAt || ""));
+      const finishedAtMs = Number.isFinite(completedAtMs) ? completedAtMs : erroredAtMs;
+      return {
+        ...run,
+        durationMs:
+          Number.isFinite(startedAtMs) && Number.isFinite(finishedAtMs)
+            ? Math.max(0, finishedAtMs - startedAtMs)
+            : null
+      };
+    })
+    .sort((a, b) => {
+      const aTime = Date.parse(String(a.completedAt || a.erroredAt || a.startedAt || "")) || 0;
+      const bTime = Date.parse(String(b.completedAt || b.erroredAt || b.startedAt || "")) || 0;
+      return bTime - aTime;
+    });
+
+  return sorted.slice(0, boundedLimit);
+}
+
 export function indexResponseTriggersForAction(store: any, {
   actionId,
   kind,

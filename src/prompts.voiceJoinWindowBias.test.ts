@@ -27,3 +27,19 @@ test("buildVoiceTurnPrompt omits join-window greeting bias guidance when join-wi
 
   assert.equal(prompt.includes("Join-window bias:"), false);
 });
+
+test("buildVoiceTurnPrompt biases low-information eager turns toward skip", () => {
+  const prompt = buildVoiceTurnPrompt({
+    speakerName: "alice",
+    transcript: "haha",
+    isEagerTurn: true,
+    voiceEagerness: 50
+  });
+
+  assert.equal(
+    prompt.includes(
+      "If the turn is only laughter, filler, or backchannel noise (for example haha, lol, hmm, mm, uh-huh, yup), strongly prefer [SKIP] unless there is a clear question, request, or obvious conversational value in replying."
+    ),
+    true
+  );
+});

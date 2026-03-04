@@ -25,7 +25,7 @@ import {
   resolveDirectiveScopeConfig,
   sanitizeInline,
 } from "./memory/memoryHelpers.ts";
-import { runDailyReflection } from "./memory/dailyReflection.ts";
+import { runDailyReflection, rerunDailyReflectionForDateGuild } from "./memory/dailyReflection.ts";
 
 const DAILY_FILE_PATTERN = /^\d{4}-\d{2}-\d{2}\.md$/;
 const LORE_SUBJECT = "__lore__";
@@ -794,7 +794,7 @@ export class MemoryManager {
     return durableLoreLines.slice(0, Math.max(1, maxItems));
   }
 
-  async rememberDirectiveLine({
+  async rememberDirectiveLineDetailed({
     line,
     sourceMessageId,
     userId,
@@ -802,21 +802,50 @@ export class MemoryManager {
     channelId = null,
     sourceText = "",
     scope = "lore",
-    subjectOverride = null
+    subjectOverride = null,
+    validationMode = "strict"
   }) {
     const scopeGuildId = String(guildId || "").trim();
-    if (!scopeGuildId) return false;
+    if (!scopeGuildId) {
+      return {
+        ok: false,
+        reason: "guild_required"
+      };
+    }
 
     const scopeConfig = resolveDirectiveScopeConfig(scope);
     const subject = subjectOverride ? String(subjectOverride).trim() : scopeConfig.subject;
-    if (!subject) return false;
+    if (!subject) {
+      return {
+        ok: false,
+        reason: "subject_required"
+      };
+    }
 
     const cleaned = normalizeMemoryLineInput(line);
-    if (!cleaned) return false;
-    if (isInstructionLikeFactText(cleaned)) return false;
-    if (!isTextGroundedInSource(cleaned, sourceText)) return false;
+    if (!cleaned) {
+      return {
+        ok: false,
+        reason: "empty_fact"
+      };
+    }
+    const normalizedValidationMode =
+      String(validationMode || "").trim().toLowerCase() === "minimal" ? "minimal" : "strict";
+    if (normalizedValidationMode === "strict" && isInstructionLikeFactText(cleaned)) {
+      return {
+        ok: false,
+        reason: "instruction_like"
+      };
+    }
+    if (normalizedValidationMode === "strict" && !isTextGroundedInSource(cleaned, sourceText)) {
+      return {
+        ok: false,
+        reason: "not_grounded_in_source"
+      };
+    }
 
     const factText = `${scopeConfig.prefix}: ${cleaned}.`;
+    const existingFact = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, subject, factText);
     const inserted = this.store.addMemoryFact({
       guildId: scopeGuildId,
       channelId: channelId ? String(channelId) : null,
@@ -828,7 +857,15 @@ export class MemoryManager {
       confidence: 0.72
     });
 
-    if (!inserted) return false;
+    if (!inserted) {
+      return {
+        ok: false,
+        reason: "store_rejected",
+        factText,
+        scope: scopeConfig.scope,
+        subject
+      };
+    }
 
     this.store.logAction({
       kind: "memory_fact",
@@ -854,7 +891,20 @@ export class MemoryManager {
       }).catch(() => undefined);
     }
     this.queueMemoryRefresh();
-    return true;
+    return {
+      ok: true,
+      reason: existingFact ? "updated_existing" : "added_new",
+      factText,
+      scope: scopeConfig.scope,
+      subject,
+      factType: scopeConfig.factType,
+      isNew: !existingFact
+    };
+  }
+
+  async rememberDirectiveLine(args) {
+    const result = await this.rememberDirectiveLineDetailed(args);
+    return Boolean(result?.ok);
   }
 
   async appendDailyLogEntry({ messageId = "", authorId, authorName, guildId = "", channelId = "", content }) {
@@ -990,6 +1040,18 @@ export class MemoryManager {
       store: this.store,
       llm: this.llm,
       settings
+    });
+  }
+
+  async rerunDailyReflection({ dateKey, guildId, settings = null }) {
+    const resolvedSettings = settings || this.store.getSettings();
+    return await rerunDailyReflectionForDateGuild({
+      memory: this,
+      store: this.store,
+      llm: this.llm,
+      settings: resolvedSettings,
+      dateKey,
+      guildId
     });
   }
 }

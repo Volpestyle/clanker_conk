@@ -28,6 +28,159 @@ test("dashboard memory search handles missing params and valid lookups", async (
   }
 });
 
+test("dashboard memory reflections returns recent reflection runs with extracted and saved facts", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
+    store.logAction({
+      kind: "memory_reflection_start",
+      guildId: "guild-1",
+      content: "Reflecting on 2026-03-03 guild:guild-1 via anthropic:claude-haiku-4-5",
+      metadata: {
+        runId: "reflection_run_1",
+        dateKey: "2026-03-03",
+        guildId: "guild-1",
+        strategy: "two_pass_extract_then_main",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        extractorProvider: "anthropic",
+        extractorModel: "claude-haiku-4-5",
+        adjudicatorProvider: "anthropic",
+        adjudicatorModel: "claude-sonnet-4-6",
+        journalEntryCount: 14,
+        authorCount: 3,
+        maxFacts: 20
+      }
+    });
+    store.logAction({
+      kind: "memory_reflection_complete",
+      guildId: "guild-1",
+      content: "Completed reflection for 2026-03-03 guild:guild-1, added 1 facts.",
+      usdCost: 0.0018,
+      metadata: {
+        runId: "reflection_run_1",
+        dateKey: "2026-03-03",
+        guildId: "guild-1",
+        strategy: "two_pass_extract_then_main",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        extractorProvider: "anthropic",
+        extractorModel: "claude-haiku-4-5",
+        adjudicatorProvider: "anthropic",
+        adjudicatorModel: "claude-sonnet-4-6",
+        journalEntryCount: 14,
+        authorCount: 3,
+        maxFacts: 20,
+        factsExtracted: 3,
+        factsSelected: 1,
+        factsAdded: 1,
+        factsSaved: 1,
+        factsSkipped: 2,
+        rawResponseText:
+          "{\"facts\":[{\"subject\":\"author\",\"subjectName\":\"alice\",\"fact\":\"likes rust\",\"type\":\"preference\",\"confidence\":0.88,\"evidence\":\"I love Rust\"}]}",
+        extractedFacts: [
+          { subject: "author", subjectName: "alice", fact: "likes rust", type: "preference", confidence: 0.88, evidence: "I love Rust" }
+        ],
+        selectedFacts: [
+          { subject: "author", subjectName: "alice", fact: "likes rust", type: "preference", confidence: 0.88, evidence: "I love Rust" }
+        ],
+        savedFacts: [
+          {
+            subject: "author",
+            subjectName: "alice",
+            fact: "likes rust",
+            type: "preference",
+            confidence: 0.88,
+            evidence: "I love Rust",
+            scope: "user",
+            subjectOverride: "user-1",
+            userId: "user-1",
+            status: "saved",
+            saveReason: "added_new",
+            storedFact: "Preference: likes rust.",
+            storedSubject: "user-1"
+          }
+        ],
+        skippedFacts: [
+          {
+            subject: "author",
+            subjectName: "bob",
+            fact: "works at acme",
+            type: "profile",
+            confidence: 0.61,
+            evidence: "I work at Acme",
+            scope: "user",
+            subjectOverride: null,
+            userId: null,
+            status: "skipped",
+            saveReason: "unresolved_author_subject",
+            storedFact: null,
+            storedSubject: null
+          }
+        ]
+      }
+    });
+
+    const response = await fetch(`${baseUrl}/api/memory/reflections?limit=5`);
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(Array.isArray(json.runs), true);
+    assert.equal(json.runs.length, 1);
+    assert.equal(json.runs[0]?.dateKey, "2026-03-03");
+    assert.equal(json.runs[0]?.status, "completed");
+    assert.equal(json.runs[0]?.factsExtracted, 3);
+    assert.equal(json.runs[0]?.factsSelected, 1);
+    assert.equal(json.runs[0]?.factsAdded, 1);
+    assert.equal(json.runs[0]?.strategy, "two_pass_extract_then_main");
+    assert.equal(json.runs[0]?.extractorModel, "claude-haiku-4-5");
+    assert.equal(json.runs[0]?.savedFacts.length, 1);
+    assert.equal(json.runs[0]?.selectedFacts.length, 1);
+    assert.equal(json.runs[0]?.skippedFacts.length, 1);
+    assert.equal(typeof json.runs[0]?.rawResponseText, "string");
+    assert.equal(json.runs[0]?.savedFacts[0]?.saveReason, "added_new");
+    assert.equal(json.runs[0]?.skippedFacts[0]?.saveReason, "unresolved_author_subject");
+  });
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard memory reflection rerun forwards date and guild to memory manager", async () => {
+  const rerunCalls = [];
+  const result = await withDashboardServer(
+    {
+      memoryOverrides: {
+        async rerunDailyReflection(payload) {
+          rerunCalls.push(payload);
+          return true;
+        }
+      }
+    },
+    async ({ baseUrl }) => {
+      const response = await fetch(`${baseUrl}/api/memory/reflections/rerun`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json"
+        },
+        body: JSON.stringify({
+          dateKey: "2026-03-03",
+          guildId: "guild-1"
+        })
+      });
+      assert.equal(response.status, 200);
+      const json = await response.json();
+      assert.equal(json.ok, true);
+      assert.equal(rerunCalls.length, 1);
+      assert.equal(rerunCalls[0]?.dateKey, "2026-03-03");
+      assert.equal(rerunCalls[0]?.guildId, "guild-1");
+      assert.equal(typeof rerunCalls[0]?.settings, "object");
+    }
+  );
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
 test("dashboard automations and share-session routes validate params and unavailable manager states", async () => {
   const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
     store.createAutomation({

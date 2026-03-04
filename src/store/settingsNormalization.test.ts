@@ -336,6 +336,26 @@ test("normalizeSettings uses provider-appropriate memoryLlm model fallback", () 
   assert.equal(normalized.memoryLlm.model, "claude-haiku-4-5");
 });
 
+test("normalizeSettings preserves supported reflection strategies and defaults invalid ones", () => {
+  const onePass = normalizeSettings({
+    memory: {
+      reflection: {
+        strategy: "one_pass_main"
+      }
+    }
+  });
+  assert.equal(onePass.memory.reflection.strategy, "one_pass_main");
+
+  const invalid = normalizeSettings({
+    memory: {
+      reflection: {
+        strategy: "something_else"
+      }
+    }
+  });
+  assert.equal(invalid.memory.reflection.strategy, "two_pass_extract_then_main");
+});
+
 test("normalizeSettings keeps stt pipeline voice generation and reply decider independent from main llm", () => {
   const normalized = normalizeSettings({
     llm: {

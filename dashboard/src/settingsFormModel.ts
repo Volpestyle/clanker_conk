@@ -102,6 +102,8 @@ export function settingsToForm(settings) {
     allowInitiative: settings?.permissions?.allowInitiativeReplies !== false,
     allowReactions: settings?.permissions?.allowReactions ?? defaultPermissions.allowReactions,
     memoryEnabled: settings?.memory?.enabled ?? defaults.memory.enabled,
+    memoryReflectionStrategy:
+      settings?.memory?.reflection?.strategy ?? defaults.memory.reflection.strategy,
     provider: settings?.llm?.provider ?? defaultLlm.provider,
     model: settings?.llm?.model ?? defaultLlm.model,
     replyFollowupLlmEnabled: settings?.replyFollowupLlm?.enabled ?? defaultReplyFollowupLlm.enabled,
@@ -527,7 +529,12 @@ export function formToSettingsPatch(form) {
       }
     },
     memory: {
-      enabled: form.memoryEnabled
+      enabled: form.memoryEnabled,
+      reflection: {
+        strategy: String(form.memoryReflectionStrategy || "").trim().toLowerCase() === "one_pass_main"
+          ? "one_pass_main"
+          : "two_pass_extract_then_main"
+      }
     }
   };
 }

@@ -45,6 +45,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.replyFollowupMaxMemoryLookupCalls, 2);
   assert.equal(form.replyFollowupMaxImageLookupCalls, 2);
   assert.equal(form.replyFollowupToolTimeoutMs, 10000);
+  assert.equal(form.memoryReflectionStrategy, "two_pass_extract_then_main");
   assert.equal(form.voiceThoughtEngineEnabled, true);
   assert.equal(form.voiceThoughtEngineProvider, "anthropic");
   assert.equal(form.voiceThoughtEngineModel, "claude-sonnet-4-6");
@@ -80,6 +81,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.replyFollowupMaxMemoryLookupCalls = 3;
   form.replyFollowupMaxImageLookupCalls = 1;
   form.replyFollowupToolTimeoutMs = 16000;
+  form.memoryReflectionStrategy = "one_pass_main";
   form.voiceGenerationLlmUseTextModel = true;
   form.voiceStreamWatchCommentaryPath = "anthropic_keyframes";
   form.voiceStreamWatchKeyframeIntervalMs = 1750;
@@ -107,6 +109,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.replyFollowupLlm.maxMemoryLookupCalls, 3);
   assert.equal(patch.replyFollowupLlm.maxImageLookupCalls, 1);
   assert.equal(patch.replyFollowupLlm.toolTimeoutMs, 16000);
+  assert.equal(patch.memory.reflection.strategy, "one_pass_main");
   assert.equal(patch.voice.generationLlm.useTextModel, true);
   assert.equal(patch.voice.streamWatch.commentaryPath, "anthropic_keyframes");
   assert.equal(patch.voice.streamWatch.keyframeIntervalMs, 1750);
@@ -262,6 +265,22 @@ test("settingsFormModel round-trips elevenlabs realtime settings", () => {
   assert.equal(patch.voice.elevenLabsRealtime.apiBaseUrl, "https://api.elevenlabs.io");
   assert.equal(patch.voice.elevenLabsRealtime.inputSampleRateHz, 16000);
   assert.equal(patch.voice.elevenLabsRealtime.outputSampleRateHz, 22050);
+});
+
+test("settingsFormModel preserves explicit reflection strategy values", () => {
+  const form = settingsToForm({
+    memory: {
+      reflection: {
+        strategy: "one_pass_main"
+      }
+    }
+  });
+
+  assert.equal(form.memoryReflectionStrategy, "one_pass_main");
+  form.memoryReflectionStrategy = "two_pass_extract_then_main";
+
+  const patch = formToSettingsPatch(form);
+  assert.equal(patch.memory.reflection.strategy, "two_pass_extract_then_main");
 });
 
 test("settingsToFormPreserving keeps user's comma format for aliases on reload", () => {

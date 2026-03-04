@@ -296,6 +296,7 @@ export const DEFAULT_SETTINGS = {
     embeddingModel: "text-embedding-3-small",
     reflection: {
       enabled: true,
+      strategy: "two_pass_extract_then_main",
       hour: 4,
       minute: 0,
       maxFactsPerReflection: 20
