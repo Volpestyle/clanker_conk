@@ -18,7 +18,6 @@ export const EN_MUSIC_QUERY_EMPTY_RE = /^(?:something|anything|some|a|the|please
 export const MUSIC_DISAMBIGUATION_MAX_RESULTS = 5;
 export const MUSIC_DISAMBIGUATION_TTL_MS = 10 * 60 * 1000;
 export const VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK = 5;
-const MUSIC_ENGAGEMENT_FOLLOWUP_MS = 10_000;
 
 import type {
   MusicSelectionResult,
@@ -1354,17 +1353,6 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
     transcript: normalizedTranscript,
     settings: resolvedSettings
   });
-  const lastReplyAt = Number(session.lastAudioDeltaAt || 0);
-  const lastWakerId = String(session.lastDirectAddressUserId || "").trim();
-  const normalizedUserId = String(userId || "").trim();
-  const engagementFollowup =
-    !shouldStop &&
-    !directAddressedToBot &&
-    normalizedUserId !== "" &&
-    normalizedUserId === lastWakerId &&
-    lastReplyAt > 0 &&
-    (Date.now() - lastReplyAt) <= MUSIC_ENGAGEMENT_FOLLOWUP_MS;
-
   manager.store.logAction({
     kind: "voice_runtime",
     guildId: session.guildId,
@@ -1378,22 +1366,19 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
       transcript: normalizedTranscript,
       shouldStop,
       directAddressedToBot,
-      engagementFollowup,
       asrDuringMusic,
       decisionReason: shouldStop
         ? "heuristic_stop"
         : directAddressedToBot
           ? "direct_address"
-          : engagementFollowup
-            ? "engagement_followup"
-            : disambiguationResolutionTurn
-              ? "disambiguation"
-              : "swallowed"
+          : disambiguationResolutionTurn
+            ? "disambiguation"
+            : "swallowed"
     }
   });
 
   if (!shouldStop) {
-    if (directAddressedToBot || disambiguationResolutionTurn || engagementFollowup) {
+    if (directAddressedToBot || disambiguationResolutionTurn) {
       return false;
     }
     return true;
