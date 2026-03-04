@@ -151,7 +151,7 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
   // Auto-include recent history images as direct vision inputs
   const visionSettings = settings?.vision || {};
   const maxAutoInclude = Math.min(
-    Number(visionSettings.maxAutoIncludeImages) || 3,
+    (visionSettings.maxAutoIncludeImages != null ? Number(visionSettings.maxAutoIncludeImages) : 3),
     Math.max(0, MAX_MODEL_IMAGE_INPUTS - modelImageInputs.length)
   );
   if (maxAutoInclude > 0 && visionSettings.captionEnabled !== false && imageLookup.candidates?.length) {
