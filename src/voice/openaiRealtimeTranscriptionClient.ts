@@ -10,16 +10,12 @@ import {
   openRealtimeSocket,
   sendRealtimePayload
 } from "./realtimeClientCore.ts";
-
-const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
-const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
-const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
-  "whisper-1",
-  "gpt-4o-transcribe-latest",
-  "gpt-4o-transcribe",
-  "gpt-4o-mini-transcribe-2025-12-15",
-  "gpt-4o-mini-transcribe"
-]);
+import {
+  DEFAULT_OPENAI_BASE_URL,
+  OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
+  normalizeOpenAiBaseUrl,
+  normalizeOpenAiRealtimeTranscriptionModel
+} from "./realtimeProviderNormalization.ts";
 
 const TRANSCRIPT_DELTA_TYPES = new Set([
   "conversation.item.input_audio_transcription.delta"
@@ -347,12 +343,6 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
   }
 }
 
-function normalizeOpenAiBaseUrl(value) {
-  const raw = String(value || DEFAULT_OPENAI_BASE_URL).trim();
-  const normalized = raw || DEFAULT_OPENAI_BASE_URL;
-  return normalized.replace(/\/+$/, "");
-}
-
 function normalizeOpenAiRealtimeAudioFormat(value) {
   if (value && typeof value === "object" && !Array.isArray(value)) {
     const type = String(value.type || "")
@@ -381,13 +371,6 @@ function normalizeOpenAiRealtimeAudioFormat(value) {
     type: "audio/pcm",
     rate: 24000
   };
-}
-
-function normalizeOpenAiRealtimeTranscriptionModel(value, fallback = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL) {
-  const normalized =
-    String(value || "").trim() || String(fallback || "").trim() || OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
-  if (OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS.has(normalized)) return normalized;
-  return OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
 }
 
 function normalizeRealtimeItemId(value) {

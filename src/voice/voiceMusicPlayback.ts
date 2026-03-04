@@ -1,6 +1,5 @@
-import { PermissionFlagsBits, ChatInputCommandInteraction } from "discord.js";
-import { normalizeInlineText, normalizeVoiceText, STT_TRANSCRIPT_MAX_CHARS, isVoiceTurnAddressedToBot, resolveVoiceAsrLanguageGuidance } from "./voiceSessionHelpers.ts";
-import { SOUNDBOARD_DECISION_TRANSCRIPT_MAX_CHARS } from "./voiceSessionManager.constants.ts";
+import { ChatInputCommandInteraction } from "discord.js";
+import { normalizeInlineText, STT_TRANSCRIPT_MAX_CHARS, isVoiceTurnAddressedToBot, resolveVoiceAsrLanguageGuidance } from "./voiceSessionHelpers.ts";
 import { parseVoiceDecisionContract, normalizeVoiceReplyDecisionProvider, defaultVoiceReplyDecisionModel, resolveVoiceReplyDecisionMaxOutputTokens } from "./voiceDecisionRuntime.ts";
 import { getPromptBotName } from "../promptCore.ts";
 import { clamp } from "lodash";
@@ -26,9 +25,8 @@ import type {
   MusicTextRequestPayload,
   MusicTextCommandMessage
 } from "./voiceSessionTypes.ts";
-
-
 export function ensureSessionMusicState(manager: any, session) {
+  void manager;
   if (!session || typeof session !== "object") return null;
   if (session.music && typeof session.music === "object") return session.music;
   session.music = {
@@ -48,6 +46,7 @@ export function ensureSessionMusicState(manager: any, session) {
     lastCommandReason: null,
     pendingQuery: null,
     pendingPlatform: "auto",
+    pendingAction: "play_now",
     pendingResults: [],
     pendingRequestedByUserId: null,
     pendingRequestedAt: 0
@@ -56,8 +55,8 @@ export function ensureSessionMusicState(manager: any, session) {
 }
 
 export function snapshotMusicRuntimeState(manager: any, session) {
-  const music = manager.ensureSessionMusicState(session);
-  const queueState = manager.ensureToolMusicQueueState(session);
+  const music = ensureSessionMusicState(manager, session);
+  const queueState = ensureToolMusicQueueState(manager, session);
   if (!music) return null;
   return {
     active: Boolean(music.active),
@@ -79,7 +78,7 @@ export function snapshotMusicRuntimeState(manager: any, session) {
     pendingRequestedByUserId: music.pendingRequestedByUserId || null,
     pendingRequestedAt: music.pendingRequestedAt > 0 ? new Date(music.pendingRequestedAt).toISOString() : null,
     pendingResults: Array.isArray(music.pendingResults) ? music.pendingResults : [],
-    disambiguationActive: manager.isMusicDisambiguationActive(music),
+    disambiguationActive: isMusicDisambiguationActive(manager, music),
     queueState: queueState
       ? {
         tracks: queueState.tracks.map((track) => ({
@@ -97,7 +96,7 @@ export function snapshotMusicRuntimeState(manager: any, session) {
 }
 
 export function isMusicPlaybackActive(manager: any, session) {
-  const music = manager.ensureSessionMusicState(session);
+  const music = ensureSessionMusicState(manager, session);
   return Boolean(music?.active);
 }
 
@@ -116,7 +115,7 @@ export function normalizeMusicSelectionResult(manager: any, rawResult: Record<st
   const id = normalizeInlineText(rawResult.id, 180);
   const title = normalizeInlineText(rawResult.title, 220);
   const artist = normalizeInlineText(rawResult.artist, 220);
-  const platform = manager.normalizeMusicPlatformToken(rawResult.platform, null);
+  const platform = normalizeMusicPlatformToken(manager, rawResult.platform, null);
   if (!id || !title || !artist || !platform) return null;
   const externalUrl = normalizeInlineText(rawResult.externalUrl || rawResult.url, 260) || null;
   const durationRaw = Number(rawResult.durationSeconds);
@@ -142,10 +141,11 @@ export function isMusicDisambiguationActive(manager: any, musicState = null) {
 }
 
 export function clearMusicDisambiguationState(manager: any, session) {
-  const music = manager.ensureSessionMusicState(session);
+  const music = ensureSessionMusicState(manager, session);
   if (!music) return;
   music.pendingQuery = null;
   music.pendingPlatform = "auto";
+  music.pendingAction = "play_now";
   music.pendingResults = [];
   music.pendingRequestedByUserId = null;
   music.pendingRequestedAt = 0;
@@ -155,21 +155,26 @@ export function setMusicDisambiguationState(manager: any, {
   session,
   query = "",
   platform = "auto",
+  action = "play_now",
   results = [],
   requestedByUserId = null
 }: MusicDisambiguationPayload = {}) {
-  const music = manager.ensureSessionMusicState(session);
+  const music = ensureSessionMusicState(manager, session);
   if (!music) return null;
   const normalizedResults = (Array.isArray(results) ? results : [])
-    .map((entry) => manager.normalizeMusicSelectionResult(entry))
+    .map((entry) => normalizeMusicSelectionResult(manager, entry))
     .filter(Boolean)
     .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS);
   if (!normalizedResults.length) {
-    manager.clearMusicDisambiguationState(session);
+    clearMusicDisambiguationState(manager, session);
     return null;
   }
   music.pendingQuery = normalizeInlineText(query, 120) || null;
-  music.pendingPlatform = manager.normalizeMusicPlatformToken(platform, "auto");
+  music.pendingPlatform = normalizeMusicPlatformToken(manager, platform, "auto");
+  music.pendingAction =
+    action === "queue_next" || action === "queue_add"
+      ? action
+      : "play_now";
   music.pendingResults = normalizedResults;
   music.pendingRequestedByUserId = String(requestedByUserId || "").trim() || null;
   music.pendingRequestedAt = Date.now();
@@ -177,8 +182,8 @@ export function setMusicDisambiguationState(manager: any, {
 }
 
 export function findPendingMusicSelectionById(manager: any, session, selectedResultId = "") {
-  const music = manager.ensureSessionMusicState(session);
-  if (!music || !manager.isMusicDisambiguationActive(music)) return null;
+  const music = ensureSessionMusicState(manager, session);
+  if (!music || !isMusicDisambiguationActive(manager, music)) return null;
   const targetId = normalizeInlineText(selectedResultId, 180);
   if (!targetId) return null;
   const normalizedTarget = targetId.toLowerCase();
@@ -196,18 +201,23 @@ export function getMusicDisambiguationPromptContext(manager: any, session): {
   active: true;
   query: string | null;
   platform: "youtube" | "soundcloud" | "discord" | "auto";
+  action: "play_now" | "queue_next" | "queue_add";
   requestedByUserId: string | null;
   options: MusicSelectionResult[];
 } | null {
-  const music = manager.ensureSessionMusicState(session);
-  if (!music || !manager.isMusicDisambiguationActive(music)) return null;
+  const music = ensureSessionMusicState(manager, session);
+  if (!music || !isMusicDisambiguationActive(manager, music)) return null;
   return {
     active: true,
     query: music.pendingQuery || null,
-    platform: manager.normalizeMusicPlatformToken(music.pendingPlatform, "auto") || "auto",
+    platform: normalizeMusicPlatformToken(manager, music.pendingPlatform, "auto") || "auto",
+    action:
+      music.pendingAction === "queue_next" || music.pendingAction === "queue_add"
+        ? music.pendingAction
+        : "play_now",
     requestedByUserId: music.pendingRequestedByUserId || null,
     options: (Array.isArray(music.pendingResults) ? music.pendingResults : [])
-      .map((entry) => manager.normalizeMusicSelectionResult(entry))
+      .map((entry) => normalizeMusicSelectionResult(manager, entry))
       .filter((entry): entry is MusicSelectionResult => Boolean(entry))
       .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS)
   };
@@ -235,12 +245,12 @@ export function ensureToolMusicQueueState(manager: any, session) {
           : null,
         source:
           String(entry.source || "")
-            .trim()
-            .toLowerCase() === "sc"
-            ? "sc"
-            : "yt",
+              .trim()
+              .toLowerCase() === "sc"
+              ? "sc"
+              : "yt",
         streamUrl: normalizeInlineText(entry.streamUrl, 300) || null,
-        platform: manager.normalizeMusicPlatformToken(entry.platform, "youtube") || "youtube",
+        platform: normalizeMusicPlatformToken(manager, entry.platform, "youtube") || "youtube",
         externalUrl: normalizeInlineText(entry.externalUrl, 300) || null
       };
     })
@@ -356,6 +366,7 @@ export async function requestPlayMusic(manager: any, {
   query = "",
   trackId = null,
   platform = "auto",
+  action = "play_now",
   searchResults = null,
   reason = "nl_play_music",
   source = "text_voice_intent",
@@ -395,31 +406,44 @@ export async function requestPlayMusic(manager: any, {
     return true;
   }
 
-  const music = manager.ensureSessionMusicState(session);
+  const music = ensureSessionMusicState(manager, session);
   const playbackProviderConfigured = Boolean(manager.musicPlayback?.isConfigured?.());
-  const resolvedPlatform = manager.normalizeMusicPlatformToken(platform, "auto");
+  const resolvedPlatform = normalizeMusicPlatformToken(manager, platform, "auto");
   const resolvedQuery = normalizeInlineText(query || manager.extractMusicPlayQuery(message?.content || ""), 120) || "";
   const resolvedTrackId = normalizeInlineText(trackId, 180) || null;
   const normalizedProvidedResults = (Array.isArray(searchResults) ? searchResults : [])
-    .map((entry) => manager.normalizeMusicSelectionResult(entry))
+    .map((entry) => normalizeMusicSelectionResult(manager, entry))
     .filter(Boolean)
     .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS);
   const disambiguationFromPrompt = manager.getMusicDisambiguationPromptContext(session);
+  const requestStartedAt = Date.now();
 
   const requestDisambiguation = async (candidateResults = []) => {
     const options = candidateResults
-      .map((entry) => manager.normalizeMusicSelectionResult(entry))
+      .map((entry) => normalizeMusicSelectionResult(manager, entry))
       .filter(Boolean)
       .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS);
     if (!options.length) return false;
 
-    manager.setMusicDisambiguationState({
+    setMusicDisambiguationState(manager, {
       session,
       query: resolvedQuery,
       platform: resolvedPlatform,
+      action: action === "queue_next" || action === "queue_add" ? action : "play_now",
       results: options,
       requestedByUserId: resolvedUserId
     });
+    if (resolvedUserId) {
+      manager.beginVoiceCommandSession({
+        session,
+        userId: resolvedUserId,
+        domain: "music",
+        intent:
+          action === "queue_next" || action === "queue_add"
+            ? `${action}_disambiguation`
+            : "music_disambiguation"
+      });
+    }
 
     manager.store.logAction({
       kind: "voice_runtime",
@@ -458,7 +482,7 @@ export async function requestPlayMusic(manager: any, {
     return true;
   };
 
-  let selectedResult = resolvedTrackId ? manager.findPendingMusicSelectionById(session, resolvedTrackId) : null;
+  let selectedResult = resolvedTrackId ? findPendingMusicSelectionById(manager, session, resolvedTrackId) : null;
   if (!selectedResult && resolvedTrackId) {
     selectedResult =
       normalizedProvidedResults.find((entry) => String(entry.id || "") === resolvedTrackId) ||
@@ -477,13 +501,14 @@ export async function requestPlayMusic(manager: any, {
   }
 
   if (!resolvedTrackId && !selectedResult && resolvedQuery && manager.musicSearch?.isConfigured?.()) {
+    const searchStartedAt = Date.now();
     const searchResponse = await manager.musicSearch.search(resolvedQuery, {
       platform: resolvedPlatform || "auto",
       limit: MUSIC_DISAMBIGUATION_MAX_RESULTS
     });
     const normalizedSearchResults = (Array.isArray(searchResponse?.results) ? searchResponse.results : [])
       .map((entry) =>
-        manager.normalizeMusicSelectionResult({
+        normalizeMusicSelectionResult(manager, {
           id: entry.id,
           title: entry.title,
           artist: entry.artist,
@@ -494,6 +519,9 @@ export async function requestPlayMusic(manager: any, {
       )
       .filter(Boolean)
       .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS);
+    console.info(
+      `[voiceMusic] search complete guildId=${resolvedGuildId} sessionId=${session.id} query=${JSON.stringify(resolvedQuery)} platform=${resolvedPlatform || "auto"} resultCount=${normalizedSearchResults.length} durationMs=${Date.now() - searchStartedAt}`
+    );
 
     if (normalizedSearchResults.length > 1) {
       const handled = await requestDisambiguation(normalizedSearchResults);
@@ -538,7 +566,7 @@ export async function requestPlayMusic(manager: any, {
     }
   }
 
-  const selectedResultPlatform = manager.normalizeMusicPlatformToken(selectedResult?.platform, null);
+  const selectedResultPlatform = normalizeMusicPlatformToken(manager, selectedResult?.platform, null);
   const useDiscordStreaming = Boolean(
     selectedResult && (
       selectedResultPlatform === "youtube" ||
@@ -672,7 +700,8 @@ export async function requestPlayMusic(manager: any, {
     music.lastRequestText = requestText;
     music.lastCommandAt = Date.now();
     music.lastCommandReason = String(reason || "nl_play_music");
-    manager.clearMusicDisambiguationState(session);
+    clearMusicDisambiguationState(manager, session);
+    manager.clearVoiceCommandSession(session);
   }
 
   manager.haltSessionOutputForMusicPlayback(session, "music_playback_started");
@@ -719,6 +748,9 @@ export async function requestPlayMusic(manager: any, {
     },
     mustNotify
   });
+  console.info(
+    `[voiceMusic] request complete guildId=${resolvedGuildId} sessionId=${session.id} provider=${playbackResult.provider} totalMs=${Date.now() - requestStartedAt} query=${JSON.stringify(playbackResult.query || playbackQuery || "")}`
+  );
   return true;
 }
 
@@ -761,6 +793,7 @@ export async function requestStopMusic(manager: any, {
   reason = "nl_stop_music",
   source = "text_voice_intent",
   requestText = "",
+  clearQueue = false,
   mustNotify = true
 } = {}) {
   const resolvedGuildId = String(guildId || message?.guild?.id || message?.guildId || "").trim();
@@ -797,7 +830,7 @@ export async function requestStopMusic(manager: any, {
     return true;
   }
 
-  const music = manager.ensureSessionMusicState(session);
+  const music = ensureSessionMusicState(manager, session);
   const wasActive = Boolean(music?.active);
   const playerWasPlaying = Boolean(manager.musicPlayer?.isPlaying?.());
   const playerWasPaused = Boolean(manager.musicPlayer?.isPaused?.());
@@ -843,7 +876,10 @@ export async function requestStopMusic(manager: any, {
     music.lastRequestText = normalizedRequestText;
     music.lastCommandAt = Date.now();
     music.lastCommandReason = String(reason || "nl_stop_music");
-    manager.clearMusicDisambiguationState(session);
+    clearMusicDisambiguationState(manager, session);
+  }
+  if (clearQueue) {
+    manager.resetToolMusicQueueState(session);
   }
 
   // No-op: subprocess manages its own audio pipeline after music stop.
@@ -859,6 +895,7 @@ export async function requestStopMusic(manager: any, {
       provider: resolvedProvider,
       source: String(source || "text_voice_intent"),
       reason: String(reason || "nl_stop_music"),
+      clearedQueue: Boolean(clearQueue),
       stopResultReason,
       status: Number(playbackResult.status || 0),
       error: stopSucceeded ? null : playbackResult.message || null,
@@ -886,6 +923,7 @@ export async function requestStopMusic(manager: any, {
       reason: stopSucceeded ? (wasActive ? "stopped" : "already_stopped") : playbackResult.reason || "music_stop_failed",
       details: {
         source: String(source || "text_voice_intent"),
+        clearedQueue: Boolean(clearQueue),
         provider: resolvedProvider,
         stopResultReason,
         status: Number(playbackResult.status || 0),
@@ -956,7 +994,7 @@ export async function requestPauseMusic(manager: any, {
     return true;
   }
 
-  const music = manager.ensureSessionMusicState(session);
+  const music = ensureSessionMusicState(manager, session);
   const wasPlaying = Boolean(manager.musicPlayer?.isPlaying?.());
   const wasPaused = Boolean(manager.musicPlayer?.isPaused?.());
   if (wasPlaying) {
@@ -1043,57 +1081,19 @@ export async function maybeHandleMusicTextSelectionRequest(manager: any, {
 
   const text = normalizeInlineText(message?.content || "", STT_TRANSCRIPT_MAX_CHARS);
   if (!text) return false;
-  const normalizedText = text.toLowerCase();
-
-  if (/^(?:cancel|nevermind|never mind|nvm|forget it)$/i.test(text)) {
-    manager.clearMusicDisambiguationState(session);
-    await manager.sendOperationalMessage({
-      channel: message.channel || null,
-      settings: settings || session.settingsSnapshot || manager.store.getSettings(),
-      guildId,
-      channelId: message.channelId || session.textChannelId || null,
-      userId: message.author?.id || null,
-      messageId: message.id || null,
-      event: "voice_music_request",
-      reason: "disambiguation_cancelled",
-      details: {
-        source: "text_disambiguation_failsafe",
-        requestText: text
-      },
-      mustNotify: true
-    });
-    return true;
-  }
-
-  const options = disambiguation.options;
-  const parsedIndex = Number.parseInt(text, 10);
-  let selected: MusicSelectionResult | null = null;
-  if (Number.isFinite(parsedIndex) && String(parsedIndex) === text && parsedIndex >= 1) {
-    selected = options[parsedIndex - 1] || null;
-  }
-
-  if (!selected) {
-    selected = options.find((entry) => {
-      const idToken = String(entry?.id || "").trim().toLowerCase();
-      return Boolean(idToken) && normalizedText === idToken;
-    }) || null;
-  }
-
-  if (!selected) return false;
-
   const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
-  await manager.requestPlayMusic({
-    message,
+  return await manager.maybeHandlePendingMusicDisambiguationTurn({
+    session,
     settings: resolvedSettings,
-    query: disambiguation.query || "",
-    platform: disambiguation.platform || "auto",
-    trackId: selected.id,
-    searchResults: options,
+    userId: message.author?.id || null,
+    transcript: text,
     reason: "text_music_disambiguation_selection",
     source: "text_disambiguation_failsafe",
+    channel: message.channel || null,
+    channelId: message.channelId || session.textChannelId || null,
+    messageId: message.id || null,
     mustNotify: true
   });
-  return true;
 }
 
 export async function maybeHandleMusicTextStopRequest(manager: any, {
@@ -1122,6 +1122,7 @@ export async function maybeHandleMusicTextStopRequest(manager: any, {
     reason: "text_music_stop_failsafe",
     source: "text_failsafe",
     requestText: text,
+    clearQueue: true,
     mustNotify: true
   });
   return true;
@@ -1329,6 +1330,24 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
     });
     return true;
   }
+  const directAddressedToBot = isVoiceTurnAddressedToBot(normalizedTranscript, resolvedSettings);
+  const disambiguationResolutionTurn = manager.isMusicDisambiguationResolutionTurn(
+    session,
+    userId,
+    normalizedTranscript
+  );
+  const handledPendingDisambiguation = await manager.maybeHandlePendingMusicDisambiguationTurn({
+    session,
+    settings: resolvedSettings,
+    userId,
+    transcript: normalizedTranscript,
+    source: `voice_${String(source || "voice_turn")}`,
+    channelId: session.textChannelId || null,
+    mustNotify: false
+  });
+  if (handledPendingDisambiguation) {
+    return true;
+  }
 
   // Heuristic-only stop detection — no LLM round-trip.
   // NOTE: isLikelyMusicStopPhrase uses English-only regex patterns (EN_MUSIC_STOP_VERB_RE,
@@ -1354,9 +1373,10 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
   });
 
   if (!shouldStop) {
-    // Wake-word addressed turns during music fall through to the normal
-    // reply pipeline so the bot can answer while music plays.
-    if (isVoiceTurnAddressedToBot(normalizedTranscript, resolvedSettings)) {
+    // During command-only playback mode, keep a short speaker-locked
+    // follow-up window so actual disambiguation replies like "the second one" do not
+    // require the wake word again.
+    if (directAddressedToBot || disambiguationResolutionTurn) {
       return false;
     }
     return true;
@@ -1370,6 +1390,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
     reason: "voice_music_stop_phrase",
     source: `voice_${String(source || "voice_turn")}`,
     requestText: normalizedTranscript,
+    clearQueue: true,
     mustNotify: false
   });
   return true;
@@ -1415,7 +1436,7 @@ export async function handleMusicSlashCommand(manager: any, interaction: ChatInp
         );
         return;
       }
-      const music = manager.ensureSessionMusicState(updatedSession);
+      const music = ensureSessionMusicState(manager, updatedSession);
       if (music?.active) {
         const nowPlaying = String(music.lastTrackTitle || "").trim() || query;
         await interaction.editReply(`Playing: ${nowPlaying}`);
@@ -1438,6 +1459,7 @@ export async function handleMusicSlashCommand(manager: any, interaction: ChatInp
       settings,
       reason: "slash_command_stop",
       source: "slash_command",
+      clearQueue: true,
       mustNotify: false
     });
     await interaction.editReply("Music stopped.");

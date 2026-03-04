@@ -11,8 +11,10 @@ import {
   safeJsonPreview,
   sendRealtimePayload
 } from "./realtimeClientCore.ts";
-
-const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
+import {
+  DEFAULT_ELEVENLABS_BASE_URL,
+  normalizeElevenLabsBaseUrl
+} from "./realtimeProviderNormalization.ts";
 
 export class ElevenLabsRealtimeClient extends EventEmitter {
   apiKey;
@@ -470,17 +472,4 @@ function parsePcmRateFromFormat(format) {
   const parsed = Number(match[1]);
   if (!Number.isFinite(parsed)) return null;
   return Math.max(8000, Math.min(48000, Math.round(parsed)));
-}
-
-function normalizeElevenLabsBaseUrl(value) {
-  const target = String(value || DEFAULT_ELEVENLABS_BASE_URL).trim() || DEFAULT_ELEVENLABS_BASE_URL;
-  try {
-    const parsed = new URL(target);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return DEFAULT_ELEVENLABS_BASE_URL;
-    }
-    return `${parsed.protocol}//${parsed.host}`;
-  } catch {
-    return DEFAULT_ELEVENLABS_BASE_URL;
-  }
 }

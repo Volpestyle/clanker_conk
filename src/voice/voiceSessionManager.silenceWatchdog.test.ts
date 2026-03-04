@@ -80,7 +80,7 @@ test("flushResponseFromBufferedAudio emits response.create for OpenAI native rep
     settingsSnapshot: {
       botName: "clanker conk",
       voice: {
-        realtimeReplyStrategy: "native"
+        replyPath: "native"
       }
     },
     realtimeClient: {
@@ -115,7 +115,7 @@ test("flushResponseFromBufferedAudio skips response.create for OpenAI brain repl
     settingsSnapshot: {
       botName: "clanker conk",
       voice: {
-        realtimeReplyStrategy: "brain",
+        replyPath: "brain",
         brainProvider: "anthropic"
       }
     },

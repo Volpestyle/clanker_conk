@@ -12,17 +12,14 @@ import {
   safeJsonPreview,
   sendRealtimePayload
 } from "./realtimeClientCore.ts";
+import {
+  DEFAULT_OPENAI_BASE_URL,
+  OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
+  normalizeOpenAiBaseUrl,
+  normalizeOpenAiRealtimeTranscriptionModel
+} from "./realtimeProviderNormalization.ts";
 
-const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
-const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 const OPENAI_REALTIME_DEFAULT_SESSION_MODEL = "gpt-realtime";
-const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
-  "whisper-1",
-  "gpt-4o-mini-transcribe-2025-12-15",
-  "gpt-4o-mini-transcribe",
-  "gpt-4o-transcribe",
-  "gpt-4o-transcribe-latest"
-]);
 const OPENAI_REALTIME_SUPPORTED_SESSION_MODELS = new Set([
   "gpt-realtime",
   "gpt-realtime-1.5",
@@ -627,18 +624,6 @@ const TERMINAL_RESPONSE_STATUSES = new Set([
   "failed",
   "incomplete"
 ]);
-
-function normalizeOpenAiBaseUrl(value) {
-  const raw = String(value || DEFAULT_OPENAI_BASE_URL).trim();
-  const normalized = raw || DEFAULT_OPENAI_BASE_URL;
-  return normalized.replace(/\/+$/, "");
-}
-
-function normalizeOpenAiRealtimeTranscriptionModel(value, fallback = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL) {
-  const normalized = String(value || "").trim() || String(fallback || "").trim() || OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
-  if (OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS.has(normalized)) return normalized;
-  return OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
-}
 
 function normalizeOpenAiRealtimeSessionModel(value, fallback = OPENAI_REALTIME_DEFAULT_SESSION_MODEL) {
   const normalized =

@@ -118,7 +118,7 @@ export type VoiceRealtimeToolSettings = {
         enabled?: boolean;
     };
     voice?: {
-        realtimeReplyStrategy?: string;
+        replyPath?: string;
     };
     [key: string]: unknown;
 };

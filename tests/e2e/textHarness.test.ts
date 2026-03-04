@@ -20,6 +20,12 @@ function envNumber(name: string, defaultValue: number): number {
   return Number.isFinite(parsed) ? parsed : defaultValue;
 }
 
+function getMessageContent(message: unknown): string {
+  if (!message || typeof message !== "object") return "";
+  const content = "content" in message ? message.content : "";
+  return typeof content === "string" ? content : "";
+}
+
 describe("E2E: Text Channel", () => {
   let driver: DriverBot;
 
@@ -59,10 +65,7 @@ describe("E2E: Text Channel", () => {
 
       const response = await driver.waitForMessage(driver.config.systemBotUserId, responseWaitMs);
       assert.ok(response, "Expected a response from the bot");
-      assert.ok(
-        (response as any).content.length > 0,
-        "Expected non-empty response content"
-      );
+      assert.ok(getMessageContent(response).length > 0, "Expected non-empty response content");
     },
     DEFAULT_TIMEOUT_MS
   );
@@ -77,10 +80,7 @@ describe("E2E: Text Channel", () => {
 
       const response = await driver.waitForMessage(driver.config.systemBotUserId, responseWaitMs);
       assert.ok(response, "Expected a response when bot name is mentioned");
-      assert.ok(
-        (response as any).content.length > 0,
-        "Expected non-empty response content"
-      );
+      assert.ok(getMessageContent(response).length > 0, "Expected non-empty response content");
     },
     DEFAULT_TIMEOUT_MS
   );
@@ -132,7 +132,7 @@ describe("E2E: Text Channel", () => {
 
       const response = await driver.waitForMessage(driver.config.systemBotUserId, responseWaitMs);
       assert.ok(response, "Expected a response");
-      const content = (response as any).content;
+      const content = getMessageContent(response);
       assert.ok(content.length > 0, "Reply should not be empty");
       assert.ok(content.length < 4000, `Reply too long: ${content.length} chars`);
     },

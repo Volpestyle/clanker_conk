@@ -1,14 +1,14 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { normalizeDirectiveText } from "../botHelpers.ts";
+import {
+  executeSharedMemoryToolSearch,
+  executeSharedMemoryToolWrite
+} from "../memory/memoryToolRuntime.ts";
 
 const MAX_WEB_QUERY_LEN = 220;
 const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
-const MAX_MEMORY_WRITE_LINE_LEN = 180;
 const MAX_IMAGE_LOOKUP_QUERY_LEN = 220;
 const MAX_OPEN_ARTICLE_REF_LEN = 260;
-const MAX_MEMORY_WRITE_ITEMS = 3;
-
-type ReplyToolScope = "lore" | "self" | "user";
 
 interface ReplyToolDefinition {
   name: string;
@@ -53,16 +53,21 @@ type ReplyToolRuntime = {
       trace: Record<string, unknown>;
       limit?: number;
     }) => Promise<Array<Record<string, unknown>>>;
-    rememberDirectiveLine: (opts: {
+    rememberDirectiveLineDetailed: (opts: {
       line: string;
       sourceMessageId: string;
       userId: string;
       guildId: string;
       channelId: string | null;
       sourceText: string;
-      scope: string;
+      scope: "lore" | "self" | "user";
       subjectOverride?: string;
-    }) => Promise<boolean>;
+      validationMode?: "strict" | "minimal";
+    }) => Promise<{
+      ok: boolean;
+      reason?: string;
+      factText?: string;
+    }>;
   };
   store?: {
     logAction: (opts: Record<string, unknown>) => void;
@@ -101,7 +106,7 @@ const WEB_SEARCH_TOOL: ReplyToolDefinition = {
 const MEMORY_SEARCH_TOOL: ReplyToolDefinition = {
   name: "memory_search",
   description:
-    "Search durable memory for previously stored facts about users, the bot, or shared lore. Use when the user asks what you remember or when context from past conversations would help.",
+    'Search durable memory. Set `namespace` to `speaker`, `self`, or `guild` (or `user:<current speaker id>` / `guild:<current guild id>`). Use `query="__ALL__"` to list everything in that namespace.',
   input_schema: {
     type: "object",
     properties: {
@@ -109,6 +114,10 @@ const MEMORY_SEARCH_TOOL: ReplyToolDefinition = {
         type: "string",
         description:
           'Concise lookup query (max 220 chars). Use "__ALL__" to retrieve everything remembered.'
+      },
+      namespace: {
+        type: "string",
+        description: "Memory namespace: `speaker`, `self`, `guild`, `user:<current speaker id>`, or `guild:<current guild id>`."
       }
     },
     required: ["query"]
@@ -118,10 +127,14 @@ const MEMORY_SEARCH_TOOL: ReplyToolDefinition = {
 const MEMORY_WRITE_TOOL: ReplyToolDefinition = {
   name: "memory_write",
   description:
-    "Store one or more durable facts to long-term memory. Use for lasting personal facts about the user (scope=user), shared lore (scope=lore), or stable self-facts about you (scope=self). Only store genuinely durable facts, not throwaway chatter, requests, insults, or future-behavior rules.",
+    "Store one or more durable facts to long-term memory. Set `namespace` to `speaker`, `self`, or `guild`. Only store genuinely durable facts, not throwaway chatter, requests, insults, or future-behavior rules.",
   input_schema: {
     type: "object",
     properties: {
+      namespace: {
+        type: "string",
+        description: "Memory namespace: `speaker`, `self`, `guild`, `user:<current speaker id>`, or `guild:<current guild id>`."
+      },
       items: {
         type: "array",
         items: {
@@ -130,18 +143,12 @@ const MEMORY_WRITE_TOOL: ReplyToolDefinition = {
             text: {
               type: "string",
               description: "The fact to remember (max 180 chars)"
-            },
-            scope: {
-              type: "string",
-              enum: ["lore", "self", "user"],
-              description:
-                "lore = shared context/group knowledge, self = durable fact about you, user = durable fact about the speaker"
             }
           },
-          required: ["text", "scope"]
+          required: ["text"]
         },
         minItems: 1,
-        maxItems: 3
+        maxItems: 5
       }
     },
     required: ["items"]
@@ -318,45 +325,47 @@ async function executeMemorySearch(
   runtime: ReplyToolRuntime,
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
-  const query = normalizeDirectiveText(
-    String(input?.query || ""),
-    MAX_MEMORY_LOOKUP_QUERY_LEN
-  );
-  if (!query) {
-    return { content: "Missing or empty memory search query.", isError: true };
-  }
   if (!runtime.memory?.searchDurableFacts) {
     return { content: "Memory search is not available.", isError: true };
   }
 
   try {
-    const results = await runtime.memory.searchDurableFacts({
+    const result = await executeSharedMemoryToolSearch({
+      runtime: {
+        memory: runtime.memory
+      },
+      settings: context.settings,
       guildId: context.guildId,
       channelId: context.channelId,
-      queryText: query,
-      settings: context.settings,
+      actorUserId: context.userId,
+      namespace: input?.namespace,
+      queryText: normalizeDirectiveText(String(input?.query || ""), MAX_MEMORY_LOOKUP_QUERY_LEN),
       trace: {
         ...context.trace,
         source: "reply_tool_memory_search"
       },
       limit: 10
     });
-
-    if (!results?.length) {
-      return { content: `No memory facts found for: "${query}"` };
+    if (!result.ok) {
+      return {
+        content: `Memory search failed: ${String(result.error || "unknown_error")}`,
+        isError: true
+      };
     }
 
-    const formatted = results
+    if (!result.matches?.length) {
+      return { content: `No memory facts found for: "${String(input?.query || "").trim()}"` };
+    }
+
+    const formatted = result.matches
       .map((fact) => {
-        const text = String(fact.fact || fact.text || "").trim();
-        const scope = String(fact.scope || fact.subject || "").trim();
-        const scopeLabel = scope ? `[${scope}] ` : "";
-        return `- ${scopeLabel}${text}`;
+        const text = String(fact.text || "").trim();
+        return `- ${text}`;
       })
       .join("\n");
 
     return {
-      content: `Memory facts for "${query}":\n${formatted}`
+      content: `Memory facts (${result.namespace || "unknown"}):\n${formatted}`
     };
   } catch (error) {
     return {
@@ -371,66 +380,52 @@ async function executeMemoryWrite(
   runtime: ReplyToolRuntime,
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
-  if (!runtime.memory?.rememberDirectiveLine) {
+  if (
+    !runtime.memory?.searchDurableFacts ||
+    !runtime.memory?.rememberDirectiveLineDetailed
+  ) {
     return { content: "Memory write is not available.", isError: true };
   }
 
-  const rawItems = Array.isArray(input?.items) ? input.items : [];
-  if (!rawItems.length) {
-    return { content: "No items provided to write.", isError: true };
-  }
-
-  const items = rawItems.slice(0, MAX_MEMORY_WRITE_ITEMS);
-  const results: string[] = [];
-
-  for (const item of items) {
-    const text = normalizeDirectiveText(
-      String((item as Record<string, unknown>)?.text || ""),
-      MAX_MEMORY_WRITE_LINE_LEN
-    );
-    const scope = String(
-      (item as Record<string, unknown>)?.scope || "lore"
-    ).trim() as ReplyToolScope;
-    if (!text) {
-      results.push(`Skipped empty item (scope=${scope})`);
-      continue;
+  try {
+    const result = await executeSharedMemoryToolWrite({
+      runtime: {
+        memory: runtime.memory
+      },
+      settings: context.settings,
+      guildId: context.guildId,
+      channelId: context.channelId,
+      actorUserId: context.userId,
+      namespace: input?.namespace,
+      items: Array.isArray(input?.items) ? input.items : [],
+      trace: {
+        ...context.trace,
+        source: "reply_tool_memory_write"
+      },
+      sourceMessageIdPrefix: context.sourceMessageId,
+      sourceText: context.sourceText,
+      limit: 5
+    });
+    if (!result.ok) {
+      return {
+        content: `Memory write failed: ${String(result.error || "unknown_error")}`,
+        isError: true
+      };
     }
 
-    const validScopes = new Set(["lore", "self", "user"]);
-    const resolvedScope = validScopes.has(scope) ? scope : "lore";
-
-    try {
-      const saved = await runtime.memory.rememberDirectiveLine({
-        line: text,
-        sourceMessageId:
-          resolvedScope === "self"
-            ? `${context.sourceMessageId}-self`
-            : context.sourceMessageId,
-        userId:
-          resolvedScope === "self"
-            ? context.botUserId || context.userId
-            : context.userId,
-        guildId: context.guildId,
-        channelId: context.channelId,
-        sourceText: context.sourceText,
-        scope: resolvedScope,
-        ...(resolvedScope === "user"
-          ? { subjectOverride: context.userId }
-          : {})
-      });
-      results.push(
-        saved
-          ? `Saved [${resolvedScope}]: "${text}"`
-          : `Deduplicated [${resolvedScope}]: "${text}" (already known)`
-      );
-    } catch (error) {
-      results.push(
-        `Failed [${resolvedScope}]: ${String((error as Error)?.message || error)}`
-      );
-    }
+    const lines = [
+      ...result.written.map((entry) => `Saved: ${String(entry.text || "").trim()}`),
+      ...result.skipped.map((entry) => `Skipped (${entry.reason}): ${String(entry.text || "").trim()}`)
+    ];
+    return {
+      content: lines.length ? lines.join("\n") : "No durable facts were saved."
+    };
+  } catch (error) {
+    return {
+      content: `Memory write failed: ${String((error as Error)?.message || error)}`,
+      isError: true
+    };
   }
-
-  return { content: results.join("\n") };
 }
 
 async function executeImageLookup(

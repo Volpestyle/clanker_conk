@@ -1,12 +1,14 @@
 import { OpenAiRealtimeTranscriptionClient } from "./openaiRealtimeTranscriptionClient.ts";
 import {
-    OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
-    normalizeOpenAiRealtimeTranscriptionModel,
     resolveVoiceAsrLanguageGuidance,
     normalizeVoiceText,
     normalizeInlineText,
     STT_TRANSCRIPT_MAX_CHARS
 } from "./voiceSessionHelpers.ts";
+import {
+    OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
+    normalizeOpenAiRealtimeTranscriptionModel
+} from "./realtimeProviderNormalization.ts";
 import type { VoiceSession } from "./voiceSessionTypes.ts";
 
 export type AsrSessionMode = "per_user" | "shared";

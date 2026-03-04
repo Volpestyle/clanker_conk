@@ -1,9 +1,6 @@
 import { clamp } from "lodash";
 import { sanitizeBotText, sleep } from "../utils.ts";
-import { 
-  buildReplyPrompt, 
-  buildSystemPrompt 
-} from "../prompts.ts";
+import { buildReplyPrompt, buildSystemPrompt } from "../prompts.ts";
 import { getMediaPromptCraftGuidance } from "../promptCore.ts";
 import {
   REPLY_OUTPUT_JSON_SCHEMA,
@@ -24,48 +21,17 @@ import {
   runModelRequestedWebSearch as runModelRequestedWebSearchForReplyFollowup
 } from "./replyFollowup.ts";
 import { resolveDeterministicMentions as resolveDeterministicMentionsForMentions } from "./mentions.ts";
-import { finalizeReplyPerformanceSample } from "../bot.ts";
-
-// Helper copied from bot.ts (or re-implemented)
-const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
-const MAX_MODEL_IMAGE_INPUTS = 8;
-const LOOKUP_CONTEXT_PROMPT_LIMIT = 4;
-const LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS = 72;
-
-function createReplyPerformanceTracker({ messageCreatedAtMs, source, seed }: any) {
-  return {
-    source,
-    startedAtMs: Date.now(),
-    triggerMessageCreatedAtMs: seed?.triggerMessageCreatedAtMs || messageCreatedAtMs || null,
-    queuedAtMs: seed?.queuedAtMs || null,
-    ingestMs: seed?.ingestMs || null,
-    memorySliceMs: null,
-    llm1Ms: null,
-    followupMs: null
-  };
-}
-
-function createReplyPromptCapture({ systemPrompt, initialUserPrompt }: any) {
-  return {
-    systemPrompt,
-    initialUserPrompt,
-    followupUserPrompts: []
-  };
-}
-
-function buildLoggedReplyPrompts(capture: any, followupSteps: number) {
-  return {
-    hiddenByDefault: true,
-    systemPrompt: capture.systemPrompt,
-    initialUserPrompt: capture.initialUserPrompt,
-    followupUserPrompts: capture.followupUserPrompts,
-    followupSteps
-  };
-}
-
-function appendReplyFollowupPrompt(capture: any, prompt: string) {
-  capture.followupUserPrompts.push(prompt);
-}
+import {
+  LOOKUP_CONTEXT_PROMPT_LIMIT,
+  LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS,
+  MAX_MODEL_IMAGE_INPUTS,
+  UNICODE_REACTIONS,
+  appendReplyFollowupPrompt,
+  buildLoggedReplyPrompts,
+  createReplyPerformanceTracker,
+  createReplyPromptCapture,
+  finalizeReplyPerformanceSample
+} from "./replyPipelineShared.ts";
 
 
 

@@ -124,7 +124,7 @@ Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details 
 | `docs/technical-architecture.md` | System architecture, data model, runtime flows |
 | `docs/agent-code.md` | Claude Code orchestrator spec |
 | `docs/agent-browser.md` | Browser agent spec |
-| `docs/realtime-voice-agent-v2-spec.md` | Voice architecture and tool strategy |
+| `docs/realtime-voice-agent-spec.md` | Voice architecture and tool strategy |
 | `docs/claude-code-brain-session-mode.md` | Claude Code as LLM brain provider |
 | `docs/memory-system.md` | Memory system design |
 | `docs/initiative-discovery-spec.md` | Initiative content discovery |

@@ -11,16 +11,6 @@ Two complementary test harnesses validate voice behavior at different layers:
 
 Validates voice-chat behavior across all runtime modes with golden utterance cases, admission/response pass-fail scoring, LLM-as-judge evaluation, and performance timing metrics (p50/p95/avg).
 
-### Modes Covered
-
-- `stt_pipeline`
-- `voice_agent` (xAI realtime)
-- `openai_realtime`
-- `gemini_realtime`
-- `elevenlabs_realtime`
-
-`stt_pipeline` cases allow model-directed `[[WEB_SEARCH:...]]` follow-ups when web search is enabled and a provider is configured (`BRAVE_SEARCH_API_KEY` and/or `SERPAPI_API_KEY`).
-
 ### Run Simulated (fast local loop)
 
 ```sh

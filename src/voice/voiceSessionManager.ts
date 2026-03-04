@@ -1,6 +1,5 @@
 import { PermissionFlagsBits, type ChatInputCommandInteraction } from "discord.js";
-import { runBrowseAgent } from "../agents/browseAgent.ts";
-import type { BrowserManager } from "../services/BrowserManager.ts";
+import { resolveMemoryToolNamespaceScope } from "../memory/memoryToolRuntime.ts";
 import {
   buildVoiceToneGuardrails,
   buildHardLimitsSection,
@@ -16,38 +15,50 @@ import {
   interpolatePromptTemplate
 } from "../promptCore.ts";
 const AUDIO_DEBUG = !!process.env.AUDIO_DEBUG;
-const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
-const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
-  "whisper-1",
-  "gpt-4o-transcribe-latest",
-  "gpt-4o-transcribe",
-  "gpt-4o-mini-transcribe-2025-12-15",
-  "gpt-4o-mini-transcribe"
-]);
 import { estimateUsdCost } from "../pricing.ts";
 import { clamp } from "../utils.ts";
-import {
-  DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD,
-  hasBotNameCue
-} from "../directAddressConfidence.ts";
+import { hasBotNameCue } from "../directAddressConfidence.ts";
 import { SoundboardDirector } from "./soundboardDirector.ts";
 import {
   defaultVoiceReplyDecisionModel,
   isLowSignalVoiceFragment,
   normalizeVoiceReplyDecisionProvider,
-  parseVoiceDecisionContract,
   parseVoiceThoughtDecisionContract,
-  resolveVoiceReplyDecisionMaxOutputTokens,
   resolveRealtimeTurnTranscriptionPlan
 } from "./voiceDecisionRuntime.ts";
 import { defaultModelForLlmProvider, normalizeLlmProvider } from "../llm/llmHelpers.ts";
+import {
+  OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
+  normalizeOpenAiRealtimeTranscriptionModel
+} from "./realtimeProviderNormalization.ts";
 import { createMusicPlaybackProvider } from "./musicPlayback.ts";
 import { createMusicSearchProvider } from "./musicSearch.ts";
 import { createDiscordMusicPlayer } from "./musicPlayer.ts";
 import {
+  clearMusicDisambiguationState as clearMusicDisambiguationStateRuntime,
+  ensureSessionMusicState as ensureSessionMusicStateRuntime,
+  ensureToolMusicQueueState as ensureToolMusicQueueStateRuntime,
+  evaluateMusicStopIntentFromTranscript as evaluateMusicStopIntentFromTranscriptRuntime,
   extractMusicPlayQuery as extractMusicPlayQueryFallback,
+  findPendingMusicSelectionById as findPendingMusicSelectionByIdRuntime,
+  getMusicDisambiguationPromptContext as getMusicDisambiguationPromptContextRuntime,
+  haltSessionOutputForMusicPlayback as haltSessionOutputForMusicPlaybackRuntime,
+  handleMusicSlashCommand as handleMusicSlashCommandRuntime,
   isLikelyMusicPlayPhrase as isLikelyMusicPlayPhraseFallback,
-  isLikelyMusicStopPhrase as isLikelyMusicStopPhraseFallback
+  isLikelyMusicStopPhrase as isLikelyMusicStopPhraseFallback,
+  isMusicDisambiguationActive as isMusicDisambiguationActiveRuntime,
+  isMusicPlaybackActive as isMusicPlaybackActiveRuntime,
+  maybeHandleMusicPlaybackTurn as maybeHandleMusicPlaybackTurnRuntime,
+  maybeHandleMusicTextSelectionRequest as maybeHandleMusicTextSelectionRequestRuntime,
+  maybeHandleMusicTextStopRequest as maybeHandleMusicTextStopRequestRuntime,
+  normalizeMusicPlatformToken as normalizeMusicPlatformTokenRuntime,
+  normalizeMusicSelectionResult as normalizeMusicSelectionResultRuntime,
+  playMusicViaDiscord as playMusicViaDiscordRuntime,
+  requestPauseMusic as requestPauseMusicRuntime,
+  requestPlayMusic as requestPlayMusicRuntime,
+  requestStopMusic as requestStopMusicRuntime,
+  setMusicDisambiguationState as setMusicDisambiguationStateRuntime,
+  snapshotMusicRuntimeState as snapshotMusicRuntimeStateRuntime
 } from "./voiceMusicPlayback.ts";
 import {
   enableWatchStreamForUser,
@@ -84,7 +95,6 @@ import {
   formatRealtimeMemoryFacts,
   formatSoundboardCandidateLine,
   getRealtimeRuntimeLabel,
-  isLikelyVocativeAddressToOtherParticipant,
   isFinalRealtimeTranscriptEventType,
   isRecoverableRealtimeError,
   isRealtimeMode,
@@ -98,7 +108,6 @@ import {
   parseResponseDoneModel,
   parseResponseDoneStatus,
   parseResponseDoneUsage,
-  resolveBrainProvider,
   resolveVoiceAsrLanguageGuidance,
   resolveRealtimeProvider,
   shortError,
@@ -141,7 +150,6 @@ import {
   MIN_RESPONSE_REQUEST_GAP_MS,
   OPENAI_ACTIVE_RESPONSE_RETRY_MS,
   JOIN_GREETING_LLM_WINDOW_MS,
-  NON_DIRECT_REPLY_MIN_SILENCE_MS,
   REALTIME_CONTEXT_MEMBER_LIMIT,
   REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS,
   REALTIME_INSTRUCTION_REFRESH_DEBOUNCE_MS,
@@ -210,7 +218,6 @@ import {
   VOICE_SILENCE_GATE_MIN_CLIP_MS,
   VOICE_SILENCE_GATE_PEAK_MAX,
   VOICE_SILENCE_GATE_RMS_MAX,
-  VOICE_MEMORY_WRITE_MAX_PER_MINUTE,
   VOICE_LOOKUP_BUSY_MAX_CHARS,
   VOICE_TURN_MIN_ASR_CLIP_MS,
   VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS
@@ -293,13 +300,9 @@ function normalizeVoiceAddressingTargetToken(value = "") {
   return normalized;
 }
 
-const MUSIC_DISAMBIGUATION_MAX_RESULTS = 5;
-const MUSIC_DISAMBIGUATION_TTL_MS = 10 * 60 * 1000;
 const VOICE_COMMAND_SESSION_TTL_MS = 20 * 1000;
 const OPENAI_COMPLETED_TOOL_CALL_TTL_MS = 10 * 60 * 1000;
 const OPENAI_COMPLETED_TOOL_CALL_MAX = 256;
-const MEMORY_NAMESPACE_USER_RE = /^user:([a-z0-9_-]{2,64})$/i;
-const MEMORY_NAMESPACE_GUILD_RE = /^guild:([a-z0-9_-]{2,64})$/i;
 const OPENAI_FUNCTION_CALL_ITEM_TYPES = new Set([
   "response.output_item.added",
   "response.output_item.done",
@@ -464,7 +467,7 @@ type VoiceRealtimeToolSettings = {
     enabled?: boolean;
   };
   voice?: {
-    realtimeReplyStrategy?: string;
+    replyPath?: string;
   };
   [key: string]: unknown;
 };
@@ -503,17 +506,6 @@ type VoiceToolRuntimeSessionLike = {
   pendingMemoryIngest?: Promise<unknown> | null;
   [key: string]: unknown;
 };
-
-function normalizeOpenAiRealtimeTranscriptionModel(
-  value,
-  fallback = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
-) {
-  const normalized =
-    String(value || "").trim() || String(fallback || "").trim() || OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
-  return OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS.has(normalized)
-    ? normalized
-    : OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
-}
 
 export class VoiceSessionManager {
   client;
@@ -1207,31 +1199,7 @@ export class VoiceSessionManager {
   }
 
   ensureSessionMusicState(session) {
-    if (!session || typeof session !== "object") return null;
-    if (session.music && typeof session.music === "object") return session.music;
-    session.music = {
-      active: false,
-      startedAt: 0,
-      stoppedAt: 0,
-      provider: null,
-      source: null,
-      lastTrackId: null,
-      lastTrackTitle: null,
-      lastTrackArtists: [],
-      lastTrackUrl: null,
-      lastQuery: null,
-      lastRequestedByUserId: null,
-      lastRequestText: null,
-      lastCommandAt: 0,
-      lastCommandReason: null,
-      pendingQuery: null,
-      pendingPlatform: "auto",
-      pendingAction: "play_now",
-      pendingResults: [],
-      pendingRequestedByUserId: null,
-      pendingRequestedAt: 0
-    };
-    return session.music;
+    return ensureSessionMusicStateRuntime(this, session);
   }
 
   ensureVoiceCommandState(session) {
@@ -1314,46 +1282,7 @@ export class VoiceSessionManager {
   }
 
   snapshotMusicRuntimeState(session) {
-    const music = this.ensureSessionMusicState(session);
-    const queueState = this.ensureToolMusicQueueState(session);
-    if (!music) return null;
-    return {
-      active: Boolean(music.active),
-      provider: music.provider || null,
-      source: music.source || null,
-      startedAt: music.startedAt > 0 ? new Date(music.startedAt).toISOString() : null,
-      stoppedAt: music.stoppedAt > 0 ? new Date(music.stoppedAt).toISOString() : null,
-      lastTrackId: music.lastTrackId || null,
-      lastTrackTitle: music.lastTrackTitle || null,
-      lastTrackArtists: Array.isArray(music.lastTrackArtists) ? music.lastTrackArtists : [],
-      lastTrackUrl: music.lastTrackUrl || null,
-      lastQuery: music.lastQuery || null,
-      lastRequestedByUserId: music.lastRequestedByUserId || null,
-      lastRequestText: music.lastRequestText || null,
-      lastCommandAt: music.lastCommandAt > 0 ? new Date(music.lastCommandAt).toISOString() : null,
-      lastCommandReason: music.lastCommandReason || null,
-      pendingQuery: music.pendingQuery || null,
-      pendingPlatform: music.pendingPlatform || null,
-      pendingAction: music.pendingAction || "play_now",
-      pendingRequestedByUserId: music.pendingRequestedByUserId || null,
-      pendingRequestedAt: music.pendingRequestedAt > 0 ? new Date(music.pendingRequestedAt).toISOString() : null,
-      pendingResults: Array.isArray(music.pendingResults) ? music.pendingResults : [],
-      disambiguationActive: this.isMusicDisambiguationActive(music),
-      voiceCommandState: this.ensureVoiceCommandState(session),
-      queueState: queueState
-        ? {
-          tracks: queueState.tracks.map((track) => ({
-            id: track.id,
-            title: track.title,
-            artist: track.artist || null,
-            source: track.source
-          })),
-          nowPlayingIndex: queueState.nowPlayingIndex,
-          isPaused: queueState.isPaused,
-          volume: queueState.volume
-        }
-        : null
-    };
+    return snapshotMusicRuntimeStateRuntime(this, session);
   }
 
   getMusicPromptContext(session): {
@@ -1435,11 +1364,7 @@ export class VoiceSessionManager {
   }
 
   isMusicPlaybackActive(session) {
-    if (this.isMusicPlaybackAudible(session)) {
-      return true;
-    }
-    const music = this.ensureSessionMusicState(session);
-    return Boolean(music?.active);
+    return isMusicPlaybackActiveRuntime(this, session);
   }
 
   isCommandOnlyActive(session, settings = null) {
@@ -1545,54 +1470,19 @@ export class VoiceSessionManager {
   }
 
   normalizeMusicPlatformToken(value: unknown = "", fallback: "youtube" | "soundcloud" | "discord" | "auto" | null = null) {
-    const token = String(value || "")
-      .trim()
-      .toLowerCase();
-    if (token === "youtube" || token === "soundcloud" || token === "discord" || token === "auto") {
-      return token;
-    }
-    return fallback;
+    return normalizeMusicPlatformTokenRuntime(this, value, fallback);
   }
 
   normalizeMusicSelectionResult(rawResult: Record<string, unknown> | null = null): MusicSelectionResult | null {
-    if (!rawResult || typeof rawResult !== "object") return null;
-    const id = normalizeInlineText(rawResult.id, 180);
-    const title = normalizeInlineText(rawResult.title, 220);
-    const artist = normalizeInlineText(rawResult.artist, 220);
-    const platform = this.normalizeMusicPlatformToken(rawResult.platform, null);
-    if (!id || !title || !artist || !platform) return null;
-    const externalUrl = normalizeInlineText(rawResult.externalUrl || rawResult.url, 260) || null;
-    const durationRaw = Number(rawResult.durationSeconds);
-    const durationSeconds = Number.isFinite(durationRaw) && durationRaw >= 0 ? Math.floor(durationRaw) : null;
-    return {
-      id,
-      title,
-      artist,
-      platform,
-      externalUrl,
-      durationSeconds
-    };
+    return normalizeMusicSelectionResultRuntime(this, rawResult);
   }
 
   isMusicDisambiguationActive(musicState = null) {
-    const music = musicState && typeof musicState === "object" ? musicState : null;
-    if (!music) return false;
-    const pendingAt = Math.max(0, Number(music.pendingRequestedAt || 0));
-    if (!pendingAt) return false;
-    const ageMs = Math.max(0, Date.now() - pendingAt);
-    if (ageMs > MUSIC_DISAMBIGUATION_TTL_MS) return false;
-    return Array.isArray(music.pendingResults) && music.pendingResults.length > 0;
+    return isMusicDisambiguationActiveRuntime(this, musicState);
   }
 
   clearMusicDisambiguationState(session) {
-    const music = this.ensureSessionMusicState(session);
-    if (!music) return;
-    music.pendingQuery = null;
-    music.pendingPlatform = "auto";
-    music.pendingAction = "play_now";
-    music.pendingResults = [];
-    music.pendingRequestedByUserId = null;
-    music.pendingRequestedAt = 0;
+    return clearMusicDisambiguationStateRuntime(this, session);
   }
 
   setMusicDisambiguationState({
@@ -1603,42 +1493,18 @@ export class VoiceSessionManager {
     results = [],
     requestedByUserId = null
   }: MusicDisambiguationPayload = {}) {
-    const music = this.ensureSessionMusicState(session);
-    if (!music) return null;
-    const normalizedResults = (Array.isArray(results) ? results : [])
-      .map((entry) => this.normalizeMusicSelectionResult(entry))
-      .filter(Boolean)
-      .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS);
-    if (!normalizedResults.length) {
-      this.clearMusicDisambiguationState(session);
-      return null;
-    }
-    music.pendingQuery = normalizeInlineText(query, 120) || null;
-    music.pendingPlatform = this.normalizeMusicPlatformToken(platform, "auto");
-    music.pendingAction =
-      action === "queue_next" || action === "queue_add"
-        ? action
-        : "play_now";
-    music.pendingResults = normalizedResults;
-    music.pendingRequestedByUserId = String(requestedByUserId || "").trim() || null;
-    music.pendingRequestedAt = Date.now();
-    return music.pendingResults;
+    return setMusicDisambiguationStateRuntime(this, {
+      session,
+      query,
+      platform,
+      action,
+      results,
+      requestedByUserId
+    });
   }
 
   findPendingMusicSelectionById(session, selectedResultId = "") {
-    const music = this.ensureSessionMusicState(session);
-    if (!music || !this.isMusicDisambiguationActive(music)) return null;
-    const targetId = normalizeInlineText(selectedResultId, 180);
-    if (!targetId) return null;
-    const normalizedTarget = targetId.toLowerCase();
-    return (
-      (Array.isArray(music.pendingResults) ? music.pendingResults : []).find((entry) => {
-        const entryId = String(entry?.id || "")
-          .trim()
-          .toLowerCase();
-        return Boolean(entryId) && entryId === normalizedTarget;
-      }) || null
-    );
+    return findPendingMusicSelectionByIdRuntime(this, session, selectedResultId);
   }
 
   getMusicDisambiguationPromptContext(session): {
@@ -1649,75 +1515,11 @@ export class VoiceSessionManager {
     requestedByUserId: string | null;
     options: MusicSelectionResult[];
   } | null {
-    const music = this.ensureSessionMusicState(session);
-    if (!music || !this.isMusicDisambiguationActive(music)) return null;
-    return {
-      active: true,
-      query: music.pendingQuery || null,
-      platform: this.normalizeMusicPlatformToken(music.pendingPlatform, "auto") || "auto",
-      action:
-        music.pendingAction === "queue_next" || music.pendingAction === "queue_add"
-          ? music.pendingAction
-          : "play_now",
-      requestedByUserId: music.pendingRequestedByUserId || null,
-      options: (Array.isArray(music.pendingResults) ? music.pendingResults : [])
-        .map((entry) => this.normalizeMusicSelectionResult(entry))
-        .filter((entry): entry is MusicSelectionResult => Boolean(entry))
-        .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS)
-    };
+    return getMusicDisambiguationPromptContextRuntime(this, session);
   }
 
   ensureToolMusicQueueState(session) {
-    if (!session || typeof session !== "object") return null;
-    const current =
-      session.musicQueueState && typeof session.musicQueueState === "object"
-        ? session.musicQueueState
-        : {};
-    const tracks = Array.isArray(current.tracks) ? current.tracks : [];
-    const normalizedTracks = tracks
-      .map((entry) => {
-        if (!entry || typeof entry !== "object") return null;
-        const id = normalizeInlineText(entry.id, 180);
-        const title = normalizeInlineText(entry.title, 220);
-        if (!id || !title) return null;
-        return {
-          id,
-          title,
-          artist: normalizeInlineText(entry.artist, 220) || null,
-          durationMs: Number.isFinite(Number(entry.durationMs))
-            ? Math.max(0, Math.round(Number(entry.durationMs)))
-            : null,
-          source:
-            String(entry.source || "")
-              .trim()
-              .toLowerCase() === "sc"
-              ? "sc"
-              : "yt",
-          streamUrl: normalizeInlineText(entry.streamUrl, 300) || null,
-          platform: this.normalizeMusicPlatformToken(entry.platform, "youtube") || "youtube",
-          externalUrl: normalizeInlineText(entry.externalUrl, 300) || null
-        };
-      })
-      .filter(Boolean);
-    const normalizedNowPlayingIndexRaw = Number(current.nowPlayingIndex);
-    const normalizedNowPlayingIndex =
-      Number.isInteger(normalizedNowPlayingIndexRaw) &&
-        normalizedNowPlayingIndexRaw >= 0 &&
-        normalizedNowPlayingIndexRaw < normalizedTracks.length
-        ? normalizedNowPlayingIndexRaw
-        : null;
-    const next = {
-      guildId: String(session.guildId || "").trim(),
-      voiceChannelId: String(session.voiceChannelId || "").trim(),
-      tracks: normalizedTracks,
-      nowPlayingIndex: normalizedNowPlayingIndex,
-      isPaused: Boolean(current.isPaused),
-      volume: Number.isFinite(Number(current.volume))
-        ? clamp(Number(current.volume), 0, 1)
-        : 1
-    };
-    session.musicQueueState = next;
-    return next;
+    return ensureToolMusicQueueStateRuntime(this, session);
   }
 
   hasBotNameCueForTranscript({ transcript = "", settings = null } = {}) {
@@ -1764,40 +1566,7 @@ export class VoiceSessionManager {
   }
 
   haltSessionOutputForMusicPlayback(session, reason = "music_playback_started") {
-    if (!session || session.ending) return;
-    this.clearPendingResponse(session);
-    // Clear main-process reply state WITHOUT sending stop_playback IPC —
-    // the subprocess's handleMusicPlay already resets playback before
-    // starting music. Sending stop_playback here would kill the music
-    // process that just started.
-    this.maybeClearActiveReplyInterruptionPolicy(session);
-    this.clearBargeInOutputSuppression(session, "music_playback_started");
-    if (session.botTurnResetTimer) {
-      clearTimeout(session.botTurnResetTimer);
-      session.botTurnResetTimer = null;
-    }
-    session.botTurnOpen = false;
-    session.pendingBargeInRetry = null;
-    session.lastRequestedRealtimeUtterance = null;
-    session.activeReplyInterruptionPolicy = null;
-    session.pendingDeferredTurns = [];
-
-    this.abortActiveInboundCaptures({
-      session,
-      reason: "music_playback_active"
-    });
-
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: this.client.user?.id || null,
-      content: "voice_music_output_halted",
-      metadata: {
-        sessionId: session.id,
-        reason: String(reason || "music_playback_started")
-      }
-    });
+    return haltSessionOutputForMusicPlaybackRuntime(this, session, reason);
   }
 
   async requestPlayMusic({
@@ -1816,419 +1585,26 @@ export class VoiceSessionManager {
     source = "text_voice_intent",
     mustNotify = true
   } = {}) {
-    const resolvedGuildId = String(guildId || message?.guild?.id || message?.guildId || "").trim();
-    if (!resolvedGuildId) return false;
-    const session = this.sessions.get(resolvedGuildId);
-    const resolvedChannel = channel || message?.channel || null;
-    const resolvedChannelIdFromChannel =
-      resolvedChannel && typeof resolvedChannel === "object" && "id" in resolvedChannel
-        ? String((resolvedChannel as { id?: string | null }).id || "").trim()
-        : "";
-    const resolvedChannelId = String(
-      channelId || message?.channelId || resolvedChannelIdFromChannel || session?.textChannelId || ""
-    ).trim();
-    const resolvedUserId = String(requestedByUserId || message?.author?.id || "").trim() || null;
-    const resolvedSettings = settings || session?.settingsSnapshot || this.store.getSettings();
-    const requestText = normalizeInlineText(message?.content || "", 220) || null;
-
-    if (!session) {
-      await this.sendOperationalMessage({
-        channel: resolvedChannel,
-        settings: resolvedSettings,
-        guildId: resolvedGuildId,
-        channelId: resolvedChannelId || null,
-        userId: resolvedUserId || null,
-        messageId: message?.id || null,
-        event: "voice_music_request",
-        reason: "not_in_voice",
-        details: {
-          source: String(source || "text_voice_intent"),
-          requestText
-        },
-        mustNotify
-      });
-      return true;
-    }
-
-    const music = this.ensureSessionMusicState(session);
-    const playbackProviderConfigured = Boolean(this.musicPlayback?.isConfigured?.());
-    const resolvedPlatform = this.normalizeMusicPlatformToken(platform, "auto");
-    const resolvedQuery = normalizeInlineText(query || this.extractMusicPlayQuery(message?.content || ""), 120) || "";
-    const resolvedTrackId = normalizeInlineText(trackId, 180) || null;
-    const normalizedProvidedResults = (Array.isArray(searchResults) ? searchResults : [])
-      .map((entry) => this.normalizeMusicSelectionResult(entry))
-      .filter(Boolean)
-      .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS);
-    const disambiguationFromPrompt = this.getMusicDisambiguationPromptContext(session);
-    const requestStartedAt = Date.now();
-
-    const requestDisambiguation = async (candidateResults = []) => {
-      const options = candidateResults
-        .map((entry) => this.normalizeMusicSelectionResult(entry))
-        .filter(Boolean)
-        .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS);
-      if (!options.length) return false;
-
-      this.setMusicDisambiguationState({
-        session,
-        query: resolvedQuery,
-        platform: resolvedPlatform,
-        action: action === "queue_next" || action === "queue_add" ? action : "play_now",
-        results: options,
-        requestedByUserId: resolvedUserId
-      });
-      if (resolvedUserId) {
-        this.beginVoiceCommandSession({
-          session,
-          userId: resolvedUserId,
-          domain: "music",
-          intent:
-            action === "queue_next" || action === "queue_add"
-              ? `${action}_disambiguation`
-              : "music_disambiguation"
-        });
-      }
-
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: resolvedUserId || this.client.user?.id || null,
-        content: "voice_music_disambiguation_required",
-        metadata: {
-          sessionId: session.id,
-          source: String(source || "text_voice_intent"),
-          query: resolvedQuery || null,
-          platform: resolvedPlatform || "auto",
-          optionCount: options.length,
-          options
-        }
-      });
-
-      await this.sendOperationalMessage({
-        channel: resolvedChannel,
-        settings: resolvedSettings,
-        guildId: resolvedGuildId,
-        channelId: resolvedChannelId || session.textChannelId || null,
-        userId: resolvedUserId || null,
-        messageId: message?.id || null,
-        event: "voice_music_request",
-        reason: "disambiguation_required",
-        details: {
-          source: String(source || "text_voice_intent"),
-          query: resolvedQuery || null,
-          platform: resolvedPlatform || "auto",
-          optionCount: options.length,
-          options
-        },
-        mustNotify
-      });
-      return true;
-    };
-
-    let selectedResult = resolvedTrackId ? this.findPendingMusicSelectionById(session, resolvedTrackId) : null;
-    if (!selectedResult && resolvedTrackId) {
-      selectedResult =
-        normalizedProvidedResults.find((entry) => String(entry.id || "") === resolvedTrackId) ||
-        (Array.isArray(disambiguationFromPrompt?.options)
-          ? disambiguationFromPrompt.options.find((entry) => String(entry?.id || "") === resolvedTrackId)
-          : null) ||
-        null;
-    }
-
-    if (!resolvedTrackId && normalizedProvidedResults.length > 1) {
-      const handled = await requestDisambiguation(normalizedProvidedResults);
-      if (handled) return true;
-    }
-    if (!resolvedTrackId && !selectedResult && normalizedProvidedResults.length === 1) {
-      selectedResult = normalizedProvidedResults[0];
-    }
-
-    if (!resolvedTrackId && !selectedResult && resolvedQuery && this.musicSearch?.isConfigured?.()) {
-      const searchStartedAt = Date.now();
-      const searchResponse = await this.musicSearch.search(resolvedQuery, {
-        platform: resolvedPlatform || "auto",
-        limit: MUSIC_DISAMBIGUATION_MAX_RESULTS
-      });
-      const normalizedSearchResults = (Array.isArray(searchResponse?.results) ? searchResponse.results : [])
-        .map((entry) =>
-          this.normalizeMusicSelectionResult({
-            id: entry.id,
-            title: entry.title,
-            artist: entry.artist,
-            platform: entry.platform,
-            externalUrl: entry.externalUrl,
-            durationSeconds: entry.durationSeconds
-          })
-        )
-        .filter(Boolean)
-        .slice(0, MUSIC_DISAMBIGUATION_MAX_RESULTS);
-      console.info(
-        `[voiceMusic] search complete guildId=${resolvedGuildId} sessionId=${session.id} query=${JSON.stringify(resolvedQuery)} platform=${resolvedPlatform || "auto"} resultCount=${normalizedSearchResults.length} durationMs=${Date.now() - searchStartedAt}`
-      );
-
-      if (normalizedSearchResults.length > 1) {
-        const handled = await requestDisambiguation(normalizedSearchResults);
-        if (handled) return true;
-      } else if (normalizedSearchResults.length === 1) {
-        selectedResult = normalizedSearchResults[0];
-      }
-    }
-
-    if (!selectedResult && !playbackProviderConfigured) {
-      await this.sendOperationalMessage({
-        channel: resolvedChannel,
-        settings: resolvedSettings,
-        guildId: resolvedGuildId,
-        channelId: resolvedChannelId || session.textChannelId || null,
-        userId: resolvedUserId || null,
-        messageId: message?.id || null,
-        event: "voice_music_request",
-        reason: "music_provider_unconfigured",
-        details: {
-          provider: this.musicPlayback?.provider || "none",
-          source: String(source || "text_voice_intent"),
-          query: resolvedQuery || null,
-          requestText
-        },
-        mustNotify
-      });
-      return true;
-    }
-
-    let playbackQuery = resolvedQuery;
-    let playbackTrackId = resolvedTrackId;
-    if (selectedResult) {
-      const selectedId = String(selectedResult.id || "").trim();
-      if (!selectedId) {
-        playbackQuery = normalizeInlineText(`${selectedResult.title} ${selectedResult.artist}`, 120) || playbackQuery;
-      } else {
-        playbackTrackId = selectedId || playbackTrackId;
-        if (!playbackQuery) {
-          playbackQuery = normalizeInlineText(`${selectedResult.title} ${selectedResult.artist}`, 120);
-        }
-      }
-    }
-
-    const selectedResultPlatform = this.normalizeMusicPlatformToken(selectedResult?.platform, null);
-    const useDiscordStreaming = Boolean(
-      selectedResult && (
-        selectedResultPlatform === "youtube" ||
-        selectedResultPlatform === "soundcloud" ||
-        selectedResultPlatform === "discord"
-      )
-    );
-
-    let playbackResult: { ok: boolean; provider: string; reason: string; message: string; status: number; track: { id: string; title: string; artistNames: string[]; externalUrl: string | null } | null; query: string | null } | null = null;
-
-    if (useDiscordStreaming) {
-      const discordResult = await this.playMusicViaDiscord(session, selectedResult);
-      if (!discordResult.ok) {
-        this.store.logAction({
-          kind: "voice_error",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: resolvedUserId || this.client.user?.id || null,
-          content: "voice_music_start_failed",
-          metadata: {
-            sessionId: session.id,
-            provider: "discord",
-            reason: discordResult.error || "discord_playback_failed",
-            source: String(source || "text_voice_intent"),
-            query: playbackQuery || null,
-            requestedTrackId: selectedResult?.id || null,
-            selectedResultId: selectedResult?.id || null,
-            selectedResultPlatform: selectedResult?.platform || null,
-            error: discordResult.error || null
-          }
-        });
-        await this.sendOperationalMessage({
-          channel: resolvedChannel,
-          settings: resolvedSettings,
-          guildId: resolvedGuildId,
-          channelId: resolvedChannelId || session.textChannelId || null,
-          userId: resolvedUserId || null,
-          messageId: message?.id || null,
-          event: "voice_music_request",
-          reason: discordResult.error || "discord_playback_failed",
-          details: {
-            source: String(source || "text_voice_intent"),
-            query: playbackQuery || null,
-            selectedResultId: selectedResult?.id || null,
-            selectedResultPlatform: selectedResult?.platform || null,
-            provider: "discord",
-            error: discordResult.error || null
-          },
-          mustNotify
-        });
-        return true;
-      }
-      playbackResult = {
-        ok: true,
-        provider: "discord",
-        reason: "started",
-        message: "playing",
-        status: 200,
-        track: {
-          id: selectedResult.id,
-          title: selectedResult.title,
-          artistNames: selectedResult.artist ? [selectedResult.artist] : [],
-          externalUrl: selectedResult.externalUrl
-        },
-        query: playbackQuery
-      };
-    } else {
-      playbackResult = await this.musicPlayback.startPlayback({
-        query: playbackQuery,
-        trackId: playbackTrackId
-      });
-    }
-    if (!playbackResult.ok) {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: resolvedUserId || this.client.user?.id || null,
-        content: "voice_music_start_failed",
-        metadata: {
-          sessionId: session.id,
-          provider: playbackResult.provider,
-          reason: playbackResult.reason,
-          source: String(source || "text_voice_intent"),
-          query: playbackResult.query || playbackQuery || null,
-          requestedTrackId: playbackTrackId,
-          selectedResultId: selectedResult?.id || null,
-          selectedResultPlatform: selectedResult?.platform || null,
-          status: Number(playbackResult.status || 0),
-          message: playbackResult.message || null
-        }
-      });
-      await this.sendOperationalMessage({
-        channel: resolvedChannel,
-        settings: resolvedSettings,
-        guildId: resolvedGuildId,
-        channelId: resolvedChannelId || session.textChannelId || null,
-        userId: resolvedUserId || null,
-        messageId: message?.id || null,
-        event: "voice_music_request",
-        reason: playbackResult.reason || "music_playback_failed",
-        details: {
-          source: String(source || "text_voice_intent"),
-          query: playbackResult.query || playbackQuery || null,
-          requestedTrackId: playbackTrackId,
-          selectedResultId: selectedResult?.id || null,
-          selectedResultPlatform: selectedResult?.platform || null,
-          provider: playbackResult.provider,
-          status: Number(playbackResult.status || 0),
-          error: playbackResult.message || null
-        },
-        mustNotify
-      });
-      return true;
-    }
-
-    if (music) {
-      music.active = true;
-      music.startedAt = Date.now();
-      music.stoppedAt = 0;
-      music.provider = playbackResult.provider || null;
-      music.source = String(source || "text_voice_intent");
-      music.lastTrackId = playbackResult.track?.id || null;
-      music.lastTrackTitle = playbackResult.track?.title || null;
-      music.lastTrackArtists = Array.isArray(playbackResult.track?.artistNames)
-        ? playbackResult.track.artistNames
-        : [];
-      music.lastTrackUrl = playbackResult.track?.externalUrl || null;
-      music.lastQuery = playbackResult.query || playbackQuery || null;
-      music.lastRequestedByUserId = resolvedUserId || null;
-      music.lastRequestText = requestText;
-      music.lastCommandAt = Date.now();
-      music.lastCommandReason = String(reason || "nl_play_music");
-      this.clearMusicDisambiguationState(session);
-      this.clearVoiceCommandSession(session);
-    }
-
-    this.haltSessionOutputForMusicPlayback(session, "music_playback_started");
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: resolvedUserId || this.client.user?.id || null,
-      content: "voice_music_started",
-      metadata: {
-        sessionId: session.id,
-        provider: playbackResult.provider,
-        source: String(source || "text_voice_intent"),
-        reason: String(reason || "nl_play_music"),
-        query: playbackResult.query || playbackQuery || null,
-        requestedTrackId: playbackTrackId,
-        selectedResultId: selectedResult?.id || null,
-        selectedResultPlatform: selectedResult?.platform || null,
-        trackId: playbackResult.track?.id || null,
-        trackTitle: playbackResult.track?.title || null,
-        trackArtists: playbackResult.track?.artistNames || [],
-        trackUrl: playbackResult.track?.externalUrl || null
-      }
-    });
-    await this.sendOperationalMessage({
-      channel: resolvedChannel,
-      settings: resolvedSettings,
-      guildId: resolvedGuildId,
-      channelId: resolvedChannelId || session.textChannelId || null,
-      userId: resolvedUserId || null,
-      messageId: message?.id || null,
-      event: "voice_music_request",
-      reason: "started",
-      details: {
-        source: String(source || "text_voice_intent"),
-        provider: playbackResult.provider,
-        query: playbackResult.query || playbackQuery || null,
-        requestedTrackId: playbackTrackId,
-        selectedResultId: selectedResult?.id || null,
-        selectedResultPlatform: selectedResult?.platform || null,
-        trackTitle: playbackResult.track?.title || null,
-        trackArtists: playbackResult.track?.artistNames || [],
-        trackUrl: playbackResult.track?.externalUrl || null
-      },
+    return await requestPlayMusicRuntime(this, {
+      message,
+      guildId,
+      channel,
+      channelId,
+      requestedByUserId,
+      settings,
+      query,
+      trackId,
+      platform,
+      action,
+      searchResults,
+      reason,
+      source,
       mustNotify
     });
-    console.info(
-      `[voiceMusic] request complete guildId=${resolvedGuildId} sessionId=${session.id} provider=${playbackResult.provider} totalMs=${Date.now() - requestStartedAt} query=${JSON.stringify(playbackResult.query || playbackQuery || "")}`
-    );
-    return true;
   }
 
   async playMusicViaDiscord(session: any, track: { id: string; title: string; artist: string; platform: string; externalUrl: string | null }) {
-    if (!session?.guildId) {
-      return { ok: false, error: "no session" };
-    }
-
-    const guild = this.client.guilds.cache.get(session.guildId);
-    if (!guild) {
-      return { ok: false, error: "guild not found" };
-    }
-
-    if (!session.subprocessClient?.isAlive) {
-      return { ok: false, error: "not connected to voice" };
-    }
-
-    const searchResult = {
-      id: track.id,
-      title: track.title,
-      artist: track.artist,
-      platform: track.platform as "youtube" | "soundcloud",
-      streamUrl: null,
-      durationSeconds: null,
-      thumbnailUrl: null,
-      externalUrl: track.externalUrl || ""
-    };
-
-    const playbackStartedAt = Date.now();
-    const result = await this.musicPlayer.play(searchResult);
-    console.info(
-      `[voiceMusic] discord playback handoff guildId=${session.guildId} trackId=${JSON.stringify(track.id)} platform=${JSON.stringify(track.platform)} durationMs=${Date.now() - playbackStartedAt}`
-    );
-    return { ok: result.ok, error: result.error };
+    return await playMusicViaDiscordRuntime(this, session, track);
   }
 
   async requestStopMusic({
@@ -2244,145 +1620,19 @@ export class VoiceSessionManager {
     clearQueue = false,
     mustNotify = true
   } = {}) {
-    const resolvedGuildId = String(guildId || message?.guild?.id || message?.guildId || "").trim();
-    if (!resolvedGuildId) return false;
-    const session = this.sessions.get(resolvedGuildId);
-    const resolvedChannel = channel || message?.channel || null;
-    const resolvedChannelIdFromChannel =
-      resolvedChannel && typeof resolvedChannel === "object" && "id" in resolvedChannel
-        ? String((resolvedChannel as { id?: string | null }).id || "").trim()
-        : "";
-    const resolvedChannelId = String(
-      channelId || message?.channelId || resolvedChannelIdFromChannel || session?.textChannelId || ""
-    ).trim();
-    const resolvedUserId = String(requestedByUserId || message?.author?.id || "").trim() || null;
-    const resolvedSettings = settings || session?.settingsSnapshot || this.store.getSettings();
-    const normalizedRequestText = normalizeInlineText(requestText || message?.content || "", 220) || null;
-
-    if (!session) {
-      await this.sendOperationalMessage({
-        channel: resolvedChannel,
-        settings: resolvedSettings,
-        guildId: resolvedGuildId,
-        channelId: resolvedChannelId || null,
-        userId: resolvedUserId || null,
-        messageId: message?.id || null,
-        event: "voice_music_request",
-        reason: "not_in_voice",
-        details: {
-          source: String(source || "text_voice_intent"),
-          requestText: normalizedRequestText
-        },
-        mustNotify
-      });
-      return true;
-    }
-
-    const music = this.ensureSessionMusicState(session);
-    const wasActive = Boolean(music?.active);
-    const playerWasPlaying = Boolean(this.musicPlayer?.isPlaying?.());
-    const playerWasPaused = Boolean(this.musicPlayer?.isPaused?.());
-    const playerWasActive = playerWasPlaying || playerWasPaused;
-
-    if (this.musicPlayer) {
-      this.musicPlayer.stop();
-    }
-
-    const playbackResult = this.musicPlayback?.isConfigured?.()
-      ? await this.musicPlayback.stopPlayback()
-      : {
-        ok: false,
-        provider: this.musicPlayback?.provider || "none",
-        reason: "music_provider_unconfigured",
-        message: "music provider not configured",
-        status: 0,
-        track: null,
-        query: null
-      };
-    const usingDiscordPlayer =
-      String(music?.provider || "")
-        .trim()
-        .toLowerCase() === "discord" || playerWasActive;
-    const stopSucceeded = Boolean(playbackResult.ok) || !wasActive || usingDiscordPlayer;
-    const resolvedProvider = usingDiscordPlayer
-      ? "discord"
-      : playbackResult.provider || this.musicPlayback?.provider || "none";
-    const stopResultReason =
-      stopSucceeded && !playbackResult.ok
-        ? usingDiscordPlayer
-          ? "discord_player_stopped"
-          : "already_stopped"
-        : playbackResult.reason || null;
-    if (music) {
-      music.active = false;
-      music.stoppedAt = Date.now();
-      if (!music.provider) {
-        music.provider = resolvedProvider || null;
-      }
-      music.source = String(source || "text_voice_intent");
-      music.lastRequestedByUserId = resolvedUserId || music.lastRequestedByUserId || null;
-      music.lastRequestText = normalizedRequestText;
-      music.lastCommandAt = Date.now();
-      music.lastCommandReason = String(reason || "nl_stop_music");
-      this.clearMusicDisambiguationState(session);
-    }
-    if (clearQueue) {
-      this.resetToolMusicQueueState(session);
-    }
-
-    // No-op: subprocess manages its own audio pipeline after music stop.
-
-    this.store.logAction({
-      kind: stopSucceeded ? "voice_runtime" : "voice_error",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: resolvedUserId || this.client.user?.id || null,
-      content: stopSucceeded ? "voice_music_stopped" : "voice_music_stop_failed",
-      metadata: {
-        sessionId: session.id,
-        provider: resolvedProvider,
-        source: String(source || "text_voice_intent"),
-        reason: String(reason || "nl_stop_music"),
-        clearedQueue: Boolean(clearQueue),
-        stopResultReason,
-        status: Number(playbackResult.status || 0),
-        error: stopSucceeded ? null : playbackResult.message || null,
-        previouslyActive: wasActive,
-        requestText: normalizedRequestText
-      }
+    return await requestStopMusicRuntime(this, {
+      message,
+      guildId,
+      channel,
+      channelId,
+      requestedByUserId,
+      settings,
+      reason,
+      source,
+      requestText,
+      clearQueue,
+      mustNotify
     });
-
-    // When a voice tool triggers stop on already-idle music, suppress the
-    // operational text-channel message entirely — the voice AI already
-    // responds vocally and a text message like "nothing was playing" breaks
-    // continuity.
-    const suppressOperationalMessage =
-      !wasActive && String(source || "") === "voice_tool_call";
-
-    if (!suppressOperationalMessage) {
-      await this.sendOperationalMessage({
-        channel: resolvedChannel,
-        settings: resolvedSettings,
-        guildId: resolvedGuildId,
-        channelId: resolvedChannelId || session.textChannelId || null,
-        userId: resolvedUserId || null,
-        messageId: message?.id || null,
-        event: "voice_music_request",
-        reason: stopSucceeded ? (wasActive ? "stopped" : "already_stopped") : playbackResult.reason || "music_stop_failed",
-        details: {
-          source: String(source || "text_voice_intent"),
-          clearedQueue: Boolean(clearQueue),
-          provider: resolvedProvider,
-          stopResultReason,
-          status: Number(playbackResult.status || 0),
-          error: stopSucceeded ? null : playbackResult.message || null,
-          previouslyActive: wasActive,
-          requestText: normalizedRequestText
-        },
-        mustNotify
-      });
-    }
-    return true;
   }
 
   async requestPauseMusic({
@@ -2408,139 +1658,27 @@ export class VoiceSessionManager {
     requestText?: string;
     mustNotify?: boolean;
   } = {}) {
-    const resolvedGuildId = String(guildId || message?.guild?.id || message?.guildId || "").trim();
-    if (!resolvedGuildId) return false;
-    const session = this.sessions.get(resolvedGuildId);
-    const resolvedChannel = channel || message?.channel || null;
-    const resolvedChannelIdFromChannel =
-      resolvedChannel && typeof resolvedChannel === "object" && "id" in resolvedChannel
-        ? String((resolvedChannel as { id?: string | null }).id || "").trim()
-        : "";
-    const resolvedChannelId = String(
-      channelId || message?.channelId || resolvedChannelIdFromChannel || session?.textChannelId || ""
-    ).trim();
-    const resolvedUserId = String(requestedByUserId || message?.author?.id || "").trim() || null;
-    const resolvedSettings = settings || session?.settingsSnapshot || this.store.getSettings();
-    const normalizedRequestText = normalizeInlineText(requestText || message?.content || "", 220) || null;
-
-    if (!session) {
-      await this.sendOperationalMessage({
-        channel: resolvedChannel,
-        settings: resolvedSettings,
-        guildId: resolvedGuildId,
-        channelId: resolvedChannelId || null,
-        userId: resolvedUserId || null,
-        messageId: message?.id || null,
-        event: "voice_music_request",
-        reason: "not_in_voice",
-        details: {
-          source: String(source || "text_voice_intent"),
-          requestText: normalizedRequestText
-        },
-        mustNotify
-      });
-      return true;
-    }
-
-    const music = this.ensureSessionMusicState(session);
-    const wasPlaying = Boolean(this.musicPlayer?.isPlaying?.());
-    const wasPaused = Boolean(this.musicPlayer?.isPaused?.());
-    if (wasPlaying) {
-      this.musicPlayer.pause();
-    }
-    const paused = wasPlaying || wasPaused;
-    if (!paused) {
-      return await this.requestStopMusic({
-        message,
-        guildId: resolvedGuildId,
-        channel: resolvedChannel,
-        channelId: resolvedChannelId || session.textChannelId || null,
-        requestedByUserId: resolvedUserId,
-        settings: resolvedSettings,
-        reason: String(reason || "nl_pause_music"),
-        source: String(source || "text_voice_intent"),
-        requestText: normalizedRequestText || "",
-        mustNotify
-      });
-    }
-
-    if (music) {
-      if (!music.provider) {
-        music.provider = "discord";
-      }
-      // Mark inactive so the session unlocks — bot can converse while
-      // music is paused.  Resume will re-activate.
-      music.active = false;
-      music.source = String(source || "text_voice_intent");
-      music.lastRequestedByUserId = resolvedUserId || music.lastRequestedByUserId || null;
-      music.lastRequestText = normalizedRequestText;
-      music.lastCommandAt = Date.now();
-      music.lastCommandReason = String(reason || "nl_pause_music");
-    }
-
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: resolvedUserId || this.client.user?.id || null,
-      content: "voice_music_paused",
-      metadata: {
-        sessionId: session.id,
-        provider: music?.provider || "discord",
-        source: String(source || "text_voice_intent"),
-        reason: String(reason || "nl_pause_music"),
-        requestText: normalizedRequestText
-      }
-    });
-
-    await this.sendOperationalMessage({
-      channel: resolvedChannel,
-      settings: resolvedSettings,
-      guildId: resolvedGuildId,
-      channelId: resolvedChannelId || session.textChannelId || null,
-      userId: resolvedUserId || null,
-      messageId: message?.id || null,
-      event: "voice_music_request",
-      reason: "paused",
-      details: {
-        provider: music?.provider || "discord",
-        source: String(source || "text_voice_intent"),
-        requestText: normalizedRequestText
-      },
+    return await requestPauseMusicRuntime(this, {
+      message,
+      guildId,
+      channel,
+      channelId,
+      requestedByUserId,
+      settings,
+      reason,
+      source,
+      requestText,
       mustNotify
     });
-    return true;
   }
 
   async maybeHandleMusicTextSelectionRequest({
     message = null,
     settings = null
   }: MusicTextRequestPayload = {}) {
-    if (!message?.guild) return false;
-    const guildId = String(message.guild.id || message.guildId || "").trim();
-    if (!guildId) return false;
-    const session = this.sessions.get(guildId);
-    if (!session) return false;
-
-    const disambiguation = this.getMusicDisambiguationPromptContext(session);
-    if (!disambiguation?.active || !Array.isArray(disambiguation.options) || !disambiguation.options.length) {
-      return false;
-    }
-
-    const text = normalizeInlineText(message?.content || "", STT_TRANSCRIPT_MAX_CHARS);
-    if (!text) return false;
-    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    return await this.maybeHandlePendingMusicDisambiguationTurn({
-      session,
-      settings: resolvedSettings,
-      userId: message.author?.id || null,
-      transcript: text,
-      reason: "text_music_disambiguation_selection",
-      source: "text_disambiguation_failsafe",
-      channel: message.channel || null,
-      channelId: message.channelId || session.textChannelId || null,
-      messageId: message.id || null,
-      mustNotify: true
+    return await maybeHandleMusicTextSelectionRequestRuntime(this, {
+      message,
+      settings
     });
   }
 
@@ -2791,32 +1929,10 @@ export class VoiceSessionManager {
     message = null,
     settings = null
   }: MusicTextRequestPayload = {}) {
-    if (!message?.guild) return false;
-    const guildId = String(message.guild.id || message.guildId || "").trim();
-    if (!guildId) return false;
-    const session = this.sessions.get(guildId);
-    if (!session || !this.isMusicPlaybackActive(session)) return false;
-
-    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    const text = normalizeInlineText(message?.content || "", STT_TRANSCRIPT_MAX_CHARS);
-    if (!text) return false;
-
-    const hasMusicStopCue = this.isLikelyMusicStopPhrase({
-      transcript: text,
-      settings: resolvedSettings
-    });
-    if (!hasMusicStopCue) return false;
-
-    await this.requestStopMusic({
+    return await maybeHandleMusicTextStopRequestRuntime(this, {
       message,
-      settings: resolvedSettings,
-      reason: "text_music_stop_failsafe",
-      source: "text_failsafe",
-      requestText: text,
-      clearQueue: true,
-      mustNotify: true
+      settings
     });
-    return true;
   }
 
   async evaluateMusicStopIntentFromTranscript({
@@ -2826,107 +1942,13 @@ export class VoiceSessionManager {
     transcript = "",
     source = "voice_music_turn"
   }) {
-    const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    const candidate = this.isLikelyMusicStopPhrase({
-      transcript: normalizedTranscript,
-      settings
+    return await evaluateMusicStopIntentFromTranscriptRuntime(this, {
+      session,
+      settings,
+      userId,
+      transcript,
+      source
     });
-    if (!candidate) {
-      return {
-        shouldStop: false,
-        reason: "no_stop_cue",
-        llmProvider: null,
-        llmModel: null,
-        llmResponse: null,
-        error: null
-      };
-    }
-
-    if (!this.llm?.generate) {
-      return {
-        shouldStop: true,
-        reason: "heuristic_stop_without_llm",
-        llmProvider: null,
-        llmModel: null,
-        llmResponse: null,
-        error: null
-      };
-    }
-
-    const replyDecisionLlm = settings?.voice?.replyDecisionLlm || {};
-    const llmProvider = normalizeVoiceReplyDecisionProvider(replyDecisionLlm?.provider);
-    const llmModel = String(replyDecisionLlm?.model || defaultVoiceReplyDecisionModel(llmProvider))
-      .trim()
-      .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
-    const decisionSettings = {
-      ...settings,
-      llm: {
-        ...(settings?.llm || {}),
-        provider: llmProvider,
-        model: llmModel,
-        temperature: 0,
-        maxOutputTokens: resolveVoiceReplyDecisionMaxOutputTokens(llmProvider, llmModel),
-        reasoningEffort: String(replyDecisionLlm?.reasoningEffort || "minimal").trim().toLowerCase() || "minimal"
-      }
-    };
-
-    const systemPrompt = [
-      "You are a strict classifier for voice-chat music controls.",
-      "Context: music playback is currently active.",
-      "Decide if the speaker is instructing the bot to stop or pause the music right now.",
-      "Output exactly YES or NO.",
-      "Answer YES for direct stop/pause commands like 'hey bot stop', 'stop music', 'pause', 'stop playing'.",
-      "Answer NO when the speaker is not asking the bot to stop music."
-    ].join("\n");
-    const userPrompt = [
-      `Bot name: ${getPromptBotName(settings)}`,
-      `Transcript: "${normalizedTranscript}"`
-    ].join("\n");
-
-    try {
-      const generation = await this.llm.generate({
-        settings: decisionSettings,
-        systemPrompt,
-        userPrompt,
-        contextMessages: [],
-        trace: {
-          guildId: session?.guildId || null,
-          channelId: session?.textChannelId || null,
-          userId: userId || null,
-          source: "voice_music_stop_classifier",
-          event: String(source || "voice_music_turn")
-        }
-      });
-      const llmResponse = String(generation?.text || "").trim();
-      const parsed = parseVoiceDecisionContract(llmResponse);
-      if (parsed.confident) {
-        return {
-          shouldStop: Boolean(parsed.allow),
-          reason: parsed.allow ? "llm_yes" : "llm_no",
-          llmProvider: generation?.provider || llmProvider,
-          llmModel: generation?.model || llmModel,
-          llmResponse,
-          error: null
-        };
-      }
-      return {
-        shouldStop: true,
-        reason: "llm_contract_violation_fallback_yes",
-        llmProvider: generation?.provider || llmProvider,
-        llmModel: generation?.model || llmModel,
-        llmResponse,
-        error: null
-      };
-    } catch (error) {
-      return {
-        shouldStop: true,
-        reason: "llm_error_fallback_yes",
-        llmProvider,
-        llmModel,
-        llmResponse: null,
-        error: String(error?.message || error)
-      };
-    }
   }
 
   async maybeHandleMusicPlaybackTurn({
@@ -2937,154 +1959,14 @@ export class VoiceSessionManager {
     captureReason = "stream_end",
     source = "voice_turn"
   }) {
-    if (!session || session.ending) return false;
-    if (!this.isMusicPlaybackActive(session)) return false;
-    if (!pcmBuffer?.length) return true;
-
-    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    if (!resolvedSettings?.voice?.asrDuringMusic) {
-      return true; // music active but ASR during music disabled — swallow turn silently
-    }
-
-    if (!this.llm?.transcribeAudio) {
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId,
-        content: "voice_music_turn_ignored_no_asr",
-        metadata: {
-          sessionId: session.id,
-          source: String(source || "voice_turn"),
-          captureReason: String(captureReason || "stream_end")
-        }
-      });
-      return true;
-    }
-
-    const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
-    const sampleRateHz = source === "stt_pipeline" ? 24000 : Number(session.realtimeInputSampleRateHz) || 24000;
-    const preferredModel = source === "stt_pipeline"
-      ? settings?.voice?.sttPipeline?.transcriptionModel
-      : settings?.voice?.openaiRealtime?.inputTranscriptionModel || settings?.voice?.sttPipeline?.transcriptionModel;
-    const primaryModel = String(preferredModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
-    const fallbackModel = primaryModel === "gpt-4o-mini-transcribe" ? "whisper-1" : "";
-
-    let transcript = await this.transcribePcmTurn({
+    return await maybeHandleMusicPlaybackTurnRuntime(this, {
       session,
+      settings,
       userId,
       pcmBuffer,
-      model: primaryModel,
-      sampleRateHz,
       captureReason,
-      traceSource: `voice_music_stop_${String(source || "voice_turn")}`,
-      errorPrefix: "voice_music_transcription_failed",
-      emptyTranscriptRuntimeEvent: "voice_music_transcription_empty",
-      emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
-      asrLanguage: asrLanguageGuidance.language,
-      asrPrompt: asrLanguageGuidance.prompt
+      source
     });
-
-    if (!transcript && fallbackModel && fallbackModel !== primaryModel) {
-      transcript = await this.transcribePcmTurn({
-        session,
-        userId,
-        pcmBuffer,
-        model: fallbackModel,
-        sampleRateHz,
-        captureReason,
-        traceSource: `voice_music_stop_${String(source || "voice_turn")}_fallback`,
-        errorPrefix: "voice_music_transcription_fallback_failed",
-        emptyTranscriptRuntimeEvent: "voice_music_transcription_empty",
-        emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
-        suppressEmptyTranscriptLogs: true,
-        asrLanguage: asrLanguageGuidance.language,
-        asrPrompt: asrLanguageGuidance.prompt
-      });
-    }
-
-    const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    if (!normalizedTranscript) {
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId,
-        content: "voice_music_turn_ignored_empty_transcript",
-        metadata: {
-          sessionId: session.id,
-          source: String(source || "voice_turn"),
-          captureReason: String(captureReason || "stream_end"),
-          primaryModel,
-          fallbackModel: fallbackModel || null
-        }
-      });
-      return true;
-    }
-    const directAddressedToBot = isVoiceTurnAddressedToBot(normalizedTranscript, resolvedSettings);
-    const disambiguationResolutionTurn = this.isMusicDisambiguationResolutionTurn(
-      session,
-      userId,
-      normalizedTranscript
-    );
-    const handledPendingDisambiguation = await this.maybeHandlePendingMusicDisambiguationTurn({
-      session,
-      settings: resolvedSettings,
-      userId,
-      transcript: normalizedTranscript,
-      source: `voice_${String(source || "voice_turn")}`,
-      channelId: session.textChannelId || null,
-      mustNotify: false
-    });
-    if (handledPendingDisambiguation) {
-      return true;
-    }
-
-    // Heuristic-only stop detection — no LLM round-trip.
-    // NOTE: isLikelyMusicStopPhrase uses English-only regex patterns (EN_MUSIC_STOP_VERB_RE,
-    // EN_MUSIC_CUE_RE). Supporting other languages requires a dedicated locale-aware filter function.
-    const shouldStop = this.isLikelyMusicStopPhrase({
-      transcript: normalizedTranscript,
-      settings: resolvedSettings
-    });
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId,
-      content: "voice_music_stop_check",
-      metadata: {
-        sessionId: session.id,
-        source: String(source || "voice_turn"),
-        captureReason: String(captureReason || "stream_end"),
-        transcript: normalizedTranscript,
-        shouldStop,
-        decisionReason: shouldStop ? "heuristic_stop" : "no_stop_cue"
-      }
-    });
-
-    if (!shouldStop) {
-      // During command-only playback mode, keep a short speaker-locked
-      // follow-up window so actual disambiguation replies like "the second one" do not
-      // require the wake word again.
-      if (directAddressedToBot || disambiguationResolutionTurn) {
-        return false;
-      }
-      return true;
-    }
-
-    await this.requestStopMusic({
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      requestedByUserId: userId,
-      settings: resolvedSettings,
-      reason: "voice_music_stop_phrase",
-      source: `voice_${String(source || "voice_turn")}`,
-      requestText: normalizedTranscript,
-      clearQueue: true,
-      mustNotify: false
-    });
-    return true;
   }
 
   async requestWatchStream({ message, settings, targetUserId = null }) {
@@ -9381,18 +8263,9 @@ export class VoiceSessionManager {
   resolveRealtimeReplyStrategy({ session, settings = null }) {
     if (!session || !isRealtimeMode(session.mode)) return "brain";
     const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    // Prefer new replyPath setting, fall back to legacy realtimeReplyStrategy
     const replyPath = String(resolvedSettings?.voice?.replyPath || "").trim().toLowerCase();
     if (replyPath === "native") return "native";
-    if (replyPath === "bridge" || replyPath === "brain") return "brain";
-    const configuredStrategy = String(resolvedSettings?.voice?.realtimeReplyStrategy || "")
-      .trim()
-      .toLowerCase();
-    if (configuredStrategy === "native") {
-      return "native";
-    }
-    const brainProvider = resolveBrainProvider(resolvedSettings);
-    return brainProvider && brainProvider !== "native" ? "brain" : "native";
+    return "brain";
   }
 
   shouldUseNativeRealtimeReply({ session, settings = null }) {
@@ -11068,63 +9941,12 @@ export class VoiceSessionManager {
     namespace?: string;
     authorSpeakerId?: string | null;
   } = {}) {
-    const normalizedNamespace = normalizeInlineText(namespace, 120);
-    const normalizedAuthorSpeakerId = normalizeInlineText(authorSpeakerId, 80) || null;
-    if (normalizedNamespace && MEMORY_NAMESPACE_USER_RE.test(normalizedNamespace)) {
-      const userMatch = normalizedNamespace.match(MEMORY_NAMESPACE_USER_RE);
-      const namespaceUserId = normalizeInlineText(userMatch?.[1], 80);
-      if (!namespaceUserId) {
-        return {
-          ok: false,
-          reason: "invalid_user_namespace"
-        };
-      }
-      if (normalizedAuthorSpeakerId && normalizedAuthorSpeakerId !== namespaceUserId) {
-        return {
-          ok: false,
-          reason: "user_namespace_mismatch"
-        };
-      }
-      return {
-        ok: true,
-        namespace: `user:${namespaceUserId}`,
-        guildId: String(session?.guildId || "").trim(),
-        subject: namespaceUserId,
-        factTypeDefault: "profile"
-      };
-    }
-
-    if (normalizedNamespace && MEMORY_NAMESPACE_GUILD_RE.test(normalizedNamespace)) {
-      const guildMatch = normalizedNamespace.match(MEMORY_NAMESPACE_GUILD_RE);
-      const namespaceGuildId = normalizeInlineText(guildMatch?.[1], 80);
-      if (!namespaceGuildId) {
-        return {
-          ok: false,
-          reason: "invalid_guild_namespace"
-        };
-      }
-      if (namespaceGuildId !== String(session?.guildId || "").trim()) {
-        return {
-          ok: false,
-          reason: "guild_namespace_mismatch"
-        };
-      }
-      return {
-        ok: true,
-        namespace: `guild:${namespaceGuildId}`,
-        guildId: namespaceGuildId,
-        subject: "lore",
-        factTypeDefault: "general"
-      };
-    }
-
-    return {
-      ok: true,
-      namespace: `guild:${String(session?.guildId || "").trim()}`,
+    void authorSpeakerId;
+    return resolveMemoryToolNamespaceScope({
       guildId: String(session?.guildId || "").trim(),
-      subject: "lore",
-      factTypeDefault: "general"
-    };
+      actorUserId: session?.lastOpenAiToolCallerUserId || null,
+      namespace
+    });
   }
 
   async playVoiceQueueTrackByIndex({ session, settings, index }) {
@@ -11320,7 +10142,7 @@ export class VoiceSessionManager {
     const streamWatchBrainContext = this.getStreamWatchBrainContextForPrompt(session, settings);
     const hasScreenFrameContext = Array.isArray(streamWatchBrainContext?.notes) && streamWatchBrainContext.notes.length > 0;
     const hasActiveScreenFrameContext = hasScreenFrameContext && Boolean(streamWatchBrainContext?.active);
-    const hasRecentScreenFrameMemory = hasScreenFrameContext && !Boolean(streamWatchBrainContext?.active);
+    const hasRecentScreenFrameMemory = hasScreenFrameContext && !streamWatchBrainContext?.active;
     const screenShareCapability = this.getVoiceScreenShareCapability({
       settings,
       guildId: session?.guildId || null,
@@ -13869,111 +12691,7 @@ export class VoiceSessionManager {
     interaction: ChatInputCommandInteraction,
     settings: Record<string, unknown> | null
   ) {
-    const command = interaction.commandName;
-    const guild = interaction.guild;
-    const user = interaction.user;
-
-    if (!guild) {
-      await interaction.reply({ content: "This command must be used in a server.", ephemeral: true });
-      return;
-    }
-
-    const guildId = guild.id;
-    const session = this.sessions.get(guildId);
-
-    if (command === "play") {
-      const query = interaction.options.getString("query", true);
-      await interaction.deferReply();
-      await this.requestPlayMusic({
-        guildId,
-        channel: interaction.channel,
-        channelId: interaction.channelId,
-        requestedByUserId: user.id,
-        settings,
-        query,
-        reason: "slash_command_play",
-        source: "slash_command",
-        mustNotify: false
-      });
-
-      const updatedSession = this.sessions.get(guildId);
-      if (updatedSession) {
-        const disambiguation = this.getMusicDisambiguationPromptContext(updatedSession);
-        if (disambiguation?.active && disambiguation.options?.length > 0) {
-          const optionsList = disambiguation.options
-            .map((opt, i) => `${i + 1}. **${opt.title}** - ${opt.artist || "Unknown"}`)
-            .join("\n");
-          await interaction.editReply(
-            `Multiple results found for "${disambiguation.query}". Reply with the number to select:\n${optionsList}`
-          );
-          return;
-        }
-        const music = this.ensureSessionMusicState(updatedSession);
-        if (music?.active) {
-          const nowPlaying = String(music.lastTrackTitle || "").trim() || query;
-          await interaction.editReply(`Playing: ${nowPlaying}`);
-          return;
-        }
-      }
-
-      await interaction.editReply("Could not start music playback.");
-    } else if (command === "stop") {
-      if (!session || !this.isMusicPlaybackActive(session)) {
-        await interaction.reply({ content: "No music is currently playing.", ephemeral: true });
-        return;
-      }
-      await interaction.deferReply();
-      await this.requestStopMusic({
-        guildId,
-        channel: interaction.channel,
-        channelId: interaction.channelId,
-        requestedByUserId: user.id,
-        settings,
-        reason: "slash_command_stop",
-        source: "slash_command",
-        clearQueue: true,
-        mustNotify: false
-      });
-      await interaction.editReply("Music stopped.");
-    } else if (command === "pause") {
-      if (!session || !this.isMusicPlaybackActive(session)) {
-        await interaction.reply({ content: "No music is currently playing.", ephemeral: true });
-        return;
-      }
-      if (this.musicPlayer?.isPaused()) {
-        await interaction.reply({ content: "Music is already paused.", ephemeral: true });
-        return;
-      }
-      await interaction.deferReply();
-      await this.requestPauseMusic({
-        guildId,
-        channel: interaction.channel,
-        channelId: interaction.channelId,
-        requestedByUserId: user.id,
-        settings,
-        reason: "slash_command_pause",
-        source: "slash_command",
-        mustNotify: false
-      });
-      await interaction.editReply("Music paused.");
-    } else if (command === "resume") {
-      if (!session || !this.isMusicPlaybackActive(session)) {
-        await interaction.reply({ content: "No music is currently playing.", ephemeral: true });
-        return;
-      }
-      if (!this.musicPlayer?.isPaused()) {
-        await interaction.reply({ content: "Music is not paused.", ephemeral: true });
-        return;
-      }
-      this.musicPlayer?.resume();
-      await interaction.reply("Music resumed.");
-    } else if (command === "skip") {
-      if (!session || !this.isMusicPlaybackActive(session)) {
-        await interaction.reply({ content: "No music is currently playing.", ephemeral: true });
-        return;
-      }
-      await interaction.reply("Skip is not implemented yet.");
-    }
+    return await handleMusicSlashCommandRuntime(this, interaction, settings);
   }
 
   async handleClankSlashCommand(

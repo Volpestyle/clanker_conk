@@ -1,6 +1,9 @@
 // Extracted Tool Call Methods
 import { runBrowseAgent } from "../agents/browseAgent.ts";
-import { isInstructionLikeFactText } from "../memory/memoryHelpers.ts";
+import {
+  executeSharedMemoryToolSearch,
+  executeSharedMemoryToolWrite
+} from "../memory/memoryToolRuntime.ts";
 import { clamp } from "../utils.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
 import type {
@@ -109,7 +112,7 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
     {
       toolType: "function",
       name: "memory_search",
-      description: "Search durable memory facts by semantic relevance.",
+      description: "Search durable memory facts. Use `namespace` = `speaker`, `self`, or `guild`.",
       parameters: {
         type: "object",
         properties: {
@@ -134,7 +137,7 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
     {
       toolType: "function",
       name: "memory_write",
-      description: "Store durable memory facts with dedupe and safety limits. Save only genuine long-lived facts, never insults, requests, or future-behavior rules.",
+      description: "Store durable memory facts with dedupe and safety limits. Use `namespace` = `speaker`, `self`, or `guild`. Save only genuine long-lived facts, never insults, requests, or future-behavior rules.",
       parameters: {
         type: "object",
         properties: {
@@ -144,21 +147,13 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
             items: {
               type: "object",
               properties: {
-                text: { type: "string" },
-                tags: { type: "array", items: { type: "string" } },
-                metadata: {
-                  type: "object",
-                  properties: {
-                    authorSpeakerId: { type: "string" }
-                  },
-                  additionalProperties: true
-                }
+                text: { type: "string" }
               },
               required: ["text"],
-              additionalProperties: true
+              additionalProperties: false
             },
             minItems: 1,
-            maxItems: 8
+            maxItems: 5
           },
           dedupe: {
             type: "object",
@@ -717,71 +712,27 @@ export async function executeVoiceMemorySearchTool(manager: any, {
       error: "memory_unavailable"
     };
   }
-
-  const query = normalizeInlineText(args?.query, 240);
-  if (!query) {
-    return {
-      ok: false,
-      matches: [],
-      error: "query_required"
-    };
-  }
-  const topK = clamp(Math.floor(Number(args?.top_k || 6)), 1, 20);
-  const scope = manager.resolveVoiceMemoryNamespaceScope({
-    session,
-    namespace: args?.namespace
-  });
-  if (!scope?.ok) {
-    return {
-      ok: false,
-      matches: [],
-      error: String(scope?.reason || "invalid_namespace")
-    };
-  }
-  const tags = Array.isArray(args?.filters?.tags)
-    ? args.filters.tags.map((entry) => normalizeInlineText(entry, 40)).filter(Boolean)
-    : [];
-
-  const rows = await manager.memory.searchDurableFacts({
-    guildId: scope.guildId,
-    channelId: session.textChannelId,
-    queryText: query,
+  return executeSharedMemoryToolSearch({
+    runtime: {
+      memory: manager.memory
+    },
     settings,
+    guildId: String(session?.guildId || "").trim(),
+    channelId: session?.textChannelId || null,
+    actorUserId: session?.lastOpenAiToolCallerUserId || null,
+    namespace: args?.namespace,
+    queryText: normalizeInlineText(args?.query, 240),
     trace: {
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: session.lastOpenAiToolCallerUserId || null,
+      guildId: session?.guildId || null,
+      channelId: session?.textChannelId || null,
+      userId: session?.lastOpenAiToolCallerUserId || null,
       source: "voice_realtime_tool_memory_search"
     },
-    limit: clamp(topK * 2, 1, 40)
+    limit: clamp(Math.floor(Number(args?.top_k || 6)), 1, 20),
+    tags: Array.isArray(args?.filters?.tags)
+      ? args.filters.tags.map((entry) => normalizeInlineText(entry, 40)).filter(Boolean)
+      : []
   });
-
-  const filtered = (Array.isArray(rows) ? rows : [])
-    .filter((row) => {
-      if (scope.subject && String(row?.subject || "").trim() !== scope.subject) return false;
-      if (tags.length > 0 && !tags.includes(String(row?.fact_type || "").trim())) return false;
-      return true;
-    })
-    .slice(0, topK)
-    .map((row) => ({
-      id: String(row?.id || ""),
-      text: normalizeInlineText(row?.fact, 420) || "",
-      score: Number.isFinite(Number(row?.score))
-        ? Number(Number(row.score).toFixed(3))
-        : Number.isFinite(Number(row?.semanticScore))
-          ? Number(Number(row.semanticScore).toFixed(3))
-          : 0,
-      metadata: {
-        createdAt: String(row?.created_at || ""),
-        tags: [String(row?.fact_type || "").trim()].filter(Boolean)
-      }
-    }));
-
-  return {
-    ok: true,
-    namespace: scope.namespace,
-    matches: filtered
-  };
 }
 
 export async function executeVoiceMemoryWriteTool(manager: any, {
@@ -789,7 +740,11 @@ export async function executeVoiceMemoryWriteTool(manager: any, {
   settings,
   args
 }) {
-  if (!manager.memory || typeof manager.memory.ensureFactVector !== "function") {
+  if (
+    !manager.memory ||
+    typeof manager.memory.searchDurableFacts !== "function" ||
+    typeof manager.memory.rememberDirectiveLineDetailed !== "function"
+  ) {
     return {
       ok: false,
       written: [],
@@ -822,143 +777,30 @@ export async function executeVoiceMemoryWriteTool(manager: any, {
     };
   }
 
-  const dedupeThreshold = clamp(Number(args?.dedupe?.threshold), 0, 1) || 0.9;
-  const sourceItems = Array.isArray(args?.items) ? args.items : [];
-  const items = sourceItems
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") return null;
-      const text = normalizeInlineText(entry.text, 360);
-      if (!text) return null;
-      const tags = Array.isArray(entry.tags)
-        ? entry.tags.map((tag) => normalizeInlineText(tag, 40)).filter(Boolean).slice(0, 6)
-        : [];
-      const authorSpeakerId = normalizeInlineText(entry?.metadata?.authorSpeakerId, 80) || null;
-      return {
-        text,
-        tags,
-        authorSpeakerId
-      };
-    })
-    .filter(Boolean)
-    .slice(0, 8);
-  if (!items.length) {
-    return {
-      ok: false,
-      written: [],
-      skipped: [],
-      error: "items_required"
-    };
-  }
-
-  const written = [];
-  const skipped = [];
-  let writesCommitted = 0;
-
-  for (const item of items) {
-    const scope = manager.resolveVoiceMemoryNamespaceScope({
-      session,
-      namespace: args?.namespace,
-      authorSpeakerId: item.authorSpeakerId
-    });
-    if (!scope?.ok) {
-      skipped.push({
-        text: item.text,
-        reason: String(scope?.reason || "invalid_namespace")
-      });
-      continue;
-    }
-    if (MEMORY_SENSITIVE_PATTERN_RE.test(item.text)) {
-      skipped.push({
-        text: item.text,
-        reason: "sensitive_content"
-      });
-      continue;
-    }
-    if (isInstructionLikeFactText(item.text)) {
-      skipped.push({
-        text: item.text,
-        reason: "instruction_like"
-      });
-      continue;
-    }
-
-    const potentialDuplicates = typeof manager.memory.searchDurableFacts === "function"
-      ? await manager.memory.searchDurableFacts({
-        guildId: scope.guildId,
-        channelId: session.textChannelId,
-        queryText: item.text,
-        settings,
-        trace: {
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: session.lastOpenAiToolCallerUserId || null,
-          source: "voice_realtime_tool_memory_dedupe"
-        },
-        limit: 8
-      })
-      : [];
-    const hasDuplicate = (Array.isArray(potentialDuplicates) ? potentialDuplicates : []).some((row) => {
-      if (scope.subject && String(row?.subject || "").trim() !== scope.subject) return false;
-      const score = Math.max(
-        Number.isFinite(Number(row?.score)) ? Number(row.score) : 0,
-        Number.isFinite(Number(row?.semanticScore)) ? Number(row.semanticScore) : 0
-      );
-      return score >= dedupeThreshold;
-    });
-    if (hasDuplicate) {
-      skipped.push({
-        text: item.text,
-        reason: "duplicate"
-      });
-      continue;
-    }
-
-    const sourceMessageId = `voice-tool-${session.id}-${Date.now()}-${written.length + skipped.length + 1}`;
-    const factType = item.tags[0] || scope.factTypeDefault || "general";
-    const inserted = manager.store.addMemoryFact({
-      guildId: scope.guildId,
-      channelId: session.textChannelId,
-      subject: scope.subject,
-      fact: item.text,
-      factType,
-      evidenceText: item.text,
-      sourceMessageId,
-      confidence: 0.8
-    });
-    if (!inserted) {
-      skipped.push({
-        text: item.text,
-        reason: "write_failed"
-      });
-      continue;
-    }
-
-    const factRow = manager.store.getMemoryFactBySubjectAndFact(scope.guildId, scope.subject, item.text);
-    if (factRow) {
-      await manager.memory.ensureFactVector({
-        factRow,
-        settings,
-        trace: {
-          guildId: scope.guildId,
-          channelId: session.textChannelId,
-          userId: session.lastOpenAiToolCallerUserId || null,
-          source: "voice_realtime_tool_memory_write"
-        }
-      });
-    }
-    written.push({
-      id: String(factRow?.id || sourceMessageId),
-      status: "inserted"
-    });
-    writesCommitted += 1;
-    if (writesCommitted >= remainingWriteCapacity) break;
-  }
-
-  if (written.length > 0 && typeof manager.memory.queueMemoryRefresh === "function") {
-    await manager.memory.queueMemoryRefresh();
-  }
-  if (written.length > 0) {
-    for (let i = 0; i < writesCommitted; i += 1) {
+  const result = await executeSharedMemoryToolWrite({
+    runtime: {
+      memory: manager.memory
+    },
+    settings,
+    guildId: String(session?.guildId || "").trim(),
+    channelId: session?.textChannelId || null,
+    actorUserId: session?.lastOpenAiToolCallerUserId || null,
+    namespace: args?.namespace,
+    items: Array.isArray(args?.items) ? args.items : [],
+    trace: {
+      guildId: session?.guildId || null,
+      channelId: session?.textChannelId || null,
+      userId: session?.lastOpenAiToolCallerUserId || null,
+      source: "voice_realtime_tool_memory_write"
+    },
+    sourceMessageIdPrefix: `voice-tool-${String(session?.id || "session")}`,
+    sourceText: "",
+    limit: remainingWriteCapacity,
+    dedupeThreshold: clamp(Number(args?.dedupe?.threshold), 0, 1) || 0.9,
+    sensitivePattern: MEMORY_SENSITIVE_PATTERN_RE
+  });
+  if (result.ok && result.written.length > 0) {
+    for (let i = 0; i < result.written.length; i += 1) {
       runtimeSession.memoryWriteWindow.push(now);
     }
     runtimeSession.memoryWriteWindow = runtimeSession.memoryWriteWindow
@@ -966,16 +808,7 @@ export async function executeVoiceMemoryWriteTool(manager: any, {
       .filter((value) => Number.isFinite(value) && now - value <= 60_000);
   }
 
-  return {
-    ok: true,
-    namespace: manager.resolveVoiceMemoryNamespaceScope({
-      session,
-      namespace: args?.namespace
-    })?.namespace || `guild:${String(session.guildId || "").trim()}`,
-    dedupeThreshold,
-    written,
-    skipped
-  };
+  return result;
 }
 
 export async function executeVoiceMusicSearchTool(manager: any, { session, args }) {

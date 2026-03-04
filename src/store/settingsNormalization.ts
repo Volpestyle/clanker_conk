@@ -15,15 +15,10 @@ import {
 import {
   DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT
 } from "../promptCore.ts";
-
-const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
-const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
-  "whisper-1",
-  "gpt-4o-transcribe-latest",
-  "gpt-4o-transcribe",
-  "gpt-4o-mini-transcribe-2025-12-15",
-  "gpt-4o-mini-transcribe"
-]);
+import {
+  OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
+  normalizeOpenAiRealtimeTranscriptionModel
+} from "../voice/realtimeProviderNormalization.ts";
 
 export const PERSONA_FLAVOR_MAX_CHARS = 2_000;
 
@@ -593,20 +588,12 @@ export function normalizeSettings(raw) {
       ? Boolean(merged.voice?.commandOnlyMode)
       : Boolean(defaultVoice.commandOnlyMode);
 
-  // replyPath: "native" | "bridge" | "brain" — migrate from realtimeReplyStrategy
   const rawReplyPath = String(merged.voice?.replyPath || "").trim().toLowerCase();
-  const rawStrategy = String(merged.voice?.realtimeReplyStrategy || "").trim().toLowerCase();
   const resolvedReplyPath =
     rawReplyPath === "native" || rawReplyPath === "bridge" || rawReplyPath === "brain"
       ? rawReplyPath
-      : rawStrategy === "native"
-        ? "native"
-        : rawStrategy === "brain"
-          ? "bridge"
-          : "bridge";
+      : "bridge";
   merged.voice.replyPath = resolvedReplyPath;
-  // Keep realtimeReplyStrategy in sync for backward compatibility
-  merged.voice.realtimeReplyStrategy = resolvedReplyPath === "native" ? "native" : "brain";
 
   merged.voice.thoughtEngine.enabled =
     merged.voice?.thoughtEngine?.enabled !== undefined
@@ -1266,13 +1253,6 @@ function normalizeOpenAiRealtimeAudioFormat(value) {
   const normalized = String(value || "").trim().toLowerCase();
   if (normalized === "audio/pcm") return "pcm16";
   return "pcm16";
-}
-
-function normalizeOpenAiRealtimeTranscriptionModel(value, fallback = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL) {
-  const normalized =
-    String(value || "").trim() || String(fallback || "").trim() || OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
-  if (OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS.has(normalized)) return normalized;
-  return OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
 }
 
 function normalizeHardLimitList(input, fallback = []) {

@@ -17,8 +17,8 @@ This spec defines an iterated Discord voice bot architecture that builds on the 
 
 ## 1. High-Level Architecture
 
-![Realtime Voice Agent v2 Architecture](diagrams/realtime-voice-agent-v2.png)
-<!-- source: docs/diagrams/realtime-voice-agent-v2.mmd -->
+![Realtime Voice Agent v2 Architecture](diagrams/realtime-voice-agent.png)
+<!-- source: docs/diagrams/realtime-voice-agent.mmd -->
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐

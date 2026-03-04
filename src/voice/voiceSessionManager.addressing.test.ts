@@ -1208,7 +1208,7 @@ test("reply decider blocks ambiguous realtime native turns when classifier is di
     settings: baseSettings({
       voice: {
         replyEagerness: 60,
-        realtimeReplyStrategy: "native",
+        replyPath: "native",
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -1278,7 +1278,7 @@ test("reply decider keeps direct-address fast-path when classifier is disabled i
     settings: baseSettings({
       voice: {
         replyEagerness: 60,
-        realtimeReplyStrategy: "native",
+        replyPath: "native",
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5",
@@ -3280,7 +3280,7 @@ test("runRealtimeTurn uses native realtime forwarding when strategy is native", 
     settingsSnapshot: baseSettings({
       voice: {
         replyEagerness: 60,
-        realtimeReplyStrategy: "native",
+        replyPath: "native",
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -3335,7 +3335,7 @@ test("runRealtimeTurn keeps native strategy when soundboard is enabled", async (
     settingsSnapshot: baseSettings({
       voice: {
         replyEagerness: 60,
-        realtimeReplyStrategy: "native",
+        replyPath: "native",
         soundboard: {
           enabled: true
         },
@@ -3510,7 +3510,7 @@ test("shouldUsePerUserTranscription follows strategy and setting", () => {
 
   const bridgeDisabledSettings = baseSettings({
     voice: {
-      realtimeReplyStrategy: "brain",
+      replyPath: "brain",
       openaiRealtime: {
         usePerUserAsrBridge: false
       }
@@ -3518,7 +3518,7 @@ test("shouldUsePerUserTranscription follows strategy and setting", () => {
   });
   const bridgeEnabledSettings = baseSettings({
     voice: {
-      realtimeReplyStrategy: "brain",
+      replyPath: "brain",
       openaiRealtime: {
         usePerUserAsrBridge: true
       }
@@ -3526,7 +3526,7 @@ test("shouldUsePerUserTranscription follows strategy and setting", () => {
   });
   const nativeSettings = baseSettings({
     voice: {
-      realtimeReplyStrategy: "native",
+      replyPath: "native",
       openaiRealtime: {
         usePerUserAsrBridge: true
       }
@@ -3534,7 +3534,7 @@ test("shouldUsePerUserTranscription follows strategy and setting", () => {
   });
   const fileWavSettings = baseSettings({
     voice: {
-      realtimeReplyStrategy: "brain",
+      replyPath: "brain",
       openaiRealtime: {
         transcriptionMethod: "file_wav",
         usePerUserAsrBridge: true
@@ -3574,7 +3574,7 @@ test("shouldUseSharedTranscription follows strategy and setting", () => {
 
   const bridgeDisabledSettings = baseSettings({
     voice: {
-      realtimeReplyStrategy: "brain",
+      replyPath: "brain",
       openaiRealtime: {
         usePerUserAsrBridge: false
       }
@@ -3582,7 +3582,7 @@ test("shouldUseSharedTranscription follows strategy and setting", () => {
   });
   const bridgeEnabledSettings = baseSettings({
     voice: {
-      realtimeReplyStrategy: "brain",
+      replyPath: "brain",
       openaiRealtime: {
         usePerUserAsrBridge: true
       }
@@ -3590,7 +3590,7 @@ test("shouldUseSharedTranscription follows strategy and setting", () => {
   });
   const nativeSettings = baseSettings({
     voice: {
-      realtimeReplyStrategy: "native",
+      replyPath: "native",
       openaiRealtime: {
         usePerUserAsrBridge: false
       }
@@ -3598,7 +3598,7 @@ test("shouldUseSharedTranscription follows strategy and setting", () => {
   });
   const fileWavSettings = baseSettings({
     voice: {
-      realtimeReplyStrategy: "brain",
+      replyPath: "brain",
       openaiRealtime: {
         transcriptionMethod: "file_wav",
         usePerUserAsrBridge: false
@@ -4790,7 +4790,7 @@ test("flushDeferredBotTurnOpenTurns forwards native realtime audio after one adm
     settingsSnapshot: baseSettings({
       voice: {
         replyEagerness: 60,
-        realtimeReplyStrategy: "native",
+        replyPath: "native",
         replyDecisionLlm: {
           provider: "anthropic",
           model: "claude-haiku-4-5"
@@ -5167,22 +5167,21 @@ test("handleOpenAiRealtimeFunctionCallEvent ignores duplicate completed call ids
 });
 
 test("executeVoiceMemoryWriteTool enforces write limit per fact across calls", async () => {
-  let addFactCalls = 0;
+  let memoryWriteCalls = 0;
   const manager = createManager({
     memory: {
       async searchDurableFacts() {
         return [];
       },
-      async ensureFactVector() {},
-      async queueMemoryRefresh() {}
+      async rememberDirectiveLineDetailed(payload) {
+        memoryWriteCalls += 1;
+        return {
+          ok: true,
+          reason: "added_new",
+          factText: String(payload?.line || "")
+        };
+      }
     }
-  });
-  manager.store.addMemoryFact = () => {
-    addFactCalls += 1;
-    return true;
-  };
-  manager.store.getMemoryFactBySubjectAndFact = (_guildId, _subject, fact) => ({
-    id: `fact-${String(fact || "").replace(/\s+/g, "-")}`
   });
 
   const now = Date.now();
@@ -5214,7 +5213,8 @@ test("executeVoiceMemoryWriteTool enforces write limit per fact across calls", a
   });
   assert.equal(firstResult?.ok, true);
   assert.equal(firstResult?.written?.length, 1);
-  assert.equal(addFactCalls, 1);
+  assert.equal(Boolean(firstResult?.written?.[0]?.text), true);
+  assert.equal(memoryWriteCalls, 1);
   assert.equal(Array.isArray(session.memoryWriteWindow), true);
   assert.equal(session.memoryWriteWindow.length, 5);
 
@@ -5235,20 +5235,21 @@ test("executeVoiceMemoryWriteTool enforces write limit per fact across calls", a
 });
 
 test("executeVoiceMemoryWriteTool rejects abusive future-behavior memory requests", async () => {
-  let addFactCalls = 0;
+  let memoryWriteCalls = 0;
   const manager = createManager({
     memory: {
       async searchDurableFacts() {
         return [];
       },
-      async ensureFactVector() {},
-      async queueMemoryRefresh() {}
+      async rememberDirectiveLineDetailed() {
+        memoryWriteCalls += 1;
+        return {
+          ok: true,
+          reason: "added_new"
+        };
+      }
     }
   });
-  manager.store.addMemoryFact = () => {
-    addFactCalls += 1;
-    return true;
-  };
 
   const session = {
     id: "session-memory-write-unsafe-1",
@@ -5277,5 +5278,5 @@ test("executeVoiceMemoryWriteTool rejects abusive future-behavior memory request
   assert.equal(result?.written?.length, 0);
   assert.equal(result?.skipped?.length, 1);
   assert.equal(result?.skipped?.[0]?.reason, "instruction_like");
-  assert.equal(addFactCalls, 0);
+  assert.equal(memoryWriteCalls, 0);
 });

@@ -5,7 +5,14 @@ import reactHooks from "eslint-plugin-react-hooks";
 
 export default tseslint.config(
   {
-    ignores: ["dashboard/dist/**", "node_modules/**", "memory/**", "data/**"],
+    ignores: [
+      "dashboard/dist/**",
+      "node_modules/**",
+      "memory/**",
+      "data/**",
+      "src/voice/rust_subprocess/target/**",
+      "src/voice/rust_subprocess/build_log.txt",
+    ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,

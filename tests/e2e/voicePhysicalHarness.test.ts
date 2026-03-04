@@ -1,4 +1,4 @@
-import { test, describe, beforeAll, afterAll, beforeEach, afterEach } from "bun:test";
+import { test, describe, beforeAll, afterAll, beforeEach } from "bun:test";
 import assert from "node:assert/strict";
 import { env } from "node:process";
 import {
@@ -28,6 +28,12 @@ function envNumber(name: string, defaultValue: number): number {
   if (!value) return defaultValue;
   const parsed = parseInt(value, 10);
   return Number.isFinite(parsed) ? parsed : defaultValue;
+}
+
+function getMessageContent(message: unknown): string {
+  if (!message || typeof message !== "object") return "";
+  const content = "content" in message ? message.content : "";
+  return typeof content === "string" ? content : "";
 }
 
 const DEFAULT_TIMEOUT_MS = 60_000;
@@ -143,7 +149,7 @@ describe("E2E: Voice Physical Layer", () => {
       const responseWaitMs = envNumber("E2E_RESPONSE_WAIT_MS", DEFAULT_RESPONSE_WAIT_MS);
 
       const response = await driver.waitForMessage(driver.config.systemBotUserId, responseWaitMs);
-      assert.ok((response as any).content.length > 0, "Expected a substantive text response from the system bot");
+      assert.ok(getMessageContent(response).length > 0, "Expected a substantive text response from the system bot");
     },
     DEFAULT_TIMEOUT_MS
   );
@@ -359,7 +365,7 @@ test("smoke: E2E harness validates physical voice layer", async () => {
         gcpProject: process.env.GCP_PROJECT || "",
         geminiApiKey: process.env.GEMINI_API_KEY || "",
         xaiApiKey: process.env.XAI_API_KEY || "",
-      } as any;
+      };
 
       const llm = new LLMService({ appConfig: mockAppConfig, store });
 

@@ -595,7 +595,7 @@ function buildHarnessSettings({
     voice: {
       enabled: true,
       mode: voiceMode,
-      realtimeReplyStrategy: "brain",
+      replyPath: "brain",
       replyEagerness: 65,
       generationLlm: {
         provider: actorProvider,

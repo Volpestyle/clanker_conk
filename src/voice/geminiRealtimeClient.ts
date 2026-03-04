@@ -11,8 +11,11 @@ import {
   safeJsonPreview,
   sendRealtimePayload
 } from "./realtimeClientCore.ts";
+import {
+  DEFAULT_GEMINI_BASE_URL,
+  normalizeGeminiBaseUrl
+} from "./realtimeProviderNormalization.ts";
 
-const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 const GEMINI_LIVE_PATH = "/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
 
 export class GeminiRealtimeClient extends EventEmitter {
@@ -517,22 +520,6 @@ function summarizeOutboundPayload(payload) {
     type,
     preview
   });
-}
-
-function normalizeGeminiBaseUrl(value) {
-  const raw = String(value || DEFAULT_GEMINI_BASE_URL).trim();
-  const fallback = DEFAULT_GEMINI_BASE_URL;
-  if (!raw) return fallback;
-
-  try {
-    const parsed = new URL(raw);
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return fallback;
-    }
-    return `${parsed.protocol}//${parsed.host}`;
-  } catch {
-    return fallback;
-  }
 }
 
 function ensureGeminiModelPrefix(model) {

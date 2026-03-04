@@ -886,7 +886,7 @@ test("bindSessionHandlers starts shared OpenAI ASR only for the first concurrent
         enabled: true,
         asrEnabled: true,
         brainProvider: "anthropic",
-        realtimeReplyStrategy: "brain",
+        replyPath: "brain",
         openaiRealtime: {
           usePerUserAsrBridge: false
         }
