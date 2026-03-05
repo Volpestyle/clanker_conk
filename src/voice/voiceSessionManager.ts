@@ -7636,6 +7636,9 @@ export class VoiceSessionManager {
         retryAfterMs: Number.isFinite(decision.retryAfterMs)
           ? Math.round(decision.retryAfterMs)
           : null,
+        classifierLatencyMs: Number.isFinite(decision.classifierLatencyMs)
+          ? Math.round(decision.classifierLatencyMs)
+          : null,
         error: decision.error || null
       }
     });
@@ -7643,8 +7646,7 @@ export class VoiceSessionManager {
     const useNativeRealtimeReply = this.shouldUseNativeRealtimeReply({ session, settings });
     if (!decision.allow) {
       if (
-        decision.reason === "bot_turn_open" ||
-        decision.reason === "awaiting_non_direct_silence_window"
+        decision.reason === "bot_turn_open"
       ) {
         this.queueDeferredBotTurnOpenTurn({
           session,
@@ -7955,8 +7957,7 @@ export class VoiceSessionManager {
     });
     if (!decision.allow) {
       if (
-        decision.reason === "bot_turn_open" ||
-        decision.reason === "awaiting_non_direct_silence_window"
+        decision.reason === "bot_turn_open"
       ) {
         this.queueDeferredBotTurnOpenTurn({
           session,
@@ -10080,8 +10081,7 @@ export class VoiceSessionManager {
     });
     if (!turnDecision.allow) {
       if (
-        turnDecision.reason === "bot_turn_open" ||
-        turnDecision.reason === "awaiting_non_direct_silence_window"
+        turnDecision.reason === "bot_turn_open"
       ) {
         this.queueDeferredBotTurnOpenTurn({
           session,

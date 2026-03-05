@@ -220,6 +220,8 @@ export function settingsToForm(settings) {
     voiceThoughtEngineMinSecondsBetweenThoughts:
       settings?.voice?.thoughtEngine?.minSecondsBetweenThoughts ??
       defaultVoiceThoughtEngine.minSecondsBetweenThoughts,
+    voiceReplyDecisionLlmEnabled:
+      settings?.voice?.replyDecisionLlm?.enabled ?? defaultVoice.replyDecisionLlm.enabled,
     voiceReplyDecisionLlmProvider:
       settings?.voice?.replyDecisionLlm?.provider ?? defaultVoice.replyDecisionLlm.provider,
     voiceReplyDecisionLlmModel:
@@ -520,6 +522,7 @@ export function formToSettingsPatch(form) {
         minSecondsBetweenThoughts: Number(form.voiceThoughtEngineMinSecondsBetweenThoughts)
       },
       replyDecisionLlm: {
+        enabled: Boolean(form.voiceReplyDecisionLlmEnabled),
         provider: String(form.voiceReplyDecisionLlmProvider || "").trim(),
         model: String(form.voiceReplyDecisionLlmModel || "").trim()
       },

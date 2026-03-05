@@ -13,12 +13,12 @@ import {
 } from "./voiceSessionHelpers.ts";
 import {
   VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS,
-  NON_DIRECT_REPLY_MIN_SILENCE_MS,
   RECENT_ENGAGEMENT_WINDOW_MS,
   VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
 } from "./voiceSessionManager.constants.ts";
 import {
-  isLowSignalVoiceFragment
+  normalizeVoiceReplyDecisionProvider,
+  defaultVoiceReplyDecisionModel
 } from "./voiceDecisionRuntime.ts";
 import { hasBotNameCue, DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD } from "../directAddressConfidence.ts";
 import type {
@@ -407,27 +407,6 @@ export async function evaluateVoiceReplyDecision(manager: any, {
     };
   }
 
-  const lowSignalFragment = isLowSignalVoiceFragment(normalizedTranscript);
-
-  const botRecentReplyFollowup =
-    !directAddressed &&
-    !addressedToOtherParticipant &&
-    !lowSignalFragment &&
-    Boolean(conversationContext.recentAssistantReply) &&
-    Boolean(conversationContext.sameAsRecentDirectAddress);
-  if (botRecentReplyFollowup) {
-    return {
-      allow: true,
-      reason: "bot_recent_reply_followup",
-      participantCount,
-      directAddressed,
-      directAddressConfidence,
-      directAddressThreshold,
-      transcript: normalizedTranscript,
-      conversationContext
-    };
-  }
-
   if (directAddressed) {
     return {
       allow: true,
@@ -474,51 +453,56 @@ export async function evaluateVoiceReplyDecision(manager: any, {
       typeof manager.resolveRealtimeReplyStrategy === "function" &&
       manager.resolveRealtimeReplyStrategy({ session, settings }) === "brain");
 
-  const nameCueDetected = hasBotNameCueForTranscript(manager, {
-    transcript: normalizedTranscript,
-    settings
-  });
-  const configuredNonDirectSilenceMs = Number(settings?.voice?.nonDirectReplyMinSilenceMs);
-  const nonDirectReplyMinSilenceMs = clamp(
-    Number.isFinite(configuredNonDirectSilenceMs)
-      ? Math.round(configuredNonDirectSilenceMs)
-      : NON_DIRECT_REPLY_MIN_SILENCE_MS,
-    600,
-    12_000
-  );
-  const lastInboundAudioAt = Number(session?.lastInboundAudioAt || 0);
-  const msSinceInboundAudio =
-    lastInboundAudioAt > 0 ? Math.max(0, now - lastInboundAudioAt) : null;
-  const wakeModeActive =
-    Boolean(conversationContext?.recentAssistantReply) ||
-    Boolean(conversationContext?.sameAsRecentDirectAddress);
-  const shouldDelayNonDirectRealtimeReply =
-    isRealtimeMode(sessionMode) &&
-    mergedWithGeneration &&
-    participantCount > 1 &&
-    !directAddressed &&
-    (!nameCueDetected && directAddressConfidence < directAddressThreshold && !wakeModeActive) &&
-    Number.isFinite(msSinceInboundAudio) &&
-    msSinceInboundAudio < nonDirectReplyMinSilenceMs;
-  if (shouldDelayNonDirectRealtimeReply) {
+  // STT pipeline: the full text LLM genuinely decides via [SKIP], so just allow through
+  if (sessionMode === "stt_pipeline" && mergedWithGeneration) {
     return {
-      allow: false,
-      reason: "awaiting_non_direct_silence_window",
+      allow: true,
+      reason: "generation_decides",
       participantCount,
       directAddressed,
       directAddressConfidence,
       directAddressThreshold,
       transcript: normalizedTranscript,
-      conversationContext,
-      msSinceInboundAudio,
-      requiredSilenceMs: nonDirectReplyMinSilenceMs,
-      retryAfterMs: Math.max(60, nonDirectReplyMinSilenceMs - Number(msSinceInboundAudio || 0))
+      conversationContext
     };
   }
 
-  return {
-    allow: mergedWithGeneration,
-    reason: mergedWithGeneration ? "brain_decides" : "no_brain_session",
+  // No brain session (native realtime without brain path)
+  if (!mergedWithGeneration) {
+    return {
+      allow: false,
+      reason: "no_brain_session",
+      participantCount,
+      directAddressed,
+      directAddressConfidence,
+      directAddressThreshold,
+      transcript: normalizedTranscript,
+      conversationContext
+    };
+  }
+
+  // Bridge mode: music playing + not addressed → block without classifier
+  const nameCueDetected = hasBotNameCueForTranscript(manager, {
+    transcript: normalizedTranscript,
+    settings
+  });
+  const musicPlaying = typeof manager.isMusicPlaybackActive === "function" && manager.isMusicPlaybackActive(session);
+  if (musicPlaying && !nameCueDetected) {
+    return {
+      allow: false,
+      reason: "music_playing_not_addressed",
+      participantCount,
+      directAddressed,
+      directAddressConfidence,
+      directAddressThreshold,
+      transcript: normalizedTranscript,
+      conversationContext
+    };
+  }
+
+  // Bridge mode: classifier gate
+  const classifierEnabled = settings?.voice?.replyDecisionLlm?.enabled !== false;
+  const commonFields = {
     participantCount,
     directAddressed,
     directAddressConfidence,
@@ -526,6 +510,115 @@ export async function evaluateVoiceReplyDecision(manager: any, {
     transcript: normalizedTranscript,
     conversationContext
   };
+
+  if (classifierEnabled) {
+    const classifierResult = await runVoiceReplyClassifier(manager, {
+      session,
+      settings,
+      userId: normalizedUserId,
+      transcript: normalizedTranscript,
+      speakerName,
+      participantCount,
+      participantList,
+      conversationContext,
+      replyEagerness
+    });
+    return {
+      allow: classifierResult.allow,
+      reason: classifierResult.allow ? "classifier_allow" : "classifier_deny",
+      classifierLatencyMs: classifierResult.latencyMs,
+      ...commonFields
+    };
+  }
+
+  // Classifier disabled: block unless direct address (conservative fallback)
+  return {
+    allow: false,
+    reason: "classifier_disabled_not_addressed",
+    ...commonFields
+  };
+}
+
+export async function runVoiceReplyClassifier(manager: any, {
+  session,
+  settings,
+  userId,
+  transcript,
+  speakerName,
+  participantCount,
+  participantList,
+  conversationContext,
+  replyEagerness
+}: {
+  session: any;
+  settings: any;
+  userId: string;
+  transcript: string;
+  speakerName: string;
+  participantCount: number;
+  participantList: string[];
+  conversationContext: VoiceConversationContext;
+  replyEagerness: number;
+}): Promise<{ allow: boolean; latencyMs: number }> {
+  const replyDecisionLlm = settings?.voice?.replyDecisionLlm || {};
+  const llmProvider = normalizeVoiceReplyDecisionProvider(replyDecisionLlm?.provider);
+  const llmModel = String(replyDecisionLlm?.model || defaultVoiceReplyDecisionModel(llmProvider))
+    .trim()
+    .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
+  const botName = getPromptBotName(settings);
+
+  if (!manager.llm?.generate) {
+    return { allow: false, latencyMs: 0 };
+  }
+
+  const promptParts = [
+    `You are a voice channel reply classifier for a bot named "${botName}".`,
+    `Participants: ${participantList.join(", ")}`,
+    `Speaker: ${speakerName}`,
+    `Transcript: "${transcript}"`,
+    `Reply eagerness: ${replyEagerness}/100`,
+    conversationContext.msSinceDirectAddress != null
+      ? `Last addressed ${Math.round(conversationContext.msSinceDirectAddress / 1000)}s ago`
+      : `Never directly addressed`,
+    conversationContext.recentAssistantReply
+      ? `Bot last spoke ${Math.round(Number(conversationContext.msSinceAssistantReply || 0) / 1000)}s ago`
+      : `Bot has not spoken recently`,
+    ``,
+    `Should the bot respond to this? Output YES or NO.`,
+    `- YES if the speaker is talking to the bot, asking a question the bot should answer, or continuing a conversation with the bot`,
+    `- NO if the speaker is talking to another person, having a side conversation, or the message is not directed at the bot`
+  ];
+
+  const startMs = Date.now();
+  try {
+    const result = await manager.llm.generate({
+      settings: {
+        ...settings,
+        llm: {
+          ...(settings?.llm || {}),
+          provider: llmProvider,
+          model: llmModel,
+          temperature: 0,
+          maxOutputTokens: 4,
+          reasoningEffort: String(replyDecisionLlm?.reasoningEffort || "minimal").trim().toLowerCase() || "minimal"
+        }
+      },
+      systemPrompt: "",
+      userPrompt: promptParts.join("\n"),
+      contextMessages: [],
+      trace: {
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        source: "voice_reply_classifier"
+      }
+    });
+    const latencyMs = Date.now() - startMs;
+    const answer = String(result?.text || "").trim().toUpperCase();
+    return { allow: answer.startsWith("YES"), latencyMs };
+  } catch {
+    return { allow: false, latencyMs: Date.now() - startMs };
+  }
 }
 
 export function isCommandOnlyActive(manager: any, session, settings = null) {

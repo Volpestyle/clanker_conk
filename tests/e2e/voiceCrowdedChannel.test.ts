@@ -37,7 +37,7 @@ const SKIP_MSG = "Skipping crowded channel E2E tests: set RUN_E2E_CROWDED=1 and 
  *
  *   Issue 1: ASR buffer clear/commit race — rapid overlapping speech
  *   Issue 2: response.create TOCTOU race — back-to-back turns
- *   Issue 3: brain_decides low-signal gate — garbage transcripts rejected
+ *   Issue 3: reply classifier gate — garbage transcripts rejected
  *   Issue 4: Music request deferral — music requests survive chatter
  *   Issue 5: Stale deferred coalescing — garbage filtered from queue
  *
@@ -117,7 +117,7 @@ describe("E2E: Crowded channel — multi-participant resilience", () => {
 
   // ─────────────────────────────────────────────────────────────────────
   // Test 1: Bot ignores overlapping low-signal garbage from two users
-  // Tests: Issue 3 (brain_decides gate), Issue 5 (stale coalescing)
+  // Tests: Issue 3 (reply classifier gate), Issue 5 (stale coalescing)
   // ─────────────────────────────────────────────────────────────────────
   test(
     "Crowded: Bot ignores rapid low-signal garbage from multiple speakers",

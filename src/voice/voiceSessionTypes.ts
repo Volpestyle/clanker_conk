@@ -59,6 +59,7 @@ export type VoiceReplyDecision = {
     requiredSilenceMs?: number | null;
     msSinceInboundAudio?: number | null;
     outputLockReason?: string | null;
+    classifierLatencyMs?: number | null;
 };
 
 export type VoiceTimelineTurn = {

@@ -2,9 +2,9 @@ stateDiagram-v2
     [*] --> AudioTurnCaptured
     AudioTurnCaptured --> AdmissionGate : evaluateVoiceReplyDecision
 
-    AdmissionGate --> Denied : missing_transcript / low_signal / llm_no / llm_error
-    AdmissionGate --> Deferred : bot_turn_open or awaiting_non_direct_silence_window
-    AdmissionGate --> Admitted : direct/focused/recent followup or llm_yes
+    AdmissionGate --> Denied : missing_transcript / eagerness_disabled / addressed_to_other / classifier_deny / classifier_disabled
+    AdmissionGate --> Deferred : bot_turn_open
+    AdmissionGate --> Admitted : direct_address / classifier_allow / generation_decides
 
     Deferred --> AudioTurnCaptured : deferred flush retry
 

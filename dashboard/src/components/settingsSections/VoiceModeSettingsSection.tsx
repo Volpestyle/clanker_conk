@@ -22,6 +22,10 @@ export function VoiceModeSettingsSection({
   selectVoiceThoughtEnginePresetModel,
   voiceThoughtEngineModelOptions,
   selectedVoiceThoughtEnginePresetModel,
+  setVoiceReplyDecisionProvider,
+  selectVoiceReplyDecisionPresetModel,
+  voiceReplyDecisionModelOptions,
+  selectedVoiceReplyDecisionPresetModel,
   xAiVoiceOptions,
   openAiRealtimeModelOptions,
   openAiRealtimeVoiceOptions,
@@ -46,6 +50,7 @@ export function VoiceModeSettingsSection({
     asrModeConfigVisible &&
     Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge);
   const usesBrainGeneration = isRealtimeMode && isBrainPath;
+  const classifierVisible = isRealtimeMode && isBridgePath && !form.voiceCommandOnlyMode;
   return (
     <SettingsSection id={id} title="Voice Mode" active={form.voiceEnabled}>
       <div className="toggles">
@@ -56,6 +61,7 @@ export function VoiceModeSettingsSection({
       </div>
 
       <Collapse open={showVoiceAdvanced}>
+          {/* ── Pipeline ── */}
           <label htmlFor="voice-mode">Voice runtime mode</label>
           <select id="voice-mode" value={form.voiceProvider} onChange={set("voiceProvider")}>
             <option value="xai">xAI realtime (low-latency)</option>
@@ -102,63 +108,65 @@ export function VoiceModeSettingsSection({
                   <span> &mdash; Audio &rarr; ASR transcript &rarr; text LLM &rarr; TTS &rarr; audio out. Maximum control, any text model. Requires OpenAI API key for ASR + TTS provider.</span>
                 </label>
               </div>
+            </>
+          )}
 
-              {(isBridgePath || isBrainPath) && (
-                <>
-                  <label htmlFor="voice-brain-provider">
-                    {isBridgePath ? "Realtime provider (brain + TTS)" : "Realtime provider (ASR pipeline)"}
+          {/* ── ASR Pipeline ── */}
+          {isRealtimeMode && (isBridgePath || isBrainPath) && (
+            <>
+              <h4>ASR Pipeline</h4>
+              <label htmlFor="voice-brain-provider">
+                {isBridgePath ? "Realtime provider (brain + TTS)" : "Realtime provider (ASR pipeline)"}
+              </label>
+              <select
+                id="voice-brain-provider"
+                value={form.voiceBrainProvider || "openai"}
+                onChange={set("voiceBrainProvider")}
+              >
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="xai">xAI</option>
+                <option value="gemini">Gemini</option>
+              </select>
+
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-openai-realtime-transcription-method">Transcription method</label>
+                  <select
+                    id="voice-openai-realtime-transcription-method"
+                    value={form.voiceOpenAiRealtimeTranscriptionMethod}
+                    onChange={set("voiceOpenAiRealtimeTranscriptionMethod")}
+                  >
+                    {openAiRealtimeTranscriptionMethodOptions.map((methodId) => (
+                      <option key={methodId} value={methodId}>
+                        {methodId}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="voice-openai-realtime-transcription-model">
+                    OpenAI transcription model
                   </label>
                   <select
-                    id="voice-brain-provider"
-                    value={form.voiceBrainProvider || "openai"}
-                    onChange={set("voiceBrainProvider")}
+                    id="voice-openai-realtime-transcription-model"
+                    value={form.voiceOpenAiRealtimeInputTranscriptionModel}
+                    onChange={set("voiceOpenAiRealtimeInputTranscriptionModel")}
                   >
-                    <option value="openai">OpenAI</option>
-                    <option value="anthropic">Anthropic</option>
-                    <option value="xai">xAI</option>
-                    <option value="gemini">Gemini</option>
+                    {openAiTranscriptionModelOptions.map((modelId) => (
+                      <option key={modelId} value={modelId}>
+                        {modelId}
+                      </option>
+                    ))}
                   </select>
+                </div>
+              </div>
 
-                  <div className="split">
-                    <div>
-                      <label htmlFor="voice-openai-realtime-transcription-method">Transcription method</label>
-                      <select
-                        id="voice-openai-realtime-transcription-method"
-                        value={form.voiceOpenAiRealtimeTranscriptionMethod}
-                        onChange={set("voiceOpenAiRealtimeTranscriptionMethod")}
-                      >
-                        {openAiRealtimeTranscriptionMethodOptions.map((methodId) => (
-                          <option key={methodId} value={methodId}>
-                            {methodId}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label htmlFor="voice-openai-realtime-transcription-model">
-                        OpenAI transcription model
-                      </label>
-                      <select
-                        id="voice-openai-realtime-transcription-model"
-                        value={form.voiceOpenAiRealtimeInputTranscriptionModel}
-                        onChange={set("voiceOpenAiRealtimeInputTranscriptionModel")}
-                      >
-                        {openAiTranscriptionModelOptions.map((modelId) => (
-                          <option key={modelId} value={modelId}>
-                            {modelId}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                  </div>
-
-                  <p>
-                    {usesRealtimeAsrBridge
-                      ? "Realtime bridge streams audio into OpenAI transcription sessions and uses those transcripts as the source of truth."
-                      : "File WAV transcribes each finalized turn from captured PCM after the turn ends. It is slower, but does not use realtime ASR bridge sessions."}
-                  </p>
-                </>
-              )}
+              <p>
+                {usesRealtimeAsrBridge
+                  ? "Realtime bridge streams audio into OpenAI transcription sessions and uses those transcripts as the source of truth."
+                  : "File WAV transcribes each finalized turn from captured PCM after the turn ends. It is slower, but does not use realtime ASR bridge sessions."}
+              </p>
 
               {asrModeConfigVisible && (
                 <div className="split">
@@ -182,48 +190,198 @@ export function VoiceModeSettingsSection({
                   </div>
                 </div>
               )}
+
+              <div className="toggles">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={form.voiceAsrEnabled}
+                    onChange={set("voiceAsrEnabled")}
+                  />
+                  ASR enabled (disable to use slash commands only)
+                </label>
+              </div>
+
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-asr-language-mode">ASR language mode</label>
+                  <select
+                    id="voice-asr-language-mode"
+                    value={form.voiceAsrLanguageMode}
+                    onChange={set("voiceAsrLanguageMode")}
+                  >
+                    <option value="auto">Auto detect (allow switching)</option>
+                    <option value="fixed">Fixed language</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="voice-asr-language-hint">ASR language hint (BCP-47, e.g. en, en-us)</label>
+                  <input
+                    id="voice-asr-language-hint"
+                    type="text"
+                    value={form.voiceAsrLanguageHint}
+                    onChange={set("voiceAsrLanguageHint")}
+                    placeholder="en"
+                  />
+                </div>
+              </div>
+              <p>
+                Auto mode keeps multilingual switching and uses the hint only for ambiguity bias. Fixed mode forces that
+                language for transcription.
+              </p>
             </>
           )}
 
-          <h4>ASR Controls</h4>
+          {/* ── ASR Controls (native path fallback) ── */}
+          {(!isRealtimeMode || isNativePath) && (
+            <>
+              <h4>ASR Controls</h4>
+              <div className="toggles">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={form.voiceAsrEnabled}
+                    onChange={set("voiceAsrEnabled")}
+                  />
+                  ASR enabled (disable to use slash commands only)
+                </label>
+              </div>
+
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-asr-language-mode-native">ASR language mode</label>
+                  <select
+                    id="voice-asr-language-mode-native"
+                    value={form.voiceAsrLanguageMode}
+                    onChange={set("voiceAsrLanguageMode")}
+                  >
+                    <option value="auto">Auto detect (allow switching)</option>
+                    <option value="fixed">Fixed language</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="voice-asr-language-hint-native">ASR language hint (BCP-47, e.g. en, en-us)</label>
+                  <input
+                    id="voice-asr-language-hint-native"
+                    type="text"
+                    value={form.voiceAsrLanguageHint}
+                    onChange={set("voiceAsrLanguageHint")}
+                    placeholder="en"
+                  />
+                </div>
+              </div>
+              <p>
+                Auto mode keeps multilingual switching and uses the hint only for ambiguity bias. Fixed mode forces that
+                language for transcription.
+              </p>
+            </>
+          )}
+
+          {/* ── Reply Decision ── */}
+          <h4>Reply Decision</h4>
+          <label htmlFor="voice-reply-eagerness">
+            Voice reply eagerness (unaddressed turns): <strong>{form.voiceReplyEagerness}%</strong>
+          </label>
+          <input
+            id="voice-reply-eagerness"
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            value={form.voiceReplyEagerness}
+            onChange={set("voiceReplyEagerness")}
+            style={rangeStyle(form.voiceReplyEagerness)}
+            disabled={Boolean(form.voiceCommandOnlyMode)}
+          />
           <div className="toggles">
             <label>
               <input
                 type="checkbox"
-                checked={form.voiceAsrEnabled}
-                onChange={set("voiceAsrEnabled")}
+                checked={Boolean(form.voiceCommandOnlyMode)}
+                onChange={set("voiceCommandOnlyMode")}
               />
-              ASR enabled (disable to use slash commands only)
+              Command-only mode
             </label>
-
           </div>
+          <p>
+            {form.voiceCommandOnlyMode
+              ? "Command-only mode overrides reply eagerness. Clanker will only respond to wake-word or direct-address turns. Music playback also forces this mode automatically while audible."
+              : "When disabled, Clanker can answer unaddressed turns based on reply eagerness. Music playback still forces command-only mode while audible."}
+          </p>
 
           <div className="split">
             <div>
-              <label htmlFor="voice-asr-language-mode">ASR language mode</label>
-              <select
-                id="voice-asr-language-mode"
-                value={form.voiceAsrLanguageMode}
-                onChange={set("voiceAsrLanguageMode")}
-              >
-                <option value="auto">Auto detect (allow switching)</option>
-                <option value="fixed">Fixed language</option>
-              </select>
-            </div>
-            <div>
-              <label htmlFor="voice-asr-language-hint">ASR language hint (BCP-47, e.g. en, en-us)</label>
+              <label htmlFor="voice-intent-threshold">Intent confidence threshold</label>
               <input
-                id="voice-asr-language-hint"
-                type="text"
-                value={form.voiceAsrLanguageHint}
-                onChange={set("voiceAsrLanguageHint")}
-                placeholder="en"
+                id="voice-intent-threshold"
+                type="number"
+                min="0.4"
+                max="0.99"
+                step="0.01"
+                value={form.voiceIntentConfidenceThreshold}
+                onChange={set("voiceIntentConfidenceThreshold")}
               />
             </div>
+            <div />
           </div>
+
+          {/* ── Reply Classifier (bridge mode only) ── */}
+          {classifierVisible && (
+            <>
+              <h4>Reply Classifier</h4>
+              <p>
+                LLM gate for bridge mode. Classifies each non-direct-address turn as YES/NO before forwarding to the realtime brain. Replaces heuristic engagement gates with actual language understanding.
+              </p>
+              <div className="toggles">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={Boolean(form.voiceReplyDecisionLlmEnabled)}
+                    onChange={set("voiceReplyDecisionLlmEnabled")}
+                  />
+                  Enable reply classifier
+                </label>
+              </div>
+              {form.voiceReplyDecisionLlmEnabled && (
+                <div className="split">
+                  <div>
+                    <label htmlFor="voice-reply-decision-provider">Provider</label>
+                    <select
+                      id="voice-reply-decision-provider"
+                      value={form.voiceReplyDecisionLlmProvider}
+                      onChange={setVoiceReplyDecisionProvider}
+                    >
+                      <LlmProviderOptions />
+                    </select>
+                  </div>
+                  <div>
+                    <label htmlFor="voice-reply-decision-model-preset">Model ID</label>
+                    <select
+                      id="voice-reply-decision-model-preset"
+                      value={selectedVoiceReplyDecisionPresetModel}
+                      onChange={selectVoiceReplyDecisionPresetModel}
+                    >
+                      {voiceReplyDecisionModelOptions.map((modelId) => (
+                        <option key={modelId} value={modelId}>
+                          {modelId}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+              )}
+              {!form.voiceReplyDecisionLlmEnabled && (
+                <p>
+                  When disabled, all non-direct-address turns in bridge mode are blocked (conservative fallback).
+                </p>
+              )}
+            </>
+          )}
+
+          {/* ── Voice Output ── */}
+          <h4>Voice Output</h4>
           <p>
-            Auto mode keeps multilingual switching and uses the hint only for ambiguity bias. Fixed mode forces that
-            language for transcription.
+            Model and voice used for spoken audio output. In Native mode the model handles end-to-end; in Bridge/Brain modes it receives generated text and produces speech.
           </p>
 
           {usesBrainGeneration && (
@@ -270,120 +428,6 @@ export function VoiceModeSettingsSection({
               </div>
             </>
           )}
-
-          <label htmlFor="voice-operational-messages">Text channel status messages</label>
-          <select
-            id="voice-operational-messages"
-            value={form.voiceOperationalMessages}
-            onChange={set("voiceOperationalMessages")}
-          >
-            <option value="all">All (always post)</option>
-            <option value="essential">Essential (skip routine lifecycle)</option>
-            <option value="minimal">Minimal (only direct requests + critical errors)</option>
-            <option value="none">None (suppress all)</option>
-          </select>
-          <p>
-            Controls how chatty the bot is in text when voice events happen. "Essential" lets the LLM skip routine
-            messages like session end or music state changes. "Minimal" also suppresses error announcements unless
-            critical. "None" silences all operational messages.
-          </p>
-
-          <div className="toggles">
-            <label>
-              <input
-                type="checkbox"
-                checked={form.voiceAllowNsfwHumor}
-                onChange={set("voiceAllowNsfwHumor")}
-              />
-              Voice: allow adult/NSFW humor (with safety limits)
-            </label>
-          </div>
-
-          <div className="split">
-            <div>
-              <label htmlFor="voice-intent-threshold">Intent confidence threshold</label>
-              <input
-                id="voice-intent-threshold"
-                type="number"
-                min="0.4"
-                max="0.99"
-                step="0.01"
-                value={form.voiceIntentConfidenceThreshold}
-                onChange={set("voiceIntentConfidenceThreshold")}
-              />
-            </div>
-            <div>
-              <label htmlFor="voice-max-session-minutes">Max session minutes</label>
-              <input
-                id="voice-max-session-minutes"
-                type="number"
-                min="1"
-                max="120"
-                value={form.voiceMaxSessionMinutes}
-                onChange={set("voiceMaxSessionMinutes")}
-              />
-            </div>
-          </div>
-
-          <div className="split">
-            <div>
-              <label htmlFor="voice-inactivity-seconds">Inactivity leave seconds</label>
-              <input
-                id="voice-inactivity-seconds"
-                type="number"
-                min="20"
-                max="3600"
-                value={form.voiceInactivityLeaveSeconds}
-                onChange={set("voiceInactivityLeaveSeconds")}
-              />
-            </div>
-            <div>
-              <label htmlFor="voice-max-sessions-day">Max sessions/day</label>
-              <input
-                id="voice-max-sessions-day"
-                type="number"
-                min="0"
-                max="120"
-                value={form.voiceMaxSessionsPerDay}
-                onChange={set("voiceMaxSessionsPerDay")}
-              />
-            </div>
-          </div>
-
-          <label htmlFor="voice-reply-eagerness">
-            Voice reply eagerness (unaddressed turns): <strong>{form.voiceReplyEagerness}%</strong>
-          </label>
-          <input
-            id="voice-reply-eagerness"
-            type="range"
-            min="0"
-            max="100"
-            step="1"
-            value={form.voiceReplyEagerness}
-            onChange={set("voiceReplyEagerness")}
-            style={rangeStyle(form.voiceReplyEagerness)}
-            disabled={Boolean(form.voiceCommandOnlyMode)}
-          />
-          <div className="toggles">
-            <label>
-              <input
-                type="checkbox"
-                checked={Boolean(form.voiceCommandOnlyMode)}
-                onChange={set("voiceCommandOnlyMode")}
-              />
-              Command-only mode
-            </label>
-          </div>
-          <p>
-            {form.voiceCommandOnlyMode
-              ? "Command-only mode overrides reply eagerness. Clanker will only respond to wake-word or direct-address turns. Music playback also forces this mode automatically while audible."
-              : "When disabled, Clanker can answer unaddressed turns based on reply eagerness. Music playback still forces command-only mode while audible."}
-          </p>
-
-          <h4>Voice Output</h4>
-          <p>
-            Model and voice used for spoken audio output. In Native mode the model handles end-to-end; in Bridge/Brain modes it receives generated text and produces speech.
-          </p>
 
           {isVoiceAgentMode && (
             <>
@@ -585,6 +629,77 @@ export function VoiceModeSettingsSection({
             </>
           )}
 
+          {/* ── Session ── */}
+          <h4>Session</h4>
+          <div className="split">
+            <div>
+              <label htmlFor="voice-max-session-minutes">Max session minutes</label>
+              <input
+                id="voice-max-session-minutes"
+                type="number"
+                min="1"
+                max="120"
+                value={form.voiceMaxSessionMinutes}
+                onChange={set("voiceMaxSessionMinutes")}
+              />
+            </div>
+            <div>
+              <label htmlFor="voice-inactivity-seconds">Inactivity leave seconds</label>
+              <input
+                id="voice-inactivity-seconds"
+                type="number"
+                min="20"
+                max="3600"
+                value={form.voiceInactivityLeaveSeconds}
+                onChange={set("voiceInactivityLeaveSeconds")}
+              />
+            </div>
+          </div>
+
+          <div className="split">
+            <div>
+              <label htmlFor="voice-max-sessions-day">Max sessions/day</label>
+              <input
+                id="voice-max-sessions-day"
+                type="number"
+                min="0"
+                max="120"
+                value={form.voiceMaxSessionsPerDay}
+                onChange={set("voiceMaxSessionsPerDay")}
+              />
+            </div>
+            <div>
+              <label htmlFor="voice-operational-messages">Text channel status messages</label>
+              <select
+                id="voice-operational-messages"
+                value={form.voiceOperationalMessages}
+                onChange={set("voiceOperationalMessages")}
+              >
+                <option value="all">All (always post)</option>
+                <option value="essential">Essential (skip routine lifecycle)</option>
+                <option value="minimal">Minimal (only direct requests + critical errors)</option>
+                <option value="none">None (suppress all)</option>
+              </select>
+            </div>
+          </div>
+          <p>
+            Controls how chatty the bot is in text when voice events happen. "Essential" lets the LLM skip routine
+            messages like session end or music state changes. "Minimal" also suppresses error announcements unless
+            critical. "None" silences all operational messages.
+          </p>
+
+          <div className="toggles">
+            <label>
+              <input
+                type="checkbox"
+                checked={form.voiceAllowNsfwHumor}
+                onChange={set("voiceAllowNsfwHumor")}
+              />
+              Voice: allow adult/NSFW humor (with safety limits)
+            </label>
+          </div>
+
+          {/* ── Thought Engine ── */}
           <h4>Thought Engine</h4>
           <p>
             When VC is quiet, Clank can self-prompt a candidate thought and let the brain decide if it should be spoken.
@@ -680,6 +795,7 @@ export function VoiceModeSettingsSection({
             </>
           )}
 
+          {/* ── Stream Watch ── */}
           <h4>Stream Watch</h4>
           <div className="toggles">
             <label>
@@ -852,6 +968,7 @@ export function VoiceModeSettingsSection({
             </>
           )}
 
+          {/* ── Soundboard ── */}
           <div className="toggles">
             <label>
               <input
@@ -887,6 +1004,7 @@ export function VoiceModeSettingsSection({
             </>
           )}
 
+          {/* ── Access Control ── */}
           <label htmlFor="voice-allowed-channels">Allowed voice channel IDs (optional)</label>
           <textarea
             id="voice-allowed-channels"

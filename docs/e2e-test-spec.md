@@ -398,7 +398,7 @@ Simulates a multi-participant voice channel with overlapping speech, low-signal 
 
 | Test | Validates | Requires |
 |------|-----------|----------|
-| Bot ignores rapid low-signal garbage from multiple speakers | brain_decides low-signal gate, deferred queue filtering | Drivers A + B |
+| Bot ignores rapid low-signal garbage from multiple speakers | reply classifier gate, deferred queue filtering | Drivers A + B |
 | Direct address works after garbage storm | ASR buffer race, response.create race | Drivers A + B |
 | Rapid back-to-back direct addresses from two speakers | response.create TOCTOU race handling | Drivers A + B |
 | Music request succeeds despite overlapping chatter | Music deferral priority, stale coalescing filter | Drivers A + B |

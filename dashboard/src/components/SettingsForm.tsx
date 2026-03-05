@@ -125,6 +125,10 @@ export default function SettingsForm({
     options: voiceThoughtEngineModelOptions,
     selectedPresetModel: selectedVoiceThoughtEnginePresetModel
   } = resolvePresetSelection("voiceThoughtEngineProvider", "voiceThoughtEngineModel");
+  const {
+    options: voiceReplyDecisionModelOptions,
+    selectedPresetModel: selectedVoiceReplyDecisionPresetModel
+  } = resolvePresetSelection("voiceReplyDecisionLlmProvider", "voiceReplyDecisionLlmModel");
   const openAiRealtimeModelOptions = resolveModelOptions(
     OPENAI_REALTIME_MODEL_OPTIONS,
     effectiveForm.voiceOpenAiRealtimeModel
@@ -181,6 +185,7 @@ export default function SettingsForm({
       syncModel("visionModel", selectedVisionPresetModel);
       syncModel("voiceGenerationLlmModel", selectedVoiceGenerationPresetModel);
       syncModel("voiceThoughtEngineModel", selectedVoiceThoughtEnginePresetModel);
+      syncModel("voiceReplyDecisionLlmModel", selectedVoiceReplyDecisionPresetModel);
       if (next.voiceGenerationLlmUseTextModel) {
         syncModel("voiceGenerationLlmProvider", next.provider);
         syncModel("voiceGenerationLlmModel", selectedPresetModel);
@@ -241,6 +246,7 @@ export default function SettingsForm({
   const setBrowserLlmProvider = createProviderSetter("browserLlmProvider", "browserLlmModel");
   const setVoiceGenerationProvider = createProviderSetter("voiceGenerationLlmProvider", "voiceGenerationLlmModel");
   const setVoiceThoughtEngineProvider = createProviderSetter("voiceThoughtEngineProvider", "voiceThoughtEngineModel");
+  const setVoiceReplyDecisionProvider = createProviderSetter("voiceReplyDecisionLlmProvider", "voiceReplyDecisionLlmModel");
   const setVisionProvider = createProviderSetter("visionProvider", "visionModel");
 
   function selectModelFieldPreset(modelField, selected) {
@@ -259,6 +265,7 @@ export default function SettingsForm({
   const selectBrowserLlmPresetModel = createPresetSelector("browserLlmModel");
   const selectVoiceGenerationPresetModel = createPresetSelector("voiceGenerationLlmModel");
   const selectVoiceThoughtEnginePresetModel = createPresetSelector("voiceThoughtEngineModel");
+  const selectVoiceReplyDecisionPresetModel = createPresetSelector("voiceReplyDecisionLlmModel");
   const selectVisionPresetModel = createPresetSelector("visionModel");
 
   function resetPromptGuidanceFields() {
@@ -389,6 +396,10 @@ export default function SettingsForm({
             selectVoiceThoughtEnginePresetModel={selectVoiceThoughtEnginePresetModel}
             voiceThoughtEngineModelOptions={voiceThoughtEngineModelOptions}
             selectedVoiceThoughtEnginePresetModel={selectedVoiceThoughtEnginePresetModel}
+            setVoiceReplyDecisionProvider={setVoiceReplyDecisionProvider}
+            selectVoiceReplyDecisionPresetModel={selectVoiceReplyDecisionPresetModel}
+            voiceReplyDecisionModelOptions={voiceReplyDecisionModelOptions}
+            selectedVoiceReplyDecisionPresetModel={selectedVoiceReplyDecisionPresetModel}
             xAiVoiceOptions={xAiVoiceOptions}
             openAiRealtimeModelOptions={openAiRealtimeModelOptions}
             openAiRealtimeVoiceOptions={openAiRealtimeVoiceOptions}

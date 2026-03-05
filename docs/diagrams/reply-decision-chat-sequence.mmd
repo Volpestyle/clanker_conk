@@ -3,6 +3,7 @@ sequenceDiagram
     participant Speaker as Voice Participant
     participant Voice as VoiceSessionManager
     participant Decider as evaluateVoiceReplyDecision
+    participant Classifier as Reply Classifier (haiku)
     participant GenLLM as voice generation LLM
     participant Playback as Voice Playback/Realtime Client
     participant Store as Store
@@ -10,12 +11,22 @@ sequenceDiagram
     Speaker->>Voice: audio turn captured
     Voice->>Voice: transcribe turn
     Voice->>Decider: Stage A admission (deterministic gates)
-    Note over Decider: wake word, followup, eagerness,<br/>silence window, then brain_decides
-    Decider-->>Voice: allow/deny + reason
+    Note over Decider: wake word, eagerness,<br/>addressed-to-other, command-only
+
+    alt stt_pipeline mode
+      Decider-->>Voice: allow (generation_decides)
+    else bridge mode + classifier enabled
+      Decider->>Classifier: YES/NO classification
+      Classifier-->>Decider: classifier_allow / classifier_deny
+      Decider-->>Voice: allow/deny + reason
+    else bridge mode + classifier disabled
+      Decider-->>Voice: deny (classifier_disabled_not_addressed)
+    end
+
     Voice->>Store: log voice_turn_addressing
 
     alt denied
-      alt reason is bot_turn_open or awaiting_non_direct_silence_window
+      alt reason is bot_turn_open
         Voice->>Voice: queueDeferredBotTurnOpenTurn(...)
       else hard deny
         Voice-->>Voice: stop turn
