@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../../api";
+import { PanelHead } from "../ui";
 
 interface Guild {
   id: string;
@@ -154,8 +155,7 @@ export default function MemoryReflections({ guilds }: { guilds: Guild[] }) {
 
   return (
     <div>
-      <div className="panel-head">
-        <h3>Daily Reflections</h3>
+      <PanelHead title="Daily Reflections">
         <div className="memory-reflection-controls">
           <label>
             Runs
@@ -172,7 +172,7 @@ export default function MemoryReflections({ guilds }: { guilds: Guild[] }) {
             {loading ? "Loading..." : "Refresh"}
           </button>
         </div>
-      </div>
+      </PanelHead>
 
       <p className="memory-reflection-copy">
         Review each daily reflection run, what the model extracted, and which facts were actually persisted into durable memory.

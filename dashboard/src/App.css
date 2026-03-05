@@ -171,20 +171,6 @@ body {
   flex-shrink: 0;
 }
 
-.hero-sigil-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--danger);
-  transition: background 300ms ease, box-shadow 300ms ease;
-}
-
-.hero-sigil-dot.online {
-  background: var(--success);
-  box-shadow: 0 0 8px rgba(74, 222, 128, 0.5);
-  animation: pulse 2s ease-in-out infinite;
-}
-
 .hero-ident {
   display: flex;
   align-items: center;
@@ -306,22 +292,6 @@ body {
   display: flex;
   align-items: center;
   gap: 10px;
-}
-
-.status-dot {
-  width: 8px;
-  height: 8px;
-  min-width: 8px;
-  border-radius: 50%;
-  background: var(--danger);
-  flex-shrink: 0;
-  transition: background 300ms ease, box-shadow 300ms ease;
-}
-
-.status-dot.online {
-  background: var(--success);
-  box-shadow: 0 0 8px rgba(74, 222, 128, 0.5);
-  animation: pulse 2s ease-in-out infinite;
 }
 
 .runtime-label {

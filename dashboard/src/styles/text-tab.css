@@ -173,67 +173,6 @@
   font-size: 0.7rem;
 }
 
-/* ---- SECTION (collapsible) ---- */
-
-.tt-section {
-  border-bottom: 1px solid var(--line);
-}
-
-.tt-section:last-child {
-  border-bottom: none;
-}
-
-.tt-section-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 6px 12px;
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: var(--ink-2);
-  font-size: 0.72rem;
-  text-align: left;
-  transition: background var(--transition);
-}
-
-.tt-section-toggle:hover {
-  background: rgba(255, 255, 255, 0.02);
-}
-
-.tt-section-arrow {
-  font-size: 0.68rem;
-  color: var(--ink-3);
-  opacity: 0.6;
-  transition: transform var(--transition);
-}
-
-.tt-section-arrow-open {
-  transform: rotate(90deg);
-}
-
-.tt-section-title {
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  font-weight: 600;
-  font-size: 0.66rem;
-  color: var(--ink-3);
-}
-
-.tt-section-badge {
-  font-size: 0.66rem;
-  color: var(--ink-2);
-  background: rgba(255, 255, 255, 0.04);
-  padding: 0 5px;
-  border-radius: 8px;
-  font-variant-numeric: tabular-nums;
-}
-
-.tt-section-body {
-  padding: 4px 12px 10px;
-}
-
 /* ---- TOOLS ---- */
 
 .tt-tools-grid {
@@ -491,30 +430,6 @@
   justify-content: flex-end;
 }
 
-/* ---- COPY BUTTON ---- */
-
-.tt-copy-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1px 7px;
-  font-size: 0.64rem;
-  background: none;
-  border: 1px solid var(--line);
-  color: var(--ink-3);
-  border-radius: var(--radius-xs);
-  cursor: pointer;
-  transition: color var(--transition), border-color var(--transition);
-  line-height: 1.2;
-  white-space: nowrap;
-  font-family: inherit;
-}
-
-.tt-copy-btn:hover {
-  color: var(--accent);
-  border-color: var(--accent-soft);
-}
-
 /* ---- EMPTY STATE ---- */
 
 .tt-empty {
@@ -553,7 +468,7 @@
     padding: 6px 10px;
   }
 
-  .tt-section-body {
+  .ui-section-body {
     padding: 4px 10px 8px;
   }
 

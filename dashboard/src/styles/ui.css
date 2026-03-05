@@ -1,0 +1,144 @@
+/* ---- SHARED UI PRIMITIVES ---- */
+
+/* -- Filter Pills -- */
+
+.filter-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-bottom: 10px;
+}
+
+.filter-pill {
+  padding: 4px 10px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: none;
+  color: var(--ink-2);
+  cursor: pointer;
+  transition: all var(--transition);
+  white-space: nowrap;
+}
+
+.filter-pill:hover {
+  color: var(--ink-0);
+  border-color: var(--line-strong);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.filter-pill.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-dim);
+}
+
+/* -- Copy Button -- */
+
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 6px;
+  font-size: 0.66rem;
+  background: none;
+  border: 1px solid var(--line);
+  color: var(--ink-3);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+  line-height: 1.2;
+  white-space: nowrap;
+  font-family: inherit;
+  vertical-align: middle;
+}
+
+.copy-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent-soft);
+}
+
+/* -- Collapsible Section -- */
+
+.ui-section {
+  border-bottom: 1px solid var(--line);
+}
+
+.ui-section:last-child {
+  border-bottom: none;
+}
+
+.ui-section-toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 12px;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--ink-2);
+  font-size: 0.74rem;
+  font-weight: 600;
+  text-align: left;
+  transition: background var(--transition), color var(--transition);
+}
+
+.ui-section-toggle:hover {
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--ink-0);
+}
+
+.ui-section-arrow {
+  font-size: 0.68rem;
+  color: var(--ink-3);
+  opacity: 0.6;
+  width: 12px;
+  transition: transform var(--transition);
+}
+
+.ui-section-arrow-open {
+  transform: rotate(90deg);
+}
+
+.ui-section-title {
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+  font-size: 0.66rem;
+  color: var(--ink-3);
+  flex: 1;
+}
+
+.ui-section-badge {
+  font-size: 0.66rem;
+  font-weight: 600;
+  color: var(--ink-2);
+  background: rgba(255, 255, 255, 0.04);
+  padding: 1px 6px;
+  border-radius: 8px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ui-section-body {
+  padding: 4px 12px 10px;
+}
+
+/* -- Status Dot -- */
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  min-width: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  flex-shrink: 0;
+  transition: background 300ms ease, box-shadow 300ms ease;
+}
+
+.status-dot.online {
+  background: var(--success);
+  box-shadow: 0 0 8px rgba(74, 222, 128, 0.5);
+  animation: pulse 2s ease-in-out infinite;
+}

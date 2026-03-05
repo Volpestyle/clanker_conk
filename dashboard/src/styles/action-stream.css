@@ -1,36 +1,4 @@
-/* ---- FILTER PILLS ---- */
-
-.filter-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
-  margin-bottom: 10px;
-}
-
-.filter-pill {
-  padding: 4px 10px;
-  font-size: 0.72rem;
-  font-weight: 500;
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  background: none;
-  color: var(--ink-2);
-  cursor: pointer;
-  transition: all var(--transition);
-  white-space: nowrap;
-}
-
-.filter-pill:hover {
-  color: var(--ink-0);
-  border-color: var(--line-strong);
-  background: rgba(255, 255, 255, 0.03);
-}
-
-.filter-pill.active {
-  color: var(--accent);
-  border-color: var(--accent);
-  background: var(--accent-dim);
-}
+/* ---- ACTION STREAM FILTER EXTRAS ---- */
 
 .filter-more-wrap {
   position: relative;
@@ -308,31 +276,6 @@ td .kind-badge + .kind-badge {
 .kind-gif_call { background: rgba(251, 146, 60, 0.1); color: #fb923c; }
 .kind-gif_error { background: var(--danger-dim); color: var(--danger); }
 .kind-web-followup { background: rgba(147, 130, 255, 0.1); color: #9382ff; }
-
-/* ---- COPY BUTTON ---- */
-
-.copy-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 1px 5px;
-  font-size: 0.68rem;
-  background: none;
-  border: 1px solid var(--line);
-  color: var(--ink-3);
-  border-radius: var(--radius-xs);
-  cursor: pointer;
-  margin-left: 4px;
-  transition: color var(--transition), border-color var(--transition);
-  vertical-align: middle;
-  line-height: 1;
-}
-
-.copy-btn:hover {
-  color: var(--accent);
-  border-color: var(--accent-soft);
-  background: none;
-}
 
 /* -- responsive -- */
 

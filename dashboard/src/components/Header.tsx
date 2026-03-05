@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { getToken, setToken } from "../api";
+import { StatusDot } from "./ui";
 
 export default function Header({ isReady }: { isReady?: boolean }) {
   const [value, setValue] = useState(getToken());
@@ -17,7 +18,7 @@ export default function Header({ isReady }: { isReady?: boolean }) {
       <div className="hero-strip">
         <div className="hero-left">
           <div className="hero-sigil">
-            <span className={`hero-sigil-dot${isReady ? " online" : ""}`} />
+            <StatusDot online={isReady} />
           </div>
           <div className="hero-ident">
             <span className="hero-tag">CLANKER CONK</span>

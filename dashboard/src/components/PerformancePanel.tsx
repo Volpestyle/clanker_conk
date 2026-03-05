@@ -1,4 +1,5 @@
 import React from "react";
+import { PanelHead } from "./ui";
 const PHASE_ROWS = [
   { key: "queueMs", label: "Queue" },
   { key: "ingestMs", label: "Ingest" },
@@ -18,12 +19,11 @@ export default function PerformancePanel({ performance }) {
 
   return (
     <section className="panel performance-panel">
-      <div className="panel-head">
-        <h3>Reply Latency (24h)</h3>
+      <PanelHead title="Reply Latency (24h)">
         <span className="performance-samples">
           samples: {sampleCount}
         </span>
-      </div>
+      </PanelHead>
 
       {sampleCount <= 0 ? (
         <p className="cost-empty">No timing samples yet. Trigger a few replies to populate p50/p95.</p>

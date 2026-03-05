@@ -1,11 +1,12 @@
 import React from "react";
 import Skeleton from "./Skeleton";
+import { PanelHead } from "./ui";
 
 export default function DailyCost({ rows }) {
   if (rows === undefined || rows === null) {
     return (
       <section className="panel">
-        <h3 style={{ margin: "0 0 12px" }}>Daily Cost (14d)</h3>
+        <PanelHead title="Daily Cost (14d)" />
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {[0, 1, 2, 3, 4].map((i) => (
             <div key={i}>
@@ -20,7 +21,7 @@ export default function DailyCost({ rows }) {
   if (rows.length === 0) {
     return (
       <section className="panel">
-        <h3 style={{ margin: "0 0 12px" }}>Daily Cost (14d)</h3>
+        <PanelHead title="Daily Cost (14d)" />
         <p className="cost-empty">No usage yet</p>
       </section>
     );

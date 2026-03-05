@@ -1,4 +1,5 @@
 import { useState, useMemo } from "react";
+import { CopyButton, Section } from "./ui";
 
 // ---- Types ----
 
@@ -73,53 +74,6 @@ function num(value: unknown): number {
 
 function getCardKey(action: ActivityAction, index: number): string {
   return String(action.id ?? `${action.created_at || "u"}-${index}`);
-}
-
-// ---- CopyButton ----
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-
-  function copy(e: React.MouseEvent) {
-    e.stopPropagation();
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  }
-
-  return (
-    <button type="button" className="tt-copy-btn" onClick={copy} title="Copy to clipboard">
-      {copied ? "\u2713 Copied" : "Copy"}
-    </button>
-  );
-}
-
-// ---- Section (collapsible) ----
-
-function Section({ title, badge, children, defaultOpen = false }: {
-  title: string;
-  badge?: string;
-  children: React.ReactNode;
-  defaultOpen?: boolean;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-
-  return (
-    <div className="tt-section">
-      <button
-        type="button"
-        className="tt-section-toggle"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-      >
-        <span className={`tt-section-arrow${open ? " tt-section-arrow-open" : ""}`}>&#x25B8;</span>
-        <span className="tt-section-title">{title}</span>
-        {badge && <span className="tt-section-badge">{badge}</span>}
-      </button>
-      {open && <div className="tt-section-body">{children}</div>}
-    </div>
-  );
 }
 
 // ---- AddressingRow ----
@@ -374,7 +328,7 @@ function PromptBreakdownSection({ prompts }: { prompts: ReplyPrompts }) {
         <div className="tt-prompt-block">
           <div className="tt-prompt-header">
             <span className="tt-prompt-label">SYSTEM PROMPT</span>
-            <CopyButton text={system} />
+            <CopyButton text={system} label />
           </div>
           <pre className="tt-prompt-pre">{system}</pre>
         </div>
@@ -383,7 +337,7 @@ function PromptBreakdownSection({ prompts }: { prompts: ReplyPrompts }) {
         <div className="tt-prompt-block">
           <div className="tt-prompt-header">
             <span className="tt-prompt-label">USER PROMPT</span>
-            <CopyButton text={user} />
+            <CopyButton text={user} label />
           </div>
           <pre className="tt-prompt-pre">{user}</pre>
         </div>
@@ -397,7 +351,7 @@ function PromptBreakdownSection({ prompts }: { prompts: ReplyPrompts }) {
             <div key={i} className="tt-prompt-followup">
               <div className="tt-prompt-header">
                 <span className="tt-prompt-label-sm">Step {i + 1}</span>
-                <CopyButton text={String(prompt || "")} />
+                <CopyButton text={String(prompt || "")} label />
               </div>
               <pre className="tt-prompt-pre">{String(prompt || "(empty)")}</pre>
             </div>
@@ -418,7 +372,7 @@ function FullMetadataSection({ metadata }: { metadata: Record<string, unknown> }
     <Section title="FULL METADATA">
       <div className="tt-meta-block">
         <div className="tt-meta-header">
-          <CopyButton text={json} />
+          <CopyButton text={json} label />
         </div>
         <pre className="tt-prompt-pre">{json}</pre>
       </div>

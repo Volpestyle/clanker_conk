@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import Skeleton from "../Skeleton";
 import { renderMarkdown } from "../../renderMarkdown";
+import { PanelHead } from "../ui";
 
 interface Props {
   markdown: string | null | undefined;
@@ -15,12 +16,11 @@ export default function MemorySnapshot({ markdown, onRefresh }: Props) {
 
   return (
     <div>
-      <div className="panel-head">
-        <h3>Memory Snapshot</h3>
+      <PanelHead title="Memory Snapshot">
         <button type="button" className="sm" onClick={onRefresh}>
           Refresh memory.md
         </button>
-      </div>
+      </PanelHead>
       {markdown === undefined || markdown === null ? (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <Skeleton height="0.9em" width="80%" />

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api } from "../../api";
 import { GuildSelectField } from "./MemoryFormFields";
+import { PanelHead } from "../ui";
 
 interface Guild {
   id: string;
@@ -233,9 +234,7 @@ export default function MemoryAdaptiveDirectives({ guilds }: Props) {
 
   return (
     <div className="memory-style-layout">
-      <div className="panel-head">
-        <h3>Adaptive Directives</h3>
-      </div>
+      <PanelHead title="Adaptive Directives" />
       <p className="memory-reflection-copy">
         These are persistent server-level directives that shape how the bot talks and acts across text and voice.
         Use `guidance` for style, tone, persona, or operating guidance, and `behavior` for recurring trigger/action instructions like GIFs or targeted callouts.

@@ -1,5 +1,6 @@
 import React, { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Skeleton from "./Skeleton";
+import { CopyButton, PanelHead } from "./ui";
 
 const STORAGE_KEY = "actionStreamColWidths";
 const COLUMNS = ["time", "kind", "channel", "content", "cost"] as const;
@@ -77,24 +78,6 @@ const ALL_FILTERS = [
 const OVERFLOW_FILTERS = ALL_FILTERS.filter(
   (f) => !(PRIMARY_PILLS as readonly string[]).includes(f)
 );
-
-function CopyButton({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-
-  function copy(e: React.MouseEvent) {
-    e.stopPropagation();
-    navigator.clipboard.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
-    });
-  }
-
-  return (
-    <button type="button" className="copy-btn" onClick={copy} title="Copy">
-      {copied ? "\u2713" : "\u2398"}
-    </button>
-  );
-}
 
 function getReplyPrompts(metadata: unknown) {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
@@ -248,9 +231,7 @@ export default function ActionStream({ actions }) {
   if (!actions || actions.length === 0) {
     return (
       <section className="panel">
-        <div className="panel-head">
-          <h3>Action Stream</h3>
-        </div>
+        <PanelHead title="Action Stream" />
         {actions === undefined || actions === null ? (
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
             {[0, 1, 2, 3].map((i) => (
@@ -268,9 +249,7 @@ export default function ActionStream({ actions }) {
 
   return (
     <section className="panel">
-      <div className="panel-head">
-        <h3>Action Stream</h3>
-      </div>
+      <PanelHead title="Action Stream" />
 
       <div className="filter-pills">
         {PRIMARY_PILLS.map((f) => (

@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "../api";
+import { FilterPills } from "./ui";
 import MemorySnapshot from "./memoryTab/MemorySnapshot";
 import MemorySearch from "./memoryTab/MemorySearch";
 import MemorySimulator from "./memoryTab/MemorySimulator";
@@ -32,44 +33,12 @@ export default function MemoryTab({ markdown, onRefresh, notify }: Props) {
 
   return (
     <section className="panel">
-      <div className="filter-pills" style={{ marginBottom: 14 }}>
-        <button
-          className={`filter-pill${subTab === "snapshot" ? " active" : ""}`}
-          onClick={() => setSubTab("snapshot")}
-        >
-          Snapshot
-        </button>
-        <button
-          className={`filter-pill${subTab === "inspector" ? " active" : ""}`}
-          onClick={() => setSubTab("inspector")}
-        >
-          Inspector
-        </button>
-        <button
-          className={`filter-pill${subTab === "directives" ? " active" : ""}`}
-          onClick={() => setSubTab("directives")}
-        >
-          Directives
-        </button>
-        <button
-          className={`filter-pill${subTab === "reflections" ? " active" : ""}`}
-          onClick={() => setSubTab("reflections")}
-        >
-          Reflections
-        </button>
-        <button
-          className={`filter-pill${subTab === "search" ? " active" : ""}`}
-          onClick={() => setSubTab("search")}
-        >
-          Search
-        </button>
-        <button
-          className={`filter-pill${subTab === "simulator" ? " active" : ""}`}
-          onClick={() => setSubTab("simulator")}
-        >
-          Simulator
-        </button>
-      </div>
+      <FilterPills
+        items={["snapshot", "inspector", "directives", "reflections", "search", "simulator"] as const}
+        active={subTab}
+        onChange={setSubTab}
+        label={(t) => t.charAt(0).toUpperCase() + t.slice(1)}
+      />
       <div style={{ display: subTab === "snapshot" ? undefined : "none" }}>
         <MemorySnapshot markdown={markdown} onRefresh={onRefresh} />
       </div>

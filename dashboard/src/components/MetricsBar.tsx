@@ -1,6 +1,7 @@
 import React from "react";
 import Skeleton from "./Skeleton";
 import { formatUptime } from "../utils";
+import { StatusDot } from "./ui";
 
 interface MetricTile {
   label: string;
@@ -62,7 +63,7 @@ export default function MetricsBar({ stats }) {
     <section className="metrics-wrap">
       <div className="runtime-banner panel">
         <div className="runtime-banner-left">
-          <span className={`status-dot${isOnline ? " online" : ""}`} />
+          <StatusDot online={isOnline} />
           <span className="runtime-label">
             {isOnline
               ? `Online — ${runtime.guildCount} guild${runtime.guildCount !== 1 ? "s" : ""}`

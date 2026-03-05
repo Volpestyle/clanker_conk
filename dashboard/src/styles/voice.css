@@ -363,54 +363,6 @@
   animation: pulse 0.8s ease-in-out infinite;
 }
 
-/* -- collapsible section -- */
-
-.vm-section {
-  border-top: 1px solid var(--line);
-}
-
-.vm-section-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  background: none;
-  border: none;
-  padding: 8px 0;
-  cursor: pointer;
-  color: var(--ink-1);
-  font-size: 0.78rem;
-  font-weight: 600;
-  text-align: left;
-}
-
-.vm-section-toggle:hover {
-  color: var(--ink-0);
-}
-
-.vm-section-arrow {
-  font-size: 0.68rem;
-  color: var(--ink-3);
-  width: 12px;
-}
-
-.vm-section-title {
-  flex: 1;
-}
-
-.vm-section-badge {
-  font-size: 0.66rem;
-  font-weight: 600;
-  padding: 1px 6px;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--ink-2);
-}
-
-.vm-section-body {
-  padding: 0 0 8px 18px;
-}
-
 /* -- detail grid -- */
 
 .vm-detail-grid {

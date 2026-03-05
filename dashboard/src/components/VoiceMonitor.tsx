@@ -10,6 +10,7 @@ import {
   type LatencyTurnEntry
 } from "../hooks/useVoiceSSE";
 import { useVoiceHistory } from "../hooks/useVoiceHistory";
+import { Section } from "./ui";
 
 // ---- helpers ----
 
@@ -299,32 +300,6 @@ function resolveVoiceJoinStatusMessage(result: VoiceJoinResponse): {
     type: "error",
     text: "Voice join failed."
   };
-}
-
-// ---- Collapsible Section ----
-
-function Section({
-  title,
-  badge,
-  defaultOpen = true,
-  children
-}: {
-  title: string;
-  badge?: string | number | null;
-  defaultOpen?: boolean;
-  children: ReactNode;
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className={`vm-section ${open ? "vm-section-open" : ""}`}>
-      <button className="vm-section-toggle" onClick={() => setOpen(!open)}>
-        <span className="vm-section-arrow">{open ? "\u25BE" : "\u25B8"}</span>
-        <span className="vm-section-title">{title}</span>
-        {badge != null && <span className="vm-section-badge">{badge}</span>}
-      </button>
-      {open && <div className="vm-section-body">{children}</div>}
-    </div>
-  );
 }
 
 // ---- Stat Pill ----
@@ -629,7 +604,7 @@ function ParticipantList({ session }: { session: VoiceSession }) {
   if (ps.length === 0) return null;
 
   return (
-    <Section title="Participants" badge={session.participantCount}>
+    <Section title="Participants" badge={session.participantCount} defaultOpen>
       <div className="vm-participant-list">
         {ps.map((p) => (
           <div
@@ -1124,7 +1099,7 @@ function StreamWatchDetail({ session }: { session: VoiceSession }) {
   if (!hasAnyStreamWatchData) return null;
 
   return (
-    <Section title="Screen Share" badge={sw.active ? "active" : "idle"}>
+    <Section title="Screen Share" badge={sw.active ? "active" : "idle"} defaultOpen>
       <div className="vm-detail-grid">
         <Stat label="Target" value={sw.targetUserId?.slice(0, 8) || "none"} />
         <Stat label="Requested By" value={sw.requestedByUserId?.slice(0, 8) || "none"} />
