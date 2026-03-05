@@ -141,6 +141,9 @@ import { evaluateVoiceReplyDecision as evaluateVoiceReplyDecisionModule } from "
 import {
   ACTIVITY_TOUCH_MIN_SPEECH_MS,
   ACTIVITY_TOUCH_THROTTLE_MS,
+  BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS,
+  BARGE_IN_BOT_SPEAKING_ACTIVE_RATIO_MIN,
+  BARGE_IN_BOT_SPEAKING_PEAK_MIN,
   BARGE_IN_FULL_OVERRIDE_MIN_MS,
   BARGE_IN_MIN_SPEECH_MS,
   BARGE_IN_STT_MIN_CAPTURE_AGE_MS,
@@ -3240,6 +3243,21 @@ export class VoiceSessionManager {
   shouldBargeIn({ session, userId, captureState }) {
     if (!session || session.ending) return { allowed: false };
     if (!this.isBargeInInterruptTargetActive(session)) return { allowed: false };
+    const botTurnOpenAt = Number(session.botTurnOpenAt || 0);
+    if (!session.botTurnOpen && botTurnOpenAt <= 0) {
+      // Bot is not currently speaking and turn was never opened (or was
+      // reset). Only allow barge-in if the pending response already
+      // produced audio (turn was played then reset). If no audio was
+      // ever sent, the user can't be interrupting something they
+      // haven't heard — prevents false barge-in when speaking while
+      // waiting for a tool call result.
+      const pendingEverProducedAudio = Number(session.pendingResponse?.audioReceivedAt || 0) > 0;
+      if (!pendingEverProducedAudio) {
+        return { allowed: false };
+      }
+    } else if (botTurnOpenAt > 0 && Date.now() - botTurnOpenAt < BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS) {
+      return { allowed: false };
+    }
     const normalizedUserId = String(userId || "").trim();
     if (!normalizedUserId) return { allowed: false };
     if (captureState?.speakingEndFinalizeTimer) return { allowed: false };
@@ -3264,6 +3282,9 @@ export class VoiceSessionManager {
     }
     if (Number(captureState?.bytesSent || 0) < minCaptureBytes) return { allowed: false };
     if (!this.isCaptureSignalAssertive(captureState)) return { allowed: false };
+    if (session.botTurnOpen && !this.isCaptureSignalAssertiveDuringBotSpeech(captureState)) {
+      return { allowed: false };
+    }
     return { allowed: true, minCaptureBytes, interruptionPolicy };
   }
 
@@ -3281,6 +3302,18 @@ export class VoiceSessionManager {
       activeSampleRatio <= VOICE_SILENCE_GATE_ACTIVE_RATIO_MAX &&
       peak <= VOICE_SILENCE_GATE_PEAK_MAX;
     return !nearSilentSignal;
+  }
+
+  isCaptureSignalAssertiveDuringBotSpeech(capture) {
+    if (!capture || typeof capture !== "object") return false;
+    const sampleCount = Math.max(0, Number(capture.signalSampleCount || 0));
+    if (sampleCount <= 0) return false;
+    const activeSampleCount = Math.max(0, Number(capture.signalActiveSampleCount || 0));
+    const peakAbs = Math.max(0, Number(capture.signalPeakAbs || 0));
+    const activeSampleRatio = activeSampleCount / sampleCount;
+    const peak = peakAbs / 32768;
+    return activeSampleRatio >= BARGE_IN_BOT_SPEAKING_ACTIVE_RATIO_MIN &&
+      peak >= BARGE_IN_BOT_SPEAKING_PEAK_MIN;
   }
 
   isCaptureEligibleForActivityTouch({ session, capture }) {
@@ -3390,7 +3423,8 @@ export class VoiceSessionManager {
     session,
     userId = null,
     source = "speaking_start",
-    minCaptureBytes = 0
+    minCaptureBytes = 0,
+    captureState = null
   }) {
     if (!session || session.ending) return false;
 
@@ -3412,6 +3446,7 @@ export class VoiceSessionManager {
       session.botTurnResetTimer = null;
     }
     session.botTurnOpen = false;
+    session.botTurnOpenAt = 0;
 
     // Unduck music immediately on barge-in so the user hears it while speaking.
     const resolvedSettings = session.settingsSnapshot || this.store.getSettings();
@@ -3460,6 +3495,15 @@ export class VoiceSessionManager {
         pendingRequestId,
         minCaptureBytes: Math.max(0, Number(minCaptureBytes || 0)),
         suppressionMs: BARGE_IN_SUPPRESSION_MAX_MS,
+        captureSignalPeak: captureState ? Math.max(0, Number(captureState.signalPeakAbs || 0)) / 32768 : null,
+        captureSignalActiveSampleRatio: captureState && Number(captureState.signalSampleCount || 0) > 0
+          ? Math.max(0, Number(captureState.signalActiveSampleCount || 0)) / Number(captureState.signalSampleCount)
+          : null,
+        captureBytesSent: captureState ? Number(captureState.bytesSent || 0) : null,
+        botTurnOpen: Boolean(session.botTurnOpen),
+        botTurnAgeMs: Number(session.botTurnOpenAt || 0) > 0
+          ? Math.max(0, now - Number(session.botTurnOpenAt))
+          : null,
         queuedRetryUtterance: Boolean(isRealtimeMode(session.mode) && retryUtteranceText),
         retryInterruptionPolicyScope: interruptionPolicy?.scope || null,
         retryInterruptionPolicyAllowedUserId: interruptionPolicy?.allowedUserId || null,
@@ -4098,6 +4142,7 @@ export class VoiceSessionManager {
 
     if (!session.botTurnOpen) {
       session.botTurnOpen = true;
+      session.botTurnOpenAt = now;
       session.lastAssistantReplyAt = now;
       this.store.logAction({
         kind: "voice_turn_out",
@@ -4117,6 +4162,7 @@ export class VoiceSessionManager {
 
     session.botTurnResetTimer = setTimeout(() => {
       session.botTurnOpen = false;
+      session.botTurnOpenAt = 0;
       session.botTurnResetTimer = null;
       this.maybeClearActiveReplyInterruptionPolicy(session);
     }, BOT_TURN_SILENCE_RESET_MS);
@@ -6211,7 +6257,8 @@ export class VoiceSessionManager {
           session,
           userId,
           source: "speaking_data",
-          minCaptureBytes: bargeDecision.minCaptureBytes
+          minCaptureBytes: bargeDecision.minCaptureBytes,
+          captureState
         });
       }
 
@@ -11318,6 +11365,7 @@ export class VoiceSessionManager {
     session.bargeInSuppressionUntil = 0;
     session.bargeInSuppressedAudioChunks = 0;
     session.bargeInSuppressedAudioBytes = 0;
+    session.botTurnOpenAt = 0;
     this.resetBotAudioPlayback(session);
 
     for (const capture of session.userCaptures.values()) {

@@ -517,7 +517,7 @@ test("shouldBargeIn interrupts queued playback even when botTurnOpen already res
       hardRecoveryAttempted: false,
       source: "turn_flush",
       handlingSilence: false,
-      audioReceivedAt: 0
+      audioReceivedAt: Date.now() - 200
     },
     userCaptures: new Map([["user-1", captureState]])
   });

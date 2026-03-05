@@ -31,6 +31,14 @@ export const BARGE_IN_MIN_SPEECH_MS = 700;
 // the old timer-based armAssertiveBargeIn delay.
 export const BARGE_IN_STT_MIN_CAPTURE_AGE_MS = 500;
 export const BARGE_IN_SUPPRESSION_MAX_MS = 12_000;
+// Grace period after bot TTS audio starts before barge-in is accepted.
+// Prevents false barge-in from echo of the bot's own voice through user mic.
+export const BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS = 1500;
+// Stricter assertiveness thresholds while bot is speaking (echo rejection).
+// Normal gate: activeSampleRatio > 0.01, peak > 0.012 (anything above silence).
+// Bot-speaking gate: require clearly audible speech, not just faint echo leak.
+export const BARGE_IN_BOT_SPEAKING_ACTIVE_RATIO_MIN = 0.06;
+export const BARGE_IN_BOT_SPEAKING_PEAK_MIN = 0.05;
 export const BARGE_IN_FULL_OVERRIDE_MIN_MS = 2200;
 export const BARGE_IN_RETRY_MAX_AGE_MS = 10_000;
 export const ACTIVITY_TOUCH_THROTTLE_MS = 2000;
