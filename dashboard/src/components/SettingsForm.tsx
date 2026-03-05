@@ -22,6 +22,7 @@ import { PromptGuidanceSettingsSection } from "./settingsSections/PromptGuidance
 import { LlmConfigurationSettingsSection } from "./settingsSections/LlmConfigurationSettingsSection";
 import { WebSearchSettingsSection } from "./settingsSections/WebSearchSettingsSection";
 import { BrowserSettingsSection } from "./settingsSections/BrowserSettingsSection";
+import { CodeAgentSettingsSection } from "./settingsSections/CodeAgentSettingsSection";
 import { VisionSettingsSection } from "./settingsSections/VisionSettingsSection";
 import { VideoContextSettingsSection } from "./settingsSections/VideoContextSettingsSection";
 import { VoiceModeSettingsSection } from "./settingsSections/VoiceModeSettingsSection";
@@ -29,6 +30,7 @@ import { RateLimitsSettingsSection } from "./settingsSections/RateLimitsSettings
 import { StartupCatchupSettingsSection } from "./settingsSections/StartupCatchupSettingsSection";
 import { DiscoverySettingsSection } from "./settingsSections/DiscoverySettingsSection";
 import { ChannelsPermissionsSettingsSection } from "./settingsSections/ChannelsPermissionsSettingsSection";
+import { SubAgentOrchestrationSettingsSection } from "./settingsSections/SubAgentOrchestrationSettingsSection";
 
 const SECTIONS = [
   { id: "sec-core", label: "Core Behavior" },
@@ -36,6 +38,8 @@ const SECTIONS = [
   { id: "sec-llm", label: "LLM Config" },
   { id: "sec-search", label: "Web Search" },
   { id: "sec-browser", label: "Browser" },
+  { id: "sec-code-agent", label: "Code Agent" },
+  { id: "sec-orchestration", label: "Orchestration" },
   { id: "sec-vision", label: "Vision" },
   { id: "sec-video", label: "Video Context" },
   { id: "sec-voice", label: "Voice Mode" },
@@ -355,6 +359,19 @@ export default function SettingsForm({
             browserLlmModelOptions={browserLlmModelOptions}
             selectedBrowserLlmPresetModel={selectedBrowserLlmPresetModel}
           />
+          <CodeAgentSettingsSection id="sec-code-agent" form={form} set={set} />
+          <SubAgentOrchestrationSettingsSection id="sec-orchestration" form={form} set={set} />
+          <VisionSettingsSection
+            id="sec-vision"
+            form={form}
+            set={set}
+            setVisionProvider={setVisionProvider}
+            selectVisionPresetModel={selectVisionPresetModel}
+            visionModelOptions={visionModelOptions}
+            selectedVisionPresetModel={selectedVisionPresetModel}
+          />
+          <CodeAgentSettingsSection id="sec-code-agent" form={form} set={set} />
+          <SubAgentOrchestrationSettingsSection id="sec-orchestration" form={form} set={set} />
           <VisionSettingsSection
             id="sec-vision"
             form={form}

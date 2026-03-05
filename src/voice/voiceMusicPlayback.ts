@@ -1250,9 +1250,7 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
   if (!pcmBuffer?.length) return true;
 
   const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
-  if (!resolvedSettings?.voice?.asrDuringMusic) {
-    return true; // music active but ASR during music disabled — swallow turn silently
-  }
+  const asrDuringMusic = Boolean(resolvedSettings?.voice?.asrDuringMusic);
 
   if (!manager.llm?.transcribeAudio) {
     manager.store.logAction({
@@ -1367,14 +1365,19 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
       captureReason: String(captureReason || "stream_end"),
       transcript: normalizedTranscript,
       shouldStop,
-      decisionReason: shouldStop ? "heuristic_stop" : "no_stop_cue"
+      directAddressedToBot,
+      asrDuringMusic,
+      decisionReason: shouldStop
+        ? "heuristic_stop"
+        : directAddressedToBot
+          ? "direct_address"
+          : disambiguationResolutionTurn
+            ? "disambiguation"
+            : "swallowed"
     }
   });
 
   if (!shouldStop) {
-    // During command-only playback mode, keep a short speaker-locked
-    // follow-up window so actual disambiguation replies like "the second one" do not
-    // require the wake word again.
     if (directAddressedToBot || disambiguationResolutionTurn) {
       return false;
     }

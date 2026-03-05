@@ -9,12 +9,14 @@ import {
   executeSharedMemoryToolWrite
 } from "../memory/memoryToolRuntime.ts";
 import { formatConversationWindows } from "../prompts/promptFormatters.ts";
+import type { SubAgentSessionManager, SubAgentSession } from "../agents/subAgentSession.ts";
 
 const MAX_WEB_QUERY_LEN = 220;
 const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
 const MAX_CONVERSATION_LOOKUP_QUERY_LEN = 220;
 const MAX_IMAGE_LOOKUP_QUERY_LEN = 220;
 const MAX_BROWSER_BROWSE_QUERY_LEN = 500;
+const MAX_CODE_TASK_LEN = 2000;
 const MAX_OPEN_ARTICLE_REF_LEN = 260;
 
 interface ReplyToolDefinition {
@@ -66,6 +68,25 @@ type ReplyToolRuntime = {
       hitStepLimit?: boolean;
       error?: string | null;
       blockedByBudget?: boolean;
+    }>;
+  };
+  codeAgent?: {
+    runTask: (opts: {
+      settings: Record<string, unknown>;
+      task: string;
+      cwd?: string;
+      guildId: string;
+      channelId: string | null;
+      userId: string | null;
+      source: string;
+    }) => Promise<{
+      text?: string;
+      isError?: boolean;
+      costUsd?: number;
+      error?: string | null;
+      blockedByBudget?: boolean;
+      blockedByPermission?: boolean;
+      blockedByParallelLimit?: boolean;
     }>;
   };
   memory?: {
@@ -139,6 +160,24 @@ type ReplyToolRuntime = {
       note?: Record<string, unknown> | null;
     };
   };
+  subAgentSessions?: {
+    manager: SubAgentSessionManager;
+    createCodeSession: (opts: {
+      settings: Record<string, unknown>;
+      cwd?: string;
+      guildId: string;
+      channelId: string | null;
+      userId: string | null;
+      source: string;
+    }) => SubAgentSession | null;
+    createBrowserSession: (opts: {
+      settings: Record<string, unknown>;
+      guildId: string;
+      channelId: string | null;
+      userId: string | null;
+      source: string;
+    }) => SubAgentSession | null;
+  };
 };
 
 type ReplyToolContext = {
@@ -174,13 +213,17 @@ const WEB_SEARCH_TOOL: ReplyToolDefinition = {
 const BROWSER_BROWSE_TOOL: ReplyToolDefinition = {
   name: "browser_browse",
   description:
-    "Browse the web interactively with a headless browser agent and report back with the result. Use for tasks that need clicking, navigating, scrolling, or reading dynamic page content beyond normal web search.",
+    "Browse the web interactively with a headless browser agent and report back with the result. Use for tasks that need clicking, navigating, scrolling, or reading dynamic page content beyond normal web search. Pass session_id to continue a previous interactive session.",
   input_schema: {
     type: "object",
     properties: {
       query: {
         type: "string",
-        description: "Instruction for what to browse and find out (max 500 chars)"
+        description: "Instruction for what to browse and find out (max 500 chars). For follow-up turns, this is the continuation message."
+      },
+      session_id: {
+        type: "string",
+        description: "Session ID from a previous browser_browse result. Pass this to continue an interactive multi-turn session instead of starting a new one."
       }
     },
     required: ["query"]
@@ -270,7 +313,7 @@ const CONVERSATION_SEARCH_TOOL: ReplyToolDefinition = {
 const ADAPTIVE_STYLE_ADD_TOOL: ReplyToolDefinition = {
   name: "adaptive_directive_add",
   description:
-    "Persist a server-level adaptive directive for future conversations. Use for style guidance, operating guidance, or recurring trigger/action behavior, like how to talk or when to send a GIF/reaction. Keep the directive concise, usually 1-2 sentences max.",
+    "Save a persistent server-level directive so you remember it in future conversations. You MUST call this whenever someone uses language like 'always', 'never', 'from now on', 'every time', 'start calling me', 'stop doing', or any request that implies a standing rule — even casual ones like 'call me pookie' or 'talk like a pirate'. Covers style/tone, nicknames, recurring triggers/actions, and operating instructions. Keep the note concise (1-2 sentences).",
   input_schema: {
     type: "object",
     properties: {
@@ -290,7 +333,7 @@ const ADAPTIVE_STYLE_ADD_TOOL: ReplyToolDefinition = {
 const ADAPTIVE_STYLE_REMOVE_TOOL: ReplyToolDefinition = {
   name: "adaptive_directive_remove",
   description:
-    "Remove an active server-level adaptive directive when someone explicitly asks you to stop using it or undo a prior recurring behavior. Prefer `note_ref` from the prompt when available.",
+    "Remove a saved directive. Call this when someone says to stop doing something you previously saved — 'stop calling me pookie', 'don't do that anymore', 'go back to normal', etc. Use `note_ref` from the active directives in your prompt when available, otherwise describe the directive in `target`.",
   input_schema: {
     type: "object",
     properties: {
@@ -343,6 +386,30 @@ const OPEN_ARTICLE_TOOL: ReplyToolDefinition = {
   }
 };
 
+const CODE_TASK_TOOL: ReplyToolDefinition = {
+  name: "code_task",
+  description:
+    "Spawn Claude Code to perform a coding task in a project directory. Can read/write files, run commands, use git, create PRs. Only available to allowed users. Pass session_id to continue a previous interactive session.",
+  input_schema: {
+    type: "object",
+    properties: {
+      task: {
+        type: "string",
+        description: "Detailed instruction for what Claude Code should do. Be specific — include repo context, file paths, issue numbers, expected behavior. For follow-up turns, this is the continuation message."
+      },
+      cwd: {
+        type: "string",
+        description: "Working directory for the task. Defaults to the configured project root if omitted."
+      },
+      session_id: {
+        type: "string",
+        description: "Session ID from a previous code_task result. Pass this to continue an interactive multi-turn session instead of starting a new one."
+      }
+    },
+    required: ["task"]
+  }
+};
+
 const ALL_REPLY_TOOLS: ReplyToolDefinition[] = [
   WEB_SEARCH_TOOL,
   BROWSER_BROWSE_TOOL,
@@ -352,7 +419,8 @@ const ALL_REPLY_TOOLS: ReplyToolDefinition[] = [
   ADAPTIVE_STYLE_REMOVE_TOOL,
   CONVERSATION_SEARCH_TOOL,
   IMAGE_LOOKUP_TOOL,
-  OPEN_ARTICLE_TOOL
+  OPEN_ARTICLE_TOOL,
+  CODE_TASK_TOOL
 ];
 
 // --- Settings-gated tool set builder ---
@@ -377,6 +445,11 @@ function isBrowserBrowseEnabled(settings: Record<string, unknown>): boolean {
   return Boolean(browser?.enabled);
 }
 
+function isCodeAgentEnabled(settings: Record<string, unknown>): boolean {
+  const codeAgent = settings?.codeAgent as Record<string, unknown> | undefined;
+  return Boolean(codeAgent?.enabled);
+}
+
 export function buildReplyToolSet(
   settings: Record<string, unknown>,
   capabilities: {
@@ -387,6 +460,7 @@ export function buildReplyToolSet(
     conversationSearchAvailable?: boolean;
     imageLookupAvailable?: boolean;
     openArticleAvailable?: boolean;
+    codeAgentAvailable?: boolean;
   } = {}
 ): ReplyToolDefinition[] {
   const tools: ReplyToolDefinition[] = [];
@@ -429,6 +503,13 @@ export function buildReplyToolSet(
     tools.push(OPEN_ARTICLE_TOOL);
   }
 
+  if (
+    capabilities.codeAgentAvailable !== false &&
+    isCodeAgentEnabled(settings)
+  ) {
+    tools.push(CODE_TASK_TOOL);
+  }
+
   return tools;
 }
 
@@ -459,6 +540,8 @@ export async function executeReplyTool(
       return executeImageLookup(input, context);
     case "open_article":
       return executeOpenArticle(input, runtime, context);
+    case "code_task":
+      return executeCodeTask(input, runtime, context);
     default:
       return { content: `Unknown tool: ${toolName}`, isError: true };
   }
@@ -575,6 +658,58 @@ async function executeBrowserBrowse(
   if (!query) {
     return { content: "Missing or empty browser browse query.", isError: true };
   }
+
+  const sessionId = typeof input?.session_id === "string" ? String(input.session_id).trim() : "";
+
+  // --- Multi-turn session continuation ---
+  if (sessionId && runtime.subAgentSessions) {
+    const session = runtime.subAgentSessions.manager.get(sessionId);
+    if (!session) {
+      return { content: `Browser session '${sessionId}' not found or expired.`, isError: true };
+    }
+    // Verify the caller owns this session
+    if (session.ownerUserId && session.ownerUserId !== context.userId) {
+      return { content: `Not authorized to continue browser session '${sessionId}'.`, isError: true };
+    }
+    try {
+      const turnResult = await session.runTurn(query);
+      const sessionNote = `\n\n[session_id: ${session.id}]`;
+      if (turnResult.isError) {
+        return { content: `Browser browse failed: ${turnResult.errorMessage}${sessionNote}`, isError: true };
+      }
+      return { content: (turnResult.text.trim() || "Browser browse completed.") + sessionNote };
+    } catch (error) {
+      return { content: `Browser browse session failed: ${String((error as Error)?.message || error)}`, isError: true };
+    }
+  }
+
+  // --- New interactive session (if session manager is available) ---
+  if (runtime.subAgentSessions?.createBrowserSession) {
+    const session = runtime.subAgentSessions.createBrowserSession({
+      settings: context.settings,
+      guildId: context.guildId,
+      channelId: context.channelId,
+      userId: context.userId,
+      source: String(context.trace?.source || "reply_tool_browser_browse")
+    });
+
+    if (session) {
+      runtime.subAgentSessions.manager.register(session);
+      try {
+        const turnResult = await session.runTurn(query);
+        const sessionNote = `\n\n[session_id: ${session.id}]`;
+        if (turnResult.isError) {
+          return { content: `Browser browse failed: ${turnResult.errorMessage}${sessionNote}`, isError: true };
+        }
+        return { content: (turnResult.text.trim() || "Browser browse completed.") + sessionNote };
+      } catch (error) {
+        return { content: `Browser browse failed: ${String((error as Error)?.message || error)}`, isError: true };
+      }
+    }
+    // Fallback to one-shot if session creation returned null
+  }
+
+  // --- Legacy one-shot fallback ---
   if (!runtime.browser?.browse) {
     return { content: "Browser browsing is not available.", isError: true };
   }
@@ -851,13 +986,128 @@ async function executeOpenArticle(
   };
 }
 
+async function executeCodeTask(
+  input: ReplyToolCallInput,
+  runtime: ReplyToolRuntime,
+  context: ReplyToolContext
+): Promise<ReplyToolResult> {
+  const task = normalizeDirectiveText(
+    String(input?.task || ""),
+    MAX_CODE_TASK_LEN
+  );
+  if (!task) {
+    return { content: "Missing or empty code task instruction.", isError: true };
+  }
+
+  const sessionId = typeof input?.session_id === "string" ? String(input.session_id).trim() : "";
+
+  // --- Multi-turn session continuation ---
+  if (sessionId && runtime.subAgentSessions) {
+    const session = runtime.subAgentSessions.manager.get(sessionId);
+    if (!session) {
+      return { content: `Code session '${sessionId}' not found or expired.`, isError: true };
+    }
+    // Verify the caller owns this session
+    if (session.ownerUserId && session.ownerUserId !== context.userId) {
+      return { content: `Not authorized to continue code session '${sessionId}'.`, isError: true };
+    }
+    try {
+      const turnResult = await session.runTurn(task);
+      const costNote = turnResult.costUsd ? ` (cost: $${turnResult.costUsd.toFixed(4)})` : "";
+      const sessionNote = `\n\n[session_id: ${session.id}]`;
+      if (turnResult.isError) {
+        return { content: `Code task failed: ${turnResult.errorMessage}${costNote}${sessionNote}`, isError: true };
+      }
+      const text = turnResult.text.trim();
+      return {
+        content: (text ? `${text}${costNote}` : `Code task completed with no text result.${costNote}`) + sessionNote
+      };
+    } catch (error) {
+      return { content: `Code task session failed: ${String((error as Error)?.message || error)}`, isError: true };
+    }
+  }
+
+  // --- New interactive session (if session manager is available) ---
+  if (runtime.subAgentSessions?.createCodeSession) {
+    const session = runtime.subAgentSessions.createCodeSession({
+      settings: context.settings,
+      cwd: typeof input?.cwd === "string" ? String(input.cwd).trim() : undefined,
+      guildId: context.guildId,
+      channelId: context.channelId,
+      userId: context.userId,
+      source: String(context.trace?.source || "reply_tool_code_task")
+    });
+
+    if (session) {
+      runtime.subAgentSessions.manager.register(session);
+      try {
+        const turnResult = await session.runTurn(task);
+        const costNote = turnResult.costUsd ? ` (cost: $${turnResult.costUsd.toFixed(4)})` : "";
+        const sessionNote = `\n\n[session_id: ${session.id}]`;
+        if (turnResult.isError) {
+          return { content: `Code task failed: ${turnResult.errorMessage}${costNote}${sessionNote}`, isError: true };
+        }
+        const text = turnResult.text.trim();
+        return {
+          content: (text ? `${text}${costNote}` : `Code task completed with no text result.${costNote}`) + sessionNote
+        };
+      } catch (error) {
+        return { content: `Code task failed: ${String((error as Error)?.message || error)}`, isError: true };
+      }
+    }
+    // Fallback to one-shot if session creation returned null (e.g. blocked)
+  }
+
+  // --- Legacy one-shot fallback ---
+  if (!runtime.codeAgent?.runTask) {
+    return { content: "Code agent is not available.", isError: true };
+  }
+
+  try {
+    const result = await runtime.codeAgent.runTask({
+      settings: context.settings,
+      task,
+      cwd: typeof input?.cwd === "string" ? String(input.cwd).trim() : undefined,
+      guildId: context.guildId,
+      channelId: context.channelId,
+      userId: context.userId,
+      source: String(context.trace?.source || "reply_tool_code_task")
+    });
+
+    if (result?.blockedByPermission) {
+      return { content: "This capability is restricted to allowed users.", isError: true };
+    }
+    if (result?.blockedByBudget) {
+      return { content: "Code agent is currently blocked by rate limits.", isError: true };
+    }
+    if (result?.blockedByParallelLimit) {
+      return { content: "Too many code agent tasks are already running. Try again shortly.", isError: true };
+    }
+    if (result?.error) {
+      return { content: `Code task failed: ${String(result.error)}`, isError: true };
+    }
+
+    const text = String(result?.text || "").trim();
+    const costNote = result?.costUsd ? ` (cost: $${result.costUsd.toFixed(4)})` : "";
+    return {
+      content: text ? `${text}${costNote}` : `Code task completed with no text result.${costNote}`
+    };
+  } catch (error) {
+    return {
+      content: `Code task failed: ${String((error as Error)?.message || error)}`,
+      isError: true
+    };
+  }
+}
+
 export {
   ALL_REPLY_TOOLS,
   WEB_SEARCH_TOOL,
   MEMORY_SEARCH_TOOL,
   MEMORY_WRITE_TOOL,
   IMAGE_LOOKUP_TOOL,
-  OPEN_ARTICLE_TOOL
+  OPEN_ARTICLE_TOOL,
+  CODE_TASK_TOOL
 };
 
 export type {

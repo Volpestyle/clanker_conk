@@ -31,6 +31,22 @@ function normalizeBrowserLlmProvider(value, fallback = "anthropic") {
   return provider === "openai" || provider === "anthropic" ? provider : fallback;
 }
 
+function normalizeCodeAgentProvider(value, fallback = "claude-code") {
+  const normalized = String(value || "")
+    .trim()
+    .toLowerCase();
+  if (normalized === "claude-code") return "claude-code";
+  if (normalized === "codex") return "codex";
+  if (normalized === "auto") return "auto";
+
+  const fallbackProvider = String(fallback || "")
+    .trim()
+    .toLowerCase();
+  if (fallbackProvider === "codex") return "codex";
+  if (fallbackProvider === "auto") return "auto";
+  return "claude-code";
+}
+
 export function normalizeSettings(raw) {
   const merged = deepMerge(DEFAULT_SETTINGS, raw ?? {});
   if (!merged.persona || typeof merged.persona !== "object") merged.persona = {};
@@ -40,6 +56,7 @@ export function normalizeSettings(raw) {
   if (!merged.permissions || typeof merged.permissions !== "object") merged.permissions = {};
   if (!merged.discovery || typeof merged.discovery !== "object") merged.discovery = {};
   if (!merged.memory || typeof merged.memory !== "object") merged.memory = {};
+  if (!merged.codeAgent || typeof merged.codeAgent !== "object") merged.codeAgent = {};
   if (!merged.adaptiveDirectives || typeof merged.adaptiveDirectives !== "object") merged.adaptiveDirectives = {};
   if (!merged.automations || typeof merged.automations !== "object") merged.automations = {};
   if (!merged.llm || typeof merged.llm !== "object") merged.llm = {};
@@ -1356,6 +1373,58 @@ export function normalizeSettings(raw) {
     Number(merged.memory?.dailyLogRetentionDays) || Number(DEFAULT_SETTINGS.memory?.dailyLogRetentionDays) || 30,
     1,
     365
+  );
+
+  merged.codeAgent.enabled = Boolean(merged.codeAgent?.enabled);
+  merged.codeAgent.provider = normalizeCodeAgentProvider(
+    merged.codeAgent?.provider,
+    String(DEFAULT_SETTINGS.codeAgent?.provider || "claude-code")
+  );
+  merged.codeAgent.model = String(merged.codeAgent?.model || DEFAULT_SETTINGS.codeAgent?.model || "sonnet").trim().slice(0, 120);
+  const normalizedCodeAgentCodexModel = String(
+    merged.codeAgent?.codexModel || DEFAULT_SETTINGS.codeAgent?.codexModel || "codex-mini-latest"
+  ).trim().slice(0, 120);
+  merged.codeAgent.codexModel =
+    normalizedCodeAgentCodexModel || String(DEFAULT_SETTINGS.codeAgent?.codexModel || "codex-mini-latest");
+  merged.codeAgent.maxTurns = clamp(
+    Number(merged.codeAgent?.maxTurns) || Number(DEFAULT_SETTINGS.codeAgent?.maxTurns) || 30,
+    1,
+    200
+  );
+  merged.codeAgent.timeoutMs = clamp(
+    Number(merged.codeAgent?.timeoutMs) || Number(DEFAULT_SETTINGS.codeAgent?.timeoutMs) || 300_000,
+    10_000,
+    1_800_000
+  );
+  merged.codeAgent.maxBufferBytes = clamp(
+    Number(merged.codeAgent?.maxBufferBytes) || Number(DEFAULT_SETTINGS.codeAgent?.maxBufferBytes) || 2 * 1024 * 1024,
+    4096,
+    10 * 1024 * 1024
+  );
+  merged.codeAgent.defaultCwd = String(merged.codeAgent?.defaultCwd ?? DEFAULT_SETTINGS.codeAgent?.defaultCwd ?? "").trim().slice(0, 500);
+  merged.codeAgent.maxTasksPerHour = clamp(
+    Number(merged.codeAgent?.maxTasksPerHour) || Number(DEFAULT_SETTINGS.codeAgent?.maxTasksPerHour) || 10,
+    1,
+    100
+  );
+  merged.codeAgent.maxParallelTasks = clamp(
+    Number(merged.codeAgent?.maxParallelTasks) || Number(DEFAULT_SETTINGS.codeAgent?.maxParallelTasks) || 2,
+    1,
+    10
+  );
+  merged.codeAgent.allowedUserIds = uniqueIdList(merged.codeAgent?.allowedUserIds).slice(0, 50);
+
+  if (!merged.subAgentOrchestration || typeof merged.subAgentOrchestration !== "object") merged.subAgentOrchestration = {};
+  const defaultOrch = DEFAULT_SETTINGS.subAgentOrchestration;
+  merged.subAgentOrchestration.sessionIdleTimeoutMs = clamp(
+    Number(merged.subAgentOrchestration?.sessionIdleTimeoutMs) || Number(defaultOrch.sessionIdleTimeoutMs) || 300_000,
+    10_000,
+    1_800_000
+  );
+  merged.subAgentOrchestration.maxConcurrentSessions = clamp(
+    Number(merged.subAgentOrchestration?.maxConcurrentSessions) || Number(defaultOrch.maxConcurrentSessions) || 20,
+    1,
+    50
   );
 
   return merged;

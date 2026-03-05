@@ -126,6 +126,10 @@ export function settingsToForm(settings) {
       settings?.adaptiveDirectives?.enabled ?? defaults.adaptiveDirectives.enabled,
     automationsEnabled:
       settings?.automations?.enabled ?? defaults.automations.enabled,
+    subAgentSessionIdleTimeoutMs:
+      settings?.subAgentOrchestration?.sessionIdleTimeoutMs ?? defaults.subAgentOrchestration.sessionIdleTimeoutMs,
+    subAgentMaxConcurrentSessions:
+      settings?.subAgentOrchestration?.maxConcurrentSessions ?? defaults.subAgentOrchestration.maxConcurrentSessions,
     memoryReflectionStrategy:
       settings?.memory?.reflection?.strategy ?? defaults.memory.reflection.strategy,
     provider: settings?.llm?.provider ?? defaultLlm.provider,
@@ -155,6 +159,17 @@ export function settingsToForm(settings) {
     browserMaxSteps: settings?.browser?.maxStepsPerTask ?? defaults.browser.maxStepsPerTask,
     browserStepTimeoutMs: settings?.browser?.stepTimeoutMs ?? defaults.browser.stepTimeoutMs,
     browserSessionTimeoutMs: settings?.browser?.sessionTimeoutMs ?? defaults.browser.sessionTimeoutMs,
+    codeAgentEnabled: settings?.codeAgent?.enabled ?? defaults.codeAgent.enabled,
+    codeAgentProvider: settings?.codeAgent?.provider ?? defaults.codeAgent.provider,
+    codeAgentModel: settings?.codeAgent?.model ?? defaults.codeAgent.model,
+    codeAgentCodexModel: settings?.codeAgent?.codexModel ?? defaults.codeAgent.codexModel,
+    codeAgentMaxTurns: settings?.codeAgent?.maxTurns ?? defaults.codeAgent.maxTurns,
+    codeAgentTimeoutMs: settings?.codeAgent?.timeoutMs ?? defaults.codeAgent.timeoutMs,
+    codeAgentMaxBufferBytes: settings?.codeAgent?.maxBufferBytes ?? defaults.codeAgent.maxBufferBytes,
+    codeAgentDefaultCwd: settings?.codeAgent?.defaultCwd ?? defaults.codeAgent.defaultCwd,
+    codeAgentMaxTasksPerHour: settings?.codeAgent?.maxTasksPerHour ?? defaults.codeAgent.maxTasksPerHour,
+    codeAgentMaxParallelTasks: settings?.codeAgent?.maxParallelTasks ?? defaults.codeAgent.maxParallelTasks,
+    codeAgentAllowedUserIds: formatLineList(settings?.codeAgent?.allowedUserIds ?? defaults.codeAgent.allowedUserIds),
     visionCaptionEnabled: settings?.vision?.captionEnabled ?? defaultVision.captionEnabled,
     visionProvider: settings?.vision?.provider ?? defaultVision.provider,
     visionModel: settings?.vision?.model ?? defaultVision.model,
@@ -436,6 +451,19 @@ export function formToSettingsPatch(form) {
       stepTimeoutMs: Number(form.browserStepTimeoutMs),
       sessionTimeoutMs: Number(form.browserSessionTimeoutMs)
     },
+    codeAgent: {
+      enabled: Boolean(form.codeAgentEnabled),
+      provider: String(form.codeAgentProvider || "claude-code").trim().toLowerCase(),
+      model: String(form.codeAgentModel || "sonnet").trim(),
+      codexModel: String(form.codeAgentCodexModel || "codex-mini-latest").trim(),
+      maxTurns: Number(form.codeAgentMaxTurns),
+      timeoutMs: Number(form.codeAgentTimeoutMs),
+      maxBufferBytes: Number(form.codeAgentMaxBufferBytes),
+      defaultCwd: String(form.codeAgentDefaultCwd || "").trim(),
+      maxTasksPerHour: Number(form.codeAgentMaxTasksPerHour),
+      maxParallelTasks: Number(form.codeAgentMaxParallelTasks),
+      allowedUserIds: parseUniqueList(form.codeAgentAllowedUserIds)
+    },
     vision: {
       captionEnabled: Boolean(form.visionCaptionEnabled),
       provider: String(form.visionProvider || "").trim(),
@@ -629,6 +657,10 @@ export function formToSettingsPatch(form) {
     },
     automations: {
       enabled: Boolean(form.automationsEnabled)
+    },
+    subAgentOrchestration: {
+      sessionIdleTimeoutMs: Math.max(10000, Number(form.subAgentSessionIdleTimeoutMs) || 300_000),
+      maxConcurrentSessions: Math.max(1, Number(form.subAgentMaxConcurrentSessions) || 20)
     }
   };
 }
@@ -654,6 +686,7 @@ const LIST_FORM_KEYS: ReadonlySet<string> = new Set([
   "discoveryYoutubeChannels",
   "discoveryRssFeeds",
   "discoveryXHandles",
+  "codeAgentAllowedUserIds",
   "replyChannels",
   "discoveryChannels",
   "allowedChannels",

@@ -329,10 +329,27 @@ export const DEFAULT_SETTINGS = {
     },
     dailyLogRetentionDays: 30
   },
+  codeAgent: {
+    enabled: false,
+    provider: "claude-code",
+    model: "sonnet",
+    codexModel: "codex-mini-latest",
+    maxTurns: 30,
+    timeoutMs: 300_000,
+    maxBufferBytes: 2 * 1024 * 1024,
+    defaultCwd: "",
+    maxTasksPerHour: 10,
+    maxParallelTasks: 2,
+    allowedUserIds: []
+  },
   adaptiveDirectives: {
     enabled: true
   },
   automations: {
     enabled: true
+  },
+  subAgentOrchestration: {
+    sessionIdleTimeoutMs: 300_000,
+    maxConcurrentSessions: 20
   }
 };

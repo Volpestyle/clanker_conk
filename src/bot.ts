@@ -7,6 +7,14 @@ import {
 } from "discord.js";
 import { clankCommand } from "./commands/clankCommand.ts";
 import { browseCommand } from "./commands/browseCommand.ts";
+import { codeCommand } from "./commands/codeCommand.ts";
+import {
+  runCodeAgent,
+  isCodeAgentUserAllowed,
+  resolveCodeAgentConfig,
+  getActiveCodeAgentTaskCount,
+  createCodeAgentSession as createCodeAgentSessionRuntime
+} from "./agents/codeAgent.ts";
 import { musicCommands } from "./voice/musicCommands.ts";
 import { ImageCaptionCache } from "./vision/imageCaptionCache.ts";
 import {
@@ -121,6 +129,8 @@ import {
 } from "./voice/voiceOperationalMessaging.ts";
 import { loadPromptMemorySliceFromMemory } from "./memory/promptMemorySlice.ts";
 import { maybeReplyToMessagePipeline } from "./bot/replyPipeline.ts";
+import { SubAgentSessionManager } from "./agents/subAgentSession.ts";
+import { BrowserAgentSession } from "./agents/browseAgent.ts";
 
 const REPLY_QUEUE_MAX_PER_CHANNEL = 60;
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i;
@@ -209,6 +219,7 @@ export class ClankerBot {
   voiceSessionManager: VoiceSessionManager;
   browserManager: BrowserManager | null;
   activeBrowserTasks: BrowserTaskRegistry;
+  subAgentSessions: SubAgentSessionManager;
   imageCaptionCache: ImageCaptionCache;
   private captionTimestamps: number[];
 
@@ -247,6 +258,11 @@ export class ClankerBot {
     this.nextReflectionRunAt = null;
     this.screenShareSessionManager = null;
     this.activeBrowserTasks = new BrowserTaskRegistry();
+    this.subAgentSessions = new SubAgentSessionManager({
+      idleTimeoutMs: Number(appConfig?.subAgentOrchestration?.sessionIdleTimeoutMs) || 300_000,
+      maxSessions: Number(appConfig?.subAgentOrchestration?.maxConcurrentSessions) || 20
+    });
+    this.subAgentSessions.startSweep();
     this.imageCaptionCache = new ImageCaptionCache({
       maxEntries: 200,
       defaultTtlMs: 60 * 60 * 1000 // 1 hour
@@ -293,7 +309,7 @@ export class ClankerBot {
 
       try {
         const rest = new REST({ version: "10" }).setToken(this.appConfig.discordToken);
-        await rest.put(Routes.applicationCommands(this.client.user?.id || ""), { body: [...musicCommands, clankCommand, browseCommand] });
+        await rest.put(Routes.applicationCommands(this.client.user?.id || ""), { body: [...musicCommands, clankCommand, browseCommand, codeCommand] });
         console.log("[slashCommands] Registered slash commands");
       } catch (error) {
         console.error("[musicCommands] Failed to register slash commands:", error);
@@ -439,6 +455,78 @@ export class ClankerBot {
           }
         } finally {
           this.activeBrowserTasks.clear(activeBrowserTask);
+        }
+      } else if (commandName === "code") {
+        await interaction.deferReply();
+        const codeInstruction = interaction.options.getString("task", true);
+        const codeCwd = interaction.options.getString("cwd", false) || undefined;
+        const settings = this.store.getSettings();
+
+        if (!settings?.codeAgent?.enabled) {
+          await interaction.editReply("Code agent is disabled in settings.");
+          return;
+        }
+        if (!isCodeAgentUserAllowed(interaction.user.id, settings)) {
+          await interaction.editReply("This capability is restricted to allowed users.");
+          return;
+        }
+
+        const maxParallel = Number(settings?.codeAgent?.maxParallelTasks) || 2;
+        if (getActiveCodeAgentTaskCount() >= maxParallel) {
+          await interaction.editReply("Too many code agent tasks are already running. Try again shortly.");
+          return;
+        }
+        const maxPerHour = Number(settings?.codeAgent?.maxTasksPerHour) || 10;
+        const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+        const usedThisHour = this.store.countActionsSince("code_agent_call", since1h);
+        if (usedThisHour >= maxPerHour) {
+          await interaction.editReply("Code agent is currently blocked by hourly limits. Try again shortly.");
+          return;
+        }
+
+        try {
+          const {
+            cwd,
+            provider,
+            model,
+            codexModel,
+            maxTurns,
+            timeoutMs,
+            maxBufferBytes
+          } = resolveCodeAgentConfig(settings, codeCwd);
+
+          const result = await runCodeAgent({
+            instruction: codeInstruction,
+            cwd,
+            provider,
+            maxTurns,
+            timeoutMs,
+            maxBufferBytes,
+            model,
+            codexModel,
+            openai: this.llm?.openai || null,
+            trace: {
+              guildId: interaction.guildId,
+              channelId: interaction.channelId,
+              userId: interaction.user.id,
+              source: "slash_command_code"
+            },
+            store: this.store
+          });
+
+          let responseText = result.text;
+          if (result.costUsd > 0) {
+            responseText += `\n\n*(Cost: $${result.costUsd.toFixed(4)})*`;
+          }
+          if (responseText.length > 2000) {
+            await interaction.editReply(responseText.substring(0, 1997) + "...");
+          } else {
+            await interaction.editReply(responseText || "Code task completed with no output.");
+          }
+        } catch (error) {
+          console.error("[slashCommands] Error handling code command:", error);
+          const message = error instanceof Error ? error.message : String(error);
+          await interaction.editReply(`An error occurred while running code task: ${message}`).catch(() => undefined);
         }
       }
     });
@@ -2936,6 +3024,171 @@ export class ClankerBot {
     } finally {
       this.activeBrowserTasks.clear(activeBrowserTask);
     }
+  }
+
+  async runModelRequestedCodeTask({
+    settings,
+    task,
+    cwd: cwdOverride,
+    guildId,
+    channelId = null,
+    userId = null,
+    source = "reply_message"
+  }) {
+    if (!settings?.codeAgent?.enabled) {
+      return { text: "", error: "code_agent_disabled" };
+    }
+    if (userId && !isCodeAgentUserAllowed(userId, settings)) {
+      return { text: "", blockedByPermission: true };
+    }
+
+    const maxParallel = Number(settings?.codeAgent?.maxParallelTasks) || 2;
+    if (getActiveCodeAgentTaskCount() >= maxParallel) {
+      return { text: "", blockedByParallelLimit: true };
+    }
+
+    const maxPerHour = Number(settings?.codeAgent?.maxTasksPerHour) || 10;
+    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const used = this.store.countActionsSince("code_agent_call", since1h);
+    if (used >= maxPerHour) {
+      return { text: "", blockedByBudget: true };
+    }
+
+    const {
+      cwd,
+      provider,
+      model,
+      codexModel,
+      maxTurns,
+      timeoutMs,
+      maxBufferBytes
+    } = resolveCodeAgentConfig(settings, cwdOverride);
+
+    try {
+      const result = await runCodeAgent({
+        instruction: task,
+        cwd,
+        provider,
+        maxTurns,
+        timeoutMs,
+        maxBufferBytes,
+        model,
+        codexModel,
+        openai: this.llm?.openai || null,
+        trace: {
+          guildId,
+          channelId,
+          userId,
+          source
+        },
+        store: this.store
+      });
+
+      return {
+        text: result.text,
+        isError: result.isError,
+        costUsd: result.costUsd,
+        error: result.isError ? result.errorMessage : null
+      };
+    } catch (error) {
+      return {
+        text: "",
+        error: String(error?.message || error)
+      };
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Sub-agent session factories for multi-turn interactive mode
+  // ---------------------------------------------------------------------------
+
+  createCodeAgentSession({
+    settings,
+    cwd: cwdOverride,
+    guildId,
+    channelId = null,
+    userId = null,
+    source = "reply_session"
+  }) {
+    if (!settings?.codeAgent?.enabled) return null;
+    if (userId && !isCodeAgentUserAllowed(userId, settings)) return null;
+
+    const maxParallel = Number(settings?.codeAgent?.maxParallelTasks) || 2;
+    if (getActiveCodeAgentTaskCount() >= maxParallel) return null;
+
+    // Enforce hourly task budget (same check as tryRunCodeAgentTask)
+    const maxPerHour = Number(settings?.codeAgent?.maxTasksPerHour) || 10;
+    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const used = this.store.countActionsSince("code_agent_call", since1h);
+    if (used >= maxPerHour) return null;
+
+    const {
+      cwd,
+      provider,
+      model,
+      codexModel,
+      maxTurns,
+      timeoutMs,
+      maxBufferBytes
+    } = resolveCodeAgentConfig(settings, cwdOverride);
+
+    const scopeKey = `${guildId || "dm"}:${channelId || "dm"}`;
+    try {
+      return createCodeAgentSessionRuntime({
+        scopeKey,
+        cwd,
+        provider,
+        model,
+        codexModel,
+        maxTurns,
+        timeoutMs,
+        maxBufferBytes,
+        trace: { guildId, channelId, userId, source },
+        store: this.store,
+        openai: this.llm?.openai || null
+      });
+    } catch {
+      return null;
+    }
+  }
+
+  createBrowserAgentSession({
+    settings,
+    guildId,
+    channelId = null,
+    userId = null,
+    source = "reply_session"
+  }) {
+    if (!this.browserManager) return null;
+
+    const maxSteps = clamp(Number(settings?.browser?.maxStepsPerTask) || 15, 1, 30);
+    const stepTimeoutMs = clamp(Number(settings?.browser?.stepTimeoutMs) || 30_000, 5_000, 120_000);
+    const browserLlmProvider = String(settings?.browser?.llm?.provider || "anthropic").trim();
+    const browserLlmModel = String(settings?.browser?.llm?.model || "claude-sonnet-4-5-20250929").trim();
+
+    const scopeKey = `${guildId || "dm"}:${channelId || "dm"}`;
+    const sessionKey = `session:${scopeKey}:${Date.now()}`;
+    return new BrowserAgentSession({
+      scopeKey,
+      llm: this.llm,
+      browserManager: this.browserManager,
+      store: this.store,
+      sessionKey,
+      provider: browserLlmProvider,
+      model: browserLlmModel,
+      maxSteps,
+      stepTimeoutMs,
+      trace: { guildId, channelId, userId, source }
+    });
+  }
+
+  /** Build the subAgentSessions runtime adapter for the reply tool pipeline. */
+  buildSubAgentSessionsRuntime() {
+    return {
+      manager: this.subAgentSessions,
+      createCodeSession: (opts) => this.createCodeAgentSession(opts),
+      createBrowserSession: (opts) => this.createBrowserAgentSession(opts)
+    };
   }
 
   mergeImageInputs({ baseInputs = [], extraInputs = [], maxInputs = MAX_MODEL_IMAGE_INPUTS } = {}) {

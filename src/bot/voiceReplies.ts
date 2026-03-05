@@ -603,13 +603,17 @@ export async function generateVoiceTurnReply(runtime, {
       event: sessionId ? "voice_session" : "voice_turn"
     };
 
+    const codeAgentSettings =
+      (settings as Record<string, unknown>)?.codeAgent as Record<string, unknown> | undefined;
+    const codeAgentRuntimeAvailable = typeof runtime.runModelRequestedCodeTask === "function";
     const voiceReplyTools = buildReplyToolSet(settings as Record<string, unknown>, {
       webSearchAvailable: allowWebSearchToolCall && webSearchAvailableNow,
       browserBrowseAvailable: allowBrowserBrowseToolCall && browserBrowseAvailableNow,
       memoryAvailable: allowMemoryToolCalls,
       adaptiveDirectivesAvailable: allowAdaptiveDirectiveToolCalls,
       imageLookupAvailable: false,
-      openArticleAvailable: allowOpenArticleToolCall && openArticleCandidates.length > 0
+      openArticleAvailable: allowOpenArticleToolCall && openArticleCandidates.length > 0,
+      codeAgentAvailable: Boolean(codeAgentSettings?.enabled && codeAgentRuntimeAvailable)
     });
 
     const voiceToolRuntime: ReplyToolRuntime = {
@@ -626,6 +630,18 @@ export async function generateVoiceTurnReply(runtime, {
             source
           })
       },
+      codeAgent: runtime.runModelRequestedCodeTask ? {
+        runTask: async ({ settings: toolSettings, task, cwd, guildId, channelId, userId, source }) =>
+          await runtime.runModelRequestedCodeTask({
+            settings: toolSettings,
+            task,
+            cwd,
+            guildId,
+            channelId,
+            userId,
+            source
+          })
+      } : undefined,
       memory: runtime.memory,
       store: runtime.store
     };
