@@ -46,8 +46,8 @@ Runtime modes (`src/voice/voiceModes.ts`): `openai_realtime`, `voice_agent`, `ge
 | 5a. Brain (realtime end-to-end) | yes | — | — |
 | 5b. Brain (text→realtime) | — | yes | — |
 | 5c. Brain (text LLM) | — | — | yes |
-| 6a. Voice Output (realtime stream) | yes | yes | fallback |
-| 6b. Voice Output (TTS API) | — | — | yes (primary) |
+| 6a. Voice Output (realtime stream) | yes | yes | yes |
+| 6b. Voice Output (TTS API) | — | — | — |
 | Thought Engine (parallel) | yes | yes | yes |
 
 ---
@@ -76,9 +76,9 @@ Per-speaker ASR transcribes each user independently, producing labeled text. The
 
 ### Brain
 
-Shared ASR transcribes mixed audio. A text LLM (`generationLlm`) generates the response. TTS API converts text to speech.
+Shared ASR transcribes mixed audio. A text LLM (`generationLlm`) generates the response. The realtime provider speaks the generated text via utterance requests.
 
-- **Latency**: highest (ASR + text LLM + TTS)
+- **Latency**: high (ASR + text LLM + realtime utterance)
 - **ASR**: shared via STT pipeline
 - **Tool support**: full text LLM reasoning
 - **Provider requirement**: works with any provider combination
@@ -232,13 +232,13 @@ Code: `bindRealtimeHandlers()` in `voiceSessionManager.ts`, dispatch in `src/voi
 
 ### Stage 5: Voice Output
 
-#### Realtime Audio Stream (native + bridge)
+#### Realtime Audio Stream (native + bridge + brain)
 
 The realtime provider streams audio deltas. PCM 24kHz is upsampled to 48kHz, encoded to Opus, and sent to Discord.
 
-#### TTS API (brain path)
+#### TTS API (stt_pipeline mode)
 
-Text response is sent to TTS API for synthesis. Output is played via `playVoiceReplyInOrder()`.
+Text response is sent to TTS API for synthesis in non-realtime `stt_pipeline` mode. Output is played via `playVoiceReplyInOrder()`.
 
 | Setting | Key Path | Default |
 |---|---|---|
@@ -266,7 +266,7 @@ The thought engine generates ambient thoughts during silence — a parallel pipe
 2. **Eagerness roll**: random `[0,100)` vs `thoughtEngine.eagerness` — skip if roll fails
 3. **Generate candidate**: thought engine LLM produces a candidate (max `VOICE_THOUGHT_MAX_CHARS=220` chars)
 4. **Decision gate**: separate LLM call evaluates relevance — allow/reject + optional memory enrichment (`VOICE_THOUGHT_MEMORY_SEARCH_LIMIT=8` facts retrieved)
-5. **Delivery**: realtime utterance (preferred) or TTS fallback
+5. **Delivery**: realtime utterance in realtime modes; TTS in `stt_pipeline` mode
 
 ### Topicality Bias
 

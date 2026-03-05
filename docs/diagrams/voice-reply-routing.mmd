@@ -36,7 +36,7 @@ flowchart TD
         FB1[runRealtimeBrainReply]
         FB2[generateVoiceTurn]
         FB3["generationLlm model generates text\n(e.g. claude-sonnet-4-6)"]
-        FB4[Text reply sent to TTS\nvia playVoiceReplyInOrder]
+        FB4[Text reply sent to realtime utterance\nvia playVoiceReplyInOrder]
         FB1 --> FB2 --> FB3 --> FB4
     end
 

@@ -3541,7 +3541,7 @@ export class VoiceSessionManager {
 
       session.lastAudioDeltaAt = Date.now();
 
-      // Duck music when realtime TTS starts speaking — playVoiceReplyInOrder
+      // Duck music when realtime output starts speaking — playVoiceReplyInOrder
       // handles ducking for the STT pipeline, but realtime audio arrives here
       // directly and bypasses that path.
       if (musicPhaseShouldAllowDucking(this.getMusicPhase(session))) {
@@ -4910,23 +4910,15 @@ export class VoiceSessionManager {
     const line = normalizeVoiceText(thoughtCandidate, STT_REPLY_MAX_CHARS);
     if (!line) return false;
 
-    let requestedRealtimeUtterance = false;
     if (isRealtimeMode(session.mode)) {
-      requestedRealtimeUtterance = this.requestRealtimeTextUtterance({
+      const requestedRealtimeUtterance = this.requestRealtimeTextUtterance({
         session,
         text: line,
         userId: this.client.user?.id || null,
         source: "voice_thought_engine"
       });
       if (!requestedRealtimeUtterance) {
-        const spokeFallback = await this.speakVoiceLineWithTts({
-          session,
-          settings,
-          text: line,
-          source: "voice_thought_engine_tts_fallback"
-        });
-        if (!spokeFallback) return false;
-        session.lastAudioDeltaAt = Date.now();
+        return false;
       }
     } else {
       const spokeLine = await this.speakVoiceLineWithTts({
@@ -5071,7 +5063,8 @@ export class VoiceSessionManager {
     });
     if (!line) return;
 
-    if (isRealtimeMode(session.mode) && this.requestRealtimeTextUtterance({
+    const realtimeMode = isRealtimeMode(session.mode);
+    if (realtimeMode && this.requestRealtimeTextUtterance({
       session,
       text: line,
       userId,
@@ -5079,6 +5072,7 @@ export class VoiceSessionManager {
     })) {
       return;
     }
+    if (realtimeMode) return;
 
     await this.speakVoiceLineWithTts({
       session,
@@ -5502,12 +5496,14 @@ export class VoiceSessionManager {
             completed = false;
             break;
           }
+          completed = false;
+          break;
         }
         const spoke = await this.speakVoiceLineWithTts({
           session,
           settings,
           text: segmentText,
-          source: `${speechSource}:tts_fallback`
+          source: speechSource
         });
         if (!spoke) {
           completed = false;

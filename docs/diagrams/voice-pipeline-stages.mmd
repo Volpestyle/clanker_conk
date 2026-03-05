@@ -68,11 +68,9 @@ flowchart TD
 
     subgraph OUTPUT["Stage 6: Voice Output"]
         direction TB
-        RT_AUDIO["Realtime Audio Stream\n(native + bridge)"]
-        TTS["OpenAI TTS API Fallback\n(brain path)"]
+        RT_AUDIO["Realtime Audio Stream\n(native + bridge + brain)"]
         ENCODE["PCM 24k→48k → Opus\n→ Discord"]
         RT_AUDIO --> ENCODE
-        TTS --> ENCODE
     end
 
     subgraph THOUGHT["Thought Engine (Parallel)"]

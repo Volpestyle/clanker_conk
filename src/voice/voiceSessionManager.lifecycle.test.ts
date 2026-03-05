@@ -1265,6 +1265,87 @@ test("maybeHandleInterruptedReplyRecovery treats long barge-ins as full override
   assert.equal(Boolean(skipLog), true);
 });
 
+test("playVoiceReplyInOrder does not fallback to TTS when realtime utterance fails", async () => {
+  const { manager } = createManager();
+  const session = createSession({
+    mode: "openai_realtime"
+  });
+  let ttsCalls = 0;
+
+  manager.requestRealtimeTextUtterance = () => false;
+  manager.speakVoiceLineWithTts = async () => {
+    ttsCalls += 1;
+    return true;
+  };
+
+  const result = await manager.playVoiceReplyInOrder({
+    session,
+    settings: session.settingsSnapshot,
+    spokenText: "hello there",
+    playbackSteps: [
+      {
+        type: "speech",
+        text: "hello there"
+      }
+    ],
+    source: "test_reply",
+    preferRealtimeUtterance: true
+  });
+
+  assert.equal(result.completed, false);
+  assert.equal(result.requestedRealtimeUtterance, false);
+  assert.equal(result.spokeLine, false);
+  assert.equal(ttsCalls, 0);
+});
+
+test("deliverVoiceThoughtCandidate does not fallback to TTS in realtime mode", async () => {
+  const { manager } = createManager();
+  const session = createSession({
+    mode: "openai_realtime"
+  });
+  let ttsCalls = 0;
+
+  manager.requestRealtimeTextUtterance = () => false;
+  manager.speakVoiceLineWithTts = async () => {
+    ttsCalls += 1;
+    return true;
+  };
+
+  const delivered = await manager.deliverVoiceThoughtCandidate({
+    session,
+    settings: session.settingsSnapshot,
+    thoughtCandidate: "ambient thought"
+  });
+
+  assert.equal(delivered, false);
+  assert.equal(ttsCalls, 0);
+});
+
+test("announceVoiceWebLookupBusy skips TTS fallback in realtime mode", async () => {
+  const { manager } = createManager();
+  const session = createSession({
+    mode: "openai_realtime"
+  });
+  let ttsCalls = 0;
+
+  manager.requestRealtimePromptUtterance = () => false;
+  manager.requestRealtimeTextUtterance = () => false;
+  manager.generateVoiceLookupBusyLine = async () => "still looking";
+  manager.speakVoiceLineWithTts = async () => {
+    ttsCalls += 1;
+    return true;
+  };
+
+  await manager.announceVoiceWebLookupBusy({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "user-1",
+    query: "what happened"
+  });
+
+  assert.equal(ttsCalls, 0);
+});
+
 test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript instead of queueing PCM", () => {
   const { manager, logs } = createManager();
   const queuedTurns = [];

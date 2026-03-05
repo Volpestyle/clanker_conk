@@ -5,14 +5,6 @@ import { rangeStyle } from "../../utils";
 import { LlmProviderOptions } from "./LlmProviderOptions";
 import { OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS } from "../../settingsFormModel";
 
-/* ── Inline constants ── */
-
-const OPENAI_TTS_MODEL_OPTIONS = Object.freeze([
-  "gpt-4o-mini-tts",
-  "tts-1",
-  "tts-1-hd"
-]);
-
 /* ── Pipeline flow indicator ── */
 
 type PipelineStage = { label: string; active: boolean };
@@ -128,7 +120,7 @@ export function VoiceModeSettingsSection({
         { label: "Audio In", active: true },
         { label: "ASR", active: true },
         { label: "Admission Gate", active: true },
-        { label: "Realtime Brain + TTS", active: true },
+        { label: "Realtime Brain", active: true },
         { label: "Audio Out", active: true }
       ]
     : [
@@ -194,7 +186,7 @@ export function VoiceModeSettingsSection({
                     onChange={set("voiceReplyPath")}
                   />
                   <strong>Full Brain</strong>
-                  <span> &mdash; Audio &rarr; ASR transcript &rarr; text LLM &rarr; TTS &rarr; audio out. Maximum control, any text model. Requires OpenAI API key for ASR + TTS provider.</span>
+                  <span> &mdash; Audio &rarr; ASR transcript &rarr; text LLM &rarr; realtime utterance &rarr; audio out. Maximum control, any text model. Requires OpenAI API key for ASR.</span>
                 </label>
               </div>
 
@@ -563,7 +555,7 @@ export function VoiceModeSettingsSection({
               {isBridgePath
                 ? "In Bridge mode, the realtime model handles both reasoning and speech."
                 : isBrainPath
-                ? "In Brain mode, the realtime API speaks generated text; OpenAI TTS API is the fallback."
+                ? "In Brain mode, a text LLM generates replies and the realtime API speaks them."
                 : "Model and voice used for spoken audio output. In Native mode the model handles end-to-end."}
             </p>
 
@@ -767,60 +759,6 @@ export function VoiceModeSettingsSection({
               </>
             )}
 
-            {/* ── TTS Fallback (brain path only) ── */}
-            {usesBrainGeneration && (
-              <>
-                <h4>TTS Fallback</h4>
-                <p>
-                  When the realtime API utterance path is unavailable, the OpenAI TTS API is used as a fallback to speak generated text.
-                </p>
-                <div className="split">
-                  <div>
-                    <label htmlFor="voice-stt-pipeline-tts-model">TTS model</label>
-                    <select
-                      id="voice-stt-pipeline-tts-model"
-                      value={form.voiceSttPipelineTtsModel}
-                      onChange={set("voiceSttPipelineTtsModel")}
-                    >
-                      {OPENAI_TTS_MODEL_OPTIONS.map((modelId) => (
-                        <option key={modelId} value={modelId}>
-                          {modelId}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label htmlFor="voice-stt-pipeline-tts-voice">TTS voice</label>
-                    <select
-                      id="voice-stt-pipeline-tts-voice"
-                      value={form.voiceSttPipelineTtsVoice}
-                      onChange={set("voiceSttPipelineTtsVoice")}
-                    >
-                      {openAiRealtimeVoiceOptions.map((voiceName) => (
-                        <option key={voiceName} value={voiceName}>
-                          {voiceName}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-                <div className="split">
-                  <div>
-                    <label htmlFor="voice-stt-pipeline-tts-speed">TTS speed</label>
-                    <input
-                      id="voice-stt-pipeline-tts-speed"
-                      type="number"
-                      min="0.25"
-                      max="4"
-                      step="0.05"
-                      value={form.voiceSttPipelineTtsSpeed}
-                      onChange={set("voiceSttPipelineTtsSpeed")}
-                    />
-                  </div>
-                  <div />
-                </div>
-              </>
-            )}
           </StagePanel>
 
           {/* ── Session ── */}
