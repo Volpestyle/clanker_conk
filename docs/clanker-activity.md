@@ -307,15 +307,54 @@ Text reply-channel defaults do not affect voice session eligibility.
   - does not disable the text thought loop
 
 - `activity.replyLevelReplyChannels`
-  - eagerness for admitted unsolicited replies in reply channels
+  - eagerness for admitted unsolicited replies in reply channels (0–100)
   - most relevant when Clanker is already in the recent window
 
 - `activity.replyLevelOtherChannels`
-  - eagerness for admitted unsolicited replies in non-reply-channel contexts
+  - eagerness for admitted unsolicited replies in non-reply-channel contexts (0–100)
   - matters much less if `replyChannelIds` is blank, because most public channels then become reply channels by default
 
 - `activity.minSecondsBetweenMessages`
   - global text spacing between bot messages
+
+### Reply Eagerness Tiers
+
+The eagerness value (0–100) from `replyLevelReplyChannels` or `replyLevelOtherChannels` maps to graduated prompt tiers. The raw number is also exposed to the LLM so it has a continuous sense of the scale.
+
+| Range | Label | Prompt behavior |
+|-------|-------|-----------------|
+| 0–15 | Lurker | Only speak when clearly talked to or something genuinely important to say |
+| 16–35 | Observer | Observe more than talk; chime in when genuinely engaging or clearly addressed |
+| 36–55 | Selective | Skip unless genuinely useful, interesting, or funny |
+| 56–75 | Engaged | Contribute when it fits the flow, but still pick moments |
+| 76–90 | Active | Jump in freely, lighter contributions fine if they fit naturally |
+| 91–100 | Very social | Riff freely, casual reactions and banter welcome |
+
+### Directed-At-Someone-Else Detection
+
+When the trigger message is structurally directed at another user, the skip prompt is strengthened. Two signals are detected:
+
+- `mentionsOtherUsers` — the message @mentions one or more users, none of which are the bot
+- `repliesToOtherUser` — the message is a Discord reply to another user's message (not the bot's)
+
+How eagerness modulates the skip:
+
+- At eagerness ≤ 75: hard skip instruction — "Output [SKIP] unless the message also clearly invites you to participate"
+- At eagerness > 75: soft skip — "Strongly prefer [SKIP] — only jump in if you have something genuinely worth adding to their exchange"
+
+### Conversational Awareness
+
+Even without structural signals (no @mention, no Discord reply), the prompt instructs the LLM to detect when people are talking to each other:
+
+- At eagerness ≤ 60: "If people are talking to each other (using names, replying back and forth, making plans together), output [SKIP]."
+- At eagerness > 60: "If people are clearly having a private or directed exchange with each other, prefer [SKIP] unless you can genuinely add to the conversation."
+
+This covers cases like "yo James let's play later" where no platform mention is used but the message is clearly directed at someone else.
+
+Relevant code:
+
+- `mentionsOtherUsers` and `repliesToOtherUser` computed in `src/bot/replyPipeline.ts` (`buildReplyContext`)
+- eagerness tiers, directed-at-someone-else, and conversational awareness prompts in `src/prompts/promptText.ts` (`buildReplyPrompt`)
 
 ### Thought Loop Controls
 
