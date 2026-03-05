@@ -402,7 +402,16 @@ User drops a screenshot into Discord → Bot downloads attachment → Sends to R
 
 **Use case:** Live screen share where user wants real-time help.
 
-### 9.3 Realtime API Vision Input
+### 9.3 Commentary Response Tracking
+
+Out-of-band commentary (`response.create` with `conversation: "none"`) is tracked separately from the main conversation response flow to prevent stale frame descriptions:
+
+- Commentary requests are tagged with `metadata: { source: "stream_watch_commentary" }`.
+- `response.created` / `response.done` events with matching metadata route to a dedicated `pendingCommentaryResponseId` slot, leaving `activeResponseId` untouched.
+- New commentary is suppressed while a previous one is in-flight (30s staleness safety valve).
+- `maybeTriggerStreamWatchCommentary()` checks `isCommentaryResponsePending()` before firing.
+
+### 9.4 Realtime API Vision Input
 
 Send images as `input_image` content parts:
 
@@ -420,7 +429,7 @@ Send images as `input_image` content parts:
 }
 ```
 
-### 9.4 Engineering Guidelines
+### 9.5 Engineering Guidelines
 
 **1. Frame rate**
 - Don't send 30fps — blows up cost and context
@@ -435,14 +444,14 @@ Send images as `input_image` content parts:
 - If stale: ask for fresh one
 - Don't guess UI state
 
-### 9.5 Tools + Vision
+### 9.6 Tools + Vision
 
 When the model "sees" the screen, it can call tools:
 - `web_search`: "this error code means…"
 - `memory_search`: "this is the same setup as last time…"
 - `music_queue_add`: "queue that song I see on screen…"
 
-### 9.6 Configurable Modes
+### 9.7 Configurable Modes
 
 - **Tool-based** — Brain calls `screen_share_analyze()` → captures keyframe → returns description
 - **Multimodal** — Sends `input_image` directly to Realtime brain (current approach)

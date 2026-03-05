@@ -245,6 +245,17 @@ Screen share stays provider-agnostic and is layered onto the same brain/runtime 
 - realtime commentary uses existing `requestTextUtterance` flow when available
 - works across current realtime providers through shared session orchestration
 
+### Commentary Response Tracking (OpenAI Realtime)
+
+OpenAI native video commentary sends out-of-band `response.create` with `conversation: "none"`. These responses are tracked separately from conversation responses to prevent stacking:
+
+- `requestVideoCommentary()` tags the request with `metadata: { source: "stream_watch_commentary" }` and sets a `pendingCommentaryResponseId` slot.
+- `response.created` / `response.done` handlers check `response.metadata.source` to route commentary events to the commentary slot instead of `activeResponseId`.
+- New commentary requests are skipped while a previous one is in-flight (staleness safety valve at 30s).
+- `isCommentaryResponsePending()` is checked in `maybeTriggerStreamWatchCommentary()` as an additional guard before firing.
+
+This prevents commentary from stacking up on OpenAI's side and describing frames from minutes ago. Conversation responses (`activeResponseId`, `botTurnOpen`, `pendingResponse`) are completely unaffected.
+
 ## Extensibility
 
 - Add voice providers in `src/voice/voiceModes.ts`: add an entry to `REALTIME_PROVIDER_CAPABILITIES` and map runtime in `resolveVoiceRuntimeMode(...)`.
