@@ -370,17 +370,6 @@ export default function SettingsForm({
             visionModelOptions={visionModelOptions}
             selectedVisionPresetModel={selectedVisionPresetModel}
           />
-          <CodeAgentSettingsSection id="sec-code-agent" form={form} set={set} />
-          <SubAgentOrchestrationSettingsSection id="sec-orchestration" form={form} set={set} />
-          <VisionSettingsSection
-            id="sec-vision"
-            form={form}
-            set={set}
-            setVisionProvider={setVisionProvider}
-            selectVisionPresetModel={selectVisionPresetModel}
-            visionModelOptions={visionModelOptions}
-            selectedVisionPresetModel={selectedVisionPresetModel}
-          />
           <VideoContextSettingsSection id="sec-video" form={form} set={set} />
 
           <VoiceModeSettingsSection
