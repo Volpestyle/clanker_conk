@@ -11,6 +11,13 @@ export type { E2EConfig } from "./env.ts";
 export {
   beginTemporaryE2EEagerness,
   beginTemporaryE2EEagerness50,
+  beginTemporaryE2ESettings,
+  beginTemporaryE2EWithPreset,
+  recoverStaleE2ESettings,
   restoreTemporaryE2ESettings,
   waitForDashboardReady,
 } from "./dashboard.ts";
+export {
+  resolveE2EPipelineOverrides,
+  E2E_PRESETS,
+} from "./presets.ts";

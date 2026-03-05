@@ -324,6 +324,10 @@ async function beginTemporaryE2EEagerness(voiceEagerness: number, textEagerness?
 async function beginTemporaryE2EEagerness50(): Promise<void>;  // convenience wrapper
 async function restoreTemporaryE2ESettings(): Promise<void>;   // restores snapshot
 async function waitForDashboardReady(timeoutMs?: number): Promise<void>;
+
+// Pipeline preset: resolve CLI flags → preset → deep-merge, apply to dashboard
+async function beginTemporaryE2EWithPreset(argv?: string[]): Promise<string>;  // returns preset name
+function resolveE2EPipelineOverrides(argv: string[]): { presetName: string; overrides: Record<string, unknown> };
 ```
 
 ### Audio Fixture Requirements
@@ -475,6 +479,63 @@ console.log(`[Lifecycle] Bot said: "${transcript.transcript}"`);
 ```
 
 This provides **zero-ambiguity TTS detection** — the transcript event only fires for voice responses, never for music playback.
+
+## Pipeline Presets & CLI Flags
+
+E2E tests use **pipeline presets** to lock down the voice pipeline configuration under test. Each preset configures reply path, providers, and models, while CLI flags allow overriding individual settings on top of a preset.
+
+### Available Presets
+
+| Preset | Reply Path | Voice Provider | Brain Provider | Notes |
+|--------|-----------|----------------|----------------|-------|
+| `bridge-openai` (default) | bridge | openai | openai | Per-user ASR bridge, OpenAI realtime brain |
+| `native` | native | openai | openai | Direct audio passthrough, no ASR |
+| `gemini` | brain | gemini | gemini | Gemini realtime for everything |
+| `elevenlabs` | brain | elevenlabs | openai | ElevenLabs voice, OpenAI brain |
+| `brain-anthropic` | brain | openai | anthropic | OpenAI voice, Anthropic text brain |
+
+All presets set eagerness to 50, command-only off, and thought engine off as deterministic test defaults. Bridge presets enable the reply classifier; non-bridge presets disable it.
+
+### CLI Flags
+
+Flags override individual pipeline settings on top of a preset:
+
+| Flag | Maps to | Type |
+|------|---------|------|
+| `--preset` | preset name lookup | string |
+| `--reply-path` | `voice.replyPath` | `native` / `bridge` / `brain` |
+| `--voice-provider` | `voice.voiceProvider` | `openai` / `xai` / `gemini` / `elevenlabs` |
+| `--brain-provider` | `voice.brainProvider` | `openai` / `anthropic` / `xai` / `gemini` |
+| `--brain-model` | `voice.generationLlm.model` + auto-inferred provider | string |
+| `--voice-model` | `voice.openaiRealtime.model` | string |
+| `--voice-name` | `voice.openaiRealtime.voice` | string |
+| `--classifier` | `voice.replyDecisionLlm.enabled` | `on` / `off` |
+| `--thought-engine` | `voice.thoughtEngine.enabled` | `on` / `off` |
+| `--command-only` | `voice.commandOnlyMode` | `on` / `off` |
+
+### Examples
+
+```sh
+# Run with default preset (bridge-openai)
+bun run test:e2e
+
+# Run with a specific preset
+bun run test:e2e --preset native
+bun run test:e2e --preset gemini
+
+# Override specific settings on top of a preset
+bun run test:e2e --preset bridge-openai --brain-provider anthropic --brain-model claude-sonnet-4-5
+
+# Toggle features
+bun run test:e2e --preset bridge-openai --classifier off --thought-engine off
+```
+
+### Preset Logging
+
+Each test suite logs the active preset name in `beforeAll`:
+```
+[E2E] Pipeline preset: bridge-openai
+```
 
 ## Running Tests
 

@@ -2,7 +2,7 @@ import { test, describe, beforeAll, afterAll } from "bun:test";
 import assert from "node:assert/strict";
 import { env } from "node:process";
 import {
-  beginTemporaryE2EEagerness50,
+  beginTemporaryE2EWithPreset,
   DriverBot,
   type DriverBotConfig,
   getE2EConfig,
@@ -82,7 +82,8 @@ describe("E2E: Voice music_play_now (non-blocking)", () => {
     }
 
     const config = getE2EConfig();
-    await beginTemporaryE2EEagerness50();
+    const presetName = await beginTemporaryE2EWithPreset();
+    console.log(`[E2E] Pipeline preset: ${presetName}`);
 
     const baseConfig = {
       guildId: config.testGuildId,
