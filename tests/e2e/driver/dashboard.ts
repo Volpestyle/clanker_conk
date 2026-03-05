@@ -3,8 +3,8 @@ import { env } from "node:process";
 
 type E2ESettingsSnapshot = {
   activity?: {
-    replyLevelInitiative?: number;
-    replyLevelNonInitiative?: number;
+    replyLevelReplyChannels?: number;
+    replyLevelOtherChannels?: number;
   };
   voice?: {
     replyEagerness?: number;
@@ -80,7 +80,8 @@ export async function waitForDashboardReady(timeoutMs = 30_000): Promise<void> {
   throw new Error(`Dashboard did not become ready within ${timeoutMs}ms: ${String(lastError)}`);
 }
 
-export async function beginTemporaryE2EEagerness50(): Promise<void> {
+export async function beginTemporaryE2EEagerness(voiceEagerness: number, textEagerness?: number): Promise<void> {
+  const text = textEagerness ?? voiceEagerness;
   await waitForDashboardReady();
   activeOverrideCount += 1;
   if (activeOverrideCount > 1) return;
@@ -90,26 +91,30 @@ export async function beginTemporaryE2EEagerness50(): Promise<void> {
 
     const settings = await putDashboardSettings({
       activity: {
-        replyLevelInitiative: 50,
-        replyLevelNonInitiative: 50
+        replyLevelReplyChannels: text,
+        replyLevelOtherChannels: text
       },
       voice: {
-        replyEagerness: 50,
+        replyEagerness: voiceEagerness,
         thoughtEngine: {
-          eagerness: 50
+          eagerness: voiceEagerness
         }
       }
     });
 
-    assert.equal(settings.activity?.replyLevelInitiative, 50);
-    assert.equal(settings.activity?.replyLevelNonInitiative, 50);
-    assert.equal(settings.voice?.replyEagerness, 50);
-    assert.equal(settings.voice?.thoughtEngine?.eagerness, 50);
+    assert.equal(settings.activity?.replyLevelReplyChannels, text);
+    assert.equal(settings.activity?.replyLevelOtherChannels, text);
+    assert.equal(settings.voice?.replyEagerness, voiceEagerness);
+    assert.equal(settings.voice?.thoughtEngine?.eagerness, voiceEagerness);
   } catch (error) {
     activeOverrideCount = 0;
     savedSettingsSnapshot = null;
     throw error;
   }
+}
+
+export async function beginTemporaryE2EEagerness50(): Promise<void> {
+  return beginTemporaryE2EEagerness(50);
 }
 
 export async function restoreTemporaryE2ESettings(): Promise<void> {
@@ -125,12 +130,12 @@ export async function restoreTemporaryE2ESettings(): Promise<void> {
   const restored = await putDashboardSettings(snapshot);
 
   assert.equal(
-    restored.activity?.replyLevelInitiative,
-    snapshot.activity?.replyLevelInitiative
+    restored.activity?.replyLevelReplyChannels,
+    snapshot.activity?.replyLevelReplyChannels
   );
   assert.equal(
-    restored.activity?.replyLevelNonInitiative,
-    snapshot.activity?.replyLevelNonInitiative
+    restored.activity?.replyLevelOtherChannels,
+    snapshot.activity?.replyLevelOtherChannels
   );
   assert.equal(
     restored.voice?.replyEagerness,

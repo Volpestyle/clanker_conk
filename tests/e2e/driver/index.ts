@@ -9,7 +9,8 @@ export type { AudioGeneratorResult } from "./audioGenerator.ts";
 export { getE2EConfig, hasE2EConfig, hasTextE2EConfig, hasDialogueE2EConfig } from "./env.ts";
 export type { E2EConfig } from "./env.ts";
 export {
+  beginTemporaryE2EEagerness,
   beginTemporaryE2EEagerness50,
   restoreTemporaryE2ESettings,
-  waitForDashboardReady
+  waitForDashboardReady,
 } from "./dashboard.ts";

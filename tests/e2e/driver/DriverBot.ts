@@ -9,6 +9,7 @@ import {
   createAudioResource,
   AudioPlayerStatus,
   EndBehaviorType,
+  VoiceConnectionStatus,
   type VoiceConnection,
   type AudioPlayer
 } from "@discordjs/voice";
@@ -49,12 +50,15 @@ function waitForEvent<K extends string>(
   });
 }
 
+let driverBotCounter = 0;
+
 export class DriverBot {
   client: Client;
   connection: VoiceConnection | null = null;
   player: AudioPlayer | null = null;
 
   readonly config: DriverBotConfig;
+  private readonly groupId: string;
 
   private receivedAudioChunks: Buffer[] = [];
   private connected = false;
@@ -62,6 +66,7 @@ export class DriverBot {
 
   constructor(config: DriverBotConfig) {
     this.config = config;
+    this.groupId = `driver-bot-${++driverBotCounter}`;
     this.client = new Client({
       intents: [
         GatewayIntentBits.Guilds,
@@ -96,7 +101,8 @@ export class DriverBot {
       channelId: this.config.voiceChannelId,
       adapterCreator: guild.voiceAdapterCreator,
       selfDeaf: false,
-      selfMute: false
+      selfMute: false,
+      group: this.groupId
     });
 
     // Log connection state transitions
@@ -359,7 +365,9 @@ export class DriverBot {
   }
 
   async disconnect(): Promise<void> {
-    this.connection?.destroy();
+    if (this.connection && this.connection.state.status !== "destroyed") {
+      this.connection.destroy();
+    }
     this.connection = null;
     this.player?.stop();
     this.player = null;
