@@ -7905,6 +7905,19 @@ export class VoiceSessionManager {
           captureReason: reason
         });
         if (!handledInterruptedReply && useOpenAiPerUserAsr) {
+          // During music, per-user ASR bridge fails (audio buffers cleared).
+          // Route directly to processRealtimeTurn so maybeHandleMusicPlaybackTurn
+          // can transcribe the PCM and detect wake words.
+          if (this.isMusicPlaybackActive(session)) {
+            this.queueRealtimeTurn({
+              session,
+              userId,
+              pcmBuffer,
+              captureReason: reason,
+              finalizedAt
+            });
+            return;
+          }
           const asrBridgeMaxWaitMs = Math.max(120, Number(OPENAI_ASR_BRIDGE_MAX_WAIT_MS) || 700);
           let bridgeForwarded = false;
           const forwardAsrBridgeTurn = (asrResult, source) => {

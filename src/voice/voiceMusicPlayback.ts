@@ -1379,6 +1379,24 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
 
   if (!shouldStop) {
     if (directAddressedToBot || disambiguationResolutionTurn) {
+      // Pause music so the output lock releases and the bot can respond.
+      if (directAddressedToBot) {
+        const music = ensureSessionMusicState(manager, session);
+        if (music) music.active = false;
+        manager.musicPlayer?.pause?.();
+        manager.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: "voice_music_paused_for_wake_word",
+          metadata: {
+            sessionId: session.id,
+            transcript: normalizedTranscript,
+            source: String(source || "voice_turn")
+          }
+        });
+      }
       return false;
     }
     return true;
