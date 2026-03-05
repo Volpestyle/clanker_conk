@@ -12,8 +12,9 @@ import PerformancePanel from "./components/PerformancePanel";
 import StaleIndicator from "./components/StaleIndicator";
 import VoiceMonitor from "./components/VoiceMonitor";
 import TextTab from "./components/TextTab";
+import AgentsTab from "./components/AgentsTab";
 
-type MainTab = "activity" | "text" | "memory" | "voice" | "settings";
+type MainTab = "activity" | "text" | "agents" | "memory" | "voice" | "settings";
 
 interface MainTabDefinition {
   id: MainTab;
@@ -37,6 +38,17 @@ const MAIN_TABS: MainTabDefinition[] = [
     icon: (
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+      </svg>
+    )
+  },
+  {
+    id: "agents",
+    label: "Agents",
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="10" />
+        <line x1="2" y1="12" x2="22" y2="12" />
+        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
       </svg>
     )
   },
@@ -201,6 +213,8 @@ export default function App() {
       )}
 
       {tab === "text" && <TextTab actions={mergedTextActions} />}
+
+      {tab === "agents" && <AgentsTab />}
 
       {tab === "voice" && <VoiceMonitor />}
 

@@ -384,6 +384,143 @@ export function hasReflectionBeenCompleted(store: any, dateKey: string, guildId:
   return Boolean(row);
 }
 
+export function getRecentBrowserSessions(store: any, limit = 50, opts: { sinceIso?: string | null } = {}) {
+  const parsedLimit = clamp(Math.floor(Number(limit) || 50), 1, 200);
+  const sinceIso = String(opts?.sinceIso || "").trim();
+
+  const conditions: string[] = [
+    "kind IN ('browser_browse_call', 'browser_tool_step', 'browser_agent_session_turn')"
+  ];
+  const params: Array<string | number> = [];
+
+  if (sinceIso) {
+    conditions.push("created_at >= ?");
+    params.push(sinceIso);
+  }
+
+  const whereClause = conditions.join(" AND ");
+  const rows = store.db
+    .prepare(
+      `SELECT id, created_at, guild_id, channel_id, message_id, user_id, kind, content, metadata, usd_cost
+         FROM actions
+         WHERE ${whereClause}
+         ORDER BY created_at DESC
+         LIMIT ?`
+    )
+    .all(...params, parsedLimit * 20);
+
+  interface ToolStepEntry {
+    tool: string;
+    step: number;
+    timestamp: string;
+  }
+
+  interface SessionAccum {
+    sessionId: string;
+    startedAt: string;
+    lastActiveAt: string;
+    source: string | null;
+    guildId: string | null;
+    channelId: string | null;
+    userId: string | null;
+    instruction: string | null;
+    totalCostUsd: number;
+    totalSteps: number;
+    hitStepLimit: boolean;
+    durationMs: number | null;
+    toolSteps: ToolStepEntry[];
+  }
+
+  const sessions = new Map<string, SessionAccum>();
+
+  for (const row of rows) {
+    const metadata = safeJsonParse(row.metadata, null) as Record<string, unknown> | null;
+    const meta = metadata || {};
+
+    const sessionId =
+      String(meta.sessionId || meta.sessionKey || "").trim() ||
+      `browse-${String(row.id || row.created_at || "")}`;
+
+    const existing = sessions.get(sessionId) || {
+      sessionId,
+      startedAt: String(row.created_at || ""),
+      lastActiveAt: String(row.created_at || ""),
+      source: null,
+      guildId: null,
+      channelId: null,
+      userId: null,
+      instruction: null,
+      totalCostUsd: 0,
+      totalSteps: 0,
+      hitStepLimit: false,
+      durationMs: null,
+      toolSteps: []
+    };
+
+    const rowTime = String(row.created_at || "");
+    if (rowTime && (!existing.startedAt || rowTime < existing.startedAt)) {
+      existing.startedAt = rowTime;
+    }
+    if (rowTime && (!existing.lastActiveAt || rowTime > existing.lastActiveAt)) {
+      existing.lastActiveAt = rowTime;
+    }
+
+    existing.guildId = existing.guildId || (row.guild_id ? String(row.guild_id) : null);
+    existing.channelId = existing.channelId || (row.channel_id ? String(row.channel_id) : null);
+    existing.userId = existing.userId || (row.user_id ? String(row.user_id) : null);
+    existing.source = existing.source || (meta.source ? String(meta.source) : null);
+
+    if (row.kind === "browser_browse_call") {
+      existing.instruction = existing.instruction || (row.content ? String(row.content) : null);
+      const steps = Number(meta.steps);
+      if (Number.isFinite(steps) && steps > existing.totalSteps) existing.totalSteps = steps;
+      if (meta.hitStepLimit) existing.hitStepLimit = true;
+      const cost = Number(meta.totalCostUsd || row.usd_cost);
+      if (Number.isFinite(cost)) existing.totalCostUsd += cost;
+    } else if (row.kind === "browser_tool_step") {
+      existing.toolSteps.push({
+        tool: String(meta.tool || row.content || "unknown"),
+        step: Math.max(0, Math.floor(Number(meta.step) || 0)),
+        timestamp: rowTime
+      });
+    } else if (row.kind === "browser_agent_session_turn") {
+      if (!existing.instruction) {
+        existing.instruction = row.content ? String(row.content) : null;
+      }
+      const steps = Number(meta.steps);
+      if (Number.isFinite(steps)) existing.totalSteps += steps;
+      const cost = Number(meta.turnCostUsd || row.usd_cost);
+      if (Number.isFinite(cost)) existing.totalCostUsd += cost;
+      const dur = Number(meta.durationMs);
+      if (Number.isFinite(dur)) {
+        existing.durationMs = (existing.durationMs || 0) + dur;
+      }
+    }
+
+    sessions.set(sessionId, existing);
+  }
+
+  const sorted = [...sessions.values()]
+    .map((session) => {
+      session.toolSteps.sort((a, b) => a.step - b.step);
+      if (session.durationMs === null) {
+        const startMs = Date.parse(session.startedAt);
+        const endMs = Date.parse(session.lastActiveAt);
+        if (Number.isFinite(startMs) && Number.isFinite(endMs) && endMs > startMs) {
+          session.durationMs = endMs - startMs;
+        }
+      }
+      return session;
+    })
+    .sort((a, b) => {
+      const aTime = Date.parse(a.lastActiveAt) || 0;
+      const bTime = Date.parse(b.lastActiveAt) || 0;
+      return bTime - aTime;
+    });
+
+  return sorted.slice(0, parsedLimit);
+}
+
 export function hasTriggeredResponse(store: any, triggerMessageId) {
   const id = String(triggerMessageId).trim();
   if (!id) return false;

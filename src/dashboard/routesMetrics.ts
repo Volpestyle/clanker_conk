@@ -17,6 +17,15 @@ export function attachMetricsRoutes(app: any, deps: any) {
     res.json(store.getRecentActions(limit, { kinds, sinceIso }));
   });
 
+  app.get("/api/agents/browser-sessions", (req, res) => {
+    const sinceHoursRaw = Number(req.query.sinceHours);
+    const sinceHours = Number.isFinite(sinceHoursRaw) && sinceHoursRaw > 0 ? sinceHoursRaw : 24;
+    const sinceIso = new Date(Date.now() - sinceHours * 60 * 60 * 1000).toISOString();
+    const limit = parseBoundedInt(req.query.limit, 50, 1, 200);
+    const sessions = store.getRecentBrowserSessions(limit, { sinceIso });
+    res.json({ sessions });
+  });
+
   app.get("/api/stats", (_req, res) => {
     res.json(getStatsPayload());
   });

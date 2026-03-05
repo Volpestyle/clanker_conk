@@ -15,7 +15,7 @@ import {
   searchConversationWindows,
   getActiveChannels
 } from "./store/storeMessages.ts";
-import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, countDiscoveryPostsSince, getRecentActions, getRecentMemoryReflections, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted } from "./store/storeActionLog.ts";
+import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, countDiscoveryPostsSince, getRecentActions, getRecentMemoryReflections, getRecentBrowserSessions, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted } from "./store/storeActionLog.ts";
 import { wasLinkSharedSince, recordSharedLink, pruneLookupContext, recordLookupContext, searchLookupContext } from "./store/storeLookups.ts";
 import { getRecentVoiceSessions, getVoiceSessionEvents } from "./store/storeVoice.ts";
 import { getReplyPerformanceStats, getStats } from "./store/storeStats.ts";
@@ -391,6 +391,10 @@ export class Store {
 
   getRecentMemoryReflections(limit = 20) {
     return getRecentMemoryReflections(this, limit);
+  }
+
+  getRecentBrowserSessions(limit = 50, opts: { sinceIso?: string | null } = {}) {
+    return getRecentBrowserSessions(this, limit, opts);
   }
 
   indexResponseTriggersForAction(opts: {

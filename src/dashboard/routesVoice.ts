@@ -612,4 +612,37 @@ export function attachVoiceRoutes(app: any, deps: any) {
       return next(error);
     }
   });
+
+  app.get("/api/memory/subjects", (req, res, next) => {
+    try {
+      const guildId = String(req.query.guildId || "").trim();
+      const limit = parseBoundedInt(req.query.limit, 200, 1, 500);
+      if (!guildId) {
+        return res.json({ guildId, subjects: [], limit });
+      }
+      const subjects = store.getMemorySubjects(limit, { guildId });
+      return res.json({ guildId, limit, subjects });
+    } catch (error) {
+      return next(error);
+    }
+  });
+
+  app.get("/api/memory/facts", (req, res, next) => {
+    try {
+      const guildId = String(req.query.guildId || "").trim();
+      const limit = parseBoundedInt(req.query.limit, 120, 1, 500);
+      const subjectFilter = String(req.query.subject || "").trim() || null;
+      if (!guildId) {
+        return res.json({ guildId, facts: [], limit });
+      }
+      const facts = store.getFactsForScope({
+        guildId,
+        limit,
+        subjectIds: subjectFilter ? [subjectFilter] : null
+      });
+      return res.json({ guildId, limit, subject: subjectFilter, facts });
+    } catch (error) {
+      return next(error);
+    }
+  });
 }
