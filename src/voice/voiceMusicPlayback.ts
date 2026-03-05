@@ -1451,6 +1451,40 @@ export async function handleMusicSlashCommand(manager: any, interaction: ChatInp
       await interaction.reply({ content: "No music is currently playing.", ephemeral: true });
       return;
     }
-    await interaction.reply("Skip is not implemented yet.");
+    await interaction.deferReply();
+    const queueState = ensureToolMusicQueueState(manager, session);
+    if (!queueState || queueState.nowPlayingIndex == null) {
+      await manager.requestStopMusic({
+        guildId,
+        channelId: interaction.channelId,
+        requestedByUserId: user.id,
+        settings,
+        reason: "slash_command_skip_without_queue",
+        source: "slash_command",
+        mustNotify: false
+      });
+      await interaction.editReply("Skipped. No more tracks in queue.");
+      return;
+    }
+    const nextIndex = queueState.nowPlayingIndex + 1;
+    await manager.requestStopMusic({
+      guildId,
+      channelId: interaction.channelId,
+      requestedByUserId: user.id,
+      settings,
+      reason: "slash_command_skip",
+      source: "slash_command",
+      mustNotify: false
+    });
+    if (nextIndex < queueState.tracks.length) {
+      await manager.playVoiceQueueTrackByIndex({ session, settings, index: nextIndex });
+      const nextTrack = queueState.tracks[nextIndex];
+      const title = nextTrack?.title || "next track";
+      await interaction.editReply(`Skipped. Now playing: ${title}`);
+    } else {
+      queueState.nowPlayingIndex = null;
+      queueState.isPaused = false;
+      await interaction.editReply("Skipped. Queue finished.");
+    }
   }
 }
