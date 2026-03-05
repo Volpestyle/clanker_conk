@@ -1262,7 +1262,9 @@ export async function executeVoiceMusicPlayNowTool(manager: any, { session, sett
   queueState.nowPlayingIndex = 0;
   queueState.isPaused = false;
 
-  await manager.requestPlayMusic({
+  const trackInfo = { title: selectedTrack.title, artist: selectedTrack.artist };
+
+  manager.requestPlayMusic({
     guildId: session.guildId,
     channelId: session.textChannelId,
     requestedByUserId: session.lastOpenAiToolCallerUserId || null,
@@ -1273,11 +1275,27 @@ export async function executeVoiceMusicPlayNowTool(manager: any, { session, sett
     reason: "voice_tool_music_play_now",
     source: "voice_tool_call",
     mustNotify: false
-  });
+  })
+    .then(() => {
+      manager.requestRealtimePromptUtterance({
+        session,
+        prompt: `(system: "${trackInfo.title}" by ${trackInfo.artist} is now playing)`,
+        source: "music_now_playing"
+      });
+    })
+    .catch((err: unknown) => {
+      const message = err instanceof Error ? err.message : "unknown error";
+      manager.requestRealtimePromptUtterance({
+        session,
+        prompt: `(system: failed to load "${trackInfo.title}" — ${message})`,
+        source: "music_play_failed"
+      });
+    });
 
   return {
     ok: true,
-    now_playing: {
+    status: "loading",
+    track: {
       id: replacementTrack.id,
       title: replacementTrack.title,
       artist: replacementTrack.artist,
