@@ -7934,8 +7934,7 @@ export class VoiceSessionManager {
           let bridgeForwarded = false;
           const forwardAsrBridgeTurn = (asrResult, source) => {
             if (bridgeForwarded || session.ending) return false;
-            bridgeForwarded = true;
-            this.queueRealtimeTurnFromAsrBridge({
+            const queued = this.queueRealtimeTurnFromAsrBridge({
               session,
               userId,
               pcmBuffer,
@@ -7944,7 +7943,8 @@ export class VoiceSessionManager {
               asrResult,
               source
             });
-            return true;
+            if (queued) bridgeForwarded = true;
+            return queued;
           };
 
           const fallbackTimer = setTimeout(() => {
@@ -7975,6 +7975,48 @@ export class VoiceSessionManager {
               clearTimeout(fallbackTimer);
               const forwarded = forwardAsrBridgeTurn(asrResult, "per_user");
               if (forwarded) return;
+
+              // Commit returned empty — poll the tracked utterance for
+              // late-arriving streaming transcript segments before giving up.
+              if (!bridgeForwarded && !session.ending) {
+                const lateAsrState = this.getOrCreateOpenAiAsrSessionState({ session, userId });
+                const trackedUtterance = lateAsrState?.utterance;
+                if (trackedUtterance) {
+                  const lateDeadlineMs = Date.now() + 1500;
+                  while (Date.now() < lateDeadlineMs && !bridgeForwarded && !session.ending) {
+                    await new Promise((r) => setTimeout(r, 80));
+                    const lateFinal = normalizeVoiceText(
+                      Array.isArray(trackedUtterance.finalSegments)
+                        ? trackedUtterance.finalSegments.join(" ")
+                        : "",
+                      STT_TRANSCRIPT_MAX_CHARS
+                    );
+                    if (lateFinal) {
+                      const lateForwarded = forwardAsrBridgeTurn(
+                        { ...asrResult, transcript: lateFinal },
+                        "per_user_late_streaming"
+                      );
+                      if (lateForwarded) {
+                        this.store.logAction({
+                          kind: "voice_runtime",
+                          guildId: session.guildId,
+                          channelId: session.textChannelId,
+                          userId,
+                          content: "openai_realtime_asr_bridge_late_streaming_recovered",
+                          metadata: {
+                            sessionId: session.id,
+                            captureReason: String(reason || "stream_end"),
+                            transcriptChars: lateFinal.length,
+                            lateWaitMs: Date.now() - (lateDeadlineMs - 1500)
+                          }
+                        });
+                      }
+                      return;
+                    }
+                  }
+                }
+              }
+
               const lateTranscript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
               if (!lateTranscript) return;
               this.store.logAction({
@@ -8025,8 +8067,7 @@ export class VoiceSessionManager {
           let bridgeForwarded = false;
           const forwardAsrBridgeTurn = (asrResult, source) => {
             if (bridgeForwarded || session.ending) return false;
-            bridgeForwarded = true;
-            this.queueRealtimeTurnFromAsrBridge({
+            const queued = this.queueRealtimeTurnFromAsrBridge({
               session,
               userId,
               pcmBuffer,
@@ -8035,7 +8076,8 @@ export class VoiceSessionManager {
               asrResult,
               source
             });
-            return true;
+            if (queued) bridgeForwarded = true;
+            return queued;
           };
 
           // Mark commit in-flight synchronously so a new utterance's
@@ -8074,6 +8116,49 @@ export class VoiceSessionManager {
               clearTimeout(fallbackTimer);
               const forwarded = forwardAsrBridgeTurn(asrResult, "shared");
               if (forwarded) return;
+
+              // Commit returned empty — poll the shared ASR state for
+              // late-arriving streaming transcript segments before giving up.
+              if (!bridgeForwarded && !session.ending) {
+                const lateSharedState = this.getOpenAiSharedAsrState(session);
+                const trackedUtterance = lateSharedState?.utterance;
+                if (trackedUtterance) {
+                  const lateDeadlineMs = Date.now() + 1500;
+                  while (Date.now() < lateDeadlineMs && !bridgeForwarded && !session.ending) {
+                    await new Promise((r) => setTimeout(r, 80));
+                    const lateFinal = normalizeVoiceText(
+                      Array.isArray(trackedUtterance.finalSegments)
+                        ? trackedUtterance.finalSegments.join(" ")
+                        : "",
+                      STT_TRANSCRIPT_MAX_CHARS
+                    );
+                    if (lateFinal) {
+                      const lateForwarded = forwardAsrBridgeTurn(
+                        { ...asrResult, transcript: lateFinal },
+                        "shared_late_streaming"
+                      );
+                      if (lateForwarded) {
+                        this.store.logAction({
+                          kind: "voice_runtime",
+                          guildId: session.guildId,
+                          channelId: session.textChannelId,
+                          userId,
+                          content: "openai_realtime_asr_bridge_late_streaming_recovered",
+                          metadata: {
+                            sessionId: session.id,
+                            captureReason: String(reason || "stream_end"),
+                            source: "shared",
+                            transcriptChars: lateFinal.length,
+                            lateWaitMs: Date.now() - (lateDeadlineMs - 1500)
+                          }
+                        });
+                      }
+                      return;
+                    }
+                  }
+                }
+              }
+
               const lateTranscript = normalizeVoiceText(asrResult?.transcript || "", STT_TRANSCRIPT_MAX_CHARS);
               if (!lateTranscript) return;
               this.store.logAction({
