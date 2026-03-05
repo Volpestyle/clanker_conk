@@ -684,6 +684,7 @@ export async function requestPlayMusic(manager: any, {
 
   if (music) {
     music.active = true;
+    music.pausedForWakeWord = false;
     music.startedAt = Date.now();
     music.stoppedAt = 0;
     music.provider = playbackResult.provider || null;
@@ -866,6 +867,7 @@ export async function requestStopMusic(manager: any, {
       : playbackResult.reason || null;
   if (music) {
     music.active = false;
+    music.pausedForWakeWord = false;
     music.stoppedAt = Date.now();
     if (!music.provider) {
       music.provider = resolvedProvider || null;
@@ -1022,6 +1024,7 @@ export async function requestPauseMusic(manager: any, {
     // Mark inactive so the session unlocks — bot can converse while
     // music is paused.  Resume will re-activate.
     music.active = false;
+    music.pausedForWakeWord = false;
     music.source = String(source || "text_voice_intent");
     music.lastRequestedByUserId = resolvedUserId || music.lastRequestedByUserId || null;
     music.lastRequestText = normalizedRequestText;
@@ -1382,7 +1385,10 @@ export async function maybeHandleMusicPlaybackTurn(manager: any, {
       // Pause music so the output lock releases and the bot can respond.
       if (directAddressedToBot) {
         const music = ensureSessionMusicState(manager, session);
-        if (music) music.active = false;
+        if (music) {
+          music.active = false;
+          music.pausedForWakeWord = true;
+        }
         manager.musicPlayer?.pause?.();
         manager.store.logAction({
           kind: "voice_runtime",

@@ -3786,6 +3786,19 @@ export class VoiceSessionManager {
         // Schedule music unduck after the subprocess finishes playing
         // buffered audio (~BOT_TURN_SILENCE_RESET_MS after last delta).
         this.scheduleBotSpeechMusicUnduck(session, resolvedSettings, BOT_TURN_SILENCE_RESET_MS);
+
+        // Resume music if it was paused for a wake-word direct address.
+        const music = this.ensureSessionMusicState(session);
+        if (music?.pausedForWakeWord && this.musicPlayer?.isPaused?.()) {
+          music.pausedForWakeWord = false;
+          setTimeout(() => {
+            if (session.ending) return;
+            music.active = true;
+            this.musicPlayer?.resume?.();
+            this.haltSessionOutputForMusicPlayback(session, "music_resumed_after_wake_word");
+          }, BOT_TURN_SILENCE_RESET_MS);
+        }
+
         this.clearPendingResponse(session);
         return;
       }
@@ -3864,7 +3877,12 @@ export class VoiceSessionManager {
 
   resetBotAudioPlayback(session) {
     if (!session) return;
-    try { session.subprocessClient?.stopPlayback(); } catch { /* ignore */ }
+    if (this.isMusicPlaybackActive(session)) {
+      // Clear TTS buffer only — stopPlayback would kill the pending music pipeline.
+      try { session.subprocessClient?.stopTtsPlayback(); } catch { /* ignore */ }
+    } else {
+      try { session.subprocessClient?.stopPlayback(); } catch { /* ignore */ }
+    }
     this.maybeClearActiveReplyInterruptionPolicy(session);
   }
 
@@ -6142,13 +6160,10 @@ export class VoiceSessionManager {
     };
     asrState.lastPartialText = "";
     asrState.lastPartialLogAt = 0;
-    if (!asrState.isCommittingAsr) {
-      try {
-        asrState.client?.clearInputAudioBuffer?.();
-      } catch {
-        // ignore
-      }
-    }
+    // Do NOT clear the OpenAI buffer here — a concurrent commit may have
+    // already flushed audio that hasn't been committed yet.  The buffer is
+    // implicitly reset after each successful commit, and clearing here risks
+    // wiping in-flight audio in rapid speech-restart scenarios.
 
     void this.ensureOpenAiAsrSessionConnected({
       session,
@@ -7006,13 +7021,10 @@ export class VoiceSessionManager {
     };
     asrState.lastPartialText = "";
     asrState.lastPartialLogAt = 0;
-    if (!asrState.isCommittingAsr) {
-      try {
-        asrState.client?.clearInputAudioBuffer?.();
-      } catch {
-        // ignore
-      }
-    }
+    // Do NOT clear the OpenAI buffer here — a concurrent commit may have
+    // already flushed audio that hasn't been committed yet.  The buffer is
+    // implicitly reset after each successful commit, and clearing here risks
+    // wiping in-flight audio in rapid speech-restart scenarios.
 
     void this.ensureOpenAiSharedAsrSessionConnected({
       session,
@@ -9322,9 +9334,19 @@ export class VoiceSessionManager {
     }
     const deferredTurnsToFlush = pendingQueue;
     const coalescedTurns = deferredTurnsToFlush.slice(-BOT_TURN_DEFERRED_COALESCE_MAX);
-    const latestTurn = coalescedTurns[coalescedTurns.length - 1];
+    const substantiveTurns = coalescedTurns.filter(
+      (entry) => !isLowSignalVoiceFragment(String(entry?.transcript || ""))
+    );
+    const turnsForTranscript = substantiveTurns.length > 0 ? substantiveTurns : coalescedTurns;
+    // If any deferred turn was direct-addressed, use that turn's userId and
+    // place its transcript first so the wake phrase isn't buried mid-string.
+    const directAddressedTurn = turnsForTranscript.find((entry) => entry?.directAddressed) || null;
+    const latestTurn = directAddressedTurn || turnsForTranscript[turnsForTranscript.length - 1];
+    const orderedTurns = directAddressedTurn
+      ? [directAddressedTurn, ...turnsForTranscript.filter((t) => t !== directAddressedTurn)]
+      : turnsForTranscript;
     const coalescedTranscript = normalizeVoiceText(
-      coalescedTurns
+      orderedTurns
         .map((entry) => String(entry?.transcript || "").trim())
         .filter(Boolean)
         .join(" "),
@@ -9333,7 +9355,7 @@ export class VoiceSessionManager {
     if (!coalescedTranscript) return;
     const coalescedPcmBuffer = isRealtimeMode(session.mode)
       ? Buffer.concat(
-        coalescedTurns
+        orderedTurns
           .map((entry) => (entry?.pcmBuffer?.length ? entry.pcmBuffer : null))
           .filter(Boolean)
       )

@@ -338,6 +338,12 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
     },
     {
       toolType: "function",
+      name: "leave_voice_channel",
+      description: "Leave the voice channel and end this session. Only call this when you intentionally choose to end your own VC session — another person saying goodbye does not require you to leave.",
+      parameters: { type: "object", properties: {}, required: [], additionalProperties: false }
+    },
+    {
+      toolType: "function",
       name: "web_search",
       description: "Run live web search and return condensed results.",
       parameters: {
@@ -1828,6 +1834,26 @@ export async function executeLocalVoiceToolCall(manager: any, {
       settings,
       args
     });
+  }
+  if (normalizedToolName === "leave_voice_channel") {
+    // Schedule the leave after the tool output is sent and the model's
+    // follow-up audio (goodbye) finishes playing.
+    setTimeout(async () => {
+      if (session.ending) return;
+      await manager.waitForLeaveDirectivePlayback({
+        session,
+        expectRealtimeAudio: true,
+        source: "realtime_tool_leave_directive"
+      });
+      await manager.endSession({
+        guildId: session.guildId,
+        reason: "assistant_leave_directive",
+        requestedByUserId: manager.client.user?.id || null,
+        settings,
+        announcement: "wrapping up vc."
+      }).catch(() => {});
+    }, 0);
+    return { ok: true, status: "leaving" };
   }
   throw new Error(`unsupported_tool:${normalizedToolName}`);
 }
