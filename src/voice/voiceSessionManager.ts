@@ -426,6 +426,11 @@ type VoiceConversationContext = {
   msUntilCommandSessionExpiry?: number | null;
   voiceAddressingState?: VoiceAddressingState | null;
   currentTurnAddressing?: VoiceAddressingAnnotation | null;
+  addressedToOtherSignal?: boolean;
+  pendingCommandFollowupSignal?: boolean;
+  musicActive?: boolean;
+  musicWakeLatched?: boolean;
+  msUntilMusicWakeLatchExpiry?: number | null;
 };
 
 type VoiceReplyDecision = {
@@ -446,6 +451,11 @@ type VoiceReplyDecision = {
   requiredSilenceMs?: number | null;
   msSinceInboundAudio?: number | null;
   outputLockReason?: string | null;
+  classifierLatencyMs?: number | null;
+  classifierDecision?: "allow" | "deny" | null;
+  classifierConfidence?: number | null;
+  classifierTarget?: string | null;
+  classifierReason?: string | null;
 };
 
 type VoiceTimelineTurn = {
@@ -820,6 +830,10 @@ export class VoiceSessionManager {
             ? new Date(session.lastDirectAddressAt).toISOString()
             : null,
           lastDirectAddressUserId: session.lastDirectAddressUserId || null,
+          musicWakeLatchedUntil: Number(session?.musicWakeLatchedUntil || 0) > 0
+            ? new Date(Number(session.musicWakeLatchedUntil)).toISOString()
+            : null,
+          musicWakeLatchedByUserId: session.musicWakeLatchedByUserId || null,
           wake: {
             state: wakeContext?.engaged ? "awake" : "listening",
             active: Boolean(wakeContext?.engaged),
@@ -7639,6 +7653,16 @@ export class VoiceSessionManager {
         classifierLatencyMs: Number.isFinite(decision.classifierLatencyMs)
           ? Math.round(decision.classifierLatencyMs)
           : null,
+        classifierDecision: decision.classifierDecision || null,
+        classifierConfidence: Number.isFinite(decision.classifierConfidence)
+          ? Number(clamp(Number(decision.classifierConfidence), 0, 1).toFixed(3))
+          : null,
+        classifierTarget: decision.classifierTarget || null,
+        classifierReason: decision.classifierReason || null,
+        musicWakeLatched: Boolean(decision.conversationContext?.musicWakeLatched),
+        musicWakeLatchedUntil: Number(session?.musicWakeLatchedUntil || 0) > 0
+          ? new Date(Number(session.musicWakeLatchedUntil)).toISOString()
+          : null,
         error: decision.error || null
       }
     });
@@ -7951,6 +7975,19 @@ export class VoiceSessionManager {
           : null,
         retryAfterMs: Number.isFinite(decision.retryAfterMs)
           ? Math.round(decision.retryAfterMs)
+          : null,
+        classifierLatencyMs: Number.isFinite(decision.classifierLatencyMs)
+          ? Math.round(decision.classifierLatencyMs)
+          : null,
+        classifierDecision: decision.classifierDecision || null,
+        classifierConfidence: Number.isFinite(decision.classifierConfidence)
+          ? Number(clamp(Number(decision.classifierConfidence), 0, 1).toFixed(3))
+          : null,
+        classifierTarget: decision.classifierTarget || null,
+        classifierReason: decision.classifierReason || null,
+        musicWakeLatched: Boolean(decision.conversationContext?.musicWakeLatched),
+        musicWakeLatchedUntil: Number(session?.musicWakeLatchedUntil || 0) > 0
+          ? new Date(Number(session.musicWakeLatchedUntil)).toISOString()
           : null,
         error: decision.error || null
       }
@@ -10075,6 +10112,19 @@ export class VoiceSessionManager {
           : null,
         retryAfterMs: Number.isFinite(turnDecision.retryAfterMs)
           ? Math.round(turnDecision.retryAfterMs)
+          : null,
+        classifierLatencyMs: Number.isFinite(turnDecision.classifierLatencyMs)
+          ? Math.round(turnDecision.classifierLatencyMs)
+          : null,
+        classifierDecision: turnDecision.classifierDecision || null,
+        classifierConfidence: Number.isFinite(turnDecision.classifierConfidence)
+          ? Number(clamp(Number(turnDecision.classifierConfidence), 0, 1).toFixed(3))
+          : null,
+        classifierTarget: turnDecision.classifierTarget || null,
+        classifierReason: turnDecision.classifierReason || null,
+        musicWakeLatched: Boolean(turnDecision.conversationContext?.musicWakeLatched),
+        musicWakeLatchedUntil: Number(session?.musicWakeLatchedUntil || 0) > 0
+          ? new Date(Number(session.musicWakeLatchedUntil)).toISOString()
           : null,
         error: turnDecision.error || null
       }

@@ -623,6 +623,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         lastAssistantReplyAt: 0,
         lastDirectAddressAt: 0,
         lastDirectAddressUserId: null,
+        musicWakeLatchedUntil: 0,
+        musicWakeLatchedByUserId: null,
         lastInboundAudioAt: 0,
         realtimeReplySupersededCount: 0,
         pendingRealtimeInputBytes: 0,

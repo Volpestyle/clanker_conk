@@ -193,11 +193,12 @@ Decision flow:
 - Direct address (wake word) → fast-path allow, no classifier needed
 - Command followup → fast-path allow
 - Eagerness disabled → block
-- Addressed to other participant → block
+- Addressed-to-other signal → classifier context (strong deny prior, not hard deterministic block)
 - STT pipeline mode → `generation_decides` (the text LLM handles skip via `[SKIP]`)
-- Bridge mode with music playing → block
-- Bridge mode with classifier enabled → classifier YES/NO → `classifier_allow` / `classifier_deny`
-- Bridge mode with classifier disabled → `classifier_disabled_not_addressed` (conservative block)
+- Bridge mode with music playing and no wake latch → `music_playing_not_awake`
+- Bridge mode `realtimeAdmissionMode=hard_classifier` → classifier YES/NO → `classifier_allow` / `classifier_deny`
+- Bridge mode `realtimeAdmissionMode=generation_only` → `generation_decides`
+- Classifier prompt context includes attributed recent history (`speaker: "text"`) up to 6 turns / 900 chars plus current turn fields
 
 This replaces the earlier heuristic gates (`wakeModeActive`, `botRecentReplyFollowup`, `shouldDelayNonDirectRealtimeReply`) with actual language understanding.
 
@@ -241,7 +242,9 @@ There are three voice runtime styles to keep in mind:
 
 - `brain / bridge`
   - transcript text is pushed through the shared continuity + tool-calling brain path
-  - non-direct-address turns pass through the reply classifier gate (`voice.replyDecisionLlm`) before reaching the brain
+  - non-direct-address turns are admitted by `voice.replyDecisionLlm.realtimeAdmissionMode`:
+    - `hard_classifier`: YES/NO classifier gate
+    - `generation_only`: generation decides reply vs skip
 
 - `stt_pipeline`
   - transcription, text generation, and TTS are separate stages
@@ -419,14 +422,20 @@ These affect discovery posts only, not normal conversation replies.
   - `native`, `bridge`, or `brain`
   - changes how replies are transported, not the operator-facing continuity model
 
-- `voice.replyDecisionLlm.enabled`
-  - toggles the reply classifier gate for bridge mode; when disabled, only direct-address turns pass through
+- `voice.replyDecisionLlm.realtimeAdmissionMode`
+  - `hard_classifier` or `generation_only` for realtime bridge admission
+
+- `voice.replyDecisionLlm.musicWakeLatchSeconds`
+  - sliding latch window (default 15s) that allows follow-up turns during active music after a wake/direct-address
 
 - `voice.replyDecisionLlm.provider` / `voice.replyDecisionLlm.model`
-  - model used for the reply classifier (bridge mode) and thought engine decisions
+  - model used for the realtime admission classifier in `hard_classifier` mode
+
+- classifier context window
+  - attributed recent transcript history (`speaker: "text"`) up to 6 turns / 900 chars, plus current turn fields
 
 - `voice.generationLlm.*`
-  - model used for voice-turn generation in non-native generation paths
+  - model used for voice-turn generation in non-native generation paths and `generation_only` admission behavior
 
 - `voice.openaiRealtime.*`, `voice.geminiRealtime.*`, `voice.elevenLabsRealtime.*`, `voice.sttPipeline.*`
   - provider- and transport-specific controls
@@ -620,7 +629,7 @@ This prevents the thought loop from piling on while Clanker is already active in
 ### Example G: in VC, someone addresses Clanker once and then asks a short follow-up
 
 - voice conversation continuity can still treat the follow-up as aimed at the bot
-- the reply classifier gate (`voice.replyDecisionLlm.*`) and session engagement context matter more than text-channel eagerness sliders
+- realtime admission mode (`voice.replyDecisionLlm.realtimeAdmissionMode`) and session engagement context matter more than text-channel eagerness sliders
 
 ### Example H: user asks "what did we say about Nvidia earlier?"
 

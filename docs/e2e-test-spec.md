@@ -494,7 +494,7 @@ E2E tests use **pipeline presets** to lock down the voice pipeline configuration
 | `elevenlabs` | brain | elevenlabs | openai | ElevenLabs voice, OpenAI brain |
 | `brain-anthropic` | brain | openai | anthropic | OpenAI voice, Anthropic text brain |
 
-All presets set eagerness to 50, command-only off, and thought engine off as deterministic test defaults. Bridge presets enable the reply classifier; non-bridge presets disable it.
+All presets set eagerness to 50, command-only off, and thought engine off as deterministic test defaults. Bridge presets use `realtimeAdmissionMode=hard_classifier`; non-bridge presets use `generation_only`.
 
 ### CLI Flags
 
@@ -509,7 +509,7 @@ Flags override individual pipeline settings on top of a preset:
 | `--brain-model` | `voice.generationLlm.model` + auto-inferred provider | string |
 | `--voice-model` | `voice.openaiRealtime.model` | string |
 | `--voice-name` | `voice.openaiRealtime.voice` | string |
-| `--classifier` | `voice.replyDecisionLlm.enabled` | `on` / `off` |
+| `--classifier` | `voice.replyDecisionLlm.realtimeAdmissionMode` | `on` = `hard_classifier`, `off` = `generation_only` |
 | `--thought-engine` | `voice.thoughtEngine.enabled` | `on` / `off` |
 | `--command-only` | `voice.commandOnlyMode` | `on` / `off` |
 

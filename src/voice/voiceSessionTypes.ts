@@ -42,6 +42,11 @@ export type VoiceConversationContext = {
     msUntilCommandSessionExpiry?: number | null;
     voiceAddressingState?: VoiceAddressingState | null;
     currentTurnAddressing?: VoiceAddressingAnnotation | null;
+    addressedToOtherSignal?: boolean;
+    pendingCommandFollowupSignal?: boolean;
+    musicActive?: boolean;
+    musicWakeLatched?: boolean;
+    msUntilMusicWakeLatchExpiry?: number | null;
 };
 
 export type VoiceReplyDecision = {
@@ -60,6 +65,10 @@ export type VoiceReplyDecision = {
     msSinceInboundAudio?: number | null;
     outputLockReason?: string | null;
     classifierLatencyMs?: number | null;
+    classifierDecision?: "allow" | "deny" | null;
+    classifierConfidence?: number | null;
+    classifierTarget?: string | null;
+    classifierReason?: string | null;
 };
 
 export type VoiceTimelineTurn = {
@@ -435,6 +444,8 @@ export interface VoiceSession {
     lastAssistantReplyAt: number;
     lastDirectAddressAt: number;
     lastDirectAddressUserId: string | null;
+    musicWakeLatchedUntil: number;
+    musicWakeLatchedByUserId: string | null;
     lastInboundAudioAt: number;
     realtimeReplySupersededCount: number;
     pendingRealtimeInputBytes: number;

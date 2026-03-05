@@ -28,7 +28,7 @@ export const E2E_PRESETS: Record<string, E2EPipelinePreset> = {
         replyPath: "bridge",
         voiceProvider: "openai",
         brainProvider: "openai",
-        replyDecisionLlm: { enabled: true }
+        replyDecisionLlm: { realtimeAdmissionMode: "hard_classifier" }
       }
     })
   },
@@ -40,7 +40,7 @@ export const E2E_PRESETS: Record<string, E2EPipelinePreset> = {
         replyPath: "native",
         voiceProvider: "openai",
         brainProvider: "openai",
-        replyDecisionLlm: { enabled: false }
+        replyDecisionLlm: { realtimeAdmissionMode: "generation_only" }
       }
     })
   },
@@ -52,7 +52,7 @@ export const E2E_PRESETS: Record<string, E2EPipelinePreset> = {
         replyPath: "brain",
         voiceProvider: "gemini",
         brainProvider: "gemini",
-        replyDecisionLlm: { enabled: false }
+        replyDecisionLlm: { realtimeAdmissionMode: "generation_only" }
       }
     })
   },
@@ -64,7 +64,7 @@ export const E2E_PRESETS: Record<string, E2EPipelinePreset> = {
         replyPath: "brain",
         voiceProvider: "elevenlabs",
         brainProvider: "openai",
-        replyDecisionLlm: { enabled: false }
+        replyDecisionLlm: { realtimeAdmissionMode: "generation_only" }
       }
     })
   },
@@ -76,7 +76,7 @@ export const E2E_PRESETS: Record<string, E2EPipelinePreset> = {
         replyPath: "brain",
         voiceProvider: "openai",
         brainProvider: "anthropic",
-        replyDecisionLlm: { enabled: false }
+        replyDecisionLlm: { realtimeAdmissionMode: "generation_only" }
       }
     })
   }
@@ -154,7 +154,7 @@ export function parseE2EPipelineFlags(argv: string[]): ParsedFlags {
         if (hasValue) {
           voiceOverrides.replyDecisionLlm = {
             ...(voiceOverrides.replyDecisionLlm as Record<string, unknown> | undefined),
-            enabled: next === "on"
+            realtimeAdmissionMode: next === "on" ? "hard_classifier" : "generation_only"
           };
         }
         break;

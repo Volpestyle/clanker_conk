@@ -852,6 +852,8 @@ function createDecisionSession({
     lastDirectAddressAt:
       context.recentDirectAddressMs != null ? now - context.recentDirectAddressMs : 0,
     lastDirectAddressUserId: context.recentDirectAddressUserId || "",
+    musicWakeLatchedUntil: 0,
+    musicWakeLatchedByUserId: null,
     recentVoiceTurns: []
   };
 }
@@ -915,6 +917,8 @@ function buildExecutionSession({
     lastDirectAddressAt:
       context.recentDirectAddressMs != null ? now - context.recentDirectAddressMs : 0,
     lastDirectAddressUserId: context.recentDirectAddressUserId || "",
+    musicWakeLatchedUntil: 0,
+    musicWakeLatchedByUserId: null,
     lastActivityAt: now,
     userCaptures: new Map(),
     recentVoiceTurns: [],

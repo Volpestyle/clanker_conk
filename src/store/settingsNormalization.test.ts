@@ -176,9 +176,10 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
   assert.equal(normalized.voice.thoughtEngine.minSecondsBetweenThoughts, 600);
   assert.equal(normalized.voice.replyDecisionLlm.provider, "claude-code");
   assert.equal(normalized.voice.replyDecisionLlm.model, "sonnet");
-  assert.equal(normalized.voice.replyDecisionLlm.enabled, undefined);
   assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, undefined);
   assert.equal(normalized.voice.replyDecisionLlm.reasoningEffort, "high");
+  assert.equal(normalized.voice.replyDecisionLlm.realtimeAdmissionMode, "hard_classifier");
+  assert.equal(normalized.voice.replyDecisionLlm.musicWakeLatchSeconds, 15);
   assert.equal(normalized.voice.replyDecisionLlm.prompts, undefined);
   assert.equal(normalized.voice.commandOnlyMode, false);
   assert.equal(normalized.voice.openaiRealtime.inputAudioFormat, "pcm16");
@@ -451,16 +452,17 @@ test("normalizeSettings keeps stt pipeline voice generation and reply decider in
   assert.equal(normalized.voice.generationLlm.useTextModel, false);
   assert.equal(normalized.voice.replyDecisionLlm.provider, "openai");
   assert.equal(normalized.voice.replyDecisionLlm.model, "claude-haiku-4-5");
-  assert.equal(normalized.voice.replyDecisionLlm.enabled, undefined);
   assert.equal(normalized.voice.replyDecisionLlm.maxAttempts, undefined);
   assert.equal(normalized.voice.replyDecisionLlm.reasoningEffort, "minimal");
+  assert.equal(normalized.voice.replyDecisionLlm.realtimeAdmissionMode, "hard_classifier");
+  assert.equal(normalized.voice.replyDecisionLlm.musicWakeLatchSeconds, 15);
 });
 
-test("normalizeSettings strips removed replyDecisionLlm fields", () => {
+test("normalizeSettings strips removed replyDecisionLlm fields and migrates legacy enabled false", () => {
   const normalized = normalizeSettings({
     voice: {
       replyDecisionLlm: {
-        enabled: true,
+        enabled: false,
         prompts: {
           wakeVariantHint: "custom wake rule",
           systemPromptCompact: "compact prompt"
@@ -469,8 +471,49 @@ test("normalizeSettings strips removed replyDecisionLlm fields", () => {
     }
   });
 
-  assert.equal(normalized.voice.replyDecisionLlm.enabled, undefined);
+  assert.equal(normalized.voice.replyDecisionLlm.realtimeAdmissionMode, "generation_only");
+  assert.equal(normalized.voice.replyDecisionLlm.musicWakeLatchSeconds, 15);
   assert.equal(normalized.voice.replyDecisionLlm.prompts, undefined);
+});
+
+test("normalizeSettings enforces replyDecisionLlm realtime admission enum fallback", () => {
+  const invalidMode = normalizeSettings({
+    voice: {
+      replyDecisionLlm: {
+        realtimeAdmissionMode: "something_else"
+      }
+    }
+  });
+  assert.equal(invalidMode.voice.replyDecisionLlm.realtimeAdmissionMode, "hard_classifier");
+
+  const validMode = normalizeSettings({
+    voice: {
+      replyDecisionLlm: {
+        realtimeAdmissionMode: "generation_only"
+      }
+    }
+  });
+  assert.equal(validMode.voice.replyDecisionLlm.realtimeAdmissionMode, "generation_only");
+});
+
+test("normalizeSettings clamps replyDecisionLlm music wake latch seconds", () => {
+  const low = normalizeSettings({
+    voice: {
+      replyDecisionLlm: {
+        musicWakeLatchSeconds: 1
+      }
+    }
+  });
+  assert.equal(low.voice.replyDecisionLlm.musicWakeLatchSeconds, 5);
+
+  const high = normalizeSettings({
+    voice: {
+      replyDecisionLlm: {
+        musicWakeLatchSeconds: 999
+      }
+    }
+  });
+  assert.equal(high.voice.replyDecisionLlm.musicWakeLatchSeconds, 60);
 });
 
 test("normalizeSettings preserves long media prompt craft guidance blocks", () => {

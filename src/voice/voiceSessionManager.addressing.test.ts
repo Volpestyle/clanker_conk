@@ -515,12 +515,10 @@ test("reply decider allows direct-addressed turns in command-only mode", async (
   assert.equal(decision.reason, "command_only_direct_address");
 });
 
-test("reply decider blocks unaddressed turns while subprocess playback is still audible", async () => {
+test("reply decider denies unaddressed turns while music is playing and wake latch is inactive", async () => {
   const manager = createManager({
     participantCount: 1
   });
-  // Music phase "playing" is the single source of truth for the output lock.
-  // Subprocess playerState is no longer authoritative.
   const decision = await manager.evaluateVoiceReplyDecision({
     session: {
       guildId: "guild-1",
@@ -549,8 +547,7 @@ test("reply decider blocks unaddressed turns while subprocess playback is still 
   });
 
   assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "bot_turn_open");
-  assert.equal(decision.outputLockReason, "music_playback_active");
+  assert.equal(decision.reason, "music_playing_not_awake");
 });
 
 test("reply decider lets generation decide unaddressed turns in stt_pipeline mode", async () => {
@@ -979,7 +976,7 @@ test("reply decider can skip classifier call in stt pipeline when disabled", asy
   assert.equal(callCount, 0);
 });
 
-test("reply decider blocks non-addressed bridge turns when classifier is disabled", async () => {
+test("reply decider bypasses classifier in generation_only realtime admission mode", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -1000,7 +997,7 @@ test("reply decider blocks non-addressed bridge turns when classifier is disable
       voice: {
         replyEagerness: 60,
         replyDecisionLlm: {
-          enabled: false,
+          realtimeAdmissionMode: "generation_only",
           provider: "anthropic",
           model: "claude-haiku-4-5"
         }
@@ -1009,8 +1006,8 @@ test("reply decider blocks non-addressed bridge turns when classifier is disable
     transcript: "what should we do next?"
   });
 
-  assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "classifier_disabled_not_addressed");
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "generation_decides");
   assert.equal(callCount, 0);
 });
 
@@ -1161,12 +1158,251 @@ test("reply decider runs classifier after wake context gets stale", async () => 
   assert.equal(callCount, 1);
 });
 
-test("reply decider keeps non-bot vocatives in slow-listen mode", async () => {
+test("reply decider hard-denies malformed classifier output", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    generate: async () => {
+      callCount += 1;
+      return { text: "MAYBE" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+      lastInboundAudioAt: Date.now() - 220
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          realtimeAdmissionMode: "hard_classifier"
+        }
+      }
+    }),
+    transcript: "yo what's up"
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "classifier_deny");
+  assert.equal(decision.classifierDecision, null);
+  assert.equal(decision.classifierReason, "unparseable_classifier_output");
+  assert.equal(String(decision.error || "").startsWith("unparseable_classifier_output:"), true);
+  assert.equal(callCount, 1);
+});
+
+test("reply classifier prompt includes attributed history and current turn fields", async () => {
+  let classifierPrompt = "";
+  const manager = createManager({
+    generate: async ({ userPrompt }) => {
+      classifierPrompt = String(userPrompt || "");
+      return { text: "YES" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+      lastInboundAudioAt: Date.now() - 240,
+      recentVoiceTurns: [
+        { role: "assistant", text: "yo what's good", speakerName: "clanker conk" },
+        { role: "user", text: "i'm working on a project", speakerName: "vuhlp" }
+      ]
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          realtimeAdmissionMode: "hard_classifier"
+        }
+      }
+    }),
+    transcript: "yo what's up"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "classifier_allow");
+  assert.equal(classifierPrompt.includes('Speaker: speaker 1'), true);
+  assert.equal(classifierPrompt.includes('Transcript: "yo what\'s up"'), true);
+  assert.equal(classifierPrompt.includes("Recent attributed voice turns:"), true);
+  assert.equal(classifierPrompt.includes('vuhlp: "i\'m working on a project"'), true);
+});
+
+test("reply decider denies music turns when wake latch is inactive", async () => {
+  const manager = createManager();
+  const session = {
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    botTurnOpen: false,
+    musicWakeLatchedUntil: 0,
+    musicWakeLatchedByUserId: null,
+    music: {
+      phase: "playing",
+      active: true,
+      ducked: false
+    }
+  };
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session,
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60
+      }
+    }),
+    transcript: "yo what's up"
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "music_playing_not_awake");
+  assert.equal(session.music.ducked, false);
+});
+
+test("reply decider opens music wake latch on deterministic wake", async () => {
+  const manager = createManager();
+  const session = {
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    botTurnOpen: false,
+    musicWakeLatchedUntil: 0,
+    musicWakeLatchedByUserId: null,
+    music: {
+      phase: "playing",
+      active: true,
+      ducked: true
+    }
+  };
+  const before = Date.now();
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session,
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60
+      }
+    }),
+    transcript: "clanker pause the music"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "command_only_direct_address");
+  assert.equal(Number(session.musicWakeLatchedUntil || 0) > before, true);
+  assert.equal(session.musicWakeLatchedByUserId, "speaker-1");
+  assert.equal(session.music.ducked, true);
+});
+
+test("reply decider applies music wake latch across speakers and extends on admitted turn", async () => {
+  let callCount = 0;
+  const manager = createManager({
+    participantCount: 3,
+    generate: async () => {
+      callCount += 1;
+      return { text: "YES" };
+    }
+  });
+  const existingLatch = Date.now() + 5_000;
+  const session = {
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    botTurnOpen: false,
+    musicWakeLatchedUntil: existingLatch,
+    musicWakeLatchedByUserId: "speaker-1",
+    music: {
+      phase: "playing",
+      active: true,
+      ducked: false
+    }
+  };
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session,
+    userId: "speaker-2",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60,
+        replyDecisionLlm: {
+          provider: "anthropic",
+          model: "claude-haiku-4-5",
+          realtimeAdmissionMode: "hard_classifier"
+        }
+      }
+    }),
+    transcript: "what are we listening to"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "classifier_allow");
+  assert.equal(callCount, 1);
+  assert.equal(Number(session.musicWakeLatchedUntil || 0) > existingLatch, true);
+  assert.equal(session.musicWakeLatchedByUserId, "speaker-2");
+  assert.equal(session.music.ducked, false);
+});
+
+test("reply decider clears expired music wake latch and denies until new wake", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
       callCount += 1;
       return { text: "YES" };
+    }
+  });
+  const session = {
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    botTurnOpen: false,
+    musicWakeLatchedUntil: Date.now() - 1_000,
+    musicWakeLatchedByUserId: "speaker-1",
+    music: {
+      phase: "playing",
+      active: true,
+      ducked: false
+    }
+  };
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session,
+    userId: "speaker-2",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 60
+      }
+    }),
+    transcript: "can you queue something else"
+  });
+
+  assert.equal(decision.allow, false);
+  assert.equal(decision.reason, "music_playing_not_awake");
+  assert.equal(callCount, 0);
+  assert.equal(Number(session.musicWakeLatchedUntil || 0), 0);
+  assert.equal(session.musicWakeLatchedByUserId, null);
+});
+
+test("reply decider passes addressed-to-other signal into classifier and allows model deny", async () => {
+  let callCount = 0;
+  let classifierPrompt = "";
+  const manager = createManager({
+    generate: async ({ userPrompt }) => {
+      callCount += 1;
+      classifierPrompt = String(userPrompt || "");
+      return { text: "NO" };
     }
   });
   manager.getVoiceChannelParticipants = () => [
@@ -1196,11 +1432,13 @@ test("reply decider keeps non-bot vocatives in slow-listen mode", async () => {
   });
 
   assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "addressed_to_other_participant");
-  assert.equal(callCount, 0);
+  assert.equal(decision.reason, "classifier_deny");
+  assert.equal(decision.classifierTarget, "OTHER");
+  assert.equal(callCount, 1);
+  assert.equal(classifierPrompt.includes("Addressed-to-other signal: true"), true);
 });
 
-test("reply decider blocks ambiguous realtime native turns when classifier is disabled", async () => {
+test("reply decider blocks ambiguous realtime native turns without brain path", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -1271,7 +1509,7 @@ test("reply decider bypasses LLM for direct-addressed turns", async () => {
   assert.equal(callCount, 0);
 });
 
-test("reply decider keeps direct-address fast-path when classifier is disabled in native realtime mode", async () => {
+test("reply decider keeps direct-address fast-path in native realtime mode", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -1618,11 +1856,9 @@ test("reply decider keeps unrelated chatter blocked during pending music followu
     transcript: "that song is crazy"
   });
 
-  // Unrelated chatter is blocked by the output lock (music is playing)
-  // rather than command-only mode. The outcome is the same: allow: false.
+  // Unrelated chatter is denied because music is active and wake latch is not armed.
   assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "bot_turn_open");
-  assert.equal(decision.outputLockReason, "music_playback_active");
+  assert.equal(decision.reason, "music_playing_not_awake");
 });
 
 test("reply decider ignores other speakers during pending command followup in command-only mode", async () => {
@@ -1669,12 +1905,11 @@ test("reply decider ignores other speakers during pending command followup in co
     transcript: "2"
   });
 
-  // Other speakers are blocked by the output lock (music is playing).
-  // The disambiguation followup only allows through the same speaker who
-  // initiated the music request.
+  // Other speakers stay blocked while music is active and wake latch is not armed.
+  // The disambiguation followup only allows through the same speaker who initiated
+  // the music request.
   assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "bot_turn_open");
-  assert.equal(decision.outputLockReason, "music_playback_active");
+  assert.equal(decision.reason, "music_playing_not_awake");
 });
 
 test("reply decider drops expired command followup sessions", async () => {

@@ -109,6 +109,12 @@ export function VoiceModeSettingsSection({
     Boolean(form.voiceOpenAiRealtimeUsePerUserAsrBridge);
   const usesBrainGeneration = isRealtimeMode && isBrainPath;
   const classifierVisible = isRealtimeMode && isBridgePath && !form.voiceCommandOnlyMode;
+  const realtimeAdmissionMode = String(
+    form.voiceReplyDecisionRealtimeAdmissionMode || "hard_classifier"
+  )
+    .trim()
+    .toLowerCase();
+  const hardClassifierMode = realtimeAdmissionMode !== "generation_only";
 
   /* Pipeline stages for indicator */
   const pipelineStages: PipelineStage[] = isNativePath
@@ -121,14 +127,14 @@ export function VoiceModeSettingsSection({
     ? [
         { label: "Audio In", active: true },
         { label: "ASR", active: true },
-        { label: "Classifier", active: true },
+        { label: "Admission Gate", active: true },
         { label: "Realtime Brain + TTS", active: true },
         { label: "Audio Out", active: true }
       ]
     : [
         { label: "Audio In", active: true },
         { label: "ASR", active: true },
-        { label: "Classifier", active: true },
+        { label: "Admission (Text Brain)", active: true },
         { label: "Text Brain", active: true },
         { label: "TTS", active: true },
         { label: "Audio Out", active: true }
@@ -395,19 +401,34 @@ export function VoiceModeSettingsSection({
           {classifierVisible && (
             <StagePanel number={2} label="Reply Classifier" pathTag="Bridge">
               <p>
-                LLM gate for bridge mode. Classifies each non-direct-address turn as YES/NO before forwarding to the realtime brain. Replaces heuristic engagement gates with actual language understanding.
+                Admission mode for bridge turns. In hard-classifier mode, each non-direct-address turn is gated by a YES/NO classifier before forwarding to realtime generation.
               </p>
-              <div className="toggles">
-                <label>
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-realtime-admission-mode">Realtime admission mode</label>
+                  <select
+                    id="voice-realtime-admission-mode"
+                    value={form.voiceReplyDecisionRealtimeAdmissionMode}
+                    onChange={set("voiceReplyDecisionRealtimeAdmissionMode")}
+                  >
+                    <option value="hard_classifier">hard_classifier</option>
+                    <option value="generation_only">generation_only</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="voice-music-wake-latch-seconds">Music wake latch seconds</label>
                   <input
-                    type="checkbox"
-                    checked={Boolean(form.voiceReplyDecisionLlmEnabled)}
-                    onChange={set("voiceReplyDecisionLlmEnabled")}
+                    id="voice-music-wake-latch-seconds"
+                    type="number"
+                    min="5"
+                    max="60"
+                    step="1"
+                    value={form.voiceReplyDecisionMusicWakeLatchSeconds}
+                    onChange={set("voiceReplyDecisionMusicWakeLatchSeconds")}
                   />
-                  Enable reply classifier
-                </label>
+                </div>
               </div>
-              {form.voiceReplyDecisionLlmEnabled && (
+              {hardClassifierMode && (
                 <div className="split">
                   <div>
                     <label htmlFor="voice-reply-decision-provider">Provider</label>
@@ -435,9 +456,9 @@ export function VoiceModeSettingsSection({
                   </div>
                 </div>
               )}
-              {!form.voiceReplyDecisionLlmEnabled && (
+              {!hardClassifierMode && (
                 <p>
-                  When disabled, all non-direct-address turns in bridge mode are blocked (conservative fallback).
+                  Generation-only mode bypasses the classifier and lets bridge generation decide whether to reply.
                 </p>
               )}
             </StagePanel>

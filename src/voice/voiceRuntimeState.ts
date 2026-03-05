@@ -147,6 +147,10 @@ export function buildRuntimeStateSnapshot({
                     ? new Date(session.lastDirectAddressAt).toISOString()
                     : null,
                 lastDirectAddressUserId: session.lastDirectAddressUserId || null,
+                musicWakeLatchedUntil: Number(session?.musicWakeLatchedUntil || 0) > 0
+                    ? new Date(Number(session.musicWakeLatchedUntil)).toISOString()
+                    : null,
+                musicWakeLatchedByUserId: session.musicWakeLatchedByUserId || null,
                 wake: {
                     state: wakeContext?.engaged ? "awake" : "listening",
                     active: Boolean(wakeContext?.engaged),

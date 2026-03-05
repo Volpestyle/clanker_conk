@@ -10,6 +10,9 @@ import {
   formatOpenArticleCandidates,
   formatMemoryFacts
 } from "./promptFormatters.ts";
+import {
+  buildVoiceAdmissionPolicyLines
+} from "./voiceAdmissionPolicy.ts";
 
 export function buildVoiceTurnPrompt({
   speakerName = "unknown",
@@ -513,30 +516,21 @@ export function buildVoiceTurnPrompt({
     }
   }
 
-  if (isEagerTurn) {
-    const eagerness = Math.max(0, Math.min(100, Number(voiceEagerness) || 0));
-    parts.push(`You were NOT directly addressed. You're considering whether to chime in.`);
-    parts.push(`Voice reply eagerness: ${eagerness}/100.`);
-    if (normalizedConversationContext?.engagedWithCurrentSpeaker) {
-      parts.push("You are actively in this speaker's thread. Lean toward a short helpful reply over [SKIP].");
-    }
-    parts.push(
-      "If the turn is only laughter, filler, or backchannel noise (for example haha, lol, hmm, mm, uh-huh, yup), strongly prefer [SKIP] unless there is a clear question, request, or obvious conversational value in replying."
-    );
-    parts.push("Only speak up if you can genuinely add value. If not, output exactly [SKIP].");
-
-    parts.push(...voiceToneGuardrails);
-    parts.push("Task: respond as a natural spoken VC reply, or skip if you have nothing to add.");
-  } else if (!normalizedDirectAddressed) {
-    parts.push(
-      "If the turn is only laughter, filler, or backchannel noise with no clear ask or meaningful new content, prefer [SKIP]."
-    );
-    parts.push(...voiceToneGuardrails);
-    parts.push("Task: decide whether to respond now or output [SKIP] if a reply would be interruptive, low-value, or likely not meant for you.");
-  } else {
-    parts.push(...voiceToneGuardrails);
-    parts.push("Task: respond as a natural spoken VC reply.");
-  }
+  parts.push(
+    ...buildVoiceAdmissionPolicyLines({
+      mode: "generation",
+      directAddressed: normalizedDirectAddressed,
+      isEagerTurn,
+      replyEagerness: voiceEagerness,
+      participantCount: normalizedParticipantRoster.length,
+      conversationContext: normalizedConversationContext,
+      addressedToOtherSignal: Boolean(normalizedConversationContext?.addressedToOtherSignal),
+      pendingCommandFollowupSignal: Boolean(normalizedConversationContext?.pendingCommandFollowupSignal),
+      musicActive: Boolean(normalizedConversationContext?.musicActive),
+      musicWakeLatched: Boolean(normalizedConversationContext?.musicWakeLatched)
+    })
+  );
+  parts.push(...voiceToneGuardrails);
 
   parts.push(
     "Always set voiceAddressing as your best addressing guess for the incoming speaker turn: talkingTo should be \"ME\" when the speaker is likely talking to you, otherwise a participant name when reasonably clear, otherwise null."

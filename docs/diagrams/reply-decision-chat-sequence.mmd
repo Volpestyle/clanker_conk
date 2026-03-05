@@ -11,16 +11,16 @@ sequenceDiagram
     Speaker->>Voice: audio turn captured
     Voice->>Voice: transcribe turn
     Voice->>Decider: Stage A admission (deterministic gates)
-    Note over Decider: wake word, eagerness,<br/>addressed-to-other, command-only
+    Note over Decider: wake word, eagerness,<br/>music wake latch, command-only
 
     alt stt_pipeline mode
       Decider-->>Voice: allow (generation_decides)
-    else bridge mode + classifier enabled
+    else bridge mode + hard_classifier
       Decider->>Classifier: YES/NO classification
       Classifier-->>Decider: classifier_allow / classifier_deny
       Decider-->>Voice: allow/deny + reason
-    else bridge mode + classifier disabled
-      Decider-->>Voice: deny (classifier_disabled_not_addressed)
+    else bridge mode + generation_only
+      Decider-->>Voice: allow (generation_decides)
     end
 
     Voice->>Store: log voice_turn_addressing

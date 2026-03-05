@@ -220,8 +220,10 @@ export function settingsToForm(settings) {
     voiceThoughtEngineMinSecondsBetweenThoughts:
       settings?.voice?.thoughtEngine?.minSecondsBetweenThoughts ??
       defaultVoiceThoughtEngine.minSecondsBetweenThoughts,
-    voiceReplyDecisionLlmEnabled:
-      settings?.voice?.replyDecisionLlm?.enabled ?? defaultVoice.replyDecisionLlm.enabled,
+    voiceReplyDecisionRealtimeAdmissionMode:
+      settings?.voice?.replyDecisionLlm?.realtimeAdmissionMode ?? defaultVoice.replyDecisionLlm.realtimeAdmissionMode,
+    voiceReplyDecisionMusicWakeLatchSeconds:
+      settings?.voice?.replyDecisionLlm?.musicWakeLatchSeconds ?? defaultVoice.replyDecisionLlm.musicWakeLatchSeconds,
     voiceReplyDecisionLlmProvider:
       settings?.voice?.replyDecisionLlm?.provider ?? defaultVoice.replyDecisionLlm.provider,
     voiceReplyDecisionLlmModel:
@@ -504,7 +506,7 @@ export function formToSettingsPatch(form) {
       enabled: form.voiceEnabled,
       voiceProvider: String(form.voiceProvider || "openai").trim(),
       replyPath: String(form.voiceReplyPath || "bridge").trim().toLowerCase(),
-      brainProvider: "openai", // hardcoded — UI dropdown removed
+      brainProvider: String(form.voiceBrainProvider || "openai").trim().toLowerCase(),
       transcriberProvider: "openai",
       asrLanguageMode: String(form.voiceAsrLanguageMode || "").trim(),
       asrLanguageHint: String(form.voiceAsrLanguageHint || "").trim(),
@@ -525,7 +527,10 @@ export function formToSettingsPatch(form) {
         minSecondsBetweenThoughts: Number(form.voiceThoughtEngineMinSecondsBetweenThoughts)
       },
       replyDecisionLlm: {
-        enabled: Boolean(form.voiceReplyDecisionLlmEnabled),
+        realtimeAdmissionMode: String(form.voiceReplyDecisionRealtimeAdmissionMode || "hard_classifier")
+          .trim()
+          .toLowerCase(),
+        musicWakeLatchSeconds: Number(form.voiceReplyDecisionMusicWakeLatchSeconds),
         provider: String(form.voiceReplyDecisionLlmProvider || "").trim(),
         model: String(form.voiceReplyDecisionLlmModel || "").trim()
       },

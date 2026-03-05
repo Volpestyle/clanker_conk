@@ -543,9 +543,12 @@ export function normalizeSettings(raw) {
     minSecondsBetweenThoughts?: number;
   };
   type VoiceReplyDecisionDefaults = {
+    enabled?: boolean;
     provider?: string;
     model?: string;
     reasoningEffort?: string;
+    realtimeAdmissionMode?: string;
+    musicWakeLatchSeconds?: number;
   };
   type VoiceGenerationDefaults = {
     useTextModel?: boolean;
@@ -794,7 +797,6 @@ export function normalizeSettings(raw) {
   merged.voice.generationLlm.model = merged.voice.generationLlm.useTextModel
     ? merged.llm.model
     : normalizedVoiceGenerationLlm.model;
-  delete merged.voice.replyDecisionLlm.enabled;
   delete merged.voice.replyDecisionLlm.prompts;
   const voiceReplyDecisionProviderRaw = String(merged.voice?.replyDecisionLlm?.provider || "").trim();
   const defaultVoiceReplyDecisionProvider = normalizeLlmProvider(defaultVoiceReplyDecisionLlm.provider || "anthropic");
@@ -816,6 +818,33 @@ export function normalizeSettings(raw) {
     merged.voice?.replyDecisionLlm?.reasoningEffort,
     defaultReplyDecisionReasoningEffort
   ) || defaultReplyDecisionReasoningEffort;
+  const rawRealtimeAdmissionMode = String(raw?.voice?.replyDecisionLlm?.realtimeAdmissionMode || "")
+    .trim()
+    .toLowerCase();
+  const legacyClassifierEnabled = raw?.voice?.replyDecisionLlm?.enabled;
+  const defaultRealtimeAdmissionMode = String(defaultVoiceReplyDecisionLlm.realtimeAdmissionMode || "hard_classifier")
+    .trim()
+    .toLowerCase();
+  const normalizedRealtimeAdmissionMode = rawRealtimeAdmissionMode === "generation_only" || rawRealtimeAdmissionMode === "hard_classifier"
+    ? rawRealtimeAdmissionMode
+    : legacyClassifierEnabled === false
+      ? "generation_only"
+      : defaultRealtimeAdmissionMode === "generation_only"
+        ? "generation_only"
+        : "hard_classifier";
+  merged.voice.replyDecisionLlm.realtimeAdmissionMode = normalizedRealtimeAdmissionMode;
+  const musicWakeLatchSecondsRaw = Number(merged.voice?.replyDecisionLlm?.musicWakeLatchSeconds);
+  const defaultMusicWakeLatchSecondsRaw = Number(defaultVoiceReplyDecisionLlm.musicWakeLatchSeconds);
+  merged.voice.replyDecisionLlm.musicWakeLatchSeconds = clamp(
+    Number.isFinite(musicWakeLatchSecondsRaw)
+      ? musicWakeLatchSecondsRaw
+      : Number.isFinite(defaultMusicWakeLatchSecondsRaw)
+        ? defaultMusicWakeLatchSecondsRaw
+        : 15,
+    5,
+    60
+  );
+  delete merged.voice.replyDecisionLlm.enabled;
 
   merged.voice.xai.voice = String(merged.voice?.xai?.voice || defaultVoiceXai.voice || "Rex").slice(0, 60);
   merged.voice.xai.audioFormat = String(merged.voice?.xai?.audioFormat || defaultVoiceXai.audioFormat || "audio/pcm")
