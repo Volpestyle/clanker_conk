@@ -487,16 +487,23 @@ export async function evaluateVoiceReplyDecision(manager: any, {
       };
     }
     if (!musicActive) {
-      return {
-        allow: false,
-        reason: "command_only_not_addressed",
-        participantCount,
-        directAddressed,
-        directAddressConfidence,
-        directAddressThreshold,
-        transcript: normalizedTranscript,
-        conversationContext
-      };
+      const latchWindowMs = Math.round(resolveMusicWakeLatchSeconds(settings) * 1000);
+      const lastDirectAddressAt = Number(session?.lastDirectAddressAt || 0);
+      const msSinceDirectAddress = lastDirectAddressAt > 0 ? Math.max(0, now - lastDirectAddressAt) : Infinity;
+      if (msSinceDirectAddress <= latchWindowMs) {
+        // Within the command mode latch window — fall through to classifier/generation
+      } else {
+        return {
+          allow: false,
+          reason: "command_only_not_addressed",
+          participantCount,
+          directAddressed,
+          directAddressConfidence,
+          directAddressThreshold,
+          transcript: normalizedTranscript,
+          conversationContext
+        };
+      }
     }
     if (!musicWakeLatched) {
       return {
@@ -532,18 +539,8 @@ export async function evaluateVoiceReplyDecision(manager: any, {
     };
   }
 
-  if (!directAddressed && replyEagerness <= 0) {
-    return {
-      allow: false,
-      reason: "eagerness_disabled_without_direct_address",
-      participantCount,
-      directAddressed,
-      directAddressConfidence,
-      directAddressThreshold,
-      transcript: normalizedTranscript,
-      conversationContext
-    };
-  }
+  // Eagerness 0 no longer hard-rejects — it flows to classifier/generation
+  // where the tier-based personality prompt handles the conservative behavior.
 
   const sessionMode = String(session?.mode || settings?.voice?.mode || "").trim().toLowerCase();
   const mergedWithGeneration =

@@ -428,7 +428,7 @@ test("reply decider in merged realtime mode allows short clips through classifie
   assert.equal(callCount, 1);
 });
 
-test("reply decider blocks unaddressed turns when eagerness is disabled", async () => {
+test("reply decider flows eagerness-0 unaddressed turns to classifier/generation (no hard reject)", async () => {
   const manager = createManager();
   const decision = await manager.evaluateVoiceReplyDecision({
     session: {
@@ -451,7 +451,9 @@ test("reply decider blocks unaddressed turns when eagerness is disabled", async 
   });
 
   assert.equal(decision.allow, false);
-  assert.equal(decision.reason, "eagerness_disabled_without_direct_address");
+  // Eagerness 0 no longer hard-rejects — it flows through to classifier/generation.
+  // This mock has no brain session, so it reaches no_brain_session instead.
+  assert.equal(decision.reason, "no_brain_session");
 });
 
 test("reply decider blocks unaddressed turns in command-only mode", async () => {
