@@ -184,6 +184,54 @@ export function VoiceModeSettingsSection({
             </>
           )}
 
+          <h4>ASR Controls</h4>
+          <div className="toggles">
+            <label>
+              <input
+                type="checkbox"
+                checked={form.voiceAsrEnabled}
+                onChange={set("voiceAsrEnabled")}
+              />
+              ASR enabled (disable to use slash commands only)
+            </label>
+            <label>
+              <input
+                type="checkbox"
+                checked={form.voiceAsrDuringMusic}
+                onChange={set("voiceAsrDuringMusic")}
+              />
+              ASR during music (enables voice stop detection while music plays)
+            </label>
+          </div>
+
+          <div className="split">
+            <div>
+              <label htmlFor="voice-asr-language-mode">ASR language mode</label>
+              <select
+                id="voice-asr-language-mode"
+                value={form.voiceAsrLanguageMode}
+                onChange={set("voiceAsrLanguageMode")}
+              >
+                <option value="auto">Auto detect (allow switching)</option>
+                <option value="fixed">Fixed language</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="voice-asr-language-hint">ASR language hint (BCP-47, e.g. en, en-us)</label>
+              <input
+                id="voice-asr-language-hint"
+                type="text"
+                value={form.voiceAsrLanguageHint}
+                onChange={set("voiceAsrLanguageHint")}
+                placeholder="en"
+              />
+            </div>
+          </div>
+          <p>
+            Auto mode keeps multilingual switching and uses the hint only for ambiguity bias. Fixed mode forces that
+            language for transcription.
+          </p>
+
           {usesBrainGeneration && (
             <>
               <h4>Brain LLM</h4>
@@ -228,34 +276,6 @@ export function VoiceModeSettingsSection({
               </div>
             </>
           )}
-
-          <div className="split">
-            <div>
-              <label htmlFor="voice-asr-language-mode">ASR language mode</label>
-              <select
-                id="voice-asr-language-mode"
-                value={form.voiceAsrLanguageMode}
-                onChange={set("voiceAsrLanguageMode")}
-              >
-                <option value="auto">Auto detect (allow switching)</option>
-                <option value="fixed">Fixed language</option>
-              </select>
-            </div>
-            <div>
-              <label htmlFor="voice-asr-language-hint">ASR language hint (BCP-47, e.g. en, en-us)</label>
-              <input
-                id="voice-asr-language-hint"
-                type="text"
-                value={form.voiceAsrLanguageHint}
-                onChange={set("voiceAsrLanguageHint")}
-                placeholder="en"
-              />
-            </div>
-          </div>
-          <p>
-            Auto mode keeps multilingual switching and uses the hint only for ambiguity bias. Fixed mode forces that
-            language for transcription.
-          </p>
 
           <label htmlFor="voice-operational-messages">Text channel status messages</label>
           <select
@@ -366,100 +386,10 @@ export function VoiceModeSettingsSection({
               : "When disabled, Clanker can answer unaddressed turns based on reply eagerness. Music playback still forces command-only mode while audible."}
           </p>
 
-          <h4>Thought Engine</h4>
+          <h4>Voice Output</h4>
           <p>
-            When VC is quiet, Clank can self-prompt a candidate thought and let the brain decide if it should be spoken.
+            Model and voice used for spoken audio output. In Native mode the model handles end-to-end; in Bridge/Brain modes it receives generated text and produces speech.
           </p>
-          <div className="toggles">
-            <label>
-              <input
-                type="checkbox"
-                checked={form.voiceThoughtEngineEnabled}
-                onChange={set("voiceThoughtEngineEnabled")}
-              />
-              Enable silence thought loop
-            </label>
-          </div>
-          {form.voiceThoughtEngineEnabled && (
-            <>
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-thought-engine-provider">Provider</label>
-                  <select
-                    id="voice-thought-engine-provider"
-                    value={form.voiceThoughtEngineProvider}
-                    onChange={setVoiceThoughtEngineProvider}
-                  >
-                    <LlmProviderOptions />
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="voice-thought-engine-model-preset">Model ID</label>
-                  <select
-                    id="voice-thought-engine-model-preset"
-                    value={selectedVoiceThoughtEnginePresetModel}
-                    onChange={selectVoiceThoughtEnginePresetModel}
-                  >
-                    {voiceThoughtEngineModelOptions.map((modelId) => (
-                      <option key={modelId} value={modelId}>
-                        {modelId}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <label htmlFor="voice-thought-temperature">Thought temperature</label>
-              <input
-                id="voice-thought-temperature"
-                type="number"
-                min="0"
-                max="2"
-                step="0.05"
-                value={form.voiceThoughtEngineTemperature}
-                onChange={set("voiceThoughtEngineTemperature")}
-              />
-
-              <label htmlFor="voice-thought-eagerness">
-                Thought eagerness: <strong>{form.voiceThoughtEngineEagerness}%</strong>
-              </label>
-              <input
-                id="voice-thought-eagerness"
-                type="range"
-                min="0"
-                max="100"
-                step="1"
-                value={form.voiceThoughtEngineEagerness}
-                onChange={set("voiceThoughtEngineEagerness")}
-                style={rangeStyle(form.voiceThoughtEngineEagerness)}
-              />
-
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-thought-silence-seconds">Silence seconds before thought attempt</label>
-                  <input
-                    id="voice-thought-silence-seconds"
-                    type="number"
-                    min="8"
-                    max="300"
-                    value={form.voiceThoughtEngineMinSilenceSeconds}
-                    onChange={set("voiceThoughtEngineMinSilenceSeconds")}
-                  />
-                </div>
-                <div>
-                  <label htmlFor="voice-thought-min-gap-seconds">Min seconds between thought attempts</label>
-                  <input
-                    id="voice-thought-min-gap-seconds"
-                    type="number"
-                    min="8"
-                    max="600"
-                    value={form.voiceThoughtEngineMinSecondsBetweenThoughts}
-                    onChange={set("voiceThoughtEngineMinSecondsBetweenThoughts")}
-                  />
-                </div>
-              </div>
-            </>
-          )}
 
           {isVoiceAgentMode && (
             <>
@@ -509,7 +439,7 @@ export function VoiceModeSettingsSection({
             <>
               <div className="split">
                 <div>
-                  <label htmlFor="voice-openai-realtime-model">OpenAI realtime model</label>
+                  <label htmlFor="voice-openai-realtime-model">OpenAI output model</label>
                   <select
                     id="voice-openai-realtime-model"
                     value={form.voiceOpenAiRealtimeModel}
@@ -655,6 +585,101 @@ export function VoiceModeSettingsSection({
                     max="48000"
                     value={form.voiceElevenLabsRealtimeOutputSampleRateHz}
                     onChange={set("voiceElevenLabsRealtimeOutputSampleRateHz")}
+                  />
+                </div>
+              </div>
+            </>
+          )}
+
+          <h4>Thought Engine</h4>
+          <p>
+            When VC is quiet, Clank can self-prompt a candidate thought and let the brain decide if it should be spoken.
+          </p>
+          <div className="toggles">
+            <label>
+              <input
+                type="checkbox"
+                checked={form.voiceThoughtEngineEnabled}
+                onChange={set("voiceThoughtEngineEnabled")}
+              />
+              Enable silence thought loop
+            </label>
+          </div>
+          {form.voiceThoughtEngineEnabled && (
+            <>
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-thought-engine-provider">Provider</label>
+                  <select
+                    id="voice-thought-engine-provider"
+                    value={form.voiceThoughtEngineProvider}
+                    onChange={setVoiceThoughtEngineProvider}
+                  >
+                    <LlmProviderOptions />
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="voice-thought-engine-model-preset">Model ID</label>
+                  <select
+                    id="voice-thought-engine-model-preset"
+                    value={selectedVoiceThoughtEnginePresetModel}
+                    onChange={selectVoiceThoughtEnginePresetModel}
+                  >
+                    {voiceThoughtEngineModelOptions.map((modelId) => (
+                      <option key={modelId} value={modelId}>
+                        {modelId}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <label htmlFor="voice-thought-temperature">Thought temperature</label>
+              <input
+                id="voice-thought-temperature"
+                type="number"
+                min="0"
+                max="2"
+                step="0.05"
+                value={form.voiceThoughtEngineTemperature}
+                onChange={set("voiceThoughtEngineTemperature")}
+              />
+
+              <label htmlFor="voice-thought-eagerness">
+                Thought eagerness: <strong>{form.voiceThoughtEngineEagerness}%</strong>
+              </label>
+              <input
+                id="voice-thought-eagerness"
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value={form.voiceThoughtEngineEagerness}
+                onChange={set("voiceThoughtEngineEagerness")}
+                style={rangeStyle(form.voiceThoughtEngineEagerness)}
+              />
+
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-thought-silence-seconds">Silence seconds before thought attempt</label>
+                  <input
+                    id="voice-thought-silence-seconds"
+                    type="number"
+                    min="8"
+                    max="300"
+                    value={form.voiceThoughtEngineMinSilenceSeconds}
+                    onChange={set("voiceThoughtEngineMinSilenceSeconds")}
+                  />
+                </div>
+                <div>
+                  <label htmlFor="voice-thought-min-gap-seconds">Min seconds between thought attempts</label>
+                  <input
+                    id="voice-thought-min-gap-seconds"
+                    type="number"
+                    min="8"
+                    max="600"
+                    value={form.voiceThoughtEngineMinSecondsBetweenThoughts}
+                    onChange={set("voiceThoughtEngineMinSecondsBetweenThoughts")}
                   />
                 </div>
               </div>
@@ -867,26 +892,6 @@ export function VoiceModeSettingsSection({
               />
             </>
           )}
-
-          <h4>ASR Controls</h4>
-          <div className="toggles">
-            <label>
-              <input
-                type="checkbox"
-                checked={form.voiceAsrEnabled}
-                onChange={set("voiceAsrEnabled")}
-              />
-              ASR enabled (disable to use slash commands only)
-            </label>
-            <label>
-              <input
-                type="checkbox"
-                checked={form.voiceAsrDuringMusic}
-                onChange={set("voiceAsrDuringMusic")}
-              />
-              ASR during music (enables voice stop detection while music plays)
-            </label>
-          </div>
 
           <label htmlFor="voice-allowed-channels">Allowed voice channel IDs (optional)</label>
           <textarea
