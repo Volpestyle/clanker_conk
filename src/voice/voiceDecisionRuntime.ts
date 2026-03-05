@@ -252,6 +252,39 @@ export function parseVoiceThoughtDecisionContract(rawText) {
   };
 }
 
+export interface AsrLogprobEntry {
+  token: string;
+  logprob: number;
+  bytes: number[] | null;
+}
+
+export interface AsrTranscriptConfidence {
+  meanLogprob: number;
+  minLogprob: number;
+  tokenCount: number;
+}
+
+export function computeAsrTranscriptConfidence(
+  logprobs: AsrLogprobEntry[] | null | undefined
+): AsrTranscriptConfidence | null {
+  if (!Array.isArray(logprobs) || logprobs.length === 0) return null;
+  let sum = 0;
+  let min = Infinity;
+  let count = 0;
+  for (const entry of logprobs) {
+    if (!entry || typeof entry.logprob !== "number" || !Number.isFinite(entry.logprob)) continue;
+    sum += entry.logprob;
+    if (entry.logprob < min) min = entry.logprob;
+    count += 1;
+  }
+  if (count === 0) return null;
+  return {
+    meanLogprob: sum / count,
+    minLogprob: min,
+    tokenCount: count
+  };
+}
+
 function estimatePcm16MonoDurationMs(pcmByteLength, sampleRateHz = 24000) {
   const normalizedBytes = Math.max(0, Number(pcmByteLength) || 0);
   const normalizedRate = Math.max(1, Number(sampleRateHz) || 24000);

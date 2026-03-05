@@ -20,6 +20,7 @@ import { clamp } from "../utils.ts";
 import { hasBotNameCue } from "../directAddressConfidence.ts";
 import { SoundboardDirector } from "./soundboardDirector.ts";
 import {
+  computeAsrTranscriptConfidence,
   defaultVoiceReplyDecisionModel,
   isLowSignalVoiceFragment,
   normalizeVoiceReplyDecisionProvider,
@@ -242,7 +243,8 @@ import {
   VOICE_SILENCE_GATE_RMS_MAX,
   VOICE_LOOKUP_BUSY_MAX_CHARS,
   VOICE_TURN_MIN_ASR_CLIP_MS,
-  VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS
+  VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS,
+  VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD
 } from "./voiceSessionManager.constants.ts";
 import { loadPromptMemorySliceFromMemory } from "../memory/promptMemorySlice.ts";
 import { providerSupports } from "./voiceModes.ts";
@@ -3132,11 +3134,11 @@ export class VoiceSessionManager {
     const scopeRaw = String(policy.scope || "")
       .trim()
       .toLowerCase();
-    const scope = scopeRaw === "all" || normalizedTalkingTo === "ALL" ? "all" : "speaker";
+    const scope = scopeRaw === "none" || scopeRaw === "all" || normalizedTalkingTo === "ALL" ? "none" : "speaker";
     const allowedUserId = String(policy.allowedUserId || "").trim() || null;
     const assertive =
       policy.assertive === undefined
-        ? scope === "all" || Boolean(allowedUserId)
+        ? scope === "none" || Boolean(allowedUserId)
         : Boolean(policy.assertive);
     if (!assertive) return null;
     if (scope === "speaker" && !allowedUserId) return null;
@@ -3157,7 +3159,7 @@ export class VoiceSessionManager {
     return {
       assertive: true,
       scope,
-      allowedUserId: scope === "all" ? null : allowedUserId,
+      allowedUserId: scope === "none" ? null : allowedUserId,
       talkingTo: normalizedTalkingTo || null,
       reason: normalizedReason,
       source: normalizedSource
@@ -3180,7 +3182,7 @@ export class VoiceSessionManager {
     const assertive = Boolean(directAddressed) || engagedWithCurrentSpeaker || targetsAll;
     if (!assertive) return null;
 
-    const scope = targetsAll ? "all" : "speaker";
+    const scope = targetsAll ? "none" : "speaker";
     const reason = targetsAll
       ? "assistant_target_all"
       : directAddressed
@@ -3205,7 +3207,7 @@ export class VoiceSessionManager {
   } = {}) {
     const normalizedPolicy = this.normalizeReplyInterruptionPolicy(policy);
     if (!normalizedPolicy?.assertive) return true;
-    if (normalizedPolicy.scope === "all") return false;
+    if (normalizedPolicy.scope === "none") return false;
     const normalizedUserId = String(userId || "").trim();
     if (!normalizedUserId) return false;
     return normalizedUserId === String(normalizedPolicy.allowedUserId || "");
@@ -6710,7 +6712,10 @@ export class VoiceSessionManager {
       transcriptionModelFallbackOverride:
         String(asrResult?.transcriptionModelFallback || "").trim() || null,
       transcriptionPlanReasonOverride: String(asrResult?.transcriptionPlanReason || "").trim(),
-      usedFallbackModelForTranscriptOverride: Boolean(asrResult?.usedFallbackModel)
+      usedFallbackModelForTranscriptOverride: Boolean(asrResult?.usedFallbackModel),
+      transcriptLogprobsOverride: Array.isArray(asrResult?.transcriptLogprobs)
+        ? asrResult.transcriptLogprobs
+        : null
     });
     return true;
   }
@@ -6754,11 +6759,23 @@ export class VoiceSessionManager {
         ? Math.min(existingFinalizedAt, incomingFinalizedAt)
         : Math.max(existingFinalizedAt, incomingFinalizedAt);
 
+    const existingLogprobs = Array.isArray(existingTurn.transcriptLogprobsOverride)
+      ? existingTurn.transcriptLogprobsOverride
+      : [];
+    const incomingLogprobs = Array.isArray(incomingTurn.transcriptLogprobsOverride)
+      ? incomingTurn.transcriptLogprobsOverride
+      : [];
+    const mergedLogprobs =
+      existingLogprobs.length > 0 || incomingLogprobs.length > 0
+        ? [...existingLogprobs, ...incomingLogprobs]
+        : null;
+
     return {
       ...existingTurn,
       ...incomingTurn,
       pcmBuffer: mergedBuffer,
       transcriptOverride: mergedTranscript || null,
+      transcriptLogprobsOverride: mergedLogprobs,
       queuedAt: Number(incomingTurn.queuedAt || Date.now()),
       finalizedAt: mergedFinalizedAt || 0,
       mergedTurnCount: Math.max(1, Number(existingTurn.mergedTurnCount || 1)) + 1,
@@ -6779,7 +6796,8 @@ export class VoiceSessionManager {
     transcriptionModelPrimaryOverride = "",
     transcriptionModelFallbackOverride = null,
     transcriptionPlanReasonOverride = "",
-    usedFallbackModelForTranscriptOverride = false
+    usedFallbackModelForTranscriptOverride = false,
+    transcriptLogprobsOverride = null
   }) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
@@ -6811,6 +6829,9 @@ export class VoiceSessionManager {
         String(transcriptionModelFallbackOverride || "").trim() || null,
       transcriptionPlanReasonOverride: String(transcriptionPlanReasonOverride || "").trim() || null,
       usedFallbackModelForTranscriptOverride: Boolean(usedFallbackModelForTranscriptOverride),
+      transcriptLogprobsOverride: Array.isArray(transcriptLogprobsOverride)
+        ? transcriptLogprobsOverride
+        : null,
       mergedTurnCount: 1,
       droppedHeadBytes: 0
     };
@@ -7174,7 +7195,8 @@ export class VoiceSessionManager {
     transcriptionModelPrimaryOverride = "",
     transcriptionModelFallbackOverride = null,
     transcriptionPlanReasonOverride = "",
-    usedFallbackModelForTranscriptOverride = false
+    usedFallbackModelForTranscriptOverride = false,
+    transcriptLogprobsOverride = null
   }) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
@@ -7397,6 +7419,38 @@ export class VoiceSessionManager {
         }
       });
       return;
+    }
+
+    // Guard: ASR bridge returned transcript with low logprob confidence → likely hallucination
+    // from mic noise, breathing, or ambient audio on the per-user stream.
+    if (
+      hasTranscriptOverride &&
+      turnTranscript &&
+      Array.isArray(transcriptLogprobsOverride) &&
+      transcriptLogprobsOverride.length > 0
+    ) {
+      const confidence = computeAsrTranscriptConfidence(transcriptLogprobsOverride);
+      if (confidence && confidence.meanLogprob < VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD) {
+        this.store.logAction({
+          kind: "voice_runtime",
+          guildId: session.guildId,
+          channelId: session.textChannelId,
+          userId,
+          content: "voice_turn_dropped_asr_low_confidence",
+          metadata: {
+            sessionId: session.id,
+            source: "realtime",
+            captureReason: String(captureReason || "stream_end"),
+            transcript: turnTranscript,
+            meanLogprob: Number(confidence.meanLogprob.toFixed(4)),
+            minLogprob: Number(confidence.minLogprob.toFixed(4)),
+            tokenCount: confidence.tokenCount,
+            threshold: VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD,
+            clipDurationMs
+          }
+        });
+        return;
+      }
     }
 
     // Guard: ASR bridge was active but returned empty → PCM fallback produced transcript

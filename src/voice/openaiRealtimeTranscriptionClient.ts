@@ -229,12 +229,14 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
         "";
       const normalizedTranscript = String(transcript || "").trim();
       if (!normalizedTranscript) return;
+      const isFinal = TRANSCRIPT_FINAL_TYPES.has(eventType);
       this.emit("transcript", {
         text: normalizedTranscript,
         eventType,
-        final: TRANSCRIPT_FINAL_TYPES.has(eventType),
+        final: isFinal,
         itemId: itemId || null,
-        previousItemId: previousItemId || null
+        previousItemId: previousItemId || null,
+        logprobs: isFinal && Array.isArray(event.logprobs) ? event.logprobs : null
       });
       return;
     }

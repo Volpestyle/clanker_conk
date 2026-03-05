@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { isLowSignalVoiceFragment, parseVoiceThoughtDecisionContract } from "./voiceDecisionRuntime.ts";
+import { computeAsrTranscriptConfidence, isLowSignalVoiceFragment, parseVoiceThoughtDecisionContract } from "./voiceDecisionRuntime.ts";
 
 test("parseVoiceThoughtDecisionContract parses strict JSON payloads", () => {
   const parsed = parseVoiceThoughtDecisionContract(
@@ -49,4 +49,65 @@ test("isLowSignalVoiceFragment treats configured short english greetings as non-
 test("isLowSignalVoiceFragment keeps non-guard short fragments low-signal", () => {
   assert.equal(isLowSignalVoiceFragment("yoink"), true);
   assert.equal(isLowSignalVoiceFragment("hmm"), true);
+});
+
+test("computeAsrTranscriptConfidence returns null for null/empty input", () => {
+  assert.equal(computeAsrTranscriptConfidence(null), null);
+  assert.equal(computeAsrTranscriptConfidence(undefined), null);
+  assert.equal(computeAsrTranscriptConfidence([]), null);
+});
+
+test("computeAsrTranscriptConfidence computes mean, min, and count for valid logprobs", () => {
+  const logprobs = [
+    { token: "hello", logprob: -0.5, bytes: null },
+    { token: " there", logprob: -1.5, bytes: null },
+    { token: " friend", logprob: -0.2, bytes: null }
+  ];
+  const result = computeAsrTranscriptConfidence(logprobs);
+  assert.ok(result);
+  assert.equal(result.tokenCount, 3);
+  assert.ok(Math.abs(result.meanLogprob - (-0.5 + -1.5 + -0.2) / 3) < 0.0001);
+  assert.equal(result.minLogprob, -1.5);
+});
+
+test("computeAsrTranscriptConfidence skips entries with non-finite logprob", () => {
+  const logprobs = [
+    { token: "a", logprob: -0.8, bytes: null },
+    { token: "b", logprob: NaN, bytes: null },
+    { token: "c", logprob: -1.2, bytes: null }
+  ];
+  const result = computeAsrTranscriptConfidence(logprobs);
+  assert.ok(result);
+  assert.equal(result.tokenCount, 2);
+  assert.ok(Math.abs(result.meanLogprob - (-0.8 + -1.2) / 2) < 0.0001);
+  assert.equal(result.minLogprob, -1.2);
+});
+
+test("computeAsrTranscriptConfidence returns null when all entries have invalid logprob", () => {
+  const logprobs = [
+    { token: "x", logprob: NaN, bytes: null },
+    { token: "y", logprob: Infinity, bytes: null }
+  ];
+  assert.equal(computeAsrTranscriptConfidence(logprobs), null);
+});
+
+test("computeAsrTranscriptConfidence threshold boundary: -1.0 is above threshold", () => {
+  const logprobs = [
+    { token: "hey", logprob: -1.0, bytes: null }
+  ];
+  const result = computeAsrTranscriptConfidence(logprobs);
+  assert.ok(result);
+  // -1.0 is exactly at threshold, NOT below it — should pass the gate
+  assert.equal(result.meanLogprob >= -1.0, true);
+});
+
+test("computeAsrTranscriptConfidence hallucination scenario: very low logprobs", () => {
+  const logprobs = [
+    { token: "alright", logprob: -3.2, bytes: null },
+    { token: " hit", logprob: -4.1, bytes: null },
+    { token: " me", logprob: -2.8, bytes: null }
+  ];
+  const result = computeAsrTranscriptConfidence(logprobs);
+  assert.ok(result);
+  assert.equal(result.meanLogprob < -1.0, true);
 });

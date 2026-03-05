@@ -128,6 +128,70 @@ test("OpenAiRealtimeTranscriptionClient carries item linkage metadata for transc
   assert.equal(received[0]?.previousItemId, "item_001");
 });
 
+test("OpenAiRealtimeTranscriptionClient completed events emit logprobs", () => {
+  const client = new OpenAiRealtimeTranscriptionClient({ apiKey: "test-key" });
+  const received: Record<string, unknown>[] = [];
+  client.on("transcript", (payload: Record<string, unknown>) => {
+    received.push(payload);
+  });
+
+  const logprobs = [
+    { token: "hello", logprob: -0.3, bytes: null },
+    { token: " there", logprob: -0.7, bytes: null }
+  ];
+  client.handleIncoming(
+    JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "hello there",
+      item_id: "item_010",
+      logprobs
+    })
+  );
+
+  assert.equal(received.length, 1);
+  assert.equal(received[0]?.final, true);
+  assert.deepEqual(received[0]?.logprobs, logprobs);
+});
+
+test("OpenAiRealtimeTranscriptionClient delta events emit null logprobs", () => {
+  const client = new OpenAiRealtimeTranscriptionClient({ apiKey: "test-key" });
+  const received: Record<string, unknown>[] = [];
+  client.on("transcript", (payload: Record<string, unknown>) => {
+    received.push(payload);
+  });
+
+  client.handleIncoming(
+    JSON.stringify({
+      type: "conversation.item.input_audio_transcription.delta",
+      delta: "partial text"
+    })
+  );
+
+  assert.equal(received.length, 1);
+  assert.equal(received[0]?.final, false);
+  assert.equal(received[0]?.logprobs, null);
+});
+
+test("OpenAiRealtimeTranscriptionClient completed events without logprobs emit null", () => {
+  const client = new OpenAiRealtimeTranscriptionClient({ apiKey: "test-key" });
+  const received: Record<string, unknown>[] = [];
+  client.on("transcript", (payload: Record<string, unknown>) => {
+    received.push(payload);
+  });
+
+  client.handleIncoming(
+    JSON.stringify({
+      type: "conversation.item.input_audio_transcription.completed",
+      transcript: "no logprobs here",
+      item_id: "item_011"
+    })
+  );
+
+  assert.equal(received.length, 1);
+  assert.equal(received[0]?.final, true);
+  assert.equal(received[0]?.logprobs, null);
+});
+
 test("OpenAiRealtimeTranscriptionClient buildRealtimeUrl uses transcription intent", () => {
   const client = new OpenAiRealtimeTranscriptionClient({ apiKey: "test-key" });
   const url = client.buildRealtimeUrl();

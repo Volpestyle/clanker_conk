@@ -85,6 +85,7 @@ export interface AsrFinalSegmentEntry {
   previousItemId: string | null;
   text: string;
   receivedAt: number;
+  logprobs: Array<{ token: string; logprob: number; bytes: number[] | null }> | null;
 }
 
 export interface AsrPendingAudioChunk {
@@ -137,6 +138,7 @@ export interface AsrCommitResult {
   transcriptionPlanReason: string;
   usedFallbackModel: boolean;
   captureReason: string;
+  transcriptLogprobs: Array<{ token: string; logprob: number; bytes: number[] | null }> | null;
 }
 
 /** Dependencies injected by the session manager. */
@@ -294,6 +296,24 @@ function pruneMap(map: Map<string, unknown>, maxSize = MAX_MAP_SIZE) {
     dropped += 1;
     if (dropped >= overflow) break;
   }
+}
+
+// ── Logprobs collection from segment entries ─────────────────────────
+
+function collectSegmentLogprobs(
+  entries: AsrFinalSegmentEntry[] | null | undefined
+): Array<{ token: string; logprob: number; bytes: number[] | null }> | null {
+  if (!Array.isArray(entries) || entries.length === 0) return null;
+  const collected: Array<{ token: string; logprob: number; bytes: number[] | null }> = [];
+  for (const entry of entries) {
+    if (!Array.isArray(entry?.logprobs)) continue;
+    for (const lp of entry.logprobs) {
+      if (lp && typeof lp.logprob === "number") {
+        collected.push(lp);
+      }
+    }
+  }
+  return collected.length > 0 ? collected : null;
 }
 
 // ── Segment ordering (topological sort by previousItemId) ────────────
@@ -576,7 +596,8 @@ function wireClientEvents(
           itemId,
           previousItemId,
           text: transcript,
-          receivedAt: now
+          receivedAt: now,
+          logprobs: Array.isArray(payload?.logprobs) ? payload.logprobs : null
         };
         const existingIndex = entries.findIndex((entry) => String(entry?.itemId || "") === itemId);
         if (existingIndex >= 0) {
@@ -983,7 +1004,8 @@ export async function commitAsrUtterance(
       transcriptionModelFallback: null,
       transcriptionPlanReason: planReason,
       usedFallbackModel: false,
-      captureReason: String(captureReason || "stream_end")
+      captureReason: String(captureReason || "stream_end"),
+      transcriptLogprobs: null
     };
   }
 
@@ -1080,7 +1102,8 @@ export async function commitAsrUtterance(
         transcriptionModelFallback: null,
         transcriptionPlanReason: planReason,
         usedFallbackModel: false,
-        captureReason: String(captureReason || "stream_end")
+        captureReason: String(captureReason || "stream_end"),
+        transcriptLogprobs: collectSegmentLogprobs(trackedUtterance?.finalSegmentEntries)
       };
     } else {
       // Per-user mode: commit and wait for transcript settle
@@ -1115,7 +1138,8 @@ export async function commitAsrUtterance(
         transcriptionModelFallback: null,
         transcriptionPlanReason: planReason,
         usedFallbackModel: false,
-        captureReason: String(captureReason || "stream_end")
+        captureReason: String(captureReason || "stream_end"),
+        transcriptLogprobs: collectSegmentLogprobs(trackedUtterance?.finalSegmentEntries)
       };
     }
   } catch (error: unknown) {
