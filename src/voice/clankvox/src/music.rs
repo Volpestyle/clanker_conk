@@ -39,9 +39,10 @@ pub(crate) fn is_music_output_drained(
     let guard = audio_send_state.lock();
     guard
         .as_ref()
-        .map_or(true, |state| state.music_buffer_samples() == 0)
+        .is_none_or(|state| state.music_buffer_samples() == 0)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn start_music_pipeline(
     url: &str,
     music_player: &mut Option<MusicPlayer>,
@@ -52,7 +53,7 @@ pub(crate) fn start_music_pipeline(
     resolved_direct_url: bool,
     clear_output_buffers: bool,
 ) {
-    if let Some(ref mut player) = music_player {
+    if let Some(player) = music_player {
         player.stop();
     }
     *music_player = None;
@@ -74,12 +75,29 @@ pub(crate) struct MusicPlayer {
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
+/// Send a signal to the entire process group of a music pipeline child.
+///
+/// # Safety
+///
+/// This calls `libc::killpg` which is inherently unsafe because it sends a
+/// signal to an entire process group. The safety invariants are:
+///
+/// - `pid` must be a valid, non-zero PID obtained from `std::process::Child::id()`.
+/// - The child was spawned with `.process_group(0)` (see `MusicPlayer::start`),
+///   which places the shell pipeline (sh + yt-dlp + ffmpeg) in its own process
+///   group whose PGID equals the child PID.
+/// - We only call this with `SIGTERM` (graceful shutdown), never `SIGKILL`,
+///   so the child processes can clean up.
+/// - The guard `if pid == 0 { return; }` prevents signaling PID 0, which
+///   would signal the calling process's own group.
 fn kill_music_process_group(pid: u32, signal: libc::c_int) {
     if pid == 0 {
         return;
     }
-    // SAFETY: `pid` comes from `std::process::Child::id()` and we place the child
-    // shell in its own process group before spawn, so signaling that group is valid.
+    // SAFETY: All invariants documented above are upheld by the caller.
+    // `pid` originates from `Child::id()`, the child uses `.process_group(0)`,
+    // and we guard against pid==0.
+    #[allow(unsafe_code, clippy::cast_possible_wrap)]
     unsafe {
         libc::killpg(pid as libc::pid_t, signal);
     }
@@ -90,6 +108,7 @@ fn terminate_music_child(child: &mut std::process::Child, signal: libc::c_int) {
 }
 
 impl MusicPlayer {
+    #[allow(clippy::too_many_lines)]
     fn start(
         url: &str,
         pcm_tx: crossbeam::Sender<Vec<i16>>,
@@ -116,8 +135,7 @@ impl MusicPlayer {
                 Ok(c) => c,
                 Err(e) => {
                     let _ = music_event_tx.blocking_send(MusicEvent::Error(format!(
-                        "yt-dlp/ffmpeg spawn failed: {}",
-                        e
+                        "yt-dlp/ffmpeg spawn failed: {e}"
                     )));
                     return;
                 }
@@ -146,20 +164,17 @@ impl MusicPlayer {
                 })
             });
 
-            let stdout = match child.stdout.take() {
-                Some(s) => s,
-                None => {
-                    let _ = music_event_tx.blocking_send(MusicEvent::Error(
-                        "music pipeline missing stdout".to_string(),
-                    ));
-                    terminate_music_child(&mut child, libc::SIGTERM);
-                    let _ = child.wait();
-                    if let Some(handle) = stderr_thread.take() {
-                        let _ = handle.join();
-                    }
-                    child_pid_thread.store(0, Ordering::SeqCst);
-                    return;
+            let Some(stdout) = child.stdout.take() else {
+                let _ = music_event_tx.blocking_send(MusicEvent::Error(
+                    "music pipeline missing stdout".to_string(),
+                ));
+                terminate_music_child(&mut child, libc::SIGTERM);
+                let _ = child.wait();
+                if let Some(handle) = stderr_thread.take() {
+                    let _ = handle.join();
                 }
+                child_pid_thread.store(0, Ordering::SeqCst);
+                return;
             };
 
             let mut reader = io::BufReader::with_capacity(48000 * 2, stdout);
@@ -222,14 +237,12 @@ impl MusicPlayer {
                     }
                     Ok(status) => {
                         let _ = music_event_tx.blocking_send(MusicEvent::Error(format!(
-                            "music pipeline exited with status {}{}",
-                            status, stderr_summary
+                            "music pipeline exited with status {status}{stderr_summary}"
                         )));
                     }
                     Err(error) => {
                         let _ = music_event_tx.blocking_send(MusicEvent::Error(format!(
-                            "music pipeline wait failed: {}{}",
-                            error, stderr_summary
+                            "music pipeline wait failed: {error}{stderr_summary}"
                         )));
                     }
                 }
@@ -267,6 +280,7 @@ impl Drop for MusicPlayer {
 }
 
 #[derive(Default)]
+#[allow(clippy::struct_excessive_bools)] // Music state machine flags are inherently boolean.
 pub(crate) struct MusicState {
     pub(crate) player: Option<MusicPlayer>,
     pub(crate) active: bool,
@@ -337,14 +351,10 @@ impl MusicState {
 pub(crate) fn build_music_pipeline_command(url: &str, resolved_direct_url: bool) -> String {
     let quoted_url = url.replace('\'', "'\\''");
     if resolved_direct_url {
-        format!(
-            "ffmpeg -nostdin -loglevel error -i '{}' -f s16le -ar 48000 -ac 1 pipe:1",
-            quoted_url
-        )
+        format!("ffmpeg -nostdin -loglevel error -i '{quoted_url}' -f s16le -ar 48000 -ac 1 pipe:1")
     } else {
         format!(
-            "yt-dlp --no-warnings --quiet --no-playlist --extractor-args 'youtube:player_client=android' -f bestaudio/best -o - '{}' | ffmpeg -nostdin -loglevel error -i pipe:0 -f s16le -ar 48000 -ac 1 pipe:1",
-            quoted_url
+            "yt-dlp --no-warnings --quiet --no-playlist --extractor-args 'youtube:player_client=android' -f bestaudio/best -o - '{quoted_url}' | ffmpeg -nostdin -loglevel error -i pipe:0 -f s16le -ar 48000 -ac 1 pipe:1"
         )
     }
 }

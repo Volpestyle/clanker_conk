@@ -98,6 +98,8 @@ struct TransportCrypto {
     send_nonce: AtomicU32,
 }
 
+#[allow(clippy::large_enum_variant)] // Only one instance ever created; boxing adds indirection
+                                      // on the hot crypto path (every 20ms frame + every UDP recv).
 enum TransportCipher {
     Aes256GcmRtpSize(Aes256Gcm),
     XChaCha20Poly1305RtpSize(XChaCha20Poly1305),
@@ -113,7 +115,7 @@ impl TransportCrypto {
                 XChaCha20Poly1305::new_from_slice(secret_key)
                     .context("Invalid XChaCha20-Poly1305 secret key")?,
             ),
-            other => bail!("Unsupported transport mode: {}", other),
+            other => bail!("Unsupported transport mode: {other}"),
         };
         Ok(Self {
             cipher,
@@ -137,7 +139,7 @@ impl TransportCrypto {
                             aad: rtp_header,
                         },
                     )
-                    .map_err(|e| anyhow::anyhow!("AES-GCM encrypt: {}", e))?
+                    .map_err(|e| anyhow::anyhow!("AES-GCM encrypt: {e}"))?
             }
             TransportCipher::XChaCha20Poly1305RtpSize(cipher) => {
                 let mut nonce_24 = [0u8; 24];
@@ -150,7 +152,7 @@ impl TransportCrypto {
                             aad: rtp_header,
                         },
                     )
-                    .map_err(|e| anyhow::anyhow!("XChaCha20-Poly1305 encrypt: {}", e))?
+                    .map_err(|e| anyhow::anyhow!("XChaCha20-Poly1305 encrypt: {e}"))?
             }
         };
 
@@ -175,7 +177,7 @@ impl TransportCrypto {
             aad_size += 4;
         }
         if packet.len() <= aad_size + 4 {
-            bail!("Packet too small for computed AAD size {}", aad_size);
+            bail!("Packet too small for computed AAD size {aad_size}");
         }
 
         let rtp_header = &packet[..aad_size];
@@ -196,7 +198,7 @@ impl TransportCrypto {
                             aad: rtp_header,
                         },
                     )
-                    .map_err(|e| anyhow::anyhow!("AES-GCM decrypt: {}", e))
+                    .map_err(|e| anyhow::anyhow!("AES-GCM decrypt: {e}"))
             }
             TransportCipher::XChaCha20Poly1305RtpSize(cipher) => {
                 let mut nonce_24 = [0u8; 24];
@@ -210,7 +212,7 @@ impl TransportCrypto {
                             aad: rtp_header,
                         },
                     )
-                    .map_err(|e| anyhow::anyhow!("XChaCha20-Poly1305 decrypt: {}", e))
+                    .map_err(|e| anyhow::anyhow!("XChaCha20-Poly1305 decrypt: {e}"))
             }
         }
     }
@@ -235,7 +237,7 @@ async fn ip_discovery(socket: &UdpSocket, ssrc: u32) -> Result<(String, u16)> {
         .context("IP discovery timeout")?
         .context("IP discovery recv")?;
     if n < 74 {
-        bail!("IP discovery response too short: {} bytes", n);
+        bail!("IP discovery response too short: {n} bytes");
     }
 
     // Response: [type(2) | length(2) | ssrc(4) | address(64) | port(2)]
@@ -265,6 +267,7 @@ pub struct VoiceConnection {
 
 impl VoiceConnection {
     /// Perform the full voice WS + UDP handshake, then spawn background tasks.
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub async fn connect(
         endpoint: &str,
         guild_id: u64,
@@ -276,7 +279,7 @@ impl VoiceConnection {
         dave: Arc<Mutex<Option<DaveManager>>>,
     ) -> Result<Self> {
         let ep = endpoint.trim_start_matches("wss://").trim_end_matches('/');
-        let ws_url = format!("wss://{}/?v=8", ep);
+        let ws_url = format!("wss://{ep}/?v=8");
         info!("Connecting voice WS: {}", ws_url);
 
         let (ws, _) = tokio_tungstenite::connect_async(&ws_url)
@@ -318,7 +321,7 @@ impl VoiceConnection {
 
         // ---- UDP socket + IP discovery ----
         let udp = UdpSocket::bind("0.0.0.0:0").await.context("UDP bind")?;
-        let voice_addr: SocketAddr = format!("{}:{}", voice_ip, voice_port)
+        let voice_addr: SocketAddr = format!("{voice_ip}:{voice_port}")
             .parse()
             .context("Parse voice UDP addr")?;
         udp.connect(voice_addr).await.context("UDP connect")?;
@@ -333,8 +336,7 @@ impl VoiceConnection {
             "aead_xchacha20_poly1305_rtpsize"
         } else {
             bail!(
-                "No supported encryption mode (need aead_aes256_gcm_rtpsize or aead_xchacha20_poly1305_rtpsize), got: {:?}",
-                modes
+                "No supported encryption mode (need aead_aes256_gcm_rtpsize or aead_xchacha20_poly1305_rtpsize), got: {modes:?}"
             );
         };
 
@@ -550,7 +552,7 @@ impl VoiceConnection {
 // ---------------------------------------------------------------------------
 
 /// Messages received during the handshake that weren't the target opcode.
-/// These are buffered and replayed into the ws_read_loop so DAVE opcodes
+/// These are buffered and replayed into the `ws_read_loop` so DAVE opcodes
 /// (OP21 text, OP25/27/29/30 binary) that arrive between Ready and Session
 /// Description aren't silently dropped.
 type HandshakeOverflow = Vec<Message>;
@@ -725,7 +727,7 @@ async fn ws_read_loop(
             Err(e) => {
                 let _ = event_tx
                     .send(VoiceEvent::Error {
-                        message: format!("WS read error: {}", e),
+                        message: format!("WS read error: {e}"),
                     })
                     .await;
                 break;
@@ -736,7 +738,7 @@ async fn ws_read_loop(
     info!("Voice WS read loop exited");
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 async fn handle_text_opcode(
     op: u64,
     d: &Value,
@@ -824,7 +826,7 @@ async fn handle_text_opcode(
             if transitioned {
                 let ready = {
                     let guard = dave.lock();
-                    guard.as_ref().map_or(false, |dm| dm.is_ready())
+                    guard.as_ref().is_some_and(super::dave::DaveManager::is_ready)
                 };
                 if ready {
                     let _ = event_tx.send(VoiceEvent::DaveReady).await;
@@ -886,6 +888,7 @@ async fn handle_text_opcode(
     }
 }
 
+#[allow(clippy::too_many_lines)]
 async fn handle_binary_opcode(
     data: &[u8],
     event_tx: &mpsc::Sender<VoiceEvent>,
@@ -936,7 +939,7 @@ async fn handle_binary_opcode(
         }
         // OP27: MLS Proposals (server → client)
         27 => {
-            if payload.len() < 1 {
+            if payload.is_empty() {
                 warn!("DAVE binary OP27: truncated payload");
                 return;
             }
@@ -1070,7 +1073,7 @@ async fn handle_binary_opcode(
                             (dm.is_ready(), true, None)
                         }
                         Err(e) => {
-                            let err_msg = format!("{:?}", e);
+                            let err_msg = format!("{e:?}");
                             if err_msg.contains("AlreadyInGroup") || err_msg.contains("already") {
                                 // AlreadyInGroup is only benign when we already processed
                                 // the corresponding OP29 for this transition id.
@@ -1212,6 +1215,7 @@ async fn ws_write_loop(
     info!("Voice WS write loop exited");
 }
 
+#[allow(clippy::too_many_lines)]
 async fn udp_recv_loop(
     socket: Arc<UdpSocket>,
     crypto: Arc<TransportCrypto>,
@@ -1235,12 +1239,9 @@ async fn udp_recv_loop(
         };
         let packet = &buf[..n];
 
-        let (_seq, _ts, ssrc, header_size) = match parse_rtp_header(packet) {
-            Some(h) => h,
-            None => {
-                debug!("UDP drop: failed to parse RTP header");
-                continue;
-            }
+        let Some((_seq, _ts, ssrc, header_size)) = parse_rtp_header(packet) else {
+            debug!("UDP drop: failed to parse RTP header");
+            continue;
         };
 
         // Only handle Opus RTP packets (PT=120). Drop RTCP/other media payloads.
@@ -1370,35 +1371,32 @@ async fn udp_recv_loop(
                         }
                     } else {
                         // Bypass DAVE and pass payload to Opus directly
-                        (Some(primary_payload.to_vec()), false)
+                        (Some(primary_payload.clone()), false)
                     }
                 }
-                _ => (Some(primary_payload.to_vec()), false),
+                _ => (Some(primary_payload.clone()), false),
             }
         };
 
-        let opus_frame = match opus_frame_opt {
-            Some(frame) => frame,
-            None => {
-                // DAVE decrypt failed — trigger recovery if threshold exceeded
-                if needs_recovery {
-                    let recovery = {
-                        let mut guard = dave.lock();
-                        guard.as_mut().and_then(|dm| dm.reinit().ok())
-                    };
-                    if let Some(recovery) = recovery {
-                        let mut op31 = vec![31u8];
-                        op31.extend_from_slice(&recovery.transition_id.to_be_bytes());
-                        let _ = ws_cmd_tx.send(WsCommand::SendBinary(op31)).await;
-                        let mut op26 = vec![26u8];
-                        op26.extend_from_slice(&recovery.key_package);
-                        let _ = ws_cmd_tx.send(WsCommand::SendBinary(op26)).await;
-                        warn!("DAVE: recovery initiated from UDP recv ({} failures), sent OP31 + OP26",
-                            crate::dave::FAILURE_TOLERANCE);
-                    }
+        let Some(opus_frame) = opus_frame_opt else {
+            // DAVE decrypt failed — trigger recovery if threshold exceeded
+            if needs_recovery {
+                let recovery = {
+                    let mut guard = dave.lock();
+                    guard.as_mut().and_then(|dm| dm.reinit().ok())
+                };
+                if let Some(recovery) = recovery {
+                    let mut op31 = vec![31u8];
+                    op31.extend_from_slice(&recovery.transition_id.to_be_bytes());
+                    let _ = ws_cmd_tx.send(WsCommand::SendBinary(op31)).await;
+                    let mut op26 = vec![26u8];
+                    op26.extend_from_slice(&recovery.key_package);
+                    let _ = ws_cmd_tx.send(WsCommand::SendBinary(op26)).await;
+                    warn!("DAVE: recovery initiated from UDP recv ({} failures), sent OP31 + OP26",
+                        crate::dave::FAILURE_TOLERANCE);
                 }
-                continue;
             }
+            continue;
         };
 
         let _ = event_tx

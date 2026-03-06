@@ -190,6 +190,7 @@ pub struct VoiceServerData {
 }
 
 #[derive(Deserialize, Debug, Clone)]
+#[allow(clippy::struct_field_names)] // These mirror Discord gateway field names verbatim.
 pub struct VoiceStateData {
     pub session_id: Option<String>,
     pub user_id: Option<String>,
@@ -207,13 +208,19 @@ fn is_lossy_inbound_msg(msg: &InMsg) -> bool {
 pub fn send_msg(msg: &OutMsg) {
     if let Some(tx) = IPC_TX.get() {
         if is_lossy_ipc_msg(msg) {
+            // Audio frames are lossy — drop on backpressure rather than blocking.
             if let Err(err) = tx.try_send(msg.clone()) {
                 if !matches!(err, crossbeam::TrySendError::Full(_)) {
                     error!("failed to send lossy IPC message: {}", err);
                 }
             }
-        } else if let Err(err) = tx.send(msg.clone()) {
-            error!("failed to send IPC message: {}", err);
+        } else {
+            // Control messages (Error, ConnectionState, AsrTranscript, etc.) must
+            // not be silently dropped — use blocking send. The bounded channel
+            // (512 slots) provides natural backpressure if the writer thread stalls.
+            if let Err(err) = tx.send(msg.clone()) {
+                error!("failed to send control IPC message: {}", err);
+            }
         }
     }
 }
@@ -297,13 +304,12 @@ pub fn spawn_ipc_reader(
                     if n > MAX_STDIN_LINE_BYTES {
                         if audio_debug {
                             eprintln!(
-                                "[rust-subprocess] Dropping oversized stdin line ({} bytes)",
-                                n
+                                "[rust-subprocess] Dropping oversized stdin line ({n} bytes)"
                             );
                         }
                         try_send_error(
                             ErrorCode::InputTooLarge,
-                            format!("Dropped oversized stdin line ({} bytes)", n),
+                            format!("Dropped oversized stdin line ({n} bytes)"),
                         );
                         continue;
                     }
@@ -325,7 +331,7 @@ pub fn spawn_ipc_reader(
                             }
                             try_send_error(
                                 ErrorCode::InvalidJson,
-                                format!("Invalid stdin JSON message: {}", err),
+                                format!("Invalid stdin JSON message: {err}"),
                             );
                             continue;
                         }
@@ -393,19 +399,32 @@ pub fn spawn_ipc_writer() -> crossbeam::Sender<OutMsg> {
                     payload.extend_from_slice(&pcm);
 
                     let len = payload.len() as u32;
-                    let _ = out.write_all(&[1]);
-                    let _ = out.write_all(&len.to_le_bytes());
-                    let _ = out.write_all(&payload);
-                    let _ = out.flush();
+                    if let Err(e) = out
+                        .write_all(&[1])
+                        .and_then(|()| out.write_all(&len.to_le_bytes()))
+                        .and_then(|()| out.write_all(&payload))
+                        .and_then(|()| out.flush())
+                    {
+                        // Stdout broken — parent process likely exited. Audio frames
+                        // are lossy so we just log once and let the reader thread
+                        // detect stdin EOF to trigger a clean shutdown.
+                        error!("IPC stdout write failed (audio): {}", e);
+                        break;
+                    }
                 }
                 other => {
                     if let Ok(json) = serde_json::to_string(&other) {
                         let payload = json.as_bytes();
                         let len = payload.len() as u32;
-                        let _ = out.write_all(&[0]);
-                        let _ = out.write_all(&len.to_le_bytes());
-                        let _ = out.write_all(payload);
-                        let _ = out.flush();
+                        if let Err(e) = out
+                            .write_all(&[0])
+                            .and_then(|()| out.write_all(&len.to_le_bytes()))
+                            .and_then(|()| out.write_all(payload))
+                            .and_then(|()| out.flush())
+                        {
+                            error!("IPC stdout write failed (control): {}", e);
+                            break;
+                        }
                     }
                 }
             }
