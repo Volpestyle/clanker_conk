@@ -7,6 +7,20 @@ import {
   getVoiceStreamWatchSettings
 } from "../settings/agentStack.ts";
 import { buildRealtimeTextUtterancePrompt, isRealtimeMode, normalizeVoiceText } from "./voiceSessionHelpers.ts";
+import type { VoiceSessionManager } from "./voiceSessionManager.ts";
+
+type StreamWatchManager = Pick<
+  VoiceSessionManager,
+  | "client"
+  | "createTrackedAudioResponse"
+  | "llm"
+  | "memory"
+  | "resolveVoiceSpeakerName"
+  | "sendOperationalMessage"
+  | "sessions"
+  | "store"
+  | "touchActivity"
+>;
 
 const STREAM_WATCH_AUDIO_QUIET_WINDOW_MS = 2200;
 const STREAM_WATCH_COMMENTARY_PROMPT_MAX_CHARS = 220;
@@ -179,7 +193,7 @@ function isStreamWatchPlaybackBusy(session) {
   return streamBuffered > 0;
 }
 
-async function sendStreamWatchOfflineMessage(manager, { message, settings, guildId, requesterId }) {
+async function sendStreamWatchOfflineMessage(manager: StreamWatchManager, { message, settings, guildId, requesterId }) {
   await manager.sendOperationalMessage({
     channel: message.channel,
     settings,
@@ -193,7 +207,7 @@ async function sendStreamWatchOfflineMessage(manager, { message, settings, guild
   });
 }
 
-async function resolveStreamWatchRequestContext(manager, { message, settings }) {
+async function resolveStreamWatchRequestContext(manager: StreamWatchManager, { message, settings }) {
   if (!message?.guild || !message?.channel) return null;
   const guildId = String(message.guild.id);
   const requesterId = String(message.author?.id || "").trim() || null;
@@ -217,7 +231,7 @@ async function resolveStreamWatchRequestContext(manager, { message, settings }) 
   };
 }
 
-export async function requestWatchStream(manager, { message, settings, targetUserId = null }) {
+export async function requestWatchStream(manager: StreamWatchManager, { message, settings, targetUserId = null }) {
   const context = await resolveStreamWatchRequestContext(manager, { message, settings });
   if (!context) return false;
   if (context.handled) return true;
@@ -297,7 +311,7 @@ export async function requestWatchStream(manager, { message, settings, targetUse
   return true;
 }
 
-export function initializeStreamWatchState(manager, { session, requesterUserId, targetUserId = null }) {
+export function initializeStreamWatchState(manager: StreamWatchManager, { session, requesterUserId, targetUserId = null }) {
   if (!session) return;
   session.streamWatch = session.streamWatch || {};
   session.streamWatch.active = true;
@@ -356,7 +370,7 @@ export function getStreamWatchBrainContextForPrompt(session, settings = null) {
   };
 }
 
-export function supportsStreamWatchCommentary(manager, session, settings = null) {
+export function supportsStreamWatchCommentary(manager: StreamWatchManager, session, settings = null) {
   if (!session || session.ending) return false;
   const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
   if (!isRealtimeMode(session.mode)) return false;
@@ -389,7 +403,7 @@ export function supportsStreamWatchCommentary(manager, session, settings = null)
   return supportsVisionFallbackStreamWatchCommentary(manager, { session, settings: resolvedSettings });
 }
 
-export function supportsVisionFallbackStreamWatchCommentary(manager, { session = null, settings = null } = {}) {
+export function supportsVisionFallbackStreamWatchCommentary(manager: StreamWatchManager, { session = null, settings = null } = {}) {
   if (!session || session.ending) return false;
   const realtimeClient = session.realtimeClient;
   if (!realtimeClient || typeof realtimeClient.requestTextUtterance !== "function") return false;
@@ -397,13 +411,13 @@ export function supportsVisionFallbackStreamWatchCommentary(manager, { session =
   return Boolean(resolveStreamWatchVisionProviderSettings(manager, settings));
 }
 
-export function supportsStreamWatchBrainContext(manager, { session = null, settings = null } = {}) {
+export function supportsStreamWatchBrainContext(manager: StreamWatchManager, { session = null, settings = null } = {}) {
   if (!session || session.ending) return false;
   if (!manager.llm || typeof manager.llm.generate !== "function") return false;
   return Boolean(resolveStreamWatchVisionProviderSettings(manager, settings));
 }
 
-export function resolveStreamWatchVisionProviderSettings(manager, settings = null) {
+export function resolveStreamWatchVisionProviderSettings(manager: StreamWatchManager, settings = null) {
   const commentaryPath = resolveStreamWatchCommentaryPath(settings);
   const llmSettings = getResolvedOrchestratorBinding(settings);
   const fallbackCandidates = [
@@ -439,7 +453,7 @@ export function resolveStreamWatchVisionProviderSettings(manager, settings = nul
   return null;
 }
 
-export async function generateVisionFallbackStreamWatchCommentary(manager, {
+export async function generateVisionFallbackStreamWatchCommentary(manager: StreamWatchManager, {
   session,
   settings,
   streamerUserId = null,
@@ -500,7 +514,7 @@ export async function generateVisionFallbackStreamWatchCommentary(manager, {
   };
 }
 
-async function generateVisionFallbackStreamWatchBrainContext(manager, {
+async function generateVisionFallbackStreamWatchBrainContext(manager: StreamWatchManager, {
   session,
   settings,
   streamerUserId = null,
@@ -578,7 +592,7 @@ async function generateVisionFallbackStreamWatchBrainContext(manager, {
   };
 }
 
-async function maybeRefreshStreamWatchBrainContext(manager, {
+async function maybeRefreshStreamWatchBrainContext(manager: StreamWatchManager, {
   session,
   settings,
   streamerUserId = null,
@@ -645,7 +659,7 @@ async function maybeRefreshStreamWatchBrainContext(manager, {
   };
 }
 
-async function generateStreamWatchMemoryRecap(manager, {
+async function generateStreamWatchMemoryRecap(manager: StreamWatchManager, {
   session,
   settings,
   reason = "watching_stopped"
@@ -703,7 +717,7 @@ async function generateStreamWatchMemoryRecap(manager, {
   }
 }
 
-async function persistStreamWatchRecapToMemory(manager, {
+async function persistStreamWatchRecapToMemory(manager: StreamWatchManager, {
   session,
   settings,
   reason = "watching_stopped"
@@ -780,7 +794,7 @@ async function persistStreamWatchRecapToMemory(manager, {
   };
 }
 
-async function finalizeStreamWatchState(manager, {
+async function finalizeStreamWatchState(manager: StreamWatchManager, {
   session,
   settings,
   reason = "watching_stopped",
@@ -823,7 +837,7 @@ async function finalizeStreamWatchState(manager, {
   };
 }
 
-export function isUserInSessionVoiceChannel(manager, { session, userId }) {
+export function isUserInSessionVoiceChannel(manager: StreamWatchManager, { session, userId }) {
   const normalizedUserId = String(userId || "").trim();
   if (!session || !normalizedUserId) return false;
   const guild = manager.client.guilds.cache.get(String(session.guildId || "")) || null;
@@ -831,7 +845,7 @@ export function isUserInSessionVoiceChannel(manager, { session, userId }) {
   return Boolean(voiceChannel?.members?.has?.(normalizedUserId));
 }
 
-export async function enableWatchStreamForUser(manager, {
+export async function enableWatchStreamForUser(manager: StreamWatchManager, {
   guildId,
   requesterUserId,
   targetUserId = null,
@@ -904,7 +918,7 @@ export async function enableWatchStreamForUser(manager, {
   };
 }
 
-export async function requestStopWatchingStream(manager, { message, settings }) {
+export async function requestStopWatchingStream(manager: StreamWatchManager, { message, settings }) {
   const context = await resolveStreamWatchRequestContext(manager, { message, settings });
   if (!context) return false;
   if (context.handled) return true;
@@ -949,7 +963,7 @@ export async function requestStopWatchingStream(manager, { message, settings }) 
   return Boolean(stopResult?.ok);
 }
 
-export async function stopWatchStreamForUser(manager, {
+export async function stopWatchStreamForUser(manager: StreamWatchManager, {
   guildId,
   requesterUserId = null,
   targetUserId = null,
@@ -1010,7 +1024,7 @@ export async function stopWatchStreamForUser(manager, {
   });
 }
 
-export async function requestStreamWatchStatus(manager, { message, settings }) {
+export async function requestStreamWatchStatus(manager: StreamWatchManager, { message, settings }) {
   const context = await resolveStreamWatchRequestContext(manager, { message, settings });
   if (!context) return false;
   if (context.handled) return true;
@@ -1049,7 +1063,7 @@ export async function requestStreamWatchStatus(manager, { message, settings }) {
   return true;
 }
 
-export async function ingestStreamFrame(manager, {
+export async function ingestStreamFrame(manager: StreamWatchManager, {
   guildId,
   streamerUserId = null,
   mimeType = "image/jpeg",
@@ -1230,7 +1244,7 @@ export async function ingestStreamFrame(manager, {
   };
 }
 
-export async function maybeTriggerStreamWatchCommentary(manager, {
+export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchManager, {
   session,
   settings,
   streamerUserId = null,

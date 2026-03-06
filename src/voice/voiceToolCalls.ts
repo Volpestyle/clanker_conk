@@ -16,6 +16,7 @@ import type {
   VoiceRealtimeToolDescriptor,
   VoiceToolCallEvent,
 } from "./voiceSessionTypes.ts";
+import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 import {
   OPENAI_TOOL_CALL_EVENT_MAX,
   OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS,
@@ -57,7 +58,120 @@ import {
   isResearchEnabled
 } from "../settings/agentStack.ts";
 
-export function ensureSessionToolRuntimeState(manager: any, session) {
+type VoiceToolCallManager = Pick<
+  VoiceSessionManager,
+  | "appConfig"
+  | "browserManager"
+  | "buildRealtimeFunctionTools"
+  | "buildVoiceQueueStatePayload"
+  | "client"
+  | "endSession"
+  | "ensureSessionMusicState"
+  | "ensureSessionToolRuntimeState"
+  | "ensureToolMusicQueueState"
+  | "executeLocalVoiceToolCall"
+  | "executeMcpVoiceToolCall"
+  | "executeVoiceAdaptiveStyleAddTool"
+  | "executeVoiceAdaptiveStyleRemoveTool"
+  | "executeVoiceConversationSearchTool"
+  | "executeVoiceMemorySearchTool"
+  | "executeVoiceMemoryWriteTool"
+  | "executeVoiceMusicPlayNowTool"
+  | "executeVoiceMusicQueueAddTool"
+  | "executeVoiceMusicQueueNextTool"
+  | "executeVoiceMusicSearchTool"
+  | "executeVoiceWebSearchTool"
+  | "getVoiceMcpServerStatuses"
+  | "getVoiceScreenShareCapability"
+  | "haltSessionOutputForMusicPlayback"
+  | "isMusicPlaybackActive"
+  | "llm"
+  | "memory"
+  | "musicPlayer"
+  | "musicSearch"
+  | "normalizeMusicSelectionResult"
+  | "offerVoiceScreenShareLink"
+  | "parseOpenAiRealtimeToolArguments"
+  | "playVoiceQueueTrackByIndex"
+  | "recordVoiceToolCallEvent"
+  | "requestPauseMusic"
+  | "requestPlayMusic"
+  | "requestRealtimePromptUtterance"
+  | "requestStopMusic"
+  | "resolveOpenAiRealtimeToolDescriptor"
+  | "resolveVoiceRealtimeToolDescriptors"
+  | "resolveVoiceSpeakerName"
+  | "scheduleOpenAiRealtimeToolFollowupResponse"
+  | "search"
+  | "setMusicPhase"
+  | "store"
+  | "summarizeVoiceToolOutput"
+  | "updateVoiceMcpStatus"
+  | "waitForLeaveDirectivePlayback"
+> & {
+  createBrowserAgentSession?: ((args: {
+    settings?: VoiceRealtimeToolSettings | null;
+    guildId: string;
+    channelId: string;
+    userId: string | null;
+    source: string;
+  }) => SubAgentInteractiveSession | null | undefined) | null;
+  createCodeAgentSession?: ((args: {
+    settings?: VoiceRealtimeToolSettings | null;
+    cwd?: string;
+    guildId: string;
+    channelId: string;
+    userId: string | null;
+    source: string;
+  }) => SubAgentInteractiveSession | null | undefined) | null;
+  runModelRequestedCodeTask?: ((args: {
+    settings?: VoiceRealtimeToolSettings | null;
+    task: string;
+    cwd?: string;
+    guildId: string;
+    channelId: string;
+    userId: string | null;
+    source: string;
+  }) => Promise<{
+    text?: string;
+    costUsd?: number;
+    error?: unknown;
+    blockedByPermission?: boolean;
+    blockedByBudget?: boolean;
+    blockedByParallelLimit?: boolean;
+  }>) | null;
+  subAgentSessions?: SubAgentSessionRegistry | null;
+};
+
+type VoiceToolCallArgs = Record<string, unknown>;
+type RealtimeFunctionTool = {
+  type: "function";
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  toolType: "function" | "mcp";
+  serverName: string | null;
+};
+
+interface SubAgentTurnResult {
+  isError?: boolean;
+  errorMessage?: string | null;
+  text: string;
+  costUsd?: number | null;
+}
+
+interface SubAgentInteractiveSession {
+  id: string;
+  ownerUserId?: string | null;
+  runTurn: (instruction: string) => Promise<SubAgentTurnResult>;
+}
+
+interface SubAgentSessionRegistry {
+  get: (sessionId: string) => SubAgentInteractiveSession | null | undefined;
+  register: (session: SubAgentInteractiveSession) => void;
+}
+
+export function ensureSessionToolRuntimeState(manager: VoiceToolCallManager, session: VoiceToolRuntimeSessionLike | null | undefined) {
   if (!session || typeof session !== "object") return null;
   if (!Array.isArray(session.toolCallEvents)) {
     session.toolCallEvents = [];
@@ -85,7 +199,7 @@ export function ensureSessionToolRuntimeState(manager: any, session) {
   return session;
 }
 
-export function getVoiceMcpServerStatuses(manager: any) {
+export function getVoiceMcpServerStatuses(manager: VoiceToolCallManager) {
   const servers = Array.isArray(manager.appConfig?.voiceMcpServers) ? manager.appConfig.voiceMcpServers : [];
   return servers
     .map((server) => {
@@ -137,7 +251,7 @@ export function getVoiceMcpServerStatuses(manager: any) {
     .filter((entry): entry is VoiceMcpServerStatus => Boolean(entry));
 }
 
-export function resolveVoiceRealtimeToolDescriptors(manager: any, {
+export function resolveVoiceRealtimeToolDescriptors(manager: VoiceToolCallManager, {
   session,
   settings
 }: {
@@ -200,7 +314,7 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
       const serverName = normalizeInlineText(server?.serverName, 80);
       if (!serverName) return [];
       return (Array.isArray(server?.tools) ? server.tools : [])
-        .map((tool) => {
+        .map((tool): VoiceRealtimeToolDescriptor | null => {
           if (!tool || typeof tool !== "object") return null;
           const name = normalizeInlineText(tool.name, 120);
           if (!name) return null;
@@ -253,13 +367,13 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
   ];
 }
 
-export function buildRealtimeFunctionTools(manager: any, {
+export function buildRealtimeFunctionTools(manager: VoiceToolCallManager, {
   session,
   settings
 }: {
   session?: VoiceToolRuntimeSessionLike | null;
   settings?: VoiceRealtimeToolSettings | null;
-} = {}) {
+} = {}): RealtimeFunctionTool[] {
   return manager.resolveVoiceRealtimeToolDescriptors({ session, settings }).map((entry) => ({
     type: "function",
     name: entry.name,
@@ -270,7 +384,7 @@ export function buildRealtimeFunctionTools(manager: any, {
   }));
 }
 
-export function recordVoiceToolCallEvent(manager: any, {
+export function recordVoiceToolCallEvent(manager: VoiceToolCallManager, {
   session,
   event
 }: {
@@ -288,7 +402,7 @@ export function recordVoiceToolCallEvent(manager: any, {
   }
 }
 
-export function parseOpenAiRealtimeToolArguments(manager: any, argumentsText = "") {
+export function parseOpenAiRealtimeToolArguments(manager: VoiceToolCallManager, argumentsText = "") {
   const normalizedText = String(argumentsText || "")
     .trim()
     .slice(0, OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS);
@@ -302,7 +416,11 @@ export function parseOpenAiRealtimeToolArguments(manager: any, argumentsText = "
   }
 }
 
-export function resolveOpenAiRealtimeToolDescriptor(manager: any, session, toolName = "") {
+export function resolveOpenAiRealtimeToolDescriptor(
+  manager: VoiceToolCallManager,
+  session: VoiceToolRuntimeSessionLike | null | undefined,
+  toolName = ""
+) {
   const normalizedToolName = normalizeInlineText(toolName, 120);
   if (!normalizedToolName) return null;
   const configuredTools = Array.isArray(session?.openAiToolDefinitions)
@@ -314,7 +432,7 @@ export function resolveOpenAiRealtimeToolDescriptor(manager: any, session, toolN
   return configuredTools.find((tool) => String(tool?.name || "") === normalizedToolName) || null;
 }
 
-export function summarizeVoiceToolOutput(manager: any, output: unknown = null) {
+export function summarizeVoiceToolOutput(manager: VoiceToolCallManager, output: unknown = null) {
   if (output == null) return null;
   if (typeof output === "string") {
     return normalizeInlineText(output, 280) || null;
@@ -326,7 +444,7 @@ export function summarizeVoiceToolOutput(manager: any, output: unknown = null) {
   }
 }
 
-export async function executeOpenAiRealtimeFunctionCall(manager: any, {
+export async function executeOpenAiRealtimeFunctionCall(manager: VoiceToolCallManager, {
   session,
   settings,
   pendingCall
@@ -492,7 +610,7 @@ export async function executeOpenAiRealtimeFunctionCall(manager: any, {
   }
 }
 
-export async function refreshRealtimeTools(manager: any, {
+export async function refreshRealtimeTools(manager: VoiceToolCallManager, {
   session,
   settings,
   reason = "voice_context_refresh"
@@ -582,7 +700,7 @@ export async function refreshRealtimeTools(manager: any, {
   }
 }
 
-export async function executeVoiceMemorySearchTool(manager: any, {
+export async function executeVoiceMemorySearchTool(manager: VoiceToolCallManager, {
   session,
   settings,
   args
@@ -617,7 +735,7 @@ export async function executeVoiceMemorySearchTool(manager: any, {
   });
 }
 
-export async function executeVoiceConversationSearchTool(manager: any, {
+export async function executeVoiceConversationSearchTool(manager: VoiceToolCallManager, {
   session,
   args
 }) {
@@ -656,7 +774,7 @@ export async function executeVoiceConversationSearchTool(manager: any, {
   };
 }
 
-export async function executeVoiceMemoryWriteTool(manager: any, {
+export async function executeVoiceMemoryWriteTool(manager: VoiceToolCallManager, {
   session,
   settings,
   args
@@ -732,7 +850,7 @@ export async function executeVoiceMemoryWriteTool(manager: any, {
   return result;
 }
 
-export async function executeVoiceAdaptiveStyleAddTool(manager: any, {
+export async function executeVoiceAdaptiveStyleAddTool(manager: VoiceToolCallManager, {
   session,
   args
 }) {
@@ -762,7 +880,7 @@ export async function executeVoiceAdaptiveStyleAddTool(manager: any, {
   });
 }
 
-export async function executeVoiceAdaptiveStyleRemoveTool(manager: any, {
+export async function executeVoiceAdaptiveStyleRemoveTool(manager: VoiceToolCallManager, {
   session,
   args
 }) {
@@ -793,7 +911,10 @@ export async function executeVoiceAdaptiveStyleRemoveTool(manager: any, {
   });
 }
 
-export async function executeVoiceMusicSearchTool(manager: any, { session, args }) {
+export async function executeVoiceMusicSearchTool(
+  manager: VoiceToolCallManager,
+  { session, args }: { session?: VoiceToolRuntimeSessionLike | null; args?: VoiceToolCallArgs }
+) {
   const query = normalizeInlineText(args?.query, 180);
   if (!query) {
     return {
@@ -847,7 +968,18 @@ export async function executeVoiceMusicSearchTool(manager: any, { session, args 
   };
 }
 
-export async function executeVoiceMusicQueueAddTool(manager: any, { session, settings, args }) {
+export async function executeVoiceMusicQueueAddTool(
+  manager: VoiceToolCallManager,
+  {
+    session,
+    settings,
+    args
+  }: {
+    session?: VoiceToolRuntimeSessionLike | null;
+    settings?: VoiceRealtimeToolSettings | null;
+    args?: VoiceToolCallArgs;
+  }
+) {
   const queueState = manager.ensureToolMusicQueueState(session);
   const runtimeSession = manager.ensureSessionToolRuntimeState(session);
   if (!queueState || !runtimeSession) {
@@ -932,7 +1064,18 @@ export async function executeVoiceMusicQueueAddTool(manager: any, { session, set
   };
 }
 
-export async function executeVoiceMusicQueueNextTool(manager: any, { session, settings, args }) {
+export async function executeVoiceMusicQueueNextTool(
+  manager: VoiceToolCallManager,
+  {
+    session,
+    settings,
+    args
+  }: {
+    session?: VoiceToolRuntimeSessionLike | null;
+    settings?: VoiceRealtimeToolSettings | null;
+    args?: VoiceToolCallArgs;
+  }
+) {
   const queueState = manager.ensureToolMusicQueueState(session);
   const runtimeSession = manager.ensureSessionToolRuntimeState(session);
   if (!queueState || !runtimeSession) {
@@ -1006,7 +1149,18 @@ export async function executeVoiceMusicQueueNextTool(manager: any, { session, se
   };
 }
 
-export async function executeVoiceMusicPlayNowTool(manager: any, { session, settings, args }) {
+export async function executeVoiceMusicPlayNowTool(
+  manager: VoiceToolCallManager,
+  {
+    session,
+    settings,
+    args
+  }: {
+    session?: VoiceToolRuntimeSessionLike | null;
+    settings?: VoiceRealtimeToolSettings | null;
+    args?: VoiceToolCallArgs;
+  }
+) {
   const queueState = manager.ensureToolMusicQueueState(session);
   const runtimeSession = manager.ensureSessionToolRuntimeState(session);
   const trackId = normalizeInlineText(args?.track_id, 180);
@@ -1095,7 +1249,18 @@ export async function executeVoiceMusicPlayNowTool(manager: any, { session, sett
   };
 }
 
-export async function executeVoiceWebSearchTool(manager: any, { session, settings, args }) {
+export async function executeVoiceWebSearchTool(
+  manager: VoiceToolCallManager,
+  {
+    session,
+    settings,
+    args
+  }: {
+    session?: VoiceToolRuntimeSessionLike | null;
+    settings?: VoiceRealtimeToolSettings | null;
+    args?: VoiceToolCallArgs;
+  }
+) {
   const query = normalizeInlineText(args?.query, 240);
   if (!query) {
     return {
@@ -1175,7 +1340,17 @@ export async function executeVoiceWebSearchTool(manager: any, { session, setting
   };
 }
 
-export async function executeVoiceWebScrapeTool(manager: any, { session, args }: { session: any, args: any }) {
+export async function executeVoiceWebScrapeTool(
+  manager: VoiceToolCallManager,
+  {
+    session: _session,
+    args
+  }: {
+    session?: VoiceToolRuntimeSessionLike | null;
+    args?: VoiceToolCallArgs;
+  }
+) {
+  void _session;
   const url = String(args?.url || "").trim().slice(0, 2000);
   if (!url) {
     return { ok: false, text: "", error: "url_required" };
@@ -1215,7 +1390,20 @@ export async function executeVoiceWebScrapeTool(manager: any, { session, args }:
   }
 }
 
-export async function executeVoiceBrowserBrowseTool(manager: any, { session, settings, args, signal }: { session: any, settings: any, args: any, signal?: AbortSignal }) {
+export async function executeVoiceBrowserBrowseTool(
+  manager: VoiceToolCallManager,
+  {
+    session,
+    settings,
+    args,
+    signal
+  }: {
+    session?: VoiceToolRuntimeSessionLike | null;
+    settings?: VoiceRealtimeToolSettings | null;
+    args?: VoiceToolCallArgs;
+    signal?: AbortSignal;
+  }
+) {
   const instruction = normalizeInlineText(args?.query, 500);
   if (!instruction) {
     return { ok: false, text: "", error: "query_required" };
@@ -1346,7 +1534,18 @@ export async function executeVoiceBrowserBrowseTool(manager: any, { session, set
   }
 }
 
-export async function executeVoiceCodeTaskTool(manager: any, { session, settings, args }: { session: any, settings: any, args: any }) {
+export async function executeVoiceCodeTaskTool(
+  manager: VoiceToolCallManager,
+  {
+    session,
+    settings,
+    args
+  }: {
+    session?: VoiceToolRuntimeSessionLike | null;
+    settings?: VoiceRealtimeToolSettings | null;
+    args?: VoiceToolCallArgs;
+  }
+) {
   const task = normalizeInlineText(args?.task, 2000);
   if (!task) {
     return { ok: false, text: "", error: "task_required" };
@@ -1451,13 +1650,19 @@ export async function executeVoiceCodeTaskTool(manager: any, { session, settings
   }
 }
 
-export async function executeLocalVoiceToolCall(manager: any, {
+export async function executeLocalVoiceToolCall(manager: VoiceToolCallManager, {
   session,
   settings,
   toolName,
   args,
   signal
-}: { session: any, settings: any, toolName: any, args: any, signal?: AbortSignal }) {
+}: {
+  session?: VoiceToolRuntimeSessionLike | null;
+  settings?: VoiceRealtimeToolSettings | null;
+  toolName: string;
+  args?: VoiceToolCallArgs;
+  signal?: AbortSignal;
+}) {
   const normalizedToolName = normalizeInlineText(toolName, 120);
   if (!normalizedToolName) {
     throw new Error("missing_tool_name");
@@ -1718,7 +1923,7 @@ export async function executeLocalVoiceToolCall(manager: any, {
   throw new Error(`unsupported_tool:${normalizedToolName}`);
 }
 
-export async function executeMcpVoiceToolCall(manager: any, {
+export async function executeMcpVoiceToolCall(manager: VoiceToolCallManager, {
   session,
   settings: _settings,
   toolDescriptor,

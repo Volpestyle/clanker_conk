@@ -116,6 +116,20 @@ export type VoiceToolCallEvent = {
     sourceEventType?: string | null;
 };
 
+export type VoicePendingToolCallState = {
+    callId: string;
+    name: string;
+    argumentsText: string;
+    done: boolean;
+    startedAtMs: number;
+    sourceEventType: string;
+};
+
+export type VoiceToolExecutionState = {
+    startedAtMs: number;
+    toolName: string;
+};
+
 export type VoiceMcpServerStatus = {
     serverName: string;
     connected: boolean;
@@ -170,8 +184,8 @@ export type VoiceToolRuntimeSessionLike = {
     textChannelId?: string;
     id?: string;
     openAiToolResponseDebounceTimer?: ReturnType<typeof setTimeout> | null;
-    openAiToolCallExecutions?: Map<string, Promise<void>>;
-    openAiPendingToolCalls?: Map<string, unknown>;
+    openAiToolCallExecutions?: Map<string, VoiceToolExecutionState>;
+    openAiPendingToolCalls?: Map<string, VoicePendingToolCallState>;
     openAiCompletedToolCallIds?: Map<string, number>;
     toolMusicTrackCatalog?: Map<string, unknown>;
     memoryWriteWindow?: number[];
@@ -483,6 +497,35 @@ export interface TurnProcessorState {
     realtimeTurnCoalesceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
 }
 
+export interface RealtimeInstructionMemorySlice {
+    userFacts: unknown[];
+    relevantFacts: unknown[];
+    relevantMessages: unknown[];
+    recentConversationHistory: unknown[];
+    recentWebLookups: unknown[];
+    adaptiveDirectives: unknown[];
+}
+
+export interface QueuedRealtimeTurnContextRefresh {
+    settings: VoiceRealtimeToolSettings | null;
+    userId: string | null;
+    transcript: string;
+    captureReason: string;
+}
+
+export interface RealtimeTurnContextRefreshState {
+    inFlight: boolean;
+    pending: QueuedRealtimeTurnContextRefresh | null;
+}
+
+export interface InstructionManagerState {
+    baseVoiceInstructions: string;
+    lastOpenAiRealtimeInstructions: string;
+    lastOpenAiRealtimeInstructionsAt: number;
+    realtimeInstructionRefreshTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
+    openAiTurnContextRefreshState: RealtimeTurnContextRefreshState | null;
+}
+
 export type OutputChannelDeferredBlockReason =
     | "session_inactive"
     | "active_captures"
@@ -571,8 +614,8 @@ export interface VoiceSession {
     openAiPerUserAsrModel: string;
     openAiPerUserAsrLanguage: string;
     openAiPerUserAsrPrompt: string;
-    openAiPendingToolCalls: Map<string, any>;
-    openAiToolCallExecutions: Map<string, Promise<void>>;
+    openAiPendingToolCalls: Map<string, VoicePendingToolCallState>;
+    openAiToolCallExecutions: Map<string, VoiceToolExecutionState>;
     openAiToolResponseDebounceTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     openAiCompletedToolCallIds: Map<string, number>;
     lastOpenAiAssistantAudioItemId: string | null;
@@ -612,11 +655,11 @@ export interface VoiceSession {
     membershipEvents: any[];
     voiceLookupBusyCount: number;
     lastSuppressedCaptureLogAt: number;
-    baseVoiceInstructions: string;
-    lastOpenAiRealtimeInstructions: string;
-    lastOpenAiRealtimeInstructionsAt: number;
-    realtimeInstructionRefreshTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
-    openAiTurnContextRefreshState: any;
+    baseVoiceInstructions: InstructionManagerState["baseVoiceInstructions"];
+    lastOpenAiRealtimeInstructions: InstructionManagerState["lastOpenAiRealtimeInstructions"];
+    lastOpenAiRealtimeInstructionsAt: InstructionManagerState["lastOpenAiRealtimeInstructionsAt"];
+    realtimeInstructionRefreshTimer: InstructionManagerState["realtimeInstructionRefreshTimer"];
+    openAiTurnContextRefreshState: InstructionManagerState["openAiTurnContextRefreshState"];
     settingsSnapshot: VoiceRealtimeToolSettings | null;
     cleanupHandlers: Array<() => void>;
     ending: boolean;
