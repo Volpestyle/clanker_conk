@@ -13,6 +13,7 @@ Controls whether users can barge-in (interrupt) the bot while it is speaking.
   assertive: boolean;   // true = policy is active (false/null = anyone can interrupt)
   scope: "none" | "speaker";
   allowedUserId?: string; // only used when scope = "speaker"
+  talkingTo?: string;     // normalized voice addressing target token (influences scope)
   reason?: string;        // descriptive label for logging
   source?: string;        // originating system (e.g. "music_now_playing")
 }

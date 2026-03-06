@@ -125,7 +125,8 @@ Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details 
 | `docs/clanker-activity.md` | Text activity model: direct replies, reply/lurk channels, thought loop, discovery |
 | `docs/agent-code.md` | Claude Code orchestrator design and implementation |
 | `docs/agent-browser.md` | Browser agent spec |
-| `docs/realtime-voice-agent-spec.md` | Voice architecture and tool strategy |
+| `docs/voice-interruption-policy.md` | Voice barge-in and noise rejection |
+| `docs/voice-output-state-machine.md` | Voice output lifecycle and state machine |
 | `docs/claude-code-brain-session-mode.md` | Claude Code as LLM brain provider |
 | `docs/memory-system.md` | Memory system design |
 | `docs/initiative-discovery-spec.md` | Discovery post content sourcing |

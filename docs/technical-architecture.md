@@ -147,6 +147,7 @@ Main tables created in `src/store.ts`:
 - `shared_links`: external links already posted (for dedupe windows).
 - `automations`: natural-language schedule definitions and next-run state.
 - `automation_runs`: per-run execution history for each automation.
+- `response_triggers`: maps trigger message IDs to the action that responded to them (for reply deduplication).
 
 Table relationship diagram (logical relationships):
 
@@ -179,7 +180,7 @@ Canonical top-level settings groups:
 - `automations`
 
 Preset-driven stack settings:
-- `agentStack.preset`: `openai_native`, `anthropic_brain_openai_tools`, `multi_provider_legacy`, or `custom`
+- `agentStack.preset`: `openai_native`, `anthropic_brain_openai_tools`, `claude_code_max`, or `custom`
 - `agentStack.advancedOverridesEnabled`: whether per-runtime overrides are exposed and persisted
 - `agentStack.overrides`: orchestrator / worker override bindings
 - `agentStack.runtimeConfig`: capability-runtime configuration for research, browser, voice, and dev-team workers
@@ -215,7 +216,7 @@ Key guardrails:
 High-impact latency levers:
 - `llm.provider` + `llm.model` for primary reply generation.
 - `replyFollowupLlm.*` when follow-up lookup/regeneration passes are enabled.
-- voice model settings (`voice.replyDecisionLlm.provider/model` for music stop / thought engine, realtime/STT/TTS model fields).
+- voice model settings (`agentStack.overrides.voiceAdmissionClassifier` for admission classifier, `initiative.voice.*` for thought engine, realtime/STT/TTS model fields).
 
 Validation signals:
 - `Store.getReplyPerformanceStats()` (`memorySliceMs`, `llm1Ms`, `followupMs`).
@@ -224,8 +225,8 @@ Validation signals:
 ## 8. Text Thought Loop + Discovery Post Flow
 
 Text-channel proactivity is now split in two:
-- `replyChannelIds` + `textThoughtLoop.*`: periodic conversational lurking.
-- `discovery.channelIds` + `discovery.*`: proactive standalone discovery posting with optional external links/media.
+- `replyChannelIds` + `initiative.text.*`: periodic conversational lurking.
+- `initiative.discovery.channelIds` + `initiative.discovery.*`: proactive standalone discovery posting with optional external links/media.
 
 Canonical activity rules, sliders, and edge cases are documented in:
 - `docs/clanker-activity.md`
