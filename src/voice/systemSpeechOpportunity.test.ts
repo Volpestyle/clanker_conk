@@ -1,0 +1,69 @@
+import { test } from "bun:test";
+import assert from "node:assert/strict";
+import {
+  SYSTEM_SPEECH_OPPORTUNITY,
+  SYSTEM_SPEECH_SOURCE,
+  isJoinGreetingOpportunitySource,
+  isSystemSpeechOpportunitySource,
+  resolveSystemSpeechOpportunityType,
+  resolveSystemSpeechReplyAccountingOnLocalPlayback,
+  resolveSystemSpeechReplyAccountingOnRequest,
+  shouldCancelSystemSpeechBeforeAudioOnPromotedUserSpeech,
+  shouldSupersedeSystemSpeechBeforePlayback
+} from "./systemSpeechOpportunity.ts";
+
+test("resolveSystemSpeechOpportunityType identifies canonical system speech sources", () => {
+  assert.equal(
+    resolveSystemSpeechOpportunityType(`${SYSTEM_SPEECH_SOURCE.JOIN_GREETING}:speech_1`),
+    SYSTEM_SPEECH_OPPORTUNITY.JOIN_GREETING
+  );
+  assert.equal(
+    resolveSystemSpeechOpportunityType(SYSTEM_SPEECH_SOURCE.THOUGHT),
+    SYSTEM_SPEECH_OPPORTUNITY.THOUGHT
+  );
+  assert.equal(
+    resolveSystemSpeechOpportunityType(SYSTEM_SPEECH_SOURCE.THOUGHT_TTS),
+    SYSTEM_SPEECH_OPPORTUNITY.THOUGHT
+  );
+  assert.equal(resolveSystemSpeechOpportunityType("realtime:user_turn"), null);
+});
+
+test("system speech source helpers only match system initiated reply sources", () => {
+  assert.equal(isSystemSpeechOpportunitySource(SYSTEM_SPEECH_SOURCE.JOIN_GREETING), true);
+  assert.equal(isSystemSpeechOpportunitySource(SYSTEM_SPEECH_SOURCE.THOUGHT), true);
+  assert.equal(isSystemSpeechOpportunitySource("stt_pipeline_reply"), false);
+  assert.equal(isJoinGreetingOpportunitySource(`${SYSTEM_SPEECH_SOURCE.JOIN_GREETING}:speech_1`), true);
+  assert.equal(isJoinGreetingOpportunitySource(SYSTEM_SPEECH_SOURCE.THOUGHT), false);
+});
+
+test("system speech sources yield to promoted user speech before audio begins", () => {
+  assert.equal(
+    shouldCancelSystemSpeechBeforeAudioOnPromotedUserSpeech(SYSTEM_SPEECH_SOURCE.JOIN_GREETING),
+    true
+  );
+  assert.equal(
+    shouldCancelSystemSpeechBeforeAudioOnPromotedUserSpeech(SYSTEM_SPEECH_SOURCE.THOUGHT),
+    true
+  );
+  assert.equal(shouldCancelSystemSpeechBeforeAudioOnPromotedUserSpeech("realtime"), false);
+  assert.equal(shouldSupersedeSystemSpeechBeforePlayback(SYSTEM_SPEECH_SOURCE.JOIN_GREETING), true);
+  assert.equal(shouldSupersedeSystemSpeechBeforePlayback(SYSTEM_SPEECH_SOURCE.THOUGHT), true);
+  assert.equal(shouldSupersedeSystemSpeechBeforePlayback("realtime"), false);
+});
+
+test("system speech reply accounting is explicit for request and local playback phases", () => {
+  assert.equal(
+    resolveSystemSpeechReplyAccountingOnRequest(SYSTEM_SPEECH_SOURCE.JOIN_GREETING),
+    "requested"
+  );
+  assert.equal(
+    resolveSystemSpeechReplyAccountingOnRequest(SYSTEM_SPEECH_SOURCE.THOUGHT),
+    "requested"
+  );
+  assert.equal(
+    resolveSystemSpeechReplyAccountingOnLocalPlayback(SYSTEM_SPEECH_SOURCE.THOUGHT_TTS),
+    "spoken"
+  );
+  assert.equal(resolveSystemSpeechReplyAccountingOnRequest("stt_pipeline_reply"), null);
+  assert.equal(resolveSystemSpeechReplyAccountingOnLocalPlayback("stt_pipeline_reply"), null);
+});

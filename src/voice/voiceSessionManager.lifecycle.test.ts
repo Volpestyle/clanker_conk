@@ -3,11 +3,16 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { VoiceSessionManager } from "./voiceSessionManager.ts";
 import {
+  SYSTEM_SPEECH_OPPORTUNITY,
+  SYSTEM_SPEECH_SOURCE
+} from "./systemSpeechOpportunity.ts";
+import {
   ACTIVITY_TOUCH_MIN_SPEECH_MS,
   BARGE_IN_FULL_OVERRIDE_MIN_MS,
   BARGE_IN_MIN_SPEECH_MS,
   BARGE_IN_STT_MIN_CAPTURE_AGE_MS,
-  VOICE_SILENCE_GATE_MIN_CLIP_MS
+  VOICE_SILENCE_GATE_MIN_CLIP_MS,
+  VOICE_TURN_PROMOTION_MIN_CLIP_MS
 } from "./voiceSessionManager.constants.ts";
 import { trackSharedAsrCommittedItem, commitAsrUtterance } from "./voiceAsrBridge.ts";
 import type { AsrBridgeState } from "./voiceAsrBridge.ts";
@@ -19,6 +24,16 @@ function makeMonoPcm16(sampleCount: number, amplitude: number) {
   const pcm = Buffer.alloc(sampleCount * 2);
   for (let i = 0; i < sampleCount; i += 1) {
     pcm.writeInt16LE(amplitude, i * 2);
+  }
+  return pcm;
+}
+
+function makeSparseMonoPcm16(sampleCount: number, amplitude: number, activeEverySamples: number) {
+  const pcm = Buffer.alloc(sampleCount * 2);
+  const stride = Math.max(1, activeEverySamples);
+  for (let i = 0; i < sampleCount; i += 1) {
+    const sample = i % stride === 0 ? amplitude : 0;
+    pcm.writeInt16LE(sample, i * 2);
   }
   return pcm;
 }
@@ -178,12 +193,37 @@ function createSession(overrides = {}) {
     activeReplyInterruptionPolicy: null,
     deferredVoiceActions: {},
     deferredVoiceActionTimers: {},
+    joinGreetingOpportunity: null,
+    joinGreetingTimer: null,
     lastRequestedRealtimeUtterance: null,
     settingsSnapshot: {
       botName: "clanker conk",
       voice: {
         enabled: true
       }
+    },
+    ...overrides
+  };
+}
+
+function createInterruptedReplyAction(overrides = {}) {
+  return {
+    type: "interrupted_reply",
+    goal: "complete_interrupted_reply",
+    freshnessPolicy: "retry_then_regenerate",
+    status: "scheduled",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    notBeforeAt: 0,
+    expiresAt: Date.now() + 30_000,
+    reason: "test",
+    revision: 1,
+    payload: {
+      utteranceText: null,
+      interruptedByUserId: null,
+      interruptedAt: Date.now(),
+      source: "voice_reply",
+      interruptionPolicy: null
     },
     ...overrides
   };
@@ -799,7 +839,7 @@ test("startInboundCapture promotes assertive audio and replays buffered PCM into
     settings: session.settingsSnapshot
   });
 
-  const speechPcm = makeMonoPcm16(Math.ceil((24_000 * (VOICE_SILENCE_GATE_MIN_CLIP_MS + 40)) / 1000), 3000);
+  const speechPcm = makeMonoPcm16(Math.ceil((24_000 * (VOICE_TURN_PROMOTION_MIN_CLIP_MS + 40)) / 1000), 3000);
   voxClient.emit("userAudio", "speaker-1", speechPcm);
 
   const capture = session.userCaptures.get("speaker-1");
@@ -813,6 +853,60 @@ test("startInboundCapture promotes assertive audio and replays buffered PCM into
   const activityLog = logs.find((entry) => entry?.content === "voice_activity_started");
   assert.ok(activityLog);
   assert.equal(activityLog?.userId, "speaker-1");
+});
+
+test("startInboundCapture keeps sparse spike noise provisional even with sharp peaks", () => {
+  const { manager, logs, touchCalls } = createManager();
+  manager.appConfig.openaiApiKey = "test-openai-key";
+  const beginCalls = [];
+  const appendCalls = [];
+  manager.beginOpenAiAsrUtterance = (payload) => {
+    beginCalls.push(payload);
+  };
+  manager.appendAudioToOpenAiAsr = (payload) => {
+    appendCalls.push(payload);
+  };
+  manager.shouldUsePerUserTranscription = () => true;
+  const voxClient = new EventEmitter();
+  voxClient.subscribeUser = () => {};
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeInputSampleRateHz: 24_000,
+    cleanupHandlers: [],
+    settingsSnapshot: {
+      botName: "clanker conk",
+      voice: {
+        enabled: true,
+        asrEnabled: true,
+        brainProvider: "anthropic"
+      }
+    },
+    voxClient
+  });
+
+  manager.startInboundCapture({
+    session,
+    userId: "speaker-1",
+    settings: session.settingsSnapshot
+  });
+
+  const noisyPcm = makeSparseMonoPcm16(
+    Math.ceil((24_000 * VOICE_TURN_PROMOTION_MIN_CLIP_MS) / 1000),
+    1024,
+    60
+  );
+  voxClient.emit("userAudio", "speaker-1", noisyPcm);
+
+  const capture = session.userCaptures.get("speaker-1");
+  assert.ok(capture);
+  assert.equal(Number(capture.promotedAt || 0), 0);
+  capture.finalize("stream_end");
+
+  assert.equal(beginCalls.length, 0);
+  assert.equal(appendCalls.length, 0);
+  assert.equal(touchCalls.length, 0);
+  assert.equal(logs.some((entry) => entry?.content === "voice_activity_started"), false);
+  assert.equal(logs.some((entry) => entry?.content === "voice_turn_dropped_provisional_capture"), true);
 });
 
 test("bindSessionHandlers defers per-user OpenAI ASR start until speech is confirmed", () => {
@@ -1582,18 +1676,13 @@ test("queueRealtimeTurnFromAsrBridge refires pending join greeting through brain
         replyPath: "brain"
       }
     },
-    deferredVoiceActions: {
-      join_greeting: {
-        type: "join_greeting",
-        status: "deferred",
-        createdAt: Date.now() - 500,
-        updatedAt: Date.now() - 500,
-        notBeforeAt: 0,
-        expiresAt: Date.now() + 5_000,
-        reason: "capture_resolved",
-        revision: 1
-      }
+    joinGreetingOpportunity: {
+      trigger: "capture_resolved",
+      armedAt: Date.now() - 1_000,
+      fireAt: Date.now() - 500,
+      expiresAt: Date.now() + 5_000
     },
+    lastOpenAiRealtimeInstructions: "ready",
     lastAssistantReplyAt: 0,
     userCaptures: new Map()
   });
@@ -1615,14 +1704,14 @@ test("queueRealtimeTurnFromAsrBridge refires pending join greeting through brain
   assert.equal(queuedTurns.length, 0);
   assert.equal(createdResponses.length, 0);
   assert.equal(brainReplies.length, 1);
-  assert.equal(brainReplies[0]?.source, "voice_join_greeting");
+  assert.equal(brainReplies[0]?.source, SYSTEM_SPEECH_SOURCE.JOIN_GREETING);
   assert.equal(
     String(brainReplies[0]?.transcript || "").includes("Join greeting opportunity."),
     true
   );
   assert.equal(brainReplies[0]?.inputKind, "event");
-  assert.equal(Boolean(session.deferredVoiceActions?.join_greeting), false);
-  assert.equal(Number(session.lastAssistantReplyAt || 0) > 0, true);
+  assert.equal(session.joinGreetingOpportunity, null);
+  assert.equal(Number(session.lastAssistantReplyAt || 0), 0);
   assert.equal(logs.some((entry) => entry?.content === "voice_join_greeting_fired"), true);
   const firedLog = logs.find((entry) => entry?.content === "voice_join_greeting_fired");
   assert.equal(firedLog?.metadata?.strategy, "brain");
@@ -1655,18 +1744,13 @@ test("queueRealtimeTurnFromAsrBridge refires pending join greeting through nativ
         replyPath: "native"
       }
     },
-    deferredVoiceActions: {
-      join_greeting: {
-        type: "join_greeting",
-        status: "deferred",
-        createdAt: Date.now() - 500,
-        updatedAt: Date.now() - 500,
-        notBeforeAt: 0,
-        expiresAt: Date.now() + 5_000,
-        reason: "capture_resolved",
-        revision: 1
-      }
+    joinGreetingOpportunity: {
+      trigger: "capture_resolved",
+      armedAt: Date.now() - 1_000,
+      fireAt: Date.now() - 500,
+      expiresAt: Date.now() + 5_000
     },
+    lastOpenAiRealtimeInstructions: "ready",
     lastAssistantReplyAt: 0,
     userCaptures: new Map()
   });
@@ -1687,30 +1771,24 @@ test("queueRealtimeTurnFromAsrBridge refires pending join greeting through nativ
   assert.equal(usedTranscript, false);
   assert.equal(queuedTurns.length, 0);
   assert.equal(createdResponses.length, 1);
-  assert.equal(createdResponses[0]?.source, "voice_join_greeting");
+  assert.equal(createdResponses[0]?.source, SYSTEM_SPEECH_SOURCE.JOIN_GREETING);
   assert.equal(brainReplies.length, 0);
-  assert.equal(Boolean(session.deferredVoiceActions?.join_greeting), false);
-  assert.equal(Number(session.lastAssistantReplyAt || 0) > 0, true);
+  assert.equal(session.joinGreetingOpportunity, null);
+  assert.equal(Number(session.lastAssistantReplyAt || 0), 0);
   assert.equal(logs.some((entry) => entry?.content === "voice_join_greeting_fired"), true);
   const firedLog = logs.find((entry) => entry?.content === "voice_join_greeting_fired");
   assert.equal(firedLog?.metadata?.strategy, "native");
 });
 
-test("createTrackedAudioResponse clears deferred join greeting when newer bot speech starts", () => {
+test("createTrackedAudioResponse clears join greeting opportunity when newer bot speech starts", () => {
   const { manager } = createManager();
   const session = createSession({
     mode: "openai_realtime",
-    deferredVoiceActions: {
-      join_greeting: {
-        type: "join_greeting",
-        status: "deferred",
-        createdAt: Date.now() - 500,
-        updatedAt: Date.now() - 500,
-        notBeforeAt: 0,
-        expiresAt: Date.now() + 5_000,
-        reason: "capture_resolved",
-        revision: 1
-      }
+    joinGreetingOpportunity: {
+      trigger: "capture_resolved",
+      armedAt: Date.now() - 1_000,
+      fireAt: Date.now() - 500,
+      expiresAt: Date.now() + 5_000
     }
   });
 
@@ -1721,26 +1799,132 @@ test("createTrackedAudioResponse clears deferred join greeting when newer bot sp
   });
 
   assert.equal(created, true);
-  assert.equal(Boolean(session.deferredVoiceActions?.join_greeting), false);
+  assert.equal(session.joinGreetingOpportunity, null);
   manager.clearPendingResponse(session);
 });
 
-test("buildRealtimeInstructions softens deferred join greeting into a re-evaluation prompt", () => {
+test("cancelPendingSystemSpeechForUserSpeech clears pre-audio join greeting response", () => {
+  const { manager, logs } = createManager();
+  const cancelCalls = [];
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeClient: {
+      cancelActiveResponse() {
+        cancelCalls.push(true);
+        return true;
+      }
+    },
+    lastAudioDeltaAt: 0,
+    pendingResponse: {
+      requestId: 7,
+      requestedAt: Date.now() + 5_000,
+      source: `${SYSTEM_SPEECH_SOURCE.JOIN_GREETING}:speech_1`,
+      handlingSilence: false,
+      audioReceivedAt: 0,
+      interruptionPolicy: null,
+      utteranceText: "yo",
+      latencyContext: null,
+      userId: null,
+      retryCount: 0,
+      hardRecoveryAttempted: false
+    }
+  });
+  const promotedAt = Date.now();
+  const capture = {
+    userId: "speaker-1",
+    startedAt: promotedAt - 420,
+    promotedAt,
+    bytesSent: 24_000,
+    signalSampleCount: 12_000,
+    signalActiveSampleCount: 6_000,
+    signalPeakAbs: 12_000,
+    signalSumSquares: 12_000 * 12_000 * 12_000
+  };
+
+  const cancelled = manager.cancelPendingSystemSpeechForUserSpeech({
+    session,
+    userId: "speaker-1",
+    captureState: capture,
+    source: "capture_promoted",
+    now: promotedAt
+  });
+
+  assert.equal(cancelled, true);
+  assert.equal(session.pendingResponse, null);
+  assert.equal(cancelCalls.length, 1);
+  const cancelLog = logs.find((entry) => entry?.content === "voice_system_speech_cancelled_for_user_speech");
+  assert.ok(cancelLog);
+  assert.equal(cancelLog?.metadata?.pendingSource, `${SYSTEM_SPEECH_SOURCE.JOIN_GREETING}:speech_1`);
+  assert.equal(cancelLog?.metadata?.opportunityType, SYSTEM_SPEECH_OPPORTUNITY.JOIN_GREETING);
+  assert.equal(Boolean(cancelLog?.metadata?.responseCancelAttempted), true);
+});
+
+test("cancelPendingSystemSpeechForUserSpeech clears pre-audio thought response", () => {
+  const { manager, logs } = createManager();
+  const cancelCalls = [];
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeClient: {
+      cancelActiveResponse() {
+        cancelCalls.push(true);
+        return true;
+      }
+    },
+    lastAudioDeltaAt: 0,
+    pendingResponse: {
+      requestId: 11,
+      requestedAt: Date.now() + 5_000,
+      source: SYSTEM_SPEECH_SOURCE.THOUGHT,
+      handlingSilence: false,
+      audioReceivedAt: 0,
+      interruptionPolicy: null,
+      utteranceText: "wild thought",
+      latencyContext: null,
+      userId: null,
+      retryCount: 0,
+      hardRecoveryAttempted: false
+    }
+  });
+  const promotedAt = Date.now();
+  const capture = {
+    userId: "speaker-1",
+    startedAt: promotedAt - 420,
+    promotedAt,
+    bytesSent: 24_000,
+    signalSampleCount: 12_000,
+    signalActiveSampleCount: 6_000,
+    signalPeakAbs: 12_000,
+    signalSumSquares: 12_000 * 12_000 * 12_000
+  };
+
+  const cancelled = manager.cancelPendingSystemSpeechForUserSpeech({
+    session,
+    userId: "speaker-1",
+    captureState: capture,
+    source: "capture_promoted",
+    now: promotedAt
+  });
+
+  assert.equal(cancelled, true);
+  assert.equal(session.pendingResponse, null);
+  assert.equal(cancelCalls.length, 1);
+  const cancelLog = logs.find((entry) => entry?.content === "voice_system_speech_cancelled_for_user_speech");
+  assert.ok(cancelLog);
+  assert.equal(cancelLog?.metadata?.pendingSource, SYSTEM_SPEECH_SOURCE.THOUGHT);
+  assert.equal(cancelLog?.metadata?.opportunityType, SYSTEM_SPEECH_OPPORTUNITY.THOUGHT);
+  assert.equal(Boolean(cancelLog?.metadata?.responseCancelAttempted), true);
+});
+
+test("buildRealtimeInstructions does not inject join greeting prompt even when opportunity is armed", () => {
   const { manager } = createManager();
   const session = createSession({
     mode: "openai_realtime",
     startedAt: Date.now() - 2_000,
-    deferredVoiceActions: {
-      join_greeting: {
-        type: "join_greeting",
-        status: "deferred",
-        createdAt: Date.now() - 1_500,
-        updatedAt: Date.now() - 500,
-        notBeforeAt: 0,
-        expiresAt: Date.now() + 5_000,
-        reason: "capture_resolved",
-        revision: 2
-      }
+    joinGreetingOpportunity: {
+      trigger: "capture_resolved",
+      armedAt: Date.now() - 1_500,
+      fireAt: Date.now() - 500,
+      expiresAt: Date.now() + 5_000
     }
   });
 
@@ -1752,8 +1936,8 @@ test("buildRealtimeInstructions softens deferred join greeting into a re-evaluat
     memorySlice: null
   });
 
-  assert.equal(instructions.includes("Re-evaluate whether a brief casual greeting still fits right now."), true);
-  assert.equal(instructions.includes("If the moment has passed or the room has clearly moved on, you may skip."), true);
+  assert.equal(instructions.includes("Re-evaluate whether a brief casual greeting still fits right now."), false);
+  assert.equal(instructions.includes("You just joined this voice channel."), false);
 });
 
 test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript for all capture reasons", () => {
@@ -2805,43 +2989,21 @@ test("dispose detaches handlers and clears join locks", async () => {
 test("canFireDeferredAction returns null (can fire) when session is valid and output channel is clear", () => {
   const { manager } = createManager();
   const session = createSession({ mode: "openai_realtime" });
-  const action = {
-    type: "join_greeting",
-    goal: "announce_join",
-    freshnessPolicy: "regenerate_from_goal",
-    status: "scheduled",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    notBeforeAt: 0,
-    expiresAt: Date.now() + 30_000,
-    reason: "connection_ready",
-    revision: 1,
-    payload: { trigger: "connection_ready" }
-  };
+  const action = createInterruptedReplyAction();
   const result = manager.canFireDeferredAction(session, action);
   assert.equal(result, null);
 });
 
 test("canFireDeferredAction returns 'session_inactive' when session is null", () => {
   const { manager } = createManager();
-  const result = manager.canFireDeferredAction(null, { type: "join_greeting" } as any);
+  const result = manager.canFireDeferredAction(null, createInterruptedReplyAction());
   assert.equal(result, "session_inactive");
 });
 
 test("canFireDeferredAction returns 'session_inactive' when session.ending is true", () => {
   const { manager } = createManager();
   const session = createSession({ ending: true });
-  const action = {
-    type: "join_greeting",
-    status: "scheduled",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    notBeforeAt: 0,
-    expiresAt: Date.now() + 30_000,
-    reason: "test",
-    revision: 1,
-    payload: {}
-  };
+  const action = createInterruptedReplyAction();
   const result = manager.canFireDeferredAction(session, action);
   assert.equal(result, "session_inactive");
 });
@@ -2856,17 +3018,11 @@ test("canFireDeferredAction returns 'no_action' when action is null", () => {
 test("canFireDeferredAction returns 'expired' when expiresAt is in the past", () => {
   const { manager } = createManager();
   const session = createSession();
-  const action = {
-    type: "join_greeting",
-    status: "scheduled",
+  const action = createInterruptedReplyAction({
     createdAt: Date.now() - 60_000,
     updatedAt: Date.now() - 60_000,
-    notBeforeAt: 0,
-    expiresAt: Date.now() - 1_000,
-    reason: "test",
-    revision: 1,
-    payload: {}
-  };
+    expiresAt: Date.now() - 1_000
+  });
   const result = manager.canFireDeferredAction(session, action);
   assert.equal(result, "expired");
 });
@@ -2874,17 +3030,9 @@ test("canFireDeferredAction returns 'expired' when expiresAt is in the past", ()
 test("canFireDeferredAction returns 'not_before_at' when notBeforeAt is in the future", () => {
   const { manager } = createManager();
   const session = createSession();
-  const action = {
-    type: "join_greeting",
-    status: "scheduled",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    notBeforeAt: Date.now() + 5_000,
-    expiresAt: Date.now() + 30_000,
-    reason: "test",
-    revision: 1,
-    payload: {}
-  };
+  const action = createInterruptedReplyAction({
+    notBeforeAt: Date.now() + 5_000
+  });
   const result = manager.canFireDeferredAction(session, action);
   assert.equal(result, "not_before_at");
 });
@@ -2893,17 +3041,7 @@ test("canFireDeferredAction returns 'active_captures' when user captures are in 
   const { manager } = createManager();
   const session = createSession();
   session.userCaptures.set("user-1", { startedAt: Date.now() });
-  const action = {
-    type: "join_greeting",
-    status: "scheduled",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    notBeforeAt: 0,
-    expiresAt: Date.now() + 30_000,
-    reason: "test",
-    revision: 1,
-    payload: {}
-  };
+  const action = createInterruptedReplyAction();
   const result = manager.canFireDeferredAction(session, action);
   assert.equal(result, "active_captures");
 });
@@ -2943,17 +3081,7 @@ test("canFireDeferredAction ignores silence-only captures for queued user turns"
 test("canFireDeferredAction returns 'pending_response' when session has pendingResponse", () => {
   const { manager } = createManager();
   const session = createSession({ pendingResponse: { id: "resp-1" } });
-  const action = {
-    type: "join_greeting",
-    status: "scheduled",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    notBeforeAt: 0,
-    expiresAt: Date.now() + 30_000,
-    reason: "test",
-    revision: 1,
-    payload: {}
-  };
+  const action = createInterruptedReplyAction();
   const result = manager.canFireDeferredAction(session, action);
   assert.equal(result, "pending_response");
 });
@@ -2962,17 +3090,7 @@ test("canFireDeferredAction returns 'active_response' when realtime response is 
   const { manager } = createManager();
   const session = createSession({ mode: "openai_realtime" });
   manager.isRealtimeResponseActive = () => true;
-  const action = {
-    type: "join_greeting",
-    status: "scheduled",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    notBeforeAt: 0,
-    expiresAt: Date.now() + 30_000,
-    reason: "test",
-    revision: 1,
-    payload: {}
-  };
+  const action = createInterruptedReplyAction();
   const result = manager.canFireDeferredAction(session, action);
   assert.equal(result, "active_response");
 });
@@ -2980,17 +3098,7 @@ test("canFireDeferredAction returns 'active_response' when realtime response is 
 test("canFireDeferredAction returns 'awaiting_tool_outputs' when tools are pending", () => {
   const { manager } = createManager();
   const session = createSession({ awaitingToolOutputs: true });
-  const action = {
-    type: "join_greeting",
-    status: "scheduled",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    notBeforeAt: 0,
-    expiresAt: Date.now() + 30_000,
-    reason: "test",
-    revision: 1,
-    payload: {}
-  };
+  const action = createInterruptedReplyAction();
   const result = manager.canFireDeferredAction(session, action);
   assert.equal(result, "awaiting_tool_outputs");
 });
@@ -2999,17 +3107,7 @@ test("canFireDeferredAction returns 'tool_calls_running' when openAiToolCallExec
   const { manager } = createManager();
   const session = createSession();
   session.openAiToolCallExecutions = new Map([["call-1", {}]]);
-  const action = {
-    type: "join_greeting",
-    status: "scheduled",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    notBeforeAt: 0,
-    expiresAt: Date.now() + 30_000,
-    reason: "test",
-    revision: 1,
-    payload: {}
-  };
+  const action = createInterruptedReplyAction();
   const result = manager.canFireDeferredAction(session, action);
   assert.equal(result, "tool_calls_running");
 });
@@ -3017,17 +3115,9 @@ test("canFireDeferredAction returns 'tool_calls_running' when openAiToolCallExec
 test("canFireDeferredAction treats expiresAt=0 as no expiry", () => {
   const { manager } = createManager();
   const session = createSession();
-  const action = {
-    type: "join_greeting",
-    status: "scheduled",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    notBeforeAt: 0,
-    expiresAt: 0,
-    reason: "test",
-    revision: 1,
-    payload: {}
-  };
+  const action = createInterruptedReplyAction({
+    expiresAt: 0
+  });
   const result = manager.canFireDeferredAction(session, action);
   assert.equal(result, null);
 });
@@ -3036,17 +3126,7 @@ test("canFireDeferredAction checks blockers in priority order (captures before p
   const { manager } = createManager();
   const session = createSession({ pendingResponse: { id: "resp-1" } });
   session.userCaptures.set("user-1", { startedAt: Date.now() });
-  const action = {
-    type: "join_greeting",
-    status: "scheduled",
-    createdAt: Date.now(),
-    updatedAt: Date.now(),
-    notBeforeAt: 0,
-    expiresAt: Date.now() + 30_000,
-    reason: "test",
-    revision: 1,
-    payload: {}
-  };
+  const action = createInterruptedReplyAction();
   // Should return the first blocker hit: active_captures
   const result = manager.canFireDeferredAction(session, action);
   assert.equal(result, "active_captures");

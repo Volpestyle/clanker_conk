@@ -924,6 +924,8 @@ function buildExecutionSession({
     recentVoiceTurns: [],
     deferredVoiceActions: {},
     deferredVoiceActionTimers: {},
+    joinGreetingOpportunity: null,
+    joinGreetingTimer: null,
     soundboard: {
       playCount: 0,
       lastPlayedAt: 0

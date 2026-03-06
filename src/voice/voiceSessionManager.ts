@@ -136,6 +136,14 @@ import {
   shouldAllowVoiceNsfwHumor,
   transcriptSourceFromEventType
 } from "./voiceSessionHelpers.ts";
+import {
+  SYSTEM_SPEECH_SOURCE,
+  resolveSystemSpeechOpportunityType,
+  resolveSystemSpeechReplyAccountingOnLocalPlayback,
+  resolveSystemSpeechReplyAccountingOnRequest,
+  shouldCancelSystemSpeechBeforeAudioOnPromotedUserSpeech,
+  shouldSupersedeSystemSpeechBeforePlayback
+} from "./systemSpeechOpportunity.ts";
 import { requestJoin } from "./voiceJoinFlow.ts";
 import { evaluateVoiceReplyDecision as evaluateVoiceReplyDecisionModule } from "./voiceReplyDecision.ts";
 import {
@@ -238,6 +246,9 @@ import {
   VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS,
   VOICE_LOOKUP_BUSY_ANNOUNCE_DELAY_MS,
   VOICE_LOOKUP_BUSY_LOG_COOLDOWN_MS,
+  VOICE_TURN_PROMOTION_ACTIVE_RATIO_MIN,
+  VOICE_TURN_PROMOTION_MIN_CLIP_MS,
+  VOICE_TURN_PROMOTION_PEAK_MIN,
   VOICE_SILENCE_GATE_ACTIVE_RATIO_MAX,
   VOICE_SILENCE_GATE_ACTIVE_SAMPLE_MIN_ABS,
   VOICE_SILENCE_GATE_MIN_CLIP_MS,
@@ -888,7 +899,7 @@ export class VoiceSessionManager {
             active: joinWindowActive,
             ageMs: Math.round(joinWindowAgeMs),
             windowMs: JOIN_GREETING_LLM_WINDOW_MS,
-            greetingPending: Boolean(this.getDeferredVoiceAction(session, "join_greeting")),
+            greetingPending: Boolean(this.getJoinGreetingOpportunity(session)),
           },
           thoughtEngine: {
             busy: Boolean(session.thoughtLoopBusy),
@@ -2593,30 +2604,9 @@ export class VoiceSessionManager {
       session.playbackArmedAt = Date.now();
       this.syncAssistantOutputState(session, "vox_playback_armed");
       if (reason !== "connection_ready") return;
-      this.setDeferredVoiceAction(session, {
-        type: "join_greeting",
-        goal: "announce_join",
-        freshnessPolicy: "regenerate_from_goal",
-        status: "scheduled",
-        reason: "connection_ready",
-        notBeforeAt: Date.now() + 2500,
-        expiresAt: Number(session.startedAt || 0) + JOIN_GREETING_LLM_WINDOW_MS,
-        payload: {
-          trigger: "connection_ready"
-        }
+      this.armJoinGreetingOpportunity(session, {
+        trigger: "connection_ready"
       });
-      // If instructions are already set, start the observation grace window.
-      if (session.lastOpenAiRealtimeInstructions && !session.lastAssistantReplyAt) {
-        const greetingAction = this.getDeferredVoiceAction(session, "join_greeting");
-        if (greetingAction) {
-          const delayMs = Math.max(0, Number(greetingAction.notBeforeAt || 0) - Date.now());
-          this.scheduleDeferredVoiceActionRecheck(session, {
-            type: "join_greeting",
-            delayMs,
-            reason: "join_greeting_grace"
-          });
-        }
-      }
     };
 
     const onMusicIdle = () => {
@@ -2680,6 +2670,108 @@ export class VoiceSessionManager {
       session.voxClient?.off("musicError", onMusicError);
       session.voxClient?.off("error", onError);
     });
+  }
+
+  getJoinGreetingOpportunity(session) {
+    const opportunity = session?.joinGreetingOpportunity;
+    return opportunity && typeof opportunity === "object" ? opportunity : null;
+  }
+
+  clearJoinGreetingTimer(session) {
+    if (!session) return;
+    if (session.joinGreetingTimer) {
+      clearTimeout(session.joinGreetingTimer);
+    }
+    session.joinGreetingTimer = null;
+  }
+
+  clearJoinGreetingOpportunity(session) {
+    if (!session) return;
+    this.clearJoinGreetingTimer(session);
+    session.joinGreetingOpportunity = null;
+  }
+
+  armJoinGreetingOpportunity(session, {
+    trigger = "connection_ready"
+  }: {
+    trigger?: string | null;
+  } = {}) {
+    if (!session || session.ending) return null;
+    if (!isRealtimeMode(session.mode)) return null;
+
+    const now = Date.now();
+    const expiresAt = Math.max(0, Number(session.startedAt || 0)) + JOIN_GREETING_LLM_WINDOW_MS;
+    if (expiresAt > 0 && now >= expiresAt) {
+      this.clearJoinGreetingOpportunity(session);
+      return null;
+    }
+
+    session.joinGreetingOpportunity = {
+      trigger: String(trigger || "connection_ready").trim() || "connection_ready",
+      armedAt: now,
+      fireAt: now + 2500,
+      expiresAt
+    };
+
+    if (session.lastOpenAiRealtimeInstructions && !session.lastAssistantReplyAt) {
+      const delayMs = Math.max(0, Number(session.joinGreetingOpportunity.fireAt || 0) - now);
+      this.scheduleJoinGreetingOpportunity(session, {
+        delayMs,
+        reason: "join_greeting_grace"
+      });
+    }
+
+    return session.joinGreetingOpportunity;
+  }
+
+  scheduleJoinGreetingOpportunity(session, {
+    delayMs = 0,
+    reason = "scheduled_recheck"
+  }: {
+    delayMs?: number;
+    reason?: string;
+  } = {}) {
+    if (!session || session.ending) return;
+    if (!this.getJoinGreetingOpportunity(session)) return;
+    this.clearJoinGreetingTimer(session);
+    session.joinGreetingTimer = setTimeout(() => {
+      session.joinGreetingTimer = null;
+      this.maybeFireJoinGreetingOpportunity(session, reason);
+    }, Math.max(0, Number(delayMs) || 0));
+  }
+
+  getDeferredOutputChannelBlockReason(session): string | null {
+    if (Number(session.userCaptures?.size || 0) > 0 && this.hasReplayBlockingActiveCapture(session)) {
+      return "active_captures";
+    }
+    if (session.pendingResponse) return "pending_response";
+    if (this.isRealtimeResponseActive(session)) return "active_response";
+    if (session.awaitingToolOutputs) return "awaiting_tool_outputs";
+    if (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0) {
+      return "tool_calls_running";
+    }
+    return null;
+  }
+
+  canFireJoinGreetingOpportunity(session, opportunity = null): string | null {
+    if (!session || session.ending) return "session_inactive";
+    if (!isRealtimeMode(session.mode)) return "wrong_mode";
+    const pendingOpportunity = opportunity && typeof opportunity === "object"
+      ? opportunity
+      : this.getJoinGreetingOpportunity(session);
+    if (!pendingOpportunity) return "no_opportunity";
+
+    const now = Date.now();
+    const expiresAt = Math.max(0, Number(pendingOpportunity.expiresAt || 0));
+    if (expiresAt > 0 && now >= expiresAt) return "expired";
+    if (!session.playbackArmed) return "playback_not_armed";
+    if (session.lastAssistantReplyAt) return "assistant_reply_already_sent";
+    if (!session.lastOpenAiRealtimeInstructions) return "instructions_not_ready";
+
+    const fireAt = Math.max(0, Number(pendingOpportunity.fireAt || 0));
+    if (fireAt > now) return "not_before_at";
+
+    return this.getDeferredOutputChannelBlockReason(session);
   }
 
   getDeferredVoiceActions(session) {
@@ -2839,18 +2931,7 @@ export class VoiceSessionManager {
     const notBeforeAt = Math.max(0, Number(action.notBeforeAt || 0));
     if (notBeforeAt > now) return "not_before_at";
 
-    // Output channel blockers
-    if (Number(session.userCaptures?.size || 0) > 0 && this.hasReplayBlockingActiveCapture(session)) {
-      return "active_captures";
-    }
-    if (session.pendingResponse) return "pending_response";
-    if (this.isRealtimeResponseActive(session)) return "active_response";
-    if (session.awaitingToolOutputs) return "awaiting_tool_outputs";
-    if (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0) {
-      return "tool_calls_running";
-    }
-
-    return null;
+    return this.getDeferredOutputChannelBlockReason(session);
   }
 
   recheckDeferredVoiceActions({
@@ -2865,7 +2946,7 @@ export class VoiceSessionManager {
     context?;
   }) {
     if (!session || session.ending) return false;
-    const actionPriority: DeferredVoiceActionType[] = ["interrupted_reply", "queued_user_turns", "join_greeting"];
+    const actionPriority: DeferredVoiceActionType[] = ["interrupted_reply", "queued_user_turns"];
     const knownActions = this.getDeferredVoiceActions(session);
     const types = Array.isArray(preferredTypes) && preferredTypes.length > 0
       ? preferredTypes
@@ -2899,20 +2980,6 @@ export class VoiceSessionManager {
         // Blocked — downgrade to deferred status and reschedule if applicable
         if (type === "queued_user_turns") {
           this.scheduleDeferredBotTurnOpenFlush({ session, reason });
-        } else if (type === "join_greeting") {
-          const expiresAt = Math.max(0, Number(action.expiresAt || 0));
-          this.setDeferredVoiceAction(session, {
-            type: "join_greeting",
-            goal: "announce_join",
-            freshnessPolicy: "regenerate_from_goal",
-            status: "deferred",
-            reason,
-            notBeforeAt: 0,
-            expiresAt,
-            payload: {
-              trigger: String((action as any)?.payload?.trigger || action.reason || "join").trim() || null
-            }
-          });
         }
         // interrupted_reply: no reschedule — waits for next capture resolution
         continue;
@@ -2920,9 +2987,6 @@ export class VoiceSessionManager {
 
       // Gating passed — delegate to action-specific fire logic
       switch (type) {
-        case "join_greeting":
-          if (this.fireDeferredJoinGreeting(session, action, reason)) return true;
-          break;
         case "queued_user_turns":
           if (this.fireDeferredQueuedUserTurns(session, action as DeferredQueuedUserTurnsAction, reason)) return true;
           break;
@@ -2963,28 +3027,22 @@ export class VoiceSessionManager {
     return true;
   }
 
-  fireJoinGreeting(session, reason = "manual") {
-    return this.recheckDeferredVoiceActions({
-      session,
-      reason,
-      preferredTypes: ["join_greeting"]
-    });
-  }
-
-  /**
-   * Fire logic for join_greeting. Called only after canFireDeferredAction()
-   * returns null. Handles join-greeting-specific preconditions and dispatch.
-   */
-  fireDeferredJoinGreeting(session, action, reason: string): boolean {
-    if (!isRealtimeMode(session.mode) || !session.playbackArmed || session.lastAssistantReplyAt) {
-      this.clearDeferredVoiceAction(session, "join_greeting");
+  maybeFireJoinGreetingOpportunity(session, reason = "manual") {
+    const opportunity = this.getJoinGreetingOpportunity(session);
+    const blockReason = this.canFireJoinGreetingOpportunity(session, opportunity);
+    if (blockReason === "not_before_at") {
+      const delayMs = Math.max(0, Number(opportunity?.fireAt || 0) - Date.now());
+      this.scheduleJoinGreetingOpportunity(session, {
+        delayMs,
+        reason
+      });
       return false;
     }
-
-    const joinWindowAgeMs = Math.max(0, Date.now() - Number(session?.startedAt || 0));
-    const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
-    if (!joinWindowActive) {
-      this.clearDeferredVoiceAction(session, "join_greeting");
+    if (blockReason === "instructions_not_ready") {
+      return false;
+    }
+    if (blockReason) {
+      this.clearJoinGreetingOpportunity(session);
       return false;
     }
 
@@ -2996,14 +3054,13 @@ export class VoiceSessionManager {
     if (useNativeRealtimeReply) {
       this.createTrackedAudioResponse({
         session,
-        source: "voice_join_greeting",
+        source: SYSTEM_SPEECH_SOURCE.JOIN_GREETING,
         emitCreateEvent: true,
         resetRetryState: true
       });
-      session.lastAssistantReplyAt = Date.now();
     } else {
       const joinGreetingTrigger = String(
-        action?.payload?.trigger || action.reason || "join_greeting"
+        opportunity?.trigger || "join_greeting"
       )
         .replace(/\s+/g, " ")
         .trim()
@@ -3026,7 +3083,7 @@ export class VoiceSessionManager {
           userId: null,
           directAddressed: false
         }),
-        source: "voice_join_greeting"
+        source: SYSTEM_SPEECH_SOURCE.JOIN_GREETING
       }).catch((error) => {
         this.store.logAction({
           kind: "voice_error",
@@ -3040,9 +3097,8 @@ export class VoiceSessionManager {
           }
         });
       });
-      session.lastAssistantReplyAt = Date.now();
     }
-    this.clearDeferredVoiceAction(session, "join_greeting");
+    this.clearJoinGreetingOpportunity(session);
     this.store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,
@@ -3053,8 +3109,8 @@ export class VoiceSessionManager {
         sessionId: session.id,
         mode: session.mode,
         strategy: useNativeRealtimeReply ? "native" : "brain",
-        deferredActionReason: String(action.reason || "deferred"),
-        recheckReason: String(reason || "manual")
+        trigger: String(opportunity?.trigger || "join_greeting"),
+        fireReason: String(reason || "manual")
       }
     });
     return true;
@@ -3659,17 +3715,13 @@ export class VoiceSessionManager {
       : 24000;
     const minPromotionBytes = Math.max(
       2,
-      Math.ceil((sampleRateHz * 2 * VOICE_SILENCE_GATE_MIN_CLIP_MS) / 1000)
+      Math.ceil((sampleRateHz * 2 * VOICE_TURN_PROMOTION_MIN_CLIP_MS) / 1000)
     );
     if (Math.max(0, Number(capture.bytesSent || 0)) < minPromotionBytes) return false;
-    if (!this.isCaptureSignalAssertive(capture)) return false;
     const signal = this.getCaptureSignalMetrics(capture);
     if (signal.sampleCount <= 0) return false;
-    const noiseLike =
-      signal.rms <= VOICE_FALLBACK_NOISE_GATE_RMS_MAX &&
-      signal.peak <= VOICE_FALLBACK_NOISE_GATE_PEAK_MAX &&
-      signal.activeSampleRatio <= VOICE_FALLBACK_NOISE_GATE_ACTIVE_RATIO_MAX;
-    return !noiseLike;
+    return signal.activeSampleRatio >= VOICE_TURN_PROMOTION_ACTIVE_RATIO_MIN &&
+      signal.peak >= VOICE_TURN_PROMOTION_PEAK_MIN;
   }
 
   isCaptureEligibleForActivityTouch({ session, capture }) {
@@ -3707,6 +3759,93 @@ export class VoiceSessionManager {
       }
     }
     return false;
+  }
+
+  summarizeRealtimeInterruptingLiveCaptures({
+    session = null,
+    promotedAfterMs = 0
+  } = {}) {
+    if (!session || !(session.userCaptures instanceof Map) || session.userCaptures.size <= 0) {
+      return {
+        livePromotedCaptureCount: 0,
+        oldestPromotedAt: null,
+        newestPromotedAt: null
+      };
+    }
+
+    const promotedAfter = Math.max(0, Number(promotedAfterMs || 0));
+    let livePromotedCaptureCount = 0;
+    let oldestPromotedAt = Number.POSITIVE_INFINITY;
+    let newestPromotedAt = 0;
+
+    for (const capture of session.userCaptures.values()) {
+      if (!this.hasCaptureBeenPromoted(capture)) continue;
+      if (!this.isCaptureEligibleForActivityTouch({ session, capture })) continue;
+      const promotedAt = Math.max(0, Number(capture?.promotedAt || capture?.startedAt || 0));
+      if (promotedAfter > 0 && promotedAt > 0 && promotedAt <= promotedAfter) {
+        continue;
+      }
+      livePromotedCaptureCount += 1;
+      if (promotedAt > 0 && promotedAt < oldestPromotedAt) {
+        oldestPromotedAt = promotedAt;
+      }
+      if (promotedAt > newestPromotedAt) {
+        newestPromotedAt = promotedAt;
+      }
+    }
+
+    return {
+      livePromotedCaptureCount,
+      oldestPromotedAt: Number.isFinite(oldestPromotedAt)
+        ? Math.max(0, Math.round(oldestPromotedAt))
+        : null,
+      newestPromotedAt: newestPromotedAt > 0
+        ? Math.max(0, Math.round(newestPromotedAt))
+        : null
+    };
+  }
+
+  cancelPendingSystemSpeechForUserSpeech({
+    session = null,
+    userId = null,
+    captureState = null,
+    source = "capture_promoted",
+    now = Date.now()
+  } = {}) {
+    if (!session || session.ending) return false;
+    const pending = session.pendingResponse && typeof session.pendingResponse === "object"
+      ? session.pendingResponse
+      : null;
+    const pendingOpportunityType = resolveSystemSpeechOpportunityType(pending?.source);
+    if (!pending || !shouldCancelSystemSpeechBeforeAudioOnPromotedUserSpeech(pending.source)) return false;
+    if (this.pendingResponseHasAudio(session, pending)) return false;
+
+    const signal = this.getCaptureSignalMetrics(captureState);
+    const cancelTelemetry = this.cancelRealtimeResponseForBargeIn(session);
+    this.clearPendingResponse(session);
+    this.maybeClearActiveReplyInterruptionPolicy(session);
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: userId || null,
+      content: "voice_system_speech_cancelled_for_user_speech",
+      metadata: {
+        sessionId: session.id,
+        opportunityType: pendingOpportunityType,
+        source: String(source || "capture_promoted"),
+        pendingSource: String(pending.source || SYSTEM_SPEECH_SOURCE.JOIN_GREETING),
+        pendingRequestId: Number(pending.requestId || 0) || null,
+        captureStartedAt: Math.max(0, Number(captureState?.startedAt || 0)) || null,
+        capturePromotedAt: Math.max(0, Number(captureState?.promotedAt || now)) || null,
+        captureBytes: Math.max(0, Number(captureState?.bytesSent || 0)),
+        capturePeak: signal.peak,
+        captureRms: signal.rms,
+        captureActiveSampleRatio: signal.activeSampleRatio,
+        ...cancelTelemetry
+      }
+    });
+    return true;
   }
 
   findAssertiveInboundCaptureUserId(session, interruptionPolicy = null) {
@@ -5381,7 +5520,7 @@ export class VoiceSessionManager {
         session,
         text: line,
         userId: this.client.user?.id || null,
-        source: "voice_thought_engine"
+        source: SYSTEM_SPEECH_SOURCE.THOUGHT
       });
       if (!requestedRealtimeUtterance) {
         return false;
@@ -5391,14 +5530,19 @@ export class VoiceSessionManager {
         session,
         settings,
         text: line,
-        source: "voice_thought_engine_tts"
+        source: SYSTEM_SPEECH_SOURCE.THOUGHT_TTS
       });
       if (!spokeLine) return false;
       session.lastAudioDeltaAt = Date.now();
     }
 
     const replyAt = Date.now();
-    session.lastAssistantReplyAt = replyAt;
+    const replyAccounting = requestedRealtimeUtterance
+      ? resolveSystemSpeechReplyAccountingOnRequest(SYSTEM_SPEECH_SOURCE.THOUGHT)
+      : resolveSystemSpeechReplyAccountingOnLocalPlayback(SYSTEM_SPEECH_SOURCE.THOUGHT_TTS);
+    if (replyAccounting !== "none") {
+      session.lastAssistantReplyAt = replyAt;
+    }
     this.recordVoiceTurn(session, {
       role: "assistant",
       userId: this.client.user?.id || null,
@@ -5834,7 +5978,8 @@ export class VoiceSessionManager {
     session = null,
     source = "voice_reply",
     speechStep = 0,
-    generationStartedAtMs = 0
+    generationStartedAtMs = 0,
+    includePromotedCaptureSupersede = false
   } = {}) {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
@@ -5844,7 +5989,22 @@ export class VoiceSessionManager {
       finalizedAfterMs: generationStartedAt
     });
     const hasInterruptingNewerInput = pendingSummary.pendingInterruptingQueueDepth > 0;
-    if (!hasInterruptingNewerInput) return false;
+    const liveCaptureSummary = includePromotedCaptureSupersede
+      ? this.summarizeRealtimeInterruptingLiveCaptures({
+        session,
+        promotedAfterMs: generationStartedAt
+      })
+      : {
+        livePromotedCaptureCount: 0,
+        oldestPromotedAt: null,
+        newestPromotedAt: null
+      };
+    const hasInterruptingLiveCapture = liveCaptureSummary.livePromotedCaptureCount > 0;
+    if (!hasInterruptingNewerInput && !hasInterruptingLiveCapture) return false;
+
+    const supersedeReason = hasInterruptingNewerInput
+      ? "newer_finalized_realtime_turn"
+      : "newer_live_promoted_capture";
 
     session.realtimeReplySupersededCount =
       Math.max(0, Number(session.realtimeReplySupersededCount || 0)) + 1;
@@ -5857,7 +6017,7 @@ export class VoiceSessionManager {
       metadata: {
         sessionId: session.id,
         source: String(source || "voice_reply"),
-        supersedeReason: "newer_finalized_realtime_turn",
+        supersedeReason,
         generationStartedAt: generationStartedAt > 0 ? generationStartedAt : null,
         pendingRealtimeQueueDepth: pendingSummary.pendingInterruptingQueueDepth,
         totalPendingRealtimeQueueDepth: pendingSummary.totalPendingRealtimeQueueDepth,
@@ -5865,6 +6025,9 @@ export class VoiceSessionManager {
         pendingNearSilentQueueDepth: pendingSummary.pendingNearSilentQueueDepth,
         oldestConsideredFinalizedAt: pendingSummary.oldestConsideredFinalizedAt,
         newestConsideredFinalizedAt: pendingSummary.newestConsideredFinalizedAt,
+        livePromotedCaptureCount: liveCaptureSummary.livePromotedCaptureCount,
+        oldestLivePromotedAt: liveCaptureSummary.oldestPromotedAt,
+        newestLivePromotedAt: liveCaptureSummary.newestPromotedAt,
         speechStep: Math.max(0, Number(speechStep || 0)),
         supersededCount: Math.max(0, Number(session.realtimeReplySupersededCount || 0))
       }
@@ -5908,6 +6071,7 @@ export class VoiceSessionManager {
     let requestedRealtimeUtterance = false;
     let playedSoundboardCount = 0;
     let completed = true;
+    const allowLiveCaptureSupersede = shouldSupersedeSystemSpeechBeforePlayback(source);
 
     for (const step of steps) {
       if (session.ending) {
@@ -5926,7 +6090,8 @@ export class VoiceSessionManager {
               session,
               source: speechSource,
               speechStep,
-              generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0)
+              generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0),
+              includePromotedCaptureSupersede: allowLiveCaptureSupersede
             })
           ) {
             completed = false;
@@ -5957,7 +6122,8 @@ export class VoiceSessionManager {
               session,
               source: speechSource,
               speechStep,
-              generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0)
+              generationStartedAtMs: Number(latencyContext?.generationStartedAtMs || 0),
+              includePromotedCaptureSupersede: allowLiveCaptureSupersede
             })
           ) {
             completed = false;
@@ -6568,6 +6734,7 @@ export class VoiceSessionManager {
     const maybeTriggerDeferredActions = () => {
       if (!this.hasReplayBlockingActiveCapture(session)) {
         this.recheckDeferredVoiceActions({ session, reason: "capture_resolved" });
+        this.maybeFireJoinGreetingOpportunity(session, "capture_resolved");
       }
     };
 
@@ -6605,8 +6772,16 @@ export class VoiceSessionManager {
     const promoteCapture = (reason = "assertive_audio", now = Date.now()) => {
       if (this.hasCaptureBeenPromoted(captureState)) return true;
       if (!this.isCaptureEligibleForTurnPromotion({ session, capture: captureState })) return false;
+      const signal = this.getCaptureSignalMetrics(captureState);
       captureState.promotedAt = now;
       captureState.promotionReason = String(reason || "assertive_audio");
+      this.cancelPendingSystemSpeechForUserSpeech({
+        session,
+        userId,
+        captureState,
+        source: "capture_promoted",
+        now
+      });
       if (useOpenAiPerUserAsr) {
         this.beginOpenAiAsrUtterance({
           session,
@@ -6633,7 +6808,11 @@ export class VoiceSessionManager {
         metadata: {
           sessionId: session.id,
           promotionReason: captureState.promotionReason,
-          promotionDelayMs: Math.max(0, now - Number(captureState.startedAt || now))
+          promotionDelayMs: Math.max(0, now - Number(captureState.startedAt || now)),
+          promotionBytes: Math.max(0, Number(captureState.bytesSent || 0)),
+          promotionPeak: signal.peak,
+          promotionRms: signal.rms,
+          promotionActiveSampleRatio: signal.activeSampleRatio
         }
       });
       return true;
@@ -7198,6 +7377,7 @@ export class VoiceSessionManager {
         session,
         reason: "empty_asr_bridge_drop"
       });
+      this.maybeFireJoinGreetingOpportunity(session, "empty_asr_bridge_drop");
       return false;
     }
 
@@ -9638,12 +9818,10 @@ export class VoiceSessionManager {
         }
       });
 
-      // Start greeting observation window now that instructions are set.
-      const greetingAction = this.getDeferredVoiceAction(session, "join_greeting");
-      if (greetingAction && session.playbackArmed && !session.lastAssistantReplyAt) {
-        const delayMs = Math.max(0, Number(greetingAction.notBeforeAt || 0) - Date.now());
-        this.scheduleDeferredVoiceActionRecheck(session, {
-          type: "join_greeting",
+      const joinGreetingOpportunity = this.getJoinGreetingOpportunity(session);
+      if (joinGreetingOpportunity && session.playbackArmed && !session.lastAssistantReplyAt) {
+        const delayMs = Math.max(0, Number(joinGreetingOpportunity.fireAt || 0) - Date.now());
+        this.scheduleJoinGreetingOpportunity(session, {
           delayMs,
           reason: "join_greeting_grace"
         });
@@ -9718,19 +9896,6 @@ export class VoiceSessionManager {
         "- If someone recently left, a brief natural goodbye/acknowledgement is usually good."
       ].join("\n")
     );
-
-    const joinWindowAgeMs = Math.max(0, Date.now() - Number(session?.startedAt || 0));
-    const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
-    const deferredJoinGreeting = this.getDeferredVoiceAction(session, "join_greeting");
-    if (joinWindowActive && !session.lastAssistantReplyAt) {
-      if (deferredJoinGreeting?.status === "deferred") {
-        sections.push(
-          "You recently joined this voice channel, but your greeting was deferred while you waited for better timing. Re-evaluate whether a brief casual greeting still fits right now. If the moment has passed or the room has clearly moved on, you may skip."
-        );
-      } else {
-        sections.push("You just joined this voice channel. Say a brief, casual greeting to announce your presence. Keep it to one short sentence. Be natural.");
-      }
-    }
 
     if (speakerName || normalizedTranscript) {
       sections.push(
@@ -11491,6 +11656,7 @@ export class VoiceSessionManager {
     if (!isRealtimeMode(session.mode)) return false;
     // Any fresh bot response supersedes older deferred voice intents.
     this.clearAllDeferredVoiceActions(session);
+    this.clearJoinGreetingOpportunity(session);
     if (emitCreateEvent && this.isRealtimeResponseActive(session)) {
       this.store.logAction({
         kind: "voice_runtime",
@@ -11619,6 +11785,7 @@ export class VoiceSessionManager {
       session,
       reason: "pending_response_cleared"
     });
+    this.maybeFireJoinGreetingOpportunity(session, "pending_response_cleared");
   }
 
   isRealtimeResponseActive(session) {
@@ -11894,6 +12061,7 @@ export class VoiceSessionManager {
     if (session.realtimeInstructionRefreshTimer) clearTimeout(session.realtimeInstructionRefreshTimer);
     if (session.openAiToolResponseDebounceTimer) clearTimeout(session.openAiToolResponseDebounceTimer);
     if (session.voiceLookupBusyAnnounceTimer) clearTimeout(session.voiceLookupBusyAnnounceTimer);
+    this.clearJoinGreetingOpportunity(session);
     this.clearVoiceThoughtLoopTimer(session);
     session.thoughtLoopBusy = false;
     session.pendingResponse = null;
@@ -11906,6 +12074,7 @@ export class VoiceSessionManager {
       session.realtimeTurnCoalesceTimer = null;
     }
     this.clearAllDeferredVoiceActions(session);
+    this.clearJoinGreetingOpportunity(session);
     session.awaitingToolOutputs = false;
     session.openAiPendingToolCalls = new Map();
     session.openAiToolCallExecutions = new Map();

@@ -128,6 +128,11 @@ export interface AsrBridgeState {
   pendingCommitResolvers: AsrPendingCommitResolver[];
   pendingCommitRequests: AsrPendingCommitRequest[];
   consecutiveEmptyCommits: number;
+  // Internal periodic flush telemetry for aggregated runtime logging.
+  _flushAccumBytes: number;
+  _flushAccumChunks: number;
+  _flushAccumSkipped: number;
+  _lastFlushLogAt: number;
 }
 
 export interface AsrCommitResult {
@@ -188,7 +193,11 @@ export function createAsrBridgeState(): AsrBridgeState {
     finalTranscriptsByItemId: new Map(),
     pendingCommitResolvers: [],
     pendingCommitRequests: [],
-    consecutiveEmptyCommits: 0
+    consecutiveEmptyCommits: 0,
+    _flushAccumBytes: 0,
+    _flushAccumChunks: 0,
+    _flushAccumSkipped: 0,
+    _lastFlushLogAt: 0
   };
 }
 

@@ -269,7 +269,7 @@ export function syncAssistantOutputStateRecord(
   const bufferedBotSpeech =
     normalizedTtsPlaybackState === TTS_PLAYBACK_STATE.BUFFERED || normalizedBufferedSamples > 0;
 
-  let phase = ASSISTANT_OUTPUT_PHASE.IDLE;
+  let phase: AssistantOutputPhase = ASSISTANT_OUTPUT_PHASE.IDLE;
   if (liveAudioStreaming) {
     phase = ASSISTANT_OUTPUT_PHASE.SPEAKING_LIVE;
   } else if (bufferedBotSpeech) {

@@ -9,6 +9,7 @@ import MemoryAdaptiveDirectives from "./memoryTab/MemoryAdaptiveDirectives";
 import MemoryInspector from "./memoryTab/MemoryInspector";
 
 type SubTab = "snapshot" | "inspector" | "directives" | "reflections" | "search" | "simulator";
+const MEMORY_SUB_TABS = ["snapshot", "inspector", "directives", "reflections", "search", "simulator"] as const;
 
 interface Guild {
   id: string;
@@ -19,6 +20,10 @@ interface Props {
   markdown: string | null | undefined;
   onRefresh: () => void;
   notify: (text: string, type?: string) => void;
+}
+
+function isMemorySubTab(value: string): value is SubTab {
+  return MEMORY_SUB_TABS.some((tab) => tab === value);
 }
 
 export default function MemoryTab({ markdown, onRefresh, notify }: Props) {
@@ -34,9 +39,13 @@ export default function MemoryTab({ markdown, onRefresh, notify }: Props) {
   return (
     <section className="panel">
       <FilterPills
-        items={["snapshot", "inspector", "directives", "reflections", "search", "simulator"] as const}
+        items={MEMORY_SUB_TABS}
         active={subTab}
-        onChange={setSubTab}
+        onChange={(value) => {
+          if (isMemorySubTab(value)) {
+            setSubTab(value);
+          }
+        }}
         label={(t) => t.charAt(0).toUpperCase() + t.slice(1)}
       />
       <div style={{ display: subTab === "snapshot" ? undefined : "none" }}>

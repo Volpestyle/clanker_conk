@@ -170,7 +170,7 @@ export function buildRuntimeStateSnapshot({
                     active: joinWindowActive,
                     ageMs: Math.round(joinWindowAgeMs),
                     windowMs: JOIN_GREETING_LLM_WINDOW_MS,
-                    greetingPending: Boolean(manager.getDeferredVoiceAction(session, "join_greeting")),
+                    greetingPending: Boolean(manager.getJoinGreetingOpportunity(session)),
                 },
                 thoughtEngine: {
                     busy: Boolean(session.thoughtLoopBusy),

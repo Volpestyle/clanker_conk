@@ -6,6 +6,7 @@ import {
   resolveVoiceThoughtTopicalityBias
 } from "./voiceSessionManager.ts";
 import { STT_TURN_QUEUE_MAX, VOICE_TURN_MIN_ASR_CLIP_MS } from "./voiceSessionManager.constants.ts";
+import { SYSTEM_SPEECH_SOURCE } from "./systemSpeechOpportunity.ts";
 
 function createManager({
   participantCount = 2,
@@ -3342,6 +3343,75 @@ test("runRealtimeBrainReply does not supersede stale playback on active capture 
   );
   assert.equal(Boolean(supersededLog), false);
   assert.equal(session.realtimeReplySupersededCount, 0);
+});
+
+test("runRealtimeBrainReply supersedes join greeting on promoted live capture before playback", async () => {
+  const runtimeLogs = [];
+  let requestedRealtimeUtterances = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
+  manager.prepareRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = () => {
+    requestedRealtimeUtterances += 1;
+    return true;
+  };
+  manager.generateVoiceTurn = async () => {
+    const promotedAt = Date.now() + 20;
+    session.userCaptures.set("speaker-2", {
+      startedAt: promotedAt - 400,
+      promotedAt,
+      bytesSent: 24_000,
+      signalSampleCount: 12_000,
+      signalActiveSampleCount: 3_600,
+      signalPeakAbs: 12_000
+    });
+    return {
+      text: "old greeting should yield"
+    };
+  };
+
+  const session = {
+    id: "session-realtime-supersede-join-greeting-live-capture-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 8_000,
+    realtimeClient: {},
+    realtimeInputSampleRateHz: 24_000,
+    userCaptures: new Map(),
+    pendingRealtimeTurns: [],
+    realtimeReplySupersededCount: 0,
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "join event",
+    inputKind: "event",
+    directAddressed: false,
+    source: SYSTEM_SPEECH_SOURCE.JOIN_GREETING
+  });
+
+  assert.equal(result, false);
+  assert.equal(requestedRealtimeUtterances, 0);
+  const supersededLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "realtime_reply_superseded_newer_input"
+  );
+  assert.equal(Boolean(supersededLog), true);
+  assert.equal(supersededLog?.metadata?.supersedeReason, "newer_live_promoted_capture");
+  assert.equal(supersededLog?.metadata?.livePromotedCaptureCount, 1);
+  assert.equal(session.realtimeReplySupersededCount, 1);
 });
 
 test("runRealtimeBrainReply supersedes stale playback when a newer finalized realtime turn is queued", async () => {

@@ -304,7 +304,7 @@ export interface VoiceSessionMusicState {
     pendingRequestedAt: number;
 }
 
-export type DeferredVoiceActionType = "join_greeting" | "interrupted_reply" | "queued_user_turns";
+export type DeferredVoiceActionType = "interrupted_reply" | "queued_user_turns";
 
 export type DeferredVoiceActionStatus = "scheduled" | "deferred";
 
@@ -324,15 +324,6 @@ export interface DeferredVoiceActionBase {
     expiresAt: number;
     reason: string;
     revision: number;
-}
-
-export interface DeferredJoinGreetingAction extends DeferredVoiceActionBase {
-    type: "join_greeting";
-    goal: "announce_join";
-    freshnessPolicy: "regenerate_from_goal";
-    payload: {
-        trigger: string | null;
-    };
 }
 
 export interface DeferredInterruptedReplyAction extends DeferredVoiceActionBase {
@@ -371,9 +362,15 @@ export interface DeferredQueuedUserTurnsAction extends DeferredVoiceActionBase {
 }
 
 export type DeferredVoiceAction =
-    | DeferredJoinGreetingAction
     | DeferredInterruptedReplyAction
     | DeferredQueuedUserTurnsAction;
+
+export interface JoinGreetingOpportunityState {
+    trigger: string | null;
+    armedAt: number;
+    fireAt: number;
+    expiresAt: number;
+}
 
 export interface VoiceCommandState {
     userId: string | null;
@@ -508,6 +505,8 @@ export interface VoiceSession {
     nextThoughtAt: number;
     lastThoughtAttemptAt: number;
     lastThoughtSpokenAt: number;
+    joinGreetingOpportunity: JoinGreetingOpportunityState | null;
+    joinGreetingTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     userCaptures: Map<string, any>;
     streamWatch: VoiceSessionStreamWatchState;
     music: VoiceSessionMusicState;
