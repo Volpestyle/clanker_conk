@@ -223,7 +223,7 @@ export const DEFAULT_SETTINGS = {
       browser: {
         enabled: true,
         openaiComputerUse: {
-          model: "gpt-5"
+          model: "computer-use-preview"
         },
         localBrowserAgent: {
           execution: {

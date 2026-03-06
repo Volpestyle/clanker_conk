@@ -92,7 +92,7 @@ export function shouldAttemptReplyDecision({
   windowSize = 5
 }) {
   if (forceRespond || forceDecisionLoop || isHardAddressSignal(addressSignal)) return true;
-  if (!settings?.permissions?.allowUnsolicitedReplies) return false;
+  if (!getReplyPermissions(settings).allowUnsolicitedReplies) return false;
   return hasBotMessageInRecentWindow({
     botUserId,
     recentMessages,
@@ -194,3 +194,4 @@ function isHardAddressSignal(addressSignal: Partial<ReplyAddressSignal> | null =
     .toLowerCase();
   return reason === "direct" || reason === "name_exact" || reason === "name_alias";
 }
+import { getReplyPermissions } from "../settings/agentStack.ts";

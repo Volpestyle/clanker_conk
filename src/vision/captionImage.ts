@@ -8,7 +8,7 @@
  */
 
 import {
-    getResolvedOrchestratorBinding,
+    applyOrchestratorOverrideSettings,
     getResolvedVisionBinding
 } from "../settings/agentStack.ts";
 
@@ -33,14 +33,12 @@ const VISION_PROVIDER_CANDIDATES = [
 export function resolveVisionProviderSettings(llm, settings = null) {
     if (!llm || typeof llm.isProviderConfigured !== "function") return null;
 
-    const llmSettings = getResolvedOrchestratorBinding(settings);
     const visionSettings = getResolvedVisionBinding(settings);
     const preferredProvider = String(visionSettings.provider || "").trim().toLowerCase();
     const preferredModel = String(visionSettings.model || "").trim();
 
     if (preferredProvider && preferredModel && llm.isProviderConfigured(preferredProvider)) {
         return {
-            ...llmSettings,
             provider: preferredProvider,
             model: preferredModel,
             temperature: 0.2,
@@ -51,7 +49,6 @@ export function resolveVisionProviderSettings(llm, settings = null) {
     for (const candidate of VISION_PROVIDER_CANDIDATES) {
         if (!llm.isProviderConfigured(candidate.provider)) continue;
         return {
-            ...llmSettings,
             provider: candidate.provider,
             model: candidate.model,
             temperature: 0.2,
@@ -152,14 +149,15 @@ export async function captionImage({
     );
 
     try {
+        const tunedSettings = applyOrchestratorOverrideSettings(settings, {
+            provider: providerSettings.provider,
+            model: providerSettings.model,
+            temperature: providerSettings.temperature,
+            maxOutputTokens: resolvedMaxTokens
+        });
+
         const generated = await llm.generate({
-            settings: {
-                ...(settings || {}),
-                llm: {
-                    ...providerSettings,
-                    maxOutputTokens: resolvedMaxTokens
-                }
-            },
+            settings: tunedSettings,
             systemPrompt:
                 "You are an image captioning assistant. Respond with only the description, no preamble.",
             userPrompt: resolvedPrompt,

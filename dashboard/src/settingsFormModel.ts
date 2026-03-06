@@ -7,7 +7,48 @@ import {
   parseUniqueLineList,
   parseUniqueList
 } from "../../src/settings/listNormalization.ts";
-import { decorateRuntimeSettings } from "../../src/settings/runtimeCompat.ts";
+import {
+  getActivitySettings,
+  getAgentStackSettings,
+  getAutomationsSettings,
+  getBotName,
+  getBotNameAliases,
+  getBrowserRuntimeConfig,
+  getDevTaskPermissions,
+  getDevTeamRuntimeConfig,
+  getDirectiveSettings,
+  getDiscoverySettings,
+  getFollowupSettings,
+  getMemorySettings,
+  getPersonaSettings,
+  getPromptingSettings,
+  getReplyPermissions,
+  getResearchRuntimeConfig,
+  getResolvedFollowupBinding,
+  getResolvedLegacyVoiceProvider,
+  getResolvedMemoryBinding,
+  getResolvedOrchestratorBinding,
+  getResolvedVisionBinding,
+  getResolvedVoiceAdmissionClassifierBinding,
+  getResolvedVoiceGenerationBinding,
+  getResolvedVoiceInitiativeBinding,
+  getSessionOrchestrationSettings,
+  getStartupSettings,
+  getTextInitiativeSettings,
+  getVideoContextSettings,
+  getVisionSettings,
+  getVoiceAdmissionSettings,
+  getVoiceChannelPolicy,
+  getVoiceConversationPolicy,
+  getVoiceInitiativeSettings,
+  getVoiceRuntimeConfig,
+  getVoiceSessionLimits,
+  getVoiceSettings,
+  getVoiceSoundboardSettings,
+  getVoiceStreamWatchSettings,
+  getVoiceTranscriptionSettings,
+  resolveAgentStack
+} from "../../src/settings/agentStack.ts";
 
 export const OPENAI_REALTIME_MODEL_OPTIONS = Object.freeze([
   "gpt-realtime",
@@ -57,15 +98,206 @@ export const BROWSER_PROVIDER_MODEL_FALLBACKS = Object.freeze({
   openai: ["gpt-5-mini"]
 });
 
-const DEFAULT_SETTINGS_LEGACY_VIEW = decorateRuntimeSettings(
-  JSON.parse(JSON.stringify(DEFAULT_SETTINGS))
-);
+function buildSettingsFormView(settings) {
+  const source = settings || DEFAULT_SETTINGS;
+  const agentStack = getAgentStackSettings(source);
+  const prompting = getPromptingSettings(source);
+  const activity = getActivitySettings(source);
+  const permissions = getReplyPermissions(source);
+  const textThoughtLoop = getTextInitiativeSettings(source);
+  const memory = getMemorySettings(source);
+  const directives = getDirectiveSettings(source);
+  const automations = getAutomationsSettings(source);
+  const sessions = getSessionOrchestrationSettings(source);
+  const followup = getFollowupSettings(source);
+  const followupBinding = getResolvedFollowupBinding(source);
+  const orchestrator = getResolvedOrchestratorBinding(source);
+  const memoryBinding = getResolvedMemoryBinding(source);
+  const research = getResearchRuntimeConfig(source);
+  const browser = getBrowserRuntimeConfig(source);
+  const browserExecution = browser.localBrowserAgent?.execution;
+  const browserBinding =
+    browserExecution?.mode === "dedicated_model" && browserExecution.model
+      ? browserExecution.model
+      : orchestrator;
+  const devPermissions = getDevTaskPermissions(source);
+  const devTeam = getDevTeamRuntimeConfig(source);
+  const resolvedStack = resolveAgentStack(source);
+  const vision = getVisionSettings(source);
+  const visionBinding = getResolvedVisionBinding(source);
+  const videoContext = getVideoContextSettings(source);
+  const voiceSettings = getVoiceSettings(source);
+  const transcription = getVoiceTranscriptionSettings(source);
+  const voiceChannelPolicy = getVoiceChannelPolicy(source);
+  const voiceSessionLimits = getVoiceSessionLimits(source);
+  const voiceConversation = getVoiceConversationPolicy(source);
+  const voiceAdmission = getVoiceAdmissionSettings(source);
+  const voiceInitiative = getVoiceInitiativeSettings(source);
+  const voiceInitiativeBinding = getResolvedVoiceInitiativeBinding(source);
+  const voiceRuntime = getVoiceRuntimeConfig(source);
+  const voiceGenerationBinding = getResolvedVoiceGenerationBinding(source);
+  const voiceClassifierBinding = getResolvedVoiceAdmissionClassifierBinding(source);
+  const voiceStreamWatch = getVoiceStreamWatchSettings(source);
+  const voiceSoundboard = getVoiceSoundboardSettings(source);
+  const startup = getStartupSettings(source);
+  const discovery = getDiscoverySettings(source);
+  const codingWorkers = Array.isArray(resolvedStack.codingWorkers) ? resolvedStack.codingWorkers : [];
+  const codeAgentProvider =
+    codingWorkers.length === 1
+      ? codingWorkers[0] === "codex"
+        ? "codex"
+        : "claude-code"
+      : "auto";
 
-export function settingsToForm(settings) {
-  const defaults = DEFAULT_SETTINGS_LEGACY_VIEW;
-  const resolved = decorateRuntimeSettings(
-    settings ? JSON.parse(JSON.stringify(settings)) : JSON.parse(JSON.stringify(DEFAULT_SETTINGS))
-  );
+  return {
+    agentStack,
+    botName: getBotName(source),
+    botNameAliases: getBotNameAliases(source),
+    persona: getPersonaSettings(source),
+    prompt: {
+      capabilityHonestyLine: prompting.global.capabilityHonestyLine,
+      impossibleActionLine: prompting.global.impossibleActionLine,
+      memoryEnabledLine: prompting.global.memoryEnabledLine,
+      memoryDisabledLine: prompting.global.memoryDisabledLine,
+      skipLine: prompting.global.skipLine,
+      textGuidance: prompting.text.guidance,
+      voiceGuidance: prompting.voice.guidance,
+      voiceOperationalGuidance: prompting.voice.operationalGuidance,
+      voiceLookupBusySystemPrompt: prompting.voice.lookupBusySystemPrompt,
+      mediaPromptCraftGuidance: prompting.media.promptCraftGuidance
+    },
+    activity,
+    permissions,
+    textThoughtLoop,
+    memory,
+    adaptiveDirectives: directives,
+    automations,
+    subAgentOrchestration: sessions,
+    llm: orchestrator,
+    replyFollowupLlm: {
+      enabled: followup.enabled,
+      provider: followupBinding.provider,
+      model: followupBinding.model,
+      maxToolSteps: followup.toolBudget.maxToolSteps,
+      maxTotalToolCalls: followup.toolBudget.maxTotalToolCalls,
+      maxWebSearchCalls: followup.toolBudget.maxWebSearchCalls,
+      maxMemoryLookupCalls: followup.toolBudget.maxMemoryLookupCalls,
+      maxImageLookupCalls: followup.toolBudget.maxImageLookupCalls,
+      toolTimeoutMs: followup.toolBudget.toolTimeoutMs
+    },
+    memoryLlm: memoryBinding,
+    browser: {
+      runtime: resolvedStack.browserRuntime,
+      enabled: browser.enabled,
+      openAiComputerUseModel: String(browser.openaiComputerUse?.model || ""),
+      maxBrowseCallsPerHour: browser.localBrowserAgent.maxBrowseCallsPerHour,
+      llm: browserBinding,
+      maxStepsPerTask: browser.localBrowserAgent.maxStepsPerTask,
+      stepTimeoutMs: browser.localBrowserAgent.stepTimeoutMs,
+      sessionTimeoutMs: browser.localBrowserAgent.sessionTimeoutMs
+    },
+    codeAgent: {
+      enabled: devPermissions.allowedUserIds.length > 0 && Boolean(devTeam.codex?.enabled || devTeam.claudeCode?.enabled),
+      provider: codeAgentProvider,
+      model: String(devTeam.claudeCode?.model || ""),
+      codexModel: String(devTeam.codex?.model || ""),
+      maxTurns: Math.max(Number(devTeam.codex?.maxTurns || 0), Number(devTeam.claudeCode?.maxTurns || 0)),
+      timeoutMs: Math.max(Number(devTeam.codex?.timeoutMs || 0), Number(devTeam.claudeCode?.timeoutMs || 0)),
+      maxBufferBytes: Math.max(
+        Number(devTeam.codex?.maxBufferBytes || 0),
+        Number(devTeam.claudeCode?.maxBufferBytes || 0)
+      ),
+      defaultCwd: String(devTeam.codex?.defaultCwd || devTeam.claudeCode?.defaultCwd || ""),
+      maxTasksPerHour: Math.max(
+        Number(devTeam.codex?.maxTasksPerHour || 0),
+        Number(devTeam.claudeCode?.maxTasksPerHour || 0)
+      ),
+      maxParallelTasks: Math.max(
+        Number(devTeam.codex?.maxParallelTasks || 0),
+        Number(devTeam.claudeCode?.maxParallelTasks || 0)
+      ),
+      allowedUserIds: devPermissions.allowedUserIds
+    },
+    vision: {
+      captionEnabled: vision.enabled,
+      provider: visionBinding.provider,
+      model: visionBinding.model,
+      maxAutoIncludeImages: vision.maxAutoIncludeImages,
+      maxCaptionsPerHour: vision.maxCaptionsPerHour
+    },
+    webSearch: {
+      runtime: resolvedStack.researchRuntime,
+      enabled: research.enabled,
+      nativeUserLocation: research.openaiNativeWebSearch.userLocation,
+      nativeAllowedDomains: research.openaiNativeWebSearch.allowedDomains,
+      safeSearch: research.localExternalSearch.safeSearch,
+      maxSearchesPerHour: research.maxSearchesPerHour,
+      maxResults: research.localExternalSearch.maxResults,
+      maxPagesToRead: research.localExternalSearch.maxPagesToRead,
+      maxCharsPerPage: research.localExternalSearch.maxCharsPerPage,
+      providerOrder: research.localExternalSearch.providerOrder,
+      recencyDaysDefault: research.localExternalSearch.recencyDaysDefault,
+      maxConcurrentFetches: research.localExternalSearch.maxConcurrentFetches
+    },
+    videoContext,
+    voice: {
+      enabled: voiceSettings.enabled,
+      voiceProvider: getResolvedLegacyVoiceProvider(source),
+      replyPath: voiceConversation.replyPath,
+      ttsMode: voiceConversation.ttsMode,
+      asrLanguageMode: transcription.languageMode,
+      asrLanguageHint: transcription.languageHint,
+      allowNsfwHumor: voiceConversation.allowNsfwHumor,
+      intentConfidenceThreshold: voiceAdmission.intentConfidenceThreshold,
+      maxSessionMinutes: voiceSessionLimits.maxSessionMinutes,
+      inactivityLeaveSeconds: voiceSessionLimits.inactivityLeaveSeconds,
+      maxSessionsPerDay: voiceSessionLimits.maxSessionsPerDay,
+      replyEagerness: voiceConversation.replyEagerness,
+      commandOnlyMode: voiceConversation.commandOnlyMode,
+      thoughtEngine: {
+        enabled: voiceInitiative.enabled,
+        provider: voiceInitiativeBinding.provider,
+        model: voiceInitiativeBinding.model,
+        temperature: voiceInitiativeBinding.temperature,
+        eagerness: voiceInitiative.eagerness,
+        minSilenceSeconds: voiceInitiative.minSilenceSeconds,
+        minSecondsBetweenThoughts: voiceInitiative.minSecondsBetweenThoughts
+      },
+      replyDecisionLlm: {
+        realtimeAdmissionMode: voiceAdmission.mode,
+        musicWakeLatchSeconds: voiceAdmission.musicWakeLatchSeconds,
+        provider: voiceClassifierBinding?.provider || orchestrator.provider,
+        model: voiceClassifierBinding?.model || orchestrator.model
+      },
+      generationLlm: {
+        useTextModel: voiceRuntime.legacyVoiceStack?.generation?.mode !== "dedicated_model",
+        provider: voiceGenerationBinding.provider,
+        model: voiceGenerationBinding.model
+      },
+      allowedVoiceChannelIds: voiceChannelPolicy.allowedChannelIds,
+      blockedVoiceChannelIds: voiceChannelPolicy.blockedChannelIds,
+      blockedVoiceUserIds: voiceChannelPolicy.blockedUserIds,
+      xai: voiceRuntime.legacyVoiceStack.xai,
+      openaiRealtime: voiceRuntime.openaiRealtime,
+      elevenLabsRealtime: voiceRuntime.legacyVoiceStack.elevenLabsRealtime,
+      geminiRealtime: voiceRuntime.legacyVoiceStack.geminiRealtime,
+      sttPipeline: voiceRuntime.legacyVoiceStack.sttPipeline,
+      streamWatch: voiceStreamWatch,
+      soundboard: voiceSoundboard,
+      asrEnabled: transcription.enabled,
+      textOnlyMode: voiceConversation.textOnlyMode,
+      operationalMessages: voiceConversation.operationalMessages
+    },
+    startup,
+    discovery
+  };
+}
+
+const DEFAULT_SETTINGS_LEGACY_VIEW = buildSettingsFormView(DEFAULT_SETTINGS);
+
+export function settingsToForm(settings): any {
+  const defaults: any = DEFAULT_SETTINGS_LEGACY_VIEW;
+  const resolved: any = buildSettingsFormView(settings || DEFAULT_SETTINGS);
   const defaultPrompt = defaults.prompt;
   const defaultActivity = defaults.activity;
   const defaultPermissions = defaults.permissions;
@@ -87,7 +319,7 @@ export function settingsToForm(settings) {
   const defaultStartup = defaults.startup;
   const defaultTextThoughtLoop = defaults.textThoughtLoop;
   const defaultDiscovery = defaults.discovery;
-  const activity = resolved?.activity ?? {};
+  const activity: any = resolved?.activity ?? {};
   const selectedVoiceProvider = resolved?.voice?.voiceProvider ?? defaultVoice.voiceProvider;
   return {
     stackPreset: resolved?.agentStack?.preset ?? DEFAULT_SETTINGS.agentStack.preset,
@@ -163,6 +395,10 @@ export function settingsToForm(settings) {
     temperature: resolved?.llm?.temperature ?? defaultLlm.temperature,
     maxTokens: resolved?.llm?.maxOutputTokens ?? defaultLlm.maxOutputTokens,
     browserEnabled: resolved?.browser?.enabled ?? defaults.browser.enabled,
+    stackResolvedResearchRuntime: resolved?.webSearch?.runtime ?? defaultWebSearch.runtime,
+    stackResolvedBrowserRuntime: resolved?.browser?.runtime ?? defaults.browser.runtime,
+    browserOpenAiComputerUseModel:
+      resolved?.browser?.openAiComputerUseModel ?? defaults.browser.openAiComputerUseModel,
     browserMaxPerHour: resolved?.browser?.maxBrowseCallsPerHour ?? defaults.browser.maxBrowseCallsPerHour,
     browserLlmProvider: resolved?.browser?.llm?.provider ?? defaults.browser.llm.provider,
     browserLlmModel: resolved?.browser?.llm?.model ?? defaults.browser.llm.model,
@@ -186,6 +422,9 @@ export function settingsToForm(settings) {
     visionMaxAutoIncludeImages: resolved?.vision?.maxAutoIncludeImages ?? defaultVision.maxAutoIncludeImages,
     visionMaxCaptionsPerHour: resolved?.vision?.maxCaptionsPerHour ?? defaultVision.maxCaptionsPerHour,
     webSearchEnabled: resolved?.webSearch?.enabled ?? defaultWebSearch.enabled,
+    webSearchOpenAiUserLocation: resolved?.webSearch?.nativeUserLocation ?? defaultWebSearch.nativeUserLocation,
+    webSearchOpenAiAllowedDomains:
+      formatLineList(resolved?.webSearch?.nativeAllowedDomains ?? defaultWebSearch.nativeAllowedDomains),
     webSearchSafeMode: resolved?.webSearch?.safeSearch ?? defaultWebSearch.safeSearch,
     webSearchPerHour: resolved?.webSearch?.maxSearchesPerHour ?? defaultWebSearch.maxSearchesPerHour,
     webSearchMaxResults: resolved?.webSearch?.maxResults ?? defaultWebSearch.maxResults,
@@ -204,7 +443,7 @@ export function settingsToForm(settings) {
     videoContextMaxAsrSeconds: resolved?.videoContext?.maxAsrSeconds ?? defaultVideoContext.maxAsrSeconds,
     voiceEnabled: resolved?.voice?.enabled ?? defaultVoice.enabled,
     voiceProvider: selectedVoiceProvider,
-    voiceReplyPath: resolved?.voice?.replyPath ?? (resolved?.voice?.realtimeReplyStrategy === "native" ? "native" : "bridge"),
+    voiceReplyPath: resolved?.voice?.replyPath ?? defaultVoice.replyPath,
     voiceTtsMode: resolved?.voice?.ttsMode ?? defaultVoice.ttsMode ?? "realtime",
     voiceAsrLanguageMode: resolved?.voice?.asrLanguageMode ?? defaultVoice.asrLanguageMode,
     voiceAsrLanguageHint: resolved?.voice?.asrLanguageHint ?? defaultVoice.asrLanguageHint,
@@ -314,7 +553,7 @@ export function settingsToForm(settings) {
     voiceOperationalMessages: resolved?.voice?.operationalMessages ?? defaultVoice.operationalMessages ?? "all",
     maxMessages: resolved?.permissions?.maxMessagesPerHour ?? defaultPermissions.maxMessagesPerHour,
     maxReactions: resolved?.permissions?.maxReactionsPerHour ?? defaultPermissions.maxReactionsPerHour,
-    catchupEnabled: resolved?.startup?.catchupEnabled !== false,
+    catchupEnabled: Boolean(resolved?.startup?.catchupEnabled ?? true),
     catchupLookbackHours: resolved?.startup?.catchupLookbackHours ?? defaultStartup.catchupLookbackHours,
     catchupMaxMessages: resolved?.startup?.catchupMaxMessagesPerChannel ?? defaultStartup.catchupMaxMessagesPerChannel,
     catchupMaxReplies: resolved?.startup?.maxCatchupRepliesPerChannel ?? defaultStartup.maxCatchupRepliesPerChannel,
@@ -324,7 +563,7 @@ export function settingsToForm(settings) {
     discoveryMinMinutes:
       resolved?.discovery?.minMinutesBetweenPosts ?? defaultDiscovery.minMinutesBetweenPosts,
     discoveryPacingMode:
-      resolved?.discovery?.pacingMode === "spontaneous" ? "spontaneous" : "even",
+      String(resolved?.discovery?.pacingMode || defaultDiscovery.pacingMode) === "spontaneous" ? "spontaneous" : "even",
     discoverySpontaneity:
       resolved?.discovery?.spontaneity ?? defaultDiscovery.spontaneity,
     discoveryStartupPost:
@@ -352,13 +591,14 @@ export function settingsToForm(settings) {
       formatLineList(resolved?.discovery?.allowedImageModels ?? []),
     discoveryAllowedVideoModels:
       formatLineList(resolved?.discovery?.allowedVideoModels ?? []),
-    discoveryExternalEnabled:
-      resolved?.discovery?.linkChancePercent > 0 ||
-      resolved?.discovery?.sources?.reddit === true ||
-      resolved?.discovery?.sources?.hackerNews === true ||
-      resolved?.discovery?.sources?.youtube === true ||
-      resolved?.discovery?.sources?.rss === true ||
-      resolved?.discovery?.sources?.x === true,
+    discoveryExternalEnabled: Boolean(
+      Number(resolved?.discovery?.linkChancePercent) > 0 ||
+      resolved?.discovery?.sources?.reddit ||
+      resolved?.discovery?.sources?.hackerNews ||
+      resolved?.discovery?.sources?.youtube ||
+      resolved?.discovery?.sources?.rss ||
+      resolved?.discovery?.sources?.x
+    ),
     discoveryLinkChance:
       resolved?.discovery?.linkChancePercent ?? defaultDiscovery.linkChancePercent,
     discoveryMaxLinks:
@@ -520,6 +760,10 @@ export function formToSettingsPatch(form) {
         research: {
           enabled: form.webSearchEnabled,
           maxSearchesPerHour: Number(form.webSearchPerHour),
+          openaiNativeWebSearch: {
+            userLocation: String(form.webSearchOpenAiUserLocation || "").trim(),
+            allowedDomains: parseUniqueList(form.webSearchOpenAiAllowedDomains)
+          },
           localExternalSearch: {
             safeSearch: form.webSearchSafeMode,
             providerOrder: parseUniqueList(form.webSearchProviderOrder),
@@ -532,6 +776,9 @@ export function formToSettingsPatch(form) {
         },
         browser: {
           enabled: form.browserEnabled,
+          openaiComputerUse: {
+            model: String(form.browserOpenAiComputerUseModel || "computer-use-preview").trim()
+          },
           localBrowserAgent: {
             execution: {
               mode: "dedicated_model",

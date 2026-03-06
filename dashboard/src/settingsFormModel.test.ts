@@ -33,14 +33,14 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   }));
 
   assert.equal(form.botName, "clanker conk");
-  assert.equal(form.botNameAliases, "clank, conk, clank");
+  assert.equal(form.botNameAliases, "clank, conk");
   assert.equal(form.personaFlavor, "chaotic but kind");
-  assert.equal(form.personaHardLimits, "no hate\nno hate\nkeep it fun");
+  assert.equal(form.personaHardLimits, "no hate\nkeep it fun");
   assert.equal(form.stackPreset, "openai_native");
   assert.equal(form.stackAdvancedOverridesEnabled, true);
   assert.equal(form.provider, "openai");
   assert.equal(form.model, "claude-haiku-4-5");
-  assert.equal(form.voiceGenerationLlmUseTextModel, true);
+  assert.equal(form.voiceGenerationLlmUseTextModel, false);
   assert.equal(form.voiceGenerationLlmProvider, "anthropic");
   assert.equal(form.voiceGenerationLlmModel, "claude-sonnet-4-6");
   assert.equal(form.replyFollowupMaxToolSteps, 2);
@@ -53,7 +53,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.browserLlmModel, "claude-sonnet-4-5-20250929");
   assert.equal(form.codeAgentProvider, "claude-code");
   assert.equal(form.codeAgentModel, "sonnet");
-  assert.equal(form.codeAgentCodexModel, "codex-mini-latest");
+  assert.equal(form.codeAgentCodexModel, "gpt-5-codex");
   assert.equal(form.memoryReflectionStrategy, "two_pass_extract_then_main");
   assert.equal(form.adaptiveDirectivesEnabled, true);
   assert.equal(form.automationsEnabled, true);
@@ -157,17 +157,25 @@ test("settingsFormModel converts settings to form defaults and back to normalize
 
 test("settingsToForm preserves explicit empty prompt overrides", () => {
   const form = settingsToForm({
-    prompt: {
-      capabilityHonestyLine: "",
-      impossibleActionLine: "",
-      memoryEnabledLine: "",
-      memoryDisabledLine: "",
-      skipLine: "",
-      textGuidance: [],
-      voiceGuidance: [],
-      voiceOperationalGuidance: [],
-      voiceLookupBusySystemPrompt: "",
-      mediaPromptCraftGuidance: ""
+    prompting: {
+      global: {
+        capabilityHonestyLine: "",
+        impossibleActionLine: "",
+        memoryEnabledLine: "",
+        memoryDisabledLine: "",
+        skipLine: ""
+      },
+      text: {
+        guidance: []
+      },
+      voice: {
+        guidance: [],
+        operationalGuidance: [],
+        lookupBusySystemPrompt: ""
+      },
+      media: {
+        promptCraftGuidance: ""
+      }
     }
   });
 
@@ -212,7 +220,7 @@ test("resolveProviderModelOptions merges catalog values with provider fallback d
     },
     "openai"
   );
-  assert.deepEqual(openai, ["claude-haiku-4-5", "gpt-5.2"]);
+  assert.deepEqual(openai, ["claude-haiku-4-5", "gpt-5.2", "gpt-5-mini", "gpt-5", "gpt-4.1-mini"]);
 
   const anthropic = resolveProviderModelOptions(
     {
@@ -220,7 +228,7 @@ test("resolveProviderModelOptions merges catalog values with provider fallback d
     },
     "anthropic"
   );
-  assert.deepEqual(anthropic, ["claude-haiku-4-5"]);
+  assert.deepEqual(anthropic, ["claude-haiku-4-5", "claude-sonnet-4-6"]);
 });
 
 test("resolveBrowserProviderModelOptions merges catalog values with browser defaults", () => {

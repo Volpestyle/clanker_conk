@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
+import { DEFAULT_SETTINGS, PROVIDER_MODEL_FALLBACKS } from "../settings/settingsSchema.ts";
 import { normalizeBoundedStringList } from "../settings/listNormalization.ts";
 import { normalizeProviderOrder } from "../search.ts";
 import { clamp, deepMerge } from "../utils.ts";
@@ -42,6 +42,19 @@ function normalizeInt(value: unknown, fallback: number, min: number, max: number
   return clamp(parsed, min, max);
 }
 
+function fallbackModelForProvider(
+  provider: string,
+  fallbackProvider: string,
+  fallbackModel: string
+) {
+  if (provider === fallbackProvider) {
+    return normalizeString(fallbackModel, fallbackModel, 120) || fallbackModel;
+  }
+  const providerDefaults = PROVIDER_MODEL_FALLBACKS[provider as keyof typeof PROVIDER_MODEL_FALLBACKS];
+  const providerFallback = Array.isArray(providerDefaults) ? providerDefaults[0] : fallbackModel;
+  return normalizeString(providerFallback, fallbackModel, 120) || fallbackModel;
+}
+
 function normalizeModelBinding(
   binding: unknown,
   fallbackProvider: string,
@@ -49,11 +62,135 @@ function normalizeModelBinding(
 ) {
   const source = isRecord(binding) ? binding : {};
   const provider = normalizeLlmProvider(source.provider, fallbackProvider);
-  const model = normalizeString(source.model, fallbackModel, 120) || fallbackModel;
+  const modelFallback = fallbackModelForProvider(provider, fallbackProvider, fallbackModel);
+  const model = normalizeString(source.model, modelFallback, 120) || modelFallback;
   return {
     provider,
     model
   };
+}
+
+function normalizeBrowserProvider(value: unknown, fallback = "anthropic") {
+  const provider = normalizeLlmProvider(value, fallback);
+  return provider === "openai" || provider === "anthropic" ? provider : fallback;
+}
+
+function normalizeBrowserExecutionPolicy(policy: unknown) {
+  const normalized = normalizeExecutionPolicy(
+    policy,
+    "anthropic",
+    "claude-sonnet-4-5-20250929"
+  ) as Record<string, unknown>;
+  if (normalized.mode !== "dedicated_model") {
+    return normalized;
+  }
+  const rawModel = isRecord(normalized.model) ? normalized.model : {};
+  const rawProvider = normalizeLlmProvider(rawModel.provider, "anthropic");
+  const provider = normalizeBrowserProvider(rawProvider, "anthropic");
+  const fallbackModel =
+    provider === "openai"
+      ? "gpt-5-mini"
+      : "claude-sonnet-4-5-20250929";
+  return {
+    ...normalized,
+    model: {
+      provider,
+      model:
+        normalizeString(rawProvider === provider ? rawModel.model : "", fallbackModel, 120) ||
+        fallbackModel
+    }
+  };
+}
+
+function normalizeHttpBaseUrl(value: unknown, fallback: string, maxLen = 300) {
+  const candidate = normalizeString(value, fallback, maxLen) || fallback;
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return fallback;
+    }
+    return `${parsed.protocol}//${parsed.host}`;
+  } catch {
+    return fallback;
+  }
+}
+
+function normalizeDiscoveryRssFeeds(value: unknown, fallback: readonly string[]) {
+  return normalizeStringList(value, 50, 500, fallback).filter((entry) => {
+    try {
+      const parsed = new URL(entry);
+      return parsed.protocol === "https:" || parsed.protocol === "http:";
+    } catch {
+      return false;
+    }
+  });
+}
+
+function normalizeXHandles(value: unknown) {
+  return normalizeStringList(value, 50, 120)
+    .map((entry) => entry.replace(/^@+/, "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function normalizeSubreddits(value: unknown, fallback: readonly string[]) {
+  return normalizeStringList(value, 50, 80, fallback)
+    .map((entry) => entry.replace(/^r\//i, "").trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function normalizeLanguageHint(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 20)
+    .toLowerCase()
+    .replace(/_/g, "-");
+  if (!/^[a-z]{2,3}(?:-[a-z0-9]{2,8})*$/.test(normalized)) {
+    return fallback;
+  }
+  return normalized || fallback;
+}
+
+function normalizeOpenAiRealtimeAudioFormat(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 40).toLowerCase();
+  if (normalized === "audio/pcm" || normalized === "pcm16") return "pcm16";
+  if (normalized === "g711_ulaw" || normalized === "g711_alaw") return normalized;
+  return fallback;
+}
+
+function normalizeOpenAiRealtimeTranscriptionMethod(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 40).toLowerCase();
+  if (normalized === "file_wav") return "file_wav";
+  if (normalized === "realtime_bridge") return "realtime_bridge";
+  return fallback;
+}
+
+function normalizeReplyPath(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 20).toLowerCase();
+  if (normalized === "native") return "native";
+  if (normalized === "brain") return "brain";
+  if (normalized === "bridge") return "bridge";
+  return fallback;
+}
+
+function normalizeOperationalMessages(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 40).toLowerCase();
+  if (normalized === "all") return "all";
+  if (normalized === "essential" || normalized === "important_only") return "essential";
+  if (normalized === "minimal") return "minimal";
+  if (normalized === "none" || normalized === "off") return "none";
+  return fallback;
+}
+
+function normalizeStreamWatchCommentaryPath(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 40).toLowerCase();
+  if (normalized === "anthropic_keyframes") return "anthropic_keyframes";
+  if (normalized === "auto") return "auto";
+  return fallback;
+}
+
+function normalizeReflectionStrategy(value: unknown, fallback: string) {
+  const normalized = normalizeString(value, fallback, 64).toLowerCase();
+  if (normalized === "one_pass_main") return "one_pass_main";
+  if (normalized === "two_pass_extract_then_main") return "two_pass_extract_then_main";
+  return fallback;
 }
 
 function normalizeExecutionPolicy(
@@ -138,7 +275,13 @@ function normalizeVoiceAdmissionMode(value: unknown, fallback: string) {
   const normalized = normalizeString(value, fallback, 40).toLowerCase();
   if (normalized === "deterministic_only") return "deterministic_only";
   if (normalized === "classifier_gate" || normalized === "hard_classifier") return "classifier_gate";
-  if (normalized === "generation_decides" || normalized === "generation") return "generation_decides";
+  if (
+    normalized === "generation_decides" ||
+    normalized === "generation_only" ||
+    normalized === "generation"
+  ) {
+    return "generation_decides";
+  }
   if (normalized === "adaptive") return "adaptive";
   return fallback;
 }
@@ -458,7 +601,10 @@ function migrateLegacySettings(raw: Record<string, unknown>) {
         operationalMessages: voice.operationalMessages
       },
       admission: {
-        mode: voiceReplyDecisionLlm.realtimeAdmissionMode,
+        mode:
+          voiceReplyDecisionLlm.enabled === false
+            ? "generation_decides"
+            : voiceReplyDecisionLlm.realtimeAdmissionMode,
         intentConfidenceThreshold: voice.intentConfidenceThreshold,
         musicWakeLatchSeconds: voiceReplyDecisionLlm.musicWakeLatchSeconds
       },
@@ -523,6 +669,11 @@ export function normalizeSettings(raw: unknown) {
   )
     ? presetRaw
     : DEFAULT_SETTINGS.agentStack.preset;
+  const orchestratorOverride = normalizeModelBinding(
+    (agentStack.overrides as any)?.orchestrator,
+    "openai",
+    "gpt-5"
+  );
 
   const normalized = {
     identity: {
@@ -685,8 +836,8 @@ export function normalizeSettings(raw: unknown) {
         ),
         execution: normalizeExecutionPolicy(
           (interaction.followup as any)?.execution,
-          "anthropic",
-          "claude-haiku-4-5"
+          orchestratorOverride.provider,
+          orchestratorOverride.model
         ),
         toolBudget: {
           maxToolSteps: normalizeInt(
@@ -774,11 +925,7 @@ export function normalizeSettings(raw: unknown) {
       ),
       overrides: {
         ...(isRecord(agentStack.overrides) ? agentStack.overrides : {}),
-        orchestrator: normalizeModelBinding(
-          (agentStack.overrides as any)?.orchestrator,
-          "openai",
-          "gpt-5"
-        ),
+        orchestrator: orchestratorOverride,
         ...(isRecord((agentStack.overrides as any)?.devTeam)
           ? {
               devTeam: {
@@ -880,10 +1027,8 @@ export function normalizeSettings(raw: unknown) {
             )
           },
           localBrowserAgent: {
-            execution: normalizeExecutionPolicy(
-              (agentStack.runtimeConfig as any)?.browser?.localBrowserAgent?.execution,
-              "anthropic",
-              "claude-sonnet-4-5-20250929"
+            execution: normalizeBrowserExecutionPolicy(
+              (agentStack.runtimeConfig as any)?.browser?.localBrowserAgent?.execution
             ),
             maxBrowseCallsPerHour: normalizeInt(
               (agentStack.runtimeConfig as any)?.browser?.localBrowserAgent?.maxBrowseCallsPerHour,
@@ -924,19 +1069,24 @@ export function normalizeSettings(raw: unknown) {
               120
             ),
             inputAudioFormat: normalizeString(
-              (agentStack.runtimeConfig as any)?.voice?.openaiRealtime?.inputAudioFormat,
+              normalizeOpenAiRealtimeAudioFormat(
+                (agentStack.runtimeConfig as any)?.voice?.openaiRealtime?.inputAudioFormat,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.inputAudioFormat
+              ),
               DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.inputAudioFormat,
               120
             ),
             outputAudioFormat: normalizeString(
-              (agentStack.runtimeConfig as any)?.voice?.openaiRealtime?.outputAudioFormat,
+              normalizeOpenAiRealtimeAudioFormat(
+                (agentStack.runtimeConfig as any)?.voice?.openaiRealtime?.outputAudioFormat,
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.outputAudioFormat
+              ),
               DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.outputAudioFormat,
               120
             ),
-            transcriptionMethod: normalizeString(
+            transcriptionMethod: normalizeOpenAiRealtimeTranscriptionMethod(
               (agentStack.runtimeConfig as any)?.voice?.openaiRealtime?.transcriptionMethod,
-              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod,
-              40
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod
             ),
             inputTranscriptionModel: normalizeOpenAiRealtimeTranscriptionModel(
               (agentStack.runtimeConfig as any)?.voice?.openaiRealtime?.inputTranscriptionModel,
@@ -986,10 +1136,9 @@ export function normalizeSettings(raw: unknown) {
                 DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.voiceId,
                 200
               ),
-              apiBaseUrl: normalizeString(
+              apiBaseUrl: normalizeHttpBaseUrl(
                 (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.elevenLabsRealtime?.apiBaseUrl,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.apiBaseUrl,
-                300
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.elevenLabsRealtime.apiBaseUrl
               ),
               inputSampleRateHz: normalizeInt(
                 (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.elevenLabsRealtime?.inputSampleRateHz,
@@ -1015,10 +1164,9 @@ export function normalizeSettings(raw: unknown) {
                 DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.voice,
                 120
               ),
-              apiBaseUrl: normalizeString(
+              apiBaseUrl: normalizeHttpBaseUrl(
                 (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.geminiRealtime?.apiBaseUrl,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.apiBaseUrl,
-                300
+                DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.legacyVoiceStack.geminiRealtime.apiBaseUrl
               ),
               inputSampleRateHz: normalizeInt(
                 (agentStack.runtimeConfig as any)?.voice?.legacyVoiceStack?.geminiRealtime?.inputSampleRateHz,
@@ -1074,11 +1222,12 @@ export function normalizeSettings(raw: unknown) {
               (agentStack.runtimeConfig as any)?.devTeam?.codex?.enabled,
               DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.enabled
             ),
-            model: normalizeString(
+            model:
+              normalizeString(
               (agentStack.runtimeConfig as any)?.devTeam?.codex?.model,
               DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.model,
               120
-            ),
+              ) || DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.model,
             maxTurns: normalizeInt(
               (agentStack.runtimeConfig as any)?.devTeam?.codex?.maxTurns,
               DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.maxTurns,
@@ -1120,11 +1269,12 @@ export function normalizeSettings(raw: unknown) {
               (agentStack.runtimeConfig as any)?.devTeam?.claudeCode?.enabled,
               DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.enabled
             ),
-            model: normalizeString(
+            model:
+              normalizeString(
               (agentStack.runtimeConfig as any)?.devTeam?.claudeCode?.model,
               DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.model,
               120
-            ),
+              ) || DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.model,
             maxTurns: normalizeInt(
               (agentStack.runtimeConfig as any)?.devTeam?.claudeCode?.maxTurns,
               DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.maxTurns,
@@ -1197,10 +1347,9 @@ export function normalizeSettings(raw: unknown) {
           (memory.reflection as any)?.enabled,
           DEFAULT_SETTINGS.memory.reflection.enabled
         ),
-        strategy: normalizeString(
+        strategy: normalizeReflectionStrategy(
           (memory.reflection as any)?.strategy,
-          DEFAULT_SETTINGS.memory.reflection.strategy,
-          120
+          DEFAULT_SETTINGS.memory.reflection.strategy
         ),
         hour: normalizeInt(
           (memory.reflection as any)?.hour,
@@ -1451,24 +1600,19 @@ export function normalizeSettings(raw: unknown) {
           DEFAULT_SETTINGS.initiative.discovery.allowNsfw
         ),
         preferredTopics: normalizeStringList((initiative.discovery as any)?.preferredTopics, 50, 120),
-        redditSubreddits: normalizeStringList(
+        redditSubreddits: normalizeSubreddits(
           (initiative.discovery as any)?.redditSubreddits,
-          50,
-          80,
           DEFAULT_SETTINGS.initiative.discovery.redditSubreddits as unknown as string[]
         ),
         youtubeChannelIds: normalizeStringList((initiative.discovery as any)?.youtubeChannelIds, 50, 120),
-        rssFeeds: normalizeStringList(
+        rssFeeds: normalizeDiscoveryRssFeeds(
           (initiative.discovery as any)?.rssFeeds,
-          50,
-          500,
           DEFAULT_SETTINGS.initiative.discovery.rssFeeds as unknown as string[]
         ),
-        xHandles: normalizeStringList((initiative.discovery as any)?.xHandles, 50, 120),
-        xNitterBaseUrl: normalizeString(
+        xHandles: normalizeXHandles((initiative.discovery as any)?.xHandles),
+        xNitterBaseUrl: normalizeHttpBaseUrl(
           (initiative.discovery as any)?.xNitterBaseUrl,
-          DEFAULT_SETTINGS.initiative.discovery.xNitterBaseUrl,
-          300
+          DEFAULT_SETTINGS.initiative.discovery.xNitterBaseUrl
         ),
         sources: normalizeDiscoverySourceMap((initiative.discovery as any)?.sources)
       }
@@ -1488,10 +1632,9 @@ export function normalizeSettings(raw: unknown) {
           ).toLowerCase() === "fixed"
             ? "fixed"
             : "auto",
-        languageHint: normalizeString(
+        languageHint: normalizeLanguageHint(
           (voice.transcription as any)?.languageHint,
-          DEFAULT_SETTINGS.voice.transcription.languageHint,
-          20
+          DEFAULT_SETTINGS.voice.transcription.languageHint
         )
       },
       channelPolicy: {
@@ -1544,14 +1687,10 @@ export function normalizeSettings(raw: unknown) {
           (voice.conversationPolicy as any)?.textOnlyMode,
           DEFAULT_SETTINGS.voice.conversationPolicy.textOnlyMode
         ),
-        replyPath:
-          normalizeString(
-            (voice.conversationPolicy as any)?.replyPath,
-            DEFAULT_SETTINGS.voice.conversationPolicy.replyPath,
-            20
-          ).toLowerCase() === "native"
-            ? "native"
-            : "bridge",
+        replyPath: normalizeReplyPath(
+          (voice.conversationPolicy as any)?.replyPath,
+          DEFAULT_SETTINGS.voice.conversationPolicy.replyPath
+        ),
         ttsMode:
           normalizeString(
             (voice.conversationPolicy as any)?.ttsMode,
@@ -1560,20 +1699,10 @@ export function normalizeSettings(raw: unknown) {
           ).toLowerCase() === "api"
             ? "api"
             : "realtime",
-        operationalMessages:
-          normalizeString(
-            (voice.conversationPolicy as any)?.operationalMessages,
-            DEFAULT_SETTINGS.voice.conversationPolicy.operationalMessages,
-            40
-          ).toLowerCase() === "important_only"
-            ? "important_only"
-            : normalizeString(
-                (voice.conversationPolicy as any)?.operationalMessages,
-                DEFAULT_SETTINGS.voice.conversationPolicy.operationalMessages,
-                40
-              ).toLowerCase() === "off"
-              ? "off"
-              : "all"
+        operationalMessages: normalizeOperationalMessages(
+          (voice.conversationPolicy as any)?.operationalMessages,
+          DEFAULT_SETTINGS.voice.conversationPolicy.operationalMessages
+        )
       },
       admission: {
         mode: normalizeVoiceAdmissionMode(
@@ -1607,30 +1736,29 @@ export function normalizeSettings(raw: unknown) {
         minCommentaryIntervalSeconds: normalizeInt(
           (voice.streamWatch as any)?.minCommentaryIntervalSeconds,
           DEFAULT_SETTINGS.voice.streamWatch.minCommentaryIntervalSeconds,
-          1,
+          3,
           120
         ),
         maxFramesPerMinute: normalizeInt(
           (voice.streamWatch as any)?.maxFramesPerMinute,
           DEFAULT_SETTINGS.voice.streamWatch.maxFramesPerMinute,
-          1,
+          6,
           600
         ),
         maxFrameBytes: normalizeInt(
           (voice.streamWatch as any)?.maxFrameBytes,
           DEFAULT_SETTINGS.voice.streamWatch.maxFrameBytes,
-          10_000,
-          5_000_000
+          50_000,
+          4_000_000
         ),
-        commentaryPath: normalizeString(
+        commentaryPath: normalizeStreamWatchCommentaryPath(
           (voice.streamWatch as any)?.commentaryPath,
-          DEFAULT_SETTINGS.voice.streamWatch.commentaryPath,
-          40
+          DEFAULT_SETTINGS.voice.streamWatch.commentaryPath
         ),
         keyframeIntervalMs: normalizeInt(
           (voice.streamWatch as any)?.keyframeIntervalMs,
           DEFAULT_SETTINGS.voice.streamWatch.keyframeIntervalMs,
-          100,
+          250,
           10_000
         ),
         autonomousCommentaryEnabled: normalizeBoolean(
@@ -1651,12 +1779,12 @@ export function normalizeSettings(raw: unknown) {
           (voice.streamWatch as any)?.brainContextMaxEntries,
           DEFAULT_SETTINGS.voice.streamWatch.brainContextMaxEntries,
           1,
-          32
+          24
         ),
         brainContextPrompt: normalizePromptBlock(
           (voice.streamWatch as any)?.brainContextPrompt,
           DEFAULT_SETTINGS.voice.streamWatch.brainContextPrompt,
-          4_000
+          420
         ),
         sharePageMaxWidthPx: normalizeInt(
           (voice.streamWatch as any)?.sharePageMaxWidthPx,

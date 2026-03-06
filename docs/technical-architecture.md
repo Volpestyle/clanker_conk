@@ -15,7 +15,6 @@ Core runtime:
 - `src/bot/*`: extracted bot domains (`automationControl`, `discoverySchedule`, `queueGateway`, `replyAdmission`, `replyFollowup`, `startupCatchup`, `voiceReplies`).
 - `src/settings/settingsSchema.ts`: canonical persisted settings schema.
 - `src/settings/agentStack.ts`: preset resolution + capability/runtime accessors (`research`, `browser`, `voice`, `devTeam`, orchestrator bindings).
-- `src/settings/runtimeCompat.ts`: internal read adapter for remaining runtime surfaces that still expect legacy field names.
 - `src/llm.ts`: model provider abstraction (OpenAI, Anthropic, xAI/Grok, or Claude Code), usage + cost logging, embeddings, image/video generation, ASR, and TTS.
 - `src/llmClaudeCode.ts`: Claude Code CLI invocation/parsing helpers used by `LLMService`.
 - `src/llmCodex.ts`: OpenAI Responses/Codex integration used by the code-agent runtime.
@@ -38,6 +37,7 @@ Agents:
 
 Tool definitions:
 - `src/tools/browserTools.ts`: browser tool schemas + execution wrappers for the browse agent.
+- `src/tools/openAiComputerUseRuntime.ts`: OpenAI computer-use sub-runtime that drives the browser manager when the resolved browser runtime is `openai_computer_use`.
 - `src/tools/replyTools.ts`: tool schemas available to the text chat brain (`conversation_search`, web search, memory, image lookup, open-article lookup, etc.).
 - `src/voice/voiceToolCalls.ts`: voice tool definitions + execution handlers for all tools available in voice sessions, including shared conversation-history recall.
 

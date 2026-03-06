@@ -79,6 +79,7 @@ type ReplyToolRuntime = {
       fetchedPages?: number;
       providerUsed?: string | null;
       providerFallbackUsed?: boolean;
+      summaryText?: string;
     }>;
     readPageSummary?: (url: string, maxChars: number) => Promise<{
       title?: string;
@@ -518,7 +519,8 @@ async function executeWebSearch(
       }
     });
 
-    if (!result.results?.length) {
+    const summary = String(result.summaryText || "").trim();
+    if (!result.results?.length && !summary) {
       return { content: `No results found for: "${query}"` };
     }
 
@@ -536,7 +538,8 @@ async function executeWebSearch(
       })
       .join("\n\n");
 
-    return { content: `Web results for "${query}":\n\n${formatted}` };
+    const summaryBlock = summary ? `Summary:\n${summary}\n\n` : "";
+    return { content: `Web results for "${query}":\n\n${summaryBlock}${formatted}` };
   } catch (error) {
     return {
       content: `Web search failed: ${String((error as Error)?.message || error)}`,

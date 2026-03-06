@@ -16,7 +16,7 @@ type CapabilityExecutionPolicy = {
 
 const PRESET_DEFAULTS = {
   openai_native: {
-    harness: "internal",
+    harness: "openai_agents",
     orchestrator: {
       provider: "openai",
       model: "gpt-5"
@@ -417,6 +417,73 @@ export function getResolvedVoiceGenerationBinding(settings: unknown) {
     provider: String(binding?.provider || fallback.provider),
     model: String(binding?.model || fallback.model)
   };
+}
+
+export function getResolvedBrowserTaskConfig(settings: unknown) {
+  const browserRuntime = getBrowserRuntimeConfig(settings);
+  const resolvedStack = resolveAgentStack(settings);
+  const orchestrator = getResolvedOrchestratorBinding(settings);
+  const browserExecution = browserRuntime.localBrowserAgent?.execution;
+  const browserBinding =
+    browserExecution?.mode === "dedicated_model" && browserExecution.model
+      ? browserExecution.model
+      : orchestrator;
+  return {
+    runtime: String(resolvedStack.browserRuntime || "local_browser_agent"),
+    enabled: Boolean(browserRuntime.enabled),
+    maxBrowseCallsPerHour: Number(browserRuntime.localBrowserAgent?.maxBrowseCallsPerHour) || 10,
+    maxStepsPerTask: Number(browserRuntime.localBrowserAgent?.maxStepsPerTask) || 15,
+    stepTimeoutMs: Number(browserRuntime.localBrowserAgent?.stepTimeoutMs) || 30_000,
+    sessionTimeoutMs: Number(browserRuntime.localBrowserAgent?.sessionTimeoutMs) || 300_000,
+    localAgent: {
+      provider: String(browserBinding?.provider || orchestrator.provider || "anthropic"),
+      model: String(browserBinding?.model || orchestrator.model || "claude-sonnet-4-5-20250929")
+    },
+    openaiComputerUse: {
+      model: String(browserRuntime.openaiComputerUse?.model || "computer-use-preview").trim() || "computer-use-preview"
+    }
+  };
+}
+
+export function applyOrchestratorOverrideSettings(
+  settings: unknown,
+  binding: {
+    provider?: unknown;
+    model?: unknown;
+    temperature?: unknown;
+    maxOutputTokens?: unknown;
+    reasoningEffort?: unknown;
+  }
+) {
+  const provider = String(binding?.provider || "").trim();
+  const model = String(binding?.model || "").trim();
+  const replyGenerationPatch: Record<string, unknown> = {};
+  if (binding?.temperature !== undefined) {
+    replyGenerationPatch.temperature = Number(binding.temperature);
+  }
+  if (binding?.maxOutputTokens !== undefined) {
+    replyGenerationPatch.maxOutputTokens = Number(binding.maxOutputTokens);
+  }
+  if (binding?.reasoningEffort !== undefined) {
+    replyGenerationPatch.reasoningEffort = String(binding.reasoningEffort || "").trim();
+  }
+
+  return deepMerge(
+    deepMerge({}, settings && typeof settings === "object" && !Array.isArray(settings) ? settings : {}),
+    {
+      agentStack: {
+        overrides: {
+          orchestrator: {
+            provider,
+            model
+          }
+        }
+      },
+      interaction: {
+        replyGeneration: replyGenerationPatch
+      }
+    }
+  );
 }
 
 export function resolveAgentStack(settings: unknown) {

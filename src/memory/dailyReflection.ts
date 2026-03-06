@@ -414,7 +414,7 @@ export async function runDailyReflection({
     if (!mdFiles.length) return;
 
     const todayDateKey = new Date().toISOString().split("T")[0];
-    const dailyLogRetentionDays = settings.memory?.dailyLogRetentionDays || 30;
+    const dailyLogRetentionDays = getMemorySettings(settings).dailyLogRetentionDays || 30;
     const pruneDate = new Date();
     pruneDate.setDate(pruneDate.getDate() - dailyLogRetentionDays);
     const pruneDateKey = pruneDate.toISOString().split("T")[0];

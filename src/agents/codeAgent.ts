@@ -103,6 +103,8 @@ export interface CodeAgentConfig {
   maxTurns: number;
   timeoutMs: number;
   maxBufferBytes: number;
+  maxTasksPerHour: number;
+  maxParallelTasks: number;
 }
 
 export function resolveCodeAgentConfig(settings: Record<string, unknown>, cwdOverride?: string): CodeAgentConfig {
@@ -126,7 +128,9 @@ export function resolveCodeAgentConfig(settings: Record<string, unknown>, cwdOve
   const maxTurns = clamp(Number(primaryWorkerConfig?.maxTurns) || 30, 1, 200);
   const timeoutMs = clamp(Number(primaryWorkerConfig?.timeoutMs) || 300_000, 10_000, 1_800_000);
   const maxBufferBytes = clamp(Number(primaryWorkerConfig?.maxBufferBytes) || 2 * 1024 * 1024, 4096, 10 * 1024 * 1024);
-  return { cwd, provider, model, codexModel, maxTurns, timeoutMs, maxBufferBytes };
+  const maxTasksPerHour = clamp(Number(primaryWorkerConfig?.maxTasksPerHour) || 10, 1, 500);
+  const maxParallelTasks = clamp(Number(primaryWorkerConfig?.maxParallelTasks) || 2, 1, 32);
+  return { cwd, provider, model, codexModel, maxTurns, timeoutMs, maxBufferBytes, maxTasksPerHour, maxParallelTasks };
 }
 
 export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgentResult> {

@@ -27,6 +27,7 @@ type WebSearchState = {
   fetchedPages?: number;
   providerUsed?: string | null;
   providerFallbackUsed?: boolean;
+  summaryText?: string;
   budget?: {
     canSearch?: boolean;
   };
@@ -257,7 +258,8 @@ export async function runModelRequestedWebSearch<T extends WebSearchState>(runti
       results: result.results,
       fetchedPages: result.fetchedPages || 0,
       providerUsed: result.providerUsed || null,
-      providerFallbackUsed: Boolean(result.providerFallbackUsed)
+      providerFallbackUsed: Boolean(result.providerFallbackUsed),
+      summaryText: String(result.summaryText || "").trim()
     } as T;
   } catch (error) {
     return {

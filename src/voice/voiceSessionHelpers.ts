@@ -3,7 +3,10 @@ import {
   getBotName,
   getBotNameAliases,
   getResolvedLegacyVoiceProvider,
-  getResolvedVoiceGenerationBinding
+  getResolvedVoiceGenerationBinding,
+  getVoiceConversationPolicy,
+  getVoiceTranscriptionSettings,
+  resolveAgentStack
 } from "../settings/agentStack.ts";
 
 export const VOICE_ADDRESSING_ALL_TOKENS = new Set([
@@ -345,12 +348,13 @@ export function resolveTranscriberProvider(settings) {
 }
 
 export function resolveVoiceRuntimeMode(settings) {
-  if (settings?.voice?.mode) {
-    return normalizeVoiceRuntimeMode(settings.voice.mode);
+  const resolvedStack = resolveAgentStack(settings);
+  if (resolvedStack.voiceRuntime === "openai_realtime") {
+    return "openai_realtime";
   }
   const voiceProvider = resolveVoiceProvider(settings);
   const modeMap = {
-    openai: "openai_realtime",
+    openai: "stt_pipeline",
     xai: "voice_agent",
     gemini: "gemini_realtime",
     elevenlabs: "elevenlabs_realtime"
@@ -554,7 +558,7 @@ function resolveMergedWakeToken(botTokens = []) {
 }
 
 export function shouldAllowVoiceNsfwHumor(settings) {
-  const voiceFlag = settings?.voice?.allowNsfwHumor;
+  const voiceFlag = getVoiceConversationPolicy(settings).allowNsfwHumor;
   if (voiceFlag === true) return true;
   if (voiceFlag === false) return false;
   return false;
@@ -583,8 +587,9 @@ export function normalizeVoiceAsrLanguageHint(hint = "", fallback = "") {
 }
 
 export function resolveVoiceAsrLanguageGuidance(settings = null) {
-  const mode = normalizeVoiceAsrLanguageMode(settings?.voice?.asrLanguageMode, "auto");
-  const hint = normalizeVoiceAsrLanguageHint(settings?.voice?.asrLanguageHint, "en");
+  const transcription = getVoiceTranscriptionSettings(settings);
+  const mode = normalizeVoiceAsrLanguageMode(transcription.languageMode, "auto");
+  const hint = normalizeVoiceAsrLanguageHint(transcription.languageHint, "en");
   const fixedLanguage = mode === "fixed" ? hint : "";
   const promptHint = hint
     ? `Language hint: ${hint}. Prefer this language when uncertain, but transcribe the actual spoken language.`
