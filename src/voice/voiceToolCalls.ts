@@ -7,7 +7,7 @@ import {
   executeSharedMemoryToolSearch,
   executeSharedMemoryToolWrite
 } from "../memory/memoryToolRuntime.ts";
-import { clamp } from "../utils.ts";
+import { clamp, deepMerge } from "../utils.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
 import type {
   VoiceMcpServerStatus,
@@ -46,6 +46,16 @@ import {
   LEAVE_VOICE_CHANNEL_SCHEMA,
   toRealtimeTool
 } from "../tools/sharedToolSchemas.ts";
+import {
+  getBrowserRuntimeConfig,
+  getDirectiveSettings,
+  getMemorySettings,
+  getResearchRuntimeConfig,
+  getResolvedOrchestratorBinding,
+  isBrowserEnabled,
+  isDevTaskEnabled,
+  isResearchEnabled
+} from "../settings/agentStack.ts";
 
 export function ensureSessionToolRuntimeState(manager: any, session) {
   if (!session || typeof session !== "object") return null;
@@ -211,20 +221,16 @@ export function resolveVoiceRealtimeToolDescriptors(manager: any, {
         .filter((entry): entry is VoiceRealtimeToolDescriptor => Boolean(entry));
     });
 
-  const includeWebSearch = Boolean(settings?.webSearch?.enabled);
-  const includeMemory = Boolean(settings?.memory?.enabled);
-  const adaptiveDirectivesSettings =
-    settings?.adaptiveDirectives && typeof settings.adaptiveDirectives === "object"
-      ? settings.adaptiveDirectives as { enabled?: boolean }
-      : null;
-  const includeAdaptiveDirectives = Boolean(adaptiveDirectivesSettings?.enabled);
-  const includeBrowser = Boolean(settings?.browser?.enabled);
+  const includeWebSearch = isResearchEnabled(settings);
+  const includeMemory = Boolean(getMemorySettings(settings).enabled);
+  const includeAdaptiveDirectives = Boolean(getDirectiveSettings(settings).enabled);
+  const includeBrowser = isBrowserEnabled(settings);
   const codeAgentRuntimeAvailable = Boolean(
     (manager.createCodeAgentSession && manager.subAgentSessions) ||
     manager.runModelRequestedCodeTask
   );
   const includeCodeAgent = Boolean(
-    (settings?.codeAgent as Record<string, unknown> | undefined)?.enabled &&
+    isDevTaskEnabled(settings) &&
     codeAgentRuntimeAvailable
   );
   const filteredLocalTools = localTools.filter((entry) => {
@@ -1103,17 +1109,28 @@ export async function executeVoiceWebSearchTool(manager: any, { session, setting
     };
   }
 
+  const researchConfig = getResearchRuntimeConfig(settings);
   const maxResults = clamp(Math.floor(Number(args?.max_results || 5)), 1, 8);
-  const recencyDays = clamp(Math.floor(Number(args?.recency_days || settings?.webSearch?.recencyDaysDefault || 30)), 1, 3650);
-  const toolSettings = {
-    ...(settings || {}),
-    webSearch: {
-      ...((settings && typeof settings === "object" ? settings.webSearch : {}) || {}),
-      enabled: true,
-      maxResults,
-      recencyDaysDefault: recencyDays
+  const recencyDays = clamp(
+    Math.floor(Number(args?.recency_days || researchConfig.localExternalSearch.recencyDaysDefault || 30)),
+    1,
+    3650
+  );
+  const toolSettings = deepMerge(deepMerge({}, settings || {}), {
+    agentStack: {
+      runtimeConfig: {
+        research: {
+          ...researchConfig,
+          enabled: true,
+          localExternalSearch: {
+            ...researchConfig.localExternalSearch,
+            maxResults,
+            recencyDaysDefault: recencyDays
+          }
+        }
+      }
     }
-  };
+  });
 
   const searchResult = await manager.search.searchAndRead({
     settings: toolSettings,
@@ -1258,10 +1275,17 @@ export async function executeVoiceBrowserBrowseTool(manager: any, { session, set
     return { ok: false, text: "", error: "llm_unavailable" };
   }
 
-  const maxSteps = clamp(Number(settings?.browser?.maxStepsPerTask) || 15, 1, 30);
-  const stepTimeoutMs = clamp(Number(settings?.browser?.stepTimeoutMs) || 30_000, 5_000, 120_000);
-  const browserLlmProvider = String(settings?.browser?.llm?.provider || "anthropic").trim();
-  const browserLlmModel = String(settings?.browser?.llm?.model || "claude-sonnet-4-5-20250929").trim();
+  const browserRuntime = getBrowserRuntimeConfig(settings);
+  const orchestrator = getResolvedOrchestratorBinding(settings);
+  const browserExecution = browserRuntime.localBrowserAgent?.execution;
+  const browserBinding =
+    browserExecution?.mode === "dedicated_model" && browserExecution.model
+      ? browserExecution.model
+      : orchestrator;
+  const maxSteps = clamp(Number(browserRuntime.localBrowserAgent?.maxStepsPerTask) || 15, 1, 30);
+  const stepTimeoutMs = clamp(Number(browserRuntime.localBrowserAgent?.stepTimeoutMs) || 30_000, 5_000, 120_000);
+  const browserLlmProvider = String(browserBinding.provider || "anthropic").trim();
+  const browserLlmModel = String(browserBinding.model || "claude-sonnet-4-5-20250929").trim();
 
   try {
     const result = await runBrowserBrowseTask({

@@ -7,6 +7,11 @@
  * - Embed thumbnail captioning
  */
 
+import {
+    getResolvedOrchestratorBinding,
+    getResolvedVisionBinding
+} from "../settings/agentStack.ts";
+
 const DEFAULT_CAPTION_PROMPT =
     "Describe this image in one concise sentence for search and conversation context. Focus on the main subject, action, and any text visible.";
 
@@ -28,13 +33,10 @@ const VISION_PROVIDER_CANDIDATES = [
 export function resolveVisionProviderSettings(llm, settings = null) {
     if (!llm || typeof llm.isProviderConfigured !== "function") return null;
 
-    const llmSettings =
-        settings?.llm && typeof settings.llm === "object" ? settings.llm : {};
-
-    // Prefer explicit vision settings if configured
-    const visionSettings = settings?.vision || {};
-    const preferredProvider = String(visionSettings.provider || visionSettings.captionProvider || "").trim().toLowerCase();
-    const preferredModel = String(visionSettings.model || visionSettings.captionModel || "").trim();
+    const llmSettings = getResolvedOrchestratorBinding(settings);
+    const visionSettings = getResolvedVisionBinding(settings);
+    const preferredProvider = String(visionSettings.provider || "").trim().toLowerCase();
+    const preferredModel = String(visionSettings.model || "").trim();
 
     if (preferredProvider && preferredModel && llm.isProviderConfigured(preferredProvider)) {
         return {

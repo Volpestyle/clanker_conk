@@ -13,6 +13,7 @@ import {
   OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
   normalizeOpenAiRealtimeTranscriptionModel
 } from "./realtimeProviderNormalization.ts";
+import { getVoiceRuntimeConfig } from "../settings/agentStack.ts";
 import {
   OPENAI_ASR_SESSION_IDLE_TTL_MS,
   OPENAI_ASR_TRANSCRIPT_STABLE_MS,
@@ -208,6 +209,12 @@ export function createAsrBridgeState(): AsrBridgeState {
     speechActive: false,
     speechDetectedUtteranceId: 0,
     speechStoppedUtteranceId: 0
+    _lastFlushLogAt: 0,
+    speechDetectedAt: 0,
+    speechStoppedAt: 0,
+    speechActive: false,
+    speechDetectedUtteranceId: 0,
+    speechStoppedUtteranceId: 0
   };
 }
 
@@ -288,9 +295,10 @@ function createAsrRuntimeLogger(deps: AsrBridgeDeps, logUserId: string) {
 function resolveAsrModelParams(session: VoiceSession, settings: Record<string, unknown> | null) {
   const resolvedSettings = settings || session.settingsSnapshot || {};
   const voiceAsrGuidance = resolveVoiceAsrLanguageGuidance(resolvedSettings);
+  const voiceRuntime = getVoiceRuntimeConfig(resolvedSettings);
   const rawModel = String(
     session.openAiPerUserAsrModel ||
-    (resolvedSettings as Record<string, unknown>)?.voice?.["openaiRealtime"]?.["inputTranscriptionModel"] ||
+    voiceRuntime.openaiRealtime?.inputTranscriptionModel ||
     OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL
   )
     .trim()

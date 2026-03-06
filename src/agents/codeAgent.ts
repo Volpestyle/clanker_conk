@@ -15,6 +15,11 @@ import { generateSessionId } from "./subAgentSession.ts";
 import { CodexAgentSession, getActiveCodexAgentTaskCount } from "./codexAgent.ts";
 import { clamp } from "../utils.ts";
 import path from "node:path";
+import {
+  getDevTaskPermissions,
+  getDevTeamRuntimeConfig,
+  resolveAgentStack
+} from "../settings/agentStack.ts";
 
 interface CodeAgentTrace {
   guildId?: string | null;
@@ -75,9 +80,10 @@ export function getActiveCodeAgentTaskCount(): number {
 }
 
 export function isCodeAgentUserAllowed(userId: string, settings: Record<string, unknown>): boolean {
-  const codeAgent = settings?.codeAgent as Record<string, unknown> | undefined;
-  if (!codeAgent?.enabled) return false;
-  const allowedUserIds = codeAgent?.allowedUserIds;
+  const devPermissions = getDevTaskPermissions(settings);
+  const devRuntime = getDevTeamRuntimeConfig(settings);
+  if (!devRuntime.codex?.enabled && !devRuntime.claudeCode?.enabled) return false;
+  const allowedUserIds = devPermissions.allowedUserIds;
   if (!Array.isArray(allowedUserIds) || allowedUserIds.length === 0) return false;
   return allowedUserIds.includes(String(userId || ""));
 }
@@ -100,17 +106,26 @@ export interface CodeAgentConfig {
 }
 
 export function resolveCodeAgentConfig(settings: Record<string, unknown>, cwdOverride?: string): CodeAgentConfig {
-  const codeAgent = settings?.codeAgent as Record<string, unknown> | undefined;
+  const resolvedStack = resolveAgentStack(settings);
+  const devRuntime = getDevTeamRuntimeConfig(settings);
+  const preferredWorker = resolvedStack.codingWorkers[0] || "claude_code";
+  const primaryWorkerConfig =
+    preferredWorker === "codex"
+      ? devRuntime.codex
+      : devRuntime.claudeCode;
   const cwd = cwdOverride || resolveCodeAgentCwd(
-    String(codeAgent?.defaultCwd || ""),
+    String(primaryWorkerConfig?.defaultCwd || ""),
     process.cwd()
   );
-  const provider = normalizeCodeAgentProvider(codeAgent?.provider, "claude-code");
-  const model = String(codeAgent?.model || "sonnet").trim();
-  const codexModel = String(codeAgent?.codexModel || "codex-mini-latest").trim() || "codex-mini-latest";
-  const maxTurns = clamp(Number(codeAgent?.maxTurns) || 30, 1, 200);
-  const timeoutMs = clamp(Number(codeAgent?.timeoutMs) || 300_000, 10_000, 1_800_000);
-  const maxBufferBytes = clamp(Number(codeAgent?.maxBufferBytes) || 2 * 1024 * 1024, 4096, 10 * 1024 * 1024);
+  const provider = normalizeCodeAgentProvider(
+    preferredWorker === "codex" ? "codex" : "claude-code",
+    "claude-code"
+  );
+  const model = String(devRuntime.claudeCode?.model || "sonnet").trim();
+  const codexModel = String(devRuntime.codex?.model || "codex-mini-latest").trim() || "codex-mini-latest";
+  const maxTurns = clamp(Number(primaryWorkerConfig?.maxTurns) || 30, 1, 200);
+  const timeoutMs = clamp(Number(primaryWorkerConfig?.timeoutMs) || 300_000, 10_000, 1_800_000);
+  const maxBufferBytes = clamp(Number(primaryWorkerConfig?.maxBufferBytes) || 2 * 1024 * 1024, 4096, 10 * 1024 * 1024);
   return { cwd, provider, model, codexModel, maxTurns, timeoutMs, maxBufferBytes };
 }
 

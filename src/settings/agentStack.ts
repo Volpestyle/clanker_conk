@@ -1,0 +1,478 @@
+import { deepMerge } from "../utils.ts";
+import { DEFAULT_SETTINGS } from "./settingsSchema.ts";
+
+type ModelBinding = {
+  provider?: string;
+  model?: string;
+};
+
+type CapabilityExecutionPolicy = {
+  mode?: string;
+  model?: ModelBinding;
+  temperature?: number;
+  maxOutputTokens?: number;
+  reasoningEffort?: string;
+};
+
+const PRESET_DEFAULTS = {
+  openai_native: {
+    harness: "internal",
+    orchestrator: {
+      provider: "openai",
+      model: "gpt-5"
+    },
+    researchRuntime: "openai_native_web_search",
+    browserRuntime: "openai_computer_use",
+    voiceRuntime: "openai_realtime",
+    voiceAdmissionPolicy: {
+      mode: "adaptive"
+    },
+    devOrchestrator: {
+      provider: "openai",
+      model: "gpt-5"
+    },
+    codingWorkers: ["codex", "claude_code"]
+  },
+  anthropic_brain_openai_tools: {
+    harness: "internal",
+    orchestrator: {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6"
+    },
+    researchRuntime: "openai_native_web_search",
+    browserRuntime: "openai_computer_use",
+    voiceRuntime: "openai_realtime",
+    voiceAdmissionPolicy: {
+      mode: "adaptive"
+    },
+    devOrchestrator: {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6"
+    },
+    codingWorkers: ["codex", "claude_code"]
+  },
+  multi_provider_legacy: {
+    harness: "internal",
+    orchestrator: {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6"
+    },
+    researchRuntime: "local_external_search",
+    browserRuntime: "local_browser_agent",
+    voiceRuntime: "legacy_voice_stack",
+    voiceAdmissionPolicy: {
+      mode: "classifier_gate"
+    },
+    devOrchestrator: {
+      provider: "anthropic",
+      model: "claude-sonnet-4-6"
+    },
+    codingWorkers: ["claude_code", "codex"]
+  },
+  custom: {
+    harness: "internal",
+    orchestrator: {
+      provider: "openai",
+      model: "gpt-5"
+    },
+    researchRuntime: "local_external_search",
+    browserRuntime: "local_browser_agent",
+    voiceRuntime: "openai_realtime",
+    voiceAdmissionPolicy: {
+      mode: "adaptive"
+    },
+    devOrchestrator: {
+      provider: "openai",
+      model: "gpt-5"
+    },
+    codingWorkers: ["codex"]
+  }
+} as const;
+
+function mergeWithDefaults<T>(defaults: T, value: unknown): T {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return deepMerge({}, defaults) as T;
+  }
+  return deepMerge(defaults, value) as T;
+}
+
+function resolveModelBinding(binding: unknown, fallback: ModelBinding): Required<ModelBinding> {
+  const source = binding && typeof binding === "object" && !Array.isArray(binding)
+    ? binding as ModelBinding
+    : {};
+  const provider = String(source.provider || fallback.provider || "").trim() || String(fallback.provider || "");
+  const model = String(source.model || fallback.model || "").trim() || String(fallback.model || "");
+  return { provider, model };
+}
+
+function resolveExecutionPolicy(
+  policy: unknown,
+  fallbackBinding: Required<ModelBinding>,
+  fallbackTemperature?: number,
+  fallbackMaxOutputTokens?: number,
+  fallbackReasoningEffort?: string
+) {
+  const source = policy && typeof policy === "object" && !Array.isArray(policy)
+    ? policy as CapabilityExecutionPolicy
+    : {};
+  const mode = String(source.mode || "inherit_orchestrator").trim() || "inherit_orchestrator";
+  return {
+    mode,
+    model: mode === "dedicated_model"
+      ? resolveModelBinding(source.model, fallbackBinding)
+      : undefined,
+    temperature:
+      source.temperature !== undefined
+        ? Number(source.temperature)
+        : fallbackTemperature,
+    maxOutputTokens:
+      source.maxOutputTokens !== undefined
+        ? Number(source.maxOutputTokens)
+        : fallbackMaxOutputTokens,
+    reasoningEffort:
+      source.reasoningEffort !== undefined
+        ? String(source.reasoningEffort || "").trim()
+        : fallbackReasoningEffort
+  };
+}
+
+export function getIdentitySettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.identity, (settings as any)?.identity);
+}
+
+export function getBotName(settings: unknown): string {
+  return String(getIdentitySettings(settings).botName || DEFAULT_SETTINGS.identity.botName);
+}
+
+export function getBotNameAliases(settings: unknown): string[] {
+  const identity = getIdentitySettings(settings);
+  return Array.isArray(identity.botNameAliases)
+    ? identity.botNameAliases.map((value) => String(value || "").trim()).filter(Boolean)
+    : [...DEFAULT_SETTINGS.identity.botNameAliases];
+}
+
+export function getPersonaSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.persona, (settings as any)?.persona);
+}
+
+export function getPromptingSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.prompting, (settings as any)?.prompting);
+}
+
+export function getReplyPermissions(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.permissions.replies, (settings as any)?.permissions?.replies);
+}
+
+export function getDevTaskPermissions(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.permissions.devTasks, (settings as any)?.permissions?.devTasks);
+}
+
+export function getInteractionSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.interaction, (settings as any)?.interaction);
+}
+
+export function getActivitySettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.interaction.activity, (settings as any)?.interaction?.activity);
+}
+
+export function getReplyGenerationSettings(settings: unknown) {
+  return mergeWithDefaults(
+    DEFAULT_SETTINGS.interaction.replyGeneration,
+    (settings as any)?.interaction?.replyGeneration
+  );
+}
+
+export function getFollowupSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.interaction.followup, (settings as any)?.interaction?.followup);
+}
+
+export function getStartupSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.interaction.startup, (settings as any)?.interaction?.startup);
+}
+
+export function getSessionOrchestrationSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.interaction.sessions, (settings as any)?.interaction?.sessions);
+}
+
+export function getAgentStackSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.agentStack, (settings as any)?.agentStack);
+}
+
+export function getMemorySettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.memory, (settings as any)?.memory);
+}
+
+export function getDirectiveSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.directives, (settings as any)?.directives);
+}
+
+export function getTextInitiativeSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.initiative.text, (settings as any)?.initiative?.text);
+}
+
+export function getVoiceInitiativeSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.initiative.voice, (settings as any)?.initiative?.voice);
+}
+
+export function getDiscoverySettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.initiative.discovery, (settings as any)?.initiative?.discovery);
+}
+
+export function getVoiceSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.voice, (settings as any)?.voice);
+}
+
+export function getVoiceTranscriptionSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.voice.transcription, (settings as any)?.voice?.transcription);
+}
+
+export function getVoiceChannelPolicy(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.voice.channelPolicy, (settings as any)?.voice?.channelPolicy);
+}
+
+export function getVoiceSessionLimits(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.voice.sessionLimits, (settings as any)?.voice?.sessionLimits);
+}
+
+export function getVoiceConversationPolicy(settings: unknown) {
+  return mergeWithDefaults(
+    DEFAULT_SETTINGS.voice.conversationPolicy,
+    (settings as any)?.voice?.conversationPolicy
+  );
+}
+
+export function getVoiceAdmissionSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.voice.admission, (settings as any)?.voice?.admission);
+}
+
+export function getVoiceStreamWatchSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.voice.streamWatch, (settings as any)?.voice?.streamWatch);
+}
+
+export function getVoiceSoundboardSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.voice.soundboard, (settings as any)?.voice?.soundboard);
+}
+
+export function getMediaSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.media, (settings as any)?.media);
+}
+
+export function getVisionSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.media.vision, (settings as any)?.media?.vision);
+}
+
+export function getVideoContextSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.media.videoContext, (settings as any)?.media?.videoContext);
+}
+
+export function getMusicSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.music, (settings as any)?.music);
+}
+
+export function getAutomationsSettings(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.automations, (settings as any)?.automations);
+}
+
+export function getRuntimeConfig(settings: unknown) {
+  const agentStack = getAgentStackSettings(settings);
+  return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig, agentStack.runtimeConfig);
+}
+
+export function getResearchRuntimeConfig(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig.research, getRuntimeConfig(settings).research);
+}
+
+export function getBrowserRuntimeConfig(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig.browser, getRuntimeConfig(settings).browser);
+}
+
+export function getVoiceRuntimeConfig(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig.voice, getRuntimeConfig(settings).voice);
+}
+
+export function getDevTeamRuntimeConfig(settings: unknown) {
+  return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam, getRuntimeConfig(settings).devTeam);
+}
+
+export function getResolvedOrchestratorBinding(settings: unknown) {
+  const interaction = getReplyGenerationSettings(settings);
+  const agentStack: any = getAgentStackSettings(settings);
+  const presetName = String(agentStack.preset || DEFAULT_SETTINGS.agentStack.preset) as keyof typeof PRESET_DEFAULTS;
+  const presetDefaults = PRESET_DEFAULTS[presetName] || PRESET_DEFAULTS.openai_native;
+  const overrideBinding = agentStack?.overrides?.orchestrator;
+  const binding = resolveModelBinding(overrideBinding, presetDefaults.orchestrator);
+  return {
+    ...binding,
+    temperature: Number(interaction.temperature),
+    maxOutputTokens: Number(interaction.maxOutputTokens),
+    reasoningEffort: String(interaction.reasoningEffort || "").trim() || undefined,
+    pricing: interaction.pricing
+  };
+}
+
+export function getResolvedFollowupBinding(settings: unknown) {
+  const followup = getFollowupSettings(settings);
+  const fallback = getResolvedOrchestratorBinding(settings);
+  const policy = resolveExecutionPolicy(
+    followup.execution,
+    fallback,
+    fallback.temperature,
+    fallback.maxOutputTokens,
+    fallback.reasoningEffort
+  );
+  const binding = policy.mode === "dedicated_model"
+    ? policy.model
+    : fallback;
+  return {
+    provider: String(binding?.provider || fallback.provider),
+    model: String(binding?.model || fallback.model),
+    temperature: policy.temperature ?? fallback.temperature,
+    maxOutputTokens: policy.maxOutputTokens ?? fallback.maxOutputTokens,
+    reasoningEffort: policy.reasoningEffort ?? fallback.reasoningEffort
+  };
+}
+
+export function getResolvedMemoryBinding(settings: unknown) {
+  const memory = getMemorySettings(settings);
+  const fallback = getResolvedOrchestratorBinding(settings);
+  const policy = resolveExecutionPolicy(memory.execution, fallback, 0, 320);
+  const binding = policy.mode === "dedicated_model"
+    ? policy.model
+    : fallback;
+  return {
+    provider: String(binding?.provider || fallback.provider),
+    model: String(binding?.model || fallback.model),
+    temperature: policy.temperature ?? 0,
+    maxOutputTokens: policy.maxOutputTokens ?? 320,
+    reasoningEffort: policy.reasoningEffort ?? fallback.reasoningEffort
+  };
+}
+
+export function getResolvedVisionBinding(settings: unknown) {
+  const vision = getVisionSettings(settings);
+  const fallback = getResolvedOrchestratorBinding(settings);
+  const policy = resolveExecutionPolicy(vision.execution, fallback);
+  const binding = policy.mode === "dedicated_model"
+    ? policy.model
+    : fallback;
+  return {
+    provider: String(binding?.provider || fallback.provider),
+    model: String(binding?.model || fallback.model)
+  };
+}
+
+export function getResolvedVoiceInitiativeBinding(settings: unknown) {
+  const voiceInitiative = getVoiceInitiativeSettings(settings);
+  const fallback = getResolvedOrchestratorBinding(settings);
+  const policy = resolveExecutionPolicy(voiceInitiative.execution, fallback, 1.2);
+  const binding = policy.mode === "dedicated_model"
+    ? policy.model
+    : fallback;
+  return {
+    provider: String(binding?.provider || fallback.provider),
+    model: String(binding?.model || fallback.model),
+    temperature: policy.temperature ?? 1.2
+  };
+}
+
+export function getResolvedVoiceAdmissionClassifierBinding(settings: unknown) {
+  const voiceAdmission = getVoiceAdmissionSettings(settings);
+  const agentStack: any = getAgentStackSettings(settings);
+  const fallback = {
+    provider: "openai",
+    model: "gpt-5-mini"
+  };
+  const overridePolicy = resolveExecutionPolicy(
+    agentStack?.overrides?.voiceAdmissionClassifier,
+    fallback
+  );
+  const mode = String(voiceAdmission.mode || "");
+  if (mode === "deterministic_only" || mode === "generation_decides") {
+    return null;
+  }
+  const binding = overridePolicy.mode === "dedicated_model"
+    ? overridePolicy.model
+    : fallback;
+  return {
+    provider: String(binding?.provider || fallback.provider),
+    model: String(binding?.model || fallback.model)
+  };
+}
+
+export function getResolvedLegacyVoiceProvider(settings: unknown): string {
+  return String(getVoiceRuntimeConfig(settings).legacyVoiceStack?.selectedProvider || "openai").trim() || "openai";
+}
+
+export function getResolvedVoiceGenerationBinding(settings: unknown) {
+  const voiceRuntime = getVoiceRuntimeConfig(settings);
+  const fallback = getResolvedOrchestratorBinding(settings);
+  const policy = resolveExecutionPolicy(
+    voiceRuntime.legacyVoiceStack?.generation,
+    fallback
+  );
+  const binding = policy.mode === "dedicated_model"
+    ? policy.model
+    : fallback;
+  return {
+    provider: String(binding?.provider || fallback.provider),
+    model: String(binding?.model || fallback.model)
+  };
+}
+
+export function resolveAgentStack(settings: unknown) {
+  const agentStack: any = getAgentStackSettings(settings);
+  const presetName = String(agentStack.preset || DEFAULT_SETTINGS.agentStack.preset) as keyof typeof PRESET_DEFAULTS;
+  const presetDefaults = PRESET_DEFAULTS[presetName] || PRESET_DEFAULTS.openai_native;
+  const overrides: any = agentStack?.overrides && typeof agentStack.overrides === "object" && !Array.isArray(agentStack.overrides)
+    ? agentStack.overrides
+    : {};
+  const voiceAdmission = getVoiceAdmissionSettings(settings);
+  const devTeamRuntime = getDevTeamRuntimeConfig(settings);
+  const enabledWorkers = [
+    Boolean(devTeamRuntime?.codex?.enabled) ? "codex" : null,
+    Boolean(devTeamRuntime?.claudeCode?.enabled) ? "claude_code" : null
+  ].filter(Boolean);
+  const overrideWorkers = Array.isArray(overrides?.devTeam?.codingWorkers)
+    ? overrides.devTeam.codingWorkers.map((value: unknown) => String(value || "").trim()).filter(Boolean)
+    : [];
+  const codingWorkers = (overrideWorkers.length ? overrideWorkers : presetDefaults.codingWorkers)
+    .filter((worker) => enabledWorkers.includes(worker));
+  return {
+    preset: presetName,
+    harness: String(overrides?.harness || presetDefaults.harness),
+    orchestrator: resolveModelBinding(overrides?.orchestrator, presetDefaults.orchestrator),
+    researchRuntime: String(overrides?.researchRuntime || presetDefaults.researchRuntime),
+    browserRuntime: String(overrides?.browserRuntime || presetDefaults.browserRuntime),
+    voiceRuntime: String(overrides?.voiceRuntime || presetDefaults.voiceRuntime),
+    voiceAdmissionPolicy: {
+      mode: String(voiceAdmission.mode || presetDefaults.voiceAdmissionPolicy.mode),
+      classifierProvider: getResolvedVoiceAdmissionClassifierBinding(settings)?.provider,
+      classifierModel: getResolvedVoiceAdmissionClassifierBinding(settings)?.model,
+      musicWakeLatchSeconds: Number(voiceAdmission.musicWakeLatchSeconds)
+    },
+    devOrchestratorProvider: resolveModelBinding(
+      overrides?.devTeam?.orchestrator,
+      devTeamRuntime?.orchestrator || presetDefaults.devOrchestrator
+    ).provider,
+    devOrchestratorModel: resolveModelBinding(
+      overrides?.devTeam?.orchestrator,
+      devTeamRuntime?.orchestrator || presetDefaults.devOrchestrator
+    ).model,
+    codingWorkers
+  };
+}
+
+export function isResearchEnabled(settings: unknown): boolean {
+  return Boolean(getResearchRuntimeConfig(settings).enabled);
+}
+
+export function isBrowserEnabled(settings: unknown): boolean {
+  return Boolean(getBrowserRuntimeConfig(settings).enabled);
+}
+
+export function isDevTaskEnabled(settings: unknown): boolean {
+  const permissions = getDevTaskPermissions(settings);
+  const runtime = getDevTeamRuntimeConfig(settings);
+  const hasWorkers = Boolean(runtime?.codex?.enabled || runtime?.claudeCode?.enabled);
+  return hasWorkers && Array.isArray(permissions.allowedUserIds) && permissions.allowedUserIds.length > 0;
+}

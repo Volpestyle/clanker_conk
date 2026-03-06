@@ -1,4 +1,5 @@
 import { normalizeDiscoveryUrl } from "./discovery.ts";
+import { getResearchRuntimeConfig } from "./settings/agentStack.ts";
 import { assertPublicUrl } from "./urlSafety.ts";
 import { clamp } from "./utils.ts";
 import { normalizeWhitespaceText } from "./normalization/text.ts";
@@ -63,7 +64,7 @@ export class WebSearchService {
     query,
     trace = { guildId: null, channelId: null, userId: null, source: null }
   }) {
-    const config = normalizeWebSearchConfig(settings?.webSearch);
+    const config = normalizeWebSearchConfig(getResearchRuntimeConfig(settings).localExternalSearch);
     const normalizedQuery = sanitizeExternalText(query, 220);
     if (!normalizedQuery) {
       return {

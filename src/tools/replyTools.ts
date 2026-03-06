@@ -33,6 +33,13 @@ import {
   VOICE_TOOL_SCHEMAS,
   toAnthropicTool
 } from "./sharedToolSchemas.ts";
+import {
+  getDirectiveSettings,
+  getMemorySettings,
+  isBrowserEnabled,
+  isDevTaskEnabled,
+  isResearchEnabled
+} from "../settings/agentStack.ts";
 
 const MAX_WEB_QUERY_LEN = 220;
 const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
@@ -295,28 +302,23 @@ const ALL_REPLY_TOOLS: ReplyToolDefinition[] = [
 // --- Settings-gated tool set builder ---
 
 function isMemoryEnabled(settings: Record<string, unknown>): boolean {
-  const memory = settings?.memory as Record<string, unknown> | undefined;
-  return Boolean(memory?.enabled);
+  return Boolean(getMemorySettings(settings).enabled);
 }
 
 function isAdaptiveDirectivesEnabled(settings: Record<string, unknown>): boolean {
-  const adaptiveDirectives = settings?.adaptiveDirectives as Record<string, unknown> | undefined;
-  return Boolean(adaptiveDirectives?.enabled);
+  return Boolean(getDirectiveSettings(settings).enabled);
 }
 
 function isWebSearchEnabled(settings: Record<string, unknown>): boolean {
-  const webSearch = settings?.webSearch as Record<string, unknown> | undefined;
-  return Boolean(webSearch?.enabled);
+  return isResearchEnabled(settings);
 }
 
 function isBrowserBrowseEnabled(settings: Record<string, unknown>): boolean {
-  const browser = settings?.browser as Record<string, unknown> | undefined;
-  return Boolean(browser?.enabled);
+  return isBrowserEnabled(settings);
 }
 
 function isCodeAgentEnabled(settings: Record<string, unknown>): boolean {
-  const codeAgent = settings?.codeAgent as Record<string, unknown> | undefined;
-  return Boolean(codeAgent?.enabled);
+  return isDevTaskEnabled(settings);
 }
 
 export function buildReplyToolSet(

@@ -6,8 +6,12 @@ import {
   PERSONA_FLAVOR_MAX_CHARS
 } from "./settingsNormalization.ts";
 
+function normalizeLegacyView(input: unknown): any {
+  return normalizeSettings(input);
+}
+
 test("normalizeSettings clamps and normalizes complex nested settings", () => {
-  const normalized = normalizeSettings({
+  const normalized = normalizeLegacyView({
     botName: "x".repeat(120),
     botNameAliases: ["clank", "clank", "  ", "conk", "alias-".repeat(20)],
     llm: {
@@ -218,7 +222,7 @@ test("normalizeSettings clamps and normalizes complex nested settings", () => {
 });
 
 test("normalizeSettings respects explicit false for openaiRealtime usePerUserAsrBridge", () => {
-  const normalized = normalizeSettings({
+  const normalized = normalizeLegacyView({
     voice: {
       openaiRealtime: {
         usePerUserAsrBridge: false
@@ -232,7 +236,7 @@ test("normalizeSettings respects explicit false for openaiRealtime usePerUserAsr
 test("normalizeSettings allows up to 100 bot aliases before truncating", () => {
   const aliases = Array.from({ length: BOT_NAME_ALIAS_MAX_ITEMS + 5 }, (_, index) => `alias-${index + 1}`);
 
-  const normalized = normalizeSettings({
+  const normalized = normalizeLegacyView({
     botNameAliases: aliases
   });
 
@@ -241,7 +245,7 @@ test("normalizeSettings allows up to 100 bot aliases before truncating", () => {
 });
 
 test("normalizeSettings preserves explicit file_wav transcription mode", () => {
-  const normalized = normalizeSettings({
+  const normalized = normalizeLegacyView({
     voice: {
       openaiRealtime: {
         transcriptionMethod: "file_wav"
@@ -253,7 +257,7 @@ test("normalizeSettings preserves explicit file_wav transcription mode", () => {
 });
 
 test("normalizeSettings restricts browser llm provider to supported browser providers", () => {
-  const normalized = normalizeSettings({
+  const normalized = normalizeLegacyView({
     browser: {
       llm: {
         provider: "xai",
@@ -267,7 +271,7 @@ test("normalizeSettings restricts browser llm provider to supported browser prov
 });
 
 test("normalizeSettings normalizes code agent provider and model fields", () => {
-  const fallback = normalizeSettings({
+  const fallback = normalizeLegacyView({
     codeAgent: {
       provider: "not-real",
       model: "",
@@ -279,7 +283,7 @@ test("normalizeSettings normalizes code agent provider and model fields", () => 
   assert.equal(fallback.codeAgent.model, "sonnet");
   assert.equal(fallback.codeAgent.codexModel, "codex-mini-latest");
 
-  const codex = normalizeSettings({
+  const codex = normalizeLegacyView({
     codeAgent: {
       provider: "CODEX",
       model: "opus",
@@ -293,7 +297,7 @@ test("normalizeSettings normalizes code agent provider and model fields", () => 
 });
 
 test("normalizeSettings preserves explicit commandOnlyMode", () => {
-  const normalized = normalizeSettings({
+  const normalized = normalizeLegacyView({
     voice: {
       commandOnlyMode: true
     }
@@ -303,7 +307,7 @@ test("normalizeSettings preserves explicit commandOnlyMode", () => {
 });
 
 test("normalizeSettings preserves explicit adaptive directive and automation toggles", () => {
-  const normalized = normalizeSettings({
+  const normalized = normalizeLegacyView({
     adaptiveDirectives: {
       enabled: false
     },
@@ -317,7 +321,7 @@ test("normalizeSettings preserves explicit adaptive directive and automation tog
 });
 
 test("normalizeSettings handles memoryLlm defaults and discovery source fallbacks", () => {
-  const normalized = normalizeSettings({
+  const normalized = normalizeLegacyView({
     memoryLlm: {},
     discovery: {
       sources: {
@@ -349,12 +353,12 @@ test("normalizeSettings handles memoryLlm defaults and discovery source fallback
 });
 
 test("normalizeSettings defaults llm maxOutputTokens to 2500 and preserves high values", () => {
-  const defaulted = normalizeSettings({
+  const defaulted = normalizeLegacyView({
     llm: {}
   });
   assert.equal(defaulted.llm.maxOutputTokens, 2500);
 
-  const highValue = normalizeSettings({
+  const highValue = normalizeLegacyView({
     llm: {
       maxOutputTokens: 9_999
     }
@@ -363,7 +367,7 @@ test("normalizeSettings defaults llm maxOutputTokens to 2500 and preserves high 
 });
 
 test("normalizeSettings forces voice generation llm to text llm when useTextModel is enabled", () => {
-  const normalized = normalizeSettings({
+  const normalized = normalizeLegacyView({
     llm: {
       provider: "openai",
       model: "claude-haiku-4-5"
@@ -390,7 +394,7 @@ test("normalizeSettings forces voice generation llm to text llm when useTextMode
 });
 
 test("normalizeSettings normalizes elevenlabs voice provider settings", () => {
-  const normalized = normalizeSettings({
+  const normalized = normalizeLegacyView({
     voice: {
       voiceProvider: "elevenlabs",
       elevenLabsRealtime: {
@@ -410,7 +414,7 @@ test("normalizeSettings normalizes elevenlabs voice provider settings", () => {
 });
 
 test("normalizeSettings uses provider-appropriate memoryLlm model fallback", () => {
-  const normalized = normalizeSettings({
+  const normalized = normalizeLegacyView({
     memoryLlm: {
       provider: "openai",
       model: ""
@@ -422,7 +426,7 @@ test("normalizeSettings uses provider-appropriate memoryLlm model fallback", () 
 });
 
 test("normalizeSettings preserves supported reflection strategies and defaults invalid ones", () => {
-  const onePass = normalizeSettings({
+  const onePass = normalizeLegacyView({
     memory: {
       reflection: {
         strategy: "one_pass_main"
@@ -431,7 +435,7 @@ test("normalizeSettings preserves supported reflection strategies and defaults i
   });
   assert.equal(onePass.memory.reflection.strategy, "one_pass_main");
 
-  const invalid = normalizeSettings({
+  const invalid = normalizeLegacyView({
     memory: {
       reflection: {
         strategy: "something_else"
@@ -442,7 +446,7 @@ test("normalizeSettings preserves supported reflection strategies and defaults i
 });
 
 test("normalizeSettings keeps stt pipeline voice generation and reply decider independent from main llm", () => {
-  const normalized = normalizeSettings({
+  const normalized = normalizeLegacyView({
     llm: {
       provider: "claude-code",
       model: "opus"
@@ -474,7 +478,7 @@ test("normalizeSettings keeps stt pipeline voice generation and reply decider in
 });
 
 test("normalizeSettings strips removed replyDecisionLlm fields and migrates legacy enabled false", () => {
-  const normalized = normalizeSettings({
+  const normalized = normalizeLegacyView({
     voice: {
       replyDecisionLlm: {
         enabled: false,
@@ -492,7 +496,7 @@ test("normalizeSettings strips removed replyDecisionLlm fields and migrates lega
 });
 
 test("normalizeSettings enforces replyDecisionLlm realtime admission enum fallback", () => {
-  const invalidMode = normalizeSettings({
+  const invalidMode = normalizeLegacyView({
     voice: {
       replyDecisionLlm: {
         realtimeAdmissionMode: "something_else"
@@ -501,7 +505,7 @@ test("normalizeSettings enforces replyDecisionLlm realtime admission enum fallba
   });
   assert.equal(invalidMode.voice.replyDecisionLlm.realtimeAdmissionMode, "hard_classifier");
 
-  const validMode = normalizeSettings({
+  const validMode = normalizeLegacyView({
     voice: {
       replyDecisionLlm: {
         realtimeAdmissionMode: "generation_only"
@@ -512,7 +516,7 @@ test("normalizeSettings enforces replyDecisionLlm realtime admission enum fallba
 });
 
 test("normalizeSettings clamps replyDecisionLlm music wake latch seconds", () => {
-  const low = normalizeSettings({
+  const low = normalizeLegacyView({
     voice: {
       replyDecisionLlm: {
         musicWakeLatchSeconds: 1
@@ -521,7 +525,7 @@ test("normalizeSettings clamps replyDecisionLlm music wake latch seconds", () =>
   });
   assert.equal(low.voice.replyDecisionLlm.musicWakeLatchSeconds, 5);
 
-  const high = normalizeSettings({
+  const high = normalizeLegacyView({
     voice: {
       replyDecisionLlm: {
         musicWakeLatchSeconds: 999
@@ -533,7 +537,7 @@ test("normalizeSettings clamps replyDecisionLlm music wake latch seconds", () =>
 
 test("normalizeSettings preserves long media prompt craft guidance blocks", () => {
   const longGuidance = `line one\n${"x".repeat(1200)}\nline three`;
-  const normalized = normalizeSettings({
+  const normalized = normalizeLegacyView({
     prompt: {
       mediaPromptCraftGuidance: longGuidance
     }
@@ -544,7 +548,7 @@ test("normalizeSettings preserves long media prompt craft guidance blocks", () =
 
 test("normalizeSettings allows longer persona flavor values", () => {
   const withinLimit = "x".repeat(PERSONA_FLAVOR_MAX_CHARS);
-  const normalizedWithinLimit = normalizeSettings({
+  const normalizedWithinLimit = normalizeLegacyView({
     persona: {
       flavor: withinLimit
     }
@@ -552,7 +556,7 @@ test("normalizeSettings allows longer persona flavor values", () => {
   assert.equal(normalizedWithinLimit.persona.flavor, withinLimit);
 
   const overLimit = `${"y".repeat(PERSONA_FLAVOR_MAX_CHARS)}overflow`;
-  const normalizedOverLimit = normalizeSettings({
+  const normalizedOverLimit = normalizeLegacyView({
     persona: {
       flavor: overLimit
     }
@@ -561,7 +565,7 @@ test("normalizeSettings allows longer persona flavor values", () => {
 });
 
 test("normalizeSettings supports auto/fixed voice ASR language guidance", () => {
-  const autoHint = normalizeSettings({
+  const autoHint = normalizeLegacyView({
     voice: {
       asrLanguageMode: "auto",
       asrLanguageHint: "EN"
@@ -570,7 +574,7 @@ test("normalizeSettings supports auto/fixed voice ASR language guidance", () => 
   assert.equal(autoHint.voice.asrLanguageMode, "auto");
   assert.equal(autoHint.voice.asrLanguageHint, "en");
 
-  const fixedHint = normalizeSettings({
+  const fixedHint = normalizeLegacyView({
     voice: {
       asrLanguageMode: "fixed",
       asrLanguageHint: "en-US"
@@ -579,7 +583,7 @@ test("normalizeSettings supports auto/fixed voice ASR language guidance", () => 
   assert.equal(fixedHint.voice.asrLanguageMode, "fixed");
   assert.equal(fixedHint.voice.asrLanguageHint, "en-us");
 
-  const invalid = normalizeSettings({
+  const invalid = normalizeLegacyView({
     voice: {
       asrLanguageMode: "not-real",
       asrLanguageHint: "!!!!!!"

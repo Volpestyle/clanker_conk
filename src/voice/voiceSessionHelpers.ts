@@ -1,4 +1,10 @@
 import { parseSoundboardReference } from "./soundboardDirector.ts";
+import {
+  getBotName,
+  getBotNameAliases,
+  getResolvedLegacyVoiceProvider,
+  getResolvedVoiceGenerationBinding
+} from "../settings/agentStack.ts";
 
 export const VOICE_ADDRESSING_ALL_TOKENS = new Set([
   "ALL",
@@ -325,16 +331,17 @@ export function shortError(text) {
 }
 
 export function resolveVoiceProvider(settings) {
-  return normalizeVoiceProvider(settings?.voice?.voiceProvider, "openai");
+  return normalizeVoiceProvider(getResolvedLegacyVoiceProvider(settings), "openai");
 }
 
 export function resolveBrainProvider(settings) {
   const voiceProvider = resolveVoiceProvider(settings);
-  return normalizeBrainProvider(settings?.voice?.brainProvider, voiceProvider, "openai");
+  return normalizeBrainProvider(getResolvedVoiceGenerationBinding(settings).provider, voiceProvider, "openai");
 }
 
 export function resolveTranscriberProvider(settings) {
-  return normalizeTranscriberProvider(settings?.voice?.transcriberProvider, "openai");
+  const voiceProvider = resolveVoiceProvider(settings);
+  return normalizeTranscriberProvider(voiceProvider === "elevenlabs" ? "openai" : voiceProvider, "openai");
 }
 
 export function resolveVoiceRuntimeMode(settings) {
@@ -454,8 +461,8 @@ export function isBotNameAddressed({
 }
 
 export function isVoiceTurnAddressedToBot(transcript, settings) {
-  if (isBotNameAddressed({ transcript, botName: settings?.botName || "" })) return true;
-  const aliases = Array.isArray(settings?.botNameAliases) ? settings.botNameAliases : [];
+  if (isBotNameAddressed({ transcript, botName: getBotName(settings) })) return true;
+  const aliases = getBotNameAliases(settings);
   for (const alias of aliases) {
     if (alias && isBotNameAddressed({ transcript, botName: String(alias) })) return true;
   }
