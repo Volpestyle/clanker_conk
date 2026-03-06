@@ -816,7 +816,20 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       });
 
       if (realtimeClient) {
-        await realtimeClient.close().catch(() => undefined);
+        try {
+          await realtimeClient.close();
+        } catch (closeError) {
+          manager.store.logAction({
+            kind: "voice_error",
+            guildId,
+            channelId: message.channelId,
+            userId,
+            content: `voice_join_realtime_client_close_failed: ${String(closeError?.message || closeError)}`,
+            metadata: {
+              failedAfter: "voice_join_failed"
+            }
+          });
+        }
       }
 
       // If the realtime API connect failed, the subprocess may still be

@@ -5252,7 +5252,7 @@ test("flushDeferredBotTurnOpenTurns waits for silence before admission", async (
 
   assert.equal(decisionCalls, 0);
   assert.equal(scheduledFlushCalls, 1);
-  assert.equal(manager.getDeferredQueuedUserTurns(session).length, 1);
+  assert.equal(manager.deferredActionQueue.getDeferredQueuedUserTurns(session).length, 1);
 });
 
 test("flushDeferredBotTurnOpenTurns coalesces deferred transcripts into one admission", async () => {
@@ -5333,7 +5333,7 @@ test("flushDeferredBotTurnOpenTurns coalesces deferred transcripts into one admi
     replyPayloads[0]?.transcript,
     "clanker hold on what about the rust panic trace"
   );
-  assert.equal(manager.getDeferredQueuedUserTurns(session).length, 0);
+  assert.equal(manager.deferredActionQueue.getDeferredQueuedUserTurns(session).length, 0);
 });
 
 test("flushDeferredBotTurnOpenTurns runs brain realtime reply after one admission", async () => {
@@ -5411,7 +5411,7 @@ test("flushDeferredBotTurnOpenTurns runs brain realtime reply after one admissio
   assert.equal(realtimeReplyPayloads[0]?.transcript, "clanker hold up add this too");
   assert.equal(realtimeReplyPayloads[0]?.source, "bot_turn_open_deferred_flush");
   assert.equal(realtimeReplyPayloads[0]?.directAddressed, false);
-  assert.equal(manager.getDeferredQueuedUserTurns(session).length, 0);
+  assert.equal(manager.deferredActionQueue.getDeferredQueuedUserTurns(session).length, 0);
 });
 
 test("flushDeferredBotTurnOpenTurns forwards native realtime audio after one admission", async () => {
@@ -5507,7 +5507,7 @@ test("flushDeferredBotTurnOpenTurns forwards native realtime audio after one adm
     : Buffer.alloc(0);
   assert.deepEqual([...forwardedPcm], [...Buffer.concat([firstPcm, secondPcm])]);
   assert.equal(forwardedPayloads[0]?.captureReason, "bot_turn_open_deferred_flush");
-  assert.equal(manager.getDeferredQueuedUserTurns(session).length, 0);
+  assert.equal(manager.deferredActionQueue.getDeferredQueuedUserTurns(session).length, 0);
 });
 
 test("voice decision history deduplicates consecutive identical turns", () => {

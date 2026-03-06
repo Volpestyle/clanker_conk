@@ -45,11 +45,19 @@ import {
   musicPhaseIsActive,
   musicPhaseShouldLockOutput
 } from "./voiceSessionTypes.ts";
-import type { BargeInController } from "./bargeInController.ts";
+import type { BargeInController, ReplyInterruptionPolicy } from "./bargeInController.ts";
 import type { DeferredActionQueue } from "./deferredActionQueue.ts";
 import type { GreetingManager } from "./greetingManager.ts";
 
 type ReplyManagerSettings = Record<string, unknown> | null;
+
+interface SilentResponseRecoveryArgs {
+  session: VoiceSession;
+  userId?: string | null;
+  trigger?: string;
+  responseId?: string | null;
+  responseStatus?: string | null;
+}
 
 type ReplyManagerStoreLike = {
   getSettings: () => ReplyManagerSettings;
@@ -80,8 +88,13 @@ export interface ReplyManagerHost {
   >;
   touchActivity: (guildId: string, settings?: ReplyManagerSettings) => void;
   logVoiceLatencyStage: (payload: Record<string, unknown>) => void;
-  normalizeReplyInterruptionPolicy: (rawPolicy?: unknown) => unknown;
-  setActiveReplyInterruptionPolicy: (session: VoiceSession, policy?: unknown) => void;
+  normalizeReplyInterruptionPolicy: (
+    rawPolicy?: ReplyInterruptionPolicy | Record<string, unknown> | null
+  ) => ReplyInterruptionPolicy | null;
+  setActiveReplyInterruptionPolicy: (
+    session: VoiceSession,
+    policy?: ReplyInterruptionPolicy | Record<string, unknown> | null
+  ) => void;
   maybeClearActiveReplyInterruptionPolicy: (session: VoiceSession) => void;
   deferredActionQueue: Pick<
     DeferredActionQueue,
@@ -575,12 +588,58 @@ export class ReplyManager {
         this.clearPendingResponse(session);
         return;
       }
-      void Promise.resolve(this.handleSilentResponse({
+      this.spawnSilentResponseRecovery({
         session,
         userId: pending.userId || userId,
         trigger: "watchdog"
-      })).catch(() => undefined);
+      });
     }, RESPONSE_SILENCE_RETRY_DELAY_MS);
+  }
+
+  private spawnSilentResponseRecovery({
+    session,
+    userId = null,
+    trigger = "watchdog",
+    responseId = null,
+    responseStatus = null
+  }: SilentResponseRecoveryArgs) {
+    void Promise.resolve(this.handleSilentResponse({
+      session,
+      userId,
+      trigger,
+      responseId,
+      responseStatus
+    })).catch((error: unknown) => {
+      const active = session.pendingResponse;
+      if (active) {
+        active.handlingSilence = false;
+      }
+      const resolvedUserId = active?.userId || userId || this.botUserId;
+      this.host.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: resolvedUserId,
+        content: `response_silent_recovery_failed: ${String((error as Error)?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          requestId: Number(active?.requestId || 0) || null,
+          trigger,
+          responseId,
+          responseStatus
+        }
+      });
+      if (session.ending || !isRealtimeMode(session.mode) || !active) return;
+      if (this.pendingResponseHasAudio(session, active)) {
+        this.clearPendingResponse(session);
+        return;
+      }
+      this.armResponseSilenceWatchdog({
+        session,
+        requestId: active.requestId,
+        userId: active.userId || userId
+      });
+    });
   }
 
   createTrackedAudioResponse({
@@ -598,7 +657,7 @@ export class ReplyManager {
     source?: string;
     resetRetryState?: boolean;
     emitCreateEvent?: boolean;
-    interruptionPolicy?: unknown;
+    interruptionPolicy?: ReplyInterruptionPolicy | Record<string, unknown> | null;
     utteranceText?: string | null;
     latencyContext?: Record<string, unknown> | null;
   }) {
@@ -699,13 +758,7 @@ export class ReplyManager {
     trigger = "watchdog",
     responseId = null,
     responseStatus = null
-  }: {
-    session: VoiceSession;
-    userId?: string | null;
-    trigger?: string;
-    responseId?: string | null;
-    responseStatus?: string | null;
-  }) {
+  }: SilentResponseRecoveryArgs) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
     const pending = session.pendingResponse;
@@ -1004,13 +1057,13 @@ export class ReplyManager {
         this.syncAssistantOutputState(session, "response_done_grace_audio_detected");
         return;
       }
-      void Promise.resolve(this.handleSilentResponse({
+      this.spawnSilentResponseRecovery({
         session,
         userId: responseUserId,
         trigger: "response_done",
         responseId,
         responseStatus
-      })).catch(() => undefined);
+      });
     }, RESPONSE_DONE_SILENCE_GRACE_MS);
   }
 

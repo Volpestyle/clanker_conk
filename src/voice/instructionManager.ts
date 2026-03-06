@@ -465,15 +465,45 @@ export class InstructionManager {
 
     session.realtimeInstructionRefreshTimer = setTimeout(() => {
       session.realtimeInstructionRefreshTimer = null;
-      void this.refreshRealtimeInstructions({
+      this.spawnRealtimeInstructionRefresh({
         session,
         settings: settings || session.settingsSnapshot || this.store.getSettings(),
         reason,
         speakerUserId,
         transcript,
         memorySlice
-      }).catch(() => undefined);
+      });
     }, REALTIME_INSTRUCTION_REFRESH_DEBOUNCE_MS);
+  }
+
+  private spawnRealtimeInstructionRefresh({
+    session,
+    settings,
+    reason = "voice_context_refresh",
+    speakerUserId = null,
+    transcript = "",
+    memorySlice = null
+  }: RefreshRealtimeInstructionsArgs) {
+    void this.refreshRealtimeInstructions({
+      session,
+      settings,
+      reason,
+      speakerUserId,
+      transcript,
+      memorySlice
+    }).catch((error: unknown) => {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: speakerUserId || this.host.client.user?.id || null,
+        content: `openai_realtime_instruction_refresh_failed: ${String((error as Error)?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          reason: String(reason || "voice_context_refresh")
+        }
+      });
+    });
   }
 
   async refreshRealtimeInstructions({

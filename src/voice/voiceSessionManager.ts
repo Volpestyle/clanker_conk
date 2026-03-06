@@ -215,9 +215,8 @@ import {
 import { providerSupports } from "./voiceModes.ts";
 import { ensureSessionToolRuntimeState, getVoiceMcpServerStatuses, resolveVoiceRealtimeToolDescriptors, buildRealtimeFunctionTools, recordVoiceToolCallEvent, parseOpenAiRealtimeToolArguments, resolveOpenAiRealtimeToolDescriptor, summarizeVoiceToolOutput, executeOpenAiRealtimeFunctionCall, refreshRealtimeTools, executeVoiceMemorySearchTool, executeVoiceMemoryWriteTool, executeVoiceAdaptiveStyleAddTool, executeVoiceAdaptiveStyleRemoveTool, executeVoiceConversationSearchTool, executeVoiceMusicSearchTool, executeVoiceMusicQueueAddTool, executeVoiceMusicQueueNextTool, executeVoiceMusicPlayNowTool, executeVoiceWebSearchTool, executeLocalVoiceToolCall, executeMcpVoiceToolCall } from "./voiceToolCalls.ts";
 import type {
-  DeferredQueuedUserTurn,
-  DeferredVoiceAction,
-  OutputChannelState
+  OutputChannelState,
+  VoiceSession
 } from "./voiceSessionTypes.ts";
 import {
   musicPhaseIsActive,
@@ -488,12 +487,12 @@ type VoiceToolRuntimeSessionLike = {
   realtimeClient?: {
     updateTools?: (payload: {
       tools: Array<{
-        type: "function";
+        type: string;
         name: string;
         description: string;
         parameters: Record<string, unknown>;
       }>;
-      toolChoice?: "auto" | "none" | "required" | { type: "function"; name: string };
+      toolChoice?: string;
     }) => void;
   } | null;
   mcpStatus?: VoiceMcpServerStatus[];
@@ -514,10 +513,11 @@ type VoiceToolRuntimeSessionLike = {
     startedAtMs: number;
     sourceEventType: string;
   }>;
+  openAiPendingToolAbortControllers?: Map<string, AbortController>;
   toolMusicTrackCatalog?: Map<string, unknown>;
   memoryWriteWindow?: number[];
   toolCallEvents?: VoiceToolCallEvent[];
-  musicQueueState?: Record<string, unknown>;
+  musicQueueState?: Record<string, unknown> | null;
   lastOpenAiToolCallerUserId?: string | null;
   awaitingToolOutputs?: boolean;
   pendingMemoryIngest?: Promise<unknown> | null;
@@ -1601,7 +1601,10 @@ export class VoiceSessionManager {
     });
   }
 
-  async playMusicViaDiscord(session: any, track: { id: string; title: string; artist: string; platform: string; externalUrl: string | null }) {
+  async playMusicViaDiscord(
+    session: VoiceSession,
+    track: Pick<MusicSelectionResult, "id" | "title" | "artist" | "platform" | "externalUrl">
+  ) {
     return await playMusicViaDiscordRuntime(this, session, track);
   }
 
@@ -2308,7 +2311,20 @@ export class VoiceSessionManager {
     });
     this.joinLocks.set(key, current);
 
-    await previous.catch(() => undefined);
+    try {
+      await previous;
+    } catch (error) {
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: key,
+        channelId: null,
+        userId: null,
+        content: `voice_join_lock_previous_failed: ${String(error?.message || error)}`,
+        metadata: {
+          scope: "withJoinLock"
+        }
+      });
+    }
     try {
       return await fn();
     } finally {
@@ -2327,25 +2343,6 @@ export class VoiceSessionManager {
 
   touchActivity(guildId, settings) {
     return this.sessionLifecycle.touchActivity(guildId, settings);
-  }
-
-  getDeferredOutputChannelBlockReason(session): OutputChannelState["deferredBlockReason"] {
-    return this.deferredActionQueue.getDeferredOutputChannelBlockReason(session);
-  }
-
-  getDeferredQueuedUserTurns(session): DeferredQueuedUserTurn[] {
-    return this.deferredActionQueue.getDeferredQueuedUserTurns(session);
-  }
-
-  /**
-   * Generic gating check shared by all deferred action types.
-   * Returns null if the action can fire, or a block-reason string if not.
-   *
-   * Covers: session validity, expiry, notBeforeAt floor, and output channel
-   * clear (captures, pendingResponse, active response, tool calls).
-   */
-  canFireDeferredAction(session, action: DeferredVoiceAction | null): string | null {
-    return this.deferredActionQueue.canFireDeferredAction(session, action);
   }
 
   normalizeReplyInterruptionPolicy(rawPolicy = null) {
@@ -3036,32 +3033,6 @@ export class VoiceSessionManager {
       session.thoughtLoopTimer = null;
     }
     session.nextThoughtAt = 0;
-  }
-
-  evaluateVoiceThoughtLoopGate({
-    session,
-    settings = null,
-    config = null,
-    now = Date.now()
-  }) {
-    return this.thoughtEngine.evaluateVoiceThoughtLoopGate({
-      session,
-      settings,
-      config,
-      now
-    });
-  }
-
-  async maybeRunVoiceThoughtLoop({
-    session,
-    settings = null,
-    trigger = "timer"
-  }) {
-    return this.thoughtEngine.maybeRunVoiceThoughtLoop({
-      session,
-      settings,
-      trigger
-    });
   }
 
   async generateVoiceThoughtCandidate({
@@ -4443,14 +4414,6 @@ export class VoiceSessionManager {
 
   async closeOpenAiSharedAsrSession(session, reason = "manual") {
     await closeSharedAsrSession(session, this.buildAsrBridgeDeps(session), reason);
-  }
-
-  startInboundCapture({ session, userId, settings = session?.settingsSnapshot }) {
-    return this.captureManager.startInboundCapture({
-      session,
-      userId,
-      settings
-    });
   }
 
   maybeHandleInterruptedReplyRecovery({
