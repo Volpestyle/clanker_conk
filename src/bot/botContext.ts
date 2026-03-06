@@ -72,6 +72,10 @@ export interface MediaContext extends BotContext {
   readonly video: VideoContextService;
 }
 
+export interface MediaAttachmentContext extends BudgetContext {
+  readonly gifs: GifService;
+}
+
 export interface AgentContext extends BotContext {
   readonly browserManager: BrowserManager | null;
   readonly activeBrowserTasks: BrowserTaskRegistry;
@@ -142,6 +146,7 @@ type ReplyPipelineRuntimeMember =
   | "maybeApplyReplyReaction"
   | "logSkippedReply"
   | "maybeHandleScreenShareOfferIntent"
+  | "resolveMediaAttachment"
   | "maybeAttachReplyGif"
   | "maybeAttachGeneratedImage"
   | "maybeAttachGeneratedVideo"

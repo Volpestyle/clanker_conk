@@ -23,13 +23,11 @@ import {
 } from "./prompts.ts";
 import { getMediaPromptCraftGuidance } from "./promptCore.ts";
 import {
-  MAX_GIF_QUERY_LEN,
   composeDiscoveryImagePrompt,
   composeDiscoveryVideoPrompt,
   composeReplyImagePrompt,
   composeReplyVideoPrompt,
   extractUrlsFromText,
-  normalizeDirectiveText,
   normalizeReactionEmojiToken,
   normalizeSkipSentinel,
   parseDiscoveryMediaDirective,
@@ -97,6 +95,15 @@ import {
   runModelRequestedImageLookup as runModelRequestedImageLookupForImageAnalysis
 } from "./bot/imageAnalysis.ts";
 import {
+  buildMessagePayloadWithGif as buildMessagePayloadWithGifForMediaAttachment,
+  buildMessagePayloadWithImage as buildMessagePayloadWithImageForMediaAttachment,
+  buildMessagePayloadWithVideo as buildMessagePayloadWithVideoForMediaAttachment,
+  maybeAttachGeneratedImage as maybeAttachGeneratedImageForMediaAttachment,
+  maybeAttachGeneratedVideo as maybeAttachGeneratedVideoForMediaAttachment,
+  maybeAttachReplyGif as maybeAttachReplyGifForMediaAttachment,
+  resolveMediaAttachment as resolveMediaAttachmentForMediaAttachment
+} from "./bot/mediaAttachment.ts";
+import {
   composeMessageContentForHistory as composeMessageContentForHistoryForMessageHistory,
   getConversationHistoryForPrompt as getConversationHistoryForPromptForMessageHistory,
   getImageInputs as getImageInputsForMessageHistory,
@@ -161,6 +168,7 @@ import type {
   AgentContext,
   BotContext,
   BudgetContext,
+  MediaAttachmentContext,
   QueueGatewayRuntime,
   ReplyPipelineRuntime,
   VoiceReplyRuntime
@@ -491,6 +499,13 @@ export class ClankerBot {
     };
   }
 
+  toMediaAttachmentContext(): MediaAttachmentContext {
+    return {
+      ...this.toBudgetContext(),
+      gifs: this.gifs
+    };
+  }
+
   toQueueGatewayRuntime(): QueueGatewayRuntime {
     const runtime: QueueGatewayRuntime = {
       ...this.toBotContext(),
@@ -610,6 +625,7 @@ export class ClankerBot {
       maybeApplyReplyReaction: (payload) => this.maybeApplyReplyReaction(payload),
       logSkippedReply: (payload) => this.logSkippedReply(payload),
       maybeHandleScreenShareOfferIntent: (payload) => this.maybeHandleScreenShareOfferIntent(payload),
+      resolveMediaAttachment: (payload) => this.resolveMediaAttachment(payload),
       maybeAttachReplyGif: (payload) => this.maybeAttachReplyGif(payload),
       maybeAttachGeneratedImage: (payload) => this.maybeAttachGeneratedImage(payload),
       maybeAttachGeneratedVideo: (payload) => this.maybeAttachGeneratedVideo(payload),
@@ -2887,248 +2903,53 @@ export class ClankerBot {
     });
   }
 
+  async resolveMediaAttachment({ settings, text, directive = null, trace }) {
+    return await resolveMediaAttachmentForMediaAttachment(this.toMediaAttachmentContext(), {
+      settings,
+      text,
+      directive,
+      trace
+    });
+  }
+
   async maybeAttachGeneratedImage({ settings, text, prompt, variant = "simple", trace }) {
-    const payload = { content: text };
-    const ready = this.isImageGenerationReady(settings, variant);
-    if (!ready) {
-      return {
-        payload,
-        imageUsed: false,
-        variant: null,
-        blockedByBudget: false,
-        blockedByCapability: true,
-        budget: this.getImageBudgetState(settings)
-      };
-    }
-
-    const budget = this.getImageBudgetState(settings);
-    if (!budget.canGenerate) {
-      return {
-        payload,
-        imageUsed: false,
-        variant: null,
-        blockedByBudget: true,
-        blockedByCapability: false,
-        budget
-      };
-    }
-
-    try {
-      const image = await this.llm.generateImage({
-        settings,
-        prompt,
-        variant,
-        trace
-      });
-      const withImage = this.buildMessagePayloadWithImage(text, image);
-      return {
-        payload: withImage.payload,
-        imageUsed: withImage.imageUsed,
-        variant: image.variant || variant,
-        blockedByBudget: false,
-        blockedByCapability: false,
-        budget
-      };
-    } catch {
-      return {
-        payload,
-        imageUsed: false,
-        variant: null,
-        blockedByBudget: false,
-        blockedByCapability: false,
-        budget
-      };
-    }
+    return await maybeAttachGeneratedImageForMediaAttachment(this.toMediaAttachmentContext(), {
+      settings,
+      text,
+      prompt,
+      variant,
+      trace
+    });
   }
 
   async maybeAttachGeneratedVideo({ settings, text, prompt, trace }) {
-    const payload = { content: text };
-    const ready = this.isVideoGenerationReady(settings);
-    if (!ready) {
-      return {
-        payload,
-        videoUsed: false,
-        blockedByBudget: false,
-        blockedByCapability: true,
-        budget: this.getVideoGenerationBudgetState(settings)
-      };
-    }
-
-    const budget = this.getVideoGenerationBudgetState(settings);
-    if (!budget.canGenerate) {
-      return {
-        payload,
-        videoUsed: false,
-        blockedByBudget: true,
-        blockedByCapability: false,
-        budget
-      };
-    }
-
-    try {
-      const video = await this.llm.generateVideo({
-        settings,
-        prompt,
-        trace
-      });
-      const withVideo = this.buildMessagePayloadWithVideo(text, video);
-      return {
-        payload: withVideo.payload,
-        videoUsed: withVideo.videoUsed,
-        blockedByBudget: false,
-        blockedByCapability: false,
-        budget
-      };
-    } catch {
-      return {
-        payload,
-        videoUsed: false,
-        blockedByBudget: false,
-        blockedByCapability: false,
-        budget
-      };
-    }
+    return await maybeAttachGeneratedVideoForMediaAttachment(this.toMediaAttachmentContext(), {
+      settings,
+      text,
+      prompt,
+      trace
+    });
   }
 
   async maybeAttachReplyGif({ settings, text, query, trace }) {
-    const payload = { content: text };
-    const budget = this.getGifBudgetState(settings);
-    const normalizedQuery = normalizeDirectiveText(query, MAX_GIF_QUERY_LEN);
-    const discovery = getDiscoverySettings(settings);
-
-    if (!discovery.allowReplyGifs) {
-      return {
-        payload,
-        gifUsed: false,
-        blockedByBudget: false,
-        blockedByConfiguration: true,
-        budget
-      };
-    }
-
-    if (!normalizedQuery) {
-      return {
-        payload,
-        gifUsed: false,
-        blockedByBudget: false,
-        blockedByConfiguration: false,
-        budget
-      };
-    }
-
-    if (!this.gifs?.isConfigured?.()) {
-      return {
-        payload,
-        gifUsed: false,
-        blockedByBudget: false,
-        blockedByConfiguration: true,
-        budget
-      };
-    }
-
-    if (!budget.canFetch) {
-      return {
-        payload,
-        gifUsed: false,
-        blockedByBudget: true,
-        blockedByConfiguration: false,
-        budget
-      };
-    }
-
-    try {
-      const gif = await this.gifs.pickGif({
-        query: normalizedQuery,
-        trace
-      });
-      if (!gif?.url) {
-        return {
-          payload,
-          gifUsed: false,
-          blockedByBudget: false,
-          blockedByConfiguration: false,
-          budget
-        };
-      }
-
-      const withGif = this.buildMessagePayloadWithGif(text, gif.url);
-      return {
-        payload: withGif.payload,
-        gifUsed: withGif.gifUsed,
-        blockedByBudget: false,
-        blockedByConfiguration: false,
-        budget
-      };
-    } catch {
-      return {
-        payload,
-        gifUsed: false,
-        blockedByBudget: false,
-        blockedByConfiguration: false,
-        budget
-      };
-    }
+    return await maybeAttachReplyGifForMediaAttachment(this.toMediaAttachmentContext(), {
+      settings,
+      text,
+      query,
+      trace
+    });
   }
 
   buildMessagePayloadWithImage(text, image) {
-    if (image.imageBuffer) {
-      return {
-        payload: {
-          content: text,
-          files: [{ attachment: image.imageBuffer, name: `clanker-${Date.now()}.png` }]
-        },
-        imageUsed: true
-      };
-    }
-
-    if (image.imageUrl) {
-      const normalizedUrl = String(image.imageUrl || "").trim();
-      const trimmedText = String(text || "").trim();
-      const content = trimmedText ? `${trimmedText}\n${normalizedUrl}` : normalizedUrl;
-      return {
-        payload: { content },
-        imageUsed: true
-      };
-    }
-
-    return {
-      payload: { content: text },
-      imageUsed: false
-    };
+    return buildMessagePayloadWithImageForMediaAttachment(text, image);
   }
 
   buildMessagePayloadWithVideo(text, video) {
-    const videoUrl = String(video?.videoUrl || "").trim();
-    if (!videoUrl) {
-      return {
-        payload: { content: text },
-        videoUsed: false
-      };
-    }
-
-    const trimmedText = String(text || "").trim();
-    const content = trimmedText ? `${trimmedText}\n${videoUrl}` : videoUrl;
-    return {
-      payload: { content },
-      videoUsed: true
-    };
+    return buildMessagePayloadWithVideoForMediaAttachment(text, video);
   }
 
   buildMessagePayloadWithGif(text, gifUrl) {
-    const normalizedUrl = String(gifUrl || "").trim();
-    if (!normalizedUrl) {
-      return {
-        payload: { content: text },
-        gifUsed: false
-      };
-    }
-
-    const trimmedText = String(text || "").trim();
-    const content = trimmedText ? `${trimmedText}\n${normalizedUrl}` : normalizedUrl;
-    return {
-      payload: { content },
-      gifUsed: true
-    };
+    return buildMessagePayloadWithGifForMediaAttachment(text, gifUrl);
   }
 
   isUserBlocked(settings, userId) {
@@ -3646,89 +3467,49 @@ export class ClankerBot {
     }
 
     const mediaDirective = pickReplyMediaDirective(directive);
-    let payload = { content: finalText };
-    let media = null;
-
-    if (mediaDirective?.type === "gif" && directive.gifQuery) {
-      const gifResult = await this.maybeAttachReplyGif({
-        settings,
-        text: finalText,
-        query: directive.gifQuery,
-        trace: {
-          guildId: automation.guild_id,
-          channelId: automation.channel_id,
-          userId: this.client.user?.id || null,
-          source: "automation_run"
-        }
-      });
-      payload = gifResult.payload;
-      if (gifResult.gifUsed) media = { type: "gif" };
-    }
-
-    if (mediaDirective?.type === "image_simple" && directive.imagePrompt) {
-      const imageResult = await this.maybeAttachGeneratedImage({
-        settings,
-        text: finalText,
-        prompt: composeReplyImagePrompt(
-          directive.imagePrompt,
-          finalText,
-          mediaPromptLimit,
-          automationMediaMemoryFacts
-        ),
-        variant: "simple",
-        trace: {
-          guildId: automation.guild_id,
-          channelId: automation.channel_id,
-          userId: this.client.user?.id || null,
-          source: "automation_run"
-        }
-      });
-      payload = imageResult.payload;
-      if (imageResult.imageUsed) media = { type: "image_simple" };
-    }
-
-    if (mediaDirective?.type === "image_complex" && directive.complexImagePrompt) {
-      const imageResult = await this.maybeAttachGeneratedImage({
-        settings,
-        text: finalText,
-        prompt: composeReplyImagePrompt(
-          directive.complexImagePrompt,
-          finalText,
-          mediaPromptLimit,
-          automationMediaMemoryFacts
-        ),
-        variant: "complex",
-        trace: {
-          guildId: automation.guild_id,
-          channelId: automation.channel_id,
-          userId: this.client.user?.id || null,
-          source: "automation_run"
-        }
-      });
-      payload = imageResult.payload;
-      if (imageResult.imageUsed) media = { type: "image_complex" };
-    }
-
-    if (mediaDirective?.type === "video" && directive.videoPrompt) {
-      const videoResult = await this.maybeAttachGeneratedVideo({
-        settings,
-        text: finalText,
-        prompt: composeReplyVideoPrompt(
-          directive.videoPrompt,
-          finalText,
-          mediaPromptLimit,
-          automationMediaMemoryFacts
-        ),
-        trace: {
-          guildId: automation.guild_id,
-          channelId: automation.channel_id,
-          userId: this.client.user?.id || null,
-          source: "automation_run"
-        }
-      });
-      payload = videoResult.payload;
-      if (videoResult.videoUsed) media = { type: "video" };
-    }
+    const mediaAttachment = await this.resolveMediaAttachment({
+      settings,
+      text: finalText,
+      directive: {
+        type: mediaDirective?.type ?? null,
+        gifQuery: directive.gifQuery,
+        imagePrompt:
+          mediaDirective?.type === "image_simple" && directive.imagePrompt
+            ? composeReplyImagePrompt(
+              directive.imagePrompt,
+              finalText,
+              mediaPromptLimit,
+              automationMediaMemoryFacts
+            )
+            : null,
+        complexImagePrompt:
+          mediaDirective?.type === "image_complex" && directive.complexImagePrompt
+            ? composeReplyImagePrompt(
+              directive.complexImagePrompt,
+              finalText,
+              mediaPromptLimit,
+              automationMediaMemoryFacts
+            )
+            : null,
+        videoPrompt:
+          mediaDirective?.type === "video" && directive.videoPrompt
+            ? composeReplyVideoPrompt(
+              directive.videoPrompt,
+              finalText,
+              mediaPromptLimit,
+              automationMediaMemoryFacts
+            )
+            : null
+      },
+      trace: {
+        guildId: automation.guild_id,
+        channelId: automation.channel_id,
+        userId: this.client.user?.id || null,
+        source: "automation_run"
+      }
+    });
+    const payload = mediaAttachment.payload;
+    const media = mediaAttachment.media;
 
     return {
       skip: false,
@@ -4171,82 +3952,60 @@ export class ClankerBot {
       let videoUsed = false;
       let videoBudgetBlocked = false;
       let videoCapabilityBlocked = false;
-      if (mediaDirective?.type === "image_simple" && discovery.allowImagePosts && imagePrompt) {
-        const imageResult = await this.maybeAttachGeneratedImage({
-          settings,
-          text: finalText,
-          prompt: composeDiscoveryImagePrompt(
-            imagePrompt,
-            finalText,
-            discoveryMediaPromptLimit,
-            discoveryMediaMemoryFacts
-          ),
-          variant: "simple",
-          trace: {
-            guildId: channel.guildId,
-            channelId: channel.id,
-            userId: this.client.user.id,
-            source: "discovery_post"
-          }
-        });
-        payload = imageResult.payload;
-        imageUsed = imageResult.imageUsed;
-        imageBudgetBlocked = imageResult.blockedByBudget;
-        imageCapabilityBlocked = imageResult.blockedByCapability;
-        imageVariantUsed = imageResult.variant || "simple";
-      }
-
-      if (
-        mediaDirective?.type === "image_complex" &&
-        discovery.allowImagePosts &&
-        complexImagePrompt
-      ) {
-        const imageResult = await this.maybeAttachGeneratedImage({
-          settings,
-          text: finalText,
-          prompt: composeDiscoveryImagePrompt(
-            complexImagePrompt,
-            finalText,
-            discoveryMediaPromptLimit,
-            discoveryMediaMemoryFacts
-          ),
-          variant: "complex",
-          trace: {
-            guildId: channel.guildId,
-            channelId: channel.id,
-            userId: this.client.user.id,
-            source: "discovery_post"
-          }
-        });
-        payload = imageResult.payload;
-        imageUsed = imageResult.imageUsed;
-        imageBudgetBlocked = imageResult.blockedByBudget;
-        imageCapabilityBlocked = imageResult.blockedByCapability;
-        imageVariantUsed = imageResult.variant || "complex";
-      }
-
-      if (mediaDirective?.type === "video" && discovery.allowVideoPosts && videoPrompt) {
-        const videoResult = await this.maybeAttachGeneratedVideo({
-          settings,
-          text: finalText,
-          prompt: composeDiscoveryVideoPrompt(
-            videoPrompt,
-            finalText,
-            discoveryMediaPromptLimit,
-            discoveryMediaMemoryFacts
-          ),
-          trace: {
-            guildId: channel.guildId,
-            channelId: channel.id,
-            userId: this.client.user.id,
-            source: "discovery_post"
-          }
-        });
-        payload = videoResult.payload;
-        videoUsed = videoResult.videoUsed;
-        videoBudgetBlocked = videoResult.blockedByBudget;
-        videoCapabilityBlocked = videoResult.blockedByCapability;
-      }
+      const mediaAttachment = await this.resolveMediaAttachment({
+        settings,
+        text: finalText,
+        directive: {
+          type: mediaDirective?.type ?? null,
+          imagePrompt:
+            mediaDirective?.type === "image_simple" &&
+              discovery.allowImagePosts &&
+              imagePrompt
+              ? composeDiscoveryImagePrompt(
+                imagePrompt,
+                finalText,
+                discoveryMediaPromptLimit,
+                discoveryMediaMemoryFacts
+              )
+              : null,
+          complexImagePrompt:
+            mediaDirective?.type === "image_complex" &&
+              discovery.allowImagePosts &&
+              complexImagePrompt
+              ? composeDiscoveryImagePrompt(
+                complexImagePrompt,
+                finalText,
+                discoveryMediaPromptLimit,
+                discoveryMediaMemoryFacts
+              )
+              : null,
+          videoPrompt:
+            mediaDirective?.type === "video" &&
+              discovery.allowVideoPosts &&
+              videoPrompt
+              ? composeDiscoveryVideoPrompt(
+                videoPrompt,
+                finalText,
+                discoveryMediaPromptLimit,
+                discoveryMediaMemoryFacts
+              )
+              : null
+        },
+        trace: {
+          guildId: channel.guildId,
+          channelId: channel.id,
+          userId: this.client.user.id,
+          source: "discovery_post"
+        }
+      });
+      payload = mediaAttachment.payload;
+      imageUsed = mediaAttachment.imageUsed;
+      imageBudgetBlocked = mediaAttachment.imageBudgetBlocked;
+      imageCapabilityBlocked = mediaAttachment.imageCapabilityBlocked;
+      imageVariantUsed = mediaAttachment.imageVariantUsed;
+      videoUsed = mediaAttachment.videoUsed;
+      videoBudgetBlocked = mediaAttachment.videoBudgetBlocked;
+      videoCapabilityBlocked = mediaAttachment.videoCapabilityBlocked;
 
       if (!finalText && !imageUsed && !videoUsed) {
         this.store.logAction({

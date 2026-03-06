@@ -1196,97 +1196,58 @@ export async function dispatchReplyActions(
   const complexImagePrompt = replyDirective.complexImagePrompt;
   const videoPrompt = replyDirective.videoPrompt;
   const gifQuery = replyDirective.gifQuery;
-
-  if (mediaDirective?.type === "gif" && gifQuery) {
-    const gifResult = await bot.maybeAttachReplyGif({
-      settings,
-      text: finalText,
-      query: gifQuery,
-      trace: {
-        guildId: message.guildId,
-        channelId: message.channelId,
-        userId: message.author.id,
-        source: "reply_message"
-      }
-    });
-    payload = gifResult.payload;
-    gifUsed = gifResult.gifUsed;
-    gifBudgetBlocked = gifResult.blockedByBudget;
-    gifConfigBlocked = gifResult.blockedByConfiguration;
-  }
-
-  if (mediaDirective?.type === "image_simple" && discovery.allowReplyImages && imagePrompt) {
-    const imageResult = await bot.maybeAttachGeneratedImage({
-      settings,
-      text: finalText,
-      prompt: composeReplyImagePrompt(
-        imagePrompt,
-        finalText,
-        mediaPromptLimit,
-        replyMediaMemoryFacts
-      ),
-      variant: "simple",
-      trace: {
-        guildId: message.guildId,
-        channelId: message.channelId,
-        userId: message.author.id,
-        source: "reply_message"
-      }
-    });
-    payload = imageResult.payload;
-    imageUsed = imageResult.imageUsed;
-    imageBudgetBlocked = imageResult.blockedByBudget;
-    imageCapabilityBlocked = imageResult.blockedByCapability;
-    imageVariantUsed = imageResult.variant || "simple";
-  }
-
-  if (mediaDirective?.type === "image_complex" && discovery.allowReplyImages && complexImagePrompt) {
-    const imageResult = await bot.maybeAttachGeneratedImage({
-      settings,
-      text: finalText,
-      prompt: composeReplyImagePrompt(
-        complexImagePrompt,
-        finalText,
-        mediaPromptLimit,
-        replyMediaMemoryFacts
-      ),
-      variant: "complex",
-      trace: {
-        guildId: message.guildId,
-        channelId: message.channelId,
-        userId: message.author.id,
-        source: "reply_message"
-      }
-    });
-    payload = imageResult.payload;
-    imageUsed = imageResult.imageUsed;
-    imageBudgetBlocked = imageResult.blockedByBudget;
-    imageCapabilityBlocked = imageResult.blockedByCapability;
-    imageVariantUsed = imageResult.variant || "complex";
-  }
-
-  if (mediaDirective?.type === "video" && discovery.allowReplyVideos && videoPrompt) {
-    const videoResult = await bot.maybeAttachGeneratedVideo({
-      settings,
-      text: finalText,
-      prompt: composeReplyVideoPrompt(
-        videoPrompt,
-        finalText,
-        mediaPromptLimit,
-        replyMediaMemoryFacts
-      ),
-      trace: {
-        guildId: message.guildId,
-        channelId: message.channelId,
-        userId: message.author.id,
-        source: "reply_message"
-      }
-    });
-    payload = videoResult.payload;
-    videoUsed = videoResult.videoUsed;
-    videoBudgetBlocked = videoResult.blockedByBudget;
-    videoCapabilityBlocked = videoResult.blockedByCapability;
-  }
+  const mediaAttachment = await bot.resolveMediaAttachment({
+    settings,
+    text: finalText,
+    directive: {
+      type: mediaDirective?.type ?? null,
+      gifQuery,
+      imagePrompt:
+        mediaDirective?.type === "image_simple" && discovery.allowReplyImages && imagePrompt
+          ? composeReplyImagePrompt(
+            imagePrompt,
+            finalText,
+            mediaPromptLimit,
+            replyMediaMemoryFacts
+          )
+          : null,
+      complexImagePrompt:
+        mediaDirective?.type === "image_complex" && discovery.allowReplyImages && complexImagePrompt
+          ? composeReplyImagePrompt(
+            complexImagePrompt,
+            finalText,
+            mediaPromptLimit,
+            replyMediaMemoryFacts
+          )
+          : null,
+      videoPrompt:
+        mediaDirective?.type === "video" && discovery.allowReplyVideos && videoPrompt
+          ? composeReplyVideoPrompt(
+            videoPrompt,
+            finalText,
+            mediaPromptLimit,
+            replyMediaMemoryFacts
+          )
+          : null
+    },
+    trace: {
+      guildId: message.guildId,
+      channelId: message.channelId,
+      userId: message.author.id,
+      source: "reply_message"
+    }
+  });
+  payload = mediaAttachment.payload;
+  imageUsed = mediaAttachment.imageUsed;
+  imageBudgetBlocked = mediaAttachment.imageBudgetBlocked;
+  imageCapabilityBlocked = mediaAttachment.imageCapabilityBlocked;
+  imageVariantUsed = mediaAttachment.imageVariantUsed;
+  videoUsed = mediaAttachment.videoUsed;
+  videoBudgetBlocked = mediaAttachment.videoBudgetBlocked;
+  videoCapabilityBlocked = mediaAttachment.videoCapabilityBlocked;
+  gifUsed = mediaAttachment.gifUsed;
+  gifBudgetBlocked = mediaAttachment.gifBudgetBlocked;
+  gifConfigBlocked = mediaAttachment.gifConfigBlocked;
 
   if (!finalText && !imageUsed && !videoUsed && !gifUsed) {
     bot.store.logAction({
