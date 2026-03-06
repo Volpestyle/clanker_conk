@@ -145,6 +145,7 @@ import {
   getBrowserRuntimeConfig,
   getResearchRuntimeConfig,
   getResolvedBrowserTaskConfig,
+  getVoiceAdmissionSettings,
   isDevTaskEnabled
 } from "./settings/agentStack.ts";
 
@@ -1653,13 +1654,16 @@ export class ClankerBot {
   }
 
   async maybeHandleStructuredVoiceIntent({ message, settings, replyDirective }) {
-    const voiceSettings = settings?.voice || {};
-    if (!voiceSettings.enabled) return false;
+    if (!settings?.voice?.enabled) return false;
 
     const intent = replyDirective?.voiceIntent;
     if (!intent?.intent) return false;
 
-    const threshold = clamp(Number(voiceSettings.intentConfidenceThreshold) || 0.75, 0.4, 0.99);
+    const threshold = clamp(
+      Number(getVoiceAdmissionSettings(settings).intentConfidenceThreshold) || 0.75,
+      0.4,
+      0.99
+    );
     if (intent.confidence < threshold) return false;
 
     this.store.logAction({

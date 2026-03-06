@@ -1250,16 +1250,20 @@ test("reply classifier prompt includes attributed history and current turn field
       ]
     },
     userId: "speaker-1",
-    settings: baseSettings({
-      voice: {
-        replyEagerness: 60,
-        replyDecisionLlm: {
-          provider: "anthropic",
-          model: "claude-haiku-4-5",
-          realtimeAdmissionMode: "hard_classifier"
+    settings: (() => {
+      const settings = baseSettings({
+        voice: {
+          replyEagerness: 60,
+          replyDecisionLlm: {
+            provider: "anthropic",
+            model: "claude-haiku-4-5",
+            realtimeAdmissionMode: "hard_classifier"
+          }
         }
-      }
-    }),
+      });
+      settings.voice.conversationPolicy.replyEagerness = 60;
+      return settings;
+    })(),
     transcript: "yo what's up"
   });
 
@@ -1267,6 +1271,7 @@ test("reply classifier prompt includes attributed history and current turn field
   assert.equal(decision.reason, "classifier_allow");
   assert.equal(classifierPrompt.includes('Speaker: speaker 1'), true);
   assert.equal(classifierPrompt.includes('Transcript: "yo what\'s up"'), true);
+  assert.equal(classifierPrompt.includes("Voice reply eagerness: 60/100."), true);
   assert.equal(classifierPrompt.includes("Recent attributed voice turns:"), true);
   assert.equal(classifierPrompt.includes('vuhlp: "i\'m working on a project"'), true);
 });
@@ -2915,6 +2920,7 @@ test("smoke: runRealtimeBrainReply passes join-window context into generation", 
   };
 
   const settingsSnapshot = baseSettings();
+  settingsSnapshot.voice.conversationPolicy.replyEagerness = 60;
   settingsSnapshot.voice.streamWatch = {
     enabled: true,
     commentaryPath: "anthropic_keyframes",
@@ -2968,6 +2974,7 @@ test("smoke: runRealtimeBrainReply passes join-window context into generation", 
   assert.equal(result, true);
   assert.equal(generationPayloads.length, 1);
   assert.equal(Boolean(generationPayloads[0]?.isEagerTurn), true);
+  assert.equal(generationPayloads[0]?.voiceEagerness, 60);
   assert.equal(Boolean(generationPayloads[0]?.joinWindowActive), true);
   assert.equal(
     Number.isFinite(Number(generationPayloads[0]?.joinWindowAgeMs)),
@@ -3023,7 +3030,11 @@ test("runRealtimeBrainReply retries fired join greetings instead of accepting an
     realtimeClient: {},
     recentVoiceTurns: [],
     membershipEvents: [],
-    settingsSnapshot: baseSettings()
+    settingsSnapshot: (() => {
+      const settings = baseSettings();
+      settings.voice.conversationPolicy.replyEagerness = 60;
+      return settings;
+    })()
   };
 
   const result = await manager.runRealtimeBrainReply({
@@ -4648,6 +4659,7 @@ test("runSttPipelineReply passes addressing state into generation and persists m
   });
 
   assert.equal(generationPayloads.length, 1);
+  assert.equal(generationPayloads[0]?.voiceEagerness, 60);
   assert.equal(generationPayloads[0]?.conversationContext?.voiceAddressingState?.currentSpeakerTarget, "bob");
   assert.equal(
     generationPayloads[0]?.conversationContext?.voiceAddressingState?.recentAddressingGuesses?.length >= 2,

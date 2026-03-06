@@ -1724,6 +1724,58 @@ test("voice intent below confidence threshold falls back to normal text reply pa
   });
 });
 
+test("maybeHandleStructuredVoiceIntent respects canonical voice admission threshold", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+    store.patchSettings({
+      voice: {
+        enabled: true,
+        admission: {
+          intentConfidenceThreshold: 0.9
+        }
+      }
+    });
+
+    let joinCallCount = 0;
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: null,
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+    bot.voiceSessionManager.requestJoin = async () => {
+      joinCallCount += 1;
+      return true;
+    };
+
+    const handled = await bot.maybeHandleStructuredVoiceIntent({
+      message: {
+        id: "msg-canonical-voice-threshold",
+        guildId: "guild-1",
+        channelId,
+        author: { id: "user-1", username: "alice" },
+        member: { displayName: "alice" }
+      },
+      settings: store.getSettings(),
+      replyDirective: {
+        voiceIntent: {
+          intent: "join",
+          confidence: 0.8,
+          reason: "not confident enough"
+        }
+      }
+    });
+
+    assert.equal(handled, false);
+    assert.equal(joinCallCount, 0);
+  });
+});
+
 test("voice intent dispatcher routes all supported intents to voice session manager handlers", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";

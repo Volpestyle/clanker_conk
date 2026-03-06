@@ -3,6 +3,7 @@ import { normalizeAutomationSchedule } from "./automation.ts";
 import { normalizeMentionLookupKey } from "./bot/mentionLookup.ts";
 import { normalizeWhitespaceText } from "./normalization/text.ts";
 import { extractJsonObjectFromText } from "./normalization/jsonExtraction.ts";
+import { getDiscoverySettings } from "./settings/agentStack.ts";
 
 const URL_IN_TEXT_RE = /https?:\/\/[^\s<>()]+/gi;
 const IMAGE_PROMPT_DIRECTIVE_RE = /\[\[IMAGE_PROMPT:\s*([^\]]*?)\s*\]\]\s*$/i;
@@ -35,7 +36,7 @@ const MAX_VOICE_INTENT_SELECTED_RESULT_ID_LEN = 180;
 const MAX_VOICE_INTENT_MUSIC_RESULT_FIELD_LEN = 220;
 
 export function resolveMaxMediaPromptLen(settings) {
-  const raw = Number(settings?.discovery?.maxMediaPromptChars);
+  const raw = Number(getDiscoverySettings(settings).maxMediaPromptChars);
   if (!Number.isFinite(raw)) return DEFAULT_MAX_MEDIA_PROMPT_LEN;
   return clamp(Math.floor(raw), MAX_MEDIA_PROMPT_FLOOR, MAX_MEDIA_PROMPT_CEILING);
 }

@@ -371,7 +371,7 @@ export async function evaluateVoiceReplyDecision(manager: any, {
     }
     return false;
   };
-  const botWakeTokens = normalizeWakeTokens(settings?.botName || "");
+  const botWakeTokens = normalizeWakeTokens(getPromptBotName(settings));
   const transcriptWakeTokens = normalizeWakeTokens(normalizedTranscript);
   const transcriptWakeTokenSet = new Set(transcriptWakeTokens);
   const mergedWakeToken = botWakeTokens.length >= 2 ? botWakeTokens.join("") : "";
@@ -397,7 +397,7 @@ export async function evaluateVoiceReplyDecision(manager: any, {
   const directAddressConfidence = Number(directAddressAssessment.confidence) || 0;
   const directAddressThreshold = Number(directAddressAssessment.threshold) || DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD;
   const directAddressed = directAddressConfidence >= directAddressThreshold;
-  const replyEagerness = clamp(Number(settings?.voice?.replyEagerness) || 0, 0, 100);
+  const replyEagerness = clamp(Number(getVoiceConversationPolicy(settings).replyEagerness) || 0, 0, 100);
   const sameSpeakerPendingCommandFollowup =
     typeof manager.isMusicDisambiguationResolutionTurn === "function" &&
     manager.isMusicDisambiguationResolutionTurn(session, normalizedUserId, normalizedTranscript);
@@ -550,7 +550,7 @@ export async function evaluateVoiceReplyDecision(manager: any, {
   // Eagerness 0 no longer hard-rejects — it flows to classifier/generation
   // where the tier-based personality prompt handles the conservative behavior.
 
-  const sessionMode = String(session?.mode || settings?.voice?.mode || "").trim().toLowerCase();
+  const sessionMode = String(session?.mode || "").trim().toLowerCase();
   const mergedWithGeneration =
     sessionMode === "stt_pipeline" ||
     (isRealtimeMode(sessionMode) &&

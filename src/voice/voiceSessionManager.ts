@@ -5,6 +5,7 @@ import {
   getBotNameAliases,
   getMemorySettings,
   getDirectiveSettings,
+  getFollowupSettings,
   getReplyGenerationSettings,
   getResolvedOrchestratorBinding,
   getResolvedVoiceAdmissionClassifierBinding,
@@ -10899,6 +10900,8 @@ export class VoiceSessionManager {
     let leaveVoiceChannelRequested = false;
     let generatedVoiceAddressing = null;
     let releaseLookupBusy = null;
+    const voiceConversation = getVoiceConversationPolicy(settings);
+    const followup = getFollowupSettings(settings);
     try {
       const generated = await this.generateVoiceTurn({
         settings,
@@ -10912,7 +10915,7 @@ export class VoiceSessionManager {
         isEagerTurn: !directAddressed && !generationConversationContext?.engaged,
         joinWindowActive,
         joinWindowAgeMs,
-        voiceEagerness: Number(settings?.voice?.replyEagerness) || 0,
+        voiceEagerness: Number(voiceConversation.replyEagerness) || 0,
         conversationContext: generationConversationContext,
         sessionTiming,
         participantRoster,
@@ -10933,7 +10936,7 @@ export class VoiceSessionManager {
           releaseLookupBusy();
           releaseLookupBusy = null;
         },
-        webSearchTimeoutMs: Number(settings?.voice?.webSearchTimeoutMs),
+        webSearchTimeoutMs: Number(followup.toolBudget?.toolTimeoutMs),
         voiceToolCallbacks: this.buildVoiceToolCallbacks({ session, settings })
       });
       const generatedPayload =
@@ -11236,6 +11239,8 @@ export class VoiceSessionManager {
     let releaseLookupBusy = null;
     let generatedPayload = null;
     let generatedVoiceAddressing = null;
+    const voiceConversation = getVoiceConversationPolicy(settings);
+    const followup = getFollowupSettings(settings);
     try {
       const generated = await this.generateVoiceTurn({
         settings,
@@ -11250,7 +11255,7 @@ export class VoiceSessionManager {
         isEagerTurn: !directAddressed && !generationConversationContext?.engaged,
         joinWindowActive,
         joinWindowAgeMs,
-        voiceEagerness: Number(settings?.voice?.replyEagerness) || 0,
+        voiceEagerness: Number(voiceConversation.replyEagerness) || 0,
         conversationContext: generationConversationContext,
         sessionTiming,
         participantRoster,
@@ -11271,7 +11276,7 @@ export class VoiceSessionManager {
           releaseLookupBusy();
           releaseLookupBusy = null;
         },
-        webSearchTimeoutMs: Number(settings?.voice?.webSearchTimeoutMs),
+        webSearchTimeoutMs: Number(followup.toolBudget?.toolTimeoutMs),
         voiceToolCallbacks: this.buildVoiceToolCallbacks({ session, settings })
       });
       generatedPayload =
