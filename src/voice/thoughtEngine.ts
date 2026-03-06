@@ -135,12 +135,48 @@ export class ThoughtEngine {
     session.thoughtLoopTimer = setTimeout(() => {
       session.thoughtLoopTimer = null;
       session.nextThoughtAt = 0;
-      void this.maybeRunVoiceThoughtLoop({
+      this.spawnVoiceThoughtLoop({
         session,
         settings: session.settingsSnapshot || this.store.getSettings(),
         trigger: "timer"
-      }).catch(() => undefined);
+      });
     }, waitMs);
+  }
+
+  private spawnVoiceThoughtLoop({
+    session,
+    settings = null,
+    trigger = "timer"
+  }: {
+    session: VoiceSession;
+    settings?: ThoughtSettings;
+    trigger?: string;
+  }) {
+    void this.maybeRunVoiceThoughtLoop({
+      session,
+      settings,
+      trigger
+    }).catch((error: unknown) => {
+      session.thoughtLoopBusy = false;
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.botUserId,
+        content: `voice_thought_loop_schedule_failed: ${String((error as Error)?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          mode: session.mode,
+          trigger: String(trigger || "timer")
+        }
+      });
+      if (session.ending) return;
+      this.scheduleVoiceThoughtLoop({
+        session,
+        settings: settings || session.settingsSnapshot || this.store.getSettings(),
+        delayMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
+      });
+    });
   }
 
   evaluateVoiceThoughtLoopGate({

@@ -286,6 +286,35 @@ function createAsrRuntimeLogger(deps: AsrBridgeDeps, logUserId: string) {
   };
 }
 
+function logAsyncAsrCloseFailure(
+  deps: AsrBridgeDeps,
+  session: VoiceSession,
+  {
+    userId = null,
+    reason,
+    mode,
+    error
+  }: {
+    userId?: string | null;
+    reason: string;
+    mode: AsrBridgeMode;
+    error: unknown;
+  }
+) {
+  deps.store.logAction({
+    kind: "voice_error",
+    guildId: session.guildId,
+    channelId: session.textChannelId,
+    userId: String(userId || "").trim() || deps.botUserId || null,
+    content: `openai_realtime_asr_async_close_failed: ${String((error as Error)?.message || error)}`,
+    metadata: {
+      sessionId: session.id,
+      reason,
+      mode
+    }
+  });
+}
+
 function resolveAsrModelParams(session: VoiceSession, settings: Record<string, unknown> | null) {
   const resolvedSettings = settings || session.settingsSnapshot || {};
   const voiceAsrGuidance = resolveVoiceAsrLanguageGuidance(resolvedSettings);
@@ -558,10 +587,6 @@ export async function waitForAsrTranscriptSettle(
         : "",
       STT_TRANSCRIPT_MAX_CHARS_LOCAL
     );
-    const partialText = normalizeVoiceText(
-      trackedUtterance?.partialText || "",
-      STT_TRANSCRIPT_MAX_CHARS_LOCAL
-    );
     if (finalText && stable) return finalText;
     // Don't early-return partials — they're inherently incomplete.
     // A 120ms gap between partial updates is normal ASR batching,
@@ -805,7 +830,11 @@ export async function ensureAsrSessionConnected(
   }
 
   if (asrState.connectPromise) {
-    await asrState.connectPromise.catch(() => undefined);
+    try {
+      await asrState.connectPromise;
+    } catch {
+      // The primary connect path already logged and cleaned up the failure.
+    }
     return asrState.client ? asrState : null;
   }
 
@@ -1302,7 +1331,14 @@ export async function commitAsrUtterance(
             }
           });
           // Force-close the dead session; next capture will reconnect.
-          void closePerUserAsrSession(session, deps, normalizedUserId, "circuit_breaker").catch(() => undefined);
+          void closePerUserAsrSession(session, deps, normalizedUserId, "circuit_breaker").catch((error: unknown) => {
+            logAsyncAsrCloseFailure(deps, session, {
+              userId: normalizedUserId,
+              reason: "circuit_breaker",
+              mode: "per_user",
+              error
+            });
+          });
         }
       } else if (transcript) {
         asrState.consecutiveEmptyCommits = 0;
@@ -1381,9 +1417,23 @@ export function scheduleAsrIdleClose(
   asrState.idleTimer = setTimeout(() => {
     asrState.idleTimer = null;
     if (mode === "per_user") {
-      closePerUserAsrSession(session, deps, userId, "idle_ttl").catch(() => undefined);
+      void closePerUserAsrSession(session, deps, userId, "idle_ttl").catch((error: unknown) => {
+        logAsyncAsrCloseFailure(deps, session, {
+          userId,
+          reason: "idle_ttl",
+          mode: "per_user",
+          error
+        });
+      });
     } else {
-      closeSharedAsrSession(session, deps, "idle_ttl").catch(() => undefined);
+      void closeSharedAsrSession(session, deps, "idle_ttl").catch((error: unknown) => {
+        logAsyncAsrCloseFailure(deps, session, {
+          userId: session.openAiSharedAsrState?.userId || null,
+          reason: "idle_ttl",
+          mode: "shared",
+          error
+        });
+      });
     }
   }, ttlMs);
 }

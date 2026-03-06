@@ -3,6 +3,8 @@ import type { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 import type { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
 import type { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
 import type { ElevenLabsRealtimeClient } from "./elevenLabsRealtimeClient.ts";
+import type { ReplyInterruptionPolicy } from "./bargeInController.ts";
+import type { AsrBridgeState } from "./voiceAsrBridge.ts";
 import type {
     AssistantOutputLockReason,
     AssistantOutputPhase,
@@ -167,12 +169,12 @@ export type VoiceToolRuntimeSessionLike = {
     realtimeClient?: {
         updateTools?: (payload: {
             tools: Array<{
-                type: "function";
+                type: string;
                 name: string;
                 description: string;
                 parameters: Record<string, unknown>;
             }>;
-            toolChoice?: "auto" | "none" | "required" | { type: "function"; name: string };
+            toolChoice?: string;
         }) => void;
     } | null;
     mcpStatus?: VoiceMcpServerStatus[];
@@ -187,10 +189,11 @@ export type VoiceToolRuntimeSessionLike = {
     openAiToolCallExecutions?: Map<string, VoiceToolExecutionState>;
     openAiPendingToolCalls?: Map<string, VoicePendingToolCallState>;
     openAiCompletedToolCallIds?: Map<string, number>;
+    openAiPendingToolAbortControllers?: Map<string, AbortController>;
     toolMusicTrackCatalog?: Map<string, unknown>;
     memoryWriteWindow?: number[];
     toolCallEvents?: VoiceToolCallEvent[];
-    musicQueueState?: Record<string, unknown>;
+    musicQueueState?: Record<string, unknown> | null;
     lastOpenAiToolCallerUserId?: string | null;
     awaitingToolOutputs?: boolean;
     voiceCommandState?: {
@@ -235,6 +238,160 @@ export type MusicTextRequestPayload = {
     message?: MusicTextCommandMessage | null;
     settings?: Record<string, unknown> | null;
 };
+
+export interface StreamWatchBrainContextEntry {
+    text: string;
+    at: number;
+    provider: string | null;
+    model: string | null;
+    speakerName: string | null;
+}
+
+export interface SoundboardCandidate {
+    soundId: string;
+    sourceGuildId: string | null;
+    reference: string;
+    name: string | null;
+    origin: "preferred" | "guild_catalog";
+}
+
+export interface VoicePendingResponseLatencyContext {
+    finalizedAtMs: number;
+    asrStartedAtMs: number;
+    asrCompletedAtMs: number;
+    generationStartedAtMs: number;
+    replyRequestedAtMs: number;
+    audioStartedAtMs: number;
+    source: string;
+    captureReason: string | null;
+    queueWaitMs: number | null;
+    pendingQueueDepth: number | null;
+}
+
+export interface VoicePendingResponse {
+    requestId: number;
+    userId: string | null;
+    requestedAt: number;
+    retryCount: number;
+    hardRecoveryAttempted: boolean;
+    source: string;
+    handlingSilence: boolean;
+    audioReceivedAt: number;
+    interruptionPolicy: ReplyInterruptionPolicy | null;
+    utteranceText: string | null;
+    latencyContext: VoicePendingResponseLatencyContext | null;
+}
+
+export interface VoiceLastRequestedRealtimeUtterance {
+    utteranceText: string | null;
+    requestedAt: number;
+    source: string;
+    interruptionPolicy: ReplyInterruptionPolicy | null;
+}
+
+export interface VoiceMusicQueueTrack {
+    id: string;
+    title: string;
+    artist: string | null;
+    durationMs: number | null;
+    source: "yt" | "sc";
+    streamUrl: string | null;
+    platform: "youtube" | "soundcloud" | "discord" | "auto";
+    externalUrl: string | null;
+}
+
+export interface VoiceMusicQueueState {
+    guildId: string;
+    voiceChannelId: string;
+    tracks: VoiceMusicQueueTrack[];
+    nowPlayingIndex: number | null;
+    isPaused: boolean;
+    volume: number;
+    [key: string]: unknown;
+}
+
+export interface VoiceLatencyStageEntry {
+    at: number;
+    stage: string;
+    source: string;
+    finalizedToAsrStartMs: number | null;
+    asrToGenerationStartMs: number | null;
+    generationToReplyRequestMs: number | null;
+    replyRequestToAudioStartMs: number | null;
+    totalMs: number;
+    queueWaitMs: number | null;
+    pendingQueueDepth: number | null;
+}
+
+export interface VoiceMembershipEvent {
+    userId: string;
+    displayName: string;
+    eventType: "join" | "leave";
+    at: number;
+}
+
+export interface VoiceMembershipPromptEntry extends VoiceMembershipEvent {
+    ageMs: number;
+}
+
+export interface VoiceSessionTimingContext {
+    timeoutWarningActive: boolean;
+    timeoutWarningReason: "none" | "max_duration" | "inactivity";
+    maxSecondsRemaining: number | null;
+    inactivitySecondsRemaining: number | null;
+}
+
+export interface VoiceGenerationContextMessage {
+    role: "assistant" | "user";
+    content: string;
+}
+
+export interface VoiceGenerationMemoryFacts {
+    userFacts: unknown[];
+    relevantFacts: unknown[];
+}
+
+export interface VoiceModelContextSummary {
+    capturedAt?: string;
+    source?: string;
+    availableTurns?: number;
+    sentTurns?: number;
+    maxTurns?: number;
+    contextChars?: number;
+    transcriptChars?: number;
+    directAddressed?: boolean;
+    [key: string]: unknown;
+}
+
+export interface VoiceGenerationContextSnapshot {
+    capturedAt: string;
+    incomingTranscript: string;
+    speakerName: string | null;
+    directAddressed: boolean;
+    isEagerTurn: boolean;
+    contextMessages: VoiceGenerationContextMessage[];
+    conversationContext: VoiceConversationContext | null;
+    userFacts?: unknown[];
+    relevantFacts?: unknown[];
+    participantRoster?: string[];
+    membershipEvents?: VoiceMembershipPromptEntry[];
+    memoryFacts?: VoiceGenerationMemoryFacts;
+    recentConversationHistory?: unknown[];
+    recentWebLookups?: unknown[];
+    sessionTiming?: VoiceSessionTimingContext | null;
+    tools?: Record<string, boolean>;
+    soundboardCandidateCount?: number;
+    llmConfig?: {
+        provider?: string;
+        model?: string;
+        temperature?: number | null;
+        maxOutputTokens?: number | null;
+        [key: string]: unknown;
+    };
+    source?: string;
+    mode?: string;
+    [key: string]: unknown;
+}
 
 /**
  * Explicit music playback state machine.
@@ -303,8 +460,8 @@ export interface VoiceSessionMusicState {
     pauseReason: MusicPauseReason;
     startedAt: number;
     stoppedAt: number;
-    provider: any;
-    source: any;
+    provider: string | null;
+    source: string | null;
     lastTrackId: string | null;
     lastTrackTitle: string | null;
     lastTrackArtists: string[];
@@ -317,7 +474,7 @@ export interface VoiceSessionMusicState {
     pendingQuery: string | null;
     pendingPlatform: "auto" | "youtube" | "soundcloud" | "discord";
     pendingAction: "play_now" | "queue_next" | "queue_add";
-    pendingResults: any[];
+    pendingResults: MusicSelectionResult[];
     pendingRequestedByUserId: string | null;
     pendingRequestedAt: number;
 }
@@ -353,7 +510,7 @@ export interface DeferredInterruptedReplyAction extends DeferredVoiceActionBase 
         interruptedByUserId: string | null;
         interruptedAt: number;
         source: string | null;
-        interruptionPolicy: any;
+        interruptionPolicy: ReplyInterruptionPolicy | null;
     };
 }
 
@@ -412,7 +569,7 @@ export interface VoiceSessionStreamWatchState {
     lastBrainContextAt: number;
     lastBrainContextProvider: string | null;
     lastBrainContextModel: string | null;
-    brainContextEntries: any[];
+    brainContextEntries: StreamWatchBrainContextEntry[];
     ingestedFrameCount: number;
     acceptedFrameCountInWindow: number;
     frameWindowStartedAt: number;
@@ -424,7 +581,7 @@ export interface VoiceSessionStreamWatchState {
 export interface VoiceSessionSoundboardState {
     playCount: number;
     lastPlayedAt: number;
-    catalogCandidates: any[];
+    catalogCandidates: SoundboardCandidate[];
     catalogFetchedAt: number;
     lastDirectiveKey: string;
     lastDirectiveAt: number;
@@ -562,11 +719,11 @@ export interface VoiceSession {
     realtimeProvider: string;
     realtimeInputSampleRateHz: number;
     realtimeOutputSampleRateHz: number;
-    recentVoiceTurns: any[];
+    recentVoiceTurns: VoiceTimelineTurn[];
     transcriptTurns: VoiceTimelineTurn[];
     modelContextSummary: {
-        generation: any;
-        decider: any;
+        generation: VoiceModelContextSummary | null;
+        decider: VoiceModelContextSummary | null;
     };
     voxClient: ClankvoxClient | null;
     realtimeClient: OpenAiRealtimeClient | GeminiRealtimeClient | XaiRealtimeClient | ElevenLabsRealtimeClient | null;
@@ -599,18 +756,18 @@ export interface VoiceSession {
     realtimeReplySupersededCount: number;
     pendingRealtimeInputBytes: TurnProcessorState["pendingRealtimeInputBytes"];
     nextResponseRequestId: number;
-    pendingResponse: any;
-    activeReplyInterruptionPolicy: any;
-    lastRequestedRealtimeUtterance: any;
+    pendingResponse: VoicePendingResponse | null;
+    activeReplyInterruptionPolicy: ReplyInterruptionPolicy | null;
+    lastRequestedRealtimeUtterance: VoiceLastRequestedRealtimeUtterance | null;
     pendingSttTurns: TurnProcessorState["pendingSttTurns"];
     sttTurnDrainActive: TurnProcessorState["sttTurnDrainActive"];
     pendingSttTurnsQueue: TurnProcessorState["pendingSttTurnsQueue"];
     realtimeTurnDrainActive: TurnProcessorState["realtimeTurnDrainActive"];
     pendingRealtimeTurns: TurnProcessorState["pendingRealtimeTurns"];
-    openAiAsrSessions: Map<string, any>;
+    openAiAsrSessions: Map<string, AsrBridgeState>;
     perUserAsrEnabled: boolean;
     sharedAsrEnabled: boolean;
-    openAiSharedAsrState: any;
+    openAiSharedAsrState: AsrBridgeState | null;
     openAiPerUserAsrModel: string;
     openAiPerUserAsrLanguage: string;
     openAiPerUserAsrPrompt: string;
@@ -618,6 +775,7 @@ export interface VoiceSession {
     openAiToolCallExecutions: Map<string, VoiceToolExecutionState>;
     openAiToolResponseDebounceTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     openAiCompletedToolCallIds: Map<string, number>;
+    openAiPendingToolAbortControllers?: Map<string, AbortController>;
     lastOpenAiAssistantAudioItemId: string | null;
     lastOpenAiAssistantAudioItemContentIndex: number;
     lastOpenAiAssistantAudioItemReceivedMs: number;
@@ -628,17 +786,10 @@ export interface VoiceSession {
     awaitingToolOutputs: boolean;
     toolCallEvents: VoiceToolCallEvent[];
     mcpStatus: VoiceMcpServerStatus[];
-    toolMusicTrackCatalog: Map<string, any>;
+    toolMusicTrackCatalog: Map<string, unknown>;
     memoryWriteWindow: number[];
     voiceCommandState: VoiceCommandState | null;
-    musicQueueState: {
-        guildId: string;
-        voiceChannelId: string;
-        tracks: any[];
-        nowPlayingIndex: number | null;
-        isPaused: boolean;
-        volume: number;
-    };
+    musicQueueState: VoiceMusicQueueState;
     assistantOutput: AssistantOutputState;
     thoughtLoopTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     thoughtLoopBusy: boolean;
@@ -651,8 +802,8 @@ export interface VoiceSession {
     streamWatch: VoiceSessionStreamWatchState;
     music: VoiceSessionMusicState;
     soundboard: VoiceSessionSoundboardState;
-    latencyStages: any[];
-    membershipEvents: any[];
+    latencyStages: VoiceLatencyStageEntry[];
+    membershipEvents: VoiceMembershipEvent[];
     voiceLookupBusyCount: number;
     lastSuppressedCaptureLogAt: number;
     baseVoiceInstructions: InstructionManagerState["baseVoiceInstructions"];
@@ -671,9 +822,9 @@ export interface VoiceSession {
     botTurnOpenAt?: number;
     deferredVoiceActions?: Partial<Record<DeferredVoiceActionType, DeferredVoiceAction>>;
     deferredVoiceActionTimers?: Partial<Record<DeferredVoiceActionType, ReturnType<typeof setTimeout> | NodeJS.Timeout | null>>;
-    lastGenerationContext?: any;
+    lastGenerationContext?: VoiceGenerationContextSnapshot | null;
     openAiAsrSessionIdleTtlMs?: number;
     realtimeTurnCoalesceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     voiceLookupBusyAnnounceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
-    [key: string]: any;
+    [key: string]: unknown;
 }

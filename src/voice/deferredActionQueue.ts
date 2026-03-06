@@ -41,6 +41,8 @@ type DeferredQueueStoreLike = {
   }) => void;
 };
 
+const DEFERRED_FLUSH_RETRY_DELAY_MS = 250;
+
 export interface DeferredActionQueueHost {
   client: {
     user?: {
@@ -298,12 +300,56 @@ export class DeferredActionQueue {
     }
 
     this.clearDeferredVoiceAction(session, "queued_user_turns");
+    this.spawnDeferredQueuedTurnsFlush(session, pendingQueue, reason);
+    return true;
+  }
+
+  private spawnDeferredQueuedTurnsFlush(
+    session: VoiceSession,
+    pendingQueue: DeferredQueuedUserTurn[],
+    reason: string
+  ) {
+    const deferredTurns = pendingQueue.slice();
     void Promise.resolve(this.host.flushDeferredBotTurnOpenTurns({
       session,
-      deferredTurns: pendingQueue,
+      deferredTurns,
       reason
-    })).catch(() => undefined);
-    return true;
+    })).catch((error: unknown) => {
+      const restoredTurns = [...deferredTurns, ...this.getDeferredQueuedUserTurns(session)];
+      const nextFlushAt = Date.now() + DEFERRED_FLUSH_RETRY_DELAY_MS;
+      const latestTurn = deferredTurns[deferredTurns.length - 1] || null;
+      this.host.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: latestTurn?.userId || this.host.client.user?.id || null,
+        content: `deferred_voice_turn_flush_failed: ${String((error as Error)?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          reason,
+          deferredTurnCount: deferredTurns.length,
+          restoredTurnCount: restoredTurns.length
+        }
+      });
+      if (session.ending || !restoredTurns.length) return;
+      this.setDeferredVoiceAction(session, {
+        type: "queued_user_turns",
+        goal: "respond_to_deferred_user_turns",
+        freshnessPolicy: "regenerate_from_goal",
+        status: "scheduled",
+        reason,
+        notBeforeAt: nextFlushAt,
+        payload: {
+          turns: restoredTurns,
+          nextFlushAt
+        }
+      });
+      this.scheduleDeferredVoiceActionRecheck(session, {
+        type: "queued_user_turns",
+        delayMs: DEFERRED_FLUSH_RETRY_DELAY_MS,
+        reason: "queued_user_turns_flush_retry_after_error"
+      });
+    });
   }
 
   fireDeferredInterruptedReply(

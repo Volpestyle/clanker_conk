@@ -465,7 +465,7 @@ export class TurnProcessor {
       }
       nextTurn = this.mergeRealtimeQueuedTurn(nextTurn, queuedTurn);
       if (!nextTurn) return;
-      void Promise.resolve(this.drainRealtimeTurnQueue(nextTurn)).catch(() => undefined);
+      this.spawnRealtimeTurnDrain(nextTurn, "pending_queue_merge");
       return;
     }
 
@@ -486,13 +486,40 @@ export class TurnProcessor {
           turn = turn ? this.mergeRealtimeQueuedTurn(turn, next) : next;
         }
         if (turn) {
-          void Promise.resolve(this.drainRealtimeTurnQueue(turn)).catch(() => undefined);
+          this.spawnRealtimeTurnDrain(turn, "coalesce_window_flush");
         }
       }, REALTIME_TURN_COALESCE_WINDOW_MS);
       return;
     }
 
-    void Promise.resolve(this.drainRealtimeTurnQueue(queuedTurn)).catch(() => undefined);
+    this.spawnRealtimeTurnDrain(queuedTurn, "direct_queue_start");
+  }
+
+  private spawnRealtimeTurnDrain(turn: RealtimeQueuedTurn, trigger: string) {
+    const session = turn?.session;
+    void Promise.resolve(this.drainRealtimeTurnQueue(turn)).catch((error: unknown) => {
+      if (!session) return;
+      const pendingQueue = this.ensurePendingRealtimeTurnQueue(session);
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: turn.userId,
+        content: `realtime_turn_queue_drain_failed: ${String((error as Error)?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          trigger,
+          captureReason: String(turn.captureReason || "stream_end"),
+          pendingQueueDepth: pendingQueue.length
+        }
+      });
+      if (session.ending) return;
+      session.realtimeTurnDrainActive = false;
+      const pending = pendingQueue.shift();
+      if (pending) {
+        this.spawnRealtimeTurnDrain(pending, "recovery_after_failure");
+      }
+    });
   }
 
   async drainRealtimeTurnQueue(initialTurn: RealtimeQueuedTurn) {
@@ -531,7 +558,7 @@ export class TurnProcessor {
       } else {
         const pending = pendingQueue.shift();
         if (pending) {
-          void Promise.resolve(this.drainRealtimeTurnQueue(pending)).catch(() => undefined);
+          this.spawnRealtimeTurnDrain(pending, "finally_continue_pending");
         }
       }
     }
@@ -1126,11 +1153,40 @@ export class TurnProcessor {
       pendingQueue.push(queuedTurn);
       const nextTurn = pendingQueue.shift();
       if (!nextTurn) return;
-      void Promise.resolve(this.drainSttPipelineTurnQueue(nextTurn)).catch(() => undefined);
+      this.spawnSttPipelineTurnDrain(nextTurn, "pending_queue_merge");
       return;
     }
 
-    void Promise.resolve(this.drainSttPipelineTurnQueue(queuedTurn)).catch(() => undefined);
+    this.spawnSttPipelineTurnDrain(queuedTurn, "direct_queue_start");
+  }
+
+  private spawnSttPipelineTurnDrain(turn: SttPipelineQueuedTurn, trigger: string) {
+    const session = turn?.session;
+    void Promise.resolve(this.drainSttPipelineTurnQueue(turn)).catch((error: unknown) => {
+      if (!session) return;
+      const pendingQueue = this.getPendingSttTurnQueue(session);
+      this.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: turn.userId,
+        content: `stt_pipeline_turn_queue_drain_failed: ${String((error as Error)?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          trigger,
+          captureReason: String(turn.captureReason || "stream_end"),
+          pendingQueueDepth: pendingQueue.length
+        }
+      });
+      if (session.ending) return;
+      session.sttTurnDrainActive = false;
+      this.syncPendingSttTurnCount(session);
+      const pendingTurn = pendingQueue.shift();
+      if (pendingTurn) {
+        this.syncPendingSttTurnCount(session);
+        this.spawnSttPipelineTurnDrain(pendingTurn, "recovery_after_failure");
+      }
+    });
   }
 
   async drainSttPipelineTurnQueue(initialTurn: SttPipelineQueuedTurn) {
@@ -1173,7 +1229,7 @@ export class TurnProcessor {
         const pendingTurn = pendingQueue.shift();
         if (pendingTurn) {
           this.syncPendingSttTurnCount(session);
-          void Promise.resolve(this.drainSttPipelineTurnQueue(pendingTurn)).catch(() => undefined);
+          this.spawnSttPipelineTurnDrain(pendingTurn, "finally_continue_pending");
         }
       }
       this.syncPendingSttTurnCount(session);

@@ -744,7 +744,7 @@ test("bindSessionHandlers does not touch activity on speaking.start before speec
   const { manager, touchCalls } = createManager();
   const voxClient = new EventEmitter();
   const startCalls = [];
-  manager.startInboundCapture = (payload) => {
+  manager.captureManager.startInboundCapture = (payload) => {
     startCalls.push(payload);
   };
 
@@ -797,7 +797,7 @@ test("startInboundCapture drops provisional noise before activity promotion whil
     voxClient
   });
 
-  manager.startInboundCapture({
+  manager.captureManager.startInboundCapture({
     session,
     userId: "speaker-1",
     settings: session.settingsSnapshot
@@ -849,7 +849,7 @@ test("startInboundCapture promotes strong local speech while streaming per-user 
     voxClient
   });
 
-  manager.startInboundCapture({
+  manager.captureManager.startInboundCapture({
     session,
     userId: "speaker-1",
     settings: session.settingsSnapshot
@@ -902,7 +902,7 @@ test("startInboundCapture promotes modest speech once server VAD confirms the pr
     voxClient
   });
 
-  manager.startInboundCapture({
+  manager.captureManager.startInboundCapture({
     session,
     userId: "speaker-1",
     settings: session.settingsSnapshot
@@ -952,7 +952,7 @@ test("startInboundCapture keeps sparse spike noise provisional even while stream
     voxClient
   });
 
-  manager.startInboundCapture({
+  manager.captureManager.startInboundCapture({
     session,
     userId: "speaker-1",
     settings: session.settingsSnapshot
@@ -987,7 +987,7 @@ test("bindSessionHandlers does not duplicate provisional capture creation for re
   manager.beginOpenAiAsrUtterance = (payload) => {
     beginCalls.push(payload);
   };
-  manager.startInboundCapture = ({ session, userId }) => {
+  manager.captureManager.startInboundCapture = ({ session, userId }) => {
     if (!session.userCaptures.has(userId)) {
       session.userCaptures.set(userId, {
         speakingEndFinalizeTimer: null
@@ -1095,7 +1095,7 @@ test("bindSessionHandlers defers shared OpenAI ASR start until speech is confirm
     beginCalls.push(payload);
     return true;
   };
-  manager.startInboundCapture = ({ session, userId }) => {
+  manager.captureManager.startInboundCapture = ({ session, userId }) => {
     if (!session.userCaptures.has(userId)) {
       session.userCaptures.set(userId, {
         speakingEndFinalizeTimer: null
@@ -2147,7 +2147,7 @@ test("shared ASR bridge forwards recovered transcript after timeout instead of d
     settingsSnapshot: settings
   });
 
-  manager.startInboundCapture({
+  manager.captureManager.startInboundCapture({
     session,
     userId: "speaker-1",
     settings
@@ -2179,7 +2179,7 @@ test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown",
     lastThoughtAttemptAt: 0
   });
 
-  const blockedBySilence = manager.evaluateVoiceThoughtLoopGate({
+  const blockedBySilence = manager.thoughtEngine.evaluateVoiceThoughtLoopGate({
     session,
     settings: createTestSettings({
       voice: {
@@ -2197,7 +2197,7 @@ test("evaluateVoiceThoughtLoopGate waits for silence window and queue cooldown",
   assert.equal(blockedBySilence.allow, false);
   assert.equal(blockedBySilence.reason, "silence_window_not_met");
 
-  const allowed = manager.evaluateVoiceThoughtLoopGate({
+  const allowed = manager.thoughtEngine.evaluateVoiceThoughtLoopGate({
     session: {
       ...session,
       lastActivityAt: now - 25_000
@@ -2227,7 +2227,7 @@ test("evaluateVoiceThoughtLoopGate blocks thoughts in command-only mode", () => 
     lastThoughtAttemptAt: 0
   });
 
-  const blocked = manager.evaluateVoiceThoughtLoopGate({
+  const blocked = manager.thoughtEngine.evaluateVoiceThoughtLoopGate({
     session,
     settings: createTestSettings({
       voice: {
@@ -2289,7 +2289,7 @@ test("maybeRunVoiceThoughtLoop speaks approved thought candidates", async () => 
   const originalRandom = Math.random;
   Math.random = () => 0.01;
   try {
-    const ran = await manager.maybeRunVoiceThoughtLoop({
+    const ran = await manager.thoughtEngine.maybeRunVoiceThoughtLoop({
       session,
       settings,
       trigger: "test"
@@ -2335,7 +2335,7 @@ test("maybeRunVoiceThoughtLoop skips generation when eagerness probability roll 
   const originalRandom = Math.random;
   Math.random = () => 0.95;
   try {
-    const ran = await manager.maybeRunVoiceThoughtLoop({
+    const ran = await manager.thoughtEngine.maybeRunVoiceThoughtLoop({
       session,
       settings,
       trigger: "test"
@@ -3103,13 +3103,13 @@ test("canFireDeferredAction returns null (can fire) when session is valid and ou
   const { manager } = createManager();
   const session = createSession({ mode: "openai_realtime" });
   const action = createInterruptedReplyAction();
-  const result = manager.canFireDeferredAction(session, action);
+  const result = manager.deferredActionQueue.canFireDeferredAction(session, action);
   assert.equal(result, null);
 });
 
 test("canFireDeferredAction returns 'session_inactive' when session is null", () => {
   const { manager } = createManager();
-  const result = manager.canFireDeferredAction(null, createInterruptedReplyAction());
+  const result = manager.deferredActionQueue.canFireDeferredAction(null, createInterruptedReplyAction());
   assert.equal(result, "session_inactive");
 });
 
@@ -3117,14 +3117,14 @@ test("canFireDeferredAction returns 'session_inactive' when session.ending is tr
   const { manager } = createManager();
   const session = createSession({ ending: true });
   const action = createInterruptedReplyAction();
-  const result = manager.canFireDeferredAction(session, action);
+  const result = manager.deferredActionQueue.canFireDeferredAction(session, action);
   assert.equal(result, "session_inactive");
 });
 
 test("canFireDeferredAction returns 'no_action' when action is null", () => {
   const { manager } = createManager();
   const session = createSession();
-  const result = manager.canFireDeferredAction(session, null);
+  const result = manager.deferredActionQueue.canFireDeferredAction(session, null);
   assert.equal(result, "no_action");
 });
 
@@ -3136,7 +3136,7 @@ test("canFireDeferredAction returns 'expired' when expiresAt is in the past", ()
     updatedAt: Date.now() - 60_000,
     expiresAt: Date.now() - 1_000
   });
-  const result = manager.canFireDeferredAction(session, action);
+  const result = manager.deferredActionQueue.canFireDeferredAction(session, action);
   assert.equal(result, "expired");
 });
 
@@ -3146,7 +3146,7 @@ test("canFireDeferredAction returns 'not_before_at' when notBeforeAt is in the f
   const action = createInterruptedReplyAction({
     notBeforeAt: Date.now() + 5_000
   });
-  const result = manager.canFireDeferredAction(session, action);
+  const result = manager.deferredActionQueue.canFireDeferredAction(session, action);
   assert.equal(result, "not_before_at");
 });
 
@@ -3155,7 +3155,7 @@ test("canFireDeferredAction returns 'active_captures' when user captures are in 
   const session = createSession();
   session.userCaptures.set("user-1", { startedAt: Date.now() });
   const action = createInterruptedReplyAction();
-  const result = manager.canFireDeferredAction(session, action);
+  const result = manager.deferredActionQueue.canFireDeferredAction(session, action);
   assert.equal(result, "active_captures");
 });
 
@@ -3187,7 +3187,7 @@ test("canFireDeferredAction ignores silence-only captures for queued user turns"
     }
   };
 
-  const result = manager.canFireDeferredAction(session, action);
+  const result = manager.deferredActionQueue.canFireDeferredAction(session, action);
   assert.equal(result, null);
 });
 
@@ -3195,7 +3195,7 @@ test("canFireDeferredAction returns 'pending_response' when session has pendingR
   const { manager } = createManager();
   const session = createSession({ pendingResponse: { id: "resp-1" } });
   const action = createInterruptedReplyAction();
-  const result = manager.canFireDeferredAction(session, action);
+  const result = manager.deferredActionQueue.canFireDeferredAction(session, action);
   assert.equal(result, "pending_response");
 });
 
@@ -3204,7 +3204,7 @@ test("canFireDeferredAction returns 'active_response' when realtime response is 
   const session = createSession({ mode: "openai_realtime" });
   manager.replyManager.isRealtimeResponseActive = () => true;
   const action = createInterruptedReplyAction();
-  const result = manager.canFireDeferredAction(session, action);
+  const result = manager.deferredActionQueue.canFireDeferredAction(session, action);
   assert.equal(result, "active_response");
 });
 
@@ -3212,7 +3212,7 @@ test("canFireDeferredAction returns 'awaiting_tool_outputs' when tools are pendi
   const { manager } = createManager();
   const session = createSession({ awaitingToolOutputs: true });
   const action = createInterruptedReplyAction();
-  const result = manager.canFireDeferredAction(session, action);
+  const result = manager.deferredActionQueue.canFireDeferredAction(session, action);
   assert.equal(result, "awaiting_tool_outputs");
 });
 
@@ -3221,7 +3221,7 @@ test("canFireDeferredAction returns 'tool_calls_running' when openAiToolCallExec
   const session = createSession();
   session.openAiToolCallExecutions = new Map([["call-1", {}]]);
   const action = createInterruptedReplyAction();
-  const result = manager.canFireDeferredAction(session, action);
+  const result = manager.deferredActionQueue.canFireDeferredAction(session, action);
   assert.equal(result, "tool_calls_running");
 });
 
@@ -3231,7 +3231,7 @@ test("canFireDeferredAction treats expiresAt=0 as no expiry", () => {
   const action = createInterruptedReplyAction({
     expiresAt: 0
   });
-  const result = manager.canFireDeferredAction(session, action);
+  const result = manager.deferredActionQueue.canFireDeferredAction(session, action);
   assert.equal(result, null);
 });
 
@@ -3241,6 +3241,6 @@ test("canFireDeferredAction checks blockers in priority order (captures before p
   session.userCaptures.set("user-1", { startedAt: Date.now() });
   const action = createInterruptedReplyAction();
   // Should return the first blocker hit: active_captures
-  const result = manager.canFireDeferredAction(session, action);
+  const result = manager.deferredActionQueue.canFireDeferredAction(session, action);
   assert.equal(result, "active_captures");
 });

@@ -25,6 +25,7 @@ import {
   VOICE_MAX_DURATION_WARNING_SECONDS
 } from "./voiceSessionManager.constants.ts";
 import type { BargeInController } from "./bargeInController.ts";
+import type { CaptureManager } from "./captureManager.ts";
 import type { DeferredActionQueue } from "./deferredActionQueue.ts";
 import type { GreetingManager } from "./greetingManager.ts";
 import type { InstructionManager } from "./instructionManager.ts";
@@ -56,11 +57,11 @@ type SessionLifecycleHost = Pick<
   | "resolveSpeakingEndFinalizeDelayMs"
   | "sessions"
   | "setMusicPhase"
-  | "startInboundCapture"
   | "store"
   | "touchActivity"
 > & {
   bargeInController: Pick<BargeInController, "isBargeInOutputSuppressed">;
+  captureManager: Pick<CaptureManager, "startInboundCapture">;
   instructionManager: Pick<InstructionManager, "scheduleRealtimeInstructionRefresh">;
   deferredActionQueue: Pick<DeferredActionQueue, "clearAllDeferredVoiceActions">;
   greetingManager: Pick<GreetingManager, "armJoinGreetingOpportunity" | "clearJoinGreetingOpportunity">;
@@ -885,7 +886,7 @@ export class SessionLifecycle {
         clearTimeout(activeCapture.speakingEndFinalizeTimer);
         activeCapture.speakingEndFinalizeTimer = null;
       }
-      this.host.startInboundCapture({
+      this.host.captureManager.startInboundCapture({
         session,
         userId: normalizedUserId,
         settings

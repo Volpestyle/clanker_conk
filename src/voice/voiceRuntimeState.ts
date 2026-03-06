@@ -12,6 +12,7 @@ import {
     isRealtimeMode,
     resolveRealtimeProvider
 } from "./voiceSessionHelpers.ts";
+import type { VoiceLatencyStageEntry } from "./voiceSessionTypes.ts";
 import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 
 export function buildRuntimeStateSnapshot({
@@ -442,7 +443,15 @@ export function buildRuntimeStateSnapshot({
                     queueWaitMs: e.queueWaitMs ?? null,
                     pendingQueueDepth: e.pendingQueueDepth ?? null
                 }));
-                const avg = (field: any) => {
+                type LatencyMetricField = keyof Pick<
+                    VoiceLatencyStageEntry,
+                    | "finalizedToAsrStartMs"
+                    | "asrToGenerationStartMs"
+                    | "generationToReplyRequestMs"
+                    | "replyRequestToAudioStartMs"
+                    | "totalMs"
+                >;
+                const avg = (field: LatencyMetricField) => {
                     const vals = stages.map((e) => e[field]).filter((v) => Number.isFinite(v) && v >= 0);
                     return vals.length > 0 ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
                 };

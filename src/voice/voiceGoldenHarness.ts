@@ -1563,7 +1563,13 @@ export async function runVoiceGoldenHarness(inputOptions: VoiceGoldenHarnessOpti
     }
 
     modeReports.push(aggregateModeReport(mode, null, results));
-    await manager.dispose("voice_golden_harness_done").catch(() => undefined);
+    try {
+      await manager.dispose("voice_golden_harness_done");
+    } catch (error) {
+      console.warn(
+        `[voice-golden-harness] manager.dispose failed for mode=${mode}: ${String((error as Error)?.message || error)}`
+      );
+    }
   }
 
   const allResults = modeReports.flatMap((report) => report.results);
