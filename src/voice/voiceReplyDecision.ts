@@ -642,7 +642,9 @@ export async function evaluateVoiceReplyDecision(manager: any, {
     pendingCommandFollowupSignal: sameSpeakerPendingCommandFollowup,
     musicActive,
     musicWakeLatched,
-    msUntilMusicWakeLatchExpiry
+    msUntilMusicWakeLatchExpiry,
+    currentSpeakerDirectedConfidence: Number(voiceAddressingState?.currentSpeakerDirectedConfidence || 0),
+    currentSpeakerTarget: String(voiceAddressingState?.currentSpeakerTarget || "").trim() || null
   });
   if (classifierResult.allow && musicActive && musicWakeLatched) {
     touchMusicWakeLatch(session, settings, normalizedUserId, now);
@@ -679,7 +681,9 @@ export async function runVoiceReplyClassifier(manager: any, {
   pendingCommandFollowupSignal = false,
   musicActive = false,
   musicWakeLatched = false,
-  msUntilMusicWakeLatchExpiry = null
+  msUntilMusicWakeLatchExpiry = null,
+  currentSpeakerDirectedConfidence = 0,
+  currentSpeakerTarget = null
 }: {
   session: any;
   settings: any;
@@ -695,6 +699,8 @@ export async function runVoiceReplyClassifier(manager: any, {
   musicActive?: boolean;
   musicWakeLatched?: boolean;
   msUntilMusicWakeLatchExpiry?: number | null;
+  currentSpeakerDirectedConfidence?: number;
+  currentSpeakerTarget?: string | null;
 }): Promise<{
   allow: boolean;
   decision: "allow" | "deny" | null;
@@ -711,6 +717,8 @@ export async function runVoiceReplyClassifier(manager: any, {
     .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
   const classifierDebugEnabled = parseBooleanFlag(process.env.VOICE_CLASSIFIER_DEBUG, false);
   const botName = getPromptBotName(settings);
+  const normalizedDirectedConfidence = Math.max(0, Math.min(1, Number(currentSpeakerDirectedConfidence) || 0));
+  const normalizedTarget = String(currentSpeakerTarget || "").trim() || null;
   const normalizedUserId = String(userId || "").trim() || null;
   const logClassifierDebug = ({
     stage = "result",
@@ -833,6 +841,10 @@ export async function runVoiceReplyClassifier(manager: any, {
     `Participants: ${participantList.join(", ") || "none"}`,
     `Speaker: ${speakerName}`,
     `Transcript: "${transcript}"`,
+    normalizedDirectedConfidence > 0
+      ? `Speaker-directed-to-bot confidence: ${normalizedDirectedConfidence.toFixed(2)} (target: ${normalizedTarget || "unknown"})`
+      : `Speaker-directed-to-bot confidence: unknown`,
+    `Note: voice transcription often mishears the bot's name "${botName}". If the transcript contains a word that sounds similar (e.g. rhymes, off-by-one syllable), treat it as likely addressed to the bot.`,
     `Addressed-to-other signal: ${addressedToOtherSignal ? "true" : "false"}`,
     `Pending-command-followup signal: ${pendingCommandFollowupSignal ? "true" : "false"}`,
     `Music active: ${musicActive ? "true" : "false"}`,
