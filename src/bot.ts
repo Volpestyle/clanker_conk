@@ -173,7 +173,7 @@ const IS_TEST_PROCESS = /\.test\.[cm]?[jt]sx?$/i.test(String(process.argv?.[1] |
   process.argv.includes("--test");
 const SCREEN_SHARE_EXPLICIT_REQUEST_RE =
   /\b(?:screen\s*share|share\s*(?:my|the)?\s*screen|watch\s*(?:my|the)?\s*screen|see\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*screen|look\s*at\s*(?:my|the)?\s*stream|watch\s*(?:my|the)?\s*stream)\b/i;
-type ReplyAttemptOptions = {
+export type ReplyAttemptOptions = {
   recentMessages?: Array<Record<string, unknown>>;
   addressSignal?: {
     direct?: boolean;
