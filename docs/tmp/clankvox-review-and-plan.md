@@ -1,177 +1,234 @@
-# Clankvox Rust Subprocess — Review & Improvement Plan
+# Clankvox Rust Subprocess — Audit Report (v2)
 
-**Date:** March 6, 2026
+**Date:** March 6, 2026 (updated)
 **Scope:** `src/voice/clankvox/` (Rust) + `src/voice/clankvoxClient.ts` (TS client)
+**Edition:** Rust 2024 / MSRV 1.85
+**Version:** 0.3.0
 
 ---
 
 ## The Numbers
 
-| Component | Lines |
-|-----------|-------|
-| `main.rs` | 2,299 |
-| `voice_conn.rs` | 1,422 |
-| `dave.rs` | 425 |
-| **Total Rust** | **4,146** |
-| `clankvoxClient.ts` (TS client) | 627 |
-| `clankvoxClient.test.ts` | 139 |
-| **Total system** | **4,912** |
-
-The original codebase review reported 2,299 lines — that's just `main.rs`. The actual Rust codebase is **4,146 lines** across 3 files, nearly double what was reported.
+| Component | Lines | Change |
+|-----------|-------|--------|
+| `voice_conn.rs` | 1,477 | +55 (tests, allows) |
+| `main.rs` | 1,193 | -1,106 (modules extracted) |
+| `dave.rs` | 455 | +30 (tests added) |
+| `ipc.rs` | 435 | new module (was in main.rs) |
+| `music.rs` | 422 | new module (was in main.rs) |
+| `audio_pipeline.rs` | 394 | new module (was in main.rs) |
+| `asr.rs` | 147 | new module (was in main.rs) |
+| `capture.rs` | 41 | new module (was in main.rs) |
+| **Total Rust** | **4,564** | +418 (tests, docs, allows) |
+| `clankvoxClient.ts` (TS client) | 802 | +175 |
+| `clankvoxClient.test.ts` | 172 | +33 |
+| **Total system** | **~5,538** | |
 
 ---
 
-## Grade: **B-**
+## Grade: **B+**
+
+Upgraded from **B-** (original review). The codebase has meaningfully improved since
+the initial assessment through module extraction, typed IPC, bug fixes, and this audit's
+clippy/edition cleanup.
+
+---
+
+## What Changed Since the B- Review
+
+The original review (March 6, 2026) identified 14 improvement items. Here's the
+current status:
+
+### Resolved Before This Audit
+
+| Original # | Issue | Status |
+|------------|-------|--------|
+| 1 | Shared Opus decoder across all SSRCs | **Fixed** — per-SSRC `HashMap<u32, OpusDecoder>` in `capture.rs` |
+| 3 | `kill(pid)` instead of `killpg` | **Fixed** — `libc::killpg()` with proper SAFETY comment |
+| 5 | 14 loose music variables, 6 copy-pasted resets | **Fixed** — `MusicState` struct in `music.rs` with `reset()` |
+| 6 | `#![allow(dead_code)]` suppressing warnings | **Fixed** — removed, dead code deleted |
+| 7 | `serde_json::Value` for voice gateway data | **Fixed** — typed `VoiceServerData` / `VoiceStateData` structs in `ipc.rs` |
+| 9 | 2,299-line `main.rs` monolith | **Partially fixed** — extracted `ipc.rs`, `music.rs`, `audio_pipeline.rs`, `asr.rs`, `capture.rs`. `main.rs` down to 1,193 lines |
+
+### Resolved During This Audit
+
+| Item | What Changed |
+|------|-------------|
+| IPC writer silently drops write errors | `ipc.rs`: `let _ = out.write_all(...)` → proper error handling with `break` on write failure |
+| `.expect()` on JSON values in ASR | `asr.rs`: replaced `serde_json::Value::as_object_mut().expect()` with direct `serde_json::Map` construction |
+| Edition 2024 upgrade | `Cargo.toml`: edition `2021` → `2024`, `rust-version = "1.85"` |
+| Lints configuration | `Cargo.toml`: `[lints.rust]` (unsafe_code = warn) and `[lints.clippy]` (all + pedantic with targeted allows) |
+| Bulk clippy fixes | All files: `uninlined_format_args`, `redundant_closure_for_method_calls`, `unnecessary_map_or`, `implicit_clone`, `len_zero`, `manual_let_else` |
+| VecDeque pre-allocation | `audio_pipeline.rs`: `with_capacity(48_000)` on both PCM buffers (~1s pre-allocated) |
+| `unsafe` block documentation | `music.rs`: SAFETY comment expanded with full invariant documentation |
+
+### Still Open
+
+| Original # | Issue | Priority | Notes |
+|------------|-------|----------|-------|
+| 2 | `unwrap()` in `try_connect` on guarded invariants | Medium | Still present in `main.rs`. `is_complete()` guard makes panics unlikely but the compiler can't prove it. Consider `let...else`. |
+| 4 | `send_msg` control vs audio semantics | Low | Now documented with doc comments in `ipc.rs`. Control messages use `send()` (blocking), lossy messages use `try_send()`. The original concern was overstated — the current implementation already differentiates correctly via `force: bool`. |
+| 8 | Type the TS client (`any` casts) | Medium | `guild: any`, `_handleMessage(msg: any)` still present in `clankvoxClient.ts` |
+| 10 | Voice WebSocket reconnect | Low | Architectural limitation. The TS-side respawn approach works and is simpler to reason about. |
+| 11 | Unit tests for `voice_conn.rs` and `dave.rs` | Improved | `voice_conn.rs` now has 5 tests (RTP header parsing, AES-256-GCM + XChaCha20 round-trip). `dave.rs` has 4 tests (transition management, pending downgrade timeout). Was 7 total → now 15. |
 
 ---
 
 ## Architecture Overview
 
-Clankvox is a standalone Rust process that handles the entire low-level voice pipeline:
+Clankvox is a standalone Rust subprocess (8 source files) that handles the entire
+low-level Discord voice pipeline:
 
-1. **Discord Voice WebSocket** — full v8 protocol implementation (OP0 Identify through OP31 DAVE recovery)
-2. **UDP RTP** — IP discovery, transport encryption (AES-256-GCM + XChaCha20-Poly1305), packet send/receive
-3. **DAVE E2EE** — full MLS-based Discord Audio/Video Encryption via the `davey` crate, including transition management, welcome/commit processing, epoch reinit, and passthrough mode
-4. **Opus codec** — encode outbound TTS/music, decode inbound user audio
-5. **Audio mixing** — TTS + music buffers with gain envelope crossfading
-6. **Music pipeline** — spawns yt-dlp | ffmpeg as a child process, reads raw PCM
-7. **ASR** — OpenAI Realtime Transcription API via WebSocket, per-user sessions
+1. **Discord Voice WebSocket** — full v8 protocol (OP0 Identify through OP31 DAVE recovery)
+2. **UDP RTP** — IP discovery, transport encryption (AES-256-GCM + XChaCha20-Poly1305)
+3. **DAVE E2EE** — MLS-based encryption via `davey` crate, transition management, passthrough
+4. **Opus codec** — encode outbound TTS/music, decode inbound user audio (per-SSRC decoders)
+5. **Audio mixing** — TTS + music with gain envelope crossfading at 20ms frame rate
+6. **Music pipeline** — `yt-dlp | ffmpeg` child process, raw PCM streaming
+7. **ASR** — OpenAI Realtime Transcription API, per-user WebSocket sessions
 8. **PCM resampling** — linear interpolation between arbitrary sample rates
 
-### IPC Protocol (Bun <-> Rust)
+### IPC Protocol (Bun ↔ Rust)
 
-- **Inbound** (Bun -> Rust): newline-delimited JSON on stdin
-- **Outbound** (Rust -> Bun): length-prefixed binary frames on stdout, with format byte (0=JSON, 1=binary audio)
-- Binary audio path avoids base64 encode/decode overhead for the hot path
-- Bounded channel (512) with backpressure — drops frames rather than OOMing
+- **Inbound** (Bun → Rust): newline-delimited JSON on stdin
+- **Outbound** (Rust → Bun): length-prefixed binary frames on stdout (format byte: 0=JSON, 1=binary audio)
+- Control messages use blocking `send()`, lossy audio uses `try_send()` with backpressure (512-capacity bounded channel)
+- Writer now detects and breaks on write errors instead of silently ignoring them
 
----
+### Module Structure (post-extraction)
 
-## The Good
-
-1. **Solid dependency choices.** `tokio` for async, `parking_lot` for fast mutexes, `crossbeam-channel` for thread-safe bounded queues, `anyhow` for error propagation. All idiomatic Rust.
-
-2. **Only one `unsafe` block** (`main.rs:1122`) — a `libc::kill()` for SIGTERM on the music player child process. Reasonable use; the alternative (`Command::new("kill")`) spawns a whole process.
-
-3. **The IPC writer is well-engineered.** Dedicated thread, bounded channel with backpressure, binary fast-path for audio frames with signal metadata (peak, active sample count) packed into a compact header.
-
-4. **DAVE implementation is thorough.** Handles edge cases that many implementations miss: `AlreadyInGroup` during welcome processing, auto-execute of pending pv=0 downgrades after 3s timeout, passthrough mode during transitions, decrypt failure tracking with suppressed recovery to avoid 4006 disconnects.
-
-5. **Audio pipeline is production-quality.** PCM buffer overflow protection (15s cap), trailing silence frames for smooth cutoff, partial TTS tail coalescing/flushing, gain envelope for smooth music volume transitions.
-
-6. **Tests exist and are meaningful.** 7 unit tests in `main.rs` covering the mixer drain logic, music pipeline command construction, and TTS partial frame flushing. 3 tests in `clankvoxClient.test.ts` covering destroy lifecycle and telemetry.
-
----
-
-## The Bad
-
-### 1. `main.rs` is a monolith (2,299 lines)
-
-The main loop (`main()`) is a single `tokio::select!` loop running from line 1298 to line 2242 — **944 lines** of deeply nested match arms in one function. It manages IPC message dispatch (16 message types), voice connection events, music pipeline events, ASR exit notifications, and the 20ms audio send tick.
-
-Same god-function antipattern as `voiceSessionManager.ts`.
-
-### 2. Music state is a 14-variable bag
-
-```rust
-music_player, music_active, music_paused, active_music_url,
-active_music_resolved_direct_url, pending_music_url,
-pending_music_received_at, pending_music_audio_seen,
-pending_music_last_audio_at, pending_music_waiting_for_drain,
-pending_music_drain_started_at, pending_music_first_pcm_at,
-pending_music_resolved_direct_url, pending_music_stop
+```
+src/
+├── main.rs          (1,193)  Event loop, state machine, tokio::select!
+├── voice_conn.rs    (1,477)  WebSocket + UDP + transport crypto + RTP
+├── dave.rs            (455)  DAVE E2EE state machine
+├── ipc.rs             (435)  IPC protocol, typed messages, writer thread
+├── music.rs           (422)  MusicState, pipeline spawning, mixer
+├── audio_pipeline.rs  (394)  TTS/music mixing, PCM buffers, send state
+├── asr.rs             (147)  OpenAI Realtime ASR session management
+└── capture.rs          (41)  Per-user audio capture state, Opus decoder
 ```
 
-All loose `let mut` bindings in `main()`. The "reset all music state" block is copy-pasted **6 times**. A `MusicState` struct with a `reset()` method would eliminate this.
+---
 
-### 3. `#![allow(dead_code)]` at the top of `main.rs`
+## Strengths
 
-Silences the compiler's unused code warnings globally. Should be removed; dead code should be deleted, not suppressed.
+1. **Minimal unsafe.** One `unsafe` block in the entire codebase (`libc::killpg` in
+   `music.rs`) with thorough SAFETY documentation.
 
-### 4. `unwrap()` in `try_connect` on guarded-but-unproven invariants
+2. **Zero clippy warnings** under `clippy::all` + `clippy::pedantic` (with justified
+   targeted allows for audio-specific casts and hot-path function signatures).
 
-`main.rs:2270-2282` — `pending.user_id.unwrap()`, `pending.endpoint.as_ref().unwrap()`, etc. "Safe" because `is_complete()` was checked, but the compiler doesn't know that. If the invariant ever breaks, the entire subprocess panics. Should use `let else` or propagate as `Result`.
+3. **Edition 2024** with MSRV 1.85 — modern match ergonomics, latest language features.
 
-### 5. No reconnect support
+4. **Solid dependency choices.** `tokio`, `parking_lot`, `crossbeam-channel`, `anyhow` —
+   all idiomatic and battle-tested.
 
-When the voice WebSocket closes (e.g., Discord sends 4006 after DAVE recovery), clankvox can't reconnect — it emits `Disconnected` and the TS side has to respawn the entire process.
+5. **DAVE implementation is thorough.** Handles `AlreadyInGroup`, pending pv=0 downgrades
+   with 3s timeout, passthrough during transitions, decrypt failure suppression during
+   epoch changes. 4 unit tests covering the state machine.
 
-This is the most significant architectural limitation.
+6. **Audio pipeline is production-quality.** PCM overflow protection (15s cap), trailing
+   silence frames, partial TTS tail coalescing/flushing, gain envelope for smooth volume
+   transitions, pre-allocated VecDeque buffers.
 
-### 6. No Cargo tests for `voice_conn.rs` or `dave.rs`
+7. **IPC writer is well-engineered.** Dedicated thread, bounded channel with backpressure,
+   binary fast-path for audio, proper write error detection and teardown.
 
-All 7 Rust tests are in `main.rs` for the audio mixer. The voice connection handshake, RTP handling, transport crypto, and DAVE state machine have zero unit tests.
+8. **15 meaningful unit tests** covering transport crypto round-trips, RTP header
+   parsing, DAVE state transitions, music pipeline command construction, audio mixer
+   drain logic, and TTS partial frame flushing.
 
 ---
 
-## Red Flags
+## Remaining Concerns
 
-1. **Shared Opus decoder across all SSRCs.** `main.rs:1276-1277` creates a single `OpusDecoder` used for all inbound user audio. Opus decoders maintain internal state (PLC, bandwidth estimation). Interleaving frames from different users corrupts this state, causing audio artifacts. Each SSRC should have its own decoder.
+### Medium Priority
 
-2. **`send_msg` silently drops all message types.** Uses `try_send` on the bounded channel — if full, messages including `Error`, `ConnectionState`, and `AsrTranscript` are silently dropped. Control messages should use blocking send or at minimum log when dropped.
+1. **`main.rs` is still 1,193 lines.** The `main()` function's `tokio::select!` loop is
+   ~900 lines of tightly coupled state management. This is a conscious design choice for a
+   real-time event loop where arms share mutable state, but it makes the function hard to
+   navigate. Future work could extract handler functions that take `&mut AppState`.
 
-3. **`serde_json::Value` for voice gateway data.** `InMsg::VoiceServer { data: Value }` and `InMsg::VoiceState { data: Value }` accept arbitrary JSON with no type safety. Field extraction via `.get("endpoint").and_then(|v| v.as_str())` — a typo is a silent `None`.
+2. **`unwrap()` in `try_connect`** (main.rs). `pending.user_id.unwrap()` and
+   `pending.endpoint.as_ref().unwrap()` after `is_complete()` check. The invariant holds in
+   practice but isn't provable to the compiler. `let...else` with an error log would be
+   strictly safer.
 
-4. **Music player `kill()` doesn't kill the process group.** The `sh -c "yt-dlp ... | ffmpeg ..."` pipeline creates a process group. `kill(pid, SIGTERM)` only signals the shell, not ffmpeg. Should use `killpg` or negative PID.
+3. **TS client still uses `any`** for `guild`, `_handleMessage(msg)`, and `connectAsr`
+   params. These should be typed.
+
+### Low Priority
+
+4. **No reconnect support.** Voice WebSocket closure requires full process restart via
+   the TS parent, losing all in-flight state (ASR sessions, music position, DAVE epoch,
+   per-SSRC decoders, audio buffers). Users hear a gap during respawn. Rare enough in
+   production that it hasn't been prioritized, but it's an architectural limitation,
+   not a deliberate design choice.
+
+5. **Linear interpolation resampling** (`capture.rs`). Adequate for speech but not
+   ideal for music. A polyphase or sinc resampler would produce better results if music
+   capture becomes a use case.
+
+6. **No structured error codes in IPC.** Errors are string messages. Typed error codes
+   would let the TS side react to specific failure modes programmatically.
 
 ---
 
-## TS-Side Client (`clankvoxClient.ts` — 627 lines)
+## Changes Made in This Audit
 
-**Grade: B+**
+### Cargo.toml
+- Edition `2021` → `2024`
+- Version `0.2.0` → `0.3.0`
+- Added `rust-version = "1.85"`
+- Added `[lints.rust]`: `unsafe_code = "warn"`
+- Added `[lints.clippy]`: `all` + `pedantic` with targeted allows for audio-specific patterns
 
-The TS client is cleaner than most of the TS codebase:
-- Proper lifecycle management with `destroy()` that sends gateway leave, graceful SIGTERM with 250ms timeout, then SIGKILL at 5s
-- Static `liveClients` set with process exit handler to SIGKILL orphaned children
-- Binary stdout framing parser handles partial reads correctly
-- Audio batching (5ms timer) to reduce IPC overhead
+### ipc.rs
+- Fixed IPC writer to detect and break on write errors (was `let _ = out.write_all(...)`)
+- Added doc comments clarifying control vs lossy message semantics
+- Added `#[allow(clippy::struct_field_names)]` on `VoiceStateData`
 
-**Issues:**
-- `guild: any` — untyped
-- `_handleMessage(msg: any)` — untyped message dispatch
-- `connectAsr` params are untyped
-- No reconnect on crash — `crashed` event is emitted but the caller has to handle restart
+### asr.rs
+- Replaced `.expect()` on `serde_json::Value::as_object_mut()` with direct `serde_json::Map` construction
+- Converted `match` to `let...else`
 
----
+### music.rs
+- Enhanced SAFETY comment on `unsafe killpg` with full invariant documentation
+- Fixed edition 2024 match ergonomics
+- Converted `match` to `let...else`
 
-## Improvement Plan (Prioritized)
+### dave.rs
+- Fixed edition 2024 reference pattern in `.find()` closure
 
-### Phase 1: Bug Fixes (High Impact, Low Effort)
+### voice_conn.rs
+- Added justified `#[allow]` for `large_enum_variant`, `too_many_arguments`, `too_many_lines`
+- Converted multiple `match`/`if let..else` to `let...else`
 
-| # | Task | Why | Effort |
-|---|------|-----|--------|
-| 1 | **Per-SSRC Opus decoders** | Shared decoder corrupts internal state when interleaving frames from different users. Real audio quality bug. | Small — HashMap<u32, OpusDecoder> keyed by SSRC |
-| 2 | **Replace `unwrap()` in `try_connect`** with `let Some(...) = ... else { return }` | Subprocess panics if invariant breaks | Tiny |
-| 3 | **Use `killpg` for music pipeline** | `kill(pid)` only kills the shell, not ffmpeg in the pipeline | Tiny — change `libc::kill` to `libc::killpg` |
-| 4 | **Differentiate control vs audio in `send_msg`** | Control messages (`Error`, `ConnectionState`, `AsrTranscript`) should not be silently dropped | Small — use `send` (blocking) for non-audio, keep `try_send` for audio |
+### main.rs
+- Added justified `#[allow(clippy::too_many_lines)]` on `main()`
+- Moved `const` before `let` statements (items_after_statements)
+- Merged identical match arms
+- Renamed `new_sid`/`old_sid`/`new_uid` to descriptive names
+- Converted remaining `if let...else` to `let...else`
 
-### Phase 2: Code Quality (Medium Effort)
+### audio_pipeline.rs
+- Added `with_capacity(48_000)` to both `VecDeque` buffers
 
-| # | Task | Why | Effort |
-|---|------|-----|--------|
-| 5 | **Extract `MusicState` struct** with `reset()` method | 14 loose variables, 6 copy-pasted reset blocks | Medium |
-| 6 | **Remove `#![allow(dead_code)]`** and delete actual dead code | Suppresses useful compiler warnings | Tiny |
-| 7 | **Type voice gateway IPC messages** | Replace `serde_json::Value` with proper structs for `VoiceServer` and `VoiceState` data | Small |
-| 8 | **Type the TS client** | Replace `any` in `guild`, `_handleMessage`, `connectAsr` params | Small |
-
-### Phase 3: Architecture (High Effort, High Value)
-
-| # | Task | Why | Effort |
-|---|------|-----|--------|
-| 9 | **Break `main.rs` into modules** | 944-line main loop is a god-function. Extract: `ipc.rs` (message dispatch), `music.rs` (music state machine), `audio_pipeline.rs` (send state + mixing), `capture.rs` (user audio capture + speaking detection) | Large |
-| 10 | **Add voice WebSocket reconnect** | Currently any WS disruption requires full process restart. Most significant architectural gap. | Large |
-| 11 | **Add unit tests for `voice_conn.rs` and `dave.rs`** | Transport crypto and DAVE state machine are complex and untested | Medium |
-
-### Phase 4: Future Improvements
-
-| # | Task | Why | Effort |
-|---|------|-----|--------|
-| 12 | **CI build step for clankvox binary** | Currently built locally, no automated build | Medium |
-| 13 | **Structured IPC error reporting** | Currently just string messages — add error codes for the TS side to react to specific failure modes | Medium |
-| 14 | **Backpressure-aware stdin reader** | Potential deadlock if main loop stalls and TS side is blocked on stdout in the same event loop tick | Medium |
+### All files
+- Bulk clippy auto-fixes: `uninlined_format_args`, `redundant_closure_for_method_calls`,
+  `unnecessary_map_or` → `is_none_or`/`is_some_and`, `implicit_clone`, `len_zero` → `is_empty`
 
 ---
 
 ## Summary
 
-For 11 days of work, shipping a custom Rust Discord voice client with DAVE E2EE, transport crypto, opus codec, audio mixing, music playback, and ASR — and having it actually work — is genuinely impressive. The code quality is a solid notch above the TS monoliths. The shared Opus decoder (#1) is the most urgent bug fix, and voice WS reconnect (#10) is the most impactful architectural improvement.
+The clankvox codebase has matured significantly since the original B- assessment. Module
+extraction reduced `main.rs` from 2,299 to 1,193 lines. Per-SSRC Opus decoders,
+`MusicState` struct, typed IPC messages, and `killpg` fixes addressed the most critical
+issues. This audit added edition 2024, pedantic clippy with zero warnings, IPC write error
+handling, eliminated `.expect()` panic risks, and pre-allocated audio buffers.
+
+The remaining concerns are structural (large event loop, TS-side `any` types, no reconnect)
+rather than correctness or safety issues. For a ~4,500-line real-time voice engine handling
+Discord's full voice protocol stack including DAVE E2EE, the code quality is solid.
