@@ -1,0 +1,416 @@
+use std::io::{self, BufRead, Write};
+
+use crossbeam_channel as crossbeam;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use tokio::sync::mpsc;
+use tracing::{error, info, warn};
+
+static IPC_TX: std::sync::OnceLock<crossbeam::Sender<OutMsg>> = std::sync::OnceLock::new();
+const MAX_STDIN_LINE_BYTES: usize = 1_024 * 1_024;
+
+#[derive(Deserialize, Debug)]
+#[serde(tag = "type")]
+#[serde(rename_all = "snake_case")]
+pub enum InMsg {
+    Join {
+        #[serde(rename = "guildId")]
+        guild_id: String,
+        #[serde(rename = "channelId")]
+        channel_id: String,
+        #[serde(rename = "selfDeaf", default)]
+        _self_deaf: bool,
+        #[serde(rename = "selfMute", default)]
+        self_mute: bool,
+    },
+    VoiceServer {
+        data: VoiceServerData,
+    },
+    VoiceState {
+        data: VoiceStateData,
+    },
+    Audio {
+        #[serde(rename = "pcmBase64")]
+        pcm_base64: String,
+        #[serde(rename = "sampleRate", default = "default_sample_rate")]
+        sample_rate: u32,
+    },
+    StopPlayback,
+    StopTtsPlayback,
+    SubscribeUser {
+        #[serde(rename = "userId")]
+        user_id: String,
+        #[serde(rename = "silenceDurationMs", default = "default_silence_duration")]
+        silence_duration_ms: u32,
+        #[serde(rename = "sampleRate", default = "default_sample_rate")]
+        sample_rate: u32,
+    },
+    UnsubscribeUser {
+        #[serde(rename = "userId")]
+        user_id: String,
+    },
+    MusicPlay {
+        url: String,
+        #[serde(rename = "resolvedDirectUrl", default)]
+        resolved_direct_url: bool,
+    },
+    MusicStop,
+    MusicPause,
+    MusicResume,
+    MusicSetGain {
+        target: f32,
+        #[serde(rename = "fadeMs", default)]
+        fade_ms: u32,
+    },
+    ConnectAsr {
+        #[serde(rename = "userId")]
+        user_id: String,
+        #[serde(rename = "apiKey")]
+        api_key: String,
+        model: String,
+        language: Option<String>,
+        prompt: Option<String>,
+    },
+    DisconnectAsr {
+        #[serde(rename = "userId")]
+        user_id: String,
+    },
+    CommitAsr {
+        #[serde(rename = "userId")]
+        user_id: String,
+    },
+    ClearAsr {
+        #[serde(rename = "userId")]
+        user_id: String,
+    },
+    Destroy,
+}
+
+pub fn default_sample_rate() -> u32 {
+    24000
+}
+
+pub fn default_silence_duration() -> u32 {
+    700
+}
+
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorCode {
+    InvalidRequest,
+    InvalidJson,
+    InputTooLarge,
+    VoiceConnectFailed,
+    VoiceRuntimeError,
+}
+
+#[derive(Serialize, Debug, Clone)]
+#[serde(tag = "type")]
+#[serde(rename_all = "snake_case")]
+pub enum OutMsg {
+    Ready,
+    AdapterSend {
+        payload: Value,
+    },
+    ConnectionState {
+        status: String,
+    },
+    PlayerState {
+        status: String,
+    },
+    PlaybackArmed {
+        reason: String,
+    },
+    TtsPlaybackState {
+        status: String,
+    },
+    SpeakingStart {
+        #[serde(rename = "userId")]
+        user_id: String,
+    },
+    SpeakingEnd {
+        #[serde(rename = "userId")]
+        user_id: String,
+    },
+    UserAudio {
+        #[serde(rename = "userId")]
+        user_id: String,
+        #[serde(skip)]
+        pcm: Vec<u8>,
+        #[serde(skip)]
+        signal_peak_abs: u16,
+        #[serde(skip)]
+        signal_active_sample_count: usize,
+        #[serde(skip)]
+        signal_sample_count: usize,
+    },
+    UserAudioEnd {
+        #[serde(rename = "userId")]
+        user_id: String,
+    },
+    ClientDisconnect {
+        #[serde(rename = "userId")]
+        user_id: String,
+    },
+    MusicIdle,
+    MusicError {
+        message: String,
+    },
+    MusicGainReached {
+        gain: f32,
+    },
+    AsrTranscript {
+        #[serde(rename = "userId")]
+        user_id: String,
+        text: String,
+        #[serde(rename = "isFinal")]
+        is_final: bool,
+    },
+    AsrDisconnected {
+        #[serde(rename = "userId")]
+        user_id: String,
+        reason: String,
+    },
+    Error {
+        code: ErrorCode,
+        message: String,
+    },
+    BufferDepth {
+        #[serde(rename = "ttsSamples")]
+        tts_samples: usize,
+        #[serde(rename = "musicSamples")]
+        music_samples: usize,
+    },
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct VoiceServerData {
+    pub endpoint: Option<String>,
+    pub token: Option<String>,
+}
+
+#[derive(Deserialize, Debug, Clone)]
+pub struct VoiceStateData {
+    pub session_id: Option<String>,
+    pub user_id: Option<String>,
+    pub channel_id: Option<String>,
+}
+
+fn is_lossy_ipc_msg(msg: &OutMsg) -> bool {
+    matches!(msg, OutMsg::UserAudio { .. })
+}
+
+fn is_lossy_inbound_msg(msg: &InMsg) -> bool {
+    matches!(msg, InMsg::Audio { .. })
+}
+
+pub fn send_msg(msg: &OutMsg) {
+    if let Some(tx) = IPC_TX.get() {
+        if is_lossy_ipc_msg(msg) {
+            if let Err(err) = tx.try_send(msg.clone()) {
+                if !matches!(err, crossbeam::TrySendError::Full(_)) {
+                    error!("failed to send lossy IPC message: {}", err);
+                }
+            }
+        } else if let Err(err) = tx.send(msg.clone()) {
+            error!("failed to send IPC message: {}", err);
+        }
+    }
+}
+
+pub fn send_error(code: ErrorCode, message: impl Into<String>) {
+    send_msg(&OutMsg::Error {
+        code,
+        message: message.into(),
+    });
+}
+
+pub fn try_send_error(code: ErrorCode, message: impl Into<String>) {
+    if let Some(tx) = IPC_TX.get() {
+        let msg = OutMsg::Error {
+            code,
+            message: message.into(),
+        };
+        if let Err(err) = tx.try_send(msg) {
+            if !matches!(err, crossbeam::TrySendError::Full(_)) {
+                error!("failed to enqueue non-blocking IPC error: {}", err);
+            }
+        }
+    }
+}
+
+pub fn send_tts_playback_state(status: &str, reason: &str) {
+    info!(
+        status = status,
+        reason = reason,
+        "clankvox_tts_playback_state"
+    );
+    send_msg(&OutMsg::TtsPlaybackState {
+        status: status.to_string(),
+    });
+}
+
+pub fn send_buffer_depth(tts_samples: usize, music_samples: usize, reason: &str) {
+    info!(
+        tts_samples = tts_samples,
+        music_samples = music_samples,
+        reason = reason,
+        "clankvox_buffer_depth"
+    );
+    send_msg(&OutMsg::BufferDepth {
+        tts_samples,
+        music_samples,
+    });
+}
+
+pub fn send_gateway_voice_state_update(guild_id: u64, channel_id: u64, self_mute: bool) {
+    send_msg(&OutMsg::AdapterSend {
+        payload: serde_json::json!({
+            "op": 4,
+            "d": {
+                "guild_id": guild_id.to_string(),
+                "channel_id": channel_id.to_string(),
+                "self_mute": self_mute,
+                "self_deaf": false,
+            }
+        }),
+    });
+}
+
+pub fn spawn_ipc_reader(
+    audio_debug: bool,
+) -> (mpsc::UnboundedReceiver<InMsg>, mpsc::Receiver<InMsg>) {
+    let (control_tx, control_rx) = mpsc::unbounded_channel::<InMsg>();
+    let (audio_tx, audio_rx) = mpsc::channel::<InMsg>(256);
+
+    std::thread::spawn(move || {
+        let stdin = io::stdin();
+        let mut handle = stdin.lock();
+        let mut line_buf = String::new();
+        let mut dropped_audio_messages: u64 = 0;
+
+        loop {
+            line_buf.clear();
+            match handle.read_line(&mut line_buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    if n > MAX_STDIN_LINE_BYTES {
+                        if audio_debug {
+                            eprintln!(
+                                "[rust-subprocess] Dropping oversized stdin line ({} bytes)",
+                                n
+                            );
+                        }
+                        try_send_error(
+                            ErrorCode::InputTooLarge,
+                            format!("Dropped oversized stdin line ({} bytes)", n),
+                        );
+                        continue;
+                    }
+
+                    let trimmed = line_buf.trim();
+                    if trimmed.is_empty() {
+                        continue;
+                    }
+
+                    let msg = match serde_json::from_str::<InMsg>(trimmed) {
+                        Ok(msg) => msg,
+                        Err(err) => {
+                            if audio_debug {
+                                eprintln!(
+                                    "[rust-subprocess] JSON parse error: {} for line: {}",
+                                    err,
+                                    &trimmed[..trimmed.len().min(200)]
+                                );
+                            }
+                            try_send_error(
+                                ErrorCode::InvalidJson,
+                                format!("Invalid stdin JSON message: {}", err),
+                            );
+                            continue;
+                        }
+                    };
+
+                    if is_lossy_inbound_msg(&msg) {
+                        match audio_tx.try_send(msg) {
+                            Ok(()) => {
+                                if dropped_audio_messages > 0 {
+                                    info!(
+                                        dropped_audio_messages = dropped_audio_messages,
+                                        "clankvox_inbound_audio_backpressure_recovered"
+                                    );
+                                    dropped_audio_messages = 0;
+                                }
+                            }
+                            Err(mpsc::error::TrySendError::Full(_)) => {
+                                dropped_audio_messages = dropped_audio_messages.saturating_add(1);
+                                if dropped_audio_messages == 1 || dropped_audio_messages % 100 == 0
+                                {
+                                    warn!(
+                                        dropped_audio_messages = dropped_audio_messages,
+                                        "dropping inbound clankvox audio IPC due to backpressure"
+                                    );
+                                }
+                            }
+                            Err(mpsc::error::TrySendError::Closed(_)) => break,
+                        }
+                    } else if control_tx.send(msg).is_err() {
+                        break;
+                    }
+                }
+                Err(err) => {
+                    warn!(error = %err, "stdin reader exiting after read error");
+                    break;
+                }
+            }
+        }
+
+        let _ = control_tx.send(InMsg::Destroy);
+    });
+
+    (control_rx, audio_rx)
+}
+
+pub fn spawn_ipc_writer() -> crossbeam::Sender<OutMsg> {
+    let (tx, rx) = crossbeam::bounded::<OutMsg>(512);
+    std::thread::spawn(move || {
+        let mut out = io::stdout().lock();
+        for msg in rx {
+            match msg {
+                OutMsg::UserAudio {
+                    user_id,
+                    pcm,
+                    signal_peak_abs,
+                    signal_active_sample_count,
+                    signal_sample_count,
+                } => {
+                    let uid = user_id.parse::<u64>().unwrap_or(0);
+                    let mut payload = Vec::with_capacity(8 + 2 + 4 + 4 + pcm.len());
+                    payload.extend_from_slice(&uid.to_le_bytes());
+                    payload.extend_from_slice(&signal_peak_abs.to_le_bytes());
+                    payload.extend_from_slice(&(signal_active_sample_count as u32).to_le_bytes());
+                    payload.extend_from_slice(&(signal_sample_count as u32).to_le_bytes());
+                    payload.extend_from_slice(&pcm);
+
+                    let len = payload.len() as u32;
+                    let _ = out.write_all(&[1]);
+                    let _ = out.write_all(&len.to_le_bytes());
+                    let _ = out.write_all(&payload);
+                    let _ = out.flush();
+                }
+                other => {
+                    if let Ok(json) = serde_json::to_string(&other) {
+                        let payload = json.as_bytes();
+                        let len = payload.len() as u32;
+                        let _ = out.write_all(&[0]);
+                        let _ = out.write_all(&len.to_le_bytes());
+                        let _ = out.write_all(payload);
+                        let _ = out.flush();
+                    }
+                }
+            }
+        }
+    });
+    IPC_TX.set(tx.clone()).expect("IPC_TX already initialized");
+    tx
+}

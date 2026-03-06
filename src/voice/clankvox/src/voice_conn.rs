@@ -255,7 +255,6 @@ async fn ip_discovery(socket: &UdpSocket, ssrc: u32) -> Result<(String, u16)> {
 // ---------------------------------------------------------------------------
 
 pub struct VoiceConnection {
-    ws_cmd_tx: mpsc::Sender<WsCommand>,
     pub ssrc: u32,
     shutdown: Arc<AtomicBool>,
     udp_socket: Arc<UdpSocket>,
@@ -515,7 +514,6 @@ impl VoiceConnection {
         let _ = event_tx.send(VoiceEvent::Ready { ssrc }).await;
 
         Ok(VoiceConnection {
-            ws_cmd_tx,
             ssrc,
             shutdown,
             udp_socket: udp,
@@ -540,17 +538,6 @@ impl VoiceConnection {
 
         self.udp_socket.send(&packet).await.context("UDP send")?;
         Ok(())
-    }
-
-    pub async fn set_speaking(&self, speaking: bool) {
-        let flags: u32 = if speaking { 1 } else { 0 }; // MICROPHONE
-        let _ = self
-            .ws_cmd_tx
-            .send(WsCommand::SendJson(json!({
-                "op": 5,
-                "d": { "speaking": flags, "delay": 0, "ssrc": self.ssrc }
-            })))
-            .await;
     }
 
     pub fn shutdown(&self) {
@@ -1419,4 +1406,74 @@ async fn udp_recv_loop(
             .await;
     }
     info!("UDP recv loop exited");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{build_rtp_header, parse_rtp_header, TransportCrypto, OPUS_PT, RTP_HEADER_LEN};
+
+    #[test]
+    fn rtp_header_round_trips() {
+        let sequence = 321;
+        let timestamp = 123_456;
+        let ssrc = 987_654_321;
+
+        let header = build_rtp_header(sequence, timestamp, ssrc);
+        let parsed = parse_rtp_header(&header).expect("header should parse");
+
+        assert_eq!(parsed, (sequence, timestamp, ssrc, RTP_HEADER_LEN));
+    }
+
+    #[test]
+    fn rtp_header_parses_csrc_and_extension_words() {
+        let mut packet = vec![0u8; RTP_HEADER_LEN + 8 + 4 + 8];
+        packet[0] = 0x92; // V=2, X=1, CC=2
+        packet[1] = OPUS_PT;
+        packet[2..4].copy_from_slice(&42u16.to_be_bytes());
+        packet[4..8].copy_from_slice(&99u32.to_be_bytes());
+        packet[8..12].copy_from_slice(&7u32.to_be_bytes());
+
+        let extension_start = RTP_HEADER_LEN + 8;
+        packet[extension_start..extension_start + 2].copy_from_slice(&0xBEDEu16.to_be_bytes());
+        packet[extension_start + 2..extension_start + 4].copy_from_slice(&2u16.to_be_bytes());
+
+        let parsed = parse_rtp_header(&packet).expect("header should parse");
+        assert_eq!(parsed, (42, 99, 7, RTP_HEADER_LEN + 8 + 4 + 8));
+    }
+
+    #[test]
+    fn aes256_gcm_transport_crypto_round_trips() {
+        let crypto = TransportCrypto::new(&[7u8; 32], "aead_aes256_gcm_rtpsize")
+            .expect("crypto should initialize");
+        let header = build_rtp_header(1, 960, 77);
+        let payload = b"opus-frame";
+
+        let encrypted = crypto.encrypt(&header, payload).expect("encrypt");
+        let mut packet = Vec::with_capacity(header.len() + encrypted.len());
+        packet.extend_from_slice(&header);
+        packet.extend_from_slice(&encrypted);
+
+        let decrypted = crypto
+            .decrypt(&packet, header.len())
+            .expect("decrypt should succeed");
+        assert_eq!(decrypted, payload);
+    }
+
+    #[test]
+    fn xchacha20_transport_crypto_round_trips() {
+        let crypto = TransportCrypto::new(&[9u8; 32], "aead_xchacha20_poly1305_rtpsize")
+            .expect("crypto should initialize");
+        let header = build_rtp_header(2, 1_920, 88);
+        let payload = b"another-opus-frame";
+
+        let encrypted = crypto.encrypt(&header, payload).expect("encrypt");
+        let mut packet = Vec::with_capacity(header.len() + encrypted.len());
+        packet.extend_from_slice(&header);
+        packet.extend_from_slice(&encrypted);
+
+        let decrypted = crypto
+            .decrypt(&packet, header.len())
+            .expect("decrypt should succeed");
+        assert_eq!(decrypted, payload);
+    }
 }

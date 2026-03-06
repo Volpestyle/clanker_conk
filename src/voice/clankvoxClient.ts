@@ -11,8 +11,113 @@ import path from "node:path";
 import type { TtsPlaybackState } from "./assistantOutputState.ts";
 
 type ClankvoxProcess = ReturnType<typeof Bun.spawn<"pipe", "pipe", "inherit">>;
+type JsonRecord = Record<string, unknown>;
+type VoiceServerUpdatePayload = JsonRecord & {
+  endpoint?: string | null;
+  token?: string | null;
+};
+type VoiceStateUpdatePayload = JsonRecord & {
+  session_id?: string | null;
+  channel_id?: string | null;
+  user_id?: string | null;
+};
+type ClankvoxGuildLike = {
+  shard?: {
+    send(payload: JsonRecord): void;
+  };
+  voiceAdapterCreator?: (callbacks: {
+    onVoiceServerUpdate(data: VoiceServerUpdatePayload): void;
+    onVoiceStateUpdate(data: VoiceStateUpdatePayload): void;
+  }) => {
+    destroy?: () => void;
+  } | null | undefined;
+} | null;
+type ClankvoxSpawnOptions = {
+  selfDeaf?: boolean;
+  selfMute?: boolean;
+  timeoutMs?: number;
+};
+type ConnectAsrOptions = {
+  userId: string;
+  apiKey: string;
+  model: string;
+  language?: string | null;
+  prompt?: string | null;
+};
+export type ClankvoxIpcErrorCode =
+  | "invalid_request"
+  | "invalid_json"
+  | "input_too_large"
+  | "voice_connect_failed"
+  | "voice_runtime_error";
+type ClankvoxIpcError = {
+  code: ClankvoxIpcErrorCode | null;
+  message: string;
+};
+type ClankvoxCommand =
+  | {
+      type: "join";
+      guildId: string;
+      channelId: string;
+      selfDeaf: boolean;
+      selfMute: boolean;
+    }
+  | { type: "voice_server"; data: VoiceServerUpdatePayload }
+  | { type: "voice_state"; data: VoiceStateUpdatePayload }
+  | { type: "audio"; pcmBase64: string; sampleRate: number }
+  | { type: "stop_playback" }
+  | { type: "stop_tts_playback" }
+  | {
+      type: "subscribe_user";
+      userId: string;
+      silenceDurationMs: number;
+      sampleRate: number;
+    }
+  | { type: "unsubscribe_user"; userId: string }
+  | { type: "music_play"; url: string; resolvedDirectUrl: boolean }
+  | { type: "music_stop" }
+  | { type: "music_pause" }
+  | { type: "music_resume" }
+  | { type: "music_set_gain"; target: number; fadeMs: number }
+  | {
+      type: "connect_asr";
+      userId: string;
+      apiKey: string;
+      model: string;
+      language: string | null;
+      prompt: string | null;
+    }
+  | { type: "disconnect_asr"; userId: string }
+  | { type: "commit_asr"; userId: string }
+  | { type: "clear_asr"; userId: string }
+  | { type: "destroy" };
 
 const AUDIO_DEBUG = !!process.env.AUDIO_DEBUG;
+
+function isRecord(value: unknown): value is JsonRecord {
+  return value !== null && typeof value === "object";
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === "string" ? value : null;
+}
+
+function asNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function asClankvoxIpcErrorCode(value: unknown): ClankvoxIpcErrorCode | null {
+  switch (value) {
+    case "invalid_request":
+    case "invalid_json":
+    case "input_too_large":
+    case "voice_connect_failed":
+    case "voice_runtime_error":
+      return value;
+    default:
+      return null;
+  }
+}
 
 export class ClankvoxClient extends EventEmitter {
   private static liveClients = new Set<ClankvoxClient>();
@@ -21,7 +126,7 @@ export class ClankvoxClient extends EventEmitter {
   private child: ClankvoxProcess | null = null;
   private guildId: string;
   private channelId: string;
-  private guild: any;
+  private guild: ClankvoxGuildLike;
   private destroyed = false;
   private destroyPromise: Promise<void> | null = null;
   private adapterCleanup: (() => void) | null = null;
@@ -35,7 +140,7 @@ export class ClankvoxClient extends EventEmitter {
   private _resolveExitWaiter: (() => void) | null = null;
   private _exitWaiterPromise: Promise<void> | null = null;
 
-  constructor(guildId: string, channelId: string, guild: any) {
+  constructor(guildId: string, channelId: string, guild: ClankvoxGuildLike) {
     super();
     ClankvoxClient.installProcessExitHandlers();
     this.guildId = guildId;
@@ -46,19 +151,15 @@ export class ClankvoxClient extends EventEmitter {
   static async spawn(
     guildId: string,
     channelId: string,
-    guild: any,
-    opts: { selfDeaf?: boolean; selfMute?: boolean; timeoutMs?: number } = {}
+    guild: ClankvoxGuildLike,
+    opts: ClankvoxSpawnOptions = {}
   ): Promise<ClankvoxClient> {
     const client = new ClankvoxClient(guildId, channelId, guild);
     await client._spawn(opts);
     return client;
   }
 
-  private async _spawn(opts: {
-    selfDeaf?: boolean;
-    selfMute?: boolean;
-    timeoutMs?: number;
-  }) {
+  private async _spawn(opts: ClankvoxSpawnOptions) {
     const moduleDir = path.dirname(decodeURIComponent(new URL(import.meta.url).pathname));
     const clankvoxDir = path.resolve(
       moduleDir,
@@ -210,7 +311,7 @@ export class ClankvoxClient extends EventEmitter {
 
         if (format === 0) {
           try {
-            const msg = JSON.parse(payload.toString("utf8"));
+            const msg: unknown = JSON.parse(payload.toString("utf8"));
             this._handleMessage(msg);
           } catch {
             // ignore non-json payload
@@ -247,7 +348,7 @@ export class ClankvoxClient extends EventEmitter {
     if (!guild?.voiceAdapterCreator) return;
 
     const adapter = guild.voiceAdapterCreator({
-      onVoiceServerUpdate: (data: any) => {
+      onVoiceServerUpdate: (data) => {
         this.adapterCallbackCount.voiceServer++;
         if (AUDIO_DEBUG) {
           console.log(
@@ -257,7 +358,7 @@ export class ClankvoxClient extends EventEmitter {
         }
         this._send({ type: "voice_server", data });
       },
-      onVoiceStateUpdate: (data: any) => {
+      onVoiceStateUpdate: (data) => {
         this.adapterCallbackCount.voiceState++;
         if (AUDIO_DEBUG) {
           console.log(
@@ -281,85 +382,158 @@ export class ClankvoxClient extends EventEmitter {
     }
   }
 
-  private _handleMessage(msg: any) {
-    if (!msg || typeof msg !== "object") return;
+  private _handleMessage(msg: unknown) {
+    if (!isRecord(msg)) return;
 
-    switch (msg.type) {
+    const msgType = asString(msg.type);
+    if (!msgType) return;
+
+    switch (msgType) {
       case "ready":
         this.emit("ready");
         break;
       case "adapter_send":
-        this._forwardToGateway(msg.payload);
+        if (isRecord(msg.payload)) {
+          this._forwardToGateway(msg.payload);
+        }
         break;
-      case "connection_state":
-        this.emit("connectionState", msg.status);
+      case "connection_state": {
+        const status = asString(msg.status);
+        if (status) {
+          this.emit("connectionState", status);
+        }
         break;
-      case "player_state":
-        this.emit("playerState", msg.status);
+      }
+      case "player_state": {
+        const status = asString(msg.status);
+        if (status) {
+          this.emit("playerState", status);
+        }
         break;
-      case "playback_armed":
-        this.lastPlaybackArmedReason = String(msg.reason || "").trim() || null;
-        this.emit("playbackArmed", msg.reason);
+      }
+      case "playback_armed": {
+        const reason = asString(msg.reason);
+        this.lastPlaybackArmedReason = reason?.trim() || null;
+        this.emit("playbackArmed", reason ?? undefined);
         break;
+      }
       case "tts_playback_state": {
-        const status = String(msg.status || "").trim().toLowerCase() === "buffered" ? "buffered" : "idle";
+        const status = asString(msg.status)?.trim().toLowerCase() === "buffered" ? "buffered" : "idle";
         this.lastTtsTelemetryAt = Date.now();
         this.lastTtsPlaybackState = status;
         this.emit("ttsPlaybackState", status);
         break;
       }
-      case "speaking_start":
-        this.emit("speakingStart", msg.userId);
+      case "speaking_start": {
+        const userId = asString(msg.userId);
+        if (userId) {
+          this.emit("speakingStart", userId);
+        }
         break;
-      case "speaking_end":
-        this.emit("speakingEnd", msg.userId);
+      }
+      case "speaking_end": {
+        const userId = asString(msg.userId);
+        if (userId) {
+          this.emit("speakingEnd", userId);
+        }
         break;
+      }
       // "user_audio" (JSON) is bypassed above in the binary fast path, but kept here for fallback or tests
-      case "user_audio":
-        this.emit(
-          "userAudio",
-          msg.userId,
-          msg.pcmBase64,
-          msg.signalPeakAbs,
-          msg.signalActiveSampleCount,
-          msg.signalSampleCount
-        );
+      case "user_audio": {
+        const userId = asString(msg.userId);
+        const pcmBase64 = asString(msg.pcmBase64);
+        const signalPeakAbs = asNumber(msg.signalPeakAbs);
+        const signalActiveSampleCount = asNumber(msg.signalActiveSampleCount);
+        const signalSampleCount = asNumber(msg.signalSampleCount);
+        if (
+          userId &&
+          pcmBase64 &&
+          signalPeakAbs !== null &&
+          signalActiveSampleCount !== null &&
+          signalSampleCount !== null
+        ) {
+          this.emit(
+            "userAudio",
+            userId,
+            pcmBase64,
+            signalPeakAbs,
+            signalActiveSampleCount,
+            signalSampleCount
+          );
+        }
         break;
-      case "user_audio_end":
-        this.emit("userAudioEnd", msg.userId);
+      }
+      case "user_audio_end": {
+        const userId = asString(msg.userId);
+        if (userId) {
+          this.emit("userAudioEnd", userId);
+        }
         break;
-      case "asr_transcript":
-        this.emit("asrTranscript", msg.userId, msg.text, msg.isFinal);
+      }
+      case "asr_transcript": {
+        const userId = asString(msg.userId);
+        const text = asString(msg.text);
+        if (userId && text !== null) {
+          this.emit("asrTranscript", userId, text, msg.isFinal === true);
+        }
         break;
-      case "asr_disconnected":
-        this.emit("asrDisconnected", msg.userId, msg.reason);
+      }
+      case "asr_disconnected": {
+        const userId = asString(msg.userId);
+        const reason = asString(msg.reason);
+        if (userId && reason !== null) {
+          this.emit("asrDisconnected", userId, reason);
+        }
         break;
-      case "client_disconnect":
-        this.emit("clientDisconnect", msg.userId);
+      }
+      case "client_disconnect": {
+        const userId = asString(msg.userId);
+        if (userId) {
+          this.emit("clientDisconnect", userId);
+        }
         break;
+      }
       case "music_idle":
         this.emit("musicIdle");
         break;
-      case "music_error":
-        this.emit("musicError", msg.message);
+      case "music_error": {
+        const message = asString(msg.message);
+        if (message !== null) {
+          this.emit("musicError", message);
+        }
         break;
-      case "music_gain_reached":
-        this.emit("musicGainReached", msg.gain);
+      }
+      case "music_gain_reached": {
+        const gain = asNumber(msg.gain);
+        if (gain !== null) {
+          this.emit("musicGainReached", gain);
+        }
         break;
-      case "buffer_depth":
+      }
+      case "buffer_depth": {
+        const ttsSamples = asNumber(msg.ttsSamples) ?? 0;
+        const musicSamples = asNumber(msg.musicSamples) ?? 0;
         this.lastTtsTelemetryAt = Date.now();
-        this.ttsBufferDepthSamples = Math.max(0, Number(msg.ttsSamples ?? 0));
+        this.ttsBufferDepthSamples = Math.max(0, ttsSamples);
         this.lastTtsPlaybackState =
           this.ttsBufferDepthSamples > 0 ? "buffered" : "idle";
-        this.emit("bufferDepth", msg.ttsSamples, msg.musicSamples);
+        this.emit("bufferDepth", ttsSamples, musicSamples);
         break;
-      case "error":
-        this.emit("error", msg.message);
+      }
+      case "error": {
+        const message = asString(msg.message);
+        const code = asClankvoxIpcErrorCode(msg.code);
+        if (message !== null) {
+          const ipcError: ClankvoxIpcError = { message, code };
+          this.emit("ipcError", ipcError);
+          this.emit("error", message, code ?? undefined);
+        }
         break;
+      }
       default:
         if (AUDIO_DEBUG) {
           console.log(
-            `[clankvox] unknown message: ${msg.type}`
+            `[clankvox] unknown message: ${msgType}`
           );
         }
         break;
@@ -393,13 +567,14 @@ export class ClankvoxClient extends EventEmitter {
     return this.ttsBufferDepthSamples / 48_000;
   }
 
-  private _forwardToGateway(payload: any) {
+  private _forwardToGateway(payload: JsonRecord) {
     if (!payload || !this.guild) return;
     this.adapterCallbackCount.op4Forward++;
+    const payloadData = isRecord(payload.d) ? payload.d : null;
     if (AUDIO_DEBUG) {
       console.log(
         `[clankvox] _forwardToGateway OP4 #${this.adapterCallbackCount.op4Forward}`,
-        `guild_id=${payload?.d?.guild_id ?? "null"} channel_id=${payload?.d?.channel_id ?? "null"}`
+        `guild_id=${payloadData?.guild_id ?? "null"} channel_id=${payloadData?.channel_id ?? "null"}`
       );
     }
     try {
@@ -427,7 +602,7 @@ export class ClankvoxClient extends EventEmitter {
     });
   }
 
-  private _send(msg: any) {
+  private _send(msg: ClankvoxCommand) {
     if (!this.child || this.destroyed || this.child.killed || this.child.exitCode !== null) return;
     try {
       this.child.stdin.write(JSON.stringify(msg) + "\n");
@@ -511,7 +686,7 @@ export class ClankvoxClient extends EventEmitter {
     this._send({ type: "music_set_gain", target, fadeMs });
   }
 
-  connectAsr({ userId, apiKey, model, language, prompt }) {
+  connectAsr({ userId, apiKey, model, language, prompt }: ConnectAsrOptions) {
     this._send({
       type: "connect_asr",
       userId,
