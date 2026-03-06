@@ -453,6 +453,11 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       providerUsed: null,
       providerFallbackUsed: false,
       budget: {
+        maxPerHour: 0,
+        used: 0,
+        successCount: 0,
+        errorCount: 0,
+        remaining: 0,
         canSearch: false
       }
     };
@@ -477,6 +482,9 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       steps: 0,
       hitStepLimit: false,
       budget: {
+        maxPerHour: 0,
+        used: 0,
+        remaining: 0,
         canBrowse: false
       }
     };
