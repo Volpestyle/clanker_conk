@@ -16,6 +16,7 @@ import {
 } from "./voiceSessionHelpers.ts";
 import { providerSupports } from "./voiceModes.ts";
 import type { VoiceSession } from "./voiceSessionTypes.ts";
+import { createAssistantOutputState } from "./assistantOutputState.ts";
 
 const MIN_MAX_SESSION_MINUTES = 1;
 const MAX_MAX_SESSION_MINUTES = 120;
@@ -671,6 +672,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           isPaused: false,
           volume: 1
         },
+        assistantOutput: createAssistantOutputState({ now, trigger: "session_start" }),
         thoughtLoopTimer: null,
         thoughtLoopBusy: false,
         nextThoughtAt: 0,
@@ -750,7 +752,9 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         openAiTurnContextRefreshState: null,
         settingsSnapshot: settings,
         cleanupHandlers: [],
-        ending: false
+        ending: false,
+        playerState: null,
+        botTurnOpenAt: 0
       };
 
       manager.sessions.set(guildId, session);

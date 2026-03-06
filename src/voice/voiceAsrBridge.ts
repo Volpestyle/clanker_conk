@@ -127,6 +127,7 @@ export interface AsrBridgeState {
   finalTranscriptsByItemId: Map<string, string>;
   pendingCommitResolvers: AsrPendingCommitResolver[];
   pendingCommitRequests: AsrPendingCommitRequest[];
+  consecutiveEmptyCommits: number;
 }
 
 export interface AsrCommitResult {
@@ -162,6 +163,11 @@ export interface AsrBridgeDeps {
 
 // ── State creation ───────────────────────────────────────────────────
 
+// Circuit breaker: after this many consecutive empty commits with
+// substantial audio, force-reconnect the ASR session.
+const ASR_EMPTY_COMMIT_RECONNECT_THRESHOLD = 3;
+const ASR_EMPTY_COMMIT_MIN_BYTES = 48_000; // ~1s of 24kHz PCM16
+
 export function createAsrBridgeState(): AsrBridgeState {
   return {
     phase: "idle",
@@ -181,7 +187,8 @@ export function createAsrBridgeState(): AsrBridgeState {
     itemIdToUserId: new Map(),
     finalTranscriptsByItemId: new Map(),
     pendingCommitResolvers: [],
-    pendingCommitRequests: []
+    pendingCommitRequests: [],
+    consecutiveEmptyCommits: 0
   };
 }
 
@@ -818,15 +825,21 @@ export function flushPendingAsrAudio(
   if (!chunks.length) return;
 
   const remainingChunks: AsrPendingAudioChunk[] = [];
+  let flushedBytes = 0;
+  let flushedChunks = 0;
+  let skippedUtteranceMismatch = 0;
   while (chunks.length > 0) {
     const entry = chunks.shift()!;
     if (!entry || !Buffer.isBuffer(entry.chunk)) continue;
     if (Number(entry.utteranceId || 0) !== targetUtteranceId) {
       remainingChunks.push(entry);
+      skippedUtteranceMismatch += 1;
       continue;
     }
     try {
       client.appendInputAudioPcm(entry.chunk);
+      flushedBytes += entry.chunk.length;
+      flushedChunks += 1;
     } catch (error: unknown) {
       const errorUserId = mode === "shared" ? state.userId : (userId ? String(userId).trim() : null);
       deps.store.logAction({
@@ -851,6 +864,40 @@ export function flushPendingAsrAudio(
     (total, pendingChunk) => total + Number(pendingChunk?.chunk?.length || 0),
     0
   );
+
+  // Track cumulative flush stats on the state for periodic reporting.
+  state._flushAccumBytes = Math.max(0, Number(state._flushAccumBytes || 0)) + flushedBytes;
+  state._flushAccumChunks = Math.max(0, Number(state._flushAccumChunks || 0)) + flushedChunks;
+  state._flushAccumSkipped = Math.max(0, Number(state._flushAccumSkipped || 0)) + skippedUtteranceMismatch;
+  const lastFlushLogAt = Number(state._lastFlushLogAt || 0);
+  const flushLogIntervalMs = 2000;
+  const now = Date.now();
+  if (
+    (now - lastFlushLogAt >= flushLogIntervalMs && state._flushAccumBytes > 0) ||
+    skippedUtteranceMismatch > 0
+  ) {
+    const logUserId = mode === "shared" ? state.userId : (userId ? String(userId).trim() : null);
+    deps.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: logUserId || null,
+      content: "openai_realtime_asr_audio_flushed",
+      metadata: {
+        sessionId: session.id,
+        flushedBytes: state._flushAccumBytes,
+        flushedChunks: state._flushAccumChunks,
+        skippedUtteranceMismatch: state._flushAccumSkipped,
+        remainingPendingBytes: state.pendingAudioBytes,
+        targetUtteranceId,
+        wsReadyState: client.ws?.readyState ?? null
+      }
+    });
+    state._flushAccumBytes = 0;
+    state._flushAccumChunks = 0;
+    state._flushAccumSkipped = 0;
+    state._lastFlushLogAt = now;
+  }
 }
 
 // ── Begin utterance ──────────────────────────────────────────────────
@@ -1121,6 +1168,31 @@ export async function commitAsrUtterance(
 
       scheduleAsrIdleClose(mode, session, deps, normalizedUserId);
       if (trackedUtterance) trackedUtterance.bytesSent = 0;
+
+      // Circuit breaker: track consecutive empty commits with substantial audio.
+      // A silently dead WebSocket will produce zero transcripts indefinitely.
+      if (!transcript && utteranceBytesSent >= ASR_EMPTY_COMMIT_MIN_BYTES) {
+        asrState.consecutiveEmptyCommits = Math.max(0, Number(asrState.consecutiveEmptyCommits || 0)) + 1;
+        if (asrState.consecutiveEmptyCommits >= ASR_EMPTY_COMMIT_RECONNECT_THRESHOLD) {
+          asrState.consecutiveEmptyCommits = 0;
+          store.logAction({
+            kind: "voice_error",
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId: normalizedUserId,
+            content: "openai_realtime_asr_circuit_breaker_reconnect",
+            metadata: {
+              sessionId: session.id,
+              threshold: ASR_EMPTY_COMMIT_RECONNECT_THRESHOLD,
+              captureReason: String(captureReason || "stream_end")
+            }
+          });
+          // Force-close the dead session; next capture will reconnect.
+          void closePerUserAsrSession(session, deps, normalizedUserId, "circuit_breaker").catch(() => undefined);
+        }
+      } else if (transcript) {
+        asrState.consecutiveEmptyCommits = 0;
+      }
 
       if (!transcript) {
         store.logAction({
