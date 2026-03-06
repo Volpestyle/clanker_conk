@@ -15,6 +15,7 @@ import {
 import { clamp } from "../utils.ts";
 import { MAX_BROWSER_BROWSE_QUERY_LEN, normalizeDirectiveText } from "../botHelpers.ts";
 import { getResolvedBrowserTaskConfig, isDevTaskEnabled } from "../settings/agentStack.ts";
+import type { BrowserBrowseContextState } from "./budgetTracking.ts";
 import type { AgentContext } from "./botContext.ts";
 
 type AgentTaskTrace = {
@@ -26,16 +27,7 @@ type AgentTaskTrace = {
 
 type RunModelRequestedBrowserBrowseOptions = {
   settings: Record<string, unknown>;
-  browserBrowse: {
-    enabled: boolean;
-    configured: boolean;
-    budget: {
-      maxPerHour: number;
-      used: unknown;
-      remaining: number;
-      canBrowse: boolean;
-    };
-  } & Record<string, unknown>;
+  browserBrowse: BrowserBrowseContextState;
   query?: string;
   guildId?: string | null;
   channelId?: string | null;
@@ -43,24 +35,7 @@ type RunModelRequestedBrowserBrowseOptions = {
   source?: string;
 };
 
-type BrowserBrowseState = Record<string, unknown> & {
-  requested: boolean;
-  configured: boolean;
-  enabled: boolean;
-  used: boolean;
-  blockedByBudget: boolean;
-  error: string | null;
-  query: string;
-  text: string;
-  steps: number;
-  hitStepLimit: boolean;
-  budget: {
-    maxPerHour: number;
-    used: unknown;
-    remaining: number;
-    canBrowse: boolean;
-  };
-};
+type BrowserBrowseState = BrowserBrowseContextState;
 
 type RunModelRequestedCodeTaskOptions = {
   settings: Record<string, unknown>;

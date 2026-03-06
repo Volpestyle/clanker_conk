@@ -24,16 +24,11 @@ import {
 import { getMediaPromptCraftGuidance } from "./promptCore.ts";
 import {
   MAX_GIF_QUERY_LEN,
-  MAX_VIDEO_FALLBACK_MESSAGES,
-  MAX_VIDEO_TARGET_SCAN,
   composeDiscoveryImagePrompt,
   composeDiscoveryVideoPrompt,
   composeReplyImagePrompt,
   composeReplyVideoPrompt,
-  extractRecentVideoTargets,
   extractUrlsFromText,
-  isWebSearchOptOutText,
-  looksLikeVideoFollowupMessage,
   normalizeDirectiveText,
   normalizeReactionEmojiToken,
   normalizeSkipSentinel,
@@ -77,6 +72,22 @@ import {
   runModelRequestedBrowserBrowse as runModelRequestedBrowserBrowseForAgentTasks,
   runModelRequestedCodeTask as runModelRequestedCodeTaskForAgentTasks
 } from "./bot/agentTasks.ts";
+import {
+  buildBrowserBrowseContext as buildBrowserBrowseContextForBudgetTracking,
+  buildImageLookupContext as buildImageLookupContextForBudgetTracking,
+  buildMemoryLookupContext as buildMemoryLookupContextForBudgetTracking,
+  buildVideoReplyContext as buildVideoReplyContextForBudgetTracking,
+  buildWebSearchContext as buildWebSearchContextForBudgetTracking,
+  getBrowserBudgetState as getBrowserBudgetStateForBudgetTracking,
+  getGifBudgetState as getGifBudgetStateForBudgetTracking,
+  getImageBudgetState as getImageBudgetStateForBudgetTracking,
+  getMediaGenerationCapabilities as getMediaGenerationCapabilitiesForBudgetTracking,
+  getWebSearchBudgetState as getWebSearchBudgetStateForBudgetTracking,
+  getVideoContextBudgetState as getVideoContextBudgetStateForBudgetTracking,
+  getVideoGenerationBudgetState as getVideoGenerationBudgetStateForBudgetTracking,
+  isImageGenerationReady as isImageGenerationReadyForBudgetTracking,
+  isVideoGenerationReady as isVideoGenerationReadyForBudgetTracking
+} from "./bot/budgetTracking.ts";
 import {
   captionRecentHistoryImages as captionRecentHistoryImagesForImageAnalysis,
   extractHistoryImageCandidates as extractHistoryImageCandidatesForImageAnalysis,
@@ -149,6 +160,7 @@ import {
 import type {
   AgentContext,
   BotContext,
+  BudgetContext,
   QueueGatewayRuntime,
   ReplyPipelineRuntime,
   VoiceReplyRuntime
@@ -173,11 +185,7 @@ import {
   getMemorySettings,
   getReplyPermissions,
   getTextInitiativeSettings,
-  getVideoContextSettings,
   getActivitySettings,
-  getBrowserRuntimeConfig,
-  getResearchRuntimeConfig,
-  getResolvedBrowserTaskConfig,
   getVoiceAdmissionSettings,
   isDevTaskEnabled
 } from "./settings/agentStack.ts";
@@ -470,6 +478,16 @@ export class ClankerBot {
       browserManager: this.browserManager,
       activeBrowserTasks: this.activeBrowserTasks,
       subAgentSessions: this.subAgentSessions
+    };
+  }
+
+  toBudgetContext(): BudgetContext {
+    return {
+      ...this.toBotContext(),
+      search: this.search,
+      video: this.video,
+      browserManager: this.browserManager,
+      imageCaptionCache: this.imageCaptionCache
     };
   }
 
@@ -2506,267 +2524,48 @@ export class ClankerBot {
   }
 
   getImageBudgetState(settings) {
-    const discovery = getDiscoverySettings(settings);
-    const maxPerDay = clamp(Number(discovery.maxImagesPerDay) || 0, 0, 200);
-    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const used = this.store.countActionsSince("image_call", since24h);
-    const remaining = Math.max(0, maxPerDay - used);
-
-    return {
-      maxPerDay,
-      used,
-      remaining,
-      canGenerate: maxPerDay > 0 && remaining > 0
-    };
+    return getImageBudgetStateForBudgetTracking(this.toBudgetContext(), settings);
   }
 
   getVideoGenerationBudgetState(settings) {
-    const discovery = getDiscoverySettings(settings);
-    const maxPerDay = clamp(Number(discovery.maxVideosPerDay) || 0, 0, 120);
-    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const used = this.store.countActionsSince("video_call", since24h);
-    const remaining = Math.max(0, maxPerDay - used);
-
-    return {
-      maxPerDay,
-      used,
-      remaining,
-      canGenerate: maxPerDay > 0 && remaining > 0
-    };
+    return getVideoGenerationBudgetStateForBudgetTracking(this.toBudgetContext(), settings);
   }
 
   getGifBudgetState(settings) {
-    const discovery = getDiscoverySettings(settings);
-    const maxPerDay = clamp(Number(discovery.maxGifsPerDay) || 0, 0, 300);
-    const since24h = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const used = this.store.countActionsSince("gif_call", since24h);
-    const remaining = Math.max(0, maxPerDay - used);
-
-    return {
-      maxPerDay,
-      used,
-      remaining,
-      canFetch: maxPerDay > 0 && remaining > 0
-    };
+    return getGifBudgetStateForBudgetTracking(this.toBudgetContext(), settings);
   }
 
   getMediaGenerationCapabilities(settings) {
-    if (!this.llm?.getMediaGenerationCapabilities) {
-      return {
-        simpleImageReady: false,
-        complexImageReady: false,
-        videoReady: false,
-        simpleImageModel: null,
-        complexImageModel: null,
-        videoModel: null
-      };
-    }
-
-    return this.llm.getMediaGenerationCapabilities(settings);
+    return getMediaGenerationCapabilitiesForBudgetTracking(this.toBudgetContext(), settings);
   }
 
   isImageGenerationReady(settings, variant = "any") {
-    return Boolean(this.llm?.isImageGenerationReady?.(settings, variant));
+    return isImageGenerationReadyForBudgetTracking(this.toBudgetContext(), settings, variant);
   }
 
   isVideoGenerationReady(settings) {
-    return Boolean(this.llm?.isVideoGenerationReady?.(settings));
+    return isVideoGenerationReadyForBudgetTracking(this.toBudgetContext(), settings);
   }
 
   getWebSearchBudgetState(settings) {
-    const research = getResearchRuntimeConfig(settings);
-    const maxPerHour = clamp(Number(research.maxSearchesPerHour) || 0, 0, 120);
-    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const successCount = this.store.countActionsSince("search_call", since1h);
-    const errorCount = this.store.countActionsSince("search_error", since1h);
-    const used = successCount + errorCount;
-    const remaining = Math.max(0, maxPerHour - used);
-
-    return {
-      maxPerHour,
-      used,
-      successCount,
-      errorCount,
-      remaining,
-      canSearch: maxPerHour > 0 && remaining > 0
-    };
+    return getWebSearchBudgetStateForBudgetTracking(this.toBudgetContext(), settings);
   }
 
   getBrowserBudgetState(settings) {
-    const browser = getBrowserRuntimeConfig(settings);
-    const maxPerHour = clamp(Number(browser.localBrowserAgent?.maxBrowseCallsPerHour) || 0, 0, 60);
-    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const used = this.store.countActionsSince("browser_browse_call", since1h);
-    const remaining = Math.max(0, maxPerHour - used);
-
-    return {
-      maxPerHour,
-      used,
-      remaining,
-      canBrowse: maxPerHour > 0 && remaining > 0
-    };
+    return getBrowserBudgetStateForBudgetTracking(this.toBudgetContext(), settings);
   }
 
   getVideoContextBudgetState(settings) {
-    const videoContext = getVideoContextSettings(settings);
-    const maxPerHour = clamp(Number(videoContext.maxLookupsPerHour) || 0, 0, 120);
-    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const successCount = this.store.countActionsSince("video_context_call", since1h);
-    const errorCount = this.store.countActionsSince("video_context_error", since1h);
-    const used = successCount + errorCount;
-    const remaining = Math.max(0, maxPerHour - used);
-
-    return {
-      maxPerHour,
-      used,
-      successCount,
-      errorCount,
-      remaining,
-      canLookup: maxPerHour > 0 && remaining > 0
-    };
+    return getVideoContextBudgetStateForBudgetTracking(this.toBudgetContext(), settings);
   }
 
   async buildVideoReplyContext({ settings, message, recentMessages = [], trace = {} }) {
-    const videoContextSettings = getVideoContextSettings(settings);
-    const messageText = String(message?.content || "");
-    const enabled = Boolean(videoContextSettings.enabled);
-    const budget = this.getVideoContextBudgetState(settings);
-    const maxVideosPerMessage = clamp(Number(videoContextSettings.maxVideosPerMessage) || 0, 0, 6);
-    const maxTranscriptChars = clamp(Number(videoContextSettings.maxTranscriptChars) || 1200, 200, 4000);
-    const keyframeIntervalSeconds = clamp(Number(videoContextSettings.keyframeIntervalSeconds) || 0, 0, 120);
-    const maxKeyframesPerVideo = clamp(Number(videoContextSettings.maxKeyframesPerVideo) || 0, 0, 8);
-    const allowAsrFallback = Boolean(videoContextSettings.allowAsrFallback);
-    const maxAsrSeconds = clamp(Number(videoContextSettings.maxAsrSeconds) || 120, 15, 600);
-
-    const base = {
-      requested: false,
-      enabled,
-      used: false,
-      blockedByBudget: false,
-      error: null,
-      errors: [],
-      detectedVideos: 0,
-      detectedFromRecentMessages: false,
-      videos: [],
-      frameImages: [],
-      budget
-    };
-
-    if (!this.video) {
-      return base;
-    }
-
-    const directTargets = this.video.extractMessageTargets(message, MAX_VIDEO_TARGET_SCAN);
-    const fallbackTargets =
-      !directTargets.length && looksLikeVideoFollowupMessage(messageText)
-        ? extractRecentVideoTargets({
-          videoService: this.video,
-          recentMessages,
-          maxMessages: MAX_VIDEO_FALLBACK_MESSAGES,
-          maxTargets: MAX_VIDEO_TARGET_SCAN
-        })
-        : [];
-    const detectedTargets = directTargets.length ? directTargets : fallbackTargets;
-    if (!detectedTargets.length) return base;
-    const detectedFromRecentMessages = directTargets.length === 0 && fallbackTargets.length > 0;
-
-    if (maxVideosPerMessage <= 0) {
-      return {
-        ...base,
-        requested: true,
-        detectedVideos: detectedTargets.length,
-        detectedFromRecentMessages
-      };
-    }
-
-    const targets = detectedTargets.slice(0, maxVideosPerMessage);
-    if (!targets.length) {
-      return {
-        ...base,
-        requested: true,
-        detectedVideos: detectedTargets.length,
-        detectedFromRecentMessages
-      };
-    }
-
-    if (!enabled) {
-      return {
-        ...base,
-        requested: true,
-        detectedVideos: detectedTargets.length,
-        detectedFromRecentMessages
-      };
-    }
-
-    if (!budget.canLookup) {
-      return {
-        ...base,
-        requested: true,
-        detectedVideos: detectedTargets.length,
-        detectedFromRecentMessages,
-        blockedByBudget: true
-      };
-    }
-
-    const allowedCount = Math.min(targets.length, budget.remaining);
-    if (allowedCount <= 0) {
-      return {
-        ...base,
-        requested: true,
-        detectedVideos: detectedTargets.length,
-        detectedFromRecentMessages,
-        blockedByBudget: true
-      };
-    }
-
-    const selectedTargets = targets.slice(0, allowedCount);
-    const blockedByBudget = selectedTargets.length < targets.length;
-
-    try {
-      const result = await this.video.fetchContexts({
-        targets: selectedTargets,
-        maxTranscriptChars,
-        keyframeIntervalSeconds,
-        maxKeyframesPerVideo,
-        allowAsrFallback,
-        maxAsrSeconds,
-        trace
-      });
-      const firstError = result.errors?.[0]?.error || null;
-      const videos = (result.videos || []).map((item) => {
-        const { frameImages: _frameImages, ...rest } = item || {};
-        return rest;
-      });
-      const frameImages = (result.videos || []).flatMap((item) => item?.frameImages || []);
-      return {
-        ...base,
-        requested: true,
-        used: Boolean(videos.length),
-        blockedByBudget,
-        error: firstError,
-        errors: result.errors || [],
-        detectedVideos: detectedTargets.length,
-        detectedFromRecentMessages,
-        videos,
-        frameImages
-      };
-    } catch (error) {
-      return {
-        ...base,
-        requested: true,
-        detectedVideos: detectedTargets.length,
-        detectedFromRecentMessages,
-        blockedByBudget,
-        error: String(error?.message || error),
-        errors: [
-          {
-            videoId: null,
-            url: null,
-            error: String(error?.message || error)
-          }
-        ]
-      };
-    }
+    return await buildVideoReplyContextForBudgetTracking(this.toBudgetContext(), {
+      settings,
+      message,
+      recentMessages,
+      trace
+    });
   }
 
   /**
@@ -2857,85 +2656,24 @@ export class ClankerBot {
   }
 
   buildWebSearchContext(settings, messageText) {
-    const text = String(messageText || "");
-    const configured = Boolean(this.search?.isConfigured?.());
-    const enabled = Boolean(getResearchRuntimeConfig(settings).enabled);
-    const budget = this.getWebSearchBudgetState(settings);
-
-    return {
-      requested: false,
-      configured,
-      enabled,
-      used: false,
-      blockedByBudget: false,
-      optedOutByUser: isWebSearchOptOutText(text),
-      error: null,
-      query: "",
-      results: [],
-      fetchedPages: 0,
-      providerUsed: null,
-      providerFallbackUsed: false,
-      budget
-    };
+    return buildWebSearchContextForBudgetTracking(this.toBudgetContext(), settings, messageText);
   }
 
   buildBrowserBrowseContext(settings) {
-    const browserTaskConfig = getResolvedBrowserTaskConfig(settings);
-    const configured = Boolean(
-      this.browserManager &&
-      (browserTaskConfig.runtime !== "openai_computer_use" || this.llm?.openai)
-    );
-    const enabled = Boolean(getBrowserRuntimeConfig(settings).enabled);
-    const budget = this.getBrowserBudgetState(settings);
-
-    return {
-      requested: false,
-      configured,
-      enabled,
-      used: false,
-      blockedByBudget: false,
-      error: null,
-      query: "",
-      text: "",
-      steps: 0,
-      hitStepLimit: false,
-      budget
-    };
+    return buildBrowserBrowseContextForBudgetTracking(this.toBudgetContext(), settings);
   }
 
   buildMemoryLookupContext({ settings }) {
-    const enabled = Boolean(getMemorySettings(settings).enabled && this.memory?.searchDurableFacts);
-    return {
-      enabled,
-      requested: false,
-      used: false,
-      query: "",
-      results: [],
-      error: null
-    };
+    return buildMemoryLookupContextForBudgetTracking(this.toBudgetContext(), {
+      settings
+    });
   }
 
   buildImageLookupContext({ recentMessages = [], excludedUrls = [] } = {}) {
-    const excluded = new Set<string>(
-      (Array.isArray(excludedUrls) ? excludedUrls : [])
-        .map((value) => String(value || "").trim())
-        .filter(Boolean)
-    );
-    const candidates = extractHistoryImageCandidatesForImageAnalysis({
+    return buildImageLookupContextForBudgetTracking(this.toBudgetContext(), {
       recentMessages,
-      excluded,
-      imageCaptionCache: this.imageCaptionCache
+      excludedUrls
     });
-    return {
-      enabled: true,
-      requested: false,
-      used: false,
-      query: "",
-      candidates,
-      results: [],
-      selectedImageInputs: [],
-      error: null
-    };
   }
 
   /**
