@@ -103,6 +103,9 @@ function createManager(overrides = {}) {
     async endSession() {
       this.endSessionCalls += 1;
     },
+    sessionLifecycle: {
+      async attachSessionRuntime() {}
+    },
     getMissingJoinPermissionInfo() {
       return null;
     }

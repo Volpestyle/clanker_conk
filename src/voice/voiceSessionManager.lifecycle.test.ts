@@ -422,7 +422,7 @@ test("shouldBargeIn requires sustained capture bytes", () => {
     userCaptures: new Map([["user-1", captureState]])
   });
 
-  const result = manager.shouldBargeIn({ session, userId: "user-1", captureState });
+  const result = manager.bargeInController.shouldBargeIn({ session, userId: "user-1", captureState });
   assert.equal(result.allowed, false);
 });
 
@@ -450,7 +450,7 @@ test("shouldBargeIn ignores non-target speaker under assertive reply policy", ()
     userCaptures: new Map([["user-2", captureState]])
   });
 
-  const result = manager.shouldBargeIn({ session, userId: "user-2", captureState });
+  const result = manager.bargeInController.shouldBargeIn({ session, userId: "user-2", captureState });
   assert.equal(result.allowed, false);
 });
 
@@ -479,7 +479,7 @@ test("shouldBargeIn blocks all interruptions when reply targets ALL", () => {
     userCaptures: new Map([["user-1", captureState]])
   });
 
-  const result = manager.shouldBargeIn({ session, userId: "user-1", captureState });
+  const result = manager.bargeInController.shouldBargeIn({ session, userId: "user-1", captureState });
   assert.equal(result.allowed, false);
 });
 
@@ -509,7 +509,7 @@ test("shouldBargeIn allows barge-in after assertive speech", () => {
     userCaptures: new Map([["user-1", captureState]])
   });
 
-  const result = manager.shouldBargeIn({ session, userId: "user-1", captureState });
+  const result = manager.bargeInController.shouldBargeIn({ session, userId: "user-1", captureState });
   assert.equal(result.allowed, true);
   assert.equal(typeof result.minCaptureBytes, "number");
   assert.ok(result.minCaptureBytes > 0);
@@ -531,7 +531,7 @@ test("shouldBargeIn ignores near-silent captures", () => {
     userCaptures: new Map([["user-1", captureState]])
   });
 
-  const result = manager.shouldBargeIn({ session, userId: "user-1", captureState });
+  const result = manager.bargeInController.shouldBargeIn({ session, userId: "user-1", captureState });
   assert.equal(result.allowed, false);
 });
 
@@ -576,7 +576,7 @@ test("shouldBargeIn does not interrupt music-only playback lock", () => {
     userCaptures: new Map([["user-1", captureState]])
   });
 
-  const result = manager.shouldBargeIn({ session, userId: "user-1", captureState });
+  const result = manager.bargeInController.shouldBargeIn({ session, userId: "user-1", captureState });
   assert.equal(result.allowed, false);
 });
 
@@ -610,7 +610,7 @@ test("shouldBargeIn ignores buffered subprocess playback after live deltas stop"
     userCaptures: new Map([["user-1", captureState]])
   });
 
-  const result = manager.shouldBargeIn({ session, userId: "user-1", captureState });
+  const result = manager.bargeInController.shouldBargeIn({ session, userId: "user-1", captureState });
   assert.equal(result.allowed, false);
 });
 
@@ -640,7 +640,7 @@ test("shouldBargeIn requires minimum capture age for STT pipeline", () => {
     userCaptures: new Map([["user-1", captureState]])
   });
 
-  const result = manager.shouldBargeIn({ session, userId: "user-1", captureState });
+  const result = manager.bargeInController.shouldBargeIn({ session, userId: "user-1", captureState });
   assert.equal(result.allowed, false);
 });
 
@@ -760,7 +760,7 @@ test("bindSessionHandlers does not touch activity on speaking.start before speec
     }
   });
 
-  manager.bindSessionHandlers(session, session.settingsSnapshot);
+  manager.sessionLifecycle.bindSessionHandlers(session, session.settingsSnapshot);
   voxClient.emit("speakingStart", "speaker-1");
 
   assert.equal(startCalls.length, 1);
@@ -1009,7 +1009,7 @@ test("bindSessionHandlers does not duplicate provisional capture creation for re
     voxClient
   });
 
-  manager.bindSessionHandlers(session, session.settingsSnapshot);
+  manager.sessionLifecycle.bindSessionHandlers(session, session.settingsSnapshot);
   voxClient.emit("speakingStart", "speaker-1");
   voxClient.emit("speakingStart", "speaker-1");
 
@@ -1121,7 +1121,7 @@ test("bindSessionHandlers defers shared OpenAI ASR start until speech is confirm
     voxClient
   });
 
-  manager.bindSessionHandlers(session, session.settingsSnapshot);
+  manager.sessionLifecycle.bindSessionHandlers(session, session.settingsSnapshot);
   voxClient.emit("speakingStart", "speaker-1");
   voxClient.emit("speakingStart", "speaker-2");
 
@@ -1691,7 +1691,7 @@ test("announceVoiceWebLookupBusy skips TTS fallback in realtime mode", async () 
 test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript instead of queueing PCM", () => {
   const { manager, logs } = createManager();
   const queuedTurns = [];
-  manager.queueRealtimeTurn = (payload) => {
+  manager.turnProcessor.queueRealtimeTurn = (payload) => {
     queuedTurns.push(payload);
   };
   const session = createSession({
@@ -1724,10 +1724,10 @@ test("queueRealtimeTurnFromAsrBridge refires pending join greeting through brain
   const queuedTurns = [];
   const createdResponses = [];
   const brainReplies = [];
-  manager.queueRealtimeTurn = (payload) => {
+  manager.turnProcessor.queueRealtimeTurn = (payload) => {
     queuedTurns.push(payload);
   };
-  manager.createTrackedAudioResponse = (payload) => {
+  manager.replyManager.createTrackedAudioResponse = (payload) => {
     createdResponses.push(payload);
     return true;
   };
@@ -1794,10 +1794,10 @@ test("queueRealtimeTurnFromAsrBridge refires pending join greeting through nativ
   const queuedTurns = [];
   const createdResponses = [];
   const brainReplies = [];
-  manager.queueRealtimeTurn = (payload) => {
+  manager.turnProcessor.queueRealtimeTurn = (payload) => {
     queuedTurns.push(payload);
   };
-  manager.createTrackedAudioResponse = (payload) => {
+  manager.replyManager.createTrackedAudioResponse = (payload) => {
     createdResponses.push(payload);
     return true;
   };
@@ -1864,7 +1864,7 @@ test("createTrackedAudioResponse clears join greeting opportunity when newer bot
     }
   });
 
-  const created = manager.createTrackedAudioResponse({
+  const created = manager.replyManager.createTrackedAudioResponse({
     session,
     source: "openai_realtime_text_turn",
     emitCreateEvent: false
@@ -1872,7 +1872,7 @@ test("createTrackedAudioResponse clears join greeting opportunity when newer bot
 
   assert.equal(created, true);
   assert.equal(session.joinGreetingOpportunity, null);
-  manager.clearPendingResponse(session);
+  manager.replyManager.clearPendingResponse(session);
 });
 
 test("cancelPendingSystemSpeechForUserSpeech clears pre-audio join greeting response", () => {
@@ -2000,7 +2000,7 @@ test("buildRealtimeInstructions does not inject join greeting prompt even when o
     }
   });
 
-  const instructions = manager.buildRealtimeInstructions({
+  const instructions = manager.instructionManager.buildRealtimeInstructions({
     session,
     settings: session.settingsSnapshot,
     speakerUserId: null,
@@ -2015,7 +2015,7 @@ test("buildRealtimeInstructions does not inject join greeting prompt even when o
 test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript for all capture reasons", () => {
   const { manager, logs } = createManager();
   const queuedTurns = [];
-  manager.queueRealtimeTurn = (payload) => {
+  manager.turnProcessor.queueRealtimeTurn = (payload) => {
     queuedTurns.push(payload);
   };
   const session = createSession({
@@ -2067,7 +2067,7 @@ test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript for all capture 
 test("queueRealtimeTurnFromAsrBridge forwards transcript metadata when ASR transcript exists", () => {
   const { manager, logs } = createManager();
   const queuedTurns = [];
-  manager.queueRealtimeTurn = (payload) => {
+  manager.turnProcessor.queueRealtimeTurn = (payload) => {
     queuedTurns.push(payload);
   };
   const session = createSession({
@@ -2407,7 +2407,7 @@ test("getReplyOutputLockState locks output while music playback is active", () =
     }
   });
 
-  const lockState = manager.getReplyOutputLockState(session);
+  const lockState = manager.replyManager.getReplyOutputLockState(session);
   assert.equal(lockState.locked, true);
   assert.equal(lockState.reason, "music_playback_active");
   assert.equal(lockState.musicActive, true);
@@ -2422,7 +2422,7 @@ test("getReplyOutputLockState does not lock output when music is paused", () => 
     }
   });
 
-  const lockState = manager.getReplyOutputLockState(session);
+  const lockState = manager.replyManager.getReplyOutputLockState(session);
   assert.equal(lockState.locked, false);
   assert.equal(lockState.reason, "idle");
   assert.equal(lockState.musicActive, false);
@@ -2440,7 +2440,7 @@ test("getReplyOutputLockState locks output while clankvox still has queued speec
     }
   });
 
-  const lockState = manager.getReplyOutputLockState(session);
+  const lockState = manager.replyManager.getReplyOutputLockState(session);
   assert.equal(lockState.locked, true);
   assert.equal(lockState.reason, "bot_audio_buffered");
   assert.equal(lockState.bufferedBotSpeech, true);
@@ -2464,7 +2464,7 @@ test("getReplyOutputLockState ignores stale clankvox buffered telemetry", () => 
     }
   });
 
-  const lockState = manager.getReplyOutputLockState(session);
+  const lockState = manager.replyManager.getReplyOutputLockState(session);
   assert.equal(lockState.locked, false);
   assert.equal(lockState.reason, "idle");
   assert.equal(lockState.phase, "idle");
@@ -2478,7 +2478,7 @@ test("getReplyOutputLockState ignores stale botTurnOpen when no output signals r
     lastAudioDeltaAt: Date.now() - 5_000
   });
 
-  const lockState = manager.getReplyOutputLockState(session);
+  const lockState = manager.replyManager.getReplyOutputLockState(session);
   assert.equal(lockState.locked, false);
   assert.equal(lockState.reason, "idle");
   assert.equal(lockState.phase, "idle");
@@ -2542,7 +2542,7 @@ test("getReplyOutputLockState clears stale active realtime response once playbac
     }
   });
 
-  const lockState = manager.getReplyOutputLockState(session);
+  const lockState = manager.replyManager.getReplyOutputLockState(session);
   assert.equal(lockState.locked, false);
   assert.equal(lockState.reason, "idle");
   assert.equal(lockState.phase, "idle");
@@ -2568,18 +2568,18 @@ test("bindVoxHandlers tracks explicit tts playback lifecycle from clankvox", () 
     voxClient
   });
 
-  manager.bindVoxHandlers(session);
+  manager.sessionLifecycle.bindVoxHandlers(session);
   playbackState = "buffered";
   voxClient.emit("ttsPlaybackState", "buffered");
 
-  let lockState = manager.getReplyOutputLockState(session);
+  let lockState = manager.replyManager.getReplyOutputLockState(session);
   assert.equal(lockState.locked, true);
   assert.equal(lockState.reason, "bot_audio_buffered");
   assert.equal(lockState.phase, "speaking_buffered");
 
   playbackState = "idle";
   voxClient.emit("ttsPlaybackState", "idle");
-  lockState = manager.getReplyOutputLockState(session);
+  lockState = manager.replyManager.getReplyOutputLockState(session);
   assert.equal(lockState.locked, false);
   assert.equal(lockState.reason, "idle");
   assert.equal(lockState.phase, "idle");
@@ -2604,11 +2604,11 @@ test("resetBotAudioPlayback clears cached clankvox playback telemetry immediatel
     voxClient
   });
 
-  let lockState = manager.getReplyOutputLockState(session);
+  let lockState = manager.replyManager.getReplyOutputLockState(session);
   assert.equal(lockState.reason, "bot_audio_buffered");
 
-  manager.resetBotAudioPlayback(session);
-  lockState = manager.getReplyOutputLockState(session);
+  manager.replyManager.resetBotAudioPlayback(session);
+  lockState = manager.replyManager.getReplyOutputLockState(session);
   assert.equal(lockState.locked, false);
   assert.equal(lockState.reason, "idle");
 });
@@ -3013,7 +3013,7 @@ test("reconcileSettings ends blocked sessions and touches allowed sessions", asy
 test("handleVoiceStateUpdate records join/leave membership events and refreshes realtime instructions", async () => {
   const { manager, logs } = createManager();
   const refreshCalls = [];
-  manager.scheduleRealtimeInstructionRefresh = (payload) => {
+  manager.instructionManager.scheduleRealtimeInstructionRefresh = (payload) => {
     refreshCalls.push(payload);
   };
 
@@ -3202,7 +3202,7 @@ test("canFireDeferredAction returns 'pending_response' when session has pendingR
 test("canFireDeferredAction returns 'active_response' when realtime response is active", () => {
   const { manager } = createManager();
   const session = createSession({ mode: "openai_realtime" });
-  manager.isRealtimeResponseActive = () => true;
+  manager.replyManager.isRealtimeResponseActive = () => true;
   const action = createInterruptedReplyAction();
   const result = manager.canFireDeferredAction(session, action);
   assert.equal(result, "active_response");

@@ -12,7 +12,6 @@ import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 type StreamWatchManager = Pick<
   VoiceSessionManager,
   | "client"
-  | "createTrackedAudioResponse"
   | "llm"
   | "memory"
   | "resolveVoiceSpeakerName"
@@ -20,7 +19,9 @@ type StreamWatchManager = Pick<
   | "sessions"
   | "store"
   | "touchActivity"
->;
+> & {
+  replyManager: Pick<VoiceSessionManager["replyManager"], "createTrackedAudioResponse">;
+};
 
 const STREAM_WATCH_AUDIO_QUIET_WINDOW_MS = 2200;
 const STREAM_WATCH_COMMENTARY_PROMPT_MAX_CHARS = 220;
@@ -1362,7 +1363,7 @@ export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchMana
       return;
     }
 
-    const created = manager.createTrackedAudioResponse({
+    const created = manager.replyManager.createTrackedAudioResponse({
       session,
       userId: session.streamWatch.targetUserId || streamerUserId || manager.client.user?.id || null,
       source: "stream_watch_commentary",

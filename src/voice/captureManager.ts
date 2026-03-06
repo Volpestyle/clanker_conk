@@ -12,6 +12,8 @@ import {
   VOICE_SILENCE_GATE_ACTIVE_SAMPLE_MIN_ABS
 } from "./voiceSessionManager.constants.ts";
 import { isRealtimeMode, normalizeVoiceText } from "./voiceSessionHelpers.ts";
+import type { BargeInController } from "./bargeInController.ts";
+import type { TurnProcessor } from "./turnProcessor.ts";
 import type { CaptureState, VoiceSession } from "./voiceSessionTypes.ts";
 
 type CaptureManagerSettings = Record<string, unknown> | null;
@@ -53,6 +55,8 @@ type CaptureManagerStoreLike = {
 
 export interface CaptureManagerHost {
   store: CaptureManagerStoreLike;
+  bargeInController: Pick<BargeInController, "getCaptureSignalMetrics" | "shouldBargeIn">;
+  turnProcessor: Pick<TurnProcessor, "queueRealtimeTurn" | "queueSttPipelineTurn">;
   shouldUsePerUserTranscription: (args: {
     session: VoiceSession;
     settings?: CaptureManagerSettings;
@@ -127,7 +131,6 @@ export interface CaptureManagerHost {
     session: VoiceSession;
     capture: CaptureState;
   }) => string | null;
-  getCaptureSignalMetrics: (capture: CaptureState) => CaptureSignalMetrics;
   hasCaptureServerVadSpeech: (args: {
     session: VoiceSession;
     capture: CaptureState;
@@ -144,11 +147,6 @@ export interface CaptureManagerHost {
     session: VoiceSession;
     capture: CaptureState;
   }) => boolean;
-  shouldBargeIn: (args: {
-    session: VoiceSession;
-    userId?: string | null;
-    captureState?: CaptureState | null;
-  }) => { allowed: boolean; minCaptureBytes?: number };
   interruptBotSpeechForBargeIn: (args: {
     session: VoiceSession;
     userId?: string | null;
@@ -160,25 +158,12 @@ export interface CaptureManagerHost {
     pcmBuffer: Buffer;
     sampleRateHz?: number;
   }) => PcmSilenceGateResult;
-  queueSttPipelineTurn: (args: {
-    session: VoiceSession;
-    userId: string;
-    pcmBuffer: Buffer;
-    captureReason?: string;
-  }) => void;
   maybeHandleInterruptedReplyRecovery: (args: {
     session: VoiceSession;
     userId?: string | null;
     pcmBuffer?: Buffer | null;
     captureReason?: string;
   }) => boolean;
-  queueRealtimeTurn: (args: {
-    session: VoiceSession;
-    userId: string;
-    pcmBuffer?: Buffer | null;
-    captureReason?: string;
-    finalizedAt?: number;
-  }) => void;
   queueRealtimeTurnFromAsrBridge: (args: {
     session: VoiceSession;
     userId: string;
@@ -304,7 +289,7 @@ export class CaptureManager {
         capture: captureState
       });
       if (!promotionReason) return false;
-      const signal = this.host.getCaptureSignalMetrics(captureState);
+      const signal = this.host.bargeInController.getCaptureSignalMetrics(captureState);
       captureState.promotedAt = now;
       captureState.promotionReason = String(promotionReason);
       this.host.cancelPendingSystemSpeechForUserSpeech({
@@ -354,7 +339,7 @@ export class CaptureManager {
       captureFinalized = true;
       const finalizedAt = Date.now();
       const captureDurationMs = Math.max(0, finalizedAt - captureState.startedAt);
-      const signal = this.host.getCaptureSignalMetrics(captureState);
+      const signal = this.host.bargeInController.getCaptureSignalMetrics(captureState);
 
       if (!this.host.hasCaptureBeenPromoted(captureState) && Number(captureState.bytesSent || 0) > 0 && !session.ending) {
         this.host.store.logAction({
@@ -503,7 +488,7 @@ export class CaptureManager {
 
       cleanupCapture();
       if (session.mode === "stt_pipeline") {
-        this.host.queueSttPipelineTurn({
+        this.host.turnProcessor.queueSttPipelineTurn({
           session,
           userId,
           pcmBuffer,
@@ -533,7 +518,7 @@ export class CaptureManager {
         return;
       }
       if (!handledInterruptedReply) {
-        this.host.queueRealtimeTurn({
+        this.host.turnProcessor.queueRealtimeTurn({
           session,
           userId,
           pcmBuffer,
@@ -640,7 +625,7 @@ export class CaptureManager {
         }
       }
 
-      const bargeDecision = this.host.shouldBargeIn({ session, userId, captureState });
+      const bargeDecision = this.host.bargeInController.shouldBargeIn({ session, userId, captureState });
       if (bargeDecision.allowed) {
         this.host.interruptBotSpeechForBargeIn({
           session,
@@ -751,7 +736,13 @@ export class CaptureManager {
     if (useOpenAiSharedAsr) {
       const hasSharedAsrAudio = Math.max(0, Number(captureState.sharedAsrBytesSent || 0)) > 0;
       if (!hasSharedAsrAudio) {
-        this.host.queueRealtimeTurn({ session, userId, pcmBuffer, captureReason, finalizedAt });
+        this.host.turnProcessor.queueRealtimeTurn({
+          session,
+          userId,
+          pcmBuffer,
+          captureReason,
+          finalizedAt
+        });
         return;
       }
       const sharedAsrState = this.host.getOpenAiSharedAsrState(session);

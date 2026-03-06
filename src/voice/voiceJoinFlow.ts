@@ -771,7 +771,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       };
 
       manager.sessions.set(guildId, session);
-      await manager.attachSessionRuntime({
+      await manager.sessionLifecycle.attachSessionRuntime({
         session,
         settings,
         initialSpeakerUserId: userId

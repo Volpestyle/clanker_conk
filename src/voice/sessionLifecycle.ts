@@ -24,6 +24,9 @@ import {
   VOICE_LOOKUP_BUSY_LOG_COOLDOWN_MS,
   VOICE_MAX_DURATION_WARNING_SECONDS
 } from "./voiceSessionManager.constants.ts";
+import type { BargeInController } from "./bargeInController.ts";
+import type { InstructionManager } from "./instructionManager.ts";
+import type { ReplyManager } from "./replyManager.ts";
 import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 import { musicPhaseShouldAllowDucking, type VoiceSession } from "./voiceSessionTypes.ts";
 import { providerSupports } from "./voiceModes.ts";
@@ -31,14 +34,8 @@ import { providerSupports } from "./voiceModes.ts";
 type SessionLifecycleHost = Pick<
   VoiceSessionManager,
   | "armJoinGreetingOpportunity"
-  | "armResponseSilenceWatchdog"
-  | "bindRealtimeHandlers"
-  | "bindSessionHandlers"
-  | "bindVoxHandlers"
   | "clearAllDeferredVoiceActions"
   | "clearJoinGreetingOpportunity"
-  | "clearPendingResponse"
-  | "clearResponseSilenceTimers"
   | "clearVoiceThoughtLoopTimer"
   | "client"
   | "endSession"
@@ -49,30 +46,36 @@ type SessionLifecycleHost = Pick<
   | "estimatePcm16MonoDurationMs"
   | "getMusicPhase"
   | "handleOpenAiRealtimeFunctionCallEvent"
-  | "handleResponseDone"
   | "isAsrActive"
-  | "isBargeInOutputSuppressed"
   | "isInboundCaptureSuppressed"
-  | "isRealtimeResponseActive"
-  | "markBotTurnOut"
   | "maybeTriggerAssistantDirectedSoundboard"
   | "musicPlayer"
   | "normalizeSoundboardRefs"
-  | "pendingResponseHasAudio"
   | "recordVoiceTurn"
   | "refreshRealtimeTools"
-  | "resetBotAudioPlayback"
   | "resolveSpeakingEndFinalizeDelayMs"
-  | "scheduleRealtimeInstructionRefresh"
   | "scheduleVoiceThoughtLoop"
   | "sessions"
   | "setMusicPhase"
   | "startInboundCapture"
-  | "startSessionTimers"
   | "store"
-  | "syncAssistantOutputState"
   | "touchActivity"
->;
+> & {
+  bargeInController: Pick<BargeInController, "isBargeInOutputSuppressed">;
+  instructionManager: Pick<InstructionManager, "scheduleRealtimeInstructionRefresh">;
+  replyManager: Pick<
+    ReplyManager,
+    | "armResponseSilenceWatchdog"
+    | "clearPendingResponse"
+    | "clearResponseSilenceTimers"
+    | "handleResponseDone"
+    | "isRealtimeResponseActive"
+    | "markBotTurnOut"
+    | "pendingResponseHasAudio"
+    | "resetBotAudioPlayback"
+    | "syncAssistantOutputState"
+  >;
+};
 
 type SessionLifecycleSettings = VoiceSession["settingsSnapshot"];
 type RefreshRealtimeToolsArgs = NonNullable<Parameters<SessionLifecycleHost["refreshRealtimeTools"]>[0]>;
@@ -160,11 +163,11 @@ export class SessionLifecycle {
   }) {
     if (!session || session.ending) return;
     const resolvedSettings = settings || session.settingsSnapshot || this.host.store.getSettings();
-    this.host.bindVoxHandlers(session);
+    this.bindVoxHandlers(session);
     this.host.musicPlayer?.setVoxClient?.(session.voxClient);
-    this.host.bindSessionHandlers(session, resolvedSettings);
+    this.bindSessionHandlers(session, resolvedSettings);
     if (isRealtimeMode(session.mode)) {
-      this.host.bindRealtimeHandlers(session, resolvedSettings);
+      this.bindRealtimeHandlers(session, resolvedSettings);
     }
     if (providerSupports(session.mode || "", "updateTools")) {
       await this.host.refreshRealtimeTools({
@@ -174,13 +177,13 @@ export class SessionLifecycle {
       });
     }
     if (providerSupports(session.mode || "", "updateInstructions")) {
-      this.host.scheduleRealtimeInstructionRefresh({
+      this.host.instructionManager.scheduleRealtimeInstructionRefresh({
         session,
         settings: resolvedSettings,
         reason: "session_start"
       });
     }
-    this.host.startSessionTimers(session, resolvedSettings);
+    this.startSessionTimers(session, resolvedSettings);
 
     if (
       session.perUserAsrEnabled &&
@@ -247,7 +250,7 @@ export class SessionLifecycle {
     session.bargeInSuppressedAudioChunks = 0;
     session.bargeInSuppressedAudioBytes = 0;
     session.botTurnOpenAt = 0;
-    this.host.resetBotAudioPlayback(session);
+    this.host.replyManager.resetBotAudioPlayback(session);
     session.userCaptures?.clear?.();
   }
 
@@ -341,7 +344,7 @@ export class SessionLifecycle {
       if (status === "playing") {
         session.lastActivityAt = Date.now();
       }
-      this.host.syncAssistantOutputState(session, "vox_player_state");
+      this.host.replyManager.syncAssistantOutputState(session, "vox_player_state");
     };
 
     const onError = (message) => {
@@ -362,7 +365,7 @@ export class SessionLifecycle {
       session.playbackArmed = true;
       session.playbackArmedReason = reason;
       session.playbackArmedAt = Date.now();
-      this.host.syncAssistantOutputState(session, "vox_playback_armed");
+      this.host.replyManager.syncAssistantOutputState(session, "vox_playback_armed");
       if (reason !== "connection_ready") return;
       this.host.armJoinGreetingOpportunity(session, {
         trigger: "connection_ready"
@@ -377,12 +380,12 @@ export class SessionLifecycle {
         music.ducked = false;
       }
       this.host.musicPlayer?.clearCurrentTrack?.();
-      this.host.scheduleRealtimeInstructionRefresh({
+      this.host.instructionManager.scheduleRealtimeInstructionRefresh({
         session,
         settings: session.settingsSnapshot || this.host.store.getSettings(),
         reason: "music_idle"
       });
-      this.host.syncAssistantOutputState(session, "music_idle");
+      this.host.replyManager.syncAssistantOutputState(session, "music_idle");
     };
 
     const onMusicError = () => {
@@ -393,15 +396,15 @@ export class SessionLifecycle {
         music.ducked = false;
       }
       this.host.musicPlayer?.clearCurrentTrack?.();
-      this.host.syncAssistantOutputState(session, "music_error");
+      this.host.replyManager.syncAssistantOutputState(session, "music_error");
     };
 
     const onBufferDepth = (_ttsSamples) => {
-      this.host.syncAssistantOutputState(session, "vox_buffer_depth");
+      this.host.replyManager.syncAssistantOutputState(session, "vox_buffer_depth");
     };
 
     const onTtsPlaybackState = (_status) => {
-      this.host.syncAssistantOutputState(session, "vox_tts_playback_state");
+      this.host.replyManager.syncAssistantOutputState(session, "vox_tts_playback_state");
     };
 
     session.voxClient.on("playerState", onPlayerState);
@@ -478,7 +481,7 @@ export class SessionLifecycle {
         ) + this.host.estimatePcm16MonoDurationMs(pcmByteLength, sampleRate);
       }
 
-      if (this.host.isBargeInOutputSuppressed(session)) {
+      if (this.host.bargeInController.isBargeInOutputSuppressed(session)) {
         session.lastAudioDeltaAt = Date.now();
         session.bargeInSuppressedAudioChunks = Math.max(0, Number(session.bargeInSuppressedAudioChunks || 0)) + 1;
         session.bargeInSuppressedAudioBytes = Math.max(0, Number(session.bargeInSuppressedAudioBytes || 0)) + pcmByteLength;
@@ -486,7 +489,7 @@ export class SessionLifecycle {
         if (pending && typeof pending === "object") {
           pending.audioReceivedAt = Number(session.lastAudioDeltaAt || Date.now());
         }
-        this.host.syncAssistantOutputState(session, "audio_delta_suppressed");
+        this.host.replyManager.syncAssistantOutputState(session, "audio_delta_suppressed");
         return;
       }
 
@@ -506,18 +509,18 @@ export class SessionLifecycle {
         return;
       }
 
-      this.host.markBotTurnOut(session, settings);
-      this.host.syncAssistantOutputState(session, "audio_delta");
+      this.host.replyManager.markBotTurnOut(session, settings);
+      this.host.replyManager.syncAssistantOutputState(session, "audio_delta");
       if (isRealtimeMode(session.mode)) {
         session.pendingRealtimeInputBytes = 0;
       }
 
-      if (this.host.pendingResponseHasAudio(session)) {
+      if (this.host.replyManager.pendingResponseHasAudio(session)) {
         const pending = session.pendingResponse;
         if (pending) {
           pending.audioReceivedAt = session.lastAudioDeltaAt;
         }
-        this.host.clearResponseSilenceTimers(session);
+        this.host.replyManager.clearResponseSilenceTimers(session);
       }
     };
 
@@ -622,19 +625,19 @@ export class SessionLifecycle {
         const isActiveResponseCollision =
           normalizedCode === "conversation_already_has_active_response" ||
           /active response in progress/i.test(String(details.message || ""));
-        const hasActiveResponse = this.host.isRealtimeResponseActive(session);
+        const hasActiveResponse = this.host.replyManager.isRealtimeResponseActive(session);
         session.pendingRealtimeInputBytes = 0;
         const pending = session.pendingResponse;
         if (
           normalizedCode === "input_audio_buffer_commit_empty" &&
           pending &&
           !hasActiveResponse &&
-          !this.host.pendingResponseHasAudio(session, pending)
+          !this.host.replyManager.pendingResponseHasAudio(session, pending)
         ) {
-          this.host.clearPendingResponse(session);
+          this.host.replyManager.clearPendingResponse(session);
         } else if (isActiveResponseCollision && pending) {
           pending.handlingSilence = false;
-          this.host.armResponseSilenceWatchdog({
+          this.host.replyManager.armResponseSilenceWatchdog({
             session,
             requestId: pending.requestId,
             userId: pending.userId
@@ -692,7 +695,7 @@ export class SessionLifecycle {
     };
 
     const onResponseDone = (event) => {
-      this.host.handleResponseDone({
+      this.host.replyManager.handleResponseDone({
         session,
         event,
         settings,

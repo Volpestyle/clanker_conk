@@ -97,7 +97,7 @@ test("flushResponseFromBufferedAudio emits response.create for OpenAI native rep
     }
   });
 
-  manager.flushResponseFromBufferedAudio({
+  manager.turnProcessor.flushResponseFromBufferedAudio({
     session,
     userId: "speaker-native"
   });
@@ -133,7 +133,7 @@ test("flushResponseFromBufferedAudio skips response.create for OpenAI brain repl
     }
   });
 
-  manager.flushResponseFromBufferedAudio({
+  manager.turnProcessor.flushResponseFromBufferedAudio({
     session,
     userId: "speaker-brain"
   });
@@ -158,13 +158,13 @@ test("silent response triggers retry and rearms watchdog", async () => {
     }
   });
 
-  manager.createTrackedAudioResponse = () => false;
+  manager.replyManager.createTrackedAudioResponse = () => false;
   let rearmArgs = null;
-  manager.armResponseSilenceWatchdog = (args) => {
+  manager.replyManager.armResponseSilenceWatchdog = (args) => {
     rearmArgs = args;
   };
 
-  await manager.handleSilentResponse({
+  await manager.replyManager.handleSilentResponse({
     session,
     userId: "fallback-user",
     trigger: "watchdog"
@@ -199,7 +199,7 @@ test("audio arrival clears watchdog and pending response", () => {
     return { id: "watchdog" };
   };
   try {
-    manager.armResponseSilenceWatchdog({
+    manager.replyManager.armResponseSilenceWatchdog({
       session,
       requestId: 9,
       userId: "user-9"
@@ -226,7 +226,7 @@ test("max retries ends session when retry path throws", async () => {
     }
   });
 
-  manager.createTrackedAudioResponse = () => {
+  manager.replyManager.createTrackedAudioResponse = () => {
     throw new Error("retry create failed");
   };
   const endCalls = [];
@@ -234,7 +234,7 @@ test("max retries ends session when retry path throws", async () => {
     endCalls.push(payload);
   };
 
-  await manager.handleSilentResponse({
+  await manager.replyManager.handleSilentResponse({
     session,
     userId: "fallback-user",
     trigger: "watchdog"

@@ -220,11 +220,6 @@ import type {
   DeferredVoiceActionType,
   OutputChannelState
 } from "./voiceSessionTypes.ts";
-import type {
-  AssistantOutputState,
-  ReplyOutputLockState,
-  TtsPlaybackState
-} from "./assistantOutputState.ts";
 import {
   musicPhaseIsActive,
   musicPhaseIsAudible,
@@ -811,7 +806,7 @@ export class VoiceSessionManager {
         mode: session.mode || "voice_agent",
         botTurnOpen: Boolean(session.botTurnOpen),
         assistantOutput: {
-          phase: this.syncAssistantOutputState(session, "runtime_state")?.phase || "idle",
+          phase: this.replyManager.syncAssistantOutputState(session, "runtime_state")?.phase || "idle",
           reason: session.assistantOutput?.reason || null,
           lastTrigger: session.assistantOutput?.lastTrigger || null,
           phaseEnteredAt: Number(session.assistantOutput?.phaseEnteredAt || 0) > 0
@@ -2331,48 +2326,8 @@ export class VoiceSessionManager {
     return this.sessionLifecycle.reconcileSettings(settings);
   }
 
-  startSessionTimers(session, settings) {
-    return this.sessionLifecycle.startSessionTimers(session, settings);
-  }
-
-  async attachSessionRuntime({
-    session,
-    settings = session?.settingsSnapshot,
-    initialSpeakerUserId = null
-  }: {
-    session;
-    settings?;
-    initialSpeakerUserId?: string | null;
-  }) {
-    return this.sessionLifecycle.attachSessionRuntime({
-      session,
-      settings,
-      initialSpeakerUserId
-    });
-  }
-
-  clearSessionRuntimeTimers(session) {
-    return this.sessionLifecycle.clearSessionRuntimeTimers(session);
-  }
-
-  clearSessionRuntimeState(session) {
-    return this.sessionLifecycle.clearSessionRuntimeState(session);
-  }
-
-  runSessionCleanupHandlers(session) {
-    return this.sessionLifecycle.runSessionCleanupHandlers(session);
-  }
-
   touchActivity(guildId, settings) {
     return this.sessionLifecycle.touchActivity(guildId, settings);
-  }
-
-  buildVoiceSessionTimingContext(session) {
-    return this.sessionLifecycle.buildVoiceSessionTimingContext(session);
-  }
-
-  bindVoxHandlers(session) {
-    return this.sessionLifecycle.bindVoxHandlers(session);
   }
 
   getJoinGreetingOpportunity(session) {
@@ -2479,18 +2434,6 @@ export class VoiceSessionManager {
     return this.greetingManager.canFireJoinGreetingOpportunity(session, opportunity);
   }
 
-  isBargeInOutputSuppressed(session, now = Date.now()) {
-    return this.bargeInController.isBargeInOutputSuppressed(session, now);
-  }
-
-  clearBargeInOutputSuppression(session, reason = "cleared") {
-    return this.bargeInController.clearBargeInOutputSuppression(session, reason);
-  }
-
-  isBargeInInterruptTargetActive(session) {
-    return this.bargeInController.isBargeInInterruptTargetActive(session);
-  }
-
   normalizeReplyInterruptionPolicy(rawPolicy = null) {
     const policy = rawPolicy && typeof rawPolicy === "object" ? rawPolicy : null;
     if (!policy) return null;
@@ -2590,76 +2533,6 @@ export class VoiceSessionManager {
     session.activeReplyInterruptionPolicy = null;
   }
 
-  ensureAssistantOutputState(session): AssistantOutputState | null {
-    return this.replyManager.ensureAssistantOutputState(session);
-  }
-
-  patchAssistantOutputTelemetry(
-    session,
-    metadata: {
-      trigger?: string | null;
-      requestId?: number | null;
-      ttsPlaybackState?: string | null;
-      ttsBufferedSamples?: number | null;
-    } = {}
-  ) {
-    return this.replyManager.patchAssistantOutputTelemetry(session, metadata);
-  }
-
-  getSessionTtsPlaybackState(
-    session,
-    fallbackState: AssistantOutputState | null = null
-  ): TtsPlaybackState {
-    return this.replyManager.getSessionTtsPlaybackState(session, fallbackState);
-  }
-
-  getClankvoxReportedTtsPlaybackState(session) {
-    return this.replyManager.getClankvoxReportedTtsPlaybackState(session);
-  }
-
-  getClankvoxReportedTtsBufferedSamples(session) {
-    return this.replyManager.getClankvoxReportedTtsBufferedSamples(session);
-  }
-
-  getClankvoxTtsTelemetryAgeMs(session) {
-    return this.replyManager.getClankvoxTtsTelemetryAgeMs(session);
-  }
-
-  isClankvoxTtsTelemetryFresh(session) {
-    return this.replyManager.isClankvoxTtsTelemetryFresh(session);
-  }
-
-  getOutputLockDebugMetadata(session, outputLockReason = null) {
-    return this.replyManager.getOutputLockDebugMetadata(session, outputLockReason);
-  }
-
-  maybeClearStaleRealtimeResponseState(session, { liveAudioStreaming = false, bufferedBotSpeech = false } = {}) {
-    return this.replyManager.maybeClearStaleRealtimeResponseState(session, {
-      liveAudioStreaming,
-      bufferedBotSpeech
-    });
-  }
-
-  syncAssistantOutputState(session, trigger = "state_sync") {
-    return this.replyManager.syncAssistantOutputState(session, trigger);
-  }
-
-  shouldBargeIn({ session, userId, captureState }) {
-    return this.bargeInController.shouldBargeIn({ session, userId, captureState });
-  }
-
-  isCaptureSignalAssertive(capture) {
-    return this.bargeInController.isCaptureSignalAssertive(capture);
-  }
-
-  isCaptureSignalAssertiveDuringBotSpeech(capture) {
-    return this.bargeInController.isCaptureSignalAssertiveDuringBotSpeech(capture);
-  }
-
-  getCaptureSignalMetrics(capture) {
-    return this.bargeInController.getCaptureSignalMetrics(capture);
-  }
-
   hasCaptureBeenPromoted(capture) {
     return Math.max(0, Number(capture?.promotedAt || 0)) > 0;
   }
@@ -2691,7 +2564,7 @@ export class VoiceSessionManager {
     );
     if (Math.max(0, Number(capture.bytesSent || 0)) < minPromotionBytes) return null;
 
-    const signal = this.getCaptureSignalMetrics(capture);
+    const signal = this.bargeInController.getCaptureSignalMetrics(capture);
     if (signal.sampleCount <= 0) return null;
 
     const serverVadConfirmed = this.hasCaptureServerVadSpeech({ session, capture });
@@ -2729,7 +2602,7 @@ export class VoiceSessionManager {
       Math.ceil((sampleRateHz * 2 * ACTIVITY_TOUCH_MIN_SPEECH_MS) / 1000)
     );
     if (Number(capture.bytesSent || 0) < minSpeechBytes) return false;
-    return this.isCaptureSignalAssertive(capture);
+    return this.bargeInController.isCaptureSignalAssertive(capture);
   }
 
   isCaptureBlockingDeferredReplay({ session, capture }) {
@@ -2812,11 +2685,11 @@ export class VoiceSessionManager {
       : null;
     const pendingOpportunityType = resolveSystemSpeechOpportunityType(pending?.source);
     if (!pending || !shouldCancelSystemSpeechBeforeAudioOnPromotedUserSpeech(pending.source)) return false;
-    if (this.pendingResponseHasAudio(session, pending)) return false;
+    if (this.replyManager.pendingResponseHasAudio(session, pending)) return false;
 
-    const signal = this.getCaptureSignalMetrics(captureState);
+    const signal = this.bargeInController.getCaptureSignalMetrics(captureState);
     const cancelTelemetry = this.cancelRealtimeResponseForBargeIn(session);
-    this.clearPendingResponse(session);
+    this.replyManager.clearPendingResponse(session);
     this.maybeClearActiveReplyInterruptionPolicy(session);
     this.store.logAction({
       kind: "voice_runtime",
@@ -2856,7 +2729,7 @@ export class VoiceSessionManager {
       if (!normalizedCaptureUserId) continue;
       if (capture.speakingEndFinalizeTimer) continue;
       if (Number(capture.bytesSent || 0) < minCaptureBytes) continue;
-      if (!this.isCaptureSignalAssertive(capture)) continue;
+      if (!this.bargeInController.isCaptureSignalAssertive(capture)) continue;
       if (
         !this.isUserAllowedToInterruptReply({
           policy: normalizedInterruptionPolicy,
@@ -2954,14 +2827,14 @@ export class VoiceSessionManager {
     if (!session || session.ending || !command) return false;
     const cancelTelemetry = this.cancelRealtimeResponseForBargeIn(session);
 
-    this.resetBotAudioPlayback(session);
+    this.replyManager.resetBotAudioPlayback(session);
     if (session.botTurnResetTimer) {
       clearTimeout(session.botTurnResetTimer);
       session.botTurnResetTimer = null;
     }
     session.botTurnOpen = false;
     session.botTurnOpenAt = 0;
-    this.syncAssistantOutputState(session, "barge_in_interrupt");
+    this.replyManager.syncAssistantOutputState(session, "barge_in_interrupt");
 
     // Unduck music immediately on barge-in so the user hears it while speaking.
     const resolvedSettings = session.settingsSnapshot || this.store.getSettings();
@@ -3038,66 +2911,8 @@ export class VoiceSessionManager {
     return true;
   }
 
-  hasRecentAssistantAudioDelta(session) {
-    return this.replyManager.hasRecentAssistantAudioDelta(session);
-  }
-
-  getBufferedTtsSamples(session) {
-    return this.replyManager.getBufferedTtsSamples(session);
-  }
-
-  hasBufferedTtsPlayback(session) {
-    return this.replyManager.hasBufferedTtsPlayback(session);
-  }
-
-  trackOpenAiRealtimeAssistantAudioEvent(session, event) {
-    return this.sessionLifecycle.trackOpenAiRealtimeAssistantAudioEvent(session, event);
-  }
-
-  bindRealtimeHandlers(session, settings = session.settingsSnapshot) {
-    return this.sessionLifecycle.bindRealtimeHandlers(session, settings);
-  }
-
-  resetBotAudioPlayback(session) {
-    return this.replyManager.resetBotAudioPlayback(session);
-  }
-
-  handleResponseDone({
-    session,
-    event,
-    settings = null,
-    runtimeLabel = "openai_realtime"
-  }) {
-    return this.replyManager.handleResponseDone({
-      session,
-      event,
-      settings,
-      runtimeLabel
-    });
-  }
-
-  queueRealtimeTurnContextRefresh({
-    session,
-    settings,
-    userId,
-    transcript = "",
-    captureReason = "stream_end"
-  }) {
-    return this.instructionManager.queueRealtimeTurnContextRefresh({
-      session,
-      settings,
-      userId,
-      transcript,
-      captureReason
-    });
-  }
-
-  getReplyOutputLockState(session): ReplyOutputLockState {
-    return this.replyManager.getReplyOutputLockState(session);
-  }
-
   getOutputChannelState(session): OutputChannelState {
-    const replyOutputLockState = this.getReplyOutputLockState(session);
+    const replyOutputLockState = this.replyManager.getReplyOutputLockState(session);
     const sessionInactive = !session || session.ending;
     const captureBlocking =
       !sessionInactive &&
@@ -3129,7 +2944,7 @@ export class VoiceSessionManager {
       lockReason: replyOutputLockState.reason || null,
       musicActive: replyOutputLockState.musicActive,
       captureBlocking,
-      bargeInSuppressed: !sessionInactive && this.isBargeInOutputSuppressed(session),
+      bargeInSuppressed: !sessionInactive && this.bargeInController.isBargeInOutputSuppressed(session),
       turnBacklog: this.getTurnBacklogSize(session),
       toolCallsRunning,
       botTurnOpen: replyOutputLockState.botTurnOpen,
@@ -3166,17 +2981,12 @@ export class VoiceSessionManager {
     return true;
   }
 
-  markBotTurnOut(session, settings = session.settingsSnapshot) {
-    return this.replyManager.markBotTurnOut(session, settings);
-  }
-
-  getRealtimeTurnBacklogSize(session) {
-    return this.turnProcessor.getRealtimeTurnBacklogSize(session);
-  }
-
   getTurnBacklogSize(session) {
     if (!session) return 0;
-    return Math.max(0, this.getRealtimeTurnBacklogSize(session) + Number(session.pendingSttTurns || 0));
+    return Math.max(
+      0,
+      this.turnProcessor.getRealtimeTurnBacklogSize(session) + Number(session.pendingSttTurns || 0)
+    );
   }
 
   resolveSpeakingEndFinalizeDelayMs({ session, captureAgeMs }) {
@@ -3190,7 +3000,7 @@ export class VoiceSessionManager {
     }
 
     const activeCaptureCount = Number(session?.userCaptures?.size || 0);
-    const realtimeTurnBacklog = this.getRealtimeTurnBacklogSize(session);
+    const realtimeTurnBacklog = this.turnProcessor.getRealtimeTurnBacklogSize(session);
     const sttTurnBacklog = Number(session?.pendingSttTurns || 0);
     const turnBacklog = Math.max(0, realtimeTurnBacklog, sttTurnBacklog);
 
@@ -3935,7 +3745,7 @@ export class VoiceSessionManager {
 
     try {
       realtimeClient.requestTextUtterance(utterancePrompt);
-      this.createTrackedAudioResponse({
+      this.replyManager.createTrackedAudioResponse({
         session,
         userId: userId || this.client.user?.id || null,
         source,
@@ -4358,9 +4168,9 @@ export class VoiceSessionManager {
       const now = Date.now();
       if (now >= deadlineAt) break;
       const botTurnOpen = Boolean(session.botTurnOpen);
-      const bufferedBotSpeech = this.hasBufferedTtsPlayback(session);
+      const bufferedBotSpeech = this.replyManager.hasBufferedTtsPlayback(session);
       const pending = session.pendingResponse;
-      const pendingHasAudio = pending ? this.pendingResponseHasAudio(session, pending) : false;
+      const pendingHasAudio = pending ? this.replyManager.pendingResponseHasAudio(session, pending) : false;
       const hasPostRequestAudio = Number(session.lastAudioDeltaAt || 0) >= audioRequestedAt;
 
       if (botTurnOpen || bufferedBotSpeech || pendingHasAudio || hasPostRequestAudio) {
@@ -4471,7 +4281,7 @@ export class VoiceSessionManager {
       }
       return false;
     }
-    this.markBotTurnOut(session, settings);
+    this.replyManager.markBotTurnOut(session, settings);
     if (duckedMusic) {
       this.scheduleBotSpeechMusicUnduck(session, settings, BOT_TURN_SILENCE_RESET_MS);
     }
@@ -4708,10 +4518,6 @@ export class VoiceSessionManager {
     await closeSharedAsrSession(session, this.buildAsrBridgeDeps(session), reason);
   }
 
-  bindSessionHandlers(session, settings) {
-    return this.sessionLifecycle.bindSessionHandlers(session, settings);
-  }
-
   startInboundCapture({ session, userId, settings = session?.settingsSnapshot }) {
     return this.captureManager.startInboundCapture({
       session,
@@ -4784,7 +4590,7 @@ export class VoiceSessionManager {
       normalizedPcmBuffer.length,
       Number(session.realtimeInputSampleRateHz) || 24000
     );
-    this.queueRealtimeTurn({
+    this.turnProcessor.queueRealtimeTurn({
       session,
       userId,
       captureReason,
@@ -4803,48 +4609,6 @@ export class VoiceSessionManager {
         : null
     });
     return true;
-  }
-
-  mergeRealtimeQueuedTurn(existingTurn, incomingTurn) {
-    return this.turnProcessor.mergeRealtimeQueuedTurn(existingTurn, incomingTurn);
-  }
-
-  queueRealtimeTurn({
-    session,
-    userId,
-    pcmBuffer = null,
-    captureReason = "stream_end",
-    finalizedAt = 0,
-    transcriptOverride = "",
-    clipDurationMsOverride = Number.NaN,
-    asrStartedAtMsOverride = 0,
-    asrCompletedAtMsOverride = 0,
-    transcriptionModelPrimaryOverride = "",
-    transcriptionModelFallbackOverride = null,
-    transcriptionPlanReasonOverride = "",
-    usedFallbackModelForTranscriptOverride = false,
-    transcriptLogprobsOverride = null
-  }) {
-    return this.turnProcessor.queueRealtimeTurn({
-      session,
-      userId,
-      pcmBuffer,
-      captureReason,
-      finalizedAt,
-      transcriptOverride,
-      clipDurationMsOverride,
-      asrStartedAtMsOverride,
-      asrCompletedAtMsOverride,
-      transcriptionModelPrimaryOverride,
-      transcriptionModelFallbackOverride,
-      transcriptionPlanReasonOverride,
-      usedFallbackModelForTranscriptOverride,
-      transcriptLogprobsOverride
-    });
-  }
-
-  async drainRealtimeTurnQueue(initialTurn) {
-    return this.turnProcessor.drainRealtimeTurnQueue(initialTurn);
   }
 
   estimatePcm16MonoDurationMs(pcmByteLength, sampleRateHz = 24000) {
@@ -5036,42 +4800,6 @@ export class VoiceSessionManager {
     return this.resolveRealtimeReplyStrategy({ session, settings }) === "native";
   }
 
-  async runRealtimeTurn({
-    session,
-    userId,
-    pcmBuffer = null,
-    captureReason = "stream_end",
-    queuedAt = 0,
-    finalizedAt = 0,
-    transcriptOverride = "",
-    clipDurationMsOverride = Number.NaN,
-    asrStartedAtMsOverride = 0,
-    asrCompletedAtMsOverride = 0,
-    transcriptionModelPrimaryOverride = "",
-    transcriptionModelFallbackOverride = null,
-    transcriptionPlanReasonOverride = "",
-    usedFallbackModelForTranscriptOverride = false,
-    transcriptLogprobsOverride = null
-  }) {
-    return this.turnProcessor.runRealtimeTurn({
-      session,
-      userId,
-      pcmBuffer,
-      captureReason,
-      queuedAt,
-      finalizedAt,
-      transcriptOverride,
-      clipDurationMsOverride,
-      asrStartedAtMsOverride,
-      asrCompletedAtMsOverride,
-      transcriptionModelPrimaryOverride,
-      transcriptionModelFallbackOverride,
-      transcriptionPlanReasonOverride,
-      usedFallbackModelForTranscriptOverride,
-      transcriptLogprobsOverride
-    });
-  }
-
   queueDeferredBotTurnOpenTurn({
     session,
     userId = null,
@@ -5120,7 +4848,7 @@ export class VoiceSessionManager {
       }
     });
     const outputChannelState = this.getOutputChannelState(session);
-    const deferredOutputLockDebugMetadata = this.getOutputLockDebugMetadata(
+    const deferredOutputLockDebugMetadata = this.replyManager.getOutputLockDebugMetadata(
       session,
       outputChannelState.lockReason
     );
@@ -5258,7 +4986,7 @@ export class VoiceSessionManager {
       session,
       userId: latestTurn?.userId || null
     });
-    const deferredOutputLockDebugMetadata = this.getOutputLockDebugMetadata(
+    const deferredOutputLockDebugMetadata = this.replyManager.getOutputLockDebugMetadata(
       session,
       decision.outputLockReason || null
     );
@@ -5436,7 +5164,7 @@ export class VoiceSessionManager {
 
     // Cancel any in-flight response so the model sees all user messages and
     // generates a single contextual reply instead of queuing separate responses.
-    if (this.isRealtimeResponseActive(session)) {
+    if (this.replyManager.isRealtimeResponseActive(session)) {
       try {
         const cancel = session.realtimeClient?.cancelActiveResponse;
         if (typeof cancel === "function") {
@@ -5444,7 +5172,7 @@ export class VoiceSessionManager {
         }
       } catch { /* best-effort */ }
       try { session.voxClient?.stopPlayback(); } catch { /* ignore */ }
-      this.clearPendingResponse(session);
+      this.replyManager.clearPendingResponse(session);
     }
 
     const replyInterruptionPolicy = this.buildReplyInterruptionPolicy({
@@ -5455,7 +5183,7 @@ export class VoiceSessionManager {
       source: String(source || "openai_realtime_text_turn")
     });
     try {
-      await this.prepareRealtimeTurnContext({
+      await this.instructionManager.prepareRealtimeTurnContext({
         session,
         settings,
         userId: normalizedUserId,
@@ -5463,7 +5191,7 @@ export class VoiceSessionManager {
         captureReason
       });
       session.realtimeClient.requestTextUtterance(labeledTranscript);
-      this.createTrackedAudioResponse({
+      this.replyManager.createTrackedAudioResponse({
         session,
         userId: normalizedUserId,
         source: String(source || "openai_realtime_text_turn"),
@@ -5550,7 +5278,7 @@ export class VoiceSessionManager {
     }
 
     if (providerSupports(session.mode || "", "updateInstructions")) {
-      this.queueRealtimeTurnContextRefresh({
+      this.instructionManager.queueRealtimeTurnContextRefresh({
         session,
         settings,
         userId,
@@ -5558,7 +5286,7 @@ export class VoiceSessionManager {
         captureReason
       });
     }
-    this.scheduleResponseFromBufferedAudio({ session, userId });
+    this.turnProcessor.scheduleResponseFromBufferedAudio({ session, userId });
     return true;
   }
 
@@ -6086,25 +5814,6 @@ export class VoiceSessionManager {
     return 1;
   }
 
-  async prepareRealtimeTurnContext({ session, settings, userId, transcript = "", captureReason: _captureReason = "stream_end" }) {
-    return this.instructionManager.prepareRealtimeTurnContext({
-      session,
-      settings,
-      userId,
-      transcript,
-      captureReason: _captureReason
-    });
-  }
-
-  async buildRealtimeMemorySlice({ session, settings, userId, transcript = "" }) {
-    return this.instructionManager.buildRealtimeMemorySlice({
-      session,
-      settings,
-      userId,
-      transcript
-    });
-  }
-
   extractOpenAiFunctionCallEnvelope(event) {
     if (!event || typeof event !== "object") return null;
     const eventType = String(event.type || "").trim();
@@ -6174,9 +5883,9 @@ export class VoiceSessionManager {
       if (!session || session.ending) return;
       if (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0) return;
       session.awaitingToolOutputs = false;
-      this.syncAssistantOutputState(session, "tool_outputs_ready");
+      this.replyManager.syncAssistantOutputState(session, "tool_outputs_ready");
 
-      const created = this.createTrackedAudioResponse({
+      const created = this.replyManager.createTrackedAudioResponse({
         session,
         userId: userId || session.lastOpenAiToolCallerUserId || null,
         source: "tool_call_followup",
@@ -6194,7 +5903,7 @@ export class VoiceSessionManager {
             sessionId: session.id
           }
         });
-        this.syncAssistantOutputState(session, "tool_followup_skipped");
+        this.replyManager.syncAssistantOutputState(session, "tool_followup_skipped");
       }
     }, OPENAI_TOOL_RESPONSE_DEBOUNCE_MS);
   }
@@ -6269,7 +5978,7 @@ export class VoiceSessionManager {
       toolName: pendingCall.name
     });
     session.awaitingToolOutputs = true;
-    this.syncAssistantOutputState(session, "tool_call_in_progress");
+    this.replyManager.syncAssistantOutputState(session, "tool_call_in_progress");
 
     await this.executeOpenAiRealtimeFunctionCall({
       session,
@@ -6380,52 +6089,6 @@ export class VoiceSessionManager {
       ...(updates && typeof updates === "object" ? updates : {})
     };
     session.mcpStatus = rows;
-  }
-
-  scheduleRealtimeInstructionRefresh({
-    session,
-    settings,
-    reason = "voice_context_refresh",
-    speakerUserId = null,
-    transcript = "",
-    memorySlice = null
-  }) {
-    return this.instructionManager.scheduleRealtimeInstructionRefresh({
-      session,
-      settings,
-      reason,
-      speakerUserId,
-      transcript,
-      memorySlice
-    });
-  }
-
-  async refreshRealtimeInstructions({
-    session,
-    settings,
-    reason = "voice_context_refresh",
-    speakerUserId = null,
-    transcript = "",
-    memorySlice = null
-  }) {
-    return this.instructionManager.refreshRealtimeInstructions({
-      session,
-      settings,
-      reason,
-      speakerUserId,
-      transcript,
-      memorySlice
-    });
-  }
-
-  buildRealtimeInstructions({ session, settings, speakerUserId = null, transcript = "", memorySlice = null }) {
-    return this.instructionManager.buildRealtimeInstructions({
-      session,
-      settings,
-      speakerUserId,
-      transcript,
-      memorySlice
-    });
   }
 
   getVoiceChannelParticipants(session) {
@@ -6552,41 +6215,6 @@ export class VoiceSessionManager {
     return String(userName || "").trim();
   }
 
-  getPendingSttTurnQueue(session) {
-    return this.turnProcessor.getPendingSttTurnQueue(session);
-  }
-
-  syncPendingSttTurnCount(session) {
-    return this.turnProcessor.syncPendingSttTurnCount(session);
-  }
-
-  shouldCoalesceSttTurn(prevTurn, nextTurn) {
-    return this.turnProcessor.shouldCoalesceSttTurn(prevTurn, nextTurn);
-  }
-
-  queueSttPipelineTurn({ session, userId, pcmBuffer, captureReason = "stream_end" }) {
-    return this.turnProcessor.queueSttPipelineTurn({
-      session,
-      userId,
-      pcmBuffer,
-      captureReason
-    });
-  }
-
-  async drainSttPipelineTurnQueue(initialTurn) {
-    return this.turnProcessor.drainSttPipelineTurnQueue(initialTurn);
-  }
-
-  async runSttPipelineTurn({ session, userId, pcmBuffer, captureReason = "stream_end", queuedAt = 0 }) {
-    return this.turnProcessor.runSttPipelineTurn({
-      session,
-      userId,
-      pcmBuffer,
-      captureReason,
-      queuedAt
-    });
-  }
-
   async runSttPipelineReply({
     session,
     settings,
@@ -6660,7 +6288,7 @@ export class VoiceSessionManager {
     const contextNow = Date.now();
     const joinWindowAgeMs = Math.max(0, contextNow - Number(session?.startedAt || 0));
     const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
-    const sessionTiming = this.buildVoiceSessionTimingContext(session);
+    const sessionTiming = this.sessionLifecycle.buildVoiceSessionTimingContext(session);
     const streamWatchBrainContext = this.getStreamWatchBrainContextForPrompt(session, settings);
     const voiceAddressingState = this.buildVoiceAddressingState({
       session,
@@ -6990,7 +6618,7 @@ export class VoiceSessionManager {
     const contextNow = Date.now();
     const joinWindowAgeMs = Math.max(0, contextNow - Number(session?.startedAt || 0));
     const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
-    const sessionTiming = this.buildVoiceSessionTimingContext(session);
+    const sessionTiming = this.sessionLifecycle.buildVoiceSessionTimingContext(session);
     const streamWatchBrainContext = this.getStreamWatchBrainContextForPrompt(session, settings);
     const voiceAddressingState = this.buildVoiceAddressingState({
       session,
@@ -7211,7 +6839,7 @@ export class VoiceSessionManager {
     }
 
     if (playbackPlan.spokenText && providerSupports(session.mode || "", "updateInstructions")) {
-      void this.prepareRealtimeTurnContext({
+      void this.instructionManager.prepareRealtimeTurnContext({
         session,
         settings,
         userId,
@@ -7454,76 +7082,6 @@ export class VoiceSessionManager {
     }
   }
 
-  scheduleResponseFromBufferedAudio({ session, userId = null }) {
-    return this.turnProcessor.scheduleResponseFromBufferedAudio({ session, userId });
-  }
-
-  flushResponseFromBufferedAudio({ session, userId = null }) {
-    return this.turnProcessor.flushResponseFromBufferedAudio({ session, userId });
-  }
-
-  createTrackedAudioResponse({
-    session,
-    userId = null,
-    source = "turn_flush",
-    resetRetryState = false,
-    emitCreateEvent = true,
-    interruptionPolicy = undefined,
-    utteranceText = undefined,
-    latencyContext = undefined
-  }) {
-    return this.replyManager.runCreateTrackedAudioResponse({
-      session,
-      userId,
-      source,
-      resetRetryState,
-      emitCreateEvent,
-      interruptionPolicy,
-      utteranceText,
-      latencyContext
-    });
-  }
-
-  pendingResponseHasAudio(session, pendingResponse = session?.pendingResponse) {
-    return this.replyManager.runPendingResponseHasAudio(session, pendingResponse);
-  }
-
-  clearResponseSilenceTimers(session) {
-    return this.replyManager.clearResponseSilenceTimers(session);
-  }
-
-  clearPendingResponse(session) {
-    return this.replyManager.runClearPendingResponse(session);
-  }
-
-  isRealtimeResponseActive(session) {
-    return this.replyManager.runIsRealtimeResponseActive(session);
-  }
-
-  armResponseSilenceWatchdog({ session, requestId, userId = null }) {
-    return this.replyManager.runArmResponseSilenceWatchdog({
-      session,
-      requestId,
-      userId
-    });
-  }
-
-  async handleSilentResponse({
-    session,
-    userId = null,
-    trigger = "watchdog",
-    responseId = null,
-    responseStatus = null
-  }) {
-    return this.replyManager.runHandleSilentResponse({
-      session,
-      userId,
-      trigger,
-      responseId,
-      responseStatus
-    });
-  }
-
   async endSession({
     guildId,
     reason = "unknown",
@@ -7566,11 +7124,11 @@ export class VoiceSessionManager {
     session.ending = true;
     this.sessions.delete(String(guildId));
 
-    this.clearSessionRuntimeTimers(session);
-    this.clearSessionRuntimeState(session);
+    this.sessionLifecycle.clearSessionRuntimeTimers(session);
+    this.sessionLifecycle.clearSessionRuntimeState(session);
     await this.closeAllOpenAiAsrSessions(session, "session_end");
     await this.closeOpenAiSharedAsrSession(session, "session_end");
-    this.runSessionCleanupHandlers(session);
+    this.sessionLifecycle.runSessionCleanupHandlers(session);
 
     try {
       await session.realtimeClient?.close?.();
@@ -7678,7 +7236,7 @@ export class VoiceSessionManager {
         sessionVoiceChannelId &&
         (oldChannelId === sessionVoiceChannelId || newChannelId === sessionVoiceChannelId)
       ) {
-        this.scheduleRealtimeInstructionRefresh({
+        this.instructionManager.scheduleRealtimeInstructionRefresh({
           session,
           settings: session.settingsSnapshot,
           reason: "voice_membership_changed",
@@ -7711,7 +7269,7 @@ export class VoiceSessionManager {
           if (liveChannelId) {
             liveSession.voiceChannelId = liveChannelId;
             liveSession.lastActivityAt = Date.now();
-            this.scheduleRealtimeInstructionRefresh({
+            this.instructionManager.scheduleRealtimeInstructionRefresh({
               session: liveSession,
               settings: liveSession.settingsSnapshot,
               reason: "voice_channel_recovered"
@@ -7760,7 +7318,7 @@ export class VoiceSessionManager {
     if (String(newState.channelId) !== session.voiceChannelId) {
       session.voiceChannelId = String(newState.channelId);
       session.lastActivityAt = Date.now();
-      this.scheduleRealtimeInstructionRefresh({
+      this.instructionManager.scheduleRealtimeInstructionRefresh({
         session,
         settings: session.settingsSnapshot,
         reason: "voice_channel_changed"

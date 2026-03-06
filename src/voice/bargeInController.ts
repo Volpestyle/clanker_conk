@@ -9,6 +9,7 @@ import {
   VOICE_SILENCE_GATE_PEAK_MAX
 } from "./voiceSessionManager.constants.ts";
 import { isRealtimeMode, normalizeVoiceText } from "./voiceSessionHelpers.ts";
+import type { ReplyManager } from "./replyManager.ts";
 import type { OutputChannelState, VoiceSession } from "./voiceSessionTypes.ts";
 
 type BargeInStoreLike = {
@@ -87,9 +88,8 @@ export interface BargeInControllerHost {
     } | null;
   };
   store: BargeInStoreLike;
+  replyManager: Pick<ReplyManager, "hasRecentAssistantAudioDelta" | "hasBufferedTtsPlayback">;
   getOutputChannelState: (session: VoiceSession) => OutputChannelState;
-  hasRecentAssistantAudioDelta: (session: VoiceSession) => boolean;
-  hasBufferedTtsPlayback: (session: VoiceSession) => boolean;
   normalizeReplyInterruptionPolicy: (
     rawPolicy?: ReplyInterruptionPolicy | Record<string, unknown> | null
   ) => ReplyInterruptionPolicy | null;
@@ -166,8 +166,8 @@ export class BargeInController {
     if (!session || session.ending) return { allowed: false };
     if (!this.isBargeInInterruptTargetActive(session)) return { allowed: false };
     const botTurnOpenAt = Math.max(0, Number(session.botTurnOpenAt || 0));
-    const liveAudioStreaming = this.host.hasRecentAssistantAudioDelta(session);
-    const bufferedBotSpeech = this.host.hasBufferedTtsPlayback(session);
+    const liveAudioStreaming = this.host.replyManager.hasRecentAssistantAudioDelta(session);
+    const bufferedBotSpeech = this.host.replyManager.hasBufferedTtsPlayback(session);
 
     if (!session.botTurnOpen && botTurnOpenAt <= 0) {
       const pendingResponse = this.getPendingResponse(session);

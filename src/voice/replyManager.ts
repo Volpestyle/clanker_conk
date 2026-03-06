@@ -46,6 +46,7 @@ import {
   musicPhaseIsActive,
   musicPhaseShouldLockOutput
 } from "./voiceSessionTypes.ts";
+import type { BargeInController } from "./bargeInController.ts";
 
 type ReplyManagerSettings = Record<string, unknown> | null;
 
@@ -72,36 +73,15 @@ export interface ReplyManagerHost {
   musicPlayer?: {
     resume?: () => void;
   } | null;
+  bargeInController: Pick<
+    BargeInController,
+    "clearBargeInOutputSuppression" | "isBargeInOutputSuppressed"
+  >;
   touchActivity: (guildId: string, settings?: ReplyManagerSettings) => void;
   logVoiceLatencyStage: (payload: Record<string, unknown>) => void;
   normalizeReplyInterruptionPolicy: (rawPolicy?: unknown) => unknown;
   setActiveReplyInterruptionPolicy: (session: VoiceSession, policy?: unknown) => void;
   maybeClearActiveReplyInterruptionPolicy: (session: VoiceSession) => void;
-  isRealtimeResponseActive: (session: VoiceSession) => boolean;
-  pendingResponseHasAudio: (session: VoiceSession, pendingResponse?: unknown) => boolean;
-  clearPendingResponse: (session: VoiceSession) => void;
-  armResponseSilenceWatchdog: (args: {
-    session: VoiceSession;
-    requestId: number;
-    userId?: string | null;
-  }) => void;
-  createTrackedAudioResponse: (args: {
-    session: VoiceSession;
-    userId?: string | null;
-    source?: string;
-    resetRetryState?: boolean;
-    emitCreateEvent?: boolean;
-    interruptionPolicy?: unknown;
-    utteranceText?: string | null;
-    latencyContext?: Record<string, unknown> | null;
-  }) => boolean;
-  handleSilentResponse: (args: {
-    session: VoiceSession;
-    userId?: string | null;
-    trigger?: string;
-    responseId?: string | null;
-    responseStatus?: string | null;
-  }) => Promise<void> | void;
   getDeferredQueuedUserTurns: (session: VoiceSession) => unknown[];
   scheduleDeferredVoiceActionRecheck: (
     session: VoiceSession,
@@ -127,8 +107,6 @@ export interface ReplyManagerHost {
     announcement?: string;
     settings?: ReplyManagerSettings;
   }) => Promise<unknown>;
-  isBargeInOutputSuppressed: (session: VoiceSession, now?: number) => boolean;
-  clearBargeInOutputSuppression: (session: VoiceSession, reason?: string) => void;
   scheduleBotSpeechMusicUnduck: (
     session: VoiceSession,
     settings?: ReplyManagerSettings,
@@ -266,7 +244,7 @@ export class ReplyManager {
     if (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0) {
       return false;
     }
-    if (!this.host.isRealtimeResponseActive(session)) return false;
+    if (!this.isRealtimeResponseActive(session)) return false;
 
     const lastRelevantAt = Math.max(
       0,
@@ -329,7 +307,7 @@ export class ReplyManager {
       liveAudioStreaming,
       bufferedBotSpeech
     });
-    const openAiActiveResponse = this.host.isRealtimeResponseActive(session);
+    const openAiActiveResponse = this.isRealtimeResponseActive(session);
     const bufferedStateAgeMs = Math.max(0, Date.now() - Number(state.phaseEnteredAt || 0));
 
     if (
@@ -436,7 +414,7 @@ export class ReplyManager {
     const assistantOutput = this.syncAssistantOutputState(session, "reply_output_lock");
     const botTurnOpen = Boolean(session.botTurnOpen);
     const pendingResponse = Boolean(session.pendingResponse && typeof session.pendingResponse === "object");
-    const openAiActiveResponse = this.host.isRealtimeResponseActive(session);
+    const openAiActiveResponse = this.isRealtimeResponseActive(session);
     const awaitingToolOutputs =
       session.awaitingToolOutputs ||
       (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0);
@@ -602,11 +580,11 @@ export class ReplyManager {
       const pending = session.pendingResponse;
       if (!pending) return;
       if (Number(pending.requestId || 0) !== Number(requestId)) return;
-      if (this.host.pendingResponseHasAudio(session, pending)) {
-        this.host.clearPendingResponse(session);
+      if (this.pendingResponseHasAudio(session, pending)) {
+        this.clearPendingResponse(session);
         return;
       }
-      void Promise.resolve(this.host.handleSilentResponse({
+      void Promise.resolve(this.handleSilentResponse({
         session,
         userId: pending.userId || userId,
         trigger: "watchdog"
@@ -637,7 +615,7 @@ export class ReplyManager {
     if (!isRealtimeMode(session.mode)) return false;
     this.host.clearAllDeferredVoiceActions(session);
     this.host.clearJoinGreetingOpportunity(session);
-    if (emitCreateEvent && this.host.isRealtimeResponseActive(session)) {
+    if (emitCreateEvent && this.isRealtimeResponseActive(session)) {
       this.host.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
@@ -715,7 +693,7 @@ export class ReplyManager {
     session.lastResponseRequestAt = now;
     this.host.setActiveReplyInterruptionPolicy(session, normalizedInterruptionPolicy);
     this.clearResponseSilenceTimers(session);
-    this.host.armResponseSilenceWatchdog({
+    this.armResponseSilenceWatchdog({
       session,
       requestId,
       userId: session.pendingResponse.userId
@@ -742,8 +720,8 @@ export class ReplyManager {
     const pending = session.pendingResponse;
     if (!pending) return;
     if (pending.handlingSilence) return;
-    if (this.host.pendingResponseHasAudio(session, pending)) {
-      this.host.clearPendingResponse(session);
+    if (this.pendingResponseHasAudio(session, pending)) {
+      this.clearPendingResponse(session);
       return;
     }
 
@@ -752,7 +730,7 @@ export class ReplyManager {
 
     if (this.host.hasReplayBlockingActiveCapture(session)) {
       pending.handlingSilence = false;
-      this.host.armResponseSilenceWatchdog({
+      this.armResponseSilenceWatchdog({
         session,
         requestId: pending.requestId,
         userId: pending.userId || userId
@@ -789,14 +767,14 @@ export class ReplyManager {
       });
 
       try {
-        const created = this.host.createTrackedAudioResponse({
+        const created = this.createTrackedAudioResponse({
           session,
           userId: resolvedUserId,
           source: "silent_retry",
           resetRetryState: false
         });
         if (!created) {
-          this.host.armResponseSilenceWatchdog({
+          this.armResponseSilenceWatchdog({
             session,
             requestId: pending.requestId,
             userId: pending.userId || userId
@@ -814,7 +792,7 @@ export class ReplyManager {
             requestId: pending.requestId
           }
         });
-        this.host.clearPendingResponse(session);
+        this.clearPendingResponse(session);
         await this.host.endSession({
           guildId: session.guildId,
           reason: "response_stalled",
@@ -855,14 +833,14 @@ export class ReplyManager {
           session.realtimeClient.commitInputAudioBuffer();
           session.pendingRealtimeInputBytes = 0;
         }
-        const created = this.host.createTrackedAudioResponse({
+        const created = this.createTrackedAudioResponse({
           session,
           userId: resolvedUserId,
           source: "hard_recovery",
           resetRetryState: false
         });
         if (!created) {
-          this.host.armResponseSilenceWatchdog({
+          this.armResponseSilenceWatchdog({
             session,
             requestId: pending.requestId,
             userId: pending.userId || userId
@@ -880,7 +858,7 @@ export class ReplyManager {
             requestId: pending.requestId
           }
         });
-        this.host.clearPendingResponse(session);
+        this.clearPendingResponse(session);
         await this.host.endSession({
           guildId: session.guildId,
           reason: "response_stalled",
@@ -909,7 +887,7 @@ export class ReplyManager {
         responseStatus
       }
     });
-    this.host.clearPendingResponse(session);
+    this.clearPendingResponse(session);
   }
 
   handleResponseDone({
@@ -924,9 +902,9 @@ export class ReplyManager {
     runtimeLabel?: string;
   }) {
     if (session.ending) return;
-    const hadBargeSuppression = this.host.isBargeInOutputSuppressed(session);
+    const hadBargeSuppression = this.host.bargeInController.isBargeInOutputSuppressed(session);
     if (hadBargeSuppression) {
-      this.host.clearBargeInOutputSuppression(session, "response_done");
+      this.host.bargeInController.clearBargeInOutputSuppression(session, "response_done");
     }
     const pending = session.pendingResponse;
     const responseId = parseResponseDoneId(event);
@@ -962,7 +940,7 @@ export class ReplyManager {
           customPricing: replyGeneration.pricing
         })
         : 0;
-    const hadAudio = pending ? this.host.pendingResponseHasAudio(session, pending) : false;
+    const hadAudio = pending ? this.pendingResponseHasAudio(session, pending) : false;
     const hasInFlightToolCalls =
       session.awaitingToolOutputs ||
       (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0);
@@ -1008,13 +986,13 @@ export class ReplyManager {
         }, BOT_TURN_SILENCE_RESET_MS);
       }
 
-      this.host.clearPendingResponse(session);
+      this.clearPendingResponse(session);
       this.syncAssistantOutputState(session, "response_done_had_audio");
       return;
     }
 
     if (hasInFlightToolCalls) {
-      this.host.clearPendingResponse(session);
+      this.clearPendingResponse(session);
       this.syncAssistantOutputState(session, "response_done_tool_calls_in_flight");
       return;
     }
@@ -1030,12 +1008,12 @@ export class ReplyManager {
       if (!session || session.ending) return;
       const current = session.pendingResponse;
       if (!current || Number(current.requestId || 0) !== requestId) return;
-      if (this.host.pendingResponseHasAudio(session, current)) {
-        this.host.clearPendingResponse(session);
+      if (this.pendingResponseHasAudio(session, current)) {
+        this.clearPendingResponse(session);
         this.syncAssistantOutputState(session, "response_done_grace_audio_detected");
         return;
       }
-      void Promise.resolve(this.host.handleSilentResponse({
+      void Promise.resolve(this.handleSilentResponse({
         session,
         userId: responseUserId,
         trigger: "response_done",
@@ -1043,49 +1021,6 @@ export class ReplyManager {
         responseStatus
       })).catch(() => undefined);
     }, RESPONSE_DONE_SILENCE_GRACE_MS);
-  }
-
-  runIsRealtimeResponseActive(session: VoiceSession) {
-    return this.isRealtimeResponseActive(session);
-  }
-
-  runPendingResponseHasAudio(session: VoiceSession, pendingResponse = session?.pendingResponse) {
-    return this.pendingResponseHasAudio(session, pendingResponse);
-  }
-
-  runClearPendingResponse(session: VoiceSession) {
-    return this.clearPendingResponse(session);
-  }
-
-  runArmResponseSilenceWatchdog(args: {
-    session: VoiceSession;
-    requestId: number;
-    userId?: string | null;
-  }) {
-    return this.armResponseSilenceWatchdog(args);
-  }
-
-  runCreateTrackedAudioResponse(args: {
-    session: VoiceSession;
-    userId?: string | null;
-    source?: string;
-    resetRetryState?: boolean;
-    emitCreateEvent?: boolean;
-    interruptionPolicy?: unknown;
-    utteranceText?: string | null;
-    latencyContext?: Record<string, unknown> | null;
-  }) {
-    return this.createTrackedAudioResponse(args);
-  }
-
-  runHandleSilentResponse(args: {
-    session: VoiceSession;
-    userId?: string | null;
-    trigger?: string;
-    responseId?: string | null;
-    responseStatus?: string | null;
-  }) {
-    return this.handleSilentResponse(args);
   }
 
   private get botUserId() {

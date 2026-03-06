@@ -31,6 +31,7 @@ import {
   normalizeVoiceText,
   resolveVoiceAsrLanguageGuidance
 } from "./voiceSessionHelpers.ts";
+import type { ReplyManager } from "./replyManager.ts";
 import type {
   OutputChannelState,
   RealtimeQueuedTurn,
@@ -212,17 +213,6 @@ interface RunSttPipelineReplyArgs {
   conversationContext?: VoiceConversationContext | null;
 }
 
-interface CreateTrackedAudioResponseArgs {
-  session: VoiceSession;
-  userId?: string | null;
-  source?: string;
-  resetRetryState?: boolean;
-  emitCreateEvent?: boolean;
-  interruptionPolicy?: unknown;
-  utteranceText?: string | null;
-  latencyContext?: Record<string, unknown> | null;
-}
-
 type TurnProcessorStoreLike = {
   getSettings: () => TurnProcessorSettings;
   logAction: (entry: {
@@ -244,6 +234,10 @@ type TurnProcessorLlmLike = {
 export interface TurnProcessorHost {
   store: TurnProcessorStoreLike;
   llm?: TurnProcessorLlmLike;
+  replyManager: Pick<
+    ReplyManager,
+    "createTrackedAudioResponse" | "getOutputLockDebugMetadata" | "isRealtimeResponseActive"
+  >;
   maybeHandleMusicPlaybackTurn: (
     args: MaybeHandleMusicPlaybackTurnArgs
   ) => Promise<boolean> | boolean;
@@ -278,10 +272,6 @@ export interface TurnProcessorHost {
     userId?: string | null;
     now?: number;
   }) => VoiceAddressingState | null;
-  getOutputLockDebugMetadata: (
-    session: VoiceSession,
-    outputLockReason?: string | null
-  ) => Record<string, unknown>;
   shouldUseNativeRealtimeReply: (args: {
     session: VoiceSession;
     settings?: TurnProcessorSettings;
@@ -299,20 +289,6 @@ export interface TurnProcessorHost {
   touchActivity: (guildId: string, settings?: TurnProcessorSettings) => void;
   runSttPipelineReply: (args: RunSttPipelineReplyArgs) => Promise<void>;
   getOutputChannelState: (session: VoiceSession) => OutputChannelState;
-  isRealtimeResponseActive: (session: VoiceSession) => boolean;
-  createTrackedAudioResponse: (args: CreateTrackedAudioResponseArgs) => boolean;
-  scheduleResponseFromBufferedAudio: (args: {
-    session: VoiceSession;
-    userId?: string | null;
-  }) => void;
-  flushResponseFromBufferedAudio: (args: {
-    session: VoiceSession;
-    userId?: string | null;
-  }) => void;
-  runRealtimeTurn: (args: RunRealtimeTurnArgs) => Promise<void>;
-  runSttPipelineTurn: (args: RunSttPipelineTurnArgs) => Promise<void>;
-  drainRealtimeTurnQueue: (initialTurn: RealtimeQueuedTurn) => Promise<void>;
-  drainSttPipelineTurnQueue: (initialTurn: SttPipelineQueuedTurn) => Promise<void>;
 }
 
 export class TurnProcessor {
@@ -489,7 +465,7 @@ export class TurnProcessor {
       }
       nextTurn = this.mergeRealtimeQueuedTurn(nextTurn, queuedTurn);
       if (!nextTurn) return;
-      void Promise.resolve(this.host.drainRealtimeTurnQueue(nextTurn)).catch(() => undefined);
+      void Promise.resolve(this.drainRealtimeTurnQueue(nextTurn)).catch(() => undefined);
       return;
     }
 
@@ -510,13 +486,13 @@ export class TurnProcessor {
           turn = turn ? this.mergeRealtimeQueuedTurn(turn, next) : next;
         }
         if (turn) {
-          void Promise.resolve(this.host.drainRealtimeTurnQueue(turn)).catch(() => undefined);
+          void Promise.resolve(this.drainRealtimeTurnQueue(turn)).catch(() => undefined);
         }
       }, REALTIME_TURN_COALESCE_WINDOW_MS);
       return;
     }
 
-    void Promise.resolve(this.host.drainRealtimeTurnQueue(queuedTurn)).catch(() => undefined);
+    void Promise.resolve(this.drainRealtimeTurnQueue(queuedTurn)).catch(() => undefined);
   }
 
   async drainRealtimeTurnQueue(initialTurn: RealtimeQueuedTurn) {
@@ -531,7 +507,7 @@ export class TurnProcessor {
     try {
       while (turn && !session.ending) {
         try {
-          await this.host.runRealtimeTurn(turn);
+          await this.runRealtimeTurn(turn);
         } catch (error) {
           this.store.logAction({
             kind: "voice_error",
@@ -555,7 +531,7 @@ export class TurnProcessor {
       } else {
         const pending = pendingQueue.shift();
         if (pending) {
-          void Promise.resolve(this.host.drainRealtimeTurnQueue(pending)).catch(() => undefined);
+          void Promise.resolve(this.drainRealtimeTurnQueue(pending)).catch(() => undefined);
         }
       }
     }
@@ -890,7 +866,7 @@ export class TurnProcessor {
       session,
       userId
     });
-    const outputLockDebugMetadata = this.host.getOutputLockDebugMetadata(
+    const outputLockDebugMetadata = this.host.replyManager.getOutputLockDebugMetadata(
       session,
       decision.outputLockReason || null
     );
@@ -1150,11 +1126,11 @@ export class TurnProcessor {
       pendingQueue.push(queuedTurn);
       const nextTurn = pendingQueue.shift();
       if (!nextTurn) return;
-      void Promise.resolve(this.host.drainSttPipelineTurnQueue(nextTurn)).catch(() => undefined);
+      void Promise.resolve(this.drainSttPipelineTurnQueue(nextTurn)).catch(() => undefined);
       return;
     }
 
-    void Promise.resolve(this.host.drainSttPipelineTurnQueue(queuedTurn)).catch(() => undefined);
+    void Promise.resolve(this.drainSttPipelineTurnQueue(queuedTurn)).catch(() => undefined);
   }
 
   async drainSttPipelineTurnQueue(initialTurn: SttPipelineQueuedTurn) {
@@ -1171,7 +1147,7 @@ export class TurnProcessor {
     try {
       while (turn && !session.ending) {
         try {
-          await this.host.runSttPipelineTurn(turn);
+          await this.runSttPipelineTurn(turn);
         } catch (error) {
           this.store.logAction({
             kind: "voice_error",
@@ -1197,7 +1173,7 @@ export class TurnProcessor {
         const pendingTurn = pendingQueue.shift();
         if (pendingTurn) {
           this.syncPendingSttTurnCount(session);
-          void Promise.resolve(this.host.drainSttPipelineTurnQueue(pendingTurn)).catch(() => undefined);
+          void Promise.resolve(this.drainSttPipelineTurnQueue(pendingTurn)).catch(() => undefined);
         }
       }
       this.syncPendingSttTurnCount(session);
@@ -1423,7 +1399,7 @@ export class TurnProcessor {
       session,
       userId
     });
-    const turnOutputLockDebugMetadata = this.host.getOutputLockDebugMetadata(
+    const turnOutputLockDebugMetadata = this.host.replyManager.getOutputLockDebugMetadata(
       session,
       turnDecision.outputLockReason || null
     );
@@ -1542,7 +1518,7 @@ export class TurnProcessor {
 
     session.responseFlushTimer = setTimeout(() => {
       session.responseFlushTimer = null;
-      this.host.flushResponseFromBufferedAudio({ session, userId });
+      this.flushResponseFromBufferedAudio({ session, userId });
     }, RESPONSE_FLUSH_DEBOUNCE_MS);
   }
 
@@ -1562,24 +1538,24 @@ export class TurnProcessor {
       const waitMs = Math.max(20, MIN_RESPONSE_REQUEST_GAP_MS - msSinceLastRequest);
       session.responseFlushTimer = setTimeout(() => {
         session.responseFlushTimer = null;
-        this.host.flushResponseFromBufferedAudio({ session, userId });
+        this.flushResponseFromBufferedAudio({ session, userId });
       }, waitMs);
       return;
     }
 
     const outputChannelState = this.host.getOutputChannelState(session);
     if (outputChannelState.captureBlocking) {
-      this.host.scheduleResponseFromBufferedAudio({ session, userId });
+      this.scheduleResponseFromBufferedAudio({ session, userId });
       return;
     }
 
     if (outputChannelState.bargeInSuppressed) {
-      this.host.scheduleResponseFromBufferedAudio({ session, userId });
+      this.scheduleResponseFromBufferedAudio({ session, userId });
       return;
     }
 
     if (outputChannelState.locked) {
-      this.host.scheduleResponseFromBufferedAudio({
+      this.scheduleResponseFromBufferedAudio({
         session,
         userId: session.pendingResponse?.userId || userId
       });
@@ -1596,14 +1572,14 @@ export class TurnProcessor {
     }
 
     if (outputChannelState.turnBacklog > 0) {
-      this.host.scheduleResponseFromBufferedAudio({ session, userId });
+      this.scheduleResponseFromBufferedAudio({ session, userId });
       return;
     }
 
-    if (this.host.isRealtimeResponseActive(session)) {
+    if (this.host.replyManager.isRealtimeResponseActive(session)) {
       session.responseFlushTimer = setTimeout(() => {
         session.responseFlushTimer = null;
-        this.host.flushResponseFromBufferedAudio({ session, userId });
+        this.flushResponseFromBufferedAudio({ session, userId });
       }, OPENAI_ACTIVE_RESPONSE_RETRY_MS);
       return;
     }
@@ -1613,7 +1589,7 @@ export class TurnProcessor {
       session.pendingRealtimeInputBytes = 0;
       const emitCreateEvent =
         !providerSupports(session.mode || "", "textInput") || this.host.shouldUseNativeRealtimeReply({ session });
-      const created = this.host.createTrackedAudioResponse({
+      const created = this.host.replyManager.createTrackedAudioResponse({
         session,
         userId,
         source: "turn_flush",
@@ -1621,7 +1597,7 @@ export class TurnProcessor {
         emitCreateEvent
       });
       if (!created) {
-        this.host.scheduleResponseFromBufferedAudio({ session, userId });
+        this.scheduleResponseFromBufferedAudio({ session, userId });
       }
     } catch (error) {
       this.store.logAction({

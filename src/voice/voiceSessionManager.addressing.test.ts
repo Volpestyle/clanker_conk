@@ -2064,7 +2064,7 @@ test("runRealtimeTurn in voice_agent retries full ASR model after empty mini tra
     settingsSnapshot: baseSettings()
   };
 
-  await manager.runRealtimeTurn({
+  await manager.turnProcessor.runRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.alloc(96_000, 1),
@@ -2116,7 +2116,7 @@ test("runRealtimeTurn skips ASR on very short speaking_end clips", async () => {
     settingsSnapshot: baseSettings()
   };
 
-  await manager.runRealtimeTurn({
+  await manager.turnProcessor.runRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([1, 2, 3, 4]),
@@ -2179,7 +2179,7 @@ test("runRealtimeTurn transcribes speaking_end clips above minimum duration thre
   );
   const aboveThresholdClip = Buffer.alloc(minAsrClipBytes + 2, 10);
 
-  await manager.runRealtimeTurn({
+  await manager.turnProcessor.runRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: aboveThresholdClip,
@@ -2245,7 +2245,7 @@ test("runRealtimeTurn forwards short post-reply clips through merged realtime ge
     })
   };
 
-  await manager.runRealtimeTurn({
+  await manager.turnProcessor.runRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.alloc(22_080, 1),
@@ -2300,7 +2300,7 @@ test("runRealtimeTurn drops near-silent clips before ASR", async () => {
     settingsSnapshot: baseSettings()
   };
 
-  await manager.runRealtimeTurn({
+  await manager.turnProcessor.runRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.alloc(96_000, 0),
@@ -2411,7 +2411,7 @@ test("runRealtimeTurn does not forward audio when reply decision denies turn", a
     }
   };
 
-  const turnRun = manager.runRealtimeTurn({
+  const turnRun = manager.turnProcessor.runRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([1, 2, 3, 4]),
@@ -2468,7 +2468,7 @@ test("runRealtimeTurn queues direct-addressed bot-turn-open turns for deferred f
     settingsSnapshot: baseSettings()
   };
 
-  await manager.runRealtimeTurn({
+  await manager.turnProcessor.runRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([1, 2, 3, 4]),
@@ -2515,7 +2515,7 @@ test("runRealtimeTurn queues non-direct bot-turn-open turns for deferred flush",
     settingsSnapshot: baseSettings()
   };
 
-  await manager.runRealtimeTurn({
+  await manager.turnProcessor.runRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([8, 9, 10, 11]),
@@ -2565,7 +2565,7 @@ test("runRealtimeTurn logs buffered output-lock telemetry when deferring a turn"
     settingsSnapshot: baseSettings()
   };
 
-  await manager.runRealtimeTurn({
+  await manager.turnProcessor.runRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([21, 22, 23, 24]),
@@ -2620,7 +2620,7 @@ test("runRealtimeTurn drops classifier_deny turns without deferral", async () =>
     settingsSnapshot: baseSettings()
   };
 
-  await manager.runRealtimeTurn({
+  await manager.turnProcessor.runRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([12, 13, 14, 15]),
@@ -2651,25 +2651,25 @@ test("queueRealtimeTurn keeps only one merged pending turn while realtime drain 
     pendingRealtimeTurns: []
   };
 
-  manager.queueRealtimeTurn({
+  manager.turnProcessor.queueRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([1]),
     captureReason: "r1"
   });
-  manager.queueRealtimeTurn({
+  manager.turnProcessor.queueRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([2]),
     captureReason: "r2"
   });
-  manager.queueRealtimeTurn({
+  manager.turnProcessor.queueRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([3]),
     captureReason: "r3"
   });
-  manager.queueRealtimeTurn({
+  manager.turnProcessor.queueRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([4]),
@@ -2701,13 +2701,13 @@ test("queueRealtimeTurn coalesces queued turns even when speaker or reason chang
     pendingRealtimeTurns: []
   };
 
-  manager.queueRealtimeTurn({
+  manager.turnProcessor.queueRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([1, 2, 3]),
     captureReason: "speaking_end"
   });
-  manager.queueRealtimeTurn({
+  manager.turnProcessor.queueRealtimeTurn({
     session,
     userId: "speaker-2",
     pcmBuffer: Buffer.from([4, 5]),
@@ -2758,7 +2758,7 @@ test("runRealtimeTurn skips stale queued turns when newer backlog exists", async
     settingsSnapshot: baseSettings()
   };
 
-  await manager.runRealtimeTurn({
+  await manager.turnProcessor.runRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([1, 2, 3, 4]),
@@ -2800,7 +2800,7 @@ test("runRealtimeTurn uses brain reply generation when admission allows turn", a
     settingsSnapshot: baseSettings()
   };
 
-  await manager.runRealtimeTurn({
+  await manager.turnProcessor.runRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([8, 9, 10, 11]),
@@ -2818,8 +2818,8 @@ test("forwardRealtimeTextTurnToBrain waits for turn-context refresh before sendi
   const requestCalls = [];
   let releaseContextRefresh = () => undefined;
   const manager = createManager();
-  manager.createTrackedAudioResponse = () => true;
-  manager.prepareRealtimeTurnContext = async () => {
+  manager.replyManager.createTrackedAudioResponse = () => true;
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {
     await new Promise((resolve) => {
       releaseContextRefresh = resolve;
     });
@@ -2865,12 +2865,12 @@ test("forwardRealtimeTurnAudio schedules response without waiting for turn-conte
   let releaseContextRefresh = () => undefined;
   let scheduledCalls = 0;
   const manager = createManager();
-  manager.prepareRealtimeTurnContext = async () => {
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {
     await new Promise((resolve) => {
       releaseContextRefresh = resolve;
     });
   };
-  manager.scheduleResponseFromBufferedAudio = () => {
+  manager.turnProcessor.scheduleResponseFromBufferedAudio = () => {
     scheduledCalls += 1;
   };
 
@@ -2912,7 +2912,7 @@ test("smoke: runRealtimeBrainReply passes join-window context into generation", 
     { userId: "speaker-1", displayName: "alice" },
     { userId: "speaker-2", displayName: "bob" }
   ];
-  manager.prepareRealtimeTurnContext = async () => {};
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => true;
   manager.generateVoiceTurn = async (payload) => {
     generationPayloads.push(payload);
@@ -3009,7 +3009,7 @@ test("runRealtimeBrainReply retries fired join greetings instead of accepting an
     candidates: []
   });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.prepareRealtimeTurnContext = async () => {};
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = (payload) => {
     requestedRealtimeUtterances.push(payload);
     return true;
@@ -3079,7 +3079,7 @@ test("runRealtimeBrainReply supersedes stale reply when newer realtime input is 
     candidates: []
   });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.prepareRealtimeTurnContext = async () => {};
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => {
     requestedRealtimeUtterances += 1;
     return true;
@@ -3141,7 +3141,7 @@ test("runRealtimeBrainReply ignores raw newer inbound timestamps without queued 
     candidates: []
   });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.prepareRealtimeTurnContext = async () => {};
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => {
     requestedRealtimeUtterances += 1;
     return true;
@@ -3199,7 +3199,7 @@ test("runRealtimeBrainReply keeps assertive direct-address reply when queued spe
     { userId: "speaker-1", displayName: "alice" },
     { userId: "speaker-2", displayName: "bob" }
   ];
-  manager.prepareRealtimeTurnContext = async () => {};
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => {
     requestedRealtimeUtterances += 1;
     return true;
@@ -3269,7 +3269,7 @@ test("runRealtimeBrainReply keeps ALL-target replies when queued speaker cannot 
     { userId: "speaker-1", displayName: "alice" },
     { userId: "speaker-2", displayName: "bob" }
   ];
-  manager.prepareRealtimeTurnContext = async () => {};
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => {
     requestedRealtimeUtterances += 1;
     return true;
@@ -3340,7 +3340,7 @@ test("runRealtimeBrainReply ignores near-silent queued turns for supersede check
     candidates: []
   });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.prepareRealtimeTurnContext = async () => {};
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => {
     requestedRealtimeUtterances += 1;
     return true;
@@ -3403,7 +3403,7 @@ test("runRealtimeBrainReply does not supersede stale playback on active capture 
     candidates: []
   });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.prepareRealtimeTurnContext = async () => {};
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => {
     requestedRealtimeUtterances += 1;
     return true;
@@ -3469,7 +3469,7 @@ test("runRealtimeBrainReply supersedes join greeting on promoted live capture be
     candidates: []
   });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.prepareRealtimeTurnContext = async () => {};
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => {
     requestedRealtimeUtterances += 1;
     return true;
@@ -3538,7 +3538,7 @@ test("runRealtimeBrainReply supersedes stale playback when a newer finalized rea
     candidates: []
   });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.prepareRealtimeTurnContext = async () => {};
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => {
     requestedRealtimeUtterances += 1;
     return true;
@@ -3601,7 +3601,7 @@ test("runRealtimeBrainReply ends VC when model requests leave directive", async 
     candidates: []
   });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.prepareRealtimeTurnContext = async () => {};
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => true;
   manager.generateVoiceTurn = async () => ({
     text: "aight, peace out",
@@ -3653,7 +3653,7 @@ test("runRealtimeBrainReply plays inline and trailing soundboard directives in o
     candidates: []
   });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.prepareRealtimeTurnContext = async () => {};
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
   manager.generateVoiceTurn = async () => ({
     text: "yo [[SOUNDBOARD:airhorn@123]] done",
     soundboardRefs: ["rimshot@456"]
@@ -3711,7 +3711,7 @@ test("runRealtimeBrainReply treats engaged thread turns as non-eager even withou
     candidates: []
   });
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
-  manager.prepareRealtimeTurnContext = async () => {};
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
   manager.requestRealtimeTextUtterance = () => true;
   manager.generateVoiceTurn = async (payload) => {
     generationPayloads.push(payload);
@@ -3793,7 +3793,7 @@ test("runRealtimeTurn uses native realtime forwarding when strategy is native", 
   };
 
   const pcmBuffer = Buffer.from([8, 9, 10, 11]);
-  await manager.runRealtimeTurn({
+  await manager.turnProcessor.runRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer,
@@ -3851,7 +3851,7 @@ test("runRealtimeTurn keeps native strategy when soundboard is enabled", async (
   };
 
   const pcmBuffer = Buffer.from([8, 9, 10, 11]);
-  await manager.runRealtimeTurn({
+  await manager.turnProcessor.runRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer,
@@ -3918,7 +3918,7 @@ test("runRealtimeTurn forwards per-user ASR transcript turns into OpenAI room-br
     })
   };
 
-  await manager.runRealtimeTurn({
+  await manager.turnProcessor.runRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: null,
@@ -3990,7 +3990,7 @@ test("runRealtimeTurn forwards shared ASR transcript turns into OpenAI room-brai
     })
   };
 
-  await manager.runRealtimeTurn({
+  await manager.turnProcessor.runRealtimeTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: null,
@@ -4329,7 +4329,7 @@ test("bindRealtimeHandlers logs OpenAI realtime response.done usage cost", () =>
     cleanupHandlers: []
   };
 
-  manager.bindRealtimeHandlers(session, session.settingsSnapshot);
+  manager.sessionLifecycle.bindRealtimeHandlers(session, session.settingsSnapshot);
 
   const onResponseDone = handlerMap.get("response_done");
   assert.equal(typeof onResponseDone, "function");
@@ -4418,7 +4418,7 @@ test("bindRealtimeHandlers persists only final realtime transcript events", () =
     cleanupHandlers: []
   };
 
-  manager.bindRealtimeHandlers(session, session.settingsSnapshot);
+  manager.sessionLifecycle.bindRealtimeHandlers(session, session.settingsSnapshot);
 
   const onTranscript = handlerMap.get("transcript");
   assert.equal(typeof onTranscript, "function");
@@ -4491,7 +4491,7 @@ test("runSttPipelineTurn exits before generation when turn admission denies spea
     })
   };
 
-  const turnRun = manager.runSttPipelineTurn({
+  const turnRun = manager.turnProcessor.runSttPipelineTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([4, 5, 6, 7]),
@@ -4796,7 +4796,7 @@ test("runSttPipelineTurn queues bot-turn-open transcripts for deferred flush", a
     settingsSnapshot: baseSettings()
   };
 
-  await manager.runSttPipelineTurn({
+  await manager.turnProcessor.runSttPipelineTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([4, 5, 6, 7]),
@@ -4841,7 +4841,7 @@ test("runSttPipelineTurn retries full ASR model after empty mini transcript", as
     settingsSnapshot: baseSettings()
   };
 
-  await manager.runSttPipelineTurn({
+  await manager.turnProcessor.runSttPipelineTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.alloc(96_000, 1),
@@ -4894,7 +4894,7 @@ test("runSttPipelineTurn drops near-silent clips before ASR", async () => {
     settingsSnapshot: baseSettings()
   };
 
-  await manager.runSttPipelineTurn({
+  await manager.turnProcessor.runSttPipelineTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.alloc(96_000, 0),
@@ -4934,7 +4934,7 @@ test("runSttPipelineTurn empty transcripts escalate after streak threshold", asy
   };
 
   for (let index = 0; index < 3; index += 1) {
-    await manager.runSttPipelineTurn({
+    await manager.turnProcessor.runSttPipelineTurn({
       session,
       userId: "speaker-1",
       pcmBuffer: Buffer.alloc(48_000, 1),
@@ -4962,7 +4962,7 @@ test("queueSttPipelineTurn keeps a bounded FIFO backlog while a turn is running"
   manager.store.logAction = (row) => {
     runtimeLogs.push(row);
   };
-  manager.runSttPipelineTurn = async ({ captureReason }) => {
+  manager.turnProcessor.runSttPipelineTurn = async ({ captureReason }) => {
     seenCaptureReasons.push(captureReason);
     if (!firstTurnStarted) {
       firstTurnStarted = true;
@@ -4983,7 +4983,7 @@ test("queueSttPipelineTurn keeps a bounded FIFO backlog while a turn is running"
     pendingSttTurnsQueue: []
   };
 
-  manager.queueSttPipelineTurn({
+  manager.turnProcessor.queueSttPipelineTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([1, 2, 3]),
@@ -4993,7 +4993,7 @@ test("queueSttPipelineTurn keeps a bounded FIFO backlog while a turn is running"
 
   const queuedCount = STT_TURN_QUEUE_MAX + 2;
   for (let index = 0; index < queuedCount; index += 1) {
-    manager.queueSttPipelineTurn({
+    manager.turnProcessor.queueSttPipelineTurn({
       session,
       userId: "speaker-1",
       pcmBuffer: Buffer.from([4 + index, 5 + index, 6 + index]),
@@ -5053,7 +5053,7 @@ test("queueSttPipelineTurn coalesces adjacent queued STT turns from the same spe
   };
   session.pendingSttTurnsQueue[0].session = session;
 
-  manager.queueSttPipelineTurn({
+  manager.turnProcessor.queueSttPipelineTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([4, 5, 6, 7]),
@@ -5114,7 +5114,7 @@ test("runSttPipelineTurn drops stale queued turns before ASR when backlog exists
     settingsSnapshot: baseSettings()
   };
 
-  await manager.runSttPipelineTurn({
+  await manager.turnProcessor.runSttPipelineTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([1, 2, 3, 4]),
@@ -5172,7 +5172,7 @@ test("runSttPipelineTurn transcribes stale queued turns for context but skips re
     settingsSnapshot: baseSettings()
   };
 
-  await manager.runSttPipelineTurn({
+  await manager.turnProcessor.runSttPipelineTurn({
     session,
     userId: "speaker-1",
     pcmBuffer: Buffer.from([1, 2, 3, 4]),
@@ -5624,7 +5624,7 @@ test("buildRealtimeInstructions forbids claiming screen vision before frame cont
     reason: null
   });
 
-  const instructions = manager.buildRealtimeInstructions({
+  const instructions = manager.instructionManager.buildRealtimeInstructions({
     session: {
       id: "session-screen-vision-1",
       guildId: "guild-1",

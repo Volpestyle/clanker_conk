@@ -1,6 +1,7 @@
 import { SYSTEM_SPEECH_SOURCE } from "./systemSpeechOpportunity.ts";
 import { JOIN_GREETING_LLM_WINDOW_MS } from "./voiceSessionManager.constants.ts";
 import { isRealtimeMode } from "./voiceSessionHelpers.ts";
+import type { ReplyManager } from "./replyManager.ts";
 import type {
   JoinGreetingOpportunityState,
   OutputChannelState,
@@ -29,16 +30,11 @@ export interface GreetingManagerHost {
     } | null;
   };
   store: GreetingStoreLike;
+  replyManager: Pick<ReplyManager, "createTrackedAudioResponse">;
   getOutputChannelState: (session: VoiceSession) => OutputChannelState;
   shouldUseNativeRealtimeReply: (args: {
     session: VoiceSession;
     settings?: GreetingSettings;
-  }) => boolean;
-  createTrackedAudioResponse: (args: {
-    session: VoiceSession;
-    source?: string;
-    emitCreateEvent?: boolean;
-    resetRetryState?: boolean;
   }) => boolean;
   runRealtimeBrainReply: (args: {
     session: VoiceSession;
@@ -185,7 +181,7 @@ export class GreetingManager {
       settings: resolvedSettings
     });
     if (useNativeRealtimeReply) {
-      this.host.createTrackedAudioResponse({
+      this.host.replyManager.createTrackedAudioResponse({
         session,
         source: SYSTEM_SPEECH_SOURCE.JOIN_GREETING,
         emitCreateEvent: true,

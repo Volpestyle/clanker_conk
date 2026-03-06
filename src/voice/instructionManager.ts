@@ -222,17 +222,6 @@ export interface InstructionManagerHost {
     session: VoiceSession,
     args: { delayMs: number; reason?: string }
   ) => void;
-  queueRealtimeTurnContextRefresh: (
-    args: QueueRealtimeTurnContextRefreshArgs
-  ) => void;
-  prepareRealtimeTurnContext: (args: PrepareRealtimeTurnContextArgs) => Promise<void>;
-  buildRealtimeMemorySlice: (
-    args: BuildRealtimeMemorySliceArgs
-  ) => Promise<RealtimeInstructionMemorySlice>;
-  refreshRealtimeInstructions: (
-    args: RefreshRealtimeInstructionsArgs
-  ) => Promise<void>;
-  buildRealtimeInstructions: (args: BuildRealtimeInstructionsArgs) => string;
 }
 
 export class InstructionManager {
@@ -265,7 +254,7 @@ export class InstructionManager {
           const queued = pendingRefreshState.pending;
           pendingRefreshState.pending = null;
           if (!queued) break;
-          await this.host.prepareRealtimeTurnContext({
+          await this.prepareRealtimeTurnContext({
             session,
             settings: queued.settings,
             userId: queued.userId,
@@ -299,7 +288,7 @@ export class InstructionManager {
       }
 
       if (nextRefresh) {
-        this.host.queueRealtimeTurnContextRefresh({
+        this.queueRealtimeTurnContextRefresh({
           session,
           settings: nextRefresh.settings,
           userId: nextRefresh.userId,
@@ -324,14 +313,14 @@ export class InstructionManager {
     if (!providerSupports(session.mode || "", "updateInstructions")) return;
 
     const normalizedTranscript = normalizeVoiceText(transcript, REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS);
-    const memorySlice = await this.host.buildRealtimeMemorySlice({
+    const memorySlice = await this.buildRealtimeMemorySlice({
       session,
       settings,
       userId,
       transcript: normalizedTranscript
     });
 
-    await this.host.refreshRealtimeInstructions({
+    await this.refreshRealtimeInstructions({
       session,
       settings,
       reason: "turn_context",
@@ -483,7 +472,7 @@ export class InstructionManager {
 
     session.realtimeInstructionRefreshTimer = setTimeout(() => {
       session.realtimeInstructionRefreshTimer = null;
-      void this.host.refreshRealtimeInstructions({
+      void this.refreshRealtimeInstructions({
         session,
         settings: settings || session.settingsSnapshot || this.store.getSettings(),
         reason,
@@ -518,7 +507,7 @@ export class InstructionManager {
       settings: resolvedSettings,
       reason
     });
-    const instructions = this.host.buildRealtimeInstructions({
+    const instructions = this.buildRealtimeInstructions({
       session,
       settings: resolvedSettings,
       speakerUserId,

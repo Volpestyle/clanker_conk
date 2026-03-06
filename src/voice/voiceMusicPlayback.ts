@@ -216,7 +216,7 @@ export function scheduleBotSpeechMusicUnduck(manager: any, session, settings = n
   const normalizedDelayMs = clamp(Math.round(Number(delayMs) || 0), 0, 15_000);
   session.botSpeechMusicUnduckTimer = setTimeout(() => {
     session.botSpeechMusicUnduckTimer = null;
-    if (manager.hasBufferedTtsPlayback(session) || Boolean(session.botTurnOpen)) {
+    if (manager.replyManager.hasBufferedTtsPlayback(session) || Boolean(session.botTurnOpen)) {
       scheduleBotSpeechMusicUnduck(manager, session, settings, Math.min(200, normalizedDelayMs || 200));
       return;
     }
@@ -471,13 +471,13 @@ export function extractMusicPlayQuery(manager: any, transcript = "") {
 
 export function haltSessionOutputForMusicPlayback(manager: any, session, reason = "music_playback_started") {
   if (!session || session.ending) return;
-  manager.clearPendingResponse(session);
+  manager.replyManager.clearPendingResponse(session);
   // Clear main-process reply state WITHOUT sending stop_playback IPC —
   // the subprocess's handleMusicPlay already resets playback before
   // starting music. Sending stop_playback here would kill the music
   // process that just started.
   manager.maybeClearActiveReplyInterruptionPolicy(session);
-  manager.clearBargeInOutputSuppression(session, "music_playback_started");
+  manager.bargeInController.clearBargeInOutputSuppression(session, "music_playback_started");
   if (session.botTurnResetTimer) {
     clearTimeout(session.botTurnResetTimer);
     session.botTurnResetTimer = null;

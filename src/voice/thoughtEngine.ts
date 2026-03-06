@@ -1,6 +1,7 @@
 import { clamp } from "../utils.ts";
 import { VOICE_THOUGHT_LOOP_BUSY_RETRY_MS, VOICE_THOUGHT_MAX_CHARS } from "./voiceSessionManager.constants.ts";
 import { normalizeVoiceText } from "./voiceSessionHelpers.ts";
+import type { TurnProcessor } from "./turnProcessor.ts";
 import type {
   MusicPlaybackPhase,
   VoiceSession
@@ -63,7 +64,7 @@ export interface ThoughtEngineHost {
     lockReason?: string | null;
   };
   hasReplayBlockingActiveCapture: (session: VoiceSession) => boolean;
-  getRealtimeTurnBacklogSize: (session: VoiceSession) => number;
+  turnProcessor: Pick<TurnProcessor, "getRealtimeTurnBacklogSize">;
   getDeferredQueuedUserTurns: (session: VoiceSession) => unknown[];
   countHumanVoiceParticipants: (session: VoiceSession) => number;
   scheduleVoiceThoughtLoop: (args: {
@@ -244,7 +245,7 @@ export class ThoughtEngine {
         retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
       };
     }
-    if (this.host.getRealtimeTurnBacklogSize(session) > 0) {
+    if (this.host.turnProcessor.getRealtimeTurnBacklogSize(session) > 0) {
       return {
         allow: false,
         reason: "pending_realtime_turns",
