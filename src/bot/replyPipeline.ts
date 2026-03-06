@@ -2,6 +2,7 @@ import { clamp } from "lodash";
 import { sanitizeBotText, sleep } from "../utils.ts";
 import { buildReplyPrompt, buildSystemPrompt } from "../prompts.ts";
 import { getMediaPromptCraftGuidance } from "../promptCore.ts";
+import type { ClankerBot, ReplyAttemptOptions } from "../bot.ts";
 import {
   REPLY_OUTPUT_JSON_SCHEMA,
   composeReplyImagePrompt,
@@ -16,6 +17,7 @@ import {
 } from "../botHelpers.ts";
 import { getLocalTimeZoneLabel } from "../automation.ts";
 import { buildReplyToolSet, executeReplyTool } from "../tools/replyTools.ts";
+import type { ReplyToolContext, ReplyToolRuntime } from "../tools/replyTools.ts";
 import {
   maybeRegenerateWithMemoryLookup as maybeRegenerateWithMemoryLookupForReplyFollowup,
   resolveReplyFollowupGenerationSettings as resolveReplyFollowupGenerationSettingsForReplyFollowup,
@@ -44,10 +46,268 @@ import {
   getVoiceSettings,
   isDevTaskEnabled
 } from "../settings/agentStack.ts";
+import type { Settings } from "../settings/settingsSchema.ts";
+
+type ReplyPipelineAttachment = {
+  url?: string;
+  proxyURL?: string;
+};
+
+type ReplyPipelineAttachmentCollection = {
+  size?: number;
+  values: () => IterableIterator<ReplyPipelineAttachment>;
+};
+
+type ReplyPipelineEmbed = {
+  url?: string;
+  video?: {
+    url?: string;
+    proxyURL?: string;
+  } | null;
+};
+
+type ReplyPipelineGuildMember = {
+  id?: string;
+  displayName?: string;
+  nickname?: string | null;
+  user?: {
+    id?: string;
+    username?: string;
+    globalName?: string | null;
+  } | null;
+};
+
+type ReplyPipelineGuild = {
+  members?: {
+    cache?: {
+      size?: number;
+      values: () => IterableIterator<ReplyPipelineGuildMember>;
+    };
+    search?: (options: {
+      query: string;
+      limit: number;
+    }) => Promise<{
+      values: () => IterableIterator<ReplyPipelineGuildMember>;
+    }>;
+  } | null;
+};
+
+type ReplyPipelineMentions = {
+  users?: {
+    size: number;
+    has: (id: string | undefined) => boolean;
+  } | null;
+  repliedUser?: {
+    id: string;
+  } | null;
+};
+
+type ReplyMessagePayload = Record<string, unknown> & {
+  content: string;
+  allowedMentions?: {
+    repliedUser?: boolean;
+  };
+};
+
+type ReplyPipelineSentMessage = {
+  id: string;
+  createdTimestamp: number;
+  guildId: string;
+  channelId: string;
+  content?: string;
+  attachments?: ReplyPipelineAttachmentCollection;
+  embeds?: ReplyPipelineEmbed[];
+};
+
+type ReplyPipelineChannel = {
+  sendTyping: () => Promise<unknown>;
+  send: (payload: ReplyMessagePayload) => Promise<ReplyPipelineSentMessage>;
+};
+
+type ReplyPipelineMessage = ReplyPipelineSentMessage & {
+  content: string;
+  guild: ReplyPipelineGuild | null;
+  author: {
+    id: string;
+    username?: string;
+    bot?: boolean;
+  };
+  member?: {
+    displayName?: string | null;
+  } | null;
+  channel: ReplyPipelineChannel;
+  mentions?: ReplyPipelineMentions;
+  react: (emoji: string) => Promise<unknown>;
+  reply: (payload: ReplyMessagePayload) => Promise<ReplyPipelineSentMessage>;
+};
+
+type ReplyAddressSignal =
+  | ReplyAttemptOptions["addressSignal"]
+  | Awaited<ReturnType<ClankerBot["getReplyAddressSignal"]>>;
+type ReplyRecentMessage = Record<string, unknown>;
+type ReplyImageInput = Record<string, unknown> & {
+  url?: string;
+  mediaType?: string;
+  contentType?: string;
+  dataBase64?: string;
+};
+type ReplyGeneration = {
+  provider?: string;
+  model?: string;
+  usage?: Record<string, unknown> | null;
+  costUsd?: number | null;
+  text: string;
+  rawContent?: unknown;
+  toolCalls?: Array<{
+    id: string;
+    name: string;
+    input: Record<string, unknown>;
+  }>;
+};
+type ReplyToolExecutionResult = Awaited<ReturnType<typeof executeReplyTool>>;
+type ReplyPerformance = ReturnType<typeof createReplyPerformanceTracker>;
+type ReplyPromptCaptureState = ReturnType<typeof createReplyPromptCapture>;
+type ReplyPrompts = ReturnType<typeof buildLoggedReplyPrompts>;
+type ReplyContinuityContext = Awaited<ReturnType<typeof loadConversationContinuityContext>>;
+type ReplyPromptBase = Parameters<typeof buildReplyPrompt>[0];
+type ReplyTrace = {
+  guildId: string;
+  channelId: string;
+  userId: string;
+};
+type ReplyDirective = ReturnType<typeof parseStructuredReplyOutput>;
+type ReplyMediaDirective = ReturnType<typeof pickReplyMediaDirective>;
+type ReplyMentionResolution = Awaited<ReturnType<typeof resolveDeterministicMentionsForMentions>>;
+type ReplyReactionResult = Awaited<ReturnType<ClankerBot["maybeApplyReplyReaction"]>>;
+type ReplyScreenShareOffer = Awaited<ReturnType<ClankerBot["maybeHandleScreenShareOfferIntent"]>>;
+type ReplyFollowupGenerationSettings = ReturnType<typeof resolveReplyFollowupGenerationSettingsForReplyFollowup>;
+type ReplyWebSearchState = ReturnType<ClankerBot["buildWebSearchContext"]> & {
+  summaryText?: string | null;
+};
+
+type ReplyPipelineContext = {
+  shouldRun: true;
+  recentMessages: ReplyRecentMessage[];
+  addressSignal: ReplyAddressSignal;
+  triggerMessageIds: string[];
+  addressed: boolean;
+  reactionEagerness: number;
+  isReplyChannel: boolean;
+  replyEagerness: number;
+  reactionEmojiOptions: string[];
+  source: string;
+  performance: ReplyPerformance;
+  memorySlice: ReplyContinuityContext["memorySlice"];
+  replyMediaMemoryFacts: ReturnType<ClankerBot["buildMediaMemoryFacts"]>;
+  attachmentImageInputs: ReplyImageInput[];
+  imageBudget: ReturnType<ClankerBot["getImageBudgetState"]>;
+  videoBudget: ReturnType<ClankerBot["getVideoGenerationBudgetState"]>;
+  mediaCapabilities: ReturnType<ClankerBot["getMediaGenerationCapabilities"]>;
+  simpleImageCapabilityReady: boolean;
+  complexImageCapabilityReady: boolean;
+  imageCapabilityReady: boolean;
+  videoCapabilityReady: boolean;
+  gifBudget: ReturnType<ClankerBot["getGifBudgetState"]>;
+  gifsConfigured: boolean;
+  webSearch: ReplyWebSearchState;
+  browserBrowse: ReturnType<ClankerBot["buildBrowserBrowseContext"]>;
+  recentConversationHistory: ReplyContinuityContext["recentConversationHistory"];
+  recentWebLookups: ReplyContinuityContext["recentWebLookups"];
+  memoryLookup: ReturnType<ClankerBot["buildMemoryLookupContext"]>;
+  videoContext: Awaited<ReturnType<ClankerBot["buildVideoReplyContext"]>>;
+  modelImageInputs: ReplyImageInput[];
+  imageLookup: ReturnType<ClankerBot["buildImageLookupContext"]>;
+  replyTrace: ReplyTrace;
+  screenShareCapability: ReturnType<ClankerBot["getVoiceScreenShareCapability"]>;
+  activeVoiceSession: ReturnType<ClankerBot["voiceSessionManager"]["getSession"]> | null;
+  inVoiceChannelNow: boolean;
+  activeVoiceParticipantRoster: string[];
+  musicState: ReturnType<ClankerBot["voiceSessionManager"]["getMusicPromptContext"]> | null;
+  musicDisambiguation: ReturnType<ClankerBot["voiceSessionManager"]["getMusicDisambiguationPromptContext"]> | null;
+  systemPrompt: string;
+  replyPromptBase: ReplyPromptBase;
+  initialUserPrompt: string;
+  replyPromptCapture: ReplyPromptCaptureState;
+  replyPrompts: ReplyPrompts;
+};
+
+type ReplyIntentHandledResult = {
+  handledByIntent: true;
+};
+
+type ReplyActionableLlmResult = {
+  handledByIntent: false;
+  generation: ReplyGeneration;
+  usedWebSearchFollowup: boolean;
+  usedBrowserBrowseFollowup: boolean;
+  usedMemoryLookupFollowup: boolean;
+  usedImageLookupFollowup: boolean;
+  followupGenerationSettings: ReplyFollowupGenerationSettings;
+  mediaPromptLimit: number;
+  replyDirective: ReplyDirective;
+  webSearch: ReplyWebSearchState;
+  browserBrowse: ReturnType<ClankerBot["buildBrowserBrowseContext"]>;
+  memoryLookup: ReturnType<ClankerBot["buildMemoryLookupContext"]>;
+  imageLookup: ReturnType<ClankerBot["buildImageLookupContext"]>;
+  modelImageInputs: ReplyImageInput[];
+  replyPrompts: ReplyPrompts;
+};
+
+type ReplyLlmResult = ReplyIntentHandledResult | ReplyActionableLlmResult;
+
+type ReplySkippedActionResult = {
+  skipped: true;
+};
+
+type ReplySendableActionResult = {
+  skipped: false;
+  reaction: ReplyReactionResult;
+  memoryLine: ReplyDirective["memoryLine"];
+  selfMemoryLine: ReplyDirective["selfMemoryLine"];
+  memorySaved: boolean;
+  selfMemorySaved: boolean;
+  mediaDirective: ReplyMediaDirective;
+  finalText: string;
+  mentionResolution: ReplyMentionResolution;
+  screenShareOffer: ReplyScreenShareOffer;
+  allowMediaOnlyReply: boolean;
+  modelProducedSkip: boolean;
+  modelProducedEmpty: boolean;
+  payload: ReplyMessagePayload;
+  imageUsed: boolean;
+  imageBudgetBlocked: boolean;
+  imageCapabilityBlocked: boolean;
+  imageVariantUsed: string | null;
+  videoUsed: boolean;
+  videoBudgetBlocked: boolean;
+  videoCapabilityBlocked: boolean;
+  gifUsed: boolean;
+  gifBudgetBlocked: boolean;
+  gifConfigBlocked: boolean;
+  imagePrompt: ReplyDirective["imagePrompt"];
+  complexImagePrompt: ReplyDirective["complexImagePrompt"];
+  videoPrompt: ReplyDirective["videoPrompt"];
+  gifQuery: ReplyDirective["gifQuery"];
+};
+
+type ReplyActionResult = ReplySkippedActionResult | ReplySendableActionResult;
+
+function isReplyActionableLlmResult(result: ReplyLlmResult): result is ReplyActionableLlmResult {
+  return result.handledByIntent === false;
+}
+
+function isReplySendableActionResult(result: ReplyActionResult): result is ReplySendableActionResult {
+  return result.skipped === false;
+}
 
 
 
-export async function buildReplyContext(bot: any, message: any, settings: any, options: any) {
+export async function buildReplyContext(
+  bot: ClankerBot,
+  message: ReplyPipelineMessage,
+  settings: Settings,
+  options: ReplyAttemptOptions
+): Promise<ReplyPipelineContext | false> {
   const memorySettings = getMemorySettings(settings);
   const activity = getActivitySettings(settings);
   const directiveSettings = getDirectiveSettings(settings);
@@ -67,7 +327,7 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
         .filter(Boolean)
     )
   ];
-  const addressed = addressSignal.triggered;
+  const addressed = Boolean(addressSignal?.triggered);
   const reactionEagerness = clamp(Number(activity.reactionLevel) || 0, 0, 100);
   const isReplyChannel = bot.isReplyChannel(settings, message.channelId);
   const replyEagerness = clamp(
@@ -110,7 +370,16 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
     },
     source,
     recentMessages,
-    loadPromptMemorySlice: (payload) => bot.loadPromptMemorySlice(payload),
+    loadPromptMemorySlice: (payload) =>
+      bot.loadPromptMemorySlice({
+        settings: payload.settings,
+        userId: payload.userId,
+        guildId: String(payload.guildId || message.guildId),
+        channelId: payload.channelId,
+        queryText: payload.queryText,
+        trace: payload.trace,
+        source: payload.source
+      }),
     loadRecentLookupContext: (payload) => bot.getRecentLookupContextForPrompt(payload),
     loadRecentConversationHistory: (payload) => bot.getConversationHistoryForPrompt(payload),
     loadAdaptiveDirectives:
@@ -131,7 +400,7 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
     userFacts: memorySlice.userFacts,
     relevantFacts: memorySlice.relevantFacts
   });
-  const attachmentImageInputs = bot.getImageInputs(message);
+  const attachmentImageInputs: ReplyImageInput[] = bot.getImageInputs(message);
   const imageBudget = bot.getImageBudgetState(settings);
   const videoBudget = bot.getVideoGenerationBudgetState(settings);
   const mediaCapabilities = bot.getMediaGenerationCapabilities(settings);
@@ -141,7 +410,7 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
   const videoCapabilityReady = mediaCapabilities.videoReady;
   const gifBudget = bot.getGifBudgetState(settings);
   const gifsConfigured = Boolean(bot.gifs?.isConfigured?.());
-  const webSearch = bot.buildWebSearchContext(settings, message.content);
+  const webSearch: ReplyWebSearchState = bot.buildWebSearchContext(settings, message.content);
   const browserBrowse = bot.buildBrowserBrowseContext(settings);
   const recentWebLookups = continuity.recentWebLookups;
   const recentConversationHistory = continuity.recentConversationHistory;
@@ -157,7 +426,10 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
       source
     }
   });
-  const modelImageInputs = [...attachmentImageInputs, ...(videoContext.frameImages || [])].slice(0, MAX_MODEL_IMAGE_INPUTS);
+  const modelImageInputs: ReplyImageInput[] = [
+    ...attachmentImageInputs,
+    ...(videoContext.frameImages || [])
+  ].slice(0, MAX_MODEL_IMAGE_INPUTS);
   const imageLookup = bot.buildImageLookupContext({
     recentMessages,
     excludedUrls: modelImageInputs.map((image) => String(image?.url || "").trim())
@@ -224,12 +496,13 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
   const systemPrompt = buildSystemPrompt(settings, {
     adaptiveDirectives
   });
-  const replyPromptBase = {
+  const replyPromptBase: ReplyPromptBase = {
     message: {
       authorName: message.member?.displayName || message.author.username,
       content: message.content
     },
     triggerMessageIds,
+    imageInputs: modelImageInputs,
     recentMessages,
     relevantMessages: memorySlice.relevantMessages,
     userFacts: memorySlice.userFacts,
@@ -317,7 +590,13 @@ export async function buildReplyContext(bot: any, message: any, settings: any, o
 }
 
 
-export async function executeReplyLlm(bot: any, message: any, settings: any, options: any, ctx: any) {
+export async function executeReplyLlm(
+  bot: ClankerBot,
+  message: ReplyPipelineMessage,
+  settings: Settings,
+  _options: ReplyAttemptOptions,
+  ctx: ReplyPipelineContext
+): Promise<ReplyLlmResult> {
   const {
     addressSignal, triggerMessageIds, source, performance,
     replyTrace, systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture
@@ -342,7 +621,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     openArticleAvailable: false,
     codeAgentAvailable: isDevTaskEnabled(settings)
   });
-  const replyToolRuntime = {
+  const replyToolRuntime: ReplyToolRuntime = {
     search: bot.search,
     browser: {
       browse: async ({ settings: toolSettings, query, guildId, channelId, userId, source }) => {
@@ -374,7 +653,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     store: bot.store,
     subAgentSessions: bot.buildSubAgentSessionsRuntime()
   };
-  const replyToolContext = {
+  const replyToolContext: ReplyToolContext = {
     settings,
     guildId: message.guildId,
     channelId: message.channelId,
@@ -391,7 +670,7 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
   let replyContextMessages: Array<{ role: string; content: unknown }> = [];
 
   const llm1StartedAtMs = Date.now();
-  let generation = await bot.llm.generate({
+  let generation: ReplyGeneration = await bot.llm.generate({
     settings,
     systemPrompt,
     userPrompt: initialUserPrompt,
@@ -440,17 +719,20 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     const sequentialCalls = eligibleToolCalls.filter((tc) => !CONCURRENT_TOOL_NAMES.has(tc.name));
 
     // Run concurrent sub-agent calls in parallel
-    const concurrentResults = new Map<string, { content: string; isError?: boolean }>();
+    const concurrentResults = new Map<string, ReplyToolExecutionResult>();
     if (concurrentCalls.length > 0) {
       const settledCalls = await Promise.allSettled(concurrentCalls.map(async (toolCall) => {
-        const toolInput = toolCall.input as Record<string, unknown>;
+        const toolInput = toolCall.input;
         const result = await executeReplyTool(toolCall.name, toolInput, replyToolRuntime, replyToolContext);
         concurrentResults.set(toolCall.id, result);
       }));
       settledCalls.forEach((settled, index) => {
         if (settled.status === "fulfilled") return;
         const toolCall = concurrentCalls[index];
-        const errorMessage = String((settled.reason as Error)?.message || settled.reason || "unknown_error");
+        const errorMessage =
+          settled.reason instanceof Error
+            ? settled.reason.message
+            : String(settled.reason || "unknown_error");
         concurrentResults.set(toolCall.id, {
           content: `${toolCall.name} failed: ${errorMessage}`,
           isError: true
@@ -472,10 +754,10 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     }
 
     // Run sequential tools in order
-    const sequentialResults = new Map<string, { content: string; isError?: boolean }>();
+    const sequentialResults = new Map<string, ReplyToolExecutionResult>();
     for (const toolCall of sequentialCalls) {
-      const toolInput = toolCall.input as Record<string, unknown>;
-      let result;
+      const toolInput = toolCall.input;
+      let result: ReplyToolExecutionResult;
       if (toolCall.name === "web_search") {
         const toolQuery = String(toolInput.query || "");
         webSearch = await runModelRequestedWebSearchForReplyFollowup(
@@ -536,8 +818,8 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
           query: String(toolInput.query || "")
         });
         modelImageInputs = bot.mergeImageInputs({
-          existing: modelImageInputs,
-          additions: imageLookup.selectedImageInputs || [],
+          baseInputs: modelImageInputs,
+          extraInputs: imageLookup.selectedImageInputs || [],
           maxInputs: MAX_MODEL_IMAGE_INPUTS
         });
         usedImageLookupFollowup = Boolean(imageLookup?.used);
@@ -748,7 +1030,14 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
 }
 
 
-export async function dispatchReplyActions(bot: any, message: any, settings: any, options: any, ctx: any, llmResult: any) {
+export async function dispatchReplyActions(
+  bot: ClankerBot,
+  message: ReplyPipelineMessage,
+  settings: Settings,
+  _options: ReplyAttemptOptions,
+  ctx: ReplyPipelineContext,
+  llmResult: ReplyActionableLlmResult
+): Promise<ReplyActionResult> {
   const memorySettings = getMemorySettings(settings);
   const discovery = getDiscoverySettings(settings);
   const {
@@ -883,7 +1172,7 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
   finalText = mentionResolution.text;
   finalText = embedWebSearchSources(finalText, webSearch);
 
-  let payload = { content: finalText };
+  let payload: ReplyMessagePayload = { content: finalText };
   let imageUsed = false;
   let imageBudgetBlocked = false;
   let imageCapabilityBlocked = false;
@@ -1032,7 +1321,15 @@ export async function dispatchReplyActions(bot: any, message: any, settings: any
 }
 
 
-export async function sendReplyMessage(bot: any, message: any, settings: any, options: any, ctx: any, llmResult: any, actionResult: any) {
+export async function sendReplyMessage(
+  bot: ClankerBot,
+  message: ReplyPipelineMessage,
+  settings: Settings,
+  options: ReplyAttemptOptions,
+  ctx: ReplyPipelineContext,
+  llmResult: ReplyActionableLlmResult,
+  actionResult: ReplySendableActionResult
+): Promise<true> {
   const botName = getBotName(settings);
   const {
     addressSignal, triggerMessageIds, addressed,
@@ -1228,7 +1525,12 @@ export async function sendReplyMessage(bot: any, message: any, settings: any, op
 }
 
 
-export async function maybeReplyToMessagePipeline(bot: any, message: any, settings: any, options: any = {}) {
+export async function maybeReplyToMessagePipeline(
+  bot: ClankerBot,
+  message: ReplyPipelineMessage,
+  settings: Settings,
+  options: ReplyAttemptOptions = {}
+): Promise<boolean> {
   const permissions = getReplyPermissions(settings);
   if (!permissions.allowReplies) return false;
   if (!bot.canSendMessage(permissions.maxMessagesPerHour)) return false;
@@ -1238,10 +1540,20 @@ export async function maybeReplyToMessagePipeline(bot: any, message: any, settin
   if (!ctx || !ctx.shouldRun) return false;
 
   const llmResult = await executeReplyLlm(bot, message, settings, options, ctx);
-  if (llmResult.handledByIntent) return true;
+  if (!isReplyActionableLlmResult(llmResult)) return true;
+  const actionableLlmResult = llmResult;
 
-  const actionResult = await dispatchReplyActions(bot, message, settings, options, ctx, llmResult);
-  if (actionResult.skipped) return false;
+  const actionResult = await dispatchReplyActions(bot, message, settings, options, ctx, actionableLlmResult);
+  if (!isReplySendableActionResult(actionResult)) return false;
+  const sendableActionResult = actionResult;
 
-  return await sendReplyMessage(bot, message, settings, options, ctx, llmResult, actionResult);
+  return await sendReplyMessage(
+    bot,
+    message,
+    settings,
+    options,
+    ctx,
+    actionableLlmResult,
+    sendableActionResult
+  );
 }
