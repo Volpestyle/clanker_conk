@@ -12,8 +12,7 @@ import {
   runCodeAgent,
   isCodeAgentUserAllowed,
   resolveCodeAgentConfig,
-  getActiveCodeAgentTaskCount,
-  createCodeAgentSession as createCodeAgentSessionRuntime
+  getActiveCodeAgentTaskCount
 } from "./agents/codeAgent.ts";
 import { musicCommands } from "./voice/musicCommands.ts";
 import { ImageCaptionCache } from "./vision/imageCaptionCache.ts";
@@ -24,7 +23,6 @@ import {
 } from "./prompts.ts";
 import { getMediaPromptCraftGuidance } from "./promptCore.ts";
 import {
-  MAX_BROWSER_BROWSE_QUERY_LEN,
   MAX_GIF_QUERY_LEN,
   MAX_VIDEO_FALLBACK_MESSAGES,
   MAX_VIDEO_TARGET_SCAN,
@@ -72,6 +70,13 @@ import {
   normalizeReplyPerformanceSeed
 } from "./bot/replyPipelineShared.ts";
 import type { ReplyPerformanceSeed } from "./bot/replyPipelineShared.ts";
+import {
+  buildSubAgentSessionsRuntime as buildSubAgentSessionsRuntimeForAgentTasks,
+  createBrowserAgentSession as createBrowserAgentSessionForAgentTasks,
+  createCodeAgentSession as createCodeAgentSessionForAgentTasks,
+  runModelRequestedBrowserBrowse as runModelRequestedBrowserBrowseForAgentTasks,
+  runModelRequestedCodeTask as runModelRequestedCodeTaskForAgentTasks
+} from "./bot/agentTasks.ts";
 import {
   captionRecentHistoryImages as captionRecentHistoryImagesForImageAnalysis,
   extractHistoryImageCandidates as extractHistoryImageCandidatesForImageAnalysis,
@@ -142,6 +147,7 @@ import {
   pickDiscoveryChannel
 } from "./bot/discoverySchedule.ts";
 import type {
+  AgentContext,
   BotContext,
   QueueGatewayRuntime,
   ReplyPipelineRuntime,
@@ -152,17 +158,14 @@ import type { BrowserManager } from "./services/BrowserManager.ts";
 import {
   BrowserTaskRegistry,
   buildBrowserTaskScopeKey,
-  isAbortError,
-  runBrowserBrowseTask
+  isAbortError
 } from "./tools/browserTaskRuntime.ts";
-import { runOpenAiComputerUseTask } from "./tools/openAiComputerUseRuntime.ts";
 import {
   resolveOperationalChannel,
   sendToChannel
 } from "./voice/voiceOperationalMessaging.ts";
 import { maybeReplyToMessagePipeline } from "./bot/replyPipeline.ts";
 import { SubAgentSessionManager } from "./agents/subAgentSession.ts";
-import { BrowserAgentSession } from "./agents/browseAgent.ts";
 import {
   getAutomationsSettings,
   getBotName,
@@ -458,6 +461,15 @@ export class ClankerBot {
       memory: this.memory,
       client: this.client,
       botUserId: String(this.client.user?.id || "").trim() || null
+    };
+  }
+
+  toAgentContext(): AgentContext {
+    return {
+      ...this.toBotContext(),
+      browserManager: this.browserManager,
+      activeBrowserTasks: this.activeBrowserTasks,
+      subAgentSessions: this.subAgentSessions
     };
   }
 
@@ -2985,116 +2997,15 @@ export class ClankerBot {
     userId = null,
     source = "reply_message"
   }) {
-    const normalizedQuery = normalizeDirectiveText(query, MAX_BROWSER_BROWSE_QUERY_LEN);
-    const state = {
-      ...browserBrowse,
-      requested: true,
-      used: false,
-      blockedByBudget: false,
-      query: normalizedQuery,
-      text: "",
-      steps: 0,
-      hitStepLimit: false,
-      error: null
-    };
-
-    if (!state.enabled || !state.configured || !this.browserManager) {
-      return state;
-    }
-    if (!state.budget?.canBrowse) {
-      return {
-        ...state,
-        blockedByBudget: true
-      };
-    }
-    if (!normalizedQuery) {
-      return {
-        ...state,
-        error: "Missing browser browse query."
-      };
-    }
-    if (!this.llm) {
-      return {
-        ...state,
-        error: "llm_unavailable"
-      };
-    }
-
-    const browserTaskConfig = getResolvedBrowserTaskConfig(settings);
-    const maxSteps = clamp(Number(browserTaskConfig.maxStepsPerTask) || 15, 1, 30);
-    const stepTimeoutMs = clamp(Number(browserTaskConfig.stepTimeoutMs) || 30_000, 5_000, 120_000);
-    if (browserTaskConfig.runtime === "openai_computer_use" && !this.llm?.openai) {
-      return {
-        ...state,
-        error: "openai_computer_use_unavailable"
-      };
-    }
-
-    const scopeKey = buildBrowserTaskScopeKey({
+    return await runModelRequestedBrowserBrowseForAgentTasks(this.toAgentContext(), {
+      settings,
+      browserBrowse,
+      query,
       guildId,
-      channelId
+      channelId,
+      userId,
+      source
     });
-    const activeBrowserTask = this.activeBrowserTasks.beginTask(scopeKey);
-
-    try {
-      const sessionKey = `reply:${activeBrowserTask.taskId}`;
-      const trace = {
-        guildId,
-        channelId,
-        userId,
-        source: `${source}_browser_browse`
-      };
-      const result =
-        browserTaskConfig.runtime === "openai_computer_use"
-          ? await runOpenAiComputerUseTask({
-              openai: this.llm?.openai,
-              browserManager: this.browserManager,
-              store: this.store,
-              sessionKey,
-              instruction: normalizedQuery,
-              model: browserTaskConfig.openaiComputerUse.model,
-              maxSteps,
-              stepTimeoutMs,
-              trace,
-              logSource: source,
-              signal: activeBrowserTask.abortController.signal
-            })
-          : await runBrowserBrowseTask({
-              llm: this.llm,
-              browserManager: this.browserManager,
-              store: this.store,
-              sessionKey,
-              instruction: normalizedQuery,
-              provider: browserTaskConfig.localAgent.provider,
-              model: browserTaskConfig.localAgent.model,
-              maxSteps,
-              stepTimeoutMs,
-              trace,
-              logSource: source,
-              signal: activeBrowserTask.abortController.signal
-            });
-
-      return {
-        ...state,
-        used: true,
-        text: result.text,
-        steps: result.steps,
-        hitStepLimit: result.hitStepLimit
-      };
-    } catch (error) {
-      if (isAbortError(error)) {
-        return {
-          ...state,
-          error: "Browser session cancelled by user."
-        };
-      }
-      return {
-        ...state,
-        error: String(error?.message || error)
-      };
-    } finally {
-      this.activeBrowserTasks.clear(activeBrowserTask);
-    }
   }
 
   async runModelRequestedCodeTask({
@@ -3106,68 +3017,15 @@ export class ClankerBot {
     userId = null,
     source = "reply_message"
   }) {
-    if (!isDevTaskEnabled(settings)) {
-      return { text: "", error: "code_agent_disabled" };
-    }
-    if (userId && !isCodeAgentUserAllowed(userId, settings)) {
-      return { text: "", blockedByPermission: true };
-    }
-
-    const codeAgentConfig = resolveCodeAgentConfig(settings, cwdOverride);
-    const maxParallel = codeAgentConfig.maxParallelTasks;
-    if (getActiveCodeAgentTaskCount() >= maxParallel) {
-      return { text: "", blockedByParallelLimit: true };
-    }
-
-    const maxPerHour = codeAgentConfig.maxTasksPerHour;
-    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const used = this.store.countActionsSince("code_agent_call", since1h);
-    if (used >= maxPerHour) {
-      return { text: "", blockedByBudget: true };
-    }
-
-    const {
-      cwd,
-      provider,
-      model,
-      codexModel,
-      maxTurns,
-      timeoutMs,
-      maxBufferBytes
-    } = codeAgentConfig;
-
-    try {
-      const result = await runCodeAgent({
-        instruction: task,
-        cwd,
-        provider,
-        maxTurns,
-        timeoutMs,
-        maxBufferBytes,
-        model,
-        codexModel,
-        openai: this.llm?.openai || null,
-        trace: {
-          guildId,
-          channelId,
-          userId,
-          source
-        },
-        store: this.store
-      });
-
-      return {
-        text: result.text,
-        isError: result.isError,
-        costUsd: result.costUsd,
-        error: result.isError ? result.errorMessage : null
-      };
-    } catch (error) {
-      return {
-        text: "",
-        error: String(error?.message || error)
-      };
-    }
+    return await runModelRequestedCodeTaskForAgentTasks(this.toAgentContext(), {
+      settings,
+      task,
+      cwd: cwdOverride,
+      guildId,
+      channelId,
+      userId,
+      source
+    });
   }
 
   // ---------------------------------------------------------------------------
@@ -3182,47 +3040,14 @@ export class ClankerBot {
     userId = null,
     source = "reply_session"
   }) {
-    if (!isDevTaskEnabled(settings)) return null;
-    if (userId && !isCodeAgentUserAllowed(userId, settings)) return null;
-
-    const codeAgentConfig = resolveCodeAgentConfig(settings, cwdOverride);
-    const maxParallel = codeAgentConfig.maxParallelTasks;
-    if (getActiveCodeAgentTaskCount() >= maxParallel) return null;
-
-    // Enforce hourly task budget (same check as tryRunCodeAgentTask)
-    const maxPerHour = codeAgentConfig.maxTasksPerHour;
-    const since1h = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const used = this.store.countActionsSince("code_agent_call", since1h);
-    if (used >= maxPerHour) return null;
-
-    const {
-      cwd,
-      provider,
-      model,
-      codexModel,
-      maxTurns,
-      timeoutMs,
-      maxBufferBytes
-    } = codeAgentConfig;
-
-    const scopeKey = `${guildId || "dm"}:${channelId || "dm"}`;
-    try {
-      return createCodeAgentSessionRuntime({
-        scopeKey,
-        cwd,
-        provider,
-        model,
-        codexModel,
-        maxTurns,
-        timeoutMs,
-        maxBufferBytes,
-        trace: { guildId, channelId, userId, source },
-        store: this.store,
-        openai: this.llm?.openai || null
-      });
-    } catch {
-      return null;
-    }
+    return createCodeAgentSessionForAgentTasks(this.toAgentContext(), {
+      settings,
+      cwd: cwdOverride,
+      guildId,
+      channelId,
+      userId,
+      source
+    });
   }
 
   createBrowserAgentSession({
@@ -3232,35 +3057,18 @@ export class ClankerBot {
     userId = null,
     source = "reply_session"
   }) {
-    if (!this.browserManager) return null;
-    const browserTaskConfig = getResolvedBrowserTaskConfig(settings);
-    if (browserTaskConfig.runtime === "openai_computer_use") return null;
-    const maxSteps = clamp(Number(browserTaskConfig.maxStepsPerTask) || 15, 1, 30);
-    const stepTimeoutMs = clamp(Number(browserTaskConfig.stepTimeoutMs) || 30_000, 5_000, 120_000);
-
-    const scopeKey = `${guildId || "dm"}:${channelId || "dm"}`;
-    const sessionKey = `session:${scopeKey}:${Date.now()}`;
-    return new BrowserAgentSession({
-      scopeKey,
-      llm: this.llm,
-      browserManager: this.browserManager,
-      store: this.store,
-      sessionKey,
-      provider: browserTaskConfig.localAgent.provider,
-      model: browserTaskConfig.localAgent.model,
-      maxSteps,
-      stepTimeoutMs,
-      trace: { guildId, channelId, userId, source }
+    return createBrowserAgentSessionForAgentTasks(this.toAgentContext(), {
+      settings,
+      guildId,
+      channelId,
+      userId,
+      source
     });
   }
 
   /** Build the subAgentSessions runtime adapter for the reply tool pipeline. */
   buildSubAgentSessionsRuntime() {
-    return {
-      manager: this.subAgentSessions,
-      createCodeSession: (opts) => this.createCodeAgentSession(opts),
-      createBrowserSession: (opts) => this.createBrowserAgentSession(opts)
-    };
+    return buildSubAgentSessionsRuntimeForAgentTasks(this.toAgentContext());
   }
 
   mergeImageInputs({ baseInputs = [], extraInputs = [], maxInputs = MAX_MODEL_IMAGE_INPUTS } = {}) {
