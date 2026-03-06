@@ -29,7 +29,6 @@ import {
   MAX_IMAGE_LOOKUP_QUERY_LEN,
   MAX_VIDEO_FALLBACK_MESSAGES,
   MAX_VIDEO_TARGET_SCAN,
-  collectMemoryFactHints,
   composeDiscoveryImagePrompt,
   composeDiscoveryVideoPrompt,
   composeReplyImagePrompt,
@@ -86,6 +85,12 @@ import {
   syncMessageSnapshot as syncMessageSnapshotForMessageHistory,
   syncMessageSnapshotFromReaction as syncMessageSnapshotFromReactionForMessageHistory
 } from "./bot/messageHistory.ts";
+import {
+  buildMediaMemoryFacts as buildMediaMemoryFactsForMemorySlice,
+  getScopedFallbackFacts as getScopedFallbackFactsForMemorySlice,
+  loadPromptMemorySlice as loadPromptMemorySliceForMemorySlice,
+  loadRelevantMemoryFacts as loadRelevantMemoryFactsForMemorySlice
+} from "./bot/memorySlice.ts";
 import {
   isChannelAllowed as isChannelAllowedForPermissions,
   isDiscoveryChannel as isDiscoveryChannelForPermissions,
@@ -150,7 +155,6 @@ import {
   resolveOperationalChannel,
   sendToChannel
 } from "./voice/voiceOperationalMessaging.ts";
-import { loadPromptMemorySliceFromMemory } from "./memory/promptMemorySlice.ts";
 import { maybeReplyToMessagePipeline } from "./bot/replyPipeline.ts";
 import { SubAgentSessionManager } from "./agents/subAgentSession.ts";
 import { BrowserAgentSession } from "./agents/browseAgent.ts";
@@ -205,10 +209,6 @@ export type ReplyAttemptOptions = {
   forceDecisionLoop?: boolean;
   source?: string;
   performanceSeed?: ReplyPerformanceSeed | null;
-};
-
-type MemoryTrace = Record<string, unknown> & {
-  source?: string;
 };
 
 type DiscoveryLinkCandidate = {
@@ -3480,68 +3480,31 @@ export class ClankerBot {
     trace = {},
     source = "prompt_memory_slice"
   }) {
-    return await loadPromptMemorySliceFromMemory({
+    return await loadPromptMemorySliceForMemorySlice(this.toBotContext(), {
       settings,
-      memory: this.memory,
       userId,
       guildId,
       channelId,
       queryText,
       trace,
-      source,
-      onError: ({ error, context }) => {
-        this.store.logAction({
-          kind: "bot_error",
-          guildId: context.guildId,
-          channelId: context.channelId,
-          userId: context.userId,
-          content: `${context.source}: ${String(error?.message || error)}`
-        });
-      }
+      source
     });
   }
 
   buildMediaMemoryFacts({ userFacts = [], relevantFacts = [], maxItems = 5 } = {}) {
-    const merged = [
-      ...(Array.isArray(userFacts) ? userFacts : []),
-      ...(Array.isArray(relevantFacts) ? relevantFacts : [])
-    ];
-    const max = clamp(Math.floor(Number(maxItems) || 5), 1, 8);
-    return collectMemoryFactHints(merged, max);
+    return buildMediaMemoryFactsForMemorySlice({
+      userFacts,
+      relevantFacts,
+      maxItems
+    });
   }
 
   getScopedFallbackFacts({ guildId, channelId = null, limit = 8 }) {
-    const normalizedGuildId = String(guildId || "").trim();
-    if (!normalizedGuildId || typeof this.store?.getFactsForScope !== "function") return [];
-
-    const boundedLimit = clamp(Math.floor(Number(limit) || 8), 1, 24);
-    const candidateLimit = clamp(boundedLimit * 4, boundedLimit, 120);
-    const rows = this.store.getFactsForScope({
-      guildId: normalizedGuildId,
-      limit: candidateLimit
+    return getScopedFallbackFactsForMemorySlice(this.toBotContext(), {
+      guildId,
+      channelId,
+      limit
     });
-    if (!rows.length) return [];
-
-    const normalizedChannelId = String(channelId || "").trim();
-    if (!normalizedChannelId) return rows.slice(0, boundedLimit);
-
-    const sameChannel = [];
-    const noChannel = [];
-    const otherChannel = [];
-    for (const row of rows) {
-      const rowChannelId = String(row?.channel_id || "").trim();
-      if (rowChannelId && rowChannelId === normalizedChannelId) {
-        sameChannel.push(row);
-        continue;
-      }
-      if (!rowChannelId) {
-        noChannel.push(row);
-        continue;
-      }
-      otherChannel.push(row);
-    }
-
-    return [...sameChannel, ...noChannel, ...otherChannel].slice(0, boundedLimit);
   }
 
   async loadRelevantMemoryFacts({
@@ -3561,62 +3524,21 @@ export class ClankerBot {
     guildId: string;
     channelId?: string | null;
     queryText?: string;
-    trace?: MemoryTrace;
+    trace?: Record<string, unknown> & {
+      source?: string;
+    };
     limit?: number;
     fallbackWhenNoMatch?: boolean;
   }) {
-    if (!settings?.memory?.enabled || !this.memory?.searchDurableFacts) return [];
-    const normalizedGuildId = String(guildId || "").trim();
-    if (!normalizedGuildId) return [];
-    const normalizedChannelId = String(channelId || "").trim() || null;
-    const boundedLimit = clamp(Math.floor(Number(limit) || 8), 1, 24);
-    const normalizedQuery = String(queryText || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 320);
-    if (!normalizedQuery) {
-      return this.getScopedFallbackFacts({
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        limit: boundedLimit
-      });
-    }
-
-    try {
-      const results = await this.memory.searchDurableFacts({
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        queryText: normalizedQuery,
-        settings,
-        trace: {
-          ...trace,
-          source: trace?.source || "memory_context"
-        },
-        limit: boundedLimit
-      });
-      if (results.length || !fallbackWhenNoMatch) return results;
-      return this.getScopedFallbackFacts({
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        limit: boundedLimit
-      });
-    } catch (error) {
-      this.store.logAction({
-        kind: "bot_error",
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        content: `memory_context: ${String(error?.message || error)}`,
-        metadata: {
-          queryText: normalizedQuery.slice(0, 120),
-          source: trace?.source || "memory_context"
-        }
-      });
-      return this.getScopedFallbackFacts({
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        limit: boundedLimit
-      });
-    }
+    return await loadRelevantMemoryFactsForMemorySlice(this.toBotContext(), {
+      settings,
+      guildId,
+      channelId,
+      queryText,
+      trace,
+      limit,
+      fallbackWhenNoMatch
+    });
   }
 
   async maybeAttachGeneratedImage({ settings, text, prompt, variant = "simple", trace }) {
