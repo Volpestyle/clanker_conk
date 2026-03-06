@@ -17,6 +17,25 @@ pub(crate) enum AsrCommand {
     Clear,
 }
 
+fn insert_optional_transcription_field(
+    transcription_cfg: &mut serde_json::Value,
+    key: &str,
+    value: Option<String>,
+) {
+    let Some(value) = value.filter(|value| !value.is_empty()) else {
+        return;
+    };
+
+    if let Some(object) = transcription_cfg.as_object_mut() {
+        object.insert(key.to_owned(), json!(value));
+    } else {
+        error!(
+            field = key,
+            "transcription config unexpectedly stopped being an object"
+        );
+    }
+}
+
 pub(crate) async fn run_asr_client(
     user_id: String,
     api_key: String,
@@ -40,22 +59,8 @@ pub(crate) async fn run_asr_client(
     let mut transcription_cfg = json!({
         "model": model,
     });
-    if let Some(l) = language {
-        if !l.is_empty() {
-            transcription_cfg
-                .as_object_mut()
-                .expect("transcription config should be an object")
-                .insert("language".into(), json!(l));
-        }
-    }
-    if let Some(p) = prompt {
-        if !p.is_empty() {
-            transcription_cfg
-                .as_object_mut()
-                .expect("transcription config should be an object")
-                .insert("prompt".into(), json!(p));
-        }
-    }
+    insert_optional_transcription_field(&mut transcription_cfg, "language", language);
+    insert_optional_transcription_field(&mut transcription_cfg, "prompt", prompt);
 
     let setup_msg = json!({
         "type": "session.update",

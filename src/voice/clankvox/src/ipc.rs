@@ -204,6 +204,53 @@ fn is_lossy_inbound_msg(msg: &InMsg) -> bool {
     matches!(msg, InMsg::Audio { .. })
 }
 
+fn encode_user_audio_payload(
+    user_id: &str,
+    pcm: &[u8],
+    signal_peak_abs: u16,
+    signal_active_sample_count: usize,
+    signal_sample_count: usize,
+) -> Option<Vec<u8>> {
+    let uid = match user_id.parse::<u64>() {
+        Ok(uid) => uid,
+        Err(err) => {
+            warn!(user_id, error = %err, "dropping user audio IPC with non-numeric user id");
+            return None;
+        }
+    };
+
+    let active_sample_count = match u32::try_from(signal_active_sample_count) {
+        Ok(value) => value,
+        Err(_) => {
+            warn!(
+                user_id,
+                signal_active_sample_count,
+                "dropping user audio IPC with oversized active sample count"
+            );
+            return None;
+        }
+    };
+
+    let sample_count = match u32::try_from(signal_sample_count) {
+        Ok(value) => value,
+        Err(_) => {
+            warn!(
+                user_id,
+                signal_sample_count, "dropping user audio IPC with oversized sample count"
+            );
+            return None;
+        }
+    };
+
+    let mut payload = Vec::with_capacity(8 + 2 + 4 + 4 + pcm.len());
+    payload.extend_from_slice(&uid.to_le_bytes());
+    payload.extend_from_slice(&signal_peak_abs.to_le_bytes());
+    payload.extend_from_slice(&active_sample_count.to_le_bytes());
+    payload.extend_from_slice(&sample_count.to_le_bytes());
+    payload.extend_from_slice(pcm);
+    Some(payload)
+}
+
 pub fn send_msg(msg: &OutMsg) {
     if let Some(tx) = IPC_TX.get() {
         if is_lossy_ipc_msg(msg) {
@@ -344,7 +391,8 @@ pub fn spawn_ipc_reader(
                             }
                             Err(mpsc::error::TrySendError::Full(_)) => {
                                 dropped_audio_messages = dropped_audio_messages.saturating_add(1);
-                                if dropped_audio_messages == 1 || dropped_audio_messages % 100 == 0
+                                if dropped_audio_messages == 1
+                                    || dropped_audio_messages.is_multiple_of(100)
                                 {
                                     warn!(
                                         dropped_audio_messages = dropped_audio_messages,
@@ -372,6 +420,10 @@ pub fn spawn_ipc_reader(
 }
 
 pub fn spawn_ipc_writer() -> crossbeam::Sender<OutMsg> {
+    if let Some(tx) = IPC_TX.get() {
+        return tx.clone();
+    }
+
     let (tx, rx) = crossbeam::bounded::<OutMsg>(512);
     std::thread::spawn(move || {
         let mut out = io::stdout().lock();
@@ -384,13 +436,15 @@ pub fn spawn_ipc_writer() -> crossbeam::Sender<OutMsg> {
                     signal_active_sample_count,
                     signal_sample_count,
                 } => {
-                    let uid = user_id.parse::<u64>().unwrap_or(0);
-                    let mut payload = Vec::with_capacity(8 + 2 + 4 + 4 + pcm.len());
-                    payload.extend_from_slice(&uid.to_le_bytes());
-                    payload.extend_from_slice(&signal_peak_abs.to_le_bytes());
-                    payload.extend_from_slice(&(signal_active_sample_count as u32).to_le_bytes());
-                    payload.extend_from_slice(&(signal_sample_count as u32).to_le_bytes());
-                    payload.extend_from_slice(&pcm);
+                    let Some(payload) = encode_user_audio_payload(
+                        &user_id,
+                        &pcm,
+                        signal_peak_abs,
+                        signal_active_sample_count,
+                        signal_sample_count,
+                    ) else {
+                        continue;
+                    };
 
                     let len = payload.len() as u32;
                     let _ = out.write_all(&[1]);
@@ -413,4 +467,25 @@ pub fn spawn_ipc_writer() -> crossbeam::Sender<OutMsg> {
     });
     IPC_TX.set(tx.clone()).expect("IPC_TX already initialized");
     tx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::encode_user_audio_payload;
+
+    #[test]
+    fn encode_user_audio_payload_serializes_header_fields() {
+        let payload = encode_user_audio_payload("42", &[1, 2, 3, 4], 7, 8, 9).expect("payload");
+
+        assert_eq!(&payload[0..8], &42_u64.to_le_bytes());
+        assert_eq!(&payload[8..10], &7_u16.to_le_bytes());
+        assert_eq!(&payload[10..14], &8_u32.to_le_bytes());
+        assert_eq!(&payload[14..18], &9_u32.to_le_bytes());
+        assert_eq!(&payload[18..], &[1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn encode_user_audio_payload_rejects_non_numeric_user_ids() {
+        assert!(encode_user_audio_payload("not-a-user", &[], 0, 0, 0).is_none());
+    }
 }

@@ -38,9 +38,10 @@ use crate::ipc::{
     spawn_ipc_writer, ErrorCode, InMsg, OutMsg,
 };
 use crate::music::{
-    drain_music_pcm_queue, is_music_output_drained, start_music_pipeline, MusicEvent, MusicState,
+    drain_music_pcm_queue, is_music_output_drained, start_music_pipeline, MusicEvent,
+    MusicPipelineContext, MusicPipelineRequest, MusicState,
 };
-use crate::voice_conn::{VoiceConnection, VoiceEvent};
+use crate::voice_conn::{VoiceConnection, VoiceConnectionParams, VoiceEvent};
 
 fn schedule_reconnect(
     reconnect_deadline: &mut Option<time::Instant>,
@@ -330,7 +331,7 @@ async fn main() {
                         if music.active && !music.paused {
                             let is_ducked = {
                                 let guard = audio_send_state.lock();
-                                guard.as_ref().map_or(false, |s| s.is_music_ducked())
+                                guard.as_ref().is_some_and(|s| s.is_music_ducked())
                             };
                             if !is_ducked {
                                 continue;
@@ -425,14 +426,18 @@ async fn main() {
 
                         music.queue_pending_start(normalized_url.clone(), resolved_direct_url);
                         start_music_pipeline(
-                            &normalized_url,
-                            &mut music.player,
-                            &music_pcm_rx,
-                            &music_pcm_tx,
-                            &music_event_tx,
-                            &audio_send_state,
-                            resolved_direct_url,
-                            false,
+                            MusicPipelineRequest {
+                                url: &normalized_url,
+                                resolved_direct_url,
+                                clear_output_buffers: false,
+                            },
+                            MusicPipelineContext {
+                                music_player: &mut music.player,
+                                music_pcm_rx: &music_pcm_rx,
+                                music_pcm_tx: &music_pcm_tx,
+                                music_event_tx: &music_event_tx,
+                                audio_send_state: &audio_send_state,
+                            },
                         );
                         info!(
                             "music_play queued pending start url={} direct={} (waiting for announcement drain)",
@@ -496,14 +501,18 @@ async fn main() {
                             });
                         } else if let Some(url) = music.active_url.clone() {
                             start_music_pipeline(
-                                &url,
-                                &mut music.player,
-                                &music_pcm_rx,
-                                &music_pcm_tx,
-                                &music_event_tx,
-                                &audio_send_state,
-                                music.active_resolved_direct_url,
-                                true,
+                                MusicPipelineRequest {
+                                    url: &url,
+                                    resolved_direct_url: music.active_resolved_direct_url,
+                                    clear_output_buffers: true,
+                                },
+                                MusicPipelineContext {
+                                    music_player: &mut music.player,
+                                    music_pcm_rx: &music_pcm_rx,
+                                    music_pcm_tx: &music_pcm_tx,
+                                    music_event_tx: &music_event_tx,
+                                    audio_send_state: &audio_send_state,
+                                },
                             );
                             music.paused = false;
                             music.active = true;
@@ -948,7 +957,7 @@ async fn main() {
                                     let guard = audio_send_state.lock();
                                     guard
                                         .as_ref()
-                                        .map_or(true, |state| state.tts_is_empty())
+                                        .is_none_or(|state| state.tts_is_empty())
                                 };
                                 let drain_elapsed_ms = music.pending_drain_started_at
                                     .map(|started| now.duration_since(started).as_millis() as u64)
@@ -1044,7 +1053,7 @@ async fn main() {
                 if music.pending_stop {
                     let fade_done = {
                         let guard = audio_send_state.lock();
-                        guard.as_ref().map_or(true, |s| s.is_music_fade_out_complete())
+                        guard.as_ref().is_none_or(|s| s.is_music_fade_out_complete())
                     };
                     if fade_done {
                         music.reset();
@@ -1181,12 +1190,14 @@ async fn try_connect(
     );
 
     match VoiceConnection::connect(
-        endpoint,
-        gid,
-        uid,
-        session_id,
-        token,
-        cid,
+        VoiceConnectionParams {
+            endpoint,
+            guild_id: gid,
+            user_id: uid,
+            session_id,
+            token,
+            channel_id: cid,
+        },
         event_tx.clone(),
         dave.clone(),
     )

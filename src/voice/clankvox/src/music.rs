@@ -39,19 +39,40 @@ pub(crate) fn is_music_output_drained(
     let guard = audio_send_state.lock();
     guard
         .as_ref()
-        .map_or(true, |state| state.music_buffer_samples() == 0)
+        .is_none_or(|state| state.music_buffer_samples() == 0)
+}
+
+pub(crate) struct MusicPipelineRequest<'a> {
+    pub(crate) url: &'a str,
+    pub(crate) resolved_direct_url: bool,
+    pub(crate) clear_output_buffers: bool,
+}
+
+pub(crate) struct MusicPipelineContext<'a> {
+    pub(crate) music_player: &'a mut Option<MusicPlayer>,
+    pub(crate) music_pcm_rx: &'a crossbeam::Receiver<Vec<i16>>,
+    pub(crate) music_pcm_tx: &'a crossbeam::Sender<Vec<i16>>,
+    pub(crate) music_event_tx: &'a mpsc::Sender<MusicEvent>,
+    pub(crate) audio_send_state: &'a Arc<Mutex<Option<AudioSendState>>>,
 }
 
 pub(crate) fn start_music_pipeline(
-    url: &str,
-    music_player: &mut Option<MusicPlayer>,
-    music_pcm_rx: &crossbeam::Receiver<Vec<i16>>,
-    music_pcm_tx: &crossbeam::Sender<Vec<i16>>,
-    music_event_tx: &mpsc::Sender<MusicEvent>,
-    audio_send_state: &Arc<Mutex<Option<AudioSendState>>>,
-    resolved_direct_url: bool,
-    clear_output_buffers: bool,
+    request: MusicPipelineRequest<'_>,
+    context: MusicPipelineContext<'_>,
 ) {
+    let MusicPipelineRequest {
+        url,
+        resolved_direct_url,
+        clear_output_buffers,
+    } = request;
+    let MusicPipelineContext {
+        music_player,
+        music_pcm_rx,
+        music_pcm_tx,
+        music_event_tx,
+        audio_send_state,
+    } = context;
+
     if let Some(ref mut player) = music_player {
         player.stop();
     }

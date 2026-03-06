@@ -99,16 +99,25 @@ struct TransportCrypto {
 }
 
 enum TransportCipher {
-    Aes256GcmRtpSize(Aes256Gcm),
+    Aes256GcmRtpSize(Box<Aes256Gcm>),
     XChaCha20Poly1305RtpSize(XChaCha20Poly1305),
+}
+
+pub struct VoiceConnectionParams<'a> {
+    pub endpoint: &'a str,
+    pub guild_id: u64,
+    pub user_id: u64,
+    pub session_id: &'a str,
+    pub token: &'a str,
+    pub channel_id: u64,
 }
 
 impl TransportCrypto {
     fn new(secret_key: &[u8], mode: &str) -> Result<Self> {
         let cipher = match mode {
-            "aead_aes256_gcm_rtpsize" => TransportCipher::Aes256GcmRtpSize(
+            "aead_aes256_gcm_rtpsize" => TransportCipher::Aes256GcmRtpSize(Box::new(
                 Aes256Gcm::new_from_slice(secret_key).context("Invalid AES-256-GCM secret key")?,
-            ),
+            )),
             "aead_xchacha20_poly1305_rtpsize" => TransportCipher::XChaCha20Poly1305RtpSize(
                 XChaCha20Poly1305::new_from_slice(secret_key)
                     .context("Invalid XChaCha20-Poly1305 secret key")?,
@@ -266,15 +275,19 @@ pub struct VoiceConnection {
 impl VoiceConnection {
     /// Perform the full voice WS + UDP handshake, then spawn background tasks.
     pub async fn connect(
-        endpoint: &str,
-        guild_id: u64,
-        user_id: u64,
-        session_id: &str,
-        token: &str,
-        channel_id: u64,
+        params: VoiceConnectionParams<'_>,
         event_tx: mpsc::Sender<VoiceEvent>,
         dave: Arc<Mutex<Option<DaveManager>>>,
     ) -> Result<Self> {
+        let VoiceConnectionParams {
+            endpoint,
+            guild_id,
+            user_id,
+            session_id,
+            token,
+            channel_id,
+        } = params;
+
         let ep = endpoint.trim_start_matches("wss://").trim_end_matches('/');
         let ws_url = format!("wss://{}/?v=8", ep);
         info!("Connecting voice WS: {}", ws_url);
@@ -824,7 +837,7 @@ async fn handle_text_opcode(
             if transitioned {
                 let ready = {
                     let guard = dave.lock();
-                    guard.as_ref().map_or(false, |dm| dm.is_ready())
+                    guard.as_ref().is_some_and(|dm| dm.is_ready())
                 };
                 if ready {
                     let _ = event_tx.send(VoiceEvent::DaveReady).await;
@@ -936,7 +949,7 @@ async fn handle_binary_opcode(
         }
         // OP27: MLS Proposals (server → client)
         27 => {
-            if payload.len() < 1 {
+            if payload.is_empty() {
                 warn!("DAVE binary OP27: truncated payload");
                 return;
             }
