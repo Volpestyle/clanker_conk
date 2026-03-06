@@ -158,10 +158,12 @@ function createManager({
     resolveVoiceSpeakerName() {
       return "alice";
     },
-    createTrackedAudioResponse() {
-      const response = { id: `resp-${createdResponses.length + 1}` };
-      createdResponses.push(response);
-      return response;
+    replyManager: {
+      createTrackedAudioResponse() {
+        const response = { id: `resp-${createdResponses.length + 1}` };
+        createdResponses.push(response);
+        return response;
+      }
     }
   };
 

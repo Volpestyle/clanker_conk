@@ -263,7 +263,7 @@ test("pending ingestion is awaited before memory slice lookup", async () => {
   resolveIngest!();
 
   // buildRealtimeMemorySlice should drain the pending ingestion first
-  await manager.buildRealtimeMemorySlice({
+  await manager.instructionManager.buildRealtimeMemorySlice({
     session,
     settings: { memory: { enabled: true } },
     userId: "user-1",
