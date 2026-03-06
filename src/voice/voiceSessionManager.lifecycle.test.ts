@@ -117,7 +117,10 @@ function createSession(overrides = {}) {
       ingestedFrameCount: 0
     },
     music: {
+      phase: "idle",
       active: false,
+      ducked: false,
+      pauseReason: null,
       startedAt: 0,
       stoppedAt: 0,
       provider: null,
@@ -137,6 +140,24 @@ function createSession(overrides = {}) {
       pendingRequestedByUserId: null,
       pendingRequestedAt: 0
     },
+    assistantOutput: {
+      phase: "idle",
+      reason: "idle",
+      phaseEnteredAt: now,
+      lastSyncedAt: now,
+      requestId: null,
+      ttsPlaybackState: "idle",
+      ttsBufferedSamples: 0,
+      lastTrigger: "test_seed"
+    },
+    botTurnOpen: false,
+    botTurnOpenAt: 0,
+    lastResponseRequestAt: 0,
+    lastAudioDeltaAt: 0,
+    pendingResponse: null,
+    awaitingToolOutputs: false,
+    openAiToolCallExecutions: new Map(),
+    voxClient: null,
     pendingSttTurns: 0,
     recentVoiceTurns: [],
     membershipEvents: [],
@@ -496,7 +517,7 @@ test("shouldBargeIn does not interrupt music-only playback lock", () => {
   assert.equal(result.allowed, false);
 });
 
-test("shouldBargeIn interrupts queued playback even when botTurnOpen already reset", () => {
+test("shouldBargeIn ignores buffered subprocess playback after live deltas stop", () => {
   const { manager } = createManager();
   const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
   const captureState = {
@@ -510,6 +531,7 @@ test("shouldBargeIn interrupts queued playback even when botTurnOpen already res
   const session = createSession({
     mode: "stt_pipeline",
     botTurnOpen: false,
+    lastAudioDeltaAt: Date.now() - 2_000,
     pendingResponse: {
       requestId: 22,
       requestedAt: Date.now() - 500,
@@ -519,11 +541,14 @@ test("shouldBargeIn interrupts queued playback even when botTurnOpen already res
       handlingSilence: false,
       audioReceivedAt: Date.now() - 200
     },
+    voxClient: {
+      ttsBufferDepthSamples: 48_000
+    },
     userCaptures: new Map([["user-1", captureState]])
   });
 
   const result = manager.shouldBargeIn({ session, userId: "user-1", captureState });
-  assert.equal(result.allowed, true);
+  assert.equal(result.allowed, false);
 });
 
 test("shouldBargeIn requires minimum capture age for STT pipeline", () => {
@@ -1993,6 +2018,150 @@ test("getReplyOutputLockState does not lock output when music is paused", () => 
   assert.equal(lockState.musicActive, false);
 });
 
+test("getReplyOutputLockState locks output while clankvox still has queued speech", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    botTurnOpen: false,
+    voxClient: {
+      ttsBufferDepthSamples: 24_000,
+      getTtsBufferDepthSamples() {
+        return this.ttsBufferDepthSamples;
+      }
+    }
+  });
+
+  const lockState = manager.getReplyOutputLockState(session);
+  assert.equal(lockState.locked, true);
+  assert.equal(lockState.reason, "bot_audio_buffered");
+  assert.equal(lockState.bufferedBotSpeech, true);
+});
+
+test("getReplyOutputLockState ignores stale clankvox buffered telemetry", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    botTurnOpen: false,
+    voxClient: {
+      ttsBufferDepthSamples: 24_000,
+      getTtsBufferDepthSamples() {
+        return this.ttsBufferDepthSamples;
+      },
+      getTtsPlaybackState() {
+        return "buffered";
+      },
+      getTtsTelemetryUpdatedAt() {
+        return Date.now() - 5_000;
+      }
+    }
+  });
+
+  const lockState = manager.getReplyOutputLockState(session);
+  assert.equal(lockState.locked, false);
+  assert.equal(lockState.reason, "idle");
+  assert.equal(lockState.phase, "idle");
+});
+
+test("getReplyOutputLockState ignores stale botTurnOpen when no output signals remain", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    botTurnOpen: true,
+    botTurnOpenAt: Date.now() - 5_000,
+    lastAudioDeltaAt: Date.now() - 5_000
+  });
+
+  const lockState = manager.getReplyOutputLockState(session);
+  assert.equal(lockState.locked, false);
+  assert.equal(lockState.reason, "idle");
+  assert.equal(lockState.phase, "idle");
+  assert.equal(lockState.botTurnOpen, true);
+});
+
+test("getReplyOutputLockState clears stale active realtime response once playback is idle", () => {
+  const { manager, logs } = createManager();
+  let activeResponse = true;
+  const session = createSession({
+    mode: "openai_realtime",
+    lastResponseRequestAt: Date.now() - 10_000,
+    realtimeClient: {
+      isResponseInProgress() {
+        return activeResponse;
+      },
+      clearActiveResponse() {
+        activeResponse = false;
+      }
+    }
+  });
+
+  const lockState = manager.getReplyOutputLockState(session);
+  assert.equal(lockState.locked, false);
+  assert.equal(lockState.reason, "idle");
+  assert.equal(lockState.phase, "idle");
+  assert.ok(
+    logs.some((entry) => entry.content === "openai_realtime_active_response_cleared_stale"),
+    "expected stale active-response recovery log"
+  );
+});
+
+test("bindVoxHandlers tracks explicit tts playback lifecycle from clankvox", () => {
+  const { manager } = createManager();
+  let playbackState: "idle" | "buffered" = "idle";
+  const voxClient = new EventEmitter() as EventEmitter & {
+    ttsBufferDepthSamples: number;
+    getPlaybackArmedReason: () => string | null;
+    getTtsPlaybackState: () => "idle" | "buffered";
+    off: (event: string, listener: (...args: unknown[]) => void) => EventEmitter;
+  };
+  voxClient.ttsBufferDepthSamples = 0;
+  voxClient.getPlaybackArmedReason = () => null;
+  voxClient.getTtsPlaybackState = () => playbackState;
+  const session = createSession({
+    voxClient
+  });
+
+  manager.bindVoxHandlers(session);
+  playbackState = "buffered";
+  voxClient.emit("ttsPlaybackState", "buffered");
+
+  let lockState = manager.getReplyOutputLockState(session);
+  assert.equal(lockState.locked, true);
+  assert.equal(lockState.reason, "bot_audio_buffered");
+  assert.equal(lockState.phase, "speaking_buffered");
+
+  playbackState = "idle";
+  voxClient.emit("ttsPlaybackState", "idle");
+  lockState = manager.getReplyOutputLockState(session);
+  assert.equal(lockState.locked, false);
+  assert.equal(lockState.reason, "idle");
+  assert.equal(lockState.phase, "idle");
+});
+
+test("resetBotAudioPlayback clears cached clankvox playback telemetry immediately", () => {
+  const { manager } = createManager();
+  let playbackState: "idle" | "buffered" = "buffered";
+  const voxClient = {
+    isAlive: true,
+    ttsBufferDepthSamples: 24_000,
+    stopPlayback() {},
+    clearTtsPlaybackTelemetry() {
+      playbackState = "idle";
+      voxClient.ttsBufferDepthSamples = 0;
+    },
+    getTtsPlaybackState() {
+      return playbackState;
+    }
+  };
+  const session = createSession({
+    voxClient
+  });
+
+  let lockState = manager.getReplyOutputLockState(session);
+  assert.equal(lockState.reason, "bot_audio_buffered");
+
+  manager.resetBotAudioPlayback(session);
+  lockState = manager.getReplyOutputLockState(session);
+  assert.equal(lockState.locked, false);
+  assert.equal(lockState.reason, "idle");
+});
+
 test("bot speech music duck helpers use configured gain and release after inactivity", async () => {
   const { manager } = createManager();
   const session = createSession({
@@ -2035,6 +2204,52 @@ test("bot speech music duck helpers use configured gain and release after inacti
 
   manager.scheduleBotSpeechMusicUnduck(session, settings, 0);
   await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(session.botSpeechMusicDucked, false);
+  assert.equal(session.music.ducked, false);
+  assert.deepEqual(unduckCalls[0], {
+    targetGain: 1,
+    fadeMs: 120
+  });
+});
+
+test("scheduleBotSpeechMusicUnduck waits for buffered tts playback to drain", async () => {
+  const { manager } = createManager();
+  const session = createSession({
+    botSpeechMusicDucked: true,
+    voxClient: {
+      ttsBufferDepthSamples: 24_000
+    },
+    music: {
+      phase: "playing",
+      active: true,
+      ducked: true,
+      pauseReason: null
+    }
+  });
+  const settings = {
+    voice: {
+      enabled: true,
+      musicDucking: {
+        targetGain: 0.22,
+        fadeMs: 120
+      }
+    }
+  };
+  const unduckCalls = [];
+
+  manager.musicPlayer = {
+    unduck(options) {
+      unduckCalls.push(options);
+    }
+  };
+
+  manager.scheduleBotSpeechMusicUnduck(session, settings, 0);
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.equal(unduckCalls.length, 0);
+
+  session.voxClient.ttsBufferDepthSamples = 0;
+  await new Promise((resolve) => setTimeout(resolve, 250));
 
   assert.equal(session.botSpeechMusicDucked, false);
   assert.equal(session.music.ducked, false);
@@ -2537,6 +2752,38 @@ test("canFireDeferredAction returns 'active_captures' when user captures are in 
   };
   const result = manager.canFireDeferredAction(session, action);
   assert.equal(result, "active_captures");
+});
+
+test("canFireDeferredAction ignores silence-only captures for queued user turns", () => {
+  const { manager } = createManager();
+  const session = createSession({
+    mode: "openai_realtime"
+  });
+  session.userCaptures.set("user-1", {
+    userId: "user-1",
+    startedAt: Date.now() - 1_000,
+    bytesSent: 48_000,
+    signalSampleCount: 24_000,
+    signalActiveSampleCount: 0,
+    signalPeakAbs: 0
+  });
+  const action = {
+    type: "queued_user_turns",
+    status: "scheduled",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    notBeforeAt: 0,
+    expiresAt: Date.now() + 30_000,
+    reason: "test",
+    revision: 1,
+    payload: {
+      turns: [],
+      nextFlushAt: Date.now()
+    }
+  };
+
+  const result = manager.canFireDeferredAction(session, action);
+  assert.equal(result, null);
 });
 
 test("canFireDeferredAction returns 'pending_response' when session has pendingResponse", () => {

@@ -3,6 +3,16 @@ import type { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 import type { GeminiRealtimeClient } from "./geminiRealtimeClient.ts";
 import type { XaiRealtimeClient } from "./xaiRealtimeClient.ts";
 import type { ElevenLabsRealtimeClient } from "./elevenLabsRealtimeClient.ts";
+import type { AssistantOutputState } from "./assistantOutputState.ts";
+
+export type {
+    AssistantOutputLockReason,
+    AssistantOutputPhase,
+    AssistantOutputReason,
+    AssistantOutputState,
+    ReplyOutputLockState,
+    TtsPlaybackState
+} from "./assistantOutputState.ts";
 
 export type VoiceAddressingAnnotation = {
     talkingTo: string | null;
@@ -430,6 +440,7 @@ export interface VoiceSession {
     maxTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     inactivityTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     botTurnResetTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
+    /** Short echo/barge-in guard after assistant speech begins. Not the authoritative output phase. */
     botTurnOpen: boolean;
     bargeInSuppressionUntil: number;
     bargeInSuppressedAudioChunks: number;
@@ -440,6 +451,7 @@ export interface VoiceSession {
     responseDoneGraceTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     botDisconnectTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     lastResponseRequestAt: number;
+    /** Timestamp of the most recent live assistant audio delta. Useful for latency/engagement heuristics only. */
     lastAudioDeltaAt: number;
     lastAssistantReplyAt: number;
     lastDirectAddressAt: number;
@@ -490,6 +502,7 @@ export interface VoiceSession {
         isPaused: boolean;
         volume: number;
     };
+    assistantOutput: AssistantOutputState;
     thoughtLoopTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     thoughtLoopBusy: boolean;
     nextThoughtAt: number;
@@ -511,9 +524,12 @@ export interface VoiceSession {
     settingsSnapshot: VoiceRealtimeToolSettings | null;
     cleanupHandlers: Array<() => void>;
     ending: boolean;
+    /** Subprocess readiness/bootstrap hint. Not part of the assistant output state machine. */
     playbackArmed?: boolean;
     playbackArmedReason?: string | null;
     playbackArmedAt?: number;
+    playerState?: string | null;
+    botTurnOpenAt?: number;
     deferredVoiceActions?: Partial<Record<DeferredVoiceActionType, DeferredVoiceAction>>;
     deferredVoiceActionTimers?: Partial<Record<DeferredVoiceActionType, ReturnType<typeof setTimeout> | NodeJS.Timeout | null>>;
     lastGenerationContext?: any;

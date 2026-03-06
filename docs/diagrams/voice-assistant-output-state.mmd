@@ -1,0 +1,32 @@
+stateDiagram-v2
+    direction LR
+
+    state "Idle" as Idle
+    state "Response Pending" as ResponsePending
+    state "Awaiting Tool Outputs" as AwaitingToolOutputs
+    state "Speaking Live" as SpeakingLive
+    state "Speaking Buffered" as SpeakingBuffered
+
+    [*] --> Idle
+    Idle --> ResponsePending: "reply requested"
+    ResponsePending --> AwaitingToolOutputs: "tool call emitted"
+    AwaitingToolOutputs --> ResponsePending: "tool outputs submitted\nfollow-up requested"
+    ResponsePending --> SpeakingLive: "audio delta received"
+    SpeakingLive --> SpeakingBuffered: "live deltas stop\nclankvox still buffered"
+    SpeakingLive --> Idle: "reply drained\nno buffered playback"
+    SpeakingBuffered --> Idle: "clankvox idle\nbuffer depth = 0"
+    ResponsePending --> Idle: "silent response cleared\nor stale active response recovered"
+    AwaitingToolOutputs --> Idle: "request cancelled\nor session ends"
+    SpeakingLive --> Idle: "barge-in\nor stop playback"
+    SpeakingBuffered --> Idle: "barge-in\nor stop playback"
+
+    note right of ResponsePending
+      Bun owns the canonical phase.
+      OpenAI realtime contributes request/response signals.
+    end note
+
+    note right of SpeakingBuffered
+      clankvox contributes
+      tts_playback_state and buffer_depth.
+      Bun still owns the phase.
+    end note

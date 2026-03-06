@@ -25,6 +25,9 @@ export const CAPTURE_NEAR_SILENCE_ABORT_MIN_AGE_MS = 1_000;
 export const CAPTURE_NEAR_SILENCE_ABORT_ACTIVE_RATIO_MAX = 0.009;
 export const CAPTURE_NEAR_SILENCE_ABORT_PEAK_MAX = 0.011;
 export const BOT_TURN_SILENCE_RESET_MS = 1200;
+// clankvox reports TTS depth every 500ms; if positive buffered telemetry stops
+// updating for this long, treat it as stale rather than durable truth.
+export const CLANKVOX_TTS_TELEMETRY_STALE_MS = 1600;
 // Make barge-in intentionally stubborn so brief talk-over/echo does not cut bot playback.
 export const BARGE_IN_MIN_SPEECH_MS = 700;
 // STT pipeline captures must be at least this old before barge-in fires, replacing

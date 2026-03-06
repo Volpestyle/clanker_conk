@@ -158,6 +158,7 @@ import {
   CAPTURE_NEAR_SILENCE_ABORT_ACTIVE_RATIO_MAX,
   CAPTURE_NEAR_SILENCE_ABORT_MIN_AGE_MS,
   CAPTURE_NEAR_SILENCE_ABORT_PEAK_MAX,
+  CLANKVOX_TTS_TELEMETRY_STALE_MS,
   CAPTURE_MAX_DURATION_MS,
   RECENT_ENGAGEMENT_WINDOW_MS,
   INPUT_SPEECH_END_SILENCE_MS,
@@ -255,7 +256,27 @@ import {
   loadConversationContinuityContext
 } from "../bot/conversationContinuity.ts";
 import type { ConversationContinuityPayload } from "../bot/conversationContinuity.ts";
-import type { DeferredQueuedUserTurn, DeferredQueuedUserTurnsAction, DeferredVoiceAction, DeferredVoiceActionType } from "./voiceSessionTypes.ts";
+import type {
+  DeferredQueuedUserTurn,
+  DeferredQueuedUserTurnsAction,
+  DeferredVoiceAction,
+  DeferredVoiceActionType
+} from "./voiceSessionTypes.ts";
+import type {
+  AssistantOutputState,
+  ReplyOutputLockState,
+  TtsPlaybackState
+} from "./assistantOutputState.ts";
+import {
+  TTS_PLAYBACK_STATE,
+  buildReplyOutputLockState,
+  createAssistantOutputState,
+  getAssistantOutputActivityAt,
+  normalizeAssistantOutputState,
+  normalizeTtsPlaybackState,
+  patchAssistantOutputState,
+  syncAssistantOutputStateRecord
+} from "./assistantOutputState.ts";
 import {
   musicPhaseIsActive,
   musicPhaseIsAudible,
@@ -818,6 +839,19 @@ export class VoiceSessionManager {
         },
         mode: session.mode || "voice_agent",
         botTurnOpen: Boolean(session.botTurnOpen),
+        assistantOutput: {
+          phase: this.syncAssistantOutputState(session, "runtime_state")?.phase || "idle",
+          reason: session.assistantOutput?.reason || null,
+          lastTrigger: session.assistantOutput?.lastTrigger || null,
+          phaseEnteredAt: Number(session.assistantOutput?.phaseEnteredAt || 0) > 0
+            ? new Date(Number(session.assistantOutput.phaseEnteredAt)).toISOString()
+            : null,
+          requestId: Number.isFinite(Number(session.assistantOutput?.requestId))
+            ? Math.round(Number(session.assistantOutput.requestId))
+            : null,
+          ttsPlaybackState: session.assistantOutput?.ttsPlaybackState || "idle",
+          ttsBufferedSamples: Math.max(0, Number(session.assistantOutput?.ttsBufferedSamples || 0))
+        },
         playbackArm: {
           armed: Boolean(session.playbackArmed),
           reason: session.playbackArmedReason || null,
@@ -2533,6 +2567,7 @@ export class VoiceSessionManager {
       if (status === "playing") {
         session.lastActivityAt = Date.now();
       }
+      this.syncAssistantOutputState(session, "vox_player_state");
       if (AUDIO_DEBUG) {
         console.log(`[subprocess:audio-player] → ${status}`);
       }
@@ -2556,6 +2591,7 @@ export class VoiceSessionManager {
       session.playbackArmed = true;
       session.playbackArmedReason = reason;
       session.playbackArmedAt = Date.now();
+      this.syncAssistantOutputState(session, "vox_playback_armed");
       if (reason !== "connection_ready") return;
       this.setDeferredVoiceAction(session, {
         type: "join_greeting",
@@ -2596,6 +2632,7 @@ export class VoiceSessionManager {
         settings: session.settingsSnapshot || this.store.getSettings(),
         reason: "music_idle"
       });
+      this.syncAssistantOutputState(session, "music_idle");
     };
 
     const onMusicError = () => {
@@ -2606,10 +2643,21 @@ export class VoiceSessionManager {
         music.ducked = false;
       }
       this.musicPlayer?.clearCurrentTrack?.();
+      this.syncAssistantOutputState(session, "music_error");
+    };
+
+    const onBufferDepth = (_ttsSamples) => {
+      this.syncAssistantOutputState(session, "vox_buffer_depth");
+    };
+
+    const onTtsPlaybackState = (_status) => {
+      this.syncAssistantOutputState(session, "vox_tts_playback_state");
     };
 
     session.voxClient.on("playerState", onPlayerState);
     session.voxClient.on("playbackArmed", onPlaybackArmed);
+    session.voxClient.on("bufferDepth", onBufferDepth);
+    session.voxClient.on("ttsPlaybackState", onTtsPlaybackState);
     session.voxClient.on("musicIdle", onMusicIdle);
     session.voxClient.on("musicError", onMusicError);
     session.voxClient.on("error", onError);
@@ -2620,10 +2668,14 @@ export class VoiceSessionManager {
     if (armedReason) {
       onPlaybackArmed(armedReason);
     }
+    onTtsPlaybackState(session.voxClient.getTtsPlaybackState?.() || "idle");
+    onBufferDepth(session.voxClient.ttsBufferDepthSamples || 0);
 
     session.cleanupHandlers.push(() => {
       session.voxClient?.off("playerState", onPlayerState);
       session.voxClient?.off("playbackArmed", onPlaybackArmed);
+      session.voxClient?.off("bufferDepth", onBufferDepth);
+      session.voxClient?.off("ttsPlaybackState", onTtsPlaybackState);
       session.voxClient?.off("musicIdle", onMusicIdle);
       session.voxClient?.off("musicError", onMusicError);
       session.voxClient?.off("error", onError);
@@ -2788,7 +2840,12 @@ export class VoiceSessionManager {
     if (notBeforeAt > now) return "not_before_at";
 
     // Output channel blockers
-    if (Number(session.userCaptures?.size || 0) > 0) return "active_captures";
+    if (Number(session.userCaptures?.size || 0) > 0) {
+      const queuedUserTurnsAction = String(action?.type || "") === "queued_user_turns";
+      if (!queuedUserTurnsAction || this.hasReplayBlockingActiveCapture(session)) {
+        return "active_captures";
+      }
+    }
     if (session.pendingResponse) return "pending_response";
     if (this.isRealtimeResponseActive(session)) return "active_response";
     if (session.awaitingToolOutputs) return "awaiting_tool_outputs";
@@ -3244,11 +3301,198 @@ export class VoiceSessionManager {
     session.activeReplyInterruptionPolicy = null;
   }
 
+  ensureAssistantOutputState(session): AssistantOutputState | null {
+    if (!session || session.ending) return null;
+    const now = Date.now();
+    const existing =
+      session.assistantOutput && typeof session.assistantOutput === "object"
+        ? session.assistantOutput
+        : null;
+    if (existing) {
+      const normalized = normalizeAssistantOutputState(existing, { now });
+      session.assistantOutput = normalized;
+      return normalized;
+    }
+
+    const seeded = createAssistantOutputState({ now, trigger: "session_seed" });
+    session.assistantOutput = seeded;
+    return seeded;
+  }
+
+  patchAssistantOutputTelemetry(
+    session,
+    metadata: {
+      trigger?: string | null;
+      requestId?: number | null;
+      ttsPlaybackState?: string | null;
+      ttsBufferedSamples?: number | null;
+    } = {}
+  ) {
+    const state = this.ensureAssistantOutputState(session);
+    if (!state) return null;
+    const nextState = patchAssistantOutputState(state, {
+      now: Date.now(),
+      trigger: metadata.trigger,
+      requestId: metadata.requestId,
+      ttsPlaybackState: metadata.ttsPlaybackState,
+      ttsBufferedSamples: metadata.ttsBufferedSamples
+    });
+    session.assistantOutput = nextState;
+    return nextState;
+  }
+
+  getSessionTtsPlaybackState(
+    session,
+    fallbackState: AssistantOutputState | null = null
+  ): TtsPlaybackState {
+    if (!session || session.ending) return TTS_PLAYBACK_STATE.IDLE;
+    const telemetryFresh = this.isClankvoxTtsTelemetryFresh(session);
+    const bufferedSamples = this.getBufferedTtsSamples(session);
+    const voxPlaybackState = session.voxClient?.getTtsPlaybackState?.();
+    if (typeof voxPlaybackState === "string") {
+      if (!telemetryFresh) {
+        return TTS_PLAYBACK_STATE.IDLE;
+      }
+      if (bufferedSamples > 0) {
+        return TTS_PLAYBACK_STATE.BUFFERED;
+      }
+      return normalizeTtsPlaybackState(voxPlaybackState);
+    }
+    return normalizeTtsPlaybackState(fallbackState?.ttsPlaybackState);
+  }
+
+  getClankvoxTtsTelemetryAgeMs(session) {
+    if (!session || session.ending) return null;
+    const updatedAt = Number(session.voxClient?.getTtsTelemetryUpdatedAt?.() || 0);
+    if (!Number.isFinite(updatedAt) || updatedAt <= 0) return null;
+    return Math.max(0, Date.now() - updatedAt);
+  }
+
+  isClankvoxTtsTelemetryFresh(session) {
+    const telemetryAgeMs = this.getClankvoxTtsTelemetryAgeMs(session);
+    if (telemetryAgeMs == null) return true;
+    return telemetryAgeMs <= CLANKVOX_TTS_TELEMETRY_STALE_MS;
+  }
+
+  maybeClearStaleRealtimeResponseState(session, { liveAudioStreaming = false, bufferedBotSpeech = false } = {}) {
+    if (!session || session.ending) return false;
+    if (session.pendingResponse) return false;
+    if (liveAudioStreaming || bufferedBotSpeech) return false;
+    if (Boolean(session.awaitingToolOutputs)) return false;
+    if (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0) {
+      return false;
+    }
+    if (!this.isRealtimeResponseActive(session)) return false;
+
+    const lastRelevantAt = Math.max(
+      0,
+      Number(session.lastResponseRequestAt || 0),
+      Number(session.lastAudioDeltaAt || 0),
+      getAssistantOutputActivityAt(session.assistantOutput)
+    );
+    if (!lastRelevantAt) return false;
+    const staleAgeMs = Math.max(0, Date.now() - lastRelevantAt);
+    if (staleAgeMs < RESPONSE_DONE_SILENCE_GRACE_MS) return false;
+
+    const realtimeClient = session.realtimeClient;
+    if (
+      !realtimeClient ||
+      typeof realtimeClient !== "object" ||
+      !("clearActiveResponse" in realtimeClient) ||
+      typeof realtimeClient.clearActiveResponse !== "function"
+    ) {
+      return false;
+    }
+
+    try {
+      realtimeClient.clearActiveResponse("completed");
+      this.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: this.client.user?.id || null,
+        content: "openai_realtime_active_response_cleared_stale",
+        metadata: {
+          sessionId: session.id,
+          staleAgeMs
+        }
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  syncAssistantOutputState(session, trigger = "state_sync") {
+    const state = this.ensureAssistantOutputState(session);
+    if (!state) return null;
+    const previousPhase = String(state.phase || "idle");
+
+    const liveAudioStreaming = this.hasRecentAssistantAudioDelta(session);
+    const pendingResponse =
+      session?.pendingResponse && typeof session.pendingResponse === "object"
+        ? session.pendingResponse
+        : null;
+    const awaitingToolOutputs =
+      Boolean(session.awaitingToolOutputs) ||
+      (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0);
+    const bufferedSamples = this.getBufferedTtsSamples(session);
+
+    let ttsPlaybackState = this.getSessionTtsPlaybackState(session, state);
+
+    let bufferedBotSpeech = ttsPlaybackState === TTS_PLAYBACK_STATE.BUFFERED || bufferedSamples > 0;
+    this.maybeClearStaleRealtimeResponseState(session, {
+      liveAudioStreaming,
+      bufferedBotSpeech
+    });
+    let openAiActiveResponse = this.isRealtimeResponseActive(session);
+    const bufferedStateAgeMs = Math.max(0, Date.now() - Number(state.phaseEnteredAt || 0));
+
+    // If buffered playback was inferred only from an earlier event and all
+    // other output signals are now clear, treat it as stale and clear it.
+    if (
+      bufferedBotSpeech &&
+      bufferedSamples <= 0 &&
+      !liveAudioStreaming &&
+      !pendingResponse &&
+      !openAiActiveResponse &&
+      bufferedStateAgeMs >= RESPONSE_DONE_SILENCE_GRACE_MS
+    ) {
+      ttsPlaybackState = TTS_PLAYBACK_STATE.IDLE;
+      bufferedBotSpeech = false;
+    }
+
+    const nextState = syncAssistantOutputStateRecord(state, {
+      now: Date.now(),
+      trigger,
+      liveAudioStreaming,
+      pendingResponse: Boolean(pendingResponse),
+      openAiActiveResponse,
+      awaitingToolOutputs,
+      requestId: pendingResponse?.requestId || state.requestId || null,
+      ttsPlaybackState,
+      ttsBufferedSamples: bufferedSamples
+    });
+    session.assistantOutput = nextState;
+    if (
+      previousPhase !== "idle" &&
+      nextState.phase === "idle" &&
+      this.getDeferredQueuedUserTurns(session).length > 0
+    ) {
+      this.scheduleDeferredVoiceActionRecheck(session, {
+        type: "queued_user_turns",
+        delayMs: 0,
+        reason: "assistant_output_idle"
+      });
+    }
+    return nextState;
+  }
+
   shouldBargeIn({ session, userId, captureState }) {
     if (!session || session.ending) return { allowed: false };
     if (!this.isBargeInInterruptTargetActive(session)) return { allowed: false };
     const botTurnOpenAt = Number(session.botTurnOpenAt || 0);
-    const liveAudioStreaming = this.isAudioActivelyFlowing(session);
+    const liveAudioStreaming = this.hasRecentAssistantAudioDelta(session);
     const bufferedBotSpeech = this.hasBufferedTtsPlayback(session);
     if (!session.botTurnOpen && botTurnOpenAt <= 0) {
       // Bot is not currently speaking and turn was never opened (or was
@@ -3346,6 +3590,28 @@ export class VoiceSessionManager {
     );
     if (Number(capture.bytesSent || 0) < minSpeechBytes) return false;
     return this.isCaptureSignalAssertive(capture);
+  }
+
+  isCaptureBlockingDeferredReplay({ session, capture }) {
+    if (!session || !capture || typeof capture !== "object") return false;
+    const bytesSent = Math.max(0, Number(capture.bytesSent || 0));
+    const signalSampleCount = Math.max(0, Number(capture.signalSampleCount || 0));
+    if (!capture.speakingEndFinalizeTimer && bytesSent <= 0 && signalSampleCount <= 0) {
+      return true;
+    }
+    return this.isCaptureEligibleForActivityTouch({ session, capture });
+  }
+
+  hasReplayBlockingActiveCapture(session) {
+    if (!session || !(session.userCaptures instanceof Map) || session.userCaptures.size <= 0) {
+      return false;
+    }
+    for (const capture of session.userCaptures.values()) {
+      if (this.isCaptureBlockingDeferredReplay({ session, capture })) {
+        return true;
+      }
+    }
+    return false;
   }
 
   findAssertiveInboundCaptureUserId(session, interruptionPolicy = null) {
@@ -3466,6 +3732,7 @@ export class VoiceSessionManager {
     }
     session.botTurnOpen = false;
     session.botTurnOpenAt = 0;
+    this.syncAssistantOutputState(session, "barge_in_interrupt");
 
     // Unduck music immediately on barge-in so the user hears it while speaking.
     const resolvedSettings = session.settingsSnapshot || this.store.getSettings();
@@ -3542,9 +3809,10 @@ export class VoiceSessionManager {
     return true;
   }
 
-  isAudioActivelyFlowing(session) {
+  hasRecentAssistantAudioDelta(session) {
     if (!session || session.ending) return false;
-    // With subprocess, we can't check stream buffer; rely on recent audio delta timing.
+    // This is only a live-stream heuristic. Buffered subprocess playback is tracked
+    // separately through the assistant output state machine and clankvox IPC.
     const msSinceLastDelta = Date.now() - Number(session.lastAudioDeltaAt || 0);
     return msSinceLastDelta < 200;
   }
@@ -3554,11 +3822,21 @@ export class VoiceSessionManager {
     const voxClient = session.voxClient;
     if (!voxClient || typeof voxClient !== "object") return 0;
     if ("isAlive" in voxClient && voxClient.isAlive === false) return 0;
-    return Math.max(0, Number(voxClient.ttsBufferDepthSamples || 0));
+    const rawBufferedSamples =
+      typeof voxClient.getTtsBufferDepthSamples === "function"
+        ? Number(voxClient.getTtsBufferDepthSamples())
+        : Number(voxClient.ttsBufferDepthSamples || 0);
+    const bufferedSamples = Math.max(0, rawBufferedSamples);
+    if (bufferedSamples <= 0) return 0;
+    return this.isClankvoxTtsTelemetryFresh(session) ? bufferedSamples : 0;
   }
 
   hasBufferedTtsPlayback(session) {
-    return this.getBufferedTtsSamples(session) > 0;
+    const state = this.ensureAssistantOutputState(session);
+    return (
+      this.getBufferedTtsSamples(session) > 0 ||
+      this.getSessionTtsPlaybackState(session, state) === TTS_PLAYBACK_STATE.BUFFERED
+    );
   }
 
   trackOpenAiRealtimeAssistantAudioEvent(session, event) {
@@ -3619,6 +3897,7 @@ export class VoiceSessionManager {
         if (pending && typeof pending === "object") {
           pending.audioReceivedAt = Number(session.lastAudioDeltaAt || Date.now());
         }
+        this.syncAssistantOutputState(session, "audio_delta_suppressed");
         return;
       }
 
@@ -3643,6 +3922,7 @@ export class VoiceSessionManager {
       }
 
       this.markBotTurnOut(session, settings);
+      this.syncAssistantOutputState(session, "audio_delta");
       if (isRealtimeMode(session.mode)) {
         session.pendingRealtimeInputBytes = 0;
       }
@@ -3884,7 +4164,10 @@ export class VoiceSessionManager {
         }
       });
 
-      if (!pending) return;
+      if (!pending) {
+        this.syncAssistantOutputState(session, "response_done_without_pending");
+        return;
+      }
 
       if (hadAudio) {
         // Schedule music unduck after the subprocess finishes playing
@@ -3903,11 +4186,13 @@ export class VoiceSessionManager {
         }
 
         this.clearPendingResponse(session);
+        this.syncAssistantOutputState(session, "response_done_had_audio");
         return;
       }
 
       if (hasInFlightToolCalls) {
         this.clearPendingResponse(session);
+        this.syncAssistantOutputState(session, "response_done_tool_calls_in_flight");
         return;
       }
 
@@ -3924,6 +4209,7 @@ export class VoiceSessionManager {
         if (!current || Number(current.requestId || 0) !== requestId) return;
         if (this.pendingResponseHasAudio(session, current)) {
           this.clearPendingResponse(session);
+          this.syncAssistantOutputState(session, "response_done_grace_audio_detected");
           return;
         }
         this.handleSilentResponse({
@@ -3986,6 +4272,13 @@ export class VoiceSessionManager {
     } else {
       try { session.voxClient?.stopPlayback(); } catch { /* ignore */ }
     }
+    session.voxClient?.clearTtsPlaybackTelemetry?.();
+    this.patchAssistantOutputTelemetry(session, {
+      trigger: "reset_bot_audio_playback",
+      ttsPlaybackState: TTS_PLAYBACK_STATE.IDLE,
+      ttsBufferedSamples: 0
+    });
+    this.syncAssistantOutputState(session, "reset_bot_audio_playback");
     this.maybeClearActiveReplyInterruptionPolicy(session);
   }
 
@@ -4071,56 +4364,41 @@ export class VoiceSessionManager {
     void runQueuedRefresh();
   }
 
-  getReplyOutputLockState(session) {
+  getReplyOutputLockState(session): ReplyOutputLockState {
     if (!session || session.ending) {
       return {
         locked: true,
         reason: "session_inactive",
+        phase: "idle",
         musicActive: false,
         botTurnOpen: false,
         bufferedBotSpeech: false,
         pendingResponse: false,
         openAiActiveResponse: false,
+        awaitingToolOutputs: false,
         streamBufferedBytes: 0
       };
     }
 
     const streamBufferedBytes = 0; // Subprocess manages its own stream buffer
     const musicActive = musicPhaseShouldLockOutput(this.getMusicPhase(session));
+    const assistantOutput = this.syncAssistantOutputState(session, "reply_output_lock");
     const botTurnOpen = Boolean(session.botTurnOpen);
-    const bufferedBotSpeech = this.hasBufferedTtsPlayback(session);
+    const bufferedBotSpeech = assistantOutput?.phase === "speaking_buffered";
     const pendingResponse = Boolean(session.pendingResponse && typeof session.pendingResponse === "object");
     const openAiActiveResponse = this.isRealtimeResponseActive(session);
-    const locked =
-      musicActive ||
-      botTurnOpen ||
-      bufferedBotSpeech ||
-      pendingResponse ||
-      openAiActiveResponse;
-
-    let reason = "idle";
-    if (musicActive) {
-      reason = "music_playback_active";
-    } else if (pendingResponse) {
-      reason = "pending_response";
-    } else if (openAiActiveResponse) {
-      reason = "openai_active_response";
-    } else if (bufferedBotSpeech) {
-      reason = "bot_audio_buffered";
-    } else if (botTurnOpen) {
-      reason = "bot_turn_open";
-    }
-
-    return {
-      locked,
-      reason,
+    const awaitingToolOutputs =
+      Boolean(session.awaitingToolOutputs) ||
+      (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0);
+    return buildReplyOutputLockState({
+      assistantOutput,
       musicActive,
       botTurnOpen,
-      bufferedBotSpeech,
       pendingResponse,
       openAiActiveResponse,
+      awaitingToolOutputs,
       streamBufferedBytes
-    };
+    });
   }
 
   async enqueueChunkedTtsPcmForPlayback({
@@ -4200,7 +4478,6 @@ export class VoiceSessionManager {
         }
       });
     }
-
     if (session.botTurnResetTimer) {
       clearTimeout(session.botTurnResetTimer);
     }
@@ -4209,6 +4486,7 @@ export class VoiceSessionManager {
       session.botTurnOpen = false;
       session.botTurnOpenAt = 0;
       session.botTurnResetTimer = null;
+      this.syncAssistantOutputState(session, "bot_turn_reset");
       this.maybeClearActiveReplyInterruptionPolicy(session);
     }, BOT_TURN_SILENCE_RESET_MS);
   }
@@ -6215,7 +6493,7 @@ export class VoiceSessionManager {
     // gated, or suppressed). If this was the last capture and deferred actions
     // are pending, recheck them now that the output channel may be clear.
     const maybeTriggerDeferredActions = () => {
-      if (session.userCaptures.size === 0) {
+      if (!this.hasReplayBlockingActiveCapture(session)) {
         this.recheckDeferredVoiceActions({ session, reason: "capture_resolved" });
       }
     };
@@ -7582,6 +7860,7 @@ export class VoiceSessionManager {
         retryAfterMs: Number.isFinite(decision.retryAfterMs)
           ? Math.round(decision.retryAfterMs)
           : null,
+        outputLockReason: decision.outputLockReason || null,
         classifierLatencyMs: Number.isFinite(decision.classifierLatencyMs)
           ? Math.round(decision.classifierLatencyMs)
           : null,
@@ -7790,7 +8069,7 @@ export class VoiceSessionManager {
     if (!pendingQueue.length) return;
     if (!Array.isArray(deferredTurns)) {
       const replyOutputLockState = this.getReplyOutputLockState(session);
-      if (replyOutputLockState.locked || Number(session.userCaptures?.size || 0) > 0) {
+      if (replyOutputLockState.locked || this.hasReplayBlockingActiveCapture(session)) {
         this.scheduleDeferredBotTurnOpenFlush({ session, reason });
         return;
       }
@@ -7905,6 +8184,7 @@ export class VoiceSessionManager {
         retryAfterMs: Number.isFinite(decision.retryAfterMs)
           ? Math.round(decision.retryAfterMs)
           : null,
+        outputLockReason: decision.outputLockReason || null,
         classifierLatencyMs: Number.isFinite(decision.classifierLatencyMs)
           ? Math.round(decision.classifierLatencyMs)
           : null,
@@ -8863,6 +9143,7 @@ export class VoiceSessionManager {
       if (!session || session.ending) return;
       if (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0) return;
       session.awaitingToolOutputs = false;
+      this.syncAssistantOutputState(session, "tool_outputs_ready");
 
       const created = this.createTrackedAudioResponse({
         session,
@@ -8882,6 +9163,7 @@ export class VoiceSessionManager {
             sessionId: session.id
           }
         });
+        this.syncAssistantOutputState(session, "tool_followup_skipped");
       }
     }, OPENAI_TOOL_RESPONSE_DEBOUNCE_MS);
   }
@@ -8956,6 +9238,7 @@ export class VoiceSessionManager {
       toolName: pendingCall.name
     });
     session.awaitingToolOutputs = true;
+    this.syncAssistantOutputState(session, "tool_call_in_progress");
 
     await this.executeOpenAiRealtimeFunctionCall({
       session,
@@ -10010,6 +10293,7 @@ export class VoiceSessionManager {
         retryAfterMs: Number.isFinite(turnDecision.retryAfterMs)
           ? Math.round(turnDecision.retryAfterMs)
           : null,
+        outputLockReason: turnDecision.outputLockReason || null,
         classifierLatencyMs: Number.isFinite(turnDecision.classifierLatencyMs)
           ? Math.round(turnDecision.classifierLatencyMs)
           : null,
@@ -11081,6 +11365,7 @@ export class VoiceSessionManager {
       requestId,
       userId: session.pendingResponse.userId
     });
+    this.syncAssistantOutputState(session, "response_requested");
     return true;
   }
 
@@ -11119,6 +11404,7 @@ export class VoiceSessionManager {
     }
 
     session.pendingResponse = null;
+    this.syncAssistantOutputState(session, "pending_response_cleared");
     this.maybeClearActiveReplyInterruptionPolicy(session);
     this.recheckDeferredVoiceActions({
       session,
