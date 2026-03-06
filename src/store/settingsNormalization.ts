@@ -21,6 +21,7 @@ import {
 } from "../voice/realtimeProviderNormalization.ts";
 
 export const PERSONA_FLAVOR_MAX_CHARS = 2_000;
+export const BOT_NAME_ALIAS_MAX_ITEMS = 100;
 const BROWSER_LLM_PROVIDER_FALLBACK_MODELS = {
   anthropic: "claude-sonnet-4-5-20250929",
   openai: "gpt-5-mini"
@@ -88,7 +89,7 @@ export function normalizeSettings(raw) {
   merged.botName = String(merged.botName || "clanker conk").slice(0, 50);
   merged.botNameAliases = uniqueStringList(
     merged.botNameAliases,
-    24,
+    BOT_NAME_ALIAS_MAX_ITEMS,
     50
   );
   merged.persona.flavor = String(merged.persona?.flavor || DEFAULT_SETTINGS.persona.flavor).slice(

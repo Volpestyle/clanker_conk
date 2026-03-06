@@ -1,6 +1,10 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { normalizeSettings, PERSONA_FLAVOR_MAX_CHARS } from "./settingsNormalization.ts";
+import {
+  BOT_NAME_ALIAS_MAX_ITEMS,
+  normalizeSettings,
+  PERSONA_FLAVOR_MAX_CHARS
+} from "./settingsNormalization.ts";
 
 test("normalizeSettings clamps and normalizes complex nested settings", () => {
   const normalized = normalizeSettings({
@@ -223,6 +227,17 @@ test("normalizeSettings respects explicit false for openaiRealtime usePerUserAsr
   });
 
   assert.equal(normalized.voice.openaiRealtime.usePerUserAsrBridge, false);
+});
+
+test("normalizeSettings allows up to 100 bot aliases before truncating", () => {
+  const aliases = Array.from({ length: BOT_NAME_ALIAS_MAX_ITEMS + 5 }, (_, index) => `alias-${index + 1}`);
+
+  const normalized = normalizeSettings({
+    botNameAliases: aliases
+  });
+
+  assert.equal(normalized.botNameAliases.length, BOT_NAME_ALIAS_MAX_ITEMS);
+  assert.deepEqual(normalized.botNameAliases, aliases.slice(0, BOT_NAME_ALIAS_MAX_ITEMS));
 });
 
 test("normalizeSettings preserves explicit file_wav transcription mode", () => {
