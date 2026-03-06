@@ -3,7 +3,6 @@ import { resolveMemoryToolNamespaceScope } from "../memory/memoryToolRuntime.ts"
 import {
   applyOrchestratorOverrideSettings,
   getBotNameAliases,
-  getMemorySettings,
   getFollowupSettings,
   getReplyGenerationSettings,
   getResolvedOrchestratorBinding,
@@ -12,21 +11,10 @@ import {
   getVoiceConversationPolicy,
   getVoiceInitiativeSettings,
   getVoiceRuntimeConfig,
-  getVoiceSoundboardSettings,
-  getVoiceTranscriptionSettings
 } from "../settings/agentStack.ts";
 import {
-  buildVoiceToneGuardrails,
-  buildHardLimitsSection,
-  DEFAULT_PROMPT_VOICE_GUIDANCE,
   getPromptBotName,
-  getPromptCapabilityHonestyLine,
-  getPromptImpossibleActionLine,
   getPromptVoiceLookupBusySystemPrompt,
-  getPromptMemoryDisabledLine,
-  getPromptMemoryEnabledLine,
-  getPromptStyle,
-  getPromptVoiceGuidance,
   interpolatePromptTemplate
 } from "../prompts/promptCore.ts";
 import { clamp } from "../utils.ts";
@@ -116,23 +104,69 @@ import {
 } from "./voiceAsrBridge.ts";
 import {
   SOUNDBOARD_MAX_CANDIDATES,
-  dedupeSoundboardCandidates,
   buildRealtimeTextUtterancePrompt,
   encodePcm16MonoAsWav,
   extractSoundboardDirective,
-  findMentionedSoundboardReference,
   formatRealtimeMemoryFacts,
   formatSoundboardCandidateLine,
   isRealtimeMode,
-  matchSoundboardReference,
   normalizeInlineText,
+  normalizeVoiceAddressingTargetToken,
   normalizeVoiceText,
   parseSoundboardDirectiveSequence,
-  parsePreferredSoundboardReferences,
   resolveRealtimeProvider,
-  shortError,
-  shouldAllowVoiceNsfwHumor
+  shortError
 } from "./voiceSessionHelpers.ts";
+import {
+  analyzeMonoPcmSignal as analyzeMonoPcmSignalModule,
+  estimateDiscordPcmPlaybackDurationMs as estimateDiscordPcmPlaybackDurationMsModule,
+  estimatePcm16MonoDurationMs as estimatePcm16MonoDurationMsModule,
+  evaluatePcmSilenceGate as evaluatePcmSilenceGateModule
+} from "./voiceAudioAnalysis.ts";
+import {
+  buildVoiceLatencyStageMetrics as buildVoiceLatencyStageMetricsModule,
+  computeLatencyMs as computeLatencyMsModule,
+  logVoiceLatencyStage as logVoiceLatencyStageModule
+} from "./voiceLatencyTracker.ts";
+import {
+  annotateLatestVoiceTurnAddressing as annotateLatestVoiceTurnAddressingModule,
+  buildVoiceAddressingState as buildVoiceAddressingStateModule,
+  findLatestVoiceTurnIndex as findLatestVoiceTurnIndexModule,
+  mergeVoiceAddressingAnnotation as mergeVoiceAddressingAnnotationModule,
+  normalizeVoiceAddressingAnnotation as normalizeVoiceAddressingAnnotationModule
+} from "./voiceAddressing.ts";
+import {
+  buildVoiceInstructions as buildVoiceInstructionsModule,
+  isAsrActive as isAsrActiveModule,
+  resolveRealtimeReplyStrategy as resolveRealtimeReplyStrategyModule,
+  shouldUseNativeRealtimeReply as shouldUseNativeRealtimeReplyModule,
+  shouldUsePerUserTranscription as shouldUsePerUserTranscriptionModule,
+  shouldUseRealtimeTranscriptBridge as shouldUseRealtimeTranscriptBridgeModule,
+  shouldUseSharedTranscription as shouldUseSharedTranscriptionModule
+} from "./voiceConfigResolver.ts";
+import {
+  fetchGuildSoundboardCandidates as fetchGuildSoundboardCandidatesModule,
+  maybeTriggerAssistantDirectedSoundboard as maybeTriggerAssistantDirectedSoundboardModule,
+  normalizeSoundboardRefs as normalizeSoundboardRefsModule,
+  resolveSoundboardCandidates as resolveSoundboardCandidatesModule
+} from "./voiceSoundboard.ts";
+import {
+  completePendingMusicDisambiguationSelection as completePendingMusicDisambiguationSelectionModule,
+  describeMusicPromptAction as describeMusicPromptActionModule,
+  getMusicPromptContext as getMusicPromptContextModule,
+  hasPendingMusicDisambiguationForUser as hasPendingMusicDisambiguationForUserModule,
+  isMusicDisambiguationResolutionTurn as isMusicDisambiguationResolutionTurnModule,
+  maybeHandlePendingMusicDisambiguationTurn as maybeHandlePendingMusicDisambiguationTurnModule,
+  resolvePendingMusicDisambiguationSelection as resolvePendingMusicDisambiguationSelectionModule
+} from "./voiceMusicDisambiguation.ts";
+import {
+  deliverVoiceThoughtCandidate as deliverVoiceThoughtCandidateModule,
+  evaluateVoiceThoughtDecision as evaluateVoiceThoughtDecisionModule,
+  generateVoiceThoughtCandidate as generateVoiceThoughtCandidateModule,
+  loadVoiceThoughtMemoryFacts as loadVoiceThoughtMemoryFactsModule,
+  resolveVoiceThoughtEngineConfig as resolveVoiceThoughtEngineConfigModule
+} from "./voiceThoughtGeneration.ts";
+import { buildVoiceRuntimeSnapshot } from "./voiceRuntimeSnapshot.ts";
 import {
   SYSTEM_SPEECH_SOURCE,
   resolveSystemSpeechOpportunityType,
@@ -162,12 +196,8 @@ import {
   LEAVE_DIRECTIVE_REALTIME_AUDIO_START_WAIT_MS,
   JOIN_GREETING_LLM_WINDOW_MS,
   REALTIME_CONTEXT_MEMBER_LIMIT,
-  OPENAI_ASR_SESSION_IDLE_TTL_MS,
   OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS,
-  OPENAI_TOOL_CALL_EVENT_MAX,
   OPENAI_TOOL_RESPONSE_DEBOUNCE_MS,
-  SOUNDBOARD_CATALOG_REFRESH_MS,
-  SOUNDBOARD_DECISION_TRANSCRIPT_MAX_CHARS,
   SPEAKING_END_ADAPTIVE_BUSY_BACKLOG,
   SPEAKING_END_ADAPTIVE_BUSY_CAPTURE_COUNT,
   SPEAKING_END_ADAPTIVE_BUSY_SCALE,
@@ -284,26 +314,6 @@ export function resolveVoiceThoughtTopicalityBias({
     fullDriftSeconds,
     promptHint
   };
-}
-
-const VOICE_ADDRESSING_ALL_TOKENS = new Set([
-  "ALL",
-  "EVERYONE",
-  "EVERYBODY",
-  "WHOLE_ROOM",
-  "WHOLE_CHAT",
-  "VC"
-]);
-
-function normalizeVoiceAddressingTargetToken(value = "") {
-  const normalized = String(value || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 80);
-  if (!normalized) return "";
-  const upper = normalized.toUpperCase();
-  if (VOICE_ADDRESSING_ALL_TOKENS.has(upper)) return "ALL";
-  return normalized;
 }
 
 const VOICE_COMMAND_SESSION_TTL_MS = 20 * 1000;
@@ -689,465 +699,18 @@ export class VoiceSessionManager {
   }
 
   getRuntimeState() {
-    const sessions = [...this.sessions.values()].map((session) => {
-      const now = Date.now();
-      const participants = this.getVoiceChannelParticipants(session);
-      const participantDisplayByUserId = new Map(
-        participants.map((entry) => [String(entry?.userId || ""), String(entry?.displayName || "")])
-      );
-      const membershipEvents = this.getRecentVoiceMembershipEvents(session, {
-        maxItems: VOICE_MEMBERSHIP_EVENT_PROMPT_LIMIT
-      });
-      const activeCaptureEntries = session.userCaptures instanceof Map
-        ? [...session.userCaptures.entries()]
-        : [];
-      const activeCaptures = activeCaptureEntries
-        .map(([rawUserId, rawCapture]) => {
-          const userId = String(rawUserId || "").trim();
-          if (!userId) return null;
-          const capture = rawCapture && typeof rawCapture === "object" ? rawCapture : {};
-          const startedAtMs = Number(capture?.startedAt || 0);
-          const startedAt = Number.isFinite(startedAtMs) && startedAtMs > 0
-            ? new Date(startedAtMs).toISOString()
-            : null;
-          const ageMs = Number.isFinite(startedAtMs) && startedAtMs > 0
-            ? Math.max(0, Math.round(now - startedAtMs))
-            : null;
-          const participantDisplayName = String(participantDisplayByUserId.get(userId) || "").trim();
-          const membershipDisplayName = String(
-            membershipEvents
-              .slice()
-              .reverse()
-              .find((entry) => String(entry?.userId || "") === userId)
-              ?.displayName || ""
-          ).trim();
-          const cachedUser = this.client?.users?.cache?.get?.(userId) || null;
-          const cachedDisplayName = String(
-            cachedUser?.displayName ||
-            cachedUser?.globalName ||
-            cachedUser?.username ||
-            ""
-          ).trim();
-          const displayName = participantDisplayName || membershipDisplayName || cachedDisplayName || null;
-          return {
-            userId,
-            displayName,
-            startedAt,
-            ageMs
-          };
-        })
-        .filter(Boolean);
-      const wakeContext = this.buildVoiceConversationContext({
-        session,
-        now
-      });
-      const addressingState = this.buildVoiceAddressingState({
-        session,
-        now
-      });
-      const joinWindowAgeMs = Math.max(0, now - Number(session?.startedAt || 0));
-      const joinWindowActive = Boolean(session?.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
-      const modelTurns = Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns : [];
-      const transcriptTurns = Array.isArray(session.transcriptTurns) ? session.transcriptTurns : [];
-      const deferredQueue = this.deferredActionQueue.getDeferredQueuedUserTurns(session);
-      const generationSummary =
-        session.modelContextSummary && typeof session.modelContextSummary === "object"
-          ? session.modelContextSummary.generation || null
-          : null;
-      const deciderSummary =
-        session.modelContextSummary && typeof session.modelContextSummary === "object"
-          ? session.modelContextSummary.decider || null
-          : null;
-      const streamWatchRawEntries = Array.isArray(session.streamWatch?.brainContextEntries)
-        ? session.streamWatch.brainContextEntries
-        : [];
-      const streamWatchVisualFeed = streamWatchRawEntries
-        .map((entry) => {
-          if (!entry || typeof entry !== "object") return null;
-          const text = String(entry.text || "").trim();
-          if (!text) return null;
-          const atMs = Number(entry.at || 0);
-          return {
-            text: text.slice(0, 220),
-            at: Number.isFinite(atMs) && atMs > 0 ? new Date(atMs).toISOString() : null,
-            provider: String(entry.provider || "").trim() || null,
-            model: String(entry.model || "").trim() || null,
-            speakerName: String(entry.speakerName || "").trim() || null
-          };
-        })
-        .filter(Boolean);
-      const streamWatchBrainContext = this.getStreamWatchBrainContextForPrompt(
-        session,
-        session.settingsSnapshot || null
-      );
-      const streamWatchLatestFrameDataBase64 = String(session.streamWatch?.latestFrameDataBase64 || "").trim();
-      const streamWatchLatestFrameApproxBytes = streamWatchLatestFrameDataBase64
-        ? Math.max(0, Math.floor((streamWatchLatestFrameDataBase64.length * 3) / 4))
-        : 0;
-
-      return {
-        sessionId: session.id,
-        guildId: session.guildId,
-        voiceChannelId: session.voiceChannelId,
-        textChannelId: session.textChannelId,
-        startedAt: new Date(session.startedAt).toISOString(),
-        lastActivityAt: new Date(session.lastActivityAt).toISOString(),
-        maxEndsAt: session.maxEndsAt ? new Date(session.maxEndsAt).toISOString() : null,
-        inactivityEndsAt: session.inactivityEndsAt ? new Date(session.inactivityEndsAt).toISOString() : null,
-        activeInputStreams: session.userCaptures.size,
-        activeCaptures,
-        soundboard: {
-          playCount: session.soundboard?.playCount || 0,
-          lastPlayedAt: session.soundboard?.lastPlayedAt
-            ? new Date(session.soundboard.lastPlayedAt).toISOString()
-            : null
-        },
-        mode: session.mode || "voice_agent",
-        botTurnOpen: Boolean(session.botTurnOpen),
-        assistantOutput: {
-          phase: this.replyManager.syncAssistantOutputState(session, "runtime_state")?.phase || "idle",
-          reason: session.assistantOutput?.reason || null,
-          lastTrigger: session.assistantOutput?.lastTrigger || null,
-          phaseEnteredAt: Number(session.assistantOutput?.phaseEnteredAt || 0) > 0
-            ? new Date(Number(session.assistantOutput.phaseEnteredAt)).toISOString()
-            : null,
-          requestId: Number.isFinite(Number(session.assistantOutput?.requestId))
-            ? Math.round(Number(session.assistantOutput.requestId))
-            : null,
-          ttsPlaybackState: session.assistantOutput?.ttsPlaybackState || "idle",
-          ttsBufferedSamples: Math.max(0, Number(session.assistantOutput?.ttsBufferedSamples || 0))
-        },
-        playbackArm: {
-          armed: Boolean(session.playbackArmed),
-          reason: session.playbackArmedReason || null,
-          armedAt: session.playbackArmedAt ? new Date(session.playbackArmedAt).toISOString() : null,
-        },
-        conversation: {
-          lastAssistantReplyAt: session.lastAssistantReplyAt
-            ? new Date(session.lastAssistantReplyAt).toISOString()
-            : null,
-          lastDirectAddressAt: session.lastDirectAddressAt
-            ? new Date(session.lastDirectAddressAt).toISOString()
-            : null,
-          lastDirectAddressUserId: session.lastDirectAddressUserId || null,
-          musicWakeLatchedUntil: Number(session?.musicWakeLatchedUntil || 0) > 0
-            ? new Date(Number(session.musicWakeLatchedUntil)).toISOString()
-            : null,
-          musicWakeLatchedByUserId: session.musicWakeLatchedByUserId || null,
-          wake: {
-            state: wakeContext?.engaged ? "awake" : "listening",
-            active: Boolean(wakeContext?.engaged),
-            engagementState: wakeContext?.engagementState || "wake_word_biased",
-            engagedWithCurrentSpeaker: Boolean(wakeContext?.engagedWithCurrentSpeaker),
-            recentAssistantReply: Boolean(wakeContext?.recentAssistantReply),
-            recentDirectAddress: Boolean(wakeContext?.recentDirectAddress),
-            msSinceAssistantReply: Number.isFinite(wakeContext?.msSinceAssistantReply)
-              ? Math.round(wakeContext.msSinceAssistantReply)
-              : null,
-            msSinceDirectAddress: Number.isFinite(wakeContext?.msSinceDirectAddress)
-              ? Math.round(wakeContext.msSinceDirectAddress)
-              : null,
-            windowMs: RECENT_ENGAGEMENT_WINDOW_MS
-          },
-          joinWindow: {
-            active: joinWindowActive,
-            ageMs: Math.round(joinWindowAgeMs),
-            windowMs: JOIN_GREETING_LLM_WINDOW_MS,
-            greetingPending: Boolean(this.greetingManager.getJoinGreetingOpportunity(session)),
-          },
-          thoughtEngine: {
-            busy: Boolean(session.thoughtLoopBusy),
-            nextAttemptAt: session.nextThoughtAt ? new Date(session.nextThoughtAt).toISOString() : null,
-            lastAttemptAt: session.lastThoughtAttemptAt
-              ? new Date(session.lastThoughtAttemptAt).toISOString()
-              : null,
-            lastSpokenAt: session.lastThoughtSpokenAt
-              ? new Date(session.lastThoughtSpokenAt).toISOString()
-              : null
-          },
-          addressing: addressingState,
-          modelContext: {
-            generation: generationSummary,
-            decider: deciderSummary,
-            trackedTurns: modelTurns.length,
-            trackedTurnLimit: VOICE_DECIDER_HISTORY_MAX_TURNS,
-            trackedTranscriptTurns: transcriptTurns.length
-          }
-        },
-        participants: participants.map((p) => ({ userId: p.userId, displayName: p.displayName })),
-        participantCount: participants.length,
-        membershipEvents: membershipEvents.map((entry) => ({
-          userId: entry.userId,
-          displayName: entry.displayName,
-          eventType: entry.eventType,
-          at: new Date(entry.at).toISOString(),
-          ageMs: Math.max(0, Math.round(entry.ageMs))
-        })),
-        voiceLookupBusyCount: Number(session.voiceLookupBusyCount || 0),
-        pendingDeferredTurns: deferredQueue.length,
-        recentTurns: transcriptTurns.slice(-VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS).map((t) => ({
-          role: t.role,
-          speakerName: t.speakerName || "",
-          text: String(t.text || ""),
-          at: t.at ? new Date(t.at).toISOString() : null,
-          addressing:
-            t?.addressing && typeof t.addressing === "object"
-              ? {
-                talkingTo: t.addressing.talkingTo || null,
-                directedConfidence: Number.isFinite(Number(t.addressing.directedConfidence))
-                  ? Number(clamp(Number(t.addressing.directedConfidence), 0, 1).toFixed(3))
-                  : 0,
-                source: t.addressing.source || null,
-                reason: t.addressing.reason || null
-              }
-              : null
-        })),
-        lastGenerationContext: session.lastGenerationContext || null,
-        streamWatch: {
-          active: Boolean(session.streamWatch?.active),
-          targetUserId: session.streamWatch?.targetUserId || null,
-          requestedByUserId: session.streamWatch?.requestedByUserId || null,
-          lastFrameAt: session.streamWatch?.lastFrameAt
-            ? new Date(session.streamWatch.lastFrameAt).toISOString()
-            : null,
-          lastCommentaryAt: session.streamWatch?.lastCommentaryAt
-            ? new Date(session.streamWatch.lastCommentaryAt).toISOString()
-            : null,
-          lastCommentaryNote: session.streamWatch?.lastCommentaryNote || null,
-          lastMemoryRecapAt: session.streamWatch?.lastMemoryRecapAt
-            ? new Date(session.streamWatch.lastMemoryRecapAt).toISOString()
-            : null,
-          lastMemoryRecapText: session.streamWatch?.lastMemoryRecapText || null,
-          lastMemoryRecapDurableSaved: Boolean(session.streamWatch?.lastMemoryRecapDurableSaved),
-          lastMemoryRecapReason: session.streamWatch?.lastMemoryRecapReason || null,
-          latestFrameAt: session.streamWatch?.latestFrameAt
-            ? new Date(session.streamWatch.latestFrameAt).toISOString()
-            : null,
-          latestFrameMimeType: session.streamWatch?.latestFrameMimeType || null,
-          latestFrameApproxBytes: streamWatchLatestFrameApproxBytes,
-          acceptedFrameCountInWindow: Number(session.streamWatch?.acceptedFrameCountInWindow || 0),
-          frameWindowStartedAt: session.streamWatch?.frameWindowStartedAt
-            ? new Date(session.streamWatch.frameWindowStartedAt).toISOString()
-            : null,
-          lastBrainContextAt: session.streamWatch?.lastBrainContextAt
-            ? new Date(session.streamWatch.lastBrainContextAt).toISOString()
-            : null,
-          lastBrainContextProvider: session.streamWatch?.lastBrainContextProvider || null,
-          lastBrainContextModel: session.streamWatch?.lastBrainContextModel || null,
-          brainContextCount: Array.isArray(session.streamWatch?.brainContextEntries)
-            ? session.streamWatch.brainContextEntries.length
-            : 0,
-          ingestedFrameCount: Number(session.streamWatch?.ingestedFrameCount || 0),
-          visualFeed: streamWatchVisualFeed,
-          brainContextPayload: streamWatchBrainContext
-            ? {
-              prompt: String(streamWatchBrainContext.prompt || "").trim(),
-              notes: Array.isArray(streamWatchBrainContext.notes)
-                ? streamWatchBrainContext.notes
-                  .map((note) => String(note || "").trim())
-                  .filter(Boolean)
-                  .slice(-24)
-                : [],
-              lastAt: Number(streamWatchBrainContext.lastAt || 0)
-                ? new Date(Number(streamWatchBrainContext.lastAt)).toISOString()
-                : null,
-              provider: streamWatchBrainContext.provider || null,
-              model: streamWatchBrainContext.model || null
-            }
-            : null
-        },
-        asrSessions: (() => {
-          const asrMap = session.openAiAsrSessions instanceof Map ? session.openAiAsrSessions : null;
-          if (!asrMap || asrMap.size === 0) return null;
-          return [...asrMap.entries()].map(([uid, asr]) => {
-            const ws = asr?.client?.ws;
-            const connected = Boolean(ws && ws.readyState === 1);
-            const idleTtlMs = Math.max(
-              1_000,
-              Number(session.openAiAsrSessionIdleTtlMs || OPENAI_ASR_SESSION_IDLE_TTL_MS)
-            );
-            const lastActivityMs = Math.max(
-              Number(asr.lastAudioAt || 0),
-              Number(asr.lastTranscriptAt || 0)
-            );
-            const idleMs = lastActivityMs > 0 ? Math.max(0, now - lastActivityMs) : null;
-            return {
-              userId: String(uid || ""),
-              displayName: participantDisplayByUserId.get(String(uid || "")) || null,
-              connected,
-              phase: String(asr.phase || "idle"),
-              connectedAt: asr.connectedAt > 0 ? new Date(asr.connectedAt).toISOString() : null,
-              lastAudioAt: asr.lastAudioAt > 0 ? new Date(asr.lastAudioAt).toISOString() : null,
-              lastTranscriptAt: asr.lastTranscriptAt > 0 ? new Date(asr.lastTranscriptAt).toISOString() : null,
-              idleMs,
-              idleTtlMs,
-              hasIdleTimer: Boolean(asr.idleTimer),
-              pendingAudioBytes: Number(asr.pendingAudioBytes || 0),
-              pendingAudioChunks: Array.isArray(asr.pendingAudioChunks) ? asr.pendingAudioChunks.length : 0,
-              utterance: asr.utterance ? {
-                partialText: String(asr.utterance.partialText || "").slice(0, 200),
-                finalSegments: Array.isArray(asr.utterance.finalSegments) ? asr.utterance.finalSegments.length : 0,
-                bytesSent: Number(asr.utterance.bytesSent || 0)
-              } : null,
-              model: String(
-                asr.client?.sessionConfig?.inputTranscriptionModel ||
-                session.openAiPerUserAsrModel ||
-                ""
-              ).trim() || null,
-              sessionId: asr.client?.sessionId || null
-            };
-          });
-        })(),
-        sharedAsrSession: (() => {
-          const shared = session.openAiSharedAsrState && typeof session.openAiSharedAsrState === "object"
-            ? session.openAiSharedAsrState
-            : null;
-          if (!shared) return null;
-          const ws = shared?.client?.ws;
-          const connected = Boolean(ws && ws.readyState === 1);
-          const idleTtlMs = Math.max(
-            1_000,
-            Number(session.openAiAsrSessionIdleTtlMs || OPENAI_ASR_SESSION_IDLE_TTL_MS)
-          );
-          const lastActivityMs = Math.max(
-            Number(shared.lastAudioAt || 0),
-            Number(shared.lastTranscriptAt || 0)
-          );
-          const idleMs = lastActivityMs > 0 ? Math.max(0, now - lastActivityMs) : null;
-          const activeUserId = String(shared.userId || "").trim();
-          return {
-            connected,
-            phase: String(shared.phase || "idle"),
-            userId: activeUserId || null,
-            displayName: activeUserId ? participantDisplayByUserId.get(activeUserId) || null : null,
-            connectedAt: shared.connectedAt > 0 ? new Date(shared.connectedAt).toISOString() : null,
-            lastAudioAt: shared.lastAudioAt > 0 ? new Date(shared.lastAudioAt).toISOString() : null,
-            lastTranscriptAt: shared.lastTranscriptAt > 0 ? new Date(shared.lastTranscriptAt).toISOString() : null,
-            idleMs,
-            idleTtlMs,
-            hasIdleTimer: Boolean(shared.idleTimer),
-            pendingAudioBytes: Number(shared.pendingAudioBytes || 0),
-            pendingAudioChunks: Array.isArray(shared.pendingAudioChunks) ? shared.pendingAudioChunks.length : 0,
-            pendingCommitResolvers: Array.isArray(shared.pendingCommitResolvers) ? shared.pendingCommitResolvers.length : 0,
-            pendingCommitRequests: Array.isArray(shared.pendingCommitRequests) ? shared.pendingCommitRequests.length : 0,
-            transcriptByItemIds: shared.finalTranscriptsByItemId instanceof Map ? shared.finalTranscriptsByItemId.size : 0,
-            speakerByItemIds: shared.itemIdToUserId instanceof Map ? shared.itemIdToUserId.size : 0,
-            utterance: shared.utterance
-              ? {
-                partialText: String(shared.utterance.partialText || "").slice(0, 200),
-                finalSegments: Array.isArray(shared.utterance.finalSegments) ? shared.utterance.finalSegments.length : 0,
-                bytesSent: Number(shared.utterance.bytesSent || 0)
-              }
-              : null,
-            model: String(
-              shared.client?.sessionConfig?.inputTranscriptionModel ||
-              session.openAiPerUserAsrModel ||
-              ""
-            ).trim() || null,
-            sessionId: shared.client?.sessionId || null
-          };
-        })(),
-        brainTools: (() => {
-          const tools = Array.isArray(session.openAiToolDefinitions) ? session.openAiToolDefinitions : [];
-          if (!tools.length) return null;
-          return tools.map((tool) => ({
-            name: String(tool?.name || ""),
-            toolType: tool?.toolType === "mcp" ? "mcp" : "function",
-            serverName: tool?.serverName || null,
-            description: String(tool?.description || "")
-          }));
-        })(),
-        toolCalls: (() => {
-          const events = Array.isArray(session.toolCallEvents) ? session.toolCallEvents : [];
-          if (!events.length) return null;
-          return events.slice(-OPENAI_TOOL_CALL_EVENT_MAX).map((entry) => ({
-            callId: String(entry?.callId || ""),
-            toolName: String(entry?.toolName || ""),
-            toolType: entry?.toolType === "mcp" ? "mcp" : "function",
-            arguments: entry?.arguments && typeof entry.arguments === "object" ? entry.arguments : {},
-            startedAt: String(entry?.startedAt || ""),
-            completedAt: entry?.completedAt ? String(entry.completedAt) : null,
-            runtimeMs: Number.isFinite(Number(entry?.runtimeMs)) ? Math.round(Number(entry.runtimeMs)) : null,
-            success: Boolean(entry?.success),
-            outputSummary: entry?.outputSummary ? String(entry.outputSummary) : null,
-            error: entry?.error ? String(entry.error) : null
-          }));
-        })(),
-        mcpStatus: (() => {
-          const rows = Array.isArray(session.mcpStatus) ? session.mcpStatus : [];
-          if (!rows.length) return null;
-          return rows.map((row) => ({
-            serverName: String(row?.serverName || ""),
-            connected: Boolean(row?.connected),
-            tools: Array.isArray(row?.tools)
-              ? row.tools.map((tool) => ({
-                name: String(tool?.name || ""),
-                description: String(tool?.description || "")
-              }))
-              : [],
-            lastError: row?.lastError ? String(row.lastError) : null,
-            lastConnectedAt: row?.lastConnectedAt ? String(row.lastConnectedAt) : null,
-            lastCallAt: row?.lastCallAt ? String(row.lastCallAt) : null
-          }));
-        })(),
-        music: this.snapshotMusicRuntimeState(session),
-        stt: session.mode === "stt_pipeline"
-          ? {
-            pendingTurns: Number(session.pendingSttTurns || 0),
-            contextMessages: modelTurns.length
-          }
-          : null,
-        realtime: isRealtimeMode(session.mode)
-          ? {
-            provider: session.realtimeProvider || resolveRealtimeProvider(session.mode),
-            inputSampleRateHz: Number(session.realtimeInputSampleRateHz) || 24000,
-            outputSampleRateHz: Number(session.realtimeOutputSampleRateHz) || 24000,
-            recentVoiceTurns: modelTurns.length,
-            replySuperseded: Math.max(0, Number(session.realtimeReplySupersededCount || 0)),
-            pendingTurns:
-              (session.realtimeTurnDrainActive ? 1 : 0) +
-              (Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns.length : 0),
-            drainActive: Boolean(session.realtimeTurnDrainActive),
-            coalesceActive: Boolean(session.realtimeTurnCoalesceTimer),
-            state: session.realtimeClient?.getState?.() || null
-          }
-          : null,
-        latency: (() => {
-          const stages = Array.isArray(session.latencyStages) ? session.latencyStages : [];
-          if (stages.length === 0) return null;
-          const recentTurns = stages.slice(-8).reverse().map((e) => ({
-            at: new Date(e.at).toISOString(),
-            finalizedToAsrStartMs: e.finalizedToAsrStartMs ?? null,
-            asrToGenerationStartMs: e.asrToGenerationStartMs ?? null,
-            generationToReplyRequestMs: e.generationToReplyRequestMs ?? null,
-            replyRequestToAudioStartMs: e.replyRequestToAudioStartMs ?? null,
-            totalMs: e.totalMs ?? null,
-            queueWaitMs: e.queueWaitMs ?? null,
-            pendingQueueDepth: e.pendingQueueDepth ?? null
-          }));
-          const avg = (field) => {
-            const vals = stages.map((e) => e[field]).filter((v) => Number.isFinite(v) && v >= 0);
-            return vals.length > 0 ? Math.round(vals.reduce((a, b) => a + b, 0) / vals.length) : null;
-          };
-          return {
-            recentTurns,
-            averages: {
-              finalizedToAsrStartMs: avg("finalizedToAsrStartMs"),
-              asrToGenerationStartMs: avg("asrToGenerationStartMs"),
-              generationToReplyRequestMs: avg("generationToReplyRequestMs"),
-              replyRequestToAudioStartMs: avg("replyRequestToAudioStartMs"),
-              totalMs: avg("totalMs")
-            },
-            turnCount: stages.length
-          };
-        })()
-      };
+    return buildVoiceRuntimeSnapshot(this.sessions, {
+      client: this.client,
+      replyManager: this.replyManager,
+      greetingManager: this.greetingManager,
+      deferredActionQueue: this.deferredActionQueue,
+      getVoiceChannelParticipants: (session) => this.getVoiceChannelParticipants(session),
+      getRecentVoiceMembershipEvents: (session, args) => this.getRecentVoiceMembershipEvents(session, args),
+      buildVoiceConversationContext: (args) => this.buildVoiceConversationContext(args),
+      buildVoiceAddressingState: (args) => this.buildVoiceAddressingState(args),
+      getStreamWatchBrainContextForPrompt: (session, settings) => this.getStreamWatchBrainContextForPrompt(session, settings),
+      snapshotMusicRuntimeState: (session) => this.snapshotMusicRuntimeState(session)
     });
-
-    return {
-      activeCount: sessions.length,
-      sessions
-    };
   }
 
   async requestJoin({ message, settings, intentConfidence = null }) {
@@ -1346,73 +909,11 @@ export class VoiceSessionManager {
     lastAction: "play_now" | "stop" | "pause" | "resume" | "skip" | null;
     lastQuery: string | null;
   } | null {
-    const snapshot = this.snapshotMusicRuntimeState(session);
-    if (!snapshot) return null;
-    const queueTracks = Array.isArray(snapshot.queueState?.tracks) ? snapshot.queueState.tracks : [];
-    const nowPlayingIndex = Number.isInteger(snapshot.queueState?.nowPlayingIndex)
-      ? Number(snapshot.queueState?.nowPlayingIndex)
-      : null;
-    const currentQueueTrack =
-      nowPlayingIndex != null && nowPlayingIndex >= 0 && nowPlayingIndex < queueTracks.length
-        ? queueTracks[nowPlayingIndex]
-        : null;
-    const currentTrack = currentQueueTrack?.title
-      ? {
-        title: currentQueueTrack.title,
-        artists: currentQueueTrack.artist ? [currentQueueTrack.artist] : []
-      }
-      : snapshot.active && snapshot.lastTrackTitle
-        ? {
-          title: snapshot.lastTrackTitle,
-          artists: Array.isArray(snapshot.lastTrackArtists) ? snapshot.lastTrackArtists : []
-        }
-        : null;
-    const lastTrack = snapshot.lastTrackTitle
-      ? {
-        title: snapshot.lastTrackTitle,
-        artists: Array.isArray(snapshot.lastTrackArtists) ? snapshot.lastTrackArtists : []
-      }
-      : null;
-    const upcomingTracks =
-      nowPlayingIndex != null && nowPlayingIndex >= 0
-        ? queueTracks.slice(nowPlayingIndex + 1)
-        : queueTracks;
-    let playbackState: "playing" | "paused" | "stopped" | "idle" = "idle";
-    if (snapshot.queueState?.isPaused) {
-      playbackState = "paused";
-    } else if (snapshot.active) {
-      playbackState = "playing";
-    } else if (snapshot.lastCommandReason && this.describeMusicPromptAction(snapshot.lastCommandReason) === "stop") {
-      playbackState = "stopped";
-    }
-    return {
-      playbackState,
-      currentTrack,
-      lastTrack,
-      queueLength: queueTracks.length,
-      upcomingTracks: upcomingTracks
-        .map((track) => ({
-          title: String(track?.title || "").trim(),
-          artist: track?.artist ? String(track.artist).trim() : null
-        }))
-        .filter((track) => track.title)
-        .slice(0, 3),
-      lastAction: this.describeMusicPromptAction(snapshot.lastCommandReason),
-      lastQuery: snapshot.lastQuery || null
-    };
+    return getMusicPromptContextModule(this, session);
   }
 
   describeMusicPromptAction(reason: unknown): "play_now" | "stop" | "pause" | "resume" | "skip" | null {
-    const normalizedReason = String(reason || "")
-      .trim()
-      .toLowerCase();
-    if (!normalizedReason) return null;
-    if (normalizedReason.includes("pause")) return "pause";
-    if (normalizedReason.includes("resume")) return "resume";
-    if (normalizedReason.includes("skip")) return "skip";
-    if (normalizedReason.includes("stop") || normalizedReason === "session_end") return "stop";
-    if (normalizedReason.includes("play")) return "play_now";
-    return null;
+    return describeMusicPromptActionModule(reason);
   }
 
   /** Get the current music playback phase (single source of truth). */
@@ -1459,12 +960,10 @@ export class VoiceSessionManager {
 
 
   isAsrActive(session, settings = null) {
-    const resolved = settings || session?.settingsSnapshot || this.store.getSettings();
-    if (!getVoiceTranscriptionSettings(resolved).enabled) return false;
-    if (getVoiceConversationPolicy(resolved).textOnlyMode) return false;
-    // PCM capture stays open during music — the music gate downstream
-    // (maybeHandleMusicPlaybackTurn) decides which turns to act on vs swallow.
-    return true;
+    return isAsrActiveModule({
+      session,
+      settings: settings || session?.settingsSnapshot || this.store.getSettings()
+    });
   }
 
   normalizeMusicPlatformToken(value: unknown = "", fallback: "youtube" | "soundcloud" | "discord" | "auto" | null = null) {
@@ -1684,77 +1183,15 @@ export class VoiceSessionManager {
   }
 
   hasPendingMusicDisambiguationForUser(session, userId = null) {
-    const disambiguation = this.getMusicDisambiguationPromptContext(session);
-    if (!disambiguation?.active) return false;
-    const normalizedUserId = String(userId || "").trim();
-    const requestedByUserId = String(disambiguation.requestedByUserId || "").trim();
-    if (!normalizedUserId || !requestedByUserId) return false;
-    return normalizedUserId === requestedByUserId;
+    return hasPendingMusicDisambiguationForUserModule(this, session, userId);
   }
 
   isMusicDisambiguationResolutionTurn(session, userId = null, transcript = "") {
-    const normalizedUserId = String(userId || "").trim();
-    if (!normalizedUserId) return false;
-    if (!this.hasPendingMusicDisambiguationForUser(session, normalizedUserId)) {
-      return false;
-    }
-    if (!this.isVoiceCommandSessionActiveForUser(session, normalizedUserId, { domain: "music" })) {
-      return false;
-    }
-    const text = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    if (!text) return false;
-    if (/^(?:cancel|nevermind|never mind|nvm|forget it)$/i.test(text)) {
-      return true;
-    }
-    return Boolean(this.resolvePendingMusicDisambiguationSelection(session, text));
+    return isMusicDisambiguationResolutionTurnModule(this, session, userId, transcript);
   }
 
   resolvePendingMusicDisambiguationSelection(session, transcript = "") {
-    const disambiguation = this.getMusicDisambiguationPromptContext(session);
-    if (!disambiguation?.active || !Array.isArray(disambiguation.options) || !disambiguation.options.length) {
-      return null;
-    }
-    const text = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    if (!text) return null;
-    const normalizedText = text.toLowerCase();
-    const options = disambiguation.options;
-    const parsedIndex = Number.parseInt(text, 10);
-    if (Number.isFinite(parsedIndex) && String(parsedIndex) === text && parsedIndex >= 1) {
-      return options[parsedIndex - 1] || null;
-    }
-    const ordinalIndexByToken = new Map<string, number>([
-      ["first", 0],
-      ["1st", 0],
-      ["second", 1],
-      ["2nd", 1],
-      ["third", 2],
-      ["3rd", 2],
-      ["fourth", 3],
-      ["4th", 3],
-      ["fifth", 4],
-      ["5th", 4]
-    ]);
-    for (const [token, optionIndex] of ordinalIndexByToken.entries()) {
-      if (normalizedText.includes(token)) {
-        return options[optionIndex] || null;
-      }
-    }
-
-    const cleanedSelectionText = normalizedText
-      .replace(/\b(?:the|one|version|song|track|by|please|plz|uh|um|like)\b/gi, " ")
-      .replace(/\s+/g, " ")
-      .trim();
-    return options.find((entry) => {
-      const idToken = String(entry?.id || "").trim().toLowerCase();
-      if (idToken && normalizedText === idToken) return true;
-      const artistToken = String(entry?.artist || "").trim().toLowerCase();
-      const titleToken = String(entry?.title || "").trim().toLowerCase();
-      const combined = `${titleToken} ${artistToken}`.trim();
-      if (cleanedSelectionText && combined.includes(cleanedSelectionText)) return true;
-      if (cleanedSelectionText && artistToken && cleanedSelectionText.includes(artistToken)) return true;
-      if (cleanedSelectionText && titleToken && cleanedSelectionText.includes(titleToken)) return true;
-      return false;
-    }) || null;
+    return resolvePendingMusicDisambiguationSelectionModule(this, session, transcript);
   }
 
   async completePendingMusicDisambiguationSelection({
@@ -1780,76 +1217,18 @@ export class VoiceSessionManager {
     messageId?: string | null;
     mustNotify?: boolean;
   } = {}) {
-    const disambiguation = this.getMusicDisambiguationPromptContext(session);
-    if (!session || !disambiguation?.active || !selected) return false;
-    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    const normalizedUserId = String(userId || "").trim() || null;
-    const action = disambiguation.action || "play_now";
-    if (action === "play_now") {
-      await this.requestPlayMusic({
-        guildId: session.guildId,
-        channel,
-        channelId: channelId || session.textChannelId || null,
-        requestedByUserId: normalizedUserId,
-        settings: resolvedSettings,
-        query: disambiguation.query || "",
-        platform: disambiguation.platform || "auto",
-        trackId: selected.id,
-        searchResults: disambiguation.options,
-        reason,
-        source,
-        mustNotify
-      });
-      return true;
-    }
-
-    const runtimeSession = this.ensureSessionToolRuntimeState(session);
-    const catalog = runtimeSession?.toolMusicTrackCatalog instanceof Map
-      ? runtimeSession.toolMusicTrackCatalog
-      : new Map();
-    if (runtimeSession && !(runtimeSession.toolMusicTrackCatalog instanceof Map)) {
-      runtimeSession.toolMusicTrackCatalog = catalog;
-    }
-    catalog.set(selected.id, selected);
-    this.clearMusicDisambiguationState(session);
-    if (action === "queue_next") {
-      await this.executeVoiceMusicQueueNextTool({
-        session,
-        settings: resolvedSettings,
-        args: {
-          tracks: [selected.id]
-        }
-      });
-    } else {
-      await this.executeVoiceMusicQueueAddTool({
-        session,
-        settings: resolvedSettings,
-        args: {
-          tracks: [selected.id],
-          position: "end"
-        }
-      });
-    }
-    this.clearVoiceCommandSession(session);
-    await this.sendOperationalMessage({
+    return await completePendingMusicDisambiguationSelectionModule(this, {
+      session,
+      settings: settings || session?.settingsSnapshot || this.store.getSettings(),
+      userId,
+      selected,
+      reason,
+      source,
       channel,
-      settings: resolvedSettings,
-      guildId: session.guildId,
-      channelId: channelId || session.textChannelId || null,
-      userId: normalizedUserId,
+      channelId,
       messageId,
-      event: "voice_music_request",
-      reason: action === "queue_next" ? "queued_next" : "queued",
-      details: {
-        source,
-        query: disambiguation.query || null,
-        trackId: selected.id,
-        trackTitle: selected.title,
-        trackArtists: selected.artist ? [selected.artist] : []
-      },
       mustNotify
     });
-    return true;
   }
 
   async maybeHandlePendingMusicDisambiguationTurn({
@@ -1875,48 +1254,11 @@ export class VoiceSessionManager {
     messageId?: string | null;
     mustNotify?: boolean;
   } = {}) {
-    const disambiguation = this.getMusicDisambiguationPromptContext(session);
-    if (!session || !disambiguation?.active || !Array.isArray(disambiguation.options) || !disambiguation.options.length) {
-      return false;
-    }
-    const normalizedUserId = String(userId || "").trim();
-    const requestedByUserId = String(disambiguation.requestedByUserId || "").trim();
-    if (!normalizedUserId) {
-      return false;
-    }
-    if (requestedByUserId && normalizedUserId !== requestedByUserId) {
-      return false;
-    }
-    const text = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    if (!text) return false;
-    if (/^(?:cancel|nevermind|never mind|nvm|forget it)$/i.test(text)) {
-      this.clearMusicDisambiguationState(session);
-      this.clearVoiceCommandSession(session);
-      await this.sendOperationalMessage({
-        channel,
-        settings: settings || session.settingsSnapshot || this.store.getSettings(),
-        guildId: session.guildId,
-        channelId: channelId || session.textChannelId || null,
-        userId: normalizedUserId,
-        messageId,
-        event: "voice_music_request",
-        reason: "disambiguation_cancelled",
-        details: {
-          source,
-          requestText: text
-        },
-        mustNotify
-      });
-      return true;
-    }
-
-    const selected = this.resolvePendingMusicDisambiguationSelection(session, text);
-    if (!selected) return false;
-    return await this.completePendingMusicDisambiguationSelection({
+    return await maybeHandlePendingMusicDisambiguationTurnModule(this, {
       session,
-      settings,
-      userId: normalizedUserId,
-      selected,
+      settings: settings || session?.settingsSnapshot || this.store.getSettings(),
+      userId,
+      transcript,
       reason,
       source,
       channel,
@@ -2086,200 +1428,29 @@ export class VoiceSessionManager {
     requestedRef = "",
     source = "voice_transcript"
   }) {
-    if (!session || session.ending) return;
-
-    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    if (!resolvedSettings?.voice?.soundboard?.enabled) return;
-    const normalizedRef = String(requestedRef || "").trim().slice(0, 180);
-    if (!normalizedRef) return;
-
-    const normalizedTranscript = normalizeVoiceText(transcript, SOUNDBOARD_DECISION_TRANSCRIPT_MAX_CHARS);
-    session.soundboard = session.soundboard || {
-      playCount: 0,
-      lastPlayedAt: 0,
-      catalogCandidates: [],
-      catalogFetchedAt: 0,
-      lastDirectiveKey: "",
-      lastDirectiveAt: 0
-    };
-
-    const directiveKey = [
-      String(source || "voice_transcript").trim().toLowerCase(),
-      normalizedRef.toLowerCase(),
-      String(normalizedTranscript || "").trim().toLowerCase()
-    ].join("|");
-    const now = Date.now();
-    if (
-      directiveKey &&
-      directiveKey === String(session.soundboard.lastDirectiveKey || "") &&
-      now - Number(session.soundboard.lastDirectiveAt || 0) < 6_000
-    ) {
-      return;
-    }
-    session.soundboard.lastDirectiveKey = directiveKey;
-    session.soundboard.lastDirectiveAt = now;
-
-    const candidateInfo = await this.resolveSoundboardCandidates({
+    return await maybeTriggerAssistantDirectedSoundboardModule(this, {
       session,
-      settings: resolvedSettings
-    });
-    const candidates = Array.isArray(candidateInfo?.candidates) ? candidateInfo.candidates : [];
-    const candidateSource = String(candidateInfo?.source || "none");
-    const byReference = matchSoundboardReference(candidates, normalizedRef);
-    const byMention = byReference ? null : findMentionedSoundboardReference(candidates, normalizedRef);
-    const byName =
-      byReference || byMention
-        ? null
-        : candidates.find((entry) => String(entry?.name || "").trim().toLowerCase() === normalizedRef.toLowerCase()) ||
-        candidates.find((entry) =>
-          String(entry?.name || "")
-            .trim()
-            .toLowerCase()
-            .includes(normalizedRef.toLowerCase())
-        );
-    const matched = byReference || byMention || byName || null;
-
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: userId || this.client.user?.id || null,
-      content: "voice_soundboard_directive_decision",
-      metadata: {
-        sessionId: session.id,
-        mode: session.mode,
-        source: String(source || "voice_transcript"),
-        transcript: normalizedTranscript || null,
-        requestedRef: normalizedRef,
-        candidateCount: candidates.length,
-        candidateSource,
-        matchedReference: matched?.reference || null
-      }
-    });
-
-    if (!matched) return;
-
-    const result = await this.soundboardDirector.play({
-      session,
-      settings: resolvedSettings,
-      soundId: matched.soundId,
-      sourceGuildId: matched.sourceGuildId,
-      reason: `assistant_directive_${String(source || "voice_transcript").slice(0, 50)}`
-    });
-
-    this.store.logAction({
-      kind: result.ok ? "voice_runtime" : "voice_error",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: userId || this.client.user?.id || null,
-      content: result.ok ? "voice_soundboard_directive_played" : "voice_soundboard_directive_failed",
-      metadata: {
-        sessionId: session.id,
-        mode: session.mode,
-        source: String(source || "voice_transcript"),
-        transcript: normalizedTranscript || null,
-        requestedRef: normalizedRef,
-        soundId: matched.soundId,
-        sourceGuildId: matched.sourceGuildId,
-        reason: result.reason || null,
-        error: result.ok ? null : shortError(result.message || "")
-      }
+      settings: settings || session?.settingsSnapshot || this.store.getSettings(),
+      userId,
+      transcript,
+      requestedRef,
+      source
     });
   }
 
   async resolveSoundboardCandidates({ session = null, settings, guild = null }) {
-    const preferred = parsePreferredSoundboardReferences(getVoiceSoundboardSettings(settings).preferredSoundIds);
-    if (preferred.length) {
-      return {
-        source: "preferred",
-        candidates: preferred.slice(0, SOUNDBOARD_MAX_CANDIDATES)
-      };
-    }
-
-    const guildCandidates = await this.fetchGuildSoundboardCandidates({
+    return await resolveSoundboardCandidatesModule(this, {
       session,
+      settings,
       guild
     });
-    if (guildCandidates.length) {
-      return {
-        source: "guild_catalog",
-        candidates: guildCandidates.slice(0, SOUNDBOARD_MAX_CANDIDATES)
-      };
-    }
-
-    return {
-      source: "none",
-      candidates: []
-    };
   }
 
   async fetchGuildSoundboardCandidates({ session = null, guild = null }) {
-    if (session && session.ending) return [];
-    const now = Date.now();
-
-    let cached = [];
-    if (session) {
-      session.soundboard = session.soundboard || {
-        playCount: 0,
-        lastPlayedAt: 0,
-        catalogCandidates: [],
-        catalogFetchedAt: 0,
-        lastDirectiveKey: "",
-        lastDirectiveAt: 0
-      };
-      cached = Array.isArray(session.soundboard.catalogCandidates)
-        ? session.soundboard.catalogCandidates.filter(Boolean)
-        : [];
-      const lastFetchedAt = Number(session.soundboard.catalogFetchedAt || 0);
-      if (lastFetchedAt > 0 && now - lastFetchedAt < SOUNDBOARD_CATALOG_REFRESH_MS) {
-        return cached;
-      }
-    }
-
-    const resolvedGuild = guild || this.client.guilds.cache.get(String(session?.guildId || ""));
-    if (!resolvedGuild?.soundboardSounds?.fetch) {
-      return cached || [];
-    }
-
-    try {
-      const fetched = await resolvedGuild.soundboardSounds.fetch();
-      const candidates = [];
-      fetched.forEach((sound) => {
-        if (!sound || sound.available === false) return;
-        const soundId = String(sound.soundId || "").trim();
-        if (!soundId) return;
-        const name = String(sound.name || "").trim();
-        candidates.push({
-          soundId,
-          sourceGuildId: null,
-          reference: soundId,
-          name: name || null,
-          origin: "guild_catalog"
-        });
-      });
-
-      const deduped = dedupeSoundboardCandidates(candidates).slice(0, SOUNDBOARD_MAX_CANDIDATES);
-      if (session?.soundboard) {
-        session.soundboard.catalogCandidates = deduped;
-        session.soundboard.catalogFetchedAt = now;
-      }
-      return deduped;
-    } catch (error) {
-      if (session) {
-        this.store.logAction({
-          kind: "voice_error",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: this.client.user?.id || null,
-          content: `voice_soundboard_catalog_fetch_failed: ${String(error?.message || error)}`,
-          metadata: {
-            sessionId: session.id
-          }
-        });
-        session.soundboard.catalogFetchedAt = now;
-      }
-      return cached || [];
-    }
+    return await fetchGuildSoundboardCandidatesModule(this, {
+      session,
+      guild
+    });
   }
 
   async stopAll(reason = "shutdown") {
@@ -2990,36 +2161,7 @@ export class VoiceSessionManager {
   }
 
   resolveVoiceThoughtEngineConfig(settings = null) {
-    const resolvedSettings = settings || this.store.getSettings();
-    const thoughtEngine = getVoiceInitiativeSettings(resolvedSettings);
-    const thoughtBinding = getResolvedVoiceInitiativeBinding(resolvedSettings);
-    const enabled = Boolean(thoughtEngine.enabled);
-    const provider = normalizeLlmProvider(thoughtBinding.provider, "anthropic");
-    const model = String(thoughtBinding.model || defaultModelForLlmProvider(provider)).trim().slice(0, 120) ||
-      defaultModelForLlmProvider(provider);
-    const configuredTemperature = Number(thoughtBinding.temperature);
-    const temperature = clamp(Number.isFinite(configuredTemperature) ? configuredTemperature : 0.8, 0, 2);
-    const eagerness = clamp(Number(thoughtEngine.eagerness) || 0, 0, 100);
-    const minSilenceSeconds = clamp(
-      Number(thoughtEngine.minSilenceSeconds) || 20,
-      VOICE_THOUGHT_LOOP_MIN_SILENCE_SECONDS,
-      VOICE_THOUGHT_LOOP_MAX_SILENCE_SECONDS
-    );
-    const minSecondsBetweenThoughts = clamp(
-      Number(thoughtEngine.minSecondsBetweenThoughts) || minSilenceSeconds,
-      VOICE_THOUGHT_LOOP_MIN_INTERVAL_SECONDS,
-      VOICE_THOUGHT_LOOP_MAX_INTERVAL_SECONDS
-    );
-
-    return {
-      enabled,
-      provider,
-      model,
-      temperature,
-      eagerness,
-      minSilenceSeconds,
-      minSecondsBetweenThoughts
-    };
+    return resolveVoiceThoughtEngineConfigModule(settings || this.store.getSettings());
   }
 
   resolveVoiceThoughtTopicalityBias(args = {}) {
@@ -3041,73 +2183,12 @@ export class VoiceSessionManager {
     config,
     trigger = "timer"
   }) {
-    if (!session || session.ending) return "";
-    if (!this.llm?.generate) return "";
-
-    const thoughtConfig = config || this.resolveVoiceThoughtEngineConfig(settings);
-    const participants = this.getVoiceChannelParticipants(session).map((entry) => entry.displayName).filter(Boolean);
-    const recentHistory = this.formatVoiceDecisionHistory(session, 6, VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS);
-    const thoughtEagerness = clamp(Number(thoughtConfig?.eagerness) || 0, 0, 100);
-    const silenceMs = Math.max(0, Date.now() - Number(session.lastActivityAt || 0));
-    const topicalityBias = resolveVoiceThoughtTopicalityBias({
-      silenceMs,
-      minSilenceSeconds: thoughtConfig.minSilenceSeconds,
-      minSecondsBetweenThoughts: thoughtConfig.minSecondsBetweenThoughts
+    return generateVoiceThoughtCandidateModule(this, {
+      session,
+      settings,
+      config,
+      trigger
     });
-    const botName = getPromptBotName(settings);
-    const systemPrompt = [
-      `You are the internal thought engine for ${botName} in live Discord voice chat.`,
-      "Draft exactly one short natural spoken line that might fit right now.",
-      "Thought style: freedom to reflect the social atmosphere. Try to catch a vibe.",
-      "It can be funny, insightful, witty, serious, frustrated, or even a short train-of-thought blurb when that still feels socially natural.",
-      "It is valid to be random or to reflect the bot's current mood/persona.",
-      "Topic drift rule: as silence grows, rely less on old-topic callbacks and more on fresh standalone lines.",
-      "When topic tether is low, avoid stale references that require shared context (for example: vague that/they/it callbacks).",
-      "If there is no good line, output exactly [SKIP].",
-      "No markdown, no quotes, no meta commentary, no soundboard directives."
-    ].join("\n");
-    const userPromptParts = [
-      `Current humans in VC: ${participants.length || 0}.`,
-      participants.length ? `Participant names: ${participants.slice(0, 12).join(", ")}.` : "Participant names: none.",
-      `Thought eagerness setting: ${thoughtEagerness}/100.`,
-      `Silence duration ms: ${Math.max(0, Math.round(silenceMs))}.`,
-      `Topic tether strength: ${topicalityBias.topicTetherStrength}/100 (100=strongly topical, 0=fully untethered).`,
-      `Random inspiration strength: ${topicalityBias.randomInspirationStrength}/100.`,
-      `Topic drift phase: ${topicalityBias.phase}.`,
-      `Topic drift guidance: ${topicalityBias.promptHint}`,
-      "Goal: seed a light initiative line that can keep conversation moving without forcing it."
-    ];
-    if (recentHistory) {
-      userPromptParts.push(`Recent voice turns:\n${recentHistory}`);
-    }
-    const userPrompt = userPromptParts.join("\n");
-    const generationSettings = applyOrchestratorOverrideSettings(settings, {
-      provider: thoughtConfig.provider,
-      model: thoughtConfig.model,
-      temperature: thoughtConfig.temperature,
-      maxOutputTokens: 96
-    });
-
-    const generation = await this.llm.generate({
-      settings: generationSettings,
-      systemPrompt,
-      userPrompt,
-      contextMessages: [],
-      trace: {
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: this.client.user?.id || null,
-        source: "voice_thought_generation",
-        event: String(trigger || "timer")
-      }
-    });
-    const thoughtRaw = String(generation?.text || "").trim();
-    const thoughtNoDirective = extractSoundboardDirective(thoughtRaw).text;
-    const thoughtCandidate = normalizeVoiceText(thoughtNoDirective, VOICE_THOUGHT_MAX_CHARS);
-    if (!thoughtCandidate || thoughtCandidate === "[SKIP]") {
-      return "";
-    }
-    return thoughtCandidate;
   }
 
   async loadVoiceThoughtMemoryFacts({
@@ -3115,60 +2196,11 @@ export class VoiceSessionManager {
     settings,
     thoughtCandidate
   }) {
-    if (!session || session.ending) return [];
-    if (!settings?.memory?.enabled) return [];
-    if (!this.memory || typeof this.memory.searchDurableFacts !== "function") return [];
-
-    const normalizedThought = normalizeVoiceText(thoughtCandidate, VOICE_THOUGHT_MAX_CHARS);
-    if (!normalizedThought) return [];
-    const recentHistory = this.formatVoiceDecisionHistory(session, 6, VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS);
-    const queryText = normalizeVoiceText(
-      [normalizedThought, recentHistory].filter(Boolean).join("\n"),
-      STT_TRANSCRIPT_MAX_CHARS
-    );
-    if (!queryText) return [];
-
-    try {
-      const results = await this.memory.searchDurableFacts({
-        guildId: session.guildId,
-        channelId: session.textChannelId || null,
-        queryText,
-        settings,
-        trace: {
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: this.client.user?.id || null,
-          source: "voice_thought_memory_search"
-        },
-        limit: VOICE_THOUGHT_MEMORY_SEARCH_LIMIT
-      });
-
-      const rows = Array.isArray(results) ? results : [];
-      const deduped = [];
-      const seenFacts = new Set();
-      for (const row of rows) {
-        const factText = normalizeVoiceText(row?.fact || "", 180);
-        if (!factText) continue;
-        const dedupeKey = factText.toLowerCase();
-        if (seenFacts.has(dedupeKey)) continue;
-        seenFacts.add(dedupeKey);
-        deduped.push(row);
-        if (deduped.length >= VOICE_THOUGHT_MEMORY_SEARCH_LIMIT) break;
-      }
-      return deduped;
-    } catch (error) {
-      this.store.logAction({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: this.client.user?.id || null,
-        content: `voice_thought_memory_search_failed: ${String(error?.message || error)}`,
-        metadata: {
-          sessionId: session.id
-        }
-      });
-      return [];
-    }
+    return loadVoiceThoughtMemoryFactsModule(this, {
+      session,
+      settings,
+      thoughtCandidate
+    });
   }
 
   async evaluateVoiceThoughtDecision({
@@ -3178,175 +2210,13 @@ export class VoiceSessionManager {
     memoryFacts = [],
     topicalityBias = null
   }) {
-    const normalizedThought = normalizeVoiceText(thoughtCandidate, VOICE_THOUGHT_MAX_CHARS);
-    if (!normalizedThought) {
-      return {
-        allow: false,
-        reason: "empty_thought_candidate",
-        finalThought: "",
-        usedMemory: false,
-        memoryFactCount: 0
-      };
-    }
-
-    const classifierBinding = getResolvedVoiceAdmissionClassifierBinding(settings);
-    if (!this.llm?.generate) {
-      return {
-        allow: false,
-        reason: "llm_generate_unavailable",
-        finalThought: "",
-        usedMemory: false,
-        memoryFactCount: 0
-      };
-    }
-
-    const llmProvider = normalizeVoiceReplyDecisionProvider(classifierBinding?.provider || "openai");
-    const llmModel = String(classifierBinding?.model || defaultVoiceReplyDecisionModel(llmProvider))
-      .trim()
-      .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
-    const participants = this.getVoiceChannelParticipants(session).map((entry) => entry.displayName).filter(Boolean);
-    const recentHistory = this.formatVoiceDecisionHistory(session, 8, VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS);
-    const silenceMs = Math.max(0, Date.now() - Number(session.lastActivityAt || 0));
-    const resolvedThoughtConfig = this.resolveVoiceThoughtEngineConfig(settings);
-    const resolvedTopicalityBias =
-      topicalityBias && typeof topicalityBias === "object"
-        ? topicalityBias
-        : resolveVoiceThoughtTopicalityBias({
-          silenceMs,
-          minSilenceSeconds: resolvedThoughtConfig.minSilenceSeconds,
-          minSecondsBetweenThoughts: resolvedThoughtConfig.minSecondsBetweenThoughts
-        });
-    const thoughtEagerness = clamp(Number(resolvedThoughtConfig.eagerness) || 0, 0, 100);
-    const ambientMemoryFacts = Array.isArray(memoryFacts) ? memoryFacts : [];
-    const ambientMemory = formatRealtimeMemoryFacts(ambientMemoryFacts, VOICE_THOUGHT_MEMORY_SEARCH_LIMIT);
-    const botName = getPromptBotName(settings);
-
-    const systemPrompt = [
-      `You decide whether ${botName} should speak a candidate thought line right now in live Discord voice chat.`,
-      "Return strict JSON only with keys: allow (boolean), finalThought (string), usedMemory (boolean), reason (string).",
-      "If allow is true, finalThought must contain one short spoken line.",
-      "If allow is false, finalThought must be an empty string.",
-      "You may improve the draft using memory only when it feels natural and additive.",
-      "Topic drift bias is required: as silence gets older, prefer fresh standalone lines over stale callbacks to earlier topic details.",
-      "When topic tether is low, reject callback-heavy lines that depend on shared old context.",
-      "Prefer allow=false over awkward memory references.",
-      "No markdown, no extra keys."
-    ].join("\n");
-    const userPromptParts = [
-      `Draft thought: "${normalizedThought}"`,
-      `Thought eagerness: ${thoughtEagerness}/100.`,
-      `Current human participant count: ${participants.length || 0}.`,
-      `Silence duration ms: ${Math.max(0, Math.round(silenceMs))}.`,
-      `Topic tether strength: ${resolvedTopicalityBias.topicTetherStrength}/100 (100=strongly topical, 0=fully untethered).`,
-      `Random inspiration strength: ${resolvedTopicalityBias.randomInspirationStrength}/100.`,
-      `Topic drift phase: ${resolvedTopicalityBias.phase}.`,
-      `Topic drift guidance: ${resolvedTopicalityBias.promptHint}`,
-      `Final thought hard max chars: ${VOICE_THOUGHT_MAX_CHARS}.`,
-      "Decision rule: allow only when saying the final line now would feel natural and additive."
-    ];
-    if (participants.length) {
-      userPromptParts.push(`Participant names: ${participants.slice(0, 12).join(", ")}.`);
-    }
-    if (recentHistory) {
-      userPromptParts.push(`Recent voice turns:\n${recentHistory}`);
-    }
-    if (ambientMemory) {
-      userPromptParts.push(`Ambient durable memory (optional): ${ambientMemory}`);
-    }
-
-    try {
-      const generation = await this.llm.generate({
-        settings: applyOrchestratorOverrideSettings(settings, {
-          provider: llmProvider,
-          model: llmModel,
-          temperature: 0,
-          maxOutputTokens: VOICE_THOUGHT_DECISION_MAX_OUTPUT_TOKENS,
-          reasoningEffort: "minimal"
-        }),
-        systemPrompt,
-        userPrompt: userPromptParts.join("\n"),
-        contextMessages: [],
-        jsonSchema: JSON.stringify({
-          type: "object",
-          additionalProperties: false,
-          required: ["allow", "finalThought", "usedMemory", "reason"],
-          properties: {
-            allow: { type: "boolean" },
-            finalThought: {
-              type: "string",
-              maxLength: VOICE_THOUGHT_MAX_CHARS
-            },
-            usedMemory: { type: "boolean" },
-            reason: {
-              type: "string",
-              maxLength: 80
-            }
-          }
-        }),
-        trace: {
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: this.client.user?.id || null,
-          source: "voice_thought_decision"
-        }
-      });
-      const raw = String(generation?.text || "").trim();
-      const parsed = parseVoiceThoughtDecisionContract(raw);
-      if (!parsed.confident) {
-        return {
-          allow: false,
-          reason: "llm_contract_violation",
-          finalThought: "",
-          usedMemory: false,
-          memoryFactCount: ambientMemoryFacts.length,
-          llmResponse: raw,
-          llmProvider: generation?.provider || llmProvider,
-          llmModel: generation?.model || llmModel
-        };
-      }
-      const sanitizedThought = normalizeVoiceText(
-        extractSoundboardDirective(parsed.finalThought || "").text,
-        VOICE_THOUGHT_MAX_CHARS
-      );
-      if (parsed.allow && (!sanitizedThought || sanitizedThought === "[SKIP]")) {
-        return {
-          allow: false,
-          reason: "llm_contract_violation",
-          finalThought: "",
-          usedMemory: false,
-          memoryFactCount: ambientMemoryFacts.length,
-          llmResponse: raw,
-          llmProvider: generation?.provider || llmProvider,
-          llmModel: generation?.model || llmModel
-        };
-      }
-      const parsedReason = String(parsed.reason || "")
-        .trim()
-        .toLowerCase()
-        .replace(/[^\w.-]+/g, "_")
-        .slice(0, 80);
-      return {
-        allow: parsed.allow,
-        reason: parsedReason || (parsed.allow ? "llm_allow" : "llm_deny"),
-        finalThought: parsed.allow ? sanitizedThought : "",
-        usedMemory: parsed.allow ? Boolean(parsed.usedMemory) : false,
-        memoryFactCount: ambientMemoryFacts.length,
-        llmResponse: raw,
-        llmProvider: generation?.provider || llmProvider,
-        llmModel: generation?.model || llmModel
-      };
-    } catch (error) {
-      return {
-        allow: false,
-        reason: "llm_error",
-        finalThought: "",
-        usedMemory: false,
-        memoryFactCount: ambientMemoryFacts.length,
-        llmProvider,
-        llmModel,
-        error: String(error?.message || error)
-      };
-    }
+    return evaluateVoiceThoughtDecisionModule(this, {
+      session,
+      settings,
+      thoughtCandidate,
+      memoryFacts,
+      topicalityBias
+    });
   }
 
   async deliverVoiceThoughtCandidate({
@@ -3355,62 +2225,12 @@ export class VoiceSessionManager {
     thoughtCandidate,
     trigger = "timer"
   }) {
-    if (!session || session.ending) return false;
-    const line = normalizeVoiceText(thoughtCandidate, STT_REPLY_MAX_CHARS);
-    if (!line) return false;
-
-    const useApiTts = String(getVoiceConversationPolicy(settings).ttsMode || "").trim().toLowerCase() === "api";
-    let requestedRealtimeUtterance = false;
-    if (isRealtimeMode(session.mode) && !useApiTts) {
-      requestedRealtimeUtterance = this.requestRealtimeTextUtterance({
-        session,
-        text: line,
-        userId: this.client.user?.id || null,
-        source: SYSTEM_SPEECH_SOURCE.THOUGHT
-      });
-      if (!requestedRealtimeUtterance) {
-        return false;
-      }
-    } else {
-      const spokeLine = await this.speakVoiceLineWithTts({
-        session,
-        settings,
-        text: line,
-        source: SYSTEM_SPEECH_SOURCE.THOUGHT_TTS
-      });
-      if (!spokeLine) return false;
-      session.lastAudioDeltaAt = Date.now();
-    }
-
-    const replyAt = Date.now();
-    const replyAccounting = requestedRealtimeUtterance
-      ? resolveSystemSpeechReplyAccountingOnRequest(SYSTEM_SPEECH_SOURCE.THOUGHT)
-      : resolveSystemSpeechReplyAccountingOnLocalPlayback(SYSTEM_SPEECH_SOURCE.THOUGHT_TTS);
-    if (replyAccounting !== "none") {
-      session.lastAssistantReplyAt = replyAt;
-    }
-    this.recordVoiceTurn(session, {
-      role: "assistant",
-      userId: this.client.user?.id || null,
-      text: line
+    return deliverVoiceThoughtCandidateModule(this, {
+      session,
+      settings,
+      thoughtCandidate,
+      trigger
     });
-
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: this.client.user?.id || null,
-      content: "voice_thought_spoken",
-      metadata: {
-        sessionId: session.id,
-        mode: session.mode,
-        trigger: String(trigger || "timer"),
-        thoughtText: line,
-        requestedRealtimeUtterance
-      }
-    });
-
-    return true;
   }
 
   beginVoiceWebLookupBusy({
@@ -3700,14 +2520,7 @@ export class VoiceSessionManager {
   }
 
   normalizeSoundboardRefs(soundboardRefs = []) {
-    return (Array.isArray(soundboardRefs) ? soundboardRefs : [])
-      .map((entry) =>
-        String(entry || "")
-          .trim()
-          .slice(0, 180)
-      )
-      .filter(Boolean)
-      .slice(0, 12);
+    return normalizeSoundboardRefsModule(soundboardRefs);
   }
 
   buildVoiceReplyPlaybackPlan({
@@ -4197,31 +3010,11 @@ export class VoiceSessionManager {
     } | null;
     settings?: Record<string, unknown> | null;
   } = {}) {
-    if (!session || session.ending) return false;
-    if (!providerSupports(session.mode || "", "perUserAsr")) return false;
-    if (!this.appConfig?.openaiApiKey) return false;
-    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    const voiceConversation = getVoiceConversationPolicy(resolvedSettings);
-    const voiceRuntime = getVoiceRuntimeConfig(resolvedSettings);
-    if (voiceConversation.textOnlyMode) return false;
-    const transcriptionMethod = String(
-      voiceRuntime.openaiRealtime?.transcriptionMethod || "realtime_bridge"
-    )
-      .trim()
-      .toLowerCase();
-    if (this.resolveRealtimeReplyStrategy({
+    return shouldUsePerUserTranscriptionModule({
       session,
-      settings: resolvedSettings
-    }) !== "brain") {
-      return false;
-    }
-    if (transcriptionMethod !== "realtime_bridge") {
-      return false;
-    }
-    if (!voiceRuntime.openaiRealtime?.usePerUserAsrBridge) {
-      return false;
-    }
-    return true;
+      settings: settings || session?.settingsSnapshot || this.store.getSettings(),
+      hasOpenAiApiKey: Boolean(this.appConfig?.openaiApiKey)
+    });
   }
 
   shouldUseSharedTranscription({
@@ -4235,31 +3028,11 @@ export class VoiceSessionManager {
     } | null;
     settings?: Record<string, unknown> | null;
   } = {}) {
-    if (!session || session.ending) return false;
-    if (!providerSupports(session.mode || "", "sharedAsr")) return false;
-    if (!this.appConfig?.openaiApiKey) return false;
-    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    const voiceConversation = getVoiceConversationPolicy(resolvedSettings);
-    const voiceRuntime = getVoiceRuntimeConfig(resolvedSettings);
-    if (voiceConversation.textOnlyMode) return false;
-    const transcriptionMethod = String(
-      voiceRuntime.openaiRealtime?.transcriptionMethod || "realtime_bridge"
-    )
-      .trim()
-      .toLowerCase();
-    if (this.resolveRealtimeReplyStrategy({
+    return shouldUseSharedTranscriptionModule({
       session,
-      settings: resolvedSettings
-    }) !== "brain") {
-      return false;
-    }
-    if (transcriptionMethod !== "realtime_bridge") {
-      return false;
-    }
-    if (voiceRuntime.openaiRealtime?.usePerUserAsrBridge) {
-      return false;
-    }
-    return true;
+      settings: settings || session?.settingsSnapshot || this.store.getSettings(),
+      hasOpenAiApiKey: Boolean(this.appConfig?.openaiApiKey)
+    });
   }
 
   shouldUseRealtimeTranscriptBridge({
@@ -4273,20 +3046,10 @@ export class VoiceSessionManager {
     } | null;
     settings?: Record<string, unknown> | null;
   } = {}) {
-    if (!session || session.ending) return false;
-    if (!isRealtimeMode(session.mode || "")) return false;
-    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    const voiceConversation = getVoiceConversationPolicy(resolvedSettings);
-    const replyPath = String(voiceConversation.replyPath || "")
-      .trim()
-      .toLowerCase();
-    if (replyPath === "bridge") {
-      const ttsMode = String(voiceConversation.ttsMode || "").trim().toLowerCase();
-      if (ttsMode === "api") return false;
-      return true;
-    }
-    if (replyPath === "brain" || replyPath === "native") return false;
-    return false;
+    return shouldUseRealtimeTranscriptBridgeModule({
+      session,
+      settings: settings || session?.settingsSnapshot || this.store.getSettings()
+    });
   }
 
   // ── ASR bridge deps factory & delegation ─────────────────────────────
@@ -4502,77 +3265,26 @@ export class VoiceSessionManager {
   }
 
   estimatePcm16MonoDurationMs(pcmByteLength, sampleRateHz = 24000) {
-    const normalizedBytes = Math.max(0, Number(pcmByteLength) || 0);
-    const normalizedRate = Math.max(1, Number(sampleRateHz) || 24000);
-    return Math.round((normalizedBytes / (2 * normalizedRate)) * 1000);
+    return estimatePcm16MonoDurationMsModule(pcmByteLength, sampleRateHz);
   }
 
   estimateDiscordPcmPlaybackDurationMs(pcmByteLength) {
-    const normalizedBytes = Math.max(0, Number(pcmByteLength) || 0);
-    const bytesPerSecond = 48_000 * 2 * 2;
-    return Math.round((normalizedBytes / bytesPerSecond) * 1000);
+    return estimateDiscordPcmPlaybackDurationMsModule(pcmByteLength);
   }
 
   analyzeMonoPcmSignal(pcmBuffer) {
-    const buffer = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
-    const evenByteLength = Math.max(0, buffer.length - (buffer.length % 2));
-    if (evenByteLength <= 0) {
-      return {
-        sampleCount: 0,
-        rms: 0,
-        peak: 0,
-        activeSampleRatio: 0
-      };
-    }
-
-    let sumSquares = 0;
-    let peakAbs = 0;
-    let activeSamples = 0;
-    const sampleCount = evenByteLength / 2;
-    for (let offset = 0; offset < evenByteLength; offset += 2) {
-      const sample = buffer.readInt16LE(offset);
-      const absSample = Math.abs(sample);
-      sumSquares += sample * sample;
-      if (absSample > peakAbs) {
-        peakAbs = absSample;
-      }
-      if (absSample >= VOICE_SILENCE_GATE_ACTIVE_SAMPLE_MIN_ABS) {
-        activeSamples += 1;
-      }
-    }
-
-    const rmsAbs = Math.sqrt(sumSquares / sampleCount);
-    return {
-      sampleCount,
-      rms: rmsAbs / 32768,
-      peak: peakAbs / 32768,
-      activeSampleRatio: activeSamples / sampleCount
-    };
+    return analyzeMonoPcmSignalModule(pcmBuffer);
   }
 
   evaluatePcmSilenceGate({ pcmBuffer, sampleRateHz = 24000 }) {
-    const clipDurationMs = this.estimatePcm16MonoDurationMs(pcmBuffer?.length || 0, sampleRateHz);
-    const signal = this.analyzeMonoPcmSignal(pcmBuffer);
-    const eligibleForGate = clipDurationMs >= VOICE_SILENCE_GATE_MIN_CLIP_MS;
-    const nearSilentSignal =
-      signal.rms <= VOICE_SILENCE_GATE_RMS_MAX &&
-      signal.peak <= VOICE_SILENCE_GATE_PEAK_MAX &&
-      signal.activeSampleRatio <= VOICE_SILENCE_GATE_ACTIVE_RATIO_MAX;
-
-    return {
-      clipDurationMs,
-      ...signal,
-      drop: Boolean(eligibleForGate && nearSilentSignal)
-    };
+    return evaluatePcmSilenceGateModule({
+      pcmBuffer,
+      sampleRateHz
+    });
   }
 
   computeLatencyMs(startMs = 0, endMs = 0) {
-    const normalizedStart = Number(startMs || 0);
-    const normalizedEnd = Number(endMs || 0);
-    if (!Number.isFinite(normalizedStart) || !Number.isFinite(normalizedEnd)) return null;
-    if (normalizedStart <= 0 || normalizedEnd <= 0) return null;
-    if (normalizedEnd < normalizedStart) return null;
-    return Math.max(0, Math.round(normalizedEnd - normalizedStart));
+    return computeLatencyMsModule(startMs, endMs);
   }
 
   buildVoiceLatencyStageMetrics({
@@ -4583,33 +3295,7 @@ export class VoiceSessionManager {
     replyRequestedAtMs = 0,
     audioStartedAtMs = 0
   } = {}) {
-    return {
-      finalizedToAsrStartMs: this.computeLatencyMs(finalizedAtMs, asrStartedAtMs),
-      asrToGenerationStartMs: this.computeLatencyMs(asrCompletedAtMs, generationStartedAtMs),
-      generationToReplyRequestMs: this.computeLatencyMs(generationStartedAtMs, replyRequestedAtMs),
-      replyRequestToAudioStartMs: this.computeLatencyMs(replyRequestedAtMs, audioStartedAtMs)
-    };
-  }
-
-  logVoiceLatencyStage(payload = null) {
-    const {
-      session = null,
-      userId = null,
-      stage = "unknown",
-      source = "realtime",
-      captureReason = null,
-      requestId = null,
-      queueWaitMs = null,
-      pendingQueueDepth = null,
-      finalizedAtMs = 0,
-      asrStartedAtMs = 0,
-      asrCompletedAtMs = 0,
-      generationStartedAtMs = 0,
-      replyRequestedAtMs = 0,
-      audioStartedAtMs = 0
-    } = payload && typeof payload === "object" ? payload : {};
-    if (!session || session.ending) return;
-    const metrics = this.buildVoiceLatencyStageMetrics({
+    return buildVoiceLatencyStageMetricsModule({
       finalizedAtMs,
       asrStartedAtMs,
       asrCompletedAtMs,
@@ -4617,77 +3303,27 @@ export class VoiceSessionManager {
       replyRequestedAtMs,
       audioStartedAtMs
     });
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: userId || this.client.user?.id || null,
-      content: "voice_latency_stage",
-      metadata: {
-        sessionId: session.id,
-        mode: session.mode,
-        stage: String(stage || "unknown"),
-        source: String(source || "realtime"),
-        captureReason: captureReason ? String(captureReason) : null,
-        requestId: Number.isFinite(Number(requestId)) && Number(requestId) > 0
-          ? Number(requestId)
-          : null,
-        queueWaitMs: Number.isFinite(Number(queueWaitMs))
-          ? Math.max(0, Math.round(Number(queueWaitMs)))
-          : null,
-        pendingQueueDepth: Number.isFinite(Number(pendingQueueDepth))
-          ? Math.max(0, Math.round(Number(pendingQueueDepth)))
-          : null,
-        finalizedToAsrStartMs: metrics.finalizedToAsrStartMs,
-        asrToGenerationStartMs: metrics.asrToGenerationStartMs,
-        generationToReplyRequestMs: metrics.generationToReplyRequestMs,
-        replyRequestToAudioStartMs: metrics.replyRequestToAudioStartMs
-      }
+  }
+
+  logVoiceLatencyStage(payload = null) {
+    return logVoiceLatencyStageModule(this, {
+      ...(payload && typeof payload === "object" ? payload : {}),
+      botUserId: this.client.user?.id || null
     });
-
-    if (String(stage || "").toLowerCase() === "audio_started") {
-      const totalMs = [
-        metrics.finalizedToAsrStartMs,
-        metrics.asrToGenerationStartMs,
-        metrics.generationToReplyRequestMs,
-        metrics.replyRequestToAudioStartMs
-      ].reduce((sum, v) => sum + (Number.isFinite(v) ? v : 0), 0);
-
-      const entry = {
-        at: Date.now(),
-        stage: String(stage),
-        source: String(source || "realtime"),
-        finalizedToAsrStartMs: metrics.finalizedToAsrStartMs,
-        asrToGenerationStartMs: metrics.asrToGenerationStartMs,
-        generationToReplyRequestMs: metrics.generationToReplyRequestMs,
-        replyRequestToAudioStartMs: metrics.replyRequestToAudioStartMs,
-        totalMs,
-        queueWaitMs: Number.isFinite(Number(queueWaitMs))
-          ? Math.max(0, Math.round(Number(queueWaitMs)))
-          : null,
-        pendingQueueDepth: Number.isFinite(Number(pendingQueueDepth))
-          ? Math.max(0, Math.round(Number(pendingQueueDepth)))
-          : null
-      };
-
-      if (!Array.isArray(session.latencyStages)) session.latencyStages = [];
-      session.latencyStages.push(entry);
-      if (session.latencyStages.length > 12) {
-        session.latencyStages = session.latencyStages.slice(-12);
-      }
-    }
   }
 
   resolveRealtimeReplyStrategy({ session, settings = null }) {
-    if (!session || !isRealtimeMode(session.mode)) return "brain";
-    const resolvedSettings = settings || session.settingsSnapshot || this.store.getSettings();
-    const replyPath = String(getVoiceConversationPolicy(resolvedSettings).replyPath || "").trim().toLowerCase();
-    if (replyPath === "native") return "native";
-    return "brain";
+    return resolveRealtimeReplyStrategyModule({
+      session,
+      settings: settings || session?.settingsSnapshot || this.store.getSettings()
+    });
   }
 
   shouldUseNativeRealtimeReply({ session, settings = null }) {
-    return this.resolveRealtimeReplyStrategy({ session, settings }) === "native";
+    return shouldUseNativeRealtimeReplyModule({
+      session,
+      settings: settings || session?.settingsSnapshot || this.store.getSettings()
+    });
   }
 
   queueDeferredBotTurnOpenTurn({
@@ -5362,96 +3998,29 @@ export class VoiceSessionManager {
     source = "",
     reason = null
   } = {}): VoiceAddressingAnnotation | null {
-    const input = rawAddressing && typeof rawAddressing === "object" ? rawAddressing : null;
-    const talkingToToken = normalizeVoiceAddressingTargetToken(input?.talkingTo ?? input?.target ?? "");
-    let talkingTo = talkingToToken || null;
-
-    const confidenceRaw = Number(
-      input?.directedConfidence ?? input?.confidence ?? directedConfidence
-    );
-    let normalizedDirectedConfidence = Number.isFinite(confidenceRaw)
-      ? clamp(confidenceRaw, 0, 1)
-      : 0;
-
-    if (directAddressed && !talkingTo) {
-      talkingTo = "ME";
-    }
-    if (directAddressed && talkingTo === "ME") {
-      normalizedDirectedConfidence = Math.max(normalizedDirectedConfidence, 0.72);
-    }
-
-    if (!talkingTo && normalizedDirectedConfidence <= 0) return null;
-
-    const normalizedSource = String(source || "")
-      .replace(/\s+/g, "_")
-      .trim()
-      .toLowerCase()
-      .slice(0, 48);
-    const normalizedReason =
-      String(reason || "")
-        .replace(/\s+/g, " ")
-        .trim()
-        .slice(0, 140) || null;
-
-    return {
-      talkingTo,
-      directedConfidence: Number(normalizedDirectedConfidence.toFixed(3)),
-      source: normalizedSource || null,
-      reason: normalizedReason
-    };
+    return normalizeVoiceAddressingAnnotationModule({
+      rawAddressing,
+      directAddressed,
+      directedConfidence,
+      source,
+      reason
+    });
   }
 
   mergeVoiceAddressingAnnotation(
     existing: VoiceAddressingAnnotation | null = null,
     incoming: VoiceAddressingAnnotation | null = null
   ): VoiceAddressingAnnotation | null {
-    const current = existing && typeof existing === "object" ? existing : null;
-    const next = incoming && typeof incoming === "object" ? incoming : null;
-    if (!next) return current;
-    if (!current) return next;
-
-    const currentTarget = String(current.talkingTo || "").trim();
-    const nextTarget = String(next.talkingTo || "").trim();
-    const currentConfidence = Number.isFinite(Number(current.directedConfidence))
-      ? clamp(Number(current.directedConfidence), 0, 1)
-      : 0;
-    const nextConfidence = Number.isFinite(Number(next.directedConfidence))
-      ? clamp(Number(next.directedConfidence), 0, 1)
-      : 0;
-    const nextSource = String(next.source || "").trim().toLowerCase();
-    const shouldReplace =
-      (nextTarget && !currentTarget) ||
-      nextConfidence > currentConfidence + 0.02 ||
-      (nextSource === "generation" && nextTarget && nextConfidence >= currentConfidence - 0.05);
-
-    return shouldReplace
-      ? {
-        ...current,
-        ...next
-      }
-      : current;
+    return mergeVoiceAddressingAnnotationModule(existing, incoming);
   }
 
   findLatestVoiceTurnIndex(rows, { role = "user", userId = null, text = null, textMaxChars = STT_TRANSCRIPT_MAX_CHARS }) {
-    const source = Array.isArray(rows) ? rows : [];
-    if (!source.length) return -1;
-    const normalizedRole = role === "assistant" ? "assistant" : "user";
-    const normalizedUserId = String(userId || "").trim() || null;
-    const normalizedText = text ? normalizeVoiceText(text, textMaxChars) : "";
-
-    for (let index = source.length - 1; index >= 0; index -= 1) {
-      const row = source[index];
-      if (!row || typeof row !== "object") continue;
-      const rowRole = row.role === "assistant" ? "assistant" : "user";
-      if (rowRole !== normalizedRole) continue;
-      if (String(row.userId || "") !== String(normalizedUserId || "")) continue;
-      if (normalizedText) {
-        const rowText = normalizeVoiceText(row.text || "", textMaxChars);
-        if (!rowText || rowText !== normalizedText) continue;
-      }
-      return index;
-    }
-    return -1;
+    return findLatestVoiceTurnIndexModule(rows, {
+      role,
+      userId,
+      text,
+      textMaxChars
+    });
   }
 
   annotateLatestVoiceTurnAddressing({
@@ -5461,45 +4030,13 @@ export class VoiceSessionManager {
     text = "",
     addressing = null
   } = {}) {
-    if (!session || session.ending) return false;
-    const normalizedAddressing =
-      addressing && typeof addressing === "object"
-        ? this.normalizeVoiceAddressingAnnotation({ rawAddressing: addressing })
-        : null;
-    if (!normalizedAddressing) return false;
-
-    const modelTurns = Array.isArray(session.recentVoiceTurns) ? session.recentVoiceTurns : [];
-    const transcriptTurns = Array.isArray(session.transcriptTurns) ? session.transcriptTurns : [];
-    const modelTurnIndex = this.findLatestVoiceTurnIndex(modelTurns, {
+    return annotateLatestVoiceTurnAddressingModule({
+      session,
       role,
       userId,
       text,
-      textMaxChars: VOICE_DECIDER_HISTORY_MAX_CHARS
+      addressing
     });
-    const transcriptTurnIndex = this.findLatestVoiceTurnIndex(transcriptTurns, {
-      role,
-      userId,
-      text,
-      textMaxChars: STT_TRANSCRIPT_MAX_CHARS
-    });
-    if (modelTurnIndex < 0 && transcriptTurnIndex < 0) return false;
-
-    if (modelTurnIndex >= 0) {
-      const current = modelTurns[modelTurnIndex]?.addressing;
-      modelTurns[modelTurnIndex] = {
-        ...modelTurns[modelTurnIndex],
-        addressing: this.mergeVoiceAddressingAnnotation(current, normalizedAddressing)
-      };
-    }
-    if (transcriptTurnIndex >= 0) {
-      const current = transcriptTurns[transcriptTurnIndex]?.addressing;
-      transcriptTurns[transcriptTurnIndex] = {
-        ...transcriptTurns[transcriptTurnIndex],
-        addressing: this.mergeVoiceAddressingAnnotation(current, normalizedAddressing)
-      };
-    }
-
-    return true;
   }
 
   buildVoiceAddressingState({
@@ -5508,68 +4045,12 @@ export class VoiceSessionManager {
     now = Date.now(),
     maxItems = 6
   } = {}): VoiceAddressingState | null {
-    const sourceTurns = Array.isArray(session?.transcriptTurns) ? session.transcriptTurns : [];
-    if (!sourceTurns.length) return null;
-
-    const normalizedUserId = String(userId || "").trim();
-    const normalizedMaxItems = Math.max(1, Math.min(12, Math.floor(Number(maxItems) || 6)));
-    const annotatedRows = sourceTurns
-      .filter((row) => row && typeof row === "object" && (row.role === "user" || row.role === "assistant"))
-      .map((row) => {
-        const normalized = this.normalizeVoiceAddressingAnnotation({
-          rawAddressing: row?.addressing
-        });
-        if (!normalized) return null;
-        const atRaw = Number(row?.at || 0);
-        const at = atRaw > 0 ? atRaw : null;
-        const ageMs = at ? Math.max(0, now - at) : null;
-        return {
-          role: row.role === "assistant" ? "assistant" : "user",
-          userId: String(row?.userId || "").trim() || null,
-          speakerName: String(row?.speakerName || "").trim() || "someone",
-          talkingTo: normalized.talkingTo || null,
-          directedConfidence: Number(normalized.directedConfidence || 0),
-          at,
-          ageMs
-        };
-      })
-      .filter(Boolean);
-    if (!annotatedRows.length) return null;
-
-    const recentAddressingGuesses = annotatedRows
-      .slice(-normalizedMaxItems)
-      .map((row) => ({
-        speakerName: row.speakerName,
-        talkingTo: row.talkingTo || null,
-        directedConfidence: Number(clamp(Number(row.directedConfidence) || 0, 0, 1).toFixed(3)),
-        ageMs: Number.isFinite(row.ageMs) ? Math.round(row.ageMs) : null
-      }));
-
-    const currentSpeakerRow = normalizedUserId
-      ? [...annotatedRows]
-        .reverse()
-        .find((row) => row.role === "user" && String(row.userId || "") === normalizedUserId) || null
-      : null;
-    const lastDirectedToMeRow =
-      [...annotatedRows]
-        .reverse()
-        .find((row) => row.role === "user" && row.talkingTo === "ME" && Number(row.directedConfidence || 0) > 0) ||
-      null;
-
-    return {
-      currentSpeakerTarget: currentSpeakerRow?.talkingTo || null,
-      currentSpeakerDirectedConfidence: Number(
-        clamp(Number(currentSpeakerRow?.directedConfidence) || 0, 0, 1).toFixed(3)
-      ),
-      lastDirectedToMe: lastDirectedToMeRow
-        ? {
-          speakerName: lastDirectedToMeRow.speakerName,
-          directedConfidence: Number(clamp(Number(lastDirectedToMeRow.directedConfidence) || 0, 0, 1).toFixed(3)),
-          ageMs: Number.isFinite(lastDirectedToMeRow.ageMs) ? Math.round(lastDirectedToMeRow.ageMs) : null
-        }
-        : null,
-      recentAddressingGuesses
-    };
+    return buildVoiceAddressingStateModule({
+      session,
+      userId,
+      now,
+      maxItems
+    });
   }
 
   shouldPersistUserTranscriptTimelineTurn({
@@ -7232,49 +5713,9 @@ export class VoiceSessionManager {
   }
 
   buildVoiceInstructions(settings, { soundboardCandidates = [] } = {}) {
-    const botName = getPromptBotName(settings);
-    const style = getPromptStyle(settings);
-    const allowNsfwHumor = shouldAllowVoiceNsfwHumor(settings);
-    const memoryEnabled = Boolean(getMemorySettings(settings).enabled);
-    const soundboardEnabled = Boolean(getVoiceSoundboardSettings(settings).enabled);
-    const soundboardCandidateLines = (Array.isArray(soundboardCandidates) ? soundboardCandidates : [])
-      .map((entry) => formatSoundboardCandidateLine(entry))
-      .filter(Boolean)
-      .slice(0, SOUNDBOARD_MAX_CANDIDATES);
-    const voiceToneGuardrails = buildVoiceToneGuardrails();
-    const voiceGuidance = getPromptVoiceGuidance(settings, DEFAULT_PROMPT_VOICE_GUIDANCE);
-    const lines = [
-      `You are ${botName}, a real-feeling regular in a Discord server, speaking in live voice chat.`,
-      `Stay in-character as ${botName}. Style: ${style}.`,
-      ...voiceGuidance,
-      ...voiceToneGuardrails,
-      allowNsfwHumor
-        ? "Adult/NSFW humor is allowed for consenting adults, but never include minors, coercion, or targeted harassment."
-        : "Keep humor non-sexual by default unless users explicitly request a safe toned-down joke.",
-      getPromptCapabilityHonestyLine(settings),
-      memoryEnabled
-        ? getPromptMemoryEnabledLine(
-          settings,
-          "You have persistent memory across conversations via saved durable facts. Do not claim each conversation starts from zero."
-        )
-        : getPromptMemoryDisabledLine(settings),
-      getPromptImpossibleActionLine(settings),
-      ...buildHardLimitsSection(settings, { maxItems: 12 }),
-      "You do not need to respond to filler words, background noise, or things that don't warrant a reply."
-    ];
-
-    if (soundboardEnabled && soundboardCandidateLines.length) {
-      lines.push("Soundboard control is enabled.");
-      lines.push("Available sound refs:");
-      lines.push(soundboardCandidateLines.join("\n"));
-      lines.push(
-        "If you want soundboard effects, insert one or more directives where they should fire: [[SOUNDBOARD:<sound_ref>]] using exact refs from the list."
-      );
-      lines.push("If no sound should play, omit that directive.");
-      lines.push("Never mention or explain the directive in normal speech.");
-    }
-
-    return lines.join("\n");
+    return buildVoiceInstructionsModule(settings, {
+      soundboardCandidates
+    });
   }
 
   async sendOperationalMessage({
