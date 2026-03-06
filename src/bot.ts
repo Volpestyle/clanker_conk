@@ -199,6 +199,121 @@ type DiscoveryLinkCandidate = {
   source?: string;
 };
 
+type SentMessageLike = {
+  id: string;
+  createdTimestamp: number;
+  guildId: string;
+  channelId: string;
+  content?: string;
+  attachments?: unknown;
+  embeds?: unknown[];
+};
+
+type CachedChannelLike = {
+  id: string;
+  name?: string;
+  send?: (payload: unknown) => Promise<SentMessageLike>;
+  sendTyping?: () => Promise<unknown>;
+  isTextBased?: () => boolean;
+  isVoiceBased?: () => boolean;
+  parent?: { name?: string } | null;
+};
+
+type GuildMemberLike = {
+  displayName?: string;
+  user?: {
+    username?: string;
+  } | null;
+};
+
+type GuildLike = {
+  id: string;
+  name: string;
+  members?: {
+    cache?: {
+      get: (id: string) => GuildMemberLike | undefined;
+    };
+  };
+  channels?: {
+    cache: {
+      values: () => IterableIterator<CachedChannelLike>;
+      filter: (predicate: (channel: CachedChannelLike) => boolean) => {
+        first: (count: number) => CachedChannelLike[];
+      };
+    };
+  };
+};
+
+type DiscordClientLike = {
+  on: Client["on"];
+  destroy: Client["destroy"];
+  isReady: Client["isReady"];
+  login: Client["login"];
+  user: {
+    id?: string;
+    username?: string;
+    tag?: string;
+  } | null;
+  guilds: {
+    cache: {
+      get: (id: string) => GuildLike | undefined;
+      values: () => IterableIterator<GuildLike>;
+      size: number;
+    };
+  };
+  channels: {
+    cache: {
+      get: (id: string) => CachedChannelLike | undefined;
+    };
+  };
+  users?: {
+    cache?: {
+      get: (id: string) => {
+        username?: string;
+      } | undefined;
+    };
+  };
+};
+
+function isSendableChannel(
+  channel: CachedChannelLike | null | undefined
+): channel is CachedChannelLike & {
+  send: (payload: unknown) => Promise<SentMessageLike>;
+  sendTyping: () => Promise<unknown>;
+} {
+  return Boolean(channel) &&
+    channel.isTextBased?.() === true &&
+    typeof channel.send === "function" &&
+    typeof channel.sendTyping === "function";
+}
+
+type ScreenShareLinkCapability = {
+  enabled?: boolean;
+  status?: string;
+  publicUrl?: string;
+  reason?: string | null;
+};
+
+type ScreenShareSessionResult = {
+  ok: boolean;
+  reason?: string;
+  shareUrl?: string;
+  expiresInMinutes?: number;
+  reused?: boolean;
+};
+
+type ScreenShareSessionManagerLike = {
+  getLinkCapability?: () => ScreenShareLinkCapability;
+  createSession: (payload: {
+    guildId: string;
+    channelId: string | null;
+    requesterUserId: string;
+    requesterDisplayName?: string;
+    targetUserId?: string | null;
+    source?: string;
+  }) => Promise<ScreenShareSessionResult>;
+};
+
 export class ClankerBot {
   appConfig;
   store;
@@ -230,8 +345,8 @@ export class ClankerBot {
   replyQueuedMessageIds: Set<string>;
   reflectionTimer;
   nextReflectionRunAt: string | null;
-  screenShareSessionManager: any;
-  client: any;
+  screenShareSessionManager: ScreenShareSessionManagerLike | null;
+  client: DiscordClientLike;
   voiceSessionManager: VoiceSessionManager;
   browserManager: BrowserManager | null;
   activeBrowserTasks: BrowserTaskRegistry;
@@ -312,7 +427,7 @@ export class ClankerBot {
     this.registerEvents();
   }
 
-  attachScreenShareSessionManager(manager) {
+  attachScreenShareSessionManager(manager: ScreenShareSessionManagerLike | null) {
     this.screenShareSessionManager = manager || null;
   }
 
@@ -3890,7 +4005,7 @@ export class ClankerBot {
         retrySoon = true;
       } else {
         const channel = this.client.channels.cache.get(channelId);
-        if (!channel || !channel.isTextBased?.() || typeof channel.send !== "function") {
+        if (!isSendableChannel(channel)) {
           runStatus = "error";
           errorText = "channel unavailable";
         } else {
@@ -4315,7 +4430,7 @@ export class ClankerBot {
 
     for (const id of explicit) {
       const channel = this.client.channels.cache.get(String(id));
-      if (!channel || !channel.isTextBased?.() || typeof channel.send !== "function") continue;
+      if (!isSendableChannel(channel)) continue;
       if (seen.has(channel.id)) continue;
       seen.add(channel.id);
       channels.push(channel);
@@ -4325,7 +4440,7 @@ export class ClankerBot {
 
     for (const guild of this.client.guilds.cache.values()) {
       const guildChannels = guild.channels.cache
-        .filter((channel) => channel.isTextBased?.() && typeof channel.send === "function")
+        .filter((channel) => isSendableChannel(channel))
         .first(8);
 
       for (const channel of guildChannels) {

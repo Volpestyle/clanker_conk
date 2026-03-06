@@ -441,7 +441,7 @@ test("renderSharePage returns branded invalid and valid pages", async () => {
   );
   assert.equal(valid.html.includes("const FRAME_INTERVAL_MS=1200;"), true);
   assert.equal(valid.html.includes("const MAX_WIDTH=960;"), true);
-  assert.equal(valid.html.includes("const JPEG_QUALITY=0.62;"), true);
+  assert.equal(valid.html.includes("const JPEG_QUALITY=0.6;"), true);
   assert.equal(valid.html.includes("TERMINAL_REASONS"), true);
 });
 

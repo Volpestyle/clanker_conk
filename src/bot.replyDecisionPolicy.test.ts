@@ -1288,6 +1288,166 @@ test("reply follow-up regeneration can add history images when model requests im
   });
 });
 
+test("reply tool loop keeps remaining concurrent tool results when one concurrent tool throws", async () => {
+  await withTempStore(async (store) => {
+    const channelId = "chan-1";
+    applyBaselineSettings(store, channelId);
+    patchTestSettings(store, {
+      permissions: {
+        devTasks: {
+          allowedUserIds: ["user-1"]
+        }
+      },
+      agentStack: {
+        runtimeConfig: {
+          devTeam: {
+            codex: {
+              enabled: true
+            }
+          }
+        }
+      }
+    });
+
+    const llmCalls = [];
+    const replyPayloads = [];
+    const channelSendPayloads = [];
+    const typingCallsRef = { count: 0 };
+
+    const bot = new ClankerBot({
+      appConfig: {},
+      store,
+      llm: {
+        async generate(payload) {
+          llmCalls.push(payload);
+          if (llmCalls.length === 1) {
+            return {
+              text: "",
+              toolCalls: [
+                {
+                  id: "tc_browser_1",
+                  name: "browser_browse",
+                  input: { query: "open the docs" }
+                },
+                {
+                  id: "tc_code_1",
+                  name: "code_task",
+                  input: { task: "inspect the repo status" }
+                }
+              ],
+              rawContent: [
+                { type: "text", text: "" },
+                {
+                  type: "tool_use",
+                  id: "tc_browser_1",
+                  name: "browser_browse",
+                  input: { query: "open the docs" }
+                },
+                {
+                  type: "tool_use",
+                  id: "tc_code_1",
+                  name: "code_task",
+                  input: { task: "inspect the repo status" }
+                }
+              ],
+              provider: "test",
+              model: "test-model",
+              usage: null,
+              costUsd: 0
+            };
+          }
+
+          return {
+            text: JSON.stringify({
+              text: "kept the surviving tool result",
+              skip: false,
+              reactionEmoji: null,
+              media: null,
+              automationAction: { operation: "none" },
+              voiceIntent: { intent: "none", confidence: 0, reason: null },
+              screenShareIntent: { action: "none", confidence: 0, reason: null }
+            }),
+            provider: "test",
+            model: "test-model",
+            usage: null,
+            costUsd: 0
+          };
+        }
+      },
+      memory: null,
+      discovery: null,
+      search: null,
+      gifs: null,
+      video: null
+    });
+
+    bot.client.user = {
+      id: "bot-1",
+      username: "clanker conk",
+      tag: "clanker conk#0001"
+    };
+    bot.runModelRequestedCodeTask = async () => ({
+      text: "repo status inspected",
+      isError: false,
+      costUsd: 0,
+      error: null
+    });
+    bot.buildSubAgentSessionsRuntime = () => ({
+      manager: bot.subAgentSessions,
+      createCodeSession() {
+        return null;
+      },
+      createBrowserSession() {
+        throw new Error("browser session init exploded");
+      }
+    });
+
+    const guild = buildGuild();
+    const channel = buildChannel({ guild, channelId, channelSendPayloads, typingCallsRef });
+    store.recordMessage({
+      messageId: "bot-context-concurrent-tools",
+      createdAt: Date.now() - 750,
+      guildId: guild.id,
+      channelId,
+      authorId: "bot-1",
+      authorName: "clanker conk",
+      isBot: true,
+      content: "last bot line",
+      referencedMessageId: null
+    });
+    const incoming = buildIncomingMessage({
+      guild,
+      channel,
+      messageId: "msg-concurrent-tools",
+      content: "check both tools",
+      replyPayloads
+    });
+
+    const settings = store.getSettings();
+    const recentMessages = store.getRecentMessages(
+      channelId,
+      getMemorySettings(settings).promptSlice.maxRecentMessages
+    );
+    const sent = await bot.maybeReplyToMessage(incoming, settings, {
+      source: "message_event",
+      recentMessages,
+      addressSignal: {
+        direct: false,
+        inferred: false,
+        triggered: false,
+        reason: "llm_decides"
+      }
+    });
+
+    assert.equal(sent, true);
+    assert.equal(llmCalls.length, 2);
+    assert.equal(channelSendPayloads.length, 1);
+    const followupContext = JSON.stringify(llmCalls[1]?.contextMessages || []);
+    assert.match(followupContext, /repo status inspected/);
+    assert.match(followupContext, /browser_browse failed: browser session init exploded/);
+  });
+});
+
 test("voice intent handoff routes join requests to voice session manager instead of sending text", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";

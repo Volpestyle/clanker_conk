@@ -715,7 +715,11 @@ export async function maybeRegenerateWithMemoryLookup<
     }
 
     if (toolTasks.length) {
-      await Promise.all(toolTasks);
+      const settledTasks = await Promise.allSettled(toolTasks);
+      for (const settled of settledTasks) {
+        if (settled.status === "fulfilled") continue;
+        console.error("[replyFollowup] lookup task failed:", settled.reason);
+      }
     }
     if (!shouldRegenerate) break;
 

@@ -62,6 +62,39 @@ export const LEGACY_VOICE_PROVIDER_KINDS = [
   "elevenlabs"
 ] as const;
 
+type Primitive = string | number | boolean | bigint | symbol | null | undefined;
+
+type WidenLiteral<T> =
+  T extends string ? string :
+  T extends number ? number :
+  T extends boolean ? boolean :
+  T;
+
+type DeepWiden<T> =
+  T extends Primitive ? WidenLiteral<T> :
+  T extends readonly (infer U)[] ? readonly DeepWiden<[U] extends [never] ? string : U>[] :
+  T extends object ? { [K in keyof T]: DeepWiden<T[K]> } :
+  T;
+
+type DeepPartial<T> =
+  T extends Primitive ? T :
+  T extends readonly (infer U)[] ? readonly DeepPartial<U>[] :
+  T extends object ? { [K in keyof T]?: DeepPartial<T[K]> } :
+  T;
+
+export type SettingsModelBinding = {
+  provider?: string;
+  model?: string;
+};
+
+export type SettingsExecutionPolicy = {
+  mode?: string;
+  model?: SettingsModelBinding;
+  temperature?: number;
+  maxOutputTokens?: number;
+  reasoningEffort?: string;
+};
+
 export const DEFAULT_SETTINGS = {
   identity: {
     botName: "clanker conk",
@@ -545,3 +578,29 @@ export const DEFAULT_SETTINGS = {
     enabled: true
   }
 } as const;
+
+type SettingsFromDefaults = DeepWiden<typeof DEFAULT_SETTINGS>;
+
+export type Settings = Omit<SettingsFromDefaults, "interaction" | "agentStack"> & {
+  interaction: Omit<SettingsFromDefaults["interaction"], "replyGeneration"> & {
+    replyGeneration: Omit<SettingsFromDefaults["interaction"]["replyGeneration"], "pricing"> & {
+      pricing: Record<string, unknown>;
+    };
+  };
+  agentStack: Omit<SettingsFromDefaults["agentStack"], "overrides"> & {
+    overrides: {
+      orchestrator?: SettingsModelBinding;
+      harness?: string;
+      researchRuntime?: string;
+      browserRuntime?: string;
+      voiceRuntime?: string;
+      voiceAdmissionClassifier?: SettingsExecutionPolicy;
+      devTeam?: {
+        orchestrator?: SettingsModelBinding;
+        codingWorkers?: readonly string[];
+      };
+    };
+  };
+};
+
+export type SettingsInput = DeepPartial<Settings>;

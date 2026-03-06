@@ -1,4 +1,8 @@
-import { DEFAULT_SETTINGS, PROVIDER_MODEL_FALLBACKS } from "../settings/settingsSchema.ts";
+import {
+  DEFAULT_SETTINGS,
+  PROVIDER_MODEL_FALLBACKS,
+  type SettingsInput
+} from "../settings/settingsSchema.ts";
 import { normalizeBoundedStringList } from "../settings/listNormalization.ts";
 import { normalizeProviderOrder } from "../search.ts";
 import { clamp, deepMerge } from "../utils.ts";
@@ -325,7 +329,7 @@ function inferLegacyPreset(raw: Record<string, unknown>) {
   return "multi_provider_legacy";
 }
 
-function migrateLegacySettings(raw: Record<string, unknown>) {
+function migrateLegacySettings(raw: Record<string, unknown>): SettingsInput {
   const prompt = isRecord(raw.prompt) ? raw.prompt : {};
   const activity = isRecord(raw.activity) ? raw.activity : {};
   const llm = isRecord(raw.llm) ? raw.llm : {};
@@ -672,6 +676,7 @@ export function normalizeSettings(raw: unknown) {
   const permissions = isRecord(merged.permissions) ? merged.permissions : {};
   const interaction = isRecord(merged.interaction) ? merged.interaction : {};
   const agentStack = isRecord(merged.agentStack) ? merged.agentStack : {};
+  const rawAgentStack = isRecord(canonicalInput.agentStack) ? canonicalInput.agentStack : {};
   const memory = isRecord(merged.memory) ? merged.memory : {};
   const directives = isRecord(merged.directives) ? merged.directives : {};
   const initiative = isRecord(merged.initiative) ? merged.initiative : {};
@@ -680,7 +685,7 @@ export function normalizeSettings(raw: unknown) {
   const music = isRecord(merged.music) ? merged.music : {};
   const automations = isRecord(merged.automations) ? merged.automations : {};
 
-  const presetRaw = normalizeString(agentStack.preset, DEFAULT_SETTINGS.agentStack.preset, 48);
+  const presetRaw = normalizeString(rawAgentStack.preset, DEFAULT_SETTINGS.agentStack.preset, 48);
   const preset = (
     presetRaw === "openai_native" ||
     presetRaw === "anthropic_brain_openai_tools" ||
@@ -701,7 +706,7 @@ export function normalizeSettings(raw: unknown) {
       ? { provider: "claude_code_session", model: "max" }
       : { provider: "openai", model: "gpt-5-mini" };
   const orchestratorOverride = normalizeModelBinding(
-    (agentStack.overrides as any)?.orchestrator,
+    (rawAgentStack.overrides as any)?.orchestrator,
     presetOrchestratorFallback.provider,
     presetOrchestratorFallback.model
   );
@@ -951,23 +956,23 @@ export function normalizeSettings(raw: unknown) {
     agentStack: {
       preset,
       advancedOverridesEnabled: normalizeBoolean(
-        agentStack.advancedOverridesEnabled,
+        rawAgentStack.advancedOverridesEnabled,
         DEFAULT_SETTINGS.agentStack.advancedOverridesEnabled
       ),
       overrides: {
-        ...(isRecord(agentStack.overrides) ? agentStack.overrides : {}),
+        ...(isRecord(rawAgentStack.overrides) ? rawAgentStack.overrides : {}),
         orchestrator: orchestratorOverride,
-        ...(isRecord((agentStack.overrides as any)?.devTeam)
+        ...(isRecord((rawAgentStack.overrides as any)?.devTeam)
           ? {
               devTeam: {
-                ...(agentStack.overrides as any).devTeam,
+                ...(rawAgentStack.overrides as any).devTeam,
                 orchestrator: normalizeModelBinding(
-                  (agentStack.overrides as any)?.devTeam?.orchestrator,
+                  (rawAgentStack.overrides as any)?.devTeam?.orchestrator,
                   presetOrchestratorFallback.provider,
                   presetOrchestratorFallback.model
                 ),
                 codingWorkers: normalizeStringList(
-                  (agentStack.overrides as any)?.devTeam?.codingWorkers,
+                  (rawAgentStack.overrides as any)?.devTeam?.codingWorkers,
                   4,
                   40
                 )
@@ -975,7 +980,7 @@ export function normalizeSettings(raw: unknown) {
             }
           : {}),
         voiceAdmissionClassifier: normalizeExecutionPolicy(
-          (agentStack.overrides as any)?.voiceAdmissionClassifier,
+          (rawAgentStack.overrides as any)?.voiceAdmissionClassifier,
           presetVoiceAdmissionClassifierFallback.provider,
           presetVoiceAdmissionClassifierFallback.model,
           { fallbackMode: "dedicated_model" }

@@ -442,12 +442,33 @@ export async function executeReplyLlm(bot: any, message: any, settings: any, opt
     // Run concurrent sub-agent calls in parallel
     const concurrentResults = new Map<string, { content: string; isError?: boolean }>();
     if (concurrentCalls.length > 0) {
-      const promises = concurrentCalls.map(async (toolCall) => {
+      const settledCalls = await Promise.allSettled(concurrentCalls.map(async (toolCall) => {
         const toolInput = toolCall.input as Record<string, unknown>;
         const result = await executeReplyTool(toolCall.name, toolInput, replyToolRuntime, replyToolContext);
         concurrentResults.set(toolCall.id, result);
+      }));
+      settledCalls.forEach((settled, index) => {
+        if (settled.status === "fulfilled") return;
+        const toolCall = concurrentCalls[index];
+        const errorMessage = String((settled.reason as Error)?.message || settled.reason || "unknown_error");
+        concurrentResults.set(toolCall.id, {
+          content: `${toolCall.name} failed: ${errorMessage}`,
+          isError: true
+        });
+        bot.store?.logAction?.({
+          kind: "bot_error",
+          guildId: message.guildId,
+          channelId: message.channelId,
+          messageId: message.id,
+          userId: message.author?.id || null,
+          content: `reply_tool_concurrent_failure:${toolCall.name}`,
+          metadata: {
+            source,
+            toolCallId: toolCall.id,
+            error: errorMessage
+          }
+        });
       });
-      await Promise.all(promises);
     }
 
     // Run sequential tools in order

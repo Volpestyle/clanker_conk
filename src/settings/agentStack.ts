@@ -1,5 +1,9 @@
 import { deepMerge } from "../utils.ts";
-import { DEFAULT_SETTINGS } from "./settingsSchema.ts";
+import {
+  DEFAULT_SETTINGS,
+  type Settings,
+  type SettingsInput
+} from "./settingsSchema.ts";
 
 type ModelBinding = {
   provider?: string;
@@ -258,6 +262,22 @@ function mergeWithDefaults<T>(defaults: T, value: unknown): T {
   return deepMerge(defaults, value) as T;
 }
 
+function isSettingsInput(value: unknown): value is SettingsInput {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function getSettingsInput(settings: unknown): SettingsInput {
+  return isSettingsInput(settings) ? settings : {};
+}
+
+function getSettingsSection<T>(
+  settings: unknown,
+  select: (input: SettingsInput) => unknown,
+  defaults: T
+): T {
+  return mergeWithDefaults(defaults, select(getSettingsInput(settings)));
+}
+
 function resolveModelBinding(binding: unknown, fallback: ModelBinding): Required<ModelBinding> {
   const source = binding && typeof binding === "object" && !Array.isArray(binding)
     ? binding as ModelBinding
@@ -298,8 +318,8 @@ function resolveExecutionPolicy(
   };
 }
 
-export function getIdentitySettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.identity, (settings as any)?.identity);
+export function getIdentitySettings(settings: unknown): Settings["identity"] {
+  return getSettingsSection(settings, (input) => input.identity, DEFAULT_SETTINGS.identity);
 }
 
 export function getBotName(settings: unknown): string {
@@ -313,167 +333,239 @@ export function getBotNameAliases(settings: unknown): string[] {
     : [...DEFAULT_SETTINGS.identity.botNameAliases];
 }
 
-export function getPersonaSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.persona, (settings as any)?.persona);
+export function getPersonaSettings(settings: unknown): Settings["persona"] {
+  return getSettingsSection(settings, (input) => input.persona, DEFAULT_SETTINGS.persona);
 }
 
-export function getPromptingSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.prompting, (settings as any)?.prompting);
+export function getPromptingSettings(settings: unknown): Settings["prompting"] {
+  return getSettingsSection(settings, (input) => input.prompting, DEFAULT_SETTINGS.prompting);
 }
 
-export function getReplyPermissions(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.permissions.replies, (settings as any)?.permissions?.replies);
-}
-
-export function getDevTaskPermissions(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.permissions.devTasks, (settings as any)?.permissions?.devTasks);
-}
-
-export function getInteractionSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.interaction, (settings as any)?.interaction);
-}
-
-export function getActivitySettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.interaction.activity, (settings as any)?.interaction?.activity);
-}
-
-export function getReplyGenerationSettings(settings: unknown) {
-  return mergeWithDefaults(
-    DEFAULT_SETTINGS.interaction.replyGeneration,
-    (settings as any)?.interaction?.replyGeneration
+export function getReplyPermissions(settings: unknown): Settings["permissions"]["replies"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.permissions?.replies,
+    DEFAULT_SETTINGS.permissions.replies
   );
 }
 
-export function getFollowupSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.interaction.followup, (settings as any)?.interaction?.followup);
-}
-
-export function getStartupSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.interaction.startup, (settings as any)?.interaction?.startup);
-}
-
-export function getSessionOrchestrationSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.interaction.sessions, (settings as any)?.interaction?.sessions);
-}
-
-export function getAgentStackSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.agentStack, (settings as any)?.agentStack);
-}
-
-export function getMemorySettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.memory, (settings as any)?.memory);
-}
-
-export function getDirectiveSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.directives, (settings as any)?.directives);
-}
-
-export function getTextInitiativeSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.initiative.text, (settings as any)?.initiative?.text);
-}
-
-export function getVoiceInitiativeSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.initiative.voice, (settings as any)?.initiative?.voice);
-}
-
-export function getDiscoverySettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.initiative.discovery, (settings as any)?.initiative?.discovery);
-}
-
-export function getVoiceSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.voice, (settings as any)?.voice);
-}
-
-export function getVoiceTranscriptionSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.voice.transcription, (settings as any)?.voice?.transcription);
-}
-
-export function getVoiceChannelPolicy(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.voice.channelPolicy, (settings as any)?.voice?.channelPolicy);
-}
-
-export function getVoiceSessionLimits(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.voice.sessionLimits, (settings as any)?.voice?.sessionLimits);
-}
-
-export function getVoiceConversationPolicy(settings: unknown) {
-  return mergeWithDefaults(
-    DEFAULT_SETTINGS.voice.conversationPolicy,
-    (settings as any)?.voice?.conversationPolicy
+export function getDevTaskPermissions(settings: unknown): Settings["permissions"]["devTasks"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.permissions?.devTasks,
+    DEFAULT_SETTINGS.permissions.devTasks
   );
 }
 
-export function getVoiceAdmissionSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.voice.admission, (settings as any)?.voice?.admission);
+export function getInteractionSettings(settings: unknown): Settings["interaction"] {
+  return getSettingsSection(settings, (input) => input.interaction, DEFAULT_SETTINGS.interaction);
 }
 
-export function getVoiceStreamWatchSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.voice.streamWatch, (settings as any)?.voice?.streamWatch);
+export function getActivitySettings(settings: unknown): Settings["interaction"]["activity"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.interaction?.activity,
+    DEFAULT_SETTINGS.interaction.activity
+  );
 }
 
-export function getVoiceSoundboardSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.voice.soundboard, (settings as any)?.voice?.soundboard);
+export function getReplyGenerationSettings(settings: unknown): Settings["interaction"]["replyGeneration"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.interaction?.replyGeneration,
+    DEFAULT_SETTINGS.interaction.replyGeneration
+  );
 }
 
-export function getMediaSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.media, (settings as any)?.media);
+export function getFollowupSettings(settings: unknown): Settings["interaction"]["followup"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.interaction?.followup,
+    DEFAULT_SETTINGS.interaction.followup
+  );
 }
 
-export function getVisionSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.media.vision, (settings as any)?.media?.vision);
+export function getStartupSettings(settings: unknown): Settings["interaction"]["startup"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.interaction?.startup,
+    DEFAULT_SETTINGS.interaction.startup
+  );
 }
 
-export function getVideoContextSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.media.videoContext, (settings as any)?.media?.videoContext);
+export function getSessionOrchestrationSettings(settings: unknown): Settings["interaction"]["sessions"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.interaction?.sessions,
+    DEFAULT_SETTINGS.interaction.sessions
+  );
 }
 
-export function getMusicSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.music, (settings as any)?.music);
+export function getAgentStackSettings(settings: unknown): Settings["agentStack"] {
+  return getSettingsSection(settings, (input) => input.agentStack, DEFAULT_SETTINGS.agentStack);
 }
 
-export function getAutomationsSettings(settings: unknown) {
-  return mergeWithDefaults(DEFAULT_SETTINGS.automations, (settings as any)?.automations);
+export function getMemorySettings(settings: unknown): Settings["memory"] {
+  return getSettingsSection(settings, (input) => input.memory, DEFAULT_SETTINGS.memory);
 }
 
-export function getRuntimeConfig(settings: unknown) {
+export function getDirectiveSettings(settings: unknown): Settings["directives"] {
+  return getSettingsSection(settings, (input) => input.directives, DEFAULT_SETTINGS.directives);
+}
+
+export function getTextInitiativeSettings(settings: unknown): Settings["initiative"]["text"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.initiative?.text,
+    DEFAULT_SETTINGS.initiative.text
+  );
+}
+
+export function getVoiceInitiativeSettings(settings: unknown): Settings["initiative"]["voice"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.initiative?.voice,
+    DEFAULT_SETTINGS.initiative.voice
+  );
+}
+
+export function getDiscoverySettings(settings: unknown): Settings["initiative"]["discovery"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.initiative?.discovery,
+    DEFAULT_SETTINGS.initiative.discovery
+  );
+}
+
+export function getVoiceSettings(settings: unknown): Settings["voice"] {
+  return getSettingsSection(settings, (input) => input.voice, DEFAULT_SETTINGS.voice);
+}
+
+export function getVoiceTranscriptionSettings(settings: unknown): Settings["voice"]["transcription"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.voice?.transcription,
+    DEFAULT_SETTINGS.voice.transcription
+  );
+}
+
+export function getVoiceChannelPolicy(settings: unknown): Settings["voice"]["channelPolicy"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.voice?.channelPolicy,
+    DEFAULT_SETTINGS.voice.channelPolicy
+  );
+}
+
+export function getVoiceSessionLimits(settings: unknown): Settings["voice"]["sessionLimits"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.voice?.sessionLimits,
+    DEFAULT_SETTINGS.voice.sessionLimits
+  );
+}
+
+export function getVoiceConversationPolicy(settings: unknown): Settings["voice"]["conversationPolicy"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.voice?.conversationPolicy,
+    DEFAULT_SETTINGS.voice.conversationPolicy
+  );
+}
+
+export function getVoiceAdmissionSettings(settings: unknown): Settings["voice"]["admission"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.voice?.admission,
+    DEFAULT_SETTINGS.voice.admission
+  );
+}
+
+export function getVoiceStreamWatchSettings(settings: unknown): Settings["voice"]["streamWatch"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.voice?.streamWatch,
+    DEFAULT_SETTINGS.voice.streamWatch
+  );
+}
+
+export function getVoiceSoundboardSettings(settings: unknown): Settings["voice"]["soundboard"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.voice?.soundboard,
+    DEFAULT_SETTINGS.voice.soundboard
+  );
+}
+
+export function getMediaSettings(settings: unknown): Settings["media"] {
+  return getSettingsSection(settings, (input) => input.media, DEFAULT_SETTINGS.media);
+}
+
+export function getVisionSettings(settings: unknown): Settings["media"]["vision"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.media?.vision,
+    DEFAULT_SETTINGS.media.vision
+  );
+}
+
+export function getVideoContextSettings(settings: unknown): Settings["media"]["videoContext"] {
+  return getSettingsSection(
+    settings,
+    (input) => input.media?.videoContext,
+    DEFAULT_SETTINGS.media.videoContext
+  );
+}
+
+export function getMusicSettings(settings: unknown): Settings["music"] {
+  return getSettingsSection(settings, (input) => input.music, DEFAULT_SETTINGS.music);
+}
+
+export function getAutomationsSettings(settings: unknown): Settings["automations"] {
+  return getSettingsSection(settings, (input) => input.automations, DEFAULT_SETTINGS.automations);
+}
+
+export function getRuntimeConfig(settings: unknown): Settings["agentStack"]["runtimeConfig"] {
   const agentStack = getAgentStackSettings(settings);
   return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig, agentStack.runtimeConfig);
 }
 
-export function getResearchRuntimeConfig(settings: unknown) {
+export function getResearchRuntimeConfig(settings: unknown): Settings["agentStack"]["runtimeConfig"]["research"] {
   return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig.research, getRuntimeConfig(settings).research);
 }
 
-export function getBrowserRuntimeConfig(settings: unknown) {
+export function getBrowserRuntimeConfig(settings: unknown): Settings["agentStack"]["runtimeConfig"]["browser"] {
   return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig.browser, getRuntimeConfig(settings).browser);
 }
 
-export function getVoiceRuntimeConfig(settings: unknown) {
+export function getVoiceRuntimeConfig(settings: unknown): Settings["agentStack"]["runtimeConfig"]["voice"] {
   return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig.voice, getRuntimeConfig(settings).voice);
 }
 
-export function getClaudeCodeSessionRuntimeConfig(settings: unknown) {
+export function getClaudeCodeSessionRuntimeConfig(
+  settings: unknown
+): Settings["agentStack"]["runtimeConfig"]["claudeCodeSession"] {
   return mergeWithDefaults(
     DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeCodeSession,
     getRuntimeConfig(settings).claudeCodeSession
   );
 }
 
-export function getDevTeamRuntimeConfig(settings: unknown) {
+export function getDevTeamRuntimeConfig(settings: unknown): Settings["agentStack"]["runtimeConfig"]["devTeam"] {
   return mergeWithDefaults(DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam, getRuntimeConfig(settings).devTeam);
 }
 
 function getPresetDefaults(settings: unknown): PresetDefaults {
-  const agentStack: any = getAgentStackSettings(settings);
+  const agentStack = getAgentStackSettings(settings);
   const presetName = String(agentStack.preset || DEFAULT_SETTINGS.agentStack.preset) as keyof typeof PRESET_DEFAULTS;
   return PRESET_DEFAULTS[presetName] || PRESET_DEFAULTS.openai_native;
 }
 
 export function getResolvedOrchestratorBinding(settings: unknown) {
   const interaction = getReplyGenerationSettings(settings);
-  const agentStack: any = getAgentStackSettings(settings);
+  const agentStack = getAgentStackSettings(settings);
   const presetDefaults = getPresetDefaults(settings);
-  const overrideBinding = agentStack?.overrides?.orchestrator;
+  const overrideBinding = agentStack.overrides?.orchestrator;
   const binding = resolveModelBinding(overrideBinding, presetDefaults.orchestrator);
   return {
     ...binding,
@@ -551,11 +643,11 @@ export function getResolvedVoiceInitiativeBinding(settings: unknown) {
 
 export function getResolvedVoiceAdmissionClassifierBinding(settings: unknown) {
   const voiceAdmission = getVoiceAdmissionSettings(settings);
-  const agentStack: any = getAgentStackSettings(settings);
+  const agentStack = getAgentStackSettings(settings);
   const presetDefaults = getPresetDefaults(settings);
   const fallback = presetDefaults.voiceAdmissionClassifier || presetDefaults.orchestrator;
   const overridePolicy = resolveExecutionPolicy(
-    agentStack?.overrides?.voiceAdmissionClassifier,
+    agentStack.overrides?.voiceAdmissionClassifier,
     fallback
   );
   const mode = String(voiceAdmission.mode || "");
@@ -659,12 +751,10 @@ export function applyOrchestratorOverrideSettings(
 }
 
 export function resolveAgentStack(settings: unknown) {
-  const agentStack: any = getAgentStackSettings(settings);
+  const agentStack = getAgentStackSettings(settings);
   const presetName = String(agentStack.preset || DEFAULT_SETTINGS.agentStack.preset) as keyof typeof PRESET_DEFAULTS;
   const presetDefaults = getPresetDefaults(settings);
-  const overrides: any = agentStack?.overrides && typeof agentStack.overrides === "object" && !Array.isArray(agentStack.overrides)
-    ? agentStack.overrides
-    : {};
+  const overrides = agentStack.overrides || {};
   const voiceAdmission = getVoiceAdmissionSettings(settings);
   const claudeCodeSession = getClaudeCodeSessionRuntimeConfig(settings);
   const devTeamRuntime = getDevTeamRuntimeConfig(settings);

@@ -323,7 +323,7 @@ test("normalizeSettings migrates legacy code agent provider fields into dev-team
   });
 
   assert.equal(fallback.agentStack.runtimeConfig.devTeam.codex.enabled, false);
-  assert.equal(fallback.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
+  assert.equal(fallback.agentStack.runtimeConfig.devTeam.codex.model, "codex-mini-latest");
   assert.equal(fallback.agentStack.runtimeConfig.devTeam.claudeCode.enabled, true);
   assert.equal(fallback.agentStack.runtimeConfig.devTeam.claudeCode.model, "sonnet");
 

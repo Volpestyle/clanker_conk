@@ -54,11 +54,11 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.browserLlmModel, "claude-sonnet-4-5-20250929");
   assert.equal(form.codeAgentProvider, "claude-code");
   assert.equal(form.codeAgentModel, "sonnet");
-  assert.equal(form.codeAgentCodexModel, "gpt-5-codex");
+  assert.equal(form.codeAgentCodexModel, "codex-mini-latest");
   assert.equal(form.memoryReflectionStrategy, "two_pass_extract_then_main");
   assert.equal(form.adaptiveDirectivesEnabled, true);
   assert.equal(form.automationsEnabled, true);
-  assert.equal(form.voiceThoughtEngineEnabled, true);
+  assert.equal(form.voiceThoughtEngineEnabled, false);
   assert.equal(form.voiceThoughtEngineProvider, "anthropic");
   assert.equal(form.voiceThoughtEngineModel, "claude-sonnet-4-6");
   assert.equal(form.voiceThoughtEngineTemperature, 1.2);
@@ -149,7 +149,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.voice.transcription.languageHint, "en-us");
   assert.deepEqual(patch.agentStack.overrides.devTeam.codingWorkers, ["codex"]);
   assert.equal(patch.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
-  assert.equal(patch.initiative.voice.enabled, true);
+  assert.equal(patch.initiative.voice.enabled, false);
   assert.equal(patch.initiative.voice.execution.model.provider, "anthropic");
   assert.equal(patch.initiative.voice.execution.model.model, "claude-sonnet-4-6");
   assert.equal(patch.initiative.voice.execution.temperature, 1.2);
