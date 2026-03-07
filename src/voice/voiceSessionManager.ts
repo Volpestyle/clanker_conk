@@ -152,7 +152,10 @@ import {
 } from "./systemSpeechOpportunity.ts";
 import { runVoiceReplyPipeline } from "./voiceReplyPipeline.ts";
 import { requestJoin } from "./voiceJoinFlow.ts";
-import { evaluateVoiceReplyDecision as evaluateVoiceReplyDecisionModule } from "./voiceReplyDecision.ts";
+import {
+  buildVoiceConversationContext as buildVoiceConversationContextModule,
+  evaluateVoiceReplyDecision as evaluateVoiceReplyDecisionModule
+} from "./voiceReplyDecision.ts";
 import {
   ACTIVITY_TOUCH_MIN_SPEECH_MS,
   BARGE_IN_BOT_AUDIO_ECHO_GUARD_MS,
@@ -164,7 +167,6 @@ import {
   BOT_TURN_DEFERRED_FLUSH_DELAY_MS,
   BOT_TURN_DEFERRED_QUEUE_MAX,
   BOT_TURN_SILENCE_RESET_MS,
-  RECENT_ENGAGEMENT_WINDOW_MS,
   LEAVE_DIRECTIVE_PLAYBACK_MAX_WAIT_MS,
   LEAVE_DIRECTIVE_PLAYBACK_NO_SIGNAL_GRACE_MS,
   LEAVE_DIRECTIVE_PLAYBACK_POLL_MS,
@@ -3670,57 +3672,17 @@ export class VoiceSessionManager {
     userId = null,
     directAddressed = false,
     addressedToOtherParticipant = false,
+    participantCount = null,
     now = Date.now()
   } = {}): VoiceConversationContext {
-    const normalizedUserId = String(userId || "").trim();
-
-    const lastAudioDeltaAt = Number(session?.lastAudioDeltaAt || 0);
-    const msSinceAssistantReply = lastAudioDeltaAt > 0 ? Math.max(0, now - lastAudioDeltaAt) : null;
-    const recentAssistantReply =
-      Number.isFinite(msSinceAssistantReply) &&
-      msSinceAssistantReply <= RECENT_ENGAGEMENT_WINDOW_MS;
-
-    const lastDirectAddressUserId = String(session?.lastDirectAddressUserId || "").trim();
-    const sameAsRecentDirectAddress =
-      Boolean(normalizedUserId) &&
-      Boolean(lastDirectAddressUserId) &&
-      normalizedUserId === lastDirectAddressUserId;
-    const lastDirectAddressAt = Number(session?.lastDirectAddressAt || 0);
-    const msSinceDirectAddress = lastDirectAddressAt > 0 ? Math.max(0, now - lastDirectAddressAt) : null;
-    const recentDirectAddress =
-      Number.isFinite(msSinceDirectAddress) &&
-      msSinceDirectAddress <= RECENT_ENGAGEMENT_WINDOW_MS;
-    const activeVoiceCommandState = this.ensureVoiceCommandState(session);
-    const sameAsVoiceCommandUser =
-      Boolean(normalizedUserId) &&
-      Boolean(activeVoiceCommandState?.userId) &&
-      normalizedUserId === activeVoiceCommandState.userId;
-
-    const engagedWithCurrentSpeaker =
-      Boolean(directAddressed) ||
-      sameAsVoiceCommandUser ||
-      (recentAssistantReply && sameAsRecentDirectAddress) ||
-      (recentDirectAddress && sameAsRecentDirectAddress);
-    const engaged =
-      !addressedToOtherParticipant &&
-      engagedWithCurrentSpeaker;
-
-    return {
-      engagementState: engaged ? "engaged" : activeVoiceCommandState ? "command_only_engaged" : "wake_word_biased",
-      engaged,
-      engagedWithCurrentSpeaker,
-      recentAssistantReply,
-      recentDirectAddress,
-      sameAsRecentDirectAddress,
-      msSinceAssistantReply: Number.isFinite(msSinceAssistantReply) ? msSinceAssistantReply : null,
-      msSinceDirectAddress: Number.isFinite(msSinceDirectAddress) ? msSinceDirectAddress : null,
-      activeCommandSpeaker: activeVoiceCommandState?.userId || null,
-      activeCommandDomain: activeVoiceCommandState?.domain || null,
-      activeCommandIntent: activeVoiceCommandState?.intent || null,
-      msUntilCommandSessionExpiry: activeVoiceCommandState
-        ? Math.max(0, activeVoiceCommandState.expiresAt - now)
-        : null
-    };
+    return buildVoiceConversationContextModule(this, {
+      session,
+      userId,
+      directAddressed,
+      addressedToOtherParticipant,
+      participantCount,
+      now
+    });
   }
 
   async evaluateVoiceReplyDecision({

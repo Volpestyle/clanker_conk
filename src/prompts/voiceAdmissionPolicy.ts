@@ -93,13 +93,10 @@ export function buildVoiceAdmissionPolicyLines({
     }
   }
 
-  if (pendingCommandFollowupSignal) {
-    lines.push("Signal: this may be a same-speaker command follow-up. Treat as a strong positive context signal and prefer YES unless the transcript is unusable.");
-  }
-
-  if (addressedToOtherSignal) {
-    lines.push("Signal: this may be directed to another participant. Treat as a strong negative context signal; in ambiguous cases, prefer NO.");
-  }
+  // addressedToOtherSignal and pendingCommandFollowupSignal lines removed for
+  // classifier mode — the classifier LLM can infer these from the transcript
+  // and participant list directly, and our heuristic signals were redundant
+  // noise that sometimes contradicted the LLM's better judgment.
 
   if (normalizedMode === "classifier") {
     if (normalizedDirectAddressed) {
@@ -109,11 +106,16 @@ export function buildVoiceAdmissionPolicyLines({
     } else {
       lines.push("The bot should stay selective. Prefer NO when this appears to be side chatter, filler, or not meant for the bot.");
     }
-    if (addressedToOtherSignal) {
-      lines.push("When target likely equals OTHER and there is no clear handoff to the bot, prefer NO.");
-    }
     lines.push("If the turn is only laughter/backchannel noise with no clear ask, prefer NO.");
     return lines;
+  }
+
+  if (pendingCommandFollowupSignal) {
+    lines.push("Signal: this may be a same-speaker command follow-up. Treat as a strong positive context signal and prefer YES unless the transcript is unusable.");
+  }
+
+  if (addressedToOtherSignal) {
+    lines.push("Signal: this may be directed to another participant. Treat as a strong negative context signal; in ambiguous cases, prefer NO.");
   }
 
   if (normalizedIsEagerTurn) {

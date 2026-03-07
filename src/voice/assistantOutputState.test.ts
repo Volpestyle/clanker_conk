@@ -120,3 +120,150 @@ test("getAssistantOutputActivityAt returns zero when state is idle", () => {
   });
   assert.equal(getAssistantOutputActivityAt(speaking), 43_000);
 });
+
+test("syncAssistantOutputStateRecord keeps lock in speaking_buffered until buffered audio drains", () => {
+  const live = syncAssistantOutputStateRecord(null, {
+    now: 50_000,
+    trigger: "audio_delta",
+    liveAudioStreaming: true,
+    pendingResponse: true,
+    openAiActiveResponse: true,
+    awaitingToolOutputs: false,
+    requestId: 21
+  });
+
+  const buffered = syncAssistantOutputStateRecord(live, {
+    now: 50_250,
+    trigger: "response_done",
+    liveAudioStreaming: false,
+    pendingResponse: false,
+    openAiActiveResponse: false,
+    awaitingToolOutputs: false,
+    ttsBufferedSamples: 4_800,
+    requestId: 21
+  });
+
+  assert.equal(buffered.phase, ASSISTANT_OUTPUT_PHASE.SPEAKING_BUFFERED);
+  assert.equal(buffered.reason, ASSISTANT_OUTPUT_REASON.BOT_AUDIO_BUFFERED);
+  assert.equal(buffered.requestId, 21);
+});
+
+test("syncAssistantOutputStateRecord returns idle after stale buffered telemetry clears", () => {
+  const buffered = syncAssistantOutputStateRecord(null, {
+    now: 60_000,
+    trigger: "buffer_depth",
+    liveAudioStreaming: false,
+    pendingResponse: false,
+    openAiActiveResponse: false,
+    awaitingToolOutputs: false,
+    ttsBufferedSamples: 9_600,
+    requestId: 22
+  });
+
+  const idle = syncAssistantOutputStateRecord(buffered, {
+    now: 62_000,
+    trigger: "buffer_depth_expired",
+    liveAudioStreaming: false,
+    pendingResponse: false,
+    openAiActiveResponse: false,
+    awaitingToolOutputs: false,
+    ttsPlaybackState: TTS_PLAYBACK_STATE.IDLE,
+    ttsBufferedSamples: 0,
+    requestId: null
+  });
+
+  assert.equal(idle.phase, ASSISTANT_OUTPUT_PHASE.IDLE);
+  assert.equal(idle.reason, ASSISTANT_OUTPUT_REASON.IDLE);
+  assert.equal(idle.requestId, null);
+});
+
+test("syncAssistantOutputStateRecord clears stale active response once pending state disappears", () => {
+  const pending = syncAssistantOutputStateRecord(null, {
+    now: 70_000,
+    trigger: "response_requested",
+    liveAudioStreaming: false,
+    pendingResponse: false,
+    openAiActiveResponse: true,
+    awaitingToolOutputs: false,
+    requestId: 23
+  });
+
+  const idle = syncAssistantOutputStateRecord(pending, {
+    now: 70_800,
+    trigger: "active_response_cleared",
+    liveAudioStreaming: false,
+    pendingResponse: false,
+    openAiActiveResponse: false,
+    awaitingToolOutputs: false,
+    requestId: null
+  });
+
+  assert.equal(pending.phase, ASSISTANT_OUTPUT_PHASE.RESPONSE_PENDING);
+  assert.equal(idle.phase, ASSISTANT_OUTPUT_PHASE.IDLE);
+  assert.equal(idle.reason, ASSISTANT_OUTPUT_REASON.IDLE);
+});
+
+test("syncAssistantOutputStateRecord returns to response_pending after tool outputs finish", () => {
+  const pending = syncAssistantOutputStateRecord(null, {
+    now: 80_000,
+    trigger: "response_requested",
+    liveAudioStreaming: false,
+    pendingResponse: true,
+    openAiActiveResponse: false,
+    awaitingToolOutputs: false,
+    requestId: 24
+  });
+  const awaitingTools = syncAssistantOutputStateRecord(pending, {
+    now: 80_200,
+    trigger: "tool_call_started",
+    liveAudioStreaming: false,
+    pendingResponse: true,
+    openAiActiveResponse: false,
+    awaitingToolOutputs: true,
+    requestId: 24
+  });
+  const resumed = syncAssistantOutputStateRecord(awaitingTools, {
+    now: 80_400,
+    trigger: "tool_outputs_completed",
+    liveAudioStreaming: false,
+    pendingResponse: true,
+    openAiActiveResponse: false,
+    awaitingToolOutputs: false,
+    requestId: 24
+  });
+
+  assert.equal(awaitingTools.phase, ASSISTANT_OUTPUT_PHASE.AWAITING_TOOL_OUTPUTS);
+  assert.equal(awaitingTools.reason, ASSISTANT_OUTPUT_REASON.AWAITING_TOOL_OUTPUTS);
+  assert.equal(resumed.phase, ASSISTANT_OUTPUT_PHASE.RESPONSE_PENDING);
+  assert.equal(resumed.reason, ASSISTANT_OUTPUT_REASON.PENDING_RESPONSE);
+  assert.equal(resumed.requestId, 24);
+});
+
+test("syncAssistantOutputStateRecord forces immediate idle on barge-in reset", () => {
+  const buffered = syncAssistantOutputStateRecord(null, {
+    now: 90_000,
+    trigger: "buffer_depth",
+    liveAudioStreaming: false,
+    pendingResponse: false,
+    openAiActiveResponse: false,
+    awaitingToolOutputs: false,
+    ttsBufferedSamples: 9_600,
+    requestId: 25
+  });
+
+  const bargedIn = syncAssistantOutputStateRecord(buffered, {
+    now: 90_050,
+    trigger: "barge_in_interrupt",
+    liveAudioStreaming: false,
+    pendingResponse: false,
+    openAiActiveResponse: false,
+    awaitingToolOutputs: false,
+    ttsPlaybackState: TTS_PLAYBACK_STATE.IDLE,
+    ttsBufferedSamples: 0,
+    requestId: null
+  });
+
+  assert.equal(buffered.phase, ASSISTANT_OUTPUT_PHASE.SPEAKING_BUFFERED);
+  assert.equal(bargedIn.phase, ASSISTANT_OUTPUT_PHASE.IDLE);
+  assert.equal(bargedIn.reason, ASSISTANT_OUTPUT_REASON.IDLE);
+});

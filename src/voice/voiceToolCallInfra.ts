@@ -1,5 +1,5 @@
 import { providerSupports } from "./voiceModes.ts";
-import type { VoiceMcpServerStatus, VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
+import type { VoiceMcpServerStatus, VoicePendingToolCallState, VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 import {
   buildRealtimeFunctionTools,
@@ -36,7 +36,7 @@ type ToolExecutionSession = ToolRuntimeSession & {
 
 export async function executeOpenAiRealtimeFunctionCall(
   manager: VoiceToolCallManager,
-  { session, settings, pendingCall }: { session?: ToolRuntimeSession | null; settings?: VoiceRealtimeToolSettings | null; pendingCall: any }
+  { session, settings, pendingCall }: { session?: ToolRuntimeSession | null; settings?: VoiceRealtimeToolSettings | null; pendingCall: VoicePendingToolCallState }
 ) {
   if (!session || session.ending) return;
   const runtimeSession = session as ToolExecutionSession;

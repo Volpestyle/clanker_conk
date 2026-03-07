@@ -100,7 +100,19 @@ function scheduleLeaveVoiceChannel(
       requestedByUserId: manager.client.user?.id || null,
       settings,
       announcement: "wrapping up vc."
-    }).catch(() => {});
+    }).catch((error) => {
+      manager.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: manager.client.user?.id || null,
+        content: `assistant_leave_directive_end_session_failed: ${String(error instanceof Error ? error.message : error)}`,
+        metadata: {
+          sessionId: session.id,
+          reason: "assistant_leave_directive"
+        }
+      });
+    });
   }, 0);
 }
 

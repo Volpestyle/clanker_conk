@@ -3,7 +3,7 @@ import { normalizeInlineText, STT_TRANSCRIPT_MAX_CHARS, isVoiceTurnAddressedToBo
 import { getVoiceConversationPolicy, getVoiceRuntimeConfig } from "../settings/agentStack.ts";
 import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
 
-import { clamp } from "lodash";
+import { clamp } from "../utils.ts";
 import type { BargeInController } from "./bargeInController.ts";
 import type { DeferredActionQueue } from "./deferredActionQueue.ts";
 import type { MusicPlaybackProvider } from "./musicPlayback.ts";

@@ -1,4 +1,4 @@
-import { clamp } from "lodash";
+import { clamp } from "../utils.ts";
 import {
   getPromptBotName
 } from "../prompts/promptCore.ts";
@@ -52,6 +52,8 @@ const CLASSIFIER_HISTORY_MAX_TURNS = 6;
 const CLASSIFIER_HISTORY_MAX_CHARS = 900;
 const VOICE_CLASSIFIER_DEBUG_PROMPT_MAX_CHARS = 12_000;
 const VOICE_CLASSIFIER_DEBUG_OUTPUT_MAX_CHARS = 1_200;
+const VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH_ENV =
+  "VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH";
 
 type ReplyDecisionSettings = Record<string, unknown> | null;
 type ReplyDecisionSessionLike = Partial<VoiceSession>;
@@ -83,6 +85,11 @@ type ReplyDecisionGenerateArgs = {
     userId?: string | null;
     source?: string | null;
   };
+};
+
+type SingleParticipantAssistantFollowupState = {
+  active: boolean;
+  msSinceAssistantTurn: number | null;
 };
 
 export interface ReplyDecisionHost {
@@ -137,6 +144,13 @@ function resolveMusicWakeLatchSeconds(settings: ReplyDecisionSettings): number {
     Number(getVoiceAdmissionSettings(settings).musicWakeLatchSeconds) || DEFAULT_MUSIC_WAKE_LATCH_SECONDS,
     5,
     60
+  );
+}
+
+function isSingleParticipantAssistantFollowupFastPathEnabled(): boolean {
+  return parseBooleanFlag(
+    process.env[VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH_ENV],
+    true
   );
 }
 
@@ -229,11 +243,83 @@ export function hasBotNameCueForTranscript(
   return false;
 }
 
+function detectSingleParticipantAssistantFollowup(manager: ReplyDecisionHost, {
+  session = null,
+  userId = null,
+  participantCount = null,
+  now = Date.now()
+}: {
+  session?: ReplyDecisionSessionLike | null;
+  userId?: string | null;
+  participantCount?: number | null;
+  now?: number;
+} = {}): SingleParticipantAssistantFollowupState {
+  const normalizedUserId = String(userId || "").trim();
+  if (!normalizedUserId) {
+    return {
+      active: false,
+      msSinceAssistantTurn: null
+    };
+  }
+
+  const normalizedParticipantCount = Number.isFinite(Number(participantCount))
+    ? Math.max(0, Math.floor(Number(participantCount)))
+    : manager.getVoiceChannelParticipants(session).length;
+  if (normalizedParticipantCount !== 1) {
+    return {
+      active: false,
+      msSinceAssistantTurn: null
+    };
+  }
+
+  const turns = Array.isArray(session?.recentVoiceTurns) ? session.recentVoiceTurns : [];
+  if (!turns.length) {
+    return {
+      active: false,
+      msSinceAssistantTurn: null
+    };
+  }
+
+  const latestTurn = turns.at(-1) || null;
+  const previousTurn = turns.at(-2) || null;
+
+  let assistantTurn = null;
+  if (
+    latestTurn?.role === "user" &&
+    String(latestTurn.userId || "").trim() === normalizedUserId &&
+    previousTurn?.role === "assistant"
+  ) {
+    assistantTurn = previousTurn;
+  } else if (latestTurn?.role === "assistant") {
+    assistantTurn = latestTurn;
+  }
+
+  const assistantTurnAt = Number(assistantTurn?.at || 0);
+  if (!assistantTurn || !Number.isFinite(assistantTurnAt) || assistantTurnAt <= 0) {
+    return {
+      active: false,
+      msSinceAssistantTurn: null
+    };
+  }
+
+  const referenceTurnAt = Number(latestTurn?.at || 0);
+  const referenceAt =
+    Number.isFinite(referenceTurnAt) && referenceTurnAt > 0
+      ? referenceTurnAt
+      : now;
+  const msSinceAssistantTurn = Math.max(0, referenceAt - assistantTurnAt);
+  return {
+    active: msSinceAssistantTurn <= RECENT_ENGAGEMENT_WINDOW_MS,
+    msSinceAssistantTurn
+  };
+}
+
 export function buildVoiceConversationContext(manager: ReplyDecisionHost, {
   session = null,
   userId = null,
   directAddressed = false,
   addressedToOtherParticipant = false,
+  participantCount = null,
   now = Date.now()
 } = {}): VoiceConversationContext {
   const normalizedUserId = String(userId || "").trim();
@@ -261,9 +347,16 @@ export function buildVoiceConversationContext(manager: ReplyDecisionHost, {
     Boolean(normalizedUserId) &&
     Boolean(activeVoiceCommandState?.userId) &&
     normalizedUserId === activeVoiceCommandState.userId;
+  const singleParticipantAssistantFollowup = detectSingleParticipantAssistantFollowup(manager, {
+    session,
+    userId: normalizedUserId,
+    participantCount,
+    now
+  });
 
   const engagedWithCurrentSpeaker =
     Boolean(directAddressed) ||
+    singleParticipantAssistantFollowup.active ||
     sameAsVoiceCommandUser ||
     (recentAssistantReply && sameAsRecentDirectAddress) ||
     (recentDirectAddress && sameAsRecentDirectAddress);
@@ -275,6 +368,7 @@ export function buildVoiceConversationContext(manager: ReplyDecisionHost, {
     engagementState: engaged ? "engaged" : activeVoiceCommandState ? "command_only_engaged" : "wake_word_biased",
     engaged,
     engagedWithCurrentSpeaker,
+    singleParticipantAssistantFollowup: singleParticipantAssistantFollowup.active,
     recentAssistantReply,
     recentDirectAddress,
     sameAsRecentDirectAddress,
@@ -435,6 +529,7 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
       userId: normalizedUserId,
       directAddressed: false,
       addressedToOtherParticipant,
+      participantCount,
       now
     });
     return {
@@ -515,6 +610,7 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     userId: normalizedUserId,
     directAddressed,
     addressedToOtherParticipant,
+    participantCount,
     now
   });
   const voiceAddressingState = buildVoiceAddressingState(manager, {
@@ -719,6 +815,22 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     return {
       allow: true,
       reason: "generation_decides",
+      participantCount,
+      directAddressed,
+      directAddressConfidence,
+      directAddressThreshold,
+      transcript: normalizedTranscript,
+      conversationContext
+    };
+  }
+
+  if (
+    isSingleParticipantAssistantFollowupFastPathEnabled() &&
+    conversationContext.singleParticipantAssistantFollowup
+  ) {
+    return {
+      allow: true,
+      reason: "single_participant_assistant_followup",
       participantCount,
       directAddressed,
       directAddressConfidence,
@@ -944,6 +1056,10 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
     musicWakeLatched
   });
 
+  // Build the classifier prompt — only include fields that carry actual signal.
+  // Fields like directed-confidence and soundalike notes are omitted because
+  // high-confidence direct-address is already handled by the fast-path before
+  // the classifier runs, so the classifier only ever sees confidence=0.
   const promptParts = [
     `You are a realtime voice admission classifier for a bot named "${botName}".`,
     `Output exactly one token: YES or NO.`,
@@ -951,29 +1067,41 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
     `Participant count: ${participantCount}`,
     `Participants: ${participantList.join(", ") || "none"}`,
     `Speaker: ${speakerName}`,
-    `Transcript: "${transcript}"`,
-    normalizedDirectedConfidence > 0
-      ? `Speaker-directed-to-bot confidence: ${normalizedDirectedConfidence.toFixed(2)} (target: ${normalizedTarget || "unknown"})`
-      : `Speaker-directed-to-bot confidence: unknown`,
-    `Note: voice transcription often mishears the bot's name "${botName}". If the transcript contains a word that sounds similar (e.g. rhymes, off-by-one syllable), treat it as likely addressed to the bot.`,
-    `Addressed-to-other signal: ${addressedToOtherSignal ? "true" : "false"}`,
-    `Pending-command-followup signal: ${pendingCommandFollowupSignal ? "true" : "false"}`,
-    `Music active: ${musicActive ? "true" : "false"}`,
-    `Music wake latched: ${musicWakeLatched ? "true" : "false"}`,
-    `Music wake latch expires in ms: ${
-      Number.isFinite(Number(msUntilMusicWakeLatchExpiry))
-        ? Math.max(0, Math.round(Number(msUntilMusicWakeLatchExpiry)))
-        : "none"
-    }`,
-    conversationContext.msSinceDirectAddress != null
-      ? `Last addressed ${Math.round(conversationContext.msSinceDirectAddress / 1000)}s ago`
-      : `Never directly addressed`,
-    conversationContext.recentAssistantReply
-      ? `Bot last spoke ${Math.round(Number(conversationContext.msSinceAssistantReply || 0) / 1000)}s ago`
-      : `Bot has not spoken recently`,
-    ...policyLines,
-    `Decision: should the bot respond to this speaker turn right now?`
+    `Transcript: "${transcript}"`
   ];
+
+  // Conditional context — only include when non-default.
+  // addressedToOtherSignal and pendingCommandFollowupSignal are omitted: both
+  // are derived from transcript parsing that the classifier LLM can do better
+  // itself given the raw transcript and participant list.
+  if (musicActive) {
+    promptParts.push(`Music active: true`);
+    promptParts.push(`Music wake latched: ${musicWakeLatched ? "true" : "false"}`);
+    if (musicWakeLatched && Number.isFinite(Number(msUntilMusicWakeLatchExpiry))) {
+      promptParts.push(`Music wake latch expires in ms: ${Math.max(0, Math.round(Number(msUntilMusicWakeLatchExpiry)))}`);
+    }
+  }
+
+  // Conversation recency — avoid contradictory signals. When the bot recently
+  // spoke, "Never directly addressed" is misleading in a 1:1 room; instead
+  // surface the recency as a cohesive engagement signal.
+  if (conversationContext.recentAssistantReply) {
+    const secsSinceReply = Math.round(Number(conversationContext.msSinceAssistantReply || 0) / 1000);
+    promptParts.push(`Bot last spoke ${secsSinceReply}s ago — active conversation.`);
+    if (conversationContext.msSinceDirectAddress != null) {
+      promptParts.push(`Last addressed by name ${Math.round(conversationContext.msSinceDirectAddress / 1000)}s ago.`);
+    }
+  } else {
+    promptParts.push(`Bot has not spoken recently.`);
+    if (conversationContext.msSinceDirectAddress != null) {
+      promptParts.push(`Last addressed ${Math.round(conversationContext.msSinceDirectAddress / 1000)}s ago.`);
+    } else {
+      promptParts.push(`Never directly addressed.`);
+    }
+  }
+
+  promptParts.push(...policyLines);
+  promptParts.push(`Decision: should the bot respond to this speaker turn right now?`);
   if (recentHistory) {
     promptParts.push(`Recent attributed voice turns:\n${recentHistory}`);
   }

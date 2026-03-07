@@ -47,6 +47,7 @@ export type VoiceConversationContext = {
     engagementState: string;
     engaged: boolean;
     engagedWithCurrentSpeaker: boolean;
+    singleParticipantAssistantFollowup?: boolean;
     recentAssistantReply: boolean;
     recentDirectAddress: boolean;
     sameAsRecentDirectAddress: boolean;

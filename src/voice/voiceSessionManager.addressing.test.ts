@@ -1047,6 +1047,183 @@ test("reply decider bypasses classifier in generation_only realtime admission mo
   assert.equal(callCount, 0);
 });
 
+test("reply decider fast-paths single-human assistant followups in hard-classifier realtime mode", async () => {
+  let callCount = 0;
+  const now = Date.now();
+  const manager = createManager({
+    participantCount: 1,
+    generate: async () => {
+      callCount += 1;
+      return { text: "NO" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+      lastAudioDeltaAt: now - 4_000,
+      recentVoiceTurns: [
+        {
+          role: "assistant",
+          userId: null,
+          text: "yo, what's up?",
+          speakerName: "clanker conk",
+          at: now - 4_000
+        },
+        {
+          role: "user",
+          userId: "speaker-1",
+          text: "yo, what's up, man?",
+          speakerName: "speaker 1",
+          at: now
+        }
+      ]
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 50,
+        replyDecisionLlm: {
+          realtimeAdmissionMode: "hard_classifier",
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "yo, what's up, man?"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "single_participant_assistant_followup");
+  assert.equal(decision.conversationContext.engaged, true);
+  assert.equal(decision.conversationContext.engagedWithCurrentSpeaker, true);
+  assert.equal(decision.conversationContext.singleParticipantAssistantFollowup, true);
+  assert.equal(callCount, 0);
+});
+
+test("reply decider still runs classifier when single-human assistant followup window is stale", async () => {
+  let callCount = 0;
+  const now = Date.now();
+  const manager = createManager({
+    participantCount: 1,
+    generate: async () => {
+      callCount += 1;
+      return { text: "YES" };
+    }
+  });
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session: {
+      guildId: "guild-1",
+      textChannelId: "chan-1",
+      voiceChannelId: "voice-1",
+      mode: "openai_realtime",
+      botTurnOpen: false,
+      lastAudioDeltaAt: now - 45_000,
+      recentVoiceTurns: [
+        {
+          role: "assistant",
+          userId: null,
+          text: "yo, what's up?",
+          speakerName: "clanker conk",
+          at: now - 45_000
+        },
+        {
+          role: "user",
+          userId: "speaker-1",
+          text: "yo, what's up, man?",
+          speakerName: "speaker 1",
+          at: now
+        }
+      ]
+    },
+    userId: "speaker-1",
+    settings: baseSettings({
+      voice: {
+        replyEagerness: 50,
+        replyDecisionLlm: {
+          realtimeAdmissionMode: "hard_classifier",
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
+        }
+      }
+    }),
+    transcript: "yo, what's up, man?"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "classifier_allow");
+  assert.equal(decision.conversationContext.singleParticipantAssistantFollowup, false);
+  assert.equal(callCount, 1);
+});
+
+test("reply decider can disable single-human assistant followup fast path via env var", async () => {
+  const previous = process.env.VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH;
+  process.env.VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH = "false";
+  try {
+    let callCount = 0;
+    const now = Date.now();
+    const manager = createManager({
+      participantCount: 1,
+      generate: async () => {
+        callCount += 1;
+        return { text: "YES" };
+      }
+    });
+    const decision = await manager.evaluateVoiceReplyDecision({
+      session: {
+        guildId: "guild-1",
+        textChannelId: "chan-1",
+        voiceChannelId: "voice-1",
+        mode: "openai_realtime",
+        botTurnOpen: false,
+        lastAudioDeltaAt: now - 4_000,
+        recentVoiceTurns: [
+          {
+            role: "assistant",
+            userId: null,
+            text: "yo, what's up?",
+            speakerName: "clanker conk",
+            at: now - 4_000
+          },
+          {
+            role: "user",
+            userId: "speaker-1",
+            text: "yo, what's up, man?",
+            speakerName: "speaker 1",
+            at: now
+          }
+        ]
+      },
+      userId: "speaker-1",
+      settings: baseSettings({
+        voice: {
+          replyEagerness: 50,
+          replyDecisionLlm: {
+            realtimeAdmissionMode: "hard_classifier",
+            provider: "anthropic",
+            model: "claude-haiku-4-5"
+          }
+        }
+      }),
+      transcript: "yo, what's up, man?"
+    });
+
+    assert.equal(decision.allow, true);
+    assert.equal(decision.reason, "classifier_allow");
+    assert.equal(decision.conversationContext.singleParticipantAssistantFollowup, true);
+    assert.equal(callCount, 1);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH;
+    } else {
+      process.env.VOICE_SINGLE_PARTICIPANT_ASSISTANT_FOLLOWUP_FAST_PATH = previous;
+    }
+  }
+});
+
 test("reply decider runs classifier for non-direct multi-user realtime turns", async () => {
   let callCount = 0;
   const manager = createManager({
@@ -1476,7 +1653,10 @@ test("reply decider passes addressed-to-other signal into classifier and allows 
   assert.equal(decision.reason, "classifier_deny");
   assert.equal(decision.classifierTarget, "OTHER");
   assert.equal(callCount, 1);
-  assert.equal(classifierPrompt.includes("Addressed-to-other signal: true"), true);
+  // The classifier prompt no longer includes a literal "Addressed-to-other signal" line —
+  // the LLM infers addressing from the transcript and participant list directly.
+  // Verify it still sees the participant list so it can make that inference.
+  assert.equal(classifierPrompt.includes("smelly"), true);
 });
 
 test("reply decider blocks ambiguous realtime native turns without brain path", async () => {
