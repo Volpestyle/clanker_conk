@@ -22,6 +22,8 @@ Current shared voice catalog size:
 - `91` scenarios total
 - `8` scenario groups
 - Running both active voice suites exercises those same `91` scenarios twice: once in `voiceAdmission.live.test.ts` and once in the voice section of `replyGeneration.live.test.ts`
+- Voice generation expectations are now exact for `82` of those `91` shared scenarios
+- The remaining `9` generation `either` cases are raw room-event cues, where admission may allow but the brain is still intentionally free to speak or `[SKIP]`
 
 Current group breakdown:
 
@@ -38,12 +40,19 @@ Coverage assessment:
 
 - Good breadth for admission and generation behavior across name detection, unsolicited participation, joins, music control, silence cases, and eagerness thresholds
 - Good alignment because admission and generation now consume the same voice inputs instead of drifting into separate hand-written suites
+- The voice generation prompt now relies on transcript plus contextual guidance such as membership events, room context, and fuzzy bot-name cues instead of a dedicated join-state prompt flag
 - Still not full-stack realtime coverage: these tests do not validate websocket/session transport, ASR streaming, TTS audio output, Discord timing, or end-to-end voice latency
 - Still not a full provider matrix by default: the scenarios are broad, but we do not automatically run every scenario against every provider/model combination
 
-### Structured Reply Live Test
+### Structured Reply Live Test (Generation LLM only — no classifier)
 
 This exercises the real structured reply contract for both text and voice generation.
+It tests the **generation LLM brain only** — the classifier admission pipeline is NOT involved.
+Each scenario builds a full generation prompt (`buildSystemPrompt` + `buildVoiceTurnPrompt`)
+and sends it directly to the LLM via `llm.generate()`, then asserts whether the structured
+output is a real spoken reply or `[SKIP]`.
+
+This answers: "Given this context, does the generation LLM produce the right reply-vs-skip decision?"
 
 The voice section uses the shared voice live scenario catalog that is also consumed by `tests/live/voiceAdmission.live.test.ts`, so both suites cover the same voice situations.
 

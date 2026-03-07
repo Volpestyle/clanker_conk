@@ -31,7 +31,10 @@ import {
   getResolvedVoiceGenerationBinding
 } from "../../src/settings/agentStack.ts";
 import { createTestSettings } from "../../src/testSettings.ts";
-import { isVoiceTurnAddressedToBot } from "../../src/voice/voiceSessionHelpers.ts";
+import {
+  isLikelyVocativeAddressToOtherParticipant,
+  isVoiceTurnAddressedToBot
+} from "../../src/voice/voiceSessionHelpers.ts";
 import {
   VOICE_LIVE_SCENARIO_GROUPS,
   type VoiceLiveScenario
@@ -305,19 +308,13 @@ function buildRecentConversationHistory(timeline: string[] | undefined) {
   ];
 }
 
-function isAddressedToOtherParticipant(sc: VoiceLiveScenario): boolean {
-  const transcript = String(sc.transcript || "").trim().toLowerCase();
-  if (!transcript || sc.inputKind === "event") return false;
-  const speaker = String(sc.speaker || sc.participants[0] || "").trim().toLowerCase();
-
-  for (const participant of sc.participants) {
-    const name = String(participant || "").trim().toLowerCase();
-    if (!name || name === speaker) continue;
-    if (transcript.startsWith(`${name},`) || transcript.startsWith(`${name} `)) {
-      return true;
-    }
-  }
-  return false;
+function buildRecentMembershipEvents(sc: VoiceLiveScenario) {
+  if ((sc.inputKind || "transcript") !== "event") return [];
+  const displayName = String(sc.speaker || sc.participants[0] || "").trim();
+  if (!displayName || displayName.toUpperCase() === "YOU") return [];
+  const normalizedTranscript = String(sc.transcript || "").trim().toLowerCase();
+  const eventType = normalizedTranscript.includes("left") ? "leave" : "join";
+  return [{ eventType, displayName, ageMs: 1_200 }];
 }
 
 function buildVoicePrompt(sc: VoiceLiveScenario): PromptEnvelope {
@@ -337,20 +334,25 @@ function buildVoicePrompt(sc: VoiceLiveScenario): PromptEnvelope {
     (sc.inputKind || "transcript") !== "event" &&
     isVoiceTurnAddressedToBot(sc.transcript, settings);
   const engaged = Boolean(sc.recentAssistantReply) || sc.msSinceDirectAddress != null;
+  const speakerName = sc.speaker || sc.participants[0] || "someone";
+  const participantRoster = Array.isArray(sc.participants) ? sc.participants : [];
   const conversationContext = {
     recentAssistantReply: Boolean(sc.recentAssistantReply),
     msSinceAssistantReply: sc.msSinceAssistantReply ?? null,
     msSinceDirectAddress: sc.msSinceDirectAddress ?? null,
     engaged,
     engagedWithCurrentSpeaker: engaged,
-    addressedToOtherSignal: isAddressedToOtherParticipant(sc),
+    addressedToOtherSignal: isLikelyVocativeAddressToOtherParticipant({
+      transcript: sc.transcript,
+      participantDisplayNames: participantRoster,
+      botName: sc.botName || "clanker conk",
+      speakerName
+    }),
     pendingCommandFollowupSignal: Boolean(sc.musicActive && sc.recentAssistantReply),
     musicActive: Boolean(sc.musicActive),
     musicWakeLatched: Boolean(sc.musicWakeLatched)
   };
   const isEagerTurn = !directAddressed && !engaged;
-  const speakerName = sc.speaker || sc.participants[0] || "someone";
-  const participantRoster = Array.isArray(sc.participants) ? sc.participants : [];
 
   return {
     binding: getResolvedOrchestratorBinding(tunedSettings),
@@ -380,11 +382,9 @@ function buildVoicePrompt(sc: VoiceLiveScenario): PromptEnvelope {
       voiceEagerness,
       conversationContext,
       sessionTiming: null,
-      joinWindowActive: false,
-      joinWindowAgeMs: null,
       botName: sc.botName || "clanker conk",
       participantRoster,
-      recentMembershipEvents: [],
+      recentMembershipEvents: buildRecentMembershipEvents(sc),
       recentVoiceEffectEvents: [],
       soundboardCandidates: [],
       webSearch: null,

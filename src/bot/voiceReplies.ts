@@ -296,8 +296,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   sessionId = null,
   isEagerTurn = false,
   sessionTiming = null,
-  joinWindowActive = false,
-  joinWindowAgeMs = null,
   voiceEagerness = 0,
   conversationContext = null,
   participantRoster = [],
@@ -531,15 +529,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   const openedArticle = null;
   let usedWebSearchFollowup = false;
   let usedOpenArticleFollowup = false;
-  const effectiveJoinWindowActive =
-    Boolean(joinWindowActive) || Boolean(conversationContext?.joinWindowActive);
-  const explicitJoinWindowAgeMs = Number(joinWindowAgeMs);
-  const contextJoinWindowAgeMs = Number(conversationContext?.joinWindowAgeMs);
-  const effectiveJoinWindowAgeMs = Number.isFinite(explicitJoinWindowAgeMs)
-    ? Math.max(0, Math.round(explicitJoinWindowAgeMs))
-    : Number.isFinite(contextJoinWindowAgeMs)
-      ? Math.max(0, Math.round(contextJoinWindowAgeMs))
-      : null;
 
   const voiceToneGuardrails = buildVoiceToneGuardrails();
   const systemPrompt = [
@@ -549,9 +538,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     "You are speaking in live Discord voice chat.",
     ...voiceToneGuardrails,
     "Return strict JSON only matching the provided schema.",
-    effectiveJoinWindowActive
-      ? "Join window active: you just joined VC. You can acknowledge a direct greeting naturally, but read the room first — do not jump in on every hello, especially if people are mid-conversation."
-      : null,
     directAddressed
       ? "This speaker directly addressed you. Prefer skip=false with a response unless the transcript is too unclear."
       : isEagerTurn
@@ -580,8 +566,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       voiceEagerness,
       conversationContext,
       sessionTiming,
-      joinWindowActive: effectiveJoinWindowActive,
-      joinWindowAgeMs: effectiveJoinWindowAgeMs,
       botName: getPromptBotName(settings),
       participantRoster: normalizedParticipantRoster,
       recentMembershipEvents: normalizedMembershipEvents,

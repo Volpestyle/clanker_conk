@@ -4,7 +4,10 @@ type VoiceAdmissionPolicyContext = {
 };
 
 type VoiceAdmissionPolicyOptions = {
+  inputKind?: "transcript" | "event";
+  speakerName?: string;
   directAddressed?: boolean;
+  nameCueDetected?: boolean;
   isEagerTurn?: boolean;
   replyEagerness?: number;
   participantCount?: number;
@@ -33,7 +36,10 @@ function getEagernessGenerationTier(eagerness: number): string {
 }
 
 export function buildVoiceAdmissionPolicyLines({
+  inputKind = "transcript",
+  speakerName = "unknown",
   directAddressed = false,
+  nameCueDetected = false,
   isEagerTurn = false,
   replyEagerness = 0,
   participantCount = 0,
@@ -44,7 +50,12 @@ export function buildVoiceAdmissionPolicyLines({
   musicWakeLatched = false
 }: VoiceAdmissionPolicyOptions = {}) {
   const lines: string[] = [];
+  const normalizedInputKind = String(inputKind || "").trim().toLowerCase() === "event"
+    ? "event"
+    : "transcript";
+  const normalizedSpeakerName = String(speakerName || "").trim() || "unknown";
   const normalizedDirectAddressed = Boolean(directAddressed);
+  const normalizedNameCueDetected = Boolean(nameCueDetected);
   const normalizedIsEagerTurn = Boolean(isEagerTurn);
   const normalizedParticipantCount = Math.max(0, Math.floor(Number(participantCount) || 0));
   const normalizedEagerness = Math.max(0, Math.min(100, Number(replyEagerness) || 0));
@@ -58,6 +69,19 @@ export function buildVoiceAdmissionPolicyLines({
     lines.push("Single-human voice-room prior: default toward engagement unless the turn is clearly non-speech, self-talk, or low-value filler.");
   } else if (normalizedParticipantCount > 1) {
     lines.push("Multi-human room: avoid barging in without clear conversational value.");
+  }
+
+  if (normalizedInputKind === "event") {
+    lines.push("This is a voice-room event cue, not literal quoted speech.");
+    if (normalizedSpeakerName.toUpperCase() === "YOU") {
+      lines.push("If you just entered the channel and a quick hello would feel natural, you may reply briefly. Otherwise use [SKIP].");
+    } else {
+      lines.push("If a brief acknowledgement of the join/leave would feel natural, you may reply briefly. Otherwise use [SKIP].");
+    }
+  }
+
+  if (!normalizedDirectAddressed && normalizedNameCueDetected) {
+    lines.push("The transcript may contain your name or a phonetic variant of it. Treat that as a positive signal that the speaker may be talking to you.");
   }
 
   if (musicActive) {

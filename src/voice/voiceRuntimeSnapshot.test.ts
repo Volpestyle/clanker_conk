@@ -404,8 +404,8 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and stt session state", (
     ]);
     assert.equal(realtime?.assistantOutput.phase, "speaking");
     assert.equal(realtime?.assistantOutput.requestId, 8);
-    assert.equal(realtime?.conversation.joinWindow.active, true);
-    assert.equal(realtime?.conversation.joinWindow.greetingPending, true);
+    assert.equal(realtime?.conversation.joinGreetingOpportunity.active, true);
+    assert.equal(realtime?.conversation.joinGreetingOpportunity.greetingPending, true);
     assert.equal(realtime?.conversation.wake.windowMs, 35_000);
     assert.equal(realtime?.pendingDeferredTurns, 2);
     assert.equal(realtime?.recentTurns[0]?.addressing?.directedConfidence, 1);
@@ -492,7 +492,7 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and stt session state", (
 
     const stt = snapshot.sessions.find((entry) => entry.sessionId === "session-2");
     assert.ok(stt);
-    assert.equal(stt?.conversation.joinWindow.active, false);
+    assert.equal(stt?.conversation.joinGreetingOpportunity.active, false);
     assert.deepEqual(stt?.stt, {
       pendingTurns: 3,
       contextMessages: 0

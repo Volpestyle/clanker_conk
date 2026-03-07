@@ -152,25 +152,30 @@ function buildMockManager(sc: VoiceLiveScenario): ReplyDecisionHost {
       return { text };
     }
 
-    const result = await anthropicClient!.messages.create({
-      model: MODEL,
-      max_tokens: 4,
-      temperature: 0,
-      system: systemPrompt,
-      messages: [{ role: "user", content: userPrompt }]
-    });
-    const text = result.content
-      .filter((block): block is Anthropic.TextBlock => block.type === "text")
-      .map((block) => block.text)
-      .join("")
-      .trim();
-    logAdmissionClassifierDebug({
-      label: sc.label,
-      stage: "result",
-      raw: text,
-      parsedDecision: text
-    });
-    return { text };
+    try {
+      const result = await anthropicClient!.messages.create({
+        model: MODEL,
+        max_tokens: 4,
+        temperature: 0,
+        system: systemPrompt,
+        messages: [{ role: "user", content: userPrompt }]
+      });
+      const text = result.content
+        .filter((block): block is Anthropic.TextBlock => block.type === "text")
+        .map((block) => block.text)
+        .join("")
+        .trim();
+      logAdmissionClassifierDebug({
+        label: sc.label,
+        stage: "result",
+        raw: text,
+        parsedDecision: text
+      });
+      return { text };
+    } catch (error) {
+      console.error(`[voiceAdmission.live] ${sc.label} LLM ERROR:`, error instanceof Error ? error.message : error);
+      throw error;
+    }
   };
 
   const participants = sc.participants.map((name, index) => ({

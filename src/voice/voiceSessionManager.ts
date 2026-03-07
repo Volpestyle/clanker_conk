@@ -174,7 +174,7 @@ import {
   LEAVE_DIRECTIVE_PLAYBACK_NO_SIGNAL_GRACE_MS,
   LEAVE_DIRECTIVE_PLAYBACK_POLL_MS,
   LEAVE_DIRECTIVE_REALTIME_AUDIO_START_WAIT_MS,
-  JOIN_GREETING_LLM_WINDOW_MS,
+  JOIN_GREETING_OPPORTUNITY_WINDOW_MS,
   REALTIME_CONTEXT_MEMBER_LIMIT,
   OPENAI_TOOL_CALL_ARGUMENTS_MAX_CHARS,
   OPENAI_TOOL_RESPONSE_DEBOUNCE_MS,
@@ -730,7 +730,7 @@ export class VoiceSessionManager {
     if (!session || session.ending) return null;
     if (!isRealtimeMode(session.mode)) return null;
     const now = Date.now();
-    const expiresAt = Math.max(0, Number(session.startedAt || 0)) + JOIN_GREETING_LLM_WINDOW_MS;
+    const expiresAt = Math.max(0, Number(session.startedAt || 0)) + JOIN_GREETING_OPPORTUNITY_WINDOW_MS;
     if (expiresAt > 0 && now >= expiresAt) {
       this.clearJoinGreetingOpportunity(session);
       return null;
@@ -738,7 +738,7 @@ export class VoiceSessionManager {
     const opportunity = {
       trigger: String(trigger || "connection_ready").trim() || "connection_ready",
       armedAt: now,
-      fireAt: now + 2500,
+      fireAt: now,
       expiresAt,
       userId: String(userId || "").trim() || null,
       displayName: String(displayName || "").trim() || null
@@ -747,8 +747,8 @@ export class VoiceSessionManager {
     this.pendingJoinGreetingEvents.set(session, { opportunity, timer: null });
     if (session.lastOpenAiRealtimeInstructions) {
       this.scheduleJoinGreetingOpportunity(session, {
-        delayMs: Math.max(0, opportunity.fireAt - now),
-        reason: "join_greeting_grace"
+        delayMs: 0,
+        reason: "join_greeting_armed"
       });
     }
     return opportunity;

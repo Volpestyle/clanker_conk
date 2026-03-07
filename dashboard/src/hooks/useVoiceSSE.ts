@@ -61,8 +61,6 @@ export type GenerationContextSnapshot = {
   conversationContext: {
     engagementState?: string;
     engaged?: boolean;
-    joinWindowActive?: boolean;
-    joinWindowAgeMs?: number | null;
     streamWatchBrainContext?: string[];
     addressing?: { talkingTo?: string | null; confidence?: number } | null;
     [key: string]: unknown;
@@ -213,10 +211,11 @@ export type VoiceSession = {
       msSinceDirectAddress: number | null;
       windowMs: number;
     };
-    joinWindow: {
+    joinGreetingOpportunity: {
       active: boolean;
       ageMs: number;
       windowMs: number;
+      greetingPending?: boolean;
     };
     thoughtEngine: {
       busy: boolean;
@@ -243,7 +242,6 @@ export type VoiceSession = {
         promptHistoryChars: number;
         transcriptChars: number;
         directAddressed: boolean;
-        joinWindowActive: boolean;
       } | null;
       trackedTurns: number;
       trackedTurnLimit: number;

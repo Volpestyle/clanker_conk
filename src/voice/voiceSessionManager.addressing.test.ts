@@ -329,7 +329,7 @@ test("shouldPersistUserTranscriptTimelineTurn persists any non-empty transcript"
   }), false);
 });
 
-test("reply decider lets generation decide join-window greetings", async () => {
+test("reply decider lets generation decide fresh-join greetings", async () => {
   let callCount = 0;
   const greetings = [
     "what up",
@@ -368,7 +368,7 @@ test("reply decider lets generation decide join-window greetings", async () => {
   assert.equal(callCount, 0);
 });
 
-test("reply decider lets generation decide low-signal greetings once join window is stale", async () => {
+test("reply decider lets generation decide low-signal greetings outside the fresh-join moment", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -396,7 +396,7 @@ test("reply decider lets generation decide low-signal greetings once join window
   assert.equal(callCount, 0);
 });
 
-test("reply decider lets generation decide join-window what-up greetings even when join window is stale", async () => {
+test("reply decider lets generation decide what-up greetings even outside the fresh-join moment", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
@@ -3325,7 +3325,7 @@ test("forwardRealtimeTurnAudio schedules response without waiting for turn-conte
   await new Promise((resolve) => setTimeout(resolve, 0));
 });
 
-test("smoke: runRealtimeBrainReply passes join-window context into generation", async () => {
+test("smoke: runRealtimeBrainReply passes membership context into generation without special join gating flags", async () => {
   const generationPayloads = [];
   const manager = createManager();
   manager.resolveSoundboardCandidates = async () => ({
@@ -3400,11 +3400,6 @@ test("smoke: runRealtimeBrainReply passes join-window context into generation", 
   assert.equal(generationPayloads.length, 1);
   assert.equal(Boolean(generationPayloads[0]?.isEagerTurn), true);
   assert.equal(generationPayloads[0]?.voiceEagerness, 60);
-  assert.equal(Boolean(generationPayloads[0]?.joinWindowActive), true);
-  assert.equal(
-    Number.isFinite(Number(generationPayloads[0]?.joinWindowAgeMs)),
-    true
-  );
   assert.deepEqual(
     generationPayloads[0]?.participantRoster?.map((entry) => entry?.displayName),
     ["alice", "bob"]

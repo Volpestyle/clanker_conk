@@ -316,8 +316,8 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     objective: "Acknowledge the direct callout and respond briefly."
   },
   {
-    id: "join-window-greeting-yo-single",
-    title: "Join Window Greeting Yo (Single)",
+    id: "fresh-join-greeting-yo-single",
+    title: "Fresh Join Greeting Yo (Single)",
     userText: "yo",
     expectedAllow: true,
     objective: "Right after join, treat a short greeting as worth a brief acknowledgement.",
@@ -326,8 +326,8 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     sessionAgeMs: 4_000
   },
   {
-    id: "join-window-greeting-yo-multi",
-    title: "Join Window Greeting Yo (Multi)",
+    id: "fresh-join-greeting-yo-multi",
+    title: "Fresh Join Greeting Yo (Multi)",
     userText: "yo",
     expectedAllow: true,
     objective: "Right after join in a group call, treat a short greeting as worth a brief acknowledgement.",
@@ -336,8 +336,8 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     sessionAgeMs: 4_000
   },
   {
-    id: "join-window-greeting-hi-single",
-    title: "Join Window Greeting Hi (Single)",
+    id: "fresh-join-greeting-hi-single",
+    title: "Fresh Join Greeting Hi (Single)",
     userText: "hi",
     expectedAllow: true,
     objective: "Right after join, treat a hi greeting as worth a brief acknowledgement.",
@@ -346,8 +346,8 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     sessionAgeMs: 4_000
   },
   {
-    id: "join-window-greeting-hi-multi",
-    title: "Join Window Greeting Hi (Multi)",
+    id: "fresh-join-greeting-hi-multi",
+    title: "Fresh Join Greeting Hi (Multi)",
     userText: "hi",
     expectedAllow: true,
     objective: "Right after join in a group call, treat a hi greeting as worth a brief acknowledgement.",
@@ -356,8 +356,8 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     sessionAgeMs: 4_000
   },
   {
-    id: "join-window-greeting-sup-single",
-    title: "Join Window Greeting Sup (Single)",
+    id: "fresh-join-greeting-sup-single",
+    title: "Fresh Join Greeting Sup (Single)",
     userText: "sup",
     expectedAllow: true,
     objective: "Right after join, treat a sup check-in as worth a brief acknowledgement.",
@@ -366,8 +366,8 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     sessionAgeMs: 4_000
   },
   {
-    id: "join-window-greeting-sup-multi",
-    title: "Join Window Greeting Sup (Multi)",
+    id: "fresh-join-greeting-sup-multi",
+    title: "Fresh Join Greeting Sup (Multi)",
     userText: "sup",
     expectedAllow: true,
     objective: "Right after join in a group call, treat a sup check-in as worth a brief acknowledgement.",
@@ -376,8 +376,8 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     sessionAgeMs: 4_000
   },
   {
-    id: "join-window-greeting-yo-clanka-single",
-    title: "Join Window Greeting Yo Clanka (Single)",
+    id: "fresh-join-greeting-yo-clanka-single",
+    title: "Fresh Join Greeting Yo Clanka (Single)",
     userText: "yo clanka",
     expectedAllow: true,
     objective: "Treat likely wake-word variants in greeting form as direct enough to acknowledge.",
@@ -386,8 +386,8 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     sessionAgeMs: 4_000
   },
   {
-    id: "join-window-greeting-yo-clanka-multi",
-    title: "Join Window Greeting Yo Clanka (Multi)",
+    id: "fresh-join-greeting-yo-clanka-multi",
+    title: "Fresh Join Greeting Yo Clanka (Multi)",
     userText: "yo clanka",
     expectedAllow: true,
     objective: "In group calls, treat likely wake-word variant greetings as direct enough to acknowledge.",
@@ -396,8 +396,8 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     sessionAgeMs: 4_000
   },
   {
-    id: "join-window-non-greeting-undirected",
-    title: "Join Window Non-Greeting Undirected",
+    id: "fresh-join-non-greeting-undirected",
+    title: "Fresh Join Non-Greeting Undirected",
     userText: "the build passed on main",
     expectedAllow: true,
     objective: "Non-greeting, non-directed chatter is passed to the brain which may skip.",
@@ -406,8 +406,8 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     sessionAgeMs: 4_000
   },
   {
-    id: "join-window-non-greeting-undirected-single",
-    title: "Join Window Non-Greeting Undirected (Single)",
+    id: "fresh-join-non-greeting-undirected-single",
+    title: "Fresh Join Non-Greeting Undirected (Single)",
     userText: "the build passed on main",
     expectedAllow: true,
     objective: "Non-greeting, non-directed chatter is passed to the brain which may skip, even in 1:1.",
@@ -416,8 +416,8 @@ const VOICE_GOLDEN_CASES: VoiceGoldenCase[] = [
     sessionAgeMs: 4_000
   },
   {
-    id: "join-window-non-greeting-directed-to-other",
-    title: "Join Window Directed To Other Human",
+    id: "fresh-join-directed-to-other",
+    title: "Fresh Join Directed To Other Human",
     userText: "bob can you share the link",
     expectedAllow: true,
     objective: "Passed to brain which detects this is addressed to another human and may skip.",
@@ -718,10 +718,9 @@ function buildSimulatedDecisionLlm(): DecisionLlm {
     async generate(payload) {
       const prompt = String(payload?.userPrompt || "").toLowerCase();
       const transcript = extractPromptTranscript(prompt);
-      const joinWindowActive = extractPromptFlag({
-        prompt,
-        label: "join window active"
-      });
+      const freshJoinCue =
+        prompt.includes("you just joined") ||
+        prompt.includes("someone joined or left");
       const likelyAimedAtOtherParticipant = extractPromptFlag({
         prompt,
         label: "likely aimed at another participant"
@@ -736,7 +735,7 @@ function buildSimulatedDecisionLlm(): DecisionLlm {
       }
       if (directlyAddressed) return { text: "YES", provider: "simulated", model: "rule-decider" };
       if (transcript.includes("clanker")) return { text: "YES", provider: "simulated", model: "rule-decider" };
-      if (joinWindowActive && isGreetingCheckIn(transcript)) {
+      if (freshJoinCue && isGreetingCheckIn(transcript)) {
         return { text: "YES", provider: "simulated", model: "rule-decider" };
       }
       if (/[?]/.test(transcript) && transcript.length > 6) {

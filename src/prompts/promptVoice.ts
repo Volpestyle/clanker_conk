@@ -10,6 +10,7 @@ import {
   formatOpenArticleCandidates,
   formatMemoryFacts
 } from "./promptFormatters.ts";
+import { hasBotNameCue } from "../bot/directAddressConfidence.ts";
 import { formatVoiceChannelEffectSummary } from "../voice/voiceSessionHelpers.ts";
 import {
   buildVoiceAdmissionPolicyLines
@@ -26,8 +27,6 @@ export function buildVoiceTurnPrompt({
   voiceEagerness = 0,
   conversationContext = null,
   sessionTiming = null,
-  joinWindowActive = false,
-  joinWindowAgeMs = null,
   botName = "the bot",
   participantRoster = [],
   recentMembershipEvents = [],
@@ -62,6 +61,13 @@ export function buildVoiceTurnPrompt({
     .slice(0, 40);
   const normalizedBotName = String(botName || "the bot").trim() || "the bot";
   const normalizedDirectAddressed = Boolean(directAddressed);
+  const normalizedNameCueDetected =
+    !normalizedDirectAddressed &&
+    Boolean(text) &&
+    hasBotNameCue({
+      transcript: text,
+      botName: normalizedBotName
+    });
   const normalizedConversationContext =
     conversationContext && typeof conversationContext === "object" ? conversationContext : null;
   const normalizedSessionTiming =
@@ -238,6 +244,11 @@ export function buildVoiceTurnPrompt({
       `Interpret second-person references like "you"/"your" as likely referring to ${normalizedBotName} unless another human target is explicit.`
     );
   }
+  if (normalizedNameCueDetected) {
+    parts.push(
+      `The transcript may be using ${normalizedBotName}'s name or a phonetic variation of it. Treat that as a positive signal that the speaker may be talking to you.`
+    );
+  }
   parts.push(
     ...buildVoiceSelfContextLines({
       voiceEnabled: true,
@@ -331,17 +342,6 @@ export function buildVoiceTurnPrompt({
       ]
         .filter(Boolean)
         .join("\n")
-    );
-  }
-
-  if (joinWindowActive) {
-    parts.push(
-      `Join window active: yes${
-        Number.isFinite(joinWindowAgeMs) ? ` (${Math.max(0, Math.round(Number(joinWindowAgeMs)))}ms since join)` : ""
-      }.`
-    );
-    parts.push(
-      "Join-window bias: if this turn is a short greeting/check-in (for example hi/hey/yo/sup/what's up), default to a brief acknowledgement instead of [SKIP] even in multi-participant channels, unless clearly aimed at another human."
     );
   }
   if (normalizedSessionTiming) {
@@ -540,7 +540,10 @@ export function buildVoiceTurnPrompt({
 
   parts.push(
     ...buildVoiceAdmissionPolicyLines({
+      inputKind: normalizedInputKind,
+      speakerName: speaker,
       directAddressed: normalizedDirectAddressed,
+      nameCueDetected: normalizedNameCueDetected,
       isEagerTurn,
       replyEagerness: voiceEagerness,
       participantCount: normalizedParticipantRoster.length,

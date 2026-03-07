@@ -1,6 +1,8 @@
 export type VoiceLiveScenarioExpected = {
   classifier: "YES" | "NO";
   admission: "allow" | "deny";
+  // "either" is reserved for raw room-event cues where admission may allow
+  // but generation is still intentionally free to speak or [SKIP].
   generation: "reply" | "skip" | "either";
 };
 
@@ -119,9 +121,6 @@ export const VOICE_LIVE_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
       "YES",
       {
         participants: ["vuhlp", "big bob", "poopy", "tim"]
-      },
-      {
-        generation: "either"
       }
     ),
     scenario("no bot name, ambient chatter", "did you see the game last night?", "NO", {
@@ -206,10 +205,7 @@ export const VOICE_LIVE_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
         timeline: turns('poopy: "Whos that?"')
       },
       10,
-      [10, 25, 50],
-      {
-        generation: "either"
-      }
+      [10, 25, 50]
     ),
     ...eagernessSweep(
       "fuzzy matching name pt 2 @ eagerness {e}",
@@ -221,10 +217,7 @@ export const VOICE_LIVE_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
         timeline: turns('poopy: "Oh my"')
       },
       10,
-      [10, 25, 50],
-      {
-        generation: "either"
-      }
+      [10, 25, 50]
     ),
     ...eagernessSweep(
       "direct follow up to bot after vague reply @ eagerness {e}",
@@ -339,10 +332,7 @@ export const VOICE_LIVE_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
         timeline: turns('alice: "Tis the season to be jolly"', 'carol: "How many tictacs can u lick lack?"')
       },
       10,
-      [10, 50],
-      {
-        generation: "either"
-      }
+      [10, 50]
     )
   ]),
 

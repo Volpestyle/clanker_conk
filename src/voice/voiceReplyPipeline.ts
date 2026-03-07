@@ -2,7 +2,6 @@ import { getFollowupSettings, getVoiceConversationPolicy } from "../settings/age
 import { clamp } from "../utils.ts";
 import { shouldAllowSystemSpeechSkipAfterFire } from "./systemSpeechOpportunity.ts";
 import {
-  JOIN_GREETING_LLM_WINDOW_MS,
   REALTIME_CONTEXT_MEMBER_LIMIT,
   STT_CONTEXT_MAX_MESSAGES,
   STT_REPLY_MAX_CHARS,
@@ -162,8 +161,6 @@ function logReplySkipped({
   usedScreenShareOffer,
   generatedVoiceAddressing,
   leaveVoiceChannelRequested,
-  joinWindowActive,
-  joinWindowAgeMs,
   resolvedConversationContext,
   contextMessages,
   contextTurns,
@@ -177,8 +174,6 @@ function logReplySkipped({
   usedScreenShareOffer: boolean;
   generatedVoiceAddressing: ReturnType<VoiceReplyPipelineHost["normalizeVoiceAddressingAnnotation"]>;
   leaveVoiceChannelRequested: boolean;
-  joinWindowActive: boolean;
-  joinWindowAgeMs: number;
   resolvedConversationContext: VoiceConversationContext | null;
   contextMessages: ContextMessage[];
   contextTurns: Array<Record<string, unknown>>;
@@ -211,8 +206,6 @@ function logReplySkipped({
       leaveVoiceChannelRequested,
       skipCause,
       replyTextPreview: replyText ? replyText.slice(0, 220) : null,
-      joinWindowActive,
-      joinWindowAgeMs: Math.round(joinWindowAgeMs),
       conversationState: resolvedConversationContext?.engagementState || null,
       engagedWithCurrentSpeaker: Boolean(resolvedConversationContext?.engagedWithCurrentSpeaker),
       contextTurnsSent: contextMessages.length,
@@ -294,8 +287,6 @@ export async function runVoiceReplyPipeline(
     maxItems: VOICE_CHANNEL_EFFECT_EVENT_PROMPT_LIMIT
   });
   const contextNow = Date.now();
-  const joinWindowAgeMs = Math.max(0, contextNow - Number(session.startedAt || 0));
-  const joinWindowActive = Boolean(session.startedAt) && joinWindowAgeMs <= JOIN_GREETING_LLM_WINDOW_MS;
   const sessionTiming = host.sessionLifecycle.buildVoiceSessionTimingContext(session);
   const streamWatchBrainContext = host.getStreamWatchBrainContextForPrompt(session, params.settings);
   const voiceAddressingState = host.buildVoiceAddressingState({
@@ -305,8 +296,6 @@ export async function runVoiceReplyPipeline(
   });
   const generationConversationContext = {
     ...(resolvedConversationContext || {}),
-    joinWindowActive,
-    joinWindowAgeMs: Math.round(joinWindowAgeMs),
     sessionTimeoutWarningActive: Boolean(sessionTiming?.timeoutWarningActive),
     sessionTimeoutWarningReason: String(sessionTiming?.timeoutWarningReason || "none"),
     streamWatchBrainContext,
@@ -345,8 +334,6 @@ export async function runVoiceReplyPipeline(
       contextMessages,
       sessionId: session.id,
       isEagerTurn: !params.directAddressed && !generationConversationContext?.engaged,
-      joinWindowActive,
-      joinWindowAgeMs,
       voiceEagerness: Number(voiceConversation.replyEagerness) || 0,
       conversationContext: generationConversationContext,
       sessionTiming,
@@ -478,8 +465,6 @@ export async function runVoiceReplyPipeline(
       usedScreenShareOffer,
       generatedVoiceAddressing,
       leaveVoiceChannelRequested,
-      joinWindowActive,
-      joinWindowAgeMs,
       resolvedConversationContext,
       contextMessages,
       contextTurns,
@@ -620,8 +605,6 @@ export async function runVoiceReplyPipeline(
             ? Number(clamp(Number(generatedVoiceAddressing.directedConfidence), 0, 1).toFixed(3))
             : 0,
           leaveVoiceChannelRequested,
-          joinWindowActive,
-          joinWindowAgeMs: Math.round(joinWindowAgeMs),
           contextTurnsSent: contextMessages.length,
           contextTurnsAvailable: contextTurns.length,
           contextCharsSent: contextMessageChars
@@ -667,8 +650,6 @@ export async function runVoiceReplyPipeline(
             ? Number(clamp(Number(generatedVoiceAddressing.directedConfidence), 0, 1).toFixed(3))
             : 0,
           leaveVoiceChannelRequested,
-          joinWindowActive,
-          joinWindowAgeMs: Math.round(joinWindowAgeMs),
           contextTurnsSent: contextMessages.length,
           contextTurnsAvailable: contextTurns.length,
           contextCharsSent: contextMessageChars
