@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { spawn } from "node:child_process";
 import { clampInt } from "../normalization/numbers.ts";
 import { safeJsonParseFromString } from "../normalization/valueParsers.ts";
+import { createAbortError } from "../tools/browserTaskRuntime.ts";
 
 type CodexCliResult = {
   stdout: string;
@@ -35,7 +36,7 @@ type CodexCliParsedResult = {
 };
 
 export type CodexCliStreamSessionLike = {
-  run: (payload: { input?: string; timeoutMs?: number }) => Promise<CodexCliResult>;
+  run: (payload: { input?: string; timeoutMs?: number; signal?: AbortSignal }) => Promise<CodexCliResult>;
   close: () => void;
   isIdle: () => boolean;
 };
@@ -43,6 +44,7 @@ export type CodexCliStreamSessionLike = {
 type PendingJob = {
   input: string;
   timeoutMs: number;
+  signal?: AbortSignal;
   resolve: (result: CodexCliResult) => void;
   reject: (error: Error) => void;
 };
@@ -51,12 +53,13 @@ function safeJsonParse(value: string, fallback: unknown = null) {
   return safeJsonParseFromString(value, fallback);
 }
 
-export function runCodexCli({ args, input, timeoutMs, maxBufferBytes, cwd = "" }: {
+export function runCodexCli({ args, input, timeoutMs, maxBufferBytes, cwd = "", signal = undefined as AbortSignal | undefined }: {
   args: string[];
   input?: string;
   timeoutMs: number;
   maxBufferBytes: number;
   cwd?: string;
+  signal?: AbortSignal;
 }) {
   return new Promise<CodexCliResult>((resolve, reject) => {
     const spawnOptions: { stdio: ["pipe", "pipe", "pipe"]; cwd?: string } = { stdio: ["pipe", "pipe", "pipe"] };
@@ -69,11 +72,20 @@ export function runCodexCli({ args, input, timeoutMs, maxBufferBytes, cwd = "" }
     let stderrBytes = 0;
     let settled = false;
     let timedOut = false;
+    let aborted = false;
+
+    if (signal?.aborted) {
+      reject(createAbortError(signal.reason || "codex CLI cancelled"));
+      return;
+    }
 
     const finish = (error: Error | null, result?: CodexCliResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      if (signal && abortHandler) {
+        signal.removeEventListener("abort", abortHandler);
+      }
       if (error) reject(error);
       else resolve(result || { stdout: "", stderr: "" });
     };
@@ -90,6 +102,23 @@ export function runCodexCli({ args, input, timeoutMs, maxBufferBytes, cwd = "" }
         } catch {}
       }, 1000);
     }, timeoutMs);
+    const abortHandler = signal
+      ? () => {
+          aborted = true;
+          try {
+            child.kill("SIGTERM");
+          } catch {}
+          setTimeout(() => {
+            if (settled) return;
+            try {
+              child.kill("SIGKILL");
+            } catch {}
+          }, 1000);
+        }
+      : null;
+    if (signal && abortHandler) {
+      signal.addEventListener("abort", abortHandler, { once: true });
+    }
 
     child.on("error", (error) => finish(error));
 
@@ -112,6 +141,16 @@ export function runCodexCli({ args, input, timeoutMs, maxBufferBytes, cwd = "" }
     });
 
     child.on("close", (code, signal) => {
+      if (aborted) {
+        const error = createAbortError(signal || "codex CLI cancelled") as CodexCliError;
+        error.killed = true;
+        error.signal = signal || "SIGTERM";
+        error.code = code;
+        error.stdout = stdout;
+        error.stderr = stderr;
+        finish(error, undefined);
+        return;
+      }
       if (timedOut) {
         const error = new Error("codex CLI timeout") as CodexCliError;
         error.killed = true;
@@ -149,6 +188,7 @@ class CodexCliStreamSession implements CodexCliStreamSessionLike {
   private running: boolean;
   private readonly queue: PendingJob[];
   private threadId: string;
+  private activeRunAbortController: AbortController | null;
 
   constructor({ model, maxBufferBytes, cwd = "" }: { model: string; maxBufferBytes: number; cwd?: string }) {
     this.model = String(model || "").trim();
@@ -158,21 +198,26 @@ class CodexCliStreamSession implements CodexCliStreamSessionLike {
     this.running = false;
     this.queue = [];
     this.threadId = "";
+    this.activeRunAbortController = null;
   }
 
   isIdle() {
     return !this.running && this.queue.length === 0;
   }
 
-  async run({ input = "", timeoutMs = 30_000 }: { input?: string; timeoutMs?: number }) {
+  async run({ input = "", timeoutMs = 30_000, signal = undefined as AbortSignal | undefined }: { input?: string; timeoutMs?: number; signal?: AbortSignal }) {
     if (this.closed) {
       throw new Error("codex-cli session is closed");
+    }
+    if (signal?.aborted) {
+      throw createAbortError(signal.reason || "codex-cli session cancelled");
     }
 
     return await new Promise<CodexCliResult>((resolve, reject) => {
       this.queue.push({
         input: String(input || ""),
         timeoutMs: Math.max(1, Math.floor(Number(timeoutMs) || 30_000)),
+        signal,
         resolve,
         reject
       });
@@ -186,6 +231,11 @@ class CodexCliStreamSession implements CodexCliStreamSessionLike {
     for (const job of this.queue.splice(0)) {
       job.reject(error);
     }
+    try {
+      this.activeRunAbortController?.abort("codex-cli session closed");
+    } catch {
+      // ignore
+    }
   }
 
   private async pump() {
@@ -194,17 +244,22 @@ class CodexCliStreamSession implements CodexCliStreamSessionLike {
     if (!job) return;
 
     this.running = true;
+    this.activeRunAbortController = new AbortController();
     try {
       const prompt = String(job.input || "").trim();
       const args = this.threadId
         ? buildCodexCliResumeArgs({ model: this.model, threadId: this.threadId, prompt })
         : buildCodexCliBrainArgs({ model: this.model, prompt });
+      const signal = job.signal
+        ? AbortSignal.any([this.activeRunAbortController.signal, job.signal])
+        : this.activeRunAbortController.signal;
       const result = await runCodexCli({
         args,
         input: "",
         timeoutMs: job.timeoutMs,
         maxBufferBytes: this.maxBufferBytes,
-        cwd: this.cwd
+        cwd: this.cwd,
+        signal
       });
       const parsed = parseCodexCliJsonlOutput(result.stdout);
       if (parsed?.threadId) {
@@ -214,6 +269,7 @@ class CodexCliStreamSession implements CodexCliStreamSessionLike {
     } catch (error) {
       job.reject(error instanceof Error ? error : new Error(String(error || "codex CLI error")));
     } finally {
+      this.activeRunAbortController = null;
       this.running = false;
       void this.pump();
     }

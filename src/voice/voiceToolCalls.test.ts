@@ -70,6 +70,40 @@ test("executeLocalVoiceToolCall forwards browser abort signals to browser_browse
   assert.equal(browserCalled, false);
 });
 
+test("executeLocalVoiceToolCall aborts non-browser tools before dispatch", async () => {
+  const controller = new AbortController();
+  controller.abort("cancel voice web search");
+
+  let searchCalled = false;
+  const manager = {
+    search: {
+      async searchAndRead() {
+        searchCalled = true;
+        return { query: "ignored", results: [] };
+      }
+    }
+  };
+
+  await assert.rejects(
+    executeLocalVoiceToolCall(manager, {
+      session: {
+        id: "voice-session-1",
+        guildId: "guild-1",
+        textChannelId: "channel-1",
+        lastOpenAiToolCallerUserId: "user-1"
+      },
+      settings: createTestSettings({}),
+      toolName: "web_search",
+      args: {
+        query: "latest rust news"
+      },
+      signal: controller.signal
+    }),
+    /AbortError/i
+  );
+  assert.equal(searchCalled, false);
+});
+
 // ---------------------------------------------------------------------------
 // music_play_now non-blocking tests
 // ---------------------------------------------------------------------------

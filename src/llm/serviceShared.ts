@@ -65,6 +65,7 @@ export type ChatModelRequest = {
   reasoningEffort?: unknown;
   jsonSchema?: string;
   tools?: ChatTool[];
+  signal?: AbortSignal;
 };
 
 export type ChatModelResponse = {

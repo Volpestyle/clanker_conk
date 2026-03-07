@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { clampInt } from "../normalization/numbers.ts";
 import { safeJsonParseFromString } from "../normalization/valueParsers.ts";
+import { createAbortError } from "../tools/browserTaskRuntime.ts";
 
 type ClaudeCliResult = {
   stdout: string;
@@ -23,13 +24,17 @@ type ClaudeCliStreamJob = {
   stdoutBytes: number;
   stderrBytes: number;
   timedOut: boolean;
+  aborted: boolean;
+  abortReason: unknown;
+  signal?: AbortSignal;
+  abortHandler: (() => void) | null;
   timeout: ReturnType<typeof setTimeout> | null;
   resolve: (result: ClaudeCliResult) => void;
   reject: (error: Error) => void;
 };
 
 export type ClaudeCliStreamSessionLike = {
-  run: (payload: { input?: string; timeoutMs?: number }) => Promise<ClaudeCliResult>;
+  run: (payload: { input?: string; timeoutMs?: number; signal?: AbortSignal }) => Promise<ClaudeCliResult>;
   close: () => void;
   isIdle: () => boolean;
 };
@@ -38,7 +43,7 @@ export function safeJsonParse(value, fallback = null) {
   return safeJsonParseFromString(value, fallback);
 }
 
-export function runClaudeCli({ args, input, timeoutMs, maxBufferBytes, cwd = "" }) {
+export function runClaudeCli({ args, input, timeoutMs, maxBufferBytes, cwd = "", signal = undefined as AbortSignal | undefined }) {
   return new Promise<ClaudeCliResult>((resolve, reject) => {
     const spawnOptions: { stdio: ["pipe", "pipe", "pipe"]; cwd?: string } = { stdio: ["pipe", "pipe", "pipe"] };
     const normalizedCwd = String(cwd || "").trim();
@@ -50,11 +55,20 @@ export function runClaudeCli({ args, input, timeoutMs, maxBufferBytes, cwd = "" 
     let stderrBytes = 0;
     let settled = false;
     let timedOut = false;
+    let aborted = false;
+
+    if (signal?.aborted) {
+      reject(createAbortError(signal.reason || "claude CLI cancelled"));
+      return;
+    }
 
     const finish = (error: Error | null, result?: ClaudeCliResult) => {
       if (settled) return;
       settled = true;
       clearTimeout(timeout);
+      if (signal && abortHandler) {
+        signal.removeEventListener("abort", abortHandler);
+      }
       if (error) reject(error);
       else resolve(result || { stdout: "", stderr: "" });
     };
@@ -71,6 +85,23 @@ export function runClaudeCli({ args, input, timeoutMs, maxBufferBytes, cwd = "" 
         } catch {}
       }, 1000);
     }, timeoutMs);
+    const abortHandler = signal
+      ? () => {
+          aborted = true;
+          try {
+            child.kill("SIGTERM");
+          } catch {}
+          setTimeout(() => {
+            if (settled) return;
+            try {
+              child.kill("SIGKILL");
+            } catch {}
+          }, 1000);
+        }
+      : null;
+    if (signal && abortHandler) {
+      signal.addEventListener("abort", abortHandler, { once: true });
+    }
 
     child.on("error", (error) => finish(error));
 
@@ -93,6 +124,16 @@ export function runClaudeCli({ args, input, timeoutMs, maxBufferBytes, cwd = "" 
     });
 
     child.on("close", (code, signal) => {
+      if (aborted) {
+        const error = createAbortError(signal || "claude CLI cancelled") as ClaudeCliError;
+        error.killed = true;
+        error.signal = signal || "SIGTERM";
+        error.code = code;
+        error.stdout = stdout;
+        error.stderr = stderr;
+        finish(error, undefined);
+        return;
+      }
       if (timedOut) {
         const error = new Error("claude CLI timeout") as ClaudeCliError;
         error.killed = true;
@@ -149,6 +190,8 @@ function buildClaudeCliCommandError({
   code,
   signal,
   timedOut = false,
+  aborted = false,
+  abortReason = "claude CLI cancelled",
   stdout = "",
   stderr = ""
 }: {
@@ -156,9 +199,20 @@ function buildClaudeCliCommandError({
   code?: number | null;
   signal?: string | null;
   timedOut?: boolean;
+  aborted?: boolean;
+  abortReason?: unknown;
   stdout?: string;
   stderr?: string;
 }) {
+  if (aborted) {
+    const error = createAbortError(abortReason) as ClaudeCliError;
+    error.killed = true;
+    error.signal = signal ?? "SIGTERM";
+    error.code = typeof code === "number" ? code : code ?? null;
+    error.stdout = String(stdout || "");
+    error.stderr = String(stderr || "");
+    return error;
+  }
   const error = new Error(
     timedOut ? "claude CLI timeout" : `Command failed: claude ${Array.isArray(args) ? args.join(" ") : ""}`
   ) as ClaudeCliError;
@@ -197,9 +251,12 @@ class ClaudeCliStreamSession {
     return !this.activeJob && this.queue.length === 0;
   }
 
-  async run({ input = "", timeoutMs = 30_000 }: { input?: string; timeoutMs?: number }) {
+  async run({ input = "", timeoutMs = 30_000, signal = undefined as AbortSignal | undefined }: { input?: string; timeoutMs?: number; signal?: AbortSignal }) {
     if (this.closed) {
       throw new Error("claude-code session is closed");
+    }
+    if (signal?.aborted) {
+      throw createAbortError(signal.reason || "claude-code session cancelled");
     }
 
     return await new Promise<ClaudeCliResult>((resolve, reject) => {
@@ -211,6 +268,10 @@ class ClaudeCliStreamSession {
         stdoutBytes: 0,
         stderrBytes: 0,
         timedOut: false,
+        aborted: false,
+        abortReason: "",
+        signal,
+        abortHandler: null,
         timeout: null,
         resolve,
         reject
@@ -244,6 +305,21 @@ class ClaudeCliStreamSession {
 
     this.activeJob = nextJob;
     this.lastUsedAt = Date.now();
+    if (nextJob.signal?.aborted) {
+      nextJob.aborted = true;
+      nextJob.abortReason = nextJob.signal.reason || "claude-code session cancelled";
+      this.failActiveJob(createAbortError(nextJob.abortReason));
+      this.pump();
+      return;
+    }
+    if (nextJob.signal) {
+      nextJob.abortHandler = () => {
+        nextJob.aborted = true;
+        nextJob.abortReason = nextJob.signal?.reason || "claude-code session cancelled";
+        this.terminateChild();
+      };
+      nextJob.signal.addEventListener("abort", nextJob.abortHandler, { once: true });
+    }
     nextJob.timeout = setTimeout(() => {
       nextJob.timedOut = true;
       this.terminateChild();
@@ -284,6 +360,8 @@ class ClaudeCliStreamSession {
           code,
           signal,
           timedOut: active.timedOut,
+          aborted: active.aborted,
+          abortReason: active.abortReason,
           stdout: active.stdout,
           stderr: active.stderr
         });
@@ -353,6 +431,10 @@ class ClaudeCliStreamSession {
     if (!active) return;
     this.activeJob = null;
     if (active.timeout) clearTimeout(active.timeout);
+    if (active.signal && active.abortHandler) {
+      active.signal.removeEventListener("abort", active.abortHandler);
+      active.abortHandler = null;
+    }
     this.lastUsedAt = Date.now();
     active.resolve({
       stdout: active.stdout,
@@ -366,6 +448,10 @@ class ClaudeCliStreamSession {
     if (!active) return;
     this.activeJob = null;
     if (active.timeout) clearTimeout(active.timeout);
+    if (active.signal && active.abortHandler) {
+      active.signal.removeEventListener("abort", active.abortHandler);
+      active.abortHandler = null;
+    }
 
     const normalizedError = (error instanceof Error ? error : new Error(String(error || "claude CLI error"))) as ClaudeCliError;
     if (typeof normalizedError.stdout !== "string") {

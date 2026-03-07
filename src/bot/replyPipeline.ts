@@ -22,6 +22,13 @@ import {
   resolveReplyFollowupGenerationSettings as resolveReplyFollowupGenerationSettingsForReplyFollowup,
   runModelRequestedWebSearch as runModelRequestedWebSearchForReplyFollowup
 } from "./replyFollowup.ts";
+import {
+  buildTextReplyScopeKey
+} from "../tools/activeReplyRegistry.ts";
+import {
+  isAbortError,
+  throwIfAborted
+} from "../tools/browserTaskRuntime.ts";
 import { resolveDeterministicMentions as resolveDeterministicMentionsForMentions } from "./mentions.ts";
 import {
   MAX_MODEL_IMAGE_INPUTS,
@@ -196,6 +203,7 @@ type ReplyWebSearchState = ReturnType<ReplyPipelineRuntime["buildWebSearchContex
 
 type ReplyPipelineContext = {
   shouldRun: true;
+  signal?: AbortSignal;
   recentMessages: ReplyRecentMessage[];
   addressSignal: ReplyAddressSignal;
   triggerMessageIds: string[];
@@ -601,7 +609,7 @@ export async function executeReplyLlm(
   ctx: ReplyPipelineContext
 ): Promise<ReplyLlmResult> {
   const {
-    addressSignal, triggerMessageIds, source, performance,
+    addressSignal, triggerMessageIds, source, performance, signal,
     replyTrace, systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture
   } = ctx;
   let { webSearch, browserBrowse, memoryLookup, modelImageInputs, imageLookup, replyPrompts } = ctx;
@@ -635,7 +643,8 @@ export async function executeReplyLlm(
           guildId,
           channelId,
           userId,
-          source
+          source,
+          signal
         });
         return browserBrowse;
       }
@@ -649,7 +658,8 @@ export async function executeReplyLlm(
           guildId,
           channelId,
           userId,
-          source
+          source,
+          signal
         })
     },
     memory: bot.memory,
@@ -668,10 +678,12 @@ export async function executeReplyLlm(
     trace: {
       ...replyTrace,
       source
-    }
+    },
+    signal
   };
   let replyContextMessages: ContextMessage[] = [];
 
+  throwIfAborted(signal, "Reply cancelled");
   const llm1StartedAtMs = Date.now();
   let generation: ReplyGeneration = await bot.llm.generate({
     settings,
@@ -681,7 +693,8 @@ export async function executeReplyLlm(
     contextMessages: replyContextMessages,
     jsonSchema: REPLY_OUTPUT_JSON_SCHEMA,
     tools: replyTools,
-    trace: replyTrace
+    trace: replyTrace,
+    signal
   });
   const followupGenerationSettings = resolveReplyFollowupGenerationSettingsForReplyFollowup(settings);
   performance.llm1Ms = Math.max(0, Date.now() - llm1StartedAtMs);
@@ -699,6 +712,7 @@ export async function executeReplyLlm(
     replyToolLoopSteps < REPLY_TOOL_LOOP_MAX_STEPS &&
     replyTotalToolCalls < REPLY_TOOL_LOOP_MAX_CALLS
   ) {
+    throwIfAborted(signal, "Reply cancelled");
     const assistantContent = buildContextContentBlocks(generation.rawContent, generation.text);
     replyContextMessages = [
       ...replyContextMessages,
@@ -723,6 +737,7 @@ export async function executeReplyLlm(
     const concurrentResults = new Map<string, ReplyToolExecutionResult>();
     if (concurrentCalls.length > 0) {
       const settledCalls = await Promise.allSettled(concurrentCalls.map(async (toolCall) => {
+        throwIfAborted(signal, "Reply cancelled");
         const toolInput = toolCall.input;
         const result = await executeReplyTool(toolCall.name, toolInput, replyToolRuntime, replyToolContext);
         concurrentResults.set(toolCall.id, result);
@@ -757,6 +772,7 @@ export async function executeReplyLlm(
     // Run sequential tools in order
     const sequentialResults = new Map<string, ReplyToolExecutionResult>();
     for (const toolCall of sequentialCalls) {
+      throwIfAborted(signal, "Reply cancelled");
       const toolInput = toolCall.input;
       let result: ReplyToolExecutionResult;
       if (toolCall.name === "web_search") {
@@ -770,7 +786,8 @@ export async function executeReplyLlm(
             trace: {
               ...replyTrace,
               source
-            }
+            },
+            signal
           }
         );
         usedWebSearchFollowup = Boolean(webSearch?.used);
@@ -850,6 +867,7 @@ export async function executeReplyLlm(
       { role: "user", content: toolResultMessages }
     ];
 
+    throwIfAborted(signal, "Reply cancelled");
     generation = await bot.llm.generate({
       settings: followupGenerationSettings,
       systemPrompt,
@@ -861,7 +879,8 @@ export async function executeReplyLlm(
       trace: {
         ...replyTrace,
         event: `reply_tool_loop:${replyToolLoopSteps + 1}`
-      }
+      },
+      signal
     });
     replyToolLoopSteps += 1;
   }
@@ -947,7 +966,8 @@ export async function executeReplyLlm(
             trace: {
               ...replyTrace,
               source
-            }
+            },
+            signal
           }
         ),
       runModelRequestedBrowserBrowse: async ({ browserBrowse: currentBrowserBrowse, query }) =>
@@ -1499,24 +1519,47 @@ export async function maybeReplyToMessagePipeline(
   if (!bot.canSendMessage(permissions.maxMessagesPerHour)) return false;
   if (!bot.canTalkNow(settings)) return false;
 
-  const ctx = await buildReplyContext(bot, message, settings, options);
-  if (!ctx || !ctx.shouldRun) return false;
+  const replyScopeKey = buildTextReplyScopeKey({
+    guildId: message.guildId,
+    channelId: message.channelId
+  });
+  const activeReply = bot.activeReplies.begin(replyScopeKey, "text-reply");
+  const signal = activeReply.abortController.signal;
 
-  const llmResult = await executeReplyLlm(bot, message, settings, options, ctx);
-  if (!isReplyActionableLlmResult(llmResult)) return true;
-  const actionableLlmResult = llmResult;
+  try {
+    throwIfAborted(signal, "Reply cancelled");
+    const ctx = await buildReplyContext(bot, message, settings, options);
+    if (!ctx || !ctx.shouldRun) return false;
+    ctx.signal = signal;
 
-  const actionResult = await dispatchReplyActions(bot, message, settings, options, ctx, actionableLlmResult);
-  if (!isReplySendableActionResult(actionResult)) return false;
-  const sendableActionResult = actionResult;
+    throwIfAborted(signal, "Reply cancelled");
+    const llmResult = await executeReplyLlm(bot, message, settings, options, ctx);
+    if (!isReplyActionableLlmResult(llmResult)) return true;
+    const actionableLlmResult = llmResult;
 
-  return await sendReplyMessage(
-    bot,
-    message,
-    settings,
-    options,
-    ctx,
-    actionableLlmResult,
-    sendableActionResult
-  );
+    throwIfAborted(signal, "Reply cancelled");
+    const actionResult = await dispatchReplyActions(bot, message, settings, options, ctx, actionableLlmResult);
+    if (!isReplySendableActionResult(actionResult)) return false;
+    const sendableActionResult = actionResult;
+
+    throwIfAborted(signal, "Reply cancelled");
+    return await sendReplyMessage(
+      bot,
+      message,
+      settings,
+      options,
+      ctx,
+      actionableLlmResult,
+      sendableActionResult
+    );
+  } catch (error) {
+    if (isAbortError(error) || signal.aborted) {
+      // Return true ("reply handled") so the caller does not retry or fall back
+      // to another reply path after the user explicitly cancelled this turn.
+      return true;
+    }
+    throw error;
+  } finally {
+    bot.activeReplies.clear(activeReply);
+  }
 }

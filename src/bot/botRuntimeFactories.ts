@@ -435,6 +435,7 @@ export function buildReplyPipelineRuntime(
 
   return {
     ...botContext,
+    activeReplies: bot.activeReplies,
     gifs: bot.gifs,
     search: bot.search,
     voiceSessionManager: bot.voiceSessionManager,

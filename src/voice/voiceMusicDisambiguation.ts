@@ -2,6 +2,7 @@ import { normalizeInlineText, STT_TRANSCRIPT_MAX_CHARS } from "./voiceSessionHel
 import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
 import { executeVoiceMusicQueueAddTool, executeVoiceMusicQueueNextTool } from "./voiceToolCallMusic.ts";
 import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
+import { isCancelIntent } from "../tools/cancelDetection.ts";
 import type {
   MusicSelectionResult,
   VoiceToolRuntimeSessionLike
@@ -230,7 +231,7 @@ export function isMusicDisambiguationResolutionTurn(
   }
   const text = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
   if (!text) return false;
-  if (/^(?:cancel|nevermind|never mind|nvm|forget it)$/i.test(text)) {
+  if (isCancelIntent(text)) {
     return true;
   }
   return Boolean(resolvePendingMusicDisambiguationSelection(host, session, text));
@@ -374,7 +375,7 @@ export async function maybeHandlePendingMusicDisambiguationTurn(
   }
   const text = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
   if (!text) return false;
-  if (/^(?:cancel|nevermind|never mind|nvm|forget it)$/i.test(text)) {
+  if (isCancelIntent(text)) {
     host.clearMusicDisambiguationState(session);
     host.clearVoiceCommandSession(session);
     await sendOperationalMessage(host, {

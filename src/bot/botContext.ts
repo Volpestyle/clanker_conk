@@ -8,6 +8,7 @@ import type { BrowserManager } from "../services/BrowserManager.ts";
 import type { WebSearchService } from "../services/search.ts";
 import type { Store } from "../store/store.ts";
 import type { BrowserTaskRegistry } from "../tools/browserTaskRuntime.ts";
+import type { ActiveReplyRegistry } from "../tools/activeReplyRegistry.ts";
 import type { VideoContextService } from "../video/videoContextService.ts";
 import type { ImageCaptionCache } from "../vision/imageCaptionCache.ts";
 import type { SubAgentSessionManager } from "../agents/subAgentSession.ts";
@@ -196,6 +197,7 @@ type ReplyPipelineRuntimeMember =
   | "canTalkNow";
 
 export interface ReplyPipelineRuntime extends BotContext, Pick<ClankerBot, ReplyPipelineRuntimeMember> {
+  activeReplies: ActiveReplyRegistry;
   getReplyAddressSignal: GetReplyAddressSignalRuntimeFn;
   isReplyChannel: IsReplyChannelRuntimeFn;
   shouldAttemptReplyDecision: ShouldAttemptReplyDecisionRuntimeFn;

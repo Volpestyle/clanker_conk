@@ -22,6 +22,7 @@ import { CodexAgentSession, getActiveCodexAgentTaskCount } from "./codexAgent.ts
 import { CodexCliAgentSession, getActiveCodexCliAgentTaskCount } from "./codexCliAgent.ts";
 import { clamp } from "../utils.ts";
 import path from "node:path";
+import { createAbortError, isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import {
   getDevTaskPermissions,
   getDevTeamRuntimeConfig,
@@ -68,6 +69,7 @@ interface CodeAgentOptions {
   store: {
     logAction: (entry: Record<string, unknown>) => void;
   };
+  signal?: AbortSignal;
 }
 
 interface CodeAgentResult {
@@ -168,7 +170,8 @@ export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgent
     codexCliModel,
     openai = null,
     trace,
-    store
+    store,
+    signal
   } = options;
   const resolvedProvider = resolveEffectiveCodeAgentProvider(provider);
 
@@ -176,6 +179,7 @@ export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgent
   const startMs = Date.now();
 
   try {
+    throwIfAborted(signal, "Code agent cancelled");
     if (resolvedProvider === "codex") {
       if (!openai) {
         throw new Error("Codex code agent requires OPENAI_API_KEY.");
@@ -185,7 +189,8 @@ export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgent
         openai,
         instruction,
         model: codexModel,
-        timeoutMs
+        timeoutMs,
+        signal
       });
       const text = response.text || (response.isError ? response.errorMessage : "Code agent completed with no output.");
       const agentResult: CodeAgentResult = {
@@ -231,7 +236,8 @@ export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgent
         args,
         input: "",
         timeoutMs,
-        maxBufferBytes
+        maxBufferBytes,
+        signal
       });
       const parsed = parseCodexCliJsonlOutput(result.stdout);
       const agentResult: CodeAgentResult = parsed
@@ -283,7 +289,8 @@ export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgent
       input: "",
       timeoutMs,
       maxBufferBytes,
-      cwd
+      cwd,
+      signal
     });
     const parsed = parseClaudeCodeStreamOutput(result.stdout);
     const agentResult: CodeAgentResult = parsed
@@ -324,6 +331,9 @@ export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgent
 
     return agentResult;
   } catch (error) {
+    if (isAbortError(error) || signal?.aborted) {
+      throw createAbortError(signal?.reason || error);
+    }
     const normalized = resolvedProvider === "claude-code"
       ? normalizeClaudeCodeCliError(error, {
           timeoutPrefix: "Code agent timed out",
@@ -403,6 +413,7 @@ export class CodeAgentSession implements SubAgentSession {
   private readonly store: { logAction: (entry: Record<string, unknown>) => void };
   private turnCount: number;
   private totalCostUsd: number;
+  private activeAbortController: AbortController | null;
 
   constructor(options: CodeAgentSessionOptions) {
     const { scopeKey, cwd, model, maxTurns, timeoutMs, maxBufferBytes, trace, store } = options;
@@ -417,6 +428,7 @@ export class CodeAgentSession implements SubAgentSession {
     this.store = store;
     this.turnCount = 0;
     this.totalCostUsd = 0;
+    this.activeAbortController = null;
 
     const args = buildCodeAgentSessionCliArgs({ model, maxTurns });
     this.streamSession = createClaudeCliStreamSession({
@@ -426,7 +438,7 @@ export class CodeAgentSession implements SubAgentSession {
     });
   }
 
-  async runTurn(input: string): Promise<SubAgentTurnResult> {
+  async runTurn(input: string, options: { signal?: AbortSignal } = {}): Promise<SubAgentTurnResult> {
     if (this.status === "cancelled" || this.status === "error") {
       return {
         text: `Session is ${this.status} and cannot accept new turns.`,
@@ -441,14 +453,20 @@ export class CodeAgentSession implements SubAgentSession {
     this.lastUsedAt = Date.now();
     this.turnCount += 1;
     const turnStartMs = Date.now();
+    this.activeAbortController = new AbortController();
+    const turnSignal = options.signal
+      ? AbortSignal.any([this.activeAbortController.signal, options.signal])
+      : this.activeAbortController.signal;
 
     const stdinPayload = buildCodeAgentSessionTurnInput(input);
 
     try {
+      throwIfAborted(turnSignal, "Code agent session cancelled");
       activeTaskCount.current++;
       const result = await this.streamSession.run({
         input: stdinPayload,
-        timeoutMs: this.timeoutMs
+        timeoutMs: this.timeoutMs,
+        signal: turnSignal
       });
 
       const parsed = parseClaudeCodeStreamOutput(result.stdout);
@@ -491,6 +509,11 @@ export class CodeAgentSession implements SubAgentSession {
 
       return turnResult;
     } catch (error) {
+      if (isAbortError(error) || turnSignal.aborted) {
+        this.status = "cancelled";
+        this.lastUsedAt = Date.now();
+        throw createAbortError(turnSignal.reason || error);
+      }
       const normalized = normalizeClaudeCodeCliError(error, {
         timeoutPrefix: "Code agent session turn timed out",
         timeoutMs: this.timeoutMs
@@ -523,14 +546,24 @@ export class CodeAgentSession implements SubAgentSession {
         usage: { ...EMPTY_USAGE }
       };
     } finally {
+      this.activeAbortController = null;
       activeTaskCount.current = Math.max(0, activeTaskCount.current - 1);
     }
   }
 
-  close(): void {
+  cancel(reason = "Code agent session cancelled"): void {
     if (this.status === "cancelled") return;
     this.status = "cancelled";
+    try {
+      this.activeAbortController?.abort(reason);
+    } catch {
+      // ignore
+    }
     this.streamSession.close();
+  }
+
+  close(): void {
+    this.cancel("Code agent session closed");
   }
 }
 

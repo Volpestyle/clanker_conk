@@ -11,6 +11,8 @@ import {
   summarizeVoiceToolOutput
 } from "./voiceToolCallToolRegistry.ts";
 import { executeLocalVoiceToolCall, executeMcpVoiceToolCall } from "./voiceToolCallDispatch.ts";
+import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
+import { isAbortError } from "../tools/browserTaskRuntime.ts";
 
 type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
 
@@ -49,8 +51,16 @@ export async function executeOpenAiRealtimeFunctionCall(
   const callArgs = parseOpenAiRealtimeToolArguments(manager, pendingCall?.argumentsText || "");
   const toolDescriptor = resolveOpenAiRealtimeToolDescriptor(manager, session, toolName);
   const toolType = toolDescriptor?.toolType === "mcp" ? "mcp" : "function";
+  const activeReply = manager.activeReplies?.begin(
+    buildVoiceReplyScopeKey(session.id),
+    "voice-tool",
+    [toolName || toolDescriptor?.name || "unknown_tool"]
+  ) || null;
 
   const abortController = new AbortController();
+  const toolSignal = activeReply
+    ? AbortSignal.any([abortController.signal, activeReply.abortController.signal])
+    : abortController.signal;
   if (!(runtimeSession.openAiPendingToolAbortControllers instanceof Map)) {
     runtimeSession.openAiPendingToolAbortControllers = new Map();
   }
@@ -77,20 +87,36 @@ export async function executeOpenAiRealtimeFunctionCall(
   try {
     if (!toolDescriptor) throw new Error(`unknown_tool:${toolName || "unnamed"}`);
     output = toolDescriptor.toolType === "mcp"
-      ? await executeMcpVoiceToolCall(manager, { session, settings: resolvedSettings, toolDescriptor, args: callArgs })
+      ? await executeMcpVoiceToolCall(manager, {
+          session,
+          settings: resolvedSettings,
+          toolDescriptor,
+          args: callArgs,
+          signal: toolSignal
+        })
       : await executeLocalVoiceToolCall(manager, {
           session,
           settings: resolvedSettings,
           toolName: toolDescriptor.name,
           args: callArgs,
-          signal: abortController.signal
+          signal: toolSignal
         });
     success = true;
   } catch (error) {
-    errorMessage = String(error?.message || error);
-    output = { ok: false, error: { message: errorMessage } };
+    if (isAbortError(error) || toolSignal.aborted) {
+      errorMessage = "cancelled_by_user";
+      output = {
+        ok: false,
+        cancelled: true,
+        error: { message: "Tool call cancelled by user." }
+      };
+    } else {
+      errorMessage = String(error?.message || error);
+      output = { ok: false, error: { message: errorMessage } };
+    }
   } finally {
     runtimeSession.openAiPendingToolAbortControllers?.delete(callId);
+    manager.activeReplies?.clear(activeReply);
   }
 
   const runtimeMs = Math.max(0, Date.now() - startedAtMs);
@@ -166,7 +192,8 @@ export async function executeOpenAiRealtimeFunctionCall(
   if (!(session.openAiToolCallExecutions instanceof Map) || session.openAiToolCallExecutions.size <= 0) {
     manager.scheduleOpenAiRealtimeToolFollowupResponse({
       session,
-      userId: session.lastOpenAiToolCallerUserId || null
+      userId: session.lastOpenAiToolCallerUserId || null,
+      startedAtMs
     });
   }
 }

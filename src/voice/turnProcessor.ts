@@ -1,5 +1,8 @@
 import { getVoiceRuntimeConfig } from "../settings/agentStack.ts";
 import { clamp } from "../utils.ts";
+import type { ActiveReplyRegistry } from "../tools/activeReplyRegistry.ts";
+import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
+import { isCancelIntent } from "../tools/cancelDetection.ts";
 import {
   computeAsrTranscriptConfidence,
   resolveRealtimeTurnTranscriptionPlan
@@ -236,8 +239,9 @@ export interface TurnProcessorHost {
   llm?: TurnProcessorLlmLike;
   replyManager: Pick<
     ReplyManager,
-    "createTrackedAudioResponse" | "getOutputLockDebugMetadata" | "isRealtimeResponseActive"
+    "clearPendingResponse" | "createTrackedAudioResponse" | "getOutputLockDebugMetadata" | "isRealtimeResponseActive"
   >;
+  activeReplies?: ActiveReplyRegistry | null;
   maybeHandleMusicPlaybackTurn: (
     args: MaybeHandleMusicPlaybackTurnArgs
   ) => Promise<boolean> | boolean;
@@ -285,6 +289,12 @@ export interface TurnProcessorHost {
   forwardRealtimeTextTurnToBrain: (
     args: ForwardRealtimeTextTurnToBrainArgs
   ) => Promise<boolean>;
+  requestRealtimePromptUtterance: (args: {
+    session: VoiceSession;
+    prompt: string;
+    userId?: string | null;
+    source?: string;
+  }) => boolean;
   runRealtimeBrainReply: (args: RunRealtimeBrainReplyArgs) => Promise<boolean>;
   touchActivity: (guildId: string, settings?: TurnProcessorSettings) => void;
   runSttPipelineReply: (args: RunSttPipelineReplyArgs) => Promise<void>;
@@ -293,6 +303,58 @@ export interface TurnProcessorHost {
 
 export class TurnProcessor {
   constructor(private readonly host: TurnProcessorHost) {}
+
+  private cancelRealtimeSessionWork({
+    session,
+    userId = null,
+    transcript = "",
+    source = "realtime",
+    captureReason = "stream_end"
+  }: {
+    session: VoiceSession;
+    userId?: string | null;
+    transcript?: string;
+    source?: string;
+    captureReason?: string;
+  }) {
+    if (!session || session.ending) return;
+    let responseCancelSucceeded = false;
+    let cancelAcknowledgementQueued = false;
+    const cancelActiveResponse = session.realtimeClient?.cancelActiveResponse;
+    if (typeof cancelActiveResponse === "function") {
+      try {
+        responseCancelSucceeded = Boolean(cancelActiveResponse.call(session.realtimeClient));
+      } catch {
+        responseCancelSucceeded = false;
+      }
+    }
+    this.host.replyManager.clearPendingResponse(session);
+    cancelAcknowledgementQueued = this.host.requestRealtimePromptUtterance({
+      session,
+      userId: userId || session.lastOpenAiToolCallerUserId || null,
+      source: "voice_turn_cancel_acknowledgement",
+      prompt: [
+        "The user just asked you to stop or cancel what you were doing.",
+        "Acknowledge briefly in one short spoken sentence.",
+        "Do not continue the cancelled task."
+      ].join(" ")
+    });
+    this.host.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId,
+      content: "voice_turn_cancel_intent",
+      metadata: {
+        sessionId: session.id,
+        source,
+        captureReason,
+        transcript: normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS) || null,
+        responseCancelSucceeded,
+        cancelAcknowledgementQueued
+      }
+    });
+  }
 
   getRealtimeTurnBacklogSize(session: VoiceSession | null | undefined) {
     if (!session) return 0;
@@ -583,12 +645,38 @@ export class TurnProcessor {
   }: RunRealtimeTurnArgs) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
+    const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
     const normalizedPcmBuffer = Buffer.isBuffer(pcmBuffer) ? pcmBuffer : Buffer.from(pcmBuffer || []);
     const normalizedTranscriptOverride = normalizeVoiceText(transcriptOverride, STT_TRANSCRIPT_MAX_CHARS);
     const hasTranscriptOverride = Boolean(normalizedTranscriptOverride);
     if (!normalizedPcmBuffer?.length && !hasTranscriptOverride) return;
     const queueWaitMs = queuedAt ? Math.max(0, Date.now() - Number(queuedAt || Date.now())) : 0;
     const finalizedAtMs = Math.max(0, Number(finalizedAt || 0)) || Math.max(0, Number(queuedAt || 0));
+    if (this.host.activeReplies?.isStale(voiceReplyScopeKey, finalizedAtMs || Date.now())) {
+      this.host.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "realtime_turn_skipped_cancelled",
+        metadata: {
+          sessionId: session.id,
+          captureReason: String(captureReason || "stream_end"),
+          finalizedAtMs
+        }
+      });
+      return;
+    }
+    if (hasTranscriptOverride && isCancelIntent(normalizedTranscriptOverride)) {
+      this.cancelRealtimeSessionWork({
+        session,
+        userId,
+        transcript: normalizedTranscriptOverride,
+        source: "realtime",
+        captureReason
+      });
+      return;
+    }
     const pendingQueueDepth = Array.isArray(session.pendingRealtimeTurns) ? session.pendingRealtimeTurns.length : 0;
     if (
       pendingQueueDepth > 0 &&
@@ -770,6 +858,17 @@ export class TurnProcessor {
         }
       }
       asrCompletedAtMs = Date.now();
+    }
+
+    if (turnTranscript && isCancelIntent(turnTranscript)) {
+      this.cancelRealtimeSessionWork({
+        session,
+        userId,
+        transcript: turnTranscript,
+        source: "realtime",
+        captureReason
+      });
+      return;
     }
 
     if (
@@ -1247,6 +1346,22 @@ export class TurnProcessor {
     if (session.mode !== "stt_pipeline") return;
     if (!pcmBuffer?.length) return;
     if (!this.llm?.transcribeAudio || !this.llm?.synthesizeSpeech) return;
+    const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
+    if (this.host.activeReplies?.isStale(voiceReplyScopeKey, queuedAt || Date.now())) {
+      this.host.store.logAction({
+        kind: "voice_runtime",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId,
+        content: "stt_pipeline_turn_skipped_cancelled",
+        metadata: {
+          sessionId: session.id,
+          captureReason: String(captureReason || "stream_end"),
+          queuedAt: Number(queuedAt || 0) || null
+        }
+      });
+      return;
+    }
 
     const queueWaitMs = queuedAt ? Math.max(0, Date.now() - Number(queuedAt || Date.now())) : 0;
     const pendingQueueDepth = Array.isArray(session.pendingSttTurnsQueue) ? session.pendingSttTurnsQueue.length : 0;
@@ -1360,6 +1475,16 @@ export class TurnProcessor {
       }
     }
     if (!transcript) return;
+    if (isCancelIntent(transcript)) {
+      this.cancelRealtimeSessionWork({
+        session,
+        userId,
+        transcript,
+        source: "stt_pipeline",
+        captureReason
+      });
+      return;
+    }
     if (session.ending) return;
 
     this.host.touchActivity(session.guildId, settings);

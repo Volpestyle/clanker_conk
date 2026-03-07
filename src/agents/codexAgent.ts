@@ -1,5 +1,6 @@
 import type OpenAI from "openai";
 import { runCodexSessionTurn } from "../llm/llmCodex.ts";
+import { createAbortError, isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
 import { generateSessionId } from "./subAgentSession.ts";
 
@@ -43,6 +44,7 @@ export class CodexAgentSession implements SubAgentSession {
   private readonly openai: OpenAI;
   private turnCount: number;
   private previousResponseId: string;
+  private activeAbortController: AbortController | null;
 
   constructor(options: CodexAgentSessionOptions) {
     const { scopeKey, model, timeoutMs, trace, store, openai } = options;
@@ -59,9 +61,10 @@ export class CodexAgentSession implements SubAgentSession {
     this.openai = openai;
     this.turnCount = 0;
     this.previousResponseId = "";
+    this.activeAbortController = null;
   }
 
-  async runTurn(input: string): Promise<SubAgentTurnResult> {
+  async runTurn(input: string, options: { signal?: AbortSignal } = {}): Promise<SubAgentTurnResult> {
     if (this.status === "cancelled" || this.status === "error") {
       return {
         text: `Session is ${this.status} and cannot accept new turns.`,
@@ -76,15 +79,21 @@ export class CodexAgentSession implements SubAgentSession {
     this.lastUsedAt = Date.now();
     this.turnCount += 1;
     const turnStartMs = Date.now();
+    this.activeAbortController = new AbortController();
+    const turnSignal = options.signal
+      ? AbortSignal.any([this.activeAbortController.signal, options.signal])
+      : this.activeAbortController.signal;
 
     try {
+      throwIfAborted(turnSignal, "Codex session cancelled");
       activeCodexTaskCount.current += 1;
       const response = await runCodexSessionTurn({
         openai: this.openai,
         previousResponseId: this.previousResponseId || null,
         input,
         model: this.model,
-        timeoutMs: this.timeoutMs
+        timeoutMs: this.timeoutMs,
+        signal: turnSignal
       });
       this.previousResponseId = response.responseId || this.previousResponseId;
       this.status = "idle";
@@ -121,6 +130,11 @@ export class CodexAgentSession implements SubAgentSession {
 
       return turnResult;
     } catch (error) {
+      if (isAbortError(error) || turnSignal.aborted) {
+        this.status = "cancelled";
+        this.lastUsedAt = Date.now();
+        throw createAbortError(turnSignal.reason || error);
+      }
       const message = String(error instanceof Error ? error.message : error || "Codex session turn failed.");
       this.status = "error";
       this.lastUsedAt = Date.now();
@@ -150,12 +164,22 @@ export class CodexAgentSession implements SubAgentSession {
         usage: { ...EMPTY_USAGE }
       };
     } finally {
+      this.activeAbortController = null;
       activeCodexTaskCount.current = Math.max(0, activeCodexTaskCount.current - 1);
     }
   }
 
-  close(): void {
+  cancel(reason = "Codex session cancelled"): void {
     if (this.status === "cancelled") return;
     this.status = "cancelled";
+    try {
+      this.activeAbortController?.abort(reason);
+    } catch {
+      // ignore
+    }
+  }
+
+  close(): void {
+    this.cancel("Codex session closed");
   }
 }
