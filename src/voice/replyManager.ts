@@ -237,17 +237,21 @@ export class ReplyManager {
     };
   }
 
-  maybeClearStaleRealtimeResponseState(
-    session: VoiceSession,
-    { liveAudioStreaming = false, bufferedBotSpeech = false } = {}
-  ) {
+  /**
+   * Check whether the OpenAI realtime active response is stale (no recent
+   * activity for longer than RESPONSE_DONE_SILENCE_GRACE_MS). This is a
+   * pure read — no side effects. Call clearStaleRealtimeResponse() to
+   * actually clear it.
+   *
+   * Use isStaleRealtimeResponseAt() to pass a shared snapshot timestamp
+   * when the caller also uses that timestamp for derivation.
+   */
+  isStaleRealtimeResponse(session: VoiceSession) {
+    return this.isStaleRealtimeResponseAt(session, Date.now());
+  }
+
+  isStaleRealtimeResponseAt(session: VoiceSession, now: number) {
     if (!session || session.ending) return false;
-    if (session.pendingResponse) return false;
-    if (liveAudioStreaming || bufferedBotSpeech) return false;
-    if (session.awaitingToolOutputs) return false;
-    if (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0) {
-      return false;
-    }
     if (!this.isRealtimeResponseActive(session)) return false;
 
     const lastRelevantAt = Math.max(
@@ -257,8 +261,35 @@ export class ReplyManager {
       getAssistantOutputActivityAt(session.assistantOutput)
     );
     if (!lastRelevantAt) return false;
-    const staleAgeMs = Math.max(0, Date.now() - lastRelevantAt);
-    if (staleAgeMs < RESPONSE_DONE_SILENCE_GRACE_MS) return false;
+    const staleAgeMs = Math.max(0, now - lastRelevantAt);
+    return staleAgeMs >= RESPONSE_DONE_SILENCE_GRACE_MS;
+  }
+
+  getActiveResponseId(session: VoiceSession): string | null {
+    const realtimeClient = session?.realtimeClient;
+    if (
+      !realtimeClient ||
+      typeof realtimeClient !== "object" ||
+      !("activeResponseId" in realtimeClient)
+    ) {
+      return null;
+    }
+    return realtimeClient.activeResponseId
+      ? String(realtimeClient.activeResponseId)
+      : null;
+  }
+
+  /**
+   * Clear a stale OpenAI realtime active response. Idempotent and
+   * best-effort — safe to call even if the response was already cleared
+   * or the client state changed since the staleness check.
+   *
+   * When expectedResponseId is provided, the clear is skipped if the
+   * current active response ID no longer matches (a fresh response
+   * started since the staleness check).
+   */
+  clearStaleRealtimeResponse(session: VoiceSession, expectedResponseId: string | null = null) {
+    if (!session || session.ending) return false;
 
     const realtimeClient = session.realtimeClient;
     if (
@@ -269,6 +300,20 @@ export class ReplyManager {
     ) {
       return false;
     }
+
+    // If we captured a specific response ID at check time, only clear
+    // if it still matches. A different ID means a new response started.
+    if (expectedResponseId) {
+      const currentId = this.getActiveResponseId(session);
+      if (currentId && currentId !== expectedResponseId) return false;
+    }
+
+    const lastRelevantAt = Math.max(
+      0,
+      Number(session.lastResponseRequestAt || 0),
+      Number(session.lastAudioDeltaAt || 0)
+    );
+    const staleAgeMs = Math.max(0, Date.now() - lastRelevantAt);
 
     try {
       realtimeClient.clearActiveResponse();
@@ -292,6 +337,7 @@ export class ReplyManager {
   syncAssistantOutputState(session: VoiceSession, trigger = "state_sync") {
     const state = this.ensureAssistantOutputState(session);
     if (!state) return null;
+    const now = Date.now();
     const previousPhase = String(state.phase || "idle");
 
     const liveAudioStreaming = this.hasRecentAssistantAudioDelta(session);
@@ -307,12 +353,23 @@ export class ReplyManager {
     let ttsPlaybackState = this.getSessionTtsPlaybackState(session, state);
 
     let bufferedBotSpeech = ttsPlaybackState === TTS_PLAYBACK_STATE.BUFFERED || bufferedSamples > 0;
-    this.maybeClearStaleRealtimeResponseState(session, {
-      liveAudioStreaming,
-      bufferedBotSpeech
-    });
     const openAiActiveResponse = this.isRealtimeResponseActive(session);
-    const bufferedStateAgeMs = Math.max(0, Date.now() - Number(state.phaseEnteredAt || 0));
+    const bufferedStateAgeMs = Math.max(0, now - Number(state.phaseEnteredAt || 0));
+
+    // Compute stale-response eligibility BEFORE derivation, since derivation
+    // will overwrite phaseEnteredAt and make the staleness check see "just started".
+    // Capture the responseId now so clearStaleRealtimeResponse only clears
+    // this specific response, not a fresh one that started in the meantime.
+    const staleResponseId = openAiActiveResponse
+      ? this.getActiveResponseId(session)
+      : null;
+    const staleResponseEligible =
+      openAiActiveResponse &&
+      !pendingResponse &&
+      !awaitingToolOutputs &&
+      !liveAudioStreaming &&
+      !bufferedBotSpeech &&
+      this.isStaleRealtimeResponseAt(session, now);
 
     if (
       bufferedBotSpeech &&
@@ -327,17 +384,27 @@ export class ReplyManager {
     }
 
     const nextState = syncAssistantOutputStateRecord(state, {
-      now: Date.now(),
+      now,
       trigger,
       liveAudioStreaming,
       pendingResponse: Boolean(pendingResponse),
-      openAiActiveResponse,
+      openAiActiveResponse: staleResponseEligible ? false : openAiActiveResponse,
       awaitingToolOutputs,
       requestId: pendingResponse?.requestId || state.requestId || null,
       ttsPlaybackState,
       ttsBufferedSamples: bufferedSamples
     });
     session.assistantOutput = nextState;
+
+    // Clear stale OpenAI active response AFTER phase derivation.
+    // We pre-computed eligibility above so the derivation already excluded
+    // the stale signal; now perform the actual side-effect cleanup.
+    // Pass the captured responseId so we only clear the response we deemed
+    // stale, not a fresh one that may have started since the check.
+    if (staleResponseEligible) {
+      this.clearStaleRealtimeResponse(session, staleResponseId);
+    }
+
     if (
       previousPhase !== "idle" &&
       nextState.phase === "idle" &&

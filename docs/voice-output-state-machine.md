@@ -42,6 +42,8 @@ Code:
 | `speaking_live` | realtime audio deltas are actively arriving | `bot_audio_live` |
 | `speaking_buffered` | live deltas stopped, but `clankvox` still has buffered speech | `bot_audio_buffered` |
 
+`music_playback_active` is **not** a phase in this state machine. Music playback is an orthogonal lock managed by `MusicPlaybackPhase`; it is composed with the assistant output phase at the `buildReplyOutputLockState` layer (`locked = musicActive || phase !== idle`).
+
 Only one helper should translate these phases into reply output lock decisions:
 
 - `buildReplyOutputLockState(...)` in `src/voice/assistantOutputState.ts`
@@ -72,6 +74,7 @@ Freshness rule:
 | reply requested | `idle` | `response_pending` |
 | tool call emitted | `response_pending` | `awaiting_tool_outputs` |
 | tool outputs submitted / follow-up requested | `awaiting_tool_outputs` | `response_pending` |
+| request cancelled or session ends | `awaiting_tool_outputs` | `idle` |
 | first audio delta arrives | `response_pending` | `speaking_live` |
 | audio deltas stop but buffered speech remains | `speaking_live` | `speaking_buffered` |
 | `clankvox` reports drained / idle | `speaking_buffered` | `idle` |

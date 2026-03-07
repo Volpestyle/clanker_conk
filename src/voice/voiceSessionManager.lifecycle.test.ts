@@ -558,6 +558,17 @@ test("shouldBargeIn blocks all interruptions when reply targets ALL", () => {
   assert.equal(result.allowed, false);
 });
 
+test("normalizeReplyInterruptionPolicy rejects legacy all scope without speaker id", () => {
+  const { manager } = createManager();
+
+  const result = manager.normalizeReplyInterruptionPolicy({
+    assertive: true,
+    scope: "all"
+  });
+
+  assert.equal(result, null);
+});
+
 test("shouldBargeIn allows barge-in after assertive speech", () => {
   const { manager } = createManager();
   const minBytes = Math.ceil((24_000 * 2 * BARGE_IN_MIN_SPEECH_MS) / 1000);
@@ -2571,6 +2582,39 @@ test("getReplyOutputLockState clears stale active realtime response once playbac
     logs.some((entry) => entry.content === "openai_realtime_active_response_cleared_stale"),
     "expected stale active-response recovery log"
   );
+});
+
+test("clearStaleRealtimeResponse skips clear when a fresh response replaced the stale one", () => {
+  const { manager, logs } = createManager();
+  let activeResponseId: string | null = "stale_resp_1";
+  const session = createSession({
+    mode: "openai_realtime",
+    lastResponseRequestAt: Date.now() - 10_000,
+    realtimeClient: {
+      activeResponseId,
+      isResponseInProgress() {
+        return Boolean(activeResponseId);
+      },
+      clearActiveResponse() {
+        activeResponseId = null;
+      }
+    }
+  });
+
+  // Simulate: between staleness check and clear, a fresh response starts.
+  // We do this by calling syncAssistantOutputState (which captures the stale ID),
+  // then swapping the activeResponseId before the clear runs.
+  // Since sync is synchronous, we instead test clearStaleRealtimeResponse directly.
+  const cleared1 = manager.replyManager.clearStaleRealtimeResponse(session, "stale_resp_1");
+  assert.equal(cleared1, true, "should clear when ID matches");
+
+  // Reset: simulate a fresh response is now active
+  activeResponseId = "fresh_resp_2";
+  (session.realtimeClient as { activeResponseId: string | null }).activeResponseId = "fresh_resp_2";
+
+  const cleared2 = manager.replyManager.clearStaleRealtimeResponse(session, "stale_resp_1");
+  assert.equal(cleared2, false, "should skip clear when active response ID changed");
+  assert.equal(activeResponseId, "fresh_resp_2", "fresh response should not be wiped");
 });
 
 test("bindVoxHandlers tracks explicit tts playback lifecycle from clankvox", () => {
