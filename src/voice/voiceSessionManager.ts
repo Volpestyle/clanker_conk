@@ -3705,6 +3705,60 @@ export class VoiceSessionManager {
     });
   }
 
+  async fireVoiceRuntimeEvent({
+    session,
+    settings,
+    userId = null,
+    transcript = "",
+    source = "voice_runtime_event"
+  }) {
+    if (!session || session.ending) return false;
+    if (!isRealtimeMode(session.mode)) return false;
+
+    const decision = await this.evaluateVoiceReplyDecision({
+      session,
+      settings,
+      userId,
+      transcript,
+      inputKind: "event",
+      source
+    });
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId,
+      content: "voice_runtime_event_decision",
+      metadata: {
+        sessionId: session.id,
+        mode: session.mode,
+        inputKind: "event",
+        source,
+        transcript: decision.transcript || transcript || null,
+        allow: Boolean(decision.allow),
+        reason: decision.reason,
+        participantCount: Number(decision.participantCount || 0)
+      }
+    });
+
+    if (!decision.allow) return false;
+
+    await this.runRealtimeBrainReply({
+      session,
+      settings,
+      userId,
+      transcript,
+      inputKind: "event",
+      directAddressed: Boolean(decision.directAddressed),
+      directAddressConfidence: Number(decision.directAddressConfidence),
+      conversationContext: decision.conversationContext || null,
+      source
+    });
+
+    return true;
+  }
+
   formatVoiceDecisionHistory(session, maxTurns = 6, maxTotalChars = VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS) {
     const turns = Array.isArray(session?.recentVoiceTurns) ? session.recentVoiceTurns : [];
     const membershipEvents = Array.isArray(session?.membershipEvents) ? session.membershipEvents : [];
@@ -4895,6 +4949,16 @@ export class VoiceSessionManager {
               participantCount: this.countHumanVoiceParticipants(session)
             }
           });
+
+          if (movedIntoSession && recordedEvent.displayName) {
+            void this.fireVoiceRuntimeEvent({
+              session,
+              settings: session.settingsSnapshot || this.store.getSettings(),
+              userId: stateUserId,
+              transcript: `[${recordedEvent.displayName} joined the voice channel]`,
+              source: "member_join_greeting"
+            });
+          }
         }
       }
       if (
