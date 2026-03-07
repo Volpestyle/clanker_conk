@@ -112,7 +112,6 @@ export function LlmConfigurationSettingsSection({
             step="1"
             value={form.replyFollowupMaxToolSteps}
             onChange={set("replyFollowupMaxToolSteps")}
-            disabled={!form.replyFollowupLlmEnabled}
           />
         </div>
         <div>
@@ -125,7 +124,6 @@ export function LlmConfigurationSettingsSection({
             step="1"
             value={form.replyFollowupMaxTotalToolCalls}
             onChange={set("replyFollowupMaxTotalToolCalls")}
-            disabled={!form.replyFollowupLlmEnabled}
           />
         </div>
       </div>
@@ -140,7 +138,6 @@ export function LlmConfigurationSettingsSection({
             step="1"
             value={form.replyFollowupMaxWebSearchCalls}
             onChange={set("replyFollowupMaxWebSearchCalls")}
-            disabled={!form.replyFollowupLlmEnabled}
           />
         </div>
         <div>
@@ -153,7 +150,6 @@ export function LlmConfigurationSettingsSection({
             step="1"
             value={form.replyFollowupMaxMemoryLookupCalls}
             onChange={set("replyFollowupMaxMemoryLookupCalls")}
-            disabled={!form.replyFollowupLlmEnabled}
           />
         </div>
       </div>
@@ -168,7 +164,6 @@ export function LlmConfigurationSettingsSection({
             step="1"
             value={form.replyFollowupMaxImageLookupCalls}
             onChange={set("replyFollowupMaxImageLookupCalls")}
-            disabled={!form.replyFollowupLlmEnabled}
           />
         </div>
         <div>
@@ -181,7 +176,6 @@ export function LlmConfigurationSettingsSection({
             step="100"
             value={form.replyFollowupToolTimeoutMs}
             onChange={set("replyFollowupToolTimeoutMs")}
-            disabled={!form.replyFollowupLlmEnabled}
           />
         </div>
       </div>

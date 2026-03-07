@@ -1,9 +1,10 @@
 import type { DashboardAppConfig, DashboardBot } from "../dashboard.ts";
+import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { DashboardApp } from "./shared.ts";
 import type { Store } from "../store/store.ts";
 import { getLlmModelCatalog } from "../llm/pricing.ts";
 import { getReplyGenerationSettings } from "../settings/agentStack.ts";
-import { readDashboardBody } from "./shared.ts";
+import { readDashboardBody, toRecord } from "./shared.ts";
 
 export interface SettingsRouteDeps {
   store: Store;
@@ -73,7 +74,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
     });
     if (!response.ok) {
       const text = await response.text().catch(() => "");
-      return Response.json({ error: `ElevenLabs API error: ${response.status}`, detail: text }, { status: response.status });
+      return c.json({ error: `ElevenLabs API error: ${response.status}`, detail: text }, toContentfulStatusCode(response.status));
     }
     return c.json(await response.json());
   });
@@ -117,7 +118,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
     });
     if (!response.ok) {
       const text = await response.text().catch(() => "");
-      return Response.json({ error: `ElevenLabs API error: ${response.status}`, detail: text }, { status: response.status });
+      return c.json({ error: `ElevenLabs API error: ${response.status}`, detail: text }, toContentfulStatusCode(response.status));
     }
     return c.json(await response.json());
   });
@@ -139,7 +140,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
     });
     if (!response.ok) {
       const text = await response.text().catch(() => "");
-      return Response.json({ error: `ElevenLabs API error: ${response.status}`, detail: text }, { status: response.status });
+      return c.json({ error: `ElevenLabs API error: ${response.status}`, detail: text }, toContentfulStatusCode(response.status));
     }
     return c.json({ ok: true });
   });
@@ -166,10 +167,10 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
   });
 }
 
-function toRecord(value: object) {
-  const record: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    record[key] = entry;
+function toContentfulStatusCode(status: number): ContentfulStatusCode {
+  if (status === 101 || status === 204 || status === 205 || status === 304) {
+    return 500;
   }
-  return record;
+
+  return status as ContentfulStatusCode;
 }

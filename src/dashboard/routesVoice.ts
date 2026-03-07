@@ -3,7 +3,7 @@ import type { DashboardBot, DashboardMemory, DashboardScreenShareSessionManager 
 import type { DashboardApp, DashboardSseClient } from "./shared.ts";
 import type { Store } from "../store/store.ts";
 import { getDirectiveSettings } from "../settings/agentStack.ts";
-import { parseBoundedInt, readDashboardBody, STREAM_INGEST_API_PATH } from "./shared.ts";
+import { parseBoundedInt, readDashboardBody, STREAM_INGEST_API_PATH, toRecord } from "./shared.ts";
 
 export interface VoiceRouteDeps {
   store: Store;
@@ -740,16 +740,4 @@ interface MpcStatusRow {
     description: string;
   }>;
   lastError: string | null;
-}
-
-function toRecord(value: unknown) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return {};
-  }
-
-  const record: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    record[key] = entry;
-  }
-  return record;
 }

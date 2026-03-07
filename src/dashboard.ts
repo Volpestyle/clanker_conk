@@ -374,6 +374,7 @@ export function createDashboardServer({
   };
 
   const staticDir = path.resolve(__dirname, "../dashboard/dist");
+  const staticRoot = path.relative(process.cwd(), staticDir) || ".";
   const indexPath = path.join(staticDir, "index.html");
 
   if (!fs.existsSync(indexPath)) {
@@ -381,7 +382,7 @@ export function createDashboardServer({
   }
 
   const indexHtml = fs.readFileSync(indexPath, "utf8");
-  const serveDashboardStatic = serveStatic({ root: staticDir });
+  const serveDashboardStatic = serveStatic({ root: staticRoot });
 
   app.use("*", async (c, next) => {
     if (isRequestFromPublicTunnel(c, publicHttpsEntrypoint) && !c.req.path.startsWith("/share/")) {

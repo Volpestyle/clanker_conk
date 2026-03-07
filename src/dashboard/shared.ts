@@ -104,7 +104,7 @@ export async function readDashboardBody(
     return {};
   }
 
-  const bodyBuffer = await c.req.raw.clone().arrayBuffer();
+  const bodyBuffer = await c.req.raw.arrayBuffer();
   if (bodyBuffer.byteLength === 0) {
     return {};
   }
@@ -118,7 +118,7 @@ export async function readDashboardBody(
   if (contentType.includes("application/json")) {
     try {
       const parsed: unknown = JSON.parse(bodyText);
-      return toBodyRecord(parsed);
+      return toRecord(parsed);
     } catch {
       throw new DashboardHttpError(400, { error: "invalid_json_body" });
     }
@@ -190,7 +190,7 @@ function parseDeclaredContentLength(contentLengthHeader: string | undefined) {
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null;
 }
 
-function toBodyRecord(value: unknown): Record<string, unknown> {
+export function toRecord(value: unknown): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return {};
   }
