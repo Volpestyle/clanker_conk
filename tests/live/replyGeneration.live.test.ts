@@ -1,8 +1,13 @@
 /**
  * Live structured-reply tests for text and voice generation.
  *
- * These tests call the configured LLM providers for real and validate the
- * same structured reply contract used by the app.
+ * GENERATION LLM ONLY — no classifier. Each scenario builds a full generation
+ * prompt (buildSystemPrompt + buildVoiceTurnPrompt) and sends it directly to
+ * the LLM via llm.generate(). The classifier admission pipeline
+ * (evaluateVoiceReplyDecision) is never called here.
+ *
+ * Asserts whether the generation LLM's structured output is a real spoken
+ * reply or [SKIP] — i.e. "does the brain make the right call given context?"
  *
  * Env:
  *   LIVE_REPLY_FILTER=text|voice|label-substring

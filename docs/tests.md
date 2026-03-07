@@ -92,9 +92,19 @@ Debug visibility:
 
 - `LIVE_REPLY_DEBUG=1` prints provider/model, system prompt, user prompt, raw model output, and parsed structured text
 
-### Voice Admission Live Test
+### Voice Admission Live Test (Classifier + fast-paths — no generation)
 
-This is the active end-to-end admission suite for voice reply gating. It uses the same shared scenario corpus as the voice section of `replyGeneration.live.test.ts`.
+This is the active end-to-end admission suite for voice reply gating. It tests the
+**classifier pipeline** — name detection fast-paths plus the YES/NO LLM classifier —
+via `evaluateVoiceReplyDecision()`. The generation LLM is NOT involved.
+
+The classifier LLM returns YES or NO. The admission pipeline wraps that into allow/deny
+(along with deterministic fast-paths that can allow/deny before the classifier runs).
+Each scenario asserts on the final `allow`/`deny` outcome.
+
+This answers: "Given this context, does the admission pipeline (fast-paths + classifier) correctly gate the turn?"
+
+It uses the same shared scenario corpus as the voice section of `replyGeneration.live.test.ts`.
 
 Defaults:
 
