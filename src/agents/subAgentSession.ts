@@ -34,7 +34,10 @@ export interface SubAgentSession {
   status: "idle" | "running" | "completed" | "error" | "cancelled";
 
   /** Send a turn (initial instruction or follow-up) and get the result. */
-  runTurn(input: string): Promise<SubAgentTurnResult>;
+  runTurn(input: string, options?: { signal?: AbortSignal }): Promise<SubAgentTurnResult>;
+
+  /** Cancel any in-flight work and reject future turns. */
+  cancel(reason?: string): void;
 
   /** Close the session and free resources. */
   close(): void;
@@ -121,6 +124,14 @@ export class SubAgentSessionManager {
     if (!session) return false;
     session.close();
     this.sessions.delete(sessionId);
+    return true;
+  }
+
+  /** Cancel a specific session without evicting unrelated sessions. */
+  cancel(sessionId: string, reason?: string): boolean {
+    const session = this.sessions.get(sessionId);
+    if (!session) return false;
+    session.cancel(reason);
     return true;
   }
 

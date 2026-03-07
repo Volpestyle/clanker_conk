@@ -9,6 +9,7 @@ import { assertPublicUrl } from "./urlSafety.ts";
 import { clamp } from "../utils.ts";
 import { normalizeWhitespaceText } from "../normalization/text.ts";
 import { sleep } from "../normalization/time.ts";
+import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import {
   getRetryDelayMs,
   isRetryableFetchError,
@@ -30,6 +31,7 @@ type ProviderSearchInput = {
   maxResults: number;
   recencyDays: number;
   safeSearch: boolean;
+  signal?: AbortSignal;
 };
 
 type ProviderSearchRow = {
@@ -71,7 +73,8 @@ export class WebSearchService {
   async searchAndRead({
     settings,
     query,
-    trace = { guildId: null, channelId: null, userId: null, source: null }
+    trace = { guildId: null, channelId: null, userId: null, source: null },
+    signal = undefined as AbortSignal | undefined
   }) {
     const config = normalizeWebSearchConfig(getResearchRuntimeConfig(settings).localExternalSearch);
     const resolvedStack = resolveAgentStack(settings);
@@ -87,11 +90,13 @@ export class WebSearchService {
       };
     }
 
+    throwIfAborted(signal, "Web search cancelled");
     if (resolvedStack.researchRuntime === "openai_native_web_search") {
       return await this.searchWithOpenAiHostedWebSearch({
         settings,
         query: normalizedQuery,
-        trace
+        trace,
+        signal
       });
     }
 
@@ -114,7 +119,8 @@ export class WebSearchService {
           query: normalizedQuery,
           maxResults: config.maxResults,
           recencyDays: config.recencyDaysDefault,
-          safeSearch: config.safeSearch
+          safeSearch: config.safeSearch,
+          signal
         });
       } catch (error) {
         if (!secondaryProvider) throw error;
@@ -124,14 +130,16 @@ export class WebSearchService {
           query: normalizedQuery,
           maxResults: config.maxResults,
           recencyDays: config.recencyDaysDefault,
-          safeSearch: config.safeSearch
+          safeSearch: config.safeSearch,
+          signal
         });
       }
 
       const readCandidates = searchData.results.slice(0, config.maxPagesToRead);
       const pageSummaries = await mapConcurrent(readCandidates, config.maxConcurrentFetches, async (item) => {
+        throwIfAborted(signal, "Web search cancelled");
         try {
-          return await this.readPageSummary(item.url, config.maxCharsPerPage);
+          return await this.readPageSummary(item.url, config.maxCharsPerPage, signal);
         } catch (error) {
           this.logSearchError({
             trace,
@@ -207,7 +215,8 @@ export class WebSearchService {
   async searchWithOpenAiHostedWebSearch({
     settings,
     query,
-    trace
+    trace,
+    signal = undefined as AbortSignal | undefined
   }) {
     if (!this.openai) {
       throw new Error("OpenAI native web search requires OPENAI_API_KEY.");
@@ -248,7 +257,7 @@ export class WebSearchService {
       }],
       tools: [tool],
       include: ["web_search_call.action.sources"]
-    });
+    }, signal ? { signal } : undefined);
 
     const summaryText = normalizeWhitespaceText(String(response.output_text || "").trim(), {
       maxLen: 6_000
@@ -288,12 +297,13 @@ export class WebSearchService {
     };
   }
 
-  async readPageSummary(url, maxChars) {
+  async readPageSummary(url, maxChars, signal = undefined as AbortSignal | undefined) {
     const safeUrl = normalizeDiscoveryUrl(url);
     if (!safeUrl) {
       throw new Error(`blocked or invalid page URL: ${url}`);
     }
 
+    throwIfAborted(signal, "Web page read cancelled");
     await assertPublicUrl(safeUrl);
 
     const { response, attempts } = await fetchWithRetry({
@@ -305,7 +315,7 @@ export class WebSearchService {
             "user-agent": SEARCH_USER_AGENT,
             accept: "text/html,text/plain;q=0.9,*/*;q=0.2"
           },
-          signal: AbortSignal.timeout(FAST_FETCH_TIMEOUT_MS)
+          signal: combineAbortSignal(signal, FAST_FETCH_TIMEOUT_MS)
         }),
       shouldRetryResponse: (res) => !res.ok && shouldRetryHttpStatus(res.status),
       maxAttempts: FETCH_RETRY_ATTEMPTS
@@ -497,7 +507,8 @@ class BraveSearchProvider {
         "user-agent": SEARCH_USER_AGENT
       },
       requestLabel: "Brave Search",
-      invalidJsonMessage: "Brave Search returned invalid JSON."
+      invalidJsonMessage: "Brave Search returned invalid JSON.",
+      signal: input.signal
     });
     const rawItems = Array.isArray(payload?.web?.results) ? payload.web.results : [];
     return { results: normalizeProviderResults(rawItems, "brave", input.maxResults) };
@@ -535,20 +546,31 @@ class SerpApiSearchProvider {
         "user-agent": SEARCH_USER_AGENT
       },
       requestLabel: "SerpApi",
-      invalidJsonMessage: "SerpApi returned invalid JSON."
+      invalidJsonMessage: "SerpApi returned invalid JSON.",
+      signal: input.signal
     });
     const rawItems = Array.isArray(payload?.organic_results) ? payload.organic_results : [];
     return { results: normalizeProviderResults(rawItems, "serpapi", input.maxResults) };
   }
 }
 
-async function fetchSearchPayload({ endpoint, headers, requestLabel, invalidJsonMessage }) {
+function combineAbortSignal(signal: AbortSignal | undefined, timeoutMs: number) {
+  return signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs);
+}
+
+async function fetchSearchPayload({
+  endpoint,
+  headers,
+  requestLabel,
+  invalidJsonMessage,
+  signal = undefined as AbortSignal | undefined
+}) {
   const { response, attempts } = await fetchWithRetry({
     request: () =>
       fetch(endpoint, {
         method: "GET",
         headers,
-        signal: AbortSignal.timeout(SEARCH_TIMEOUT_MS)
+        signal: combineAbortSignal(signal, SEARCH_TIMEOUT_MS)
       }),
     shouldRetryResponse: (res) => !res.ok && shouldRetryHttpStatus(res.status),
     maxAttempts: SEARCH_RETRY_ATTEMPTS

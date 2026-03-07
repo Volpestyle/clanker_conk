@@ -37,7 +37,7 @@ export async function executeVoiceBrowserBrowseTool(
       return { ok: false, text: "", error: `Not authorized to continue browser session '${sessionId}'.` };
     }
     try {
-      const turnResult = await existingSession.runTurn(instruction);
+      const turnResult = await existingSession.runTurn(instruction, { signal });
       if (turnResult.isError) return { ok: false, text: "", error: turnResult.errorMessage };
       return { ok: true, text: turnResult.text.trim() || "Browser browse completed.", session_id: existingSession.id };
     } catch (error: unknown) {
@@ -56,7 +56,7 @@ export async function executeVoiceBrowserBrowseTool(
     if (newSession) {
       manager.subAgentSessions.register(newSession);
       try {
-        const turnResult = await newSession.runTurn(instruction);
+        const turnResult = await newSession.runTurn(instruction, { signal });
         if (turnResult.isError) {
           return { ok: false, text: "", error: turnResult.errorMessage, session_id: newSession.id };
         }
@@ -127,7 +127,7 @@ export async function executeVoiceBrowserBrowseTool(
 
 export async function executeVoiceCodeTaskTool(
   manager: VoiceToolCallManager,
-  { session, settings, args }: VoiceAgentToolOptions
+  { session, settings, args, signal }: VoiceBrowserToolOptions
 ) {
   const task = normalizeInlineText(args?.task, 2000);
   if (!task) {
@@ -144,7 +144,7 @@ export async function executeVoiceCodeTaskTool(
       return { ok: false, text: "", error: `Not authorized to continue code session '${sessionId}'.` };
     }
     try {
-      const turnResult = await existingSession.runTurn(task);
+      const turnResult = await existingSession.runTurn(task, { signal });
       if (turnResult.isError) return { ok: false, text: "", error: turnResult.errorMessage };
       return {
         ok: true,
@@ -169,7 +169,7 @@ export async function executeVoiceCodeTaskTool(
     if (newSession) {
       manager.subAgentSessions.register(newSession);
       try {
-        const turnResult = await newSession.runTurn(task);
+        const turnResult = await newSession.runTurn(task, { signal });
         if (turnResult.isError) {
           return { ok: false, text: "", error: turnResult.errorMessage, session_id: newSession.id };
         }
@@ -197,7 +197,8 @@ export async function executeVoiceCodeTaskTool(
       guildId: session?.guildId || "",
       channelId: session?.textChannelId || "",
       userId: session?.lastOpenAiToolCallerUserId || null,
-      source: "voice_realtime_tool_code_task"
+      source: "voice_realtime_tool_code_task",
+      signal
     });
     if (result?.blockedByPermission) return { ok: false, text: "", error: "restricted_to_allowed_users" };
     if (result?.blockedByBudget) return { ok: false, text: "", error: "rate_limited" };

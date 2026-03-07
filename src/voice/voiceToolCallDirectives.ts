@@ -2,6 +2,7 @@ import {
   executeSharedAdaptiveDirectiveAdd,
   executeSharedAdaptiveDirectiveRemove
 } from "../adaptiveDirectives/adaptiveDirectiveToolRuntime.ts";
+import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import type { VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 
@@ -10,12 +11,14 @@ type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
 type VoiceDirectiveToolOptions = {
   session?: ToolRuntimeSession | null;
   args?: VoiceToolCallArgs;
+  signal?: AbortSignal;
 };
 
 export async function executeVoiceAdaptiveStyleAddTool(
   manager: VoiceToolCallManager,
-  { session, args }: VoiceDirectiveToolOptions
+  { session, args, signal }: VoiceDirectiveToolOptions
 ) {
+  throwIfAborted(signal, "Voice directive add cancelled");
   if (
     !manager.store ||
     typeof manager.store.getActiveAdaptiveStyleNotes !== "function" ||
@@ -40,8 +43,9 @@ export async function executeVoiceAdaptiveStyleAddTool(
 
 export async function executeVoiceAdaptiveStyleRemoveTool(
   manager: VoiceToolCallManager,
-  { session, args }: VoiceDirectiveToolOptions
+  { session, args, signal }: VoiceDirectiveToolOptions
 ) {
+  throwIfAborted(signal, "Voice directive remove cancelled");
   if (
     !manager.store ||
     typeof manager.store.getActiveAdaptiveStyleNotes !== "function" ||

@@ -1,9 +1,11 @@
 import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 import type { VoiceRealtimeToolSettings } from "./voiceSessionTypes.ts";
+import type { ActiveReplyRegistry } from "../tools/activeReplyRegistry.ts";
 
 export type VoiceToolCallManager = Pick<
   VoiceSessionManager,
   | "appConfig"
+  | "activeReplies"
   | "browserManager"
   | "buildVoiceQueueStatePayload"
   | "client"
@@ -55,6 +57,7 @@ export type VoiceToolCallManager = Pick<
     channelId: string;
     userId: string | null;
     source: string;
+    signal?: AbortSignal;
   }) => Promise<{
     text?: string;
     costUsd?: number;
@@ -87,7 +90,7 @@ export interface SubAgentTurnResult {
 export interface SubAgentInteractiveSession {
   id: string;
   ownerUserId?: string | null;
-  runTurn: (instruction: string) => Promise<SubAgentTurnResult>;
+  runTurn: (instruction: string, options?: { signal?: AbortSignal }) => Promise<SubAgentTurnResult>;
 }
 
 export interface SubAgentSessionRegistry {

@@ -161,6 +161,7 @@ test("executeReplyTool delegates browser_browse to runtime", async () => {
     guildId: "guild-1",
     channelId: "channel-1",
     userId: "user-1",
-    source: "reply_message"
+    source: "reply_message",
+    signal: undefined
   }]);
 });

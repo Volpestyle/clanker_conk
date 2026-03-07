@@ -1,4 +1,6 @@
 import { estimateUsdCost } from "../llm/pricing.ts";
+import type { ActiveReplyRegistry } from "../tools/activeReplyRegistry.ts";
+import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
 import {
   getReplyGenerationSettings,
   getVoiceRuntimeConfig
@@ -78,6 +80,7 @@ export interface ReplyManagerHost {
     } | null;
   };
   store: ReplyManagerStoreLike;
+  activeReplies?: ActiveReplyRegistry | null;
   musicPlayer?: {
     resume?: () => void;
   } | null;
@@ -588,6 +591,11 @@ export class ReplyManager {
   clearPendingResponse(session: VoiceSession) {
     if (!session) return;
     this.clearResponseSilenceTimers(session);
+    const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
+
+    if (this.host.activeReplies) {
+      this.host.activeReplies.abortAll(voiceReplyScopeKey, "Pending response cleared");
+    }
 
     if (session.openAiPendingToolAbortControllers) {
       for (const controller of session.openAiPendingToolAbortControllers.values()) {

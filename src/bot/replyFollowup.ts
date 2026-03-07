@@ -212,12 +212,14 @@ export async function runModelRequestedWebSearch<T extends WebSearchState>(runti
   settings,
   webSearch,
   query,
-  trace = {}
+  trace = {},
+  signal
 }: {
   settings: Record<string, unknown>;
   webSearch: T;
   query: string;
   trace?: ReplyFollowupTrace;
+  signal?: AbortSignal;
 }): Promise<T> {
   const normalizedQuery = normalizeDirectiveText(query, MAX_WEB_QUERY_LEN);
   const state = {
@@ -248,7 +250,8 @@ export async function runModelRequestedWebSearch<T extends WebSearchState>(runti
     const result = await runtime.search.searchAndRead({
       settings,
       query: normalizedQuery,
-      trace
+      trace,
+      signal
     });
 
     return {

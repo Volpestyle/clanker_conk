@@ -1,7 +1,7 @@
 import type { LLMService, ToolLoopContentBlock, ToolLoopMessage } from "../llm.ts";
 import type { BrowserManager } from "../services/BrowserManager.ts";
 import { BROWSER_AGENT_TOOL_DEFINITIONS, executeBrowserTool } from "../tools/browserTools.ts";
-import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
+import { isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
 import { generateSessionId } from "./subAgentSession.ts";
 
@@ -220,12 +220,13 @@ export class BrowserAgentSession implements SubAgentSession {
   private readonly maxSteps: number;
   private readonly stepTimeoutMs: number;
   private readonly trace: BrowseAgentTrace;
-  private readonly signal?: AbortSignal;
+  private readonly baseSignal?: AbortSignal;
 
   private messages: ToolLoopMessage[];
   private stepCount: number;
   private totalCostUsd: number;
   private browserClosed: boolean;
+  private activeAbortController: AbortController | null;
 
   constructor(options: BrowserAgentSessionOptions) {
     this.id = generateSessionId("browser", options.scopeKey);
@@ -243,15 +244,24 @@ export class BrowserAgentSession implements SubAgentSession {
     this.maxSteps = options.maxSteps;
     this.stepTimeoutMs = options.stepTimeoutMs;
     this.trace = options.trace;
-    this.signal = options.signal;
+    this.baseSignal = options.signal;
 
     this.messages = [];
     this.stepCount = 0;
     this.totalCostUsd = 0;
     this.browserClosed = false;
+    this.activeAbortController = null;
   }
 
-  async runTurn(input: string): Promise<SubAgentTurnResult> {
+  private buildTurnSignal(signal?: AbortSignal) {
+    const signals = [this.baseSignal, this.activeAbortController?.signal, signal]
+      .filter((entry): entry is AbortSignal => Boolean(entry));
+    if (signals.length <= 0) return undefined;
+    if (signals.length === 1) return signals[0];
+    return AbortSignal.any(signals);
+  }
+
+  async runTurn(input: string, options: { signal?: AbortSignal } = {}): Promise<SubAgentTurnResult> {
     if (this.status === "cancelled" || this.status === "error") {
       return {
         text: `Session is ${this.status} and cannot accept new turns.`,
@@ -264,6 +274,8 @@ export class BrowserAgentSession implements SubAgentSession {
 
     this.status = "running";
     this.lastUsedAt = Date.now();
+    this.activeAbortController = new AbortController();
+    const turnSignal = this.buildTurnSignal(options.signal);
 
     // Add the user's input as a new message
     this.messages.push({ role: "user", content: input });
@@ -275,7 +287,7 @@ export class BrowserAgentSession implements SubAgentSession {
     try {
       // Run the tool loop until we get text without tool calls (yield point)
       while (this.stepCount < this.maxSteps) {
-        throwIfAborted(this.signal, "Browse agent session cancelled");
+        throwIfAborted(turnSignal, "Browse agent session cancelled");
         this.stepCount++;
 
         const response = await this.llm.chatWithTools({
@@ -287,7 +299,7 @@ export class BrowserAgentSession implements SubAgentSession {
           maxOutputTokens: 4096,
           temperature: 0.7,
           trace: this.trace,
-          signal: this.signal
+          signal: turnSignal
         });
 
         turnCostUsd += response.costUsd;
@@ -359,7 +371,7 @@ export class BrowserAgentSession implements SubAgentSession {
             toolCall.name,
             toolCall.input as Record<string, unknown>,
             this.stepTimeoutMs,
-            this.signal
+            turnSignal
           );
 
           toolResults.push({
@@ -385,6 +397,11 @@ export class BrowserAgentSession implements SubAgentSession {
         usage: turnUsage
       };
     } catch (error) {
+      if (isAbortError(error) || turnSignal?.aborted) {
+        this.status = "cancelled";
+        this.lastUsedAt = Date.now();
+        throw error;
+      }
       this.status = "error";
       this.lastUsedAt = Date.now();
       const message = error instanceof Error ? error.message : String(error);
@@ -396,12 +413,26 @@ export class BrowserAgentSession implements SubAgentSession {
         errorMessage: message,
         usage: turnUsage
       };
+    } finally {
+      this.activeAbortController = null;
     }
   }
 
-  close(): void {
+  cancel(reason = "Browser agent session cancelled"): void {
     if (this.status === "cancelled") return;
     this.status = "cancelled";
+    try {
+      this.activeAbortController?.abort(reason);
+    } catch {
+      // ignore
+    }
+    this.close();
+  }
+
+  close(): void {
+    if (this.status !== "cancelled") {
+      this.status = "cancelled";
+    }
     if (!this.browserClosed) {
       this.browserClosed = true;
       this.browserManager.close(this.sessionKey).catch((err) => {

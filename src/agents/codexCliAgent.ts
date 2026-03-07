@@ -1,4 +1,5 @@
 import { createCodexCliStreamSession, type CodexCliStreamSessionLike, normalizeCodexCliError, parseCodexCliJsonlOutput } from "../llm/llmCodexCli.ts";
+import { createAbortError, isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
 import { generateSessionId } from "./subAgentSession.ts";
 
@@ -42,6 +43,7 @@ export class CodexCliAgentSession implements SubAgentSession {
   private readonly trace: CodeAgentTrace;
   private readonly store: { logAction: (entry: Record<string, unknown>) => void };
   private turnCount: number;
+  private activeAbortController: AbortController | null;
 
   constructor(options: CodexCliAgentSessionOptions) {
     const { scopeKey, cwd, model, timeoutMs, maxBufferBytes, trace, store } = options;
@@ -55,10 +57,11 @@ export class CodexCliAgentSession implements SubAgentSession {
     this.trace = trace;
     this.store = store;
     this.turnCount = 0;
+    this.activeAbortController = null;
     this.streamSession = createCodexCliStreamSession({ model: this.model, maxBufferBytes, cwd });
   }
 
-  async runTurn(input: string): Promise<SubAgentTurnResult> {
+  async runTurn(input: string, options: { signal?: AbortSignal } = {}): Promise<SubAgentTurnResult> {
     if (this.status === "cancelled" || this.status === "error") {
       return {
         text: `Session is ${this.status} and cannot accept new turns.`,
@@ -73,12 +76,18 @@ export class CodexCliAgentSession implements SubAgentSession {
     this.lastUsedAt = Date.now();
     this.turnCount += 1;
     const turnStartMs = Date.now();
+    this.activeAbortController = new AbortController();
+    const turnSignal = options.signal
+      ? AbortSignal.any([this.activeAbortController.signal, options.signal])
+      : this.activeAbortController.signal;
 
     try {
+      throwIfAborted(turnSignal, "Codex CLI session cancelled");
       activeCodexCliTaskCount.current += 1;
       const result = await this.streamSession.run({
         input,
-        timeoutMs: this.timeoutMs
+        timeoutMs: this.timeoutMs,
+        signal: turnSignal
       });
       const parsed = parseCodexCliJsonlOutput(result.stdout);
       const turnResult: SubAgentTurnResult = parsed
@@ -119,6 +128,11 @@ export class CodexCliAgentSession implements SubAgentSession {
       });
       return turnResult;
     } catch (error) {
+      if (isAbortError(error) || turnSignal.aborted) {
+        this.status = "cancelled";
+        this.lastUsedAt = Date.now();
+        throw createAbortError(turnSignal.reason || error);
+      }
       const normalized = normalizeCodexCliError(error, {
         timeoutPrefix: "Code agent session turn timed out",
         timeoutMs: this.timeoutMs
@@ -150,13 +164,23 @@ export class CodexCliAgentSession implements SubAgentSession {
         usage: { ...EMPTY_USAGE }
       };
     } finally {
+      this.activeAbortController = null;
       activeCodexCliTaskCount.current = Math.max(0, activeCodexCliTaskCount.current - 1);
     }
   }
 
-  close(): void {
+  cancel(reason = "Codex CLI session cancelled"): void {
     if (this.status === "cancelled") return;
     this.status = "cancelled";
+    try {
+      this.activeAbortController?.abort(reason);
+    } catch {
+      // ignore
+    }
     this.streamSession.close();
+  }
+
+  close(): void {
+    this.cancel("Codex CLI session closed");
   }
 }

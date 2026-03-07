@@ -33,6 +33,7 @@ type RunModelRequestedBrowserBrowseOptions = {
   channelId?: string | null;
   userId?: string | null;
   source?: string;
+  signal?: AbortSignal;
 };
 
 type BrowserBrowseState = BrowserBrowseContextState;
@@ -45,6 +46,7 @@ type RunModelRequestedCodeTaskOptions = {
   channelId?: string | null;
   userId?: string | null;
   source?: string;
+  signal?: AbortSignal;
 };
 
 type CreateCodeAgentSessionOptions = {
@@ -101,7 +103,8 @@ export async function runModelRequestedBrowserBrowse(
     guildId,
     channelId = null,
     userId = null,
-    source = "reply_message"
+    source = "reply_message",
+    signal
   }: RunModelRequestedBrowserBrowseOptions
 ) {
   const normalizedQuery = normalizeDirectiveText(query, MAX_BROWSER_BROWSE_QUERY_LEN);
@@ -154,6 +157,9 @@ export async function runModelRequestedBrowserBrowse(
     channelId
   });
   const activeBrowserTask = ctx.activeBrowserTasks.beginTask(scopeKey);
+  const taskSignal = signal
+    ? AbortSignal.any([activeBrowserTask.abortController.signal, signal])
+    : activeBrowserTask.abortController.signal;
 
   try {
     const sessionKey = `reply:${activeBrowserTask.taskId}`;
@@ -176,7 +182,7 @@ export async function runModelRequestedBrowserBrowse(
             stepTimeoutMs,
             trace,
             logSource: source,
-            signal: activeBrowserTask.abortController.signal
+            signal: taskSignal
           })
         : await runBrowserBrowseTask({
             llm: ctx.llm,
@@ -190,7 +196,7 @@ export async function runModelRequestedBrowserBrowse(
             stepTimeoutMs,
             trace,
             logSource: source,
-            signal: activeBrowserTask.abortController.signal
+            signal: taskSignal
           });
 
     return {
@@ -225,7 +231,8 @@ export async function runModelRequestedCodeTask(
     guildId,
     channelId = null,
     userId = null,
-    source = "reply_message"
+    source = "reply_message",
+    signal
   }: RunModelRequestedCodeTaskOptions
 ) {
   if (!isDevTaskEnabled(settings)) {
@@ -276,7 +283,8 @@ export async function runModelRequestedCodeTask(
         userId,
         source
       }),
-      store: ctx.store
+      store: ctx.store,
+      signal
     });
 
     return {

@@ -121,6 +121,11 @@ import {
   buildBrowserTaskScopeKey,
   isAbortError
 } from "./tools/browserTaskRuntime.ts";
+import {
+  ActiveReplyRegistry,
+  buildTextReplyScopeKey
+} from "./tools/activeReplyRegistry.ts";
+import { isCancelIntent } from "./tools/cancelDetection.ts";
 import { maybeReplyToMessagePipeline } from "./bot/replyPipeline.ts";
 import { SubAgentSessionManager } from "./agents/subAgentSession.ts";
 import {
@@ -285,6 +290,7 @@ export class ClankerBot {
   client: DiscordClientLike;
   voiceSessionManager: VoiceSessionManager;
   browserManager: BrowserManager | null;
+  activeReplies: ActiveReplyRegistry;
   activeBrowserTasks: BrowserTaskRegistry;
   subAgentSessions: SubAgentSessionManager;
   imageCaptionCache: ImageCaptionCache;
@@ -324,6 +330,7 @@ export class ClankerBot {
     this.reflectionTimer = null;
     this.nextReflectionRunAt = null;
     this.screenShareSessionManager = null;
+    this.activeReplies = new ActiveReplyRegistry();
     this.activeBrowserTasks = new BrowserTaskRegistry();
     this.subAgentSessions = new SubAgentSessionManager({
       idleTimeoutMs: Number(appConfig?.subAgentOrchestration?.sessionIdleTimeoutMs) || 300_000,
@@ -358,6 +365,7 @@ export class ClankerBot {
         composeVoiceOperationalMessageForVoiceCoordination(this.toVoiceCoordinationRuntime(), payload),
       generateVoiceTurn: (payload) =>
         generateVoiceTurnReplyForVoiceCoordination(this.toVoiceCoordinationRuntime(), payload),
+      activeReplies: this.activeReplies,
       getVoiceScreenShareCapability: (payload) =>
         getVoiceScreenShareCapabilityForScreenShare(this.toScreenShareRuntime(), payload),
       offerVoiceScreenShareLink: (payload) =>
@@ -1019,18 +1027,28 @@ export class ClankerBot {
     if (!isChannelAllowedForPermissions(settings, String(message.channelId))) return;
     if (isUserBlockedForPermissions(settings, String(message.author.id))) return;
 
-    const lowerText = text.toLowerCase().trim();
-    if (lowerText === "stop" || lowerText === "cancel" || lowerText === "never mind" || lowerText === "nevermind") {
-      const scopeKey = buildBrowserTaskScopeKey({
+    if (isCancelIntent(text)) {
+      const replyScopeKey = buildTextReplyScopeKey({
         guildId: message.guildId,
         channelId: message.channelId
       });
-      const cancelled = this.activeBrowserTasks.abort(scopeKey, "User requested cancellation via text");
-      if (cancelled) {
+      const cancelledReplyCount = this.activeReplies.abortAll(
+        replyScopeKey,
+        "User requested cancellation via text"
+      );
+      const browserScopeKey = buildBrowserTaskScopeKey({
+        guildId: message.guildId,
+        channelId: message.channelId
+      });
+      const browserCancelled = this.activeBrowserTasks.abort(
+        browserScopeKey,
+        "User requested cancellation via text"
+      );
+      if (cancelledReplyCount > 0 || browserCancelled) {
         try {
-          await message.reply("Cancelled the active browser session.");
+          await message.reply("Cancelled.");
         } catch (replyError) {
-          console.warn("[textCommands] Failed to send browser cancellation reply:", replyError);
+          console.warn("[textCommands] Failed to send cancellation reply:", replyError);
         }
         return;
       }

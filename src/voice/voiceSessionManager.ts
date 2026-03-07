@@ -18,6 +18,8 @@ import {
   interpolatePromptTemplate
 } from "../prompts/promptCore.ts";
 import { clamp } from "../utils.ts";
+import type { ActiveReplyRegistry } from "../tools/activeReplyRegistry.ts";
+import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
 import { hasBotNameCue } from "../bot/directAddressConfidence.ts";
 import { SoundboardDirector } from "./soundboardDirector.ts";
 import {
@@ -531,6 +533,7 @@ export class VoiceSessionManager {
   memory;
   search;
   browserManager;
+  activeReplies;
   composeOperationalMessage;
   generateVoiceTurn;
   getVoiceScreenShareCapabilityHook;
@@ -562,6 +565,7 @@ export class VoiceSessionManager {
     memory = null,
     search = null,
     browserManager = null,
+    activeReplies = null,
     composeOperationalMessage = null,
     generateVoiceTurn = null,
     getVoiceScreenShareCapability = null,
@@ -574,6 +578,7 @@ export class VoiceSessionManager {
     this.memory = memory || null;
     this.search = search || null;
     this.browserManager = browserManager || null;
+    this.activeReplies = activeReplies as ActiveReplyRegistry | null;
     this.composeOperationalMessage =
       typeof composeOperationalMessage === "function" ? composeOperationalMessage : null;
     this.generateVoiceTurn = typeof generateVoiceTurn === "function" ? generateVoiceTurn : null;
@@ -3439,10 +3444,21 @@ export class VoiceSessionManager {
     reason = "bot_turn_open_deferred_flush"
   }) {
     if (!session || session.ending) return;
+    const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
     const pendingQueue = Array.isArray(deferredTurns)
       ? deferredTurns
       : this.deferredActionQueue.getDeferredQueuedUserTurns(session).slice();
     if (!pendingQueue.length) return;
+    const latestQueuedAt = pendingQueue.reduce((latest, entry) => {
+      const queuedAt = Math.max(0, Number(entry?.queuedAt || 0));
+      return queuedAt > latest ? queuedAt : latest;
+    }, 0);
+    if (this.activeReplies?.isStale(voiceReplyScopeKey, latestQueuedAt)) {
+      if (!Array.isArray(deferredTurns)) {
+        this.deferredActionQueue.clearDeferredVoiceAction(session, "queued_user_turns");
+      }
+      return;
+    }
     if (!Array.isArray(deferredTurns)) {
       const outputChannelState = this.getOutputChannelState(session);
       if (outputChannelState.locked || outputChannelState.captureBlocking) {
@@ -4240,10 +4256,12 @@ export class VoiceSessionManager {
 
   scheduleOpenAiRealtimeToolFollowupResponse({
     session,
-    userId = null
+    userId = null,
+    startedAtMs = 0
   }: {
     session?: VoiceSession | VoiceToolRuntimeSessionLike | null;
     userId?: string | null;
+    startedAtMs?: number;
   } = {}) {
     if (!session || session.ending) return;
     if (!providerSupports(session.mode || "", "updateTools")) return;
@@ -4255,6 +4273,13 @@ export class VoiceSessionManager {
     session.openAiToolResponseDebounceTimer = setTimeout(() => {
       session.openAiToolResponseDebounceTimer = null;
       if (!session || session.ending) return;
+      if (
+        this.activeReplies?.isStale(buildVoiceReplyScopeKey(session.id), startedAtMs)
+      ) {
+        session.awaitingToolOutputs = false;
+        this.replyManager.syncAssistantOutputState(session, "tool_outputs_cancelled");
+        return;
+      }
       if (session.openAiToolCallExecutions instanceof Map && session.openAiToolCallExecutions.size > 0) return;
       session.awaitingToolOutputs = false;
       this.replyManager.syncAssistantOutputState(session, "tool_outputs_ready");

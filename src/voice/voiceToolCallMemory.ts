@@ -6,6 +6,7 @@ import { clamp } from "../utils.ts";
 import { MEMORY_SENSITIVE_PATTERN_RE, VOICE_MEMORY_WRITE_MAX_PER_MINUTE } from "./voiceSessionManager.constants.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
 import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
+import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import type { VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 
@@ -15,11 +16,13 @@ type VoiceMemoryToolOptions = {
   session?: ToolRuntimeSession | null;
   settings?: VoiceRealtimeToolSettings | null;
   args?: VoiceToolCallArgs;
+  signal?: AbortSignal;
 };
 
 type VoiceConversationSearchToolOptions = {
   session?: ToolRuntimeSession | null;
   args?: VoiceToolCallArgs;
+  signal?: AbortSignal;
 };
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -28,8 +31,9 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 export async function executeVoiceMemorySearchTool(
   manager: VoiceToolCallManager,
-  { session, settings, args }: VoiceMemoryToolOptions
+  { session, settings, args, signal }: VoiceMemoryToolOptions
 ) {
+  throwIfAborted(signal, "Voice memory search cancelled");
   const filters = asRecord(args?.filters);
   if (!manager.memory || typeof manager.memory.searchDurableFacts !== "function") {
     return { ok: false, matches: [], error: "memory_unavailable" };
@@ -57,8 +61,9 @@ export async function executeVoiceMemorySearchTool(
 
 export async function executeVoiceConversationSearchTool(
   manager: VoiceToolCallManager,
-  { session, args }: VoiceConversationSearchToolOptions
+  { session, args, signal }: VoiceConversationSearchToolOptions
 ) {
+  throwIfAborted(signal, "Voice conversation search cancelled");
   if (!manager.store || typeof manager.store.searchConversationWindows !== "function") {
     return { ok: false, matches: [], error: "conversation_history_unavailable" };
   }
@@ -83,8 +88,9 @@ export async function executeVoiceConversationSearchTool(
 
 export async function executeVoiceMemoryWriteTool(
   manager: VoiceToolCallManager,
-  { session, settings, args }: VoiceMemoryToolOptions
+  { session, settings, args, signal }: VoiceMemoryToolOptions
 ) {
+  throwIfAborted(signal, "Voice memory write cancelled");
   const dedupe = asRecord(args?.dedupe);
   if (
     !manager.memory ||

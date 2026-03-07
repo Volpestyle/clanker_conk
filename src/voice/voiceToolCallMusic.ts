@@ -1,6 +1,7 @@
 import { clamp } from "../utils.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
 import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
+import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import type { MusicSelectionResult, VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 
@@ -10,6 +11,7 @@ type VoiceMusicToolOptions = {
   session?: ToolRuntimeSession | null;
   settings?: VoiceRealtimeToolSettings | null;
   args?: VoiceToolCallArgs;
+  signal?: AbortSignal;
 };
 type MusicQueueTrack = {
   id: string;
@@ -59,8 +61,9 @@ function resolveMusicCatalogTracks(catalog: Map<string, unknown>, trackIds: stri
 
 export async function executeVoiceMusicSearchTool(
   manager: VoiceToolCallManager,
-  { session, args }: VoiceMusicToolOptions
+  { session, args, signal }: VoiceMusicToolOptions
 ) {
+  throwIfAborted(signal, "Voice music search cancelled");
   const query = normalizeInlineText(args?.query, 180);
   if (!query) return { ok: false, tracks: [], error: "query_required" };
   const maxResults = clamp(Math.floor(Number(args?.max_results || 5)), 1, 10);
@@ -103,8 +106,9 @@ export async function executeVoiceMusicSearchTool(
 
 export async function executeVoiceMusicQueueAddTool(
   manager: VoiceToolCallManager,
-  { session, settings, args }: VoiceMusicToolOptions
+  { session, settings, args, signal }: VoiceMusicToolOptions
 ) {
+  throwIfAborted(signal, "Voice music queue add cancelled");
   const queueState = manager.ensureToolMusicQueueState(session);
   const runtimeSession = ensureSessionToolRuntimeState(manager, session);
   if (!queueState || !runtimeSession) return { ok: false, queue_length: 0, added: [], error: "queue_unavailable" };
@@ -164,8 +168,9 @@ export async function executeVoiceMusicQueueAddTool(
 
 export async function executeVoiceMusicQueueNextTool(
   manager: VoiceToolCallManager,
-  { session, settings, args }: VoiceMusicToolOptions
+  { session, settings, args, signal }: VoiceMusicToolOptions
 ) {
+  throwIfAborted(signal, "Voice music queue next cancelled");
   const queueState = manager.ensureToolMusicQueueState(session);
   const runtimeSession = ensureSessionToolRuntimeState(manager, session);
   if (!queueState || !runtimeSession) return { ok: false, queue_length: 0, added: [], error: "queue_unavailable" };
@@ -202,8 +207,9 @@ export async function executeVoiceMusicQueueNextTool(
 
 export async function executeVoiceMusicPlayNowTool(
   manager: VoiceToolCallManager,
-  { session, settings, args }: VoiceMusicToolOptions
+  { session, settings, args, signal }: VoiceMusicToolOptions
 ) {
+  throwIfAborted(signal, "Voice music play cancelled");
   const queueState = manager.ensureToolMusicQueueState(session);
   const runtimeSession = ensureSessionToolRuntimeState(manager, session);
   const trackId = normalizeInlineText(args?.track_id, 180);
@@ -273,8 +279,9 @@ export async function executeVoiceMusicPlayNowTool(
 
 export async function executeVoiceMusicStopTool(
   manager: VoiceToolCallManager,
-  { session, settings }: VoiceMusicToolOptions
+  { session, settings, signal }: VoiceMusicToolOptions
 ) {
+  throwIfAborted(signal, "Voice music stop cancelled");
   await manager.requestStopMusic({
     guildId: session?.guildId,
     channelId: session?.textChannelId,
@@ -290,8 +297,9 @@ export async function executeVoiceMusicStopTool(
 
 export async function executeVoiceMusicPauseTool(
   manager: VoiceToolCallManager,
-  { session, settings }: VoiceMusicToolOptions
+  { session, settings, signal }: VoiceMusicToolOptions
 ) {
+  throwIfAborted(signal, "Voice music pause cancelled");
   await manager.requestPauseMusic({
     guildId: session?.guildId,
     channelId: session?.textChannelId,
@@ -308,8 +316,9 @@ export async function executeVoiceMusicPauseTool(
 
 export async function executeVoiceMusicResumeTool(
   manager: VoiceToolCallManager,
-  { session }: VoiceMusicToolOptions
+  { session, signal }: VoiceMusicToolOptions
 ) {
+  throwIfAborted(signal, "Voice music resume cancelled");
   manager.musicPlayer?.resume?.();
   manager.setMusicPhase(session, "playing");
   manager.haltSessionOutputForMusicPlayback(session, "music_resumed");
@@ -320,8 +329,9 @@ export async function executeVoiceMusicResumeTool(
 
 export async function executeVoiceMusicSkipTool(
   manager: VoiceToolCallManager,
-  { session, settings }: VoiceMusicToolOptions
+  { session, settings, signal }: VoiceMusicToolOptions
 ) {
+  throwIfAborted(signal, "Voice music skip cancelled");
   const queueState = manager.ensureToolMusicQueueState(session);
   if (!queueState || queueState.nowPlayingIndex == null) {
     await manager.requestStopMusic({
@@ -355,8 +365,9 @@ export async function executeVoiceMusicSkipTool(
 
 export async function executeVoiceMusicNowPlayingTool(
   manager: VoiceToolCallManager,
-  { session }: VoiceMusicToolOptions
+  { session, signal }: VoiceMusicToolOptions
 ) {
+  throwIfAborted(signal, "Voice music now playing cancelled");
   const queueState = manager.ensureToolMusicQueueState(session);
   const nowTrack = queueState && queueState.nowPlayingIndex != null
     ? queueState.tracks[queueState.nowPlayingIndex] || null

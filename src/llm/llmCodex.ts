@@ -5,6 +5,7 @@ import {
 } from "./llmHelpers.ts";
 import { sleepMs } from "../normalization/time.ts";
 import { estimateUsdCost } from "./pricing.ts";
+import { createAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
 
 const CODEX_POLL_INTERVAL_MS = 1200;
 const CODEX_PENDING_STATUSES = new Set(["queued", "in_progress"]);
@@ -32,6 +33,7 @@ export interface RunCodexTaskOptions {
   instruction: string;
   model: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 export interface RunCodexSessionTurnOptions {
@@ -40,6 +42,7 @@ export interface RunCodexSessionTurnOptions {
   input: string;
   model: string;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }
 
 function normalizeStatus(status: unknown): string {
@@ -72,17 +75,20 @@ function resolveCodexErrorMessage(response: unknown, status: string): string {
 async function waitForTerminalResponse({
   openai,
   initialResponse,
-  timeoutMs
+  timeoutMs,
+  signal
 }: {
   openai: OpenAI;
   initialResponse: unknown;
   timeoutMs: number;
+  signal?: AbortSignal;
 }) {
   const responseId = String((initialResponse as { id?: unknown })?.id || "").trim();
   let response = initialResponse;
   const deadlineMs = Date.now() + timeoutMs;
 
   while (CODEX_PENDING_STATUSES.has(normalizeStatus((response as { status?: unknown })?.status))) {
+    throwIfAborted(signal, "Codex request cancelled");
     if (!responseId) {
       throw new Error("Codex response is still running but no response id was returned.");
     }
@@ -90,11 +96,45 @@ async function waitForTerminalResponse({
     if (remainingMs <= 0) {
       throw new Error(`Codex request timed out after ${timeoutMs}ms.`);
     }
-    await sleepMs(Math.min(CODEX_POLL_INTERVAL_MS, remainingMs));
-    response = await openai.responses.retrieve(responseId);
+    await waitForCodexPoll(Math.min(CODEX_POLL_INTERVAL_MS, remainingMs), signal);
+    response = await openai.responses.retrieve(responseId, undefined, signal ? { signal } : undefined);
   }
 
   return response;
+}
+
+async function waitForCodexPoll(delayMs: number, signal?: AbortSignal) {
+  throwIfAborted(signal, "Codex request cancelled");
+  if (!signal) {
+    await sleepMs(delayMs);
+    return;
+  }
+  await new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve();
+    }, Math.max(0, Math.floor(Number(delayMs) || 0)));
+    const onAbort = () => {
+      clearTimeout(timeout);
+      signal.removeEventListener("abort", onAbort);
+      reject(createAbortError(signal.reason || "Codex request cancelled"));
+    };
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+async function maybeCancelCodexResponse(openai: OpenAI, responseId: string) {
+  const normalizedResponseId = String(responseId || "").trim();
+  if (!normalizedResponseId) return;
+  const cancel = (openai.responses as OpenAI["responses"] & {
+    cancel?: (id: string) => Promise<unknown>;
+  }).cancel;
+  if (typeof cancel !== "function") return;
+  try {
+    await cancel.call(openai.responses, normalizedResponseId);
+  } catch {
+    // ignore
+  }
 }
 
 function parseCodexResponse({ response, model }: { response: unknown; model: string }): CodexRunResult {
@@ -135,58 +175,74 @@ async function runCodexInput({
   model,
   input,
   previousResponseId = "",
-  timeoutMs = 300_000
+  timeoutMs = 300_000,
+  signal
 }: {
   openai: OpenAI;
   model: string;
   input: string;
   previousResponseId?: string | null;
   timeoutMs?: number;
+  signal?: AbortSignal;
 }): Promise<CodexRunResult> {
   const normalizedTimeoutMs = normalizeTimeoutMs(timeoutMs);
   const normalizedModel = String(model || "").trim();
   const normalizedInput = String(input || "");
   const normalizedPreviousResponseId = String(previousResponseId || "").trim();
+  throwIfAborted(signal, "Codex request cancelled");
 
-  const initialResponse = await openai.responses.create({
-    model: normalizedModel,
-    ...(normalizedPreviousResponseId ? { previous_response_id: normalizedPreviousResponseId } : {}),
-    input: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: normalizedInput
-          }
-        ]
-      }
-    ]
-  });
+  let initialResponse: unknown = null;
+  try {
+    initialResponse = await openai.responses.create({
+      model: normalizedModel,
+      ...(normalizedPreviousResponseId ? { previous_response_id: normalizedPreviousResponseId } : {}),
+      input: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: normalizedInput
+            }
+          ]
+        }
+      ]
+    }, signal ? { signal } : undefined);
 
-  const terminalResponse = await waitForTerminalResponse({
-    openai,
-    initialResponse,
-    timeoutMs: normalizedTimeoutMs
-  });
+    const terminalResponse = await waitForTerminalResponse({
+      openai,
+      initialResponse,
+      timeoutMs: normalizedTimeoutMs,
+      signal
+    });
 
-  return parseCodexResponse({
-    response: terminalResponse,
-    model: normalizedModel
-  });
+    return parseCodexResponse({
+      response: terminalResponse,
+      model: normalizedModel
+    });
+  } catch (error) {
+    if (signal?.aborted) {
+      const responseId = String((initialResponse as { id?: unknown })?.id || "").trim();
+      await maybeCancelCodexResponse(openai, responseId);
+      throw createAbortError(signal.reason || error);
+    }
+    throw error;
+  }
 }
 
 export async function runCodexTask({
   openai,
   instruction,
   model,
-  timeoutMs = 300_000
+  timeoutMs = 300_000,
+  signal
 }: RunCodexTaskOptions): Promise<CodexRunResult> {
   return runCodexInput({
     openai,
     model,
     input: instruction,
-    timeoutMs
+    timeoutMs,
+    signal
   });
 }
 
@@ -195,13 +251,15 @@ export async function runCodexSessionTurn({
   previousResponseId = null,
   input,
   model,
-  timeoutMs = 300_000
+  timeoutMs = 300_000,
+  signal
 }: RunCodexSessionTurnOptions): Promise<CodexRunResult> {
   return runCodexInput({
     openai,
     model,
     input,
     previousResponseId,
-    timeoutMs
+    timeoutMs,
+    signal
   });
 }

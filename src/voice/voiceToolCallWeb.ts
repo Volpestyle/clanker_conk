@@ -1,6 +1,7 @@
 import { deepMerge, clamp } from "../utils.ts";
 import { getResearchRuntimeConfig } from "../settings/agentStack.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
+import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import type { VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 
@@ -10,17 +11,20 @@ type VoiceWebToolOptions = {
   session?: ToolRuntimeSession | null;
   settings?: VoiceRealtimeToolSettings | null;
   args?: VoiceToolCallArgs;
+  signal?: AbortSignal;
 };
 
 type VoiceWebScrapeToolOptions = {
   session?: ToolRuntimeSession | null;
   args?: VoiceToolCallArgs;
+  signal?: AbortSignal;
 };
 
 export async function executeVoiceWebSearchTool(
   manager: VoiceToolCallManager,
-  { session, settings, args }: VoiceWebToolOptions
+  { session, settings, args, signal }: VoiceWebToolOptions
 ) {
+  throwIfAborted(signal, "Voice web search cancelled");
   const query = normalizeInlineText(args?.query, 240);
   if (!query) {
     return { ok: false, results: [], answer: "", error: "query_required" };
@@ -60,7 +64,8 @@ export async function executeVoiceWebSearchTool(
       channelId: session?.textChannelId,
       userId: session?.lastOpenAiToolCallerUserId || null,
       source: "voice_realtime_tool_web_search"
-    }
+    },
+    signal
   });
   const rows = (Array.isArray(searchResult?.results) ? searchResult.results : [])
     .slice(0, maxResults)
@@ -80,9 +85,10 @@ export async function executeVoiceWebSearchTool(
 
 export async function executeVoiceWebScrapeTool(
   manager: VoiceToolCallManager,
-  { session: _session, args }: VoiceWebScrapeToolOptions
+  { session: _session, args, signal }: VoiceWebScrapeToolOptions
 ) {
   void _session;
+  throwIfAborted(signal, "Voice web scrape cancelled");
   const url = String(args?.url || "").trim().slice(0, 2000);
   if (!url) {
     return { ok: false, text: "", error: "url_required" };
@@ -93,7 +99,7 @@ export async function executeVoiceWebScrapeTool(
 
   const maxChars = clamp(Math.floor(Number(args?.max_chars) || 8000), 350, 24000);
   try {
-    const result = await manager.search.readPageSummary(url, maxChars);
+    const result = await manager.search.readPageSummary(url, maxChars, signal);
     const title = result?.title ? String(result.title).trim() : null;
     const body = String(result?.summary || "").trim();
     if (!body) {

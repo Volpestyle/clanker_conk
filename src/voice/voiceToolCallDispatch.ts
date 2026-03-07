@@ -26,6 +26,7 @@ import type {
   VoiceToolRuntimeSessionLike
 } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
+import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
 
 type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
 
@@ -42,6 +43,7 @@ type McpVoiceToolCallOptions = {
   settings?: VoiceRealtimeToolSettings | null;
   toolDescriptor: VoiceRealtimeToolDescriptor | null | undefined;
   args?: VoiceToolCallArgs;
+  signal?: AbortSignal;
 };
 
 async function executeOfferScreenShareLinkTool(
@@ -124,39 +126,40 @@ export async function executeLocalVoiceToolCall(manager: VoiceToolCallManager, o
 
   switch (normalizedToolName) {
     case "memory_search":
-      return executeVoiceMemorySearchTool(manager, { session: opts.session, settings: opts.settings, args: opts.args });
+      return executeVoiceMemorySearchTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
     case "memory_write":
-      return executeVoiceMemoryWriteTool(manager, { session: opts.session, settings: opts.settings, args: opts.args });
+      return executeVoiceMemoryWriteTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
     case "adaptive_directive_add":
-      return executeVoiceAdaptiveStyleAddTool(manager, { session: opts.session, args: opts.args });
+      return executeVoiceAdaptiveStyleAddTool(manager, { session: opts.session, args: opts.args, signal: opts.signal });
     case "adaptive_directive_remove":
-      return executeVoiceAdaptiveStyleRemoveTool(manager, { session: opts.session, args: opts.args });
+      return executeVoiceAdaptiveStyleRemoveTool(manager, { session: opts.session, args: opts.args, signal: opts.signal });
     case "conversation_search":
-      return executeVoiceConversationSearchTool(manager, { session: opts.session, args: opts.args });
+      return executeVoiceConversationSearchTool(manager, { session: opts.session, args: opts.args, signal: opts.signal });
     case "music_search":
-      return executeVoiceMusicSearchTool(manager, { session: opts.session, args: opts.args });
+      return executeVoiceMusicSearchTool(manager, { session: opts.session, args: opts.args, signal: opts.signal });
     case "music_queue_add":
-      return executeVoiceMusicQueueAddTool(manager, { session: opts.session, settings: opts.settings, args: opts.args });
+      return executeVoiceMusicQueueAddTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
     case "music_queue_next":
-      return executeVoiceMusicQueueNextTool(manager, { session: opts.session, settings: opts.settings, args: opts.args });
+      return executeVoiceMusicQueueNextTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
     case "music_play_now":
-      return executeVoiceMusicPlayNowTool(manager, { session: opts.session, settings: opts.settings, args: opts.args });
+      return executeVoiceMusicPlayNowTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
     case "music_stop":
-      return executeVoiceMusicStopTool(manager, { session: opts.session, settings: opts.settings });
+      return executeVoiceMusicStopTool(manager, { session: opts.session, settings: opts.settings, signal: opts.signal });
     case "music_pause":
-      return executeVoiceMusicPauseTool(manager, { session: opts.session, settings: opts.settings });
+      return executeVoiceMusicPauseTool(manager, { session: opts.session, settings: opts.settings, signal: opts.signal });
     case "music_resume":
-      return executeVoiceMusicResumeTool(manager, { session: opts.session });
+      return executeVoiceMusicResumeTool(manager, { session: opts.session, signal: opts.signal });
     case "music_skip":
-      return executeVoiceMusicSkipTool(manager, { session: opts.session, settings: opts.settings });
+      return executeVoiceMusicSkipTool(manager, { session: opts.session, settings: opts.settings, signal: opts.signal });
     case "music_now_playing":
-      return executeVoiceMusicNowPlayingTool(manager, { session: opts.session });
+      return executeVoiceMusicNowPlayingTool(manager, { session: opts.session, signal: opts.signal });
     case "offer_screen_share_link":
+      throwIfAborted(opts.signal, "Voice tool cancelled");
       return executeOfferScreenShareLinkTool(manager, { session: opts.session, settings: opts.settings });
     case "web_search":
-      return executeVoiceWebSearchTool(manager, { session: opts.session, settings: opts.settings, args: opts.args });
+      return executeVoiceWebSearchTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
     case "web_scrape":
-      return executeVoiceWebScrapeTool(manager, { session: opts.session, args: opts.args });
+      return executeVoiceWebScrapeTool(manager, { session: opts.session, args: opts.args, signal: opts.signal });
     case "browser_browse":
       return executeVoiceBrowserBrowseTool(manager, {
         session: opts.session,
@@ -165,8 +168,9 @@ export async function executeLocalVoiceToolCall(manager: VoiceToolCallManager, o
         signal: opts.signal
       });
     case "code_task":
-      return executeVoiceCodeTaskTool(manager, { session: opts.session, settings: opts.settings, args: opts.args });
+      return executeVoiceCodeTaskTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
     case "leave_voice_channel":
+      throwIfAborted(opts.signal, "Voice tool cancelled");
       scheduleLeaveVoiceChannel(manager, { session: opts.session, settings: opts.settings });
       return { ok: true, status: "leaving" };
     default:
@@ -176,9 +180,10 @@ export async function executeLocalVoiceToolCall(manager: VoiceToolCallManager, o
 
 export async function executeMcpVoiceToolCall(
   manager: VoiceToolCallManager,
-  { session, settings: _settings, toolDescriptor, args }: McpVoiceToolCallOptions
+  { session, settings: _settings, toolDescriptor, args, signal }: McpVoiceToolCallOptions
 ) {
   void _settings;
+  throwIfAborted(signal, "Voice MCP tool cancelled");
   const serverName = normalizeInlineText(toolDescriptor?.serverName, 80);
   const toolName = normalizeInlineText(toolDescriptor?.name, 120);
   if (!serverName || !toolName) {
@@ -208,7 +213,7 @@ export async function executeMcpVoiceToolCall(
         toolName,
         arguments: args && typeof args === "object" ? args : {}
       }),
-      signal: AbortSignal.timeout(timeoutMs)
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(timeoutMs)]) : AbortSignal.timeout(timeoutMs)
     });
     const bodyText = await response.text().catch(() => "");
     let payload: Record<string, unknown> | null = null;

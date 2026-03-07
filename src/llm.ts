@@ -247,7 +247,8 @@ export class LLMService {
       messageId: null
     },
     jsonSchema = "",
-    tools = []
+    tools = [],
+    signal
   }: {
     settings: unknown;
     systemPrompt: string;
@@ -265,6 +266,7 @@ export class LLMService {
     };
     jsonSchema?: string;
     tools?: ChatModelRequest["tools"];
+    signal?: AbortSignal;
   }) {
     const orchestrator = getResolvedOrchestratorBinding(settings);
     const replyGeneration = getReplyGenerationSettings(settings);
@@ -299,7 +301,8 @@ export class LLMService {
         reasoningEffort: orchestrator.reasoningEffort,
         jsonSchema: normalizedJsonSchema,
         trace: normalizedTrace,
-        tools: normalizedTools
+        tools: normalizedTools,
+        signal
       });
       const toolCalls = "toolCalls" in response && Array.isArray(response.toolCalls) ? response.toolCalls : [];
       const rawContent = "rawContent" in response ? response.rawContent || null : null;

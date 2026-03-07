@@ -84,12 +84,14 @@ export async function runClaudeCodeBrainStream(
     model,
     input,
     timeoutMs,
-    maxBufferBytes
+    maxBufferBytes,
+    signal
   }: {
     model: string;
     input: string;
     timeoutMs: number;
     maxBufferBytes: number;
+    signal?: AbortSignal;
   }
 ): Promise<ClaudeCodeStreamResult> {
   const normalizedModel = String(model || "").trim();
@@ -115,7 +117,8 @@ export async function runClaudeCodeBrainStream(
 
   return await deps.getBrainSession()!.run({
     input,
-    timeoutMs
+    timeoutMs,
+    signal
   });
 }
 
@@ -129,6 +132,7 @@ export async function callClaudeCode(
     contextMessages = [],
     maxOutputTokens,
     jsonSchema = "",
+    signal,
     trace = {
       guildId: null,
       channelId: null,
@@ -168,7 +172,8 @@ export async function callClaudeCode(
           model,
           input: streamInput,
           timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
-          maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
+          maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES,
+          signal
         })
       : await runClaudeCli({
           args: buildClaudeCodeCliArgs({
@@ -179,7 +184,8 @@ export async function callClaudeCode(
           }),
           input: streamInput,
           timeoutMs: CLAUDE_CODE_TIMEOUT_MS,
-          maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES
+          maxBufferBytes: CLAUDE_CODE_MAX_BUFFER_BYTES,
+          signal
         });
 
     const parsed = parseClaudeCodeStreamOutput(stdout);

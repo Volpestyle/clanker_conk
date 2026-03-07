@@ -47,7 +47,8 @@ export async function callOpenAiResponses(
     maxOutputTokens,
     reasoningEffort,
     jsonSchema = "",
-    tools = []
+    tools = [],
+    signal
   }: ChatModelRequest
 ) {
   if (!deps.openai) {
@@ -108,7 +109,7 @@ export async function callOpenAiResponses(
       }
     ]
   } as Parameters<typeof deps.openai.responses.create>[0];
-  const response = await deps.openai.responses.create(requestBody as never);
+  const response = await deps.openai.responses.create(requestBody as never, signal ? { signal } : undefined);
   const responseWithOutput = response as { output?: unknown };
 
   const text = extractOpenAiResponseText(response);
@@ -132,7 +133,8 @@ export async function callXaiChatCompletions(
     contextMessages = [],
     temperature,
     maxOutputTokens,
-    tools = []
+    tools = [],
+    signal
   }: ChatModelRequest
 ) {
   if (!deps.xai) {
@@ -192,7 +194,7 @@ export async function callXaiChatCompletions(
     messages,
     ...(xaiTools.length ? { tools: xaiTools } : {})
   } as Parameters<typeof deps.xai.chat.completions.create>[0];
-  const response = await deps.xai.chat.completions.create(requestBody as never) as {
+  const response = await deps.xai.chat.completions.create(requestBody as never, signal ? { signal } : undefined) as {
     choices?: Array<{
       message?: {
         content?: string;
@@ -242,7 +244,8 @@ export async function callAnthropic(
     contextMessages = [],
     temperature,
     maxOutputTokens,
-    tools = []
+    tools = [],
+    signal
   }: ChatModelRequest
 ) {
   if (!deps.anthropic) {
@@ -287,7 +290,7 @@ export async function callAnthropic(
     messages,
     ...toolsParam
   } as Parameters<typeof deps.anthropic.messages.create>[0];
-  const response = await deps.anthropic.messages.create(requestBody as never) as {
+  const response = await deps.anthropic.messages.create(requestBody as never, signal ? { signal } : undefined) as {
     content: Array<{
       type: string;
       text?: string;

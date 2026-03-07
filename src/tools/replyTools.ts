@@ -1,5 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { normalizeDirectiveText } from "../bot/botHelpers.ts";
+import { throwIfAborted } from "./browserTaskRuntime.ts";
 import {
   executeSharedAdaptiveDirectiveAdd,
   executeSharedAdaptiveDirectiveRemove
@@ -73,6 +74,7 @@ type ReplyToolRuntime = {
       settings: Record<string, unknown>;
       query: string;
       trace: Record<string, unknown>;
+      signal?: AbortSignal;
     }) => Promise<{
       query: string;
       results: Array<Record<string, unknown>>;
@@ -81,7 +83,7 @@ type ReplyToolRuntime = {
       providerFallbackUsed?: boolean;
       summaryText?: string;
     }>;
-    readPageSummary?: (url: string, maxChars: number) => Promise<{
+    readPageSummary?: (url: string, maxChars: number, signal?: AbortSignal) => Promise<{
       title?: string;
       summary?: string;
       extractionMethod?: string;
@@ -95,6 +97,7 @@ type ReplyToolRuntime = {
       channelId: string | null;
       userId: string | null;
       source: string;
+      signal?: AbortSignal;
     }) => Promise<{
       used?: boolean;
       text?: string;
@@ -113,6 +116,7 @@ type ReplyToolRuntime = {
       channelId: string | null;
       userId: string | null;
       source: string;
+      signal?: AbortSignal;
     }) => Promise<{
       text?: string;
       isError?: boolean;
@@ -236,6 +240,7 @@ type ReplyToolContext = {
   botUserId?: string;
   actorName?: string;
   trace?: Record<string, unknown>;
+  signal?: AbortSignal;
 };
 
 // --- Tool definitions ---
@@ -413,6 +418,7 @@ export async function executeReplyTool(
   runtime: ReplyToolRuntime,
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
   switch (toolName) {
     case "web_search":
       return executeWebSearch(input, runtime, context);
@@ -446,7 +452,7 @@ export async function executeReplyTool(
     case "music_skip":
     case "music_now_playing":
     case "leave_voice_channel":
-      return executeVoiceTool(toolName, input, runtime);
+      return executeVoiceTool(toolName, input, runtime, context.signal);
     default:
       return { content: `Unknown tool: ${toolName}`, isError: true };
   }
@@ -457,6 +463,7 @@ async function executeConversationSearch(
   runtime: ReplyToolRuntime,
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
   if (!runtime.store?.searchConversationWindows) {
     return { content: "Conversation history search is not available.", isError: true };
   }
@@ -503,6 +510,7 @@ async function executeWebSearch(
   runtime: ReplyToolRuntime,
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
   const query = normalizeDirectiveText(
     String(input?.query || ""),
     MAX_WEB_QUERY_LEN
@@ -521,7 +529,8 @@ async function executeWebSearch(
       trace: {
         ...context.trace,
         source: "reply_tool_web_search"
-      }
+      },
+      signal: context.signal
     });
 
     const summary = String(result.summaryText || "").trim();
@@ -556,8 +565,9 @@ async function executeWebSearch(
 async function executeWebScrape(
   input: ReplyToolCallInput,
   runtime: ReplyToolRuntime,
-  _context: ReplyToolContext
+  context: ReplyToolContext
 ): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
   const url = String(input?.url || "").trim().slice(0, MAX_WEB_SCRAPE_URL_LEN);
   if (!url) {
     return { content: "Missing or empty URL.", isError: true };
@@ -572,7 +582,7 @@ async function executeWebScrape(
   );
 
   try {
-    const result = await runtime.search.readPageSummary(url, maxChars);
+    const result = await runtime.search.readPageSummary(url, maxChars, context.signal);
     const title = result?.title ? `Title: ${result.title}\n` : "";
     const body = String(result?.summary || "").trim();
     if (!body) {
@@ -593,6 +603,7 @@ async function executeBrowserBrowse(
   runtime: ReplyToolRuntime,
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
   const query = normalizeDirectiveText(
     String(input?.query || ""),
     MAX_BROWSER_BROWSE_QUERY_LEN
@@ -614,7 +625,7 @@ async function executeBrowserBrowse(
       return { content: `Not authorized to continue browser session '${sessionId}'.`, isError: true };
     }
     try {
-      const turnResult = await session.runTurn(query);
+      const turnResult = await session.runTurn(query, { signal: context.signal });
       const sessionNote = `\n\n[session_id: ${session.id}]`;
       if (turnResult.isError) {
         return { content: `Browser browse failed: ${turnResult.errorMessage}${sessionNote}`, isError: true };
@@ -638,7 +649,7 @@ async function executeBrowserBrowse(
     if (session) {
       runtime.subAgentSessions.manager.register(session);
       try {
-        const turnResult = await session.runTurn(query);
+        const turnResult = await session.runTurn(query, { signal: context.signal });
         const sessionNote = `\n\n[session_id: ${session.id}]`;
         if (turnResult.isError) {
           return { content: `Browser browse failed: ${turnResult.errorMessage}${sessionNote}`, isError: true };
@@ -663,7 +674,8 @@ async function executeBrowserBrowse(
       guildId: context.guildId,
       channelId: context.channelId,
       userId: context.userId,
-      source: String(context.trace?.source || "reply_tool_browser_browse")
+      source: String(context.trace?.source || "reply_tool_browser_browse"),
+      signal: context.signal
     });
 
     if (result?.blockedByBudget) {
@@ -705,6 +717,7 @@ async function executeMemorySearch(
   runtime: ReplyToolRuntime,
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
   if (!runtime.memory?.searchDurableFacts) {
     return { content: "Memory search is not available.", isError: true };
   }
@@ -760,6 +773,7 @@ async function executeMemoryWrite(
   runtime: ReplyToolRuntime,
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
   if (
     !runtime.memory?.searchDurableFacts ||
     !runtime.memory?.rememberDirectiveLineDetailed
@@ -813,6 +827,7 @@ async function executeAdaptiveStyleAdd(
   runtime: ReplyToolRuntime,
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
   if (!runtime.store?.getActiveAdaptiveStyleNotes || !runtime.store?.addAdaptiveStyleNote) {
     return { content: "Adaptive directives are not available.", isError: true };
   }
@@ -855,6 +870,7 @@ async function executeAdaptiveStyleRemove(
   runtime: ReplyToolRuntime,
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
   if (!runtime.store?.getActiveAdaptiveStyleNotes || !runtime.store?.removeAdaptiveStyleNote) {
     return { content: "Adaptive directives are not available.", isError: true };
   }
@@ -889,8 +905,9 @@ async function executeAdaptiveStyleRemove(
 
 async function executeImageLookup(
   input: ReplyToolCallInput,
-  _context: ReplyToolContext
+  context: ReplyToolContext
 ): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
   const imageId = normalizeDirectiveText(
     String(input?.imageId || ""),
     MAX_IMAGE_LOOKUP_QUERY_LEN
@@ -914,8 +931,9 @@ async function executeImageLookup(
 async function executeOpenArticle(
   input: ReplyToolCallInput,
   runtime: ReplyToolRuntime,
-  _context: ReplyToolContext
+  context: ReplyToolContext
 ): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
   const ref = normalizeDirectiveText(
     String(input?.ref || ""),
     MAX_OPEN_ARTICLE_REF_LEN
@@ -938,6 +956,7 @@ async function executeCodeTask(
   runtime: ReplyToolRuntime,
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
   const task = normalizeDirectiveText(
     String(input?.task || ""),
     MAX_CODE_TASK_LEN
@@ -959,7 +978,7 @@ async function executeCodeTask(
       return { content: `Not authorized to continue code session '${sessionId}'.`, isError: true };
     }
     try {
-      const turnResult = await session.runTurn(task);
+      const turnResult = await session.runTurn(task, { signal: context.signal });
       const costNote = turnResult.costUsd ? ` (cost: $${turnResult.costUsd.toFixed(4)})` : "";
       const sessionNote = `\n\n[session_id: ${session.id}]`;
       if (turnResult.isError) {
@@ -988,7 +1007,7 @@ async function executeCodeTask(
     if (session) {
       runtime.subAgentSessions.manager.register(session);
       try {
-        const turnResult = await session.runTurn(task);
+        const turnResult = await session.runTurn(task, { signal: context.signal });
         const costNote = turnResult.costUsd ? ` (cost: $${turnResult.costUsd.toFixed(4)})` : "";
         const sessionNote = `\n\n[session_id: ${session.id}]`;
         if (turnResult.isError) {
@@ -1018,7 +1037,8 @@ async function executeCodeTask(
       guildId: context.guildId,
       channelId: context.channelId,
       userId: context.userId,
-      source: String(context.trace?.source || "reply_tool_code_task")
+      source: String(context.trace?.source || "reply_tool_code_task"),
+      signal: context.signal
     });
 
     if (result?.blockedByPermission) {
@@ -1050,8 +1070,10 @@ async function executeCodeTask(
 async function executeVoiceTool(
   toolName: string,
   input: ReplyToolCallInput,
-  runtime: ReplyToolRuntime
+  runtime: ReplyToolRuntime,
+  signal?: AbortSignal
 ): Promise<ReplyToolResult> {
+  throwIfAborted(signal, "Reply tool cancelled");
   if (!runtime.voiceSession) {
     return { content: "Voice session tools are not available.", isError: true };
   }
@@ -1062,6 +1084,7 @@ async function executeVoiceTool(
         const query = String(input?.query || "").trim().slice(0, 180);
         if (!query) return { content: "Missing or empty search query.", isError: true };
         const limit = Math.max(1, Math.min(10, Math.floor(Number(input?.max_results) || 5)));
+        throwIfAborted(signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicSearch(query, limit);
         break;
       }
@@ -1073,12 +1096,14 @@ async function executeVoiceTool(
         const position = typeof input?.position === "number"
           ? Math.max(0, Math.floor(input.position))
           : (input?.position === "end" ? "end" : undefined);
+        throwIfAborted(signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicQueueAdd(tracks, position);
         break;
       }
       case "music_play_now": {
         const trackId = String(input?.track_id || "").trim();
         if (!trackId) return { content: "Missing track_id.", isError: true };
+        throwIfAborted(signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicPlayNow(trackId);
         break;
       }
@@ -1087,25 +1112,32 @@ async function executeVoiceTool(
           ? (input.tracks as string[]).map((t) => String(t).trim()).filter(Boolean).slice(0, 12)
           : [];
         if (!tracks.length) return { content: "No track IDs provided.", isError: true };
+        throwIfAborted(signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicQueueNext(tracks);
         break;
       }
       case "music_stop":
+        throwIfAborted(signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicStop();
         break;
       case "music_pause":
+        throwIfAborted(signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicPause();
         break;
       case "music_resume":
+        throwIfAborted(signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicResume();
         break;
       case "music_skip":
+        throwIfAborted(signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicSkip();
         break;
       case "music_now_playing":
+        throwIfAborted(signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicNowPlaying();
         break;
       case "leave_voice_channel":
+        throwIfAborted(signal, "Reply tool cancelled");
         result = await runtime.voiceSession.leaveVoiceChannel();
         break;
       default:

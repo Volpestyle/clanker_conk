@@ -84,12 +84,14 @@ export async function runCodexCliBrainStream(
     model,
     input,
     timeoutMs,
-    maxBufferBytes
+    maxBufferBytes,
+    signal
   }: {
     model: string;
     input: string;
     timeoutMs: number;
     maxBufferBytes: number;
+    signal?: AbortSignal;
   }
 ) {
   const normalizedModel = String(model || "").trim();
@@ -111,7 +113,8 @@ export async function runCodexCliBrainStream(
 
   return await deps.getBrainSession()!.run({
     input,
-    timeoutMs
+    timeoutMs,
+    signal
   });
 }
 
@@ -125,6 +128,7 @@ export async function callCodexCli(
     contextMessages = [],
     maxOutputTokens,
     jsonSchema = "",
+    signal,
     trace = {
       guildId: null,
       channelId: null,
@@ -167,7 +171,8 @@ export async function callCodexCli(
           model,
           input: prompt,
           timeoutMs: CODEX_CLI_TIMEOUT_MS,
-          maxBufferBytes: CODEX_CLI_MAX_BUFFER_BYTES
+          maxBufferBytes: CODEX_CLI_MAX_BUFFER_BYTES,
+          signal
         })
       : await runCodexCli({
           args: buildCodexCliBrainArgs({
@@ -177,7 +182,8 @@ export async function callCodexCli(
           }),
           input: "",
           timeoutMs: CODEX_CLI_TIMEOUT_MS,
-          maxBufferBytes: CODEX_CLI_MAX_BUFFER_BYTES
+          maxBufferBytes: CODEX_CLI_MAX_BUFFER_BYTES,
+          signal
         });
 
     const parsed = parseCodexCliJsonlOutput(stdout);
@@ -228,7 +234,8 @@ export async function callCodexCli(
       }),
       input: "",
       timeoutMs: CODEX_CLI_TIMEOUT_MS,
-      maxBufferBytes: CODEX_CLI_MAX_BUFFER_BYTES
+      maxBufferBytes: CODEX_CLI_MAX_BUFFER_BYTES,
+      signal
     });
     const parsed = parseCodexCliJsonlOutput(stdout);
     if (parsed?.isError) {
