@@ -1,5 +1,4 @@
-import { clamp } from "lodash";
-import { sanitizeBotText, sleep } from "../utils.ts";
+import { clamp, sanitizeBotText, sleep } from "../utils.ts";
 import { buildReplyPrompt, buildSystemPrompt } from "../prompts/index.ts";
 import { getMediaPromptCraftGuidance } from "../prompts/promptCore.ts";
 import type { ReplyAttemptOptions } from "../bot.ts";

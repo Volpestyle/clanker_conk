@@ -770,7 +770,11 @@ export class VideoContextService {
         this.commandAvailable("yt-dlp", ["--version"])
       ])
         .then(([ffmpeg, ytDlp]) => ({ ffmpeg, ytDlp }))
-        .catch(() => ({ ffmpeg: false, ytDlp: false }));
+        .catch((error) => {
+          this.toolAvailabilityPromise = null;
+          this.logCleanupError("video_context_tool_availability_failed", error);
+          return { ffmpeg: false, ytDlp: false };
+        });
     }
     return this.toolAvailabilityPromise;
   }

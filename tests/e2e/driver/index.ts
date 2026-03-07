@@ -17,6 +17,8 @@ export {
   restoreTemporaryE2ESettings,
   waitForDashboardReady,
 } from "./dashboard.ts";
+export { VoiceHistoryAssertionHelper } from "./voiceHistory.ts";
+export type { VoiceHistoryEvent, VoiceHistorySession } from "./voiceHistory.ts";
 export {
   resolveE2EPipelineOverrides,
   E2E_PRESETS,

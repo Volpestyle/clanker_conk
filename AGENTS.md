@@ -28,10 +28,12 @@
 
 ### Test Commands
 
+- When running e2e integration tests, start the bun bot process and then test so you can compare logs side by side.
 - `bun run test` — unit/integration tests only (files in `src/` and `dashboard/src/`). E2E tests are excluded. Always use this for verification after code changes.
 - `bun run test:e2e` — E2E tests only (`tests/e2e/`). Requires running dashboard, bot tokens, and test guild.
 - `bun run test:e2e:voice` / `bun run test:e2e:text` — targeted E2E suites.
 - Never run bare `bun test` — it discovers all `*.test.ts` files including E2E. Always use `bun run test`.
+
 
 ## Dashboard UI Preferences
 

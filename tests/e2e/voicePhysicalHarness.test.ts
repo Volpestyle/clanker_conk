@@ -10,7 +10,8 @@ import {
   hasTextE2EConfig,
   getFixturePath,
   generatePcmAudioFixture,
-  restoreTemporaryE2ESettings
+  restoreTemporaryE2ESettings,
+  VoiceHistoryAssertionHelper
 } from "./driver/index.ts";
 import { Store } from "../../src/store.ts";
 import { LLMService } from "../../src/llm.ts";
@@ -39,8 +40,22 @@ function getMessageContent(message: unknown): string {
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_RESPONSE_WAIT_MS = 12_000;
 
+async function ensureFixture(name: string, text: string): Promise<string> {
+  const path = getFixturePath(name);
+  try {
+    const { stat } = await import("node:fs/promises");
+    await stat(path);
+    return path;
+  } catch {
+    console.log(`Generating fixture: ${name} (\"${text}\")`);
+    await generatePcmAudioFixture(name, text);
+    return getFixturePath(name);
+  }
+}
+
 describe("E2E: Voice Physical Layer", () => {
   let driver: DriverBot;
+  let history: VoiceHistoryAssertionHelper;
 
   beforeAll(async () => {
     if (!hasE2EConfig()) {
@@ -59,6 +74,7 @@ describe("E2E: Voice Physical Layer", () => {
       systemBotUserId: config.systemBotUserId
     };
     driver = new DriverBot(driverConfig);
+    history = new VoiceHistoryAssertionHelper();
     await driver.connect();
     await driver.joinVoiceChannel();
     await driver.summonSystemBot(45_000);
@@ -245,8 +261,12 @@ describe("E2E: Voice Physical Layer", () => {
     async () => {
       if (!hasE2EConfig()) return;
 
+      const scenarioStartedAt = Date.now();
       const greetingFixture = env.E2E_GREETING_FIXTURE_PATH || getFixturePath("greeting_yo");
-      const followupFixture = env.E2E_FOLLOWUP_FIXTURE_PATH || getFixturePath("rapid_followup");
+      const followupFixture = env.E2E_FOLLOWUP_FIXTURE_PATH || await ensureFixture(
+        "rapid_followup",
+        "wait actually one more thing, tell me about the second thing instead"
+      );
       const responseWaitMs = envNumber("E2E_RESPONSE_WAIT_MS", DEFAULT_RESPONSE_WAIT_MS);
 
       // Play two utterances back to back with minimal gap
@@ -254,19 +274,7 @@ describe("E2E: Voice Physical Layer", () => {
       await new Promise((r) => setTimeout(r, 500));
 
       driver.clearReceivedAudio();
-
-      try {
-        await driver.playAudio(followupFixture);
-      } catch (error) {
-        // If rapid_followup fixture doesn't exist, generate it
-        if ((error as Error).message.includes("ENOENT")) {
-          console.log("Generating rapid_followup fixture...");
-          await generatePcmAudioFixture("rapid_followup", "wait actually one more thing");
-          await driver.playAudio(getFixturePath("rapid_followup"));
-        } else {
-          throw error;
-        }
-      }
+      await driver.playAudio(followupFixture);
 
       await new Promise((resolve) => setTimeout(resolve, responseWaitMs));
 
@@ -275,6 +283,22 @@ describe("E2E: Voice Physical Layer", () => {
         receivedBytes > 0,
         `Expected bot to respond to rapid followup, got ${receivedBytes} bytes`
       );
+
+      const left = await driver.dismissBot("dismiss_rapid_followup", "Clanker thanks, you can hop out now.");
+      assert.ok(left, "Expected the bot to leave so the session lands in voice history");
+
+      const session = await history.waitForLatestSession({
+        guildId: driver.config.guildId,
+        endedAfterMs: scenarioStartedAt,
+        timeoutMs: 45_000
+      });
+      const events = await history.waitForSessionEvents(session.sessionId, { minEvents: 5, timeoutMs: 15_000 });
+
+      history.assertAnyEventMetadataIncludes(events, "voice_turn_addressing", "transcript", "one more thing");
+      const supersedeEvent = history.findLastEventByContent(events, "realtime_reply_superseded_newer_input");
+      assert.ok(supersedeEvent, "Expected history to show the stale reply was superseded by newer input");
+
+      await driver.summonSystemBot(45_000);
     },
     DEFAULT_TIMEOUT_MS
   );

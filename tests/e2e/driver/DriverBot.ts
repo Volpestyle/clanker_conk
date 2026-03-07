@@ -63,6 +63,9 @@ export class DriverBot {
   private receivedAudioChunks: Buffer[] = [];
   private connected = false;
   private subscribedToSystemBot = false;
+  private systemBotSpeaking = false;
+  private lastSystemBotSpeakingStartAt = 0;
+  private lastSystemBotSpeakingEndAt = 0;
 
   constructor(config: DriverBotConfig) {
     this.config = config;
@@ -118,12 +121,18 @@ export class DriverBot {
     this.connection.receiver.speaking.on("start", (userId) => {
       console.log(`[DriverBot] speaking START: userId=${userId} (system bot? ${userId === this.config.systemBotUserId})`);
       if (userId === this.config.systemBotUserId) {
+        this.systemBotSpeaking = true;
+        this.lastSystemBotSpeakingStartAt = Date.now();
         this.subscribeToSystemBotAudio();
       }
     });
 
     this.connection.receiver.speaking.on("end", (userId) => {
       console.log(`[DriverBot] speaking END: userId=${userId}`);
+      if (userId === this.config.systemBotUserId) {
+        this.systemBotSpeaking = false;
+        this.lastSystemBotSpeakingEndAt = Date.now();
+      }
     });
   }
 
@@ -145,25 +154,31 @@ export class DriverBot {
     });
   }
 
-  playAudio(audioPath: string): Promise<void> {
+  playAudioNonBlocking(audioPath: string): Promise<void> {
     if (!this.connection) {
       throw new Error("Not connected to voice channel");
     }
     console.log(`[DriverBot] playAudio: ${audioPath}`);
 
-    this.player = createAudioPlayer();
-    this.player.on("stateChange", (oldState, newState) => {
+    this.player?.stop();
+    const player = createAudioPlayer();
+    this.player = player;
+    player.on("stateChange", (oldState, newState) => {
       console.log(`[DriverBot] player state: ${oldState.status} → ${newState.status}`);
     });
-    this.player.on("error", (err) => {
+    player.on("error", (err) => {
       console.error(`[DriverBot] player error:`, err);
     });
-    this.connection.subscribe(this.player);
+    this.connection.subscribe(player);
 
     const resource = createAudioResource(audioPath);
-    this.player.play(resource);
+    player.play(resource);
 
-    return waitForEvent(this.player, AudioPlayerStatus.Idle, 30_000);
+    return waitForEvent(player, AudioPlayerStatus.Idle, 30_000);
+  }
+
+  async playAudio(audioPath: string): Promise<void> {
+    await this.playAudioNonBlocking(audioPath);
   }
 
   getReceivedAudioBytes(): number {
@@ -176,6 +191,18 @@ export class DriverBot {
 
   clearReceivedAudio(): void {
     this.receivedAudioChunks = [];
+  }
+
+  isSystemBotSpeaking(): boolean {
+    return this.systemBotSpeaking;
+  }
+
+  getLastSystemBotSpeakingStartAt(): number {
+    return this.lastSystemBotSpeakingStartAt;
+  }
+
+  getLastSystemBotSpeakingEndAt(): number {
+    return this.lastSystemBotSpeakingEndAt;
   }
 
   // --- Text Channel Helpers (Future Extension) ---
@@ -397,6 +424,34 @@ export class DriverBot {
     return false;
   }
 
+  async waitForReceivedAudioBytes(minBytes: number, timeoutMs = 10_000, pollMs = 100): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    const threshold = Math.max(1, Number(minBytes || 1));
+    while (Date.now() < deadline) {
+      if (this.getReceivedAudioBytes() >= threshold) return true;
+      await new Promise((r) => setTimeout(r, pollMs));
+    }
+    return false;
+  }
+
+  async waitForSystemBotSpeakingStart(timeoutMs = 10_000, pollMs = 100): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (this.systemBotSpeaking || this.lastSystemBotSpeakingStartAt > 0) return true;
+      await new Promise((r) => setTimeout(r, pollMs));
+    }
+    return false;
+  }
+
+  async waitForSystemBotSpeakingStop(timeoutMs = 10_000, pollMs = 100): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (!this.systemBotSpeaking && this.lastSystemBotSpeakingEndAt > 0) return true;
+      await new Promise((r) => setTimeout(r, pollMs));
+    }
+    return false;
+  }
+
   async disconnect(): Promise<void> {
     if (this.connection && this.connection.state.status !== "destroyed") {
       this.connection.destroy();
@@ -405,6 +460,9 @@ export class DriverBot {
     this.player?.stop();
     this.player = null;
     this.subscribedToSystemBot = false;
+    this.systemBotSpeaking = false;
+    this.lastSystemBotSpeakingStartAt = 0;
+    this.lastSystemBotSpeakingEndAt = 0;
   }
 
   async destroy(): Promise<void> {

@@ -10,6 +10,7 @@ import {
   generatePcmAudioFixture,
   restoreTemporaryE2ESettings
 } from "./driver/index.ts";
+import { RECENT_ENGAGEMENT_WINDOW_MS } from "../../src/voice/voiceSessionManager.constants.ts";
 
 function envNumber(name: string, defaultValue: number): number {
   const value = env[name];
@@ -427,5 +428,248 @@ describe("E2E: Voice Dialogue (Two Speakers)", () => {
       );
     },
     DEFAULT_TIMEOUT_MS
+  );
+
+  // ----------------------------------------------------------------
+  // Conversational follow-up tests — engagement window behavior
+  // ----------------------------------------------------------------
+
+  test(
+    "Dialogue: Same speaker follows up without wake word — bot responds within engagement window",
+    async () => {
+      if (!hasDialogueE2EConfig()) return;
+
+      const responseWaitMs = envNumber("E2E_RESPONSE_WAIT_MS", 12_000);
+
+      const addressFixture = await ensureFixture(
+        "dialogue_a_followup_address",
+        "Hey clanker, how's it going?"
+      );
+      const followupFixture = await ensureFixture(
+        "dialogue_a_followup_casual",
+        "Yo, what's up man? What have you been up to?"
+      );
+
+      driverA.clearReceivedAudio();
+      driverB.clearReceivedAudio();
+
+      // Step 1: Speaker A addresses the bot by name to establish engagement
+      console.log("[Dialogue] Speaker A addressing bot to establish engagement...");
+      await driverA.playAudio(addressFixture);
+      await new Promise((r) => setTimeout(r, responseWaitMs));
+
+      const initialBytes = driverA.getReceivedAudioBytes();
+      console.log(`[Dialogue] Bot responded to initial address: ${initialBytes} bytes`);
+      assert.ok(
+        initialBytes > 0,
+        "Bot must respond to the initial direct address to establish engagement"
+      );
+
+      // Step 2: Wait for the bot to finish speaking, then follow up WITHOUT
+      // using the wake word — still within the engagement window.
+      // Use a pause that's clearly within RECENT_ENGAGEMENT_WINDOW_MS.
+      const followupDelayMs = Math.min(5_000, Math.floor(RECENT_ENGAGEMENT_WINDOW_MS * 0.4));
+      console.log(`[Dialogue] Waiting ${followupDelayMs}ms before casual follow-up (engagement window: ${RECENT_ENGAGEMENT_WINDOW_MS}ms)...`);
+      await new Promise((r) => setTimeout(r, followupDelayMs));
+
+      driverA.clearReceivedAudio();
+
+      // Speaker A follows up casually — no bot name, just continuing the conversation
+      console.log("[Dialogue] Speaker A following up without wake word...");
+      await driverA.playAudio(followupFixture);
+
+      console.log(`[Dialogue] Waiting ${responseWaitMs}ms for bot response to follow-up...`);
+      await new Promise((r) => setTimeout(r, responseWaitMs));
+
+      const followupBytes = driverA.getReceivedAudioBytes();
+      console.log(`[Dialogue] Bot response to follow-up: ${followupBytes} bytes`);
+
+      assert.ok(
+        followupBytes > 0,
+        `Bot should respond to a casual follow-up within the engagement window (${RECENT_ENGAGEMENT_WINDOW_MS}ms) without requiring the wake word, but got ${followupBytes} bytes`
+      );
+    },
+    DEFAULT_TIMEOUT_MS
+  );
+
+  test(
+    "Dialogue: Speaker A addresses bot, Speaker B follows up — bot responds to B within engagement window",
+    async () => {
+      if (!hasDialogueE2EConfig()) return;
+
+      const responseWaitMs = envNumber("E2E_RESPONSE_WAIT_MS", 12_000);
+
+      const addressFixture = await ensureFixture(
+        "dialogue_a_multiuser_address",
+        "Hey clanker, tell us a fun fact."
+      );
+      const followupFixture = await ensureFixture(
+        "dialogue_b_multiuser_followup",
+        "Oh that's cool, do you know any more like that?"
+      );
+
+      driverA.clearReceivedAudio();
+      driverB.clearReceivedAudio();
+
+      // Step 1: Speaker A addresses the bot
+      console.log("[Dialogue] Speaker A addressing bot...");
+      await driverA.playAudio(addressFixture);
+      await new Promise((r) => setTimeout(r, responseWaitMs));
+
+      const initialBytes = driverA.getReceivedAudioBytes();
+      console.log(`[Dialogue] Bot responded to Speaker A: ${initialBytes} bytes`);
+      assert.ok(
+        initialBytes > 0,
+        "Bot must respond to Speaker A's direct address"
+      );
+
+      // Step 2: Speaker B follows up naturally — this is a continuation of the
+      // same group conversation, no intervening side chatter.
+      const followupDelayMs = Math.min(5_000, Math.floor(RECENT_ENGAGEMENT_WINDOW_MS * 0.4));
+      console.log(`[Dialogue] Waiting ${followupDelayMs}ms before Speaker B follow-up...`);
+      await new Promise((r) => setTimeout(r, followupDelayMs));
+
+      driverA.clearReceivedAudio();
+      driverB.clearReceivedAudio();
+
+      console.log("[Dialogue] Speaker B following up without wake word...");
+      await driverB.playAudio(followupFixture);
+
+      console.log(`[Dialogue] Waiting ${responseWaitMs}ms for bot response to Speaker B...`);
+      await new Promise((r) => setTimeout(r, responseWaitMs));
+
+      const followupBytesA = driverA.getReceivedAudioBytes();
+      const followupBytesB = driverB.getReceivedAudioBytes();
+      const totalFollowupBytes = followupBytesA + followupBytesB;
+      console.log(`[Dialogue] Bot response to Speaker B follow-up: driverA=${followupBytesA}, driverB=${followupBytesB}`);
+
+      assert.ok(
+        totalFollowupBytes > 0,
+        `Bot should respond to Speaker B's follow-up within the engagement window without requiring the wake word, but got ${totalFollowupBytes} bytes total`
+      );
+    },
+    DEFAULT_TIMEOUT_MS
+  );
+
+  test(
+    "Dialogue: Two speakers have side conversation after bot responds — bot stays silent",
+    async () => {
+      if (!hasDialogueE2EConfig()) return;
+
+      const responseWaitMs = envNumber("E2E_RESPONSE_WAIT_MS", 12_000);
+
+      const addressFixture = await ensureFixture(
+        "dialogue_a_side_conv_address",
+        "Clanker, what time is it?"
+      );
+      const sideA = await ensureFixture(
+        "dialogue_a_side_conv_pivot",
+        "Anyway dude, you wanna grab food after this?"
+      );
+      const sideB = await ensureFixture(
+        "dialogue_b_side_conv_reply",
+        "Yeah I'm starving, let's hit that taco place."
+      );
+
+      driverA.clearReceivedAudio();
+
+      // Step 1: Address the bot to establish engagement
+      console.log("[Dialogue] Speaker A addressing bot...");
+      await driverA.playAudio(addressFixture);
+      await new Promise((r) => setTimeout(r, responseWaitMs));
+
+      assert.ok(
+        driverA.getReceivedAudioBytes() > 0,
+        "Bot must respond to the direct address"
+      );
+
+      // Step 2: Both speakers start a side conversation with each other.
+      // The conversation is clearly between them (A asks B, B answers A).
+      // Bot should recognize this is not directed at it.
+      const sideDelayMs = Math.min(4_000, Math.floor(RECENT_ENGAGEMENT_WINDOW_MS * 0.3));
+      await new Promise((r) => setTimeout(r, sideDelayMs));
+
+      driverA.clearReceivedAudio();
+      driverB.clearReceivedAudio();
+
+      console.log("[Dialogue] Speakers pivot to side conversation...");
+      await driverA.playAudio(sideA);
+      await new Promise((r) => setTimeout(r, 1_200));
+      await driverB.playAudio(sideB);
+
+      console.log(`[Dialogue] Waiting ${SILENCE_WINDOW_MS}ms for bot silence during side conversation...`);
+      await new Promise((r) => setTimeout(r, SILENCE_WINDOW_MS));
+
+      const bytesA = driverA.getReceivedAudioBytes();
+      const bytesB = driverB.getReceivedAudioBytes();
+      console.log(`[Dialogue] Side conversation — driverA: ${bytesA} bytes, driverB: ${bytesB} bytes`);
+
+      assert.strictEqual(
+        bytesA,
+        0,
+        `Bot should stay silent when speakers pivot to side conversation, but driverA got ${bytesA} bytes`
+      );
+      assert.strictEqual(
+        bytesB,
+        0,
+        `Bot should stay silent when speakers pivot to side conversation, but driverB got ${bytesB} bytes`
+      );
+    },
+    DEFAULT_TIMEOUT_MS
+  );
+
+  test(
+    "Dialogue: Follow-up beyond engagement window — bot stays silent",
+    async () => {
+      if (!hasDialogueE2EConfig()) return;
+
+      const responseWaitMs = envNumber("E2E_RESPONSE_WAIT_MS", 12_000);
+
+      const addressFixture = await ensureFixture(
+        "dialogue_a_stale_address",
+        "Hey clanker, quick question, what's two plus two?"
+      );
+      const staleFollowup = await ensureFixture(
+        "dialogue_a_stale_followup",
+        "Oh wait, one more thing, never mind."
+      );
+
+      driverA.clearReceivedAudio();
+
+      // Step 1: Address the bot
+      console.log("[Dialogue] Speaker A addressing bot...");
+      await driverA.playAudio(addressFixture);
+      await new Promise((r) => setTimeout(r, responseWaitMs));
+
+      assert.ok(
+        driverA.getReceivedAudioBytes() > 0,
+        "Bot must respond to the direct address"
+      );
+
+      // Step 2: Wait BEYOND the engagement window, then try a casual follow-up.
+      // Add a safety margin so we're clearly past the window.
+      const staleDelayMs = RECENT_ENGAGEMENT_WINDOW_MS + 8_000;
+      console.log(`[Dialogue] Waiting ${staleDelayMs}ms to expire engagement window (${RECENT_ENGAGEMENT_WINDOW_MS}ms)...`);
+      await new Promise((r) => setTimeout(r, staleDelayMs));
+
+      driverA.clearReceivedAudio();
+
+      console.log("[Dialogue] Speaker A attempting stale follow-up...");
+      await driverA.playAudio(staleFollowup);
+
+      console.log(`[Dialogue] Waiting ${SILENCE_WINDOW_MS}ms for bot silence...`);
+      await new Promise((r) => setTimeout(r, SILENCE_WINDOW_MS));
+
+      const staleBytes = driverA.getReceivedAudioBytes();
+      console.log(`[Dialogue] Bot response to stale follow-up: ${staleBytes} bytes`);
+
+      assert.strictEqual(
+        staleBytes,
+        0,
+        `Bot should stay silent for a casual follow-up beyond the engagement window (${RECENT_ENGAGEMENT_WINDOW_MS}ms), but got ${staleBytes} bytes`
+      );
+    },
+    // This test needs extra time because it deliberately waits past the engagement window
+    DEFAULT_TIMEOUT_MS + RECENT_ENGAGEMENT_WINDOW_MS + 15_000
   );
 });

@@ -97,7 +97,15 @@ async function resolvePromptMemorySlice({
     source
   })
     .then((slice) => normalizePromptMemorySlice(slice))
-    .catch(() => empty);
+    .catch((error) => {
+      console.error("[conversationContinuity] prompt memory slice failed:", error, {
+        guildId,
+        channelId,
+        userId,
+        source
+      });
+      return empty;
+    });
 
   const boundedTimeoutMs = Math.max(0, Math.floor(Number(memoryTimeoutMs) || 0));
   if (!boundedTimeoutMs) {

@@ -396,7 +396,21 @@ export class ScreenShareSessionManager {
           targetUserId: session.targetUserId,
           settings,
           reason: String(reason || "stopped_by_user")
-        }).catch(() => null)
+        }).catch((error) => {
+          this.store.logAction({
+            kind: "voice_error",
+            guildId: session.guildId,
+            channelId: session.channelId,
+            userId: session.requesterUserId,
+            content: `screen_share_voice_watch_stop_failed: ${String(error instanceof Error ? error.message : error)}`,
+            metadata: {
+              tokenSuffix: String(session.token || "").slice(-8),
+              reason: String(reason || "stopped_by_user").slice(0, 80),
+              targetUserId: session.targetUserId || null
+            }
+          });
+          return null;
+        })
       : null;
     this.store.logAction({
       kind: "voice_runtime",
