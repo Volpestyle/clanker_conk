@@ -546,17 +546,17 @@ function resolveDefaults(options: VoiceGoldenHarnessOptions = {}): VoiceGoldenRe
     mode: normalizeMode(options.mode),
     modes: requestedModes.length ? requestedModes : [...VOICE_GOLDEN_MODES],
     iterations: Math.max(1, Math.floor(Number(options.iterations) || 1)),
-    actorProvider: String(options.actorProvider || "claude-code").trim() || "claude-code",
-    actorModel: String(options.actorModel || "sonnet").trim() || "sonnet",
-    deciderProvider: String(options.deciderProvider || "claude-code").trim() || "claude-code",
-    deciderModel: String(options.deciderModel || "sonnet").trim() || "sonnet",
+    actorProvider: String(options.actorProvider || "claude-oauth").trim() || "claude-oauth",
+    actorModel: String(options.actorModel || "claude-sonnet-4-5").trim() || "claude-sonnet-4-5",
+    deciderProvider: String(options.deciderProvider || "claude-oauth").trim() || "claude-oauth",
+    deciderModel: String(options.deciderModel || "claude-haiku-4-5").trim() || "claude-haiku-4-5",
     judge: {
       enabled:
         options.judge?.enabled !== undefined
           ? Boolean(options.judge.enabled)
           : true,
-      provider: String(options.judge?.provider || "claude-code").trim() || "claude-code",
-      model: String(options.judge?.model || "sonnet").trim() || "sonnet"
+      provider: String(options.judge?.provider || "claude-oauth").trim() || "claude-oauth",
+      model: String(options.judge?.model || "claude-haiku-4-5").trim() || "claude-haiku-4-5"
     },
     allowMissingCredentials: parseBooleanFlag(options.allowMissingCredentials, false),
     maxCases: Math.max(1, Math.min(VOICE_GOLDEN_CASES.length, Math.floor(Number(options.maxCases) || DEFAULT_MAX_CASES)))
@@ -1107,7 +1107,7 @@ function hasProviderCredentials(provider: string) {
   if (normalized === "openai") return Boolean(appConfig.openaiApiKey);
   if (normalized === "anthropic") return Boolean(appConfig.anthropicApiKey);
   if (normalized === "xai") return Boolean(appConfig.xaiApiKey);
-  if (normalized === "claude-code") return true;
+  if (normalized === "claude-oauth") return true;
   return false;
 }
 

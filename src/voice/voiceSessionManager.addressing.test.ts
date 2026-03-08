@@ -954,12 +954,12 @@ test("reply decider lets generation decide even when generate would throw", asyn
   assert.equal(callCount, 0);
 });
 
-test("reply decider lets generation decide without calling classifier for claude-code provider", async () => {
+test("reply decider lets generation decide without calling classifier for stt_pipeline mode", async () => {
   let callCount = 0;
   const manager = createManager({
     generate: async () => {
       callCount += 1;
-      return { text: '{"decision":"YES"}', provider: "claude-code", model: "haiku" };
+      return { text: '{"decision":"YES"}', provider: "anthropic", model: "claude-haiku-4-5" };
     }
   });
   const decision = await manager.evaluateVoiceReplyDecision({
@@ -975,8 +975,8 @@ test("reply decider lets generation decide without calling classifier for claude
       voice: {
         replyEagerness: 60,
         replyDecisionLlm: {
-          provider: "claude-code",
-          model: "haiku"
+          provider: "anthropic",
+          model: "claude-haiku-4-5"
         }
       }
     }),
@@ -1010,8 +1010,8 @@ test("reply decider in stt pipeline lets generation decide without calling class
     userId: "speaker-1",
     settings: baseSettings({
       llm: {
-        provider: "claude-code",
-        model: "sonnet"
+        provider: "claude-oauth",
+        model: "claude-sonnet-4-5"
       },
       voice: {
         replyEagerness: 60,
@@ -1050,8 +1050,8 @@ test("reply decider lets generation decide without calling classifier for gpt-5 
     userId: "speaker-1",
     settings: baseSettings({
       llm: {
-        provider: "claude-code",
-        model: "sonnet"
+        provider: "claude-oauth",
+        model: "claude-sonnet-4-5"
       },
       voice: {
         replyEagerness: 60,

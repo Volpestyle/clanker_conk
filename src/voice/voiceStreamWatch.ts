@@ -452,10 +452,6 @@ export function resolveStreamWatchVisionProviderSettings(manager: StreamWatchMan
     {
       provider: "xai",
       model: "grok-2-vision-latest"
-    },
-    {
-      provider: "claude-code",
-      model: "sonnet"
     }
   ];
   const anthropicProviders = new Set(["claude-oauth", "anthropic"]);

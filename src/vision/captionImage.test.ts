@@ -39,13 +39,12 @@ describe("resolveVisionProviderSettings", () => {
         assert.equal(result.model, "grok-2-vision-latest");
     });
 
-    test("falls back to claude-code when anthropic and xai are not configured", () => {
+    test("returns null when no vision providers are configured", () => {
         const llm = {
-            isProviderConfigured: (provider) => provider === "claude-code"
+            isProviderConfigured: () => false
         };
         const result = resolveVisionProviderSettings(llm);
-        assert.equal(result.provider, "claude-code");
-        assert.equal(result.model, "sonnet");
+        assert.equal(result, null);
     });
 
     test("uses explicit vision settings when configured", () => {

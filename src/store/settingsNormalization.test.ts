@@ -525,48 +525,6 @@ test("normalizeSettings preserves supported reflection strategies and defaults i
   assert.equal(invalid.memory.reflection.strategy, "two_pass_extract_then_main");
 });
 
-test("normalizeSettings keeps legacy stt-pipeline generation and admission classifier independent from main llm", () => {
-  const normalized = normalizeLegacyView({
-    llm: {
-      provider: "claude-code",
-      model: "opus"
-    },
-    voice: {
-      mode: "stt_pipeline",
-      generationLlm: {
-        useTextModel: false,
-        provider: "openai",
-        model: "claude-haiku-4-5"
-      },
-      replyDecisionLlm: {
-        provider: "openai",
-        model: "claude-haiku-4-5",
-        reasoningEffort: "not-real"
-      }
-    }
-  });
-
-  const generation = normalized.agentStack.runtimeConfig.voice.generation as {
-    mode: string;
-    model?: { provider: string; model: string };
-  };
-  const classifier = normalized.agentStack.overrides.voiceAdmissionClassifier as {
-    mode: string;
-    model?: { provider: string; model: string };
-  };
-  assert.equal(normalized.agentStack.runtimeConfig.voice.runtimeMode, "stt_pipeline");
-  assert.equal(generation.mode, "dedicated_model");
-  assert.deepEqual(generation.model, {
-    provider: "openai",
-    model: "claude-haiku-4-5"
-  });
-  assert.equal(classifier.mode, "dedicated_model");
-  assert.deepEqual(classifier.model, {
-    provider: "openai",
-    model: "claude-haiku-4-5"
-  });
-});
-
 test("normalizeSettings drops removed replyDecisionLlm prompts and migrates enabled false to generation_decides", () => {
   const normalized = normalizeLegacyView({
     voice: {

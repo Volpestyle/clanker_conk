@@ -35,9 +35,9 @@ interface CodeAgentTrace {
   source?: string | null;
 }
 
-export type CodeAgentProvider = "codex" | "codex-cli" | "auto";
+export type CodeAgentProvider = "codex" | "codex-cli" | "claude-code" | "auto";
 
-const CODE_AGENT_PROVIDER_VALUES = new Set<CodeAgentProvider>(["codex", "codex-cli", "auto"]);
+const CODE_AGENT_PROVIDER_VALUES = new Set<CodeAgentProvider>(["codex", "codex-cli", "claude-code", "auto"]);
 
 function normalizeCodeAgentProvider(value: unknown, fallback: CodeAgentProvider = "codex-cli"): CodeAgentProvider {
   const normalized = String(value || "")
@@ -49,6 +49,7 @@ function normalizeCodeAgentProvider(value: unknown, fallback: CodeAgentProvider 
 
 function resolveEffectiveCodeAgentProvider(provider: CodeAgentProvider): Exclude<CodeAgentProvider, "auto"> {
   if (provider === "codex") return "codex";
+  if (provider === "claude-code") return "claude-code";
   return "codex-cli";
 }
 
@@ -585,6 +586,7 @@ export function createCodeAgentSession(options: CreateCodeAgentSessionOptions): 
     });
   }
 
+  // claude-code: persistent multi-turn session via Claude CLI
   return new CodeAgentSession({
     scopeKey,
     cwd,

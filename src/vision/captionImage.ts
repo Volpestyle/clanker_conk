@@ -22,8 +22,7 @@ const IMAGE_FETCH_MAX_BYTES = 10 * 1024 * 1024; // 10 MB
 
 const VISION_PROVIDER_CANDIDATES = [
     { provider: "anthropic", model: "claude-haiku-4-5" },
-    { provider: "xai", model: "grok-2-vision-latest" },
-    { provider: "claude-code", model: "sonnet" }
+    { provider: "xai", model: "grok-2-vision-latest" }
 ];
 
 /**

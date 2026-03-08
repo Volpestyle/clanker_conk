@@ -1,4 +1,3 @@
-const CLAUDE_CODE_MODELS = new Set(["sonnet", "opus", "haiku"]);
 export const MEMORY_FACT_TYPES = ["preference", "profile", "relationship", "project", "other"];
 export const MEMORY_FACT_SUBJECTS = ["author", "bot", "lore"];
 const XAI_DEFAULT_BASE_URL = "https://api.x.ai/v1";
@@ -235,14 +234,6 @@ export function normalizeDefaultModel(value, fallback) {
   const normalized = String(value || "").trim();
   if (normalized) return normalized.slice(0, 120);
   return String(fallback || "").trim().slice(0, 120);
-}
-
-export function normalizeClaudeCodeModel(value) {
-  const normalized = String(value || "")
-    .trim()
-    .toLowerCase();
-  if (!normalized) return "";
-  return CLAUDE_CODE_MODELS.has(normalized) ? normalized : "";
 }
 
 export function inferProviderFromModel(model) {
