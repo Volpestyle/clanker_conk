@@ -166,11 +166,14 @@ Agent-based model. Uses signed URL auth (`fetchSignedUrl`). Audio sent as `user_
 |---|---|---|
 | Capture → Client | Forward raw PCM (native path) | `realtimeClient.appendInputAudioPcm()` |
 | Capture → Client | Forward labeled transcript (bridge path) | `realtimeClient.requestTextUtterance()` |
+| Reply Pipeline → Client | Play pre-generated exact-line speech | `requestRealtimeTextUtterance()` → provider playback method (`requestPlaybackUtterance()` on OpenAI) |
 | Client → Output SM | Audio delta, response lifecycle events | `syncAssistantOutputState()` |
 | Client → Barge-In | Cancel active response | `realtimeClient.cancelActiveResponse()`, `realtimeClient.truncateConversationItem()` |
 | Client → Tool Dispatch | Function call events | `handleOpenAiRealtimeFunctionCallEvent()` |
 | Client → Subprocess | Audio for Discord playback | `voxClient.appendTtsAudio()` |
 | Instruction Mgr → Client | Updated instructions/tools | `realtimeClient.updateInstructions()`, `session.update` with tools |
+
+OpenAI intentionally separates these two text paths. Forwarded user transcripts use the normal conversation item + response flow so the realtime brain can reason over conversation state and call tools. Exact-line playback for already-generated bot speech uses an out-of-band audio response with tools disabled so playback does not re-enter the tool loop or duplicate upstream work.
 
 ## 9. Incident Debugging
 

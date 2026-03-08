@@ -1417,7 +1417,10 @@ export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchMana
     if (!forceAnthropicKeyframes && typeof realtimeClient.requestVideoCommentary === "function") {
       realtimeClient.requestVideoCommentary(nativePrompt);
       commentaryPathUsed = "provider_native_video";
-    } else if (typeof realtimeClient.requestTextUtterance === "function") {
+    } else if (
+      typeof realtimeClient.requestPlaybackUtterance === "function" ||
+      typeof realtimeClient.requestTextUtterance === "function"
+    ) {
       const bufferedFrame = String(session.streamWatch?.latestFrameDataBase64 || "").trim();
       if (!bufferedFrame) return;
       const generated = await generateVisionFallbackStreamWatchCommentary(manager, {
@@ -1430,7 +1433,11 @@ export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchMana
       const line = normalizeVoiceText(generated?.text || "", STREAM_WATCH_COMMENTARY_LINE_MAX_CHARS);
       if (!line) return;
       const utterancePrompt = buildRealtimeTextUtterancePrompt(line, STREAM_WATCH_COMMENTARY_LINE_MAX_CHARS);
-      realtimeClient.requestTextUtterance(utterancePrompt);
+      const requestPlaybackUtterance =
+        typeof realtimeClient.requestPlaybackUtterance === "function"
+          ? realtimeClient.requestPlaybackUtterance.bind(realtimeClient)
+          : realtimeClient.requestTextUtterance.bind(realtimeClient);
+      requestPlaybackUtterance(utterancePrompt);
       commentaryPathUsed = "vision_fallback_text_utterance";
       visionMeta = {
         provider: generated?.provider || null,

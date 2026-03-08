@@ -2548,7 +2548,13 @@ export class VoiceSessionManager {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
     const realtimeClient = session.realtimeClient;
-    if (!realtimeClient || typeof realtimeClient.requestTextUtterance !== "function") return false;
+    const requestPlaybackUtterance =
+      typeof realtimeClient?.requestPlaybackUtterance === "function"
+        ? realtimeClient.requestPlaybackUtterance.bind(realtimeClient)
+        : typeof realtimeClient?.requestTextUtterance === "function"
+          ? realtimeClient.requestTextUtterance.bind(realtimeClient)
+          : null;
+    if (!requestPlaybackUtterance) return false;
 
     const normalizedInterruptionPolicy = this.normalizeReplyInterruptionPolicy(interruptionPolicy);
     const normalizedUtteranceText =
@@ -2557,7 +2563,7 @@ export class VoiceSessionManager {
         : normalizeVoiceText(String(utteranceText || ""), STT_REPLY_MAX_CHARS) || null;
 
     try {
-      realtimeClient.requestTextUtterance(prompt);
+      requestPlaybackUtterance(prompt);
       this.replyManager.createTrackedAudioResponse({
         session,
         userId: userId || this.client.user?.id || null,
@@ -2603,7 +2609,15 @@ export class VoiceSessionManager {
     if (!session || session.ending) return false;
     if (!isRealtimeMode(session.mode)) return false;
     const realtimeClient = session.realtimeClient;
-    if (!realtimeClient || typeof realtimeClient.requestTextUtterance !== "function") return false;
+    if (
+      !realtimeClient ||
+      (
+        typeof realtimeClient.requestPlaybackUtterance !== "function" &&
+        typeof realtimeClient.requestTextUtterance !== "function"
+      )
+    ) {
+      return false;
+    }
 
     const utterancePrompt = String(prompt || "")
       .replace(/\s+/g, " ")

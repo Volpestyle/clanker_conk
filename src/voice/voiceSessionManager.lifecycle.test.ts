@@ -1710,6 +1710,36 @@ test("requestRealtimeTextUtterance queues assistant speech behind an active real
   assert.equal(logs.some((entry) => entry?.content === "realtime_assistant_utterance_queued"), true);
 });
 
+test("requestRealtimeTextUtterance prefers playback-specific realtime client method when available", () => {
+  const { manager } = createManager();
+  const textPrompts = [];
+  const playbackPrompts = [];
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeClient: {
+      requestTextUtterance(prompt) {
+        textPrompts.push(prompt);
+      },
+      requestPlaybackUtterance(prompt) {
+        playbackPrompts.push(prompt);
+      },
+      isResponseInProgress() {
+        return false;
+      }
+    }
+  });
+
+  const requested = manager.requestRealtimeTextUtterance({
+    session,
+    text: "Say less, let me pull that up real quick.",
+    source: "voice_web_lookup:busy_utterance"
+  });
+
+  assert.equal(requested, true);
+  assert.deepEqual(textPrompts, []);
+  assert.equal(playbackPrompts.length, 1);
+});
+
 test("handleResponseDone drains queued assistant speech after realtime audio completes", () => {
   const { manager, logs } = createManager();
   const prompts = [];

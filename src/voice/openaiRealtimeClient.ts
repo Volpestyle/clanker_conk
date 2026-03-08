@@ -464,6 +464,25 @@ export class OpenAiRealtimeClient extends EventEmitter {
   requestTextUtterance(promptText) {
     const prompt = String(promptText || "").trim();
     if (!prompt) return;
+    this.send({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: prompt
+          }
+        ]
+      }
+    });
+    this.createAudioResponse();
+  }
+
+  requestPlaybackUtterance(promptText) {
+    const prompt = String(promptText || "").trim();
+    if (!prompt) return;
     if (!this.activeResponseId) {
       this.setActiveResponse(`pending_${Date.now()}`, "in_progress");
     }

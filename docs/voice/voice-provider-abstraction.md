@@ -259,6 +259,8 @@ Code: `bindRealtimeHandlers()` in `voiceSessionManager.ts`, dispatch in `src/voi
 
 The realtime provider streams audio deltas. PCM 24kHz is upsampled to 48kHz, encoded to Opus, and sent to Discord.
 
+When realtime sessions use the brain reply strategy, the brain LLM still generates the reply text, but delivery can stay on this realtime output transport. On OpenAI, exact-line playback is sent as an out-of-band audio response with tools disabled so upstream-generated speech does not trigger a second tool/reasoning pass.
+
 #### TTS API (stt_pipeline mode)
 
 Text response is sent to TTS API for synthesis in non-realtime `stt_pipeline` mode. Output is played via `playVoiceReplyInOrder()`.

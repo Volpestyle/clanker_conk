@@ -98,6 +98,8 @@ Labeled transcript `(speakerName): text` sent to realtime provider. Cancels any 
 
 The unified pipeline: generate text via LLM, build playback plan, play via realtime TTS or API TTS. See `voice-provider-abstraction.md` §3 for detailed stage description.
 
+In realtime sessions, this path can still deliver speech through the realtime client even when settings-level `voice.replyPath` is `"brain"`. Here `mode: "bridge"` means "use realtime output transport for pre-generated text", not "use the transcript-to-realtime brain path above". On OpenAI, these exact-line playback requests are sent out-of-band with tools disabled so pre-generated speech cannot start a second tool/reasoning loop.
+
 ## 5. Deferred Turn System
 
 When a turn is denied with reason `"bot_turn_open"` (output channel busy), it is **deferred** rather than dropped.

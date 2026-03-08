@@ -209,7 +209,27 @@ test("OpenAiRealtimeClient stream-watch commentary requires a buffered frame", (
   );
 });
 
-test("OpenAiRealtimeClient requestTextUtterance sends an out-of-band tool-free audio response", () => {
+test("OpenAiRealtimeClient requestTextUtterance adds a user message and creates a normal audio response", () => {
+  const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
+  const outbound = [];
+  client.send = (payload) => {
+    outbound.push(payload);
+  };
+
+  client.requestTextUtterance("(speaker): where's Wendy's?");
+
+  assert.equal(outbound.length, 2);
+  assert.equal(outbound[0]?.type, "conversation.item.create");
+  assert.equal(outbound[0]?.item?.type, "message");
+  assert.equal(outbound[0]?.item?.role, "user");
+  assert.equal(outbound[0]?.item?.content?.[0]?.type, "input_text");
+  assert.equal(outbound[0]?.item?.content?.[0]?.text, "(speaker): where's Wendy's?");
+  assert.equal(outbound[1]?.type, "response.create");
+  assert.deepEqual(outbound[1]?.response?.output_modalities, ["audio"]);
+  assert.equal(client.isResponseInProgress(), true);
+});
+
+test("OpenAiRealtimeClient requestPlaybackUtterance sends an out-of-band tool-free audio response", () => {
   const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
   const outbound = [];
   client.send = (payload) => {
@@ -241,7 +261,7 @@ test("OpenAiRealtimeClient requestTextUtterance sends an out-of-band tool-free a
     toolChoice: "auto"
   };
 
-  client.requestTextUtterance("Speak this exact line.");
+  client.requestPlaybackUtterance("Speak this exact line.");
 
   assert.equal(outbound.length, 1);
   assert.equal(outbound[0]?.type, "response.create");
