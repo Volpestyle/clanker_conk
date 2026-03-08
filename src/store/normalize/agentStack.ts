@@ -1,4 +1,4 @@
-import { normalizeProviderOrder } from "../../services/search.ts";
+import { normalizeProviderOrder } from "./primitives.ts";
 import {
   DEFAULT_SETTINGS,
   type Settings,

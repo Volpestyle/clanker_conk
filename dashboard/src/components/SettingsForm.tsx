@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { resetSettings } from "../api";
+import { api, resetSettings } from "../api";
 import {
   GEMINI_REALTIME_MODEL_OPTIONS,
   OPENAI_REALTIME_MODEL_OPTIONS,
   OPENAI_REALTIME_VOICE_OPTIONS,
   OPENAI_TRANSCRIPTION_MODEL_OPTIONS,
   XAI_VOICE_OPTIONS,
-  applyStackPreset,
+  applyStackPresetDefaults,
   formToSettingsPatch,
   getCodeAgentValidationError,
   resolveBrowserProviderModelOptions,
@@ -34,7 +34,6 @@ import { StartupCatchupSettingsSection } from "./settingsSections/StartupCatchup
 import { DiscoverySettingsSection } from "./settingsSections/DiscoverySettingsSection";
 import { ChannelsPermissionsSettingsSection } from "./settingsSections/ChannelsPermissionsSettingsSection";
 import { SubAgentOrchestrationSettingsSection } from "./settingsSections/SubAgentOrchestrationSettingsSection";
-import { resolveAgentStack } from "../../../src/settings/agentStack.ts";
 
 function formatCapabilityPolicy(policy) {
   if (!policy || policy.mode !== "dedicated_model") {
@@ -103,7 +102,33 @@ export default function SettingsForm({
     return JSON.stringify(form) !== savedFormRef.current;
   }, [form]);
 
-  const resolvedStack = useMemo(() => resolveAgentStack(formToSettingsPatch(effectiveForm)), [effectiveForm]);
+  type ResolvedStack = {
+    harness: string;
+    orchestrator: { provider: string; model: string };
+    researchRuntime: string;
+    browserRuntime: string;
+    voiceRuntime: string;
+    voiceAdmissionPolicy: { mode: string };
+    sessionPolicy: unknown;
+    devTeam: {
+      orchestrator: { provider: string; model: string };
+      roles: Record<string, unknown>;
+      codingWorkers: string[];
+    };
+  };
+  const resolvedStack = useMemo((): ResolvedStack => {
+    const r = (settings as Record<string, unknown>)?._resolved as Record<string, unknown> | undefined;
+    return (r?.agentStack || {
+      harness: "",
+      orchestrator: { provider: effectiveForm.provider, model: effectiveForm.model },
+      researchRuntime: "",
+      browserRuntime: "",
+      voiceRuntime: "",
+      voiceAdmissionPolicy: { mode: "" },
+      sessionPolicy: null,
+      devTeam: { orchestrator: { provider: "", model: "" }, roles: {}, codingWorkers: [] }
+    }) as ResolvedStack;
+  }, [settings, effectiveForm.provider, effectiveForm.model]);
   const codeAgentValidationError = useMemo(() => getCodeAgentValidationError(effectiveForm), [effectiveForm]);
 
   function resolvePresetSelection(providerField, modelField) {
@@ -238,13 +263,21 @@ export default function SettingsForm({
   if (!form) return null;
 
   function set(key) {
-    return (e) => setForm((current) => {
+    return (e) => {
       const value = e.target.type === "checkbox" ? e.target.checked : e.target.value;
       if (key === "stackPreset") {
-        return applyStackPreset(current || defaultForm, String(value || "").trim());
+        const preset = String(value || "").trim();
+        setForm((current) => ({ ...(current || defaultForm), stackPreset: preset }));
+        api<Record<string, unknown>>("/api/settings/preset-defaults", {
+          method: "POST",
+          body: { preset }
+        }).then((defaults) => {
+          setForm((current) => applyStackPresetDefaults(current || defaultForm, defaults));
+        });
+        return;
       }
-      return { ...current, [key]: value };
-    });
+      setForm((current) => ({ ...current, [key]: value }));
+    };
   }
 
   function sanitizeBotNameAliases() {

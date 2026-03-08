@@ -1,10 +1,10 @@
 import {
   DEFAULT_SETTINGS,
+  MODEL_PROVIDER_KINDS,
   PROVIDER_MODEL_FALLBACKS,
+  type Settings,
   type SettingsInput
 } from "../../src/settings/settingsSchema.ts";
-import { normalizeSettings } from "../../src/store/settingsNormalization.ts";
-import { normalizeLlmProvider } from "../../src/llm/llmHelpers.ts";
 import {
   formatCommaList,
   formatLineList,
@@ -12,49 +12,48 @@ import {
   parseUniqueLineList,
   parseUniqueList
 } from "../../src/settings/listNormalization.ts";
-import {
-  getActivitySettings,
-  getAgentStackSettings,
-  getAutomationsSettings,
-  getBotName,
-  getBotNameAliases,
-  getBrowserRuntimeConfig,
-  getDevTaskPermissions,
-  getDevTeamRuntimeConfig,
-  getDirectiveSettings,
-  getDiscoverySettings,
-  getFollowupSettings,
-  getMemorySettings,
-  getPersonaSettings,
-  getPromptingSettings,
-  getReplyPermissions,
-  getResearchRuntimeConfig,
-  getResolvedFollowupBinding,
-  getResolvedMemoryBinding,
-  getResolvedOrchestratorBinding,
-  getResolvedVoiceProvider,
-  getResolvedVisionBinding,
-  getResolvedVoiceAdmissionClassifierBinding,
-  getResolvedVoiceGenerationBinding,
-  getResolvedVoiceInitiativeBinding,
-  getSessionOrchestrationSettings,
-  getStartupSettings,
-  getTextInitiativeSettings,
-  getVideoContextSettings,
-  getVisionSettings,
-  getVoiceAdmissionSettings,
-  getVoiceChannelPolicy,
-  getVoiceConversationPolicy,
-  getVoiceInitiativeSettings,
-  getVoiceRuntimeConfig,
-  getVoiceSessionLimits,
-  getVoiceSettings,
-  getVoiceSoundboardSettings,
-  getVoiceStreamWatchSettings,
-  getVoiceTranscriptionSettings,
-  resolveAgentStack
-} from "../../src/settings/agentStack.ts";
-import { resolveAgentStackPresetConfig } from "../../src/store/normalize/shared.ts";
+type ResolvedBindings = {
+  agentStack: {
+    preset: string;
+    harness: string;
+    orchestrator: { provider: string; model: string };
+    researchRuntime: string;
+    browserRuntime: string;
+    voiceRuntime: string;
+    voiceAdmissionPolicy: { mode: string; classifierProvider?: string; classifierModel?: string; musicWakeLatchSeconds?: number };
+    sessionPolicy: unknown;
+    devTeam: {
+      orchestrator: { provider: string; model: string };
+      roles: Record<string, unknown>;
+      codingWorkers: string[];
+    };
+  };
+  orchestrator: { provider: string; model: string; temperature?: number; maxOutputTokens?: number; reasoningEffort?: string };
+  followupBinding: { provider: string; model: string };
+  memoryBinding: { provider: string; model: string };
+  visionBinding: { provider: string; model: string };
+  voiceProvider: string;
+  voiceInitiativeBinding: { provider: string; model: string; temperature?: number };
+  voiceAdmissionClassifierBinding: { provider: string; model: string } | null;
+  voiceGenerationBinding: { provider: string; model: string };
+};
+
+const PROVIDER_SET = new Set<string>(MODEL_PROVIDER_KINDS);
+
+function normalizeLlmProvider(value: unknown, fallback = "openai"): string {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (PROVIDER_SET.has(normalized)) return normalized;
+  const fallbackNormalized = String(fallback || "").trim().toLowerCase();
+  if (PROVIDER_SET.has(fallbackNormalized)) return fallbackNormalized;
+  return "openai";
+}
+
+function getPresetClassifierFallback(preset: string): { provider: string; model: string } | undefined {
+  if (preset === "claude_oauth_local_tools") return { provider: "claude-oauth", model: "claude-haiku-4-5" };
+  if (preset === "anthropic_brain_openai_tools") return { provider: "anthropic", model: "claude-haiku-4-5" };
+  if (preset === "openai_native") return { provider: "openai", model: "gpt-5-mini" };
+  return undefined;
+}
 
 export const OPENAI_REALTIME_MODEL_OPTIONS = Object.freeze([
   "gpt-realtime",
@@ -105,54 +104,58 @@ export const BROWSER_PROVIDER_MODEL_FALLBACKS = Object.freeze({
   openai: ["gpt-5-mini"]
 });
 
+function section<T>(value: T | undefined, fallback: T): T {
+  return value !== undefined && value !== null ? value : fallback;
+}
+
 function buildSettingsFormView(settings: unknown) {
-  const source = settings || DEFAULT_SETTINGS;
-  const agentStack = getAgentStackSettings(source);
-  const prompting = getPromptingSettings(source);
-  const activity = getActivitySettings(source);
-  const permissions = getReplyPermissions(source);
-  const textThoughtLoop = getTextInitiativeSettings(source);
-  const memory = getMemorySettings(source);
-  const directives = getDirectiveSettings(source);
-  const automations = getAutomationsSettings(source);
-  const sessions = getSessionOrchestrationSettings(source);
-  const followup = getFollowupSettings(source);
-  const followupBinding = getResolvedFollowupBinding(source);
-  const orchestrator = getResolvedOrchestratorBinding(source);
-  const memoryBinding = getResolvedMemoryBinding(source);
-  const research = getResearchRuntimeConfig(source);
-  const browser = getBrowserRuntimeConfig(source);
+  const d = DEFAULT_SETTINGS;
+  const s = (settings || d) as Partial<Settings> & { _resolved?: ResolvedBindings };
+  const resolved = s._resolved;
+  const agentStack = section(s.agentStack, d.agentStack);
+  const prompting = section(s.prompting, d.prompting);
+  const activity = section(s.interaction?.activity, d.interaction.activity);
+  const permissions = section(s.permissions?.replies, d.permissions.replies);
+  const textThoughtLoop = section(s.initiative?.text, d.initiative.text);
+  const memory = section(s.memory, d.memory);
+  const directives = section(s.directives, d.directives);
+  const automations = section(s.automations, d.automations);
+  const sessions = section(s.interaction?.sessions, d.interaction.sessions);
+  const followup = section(s.interaction?.followup, d.interaction.followup);
+  const orchestrator = resolved?.orchestrator || { provider: agentStack.overrides?.orchestrator?.provider || "openai", model: agentStack.overrides?.orchestrator?.model || "gpt-5" };
+  const followupBinding = resolved?.followupBinding || orchestrator;
+  const memoryBinding = resolved?.memoryBinding || orchestrator;
+  const research = section(agentStack.runtimeConfig?.research, d.agentStack.runtimeConfig.research);
+  const browser = section(agentStack.runtimeConfig?.browser, d.agentStack.runtimeConfig.browser);
   const browserExecution = browser.localBrowserAgent?.execution;
   const browserBinding =
     browserExecution?.mode === "dedicated_model" && browserExecution.model
       ? browserExecution.model
       : orchestrator;
-  const devPermissions = getDevTaskPermissions(source);
-  const devTeam = getDevTeamRuntimeConfig(source);
-  const resolvedStack = resolveAgentStack(source);
-  const vision = getVisionSettings(source);
-  const visionBinding = getResolvedVisionBinding(source);
-  const videoContext = getVideoContextSettings(source);
-  const voiceSettings = getVoiceSettings(source);
-  const transcription = getVoiceTranscriptionSettings(source);
-  const voiceChannelPolicy = getVoiceChannelPolicy(source);
-  const voiceSessionLimits = getVoiceSessionLimits(source);
-  const voiceConversation = getVoiceConversationPolicy(source);
-  const voiceAdmission = getVoiceAdmissionSettings(source);
-  const voiceInitiative = getVoiceInitiativeSettings(source);
-  const voiceInitiativeBinding = getResolvedVoiceInitiativeBinding(source);
-  const voiceRuntime = getVoiceRuntimeConfig(source);
-  const voiceGenerationBinding = getResolvedVoiceGenerationBinding(source);
-  const voiceClassifierBinding = getResolvedVoiceAdmissionClassifierBinding(source);
-  const presetConfig = resolveAgentStackPresetConfig(agentStack as Record<string, unknown>);
-  const voiceClassifierFallback = voiceClassifierBinding
-    || presetConfig.presetVoiceAdmissionClassifierFallback
-    || orchestrator;
-  const voiceStreamWatch = getVoiceStreamWatchSettings(source);
-  const voiceSoundboard = getVoiceSoundboardSettings(source);
-  const startup = getStartupSettings(source);
-  const discovery = getDiscoverySettings(source);
-  const codingWorkers = Array.isArray(resolvedStack.devTeam?.codingWorkers) ? resolvedStack.devTeam.codingWorkers : [];
+  const devPermissions = section(s.permissions?.devTasks, d.permissions.devTasks);
+  const devTeam = section(agentStack.runtimeConfig?.devTeam, d.agentStack.runtimeConfig.devTeam);
+  const resolvedStack = resolved?.agentStack;
+  const vision = section(s.media?.vision, d.media.vision);
+  const visionBinding = resolved?.visionBinding || orchestrator;
+  const videoContext = section(s.media?.videoContext, d.media.videoContext);
+  const voiceSettings = section(s.voice, d.voice);
+  const transcription = section(s.voice?.transcription, d.voice.transcription);
+  const voiceChannelPolicy = section(s.voice?.channelPolicy, d.voice.channelPolicy);
+  const voiceSessionLimits = section(s.voice?.sessionLimits, d.voice.sessionLimits);
+  const voiceConversation = section(s.voice?.conversationPolicy, d.voice.conversationPolicy);
+  const voiceAdmission = section(s.voice?.admission, d.voice.admission);
+  const voiceInitiative = section(s.initiative?.voice, d.initiative.voice);
+  const voiceInitiativeBinding = resolved?.voiceInitiativeBinding || orchestrator;
+  const voiceRuntime = section(agentStack.runtimeConfig?.voice, d.agentStack.runtimeConfig.voice);
+  const voiceGenerationBinding = resolved?.voiceGenerationBinding || orchestrator;
+  const voiceClassifierBinding = resolved?.voiceAdmissionClassifierBinding;
+  const presetClassifierFallback = getPresetClassifierFallback(agentStack.preset);
+  const voiceClassifierFallback = voiceClassifierBinding || presetClassifierFallback || orchestrator;
+  const voiceStreamWatch = section(s.voice?.streamWatch, d.voice.streamWatch);
+  const voiceSoundboard = section(s.voice?.soundboard, d.voice.soundboard);
+  const startup = section(s.interaction?.startup, d.interaction.startup);
+  const discovery = section(s.initiative?.discovery, d.initiative.discovery);
+  const codingWorkers = resolvedStack?.devTeam?.codingWorkers || [];
   const codeAgentProvider =
     codingWorkers.length === 1
       ? codingWorkers[0] === "codex"
@@ -162,11 +165,19 @@ function buildSettingsFormView(settings: unknown) {
         : "claude-code"
       : "auto";
 
+  const voiceProviderStr = resolved?.voiceProvider
+    || (String(voiceRuntime.runtimeMode || "").includes("xai") || String(voiceRuntime.runtimeMode || "").includes("voice_agent") ? "xai"
+      : String(voiceRuntime.runtimeMode || "").includes("gemini") ? "gemini"
+      : String(voiceRuntime.runtimeMode || "").includes("elevenlabs") ? "elevenlabs"
+      : "openai");
+
   return {
     agentStack,
-    botName: getBotName(source),
-    botNameAliases: getBotNameAliases(source),
-    persona: getPersonaSettings(source),
+    botName: s.identity?.botName || d.identity.botName,
+    botNameAliases: Array.isArray(s.identity?.botNameAliases)
+      ? s.identity.botNameAliases.map((v) => String(v || "").trim()).filter(Boolean)
+      : [...d.identity.botNameAliases],
+    persona: section(s.persona, d.persona),
     prompt: {
       capabilityHonestyLine: prompting.global.capabilityHonestyLine,
       impossibleActionLine: prompting.global.impossibleActionLine,
@@ -200,7 +211,7 @@ function buildSettingsFormView(settings: unknown) {
     },
     memoryLlm: memoryBinding,
     browser: {
-      runtime: resolvedStack.browserRuntime,
+      runtime: resolvedStack?.browserRuntime || "",
       enabled: browser.enabled,
       openAiComputerUseModel: String(browser.openaiComputerUse?.model || ""),
       maxBrowseCallsPerHour: browser.localBrowserAgent.maxBrowseCallsPerHour,
@@ -242,7 +253,7 @@ function buildSettingsFormView(settings: unknown) {
       maxCaptionsPerHour: vision.maxCaptionsPerHour
     },
     webSearch: {
-      runtime: resolvedStack.researchRuntime,
+      runtime: resolvedStack?.researchRuntime || "",
       enabled: research.enabled,
       nativeUserLocation: research.openaiNativeWebSearch.userLocation,
       nativeAllowedDomains: research.openaiNativeWebSearch.allowedDomains,
@@ -258,7 +269,7 @@ function buildSettingsFormView(settings: unknown) {
     videoContext,
     voice: {
       enabled: voiceSettings.enabled,
-      voiceProvider: getResolvedVoiceProvider(source),
+      voiceProvider: voiceProviderStr,
       replyPath: voiceConversation.replyPath,
       ttsMode: voiceConversation.ttsMode,
       asrLanguageMode: transcription.languageMode,
@@ -674,23 +685,18 @@ export function settingsToForm(settings: unknown) {
 
 export type SettingsForm = ReturnType<typeof settingsToForm>;
 
-export function applyStackPreset(form: SettingsForm, preset: string): SettingsForm {
-  const presetForm = settingsToForm(normalizeSettings({
-    agentStack: {
-      preset
-    }
-  }));
+export function applyStackPresetDefaults(form: SettingsForm, defaults: Record<string, unknown>): SettingsForm {
   return {
     ...form,
-    stackPreset: presetForm.stackPreset,
-    provider: presetForm.provider,
-    model: presetForm.model,
-    voiceReplyDecisionRealtimeAdmissionMode: presetForm.voiceReplyDecisionRealtimeAdmissionMode,
-    voiceReplyDecisionLlmProvider: presetForm.voiceReplyDecisionLlmProvider,
-    voiceReplyDecisionLlmModel: presetForm.voiceReplyDecisionLlmModel,
-    voiceGenerationLlmUseTextModel: presetForm.voiceGenerationLlmUseTextModel,
-    voiceGenerationLlmProvider: presetForm.voiceGenerationLlmProvider,
-    voiceGenerationLlmModel: presetForm.voiceGenerationLlmModel
+    stackPreset: String(defaults.stackPreset || form.stackPreset),
+    provider: String(defaults.provider || form.provider),
+    model: String(defaults.model || form.model),
+    voiceReplyDecisionRealtimeAdmissionMode: String(defaults.voiceReplyDecisionRealtimeAdmissionMode || form.voiceReplyDecisionRealtimeAdmissionMode),
+    voiceReplyDecisionLlmProvider: String(defaults.voiceReplyDecisionLlmProvider || form.voiceReplyDecisionLlmProvider),
+    voiceReplyDecisionLlmModel: String(defaults.voiceReplyDecisionLlmModel || form.voiceReplyDecisionLlmModel),
+    voiceGenerationLlmUseTextModel: Boolean(defaults.voiceGenerationLlmUseTextModel ?? form.voiceGenerationLlmUseTextModel),
+    voiceGenerationLlmProvider: String(defaults.voiceGenerationLlmProvider || form.voiceGenerationLlmProvider),
+    voiceGenerationLlmModel: String(defaults.voiceGenerationLlmModel || form.voiceGenerationLlmModel)
   };
 }
 

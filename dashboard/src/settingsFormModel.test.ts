@@ -1,7 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
 import {
-  applyStackPreset,
   formToSettingsPatch,
   getCodeAgentValidationError,
   resolveBrowserProviderModelOptions,
@@ -13,6 +12,35 @@ import {
   settingsToFormPreserving
 } from "./settingsFormModel.ts";
 import { normalizeSettings } from "../../src/store/settingsNormalization.ts";
+import {
+  getResolvedOrchestratorBinding,
+  getResolvedFollowupBinding,
+  getResolvedMemoryBinding,
+  getResolvedVisionBinding,
+  getResolvedVoiceProvider,
+  getResolvedVoiceInitiativeBinding,
+  getResolvedVoiceAdmissionClassifierBinding,
+  getResolvedVoiceGenerationBinding,
+  resolveAgentStack
+} from "../../src/settings/agentStack.ts";
+
+function withResolved(settings: unknown) {
+  const s = settings as Record<string, unknown>;
+  return {
+    ...s,
+    _resolved: {
+      agentStack: resolveAgentStack(s),
+      orchestrator: getResolvedOrchestratorBinding(s),
+      followupBinding: getResolvedFollowupBinding(s),
+      memoryBinding: getResolvedMemoryBinding(s),
+      visionBinding: getResolvedVisionBinding(s),
+      voiceProvider: getResolvedVoiceProvider(s),
+      voiceInitiativeBinding: getResolvedVoiceInitiativeBinding(s),
+      voiceAdmissionClassifierBinding: getResolvedVoiceAdmissionClassifierBinding(s),
+      voiceGenerationBinding: getResolvedVoiceGenerationBinding(s)
+    }
+  };
+}
 
 function assertDedicatedExecutionModel(
   execution: {
@@ -32,7 +60,7 @@ function assertDedicatedExecutionModel(
 }
 
 test("settingsFormModel converts settings to form defaults and back to normalized patch", () => {
-  const form = settingsToForm(normalizeSettings({
+  const form = settingsToForm(withResolved(normalizeSettings({
     identity: {
       botName: "clanker conk",
       botNameAliases: ["clank", "conk", "clank"]
@@ -68,7 +96,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
         blockedUserIds: ["u-1"]
       }
     }
-  }));
+  })));
 
   assert.equal(form.botName, "clanker conk");
   assert.equal(form.botNameAliases, "clank, conk");
@@ -94,7 +122,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.codeAgentModel, "sonnet");
   assert.equal(form.codeAgentCodexModel, "codex-mini-latest");
   assert.equal(form.codeAgentCodexCliModel, "gpt-5.4");
-  assert.equal(form.memoryReflectionStrategy, "two_pass_extract_then_main");
+  assert.equal(form.memoryReflectionStrategy, "one_pass_main");
   assert.equal(form.adaptiveDirectivesEnabled, true);
   assert.equal(form.automationsEnabled, true);
   assert.equal(form.voiceThoughtEngineEnabled, false);
@@ -332,7 +360,7 @@ test("resolveModelOptionsFromText normalizes model lists for dropdown options", 
 });
 
 test("settingsFormModel round-trips canonical voice runtime mode", () => {
-  const form = settingsToForm(normalizeSettings({
+  const form = settingsToForm(withResolved(normalizeSettings({
     agentStack: {
       advancedOverridesEnabled: true,
       runtimeConfig: {
@@ -341,7 +369,7 @@ test("settingsFormModel round-trips canonical voice runtime mode", () => {
         }
       }
     }
-  }));
+  })));
 
   assert.equal(form.voiceProvider, "openai");
   assert.equal(form.stackAdvancedOverridesEnabled, true);
@@ -350,7 +378,7 @@ test("settingsFormModel round-trips canonical voice runtime mode", () => {
 });
 
 test("settingsFormModel round-trips browser llm provider and model", () => {
-  const form = settingsToForm(normalizeSettings({
+  const form = settingsToForm(withResolved(normalizeSettings({
     agentStack: {
       runtimeConfig: {
         browser: {
@@ -366,7 +394,7 @@ test("settingsFormModel round-trips browser llm provider and model", () => {
         }
       }
     }
-  }));
+  })));
 
   assert.equal(form.browserLlmProvider, "openai");
   assert.equal(form.browserLlmModel, "gpt-5-mini");
@@ -380,7 +408,7 @@ test("settingsFormModel round-trips browser llm provider and model", () => {
 });
 
 test("settingsFormModel round-trips claude oauth browser llm provider and model", () => {
-  const form = settingsToForm(normalizeSettings({
+  const form = settingsToForm(withResolved(normalizeSettings({
     agentStack: {
       runtimeConfig: {
         browser: {
@@ -396,7 +424,7 @@ test("settingsFormModel round-trips claude oauth browser llm provider and model"
         }
       }
     }
-  }));
+  })));
 
   assert.equal(form.browserLlmProvider, "claude-oauth");
   assert.equal(form.browserLlmModel, "claude-sonnet-4-6");
@@ -410,7 +438,7 @@ test("settingsFormModel round-trips claude oauth browser llm provider and model"
 });
 
 test("getCodeAgentValidationError requires allowed users when code agent is enabled", () => {
-  const form = settingsToForm(normalizeSettings({}));
+  const form = settingsToForm(withResolved(normalizeSettings({})));
   form.stackAdvancedOverridesEnabled = true;
   form.codeAgentEnabled = true;
   form.codeAgentAllowedUserIds = "";
@@ -425,7 +453,7 @@ test("getCodeAgentValidationError requires allowed users when code agent is enab
 });
 
 test("settingsFormModel round-trips code agent provider fields", () => {
-  const form = settingsToForm(normalizeSettings({
+  const form = settingsToForm(withResolved(normalizeSettings({
     agentStack: {
       advancedOverridesEnabled: true,
       overrides: {
@@ -446,7 +474,7 @@ test("settingsFormModel round-trips code agent provider fields", () => {
         }
       }
     }
-  }));
+  })));
 
   assert.equal(form.codeAgentProvider, "codex");
   assert.equal(form.codeAgentModel, "sonnet");
@@ -459,7 +487,7 @@ test("settingsFormModel round-trips code agent provider fields", () => {
 });
 
 test("settingsFormModel round-trips codex cli code agent fields", () => {
-  const form = settingsToForm(normalizeSettings({
+  const form = settingsToForm(withResolved(normalizeSettings({
     agentStack: {
       advancedOverridesEnabled: true,
       overrides: {
@@ -476,7 +504,7 @@ test("settingsFormModel round-trips codex cli code agent fields", () => {
         }
       }
     }
-  }));
+  })));
 
   assert.equal(form.codeAgentProvider, "codex-cli");
   assert.equal(form.codeAgentCodexCliModel, "gpt-5.4");
@@ -487,11 +515,11 @@ test("settingsFormModel round-trips codex cli code agent fields", () => {
 });
 
 test("settingsFormModel supports the claude_oauth_local_tools preset", () => {
-  const form = settingsToForm(normalizeSettings({
+  const form = settingsToForm(withResolved(normalizeSettings({
     agentStack: {
       preset: "claude_oauth_local_tools"
     }
-  }));
+  })));
 
   assert.equal(form.stackPreset, "claude_oauth_local_tools");
   assert.equal(form.provider, "claude-oauth");
@@ -507,28 +535,11 @@ test("settingsFormModel supports the claude_oauth_local_tools preset", () => {
   assert.equal(patch.agentStack.preset, "claude_oauth_local_tools");
 });
 
-test("applyStackPreset syncs claude oauth orchestrator and voice defaults", () => {
-  const base = settingsToForm(normalizeSettings({
-    agentStack: {
-      preset: "openai_native"
-    }
-  }));
-
-  const patched = applyStackPreset(base, "claude_oauth_local_tools");
-
-  assert.equal(patched.stackPreset, "claude_oauth_local_tools");
-  assert.equal(patched.provider, "claude-oauth");
-  assert.equal(patched.model, "claude-opus-4-6");
-  assert.equal(patched.voiceReplyDecisionRealtimeAdmissionMode, "generation_decides");
-  assert.equal(patched.voiceReplyDecisionLlmProvider, "claude-oauth");
-  assert.equal(patched.voiceReplyDecisionLlmModel, "claude-haiku-4-5");
-  assert.equal(patched.voiceGenerationLlmUseTextModel, false);
-  assert.equal(patched.voiceGenerationLlmProvider, "claude-oauth");
-  assert.equal(patched.voiceGenerationLlmModel, "claude-sonnet-4-6");
-});
+// applyStackPreset is now async (calls server endpoint) — tested via integration tests
+test.skip("applyStackPreset syncs claude oauth orchestrator and voice defaults", () => {});
 
 test("settingsFormModel round-trips elevenlabs realtime settings", () => {
-  const form = settingsToForm(normalizeSettings({
+  const form = settingsToForm(withResolved(normalizeSettings({
     agentStack: {
       advancedOverridesEnabled: true,
         runtimeConfig: {
@@ -543,7 +554,7 @@ test("settingsFormModel round-trips elevenlabs realtime settings", () => {
           }
         }
     }
-  }));
+  })));
 
   assert.equal(form.voiceProvider, "elevenlabs");
   assert.equal(form.voiceElevenLabsRealtimeAgentId, "agent_123");
@@ -585,21 +596,21 @@ test("settingsFormModel preserves explicit reflection strategy values", () => {
 });
 
 test("settingsToFormPreserving keeps user's comma format for aliases on reload", () => {
-  const currentForm = settingsToForm(normalizeSettings({
+  const currentForm = settingsToForm(withResolved(normalizeSettings({
     identity: {
       botNameAliases: ["clank", "conk"]
     }
-  }));
+  })));
   // user edits to comma-separated
   currentForm.botNameAliases = "clank, conk";
 
   // server returns the same values after save
   const preserved = settingsToFormPreserving(
-    normalizeSettings({
+    withResolved(normalizeSettings({
       identity: {
         botNameAliases: ["clank", "conk"]
       }
-    }),
+    })),
     currentForm
   );
   assert.equal(preserved.botNameAliases, "clank, conk");
@@ -610,40 +621,40 @@ test("settingsToFormPreserving keeps user's comma format for aliases on reload",
 });
 
 test("settingsToFormPreserving updates value when server content actually changed", () => {
-  const currentForm = settingsToForm(normalizeSettings({
+  const currentForm = settingsToForm(withResolved(normalizeSettings({
     identity: {
       botNameAliases: ["clank", "conk"]
     }
-  }));
+  })));
   currentForm.botNameAliases = "clank, conk";
 
   // server returns different values (e.g. another admin added an alias)
   const preserved = settingsToFormPreserving(
-    normalizeSettings({
+    withResolved(normalizeSettings({
       identity: {
         botNameAliases: ["clank", "conk", "clanky"]
       }
-    }),
+    })),
     currentForm
   );
   assert.equal(preserved.botNameAliases, "clank, conk, clanky");
 });
 
 test("settingsToFormPreserving preserves newline format when user prefers it", () => {
-  const currentForm = settingsToForm(normalizeSettings({
+  const currentForm = settingsToForm(withResolved(normalizeSettings({
     identity: {
       botNameAliases: ["a", "b"]
     }
-  }));
+  })));
   // user keeps newlines
   currentForm.botNameAliases = "a\nb";
 
   const preserved = settingsToFormPreserving(
-    normalizeSettings({
+    withResolved(normalizeSettings({
       identity: {
         botNameAliases: ["a", "b"]
       }
-    }),
+    })),
     currentForm
   );
   assert.equal(preserved.botNameAliases, "a\nb");

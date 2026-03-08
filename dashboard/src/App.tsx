@@ -1,18 +1,19 @@
-import { useState, useCallback, useMemo, type ReactNode } from "react";
+import { useState, useCallback, useMemo, lazy, Suspense, type ReactNode } from "react";
 import { api } from "./api";
 import { usePolling } from "./hooks/usePolling";
 import { useActivitySSE } from "./hooks/useActivitySSE";
 import Header from "./components/Header";
 import MetricsBar from "./components/MetricsBar";
-import SettingsForm from "./components/SettingsForm";
 import ActionStream from "./components/ActionStream";
-import MemoryTab from "./components/MemoryTab";
 import DailyCost from "./components/DailyCost";
 import PerformancePanel from "./components/PerformancePanel";
 import StaleIndicator from "./components/StaleIndicator";
-import VoiceMonitor from "./components/VoiceMonitor";
-import TextTab from "./components/TextTab";
-import AgentsTab from "./components/AgentsTab";
+
+const SettingsForm = lazy(() => import("./components/SettingsForm"));
+const MemoryTab = lazy(() => import("./components/MemoryTab"));
+const VoiceMonitor = lazy(() => import("./components/VoiceMonitor"));
+const TextTab = lazy(() => import("./components/TextTab"));
+const AgentsTab = lazy(() => import("./components/AgentsTab"));
 
 type MainTab = "activity" | "text" | "agents" | "memory" | "voice" | "settings";
 
@@ -90,6 +91,9 @@ export default function App() {
   const [toast, setToast] = useState({ text: "", type: "" });
   const [tab, setTab] = useState<MainTab>("activity");
   const [settingsRefreshBusy, setSettingsRefreshBusy] = useState(false);
+  const [settingsMounted, setSettingsMounted] = useState(false);
+
+  if (tab === "settings" && !settingsMounted) setSettingsMounted(true);
 
   const notify = useCallback((text, type = "ok") => {
     setToast({ text, type });
@@ -212,30 +216,34 @@ export default function App() {
         </section>
       )}
 
-      {tab === "text" && <TextTab actions={mergedTextActions} />}
+      <Suspense>
+        {tab === "text" && <TextTab actions={mergedTextActions} />}
 
-      {tab === "agents" && <AgentsTab />}
+        {tab === "agents" && <AgentsTab />}
 
-      {tab === "voice" && <VoiceMonitor />}
+        {tab === "voice" && <VoiceMonitor />}
 
-      {tab === "memory" && (
-        <MemoryTab
-          markdown={memory.data?.markdown}
-          onRefresh={handleMemoryRefresh}
-          notify={notify}
-        />
-      )}
+        {tab === "memory" && (
+          <MemoryTab
+            markdown={memory.data?.markdown}
+            onRefresh={handleMemoryRefresh}
+            notify={notify}
+          />
+        )}
 
-      <section className={tab === "settings" ? "" : "tab-panel-hidden"} aria-hidden={tab !== "settings"}>
-        <SettingsForm
-          settings={settings.data}
-          modelCatalog={llmModels.data}
-          onSave={handleSettingsSave}
-          onRefreshRuntime={handleSettingsRefresh}
-          refreshRuntimeBusy={settingsRefreshBusy}
-          toast={toast}
-        />
-      </section>
+        {settingsMounted && (
+          <section className={tab === "settings" ? "" : "tab-panel-hidden"} aria-hidden={tab !== "settings"}>
+            <SettingsForm
+              settings={settings.data}
+              modelCatalog={llmModels.data}
+              onSave={handleSettingsSave}
+              onRefreshRuntime={handleSettingsRefresh}
+              refreshRuntimeBusy={settingsRefreshBusy}
+              toast={toast}
+            />
+          </section>
+        )}
+      </Suspense>
     </main>
   );
 }

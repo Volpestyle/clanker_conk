@@ -136,3 +136,18 @@ export function normalizeOpenAiRealtimeTranscriptionMethod(value: unknown, fallb
   if (normalized === "realtime_bridge") return "realtime_bridge";
   return fallback;
 }
+
+export function normalizeProviderOrder(order: unknown) {
+  const allowed = new Set(["brave", "serpapi"]);
+  const values = Array.isArray(order) ? order : ["brave", "serpapi"];
+  const normalized: string[] = [];
+  for (const value of values) {
+    const key = String(value || "").toLowerCase();
+    if (!allowed.has(key) || normalized.includes(key)) continue;
+    normalized.push(key);
+  }
+  if (!normalized.length) {
+    return ["brave", "serpapi"];
+  }
+  return normalized;
+}

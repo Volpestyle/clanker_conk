@@ -7,6 +7,7 @@ import {
 } from "../settings/agentStack.ts";
 import { assertPublicUrl } from "./urlSafety.ts";
 import { clamp } from "../utils.ts";
+import { normalizeProviderOrder } from "../store/normalize/primitives.ts";
 import { normalizeWhitespaceText } from "../normalization/text.ts";
 import { sleep } from "../normalization/time.ts";
 import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
@@ -622,20 +623,7 @@ function normalizeWebSearchConfig(rawConfig) {
   };
 }
 
-export function normalizeProviderOrder(order) {
-  const allowed = new Set(["brave", "serpapi"]);
-  const values = Array.isArray(order) ? order : ["brave", "serpapi"];
-  const normalized = [];
-  for (const value of values) {
-    const key = String(value || "").toLowerCase();
-    if (!allowed.has(key) || normalized.includes(key)) continue;
-    normalized.push(key);
-  }
-  if (!normalized.length) {
-    return ["brave", "serpapi"];
-  }
-  return normalized;
-}
+export { normalizeProviderOrder } from "../store/normalize/primitives.ts";
 
 function extractDomain(rawUrl) {
   try {

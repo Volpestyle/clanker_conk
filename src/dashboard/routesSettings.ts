@@ -3,7 +3,21 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { DashboardApp } from "./shared.ts";
 import type { Store } from "../store/store.ts";
 import { getLlmModelCatalog } from "../llm/pricing.ts";
-import { getReplyGenerationSettings } from "../settings/agentStack.ts";
+import {
+  getReplyGenerationSettings,
+  getResolvedOrchestratorBinding,
+  getResolvedFollowupBinding,
+  getResolvedMemoryBinding,
+  getResolvedVisionBinding,
+  getResolvedVoiceProvider,
+  getResolvedVoiceInitiativeBinding,
+  getResolvedVoiceAdmissionClassifierBinding,
+  getResolvedVoiceGenerationBinding,
+  getVoiceAdmissionSettings,
+  getVoiceRuntimeConfig,
+  resolveAgentStack
+} from "../settings/agentStack.ts";
+import { normalizeSettings } from "../store/settingsNormalization.ts";
 import { readDashboardBody, toRecord } from "./shared.ts";
 
 export interface SettingsRouteDeps {
@@ -20,13 +34,36 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
   });
 
   app.get("/api/settings", (c) => {
-    return c.json(store.getSettings());
+    const settings = store.getSettings();
+    return c.json({ ...settings, _resolved: resolveSettingsBindings(settings) });
   });
 
   app.put("/api/settings", async (c) => {
     const nextSettings = store.patchSettings(await readDashboardBody(c));
     await bot.applyRuntimeSettings(nextSettings);
-    return c.json(nextSettings);
+    return c.json({ ...nextSettings, _resolved: resolveSettingsBindings(nextSettings) });
+  });
+
+  app.post("/api/settings/preset-defaults", async (c) => {
+    const body = await readDashboardBody(c);
+    const preset = String(body.preset || "openai_native").trim();
+    const settings = normalizeSettings({ agentStack: { preset } });
+    const resolved = resolveSettingsBindings(settings);
+    const voiceAdmission = getVoiceAdmissionSettings(settings);
+    const voiceRuntime = getVoiceRuntimeConfig(settings);
+    const classifierFallback = resolved.voiceAdmissionClassifierBinding || resolved.orchestrator;
+    const generationBinding = resolved.voiceGenerationBinding;
+    return c.json({
+      stackPreset: preset,
+      provider: resolved.orchestrator.provider,
+      model: resolved.orchestrator.model,
+      voiceReplyDecisionRealtimeAdmissionMode: String(voiceAdmission.mode || "adaptive"),
+      voiceReplyDecisionLlmProvider: classifierFallback.provider,
+      voiceReplyDecisionLlmModel: classifierFallback.model,
+      voiceGenerationLlmUseTextModel: voiceRuntime.generation?.mode !== "dedicated_model",
+      voiceGenerationLlmProvider: generationBinding.provider,
+      voiceGenerationLlmModel: generationBinding.model
+    });
   });
 
   app.post("/api/settings/refresh", async (c) => {
@@ -165,6 +202,20 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
       return c.json([]);
     }
   });
+}
+
+function resolveSettingsBindings(settings: unknown) {
+  return {
+    agentStack: resolveAgentStack(settings),
+    orchestrator: getResolvedOrchestratorBinding(settings),
+    followupBinding: getResolvedFollowupBinding(settings),
+    memoryBinding: getResolvedMemoryBinding(settings),
+    visionBinding: getResolvedVisionBinding(settings),
+    voiceProvider: getResolvedVoiceProvider(settings),
+    voiceInitiativeBinding: getResolvedVoiceInitiativeBinding(settings),
+    voiceAdmissionClassifierBinding: getResolvedVoiceAdmissionClassifierBinding(settings),
+    voiceGenerationBinding: getResolvedVoiceGenerationBinding(settings)
+  };
 }
 
 function toContentfulStatusCode(status: number): ContentfulStatusCode {
