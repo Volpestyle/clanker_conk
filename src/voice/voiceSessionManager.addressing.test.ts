@@ -3867,6 +3867,90 @@ test("runRealtimeBrainReply supersedes stale playback when a newer finalized rea
   assert.equal(session.realtimeReplySupersededCount, 1);
 });
 
+test("runRealtimeBrainReply exits before generation when a newer promoted capture already exists", async () => {
+  const runtimeLogs = [];
+  let requestedRealtimeUtterances = 0;
+  let generateVoiceTurnCalls = 0;
+  const manager = createManager();
+  manager.store.logAction = (row) => {
+    runtimeLogs.push(row);
+  };
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
+  manager.requestRealtimeTextUtterance = () => {
+    requestedRealtimeUtterances += 1;
+    return true;
+  };
+  manager.generateVoiceTurn = async () => {
+    generateVoiceTurnCalls += 1;
+    return {
+      text: "should not be generated"
+    };
+  };
+  manager.isCaptureConfirmedLiveSpeech = () => true;
+
+  const finalizedAtMs = Date.now() - 1_000;
+  const session = {
+    id: "session-realtime-supersede-live-capture-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 8_000,
+    realtimeClient: {},
+    realtimeInputSampleRateHz: 24_000,
+    userCaptures: new Map([
+      [
+        "speaker-1",
+        {
+          userId: "speaker-1",
+          startedAt: finalizedAtMs + 100,
+          promotedAt: finalizedAtMs + 150,
+          bytesSent: 24_000,
+          signalSampleCount: 12_000,
+          signalActiveSampleCount: 6_000,
+          signalPeakAbs: 12_000,
+          signalSumSquares: 12_000 * 12_000 * 12_000
+        }
+      ]
+    ]),
+    pendingRealtimeTurns: [],
+    realtimeReplySupersededCount: 0,
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "older transcript",
+    directAddressed: false,
+    source: "realtime",
+    latencyContext: {
+      finalizedAtMs,
+      asrStartedAtMs: finalizedAtMs - 100,
+      asrCompletedAtMs: finalizedAtMs - 50,
+      queueWaitMs: 0,
+      pendingQueueDepth: 0,
+      captureReason: "max_duration"
+    }
+  });
+
+  assert.equal(result, false);
+  assert.equal(generateVoiceTurnCalls, 0);
+  assert.equal(requestedRealtimeUtterances, 0);
+  const supersededLog = runtimeLogs.find(
+    (row) => row?.kind === "voice_runtime" && row?.content === "realtime_reply_superseded_newer_input"
+  );
+  assert.equal(Boolean(supersededLog), true);
+  assert.equal(supersededLog?.metadata?.supersedeReason, "newer_live_promoted_capture");
+});
+
 test("runRealtimeBrainReply ends VC when model requests leave directive", async () => {
   const manager = createManager();
   const endCalls = [];

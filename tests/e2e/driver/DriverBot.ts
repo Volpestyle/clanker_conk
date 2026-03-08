@@ -9,7 +9,6 @@ import {
   createAudioResource,
   AudioPlayerStatus,
   EndBehaviorType,
-  VoiceConnectionStatus,
   type VoiceConnection,
   type AudioPlayer
 } from "@discordjs/voice";
@@ -105,12 +104,21 @@ export class DriverBot {
       adapterCreator: guild.voiceAdapterCreator,
       selfDeaf: false,
       selfMute: false,
-      group: this.groupId
+      group: this.groupId,
+      debug: true
     });
 
     // Log connection state transitions
     this.connection.on("stateChange", (oldState, newState) => {
       console.log(`[DriverBot] connection state: ${oldState.status} → ${newState.status}`);
+    });
+
+    this.connection.on("debug", (msg) => {
+      console.log(`[DriverBot:debug] ${msg}`);
+    });
+
+    this.connection.on("error", (err) => {
+      console.error(`[DriverBot:error] ${err.message}`);
     });
 
     await waitForEvent(this.connection, "ready", 15_000);

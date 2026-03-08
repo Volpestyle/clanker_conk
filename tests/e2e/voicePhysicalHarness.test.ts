@@ -47,7 +47,7 @@ async function ensureFixture(name: string, text: string): Promise<string> {
     await stat(path);
     return path;
   } catch {
-    console.log(`Generating fixture: ${name} (\"${text}\")`);
+    console.log(`Generating fixture: ${name} ("${text}")`);
     await generatePcmAudioFixture(name, text);
     return getFixturePath(name);
   }

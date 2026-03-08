@@ -4,7 +4,6 @@ import { env } from "node:process";
 import {
   beginTemporaryE2EWithPreset,
   DriverBot,
-  type DriverBotConfig,
   getE2EConfig,
   hasE2EConfig,
   hasDialogueE2EConfig,
@@ -238,7 +237,7 @@ describe("E2E: Crowded channel — multi-participant resilience", () => {
 
       // Wait for bot to process both
       console.log("[Crowded] Waiting for response...");
-      const gotResponseA = await driverA.waitForAudioResponse(15_000);
+      const _gotResponseA = await driverA.waitForAudioResponse(15_000);
       const bytesA = driverA.getReceivedAudioBytes();
       const bytesB = driverB.getReceivedAudioBytes();
       console.log(`[Crowded] Audio — A: ${bytesA}, B: ${bytesB}`);

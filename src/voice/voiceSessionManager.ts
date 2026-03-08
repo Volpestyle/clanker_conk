@@ -132,7 +132,6 @@ import {
 import { buildVoiceRuntimeSnapshot } from "./voiceRuntimeSnapshot.ts";
 import {
   resolveSystemSpeechOpportunityType,
-  shouldCancelSystemSpeechBeforeAudioOnPromotedUserSpeech,
   shouldSupersedeSystemSpeechBeforePlayback
 } from "./systemSpeechOpportunity.ts";
 import { runVoiceReplyPipeline } from "./voiceReplyPipeline.ts";
@@ -1695,7 +1694,7 @@ export class VoiceSessionManager {
     };
   }
 
-  cancelPendingSystemSpeechForUserSpeech({
+  cancelPendingPrePlaybackReplyForUserSpeech({
     session = null,
     userId = null,
     captureState = null,
@@ -1706,26 +1705,55 @@ export class VoiceSessionManager {
     const pending = session.pendingResponse && typeof session.pendingResponse === "object"
       ? session.pendingResponse
       : null;
+    const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
+    const hadActiveReply = Boolean(this.activeReplies?.has(voiceReplyScopeKey));
     const pendingOpportunityType = resolveSystemSpeechOpportunityType(pending?.source);
-    if (!pending || !shouldCancelSystemSpeechBeforeAudioOnPromotedUserSpeech(pending.source)) return false;
-    if (this.replyManager.pendingResponseHasAudio(session, pending)) return false;
+    const pendingHasAudio = pending ? this.replyManager.pendingResponseHasAudio(session, pending) : false;
+    const outputAlreadyStarted =
+      pendingHasAudio ||
+      Boolean(session.botTurnOpen) ||
+      this.replyManager.hasBufferedTtsPlayback(session);
+    if ((!pending && !hadActiveReply) || outputAlreadyStarted) return false;
 
     const signal = this.bargeInController.getCaptureSignalMetrics(captureState);
-    const cancelTelemetry = this.cancelRealtimeResponseForBargeIn(session);
-    this.replyManager.clearPendingResponse(session);
+    const cancelTelemetry = pending
+      ? this.cancelRealtimeResponseForBargeIn(session)
+      : {
+        responseCancelAttempted: false,
+        responseCancelSucceeded: false,
+        responseCancelError: null,
+        truncateAttempted: false,
+        truncateSucceeded: false,
+        truncateError: null,
+        truncateItemId: null,
+        truncateContentIndex: 0,
+        truncateAudioEndMs: 0
+      };
+    let activeReplyAbortCount = 0;
+    if (pending) {
+      this.replyManager.clearPendingResponse(session);
+    } else if (this.activeReplies) {
+      activeReplyAbortCount = this.activeReplies.abortAll(
+        voiceReplyScopeKey,
+        "Superseded by newer promoted user speech"
+      );
+    }
     this.maybeClearActiveReplyInterruptionPolicy(session);
     this.store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,
       channelId: session.textChannelId,
       userId: userId || null,
-      content: "voice_system_speech_cancelled_for_user_speech",
+      content: "voice_preplay_reply_superseded_for_user_speech",
       metadata: {
         sessionId: session.id,
         opportunityType: pendingOpportunityType,
         source: String(source || "capture_promoted"),
-        pendingSource: String(pending.source || "unknown"),
-        pendingRequestId: Number(pending.requestId || 0) || null,
+        pendingSource: pending ? String(pending.source || "unknown") : null,
+        pendingRequestId: pending ? Number(pending.requestId || 0) || null : null,
+        hadPendingResponse: Boolean(pending),
+        hadActiveReply,
+        activeReplyAbortCount,
         captureStartedAt: Math.max(0, Number(captureState?.startedAt || 0)) || null,
         capturePromotedAt: Math.max(0, Number(captureState?.promotedAt || now)) || null,
         captureBytes: Math.max(0, Number(captureState?.bytesSent || 0)),

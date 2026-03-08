@@ -1,5 +1,7 @@
 import { getFollowupSettings, getVoiceConversationPolicy } from "../settings/agentStack.ts";
 import { clamp } from "../utils.ts";
+import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
+import { isAbortError } from "../tools/browserTaskRuntime.ts";
 import { shouldAllowSystemSpeechSkipAfterFire } from "./systemSpeechOpportunity.ts";
 import {
   REALTIME_CONTEXT_MEMBER_LIMIT,
@@ -78,6 +80,7 @@ export type VoiceReplyPipelineHost = Pick<VoiceSessionManager,
   | "getStreamWatchBrainContextForPrompt"
   | "getVoiceChannelParticipants"
   | "logVoiceLatencyStage"
+  | "maybeSupersedeRealtimeReplyBeforePlayback"
   | "maybeClearActiveReplyInterruptionPolicy"
   | "normalizeVoiceAddressingAnnotation"
   | "playVoiceReplyInOrder"
@@ -92,6 +95,7 @@ export type VoiceReplyPipelineHost = Pick<VoiceSessionManager,
   llm: VoiceSessionManager["llm"];
   sessionLifecycle: VoiceSessionManager["sessionLifecycle"];
   store: VoiceSessionManager["store"];
+  activeReplies: VoiceSessionManager["activeReplies"];
 };
 
 function toGeneratedPayload(value: unknown): GeneratedPayload {
@@ -247,6 +251,33 @@ export async function runVoiceReplyPipeline(
   const normalizedTranscript = normalizeVoiceText(params.transcript, STT_TRANSCRIPT_MAX_CHARS);
   if (!normalizedTranscript) return false;
 
+  const normalizedLatencyContext =
+    params.mode === "bridge" && params.latencyContext && typeof params.latencyContext === "object"
+      ? params.latencyContext
+      : null;
+  const latencyFinalizedAtMs = Math.max(0, Number(normalizedLatencyContext?.finalizedAtMs || 0));
+  const latencyAsrStartedAtMs = Math.max(0, Number(normalizedLatencyContext?.asrStartedAtMs || 0));
+  const latencyAsrCompletedAtMs = Math.max(0, Number(normalizedLatencyContext?.asrCompletedAtMs || 0));
+  const latencyQueueWaitMs = Number.isFinite(Number(normalizedLatencyContext?.queueWaitMs))
+    ? Math.max(0, Math.round(Number(normalizedLatencyContext?.queueWaitMs)))
+    : null;
+  const latencyPendingQueueDepth = Number.isFinite(Number(normalizedLatencyContext?.pendingQueueDepth))
+    ? Math.max(0, Math.round(Number(normalizedLatencyContext?.pendingQueueDepth)))
+    : null;
+  const latencyCaptureReason = String(normalizedLatencyContext?.captureReason || "").trim() || null;
+
+  if (
+    params.mode === "bridge" &&
+    host.maybeSupersedeRealtimeReplyBeforePlayback({
+      session,
+      source: `${source}:generation_preflight`,
+      generationStartedAtMs: latencyFinalizedAtMs || Date.now(),
+      includePromotedCaptureSupersede: true
+    })
+  ) {
+    return false;
+  }
+
   const { contextMessages, contextMessageChars, contextTurns } = buildContextMessages(session, normalizedTranscript);
   host.updateModelContextSummary(session, "generation", {
     source,
@@ -302,22 +333,13 @@ export async function runVoiceReplyPipeline(
     voiceAddressingState
   };
 
-  const normalizedLatencyContext =
-    params.mode === "bridge" && params.latencyContext && typeof params.latencyContext === "object"
-      ? params.latencyContext
-      : null;
-  const latencyFinalizedAtMs = Math.max(0, Number(normalizedLatencyContext?.finalizedAtMs || 0));
-  const latencyAsrStartedAtMs = Math.max(0, Number(normalizedLatencyContext?.asrStartedAtMs || 0));
-  const latencyAsrCompletedAtMs = Math.max(0, Number(normalizedLatencyContext?.asrCompletedAtMs || 0));
-  const latencyQueueWaitMs = Number.isFinite(Number(normalizedLatencyContext?.queueWaitMs))
-    ? Math.max(0, Math.round(Number(normalizedLatencyContext?.queueWaitMs)))
-    : null;
-  const latencyPendingQueueDepth = Number.isFinite(Number(normalizedLatencyContext?.pendingQueueDepth))
-    ? Math.max(0, Math.round(Number(normalizedLatencyContext?.pendingQueueDepth)))
-    : null;
-  const latencyCaptureReason = String(normalizedLatencyContext?.captureReason || "").trim() || null;
-
   const generationStartedAt = Date.now();
+  const voiceReplyScopeKey = params.mode === "bridge" ? buildVoiceReplyScopeKey(session.id) : null;
+  const activeReply =
+    params.mode === "bridge" && host.activeReplies && voiceReplyScopeKey
+      ? host.activeReplies.begin(voiceReplyScopeKey, "text-reply", ["voice_generation"])
+      : null;
+  const generationSignal = activeReply?.abortController.signal;
   let releaseLookupBusy: (() => void) | null = null;
   let generatedPayload: GeneratedPayload | null = null;
   const voiceConversation = getVoiceConversationPolicy(params.settings);
@@ -357,7 +379,8 @@ export async function runVoiceReplyPipeline(
         releaseLookupBusy = null;
       },
       webSearchTimeoutMs: Number(followup.toolBudget?.toolTimeoutMs),
-      voiceToolCallbacks: host.buildVoiceToolCallbacks({ session, settings: params.settings })
+      voiceToolCallbacks: host.buildVoiceToolCallbacks({ session, settings: params.settings }),
+      signal: generationSignal
     }));
     if (generatedPayload?.generationContextSnapshot) {
       session.lastGenerationContext = {
@@ -367,6 +390,9 @@ export async function runVoiceReplyPipeline(
       };
     }
   } catch (error) {
+    if (isAbortError(error) || generationSignal?.aborted) {
+      return false;
+    }
     host.store.logAction({
       kind: "voice_error",
       guildId: session.guildId,
@@ -384,9 +410,11 @@ export async function runVoiceReplyPipeline(
       releaseLookupBusy();
       releaseLookupBusy = null;
     }
+    host.activeReplies?.clear(activeReply);
   }
 
   if (session.ending) return false;
+  if (generationSignal?.aborted) return false;
 
   const replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
   const requestedSoundboardRefs = normalizeSoundboardRefsModule(generatedPayload?.soundboardRefs);

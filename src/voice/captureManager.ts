@@ -78,7 +78,7 @@ export interface CaptureManagerHost {
     session: VoiceSession;
     capture: CaptureState;
   }) => boolean;
-  cancelPendingSystemSpeechForUserSpeech: (args: {
+  cancelPendingPrePlaybackReplyForUserSpeech: (args: {
     session: VoiceSession;
     userId?: string | null;
     captureState?: CaptureState | null;
@@ -248,7 +248,7 @@ export class CaptureManager {
       const signal = this.host.bargeInController.getCaptureSignalMetrics(captureState);
       captureState.promotedAt = now;
       captureState.promotionReason = String(promotionReason);
-      this.host.cancelPendingSystemSpeechForUserSpeech({
+      this.host.cancelPendingPrePlaybackReplyForUserSpeech({
         session,
         userId,
         captureState,
