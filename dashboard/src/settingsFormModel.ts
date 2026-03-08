@@ -547,6 +547,10 @@ export function settingsToForm(settings: unknown) {
       defaultVoiceStreamWatch.brainContextMinIntervalSeconds,
     voiceStreamWatchBrainContextMaxEntries:
       resolved?.voice?.streamWatch?.brainContextMaxEntries ?? defaultVoiceStreamWatch.brainContextMaxEntries,
+    voiceStreamWatchBrainContextProvider:
+      resolved?.voice?.streamWatch?.brainContextProvider ?? defaultVoiceStreamWatch.brainContextProvider ?? "",
+    voiceStreamWatchBrainContextModel:
+      resolved?.voice?.streamWatch?.brainContextModel ?? defaultVoiceStreamWatch.brainContextModel ?? "",
     voiceStreamWatchBrainContextPrompt:
       resolved?.voice?.streamWatch?.brainContextPrompt ?? defaultVoiceStreamWatch.brainContextPrompt,
     voiceStreamWatchSharePageMaxWidthPx:
@@ -1048,6 +1052,8 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
         keyframeIntervalMs: Number(form.voiceStreamWatchKeyframeIntervalMs),
         autonomousCommentaryEnabled: Boolean(form.voiceStreamWatchAutonomousCommentaryEnabled),
         brainContextEnabled: Boolean(form.voiceStreamWatchBrainContextEnabled),
+        brainContextProvider: String(form.voiceStreamWatchBrainContextProvider || "").trim(),
+        brainContextModel: String(form.voiceStreamWatchBrainContextModel || "").trim(),
         brainContextMinIntervalSeconds: Number(form.voiceStreamWatchBrainContextMinIntervalSeconds),
         brainContextMaxEntries: Number(form.voiceStreamWatchBrainContextMaxEntries),
         brainContextPrompt: String(form.voiceStreamWatchBrainContextPrompt || "").trim(),

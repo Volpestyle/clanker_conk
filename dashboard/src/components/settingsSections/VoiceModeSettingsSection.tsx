@@ -2,7 +2,7 @@ import React from "react";
 import { SettingsSection } from "../SettingsSection";
 import { Collapse } from "../Collapse";
 import { rangeStyle } from "../../utils";
-import { LlmProviderOptions } from "./LlmProviderOptions";
+import { LlmProviderOptions, VISION_LLM_PROVIDER_OPTIONS } from "./LlmProviderOptions";
 import { OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS } from "../../settingsFormModel";
 
 /* ── Pipeline flow indicator ── */
@@ -80,7 +80,11 @@ export function VoiceModeSettingsSection({
   openAiRealtimeModelOptions,
   openAiRealtimeVoiceOptions,
   openAiTranscriptionModelOptions,
-  geminiRealtimeModelOptions
+  geminiRealtimeModelOptions,
+  setStreamWatchVisionProvider,
+  selectStreamWatchVisionPresetModel,
+  streamWatchVisionModelOptions,
+  selectedStreamWatchVisionPresetModel
 }) {
   const isRealtimeMode =
     isVoiceAgentMode || isOpenAiRealtimeMode || isGeminiRealtimeMode || isElevenLabsRealtimeMode;
@@ -1149,6 +1153,47 @@ export function VoiceModeSettingsSection({
               </label>
             </div>
           )}
+
+          {form.voiceStreamWatchEnabled && form.voiceStreamWatchBrainContextEnabled && (() => {
+            const voiceProvider = String(form.voiceGenerationLlmProvider || form.provider || "").trim();
+            const isDirectVision = voiceProvider === "claude-oauth";
+            const hasOverride = Boolean(String(form.voiceStreamWatchBrainContextProvider || "").trim());
+            return (
+              <>
+                <div className="split">
+                  <div>
+                    <label htmlFor="stream-watch-vision-provider">Vision provider</label>
+                    <select
+                      id="stream-watch-vision-provider"
+                      value={form.voiceStreamWatchBrainContextProvider}
+                      onChange={setStreamWatchVisionProvider}
+                    >
+                      <option value="">
+                        {isDirectVision ? "Voice brain (sees frames directly)" : "Auto (first configured)"}
+                      </option>
+                      <LlmProviderOptions options={VISION_LLM_PROVIDER_OPTIONS} />
+                    </select>
+                  </div>
+                  {hasOverride && (
+                    <div>
+                      <label htmlFor="stream-watch-vision-model">Vision model</label>
+                      <select
+                        id="stream-watch-vision-model"
+                        value={selectedStreamWatchVisionPresetModel}
+                        onChange={selectStreamWatchVisionPresetModel}
+                      >
+                        {streamWatchVisionModelOptions.map((modelId) => (
+                          <option key={modelId} value={modelId}>
+                            {modelId}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              </>
+            );
+          })()}
 
           {form.voiceStreamWatchEnabled && form.voiceStreamWatchBrainContextEnabled && (
             <div className="split">

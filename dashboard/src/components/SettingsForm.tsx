@@ -154,6 +154,10 @@ export default function SettingsForm({
     options: voiceReplyDecisionModelOptions,
     selectedPresetModel: selectedVoiceReplyDecisionPresetModel
   } = resolvePresetSelection("voiceReplyDecisionLlmProvider", "voiceReplyDecisionLlmModel");
+  const {
+    options: streamWatchVisionModelOptions,
+    selectedPresetModel: selectedStreamWatchVisionPresetModel
+  } = resolvePresetSelection("voiceStreamWatchBrainContextProvider", "voiceStreamWatchBrainContextModel");
   const openAiRealtimeModelOptions = resolveModelOptions(
     OPENAI_REALTIME_MODEL_OPTIONS,
     effectiveForm.voiceOpenAiRealtimeModel
@@ -211,6 +215,7 @@ export default function SettingsForm({
       syncModel("voiceGenerationLlmModel", selectedVoiceGenerationPresetModel);
       syncModel("voiceThoughtEngineModel", selectedVoiceThoughtEnginePresetModel);
       syncModel("voiceReplyDecisionLlmModel", selectedVoiceReplyDecisionPresetModel);
+      syncModel("voiceStreamWatchBrainContextModel", selectedStreamWatchVisionPresetModel);
       if (next.voiceGenerationLlmUseTextModel) {
         syncModel("voiceGenerationLlmProvider", next.provider);
         syncModel("voiceGenerationLlmModel", selectedPresetModel);
@@ -280,6 +285,7 @@ export default function SettingsForm({
   const setVoiceThoughtEngineProvider = createProviderSetter("voiceThoughtEngineProvider", "voiceThoughtEngineModel");
   const setVoiceReplyDecisionProvider = createProviderSetter("voiceReplyDecisionLlmProvider", "voiceReplyDecisionLlmModel");
   const setVisionProvider = createProviderSetter("visionProvider", "visionModel");
+  const setStreamWatchVisionProvider = createProviderSetter("voiceStreamWatchBrainContextProvider", "voiceStreamWatchBrainContextModel");
 
   function selectModelFieldPreset(modelField, selected) {
     setForm((current) => ({ ...current, [modelField]: selected }));
@@ -299,6 +305,7 @@ export default function SettingsForm({
   const selectVoiceThoughtEnginePresetModel = createPresetSelector("voiceThoughtEngineModel");
   const selectVoiceReplyDecisionPresetModel = createPresetSelector("voiceReplyDecisionLlmModel");
   const selectVisionPresetModel = createPresetSelector("visionModel");
+  const selectStreamWatchVisionPresetModel = createPresetSelector("voiceStreamWatchBrainContextModel");
 
   function resetPromptGuidanceFields() {
     setForm((current) => ({
@@ -516,6 +523,10 @@ export default function SettingsForm({
             openAiRealtimeVoiceOptions={openAiRealtimeVoiceOptions}
             openAiTranscriptionModelOptions={openAiTranscriptionModelOptions}
             geminiRealtimeModelOptions={geminiRealtimeModelOptions}
+            setStreamWatchVisionProvider={setStreamWatchVisionProvider}
+            selectStreamWatchVisionPresetModel={selectStreamWatchVisionPresetModel}
+            streamWatchVisionModelOptions={streamWatchVisionModelOptions}
+            selectedStreamWatchVisionPresetModel={selectedStreamWatchVisionPresetModel}
           />
 
           <RateLimitsSettingsSection id="sec-rate" form={form} set={set} />

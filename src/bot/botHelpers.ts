@@ -255,7 +255,9 @@ export const REPLY_OUTPUT_SCHEMA = {
         directedConfidence: { type: "number" }
       },
       required: ["talkingTo", "directedConfidence"]
-    }
+    },
+    screenNote: { type: ["string", "null"] },
+    screenMoment: { type: ["string", "null"] }
   },
   required: [
     "text",
@@ -274,7 +276,9 @@ export const REPLY_OUTPUT_SCHEMA = {
     "automationAction",
     "voiceIntent",
     "screenShareIntent",
-    "voiceAddressing"
+    "voiceAddressing",
+    "screenNote",
+    "screenMoment"
   ]
 };
 

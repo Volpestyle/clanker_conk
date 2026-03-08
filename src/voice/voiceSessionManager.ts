@@ -4744,7 +4744,8 @@ export class VoiceSessionManager {
     source = "realtime",
     latencyContext = null,
     forceSpokenOutput = false,
-    spokenOutputRetryCount = 0
+    spokenOutputRetryCount = 0,
+    frozenFrameSnapshot = null
   }) {
     return await runVoiceReplyPipeline(this, {
       session,
@@ -4759,7 +4760,8 @@ export class VoiceSessionManager {
       source,
       latencyContext,
       forceSpokenOutput,
-      spokenOutputRetryCount
+      spokenOutputRetryCount,
+      frozenFrameSnapshot
     });
   }
 

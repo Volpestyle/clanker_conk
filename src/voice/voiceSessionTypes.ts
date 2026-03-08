@@ -585,6 +585,7 @@ export interface VoiceSessionStreamWatchState {
     lastBrainContextProvider: string | null;
     lastBrainContextModel: string | null;
     brainContextEntries: StreamWatchBrainContextEntry[];
+    durableScreenNotes: string[];
     ingestedFrameCount: number;
     acceptedFrameCountInWindow: number;
     frameWindowStartedAt: number;

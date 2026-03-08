@@ -4,6 +4,7 @@ import { safeJsonParseFromString } from "../normalization/valueParsers.ts";
 import {
   getBotName,
   getResolvedOrchestratorBinding,
+  getResolvedVoiceGenerationBinding,
   getVoiceStreamWatchSettings
 } from "../settings/agentStack.ts";
 import { buildRealtimeTextUtterancePrompt, isRealtimeMode, normalizeVoiceText } from "./voiceSessionHelpers.ts";
@@ -22,6 +23,7 @@ type StreamWatchManager = Pick<
 > & {
   composeOperationalMessage?: VoiceSessionManager["composeOperationalMessage"];
   replyManager: Pick<VoiceSessionManager["replyManager"], "createTrackedAudioResponse">;
+  runRealtimeBrainReply?: VoiceSessionManager["runRealtimeBrainReply"];
 };
 
 const STREAM_WATCH_AUDIO_QUIET_WINDOW_MS = 2200;
@@ -135,7 +137,7 @@ function buildStreamWatchNotesText(session, maxEntries = 6) {
     .join("\n");
 }
 
-function appendStreamWatchBrainContextEntry({
+export function appendStreamWatchBrainContextEntry({
   session,
   text,
   at,
@@ -330,6 +332,7 @@ export function initializeStreamWatchState(manager: StreamWatchManager, { sessio
   session.streamWatch.lastBrainContextProvider = null;
   session.streamWatch.lastBrainContextModel = null;
   session.streamWatch.brainContextEntries = [];
+  session.streamWatch.durableScreenNotes = [];
   session.streamWatch.ingestedFrameCount = 0;
   session.streamWatch.acceptedFrameCountInWindow = 0;
   session.streamWatch.frameWindowStartedAt = 0;
@@ -422,7 +425,26 @@ export function supportsStreamWatchBrainContext(manager: StreamWatchManager, { s
 export function resolveStreamWatchVisionProviderSettings(manager: StreamWatchManager, settings = null) {
   const commentaryPath = resolveStreamWatchCommentaryPath(settings);
   const llmSettings = getResolvedOrchestratorBinding(settings);
+  const streamWatchSettings = getVoiceStreamWatchSettings(settings);
+
+  const overrideProvider = String(streamWatchSettings.brainContextProvider || "").trim();
+  const overrideModel = String(streamWatchSettings.brainContextModel || "").trim();
+
+  if (overrideProvider && overrideModel && manager.llm?.isProviderConfigured?.(overrideProvider)) {
+    return {
+      ...llmSettings,
+      provider: overrideProvider,
+      model: overrideModel,
+      temperature: 0.3,
+      maxOutputTokens: STREAM_WATCH_VISION_MAX_OUTPUT_TOKENS
+    };
+  }
+
   const fallbackCandidates = [
+    {
+      provider: "claude-oauth",
+      model: "claude-sonnet-4-6"
+    },
     {
       provider: "anthropic",
       model: "claude-haiku-4-5"
@@ -436,8 +458,9 @@ export function resolveStreamWatchVisionProviderSettings(manager: StreamWatchMan
       model: "sonnet"
     }
   ];
+  const anthropicProviders = new Set(["claude-oauth", "anthropic"]);
   const candidates = commentaryPath === STREAM_WATCH_COMMENTARY_PATH_ANTHROPIC_KEYFRAMES
-    ? fallbackCandidates.filter((candidate) => candidate.provider === "anthropic")
+    ? fallbackCandidates.filter((candidate) => anthropicProviders.has(candidate.provider))
     : fallbackCandidates;
 
   for (const candidate of candidates) {
@@ -453,6 +476,18 @@ export function resolveStreamWatchVisionProviderSettings(manager: StreamWatchMan
   }
 
   return null;
+}
+
+const DIRECT_VISION_PROVIDERS = new Set(["claude-oauth"]);
+
+export function supportsDirectVisionCommentary(manager: StreamWatchManager, settings = null) {
+  if (!manager.llm || typeof manager.llm.generate !== "function") return false;
+  // If the user explicitly set a separate vision provider, use the two-model path
+  const streamWatchSettings = getVoiceStreamWatchSettings(settings);
+  const overrideProvider = String(streamWatchSettings.brainContextProvider || "").trim();
+  if (overrideProvider) return false;
+  const voiceBinding = getResolvedVoiceGenerationBinding(settings);
+  return DIRECT_VISION_PROVIDERS.has(voiceBinding.provider);
 }
 
 export async function generateVisionFallbackStreamWatchCommentary(manager: StreamWatchManager, {
@@ -667,22 +702,33 @@ async function generateStreamWatchMemoryRecap(manager: StreamWatchManager, {
   reason = "watching_stopped"
 }) {
   const notesText = buildStreamWatchNotesText(session, 6);
-  if (!notesText) return null;
+  const durableNotes = (Array.isArray(session.streamWatch?.durableScreenNotes) ? session.streamWatch.durableScreenNotes : [])
+    .map((note) => String(note || "").trim())
+    .filter(Boolean)
+    .slice(-20);
+  if (!notesText && !durableNotes.length) return null;
   const speakerName = manager.resolveVoiceSpeakerName(session, session.streamWatch?.targetUserId) || "the streamer";
   const systemPrompt = [
     `You are ${getPromptBotName(settings)} summarizing an ended screen share for memory.`,
-    "You will receive private notes captured during one screen-share session.",
+    "You will receive recent observations and key moments captured during one screen-share session.",
     "Return strict JSON only.",
     "recap must be one concise grounded sentence, max 22 words.",
     "shouldStore should be true if the recap is useful future continuity for this conversation or likely relevant later.",
     "Avoid filler, speculation, and talk about the bot."
   ].join(" ");
-  const userPrompt = [
+  const userPromptParts = [
     `Speaker: ${speakerName}`,
-    `Stop reason: ${String(reason || "watching_stopped")}`,
-    "Screen-share notes:",
-    notesText
-  ].join("\n");
+    `Stop reason: ${String(reason || "watching_stopped")}`
+  ];
+  if (notesText) {
+    userPromptParts.push("Recent screen observations:");
+    userPromptParts.push(notesText);
+  }
+  if (durableNotes.length) {
+    userPromptParts.push("Key moments during session:");
+    userPromptParts.push(...durableNotes.map((note, i) => `${i + 1}. ${note}`));
+  }
+  const userPrompt = userPromptParts.join("\n");
 
   try {
     const generated = await manager.llm.generate({
@@ -1246,6 +1292,8 @@ export async function ingestStreamFrame(manager: StreamWatchManager, {
   };
 }
 
+const DIRECT_VISION_SILENCE_THRESHOLD_MS = 10_000;
+
 export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchManager, {
   session,
   settings,
@@ -1260,8 +1308,10 @@ export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchMana
   const streamWatchSettings = resolvedSettings?.voice?.streamWatch || {};
   const commentaryPath = resolveStreamWatchCommentaryPath(resolvedSettings);
   const forceAnthropicKeyframes = commentaryPath === STREAM_WATCH_COMMENTARY_PATH_ANTHROPIC_KEYFRAMES;
-  let brainContextUpdate = null;
+  const useDirectVision = supportsDirectVisionCommentary(manager, resolvedSettings);
 
+  // ── Haiku brain context refresh (runs in both modes as gap-filler) ──
+  let brainContextUpdate = null;
   if (supportsStreamWatchBrainContext(manager, { session, settings: resolvedSettings })) {
     try {
       brainContextUpdate = await maybeRefreshStreamWatchBrainContext(manager, {
@@ -1290,16 +1340,15 @@ export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchMana
       ? Boolean(streamWatchSettings.autonomousCommentaryEnabled)
       : true;
   if (!autonomousCommentaryEnabled) return;
-  if (brainContextUpdate && (brainContextUpdate.sceneChanged === false || brainContextUpdate.shouldComment === false)) {
-    return;
-  }
 
+  // ── Shared gates ──
   if (session.userCaptures.size > 0) return;
   if (session.pendingResponse) return;
   if (isStreamWatchPlaybackBusy(session)) return;
 
   const quietWindowMs = STREAM_WATCH_AUDIO_QUIET_WINDOW_MS;
-  const sinceLastInboundAudio = Date.now() - Number(session.lastInboundAudioAt || 0);
+  const now = Date.now();
+  const sinceLastInboundAudio = now - Number(session.lastInboundAudioAt || 0);
   if (Number(session.lastInboundAudioAt || 0) > 0 && sinceLastInboundAudio < quietWindowMs) return;
 
   const minCommentaryIntervalSeconds = clamp(
@@ -1307,7 +1356,6 @@ export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchMana
     3,
     120
   );
-  const now = Date.now();
   if (now - Number(session.streamWatch.lastCommentaryAt || 0) < minCommentaryIntervalSeconds * 1000) return;
 
   const realtimeClient = session.realtimeClient;
@@ -1318,30 +1366,94 @@ export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchMana
     return;
   }
 
-  const speakerName = manager.resolveVoiceSpeakerName(session, streamerUserId) || "the streamer";
-  const nativePrompt = normalizeVoiceText(
-    [
-      `You're in Discord VC watching ${speakerName}'s live stream.`,
-      "Give one short in-character spoken commentary line about the latest frame.",
-      "If unclear, say that briefly without pretending certainty."
-    ].join(" "),
-    STREAM_WATCH_COMMENTARY_PROMPT_MAX_CHARS
-  );
+  if (useDirectVision && typeof manager.runRealtimeBrainReply === "function") {
+    // ── Direct vision: event-triggered full brain turn ──
+    // Haiku fills rolling context in the background. The full brain only fires when:
+    // 1. Haiku flags a scene change
+    // 2. Extended silence (10s+ since anyone spoke)
+    const sceneChanged = brainContextUpdate?.sceneChanged === true;
+    const isFirstCommentary = Number(session.streamWatch.lastCommentaryAt || 0) === 0;
+    const silenceTriggered =
+      Number(session.lastInboundAudioAt || 0) > 0 &&
+      sinceLastInboundAudio >= DIRECT_VISION_SILENCE_THRESHOLD_MS;
+
+    if (!sceneChanged && !silenceTriggered && !isFirstCommentary) return;
+
+    const bufferedFrame = String(session.streamWatch?.latestFrameDataBase64 || "").trim();
+    if (!bufferedFrame) return;
+
+    // Freeze the frame that caused the trigger so the pipeline uses this exact frame
+    const frozenFrameSnapshot = {
+      mimeType: String(session.streamWatch?.latestFrameMimeType || "image/jpeg"),
+      dataBase64: bufferedFrame
+    };
+
+    const speakerName = manager.resolveVoiceSpeakerName(session, streamerUserId) || "the streamer";
+    session.streamWatch.lastCommentaryAt = now;
+
+    const triggerReason = isFirstCommentary ? "share_start" : sceneChanged ? "scene_changed" : "silence";
+    manager.runRealtimeBrainReply({
+      session,
+      settings: resolvedSettings,
+      userId: session.streamWatch.targetUserId || streamerUserId || manager.client.user?.id || null,
+      transcript: `[${speakerName} is screen sharing with you — new frame available]`,
+      inputKind: "event",
+      directAddressed: false,
+      source: `stream_watch_direct_vision:${triggerReason}`,
+      frozenFrameSnapshot
+    });
+
+    manager.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: manager.client.user?.id || null,
+      content: "stream_watch_commentary_requested",
+      metadata: {
+        sessionId: session.id,
+        source: String(source || "api_stream_ingest"),
+        streamerUserId: streamerUserId || null,
+        commentaryPath: "direct_vision_brain_turn",
+        triggerReason,
+        configuredCommentaryPath: commentaryPath
+      }
+    });
+    return;
+  }
+
+  // ── Legacy two-model commentary path ──
+  if (!useDirectVision && brainContextUpdate && (brainContextUpdate.sceneChanged === false || brainContextUpdate.shouldComment === false)) {
+    return;
+  }
 
   try {
-    let fallbackVisionMeta = null;
-    const latestContextNote = normalizeVoiceText(
+    let commentaryPathUsed = "";
+    let visionMeta = null;
+
+    const speakerName = manager.resolveVoiceSpeakerName(session, streamerUserId) || "the streamer";
+    const nativePrompt = normalizeVoiceText(
+      [
+        `You're in Discord VC watching ${speakerName}'s live stream.`,
+        "Give one short in-character spoken commentary line about the latest frame.",
+        "If unclear, say that briefly without pretending certainty."
+      ].join(" "),
+      STREAM_WATCH_COMMENTARY_PROMPT_MAX_CHARS
+    );
+
+    const noteForTracking = normalizeVoiceText(
       brainContextUpdate?.note || session.streamWatch?.brainContextEntries?.[session.streamWatch.brainContextEntries.length - 1]?.text || "",
       STREAM_WATCH_BRAIN_CONTEXT_LINE_MAX_CHARS
     );
     if (
-      latestContextNote &&
-      String(session.streamWatch?.lastCommentaryNote || "").trim().toLowerCase() === latestContextNote.toLowerCase()
+      noteForTracking &&
+      String(session.streamWatch?.lastCommentaryNote || "").trim().toLowerCase() === noteForTracking.toLowerCase()
     ) {
       return;
     }
+
     if (!forceAnthropicKeyframes && typeof realtimeClient.requestVideoCommentary === "function") {
       realtimeClient.requestVideoCommentary(nativePrompt);
+      commentaryPathUsed = "provider_native_video";
     } else if (typeof realtimeClient.requestTextUtterance === "function") {
       const bufferedFrame = String(session.streamWatch?.latestFrameDataBase64 || "").trim();
       if (!bufferedFrame) return;
@@ -1356,7 +1468,8 @@ export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchMana
       if (!line) return;
       const utterancePrompt = buildRealtimeTextUtterancePrompt(line, STREAM_WATCH_COMMENTARY_LINE_MAX_CHARS);
       realtimeClient.requestTextUtterance(utterancePrompt);
-      fallbackVisionMeta = {
+      commentaryPathUsed = "vision_fallback_text_utterance";
+      visionMeta = {
         provider: generated?.provider || null,
         model: generated?.model || null
       };
@@ -1373,7 +1486,7 @@ export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchMana
     });
     if (!created) return;
     session.streamWatch.lastCommentaryAt = now;
-    session.streamWatch.lastCommentaryNote = latestContextNote || null;
+    session.streamWatch.lastCommentaryNote = noteForTracking || null;
     manager.store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,
@@ -1384,10 +1497,10 @@ export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchMana
         sessionId: session.id,
         source: String(source || "api_stream_ingest"),
         streamerUserId: streamerUserId || null,
-        commentaryPath: fallbackVisionMeta ? "vision_fallback_text_utterance" : "provider_native_video",
+        commentaryPath: commentaryPathUsed,
         configuredCommentaryPath: commentaryPath,
-        visionProvider: fallbackVisionMeta?.provider || null,
-        visionModel: fallbackVisionMeta?.model || null
+        visionProvider: visionMeta?.provider || null,
+        visionModel: visionMeta?.model || null
       }
     });
   } catch (error) {

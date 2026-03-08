@@ -204,6 +204,7 @@ interface RunRealtimeBrainReplyArgs {
   latencyContext?: Record<string, unknown> | null;
   forceSpokenOutput?: boolean;
   spokenOutputRetryCount?: number;
+  frozenFrameSnapshot?: { mimeType: string; dataBase64: string } | null;
 }
 
 interface RunSttPipelineReplyArgs {

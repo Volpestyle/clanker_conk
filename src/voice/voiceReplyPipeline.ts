@@ -23,6 +23,7 @@ import {
   normalizeSoundboardRefs as normalizeSoundboardRefsModule,
   resolveSoundboardCandidates as resolveSoundboardCandidatesModule
 } from "./voiceSoundboard.ts";
+import { appendStreamWatchBrainContextEntry } from "./voiceStreamWatch.ts";
 import type { ReplyInterruptionPolicy } from "./bargeInController.ts";
 import type {
   VoiceConversationContext,
@@ -63,6 +64,7 @@ export interface VoiceReplyPipelineParams {
   latencyContext?: VoicePendingResponseLatencyContext | null;
   forceSpokenOutput?: boolean;
   spokenOutputRetryCount?: number;
+  frozenFrameSnapshot?: { mimeType: string; dataBase64: string } | null;
 }
 
 export type VoiceReplyPipelineHost = Pick<VoiceSessionManager,
@@ -320,6 +322,19 @@ export async function runVoiceReplyPipeline(
   const contextNow = Date.now();
   const sessionTiming = host.sessionLifecycle.buildVoiceSessionTimingContext(session);
   const streamWatchBrainContext = host.getStreamWatchBrainContextForPrompt(session, params.settings);
+  const streamWatchLatestFrame =
+    params.frozenFrameSnapshot?.dataBase64
+      ? params.frozenFrameSnapshot
+      : session.streamWatch?.active && session.streamWatch?.latestFrameDataBase64
+        ? {
+            mimeType: String(session.streamWatch.latestFrameMimeType || "image/jpeg"),
+            dataBase64: String(session.streamWatch.latestFrameDataBase64)
+          }
+        : null;
+  const streamWatchDurableScreenNotes =
+    session.streamWatch?.active && Array.isArray(session.streamWatch?.durableScreenNotes)
+      ? session.streamWatch.durableScreenNotes
+      : [];
   const voiceAddressingState = host.buildVoiceAddressingState({
     session,
     userId: params.userId,
@@ -363,6 +378,8 @@ export async function runVoiceReplyPipeline(
       recentMembershipEvents,
       recentVoiceEffectEvents,
       soundboardCandidates: soundboardCandidateLines,
+      streamWatchLatestFrame,
+      streamWatchDurableScreenNotes,
       onWebLookupStart: async ({ query }: { query: string }) => {
         if (typeof releaseLookupBusy === "function") return;
         releaseLookupBusy = host.beginVoiceWebLookupBusy({
@@ -422,6 +439,29 @@ export async function runVoiceReplyPipeline(
   const usedOpenArticleFollowup = Boolean(generatedPayload?.usedOpenArticleFollowup);
   const usedScreenShareOffer = Boolean(generatedPayload?.usedScreenShareOffer);
   const leaveVoiceChannelRequested = Boolean(generatedPayload?.leaveVoiceChannelRequested);
+  const screenNote = typeof generatedPayload?.screenNote === "string"
+    ? String(generatedPayload.screenNote || "").trim().slice(0, 220)
+    : null;
+  if (screenNote && session.streamWatch?.active) {
+    appendStreamWatchBrainContextEntry({
+      session,
+      text: screenNote,
+      at: Date.now(),
+      provider: null,
+      model: null,
+      speakerName: null
+    });
+    session.streamWatch.lastBrainContextAt = Date.now();
+  }
+  const screenMoment = typeof generatedPayload?.screenMoment === "string"
+    ? String(generatedPayload.screenMoment || "").trim().slice(0, 220)
+    : null;
+  if (screenMoment && session.streamWatch?.active) {
+    if (!Array.isArray(session.streamWatch.durableScreenNotes)) {
+      session.streamWatch.durableScreenNotes = [];
+    }
+    session.streamWatch.durableScreenNotes.push(screenMoment);
+  }
   const generatedVoiceAddressing = host.normalizeVoiceAddressingAnnotation({
     rawAddressing: generatedPayload?.voiceAddressing,
     directAddressed: Boolean(params.directAddressed),
