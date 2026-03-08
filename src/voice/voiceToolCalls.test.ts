@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { executeLocalVoiceToolCall, executeVoiceMusicPlayNowTool } from "./voiceToolCalls.ts";
+import { executeLocalVoiceToolCall, executeVoiceMusicPlayTool } from "./voiceToolCalls.ts";
 import { createTestSettings } from "../testSettings.ts";
 
 test("executeLocalVoiceToolCall forwards browser abort signals to browser_browse", async () => {
@@ -105,13 +105,22 @@ test("executeLocalVoiceToolCall aborts non-browser tools before dispatch", async
 });
 
 // ---------------------------------------------------------------------------
-// music_play_now non-blocking tests
+// music_play non-blocking tests
 // ---------------------------------------------------------------------------
 
-function buildMusicPlayNowManager({
-  requestPlayMusicImpl
+function buildMusicPlayManager({
+  requestPlayMusicImpl,
+  searchResults = []
 }: {
   requestPlayMusicImpl?: () => Promise<void>;
+  searchResults?: Array<{
+    id: string;
+    title: string;
+    artist: string;
+    durationSeconds: number;
+    platform: string;
+    externalUrl: string;
+  }>;
 } = {}) {
   const calls: { method: string; args: unknown }[] = [];
 
@@ -135,12 +144,33 @@ function buildMusicPlayNowManager({
   const catalog = new Map([[track.id, track]]);
 
   const manager = {
+    client: {
+      user: {
+        id: "bot-user"
+      }
+    },
     ensureToolMusicQueueState: () => queueState,
     buildVoiceQueueStatePayload: () => ({ guildId: "guild-1", tracks: [], nowPlayingIndex: 0, isPaused: false }),
+    musicSearch: {
+      isConfigured: () => true,
+      search: async () => ({ results: searchResults })
+    },
+    normalizeMusicSelectionResult: (row: Record<string, unknown>) => ({
+      id: String(row.id || ""),
+      title: String(row.title || ""),
+      artist: String(row.artist || ""),
+      platform: String(row.platform || "youtube"),
+      externalUrl: String(row.externalUrl || ""),
+      durationSeconds: Number(row.durationSeconds || 0)
+    }),
+    beginVoiceCommandSession: (...args: unknown[]) => { calls.push({ method: "beginVoiceCommandSession", args }); },
     requestPlayMusic: requestPlayMusicImpl
       ? (...args: unknown[]) => { calls.push({ method: "requestPlayMusic", args }); return requestPlayMusicImpl(); }
       : (...args: unknown[]) => { calls.push({ method: "requestPlayMusic", args }); return Promise.resolve(); },
-    requestRealtimePromptUtterance: (args: unknown) => { calls.push({ method: "requestRealtimePromptUtterance", args }); return true; }
+    requestRealtimePromptUtterance: (args: unknown) => { calls.push({ method: "requestRealtimePromptUtterance", args }); return true; },
+    store: {
+      logAction: (...args: unknown[]) => { calls.push({ method: "logAction", args }); }
+    }
   };
 
   const session = {
@@ -154,69 +184,83 @@ function buildMusicPlayNowManager({
   return { manager, session, calls, track };
 }
 
-test("music_play_now returns immediately with status loading", async () => {
+test("music_play returns immediately with status loading for a direct match", async () => {
   let resolvePlayMusic: () => void;
   const playMusicPromise = new Promise<void>((r) => { resolvePlayMusic = r; });
+  const directTrack = {
+    id: "track-abc",
+    title: "Bad and Boujee",
+    artist: "Migos",
+    durationSeconds: 240,
+    platform: "youtube",
+    externalUrl: "https://example.com/track"
+  };
 
-  const { manager, session, calls } = buildMusicPlayNowManager({
-    requestPlayMusicImpl: () => playMusicPromise
+  const { manager, session, calls } = buildMusicPlayManager({
+    requestPlayMusicImpl: () => playMusicPromise,
+    searchResults: [directTrack]
   });
 
-  const result = await executeVoiceMusicPlayNowTool(manager, {
+  const result = await executeVoiceMusicPlayTool(manager, {
     session,
     settings: createTestSettings({}),
-    args: { track_id: "track-abc" }
+    args: { query: "bad and boujee" }
   });
 
-  // Tool returns immediately — requestPlayMusic has NOT resolved yet
   assert.equal(result.ok, true);
   assert.equal(result.status, "loading");
   assert.equal(result.track.title, "Bad and Boujee");
   assert.equal(result.track.artist, "Migos");
+  assert.equal(calls.filter((c) => c.method === "requestPlayMusic").length, 1);
 
-  // requestRealtimePromptUtterance should NOT have been called yet
   const utteranceCalls = calls.filter((c) => c.method === "requestRealtimePromptUtterance");
   assert.equal(utteranceCalls.length, 0);
 
-  // Now let the background download complete
   resolvePlayMusic!();
   await new Promise((r) => setTimeout(r, 10));
 
-  // Now the "now playing" utterance should have fired
   const afterCalls = calls.filter((c) => c.method === "requestRealtimePromptUtterance");
-  assert.equal(afterCalls.length, 1);
-  const utteranceArgs = afterCalls[0].args as { prompt: string; source: string };
-  assert.match(utteranceArgs.prompt, /Bad and Boujee/);
-  assert.match(utteranceArgs.prompt, /now playing/);
-  assert.equal(utteranceArgs.source, "music_now_playing");
+  assert.equal(afterCalls.length, 0);
 });
 
-test("music_play_now injects error utterance when download fails", async () => {
-  const { manager, session, calls } = buildMusicPlayNowManager({
-    requestPlayMusicImpl: () => Promise.reject(new Error("yt-dlp timed out"))
-  });
+test("music_play returns disambiguation options when search is ambiguous", async () => {
+  const searchResults = [
+    {
+      id: "track-a",
+      title: "Risk It All",
+      artist: "Bruno Mars",
+      durationSeconds: 201,
+      platform: "youtube",
+      externalUrl: "https://example.com/a"
+    },
+    {
+      id: "track-b",
+      title: "24K Magic",
+      artist: "Bruno Mars",
+      durationSeconds: 227,
+      platform: "youtube",
+      externalUrl: "https://example.com/b"
+    }
+  ];
 
-  const result = await executeVoiceMusicPlayNowTool(manager, {
+  const { manager, session, calls } = buildMusicPlayManager({ searchResults });
+
+  const result = await executeVoiceMusicPlayTool(manager, {
     session,
     settings: createTestSettings({}),
-    args: { track_id: "track-abc" }
+    args: { query: "Bruno Mars" }
   });
 
   assert.equal(result.ok, true);
-  assert.equal(result.status, "loading");
-
-  // Let the rejected promise propagate through .catch()
-  await new Promise((r) => setTimeout(r, 10));
-
-  const utteranceCalls = calls.filter((c) => c.method === "requestRealtimePromptUtterance");
-  assert.equal(utteranceCalls.length, 1);
-  const utteranceArgs = utteranceCalls[0].args as { prompt: string; source: string };
-  assert.match(utteranceArgs.prompt, /failed to load/);
-  assert.match(utteranceArgs.prompt, /yt-dlp timed out/);
-  assert.equal(utteranceArgs.source, "music_play_failed");
+  assert.equal(result.status, "needs_disambiguation");
+  assert.equal(Array.isArray(result.options), true);
+  assert.equal(result.options.length, 2);
+  assert.equal(result.options[0]?.selection_id, "track-a");
+  assert.equal(calls.filter((c) => c.method === "requestPlayMusic").length, 0);
+  assert.equal(calls.filter((c) => c.method === "beginVoiceCommandSession").length, 1);
 });
 
-test("music_play_now updates queue state synchronously before returning", async () => {
+test("music_play updates queue state synchronously before returning", async () => {
   const queueState = {
     guildId: "guild-1",
     voiceChannelId: "vc-1",
@@ -240,13 +284,38 @@ test("music_play_now updates queue state synchronously before returning", async 
   const catalog = new Map([[track.id, track]]);
 
   const manager = {
+    client: {
+      user: {
+        id: "bot-user"
+      }
+    },
     ensureToolMusicQueueState: () => queueState,
     buildVoiceQueueStatePayload: () => null,
+    musicSearch: {
+      isConfigured: () => true,
+      search: async () => ({ results: [] })
+    },
+    normalizeMusicSelectionResult: (row: Record<string, unknown>) => ({
+      id: String(row.id || ""),
+      title: String(row.title || ""),
+      artist: String(row.artist || ""),
+      platform: String(row.platform || "youtube"),
+      externalUrl: String(row.externalUrl || ""),
+      durationSeconds: Number(row.durationSeconds || 0)
+    }),
+    beginVoiceCommandSession() {
+      return undefined;
+    },
     requestPlayMusic: () => new Promise<void>(() => {}), // never resolves
-    requestRealtimePromptUtterance: () => true
+    requestRealtimePromptUtterance: () => true,
+    store: {
+      logAction() {
+        return undefined;
+      }
+    }
   };
 
-  await executeVoiceMusicPlayNowTool(manager, {
+  await executeVoiceMusicPlayTool(manager, {
     session: {
       id: "s1",
       guildId: "g1",
@@ -255,14 +324,12 @@ test("music_play_now updates queue state synchronously before returning", async 
       toolMusicTrackCatalog: catalog
     },
     settings: createTestSettings({}),
-    args: { track_id: "track-abc" }
+    args: { selection_id: "track-abc" }
   });
 
-  // Queue should have been updated synchronously
   assert.equal(queueState.nowPlayingIndex, 0);
   assert.equal(queueState.isPaused, false);
   assert.equal(queueState.tracks[0].title, "Bad and Boujee");
-  // old-2 should be preserved (was after nowPlayingIndex)
   assert.equal(queueState.tracks[1].id, "old-2");
   assert.equal(queueState.tracks.length, 2);
 });

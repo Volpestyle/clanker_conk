@@ -163,7 +163,7 @@ test("buildVoiceTurnPrompt prefers tool calls over stale helper fields", () => {
   assert.equal(prompt.includes("call open_article with one ref from this list."), true);
   assert.equal(prompt.includes("Use memory_write with namespace=speaker"), true);
   assert.equal(prompt.includes("Voice/session control tools are available."), true);
-  assert.equal(prompt.includes("music_play_now"), true);
+  assert.equal(prompt.includes("music_play"), true);
   assert.equal(prompt.includes("set_addressing"), false);
   assert.equal(prompt.includes("Use tool calls for actions, lookup, voice addressing"), false);
   assert.equal(prompt.includes("Music playback:"), true);

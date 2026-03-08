@@ -765,7 +765,10 @@ export class InstructionManager {
           getDirectiveSettings(settings).enabled
             ? "- If someone explicitly asks you to change how you talk, follow a standing instruction, or perform a recurring trigger/action behavior in future conversations, use adaptive_directive_add or adaptive_directive_remove instead of memory_write."
             : "- Adaptive directives are disabled right now. Do not imply you can save standing behavior changes for later.",
-          "- For music controls, use music_play_now for immediate playback, music_queue_next to place a track after the current one, music_queue_add to append, and music_stop to stop playback.",
+          "- For music controls, use music_play to start or replace playback now. It searches internally and may return disambiguation options.",
+          "- If music_play returns choices, ask which one they want and then call music_play again with selection_id.",
+          "- Use music_search only for explicit browsing requests or when you need candidate IDs for queue operations.",
+          "- Use music_queue_next to place a track after the current one, music_queue_add to append, and music_stop to stop playback.",
           "- Do not emulate play-now by chaining music_queue_add and music_skip.",
           "- Do not use music_skip as a substitute for music_stop.",
           "- If a tool fails, explain the failure briefly and continue naturally."

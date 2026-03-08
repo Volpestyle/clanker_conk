@@ -25,10 +25,10 @@ function envNumber(name: string, defaultValue: number): number {
   return Number.isFinite(parsed) ? parsed : defaultValue;
 }
 
-const SKIP_MSG = "Skipping music play-now E2E tests: set RUN_E2E_MUSIC=1";
+const SKIP_MSG = "Skipping voice music_play E2E tests: set RUN_E2E_MUSIC=1";
 
 /**
- * Non-blocking music_play_now E2E tests.
+ * Non-blocking music_play E2E tests.
  *
  * Validates that when a user asks to play music via voice, the bot
  * acknowledges immediately (within a few seconds) rather than blocking
@@ -39,7 +39,7 @@ const SKIP_MSG = "Skipping music play-now E2E tests: set RUN_E2E_MUSIC=1";
  *
  * Requires: RUN_E2E_MUSIC=1 and standard E2E env vars.
  */
-describe("E2E: Voice music_play_now (non-blocking)", () => {
+describe("E2E: Voice music_play (non-blocking)", () => {
   let driver: DriverBot;
   let driverB: DriverBot | null = null;
 

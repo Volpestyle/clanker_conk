@@ -733,8 +733,9 @@ export function buildVoiceTurnPrompt({
 
   if (allowVoiceToolCalls) {
     parts.push("Voice/session control tools are available.");
-    parts.push("- For music controls, use music_play_now for immediate playback, music_queue_next to place a track after the current one, music_queue_add to append, music_stop to stop playback, music_pause to pause, music_resume to resume, music_skip to skip, and music_now_playing to inspect status.");
-    parts.push("- Use music_search when the speaker wants you to find candidate tracks first instead of starting playback immediately.");
+    parts.push("- For music controls, use music_play to start or replace playback now. It searches internally and may return disambiguation options. If the speaker then picks an option, call music_play again with selection_id.");
+    parts.push("- Use music_search only when the speaker explicitly wants to browse candidates first or when you need candidate IDs for queue operations.");
+    parts.push("- Use music_queue_next to place a track after the current one, music_queue_add to append, music_stop to stop playback, music_pause to pause, music_resume to resume, music_skip to skip, and music_now_playing to inspect status.");
     parts.push("- Do not emulate play-now by chaining music_queue_add and music_skip.");
     parts.push("- Do not use music_skip as a substitute for music_stop.");
     parts.push("- Use note_context to pin important session-scoped facts, plans, preferences, or relationships that should stay available later in this conversation. Do not duplicate something already pinned.");

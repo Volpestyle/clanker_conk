@@ -199,7 +199,7 @@ import {
 import { providerSupports } from "./voiceModes.ts";
 import { executeOpenAiRealtimeFunctionCall } from "./voiceToolCallInfra.ts";
 import {
-  executeVoiceMusicPlayNowTool,
+  executeVoiceMusicPlayTool,
   executeVoiceMusicQueueAddTool,
   executeVoiceMusicQueueNextTool,
   executeVoiceMusicSearchTool
@@ -5566,10 +5566,18 @@ export class VoiceSessionManager {
     return {
       musicSearch: (query: string, limit: number) =>
         executeVoiceMusicSearchTool(this, { session, args: { query, max_results: limit } }),
+      musicPlay: (query: string, selectionId?: string | null, platform?: string | null) =>
+        executeVoiceMusicPlayTool(this, {
+          session,
+          settings,
+          args: {
+            query,
+            selection_id: selectionId,
+            platform
+          }
+        }),
       musicQueueAdd: (trackIds: string[], position?: number | "end") =>
         executeVoiceMusicQueueAddTool(this, { session, settings, args: { tracks: trackIds, position } }),
-      musicPlayNow: (trackId: string) =>
-        executeVoiceMusicPlayNowTool(this, { session, settings, args: { track_id: trackId } }),
       musicQueueNext: (trackIds: string[]) =>
         executeVoiceMusicQueueNextTool(this, { session, settings, args: { tracks: trackIds } }),
       musicStop: () =>

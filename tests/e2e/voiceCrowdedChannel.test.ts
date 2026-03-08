@@ -321,7 +321,7 @@ describe("E2E: Crowded channel — multi-participant resilience", () => {
       assert.ok(
         sustainedBytes > 0,
         `Music should be actively streaming (got ${sustainedBytes} bytes over 5s after clearing buffer). ` +
-        `If zero, the model may have called music_search without following up with music_play_now.`
+        `If zero, the model may have stalled after music_search instead of completing music_play.`
       );
 
       await stopMusic();

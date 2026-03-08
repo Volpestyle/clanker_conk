@@ -78,6 +78,7 @@ test("refreshRealtimeTools registers local and MCP tool definitions", async () =
   assert.equal(toolNames.includes("memory_search"), true);
   assert.equal(toolNames.includes("memory_write"), true);
   assert.equal(toolNames.includes("music_search"), true);
+  assert.equal(toolNames.includes("music_play"), true);
   assert.equal(toolNames.includes("offer_screen_share_link"), true);
   assert.equal(toolNames.includes("server_status"), true);
   const descriptorRows = Array.isArray(session.openAiToolDefinitions) ? session.openAiToolDefinitions : [];

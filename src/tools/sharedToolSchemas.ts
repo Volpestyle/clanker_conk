@@ -210,7 +210,7 @@ export const SHARED_TOOL_SCHEMAS: SharedToolSchema[] = [
 
 export const MUSIC_SEARCH_SCHEMA: SharedToolSchema = {
   name: "music_search",
-  description: "Search for music tracks to queue or play.",
+  description: "Search for candidate tracks without starting playback. Use this for explicit browsing requests or when you need candidate IDs for queue operations.",
   voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
@@ -246,16 +246,32 @@ export const MUSIC_QUEUE_ADD_SCHEMA: SharedToolSchema = {
   }
 };
 
-export const MUSIC_PLAY_NOW_SCHEMA: SharedToolSchema = {
-  name: "music_play_now",
-  description: "Start playing a specific track immediately.",
-  voiceContinuationPolicy: "if_no_spoken_text",
+export const MUSIC_PLAY_SCHEMA: SharedToolSchema = {
+  name: "music_play",
+  description: "Start playing music immediately from a query or a prior disambiguation selection. Searches internally and returns clarification options when needed.",
+  voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
     properties: {
-      track_id: { type: "string" }
+      query: {
+        type: "string",
+        description: "Song, artist, or phrase to play right now."
+      },
+      selection_id: {
+        type: "string",
+        description: "Exact selection id returned from a previous music_play or music_search result."
+      },
+      platform: {
+        type: "string",
+        enum: ["youtube", "soundcloud", "auto"]
+      },
+      max_results: {
+        type: "integer",
+        minimum: 1,
+        maximum: 10,
+        description: "Maximum disambiguation options to consider when searching."
+      }
     },
-    required: ["track_id"],
     additionalProperties: false
   }
 };
@@ -427,8 +443,8 @@ export const NOTE_CONTEXT_SCHEMA: SharedToolSchema = {
 
 export const VOICE_TOOL_SCHEMAS: SharedToolSchema[] = [
   MUSIC_SEARCH_SCHEMA,
+  MUSIC_PLAY_SCHEMA,
   MUSIC_QUEUE_ADD_SCHEMA,
-  MUSIC_PLAY_NOW_SCHEMA,
   MUSIC_QUEUE_NEXT_SCHEMA,
   MUSIC_STOP_SCHEMA,
   MUSIC_PAUSE_SCHEMA,

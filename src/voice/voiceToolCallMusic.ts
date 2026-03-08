@@ -1,6 +1,11 @@
 import { clamp } from "../utils.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
 import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
+import {
+  findPendingMusicSelectionById,
+  getMusicDisambiguationPromptContext,
+  setMusicDisambiguationState
+} from "./voiceMusicPlayback.ts";
 import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import type { MusicSelectionResult, VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
@@ -59,6 +64,141 @@ function resolveMusicCatalogTracks(catalog: Map<string, unknown>, trackIds: stri
     .filter((entry): entry is MusicQueueTrack => Boolean(entry));
 }
 
+function getToolMusicCatalog(manager: VoiceToolCallManager, session: ToolRuntimeSession | null | undefined) {
+  const runtimeSession = ensureSessionToolRuntimeState(manager, session);
+  const catalog = runtimeSession?.toolMusicTrackCatalog instanceof Map
+    ? runtimeSession.toolMusicTrackCatalog
+    : new Map<string, unknown>();
+  if (runtimeSession && !(runtimeSession.toolMusicTrackCatalog instanceof Map)) {
+    runtimeSession.toolMusicTrackCatalog = catalog;
+  }
+  return {
+    runtimeSession,
+    catalog
+  };
+}
+
+function buildMusicToolTrackResult(track: MusicSelectionResult | MusicQueueTrack) {
+  const durationMs = "durationSeconds" in track
+    ? Number.isFinite(Number(track.durationSeconds))
+      ? Math.max(0, Math.round(Number(track.durationSeconds) * 1000))
+      : null
+    : track.durationMs;
+  const platform = "platform" in track ? track.platform : "youtube";
+  const externalUrl = "externalUrl" in track ? track.externalUrl : null;
+  return {
+    id: track.id,
+    title: track.title,
+    artist: track.artist,
+    durationMs,
+    source: platform === "soundcloud" ? "sc" : "yt",
+    platform,
+    streamUrl: externalUrl || null
+  };
+}
+
+function buildMusicToolOptionResult(track: MusicSelectionResult) {
+  const base = buildMusicToolTrackResult(track);
+  return {
+    selection_id: track.id,
+    ...base
+  };
+}
+
+function normalizeMusicSearchResult(
+  manager: VoiceToolCallManager,
+  row: {
+    id: string;
+    title: string;
+    artist: string;
+    platform: string;
+    externalUrl?: string | null;
+    durationSeconds?: number | null;
+  }
+) {
+  return manager.normalizeMusicSelectionResult({
+    id: row.id,
+    title: row.title,
+    artist: row.artist,
+    platform: row.platform,
+    externalUrl: row.externalUrl,
+    durationSeconds: row.durationSeconds
+  });
+}
+
+function resolveMusicPlaySelection(
+  manager: VoiceToolCallManager,
+  session: ToolRuntimeSession | null | undefined,
+  selectionId: string,
+  catalog: Map<string, unknown>
+) {
+  const pendingSelection = findPendingMusicSelectionById(manager, session, selectionId);
+  if (pendingSelection) return pendingSelection;
+  const catalogSelection = catalog.get(selectionId);
+  return isMusicSelectionResult(catalogSelection) ? catalogSelection : null;
+}
+
+function startVoiceMusicPlayRequest(
+  manager: VoiceToolCallManager,
+  {
+    session,
+    settings,
+    query,
+    selectedTrack
+  }: {
+    session: ToolRuntimeSession | null | undefined;
+    settings?: VoiceRealtimeToolSettings | null;
+    query?: string | null;
+    selectedTrack: MusicSelectionResult;
+  }
+) {
+  const queueState = manager.ensureToolMusicQueueState(session);
+  if (!queueState) return { ok: false, error: "queue_unavailable" };
+  const replacementTrack = toMusicQueueTrack(selectedTrack);
+  const trailingTracks = queueState.nowPlayingIndex == null
+    ? []
+    : queueState.tracks.slice(Math.max(0, queueState.nowPlayingIndex + 1));
+  queueState.tracks = [replacementTrack, ...trailingTracks];
+  queueState.nowPlayingIndex = 0;
+  queueState.isPaused = false;
+  const playbackQuery =
+    normalizeInlineText(query || `${selectedTrack.title} ${selectedTrack.artist || ""}`, 120) ||
+    normalizeInlineText(`${selectedTrack.title} ${selectedTrack.artist || ""}`, 120);
+
+  manager.requestPlayMusic({
+    guildId: session?.guildId,
+    channelId: session?.textChannelId,
+    requestedByUserId: session?.lastOpenAiToolCallerUserId || null,
+    settings,
+    query: playbackQuery,
+    trackId: selectedTrack.id,
+    searchResults: [selectedTrack],
+    reason: "voice_tool_music_play",
+    source: "voice_tool_call",
+    mustNotify: false
+  }).catch((error: unknown) => {
+    manager.store.logAction({
+      kind: "voice_error",
+      guildId: String(session?.guildId || "").trim() || null,
+      channelId: String(session?.textChannelId || "").trim() || null,
+      userId: manager.client.user?.id || null,
+      content: `voice_tool_music_play_failed: ${String(error instanceof Error ? error.message : error)}`,
+      metadata: {
+        sessionId: String(session?.id || "").trim() || null,
+        trackId: selectedTrack.id
+      }
+    });
+  });
+
+  return {
+    ok: true,
+    status: "loading",
+    query: playbackQuery || null,
+    track: buildMusicToolTrackResult(replacementTrack),
+    queue_state: manager.buildVoiceQueueStatePayload(session)
+  };
+}
+
 export async function executeVoiceMusicSearchTool(
   manager: VoiceToolCallManager,
   { session, args, signal }: VoiceMusicToolOptions
@@ -68,36 +208,14 @@ export async function executeVoiceMusicSearchTool(
   if (!query) return { ok: false, tracks: [], error: "query_required" };
   const maxResults = clamp(Math.floor(Number(args?.max_results || 5)), 1, 10);
   const searchResponse = await manager.musicSearch.search(query, { platform: "auto", limit: maxResults });
-  const runtimeSession = ensureSessionToolRuntimeState(manager, session);
-  const catalog = runtimeSession?.toolMusicTrackCatalog instanceof Map
-    ? runtimeSession.toolMusicTrackCatalog
-    : new Map<string, unknown>();
-  if (runtimeSession && !(runtimeSession.toolMusicTrackCatalog instanceof Map)) {
-    runtimeSession.toolMusicTrackCatalog = catalog;
-  }
+  const { catalog } = getToolMusicCatalog(manager, session);
   const tracks = (Array.isArray(searchResponse?.results) ? searchResponse.results : [])
     .slice(0, maxResults)
     .map((row) => {
-      const normalized = manager.normalizeMusicSelectionResult({
-        id: row.id,
-        title: row.title,
-        artist: row.artist,
-        platform: row.platform,
-        externalUrl: row.externalUrl,
-        durationSeconds: row.durationSeconds
-      });
+      const normalized = normalizeMusicSearchResult(manager, row);
       if (!normalized) return null;
       catalog.set(normalized.id, normalized);
-      return {
-        id: normalized.id,
-        title: normalized.title,
-        artist: normalized.artist,
-        durationMs: Number.isFinite(Number(normalized.durationSeconds))
-          ? Math.max(0, Math.round(Number(normalized.durationSeconds) * 1000))
-          : null,
-        source: normalized.platform === "soundcloud" ? "sc" : "yt",
-        streamUrl: normalized.externalUrl || null
-      };
+      return buildMusicToolTrackResult(normalized);
     })
     .filter(Boolean);
 
@@ -213,76 +331,123 @@ export async function executeVoiceMusicQueueNextTool(
   };
 }
 
-export async function executeVoiceMusicPlayNowTool(
+export async function executeVoiceMusicPlayTool(
   manager: VoiceToolCallManager,
   { session, settings, args, signal }: VoiceMusicToolOptions
 ) {
   throwIfAborted(signal, "Voice music play cancelled");
-  const queueState = manager.ensureToolMusicQueueState(session);
-  const runtimeSession = ensureSessionToolRuntimeState(manager, session);
-  const trackId = normalizeInlineText(args?.track_id, 180);
-  if (!queueState || !runtimeSession) return { ok: false, error: "queue_unavailable" };
-  if (!trackId) return { ok: false, error: "track_id_required" };
+  const query = normalizeInlineText(args?.query, 180);
+  const selectionId = normalizeInlineText(args?.selection_id, 180);
+  const platformToken = normalizeInlineText(args?.platform, 32)?.toLowerCase();
+  const platform =
+    platformToken === "youtube" || platformToken === "soundcloud" || platformToken === "auto"
+      ? platformToken
+      : "auto";
+  const maxResults = clamp(Math.floor(Number(args?.max_results || 5)), 1, 10);
+  if (!query && !selectionId) return { ok: false, error: "query_or_selection_id_required" };
 
-  const catalog = runtimeSession.toolMusicTrackCatalog instanceof Map
-    ? runtimeSession.toolMusicTrackCatalog
-    : new Map<string, unknown>();
-  const selectedTrack = catalog.get(trackId);
-  if (!isMusicSelectionResult(selectedTrack)) return { ok: false, error: "unknown_track_id" };
-  const replacementTrack = toMusicQueueTrack(selectedTrack);
-  const trailingTracks = queueState.nowPlayingIndex == null
-    ? []
-    : queueState.tracks.slice(Math.max(0, queueState.nowPlayingIndex + 1));
-  queueState.tracks = [replacementTrack, ...trailingTracks];
-  queueState.nowPlayingIndex = 0;
-  queueState.isPaused = false;
-  const trackInfo = { title: selectedTrack.title, artist: selectedTrack.artist };
-  manager.requestPlayMusic({
-    guildId: session?.guildId,
-    channelId: session?.textChannelId,
-    requestedByUserId: session?.lastOpenAiToolCallerUserId || null,
-    settings,
-    query: normalizeInlineText(`${selectedTrack.title} ${selectedTrack.artist || ""}`, 120),
-    trackId: selectedTrack.id,
-    searchResults: [selectedTrack],
-    reason: "voice_tool_music_play_now",
-    source: "voice_tool_call",
-    mustNotify: false
-  })
-    .then(() => {
-      manager.requestRealtimePromptUtterance({
-        session,
-        prompt: `(system: "${trackInfo.title}" by ${trackInfo.artist} is now playing)`,
-        source: "music_now_playing",
-        interruptionPolicy: {
-          assertive: true,
-          scope: "speaker",
-          allowedUserId: session?.lastOpenAiToolCallerUserId || null,
-          reason: "announcement",
-          source: "music_now_playing"
+  const { catalog } = getToolMusicCatalog(manager, session);
+  if (selectionId) {
+    const selectedTrack = resolveMusicPlaySelection(manager, session, selectionId, catalog);
+    if (!selectedTrack) return { ok: false, error: "unknown_selection_id" };
+    catalog.set(selectedTrack.id, selectedTrack);
+    return startVoiceMusicPlayRequest(manager, {
+      session,
+      settings,
+      query,
+      selectedTrack
+    });
+  }
+
+  const canSearch = Boolean(manager.musicSearch?.isConfigured?.()) && typeof manager.musicSearch?.search === "function";
+  if (!canSearch) {
+    manager.requestPlayMusic({
+      guildId: session?.guildId,
+      channelId: session?.textChannelId,
+      requestedByUserId: session?.lastOpenAiToolCallerUserId || null,
+      settings,
+      query,
+      reason: "voice_tool_music_play",
+      source: "voice_tool_call",
+      mustNotify: false
+    }).catch((error: unknown) => {
+      manager.store.logAction({
+        kind: "voice_error",
+        guildId: String(session?.guildId || "").trim() || null,
+        channelId: String(session?.textChannelId || "").trim() || null,
+        userId: manager.client.user?.id || null,
+        content: `voice_tool_music_play_failed: ${String(error instanceof Error ? error.message : error)}`,
+        metadata: {
+          sessionId: String(session?.id || "").trim() || null,
+          query
         }
       });
-    })
-    .catch((error: unknown) => {
-      const message = error instanceof Error ? error.message : "unknown error";
-      manager.requestRealtimePromptUtterance({
-        session,
-        prompt: `(system: failed to load "${trackInfo.title}" — ${message})`,
-        source: "music_play_failed",
-        interruptionPolicy: { assertive: true, scope: "none", reason: "announcement", source: "music_play_failed" }
-      });
     });
-  return {
-    ok: true,
-    status: "loading",
-    track: {
-      id: replacementTrack.id,
-      title: replacementTrack.title,
-      artist: replacementTrack.artist,
-      source: replacementTrack.source
-    },
-    queue_state: manager.buildVoiceQueueStatePayload(session)
-  };
+    return {
+      ok: true,
+      status: "loading",
+      query,
+      queue_state: manager.buildVoiceQueueStatePayload(session)
+    };
+  }
+
+  const searchResponse = await manager.musicSearch.search(query, {
+    platform,
+    limit: maxResults
+  });
+  const results = (Array.isArray(searchResponse?.results) ? searchResponse.results : [])
+    .slice(0, maxResults)
+    .map((row) => normalizeMusicSearchResult(manager, row))
+    .filter((entry): entry is MusicSelectionResult => Boolean(entry));
+  for (const result of results) {
+    catalog.set(result.id, result);
+  }
+
+  if (!results.length) {
+    return {
+      ok: false,
+      status: "not_found",
+      query,
+      error: "no_results"
+    };
+  }
+
+  if (results.length > 1) {
+    const requestedByUserId = session?.lastOpenAiToolCallerUserId || null;
+    setMusicDisambiguationState(manager, {
+      session,
+      query,
+      platform,
+      action: "play_now",
+      results,
+      requestedByUserId
+    });
+    if (requestedByUserId) {
+      manager.beginVoiceCommandSession({
+        session,
+        userId: requestedByUserId,
+        domain: "music",
+        intent: "music_disambiguation"
+      });
+    }
+    const disambiguation = getMusicDisambiguationPromptContext(manager, session);
+    const options = Array.isArray(disambiguation?.options) && disambiguation.options.length > 0
+      ? disambiguation.options
+      : results;
+    return {
+      ok: true,
+      status: "needs_disambiguation",
+      query,
+      options: options.map((entry) => buildMusicToolOptionResult(entry))
+    };
+  }
+
+  return startVoiceMusicPlayRequest(manager, {
+    session,
+    settings,
+    query,
+    selectedTrack: results[0]
+  });
 }
 
 export async function executeVoiceMusicStopTool(

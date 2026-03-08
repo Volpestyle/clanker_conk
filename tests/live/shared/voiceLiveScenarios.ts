@@ -327,17 +327,17 @@ export const VOICE_LIVE_SHARED_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
   ]),
 
   group("command recognition", [
-    intentScenario("play command with bot name", "clanker conk play sicko mode", "YES", "music_play_now", {
+    intentScenario("play command with bot name", "clanker conk play sicko mode", "YES", "music_play", {
       eagerness: 10,
       participants: ["alice", "bob"]
     }),
-    intentScenario("play command without bot name, active conversation", "Play Sicko Mode", "YES", "music_play_now", {
+    intentScenario("play command without bot name, active conversation", "Play Sicko Mode", "YES", "music_play", {
       eagerness: 10,
       participants: ["alice", "bob"],
       recentAssistantReply: true,
       msSinceAssistantReply: 15_000
     }),
-    intentScenario("playing music in conversation", "Clank play Sicko Mode", "YES", "music_play_now", {
+    intentScenario("playing music in conversation", "Clank play Sicko Mode", "YES", "music_play", {
       eagerness: 10,
       participants: ["alice", "bob", "carol"],
       speaker: "bob",

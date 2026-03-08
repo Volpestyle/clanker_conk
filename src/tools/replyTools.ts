@@ -233,8 +233,8 @@ type ReplyToolRuntime = {
   };
   voiceSession?: {
     musicSearch: (query: string, limit: number) => Promise<{ ok: boolean; tracks: Record<string, unknown>[] }>;
+    musicPlay: (query: string, selectionId?: string | null, platform?: string | null) => Promise<Record<string, unknown>>;
     musicQueueAdd: (trackIds: string[], position?: number | "end") => Promise<{ ok: boolean; queue_length: number; added: string[] }>;
-    musicPlayNow: (trackId: string) => Promise<{ ok: boolean; error?: string }>;
     musicQueueNext: (trackIds: string[]) => Promise<{ ok: boolean; queue_length: number }>;
     musicStop: () => Promise<{ ok: boolean }>;
     musicPause: () => Promise<{ ok: boolean }>;
@@ -470,8 +470,8 @@ export async function executeReplyTool(
     case "code_task":
       return executeCodeTask(input, runtime, context);
     case "music_search":
+    case "music_play":
     case "music_queue_add":
-    case "music_play_now":
     case "music_queue_next":
     case "music_stop":
     case "music_pause":
@@ -1281,6 +1281,17 @@ async function executeVoiceTool(
         result = await runtime.voiceSession.musicSearch(query, limit);
         break;
       }
+      case "music_play": {
+        const query = String(input?.query || "").trim().slice(0, 180);
+        const selectionId = String(input?.selection_id || "").trim().slice(0, 180) || null;
+        const platform = String(input?.platform || "").trim().slice(0, 32) || null;
+        if (!query && !selectionId) {
+          return { content: "Missing query or selection_id.", isError: true };
+        }
+        throwIfAborted(signal, "Reply tool cancelled");
+        result = await runtime.voiceSession.musicPlay(query, selectionId, platform);
+        break;
+      }
       case "music_queue_add": {
         const tracks = Array.isArray(input?.tracks)
           ? (input.tracks as string[]).map((t) => String(t).trim()).filter(Boolean).slice(0, 12)
@@ -1296,13 +1307,6 @@ async function executeVoiceTool(
               : undefined;
         throwIfAborted(signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicQueueAdd(tracks, position);
-        break;
-      }
-      case "music_play_now": {
-        const trackId = String(input?.track_id || "").trim();
-        if (!trackId) return { content: "Missing track_id.", isError: true };
-        throwIfAborted(signal, "Reply tool cancelled");
-        result = await runtime.voiceSession.musicPlayNow(trackId);
         break;
       }
       case "music_queue_next": {

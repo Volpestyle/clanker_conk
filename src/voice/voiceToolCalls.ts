@@ -30,7 +30,7 @@ export {
 } from "./voiceToolCallMemory.ts";
 
 export {
-  executeVoiceMusicPlayNowTool,
+  executeVoiceMusicPlayTool,
   executeVoiceMusicQueueAddTool,
   executeVoiceMusicQueueNextTool,
   executeVoiceMusicSearchTool

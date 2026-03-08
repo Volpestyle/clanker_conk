@@ -5,6 +5,7 @@ export type VoiceToolCallManager = Pick<
   VoiceSessionManager,
   | "appConfig"
   | "activeReplies"
+  | "beginVoiceCommandSession"
   | "browserManager"
   | "buildVoiceQueueStatePayload"
   | "client"

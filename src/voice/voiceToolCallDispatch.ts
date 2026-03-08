@@ -7,7 +7,7 @@ import {
   executeVoiceMemoryWriteTool
 } from "./voiceToolCallMemory.ts";
 import {
-  executeVoiceMusicPlayNowTool,
+  executeVoiceMusicPlayTool,
   executeVoiceMusicQueueAddTool,
   executeVoiceMusicQueueNextTool,
   executeVoiceMusicNowPlayingTool,
@@ -137,12 +137,12 @@ export async function executeLocalVoiceToolCall(manager: VoiceToolCallManager, o
       return executeVoiceConversationSearchTool(manager, { session: opts.session, args: opts.args, signal: opts.signal });
     case "music_search":
       return executeVoiceMusicSearchTool(manager, { session: opts.session, args: opts.args, signal: opts.signal });
+    case "music_play":
+      return executeVoiceMusicPlayTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
     case "music_queue_add":
       return executeVoiceMusicQueueAddTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
     case "music_queue_next":
       return executeVoiceMusicQueueNextTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
-    case "music_play_now":
-      return executeVoiceMusicPlayNowTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
     case "music_stop":
       return executeVoiceMusicStopTool(manager, { session: opts.session, settings: opts.settings, signal: opts.signal });
     case "music_pause":
