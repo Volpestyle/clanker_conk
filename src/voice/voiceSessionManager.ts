@@ -136,6 +136,7 @@ import {
 } from "./systemSpeechOpportunity.ts";
 import { runVoiceReplyPipeline } from "./voiceReplyPipeline.ts";
 import { requestJoin } from "./voiceJoinFlow.ts";
+import { shouldRequestVoiceToolFollowup } from "../tools/sharedToolSchemas.ts";
 import {
   buildVoiceConversationContext as buildVoiceConversationContextModule,
   evaluateVoiceReplyDecision as evaluateVoiceReplyDecisionModule
@@ -510,11 +511,14 @@ type VoiceToolRuntimeSessionLike = {
     callId: string;
     name: string;
     argumentsText: string;
+    responseId?: string | null;
     done: boolean;
     startedAtMs: number;
     sourceEventType: string;
   }>;
   openAiPendingToolAbortControllers?: Map<string, AbortController>;
+  openAiResponsesWithAssistantOutput?: Map<string, number>;
+  openAiToolFollowupNeeded?: boolean;
   toolMusicTrackCatalog?: Map<string, unknown>;
   memoryWriteWindow?: number[];
   toolCallEvents?: VoiceToolCallEvent[];

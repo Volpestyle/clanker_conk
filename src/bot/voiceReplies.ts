@@ -17,6 +17,7 @@ import {
   executeReplyTool
 } from "../tools/replyTools.ts";
 import type { ReplyToolRuntime, ReplyToolContext } from "../tools/replyTools.ts";
+import { shouldRequestVoiceToolFollowup } from "../tools/sharedToolSchemas.ts";
 import { clamp, sanitizeBotText } from "../utils.ts";
 import { loadConversationContinuityContext } from "./conversationContinuity.ts";
 import {
@@ -78,6 +79,22 @@ function mergeSpokenReplyText(parts: string[]) {
     .filter(Boolean)
     .join("\n")
     .trim();
+}
+
+function ensureAssistantContentIncludesResolvedText(content: ContentBlock[], fallbackText: unknown) {
+  const normalizedFallback = String(fallbackText || "").trim();
+  if (!normalizedFallback) return content;
+
+  const hasTextBlock = content.some((block) => {
+    if (!block || typeof block !== "object" || block.type !== "text") return false;
+    return String(block.text || "").trim().length > 0;
+  });
+  if (hasTextBlock) return content;
+
+  return [
+    { type: "text", text: normalizedFallback },
+    ...content
+  ];
 }
 
 function normalizeSessionDurableContextCategory(value: unknown): SessionDurableContextCategory {
@@ -823,8 +840,10 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       contextMessages: ContextMessage[];
       trace: typeof voiceTrace;
     }) => {
+      let streamedTextAccepted = false;
+      const streamedTextParts: string[] = [];
       if (!streamingEnabled) {
-        return await runtime.llm.generate({
+        const generation = await runtime.llm.generate({
           settings: tunedSettings,
           systemPrompt,
           userPrompt,
@@ -834,6 +853,15 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
           trace,
           signal
         });
+        const resolvedSpokenText = sanitizeBotText(
+          normalizeSkipSentinel(String(generation.text || "")),
+          520
+        );
+        return {
+          ...generation,
+          streamedTextAccepted,
+          resolvedSpokenText
+        };
       }
 
       const accumulator = new SentenceAccumulator({
@@ -848,6 +876,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
             index: streamedSentenceIndex
           });
           if (accepted === false) return;
+          streamedTextAccepted = true;
+          streamedTextParts.push(normalized);
           streamedSentenceIndex += 1;
           streamedSentenceCount += 1;
         }
@@ -867,7 +897,15 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         }
       });
       accumulator.flush();
-      return generation;
+      const resolvedSpokenText = sanitizeBotText(
+        normalizeSkipSentinel(String(generation.text || "")),
+        520
+      ) || sanitizeBotText(mergeSpokenReplyText(streamedTextParts), 520);
+      return {
+        ...generation,
+        streamedTextAccepted,
+        resolvedSpokenText
+      };
     };
 
     let generation = await runVoiceGeneration({
@@ -875,7 +913,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       contextMessages: voiceContextMessages,
       trace: voiceTrace
     });
-    captureGenerationText(generation.text);
+    captureGenerationText(generation.resolvedSpokenText);
 
     const VOICE_TOOL_LOOP_MAX_STEPS = 2;
     const VOICE_TOOL_LOOP_MAX_CALLS = 6;
@@ -888,7 +926,11 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       voiceToolLoopSteps < VOICE_TOOL_LOOP_MAX_STEPS &&
       voiceTotalToolCalls < VOICE_TOOL_LOOP_MAX_CALLS
     ) {
-      const assistantContent = buildContextContentBlocks(generation.rawContent, generation.text);
+      const generationHasSpokenText = Boolean(generation.resolvedSpokenText);
+      const assistantContent = ensureAssistantContentIncludesResolvedText(
+        buildContextContentBlocks(generation.rawContent, generation.resolvedSpokenText),
+        generation.resolvedSpokenText
+      );
       voiceContextMessages = [
         ...voiceContextMessages,
         { role: "user", content: initialUserPrompt },
@@ -896,6 +938,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       ];
 
       const toolResultMessages: ContentBlock[] = [];
+      let continuationRequested = false;
       for (const toolCall of generation.toolCalls) {
         if (voiceTotalToolCalls >= VOICE_TOOL_LOOP_MAX_CALLS) break;
         voiceTotalToolCalls += 1;
@@ -911,6 +954,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         }
 
         const toolInput = toolCall.input as Record<string, unknown>;
+        const toolStartMs = Date.now();
         const result = toolCall.name === "note_context"
           ? (() => {
             const stored = appendSessionDurableContextEntry({
@@ -944,6 +988,24 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
             voiceToolRuntime,
             voiceToolContext
           );
+        const toolDurationMs = Date.now() - toolStartMs;
+
+        runtime.store.logAction({
+          kind: "voice_runtime",
+          guildId,
+          channelId,
+          userId,
+          content: "voice_stt_tool_call",
+          metadata: {
+            sessionId,
+            source: voiceTrace.source,
+            toolName: toolCall.name,
+            toolInput: toolCall.input,
+            toolCallIndex: voiceTotalToolCalls,
+            durationMs: toolDurationMs,
+            isError: result.isError || false
+          }
+        });
 
         if (toolCall.name === "web_search" && !result.isError) {
           usedWebSearchFollowup = true;
@@ -979,11 +1041,18 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
           leaveVoiceChannelRequested = leaveVoiceChannelRequested || Boolean(toolPayload?.ok);
         }
 
+        if (shouldRequestVoiceToolFollowup(toolCall.name, { hasSpokenText: generationHasSpokenText })) {
+          continuationRequested = true;
+        }
         toolResultMessages.push({
           type: "tool_result",
           tool_use_id: toolCall.id,
           content: result.content
         });
+      }
+
+      if (!continuationRequested) {
+        break;
       }
 
       voiceContextMessages = [
@@ -999,7 +1068,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
           event: `${sessionId ? "voice_session" : "voice_turn"}:tool_loop:${voiceToolLoopSteps + 1}`
         },
       });
-      captureGenerationText(generation.text);
+      captureGenerationText(generation.resolvedSpokenText);
       voiceToolLoopSteps += 1;
     }
 

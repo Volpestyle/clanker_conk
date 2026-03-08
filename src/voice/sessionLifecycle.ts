@@ -83,6 +83,35 @@ type SessionLifecycleSettings = VoiceSession["settingsSnapshot"];
 type RefreshRealtimeToolsArgs = NonNullable<Parameters<typeof refreshRealtimeTools>[1]>;
 type RefreshRealtimeToolsSession = RefreshRealtimeToolsArgs["session"];
 type EndSessionArgs = Parameters<SessionLifecycleHost["endSession"]>[0];
+const OPENAI_REALTIME_ASSISTANT_OUTPUT_STATE_TTL_MS = 10 * 60 * 1000;
+const OPENAI_REALTIME_ASSISTANT_OUTPUT_EVENT_TYPES = new Set([
+  "response.output_audio.delta",
+  "response.output_audio.done",
+  "response.output_audio_transcript.delta",
+  "response.output_audio_transcript.done",
+  "response.output_text.delta",
+  "response.output_text.done"
+]);
+
+function parseRealtimeResponseId(session: VoiceSession, event: Record<string, unknown> | null | undefined) {
+  if (!event || typeof event !== "object") return null;
+  const response =
+    event.response && typeof event.response === "object" ? (event.response as Record<string, unknown>) : null;
+  const eventItem =
+    event.item && typeof event.item === "object" ? (event.item as Record<string, unknown>) : null;
+  const outputItem =
+    event.output_item && typeof event.output_item === "object"
+      ? (event.output_item as Record<string, unknown>)
+      : null;
+  const directId = normalizeInlineText(
+    event.response_id || event.responseId || response?.id || eventItem?.response_id || outputItem?.response_id,
+    180
+  );
+  if (directId) return directId;
+  const realtimeClient = session.realtimeClient;
+  if (!realtimeClient || typeof realtimeClient !== "object" || !("activeResponseId" in realtimeClient)) return null;
+  return normalizeInlineText(realtimeClient.activeResponseId, 180) || null;
+}
 
 export class SessionLifecycle {
   constructor(private readonly host: SessionLifecycleHost) {}
@@ -514,6 +543,40 @@ export class SessionLifecycle {
     session.lastOpenAiAssistantAudioItemContentIndex = contentIndex;
   }
 
+  trackOpenAiRealtimeResponseOutputEvent(session: VoiceSession, event: Record<string, unknown> | null | undefined) {
+    if (!session || session.ending) return;
+    if (!isRealtimeMode(session.mode)) return;
+    if (!event || typeof event !== "object") return;
+
+    const eventType = String(event.type || "").trim();
+    let producedAssistantOutput = OPENAI_REALTIME_ASSISTANT_OUTPUT_EVENT_TYPES.has(eventType);
+    if (!producedAssistantOutput && (eventType === "response.output_item.added" || eventType === "response.output_item.done")) {
+      const eventItem =
+        event.item && typeof event.item === "object" ? (event.item as Record<string, unknown>) : null;
+      const outputItem =
+        event.output_item && typeof event.output_item === "object"
+          ? (event.output_item as Record<string, unknown>)
+          : null;
+      const item = eventItem || outputItem;
+      producedAssistantOutput = String(item?.type || "").trim().toLowerCase() === "message";
+    }
+    if (!producedAssistantOutput) return;
+
+    const responseId = parseRealtimeResponseId(session, event);
+    if (!responseId) return;
+    const responseOutputState = session.openAiResponsesWithAssistantOutput instanceof Map
+      ? session.openAiResponsesWithAssistantOutput
+      : new Map<string, number>();
+    session.openAiResponsesWithAssistantOutput = responseOutputState;
+    const now = Date.now();
+    responseOutputState.set(responseId, now);
+    for (const [trackedResponseId, trackedAt] of responseOutputState.entries()) {
+      if (now - Number(trackedAt || 0) > OPENAI_REALTIME_ASSISTANT_OUTPUT_STATE_TTL_MS) {
+        responseOutputState.delete(trackedResponseId);
+      }
+    }
+  }
+
   bindRealtimeHandlers(session: VoiceSession, settings: SessionLifecycleSettings = session.settingsSnapshot) {
     if (!session?.realtimeClient) return;
     ensureSessionToolRuntimeState(this.host, session);
@@ -780,6 +843,7 @@ export class SessionLifecycle {
       if (!session || session.ending) return;
       if (!event || typeof event !== "object") return;
       if (!isRealtimeMode(session.mode)) return;
+      this.trackOpenAiRealtimeResponseOutputEvent(session, event);
       this.trackOpenAiRealtimeAssistantAudioEvent(session, event);
       this.host.handleOpenAiRealtimeFunctionCallEvent({
         session,

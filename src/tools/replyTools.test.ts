@@ -107,6 +107,7 @@ test("buildReplyToolSet includes note_context when voice tools are available", (
   }).map((tool) => tool.name);
 
   assert.equal(toolNames.includes("note_context"), true);
+  assert.equal(toolNames.includes("set_addressing"), false);
 });
 
 test("executeReplyTool delegates web_scrape to readPageSummary", async () => {

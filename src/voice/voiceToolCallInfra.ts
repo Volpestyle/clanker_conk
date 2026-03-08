@@ -13,6 +13,7 @@ import {
 import { executeLocalVoiceToolCall, executeMcpVoiceToolCall } from "./voiceToolCallDispatch.ts";
 import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
 import { isAbortError } from "../tools/browserTaskRuntime.ts";
+import { shouldRequestVoiceToolFollowup } from "../tools/sharedToolSchemas.ts";
 
 type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
 
@@ -121,6 +122,15 @@ export async function executeOpenAiRealtimeFunctionCall(
 
   const runtimeMs = Math.max(0, Date.now() - startedAtMs);
   const outputSummary = summarizeVoiceToolOutput(manager, output);
+  const responseHadAssistantOutput =
+    typeof manager.hasOpenAiRealtimeAssistantOutputForResponse === "function" &&
+    pendingCall.responseId
+      ? manager.hasOpenAiRealtimeAssistantOutputForResponse(session, pendingCall.responseId)
+      : false;
+  const requestFollowup = shouldRequestVoiceToolFollowup(toolName || toolDescriptor?.name || "unknown_tool", {
+    toolType,
+    hasSpokenText: responseHadAssistantOutput
+  });
   recordVoiceToolCallEvent(manager, {
     session,
     event: {
@@ -193,7 +203,8 @@ export async function executeOpenAiRealtimeFunctionCall(
     manager.scheduleOpenAiRealtimeToolFollowupResponse({
       session,
       userId: session.lastOpenAiToolCallerUserId || null,
-      startedAtMs
+      startedAtMs,
+      requestFollowup
     });
   }
 }

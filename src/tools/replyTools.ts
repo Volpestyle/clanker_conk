@@ -21,6 +21,7 @@ import {
   ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA,
   CONVERSATION_SEARCH_SCHEMA,
   CODE_TASK_SCHEMA,
+  OPEN_ARTICLE_SCHEMA,
   OFFER_SCREEN_SHARE_LINK_SCHEMA,
   PLAY_SOUNDBOARD_SCHEMA,
   SCREEN_MOMENT_SCHEMA,
@@ -298,22 +299,7 @@ const IMAGE_LOOKUP_TOOL: ReplyToolDefinition = {
   }
 };
 
-const OPEN_ARTICLE_TOOL: ReplyToolDefinition = {
-  name: "open_article",
-  description:
-    "Open and read a previously found web article. Use when the user asks to read/open/click a cached article from a prior web search.",
-  input_schema: {
-    type: "object",
-    properties: {
-      ref: {
-        type: "string",
-        description:
-          "Article reference — a row:col ref (e.g. r1:2), an index number, or a URL from cached results"
-      }
-    },
-    required: ["ref"]
-  }
-};
+const OPEN_ARTICLE_TOOL: ReplyToolDefinition = toAnthropicTool(OPEN_ARTICLE_SCHEMA);
 
 // WEB_SCRAPE_TOOL and CODE_TASK_TOOL are defined above via toAnthropicTool().
 

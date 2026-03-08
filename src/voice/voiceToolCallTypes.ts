@@ -12,6 +12,7 @@ export type VoiceToolCallManager = Pick<
   | "ensureSessionMusicState"
   | "ensureToolMusicQueueState"
   | "getVoiceScreenShareCapability"
+  | "hasOpenAiRealtimeAssistantOutputForResponse"
   | "haltSessionOutputForMusicPlayback"
   | "isMusicPlaybackActive"
   | "llm"
@@ -79,6 +80,7 @@ export type RealtimeFunctionTool = {
   parameters: Record<string, unknown>;
   toolType: "function" | "mcp";
   serverName: string | null;
+  continuationPolicy?: "always" | "if_no_spoken_text" | "never";
 };
 
 export interface SubAgentTurnResult {

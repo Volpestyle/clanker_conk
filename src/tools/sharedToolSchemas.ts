@@ -1,5 +1,7 @@
 import type { VoiceRealtimeToolDescriptor } from "../voice/voiceSessionTypes.ts";
 
+export type VoiceToolContinuationPolicy = "always" | "if_no_spoken_text" | "never";
+
 export interface SharedToolSchema {
   name: string;
   description: string;
@@ -9,6 +11,7 @@ export interface SharedToolSchema {
     required?: string[];
     additionalProperties?: boolean;
   };
+  voiceContinuationPolicy?: VoiceToolContinuationPolicy;
 }
 
 // ── 9 canonical shared tool schemas ──────────────────────────────────
@@ -18,6 +21,7 @@ export interface SharedToolSchema {
 export const WEB_SEARCH_SCHEMA: SharedToolSchema = {
   name: "web_search",
   description: "Run live web search and return condensed results.",
+  voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
     properties: {
@@ -33,6 +37,7 @@ export const WEB_SEARCH_SCHEMA: SharedToolSchema = {
 export const WEB_SCRAPE_SCHEMA: SharedToolSchema = {
   name: "web_scrape",
   description: "Fetch and read a specific web page by URL. Returns extracted text content. Much faster than browser_browse. Only use browser_browse if this fails or the page needs JS/interaction.",
+  voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
     properties: {
@@ -47,6 +52,7 @@ export const WEB_SCRAPE_SCHEMA: SharedToolSchema = {
 export const BROWSER_BROWSE_SCHEMA: SharedToolSchema = {
   name: "browser_browse",
   description: "Browse a webpage interactively and report back with the result. Use only when web_scrape fails or you need to click, type, scroll, drag, or otherwise interact with the page. Pass session_id to continue a previous session.",
+  voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
     properties: {
@@ -61,6 +67,7 @@ export const BROWSER_BROWSE_SCHEMA: SharedToolSchema = {
 export const MEMORY_SEARCH_SCHEMA: SharedToolSchema = {
   name: "memory_search",
   description: "Search durable memory facts. Use `namespace` = `speaker`, `self`, or `guild`.",
+  voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
     properties: {
@@ -86,6 +93,7 @@ export const MEMORY_SEARCH_SCHEMA: SharedToolSchema = {
 export const MEMORY_WRITE_SCHEMA: SharedToolSchema = {
   name: "memory_write",
   description: "Store durable memory facts with dedupe and safety limits. Use `namespace` = `speaker`, `self`, or `guild`. Save only genuine long-lived facts, never insults, requests, or future-behavior rules.",
+  voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
     properties: {
@@ -120,6 +128,7 @@ export const MEMORY_WRITE_SCHEMA: SharedToolSchema = {
 export const ADAPTIVE_DIRECTIVE_ADD_SCHEMA: SharedToolSchema = {
   name: "adaptive_directive_add",
   description: "Persist a server-level adaptive directive for future conversations. Use for style guidance, operating guidance, or recurring trigger/action behavior, like how to talk or when to send a GIF/reaction.",
+  voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
     properties: {
@@ -137,6 +146,7 @@ export const ADAPTIVE_DIRECTIVE_ADD_SCHEMA: SharedToolSchema = {
 export const ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA: SharedToolSchema = {
   name: "adaptive_directive_remove",
   description: "Remove a previously saved server-level adaptive directive when someone explicitly asks you to stop using it.",
+  voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
     properties: {
@@ -151,6 +161,7 @@ export const ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA: SharedToolSchema = {
 export const CONVERSATION_SEARCH_SCHEMA: SharedToolSchema = {
   name: "conversation_search",
   description: "Search past conversation history across saved text chat and voice transcripts. Use for recalling what was said earlier, not for durable facts.",
+  voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
     properties: {
@@ -170,6 +181,7 @@ export const CONVERSATION_SEARCH_SCHEMA: SharedToolSchema = {
 export const CODE_TASK_SCHEMA: SharedToolSchema = {
   name: "code_task",
   description: "Spawn Claude Code to perform a coding task. Can read/write files, run commands, use git, create PRs. Only available to allowed users. Pass session_id to continue a previous session.",
+  voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
     properties: {
@@ -199,6 +211,7 @@ export const SHARED_TOOL_SCHEMAS: SharedToolSchema[] = [
 export const MUSIC_SEARCH_SCHEMA: SharedToolSchema = {
   name: "music_search",
   description: "Search for music tracks to queue or play.",
+  voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
     properties: {
@@ -213,6 +226,7 @@ export const MUSIC_SEARCH_SCHEMA: SharedToolSchema = {
 export const MUSIC_QUEUE_ADD_SCHEMA: SharedToolSchema = {
   name: "music_queue_add",
   description: "Add one or more track IDs to the voice music queue.",
+  voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
     properties: {
@@ -235,6 +249,7 @@ export const MUSIC_QUEUE_ADD_SCHEMA: SharedToolSchema = {
 export const MUSIC_PLAY_NOW_SCHEMA: SharedToolSchema = {
   name: "music_play_now",
   description: "Start playing a specific track immediately.",
+  voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
     properties: {
@@ -248,6 +263,7 @@ export const MUSIC_PLAY_NOW_SCHEMA: SharedToolSchema = {
 export const MUSIC_QUEUE_NEXT_SCHEMA: SharedToolSchema = {
   name: "music_queue_next",
   description: "Insert one or more track IDs immediately after the current track.",
+  voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
     properties: {
@@ -266,6 +282,7 @@ export const MUSIC_QUEUE_NEXT_SCHEMA: SharedToolSchema = {
 export const MUSIC_STOP_SCHEMA: SharedToolSchema = {
   name: "music_stop",
   description: "Stop playback and clear the active queue.",
+  voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
     properties: {},
@@ -276,6 +293,7 @@ export const MUSIC_STOP_SCHEMA: SharedToolSchema = {
 export const MUSIC_PAUSE_SCHEMA: SharedToolSchema = {
   name: "music_pause",
   description: "Pause music playback.",
+  voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
     properties: {},
@@ -286,6 +304,7 @@ export const MUSIC_PAUSE_SCHEMA: SharedToolSchema = {
 export const MUSIC_RESUME_SCHEMA: SharedToolSchema = {
   name: "music_resume",
   description: "Resume paused music playback.",
+  voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
     properties: {},
@@ -296,6 +315,7 @@ export const MUSIC_RESUME_SCHEMA: SharedToolSchema = {
 export const MUSIC_SKIP_SCHEMA: SharedToolSchema = {
   name: "music_skip",
   description: "Skip current track and advance to next queued track.",
+  voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
     properties: {},
@@ -306,6 +326,7 @@ export const MUSIC_SKIP_SCHEMA: SharedToolSchema = {
 export const MUSIC_NOW_PLAYING_SCHEMA: SharedToolSchema = {
   name: "music_now_playing",
   description: "Read now-playing and queue status.",
+  voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
     properties: {},
@@ -316,18 +337,21 @@ export const MUSIC_NOW_PLAYING_SCHEMA: SharedToolSchema = {
 export const LEAVE_VOICE_CHANNEL_SCHEMA: SharedToolSchema = {
   name: "leave_voice_channel",
   description: "Leave the voice channel and end this session. Only call this when you intentionally choose to end your own VC session — another person saying goodbye does not require you to leave.",
+  voiceContinuationPolicy: "if_no_spoken_text",
   parameters: { type: "object", properties: {}, required: [], additionalProperties: false }
 };
 
 export const OFFER_SCREEN_SHARE_LINK_SCHEMA: SharedToolSchema = {
   name: "offer_screen_share_link",
   description: "Send the active speaker a temporary screen-share link in the text channel so they can start sharing their screen.",
+  voiceContinuationPolicy: "if_no_spoken_text",
   parameters: { type: "object", properties: {}, required: [], additionalProperties: false }
 };
 
 export const PLAY_SOUNDBOARD_SCHEMA: SharedToolSchema = {
   name: "play_soundboard",
   description: "Play one or more soundboard refs in the current voice session, in order.",
+  voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
     properties: {
@@ -346,6 +370,7 @@ export const PLAY_SOUNDBOARD_SCHEMA: SharedToolSchema = {
 export const SCREEN_NOTE_SCHEMA: SharedToolSchema = {
   name: "screen_note",
   description: "Save a brief private factual note about the current visible screen state.",
+  voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
     properties: {
@@ -363,6 +388,7 @@ export const SCREEN_NOTE_SCHEMA: SharedToolSchema = {
 export const SCREEN_MOMENT_SCHEMA: SharedToolSchema = {
   name: "screen_moment",
   description: "Save a brief noteworthy screen moment that should persist in session memory.",
+  voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
     properties: {
@@ -380,6 +406,7 @@ export const SCREEN_MOMENT_SCHEMA: SharedToolSchema = {
 export const NOTE_CONTEXT_SCHEMA: SharedToolSchema = {
   name: "note_context",
   description: "Pin important session-scoped context that should stay available later in this conversation even after older turns scroll out. Do not duplicate notes already pinned.",
+  voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
     properties: {
@@ -415,6 +442,63 @@ export const VOICE_TOOL_SCHEMAS: SharedToolSchema[] = [
   LEAVE_VOICE_CHANNEL_SCHEMA
 ];
 
+export const OPEN_ARTICLE_SCHEMA: SharedToolSchema = {
+  name: "open_article",
+  description: "Open and read a previously found web article. Use when the user asks to read/open/click a cached article from a prior web search.",
+  voiceContinuationPolicy: "always",
+  parameters: {
+    type: "object",
+    properties: {
+      ref: {
+        type: "string",
+        description: "Article reference — a row:col ref (e.g. r1:2), an index number, or a URL from cached results"
+      }
+    },
+    required: ["ref"],
+    additionalProperties: false
+  }
+};
+
+const LOCAL_VOICE_CONTINUATION_SCHEMAS: SharedToolSchema[] = [
+  ...SHARED_TOOL_SCHEMAS,
+  ...VOICE_TOOL_SCHEMAS,
+  OPEN_ARTICLE_SCHEMA
+];
+
+const LOCAL_VOICE_CONTINUATION_SCHEMA_BY_NAME = new Map(
+  LOCAL_VOICE_CONTINUATION_SCHEMAS.map((schema) => [schema.name, schema] as const)
+);
+
+export function getLocalVoiceToolSchema(toolName: unknown): SharedToolSchema | null {
+  const normalizedName = String(toolName || "").trim().toLowerCase();
+  if (!normalizedName) return null;
+  return LOCAL_VOICE_CONTINUATION_SCHEMA_BY_NAME.get(normalizedName) || null;
+}
+
+export function resolveVoiceToolContinuationPolicy(
+  toolName: unknown,
+  { toolType = "function" }: { toolType?: "function" | "mcp" } = {}
+): VoiceToolContinuationPolicy {
+  if (toolType === "mcp") return "always";
+  return getLocalVoiceToolSchema(toolName)?.voiceContinuationPolicy || "if_no_spoken_text";
+}
+
+export function shouldRequestVoiceToolFollowup(
+  toolName: unknown,
+  {
+    toolType = "function",
+    hasSpokenText = false
+  }: {
+    toolType?: "function" | "mcp";
+    hasSpokenText?: boolean;
+  } = {}
+): boolean {
+  const continuationPolicy = resolveVoiceToolContinuationPolicy(toolName, { toolType });
+  if (continuationPolicy === "always") return true;
+  if (continuationPolicy === "never") return false;
+  return !hasSpokenText;
+}
+
 // ── Format adapters ──────────────────────────────────────────────────
 
 /** Convert to Anthropic Claude API tool format (for replyTools.ts). */
@@ -436,6 +520,7 @@ export function toRealtimeTool(schema: SharedToolSchema): VoiceRealtimeToolDescr
     toolType: "function",
     name: schema.name,
     description: schema.description,
-    parameters: schema.parameters
+    parameters: schema.parameters,
+    continuationPolicy: schema.voiceContinuationPolicy || "if_no_spoken_text"
   };
 }

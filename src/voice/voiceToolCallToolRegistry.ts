@@ -92,6 +92,8 @@ export function ensureSessionToolRuntimeState(
   if (!(session.openAiPendingToolCalls instanceof Map)) session.openAiPendingToolCalls = new Map();
   if (!(session.openAiCompletedToolCallIds instanceof Map)) session.openAiCompletedToolCallIds = new Map();
   if (!(session.openAiToolCallExecutions instanceof Map)) session.openAiToolCallExecutions = new Map();
+  if (!(session.openAiResponsesWithAssistantOutput instanceof Map)) session.openAiResponsesWithAssistantOutput = new Map();
+  if (typeof session.openAiToolFollowupNeeded !== "boolean") session.openAiToolFollowupNeeded = false;
   if (!(session.toolMusicTrackCatalog instanceof Map)) session.toolMusicTrackCatalog = new Map();
   if (!Array.isArray(session.memoryWriteWindow)) session.memoryWriteWindow = [];
   if (!session.mcpStatus || !Array.isArray(session.mcpStatus)) {
@@ -192,7 +194,8 @@ export function resolveVoiceRealtimeToolDescriptors(
             tool.inputSchema && typeof tool.inputSchema === "object"
               ? tool.inputSchema
               : { type: "object", additionalProperties: true },
-          serverName
+          serverName,
+          continuationPolicy: "always"
         };
       })
       .filter((entry): entry is VoiceRealtimeToolDescriptor => Boolean(entry));
@@ -234,7 +237,8 @@ export function buildRealtimeFunctionTools(
     description: entry.description,
     parameters: entry.parameters,
     toolType: entry.toolType,
-    serverName: entry.serverName || null
+    serverName: entry.serverName || null,
+    continuationPolicy: entry.continuationPolicy
   }));
 }
 

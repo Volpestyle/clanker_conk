@@ -135,6 +135,7 @@ export type VoiceRealtimeToolDescriptor = {
     description: string;
     parameters: Record<string, unknown>;
     serverName?: string | null;
+    continuationPolicy?: "always" | "if_no_spoken_text" | "never";
 };
 
 export type VoiceToolCallEvent = {
@@ -155,6 +156,7 @@ export type VoicePendingToolCallState = {
     callId: string;
     name: string;
     argumentsText: string;
+    responseId?: string | null;
     done: boolean;
     startedAtMs: number;
     sourceEventType: string;
@@ -223,6 +225,8 @@ export type VoiceToolRuntimeSessionLike = {
     openAiPendingToolCalls?: Map<string, VoicePendingToolCallState>;
     openAiCompletedToolCallIds?: Map<string, number>;
     openAiPendingToolAbortControllers?: Map<string, AbortController>;
+    openAiResponsesWithAssistantOutput?: Map<string, number>;
+    openAiToolFollowupNeeded?: boolean;
     toolMusicTrackCatalog?: Map<string, unknown>;
     memoryWriteWindow?: number[];
     toolCallEvents?: VoiceToolCallEvent[];
@@ -844,6 +848,8 @@ export interface VoiceSession {
     openAiToolResponseDebounceTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     openAiCompletedToolCallIds: Map<string, number>;
     openAiPendingToolAbortControllers?: Map<string, AbortController>;
+    openAiResponsesWithAssistantOutput?: Map<string, number>;
+    openAiToolFollowupNeeded?: boolean;
     lastOpenAiAssistantAudioItemId: string | null;
     lastOpenAiAssistantAudioItemContentIndex: number;
     lastOpenAiAssistantAudioItemReceivedMs: number;
