@@ -387,8 +387,8 @@ export async function buildReplyContext(
     },
     source,
     recentMessages,
-    loadPromptMemorySlice: (payload) =>
-      bot.loadPromptMemorySlice({
+    loadFactProfile: (payload) =>
+      bot.loadFactProfile({
         settings: payload.settings,
         userId: payload.userId,
         guildId: String(payload.guildId || message.guildId),

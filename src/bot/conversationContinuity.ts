@@ -1,7 +1,4 @@
-import {
-  emptyPromptMemorySlice,
-  normalizePromptMemorySlice
-} from "../memory/promptMemorySlice.ts";
+import { emptyFactProfileSlice, normalizeFactProfileSlice } from "./memorySlice.ts";
 import { getMemorySettings } from "../settings/agentStack.ts";
 import {
   CONVERSATION_HISTORY_PROMPT_LIMIT,
@@ -42,8 +39,7 @@ type ContinuityLoaderArgs = {
   source?: string;
   trace?: Record<string, unknown>;
   recentMessages?: Array<Record<string, unknown>>;
-  memoryTimeoutMs?: number;
-  loadPromptMemorySlice?: ((payload: ConversationContinuityPayload) => Promise<unknown>) | null;
+  loadFactProfile?: ((payload: ConversationContinuityPayload) => unknown) | null;
   loadRecentLookupContext?: ((payload: ConversationLookupPayload) => unknown) | null;
   loadRecentConversationHistory?: ((payload: ConversationLookupPayload) => unknown) | null;
   loadAdaptiveDirectives?: ((payload: AdaptiveDirectiveLookupPayload) => unknown) | null;
@@ -60,7 +56,7 @@ function isMemoryEnabled(settings: Record<string, unknown>) {
   return Boolean(getMemorySettings(settings).enabled);
 }
 
-async function resolvePromptMemorySlice({
+function resolveFactProfile({
   settings,
   guildId,
   channelId,
@@ -68,8 +64,7 @@ async function resolvePromptMemorySlice({
   queryText,
   source,
   trace,
-  loadPromptMemorySlice,
-  memoryTimeoutMs = 0
+  loadFactProfile,
 }: {
   settings: Record<string, unknown>;
   guildId: string;
@@ -78,50 +73,32 @@ async function resolvePromptMemorySlice({
   queryText: string;
   source: string;
   trace: Record<string, unknown>;
-  loadPromptMemorySlice?: ((payload: Record<string, unknown>) => Promise<unknown>) | null;
-  memoryTimeoutMs?: number;
+  loadFactProfile?: ((payload: Record<string, unknown>) => unknown) | null;
 }) {
-  const empty = emptyPromptMemorySlice();
+  const empty = emptyFactProfileSlice();
   if (!isMemoryEnabled(settings)) return empty;
-  if (!guildId || !userId || !queryText || typeof loadPromptMemorySlice !== "function") {
+  if (!guildId || !userId || !queryText || typeof loadFactProfile !== "function") {
     return empty;
   }
 
-  const slicePromise = loadPromptMemorySlice({
-    settings,
-    userId,
-    guildId,
-    channelId,
-    queryText,
-    trace,
-    source
-  })
-    .then((slice) => normalizePromptMemorySlice(slice))
-    .catch((error) => {
-      console.error("[conversationContinuity] prompt memory slice failed:", error, {
-        guildId,
-        channelId,
-        userId,
-        source
-      });
-      return empty;
-    });
-
-  const boundedTimeoutMs = Math.max(0, Math.floor(Number(memoryTimeoutMs) || 0));
-  if (!boundedTimeoutMs) {
-    return await slicePromise;
-  }
-
-  let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
   try {
-    return await Promise.race([
-      slicePromise,
-      new Promise<ReturnType<typeof emptyPromptMemorySlice>>((resolve) => {
-        timeoutHandle = setTimeout(() => resolve(empty), boundedTimeoutMs);
-      })
-    ]);
-  } finally {
-    if (timeoutHandle) clearTimeout(timeoutHandle);
+    return normalizeFactProfileSlice(loadFactProfile({
+      settings,
+      userId,
+      guildId,
+      channelId,
+      queryText,
+      trace,
+      source
+    }));
+  } catch (error) {
+    console.error("[conversationContinuity] fact profile failed:", error, {
+      guildId,
+      channelId,
+      userId,
+      source
+    });
+    return empty;
   }
 }
 
@@ -160,8 +137,7 @@ export async function loadConversationContinuityContext({
   source = "conversation_continuity",
   trace = {},
   recentMessages = [],
-  memoryTimeoutMs = 0,
-  loadPromptMemorySlice = null,
+  loadFactProfile = null,
   loadRecentLookupContext = null,
   loadRecentConversationHistory = null,
   loadAdaptiveDirectives = null
@@ -176,7 +152,7 @@ export async function loadConversationContinuityContext({
       ? trace
       : {};
 
-  const memorySlice = await resolvePromptMemorySlice({
+  const memorySlice = resolveFactProfile({
     settings,
     guildId: normalizedGuildId,
     channelId: normalizedChannelId,
@@ -184,8 +160,7 @@ export async function loadConversationContinuityContext({
     queryText: normalizedQueryText,
     source: normalizedSource,
     trace: normalizedTrace,
-    loadPromptMemorySlice,
-    memoryTimeoutMs
+    loadFactProfile
   });
 
   const recentWebLookupsRaw =

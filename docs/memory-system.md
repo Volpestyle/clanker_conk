@@ -24,7 +24,7 @@ This is only the durable-fact memory system. Two adjacent persistence layers now
 
 ## Key Files
 
-- `src/memory/memoryManager.ts`: ingestion queue, daily journaling, daily reflection job, directive writes (`rememberDirectiveLine`), hybrid retrieval/ranking, markdown refresh.
+- `src/memory/memoryManager.ts`: ingestion queue, daily journaling, daily reflection job, directive writes (`rememberDirectiveLine`), fact profile loading (`loadUserFactProfile`), on-demand hybrid retrieval/ranking (`searchDurableFacts`), markdown refresh.
 - `src/memory/memoryHelpers.ts`: fact normalization, grounding checks, scoring helpers, directive scope config.
 - `src/memory/dailyReflection.ts`: end-of-day reflection logic — reads daily journal, runs LLM distillation, writes durable facts.
 - `src/store/store.ts`: `memory_facts` and `memory_fact_vectors_native` schema + query/update methods.
@@ -32,8 +32,8 @@ This is only the durable-fact memory system. Two adjacent persistence layers now
 - `src/llm.ts`: embedding API calls, reflection LLM calls.
 - `src/tools/replyTools.ts`: `memory_write` and `memory_search` tool definitions + execution handlers (used by text chat brain).
 - `src/voice/voiceToolCalls.ts`: `memory_search`, `memory_write`, and adaptive-directive voice tool definitions + execution handlers (used by OpenAI Realtime brain).
-- `src/bot.ts`: message ingest trigger, memory slice loading, reflection job scheduling.
-- `src/bot/voiceReplies.ts` and `src/voice/voiceSessionManager.ts`: voice transcript ingestion + memory context loading.
+- `src/bot.ts`: message ingest trigger, reflection job scheduling.
+- `src/bot/voiceReplies.ts` and `src/voice/voiceSessionManager.ts`: voice transcript ingestion + session-level fact profile caching.
 - `src/dashboard.ts`: `/api/memory`, `/api/memory/refresh`, `/api/memory/search`.
 
 ## Data Model
@@ -122,7 +122,7 @@ Both paths produce the same kind of durable facts in `memory_facts`. Reflection 
 
 ### Fact creation via `memory_write` tool
 
-Durable facts are created when the brain decides to call the `memory_write` tool during conversation. This replaces the previous `memoryLine`/`selfMemoryLine` JSON directive fields.
+Durable facts are created when the brain decides to call the `memory_write` tool during conversation.
 
 **Tool definition** (`src/tools/replyTools.ts`): accepts an `items` array, each with `text` and `scope`:
 
@@ -134,9 +134,34 @@ All scopes share: `confidence = 0.72`, grounding check against source text, inst
 
 **Execution path**: tool call → `executeMemoryWrite()` in `replyTools.ts` → `memory.rememberDirectiveLine({ line, scope, subjectOverride, ... })` → `store.addMemoryFact(...)` → async embedding → archive old facts → markdown refresh.
 
+When `memory_write` fires during an active voice session, the affected user's cached fact profile is refreshed on the session object so subsequent turns see the new fact without a full reload.
+
 **Scope config** is resolved by `resolveDirectiveScopeConfig()` in `memoryHelpers.ts`.
 
 This path is used in both text chat (via `replyTools.ts`) and voice chat (via `voiceToolCalls.ts`), where equivalent `memory_write` and `memory_search` tools are registered as OpenAI Realtime function tools.
+
+### Tiered fact storage and eviction
+
+Facts are classified into two durability tiers that control eviction behavior when per-subject caps are reached:
+
+**Core facts** — identity-level, rarely change:
+- Inferred from `fact_type`: `profile` and `relationship` facts are core.
+- Examples: name, birthday, occupation, family relationships, long-term preferences.
+- Evicted last. When the core tier itself fills, a consolidation pass merges/compresses related facts rather than dropping them.
+- Separate cap (default 20 per user subject).
+
+**Contextual facts** — situational, expected to rotate:
+- All other `fact_type` values: `preference`, `project`, `other`, `lore`.
+- Examples: current mood, what game they're playing this week, recent opinions.
+- Standard FIFO eviction by `updated_at` — oldest contextual facts are archived first.
+- Cap: remaining budget after core facts (e.g., 60 contextual if 20 core out of 80 total).
+
+**Eviction order** in `archiveOldFactsForSubject`:
+1. Archive contextual facts beyond the contextual cap (oldest first by `updated_at`).
+2. Only if contextual facts are within budget AND total exceeds the subject cap, archive core facts (oldest first).
+3. Core facts are never archived to make room for contextual facts.
+
+The LLM already distinguishes fact types at write time (both `memory_write` and daily reflection). The tier is derived from the existing `fact_type` field — no new column needed.
 
 ## Safety Guards
 
@@ -153,7 +178,7 @@ If embedding fails, errors are logged and the fact is still stored (embedding ba
 
 ## Embeddings
 
-Embeddings are used only for semantic ranking of facts:
+Embeddings are used for semantic ranking in on-demand `memory_search` tool calls and dashboard search.
 
 - Query embedding: `llm.embedText(...)` when query length >= 3 and OpenAI client exists.
 - Fact embedding payload includes `type`, `fact`, and optional `evidence`.
@@ -164,32 +189,58 @@ Embeddings are used only for semantic ranking of facts:
 
 If vectors are missing for some candidates, retrieval backfills up to 8 missing fact vectors per query.
 
+Fact embeddings are generated at write time for use by `memory_search` queries.
+
 ## Retrieval and Ranking
 
-### Prompt slice retrieval (`buildPromptMemorySlice`)
+### Fact profile retrieval (`loadUserFactProfile`)
 
-For normal response generation:
+For prompt injection, facts are loaded as **fact profiles** — lightweight SQLite-only queries with no embedding API calls. Profiles are cached at the session level (voice) or loaded per-turn (text chat).
 
-- `userFacts`: hybrid select for subject `[userId]`, limit 8.
-- `relevantFacts`: hybrid select for subjects `[userId, "__self__", "__lore__"]`, limit 10.
-- `relevantMessages`: lexical search from `messages` table in current channel (limit 8).
+**How it works:**
 
-Primary consumers of this slice:
+1. Query `memory_facts` for the user's active facts (`subject = userId, is_active = 1`), ordered by `confidence DESC, updated_at DESC`.
+2. Query `memory_facts` for bot self-facts (`subject = "__self__"`) and guild lore (`subject = "__lore__"`), same ordering.
+3. Return structured profile with core vs contextual facts separated (see Tiered Fact Storage below).
+4. No embedding call, no semantic ranking. Pure SQLite, sub-millisecond.
 
-- Text replies (`src/bot.ts`, `maybeReplyToMessage` path)
-- Automation runs (`src/bot.ts`, automation generation path)
-- Discovery generation (`src/bot.ts`, discovery post path)
-- Voice turn generation/realtime voice context (`src/bot/voiceReplies.ts`, `src/voice/voiceSessionManager.ts`)
+**Session-level caching (voice):**
+
+- When a user joins the voice channel, their fact profile is loaded and stored on `session.factProfiles[userId]`.
+- When a user leaves, their profile is removed from the cache.
+- When `memory_write` fires during a session, the affected user's cached profile is refreshed.
+- Instruction rebuilds (realtime mode) and turn generation (STT mode) pull from the cached profiles.
+- Lore and self-facts are loaded once at session start and refreshed on `memory_write`.
+
+**Per-turn loading (text chat / automation):**
+
+- Text replies and automation runs load fact profiles fresh per-turn via `loadConversationContinuityContext`.
+- This is still fast (SQLite-only) so per-turn loading is acceptable outside voice.
+
+**Consumers:**
+
+- Text replies (`src/bot/replyPipeline.ts`)
+- Automation runs (`src/bot/automationEngine.ts`)
+- Voice turn generation (`src/bot/voiceReplies.ts`)
+- Voice realtime instruction context (`src/voice/instructionManager.ts`)
+
+### On-demand search via `memory_search` tool
+
+For targeted, context-aware memory lookup the model calls the `memory_search` tool. This is where semantic ranking (embeddings + cosine similarity) earns its keep — the model writes a purposeful query, not a raw transcript.
+
+- Used by the brain mid-conversation when it needs specific facts ("what do I know about this person's job?")
+- Uses `searchDurableFacts` which performs full hybrid ranking with embedding.
+- Also powers dashboard search and reply followup memory lookups.
 
 ### Search API retrieval (`searchDurableFacts`)
 
-For dashboard and model-triggered memory lookup:
+For on-demand model-triggered and dashboard memory lookup:
 
 - Pulls guild-scoped active facts (`getFactsForScope`).
 - Hybrid ranking with strict relevance gate enabled.
 - Returns top N (limit clamped to 1..24).
 
-### Hybrid score formula
+### Hybrid score formula (used by `searchDurableFacts` only)
 
 Per candidate:
 
@@ -214,6 +265,8 @@ Relevance gate:
 - With semantic: pass if semantic/lexical minimums are met, or strong combined score with minimum signal.
 - Without semantic: requires lexical >= 0.24 or combined >= 0.62.
 - Strict mode (`searchDurableFacts`) returns no hits if all candidates fail gate.
+
+
 
 ## Adaptive Directives vs Durable Memory
 
@@ -277,8 +330,7 @@ Dashboard API:
 
 - `GET /api/memory`: returns snapshot markdown content.
 - `POST /api/memory/refresh`: regenerates and returns snapshot.
-- `GET /api/memory/search?q=...&guildId=...&channelId=...&limit=...`: hybrid durable fact search.
-- `POST /api/memory/simulate-slice`: preview `buildPromptMemorySlice(...)` output (`userFacts`, `relevantFacts`, `relevantMessages`) for a `guildId` + `queryText` request body.
+- `GET /api/memory/search?q=...&guildId=...&channelId=...&limit=...`: hybrid durable fact search (uses `searchDurableFacts` with full semantic ranking).
 
 Action log kinds used by memory pipeline:
 
@@ -293,4 +345,6 @@ Action log kinds used by memory pipeline:
 - Durable memory is always guild-scoped. Facts never cross guild boundaries.
 - Channel scope is a ranking hint, not a hard filter.
 - Archiving is soft (`is_active = 0`), not hard delete.
+- Pre-turn prompt injection uses SQLite-only fact profiles (no embedding API calls). Semantic ranking (embeddings + cosine similarity) is reserved for on-demand `memory_search` tool calls.
+- Voice sessions cache fact profiles per-user; text chat loads them fresh per-turn (still fast since it's SQLite-only).
 - The canonical source for runtime memory behavior is `src/memory/memoryManager.ts` + `src/store/store.ts`; docs should be updated if those files change.

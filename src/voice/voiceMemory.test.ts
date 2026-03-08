@@ -234,14 +234,14 @@ test("pending ingestion is awaited before memory slice lookup", async () => {
     async ingestMessage() {
       await ingestPromise;
       events.push("ingest_done");
-    },
-    async loadPromptMemorySlice() {
-      events.push("lookup_done");
-      return { userFacts: [], relevantFacts: [] };
     }
   };
 
   const { manager } = createManager({ memory: mockMemory });
+  manager.getSessionFactProfileSlice = () => {
+    events.push("lookup_done");
+    return { userFacts: [], relevantFacts: [], relevantMessages: [] };
+  };
 
   const session = {
     id: "session-1",

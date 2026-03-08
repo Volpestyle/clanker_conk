@@ -57,7 +57,7 @@ Storage:
 
 ## 3. Tool Orchestration
 
-The central architectural idea: Clanker owns the product control plane, while the agent stack resolves external runtimes by preset. The orchestrator is still tool-using LLM-driven, but capability routing is now resolved through a canonical stack instead of scattered provider toggles.
+The central architectural idea: Clanker owns the product control plane, while the agent stack resolves external runtimes by preset. The orchestrator is still tool-using LLM-driven, but capability routing is resolved through a canonical stack.
 
 ```
 User (voice or text)
@@ -190,7 +190,7 @@ Normalization responsibilities:
 - clamping numeric ranges,
 - sanitizing list fields,
 - defaulting missing keys,
-- migrating legacy flat settings into the canonical preset-driven shape,
+- normalizing flat settings into the canonical preset-driven shape,
 - ensuring reply-channel, text-thought-loop, and discovery config is always valid.
 
 The bot reads settings at decision time (`store.getSettings()`), so updates apply without restart.

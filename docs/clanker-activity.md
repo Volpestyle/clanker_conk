@@ -41,7 +41,7 @@ A separate proactive posting system that can post standalone discovery/shitpost 
 
 These are related, but they are not the same system and they are not controlled by the same settings.
 
-The closest existing overview before this was the short architecture summary in `docs/technical-architecture.md` and the voice-runtime overview in `docs/voice/voice-provider-abstraction.md`. This file exists because the runtime now has enough separate paths and sliders that the activity model needs its own dedicated reference.
+The runtime has enough separate paths and sliders that the activity model needs its own dedicated reference.
 
 ## Operator Checklist
 
@@ -210,7 +210,7 @@ Decision flow:
 - `voice.admission.mode=generation_decides` → `generation_decides`
 - Classifier prompt context includes attributed recent history (`speaker: "text"`) up to 6 turns / 900 chars plus current turn fields
 
-This replaces the earlier heuristic gates (`wakeModeActive`, `botRecentReplyFollowup`, `shouldDelayNonDirectRealtimeReply`) with actual language understanding.
+The classifier gate uses language understanding to evaluate turns.
 
 Relevant code:
 

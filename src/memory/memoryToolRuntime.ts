@@ -393,7 +393,8 @@ export async function executeSharedMemoryToolWrite({
     }
     written.push({
       status: String(result.reason || "added_new"),
-      text: String(result.factText || item.text)
+      text: String(result.factText || item.text),
+      subject: String(result.subject || scope.subject || "").trim() || null
     });
   }
 

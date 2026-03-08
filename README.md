@@ -36,6 +36,14 @@ Ask it to check your GitHub issues? It can browse the page and summarize them. A
 - SQLite persistence with vector embeddings
 - Multi-provider LLM support (OpenAI, Anthropic, xAI, Google, Claude Code CLI)
 
+## Tech Stack
+
+- **Runtime:** Bun
+- **Language:** TypeScript, Rust
+- **Database:** SQLite
+- **Frameworks/Libraries:** React, Hono, Discord.js
+- **Media:** ffmpeg, yt-dlp
+
 ## Setup
 
 ```bash

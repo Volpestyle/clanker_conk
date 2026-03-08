@@ -1,5 +1,4 @@
 import { getDirectiveSettings } from "../settings/agentStack.ts";
-import { loadPromptMemorySliceFromMemory } from "../memory/promptMemorySlice.ts";
 import {
   formatAdaptiveDirectives,
   formatConversationWindows,
@@ -207,6 +206,14 @@ export type InstructionManagerHost = VoiceToolCallManager & {
     session: VoiceSession
   ) => MusicDisambiguationPromptContext | null;
   getMusicPromptContext: (session: VoiceSession) => MusicPromptContext | null;
+  getSessionFactProfileSlice?: (payload: {
+    session: VoiceSession;
+    userId?: string | null;
+  }) => {
+    userFacts: unknown[];
+    relevantFacts: unknown[];
+    relevantMessages?: unknown[];
+  };
 };
 
 export class InstructionManager {
@@ -364,30 +371,12 @@ export class InstructionManager {
         userId: normalizedUserId
       },
       source: "voice_realtime_instruction_context",
-      loadPromptMemorySlice:
-        this.host.memory && typeof this.host.memory === "object"
-          ? (payload: ConversationContinuityPayload) =>
-            loadPromptMemorySliceFromMemory({
-              settings: payload.settings,
-              memory: this.host.memory,
-              userId: String(payload.userId || "").trim() || null,
-              guildId: String(payload.guildId || "").trim(),
-              channelId: String(payload.channelId || "").trim() || null,
-              queryText: String(payload.queryText || ""),
-              trace: payload.trace || {},
-              source: String(payload.source || "voice_realtime_instruction_context"),
-              onError: ({ error }) => {
-                this.store.logAction({
-                  kind: "voice_error",
-                  guildId: session.guildId,
-                  channelId: session.textChannelId,
-                  userId: normalizedUserId,
-                  content: `voice_realtime_memory_slice_failed: ${String((error as Error)?.message || error)}`,
-                  metadata: {
-                    sessionId: session.id
-                  }
-                });
-              }
+      loadFactProfile:
+        typeof this.host.getSessionFactProfileSlice === "function"
+          ? (_payload: ConversationContinuityPayload) =>
+            this.host.getSessionFactProfileSlice({
+              session,
+              userId: normalizedUserId
             })
           : null,
       loadRecentLookupContext:

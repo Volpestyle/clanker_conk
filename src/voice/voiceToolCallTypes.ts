@@ -25,6 +25,8 @@ export type VoiceToolCallManager = Pick<
   | "requestPlayMusic"
   | "requestRealtimePromptUtterance"
   | "requestStopMusic"
+  | "refreshSessionGuildFactProfile"
+  | "refreshSessionUserFactProfile"
   | "resolveVoiceSpeakerName"
   | "scheduleOpenAiRealtimeToolFollowupResponse"
   | "search"

@@ -39,8 +39,8 @@ Current group breakdown:
 Coverage assessment:
 
 - Good breadth for admission and generation behavior across name detection, unsolicited participation, joins, music control, silence cases, and eagerness thresholds
-- Good alignment because admission and generation now consume the same voice inputs instead of drifting into separate hand-written suites
-- The voice generation prompt now relies on transcript plus contextual guidance such as membership events, room context, and fuzzy bot-name cues instead of a dedicated join-state prompt flag
+- Good alignment because admission and generation consume the same voice inputs
+- The voice generation prompt relies on transcript plus contextual guidance such as membership events, room context, and fuzzy bot-name cues
 - Still not full-stack realtime coverage: these tests do not validate websocket/session transport, ASR streaming, TTS audio output, Discord timing, or end-to-end voice latency
 - Still not a full provider matrix by default: the scenarios are broad, but we do not automatically run every scenario against every provider/model combination
 

@@ -10,6 +10,9 @@ import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import type { VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
 import type { VoiceToolCallArgs, VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 
+const SELF_SUBJECT = "__self__";
+const LORE_SUBJECT = "__lore__";
+
 type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
 
 type VoiceMemoryToolOptions = {
@@ -144,6 +147,19 @@ export async function executeVoiceMemoryWriteTool(
     runtimeSession.memoryWriteWindow = runtimeSession.memoryWriteWindow
       .map((value) => Number(value))
       .filter((value) => Number.isFinite(value) && now - value <= 60_000);
+
+    const writtenSubjects = new Set(
+      result.written
+        .map((entry) => String(entry?.subject || "").trim())
+        .filter(Boolean)
+    );
+    if (writtenSubjects.has(SELF_SUBJECT) || writtenSubjects.has(LORE_SUBJECT)) {
+      manager.refreshSessionGuildFactProfile?.(runtimeSession as VoiceSession);
+    }
+    for (const subject of writtenSubjects) {
+      if (subject === SELF_SUBJECT || subject === LORE_SUBJECT) continue;
+      manager.refreshSessionUserFactProfile?.(runtimeSession as VoiceSession, subject);
+    }
   }
 
   return result;

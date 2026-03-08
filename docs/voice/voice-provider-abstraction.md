@@ -338,7 +338,7 @@ From `REALTIME_PROVIDER_CAPABILITIES` in `src/voice/voiceModes.ts`:
 | `perUserAsr` | yes | — | — | — |
 | `sharedAsr` | yes | yes | yes | yes |
 
-Guards use `providerSupports(mode, capability)` instead of hardcoded provider checks.
+Guards use `providerSupports(mode, capability)` for capability routing.
 
 ---
 

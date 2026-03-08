@@ -10,6 +10,7 @@ import type {
     AssistantOutputPhase,
     AssistantOutputState
 } from "./assistantOutputState.ts";
+import type { MemoryFactRow } from "../store/storeMemory.ts";
 
 export type {
     AssistantOutputLockReason,
@@ -677,6 +678,17 @@ export interface RealtimeInstructionMemorySlice {
     adaptiveDirectives: unknown[];
 }
 
+export interface VoiceUserFactProfile {
+    userFacts: MemoryFactRow[];
+    loadedAt: number;
+}
+
+export interface VoiceGuildFactProfile {
+    selfFacts: MemoryFactRow[];
+    loreFacts: MemoryFactRow[];
+    loadedAt: number;
+}
+
 export interface QueuedRealtimeTurnContextRefresh {
     settings: VoiceRealtimeToolSettings | null;
     userId: string | null;
@@ -802,6 +814,8 @@ export interface VoiceSession {
     mcpStatus: VoiceMcpServerStatus[];
     toolMusicTrackCatalog: Map<string, unknown>;
     memoryWriteWindow: number[];
+    factProfiles: Map<string, VoiceUserFactProfile>;
+    guildFactProfile: VoiceGuildFactProfile | null;
     voiceCommandState: VoiceCommandState | null;
     musicQueueState: VoiceMusicQueueState;
     assistantOutput: AssistantOutputState;

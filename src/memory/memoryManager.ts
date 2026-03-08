@@ -28,6 +28,7 @@ import {
   sanitizeInline,
 } from "./memoryHelpers.ts";
 import { runDailyReflection, rerunDailyReflectionForDateGuild } from "./dailyReflection.ts";
+import type { MemoryFactRow } from "../store/storeMemory.ts";
 
 const DAILY_FILE_PATTERN = /^\d{4}-\d{2}-\d{2}\.md$/;
 const HYBRID_FACT_LIMIT = 10;
@@ -232,40 +233,52 @@ export class MemoryManager {
     }
   }
 
-  async buildPromptMemorySlice({ userId, guildId, channelId, queryText, settings, trace = {} }) {
-    const scopeGuildId = String(guildId || "").trim();
-    if (!scopeGuildId) {
+  loadUserFactProfile({ userId, guildId }: { userId?: string | null; guildId?: string | null }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    const normalizedUserId = String(userId || "").trim();
+    if (!normalizedGuildId || !normalizedUserId) {
       return {
-        userFacts: [],
-        relevantFacts: [],
-        relevantMessages: []
+        userFacts: [] as MemoryFactRow[]
       };
     }
 
-    const userFacts = await this.selectHybridFacts({
-      subjects: [userId],
-      guildId: scopeGuildId,
-      channelId,
-      queryText,
-      settings,
-      trace,
-      limit: 8
+    return {
+      userFacts: this.store.getFactProfileRows({
+        guildId: normalizedGuildId,
+        subjects: [normalizedUserId],
+        limit: 20
+      })
+    };
+  }
+
+  loadGuildFactProfile({ guildId }: { guildId?: string | null }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) {
+      return {
+        selfFacts: [] as MemoryFactRow[],
+        loreFacts: [] as MemoryFactRow[]
+      };
+    }
+
+    const rows = this.store.getFactProfileRows({
+      guildId: normalizedGuildId,
+      subjects: [SELF_SUBJECT, LORE_SUBJECT],
+      limit: 20
     });
-    const relevantFacts = await this.selectHybridFacts({
-      subjects: [userId, SELF_SUBJECT, LORE_SUBJECT],
-      guildId: scopeGuildId,
-      channelId,
-      queryText,
-      settings,
-      trace,
-      limit: HYBRID_FACT_LIMIT
-    });
-    const relevantMessages = channelId ? this.store.searchRelevantMessages(channelId, queryText, 8) : [];
 
     return {
-      userFacts,
-      relevantFacts,
-      relevantMessages
+      selfFacts: rows.filter((row) => String(row.subject || "").trim() === SELF_SUBJECT).slice(0, 10),
+      loreFacts: rows.filter((row) => String(row.subject || "").trim() === LORE_SUBJECT).slice(0, 10)
+    };
+  }
+
+  loadFactProfile({ userId, guildId }: { userId?: string | null; guildId?: string | null }) {
+    const userProfile = this.loadUserFactProfile({ userId, guildId });
+    const guildProfile = this.loadGuildFactProfile({ guildId });
+
+    return {
+      userFacts: userProfile.userFacts,
+      relevantFacts: [...guildProfile.selfFacts, ...guildProfile.loreFacts]
     };
   }
 
@@ -317,47 +330,6 @@ export class MemoryManager {
       trace,
       channelId,
       requireRelevanceGate: true
-    });
-
-    return ranked.slice(0, boundedLimit).map((row) => ({
-      id: row.id,
-      created_at: row.created_at,
-      guild_id: row.guild_id,
-      channel_id: row.channel_id,
-      subject: row.subject,
-      fact: row.fact,
-      fact_type: row.fact_type,
-      evidence_text: row.evidence_text,
-      source_message_id: row.source_message_id,
-      confidence: row.confidence,
-      score: row._score,
-      semanticScore: row._semanticScore,
-      lexicalScore: row._lexicalScore
-    }));
-  }
-
-  async selectHybridFacts({ subjects, guildId, channelId, queryText, settings, trace = {}, limit = HYBRID_FACT_LIMIT }) {
-    const normalizedSubjects = [...new Set((subjects || []).map((value) => String(value || "").trim()).filter(Boolean))];
-    if (!normalizedSubjects.length) return [];
-    const scopeGuildId = String(guildId || "").trim();
-    if (!scopeGuildId) return [];
-
-    const boundedLimit = clampInt(limit, 1, 24);
-    const candidateLimit = Math.min(
-      HYBRID_MAX_CANDIDATES,
-      Math.max(boundedLimit * HYBRID_CANDIDATE_MULTIPLIER, boundedLimit)
-    );
-    const candidates = this.store.getFactsForSubjects(normalizedSubjects, candidateLimit, {
-      guildId: scopeGuildId
-    });
-    if (!candidates.length) return [];
-
-    const ranked = await this.rankHybridCandidates({
-      candidates,
-      queryText,
-      settings,
-      trace,
-      channelId
     });
 
     return ranked.slice(0, boundedLimit).map((row) => ({

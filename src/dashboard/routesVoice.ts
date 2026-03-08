@@ -678,34 +678,6 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
     });
   });
 
-  app.post("/api/memory/simulate-slice", async (c) => {
-    const body = await readDashboardBody(c);
-    const userId = String(body.userId || "").trim() || null;
-    const guildId = String(body.guildId || "").trim();
-    const channelId = String(body.channelId || "").trim() || null;
-    const queryText = String(body.queryText || "").trim();
-
-    if (!guildId || !queryText) {
-      return c.json({ error: "guildId and queryText are required" }, 400);
-    }
-
-    const settings = store.getSettings();
-    const result = await memory.buildPromptMemorySlice({
-      userId,
-      guildId,
-      channelId,
-      queryText,
-      settings,
-      trace: { guildId, channelId, source: "dashboard_simulate_slice" }
-    });
-
-    return c.json({
-      userFacts: result.userFacts || [],
-      relevantFacts: result.relevantFacts || [],
-      relevantMessages: result.relevantMessages || []
-    });
-  });
-
   app.get("/api/memory/subjects", (c) => {
     const guildId = String(c.req.query("guildId") || "").trim();
     const limit = parseBoundedInt(c.req.query("limit"), 200, 1, 500);

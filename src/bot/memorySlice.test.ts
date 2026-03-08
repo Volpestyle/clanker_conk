@@ -12,7 +12,7 @@ import type { BotContext } from "./botContext.ts";
 import {
   buildMediaMemoryFacts,
   getScopedFallbackFacts,
-  loadPromptMemorySlice,
+  loadFactProfile,
   loadRelevantMemoryFacts
 } from "./memorySlice.ts";
 
@@ -119,7 +119,7 @@ test("getScopedFallbackFacts prioritizes same-channel facts before wider guild f
   });
 });
 
-test("loadPromptMemorySlice normalizes partial memory slices from memory manager", async () => {
+test("loadFactProfile normalizes partial fact profiles from memory manager", async () => {
   await withTempMemoryContext(async (ctx) => {
     const settings = createTestSettings({
       memory: {
@@ -129,16 +129,20 @@ test("loadPromptMemorySlice normalizes partial memory slices from memory manager
     let capturedSource = "";
     let capturedQuery = "";
 
-    ctx.memory.buildPromptMemorySlice = async (payload) => {
-      capturedSource = String(payload.trace?.source || "");
-      capturedQuery = String(payload.queryText || "");
+    ctx.memory.loadFactProfile = (payload) => {
       return {
         userFacts: [{ fact: "likes tea" }],
-        relevantMessages: [{ content: "hello there" }]
+        relevantFacts: []
       };
     };
 
-    const slice = await loadPromptMemorySlice(ctx, {
+    ctx.store.searchRelevantMessages = (channelId, queryText) => {
+      capturedSource = "reply_memory_slice";
+      capturedQuery = `${String(channelId)}:${String(queryText)}`;
+      return [{ content: "hello there" }];
+    };
+
+    const slice = loadFactProfile(ctx, {
       settings,
       userId: "user-1",
       guildId: "guild-1",
@@ -148,14 +152,14 @@ test("loadPromptMemorySlice normalizes partial memory slices from memory manager
     });
 
     assert.equal(capturedSource, "reply_memory_slice");
-    assert.equal(capturedQuery, "hello there");
+    assert.equal(capturedQuery, "chan-1:hello there");
     assert.deepEqual(slice.userFacts, [{ fact: "likes tea" }]);
     assert.deepEqual(slice.relevantFacts, []);
     assert.deepEqual(slice.relevantMessages, [{ content: "hello there" }]);
   });
 });
 
-test("loadPromptMemorySlice logs and returns empty slice when memory manager throws", async () => {
+test("loadFactProfile logs and returns empty slice when memory manager throws", async () => {
   await withTempMemoryContext(async (ctx) => {
     const settings = createTestSettings({
       memory: {
@@ -163,11 +167,11 @@ test("loadPromptMemorySlice logs and returns empty slice when memory manager thr
       }
     });
 
-    ctx.memory.buildPromptMemorySlice = async () => {
+    ctx.memory.loadFactProfile = () => {
       throw new Error("prompt slice failed");
     };
 
-    const slice = await loadPromptMemorySlice(ctx, {
+    const slice = loadFactProfile(ctx, {
       settings,
       userId: "user-1",
       guildId: "guild-1",

@@ -81,19 +81,6 @@ export interface DashboardMemory {
     guildId: string;
     settings?: unknown;
   }): Promise<unknown>;
-  buildPromptMemorySlice(payload: {
-    guildId: string;
-    queryText: string;
-    settings: unknown;
-    userId?: string | null;
-    channelId?: string | null;
-    trace?: Record<string, unknown>;
-  }): Promise<{
-    userFacts?: unknown[];
-    relevantFacts?: unknown[];
-    relevantMessages?: unknown[];
-    [key: string]: unknown;
-  }>;
 }
 
 export interface DashboardPublicHttpsState {

@@ -90,7 +90,7 @@ export interface BudgetContext extends BotContext {
   readonly imageCaptionCache: ImageCaptionCache;
 }
 
-type LoadPromptMemorySliceFn = typeof import("./memorySlice.ts").loadPromptMemorySlice;
+type LoadFactProfileFn = typeof import("./memorySlice.ts").loadFactProfile;
 type BuildMediaMemoryFactsFn = typeof import("./memorySlice.ts").buildMediaMemoryFacts;
 type LoadRelevantMemoryFactsFn = typeof import("./memorySlice.ts").loadRelevantMemoryFacts;
 type GetRecentLookupContextForPromptFn = typeof import("./messageHistory.ts").getRecentLookupContextForPrompt;
@@ -201,7 +201,7 @@ export interface ReplyPipelineRuntime extends BotContext, Pick<ClankerBot, Reply
   getReplyAddressSignal: GetReplyAddressSignalRuntimeFn;
   isReplyChannel: IsReplyChannelRuntimeFn;
   shouldAttemptReplyDecision: ShouldAttemptReplyDecisionRuntimeFn;
-  loadPromptMemorySlice: StripFirstArg<LoadPromptMemorySliceFn>;
+  loadFactProfile: StripFirstArg<LoadFactProfileFn>;
   getRecentLookupContextForPrompt: StripFirstArg<GetRecentLookupContextForPromptFn>;
   getConversationHistoryForPrompt: StripFirstArg<GetConversationHistoryForPromptFn>;
   buildMediaMemoryFacts: BuildMediaMemoryFactsFn;
@@ -234,9 +234,17 @@ export interface ReplyPipelineRuntime extends BotContext, Pick<ClankerBot, Reply
 
 export interface VoiceReplyRuntime extends BotContext {
   readonly search: WebSearchService;
+  readonly voiceSessionManager?: {
+    getSessionById?: (sessionId: string | null | undefined) => unknown;
+    getSessionFactProfileSlice?: (payload: { session?: unknown; userId?: string | null }) => {
+      userFacts: Array<Record<string, unknown>>;
+      relevantFacts: Array<Record<string, unknown>>;
+      relevantMessages?: Array<Record<string, unknown>>;
+    };
+  } | null;
   loadRelevantMemoryFacts: StripFirstArg<LoadRelevantMemoryFactsFn>;
   buildMediaMemoryFacts: BuildMediaMemoryFactsFn;
-  loadPromptMemorySlice: StripFirstArg<LoadPromptMemorySliceFn>;
+  loadFactProfile: StripFirstArg<LoadFactProfileFn>;
   buildWebSearchContext: StripFirstArg<BuildWebSearchContextFn>;
   loadRecentConversationHistory: StripFirstArg<GetConversationHistoryForPromptFn>;
   loadRecentLookupContext: StripFirstArg<GetRecentLookupContextForPromptFn>;

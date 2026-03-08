@@ -36,6 +36,7 @@ import {
   type ContextMessage
 } from "../llm/serviceShared.ts";
 import type { VoiceReplyRuntime } from "./botContext.ts";
+import { normalizeFactProfileSlice } from "./memorySlice.ts";
 
 const MAX_SOUNDBOARD_LEAK_TOKEN_SCAN = 24;
 const SOUNDBOARD_CANDIDATE_PARSE_LIMIT = 40;
@@ -44,45 +45,6 @@ const MAX_VOICE_SOUNDBOARD_REFS = 10;
 const OPEN_ARTICLE_MAX_CANDIDATES = 12;
 const OPEN_ARTICLE_ROW_LIMIT = 4;
 const OPEN_ARTICLE_RESULTS_PER_ROW = 5;
-const VOICE_MEMORY_CONTEXT_MAX_FACTS = 24;
-const VOICE_MEMORY_PREFETCH_WAIT_MS = 120;
-
-type VoiceMemoryFact = Record<string, unknown>;
-
-type VoiceMemorySlice = {
-  userFacts: VoiceMemoryFact[];
-  relevantFacts: VoiceMemoryFact[];
-};
-
-function emptyVoiceMemorySlice(): VoiceMemorySlice {
-  return {
-    userFacts: [],
-    relevantFacts: []
-  };
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
-}
-
-function normalizeVoiceMemoryFactList(value: unknown): VoiceMemoryFact[] {
-  const rows = Array.isArray(value) ? value : [];
-  const normalized: VoiceMemoryFact[] = [];
-  for (const row of rows) {
-    if (!isPlainRecord(row)) continue;
-    normalized.push({ ...row });
-    if (normalized.length >= VOICE_MEMORY_CONTEXT_MAX_FACTS) break;
-  }
-  return normalized;
-}
-
-function normalizeVoiceMemorySlice(value: unknown): VoiceMemorySlice {
-  if (!isPlainRecord(value)) return emptyVoiceMemorySlice();
-  return {
-    userFacts: normalizeVoiceMemoryFactList(value.userFacts),
-    relevantFacts: normalizeVoiceMemoryFactList(value.relevantFacts)
-  };
-}
 
 function runAsyncCallback(callback: unknown, payload: Record<string, unknown>, callbackName: string) {
   if (typeof callback !== "function") return;
@@ -427,10 +389,18 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       userId
     },
     source: "voice_stt_pipeline_generation",
-    memoryTimeoutMs: VOICE_MEMORY_PREFETCH_WAIT_MS,
-    loadPromptMemorySlice:
-      typeof runtime.loadPromptMemorySlice === "function"
-        ? (payload) => runtime.loadPromptMemorySlice(payload)
+    loadFactProfile:
+      sessionId && typeof runtime.voiceSessionManager?.getSessionFactProfileSlice === "function"
+        ? (payload) => {
+          const session = runtime.voiceSessionManager?.getSessionById?.(sessionId);
+          if (!session) return { userFacts: [], relevantFacts: [] };
+          return runtime.voiceSessionManager?.getSessionFactProfileSlice?.({
+            session,
+            userId: String(payload.userId || "").trim() || null
+          }) || { userFacts: [], relevantFacts: [] };
+        }
+        : typeof runtime.loadFactProfile === "function"
+          ? (payload) => runtime.loadFactProfile(payload)
         : null,
     loadRecentLookupContext:
       typeof runtime.loadRecentLookupContext === "function"
@@ -451,7 +421,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
             })
         : null
   });
-  const promptMemorySlice = normalizeVoiceMemorySlice(continuity.memorySlice);
+  const promptMemorySlice = normalizeFactProfileSlice(continuity.memorySlice);
   const recentWebLookups = continuity.recentWebLookups;
   const recentConversationHistory = continuity.recentConversationHistory;
   const adaptiveDirectives = Array.isArray(continuity.adaptiveDirectives) ? continuity.adaptiveDirectives : [];

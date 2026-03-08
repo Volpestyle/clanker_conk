@@ -20,7 +20,7 @@ import { wasLinkSharedSince, recordSharedLink, pruneLookupContext, recordLookupC
 import { getRecentVoiceSessions, getVoiceSessionEvents } from "./storeVoice.ts";
 import { getReplyPerformanceStats, getStats } from "./storeStats.ts";
 import { createAutomation, getAutomationById, countAutomations, listAutomations, getMostRecentAutomations, findAutomationsByQuery, setAutomationStatus, claimDueAutomations, finalizeAutomationRun, recordAutomationRun, getAutomationRuns } from "./storeAutomation.ts";
-import { addMemoryFact, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactBySubjectAndFact, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject } from "./storeMemory.ts";
+import { addMemoryFact, getFactProfileRows, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactBySubjectAndFact, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject } from "./storeMemory.ts";
 import { addAdaptiveStyleNote, getActiveAdaptiveStyleNotes, getAdaptiveStyleNoteAuditLog, removeAdaptiveStyleNote, searchAdaptiveStyleNotesForPrompt, updateAdaptiveStyleNote } from "./storeAdaptiveDirectives.ts";
 
 export const SETTINGS_KEY = "runtime_settings";
@@ -628,6 +628,10 @@ export class Store {
 
   getFactsForSubjects(subjects, limit = 80, scope = null) {
     return getFactsForSubjects(this, subjects, limit, scope);
+  }
+
+  getFactProfileRows(opts: { guildId?; subjects?; limit? } = {}) {
+    return getFactProfileRows(this, opts);
   }
 
   getFactsForScope(opts: { guildId; limit?; subjectIds? }) {

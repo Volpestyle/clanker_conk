@@ -119,7 +119,7 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
           memoryIngestCalls.push(payload);
           return true;
         },
-        async buildPromptMemorySlice() {
+        loadFactProfile() {
           return {
             userFacts: [],
             relevantFacts: [],

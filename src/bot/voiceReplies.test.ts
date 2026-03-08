@@ -169,7 +169,7 @@ function createVoiceBot({
   generationText = "all good",
   generationError = null,
   generationSequence = null,
-  loadPromptMemorySlice = async () => ({
+  loadFactProfile = () => ({
     userFacts: [],
     relevantFacts: []
   }),
@@ -267,8 +267,8 @@ function createVoiceBot({
     buildMediaMemoryFacts() {
       return [];
     },
-    async loadPromptMemorySlice(payload) {
-      return await loadPromptMemorySlice(payload);
+    loadFactProfile(payload) {
+      return loadFactProfile(payload);
     },
     loadRecentConversationHistory() {
       return recentConversationHistory;
@@ -1075,12 +1075,12 @@ test("generateVoiceTurnReply handles open_article tool call", async () => {
   assert.equal(reply.usedOpenArticleFollowup, true);
 });
 
-test("generateVoiceTurnReply does not block on unresolved memory lookup", async () => {
+test("generateVoiceTurnReply tolerates empty fact profiles", async () => {
   const { bot } = createVoiceBot({
     generationText: structuredVoiceOutput({
       text: "quick reply"
     }),
-    loadPromptMemorySlice: async () => await new Promise(() => undefined)
+    loadFactProfile: () => ({ userFacts: [], relevantFacts: [] })
   });
 
   const completed = await Promise.race([
@@ -1112,7 +1112,7 @@ test("generateVoiceTurnReply fetches fresh memory context each turn", async () =
         text: "second pass"
       })
     ],
-    loadPromptMemorySlice: async () => {
+    loadFactProfile: () => {
       memoryLoadCalls += 1;
       if (memoryLoadCalls === 1) {
         return {
@@ -1120,7 +1120,7 @@ test("generateVoiceTurnReply fetches fresh memory context each turn", async () =
           relevantFacts: []
         };
       }
-      return await new Promise(() => undefined);
+      return { userFacts: [], relevantFacts: [] };
     }
   });
 

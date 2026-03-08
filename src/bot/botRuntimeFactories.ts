@@ -45,7 +45,7 @@ import {
 } from "./messageHistory.ts";
 import {
   buildMediaMemoryFacts as buildMediaMemoryFactsForMemorySlice,
-  loadPromptMemorySlice as loadPromptMemorySliceForMemorySlice,
+  loadFactProfile as loadFactProfileForMemorySlice,
   loadRelevantMemoryFacts as loadRelevantMemoryFactsForMemorySlice
 } from "./memorySlice.ts";
 import {
@@ -247,7 +247,7 @@ export function buildAutomationEngineRuntime(bot: ClankerBot): AutomationEngineR
     },
     composeMessageContentForHistory: (message, baseText) =>
       composeHistoryMessageContent(message, baseText),
-    loadPromptMemorySlice: (payload) => loadPromptMemorySliceForMemorySlice(botContext, payload),
+    loadFactProfile: (payload) => loadFactProfileForMemorySlice(botContext, payload),
     buildMediaMemoryFacts: (payload) => buildMediaMemoryFactsForMemorySlice(payload),
     buildMemoryLookupContext: (payload) =>
       buildMemoryLookupContextForBudgetTracking(
@@ -462,7 +462,7 @@ export function buildReplyPipelineRuntime(
         ...payload,
         windowSize: unsolicitedReplyContextWindow
       } as Parameters<typeof shouldAttemptReplyDecisionForReplyAdmission>[0]),
-    loadPromptMemorySlice: (payload) => loadPromptMemorySliceForMemorySlice(botContext, payload),
+    loadFactProfile: (payload) => loadFactProfileForMemorySlice(botContext, payload),
     getRecentLookupContextForPrompt: (payload) =>
       getRecentLookupContextForPromptForMessageHistory(botContext, payload),
     getConversationHistoryForPrompt: (payload) =>
@@ -543,9 +543,10 @@ export function buildVoiceReplyRuntime(bot: ClankerBot): VoiceReplyRuntime {
   return {
     ...botContext,
     search: bot.search,
+    voiceSessionManager: bot.voiceSessionManager,
     loadRelevantMemoryFacts: (payload) => loadRelevantMemoryFactsForMemorySlice(botContext, payload),
     buildMediaMemoryFacts: (payload) => buildMediaMemoryFactsForMemorySlice(payload),
-    loadPromptMemorySlice: (payload) => loadPromptMemorySliceForMemorySlice(botContext, payload),
+    loadFactProfile: (payload) => loadFactProfileForMemorySlice(botContext, payload),
     buildWebSearchContext: (settings, messageText) =>
       buildWebSearchContextForBudgetTracking(budgetContext, settings, messageText),
     loadRecentConversationHistory: (payload) =>

@@ -679,6 +679,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         mcpStatus: getVoiceMcpServerStatuses(manager),
         toolMusicTrackCatalog: new Map(),
         memoryWriteWindow: [],
+        factProfiles: new Map(),
+        guildFactProfile: null,
         voiceCommandState: null,
         musicQueueState: {
           guildId,
@@ -775,6 +777,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       };
 
       manager.sessions.set(guildId, session);
+      manager.primeSessionFactProfiles(session);
 
       // Record the bot's own join as a membership event so the classifier
       // history shows "[botName] joined" as the first event.

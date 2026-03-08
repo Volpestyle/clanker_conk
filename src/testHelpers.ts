@@ -117,9 +117,6 @@ export async function withDashboardServer<T>(
     async rerunDailyReflection() {
       return { ok: true };
     },
-    async buildPromptMemorySlice() {
-      return { facts: [] };
-    },
     ...memoryOverrides
   };
 

@@ -55,45 +55,51 @@ test("memory facts are scoped by guild", async () => {
   });
 });
 
-test("archiveOldFactsForSubject deactivates older facts", async () => {
+test("archiveOldFactsForSubject evicts contextual facts before core facts", async () => {
   await withTempStore(async (store) => {
-    store.addMemoryFact({
-      guildId: "guild-a",
-      channelId: "chan-1",
-      subject: "user-2",
-      fact: "Fact A.",
-      factType: "other",
-      sourceMessageId: "m1",
-      confidence: 0.4
-    });
-    store.addMemoryFact({
-      guildId: "guild-a",
-      channelId: "chan-1",
-      subject: "user-2",
-      fact: "Fact B.",
-      factType: "other",
-      sourceMessageId: "m2",
-      confidence: 0.5
-    });
-    store.addMemoryFact({
-      guildId: "guild-a",
-      channelId: "chan-1",
-      subject: "user-2",
-      fact: "Fact C.",
-      factType: "other",
-      sourceMessageId: "m3",
-      confidence: 0.6
-    });
+    const addFact = (subject: string, fact: string, factType: string, sourceMessageId: string) => {
+      store.addMemoryFact({
+        guildId: "guild-a",
+        channelId: "chan-1",
+        subject,
+        fact,
+        factType,
+        sourceMessageId,
+        confidence: 0.6
+      });
+    };
 
-    const archived = store.archiveOldFactsForSubject({
-      guildId: "guild-a",
-      subject: "user-2",
-      keep: 2
-    });
-    assert.ok(archived >= 1);
+    for (let i = 1; i <= 19; i += 1) {
+      addFact("user-context-first", `Core ${i}.`, i % 2 === 0 ? "relationship" : "profile", `core-a-${i}`);
+    }
+    addFact("user-context-first", "Context 1.", "preference", "ctx-a-1");
+    addFact("user-context-first", "Context 2.", "preference", "ctx-a-2");
+    addFact("user-context-first", "Context 3.", "preference", "ctx-a-3");
 
-    const activeFacts = store.getFactsForSubjects(["user-2"], 10, { guildId: "guild-a" });
-    assert.equal(activeFacts.length, 2);
+    const archivedContextual = store.archiveOldFactsForSubject({
+      guildId: "guild-a",
+      subject: "user-context-first",
+      keep: 20
+    });
+    assert.equal(archivedContextual, 2);
+    const contextFirstFacts = store.getFactsForSubjects(["user-context-first"], 30, { guildId: "guild-a" });
+    assert.equal(contextFirstFacts.filter((row) => row.fact_type === "profile" || row.fact_type === "relationship").length, 19);
+    assert.equal(contextFirstFacts.filter((row) => row.fact_type === "preference").length, 1);
+
+    for (let i = 1; i <= 22; i += 1) {
+      addFact("user-core-cap", `Core cap ${i}.`, i % 2 === 0 ? "relationship" : "profile", `core-b-${i}`);
+    }
+    addFact("user-core-cap", "Context survivor.", "preference", "ctx-b-1");
+
+    const archivedMixed = store.archiveOldFactsForSubject({
+      guildId: "guild-a",
+      subject: "user-core-cap",
+      keep: 20
+    });
+    assert.equal(archivedMixed, 3);
+    const coreCapFacts = store.getFactsForSubjects(["user-core-cap"], 30, { guildId: "guild-a" });
+    assert.equal(coreCapFacts.filter((row) => row.fact_type === "preference").length, 0);
+    assert.equal(coreCapFacts.filter((row) => row.fact_type === "profile" || row.fact_type === "relationship").length, 20);
   });
 });
 

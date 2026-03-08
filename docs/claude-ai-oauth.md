@@ -4,7 +4,7 @@
 
 The `claude-oauth` provider authenticates against the Anthropic Messages API using OAuth tokens from a Claude Pro/Max subscription, instead of a paid API key. This gives access to Claude models at zero marginal cost (covered by the subscription).
 
-This replaces the old `claude-code` provider which spawned the `claude` CLI as a subprocess. The OAuth provider calls the API directly via `@anthropic-ai/sdk` with a custom fetch wrapper.
+The OAuth provider calls the API directly via `@anthropic-ai/sdk` with a custom fetch wrapper.
 
 ## How It Works
 

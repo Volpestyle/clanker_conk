@@ -1,5 +1,4 @@
 import { collectMemoryFactHints } from "./botHelpers.ts";
-import { loadPromptMemorySliceFromMemory } from "../memory/promptMemorySlice.ts";
 import { clamp } from "../utils.ts";
 import type { BotContext } from "./botContext.ts";
 
@@ -13,7 +12,13 @@ type MemorySettings = {
   };
 } & Record<string, unknown>;
 
-type LoadPromptMemorySliceOptions = {
+export type FactProfileSlice = {
+  userFacts: Array<Record<string, unknown>>;
+  relevantFacts: Array<Record<string, unknown>>;
+  relevantMessages: Array<Record<string, unknown>>;
+};
+
+type LoadFactProfileOptions = {
   settings: MemorySettings;
   userId?: string | null;
   guildId?: string | null;
@@ -22,6 +27,25 @@ type LoadPromptMemorySliceOptions = {
   trace?: MemoryTrace;
   source?: string;
 };
+
+export function emptyFactProfileSlice(): FactProfileSlice {
+  return {
+    userFacts: [],
+    relevantFacts: [],
+    relevantMessages: []
+  };
+}
+
+export function normalizeFactProfileSlice(slice: unknown): FactProfileSlice {
+  const value = slice && typeof slice === "object" && !Array.isArray(slice)
+    ? slice as Record<string, unknown>
+    : {};
+  return {
+    userFacts: Array.isArray(value.userFacts) ? value.userFacts as Array<Record<string, unknown>> : [],
+    relevantFacts: Array.isArray(value.relevantFacts) ? value.relevantFacts as Array<Record<string, unknown>> : [],
+    relevantMessages: Array.isArray(value.relevantMessages) ? value.relevantMessages as Array<Record<string, unknown>> : []
+  };
+}
 
 type BuildMediaMemoryFactsOptions = {
   userFacts?: Array<Record<string, unknown> | string>;
@@ -45,7 +69,7 @@ type LoadRelevantMemoryFactsOptions = {
   fallbackWhenNoMatch?: boolean;
 };
 
-export async function loadPromptMemorySlice(
+export function loadFactProfile(
   ctx: BotContext,
   {
     settings,
@@ -53,29 +77,47 @@ export async function loadPromptMemorySlice(
     guildId,
     channelId = null,
     queryText = "",
-    trace = {},
-    source = "prompt_memory_slice"
-  }: LoadPromptMemorySliceOptions
+    trace: _trace = {},
+    source = "fact_profile"
+  }: LoadFactProfileOptions
 ) {
-  return await loadPromptMemorySliceFromMemory({
-    settings,
-    memory: ctx.memory,
-    userId,
-    guildId,
-    channelId,
-    queryText,
-    trace,
-    source,
-    onError: ({ error, context }) => {
-      ctx.store.logAction({
-        kind: "bot_error",
-        guildId: context.guildId,
-        channelId: context.channelId,
-        userId: context.userId,
-        content: `${context.source}: ${String(error?.message || error)}`
-      });
-    }
-  });
+  const empty = emptyFactProfileSlice();
+  if (!settings?.memory?.enabled || typeof ctx.memory?.loadFactProfile !== "function") {
+    return empty;
+  }
+
+  const normalizedGuildId = String(guildId || "").trim();
+  if (!normalizedGuildId) return empty;
+  const normalizedUserId = String(userId || "").trim() || null;
+  const normalizedChannelId = String(channelId || "").trim() || null;
+  const normalizedQuery = String(queryText || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 420);
+  const normalizedSource = String(source || "fact_profile").trim() || "fact_profile";
+
+  try {
+    const factProfile = normalizeFactProfileSlice(ctx.memory.loadFactProfile({
+      userId: normalizedUserId,
+      guildId: normalizedGuildId
+    }));
+    const relevantMessages = normalizedChannelId && normalizedQuery && typeof ctx.store?.searchRelevantMessages === "function"
+      ? ctx.store.searchRelevantMessages(normalizedChannelId, normalizedQuery, 8)
+      : [];
+    return {
+      ...factProfile,
+      relevantMessages: Array.isArray(relevantMessages) ? relevantMessages : []
+    };
+  } catch (error) {
+    ctx.store.logAction({
+      kind: "bot_error",
+      guildId: normalizedGuildId,
+      channelId: normalizedChannelId,
+      userId: normalizedUserId,
+      content: `${normalizedSource}: ${String(error?.message || error)}`
+    });
+    return empty;
+  }
 }
 
 export function buildMediaMemoryFacts({

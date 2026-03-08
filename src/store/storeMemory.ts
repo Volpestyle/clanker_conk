@@ -12,7 +12,7 @@ interface MemoryStore {
   ensureSqliteVecReady(): boolean;
 }
 
-interface MemoryFactRow {
+export interface MemoryFactRow {
   id: number;
   created_at: string;
   updated_at: string;
@@ -28,7 +28,12 @@ interface MemoryFactRow {
 
 interface MemoryFactIdRow {
   id: number;
+  fact_type?: string;
 }
+
+const CORE_FACT_TYPES = ["profile", "relationship"] as const;
+const CORE_FACT_TYPE_SET = new Set<string>(CORE_FACT_TYPES);
+const CORE_FACT_KEEP = 20;
 
 interface MemoryFactVectorBlobRow {
   embedding_blob: Uint8Array;
@@ -135,6 +140,36 @@ return store.db
          LIMIT ?`
   )
   .all(...args, clamp(limit, 1, 500));
+}
+
+export function getFactProfileRows(store: MemoryStore, {
+  guildId,
+  subjects = [],
+  limit = 20
+}: {
+  guildId?: string | null;
+  subjects?: string[];
+  limit?: number;
+}) {
+const normalizedGuildId = String(guildId || "").trim();
+if (!normalizedGuildId) return [];
+
+const normalizedSubjects: string[] = [
+  ...new Set((Array.isArray(subjects) ? subjects : []).map((value) => String(value || "").trim()).filter(Boolean))
+];
+if (!normalizedSubjects.length) return [];
+
+return store.db
+  .prepare<MemoryFactRow, Array<string | number>>(
+    `SELECT id, created_at, updated_at, guild_id, channel_id, subject, fact, fact_type, evidence_text, source_message_id, confidence
+         FROM memory_facts
+         WHERE guild_id = ?
+           AND is_active = 1
+           AND subject IN (${normalizedSubjects.map(() => "?").join(", ")})
+         ORDER BY confidence DESC, updated_at DESC
+         LIMIT ?`
+  )
+  .all(normalizedGuildId, ...normalizedSubjects, clamp(limit, 1, 200));
 }
 
 export function getFactsForScope(store: MemoryStore, { guildId, limit = 120, subjectIds = null }) {
@@ -379,7 +414,7 @@ if (factType) {
 
 const rows = store.db
   .prepare<MemoryFactIdRow, string[]>(
-    `SELECT id
+    `SELECT id, fact_type
          FROM memory_facts
          WHERE ${where.join(" AND ")}
          ORDER BY updated_at DESC
@@ -388,7 +423,28 @@ const rows = store.db
   .all(...args);
 if (rows.length <= boundedKeep) return 0;
 
-const staleIds = rows.slice(boundedKeep).map((row) => Number(row.id)).filter((id) => Number.isInteger(id) && id > 0);
+let staleIds: number[] = [];
+if (factType) {
+  staleIds = rows.slice(boundedKeep).map((row) => Number(row.id)).filter((id) => Number.isInteger(id) && id > 0);
+} else {
+  const contextualRows = rows.filter((row) => !CORE_FACT_TYPE_SET.has(String(row.fact_type || "").trim()));
+  const coreRows = rows.filter((row) => CORE_FACT_TYPE_SET.has(String(row.fact_type || "").trim()));
+  const overflowCount = Math.max(0, rows.length - boundedKeep);
+  const contextualKeep = Math.max(0, contextualRows.length - overflowCount);
+  const contextualStaleIds = contextualRows
+    .slice(contextualKeep)
+    .map((row) => Number(row.id))
+    .filter((id) => Number.isInteger(id) && id > 0);
+  const remainingOverflow = Math.max(0, overflowCount - contextualStaleIds.length);
+  const coreKeep = Math.min(CORE_FACT_KEEP, coreRows.length);
+  const coreOverflow = Math.max(0, coreRows.length - coreKeep);
+  const coreToArchive = Math.min(coreOverflow, remainingOverflow);
+  const coreStaleIds = coreRows
+    .slice(coreRows.length - coreToArchive)
+    .map((row) => Number(row.id))
+    .filter((id) => Number.isInteger(id) && id > 0);
+  staleIds = [...contextualStaleIds, ...coreStaleIds];
+}
 if (!staleIds.length) return 0;
 
 const placeholders = staleIds.map(() => "?").join(", ");

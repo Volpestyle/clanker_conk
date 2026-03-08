@@ -599,6 +599,64 @@ export class VoiceSessionManager {
     this.client.on("voiceChannelEffectSend", this.onVoiceChannelEffectSend);
   }
 
+  getSessionById(sessionId) {
+    const normalizedSessionId = String(sessionId || "").trim();
+    if (!normalizedSessionId) return null;
+    for (const session of this.sessions.values()) {
+      if (String(session?.id || "") === normalizedSessionId) {
+        return session;
+      }
+    }
+    return null;
+  }
+
+  getSessionFactProfileSlice({ session, userId = null }) {
+    const normalizedUserId = String(userId || "").trim();
+    const userProfile = normalizedUserId ? session?.factProfiles?.get?.(normalizedUserId) || null : null;
+    const guildProfile = session?.guildFactProfile || null;
+    return {
+      userFacts: Array.isArray(userProfile?.userFacts) ? userProfile.userFacts : [],
+      relevantFacts: [
+        ...(Array.isArray(guildProfile?.selfFacts) ? guildProfile.selfFacts : []),
+        ...(Array.isArray(guildProfile?.loreFacts) ? guildProfile.loreFacts : [])
+      ],
+      relevantMessages: []
+    };
+  }
+
+  primeSessionFactProfiles(session) {
+    if (!session || session.ending || !this.memory) return;
+    this.refreshSessionGuildFactProfile(session);
+    const participants = this.getVoiceChannelParticipants(session);
+    for (const participant of participants) {
+      this.refreshSessionUserFactProfile(session, participant.userId);
+    }
+  }
+
+  refreshSessionUserFactProfile(session, userId) {
+    if (!session || session.ending || typeof this.memory?.loadUserFactProfile !== "function") return;
+    const normalizedUserId = String(userId || "").trim();
+    if (!normalizedUserId) return;
+    const profile = this.memory.loadUserFactProfile({
+      userId: normalizedUserId,
+      guildId: session.guildId
+    });
+    session.factProfiles.set(normalizedUserId, {
+      userFacts: Array.isArray(profile?.userFacts) ? profile.userFacts : [],
+      loadedAt: Date.now()
+    });
+  }
+
+  refreshSessionGuildFactProfile(session) {
+    if (!session || session.ending || typeof this.memory?.loadGuildFactProfile !== "function") return;
+    const profile = this.memory.loadGuildFactProfile({ guildId: session.guildId });
+    session.guildFactProfile = {
+      selfFacts: Array.isArray(profile?.selfFacts) ? profile.selfFacts : [],
+      loreFacts: Array.isArray(profile?.loreFacts) ? profile.loreFacts : [],
+      loadedAt: Date.now()
+    };
+  }
+
   getVoiceScreenShareCapability({
     settings = null,
     guildId = null,
@@ -4956,6 +5014,11 @@ export class VoiceSessionManager {
       const movedIntoSession = sessionVoiceChannelId && oldChannelId !== sessionVoiceChannelId && newChannelId === sessionVoiceChannelId;
       const movedOutOfSession = sessionVoiceChannelId && oldChannelId === sessionVoiceChannelId && newChannelId !== sessionVoiceChannelId;
       if (movedIntoSession || movedOutOfSession) {
+        if (movedIntoSession) {
+          this.refreshSessionUserFactProfile(session, stateUserId);
+        } else if (movedOutOfSession) {
+          session.factProfiles?.delete?.(stateUserId);
+        }
         const recordedEvent = this.recordVoiceMembershipEvent({
           session,
           userId: stateUserId,

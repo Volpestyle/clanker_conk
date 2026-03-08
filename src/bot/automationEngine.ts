@@ -102,7 +102,7 @@ export type AutomationEngineRuntime = BotContext & {
   getSimulatedTypingDelayMs: (minMs: number, jitterMs: number) => number;
   markSpoke: () => void;
   composeMessageContentForHistory: (message: unknown, baseText?: string) => string;
-  loadPromptMemorySlice: (payload: {
+  loadFactProfile: (payload: {
     settings: Record<string, unknown>;
     userId?: string | null;
     guildId?: string;
@@ -110,7 +110,7 @@ export type AutomationEngineRuntime = BotContext & {
     queryText?: string;
     trace?: Record<string, unknown>;
     source?: string;
-  }) => Promise<AutomationMemorySlice>;
+  }) => AutomationMemorySlice;
   buildMediaMemoryFacts: (payload: {
     userFacts: Array<Record<string, unknown>>;
     relevantFacts: Array<Record<string, unknown>>;
@@ -358,7 +358,7 @@ export async function generateAutomationPayload(
   const automationQuery = `${String(automation?.title || "")} ${String(automation?.instruction || "")}`
     .replace(/\s+/g, " ")
     .trim();
-  const memorySlice = await runtime.loadPromptMemorySlice({
+  const memorySlice = runtime.loadFactProfile({
     settings,
     userId: automationOwnerId,
     guildId: automation.guild_id,

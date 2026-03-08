@@ -823,7 +823,7 @@ test("reply decider skips memory retrieval for unaddressed turns", async () => {
   const manager = createManager({
     generate: async () => ({ text: "YES" }),
     memory: {
-      async buildPromptMemorySlice() {
+      loadFactProfile() {
         memoryCallCount += 1;
         return {
           userFacts: [],
@@ -859,7 +859,7 @@ test("reply decider uses classifier with directAddressed hint without memory loo
   const manager = createManager({
     generate: async () => ({ text: "YES" }),
     memory: {
-      async buildPromptMemorySlice() {
+      loadFactProfile() {
         memoryCallCount += 1;
         return {
           userFacts: [{ fact: "likes hockey", fact_type: "preference" }],
