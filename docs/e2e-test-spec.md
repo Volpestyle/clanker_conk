@@ -261,7 +261,7 @@ tests/
 │   │   └── generate-fixtures.ts  # CLI to create audio fixtures
 │   ├── voicePhysicalHarness.test.ts  # Physical voice layer tests
 │   ├── voiceDialogue.test.ts         # Multi-turn dialogue tests
-│   ├── voiceMusicPlayNow.test.ts     # Non-blocking music play tests
+│   ├── voiceMusicPlay.test.ts        # Non-blocking music play tests
 │   ├── voiceCrowdedChannel.test.ts   # Multi-participant crowded channel tests
 │   └── textHarness.test.ts           # Text channel tests
 └── fixtures/
@@ -374,15 +374,15 @@ Gate: `RUN_E2E_VOICE_PHYSICAL=1`
 | Bot ignores undirected chatter | Admission gate rejection |
 | Response latency is within SLO | End-to-end under 8s |
 
-### Music Play-Now (`voiceMusicPlayNow.test.ts`)
+### Music Play (`voiceMusicPlay.test.ts`)
 
 Gate: `RUN_E2E_MUSIC=1`
 
-Tests the non-blocking `music_play_now` tool implementation where the tool returns `{ status: "loading" }` immediately instead of blocking ~17s for yt-dlp download.
+Tests the non-blocking `music_play` flow where the play request returns immediately with `{ status: "loading" }` while search, resolution, and download continue in the background.
 
 | Test | Validates | Requires |
 |------|-----------|----------|
-| Full lifecycle — fast ack, now-playing notification | Non-blocking ack within 8s, "now playing" injected prompt after download | Driver A |
+| Full lifecycle — fast ack, playback start | Non-blocking ack within 8s, playback starts after background download | Driver A |
 | Double queue backtrack — second request replaces first | Back-to-back requests: second song replaces first, download completes | Driver A |
 | Disambiguation with background chatter | Vague request → disambiguation → chatter overlaps → selection → download completes | Drivers A + B |
 
@@ -511,7 +511,7 @@ bun run test:e2e
 ```sh
 bun run test:e2e:voice
 bun run test:e2e:text
-RUN_E2E_MUSIC=1 bun run test:e2e -- tests/e2e/voiceMusicPlayNow.test.ts
+RUN_E2E_MUSIC=1 bun run test:e2e -- tests/e2e/voiceMusicPlay.test.ts
 RUN_E2E_CROWDED=1 bun run test:e2e -- tests/e2e/voiceCrowdedChannel.test.ts
 ```
 
@@ -704,7 +704,7 @@ Both are **complementary**:
 
 - **Implementation**: `tests/e2e/driver/DriverBot.ts`
 - **Physical Voice Suite**: `tests/e2e/voicePhysicalHarness.test.ts`
-- **Music Play-Now Suite**: `tests/e2e/voiceMusicPlayNow.test.ts`
+- **Music Play Suite**: `tests/e2e/voiceMusicPlay.test.ts`
 - **Crowded Channel Suite**: `tests/e2e/voiceCrowdedChannel.test.ts`
 - **Dialogue Suite**: `tests/e2e/voiceDialogue.test.ts`
 - **Text Suite**: `tests/e2e/textHarness.test.ts`

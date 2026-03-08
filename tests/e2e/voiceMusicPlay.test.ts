@@ -126,11 +126,11 @@ describe("E2E: Voice music_play (non-blocking)", () => {
   // Test 1: Full lifecycle + duck in/out
   //
   // Phases:
-  //   A) Request song, verify fast ack + now-playing notification
+  //   A) Request song, verify fast ack + playback start
   //   B) Direct address during playback — duck in, respond, duck out
   // ─────────────────────────────────────────────────────────────────────
   test(
-    "Music: Full lifecycle — fast ack, now-playing, duck in/out",
+    "Music: Full lifecycle — fast ack, playback start, duck in/out",
     async () => {
       if (!hasE2EConfig() || !envFlag("RUN_E2E_MUSIC")) return;
 
@@ -163,8 +163,8 @@ describe("E2E: Voice music_play (non-blocking)", () => {
 
       const ackBytes = driver.getReceivedAudioBytes();
 
-      // Wait for download, verify "now playing" notification
-      console.log(`[Lifecycle] Waiting ${downloadWaitMs}ms for download + now-playing...`);
+      // Wait for download, verify music starts without blocking the initial ack
+      console.log(`[Lifecycle] Waiting ${downloadWaitMs}ms for download + playback start...`);
       await new Promise((r) => setTimeout(r, downloadWaitMs));
 
       const postDownloadBytes = driver.getReceivedAudioBytes();
@@ -172,7 +172,7 @@ describe("E2E: Voice music_play (non-blocking)", () => {
 
       assert.ok(
         postDownloadBytes > ackBytes,
-        `Expected "now playing" notification after download. Ack: ${ackBytes}, total: ${postDownloadBytes}`
+        `Expected playback audio after download. Ack: ${ackBytes}, total: ${postDownloadBytes}`
       );
 
       // ── Phase B: Duck in/out — direct address during playback ──
@@ -246,7 +246,7 @@ describe("E2E: Voice music_play (non-blocking)", () => {
       console.log(`[Replace] Song B ack: ${gotAckB ? "yes" : "no"} (${ackBBytes} bytes)`);
       assert.ok(gotAckB, "Bot should ack replacement request");
 
-      // Wait for B to download and "now playing" to fire
+      // Wait for B to download and start playback
       console.log(`[Replace] Waiting ${downloadWaitMs}ms for song B download...`);
       await new Promise((r) => setTimeout(r, downloadWaitMs));
 
@@ -255,7 +255,7 @@ describe("E2E: Voice music_play (non-blocking)", () => {
 
       assert.ok(
         postBDownloadBytes > ackBBytes,
-        `"Now playing" should fire for replacement track B. Ack: ${ackBBytes}, total: ${postBDownloadBytes}`
+        `Replacement track B should start after download. Ack: ${ackBBytes}, total: ${postBDownloadBytes}`
       );
 
       // ── Phase B: Mid-playback replacement — B is playing, swap to C ──
@@ -274,7 +274,7 @@ describe("E2E: Voice music_play (non-blocking)", () => {
       console.log(`[Replace] Song C ack: ${gotAckC ? "yes" : "no"} (${ackCBytes} bytes)`);
       assert.ok(gotAckC, "Bot should ack mid-playback replacement request");
 
-      // Wait for C to download + "now playing"
+      // Wait for C to download and start playback
       console.log(`[Replace] Waiting ${downloadWaitMs}ms for song C download...`);
       await new Promise((r) => setTimeout(r, downloadWaitMs));
 
@@ -283,7 +283,7 @@ describe("E2E: Voice music_play (non-blocking)", () => {
 
       assert.ok(
         postCDownloadBytes > ackCBytes,
-        `"Now playing" should fire for replacement track C. Ack: ${ackCBytes}, total: ${postCDownloadBytes}`
+        `Replacement track C should start after download. Ack: ${ackCBytes}, total: ${postCDownloadBytes}`
       );
 
       await stopMusic();
@@ -371,7 +371,7 @@ describe("E2E: Voice music_play (non-blocking)", () => {
         `Bot should ack disambiguation selection after chatter break (got ${selectionAckBytes} bytes)`
       );
 
-      // --- Phase 5: Wait for download, verify "now playing" fires ---
+      // --- Phase 5: Wait for download, verify playback starts ---
       console.log(`[Disambig] Waiting ${downloadWaitMs}ms for download...`);
       await new Promise((r) => setTimeout(r, downloadWaitMs));
 
@@ -390,7 +390,7 @@ describe("E2E: Voice music_play (non-blocking)", () => {
   );
 
   // ─────────────────────────────────────────────────────────────────────
-  // Test 4: Queue + skip + announcement interruption policy
+  // Test 4: Queue + skip + playback interruption policy
   //
   // Phases:
   //   A) Play song A, queue song B, skip A — verify B starts
@@ -398,7 +398,7 @@ describe("E2E: Voice music_play (non-blocking)", () => {
   //   C) Driver A interrupts — should get a response
   // ─────────────────────────────────────────────────────────────────────
   test(
-    "Music: Queue, skip, and announcement interruption policy",
+    "Music: Queue, skip, and playback interruption policy",
     async () => {
       if (!hasE2EConfig() || !envFlag("RUN_E2E_MUSIC")) return;
 
@@ -472,7 +472,7 @@ describe("E2E: Voice music_play (non-blocking)", () => {
         `Second song should start after skip. Skip ack: ${skipAckBytes}, total: ${postSkipBytes}`
       );
 
-      // ── Phase B: Announcement interruption — only requester can interrupt ──
+      // ── Phase B: Playback interruption — only requester can interrupt ──
 
       if (!needsDriverB) {
         console.log("[AnnounceInterrupt] Skipping interruption policy phase: no E2E_DRIVER_BOT_2_TOKEN");
@@ -480,49 +480,49 @@ describe("E2E: Voice music_play (non-blocking)", () => {
         return;
       }
 
-      // Song B is playing (and/or its announcement just fired).
+      // Song B is playing.
       // Driver B tries to interrupt — should be ignored.
       driver.clearReceivedAudio();
       driverB!.clearReceivedAudio();
 
-      console.log("[AnnounceInterrupt] Driver B attempting interrupt...");
+      console.log("[PlaybackInterrupt] Driver B attempting interrupt...");
       await driverB!.playAudio(interruptB);
 
       // Give the bot time to potentially respond — it shouldn't
       const driverBGotResponse = await driverB!.waitForAudioResponse(8_000);
       const driverBBytes = driverB!.getReceivedAudioBytes();
-      console.log(`[AnnounceInterrupt] Driver B response: ${driverBGotResponse ? "yes" : "no"} (${driverBBytes} bytes)`);
+      console.log(`[PlaybackInterrupt] Driver B response: ${driverBGotResponse ? "yes" : "no"} (${driverBBytes} bytes)`);
 
       const driverABytesAfterBInterrupt = driver.getReceivedAudioBytes();
-      console.log(`[AnnounceInterrupt] Driver A bytes (same window): ${driverABytesAfterBInterrupt}`);
+      console.log(`[PlaybackInterrupt] Driver A bytes (same window): ${driverABytesAfterBInterrupt}`);
 
       // ── Phase C: Driver A interrupts — should get a response ──
 
       driver.clearReceivedAudio();
       driverB!.clearReceivedAudio();
 
-      console.log("[AnnounceInterrupt] Driver A interrupting...");
+      console.log("[PlaybackInterrupt] Driver A interrupting...");
       await driver.playAudio(interruptA);
 
       const driverAGotResponse = await driver.waitForAudioResponse(10_000);
       const driverAResponseBytes = driver.getReceivedAudioBytes();
-      console.log(`[AnnounceInterrupt] Driver A response: ${driverAGotResponse ? "yes" : "no"} (${driverAResponseBytes} bytes)`);
+      console.log(`[PlaybackInterrupt] Driver A response: ${driverAGotResponse ? "yes" : "no"} (${driverAResponseBytes} bytes)`);
 
       assert.ok(
         driverAGotResponse,
-        "Requester (Driver A) should be able to interrupt during announcement"
+        "Requester (Driver A) should be able to interrupt during playback"
       );
 
       // If Driver B received audio, it should be significantly less than A's
       // response — just background music bleed, not a dedicated response.
       if (driverBGotResponse) {
         console.log(
-          `[AnnounceInterrupt] WARNING: Driver B received ${driverBBytes} bytes — ` +
+          `[PlaybackInterrupt] WARNING: Driver B received ${driverBBytes} bytes — ` +
           `checking it's just background music (Driver A got ${driverAResponseBytes} bytes)`
         );
         assert.ok(
           driverBBytes < driverAResponseBytes * 0.5,
-          `Driver B should not get a dedicated response during announcement. ` +
+          `Driver B should not get a dedicated response during playback. ` +
           `B: ${driverBBytes}, A: ${driverAResponseBytes}`
         );
       }

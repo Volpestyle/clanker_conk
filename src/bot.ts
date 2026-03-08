@@ -1219,7 +1219,7 @@ export class ClankerBot {
     }
 
     if (
-      intent.intent === "music_play_now" ||
+      intent.intent === "music_play" ||
       intent.intent === "music_queue_next" ||
       intent.intent === "music_queue_add"
     ) {

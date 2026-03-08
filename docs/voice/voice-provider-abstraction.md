@@ -246,7 +246,7 @@ Code: `bindRealtimeHandlers()` in `voiceSessionManager.ts`, dispatch in `src/voi
 
 - `conversation_search`, `memory_search`, `memory_write`
 - `adaptive_directive_add`, `adaptive_directive_remove`
-- `music_search`, `music_play_now`, `music_queue_next`, `music_queue_add`, `music_stop`, `music_pause`, `music_resume`, `music_skip`, `music_now_playing`
+- `music_search`, `music_play`, `music_queue_next`, `music_queue_add`, `music_stop`, `music_pause`, `music_resume`, `music_skip`, `music_now_playing`
 - `web_search`, `browser_browse` (when enabled)
 
 **MCP tools**: merged from configured MCP servers, dispatched via `executeMcpVoiceToolCall()`

@@ -48,7 +48,7 @@ const REPLY_VOICE_INTENT_TYPES = new Set([
   "watch_stream",
   "stop_watching_stream",
   "stream_status",
-  "music_play_now",
+  "music_play",
   "music_queue_next",
   "music_queue_add",
   "music_stop",
@@ -56,7 +56,7 @@ const REPLY_VOICE_INTENT_TYPES = new Set([
   "none"
 ]);
 const REPLY_VOICE_MUSIC_QUERY_INTENT_TYPES = new Set([
-  "music_play_now",
+  "music_play",
   "music_queue_next",
   "music_queue_add"
 ]);
@@ -205,7 +205,7 @@ export const REPLY_OUTPUT_SCHEMA = {
             "watch_stream",
             "stop_watching_stream",
             "stream_status",
-            "music_play_now",
+            "music_play",
             "music_queue_next",
             "music_queue_add",
             "music_stop",

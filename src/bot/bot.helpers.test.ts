@@ -138,7 +138,7 @@ test("parseStructuredReplyOutput accepts music control voice intents", () => {
       text: "playing now",
       skip: false,
       voiceIntent: {
-        intent: "music_play_now",
+        intent: "music_play",
         confidence: 0.96,
         reason: "explicit play request",
         query: "mf doom all caps",
@@ -147,7 +147,7 @@ test("parseStructuredReplyOutput accepts music control voice intents", () => {
       }
     })
   );
-  assert.equal(play.voiceIntent.intent, "music_play_now");
+  assert.equal(play.voiceIntent.intent, "music_play");
   assert.equal(play.voiceIntent.confidence, 0.96);
   assert.equal(play.voiceIntent.reason, "explicit play request");
   assert.equal(play.voiceIntent.query, "mf doom all caps");

@@ -322,7 +322,7 @@ export function buildReplyPrompt({
       "If the user asks whether stream watch is on/off, set voiceIntent.intent to stream_status."
     );
     parts.push(
-      "If the user clearly asks you to play music immediately, replace the current track, or start a song now in VC, set voiceIntent.intent to music_play_now."
+      "If the user clearly asks you to play music immediately, replace the current track, or start a song now in VC, set voiceIntent.intent to music_play."
     );
     parts.push(
       "If the user clearly asks you to queue a song next in VC, set voiceIntent.intent to music_queue_next."
@@ -368,7 +368,7 @@ export function buildReplyPrompt({
       const pendingQuery = String(voiceMode?.musicDisambiguation?.query || "").trim() || null;
       const pendingPlatform = String(voiceMode?.musicDisambiguation?.platform || "auto").trim().toLowerCase() || "auto";
       parts.push(
-        `There is a pending music disambiguation request${pendingQuery ? ` for query "${pendingQuery}"` : ""} on platform ${pendingPlatform} for action ${voiceMode.musicDisambiguation.action === "queue_next" ? "music_queue_next" : voiceMode.musicDisambiguation.action === "queue_add" ? "music_queue_add" : "music_play_now"}.`
+        `There is a pending music disambiguation request${pendingQuery ? ` for query "${pendingQuery}"` : ""} on platform ${pendingPlatform} for action ${voiceMode.musicDisambiguation.action === "queue_next" ? "music_queue_next" : voiceMode.musicDisambiguation.action === "queue_add" ? "music_queue_add" : "music_play"}.`
       );
       parts.push(
         [
@@ -383,7 +383,7 @@ export function buildReplyPrompt({
         ].join("\n")
       );
       parts.push(
-        `If the user picks one of those options (by number or by naming it), set voiceIntent.intent=${voiceMode.musicDisambiguation.action === "queue_next" ? "music_queue_next" : voiceMode.musicDisambiguation.action === "queue_add" ? "music_queue_add" : "music_play_now"} and voiceIntent.selectedResultId to that exact id.`
+        `If the user picks one of those options (by number or by naming it), set voiceIntent.intent=${voiceMode.musicDisambiguation.action === "queue_next" ? "music_queue_next" : voiceMode.musicDisambiguation.action === "queue_add" ? "music_queue_add" : "music_play"} and voiceIntent.selectedResultId to that exact id.`
       );
     }
     parts.push(
@@ -724,11 +724,11 @@ export function buildReplyPrompt({
   parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false for text-channel replies.");
   parts.push("When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.");
   parts.push(
-    "Set voiceIntent.intent to one of join|leave|status|watch_stream|stop_watching_stream|stream_status|music_play_now|music_queue_next|music_queue_add|music_stop|music_pause|none."
+    "Set voiceIntent.intent to one of join|leave|status|watch_stream|stop_watching_stream|stream_status|music_play|music_queue_next|music_queue_add|music_stop|music_pause|none."
   );
-  parts.push("When voiceIntent.intent is music_play_now, music_queue_next, or music_queue_add, set voiceIntent.query to the song name the user wants.");
-  parts.push("Set voiceIntent.platform to youtube|soundcloud|auto when intent is music_play_now, music_queue_next, or music_queue_add. Use auto to search all platforms.");
-  parts.push("When searchResults are provided (from a previous music search), set voiceIntent.selectedResultId to the ID of the track to use for music_play_now, music_queue_next, or music_queue_add.");
+  parts.push("When voiceIntent.intent is music_play, music_queue_next, or music_queue_add, set voiceIntent.query to the song name the user wants.");
+  parts.push("Set voiceIntent.platform to youtube|soundcloud|auto when intent is music_play, music_queue_next, or music_queue_add. Use auto to search all platforms.");
+  parts.push("When searchResults are provided (from a previous music search), set voiceIntent.selectedResultId to the ID of the track to use for music_play, music_queue_next, or music_queue_add.");
   parts.push("When not issuing voice control, set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null, and other voiceIntent fields to null.");
   parts.push("Set screenShareIntent.action to one of offer_link|none.");
   parts.push("When not offering a share link, set screenShareIntent.action=none, screenShareIntent.confidence=0, screenShareIntent.reason=null.");

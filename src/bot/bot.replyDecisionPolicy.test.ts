@@ -1974,7 +1974,7 @@ test("voice intent dispatcher routes all supported intents to voice session mana
           ? "music_queue_next"
           : action === "queue_add"
             ? "music_queue_add"
-            : "music_play_now"
+            : "music_play"
       );
       return true;
     };
@@ -2002,7 +2002,7 @@ test("voice intent dispatcher routes all supported intents to voice session mana
       "watch_stream",
       "stop_watching_stream",
       "stream_status",
-      "music_play_now",
+      "music_play",
       "music_queue_next",
       "music_queue_add",
       "music_stop",

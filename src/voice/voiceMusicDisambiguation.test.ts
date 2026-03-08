@@ -162,7 +162,7 @@ test("getMusicPromptContext derives current playback, last action, and upcoming 
       active: true,
       lastTrackTitle: "Midnight City",
       lastTrackArtists: ["M83"],
-      lastCommandReason: "voice_music_play_now",
+      lastCommandReason: "voice_tool_music_play",
       lastQuery: "midnight city",
       queueState: {
         tracks: [

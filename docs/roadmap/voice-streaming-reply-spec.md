@@ -89,7 +89,7 @@ with every possible side-effect packed in:
   "soundboardRefs": ["airhorn"],
   "leaveVoiceChannel": false,
   "automationAction": { "operation": "create", ... },
-  "voiceIntent": { "intent": "music_play_now", ... },
+  "voiceIntent": { "intent": "music_play", ... },
   "voiceAddressing": { "talkingTo": "James", "directedConfidence": 0.9 },
   "screenNote": "...",
   "screenMoment": "..."
@@ -117,7 +117,7 @@ have tool equivalents; the rest need small new tools.
 - `imageLookupQuery` → `image_lookup`
 - `openArticleRef` → `open_article` (voice only)
 - `leaveVoiceChannel` → `leave_voice_channel`
-- `voiceIntent` (music) → `music_search`, `music_play_now`, etc.
+- `voiceIntent` (music) → `music_search`, `music_play`, etc.
 - `screenShareIntent` → `offer_screen_share_link`
 
 **Need new tools:**
