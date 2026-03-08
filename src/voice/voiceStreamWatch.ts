@@ -35,7 +35,7 @@ const STREAM_WATCH_VISION_MAX_OUTPUT_TOKENS = 72;
 const STREAM_WATCH_COMMENTARY_PATH_AUTO = "auto";
 const STREAM_WATCH_COMMENTARY_PATH_ANTHROPIC_KEYFRAMES = "anthropic_keyframes";
 const DEFAULT_STREAM_WATCH_BRAIN_CONTEXT_PROMPT =
-  "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or observational shout-out commentary.";
+  "Write one short factual private note about the most salient visible state or change in this frame. Prioritize gameplay actions, objectives, outcomes, menus, or unusual/funny moments that could support a natural later comment. If the frame is mostly idle UI, lobby, desktop, or other non-gameplay context, say that plainly. Prefer what is newly different from the previous frame.";
 const STREAM_WATCH_FRAME_ANALYSIS_JSON_SCHEMA = JSON.stringify({
   type: "object",
   properties: {
@@ -423,55 +423,22 @@ export function supportsStreamWatchBrainContext(manager: StreamWatchManager, { s
 }
 
 export function resolveStreamWatchVisionProviderSettings(manager: StreamWatchManager, settings = null) {
-  const commentaryPath = resolveStreamWatchCommentaryPath(settings);
   const llmSettings = getResolvedOrchestratorBinding(settings);
   const streamWatchSettings = getVoiceStreamWatchSettings(settings);
 
-  const overrideProvider = String(streamWatchSettings.brainContextProvider || "").trim();
-  const overrideModel = String(streamWatchSettings.brainContextModel || "").trim();
+  const provider = String(streamWatchSettings.brainContextProvider || "").trim();
+  const model = String(streamWatchSettings.brainContextModel || "").trim();
 
-  if (overrideProvider && overrideModel && manager.llm?.isProviderConfigured?.(overrideProvider)) {
-    return {
-      ...llmSettings,
-      provider: overrideProvider,
-      model: overrideModel,
-      temperature: 0.3,
-      maxOutputTokens: STREAM_WATCH_VISION_MAX_OUTPUT_TOKENS
-    };
-  }
+  if (!provider || !model) return null;
+  if (!manager.llm?.isProviderConfigured?.(provider)) return null;
 
-  const fallbackCandidates = [
-    {
-      provider: "claude-oauth",
-      model: "claude-sonnet-4-6"
-    },
-    {
-      provider: "anthropic",
-      model: "claude-haiku-4-5"
-    },
-    {
-      provider: "xai",
-      model: "grok-2-vision-latest"
-    }
-  ];
-  const anthropicProviders = new Set(["claude-oauth", "anthropic"]);
-  const candidates = commentaryPath === STREAM_WATCH_COMMENTARY_PATH_ANTHROPIC_KEYFRAMES
-    ? fallbackCandidates.filter((candidate) => anthropicProviders.has(candidate.provider))
-    : fallbackCandidates;
-
-  for (const candidate of candidates) {
-    const configured = manager.llm?.isProviderConfigured?.(candidate.provider);
-    if (!configured) continue;
-    return {
-      ...llmSettings,
-      provider: candidate.provider,
-      model: candidate.model,
-      temperature: 0.3,
-      maxOutputTokens: STREAM_WATCH_VISION_MAX_OUTPUT_TOKENS
-    };
-  }
-
-  return null;
+  return {
+    ...llmSettings,
+    provider,
+    model,
+    temperature: 0.3,
+    maxOutputTokens: STREAM_WATCH_VISION_MAX_OUTPUT_TOKENS
+  };
 }
 
 const DIRECT_VISION_PROVIDERS = new Set(["claude-oauth"]);

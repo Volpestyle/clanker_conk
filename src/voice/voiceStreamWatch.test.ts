@@ -29,8 +29,10 @@ function createSettings(overrides = {}) {
         brainContextEnabled: true,
         brainContextMinIntervalSeconds: 4,
         brainContextMaxEntries: 8,
+        brainContextProvider: "anthropic",
+        brainContextModel: "claude-haiku-4-5",
         brainContextPrompt:
-          "For each keyframe, classify it as gameplay or non-gameplay, then generate notes that support either play-by-play commentary or observational shout-out commentary."
+          "Write one short factual private note about the most salient visible state or change in this frame. Prioritize gameplay actions, objectives, outcomes, menus, or unusual/funny moments that could support a natural later comment. If the frame is mostly idle UI, lobby, desktop, or other non-gameplay context, say that plainly. Prefer what is newly different from the previous frame."
       }
     }
   };
@@ -273,7 +275,7 @@ test("getStreamWatchBrainContextForPrompt retains recent notes after screen shar
   assert.equal(String(context?.notes[0] || "").includes("boss fight HUD visible"), true);
 });
 
-test("resolveStreamWatchVisionProviderSettings picks first configured provider in priority order", () => {
+test("resolveStreamWatchVisionProviderSettings uses configured provider/model from settings", () => {
   const { manager } = createManager({
     llm: {
       isProviderConfigured(provider) {
@@ -281,12 +283,18 @@ test("resolveStreamWatchVisionProviderSettings picks first configured provider i
       }
     }
   });
-  const resolved = resolveStreamWatchVisionProviderSettings(manager, {
+  const resolved = resolveStreamWatchVisionProviderSettings(manager, createSettings({
     llm: {
       maxOutputTokens: 999,
       temperature: 0.9
+    },
+    voice: {
+      streamWatch: {
+        brainContextProvider: "xai",
+        brainContextModel: "grok-2-vision-latest"
+      }
     }
-  });
+  }));
 
   assert.equal(resolved.provider, "xai");
   assert.equal(resolved.model, "grok-2-vision-latest");
@@ -294,24 +302,24 @@ test("resolveStreamWatchVisionProviderSettings picks first configured provider i
   assert.equal(resolved.maxOutputTokens, 72);
 });
 
-test("resolveStreamWatchVisionProviderSettings honors anthropic keyframe forced path", () => {
+test("resolveStreamWatchVisionProviderSettings returns null when provider not configured", () => {
   const { manager } = createManager({
     llm: {
-      isProviderConfigured(provider) {
-        return provider === "xai" || provider === "anthropic";
+      isProviderConfigured() {
+        return false;
       }
     }
   });
-  const resolved = resolveStreamWatchVisionProviderSettings(manager, {
+  const resolved = resolveStreamWatchVisionProviderSettings(manager, createSettings({
     voice: {
       streamWatch: {
-        commentaryPath: "anthropic_keyframes"
+        brainContextProvider: "anthropic",
+        brainContextModel: "claude-haiku-4-5"
       }
     }
-  });
+  }));
 
-  assert.equal(resolved?.provider, "anthropic");
-  assert.equal(resolved?.model, "claude-haiku-4-5");
+  assert.equal(resolved, null);
 });
 
 test("enableWatchStreamForUser enforces same-voice-channel requirement and supports success", async () => {

@@ -1,5 +1,6 @@
 const SENTENCE_BREAK_RE = /(?:[.!?](?:["')\]]+)?\s+|[.!?](?:["')\]]+)?$|\n+)/gu;
 const CLAUSE_BREAK_RE = /(?:[;:](?:\s+|$))/gu;
+const TRAILING_WHITESPACE_RE = /\s$/u;
 
 function normalizeChunkText(value: string) {
   return String(value || "").replace(/\s+/g, " ").trim();
@@ -36,6 +37,14 @@ function findForcedBreakIndex(buffer: string, maxBufferChars: number) {
   return maxBufferChars;
 }
 
+function findEagerFirstChunkBoundaryIndex(buffer: string) {
+  const sentenceOrClauseBoundaryIndex = findLastBoundaryIndex(buffer, true);
+  if (sentenceOrClauseBoundaryIndex >= 0) {
+    return sentenceOrClauseBoundaryIndex;
+  }
+  return TRAILING_WHITESPACE_RE.test(buffer) ? buffer.length : -1;
+}
+
 export interface SentenceAccumulatorOptions {
   onSentence: (text: string, index: number) => void;
   eagerFirstChunk?: boolean;
@@ -55,7 +64,7 @@ export class SentenceAccumulator {
   constructor(options: SentenceAccumulatorOptions) {
     this.onSentence = options.onSentence;
     this.eagerFirstChunk = options.eagerFirstChunk !== false;
-    this.eagerMinChars = Math.max(1, Math.floor(Number(options.eagerMinChars) || 60));
+    this.eagerMinChars = Math.max(1, Math.floor(Number(options.eagerMinChars) || 30));
     this.maxBufferChars = Math.max(20, Math.floor(Number(options.maxBufferChars) || 300));
   }
 
@@ -77,11 +86,15 @@ export class SentenceAccumulator {
     while (this.buffer.trim()) {
       const allowClauseBreaks = this.emittedFirstChunk;
       const boundaryIndex = findLastBoundaryIndex(this.buffer, allowClauseBreaks);
-      const canEagerEmitFirstChunk =
+      const eagerBoundaryIndex =
         !this.emittedFirstChunk &&
         this.eagerFirstChunk &&
-        this.buffer.trim().length >= this.eagerMinChars &&
-        boundaryIndex >= 0;
+        this.buffer.trim().length >= this.eagerMinChars
+          ? findEagerFirstChunkBoundaryIndex(this.buffer)
+          : -1;
+      const canEagerEmitFirstChunk =
+        !this.emittedFirstChunk &&
+        eagerBoundaryIndex >= 0;
 
       if (this.emittedFirstChunk && boundaryIndex >= 0) {
         const chunk = normalizeChunkText(this.buffer.slice(0, boundaryIndex));
@@ -93,8 +106,8 @@ export class SentenceAccumulator {
       }
 
       if (canEagerEmitFirstChunk) {
-        const chunk = normalizeChunkText(this.buffer.slice(0, boundaryIndex));
-        this.buffer = this.buffer.slice(boundaryIndex);
+        const chunk = normalizeChunkText(this.buffer.slice(0, eagerBoundaryIndex));
+        this.buffer = this.buffer.slice(eagerBoundaryIndex);
         if (chunk) {
           this.emit(chunk);
           continue;
