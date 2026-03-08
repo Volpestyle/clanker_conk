@@ -2,6 +2,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { createHash, randomBytes } from "node:crypto";
 import Anthropic from "@anthropic-ai/sdk";
+import type { Fetch as AnthropicFetch } from "@anthropic-ai/sdk/core";
 
 const CLAUDE_OAUTH_CLIENT_ID = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 const CLAUDE_OAUTH_REDIRECT_URI = "https://console.anthropic.com/oauth/code/callback";
@@ -122,8 +123,11 @@ function stripToolPrefix(text: string): string {
   return text.replace(/"name"\s*:\s*"mcp_([^"]+)"/g, '"name": "$1"');
 }
 
-function createOAuthFetch(getTokens: () => ClaudeOAuthTokens, setTokens: (t: ClaudeOAuthTokens) => void) {
-  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+function createOAuthFetch(
+  getTokens: () => ClaudeOAuthTokens,
+  setTokens: (t: ClaudeOAuthTokens) => void
+): AnthropicFetch {
+  const oauthFetch = async (input: unknown, init?: RequestInit): Promise<Response> => {
     let tokens = getTokens();
 
     if (!tokens.accessToken || tokens.expiresAt < Date.now()) {
@@ -173,13 +177,22 @@ function createOAuthFetch(getTokens: () => ClaudeOAuthTokens, setTokens: (t: Cla
       body = prefixToolNames(body);
     }
 
-    let requestInput = input;
+    let requestInput: string | URL | Request =
+      typeof input === "string" || input instanceof URL || input instanceof Request
+        ? input
+        : "";
     let requestUrl: URL | null = null;
     try {
       if (typeof input === "string" || input instanceof URL) {
         requestUrl = new URL(input.toString());
       } else if (input instanceof Request) {
         requestUrl = new URL(input.url);
+      } else if (input && typeof input === "object" && "url" in input) {
+        const url = Reflect.get(input, "url");
+        if (typeof url === "string" && url.trim()) {
+          requestUrl = new URL(url);
+          requestInput = url;
+        }
       }
     } catch {
       requestUrl = null;
@@ -187,7 +200,7 @@ function createOAuthFetch(getTokens: () => ClaudeOAuthTokens, setTokens: (t: Cla
 
     if (requestUrl && requestUrl.pathname === "/v1/messages" && !requestUrl.searchParams.has("beta")) {
       requestUrl.searchParams.set("beta", "true");
-      requestInput = input instanceof Request ? new Request(requestUrl.toString(), input) : requestUrl;
+      requestInput = input instanceof Request ? new Request(requestUrl.toString(), input) : requestUrl.toString();
     }
 
     const response = await fetch(requestInput, {
@@ -223,6 +236,9 @@ function createOAuthFetch(getTokens: () => ClaudeOAuthTokens, setTokens: (t: Cla
 
     return response;
   };
+
+  // Anthropic's SDK types its fetch hook around shimmed Request/Response classes.
+  return oauthFetch as unknown as AnthropicFetch;
 }
 
 export type ClaudeOAuthState = {

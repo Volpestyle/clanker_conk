@@ -17,6 +17,8 @@ function createService(appConfig = {}, { logs = null } = {}) {
       defaultAnthropicModel: "claude-haiku-4-5",
       defaultXaiModel: "grok-3-mini-latest",
       defaultClaudeOAuthModel: "claude-sonnet-4-6",
+      codexOAuthRefreshToken: "",
+      defaultCodexOAuthModel: "gpt-5.4",
       defaultCodexCliModel: "gpt-5.4",
       ...appConfig
     },
@@ -64,12 +66,44 @@ test("resolveProviderAndModel keeps codex_cli_session provider when CLI is avail
   assert.deepEqual(resolved, { provider: "codex_cli_session", model: "gpt-5.4" });
 });
 
+test("resolveProviderAndModel throws when codex-oauth is selected but tokens are not configured", () => {
+  const service = createService({ anthropicApiKey: "test-anthropic-key" });
+  service.codexOAuth = null;
+
+  assert.throws(
+    () => service.resolveProviderAndModel({ provider: "codex-oauth", model: "gpt-5.4" }),
+    /codex-oauth.*no OAuth tokens/i
+  );
+});
+
+test("resolveProviderAndModel keeps codex-oauth provider when configured", () => {
+  const service = createService({ anthropicApiKey: "test-anthropic-key" });
+  service.codexOAuth = {
+    tokens: { refreshToken: "test", accessToken: "", idToken: "", expiresAt: 0, accountId: "acct_123" },
+    client: {}
+  } as never;
+
+  const resolved = service.resolveProviderAndModel({ provider: "codex-oauth", model: "gpt-5.4" });
+  assert.deepEqual(resolved, { provider: "codex-oauth", model: "gpt-5.4" });
+});
+
 test("resolveProviderAndModel accepts standard model IDs for claude-oauth", () => {
   const service = createService({ anthropicApiKey: "test-anthropic-key" });
   service.claudeOAuth = { tokens: { refreshToken: "test", accessToken: "", expiresAt: 0 }, client: {} } as never;
 
   const resolved = service.resolveProviderAndModel({ provider: "claude-oauth", model: "claude-haiku-4-5" });
   assert.deepEqual(resolved, { provider: "claude-oauth", model: "claude-haiku-4-5" });
+});
+
+test("resolveProviderAndModel remaps legacy codex model aliases for codex-oauth", () => {
+  const service = createService({ anthropicApiKey: "test-anthropic-key" });
+  service.codexOAuth = {
+    tokens: { refreshToken: "test", accessToken: "", idToken: "", expiresAt: 0, accountId: "acct_123" },
+    client: {}
+  } as never;
+
+  const resolved = service.resolveProviderAndModel({ provider: "codex-oauth", model: "gpt-5-codex" });
+  assert.deepEqual(resolved, { provider: "codex-oauth", model: "gpt-5.3-codex" });
 });
 
 test("resolveDefaultModel uses claude-haiku-4-5 for anthropic fallback", () => {

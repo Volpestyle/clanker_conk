@@ -107,11 +107,13 @@ export type LLMAppConfig = {
   xaiBaseUrl?: string | null;
   anthropicApiKey?: string | null;
   claudeOAuthRefreshToken?: string | null;
+  codexOAuthRefreshToken?: string | null;
   defaultProvider?: string | null;
   defaultOpenAiModel?: string | null;
   defaultAnthropicModel?: string | null;
   defaultXaiModel?: string | null;
   defaultClaudeOAuthModel?: string | null;
+  defaultCodexOAuthModel?: string | null;
   defaultCodexCliModel?: string | null;
   defaultMemoryEmbeddingModel?: string | null;
 };

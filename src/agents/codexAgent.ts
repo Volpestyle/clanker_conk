@@ -21,6 +21,7 @@ export function getActiveCodexAgentTaskCount(): number {
 export interface CodexAgentSessionOptions {
   scopeKey: string;
   model: string;
+  costProvider?: string;
   timeoutMs: number;
   trace: CodeAgentTrace;
   store: {
@@ -38,6 +39,7 @@ export class CodexAgentSession implements SubAgentSession {
   status: SubAgentSession["status"];
 
   private readonly model: string;
+  private readonly costProvider: string;
   private readonly timeoutMs: number;
   private readonly trace: CodeAgentTrace;
   private readonly store: { logAction: (entry: Record<string, unknown>) => void };
@@ -47,7 +49,7 @@ export class CodexAgentSession implements SubAgentSession {
   private activeAbortController: AbortController | null;
 
   constructor(options: CodexAgentSessionOptions) {
-    const { scopeKey, model, timeoutMs, trace, store, openai } = options;
+    const { scopeKey, model, costProvider = "openai", timeoutMs, trace, store, openai } = options;
 
     this.id = generateSessionId("code", scopeKey);
     this.createdAt = Date.now();
@@ -55,6 +57,7 @@ export class CodexAgentSession implements SubAgentSession {
     this.ownerUserId = trace.userId ?? null;
     this.status = "idle";
     this.model = String(model || "").trim();
+    this.costProvider = String(costProvider || "openai").trim() || "openai";
     this.timeoutMs = timeoutMs;
     this.trace = trace;
     this.store = store;
@@ -92,6 +95,7 @@ export class CodexAgentSession implements SubAgentSession {
         previousResponseId: this.previousResponseId || null,
         input,
         model: this.model,
+        costProvider: this.costProvider,
         timeoutMs: this.timeoutMs,
         signal: turnSignal
       });

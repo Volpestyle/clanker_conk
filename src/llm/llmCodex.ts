@@ -32,6 +32,7 @@ export interface RunCodexTaskOptions {
   openai: OpenAI;
   instruction: string;
   model: string;
+  costProvider?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
 }
@@ -41,6 +42,7 @@ export interface RunCodexSessionTurnOptions {
   previousResponseId?: string | null;
   input: string;
   model: string;
+  costProvider?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
 }
@@ -137,7 +139,15 @@ async function maybeCancelCodexResponse(openai: OpenAI, responseId: string) {
   }
 }
 
-function parseCodexResponse({ response, model }: { response: unknown; model: string }): CodexRunResult {
+function parseCodexResponse({
+  response,
+  model,
+  costProvider = "openai"
+}: {
+  response: unknown;
+  model: string;
+  costProvider?: string;
+}): CodexRunResult {
   const normalizedResponseId = String((response as { id?: unknown })?.id || "").trim();
   const status = normalizeStatus((response as { status?: unknown })?.status) || "completed";
   const text = extractOpenAiResponseText(response);
@@ -149,7 +159,7 @@ function parseCodexResponse({ response, model }: { response: unknown; model: str
     cacheReadTokens: Number(usage?.cacheReadTokens || 0)
   };
   const costUsd = estimateUsdCost({
-    provider: "openai",
+    provider: costProvider,
     model,
     inputTokens: normalizedUsage.inputTokens,
     outputTokens: normalizedUsage.outputTokens,
@@ -175,6 +185,7 @@ async function runCodexInput({
   model,
   input,
   previousResponseId = "",
+  costProvider = "openai",
   timeoutMs = 300_000,
   signal
 }: {
@@ -182,6 +193,7 @@ async function runCodexInput({
   model: string;
   input: string;
   previousResponseId?: string | null;
+  costProvider?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<CodexRunResult> {
@@ -218,7 +230,8 @@ async function runCodexInput({
 
     return parseCodexResponse({
       response: terminalResponse,
-      model: normalizedModel
+      model: normalizedModel,
+      costProvider
     });
   } catch (error) {
     if (signal?.aborted) {
@@ -234,6 +247,7 @@ export async function runCodexTask({
   openai,
   instruction,
   model,
+  costProvider = "openai",
   timeoutMs = 300_000,
   signal
 }: RunCodexTaskOptions): Promise<CodexRunResult> {
@@ -241,6 +255,7 @@ export async function runCodexTask({
     openai,
     model,
     input: instruction,
+    costProvider,
     timeoutMs,
     signal
   });
@@ -251,6 +266,7 @@ export async function runCodexSessionTurn({
   previousResponseId = null,
   input,
   model,
+  costProvider = "openai",
   timeoutMs = 300_000,
   signal
 }: RunCodexSessionTurnOptions): Promise<CodexRunResult> {
@@ -259,6 +275,7 @@ export async function runCodexSessionTurn({
     model,
     input,
     previousResponseId,
+    costProvider,
     timeoutMs,
     signal
   });

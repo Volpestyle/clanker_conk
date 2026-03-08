@@ -19,6 +19,7 @@ import { generateSessionId } from "./subAgentSession.ts";
 import { CodexAgentSession, getActiveCodexAgentTaskCount } from "./codexAgent.ts";
 import { CodexCliAgentSession, getActiveCodexCliAgentTaskCount } from "./codexCliAgent.ts";
 import { clamp } from "../utils.ts";
+import { normalizeCodexOAuthModel } from "../llm/llmHelpers.ts";
 import path from "node:path";
 import { createAbortError, isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import {
@@ -62,6 +63,7 @@ interface CodeAgentOptions {
   codexModel: string;
   codexCliModel: string;
   openai?: OpenAI | null;
+  codexCostProvider?: "openai" | "codex-oauth";
   trace: CodeAgentTrace;
   store: {
     logAction: (entry: Record<string, unknown>) => void;
@@ -148,6 +150,13 @@ export function resolveCodeAgentConfig(settings: Record<string, unknown>, cwdOve
   return { cwd, provider, model, codexModel, codexCliModel, maxTurns, timeoutMs, maxBufferBytes, maxTasksPerHour, maxParallelTasks };
 }
 
+function resolveCodexAgentModel(model: string, costProvider: "openai" | "codex-oauth"): string {
+  if (costProvider === "codex-oauth") {
+    return normalizeCodexOAuthModel(model, "gpt-5.3-codex");
+  }
+  return String(model || "").trim() || "codex-mini-latest";
+}
+
 export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgentResult> {
   const {
     instruction,
@@ -160,6 +169,7 @@ export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgent
     codexModel,
     codexCliModel,
     openai = null,
+    codexCostProvider = "openai",
     trace,
     store,
     signal
@@ -173,13 +183,15 @@ export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgent
     throwIfAborted(signal, "Code agent cancelled");
     if (resolvedProvider === "codex") {
       if (!openai) {
-        throw new Error("Codex code agent requires OPENAI_API_KEY.");
+        throw new Error("Codex code agent requires OPENAI_API_KEY or CODEX_OAUTH_REFRESH_TOKEN.");
       }
+      const resolvedCodexModel = resolveCodexAgentModel(codexModel, codexCostProvider);
 
       const response = await runCodexTask({
         openai,
         instruction,
-        model: codexModel,
+        model: resolvedCodexModel,
+        costProvider: codexCostProvider,
         timeoutMs,
         signal
       });
@@ -201,7 +213,8 @@ export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgent
         metadata: {
           provider: "codex",
           configuredProvider: provider,
-          model: codexModel,
+          model: resolvedCodexModel,
+          authProvider: codexCostProvider,
           maxTurns,
           cwd,
           status: response.status,
@@ -294,9 +307,15 @@ export async function runCodeAgent(options: CodeAgentOptions): Promise<CodeAgent
       metadata: {
         provider: resolvedProvider,
         configuredProvider: provider,
-        model: resolvedProvider === "codex" ? codexModel : resolvedProvider === "codex-cli" ? codexCliModel : model,
+        model:
+          resolvedProvider === "codex"
+            ? resolveCodexAgentModel(codexModel, codexCostProvider)
+            : resolvedProvider === "codex-cli"
+              ? codexCliModel
+              : model,
         maxTurns,
         cwd,
+        authProvider: resolvedProvider === "codex" ? codexCostProvider : undefined,
         isTimeout: normalized.isTimeout,
         errorMessage: normalized.message,
         source: trace.source,
@@ -518,6 +537,7 @@ export interface CreateCodeAgentSessionOptions {
     logAction: (entry: Record<string, unknown>) => void;
   };
   openai?: OpenAI | null;
+  codexCostProvider?: "openai" | "codex-oauth";
 }
 
 export function createCodeAgentSession(options: CreateCodeAgentSessionOptions): SubAgentSession {
@@ -533,17 +553,19 @@ export function createCodeAgentSession(options: CreateCodeAgentSessionOptions): 
     maxBufferBytes,
     trace,
     store,
-    openai = null
+    openai = null,
+    codexCostProvider = "openai"
   } = options;
   const resolvedProvider = resolveEffectiveCodeAgentProvider(provider);
 
   if (resolvedProvider === "codex") {
     if (!openai) {
-      throw new Error("Codex code agent requires OPENAI_API_KEY.");
+      throw new Error("Codex code agent requires OPENAI_API_KEY or CODEX_OAUTH_REFRESH_TOKEN.");
     }
     return new CodexAgentSession({
       scopeKey,
-      model: codexModel,
+      model: resolveCodexAgentModel(codexModel, codexCostProvider),
+      costProvider: codexCostProvider,
       timeoutMs,
       trace,
       store,

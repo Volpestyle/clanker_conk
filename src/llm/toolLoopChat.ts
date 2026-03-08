@@ -18,6 +18,7 @@ export type ToolLoopChatDeps = {
   openai: OpenAI | null;
   anthropic: Anthropic | null;
   claudeOAuthClient: Anthropic | null;
+  codexOAuthClient: OpenAI | null;
   store: LlmActionStore;
 };
 
@@ -132,9 +133,14 @@ export async function chatWithTools(
       cacheWriteTokens: Number(response.usage?.cache_creation_input_tokens || 0),
       cacheReadTokens: Number(response.usage?.cache_read_input_tokens || 0)
     };
-  } else if (resolvedProvider === "openai") {
-    if (!deps.openai) {
-      throw new Error("chatWithTools requires OPENAI_API_KEY.");
+  } else if (resolvedProvider === "openai" || resolvedProvider === "codex-oauth") {
+    const openAiClient = resolvedProvider === "codex-oauth" ? deps.codexOAuthClient : deps.openai;
+    if (!openAiClient) {
+      throw new Error(
+        resolvedProvider === "codex-oauth"
+          ? "chatWithTools requires CODEX_OAUTH_REFRESH_TOKEN."
+          : "chatWithTools requires OPENAI_API_KEY."
+      );
     }
 
     const requestBody = {
@@ -151,8 +157,8 @@ export async function chatWithTools(
         strict: false
       })),
       input: buildOpenAiToolLoopInput(messages)
-    } as Parameters<typeof deps.openai.responses.create>[0];
-    const response = await deps.openai.responses.create(requestBody as never, { signal });
+    } as Parameters<typeof openAiClient.responses.create>[0];
+    const response = await openAiClient.responses.create(requestBody as never, { signal });
     const responseWithOutput = response as { output?: unknown };
 
     content = buildToolLoopContentFromOpenAiOutput(responseWithOutput.output);

@@ -24,6 +24,7 @@ export type MemoryExtractionDeps = {
   xai: OpenAI | null;
   anthropic: Anthropic | null;
   claudeOAuthClient: Anthropic | null;
+  codexOAuthClient: OpenAI | null;
   store: LlmActionStore;
   resolveProviderAndModel: (llmSettings: unknown) => { provider: string; model: string };
   callCodexCliMemoryExtraction: (
@@ -48,6 +49,9 @@ export async function callMemoryExtractionModel(
       payload
     );
   }
+  if (provider === "codex-oauth") {
+    return callCodexOAuthMemoryExtraction(deps, payload);
+  }
   if (provider === "codex-cli" || provider === "codex_cli_session") {
     return deps.callCodexCliMemoryExtraction(payload);
   }
@@ -61,6 +65,51 @@ export async function callMemoryExtractionModel(
     return callOpenAiMemoryExtraction(deps, payload);
   }
   throw new Error(`Unsupported LLM provider '${provider}'.`);
+}
+
+async function callOpenAiFamilyMemoryExtraction(
+  client: OpenAI | null,
+  missingCredentialsMessage: string,
+  { model, systemPrompt, userPrompt }: MemoryExtractionRequest
+) {
+  if (!client) {
+    throw new Error(missingCredentialsMessage);
+  }
+
+  const requestBody = {
+    model,
+    instructions: systemPrompt,
+    ...buildOpenAiTemperatureParam(model, 0),
+    ...buildOpenAiReasoningParam(model, "minimal"),
+    max_output_tokens: 320,
+    input: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "input_text",
+            text: userPrompt
+          }
+        ]
+      }
+    ],
+    text: {
+      format: {
+        type: "json_schema",
+        name: "memory_fact_extraction",
+        strict: true,
+        schema: MEMORY_EXTRACTION_SCHEMA
+      }
+    }
+  } as Parameters<typeof client.responses.create>[0];
+  const response = await client.responses.create(requestBody);
+
+  const text = extractOpenAiResponseText(response) || "{\"facts\":[]}";
+
+  return {
+    text,
+    usage: extractOpenAiResponseUsage(response)
+  };
 }
 
 export async function extractMemoryFacts(
@@ -169,46 +218,24 @@ export async function extractMemoryFacts(
 
 export async function callOpenAiMemoryExtraction(
   deps: Pick<MemoryExtractionDeps, "openai">,
-  { model, systemPrompt, userPrompt }: MemoryExtractionRequest
+  payload: MemoryExtractionRequest
 ) {
-  if (!deps.openai) {
-    throw new Error("Memory fact extraction requires OPENAI_API_KEY when provider is openai.");
-  }
+  return callOpenAiFamilyMemoryExtraction(
+    deps.openai,
+    "Memory fact extraction requires OPENAI_API_KEY when provider is openai.",
+    payload
+  );
+}
 
-  const requestBody = {
-    model,
-    instructions: systemPrompt,
-    ...buildOpenAiTemperatureParam(model, 0),
-    ...buildOpenAiReasoningParam(model, "minimal"),
-    max_output_tokens: 320,
-    input: [
-      {
-        role: "user",
-        content: [
-          {
-            type: "input_text",
-            text: userPrompt
-          }
-        ]
-      }
-    ],
-    text: {
-      format: {
-        type: "json_schema",
-        name: "memory_fact_extraction",
-        strict: true,
-        schema: MEMORY_EXTRACTION_SCHEMA
-      }
-    }
-  } as Parameters<typeof deps.openai.responses.create>[0];
-  const response = await deps.openai.responses.create(requestBody);
-
-  const text = extractOpenAiResponseText(response) || "{\"facts\":[]}";
-
-  return {
-    text,
-    usage: extractOpenAiResponseUsage(response)
-  };
+export async function callCodexOAuthMemoryExtraction(
+  deps: Pick<MemoryExtractionDeps, "codexOAuthClient">,
+  payload: MemoryExtractionRequest
+) {
+  return callOpenAiFamilyMemoryExtraction(
+    deps.codexOAuthClient,
+    "Memory fact extraction requires CODEX_OAUTH_REFRESH_TOKEN when provider is codex-oauth.",
+    payload
+  );
 }
 
 export async function callXaiMemoryExtraction(

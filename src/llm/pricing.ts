@@ -181,6 +181,17 @@ const DEFAULT_PRICING = {
     "claude-opus-4-6": { inputPer1M: 0, outputPer1M: 0 },
     "claude-opus-4-5": { inputPer1M: 0, outputPer1M: 0 }
   },
+  "codex-oauth": {
+    "gpt-5.4": { inputPer1M: 0, outputPer1M: 0 },
+    "gpt-5.2": { inputPer1M: 0, outputPer1M: 0 },
+    "gpt-5.3-codex": { inputPer1M: 0, outputPer1M: 0 },
+    "gpt-5.2-codex": { inputPer1M: 0, outputPer1M: 0 },
+    "gpt-5.1-codex": { inputPer1M: 0, outputPer1M: 0 },
+    "gpt-5-codex": { inputPer1M: 0, outputPer1M: 0 },
+    "codex-mini-latest": { inputPer1M: 0, outputPer1M: 0 },
+    "gpt-5.1-codex-mini": { inputPer1M: 0, outputPer1M: 0 },
+    "gpt-5.1-codex-max": { inputPer1M: 0, outputPer1M: 0 }
+  },
   "codex-cli": {
     "gpt-5.4": { inputPer1M: 0, outputPer1M: 0 },
     "gpt-5-codex": { inputPer1M: 0, outputPer1M: 0 }
@@ -217,7 +228,7 @@ const MODEL_ALIASES = {
     "gpt 5.4": "gpt-5.4",
     "grok vision beta": "grok-vision-beta"
   };
-const LLM_PROVIDER_KEYS = ["openai", "anthropic", "xai", "claude-oauth", "codex-cli"];
+const LLM_PROVIDER_KEYS = ["openai", "anthropic", "xai", "claude-oauth", "codex-oauth", "codex-cli"];
 const NON_TEXT_MODEL_PATTERNS = [
   /embedding/i,
   /image/i,
@@ -279,6 +290,7 @@ export function getLlmModelCatalog(customPricing = {}) {
     anthropic: listLlmModelsForProvider(merged.anthropic, "anthropic"),
     xai: listLlmModelsForProvider(merged.xai, "xai"),
     "claude-oauth": listLlmModelsForProvider(merged["claude-oauth"], "claude-oauth"),
+    "codex-oauth": listLlmModelsForProvider(merged["codex-oauth"], "codex-oauth"),
     "codex-cli": listLlmModelsForProvider(merged["codex-cli"], "codex-cli")
   };
 }
@@ -309,6 +321,10 @@ function mergePricing(customPricing) {
     "claude-oauth": {
       ...DEFAULT_PRICING["claude-oauth"],
       ...(custom["claude-oauth"] && typeof custom["claude-oauth"] === "object" ? custom["claude-oauth"] : {})
+    },
+    "codex-oauth": {
+      ...DEFAULT_PRICING["codex-oauth"],
+      ...(custom["codex-oauth"] && typeof custom["codex-oauth"] === "object" ? custom["codex-oauth"] : {})
     },
     "codex-cli": {
       ...DEFAULT_PRICING["codex-cli"],

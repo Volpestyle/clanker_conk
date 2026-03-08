@@ -179,6 +179,16 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
         1,
         24
       ),
+      brainContextProvider: normalizeString(
+        streamWatch.brainContextProvider,
+        DEFAULT_SETTINGS.voice.streamWatch.brainContextProvider,
+        40
+      ),
+      brainContextModel: normalizeString(
+        streamWatch.brainContextModel,
+        DEFAULT_SETTINGS.voice.streamWatch.brainContextModel,
+        120
+      ),
       brainContextPrompt: normalizePromptBlock(
         streamWatch.brainContextPrompt,
         DEFAULT_SETTINGS.voice.streamWatch.brainContextPrompt,

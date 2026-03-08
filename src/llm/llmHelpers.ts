@@ -158,6 +158,7 @@ export function normalizeLlmProvider(value, fallback = "openai") {
   if (normalized === "ai_sdk_anthropic") return "ai_sdk_anthropic";
   if (normalized === "litellm") return "litellm";
   if (normalized === "claude-oauth") return "claude-oauth";
+  if (normalized === "codex-oauth") return "codex-oauth";
   if (normalized === "codex_cli_session") return "codex_cli_session";
   if (normalized === "xai") return "xai";
   if (normalized === "codex") return "codex";
@@ -171,6 +172,7 @@ export function normalizeLlmProvider(value, fallback = "openai") {
   if (fallbackProvider === "ai_sdk_anthropic") return "ai_sdk_anthropic";
   if (fallbackProvider === "litellm") return "litellm";
   if (fallbackProvider === "claude-oauth") return "claude-oauth";
+  if (fallbackProvider === "codex-oauth") return "codex-oauth";
   if (fallbackProvider === "codex_cli_session") return "codex_cli_session";
   if (fallbackProvider === "xai") return "xai";
   if (fallbackProvider === "codex") return "codex";
@@ -194,6 +196,7 @@ export function defaultModelForLlmProvider(provider) {
   if (provider === "ai_sdk_anthropic") return "claude-haiku-4-5";
   if (provider === "litellm") return "claude-haiku-4-5";
   if (provider === "claude-oauth") return "claude-sonnet-4-6";
+  if (provider === "codex-oauth") return "gpt-5.4";
   if (provider === "codex_cli_session") return "gpt-5.4";
   if (provider === "xai") return "grok-3-mini-latest";
   if (provider === "codex") return "gpt-5-codex";
@@ -203,16 +206,29 @@ export function defaultModelForLlmProvider(provider) {
 
 export function resolveProviderFallbackOrder(provider) {
   if (provider === "claude-oauth") return ["claude-oauth", "anthropic", "openai", "xai"];
+  if (provider === "codex-oauth") return ["codex-oauth", "openai", "anthropic", "claude-oauth", "xai"];
   if (provider === "codex_cli_session") {
-    return ["codex_cli_session", "codex-cli", "codex", "openai", "anthropic", "claude-oauth", "xai"];
+    return ["codex_cli_session", "codex-cli", "codex-oauth", "codex", "openai", "anthropic", "claude-oauth", "xai"];
   }
-  if (provider === "codex-cli") return ["codex-cli", "codex", "openai", "anthropic", "claude-oauth", "xai"];
-  if (provider === "codex") return ["codex", "openai", "anthropic", "claude-oauth", "xai"];
-  if (provider === "ai_sdk_anthropic") return ["ai_sdk_anthropic", "anthropic", "openai", "xai", "claude-oauth"];
-  if (provider === "litellm") return ["litellm", "openai", "anthropic", "xai", "claude-oauth"];
-  if (provider === "anthropic") return ["anthropic", "openai", "xai", "claude-oauth"];
-  if (provider === "xai") return ["xai", "openai", "anthropic", "claude-oauth"];
-  return ["openai", "anthropic", "xai", "claude-oauth"];
+  if (provider === "codex-cli") return ["codex-cli", "codex-oauth", "codex", "openai", "anthropic", "claude-oauth", "xai"];
+  if (provider === "codex") return ["codex", "codex-oauth", "openai", "anthropic", "claude-oauth", "xai"];
+  if (provider === "ai_sdk_anthropic") return ["ai_sdk_anthropic", "anthropic", "openai", "xai", "claude-oauth", "codex-oauth"];
+  if (provider === "litellm") return ["litellm", "openai", "anthropic", "xai", "claude-oauth", "codex-oauth"];
+  if (provider === "anthropic") return ["anthropic", "openai", "xai", "claude-oauth", "codex-oauth"];
+  if (provider === "xai") return ["xai", "openai", "anthropic", "claude-oauth", "codex-oauth"];
+  return ["openai", "codex-oauth", "anthropic", "xai", "claude-oauth"];
+}
+
+export function normalizeCodexOAuthModel(model, fallback = "gpt-5.4") {
+  const normalized = String(model || "").trim();
+  if (!normalized) return String(fallback || "gpt-5.4").trim() || "gpt-5.4";
+
+  // The ChatGPT-backed Codex transport does not expose the legacy API-only aliases.
+  if (normalized === "codex-mini-latest" || normalized === "gpt-5-codex") {
+    return "gpt-5.3-codex";
+  }
+
+  return normalized;
 }
 
 export function normalizeDefaultModel(value, fallback) {

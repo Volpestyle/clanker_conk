@@ -54,7 +54,7 @@ bun install
 ### Required
 
 - `DISCORD_TOKEN`
-- At least one LLM provider key: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `GOOGLE_API_KEY`, and/or `ELEVENLABS_API_KEY`
+- At least one LLM provider credential: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `CLAUDE_OAUTH_REFRESH_TOKEN`, `CODEX_OAUTH_REFRESH_TOKEN`, `GOOGLE_API_KEY`, and/or `ELEVENLABS_API_KEY`
 
 ### Optional
 
@@ -75,9 +75,11 @@ For the optional `claude-code` brain provider, ensure `claude` CLI is on `PATH`.
 
 - `XAI_API_KEY` — Grok text models, `voice_agent` mode, Grok Imagine media generation
 - `OPENAI_API_KEY` — `openai_realtime` voice mode, STT pipeline mode
+- `CODEX_OAUTH_REFRESH_TOKEN` — experimental ChatGPT-backed Codex/OpenAI provider (`codex-oauth`)
 - `GOOGLE_API_KEY` — `gemini_realtime` voice mode
 - `ELEVENLABS_API_KEY` — `elevenlabs_realtime` voice mode
 - `ANTHROPIC_API_KEY` — Anthropic models, Claude Code brain sessions
+- `CLAUDE_OAUTH_REFRESH_TOKEN` — Claude subscription-backed provider (`claude-oauth`)
 - Stream-watch vision resolves providers in order: `anthropic` → `xai` → `claude-code`
 
 ## Discord Bot Permissions
@@ -136,6 +138,7 @@ Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details 
 | `docs/voice/voice-provider-abstraction.md` | Voice pipeline stages, providers, and settings |
 | `docs/claude-code-brain-session-mode.md` | Claude Code as LLM brain provider |
 | `docs/claude-ai-oauth.md` | Claude AI OAuth provider (`claude-oauth`) |
+| `docs/codex-oauth.md` | Experimental ChatGPT-backed Codex/OpenAI OAuth provider (`codex-oauth`) |
 | `docs/memory-system.md` | Memory system design |
 | `docs/initiative-discovery-spec.md` | Discovery post content sourcing |
 | `docs/public-https-entrypoint-spec.md` | Public HTTPS tunnel |

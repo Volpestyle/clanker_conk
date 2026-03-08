@@ -15,6 +15,8 @@ const CONFIG_ENV_KEYS = [
   "ELEVENLABS_API_KEY",
   "GOOGLE_API_KEY",
   "ANTHROPIC_API_KEY",
+  "CLAUDE_OAUTH_REFRESH_TOKEN",
+  "CODEX_OAUTH_REFRESH_TOKEN",
   "XAI_API_KEY",
   "XAI_BASE_URL",
   "BRAVE_SEARCH_API_KEY",
@@ -33,6 +35,7 @@ const CONFIG_ENV_KEYS = [
   "DEFAULT_MODEL_ANTHROPIC",
   "DEFAULT_MODEL_XAI",
   "DEFAULT_MODEL_CLAUDE_OAUTH",
+  "DEFAULT_MODEL_CODEX_OAUTH",
   "DEFAULT_MODEL_CODEX_CLI",
   "DEFAULT_MEMORY_EMBEDDING_MODEL"
 ];
@@ -80,6 +83,7 @@ test("config parses explicit env values", async () => {
       DEFAULT_MODEL_ANTHROPIC: "claude-sonnet-4-5",
       DEFAULT_MODEL_XAI: "grok-4-latest",
       DEFAULT_MODEL_CLAUDE_OAUTH: "claude-opus-4-6",
+      DEFAULT_MODEL_CODEX_OAUTH: "gpt-5.3-codex",
       DEFAULT_MODEL_CODEX_CLI: "gpt-5.4",
       GIPHY_RATING: "PG",
       XAI_BASE_URL: "https://x.ai/custom",
@@ -98,6 +102,7 @@ test("config parses explicit env values", async () => {
       assert.equal(appConfig.defaultAnthropicModel, "claude-sonnet-4-5");
       assert.equal(appConfig.defaultXaiModel, "grok-4-latest");
       assert.equal(appConfig.defaultClaudeOAuthModel, "claude-opus-4-6");
+      assert.equal(appConfig.defaultCodexOAuthModel, "gpt-5.3-codex");
       assert.equal(appConfig.defaultCodexCliModel, "gpt-5.4");
       assert.equal(appConfig.giphyRating, "PG");
       assert.equal(appConfig.xaiBaseUrl, "https://x.ai/custom");

@@ -264,6 +264,8 @@ export async function runModelRequestedCodeTask(
     timeoutMs,
     maxBufferBytes
   } = codeAgentConfig;
+  const codexCompatibleClient = ctx.llm?.getCodexCompatibleClient() || null;
+  const codexCostProvider = ctx.llm?.openai ? "openai" : ctx.llm?.codexOAuth ? "codex-oauth" : undefined;
 
   try {
     const result = await runCodeAgent({
@@ -276,7 +278,8 @@ export async function runModelRequestedCodeTask(
       model,
       codexModel,
       codexCliModel,
-      openai: ctx.llm?.openai || null,
+      openai: codexCompatibleClient,
+      codexCostProvider,
       trace: buildTrace({
         guildId,
         channelId,
@@ -333,6 +336,8 @@ export function createCodeAgentSession(
     timeoutMs,
     maxBufferBytes
   } = codeAgentConfig;
+  const codexCompatibleClient = ctx.llm?.getCodexCompatibleClient() || null;
+  const codexCostProvider = ctx.llm?.openai ? "openai" : ctx.llm?.codexOAuth ? "codex-oauth" : undefined;
 
   const scopeKey = buildScopeKey({
     guildId,
@@ -356,7 +361,8 @@ export function createCodeAgentSession(
         source
       }),
       store: ctx.store,
-      openai: ctx.llm?.openai || null
+      openai: codexCompatibleClient,
+      codexCostProvider
     });
   } catch {
     return null;
