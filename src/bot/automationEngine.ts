@@ -1,11 +1,10 @@
 import { resolveFollowingNextRunAt } from "./automation.ts";
 import {
+  MAX_GIF_QUERY_LEN,
   composeReplyImagePrompt,
   composeReplyVideoPrompt,
+  normalizeDirectiveText,
   normalizeSkipSentinel,
-  parseStructuredReplyOutput,
-  pickReplyMediaDirective,
-  REPLY_OUTPUT_JSON_SCHEMA,
   resolveMaxMediaPromptLen,
   splitDiscordMessage
 } from "./botHelpers.ts";
@@ -92,6 +91,13 @@ type MediaCapabilitiesLike = {
   videoReady: boolean;
 };
 
+type AutomationMediaDirective =
+  | {
+      type: "image_simple" | "image_complex" | "video" | "gif";
+      prompt: string;
+    }
+  | null;
+
 export type AutomationEngineRuntime = BotContext & {
   readonly client: AutomationClientLike;
   readonly search: ReplyToolRuntime["search"];
@@ -153,6 +159,32 @@ function isSendableChannel(
   return Boolean(channel) &&
     typeof channel.send === "function" &&
     typeof channel.sendTyping === "function";
+}
+
+function normalizeAutomationMediaDirective(
+  input: Record<string, unknown>,
+  maxPromptChars: number
+): AutomationMediaDirective {
+  const rawType = String(input?.type || "").trim().toLowerCase();
+  const normalizedType =
+    rawType === "image_simple" ||
+    rawType === "image_complex" ||
+    rawType === "video" ||
+    rawType === "gif"
+      ? rawType
+      : null;
+  if (!normalizedType) return null;
+
+  const prompt = normalizeDirectiveText(
+    input?.prompt,
+    normalizedType === "gif" ? MAX_GIF_QUERY_LEN : maxPromptChars
+  );
+  if (!prompt) return null;
+
+  return {
+    type: normalizedType,
+    prompt
+  };
 }
 
 export async function maybeRunAutomationCycle(runtime: AutomationEngineRuntime) {
@@ -423,6 +455,15 @@ export async function generateAutomationPayload(
     webScrapeAvailable: false,
     browserBrowseAvailable: false,
     memoryAvailable: memory.enabled,
+    generateMediaAvailable:
+      (Boolean(discovery.allowImagePosts) &&
+        Boolean(imageBudget.canGenerate) &&
+        (Boolean(mediaCapabilities.simpleImageReady) || Boolean(mediaCapabilities.complexImageReady))) ||
+      (Boolean(discovery.allowVideoPosts) &&
+        Boolean(videoBudget.canGenerate) &&
+        Boolean(mediaCapabilities.videoReady)) ||
+      (Boolean(discovery.allowReplyGifs) &&
+        Boolean(gifBudget.canFetch)),
     adaptiveDirectivesAvailable: false,
     imageLookupAvailable: false,
     openArticleAvailable: false
@@ -444,12 +485,13 @@ export async function generateAutomationPayload(
   };
 
   let automationContextMessages: ContextMessage[] = [];
+  let mediaDirective: AutomationMediaDirective = null;
   let generation = await runtime.llm.generate({
     settings,
     systemPrompt: automationSystemPrompt,
     userPrompt,
     contextMessages: automationContextMessages,
-    jsonSchema: automationReplyTools.length ? "" : REPLY_OUTPUT_JSON_SCHEMA,
+    jsonSchema: "",
     tools: automationReplyTools,
     trace: automationTrace
   });
@@ -476,12 +518,21 @@ export async function generateAutomationPayload(
       if (automationTotalToolCalls >= AUTOMATION_TOOL_LOOP_MAX_CALLS) break;
       automationTotalToolCalls += 1;
 
-      const result = await executeReplyTool(
-        toolCall.name,
-        toolCall.input as Record<string, unknown>,
-        automationToolRuntime,
-        automationToolContext
-      );
+      const toolInput = toolCall.input as Record<string, unknown>;
+      const result =
+        toolCall.name === "generate_media"
+          ? (() => {
+              mediaDirective = normalizeAutomationMediaDirective(toolInput, mediaPromptLimit);
+              return mediaDirective
+                ? { content: `Media request recorded: ${mediaDirective.type}` }
+                : { content: "Media generation request was invalid.", isError: true };
+            })()
+          : await executeReplyTool(
+              toolCall.name,
+              toolInput,
+              automationToolRuntime,
+              automationToolContext
+            );
 
       toolResultMessages.push({
         type: "tool_result",
@@ -512,9 +563,7 @@ export async function generateAutomationPayload(
     automationToolLoopSteps += 1;
   }
 
-  const directive = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
-
-  let finalText = sanitizeBotText(normalizeSkipSentinel(directive.text || ""), 1200);
+  let finalText = sanitizeBotText(normalizeSkipSentinel(generation.text || ""), 1200);
   if (!finalText) {
     finalText = sanitizeBotText(String(automation.instruction || "scheduled task"), 1200);
   }
@@ -535,35 +584,34 @@ export async function generateAutomationPayload(
     };
   }
 
-  const mediaDirective = pickReplyMediaDirective(directive);
   const mediaAttachment = await runtime.resolveMediaAttachment({
     settings,
     text: finalText,
     directive: {
       type: mediaDirective?.type ?? null,
-      gifQuery: directive.gifQuery,
+      gifQuery: mediaDirective?.type === "gif" ? mediaDirective.prompt : null,
       imagePrompt:
-        mediaDirective?.type === "image_simple" && directive.imagePrompt
+        mediaDirective?.type === "image_simple" && mediaDirective.prompt
           ? composeReplyImagePrompt(
-            directive.imagePrompt,
+            mediaDirective.prompt,
             finalText,
             mediaPromptLimit,
             automationMediaMemoryFacts
           )
           : null,
       complexImagePrompt:
-        mediaDirective?.type === "image_complex" && directive.complexImagePrompt
+        mediaDirective?.type === "image_complex" && mediaDirective.prompt
           ? composeReplyImagePrompt(
-            directive.complexImagePrompt,
+            mediaDirective.prompt,
             finalText,
             mediaPromptLimit,
             automationMediaMemoryFacts
           )
           : null,
       videoPrompt:
-        mediaDirective?.type === "video" && directive.videoPrompt
+        mediaDirective?.type === "video" && mediaDirective.prompt
           ? composeReplyVideoPrompt(
-            directive.videoPrompt,
+            mediaDirective.prompt,
             finalText,
             mediaPromptLimit,
             automationMediaMemoryFacts

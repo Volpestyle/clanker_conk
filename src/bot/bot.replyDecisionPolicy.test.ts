@@ -195,6 +195,27 @@ function applyBaselineSettings(store, channelId) {
   });
 }
 
+function testGeneration({
+  text = "",
+  toolCalls = []
+}: {
+  text?: string;
+  toolCalls?: Array<{
+    id: string;
+    name: string;
+    input: Record<string, unknown>;
+  }>;
+} = {}) {
+  return {
+    text,
+    toolCalls,
+    provider: "test",
+    model: "test-model",
+    usage: null,
+    costUsd: 0
+  };
+}
+
 test("non-addressed non-initiative turn can still post when model contributes value", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";
@@ -211,24 +232,9 @@ test("non-addressed non-initiative turn can still post when model contributes va
       llm: {
         async generate(payload) {
           llmCalls.push(payload);
-          return {
-            text: JSON.stringify({
-              text: "evo lines decide everything ngl, base forms are only first impressions",
-              skip: false,
-              reactionEmoji: null,
-              media: null,
-              webSearchQuery: null,
-              memoryLookupQuery: null,
-              memoryLine: null,
-              automationAction: { operation: "none" },
-              voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
-            }),
-            provider: "test",
-            model: "test-model",
-            usage: null,
-            costUsd: 0
-          };
+          return testGeneration({
+            text: "evo lines decide everything ngl, base forms are only first impressions"
+          });
         }
       },
       memory: null,
@@ -310,24 +316,7 @@ test("non-addressed non-initiative turn is skipped when model declines", async (
       store,
       llm: {
         async generate() {
-          return {
-            text: JSON.stringify({
-              text: "[SKIP]",
-              skip: true,
-              reactionEmoji: null,
-              media: null,
-              webSearchQuery: null,
-              memoryLookupQuery: null,
-              memoryLine: null,
-              automationAction: { operation: "none" },
-              voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
-            }),
-            provider: "test",
-            model: "test-model",
-            usage: null,
-            costUsd: 0
-          };
+          return testGeneration({ text: "[SKIP]" });
         }
       },
       memory: null,
@@ -412,24 +401,7 @@ test("smoke: text followup-window turn addressed to another user is llm-skipped"
       llm: {
         async generate(payload) {
           llmCalls.push(payload);
-          return {
-            text: JSON.stringify({
-              text: "[SKIP]",
-              skip: true,
-              reactionEmoji: null,
-              media: null,
-              webSearchQuery: null,
-              memoryLookupQuery: null,
-              memoryLine: null,
-              automationAction: { operation: "none" },
-              voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
-            }),
-            provider: "test",
-            model: "test-model",
-            usage: null,
-            costUsd: 0
-          };
+          return testGeneration({ text: "[SKIP]" });
         }
       },
       memory: null,
@@ -519,24 +491,7 @@ test("non-addressed initiative turn can still contribute when model responds", a
       llm: {
         async generate(payload) {
           llmCalls.push(payload);
-          return {
-            text: JSON.stringify({
-              text: "lmao this queue got hands",
-              skip: false,
-              reactionEmoji: null,
-              media: null,
-              webSearchQuery: null,
-              memoryLookupQuery: null,
-              memoryLine: null,
-              automationAction: { operation: "none" },
-              voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
-            }),
-            provider: "test",
-            model: "test-model",
-            usage: null,
-            costUsd: 0
-          };
+          return testGeneration({ text: "lmao this queue got hands" });
         }
       },
       memory: null,
@@ -617,24 +572,7 @@ test("reply channels do not immediately evaluate cold non-addressed turns withou
       llm: {
         async generate(payload) {
           llmCalls.push(payload);
-          return {
-            text: JSON.stringify({
-              text: "yep i'm tracking",
-              skip: false,
-              reactionEmoji: null,
-              media: null,
-              webSearchQuery: null,
-              memoryLookupQuery: null,
-              memoryLine: null,
-              automationAction: { operation: "none" },
-              voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
-            }),
-            provider: "test",
-            model: "test-model",
-            usage: null,
-            costUsd: 0
-          };
+          return testGeneration({ text: "yep i'm tracking" });
         }
       },
       memory: null,
@@ -736,24 +674,7 @@ test("non-addressed turn is dropped before llm when unsolicited gate is closed",
       llm: {
         async generate(payload) {
           llmCalls.push(payload);
-          return {
-            text: JSON.stringify({
-              text: "this should never be used",
-              skip: false,
-              reactionEmoji: null,
-              media: null,
-              webSearchQuery: null,
-              memoryLookupQuery: null,
-              memoryLine: null,
-              automationAction: { operation: "none" },
-              voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
-            }),
-            provider: "test",
-            model: "test-model",
-            usage: null,
-            costUsd: 0
-          };
+          return testGeneration({ text: "this should never be used" });
         }
       },
       memory: null,
@@ -821,24 +742,7 @@ test("direct-addressed turn bypasses unsolicited gate and marks response as requ
       llm: {
         async generate(payload) {
           llmCalls.push(payload);
-          return {
-            text: JSON.stringify({
-              text: "yeah i'm here, what's up",
-              skip: false,
-              reactionEmoji: null,
-              media: null,
-              webSearchQuery: null,
-              memoryLookupQuery: null,
-              memoryLine: null,
-              automationAction: { operation: "none" },
-              voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
-            }),
-            provider: "test",
-            model: "test-model",
-            usage: null,
-            costUsd: 0
-          };
+          return testGeneration({ text: "yeah i'm here, what's up" });
         }
       },
       memory: null,
@@ -937,21 +841,9 @@ test("text reply follow-up can run web search and append cited sources", async (
             };
           }
 
-          return {
-            text: JSON.stringify({
-              text: "latest stable rust is [1]",
-              skip: false,
-              reactionEmoji: null,
-              media: null,
-              automationAction: { operation: "none" },
-              voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
-            }),
-            provider: "test",
-            model: "test-model",
-            usage: null,
-            costUsd: 0
-          };
+          return testGeneration({
+            text: "latest stable rust is [1]"
+          });
         }
       },
       memory: null,
@@ -1098,21 +990,9 @@ test("reply follow-up regeneration can use dedicated provider/model override", a
               costUsd: 0
             };
           }
-          return {
-            text: JSON.stringify({
-              text: "still think evo lines decide everything",
-              skip: false,
-              reactionEmoji: null,
-              media: null,
-              automationAction: { operation: "none" },
-              voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
-            }),
-            provider: "test",
-            model: "test-model",
-            usage: null,
-            costUsd: 0
-          };
+          return testGeneration({
+            text: "still think evo lines decide everything"
+          });
         }
       },
       memory: {
@@ -1225,21 +1105,9 @@ test("reply follow-up regeneration can add history images when model requests im
             };
           }
 
-          return {
-            text: JSON.stringify({
-              text: "that one was the dog starter image",
-              skip: false,
-              reactionEmoji: null,
-              media: null,
-              automationAction: { operation: "none" },
-              voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
-            }),
-            provider: "test",
-            model: "test-model",
-            usage: null,
-            costUsd: 0
-          };
+          return testGeneration({
+            text: "that one was the dog starter image"
+          });
         }
       },
       memory: null,
@@ -1342,21 +1210,9 @@ test("image lookup tool accepts direct IMG refs from chat history", async () => 
             };
           }
 
-          return {
-            text: JSON.stringify({
-              text: "yep that was the earlier image",
-              skip: false,
-              reactionEmoji: null,
-              media: null,
-              automationAction: { operation: "none" },
-              voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
-            }),
-            provider: "test",
-            model: "test-model",
-            usage: null,
-            costUsd: 0
-          };
+          return testGeneration({
+            text: "yep that was the earlier image"
+          });
         }
       },
       memory: null,
@@ -1485,21 +1341,9 @@ test("reply tool loop keeps remaining concurrent tool results when one concurren
             };
           }
 
-          return {
-            text: JSON.stringify({
-              text: "kept the surviving tool result",
-              skip: false,
-              reactionEmoji: null,
-              media: null,
-              automationAction: { operation: "none" },
-              voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
-            }),
-            provider: "test",
-            model: "test-model",
-            usage: null,
-            costUsd: 0
-          };
+          return testGeneration({
+            text: "kept the surviving tool result"
+          });
         }
       },
       memory: null,
@@ -1601,24 +1445,16 @@ test("voice intent handoff routes join requests to voice session manager instead
       store,
       llm: {
         async generate() {
-          return {
-            text: JSON.stringify({
-              text: "bet hopping in",
-              skip: false,
-              reactionEmoji: null,
-              media: null,
-              webSearchQuery: null,
-              memoryLookupQuery: null,
-              memoryLine: null,
-              automationAction: { operation: "none" },
-              voiceIntent: { intent: "join", confidence: 0.92, reason: "explicit join request" },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
-            }),
-            provider: "test",
-            model: "test-model",
-            usage: null,
-            costUsd: 0
-          };
+          return testGeneration({
+            text: "bet hopping in",
+            toolCalls: [
+              {
+                id: "tc_voice_join",
+                name: "voice_session_control",
+                input: { operation: "join" }
+              }
+            ]
+          });
         }
       },
       memory: null,
@@ -1677,7 +1513,7 @@ test("voice intent handoff routes join requests to voice session manager instead
   });
 });
 
-test("reply generation passes a structured JSON schema contract for voice intent directives", async () => {
+test("reply generation uses plain text output with tool availability for voice directives", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";
     applyBaselineSettings(store, channelId);
@@ -1699,26 +1535,7 @@ test("reply generation passes a structured JSON schema contract for voice intent
       llm: {
         async generate(payload) {
           llmCalls.push(payload);
-          return {
-            text: JSON.stringify({
-              text: "yo",
-              skip: false,
-              reactionEmoji: null,
-              media: null,
-              webSearchQuery: null,
-              memoryLookupQuery: null,
-              imageLookupQuery: null,
-              memoryLine: null,
-              selfMemoryLine: null,
-              automationAction: { operation: "none" },
-              voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
-            }),
-            provider: "test",
-            model: "test-model",
-            usage: null,
-            costUsd: 0
-          };
+          return testGeneration({ text: "yo" });
         }
       },
       memory: null,
@@ -1761,13 +1578,14 @@ test("reply generation passes a structured JSON schema contract for voice intent
     assert.equal(sent, true);
     assert.equal(llmCalls.length >= 1, true);
     assert.equal(typeof llmCalls[0]?.jsonSchema, "string");
-    assert.match(String(llmCalls[0]?.jsonSchema || ""), /"voiceIntent"/);
-    assert.match(String(llmCalls[0]?.jsonSchema || ""), /"join"/);
+    assert.equal(String(llmCalls[0]?.jsonSchema || ""), "");
+    assert.equal(Array.isArray(llmCalls[0]?.tools), true);
+    assert.equal(llmCalls[0].tools.some((tool) => tool?.name === "voice_session_control"), true);
     assert.equal(replyPayloads.length + channelSendPayloads.length, 1);
   });
 });
 
-test("voice intent below confidence threshold falls back to normal text reply path", async () => {
+test("without a voice control tool call the reply stays on the normal text path", async () => {
   await withTempStore(async (store) => {
     const channelId = "chan-1";
     applyBaselineSettings(store, channelId);
@@ -1788,24 +1606,7 @@ test("voice intent below confidence threshold falls back to normal text reply pa
       store,
       llm: {
         async generate() {
-          return {
-            text: JSON.stringify({
-              text: "yo say less",
-              skip: false,
-              reactionEmoji: null,
-              media: null,
-              webSearchQuery: null,
-              memoryLookupQuery: null,
-              memoryLine: null,
-              automationAction: { operation: "none" },
-              voiceIntent: { intent: "join", confidence: 0.5, reason: "weak intent guess" },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
-            }),
-            provider: "test",
-            model: "test-model",
-            usage: null,
-            costUsd: 0
-          };
+          return testGeneration({ text: "yo say less" });
         }
       },
       memory: null,
@@ -2059,24 +1860,16 @@ test("smoke: 'clanka look at my screen' initiates a screen-share link message", 
               costUsd: 0
             };
           }
-          return {
-            text: JSON.stringify({
-              text: "[SKIP]",
-              skip: true,
-              reactionEmoji: null,
-              media: null,
-              webSearchQuery: null,
-              memoryLookupQuery: null,
-              memoryLine: null,
-              automationAction: { operation: "none" },
-              voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
-            }),
-            provider: "test",
-            model: "test-model",
-            usage: null,
-            costUsd: 0
-          };
+          return testGeneration({
+            text: "[SKIP]",
+            toolCalls: [
+              {
+                id: "tc_screen_share",
+                name: "offer_screen_share_link",
+                input: {}
+              }
+            ]
+          });
         }
       },
       memory: null,
@@ -2385,24 +2178,7 @@ test("initiative-channel direct turns can be routed to thread replies when polic
       store,
       llm: {
         async generate() {
-          return {
-            text: JSON.stringify({
-              text: "threaded response",
-              skip: false,
-              reactionEmoji: null,
-              media: null,
-              webSearchQuery: null,
-              memoryLookupQuery: null,
-              memoryLine: null,
-              automationAction: { operation: "none" },
-              voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
-            }),
-            provider: "test",
-            model: "test-model",
-            usage: null,
-            costUsd: 0
-          };
+          return testGeneration({ text: "threaded response" });
         }
       },
       memory: null,
@@ -2467,24 +2243,7 @@ test("initiative-channel direct turns can be routed to standalone channel messag
       store,
       llm: {
         async generate() {
-          return {
-            text: JSON.stringify({
-              text: "standalone response",
-              skip: false,
-              reactionEmoji: null,
-              media: null,
-              webSearchQuery: null,
-              memoryLookupQuery: null,
-              memoryLine: null,
-              automationAction: { operation: "none" },
-              voiceIntent: { intent: "none", confidence: 0, reason: null },
-              screenShareIntent: { action: "none", confidence: 0, reason: null }
-            }),
-            provider: "test",
-            model: "test-model",
-            usage: null,
-            costUsd: 0
-          };
+          return testGeneration({ text: "standalone response" });
         }
       },
       memory: null,

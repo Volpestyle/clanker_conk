@@ -101,17 +101,6 @@ export function createReplyPromptCapture({
   };
 }
 
-export function appendReplyFollowupPrompt(
-  capture: ReplyPromptCapture | null = null,
-  userPrompt = ""
-) {
-  if (!capture || typeof capture !== "object") return;
-  if (!Array.isArray(capture.followupUserPrompts)) {
-    capture.followupUserPrompts = [];
-  }
-  capture.followupUserPrompts.push(String(userPrompt || ""));
-}
-
 export function buildLoggedReplyPrompts(
   capture: ReplyPromptCapture | null = null,
   followupSteps = 0

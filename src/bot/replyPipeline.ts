@@ -1,15 +1,14 @@
-import { clamp, sanitizeBotText } from "../utils.ts";
+import { clamp, deepMerge, sanitizeBotText } from "../utils.ts";
 import { buildReplyPrompt, buildSystemPrompt } from "../prompts/index.ts";
 import { getMediaPromptCraftGuidance } from "../prompts/promptCore.ts";
 import type { ReplyAttemptOptions } from "../bot.ts";
 import {
-  REPLY_OUTPUT_JSON_SCHEMA,
+  MAX_GIF_QUERY_LEN,
   composeReplyImagePrompt,
   composeReplyVideoPrompt,
   embedWebSearchSources,
   emptyMentionResolution,
-  parseStructuredReplyOutput,
-  pickReplyMediaDirective,
+  normalizeDirectiveText,
   resolveMaxMediaPromptLen,
   normalizeSkipSentinel,
   splitDiscordMessage
@@ -17,11 +16,6 @@ import {
 import { getLocalTimeZoneLabel } from "./automation.ts";
 import { buildReplyToolSet, executeReplyTool } from "../tools/replyTools.ts";
 import type { ReplyToolContext, ReplyToolRuntime } from "../tools/replyTools.ts";
-import {
-  maybeRegenerateWithMemoryLookup as maybeRegenerateWithMemoryLookupForReplyFollowup,
-  resolveReplyFollowupGenerationSettings as resolveReplyFollowupGenerationSettingsForReplyFollowup,
-  runModelRequestedWebSearch as runModelRequestedWebSearchForReplyFollowup
-} from "./replyFollowup.ts";
 import {
   buildTextReplyScopeKey
 } from "../tools/activeReplyRegistry.ts";
@@ -33,7 +27,6 @@ import { resolveDeterministicMentions as resolveDeterministicMentionsForMentions
 import {
   MAX_MODEL_IMAGE_INPUTS,
   UNICODE_REACTIONS,
-  appendReplyFollowupPrompt,
   buildLoggedReplyPrompts,
   createReplyPerformanceTracker,
   createReplyPromptCapture,
@@ -46,8 +39,10 @@ import {
   getBotName,
   getDirectiveSettings,
   getDiscoverySettings,
+  getFollowupSettings,
   getMemorySettings,
   getReplyPermissions,
+  getResolvedFollowupBinding,
   getVisionSettings,
   getVoiceSettings,
   isDevTaskEnabled
@@ -191,12 +186,36 @@ type ReplyTrace = {
   reason: string | null;
   messageId: string | null;
 };
-type ReplyDirective = ReturnType<typeof parseStructuredReplyOutput>;
-type ReplyMediaDirective = ReturnType<typeof pickReplyMediaDirective>;
+type ReplyMediaDirective =
+  | {
+      type: "image_simple" | "image_complex" | "video" | "gif";
+      prompt: string;
+    }
+  | null;
 type ReplyMentionResolution = Awaited<ReturnType<typeof resolveDeterministicMentionsForMentions>>;
 type ReplyReactionResult = Awaited<ReturnType<ReplyPipelineRuntime["maybeApplyReplyReaction"]>>;
-type ReplyScreenShareOffer = Awaited<ReturnType<ReplyPipelineRuntime["maybeHandleScreenShareOfferIntent"]>>;
-type ReplyFollowupGenerationSettings = ReturnType<typeof resolveReplyFollowupGenerationSettingsForReplyFollowup>;
+type ReplyScreenShareOffer = {
+  offered: boolean;
+  reused: boolean;
+  appendText: string;
+  linkUrl: string | null;
+  explicitRequest: boolean;
+  intentRequested: boolean;
+  confidence: number;
+  reason: string | null;
+  expiresInMinutes: number | null;
+};
+type ReplyAutomationAction = {
+  operation: "create" | "pause" | "resume" | "delete" | "list" | "none" | null;
+  title: string | null;
+  instruction: string | null;
+  schedule: Record<string, unknown> | null;
+  targetQuery: string | null;
+  automationId: number | null;
+  runImmediately: boolean;
+  targetChannelId: string | null;
+};
+type ReplyFollowupGenerationSettings = Settings;
 type ReplyWebSearchState = ReturnType<ReplyPipelineRuntime["buildWebSearchContext"]> & {
   summaryText?: string | null;
 };
@@ -260,15 +279,16 @@ type ReplyActionableLlmResult = {
   usedBrowserBrowseFollowup: boolean;
   usedMemoryLookupFollowup: boolean;
   usedImageLookupFollowup: boolean;
-  followupGenerationSettings: ReplyFollowupGenerationSettings;
   mediaPromptLimit: number;
-  replyDirective: ReplyDirective;
   webSearch: ReplyWebSearchState;
   browserBrowse: ReturnType<ReplyPipelineRuntime["buildBrowserBrowseContext"]>;
   memoryLookup: ReturnType<ReplyPipelineRuntime["buildMemoryLookupContext"]>;
   imageLookup: ReturnType<ReplyPipelineRuntime["buildImageLookupContext"]>;
   modelImageInputs: ReplyImageInput[];
   replyPrompts: ReplyPrompts;
+  reaction: ReplyReactionResult;
+  mediaDirective: ReplyMediaDirective;
+  screenShareOffer: ReplyScreenShareOffer;
 };
 
 type ReplyLlmResult = ReplyIntentHandledResult | ReplyActionableLlmResult;
@@ -280,10 +300,6 @@ type ReplySkippedActionResult = {
 type ReplySendableActionResult = {
   skipped: false;
   reaction: ReplyReactionResult;
-  memoryLine: ReplyDirective["memoryLine"];
-  selfMemoryLine: ReplyDirective["selfMemoryLine"];
-  memorySaved: boolean;
-  selfMemorySaved: boolean;
   mediaDirective: ReplyMediaDirective;
   finalText: string;
   mentionResolution: ReplyMentionResolution;
@@ -302,10 +318,10 @@ type ReplySendableActionResult = {
   gifUsed: boolean;
   gifBudgetBlocked: boolean;
   gifConfigBlocked: boolean;
-  imagePrompt: ReplyDirective["imagePrompt"];
-  complexImagePrompt: ReplyDirective["complexImagePrompt"];
-  videoPrompt: ReplyDirective["videoPrompt"];
-  gifQuery: ReplyDirective["gifQuery"];
+  imagePrompt: string | null;
+  complexImagePrompt: string | null;
+  videoPrompt: string | null;
+  gifQuery: string | null;
 };
 
 type ReplyActionResult = ReplySkippedActionResult | ReplySendableActionResult;
@@ -316,6 +332,117 @@ function isReplyActionableLlmResult(result: ReplyLlmResult): result is ReplyActi
 
 function isReplySendableActionResult(result: ReplyActionResult): result is ReplySendableActionResult {
   return result.skipped === false;
+}
+
+function createEmptyReplyReactionResult(): ReplyReactionResult {
+  return {
+    requestedByModel: false,
+    used: false,
+    emoji: null,
+    blockedByPermission: false,
+    blockedByHourlyCap: false,
+    blockedByAllowedSet: false
+  };
+}
+
+function createEmptyScreenShareOffer(): ReplyScreenShareOffer {
+  return {
+    offered: false,
+    reused: false,
+    appendText: "",
+    linkUrl: null,
+    explicitRequest: false,
+    intentRequested: false,
+    confidence: 0,
+    reason: null,
+    expiresInMinutes: null
+  };
+}
+
+function parseReplyToolResultPayload(content: unknown) {
+  const text = String(content || "").trim();
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeReplyMediaDirective(
+  input: Record<string, unknown>,
+  maxPromptChars: number
+): ReplyMediaDirective {
+  const rawType = String(input?.type || "").trim().toLowerCase();
+  const normalizedType =
+    rawType === "image_simple" ||
+    rawType === "image_complex" ||
+    rawType === "video" ||
+    rawType === "gif"
+      ? rawType
+      : null;
+  if (!normalizedType) return null;
+
+  const prompt = normalizeDirectiveText(
+    input?.prompt,
+    normalizedType === "gif" ? MAX_GIF_QUERY_LEN : maxPromptChars
+  );
+  if (!prompt) return null;
+
+  return {
+    type: normalizedType,
+    prompt
+  };
+}
+
+function normalizeAutomationToolAction(input: Record<string, unknown>): ReplyAutomationAction {
+  const rawOperation = String(input?.operation || "").trim().toLowerCase();
+  const operation =
+    rawOperation === "create" ||
+    rawOperation === "pause" ||
+    rawOperation === "resume" ||
+    rawOperation === "delete" ||
+    rawOperation === "list" ||
+    rawOperation === "none"
+      ? rawOperation
+      : null;
+
+  const rawAutomationId = Number(input?.automationId);
+  return {
+    operation,
+    title: normalizeDirectiveText(input?.title, 90) || null,
+    instruction: normalizeDirectiveText(input?.instruction, 360) || null,
+    schedule:
+      input?.schedule && typeof input.schedule === "object" && !Array.isArray(input.schedule)
+        ? input.schedule as Record<string, unknown>
+        : null,
+    targetQuery: normalizeDirectiveText(input?.targetQuery, 180) || null,
+    automationId: Number.isInteger(rawAutomationId) && rawAutomationId > 0 ? rawAutomationId : null,
+    runImmediately: input?.runImmediately === true,
+    targetChannelId: normalizeDirectiveText(input?.targetChannelId, 40) || null
+  };
+}
+
+function resolveReplyFollowupGenerationSettings(settings: Settings): Settings {
+  const followupConfig = getFollowupSettings(settings);
+  if (!followupConfig.enabled) return settings;
+
+  const binding = getResolvedFollowupBinding(settings);
+  const provider = String(binding.provider || "").trim();
+  const model = String(binding.model || "").trim();
+  if (!provider || !model) return settings;
+
+  return deepMerge(deepMerge({}, settings), {
+    agentStack: {
+      overrides: {
+        orchestrator: {
+          provider,
+          model
+        }
+      }
+    }
+  }) as Settings;
 }
 
 
@@ -611,9 +738,25 @@ export async function executeReplyLlm(
 ): Promise<ReplyLlmResult> {
   const {
     addressSignal, triggerMessageIds, source, performance, signal,
-    replyTrace, systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture
+    replyTrace, systemPrompt, initialUserPrompt, reactionEmojiOptions,
+    screenShareCapability, imageBudget, videoBudget, gifBudget,
+    simpleImageCapabilityReady, complexImageCapabilityReady, videoCapabilityReady,
+    gifsConfigured, replyPrompts
   } = ctx;
-  let { webSearch, browserBrowse, memoryLookup, modelImageInputs, imageLookup, replyPrompts } = ctx;
+  let { webSearch, browserBrowse, memoryLookup, modelImageInputs, imageLookup } = ctx;
+  const discovery = getDiscoverySettings(settings);
+  const voiceSettings = getVoiceSettings(settings);
+  const mediaPromptLimit = resolveMaxMediaPromptLen(settings);
+  const followupGenerationSettings = resolveReplyFollowupGenerationSettings(settings);
+  const voiceToolCallbacks =
+    ctx.inVoiceChannelNow &&
+    ctx.activeVoiceSession &&
+    typeof bot.voiceSessionManager?.buildVoiceToolCallbacks === "function"
+      ? bot.voiceSessionManager.buildVoiceToolCallbacks({
+          session: ctx.activeVoiceSession,
+          settings
+        })
+      : null;
 
   const replyTools = buildReplyToolSet(settings, {
     webSearchAvailable:
@@ -630,7 +773,22 @@ export async function executeReplyLlm(
     memoryAvailable: Boolean(getMemorySettings(settings).enabled),
     adaptiveDirectivesAvailable: Boolean(getDirectiveSettings(settings).enabled),
     imageLookupAvailable: Boolean(imageLookup?.enabled),
+    reactAvailable: true,
+    generateMediaAvailable:
+      (Boolean(discovery.allowReplyImages) &&
+        Boolean(imageBudget.canGenerate) &&
+        (Boolean(simpleImageCapabilityReady) || Boolean(complexImageCapabilityReady))) ||
+      (Boolean(discovery.allowReplyVideos) &&
+        Boolean(videoBudget.canGenerate) &&
+        Boolean(videoCapabilityReady)) ||
+      (Boolean(discovery.allowReplyGifs) &&
+        Boolean(gifsConfigured) &&
+        Boolean(gifBudget.canFetch)),
+    automationManagementAvailable: true,
+    voiceSessionControlAvailable: Boolean(voiceSettings.enabled),
+    musicToolsAvailable: Boolean(voiceToolCallbacks),
     openArticleAvailable: false,
+    screenShareAvailable: Boolean(screenShareCapability?.available),
     codeAgentAvailable: isDevTaskEnabled(settings)
   });
   const replyToolRuntime: ReplyToolRuntime = {
@@ -650,6 +808,17 @@ export async function executeReplyLlm(
         return browserBrowse;
       }
     },
+    screenShare: {
+      offerLink: async ({ settings: toolSettings, guildId, channelId, requesterUserId, transcript, source }) =>
+        await bot.offerVoiceScreenShareLink({
+          settings: toolSettings,
+          guildId,
+          channelId,
+          requesterUserId,
+          transcript,
+          source
+        })
+    },
     codeAgent: {
       runTask: async ({ settings: toolSettings, task, cwd, guildId, channelId, userId, source }) =>
         await bot.runModelRequestedCodeTask({
@@ -665,7 +834,8 @@ export async function executeReplyLlm(
     },
     memory: bot.memory,
     store: bot.store,
-    subAgentSessions: bot.buildSubAgentSessionsRuntime()
+    subAgentSessions: bot.buildSubAgentSessionsRuntime(),
+    voiceSession: voiceToolCallbacks || undefined
   };
   const replyToolContext: ReplyToolContext = {
     settings,
@@ -683,6 +853,9 @@ export async function executeReplyLlm(
     signal
   };
   let replyContextMessages: ContextMessage[] = [];
+  let reaction = createEmptyReplyReactionResult();
+  let mediaDirective: ReplyMediaDirective = null;
+  let screenShareOffer = createEmptyScreenShareOffer();
 
   throwIfAborted(signal, "Reply cancelled");
   const typingStartedAtMs = Date.now();
@@ -695,12 +868,11 @@ export async function executeReplyLlm(
     userPrompt: initialUserPrompt,
     imageInputs: modelImageInputs,
     contextMessages: replyContextMessages,
-    jsonSchema: REPLY_OUTPUT_JSON_SCHEMA,
+    jsonSchema: "",
     tools: replyTools,
     trace: replyTrace,
     signal
   });
-  const followupGenerationSettings = resolveReplyFollowupGenerationSettingsForReplyFollowup(settings);
   performance.llm1Ms = Math.max(0, Date.now() - llm1StartedAtMs);
   let usedWebSearchFollowup = false;
   let usedBrowserBrowseFollowup = false;
@@ -710,6 +882,7 @@ export async function executeReplyLlm(
   const REPLY_TOOL_LOOP_MAX_CALLS = 3;
   let replyToolLoopSteps = 0;
   let replyTotalToolCalls = 0;
+  const followupStartedAtMs = generation.toolCalls?.length ? Date.now() : 0;
 
   while (
     generation.toolCalls?.length > 0 &&
@@ -780,20 +953,59 @@ export async function executeReplyLlm(
       const toolInput = toolCall.input;
       let result: ReplyToolExecutionResult;
       if (toolCall.name === "web_search") {
-        const toolQuery = String(toolInput.query || "");
-        webSearch = await runModelRequestedWebSearchForReplyFollowup(
-          { llm: bot.llm, search: bot.search, memory: bot.memory },
-          {
-            settings,
-            webSearch,
-            query: toolQuery,
-            trace: {
-              ...replyTrace,
-              source
-            },
-            signal
+        const toolQuery = normalizeDirectiveText(toolInput.query, 220);
+        webSearch = {
+          ...webSearch,
+          requested: true,
+          query: toolQuery || ""
+        };
+        if (!toolQuery) {
+          webSearch = {
+            ...webSearch,
+            used: false,
+            error: "Missing web search query."
+          };
+        } else if (webSearch.optedOutByUser || !webSearch.enabled || !webSearch.configured) {
+          webSearch = {
+            ...webSearch,
+            used: false
+          };
+        } else if (!webSearch.budget?.canSearch) {
+          webSearch = {
+            ...webSearch,
+            used: false,
+            blockedByBudget: true
+          };
+        } else {
+          try {
+            const searchResult = await bot.search.searchAndRead({
+              settings,
+              query: toolQuery,
+              trace: {
+                ...replyTrace,
+                source
+              },
+              signal
+            });
+            webSearch = {
+              ...webSearch,
+              used: searchResult.results.length > 0,
+              query: searchResult.query,
+              results: searchResult.results,
+              fetchedPages: searchResult.fetchedPages || 0,
+              providerUsed: searchResult.providerUsed || null,
+              providerFallbackUsed: Boolean(searchResult.providerFallbackUsed),
+              summaryText: String(searchResult.summaryText || "").trim(),
+              error: null
+            };
+          } catch (error) {
+            webSearch = {
+              ...webSearch,
+              used: false,
+              error: String(error instanceof Error ? error.message : error)
+            };
           }
-        );
+        }
         usedWebSearchFollowup = Boolean(webSearch?.used);
         const rows = Array.isArray(webSearch?.results) ? webSearch.results : [];
         result = {
@@ -823,6 +1035,77 @@ export async function executeReplyLlm(
                 .join("\n\n")}`
               : `No results found for: "${toolQuery}"`
         };
+      } else if (toolCall.name === "react") {
+        reaction = await bot.maybeApplyReplyReaction({
+          message,
+          settings,
+          emojiOptions: reactionEmojiOptions,
+          emojiToken: String(toolInput.emoji || ""),
+          generation,
+          source,
+          triggerMessageId: message.id,
+          triggerMessageIds,
+          addressing: addressSignal
+        });
+        result = {
+          content: reaction.used
+            ? `Reaction applied: ${String(reaction.emoji || toolInput.emoji || "").trim()}`
+            : reaction.blockedByPermission
+              ? "Reaction could not be applied because reactions are disabled."
+              : reaction.blockedByHourlyCap
+                ? "Reaction could not be applied because the hourly reaction budget is exhausted."
+                : reaction.blockedByAllowedSet
+                  ? `Reaction could not be applied because "${String(reaction.emoji || toolInput.emoji || "").trim()}" is not allowed here.`
+                  : "Reaction was not applied."
+        };
+      } else if (toolCall.name === "generate_media") {
+        mediaDirective = normalizeReplyMediaDirective(toolInput, mediaPromptLimit);
+        result = mediaDirective
+          ? {
+              content: `Media request recorded: ${mediaDirective.type}`
+            }
+          : {
+              content: "Media generation request was invalid.",
+              isError: true
+            };
+      } else if (toolCall.name === "voice_session_control") {
+        const operation = String(toolInput.operation || "").trim().toLowerCase();
+        const handled = await bot.maybeHandleStructuredVoiceIntent({
+          message,
+          settings,
+          replyDirective: {
+            voiceIntent: {
+              intent: operation,
+              confidence: 1,
+              reason: "tool_call"
+            }
+          }
+        });
+        if (handled) return { handledByIntent: true };
+        result = {
+          content: `Voice session request could not be completed: ${operation || "invalid_operation"}`,
+          isError: true
+        };
+      } else if (toolCall.name === "manage_automation") {
+        const automationHandled = await bot.maybeHandleStructuredAutomationIntent({
+          message,
+          settings,
+          replyDirective: {
+            text: generation.text,
+            automationAction: normalizeAutomationToolAction(toolInput)
+          },
+          generation,
+          source,
+          triggerMessageIds,
+          addressing: addressSignal,
+          performance,
+          replyPrompts
+        });
+        if (automationHandled) return { handledByIntent: true };
+        result = {
+          content: "Automation request could not be completed.",
+          isError: true
+        };
       } else {
         result = await executeReplyTool(
           toolCall.name,
@@ -834,6 +1117,13 @@ export async function executeReplyLlm(
 
       if (toolCall.name === "memory_search" && !result.isError) {
         usedMemoryLookupFollowup = true;
+        memoryLookup = {
+          ...memoryLookup,
+          requested: true,
+          query: normalizeDirectiveText(toolInput.query, 220) || "",
+          used: true,
+          error: null
+        };
       } else if (toolCall.name === "image_lookup" && !result.isError) {
         const imageLookupRequest = String(toolInput.imageId || toolInput.query || "");
         imageLookup = await bot.runModelRequestedImageLookup({
@@ -846,6 +1136,21 @@ export async function executeReplyLlm(
           maxInputs: MAX_MODEL_IMAGE_INPUTS
         });
         usedImageLookupFollowup = Boolean(imageLookup?.used);
+      } else if (toolCall.name === "offer_screen_share_link" && !result.isError) {
+        const toolPayload = parseReplyToolResultPayload(result.content);
+        screenShareOffer = {
+          offered: Boolean(toolPayload?.offered),
+          reused: Boolean(toolPayload?.reused),
+          appendText: "",
+          linkUrl: toolPayload?.linkUrl ? String(toolPayload.linkUrl) : null,
+          explicitRequest: false,
+          intentRequested: true,
+          confidence: 1,
+          reason: toolPayload?.reason ? String(toolPayload.reason) : null,
+          expiresInMinutes: Number.isFinite(Number(toolPayload?.expiresInMinutes))
+            ? Math.max(0, Math.round(Number(toolPayload?.expiresInMinutes)))
+            : null
+        };
       }
 
       sequentialResults.set(toolCall.id, result);
@@ -878,7 +1183,7 @@ export async function executeReplyLlm(
       userPrompt: "",
       imageInputs: modelImageInputs,
       contextMessages: replyContextMessages,
-      jsonSchema: REPLY_OUTPUT_JSON_SCHEMA,
+      jsonSchema: "",
       tools: replyTools,
       trace: {
         ...replyTrace,
@@ -889,155 +1194,20 @@ export async function executeReplyLlm(
     replyToolLoopSteps += 1;
   }
 
-  const mediaPromptLimit = resolveMaxMediaPromptLen(settings);
-  let replyDirective = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
-  let voiceIntentHandled = await bot.maybeHandleStructuredVoiceIntent({
-    message,
-    settings,
-    replyDirective
-  });
-  if (voiceIntentHandled) return { handledByIntent: true };
-
-  const automationIntentHandled = await bot.maybeHandleStructuredAutomationIntent({
-    message,
-    settings,
-    replyDirective,
-    generation,
-    source,
-    triggerMessageIds,
-    addressing: addressSignal,
-    performance,
-    replyPrompts
-  });
-  if (automationIntentHandled) return { handledByIntent: true };
-
-  const followupStartedAtMs = Date.now();
-  const followup = await maybeRegenerateWithMemoryLookupForReplyFollowup(
-    { llm: bot.llm, search: bot.search, memory: bot.memory },
-    {
-      settings,
-      followupSettings: followupGenerationSettings,
-      systemPrompt,
-      generation,
-      directive: replyDirective,
-      webSearch,
-      browserBrowse,
-      memoryLookup,
-      imageLookup,
-      guildId: message.guildId,
-      channelId: message.channelId,
-      trace: {
-        ...replyTrace,
-        source,
-        event: "reply_followup"
-      },
-      mediaPromptLimit,
-      imageInputs: modelImageInputs,
-      forceRegenerate: false,
-      buildUserPrompt: ({
-        webSearch: nextWebSearch,
-        browserBrowse: nextBrowserBrowse,
-        memoryLookup: nextMemoryLookup,
-        imageLookup: nextImageLookup,
-        imageInputs: nextImageInputs,
-        allowWebSearchDirective,
-        allowBrowserBrowseDirective,
-        allowMemoryLookupDirective,
-        allowImageLookupDirective
-      }) => {
-        const followupUserPrompt = buildReplyPrompt({
-          ...replyPromptBase,
-          imageInputs: nextImageInputs,
-          webSearch: nextWebSearch,
-          browserBrowse: nextBrowserBrowse,
-          memoryLookup: nextMemoryLookup,
-          imageLookup: nextImageLookup,
-          allowWebSearchDirective,
-          allowBrowserBrowseDirective,
-          allowMemoryLookupDirective,
-          allowImageLookupDirective
-        });
-        appendReplyFollowupPrompt(replyPromptCapture, followupUserPrompt);
-        return followupUserPrompt;
-      },
-      runModelRequestedWebSearch: async ({ webSearch: currentWebSearch, query }) =>
-        await runModelRequestedWebSearchForReplyFollowup(
-          { llm: bot.llm, search: bot.search, memory: bot.memory },
-          {
-            settings,
-            webSearch: currentWebSearch,
-            query,
-            trace: {
-              ...replyTrace,
-              source
-            },
-            signal
-          }
-        ),
-      runModelRequestedBrowserBrowse: async ({ browserBrowse: currentBrowserBrowse, query }) =>
-        await bot.runModelRequestedBrowserBrowse({
-          settings,
-          browserBrowse: currentBrowserBrowse,
-          query,
-          guildId: message.guildId,
-          channelId: message.channelId,
-          userId: message.author.id,
-          source
-        }),
-      runModelRequestedImageLookup: (payload) => bot.runModelRequestedImageLookup(payload),
-      mergeImageInputs: (payload) => bot.mergeImageInputs(payload),
-      maxModelImageInputs: MAX_MODEL_IMAGE_INPUTS,
-      jsonSchema: REPLY_OUTPUT_JSON_SCHEMA
-    }
-  );
-  generation = followup.generation;
-  replyDirective = followup.directive;
-  webSearch = followup.webSearch || webSearch;
-  browserBrowse = followup.browserBrowse || browserBrowse;
-  memoryLookup = followup.memoryLookup;
-  imageLookup = followup.imageLookup;
-  modelImageInputs = followup.imageInputs;
-  usedWebSearchFollowup = followup.usedWebSearch;
-  usedBrowserBrowseFollowup = followup.usedBrowserBrowse;
-  usedMemoryLookupFollowup = followup.usedMemoryLookup;
-  usedImageLookupFollowup = followup.usedImageLookup;
-  replyPrompts = buildLoggedReplyPrompts(replyPromptCapture, followup.followupSteps);
-
   if (usedWebSearchFollowup && webSearch.used && Array.isArray(webSearch.results) && webSearch.results.length) {
     bot.rememberRecentLookupContext({
       guildId: message.guildId,
       channelId: message.channelId,
       userId: message.author.id,
       source,
-      query: webSearch.query || replyDirective.webSearchQuery,
+      query: webSearch.query || "",
       provider: webSearch.providerUsed || null,
       results: webSearch.results
     });
   }
 
-  if (followup.regenerated) {
-    voiceIntentHandled = await bot.maybeHandleStructuredVoiceIntent({
-      message,
-      settings,
-      replyDirective
-    });
-    if (voiceIntentHandled) return { handledByIntent: true };
-
-    const followupAutomationHandled = await bot.maybeHandleStructuredAutomationIntent({
-      message,
-      settings,
-      replyDirective,
-      generation,
-      source,
-      triggerMessageIds,
-      addressing: addressSignal,
-      performance,
-      replyPrompts
-    });
-    if (followupAutomationHandled) return { handledByIntent: true };
-  }
   if (
-    followup.regenerated ||
+    replyToolLoopSteps > 0 ||
     usedWebSearchFollowup ||
     usedBrowserBrowseFollowup ||
     usedMemoryLookupFollowup ||
@@ -1050,8 +1220,8 @@ export async function executeReplyLlm(
   return {
     handledByIntent: false,
     generation, typingDelayMs, usedWebSearchFollowup, usedBrowserBrowseFollowup, usedMemoryLookupFollowup, usedImageLookupFollowup,
-    followupGenerationSettings, mediaPromptLimit, replyDirective,
-    webSearch, browserBrowse, memoryLookup, imageLookup, modelImageInputs, replyPrompts
+    mediaPromptLimit, webSearch, browserBrowse, memoryLookup, imageLookup, modelImageInputs, replyPrompts,
+    reaction, mediaDirective, screenShareOffer
   };
 }
 
@@ -1064,65 +1234,19 @@ export async function dispatchReplyActions(
   ctx: ReplyPipelineContext,
   llmResult: ReplyActionableLlmResult
 ): Promise<ReplyActionResult> {
-  const memorySettings = getMemorySettings(settings);
   const discovery = getDiscoverySettings(settings);
   const {
-    addressSignal, triggerMessageIds, reactionEmojiOptions, source, performance,
+    addressSignal, triggerMessageIds, source, performance,
     replyMediaMemoryFacts
   } = ctx;
   const {
-    generation, usedWebSearchFollowup, mediaPromptLimit, replyDirective,
-    webSearch, replyPrompts
+    generation, usedWebSearchFollowup, mediaPromptLimit,
+    webSearch, replyPrompts, reaction, mediaDirective, screenShareOffer
   } = llmResult;
 
-  const reaction = await bot.maybeApplyReplyReaction({
-    message,
-    settings,
-    emojiOptions: reactionEmojiOptions,
-    emojiToken: replyDirective.reactionEmoji,
-    generation,
-    source,
-    triggerMessageId: message.id,
-    triggerMessageIds,
-    addressing: addressSignal
-  });
-
-  const memoryLine = replyDirective.memoryLine;
-  const selfMemoryLine = replyDirective.selfMemoryLine;
-  let memorySaved = false;
-  let selfMemorySaved = false;
-  if (memorySettings.enabled && memoryLine) {
-    try {
-      memorySaved = await bot.memory.rememberDirectiveLine({
-        line: memoryLine,
-        sourceMessageId: message.id,
-        userId: message.author.id,
-        guildId: message.guildId,
-        channelId: message.channelId,
-        sourceText: message.content,
-        scope: "lore"
-      });
-    } catch (error) {
-      bot.store.logAction({
-        kind: "bot_error",
-        guildId: message.guildId,
-        channelId: message.channelId,
-        messageId: message.id,
-        userId: message.author.id,
-        content: `memory_directive: ${String(error?.message || error)}`
-      });
-    }
-  }
-
-  const mediaDirective = pickReplyMediaDirective(replyDirective);
-  let finalText = sanitizeBotText(replyDirective.text || "");
+  let finalText = sanitizeBotText(generation.text || "");
   let mentionResolution = emptyMentionResolution();
   finalText = normalizeSkipSentinel(finalText);
-  const screenShareOffer = await bot.maybeHandleScreenShareOfferIntent({
-    message,
-    replyDirective,
-    source
-  });
   if (screenShareOffer.appendText) {
     const textParts = [];
     if (finalText && finalText !== "[SKIP]") textParts.push(finalText);
@@ -1164,29 +1288,6 @@ export async function dispatchReplyActions(
     return { skipped: true };
   }
 
-  if (memorySettings.enabled && selfMemoryLine) {
-    try {
-      selfMemorySaved = await bot.memory.rememberDirectiveLine({
-        line: selfMemoryLine,
-        sourceMessageId: `${message.id}-self`,
-        userId: bot.client.user?.id || message.author.id,
-        guildId: message.guildId,
-        channelId: message.channelId,
-        sourceText: finalText,
-        scope: "self"
-      });
-    } catch (error) {
-      bot.store.logAction({
-        kind: "bot_error",
-        guildId: message.guildId,
-        channelId: message.channelId,
-        messageId: message.id,
-        userId: bot.client.user?.id || null,
-        content: `memory_self_directive: ${String(error?.message || error)}`
-      });
-    }
-  }
-
   mentionResolution = await resolveDeterministicMentionsForMentions(
     { store: bot.store },
     {
@@ -1209,10 +1310,10 @@ export async function dispatchReplyActions(
   let gifUsed = false;
   let gifBudgetBlocked = false;
   let gifConfigBlocked = false;
-  const imagePrompt = replyDirective.imagePrompt;
-  const complexImagePrompt = replyDirective.complexImagePrompt;
-  const videoPrompt = replyDirective.videoPrompt;
-  const gifQuery = replyDirective.gifQuery;
+  const imagePrompt = mediaDirective?.type === "image_simple" ? mediaDirective.prompt : null;
+  const complexImagePrompt = mediaDirective?.type === "image_complex" ? mediaDirective.prompt : null;
+  const videoPrompt = mediaDirective?.type === "video" ? mediaDirective.prompt : null;
+  const gifQuery = mediaDirective?.type === "gif" ? mediaDirective.prompt : null;
   const mediaAttachment = await bot.resolveMediaAttachment({
     settings,
     text: finalText,
@@ -1299,7 +1400,7 @@ export async function dispatchReplyActions(
 
   return {
     skipped: false,
-    reaction, memoryLine, selfMemoryLine, memorySaved, selfMemorySaved, mediaDirective,
+    reaction, mediaDirective,
     finalText, mentionResolution, screenShareOffer, allowMediaOnlyReply, modelProducedSkip,
     modelProducedEmpty, payload, imageUsed, imageBudgetBlocked, imageCapabilityBlocked,
     imageVariantUsed, videoUsed, videoBudgetBlocked, videoCapabilityBlocked, gifUsed,
@@ -1331,7 +1432,7 @@ export async function sendReplyMessage(
     webSearch, imageLookup, memoryLookup, replyPrompts
   } = llmResult;
   const {
-    reaction, memorySaved, selfMemorySaved,
+    reaction,
     finalText, mentionResolution, screenShareOffer, payload, imageUsed, imageBudgetBlocked, imageCapabilityBlocked,
     imageVariantUsed, videoUsed, videoBudgetBlocked, videoCapabilityBlocked, gifUsed,
     gifBudgetBlocked, gifConfigBlocked, imagePrompt, complexImagePrompt, videoPrompt, gifQuery
@@ -1420,7 +1521,7 @@ export async function sendReplyMessage(
       },
       memory: {
         toolCallsUsed: usedMemoryLookupFollowup,
-        saved: Boolean(memorySaved || selfMemorySaved),
+        saved: false,
         query: memoryLookup?.query || null,
         results: (memoryLookup?.results || []).map((r: Record<string, unknown>) => ({
           fact: r.fact,

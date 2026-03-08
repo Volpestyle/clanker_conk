@@ -182,12 +182,99 @@ export const CODE_TASK_SCHEMA: SharedToolSchema = {
   }
 };
 
+export const REACT_SCHEMA: SharedToolSchema = {
+  name: "react",
+  description: "React to the user's message with a Discord emoji.",
+  parameters: {
+    type: "object",
+    properties: {
+      emoji: { type: "string" }
+    },
+    required: ["emoji"],
+    additionalProperties: false
+  }
+};
+
+export const GENERATE_MEDIA_SCHEMA: SharedToolSchema = {
+  name: "generate_media",
+  description: "Generate media (image, video, or GIF) to accompany your reply.",
+  parameters: {
+    type: "object",
+    properties: {
+      type: {
+        type: "string",
+        enum: ["image_simple", "image_complex", "video", "gif"]
+      },
+      prompt: { type: "string" }
+    },
+    required: ["type", "prompt"],
+    additionalProperties: false
+  }
+};
+
+export const MANAGE_AUTOMATION_SCHEMA: SharedToolSchema = {
+  name: "manage_automation",
+  description: "Create, manage, or list recurring automations.",
+  parameters: {
+    type: "object",
+    properties: {
+      operation: {
+        type: "string",
+        enum: ["create", "pause", "resume", "delete", "list", "none"]
+      },
+      title: { type: "string" },
+      instruction: { type: "string" },
+      schedule: {
+        type: "object",
+        properties: {
+          kind: {
+            type: "string",
+            enum: ["daily", "interval", "once"]
+          },
+          hour: { type: "integer" },
+          minute: { type: "integer" },
+          everyMinutes: { type: "integer" },
+          atIso: { type: "string" }
+        },
+        required: ["kind"],
+        additionalProperties: false
+      },
+      targetQuery: { type: "string" },
+      automationId: { type: "integer" },
+      runImmediately: { type: "boolean" },
+      targetChannelId: { type: "string" }
+    },
+    required: ["operation"],
+    additionalProperties: false
+  }
+};
+
+export const VOICE_SESSION_CONTROL_SCHEMA: SharedToolSchema = {
+  name: "voice_session_control",
+  description: "Control Discord voice session behavior from text chat.",
+  parameters: {
+    type: "object",
+    properties: {
+      operation: {
+        type: "string",
+        enum: ["join", "leave", "status", "watch_stream", "stop_watching_stream", "stream_status"]
+      }
+    },
+    required: ["operation"],
+    additionalProperties: false
+  }
+};
+
 export const SHARED_TOOL_SCHEMAS: SharedToolSchema[] = [
   WEB_SEARCH_SCHEMA,
   WEB_SCRAPE_SCHEMA,
   BROWSER_BROWSE_SCHEMA,
   MEMORY_SEARCH_SCHEMA,
   MEMORY_WRITE_SCHEMA,
+  REACT_SCHEMA,
+  GENERATE_MEDIA_SCHEMA,
+  MANAGE_AUTOMATION_SCHEMA,
+  VOICE_SESSION_CONTROL_SCHEMA,
   ADAPTIVE_DIRECTIVE_ADD_SCHEMA,
   ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA,
   CONVERSATION_SEARCH_SCHEMA,

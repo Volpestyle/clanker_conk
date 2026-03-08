@@ -1,18 +1,18 @@
 /**
- * Live structured-reply tests for text and voice generation.
+ * Live reply-generation tests for text and voice generation.
  *
  * GENERATION LLM ONLY — no classifier. Each scenario builds a full generation
  * prompt (buildSystemPrompt + buildVoiceTurnPrompt) and sends it directly to
  * the LLM via llm.generate(). The classifier admission pipeline
  * (evaluateVoiceReplyDecision) is never called here.
  *
- * Asserts whether the generation LLM's structured output is a real spoken
- * reply, [SKIP], or an actionable voiceIntent — i.e. "does the brain make
+ * Asserts whether the generation LLM's output is a real spoken
+ * reply, [SKIP], or an actionable tool intent — i.e. "does the brain make
  * the right call given context?"
  *
  * Voice scenarios share a single corpus with admission. That includes
  * fixed command/music-control rows that may resolve through actionable
- * voiceIntent plus eagerness sweeps that still assert spoken reply vs [SKIP].
+ * tool calls plus eagerness sweeps that still assert spoken reply vs [SKIP].
  *
  * Env:
  *   LIVE_REPLY_FILTER=text|voice|label-substring
@@ -29,15 +29,9 @@
  */
 import { afterAll, beforeAll, describe, test } from "bun:test";
 import assert from "node:assert/strict";
-import {
-  REPLY_OUTPUT_JSON_SCHEMA,
-  REPLY_OUTPUT_SCHEMA,
-  parseStructuredReplyOutput
-} from "../../src/bot/botHelpers.ts";
 import { LLMService } from "../../src/llm.ts";
 import type { ChatTool, ImageInput } from "../../src/llm/serviceShared.ts";
 import { normalizeDefaultModel, normalizeLlmProvider } from "../../src/llm/llmHelpers.ts";
-import { extractJsonObjectFromText } from "../../src/normalization/jsonExtraction.ts";
 import { parseBooleanFlag } from "../../src/normalization/valueParsers.ts";
 import { buildReplyPrompt, buildSystemPrompt, buildVoiceTurnPrompt } from "../../src/prompts/index.ts";
 import { buildVoiceToneGuardrails } from "../../src/prompts/promptCore.ts";
@@ -71,6 +65,14 @@ type PromptEnvelope = {
   imageInputs?: PromptImageInput[];
   tools?: ChatTool[];
   jsonSchema?: string;
+};
+
+type ParsedLiveReply = {
+  text: string;
+  voiceIntent: {
+    intent: string | null;
+    confidence: number;
+  };
 };
 
 type LiveScenario = {
@@ -608,12 +610,7 @@ async function runLiveGeneration(label: string, prompt: PromptEnvelope) {
     userPrompt: prompt.userPrompt,
     imageInputs: prompt.imageInputs || [],
     contextMessages: [],
-    jsonSchema:
-      typeof prompt.jsonSchema === "string"
-        ? prompt.jsonSchema
-        : Array.isArray(prompt.tools) && prompt.tools.length
-          ? ""
-          : REPLY_OUTPUT_JSON_SCHEMA,
+    jsonSchema: typeof prompt.jsonSchema === "string" ? prompt.jsonSchema : "",
     tools: prompt.tools || [],
     trace: {
       guildId: "live-test",
@@ -623,7 +620,7 @@ async function runLiveGeneration(label: string, prompt: PromptEnvelope) {
     }
   });
   const raw = String(generation.text || "").trim();
-  const parsed = parseStructuredReplyOutput(raw);
+  const parsed = parseLiveReply(raw, generation);
 
   logLiveReplyDebug({
     label,
@@ -651,12 +648,36 @@ async function runLiveGeneration(label: string, prompt: PromptEnvelope) {
 async function runStructuredReplyScenario(label: string, prompt: PromptEnvelope) {
   const generation = await runLiveGeneration(label, prompt);
   const raw = String(generation.text || "").trim();
-  const parsed = parseStructuredReplyOutput(raw);
+  const parsed = parseLiveReply(raw, generation);
 
   return {
     generation,
     raw,
     parsed
+  };
+}
+
+function parseLiveReply(
+  raw: string,
+  generation: Awaited<ReturnType<typeof runLiveGeneration>>
+): ParsedLiveReply {
+  const toolCalls = Array.isArray(generation.toolCalls) ? generation.toolCalls : [];
+  const firstTool = toolCalls[0];
+  const firstToolName = String(firstTool?.name || "").trim();
+  const firstToolOperation = String(firstTool?.input?.operation || "").trim();
+  const intent =
+    firstToolName === "voice_session_control"
+      ? firstToolOperation || null
+      : firstToolName.startsWith("music_") || firstToolName === "leave_voice_channel"
+        ? firstToolName
+        : null;
+
+  return {
+    text: raw,
+    voiceIntent: {
+      intent,
+      confidence: intent ? 1 : 0
+    }
   };
 }
 
@@ -679,15 +700,8 @@ function assertExpectedReply({
   } | null;
 }) {
   const normalizedText = String(parsedText || "").trim();
-  const rawJson = extractJsonObjectFromText(raw);
-  const rawVoiceIntent =
-    rawJson && typeof rawJson === "object" && rawJson.voiceIntent && typeof rawJson.voiceIntent === "object"
-      ? rawJson.voiceIntent
-      : null;
   const normalizedIntent = String(
-    parsedVoiceIntent?.intent ||
-    (rawVoiceIntent && "intent" in rawVoiceIntent ? rawVoiceIntent.intent : "") ||
-    ""
+    parsedVoiceIntent?.intent || ""
   ).trim();
   if (expected === "reply") {
     assert.ok(
@@ -701,7 +715,7 @@ function assertExpectedReply({
     assert.equal(
       normalizedIntent,
       String(expectedVoiceIntent || ""),
-      `Expected voiceIntent ${JSON.stringify(expectedVoiceIntent)} but got ${JSON.stringify(normalizedIntent)} (raw: ${JSON.stringify(raw)}) for ${label}`
+      `Expected tool intent ${JSON.stringify(expectedVoiceIntent)} but got ${JSON.stringify(normalizedIntent)} (raw: ${JSON.stringify(raw)}) for ${label}`
     );
     return;
   }
@@ -780,30 +794,6 @@ function assertExpectedToolCall({
       `Expected tool input for ${expectedTool} to match ${expectedInputPattern} for ${label}`
     );
   }
-}
-
-function assertStrictStructuredReplyShape(label: string, raw: string) {
-  const trimmed = String(raw || "").trim();
-  assert.ok(trimmed.startsWith("{") && trimmed.endsWith("}"), `Expected raw JSON object for ${label}, got ${JSON.stringify(raw)}`);
-
-  const parsed = extractJsonObjectFromText(trimmed);
-  assert.ok(parsed, `Expected parseable JSON object for ${label}, got ${JSON.stringify(raw)}`);
-
-  const required = Array.isArray(REPLY_OUTPUT_SCHEMA.required) ? REPLY_OUTPUT_SCHEMA.required : [];
-  for (const key of required) {
-    assert.equal(
-      Object.prototype.hasOwnProperty.call(parsed, key),
-      true,
-      `Expected structured reply field ${key} in raw JSON for ${label}`
-    );
-  }
-
-  assert.equal(typeof parsed.text, "string", `Expected text:string in ${label}`);
-  assert.equal(typeof parsed.skip, "boolean", `Expected skip:boolean in ${label}`);
-  assert.ok(
-    parsed.reactionEmoji == null || typeof parsed.reactionEmoji === "string",
-    `Expected reactionEmoji to be string|null in ${label}`
-  );
 }
 
 const textScenarios: LiveScenario[] = [
@@ -1118,68 +1108,6 @@ const textToolSelectionScenarios: ToolSelectionScenario[] = [
   }
 ];
 
-const textStructuredJsonScenarios: LiveScenario[] = [
-  {
-    label: "text structured output stays strict json for reply",
-    expected: "reply",
-    buildPrompt: () =>
-      buildTextPrompt({
-        messageContent: "clanker conk, give me one short opinion on pizza toppings.",
-        recentMessages: [],
-        replyEagerness: 70,
-        addressing: DIRECT_ADDRESSED
-      })
-  },
-  {
-    label: "text structured output stays strict json for skip",
-    expected: "skip",
-    buildPrompt: () =>
-      buildTextPrompt({
-        messageContent: "@jake can you DM me the staging notes later?",
-        recentMessages: [
-          {
-            author_name: "alice",
-            content: "I forgot where I put them",
-            is_bot: 0
-          }
-        ],
-        replyEagerness: 10,
-        addressing: {
-          directlyAddressed: false,
-          directAddressConfidence: 0.04,
-          directAddressThreshold: 0.62,
-          responseRequired: false,
-          mentionsOtherUsers: true,
-          repliesToOtherUser: true
-        }
-      })
-  },
-  {
-    label: "text structured output includes reaction emoji when appropriate",
-    expected: "reply",
-    buildPrompt: () =>
-      buildTextPrompt({
-        messageContent: "clanker conk, I just shipped my first open source project!",
-        recentMessages: [],
-        replyEagerness: 70,
-        addressing: DIRECT_ADDRESSED
-      })
-  },
-  {
-    label: "text structured output sets webSearchQuery for lookup directive",
-    expected: "reply",
-    buildPrompt: () =>
-      buildTextPrompt({
-        messageContent: "clanker conk, who won the most recent Super Bowl?",
-        recentMessages: [],
-        replyEagerness: 70,
-        addressing: DIRECT_ADDRESSED,
-        webSearchEnabled: true,
-        allowWebSearchDirective: true
-      })
-  }
-];
-
 const BLUE_SQUARE_IMAGE: PromptImageInput = {
   filename: "blue-square.png",
   contentType: "image/png",
@@ -1306,38 +1234,6 @@ describe("text tool selection live tests", () => {
         expectedTool: scenario.expectedTool,
         expectedInputPattern: scenario.expectedInputPattern
       });
-    }, textTimeoutMs);
-  }
-});
-
-describe("text structured output live tests", () => {
-  for (const scenario of textStructuredJsonScenarios.filter((entry) => matchesFilter(entry.label))) {
-    test(scenario.label, async () => {
-      const result = await runStructuredReplyScenario(scenario.label, scenario.buildPrompt());
-      assertExpectedReply({
-        label: scenario.label,
-        expected: scenario.expected,
-        raw: result.raw,
-        parsedText: result.parsed.text
-      });
-      assertStrictStructuredReplyShape(scenario.label, result.raw);
-
-      // Scenario-specific structured field assertions
-      if (scenario.label.includes("reaction emoji")) {
-        const rawJson = extractJsonObjectFromText(result.raw);
-        assert.ok(
-          rawJson && (rawJson.reactionEmoji != null || result.parsed.text.length > 0),
-          `Expected reaction emoji or substantive reply for ${scenario.label}`
-        );
-      }
-
-      if (scenario.label.includes("webSearchQuery")) {
-        const rawJson = extractJsonObjectFromText(result.raw);
-        assert.ok(
-          rawJson && (typeof rawJson.webSearchQuery === "string" && rawJson.webSearchQuery.length > 0),
-          `Expected webSearchQuery to be set for ${scenario.label}, got ${JSON.stringify(rawJson?.webSearchQuery)}`
-        );
-      }
     }, textTimeoutMs);
   }
 });

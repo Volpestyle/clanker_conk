@@ -61,7 +61,6 @@ import {
 import type { DiscoveryEngineRuntime } from "./discoveryEngine.ts";
 import {
   getVoiceScreenShareCapability as getVoiceScreenShareCapabilityForScreenShare,
-  maybeHandleScreenShareOfferIntent as maybeHandleScreenShareOfferIntentForScreenShare,
   offerVoiceScreenShareLink as offerVoiceScreenShareLinkForScreenShare,
 } from "./screenShare.ts";
 import type { ScreenShareRuntime } from "./screenShare.ts";
@@ -493,6 +492,8 @@ export function buildReplyPipelineRuntime(
       }),
     getVoiceScreenShareCapability: (payload) =>
       getVoiceScreenShareCapabilityForScreenShare(buildScreenShareRuntime(bot), payload),
+    offerVoiceScreenShareLink: (payload) =>
+      offerVoiceScreenShareLinkForScreenShare(buildScreenShareRuntime(bot), payload),
     getEmojiHints: (guild) => bot.getEmojiHints(guild),
     runModelRequestedBrowserBrowse: (payload) =>
       runModelRequestedBrowserBrowseForAgentTasks(agentContext, payload),
@@ -511,11 +512,6 @@ export function buildReplyPipelineRuntime(
       rememberRecentLookupContextForMessageHistory(botContext, payload),
     maybeApplyReplyReaction: (payload) => bot.maybeApplyReplyReaction(payload),
     logSkippedReply: (payload) => bot.logSkippedReply(payload),
-    maybeHandleScreenShareOfferIntent: (payload) =>
-      maybeHandleScreenShareOfferIntentForScreenShare(buildScreenShareRuntime(bot), {
-        ...payload,
-        settings: bot.store.getSettings()
-      }),
     resolveMediaAttachment: (payload) =>
       resolveMediaAttachmentForMediaAttachment(mediaAttachmentContext, payload),
     maybeAttachReplyGif: (payload) => maybeAttachReplyGifForMediaAttachment(mediaAttachmentContext, payload),

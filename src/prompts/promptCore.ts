@@ -245,36 +245,3 @@ function normalizeTemplateVariables(variables = {}) {
   }
   return out;
 }
-
-export const REPLY_JSON_SCHEMA = `{
-  "text": "reply text or [SKIP]",
-  "skip": false,
-  "reactionEmoji": "emoji or null",
-  "media": "media object or null",
-  "soundboardRefs": [],
-  "leaveVoiceChannel": false,
-  "automationAction": {
-    "operation": "none|create|pause|resume|delete|list",
-    "title": "string or null",
-    "instruction": "string or null",
-    "schedule": "schedule object or null",
-    "targetQuery": "string or null",
-    "automationId": "string or null",
-    "runImmediately": false,
-    "targetChannelId": "string or null"
-  },
-  "voiceIntent": {
-    "intent": "join|leave|status|watch_stream|stop_watching_stream|stream_status|music_play_now|music_queue_next|music_queue_add|music_stop|music_pause|none",
-    "confidence": 0,
-    "reason": "string or null",
-    "query": "string or null",
-    "platform": "youtube|soundcloud|auto or null",
-    "searchResults": "array or null",
-    "selectedResultId": "string or null"
-  },
-  "screenShareIntent": {
-    "action": "offer_link|none",
-    "confidence": 0,
-    "reason": "string or null"
-  }
-}`;

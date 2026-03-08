@@ -110,7 +110,6 @@ type RunModelRequestedImageLookupFn = typeof import("./imageAnalysis.ts").runMod
 type MergeImageInputsFn = typeof import("./imageAnalysis.ts").mergeImageInputs;
 type GetVoiceScreenShareCapabilityFn = typeof import("./screenShare.ts").getVoiceScreenShareCapability;
 type OfferVoiceScreenShareLinkFn = typeof import("./screenShare.ts").offerVoiceScreenShareLink;
-type MaybeHandleScreenShareOfferIntentFn = typeof import("./screenShare.ts").maybeHandleScreenShareOfferIntent;
 type RunModelRequestedBrowserBrowseFn = typeof import("./agentTasks.ts").runModelRequestedBrowserBrowse;
 type RunModelRequestedCodeTaskFn = typeof import("./agentTasks.ts").runModelRequestedCodeTask;
 type BuildSubAgentSessionsRuntimeFn = typeof import("./agentTasks.ts").buildSubAgentSessionsRuntime;
@@ -128,11 +127,6 @@ type CaptionRecentHistoryImagesRuntimeFn = (payload?: {
   settings?: Record<string, unknown> | null;
   trace?: Record<string, unknown> | null;
 }) => void;
-type MaybeHandleScreenShareOfferIntentRuntimeFn = (payload: {
-  message: unknown;
-  replyDirective: Record<string, unknown> | null | undefined;
-  source?: string;
-}) => ReturnType<MaybeHandleScreenShareOfferIntentFn>;
 type RunModelRequestedImageLookupRuntimeFn = (payload: {
   imageLookup?: Record<string, unknown> | null;
   query?: string;
@@ -217,13 +211,13 @@ export interface ReplyPipelineRuntime extends BotContext, Pick<ClankerBot, Reply
   buildImageLookupContext: StripFirstArg<BuildImageLookupContextFn>;
   captionRecentHistoryImages: CaptionRecentHistoryImagesRuntimeFn;
   getVoiceScreenShareCapability: StripFirstArg<GetVoiceScreenShareCapabilityFn>;
+  offerVoiceScreenShareLink: StripFirstArg<OfferVoiceScreenShareLinkFn>;
   runModelRequestedBrowserBrowse: StripFirstArg<RunModelRequestedBrowserBrowseFn>;
   runModelRequestedCodeTask: StripFirstArg<RunModelRequestedCodeTaskFn>;
   buildSubAgentSessionsRuntime: StripFirstArg<BuildSubAgentSessionsRuntimeFn>;
   runModelRequestedImageLookup: RunModelRequestedImageLookupRuntimeFn;
   mergeImageInputs: MergeImageInputsFn;
   rememberRecentLookupContext: StripFirstArg<RememberRecentLookupContextFn>;
-  maybeHandleScreenShareOfferIntent: MaybeHandleScreenShareOfferIntentRuntimeFn;
   resolveMediaAttachment: StripFirstArg<ResolveMediaAttachmentFn>;
   maybeAttachReplyGif: StripFirstArg<MaybeAttachReplyGifFn>;
   maybeAttachGeneratedImage: StripFirstArg<MaybeAttachGeneratedImageFn>;

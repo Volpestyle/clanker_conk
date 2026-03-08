@@ -70,6 +70,31 @@ test("buildReplyToolSet includes memory tools and conversation search when memor
   assert.equal(toolNames.includes("conversation_search"), true);
 });
 
+test("buildReplyToolSet includes text-only reply tools when explicitly available", () => {
+  const toolNames = buildReplyToolSet({
+    browser: { enabled: false },
+    webSearch: { enabled: false },
+    memory: { enabled: false },
+    adaptiveDirectives: { enabled: false },
+    automations: { enabled: true }
+  }, {
+    reactAvailable: true,
+    generateMediaAvailable: true,
+    automationManagementAvailable: true,
+    voiceSessionControlAvailable: true,
+    musicToolsAvailable: true,
+    conversationSearchAvailable: false
+  }).map((tool) => tool.name);
+
+  assert.equal(toolNames.includes("react"), true);
+  assert.equal(toolNames.includes("generate_media"), true);
+  assert.equal(toolNames.includes("manage_automation"), true);
+  assert.equal(toolNames.includes("voice_session_control"), true);
+  assert.equal(toolNames.includes("music_search"), true);
+  assert.equal(toolNames.includes("music_play_now"), true);
+  assert.equal(toolNames.includes("note_context"), false);
+});
+
 test("buildReplyToolSet includes code_task when dev task runtime and permissions are enabled", () => {
   const toolNames = buildReplyToolSet({
     browser: { enabled: false },

@@ -90,23 +90,14 @@ test("message/reaction loops cover ingest, read context, reaction, and reply", a
         async generate(payload) {
           llmCalls.push(payload);
           return {
-            text: JSON.stringify({
-              text: "bet",
-              skip: false,
-              reactionEmoji: "🔥",
-              media: null,
-              webSearchQuery: null,
-              memoryLookupQuery: null,
-              memoryLine: null,
-              automationAction: {
-                operation: "none"
-              },
-              voiceIntent: {
-                intent: "none",
-                confidence: 0,
-                reason: null
+            text: "bet",
+            toolCalls: [
+              {
+                id: "tc_react_1",
+                name: "react",
+                input: { emoji: "🔥" }
               }
-            }),
+            ],
             provider: "test",
             model: "test-model",
             usage: null,

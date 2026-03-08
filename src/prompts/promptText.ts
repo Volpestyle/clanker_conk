@@ -1,7 +1,6 @@
 import {
   buildVoiceSelfContextLines,
-  getMediaPromptCraftGuidance,
-  REPLY_JSON_SCHEMA
+  getMediaPromptCraftGuidance
 } from "./promptCore.ts";
 
 import {
@@ -271,7 +270,7 @@ export function buildReplyPrompt({
   } else {
     parts.push("React when it feels right, not by default.");
   }
-  parts.push("If a reaction fits, set reactionEmoji to exactly one allowed emoji. Otherwise set reactionEmoji to null.");
+  parts.push("If a reaction genuinely fits, call react with exactly one allowed emoji. Otherwise do not call react.");
 
   parts.push("=== VOICE CONTROL ===");
   const voiceEnabled = Boolean(voiceMode?.enabled);
@@ -291,15 +290,12 @@ export function buildReplyPrompt({
     } else {
       parts.push("If users ask whether you're in VC, acknowledge that you're not currently in VC.");
     }
-    parts.push(
-      "Hard rule: if a message is an explicit VC command aimed at you (for example: 'join vc', 'join voice', 'hop in vc', 'rejoin vc', 'join again', 'come back'), set voiceIntent.intent=join."
-    );
-    parts.push(
-      "For explicit VC join commands aimed at you, set voiceIntent.confidence to at least 0.9 and do not leave voiceIntent as none."
-    );
-    parts.push(
-      "Do not output text-only deflection for explicit VC join commands; route through voiceIntent."
-    );
+    parts.push("If the user asks you to join VC, call voice_session_control with operation=join.");
+    parts.push("If the user asks you to leave VC or disconnect, call voice_session_control with operation=leave.");
+    parts.push("If the user asks for VC status, call voice_session_control with operation=status.");
+    parts.push("If the user asks you to watch their stream/screen in VC, call voice_session_control with operation=watch_stream.");
+    parts.push("If the user asks you to stop watching a stream, call voice_session_control with operation=stop_watching_stream.");
+    parts.push("If the user asks whether you are currently watching a stream, call voice_session_control with operation=stream_status.");
     parts.push(
       "Use conversational continuity: follow-up VC control requests can still be aimed at you even if the user does not repeat your name."
     );
@@ -307,34 +303,7 @@ export function buildReplyPrompt({
       "Use recent turn history to resolve target: if someone just addressed you and follows with a short imperative like 'get in vc now', treat it as likely directed at you unless another explicit target is present."
     );
     parts.push(
-      "Prioritize who the current message is addressed to over older context when deciding voiceIntent."
-    );
-    parts.push(
-      "If the incoming message is clearly asking you to join, leave, or report VC status, set voiceIntent.intent to join, leave, or status."
-    );
-    parts.push(
-      "If the user clearly asks you to watch their stream in VC, set voiceIntent.intent to watch_stream."
-    );
-    parts.push(
-      "If the user clearly asks you to stop watching stream, set voiceIntent.intent to stop_watching_stream."
-    );
-    parts.push(
-      "If the user asks whether stream watch is on/off, set voiceIntent.intent to stream_status."
-    );
-    parts.push(
-      "If the user clearly asks you to play music immediately, replace the current track, or start a song now in VC, set voiceIntent.intent to music_play_now."
-    );
-    parts.push(
-      "If the user clearly asks you to queue a song next in VC, set voiceIntent.intent to music_queue_next."
-    );
-    parts.push(
-      "If the user clearly asks you to add a song to the queue without interrupting current playback in VC, set voiceIntent.intent to music_queue_add."
-    );
-    parts.push(
-      "If the user clearly asks you to stop music, set voiceIntent.intent to music_stop."
-    );
-    parts.push(
-      "If the user clearly asks you to pause music, set voiceIntent.intent to music_pause."
+      "Prioritize who the current message is addressed to over older context when deciding whether to take any VC action."
     );
     if (voiceMode?.musicState) {
       const musicPlaybackState = String(voiceMode.musicState.playbackState || "idle").trim().toLowerCase() || "idle";
@@ -383,24 +352,17 @@ export function buildReplyPrompt({
         ].join("\n")
       );
       parts.push(
-        `If the user picks one of those options (by number or by naming it), set voiceIntent.intent=${voiceMode.musicDisambiguation.action === "queue_next" ? "music_queue_next" : voiceMode.musicDisambiguation.action === "queue_add" ? "music_queue_add" : "music_play_now"} and voiceIntent.selectedResultId to that exact id.`
+        `If the user picks one of those options (by number or by naming it), use the matching music tool with that exact id.`
       );
     }
-    parts.push(
-      "Set voiceIntent.confidence from 0 to 1. Use high confidence only for explicit voice-control requests aimed at you."
-    );
-    parts.push(
-      "If the message is clearly aimed at someone else (for example, only tagging another user with no clear reference to you), set voiceIntent.intent to none."
-    );
-    parts.push(
-      "Example: if a message tags another user and says 'come back' without clearly addressing you, set voiceIntent.intent=none."
-    );
-    parts.push("If intent target is ambiguous, prefer voiceIntent.intent=none with lower confidence.");
-    parts.push("For normal chat or ambiguous requests, set voiceIntent.intent to none and keep confidence low.");
+    parts.push("Use music_search before music_play_now, music_queue_next, or music_queue_add unless an exact track id is already available in context.");
+    parts.push("Use music_now_playing when the user asks what is playing or what is queued and the answer is not already explicit in the provided music state.");
+    parts.push("Use music_pause, music_resume, music_stop, and music_skip for direct playback control requests.");
+    parts.push("If the message is clearly aimed at someone else, do not take VC control actions.");
+    parts.push("If intent target is ambiguous, prefer no VC action.");
   } else {
     parts.push("Voice control capability exists but is currently disabled in settings.");
     parts.push("If asked to join VC, say voice mode is currently disabled.");
-    parts.push("Set voiceIntent.intent to none.");
   }
 
   parts.push("=== SCREEN SHARE ===");
@@ -421,21 +383,16 @@ export function buildReplyPrompt({
   if (screenShareAvailable) {
     parts.push("You can offer a secure temporary screen-share link when useful.");
     parts.push(
-      "If the user asks you to see/watch their screen or stream, set screenShareIntent.action to offer_link."
+      "If the user asks you to see/watch their screen or stream, call offer_screen_share_link."
     );
     parts.push(
-      "If visual context would materially improve troubleshooting/help, you may proactively set screenShareIntent.action to offer_link."
-    );
-    parts.push(
-      "Set screenShareIntent.confidence from 0 to 1. Use high confidence only when a share link is clearly useful."
+      "If visual context would materially improve troubleshooting/help, you may proactively call offer_screen_share_link."
     );
   } else if (screenShareSupported) {
     parts.push(`Screen-share link capability exists but is currently unavailable (reason: ${screenShareReason}).`);
     parts.push("If asked, explain it can work when available, but do not claim you can watch a screen right now.");
-    parts.push("Set screenShareIntent.action to none.");
   } else {
     parts.push("Screen-share links are not available in this runtime.");
-    parts.push("Set screenShareIntent.action to none.");
   }
 
   parts.push("=== AUTOMATION ===");
@@ -443,18 +400,17 @@ export function buildReplyPrompt({
   if (allowAutomationDirective) {
     const tzLabel = String(automationTimeZoneLabel || "").trim() || "local server time";
     parts.push(`Automations are available for this guild. Scheduler timezone: ${tzLabel}.`);
-    parts.push("If the user asks to schedule/start recurring tasks, set automationAction.operation=create.");
-    parts.push("For create, set automationAction.schedule with one of:");
+    parts.push("If the user asks to schedule/start recurring tasks, call manage_automation with operation=create.");
+    parts.push("For create, use schedule with one of:");
     parts.push("- daily: {\"kind\":\"daily\",\"hour\":0-23,\"minute\":0-59}");
     parts.push("- interval: {\"kind\":\"interval\",\"everyMinutes\":integer}");
     parts.push("- once: {\"kind\":\"once\",\"atIso\":\"ISO-8601 timestamp\"}");
-    parts.push("For create, set automationAction.instruction to the exact task instruction (what to do each run).");
-    parts.push("Use automationAction.runImmediately=true only when user asks for immediate first run.");
-    parts.push("If user asks to stop/pause a recurring task, set automationAction.operation=pause with targetQuery.");
-    parts.push("If user asks to resume/re-enable, set automationAction.operation=resume with targetQuery.");
-    parts.push("If user asks to remove/delete permanently, set automationAction.operation=delete with targetQuery.");
-    parts.push("If user asks to see what is scheduled, set automationAction.operation=list.");
-    parts.push("When no automation control is requested, set automationAction.operation=none.");
+    parts.push("For create, pass instruction as the exact task instruction (what to do each run).");
+    parts.push("Use runImmediately=true only when the user asks for an immediate first run.");
+    parts.push("If user asks to stop/pause a recurring task, call manage_automation with operation=pause and targetQuery.");
+    parts.push("If user asks to resume/re-enable, call manage_automation with operation=resume and targetQuery.");
+    parts.push("If user asks to remove/delete permanently, call manage_automation with operation=delete and targetQuery.");
+    parts.push("If user asks to see what is scheduled, call manage_automation with operation=list.");
   }
 
   parts.push("=== WEB SEARCH ===");
@@ -462,27 +418,24 @@ export function buildReplyPrompt({
   if (allowWebSearchDirective) {
     if (webSearch?.optedOutByUser) {
       parts.push("The user explicitly asked not to use web search.");
-      parts.push("Set webSearchQuery to null and do not claim live lookup.");
+      parts.push("Do not call web_search and do not claim live lookup.");
     } else if (!webSearch?.enabled) {
       parts.push("Live web lookup capability exists but is currently unavailable (disabled in settings).");
-      parts.push("Set webSearchQuery to null.");
       parts.push("Do not claim you searched the web.");
     } else if (!webSearch?.configured) {
       parts.push("Live web lookup capability exists but is currently unavailable (no search provider is configured).");
-      parts.push("Set webSearchQuery to null.");
       parts.push("Do not claim you searched the web.");
     } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
       parts.push("Live web lookup capability exists but is currently unavailable (hourly search budget exhausted).");
-      parts.push("Set webSearchQuery to null.");
       parts.push("Do not claim you searched the web.");
     } else {
       parts.push("Live web lookup is available.");
       parts.push("Web search is supported right now.");
       parts.push("Do not claim you cannot search the web.");
       parts.push(
-        "If better accuracy depends on live web info, set webSearchQuery to a concise query."
+        "If better accuracy depends on live web info, call web_search with a concise query."
       );
-      parts.push("Use webSearchQuery only when needed and keep it under 220 characters.");
+      parts.push("Use web_search only when needed and keep the query under 220 characters.");
     }
   }
 
@@ -491,23 +444,20 @@ export function buildReplyPrompt({
   if (allowBrowserBrowseDirective) {
     if (!browserBrowse?.enabled) {
       parts.push("Interactive browser capability exists but is currently unavailable (disabled in settings).");
-      parts.push("Set browserBrowseQuery to null.");
       parts.push("Do not claim you can browse sites interactively right now.");
     } else if (!browserBrowse?.configured) {
       parts.push("Interactive browser capability exists but is currently unavailable (browser runtime is not configured).");
-      parts.push("Set browserBrowseQuery to null.");
       parts.push("Do not claim you can browse sites interactively right now.");
     } else if (browserBrowse?.blockedByBudget || !browserBrowse?.budget?.canBrowse) {
       parts.push("Interactive browser capability exists but is currently unavailable (hourly browser budget exhausted).");
-      parts.push("Set browserBrowseQuery to null.");
       parts.push("Do not claim you browsed the site.");
     } else {
       parts.push("Interactive browser browsing is available.");
-      parts.push("Prefer webSearchQuery for simple current facts.");
+      parts.push("Prefer web_search for simple current facts.");
       parts.push(
-        "Use browserBrowseQuery only when you need actual site navigation or interaction, such as checking listings, moving through a live page flow, or extracting page-specific details."
+        "Use browser_browse only when you need actual site navigation or interaction, such as checking listings, moving through a live page flow, or extracting page-specific details."
       );
-      parts.push("If interactive browsing is needed, set browserBrowseQuery to a concise task under 500 characters.");
+      parts.push("If interactive browsing is needed, call browser_browse with a concise task under 500 characters.");
     }
   }
 
@@ -516,34 +466,30 @@ export function buildReplyPrompt({
   if (allowMemoryLookupDirective) {
     if (!memoryLookup?.enabled) {
       parts.push("Durable memory lookup capability exists but is currently unavailable for this turn.");
-      parts.push("Set memoryLookupQuery to null.");
     } else {
       parts.push("Durable memory lookup is available for this turn.");
       parts.push(
-        "If the user asks what you remember (or asks for stored facts) and current memory context is insufficient, set memoryLookupQuery to a concise lookup query."
+        "If the user asks what you remember (or asks for stored facts) and current memory context is insufficient, call memory_search with a concise lookup query."
       );
-      parts.push("If the user asks to see ALL memory or EVERYTHING you remember, set memoryLookupQuery to \"__ALL__\".");
-      parts.push("Use memoryLookupQuery only when needed and keep it under 220 characters.");
+      parts.push("If the user asks to see ALL memory or EVERYTHING you remember, call memory_search with query \"__ALL__\".");
+      parts.push("Use memory_search only when needed and keep the query under 220 characters.");
     }
   }
 
   if (allowImageLookupDirective) {
     if (!imageLookup?.enabled) {
       parts.push("History image lookup capability exists but is currently unavailable for this turn.");
-      parts.push("Set imageLookupQuery to null.");
     } else if (!imageLookup?.candidates?.length) {
       parts.push("History image lookup capability is available, but no recent image references were found.");
-      parts.push("Set imageLookupQuery to null.");
     } else {
       parts.push("History image lookup is available for this turn.");
       parts.push("Recent image references from message history:");
       parts.push(formatImageLookupCandidates(imageLookup.candidates));
       parts.push(
-        "If the user refers to an earlier image/photo and current message attachments are insufficient, set imageLookupQuery to a concise lookup query or a specific image ref like IMG 3."
+        "If the user refers to an earlier image/photo and current message attachments are insufficient, call image_lookup with a concise lookup query or a specific image ref like IMG 3."
       );
       parts.push("The [IMG n] markers in recent chat are historical images, not fresh attachments on the latest user message.");
-      parts.push("Use imageLookupQuery only when needed and keep it under 220 characters.");
-      parts.push("If no historical image lookup is needed, set imageLookupQuery to null.");
+      parts.push("Use image_lookup only when needed and keep the query under 220 characters.");
       parts.push("Do not claim you cannot review earlier shared images when history lookup is available.");
     }
   }
@@ -639,15 +585,15 @@ export function buildReplyPrompt({
       `Visual generation is available (${remainingImages} image slot(s), ${remainingVideos} video slot(s) left where enabled in the rolling 24h budgets).`
     );
     if (simpleImageAvailable) {
-      parts.push("For a simple/quick visual, set media to {\"type\":\"image_simple\",\"prompt\":\"...\"}.");
+      parts.push("For a simple/quick visual, call generate_media with type=image_simple.");
       parts.push("Use image_simple for straightforward concepts or fast meme-style visuals.");
     }
     if (complexImageAvailable) {
-      parts.push("For a detailed/composition-heavy visual, set media to {\"type\":\"image_complex\",\"prompt\":\"...\"}.");
+      parts.push("For a detailed/composition-heavy visual, call generate_media with type=image_complex.");
       parts.push("Use image_complex for cinematic/detail-rich scenes or harder visual requests.");
     }
     if (videoGenerationAvailable) {
-      parts.push("If a generated clip is best, set media to {\"type\":\"video\",\"prompt\":\"...\"}.");
+      parts.push("If a generated clip is best, call generate_media with type=video.");
       parts.push("Use video when motion/animation is meaningfully better than a still image.");
     }
     parts.push(`Keep image/video media prompts under ${maxMediaPromptChars} chars, and always include normal reply text.`);
@@ -655,7 +601,6 @@ export function buildReplyPrompt({
   } else {
     parts.push("Reply image/video generation capability exists but is currently unavailable for this turn.");
     parts.push("Respond with text only.");
-    parts.push("Set media to null.");
   }
 
   parts.push("=== GIFS ===");
@@ -664,27 +609,25 @@ export function buildReplyPrompt({
     parts.push(`Reply GIF lookup is available (${remainingGifs} GIF lookup(s) left in the rolling 24h budget).`);
     parts.push("GIF replies are supported right now.");
     parts.push("Do not claim you cannot send GIFs and do not claim you are text-only.");
-    parts.push("If a GIF should be sent, set media to {\"type\":\"gif\",\"prompt\":\"short search query\"}.");
-    parts.push("Use media.type=gif only when a reaction GIF genuinely improves the reply.");
-    parts.push("Keep GIF media prompts concise (under 120 chars), and always include normal reply text.");
+    parts.push("If a GIF should be sent, call generate_media with type=gif and a short search query prompt.");
+    parts.push("Use generate_media type=gif only when a reaction GIF genuinely improves the reply.");
+    parts.push("Keep GIF prompts concise (under 120 chars), and always include normal reply text.");
   } else if (gifRepliesEnabled && !gifsConfigured) {
     parts.push("Reply GIF lookup capability exists but is currently unavailable (missing GIPHY configuration).");
-    parts.push("Do not set media.type=gif.");
   } else if (gifRepliesEnabled) {
     parts.push("Reply GIF lookup capability exists but is currently unavailable (24h GIF budget exhausted).");
-    parts.push("Do not set media.type=gif.");
   }
 
   if (anyVisualGeneration || (allowReplyGifs && remainingGifs > 0)) {
-    parts.push("Set at most one media object for this reply.");
+    parts.push("Call generate_media at most once for this reply.");
   }
 
   parts.push("=== MEMORY SAVING ===");
 
   if (allowMemoryDirective) {
-    parts.push("If the incoming message contains durable info worth keeping, set memoryLine to a concise fact.");
+    parts.push("If the incoming message contains durable info worth keeping, call memory_write with namespace=guild and a concise fact.");
     parts.push(
-      "Use memoryLine only for lasting facts (names, preferences, recurring relationships, long-lived context), not throwaway chatter."
+      "Use memory_write only for lasting facts (names, preferences, recurring relationships, long-lived context), not throwaway chatter."
     );
     parts.push(
       "Do not save requests, dares, jokes, insults, toxic phrasing, or instructions about how you should talk/behave in future situations."
@@ -692,46 +635,27 @@ export function buildReplyPrompt({
     parts.push(
       "Future talking-style requests and recurring trigger/action behaviors belong in adaptive_directive_add / adaptive_directive_remove, not durable memory."
     );
+    parts.push("Use your own judgment: if a candidate is not a genuine durable fact, do not call memory_write.");
+    parts.push("Keep saved facts concise (under 180 chars) and factual.");
     parts.push(
-      "Use your own judgment: if a memory candidate is not a genuine durable fact, leave memoryLine as null."
+      "If your own reply introduces a durable self fact (stable identity, recurring preference, or explicit standing commitment), call memory_write with namespace=self."
     );
-    parts.push("Keep memoryLine concise (under 180 chars) and factual.");
+    parts.push("Use namespace=self only for durable facts about you, not temporary mood or throwaway phrasing.");
     parts.push(
-      "If your own reply introduces a durable self fact (stable identity, recurring preference, or explicit standing commitment), set selfMemoryLine."
+      "Do not store abusive nicknames, harassment, or future-behavior rules as namespace=self facts; use them only for genuine stable self facts."
     );
-    parts.push("Use selfMemoryLine only for durable facts about you, not temporary mood or throwaway phrasing.");
-    parts.push(
-      "Do not store abusive nicknames, harassment, or future-behavior rules as selfMemoryLine; use selfMemoryLine only for genuine stable self facts."
-    );
-    parts.push("Keep selfMemoryLine concise (under 180 chars), concrete, and grounded in your reply text.");
+    parts.push("Keep namespace=self facts concise (under 180 chars), concrete, and grounded in your reply text.");
   }
 
   parts.push("=== OUTPUT FORMAT ===");
   parts.push("Task: write one natural Discord reply for this turn.");
   parts.push("If recent messages are one coherent thread, you may combine and answer multiple messages in one reply.");
   parts.push("If recent messages are unrelated, prioritize the latest message and keep the reply focused.");
-  parts.push("Return strict JSON only. Do not output markdown or code fences.");
-  parts.push("JSON format:");
-  parts.push(REPLY_JSON_SCHEMA);
-  parts.push("Set skip=true only when no response should be sent. If skip=true, set text to [SKIP].");
-  parts.push("When no reaction is needed, set reactionEmoji to null.");
-  parts.push("When no media should be generated, set media to null.");
-  parts.push(
-    "When no lookup is needed, set webSearchQuery, browserBrowseQuery, memoryLookupQuery, imageLookupQuery, and openArticleRef to null."
-  );
-  parts.push("When no durable fact should be saved, set memoryLine to null.");
-  parts.push("When no durable self fact should be saved, set selfMemoryLine to null.");
-  parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false for text-channel replies.");
-  parts.push("When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.");
-  parts.push(
-    "Set voiceIntent.intent to one of join|leave|status|watch_stream|stop_watching_stream|stream_status|music_play_now|music_queue_next|music_queue_add|music_stop|music_pause|none."
-  );
-  parts.push("When voiceIntent.intent is music_play_now, music_queue_next, or music_queue_add, set voiceIntent.query to the song name the user wants.");
-  parts.push("Set voiceIntent.platform to youtube|soundcloud|auto when intent is music_play_now, music_queue_next, or music_queue_add. Use auto to search all platforms.");
-  parts.push("When searchResults are provided (from a previous music search), set voiceIntent.selectedResultId to the ID of the track to use for music_play_now, music_queue_next, or music_queue_add.");
-  parts.push("When not issuing voice control, set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null, and other voiceIntent fields to null.");
-  parts.push("Set screenShareIntent.action to one of offer_link|none.");
-  parts.push("When not offering a share link, set screenShareIntent.action=none, screenShareIntent.confidence=0, screenShareIntent.reason=null.");
+  parts.push("Return only the plain reply text for Discord.");
+  parts.push("If you should not send a reply, output exactly [SKIP].");
+  parts.push("Do not output JSON, markdown headings, code fences, labels, or helper field names.");
+  parts.push("Use tool calls for reactions, lookups, memory writes, media generation, screen-share links, automation control, and any other supported side-effects.");
+  parts.push("Do not encode tool intent in fake JSON fields or placeholder prose.");
 
   return parts.join("\n\n");
 }
@@ -901,44 +825,36 @@ export function buildAutomationPrompt({
   if ((allowSimpleImagePosts || allowComplexImagePosts || allowVideoPosts) && (imageSlots > 0 || videoSlots > 0)) {
     parts.push("Media generation is available for this automation run.");
     if (allowSimpleImagePosts && imageSlots > 0) {
-      parts.push("For simple image output, set media to {\"type\":\"image_simple\",\"prompt\":\"...\"}.");
+      parts.push("For simple image output, call generate_media with type=image_simple.");
     }
     if (allowComplexImagePosts && imageSlots > 0) {
-      parts.push("For detailed image output, set media to {\"type\":\"image_complex\",\"prompt\":\"...\"}.");
+      parts.push("For detailed image output, call generate_media with type=image_complex.");
     }
     if (allowVideoPosts && videoSlots > 0) {
-      parts.push("For short generated video, set media to {\"type\":\"video\",\"prompt\":\"...\"}.");
+      parts.push("For short generated video, call generate_media with type=video.");
     }
     parts.push(`Keep image/video prompts under ${maxMediaPromptChars} chars.`);
     parts.push(mediaGuidance);
   } else {
-    parts.push("Generated image/video is unavailable this run. Set media to null.");
+    parts.push("Generated image/video is unavailable this run.");
   }
 
   if (allowGifs && gifSlots > 0) {
-    parts.push("GIF lookup is available this run. Use media {\"type\":\"gif\",\"prompt\":\"short query\"} when it helps.");
+    parts.push("GIF lookup is available this run. Call generate_media with type=gif and a short query when it helps.");
   }
 
   parts.push("=== OUTPUT FORMAT ===");
-  parts.push("Return strict JSON only.");
-  parts.push("JSON format:");
-  parts.push(REPLY_JSON_SCHEMA);
-  parts.push("Set webSearchQuery, browserBrowseQuery, imageLookupQuery, openArticleRef, memoryLine, and selfMemoryLine to null.");
-  parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false.");
+  parts.push("Return only the plain Discord message text for this run.");
+  parts.push("Do not output JSON, markdown headings, code fences, labels, or helper field names.");
   if (allowMemoryLookupDirective) {
     if (!memoryLookup?.enabled) {
-      parts.push("Durable memory lookup is unavailable for this run. Set memoryLookupQuery to null.");
+      parts.push("Durable memory lookup is unavailable for this run.");
     } else {
       parts.push("Durable memory lookup is available.");
-      parts.push("If memory context is insufficient for the task, set memoryLookupQuery to a concise query.");
-      parts.push("If not needed, set memoryLookupQuery to null.");
+      parts.push("If memory context is insufficient for the task, call memory_search with a concise query.");
     }
-  } else {
-    parts.push("Set memoryLookupQuery to null.");
   }
-  parts.push("Set automationAction.operation=none.");
-  parts.push("Set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null, and other voiceIntent fields to null.");
-  parts.push("Set screenShareIntent.action=none, screenShareIntent.confidence=0, screenShareIntent.reason=null.");
+  parts.push("Use tool calls for memory lookup, memory writes, and media generation when needed.");
   parts.push("Use [SKIP] only when sending nothing is clearly best.");
 
   return parts.join("\n\n");

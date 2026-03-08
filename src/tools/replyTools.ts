@@ -17,6 +17,10 @@ import {
   BROWSER_BROWSE_SCHEMA,
   MEMORY_SEARCH_SCHEMA,
   MEMORY_WRITE_SCHEMA,
+  REACT_SCHEMA,
+  GENERATE_MEDIA_SCHEMA,
+  MANAGE_AUTOMATION_SCHEMA,
+  VOICE_SESSION_CONTROL_SCHEMA,
   ADAPTIVE_DIRECTIVE_ADD_SCHEMA,
   ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA,
   CONVERSATION_SEARCH_SCHEMA,
@@ -30,6 +34,7 @@ import {
   toAnthropicTool
 } from "./sharedToolSchemas.ts";
 import {
+  getAutomationsSettings,
   getDirectiveSettings,
   getMemorySettings,
   isBrowserEnabled,
@@ -274,6 +279,10 @@ const WEB_SCRAPE_TOOL: ReplyToolDefinition = toAnthropicTool(WEB_SCRAPE_SCHEMA);
 const BROWSER_BROWSE_TOOL: ReplyToolDefinition = toAnthropicTool(BROWSER_BROWSE_SCHEMA);
 const MEMORY_SEARCH_TOOL: ReplyToolDefinition = toAnthropicTool(MEMORY_SEARCH_SCHEMA);
 const MEMORY_WRITE_TOOL: ReplyToolDefinition = toAnthropicTool(MEMORY_WRITE_SCHEMA);
+const REACT_TOOL: ReplyToolDefinition = toAnthropicTool(REACT_SCHEMA);
+const GENERATE_MEDIA_TOOL: ReplyToolDefinition = toAnthropicTool(GENERATE_MEDIA_SCHEMA);
+const MANAGE_AUTOMATION_TOOL: ReplyToolDefinition = toAnthropicTool(MANAGE_AUTOMATION_SCHEMA);
+const VOICE_SESSION_CONTROL_TOOL: ReplyToolDefinition = toAnthropicTool(VOICE_SESSION_CONTROL_SCHEMA);
 const ADAPTIVE_STYLE_ADD_TOOL: ReplyToolDefinition = toAnthropicTool(ADAPTIVE_DIRECTIVE_ADD_SCHEMA);
 const ADAPTIVE_STYLE_REMOVE_TOOL: ReplyToolDefinition = toAnthropicTool(ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA);
 const CONVERSATION_SEARCH_TOOL: ReplyToolDefinition = toAnthropicTool(CONVERSATION_SEARCH_SCHEMA);
@@ -330,6 +339,10 @@ const ALL_REPLY_TOOLS: ReplyToolDefinition[] = [
   BROWSER_BROWSE_TOOL,
   MEMORY_SEARCH_TOOL,
   MEMORY_WRITE_TOOL,
+  REACT_TOOL,
+  GENERATE_MEDIA_TOOL,
+  MANAGE_AUTOMATION_TOOL,
+  VOICE_SESSION_CONTROL_TOOL,
   ADAPTIVE_STYLE_ADD_TOOL,
   ADAPTIVE_STYLE_REMOVE_TOOL,
   CONVERSATION_SEARCH_TOOL,
@@ -376,6 +389,11 @@ export function buildReplyToolSet(
     soundboardAvailable?: boolean;
     codeAgentAvailable?: boolean;
     voiceToolsAvailable?: boolean;
+    musicToolsAvailable?: boolean;
+    reactAvailable?: boolean;
+    generateMediaAvailable?: boolean;
+    automationManagementAvailable?: boolean;
+    voiceSessionControlAvailable?: boolean;
   } = {}
 ): ReplyToolDefinition[] {
   const tools: ReplyToolDefinition[] = [];
@@ -407,10 +425,36 @@ export function buildReplyToolSet(
     tools.push(MEMORY_WRITE_TOOL);
   }
 
+  if (capabilities.reactAvailable) {
+    tools.push(REACT_TOOL);
+  }
+
+  if (capabilities.generateMediaAvailable) {
+    tools.push(GENERATE_MEDIA_TOOL);
+  }
+
   const adaptiveDirectivesEnabled = isAdaptiveDirectivesEnabled(settings);
   if (capabilities.adaptiveDirectivesAvailable !== false && adaptiveDirectivesEnabled) {
     tools.push(ADAPTIVE_STYLE_ADD_TOOL);
     tools.push(ADAPTIVE_STYLE_REMOVE_TOOL);
+  }
+
+  if (
+    capabilities.automationManagementAvailable &&
+    Boolean(getAutomationsSettings(settings).enabled)
+  ) {
+    tools.push(MANAGE_AUTOMATION_TOOL);
+  }
+
+  if (capabilities.voiceSessionControlAvailable) {
+    tools.push(VOICE_SESSION_CONTROL_TOOL);
+  }
+
+  if (capabilities.musicToolsAvailable) {
+    for (const schema of VOICE_TOOL_SCHEMAS) {
+      if (!schema.name.startsWith("music_")) continue;
+      tools.push(toAnthropicTool(schema));
+    }
   }
 
   if (capabilities.conversationSearchAvailable !== false) {
