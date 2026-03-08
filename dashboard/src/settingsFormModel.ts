@@ -268,6 +268,7 @@ function buildSettingsFormView(settings: unknown) {
       inactivityLeaveSeconds: voiceSessionLimits.inactivityLeaveSeconds,
       maxSessionsPerDay: voiceSessionLimits.maxSessionsPerDay,
       replyEagerness: voiceConversation.replyEagerness,
+      streaming: voiceConversation.streaming,
       commandOnlyMode: voiceConversation.commandOnlyMode,
       thoughtEngine: {
         enabled: voiceInitiative.enabled,
@@ -329,6 +330,7 @@ export function settingsToForm(settings: unknown) {
   const defaultVoiceGeminiRealtime = defaults.voice.geminiRealtime;
   const defaultVoiceThoughtEngine = defaults.voice.thoughtEngine;
   const defaultVoiceGenerationLlm = defaults.voice.generationLlm;
+  const defaultVoiceStreaming = defaults.voice.streaming;
   const defaultVoiceStreamWatch = defaults.voice.streamWatch;
   const defaultVoiceSoundboard = defaults.voice.soundboard;
   const defaultStartup = defaults.startup;
@@ -467,6 +469,12 @@ export function settingsToForm(settings: unknown) {
     voiceInactivityLeaveSeconds: resolved?.voice?.inactivityLeaveSeconds ?? defaultVoice.inactivityLeaveSeconds,
     voiceMaxSessionsPerDay: resolved?.voice?.maxSessionsPerDay ?? defaultVoice.maxSessionsPerDay,
     voiceReplyEagerness: resolved?.voice?.replyEagerness ?? defaultVoice.replyEagerness,
+    voiceStreamingEnabled:
+      resolved?.voice?.streaming?.enabled ?? defaultVoiceStreaming.enabled,
+    voiceStreamingEagerFirstChunkChars:
+      resolved?.voice?.streaming?.eagerFirstChunkChars ?? defaultVoiceStreaming.eagerFirstChunkChars,
+    voiceStreamingMaxBufferChars:
+      resolved?.voice?.streaming?.maxBufferChars ?? defaultVoiceStreaming.maxBufferChars,
     voiceCommandOnlyMode: resolved?.voice?.commandOnlyMode ?? defaultVoice.commandOnlyMode,
     voiceThoughtEngineEnabled:
       resolved?.voice?.thoughtEngine?.enabled ?? defaultVoiceThoughtEngine.enabled,
@@ -1031,6 +1039,11 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
       },
       conversationPolicy: {
         replyEagerness: Number(form.voiceReplyEagerness),
+        streaming: {
+          enabled: Boolean(form.voiceStreamingEnabled),
+          eagerFirstChunkChars: Number(form.voiceStreamingEagerFirstChunkChars),
+          maxBufferChars: Number(form.voiceStreamingMaxBufferChars)
+        },
         commandOnlyMode: Boolean(form.voiceCommandOnlyMode),
         allowNsfwHumor: form.voiceAllowNsfwHumor,
         textOnlyMode: Boolean(form.voiceTextOnlyMode),

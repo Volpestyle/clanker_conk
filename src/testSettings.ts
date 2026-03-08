@@ -356,7 +356,12 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
         textOnlyMode: voice.textOnlyMode,
         replyPath: voice.replyPath,
         ttsMode: voice.ttsMode,
-        operationalMessages: voice.operationalMessages
+        operationalMessages: voice.operationalMessages,
+        streaming: {
+          enabled: Boolean(voice.streamingEnabled),
+          eagerFirstChunkChars: Number(voice.streamingEagerFirstChunkChars),
+          maxBufferChars: Number(voice.streamingMaxBufferChars)
+        }
       },
       admission: {
         mode:

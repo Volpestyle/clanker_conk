@@ -76,93 +76,9 @@ function baseSettings(overrides = {}) {
 function structuredVoiceOutput(overrides: {
   text?: string;
   skip?: boolean;
-  reactionEmoji?: string | null;
-  media?: {
-    type?: string | null;
-    prompt?: string | null;
-  } | null;
-  soundboardRefs?: string[];
-  leaveVoiceChannel?: boolean;
-  automationAction?: {
-    operation?: string;
-    title?: string | null;
-    instruction?: string | null;
-    schedule?: Record<string, unknown> | null;
-    targetQuery?: string | null;
-    automationId?: number | null;
-    runImmediately?: boolean;
-    targetChannelId?: string | null;
-  };
-  voiceIntent?: {
-    intent?: string;
-    confidence?: number;
-    reason?: string | null;
-  };
-  screenShareIntent?: {
-    action?: string;
-    confidence?: number;
-    reason?: string | null;
-  };
-  voiceAddressing?: {
-    talkingTo?: string | null;
-    directedConfidence?: number;
-  };
 } = {}) {
-  const base = {
-    text: "all good",
-    skip: false,
-    reactionEmoji: null,
-    media: null,
-    soundboardRefs: [],
-    leaveVoiceChannel: false,
-    automationAction: {
-      operation: "none",
-      title: null,
-      instruction: null,
-      schedule: null,
-      targetQuery: null,
-      automationId: null,
-      runImmediately: false,
-      targetChannelId: null
-    },
-    voiceIntent: {
-      intent: "none",
-      confidence: 0,
-      reason: null
-    },
-    screenShareIntent: {
-      action: "none",
-      confidence: 0,
-      reason: null
-    },
-    voiceAddressing: {
-      talkingTo: null,
-      directedConfidence: 0
-    }
-  };
-
-  const merged = {
-    ...base,
-    ...overrides,
-    automationAction: {
-      ...base.automationAction,
-      ...(overrides.automationAction || {})
-    },
-    voiceIntent: {
-      ...base.voiceIntent,
-      ...(overrides.voiceIntent || {})
-    },
-    screenShareIntent: {
-      ...base.screenShareIntent,
-      ...(overrides.screenShareIntent || {})
-    },
-    voiceAddressing: {
-      ...base.voiceAddressing,
-      ...(overrides.voiceAddressing || {})
-    }
-  };
-
-  return JSON.stringify(merged);
+  if (overrides.skip) return "[SKIP]";
+  return String(overrides.text || "all good");
 }
 
 function createVoiceBot({
@@ -245,6 +161,29 @@ function createVoiceBot({
         }
         return {
           text: generationText
+        };
+      },
+      async generateStreaming(payload) {
+        generationCalls += 1;
+        generationPayloads.push(payload);
+        if (generationError) throw generationError;
+        const entry =
+          Array.isArray(generationSequence) && generationCalls <= generationSequence.length
+            ? generationSequence[generationCalls - 1]
+            : { text: generationText };
+        if (entry && typeof entry === "object" && "text" in entry) {
+          const deltas = Array.isArray(entry.textDeltas)
+            ? entry.textDeltas
+            : [String(entry.text || "")];
+          for (const delta of deltas) {
+            payload.onTextDelta?.(String(delta || ""));
+          }
+          return entry;
+        }
+        const text = String(entry || "");
+        payload.onTextDelta?.(text);
+        return {
+          text
         };
       }
     },
@@ -498,12 +437,99 @@ test("generateVoiceTurnReply passes abort signal into llm generation", async () 
   assert.equal(generationPayloads[0]?.signal, controller.signal);
 });
 
-test("generateVoiceTurnReply parses soundboard tool-call fields and handles tool-based memory", async () => {
+test("generateVoiceTurnReply streams sentence chunks when voice streaming is enabled", async () => {
+  const streamed: string[] = [];
   const { bot } = createVoiceBot({
-    generationText: structuredVoiceOutput({
-      text: "bet",
-      soundboardRefs: ["airhorn@123"]
-    })
+    generationSequence: [
+      {
+        text: "this is the first sentence. second sentence.",
+        textDeltas: ["this is the first sentence. ", "second sentence."]
+      }
+    ]
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      voice: {
+        streamingEnabled: true,
+        streamingEagerFirstChunkChars: 10,
+        streamingMaxBufferChars: 120
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "say it in two parts",
+    onSpokenSentence: ({ text }) => {
+      streamed.push(text);
+    }
+  });
+
+  assert.deepEqual(streamed, ["this is the first sentence.", "second sentence."]);
+  assert.equal(reply.text, "this is the first sentence. second sentence.");
+  assert.equal(reply.streamedSentenceCount, 2);
+});
+
+test("generateVoiceTurnReply preserves spoken text across tool-loop turns", async () => {
+  const { bot } = createVoiceBot({
+    generationSequence: [
+      {
+        text: "let me check that.",
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "web_search",
+            input: { query: "nintendo ds release year" }
+          }
+        ],
+        rawContent: [
+          { type: "text", text: "let me check that." },
+          { type: "tool_use", id: "tc_1", name: "web_search", input: { query: "nintendo ds release year" } }
+        ]
+      },
+      {
+        text: "it shipped in 2004."
+      }
+    ]
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      webSearch: {
+        enabled: true
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "when did the ds come out?"
+  });
+
+  assert.equal(reply.usedWebSearchFollowup, true);
+  assert.equal(reply.text, "let me check that.\nit shipped in 2004.");
+});
+
+test("generateVoiceTurnReply captures soundboard tool-call results", async () => {
+  const { bot } = createVoiceBot({
+    generationSequence: [
+      {
+        text: "bet",
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "play_soundboard",
+            input: { refs: ["airhorn@123"] }
+          }
+        ],
+        rawContent: [
+          { type: "text", text: "bet" },
+          { type: "tool_use", id: "tc_1", name: "play_soundboard", input: { refs: ["airhorn@123"] } }
+        ]
+      },
+      {
+        text: ""
+      }
+    ]
   });
   const reply = await generateVoiceTurnReply(bot, {
     settings: baseSettings({
@@ -526,22 +552,49 @@ test("generateVoiceTurnReply parses soundboard tool-call fields and handles tool
         content: "what happened?"
       }
     ],
-    soundboardCandidates: ["airhorn@123"]
+    soundboardCandidates: ["airhorn@123"],
+    voiceToolCallbacks: {
+      playSoundboard: async (refs) => ({ ok: true, played: refs }),
+      setAddressing: async ({ talkingTo, confidence }) => ({ ok: true, talkingTo, directedConfidence: confidence }),
+      setScreenNote: async (note) => ({ ok: true, note }),
+      setScreenMoment: async (moment) => ({ ok: true, moment }),
+      leaveVoiceChannel: async () => ({ ok: true })
+    }
   });
 
   assert.equal(reply.text, "bet");
-  assert.deepEqual(reply.soundboardRefs, ["airhorn@123"]);
+  assert.deepEqual(reply.playedSoundboardRefs, ["airhorn@123"]);
 });
 
-test("generateVoiceTurnReply returns voice addressing annotation from model output", async () => {
+test("generateVoiceTurnReply returns voice addressing annotation from tool output", async () => {
   const { bot } = createVoiceBot({
-    generationText: structuredVoiceOutput({
-      text: "yo",
-      voiceAddressing: {
-        talkingTo: "assistant",
-        directedConfidence: 0.91
+    generationSequence: [
+      {
+        text: "yo",
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "set_addressing",
+            input: {
+              talkingTo: "assistant",
+              confidence: 0.91
+            }
+          }
+        ],
+        rawContent: [
+          { type: "text", text: "yo" },
+          {
+            type: "tool_use",
+            id: "tc_1",
+            name: "set_addressing",
+            input: { talkingTo: "assistant", confidence: 0.91 }
+          }
+        ]
+      },
+      {
+        text: ""
       }
-    })
+    ]
   });
 
   const reply = await generateVoiceTurnReply(bot, {
@@ -549,7 +602,14 @@ test("generateVoiceTurnReply returns voice addressing annotation from model outp
     guildId: "guild-1",
     channelId: "text-1",
     userId: "user-1",
-    transcript: "quick check"
+    transcript: "quick check",
+    voiceToolCallbacks: {
+      playSoundboard: async (refs) => ({ ok: true, played: refs }),
+      setAddressing: async ({ talkingTo, confidence }) => ({ ok: true, talkingTo, directedConfidence: confidence }),
+      setScreenNote: async (note) => ({ ok: true, note }),
+      setScreenMoment: async (moment) => ({ ok: true, moment }),
+      leaveVoiceChannel: async () => ({ ok: true })
+    }
   });
 
   assert.equal(reply.text, "yo");
@@ -559,10 +619,30 @@ test("generateVoiceTurnReply returns voice addressing annotation from model outp
 
 test("generateVoiceTurnReply preserves ordered soundboard refs from tool-call payload", async () => {
   const { bot } = createVoiceBot({
-    generationText: structuredVoiceOutput({
-      text: "bet",
-      soundboardRefs: ["airhorn@123", "rimshot@456"]
-    })
+    generationSequence: [
+      {
+        text: "bet",
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "play_soundboard",
+            input: { refs: ["airhorn@123", "rimshot@456"] }
+          }
+        ],
+        rawContent: [
+          { type: "text", text: "bet" },
+          {
+            type: "tool_use",
+            id: "tc_1",
+            name: "play_soundboard",
+            input: { refs: ["airhorn@123", "rimshot@456"] }
+          }
+        ]
+      },
+      {
+        text: ""
+      }
+    ]
   });
   const reply = await generateVoiceTurnReply(bot, {
     settings: baseSettings({
@@ -576,11 +656,18 @@ test("generateVoiceTurnReply preserves ordered soundboard refs from tool-call pa
     channelId: "text-1",
     userId: "user-1",
     transcript: "drop both",
-    soundboardCandidates: ["airhorn@123", "rimshot@456"]
+    soundboardCandidates: ["airhorn@123", "rimshot@456"],
+    voiceToolCallbacks: {
+      playSoundboard: async (refs) => ({ ok: true, played: refs }),
+      setAddressing: async ({ talkingTo, confidence }) => ({ ok: true, talkingTo, directedConfidence: confidence }),
+      setScreenNote: async (note) => ({ ok: true, note }),
+      setScreenMoment: async (moment) => ({ ok: true, moment }),
+      leaveVoiceChannel: async () => ({ ok: true })
+    }
   });
 
   assert.equal(reply.text, "bet");
-  assert.deepEqual(reply.soundboardRefs, ["airhorn@123", "rimshot@456"]);
+  assert.deepEqual(reply.playedSoundboardRefs, ["airhorn@123", "rimshot@456"]);
 });
 
 test("generateVoiceTurnReply injects recent conversation history into the prompt", async () => {
@@ -661,11 +748,43 @@ test("generateVoiceTurnReply injects recent voice effects into the prompt", asyn
   );
 });
 
-test("generateVoiceTurnReply drops soundboard refs when soundboard is disabled", async () => {
+test("generateVoiceTurnReply excludes play_soundboard when soundboard is disabled", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: structuredVoiceOutput({
+      text: "copy that"
+    })
+  });
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      voice: {
+        soundboard: {
+          enabled: false
+        }
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "say something",
+    soundboardCandidates: ["airhorn@123"],
+    voiceToolCallbacks: {
+      playSoundboard: async (refs) => ({ ok: true, played: refs }),
+      setAddressing: async ({ talkingTo, confidence }) => ({ ok: true, talkingTo, directedConfidence: confidence }),
+      setScreenNote: async (note) => ({ ok: true, note }),
+      setScreenMoment: async (moment) => ({ ok: true, moment }),
+      leaveVoiceChannel: async () => ({ ok: true })
+    }
+  });
+
+  const toolNames = (Array.isArray(generationPayloads[0]?.tools) ? generationPayloads[0].tools : [])
+    .map((entry) => String(entry?.name || ""));
+  assert.equal(toolNames.includes("play_soundboard"), false);
+});
+
+test("generateVoiceTurnReply keeps spoken text when soundboard is disabled", async () => {
   const { bot } = createVoiceBot({
     generationText: structuredVoiceOutput({
-      text: "copy that",
-      soundboardRefs: ["airhorn@123"]
+      text: "copy that"
     })
   });
   const reply = await generateVoiceTurnReply(bot, {
@@ -684,41 +803,30 @@ test("generateVoiceTurnReply drops soundboard refs when soundboard is disabled",
   });
 
   assert.equal(reply.text, "copy that");
-  assert.deepEqual(reply.soundboardRefs, []);
+  assert.deepEqual(reply.playedSoundboardRefs || [], []);
 });
 
-test("generateVoiceTurnReply keeps spoken text and ignores soundboard refs when disabled", async () => {
+test("generateVoiceTurnReply keeps spoken text alongside soundboard playback", async () => {
   const { bot } = createVoiceBot({
-    generationText: structuredVoiceOutput({
-      text: "copy that",
-      soundboardRefs: ["airhorn@123"]
-    })
-  });
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings({
-      voice: {
-        soundboard: {
-          enabled: false
-        }
+    generationSequence: [
+      {
+        text: "playing it now",
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "play_soundboard",
+            input: { refs: ["airhorn@123"] }
+          }
+        ],
+        rawContent: [
+          { type: "text", text: "playing it now" },
+          { type: "tool_use", id: "tc_1", name: "play_soundboard", input: { refs: ["airhorn@123"] } }
+        ]
+      },
+      {
+        text: ""
       }
-    }),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "say something",
-    soundboardCandidates: ["airhorn@123"]
-  });
-
-  assert.equal(reply.text, "copy that");
-  assert.deepEqual(reply.soundboardRefs, []);
-});
-
-test("generateVoiceTurnReply strips selected soundboard id and name from spoken text", async () => {
-  const { bot } = createVoiceBot({
-    generationText: structuredVoiceOutput({
-      text: "playing airhorn@123 now airhorn",
-      soundboardRefs: ["airhorn@123"]
-    })
+    ]
   });
   const reply = await generateVoiceTurnReply(bot, {
     settings: baseSettings({
@@ -732,19 +840,40 @@ test("generateVoiceTurnReply strips selected soundboard id and name from spoken 
     channelId: "text-1",
     userId: "user-1",
     transcript: "drop a sound",
-    soundboardCandidates: ["airhorn@123 | airhorn"]
+    soundboardCandidates: ["airhorn@123 | airhorn"],
+    voiceToolCallbacks: {
+      playSoundboard: async (refs) => ({ ok: true, played: refs }),
+      setAddressing: async ({ talkingTo, confidence }) => ({ ok: true, talkingTo, directedConfidence: confidence }),
+      setScreenNote: async (note) => ({ ok: true, note }),
+      setScreenMoment: async (moment) => ({ ok: true, moment }),
+      leaveVoiceChannel: async () => ({ ok: true })
+    }
   });
 
-  assert.equal(reply.text, "playing now");
-  assert.deepEqual(reply.soundboardRefs, ["airhorn@123"]);
+  assert.equal(reply.text, "playing it now");
+  assert.deepEqual(reply.playedSoundboardRefs, ["airhorn@123"]);
 });
 
-test("generateVoiceTurnReply preserves soundboard ref when scrubbed speech becomes empty", async () => {
+test("generateVoiceTurnReply supports soundboard-only turns", async () => {
   const { bot } = createVoiceBot({
-    generationText: structuredVoiceOutput({
-      text: "airhorn@123",
-      soundboardRefs: ["airhorn@123"]
-    })
+    generationSequence: [
+      {
+        text: "",
+        toolCalls: [
+          {
+            id: "tc_1",
+            name: "play_soundboard",
+            input: { refs: ["airhorn@123"] }
+          }
+        ],
+        rawContent: [
+          { type: "tool_use", id: "tc_1", name: "play_soundboard", input: { refs: ["airhorn@123"] } }
+        ]
+      },
+      {
+        text: ""
+      }
+    ]
   });
   const reply = await generateVoiceTurnReply(bot, {
     settings: baseSettings({
@@ -758,11 +887,18 @@ test("generateVoiceTurnReply preserves soundboard ref when scrubbed speech becom
     channelId: "text-1",
     userId: "user-1",
     transcript: "drop a sound",
-    soundboardCandidates: ["airhorn@123 | airhorn"]
+    soundboardCandidates: ["airhorn@123 | airhorn"],
+    voiceToolCallbacks: {
+      playSoundboard: async (refs) => ({ ok: true, played: refs }),
+      setAddressing: async ({ talkingTo, confidence }) => ({ ok: true, talkingTo, directedConfidence: confidence }),
+      setScreenNote: async (note) => ({ ok: true, note }),
+      setScreenMoment: async (moment) => ({ ok: true, moment }),
+      leaveVoiceChannel: async () => ({ ok: true })
+    }
   });
 
   assert.equal(reply.text, "");
-  assert.deepEqual(reply.soundboardRefs, ["airhorn@123"]);
+  assert.deepEqual(reply.playedSoundboardRefs, ["airhorn@123"]);
 });
 
 test("generateVoiceTurnReply logs voice errors when generation fails", async () => {

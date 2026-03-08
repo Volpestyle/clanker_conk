@@ -10,6 +10,7 @@ import {
   buildOpenAiJsonSchemaTextFormat,
   buildOpenAiReasoningParam,
   buildOpenAiTemperatureParam,
+  type ChatModelStreamCallbacks,
   type ChatModelRequest
 } from "./serviceShared.ts";
 
@@ -18,6 +19,104 @@ export type ChatGenerationDeps = {
   xai: OpenAI | null;
   anthropic: Anthropic | null;
 };
+
+function buildAnthropicMessagesRequest({
+  model,
+  systemPrompt,
+  userPrompt,
+  imageInputs = [],
+  contextMessages = [],
+  temperature,
+  maxOutputTokens,
+  tools = []
+}: ChatModelRequest) {
+  const imageParts = buildAnthropicImageParts(imageInputs);
+  const normalizedUserPrompt = String(userPrompt || "");
+  const userContent: string | Array<Record<string, unknown>> = imageParts.length
+    ? [
+        ...(normalizedUserPrompt.trim()
+          ? [{ type: "text", text: normalizedUserPrompt } as Record<string, unknown>]
+          : []),
+        ...imageParts
+      ]
+    : normalizedUserPrompt;
+
+  const messages = [
+    ...contextMessages.map((msg) => ({
+      role: msg.role === "assistant" ? "assistant" : "user",
+      content: msg.content
+    })),
+    { role: "user", content: userContent }
+  ];
+
+  const resolvedTemperature = Math.max(0, Math.min(Number(temperature) || 0, 1));
+  const normalizedTools = Array.isArray(tools) ? tools : [];
+  const toolsParam = normalizedTools.length
+    ? {
+        tools: normalizedTools.map((tool) => ({
+          name: tool.name,
+          description: tool.description,
+          input_schema: tool.input_schema
+        }))
+      }
+    : {};
+
+  return {
+    model,
+    system: systemPrompt,
+    temperature: resolvedTemperature,
+    max_tokens: maxOutputTokens,
+    messages,
+    ...toolsParam
+  } as Parameters<Anthropic["messages"]["create"]>[0];
+}
+
+function buildAnthropicResponse(
+  response: {
+    content: Array<{
+      type: string;
+      text?: string;
+      id?: string;
+      name?: string;
+      input?: Record<string, unknown>;
+    }>;
+    stop_reason?: string | null;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
+    };
+  }
+) {
+  const text = response.content
+    .filter((item) => item.type === "text")
+    .map((item) => item.text)
+    .join("\n")
+    .trim();
+
+  const toolCalls = response.content
+    .filter((item) => item.type === "tool_use")
+    .map((item) => ({
+      id: String(item.id || ""),
+      name: String(item.name || ""),
+      input: item.input || {}
+    }))
+    .filter((item) => item.id && item.name);
+
+  return {
+    text,
+    toolCalls,
+    rawContent: response.content,
+    stopReason: response.stop_reason || "end_turn",
+    usage: {
+      inputTokens: Number(response.usage?.input_tokens || 0),
+      outputTokens: Number(response.usage?.output_tokens || 0),
+      cacheWriteTokens: Number(response.usage?.cache_creation_input_tokens || 0),
+      cacheReadTokens: Number(response.usage?.cache_read_input_tokens || 0)
+    }
+  };
+}
 
 export async function callOpenAI(deps: ChatGenerationDeps, request: ChatModelRequest) {
   if (!deps.openai) {
@@ -236,61 +335,17 @@ export async function callXaiChatCompletions(
 
 export async function callAnthropic(
   deps: Pick<ChatGenerationDeps, "anthropic">,
-  {
-    model,
-    systemPrompt,
-    userPrompt,
-    imageInputs = [],
-    contextMessages = [],
-    temperature,
-    maxOutputTokens,
-    tools = [],
-    signal
-  }: ChatModelRequest
+  request: ChatModelRequest
 ) {
   if (!deps.anthropic) {
     throw new Error("Anthropic LLM calls require ANTHROPIC_API_KEY.");
   }
 
-  const imageParts = buildAnthropicImageParts(imageInputs);
-  const normalizedUserPrompt = String(userPrompt || "");
-  const userContent: string | Array<Record<string, unknown>> = imageParts.length
-    ? [
-        ...(normalizedUserPrompt.trim()
-          ? [{ type: "text", text: normalizedUserPrompt } as Record<string, unknown>]
-          : []),
-        ...imageParts
-      ]
-    : normalizedUserPrompt;
-
-  const messages = [
-    ...contextMessages.map((msg) => ({
-      role: msg.role === "assistant" ? "assistant" : "user",
-      content: msg.content
-    })),
-    { role: "user", content: userContent }
-  ];
-
-  const resolvedTemperature = Math.max(0, Math.min(Number(temperature) || 0, 1));
-  const normalizedTools = Array.isArray(tools) ? tools : [];
-  const toolsParam = normalizedTools.length
-    ? {
-        tools: normalizedTools.map((tool) => ({
-          name: tool.name,
-          description: tool.description,
-          input_schema: tool.input_schema
-        }))
-      }
-    : {};
-  const requestBody = {
-    model,
-    system: systemPrompt,
-    temperature: resolvedTemperature,
-    max_tokens: maxOutputTokens,
-    messages,
-    ...toolsParam
-  } as Parameters<typeof deps.anthropic.messages.create>[0];
-  const response = await deps.anthropic.messages.create(requestBody as never, signal ? { signal } : undefined) as {
+  const requestBody = buildAnthropicMessagesRequest(request);
+  const response = await deps.anthropic.messages.create(
+    requestBody as never,
+    request.signal ? { signal: request.signal } : undefined
+  ) as {
     content: Array<{
       type: string;
       text?: string;
@@ -298,7 +353,7 @@ export async function callAnthropic(
       name?: string;
       input?: Record<string, unknown>;
     }>;
-    stop_reason?: string;
+    stop_reason?: string | null;
     usage?: {
       input_tokens?: number;
       output_tokens?: number;
@@ -307,30 +362,78 @@ export async function callAnthropic(
     };
   };
 
-  const text = response.content
-    .filter((item) => item.type === "text")
-    .map((item) => item.text)
-    .join("\n")
-    .trim();
+  return buildAnthropicResponse(response);
+}
 
-  const toolCalls = response.content
-    .filter((item) => item.type === "tool_use")
-    .map((item) => ({
-      id: item.id,
-      name: item.name,
-      input: item.input
-    }));
+export async function callAnthropicStreaming(
+  deps: Pick<ChatGenerationDeps, "anthropic">,
+  request: ChatModelRequest,
+  callbacks: ChatModelStreamCallbacks
+) {
+  if (!deps.anthropic) {
+    throw new Error("Anthropic LLM calls require ANTHROPIC_API_KEY.");
+  }
 
-  return {
-    text,
-    toolCalls,
-    rawContent: toolCalls.length ? response.content : null,
-    stopReason: response.stop_reason || "end_turn",
-    usage: {
-      inputTokens: Number(response.usage?.input_tokens || 0),
-      outputTokens: Number(response.usage?.output_tokens || 0),
-      cacheWriteTokens: Number(response.usage?.cache_creation_input_tokens || 0),
-      cacheReadTokens: Number(response.usage?.cache_read_input_tokens || 0)
+  const requestBody = buildAnthropicMessagesRequest(request);
+  const stream = deps.anthropic.messages.stream(requestBody as never);
+  const abortSignal = callbacks.signal || request.signal;
+  let removeAbortListener: (() => void) | null = null;
+
+  if (abortSignal) {
+    if (abortSignal.aborted) {
+      stream.abort();
+      throw abortSignal.reason ?? new Error("Anthropic stream aborted before start.");
     }
-  };
+    const abortListener = () => {
+      stream.abort();
+    };
+    abortSignal.addEventListener("abort", abortListener, { once: true });
+    removeAbortListener = () => {
+      abortSignal.removeEventListener("abort", abortListener);
+    };
+  }
+
+  stream.on("text", (delta) => {
+    callbacks.onTextDelta(String(delta || ""));
+  });
+
+  try {
+    const response = await stream.finalMessage() as {
+      content: Array<{
+        type: string;
+        text?: string;
+        id?: string;
+        name?: string;
+        input?: Record<string, unknown>;
+      }>;
+      stop_reason?: string | null;
+      usage?: {
+        input_tokens?: number;
+        output_tokens?: number;
+        cache_creation_input_tokens?: number;
+        cache_read_input_tokens?: number;
+      };
+    };
+    const normalized = buildAnthropicResponse(response);
+    if (typeof callbacks.onContentBlockComplete === "function") {
+      for (const block of response.content) {
+        if (block.type === "text" && typeof block.text === "string" && block.text.trim()) {
+          callbacks.onContentBlockComplete({ type: "text", text: block.text });
+          continue;
+        }
+        if (block.type === "tool_use" && block.id && block.name) {
+          callbacks.onContentBlockComplete({
+            type: "tool_use",
+            id: block.id,
+            name: block.name,
+            input: block.input || {}
+          });
+        }
+      }
+    }
+    callbacks.onComplete?.(normalized);
+    return normalized;
+  } finally {
+    removeAbortListener?.();
+  }
 }

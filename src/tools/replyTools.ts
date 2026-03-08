@@ -22,6 +22,10 @@ import {
   CONVERSATION_SEARCH_SCHEMA,
   CODE_TASK_SCHEMA,
   OFFER_SCREEN_SHARE_LINK_SCHEMA,
+  PLAY_SOUNDBOARD_SCHEMA,
+  SCREEN_MOMENT_SCHEMA,
+  SCREEN_NOTE_SCHEMA,
+  SET_ADDRESSING_SCHEMA,
   VOICE_TOOL_SCHEMAS,
   toAnthropicTool
 } from "./sharedToolSchemas.ts";
@@ -237,6 +241,14 @@ type ReplyToolRuntime = {
     musicResume: () => Promise<{ ok: boolean }>;
     musicSkip: () => Promise<{ ok: boolean; nextTrack?: Record<string, unknown> }>;
     musicNowPlaying: () => Promise<{ ok: boolean; now_playing: Record<string, unknown> | null; queue_state: Record<string, unknown> }>;
+    playSoundboard: (refs: string[], transcript: string) => Promise<{ ok: boolean; played: string[]; rejected?: string[] }>;
+    setAddressing: (payload: { talkingTo: string | null; confidence: number }) => Promise<{
+      ok: boolean;
+      talkingTo: string | null;
+      directedConfidence: number;
+    }>;
+    setScreenNote: (note: string) => Promise<{ ok: boolean; note: string }>;
+    setScreenMoment: (moment: string) => Promise<{ ok: boolean; moment: string }>;
     leaveVoiceChannel: () => Promise<{ ok: boolean }>;
   };
 };
@@ -267,6 +279,10 @@ const ADAPTIVE_STYLE_REMOVE_TOOL: ReplyToolDefinition = toAnthropicTool(ADAPTIVE
 const CONVERSATION_SEARCH_TOOL: ReplyToolDefinition = toAnthropicTool(CONVERSATION_SEARCH_SCHEMA);
 const CODE_TASK_TOOL: ReplyToolDefinition = toAnthropicTool(CODE_TASK_SCHEMA);
 const OFFER_SCREEN_SHARE_LINK_TOOL: ReplyToolDefinition = toAnthropicTool(OFFER_SCREEN_SHARE_LINK_SCHEMA);
+const PLAY_SOUNDBOARD_TOOL: ReplyToolDefinition = toAnthropicTool(PLAY_SOUNDBOARD_SCHEMA);
+const SET_ADDRESSING_TOOL: ReplyToolDefinition = toAnthropicTool(SET_ADDRESSING_SCHEMA);
+const SCREEN_NOTE_TOOL: ReplyToolDefinition = toAnthropicTool(SCREEN_NOTE_SCHEMA);
+const SCREEN_MOMENT_TOOL: ReplyToolDefinition = toAnthropicTool(SCREEN_MOMENT_SCHEMA);
 
 const IMAGE_LOOKUP_TOOL: ReplyToolDefinition = {
   name: "image_lookup",
@@ -357,6 +373,7 @@ export function buildReplyToolSet(
     imageLookupAvailable?: boolean;
     openArticleAvailable?: boolean;
     screenShareAvailable?: boolean;
+    soundboardAvailable?: boolean;
     codeAgentAvailable?: boolean;
     voiceToolsAvailable?: boolean;
   } = {}
@@ -421,6 +438,9 @@ export function buildReplyToolSet(
 
   if (capabilities.voiceToolsAvailable) {
     for (const schema of VOICE_TOOL_SCHEMAS) {
+      if (schema.name === "play_soundboard" && capabilities.soundboardAvailable === false) {
+        continue;
+      }
       tools.push(toAnthropicTool(schema));
     }
   }
@@ -460,6 +480,14 @@ export async function executeReplyTool(
       return executeOpenArticle(input, runtime, context);
     case "offer_screen_share_link":
       return executeOfferScreenShareLink(runtime, context);
+    case "play_soundboard":
+      return executePlaySoundboard(input, runtime, context);
+    case "set_addressing":
+      return executeSetAddressing(input, runtime, context);
+    case "screen_note":
+      return executeScreenNote(input, runtime, context);
+    case "screen_moment":
+      return executeScreenMoment(input, runtime, context);
     case "leave_voice_channel":
       return executeLeaveVoiceChannel(runtime, context.signal);
     case "code_task":
@@ -1014,6 +1042,154 @@ async function executeOfferScreenShareLink(
   }
 }
 
+async function executePlaySoundboard(
+  input: ReplyToolCallInput,
+  runtime: ReplyToolRuntime,
+  context: ReplyToolContext
+): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
+  if (!runtime.voiceSession?.playSoundboard) {
+    return { content: "Soundboard playback is not available.", isError: true };
+  }
+
+  const refs = Array.isArray(input?.refs)
+    ? input.refs
+      .map((entry) => String(entry || "").trim().slice(0, 180))
+      .filter(Boolean)
+      .slice(0, 10)
+    : [];
+  if (!refs.length) {
+    return { content: "No soundboard refs provided.", isError: true };
+  }
+
+  try {
+    const result = await runtime.voiceSession.playSoundboard(refs, context.sourceText);
+    return {
+      content: JSON.stringify({
+        ok: Boolean(result?.ok),
+        played: Array.isArray(result?.played) ? result.played : [],
+        rejected: Array.isArray(result?.rejected) ? result.rejected : []
+      }),
+      isError: result?.ok === false
+    };
+  } catch (error) {
+    return {
+      content: `Soundboard playback failed: ${String((error as Error)?.message || error)}`,
+      isError: true
+    };
+  }
+}
+
+async function executeSetAddressing(
+  input: ReplyToolCallInput,
+  runtime: ReplyToolRuntime,
+  context: ReplyToolContext
+): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
+  if (!runtime.voiceSession?.setAddressing) {
+    return { content: "Voice addressing updates are not available.", isError: true };
+  }
+
+  const rawTalkingTo = input?.talkingTo;
+  const talkingTo =
+    rawTalkingTo == null
+      ? null
+      : String(rawTalkingTo || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 80) || null;
+  const confidenceRaw = Number(input?.confidence);
+  const confidence = Number.isFinite(confidenceRaw)
+    ? Math.max(0, Math.min(1, confidenceRaw))
+    : 0;
+
+  try {
+    const result = await runtime.voiceSession.setAddressing({
+      talkingTo,
+      confidence
+    });
+    return {
+      content: JSON.stringify({
+        ok: Boolean(result?.ok),
+        talkingTo: result?.talkingTo ?? talkingTo,
+        directedConfidence: Number.isFinite(Number(result?.directedConfidence))
+          ? Math.max(0, Math.min(1, Number(result.directedConfidence)))
+          : confidence
+      }),
+      isError: result?.ok === false
+    };
+  } catch (error) {
+    return {
+      content: `Voice addressing update failed: ${String((error as Error)?.message || error)}`,
+      isError: true
+    };
+  }
+}
+
+async function executeScreenNote(
+  input: ReplyToolCallInput,
+  runtime: ReplyToolRuntime,
+  context: ReplyToolContext
+): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
+  if (!runtime.voiceSession?.setScreenNote) {
+    return { content: "Screen notes are not available.", isError: true };
+  }
+
+  const note = String(input?.note || "").replace(/\s+/g, " ").trim().slice(0, 220);
+  if (!note) {
+    return { content: "Missing screen note.", isError: true };
+  }
+
+  try {
+    const result = await runtime.voiceSession.setScreenNote(note);
+    return {
+      content: JSON.stringify({
+        ok: Boolean(result?.ok),
+        note: String(result?.note || note)
+      }),
+      isError: result?.ok === false
+    };
+  } catch (error) {
+    return {
+      content: `Screen note failed: ${String((error as Error)?.message || error)}`,
+      isError: true
+    };
+  }
+}
+
+async function executeScreenMoment(
+  input: ReplyToolCallInput,
+  runtime: ReplyToolRuntime,
+  context: ReplyToolContext
+): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
+  if (!runtime.voiceSession?.setScreenMoment) {
+    return { content: "Screen moments are not available.", isError: true };
+  }
+
+  const moment = String(input?.moment || "").replace(/\s+/g, " ").trim().slice(0, 220);
+  if (!moment) {
+    return { content: "Missing screen moment.", isError: true };
+  }
+
+  try {
+    const result = await runtime.voiceSession.setScreenMoment(moment);
+    return {
+      content: JSON.stringify({
+        ok: Boolean(result?.ok),
+        moment: String(result?.moment || moment)
+      }),
+      isError: result?.ok === false
+    };
+  } catch (error) {
+    return {
+      content: `Screen moment failed: ${String((error as Error)?.message || error)}`,
+      isError: true
+    };
+  }
+}
+
 async function executeLeaveVoiceChannel(
   runtime: ReplyToolRuntime,
   signal?: AbortSignal
@@ -1252,6 +1428,10 @@ export {
   IMAGE_LOOKUP_TOOL,
   OPEN_ARTICLE_TOOL,
   OFFER_SCREEN_SHARE_LINK_TOOL,
+  PLAY_SOUNDBOARD_TOOL,
+  SET_ADDRESSING_TOOL,
+  SCREEN_NOTE_TOOL,
+  SCREEN_MOMENT_TOOL,
   CODE_TASK_TOOL
 };
 

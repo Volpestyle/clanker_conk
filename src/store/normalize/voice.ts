@@ -106,7 +106,25 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
       operationalMessages: normalizeOperationalMessages(
         conversationPolicy.operationalMessages,
         DEFAULT_SETTINGS.voice.conversationPolicy.operationalMessages
-      )
+      ),
+      streaming: {
+        enabled: normalizeBoolean(
+          conversationPolicy.streaming?.enabled,
+          DEFAULT_SETTINGS.voice.conversationPolicy.streaming.enabled
+        ),
+        eagerFirstChunkChars: normalizeInt(
+          conversationPolicy.streaming?.eagerFirstChunkChars,
+          DEFAULT_SETTINGS.voice.conversationPolicy.streaming.eagerFirstChunkChars,
+          20,
+          220
+        ),
+        maxBufferChars: normalizeInt(
+          conversationPolicy.streaming?.maxBufferChars,
+          DEFAULT_SETTINGS.voice.conversationPolicy.streaming.maxBufferChars,
+          80,
+          800
+        )
+      }
     },
     admission: {
       mode: normalizeVoiceAdmissionMode(admission.mode, DEFAULT_SETTINGS.voice.admission.mode),

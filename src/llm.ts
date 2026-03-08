@@ -11,6 +11,7 @@ import {
 } from "./llm/audioService.ts";
 import {
   callAnthropic as callAnthropicRequest,
+  callAnthropicStreaming as callAnthropicStreamingRequest,
   callOpenAI as callOpenAIRequest,
   callOpenAiResponses as callOpenAiResponsesRequest,
   callXai as callXaiRequest,
@@ -62,6 +63,7 @@ import {
 import {
   appendJsonSchemaInstruction,
   type ChatModelRequest,
+  type ChatModelStreamCallbacks,
   type ContextMessage,
   type ImageInput,
   type LLMAppConfig,
@@ -365,6 +367,161 @@ export class LLMService {
     }
   }
 
+  async generateStreaming({
+    settings,
+    systemPrompt,
+    userPrompt,
+    imageInputs = [],
+    contextMessages = [],
+    trace = {
+      guildId: null,
+      channelId: null,
+      userId: null,
+      source: null,
+      event: null,
+      reason: null,
+      messageId: null
+    },
+    jsonSchema = "",
+    tools = [],
+    signal,
+    onTextDelta
+  }: {
+    settings: unknown;
+    systemPrompt: string;
+    userPrompt: string;
+    imageInputs?: ImageInput[];
+    contextMessages?: ContextMessage[];
+    trace?: {
+      guildId?: unknown;
+      channelId?: unknown;
+      userId?: unknown;
+      source?: unknown;
+      event?: unknown;
+      reason?: unknown;
+      messageId?: unknown;
+    };
+    jsonSchema?: string;
+    tools?: ChatModelRequest["tools"];
+    signal?: AbortSignal;
+    onTextDelta: (delta: string) => void;
+  }) {
+    const orchestrator = getResolvedOrchestratorBinding(settings);
+    const replyGeneration = getReplyGenerationSettings(settings);
+    const { provider, model } = this.resolveProviderAndModel(orchestrator);
+    const temperature = Number(orchestrator.temperature) || 0.9;
+    const maxOutputTokens = Number(orchestrator.maxOutputTokens) || 800;
+    const normalizedJsonSchema = String(jsonSchema || "").trim();
+    const normalizedTools = Array.isArray(tools) ? tools : [];
+    const normalizedTrace: LlmTrace = {
+      guildId: trace.guildId == null ? null : String(trace.guildId),
+      channelId: trace.channelId == null ? null : String(trace.channelId),
+      userId: trace.userId == null ? null : String(trace.userId),
+      source: trace.source == null ? null : String(trace.source),
+      event: trace.event == null ? null : String(trace.event),
+      reason: trace.reason == null ? null : String(trace.reason),
+      messageId: trace.messageId == null ? null : String(trace.messageId)
+    };
+
+    if (
+      normalizedJsonSchema ||
+      (provider !== "anthropic" && provider !== "claude-oauth")
+    ) {
+      return await this.generate({
+        settings,
+        systemPrompt,
+        userPrompt,
+        imageInputs,
+        contextMessages,
+        trace: normalizedTrace,
+        jsonSchema: normalizedJsonSchema,
+        tools: normalizedTools,
+        signal
+      }).then((response) => {
+        if (response.text) {
+          onTextDelta(response.text);
+        }
+        return response;
+      });
+    }
+    try {
+      const response = await this.callChatModelStreaming(provider, {
+        model,
+        systemPrompt,
+        userPrompt,
+        imageInputs,
+        contextMessages,
+        temperature,
+        maxOutputTokens,
+        reasoningEffort: orchestrator.reasoningEffort,
+        jsonSchema: normalizedJsonSchema,
+        trace: normalizedTrace,
+        tools: normalizedTools,
+        signal
+      }, {
+        onTextDelta,
+        signal
+      });
+      const toolCalls = Array.isArray(response.toolCalls) ? response.toolCalls : [];
+      const rawContent = response.rawContent || null;
+
+      const costUsd = estimateUsdCost({
+        provider,
+        model,
+        inputTokens: response.usage.inputTokens,
+        outputTokens: response.usage.outputTokens,
+        cacheWriteTokens: Number(response.usage.cacheWriteTokens || 0),
+        cacheReadTokens: Number(response.usage.cacheReadTokens || 0),
+        customPricing: replyGeneration.pricing
+      });
+
+      this.store.logAction({
+        kind: "llm_call",
+        guildId: normalizedTrace.guildId,
+        channelId: normalizedTrace.channelId,
+        userId: normalizedTrace.userId,
+        content: `${provider}:${model}`,
+        metadata: {
+          provider,
+          model,
+          usage: response.usage,
+          inputImages: imageInputs.length,
+          toolCallCount: toolCalls.length,
+          source: normalizedTrace.source || null,
+          event: normalizedTrace.event || null,
+          reason: normalizedTrace.reason || null,
+          messageId: normalizedTrace.messageId || null,
+          streaming: true
+        },
+        usdCost: costUsd
+      });
+
+      return {
+        text: response.text,
+        toolCalls,
+        rawContent,
+        provider,
+        model,
+        usage: response.usage,
+        costUsd
+      };
+    } catch (error) {
+      this.store.logAction({
+        kind: "llm_error",
+        guildId: normalizedTrace.guildId,
+        channelId: normalizedTrace.channelId,
+        userId: normalizedTrace.userId,
+        content: String(error?.message || error),
+        metadata: {
+          provider,
+          model,
+          streaming: true
+        }
+      });
+      throw error;
+    }
+  }
+
   async callChatModel(
     provider: string,
     payload: ChatModelRequest & { trace?: LlmTrace }
@@ -388,6 +545,20 @@ export class LLMService {
       return callOpenAIRequest(this.chatDeps(), payload);
     }
     throw new Error(`Unsupported LLM provider '${provider}'.`);
+  }
+
+  async callChatModelStreaming(
+    provider: string,
+    payload: ChatModelRequest & { trace?: LlmTrace },
+    callbacks: ChatModelStreamCallbacks
+  ) {
+    if (provider === "claude-oauth") {
+      return callAnthropicStreamingRequest(this.chatDeps("claude-oauth"), payload, callbacks);
+    }
+    if (provider === "anthropic") {
+      return callAnthropicStreamingRequest(this.chatDeps(), payload, callbacks);
+    }
+    throw new Error(`Streaming is not supported for LLM provider '${provider}'.`);
   }
 
   async callMemoryExtractionModel(provider: string, payload: MemoryExtractionRequest) {
@@ -611,6 +782,10 @@ export class LLMService {
 
   async callAnthropic(request: ChatModelRequest) {
     return callAnthropicRequest(this.chatDeps(), request);
+  }
+
+  async callAnthropicStreaming(request: ChatModelRequest, callbacks: ChatModelStreamCallbacks) {
+    return callAnthropicStreamingRequest(this.chatDeps(), request, callbacks);
   }
 
   async chatWithTools(args: Parameters<typeof chatWithToolsRequest>[1]) {

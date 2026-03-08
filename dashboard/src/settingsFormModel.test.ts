@@ -50,6 +50,15 @@ test("settingsFormModel converts settings to form defaults and back to normalize
         }
       }
     },
+    voice: {
+      conversationPolicy: {
+        streaming: {
+          enabled: true,
+          eagerFirstChunkChars: 72,
+          maxBufferChars: 280
+        }
+      }
+    },
     permissions: {
       replies: {
         replyChannelIds: ["1", "2"],
@@ -100,6 +109,9 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.voiceStreamWatchBrainContextMaxEntries, 8);
   assert.equal(form.voiceAsrLanguageMode, "auto");
   assert.equal(form.voiceAsrLanguageHint, "en");
+  assert.equal(form.voiceStreamingEnabled, true);
+  assert.equal(form.voiceStreamingEagerFirstChunkChars, 72);
+  assert.equal(form.voiceStreamingMaxBufferChars, 280);
   assert.equal(form.voiceCommandOnlyMode, false);
   assert.equal(form.voiceOpenAiRealtimeTranscriptionMethod, "realtime_bridge");
   assert.equal(form.voiceOpenAiRealtimeUsePerUserAsrBridge, true);
@@ -134,6 +146,9 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.voiceStreamWatchBrainContextPrompt = "Use stream snapshots as context for replies.";
   form.voiceAsrLanguageMode = "fixed";
   form.voiceAsrLanguageHint = "en-us";
+  form.voiceStreamingEnabled = false;
+  form.voiceStreamingEagerFirstChunkChars = 84;
+  form.voiceStreamingMaxBufferChars = 340;
   form.voiceCommandOnlyMode = true;
   form.voiceOpenAiRealtimeTranscriptionMethod = "file_wav";
   form.voiceOpenAiRealtimeUsePerUserAsrBridge = false;
@@ -168,6 +183,9 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.voice.streamWatch.brainContextMinIntervalSeconds, 6);
   assert.equal(patch.voice.streamWatch.brainContextMaxEntries, 5);
   assert.equal(patch.voice.streamWatch.brainContextPrompt, "Use stream snapshots as context for replies.");
+  assert.equal(patch.voice.conversationPolicy.streaming.enabled, false);
+  assert.equal(patch.voice.conversationPolicy.streaming.eagerFirstChunkChars, 84);
+  assert.equal(patch.voice.conversationPolicy.streaming.maxBufferChars, 340);
   assert.equal(patch.voice.conversationPolicy.commandOnlyMode, true);
   assert.equal(patch.agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod, "file_wav");
   assert.equal(patch.agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge, false);

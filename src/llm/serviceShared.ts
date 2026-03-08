@@ -77,6 +77,13 @@ export type ChatModelResponse = {
   costUsd?: number;
 };
 
+export type ChatModelStreamCallbacks = {
+  onTextDelta: (delta: string) => void;
+  onContentBlockComplete?: (block: ContentBlock) => void;
+  onComplete?: (result: ChatModelResponse) => void;
+  signal?: AbortSignal;
+};
+
 export type MemoryExtractionRequest = {
   model: string;
   systemPrompt: string;

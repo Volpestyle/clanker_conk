@@ -36,12 +36,15 @@ import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 
 type GeneratedPayload = {
   text?: string;
-  soundboardRefs?: unknown[];
+  playedSoundboardRefs?: unknown[];
   usedWebSearchFollowup?: boolean;
   usedOpenArticleFollowup?: boolean;
   usedScreenShareOffer?: boolean;
   leaveVoiceChannelRequested?: boolean;
   voiceAddressing?: unknown;
+  streamedSentenceCount?: number;
+  screenNote?: string | null;
+  screenMoment?: string | null;
   generationContextSnapshot?: VoiceGenerationContextSnapshot | null;
 };
 
@@ -87,6 +90,7 @@ export type VoiceReplyPipelineHost = Pick<VoiceSessionManager,
   | "normalizeVoiceAddressingAnnotation"
   | "playVoiceReplyInOrder"
   | "recordVoiceTurn"
+  | "requestRealtimeTextUtterance"
   | "setActiveReplyInterruptionPolicy"
   | "soundboardDirector"
   | "updateModelContextSummary"
@@ -106,7 +110,7 @@ function toGeneratedPayload(value: unknown): GeneratedPayload {
   }
   return {
     text: typeof value === "string" ? value : "",
-    soundboardRefs: [],
+    playedSoundboardRefs: [],
     usedWebSearchFollowup: false,
     usedOpenArticleFollowup: false,
     usedScreenShareOffer: false,
@@ -359,6 +363,50 @@ export async function runVoiceReplyPipeline(
   let generatedPayload: GeneratedPayload | null = null;
   const voiceConversation = getVoiceConversationPolicy(params.settings);
   const followup = getFollowupSettings(params.settings);
+  const useRealtimeTts =
+    params.mode === "bridge"
+      ? String(voiceConversation.ttsMode || "").trim().toLowerCase() !== "api"
+      : false;
+  const streamingVoiceReplyEnabled =
+    params.mode === "bridge" &&
+    useRealtimeTts &&
+    Boolean(voiceConversation.streaming?.enabled);
+  const preliminaryReplyInterruptionPolicy: ReplyInterruptionPolicy | null = params.mode === "bridge"
+    ? host.buildReplyInterruptionPolicy({
+      session,
+      userId: params.userId,
+      directAddressed: Boolean(params.directAddressed),
+      conversationContext: resolvedConversationContext,
+      generatedVoiceAddressing: null,
+      source
+    })
+    : null;
+  let streamedReplyRequestedAt = 0;
+
+  if (
+    streamingVoiceReplyEnabled &&
+    providerSupports(session.mode || "", "updateInstructions")
+  ) {
+    void host.instructionManager.prepareRealtimeTurnContext({
+      session,
+      settings: params.settings,
+      userId: params.userId,
+      transcript: normalizedTranscript,
+      captureReason: source
+    }).catch((error: unknown) => {
+      host.store.logAction({
+        kind: "voice_error",
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: host.client.user?.id || null,
+        content: `openai_realtime_turn_context_refresh_failed: ${String((error as Error)?.message || error)}`,
+        metadata: {
+          sessionId: session.id,
+          source
+        }
+      });
+    });
+  }
   try {
     generatedPayload = toGeneratedPayload(await host.generateVoiceTurn({
       settings: params.settings,
@@ -397,6 +445,45 @@ export async function runVoiceReplyPipeline(
       },
       webSearchTimeoutMs: Number(followup.toolBudget?.toolTimeoutMs),
       voiceToolCallbacks: host.buildVoiceToolCallbacks({ session, settings: params.settings }),
+      onSpokenSentence: streamingVoiceReplyEnabled
+        ? ({ text, index }: { text: string; index: number }) => {
+          if (session.ending || generationSignal?.aborted) return false;
+          const normalizedText = normalizeVoiceText(text, STT_REPLY_MAX_CHARS);
+          if (!normalizedText) return false;
+          const requestedAt = Date.now();
+          const latencyContext =
+            index === 0
+              ? {
+                finalizedAtMs: latencyFinalizedAtMs,
+                asrStartedAtMs: latencyAsrStartedAtMs,
+                asrCompletedAtMs: latencyAsrCompletedAtMs,
+                generationStartedAtMs: generationStartedAt,
+                replyRequestedAtMs: requestedAt,
+                audioStartedAtMs: 0,
+                source,
+                captureReason: latencyCaptureReason,
+                queueWaitMs: latencyQueueWaitMs,
+                pendingQueueDepth: latencyPendingQueueDepth
+              }
+              : null;
+          if (preliminaryReplyInterruptionPolicy) {
+            host.setActiveReplyInterruptionPolicy(session, preliminaryReplyInterruptionPolicy);
+          }
+          const requested = host.requestRealtimeTextUtterance({
+            session,
+            text: normalizedText,
+            userId: host.client.user?.id || null,
+            source: `${source}:stream_chunk_${Math.max(0, Number(index || 0))}`,
+            interruptionPolicy: preliminaryReplyInterruptionPolicy,
+            latencyContext
+          });
+          if (requested && streamedReplyRequestedAt === 0) {
+            streamedReplyRequestedAt = requestedAt;
+            session.lastAssistantReplyAt = requestedAt;
+          }
+          return requested;
+        }
+        : null,
       signal: generationSignal
     }));
     if (generatedPayload?.generationContextSnapshot) {
@@ -434,7 +521,8 @@ export async function runVoiceReplyPipeline(
   if (generationSignal?.aborted) return false;
 
   const replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
-  const requestedSoundboardRefs = normalizeSoundboardRefsModule(generatedPayload?.soundboardRefs);
+  const playedSoundboardRefs = normalizeSoundboardRefsModule(generatedPayload?.playedSoundboardRefs);
+  const streamedSentenceCount = Math.max(0, Number(generatedPayload?.streamedSentenceCount || 0));
   const usedWebSearchFollowup = Boolean(generatedPayload?.usedWebSearchFollowup);
   const usedOpenArticleFollowup = Boolean(generatedPayload?.usedOpenArticleFollowup);
   const usedScreenShareOffer = Boolean(generatedPayload?.usedScreenShareOffer);
@@ -521,9 +609,9 @@ export async function runVoiceReplyPipeline(
 
   const playbackPlan = host.buildVoiceReplyPlaybackPlan({
     replyText,
-    trailingSoundboardRefs: requestedSoundboardRefs
+    trailingSoundboardRefs: []
   });
-  if (!playbackPlan.spokenText && playbackPlan.soundboardRefs.length === 0 && !leaveVoiceChannelRequested) {
+  if (!playbackPlan.spokenText && playedSoundboardRefs.length === 0 && !leaveVoiceChannelRequested) {
     logReplySkipped({
       host,
       params: { ...params, source },
@@ -543,6 +631,7 @@ export async function runVoiceReplyPipeline(
 
   if (
     params.mode === "bridge" &&
+    !streamingVoiceReplyEnabled &&
     playbackPlan.spokenText &&
     providerSupports(session.mode || "", "updateInstructions")
   ) {
@@ -567,7 +656,8 @@ export async function runVoiceReplyPipeline(
     });
   }
 
-  const replyRequestedAt = Date.now();
+  const streamedSpeechPlayed = streamingVoiceReplyEnabled && streamedSentenceCount > 0;
+  const replyRequestedAt = streamedReplyRequestedAt || Date.now();
   const replyLatencyContext = params.mode === "bridge"
     ? {
       finalizedAtMs: latencyFinalizedAtMs,
@@ -590,20 +680,23 @@ export async function runVoiceReplyPipeline(
   }
 
   const playbackSource = params.mode === "bridge" ? `${source}:reply` : `${source}_reply`;
-  const useRealtimeTts =
-    params.mode === "bridge"
-      ? String(getVoiceConversationPolicy(params.settings).ttsMode || "").trim().toLowerCase() !== "api"
-      : false;
-  const playbackResult = await host.playVoiceReplyInOrder({
-    session,
-    settings: params.settings,
-    spokenText: playbackPlan.spokenText,
-    playbackSteps: playbackPlan.steps,
-    source: playbackSource,
-    preferRealtimeUtterance: useRealtimeTts,
-    interruptionPolicy: replyInterruptionPolicy,
-    latencyContext: replyLatencyContext
-  });
+  const playbackResult = streamedSpeechPlayed
+    ? {
+      completed: true,
+      spokeLine: Boolean(playbackPlan.spokenText),
+      requestedRealtimeUtterance: true,
+      playedSoundboardCount: playedSoundboardRefs.length
+    }
+    : await host.playVoiceReplyInOrder({
+      session,
+      settings: params.settings,
+      spokenText: playbackPlan.spokenText,
+      playbackSteps: playbackPlan.steps,
+      source: playbackSource,
+      preferRealtimeUtterance: useRealtimeTts,
+      interruptionPolicy: replyInterruptionPolicy,
+      latencyContext: replyLatencyContext
+    });
   if (!playbackResult.completed) {
     if (playbackPlan.spokenText) {
       host.recordVoiceTurn(session, {
@@ -663,8 +756,8 @@ export async function runVoiceReplyPipeline(
           requestId: pendingRequestId,
           replyText: playbackPlan.spokenText || null,
           requestedRealtimeUtterance,
-          soundboardRefs: playbackPlan.soundboardRefs,
-          playedSoundboardCount: Number(playbackResult.playedSoundboardCount || 0),
+          soundboardRefs: [...playedSoundboardRefs, ...playbackPlan.soundboardRefs],
+          playedSoundboardCount: Number(playbackResult.playedSoundboardCount || playedSoundboardRefs.length || 0),
           usedWebSearchFollowup,
           usedOpenArticleFollowup,
           usedScreenShareOffer,
@@ -682,7 +775,7 @@ export async function runVoiceReplyPipeline(
       const spokeLine = Boolean(playbackResult.spokeLine);
       const replyRuntimeEvent = playbackPlan.spokenText
         ? "stt_pipeline_reply_spoken"
-        : playbackPlan.soundboardRefs.length > 0
+        : playedSoundboardRefs.length > 0 || playbackPlan.soundboardRefs.length > 0
           ? "stt_pipeline_soundboard_only"
           : leaveVoiceChannelRequested
             ? "stt_pipeline_leave_directive"
@@ -708,8 +801,8 @@ export async function runVoiceReplyPipeline(
           sessionId: session.id,
           replyText: playbackPlan.spokenText || null,
           spokeLine,
-          soundboardRefs: playbackPlan.soundboardRefs,
-          playedSoundboardCount: Number(playbackResult.playedSoundboardCount || 0),
+          soundboardRefs: [...playedSoundboardRefs, ...playbackPlan.soundboardRefs],
+          playedSoundboardCount: Number(playbackResult.playedSoundboardCount || playedSoundboardRefs.length || 0),
           usedWebSearchFollowup,
           usedOpenArticleFollowup,
           usedScreenShareOffer,

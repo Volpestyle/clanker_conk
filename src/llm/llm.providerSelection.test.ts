@@ -404,6 +404,92 @@ test("callAnthropic omits empty text multimodal blocks", async () => {
   );
 });
 
+test("callAnthropicStreaming forwards streamed text deltas and returns the final response", async () => {
+  const service = createService({ anthropicApiKey: "test-anthropic-key" });
+  let seenPayload = null;
+  let onText = null;
+  service.anthropic = {
+    messages: {
+      stream(payload) {
+        seenPayload = payload;
+        return {
+          on(event, handler) {
+            if (event === "text") {
+              onText = handler;
+            }
+          },
+          abort() {},
+          async finalMessage() {
+            onText?.("hello ");
+            onText?.("world");
+            return {
+              content: [{ type: "text", text: "hello world" }],
+              stop_reason: "end_turn",
+              usage: {
+                input_tokens: 7,
+                output_tokens: 2,
+                cache_creation_input_tokens: 0,
+                cache_read_input_tokens: 0
+              }
+            };
+          }
+        };
+      }
+    }
+  };
+
+  const deltas: string[] = [];
+  const result = await service.callAnthropicStreaming({
+    model: "claude-haiku-4-5",
+    systemPrompt: "system prompt",
+    userPrompt: "say hello",
+    contextMessages: [],
+    temperature: 0.2,
+    maxOutputTokens: 64
+  }, {
+    onTextDelta(delta) {
+      deltas.push(delta);
+    }
+  });
+
+  assert.equal(seenPayload.model, "claude-haiku-4-5");
+  assert.deepEqual(deltas, ["hello ", "world"]);
+  assert.equal(result.text, "hello world");
+  assert.equal(result.stopReason, "end_turn");
+});
+
+test("generateStreaming falls back to batch generation for non-streaming providers", async () => {
+  const service = createService({ openaiApiKey: "test-openai-key" });
+  service.generate = async () => ({
+    text: "fallback batch reply",
+    toolCalls: [],
+    rawContent: null,
+    provider: "openai",
+    model: "claude-haiku-4-5",
+    usage: {
+      inputTokens: 1,
+      outputTokens: 1,
+      cacheWriteTokens: 0,
+      cacheReadTokens: 0
+    },
+    costUsd: 0
+  });
+
+  const deltas: string[] = [];
+  const result = await service.generateStreaming({
+    settings: { llm: { provider: "openai", model: "claude-haiku-4-5" } },
+    systemPrompt: "system",
+    userPrompt: "user",
+    contextMessages: [],
+    onTextDelta(delta) {
+      deltas.push(delta);
+    }
+  });
+
+  assert.deepEqual(deltas, ["fallback batch reply"]);
+  assert.equal(result.text, "fallback batch reply");
+});
+
 test("callOpenAiMemoryExtraction uses Responses JSON schema format", async () => {
   const service = createService({
     openaiApiKey: "test-openai-key"

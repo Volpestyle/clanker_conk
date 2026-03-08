@@ -94,6 +94,7 @@ export function VoiceModeSettingsSection({
   const isNativePath = replyPath === "native";
   const ttsMode = String(form.voiceTtsMode || "realtime").trim().toLowerCase();
   const isApiTts = ttsMode === "api";
+  const streamingVoiceReplyActive = isBridgePath && !isApiTts;
   const openAiRealtimeTranscriptionMethodOptions = OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS;
   const openAiRealtimeTranscriptionMethod = String(
     form.voiceOpenAiRealtimeTranscriptionMethod || "realtime_bridge"
@@ -229,6 +230,56 @@ export function VoiceModeSettingsSection({
                       <span> &mdash; Uses OpenAI TTS REST API (gpt-4o-mini-tts). More voice options, independent of realtime model.</span>
                     </label>
                   </div>
+                  <div className="toggles">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={Boolean(form.voiceStreamingEnabled)}
+                        onChange={set("voiceStreamingEnabled")}
+                      />
+                      Stream spoken reply chunks while generation is still running
+                    </label>
+                  </div>
+                  <p>
+                    This only takes effect on the Bridge path with Realtime TTS. When active, the bot can start
+                    speaking the first sentence before the full LLM reply finishes generating.
+                  </p>
+                  {Boolean(form.voiceStreamingEnabled) && (
+                    <div className="split">
+                      <div>
+                        <label htmlFor="voice-streaming-eager-first-chunk-chars">
+                          Eager first chunk chars
+                        </label>
+                        <input
+                          id="voice-streaming-eager-first-chunk-chars"
+                          type="number"
+                          min="20"
+                          max="240"
+                          step="1"
+                          value={form.voiceStreamingEagerFirstChunkChars}
+                          onChange={set("voiceStreamingEagerFirstChunkChars")}
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="voice-streaming-max-buffer-chars">Max buffered chars</label>
+                        <input
+                          id="voice-streaming-max-buffer-chars"
+                          type="number"
+                          min="40"
+                          max="800"
+                          step="1"
+                          value={form.voiceStreamingMaxBufferChars}
+                          onChange={set("voiceStreamingMaxBufferChars")}
+                        />
+                      </div>
+                    </div>
+                  )}
+                  {Boolean(form.voiceStreamingEnabled) && !streamingVoiceReplyActive && (
+                    <p>
+                      Streaming stays configured, but it is currently inactive because the reply path is not Bridge
+                      with Realtime TTS.
+                    </p>
+                  )}
                   {isApiTts && (
                     <div className="split">
                       <div>

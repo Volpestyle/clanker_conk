@@ -10,8 +10,6 @@ import {
 } from "../prompts/promptCore.ts";
 import {
   normalizeSkipSentinel,
-  parseStructuredReplyOutput,
-  REPLY_OUTPUT_JSON_SCHEMA,
   serializeForPrompt
 } from "./botHelpers.ts";
 import {
@@ -28,6 +26,7 @@ import {
   getResolvedOrchestratorBinding,
   getResolvedVoiceGenerationBinding,
   getReplyGenerationSettings,
+  getVoiceConversationPolicy,
   getVoiceSoundboardSettings
 } from "../settings/agentStack.ts";
 import {
@@ -37,11 +36,8 @@ import {
 } from "../llm/serviceShared.ts";
 import type { VoiceReplyRuntime } from "./botContext.ts";
 import { normalizeFactProfileSlice } from "./memorySlice.ts";
+import { SentenceAccumulator } from "../voice/sentenceAccumulator.ts";
 
-const MAX_SOUNDBOARD_LEAK_TOKEN_SCAN = 24;
-const SOUNDBOARD_CANDIDATE_PARSE_LIMIT = 40;
-const SOUNDBOARD_SIMPLE_TOKEN_RE = /^[a-z0-9 _-]+$/i;
-const MAX_VOICE_SOUNDBOARD_REFS = 10;
 const OPEN_ARTICLE_MAX_CANDIDATES = 12;
 const OPEN_ARTICLE_ROW_LIMIT = 4;
 const OPEN_ARTICLE_RESULTS_PER_ROW = 5;
@@ -63,6 +59,22 @@ function runAsyncCallback(callback: unknown, payload: Record<string, unknown>, c
   } catch (error) {
     console.error(`[voiceReplies] ${callbackName} callback threw:`, error);
   }
+}
+
+function appendUniqueStrings(target: string[], values: unknown[]) {
+  for (const value of values) {
+    const normalized = String(value || "").trim();
+    if (!normalized || target.includes(normalized)) continue;
+    target.push(normalized);
+  }
+}
+
+function mergeSpokenReplyText(parts: string[]) {
+  return parts
+    .map((part) => String(part || "").trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
 }
 
 export async function composeVoiceOperationalMessage(runtime: VoiceReplyRuntime, {
@@ -270,6 +282,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   onWebLookupComplete = null,
   webSearchTimeoutMs: _webSearchTimeoutMs = null,
   voiceToolCallbacks = null,
+  onSpokenSentence = null,
   signal = undefined
 }) {
   if (!runtime.llm?.generate || !settings) return { text: "" };
@@ -512,6 +525,12 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     recentWebLookups
   });
   const openedArticle = null;
+  const voiceConversationPolicy = getVoiceConversationPolicy(settings);
+  const streamingEnabled = Boolean(
+    voiceConversationPolicy.streaming?.enabled &&
+    typeof onSpokenSentence === "function" &&
+    typeof runtime.llm?.generateStreaming === "function"
+  );
   let usedWebSearchFollowup = false;
   let usedOpenArticleFollowup = false;
   let usedScreenShareOffer = false;
@@ -524,12 +543,11 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     }),
     "You are speaking in live Discord voice chat.",
     ...voiceToneGuardrails,
-    "Return strict JSON only matching the provided schema.",
     directAddressed
-      ? "This speaker directly addressed you. Prefer skip=false with a response unless the transcript is too unclear."
+      ? "This speaker directly addressed you. Prefer a spoken response unless the transcript is too unclear."
       : isEagerTurn
-        ? "If responding would be an interruption or you have nothing to add, set skip=true and text to [SKIP]. Otherwise set skip=false and use natural spoken text."
-        : "You are not directly addressed. Reply only if you can add clear value; otherwise set skip=true and text to [SKIP].",
+        ? "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise reply with natural spoken text."
+        : "You are not directly addressed. Reply only if you can add clear value; otherwise output exactly [SKIP].",
     "Goodbyes do not force exit. You can say goodbye and stay in VC; call leave_voice_channel only when you intentionally choose to end your own VC session now.",
     allowSoundboardToolCall ? "Never mention soundboard control refs in normal speech." : null
   ]
@@ -633,6 +651,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       imageLookupAvailable: false,
       openArticleAvailable: allowOpenArticleToolCall && openArticleCandidates.length > 0,
       screenShareAvailable: allowScreenShareToolCall,
+      soundboardAvailable: allowSoundboardToolCall,
       codeAgentAvailable: codeAgentRuntimeAvailable,
       voiceToolsAvailable: Boolean(voiceToolCallbacks)
     });
@@ -725,21 +744,87 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
             }
           ]
         : [];
-
-    let generation = await runtime.llm.generate({
-      settings: tunedSettings,
-      systemPrompt,
-      userPrompt: initialUserPrompt,
-      imageInputs: voiceImageInputs,
-      contextMessages: voiceContextMessages,
-      jsonSchema: voiceReplyTools.length ? "" : REPLY_OUTPUT_JSON_SCHEMA,
-      tools: voiceReplyTools,
-      trace: voiceTrace,
-      signal
+    const spokenTextParts: string[] = [];
+    const playedSoundboardRefs: string[] = [];
+    let streamedSentenceCount = 0;
+    let streamedSentenceIndex = 0;
+    let screenNote: string | null = null;
+    let screenMoment: string | null = null;
+    let voiceAddressing = normalizeGeneratedVoiceAddressing(null, {
+      directAddressed: Boolean(directAddressed)
     });
 
+    const captureGenerationText = (rawText: unknown) => {
+      const normalized = sanitizeBotText(normalizeSkipSentinel(String(rawText || "")), 520);
+      if (!normalized || normalized === "[SKIP]") return;
+      spokenTextParts.push(normalized);
+    };
+
+    const runVoiceGeneration = async ({
+      userPrompt,
+      contextMessages,
+      trace
+    }: {
+      userPrompt: string;
+      contextMessages: ContextMessage[];
+      trace: typeof voiceTrace;
+    }) => {
+      if (!streamingEnabled) {
+        return await runtime.llm.generate({
+          settings: tunedSettings,
+          systemPrompt,
+          userPrompt,
+          imageInputs: voiceImageInputs,
+          contextMessages,
+          tools: voiceReplyTools,
+          trace,
+          signal
+        });
+      }
+
+      const accumulator = new SentenceAccumulator({
+        eagerFirstChunk: true,
+        eagerMinChars: Number(voiceConversationPolicy.streaming?.eagerFirstChunkChars),
+        maxBufferChars: Number(voiceConversationPolicy.streaming?.maxBufferChars),
+        onSentence(text) {
+          const normalized = sanitizeBotText(normalizeSkipSentinel(text), 520);
+          if (!normalized || normalized === "[SKIP]" || signal?.aborted) return;
+          const accepted = onSpokenSentence({
+            text: normalized,
+            index: streamedSentenceIndex
+          });
+          if (accepted === false) return;
+          streamedSentenceIndex += 1;
+          streamedSentenceCount += 1;
+        }
+      });
+
+      const generation = await runtime.llm.generateStreaming({
+        settings: tunedSettings,
+        systemPrompt,
+        userPrompt,
+        imageInputs: voiceImageInputs,
+        contextMessages,
+        tools: voiceReplyTools,
+        trace,
+        signal,
+        onTextDelta(delta) {
+          accumulator.push(delta);
+        }
+      });
+      accumulator.flush();
+      return generation;
+    };
+
+    let generation = await runVoiceGeneration({
+      userPrompt: initialUserPrompt,
+      contextMessages: voiceContextMessages,
+      trace: voiceTrace
+    });
+    captureGenerationText(generation.text);
+
     const VOICE_TOOL_LOOP_MAX_STEPS = 2;
-    const VOICE_TOOL_LOOP_MAX_CALLS = 3;
+    const VOICE_TOOL_LOOP_MAX_CALLS = 6;
     let voiceToolLoopSteps = 0;
     let voiceTotalToolCalls = 0;
     let webLookupStarted = false;
@@ -784,6 +869,34 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         if (toolCall.name === "open_article" && !result.isError) {
           usedOpenArticleFollowup = true;
         }
+        if (toolCall.name === "play_soundboard" && !result.isError) {
+          const toolPayload = parseReplyToolResultPayload(result.content);
+          const playedRefs = Array.isArray(toolPayload?.played)
+            ? toolPayload.played
+            : Array.isArray((toolCall.input as Record<string, unknown>)?.refs)
+              ? (toolCall.input as Record<string, unknown>).refs as unknown[]
+              : [];
+          appendUniqueStrings(playedSoundboardRefs, playedRefs);
+        }
+        if (toolCall.name === "set_addressing" && !result.isError) {
+          const toolPayload = parseReplyToolResultPayload(result.content);
+          voiceAddressing = normalizeGeneratedVoiceAddressing({
+            talkingTo: toolPayload?.talkingTo,
+            directedConfidence: toolPayload?.directedConfidence
+          }, {
+            directAddressed: Boolean(directAddressed)
+          });
+        }
+        if (toolCall.name === "screen_note" && !result.isError) {
+          const toolPayload = parseReplyToolResultPayload(result.content);
+          const note = String(toolPayload?.note || "").replace(/\s+/g, " ").trim().slice(0, 220);
+          screenNote = note || screenNote;
+        }
+        if (toolCall.name === "screen_moment" && !result.isError) {
+          const toolPayload = parseReplyToolResultPayload(result.content);
+          const moment = String(toolPayload?.moment || "").replace(/\s+/g, " ").trim().slice(0, 220);
+          screenMoment = moment || screenMoment;
+        }
         if (toolCall.name === "offer_screen_share_link" && !result.isError) {
           const toolPayload = parseReplyToolResultPayload(result.content);
           usedScreenShareOffer = usedScreenShareOffer || Boolean(toolPayload?.offered);
@@ -805,19 +918,15 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         { role: "user", content: toolResultMessages }
       ];
 
-      generation = await runtime.llm.generate({
-        settings: tunedSettings,
-        systemPrompt,
+      generation = await runVoiceGeneration({
         userPrompt: "",
         contextMessages: voiceContextMessages,
-        jsonSchema: "",
-        tools: voiceReplyTools,
         trace: {
           ...voiceTrace,
           event: `${sessionId ? "voice_session" : "voice_turn"}:tool_loop:${voiceToolLoopSteps + 1}`
         },
-        signal
       });
+      captureGenerationText(generation.text);
       voiceToolLoopSteps += 1;
     }
 
@@ -830,57 +939,31 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       }, "onWebLookupComplete");
     }
 
-    const parsed = parseStructuredReplyOutput(generation.text);
-
-    const soundboardRefs = allowSoundboardToolCall
-      ? (Array.isArray(parsed.soundboardRefs) ? parsed.soundboardRefs : [])
-        .map((entry) =>
-          String(entry || "")
-            .trim()
-            .slice(0, 180)
-        )
-        .filter(Boolean)
-        .slice(0, MAX_VOICE_SOUNDBOARD_REFS)
-      : [];
-    const screenNote = typeof parsed.screenNote === "string"
-      ? String(parsed.screenNote || "").replace(/\s+/g, " ").trim().slice(0, 220) || null
-      : null;
-    const screenMoment = typeof parsed.screenMoment === "string"
-      ? String(parsed.screenMoment || "").replace(/\s+/g, " ").trim().slice(0, 220) || null
-      : null;
-    const voiceAddressing = normalizeGeneratedVoiceAddressing(parsed.voiceAddressing, {
-      directAddressed: Boolean(directAddressed)
-    });
-    const soundboardSafeText = String(parsed.text || generation.text || "");
-    const baseText = sanitizeBotText(normalizeSkipSentinel(soundboardSafeText), 520);
-    const finalText = sanitizeSoundboardSpeechLeak({
-      text: baseText,
-      soundboardRefs,
-      soundboardCandidates: normalizedSoundboardCandidates
-    });
-    if ((!finalText || finalText === "[SKIP]") && soundboardRefs.length === 0 && !leaveVoiceChannelRequested) {
+    const finalText = sanitizeBotText(mergeSpokenReplyText(spokenTextParts), 520);
+    if (!finalText && playedSoundboardRefs.length === 0 && !leaveVoiceChannelRequested) {
       return {
         text: "",
-        soundboardRefs: [],
         usedWebSearchFollowup,
         usedOpenArticleFollowup,
         usedScreenShareOffer,
         voiceAddressing,
         screenNote,
         screenMoment,
+        streamedSentenceCount,
         generationContextSnapshot
       };
     }
-    if (!finalText || finalText === "[SKIP]") {
+    if (!finalText) {
       const response = {
         text: "",
-        soundboardRefs,
+        playedSoundboardRefs,
         usedWebSearchFollowup,
         usedOpenArticleFollowup,
         usedScreenShareOffer,
         voiceAddressing,
         screenNote,
         screenMoment,
+        streamedSentenceCount,
         generationContextSnapshot
       };
       if (leaveVoiceChannelRequested) {
@@ -894,12 +977,14 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
 
     const response = {
       text: finalText,
-      soundboardRefs,
+      playedSoundboardRefs,
       usedWebSearchFollowup,
       usedOpenArticleFollowup,
       usedScreenShareOffer,
       voiceAddressing,
       screenNote,
+      screenMoment,
+      streamedSentenceCount,
       generationContextSnapshot
     };
     if (leaveVoiceChannelRequested) {
@@ -1062,83 +1147,4 @@ function buildOpenArticleCandidates({ webSearch, recentWebLookups }) {
     });
   }
   return withAliases.slice(0, OPEN_ARTICLE_MAX_CANDIDATES);
-}
-
-function sanitizeSoundboardSpeechLeak({
-  text,
-  soundboardRefs,
-  soundboardCandidates
-}) {
-  const spoken = String(text || "").trim();
-  const normalizedRefs = (Array.isArray(soundboardRefs) ? soundboardRefs : [])
-    .map((entry) => String(entry || "").trim())
-    .filter(Boolean)
-    .slice(0, MAX_VOICE_SOUNDBOARD_REFS);
-  if (!spoken || normalizedRefs.length === 0) return spoken;
-
-  const parsedCandidates = parseSoundboardCandidateLines(soundboardCandidates);
-  const tokensToRemove = [];
-  for (const normalizedRef of normalizedRefs) {
-    const selectedCandidate = parsedCandidates.find(
-      (candidate) => candidate.reference.toLowerCase() === normalizedRef.toLowerCase()
-    );
-    tokensToRemove.push(
-      normalizedRef,
-      normalizedRef.split("@")[0] || "",
-      selectedCandidate?.reference || "",
-      selectedCandidate?.reference.split("@")[0] || "",
-      selectedCandidate?.name || ""
-    );
-  }
-  const dedupedTokens = [...new Set(tokensToRemove.map((token) => String(token || "").trim()).filter(Boolean))].slice(
-    0,
-    MAX_SOUNDBOARD_LEAK_TOKEN_SCAN
-  );
-
-  let cleaned = spoken;
-  for (const token of dedupedTokens) {
-    cleaned = removeCaseInsensitivePhrase(cleaned, token);
-  }
-
-  return cleaned
-    .replace(/\s+/g, " ")
-    .replace(/\s+([,.;!?])/g, "$1")
-    .trim();
-}
-
-function parseSoundboardCandidateLines(lines) {
-  const source = Array.isArray(lines) ? lines : [];
-  const parsed = [];
-  for (const line of source.slice(0, SOUNDBOARD_CANDIDATE_PARSE_LIMIT)) {
-    const raw = String(line || "")
-      .replace(/^\s*-\s*/, "")
-      .trim();
-    if (!raw) continue;
-    const [referencePart, namePart] = raw.split("|");
-    const reference = String(referencePart || "").trim();
-    if (!reference) continue;
-    const name = String(namePart || "").trim();
-    parsed.push({
-      reference,
-      name: name || ""
-    });
-  }
-  return parsed;
-}
-
-function removeCaseInsensitivePhrase(text, phrase) {
-  const source = String(text || "");
-  const token = String(phrase || "").trim();
-  if (!source || !token) return source;
-
-  const escaped = escapeRegex(token);
-  const pattern = SOUNDBOARD_SIMPLE_TOKEN_RE.test(token)
-    ? new RegExp(`\\b${escaped}\\b`, "gi")
-    : new RegExp(escaped, "gi");
-
-  return source.replace(pattern, " ");
-}
-
-function escapeRegex(value) {
-  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

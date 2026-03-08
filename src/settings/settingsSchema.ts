@@ -523,7 +523,12 @@ export const DEFAULT_SETTINGS = {
       textOnlyMode: false,
       replyPath: "brain",
       ttsMode: "realtime",
-      operationalMessages: "minimal"
+      operationalMessages: "minimal",
+      streaming: {
+        enabled: false,
+        eagerFirstChunkChars: 60,
+        maxBufferChars: 300
+      }
     },
     admission: {
       mode: "classifier_gate",

@@ -4004,14 +4004,14 @@ test("runRealtimeBrainReply ends VC when model requests leave directive", async 
   assert.equal(endCalls[0]?.reason, "assistant_leave_directive");
 });
 
-test("runRealtimeBrainReply plays inline and trailing soundboard directives in order", async () => {
+test("runRealtimeBrainReply does not replay soundboard refs that were already executed during generation", async () => {
   const manager = createManager();
   const eventOrder = [];
   manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
   manager.instructionManager.prepareRealtimeTurnContext = async () => {};
   manager.generateVoiceTurn = async () => ({
-    text: "yo [[SOUNDBOARD:airhorn@123]] done",
-    soundboardRefs: ["rimshot@456"]
+    text: "yo done",
+    playedSoundboardRefs: ["airhorn@123", "rimshot@456"]
   });
   manager.requestRealtimeTextUtterance = ({ text }) => {
     eventOrder.push(`speech:${String(text)}`);
@@ -4058,12 +4058,7 @@ test("runRealtimeBrainReply plays inline and trailing soundboard directives in o
 
   assert.equal(result, true);
   assert.deepEqual(eventOrder, [
-    "speech:yo",
-    "wait",
-    "sound:airhorn@123",
-    "speech:done",
-    "wait",
-    "sound:rimshot@456"
+    "speech:yo done"
   ]);
 });
 
@@ -4877,14 +4872,14 @@ test("runSttPipelineTurn exits before generation when turn admission denies spea
   assert.equal(addressingLog?.metadata?.reason, "classifier_deny");
 });
 
-test("runSttPipelineReply triggers soundboard even when generated speech is empty", async () => {
+test("runSttPipelineReply treats already-played soundboard-only turns as handled", async () => {
   const manager = createManager();
   const soundboardCalls = [];
   const spokenLines = [];
   manager.llm.synthesizeSpeech = async () => ({ audioBuffer: Buffer.from([1, 2, 3]) });
   manager.generateVoiceTurn = async () => ({
     text: "",
-    soundboardRefs: ["airhorn@123"]
+    playedSoundboardRefs: ["airhorn@123"]
   });
   manager.speakVoiceLineWithTts = async (payload) => {
     spokenLines.push(payload);
@@ -4924,8 +4919,7 @@ test("runSttPipelineReply triggers soundboard even when generated speech is empt
   });
 
   assert.equal(spokenLines.length, 0);
-  assert.equal(soundboardCalls.length, 1);
-  assert.equal(soundboardCalls[0]?.requestedRef, "airhorn@123");
+  assert.equal(soundboardCalls.length, 0);
 });
 
 test("runSttPipelineReply passes addressing state into generation and persists model addressing guess", async () => {

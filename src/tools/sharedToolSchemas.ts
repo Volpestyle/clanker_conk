@@ -325,6 +325,78 @@ export const OFFER_SCREEN_SHARE_LINK_SCHEMA: SharedToolSchema = {
   parameters: { type: "object", properties: {}, required: [], additionalProperties: false }
 };
 
+export const PLAY_SOUNDBOARD_SCHEMA: SharedToolSchema = {
+  name: "play_soundboard",
+  description: "Play one or more soundboard refs in the current voice session, in order.",
+  parameters: {
+    type: "object",
+    properties: {
+      refs: {
+        type: "array",
+        items: { type: "string" },
+        minItems: 1,
+        maxItems: 10
+      }
+    },
+    required: ["refs"],
+    additionalProperties: false
+  }
+};
+
+export const SET_ADDRESSING_SCHEMA: SharedToolSchema = {
+  name: "set_addressing",
+  description: "Record your best guess for who the current speaker was talking to.",
+  parameters: {
+    type: "object",
+    properties: {
+      talkingTo: {
+        type: ["string", "null"]
+      },
+      confidence: {
+        type: "number",
+        minimum: 0,
+        maximum: 1
+      }
+    },
+    required: ["talkingTo", "confidence"],
+    additionalProperties: false
+  }
+};
+
+export const SCREEN_NOTE_SCHEMA: SharedToolSchema = {
+  name: "screen_note",
+  description: "Save a brief private factual note about the current visible screen state.",
+  parameters: {
+    type: "object",
+    properties: {
+      note: {
+        type: "string",
+        minLength: 1,
+        maxLength: 220
+      }
+    },
+    required: ["note"],
+    additionalProperties: false
+  }
+};
+
+export const SCREEN_MOMENT_SCHEMA: SharedToolSchema = {
+  name: "screen_moment",
+  description: "Save a brief noteworthy screen moment that should persist in session memory.",
+  parameters: {
+    type: "object",
+    properties: {
+      moment: {
+        type: "string",
+        minLength: 1,
+        maxLength: 220
+      }
+    },
+    required: ["moment"],
+    additionalProperties: false
+  }
+};
+
 export const VOICE_TOOL_SCHEMAS: SharedToolSchema[] = [
   MUSIC_SEARCH_SCHEMA,
   MUSIC_QUEUE_ADD_SCHEMA,
@@ -335,6 +407,10 @@ export const VOICE_TOOL_SCHEMAS: SharedToolSchema[] = [
   MUSIC_RESUME_SCHEMA,
   MUSIC_SKIP_SCHEMA,
   MUSIC_NOW_PLAYING_SCHEMA,
+  PLAY_SOUNDBOARD_SCHEMA,
+  SET_ADDRESSING_SCHEMA,
+  SCREEN_NOTE_SCHEMA,
+  SCREEN_MOMENT_SCHEMA,
   LEAVE_VOICE_CHANNEL_SCHEMA
 ];
 

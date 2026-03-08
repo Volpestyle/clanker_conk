@@ -498,8 +498,8 @@ export function buildVoiceTurnPrompt({
     const screenContextParts = [
       "Live screen share: You can see the user's screen directly in the attached image.",
       "Comment on what you see whenever it feels natural. React to interesting moments, changes, or anything worth noting.",
-      "Set screenNote to a brief factual description of what you see (max 20 words). This is a private note, not spoken aloud.",
-      "Set screenMoment to a brief description only when something genuinely noteworthy happens that is not already in the key moments list below. Otherwise null.",
+      "If there is a brief factual screen observation worth saving privately, call screen_note with it (max 20 words). Do not speak the note aloud unless it also belongs in your spoken reply.",
+      "If something genuinely noteworthy happens that is not already in the key moments list below, call screen_moment with a brief description. Otherwise do not call it.",
       normalizedStreamWatchBrainContext?.prompt
         ? `- Guidance: ${normalizedStreamWatchBrainContext.prompt}`
         : null
@@ -584,11 +584,11 @@ export function buildVoiceTurnPrompt({
 
   if (allowSoundboardToolCall && normalizedSoundboardCandidates.length) {
     parts.push("Soundboard tool call is available.");
-    parts.push("Use soundboardRefs as an ordered array of 0-10 refs from this list:");
+    parts.push("If a sound effect would genuinely improve the moment, call play_soundboard with refs from this list in the order they should fire:");
     parts.push(normalizedSoundboardCandidates.join("\n"));
-    parts.push("If no soundboard effect should play, set soundboardRefs to [].");
+    parts.push("Do not mention internal refs in spoken text.");
   } else {
-    parts.push("Soundboard tool call is unavailable this turn. Set soundboardRefs to [].");
+    parts.push("Soundboard tool call is unavailable this turn. Do not imply you played a sound effect.");
   }
 
   if (recentConversationHistory?.length) {
@@ -703,6 +703,7 @@ export function buildVoiceTurnPrompt({
     parts.push("- Use music_search when the speaker wants you to find candidate tracks first instead of starting playback immediately.");
     parts.push("- Do not emulate play-now by chaining music_queue_add and music_skip.");
     parts.push("- Do not use music_skip as a substitute for music_stop.");
+    parts.push("- Call set_addressing once per turn with your best guess for who the current speaker was talking to: talkingTo should be \"ME\" when they were likely addressing you, otherwise a participant name when reasonably clear, otherwise null. Set confidence to 0..1.");
   } else {
     parts.push("Voice/session control tools are unavailable this turn. Do not claim you changed music playback or left VC via a tool.");
   }
@@ -804,21 +805,10 @@ export function buildVoiceTurnPrompt({
   );
   parts.push(...voiceToneGuardrails);
 
-  parts.push(
-    "Always set voiceAddressing as your best addressing guess for the incoming speaker turn: talkingTo should be \"ME\" when the speaker is likely talking to you, otherwise a participant name when reasonably clear, otherwise null."
-  );
-  parts.push("Set voiceAddressing.directedConfidence to a 0..1 confidence score for that talkingTo guess.");
-
-  parts.push("Return strict JSON only.");
-  parts.push("JSON format:");
-  parts.push(
-    "{\"text\":\"spoken response or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"soundboardRefs\":[],\"screenNote\":null,\"voiceAddressing\":{\"talkingTo\":null,\"directedConfidence\":0}}"
-    );
-  parts.push("Do not use webSearchQuery, memoryLookupQuery, imageLookupQuery, openArticleRef, memoryLine, selfMemoryLine, automationAction, screenShareIntent, or leaveVoiceChannel in this voice JSON contract. Use tools instead when available.");
-  parts.push("Keep reactionEmoji null and media null for voice-turn generation.");
-  parts.push("Always include voiceAddressing with both fields.");
-  parts.push("If you are skipping, set skip=true and text to [SKIP]. Otherwise set skip=false and provide natural spoken text.");
-  parts.push("Never output markdown, tags, or directive syntax like [[...]].");
+  parts.push("Return only the spoken reply text for this turn.");
+  parts.push("If you should skip the turn, output exactly [SKIP].");
+  parts.push("Do not output JSON, markdown, tags, directive syntax like [[...]], or tool names in prose.");
+  parts.push("Use tool calls for actions, lookup, voice addressing, screen notes, screen moments, soundboard playback, music control, screen-share links, and leaving VC.");
 
   return parts.join("\n\n");
 }

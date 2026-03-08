@@ -712,6 +712,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
           lastBrainContextProvider: null,
           lastBrainContextModel: null,
           brainContextEntries: [],
+          durableScreenNotes: [],
           ingestedFrameCount: 0,
           acceptedFrameCountInWindow: 0,
           frameWindowStartedAt: 0,

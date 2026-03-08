@@ -5270,6 +5270,45 @@ export class VoiceSessionManager {
         executeLocalVoiceToolCall(this, { session, settings, toolName: "music_skip", args: {} }),
       musicNowPlaying: () =>
         executeLocalVoiceToolCall(this, { session, settings, toolName: "music_now_playing", args: {} }),
+      playSoundboard: async (refs: string[], transcript: string) => {
+        const normalizedRefs = (Array.isArray(refs) ? refs : [])
+          .map((entry) => String(entry || "").trim().slice(0, 180))
+          .filter(Boolean)
+          .slice(0, 10);
+        for (const requestedRef of normalizedRefs) {
+          await maybeTriggerAssistantDirectedSoundboardModule(this, {
+            session,
+            settings,
+            userId: this.client.user?.id || null,
+            transcript,
+            requestedRef,
+            source: "voice_reply_tool_play_soundboard"
+          });
+        }
+        return {
+          ok: normalizedRefs.length > 0,
+          played: normalizedRefs
+        };
+      },
+      setAddressing: async ({ talkingTo, confidence }: { talkingTo: string | null; confidence: number }) => ({
+        ok: true,
+        talkingTo:
+          talkingTo == null
+            ? null
+            : String(talkingTo || "")
+              .replace(/\s+/g, " ")
+              .trim()
+              .slice(0, 80) || null,
+        directedConfidence: clamp(Number(confidence) || 0, 0, 1)
+      }),
+      setScreenNote: async (note: string) => ({
+        ok: true,
+        note: String(note || "").replace(/\s+/g, " ").trim().slice(0, 220)
+      }),
+      setScreenMoment: async (moment: string) => ({
+        ok: true,
+        moment: String(moment || "").replace(/\s+/g, " ").trim().slice(0, 220)
+      }),
       leaveVoiceChannel: () =>
         executeLocalVoiceToolCall(this, { session, settings, toolName: "leave_voice_channel", args: {} })
     };

@@ -104,7 +104,9 @@ test("buildVoiceTurnPrompt explains screen-share tool usage when link offers are
     prompt.includes("If the speaker asks you to see/watch their screen or stream, call offer_screen_share_link in the same response."),
     true
   );
-  assert.equal(prompt.includes("Do not use webSearchQuery, memoryLookupQuery, imageLookupQuery, openArticleRef, memoryLine, selfMemoryLine, automationAction, screenShareIntent, or leaveVoiceChannel in this voice JSON contract."), true);
+  assert.equal(prompt.includes("offer_screen_share_link"), true);
+  assert.equal(prompt.includes("Do not encode tool intent in JSON helper fields, helper refs, or placeholder control fields."), true);
+  assert.equal(prompt.includes("voice JSON contract"), false);
 });
 
 test("buildVoiceTurnPrompt prefers tool calls over stale helper fields", () => {
