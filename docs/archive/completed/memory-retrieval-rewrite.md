@@ -1,5 +1,7 @@
 # Memory Retrieval Rewrite: Implementation Plan
 
+Archived completed plan. Most of this work has since landed, so file paths and deletion notes below should be read as historical implementation context rather than current instructions.
+
 ## Goal
 
 Replace the per-turn embedding-based memory retrieval (`buildPromptMemorySlice`) with SQLite-only fact profiles cached at the voice session level. Move semantic ranking off the critical path — it stays alive for on-demand `memory_search` tool calls only.

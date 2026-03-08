@@ -2,8 +2,8 @@
 
 This document explains how the bot is wired, how data moves through the system, and the key runtime flows.
 
-The preset-driven stack spec now informs the live settings/runtime layer. For the full target architecture, including `openai_native` and hybrid Anthropic/OpenAI stacks, see:
-- `docs/preset-driven-agent-stack-spec.md`
+The live settings/runtime layer is preset-driven. For target-state roadmap material, including longer-term stack options, see:
+- `docs/roadmap/preset-driven-agent-stack-spec.md`
 
 ## 1. High-Level Components
 
@@ -15,10 +15,9 @@ Core runtime:
 - `src/bot/*`: extracted bot domains (`automationControl`, `discoverySchedule`, `queueGateway`, `replyAdmission`, `replyFollowup`, `startupCatchup`, `voiceReplies`).
 - `src/settings/settingsSchema.ts`: canonical persisted settings schema.
 - `src/settings/agentStack.ts`: preset resolution + capability/runtime accessors (`research`, `browser`, `voice`, `devTeam`, orchestrator bindings).
-- `src/llm.ts`: model provider abstraction (OpenAI, Anthropic, xAI/Grok, or Claude Code), usage + cost logging, embeddings, image/video generation, ASR, and TTS.
+- `src/llm.ts`: model/runtime provider abstraction (OpenAI, Anthropic, Claude OAuth, Codex OAuth, xAI/Grok), plus usage + cost logging, embeddings, image/video generation, ASR, and TTS.
 - `src/llm/llmClaudeCode.ts`: Claude Code CLI invocation/parsing helpers used by `LLMService`.
 - `src/llm/llmCodex.ts`: OpenAI Responses/Codex integration used by the code-agent runtime.
-- `docs/claude-code-brain-session-mode.md`: Claude Code persistent-brain behavior and how it differs from stateless API providers.
 - `src/memory/memoryManager.ts`: append-only daily journaling + LLM-based fact extraction + hybrid memory retrieval (lexical + vector).
 - `src/services/discovery.ts`: external link discovery for discovery posts.
 - `src/store/store.ts`: SQLite persistence orchestration.
@@ -31,7 +30,7 @@ Core runtime:
 
 Agents:
 - `src/agents/browseAgent.ts`: headless browser agent — LLM + browser tool loop for navigating websites and extracting information.
-- `src/agents/codeAgent.ts`: code-agent orchestration (Claude Code + Codex providers), including one-shot tasks and session-backed turns.
+- `src/agents/codeAgent.ts`: code-agent orchestration (Claude Code, Codex CLI, and Codex providers), including one-shot tasks and session-backed turns.
 - `src/agents/codexAgent.ts`: Codex-backed `SubAgentSession` implementation.
 - `src/agents/subAgentSession.ts`: shared session manager + lifecycle for long-running tool sessions (`browser`, `code`).
 
@@ -68,7 +67,7 @@ Brain (LLM with tool-use)
     ├── memory_search / memory_write   →  persistent facts + vector recall
     ├── web_search                     →  live web search + page inspection
     ├── browser_browse                 →  headless browser agent (navigate, click, extract)
-    ├── code_task                      →  code agent runtime (Claude Code or Codex)
+    ├── code_task                      →  code agent runtime (Claude Code, Codex CLI, or Codex)
     ├── music_*                        →  queue management + playback control
     ├── image/video/gif generation     →  media creation via model APIs
     └── MCP tools                      →  extensible third-party capabilities
@@ -181,7 +180,7 @@ Canonical top-level settings groups:
 - `automations`
 
 Preset-driven stack settings:
-- `agentStack.preset`: `openai_native`, `anthropic_brain_openai_tools`, `multi_provider_legacy`, or `custom`
+- `agentStack.preset`: `openai_native`, `anthropic_brain_openai_tools`, `claude_oauth_local_tools`, or `custom`
 - `agentStack.advancedOverridesEnabled`: whether per-runtime overrides are exposed and persisted
 - `agentStack.overrides`: orchestrator / worker override bindings
 - `agentStack.runtimeConfig`: capability-runtime configuration for research, browser, voice, and dev-team workers

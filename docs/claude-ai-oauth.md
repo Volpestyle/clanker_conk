@@ -45,9 +45,9 @@ Set `CLAUDE_OAUTH_REFRESH_TOKEN` in your `.env`. You can obtain a refresh token 
 2. Authorize and copy the code
 3. Exchange via the token endpoint
 
-### Option 2: Dashboard Login (TODO)
+### Option 2: Dashboard Login (not implemented)
 
-A dashboard route will be added to handle the full OAuth flow interactively.
+There is no dashboard-managed OAuth login flow today. Use the refresh-token bootstrap path or a manual token file.
 
 ### Option 3: Manual Token File
 

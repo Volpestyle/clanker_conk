@@ -32,11 +32,11 @@ bun scripts/voiceGoldenHarness.ts \
   --mode live \
   --modes stt_pipeline,voice_agent,openai_realtime,gemini_realtime,elevenlabs_realtime \
   --iterations 1 \
-  --judge-provider anthropic \
+  --judge-provider claude-oauth \
   --judge-model claude-haiku-4-5 \
-  --decider-provider anthropic \
+  --decider-provider claude-oauth \
   --decider-model claude-haiku-4-5 \
-  --actor-provider anthropic \
+  --actor-provider claude-oauth \
   --actor-model claude-sonnet-4-5 \
   --out-json data/voice-golden-report.json
 ```
@@ -58,11 +58,13 @@ Use:
 - `--allow-missing-credentials`
 - `--max-cases`
 
+For the current authoritative defaults, check `scripts/voiceGoldenHarness.ts` and `docs/tests.md`.
+
 ### Credential Requirements
 
 - Live mode requires credentials for the providers selected by `--actor-provider` and `--decider-provider`.
 - Judge mode requires credentials for `--judge-provider`.
-- With defaults (`anthropic` actor on `claude-sonnet-4-5`, `anthropic` decider/judge on `claude-haiku-4-5`), set `ANTHROPIC_API_KEY`.
+- With current defaults (`claude-oauth` actor on `claude-sonnet-4-5`, `claude-oauth` decider/judge on `claude-haiku-4-5`), set `CLAUDE_OAUTH_REFRESH_TOKEN`.
 - For web-search cases, set at least one search provider key: `BRAVE_SEARCH_API_KEY` and/or `SERPAPI_API_KEY`.
 
 ---

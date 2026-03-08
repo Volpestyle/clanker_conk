@@ -44,7 +44,7 @@ export function CodeAgentSettingsSection({ id, form, set }) {
                 <option value="claude-code">Claude Code (local)</option>
                 <option value="codex-cli">Codex CLI (local)</option>
                 <option value="codex">Codex (OpenAI)</option>
-                <option value="auto">Auto (currently Claude Code)</option>
+                <option value="auto">Auto (preset/default)</option>
               </select>
             </div>
             <div>

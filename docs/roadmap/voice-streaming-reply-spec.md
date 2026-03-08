@@ -1,4 +1,8 @@
-# Streaming Voice Reply Pipeline
+# Streaming Voice Reply Pipeline Roadmap
+
+This is roadmap material, not the canonical description of the live voice runtime.
+
+Several tools and pipeline pieces described below were proposed before later runtime changes landed. Keep this file as design history, not current-state documentation.
 
 ## Problem
 

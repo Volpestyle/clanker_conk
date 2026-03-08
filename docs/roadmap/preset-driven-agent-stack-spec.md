@@ -1,6 +1,15 @@
-# Preset-Driven Agent Stack Spec
+# Preset-Driven Agent Stack Roadmap
 
-This document specifies a target architecture for shifting Clanker Conk toward a preset-driven agent stack.
+This document captures roadmap and target-state architecture ideas for shifting Clanker Conk toward a preset-driven agent stack.
+
+It is not the canonical source of truth for the live runtime. Current preset names and runtime enums live in `src/settings/settingsSchema.ts`.
+
+Live preset names today are:
+
+- `openai_native`
+- `anthropic_brain_openai_tools`
+- `claude_oauth_local_tools`
+- `custom`
 
 The architecture itself is not OpenAI-native. It is modular, capability-routed, and provider-aware.
 
@@ -15,7 +24,7 @@ The core idea is to separate:
 
 That separation allows a simple preset such as `openai_native` while still supporting mixed stacks like "Anthropic orchestrator, OpenAI hosted tools, Codex and Claude Code workers."
 
-![Preset-Driven Agent Stack](diagrams/preset-driven-agent-stack.png)
+![Preset-Driven Agent Stack](../diagrams/preset-driven-agent-stack.png)
 
 <!-- source: docs/diagrams/preset-driven-agent-stack.mmd -->
 
@@ -226,7 +235,7 @@ Advanced per-runtime override mode.
 The runtime must explicitly model four independent choices:
 
 ```ts
-type AgentHarnessKind = "internal" | "openai_agents" | "claude_code_session";
+type AgentHarnessKind = "internal" | "responses_native" | "claude_code_session";
 
 type ModelProviderKind =
   | "openai"
@@ -804,7 +813,7 @@ Clanker-owned loop:
 - fewer external dependencies
 - useful for legacy and non-OpenAI stacks
 
-### 14.2 `openai_agents`
+### 14.2 `responses_native`
 
 Preferred in `openai_native`.
 

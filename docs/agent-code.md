@@ -1,6 +1,6 @@
 # Code Agent Runtime
 
-Status as of March 5, 2026: **Implemented**.
+Status as of March 8, 2026: **Implemented**.
 
 This document describes the shipped `code_task` capability as it exists in runtime today.
 
@@ -16,37 +16,43 @@ Core runtime files:
 
 - `src/agents/codeAgent.ts`
 - `src/agents/codexAgent.ts`
+- `src/agents/codexCliAgent.ts`
 - `src/agents/subAgentSession.ts`
 - `src/llm/llmClaudeCode.ts`
 - `src/llm/llmCodex.ts`
+- `src/llm/llmCodexCli.ts`
 
 ## Access Control
 
 Access is settings-driven, not env-var-driven:
 
-- `codeAgent.enabled` must be `true`
-- caller Discord user ID must be in `codeAgent.allowedUserIds`
+- at least one coding worker must be enabled under `agentStack.runtimeConfig.devTeam.*`
+- caller Discord user ID must be present in `permissions.devTasks.allowedUserIds`
+
+Dashboard compatibility fields still flatten those controls into the `codeAgent*` form section, but the persisted source of truth is the preset-driven `agentStack` plus `permissions.devTasks`.
 
 Guardrails:
 
-- `codeAgent.maxTasksPerHour`
-- `codeAgent.maxParallelTasks`
+- per-worker `maxTasksPerHour`
+- per-worker `maxParallelTasks`
 - per-task timeout and output buffer limits
 
-If blocked, runtime returns deterministic errors (`restricted to allowed users`, rate-limit/parallel-limit blocks).
+If blocked, runtime returns deterministic errors (`restricted to allowed users`, rate-limit blocks, parallel-limit blocks).
 
 ## Providers
 
-`codeAgent.provider` supports:
+The dashboard-facing `codeAgent.provider` compatibility field supports:
 
-- `"claude-code"`
-- `"codex"`
-- `"auto"` (currently resolves to Claude Code)
+- `"claude-code"` — local Claude CLI runtime
+- `"codex-cli"` — local Codex CLI runtime
+- `"codex"` — remote OpenAI Responses/Codex runtime
+- `"auto"` — defer to the resolved dev-team worker order; the current fallback path resolves to `codex-cli`
 
 Provider model fields:
 
 - `codeAgent.model` (Claude Code model alias)
-- `codeAgent.codexModel` (Codex Responses model)
+- `codeAgent.codexCliModel` (Codex CLI model)
+- `codeAgent.codexModel` (OpenAI Codex Responses model)
 
 ## Tool Contract
 
@@ -70,16 +76,17 @@ Session manager:
 
 - `SubAgentSessionManager` with idle sweep and max concurrent session controls
 - owner checks prevent one user from continuing another user’s session
+- provider-specific session implementations for Claude Code, Codex CLI, and Codex
 
 ## Working Directory
 
 `cwd` resolution:
 
 - explicit `cwd` argument if provided
-- otherwise `codeAgent.defaultCwd`
+- otherwise the enabled worker's `defaultCwd`
 - otherwise fallback: `../web` relative to app root
 
-Claude Code runs locally in that directory. Codex runs through OpenAI Responses and does not use local CLI execution.
+`claude-code` and `codex-cli` execute locally in that directory. `codex` runs through OpenAI Responses and does not use local CLI execution.
 
 ## Logging
 
@@ -90,32 +97,49 @@ Primary action kinds:
 
 Common metadata fields:
 
-- provider / configuredProvider
-- model
-- sessionId / turnNumber (session path)
-- durationMs
+- `provider` / `configuredProvider`
+- `model`
+- `sessionId` / `turnNumber` (session path)
+- `durationMs`
 - usage and cost where available
 
 ## Settings Reference
 
-`codeAgent` defaults (`src/settings/settingsSchema.ts`):
+Canonical persisted defaults live under `agentStack.runtimeConfig.devTeam` in `src/settings/settingsSchema.ts`:
 
 ```ts
-codeAgent: {
-  enabled: false,
-  provider: "claude-code",
-  model: "sonnet",
-  codexModel: "codex-mini-latest",
-  maxTurns: 30,
-  timeoutMs: 300_000,
-  maxBufferBytes: 2 * 1024 * 1024,
-  defaultCwd: "",
-  maxTasksPerHour: 10,
-  maxParallelTasks: 2,
-  allowedUserIds: []
+devTeam: {
+  codex: {
+    enabled: false,
+    model: "codex-mini-latest",
+    maxTurns: 30,
+    timeoutMs: 300_000,
+    maxBufferBytes: 2 * 1024 * 1024,
+    defaultCwd: "",
+    maxTasksPerHour: 10,
+    maxParallelTasks: 2
+  },
+  codexCli: {
+    enabled: false,
+    model: "gpt-5.4",
+    maxTurns: 30,
+    timeoutMs: 300_000,
+    maxBufferBytes: 2 * 1024 * 1024,
+    defaultCwd: "",
+    maxTasksPerHour: 10,
+    maxParallelTasks: 2
+  },
+  claudeCode: {
+    enabled: false,
+    model: "sonnet",
+    maxTurns: 30,
+    timeoutMs: 300_000,
+    maxBufferBytes: 2 * 1024 * 1024,
+    defaultCwd: "",
+    maxTasksPerHour: 10,
+    maxParallelTasks: 2
+  }
 }
 ```
 
-## Notes
-
-- The `/code` command and tool descriptions still mention “Claude Code” text in a few places, but provider routing is runtime-configurable and supports Codex.
+The selected worker order is controlled through `agentStack.overrides.devTeam.codingWorkers` when advanced overrides are enabled. The dashboard's `Auto` option serializes to the full worker set instead of pinning one provider.

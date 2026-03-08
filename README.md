@@ -34,7 +34,7 @@ Ask it to check your GitHub issues? It can browse the page and summarize them. A
 - Optional public HTTPS via Cloudflare Quick Tunnel
 - Structured runtime logs with Loki/Grafana support
 - SQLite persistence with vector embeddings
-- Multi-provider LLM support (OpenAI, Anthropic, xAI, Google, Claude Code CLI)
+- Multi-provider model/runtime support (OpenAI, Anthropic, Claude OAuth, xAI, Google, Codex, Codex CLI, Claude Code)
 
 ## Tech Stack
 
@@ -69,7 +69,7 @@ bun install
 | `PUBLIC_HTTPS_ENABLED` | Enable Cloudflare Quick Tunnel |
 
 For voice features, install `ffmpeg` and `yt-dlp` on the host.
-For the optional `claude-code` brain provider, ensure `claude` CLI is on `PATH`.
+For optional local code-agent runtimes, ensure `claude` and/or `codex` CLI is on `PATH`.
 
 ### Provider Notes
 
@@ -78,9 +78,9 @@ For the optional `claude-code` brain provider, ensure `claude` CLI is on `PATH`.
 - `CODEX_OAUTH_REFRESH_TOKEN` — experimental ChatGPT-backed Codex/OpenAI provider (`codex-oauth`)
 - `GOOGLE_API_KEY` — `gemini_realtime` voice mode
 - `ELEVENLABS_API_KEY` — `elevenlabs_realtime` voice mode
-- `ANTHROPIC_API_KEY` — Anthropic models, Claude Code brain sessions
+- `ANTHROPIC_API_KEY` — Anthropic models
 - `CLAUDE_OAUTH_REFRESH_TOKEN` — Claude subscription-backed provider (`claude-oauth`)
-- Stream-watch vision resolves providers in order: `anthropic` → `xai` → `claude-code`
+- Stream-watch vision resolves providers in order: `claude-oauth` → `anthropic` → `xai`
 
 ## Discord Bot Permissions
 
@@ -131,12 +131,10 @@ Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details 
 | Doc | Description |
 |-----|-------------|
 | `docs/technical-architecture.md` | System architecture, data model, runtime flows |
-| `docs/preset-driven-agent-stack-spec.md` | Target spec for the preset-driven agent stack architecture and its `openai_native` profile |
 | `docs/clanker-activity.md` | Text + voice activity model: direct replies, reply/lurk channels, thought loop, discovery |
-| `docs/agent-code.md` | Code agent runtime (Claude Code + Codex) |
+| `docs/agent-code.md` | Code agent runtime (Claude Code, Codex CLI, Codex) |
 | `docs/agent-browser.md` | Browser agent runtime |
 | `docs/voice/voice-provider-abstraction.md` | Voice pipeline stages, providers, and settings |
-| `docs/claude-code-brain-session-mode.md` | Claude Code as LLM brain provider |
 | `docs/claude-ai-oauth.md` | Claude AI OAuth provider (`claude-oauth`) |
 | `docs/codex-oauth.md` | Experimental ChatGPT-backed Codex/OpenAI OAuth provider (`codex-oauth`) |
 | `docs/memory-system.md` | Memory system design |
@@ -146,6 +144,8 @@ Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details 
 | `docs/e2e-test-spec.md` | E2E bot-to-bot + golden validation suites |
 | `docs/tests.md` | Test commands, live tests, and replay harnesses |
 | `docs/logs.md` | Structured logging and Loki setup |
+
+Roadmap material now lives under `docs/roadmap/`. Historical implementation plans live under `docs/archive/`.
 
 ## Notes
 
