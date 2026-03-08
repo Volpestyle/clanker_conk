@@ -420,7 +420,7 @@ export function formatVoiceChannelEffectSummary(entry, { includeTiming = false }
 
   if (effectType === "soundboard") {
     summary = soundName
-      ? `${displayName} played soundboard \"${soundName}\"`
+      ? `${displayName} played soundboard "${soundName}"`
       : `${displayName} played a soundboard effect`;
   } else if (effectType === "emoji") {
     summary = emoji

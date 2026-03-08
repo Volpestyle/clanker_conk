@@ -57,6 +57,44 @@ test("buildReplyToolSet excludes web_scrape when caller opts out", () => {
   assert.equal(tools.some((tool) => tool.name === "web_scrape"), false);
 });
 
+test("buildReplyToolSet includes memory tools and conversation search when memory is enabled", () => {
+  const toolNames = buildReplyToolSet({
+    browser: { enabled: false },
+    webSearch: { enabled: false },
+    memory: { enabled: true },
+    adaptiveDirectives: { enabled: false }
+  }).map((tool) => tool.name);
+
+  assert.equal(toolNames.includes("memory_search"), true);
+  assert.equal(toolNames.includes("memory_write"), true);
+  assert.equal(toolNames.includes("conversation_search"), true);
+});
+
+test("buildReplyToolSet includes code_task when dev task runtime and permissions are enabled", () => {
+  const toolNames = buildReplyToolSet({
+    browser: { enabled: false },
+    webSearch: { enabled: false },
+    memory: { enabled: false },
+    adaptiveDirectives: { enabled: false },
+    permissions: {
+      devTasks: {
+        allowedUserIds: ["user-1"]
+      }
+    },
+    agentStack: {
+      runtimeConfig: {
+        devTeam: {
+          codexCli: {
+            enabled: true
+          }
+        }
+      }
+    }
+  }).map((tool) => tool.name);
+
+  assert.equal(toolNames.includes("code_task"), true);
+});
+
 test("executeReplyTool delegates web_scrape to readPageSummary", async () => {
   const calls: Array<{ url: string; maxChars: number }> = [];
 
@@ -119,6 +157,53 @@ test("executeReplyTool web_scrape suggests browser_browse on failure", async () 
 
   assert.equal(result.isError, true);
   assert.match(result.content, /browser_browse/);
+});
+
+test("executeReplyTool delegates conversation_search to store history search", async () => {
+  const queries: Array<Record<string, unknown>> = [];
+
+  const result = await executeReplyTool(
+    "conversation_search",
+    { query: "starter roguelikes", scope: "guild", top_k: 1, max_age_hours: 48 },
+    {
+      store: {
+        logAction() {},
+        searchConversationWindows(opts) {
+          queries.push(opts);
+          return [
+            {
+              ageMinutes: 90,
+              messages: [
+                { author_name: "alice", content: "you said spelunky 2 was the cleanest starter pick", is_bot: 0 }
+              ]
+            }
+          ];
+        }
+      }
+    },
+    {
+      settings: {},
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1",
+      sourceMessageId: "msg-1",
+      sourceText: "what did we say earlier",
+      trace: { source: "reply_message" }
+    }
+  );
+
+  assert.equal(result.isError, undefined);
+  assert.match(result.content, /Conversation history for "starter roguelikes"/);
+  assert.match(result.content, /spelunky 2 was the cleanest starter pick/i);
+  assert.deepEqual(queries, [{
+    guildId: "guild-1",
+    channelId: null,
+    queryText: "starter roguelikes",
+    limit: 1,
+    maxAgeHours: 48,
+    before: 1,
+    after: 1
+  }]);
 });
 
 test("executeReplyTool delegates browser_browse to runtime", async () => {

@@ -126,10 +126,17 @@ export interface ReplyDecisionHost {
 }
 
 function resolveRealtimeAdmissionMode(settings: ReplyDecisionSettings): "hard_classifier" | "generation_only" {
+  const replyPath = String(getVoiceConversationPolicy(settings).replyPath || "")
+    .trim()
+    .toLowerCase();
+  // Bridge always needs the classifier — it's the only gate before generation.
+  if (replyPath === "bridge") return "hard_classifier";
+  // Brain: default off (generation LLM decides), but allow explicit opt-in.
   const raw = String(getVoiceAdmissionSettings(settings).mode || "")
     .trim()
     .toLowerCase();
-  return raw === "generation_decides" ? "generation_only" : DEFAULT_REALTIME_ADMISSION_MODE;
+  if (raw === "classifier_gate" || raw === "hard_classifier") return "hard_classifier";
+  return "generation_only";
 }
 
 function resolveMusicWakeLatchSeconds(settings: ReplyDecisionSettings): number {
@@ -888,18 +895,20 @@ export function buildClassifierPrompt(input: ClassifierPromptInput): {
     parts.push(`Transcript: "${input.transcript}"`);
   }
 
-  // Conversation recency — signal strength scales with eagerness + recency
+  // Conversation recency
   if (input.conversationContext.recentAssistantReply) {
     const msSince = Number(input.conversationContext.msSinceAssistantReply || 0);
     const secsSinceReply = Math.round(msSince / 1000);
-    if (msSince <= 15_000 && normalizedEagerness >= 25) {
-      parts.push(`You spoke ${secsSinceReply}s ago — active conversation, this is very likely directed at you.`);
+    const hasRecentDirectAddress = input.conversationContext.msSinceDirectAddress != null
+      && input.conversationContext.msSinceDirectAddress <= 15_000;
+    if (msSince <= 15_000 && hasRecentDirectAddress) {
+      parts.push(`You spoke ${secsSinceReply}s ago in an active back-and-forth — follow-ups are likely for you.`);
     } else {
       parts.push(`You spoke ${secsSinceReply}s ago.`);
     }
-    if (input.conversationContext.msSinceDirectAddress != null) {
-      parts.push(`Last addressed by name ${Math.round(input.conversationContext.msSinceDirectAddress / 1000)}s ago.`);
-    }
+  }
+  if (input.conversationContext.msSinceDirectAddress != null) {
+    parts.push(`Last addressed by name ${Math.round(input.conversationContext.msSinceDirectAddress / 1000)}s ago.`);
   }
 
   // History
@@ -931,9 +940,17 @@ export function buildClassifierPrompt(input: ClassifierPromptInput): {
   // Event-specific guidance
   if (normalizedInputKind === "event") {
     if (input.speakerName === "YOU") {
-      parts.push(`You just joined — say YES to greet unless there is a strong reason not to.`);
+      if (normalizedEagerness >= 25 || input.participantCount <= 1) {
+        parts.push(`You just joined — say YES to greet unless there is a strong reason not to.`);
+      } else {
+        parts.push(`You just joined a room where others are talking. Only greet if directly prompted.`);
+      }
     } else {
-      parts.push(`Someone joined or left. Consider greeting them if it feels natural.`);
+      if (normalizedEagerness >= 50) {
+        parts.push(`Someone joined or left. Consider greeting them if it feels natural.`);
+      } else {
+        parts.push(`Someone joined or left.`);
+      }
     }
   }
 
@@ -944,17 +961,17 @@ export function buildClassifierPrompt(input: ClassifierPromptInput): {
     parts.push("The speaker may have said your name (fuzzy match). Lean toward YES.");
   }
 
-  // Eagerness tier — YES-first framing to avoid NO anchoring
+  // Eagerness tier
   if (normalizedEagerness <= 10) {
-    parts.push("Say YES when directly addressed by name or given a direct command. Say NO for everything else.");
+    parts.push("Say YES only when you are clearly the intended recipient — your name is used, or a command/request is aimed at you specifically. Say NO when people are talking to each other.");
   } else if (normalizedEagerness <= 25) {
-    parts.push("Say YES when directly addressed by name, given a direct command, or responding to a clear follow-up in your active conversation. Say NO for ambient chatter, questions not directed at you, or talk aimed at other participants.");
+    parts.push("Say YES when you are the likely recipient — addressed by name, given a command, or in a back-and-forth conversation with the speaker. Say NO when people are having their own conversation.");
   } else if (normalizedEagerness <= 50) {
     parts.push("Say YES when you can contribute — questions, commands, follow-ups, greetings, or anything where you can add value. Say NO for filler noise or conversations clearly between others.");
   } else if (normalizedEagerness <= 75) {
-    parts.push("Say YES when the conversation interests you or you can add value. Say NO for filler/laughter, conversations clearly between other participants, or stale topics that have moved on without you.");
+    parts.push("Say YES when the conversation interests you or you can add value. Be social and willing to engage. Only say NO for clear filler noise or someone explicitly talking to another person by name.");
   } else {
-    parts.push("Say YES freely. Only say NO for clear non-speech or someone explicitly addressing another person by name.");
+    parts.push("Say YES to almost everything. You are in maximum engagement mode. Only say NO for literal non-speech sounds.");
   }
 
   parts.push(``);
@@ -1019,8 +1036,8 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
     .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
   const classifierDebugEnabled = parseBooleanFlag(process.env.VOICE_CLASSIFIER_DEBUG, false);
   const botName = getPromptBotName(settings);
-  const normalizedDirectedConfidence = Math.max(0, Math.min(1, Number(currentSpeakerDirectedConfidence) || 0));
-  const normalizedTarget = String(currentSpeakerTarget || "").trim() || null;
+  const _normalizedDirectedConfidence = Math.max(0, Math.min(1, Number(currentSpeakerDirectedConfidence) || 0));
+  const _normalizedTarget = String(currentSpeakerTarget || "").trim() || null;
   const normalizedUserId = String(userId || "").trim() || null;
   const logClassifierDebug = ({
     stage = "result",

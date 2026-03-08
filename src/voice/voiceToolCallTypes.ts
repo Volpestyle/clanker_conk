@@ -1,6 +1,5 @@
 import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 import type { VoiceRealtimeToolSettings } from "./voiceSessionTypes.ts";
-import type { ActiveReplyRegistry } from "../tools/activeReplyRegistry.ts";
 
 export type VoiceToolCallManager = Pick<
   VoiceSessionManager,

@@ -311,6 +311,7 @@ function createVoiceBot({
       screenShareCalls.push(payload);
       return await offerScreenShare(payload);
     },
+
     search: {
       isConfigured() {
         return Boolean(searchConfigured);
@@ -476,6 +477,26 @@ test("generateVoiceTurnReply returns early for empty transcripts", async () => {
   assert.equal(getGenerationCalls(), 0);
 });
 
+test("generateVoiceTurnReply passes abort signal into llm generation", async () => {
+  const { bot, generationPayloads } = createVoiceBot({
+    generationText: structuredVoiceOutput({
+      text: "all good"
+    })
+  });
+  const controller = new AbortController();
+
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "play something",
+    signal: controller.signal
+  });
+
+  assert.equal(generationPayloads.length, 1);
+  assert.equal(generationPayloads[0]?.signal, controller.signal);
+});
 
 test("generateVoiceTurnReply parses soundboard tool-call fields and handles tool-based memory", async () => {
   const { bot } = createVoiceBot({
@@ -797,8 +818,8 @@ test("generateVoiceTurnReply uses text llm provider/model when voice generation 
   await generateVoiceTurnReply(bot, {
     settings: baseSettings({
       llm: {
-        provider: "claude-code",
-        model: "sonnet"
+        provider: "claude-oauth",
+        model: "claude-sonnet-4-6"
       },
       voice: {
         generationLlm: {
@@ -815,8 +836,8 @@ test("generateVoiceTurnReply uses text llm provider/model when voice generation 
   });
 
   assert.equal(generationPayloads.length > 0, true);
-  assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).provider, "claude-code");
-  assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).model, "sonnet");
+  assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).provider, "claude-oauth");
+  assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).model, "claude-sonnet-4-6");
 });
 
 test("generateVoiceTurnReply does not advertise code_task when runtime cannot execute code tasks", async () => {

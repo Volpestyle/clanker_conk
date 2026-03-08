@@ -33,7 +33,7 @@ test("buildVoiceTurnPrompt biases low-information eager turns toward skip", () =
 
   assert.equal(
     prompt.includes(
-      "If the turn is only laughter, filler, or backchannel noise (for example haha, lol, hmm, mm, uh-huh, yup), strongly prefer [SKIP] unless there is a clear question, request, or obvious conversational value in replying."
+      "If the turn is laughter, filler, backchannel noise (haha, lol, hmm, mm, uh-huh, yup), or self-talk/thinking out loud"
     ),
     true
   );
@@ -55,7 +55,7 @@ test("buildVoiceTurnPrompt treats fuzzy bot-name cues as a positive signal", () 
   );
   assert.equal(
     prompt.includes(
-      "The transcript may contain your name or a phonetic variant of it. Treat that as a positive signal that the speaker may be talking to you."
+      "The transcript contains your name or a phonetic variant of it. This is a strong signal the speaker is talking to you"
     ),
     true
   );

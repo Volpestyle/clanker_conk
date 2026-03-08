@@ -1,9 +1,8 @@
 export type VoiceLiveScenarioExpected = {
   classifier: "YES" | "NO";
   admission: "allow" | "deny";
-  // "either" is reserved for raw room-event cues where admission may allow
-  // but generation is still intentionally free to speak or [SKIP].
-  generation: "reply" | "skip" | "either";
+  generation: "reply" | "skip" | "intent";
+  voiceIntent?: string | null;
 };
 
 export type VoiceLiveScenario = {
@@ -39,15 +38,28 @@ function turns(...entries: string[]): string[] {
   return entries;
 }
 
+// Shared live voice scenarios are a single source of truth for both suites.
+// Keep admission plus generation/intent expectations coupled here.
 function deriveExpected(
-  classifier: "YES" | "NO",
-  overrides: Partial<VoiceLiveScenarioExpected> = {}
+  classifier: "YES" | "NO"
 ): VoiceLiveScenarioExpected {
   return {
     classifier,
     admission: classifier === "YES" ? "allow" : "deny",
     generation: classifier === "YES" ? "reply" : "skip",
-    ...overrides
+    voiceIntent: null
+  };
+}
+
+function deriveIntentExpected(
+  classifier: "YES" | "NO",
+  voiceIntent: string
+): VoiceLiveScenarioExpected {
+  const base = deriveExpected(classifier);
+  return {
+    ...base,
+    generation: classifier === "YES" ? "intent" : base.generation,
+    voiceIntent: classifier === "YES" ? voiceIntent : null
   };
 }
 
@@ -55,8 +67,7 @@ function scenario(
   label: string,
   transcript: string,
   classifier: "YES" | "NO",
-  overrides?: VoiceScenarioOverrides,
-  expectedOverrides?: Partial<VoiceLiveScenarioExpected>
+  overrides?: VoiceScenarioOverrides
 ): VoiceLiveScenario {
   const participants = overrides?.participants ?? ["vuhlp"];
   const isEvent = overrides?.inputKind === "event";
@@ -66,21 +77,29 @@ function scenario(
     transcript: transcript || (isEvent ? `[${speaker} joined the voice channel]` : ""),
     participants,
     speaker,
-    expected: deriveExpected(classifier, expectedOverrides),
+    expected: deriveExpected(classifier),
     ...overrides
   };
 }
 
-function eventScenario(
+function intentScenario(
   label: string,
+  transcript: string,
   classifier: "YES" | "NO",
-  overrides?: VoiceScenarioOverrides,
-  expectedOverrides?: Partial<VoiceLiveScenarioExpected>
+  voiceIntent: string,
+  overrides?: VoiceScenarioOverrides
 ): VoiceLiveScenario {
-  return scenario(label, "", classifier, {
-    inputKind: "event",
+  const participants = overrides?.participants ?? ["vuhlp"];
+  const isEvent = overrides?.inputKind === "event";
+  const speaker = overrides?.speaker ?? (isEvent ? "YOU" : participants[0]);
+  return {
+    label,
+    transcript: transcript || (isEvent ? `[${speaker} joined the voice channel]` : ""),
+    participants,
+    speaker,
+    expected: deriveIntentExpected(classifier, voiceIntent),
     ...overrides
-  }, expectedOverrides);
+  };
 }
 
 function group(label: string, scenarios: VoiceLiveScenario[]): VoiceLiveScenarioGroup {
@@ -91,8 +110,7 @@ function eagernessSweep(
   labelTemplate: string,
   base: VoiceScenarioBase,
   threshold: number,
-  levels = [10, 20, 30, 50, 70, 90],
-  expectedOverrides?: Partial<VoiceLiveScenarioExpected>
+  levels = [10, 20, 30, 50, 70, 90]
 ): VoiceLiveScenario[] {
   return levels.map((eagerness) => {
     const classifier = eagerness >= threshold ? "YES" : "NO";
@@ -106,12 +124,15 @@ function eagernessSweep(
       participants,
       speaker,
       eagerness,
-      expected: deriveExpected(classifier, expectedOverrides)
+      expected: deriveExpected(classifier)
     };
   });
 }
 
-export const VOICE_LIVE_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
+// Shared live voice scenarios are a single source of truth for admission plus
+// generation. Some command rows expect an actionable voiceIntent instead of a
+// spoken line.
+export const VOICE_LIVE_SHARED_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
   group("name detection fast-paths", [
     scenario("exact bot name in transcript", "Hey clanker conk, what's up?", "YES"),
     scenario("partial bot name (clanker)", "Hey clanker, play some music", "YES"),
@@ -137,10 +158,7 @@ export const VOICE_LIVE_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
         timeline: turns("[vuhlp joined the voice channel]")
       },
       10,
-      [10, 25, 50],
-      {
-        generation: "either"
-      }
+      [10, 25, 50]
     ),
     ...eagernessSweep(
       "event: bot joins a busy call @ eagerness {e}",
@@ -150,10 +168,7 @@ export const VOICE_LIVE_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
         timeline: turns("vuhlp: i got mad aura", "jake: yea thats wild", "vuhlp: I wish I had some ice cream")
       },
       25,
-      [10, 25, 50],
-      {
-        generation: "either"
-      }
+      [10, 25, 50]
     ),
     ...eagernessSweep(
       "event: another person joins busy room mid-conversation @ eagerness {e}",
@@ -164,34 +179,8 @@ export const VOICE_LIVE_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
         timeline: turns('alice: "we should order food"', 'bob: "yeah maybe tacos"')
       },
       50,
-      [10, 25, 50],
-      {
-        generation: "either"
-      }
+      [10, 25, 50]
     )
-  ]),
-
-  group("music commands", [
-    scenario("play command with bot name", "clanker conk play sicko mode", "YES", {
-      participants: ["alice", "bob"]
-    }),
-    scenario("play command without bot name, active conversation", "Play Sicko Mode", "YES", {
-      participants: ["alice", "bob"],
-      recentAssistantReply: true,
-      msSinceAssistantReply: 15_000
-    }),
-    scenario("skip during music with wake latch", "Skip this song", "YES", {
-      musicActive: true,
-      musicWakeLatched: true,
-      msUntilMusicWakeLatchExpiry: 9_000,
-      recentAssistantReply: true,
-      msSinceAssistantReply: 5_000
-    }),
-    scenario("ambient chatter during music, no wake", "This beat is fire", "NO", {
-      participants: ["vuhlp", "jake"],
-      musicActive: true,
-      musicWakeLatched: false
-    })
   ]),
 
   group("clear engagement", [
@@ -231,47 +220,27 @@ export const VOICE_LIVE_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
           'YOU: "Im just vibing in the chaos right now"'
         )
       },
-      25,
-      [10, 25, 50]
-    ),
-    ...eagernessSweep(
-      "1:1 question to the bot @ eagerness {e}",
-      {
-        transcript: "What's the weather like in New York?",
-        participants: ["vuhlp", "jake"],
-        recentAssistantReply: true,
-        msSinceAssistantReply: 10_000,
-        timeline: turns('YOU: "hey what\'s good"', 'vuhlp: "not much"', 'YOU: "cool cool"')
-      },
-      25,
-      [10, 25, 50]
-    ),
-    ...eagernessSweep(
-      "recent direct address, same speaker clarifies @ eagerness {e}",
-      {
-        transcript: "wait so Peru is Lima right?",
-        participants: ["vuhlp", "jake"],
-        speaker: "vuhlp",
-        recentAssistantReply: false,
-        msSinceDirectAddress: 4_000,
-        timeline: turns(
-          'vuhlp: "clanker conk what\'s the capital of Peru?"',
-          'jake: "pretty sure it\'s Lima"'
-        )
-      },
-      25,
-      [10, 25, 50]
-    ),
-    ...eagernessSweep(
-      "web search request, no recent assistant reply @ eagerness {e}",
-      {
-        participants: ["michael", "test"],
-        transcript: "Can you look up Nintendo DS prices?",
-        recentAssistantReply: false
-      },
       10,
       [10, 25, 50]
-    )
+    ),
+    scenario("one-on-one question after recent bot exchange", "What's the weather like in New York?", "YES", {
+      eagerness: 25,
+      participants: ["vuhlp"],
+      recentAssistantReply: true,
+      msSinceAssistantReply: 10_000,
+      timeline: turns('YOU: "hey what\'s good"', 'vuhlp: "not much"', 'YOU: "cool cool"')
+    }),
+    scenario("recent direct address, same speaker clarifies", "wait so Peru is Lima right?", "YES", {
+      eagerness: 25,
+      participants: ["vuhlp", "jake"],
+      speaker: "vuhlp",
+      recentAssistantReply: false,
+      msSinceDirectAddress: 4_000,
+      timeline: turns(
+        'vuhlp: "clanker conk what\'s the capital of Peru?"',
+        'jake: "pretty sure it\'s Lima"'
+      )
+    })
   ]),
 
   group("contextual engagement", [
@@ -303,81 +272,52 @@ export const VOICE_LIVE_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
       },
       50,
       [10, 25, 50, 75]
-    ),
-    ...eagernessSweep(
-      "NOT being annoyingly helpful in conversation @ eagerness {e}",
-      {
-        transcript: "How many are there?",
-        participants: ["alice", "bob", "carol"],
-        recentAssistantReply: true,
-        msSinceAssistantReply: 15_000,
-        msSinceDirectAddress: 15_000,
-        timeline: turns(
-          'alice: "How do I win Super mario?"',
-          'bob: "you get all the stars."'
-        )
-      },
-      75,
-      [10, 25, 50, 75]
-    ),
-    ...eagernessSweep(
-      "playing music in conversation @ eagerness {e}",
-      {
-        transcript: "Clank play Sicko Mode",
-        participants: ["alice", "bob", "carol"],
-        speaker: "bob",
-        recentAssistantReply: true,
-        msSinceAssistantReply: 15_000,
-        msSinceDirectAddress: 15_000,
-        timeline: turns('alice: "Tis the season to be jolly"', 'carol: "How many tictacs can u lick lack?"')
-      },
-      10,
-      [10, 50]
     )
   ]),
 
-  group("stays quiet", [
-    ...eagernessSweep(
-      "multi-human side conversation between humans @ eagerness {e}",
-      {
-        participants: ["alice", "bob", "carol"],
-        transcript: "did you see the game last night?",
-        timeline: turns("Alice: omg that game was crazy last night", "Bob: yeah it was insane", "Carol: Holy shit")
-      },
-      80,
-      [10, 25, 50, 75, 80]
-    ),
-    ...eagernessSweep(
-      "stale direct address after the room moved on @ eagerness {e}",
-      {
-        transcript: "nah, tacos are cheaper",
-        participants: ["alice", "bob", "carol"],
-        speaker: "carol",
-        recentAssistantReply: false,
-        msSinceDirectAddress: 45_000,
-        timeline: turns(
-          'alice: "clanker conk what should I order?"',
-          'bob: "bro just get tacos"',
-          'carol: "yeah tacos are cheaper"'
-        )
-      },
-      50,
-      [25, 50, 75]
-    ),
-    ...eagernessSweep(
-      "filler laughter @ eagerness {e}",
-      {
-        transcript: "Haha, yea some Braydon like that suppose",
-        participants: ["vuhlp", "jake"],
-        timeline: turns(
-          'jake: "and then he just fell off the chair"',
-          'vuhlp: "no way dude"',
-          'jake: "yeah bro it was hilarious"'
-        )
-      },
-      80,
-      [25, 50, 75, 80]
-    ),
+  group("categorical restraint", [
+    scenario("ambient web search request with no direct cue", "Can you look up Nintendo DS prices?", "NO", {
+      eagerness: 25,
+      participants: ["michael", "test"],
+      recentAssistantReply: false
+    }),
+    scenario("not being annoyingly helpful after humans already answered", "How many are there?", "NO", {
+      eagerness: 50,
+      participants: ["alice", "bob", "carol"],
+      recentAssistantReply: true,
+      msSinceAssistantReply: 15_000,
+      msSinceDirectAddress: 15_000,
+      timeline: turns(
+        'alice: "How do I win Super mario?"',
+        'bob: "you get all the stars."'
+      )
+    }),
+    scenario("multi-human side conversation between humans", "did you see the game last night?", "NO", {
+      eagerness: 50,
+      participants: ["alice", "bob", "carol"],
+      timeline: turns("Alice: omg that game was crazy last night", "Bob: yeah it was insane", "Carol: Holy shit")
+    }),
+    scenario("stale direct address after the room moved on", "nah, tacos are cheaper", "NO", {
+      eagerness: 50,
+      participants: ["alice", "bob", "carol"],
+      speaker: "carol",
+      recentAssistantReply: false,
+      msSinceDirectAddress: 45_000,
+      timeline: turns(
+        'alice: "clanker conk what should I order?"',
+        'bob: "bro just get tacos"',
+        'carol: "yeah tacos are cheaper"'
+      )
+    }),
+    scenario("filler laughter in human banter", "Haha, yea some Braydon like that suppose", "NO", {
+      eagerness: 50,
+      participants: ["vuhlp", "jake"],
+      timeline: turns(
+        'jake: "and then he just fell off the chair"',
+        'vuhlp: "no way dude"',
+        'jake: "yeah bro it was hilarious"'
+      )
+    }),
     scenario("backchannel noise", "Mm-hmm.", "NO"),
     scenario("self-talk / thinking out loud", "Wait, where did I put my keys...", "NO"),
     scenario("multi-human addressed to specific other person", "Carol, can you pass me that?", "NO", {
@@ -386,45 +326,58 @@ export const VOICE_LIVE_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
     })
   ]),
 
-  group("music wake latch", [
-    scenario("music active, no wake, ambient chatter", "This beat is fire", "NO", {
+  group("command recognition", [
+    intentScenario("play command with bot name", "clanker conk play sicko mode", "YES", "music_play_now", {
+      eagerness: 10,
+      participants: ["alice", "bob"]
+    }),
+    intentScenario("play command without bot name, active conversation", "Play Sicko Mode", "YES", "music_play_now", {
+      eagerness: 10,
+      participants: ["alice", "bob"],
+      recentAssistantReply: true,
+      msSinceAssistantReply: 15_000
+    }),
+    intentScenario("playing music in conversation", "Clank play Sicko Mode", "YES", "music_play_now", {
+      eagerness: 10,
+      participants: ["alice", "bob", "carol"],
+      speaker: "bob",
+      recentAssistantReply: true,
+      msSinceAssistantReply: 15_000,
+      msSinceDirectAddress: 15_000,
+      timeline: turns('alice: "Tis the season to be jolly"', 'carol: "How many tictacs can u lick lack?"')
+    })
+  ]),
+
+  group("music wake latch handling", [
+    scenario("ambient chatter during music, no wake", "This beat is fire", "NO", {
+      eagerness: 10,
       participants: ["vuhlp", "jake"],
       musicActive: true,
       musicWakeLatched: false
     }),
-    ...eagernessSweep(
-      "music active with wake latch - command should go through @ eagerness {e}",
-      {
-        transcript: "Skip this song",
-        participants: ["vuhlp"],
-        musicActive: true,
-        musicWakeLatched: true,
-        msUntilMusicWakeLatchExpiry: 9_000,
-        recentAssistantReply: true,
-        msSinceAssistantReply: 5_000
-      },
-      10,
-      [10, 25, 50]
-    ),
-    ...eagernessSweep(
-      "music wake latch carries a lightweight follow-up control @ eagerness {e}",
-      {
-        transcript: "Turn it up a little",
-        participants: ["vuhlp", "jake"],
-        musicActive: true,
-        musicWakeLatched: true,
-        msUntilMusicWakeLatchExpiry: 7_000,
-        recentAssistantReply: true,
-        msSinceAssistantReply: 8_000,
-        timeline: turns(
-          'vuhlp: "clanker conk play sicko mode"',
-          'YOU: "playing sicko mode"',
-          'jake: "this one is good"'
-        )
-      },
-      10,
-      [10, 25, 50]
-    )
+    intentScenario("skip during music with wake latch", "Skip this song", "YES", "music_queue_next", {
+      eagerness: 10,
+      participants: ["vuhlp", "jake"],
+      musicActive: true,
+      musicWakeLatched: true,
+      msUntilMusicWakeLatchExpiry: 9_000,
+      recentAssistantReply: true,
+      msSinceAssistantReply: 5_000
+    }),
+    scenario("music wake latch carries a lightweight follow-up control", "Turn it up a little", "YES", {
+      eagerness: 10,
+      participants: ["vuhlp", "jake"],
+      musicActive: true,
+      musicWakeLatched: true,
+      msUntilMusicWakeLatchExpiry: 7_000,
+      recentAssistantReply: true,
+      msSinceAssistantReply: 8_000,
+      timeline: turns(
+        'vuhlp: "clanker conk play sicko mode"',
+        'YOU: "playing sicko mode"',
+        'jake: "this one is good"'
+      )
+    })
   ]),
 
   group("eagerness sweeps", [
@@ -461,7 +414,7 @@ export const VOICE_LIVE_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
       [10, 20, 50]
     ),
     ...eagernessSweep(
-      "eagerness {e}, volunteer conversation",
+      "eagerness {e}, volunteer conversation (stale, 60s)",
       {
         participants: ["vuhlp", "jake"],
         transcript: "I wonder what the best programming language for game dev is",
@@ -474,6 +427,22 @@ export const VOICE_LIVE_SCENARIO_GROUPS: VoiceLiveScenarioGroup[] = [
         )
       },
       50,
+      [10, 25, 50]
+    ),
+    ...eagernessSweep(
+      "eagerness {e}, volunteer conversation (fresh, 12s)",
+      {
+        participants: ["vuhlp", "jake"],
+        transcript: "wait is there a way to run python inside a game engine?",
+        recentAssistantReply: true,
+        msSinceAssistantReply: 12_000,
+        timeline: turns(
+          'vuhlp: "I been messing with godot lately"',
+          'jake: "oh nice, what language does it use?"',
+          'vuhlp: "gdscript but I kinda wish it was python"'
+        )
+      },
+      25,
       [10, 25, 50]
     ),
     ...eagernessSweep(

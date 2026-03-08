@@ -223,10 +223,8 @@ export const MUSIC_QUEUE_ADD_SCHEMA: SharedToolSchema = {
         maxItems: 12
       },
       position: {
-        oneOf: [
-          { type: "string", enum: ["end"] },
-          { type: "integer", minimum: 0 }
-        ]
+        type: "string",
+        description: "Queue position: \"end\" to append, or a zero-based index as a string (e.g. \"0\" for front)"
       }
     },
     required: ["tracks"],

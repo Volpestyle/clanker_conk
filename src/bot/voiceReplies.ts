@@ -305,7 +305,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   onWebLookupStart = null,
   onWebLookupComplete = null,
   webSearchTimeoutMs: _webSearchTimeoutMs = null,
-  voiceToolCallbacks = null
+  voiceToolCallbacks = null,
+  signal = undefined
 }) {
   if (!runtime.llm?.generate || !settings) return { text: "" };
   const normalizedInputKind = String(inputKind || "").trim().toLowerCase() === "event"
@@ -461,7 +462,9 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     provider: voiceGenerationBinding.provider,
     model: voiceGenerationBinding.model,
     temperature: clamp(Number(replyGeneration.temperature) || 0.8, 0, 1.2),
-    maxOutputTokens: clamp(Number(replyGeneration.maxOutputTokens) || 220, 40, 420)
+    // Voice-turn JSON with actionable voiceIntent fields needs more headroom
+    // than plain spoken-text replies to avoid truncating the closing schema.
+    maxOutputTokens: clamp(Number(replyGeneration.maxOutputTokens) || 320, 40, 420)
   });
   const tunedBinding = getResolvedOrchestratorBinding(tunedSettings);
 
@@ -712,7 +715,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       contextMessages: voiceContextMessages,
       jsonSchema: voiceReplyTools.length ? "" : REPLY_OUTPUT_JSON_SCHEMA,
       tools: voiceReplyTools,
-      trace: voiceTrace
+      trace: voiceTrace,
+      signal
     });
 
     const VOICE_TOOL_LOOP_MAX_STEPS = 2;
@@ -784,7 +788,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         trace: {
           ...voiceTrace,
           event: `${sessionId ? "voice_session" : "voice_turn"}:tool_loop:${voiceToolLoopSteps + 1}`
-        }
+        },
+        signal
       });
       voiceToolLoopSteps += 1;
     }

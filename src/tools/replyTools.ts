@@ -21,16 +21,6 @@ import {
   ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA,
   CONVERSATION_SEARCH_SCHEMA,
   CODE_TASK_SCHEMA,
-  MUSIC_SEARCH_SCHEMA,
-  MUSIC_QUEUE_ADD_SCHEMA,
-  MUSIC_PLAY_NOW_SCHEMA,
-  MUSIC_QUEUE_NEXT_SCHEMA,
-  MUSIC_STOP_SCHEMA,
-  MUSIC_PAUSE_SCHEMA,
-  MUSIC_RESUME_SCHEMA,
-  MUSIC_SKIP_SCHEMA,
-  MUSIC_NOW_PLAYING_SCHEMA,
-  LEAVE_VOICE_CHANNEL_SCHEMA,
   VOICE_TOOL_SCHEMAS,
   toAnthropicTool
 } from "./sharedToolSchemas.ts";
@@ -269,10 +259,10 @@ const IMAGE_LOOKUP_TOOL: ReplyToolDefinition = {
       },
       query: {
         type: "string",
-        description: "Concise description of the image to find, or the image ref itself (max 220 chars)"
+        description: "Concise description of the image to find, or the image ref itself (max 220 chars). Provide imageId OR query."
       }
     },
-    anyOf: [{ required: ["imageId"] }, { required: ["query"] }],
+    required: ["query"],
     additionalProperties: false
   }
 };
@@ -1093,9 +1083,14 @@ async function executeVoiceTool(
           ? (input.tracks as string[]).map((t) => String(t).trim()).filter(Boolean).slice(0, 12)
           : [];
         if (!tracks.length) return { content: "No track IDs provided.", isError: true };
-        const position = typeof input?.position === "number"
-          ? Math.max(0, Math.floor(input.position))
-          : (input?.position === "end" ? "end" : undefined);
+        const rawPos = input?.position;
+        const position = rawPos === "end"
+          ? "end"
+          : typeof rawPos === "string" && /^\d+$/.test(rawPos)
+            ? Math.max(0, parseInt(rawPos, 10))
+            : typeof rawPos === "number"
+              ? Math.max(0, Math.floor(rawPos))
+              : undefined;
         throwIfAborted(signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicQueueAdd(tracks, position);
         break;

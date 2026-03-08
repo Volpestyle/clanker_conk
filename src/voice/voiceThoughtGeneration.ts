@@ -282,7 +282,7 @@ export async function loadVoiceThoughtMemoryFacts(
   }
 ) {
   if (!session || session.ending) return [];
-  if (!Boolean(getMemorySettings(settings).enabled)) return [];
+  if (!getMemorySettings(settings).enabled) return [];
   if (!host.memory || typeof host.memory.searchDurableFacts !== "function") return [];
 
   const normalizedThought = normalizeVoiceText(thoughtCandidate, VOICE_THOUGHT_MAX_CHARS);

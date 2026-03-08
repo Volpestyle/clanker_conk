@@ -58,7 +58,7 @@ export function buildVoiceAdmissionPolicyLines({
   const normalizedParticipantCount = Math.max(0, Math.floor(Number(participantCount) || 0));
   const normalizedEagerness = Math.max(0, Math.min(100, Number(replyEagerness) || 0));
   const engagedWithCurrentSpeaker = Boolean(conversationContext?.engagedWithCurrentSpeaker);
-  const engaged = Boolean(conversationContext?.engaged);
+  const _engaged = Boolean(conversationContext?.engaged);
 
   lines.push(`Voice reply eagerness: ${normalizedEagerness}/100.`);
   lines.push(getEagernessGenerationTier(normalizedEagerness));
@@ -79,7 +79,7 @@ export function buildVoiceAdmissionPolicyLines({
   }
 
   if (!normalizedDirectAddressed && normalizedNameCueDetected) {
-    lines.push("The transcript may contain your name or a phonetic variant of it. Treat that as a positive signal that the speaker may be talking to you.");
+    lines.push("The transcript contains your name or a phonetic variant of it. This is a strong signal the speaker is talking to you — prefer responding unless the context clearly shows otherwise.");
   }
 
   if (musicActive) {
@@ -101,7 +101,7 @@ export function buildVoiceAdmissionPolicyLines({
       lines.push("You are actively in this speaker's thread. Lean toward a short helpful reply over [SKIP].");
     }
     lines.push(
-      "If the turn is only laughter, filler, or backchannel noise (for example haha, lol, hmm, mm, uh-huh, yup), strongly prefer [SKIP] unless there is a clear question, request, or obvious conversational value in replying."
+      "If the turn is laughter, filler, backchannel noise (haha, lol, hmm, mm, uh-huh, yup), or self-talk/thinking out loud (for example 'where did I put my keys', 'hmm let me think', 'wait what was I doing'), strongly prefer [SKIP]. These are not directed at you even in a 1:1 room."
     );
     lines.push("Only speak up if you can genuinely add value. If not, output exactly [SKIP].");
     lines.push("Task: respond as a natural spoken VC reply, or skip if you have nothing to add.");

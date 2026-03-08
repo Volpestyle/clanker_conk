@@ -56,11 +56,19 @@ This answers: "Given this context, does the generation LLM produce the right rep
 
 The voice section uses the shared voice live scenario catalog that is also consumed by `tests/live/voiceAdmission.live.test.ts`, so both suites cover the same voice situations.
 
+The text section also covers:
+
+- tool selection for `web_search`, `web_scrape`, `conversation_search`, and `adaptive_directive_add`
+- a vision turn with inline image input
+- raw structured-output validity for representative reply and skip cases
+
 Defaults:
 
-- Text provider defaults to `claude-code`
-- Voice provider defaults to `claude-code`
+- Text provider defaults to `claude-oauth`
+- Voice provider defaults to `claude-oauth`
 - The suite includes a small eagerness sweep for both text and voice so we validate low-vs-high participation behavior, not just one-off direct-address cases
+- Tool-selection subtests are skipped automatically for providers without tool-call support
+- Vision subtests are skipped automatically for providers without multimodal image support
 
 ```sh
 bun test tests/live/replyGeneration.live.test.ts
@@ -69,8 +77,8 @@ bun test tests/live/replyGeneration.live.test.ts
 You can target different providers/models per path:
 
 ```sh
-TEXT_LLM_PROVIDER=claude-code TEXT_LLM_MODEL=sonnet \
-VOICE_LLM_PROVIDER=claude-code VOICE_LLM_MODEL=sonnet \
+TEXT_LLM_PROVIDER=claude-oauth TEXT_LLM_MODEL=claude-sonnet-4-6 \
+VOICE_LLM_PROVIDER=claude-oauth VOICE_LLM_MODEL=claude-sonnet-4-6 \
 bun test tests/live/replyGeneration.live.test.ts
 ```
 
@@ -90,7 +98,7 @@ LIVE_REPLY_FILTER=text bun test tests/live/replyGeneration.live.test.ts
 
 Debug visibility:
 
-- `LIVE_REPLY_DEBUG=1` prints provider/model, system prompt, user prompt, raw model output, and parsed structured text
+- `LIVE_REPLY_DEBUG=1` prints provider/model, system prompt, user prompt, raw model output, parsed structured text, and any returned tool calls
 
 ### Voice Admission Live Test (Classifier + fast-paths — no generation)
 
@@ -108,7 +116,7 @@ It uses the same shared scenario corpus as the voice section of `replyGeneration
 
 Defaults:
 
-- Classifier provider defaults to `claude-code`
+- Classifier provider defaults to `claude-oauth`
 - The suite covers the shared name-detection, join-event, music, contextual, and eagerness scenarios
 
 ```sh
@@ -116,11 +124,11 @@ bun test tests/live/voiceAdmission.live.test.ts
 ```
 
 ```sh
-CLASSIFIER_PROVIDER=claude-code CLASSIFIER_MODEL=claude-haiku-4-5 VOICE_ADMISSION_DEBUG=0 bun test tests/live/voiceAdmission.live.test.ts
+CLASSIFIER_PROVIDER=claude-oauth CLASSIFIER_MODEL=claude-haiku-4-5 VOICE_ADMISSION_DEBUG=0 bun test tests/live/voiceAdmission.live.test.ts
 ```
 
 ```sh
-CLASSIFIER_PROVIDER=claude-code CLASSIFIER_MODEL=claude-haiku-4-5 LABEL_FILTER="event: another person joins" VOICE_ADMISSION_DEBUG=1 bun test tests/live/voiceAdmission.live.test.ts
+CLASSIFIER_PROVIDER=claude-oauth CLASSIFIER_MODEL=claude-haiku-4-5 LABEL_FILTER="event: another person joins" VOICE_ADMISSION_DEBUG=1 bun test tests/live/voiceAdmission.live.test.ts
 ```
 
 Debug visibility:

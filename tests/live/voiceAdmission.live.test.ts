@@ -1,9 +1,12 @@
 /**
  * Live voice admission tests — CLASSIFIER + FAST-PATHS ONLY, no generation.
  *
- * Exercises the full evaluateVoiceReplyDecision pipeline (name detection
- * fast-paths + YES/NO LLM classifier) against a real LLM. The generation
- * LLM (buildVoiceTurnPrompt / llm.generate) is never called here.
+ * Exercises the full evaluateVoiceReplyDecision pipeline against a real LLM.
+ * This suite covers:
+ * - shared conversational scenarios that should align with generation
+ * - fixed command and music-control scenarios alongside eagerness sweeps
+ *
+ * The generation LLM (buildVoiceTurnPrompt / llm.generate) is never called here.
  *
  * The classifier returns YES/NO. The admission pipeline wraps that into
  * allow/deny (deterministic fast-paths can also allow/deny before the
@@ -11,6 +14,7 @@
  *
  * Run:
  *   bun test tests/live/voiceAdmission.live.test.ts
+ *   CLASSIFIER_PROVIDER=claude-oauth bun test tests/live/voiceAdmission.live.test.ts
  *   CLASSIFIER_PROVIDER=anthropic ANTHROPIC_API_KEY=sk-... bun test tests/live/voiceAdmission.live.test.ts
  *
  * Optional:
@@ -27,27 +31,37 @@ import {
 } from "../../src/voice/voiceReplyDecision.ts";
 import { createTestSettings } from "../../src/testSettings.ts";
 import {
-  runClaudeCli,
-  buildClaudeCodeTextCliArgs
-} from "../../src/llm/llmClaudeCode.ts";
+  createClaudeOAuthClient,
+  isClaudeOAuthConfigured,
+  type ClaudeOAuthState
+} from "../../src/llm/claudeOAuth.ts";
 import {
-  VOICE_LIVE_SCENARIO_GROUPS,
+  VOICE_LIVE_SHARED_SCENARIO_GROUPS,
   type VoiceLiveScenario
 } from "./shared/voiceLiveScenarios.ts";
 
-const CLASSIFIER_PROVIDER = (process.env.CLASSIFIER_PROVIDER || "claude-code").trim().toLowerCase();
+const CLASSIFIER_PROVIDER = (process.env.CLASSIFIER_PROVIDER || "claude-oauth").trim().toLowerCase();
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
-const MODEL = process.env.CLASSIFIER_MODEL || "claude-haiku-4-5";
+const MODEL = process.env.CLASSIFIER_MODEL || "claude-sonnet-4-6";
 const LABEL_FILTER = (process.env.LABEL_FILTER || "").trim().toLowerCase();
 const LIVE_DEBUG = parseBooleanFlag(
   process.env.VOICE_ADMISSION_DEBUG ?? process.env.VOICE_CLASSIFIER_DEBUG,
   false
 );
-const TEST_TIMEOUT_MS = CLASSIFIER_PROVIDER === "claude-code" ? 30_000 : 10_000;
+const TEST_TIMEOUT_MS = 10_000;
 
 let anthropicClient: Anthropic | null = null;
+let claudeOAuthState: ClaudeOAuthState | null = null;
 
 beforeAll(() => {
+  if (CLASSIFIER_PROVIDER === "claude-oauth") {
+    if (!isClaudeOAuthConfigured(process.env.CLAUDE_OAUTH_REFRESH_TOKEN || "")) {
+      throw new Error("CLAUDE_OAUTH_REFRESH_TOKEN or data/claude-oauth-tokens.json is required when using claude-oauth provider");
+    }
+    claudeOAuthState = createClaudeOAuthClient(process.env.CLAUDE_OAUTH_REFRESH_TOKEN || "");
+    return;
+  }
+
   if (CLASSIFIER_PROVIDER === "anthropic") {
     if (!ANTHROPIC_API_KEY) {
       throw new Error("ANTHROPIC_API_KEY is required when using anthropic provider");
@@ -56,12 +70,7 @@ beforeAll(() => {
     return;
   }
 
-  if (CLASSIFIER_PROVIDER === "claude-code") {
-    delete process.env.CLAUDECODE;
-    return;
-  }
-
-  throw new Error("CLASSIFIER_PROVIDER must be either 'claude-code' or 'anthropic'");
+  throw new Error("CLASSIFIER_PROVIDER must be either 'claude-oauth' or 'anthropic'");
 });
 
 function matchesLabelFilter(label: string): boolean {
@@ -107,8 +116,8 @@ function buildMockManager(sc: VoiceLiveScenario): ReplyDecisionHost {
   const settings = createTestSettings({
     botName,
     llm: {
-      provider: "claude-code",
-      model: "sonnet"
+      provider: "claude-oauth",
+      model: "claude-sonnet-4-6"
     },
     voice: {
       replyEagerness: sc.eagerness ?? 50,
@@ -137,30 +146,12 @@ function buildMockManager(sc: VoiceLiveScenario): ReplyDecisionHost {
       userPrompt
     });
 
-    if (CLASSIFIER_PROVIDER === "claude-code") {
-      const args = buildClaudeCodeTextCliArgs({
-        model: MODEL,
-        systemPrompt,
-        prompt: userPrompt
-      });
-      const { stdout } = await runClaudeCli({
-        args,
-        input: "",
-        timeoutMs: 30_000,
-        maxBufferBytes: 1024 * 1024
-      });
-      const text = String(stdout || "").trim();
-      logAdmissionClassifierDebug({
-        label: sc.label,
-        stage: "result",
-        raw: text,
-        parsedDecision: text
-      });
-      return { text };
-    }
+    const client = CLASSIFIER_PROVIDER === "claude-oauth"
+      ? claudeOAuthState!.client
+      : anthropicClient!;
 
     try {
-      const result = await anthropicClient!.messages.create({
+      const result = await client.messages.create({
         model: MODEL,
         max_tokens: 4,
         temperature: 0,
@@ -257,7 +248,7 @@ async function runAdmission(sc: VoiceLiveScenario): Promise<{ allow: boolean; re
 }
 
 describe("voice admission live tests (full pipeline)", () => {
-  for (const scenarioGroup of VOICE_LIVE_SCENARIO_GROUPS) {
+  for (const scenarioGroup of VOICE_LIVE_SHARED_SCENARIO_GROUPS) {
     const filteredScenarios = scenarioGroup.scenarios.filter((scenario) => matchesLabelFilter(scenario.label));
     if (!filteredScenarios.length) continue;
 

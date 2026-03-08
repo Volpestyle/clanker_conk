@@ -188,9 +188,15 @@ Relevant code:
 - `buildVoiceAddressingState(...)` in `src/voice/voiceAddressing.ts`
 - `voice_turn_addressing` action logging in `src/voice/turnProcessor.ts`
 
-### 6. Voice Reply Classifier Gate (Bridge Mode)
+### 6. Voice Reply Classifier Gate
 
-In bridge mode, a lightweight LLM classifier (haiku, yes/no) gates every non-direct-address turn before it reaches the realtime brain. The classifier sees transcript, speaker, participant list, eagerness, and engagement context, and decides whether the bot should respond.
+A lightweight LLM classifier (haiku, yes/no) gates non-direct-address turns before they reach generation. The classifier sees transcript, speaker, participant list, eagerness, and engagement context, and decides whether the bot should respond.
+
+Mode defaults:
+
+- **Bridge:** classifier always on — it's the only gate before generation.
+- **Brain:** classifier off by default (generation LLM decides via `[SKIP]`), toggleable on via dashboard.
+- **Native:** not applicable — audio flows directly to the realtime model.
 
 Decision flow:
 
@@ -199,9 +205,9 @@ Decision flow:
 - Eagerness disabled → block
 - Addressed-to-other signal → classifier context (strong deny prior, not hard deterministic block)
 - STT pipeline mode → `generation_decides` (the text LLM handles skip via `[SKIP]`)
-- Bridge mode with music playing and no wake latch → `music_playing_not_awake`
-- Bridge mode `voice.admission.mode=classifier_gate` → classifier YES/NO → `classifier_allow` / `classifier_deny`
-- Bridge mode `voice.admission.mode=generation_decides` → `generation_decides`
+- Music playing and no wake latch → `music_playing_not_awake`
+- `voice.admission.mode=classifier_gate` → classifier YES/NO → `classifier_allow` / `classifier_deny`
+- `voice.admission.mode=generation_decides` → `generation_decides`
 - Classifier prompt context includes attributed recent history (`speaker: "text"`) up to 6 turns / 900 chars plus current turn fields
 
 This replaces the earlier heuristic gates (`wakeModeActive`, `botRecentReplyFollowup`, `shouldDelayNonDirectRealtimeReply`) with actual language understanding.

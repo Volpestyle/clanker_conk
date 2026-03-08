@@ -167,9 +167,11 @@ function getPromptHardLimits(settings, { maxItems = null } = {}) {
 }
 
 export function buildHardLimitsSection(settings, { maxItems = null } = {}) {
+  const limits = getPromptHardLimits(settings, { maxItems });
+  if (!limits.length) return [];
   return [
     "Hard limitations:",
-    ...getPromptHardLimits(settings, { maxItems }).map((line) => `- ${line}`)
+    ...limits.map((line) => `- ${line}`)
   ];
 }
 

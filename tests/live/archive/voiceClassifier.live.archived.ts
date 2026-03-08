@@ -100,7 +100,7 @@ function scenario(
   };
 }
 
-function eventScenario(
+function _eventScenario(
   label: string,
   expected: "YES" | "NO",
   overrides?: ScenarioOverrides

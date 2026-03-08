@@ -4,7 +4,8 @@ import { createTestSettings } from "../testSettings.ts";
 import {
   buildBotContext,
   buildQueueGatewayRuntime,
-  buildReplyPipelineRuntime
+  buildReplyPipelineRuntime,
+  buildVoiceReplyRuntime
 } from "./botRuntimeFactories.ts";
 
 function createBot() {
@@ -18,7 +19,10 @@ function createBot() {
     maybeHandleStructuredAutomationIntent: [] as unknown[],
     maybeApplyReplyReaction: [] as unknown[],
     logSkippedReply: [] as unknown[],
-    shouldSendAsReply: [] as unknown[]
+    shouldSendAsReply: [] as unknown[],
+    requestPlayMusic: [] as unknown[],
+    requestStopMusic: [] as unknown[],
+    requestPauseMusic: [] as unknown[]
   };
 
   const bot = {
@@ -30,6 +34,9 @@ function createBot() {
         return createTestSettings({
           botName: "clanker conk"
         });
+      },
+      logAction() {
+        return true;
       }
     },
     llm: {
@@ -66,7 +73,19 @@ function createBot() {
       name: "sessions"
     },
     voiceSessionManager: {
-      name: "voice-session-manager"
+      name: "voice-session-manager",
+      async requestPlayMusic(payload: unknown) {
+        calls.requestPlayMusic.push(payload);
+        return true;
+      },
+      async requestStopMusic(payload: unknown) {
+        calls.requestStopMusic.push(payload);
+        return true;
+      },
+      async requestPauseMusic(payload: unknown) {
+        calls.requestPauseMusic.push(payload);
+        return true;
+      }
     },
     replyQueues: new Map([["channel-1", []]]),
     replyQueueWorkers: new Map([["channel-1", { running: true }]]),
@@ -266,3 +285,4 @@ test("buildQueueGatewayRuntime exposes live bot state through getters, setters, 
   assert.equal(calls.isDirectlyAddressed.length, 1);
   assert.ok(bot.lastGatewayEventAt >= beforeGatewayMark);
 });
+

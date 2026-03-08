@@ -122,8 +122,16 @@ export async function executeVoiceMusicQueueAddTool(
   const resolvedTracks = resolveMusicCatalogTracks(catalog, requestedTrackIds);
   if (!resolvedTracks.length) return { ok: false, queue_length: queueState.tracks.length, added: [], error: "unknown_track_ids" };
   const wasEmpty = queueState.tracks.length === 0;
-  const insertAt = typeof args?.position === "number"
-    ? clamp(Math.floor(Number(args.position)), 0, queueState.tracks.length)
+  const rawPos = args?.position;
+  const parsedPos = rawPos === "end"
+    ? undefined
+    : typeof rawPos === "string" && /^\d+$/.test(rawPos)
+      ? parseInt(rawPos, 10)
+      : typeof rawPos === "number"
+        ? rawPos
+        : undefined;
+  const insertAt = parsedPos != null
+    ? clamp(Math.floor(parsedPos), 0, queueState.tracks.length)
     : queueState.tracks.length;
   queueState.tracks.splice(insertAt, 0, ...resolvedTracks);
   if (queueState.nowPlayingIndex == null && queueState.tracks.length > 0) {

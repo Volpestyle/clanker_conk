@@ -288,24 +288,31 @@ export function buildVoiceTurnPrompt({
   }
 
   if (normalizedConversationContext) {
-    parts.push(
-      [
-        "Conversation attention context:",
-        `- State: ${String(normalizedConversationContext.engagementState || "wake_word_biased")}`,
-        `- Engaged with current speaker: ${normalizedConversationContext.engagedWithCurrentSpeaker ? "yes" : "no"}`,
-        `- Current speaker matches last direct-address speaker: ${normalizedConversationContext.sameAsRecentDirectAddress ? "yes" : "no"}`,
-        `- Recent bot reply ms ago: ${
-          Number.isFinite(normalizedConversationContext.msSinceAssistantReply)
-            ? Math.round(normalizedConversationContext.msSinceAssistantReply)
-            : "none"
-        }`,
-        `- Recent direct address ms ago: ${
-          Number.isFinite(normalizedConversationContext.msSinceDirectAddress)
-            ? Math.round(normalizedConversationContext.msSinceDirectAddress)
-            : "none"
-        }`
-      ].join("\n")
-    );
+    const recencyLines: string[] = [];
+    const msSinceReply = normalizedConversationContext.msSinceAssistantReply;
+    const msSinceAddress = normalizedConversationContext.msSinceDirectAddress;
+    const secsSinceReply = Number.isFinite(msSinceReply) ? Math.round(msSinceReply / 1000) : null;
+    const secsSinceAddress = Number.isFinite(msSinceAddress) ? Math.round(msSinceAddress / 1000) : null;
+
+    if (secsSinceReply != null) {
+      recencyLines.push(`You last spoke ${secsSinceReply}s ago.`);
+    } else {
+      recencyLines.push("You have not spoken recently.");
+    }
+
+    if (secsSinceAddress != null) {
+      if (normalizedConversationContext.sameAsRecentDirectAddress) {
+        recencyLines.push(`This is the same speaker who addressed you by name ${secsSinceAddress}s ago.`);
+      } else {
+        recencyLines.push(`Last addressed by name ${secsSinceAddress}s ago by a different speaker.`);
+      }
+    }
+
+    if (normalizedConversationContext.engagementState === "command_only_engaged") {
+      recencyLines.push("You have a pending command from another speaker. This speaker is not part of that exchange — do not treat their speech as a command response.");
+    }
+
+    parts.push(recencyLines.join("\n"));
   }
 
   if (normalizedVoiceAddressingState) {
@@ -563,9 +570,9 @@ export function buildVoiceTurnPrompt({
   parts.push("Return strict JSON only.");
   parts.push("JSON format:");
   parts.push(
-    "{\"text\":\"spoken response or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"openArticleRef\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"soundboardRefs\":[],\"leaveVoiceChannel\":false,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"voiceIntent\":{\"intent\":\"none\",\"confidence\":0,\"reason\":null,\"query\":null,\"platform\":null,\"searchResults\":null,\"selectedResultId\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null},\"voiceAddressing\":{\"talkingTo\":null,\"directedConfidence\":0}}"
+    "{\"text\":\"spoken response or [SKIP]\",\"skip\":false,\"reactionEmoji\":null,\"media\":null,\"webSearchQuery\":null,\"memoryLookupQuery\":null,\"imageLookupQuery\":null,\"openArticleRef\":null,\"memoryLine\":null,\"selfMemoryLine\":null,\"soundboardRefs\":[],\"leaveVoiceChannel\":false,\"automationAction\":{\"operation\":\"none\",\"title\":null,\"instruction\":null,\"schedule\":null,\"targetQuery\":null,\"automationId\":null,\"runImmediately\":false,\"targetChannelId\":null},\"screenShareIntent\":{\"action\":\"none\",\"confidence\":0,\"reason\":null},\"voiceAddressing\":{\"talkingTo\":null,\"directedConfidence\":0}}"
     );
-  parts.push("Keep reactionEmoji null, media null, memoryLookupQuery null, imageLookupQuery null, and voiceIntent intent none for voice-turn generation.");
+  parts.push("Keep reactionEmoji null, media null, memoryLookupQuery null, and imageLookupQuery null for voice-turn generation.");
   parts.push("Always include voiceAddressing with both fields.");
   parts.push("If you are skipping, set skip=true and text to [SKIP]. Otherwise set skip=false and provide natural spoken text.");
   parts.push("Never output markdown, tags, or directive syntax like [[...]].");

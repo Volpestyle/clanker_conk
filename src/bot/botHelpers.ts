@@ -159,7 +159,23 @@ export const REPLY_OUTPUT_SCHEMA = {
         },
         title: { type: ["string", "null"] },
         instruction: { type: ["string", "null"] },
-        schedule: { type: ["object", "null"] },
+        schedule: {
+          anyOf: [
+            { type: "null" },
+            {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                kind: { type: "string", enum: ["daily", "interval", "once"] },
+                hour: { type: ["number", "null"] },
+                minute: { type: ["number", "null"] },
+                everyMinutes: { type: ["number", "null"] },
+                atIso: { type: ["string", "null"] }
+              },
+              required: ["kind", "hour", "minute", "everyMinutes", "atIso"]
+            }
+          ]
+        },
         targetQuery: { type: ["string", "null"] },
         automationId: { type: ["number", "null"] },
         runImmediately: { type: "boolean" },
@@ -219,7 +235,7 @@ export const REPLY_OUTPUT_SCHEMA = {
         },
         selectedResultId: { type: ["string", "null"] }
       },
-      required: ["intent", "confidence", "reason"]
+      required: ["intent", "confidence", "reason", "query", "platform", "searchResults", "selectedResultId"]
     },
     screenShareIntent: {
       type: "object",
@@ -257,7 +273,8 @@ export const REPLY_OUTPUT_SCHEMA = {
     "leaveVoiceChannel",
     "automationAction",
     "voiceIntent",
-    "screenShareIntent"
+    "screenShareIntent",
+    "voiceAddressing"
   ]
 };
 
@@ -910,8 +927,8 @@ function normalizeStructuredVoiceAddressing(rawAddressing) {
 
   const confidenceRaw = Number(
     rawAddressing.directedConfidence ??
-      rawAddressing.confidence ??
-      rawAddressing.score
+    rawAddressing.confidence ??
+    rawAddressing.score
   );
   const directedConfidence = Number.isFinite(confidenceRaw) ? clamp(confidenceRaw, 0, 1) : 0;
 

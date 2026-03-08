@@ -92,6 +92,7 @@ test("runBrowseAgent throws AbortError when signal is aborted before or during l
   const browserManager = {
     async open() { return "opened"; },
     async close() { }
+  // eslint-disable-next-line no-restricted-syntax
   } as unknown as BrowserManager;
 
   const store = { logAction() { } };
@@ -107,6 +108,7 @@ test("runBrowseAgent throws AbortError when signal is aborted before or during l
         costUsd: 0.01
       };
     }
+  // eslint-disable-next-line no-restricted-syntax
   } as unknown as LLMService;
 
   const agentPromise = runBrowseAgent({
@@ -139,6 +141,7 @@ test("runBrowseAgent propagates AbortError when a browser tool is cancelled in f
         costUsd: 0.01
       };
     }
+  // eslint-disable-next-line no-restricted-syntax
   } as unknown as LLMService;
 
   const browserManager = {
@@ -153,6 +156,7 @@ test("runBrowseAgent propagates AbortError when a browser tool is cancelled in f
     async close(sessionKey: string) {
       closeCalls.push(sessionKey);
     }
+  // eslint-disable-next-line no-restricted-syntax
   } as unknown as BrowserManager;
 
   const store = { logAction() { } };

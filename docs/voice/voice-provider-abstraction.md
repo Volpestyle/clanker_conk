@@ -43,7 +43,7 @@ Runtime modes (`src/voice/voiceModes.ts`): `openai_realtime`, `voice_agent`, `ge
 | 2b. ASR (shared) | — | — | yes |
 | 3. Noise Rejection | bypassed | yes | yes |
 | 4a. Reply Admission (deterministic) | yes | yes | yes |
-| 4b. Reply Admission (classifier) | — | yes (if not cmd-only) | — |
+| 4b. Reply Admission (classifier) | — | yes (always on) | optional (off by default) |
 | 5a. Brain (realtime end-to-end) | yes | — | — |
 | 5b. Brain (text→realtime) | — | yes | — |
 | 5c. Brain (text LLM) | — | — | yes |
