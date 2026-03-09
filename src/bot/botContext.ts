@@ -191,7 +191,6 @@ type ReplyPipelineRuntimeMember =
   | "voiceSessionManager"
   | "getReactionEmojiOptions"
   | "getEmojiHints"
-  | "maybeHandleStructuredVoiceIntent"
   | "maybeHandleStructuredAutomationIntent"
   | "maybeApplyReplyReaction"
   | "logSkippedReply"

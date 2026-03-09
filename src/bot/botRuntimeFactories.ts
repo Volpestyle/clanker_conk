@@ -504,7 +504,6 @@ export function buildReplyPipelineRuntime(
         query: payload.query || ""
       }),
     mergeImageInputs: (payload) => mergeImageInputsForImageAnalysis(payload),
-    maybeHandleStructuredVoiceIntent: (payload) => bot.maybeHandleStructuredVoiceIntent(payload),
     maybeHandleStructuredAutomationIntent: (payload) =>
       bot.maybeHandleStructuredAutomationIntent(payload),
     rememberRecentLookupContext: (payload) =>

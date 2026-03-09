@@ -134,7 +134,6 @@ import {
   getDiscoverySettings,
   getReplyPermissions,
   getActivitySettings,
-  getVoiceAdmissionSettings,
   isDevTaskEnabled
 } from "./settings/agentStack.ts";
 
@@ -1143,129 +1142,6 @@ export class ClankerBot {
 
   async maybeReplyToMessage(message, settings, options: ReplyAttemptOptions = {}) {
     return await maybeReplyToMessagePipeline(this.toReplyPipelineRuntime(), message, settings, options);
-  }
-
-  async maybeHandleStructuredVoiceIntent({ message, settings, replyDirective }) {
-    if (!settings?.voice?.enabled) return false;
-
-    const intent = replyDirective?.voiceIntent;
-    if (!intent?.intent) return false;
-
-    const threshold = clamp(
-      Number(getVoiceAdmissionSettings(settings).intentConfidenceThreshold) || 0.75,
-      0.4,
-      0.99
-    );
-    if (intent.confidence < threshold) return false;
-
-    this.store.logAction({
-      kind: "voice_intent_detected",
-      guildId: message.guildId,
-      channelId: message.channelId,
-      messageId: message.id,
-      userId: message.author?.id || null,
-      content: intent.intent,
-      metadata: {
-        confidence: intent.confidence,
-        threshold,
-        detector: "reply_llm",
-        reason: intent.reason || null
-      }
-    });
-
-    if (intent.intent === "join") {
-      return await this.voiceSessionManager.requestJoin({
-        message,
-        settings,
-        intentConfidence: intent.confidence
-      });
-    }
-
-    if (intent.intent === "leave") {
-      return await this.voiceSessionManager.requestLeave({
-        message,
-        settings,
-        reason: "nl_leave"
-      });
-    }
-
-    if (intent.intent === "status") {
-      return await this.voiceSessionManager.requestStatus({
-        message,
-        settings
-      });
-    }
-
-    if (intent.intent === "watch_stream") {
-      return await this.voiceSessionManager.requestWatchStream({
-        message,
-        settings,
-        targetUserId: message.author?.id || null
-      });
-    }
-
-    if (intent.intent === "stop_watching_stream") {
-      return await this.voiceSessionManager.requestStopWatchingStream({
-        message,
-        settings
-      });
-    }
-
-    if (intent.intent === "stream_status") {
-      return await this.voiceSessionManager.requestStreamWatchStatus({
-        message,
-        settings
-      });
-    }
-
-    if (
-      intent.intent === "music_play" ||
-      intent.intent === "music_queue_next" ||
-      intent.intent === "music_queue_add"
-    ) {
-      const query = String(intent.query || "").trim();
-      const trackId = String(intent.selectedResultId || "").trim() || null;
-      const platform = String(intent.platform || "").trim().toLowerCase() || "auto";
-      const searchResults = Array.isArray(intent.searchResults) ? intent.searchResults : null;
-      const action =
-        intent.intent === "music_queue_next"
-          ? "queue_next"
-          : intent.intent === "music_queue_add"
-            ? "queue_add"
-            : "play_now";
-      return await this.voiceSessionManager.requestPlayMusic({
-        message,
-        settings,
-        query,
-        trackId,
-        platform,
-        action,
-        searchResults,
-        reason: `nl_${intent.intent}`,
-        source: "text_voice_intent"
-      });
-    }
-
-    if (intent.intent === "music_stop") {
-      return await this.voiceSessionManager.requestStopMusic({
-        message,
-        settings,
-        reason: "nl_music_stop",
-        clearQueue: true,
-        source: "text_voice_intent"
-      });
-    }
-
-    if (intent.intent === "music_pause") {
-      return await this.voiceSessionManager.requestPauseMusic({
-        message,
-        settings,
-        reason: "nl_music_pause",
-        source: "text_voice_intent"
-      });
-    }
-
-    return false;
   }
 
   async maybeHandleStructuredAutomationIntent({

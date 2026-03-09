@@ -245,7 +245,6 @@ export type VoiceSession = {
   participants: VoiceParticipant[];
   participantCount: number;
   membershipEvents: VoiceMembershipEvent[];
-  voiceLookupBusyCount: number;
   pendingDeferredTurns: number;
   recentTurns: VoiceTurn[];
   lastGenerationContext: GenerationContextSnapshot | null;

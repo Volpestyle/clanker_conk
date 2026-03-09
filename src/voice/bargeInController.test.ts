@@ -185,8 +185,6 @@ function createSession(overrides: Partial<BargeInTestSession> = {}): BargeInTest
     soundboard: { playCount: 0, lastPlayedAt: 0 },
     latencyStages: [],
     membershipEvents: [],
-    voiceLookupBusyCount: 0,
-    lastSuppressedCaptureLogAt: 0,
     baseVoiceInstructions: "",
     lastOpenAiRealtimeInstructions: "",
     lastOpenAiRealtimeInstructionsAt: 0,

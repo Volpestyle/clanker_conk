@@ -82,14 +82,6 @@ export function PromptGuidanceSettingsSection({ id, form, set, onResetPromptGuid
         onChange={set("promptVoiceOperationalGuidance")}
       />
 
-      <label htmlFor="prompt-voice-lookup-busy-system-prompt">Voice lookup busy-line system prompt</label>
-      <textarea
-        id="prompt-voice-lookup-busy-system-prompt"
-        rows={4}
-        value={form.promptVoiceLookupBusySystemPrompt}
-        onChange={set("promptVoiceLookupBusySystemPrompt")}
-      />
-
       <label htmlFor="prompt-media-guidance">Media prompt craft guidance</label>
       <textarea
         id="prompt-media-guidance"

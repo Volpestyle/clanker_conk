@@ -259,13 +259,6 @@ export class ThoughtEngine {
         outputLockReason: outputChannelState.lockReason
       };
     }
-    if (Number(session.voiceLookupBusyCount || 0) > 0) {
-      return {
-        allow: false,
-        reason: "voice_lookup_busy",
-        retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
-      };
-    }
     if (this.host.hasReplayBlockingActiveCapture(session)) {
       return {
         allow: false,

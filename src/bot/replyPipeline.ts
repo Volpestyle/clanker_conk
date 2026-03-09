@@ -891,12 +891,6 @@ export async function executeReplyLlm(
 
   const mediaPromptLimit = resolveMaxMediaPromptLen(settings);
   let replyDirective = parseStructuredReplyOutput(generation.text, mediaPromptLimit);
-  let voiceIntentHandled = await bot.maybeHandleStructuredVoiceIntent({
-    message,
-    settings,
-    replyDirective
-  });
-  if (voiceIntentHandled) return { handledByIntent: true };
 
   const automationIntentHandled = await bot.maybeHandleStructuredAutomationIntent({
     message,
@@ -1016,13 +1010,6 @@ export async function executeReplyLlm(
   }
 
   if (followup.regenerated) {
-    voiceIntentHandled = await bot.maybeHandleStructuredVoiceIntent({
-      message,
-      settings,
-      replyDirective
-    });
-    if (voiceIntentHandled) return { handledByIntent: true };
-
     const followupAutomationHandled = await bot.maybeHandleStructuredAutomationIntent({
       message,
       settings,

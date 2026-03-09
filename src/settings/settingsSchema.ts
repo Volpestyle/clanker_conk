@@ -170,9 +170,7 @@ export const DEFAULT_SETTINGS = {
         "Clearly state what happened and why, especially when a request is blocked.",
         "If relevant, mention required permissions/settings plainly.",
         "Avoid dramatic wording, blame, apology spirals, and long postmortems."
-      ],
-      lookupBusySystemPrompt:
-        "Output one short spoken line only (4-12 words).\nIndicate you're looking up something.\nKeep it natural."
+      ]
     },
     media: {
       promptCraftGuidance:

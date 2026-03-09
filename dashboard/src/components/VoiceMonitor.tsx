@@ -1297,7 +1297,6 @@ function SessionCard({ session }: { session: VoiceSession }) {
             warn={Number(session.realtime.replySuperseded || 0) > 0}
           />
         )}
-        <Stat label="Lookups" value={session.voiceLookupBusyCount} warn={session.voiceLookupBusyCount > 0} />
         <Stat label="Soundboard" value={session.soundboard.playCount} />
       </div>
 
@@ -1333,11 +1332,6 @@ function SessionCard({ session }: { session: VoiceSession }) {
         {session.pendingDeferredTurns > 0 && (
           <span className="vm-ts-pill vm-ts-deferred">
             {session.pendingDeferredTurns} Deferred
-          </span>
-        )}
-        {session.voiceLookupBusyCount > 0 && (
-          <span className="vm-ts-pill vm-ts-lookup">
-            {session.voiceLookupBusyCount} Lookup{session.voiceLookupBusyCount !== 1 ? "s" : ""}
           </span>
         )}
         {session.music?.active && (

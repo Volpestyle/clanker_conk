@@ -39,11 +39,6 @@ export function normalizePromptingSection(section: Settings["prompting"]): Setti
       operationalGuidance: normalizePromptLineList(
         voice.operationalGuidance,
         DEFAULT_SETTINGS.prompting.voice.operationalGuidance
-      ),
-      lookupBusySystemPrompt: normalizePromptBlock(
-        voice.lookupBusySystemPrompt,
-        DEFAULT_SETTINGS.prompting.voice.lookupBusySystemPrompt,
-        4_000
       )
     },
     media: {

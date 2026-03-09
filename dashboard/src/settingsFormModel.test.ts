@@ -244,8 +244,7 @@ test("settingsToForm preserves explicit empty prompt overrides", () => {
       },
       voice: {
         guidance: [],
-        operationalGuidance: [],
-        lookupBusySystemPrompt: ""
+        operationalGuidance: []
       },
       media: {
         promptCraftGuidance: ""
@@ -261,7 +260,6 @@ test("settingsToForm preserves explicit empty prompt overrides", () => {
   assert.equal(form.promptTextGuidance, "");
   assert.equal(form.promptVoiceGuidance, "");
   assert.equal(form.promptVoiceOperationalGuidance, "");
-  assert.equal(form.promptVoiceLookupBusySystemPrompt, "");
   assert.equal(form.promptMediaPromptCraftGuidance, "");
 });
 

@@ -380,7 +380,6 @@ export async function runVoiceReplyPipeline(
       session.inFlightAcceptedBrainTurn = null;
     }
   };
-  let releaseLookupBusy: (() => void) | null = null;
   let generatedPayload: GeneratedPayload | null = null;
   let generationFinished = false;
   const voiceConversation = getVoiceConversationPolicy(params.settings);
@@ -450,21 +449,6 @@ export async function runVoiceReplyPipeline(
       soundboardCandidates: soundboardCandidateLines,
       streamWatchLatestFrame,
       streamWatchDurableScreenNotes,
-      onWebLookupStart: async ({ query }: { query: string }) => {
-        if (typeof releaseLookupBusy === "function") return;
-        releaseLookupBusy = host.beginVoiceWebLookupBusy({
-          session,
-          settings: params.settings,
-          userId: params.userId,
-          query,
-          source: params.mode === "bridge" ? `${source}:web_lookup` : "stt_pipeline_web_lookup"
-        });
-      },
-      onWebLookupComplete: async () => {
-        if (typeof releaseLookupBusy !== "function") return;
-        releaseLookupBusy();
-        releaseLookupBusy = null;
-      },
       webSearchTimeoutMs: Number(followup.toolBudget?.toolTimeoutMs),
       voiceToolCallbacks: host.buildVoiceToolCallbacks({ session, settings: params.settings }),
       onSpokenSentence: streamingVoiceReplyEnabled
@@ -534,10 +518,6 @@ export async function runVoiceReplyPipeline(
     });
     return false;
   } finally {
-    if (typeof releaseLookupBusy === "function") {
-      releaseLookupBusy();
-      releaseLookupBusy = null;
-    }
     host.activeReplies?.clear(activeReply);
     if (!generationFinished || generationSignal?.aborted) {
       clearInFlightAcceptedBrainTurn();

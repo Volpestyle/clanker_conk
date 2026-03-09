@@ -766,8 +766,6 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         latencyStages: [],
         membershipEvents: [],
         voiceChannelEffects: [],
-        voiceLookupBusyCount: 0,
-        lastSuppressedCaptureLogAt: 0,
         baseVoiceInstructions,
         lastOpenAiRealtimeInstructions: "",
         lastOpenAiRealtimeInstructionsAt: 0,

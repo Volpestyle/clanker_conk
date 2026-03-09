@@ -10,8 +10,6 @@ import {
 } from "../prompts/promptCore.ts";
 import {
   normalizeSkipSentinel,
-  parseStructuredReplyOutput,
-  REPLY_OUTPUT_JSON_SCHEMA,
   serializeForPrompt
 } from "./botHelpers.ts";
 import {
@@ -30,7 +28,6 @@ import {
   getResolvedOrchestratorBinding,
   getResolvedVoiceGenerationBinding,
   getReplyGenerationSettings,
-  getVoiceAdmissionSettings,
   getVoiceConversationPolicy,
   getVoiceSoundboardSettings
 } from "../settings/agentStack.ts";
@@ -47,8 +44,6 @@ const OPEN_ARTICLE_MAX_CANDIDATES = 12;
 const OPEN_ARTICLE_ROW_LIMIT = 4;
 const OPEN_ARTICLE_RESULTS_PER_ROW = 5;
 const SESSION_DURABLE_CONTEXT_MAX_ENTRIES = 50;
-const VOICE_MUSIC_COMMAND_RE =
-  /\b(?:play|queue(?:\s+up)?|queue next|add|put on|stop(?:\s+the music)?|pause(?:\s+the music)?|find|search(?:\s+for)?)\b/i;
 
 type SessionDurableContextCategory = "fact" | "plan" | "preference" | "relationship";
 
@@ -149,321 +144,6 @@ function appendSessionDurableContextEntry({
     entry: nextEntries[nextEntries.length - 1] || null,
     duplicate,
     total: nextEntries.length
-  };
-}
-
-function normalizeMusicIntentToken(value: unknown) {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (
-    normalized === "music_play" ||
-    normalized === "music_queue_next" ||
-    normalized === "music_queue_add" ||
-    normalized === "music_stop" ||
-    normalized === "music_pause"
-  ) {
-    return normalized;
-  }
-  return "none";
-}
-
-function shouldAttemptStructuredVoiceMusicIntentPass({
-  transcript,
-  musicDisambiguation,
-  voiceSessionManager
-}: {
-  transcript: string;
-  musicDisambiguation: {
-    active: true;
-    query: string | null;
-    platform: "youtube" | "soundcloud" | "discord" | "auto";
-    action: "play_now" | "queue_next" | "queue_add";
-    requestedByUserId: string | null;
-    options: Array<{
-      id: string;
-      title: string;
-      artist: string | null;
-      platform: string;
-      externalUrl?: string | null;
-      durationSeconds?: number | null;
-    }>;
-  } | null;
-  voiceSessionManager: VoiceReplyRuntime["voiceSessionManager"];
-}) {
-  if (
-    typeof voiceSessionManager?.requestPlayMusic !== "function" &&
-    typeof voiceSessionManager?.requestStopMusic !== "function" &&
-    typeof voiceSessionManager?.requestPauseMusic !== "function"
-  ) {
-    return false;
-  }
-
-  if (musicDisambiguation?.active) return true;
-  return VOICE_MUSIC_COMMAND_RE.test(String(transcript || ""));
-}
-
-function buildStructuredVoiceMusicIntentPrompt(
-  basePrompt: string,
-  musicDisambiguation: {
-    active: true;
-    query: string | null;
-    platform: "youtube" | "soundcloud" | "discord" | "auto";
-    action: "play_now" | "queue_next" | "queue_add";
-    requestedByUserId: string | null;
-    options: Array<{
-      id: string;
-      title: string;
-      artist: string | null;
-      platform: string;
-      externalUrl?: string | null;
-      durationSeconds?: number | null;
-    }>;
-  } | null
-) {
-  const actionIntent =
-    musicDisambiguation?.action === "queue_next"
-      ? "music_queue_next"
-      : musicDisambiguation?.action === "queue_add"
-        ? "music_queue_add"
-        : "music_play";
-
-  return [
-    basePrompt,
-    "Structured music control pass:",
-    "- Do not call or plan any tools in this step. Return only structured JSON matching the reply schema.",
-    "- Decide whether this turn is an actionable music control request for the current voice session.",
-    "- Set voiceIntent.intent to one of music_play|music_queue_next|music_queue_add|music_stop|music_pause|none.",
-    "- For music_play, music_queue_next, or music_queue_add, set voiceIntent.query to the requested song/artist/phrase unless the user is selecting a pending option by ID.",
-    "- Set voiceIntent.platform to youtube|soundcloud|auto when relevant; otherwise set it to null.",
-    "- If this is not an actionable music request, set voiceIntent.intent=none, confidence=0, reason=null, query=null, platform=null, searchResults=null, selectedResultId=null.",
-    "- Keep text as one short spoken acknowledgement to say after the music action. If no spoken reply is needed, set text=\"\" and skip=false.",
-    "- Leave screenShareIntent.action as none and leaveVoiceChannel as false unless the speaker explicitly asked for those actions in this turn."
-  ]
-    .concat(
-      musicDisambiguation?.active
-        ? [
-            `- There is a pending music disambiguation request for intent ${actionIntent} on platform ${musicDisambiguation.platform}.`,
-            musicDisambiguation.query
-              ? `- Pending music query: ${musicDisambiguation.query}`
-              : "- Pending music query: (unknown)",
-            "- If the speaker picks one of the pending options by number or by naming it, set voiceIntent.intent to the pending action and voiceIntent.selectedResultId to the exact ID below.",
-            ...musicDisambiguation.options.slice(0, 5).map((option, index) =>
-              `- Pending music option ${index + 1}: ${String(option?.title || "").trim()} - ${String(option?.artist || "").trim()} [${String(option?.id || "").trim()}]`
-            )
-          ]
-        : [
-            "- For fresh play requests like 'play Daft Punk' or 'queue Migos next', set the music query directly from the transcript instead of expecting a later tool to recover it."
-          ]
-    )
-    .filter(Boolean)
-    .join("\n");
-}
-
-async function maybeHandleStructuredVoiceMusicIntent(
-  runtime: VoiceReplyRuntime,
-  {
-    settings,
-    generationSettings,
-    guildId,
-    channelId,
-    userId,
-    directAddressed,
-    transcript,
-    systemPrompt,
-    baseUserPrompt,
-    imageInputs,
-    contextMessages,
-    trace,
-    signal,
-    musicDisambiguation,
-    onBeforeSideEffect
-  }: {
-    settings: Record<string, unknown>;
-    generationSettings: Record<string, unknown>;
-    guildId: string | null;
-    channelId: string | null;
-    userId: string | null;
-    directAddressed: boolean;
-    transcript: string;
-    systemPrompt: string;
-    baseUserPrompt: string;
-    imageInputs: Array<{ mediaType: string; dataBase64: string }>;
-    contextMessages: ContextMessage[];
-    trace: {
-      guildId: string | null;
-      channelId: string | null;
-      userId: string | null;
-      source: string;
-      event: string;
-      reason: null;
-      messageId: null;
-    };
-    signal?: AbortSignal;
-    musicDisambiguation: {
-      active: true;
-      query: string | null;
-      platform: "youtube" | "soundcloud" | "discord" | "auto";
-      action: "play_now" | "queue_next" | "queue_add";
-      requestedByUserId: string | null;
-      options: Array<{
-        id: string;
-        title: string;
-        artist: string | null;
-        platform: string;
-        externalUrl?: string | null;
-        durationSeconds?: number | null;
-      }>;
-    } | null;
-    onBeforeSideEffect?: () => void;
-  }
-) {
-  if (!shouldAttemptStructuredVoiceMusicIntentPass({
-    transcript,
-    musicDisambiguation,
-    voiceSessionManager: runtime.voiceSessionManager
-  })) {
-    return {
-      handled: false,
-      voiceAddressing: normalizeGeneratedVoiceAddressing(null, {
-        directAddressed
-      })
-    };
-  }
-
-  const generation = await runtime.llm.generate({
-    settings: generationSettings,
-    systemPrompt,
-    userPrompt: buildStructuredVoiceMusicIntentPrompt(baseUserPrompt, musicDisambiguation),
-    imageInputs,
-    contextMessages,
-    jsonSchema: REPLY_OUTPUT_JSON_SCHEMA,
-    trace: {
-      ...trace,
-      event: `${trace.event}:structured_music_intent`
-    },
-    signal
-  });
-  const directive = parseStructuredReplyOutput(generation.text);
-  const voiceAddressing = normalizeGeneratedVoiceAddressing(directive.voiceAddressing, {
-    directAddressed
-  });
-  const voiceIntent = directive.voiceIntent;
-  const intent = normalizeMusicIntentToken(voiceIntent?.intent);
-  const confidenceThreshold = clamp(
-    Number(getVoiceAdmissionSettings(settings).intentConfidenceThreshold) || 0.75,
-    0.4,
-    0.99
-  );
-  const confidence = Number(voiceIntent?.confidence) || 0;
-  if (intent === "none" || confidence < confidenceThreshold) {
-    return { handled: false, voiceAddressing };
-  }
-
-  const normalizedText = sanitizeBotText(normalizeSkipSentinel(String(directive.text || "")), 520);
-  const spokenText = !normalizedText || normalizedText === "[SKIP]" ? "" : normalizedText;
-  const normalizedQuery = String(voiceIntent?.query || "").trim().slice(0, 180);
-  const selectedResultId = String(voiceIntent?.selectedResultId || "").trim().slice(0, 180) || null;
-  const normalizedPlatform = String(voiceIntent?.platform || "").trim().toLowerCase();
-  const platform =
-    normalizedPlatform === "youtube" || normalizedPlatform === "soundcloud" || normalizedPlatform === "auto"
-      ? normalizedPlatform
-      : "auto";
-  const searchResults = Array.isArray(voiceIntent?.searchResults) ? voiceIntent.searchResults : null;
-
-  let handled = false;
-  switch (intent) {
-    case "music_play":
-    case "music_queue_next":
-    case "music_queue_add": {
-      if (!normalizedQuery && !selectedResultId) {
-        return { handled: false, voiceAddressing };
-      }
-      if (typeof runtime.voiceSessionManager?.requestPlayMusic !== "function") {
-        return { handled: false, voiceAddressing };
-      }
-      if (typeof onBeforeSideEffect === "function") onBeforeSideEffect();
-      const result = await runtime.voiceSessionManager.requestPlayMusic({
-        guildId,
-        channelId,
-        requestedByUserId: userId,
-        settings,
-        query: normalizedQuery,
-        trackId: selectedResultId,
-        platform,
-        action:
-          intent === "music_queue_next"
-            ? "queue_next"
-            : intent === "music_queue_add"
-              ? "queue_add"
-              : "play_now",
-        searchResults,
-        reason: `voice_${intent}_structured`,
-        source: "voice_structured_intent",
-        mustNotify: false
-      });
-      handled = result !== false;
-      break;
-    }
-    case "music_stop": {
-      if (typeof runtime.voiceSessionManager?.requestStopMusic !== "function") {
-        return { handled: false, voiceAddressing };
-      }
-      if (typeof onBeforeSideEffect === "function") onBeforeSideEffect();
-      const result = await runtime.voiceSessionManager.requestStopMusic({
-        guildId,
-        channelId,
-        requestedByUserId: userId,
-        settings,
-        reason: "voice_music_stop_structured",
-        source: "voice_structured_intent",
-        clearQueue: true,
-        mustNotify: false
-      });
-      handled = result !== false;
-      break;
-    }
-    case "music_pause": {
-      if (typeof runtime.voiceSessionManager?.requestPauseMusic !== "function") {
-        return { handled: false, voiceAddressing };
-      }
-      if (typeof onBeforeSideEffect === "function") onBeforeSideEffect();
-      const result = await runtime.voiceSessionManager.requestPauseMusic({
-        guildId,
-        channelId,
-        requestedByUserId: userId,
-        settings,
-        reason: "voice_music_pause_structured",
-        source: "voice_structured_intent",
-        mustNotify: false
-      });
-      handled = result !== false;
-      break;
-    }
-  }
-
-  if (!handled) {
-    return { handled: false, voiceAddressing };
-  }
-
-  runtime.store?.logAction?.({
-    kind: "voice_runtime",
-    guildId,
-    channelId,
-    userId,
-    content: "voice_structured_music_intent_handled",
-    metadata: {
-      traceEvent: trace.event,
-      intent,
-      confidence,
-      query: normalizedQuery || null,
-      selectedResultId,
-      platform
-    }
-  });
-
-  return {
-    handled: true,
-    text: spokenText,
-    voiceAddressing
   };
 }
 
@@ -668,8 +348,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   soundboardCandidates = [],
   streamWatchLatestFrame = null,
   streamWatchDurableScreenNotes = [],
-  onWebLookupStart = null,
-  onWebLookupComplete = null,
   webSearchTimeoutMs: _webSearchTimeoutMs = null,
   voiceToolCallbacks = null,
   onSpokenSentence = null,
@@ -733,11 +411,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     activeVoiceSession && typeof runtime.voiceSessionManager?.getMusicPromptContext === "function"
       ? runtime.voiceSessionManager.getMusicPromptContext(activeVoiceSession)
       : null;
-  const musicDisambiguation =
-    activeVoiceSession && typeof runtime.voiceSessionManager?.getMusicDisambiguationPromptContext === "function"
-      ? runtime.voiceSessionManager.getMusicDisambiguationPromptContext(activeVoiceSession)
-      : null;
-
   const guild = runtime.client.guilds.cache.get(String(guildId || ""));
   const speakerName =
     guild?.members?.cache?.get(String(userId || ""))?.displayName ||
@@ -1151,38 +824,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       directAddressed: Boolean(directAddressed)
     });
 
-    const structuredMusicIntent = await maybeHandleStructuredVoiceMusicIntent(runtime, {
-      settings: settings as Record<string, unknown>,
-      generationSettings: tunedSettings as Record<string, unknown>,
-      guildId,
-      channelId,
-      userId,
-      directAddressed: Boolean(directAddressed),
-      transcript: incomingTranscript,
-      systemPrompt,
-      baseUserPrompt: buildVoiceUserPrompt({
-        allowVoiceTools: false
-      }),
-      imageInputs: voiceImageInputs,
-      contextMessages: normalizedContextMessages,
-      trace: voiceTrace,
-      signal,
-      musicDisambiguation,
-      onBeforeSideEffect: () => {
-        if (activeVoiceSession?.inFlightAcceptedBrainTurn?.phase === "generation_only") {
-          activeVoiceSession.inFlightAcceptedBrainTurn.phase = "tool_call_started";
-        }
-      }
-    });
-    voiceAddressing = structuredMusicIntent.voiceAddressing;
-    if (structuredMusicIntent.handled) {
-      return {
-        text: structuredMusicIntent.text || "",
-        voiceAddressing,
-        generationContextSnapshot
-      };
-    }
-
     const captureGenerationText = (rawText: unknown) => {
       const normalized = sanitizeBotText(normalizeSkipSentinel(String(rawText || "")), 520);
       if (!normalized || normalized === "[SKIP]") return;
@@ -1277,7 +918,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     const VOICE_TOOL_LOOP_MAX_CALLS = 6;
     let voiceToolLoopSteps = 0;
     let voiceTotalToolCalls = 0;
-    let webLookupStarted = false;
 
     while (
       generation.toolCalls?.length > 0 &&
@@ -1303,16 +943,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       for (const toolCall of generation.toolCalls) {
         if (voiceTotalToolCalls >= VOICE_TOOL_LOOP_MAX_CALLS) break;
         voiceTotalToolCalls += 1;
-
-        if (toolCall.name === "web_search" && !webLookupStarted && typeof onWebLookupStart === "function") {
-          webLookupStarted = true;
-          runAsyncCallback(onWebLookupStart, {
-            query: String((toolCall.input as Record<string, unknown>)?.query || ""),
-            guildId,
-            channelId,
-            userId
-          }, "onWebLookupStart");
-        }
 
         const toolInput = toolCall.input as Record<string, unknown>;
         const toolStartMs = Date.now();
@@ -1431,15 +1061,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       });
       captureGenerationText(generation.resolvedSpokenText);
       voiceToolLoopSteps += 1;
-    }
-
-    if (webLookupStarted && typeof onWebLookupComplete === "function") {
-      runAsyncCallback(onWebLookupComplete, {
-        query: "",
-        guildId,
-        channelId,
-        userId
-      }, "onWebLookupComplete");
     }
 
     const finalText = sanitizeBotText(mergeSpokenReplyText(spokenTextParts), 520);

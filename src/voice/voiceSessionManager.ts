@@ -1,18 +1,11 @@
 import { PermissionFlagsBits, type ChatInputCommandInteraction, type VoiceChannelEffect } from "discord.js";
 import { resolveMemoryToolNamespaceScope } from "../memory/memoryToolRuntime.ts";
 import {
-  applyOrchestratorOverrideSettings,
   getBotNameAliases,
-  getReplyGenerationSettings,
-  getResolvedOrchestratorBinding,
   getVoiceConversationPolicy,
   getVoiceRuntimeConfig,
 } from "../settings/agentStack.ts";
-import {
-  getPromptBotName,
-  getPromptVoiceLookupBusySystemPrompt,
-  interpolatePromptTemplate
-} from "../prompts/promptCore.ts";
+import { getPromptBotName } from "../prompts/promptCore.ts";
 import { clamp } from "../utils.ts";
 import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
 import { hasBotNameCue } from "../bot/directAddressConfidence.ts";
@@ -186,14 +179,12 @@ import {
   VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS,
   VOICE_DECIDER_HISTORY_MAX_TURNS,
   VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS,
-  VOICE_LOOKUP_BUSY_ANNOUNCE_DELAY_MS,
   VOICE_TURN_PROMOTION_ACTIVE_RATIO_MIN,
   VOICE_TURN_PROMOTION_MIN_CLIP_MS,
   VOICE_TURN_PROMOTION_PEAK_MIN,
   VOICE_TURN_PROMOTION_STRONG_LOCAL_ACTIVE_RATIO_MIN,
   VOICE_TURN_PROMOTION_STRONG_LOCAL_PEAK_MIN,
   VOICE_TURN_PROMOTION_STRONG_LOCAL_RMS_MIN,
-  VOICE_LOOKUP_BUSY_MAX_CHARS,
   VOICE_TURN_MIN_ASR_CLIP_MS,
   PREPLAY_SUPERSEDE_REQUEUE_MAX_AGE_MS
 } from "./voiceSessionManager.constants.ts";
@@ -2224,12 +2215,6 @@ export class VoiceSessionManager {
     return baseDelayMs;
   }
 
-  isInboundCaptureSuppressed(session) {
-    if (!session || session.ending) return true;
-    const activeLookupCount = Number(session.voiceLookupBusyCount || 0);
-    return activeLookupCount > 0;
-  }
-
   abortActiveInboundCaptures({ session, reason = "capture_suppressed" }) {
     if (!session || session.ending) return;
     const captures: Array<[
@@ -2334,176 +2319,6 @@ export class VoiceSessionManager {
       thoughtCandidate,
       trigger
     });
-  }
-
-  beginVoiceWebLookupBusy({
-    session,
-    settings,
-    userId = null,
-    query = "",
-    source = "voice_web_lookup"
-  }) {
-    if (!session || session.ending) {
-      return () => undefined;
-    }
-
-    session.voiceLookupBusyCount = Number(session.voiceLookupBusyCount || 0) + 1;
-    const busyCount = Number(session.voiceLookupBusyCount || 0);
-    if (busyCount === 1) {
-      this.abortActiveInboundCaptures({
-        session,
-        reason: "voice_web_lookup_busy"
-      });
-      if (session.voiceLookupBusyAnnounceTimer) {
-        clearTimeout(session.voiceLookupBusyAnnounceTimer);
-        session.voiceLookupBusyAnnounceTimer = null;
-      }
-      session.voiceLookupBusyAnnounceTimer = setTimeout(() => {
-        session.voiceLookupBusyAnnounceTimer = null;
-        if (!session || session.ending) return;
-        if (Number(session.voiceLookupBusyCount || 0) <= 0) return;
-        this.announceVoiceWebLookupBusy({
-          session,
-          settings,
-          userId,
-          query,
-          source
-        }).catch((error) => {
-          this.store.logAction({
-            kind: "voice_error",
-            guildId: session.guildId,
-            channelId: session.textChannelId,
-            userId: userId || this.client.user?.id || null,
-            content: `voice_web_lookup_busy_announce_failed: ${String(error?.message || error)}`,
-            metadata: {
-              sessionId: session.id,
-              source: String(source || "voice_web_lookup"),
-              query: String(query || "").trim().slice(0, 220) || null
-            }
-          });
-        });
-      }, VOICE_LOOKUP_BUSY_ANNOUNCE_DELAY_MS);
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: this.client.user?.id || null,
-        content: "voice_web_lookup_busy_start",
-        metadata: {
-          sessionId: session.id,
-          mode: session.mode,
-          source: String(source || "voice_web_lookup"),
-          query: String(query || "").trim().slice(0, 220) || null
-        }
-      });
-    }
-
-    let released = false;
-    return () => {
-      if (released) return;
-      released = true;
-      const nextCount = Math.max(0, Number(session.voiceLookupBusyCount || 0) - 1);
-      session.voiceLookupBusyCount = nextCount;
-      if (nextCount > 0) return;
-      if (session.voiceLookupBusyAnnounceTimer) {
-        clearTimeout(session.voiceLookupBusyAnnounceTimer);
-        session.voiceLookupBusyAnnounceTimer = null;
-      }
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: this.client.user?.id || null,
-        content: "voice_web_lookup_busy_end",
-        metadata: {
-          sessionId: session.id,
-          mode: session.mode,
-          source: String(source || "voice_web_lookup")
-        }
-      });
-    };
-  }
-
-  async announceVoiceWebLookupBusy({
-    session,
-    settings,
-    userId = null,
-    query = "",
-    source = "voice_web_lookup"
-  }) {
-    if (!session || session.ending) return;
-    const line = await this.generateVoiceLookupBusyLine({
-      session,
-      settings,
-      userId,
-      query
-    });
-    if (!line) return;
-
-    const realtimeMode = isRealtimeMode(session.mode);
-    const busyUseApiTts = String(getVoiceConversationPolicy(settings).ttsMode || "").trim().toLowerCase() === "api";
-    if (realtimeMode && !busyUseApiTts && this.requestRealtimeTextUtterance({
-      session,
-      text: line,
-      userId,
-      source: `${String(source || "voice_web_lookup")}:busy_utterance`
-    })) {
-      return;
-    }
-    if (realtimeMode && !busyUseApiTts) return;
-
-    await this.speakVoiceLineWithTts({
-      session,
-      settings,
-      text: line,
-      source: `${String(source || "voice_web_lookup")}:busy_utterance`
-    });
-  }
-
-  async generateVoiceLookupBusyLine({
-    session,
-    settings,
-    userId = null,
-    query = ""
-  }) {
-    if (!this.llm?.generate) return "";
-    const normalizedQuery = normalizeVoiceText(query, 80);
-    const orchestrator = getResolvedOrchestratorBinding(settings);
-    const replyGeneration = getReplyGenerationSettings(settings);
-    const tunedSettings = applyOrchestratorOverrideSettings(settings, {
-      provider: orchestrator.provider,
-      model: orchestrator.model,
-      temperature: clamp(Number(replyGeneration.temperature) || 0.75, 0.2, 1.1),
-      maxOutputTokens: clamp(Number(replyGeneration.maxOutputTokens) || 28, 8, 40),
-      reasoningEffort: orchestrator.reasoningEffort
-    });
-    const systemPrompt = interpolatePromptTemplate(getPromptVoiceLookupBusySystemPrompt(settings), {
-      botName: getPromptBotName(settings)
-    });
-    const userPrompt = [
-      normalizedQuery ? `Lookup query: ${normalizedQuery}` : "Lookup query: (not specified)",
-      "Write one quick filler line before lookup results are ready."
-    ].join("\n");
-
-    try {
-      const generation = await this.llm.generate({
-        settings: tunedSettings,
-        systemPrompt,
-        userPrompt,
-        contextMessages: [],
-        trace: {
-          guildId: session?.guildId || null,
-          channelId: session?.textChannelId || null,
-          userId: userId || null,
-          source: "voice_web_lookup_busy_line"
-        }
-      });
-      const line = normalizeVoiceText(String(generation?.text || ""), VOICE_LOOKUP_BUSY_MAX_CHARS);
-      if (!line || line === "[SKIP]") return "";
-      return line;
-    } catch {
-      return "";
-    }
   }
 
   getPendingRealtimeAssistantUtterances(session) {

@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import {
   getPromptImpossibleActionLine,
   getPromptTextGuidance,
-  getPromptVoiceLookupBusySystemPrompt,
   interpolatePromptTemplate
 } from "./promptCore.ts";
 import { normalizeSettings } from "../store/settingsNormalization.ts";
@@ -26,14 +25,10 @@ test("prompt getters interpolate botName placeholders", () => {
       },
       text: {
         guidance: ["reply as {{ BOTNAME }} only"]
-      },
-      voice: {
-        lookupBusySystemPrompt: "You are {{ botName }} in VC."
       }
     }
   });
 
   assert.equal(getPromptImpossibleActionLine(settings), "cannot do that, clanker mode");
   assert.deepEqual(getPromptTextGuidance(settings), ["reply as clanker only"]);
-  assert.equal(getPromptVoiceLookupBusySystemPrompt(settings), "You are clanker in VC.");
 });

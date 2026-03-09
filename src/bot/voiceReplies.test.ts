@@ -538,159 +538,6 @@ test("generateVoiceTurnReply passes abort signal into llm generation", async () 
   assert.equal(generationPayloads[0]?.signal, controller.signal);
 });
 
-test("generateVoiceTurnReply routes fresh music play requests through structured voice intent before the tool loop", async () => {
-  const { bot, requestPlayMusicCalls, generationPayloads, logs } = createVoiceBot({
-    activeVoiceSession: {
-      id: "voice-session-1"
-    },
-    generationSequence: [
-      {
-        text: structuredReplyJson({
-          text: "bet, loading up Migos.",
-          voiceIntent: {
-            intent: "music_play",
-            confidence: 0.96,
-            reason: "explicit play request",
-            query: "Migos",
-            platform: "auto",
-            selectedResultId: null
-          },
-          voiceAddressing: {
-            talkingTo: "ME",
-            directedConfidence: 0.93
-          }
-        })
-      }
-    ]
-  });
-
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings(),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    sessionId: "voice-session-1",
-    transcript: "Can you play me some Migos?"
-  });
-
-  assert.equal(requestPlayMusicCalls.length, 1);
-  assert.equal(requestPlayMusicCalls[0]?.query, "Migos");
-  assert.equal(requestPlayMusicCalls[0]?.action, "play_now");
-  assert.equal(requestPlayMusicCalls[0]?.source, "voice_structured_intent");
-  assert.equal(reply.text, "bet, loading up Migos.");
-  assert.equal(reply.voiceAddressing?.talkingTo, "ME");
-  assert.equal(generationPayloads.length, 1);
-  assert.match(String(generationPayloads[0]?.userPrompt || ""), /Structured music control pass:/);
-  assert.equal(logs.some((entry) => entry?.content === "voice_structured_music_intent_handled"), true);
-});
-
-test("generateVoiceTurnReply uses pending disambiguation IDs in structured voice music followups", async () => {
-  const { bot, requestPlayMusicCalls, generationPayloads } = createVoiceBot({
-    activeVoiceSession: {
-      id: "voice-session-2"
-    },
-    musicDisambiguation: {
-      active: true,
-      query: "Migos",
-      platform: "auto",
-      action: "play_now",
-      requestedByUserId: "user-1",
-      options: [
-        {
-          id: "youtube:first",
-          title: "Straightenin",
-          artist: "Migos",
-          platform: "youtube"
-        },
-        {
-          id: "youtube:second",
-          title: "Bad and Boujee",
-          artist: "Migos",
-          platform: "youtube"
-        }
-      ]
-    },
-    generationSequence: [
-      {
-        text: structuredReplyJson({
-          text: "running the second one.",
-          voiceIntent: {
-            intent: "music_play",
-            confidence: 0.95,
-            reason: "selected pending option",
-            query: null,
-            platform: "auto",
-            selectedResultId: "youtube:second"
-          }
-        })
-      }
-    ]
-  });
-
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings(),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    sessionId: "voice-session-2",
-    transcript: "that one"
-  });
-
-  assert.equal(requestPlayMusicCalls.length, 1);
-  assert.equal(requestPlayMusicCalls[0]?.trackId, "youtube:second");
-  assert.equal(requestPlayMusicCalls[0]?.action, "play_now");
-  assert.equal(reply.text, "running the second one.");
-  assert.match(String(generationPayloads[0]?.userPrompt || ""), /Pending music option 2: Bad and Boujee - Migos \[youtube:second\]/);
-});
-
-test("generateVoiceTurnReply uses voice generation llm provider/model for the structured music intent pass", async () => {
-  const { bot, requestPlayMusicCalls, generationPayloads } = createVoiceBot({
-    activeVoiceSession: {
-      id: "voice-session-structured-binding-1"
-    },
-    generationSequence: [
-      {
-        text: structuredReplyJson({
-          text: "bet, loading it now.",
-          voiceIntent: {
-            intent: "music_play",
-            confidence: 0.97,
-            reason: "explicit play request",
-            query: "Daft Punk",
-            platform: "auto",
-            selectedResultId: null
-          }
-        })
-      }
-    ]
-  });
-
-  await generateVoiceTurnReply(bot, {
-    settings: baseSettings({
-      llm: {
-        provider: "openai",
-        model: "gpt-5-mini"
-      },
-      voice: {
-        generationLlm: {
-          provider: "claude-oauth",
-          model: "claude-sonnet-4-6"
-        }
-      }
-    }),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    sessionId: "voice-session-structured-binding-1",
-    transcript: "play some Daft Punk"
-  });
-
-  assert.equal(requestPlayMusicCalls.length, 1);
-  assert.equal(generationPayloads.length, 1);
-  assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).provider, "claude-oauth");
-  assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).model, "claude-sonnet-4-6");
-});
-
 test("generateVoiceTurnReply streams sentence chunks when voice streaming is enabled", async () => {
   const streamed: string[] = [];
   const { bot } = createVoiceBot({
@@ -1643,7 +1490,7 @@ test("generateVoiceTurnReply advertises tool runtimes only when the capability e
   }
 });
 
-test("generateVoiceTurnReply runs web lookup follow-up with start/complete callbacks via tool calls", async () => {
+test("generateVoiceTurnReply runs web lookup follow-up via tool calls", async () => {
   const { bot, webSearchCalls, getGenerationCalls } = createVoiceBot({
     generationSequence: [
       {
@@ -1668,7 +1515,6 @@ test("generateVoiceTurnReply runs web lookup follow-up with start/complete callb
     ]
   });
 
-  const callbackEvents: string[] = [];
   const reply = await generateVoiceTurnReply(bot, {
     settings: baseSettings({
       webSearch: {
@@ -1678,20 +1524,11 @@ test("generateVoiceTurnReply runs web lookup follow-up with start/complete callb
     guildId: "guild-1",
     channelId: "text-1",
     userId: "user-1",
-    transcript: "what's the latest rust stable?",
-    onWebLookupStart: async (payload) => {
-      callbackEvents.push(`start:${String(payload?.query || "")}`);
-    },
-    onWebLookupComplete: async (_payload) => {
-      callbackEvents.push("done");
-    }
+    transcript: "what's the latest rust stable?"
   });
 
   assert.equal(getGenerationCalls(), 2);
   assert.equal(webSearchCalls.length, 1);
-  assert.equal(callbackEvents.length, 2);
-  assert.equal(callbackEvents[0], "start:latest rust stable version");
-  assert.equal(callbackEvents[1], "done");
   assert.equal(reply.text, "latest stable rust is 1.90");
   assert.equal(reply.usedWebSearchFollowup, true);
 });

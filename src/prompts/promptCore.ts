@@ -38,11 +38,6 @@ const DEFAULT_MEDIA_PROMPT_CRAFT_GUIDANCE = [
   "For video prompts, describe the motion arc: what starts, what changes, and how it ends.",
   "Never put text, words, or UI elements in media prompts."
 ].join(" ");
-export const DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT = [
-  "Output one short spoken line only (4-12 words).",
-  "Line must clearly indicate you're checking something on the web right now.",
-  "Keep it natural and direct. No markdown, no tags, no directives."
-].join("\n");
 export function interpolatePromptTemplate(template, variables = {}) {
   const input = String(template || "");
   if (!input) return "";
@@ -141,17 +136,6 @@ export function getPromptVoiceOperationalGuidance(settings, fallback = []) {
 export function getMediaPromptCraftGuidance(settings, fallback = DEFAULT_MEDIA_PROMPT_CRAFT_GUIDANCE) {
   const configured = String(getPromptingSettings(settings).media.promptCraftGuidance || "").trim();
   const resolved = configured || String(fallback || DEFAULT_MEDIA_PROMPT_CRAFT_GUIDANCE);
-  return interpolatePromptTemplate(resolved, {
-    botName: getPromptBotName(settings)
-  });
-}
-
-export function getPromptVoiceLookupBusySystemPrompt(
-  settings,
-  fallback = DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT
-) {
-  const configured = String(getPromptingSettings(settings).voice.lookupBusySystemPrompt || "").trim();
-  const resolved = configured || String(fallback || DEFAULT_PROMPT_VOICE_LOOKUP_BUSY_SYSTEM_PROMPT);
   return interpolatePromptTemplate(resolved, {
     botName: getPromptBotName(settings)
   });

@@ -15,7 +15,6 @@ export function FullPromptPreview({ form }) {
   const [expanded, setExpanded] = useState(false);
   const botName = form.botName || "clanker conk";
 
-  const voiceLookupBusy = interpolatePromptTemplate(form.promptVoiceLookupBusySystemPrompt, { botName });
   const textGuidance = interpolatePromptTemplate(form.promptTextGuidance, { botName });
   const voiceGuidance = interpolatePromptTemplate(form.promptVoiceGuidance, { botName });
   const voiceOperationalGuidance = interpolatePromptTemplate(form.promptVoiceOperationalGuidance, { botName });
@@ -61,7 +60,6 @@ Reply eagerness hint: {{eagerness}}/100.
 Low eagerness mode: treat spontaneous insertion as an exception, not the default.`;
 
   const hasAnyPrompts =
-    voiceLookupBusy ||
     textGuidance ||
     voiceGuidance ||
     voiceOperationalGuidance ||
@@ -85,7 +83,6 @@ Low eagerness mode: treat spontaneous insertion as an exception, not the default
       </button>
       {expanded && (
         <div className="full-prompt-preview-content">
-          <ScenarioSection title="Voice Lookup Busy" prompt={voiceLookupBusy} />
           <ScenarioSection title="Text Guidance" prompt={textGuidance} />
           <ScenarioSection title="Voice Guidance" prompt={voiceGuidance} />
           <ScenarioSection title="Voice Operational Guidance" prompt={voiceOperationalGuidance} />

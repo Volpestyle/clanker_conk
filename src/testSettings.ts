@@ -86,8 +86,7 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
       },
       voice: {
         guidance: prompt.voiceGuidance,
-        operationalGuidance: prompt.voiceOperationalGuidance,
-        lookupBusySystemPrompt: prompt.voiceLookupBusySystemPrompt
+        operationalGuidance: prompt.voiceOperationalGuidance
       },
       media: {
         promptCraftGuidance: prompt.mediaPromptCraftGuidance

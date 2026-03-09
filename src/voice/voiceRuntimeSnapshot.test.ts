@@ -86,7 +86,6 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and stt session state", (
           summary: "decider summary"
         }
       },
-      voiceLookupBusyCount: 2,
       lastGenerationContext: {
         route: "voice_reply"
       },
@@ -320,7 +319,6 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and stt session state", (
       botTurnOpen: false,
       recentVoiceTurns: [],
       transcriptTurns: [],
-      voiceLookupBusyCount: 0,
       thoughtLoopBusy: false,
       nextThoughtAt: 0,
       lastThoughtAttemptAt: 0,

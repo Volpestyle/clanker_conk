@@ -15,7 +15,6 @@ function createBot() {
     maybeReplyToMessage: [] as Array<Record<string, unknown>>,
     isDirectlyAddressed: [] as Array<Record<string, unknown>>,
     getReactionEmojiOptions: [] as unknown[],
-    maybeHandleStructuredVoiceIntent: [] as unknown[],
     maybeHandleStructuredAutomationIntent: [] as unknown[],
     maybeApplyReplyReaction: [] as unknown[],
     logSkippedReply: [] as unknown[],
@@ -120,10 +119,6 @@ function createBot() {
     getEmojiHints() {
       return ["wave"];
     },
-    maybeHandleStructuredVoiceIntent(payload: unknown) {
-      calls.maybeHandleStructuredVoiceIntent.push(payload);
-      return { handled: true };
-    },
     maybeHandleStructuredAutomationIntent(payload: unknown) {
       calls.maybeHandleStructuredAutomationIntent.push(payload);
       return { handled: true };
@@ -204,7 +199,6 @@ test("buildReplyPipelineRuntime maps bot fields and preserves runtime delegation
   });
   assert.equal(shouldAttempt, true);
 
-  const voiceIntentResult = runtime.maybeHandleStructuredVoiceIntent({ intent: "join" });
   const automationIntentResult = runtime.maybeHandleStructuredAutomationIntent({ intent: "schedule" });
   runtime.maybeApplyReplyReaction({ emoji: "🔥" });
   runtime.logSkippedReply({ reason: "quiet_hours" });
@@ -214,14 +208,12 @@ test("buildReplyPipelineRuntime maps bot fields and preserves runtime delegation
   const beforeMarkSpoke = bot.lastBotMessageAt;
   runtime.markSpoke();
 
-  assert.deepEqual(voiceIntentResult, { handled: true });
   assert.deepEqual(automationIntentResult, { handled: true });
   assert.equal(canSend, true);
   assert.equal(talkNow, settings);
   assert.equal(shouldReply, true);
   assert.equal(calls.canSendMessage.at(-1), 5);
   assert.equal(calls.canTalkNow.at(-1), settings);
-  assert.equal(calls.maybeHandleStructuredVoiceIntent.length, 1);
   assert.equal(calls.maybeHandleStructuredAutomationIntent.length, 1);
   assert.equal(calls.maybeApplyReplyReaction.length, 1);
   assert.equal(calls.logSkippedReply.length, 1);

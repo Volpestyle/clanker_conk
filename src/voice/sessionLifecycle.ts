@@ -21,7 +21,6 @@ import {
   MIN_MAX_SESSION_MINUTES,
   OPENAI_REALTIME_MAX_SESSION_MINUTES,
   VOICE_INACTIVITY_WARNING_SECONDS,
-  VOICE_LOOKUP_BUSY_LOG_COOLDOWN_MS,
   VOICE_MAX_DURATION_WARNING_SECONDS
 } from "./voiceSessionManager.constants.ts";
 import type { BargeInController } from "./bargeInController.ts";
@@ -297,7 +296,6 @@ export class SessionLifecycle {
     if (session.responseDoneGraceTimer) clearTimeout(session.responseDoneGraceTimer);
     if (session.realtimeInstructionRefreshTimer) clearTimeout(session.realtimeInstructionRefreshTimer);
     if (session.openAiToolResponseDebounceTimer) clearTimeout(session.openAiToolResponseDebounceTimer);
-    if (session.voiceLookupBusyAnnounceTimer) clearTimeout(session.voiceLookupBusyAnnounceTimer);
     if (session.realtimeTurnCoalesceTimer) {
       clearTimeout(session.realtimeTurnCoalesceTimer);
       session.realtimeTurnCoalesceTimer = null;
@@ -334,7 +332,6 @@ export class SessionLifecycle {
     session.openAiTurnContextRefreshState = null;
     session.lastRequestedRealtimeUtterance = null;
     session.activeReplyInterruptionPolicy = null;
-    session.voiceLookupBusyAnnounceTimer = null;
     session.bargeInSuppressionUntil = 0;
     session.bargeInSuppressedAudioChunks = 0;
     session.bargeInSuppressedAudioBytes = 0;
@@ -921,25 +918,6 @@ export class SessionLifecycle {
 
     const onSpeakingStart = (userId) => {
       if (String(userId || "") === String(this.host.client.user?.id || "")) return;
-      if (this.host.isInboundCaptureSuppressed(session)) {
-        const now = Date.now();
-        if (now - Number(session.lastSuppressedCaptureLogAt || 0) >= VOICE_LOOKUP_BUSY_LOG_COOLDOWN_MS) {
-          session.lastSuppressedCaptureLogAt = now;
-          this.host.store.logAction({
-            kind: "voice_runtime",
-            guildId: session.guildId,
-            channelId: session.textChannelId,
-            userId: String(userId || "").trim() || null,
-            content: "voice_input_suppressed",
-            metadata: {
-              sessionId: session.id,
-              mode: session.mode,
-              reason: "voice_web_lookup_busy"
-            }
-          });
-        }
-        return;
-      }
       if (!this.host.isAsrActive(session, settings)) return;
       const normalizedUserId = String(userId || "");
       const activeCapture = session.userCaptures.get(normalizedUserId);

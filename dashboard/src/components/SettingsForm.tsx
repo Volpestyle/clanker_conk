@@ -343,7 +343,6 @@ export default function SettingsForm({
       promptTextGuidance: defaultForm.promptTextGuidance,
       promptVoiceGuidance: defaultForm.promptVoiceGuidance,
       promptVoiceOperationalGuidance: defaultForm.promptVoiceOperationalGuidance,
-      promptVoiceLookupBusySystemPrompt: defaultForm.promptVoiceLookupBusySystemPrompt,
       promptMediaPromptCraftGuidance: defaultForm.promptMediaPromptCraftGuidance
     }));
   }

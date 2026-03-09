@@ -906,8 +906,6 @@ export interface VoiceSession {
     latencyStages: VoiceLatencyStageEntry[];
     membershipEvents: VoiceMembershipEvent[];
     voiceChannelEffects?: VoiceChannelEffectEvent[];
-    voiceLookupBusyCount: number;
-    lastSuppressedCaptureLogAt: number;
     baseVoiceInstructions: InstructionManagerState["baseVoiceInstructions"];
     lastOpenAiRealtimeInstructions: InstructionManagerState["lastOpenAiRealtimeInstructions"];
     lastOpenAiRealtimeInstructionsAt: InstructionManagerState["lastOpenAiRealtimeInstructionsAt"];
@@ -928,6 +926,5 @@ export interface VoiceSession {
     inFlightAcceptedBrainTurn?: InFlightAcceptedBrainTurn | null;
     openAiAsrSessionIdleTtlMs?: number;
     realtimeTurnCoalesceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
-    voiceLookupBusyAnnounceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     [key: string]: unknown;
 }

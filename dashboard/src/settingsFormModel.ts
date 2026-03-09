@@ -183,7 +183,6 @@ function buildSettingsFormView(settings: unknown) {
       textGuidance: prompting.text.guidance,
       voiceGuidance: prompting.voice.guidance,
       voiceOperationalGuidance: prompting.voice.operationalGuidance,
-      voiceLookupBusySystemPrompt: prompting.voice.lookupBusySystemPrompt,
       mediaPromptCraftGuidance: prompting.media.promptCraftGuidance
     },
     activity,
@@ -366,8 +365,6 @@ export function settingsToForm(settings: unknown) {
     promptVoiceGuidance: formatLineList(resolved.prompt.voiceGuidance ?? defaultPrompt.voiceGuidance),
     promptVoiceOperationalGuidance:
       formatLineList(resolved.prompt.voiceOperationalGuidance ?? defaultPrompt.voiceOperationalGuidance),
-    promptVoiceLookupBusySystemPrompt:
-      resolved.prompt.voiceLookupBusySystemPrompt ?? defaultPrompt.voiceLookupBusySystemPrompt,
     promptMediaPromptCraftGuidance: resolved.prompt.mediaPromptCraftGuidance ?? defaultPrompt.mediaPromptCraftGuidance,
     replyEagerness: activity.replyEagerness ?? defaultActivity.replyEagerness,
     reactionLevel: activity.reactionLevel ?? defaultActivity.reactionLevel,
@@ -731,8 +728,7 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
       },
       voice: {
         guidance: parseUniqueLineList(form.promptVoiceGuidance),
-        operationalGuidance: parseUniqueLineList(form.promptVoiceOperationalGuidance),
-        lookupBusySystemPrompt: String(form.promptVoiceLookupBusySystemPrompt || "").trim()
+        operationalGuidance: parseUniqueLineList(form.promptVoiceOperationalGuidance)
       },
       media: {
         promptCraftGuidance: String(form.promptMediaPromptCraftGuidance || "").trim()

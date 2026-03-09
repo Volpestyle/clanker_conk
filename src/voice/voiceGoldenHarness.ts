@@ -929,9 +929,7 @@ function buildExecutionSession({
     },
     streamWatch: {
       active: false
-    },
-    voiceLookupBusyCount: 0,
-    lastVoiceLookupBusyAnnouncementAt: 0
+    }
   } as Record<string, unknown>;
 
   if (mode === "openai_realtime") {

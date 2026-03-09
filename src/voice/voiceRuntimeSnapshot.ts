@@ -540,7 +540,6 @@ export function buildVoiceRuntimeSnapshot(
         at: new Date(entry.at).toISOString(),
         ageMs: Math.max(0, Math.round(entry.ageMs))
       })),
-      voiceLookupBusyCount: Number(session.voiceLookupBusyCount || 0),
       pendingDeferredTurns: deferredQueue.length,
       recentTurns: transcriptTurns.slice(-VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS).map((turn) => ({
         kind: turn.kind || "speech",
