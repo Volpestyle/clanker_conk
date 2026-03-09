@@ -458,6 +458,62 @@ test("callAnthropicStreaming forwards streamed text deltas and returns the final
   assert.equal(result.stopReason, "end_turn");
 });
 
+test("callAnthropicStreaming handles user-aborted Claude streams without leaking stream aborts", async () => {
+  const service = createService({ anthropicApiKey: "test-anthropic-key" });
+  let streamAbortListener: ((error?: unknown) => void) | null = null;
+  let streamErrorListener: ((error?: unknown) => void) | null = null;
+  let rejectFinalMessage: ((error?: unknown) => void) | null = null;
+  let abortCalled = false;
+
+  service.anthropic = {
+    messages: {
+      stream() {
+        return {
+          on(event, handler) {
+            if (event === "abort") {
+              streamAbortListener = handler;
+            }
+            if (event === "error") {
+              streamErrorListener = handler;
+            }
+            return this;
+          },
+          abort() {
+            abortCalled = true;
+            streamAbortListener?.(new Error("Request was aborted."));
+            rejectFinalMessage?.(new Error("Request was aborted."));
+          },
+          async finalMessage() {
+            return await new Promise((_, reject) => {
+              rejectFinalMessage = reject;
+            });
+          }
+        };
+      }
+    }
+  };
+
+  const controller = new AbortController();
+  const promise = service.callAnthropicStreaming({
+    model: "claude-haiku-4-5",
+    systemPrompt: "system prompt",
+    userPrompt: "say hello",
+    contextMessages: [],
+    temperature: 0.2,
+    maxOutputTokens: 64
+  }, {
+    signal: controller.signal,
+    onTextDelta() {}
+  });
+
+  controller.abort("Pending response cleared");
+
+  await assert.rejects(promise, /aborted/i);
+  assert.equal(abortCalled, true);
+  assert.equal(typeof streamAbortListener, "function");
+  assert.equal(typeof streamErrorListener, "function");
+});
+
 test("callChatModelStreaming supports OpenAI Responses streaming", async () => {
   const service = createService({ openaiApiKey: "test-openai-key" });
   let seenPayload = null;

@@ -31,6 +31,8 @@ import {
 } from "./sharedToolSchemas.ts";
 import {
   getDirectiveSettings,
+  getBotName,
+  getBotNameAliases,
   getMemorySettings,
   isBrowserEnabled,
   isDevTaskEnabled,
@@ -47,6 +49,7 @@ const MAX_WEB_SCRAPE_DEFAULT_CHARS = 8000;
 const MAX_BROWSER_BROWSE_QUERY_LEN = 500;
 const MAX_CODE_TASK_LEN = 2000;
 const MAX_OPEN_ARTICLE_REF_LEN = 260;
+const MAX_VOICE_MUSIC_QUERY_LEN = 180;
 
 interface ReplyToolDefinition {
   name: string;
@@ -478,7 +481,7 @@ export async function executeReplyTool(
     case "music_resume":
     case "music_skip":
     case "music_now_playing":
-      return executeVoiceTool(toolName, input, runtime, context.signal);
+      return executeVoiceTool(toolName, input, runtime, context);
     default:
       return { content: `Unknown tool: ${toolName}`, isError: true };
   }
@@ -1264,40 +1267,55 @@ async function executeVoiceTool(
   toolName: string,
   input: ReplyToolCallInput,
   runtime: ReplyToolRuntime,
-  signal?: AbortSignal
+  context: ReplyToolContext
 ): Promise<ReplyToolResult> {
-  throwIfAborted(signal, "Reply tool cancelled");
+  throwIfAborted(context.signal, "Reply tool cancelled");
   if (!runtime.voiceSession) {
     return { content: "Voice session tools are not available.", isError: true };
   }
   try {
     let result: Record<string, unknown>;
+    const repairedInput = repairMissingVoiceMusicToolInput(toolName, input, context);
+    if (repairedInput !== input && typeof runtime.store?.logAction === "function") {
+      runtime.store.logAction({
+        kind: "voice_runtime",
+        guildId: context.guildId,
+        channelId: context.channelId,
+        userId: context.userId,
+        content: "voice_music_tool_query_recovered",
+        metadata: {
+          toolName,
+          sourceText: context.sourceText,
+          recoveredQuery: String(repairedInput?.query || "")
+        }
+      });
+    }
     switch (toolName) {
       case "music_search": {
-        const query = String(input?.query || "").trim().slice(0, 180);
+        const query = String(repairedInput?.query || "").trim().slice(0, MAX_VOICE_MUSIC_QUERY_LEN);
         if (!query) return { content: "Missing or empty search query.", isError: true };
-        const limit = Math.max(1, Math.min(10, Math.floor(Number(input?.max_results) || 5)));
-        throwIfAborted(signal, "Reply tool cancelled");
+        const limit = Math.max(1, Math.min(10, Math.floor(Number(repairedInput?.max_results) || 5)));
+        throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicSearch(query, limit);
         break;
       }
       case "music_play": {
-        const query = String(input?.query || "").trim().slice(0, 180);
-        const selectionId = String(input?.selection_id || "").trim().slice(0, 180) || null;
-        const platform = String(input?.platform || "").trim().slice(0, 32) || null;
+        const query = String(repairedInput?.query || "").trim().slice(0, MAX_VOICE_MUSIC_QUERY_LEN);
+        const selectionId = String(repairedInput?.selection_id || "").trim().slice(0, MAX_VOICE_MUSIC_QUERY_LEN) || null;
+        const platform = String(repairedInput?.platform || "").trim().slice(0, 32) || null;
         if (!query && !selectionId) {
           return { content: "Missing query or selection_id.", isError: true };
         }
-        throwIfAborted(signal, "Reply tool cancelled");
+        throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicPlay(query, selectionId, platform);
         break;
       }
       case "music_queue_add": {
-        const tracks = Array.isArray(input?.tracks)
-          ? (input.tracks as string[]).map((t) => String(t).trim()).filter(Boolean).slice(0, 12)
+        const tracks = Array.isArray(repairedInput?.tracks)
+          ? (repairedInput.tracks as string[]).map((t) => String(t).trim()).filter(Boolean).slice(0, 12)
           : [];
         if (!tracks.length) return { content: "No track IDs provided.", isError: true };
-        const rawPos = input?.position;
+        const rawPos = repairedInput?.position;
         const position = rawPos === "end"
           ? "end"
           : typeof rawPos === "string" && /^\d+$/.test(rawPos)
@@ -1305,41 +1323,41 @@ async function executeVoiceTool(
             : typeof rawPos === "number"
               ? Math.max(0, Math.floor(rawPos))
               : undefined;
-        throwIfAborted(signal, "Reply tool cancelled");
+        throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicQueueAdd(tracks, position);
         break;
       }
       case "music_queue_next": {
-        const tracks = Array.isArray(input?.tracks)
-          ? (input.tracks as string[]).map((t) => String(t).trim()).filter(Boolean).slice(0, 12)
+        const tracks = Array.isArray(repairedInput?.tracks)
+          ? (repairedInput.tracks as string[]).map((t) => String(t).trim()).filter(Boolean).slice(0, 12)
           : [];
         if (!tracks.length) return { content: "No track IDs provided.", isError: true };
-        throwIfAborted(signal, "Reply tool cancelled");
+        throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicQueueNext(tracks);
         break;
       }
       case "music_stop":
-        throwIfAborted(signal, "Reply tool cancelled");
+        throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicStop();
         break;
       case "music_pause":
-        throwIfAborted(signal, "Reply tool cancelled");
+        throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicPause();
         break;
       case "music_resume":
-        throwIfAborted(signal, "Reply tool cancelled");
+        throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicResume();
         break;
       case "music_skip":
-        throwIfAborted(signal, "Reply tool cancelled");
+        throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicSkip();
         break;
       case "music_now_playing":
-        throwIfAborted(signal, "Reply tool cancelled");
+        throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.musicNowPlaying();
         break;
       case "leave_voice_channel":
-        throwIfAborted(signal, "Reply tool cancelled");
+        throwIfAborted(context.signal, "Reply tool cancelled");
         result = await runtime.voiceSession.leaveVoiceChannel();
         break;
       default:
@@ -1352,6 +1370,94 @@ async function executeVoiceTool(
       isError: true
     };
   }
+}
+
+function repairMissingVoiceMusicToolInput(
+  toolName: string,
+  input: ReplyToolCallInput,
+  context: ReplyToolContext
+) {
+  if ((toolName !== "music_search" && toolName !== "music_play") || !input || typeof input !== "object") {
+    return input;
+  }
+
+  const query = normalizeDirectiveText(input.query, MAX_VOICE_MUSIC_QUERY_LEN) || "";
+  const selectionId = normalizeDirectiveText(input.selection_id, MAX_VOICE_MUSIC_QUERY_LEN) || "";
+  if (query || selectionId) {
+    return input;
+  }
+
+  const recoveredQuery = recoverVoiceMusicQueryFromSourceText(context.sourceText, context.settings);
+  if (!recoveredQuery) {
+    return input;
+  }
+
+  return {
+    ...input,
+    query: recoveredQuery
+  };
+}
+
+function recoverVoiceMusicQueryFromSourceText(sourceText: unknown, settings: unknown) {
+  const normalizedSource = normalizeDirectiveText(sourceText, MAX_VOICE_MUSIC_QUERY_LEN) || "";
+  if (!normalizedSource) return "";
+
+  let working = stripVoiceMusicLeadIn(normalizedSource, settings);
+  if (!working) return "";
+
+  const commandMatch = working.match(
+    /^(?:please\s+)?(?:play|queue(?:\s+up)?|add|put on|find|search(?:\s+for)?)\b(?:\s+(?:me|us))?(?:[\s,!.:-]+(?:uh|um))*[\s,!.:-]*(.+)$/i
+  );
+  if (commandMatch?.[1]) {
+    working = commandMatch[1];
+  }
+
+  const candidate = normalizeDirectiveText(
+    working
+      .replace(/^(?:uh|um|like)\b[\s,!.:-]*/i, "")
+      .replace(/\b(?:please|for me|right now|now)\b[.!?,;:'"`]*$/i, "")
+      .replace(/^[\s"'`“”‘’.,:;!?-]+|[\s"'`“”‘’.,:;!?-]+$/gu, ""),
+    MAX_VOICE_MUSIC_QUERY_LEN
+  ) || "";
+
+  if (!candidate) return "";
+  if (looksLikeVoiceMusicSelection(candidate) || looksLikeVoiceMusicControlOnly(candidate)) {
+    return "";
+  }
+  return candidate;
+}
+
+function stripVoiceMusicLeadIn(sourceText: string, settings: unknown) {
+  let working = normalizeDirectiveText(sourceText, MAX_VOICE_MUSIC_QUERY_LEN) || "";
+  if (!working) return "";
+
+  working = working.replace(/^(?:yo|hey|ok(?:ay)?|alright|all right|well|so|please|uh|um)\b[\s,!.:-]*/i, "");
+
+  const botNames = [getBotName(settings), ...getBotNameAliases(settings)]
+    .map((entry) => normalizeDirectiveText(entry, 80) || "")
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length);
+  if (botNames.length) {
+    const namePattern = botNames.map((entry) => escapeRegExp(entry)).join("|");
+    working = working.replace(new RegExp(`^(?:${namePattern})\\b[\\s,!.:-]*`, "i"), "");
+  }
+
+  working = working.replace(/^(?:can|could|would|will|can u|could u|would u|will u)\s+you\b[\s,!.:-]*/i, "");
+  working = working.replace(/^(?:please\s+)?(?:just\s+)?/i, "");
+
+  return normalizeDirectiveText(working, MAX_VOICE_MUSIC_QUERY_LEN) || "";
+}
+
+function looksLikeVoiceMusicSelection(query: string) {
+  return /^(?:\d+|(?:number|option)\s+\d+|(?:the\s+)?(?:first|second|third|fourth|fifth|last)\s+one|that one|this one|the same one|same one)$/i.test(query);
+}
+
+function looksLikeVoiceMusicControlOnly(query: string) {
+  return /^(?:music|some music|a song|song|something|anything|stop(?: the music)?|pause(?: the music)?|resume(?: the music)?|unpause(?: it| the music)?|skip(?: it| this| track| song| the track| the song)?|(?:the\s+)?next song|play (?:the song|this song|it)(?: again)?)$/i.test(query);
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export {

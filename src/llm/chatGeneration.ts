@@ -546,6 +546,13 @@ export async function callAnthropicStreaming(
   const abortSignal = callbacks.signal || request.signal;
   let removeAbortListener: (() => void) | null = null;
 
+  // Claude streams can emit abort/error events when the caller clears a pending
+  // reply before finalMessage() settles. Attach listeners up front so those
+  // supersede aborts stay on the normal promise path instead of surfacing as an
+  // unhandled stream-level rejection.
+  stream.on("abort", () => {});
+  stream.on("error", () => {});
+
   if (abortSignal) {
     if (abortSignal.aborted) {
       stream.abort();
@@ -564,23 +571,25 @@ export async function callAnthropicStreaming(
     callbacks.onTextDelta(String(delta || ""));
   });
 
-  try {
-    const response = await stream.finalMessage() as {
-      content: Array<{
-        type: string;
-        text?: string;
-        id?: string;
-        name?: string;
-        input?: Record<string, unknown>;
-      }>;
-      stop_reason?: string | null;
-      usage?: {
-        input_tokens?: number;
-        output_tokens?: number;
-        cache_creation_input_tokens?: number;
-        cache_read_input_tokens?: number;
-      };
+  const finalMessagePromise = stream.finalMessage() as Promise<{
+    content: Array<{
+      type: string;
+      text?: string;
+      id?: string;
+      name?: string;
+      input?: Record<string, unknown>;
+    }>;
+    stop_reason?: string | null;
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
     };
+  }>;
+
+  try {
+    const response = await finalMessagePromise;
     const normalized = buildAnthropicResponse(response);
     if (typeof callbacks.onContentBlockComplete === "function") {
       for (const block of response.content) {

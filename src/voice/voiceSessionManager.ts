@@ -194,7 +194,8 @@ import {
   VOICE_TURN_PROMOTION_STRONG_LOCAL_PEAK_MIN,
   VOICE_TURN_PROMOTION_STRONG_LOCAL_RMS_MIN,
   VOICE_LOOKUP_BUSY_MAX_CHARS,
-  VOICE_TURN_MIN_ASR_CLIP_MS
+  VOICE_TURN_MIN_ASR_CLIP_MS,
+  PREPLAY_SUPERSEDE_REQUEUE_MAX_AGE_MS
 } from "./voiceSessionManager.constants.ts";
 import { providerSupports } from "./voiceModes.ts";
 import { executeOpenAiRealtimeFunctionCall } from "./voiceToolCallInfra.ts";
@@ -1833,6 +1834,42 @@ export class VoiceSessionManager {
       );
     }
     this.maybeClearActiveReplyInterruptionPolicy(session);
+
+    // Check if the aborted generation was still in a safe-to-requeue phase.
+    // Only requeue when no tool side effects have started (phase is
+    // generation_only). The stash is read synchronously before the pipeline's
+    // finally-block clears it on the next microtick.
+    const inFlight = session.inFlightAcceptedBrainTurn;
+    const inFlightPhase = inFlight?.phase || null;
+    const inFlightAge = inFlight ? now - Math.max(0, Number(inFlight.acceptedAt || 0)) : 0;
+    const requeueEligible =
+      activeReplyAbortCount > 0 &&
+      inFlight &&
+      inFlightPhase === "generation_only" &&
+      inFlightAge < PREPLAY_SUPERSEDE_REQUEUE_MAX_AGE_MS &&
+      Boolean(inFlight.transcript);
+    let requeued = false;
+    if (requeueEligible && inFlight) {
+      this.queueDeferredBotTurnOpenTurn({
+        session,
+        userId: inFlight.userId,
+        transcript: inFlight.transcript,
+        pcmBuffer: inFlight.pcmBuffer,
+        captureReason: inFlight.captureReason || "stream_end",
+        source: inFlight.source || "preplay_supersede_requeue",
+        directAddressed: Boolean(inFlight.directAddressed),
+        deferReason: "preplay_supersede_requeue",
+        flushDelayMs: null
+      });
+      requeued = true;
+      // The abortAll above set a cutoff that would mark the requeued turn as
+      // stale (monotonic timestamp >= Date.now). Reset it so the new deferred
+      // turn is accepted by flushDeferredBotTurnOpenTurns.
+      this.activeReplies?.clearAbortCutoff(voiceReplyScopeKey);
+      // Eagerly clear the stash so the pipeline's finally-block is a no-op.
+      session.inFlightAcceptedBrainTurn = null;
+    }
+
     this.store.logAction({
       kind: "voice_runtime",
       guildId: session.guildId,
@@ -1848,6 +1885,9 @@ export class VoiceSessionManager {
         hadPendingResponse: Boolean(pending),
         hadActiveReply,
         activeReplyAbortCount,
+        inFlightPhase,
+        inFlightAgeMs: inFlightAge || null,
+        requeued,
         captureStartedAt: Math.max(0, Number(captureState?.startedAt || 0)) || null,
         capturePromotedAt: Math.max(0, Number(captureState?.promotedAt || now)) || null,
         captureBytes: Math.max(0, Number(captureState?.bytesSent || 0)),

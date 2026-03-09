@@ -12,6 +12,10 @@ import type { ActiveReplyRegistry } from "../tools/activeReplyRegistry.ts";
 import type { VideoContextService } from "../video/videoContextService.ts";
 import type { ImageCaptionCache } from "../vision/imageCaptionCache.ts";
 import type { SubAgentSessionManager } from "../agents/subAgentSession.ts";
+import type {
+  InFlightAcceptedBrainTurn,
+  VoiceSessionDurableContextEntry
+} from "../voice/voiceSessionTypes.ts";
 
 export type AppConfig = typeof appConfig;
 
@@ -235,13 +239,25 @@ export interface ReplyPipelineRuntime extends BotContext, Pick<ClankerBot, Reply
 export interface VoiceReplyRuntime extends BotContext {
   readonly search: WebSearchService;
   readonly voiceSessionManager?: {
-    getSessionById?: (sessionId: string | null | undefined) => unknown;
-    getSessionFactProfileSlice?: (payload: { session?: unknown; userId?: string | null }) => {
+    getSessionById?: (sessionId: string | null | undefined) => {
+      durableContext?: VoiceSessionDurableContextEntry[];
+      inFlightAcceptedBrainTurn?: InFlightAcceptedBrainTurn | null;
+    } | null;
+    getSessionFactProfileSlice?: (payload: {
+      session?: {
+        durableContext?: VoiceSessionDurableContextEntry[];
+        inFlightAcceptedBrainTurn?: InFlightAcceptedBrainTurn | null;
+      } | null;
+      userId?: string | null;
+    }) => {
       userFacts: Array<Record<string, unknown>>;
       relevantFacts: Array<Record<string, unknown>>;
       relevantMessages?: Array<Record<string, unknown>>;
     };
-    getMusicPromptContext?: (session: unknown) => {
+    getMusicPromptContext?: (session: {
+      durableContext?: VoiceSessionDurableContextEntry[];
+      inFlightAcceptedBrainTurn?: InFlightAcceptedBrainTurn | null;
+    } | null) => {
       playbackState: "playing" | "paused" | "stopped" | "idle";
       currentTrack: { title: string; artists: string[] } | null;
       lastTrack: { title: string; artists: string[] } | null;
@@ -250,6 +266,59 @@ export interface VoiceReplyRuntime extends BotContext {
       lastAction: "play_now" | "stop" | "pause" | "resume" | "skip" | null;
       lastQuery: string | null;
     } | null;
+    getMusicDisambiguationPromptContext?: (session: {
+      durableContext?: VoiceSessionDurableContextEntry[];
+      inFlightAcceptedBrainTurn?: InFlightAcceptedBrainTurn | null;
+    } | null) => {
+      active: true;
+      query: string | null;
+      platform: "youtube" | "soundcloud" | "discord" | "auto";
+      action: "play_now" | "queue_next" | "queue_add";
+      requestedByUserId: string | null;
+      options: Array<{
+        id: string;
+        title: string;
+        artist: string | null;
+        platform: string;
+        externalUrl?: string | null;
+        durationSeconds?: number | null;
+      }>;
+    } | null;
+    requestPlayMusic?: (payload?: {
+      guildId?: string | null;
+      channelId?: string | null;
+      requestedByUserId?: string | null;
+      settings?: Record<string, unknown> | null;
+      query?: string;
+      trackId?: string | null;
+      platform?: string;
+      action?: "play_now" | "queue_next" | "queue_add";
+      searchResults?: Array<Record<string, unknown>> | null;
+      reason?: string;
+      source?: string;
+      mustNotify?: boolean;
+    }) => Promise<unknown>;
+    requestStopMusic?: (payload?: {
+      guildId?: string | null;
+      channelId?: string | null;
+      requestedByUserId?: string | null;
+      settings?: Record<string, unknown> | null;
+      reason?: string;
+      source?: string;
+      requestText?: string;
+      clearQueue?: boolean;
+      mustNotify?: boolean;
+    }) => Promise<unknown>;
+    requestPauseMusic?: (payload?: {
+      guildId?: string | null;
+      channelId?: string | null;
+      requestedByUserId?: string | null;
+      settings?: Record<string, unknown> | null;
+      reason?: string;
+      source?: string;
+      requestText?: string;
+      mustNotify?: boolean;
+    }) => Promise<unknown>;
   } | null;
   loadRelevantMemoryFacts: StripFirstArg<LoadRelevantMemoryFactsFn>;
   buildMediaMemoryFacts: BuildMediaMemoryFactsFn;

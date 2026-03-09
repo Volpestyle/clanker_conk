@@ -113,4 +113,10 @@ export class ActiveReplyRegistry {
     if (!normalizedStartedAt) return false;
     return normalizedStartedAt < cutoff;
   }
+
+  /** Clear the abort cutoff so new work queued after an abortAll is not stale. */
+  clearAbortCutoff(scopeKey: string) {
+    const normalizedScopeKey = normalizeScopeKey(scopeKey);
+    this.abortCutoffs.delete(normalizedScopeKey);
+  }
 }

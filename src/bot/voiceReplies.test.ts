@@ -82,6 +82,75 @@ function structuredVoiceOutput(overrides: {
   return String(overrides.text || "all good");
 }
 
+function structuredReplyJson(overrides: Record<string, unknown> = {}) {
+  const base = {
+    text: "",
+    skip: false,
+    reactionEmoji: null,
+    media: null,
+    webSearchQuery: null,
+    browserBrowseQuery: null,
+    memoryLookupQuery: null,
+    imageLookupQuery: null,
+    openArticleRef: null,
+    memoryLine: null,
+    selfMemoryLine: null,
+    soundboardRefs: [],
+    leaveVoiceChannel: false,
+    automationAction: {
+      operation: null,
+      title: null,
+      instruction: null,
+      schedule: null,
+      targetQuery: null,
+      automationId: null,
+      runImmediately: false,
+      targetChannelId: null
+    },
+    voiceIntent: {
+      intent: "none",
+      confidence: 0,
+      reason: null,
+      query: null,
+      platform: null,
+      searchResults: null,
+      selectedResultId: null
+    },
+    screenShareIntent: {
+      action: "none",
+      confidence: 0,
+      reason: null
+    },
+    voiceAddressing: {
+      talkingTo: null,
+      directedConfidence: 0
+    },
+    screenNote: null,
+    screenMoment: null
+  };
+
+  return JSON.stringify({
+    ...base,
+    ...overrides,
+    automationAction: {
+      ...base.automationAction,
+      ...(overrides.automationAction as Record<string, unknown> || {})
+    },
+    voiceIntent: {
+      ...base.voiceIntent,
+      ...(overrides.voiceIntent as Record<string, unknown> || {})
+    },
+    screenShareIntent: {
+      ...base.screenShareIntent,
+      ...(overrides.screenShareIntent as Record<string, unknown> || {})
+    },
+    voiceAddressing: {
+      ...base.voiceAddressing,
+      ...(overrides.voiceAddressing as Record<string, unknown> || {})
+    }
+  });
+}
+
 function createVoiceBot({
   generationText = "all good",
   generationError = null,
@@ -103,6 +172,8 @@ function createVoiceBot({
     status: "disabled",
     publicUrl: ""
   },
+  activeVoiceSession = null,
+  musicDisambiguation = null,
   offerScreenShare = async () => ({ offered: true }),
   runWebSearch = async ({ webSearch, query }) => ({
     ...(webSearch || {}),
@@ -128,6 +199,9 @@ function createVoiceBot({
   const lookupMemorySearchCalls = [];
   const lookupMemoryWrites = [];
   const screenShareCalls = [];
+  const requestPlayMusicCalls = [];
+  const requestStopMusicCalls = [];
+  const requestPauseMusicCalls = [];
   const generationPayloads = [];
   let generationCalls = 0;
 
@@ -251,6 +325,29 @@ function createVoiceBot({
       screenShareCalls.push(payload);
       return await offerScreenShare(payload);
     },
+    voiceSessionManager: activeVoiceSession || musicDisambiguation ? {
+      getSessionById(sessionId) {
+        return sessionId ? activeVoiceSession : null;
+      },
+      getMusicPromptContext() {
+        return null;
+      },
+      getMusicDisambiguationPromptContext() {
+        return musicDisambiguation;
+      },
+      async requestPlayMusic(payload = {}) {
+        requestPlayMusicCalls.push(payload);
+        return true;
+      },
+      async requestStopMusic(payload = {}) {
+        requestStopMusicCalls.push(payload);
+        return true;
+      },
+      async requestPauseMusic(payload = {}) {
+        requestPauseMusicCalls.push(payload);
+        return true;
+      }
+    } : null,
 
     search: {
       isConfigured() {
@@ -301,6 +398,9 @@ function createVoiceBot({
     lookupMemorySearchCalls,
     lookupMemoryWrites,
     screenShareCalls,
+    requestPlayMusicCalls,
+    requestStopMusicCalls,
+    requestPauseMusicCalls,
     generationPayloads,
     getGenerationCalls() {
       return generationCalls;
@@ -436,6 +536,159 @@ test("generateVoiceTurnReply passes abort signal into llm generation", async () 
 
   assert.equal(generationPayloads.length, 1);
   assert.equal(generationPayloads[0]?.signal, controller.signal);
+});
+
+test("generateVoiceTurnReply routes fresh music play requests through structured voice intent before the tool loop", async () => {
+  const { bot, requestPlayMusicCalls, generationPayloads, logs } = createVoiceBot({
+    activeVoiceSession: {
+      id: "voice-session-1"
+    },
+    generationSequence: [
+      {
+        text: structuredReplyJson({
+          text: "bet, loading up Migos.",
+          voiceIntent: {
+            intent: "music_play",
+            confidence: 0.96,
+            reason: "explicit play request",
+            query: "Migos",
+            platform: "auto",
+            selectedResultId: null
+          },
+          voiceAddressing: {
+            talkingTo: "ME",
+            directedConfidence: 0.93
+          }
+        })
+      }
+    ]
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    sessionId: "voice-session-1",
+    transcript: "Can you play me some Migos?"
+  });
+
+  assert.equal(requestPlayMusicCalls.length, 1);
+  assert.equal(requestPlayMusicCalls[0]?.query, "Migos");
+  assert.equal(requestPlayMusicCalls[0]?.action, "play_now");
+  assert.equal(requestPlayMusicCalls[0]?.source, "voice_structured_intent");
+  assert.equal(reply.text, "bet, loading up Migos.");
+  assert.equal(reply.voiceAddressing?.talkingTo, "ME");
+  assert.equal(generationPayloads.length, 1);
+  assert.match(String(generationPayloads[0]?.userPrompt || ""), /Structured music control pass:/);
+  assert.equal(logs.some((entry) => entry?.content === "voice_structured_music_intent_handled"), true);
+});
+
+test("generateVoiceTurnReply uses pending disambiguation IDs in structured voice music followups", async () => {
+  const { bot, requestPlayMusicCalls, generationPayloads } = createVoiceBot({
+    activeVoiceSession: {
+      id: "voice-session-2"
+    },
+    musicDisambiguation: {
+      active: true,
+      query: "Migos",
+      platform: "auto",
+      action: "play_now",
+      requestedByUserId: "user-1",
+      options: [
+        {
+          id: "youtube:first",
+          title: "Straightenin",
+          artist: "Migos",
+          platform: "youtube"
+        },
+        {
+          id: "youtube:second",
+          title: "Bad and Boujee",
+          artist: "Migos",
+          platform: "youtube"
+        }
+      ]
+    },
+    generationSequence: [
+      {
+        text: structuredReplyJson({
+          text: "running the second one.",
+          voiceIntent: {
+            intent: "music_play",
+            confidence: 0.95,
+            reason: "selected pending option",
+            query: null,
+            platform: "auto",
+            selectedResultId: "youtube:second"
+          }
+        })
+      }
+    ]
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    sessionId: "voice-session-2",
+    transcript: "that one"
+  });
+
+  assert.equal(requestPlayMusicCalls.length, 1);
+  assert.equal(requestPlayMusicCalls[0]?.trackId, "youtube:second");
+  assert.equal(requestPlayMusicCalls[0]?.action, "play_now");
+  assert.equal(reply.text, "running the second one.");
+  assert.match(String(generationPayloads[0]?.userPrompt || ""), /Pending music option 2: Bad and Boujee - Migos \[youtube:second\]/);
+});
+
+test("generateVoiceTurnReply uses voice generation llm provider/model for the structured music intent pass", async () => {
+  const { bot, requestPlayMusicCalls, generationPayloads } = createVoiceBot({
+    activeVoiceSession: {
+      id: "voice-session-structured-binding-1"
+    },
+    generationSequence: [
+      {
+        text: structuredReplyJson({
+          text: "bet, loading it now.",
+          voiceIntent: {
+            intent: "music_play",
+            confidence: 0.97,
+            reason: "explicit play request",
+            query: "Daft Punk",
+            platform: "auto",
+            selectedResultId: null
+          }
+        })
+      }
+    ]
+  });
+
+  await generateVoiceTurnReply(bot, {
+    settings: baseSettings({
+      llm: {
+        provider: "openai",
+        model: "gpt-5-mini"
+      },
+      voice: {
+        generationLlm: {
+          provider: "claude-oauth",
+          model: "claude-sonnet-4-6"
+        }
+      }
+    }),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    sessionId: "voice-session-structured-binding-1",
+    transcript: "play some Daft Punk"
+  });
+
+  assert.equal(requestPlayMusicCalls.length, 1);
+  assert.equal(generationPayloads.length, 1);
+  assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).provider, "claude-oauth");
+  assert.equal(getResolvedOrchestratorBinding(generationPayloads[0]?.settings).model, "claude-sonnet-4-6");
 });
 
 test("generateVoiceTurnReply streams sentence chunks when voice streaming is enabled", async () => {
@@ -1209,6 +1462,25 @@ test("generateVoiceTurnReply logs voice errors when generation fails", async () 
 test("generateVoiceTurnReply treats aborted generation as a supersede, not a voice error", async () => {
   const { bot, logs } = createVoiceBot({
     generationError: createAbortError("Pending response cleared")
+  });
+
+  const reply = await generateVoiceTurnReply(bot, {
+    settings: baseSettings(),
+    guildId: "guild-1",
+    channelId: "text-1",
+    userId: "user-1",
+    transcript: "hello there"
+  });
+
+  assert.deepEqual(reply, { text: "", generationContextSnapshot: null });
+  assert.equal(logs.length, 0);
+});
+
+test("generateVoiceTurnReply treats Anthropic-style aborted generation as a supersede, not a voice error", async () => {
+  const generationError = new Error("Request was aborted.");
+  generationError.name = "APIUserAbortError";
+  const { bot, logs } = createVoiceBot({
+    generationError
   });
 
   const reply = await generateVoiceTurnReply(bot, {

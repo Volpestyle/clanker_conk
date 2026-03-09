@@ -29,6 +29,9 @@ const BG_YELLOW = "\x1b[43m";
 const BG_BLUE = "\x1b[44m";
 const BLACK = "\x1b[30m";
 
+const BRIGHT_RED = "\x1b[91m";
+const BRIGHT_YELLOW = "\x1b[93m";
+
 const AGENT_STYLES = {
   voice: { bg: BG_CYAN, fg: BLACK },
   bot: { bg: BG_GREEN, fg: BLACK },
@@ -106,13 +109,94 @@ function formatMetadataInline(metadata) {
   return parts.length > 0 ? `  ${parts.join("  ")}` : "";
 }
 
+function detectSkipKind(payload) {
+  const event = String(payload.event || "").toLowerCase();
+  const kind = String(payload.kind || "").toLowerCase();
+  const meta = payload.metadata;
+  const allow = meta && typeof meta === "object" ? meta.allow : undefined;
+
+  // Classifier / addressing deny — the main "NO" decision
+  if (event === "voice_turn_addressing" && allow === false) {
+    return "deny";
+  }
+
+  // Text reply [SKIP]
+  if (kind === "reply_skipped") {
+    return "skip";
+  }
+
+  // Pre-classifier drops (silence gate, low confidence, hallucination, stale, etc.)
+  if (event.includes("dropped") || event.includes("skipped")) {
+    return "drop";
+  }
+
+  return null;
+}
+
+function formatSkipBadge(skipKind) {
+  if (skipKind === "deny") {
+    return `${BG_RED}${WHITE}${BOLD} ✗ DENIED ${RESET}`;
+  }
+  if (skipKind === "skip") {
+    return `${BG_MAGENTA}${WHITE}${BOLD} ⊘ SKIP ${RESET}`;
+  }
+  // "drop"
+  return `${DIM}${BRIGHT_YELLOW}⊘ DROP${RESET}`;
+}
+
+function formatSkipReason(payload, skipKind) {
+  const meta = payload.metadata;
+  if (!meta || typeof meta !== "object") return "";
+  if (skipKind === "deny") {
+    const reason = meta.reason || meta.classifierReason || "";
+    const classifier = meta.classifierDecision || "";
+    const confidence = Number.isFinite(meta.classifierConfidence)
+      ? ` conf=${Number(meta.classifierConfidence).toFixed(2)}`
+      : "";
+    const latency = Number.isFinite(meta.classifierLatencyMs)
+      ? ` ${meta.classifierLatencyMs}ms`
+      : "";
+    const parts = [];
+    if (reason) parts.push(`${BRIGHT_RED}${reason}${RESET}`);
+    if (classifier) parts.push(`${DIM}decision=${RESET}${classifier}`);
+    if (confidence) parts.push(`${DIM}${confidence}${RESET}`);
+    if (latency) parts.push(`${DIM}${latency}${RESET}`);
+    return parts.length ? `  ${parts.join("  ")}` : "";
+  }
+  if (skipKind === "skip") {
+    const content = String(payload.content || "").trim();
+    return content ? `  ${BRIGHT_RED}${content}${RESET}` : "";
+  }
+  // "drop" — show the drop reason from event name
+  const event = String(payload.event || "");
+  const shortReason = event
+    .replace(/^voice_turn_dropped_/, "")
+    .replace(/^realtime_turn_/, "")
+    .replace(/^stt_pipeline_turn_/, "");
+  return shortReason !== event ? `  ${DIM}${shortReason}${RESET}` : "";
+}
+
 export function formatPrettyLine(payload) {
   const time = (payload.ts || "").slice(11, 19); // HH:MM:SS
   const isError = payload.level === "error";
+  const skipKind = detectSkipKind(payload);
 
   const timePart = `${DIM}${time}${RESET}`;
   const agentPart = formatAgentBadge(payload.agent);
   const eventText = payload.event || payload.kind || "?";
+
+  if (skipKind) {
+    const badge = formatSkipBadge(skipKind);
+    const speechPart = formatSpeechInline(payload.metadata);
+    const reasonPart = formatSkipReason(payload, skipKind);
+    const costPart =
+      payload.usd_cost > 0
+        ? `  ${YELLOW}$${payload.usd_cost.toFixed(4)}${RESET}`
+        : "";
+    const eventPart = `${DIM}${eventText}${RESET}`;
+    return `${timePart} ${agentPart} ${badge} ${eventPart}${speechPart}${reasonPart}${costPart}\n`;
+  }
+
   const eventPart = isError
     ? `${BG_RED}${WHITE}${BOLD} ${eventText} ${RESET}`
     : `${BOLD}${WHITE}${eventText}${RESET}`;

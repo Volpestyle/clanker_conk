@@ -105,6 +105,7 @@ export const DEFAULT_SETTINGS = {
   identity: {
     botName: "clanker conk",
     botNameAliases: [
+      "clanker",
       "clank",
       "clanka",
       "klanker",
@@ -125,6 +126,7 @@ export const DEFAULT_SETTINGS = {
       "clenker",
       "clonk",
       "clonker",
+      "link",
       "clay",
       "clayton",
       "plonka",

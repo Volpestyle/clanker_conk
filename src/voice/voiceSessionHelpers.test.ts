@@ -217,6 +217,7 @@ test("isVoiceTurnAddressedToBot matches exact bot-name phrase and primary wake t
     { text: "yo clanker conk can you answer this?", expected: true },
     { text: "clankerconk can you answer this?", expected: true },
     { text: "yo clanker can you answer this?", expected: true },
+    { text: "link, can you answer this?", expected: true },
     { text: "clanker?", expected: true },
     { text: "yo conk can you answer this?", expected: false },
     { text: "yo clunker can you answer this?", expected: false },

@@ -9,6 +9,9 @@ export interface SharedToolSchema {
     type: "object";
     properties: Record<string, unknown>;
     required?: string[];
+    anyOf?: Array<{
+      required: string[];
+    }>;
     additionalProperties?: boolean;
   };
   voiceContinuationPolicy?: VoiceToolContinuationPolicy;
@@ -272,6 +275,10 @@ export const MUSIC_PLAY_SCHEMA: SharedToolSchema = {
         description: "Maximum disambiguation options to consider when searching."
       }
     },
+    anyOf: [
+      { required: ["query"] },
+      { required: ["selection_id"] }
+    ],
     additionalProperties: false
   }
 };

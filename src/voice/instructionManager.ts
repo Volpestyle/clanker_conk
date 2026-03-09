@@ -768,6 +768,7 @@ export class InstructionManager {
           "- For music controls, use music_play to start or replace playback now. It searches internally and may return disambiguation options.",
           "- If music_play returns choices, ask which one they want and then call music_play again with selection_id.",
           "- Use music_search only for explicit browsing requests or when you need candidate IDs for queue operations.",
+          "- When calling music_play or music_search for a fresh request, always include the query text from the transcript. Never send either tool with empty arguments.",
           "- Use music_queue_next to place a track after the current one, music_queue_add to append, and music_stop to stop playback.",
           "- Do not emulate play-now by chaining music_queue_add and music_skip.",
           "- Do not use music_skip as a substitute for music_stop.",

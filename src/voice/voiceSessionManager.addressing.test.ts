@@ -1,5 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
+import { ActiveReplyRegistry } from "../tools/activeReplyRegistry.ts";
 import {
   VoiceSessionManager,
   resolveVoiceThoughtTopicalityBias
@@ -3493,6 +3494,58 @@ test("runRealtimeBrainReply ends VC when model requests leave directive", async 
   assert.equal(waitCalls[0]?.expectRealtimeAudio, true);
   assert.equal(endCalls.length, 1);
   assert.equal(endCalls[0]?.reason, "assistant_leave_directive");
+});
+
+test("runRealtimeBrainReply keeps accepted turn stashed through the non-streaming playback boundary", async () => {
+  const manager = createManager();
+  manager.activeReplies = new ActiveReplyRegistry();
+  const playbackPhases: Array<string | null> = [];
+  manager.resolveSoundboardCandidates = async () => ({
+    candidates: []
+  });
+  manager.getVoiceChannelParticipants = () => [{ userId: "speaker-1", displayName: "alice" }];
+  manager.instructionManager.prepareRealtimeTurnContext = async () => {};
+  manager.generateVoiceTurn = async () => ({
+    text: "yo what's good"
+  });
+  manager.playVoiceReplyInOrder = async ({ session }) => {
+    playbackPhases.push(session.inFlightAcceptedBrainTurn?.phase || null);
+    assert.equal(session.inFlightAcceptedBrainTurn?.transcript, "say something");
+    return {
+      completed: true,
+      spokeLine: true,
+      requestedRealtimeUtterance: false,
+      playedSoundboardCount: 0
+    };
+  };
+
+  const session = {
+    id: "session-realtime-preplay-stash-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    startedAt: Date.now() - 4_000,
+    maxEndsAt: Date.now() + 90_000,
+    inactivityEndsAt: Date.now() + 25_000,
+    realtimeClient: {},
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: baseSettings()
+  };
+
+  const result = await manager.runRealtimeBrainReply({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "speaker-1",
+    transcript: "say something",
+    directAddressed: true,
+    source: "realtime"
+  });
+
+  assert.equal(result, true);
+  assert.deepEqual(playbackPhases, ["playback_requested"]);
+  assert.equal(session.inFlightAcceptedBrainTurn, null);
 });
 
 test("runRealtimeBrainReply does not replay soundboard refs that were already executed during generation", async () => {

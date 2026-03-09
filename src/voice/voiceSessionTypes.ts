@@ -555,6 +555,19 @@ export interface VoiceSessionMusicState {
     pendingRequestedAt: number;
 }
 
+export type InFlightBrainTurnPhase = "generation_only" | "tool_call_started" | "playback_requested";
+
+export interface InFlightAcceptedBrainTurn {
+    transcript: string;
+    userId: string | null;
+    pcmBuffer: Buffer | null;
+    source: string;
+    acceptedAt: number;
+    phase: InFlightBrainTurnPhase;
+    captureReason: string;
+    directAddressed: boolean;
+}
+
 export type DeferredVoiceActionType = "interrupted_reply" | "queued_user_turns";
 
 export type DeferredVoiceActionStatus = "scheduled" | "deferred";
@@ -912,6 +925,7 @@ export interface VoiceSession {
     deferredVoiceActions?: Partial<Record<DeferredVoiceActionType, DeferredVoiceAction>>;
     deferredVoiceActionTimers?: Partial<Record<DeferredVoiceActionType, ReturnType<typeof setTimeout> | NodeJS.Timeout | null>>;
     lastGenerationContext?: VoiceGenerationContextSnapshot | null;
+    inFlightAcceptedBrainTurn?: InFlightAcceptedBrainTurn | null;
     openAiAsrSessionIdleTtlMs?: number;
     realtimeTurnCoalesceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     voiceLookupBusyAnnounceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;

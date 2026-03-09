@@ -465,12 +465,24 @@ export function isBotNameAddressed({
 
   const botTokens = tokenizeWakeTokens(botName);
   if (!botTokens.length) return false;
+  if (botTokens.length === 1) {
+    return hasSingleTokenWakeAddress({
+      transcript,
+      transcriptTokens,
+      wakeToken: botTokens[0] || ""
+    });
+  }
   if (containsTokenSequence(transcriptTokens, botTokens)) return true;
   const mergedWakeToken = resolveMergedWakeToken(botTokens);
   if (mergedWakeToken && transcriptTokens.some((token) => token === mergedWakeToken)) return true;
 
   const primaryWakeToken = resolvePrimaryWakeToken(botTokens);
-  return primaryWakeToken ? transcriptTokens.some((token) => token === primaryWakeToken) : false;
+  if (!primaryWakeToken) return false;
+  return hasSingleTokenWakeAddress({
+    transcript,
+    transcriptTokens,
+    wakeToken: primaryWakeToken
+  });
 }
 
 export function isVoiceTurnAddressedToBot(transcript, settings) {
@@ -523,6 +535,56 @@ function resolveMergedWakeToken(botTokens = []) {
   if (!Array.isArray(botTokens) || botTokens.length < 2) return null;
   const merged = botTokens.join("");
   return merged.length >= PRIMARY_WAKE_TOKEN_MIN_LEN ? merged : null;
+}
+
+const LEADING_WAKE_PREFIX_TOKENS = new Set([
+  "yo",
+  "hey",
+  "hi",
+  "hello",
+  "sup",
+  "ay",
+  "ayy",
+  "oi",
+  "ok",
+  "okay",
+  "alright",
+  "please"
+]);
+
+function hasSingleTokenWakeAddress({
+  transcript,
+  transcriptTokens,
+  wakeToken
+}: {
+  transcript: string;
+  transcriptTokens: string[];
+  wakeToken: string;
+}) {
+  const normalizedWakeToken = String(wakeToken || "").trim().toLowerCase();
+  if (!normalizedWakeToken) return false;
+  if (hasLeadingWakeToken(transcriptTokens, normalizedWakeToken)) return true;
+  return hasVocativeWakeToken(transcript, normalizedWakeToken);
+}
+
+function hasLeadingWakeToken(tokens: string[] = [], wakeToken = "") {
+  if (!Array.isArray(tokens) || !tokens.length || !wakeToken) return false;
+  let index = 0;
+  while (index < tokens.length && LEADING_WAKE_PREFIX_TOKENS.has(tokens[index])) {
+    index += 1;
+  }
+  return tokens[index] === wakeToken;
+}
+
+function hasVocativeWakeToken(transcript = "", wakeToken = "") {
+  const normalizedTranscript = normalizeWakeText(transcript);
+  if (!normalizedTranscript || !wakeToken) return false;
+  const escapedWakeToken = escapeRegex(wakeToken);
+  return new RegExp(`[,;:.!?]\\s*${escapedWakeToken}(?:\\b|')`, "u").test(normalizedTranscript);
+}
+
+function escapeRegex(value = "") {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 export function shouldAllowVoiceNsfwHumor(settings) {

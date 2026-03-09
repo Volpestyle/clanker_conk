@@ -25,6 +25,7 @@ import {
 import { appendStreamWatchBrainContextEntry } from "./voiceStreamWatch.ts";
 import type { ReplyInterruptionPolicy } from "./bargeInController.ts";
 import type {
+  InFlightAcceptedBrainTurn,
   VoiceConversationContext,
   VoiceGenerationContextSnapshot,
   VoicePendingResponseLatencyContext,
@@ -353,8 +354,35 @@ export async function runVoiceReplyPipeline(
       ? host.activeReplies.begin(voiceReplyScopeKey, "voice-generation", ["voice_generation"])
       : null;
   const generationSignal = activeReply?.abortController.signal;
+  const inFlightAcceptedBrainTurn: InFlightAcceptedBrainTurn | null =
+    params.mode === "bridge" && activeReply
+      ? {
+          transcript: normalizedTranscript,
+          userId: params.userId || null,
+          pcmBuffer: null,
+          source,
+          acceptedAt: generationStartedAt,
+          phase: "generation_only",
+          captureReason: String(params.latencyContext?.captureReason || params.source || "stream_end"),
+          directAddressed: Boolean(params.directAddressed)
+        }
+      : null;
+  if (inFlightAcceptedBrainTurn) {
+    session.inFlightAcceptedBrainTurn = inFlightAcceptedBrainTurn;
+  }
+  const markInFlightAcceptedBrainTurnPhase = (phase: "generation_only" | "tool_call_started" | "playback_requested") => {
+    if (inFlightAcceptedBrainTurn && session.inFlightAcceptedBrainTurn === inFlightAcceptedBrainTurn) {
+      session.inFlightAcceptedBrainTurn.phase = phase;
+    }
+  };
+  const clearInFlightAcceptedBrainTurn = () => {
+    if (inFlightAcceptedBrainTurn && session.inFlightAcceptedBrainTurn === inFlightAcceptedBrainTurn) {
+      session.inFlightAcceptedBrainTurn = null;
+    }
+  };
   let releaseLookupBusy: (() => void) | null = null;
   let generatedPayload: GeneratedPayload | null = null;
+  let generationFinished = false;
   const voiceConversation = getVoiceConversationPolicy(params.settings);
   const followup = getFollowupSettings(params.settings);
   const useRealtimeTts =
@@ -474,6 +502,7 @@ export async function runVoiceReplyPipeline(
           if (requested && streamedReplyRequestedAt === 0) {
             streamedReplyRequestedAt = requestedAt;
             session.lastAssistantReplyAt = requestedAt;
+            markInFlightAcceptedBrainTurnPhase("playback_requested");
           }
           return requested;
         }
@@ -487,6 +516,7 @@ export async function runVoiceReplyPipeline(
         mode: session.mode || source
       };
     }
+    generationFinished = true;
   } catch (error) {
     if (isAbortError(error) || generationSignal?.aborted) {
       return false;
@@ -509,10 +539,19 @@ export async function runVoiceReplyPipeline(
       releaseLookupBusy = null;
     }
     host.activeReplies?.clear(activeReply);
+    if (!generationFinished || generationSignal?.aborted) {
+      clearInFlightAcceptedBrainTurn();
+    }
   }
 
-  if (session.ending) return false;
-  if (generationSignal?.aborted) return false;
+  if (session.ending) {
+    clearInFlightAcceptedBrainTurn();
+    return false;
+  }
+  if (generationSignal?.aborted) {
+    clearInFlightAcceptedBrainTurn();
+    return false;
+  }
 
   const replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
   const playedSoundboardRefs = normalizeSoundboardRefsModule(generatedPayload?.playedSoundboardRefs);
@@ -592,6 +631,7 @@ export async function runVoiceReplyPipeline(
         retryCount: Number(params.spokenOutputRetryCount || 0) + 1
       }
     });
+    clearInFlightAcceptedBrainTurn();
     return await runVoiceReplyPipeline(host, {
       ...params,
       source,
@@ -620,6 +660,7 @@ export async function runVoiceReplyPipeline(
       contextTurns,
       contextMessageChars
     });
+    clearInFlightAcceptedBrainTurn();
     return true;
   }
 
@@ -674,23 +715,32 @@ export async function runVoiceReplyPipeline(
   }
 
   const playbackSource = params.mode === "bridge" ? `${source}:reply` : `${source}_reply`;
-  const playbackResult = streamedSpeechPlayed
-    ? {
-      completed: true,
-      spokeLine: Boolean(playbackPlan.spokenText),
-      requestedRealtimeUtterance: true,
-      playedSoundboardCount: playedSoundboardRefs.length
+  if (!streamedSpeechPlayed && playbackPlan.steps.length > 0) {
+    markInFlightAcceptedBrainTurnPhase("playback_requested");
+  }
+  const playbackResult = await (async () => {
+    try {
+      return streamedSpeechPlayed
+        ? {
+          completed: true,
+          spokeLine: Boolean(playbackPlan.spokenText),
+          requestedRealtimeUtterance: true,
+          playedSoundboardCount: playedSoundboardRefs.length
+        }
+        : await host.playVoiceReplyInOrder({
+          session,
+          settings: params.settings,
+          spokenText: playbackPlan.spokenText,
+          playbackSteps: playbackPlan.steps,
+          source: playbackSource,
+          preferRealtimeUtterance: useRealtimeTts,
+          interruptionPolicy: replyInterruptionPolicy,
+          latencyContext: replyLatencyContext
+        });
+    } finally {
+      clearInFlightAcceptedBrainTurn();
     }
-    : await host.playVoiceReplyInOrder({
-      session,
-      settings: params.settings,
-      spokenText: playbackPlan.spokenText,
-      playbackSteps: playbackPlan.steps,
-      source: playbackSource,
-      preferRealtimeUtterance: useRealtimeTts,
-      interruptionPolicy: replyInterruptionPolicy,
-      latencyContext: replyLatencyContext
-    });
+  })();
   if (!playbackResult.completed) {
     if (playbackPlan.spokenText) {
       host.recordVoiceTurn(session, {
