@@ -625,8 +625,7 @@ function buildHarnessSettings({
         inputSampleRateHz: 24000,
         outputSampleRateHz: 24000
       },
-      sttPipeline: {
-        transcriptionModel: "gpt-4o-mini-transcribe",
+      openaiAudioApi: {
         ttsModel: "gpt-4o-mini-tts",
         ttsVoice: "alloy",
         ttsSpeed: 1
@@ -877,7 +876,7 @@ async function evaluateDecision({
     userId: "speaker-1",
     settings,
     transcript: caseRow.userText,
-    source: mode === "stt_pipeline" ? "stt_pipeline" : "realtime"
+    source: "realtime"
   });
   const decisionMs = performance.now() - startedAt;
 
@@ -944,22 +943,10 @@ function buildExecutionSession({
 }
 
 function latestVoiceReplyFromActions({
-  mode,
   actions
 }: {
-  mode: VoiceGoldenMode;
   actions: HarnessStoreAction[];
 }) {
-  if (mode === "stt_pipeline") {
-    const spoken = [...actions]
-      .reverse()
-      .find((row) => row.kind === "voice_runtime" && row.content === "stt_pipeline_reply_spoken");
-    if (spoken) {
-      return String(spoken.metadata?.replyText || "").trim();
-    }
-    return "";
-  }
-
   const requested = [...actions]
     .reverse()
     .find((row) => row.kind === "voice_runtime" && row.content === "realtime_reply_requested");
@@ -1014,24 +1001,14 @@ async function runLiveProductionCase({
       manager,
       caseRow
     });
-    if (mode === "stt_pipeline") {
-      await manager.runSttPipelineReply({
-        session,
-        settings,
-        userId: "speaker-1",
-        transcript: caseRow.userText,
-        directAddressed
-      });
-    } else {
-      await manager.runRealtimeBrainReply({
-        session,
-        settings,
-        userId: "speaker-1",
-        transcript: caseRow.userText,
-        directAddressed,
-        source: "voice_golden_production"
-      });
-    }
+    await manager.runRealtimeBrainReply({
+      session,
+      settings,
+      userId: "speaker-1",
+      transcript: caseRow.userText,
+      directAddressed,
+      source: "voice_golden_production"
+    });
   } finally {
     manager.speakVoiceLineWithTts = originalSpeakVoiceLineWithTts;
   }
@@ -1039,10 +1016,7 @@ async function runLiveProductionCase({
   stage.responseMs = performance.now() - responseStartedAt;
   stage.actorMs = stage.responseMs;
   const actionDelta = store.actions.slice(actionStart);
-  const responseText = latestVoiceReplyFromActions({
-    mode,
-    actions: actionDelta
-  });
+  const responseText = latestVoiceReplyFromActions({ actions: actionDelta });
 
   return {
     transcript: caseRow.userText,
@@ -1065,13 +1039,13 @@ async function runSimulatedCase({
 }): Promise<ModeExecutionResult> {
   const idSeed = `${mode}:${caseRow.id}:${iteration}`;
 
-  const connectMs = mode === "stt_pipeline" ? 0 : simulatedDelayMs(`${idSeed}:connect`, 18, 10);
-  const inputPrepMs = simulatedDelayMs(`${idSeed}:inputPrep`, mode === "stt_pipeline" ? 45 : 32, 25);
-  const inputSendMs = mode === "stt_pipeline" ? 0 : simulatedDelayMs(`${idSeed}:inputSend`, 8, 6);
-  const asrMs = mode === "stt_pipeline" ? simulatedDelayMs(`${idSeed}:asr`, 55, 24) : 0;
+  const connectMs = simulatedDelayMs(`${idSeed}:connect`, 18, 10);
+  const inputPrepMs = simulatedDelayMs(`${idSeed}:inputPrep`, 32, 25);
+  const inputSendMs = simulatedDelayMs(`${idSeed}:inputSend`, 8, 6);
+  const asrMs = 0;
   const actorMs = decisionAllow ? simulatedDelayMs(`${idSeed}:actor`, 70, 35) : 0;
   const ttsMs = decisionAllow ? simulatedDelayMs(`${idSeed}:tts`, 48, 18) : 0;
-  const responseMs = mode === "stt_pipeline" ? 0 : decisionAllow ? simulatedDelayMs(`${idSeed}:response`, 180, 70) : 0;
+  const responseMs = decisionAllow ? simulatedDelayMs(`${idSeed}:response`, 180, 70) : 0;
 
   await sleepMs(connectMs + inputPrepMs + inputSendMs + asrMs + actorMs + ttsMs + responseMs);
 

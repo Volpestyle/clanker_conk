@@ -12,6 +12,11 @@ import {
   parseUniqueLineList,
   parseUniqueList
 } from "../../src/settings/listNormalization.ts";
+import {
+  normalizeVoiceAdmissionModeForDashboard,
+  resolveVoiceRuntimeModeFromSelection,
+  resolveVoiceRuntimeSelectionFromMode
+} from "../../src/settings/voiceDashboardMappings.ts";
 export type ResolvedBindings = {
   agentStack: {
     preset: string;
@@ -122,6 +127,7 @@ function buildSettingsFormView(settings: unknown) {
   const automations = valueOr(s.automations, d.automations);
   const sessions = valueOr(s.interaction?.sessions, d.interaction.sessions);
   const followup = valueOr(s.interaction?.followup, d.interaction.followup);
+  const replyGeneration = valueOr(s.interaction?.replyGeneration, d.interaction.replyGeneration);
   const orchestrator = resolved?.orchestrator || { provider: agentStack.overrides?.orchestrator?.provider || "openai", model: agentStack.overrides?.orchestrator?.model || "gpt-5" };
   const followupBinding = resolved?.followupBinding || orchestrator;
   const memoryBinding = resolved?.memoryBinding || orchestrator;
@@ -165,7 +171,9 @@ function buildSettingsFormView(settings: unknown) {
         : "claude-code"
       : "auto";
 
-  const voiceProviderStr = resolved?.voiceProvider || "openai";
+  const voiceProviderStr = resolveVoiceRuntimeSelectionFromMode(
+    voiceRuntime.runtimeMode || resolved?.agentStack?.voiceRuntime
+  );
 
   return {
     agentStack,
@@ -193,6 +201,10 @@ function buildSettingsFormView(settings: unknown) {
     automations,
     subAgentOrchestration: sessions,
     llm: orchestrator,
+    replyGeneration: {
+      temperature: replyGeneration.temperature,
+      maxOutputTokens: replyGeneration.maxOutputTokens
+    },
     replyFollowupLlm: {
       enabled: followup.enabled,
       provider: followupBinding.provider,
@@ -270,7 +282,7 @@ function buildSettingsFormView(settings: unknown) {
       asrLanguageMode: transcription.languageMode,
       asrLanguageHint: transcription.languageHint,
       allowNsfwHumor: voiceConversation.allowNsfwHumor,
-      intentConfidenceThreshold: voiceAdmission.intentConfidenceThreshold,
+      defaultInterruptionMode: voiceConversation.defaultInterruptionMode,
       maxSessionMinutes: voiceSessionLimits.maxSessionMinutes,
       inactivityLeaveSeconds: voiceSessionLimits.inactivityLeaveSeconds,
       maxSessionsPerDay: voiceSessionLimits.maxSessionsPerDay,
@@ -304,7 +316,7 @@ function buildSettingsFormView(settings: unknown) {
       openaiRealtime: voiceRuntime.openaiRealtime,
       elevenLabsRealtime: voiceRuntime.elevenLabsRealtime,
       geminiRealtime: voiceRuntime.geminiRealtime,
-      sttPipeline: voiceRuntime.sttPipeline,
+      openaiAudioApi: voiceRuntime.openaiAudioApi,
       streamWatch: voiceStreamWatch,
       soundboard: voiceSoundboard,
       asrEnabled: transcription.enabled,
@@ -316,10 +328,10 @@ function buildSettingsFormView(settings: unknown) {
   };
 }
 
-const DEFAULT_SETTINGS_LEGACY_VIEW = buildSettingsFormView(DEFAULT_SETTINGS);
+const DEFAULT_VIEW = buildSettingsFormView(DEFAULT_SETTINGS);
 
 export function settingsToForm(settings: unknown) {
-  const defaults = DEFAULT_SETTINGS_LEGACY_VIEW;
+  const defaults = DEFAULT_VIEW;
   const resolved = buildSettingsFormView(settings || DEFAULT_SETTINGS);
   const defaultPrompt = defaults.prompt;
   const defaultActivity = defaults.activity;
@@ -413,8 +425,8 @@ export function settingsToForm(settings: unknown) {
       resolved.replyFollowupLlm.toolTimeoutMs ?? defaultReplyFollowupLlm.toolTimeoutMs,
     memoryLlmProvider: resolved.memoryLlm.provider ?? defaultMemoryLlm.provider,
     memoryLlmModel: resolved.memoryLlm.model ?? defaultMemoryLlm.model,
-    temperature: resolved.llm.temperature ?? defaultLlm.temperature,
-    maxTokens: resolved.llm.maxOutputTokens ?? defaultLlm.maxOutputTokens,
+    temperature: resolved.replyGeneration.temperature ?? defaults.replyGeneration.temperature,
+    maxTokens: resolved.replyGeneration.maxOutputTokens ?? defaults.replyGeneration.maxOutputTokens,
     browserEnabled: resolved.browser.enabled ?? defaults.browser.enabled,
     stackResolvedResearchRuntime: resolved.webSearch.runtime ?? defaultWebSearch.runtime,
     stackResolvedBrowserRuntime: resolved.browser.runtime ?? defaults.browser.runtime,
@@ -469,7 +481,8 @@ export function settingsToForm(settings: unknown) {
     voiceAsrLanguageMode: resolved?.voice?.asrLanguageMode ?? defaultVoice.asrLanguageMode,
     voiceAsrLanguageHint: resolved?.voice?.asrLanguageHint ?? defaultVoice.asrLanguageHint,
     voiceAllowNsfwHumor: resolved?.voice?.allowNsfwHumor ?? defaultVoice.allowNsfwHumor,
-    voiceIntentConfidenceThreshold: resolved?.voice?.intentConfidenceThreshold ?? defaultVoice.intentConfidenceThreshold,
+    voiceDefaultInterruptionMode:
+      resolved?.voice?.defaultInterruptionMode ?? defaultVoice.defaultInterruptionMode ?? "anyone",
     voiceMaxSessionMinutes: resolved?.voice?.maxSessionMinutes ?? defaultVoice.maxSessionMinutes,
     voiceInactivityLeaveSeconds: resolved?.voice?.inactivityLeaveSeconds ?? defaultVoice.inactivityLeaveSeconds,
     voiceMaxSessionsPerDay: resolved?.voice?.maxSessionsPerDay ?? defaultVoice.maxSessionsPerDay,
@@ -483,12 +496,6 @@ export function settingsToForm(settings: unknown) {
     voiceCommandOnlyMode: resolved?.voice?.commandOnlyMode ?? defaultVoice.commandOnlyMode,
     voiceThoughtEngineEnabled:
       resolved?.voice?.thoughtEngine?.enabled ?? defaultVoiceThoughtEngine.enabled,
-    voiceThoughtEngineProvider:
-      resolved?.voice?.thoughtEngine?.provider ?? defaultVoiceThoughtEngine.provider,
-    voiceThoughtEngineModel:
-      resolved?.voice?.thoughtEngine?.model ?? defaultVoiceThoughtEngine.model,
-    voiceThoughtEngineTemperature:
-      resolved?.voice?.thoughtEngine?.temperature ?? defaultVoiceThoughtEngine.temperature,
     voiceThoughtEngineEagerness:
       resolved?.voice?.thoughtEngine?.eagerness ?? defaultVoiceThoughtEngine.eagerness,
     voiceThoughtEngineMinSilenceSeconds:
@@ -496,8 +503,9 @@ export function settingsToForm(settings: unknown) {
     voiceThoughtEngineMinSecondsBetweenThoughts:
       resolved?.voice?.thoughtEngine?.minSecondsBetweenThoughts ??
       defaultVoiceThoughtEngine.minSecondsBetweenThoughts,
-    voiceReplyDecisionRealtimeAdmissionMode:
-      resolved?.voice?.replyDecisionLlm?.realtimeAdmissionMode ?? defaultVoice.replyDecisionLlm.realtimeAdmissionMode,
+    voiceReplyDecisionRealtimeAdmissionMode: normalizeVoiceAdmissionModeForDashboard(
+      resolved?.voice?.replyDecisionLlm?.realtimeAdmissionMode ?? defaultVoice.replyDecisionLlm.realtimeAdmissionMode
+    ),
     voiceReplyDecisionMusicWakeLatchSeconds:
       resolved?.voice?.replyDecisionLlm?.musicWakeLatchSeconds ?? defaultVoice.replyDecisionLlm.musicWakeLatchSeconds,
     voiceReplyDecisionLlmProvider:
@@ -573,15 +581,15 @@ export function settingsToForm(settings: unknown) {
     voiceSoundboardEnabled: resolved?.voice?.soundboard?.enabled ?? defaultVoiceSoundboard.enabled,
     voiceSoundboardAllowExternalSounds: resolved?.voice?.soundboard?.allowExternalSounds ?? defaultVoiceSoundboard.allowExternalSounds,
     voiceSoundboardPreferredSoundIds: formatLineList(resolved?.voice?.soundboard?.preferredSoundIds),
-    voiceSttPipelineTtsModel:
-      resolved?.voice?.sttPipeline?.ttsModel ?? defaults.voice.sttPipeline.ttsModel,
-    voiceSttPipelineTtsVoice:
-      resolved?.voice?.sttPipeline?.ttsVoice ?? defaults.voice.sttPipeline.ttsVoice,
-    voiceSttPipelineTtsSpeed:
-      resolved?.voice?.sttPipeline?.ttsSpeed ?? defaults.voice.sttPipeline.ttsSpeed,
+    voiceApiTtsModel:
+      resolved?.voice?.openaiAudioApi?.ttsModel ?? defaults.voice.openaiAudioApi.ttsModel,
+    voiceApiTtsVoice:
+      resolved?.voice?.openaiAudioApi?.ttsVoice ?? defaults.voice.openaiAudioApi.ttsVoice,
+    voiceApiTtsSpeed:
+      resolved?.voice?.openaiAudioApi?.ttsSpeed ?? defaults.voice.openaiAudioApi.ttsSpeed,
     voiceAsrEnabled: resolved?.voice?.asrEnabled ?? defaultVoice.asrEnabled ?? true,
     voiceTextOnlyMode: resolved?.voice?.textOnlyMode ?? defaultVoice.textOnlyMode ?? false,
-    voiceOperationalMessages: resolved?.voice?.operationalMessages ?? defaultVoice.operationalMessages ?? "all",
+    voiceOperationalMessages: resolved?.voice?.operationalMessages ?? defaultVoice.operationalMessages ?? "minimal",
     maxMessages: resolved?.permissions?.maxMessagesPerHour ?? defaultPermissions.maxMessagesPerHour,
     maxReactions: resolved?.permissions?.maxReactionsPerHour ?? defaultPermissions.maxReactionsPerHour,
     catchupEnabled: Boolean(resolved?.startup?.catchupEnabled ?? true),
@@ -684,7 +692,9 @@ export function applyStackPresetDefaults(form: SettingsForm, defaults: Record<st
     stackPreset: String(defaults.stackPreset || form.stackPreset),
     provider: String(defaults.provider || form.provider),
     model: String(defaults.model || form.model),
-    voiceReplyDecisionRealtimeAdmissionMode: String(defaults.voiceReplyDecisionRealtimeAdmissionMode || form.voiceReplyDecisionRealtimeAdmissionMode),
+    voiceReplyDecisionRealtimeAdmissionMode: normalizeVoiceAdmissionModeForDashboard(
+      defaults.voiceReplyDecisionRealtimeAdmissionMode || form.voiceReplyDecisionRealtimeAdmissionMode
+    ),
     voiceReplyDecisionLlmProvider: String(defaults.voiceReplyDecisionLlmProvider || form.voiceReplyDecisionLlmProvider),
     voiceReplyDecisionLlmModel: String(defaults.voiceReplyDecisionLlmModel || form.voiceReplyDecisionLlmModel),
     voiceGenerationLlmUseTextModel: Boolean(defaults.voiceGenerationLlmUseTextModel ?? form.voiceGenerationLlmUseTextModel),
@@ -706,6 +716,11 @@ export function getCodeAgentValidationError(form: SettingsForm): string {
 export function formToSettingsPatch(form: SettingsForm): SettingsInput {
   const discoveryExternalEnabled = Boolean(form.discoveryExternalEnabled);
   const advancedOverridesEnabled = Boolean(form.stackAdvancedOverridesEnabled);
+  const normalizedVoiceReplyPath = String(form.voiceReplyPath || "brain").trim().toLowerCase();
+  const normalizedVoiceTtsMode = normalizedVoiceReplyPath === "brain" &&
+    String(form.voiceTtsMode || "realtime").trim().toLowerCase() === "api"
+    ? "api"
+    : "realtime";
   return {
     identity: {
       botName: form.botName.trim(),
@@ -853,14 +868,7 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
           }
         },
         voice: {
-          runtimeMode:
-            String(form.voiceProvider || "openai").trim() === "xai"
-              ? "voice_agent"
-              : String(form.voiceProvider || "openai").trim() === "gemini"
-                ? "gemini_realtime"
-                : String(form.voiceProvider || "openai").trim() === "elevenlabs"
-                  ? "elevenlabs_realtime"
-                  : "openai_realtime",
+          runtimeMode: resolveVoiceRuntimeModeFromSelection(form.voiceProvider),
           openaiRealtime: {
             model: String(form.voiceOpenAiRealtimeModel || "").trim(),
             voice: String(form.voiceOpenAiRealtimeVoice || "").trim(),
@@ -899,11 +907,10 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
             inputSampleRateHz: Number(form.voiceGeminiRealtimeInputSampleRateHz),
             outputSampleRateHz: Number(form.voiceGeminiRealtimeOutputSampleRateHz)
           },
-          sttPipeline: {
-            transcriptionModel: String(form.voiceOpenAiRealtimeInputTranscriptionModel || "").trim(),
-            ttsModel: String(form.voiceSttPipelineTtsModel || "").trim(),
-            ttsVoice: String(form.voiceSttPipelineTtsVoice || "").trim(),
-            ttsSpeed: Number(form.voiceSttPipelineTtsSpeed)
+          openaiAudioApi: {
+            ttsModel: String(form.voiceApiTtsModel || "").trim(),
+            ttsVoice: String(form.voiceApiTtsVoice || "").trim(),
+            ttsSpeed: Number(form.voiceApiTtsSpeed)
           }
         },
         devTeam: {
@@ -972,14 +979,6 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
       },
       voice: {
         enabled: Boolean(form.voiceThoughtEngineEnabled),
-        execution: {
-          mode: "dedicated_model",
-          model: {
-            provider: String(form.voiceThoughtEngineProvider || "").trim(),
-            model: String(form.voiceThoughtEngineModel || "").trim()
-          },
-          temperature: Number(form.voiceThoughtEngineTemperature)
-        },
         eagerness: Number(form.voiceThoughtEngineEagerness),
         minSilenceSeconds: Number(form.voiceThoughtEngineMinSilenceSeconds),
         minSecondsBetweenThoughts: Number(form.voiceThoughtEngineMinSecondsBetweenThoughts)
@@ -1056,13 +1055,15 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
         commandOnlyMode: Boolean(form.voiceCommandOnlyMode),
         allowNsfwHumor: form.voiceAllowNsfwHumor,
         textOnlyMode: Boolean(form.voiceTextOnlyMode),
-        replyPath: String(form.voiceReplyPath || "bridge").trim().toLowerCase(),
-        ttsMode: String(form.voiceTtsMode || "realtime").trim().toLowerCase(),
-        operationalMessages: String(form.voiceOperationalMessages || "all").trim().toLowerCase()
+        defaultInterruptionMode: String(form.voiceDefaultInterruptionMode || "anyone").trim().toLowerCase(),
+        replyPath: normalizedVoiceReplyPath,
+        ttsMode: normalizedVoiceTtsMode,
+        operationalMessages: String(form.voiceOperationalMessages || "minimal").trim().toLowerCase()
       },
       admission: {
-        mode: String(form.voiceReplyDecisionRealtimeAdmissionMode || "adaptive").trim().toLowerCase(),
-        intentConfidenceThreshold: Number(form.voiceIntentConfidenceThreshold),
+        mode: normalizeVoiceAdmissionModeForDashboard(
+          form.voiceReplyDecisionRealtimeAdmissionMode || "generation_decides"
+        ),
         musicWakeLatchSeconds: Number(form.voiceReplyDecisionMusicWakeLatchSeconds)
       },
       streamWatch: {

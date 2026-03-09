@@ -17,10 +17,10 @@ import {
   REALTIME_TURN_STALE_SKIP_MS,
   RESPONSE_FLUSH_DEBOUNCE_MS,
   STT_TRANSCRIPT_MAX_CHARS,
-  STT_TURN_COALESCE_MAX_BYTES,
-  STT_TURN_COALESCE_WINDOW_MS,
-  STT_TURN_QUEUE_MAX,
-  STT_TURN_STALE_SKIP_MS,
+  FILE_ASR_TURN_COALESCE_MAX_BYTES,
+  FILE_ASR_TURN_COALESCE_WINDOW_MS,
+  FILE_ASR_TURN_QUEUE_MAX,
+  FILE_ASR_TURN_STALE_SKIP_MS,
   VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD,
   VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
   VOICE_FALLBACK_NOISE_GATE_ACTIVE_RATIO_MAX,
@@ -38,7 +38,7 @@ import type { ReplyManager } from "./replyManager.ts";
 import type {
   OutputChannelState,
   RealtimeQueuedTurn,
-  SttPipelineQueuedTurn,
+  FileAsrQueuedTurn,
   VoiceAddressingAnnotation,
   VoiceAddressingState,
   VoiceConversationContext,
@@ -90,14 +90,14 @@ interface RunRealtimeTurnArgs extends QueueRealtimeTurnArgs {
   droppedHeadBytes?: number;
 }
 
-interface QueueSttPipelineTurnArgs {
+interface QueueFileAsrTurnArgs {
   session: VoiceSession;
   userId: string;
   pcmBuffer: Buffer;
   captureReason?: string;
 }
 
-interface RunSttPipelineTurnArgs extends QueueSttPipelineTurnArgs {
+interface RunFileAsrTurnArgs extends QueueFileAsrTurnArgs {
   queuedAt?: number;
 }
 
@@ -107,7 +107,7 @@ interface MaybeHandleMusicPlaybackTurnArgs {
   userId: string;
   pcmBuffer: Buffer;
   captureReason?: string;
-  source: "realtime" | "stt_pipeline";
+  source: "realtime" | "file_asr";
   transcript?: string;
 }
 
@@ -211,16 +211,6 @@ interface RunRealtimeBrainReplyArgs {
   frozenFrameSnapshot?: { mimeType: string; dataBase64: string } | null;
 }
 
-interface RunSttPipelineReplyArgs {
-  session: VoiceSession;
-  settings: TurnProcessorSettings;
-  userId: string | null;
-  transcript: string;
-  directAddressed?: boolean;
-  directAddressConfidence?: number;
-  conversationContext?: VoiceConversationContext | null;
-}
-
 type TurnProcessorStoreLike = {
   getSettings: () => TurnProcessorSettings;
   logAction: (entry: {
@@ -286,6 +276,7 @@ export interface TurnProcessorHost {
     settings?: TurnProcessorSettings;
   }) => boolean;
   queueDeferredBotTurnOpenTurn: (args: QueueDeferredBotTurnOpenTurnArgs) => void;
+  clearDeferredQueuedUserTurns: (session: VoiceSession) => void;
   forwardRealtimeTurnAudio: (args: ForwardRealtimeTurnAudioArgs) => Promise<boolean>;
   shouldUseRealtimeTranscriptBridge: (args: {
     session: VoiceSession;
@@ -300,9 +291,9 @@ export interface TurnProcessorHost {
     userId?: string | null;
     source?: string;
   }) => boolean;
+  clearVoiceCommandSession: (session: VoiceSession) => void;
   runRealtimeBrainReply: (args: RunRealtimeBrainReplyArgs) => Promise<boolean>;
   touchActivity: (guildId: string, settings?: TurnProcessorSettings) => void;
-  runSttPipelineReply: (args: RunSttPipelineReplyArgs) => Promise<void>;
   getOutputChannelState: (session: VoiceSession) => OutputChannelState;
 }
 
@@ -334,6 +325,7 @@ export class TurnProcessor {
       }
     }
     this.host.replyManager.clearPendingResponse(session);
+    this.host.clearVoiceCommandSession(session);
     cancelAcknowledgementQueued = this.host.requestRealtimePromptUtterance({
       session,
       userId: userId || session.lastOpenAiToolCallerUserId || null,
@@ -1027,10 +1019,7 @@ export class TurnProcessor {
 
       const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
       const voiceRuntime = getVoiceRuntimeConfig(settings);
-      const preferredModel =
-        isRealtimeMode(session.mode)
-          ? voiceRuntime.openaiRealtime?.inputTranscriptionModel
-          : voiceRuntime.sttPipeline?.transcriptionModel;
+      const preferredModel = voiceRuntime.openaiRealtime?.inputTranscriptionModel;
       const transcriptionModel = String(preferredModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
       const sampleRateHz = Number(session.realtimeInputSampleRateHz) || 24000;
       const transcriptionPlan = hasTranscriptOverride
@@ -1406,6 +1395,11 @@ export class TurnProcessor {
         return;
       }
 
+      // A new turn was allowed — drain any pending deferred turns so they don't
+      // independently generate a second response. Their transcripts are already
+      // in the conversation window from when they were first captured.
+      this.host.clearDeferredQueuedUserTurns(session);
+
       if (useNativeRealtimeReply) {
         if (!normalizedPcmBuffer?.length) {
           return;
@@ -1471,24 +1465,24 @@ export class TurnProcessor {
     }
   }
 
-  getPendingSttTurnQueue(session: VoiceSession | null | undefined) {
+  getPendingFileAsrTurnQueue(session: VoiceSession | null | undefined) {
     if (!session) return [];
-    const pendingQueue = Array.isArray(session.pendingSttTurnsQueue) ? session.pendingSttTurnsQueue : [];
-    if (!Array.isArray(session.pendingSttTurnsQueue)) {
-      session.pendingSttTurnsQueue = pendingQueue;
+    const pendingQueue = Array.isArray(session.pendingFileAsrTurnsQueue) ? session.pendingFileAsrTurnsQueue : [];
+    if (!Array.isArray(session.pendingFileAsrTurnsQueue)) {
+      session.pendingFileAsrTurnsQueue = pendingQueue;
     }
     return pendingQueue;
   }
 
-  syncPendingSttTurnCount(session: VoiceSession | null | undefined) {
+  syncPendingFileAsrTurnCount(session: VoiceSession | null | undefined) {
     if (!session) return;
-    const pendingQueueDepth = Array.isArray(session.pendingSttTurnsQueue) ? session.pendingSttTurnsQueue.length : 0;
-    session.pendingSttTurns = Math.max(0, (session.sttTurnDrainActive ? 1 : 0) + pendingQueueDepth);
+    const pendingQueueDepth = Array.isArray(session.pendingFileAsrTurnsQueue) ? session.pendingFileAsrTurnsQueue.length : 0;
+    session.pendingFileAsrTurns = Math.max(0, (session.fileAsrTurnDrainActive ? 1 : 0) + pendingQueueDepth);
   }
 
-  shouldCoalesceSttTurn(
-    prevTurn: SttPipelineQueuedTurn | null | undefined,
-    nextTurn: SttPipelineQueuedTurn | null | undefined
+  shouldCoalesceFileAsrTurn(
+    prevTurn: FileAsrQueuedTurn | null | undefined,
+    nextTurn: FileAsrQueuedTurn | null | undefined
   ) {
     if (!prevTurn || !nextTurn) return false;
     const prevUserId = String(prevTurn.userId || "").trim();
@@ -1502,23 +1496,22 @@ export class TurnProcessor {
     const prevQueuedAt = Number(prevTurn.queuedAt || 0);
     const nextQueuedAt = Number(nextTurn.queuedAt || 0);
     if (!prevQueuedAt || !nextQueuedAt) return false;
-    if (nextQueuedAt - prevQueuedAt > STT_TURN_COALESCE_WINDOW_MS) return false;
+    if (nextQueuedAt - prevQueuedAt > FILE_ASR_TURN_COALESCE_WINDOW_MS) return false;
 
     const prevBuffer = Buffer.isBuffer(prevTurn.pcmBuffer) ? prevTurn.pcmBuffer : null;
     const nextBuffer = Buffer.isBuffer(nextTurn.pcmBuffer) ? nextTurn.pcmBuffer : null;
     if (!prevBuffer?.length || !nextBuffer?.length) return false;
-    if (prevBuffer.length + nextBuffer.length > STT_TURN_COALESCE_MAX_BYTES) return false;
+    if (prevBuffer.length + nextBuffer.length > FILE_ASR_TURN_COALESCE_MAX_BYTES) return false;
 
     return true;
   }
 
-  queueSttPipelineTurn({ session, userId, pcmBuffer, captureReason = "stream_end" }: QueueSttPipelineTurnArgs) {
+  queueFileAsrTurn({ session, userId, pcmBuffer, captureReason = "stream_end" }: QueueFileAsrTurnArgs) {
     if (!session || session.ending) return;
-    if (session.mode !== "stt_pipeline") return;
     if (!pcmBuffer || !pcmBuffer.length) return;
 
-    const pendingQueue = this.getPendingSttTurnQueue(session);
-    const queuedTurn: SttPipelineQueuedTurn = {
+    const pendingQueue = this.getPendingFileAsrTurnQueue(session);
+    const queuedTurn: FileAsrQueuedTurn = {
       session,
       userId,
       pcmBuffer,
@@ -1526,9 +1519,9 @@ export class TurnProcessor {
       queuedAt: Date.now()
     };
 
-    if (session.sttTurnDrainActive) {
+    if (session.fileAsrTurnDrainActive) {
       const lastQueuedTurn = pendingQueue[pendingQueue.length - 1] || null;
-      if (this.shouldCoalesceSttTurn(lastQueuedTurn, queuedTurn)) {
+      if (this.shouldCoalesceFileAsrTurn(lastQueuedTurn, queuedTurn)) {
         lastQueuedTurn.pcmBuffer = Buffer.concat([lastQueuedTurn.pcmBuffer, queuedTurn.pcmBuffer]);
         lastQueuedTurn.captureReason = queuedTurn.captureReason;
         this.store.logAction({
@@ -1536,7 +1529,7 @@ export class TurnProcessor {
           guildId: session.guildId,
           channelId: session.textChannelId,
           userId,
-          content: "stt_pipeline_turn_coalesced",
+          content: "file_asr_turn_coalesced",
           metadata: {
             sessionId: session.id,
             captureReason: String(captureReason || "stream_end"),
@@ -1547,7 +1540,7 @@ export class TurnProcessor {
         return;
       }
 
-      if (pendingQueue.length >= STT_TURN_QUEUE_MAX) {
+      if (pendingQueue.length >= FILE_ASR_TURN_QUEUE_MAX) {
         const droppedTurn = pendingQueue.shift();
         if (droppedTurn) {
           this.store.logAction({
@@ -1555,47 +1548,47 @@ export class TurnProcessor {
             guildId: session.guildId,
             channelId: session.textChannelId,
             userId,
-            content: "stt_pipeline_turn_superseded",
+            content: "file_asr_turn_superseded",
             metadata: {
               sessionId: session.id,
               replacedCaptureReason: String(droppedTurn.captureReason || "stream_end"),
               replacingCaptureReason: String(captureReason || "stream_end"),
               replacedQueueAgeMs: Math.max(0, Date.now() - Number(droppedTurn.queuedAt || Date.now())),
-              maxQueueDepth: STT_TURN_QUEUE_MAX
+              maxQueueDepth: FILE_ASR_TURN_QUEUE_MAX
             }
           });
         }
       }
       pendingQueue.push(queuedTurn);
-      this.syncPendingSttTurnCount(session);
+      this.syncPendingFileAsrTurnCount(session);
       return;
     }
 
     if (pendingQueue.length > 0) {
-      if (pendingQueue.length >= STT_TURN_QUEUE_MAX) {
+      if (pendingQueue.length >= FILE_ASR_TURN_QUEUE_MAX) {
         pendingQueue.shift();
       }
       pendingQueue.push(queuedTurn);
       const nextTurn = pendingQueue.shift();
       if (!nextTurn) return;
-      this.spawnSttPipelineTurnDrain(nextTurn, "pending_queue_merge");
+      this.spawnFileAsrTurnDrain(nextTurn, "pending_queue_merge");
       return;
     }
 
-    this.spawnSttPipelineTurnDrain(queuedTurn, "direct_queue_start");
+    this.spawnFileAsrTurnDrain(queuedTurn, "direct_queue_start");
   }
 
-  private spawnSttPipelineTurnDrain(turn: SttPipelineQueuedTurn, trigger: string) {
+  private spawnFileAsrTurnDrain(turn: FileAsrQueuedTurn, trigger: string) {
     const session = turn?.session;
-    void Promise.resolve(this.drainSttPipelineTurnQueue(turn)).catch((error: unknown) => {
+    void Promise.resolve(this.drainFileAsrTurnQueue(turn)).catch((error: unknown) => {
       if (!session) return;
-      const pendingQueue = this.getPendingSttTurnQueue(session);
+      const pendingQueue = this.getPendingFileAsrTurnQueue(session);
       this.store.logAction({
         kind: "voice_error",
         guildId: session.guildId,
         channelId: session.textChannelId,
         userId: turn.userId,
-        content: `stt_pipeline_turn_queue_drain_failed: ${String((error as Error)?.message || error)}`,
+        content: `file_asr_turn_queue_drain_failed: ${String((error as Error)?.message || error)}`,
         metadata: {
           sessionId: session.id,
           trigger,
@@ -1604,38 +1597,37 @@ export class TurnProcessor {
         }
       });
       if (session.ending) return;
-      session.sttTurnDrainActive = false;
-      this.syncPendingSttTurnCount(session);
+      session.fileAsrTurnDrainActive = false;
+      this.syncPendingFileAsrTurnCount(session);
       const pendingTurn = pendingQueue.shift();
       if (pendingTurn) {
-        this.syncPendingSttTurnCount(session);
-        this.spawnSttPipelineTurnDrain(pendingTurn, "recovery_after_failure");
+        this.syncPendingFileAsrTurnCount(session);
+        this.spawnFileAsrTurnDrain(pendingTurn, "recovery_after_failure");
       }
     });
   }
 
-  async drainSttPipelineTurnQueue(initialTurn: SttPipelineQueuedTurn) {
+  async drainFileAsrTurnQueue(initialTurn: FileAsrQueuedTurn) {
     const session = initialTurn?.session;
     if (!session || session.ending) return;
-    if (session.mode !== "stt_pipeline") return;
-    if (session.sttTurnDrainActive) return;
-    const pendingQueue = this.getPendingSttTurnQueue(session);
+    if (session.fileAsrTurnDrainActive) return;
+    const pendingQueue = this.getPendingFileAsrTurnQueue(session);
 
-    session.sttTurnDrainActive = true;
-    this.syncPendingSttTurnCount(session);
-    let turn: SttPipelineQueuedTurn | null = initialTurn;
+    session.fileAsrTurnDrainActive = true;
+    this.syncPendingFileAsrTurnCount(session);
+    let turn: FileAsrQueuedTurn | null = initialTurn;
 
     try {
       while (turn && !session.ending) {
         try {
-          await this.runSttPipelineTurn(turn);
+          await this.runFileAsrTurn(turn);
         } catch (error) {
           this.store.logAction({
             kind: "voice_error",
             guildId: session.guildId,
             channelId: session.textChannelId,
             userId: turn.userId,
-            content: `stt_pipeline_turn_failed: ${String(error?.message || error)}`,
+            content: `file_asr_turn_failed: ${String(error?.message || error)}`,
             metadata: {
               sessionId: session.id
             }
@@ -1644,34 +1636,33 @@ export class TurnProcessor {
 
         const nextTurn = pendingQueue.shift();
         turn = nextTurn || null;
-        this.syncPendingSttTurnCount(session);
+        this.syncPendingFileAsrTurnCount(session);
       }
     } finally {
-      session.sttTurnDrainActive = false;
+      session.fileAsrTurnDrainActive = false;
       if (session.ending) {
-        session.pendingSttTurnsQueue = [];
+        session.pendingFileAsrTurnsQueue = [];
       } else {
         const pendingTurn = pendingQueue.shift();
         if (pendingTurn) {
-          this.syncPendingSttTurnCount(session);
-          this.spawnSttPipelineTurnDrain(pendingTurn, "finally_continue_pending");
+          this.syncPendingFileAsrTurnCount(session);
+          this.spawnFileAsrTurnDrain(pendingTurn, "finally_continue_pending");
         }
       }
-      this.syncPendingSttTurnCount(session);
+      this.syncPendingFileAsrTurnCount(session);
     }
   }
 
-  async runSttPipelineTurn({
+  async runFileAsrTurn({
     session,
     userId,
     pcmBuffer,
     captureReason = "stream_end",
     queuedAt = 0
-  }: RunSttPipelineTurnArgs) {
+  }: RunFileAsrTurnArgs) {
     if (!session || session.ending) return;
-    if (session.mode !== "stt_pipeline") return;
     if (!pcmBuffer?.length) return;
-    if (!this.llm?.transcribeAudio || !this.llm?.synthesizeSpeech) return;
+    if (!this.llm?.transcribeAudio) return;
     const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
     if (this.host.activeReplies?.isStale(voiceReplyScopeKey, queuedAt || Date.now())) {
       this.host.store.logAction({
@@ -1679,7 +1670,7 @@ export class TurnProcessor {
         guildId: session.guildId,
         channelId: session.textChannelId,
         userId,
-        content: "stt_pipeline_turn_skipped_cancelled",
+        content: "file_asr_turn_skipped_cancelled",
         metadata: {
           sessionId: session.id,
           captureReason: String(captureReason || "stream_end"),
@@ -1690,15 +1681,15 @@ export class TurnProcessor {
     }
 
     const queueWaitMs = queuedAt ? Math.max(0, Date.now() - Number(queuedAt || Date.now())) : 0;
-    const pendingQueueDepth = Array.isArray(session.pendingSttTurnsQueue) ? session.pendingSttTurnsQueue.length : 0;
-    const staleTurn = queueWaitMs >= STT_TURN_STALE_SKIP_MS;
+    const pendingQueueDepth = Array.isArray(session.pendingFileAsrTurnsQueue) ? session.pendingFileAsrTurnsQueue.length : 0;
+    const staleTurn = queueWaitMs >= FILE_ASR_TURN_STALE_SKIP_MS;
     if (staleTurn && pendingQueueDepth > 1) {
       this.store.logAction({
         kind: "voice_runtime",
         guildId: session.guildId,
         channelId: session.textChannelId,
         userId,
-        content: "stt_pipeline_turn_skipped_stale",
+        content: "file_asr_turn_skipped_stale",
         metadata: {
           sessionId: session.id,
           captureReason: String(captureReason || "stream_end"),
@@ -1718,14 +1709,14 @@ export class TurnProcessor {
       userId,
       pcmBuffer,
       captureReason,
-      source: "stt_pipeline"
+      source: "file_asr"
     });
     if (consumedByMusicMode) return;
 
     const asrLanguageGuidance = resolveVoiceAsrLanguageGuidance(settings);
-    const sttSettings = getVoiceRuntimeConfig(settings).sttPipeline;
     const transcriptionModelPrimary =
-      String(sttSettings?.transcriptionModel || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
+      String(getVoiceRuntimeConfig(settings).openaiRealtime?.inputTranscriptionModel || "gpt-4o-mini-transcribe").trim() ||
+      "gpt-4o-mini-transcribe";
     const sampleRateHz = 24000;
     const silenceGate = this.host.evaluatePcmSilenceGate({
       pcmBuffer,
@@ -1741,7 +1732,7 @@ export class TurnProcessor {
         content: "voice_turn_dropped_silence_gate",
         metadata: {
           sessionId: session.id,
-          source: "stt_pipeline",
+          source: "file_asr",
           captureReason: String(captureReason || "stream_end"),
           pcmBytes: pcmBuffer.length,
           clipDurationMs,
@@ -1769,8 +1760,8 @@ export class TurnProcessor {
       model: transcriptionModelPrimary,
       sampleRateHz,
       captureReason,
-      traceSource: "voice_stt_pipeline_turn",
-      errorPrefix: "stt_pipeline_transcription_failed",
+      traceSource: "voice_file_asr_turn",
+      errorPrefix: "file_asr_transcription_failed",
       emptyTranscriptRuntimeEvent: "voice_stt_transcription_empty",
       emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
       asrLanguage: asrLanguageGuidance.language,
@@ -1788,8 +1779,8 @@ export class TurnProcessor {
         model: transcriptionModelFallback,
         sampleRateHz,
         captureReason,
-        traceSource: "voice_stt_pipeline_turn_fallback",
-        errorPrefix: "stt_pipeline_transcription_fallback_failed",
+        traceSource: "voice_file_asr_turn_fallback",
+        errorPrefix: "file_asr_transcription_fallback_failed",
         emptyTranscriptRuntimeEvent: "voice_stt_transcription_empty",
         emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
         suppressEmptyTranscriptLogs: true,
@@ -1806,7 +1797,7 @@ export class TurnProcessor {
         session,
         userId,
         transcript,
-        source: "stt_pipeline",
+        source: "file_asr",
         captureReason
       });
       return;
@@ -1819,7 +1810,7 @@ export class TurnProcessor {
       guildId: session.guildId,
       channelId: session.textChannelId,
       userId,
-      content: "stt_pipeline_transcript",
+      content: "file_asr_transcript",
       metadata: {
         sessionId: session.id,
         captureReason: String(captureReason || "stream_end"),
@@ -1831,12 +1822,12 @@ export class TurnProcessor {
         clipDurationMs
       }
     });
-    const persistSttTranscriptTurn = this.host.shouldPersistUserTranscriptTimelineTurn({
+    const persistFileAsrTranscriptTurn = this.host.shouldPersistUserTranscriptTimelineTurn({
       session,
       settings,
       transcript
     });
-    if (persistSttTranscriptTurn) {
+    if (persistFileAsrTranscriptTurn) {
       this.host.recordVoiceTurn(session, {
         role: "user",
         userId,
@@ -1848,9 +1839,9 @@ export class TurnProcessor {
         settings,
         userId,
         transcript,
-        source: "voice_stt_pipeline_ingest",
+        source: "voice_file_asr_ingest",
         captureReason,
-        errorPrefix: "voice_stt_memory_ingest_failed"
+        errorPrefix: "voice_file_asr_memory_ingest_failed"
       });
     }
     if (staleTurn) {
@@ -1859,7 +1850,7 @@ export class TurnProcessor {
         guildId: session.guildId,
         channelId: session.textChannelId,
         userId,
-        content: "stt_pipeline_turn_skipped_stale",
+        content: "file_asr_turn_skipped_stale",
         metadata: {
           sessionId: session.id,
           captureReason: String(captureReason || "stream_end"),
@@ -1877,7 +1868,7 @@ export class TurnProcessor {
       settings,
       userId,
       transcript,
-      source: "stt_pipeline",
+      source: "file_asr",
       transcriptionContext: {
         usedFallbackModel: usedFallbackModelForTranscript,
         captureReason: String(captureReason || "stream_end"),
@@ -1920,7 +1911,7 @@ export class TurnProcessor {
       metadata: {
         sessionId: session.id,
         mode: session.mode,
-        source: "stt_pipeline",
+        source: "file_asr",
         captureReason: String(captureReason || "stream_end"),
         allow: Boolean(turnDecision.allow),
         reason: turnDecision.reason,
@@ -1989,7 +1980,7 @@ export class TurnProcessor {
           userId,
           transcript: turnDecision.transcript || transcript,
           captureReason,
-          source: "stt_pipeline",
+          source: "file_asr",
           directAddressed: Boolean(turnDecision.directAddressed),
           deferReason: turnDecision.reason,
           flushDelayMs: turnDecision.retryAfterMs
@@ -1998,14 +1989,31 @@ export class TurnProcessor {
       return;
     }
 
-    await this.host.runSttPipelineReply({
+    this.host.clearDeferredQueuedUserTurns(session);
+
+    if (this.host.shouldUseRealtimeTranscriptBridge({ session, settings })) {
+      await this.host.forwardRealtimeTextTurnToBrain({
+        session,
+        settings,
+        userId,
+        transcript,
+        captureReason,
+        source: "file_asr_transcript_turn",
+        directAddressed: Boolean(turnDecision.directAddressed),
+        conversationContext: turnDecision.conversationContext || null
+      });
+      return;
+    }
+
+    await this.host.runRealtimeBrainReply({
       session,
       settings,
       userId,
       transcript,
       directAddressed: Boolean(turnDecision.directAddressed),
       directAddressConfidence: Number(turnDecision.directAddressConfidence),
-      conversationContext: turnDecision.conversationContext || null
+      conversationContext: turnDecision.conversationContext || null,
+      source: "file_asr"
     });
   }
 

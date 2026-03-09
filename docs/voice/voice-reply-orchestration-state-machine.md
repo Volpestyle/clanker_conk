@@ -14,15 +14,15 @@ Reply orchestration state lives on the `VoiceSession`:
 
 - `session.pendingRealtimeTurns: RealtimeQueuedTurn[]` — queue of finalized realtime turns awaiting processing
 - `session.realtimeTurnDrainActive: boolean` — whether the drain loop is running
-- `session.pendingSttTurnsQueue: SttPipelineQueuedTurn[]` — queue of STT pipeline turns
-- `session.sttTurnDrainActive: boolean` — whether the STT drain loop is running
+- `session.pendingFileAsrTurnsQueue: FileAsrQueuedTurn[]` — queue of file-ASR turns awaiting processing
+- `session.fileAsrTurnDrainActive: boolean` — whether the file-ASR drain loop is running
 - `session.deferredVoiceActions: Record<DeferredVoiceActionType, DeferredVoiceAction>` — deferred action queue (interrupted replies, queued user turns)
 
 The `TurnProcessor` owns turn queueing and drain logic. The `DeferredActionQueue` owns deferred action scheduling and dispatch. The `VoiceSessionManager` owns the reply pipeline caller methods.
 
 Code:
 
-- `src/voice/turnProcessor.ts` — turn queueing, drain loops, `runRealtimeTurn`, `runSttPipelineTurn`
+- `src/voice/turnProcessor.ts` — turn queueing, drain loops, `runRealtimeTurn`, `runFileAsrTurn`
 - `src/voice/voiceReplyDecision.ts` — reply admission gate (`evaluateVoiceReplyDecision`)
 - `src/voice/voiceReplyPipeline.ts` — unified reply pipeline
 - `src/voice/deferredActionQueue.ts` — deferred action management
@@ -43,13 +43,13 @@ captureManager.finalizeUserTurn()
       → runRealtimeTurn()
 ```
 
-### STT Pipeline Turn Queue
+### File ASR Turn Queue
 
 ```
-captureManager.finalizeUserTurn() (stt_pipeline mode)
-  → turnProcessor.queueSttPipelineTurn()
-    → drainSttPipelineTurnQueue() (serial)
-      → runSttPipelineTurn()
+captureManager.finalizeUserTurn() (realtime session with `transcriptionMethod="file_wav"`)
+  → turnProcessor.queueFileAsrTurn()
+    → drainFileAsrTurnQueue() (serial)
+      → runFileAsrTurn()
 ```
 
 Turn coalescing: multiple turns arriving within the coalesce window are merged into a single turn with concatenated PCM and merged transcripts.
@@ -68,7 +68,7 @@ Turn coalescing: multiple turns arriving within the coalesce window are merged i
 | 6 | Music playing + not awake | deny |
 | 7 | Direct address fast path | allow |
 | 8 | Eagerness disabled + no direct address | deny |
-| 9 | STT pipeline (generation decides) | allow |
+| 9 | Full-brain admission path (generation decides) | allow |
 | 10 | No brain session | deny |
 | 11 | Music playing + not awake (bridge) | deny |
 | 12 | Generation-only admission mode | allow |
@@ -83,8 +83,7 @@ After admission, the turn processor dispatches based on mode:
 |---|---|---|---|---|
 | **Native** | `shouldUseNativeRealtimeReply` | Realtime model (end-to-end) | Realtime model | No |
 | **Bridge** (text→realtime) | `shouldUseRealtimeTranscriptBridge` | Realtime model (from forwarded text) | Realtime model | No |
-| **Brain Reply** (bridge mode pipeline) | Default realtime with brain strategy | `generateVoiceTurn` (orchestrator LLM) | Realtime TTS or API TTS | Yes (`mode: "bridge"`) |
-| **STT Pipeline Reply** (brain mode pipeline) | `session.mode === "stt_pipeline"` | `generateVoiceTurn` (orchestrator LLM) | API TTS (`synthesizeSpeech`) | Yes (`mode: "brain"`) |
+| **Full Brain Reply** (realtime transport) | Default realtime with full-brain path | `generateVoiceTurn` (orchestrator LLM) | Realtime TTS or API TTS | Yes (`mode: "realtime_transport"`) |
 
 ### Native Path (`forwardRealtimeTurnAudio`)
 
@@ -94,11 +93,11 @@ Raw PCM forwarded to realtime client. The model handles understanding + audio ge
 
 Labeled transcript `(speakerName): text` sent to realtime provider. Cancels any in-flight response first. Instruction context refreshed **blocking** (awaits `prepareRealtimeTurnContext`).
 
-### Brain/STT Pipeline Path (`runVoiceReplyPipeline`)
+### Brain Path (`runVoiceReplyPipeline`)
 
 The unified pipeline: generate text via LLM, build playback plan, play via realtime TTS or API TTS. See `voice-provider-abstraction.md` §3 for detailed stage description.
 
-In realtime sessions, this path can still deliver speech through the realtime client even when settings-level `voice.replyPath` is `"brain"`. Here `mode: "bridge"` means "use realtime output transport for pre-generated text", not "use the transcript-to-realtime brain path above". On OpenAI, these exact-line playback requests are sent out-of-band with tools disabled so pre-generated speech cannot start a second tool/reasoning loop.
+In realtime sessions, this path can still deliver speech through the realtime client even when settings-level `voice.replyPath` is `"brain"`. Here `mode: "realtime_transport"` means "use realtime output transport for pre-generated text", not "use the transcript-to-realtime bridge path above". On OpenAI, these exact-line playback requests are sent out-of-band with tools disabled so pre-generated speech cannot start a second provider tool/reasoning loop.
 
 ## 5. Deferred Turn System
 
@@ -181,6 +180,21 @@ pre-generation check:
 
 Reuses the same queue/live-capture inspection logic that stage 3 already uses, but runs it before paying for an LLM call. Log: `voice_generation_superseded_pre_generation`.
 
+### Pre-play Supersede Requeue
+
+When user speech interrupts an in-flight generation that hasn't produced audio yet (`phase === "generation_only"`), the system may **requeue** the interrupted turn so it can be retried after the user finishes speaking. This prevents dropping legitimate user turns that were just slow to generate.
+
+**Requeue eligibility** (`cancelPendingPrePlaybackReplyForUserSpeech`):
+
+- Active reply was aborted (`activeReplyAbortCount > 0`)
+- In-flight turn exists and is in `generation_only` phase (no tool side effects)
+- Turn age < `PREPLAY_SUPERSEDE_REQUEUE_MAX_AGE_MS`
+- Turn has a transcript
+- Turn did NOT originate from a deferred flush (prevents zombie loops)
+- Turn is NOT a bot-initiated event (`bot_join_greeting`, `member_join_greeting`)
+
+**Bot-initiated event exclusion:** Synthetic events like join greetings are not real user speech — they become stale the moment a user speaks over them. Requeuing them produces zombie turns that race with the user's actual input, causing the bot to greet after the user has already started a conversation. These are dropped, not requeued.
+
 ### Stage 2: Abortable generation
 
 Voice generation registers an active reply and passes an `AbortSignal` to the LLM call, enabling mid-generation cancellation when newer speech arrives.
@@ -258,7 +272,7 @@ Each action has a `notBeforeAt` timestamp and an `expiresAt` deadline. `canFireD
 When a user turn is admitted but the bot doesn't reply:
 
 1. Check which dispatch path was taken (native, bridge, brain reply)
-2. For brain/STT pipeline: check `runVoiceReplyPipeline` — did `generateVoiceTurn` produce content?
+2. For full-brain replies: check `runVoiceReplyPipeline` — did `generateVoiceTurn` produce content?
 3. Check `pendingResponse` — was a tracked response created?
 4. Check for supersede — was the reply abandoned for newer input?
 
@@ -290,6 +304,7 @@ These cases should remain covered:
 - Pre-generation gate skips generation when live promoted capture exists
 - Aborted generation produces no playback and no conversation window entry
 - Abort cleanup does not corrupt session state
+- Bot-initiated events (`bot_join_greeting`, `member_join_greeting`) are NOT requeued when user speaks over them
 - Pre-playback supersede (stage 3) abandons stale replies for newer input
 - Silent response recovery retries and then hard-recovers
 - Deferred action expiry clears stale actions

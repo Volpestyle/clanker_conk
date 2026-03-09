@@ -24,35 +24,34 @@ import {
   shouldAllowVoiceNsfwHumor,
   SOUNDBOARD_MAX_CANDIDATES
 } from "./voiceSessionHelpers.ts";
+import type { RealtimeToolOwnership } from "./voiceSessionTypes.ts";
 
 type VoiceConfigSettings = Record<string, unknown> | null;
 
 type VoiceConfigSessionLike = {
   ending?: boolean;
   mode?: string;
+  realtimeToolOwnership?: RealtimeToolOwnership | null;
   settingsSnapshot?: VoiceConfigSettings;
 } | null;
-
-type RealtimeReplyStrategy = "brain" | "native";
 
 function resolveConfigSettings(session: VoiceConfigSessionLike, settings: VoiceConfigSettings) {
   return settings || session?.settingsSnapshot || null;
 }
 
-export function resolveRealtimeReplyStrategy({
+export function shouldUseTextMediatedRealtimeReply({
   session,
   settings = null
 }: {
   session?: VoiceConfigSessionLike;
   settings?: VoiceConfigSettings;
-}): RealtimeReplyStrategy {
-  if (!session || !isRealtimeMode(session.mode || "")) return "brain";
+}) {
+  if (!session || !isRealtimeMode(session.mode || "")) return false;
   const resolvedSettings = resolveConfigSettings(session, settings);
   const replyPath = String(getVoiceConversationPolicy(resolvedSettings).replyPath || "")
     .trim()
     .toLowerCase();
-  if (replyPath === "native") return "native";
-  return "brain";
+  return replyPath !== "native";
 }
 
 export function shouldUseNativeRealtimeReply({
@@ -62,7 +61,66 @@ export function shouldUseNativeRealtimeReply({
   session?: VoiceConfigSessionLike;
   settings?: VoiceConfigSettings;
 }) {
-  return resolveRealtimeReplyStrategy({ session, settings }) === "native";
+  if (!session || !isRealtimeMode(session.mode || "")) return false;
+  return !shouldUseTextMediatedRealtimeReply({ session, settings });
+}
+
+export function resolveRealtimeToolOwnership({
+  session = null,
+  settings = null,
+  mode = null
+}: {
+  session?: VoiceConfigSessionLike;
+  settings?: VoiceConfigSettings;
+  mode?: string | null;
+} = {}): RealtimeToolOwnership {
+  const latchedOwnership = String(session?.realtimeToolOwnership || "")
+    .trim()
+    .toLowerCase();
+  if (latchedOwnership === "transport_only" || latchedOwnership === "provider_native") {
+    return latchedOwnership as RealtimeToolOwnership;
+  }
+
+  const resolvedMode = String(mode || session?.mode || "")
+    .trim()
+    .toLowerCase();
+  if (!isRealtimeMode(resolvedMode)) return "transport_only";
+
+  const resolvedSettings = resolveConfigSettings(session, settings);
+  const replyPath = String(getVoiceConversationPolicy(resolvedSettings).replyPath || "")
+    .trim()
+    .toLowerCase();
+  if (replyPath === "native" || replyPath === "bridge") return "provider_native";
+  return "transport_only";
+}
+
+export function shouldRegisterRealtimeTools({
+  session = null,
+  settings = null,
+  mode = null
+}: {
+  session?: VoiceConfigSessionLike;
+  settings?: VoiceConfigSettings;
+  mode?: string | null;
+} = {}) {
+  const resolvedMode = String(mode || session?.mode || "")
+    .trim()
+    .toLowerCase();
+  if (!isRealtimeMode(resolvedMode)) return false;
+  if (!providerSupports(resolvedMode, "updateTools")) return false;
+  return resolveRealtimeToolOwnership({ session, settings, mode: resolvedMode }) === "provider_native";
+}
+
+export function shouldHandleRealtimeFunctionCalls({
+  session = null,
+  settings = null,
+  mode = null
+}: {
+  session?: VoiceConfigSessionLike;
+  settings?: VoiceConfigSettings;
+  mode?: string | null;
+} = {}) {
+  return shouldRegisterRealtimeTools({ session, settings, mode });
 }
 
 export function shouldUsePerUserTranscription({
@@ -86,7 +144,7 @@ export function shouldUsePerUserTranscription({
   )
     .trim()
     .toLowerCase();
-  if (resolveRealtimeReplyStrategy({ session, settings: resolvedSettings }) !== "brain") {
+  if (!shouldUseTextMediatedRealtimeReply({ session, settings: resolvedSettings })) {
     return false;
   }
   if (transcriptionMethod !== "realtime_bridge") {
@@ -119,7 +177,7 @@ export function shouldUseSharedTranscription({
   )
     .trim()
     .toLowerCase();
-  if (resolveRealtimeReplyStrategy({ session, settings: resolvedSettings }) !== "brain") {
+  if (!shouldUseTextMediatedRealtimeReply({ session, settings: resolvedSettings })) {
     return false;
   }
   if (transcriptionMethod !== "realtime_bridge") {
@@ -145,13 +203,31 @@ export function shouldUseRealtimeTranscriptBridge({
   const replyPath = String(voiceConversation.replyPath || "")
     .trim()
     .toLowerCase();
-  if (replyPath === "bridge") {
-    const ttsMode = String(voiceConversation.ttsMode || "").trim().toLowerCase();
-    if (ttsMode === "api") return false;
-    return true;
-  }
+  if (replyPath === "bridge") return true;
   if (replyPath === "brain" || replyPath === "native") return false;
   return false;
+}
+
+export function shouldUseFileTurnTranscription({
+  session = null,
+  settings = null
+}: {
+  session?: VoiceConfigSessionLike;
+  settings?: VoiceConfigSettings;
+} = {}) {
+  if (!session || session.ending) return false;
+  if (!isRealtimeMode(session.mode || "")) return false;
+  const resolvedSettings = resolveConfigSettings(session, settings);
+  if (!shouldUseTextMediatedRealtimeReply({ session, settings: resolvedSettings })) {
+    return false;
+  }
+  const voiceRuntime = getVoiceRuntimeConfig(resolvedSettings);
+  const transcriptionMethod = String(
+    voiceRuntime.openaiRealtime?.transcriptionMethod || "realtime_bridge"
+  )
+    .trim()
+    .toLowerCase();
+  return transcriptionMethod === "file_wav";
 }
 
 export function isAsrActive({

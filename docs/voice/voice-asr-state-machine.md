@@ -90,9 +90,9 @@ Phase query helpers: `asrPhaseCanAcceptAudio` (connecting or ready), `asrPhaseIs
 
 ### Mode Selection (`voiceConfigResolver.ts`)
 
-Per-user requires ALL of: session active, provider supports `perUserAsr` (OpenAI only), OpenAI API key, not text-only mode, `transcriptionMethod === "realtime_bridge"`, reply strategy is `"brain"`, `usePerUserAsrBridge === true`.
+Per-user requires ALL of: session active, provider supports `perUserAsr` (OpenAI only), OpenAI API key, not text-only mode, `transcriptionMethod === "realtime_bridge"`, reply path is text-mediated (`bridge` or `brain`), `usePerUserAsrBridge === true`.
 
-Shared requires ALL of: session active, provider supports `sharedAsr` (all providers), OpenAI API key, not text-only mode, `transcriptionMethod === "realtime_bridge"`, reply strategy is `"brain"`, per-user is NOT enabled.
+Shared requires ALL of: session active, provider supports `sharedAsr` (all providers), OpenAI API key, not text-only mode, `transcriptionMethod === "realtime_bridge"`, reply path is text-mediated (`bridge` or `brain`), per-user is NOT enabled.
 
 ## 6. Audio Buffering
 

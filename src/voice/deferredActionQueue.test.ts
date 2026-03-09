@@ -53,9 +53,9 @@ function createSession(overrides: Partial<VoiceSession> = {}): VoiceSession {
     pendingResponse: null,
     activeReplyInterruptionPolicy: null,
     lastRequestedRealtimeUtterance: null,
-    pendingSttTurns: [],
-    sttTurnDrainActive: false,
-    pendingSttTurnsQueue: [],
+    pendingFileAsrTurns: 0,
+    fileAsrTurnDrainActive: false,
+    pendingFileAsrTurnsQueue: [],
     realtimeTurnDrainActive: false,
     pendingRealtimeTurns: [],
     openAiAsrSessions: new Map(),
@@ -425,9 +425,6 @@ test("recheckDeferredVoiceActions gives interrupted replies priority over queued
         assertive: true,
         scope: "speaker",
         allowedUserId: "user-1",
-        talkingTo: null,
-        reason: "engaged_continuation",
-        source: "test"
       }
     }
   });

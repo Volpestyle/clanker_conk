@@ -35,8 +35,11 @@ import {
   maybeTriggerAssistantDirectedSoundboard,
   normalizeSoundboardRefs
 } from "./voiceSoundboard.ts";
+import {
+  shouldHandleRealtimeFunctionCalls as shouldHandleRealtimeFunctionCallsModule,
+  shouldRegisterRealtimeTools as shouldRegisterRealtimeToolsModule
+} from "./voiceConfigResolver.ts";
 import { refreshRealtimeTools } from "./voiceToolCallInfra.ts";
-import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
 import type { VoiceToolCallManager } from "./voiceToolCallTypes.ts";
 import { musicPhaseShouldAllowDucking, type VoiceSession } from "./voiceSessionTypes.ts";
 import { providerSupports } from "./voiceModes.ts";
@@ -50,7 +53,6 @@ type SessionLifecycleHost = VoiceToolCallManager & Pick<
   | "getMusicPhase"
   | "handleOpenAiRealtimeFunctionCallEvent"
   | "isAsrActive"
-  | "isInboundCaptureSuppressed"
   | "musicPlayer"
   | "recordVoiceTurn"
   | "resolveSpeakingEndFinalizeDelayMs"
@@ -244,7 +246,7 @@ export class SessionLifecycle {
     if (isRealtimeMode(session.mode)) {
       this.bindRealtimeHandlers(session, resolvedSettings);
     }
-    if (providerSupports(session.mode || "", "updateTools")) {
+    if (shouldRegisterRealtimeToolsModule({ session, settings: resolvedSettings })) {
       await refreshRealtimeTools(this.host, {
         session: session as RefreshRealtimeToolsSession,
         settings: resolvedSettings,
@@ -319,16 +321,18 @@ export class SessionLifecycle {
     this.host.clearVoiceThoughtLoopTimer(session);
     session.thoughtLoopBusy = false;
     session.pendingResponse = null;
-    session.sttTurnDrainActive = false;
-    session.pendingSttTurnsQueue = [];
-    session.pendingSttTurns = 0;
+    session.fileAsrTurnDrainActive = false;
+    session.pendingFileAsrTurnsQueue = [];
+    session.pendingFileAsrTurns = 0;
     session.pendingRealtimeTurns = [];
     session.activeRealtimeTurn = null;
     session.pendingRealtimeAssistantUtterances = [];
     this.host.deferredActionQueue.clearAllDeferredVoiceActions(session);
-    session.awaitingToolOutputs = false;
-    session.openAiPendingToolCalls = new Map();
-    session.openAiToolCallExecutions = new Map();
+    if (session.realtimeToolOwnership === "provider_native") {
+      session.awaitingToolOutputs = false;
+      session.openAiPendingToolCalls = new Map();
+      session.openAiToolCallExecutions = new Map();
+    }
     session.openAiTurnContextRefreshState = null;
     session.lastRequestedRealtimeUtterance = null;
     session.activeReplyInterruptionPolicy = null;
@@ -542,9 +546,14 @@ export class SessionLifecycle {
     session.lastOpenAiAssistantAudioItemContentIndex = contentIndex;
   }
 
-  trackOpenAiRealtimeResponseOutputEvent(session: VoiceSession, event: Record<string, unknown> | null | undefined) {
+  trackOpenAiRealtimeResponseOutputEvent(
+    session: VoiceSession,
+    event: Record<string, unknown> | null | undefined,
+    settings: SessionLifecycleSettings = session.settingsSnapshot
+  ) {
     if (!session || session.ending) return;
     if (!isRealtimeMode(session.mode)) return;
+    if (!shouldHandleRealtimeFunctionCallsModule({ session, settings })) return;
     if (!event || typeof event !== "object") return;
 
     const eventType = String(event.type || "").trim();
@@ -578,7 +587,6 @@ export class SessionLifecycle {
 
   bindRealtimeHandlers(session: VoiceSession, settings: SessionLifecycleSettings = session.settingsSnapshot) {
     if (!session?.realtimeClient) return;
-    ensureSessionToolRuntimeState(this.host, session);
     const runtimeLabel = getRealtimeRuntimeLabel(session.mode);
 
     const onAudioDelta = (audioBase64) => {
@@ -842,24 +850,26 @@ export class SessionLifecycle {
       if (!session || session.ending) return;
       if (!event || typeof event !== "object") return;
       if (!isRealtimeMode(session.mode)) return;
-      this.trackOpenAiRealtimeResponseOutputEvent(session, event);
+      this.trackOpenAiRealtimeResponseOutputEvent(session, event, settings);
       this.trackOpenAiRealtimeAssistantAudioEvent(session, event);
-      this.host.handleOpenAiRealtimeFunctionCallEvent({
-        session,
-        settings,
-        event
-      }).catch((error) => {
-        this.host.store.logAction({
-          kind: "voice_error",
-          guildId: session.guildId,
-          channelId: session.textChannelId,
-          userId: this.host.client.user?.id || null,
-          content: `openai_realtime_tool_event_failed: ${String(error?.message || error)}`,
-          metadata: {
-            sessionId: session.id
-          }
+      if (shouldHandleRealtimeFunctionCallsModule({ session, settings })) {
+        this.host.handleOpenAiRealtimeFunctionCallEvent({
+          session,
+          settings,
+          event
+        }).catch((error) => {
+          this.host.store.logAction({
+            kind: "voice_error",
+            guildId: session.guildId,
+            channelId: session.textChannelId,
+            userId: this.host.client.user?.id || null,
+            content: `openai_realtime_tool_event_failed: ${String(error?.message || error)}`,
+            metadata: {
+              sessionId: session.id
+            }
+          });
         });
-      });
+      }
     };
 
     session.realtimeClient.on("audio_delta", onAudioDelta);

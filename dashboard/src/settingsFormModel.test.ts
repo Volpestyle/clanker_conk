@@ -18,12 +18,12 @@ import {
   getResolvedFollowupBinding,
   getResolvedMemoryBinding,
   getResolvedVisionBinding,
-  getResolvedVoiceProvider,
   getResolvedVoiceInitiativeBinding,
   getResolvedVoiceAdmissionClassifierBinding,
   getResolvedVoiceGenerationBinding,
   resolveAgentStack
 } from "../../src/settings/agentStack.ts";
+import { resolveVoiceRuntimeSelectionFromMode } from "../../src/settings/voiceDashboardMappings.ts";
 
 function withResolved(settings: unknown) {
   const s = settings as Record<string, unknown>;
@@ -35,7 +35,7 @@ function withResolved(settings: unknown) {
       followupBinding: getResolvedFollowupBinding(s),
       memoryBinding: getResolvedMemoryBinding(s),
       visionBinding: getResolvedVisionBinding(s),
-      voiceProvider: getResolvedVoiceProvider(s),
+      voiceProvider: resolveVoiceRuntimeSelectionFromMode(resolveAgentStack(s).voiceRuntime),
       voiceInitiativeBinding: getResolvedVoiceInitiativeBinding(s),
       voiceAdmissionClassifierBinding: getResolvedVoiceAdmissionClassifierBinding(s),
       voiceGenerationBinding: getResolvedVoiceGenerationBinding(s)
@@ -82,6 +82,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
     },
     voice: {
       conversationPolicy: {
+        defaultInterruptionMode: "none",
         streaming: {
           enabled: true,
           eagerFirstChunkChars: 72,
@@ -126,10 +127,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.memoryReflectionStrategy, "one_pass_main");
   assert.equal(form.adaptiveDirectivesEnabled, true);
   assert.equal(form.automationsEnabled, true);
-  assert.equal(form.voiceThoughtEngineEnabled, false);
-  assert.equal(form.voiceThoughtEngineProvider, "anthropic");
-  assert.equal(form.voiceThoughtEngineModel, "claude-sonnet-4-6");
-  assert.equal(form.voiceThoughtEngineTemperature, 1);
+  assert.equal(form.voiceThoughtEngineEnabled, true);
   assert.equal(form.voiceThoughtEngineEagerness, 50);
   assert.equal(form.voiceStreamWatchCommentaryPath, "auto");
   assert.equal(form.voiceStreamWatchKeyframeIntervalMs, 1200);
@@ -142,6 +140,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.voiceStreamingEnabled, true);
   assert.equal(form.voiceStreamingEagerFirstChunkChars, 72);
   assert.equal(form.voiceStreamingMaxBufferChars, 280);
+  assert.equal(form.voiceDefaultInterruptionMode, "none");
   assert.equal(form.voiceCommandOnlyMode, false);
   assert.equal(form.voiceOpenAiRealtimeTranscriptionMethod, "realtime_bridge");
   assert.equal(form.voiceOpenAiRealtimeUsePerUserAsrBridge, true);
@@ -179,6 +178,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.voiceStreamingEnabled = false;
   form.voiceStreamingEagerFirstChunkChars = 84;
   form.voiceStreamingMaxBufferChars = 340;
+  form.voiceDefaultInterruptionMode = "speaker";
   form.voiceCommandOnlyMode = true;
   form.voiceOpenAiRealtimeTranscriptionMethod = "file_wav";
   form.voiceOpenAiRealtimeUsePerUserAsrBridge = false;
@@ -216,6 +216,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.voice.conversationPolicy.streaming.enabled, false);
   assert.equal(patch.voice.conversationPolicy.streaming.eagerFirstChunkChars, 84);
   assert.equal(patch.voice.conversationPolicy.streaming.maxBufferChars, 340);
+  assert.equal(patch.voice.conversationPolicy.defaultInterruptionMode, "speaker");
   assert.equal(patch.voice.conversationPolicy.commandOnlyMode, true);
   assert.equal(patch.agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod, "file_wav");
   assert.equal(patch.agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge, false);
@@ -223,9 +224,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.voice.transcription.languageHint, "en-us");
   assert.deepEqual(patch.agentStack.overrides.devTeam.codingWorkers, ["codex"]);
   assert.equal(patch.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
-  assert.equal(patch.initiative.voice.enabled, false);
-  assertDedicatedExecutionModel(patch.initiative.voice.execution, "anthropic", "claude-sonnet-4-6");
-  assert.equal(patch.initiative.voice.execution.temperature, 1);
+  assert.equal(patch.initiative.voice.enabled, true);
   assert.equal(patch.initiative.voice.eagerness, 50);
 });
 
@@ -326,7 +325,7 @@ test("resolveBrowserProviderModelOptions merges catalog values with browser defa
     },
     "claude-oauth"
   );
-  assert.deepEqual(claudeOAuth, ["claude-haiku-4-5", "claude-sonnet-4-6", "claude-opus-4-6"]);
+  assert.deepEqual(claudeOAuth, ["claude-haiku-4-5", "claude-opus-4-6", "claude-sonnet-4-6"]);
 });
 
 test("resolvePresetModelSelection always resolves to a real dropdown option", () => {
@@ -374,6 +373,42 @@ test("settingsFormModel round-trips canonical voice runtime mode", () => {
   assert.equal(form.stackAdvancedOverridesEnabled, true);
   const patch = formToSettingsPatch(form);
   assert.equal(patch.agentStack.runtimeConfig.voice.runtimeMode, "openai_realtime");
+});
+
+test("settingsFormModel keeps realtime provider selection while preserving file_wav + api TTS overrides", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({
+    agentStack: {
+      advancedOverridesEnabled: true,
+      runtimeConfig: {
+        voice: {
+          runtimeMode: "openai_realtime",
+          openaiRealtime: {
+            transcriptionMethod: "file_wav"
+          },
+          openaiAudioApi: {
+            ttsModel: "gpt-4o-mini-tts",
+            ttsVoice: "ash",
+            ttsSpeed: 1.25
+          }
+        }
+      },
+    },
+    voice: {
+      conversationPolicy: {
+        replyPath: "brain",
+        ttsMode: "api"
+      }
+    }
+  })));
+
+  assert.equal(form.voiceProvider, "openai");
+  assert.equal(form.voiceOpenAiRealtimeTranscriptionMethod, "file_wav");
+  assert.equal(form.voiceTtsMode, "api");
+  assert.equal(form.voiceApiTtsVoice, "ash");
+  const patch = formToSettingsPatch(form);
+  assert.equal(patch.agentStack.runtimeConfig.voice.runtimeMode, "openai_realtime");
+  assert.equal(patch.agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod, "file_wav");
+  assert.equal(patch.agentStack.runtimeConfig.voice.openaiAudioApi.ttsVoice, "ash");
 });
 
 test("settingsFormModel round-trips browser llm provider and model", () => {
@@ -532,6 +567,54 @@ test("settingsFormModel supports the claude_oauth_local_tools preset", () => {
 
   const patch = formToSettingsPatch(form);
   assert.equal(patch.agentStack.preset, "claude_oauth_local_tools");
+});
+
+test("settingsFormModel uses canonical voice fallbacks when legacy form fields are blank", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({})));
+  form.voiceReplyPath = "";
+  form.voiceOperationalMessages = "";
+  Reflect.set(form, "voiceReplyDecisionRealtimeAdmissionMode", "");
+
+  const patch = formToSettingsPatch(form);
+
+  assert.equal(patch.voice.conversationPolicy.replyPath, "brain");
+  assert.equal(patch.voice.conversationPolicy.operationalMessages, "minimal");
+  assert.equal(patch.voice.admission.mode, "generation_decides");
+});
+
+test("settingsFormModel forces bridge replies onto realtime output", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({
+    voice: {
+      conversationPolicy: {
+        replyPath: "bridge",
+        ttsMode: "api"
+      }
+    }
+  })));
+
+  assert.equal(form.voiceReplyPath, "bridge");
+  assert.equal(form.voiceTtsMode, "realtime");
+
+  form.voiceTtsMode = "api";
+  const patch = formToSettingsPatch(form);
+
+  assert.equal(patch.voice.conversationPolicy.replyPath, "bridge");
+  assert.equal(patch.voice.conversationPolicy.ttsMode, "realtime");
+});
+
+test("settingsFormModel canonicalizes legacy voice admission aliases for the dashboard", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({
+    voice: {
+      admission: {
+        mode: "adaptive"
+      }
+    }
+  })));
+
+  assert.equal(form.voiceReplyDecisionRealtimeAdmissionMode, "generation_decides");
+
+  const patch = formToSettingsPatch(form);
+  assert.equal(patch.voice.admission.mode, "generation_decides");
 });
 
 test("applyStackPresetDefaults merges server-returned defaults into form", () => {

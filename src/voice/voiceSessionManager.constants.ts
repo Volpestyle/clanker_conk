@@ -30,7 +30,7 @@ export const BOT_TURN_SILENCE_RESET_MS = 1200;
 export const CLANKVOX_TTS_TELEMETRY_STALE_MS = 1600;
 // Make barge-in intentionally stubborn so brief talk-over/echo does not cut bot playback.
 export const BARGE_IN_MIN_SPEECH_MS = 700;
-// STT pipeline captures must be at least this old before barge-in fires, replacing
+// File-ASR/non-realtime captures must be at least this old before barge-in fires, replacing
 // the old timer-based armAssertiveBargeIn delay.
 export const BARGE_IN_STT_MIN_CAPTURE_AGE_MS = 500;
 export const BARGE_IN_SUPPRESSION_MAX_MS = 12_000;
@@ -116,10 +116,10 @@ export const BOT_DISCONNECT_GRACE_MS = 2500;
 export const STT_CONTEXT_MAX_MESSAGES = 100;
 export const STT_TRANSCRIPT_MAX_CHARS = 700;
 export const STT_REPLY_MAX_CHARS = 1200;
-export const STT_TURN_QUEUE_MAX = 1;
-export const STT_TURN_STALE_SKIP_MS = 4500;
-export const STT_TURN_COALESCE_WINDOW_MS = 1200;
-export const STT_TURN_COALESCE_MAX_BYTES = 24_000 * 2 * 8;
+export const FILE_ASR_TURN_QUEUE_MAX = 1;
+export const FILE_ASR_TURN_STALE_SKIP_MS = 4500;
+export const FILE_ASR_TURN_COALESCE_WINDOW_MS = 1200;
+export const FILE_ASR_TURN_COALESCE_MAX_BYTES = 24_000 * 2 * 8;
 export const VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS = 260;
 export const VOICE_DECIDER_HISTORY_MAX_TURNS = 8;
 export const VOICE_TRANSCRIPT_TIMELINE_MAX_TURNS = 220;

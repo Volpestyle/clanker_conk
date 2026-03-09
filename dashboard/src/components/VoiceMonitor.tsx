@@ -15,7 +15,7 @@ import { Section } from "./ui";
 // ---- helpers ----
 
 function deriveBotState(s: VoiceSession): "processing" | "speaking" | "listening" | "idle" | "disconnected" {
-  const pendingTurns = (s.stt?.pendingTurns || 0) + (s.realtime?.pendingTurns || 0);
+  const pendingTurns = (s.batchAsr?.pendingTurns || 0) + (s.realtime?.pendingTurns || 0);
   if (s.botTurnOpen) return "speaking";
   if (pendingTurns > 0) return "processing";
   if (s.activeInputStreams > 0) return "listening";
@@ -1257,7 +1257,7 @@ function SessionCard({ session }: { session: VoiceSession }) {
   }, []);
 
   const state = deriveBotState(session);
-  const pendingTurns = (session.stt?.pendingTurns || 0) + (session.realtime?.pendingTurns || 0);
+  const pendingTurns = (session.batchAsr?.pendingTurns || 0) + (session.realtime?.pendingTurns || 0);
   const totalPending = pendingTurns + session.pendingDeferredTurns;
   const wakeIndicator = resolveWakeIndicator(session);
   const activeCaptures = Array.isArray(session.activeCaptures) ? session.activeCaptures : [];

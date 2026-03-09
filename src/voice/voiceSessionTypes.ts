@@ -198,9 +198,12 @@ export type VoiceRealtimeToolSettings = {
     [key: string]: unknown;
 };
 
+export type RealtimeToolOwnership = "transport_only" | "provider_native";
+
 export type VoiceToolRuntimeSessionLike = {
     ending?: boolean;
     mode?: string;
+    realtimeToolOwnership?: RealtimeToolOwnership | null;
     realtimeClient?: {
         updateTools?: (payload: {
             tools: Array<{
@@ -720,7 +723,7 @@ export interface RealtimeQueuedTurn {
     droppedHeadBytes: number;
 }
 
-export interface SttPipelineQueuedTurn {
+export interface FileAsrQueuedTurn {
     session: VoiceSession;
     userId: string;
     pcmBuffer: Buffer;
@@ -731,9 +734,9 @@ export interface SttPipelineQueuedTurn {
 export interface TurnProcessorState {
     responseFlushTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
     pendingRealtimeInputBytes: number;
-    pendingSttTurns: number;
-    sttTurnDrainActive: boolean;
-    pendingSttTurnsQueue: SttPipelineQueuedTurn[];
+    pendingFileAsrTurns: number;
+    fileAsrTurnDrainActive: boolean;
+    pendingFileAsrTurnsQueue: FileAsrQueuedTurn[];
     realtimeTurnDrainActive: boolean;
     pendingRealtimeTurns: RealtimeQueuedTurn[];
     realtimeTurnCoalesceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
@@ -813,6 +816,7 @@ export interface VoiceSession {
     requestedByUserId: string;
     mode: string;
     realtimeProvider: string;
+    realtimeToolOwnership: RealtimeToolOwnership;
     realtimeInputSampleRateHz: number;
     realtimeOutputSampleRateHz: number;
     recentVoiceTurns: VoiceTimelineTurn[];
@@ -857,9 +861,9 @@ export interface VoiceSession {
     activeReplyInterruptionPolicy: ReplyInterruptionPolicy | null;
     lastRequestedRealtimeUtterance: VoiceLastRequestedRealtimeUtterance | null;
     pendingRealtimeAssistantUtterances?: VoiceQueuedRealtimeAssistantUtterance[];
-    pendingSttTurns: TurnProcessorState["pendingSttTurns"];
-    sttTurnDrainActive: TurnProcessorState["sttTurnDrainActive"];
-    pendingSttTurnsQueue: TurnProcessorState["pendingSttTurnsQueue"];
+    pendingFileAsrTurns: TurnProcessorState["pendingFileAsrTurns"];
+    fileAsrTurnDrainActive: TurnProcessorState["fileAsrTurnDrainActive"];
+    pendingFileAsrTurnsQueue: TurnProcessorState["pendingFileAsrTurnsQueue"];
     realtimeTurnDrainActive: TurnProcessorState["realtimeTurnDrainActive"];
     pendingRealtimeTurns: TurnProcessorState["pendingRealtimeTurns"];
     activeRealtimeTurn?: RealtimeQueuedTurn | null;
@@ -870,21 +874,21 @@ export interface VoiceSession {
     openAiPerUserAsrModel: string;
     openAiPerUserAsrLanguage: string;
     openAiPerUserAsrPrompt: string;
-    openAiPendingToolCalls: Map<string, VoicePendingToolCallState>;
-    openAiToolCallExecutions: Map<string, VoiceToolExecutionState>;
-    openAiToolResponseDebounceTimer: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
-    openAiCompletedToolCallIds: Map<string, number>;
+    openAiPendingToolCalls?: Map<string, VoicePendingToolCallState>;
+    openAiToolCallExecutions?: Map<string, VoiceToolExecutionState>;
+    openAiToolResponseDebounceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;
+    openAiCompletedToolCallIds?: Map<string, number>;
     openAiPendingToolAbortControllers?: Map<string, AbortController>;
     openAiResponsesWithAssistantOutput?: Map<string, number>;
     openAiToolFollowupNeeded?: boolean;
     lastOpenAiAssistantAudioItemId: string | null;
     lastOpenAiAssistantAudioItemContentIndex: number;
     lastOpenAiAssistantAudioItemReceivedMs: number;
-    openAiToolDefinitions: VoiceRealtimeToolDescriptor[];
-    lastOpenAiRealtimeToolHash: string;
-    lastOpenAiRealtimeToolRefreshAt: number;
+    openAiToolDefinitions?: VoiceRealtimeToolDescriptor[];
+    lastOpenAiRealtimeToolHash?: string;
+    lastOpenAiRealtimeToolRefreshAt?: number;
     lastOpenAiToolCallerUserId: string | null;
-    awaitingToolOutputs: boolean;
+    awaitingToolOutputs?: boolean;
     toolCallEvents: VoiceToolCallEvent[];
     mcpStatus: VoiceMcpServerStatus[];
     toolMusicTrackCatalog: Map<string, unknown>;

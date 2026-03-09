@@ -15,7 +15,7 @@ import {
   shortError
 } from "./voiceSessionHelpers.ts";
 import { getPromptBotName } from "../prompts/promptCore.ts";
-import { buildVoiceInstructions } from "./voiceConfigResolver.ts";
+import { buildVoiceInstructions, resolveRealtimeToolOwnership } from "./voiceConfigResolver.ts";
 import { resolveSoundboardCandidates } from "./voiceSoundboard.ts";
 import { buildRealtimeFunctionTools, getVoiceMcpServerStatuses } from "./voiceToolCallToolRegistry.ts";
 import { providerSupports } from "./voiceModes.ts";
@@ -23,6 +23,7 @@ import type { VoiceSession } from "./voiceSessionTypes.ts";
 import { createAssistantOutputState } from "./assistantOutputState.ts";
 import {
   getVoiceChannelPolicy,
+  getVoiceConversationPolicy,
   getVoiceRuntimeConfig,
   getVoiceSessionLimits,
   getVoiceSettings
@@ -244,6 +245,17 @@ export async function requestJoin(manager, { message, settings, intentConfidence
     }
 
     const runtimeMode = resolveVoiceRuntimeMode(settings);
+    const voiceConversation = getVoiceConversationPolicy(settings);
+    const replyPath = String(voiceConversation.replyPath || "brain").trim().toLowerCase();
+    const ttsMode = String(voiceConversation.ttsMode || "realtime").trim().toLowerCase();
+    const transcriptionMethod = String(
+      voiceRuntime.openaiRealtime?.transcriptionMethod || "realtime_bridge"
+    )
+      .trim()
+      .toLowerCase();
+    const usesFileTurnTranscription = replyPath !== "native" && transcriptionMethod === "file_wav";
+    const usesApiTts = replyPath === "brain" && ttsMode === "api";
+    const usesOpenAiAudioApi = usesFileTurnTranscription || usesApiTts;
     if (runtimeMode === "voice_agent" && !manager.appConfig?.xaiApiKey) {
       await sendOperationalMessage(manager, {
         channel: message.channel,
@@ -333,58 +345,78 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         return true;
       }
     }
-    if (runtimeMode === "stt_pipeline") {
-      if (!manager.llm?.isAsrReady?.()) {
-        await sendOperationalMessage(manager, {
-          channel: message.channel,
-          settings,
-          guildId,
-          channelId: message.channelId,
-          userId,
-          messageId: message.id,
-          event: "voice_join_request",
-          reason: "stt_pipeline_asr_unavailable",
-          details: {
-            mode: runtimeMode
-          },
-          mustNotify: true
-        });
-        return true;
-      }
-      if (!manager.llm?.isSpeechSynthesisReady?.()) {
-        await sendOperationalMessage(manager, {
-          channel: message.channel,
-          settings,
-          guildId,
-          channelId: message.channelId,
-          userId,
-          messageId: message.id,
-          event: "voice_join_request",
-          reason: "stt_pipeline_tts_unavailable",
-          details: {
-            mode: runtimeMode
-          },
-          mustNotify: true
-        });
-        return true;
-      }
-      if (typeof manager.generateVoiceTurn !== "function") {
-        await sendOperationalMessage(manager, {
-          channel: message.channel,
-          settings,
-          guildId,
-          channelId: message.channelId,
-          userId,
-          messageId: message.id,
-          event: "voice_join_request",
-          reason: "stt_pipeline_brain_unavailable",
-          details: {
-            mode: runtimeMode
-          },
-          mustNotify: true
-        });
-        return true;
-      }
+    if (usesOpenAiAudioApi && runtimeMode !== "openai_realtime" && !manager.appConfig?.openaiApiKey) {
+      await sendOperationalMessage(manager, {
+        channel: message.channel,
+        settings,
+        guildId,
+        channelId: message.channelId,
+        userId,
+        messageId: message.id,
+        event: "voice_join_request",
+        reason: "openai_audio_api_key_missing",
+        details: {
+          mode: runtimeMode,
+          transcriptionMethod,
+          ttsMode
+        },
+        mustNotify: true
+      });
+      return true;
+    }
+    if (usesFileTurnTranscription && !manager.llm?.isAsrReady?.()) {
+      await sendOperationalMessage(manager, {
+        channel: message.channel,
+        settings,
+        guildId,
+        channelId: message.channelId,
+        userId,
+        messageId: message.id,
+        event: "voice_join_request",
+        reason: "voice_file_asr_unavailable",
+        details: {
+          mode: runtimeMode,
+          transcriptionMethod
+        },
+        mustNotify: true
+      });
+      return true;
+    }
+    if (usesApiTts && !manager.llm?.isSpeechSynthesisReady?.()) {
+      await sendOperationalMessage(manager, {
+        channel: message.channel,
+        settings,
+        guildId,
+        channelId: message.channelId,
+        userId,
+        messageId: message.id,
+        event: "voice_join_request",
+        reason: "voice_api_tts_unavailable",
+        details: {
+          mode: runtimeMode,
+          ttsMode
+        },
+        mustNotify: true
+      });
+      return true;
+    }
+    if (replyPath === "brain" && typeof manager.generateVoiceTurn !== "function") {
+      await sendOperationalMessage(manager, {
+        channel: message.channel,
+        settings,
+        guildId,
+        channelId: message.channelId,
+        userId,
+        messageId: message.id,
+        event: "voice_join_request",
+        reason: "voice_brain_unavailable",
+        details: {
+          mode: runtimeMode,
+          replyPath
+        },
+        mustNotify: true
+      });
+      return true;
     }
 
     const missingPermissionInfo = manager.getMissingJoinPermissionInfo({
@@ -409,6 +441,10 @@ export async function requestJoin(manager, { message, settings, intentConfidence
       return true;
     }
 
+    const realtimeToolOwnership = resolveRealtimeToolOwnership({
+      settings,
+      mode: runtimeMode
+    });
     const maxSessionMinutesCap = runtimeMode === "openai_realtime"
       ? OPENAI_REALTIME_MAX_SESSION_MINUTES
       : MAX_MAX_SESSION_MINUTES;
@@ -525,10 +561,14 @@ export async function requestJoin(manager, { message, settings, intentConfidence
             ),
           inputTranscriptionLanguage: voiceAsrGuidance.language,
           inputTranscriptionPrompt: voiceAsrGuidance.prompt,
-          tools: buildRealtimeFunctionTools(manager, {
-            session: null,
-            settings
-          }),
+          tools:
+            realtimeToolOwnership === "provider_native"
+              ? buildRealtimeFunctionTools(manager, {
+                session: null,
+                settings,
+                target: runtimeMode
+              })
+              : [],
           toolChoice: "auto"
         });
       } else if (runtimeMode === "gemini_realtime") {
@@ -609,6 +649,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         requestedByUserId: userId,
         mode: runtimeMode,
         realtimeProvider: resolveRealtimeProvider(runtimeMode),
+        realtimeToolOwnership,
         realtimeInputSampleRateHz,
         realtimeOutputSampleRateHz,
         recentVoiceTurns: [],
@@ -653,9 +694,9 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         deferredVoiceActionTimers: {},
         lastRequestedRealtimeUtterance: null,
         pendingRealtimeAssistantUtterances: [],
-        pendingSttTurns: 0,
-        sttTurnDrainActive: false,
-        pendingSttTurnsQueue: [],
+        pendingFileAsrTurns: 0,
+        fileAsrTurnDrainActive: false,
+        pendingFileAsrTurnsQueue: [],
         realtimeTurnDrainActive: false,
         pendingRealtimeTurns: [],
         activeRealtimeTurn: null,
@@ -666,22 +707,26 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         openAiPerUserAsrModel,
         openAiPerUserAsrLanguage,
         openAiPerUserAsrPrompt,
-        openAiPendingToolCalls: new Map(),
-        openAiToolCallExecutions: new Map(),
-        openAiToolResponseDebounceTimer: null,
-        openAiCompletedToolCallIds: new Map(),
         lastOpenAiAssistantAudioItemId: null,
         lastOpenAiAssistantAudioItemContentIndex: 0,
         lastOpenAiAssistantAudioItemReceivedMs: 0,
-        openAiToolDefinitions: [],
-        lastOpenAiRealtimeToolHash: "",
-        lastOpenAiRealtimeToolRefreshAt: 0,
         lastOpenAiToolCallerUserId: null,
-        awaitingToolOutputs: false,
         toolCallEvents: [],
         mcpStatus: getVoiceMcpServerStatuses(manager),
         toolMusicTrackCatalog: new Map(),
         memoryWriteWindow: [],
+        ...(realtimeToolOwnership === "provider_native"
+          ? {
+              openAiPendingToolCalls: new Map(),
+              openAiToolCallExecutions: new Map(),
+              openAiToolResponseDebounceTimer: null,
+              openAiCompletedToolCallIds: new Map(),
+              openAiToolDefinitions: [],
+              lastOpenAiRealtimeToolHash: "",
+              lastOpenAiRealtimeToolRefreshAt: 0,
+              awaitingToolOutputs: false
+            }
+          : {}),
         factProfiles: new Map(),
         guildFactProfile: null,
         voiceCommandState: null,

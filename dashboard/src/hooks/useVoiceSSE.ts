@@ -276,7 +276,7 @@ export type VoiceSession = {
   brainTools: BrainToolEntry[] | null;
   toolCalls: ToolCallEvent[] | null;
   mcpStatus: McpServerStatus[] | null;
-  stt: { pendingTurns: number; contextMessages: number } | null;
+  batchAsr: { pendingTurns: number; contextMessages: number } | null;
   realtime: {
     provider: string;
     inputSampleRateHz: number;

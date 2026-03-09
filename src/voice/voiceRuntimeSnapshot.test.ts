@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createTestSettings } from "../testSettings.ts";
 import { buildVoiceRuntimeSnapshot } from "./voiceRuntimeSnapshot.ts";
 
-test("buildVoiceRuntimeSnapshot captures rich realtime and stt session state", () => {
+test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session state", () => {
   const now = Date.parse("2026-03-06T18:00:00.000Z");
   const originalNow = Date.now;
   Date.now = () => now;
@@ -27,6 +27,7 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and stt session state", (
         lastPlayedAt: now - 9_000
       },
       mode: "openai_realtime",
+      realtimeToolOwnership: "provider_native",
       botTurnOpen: true,
       assistantOutput: {
         reason: "replying",
@@ -315,7 +316,8 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and stt session state", (
         playCount: 0,
         lastPlayedAt: 0
       },
-      mode: "stt_pipeline",
+      mode: "openai_realtime",
+      realtimeProvider: "openai",
       botTurnOpen: false,
       recentVoiceTurns: [],
       transcriptTurns: [],
@@ -323,7 +325,7 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and stt session state", (
       nextThoughtAt: 0,
       lastThoughtAttemptAt: 0,
       lastThoughtSpokenAt: 0,
-      pendingSttTurns: 3,
+      pendingFileAsrTurns: 3,
       latencyStages: [],
       settingsSnapshot: createTestSettings({})
     };
@@ -610,13 +612,120 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and stt session state", (
       totalMs: 1_200
     });
 
-    const stt = snapshot.sessions.find((entry) => entry.sessionId === "session-2");
-    assert.ok(stt);
-    assert.deepEqual(stt?.stt, {
+    const fileAsrSession = snapshot.sessions.find((entry) => entry.sessionId === "session-2");
+    assert.ok(fileAsrSession);
+    assert.deepEqual(fileAsrSession?.batchAsr, {
       pendingTurns: 3,
       contextMessages: 0
     });
-    assert.equal(stt?.realtime, null);
+    assert.equal(fileAsrSession?.realtime?.provider, "openai");
+    assert.equal(fileAsrSession?.realtime?.state, null);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("buildVoiceRuntimeSnapshot hides native tool registry in transport-only sessions but keeps shared tool state", () => {
+  const now = Date.parse("2026-03-06T18:00:00.000Z");
+  const originalNow = Date.now;
+  Date.now = () => now;
+
+  try {
+    const snapshot = buildVoiceRuntimeSnapshot(new Map([
+      ["session-transport-1", {
+        id: "session-transport-1",
+        guildId: "guild-1",
+        voiceChannelId: "voice-1",
+        textChannelId: "text-1",
+        startedAt: Date.now() - 5_000,
+        lastActivityAt: Date.now() - 500,
+        mode: "openai_realtime",
+        realtimeToolOwnership: "transport_only",
+        openAiToolDefinitions: [
+          {
+            name: "memory_search",
+            toolType: "function",
+            description: "Search memory"
+          }
+        ],
+        toolCallEvents: [
+          {
+            callId: "call-1",
+            toolName: "memory_search",
+            toolType: "function",
+            arguments: { query: "hey" },
+            startedAt: "2026-03-06T17:59:50.000Z",
+            completedAt: "2026-03-06T17:59:51.000Z",
+            runtimeMs: 101.2,
+            success: true,
+            outputSummary: "found",
+            error: null
+          }
+        ],
+        mcpStatus: [
+          {
+            serverName: "web",
+            connected: true,
+            tools: [{ name: "lookup_docs", description: "Lookup docs" }],
+            lastError: null,
+            lastConnectedAt: null,
+            lastCallAt: null
+          }
+        ],
+        userCaptures: new Map(),
+        recentVoiceTurns: [],
+        transcriptTurns: [],
+        durableContext: [],
+        modelContextSummary: { generation: null, decider: null },
+        factProfiles: new Map(),
+        guildFactProfile: null,
+        streamWatch: { active: false }
+      }]
+    ]), {
+      client: {
+        users: {
+          cache: {
+            get() {
+              return null;
+            }
+          }
+        }
+      },
+      replyManager: {
+        syncAssistantOutputState() {
+          return { phase: "idle" };
+        }
+      },
+      deferredActionQueue: {
+        getDeferredQueuedUserTurns() {
+          return [];
+        }
+      },
+      getVoiceChannelParticipants() {
+        return [];
+      },
+      getRecentVoiceMembershipEvents() {
+        return [];
+      },
+      buildVoiceConversationContext() {
+        return null;
+      },
+      buildVoiceAddressingState() {
+        return null;
+      },
+      getStreamWatchBrainContextForPrompt() {
+        return null;
+      },
+      snapshotMusicRuntimeState() {
+        return { active: false };
+      },
+      guildMemberDisplayNames: new Map()
+    });
+
+    const session = snapshot.sessions?.[0];
+    assert.equal(session?.brainTools, null);
+    assert.equal(session?.toolCalls?.length, 1);
+    assert.equal(session?.mcpStatus?.[0]?.serverName, "web");
   } finally {
     Date.now = originalNow;
   }

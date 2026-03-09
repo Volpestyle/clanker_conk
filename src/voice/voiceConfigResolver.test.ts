@@ -3,7 +3,10 @@ import assert from "node:assert/strict";
 import { createTestSettings } from "../testSettings.ts";
 import {
   isAsrActive,
-  resolveRealtimeReplyStrategy,
+  resolveRealtimeToolOwnership,
+  shouldHandleRealtimeFunctionCalls,
+  shouldRegisterRealtimeTools,
+  shouldUseTextMediatedRealtimeReply,
   shouldUsePerUserTranscription,
   shouldUseRealtimeTranscriptBridge,
   shouldUseSharedTranscription
@@ -47,17 +50,17 @@ function createSession(mode: string, settingsSnapshot: ReturnType<typeof createV
   };
 }
 
-describe("resolveRealtimeReplyStrategy", () => {
-  test("returns native only for realtime sessions configured for native replies", () => {
+describe("shouldUseTextMediatedRealtimeReply", () => {
+  test("returns false for realtime sessions configured for native replies", () => {
     const settings = createVoiceSettings({
       replyPath: "native"
     });
 
-    const strategy = resolveRealtimeReplyStrategy({
+    const result = shouldUseTextMediatedRealtimeReply({
       session: createSession("openai_realtime", settings)
     });
 
-    assert.equal(strategy, "native");
+    assert.equal(result, false);
   });
 
   test("prefers explicit settings over the session snapshot", () => {
@@ -68,25 +71,158 @@ describe("resolveRealtimeReplyStrategy", () => {
       replyPath: "brain"
     });
 
-    const strategy = resolveRealtimeReplyStrategy({
+    const result = shouldUseTextMediatedRealtimeReply({
       session: createSession("openai_realtime", snapshotSettings),
       settings: explicitSettings
     });
 
-    assert.equal(strategy, "brain");
+    assert.equal(result, true);
   });
 
-  test("falls back to brain outside realtime modes", () => {
+  test("returns false outside realtime modes", () => {
     const settings = createVoiceSettings({
-      mode: "stt_pipeline",
+      mode: "offline",
       replyPath: "native"
     });
 
-    const strategy = resolveRealtimeReplyStrategy({
-      session: createSession("stt_pipeline", settings)
+    const result = shouldUseTextMediatedRealtimeReply({
+      session: createSession("offline", settings)
     });
 
-    assert.equal(strategy, "brain");
+    assert.equal(result, false);
+  });
+});
+
+describe("resolveRealtimeToolOwnership", () => {
+  test("returns transport_only for brain reply path", () => {
+    const settings = createVoiceSettings({
+      replyPath: "brain"
+    });
+
+    const ownership = resolveRealtimeToolOwnership({
+      session: createSession("openai_realtime", settings)
+    });
+
+    assert.equal(ownership, "transport_only");
+  });
+
+  test("returns provider_native for bridge reply path", () => {
+    const settings = createVoiceSettings({
+      replyPath: "bridge"
+    });
+
+    const ownership = resolveRealtimeToolOwnership({
+      session: createSession("openai_realtime", settings)
+    });
+
+    assert.equal(ownership, "provider_native");
+  });
+
+  test("returns provider_native for native reply path", () => {
+    const settings = createVoiceSettings({
+      replyPath: "native"
+    });
+
+    const ownership = resolveRealtimeToolOwnership({
+      session: createSession("openai_realtime", settings)
+    });
+
+    assert.equal(ownership, "provider_native");
+  });
+
+  test("uses the latched session ownership over current settings", () => {
+    const ownership = resolveRealtimeToolOwnership({
+      session: {
+        mode: "openai_realtime",
+        realtimeToolOwnership: "transport_only",
+        settingsSnapshot: createVoiceSettings({
+          replyPath: "native"
+        })
+      },
+      settings: createVoiceSettings({
+        replyPath: "native"
+      })
+    });
+
+    assert.equal(ownership, "transport_only");
+  });
+});
+
+describe("realtime tool gating", () => {
+  test("does not register realtime tools for brain sessions", () => {
+    const settings = createVoiceSettings({
+      replyPath: "brain"
+    });
+
+    assert.equal(
+      shouldRegisterRealtimeTools({
+        session: createSession("openai_realtime", settings),
+        settings
+      }),
+      false
+    );
+  });
+
+  test("registers realtime tools for bridge sessions on supported providers", () => {
+    const settings = createVoiceSettings({
+      replyPath: "bridge"
+    });
+
+    assert.equal(
+      shouldRegisterRealtimeTools({
+        session: createSession("openai_realtime", settings),
+        settings
+      }),
+      true
+    );
+  });
+
+  test("registers realtime tools for native sessions on supported providers", () => {
+    const settings = createVoiceSettings({
+      replyPath: "native"
+    });
+
+    assert.equal(
+      shouldRegisterRealtimeTools({
+        session: createSession("openai_realtime", settings),
+        settings
+      }),
+      true
+    );
+  });
+
+  test("handles provider function calls for provider-owned realtime sessions", () => {
+    const brainSettings = createVoiceSettings({
+      replyPath: "brain"
+    });
+    const bridgeSettings = createVoiceSettings({
+      replyPath: "bridge"
+    });
+    const nativeSettings = createVoiceSettings({
+      replyPath: "native"
+    });
+
+    assert.equal(
+      shouldHandleRealtimeFunctionCalls({
+        session: createSession("openai_realtime", brainSettings),
+        settings: brainSettings
+      }),
+      false
+    );
+    assert.equal(
+      shouldHandleRealtimeFunctionCalls({
+        session: createSession("openai_realtime", bridgeSettings),
+        settings: bridgeSettings
+      }),
+      true
+    );
+    assert.equal(
+      shouldHandleRealtimeFunctionCalls({
+        session: createSession("openai_realtime", nativeSettings),
+        settings: nativeSettings
+      }),
+      true
+    );
   });
 });
 
@@ -182,7 +318,7 @@ describe("shouldUseSharedTranscription", () => {
 });
 
 describe("shouldUseRealtimeTranscriptBridge", () => {
-  test("enables the transcript bridge for realtime bridge replies with realtime TTS", () => {
+  test("enables the transcript bridge for realtime bridge replies", () => {
     const settings = createVoiceSettings({
       replyPath: "bridge",
       ttsMode: "realtime"
@@ -196,7 +332,7 @@ describe("shouldUseRealtimeTranscriptBridge", () => {
     assert.equal(result, true);
   });
 
-  test("disables the transcript bridge when bridge replies use API TTS", () => {
+  test("keeps the transcript bridge enabled even if legacy bridge settings request API TTS", () => {
     const settings = createVoiceSettings({
       replyPath: "bridge",
       ttsMode: "api"
@@ -207,17 +343,17 @@ describe("shouldUseRealtimeTranscriptBridge", () => {
       settings
     });
 
-    assert.equal(result, false);
+    assert.equal(result, true);
   });
 
   test("disables the transcript bridge outside realtime modes", () => {
     const settings = createVoiceSettings({
-      mode: "stt_pipeline",
+      mode: "offline",
       replyPath: "bridge"
     });
 
     const result = shouldUseRealtimeTranscriptBridge({
-      session: createSession("stt_pipeline", settings),
+      session: createSession("offline", settings),
       settings
     });
 

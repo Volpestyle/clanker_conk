@@ -61,7 +61,7 @@ export interface VoiceReplyPipelineParams {
   directAddressed?: boolean;
   directAddressConfidence?: number;
   conversationContext?: VoiceConversationContext | null;
-  mode: "brain" | "bridge";
+  mode: "realtime_transport";
   source?: string;
   inputKind?: string;
   latencyContext?: VoicePendingResponseLatencyContext | null;
@@ -72,8 +72,6 @@ export interface VoiceReplyPipelineParams {
 
 export type VoiceReplyPipelineHost = Pick<VoiceSessionManager,
   | "annotateLatestVoiceTurnAddressing"
-  | "beginVoiceWebLookupBusy"
-  | "buildReplyInterruptionPolicy"
   | "buildVoiceAddressingState"
   | "buildVoiceConversationContext"
   | "buildVoiceReplyPlaybackPlan"
@@ -91,7 +89,6 @@ export type VoiceReplyPipelineHost = Pick<VoiceSessionManager,
   | "playVoiceReplyInOrder"
   | "recordVoiceTurn"
   | "requestRealtimeTextUtterance"
-  | "setActiveReplyInterruptionPolicy"
   | "soundboardDirector"
   | "updateModelContextSummary"
   | "waitForLeaveDirectivePlayback"
@@ -194,7 +191,7 @@ function logReplySkipped({
     guildId: params.session.guildId,
     channelId: params.session.textChannelId,
     userId: host.client.user?.id || null,
-    content: params.mode === "bridge" ? "realtime_reply_skipped" : "stt_pipeline_reply_skipped",
+    content: "realtime_reply_skipped",
     metadata: {
       sessionId: params.session.id,
       mode: params.session.mode,
@@ -228,32 +225,27 @@ export async function runVoiceReplyPipeline(
   const source = String(params.source || params.mode).trim() || params.mode;
   if (!session || session.ending) return false;
 
-  if (params.mode === "brain") {
-    if (session.mode !== "stt_pipeline") return false;
-    if (!host.llm?.synthesizeSpeech || typeof host.generateVoiceTurn !== "function") return false;
-  } else {
-    if (!isRealtimeMode(session.mode)) return false;
-    if (typeof host.generateVoiceTurn !== "function") {
-      host.store.logAction({
-        kind: "voice_error",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: params.userId,
-        content: "realtime_generation_unavailable",
-        metadata: {
-          sessionId: session.id,
-          source
-        }
-      });
-      return false;
-    }
+  if (!isRealtimeMode(session.mode)) return false;
+  if (typeof host.generateVoiceTurn !== "function") {
+    host.store.logAction({
+      kind: "voice_error",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: params.userId,
+      content: "realtime_generation_unavailable",
+      metadata: {
+        sessionId: session.id,
+        source
+      }
+    });
+    return false;
   }
 
   const normalizedTranscript = normalizeVoiceText(params.transcript, STT_TRANSCRIPT_MAX_CHARS);
   if (!normalizedTranscript) return false;
 
   const normalizedLatencyContext =
-    params.mode === "bridge" && params.latencyContext && typeof params.latencyContext === "object"
+    params.latencyContext && typeof params.latencyContext === "object"
       ? params.latencyContext
       : null;
   const latencyFinalizedAtMs = Math.max(0, Number(normalizedLatencyContext?.finalizedAtMs || 0));
@@ -267,15 +259,12 @@ export async function runVoiceReplyPipeline(
     : null;
   const latencyCaptureReason = String(normalizedLatencyContext?.captureReason || "").trim() || null;
 
-  if (
-    params.mode === "bridge" &&
-    host.maybeSupersedeRealtimeReplyBeforePlayback({
-      session,
-      source: `${source}:generation_preflight`,
-      generationStartedAtMs: latencyFinalizedAtMs || Date.now(),
-      includePromotedCaptureSupersede: true
-    })
-  ) {
+  if (host.maybeSupersedeRealtimeReplyBeforePlayback({
+    session,
+    source: `${source}:generation_preflight`,
+    generationStartedAtMs: latencyFinalizedAtMs || Date.now(),
+    includePromotedCaptureSupersede: true
+  })) {
     return false;
   }
 
@@ -348,14 +337,14 @@ export async function runVoiceReplyPipeline(
   };
 
   const generationStartedAt = Date.now();
-  const voiceReplyScopeKey = params.mode === "bridge" ? buildVoiceReplyScopeKey(session.id) : null;
+  const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
   const activeReply =
-    params.mode === "bridge" && host.activeReplies && voiceReplyScopeKey
+    host.activeReplies && voiceReplyScopeKey
       ? host.activeReplies.begin(voiceReplyScopeKey, "voice-generation", ["voice_generation"])
       : null;
   const generationSignal = activeReply?.abortController.signal;
   const inFlightAcceptedBrainTurn: InFlightAcceptedBrainTurn | null =
-    params.mode === "bridge" && activeReply
+    activeReply
       ? {
           transcript: normalizedTranscript,
           userId: params.userId || null,
@@ -384,24 +373,10 @@ export async function runVoiceReplyPipeline(
   let generationFinished = false;
   const voiceConversation = getVoiceConversationPolicy(params.settings);
   const followup = getFollowupSettings(params.settings);
-  const useRealtimeTts =
-    params.mode === "bridge"
-      ? String(voiceConversation.ttsMode || "").trim().toLowerCase() !== "api"
-      : false;
+  const useRealtimeTts = String(voiceConversation.ttsMode || "").trim().toLowerCase() !== "api";
   const streamingVoiceReplyEnabled =
-    params.mode === "bridge" &&
     useRealtimeTts &&
     Boolean(voiceConversation.streaming?.enabled);
-  const preliminaryReplyInterruptionPolicy: ReplyInterruptionPolicy | null = params.mode === "bridge"
-    ? host.buildReplyInterruptionPolicy({
-      session,
-      userId: params.userId,
-      directAddressed: Boolean(params.directAddressed),
-      conversationContext: resolvedConversationContext,
-      generatedVoiceAddressing: null,
-      source
-    })
-    : null;
   let streamedReplyRequestedAt = 0;
 
   if (
@@ -435,7 +410,7 @@ export async function runVoiceReplyPipeline(
       channelId: session.textChannelId,
       userId: params.userId,
       transcript: normalizedTranscript,
-      ...(params.mode === "bridge" ? { inputKind: params.inputKind || "transcript" } : {}),
+      inputKind: params.inputKind || "transcript",
       directAddressed: Boolean(params.directAddressed),
       contextMessages,
       sessionId: session.id,
@@ -472,15 +447,11 @@ export async function runVoiceReplyPipeline(
                 pendingQueueDepth: latencyPendingQueueDepth
               }
               : null;
-          if (preliminaryReplyInterruptionPolicy) {
-            host.setActiveReplyInterruptionPolicy(session, preliminaryReplyInterruptionPolicy);
-          }
           const requested = host.requestRealtimeTextUtterance({
             session,
             text: normalizedText,
             userId: host.client.user?.id || null,
             source: `${source}:stream_chunk_${Math.max(0, Number(index || 0))}`,
-            interruptionPolicy: preliminaryReplyInterruptionPolicy,
             latencyContext
           });
           if (requested && streamedReplyRequestedAt === 0) {
@@ -510,7 +481,7 @@ export async function runVoiceReplyPipeline(
       guildId: session.guildId,
       channelId: session.textChannelId,
       userId: params.userId,
-      content: `${params.mode === "bridge" ? "realtime" : "stt_pipeline"}_generation_failed: ${String(error?.message || error)}`,
+      content: `realtime_generation_failed: ${String(error?.message || error)}`,
       metadata: {
         sessionId: session.id,
         source
@@ -580,19 +551,9 @@ export async function runVoiceReplyPipeline(
     });
   }
 
-  const replyInterruptionPolicy: ReplyInterruptionPolicy | null = params.mode === "bridge"
-    ? host.buildReplyInterruptionPolicy({
-      session,
-      userId: params.userId,
-      directAddressed: Boolean(params.directAddressed),
-      conversationContext: resolvedConversationContext,
-      generatedVoiceAddressing,
-      source
-    })
-    : null;
+  const replyInterruptionPolicy: ReplyInterruptionPolicy | null = null;
 
   const shouldRetryForcedSpeech =
-    params.mode === "bridge" &&
     Boolean(params.forceSpokenOutput) &&
     !shouldAllowSystemSpeechSkipAfterFire(source) &&
     Math.max(0, Number(params.spokenOutputRetryCount || 0)) < 1 &&
@@ -645,7 +606,6 @@ export async function runVoiceReplyPipeline(
   }
 
   if (
-    params.mode === "bridge" &&
     !streamingVoiceReplyEnabled &&
     playbackPlan.spokenText &&
     providerSupports(session.mode || "", "updateInstructions")
@@ -673,28 +633,21 @@ export async function runVoiceReplyPipeline(
 
   const streamedSpeechPlayed = streamingVoiceReplyEnabled && streamedSentenceCount > 0;
   const replyRequestedAt = streamedReplyRequestedAt || Date.now();
-  const replyLatencyContext = params.mode === "bridge"
-    ? {
-      finalizedAtMs: latencyFinalizedAtMs,
-      asrStartedAtMs: latencyAsrStartedAtMs,
-      asrCompletedAtMs: latencyAsrCompletedAtMs,
-      generationStartedAtMs: generationStartedAt,
-      replyRequestedAtMs: replyRequestedAt,
-      audioStartedAtMs: 0,
-      source,
-      captureReason: latencyCaptureReason,
-      queueWaitMs: latencyQueueWaitMs,
-      pendingQueueDepth: latencyPendingQueueDepth
-    }
-    : null;
-  if (replyInterruptionPolicy) {
-    host.setActiveReplyInterruptionPolicy(session, replyInterruptionPolicy);
-  }
-  if (params.mode === "bridge") {
-    session.lastAssistantReplyAt = replyRequestedAt;
-  }
+  const replyLatencyContext = {
+    finalizedAtMs: latencyFinalizedAtMs,
+    asrStartedAtMs: latencyAsrStartedAtMs,
+    asrCompletedAtMs: latencyAsrCompletedAtMs,
+    generationStartedAtMs: generationStartedAt,
+    replyRequestedAtMs: replyRequestedAt,
+    audioStartedAtMs: 0,
+    source,
+    captureReason: latencyCaptureReason,
+    queueWaitMs: latencyQueueWaitMs,
+    pendingQueueDepth: latencyPendingQueueDepth
+  };
+  session.lastAssistantReplyAt = replyRequestedAt;
 
-  const playbackSource = params.mode === "bridge" ? `${source}:reply` : `${source}_reply`;
+  const playbackSource = `${source}:reply`;
   if (!streamedSpeechPlayed && playbackPlan.steps.length > 0) {
     markInFlightAcceptedBrainTurnPhase("playback_requested");
   }
@@ -729,125 +682,75 @@ export async function runVoiceReplyPipeline(
         text: `[interrupted] ${playbackPlan.spokenText}`
       });
     }
-    if (params.mode === "bridge") {
-      host.maybeClearActiveReplyInterruptionPolicy(session);
-    }
+    host.maybeClearActiveReplyInterruptionPolicy(session);
     return false;
   }
 
   const requestedRealtimeUtterance = Boolean(playbackResult.requestedRealtimeUtterance);
   try {
-    const replyAt = params.mode === "bridge" ? replyRequestedAt : Date.now();
-    if (params.mode === "bridge") {
-      const pendingRequestId = Number(session.pendingResponse?.requestId || 0) || null;
-      host.logVoiceLatencyStage({
-        session,
+    const pendingRequestId = Number(session.pendingResponse?.requestId || 0) || null;
+    host.logVoiceLatencyStage({
+      session,
+      userId: host.client.user?.id || null,
+      stage: "reply_requested",
+      source,
+      captureReason: latencyCaptureReason,
+      requestId: pendingRequestId,
+      queueWaitMs: latencyQueueWaitMs,
+      pendingQueueDepth: latencyPendingQueueDepth,
+      finalizedAtMs: latencyFinalizedAtMs,
+      asrStartedAtMs: latencyAsrStartedAtMs,
+      asrCompletedAtMs: latencyAsrCompletedAtMs,
+      generationStartedAtMs: generationStartedAt,
+      replyRequestedAtMs: replyRequestedAt,
+      audioStartedAtMs: 0
+    });
+    if (playbackResult.spokeLine && !requestedRealtimeUtterance) {
+      session.lastAudioDeltaAt = replyRequestedAt;
+      session.lastAssistantReplyAt = replyRequestedAt;
+    }
+    if (playbackPlan.spokenText && !requestedRealtimeUtterance) {
+      host.recordVoiceTurn(session, {
+        role: "assistant",
         userId: host.client.user?.id || null,
-        stage: "reply_requested",
-        source,
-        captureReason: latencyCaptureReason,
-        requestId: pendingRequestId,
-        queueWaitMs: latencyQueueWaitMs,
-        pendingQueueDepth: latencyPendingQueueDepth,
-        finalizedAtMs: latencyFinalizedAtMs,
-        asrStartedAtMs: latencyAsrStartedAtMs,
-        asrCompletedAtMs: latencyAsrCompletedAtMs,
-        generationStartedAtMs: generationStartedAt,
-        replyRequestedAtMs: replyRequestedAt,
-        audioStartedAtMs: 0
-      });
-      if (playbackResult.spokeLine && !requestedRealtimeUtterance) {
-        session.lastAudioDeltaAt = replyRequestedAt;
-        session.lastAssistantReplyAt = replyRequestedAt;
-      }
-      if (playbackPlan.spokenText && !requestedRealtimeUtterance) {
-        host.recordVoiceTurn(session, {
-          role: "assistant",
-          userId: host.client.user?.id || null,
-          text: playbackPlan.spokenText
-        });
-      }
-      host.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: host.client.user?.id || null,
-        content: "realtime_reply_requested",
-        metadata: {
-          sessionId: session.id,
-          mode: session.mode,
-          source,
-          requestId: pendingRequestId,
-          replyText: playbackPlan.spokenText || null,
-          requestedRealtimeUtterance,
-          soundboardRefs: [...playedSoundboardRefs, ...playbackPlan.soundboardRefs],
-          playedSoundboardCount: Number(playbackResult.playedSoundboardCount || playedSoundboardRefs.length || 0),
-          usedWebSearchFollowup,
-          usedOpenArticleFollowup,
-          usedScreenShareOffer,
-          talkingTo: generatedVoiceAddressing?.talkingTo || null,
-          directedConfidence: Number.isFinite(Number(generatedVoiceAddressing?.directedConfidence))
-            ? Number(clamp(Number(generatedVoiceAddressing.directedConfidence), 0, 1).toFixed(3))
-            : 0,
-          leaveVoiceChannelRequested,
-          contextTurnsSent: contextMessages.length,
-          contextTurnsAvailable: contextTurns.length,
-          contextCharsSent: contextMessageChars
-        }
-      });
-    } else {
-      const spokeLine = Boolean(playbackResult.spokeLine);
-      const replyRuntimeEvent = playbackPlan.spokenText
-        ? "stt_pipeline_reply_spoken"
-        : playedSoundboardRefs.length > 0 || playbackPlan.soundboardRefs.length > 0
-          ? "stt_pipeline_soundboard_only"
-          : leaveVoiceChannelRequested
-            ? "stt_pipeline_leave_directive"
-            : "stt_pipeline_reply_skipped";
-      if (spokeLine) {
-        session.lastAudioDeltaAt = replyAt;
-      }
-      session.lastAssistantReplyAt = replyAt;
-      if (playbackPlan.spokenText) {
-        host.recordVoiceTurn(session, {
-          role: "assistant",
-          userId: host.client.user?.id || null,
-          text: playbackPlan.spokenText
-        });
-      }
-      host.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId: host.client.user?.id || null,
-        content: replyRuntimeEvent,
-        metadata: {
-          sessionId: session.id,
-          replyText: playbackPlan.spokenText || null,
-          spokeLine,
-          soundboardRefs: [...playedSoundboardRefs, ...playbackPlan.soundboardRefs],
-          playedSoundboardCount: Number(playbackResult.playedSoundboardCount || playedSoundboardRefs.length || 0),
-          usedWebSearchFollowup,
-          usedOpenArticleFollowup,
-          usedScreenShareOffer,
-          talkingTo: generatedVoiceAddressing?.talkingTo || null,
-          directedConfidence: Number.isFinite(Number(generatedVoiceAddressing?.directedConfidence))
-            ? Number(clamp(Number(generatedVoiceAddressing.directedConfidence), 0, 1).toFixed(3))
-            : 0,
-          leaveVoiceChannelRequested,
-          contextTurnsSent: contextMessages.length,
-          contextTurnsAvailable: contextTurns.length,
-          contextCharsSent: contextMessageChars
-        }
+        text: playbackPlan.spokenText
       });
     }
+    host.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: host.client.user?.id || null,
+      content: "realtime_reply_requested",
+      metadata: {
+        sessionId: session.id,
+        mode: session.mode,
+        source,
+        requestId: pendingRequestId,
+        replyText: playbackPlan.spokenText || null,
+        requestedRealtimeUtterance,
+        soundboardRefs: [...playedSoundboardRefs, ...playbackPlan.soundboardRefs],
+        playedSoundboardCount: Number(playbackResult.playedSoundboardCount || playedSoundboardRefs.length || 0),
+        usedWebSearchFollowup,
+        usedOpenArticleFollowup,
+        usedScreenShareOffer,
+        talkingTo: generatedVoiceAddressing?.talkingTo || null,
+        directedConfidence: Number.isFinite(Number(generatedVoiceAddressing?.directedConfidence))
+          ? Number(clamp(Number(generatedVoiceAddressing.directedConfidence), 0, 1).toFixed(3))
+          : 0,
+        leaveVoiceChannelRequested,
+        contextTurnsSent: contextMessages.length,
+        contextTurnsAvailable: contextTurns.length,
+        contextCharsSent: contextMessageChars
+      }
+    });
   } catch (error) {
     host.store.logAction({
       kind: "voice_error",
       guildId: session.guildId,
       channelId: session.textChannelId,
       userId: host.client.user?.id || null,
-      content: `${params.mode === "bridge" ? "realtime" : "stt_pipeline"}_audio_write_failed: ${String(error?.message || error)}`,
+      content: `realtime_audio_write_failed: ${String(error?.message || error)}`,
       metadata: {
         sessionId: session.id,
         mode: session.mode,
@@ -864,7 +767,7 @@ export async function runVoiceReplyPipeline(
     await host.waitForLeaveDirectivePlayback({
       session,
       expectRealtimeAudio: requestedRealtimeUtterance,
-      source: params.mode === "bridge" ? `${source}:leave_directive` : `${source}_leave_directive`
+      source: `${source}:leave_directive`
     });
   }
 

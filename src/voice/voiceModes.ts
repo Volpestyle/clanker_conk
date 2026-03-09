@@ -48,8 +48,7 @@ export const VOICE_RUNTIME_MODES = [
   "voice_agent",
   "openai_realtime",
   "gemini_realtime",
-  "elevenlabs_realtime",
-  "stt_pipeline"
+  "elevenlabs_realtime"
 ] as const;
 
 type VoiceRuntimeMode = (typeof VOICE_RUNTIME_MODES)[number];
@@ -61,7 +60,6 @@ export function normalizeVoiceRuntimeMode(value: unknown, fallback: VoiceRuntime
   if (normalized === "openai_realtime") return "openai_realtime";
   if (normalized === "gemini_realtime") return "gemini_realtime";
   if (normalized === "elevenlabs_realtime") return "elevenlabs_realtime";
-  if (normalized === "stt_pipeline") return "stt_pipeline";
   return "voice_agent";
 }
 
@@ -73,7 +71,6 @@ export function parseVoiceRuntimeMode(value: unknown) {
   if (normalized === "openai_realtime") return "openai_realtime";
   if (normalized === "gemini_realtime") return "gemini_realtime";
   if (normalized === "elevenlabs_realtime") return "elevenlabs_realtime";
-  if (normalized === "stt_pipeline") return "stt_pipeline";
   return null;
 }
 

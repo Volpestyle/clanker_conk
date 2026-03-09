@@ -601,6 +601,7 @@ export function buildVoiceRuntimeSnapshot(
         participantDisplayByUserId
       }),
       brainTools: (() => {
+        if (session.realtimeToolOwnership !== "provider_native") return null;
         const tools = Array.isArray(session.openAiToolDefinitions) ? session.openAiToolDefinitions : [];
         if (!tools.length) return null;
         return tools.map((tool) => ({
@@ -644,9 +645,9 @@ export function buildVoiceRuntimeSnapshot(
         }));
       })(),
       music: deps.snapshotMusicRuntimeState(session),
-      stt: session.mode === "stt_pipeline"
+      batchAsr: Number(session.pendingFileAsrTurns || 0) > 0
         ? {
-          pendingTurns: Number(session.pendingSttTurns || 0),
+          pendingTurns: Number(session.pendingFileAsrTurns || 0),
           contextMessages: modelTurns.length
         }
         : null,

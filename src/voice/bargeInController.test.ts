@@ -87,9 +87,9 @@ function createSession(overrides: Partial<BargeInTestSession> = {}): BargeInTest
     pendingResponse: null,
     activeReplyInterruptionPolicy: null,
     lastRequestedRealtimeUtterance: null,
-    pendingSttTurns: [],
-    sttTurnDrainActive: false,
-    pendingSttTurnsQueue: [],
+    pendingFileAsrTurns: 0,
+    fileAsrTurnDrainActive: false,
+    pendingFileAsrTurnsQueue: [],
     realtimeTurnDrainActive: false,
     pendingRealtimeTurns: [],
     openAiAsrSessions: new Map(),
@@ -344,9 +344,6 @@ test("shouldBargeIn blocks non-speakers when interruption scope is speaker", () 
         assertive: true,
         scope: "speaker",
         allowedUserId: "user-1",
-        talkingTo: null,
-        reason: "engaged_continuation",
-        source: "test"
       }
     },
     __testLiveAudioStreaming: true,

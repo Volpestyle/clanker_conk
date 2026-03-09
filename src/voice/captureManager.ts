@@ -57,8 +57,12 @@ type CaptureManagerStoreLike = {
 export interface CaptureManagerHost {
   store: CaptureManagerStoreLike;
   bargeInController: Pick<BargeInController, "getCaptureSignalMetrics" | "shouldBargeIn">;
-  turnProcessor: Pick<TurnProcessor, "queueRealtimeTurn" | "queueSttPipelineTurn">;
+  turnProcessor: Pick<TurnProcessor, "queueRealtimeTurn" | "queueFileAsrTurn">;
   shouldUsePerUserTranscription: (args: {
+    session: VoiceSession;
+    settings?: CaptureManagerSettings;
+  }) => boolean;
+  shouldUseFileTurnTranscription: (args: {
     session: VoiceSession;
     settings?: CaptureManagerSettings;
   }) => boolean;
@@ -425,8 +429,8 @@ export class CaptureManager {
       }
 
       cleanupCapture();
-      if (session.mode === "stt_pipeline") {
-        this.host.turnProcessor.queueSttPipelineTurn({
+      if (this.host.shouldUseFileTurnTranscription({ session, settings })) {
+        this.host.turnProcessor.queueFileAsrTurn({
           session,
           userId,
           pcmBuffer,

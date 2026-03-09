@@ -26,7 +26,7 @@ transcriberProvider = resolveTranscriberProvider(settings)  // default: "openai"
 runtimeMode      = resolveVoiceRuntimeMode(settings)       // maps provider → runtime mode
 ```
 
-Runtime modes (`src/voice/voiceModes.ts`): `openai_realtime`, `voice_agent`, `gemini_realtime`, `elevenlabs_realtime`, `stt_pipeline`
+Runtime modes (`src/voice/voiceModes.ts`): `openai_realtime`, `voice_agent`, `gemini_realtime`, `elevenlabs_realtime`
 
 ---
 
@@ -61,7 +61,7 @@ Direct audio passthrough to the realtime API. The provider handles ASR, reasonin
 
 - **Latency**: lowest
 - **ASR**: provider-internal (no local transcription)
-- **Tool support**: limited to providers that support `updateTools`
+- **Tool support**: provider-native function calling where the runtime supports `updateTools`
 - **Provider requirement**: OpenAI only (requires `perUserAsr` or native audio input)
 - **Code path**: `forwardRealtimeTurnAudio()` in `voiceSessionManager.ts`
 
@@ -71,7 +71,7 @@ Per-speaker ASR transcribes each user independently, producing labeled text. The
 
 - **Latency**: moderate (ASR round-trip added)
 - **ASR**: per-speaker via `OpenAiRealtimeTranscriptionClient` — logprobs confidence gate available
-- **Tool support**: full (realtime brain tool-calling loop)
+- **Tool support**: provider-native function calling where the runtime supports `updateTools`
 - **Provider requirement**: any provider with `textInput` capability
 - **Code path**: `forwardRealtimeTextTurnToBrain()` in `voiceSessionManager.ts`
 
@@ -80,8 +80,8 @@ Per-speaker ASR transcribes each user independently, producing labeled text. The
 Shared ASR transcribes mixed audio. A text LLM (`generationLlm`) generates the response. The realtime provider speaks the generated text via utterance requests.
 
 - **Latency**: high (ASR + text LLM + realtime utterance)
-- **ASR**: shared via STT pipeline
-- **Tool support**: full text LLM reasoning
+- **ASR**: shared/file transcription inside the realtime session when `voice.openaiRealtime.transcriptionMethod="file_wav"`
+- **Tool support**: orchestrator-owned tools inside the text LLM loop
 - **Provider requirement**: works with any provider combination
 - **Code path**: `runRealtimeBrainReply()` → `generateVoiceTurn()` in `voiceSessionManager.ts`
 
@@ -121,11 +121,11 @@ Client: `src/voice/openaiRealtimeTranscriptionClient.ts`
 
 **Shared ASR (brain path)**
 
-Uses the STT pipeline transcription model for mixed-channel transcription.
+Uses the realtime session's file-transcription model when `voice.openaiRealtime.transcriptionMethod="file_wav"`.
 
 | Setting | Key Path | Default |
 |---|---|---|
-| Transcription model | `voice.sttPipeline.transcriptionModel` | `"gpt-4o-mini-transcribe"` |
+| Transcription model | `voice.openaiRealtime.inputTranscriptionModel` | `"gpt-4o-mini-transcribe"` |
 
 **Logprobs**
 
@@ -182,7 +182,7 @@ Evaluated in order by `evaluateVoiceReplyDecision()` in `voiceReplyDecision.ts`:
 | 6 | Music playing + not awake | `music_playing_not_awake` | deny |
 | 7 | Direct address fast path | `direct_address_fast_path` | allow |
 | 8 | Eagerness disabled + no direct address | `eagerness_disabled_without_direct_address` | deny |
-| 9 | STT pipeline (generation decides) | `generation_decides` | allow |
+| 9 | Full-brain admission path (generation decides) | `generation_decides` | allow |
 | 10 | No brain session | `no_brain_session` | deny |
 | 11 | Music playing + not awake (bridge) | `music_playing_not_awake` | deny |
 | 12 | Generation-only admission mode | `generation_decides` | allow |
@@ -237,8 +237,10 @@ Code: `runRealtimeBrainReply()` → `generateVoiceTurn()` in `voiceSessionManage
 
 #### Tool Calling
 
-Realtime brain (native + bridge) supports tool calling through the provider event loop:
+Realtime brain (native + bridge) supports provider-native tool calling through the provider event loop:
 - Function-call deltas accumulated → `executeLocalVoiceToolCall()` or `executeMcpVoiceToolCall()` → result returned via `sendFunctionCallOutput()` → follow-up response via `scheduleOpenAiRealtimeToolFollowupResponse()`
+
+Full-brain replies keep tool ownership in the upstream orchestrator loop. Realtime output transport is tool-disabled in that path so upstream-generated speech cannot start a second provider tool/reasoning pass.
 
 Code: `bindRealtimeHandlers()` in `voiceSessionManager.ts`, dispatch in `src/voice/voiceToolCalls.ts`
 
@@ -259,17 +261,17 @@ Code: `bindRealtimeHandlers()` in `voiceSessionManager.ts`, dispatch in `src/voi
 
 The realtime provider streams audio deltas. PCM 24kHz is upsampled to 48kHz, encoded to Opus, and sent to Discord.
 
-When realtime sessions use the brain reply strategy, the brain LLM still generates the reply text, but delivery can stay on this realtime output transport. On OpenAI, exact-line playback is sent as an out-of-band audio response with tools disabled so upstream-generated speech does not trigger a second tool/reasoning pass.
+When realtime sessions use the full-brain path, the text LLM still generates the reply text, but delivery can stay on this realtime output transport. On OpenAI, exact-line playback is sent as an out-of-band audio response with tools disabled so upstream-generated speech does not trigger a second tool/reasoning pass.
 
-#### TTS API (stt_pipeline mode)
+#### TTS API Override (brain path)
 
-Text response is sent to TTS API for synthesis in non-realtime `stt_pipeline` mode. Output is played via `playVoiceReplyInOrder()`.
+Text response can be sent to the OpenAI audio API for synthesis when realtime sessions use `voice.ttsMode="api"`. Output is then played via `playVoiceReplyInOrder()`.
 
 | Setting | Key Path | Default |
 |---|---|---|
-| TTS model | `voice.sttPipeline.ttsModel` | `"gpt-4o-mini-tts"` |
-| TTS voice | `voice.sttPipeline.ttsVoice` | `"alloy"` |
-| TTS speed | `voice.sttPipeline.ttsSpeed` | `1` |
+| TTS model | `voice.openaiAudioApi.ttsModel` | `"gpt-4o-mini-tts"` |
+| TTS voice | `voice.openaiAudioApi.ttsVoice` | `"alloy"` |
+| TTS speed | `voice.openaiAudioApi.ttsSpeed` | `1` |
 
 #### Music Output
 
@@ -295,7 +297,7 @@ The thought engine generates ambient thoughts during silence — a parallel pipe
 2. **Eagerness roll**: random `[0,100)` vs `thoughtEngine.eagerness` — skip if roll fails
 3. **Generate candidate**: thought engine LLM produces a candidate (max `VOICE_THOUGHT_MAX_CHARS=220` chars)
 4. **Decision gate**: separate LLM call evaluates relevance — allow/reject + optional memory enrichment (`VOICE_THOUGHT_MEMORY_SEARCH_LIMIT=8` facts retrieved)
-5. **Delivery**: realtime utterance in realtime modes; TTS in `stt_pipeline` mode
+5. **Delivery**: realtime utterance by default in realtime sessions; OpenAI audio API TTS when `voice.ttsMode="api"`
 
 ### Topicality Bias
 
@@ -392,7 +394,7 @@ Guards use `providerSupports(mode, capability)` for capability routing.
 | Min silence | `voice.thoughtEngine.minSilenceSeconds` | `15` |
 | Min between thoughts | `voice.thoughtEngine.minSecondsBetweenThoughts` | `30` |
 
-### ASR & STT
+### ASR & Speech Output
 
 | Setting | Key Path | Default |
 |---|---|---|
@@ -401,10 +403,10 @@ Guards use `providerSupports(mode, capability)` for capability routing.
 | Transcription method | `voice.openaiRealtime.transcriptionMethod` | `"realtime_bridge"` |
 | Language mode | `voice.asrLanguageMode` | `"auto"` |
 | Language hint | `voice.asrLanguageHint` | `"en"` |
-| STT model (brain) | `voice.sttPipeline.transcriptionModel` | `"gpt-4o-mini-transcribe"` |
-| TTS model | `voice.sttPipeline.ttsModel` | `"gpt-4o-mini-tts"` |
-| TTS voice | `voice.sttPipeline.ttsVoice` | `"alloy"` |
-| TTS speed | `voice.sttPipeline.ttsSpeed` | `1` |
+| ASR model (file) | `voice.openaiRealtime.inputTranscriptionModel` | `"gpt-4o-mini-transcribe"` |
+| TTS model | `voice.openaiAudioApi.ttsModel` | `"gpt-4o-mini-tts"` |
+| TTS voice | `voice.openaiAudioApi.ttsVoice` | `"alloy"` |
+| TTS speed | `voice.openaiAudioApi.ttsSpeed` | `1` |
 
 ### Session
 

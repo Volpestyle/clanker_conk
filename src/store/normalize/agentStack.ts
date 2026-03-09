@@ -323,25 +323,20 @@ export function normalizeAgentStackSection(
             96_000
           )
         },
-        sttPipeline: {
-          transcriptionModel: normalizeString(
-            voice.sttPipeline.transcriptionModel,
-            DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.sttPipeline.transcriptionModel,
-            120
-          ),
+        openaiAudioApi: {
           ttsModel: normalizeString(
-            voice.sttPipeline.ttsModel,
-            DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.sttPipeline.ttsModel,
+            voice.openaiAudioApi.ttsModel,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiAudioApi.ttsModel,
             120
           ),
           ttsVoice: normalizeString(
-            voice.sttPipeline.ttsVoice,
-            DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.sttPipeline.ttsVoice,
+            voice.openaiAudioApi.ttsVoice,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiAudioApi.ttsVoice,
             120
           ),
           ttsSpeed: normalizeNumber(
-            voice.sttPipeline.ttsSpeed,
-            DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.sttPipeline.ttsSpeed,
+            voice.openaiAudioApi.ttsSpeed,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.openaiAudioApi.ttsSpeed,
             0.25,
             4
           )

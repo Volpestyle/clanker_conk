@@ -12,6 +12,7 @@ import {
   normalizeOperationalMessages,
   normalizeReplyPath,
   normalizeStreamWatchCommentaryPath,
+  normalizeVoiceDefaultInterruptionMode,
   normalizeVoiceAdmissionMode
 } from "./shared.ts";
 
@@ -23,6 +24,18 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
   const admission = section.admission;
   const streamWatch = section.streamWatch;
   const soundboard = section.soundboard;
+  const normalizedReplyPath = normalizeReplyPath(
+    conversationPolicy.replyPath,
+    DEFAULT_SETTINGS.voice.conversationPolicy.replyPath
+  );
+  const normalizedTtsMode = normalizedReplyPath === "brain" &&
+    normalizeString(
+      conversationPolicy.ttsMode,
+      DEFAULT_SETTINGS.voice.conversationPolicy.ttsMode,
+      20
+    ).toLowerCase() === "api"
+    ? "api"
+    : "realtime";
 
   return {
     enabled: normalizeBoolean(section.enabled, DEFAULT_SETTINGS.voice.enabled),
@@ -91,18 +104,12 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
         conversationPolicy.textOnlyMode,
         DEFAULT_SETTINGS.voice.conversationPolicy.textOnlyMode
       ),
-      replyPath: normalizeReplyPath(
-        conversationPolicy.replyPath,
-        DEFAULT_SETTINGS.voice.conversationPolicy.replyPath
+      defaultInterruptionMode: normalizeVoiceDefaultInterruptionMode(
+        conversationPolicy.defaultInterruptionMode,
+        DEFAULT_SETTINGS.voice.conversationPolicy.defaultInterruptionMode
       ),
-      ttsMode:
-        normalizeString(
-          conversationPolicy.ttsMode,
-          DEFAULT_SETTINGS.voice.conversationPolicy.ttsMode,
-          20
-        ).toLowerCase() === "api"
-          ? "api"
-          : "realtime",
+      replyPath: normalizedReplyPath,
+      ttsMode: normalizedTtsMode,
       operationalMessages: normalizeOperationalMessages(
         conversationPolicy.operationalMessages,
         DEFAULT_SETTINGS.voice.conversationPolicy.operationalMessages
@@ -133,12 +140,6 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
         10,
         40,
         DEFAULT_SETTINGS.voice.admission.wakeSignals
-      ),
-      intentConfidenceThreshold: normalizeNumber(
-        admission.intentConfidenceThreshold,
-        DEFAULT_SETTINGS.voice.admission.intentConfidenceThreshold,
-        0,
-        1
       ),
       musicWakeLatchSeconds: normalizeInt(
         admission.musicWakeLatchSeconds,

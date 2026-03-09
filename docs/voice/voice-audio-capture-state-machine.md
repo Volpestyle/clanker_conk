@@ -135,9 +135,9 @@ All signal metrics (`bytesSent`, `signalSampleCount`, `signalActiveSampleCount`,
 
 When a promoted capture finalizes, the concatenated PCM buffer is routed based on session mode:
 
-### STT Pipeline Mode
+### Realtime Session With File ASR Override
 
-→ `turnProcessor.queueSttPipelineTurn({ session, userId, pcmBuffer, captureReason })`
+→ `turnProcessor.queueFileAsrTurn({ session, userId, pcmBuffer, captureReason })`
 
 ### Realtime Mode (with ASR bridge)
 

@@ -67,7 +67,7 @@ function createManager() {
     touchCalls.push({ guildId, settings });
   };
   manager.turnProcessor.queueRealtimeTurn = () => true;
-  manager.turnProcessor.queueSttPipelineTurn = () => true;
+  manager.turnProcessor.queueFileAsrTurn = () => true;
 
   return { manager, logs, touchCalls };
 }
@@ -119,9 +119,9 @@ function createSession(overrides: Partial<VoiceSession> = {}): VoiceSession {
     pendingResponse: null,
     activeReplyInterruptionPolicy: null,
     lastRequestedRealtimeUtterance: null,
-    pendingSttTurns: [],
-    sttTurnDrainActive: false,
-    pendingSttTurnsQueue: [],
+    pendingFileAsrTurns: 0,
+    fileAsrTurnDrainActive: false,
+    pendingFileAsrTurnsQueue: [],
     realtimeTurnDrainActive: false,
     pendingRealtimeTurns: [],
     openAiAsrSessions: new Map(),
@@ -323,7 +323,7 @@ test("startInboundCapture max duration timer finalizes long captures", async () 
   manager.shouldUsePerUserTranscription = () => false;
   const voxClient = new EventEmitter();
   voxClient.subscribeUser = () => {};
-  const session = createSession({ mode: "stt_pipeline", voxClient });
+  const session = createSession({ mode: "openai_realtime", voxClient });
   const scheduled: Array<{ delay: number; callback: () => void; cleared: boolean }> = [];
   const originalSetTimeout = globalThis.setTimeout;
   const originalClearTimeout = globalThis.clearTimeout;
@@ -416,4 +416,68 @@ test("promoting a capture cancels pending pre-audio normal reply", async () => {
   assert.ok(cancelLog);
   assert.equal(cancelLog?.metadata?.pendingSource, "realtime:speech_1");
   assert.equal(cancelLog?.metadata?.opportunityType, null);
+});
+
+test("promoting a capture cancels pending pre-audio tool followup and preserves owner followup admission", async () => {
+  const { manager, logs } = createManager();
+  manager.shouldUsePerUserTranscription = () => false;
+  const cancelCalls: boolean[] = [];
+  const voxClient = new EventEmitter();
+  voxClient.subscribeUser = () => {};
+  const session = createSession({
+    voxClient,
+    realtimeClient: {
+      cancelActiveResponse() {
+        cancelCalls.push(true);
+        return true;
+      }
+    },
+    voiceCommandState: {
+      userId: "speaker-1",
+      domain: "tool",
+      intent: "tool_followup",
+      startedAt: Date.now(),
+      expiresAt: Date.now() + 10_000
+    },
+    pendingResponse: {
+      requestId: 8,
+      requestedAt: Date.now(),
+      source: "tool_call_followup",
+      handlingSilence: false,
+      audioReceivedAt: 0,
+      interruptionPolicy: null,
+      utteranceText: "which one did you want?",
+      latencyContext: null,
+      userId: "speaker-1",
+      retryCount: 0,
+      hardRecoveryAttempted: false
+    }
+  });
+
+  manager.captureManager.startInboundCapture({
+    session,
+    userId: "speaker-1",
+    settings: session.settingsSnapshot
+  });
+
+  const strongPcm = makeMonoPcm16(Math.ceil((24_000 * (VOICE_TURN_PROMOTION_MIN_CLIP_MS + 40)) / 1000), 3000);
+  voxClient.emit("userAudio", "speaker-1", strongPcm);
+  await flushMicrotasks();
+
+  assert.equal(session.pendingResponse, null);
+  assert.equal(cancelCalls.length, 1);
+  assert.equal(manager.ensureVoiceCommandState(session)?.intent, "tool_followup");
+
+  const decision = await manager.evaluateVoiceReplyDecision({
+    session,
+    userId: "speaker-1",
+    settings: session.settingsSnapshot,
+    transcript: "yeah do that"
+  });
+
+  assert.equal(decision.allow, true);
+  assert.equal(decision.reason, "owned_tool_followup");
+  const cancelLog = logs.find((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech");
+  assert.ok(cancelLog);
+  assert.equal(cancelLog?.metadata?.pendingSource, "tool_call_followup");
 });

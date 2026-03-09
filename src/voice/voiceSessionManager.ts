@@ -5,6 +5,7 @@ import {
   getVoiceConversationPolicy,
   getVoiceRuntimeConfig,
 } from "../settings/agentStack.ts";
+import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
 import { getPromptBotName } from "../prompts/promptCore.ts";
 import { clamp } from "../utils.ts";
 import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
@@ -76,7 +77,6 @@ import {
   formatVoiceChannelEffectSummary,
   isRealtimeMode,
   normalizeInlineText,
-  normalizeVoiceAddressingTargetToken,
   normalizeVoiceText,
   parseSoundboardDirectiveSequence,
   shortError
@@ -96,9 +96,13 @@ import {
 } from "./voiceAddressing.ts";
 import {
   isAsrActive as isAsrActiveModule,
-  resolveRealtimeReplyStrategy as resolveRealtimeReplyStrategyModule,
+  resolveRealtimeToolOwnership as resolveRealtimeToolOwnershipModule,
+  shouldHandleRealtimeFunctionCalls as shouldHandleRealtimeFunctionCallsModule,
+  shouldRegisterRealtimeTools as shouldRegisterRealtimeToolsModule,
   shouldUseNativeRealtimeReply as shouldUseNativeRealtimeReplyModule,
+  shouldUseTextMediatedRealtimeReply as shouldUseTextMediatedRealtimeReplyModule,
   shouldUsePerUserTranscription as shouldUsePerUserTranscriptionModule,
+  shouldUseFileTurnTranscription as shouldUseFileTurnTranscriptionModule,
   shouldUseRealtimeTranscriptBridge as shouldUseRealtimeTranscriptBridgeModule,
   shouldUseSharedTranscription as shouldUseSharedTranscriptionModule
 } from "./voiceConfigResolver.ts";
@@ -200,6 +204,7 @@ import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
 import { executeLocalVoiceToolCall } from "./voiceToolCallDispatch.ts";
 import type {
   OutputChannelState,
+  RealtimeToolOwnership,
   VoiceSession
 } from "./voiceSessionTypes.ts";
 import {
@@ -270,6 +275,7 @@ export function resolveVoiceThoughtTopicalityBias({
 }
 
 const VOICE_COMMAND_SESSION_TTL_MS = 20 * 1000;
+const VOICE_TOOL_FOLLOWUP_SESSION_TTL_MS = 10 * 1000;
 const OPENAI_COMPLETED_TOOL_CALL_TTL_MS = 10 * 60 * 1000;
 const OPENAI_COMPLETED_TOOL_CALL_MAX = 256;
 const OPENAI_FUNCTION_CALL_ITEM_TYPES = new Set([
@@ -278,6 +284,12 @@ const OPENAI_FUNCTION_CALL_ITEM_TYPES = new Set([
   "response.function_call_arguments.delta",
   "response.function_call_arguments.done"
 ]);
+
+function resolveVoiceToolFollowupDomain(toolName: string | null = null) {
+  const normalizedToolName = normalizeInlineText(toolName, 80)?.toLowerCase() || "";
+  if (normalizedToolName.startsWith("music_")) return "music";
+  return "tool";
+}
 
 type MusicSelectionResult = {
   id: string;
@@ -478,6 +490,7 @@ type VoiceRealtimeToolSettings = {
 type VoiceToolRuntimeSessionLike = {
   ending?: boolean;
   mode?: string;
+  realtimeToolOwnership?: RealtimeToolOwnership | null;
   realtimeClient?: {
     updateTools?: (payload: {
       tools: Array<{
@@ -1549,11 +1562,10 @@ export class VoiceSessionManager {
     const policy = rawPolicy && typeof rawPolicy === "object" ? rawPolicy : null;
     if (!policy) return null;
 
-    const normalizedTalkingTo = normalizeVoiceAddressingTargetToken(policy.talkingTo || "");
     const scopeRaw = String(policy.scope || "")
       .trim()
       .toLowerCase();
-    const scope = scopeRaw === "none" || normalizedTalkingTo === "ALL" ? "none" : "speaker";
+    const scope: "none" | "speaker" = scopeRaw === "none" ? "none" : "speaker";
     const allowedUserId = String(policy.allowedUserId || "").trim() || null;
     const assertive =
       policy.assertive === undefined
@@ -1562,61 +1574,51 @@ export class VoiceSessionManager {
     if (!assertive) return null;
     if (scope === "speaker" && !allowedUserId) return null;
 
-    const normalizedReason =
-      String(policy.reason || "")
-        .replace(/\s+/g, "_")
-        .trim()
-        .toLowerCase()
-        .slice(0, 80) || null;
-    const normalizedSource =
-      String(policy.source || "")
-        .replace(/\s+/g, "_")
-        .trim()
-        .toLowerCase()
-        .slice(0, 80) || null;
-
     return {
-      assertive: true,
+      assertive: true as const,
       scope,
       allowedUserId: scope === "none" ? null : allowedUserId,
-      talkingTo: normalizedTalkingTo || null,
-      reason: normalizedReason,
-      source: normalizedSource
     };
   }
 
-  buildReplyInterruptionPolicy({
+  getDefaultReplyInterruptionMode(settings = null) {
+    const resolvedSettings = settings || this.store.getSettings();
+    const configuredMode = String(
+      getVoiceConversationPolicy(resolvedSettings).defaultInterruptionMode ||
+      DEFAULT_SETTINGS.voice.conversationPolicy.defaultInterruptionMode
+    )
+      .trim()
+      .toLowerCase();
+    if (configuredMode === "speaker") return "speaker";
+    if (configuredMode === "none") return "none";
+    return "anyone";
+  }
+
+  resolveReplyInterruptionPolicy({
     session = null,
     userId = null,
-    directAddressed = false,
-    conversationContext = null,
-    generatedVoiceAddressing = null,
-    source = "realtime"
+    policy = null,
   } = {}) {
+    const normalizedPolicy = this.normalizeReplyInterruptionPolicy(policy);
+    if (normalizedPolicy) return normalizedPolicy;
     if (!session || session.ending) return null;
-    const normalizedUserId = String(userId || "").trim() || null;
-    const normalizedTalkingTo = normalizeVoiceAddressingTargetToken(generatedVoiceAddressing?.talkingTo || "");
-    const targetsAll = normalizedTalkingTo === "ALL";
-    const engagedWithCurrentSpeaker = Boolean(conversationContext?.engagedWithCurrentSpeaker);
-    const assertive = Boolean(directAddressed) || engagedWithCurrentSpeaker || targetsAll;
-    if (!assertive) return null;
 
-    const scope = targetsAll ? "none" : "speaker";
-    const reason = targetsAll
-      ? "assistant_target_all"
-      : directAddressed
-        ? "direct_addressed"
-        : engagedWithCurrentSpeaker
-          ? "engaged_continuation"
-          : "assertive_reply";
+    const defaultMode = this.getDefaultReplyInterruptionMode(session.settingsSnapshot || this.store.getSettings());
+    if (defaultMode === "anyone") return null;
+
+    const normalizedUserId = String(userId || "").trim() || null;
+    const normalizedBotUserId = String(this.client.user?.id || "").trim() || null;
+    if (
+      defaultMode === "speaker" &&
+      (!normalizedUserId || (normalizedBotUserId && normalizedUserId === normalizedBotUserId))
+    ) {
+      return null;
+    }
 
     return this.normalizeReplyInterruptionPolicy({
       assertive: true,
-      scope,
-      allowedUserId: scope === "speaker" ? normalizedUserId : null,
-      talkingTo: normalizedTalkingTo || null,
-      reason,
-      source
+      scope: defaultMode,
+      allowedUserId: defaultMode === "speaker" ? normalizedUserId : null,
     });
   }
 
@@ -1833,12 +1835,24 @@ export class VoiceSessionManager {
     const inFlight = session.inFlightAcceptedBrainTurn;
     const inFlightPhase = inFlight?.phase || null;
     const inFlightAge = inFlight ? now - Math.max(0, Number(inFlight.acceptedAt || 0)) : 0;
+    // Don't re-requeue turns that already came from a deferred flush — they've
+    // had their chance and the transcript is already in the conversation window.
+    // Requeuing them again creates zombie turns that race with new speech.
+    const alreadyFromDeferredFlush =
+      String(inFlight?.source || "").includes("deferred_flush");
+    // Don't requeue bot-initiated events (join greetings, etc.) — these are
+    // synthetic triggers, not real user speech. When the user speaks over a
+    // greeting, the greeting is stale and should be dropped, not replayed.
+    const BOT_EVENT_SOURCES = new Set(["bot_join_greeting", "member_join_greeting"]);
+    const isBotInitiatedEvent = BOT_EVENT_SOURCES.has(String(inFlight?.source || ""));
     const requeueEligible =
       activeReplyAbortCount > 0 &&
       inFlight &&
       inFlightPhase === "generation_only" &&
       inFlightAge < PREPLAY_SUPERSEDE_REQUEUE_MAX_AGE_MS &&
-      Boolean(inFlight.transcript);
+      Boolean(inFlight.transcript) &&
+      !alreadyFromDeferredFlush &&
+      !isBotInitiatedEvent;
     let requeued = false;
     if (requeueEligible && inFlight) {
       this.queueDeferredBotTurnOpenTurn({
@@ -2173,7 +2187,7 @@ export class VoiceSessionManager {
     if (!session) return 0;
     return Math.max(
       0,
-      this.turnProcessor.getRealtimeTurnBacklogSize(session) + Number(session.pendingSttTurns || 0)
+      this.turnProcessor.getRealtimeTurnBacklogSize(session) + Number(session.pendingFileAsrTurns || 0)
     );
   }
 
@@ -2189,8 +2203,8 @@ export class VoiceSessionManager {
 
     const activeCaptureCount = Number(session?.userCaptures?.size || 0);
     const realtimeTurnBacklog = this.turnProcessor.getRealtimeTurnBacklogSize(session);
-    const sttTurnBacklog = Number(session?.pendingSttTurns || 0);
-    const turnBacklog = Math.max(0, realtimeTurnBacklog, sttTurnBacklog);
+    const fileAsrTurnBacklog = Number(session?.pendingFileAsrTurns || 0);
+    const turnBacklog = Math.max(0, realtimeTurnBacklog, fileAsrTurnBacklog);
 
     if (
       activeCaptureCount >= SPEAKING_END_ADAPTIVE_HEAVY_CAPTURE_COUNT ||
@@ -2411,7 +2425,11 @@ export class VoiceSessionManager {
           : null;
     if (!requestPlaybackUtterance) return false;
 
-    const normalizedInterruptionPolicy = this.normalizeReplyInterruptionPolicy(interruptionPolicy);
+    const normalizedInterruptionPolicy = this.resolveReplyInterruptionPolicy({
+      session,
+      userId,
+      policy: interruptionPolicy,
+    });
     const normalizedUtteranceText =
       utteranceText === null
         ? null
@@ -2489,7 +2507,11 @@ export class VoiceSessionManager {
       (session.pendingResponse && typeof session.pendingResponse === "object")
     ) {
       const queue = this.getPendingRealtimeAssistantUtterances(session);
-      const normalizedInterruptionPolicy = this.normalizeReplyInterruptionPolicy(interruptionPolicy);
+      const normalizedInterruptionPolicy = this.resolveReplyInterruptionPolicy({
+        session,
+        userId,
+        policy: interruptionPolicy,
+      });
       queue.push({
         prompt: utterancePrompt,
         utteranceText: normalizedUtteranceText,
@@ -2980,10 +3002,10 @@ export class VoiceSessionManager {
     if (!line) return false;
     if (!this.llm?.synthesizeSpeech) return false;
 
-    const sttSettings = getVoiceRuntimeConfig(settings).sttPipeline;
-    const ttsModel = String(sttSettings?.ttsModel || "gpt-4o-mini-tts").trim() || "gpt-4o-mini-tts";
-    const ttsVoice = String(sttSettings?.ttsVoice || "alloy").trim() || "alloy";
-    const ttsSpeedRaw = Number(sttSettings?.ttsSpeed);
+    const apiSpeechSettings = getVoiceRuntimeConfig(settings).openaiAudioApi;
+    const ttsModel = String(apiSpeechSettings?.ttsModel || "gpt-4o-mini-tts").trim() || "gpt-4o-mini-tts";
+    const ttsVoice = String(apiSpeechSettings?.ttsVoice || "alloy").trim() || "alloy";
+    const ttsSpeedRaw = Number(apiSpeechSettings?.ttsSpeed);
     const ttsSpeed = Number.isFinite(ttsSpeedRaw) ? ttsSpeedRaw : 1;
 
     let ttsPcm = Buffer.alloc(0);
@@ -3090,6 +3112,23 @@ export class VoiceSessionManager {
     settings?: Record<string, unknown> | null;
   } = {}) {
     return shouldUseRealtimeTranscriptBridgeModule({
+      session,
+      settings: settings || session?.settingsSnapshot || this.store.getSettings()
+    });
+  }
+
+  shouldUseFileTurnTranscription({
+    session = null,
+    settings = null
+  }: {
+    session?: {
+      ending?: boolean;
+      mode?: string;
+      settingsSnapshot?: Record<string, unknown> | null;
+    } | null;
+    settings?: Record<string, unknown> | null;
+  } = {}) {
+    return shouldUseFileTurnTranscriptionModule({
       session,
       settings: settings || session?.settingsSnapshot || this.store.getSettings()
     });
@@ -3211,10 +3250,34 @@ export class VoiceSessionManager {
     });
   }
 
-  resolveRealtimeReplyStrategy({ session, settings = null }) {
-    return resolveRealtimeReplyStrategyModule({
+  shouldUseTextMediatedRealtimeReply({ session, settings = null }) {
+    return shouldUseTextMediatedRealtimeReplyModule({
       session,
       settings: settings || session?.settingsSnapshot || this.store.getSettings()
+    });
+  }
+
+  resolveRealtimeToolOwnership({ session, settings = null, mode = null }) {
+    return resolveRealtimeToolOwnershipModule({
+      session,
+      settings: settings || session?.settingsSnapshot || this.store.getSettings(),
+      mode
+    });
+  }
+
+  shouldRegisterRealtimeTools({ session, settings = null, mode = null }) {
+    return shouldRegisterRealtimeToolsModule({
+      session,
+      settings: settings || session?.settingsSnapshot || this.store.getSettings(),
+      mode
+    });
+  }
+
+  shouldHandleRealtimeFunctionCalls({ session, settings = null, mode = null }) {
+    return shouldHandleRealtimeFunctionCallsModule({
+      session,
+      settings: settings || session?.settingsSnapshot || this.store.getSettings(),
+      mode
     });
   }
 
@@ -3223,6 +3286,11 @@ export class VoiceSessionManager {
       session,
       settings: settings || session?.settingsSnapshot || this.store.getSettings()
     });
+  }
+
+  clearDeferredQueuedUserTurns(session) {
+    if (!session || session.ending) return;
+    this.deferredActionQueue.clearDeferredVoiceAction(session, "queued_user_turns");
   }
 
   queueDeferredBotTurnOpenTurn({
@@ -3240,7 +3308,7 @@ export class VoiceSessionManager {
     const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
     if (!normalizedTranscript) return;
     const normalizedDeferReason = String(deferReason || "bot_turn_open").trim() || "bot_turn_open";
-    const normalizedFlushDelayMs = Number.isFinite(Number(flushDelayMs))
+    const normalizedFlushDelayMs = flushDelayMs != null && Number.isFinite(Number(flushDelayMs))
       ? Math.max(20, Math.round(Number(flushDelayMs)))
       : BOT_TURN_DEFERRED_FLUSH_DELAY_MS;
     const pendingQueue = this.deferredActionQueue.getDeferredQueuedUserTurns(session).slice();
@@ -3515,19 +3583,6 @@ export class VoiceSessionManager {
       return;
     }
 
-    if (session.mode === "stt_pipeline") {
-      await this.runSttPipelineReply({
-        session,
-        settings,
-        userId: latestTurn?.userId || null,
-        transcript: coalescedTranscript,
-        directAddressed: Boolean(decision.directAddressed),
-        directAddressConfidence: Number(decision.directAddressConfidence),
-        conversationContext: decision.conversationContext || null
-      });
-      return;
-    }
-
     if (!isRealtimeMode(session.mode)) return;
     if (useNativeRealtimeReply) {
       if (!coalescedPcmBuffer?.length) return;
@@ -3588,7 +3643,6 @@ export class VoiceSessionManager {
     }
 
     const normalizedUserId = String(userId || "").trim() || null;
-    ensureSessionToolRuntimeState(this, session);
     if (normalizedUserId) {
       session.lastOpenAiToolCallerUserId = normalizedUserId;
     }
@@ -3614,13 +3668,6 @@ export class VoiceSessionManager {
       this.replyManager.clearPendingResponse(session);
     }
 
-    const replyInterruptionPolicy = this.buildReplyInterruptionPolicy({
-      session,
-      userId: normalizedUserId,
-      directAddressed: Boolean(directAddressed),
-      conversationContext: conversationContext && typeof conversationContext === "object" ? conversationContext : null,
-      source: String(source || "openai_realtime_text_turn")
-    });
     try {
       await this.instructionManager.prepareRealtimeTurnContext({
         session,
@@ -3636,7 +3683,6 @@ export class VoiceSessionManager {
         source: String(source || "openai_realtime_text_turn"),
         resetRetryState: true,
         emitCreateEvent: false,
-        interruptionPolicy: replyInterruptionPolicy,
         utteranceText: null,
         latencyContext
       });
@@ -3734,9 +3780,9 @@ export class VoiceSessionManager {
     settings,
     userId,
     transcript,
-    source = "voice_stt_pipeline_ingest",
+    source = "voice_file_asr_ingest",
     captureReason = "stream_end",
-    errorPrefix = "voice_stt_memory_ingest_failed"
+    errorPrefix = "voice_file_asr_memory_ingest_failed"
   }) {
     if (!settings?.memory?.enabled) return;
     if (!this.memory || typeof this.memory.ingestMessage !== "function") return;
@@ -3751,12 +3797,13 @@ export class VoiceSessionManager {
         authorId: normalizedUserId,
         authorName: this.resolveVoiceSpeakerName(session, normalizedUserId) || "unknown",
         content: normalizedTranscript,
+        isBot: false,
         settings,
         trace: {
           guildId: session.guildId,
           channelId: session.textChannelId,
           userId: normalizedUserId,
-          source: String(source || "voice_stt_pipeline_ingest")
+          source: String(source || "voice_file_asr_ingest")
         }
       })
       .catch((error) => {
@@ -3765,7 +3812,7 @@ export class VoiceSessionManager {
           guildId: session.guildId,
           channelId: session.textChannelId,
           userId: normalizedUserId || null,
-          content: `${String(errorPrefix || "voice_stt_memory_ingest_failed")}: ${String(error?.message || error)}`,
+          content: `${String(errorPrefix || "voice_file_asr_memory_ingest_failed")}: ${String(error?.message || error)}`,
           metadata: {
             sessionId: session.id,
             captureReason: String(captureReason || "stream_end")
@@ -3800,7 +3847,7 @@ export class VoiceSessionManager {
     userId,
     transcript,
     inputKind = "transcript",
-    source = "stt_pipeline",
+    source = "realtime",
     transcriptionContext = null
   }): Promise<VoiceReplyDecision> {
     return evaluateVoiceReplyDecisionModule(this, {
@@ -4063,6 +4110,7 @@ export class VoiceSessionManager {
         authorId: botUserId,
         authorName: botName,
         content: normalizedText,
+        isBot: true,
         settings: session.settingsSnapshot || this.store.getSettings(),
         trace: {
           guildId: String(session.guildId || "").trim() || null,
@@ -4272,15 +4320,17 @@ export class VoiceSessionManager {
     session,
     userId = null,
     startedAtMs = 0,
-    requestFollowup = false
+    requestFollowup = false,
+    toolName = null
   }: {
     session?: VoiceSession | VoiceToolRuntimeSessionLike | null;
     userId?: string | null;
     startedAtMs?: number;
     requestFollowup?: boolean;
+    toolName?: string | null;
   } = {}) {
     if (!session || session.ending) return;
-    if (!providerSupports(session.mode || "", "updateTools")) return;
+    if (!this.shouldHandleRealtimeFunctionCalls({ session })) return;
     if (requestFollowup) {
       session.openAiToolFollowupNeeded = true;
     }
@@ -4305,7 +4355,12 @@ export class VoiceSessionManager {
       this.replyManager.syncAssistantOutputState(session, "tool_outputs_ready");
       const followupNeeded = Boolean(session.openAiToolFollowupNeeded);
       session.openAiToolFollowupNeeded = false;
+      const followupUserId = userId || session.lastOpenAiToolCallerUserId || null;
+      const activeCommandState = this.ensureVoiceCommandState(session);
       if (!followupNeeded) {
+        if (activeCommandState?.intent === "tool_followup") {
+          this.clearVoiceCommandSession(session);
+        }
         this.store.logAction({
           kind: "voice_runtime",
           guildId: session.guildId,
@@ -4326,7 +4381,26 @@ export class VoiceSessionManager {
         resetRetryState: true,
         emitCreateEvent: true
       });
-      if (!created) {
+      if (created) {
+        const nextCommandState = this.ensureVoiceCommandState(session);
+        const canAdoptToolFollowupLease =
+          Boolean(followupUserId) &&
+          (!nextCommandState || nextCommandState.intent === "tool_followup");
+        if (canAdoptToolFollowupLease) {
+          this.beginVoiceCommandSession({
+            session,
+            userId: followupUserId,
+            domain: resolveVoiceToolFollowupDomain(toolName),
+            intent: "tool_followup",
+            ttlMs: VOICE_TOOL_FOLLOWUP_SESSION_TTL_MS
+          });
+        }
+        return;
+      }
+      if (this.ensureVoiceCommandState(session)?.intent === "tool_followup") {
+        this.clearVoiceCommandSession(session);
+      }
+      {
         this.store.logAction({
           kind: "voice_runtime",
           guildId: session.guildId,
@@ -4344,7 +4418,7 @@ export class VoiceSessionManager {
 
   async handleOpenAiRealtimeFunctionCallEvent({ session, settings, event }) {
     if (!session || session.ending) return;
-    if (!providerSupports(session.mode || "", "updateTools")) return;
+    if (!this.shouldHandleRealtimeFunctionCalls({ session, settings })) return;
     const envelope = this.extractOpenAiFunctionCallEnvelope(event);
     if (!envelope) return;
     const runtimeSession = ensureSessionToolRuntimeState(this, session);
@@ -4891,28 +4965,6 @@ export class VoiceSessionManager {
     return String(userName || "").trim();
   }
 
-  async runSttPipelineReply({
-    session,
-    settings,
-    userId,
-    transcript,
-    directAddressed = false,
-    directAddressConfidence = Number.NaN,
-    conversationContext = null
-  }) {
-    await runVoiceReplyPipeline(this, {
-      session,
-      settings,
-      userId,
-      transcript,
-      directAddressed,
-      directAddressConfidence,
-      conversationContext,
-      mode: "brain",
-      source: "stt_pipeline"
-    });
-  }
-
   async runRealtimeBrainReply({
     session,
     settings,
@@ -4937,7 +4989,7 @@ export class VoiceSessionManager {
       directAddressed,
       directAddressConfidence,
       conversationContext,
-      mode: "bridge",
+      mode: "realtime_transport",
       source,
       latencyContext,
       forceSpokenOutput,
@@ -4953,8 +5005,8 @@ export class VoiceSessionManager {
     model,
     sampleRateHz = 24000,
     captureReason = "stream_end",
-    traceSource = "voice_stt_pipeline_turn",
-    errorPrefix = "stt_pipeline_transcription_failed",
+    traceSource = "voice_file_asr_turn",
+    errorPrefix = "file_asr_transcription_failed",
     emptyTranscriptRuntimeEvent = "voice_transcription_empty",
     emptyTranscriptErrorStreakThreshold = 1,
     suppressEmptyTranscriptLogs = false,
@@ -4963,7 +5015,7 @@ export class VoiceSessionManager {
   }) {
     if (!this.llm?.transcribeAudio || !pcmBuffer?.length) return "";
     const resolvedModel = String(model || "gpt-4o-mini-transcribe").trim() || "gpt-4o-mini-transcribe";
-    const source = String(traceSource || "voice_stt_pipeline_turn");
+    const source = String(traceSource || "voice_file_asr_turn");
     const emptyTranscriptThreshold = Math.max(1, Math.floor(Number(emptyTranscriptErrorStreakThreshold) || 1));
     if (!session.asrEmptyTranscriptStreakBySource || typeof session.asrEmptyTranscriptStreakBySource !== "object") {
       session.asrEmptyTranscriptStreakBySource = {};
@@ -5002,7 +5054,7 @@ export class VoiceSessionManager {
           channelId: session.textChannelId,
           userId,
           content: escalated
-            ? `${String(errorPrefix || "stt_pipeline_transcription_failed")}: ${message}`
+            ? `${String(errorPrefix || "file_asr_transcription_failed")}: ${message}`
             : String(emptyTranscriptRuntimeEvent || "voice_transcription_empty"),
           metadata: {
             sessionId: session.id,
@@ -5024,7 +5076,7 @@ export class VoiceSessionManager {
         guildId: session.guildId,
         channelId: session.textChannelId,
         userId,
-        content: `${String(errorPrefix || "stt_pipeline_transcription_failed")}: ${message}`,
+        content: `${String(errorPrefix || "file_asr_transcription_failed")}: ${message}`,
         metadata: {
           sessionId: session.id,
           model: resolvedModel,
@@ -5354,8 +5406,8 @@ export class VoiceSessionManager {
       await interaction.reply({ content: "No active voice session in this server.", ephemeral: true });
       return;
     }
-    if (session.mode !== "stt_pipeline") {
-      await interaction.reply({ content: "The /clank command is only available in STT pipeline voice mode.", ephemeral: true });
+    if (!isRealtimeMode(session.mode)) {
+      await interaction.reply({ content: "The /clank command is only available in realtime voice sessions.", ephemeral: true });
       return;
     }
 
@@ -5416,18 +5468,36 @@ export class VoiceSessionManager {
       }
     });
 
-    await this.runSttPipelineReply({
+    const conversationContext = this.buildVoiceConversationContext({
+      session,
+      userId,
+      directAddressed: true
+    });
+    if (
+      this.shouldUseNativeRealtimeReply({ session, settings: resolvedSettings }) ||
+      this.shouldUseRealtimeTranscriptBridge({ session, settings: resolvedSettings })
+    ) {
+      await this.forwardRealtimeTextTurnToBrain({
+        session,
+        settings: resolvedSettings,
+        userId,
+        transcript: normalizedText,
+        source,
+        directAddressed: true,
+        conversationContext
+      });
+      return;
+    }
+
+    await this.runRealtimeBrainReply({
       session,
       settings: resolvedSettings,
       userId,
       transcript: normalizedText,
       directAddressed: true,
       directAddressConfidence: 1.0,
-      conversationContext: this.buildVoiceConversationContext({
-        session,
-        userId,
-        directAddressed: true
-      })
+      conversationContext,
+      source
     });
   }
 

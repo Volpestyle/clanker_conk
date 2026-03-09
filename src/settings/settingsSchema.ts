@@ -45,8 +45,7 @@ export const VOICE_RUNTIME_KINDS = [
   "openai_realtime",
   "voice_agent",
   "gemini_realtime",
-  "elevenlabs_realtime",
-  "stt_pipeline"
+  "elevenlabs_realtime"
 ] as const;
 
 export const VOICE_ADMISSION_MODES = [
@@ -132,7 +131,8 @@ export const DEFAULT_SETTINGS = {
       "plonka",
       "planker",
       "plinker",
-      "hank"
+      "hank",
+      "flanker"
     ]
   },
   persona: {
@@ -142,9 +142,8 @@ export const DEFAULT_SETTINGS = {
   },
   prompting: {
     global: {
-      capabilityHonestyLine: "Try not to over exaggerate your actual capabilities as an AI",
-      impossibleActionLine:
-        "If asked to do something impossible, say it plainly and suggest a practical alternative.",
+      capabilityHonestyLine: "",
+      impossibleActionLine: "",
       memoryEnabledLine:
         "You have persistent memory across conversations via saved durable facts and logs. Do not claim each conversation starts from zero.",
       memoryDisabledLine:
@@ -209,7 +208,7 @@ export const DEFAULT_SETTINGS = {
       replyCoalesceMaxMessages: 6
     },
     replyGeneration: {
-      temperature: 0.9,
+      temperature: 1.0,
       maxOutputTokens: 2500,
       reasoningEffort: "minimal",
       pricing: {}
@@ -315,8 +314,7 @@ export const DEFAULT_SETTINGS = {
           inputSampleRateHz: 16000,
           outputSampleRateHz: 24000
         },
-        sttPipeline: {
-          transcriptionModel: "gpt-4o-mini-transcribe",
+        openaiAudioApi: {
           ttsModel: "gpt-4o-mini-tts",
           ttsVoice: "alloy",
           ttsSpeed: 1
@@ -504,6 +502,7 @@ export const DEFAULT_SETTINGS = {
       commandOnlyMode: false,
       allowNsfwHumor: true,
       textOnlyMode: false,
+      defaultInterruptionMode: "none",
       replyPath: "brain",
       ttsMode: "realtime",
       operationalMessages: "minimal",
@@ -514,7 +513,7 @@ export const DEFAULT_SETTINGS = {
       }
     },
     admission: {
-      mode: "classifier_gate",
+      mode: "generation_decides",
       wakeSignals: [
         "direct_address",
         "followup_latch",
@@ -522,7 +521,6 @@ export const DEFAULT_SETTINGS = {
         "command_only",
         "music_wake"
       ],
-      intentConfidenceThreshold: 0.75,
       musicWakeLatchSeconds: 15
     },
     streamWatch: {

@@ -266,7 +266,7 @@ export class ThoughtEngine {
         retryAfterMs: VOICE_THOUGHT_LOOP_BUSY_RETRY_MS
       };
     }
-    if (Number(session.pendingSttTurns || 0) > 0) {
+    if (Number(session.pendingFileAsrTurns || 0) > 0) {
       return {
         allow: false,
         reason: "pending_stt_turns",

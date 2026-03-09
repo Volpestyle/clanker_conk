@@ -2,6 +2,8 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { requestJoin } from "./voiceJoinFlow.ts";
 import { createTestSettings } from "../testSettings.ts";
+import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
+import { ClankvoxClient } from "./clankvoxClient.ts";
 
 function baseSettings(overrides = {}) {
   const base = {
@@ -88,6 +90,11 @@ function createManager(overrides = {}) {
   const manager = {
     sessions: new Map(),
     pendingSessionGuildIds: new Set(),
+    client: {
+      user: {
+        id: "bot-1"
+      }
+    },
     appConfig: {},
     llm: defaultLlm,
     store: defaultStore,
@@ -99,6 +106,9 @@ function createManager(overrides = {}) {
       operationalMessages.push(payload);
       return "ok";
     },
+    primeSessionFactProfiles() {},
+    recordVoiceMembershipEvent() {},
+    async fireVoiceRuntimeEvent() {},
     touchActivityCalls: 0,
     touchActivity() {
       this.touchActivityCalls += 1;
@@ -334,8 +344,11 @@ test("requestJoin requires ElevenLabs agent id when mode is elevenlabs_realtime"
   assert.equal(operationalMessages.at(-1)?.reason, "elevenlabs_agent_id_missing");
 });
 
-test("requestJoin validates stt pipeline dependencies", async () => {
+test("requestJoin validates file-WAV ASR, API TTS, and brain dependencies", async () => {
   const noAsr = createManager({
+    appConfig: {
+      openaiApiKey: "openai-key"
+    },
     llm: {
       isAsrReady() {
         return false;
@@ -346,14 +359,20 @@ test("requestJoin validates stt pipeline dependencies", async () => {
     message: createMessage(),
     settings: baseSettings({
       voice: {
-        mode: "stt_pipeline"
+        mode: "openai_realtime",
+        openaiRealtime: {
+          transcriptionMethod: "file_wav"
+        }
       }
     })
   });
   assert.equal(noAsrResult, true);
-  assert.equal(noAsr.operationalMessages.at(-1)?.reason, "stt_pipeline_asr_unavailable");
+  assert.equal(noAsr.operationalMessages.at(-1)?.reason, "voice_file_asr_unavailable");
 
   const noTts = createManager({
+    appConfig: {
+      openaiApiKey: "openai-key"
+    },
     llm: {
       isAsrReady() {
         return true;
@@ -367,26 +386,32 @@ test("requestJoin validates stt pipeline dependencies", async () => {
     message: createMessage(),
     settings: baseSettings({
       voice: {
-        mode: "stt_pipeline"
+        mode: "openai_realtime",
+        replyPath: "brain",
+        ttsMode: "api"
       }
     })
   });
   assert.equal(noTtsResult, true);
-  assert.equal(noTts.operationalMessages.at(-1)?.reason, "stt_pipeline_tts_unavailable");
+  assert.equal(noTts.operationalMessages.at(-1)?.reason, "voice_api_tts_unavailable");
 
   const noBrain = createManager({
+    appConfig: {
+      openaiApiKey: "openai-key"
+    },
     generateVoiceTurn: null
   });
   const noBrainResult = await requestJoin(noBrain.manager, {
     message: createMessage(),
     settings: baseSettings({
       voice: {
-        mode: "stt_pipeline"
+        mode: "openai_realtime",
+        replyPath: "brain"
       }
     })
   });
   assert.equal(noBrainResult, true);
-  assert.equal(noBrain.operationalMessages.at(-1)?.reason, "stt_pipeline_brain_unavailable");
+  assert.equal(noBrain.operationalMessages.at(-1)?.reason, "voice_brain_unavailable");
 });
 
 test("requestJoin reports missing permission info from manager checks", async () => {
@@ -433,4 +458,101 @@ test("requestJoin enforces max concurrent sessions before connecting", async () 
 
   assert.equal(result, true);
   assert.equal(operationalMessages.at(-1)?.reason, "max_concurrent_sessions_reached");
+});
+
+test("requestJoin omits OpenAI realtime tools at connect for brain transport-only sessions", async () => {
+  const originalSpawn = ClankvoxClient.spawn;
+  const originalConnect = OpenAiRealtimeClient.prototype.connect;
+  const connectCalls = [];
+
+  ClankvoxClient.spawn = async () => ({
+    destroy() {},
+    on() {},
+    off() {}
+  }) as ClankvoxClient;
+  OpenAiRealtimeClient.prototype.connect = async function connectStub(payload = {}) {
+    connectCalls.push(payload);
+    return {};
+  };
+
+  try {
+    const { manager } = createManager({
+      appConfig: {
+        openaiApiKey: "openai-key"
+      }
+    });
+
+    const result = await requestJoin(manager, {
+      message: createMessage(),
+      settings: baseSettings({
+        voice: {
+          mode: "openai_realtime",
+          replyPath: "brain"
+        }
+      })
+    });
+
+    assert.equal(result, true);
+    assert.equal(connectCalls.length, 1);
+    assert.deepEqual(connectCalls[0]?.tools, []);
+    const session = manager.sessions.get("guild-1");
+    assert.equal(session?.realtimeToolOwnership, "transport_only");
+    assert.equal(session?.openAiPendingToolCalls, undefined);
+    assert.equal(session?.openAiToolDefinitions, undefined);
+    assert.equal(session?.awaitingToolOutputs, undefined);
+    assert.equal(Array.isArray(session?.toolCallEvents), true);
+    assert.equal(Array.isArray(session?.mcpStatus), true);
+    assert.equal(session?.toolMusicTrackCatalog instanceof Map, true);
+    assert.equal(Array.isArray(session?.memoryWriteWindow), true);
+  } finally {
+    ClankvoxClient.spawn = originalSpawn;
+    OpenAiRealtimeClient.prototype.connect = originalConnect;
+  }
+});
+
+test("requestJoin includes OpenAI realtime tools at connect for bridge sessions", async () => {
+  const originalSpawn = ClankvoxClient.spawn;
+  const originalConnect = OpenAiRealtimeClient.prototype.connect;
+  const connectCalls = [];
+
+  ClankvoxClient.spawn = async () => ({
+    destroy() {},
+    on() {},
+    off() {}
+  }) as ClankvoxClient;
+  OpenAiRealtimeClient.prototype.connect = async function connectStub(payload = {}) {
+    connectCalls.push(payload);
+    return {};
+  };
+
+  try {
+    const { manager } = createManager({
+      appConfig: {
+        openaiApiKey: "openai-key"
+      }
+    });
+
+    const result = await requestJoin(manager, {
+      message: createMessage(),
+      settings: baseSettings({
+        voice: {
+          mode: "openai_realtime",
+          replyPath: "bridge"
+        }
+      })
+    });
+
+    assert.equal(result, true);
+    assert.equal(connectCalls.length, 1);
+    assert.equal(Array.isArray(connectCalls[0]?.tools), true);
+    assert.equal((connectCalls[0]?.tools || []).length > 0, true);
+    const session = manager.sessions.get("guild-1");
+    assert.equal(session?.realtimeToolOwnership, "provider_native");
+    assert.equal(session?.openAiPendingToolCalls instanceof Map, true);
+    assert.equal(Array.isArray(session?.openAiToolDefinitions), true);
+    assert.equal(session?.awaitingToolOutputs, false);
+  } finally {
+    ClankvoxClient.spawn = originalSpawn;
+    OpenAiRealtimeClient.prototype.connect = originalConnect;
+  }
 });

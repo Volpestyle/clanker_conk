@@ -222,7 +222,7 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
           xai: voice.xai,
           elevenLabsRealtime: voice.elevenLabsRealtime,
           geminiRealtime: voice.geminiRealtime,
-          sttPipeline: voice.sttPipeline,
+          openaiAudioApi: voice.openaiAudioApi,
           generation: voiceGenerationLlm.useTextModel
             ? { mode: "inherit_orchestrator" }
             : {
@@ -353,6 +353,7 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
         commandOnlyMode: voice.commandOnlyMode,
         allowNsfwHumor: voice.allowNsfwHumor,
         textOnlyMode: voice.textOnlyMode,
+        defaultInterruptionMode: voice.defaultInterruptionMode,
         replyPath: voice.replyPath,
         ttsMode: voice.ttsMode,
         operationalMessages: voice.operationalMessages,
