@@ -4,6 +4,7 @@ import { Collapse } from "../Collapse";
 import { rangeStyle } from "../../utils";
 import { LlmProviderOptions, VISION_LLM_PROVIDER_OPTIONS } from "./LlmProviderOptions";
 import { OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS } from "../../settingsFormModel";
+import { normalizeVoiceAdmissionModeForDashboard } from "../../../../src/settings/voiceDashboardMappings.ts";
 
 /* ── Pipeline flow indicator ── */
 
@@ -83,10 +84,6 @@ export function VoiceModeSettingsSection({
   selectVoiceGenerationPresetModel,
   voiceGenerationModelOptions,
   selectedVoiceGenerationPresetModel,
-  setVoiceThoughtEngineProvider,
-  selectVoiceThoughtEnginePresetModel,
-  voiceThoughtEngineModelOptions,
-  selectedVoiceThoughtEnginePresetModel,
   setVoiceReplyDecisionProvider,
   selectVoiceReplyDecisionPresetModel,
   voiceReplyDecisionModelOptions,
@@ -103,13 +100,13 @@ export function VoiceModeSettingsSection({
 }) {
   const isRealtimeMode =
     isVoiceAgentMode || isOpenAiRealtimeMode || isGeminiRealtimeMode || isElevenLabsRealtimeMode;
-  const replyPath = String(form.voiceReplyPath || "bridge").trim().toLowerCase();
+  const replyPath = String(form.voiceReplyPath || "brain").trim().toLowerCase();
   const isBridgePath = replyPath === "bridge";
   const isBrainPath = replyPath === "brain";
   const isNativePath = replyPath === "native";
-  const ttsMode = String(form.voiceTtsMode || "realtime").trim().toLowerCase();
+  const ttsMode = String(isBridgePath ? "realtime" : form.voiceTtsMode || "realtime").trim().toLowerCase();
   const isApiTts = ttsMode === "api";
-  const streamingVoiceReplyActive = isBridgePath && !isApiTts;
+  const streamingVoiceReplyActive = isBrainPath && !isApiTts;
   const openAiRealtimeTranscriptionMethodOptions = OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS;
   const openAiRealtimeTranscriptionMethod = String(
     form.voiceOpenAiRealtimeTranscriptionMethod || "realtime_bridge"
@@ -125,12 +122,10 @@ export function VoiceModeSettingsSection({
   const classifierAlwaysOn = isRealtimeMode && isBridgePath;
   const classifierToggleable = isRealtimeMode && isBrainPath && !form.voiceCommandOnlyMode;
   const classifierVisible = classifierAlwaysOn || classifierToggleable;
-  const realtimeAdmissionMode = String(
-    form.voiceReplyDecisionRealtimeAdmissionMode || "hard_classifier"
-  )
-    .trim()
-    .toLowerCase();
-  const hardClassifierMode = realtimeAdmissionMode !== "generation_only";
+  const realtimeAdmissionMode = normalizeVoiceAdmissionModeForDashboard(
+    form.voiceReplyDecisionRealtimeAdmissionMode
+  );
+  const hardClassifierMode = realtimeAdmissionMode === "classifier_gate";
   const streamWatchCommentaryPath = String(form.voiceStreamWatchCommentaryPath || "auto")
     .trim()
     .toLowerCase();
@@ -153,18 +148,18 @@ export function VoiceModeSettingsSection({
         { label: "Realtime Model", active: true },
         { label: "Audio Out", active: true }
       ]
-    : isBridgePath && !isApiTts
+    : isBridgePath
     ? [
         { label: "Audio In", active: true },
         { label: "ASR", active: true },
         { label: "Admission Gate", active: true },
-        { label: "Realtime Brain", active: true },
+        { label: "Realtime Model", active: true },
         { label: "Audio Out", active: true }
       ]
     : [
         { label: "Audio In", active: true },
         { label: "ASR", active: true },
-        { label: "Admission (Text Brain)", active: true },
+        { label: "Admission Gate", active: true },
         { label: "Text Brain", active: true },
         { label: isApiTts ? "TTS API" : "Realtime TTS", active: true },
         { label: "Audio Out", active: true }
@@ -202,7 +197,7 @@ export function VoiceModeSettingsSection({
                     onChange={set("voiceReplyPath")}
                   />
                   <strong>Native</strong>
-                  <span> &mdash; Audio &rarr; realtime model &rarr; audio out. Fastest, but no text context or tools.</span>
+                  <span> &mdash; Audio &rarr; realtime model &rarr; audio out. Fastest path with provider-owned reasoning and provider-native tools where supported.</span>
                 </label>
                 <label>
                   <input
@@ -213,7 +208,7 @@ export function VoiceModeSettingsSection({
                     onChange={set("voiceReplyPath")}
                   />
                   <strong>Bridge</strong> (Recommended)
-                  <span> &mdash; Audio &rarr; ASR transcript &rarr; realtime model &rarr; audio out. Rich context, tools, multi-speaker labels. Requires OpenAI API key for ASR.</span>
+                  <span> &mdash; Audio &rarr; ASR transcript &rarr; realtime model &rarr; audio out. Rich context, multi-speaker labels, and provider-native tools where supported. Requires OpenAI API key for ASR.</span>
                 </label>
                 <label>
                   <input
@@ -224,7 +219,7 @@ export function VoiceModeSettingsSection({
                     onChange={set("voiceReplyPath")}
                   />
                   <strong>Full Brain</strong>
-                  <span> &mdash; Audio &rarr; ASR transcript &rarr; text LLM &rarr; realtime utterance &rarr; audio out. Maximum control, any text model. Requires OpenAI API key for ASR.</span>
+                  <span> &mdash; Audio &rarr; ASR transcript &rarr; text LLM &rarr; realtime or API TTS &rarr; audio out. Maximum control with orchestrator-owned tools and any text model. Requires OpenAI API key for ASR.</span>
                 </label>
               </div>
 
@@ -232,7 +227,7 @@ export function VoiceModeSettingsSection({
               <PipelineFlowIndicator stages={pipelineStages} />
 
               {/* ── TTS Mode ── */}
-              {!isNativePath && (
+              {isBrainPath && (
                 <>
                   <h4>TTS Mode</h4>
                   <div className="radio-group">
@@ -270,7 +265,7 @@ export function VoiceModeSettingsSection({
                     </label>
                   </div>
                   <p>
-                    This only takes effect on the Bridge path with Realtime TTS. When active, the bot can start
+                    This only takes effect on the Full Brain path with Realtime TTS. When active, the bot can start
                     speaking the first sentence before the full LLM reply finishes generating.
                   </p>
                   {Boolean(form.voiceStreamingEnabled) && (
@@ -305,8 +300,8 @@ export function VoiceModeSettingsSection({
                   )}
                   {Boolean(form.voiceStreamingEnabled) && !streamingVoiceReplyActive && (
                     <p>
-                      Streaming stays configured, but it is currently inactive because the reply path is not Bridge
-                      with Realtime TTS.
+                      Streaming stays configured, but it is currently inactive because Full Brain is not using
+                      Realtime TTS.
                     </p>
                   )}
                   {isApiTts && (
@@ -315,8 +310,8 @@ export function VoiceModeSettingsSection({
                         <label htmlFor="voice-tts-api-model">TTS model</label>
                         <select
                           id="voice-tts-api-model"
-                          value={form.voiceSttPipelineTtsModel}
-                          onChange={set("voiceSttPipelineTtsModel")}
+                          value={form.voiceApiTtsModel}
+                          onChange={set("voiceApiTtsModel")}
                         >
                           <option value="gpt-4o-mini-tts">gpt-4o-mini-tts</option>
                           <option value="tts-1">tts-1</option>
@@ -327,8 +322,8 @@ export function VoiceModeSettingsSection({
                         <label htmlFor="voice-tts-api-voice">TTS voice</label>
                         <select
                           id="voice-tts-api-voice"
-                          value={form.voiceSttPipelineTtsVoice}
-                          onChange={set("voiceSttPipelineTtsVoice")}
+                          value={form.voiceApiTtsVoice}
+                          onChange={set("voiceApiTtsVoice")}
                         >
                           <option value="alloy">alloy</option>
                           <option value="ash">ash</option>
@@ -350,11 +345,11 @@ export function VoiceModeSettingsSection({
                           min="0.25"
                           max="2"
                           step="0.05"
-                          value={form.voiceSttPipelineTtsSpeed}
-                          onChange={set("voiceSttPipelineTtsSpeed")}
-                          style={rangeStyle(form.voiceSttPipelineTtsSpeed, 0.25, 2)}
+                          value={form.voiceApiTtsSpeed}
+                          onChange={set("voiceApiTtsSpeed")}
+                          style={rangeStyle(form.voiceApiTtsSpeed, 0.25, 2)}
                         />
-                        <span className="range-value">{Number(form.voiceSttPipelineTtsSpeed).toFixed(2)}x</span>
+                        <span className="range-value">{Number(form.voiceApiTtsSpeed).toFixed(2)}x</span>
                       </div>
                     </div>
                   )}
@@ -574,11 +569,11 @@ export function VoiceModeSettingsSection({
                       <label htmlFor="voice-realtime-admission-mode">Admission gate</label>
                       <select
                         id="voice-realtime-admission-mode"
-                        value={form.voiceReplyDecisionRealtimeAdmissionMode}
+                        value={realtimeAdmissionMode}
                         onChange={set("voiceReplyDecisionRealtimeAdmissionMode")}
                       >
-                        <option value="generation_only">Off (generation decides)</option>
-                        <option value="hard_classifier">On (classifier gate)</option>
+                        <option value="generation_decides">Off (generation decides)</option>
+                        <option value="classifier_gate">On (classifier gate)</option>
                       </select>
                     </div>
                   </div>
@@ -665,24 +660,28 @@ export function VoiceModeSettingsSection({
 
           <div className="split">
             <div>
-              <label htmlFor="voice-intent-threshold">Intent confidence threshold</label>
-              <input
-                id="voice-intent-threshold"
-                type="number"
-                min="0.4"
-                max="0.99"
-                step="0.01"
-                value={form.voiceIntentConfidenceThreshold}
-                onChange={set("voiceIntentConfidenceThreshold")}
-              />
+              <label htmlFor="voice-default-interruption-mode">Interruption policy</label>
+              <select
+                id="voice-default-interruption-mode"
+                value={form.voiceDefaultInterruptionMode}
+                onChange={set("voiceDefaultInterruptionMode")}
+              >
+                <option value="anyone">Anyone can interrupt</option>
+                <option value="speaker">Only the current speaker can interrupt</option>
+                <option value="none">Nobody can interrupt</option>
+              </select>
             </div>
-            <div />
           </div>
+          <p>
+            Controls whether users can interrupt (barge-in) while the bot is speaking.
+          </p>
 
           {/* ── Stage 3: Brain (brain path only) ── */}
           {usesBrainGeneration && (
             <StagePanel number={3} label="Brain" pathTag="Brain">
-              <p>Used for voice reply generation when the reply path is set to Brain.</p>
+              <p>
+                Used for voice reply generation when the reply path is set to Brain.
+              </p>
               <div className="toggles">
                 <label>
                   <input
@@ -934,6 +933,56 @@ export function VoiceModeSettingsSection({
               </>
             )}
 
+            {!isRealtimeMode && (
+              <div className="split">
+                <div>
+                  <label htmlFor="voice-tts-api-model-nonrealtime">TTS model</label>
+                  <select
+                    id="voice-tts-api-model-nonrealtime"
+                    value={form.voiceApiTtsModel}
+                    onChange={set("voiceApiTtsModel")}
+                  >
+                    <option value="gpt-4o-mini-tts">gpt-4o-mini-tts</option>
+                    <option value="tts-1">tts-1</option>
+                    <option value="tts-1-hd">tts-1-hd</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="voice-tts-api-voice-nonrealtime">TTS voice</label>
+                  <select
+                    id="voice-tts-api-voice-nonrealtime"
+                    value={form.voiceApiTtsVoice}
+                    onChange={set("voiceApiTtsVoice")}
+                  >
+                    <option value="alloy">alloy</option>
+                    <option value="ash">ash</option>
+                    <option value="ballad">ballad</option>
+                    <option value="coral">coral</option>
+                    <option value="echo">echo</option>
+                    <option value="fable">fable</option>
+                    <option value="nova">nova</option>
+                    <option value="onyx">onyx</option>
+                    <option value="sage">sage</option>
+                    <option value="shimmer">shimmer</option>
+                  </select>
+                </div>
+                <div>
+                  <label htmlFor="voice-tts-api-speed-nonrealtime">TTS speed</label>
+                  <input
+                    id="voice-tts-api-speed-nonrealtime"
+                    type="range"
+                    min="0.25"
+                    max="2"
+                    step="0.05"
+                    value={form.voiceApiTtsSpeed}
+                    onChange={set("voiceApiTtsSpeed")}
+                    style={rangeStyle(form.voiceApiTtsSpeed, 0.25, 2)}
+                  />
+                  <span className="range-value">{Number(form.voiceApiTtsSpeed).toFixed(2)}x</span>
+                </div>
+              </div>
+            )}
+
           </StagePanel>
 
           {/* ── Session ── */}
@@ -1023,44 +1072,6 @@ export function VoiceModeSettingsSection({
           </div>
           {form.voiceThoughtEngineEnabled && (
             <>
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-thought-engine-provider">Provider</label>
-                  <select
-                    id="voice-thought-engine-provider"
-                    value={form.voiceThoughtEngineProvider}
-                    onChange={setVoiceThoughtEngineProvider}
-                  >
-                    <LlmProviderOptions />
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="voice-thought-engine-model-preset">Model ID</label>
-                  <select
-                    id="voice-thought-engine-model-preset"
-                    value={selectedVoiceThoughtEnginePresetModel}
-                    onChange={selectVoiceThoughtEnginePresetModel}
-                  >
-                    {voiceThoughtEngineModelOptions.map((modelId) => (
-                      <option key={modelId} value={modelId}>
-                        {modelId}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              </div>
-
-              <label htmlFor="voice-thought-temperature">Thought temperature</label>
-              <input
-                id="voice-thought-temperature"
-                type="number"
-                min="0"
-                max="2"
-                step="0.05"
-                value={form.voiceThoughtEngineTemperature}
-                onChange={set("voiceThoughtEngineTemperature")}
-              />
-
               <label htmlFor="voice-thought-eagerness">
                 Thought eagerness: <strong>{form.voiceThoughtEngineEagerness}%</strong>
               </label>

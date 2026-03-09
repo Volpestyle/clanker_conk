@@ -2,16 +2,14 @@ import { clamp } from "../utils.ts";
 import {
   applyOrchestratorOverrideSettings,
   getMemorySettings,
-  getResolvedVoiceAdmissionClassifierBinding,
-  getResolvedVoiceInitiativeBinding,
+  getResolvedOrchestratorBinding,
   getVoiceConversationPolicy,
   getVoiceInitiativeSettings
 } from "../settings/agentStack.ts";
-import { getPromptBotName } from "../prompts/promptCore.ts";
-import { defaultModelForLlmProvider, normalizeLlmProvider } from "../llm/llmHelpers.ts";
+import { getPromptBotName, buildVoiceToneGuardrails } from "../prompts/promptCore.ts";
+import { buildSystemPrompt } from "../prompts/promptFormatters.ts";
+import { normalizeLlmProvider } from "../llm/llmHelpers.ts";
 import {
-  defaultVoiceReplyDecisionModel,
-  normalizeVoiceReplyDecisionProvider,
   parseVoiceThoughtDecisionContract
 } from "./voiceDecisionRuntime.ts";
 import {
@@ -93,6 +91,7 @@ type ThoughtStoreLike = {
     content: string;
     metadata?: Record<string, unknown>;
   }) => void;
+  getActiveAdaptiveStyleNotes?: (guildId: string, limit?: number) => Array<{ noteText?: string; directiveKind?: string }>;
 };
 
 export interface VoiceThoughtGenerationHost {
@@ -154,15 +153,19 @@ export interface VoiceThoughtGenerationHost {
   }) => void;
 }
 
+function loadAdaptiveDirectives(host: VoiceThoughtGenerationHost, session: VoiceSession) {
+  const guildId = String(session?.guildId || "").trim();
+  if (!guildId || typeof host.store.getActiveAdaptiveStyleNotes !== "function") return [];
+  return host.store.getActiveAdaptiveStyleNotes(guildId, 24) || [];
+}
+
 export function resolveVoiceThoughtEngineConfig(settings: ThoughtSettings = null): VoiceThoughtEngineConfig {
   const thoughtEngine = getVoiceInitiativeSettings(settings);
-  const thoughtBinding = getResolvedVoiceInitiativeBinding(settings);
+  const orchestrator = getResolvedOrchestratorBinding(settings);
   const enabled = Boolean(thoughtEngine.enabled);
-  const provider = normalizeLlmProvider(thoughtBinding.provider, "anthropic");
-  const model = String(thoughtBinding.model || defaultModelForLlmProvider(provider)).trim().slice(0, 120) ||
-    defaultModelForLlmProvider(provider);
-  const configuredTemperature = Number(thoughtBinding.temperature);
-  const temperature = clamp(Number.isFinite(configuredTemperature) ? configuredTemperature : 0.8, 0, 2);
+  const provider = normalizeLlmProvider(orchestrator.provider, "anthropic");
+  const model = String(orchestrator.model || "").trim().slice(0, 120) || "claude-opus-4-6";
+  const temperature = clamp(0.8, 0, 2);
   const eagerness = clamp(Number(thoughtEngine.eagerness) || 0, 0, 100);
   const minSilenceSeconds = clamp(
     Number(thoughtEngine.minSilenceSeconds) || 20,
@@ -213,17 +216,17 @@ export async function generateVoiceThoughtCandidate(
     minSilenceSeconds: thoughtConfig.minSilenceSeconds,
     minSecondsBetweenThoughts: thoughtConfig.minSecondsBetweenThoughts
   });
-  const botName = getPromptBotName(settings);
+  const adaptiveDirectives = loadAdaptiveDirectives(host, session);
   const systemPrompt = [
-    `You are the internal thought engine for ${botName} in live Discord voice chat.`,
-    "Draft exactly one short natural spoken line that might fit right now.",
-    "Thought style: freedom to reflect the social atmosphere. Try to catch a vibe.",
-    "It can be funny, insightful, witty, serious, frustrated, or even a short train-of-thought blurb when that still feels socially natural.",
-    "It is valid to be random or to reflect the bot's current mood/persona.",
-    "Topic drift rule: as silence grows, rely less on old-topic callbacks and more on fresh standalone lines.",
-    "When topic tether is low, avoid stale references that require shared context (for example: vague that/they/it callbacks).",
-    "If there is no good line, output exactly [SKIP].",
-    "No markdown, no quotes, no meta commentary, no soundboard directives."
+    buildSystemPrompt(settings, { adaptiveDirectives }),
+    "You are speaking in live Discord voice chat.",
+    ...buildVoiceToneGuardrails(),
+    "=== AUTONOMOUS THOUGHT MODE ===",
+    "Nobody is speaking to you right now. You are deciding whether to say something on your own initiative.",
+    "Draft exactly one short natural spoken line that might fit right now — or output exactly [SKIP] if silence is better.",
+    "As silence grows, rely less on old-topic callbacks and more on fresh standalone lines.",
+    "When topic tether is low, avoid stale references that require shared context (vague that/they/it callbacks).",
+    "No markdown, no quotes, no meta commentary."
   ].join("\n");
   const userPromptParts = [
     `Current humans in VC: ${participants.length || 0}.`,
@@ -364,7 +367,7 @@ export async function evaluateVoiceThoughtDecision(
     };
   }
 
-  const classifierBinding = getResolvedVoiceAdmissionClassifierBinding(settings);
+  const orchestrator = getResolvedOrchestratorBinding(settings);
   if (!host.llm?.generate) {
     return {
       allow: false,
@@ -375,10 +378,8 @@ export async function evaluateVoiceThoughtDecision(
     };
   }
 
-  const llmProvider = normalizeVoiceReplyDecisionProvider(classifierBinding?.provider || "openai");
-  const llmModel = String(classifierBinding?.model || defaultVoiceReplyDecisionModel(llmProvider))
-    .trim()
-    .slice(0, 120) || defaultVoiceReplyDecisionModel(llmProvider);
+  const llmProvider = normalizeLlmProvider(orchestrator.provider, "anthropic");
+  const llmModel = String(orchestrator.model || "").trim().slice(0, 120) || "claude-opus-4-6";
   const participants = host.getVoiceChannelParticipants(session).map((entry) => entry.displayName).filter(Boolean);
   const recentHistory = host.formatVoiceDecisionHistory(session, 8, VOICE_DECIDER_PROMPT_HISTORY_MAX_CHARS);
   const silenceMs = Math.max(0, Date.now() - Number(session.lastActivityAt || 0));
@@ -394,17 +395,19 @@ export async function evaluateVoiceThoughtDecision(
   const thoughtEagerness = clamp(Number(resolvedThoughtConfig.eagerness) || 0, 0, 100);
   const ambientMemoryFacts = Array.isArray(memoryFacts) ? memoryFacts : [];
   const ambientMemory = formatRealtimeMemoryFacts(ambientMemoryFacts, VOICE_THOUGHT_MEMORY_SEARCH_LIMIT);
-  const botName = getPromptBotName(settings);
+  const adaptiveDirectives = loadAdaptiveDirectives(host, session);
 
   const systemPrompt = [
-    `You decide whether ${botName} should speak a candidate thought line right now in live Discord voice chat.`,
-    "Return strict JSON only with keys: allow (boolean), finalThought (string), usedMemory (boolean), reason (string).",
-    "If allow is true, finalThought must contain one short spoken line.",
+    buildSystemPrompt(settings, { adaptiveDirectives }),
+    "You are speaking in live Discord voice chat.",
+    ...buildVoiceToneGuardrails(),
+    "=== THOUGHT REFINEMENT MODE ===",
+    "You drafted an autonomous thought to say during a lull. Now decide: should you actually say it?",
+    "Return strict JSON with keys: allow (boolean), finalThought (string), usedMemory (boolean), reason (string).",
+    "If allow is true, finalThought must contain one short spoken line. You may refine the draft — reword it, sharpen it, make it more you.",
     "If allow is false, finalThought must be an empty string.",
-    "You may improve the draft using memory only when it feels natural and additive.",
-    "Topic drift bias is required: as silence gets older, prefer fresh standalone lines over stale callbacks to earlier topic details.",
-    "When topic tether is low, reject callback-heavy lines that depend on shared old context.",
-    "Prefer allow=false over awkward memory references.",
+    "You may weave in a memory fact only when it feels natural and additive.",
+    "Prefer allow=false over saying something forced or awkward.",
     "No markdown, no extra keys."
   ].join("\n");
   const userPromptParts = [

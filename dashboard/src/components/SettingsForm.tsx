@@ -162,10 +162,6 @@ export default function SettingsForm({
     selectedPresetModel: selectedVoiceGenerationPresetModel
   } = resolvePresetSelection("voiceGenerationLlmProvider", "voiceGenerationLlmModel");
   const {
-    options: voiceThoughtEngineModelOptions,
-    selectedPresetModel: selectedVoiceThoughtEnginePresetModel
-  } = resolvePresetSelection("voiceThoughtEngineProvider", "voiceThoughtEngineModel");
-  const {
     options: voiceReplyDecisionModelOptions,
     selectedPresetModel: selectedVoiceReplyDecisionPresetModel
   } = resolvePresetSelection("voiceReplyDecisionLlmProvider", "voiceReplyDecisionLlmModel");
@@ -228,7 +224,6 @@ export default function SettingsForm({
       syncModel("browserLlmModel", selectedBrowserLlmPresetModel);
       syncModel("visionModel", selectedVisionPresetModel);
       syncModel("voiceGenerationLlmModel", selectedVoiceGenerationPresetModel);
-      syncModel("voiceThoughtEngineModel", selectedVoiceThoughtEnginePresetModel);
       syncModel("voiceReplyDecisionLlmModel", selectedVoiceReplyDecisionPresetModel);
       syncModel("voiceStreamWatchBrainContextModel", selectedStreamWatchVisionPresetModel);
       if (next.voiceGenerationLlmUseTextModel) {
@@ -243,7 +238,6 @@ export default function SettingsForm({
     selectedMemoryLlmPresetModel,
     selectedBrowserLlmPresetModel,
     selectedVoiceGenerationPresetModel,
-    selectedVoiceThoughtEnginePresetModel,
     selectedVoiceReplyDecisionPresetModel,
     selectedVisionPresetModel
   ]);
@@ -307,7 +301,6 @@ export default function SettingsForm({
   const setReplyFollowupProvider = createProviderSetter("replyFollowupLlmProvider", "replyFollowupLlmModel");
   const setBrowserLlmProvider = createProviderSetter("browserLlmProvider", "browserLlmModel");
   const setVoiceGenerationProvider = createProviderSetter("voiceGenerationLlmProvider", "voiceGenerationLlmModel");
-  const setVoiceThoughtEngineProvider = createProviderSetter("voiceThoughtEngineProvider", "voiceThoughtEngineModel");
   const setVoiceReplyDecisionProvider = createProviderSetter("voiceReplyDecisionLlmProvider", "voiceReplyDecisionLlmModel");
   const setVisionProvider = createProviderSetter("visionProvider", "visionModel");
   const setStreamWatchVisionProvider = createProviderSetter("voiceStreamWatchBrainContextProvider", "voiceStreamWatchBrainContextModel");
@@ -327,7 +320,6 @@ export default function SettingsForm({
   const selectMemoryLlmPresetModel = createPresetSelector("memoryLlmModel");
   const selectBrowserLlmPresetModel = createPresetSelector("browserLlmModel");
   const selectVoiceGenerationPresetModel = createPresetSelector("voiceGenerationLlmModel");
-  const selectVoiceThoughtEnginePresetModel = createPresetSelector("voiceThoughtEngineModel");
   const selectVoiceReplyDecisionPresetModel = createPresetSelector("voiceReplyDecisionLlmModel");
   const selectVisionPresetModel = createPresetSelector("visionModel");
   const selectStreamWatchVisionPresetModel = createPresetSelector("voiceStreamWatchBrainContextModel");
@@ -414,111 +406,42 @@ export default function SettingsForm({
               <option value="custom">Custom</option>
             </select>
 
-            <div className="toggles">
-              <label>
-                <input
-                  type="checkbox"
-                  checked={form.stackAdvancedOverridesEnabled}
-                  onChange={set("stackAdvancedOverridesEnabled")}
-                />
-                Enable advanced stack overrides
-              </label>
-            </div>
-
-            <p>
-              Presets choose the harness, orchestrator, research runtime, browser runtime, voice runtime, and dev-team defaults.
-              Advanced overrides expose provider/model and runtime-specific tuning.
-            </p>
-
-            <div className="split">
-              <div>
-                <label>Harness</label>
-                <input value={resolvedStack.harness} readOnly />
-              </div>
-              <div>
-                <label>Text / Orchestrator</label>
-                <input value={`${resolvedStack.orchestrator.provider}:${resolvedStack.orchestrator.model}`} readOnly />
-              </div>
-            </div>
-
-            <div className="split">
-              <div>
-                <label>Research Runtime</label>
-                <input value={resolvedStack.researchRuntime} readOnly />
-              </div>
-              <div>
-                <label>Browser Runtime</label>
-                <input value={resolvedStack.browserRuntime} readOnly />
-              </div>
-            </div>
-
-            <div className="split">
-              <div>
-                <label>Voice Runtime</label>
-                <input value={resolvedStack.voiceRuntime} readOnly />
-              </div>
-              <div>
-                <label>Voice Admission</label>
-                <input value={resolvedStack.voiceAdmissionPolicy.mode} readOnly />
-              </div>
-            </div>
-
-            <div>
-              <label>Dev Team</label>
-              <textarea
-                readOnly
-                value={[
-                  `session: ${formatSessionPolicy(resolvedStack.sessionPolicy)}`,
-                  `orchestrator: ${resolvedStack.devTeam.orchestrator.provider}:${resolvedStack.devTeam.orchestrator.model}`,
-                  `design: ${formatCapabilityPolicy(resolvedStack.devTeam.roles.design)}`,
-                  `implementation: ${formatCapabilityPolicy(resolvedStack.devTeam.roles.implementation)}`,
-                  `review: ${formatCapabilityPolicy(resolvedStack.devTeam.roles.review)}`,
-                  `research: ${formatCapabilityPolicy(resolvedStack.devTeam.roles.research)}`,
-                  `workers: ${resolvedStack.devTeam.codingWorkers.join(", ") || "none"}`
-                ].join("\n")}
-              />
-            </div>
           </SettingsSection>
 
-          {form.stackAdvancedOverridesEnabled && (
-            <>
-              <LlmConfigurationSettingsSection
-                id="sec-llm"
-                form={form}
-                set={set}
-                setProvider={setProvider}
-                selectPresetModel={selectPresetModel}
-                providerModelOptions={providerModelOptions}
-                selectedPresetModel={selectedPresetModel}
-                setReplyFollowupProvider={setReplyFollowupProvider}
-                selectReplyFollowupPresetModel={selectReplyFollowupPresetModel}
-                replyFollowupModelOptions={replyFollowupModelOptions}
-                selectedReplyFollowupPresetModel={selectedReplyFollowupPresetModel}
-                setMemoryLlmProvider={setMemoryLlmProvider}
-                selectMemoryLlmPresetModel={selectMemoryLlmPresetModel}
-                memoryLlmModelOptions={memoryLlmModelOptions}
-                selectedMemoryLlmPresetModel={selectedMemoryLlmPresetModel}
-              />
-
-              <WebSearchSettingsSection id="sec-search" form={form} set={set} />
-              <BrowserSettingsSection
-                id="sec-browser"
-                form={form}
-                set={set}
-                setBrowserLlmProvider={setBrowserLlmProvider}
-                selectBrowserLlmPresetModel={selectBrowserLlmPresetModel}
-                browserLlmModelOptions={browserLlmModelOptions}
-                selectedBrowserLlmPresetModel={selectedBrowserLlmPresetModel}
-              />
-              <CodeAgentSettingsSection
-                id="sec-code-agent"
-                form={form}
-                set={set}
-                validationError={codeAgentValidationError}
-              />
-              <SubAgentOrchestrationSettingsSection id="sec-orchestration" form={form} set={set} />
-            </>
-          )}
+          <LlmConfigurationSettingsSection
+            id="sec-llm"
+            form={form}
+            set={set}
+            setProvider={setProvider}
+            selectPresetModel={selectPresetModel}
+            providerModelOptions={providerModelOptions}
+            selectedPresetModel={selectedPresetModel}
+            setReplyFollowupProvider={setReplyFollowupProvider}
+            selectReplyFollowupPresetModel={selectReplyFollowupPresetModel}
+            replyFollowupModelOptions={replyFollowupModelOptions}
+            selectedReplyFollowupPresetModel={selectedReplyFollowupPresetModel}
+            setMemoryLlmProvider={setMemoryLlmProvider}
+            selectMemoryLlmPresetModel={selectMemoryLlmPresetModel}
+            memoryLlmModelOptions={memoryLlmModelOptions}
+            selectedMemoryLlmPresetModel={selectedMemoryLlmPresetModel}
+          />
+          <WebSearchSettingsSection id="sec-search" form={form} set={set} />
+          <BrowserSettingsSection
+            id="sec-browser"
+            form={form}
+            set={set}
+            setBrowserLlmProvider={setBrowserLlmProvider}
+            selectBrowserLlmPresetModel={selectBrowserLlmPresetModel}
+            browserLlmModelOptions={browserLlmModelOptions}
+            selectedBrowserLlmPresetModel={selectedBrowserLlmPresetModel}
+          />
+          <CodeAgentSettingsSection
+            id="sec-code-agent"
+            form={form}
+            set={set}
+            validationError={codeAgentValidationError}
+          />
+          <SubAgentOrchestrationSettingsSection id="sec-orchestration" form={form} set={set} />
           <VisionSettingsSection
             id="sec-vision"
             form={form}
@@ -543,10 +466,6 @@ export default function SettingsForm({
             selectVoiceGenerationPresetModel={selectVoiceGenerationPresetModel}
             voiceGenerationModelOptions={voiceGenerationModelOptions}
             selectedVoiceGenerationPresetModel={selectedVoiceGenerationPresetModel}
-            setVoiceThoughtEngineProvider={setVoiceThoughtEngineProvider}
-            selectVoiceThoughtEnginePresetModel={selectVoiceThoughtEnginePresetModel}
-            voiceThoughtEngineModelOptions={voiceThoughtEngineModelOptions}
-            selectedVoiceThoughtEnginePresetModel={selectedVoiceThoughtEnginePresetModel}
             setVoiceReplyDecisionProvider={setVoiceReplyDecisionProvider}
             selectVoiceReplyDecisionPresetModel={selectVoiceReplyDecisionPresetModel}
             voiceReplyDecisionModelOptions={voiceReplyDecisionModelOptions}

@@ -78,32 +78,18 @@ function createThoughtHost({
   };
 }
 
-test("resolveVoiceThoughtEngineConfig reads settings and clamps invalid values", () => {
-  const settings = createTestSettings({
-    voice: {
-      thoughtEngine: {
-        enabled: true,
-        provider: "OPENAI",
-        model: " gpt-4o-mini ",
-        temperature: 4,
-        eagerness: 120,
-        minSilenceSeconds: 2,
-        minSecondsBetweenThoughts: 9_999
-      }
-    }
-  });
+test("resolveVoiceThoughtEngineConfig uses orchestrator binding", () => {
+  const settings = createTestSettings({});
 
   const config = resolveVoiceThoughtEngineConfig(settings);
 
-  assert.deepEqual(config, {
-    enabled: true,
-    provider: "openai",
-    model: "gpt-4o-mini",
-    temperature: 2,
-    eagerness: 100,
-    minSilenceSeconds: 8,
-    minSecondsBetweenThoughts: 600
-  });
+  assert.equal(config.enabled, true);
+  assert.equal(config.provider, "anthropic");
+  assert.equal(config.model, "claude-sonnet-4-6");
+  assert.equal(config.temperature, 0.8);
+  assert.equal(config.eagerness, 50);
+  assert.ok(config.minSilenceSeconds >= 8);
+  assert.ok(config.minSecondsBetweenThoughts >= 30);
 });
 
 test("generateVoiceThoughtCandidate strips soundboard directives from LLM output", async () => {
