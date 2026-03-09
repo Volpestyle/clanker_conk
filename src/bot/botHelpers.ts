@@ -66,6 +66,8 @@ const REPLY_AUTOMATION_OPERATION_TYPES = new Set(["create", "pause", "resume", "
 const MAX_VOICE_INTENT_REASON_LEN = 180;
 const REPLY_MUSIC_PLATFORM_TYPES = new Set(["youtube", "soundcloud", "auto"]);
 const REPLY_SCREEN_SHARE_ACTION_TYPES = new Set(["offer_link", "none"]);
+const REPLY_MEMORY_SCOPE_TYPES = new Set(["user", "lore"]);
+const REPLY_MEMORY_FACT_TYPES = new Set(["preference", "profile", "relationship", "project", "other"]);
 const MAX_SCREEN_SHARE_REASON_LEN = 180;
 export const MAX_VIDEO_TARGET_SCAN = 8;
 export const MAX_VIDEO_FALLBACK_MESSAGES = 18;
@@ -143,7 +145,10 @@ export const REPLY_OUTPUT_SCHEMA = {
     imageLookupQuery: { type: ["string", "null"] },
     openArticleRef: { type: ["string", "null"] },
     memoryLine: { type: ["string", "null"] },
+    memoryScope: { type: ["string", "null"] },
+    memoryFactType: { type: ["string", "null"] },
     selfMemoryLine: { type: ["string", "null"] },
+    selfMemoryFactType: { type: ["string", "null"] },
     soundboardRefs: {
       type: "array",
       items: {
@@ -217,7 +222,7 @@ export const REPLY_OUTPUT_SCHEMA = {
         },
         confidence: { type: "number" },
         reason: { type: ["string", "null"] },
-        query: { type: ["string", "null"] },
+        query: { type: "string", description: "The song, artist, or phrase to play/search extracted from the transcript. Must not be empty for music_play/music_queue_next/music_queue_add intents." },
         platform: { type: ["string", "null"] },
         searchResults: {
           type: ["array", "null"],
@@ -272,7 +277,10 @@ export const REPLY_OUTPUT_SCHEMA = {
     "imageLookupQuery",
     "openArticleRef",
     "memoryLine",
+    "memoryScope",
+    "memoryFactType",
     "selfMemoryLine",
+    "selfMemoryFactType",
     "soundboardRefs",
     "leaveVoiceChannel",
     "automationAction",
@@ -722,7 +730,10 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
         imageLookupQuery: null,
         openArticleRef: null,
         memoryLine: null,
+        memoryScope: null,
+        memoryFactType: null,
         selfMemoryLine: null,
+        selfMemoryFactType: null,
         soundboardRefs: [],
         leaveVoiceChannel: false,
         automationAction: emptyStructuredAutomationAction(),
@@ -747,7 +758,10 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
       imageLookupQuery: null,
       openArticleRef: null,
       memoryLine: null,
+      memoryScope: null,
+      memoryFactType: null,
       selfMemoryLine: null,
+      selfMemoryFactType: null,
       soundboardRefs: [],
       leaveVoiceChannel: false,
       automationAction: emptyStructuredAutomationAction(),
@@ -786,7 +800,10 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     imageLookupQuery: normalizeDirectiveText(parsed?.imageLookupQuery, MAX_IMAGE_LOOKUP_QUERY_LEN) || null,
     openArticleRef: normalizeDirectiveText(parsed?.openArticleRef, MAX_OPEN_ARTICLE_REF_LEN) || null,
     memoryLine: normalizeDirectiveText(parsed?.memoryLine, MAX_MEMORY_WRITE_LINE_LEN) || null,
+    memoryScope: normalizeStructuredMemoryScope(parsed?.memoryScope),
+    memoryFactType: normalizeStructuredMemoryFactType(parsed?.memoryFactType),
     selfMemoryLine: normalizeDirectiveText(parsed?.selfMemoryLine, MAX_MEMORY_WRITE_LINE_LEN) || null,
+    selfMemoryFactType: normalizeStructuredMemoryFactType(parsed?.selfMemoryFactType),
     soundboardRefs,
     leaveVoiceChannel,
     automationAction,
@@ -1077,6 +1094,22 @@ export function pickDiscoveryMediaDirective(parsed) {
 
 export function normalizeDirectiveText(text, maxLen) {
   return normalizeWhitespaceText(text, { maxLen });
+}
+
+function normalizeStructuredMemoryScope(rawScope) {
+  const normalized = String(rawScope || "")
+    .trim()
+    .toLowerCase();
+  if (!normalized || !REPLY_MEMORY_SCOPE_TYPES.has(normalized)) return null;
+  return normalized;
+}
+
+function normalizeStructuredMemoryFactType(rawType) {
+  const normalized = String(rawType || "")
+    .trim()
+    .toLowerCase();
+  if (!normalized || !REPLY_MEMORY_FACT_TYPES.has(normalized)) return null;
+  return normalized;
 }
 
 export function serializeForPrompt(value, maxLen = 1200) {

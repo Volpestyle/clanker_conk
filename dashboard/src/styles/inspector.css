@@ -186,6 +186,13 @@
   flex-shrink: 0;
 }
 
+.inspector-facts-filter {
+  min-width: 260px;
+  padding: 4px 8px !important;
+  font-size: 0.72rem !important;
+  border-radius: var(--radius-xs) !important;
+}
+
 .inspector-limit-label {
   display: flex !important;
   align-items: center;
@@ -396,6 +403,83 @@
   background: rgba(0, 0, 0, 0.15);
 }
 
+.inspector-editor-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.inspector-editor-grid label {
+  margin: 0 !important;
+}
+
+.inspector-editor-grid input {
+  margin-top: 4px;
+}
+
+.inspector-editor-textarea {
+  width: 100%;
+  margin-top: 4px;
+  min-height: 88px;
+  resize: vertical;
+}
+
+.inspector-editor-textarea-subtle {
+  color: var(--ink-2);
+}
+
+.inspector-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.inspector-audit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.inspector-audit-card {
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xs);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.inspector-audit-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 0.68rem;
+  color: var(--ink-3);
+}
+
+.inspector-audit-meta strong {
+  color: var(--ink-1);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.inspector-audit-text {
+  margin: 6px 0 0;
+  color: var(--ink-1);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.inspector-audit-submeta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+  font-size: 0.68rem;
+  color: var(--ink-3);
+}
+
 .inspector-detail-text {
   margin: 4px 0 0;
   color: var(--ink-0);
@@ -422,7 +506,18 @@
   .inspector-subjects {
     max-height: 200px;
   }
+  .inspector-facts-controls {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .inspector-facts-filter {
+    min-width: 0;
+    width: 100%;
+  }
   .inspector-detail-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .inspector-editor-grid {
+    grid-template-columns: 1fr;
   }
 }

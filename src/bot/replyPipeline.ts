@@ -1116,7 +1116,10 @@ export async function dispatchReplyActions(
   });
 
   const memoryLine = replyDirective.memoryLine;
+  const memoryScope = replyDirective.memoryScope || "user";
+  const memoryFactType = replyDirective.memoryFactType || null;
   const selfMemoryLine = replyDirective.selfMemoryLine;
+  const selfMemoryFactType = replyDirective.selfMemoryFactType || null;
   let memorySaved = false;
   let selfMemorySaved = false;
   if (memorySettings.enabled && memoryLine) {
@@ -1128,7 +1131,8 @@ export async function dispatchReplyActions(
         guildId: message.guildId,
         channelId: message.channelId,
         sourceText: message.content,
-        scope: "lore"
+        scope: memoryScope,
+        factType: memoryFactType
       });
     } catch (error) {
       bot.store.logAction({
@@ -1201,7 +1205,8 @@ export async function dispatchReplyActions(
         guildId: message.guildId,
         channelId: message.channelId,
         sourceText: finalText,
-        scope: "self"
+        scope: "self",
+        factType: selfMemoryFactType
       });
     } catch (error) {
       bot.store.logAction({

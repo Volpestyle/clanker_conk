@@ -235,7 +235,7 @@ export function countDiscoveryPostsSince(store: ActionLogStore, sinceIso) {
 export function getRecentActions(
   store: ActionLogStore,
   limit = 200,
-  opts: { kinds?: string[]; sinceIso?: string | null } = {}
+  opts: { kinds?: string[]; sinceIso?: string | null; guildId?: string | null } = {}
 ) {
   const parsedLimit = Number(limit);
   const boundedLimit = clamp(Number.isFinite(parsedLimit) ? Math.floor(parsedLimit) : 200, 1, 1000);
@@ -245,6 +245,7 @@ export function getRecentActions(
       .filter(Boolean)
   )];
   const normalizedSinceIso = String(opts?.sinceIso || "").trim();
+  const normalizedGuildId = String(opts?.guildId || "").trim();
   const conditions: string[] = [];
   const params: Array<string | number> = [];
 
@@ -255,6 +256,10 @@ export function getRecentActions(
   if (normalizedSinceIso) {
     conditions.push("created_at >= ?");
     params.push(normalizedSinceIso);
+  }
+  if (normalizedGuildId) {
+    conditions.push("guild_id = ?");
+    params.push(normalizedGuildId);
   }
 
   const whereClause = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";

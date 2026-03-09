@@ -17,6 +17,7 @@ import {
   isInstructionLikeFactText,
   isTextGroundedInSource,
   normalizeEvidenceText,
+  normalizeFactType,
   normalizeHighlightText,
   normalizeLoreFactForDisplay,
   normalizeMemoryLineInput,
@@ -290,6 +291,8 @@ export class MemoryManager {
     guildId,
     channelId = null,
     queryText,
+    subjectIds = null,
+    factTypes = null,
     settings,
     trace = {},
     limit = HYBRID_FACT_LIMIT
@@ -305,6 +308,8 @@ export class MemoryManager {
     );
     const candidates = this.store.getFactsForScope({
       guildId: scopeGuildId,
+      subjectIds,
+      factTypes,
       limit: candidateLimit
     });
     if (!candidates.length) return [];
@@ -777,6 +782,7 @@ export class MemoryManager {
     sourceText = "",
     scope = "lore",
     subjectOverride = null,
+    factType = null,
     validationMode = "strict"
   }) {
     const scopeGuildId = String(guildId || "").trim();
@@ -789,6 +795,7 @@ export class MemoryManager {
 
     const scopeConfig = resolveDirectiveScopeConfig(scope);
     const subject = subjectOverride ? String(subjectOverride).trim() : scopeConfig.subject;
+    const normalizedFactType = normalizeFactType(factType || scopeConfig.defaultFactType);
     if (!subject) {
       return {
         ok: false,
@@ -819,14 +826,15 @@ export class MemoryManager {
     }
 
     const factText = `${scopeConfig.prefix}: ${cleaned}.`;
+    const normalizedEvidenceText = normalizeEvidenceText(sourceText, sourceText);
     const existingFact = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, subject, factText);
     const inserted = this.store.addMemoryFact({
       guildId: scopeGuildId,
       channelId: channelId ? String(channelId) : null,
       subject,
       fact: factText,
-      factType: scopeConfig.factType,
-      evidenceText: normalizeEvidenceText(sourceText, sourceText),
+      factType: normalizedFactType,
+      evidenceText: normalizedEvidenceText,
       sourceMessageId,
       confidence: 0.72
     });
@@ -841,11 +849,28 @@ export class MemoryManager {
       };
     }
 
+    const factRow = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, subject, factText);
     this.store.logAction({
       kind: "memory_fact",
+      guildId: scopeGuildId,
+      channelId: channelId ? String(channelId) : null,
       userId,
       messageId: sourceMessageId,
-      content: factText
+      content: factText,
+      metadata: {
+        actorName: userId ? String(userId) : null,
+        factId: Number(factRow?.id || existingFact?.id || 0) || null,
+        subject,
+        fact: factText,
+        factType: normalizedFactType,
+        confidence: Number(factRow?.confidence ?? existingFact?.confidence ?? 0.72),
+        evidenceText: normalizedEvidenceText,
+        source: scopeConfig.traceSource,
+        reason: existingFact ? "updated_existing" : "added_new",
+        scope: scopeConfig.scope,
+        channelId: channelId ? String(channelId) : null,
+        sourceMessageId
+      }
     });
     this.store.archiveOldFactsForSubject({
       guildId: scopeGuildId,
@@ -853,7 +878,6 @@ export class MemoryManager {
       keep: scopeConfig.keep
     });
 
-    const factRow = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, subject, factText);
     if (factRow) {
       void this.ensureFactVector({
         factRow,
@@ -871,7 +895,7 @@ export class MemoryManager {
       factText,
       scope: scopeConfig.scope,
       subject,
-      factType: scopeConfig.factType,
+      factType: normalizedFactType,
       isNew: !existingFact
     };
   }

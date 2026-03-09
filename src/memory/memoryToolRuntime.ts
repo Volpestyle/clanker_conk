@@ -1,6 +1,7 @@
 import { clamp } from "../utils.ts";
 import {
   isInstructionLikeFactText,
+  normalizeFactType,
   normalizeMemoryLineInput
 } from "./memoryHelpers.ts";
 
@@ -29,6 +30,8 @@ type SharedMemoryRuntime = {
       guildId: string;
       channelId: string | null;
       queryText: string;
+      subjectIds?: string[] | null;
+      factTypes?: string[] | null;
       settings: Record<string, unknown>;
       trace: Record<string, unknown>;
       limit?: number;
@@ -42,6 +45,7 @@ type SharedMemoryRuntime = {
       sourceText: string;
       scope: "lore" | "self" | "user";
       subjectOverride?: string;
+      factType?: string | null;
       validationMode?: "strict" | "minimal";
     }) => Promise<{
       ok: boolean;
@@ -80,7 +84,7 @@ type WriteArgs = {
   channelId?: string | null;
   actorUserId?: string | null;
   namespace?: unknown;
-  items?: Array<{ text?: unknown }>;
+  items?: Array<{ text?: unknown; type?: unknown }>;
   trace?: Record<string, unknown>;
   sourceMessageIdPrefix?: string;
   sourceText?: string;
@@ -258,6 +262,8 @@ export async function executeSharedMemoryToolSearch({
     guildId: scope.guildId,
     channelId,
     queryText: resolvedQuery,
+    subjectIds: scope.subject ? [scope.subject] : null,
+    factTypes: normalizedTags.length ? normalizedTags : null,
     settings,
     trace,
     limit: clamp(boundedLimit * 2, 1, 40)
@@ -319,7 +325,8 @@ export async function executeSharedMemoryToolWrite({
 
   const normalizedItems = (Array.isArray(items) ? items : [])
     .map((entry) => ({
-      text: normalizeMemoryLineInput(entry?.text)
+      text: normalizeMemoryLineInput(entry?.text),
+      factType: entry?.type == null ? null : normalizeFactType(entry?.type)
     }))
     .filter((entry) => Boolean(entry.text))
     .slice(0, clamp(Math.floor(Number(limit) || 5), 1, 8));
@@ -357,6 +364,8 @@ export async function executeSharedMemoryToolWrite({
       guildId: scope.guildId,
       channelId,
       queryText: item.text,
+      subjectIds: scope.subject ? [scope.subject] : null,
+      factTypes: item.factType ? [item.factType] : null,
       settings,
       trace,
       limit: 8
@@ -382,6 +391,7 @@ export async function executeSharedMemoryToolWrite({
       channelId,
       sourceText: sourceText || item.text,
       scope: scope.directiveScope,
+      factType: item.factType,
       ...(scope.directiveScope === "user" && scope.subject ? { subjectOverride: scope.subject } : {})
     });
     if (!result?.ok) {

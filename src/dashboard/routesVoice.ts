@@ -47,6 +47,44 @@ function normalizeDashboardFactRows(rows: unknown) {
     .filter((row) => row !== null);
 }
 
+function normalizeMemoryFactAuditEventType(kind: string) {
+  const normalized = String(kind || "").trim().toLowerCase();
+  if (normalized === "memory_fact_updated") return "updated";
+  if (normalized === "memory_fact_removed") return "removed";
+  return "added";
+}
+
+function mapMemoryFactAuditEvent(row: unknown) {
+  const record = toRecord(row);
+  const metadata = toRecord(record.metadata);
+  const previous = toRecord(metadata.previous);
+  const next = toRecord(metadata.next);
+  const factId = Number(metadata.factId);
+  const actionId = Number(record.id);
+  const createdAt = String(record.created_at || record.createdAt || "").trim();
+  const eventType = normalizeMemoryFactAuditEventType(String(record.kind || ""));
+  return {
+    id: Number.isInteger(actionId) ? actionId : null,
+    createdAt: createdAt || null,
+    eventType,
+    actorName: String(metadata.actorName || record.user_id || record.userId || "").trim() || null,
+    source: String(metadata.source || "").trim() || null,
+    factId: Number.isInteger(factId) ? factId : null,
+    subject: String(metadata.subject || next.subject || previous.subject || "").trim() || null,
+    factType: String(metadata.factType || next.fact_type || next.factType || previous.fact_type || previous.factType || "").trim() || null,
+    fact: String(record.content || metadata.fact || next.fact || previous.fact || "").trim() || null,
+    previousFact: String(previous.fact || "").trim() || null,
+    nextFact: String(next.fact || "").trim() || null,
+    channelId:
+      String(metadata.channelId || next.channel_id || next.channelId || previous.channel_id || previous.channelId || record.channel_id || "").trim() ||
+      null,
+    sourceMessageId:
+      String(metadata.sourceMessageId || next.source_message_id || next.sourceMessageId || previous.source_message_id || previous.sourceMessageId || record.message_id || "").trim() ||
+      null,
+    removalReason: String(metadata.removalReason || "").trim() || null
+  };
+}
+
 function mapRelevantMessageRow(row: unknown) {
   const record = toRecord(row);
   const content = String(record.content || "").trim();
@@ -872,15 +910,212 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
     const guildId = String(c.req.query("guildId") || "").trim();
     const limit = parseBoundedInt(c.req.query("limit"), 120, 1, 500);
     const subjectFilter = String(c.req.query("subject") || "").trim() || null;
+    const queryText = String(c.req.query("q") || "").trim();
     if (!guildId) {
-      return c.json({ guildId, facts: [], limit });
+      return c.json({ guildId, facts: [], limit, queryText });
     }
     const facts = store.getFactsForScope({
       guildId,
       limit,
-      subjectIds: subjectFilter ? [subjectFilter] : null
+      subjectIds: subjectFilter ? [subjectFilter] : null,
+      queryText
     });
-    return c.json({ guildId, limit, subject: subjectFilter, facts });
+    return c.json({ guildId, limit, subject: subjectFilter, queryText, facts });
+  });
+
+  app.get("/api/memory/facts/audit", (c) => {
+    const guildId = String(c.req.query("guildId") || "").trim();
+    const factId = Number(c.req.query("factId"));
+    const limit = parseBoundedInt(c.req.query("limit"), 40, 1, 200);
+    if (!guildId) {
+      return c.json({
+        guildId,
+        factId: Number.isInteger(factId) && factId > 0 ? factId : null,
+        events: [],
+        limit
+      });
+    }
+
+    const events = store
+      .getRecentActions(Math.max(120, limit * 4), {
+        guildId,
+        kinds: ["memory_fact", "memory_fact_updated", "memory_fact_removed"]
+      })
+      .map((row) => mapMemoryFactAuditEvent(row))
+      .filter((event) =>
+        Number.isInteger(factId) && factId > 0
+          ? Number(event.factId || 0) === factId
+          : true
+      )
+      .slice(0, limit);
+
+    return c.json({
+      guildId,
+      factId: Number.isInteger(factId) && factId > 0 ? factId : null,
+      limit,
+      events
+    });
+  });
+
+  app.patch("/api/memory/facts/:factId", async (c) => {
+    const body = await readDashboardBody(c);
+    const guildId = String(body.guildId || "").trim();
+    const factId = Number(c.req.param("factId"));
+    const subject = String(body.subject || "").trim();
+    const fact = String(body.fact || "").trim();
+    const factType = String(body.factType || "general").trim() || "general";
+    const evidenceText = String(body.evidenceText || "").trim() || null;
+    const actorName = String(body.actorName || "dashboard").trim() || "dashboard";
+    const confidence = Number(body.confidence);
+
+    if (!guildId || !Number.isInteger(factId) || factId <= 0 || !subject || !fact) {
+      return c.json(
+        {
+          ok: false,
+          reason: !guildId
+            ? "guild_id_required"
+            : !Number.isInteger(factId) || factId <= 0
+              ? "fact_id_required"
+              : !subject
+                ? "subject_required"
+                : "fact_required"
+        },
+        400
+      );
+    }
+    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
+      return c.json(
+        {
+          ok: false,
+          reason: "confidence_invalid"
+        },
+        400
+      );
+    }
+
+    const existing = store.getMemoryFactById(factId, { guildId });
+    if (!existing) {
+      return c.json(
+        {
+          ok: false,
+          reason: "fact_not_found"
+        },
+        404
+      );
+    }
+
+    const result = store.updateMemoryFact({
+      factId,
+      guildId,
+      channelId: existing.channel_id,
+      subject,
+      fact,
+      factType,
+      evidenceText,
+      sourceMessageId: existing.source_message_id,
+      confidence
+    });
+
+    if (!result?.ok) {
+      return c.json(
+        {
+          ok: false,
+          reason: String(result?.error || "memory_fact_update_failed")
+        },
+        String(result?.error || "").trim() === "duplicate_fact" ? 409 : 400
+      );
+    }
+
+    const updated = result.fact || store.getMemoryFactById(factId, { guildId });
+    store.logAction({
+      kind: "memory_fact_updated",
+      guildId,
+      channelId: updated?.channel_id || existing.channel_id,
+      messageId: updated?.source_message_id || existing.source_message_id,
+      content: updated?.fact || fact,
+      metadata: {
+        actorName,
+        source: "dashboard",
+        factId,
+        subject: updated?.subject || subject,
+        factType: updated?.fact_type || factType,
+        channelId: updated?.channel_id || existing.channel_id,
+        sourceMessageId: updated?.source_message_id || existing.source_message_id,
+        previous: existing,
+        next: updated
+      }
+    });
+
+    return c.json({
+      ok: true,
+      fact: mapDashboardFactRow(updated)
+    });
+  });
+
+  app.post("/api/memory/facts/:factId/remove", async (c) => {
+    const body = await readDashboardBody(c);
+    const guildId = String(body.guildId || "").trim();
+    const factId = Number(c.req.param("factId"));
+    const actorName = String(body.actorName || "dashboard").trim() || "dashboard";
+    const removalReason = String(body.removalReason || "").trim() || null;
+    if (!guildId || !Number.isInteger(factId) || factId <= 0) {
+      return c.json(
+        {
+          ok: false,
+          reason: !guildId ? "guild_id_required" : "fact_id_required"
+        },
+        400
+      );
+    }
+
+    const existing = store.getMemoryFactById(factId, { guildId });
+    if (!existing) {
+      return c.json(
+        {
+          ok: false,
+          reason: "fact_not_found"
+        },
+        404
+      );
+    }
+
+    const result = store.removeMemoryFact({
+      factId,
+      guildId
+    });
+    if (!result?.ok) {
+      return c.json(
+        {
+          ok: false,
+          reason: String(result?.error || "memory_fact_remove_failed")
+        },
+        400
+      );
+    }
+
+    store.logAction({
+      kind: "memory_fact_removed",
+      guildId,
+      channelId: existing.channel_id,
+      messageId: existing.source_message_id,
+      content: existing.fact,
+      metadata: {
+        actorName,
+        source: "dashboard",
+        factId,
+        subject: existing.subject,
+        factType: existing.fact_type,
+        channelId: existing.channel_id,
+        sourceMessageId: existing.source_message_id,
+        removalReason,
+        previous: existing
+      }
+    });
+
+    return c.json({
+      ok: true,
+      factId
+    });
   });
 }
 

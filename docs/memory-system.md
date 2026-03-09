@@ -6,7 +6,7 @@ This document describes how durable memory works in runtime, based on current co
 
 Durable memory has three layers:
 
-1. **Daily journals** (`memory/YYYY-MM-DD.md`): append-only logs of every message and voice transcript. Raw material.
+1. **Daily journals** (`memory/YYYY-MM-DD.md`): append-only logs of ingested user text, bot-authored text outputs, and voice transcripts. Raw material.
 2. **Daily reflection**: an LLM pass that reviews each day's journal and distills it into durable facts. The bridge between raw logs and long-term memory.
 3. **SQLite facts + vectors** (`memory_facts`, `memory_fact_vectors_native`): the durable knowledge base used by runtime retrieval and prompts.
 
@@ -66,13 +66,18 @@ Created in `Store.init()` (`src/store/store.ts`) with key fields:
 
 ### Message ingest pipeline (text chat)
 
-Triggered in `ClankerBot.handleMessage()` when `settings.memory.enabled` is true:
+Text-side journaling now captures both the incoming user side and the bot-authored output side when `settings.memory.enabled` is true:
 
-1. `memory.ingestMessage(...)` queues a job keyed by `messageId`.
-2. Queue behavior:
+1. **Incoming user text**: `ClankerBot.handleMessage()` calls `memory.ingestMessage(...)`.
+2. **Outgoing bot text**:
+   - `src/bot/replyPipeline.ts` journals normal text replies after the send succeeds.
+   - `src/bot/automationEngine.ts` journals automation posts after publish.
+   - `src/bot/discoveryEngine.ts` journals discovery posts after publish.
+3. All of those calls queue a job keyed by `messageId`.
+4. Queue behavior:
    - Dedupes concurrent same-message jobs by returning one shared promise.
    - Max queue length is `400`; overflow drops the oldest job and resolves it as `false`.
-3. Worker runs `processIngestMessage(...)` sequentially:
+5. Worker runs `processIngestMessage(...)` sequentially:
    - Cleans content (trim/collapse, max 320 chars; empty/too short dropped).
    - Appends one line to `memory/YYYY-MM-DD.md`.
    - Schedules markdown refresh (`queueMemoryRefresh`, debounced by `pendingWrite` + 1s delay).
@@ -83,7 +88,7 @@ Note: `processIngestMessage` does **not** perform automatic fact extraction. Dur
 
 Voice paths also feed durable memory using synthetic message IDs:
 
-- **User speech**: `src/voice/voiceSessionManager.ts` calls `memory.ingestMessage(...)` via `queueVoiceMemoryIngest()` for user transcripts (both realtime and STT pipeline).
+- **User speech**: `src/voice/voiceSessionManager.ts` calls `memory.ingestMessage(...)` via `queueVoiceMemoryIngest()` for user transcripts from both realtime bridge and file-ASR turns.
 - **Bot replies**: `src/voice/voiceSessionManager.ts` calls `memory.ingestMessage(...)` in `persistAssistantVoiceTimelineTurn()` so bot-spoken replies also appear in the daily journal.
 
 Both sides of voice conversations are now captured in the daily journal, giving daily reflection the full conversation context.
@@ -123,15 +128,19 @@ Both paths produce the same kind of durable facts in `memory_facts`. Reflection 
 
 Durable facts are created when the brain decides to call the `memory_write` tool during conversation.
 
-**Tool definition** (`src/tools/replyTools.ts`): accepts an `items` array, each with `text` and `scope`:
+**Tool definition** (`src/tools/replyTools.ts` / `src/memory/memoryToolRuntime.ts`): accepts a `namespace` plus an `items` array, where each item has `text` and optional `type`.
 
-- `scope = "lore"` → stored under subject `__lore__`, prefix `"Memory line"`, `fact_type = "lore"`, keep latest 120.
-- `scope = "self"` → stored under subject `__self__`, prefix `"Self memory"`, `fact_type = "self"`, keep latest 120.
-- `scope = "user"` → stored under the speaker's user ID as subject, prefix `"User memory"`, `fact_type = "preference"`, keep latest 80.
+- `namespace = "speaker"` / `user:<id>` → stored under that user's Discord ID as `subject`.
+- `namespace = "guild"` / `guild:<guildId>` → stored under subject `__lore__`.
+- `namespace = "self"` → stored under subject `__self__`.
+- `items[].type` can explicitly preserve `preference`, `profile`, `relationship`, `project`, or `other`.
+- If `type` is omitted, the write path falls back to the scope default (`preference` for user facts, `lore` for guild lore, `self` for bot self-memory).
 
 All scopes share: `confidence = 0.72`, grounding check against source text, instruction-like text rejection.
 
-**Execution path**: tool call → `executeMemoryWrite()` in `replyTools.ts` → `memory.rememberDirectiveLine({ line, scope, subjectOverride, ... })` → `store.addMemoryFact(...)` → async embedding → archive old facts → markdown refresh.
+**Structured text reply path**: the text reply schema can also save one direct fact without a tool call by filling `memoryLine + memoryScope + memoryFactType` or `selfMemoryLine + selfMemoryFactType`. The reply pipeline routes those through the same durable-write path as `memory_write`.
+
+**Execution path**: tool call or structured reply directive → `executeMemoryWrite()` / reply pipeline → `memory.rememberDirectiveLineDetailed({ line, scope, subjectOverride, factType, ... })` → `store.addMemoryFact(...)` → async embedding → archive old facts → markdown refresh.
 
 When `memory_write` fires during an active voice session, the affected user's cached fact profile is refreshed on the session object so subsequent turns see the new fact without a full reload.
 
@@ -167,7 +176,7 @@ The LLM already distinguishes fact types at write time (both `memory_write` and 
 Facts written through `memory_write` are filtered in `memory.rememberDirectiveLine()` and `memoryHelpers.ts`:
 
 - Input normalization and length bounds (`normalizeMemoryLineInput`).
-- Fact type normalization (`preference|profile|relationship|project|other`; `general` collapses to `other`).
+- Fact type normalization (`preference|profile|relationship|project|other`; `general` collapses to `other`; scope defaults preserve `lore` / `self` for those buckets).
 - Instruction/prompt-injection-like text rejection (`isInstructionLikeFactText` — rejects `system`, `developer`, `ignore previous`, secrets, etc.).
 - Grounding requirement (`isTextGroundedInSource`):
   - Exact compact-substring pass, or
@@ -235,7 +244,7 @@ For targeted, context-aware memory lookup the model calls the `memory_search` to
 
 For on-demand model-triggered and dashboard memory lookup:
 
-- Pulls guild-scoped active facts (`getFactsForScope`).
+- Pulls guild-scoped active facts (`getFactsForScope`), with optional `subjectIds` and `factTypes` prefilters when the caller already knows the namespace or desired fact tags.
 - Hybrid ranking with strict relevance gate enabled.
 - Returns top N (limit clamped to 1..24).
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useDeferredValue, useEffect, useState } from "react";
 import { api } from "../../api";
 import { GuildSelectField } from "./MemoryFormFields";
 
@@ -28,9 +28,39 @@ interface FactRow {
   confidence: number;
 }
 
+interface FactDraft {
+  subject: string;
+  factType: string;
+  fact: string;
+  evidenceText: string;
+  confidence: string;
+}
+
+interface FactAuditEvent {
+  id: number | null;
+  createdAt: string | null;
+  eventType: string;
+  actorName: string | null;
+  source: string | null;
+  factId: number | null;
+  subject: string | null;
+  factType: string | null;
+  fact: string | null;
+  previousFact: string | null;
+  nextFact: string | null;
+  channelId: string | null;
+  sourceMessageId: string | null;
+  removalReason: string | null;
+}
+
 interface Props {
   guilds: Guild[];
 }
+
+type StatusState = {
+  text: string;
+  tone: "error" | "info";
+} | null;
 
 function timeAgo(isoDate: string): string {
   const ms = Date.now() - new Date(isoDate).getTime();
@@ -45,6 +75,57 @@ function timeAgo(isoDate: string): string {
   return `${days}d ago`;
 }
 
+function formatTimestamp(value: string | null | undefined) {
+  const raw = String(value || "").trim();
+  if (!raw) return "unknown time";
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return raw;
+  return parsed.toLocaleString();
+}
+
+function formatAuditLabel(eventType: string) {
+  const normalized = String(eventType || "").trim().toLowerCase();
+  if (normalized === "removed") return "Removed";
+  if (normalized === "updated") return "Edited";
+  return "Added";
+}
+
+function createDraft(fact: FactRow): FactDraft {
+  return {
+    subject: fact.subject,
+    factType: fact.fact_type,
+    fact: fact.fact,
+    evidenceText: fact.evidence_text || "",
+    confidence: Number.isFinite(fact.confidence) ? String(fact.confidence) : "0.5"
+  };
+}
+
+function hasDraftChanges(fact: FactRow, draft: FactDraft | undefined) {
+  if (!draft) return false;
+  const nextConfidence = Number(draft.confidence);
+  return (
+    draft.subject.trim() !== fact.subject.trim() ||
+    draft.factType.trim() !== fact.fact_type.trim() ||
+    draft.fact.trim() !== fact.fact.trim() ||
+    draft.evidenceText.trim() !== String(fact.evidence_text || "").trim() ||
+    !Number.isFinite(nextConfidence) ||
+    Math.abs(nextConfidence - Number(fact.confidence || 0)) > 0.0001
+  );
+}
+
+function buildAuditSummary(event: FactAuditEvent) {
+  if (event.eventType === "updated") {
+    if (event.previousFact && event.nextFact && event.previousFact !== event.nextFact) {
+      return `${event.previousFact} -> ${event.nextFact}`;
+    }
+    return event.nextFact || event.fact || "Fact updated.";
+  }
+  if (event.eventType === "removed") {
+    return event.previousFact || event.fact || "Fact removed.";
+  }
+  return event.nextFact || event.fact || "Fact added.";
+}
+
 export default function MemoryInspector({ guilds }: Props) {
   const [guildId, setGuildId] = useState("");
   const [subjects, setSubjects] = useState<SubjectRow[]>([]);
@@ -52,9 +133,17 @@ export default function MemoryInspector({ guilds }: Props) {
   const [facts, setFacts] = useState<FactRow[]>([]);
   const [expandedFactId, setExpandedFactId] = useState<number | null>(null);
   const [subjectFilter, setSubjectFilter] = useState("");
+  const [factQuery, setFactQuery] = useState("");
+  const [draftsById, setDraftsById] = useState<Record<number, FactDraft>>({});
+  const [auditByFactId, setAuditByFactId] = useState<Record<number, FactAuditEvent[]>>({});
   const [loadingSubjects, setLoadingSubjects] = useState(false);
   const [loadingFacts, setLoadingFacts] = useState(false);
+  const [loadingAuditFactId, setLoadingAuditFactId] = useState<number | null>(null);
+  const [savingId, setSavingId] = useState<number | null>(null);
+  const [removingId, setRemovingId] = useState<number | null>(null);
+  const [status, setStatus] = useState<StatusState>(null);
   const [factLimit, setFactLimit] = useState(120);
+  const deferredFactQuery = useDeferredValue(factQuery);
 
   useEffect(() => {
     if (!guildId && guilds.length > 0) {
@@ -83,34 +172,171 @@ export default function MemoryInspector({ guilds }: Props) {
     try {
       const params = new URLSearchParams({ guildId, limit: String(factLimit) });
       if (subject) params.set("subject", subject);
+      if (deferredFactQuery.trim()) params.set("q", deferredFactQuery.trim());
       const data = await api<{ facts: FactRow[] }>(`/api/memory/facts?${params}`);
-      setFacts(Array.isArray(data.facts) ? data.facts : []);
+      const nextFacts = Array.isArray(data.facts) ? data.facts : [];
+      setFacts(nextFacts);
+      setDraftsById(Object.fromEntries(nextFacts.map((fact) => [fact.id, createDraft(fact)])));
     } catch {
       setFacts([]);
+      setDraftsById({});
     } finally {
       setLoadingFacts(false);
     }
-  }, [guildId, factLimit]);
+  }, [deferredFactQuery, factLimit, guildId]);
+
+  const loadAuditForFact = useCallback(async (factId: number) => {
+    if (!guildId || !Number.isInteger(factId) || factId <= 0) return;
+    setLoadingAuditFactId(factId);
+    try {
+      const data = await api<{ events: FactAuditEvent[] }>(
+        `/api/memory/facts/audit?guildId=${encodeURIComponent(guildId)}&factId=${encodeURIComponent(String(factId))}&limit=12`
+      );
+      setAuditByFactId((current) => ({
+        ...current,
+        [factId]: Array.isArray(data.events) ? data.events : []
+      }));
+    } catch {
+      setAuditByFactId((current) => ({
+        ...current,
+        [factId]: []
+      }));
+    } finally {
+      setLoadingAuditFactId((current) => (current === factId ? null : current));
+    }
+  }, [guildId]);
 
   useEffect(() => {
-    if (guildId) {
-      void loadSubjects();
-      setSelectedSubject(null);
-      setFacts([]);
-    }
+    if (!guildId) return;
+    setSelectedSubject(null);
+    setFacts([]);
+    setDraftsById({});
+    setAuditByFactId({});
+    setExpandedFactId(null);
+    setStatus(null);
+    void loadSubjects();
   }, [guildId, loadSubjects]);
 
   useEffect(() => {
     if (guildId) {
       void loadFacts(selectedSubject);
     }
-  }, [guildId, selectedSubject, loadFacts]);
+  }, [guildId, loadFacts, selectedSubject]);
 
-  const totalFacts = subjects.reduce((sum, s) => sum + s.fact_count, 0);
+  useEffect(() => {
+    if (expandedFactId === null) return;
+    if (!facts.some((fact) => fact.id === expandedFactId)) {
+      setExpandedFactId(null);
+    }
+  }, [expandedFactId, facts]);
+
+  useEffect(() => {
+    if (!expandedFactId) return;
+    if (auditByFactId[expandedFactId]) return;
+    void loadAuditForFact(expandedFactId);
+  }, [auditByFactId, expandedFactId, loadAuditForFact]);
+
+  const refreshInspector = useCallback(async () => {
+    await Promise.all([
+      loadSubjects(),
+      loadFacts(selectedSubject)
+    ]);
+  }, [loadFacts, loadSubjects, selectedSubject]);
+
+  const handleSaveFact = useCallback(async (fact: FactRow) => {
+    const draft = draftsById[fact.id];
+    if (!guildId || !draft) return;
+
+    const nextSubject = draft.subject.trim();
+    const nextFactType = draft.factType.trim() || "general";
+    const nextFact = draft.fact.trim();
+    const nextEvidenceText = draft.evidenceText.trim();
+    const nextConfidence = Number(draft.confidence);
+
+    if (!nextSubject || !nextFact) {
+      setStatus({
+        text: "Subject and fact text are required.",
+        tone: "error"
+      });
+      return;
+    }
+    if (!Number.isFinite(nextConfidence) || nextConfidence < 0 || nextConfidence > 1) {
+      setStatus({
+        text: "Confidence must be between 0 and 1.",
+        tone: "error"
+      });
+      return;
+    }
+
+    setSavingId(fact.id);
+    setStatus(null);
+    try {
+      await api(`/api/memory/facts/${encodeURIComponent(String(fact.id))}`, {
+        method: "PATCH",
+        body: {
+          guildId,
+          subject: nextSubject,
+          factType: nextFactType,
+          fact: nextFact,
+          evidenceText: nextEvidenceText || null,
+          confidence: nextConfidence
+        }
+      });
+      await refreshInspector();
+      await loadAuditForFact(fact.id);
+      setStatus({
+        text: "Memory fact updated.",
+        tone: "info"
+      });
+    } catch (error: unknown) {
+      setStatus({
+        text: error instanceof Error ? error.message : String(error),
+        tone: "error"
+      });
+    } finally {
+      setSavingId(null);
+    }
+  }, [draftsById, guildId, loadAuditForFact, refreshInspector]);
+
+  const handleRemoveFact = useCallback(async (fact: FactRow) => {
+    if (!guildId) return;
+    setRemovingId(fact.id);
+    setStatus(null);
+    try {
+      await api(`/api/memory/facts/${encodeURIComponent(String(fact.id))}/remove`, {
+        method: "POST",
+        body: {
+          guildId
+        }
+      });
+      setAuditByFactId((current) => {
+        const next = { ...current };
+        delete next[fact.id];
+        return next;
+      });
+      if (expandedFactId === fact.id) {
+        setExpandedFactId(null);
+      }
+      await refreshInspector();
+      setStatus({
+        text: "Memory fact removed.",
+        tone: "info"
+      });
+    } catch (error: unknown) {
+      setStatus({
+        text: error instanceof Error ? error.message : String(error),
+        tone: "error"
+      });
+    } finally {
+      setRemovingId(null);
+    }
+  }, [expandedFactId, guildId, refreshInspector]);
+
+  const totalFacts = subjects.reduce((sum, subject) => sum + subject.fact_count, 0);
 
   const filteredSubjects = subjectFilter.trim()
-    ? subjects.filter((s) =>
-        s.subject.toLowerCase().includes(subjectFilter.toLowerCase())
+    ? subjects.filter((subject) =>
+        subject.subject.toLowerCase().includes(subjectFilter.toLowerCase())
       )
     : subjects;
 
@@ -131,7 +357,9 @@ export default function MemoryInspector({ guilds }: Props) {
           <button
             type="button"
             className="sm"
-            onClick={() => { void loadSubjects(); void loadFacts(selectedSubject); }}
+            onClick={() => {
+              void refreshInspector();
+            }}
             disabled={loadingSubjects || loadingFacts}
           >
             Reload
@@ -139,10 +367,20 @@ export default function MemoryInspector({ guilds }: Props) {
         </div>
       </div>
 
+      <p className="memory-reflection-copy">
+        Inspect the durable facts feeding long-term memory, search them by content or source metadata, then edit or remove stale entries without touching the raw SQLite file.
+      </p>
+
+      {status && (
+        <p className={`memory-reflection-inline-status${status.tone === "error" ? " error" : ""}`} role="status">
+          {status.text}
+        </p>
+      )}
+
       <div className="inspector-body">
         <aside className="inspector-subjects">
           <div className="inspector-subjects-header">
-            <span className="inspector-subjects-title">SUBJECTS</span>
+            <span className="inspector-subjects-title">Subjects</span>
             <span className="inspector-subjects-count">{filteredSubjects.length}</span>
           </div>
           <input
@@ -150,7 +388,7 @@ export default function MemoryInspector({ guilds }: Props) {
             type="text"
             placeholder="Filter subjects..."
             value={subjectFilter}
-            onChange={(e) => setSubjectFilter(e.target.value)}
+            onChange={(event) => setSubjectFilter(event.target.value)}
           />
           <button
             type="button"
@@ -164,16 +402,16 @@ export default function MemoryInspector({ guilds }: Props) {
             {loadingSubjects && subjects.length === 0 && (
               <div className="inspector-empty">Loading...</div>
             )}
-            {filteredSubjects.map((s) => (
+            {filteredSubjects.map((subject) => (
               <button
-                key={s.subject}
+                key={subject.subject}
                 type="button"
-                className={`inspector-subject-item${selectedSubject === s.subject ? " active" : ""}`}
-                onClick={() => setSelectedSubject(s.subject)}
-                title={`Last updated: ${timeAgo(s.last_seen_at)}`}
+                className={`inspector-subject-item${selectedSubject === subject.subject ? " active" : ""}`}
+                onClick={() => setSelectedSubject(subject.subject)}
+                title={`Last updated: ${timeAgo(subject.last_seen_at)}`}
               >
-                <span className="inspector-subject-name">{s.subject}</span>
-                <span className="inspector-subject-count">{s.fact_count}</span>
+                <span className="inspector-subject-name">{subject.subject}</span>
+                <span className="inspector-subject-count">{subject.fact_count}</span>
               </button>
             ))}
           </div>
@@ -182,17 +420,24 @@ export default function MemoryInspector({ guilds }: Props) {
         <div className="inspector-facts">
           <div className="inspector-facts-header">
             <span className="inspector-facts-title">
-              {selectedSubject ? `FACTS FOR ${selectedSubject}` : "ALL FACTS"}
+              {selectedSubject ? `Facts For ${selectedSubject}` : "All Facts"}
             </span>
             <div className="inspector-facts-controls">
+              <input
+                className="inspector-facts-filter"
+                type="text"
+                value={factQuery}
+                onChange={(event) => setFactQuery(event.target.value)}
+                placeholder="Search fact text, evidence, channel, source..."
+              />
               <label className="inspector-limit-label">
                 Limit
                 <select
                   value={factLimit}
-                  onChange={(e) => setFactLimit(Number(e.target.value))}
+                  onChange={(event) => setFactLimit(Number(event.target.value))}
                 >
-                  {[60, 120, 250, 500].map((n) => (
-                    <option key={n} value={n}>{n}</option>
+                  {[60, 120, 250, 500].map((value) => (
+                    <option key={value} value={value}>{value}</option>
                   ))}
                 </select>
               </label>
@@ -204,7 +449,7 @@ export default function MemoryInspector({ guilds }: Props) {
 
           {facts.length === 0 && !loadingFacts ? (
             <div className="inspector-empty">
-              {guildId ? "No facts found." : "Select a guild to inspect memory."}
+              {guildId ? "No matching facts found." : "Select a guild to inspect memory."}
             </div>
           ) : (
             <div className="inspector-facts-table-wrap">
@@ -220,17 +465,35 @@ export default function MemoryInspector({ guilds }: Props) {
                   </tr>
                 </thead>
                 <tbody>
-                  {facts.map((f) => {
-                    const isOpen = expandedFactId === f.id;
-                    return (
-                      <FactRowView
-                        key={f.id}
-                        fact={f}
-                        isOpen={isOpen}
-                        onToggle={() => setExpandedFactId(isOpen ? null : f.id)}
-                      />
-                    );
-                  })}
+                  {facts.map((fact) => (
+                    <FactRowView
+                      key={fact.id}
+                      fact={fact}
+                      draft={draftsById[fact.id]}
+                      isOpen={expandedFactId === fact.id}
+                      isSaving={savingId === fact.id}
+                      isRemoving={removingId === fact.id}
+                      auditEvents={auditByFactId[fact.id] || []}
+                      auditLoading={loadingAuditFactId === fact.id}
+                      onToggle={() => setExpandedFactId((current) => (current === fact.id ? null : fact.id))}
+                      onDraftChange={(patch) =>
+                        setDraftsById((current) => ({
+                          ...current,
+                          [fact.id]: {
+                            ...createDraft(fact),
+                            ...current[fact.id],
+                            ...patch
+                          }
+                        }))
+                      }
+                      onSave={() => {
+                        void handleSaveFact(fact);
+                      }}
+                      onRemove={() => {
+                        void handleRemoveFact(fact);
+                      }}
+                    />
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -243,13 +506,31 @@ export default function MemoryInspector({ guilds }: Props) {
 
 function FactRowView({
   fact,
+  draft,
   isOpen,
-  onToggle
+  isSaving,
+  isRemoving,
+  auditEvents,
+  auditLoading,
+  onToggle,
+  onDraftChange,
+  onSave,
+  onRemove
 }: {
   fact: FactRow;
+  draft: FactDraft | undefined;
   isOpen: boolean;
+  isSaving: boolean;
+  isRemoving: boolean;
+  auditEvents: FactAuditEvent[];
+  auditLoading: boolean;
   onToggle: () => void;
+  onDraftChange: (patch: Partial<FactDraft>) => void;
+  onSave: () => void;
+  onRemove: () => void;
 }) {
+  const changed = hasDraftChanges(fact, draft);
+
   return (
     <>
       <tr
@@ -277,48 +558,141 @@ function FactRowView({
             <div className="inspector-detail">
               <div className="inspector-detail-grid">
                 <div>
-                  <span className="inspector-detail-label">FACT ID</span>
+                  <span className="inspector-detail-label">Fact ID</span>
                   <span className="inspector-detail-value">{fact.id}</span>
                 </div>
                 <div>
-                  <span className="inspector-detail-label">GUILD</span>
+                  <span className="inspector-detail-label">Guild</span>
                   <span className="inspector-detail-value">{fact.guild_id}</span>
                 </div>
                 <div>
-                  <span className="inspector-detail-label">CHANNEL</span>
+                  <span className="inspector-detail-label">Channel</span>
                   <span className="inspector-detail-value">{fact.channel_id || "—"}</span>
                 </div>
                 <div>
-                  <span className="inspector-detail-label">SOURCE MSG</span>
+                  <span className="inspector-detail-label">Source Msg</span>
                   <span className="inspector-detail-value">{fact.source_message_id || "—"}</span>
                 </div>
                 <div>
-                  <span className="inspector-detail-label">CREATED</span>
-                  <span className="inspector-detail-value">{new Date(fact.created_at).toLocaleString()}</span>
+                  <span className="inspector-detail-label">Created</span>
+                  <span className="inspector-detail-value">{formatTimestamp(fact.created_at)}</span>
                 </div>
                 <div>
-                  <span className="inspector-detail-label">UPDATED</span>
-                  <span className="inspector-detail-value">{new Date(fact.updated_at).toLocaleString()}</span>
+                  <span className="inspector-detail-label">Updated</span>
+                  <span className="inspector-detail-value">{formatTimestamp(fact.updated_at)}</span>
                 </div>
                 <div>
-                  <span className="inspector-detail-label">CONFIDENCE</span>
+                  <span className="inspector-detail-label">Confidence</span>
                   <span className="inspector-detail-value">{(fact.confidence * 100).toFixed(1)}%</span>
                 </div>
                 <div>
-                  <span className="inspector-detail-label">TYPE</span>
+                  <span className="inspector-detail-label">Type</span>
                   <span className="inspector-detail-value">{fact.fact_type}</span>
                 </div>
               </div>
-              <div className="inspector-detail-section">
-                <span className="inspector-detail-label">FULL FACT</span>
-                <p className="inspector-detail-text">{fact.fact}</p>
+
+              <div className="inspector-editor-grid">
+                <label>
+                  Subject
+                  <input
+                    type="text"
+                    value={draft?.subject || ""}
+                    onChange={(event) => onDraftChange({ subject: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Type
+                  <input
+                    type="text"
+                    value={draft?.factType || ""}
+                    onChange={(event) => onDraftChange({ factType: event.target.value })}
+                  />
+                </label>
+                <label>
+                  Confidence
+                  <input
+                    type="number"
+                    min="0"
+                    max="1"
+                    step="0.01"
+                    value={draft?.confidence || ""}
+                    onChange={(event) => onDraftChange({ confidence: event.target.value })}
+                  />
+                </label>
               </div>
-              {fact.evidence_text && (
-                <div className="inspector-detail-section">
-                  <span className="inspector-detail-label">EVIDENCE</span>
-                  <p className="inspector-detail-evidence">{fact.evidence_text}</p>
-                </div>
-              )}
+
+              <div className="inspector-detail-section">
+                <span className="inspector-detail-label">Editable Fact</span>
+                <textarea
+                  className="inspector-editor-textarea"
+                  value={draft?.fact || ""}
+                  onChange={(event) => onDraftChange({ fact: event.target.value })}
+                  rows={3}
+                />
+              </div>
+
+              <div className="inspector-detail-section">
+                <span className="inspector-detail-label">Evidence / Source Note</span>
+                <textarea
+                  className="inspector-editor-textarea inspector-editor-textarea-subtle"
+                  value={draft?.evidenceText || ""}
+                  onChange={(event) => onDraftChange({ evidenceText: event.target.value })}
+                  rows={3}
+                />
+              </div>
+
+              <div className="inspector-detail-actions">
+                <button
+                  type="button"
+                  className="cta"
+                  disabled={!changed || isSaving || isRemoving}
+                  onClick={onSave}
+                >
+                  {isSaving ? "Saving..." : "Save Fact"}
+                </button>
+                <button
+                  type="button"
+                  disabled={isSaving || isRemoving}
+                  onClick={onRemove}
+                >
+                  {isRemoving ? "Removing..." : "Remove Fact"}
+                </button>
+              </div>
+
+              <div className="inspector-detail-section">
+                <span className="inspector-detail-label">Audit Trail</span>
+                {auditLoading ? (
+                  <p className="inspector-detail-text">Loading fact history...</p>
+                ) : auditEvents.length === 0 ? (
+                  <p className="inspector-detail-text">
+                    No explicit edit/remove events yet. Current timestamps and source metadata above still show when this fact was created and last updated.
+                  </p>
+                ) : (
+                  <div className="inspector-audit-list">
+                    {auditEvents.map((event) => (
+                      <article
+                        key={`${String(event.id || "audit")}:${String(event.createdAt || "")}:${event.eventType}`}
+                        className="inspector-audit-card"
+                      >
+                        <div className="inspector-audit-meta">
+                          <strong>{formatAuditLabel(event.eventType)}</strong>
+                          <span>{formatTimestamp(event.createdAt)}</span>
+                          <span>{event.actorName ? `by ${event.actorName}` : "actor unknown"}</span>
+                          {event.source ? <span>{event.source}</span> : null}
+                        </div>
+                        <p className="inspector-audit-text">{buildAuditSummary(event)}</p>
+                        {(event.removalReason || event.channelId || event.sourceMessageId) && (
+                          <div className="inspector-audit-submeta">
+                            {event.removalReason ? <span>Reason: {event.removalReason}</span> : null}
+                            {event.channelId ? <span>Channel: {event.channelId}</span> : null}
+                            {event.sourceMessageId ? <span>Source: {event.sourceMessageId}</span> : null}
+                          </div>
+                        )}
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </td>
         </tr>

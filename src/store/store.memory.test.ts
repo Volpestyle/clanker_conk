@@ -103,6 +103,87 @@ test("archiveOldFactsForSubject evicts contextual facts before core facts", asyn
   });
 });
 
+test("memory facts support query filtering, updates, and removal", async () => {
+  await withTempStore(async (store) => {
+    store.addMemoryFact({
+      guildId: "guild-a",
+      channelId: "chan-1",
+      subject: "user-1",
+      fact: "User likes old school DS hardware.",
+      factType: "preference",
+      evidenceText: "Mentioned old school DS hardware.",
+      sourceMessageId: "msg-1",
+      confidence: 0.77
+    });
+    store.addMemoryFact({
+      guildId: "guild-a",
+      channelId: "chan-2",
+      subject: "user-2",
+      fact: "User likes tea.",
+      factType: "preference",
+      evidenceText: "Mentioned tea.",
+      sourceMessageId: "msg-2",
+      confidence: 0.61
+    });
+
+    const matching = store.getFactsForScope({
+      guildId: "guild-a",
+      limit: 10,
+      queryText: "old school ds"
+    });
+    assert.equal(matching.length, 1);
+    assert.equal(matching[0]?.subject, "user-1");
+
+    const factId = Number(matching[0]?.id);
+    const updated = store.updateMemoryFact({
+      factId,
+      guildId: "guild-a",
+      channelId: "chan-1",
+      subject: "user-1",
+      fact: "User collects old school DS hardware and games.",
+      factType: "profile",
+      evidenceText: "Updated after audit.",
+      sourceMessageId: "msg-1",
+      confidence: 0.92
+    });
+    assert.equal(updated.ok, true);
+    assert.equal(updated.fact?.fact, "User collects old school DS hardware and games.");
+    assert.equal(updated.fact?.fact_type, "profile");
+
+    const updatedSearch = store.getFactsForScope({
+      guildId: "guild-a",
+      limit: 10,
+      queryText: "hardware and games"
+    });
+    assert.equal(updatedSearch.length, 1);
+    assert.equal(updatedSearch[0]?.id, factId);
+
+    const subjectFiltered = store.getFactsForScope({
+      guildId: "guild-a",
+      limit: 10,
+      subjectIds: ["user-2"]
+    });
+    assert.equal(subjectFiltered.length, 1);
+    assert.equal(subjectFiltered[0]?.subject, "user-2");
+
+    const typeFiltered = store.getFactsForScope({
+      guildId: "guild-a",
+      limit: 10,
+      factTypes: ["profile"]
+    });
+    assert.equal(typeFiltered.length, 1);
+    assert.equal(typeFiltered[0]?.id, factId);
+
+    const removed = store.removeMemoryFact({
+      factId,
+      guildId: "guild-a"
+    });
+    assert.equal(removed.ok, true);
+    assert.equal(store.getMemoryFactById(factId, { guildId: "guild-a" }), null);
+    assert.equal(store.getMemoryFactById(factId, { guildId: "guild-a", includeInactive: true })?.fact, removed.fact?.fact);
+  });
+});
+
 test("voice reply decision llm settings normalize provider and model", async () => {
   await withTempStore(async (store) => {
     const patched = store.patchSettings(createTestSettingsPatch({

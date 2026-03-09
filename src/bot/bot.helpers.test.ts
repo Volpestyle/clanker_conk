@@ -15,6 +15,11 @@ test("parseStructuredReplyOutput reads structured reply JSON", () => {
       skip: false,
       reactionEmoji: "🔥",
       media: { type: "gif", prompt: "cat dance" },
+      memoryLine: "Alice prefers tea over coffee.",
+      memoryScope: "user",
+      memoryFactType: "preference",
+      selfMemoryLine: "I prefer concise replies.",
+      selfMemoryFactType: "preference",
       voiceIntent: {
         intent: "join",
         confidence: 0.92,
@@ -27,6 +32,11 @@ test("parseStructuredReplyOutput reads structured reply JSON", () => {
   assert.equal(parsed.reactionEmoji, "🔥");
   assert.equal(parsed.gifQuery, "cat dance");
   assert.equal(parsed.mediaDirective?.type, "gif");
+  assert.equal(parsed.memoryLine, "Alice prefers tea over coffee.");
+  assert.equal(parsed.memoryScope, "user");
+  assert.equal(parsed.memoryFactType, "preference");
+  assert.equal(parsed.selfMemoryLine, "I prefer concise replies.");
+  assert.equal(parsed.selfMemoryFactType, "preference");
   assert.equal(parsed.automationAction.operation, null);
   assert.equal(parsed.voiceIntent.intent, "join");
   assert.equal(parsed.voiceIntent.confidence, 0.92);
@@ -44,7 +54,30 @@ test("parseStructuredReplyOutput rejects unstructured plain text", () => {
   assert.equal(parsed.voiceIntent.reason, null);
   assert.equal(parsed.voiceAddressing.talkingTo, null);
   assert.equal(parsed.voiceAddressing.directedConfidence, 0);
+  assert.equal(parsed.memoryScope, null);
+  assert.equal(parsed.memoryFactType, null);
+  assert.equal(parsed.selfMemoryFactType, null);
   assert.equal(parsed.parseState, "unstructured");
+});
+
+test("parseStructuredReplyOutput normalizes invalid memory scope and fact types", () => {
+  const parsed = parseStructuredReplyOutput(
+    JSON.stringify({
+      text: "bet",
+      skip: false,
+      memoryLine: "Alice likes tea.",
+      memoryScope: "guild",
+      memoryFactType: "identity",
+      selfMemoryLine: "I prefer short replies.",
+      selfMemoryFactType: "persona"
+    })
+  );
+
+  assert.equal(parsed.memoryLine, "Alice likes tea.");
+  assert.equal(parsed.memoryScope, null);
+  assert.equal(parsed.memoryFactType, null);
+  assert.equal(parsed.selfMemoryLine, "I prefer short replies.");
+  assert.equal(parsed.selfMemoryFactType, null);
 });
 
 test("compose media prompts fall back to contextual defaults when no prompt is provided", () => {

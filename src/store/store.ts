@@ -20,7 +20,7 @@ import { wasLinkSharedSince, recordSharedLink, pruneLookupContext, recordLookupC
 import { getRecentVoiceSessions, getVoiceSessionEvents } from "./storeVoice.ts";
 import { getReplyPerformanceStats, getStats } from "./storeStats.ts";
 import { createAutomation, getAutomationById, countAutomations, listAutomations, getMostRecentAutomations, findAutomationsByQuery, setAutomationStatus, claimDueAutomations, finalizeAutomationRun, recordAutomationRun, getAutomationRuns } from "./storeAutomation.ts";
-import { addMemoryFact, getFactProfileRows, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactBySubjectAndFact, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject } from "./storeMemory.ts";
+import { addMemoryFact, getFactProfileRows, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactById, getMemoryFactBySubjectAndFact, updateMemoryFact, removeMemoryFact, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject } from "./storeMemory.ts";
 import { addAdaptiveStyleNote, getActiveAdaptiveStyleNotes, getAdaptiveStyleNoteAuditLog, removeAdaptiveStyleNote, searchAdaptiveStyleNotesForPrompt, updateAdaptiveStyleNote } from "./storeAdaptiveDirectives.ts";
 
 export const SETTINGS_KEY = "runtime_settings";
@@ -385,7 +385,7 @@ export class Store {
     return countDiscoveryPostsSince(this, sinceIso);
   }
 
-  getRecentActions(limit = 200, opts: { kinds?: string[]; sinceIso?: string | null } = {}) {
+  getRecentActions(limit = 200, opts: { kinds?: string[]; sinceIso?: string | null; guildId?: string | null } = {}) {
     return getRecentActions(this, limit, opts);
   }
 
@@ -634,7 +634,7 @@ export class Store {
     return getFactProfileRows(this, opts);
   }
 
-  getFactsForScope(opts: { guildId; limit?; subjectIds? }) {
+  getFactsForScope(opts: { guildId; limit?; subjectIds?; factTypes?; queryText? }) {
     return getFactsForScope(this, opts);
   }
 
@@ -647,8 +647,30 @@ export class Store {
     return getFactsForSubjectsScoped(this, opts);
   }
 
+  getMemoryFactById(factId, opts: { guildId?: string | null; includeInactive?: boolean } = {}) {
+    return getMemoryFactById(this, factId, opts);
+  }
+
   getMemoryFactBySubjectAndFact(guildId, subject, fact) {
     return getMemoryFactBySubjectAndFact(this, guildId, subject, fact);
+  }
+
+  updateMemoryFact(opts: {
+    factId;
+    guildId;
+    channelId?;
+    subject;
+    fact;
+    factType?;
+    evidenceText?;
+    sourceMessageId?;
+    confidence?;
+  }) {
+    return updateMemoryFact(this, opts);
+  }
+
+  removeMemoryFact(opts: { factId; guildId }) {
+    return removeMemoryFact(this, opts);
   }
 
   ensureSqliteVecReady() {

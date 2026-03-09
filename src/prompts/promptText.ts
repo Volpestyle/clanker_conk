@@ -686,6 +686,8 @@ export function buildReplyPrompt({
     parts.push(
       "Use memoryLine only for lasting facts (names, preferences, recurring relationships, long-lived context), not throwaway chatter."
     );
+    parts.push("Set memoryScope to user for facts about the message author. Set memoryScope to lore only for stable shared guild/world context not tied to one person.");
+    parts.push("Set memoryFactType to one of preference, profile, relationship, project, or other whenever memoryLine is not null.");
     parts.push(
       "Do not save requests, dares, jokes, insults, toxic phrasing, or instructions about how you should talk/behave in future situations."
     );
@@ -699,6 +701,7 @@ export function buildReplyPrompt({
     parts.push(
       "If your own reply introduces a durable self fact (stable identity, recurring preference, or explicit standing commitment), set selfMemoryLine."
     );
+    parts.push("Set selfMemoryFactType to one of preference, profile, relationship, project, or other whenever selfMemoryLine is not null.");
     parts.push("Use selfMemoryLine only for durable facts about you, not temporary mood or throwaway phrasing.");
     parts.push(
       "Do not store abusive nicknames, harassment, or future-behavior rules as selfMemoryLine; use selfMemoryLine only for genuine stable self facts."
@@ -719,8 +722,8 @@ export function buildReplyPrompt({
   parts.push(
     "When no lookup is needed, set webSearchQuery, browserBrowseQuery, memoryLookupQuery, imageLookupQuery, and openArticleRef to null."
   );
-  parts.push("When no durable fact should be saved, set memoryLine to null.");
-  parts.push("When no durable self fact should be saved, set selfMemoryLine to null.");
+  parts.push("When no durable fact should be saved, set memoryLine, memoryScope, and memoryFactType to null.");
+  parts.push("When no durable self fact should be saved, set selfMemoryLine and selfMemoryFactType to null.");
   parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false for text-channel replies.");
   parts.push("When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.");
   parts.push(
@@ -923,7 +926,9 @@ export function buildAutomationPrompt({
   parts.push("Return strict JSON only.");
   parts.push("JSON format:");
   parts.push(REPLY_JSON_SCHEMA);
-  parts.push("Set webSearchQuery, browserBrowseQuery, imageLookupQuery, openArticleRef, memoryLine, and selfMemoryLine to null.");
+  parts.push(
+    "Set webSearchQuery, browserBrowseQuery, imageLookupQuery, openArticleRef, memoryLine, memoryScope, memoryFactType, selfMemoryLine, and selfMemoryFactType to null."
+  );
   parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false.");
   if (allowMemoryLookupDirective) {
     if (!memoryLookup?.enabled) {

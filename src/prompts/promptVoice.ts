@@ -599,6 +599,8 @@ export function buildVoiceTurnPrompt({
   if (allowMemoryToolCalls) {
     parts.push("Durable memory tools are available.");
     parts.push("- Use memory_write with namespace=speaker to save a durable fact from the speaker turn when genuinely stable and useful.");
+    parts.push("- Use memory_write with namespace=guild only for stable shared lore/context not tied to one person.");
+    parts.push("- When you know the durable fact kind, set items[].type to preference, profile, relationship, project, or other.");
     parts.push("- Use memory_write with namespace=self only for a durable fact about your own stable identity/preference/commitment in your reply.");
     parts.push("- Use memory_search only when you need to query durable memory beyond the supplied context.");
     parts.push("- Do not save requests, insults, jokes, toxic phrasing, or rules about how you should talk/behave later.");

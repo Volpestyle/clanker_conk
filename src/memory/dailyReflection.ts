@@ -111,6 +111,7 @@ type ReflectionMemory = {
     sourceText?: string;
     scope?: string;
     subjectOverride?: string | null;
+    factType?: string | null;
     validationMode?: string;
   }): Promise<{
     ok: boolean;
@@ -735,6 +736,7 @@ async function reflectGuildJournal({
         sourceText: item.evidence,
         scope,
         subjectOverride,
+        factType: item.type,
         validationMode: "minimal"
       });
 

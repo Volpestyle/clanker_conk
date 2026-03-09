@@ -9,7 +9,7 @@ type DirectiveScopeConfig = {
   scope: DirectiveScope;
   subject: string | null;
   prefix: string;
-  factType: string;
+  defaultFactType: string;
   keep: number;
   traceSource: string;
 };
@@ -23,7 +23,7 @@ const FACT_TYPE_LABELS = {
   self: "Self"
 };
 
-const ALLOWED_FACT_TYPES = new Set(["preference", "profile", "relationship", "project", "other", "general"]);
+const ALLOWED_FACT_TYPES = new Set(["preference", "profile", "relationship", "project", "other", "general", "lore", "self"]);
 // English-only fallback heuristics for filtering obvious instruction-like memory writes.
 // These are guardrails, not the primary memory decision-maker.
 const EN_MEMORY_BEHAVIOR_VERB_RE =
@@ -295,7 +295,7 @@ export function resolveDirectiveScopeConfig(scope: string | null | undefined): D
       scope: "self",
       subject: SELF_SUBJECT,
       prefix: "Self memory",
-      factType: "self",
+      defaultFactType: "self",
       keep: 120,
       traceSource: "memory_self_ingest"
     };
@@ -306,7 +306,7 @@ export function resolveDirectiveScopeConfig(scope: string | null | undefined): D
       scope: "user",
       subject: null,
       prefix: "User memory",
-      factType: "preference",
+      defaultFactType: "preference",
       keep: 80,
       traceSource: "memory_user_ingest"
     };
@@ -316,7 +316,7 @@ export function resolveDirectiveScopeConfig(scope: string | null | undefined): D
     scope: "lore",
     subject: LORE_SUBJECT,
     prefix: "Memory line",
-    factType: "lore",
+    defaultFactType: "lore",
     keep: 120,
     traceSource: "memory_lore_ingest"
   };

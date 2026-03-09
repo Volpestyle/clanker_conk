@@ -755,6 +755,7 @@ async function persistStreamWatchRecapToMemory(manager: StreamWatchManager, {
       authorId,
       authorName,
       content: logContent,
+      isBot: true,
       settings,
       trace: {
         guildId: session.guildId,

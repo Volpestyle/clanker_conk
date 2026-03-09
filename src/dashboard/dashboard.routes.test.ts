@@ -170,6 +170,101 @@ test("dashboard fact profile route returns durable and active voice cache views"
   }
 });
 
+test("dashboard memory fact inspector routes search, edit, remove, and expose audit events", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
+    store.addMemoryFact({
+      guildId: "guild-1",
+      channelId: "chan-2",
+      subject: "user-1",
+      fact: "Speaker likes old school DS hardware.",
+      factType: "preference",
+      evidenceText: "Said they were hunting for an old school DS.",
+      sourceMessageId: "msg-1",
+      confidence: 0.82
+    });
+    store.addMemoryFact({
+      guildId: "guild-1",
+      channelId: "chan-3",
+      subject: "user-2",
+      fact: "Speaker likes tea.",
+      factType: "preference",
+      evidenceText: "Talked about tea.",
+      sourceMessageId: "msg-2",
+      confidence: 0.61
+    });
+
+    const searched = await fetch(
+      `${baseUrl}/api/memory/facts?guildId=guild-1&subject=user-1&q=old+school+ds&limit=10`
+    );
+    assert.equal(searched.status, 200);
+    const searchedJson = await searched.json();
+    assert.equal(Array.isArray(searchedJson.facts), true);
+    assert.equal(searchedJson.facts.length, 1);
+    assert.equal(searchedJson.facts[0]?.fact, "Speaker likes old school DS hardware.");
+    const factId = Number(searchedJson.facts[0]?.id);
+    assert.equal(Number.isInteger(factId), true);
+
+    const updated = await fetch(`${baseUrl}/api/memory/facts/${factId}`, {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        guildId: "guild-1",
+        subject: "user-1",
+        factType: "profile",
+        fact: "Speaker collects old school DS hardware and games.",
+        evidenceText: "Dashboard correction after audit.",
+        confidence: 0.93
+      })
+    });
+    assert.equal(updated.status, 200);
+    const updatedJson = await updated.json();
+    assert.equal(updatedJson.ok, true);
+    assert.equal(updatedJson.fact.fact, "Speaker collects old school DS hardware and games.");
+    assert.equal(updatedJson.fact.factType, "profile");
+
+    const removed = await fetch(`${baseUrl}/api/memory/facts/${factId}/remove`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        guildId: "guild-1",
+        removalReason: "User said to clear stale memory."
+      })
+    });
+    assert.equal(removed.status, 200);
+    const removedJson = await removed.json();
+    assert.equal(removedJson.ok, true);
+    assert.equal(removedJson.factId, factId);
+
+    const afterRemove = await fetch(`${baseUrl}/api/memory/facts?guildId=guild-1&subject=user-1&limit=10`);
+    assert.equal(afterRemove.status, 200);
+    const afterRemoveJson = await afterRemove.json();
+    assert.deepEqual(afterRemoveJson.facts, []);
+
+    const audit = await fetch(`${baseUrl}/api/memory/facts/audit?guildId=guild-1&factId=${factId}&limit=10`);
+    assert.equal(audit.status, 200);
+    const auditJson = await audit.json();
+    assert.equal(Array.isArray(auditJson.events), true);
+    assert.equal(auditJson.events.length, 2);
+    assert.deepEqual(
+      auditJson.events.map((event) => event.eventType),
+      ["removed", "updated"]
+    );
+    assert.equal(auditJson.events[0]?.removalReason, "User said to clear stale memory.");
+    assert.equal(
+      auditJson.events[1]?.nextFact,
+      "Speaker collects old school DS hardware and games."
+    );
+  });
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
 test("dashboard shell finalizes HEAD requests for non-API routes", async () => {
   const result = await withDashboardServer({}, async ({ baseUrl }) => {
     const response = await fetch(baseUrl, { method: "HEAD" });
@@ -629,6 +724,55 @@ test("dashboard settings refresh reapplies runtime settings and reports active s
       assert.deepEqual(applyCalls[0], store.getSettings());
     }
   );
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard preset defaults preserve the claude oauth voice admission mode", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl }) => {
+    const response = await fetch(`${baseUrl}/api/settings/preset-defaults`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json"
+      },
+      body: JSON.stringify({
+        preset: "claude_oauth_local_tools"
+      })
+    });
+
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json.voiceReplyDecisionRealtimeAdmissionMode, "generation_decides");
+  });
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard settings expose realtime provider selection alongside file_wav override settings", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
+    store.patchSettings({
+      agentStack: {
+        runtimeConfig: {
+          voice: {
+            runtimeMode: "openai_realtime",
+            openaiRealtime: {
+              transcriptionMethod: "file_wav"
+            }
+          }
+        }
+      }
+    });
+
+    const response = await fetch(`${baseUrl}/api/settings`);
+    assert.equal(response.status, 200);
+    const json = await response.json();
+    assert.equal(json._resolved?.voiceProvider, "openai");
+    assert.equal(json.agentStack?.runtimeConfig?.voice?.openaiRealtime?.transcriptionMethod, "file_wav");
+  });
 
   if (result?.skipped) {
     return;

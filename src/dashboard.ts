@@ -85,6 +85,8 @@ export interface DashboardMemory {
     queryText: string;
     settings: unknown;
     channelId?: string | null;
+    subjectIds?: string[] | null;
+    factTypes?: string[] | null;
     trace?: Record<string, unknown>;
     limit?: number;
   }): Promise<unknown[]>;
