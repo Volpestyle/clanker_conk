@@ -80,7 +80,7 @@ export async function transcribeAudio(
     const response = await deps.openai.audio.transcriptions.create({
       model: resolvedModel,
       file: new File([new Uint8Array(resolvedAudioBytes)], basename(filePathText) || resolvedFileName),
-      response_format: "text",
+      response_format: "json",
       ...(resolvedLanguage ? { language: resolvedLanguage } : {}),
       ...(resolvedPrompt ? { prompt: resolvedPrompt } : {})
     });

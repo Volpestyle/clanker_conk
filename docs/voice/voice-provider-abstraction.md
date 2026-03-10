@@ -119,11 +119,13 @@ Canonical public ASR settings:
 
 Canonical runtime transport/transcription settings:
 
+- `agentStack.runtimeConfig.voice.openaiRealtime.inputAudioFormat`
+- `agentStack.runtimeConfig.voice.openaiRealtime.outputAudioFormat`
 - `agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod`
 - `agentStack.runtimeConfig.voice.openaiRealtime.inputTranscriptionModel`
 - `agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge`
 
-These runtime settings configure bridge and file-turn transcription behavior.
+These runtime settings configure bridge and file-turn transcription behavior. OpenAI transport keeps the configured `pcm16`, `g711_ulaw`, or `g711_alaw` formats when building realtime session updates.
 
 ### Stage 2: Turn Promotion And Noise Rejection
 
@@ -242,6 +244,8 @@ Classifier provider/model are resolved from preset defaults or `agentStack.overr
 | `agentStack.runtimeConfig.voice.runtimeMode` | `"openai_realtime"` | Realtime runtime family |
 | `agentStack.runtimeConfig.voice.openaiRealtime.model` | `"gpt-realtime"` | OpenAI realtime model |
 | `agentStack.runtimeConfig.voice.openaiRealtime.voice` | `"ash"` | OpenAI realtime voice |
+| `agentStack.runtimeConfig.voice.openaiRealtime.inputAudioFormat` | `"pcm16"` | OpenAI realtime input transport format |
+| `agentStack.runtimeConfig.voice.openaiRealtime.outputAudioFormat` | `"pcm16"` | OpenAI realtime output transport format |
 | `agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod` | `"realtime_bridge"` | Bridge vs file-turn transcription mode |
 | `agentStack.runtimeConfig.voice.openaiRealtime.inputTranscriptionModel` | `"gpt-4o-mini-transcribe"` | Realtime ASR model |
 | `agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge` | `true` | Per-speaker bridge mode |

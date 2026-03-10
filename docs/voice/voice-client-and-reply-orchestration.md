@@ -155,7 +155,7 @@ If a tracked response produces no audio within the watchdog timeout:
 
 ### OpenAI
 
-Full Realtime API: `session.update`, `input_audio_buffer.append/commit`, `response.create/cancel`, `conversation.item.create/truncate`. Tracks `activeResponseId`/`activeResponseStatus` with terminal status detection.
+Full Realtime API: `session.update`, `input_audio_buffer.append/commit`, `response.create/cancel`, `conversation.item.create/truncate`. The session update uses top-level transport fields inside `session` (`input_audio_format`, `output_audio_format`, `input_audio_transcription`, `turn_detection`, `voice`) instead of the older nested `audio.input` / `audio.output` shape. Tracks `activeResponseId`/`activeResponseStatus` with terminal status detection.
 
 ### xAI
 

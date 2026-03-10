@@ -71,6 +71,8 @@ Current voice dispatch modules:
 - `src/voice/voiceToolCallWeb.ts`
 - `src/voice/voiceToolCallAgents.ts`
 
+Hosted OpenAI web lookup is implemented in `src/services/search.ts` through the Responses API `web_search_preview` tool.
+
 There is no separate directive tool handler in the live architecture.
 
 ## 4. Settings Flow

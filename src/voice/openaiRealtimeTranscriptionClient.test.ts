@@ -18,11 +18,9 @@ test("OpenAiRealtimeTranscriptionClient sendSessionUpdate uses transcription ses
   client.sendSessionUpdate();
 
   assert.ok(outbound);
-  assert.equal(outbound.type, "session.update");
-  assert.equal(outbound.session.type, "transcription");
-  assert.equal(outbound.session.audio.input.format.type, "audio/pcm");
-  assert.equal(outbound.session.audio.input.format.rate, 24000);
-  assert.deepEqual(outbound.session.audio.input.turn_detection, {
+  assert.equal(outbound.type, "transcription_session.update");
+  assert.equal(outbound.session.input_audio_format, "pcm16");
+  assert.deepEqual(outbound.session.turn_detection, {
     type: "server_vad",
     threshold: 0.55,
     prefix_padding_ms: 240,
@@ -30,9 +28,10 @@ test("OpenAiRealtimeTranscriptionClient sendSessionUpdate uses transcription ses
     create_response: false,
     interrupt_response: false
   });
-  assert.equal(outbound.session.audio.input.transcription.model, "gpt-4o-mini-transcribe");
-  assert.equal(outbound.session.audio.input.transcription.language, "en");
-  assert.equal(outbound.session.audio.input.transcription.prompt, "Prefer English.");
+  assert.deepEqual(outbound.session.input_audio_noise_reduction, { type: "near_field" });
+  assert.equal(outbound.session.input_audio_transcription.model, "gpt-4o-mini-transcribe");
+  assert.equal(outbound.session.input_audio_transcription.language, "en");
+  assert.equal(outbound.session.input_audio_transcription.prompt, "Prefer English.");
   assert.deepEqual(outbound.session.include, ["item.input_audio_transcription.logprobs"]);
 });
 
@@ -52,8 +51,8 @@ test("OpenAiRealtimeTranscriptionClient keeps gpt-4o-transcribe as input transcr
   client.sendSessionUpdate();
 
   assert.ok(outbound);
-  assert.equal(outbound.type, "session.update");
-  assert.equal(outbound.session.audio.input.transcription.model, "gpt-4o-transcribe");
+  assert.equal(outbound.type, "transcription_session.update");
+  assert.equal(outbound.session.input_audio_transcription.model, "gpt-4o-transcribe");
 });
 
 test("OpenAiRealtimeTranscriptionClient normalizes unsupported ASR model values", () => {
@@ -72,8 +71,26 @@ test("OpenAiRealtimeTranscriptionClient normalizes unsupported ASR model values"
   client.sendSessionUpdate();
 
   assert.ok(outbound);
-  assert.equal(outbound.type, "session.update");
-  assert.equal(outbound.session.audio.input.transcription.model, "gpt-4o-mini-transcribe");
+  assert.equal(outbound.type, "transcription_session.update");
+  assert.equal(outbound.session.input_audio_transcription.model, "gpt-4o-mini-transcribe");
+});
+
+test("OpenAiRealtimeTranscriptionClient preserves supported G.711 input formats", () => {
+  const client = new OpenAiRealtimeTranscriptionClient({ apiKey: "test-key" });
+  let outbound = null;
+  client.send = (payload) => {
+    outbound = payload;
+  };
+  client.sessionConfig = {
+    inputAudioFormat: "g711_ulaw",
+    inputTranscriptionModel: "gpt-4o-mini-transcribe"
+  };
+
+  client.sendSessionUpdate();
+
+  assert.ok(outbound);
+  assert.equal(outbound.type, "transcription_session.update");
+  assert.equal(outbound.session.input_audio_format, "g711_ulaw");
 });
 
 test("OpenAiRealtimeTranscriptionClient emits transcript final flag by event type", () => {

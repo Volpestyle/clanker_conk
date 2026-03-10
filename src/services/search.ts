@@ -229,7 +229,7 @@ export class WebSearchService {
       allowedDomains?: readonly string[];
     };
     const tool = {
-      type: "web_search_preview_2025_03_11",
+      type: "web_search_preview",
       ...(buildOpenAiWebSearchUserLocation(nativeConfig.userLocation)
         ? { user_location: buildOpenAiWebSearchUserLocation(nativeConfig.userLocation) }
         : {}),

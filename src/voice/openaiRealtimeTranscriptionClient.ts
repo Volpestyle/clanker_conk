@@ -332,19 +332,13 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
       language: String(session.inputTranscriptionLanguage || "").trim() || null,
       prompt: String(session.inputTranscriptionPrompt || "").trim() || null
     });
-    const inputAudio = {
-      format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat),
-      noise_reduction: { type: "near_field" },
-      turn_detection: OPENAI_REALTIME_ASR_TURN_DETECTION,
-      transcription
-    };
     this.send({
-      type: "session.update",
+      type: "transcription_session.update",
       session: {
-        type: "transcription",
-        audio: {
-          input: inputAudio
-        },
+        input_audio_format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat),
+        input_audio_noise_reduction: { type: "near_field" },
+        turn_detection: OPENAI_REALTIME_ASR_TURN_DETECTION,
+        input_audio_transcription: transcription,
         // Include logprobs so downstream can compute transcript confidence when needed.
         include: ["item.input_audio_transcription.logprobs"]
       }
@@ -378,29 +372,19 @@ function normalizeOpenAiRealtimeAudioFormat(value) {
     const type = String(value.type || "")
       .trim()
       .toLowerCase();
-    if (type === "audio/pcm") {
-      const rate = Number(value.rate);
-      return {
-        type: "audio/pcm",
-        rate: Number.isFinite(rate) && rate > 0 ? Math.floor(rate) : 24000
-      };
-    }
+    if (type === "audio/pcm" || type === "pcm16") return "pcm16";
+    if (type === "g711_ulaw") return "g711_ulaw";
+    if (type === "g711_alaw") return "g711_alaw";
   }
 
   const normalized = String(value || "")
     .trim()
     .toLowerCase();
-  if (normalized === "audio/pcm" || normalized === "pcm16") {
-    return {
-      type: "audio/pcm",
-      rate: 24000
-    };
-  }
+  if (normalized === "audio/pcm" || normalized === "pcm16") return "pcm16";
+  if (normalized === "g711_ulaw") return "g711_ulaw";
+  if (normalized === "g711_alaw") return "g711_alaw";
 
-  return {
-    type: "audio/pcm",
-    rate: 24000
-  };
+  return "pcm16";
 }
 
 function normalizeRealtimeItemId(value) {
@@ -426,15 +410,17 @@ function summarizeOutboundPayload(payload) {
     };
   }
 
-  if (type === "session.update") {
+  if (type === "session.update" || type === "transcription_session.update") {
     const session = payload.session && typeof payload.session === "object" ? payload.session : {};
-    const audio = session.audio && typeof session.audio === "object" ? session.audio : {};
+    const inputAudioTranscription =
+      session.input_audio_transcription && typeof session.input_audio_transcription === "object"
+        ? session.input_audio_transcription
+        : {};
     return compactObject({
       type,
-      sessionType: session.type || null,
-      inputFormat: audio?.input?.format || null,
-      inputTurnDetectionType: audio?.input?.turn_detection?.type || null,
-      inputTranscriptionModel: audio?.input?.transcription?.model || null
+      inputFormat: session.input_audio_format || null,
+      inputTurnDetectionType: session.turn_detection?.type || null,
+      inputTranscriptionModel: inputAudioTranscription.model || null
     });
   }
 
