@@ -139,6 +139,8 @@ Tracks the in-flight assistant response:
 3. `handleResponseDone()` — response complete. If no audio was produced, triggers silent response recovery.
 4. `clearPendingResponse()` — clears `pendingResponse`, triggers deferred action rechecks.
 
+For provider-native realtime sessions, a single response can both speak and emit tool calls. When that happens, `handleResponseDone()` settles the finished spoken response without aborting the in-flight tool scope. The tool loop keeps its follow-up lease and can still issue the post-tool `response.create` that asks a disambiguation question or confirms the action result.
+
 ### Silent Response Recovery
 
 If a tracked response produces no audio within the watchdog timeout:
@@ -291,7 +293,7 @@ Turn coalescing: multiple turns arriving within the coalesce window are merged i
 
 Direct address feeds classifier/generation context and arms the music wake latch when music is active. Eagerness `0` still flows through the admission prompt and classifier/generation outcome rather than acting as a standalone deny.
 
-For bridge path turns that survive deterministic gates, `runVoiceReplyClassifier()` makes a YES/NO LLM call when the canonical admission mode is `classifier_gate`.
+For bridge path turns that survive deterministic gates, `runVoiceReplyClassifier()` makes a YES/NO LLM call when the canonical admission mode is `classifier_gate`. The classifier token budget is provider-aware: OpenAI Responses bindings use at least `16` output tokens, and the GPT-5 family uses `64`, because smaller caps are rejected by the API.
 
 ## 14. Reply Dispatch (Three Mutually Exclusive Paths)
 

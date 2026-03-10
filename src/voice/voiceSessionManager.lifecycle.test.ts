@@ -1851,6 +1851,74 @@ test("handleResponseDone preserves tool work when a tool-only realtime response 
   assert.equal(outputChannelState.lockReason, "awaiting_tool_outputs");
 });
 
+test("handleResponseDone preserves in-flight tool work when spoken audio and tool calls share a response", () => {
+  const { manager } = createManager();
+  manager.activeReplies = new ActiveReplyRegistry();
+  const toolAbortController = new AbortController();
+  const requestedAt = Date.now() - 1_000;
+  const replyScopeKey = buildVoiceReplyScopeKey("session-tool-followup-audio-1");
+  const activeReply = manager.activeReplies.begin(replyScopeKey, "voice-tool", ["music_play"]);
+  const session = createSession({
+    id: "session-tool-followup-audio-1",
+    mode: "openai_realtime",
+    realtimeClient: {
+      isResponseInProgress() {
+        return false;
+      }
+    },
+    lastAudioDeltaAt: requestedAt + 250,
+    pendingResponse: {
+      requestId: 8,
+      userId: "speaker-1",
+      requestedAt,
+      retryCount: 0,
+      hardRecoveryAttempted: false,
+      source: "tool_call_followup",
+      handlingSilence: false,
+      audioReceivedAt: requestedAt + 250,
+      interruptionPolicy: {
+        assertive: true,
+        scope: "speaker",
+        allowedUserId: "speaker-1"
+      },
+      utteranceText: "give me a sec",
+      latencyContext: null
+    },
+    awaitingToolOutputs: true,
+    activeReplyInterruptionPolicy: {
+      assertive: true,
+      scope: "speaker",
+      allowedUserId: "speaker-1"
+    },
+    realtimeToolCallExecutions: new Map([
+      ["call-1", { startedAtMs: Date.now() - 200, toolName: "music_play" }]
+    ]),
+    realtimePendingToolAbortControllers: new Map([
+      ["call-1", toolAbortController]
+    ])
+  });
+
+  manager.replyManager.handleResponseDone({
+    session,
+    event: {
+      type: "response.done",
+      response: {
+        id: "resp-tool-followup-audio-1",
+        status: "completed"
+      }
+    }
+  });
+
+  assert.equal(session.pendingResponse, null);
+  assert.equal(toolAbortController.signal.aborted, false);
+  assert.equal(activeReply.abortController.signal.aborted, false);
+  assert.equal(manager.activeReplies.has(replyScopeKey), true);
+  assert.equal(session.awaitingToolOutputs, true);
+  const outputChannelState = manager.getOutputChannelState(session);
+  assert.equal(outputChannelState.awaitingToolOutputs, true);
+  assert.equal(outputChannelState.lockReason, "awaiting_tool_outputs");
+});
+
 test("handleResponseDone preserves active voice generation when busy utterance audio completes", () => {
   const { manager } = createManager();
   manager.activeReplies = new ActiveReplyRegistry();

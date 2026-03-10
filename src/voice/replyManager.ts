@@ -1168,6 +1168,7 @@ export class ReplyManager {
     if (hadAudio) {
       this.host.scheduleBotSpeechMusicUnduck(session, resolvedSettings, BOT_TURN_SILENCE_RESET_MS);
       const preserveActiveReplies = this.shouldPreserveActiveRepliesForCompletedPendingResponse(session, pending);
+      const preserveInFlightToolWork = hasInFlightToolCalls;
 
       const musicPhase = this.host.getMusicPhase(session);
       if (musicPhase === "paused_wake_word") {
@@ -1179,8 +1180,11 @@ export class ReplyManager {
         }, BOT_TURN_SILENCE_RESET_MS);
       }
 
-      if (preserveActiveReplies) {
-        this.settlePendingResponse(session, "response_done_busy_utterance_completed", {
+      if (preserveInFlightToolWork || preserveActiveReplies) {
+        const settleTrigger = preserveInFlightToolWork
+          ? "response_done_had_audio_tool_calls_in_flight"
+          : "response_done_busy_utterance_completed";
+        this.settlePendingResponse(session, settleTrigger, {
           clearActiveReplyInterruptionPolicy: false
         });
       } else {
