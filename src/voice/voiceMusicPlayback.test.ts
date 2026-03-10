@@ -6,7 +6,6 @@ import {
   ensureSessionMusicState,
   getMusicDisambiguationPromptContext,
   handleMusicSlashCommand,
-  maybeHandleReplayMostRecentTrackTurn,
   isLikelyMusicResumePhrase,
   maybeHandleMusicPlaybackTurn,
   setMusicPhase
@@ -16,7 +15,6 @@ import type { MusicSelectionResult, VoiceSession } from "./voiceSessionTypes.ts"
 
 function createPlaybackHost() {
   const resumeCalls: string[] = [];
-  const playCalls: Array<{ id: string; title: string; artist: string; platform: string }> = [];
   const loggedEvents: Array<{ content: string; metadata?: Record<string, unknown> }> = [];
   const manager: MusicPlaybackHost = {
     client: {
@@ -26,7 +24,7 @@ function createPlaybackHost() {
       },
       guilds: {
         cache: {
-          get: () => ({ id: "guild-1" })
+          get: () => null
         }
       }
     },
@@ -54,15 +52,7 @@ function createPlaybackHost() {
     musicPlayer: {
       duck: () => {},
       unduck: () => {},
-      play: (track) => {
-        playCalls.push({
-          id: track.id,
-          title: track.title,
-          artist: track.artist,
-          platform: track.platform
-        });
-        return { ok: true, error: null };
-      },
+      play: () => {},
       stop: () => {},
       pause: () => {},
       resume: () => {
@@ -82,7 +72,7 @@ function createPlaybackHost() {
     abortActiveInboundCaptures: () => {}
   };
 
-  return { manager, resumeCalls, playCalls, loggedEvents };
+  return { manager, resumeCalls, loggedEvents };
 }
 
 function createPausedSession(manager: MusicPlaybackHost) {
@@ -165,50 +155,6 @@ test("maybeHandleMusicPlaybackTurn does not auto-resume paused music for a new p
   assert.equal(session.music?.phase, "paused");
   assert.equal(session.musicQueueState?.isPaused, true);
   assert.equal(loggedEvents.some((entry) => entry.content === "voice_music_resumed"), false);
-});
-
-test("maybeHandleReplayMostRecentTrackTurn replays the most recent track when idle", async () => {
-  const { manager, playCalls, loggedEvents } = createPlaybackHost();
-  const session = {
-    id: "session-idle-replay-1",
-    guildId: "guild-1",
-    textChannelId: "chan-1",
-    voiceChannelId: "voice-1",
-    ending: false,
-    voxClient: {
-      isAlive: true
-    },
-    musicQueueState: {
-      guildId: "guild-1",
-      voiceChannelId: "voice-1",
-      tracks: [],
-      nowPlayingIndex: null,
-      isPaused: false,
-      volume: 1
-    }
-  };
-  ensureSessionMusicState(manager, session);
-  setMusicPhase(manager, session, "idle");
-  session.music.lastTrackId = "youtube:track-1";
-  session.music.lastTrackTitle = "That’s What I Like";
-  session.music.lastTrackArtists = ["Bruno Mars"];
-  session.music.lastTrackUrl = "https://youtube.com/watch?v=track-1";
-  manager.sessions.set(session.guildId, session as VoiceSession);
-
-  const handled = await maybeHandleReplayMostRecentTrackTurn(manager, {
-    session,
-    settings: null,
-    userId: "user-1",
-    transcript: "Could you play that song again?",
-    source: "realtime"
-  });
-
-  assert.equal(handled, true);
-  assert.equal(playCalls.length, 1);
-  assert.equal(playCalls[0]?.id, "youtube:track-1");
-  assert.equal(session.music?.phase, "playing");
-  assert.equal(loggedEvents.some((entry) => entry.content === "voice_music_started"), true);
-  assert.equal(loggedEvents.some((entry) => entry.content === "voice_music_replayed_last_track"), true);
 });
 
 function createSlashInteraction(subcommand: string, query?: string) {

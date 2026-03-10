@@ -111,14 +111,6 @@ interface MaybeHandleMusicPlaybackTurnArgs {
   transcript?: string;
 }
 
-interface MaybeHandleReplayMostRecentTrackTurnArgs {
-  session: VoiceSession;
-  settings: TurnProcessorSettings;
-  userId: string;
-  transcript?: string;
-  source: "realtime" | "file_asr";
-}
-
 interface TranscribePcmTurnArgs {
   session: VoiceSession;
   userId: string;
@@ -247,9 +239,6 @@ export interface TurnProcessorHost {
   activeReplies?: ActiveReplyRegistry | null;
   maybeHandleMusicPlaybackTurn: (
     args: MaybeHandleMusicPlaybackTurnArgs
-  ) => Promise<boolean> | boolean;
-  maybeHandleReplayMostRecentTrackTurn: (
-    args: MaybeHandleReplayMostRecentTrackTurnArgs
   ) => Promise<boolean> | boolean;
   evaluatePcmSilenceGate: (args: {
     pcmBuffer: Buffer;
@@ -1570,17 +1559,6 @@ export class TurnProcessor {
       // in the conversation window from when they were first captured.
       this.host.clearDeferredQueuedUserTurns(session);
 
-      const replayedMostRecentTrack = await this.host.maybeHandleReplayMostRecentTrackTurn({
-        session,
-        settings,
-        userId,
-        transcript: decision.transcript || turnTranscript,
-        source: "realtime"
-      });
-      if (replayedMostRecentTrack) {
-        return;
-      }
-
       if (useNativeRealtimeReply) {
         if (!normalizedPcmBuffer?.length) {
           return;
@@ -2171,17 +2149,6 @@ export class TurnProcessor {
     }
 
     this.host.clearDeferredQueuedUserTurns(session);
-
-    const replayedMostRecentTrack = await this.host.maybeHandleReplayMostRecentTrackTurn({
-      session,
-      settings,
-      userId,
-      transcript: turnDecision.transcript || transcript,
-      source: "file_asr"
-    });
-    if (replayedMostRecentTrack) {
-      return;
-    }
 
     if (this.host.shouldUseRealtimeTranscriptBridge({ session, settings })) {
       await this.host.forwardRealtimeTextTurnToBrain({

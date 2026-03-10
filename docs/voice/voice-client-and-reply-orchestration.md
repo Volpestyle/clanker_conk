@@ -299,8 +299,6 @@ For bridge path turns that survive deterministic gates, `runVoiceReplyClassifier
 
 After admission, the turn processor dispatches based on mode:
 
-Before any of the three dispatches run, the turn can still be consumed by local side effects that are safer than asking the model to improvise an action. The music path uses this for idle replay phrases such as "play that song again": if the session has a known most-recent track, playback restarts locally instead of relying on the realtime model to remember a `music_play` function call.
-
 | Path | Condition | Who generates text? | Who generates speech? | Uses `runVoiceReplyPipeline`? |
 |---|---|---|---|---|
 | **Native** | `shouldUseNativeRealtimeReply` | Realtime model (end-to-end) | Realtime model | No |

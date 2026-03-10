@@ -19,8 +19,6 @@ export const EN_MUSIC_RESUME_VERB_RE = /\b(?:resume|unpause|continue)\b/i;
 export const EN_MUSIC_RESUME_PRONOUN_RE = /\b(?:resume|unpause|continue)\s+it\b/i;
 export const EN_MUSIC_RESUME_PLAY_CURRENT_RE =
   /\bplay\s+(?:it|this(?:\s+(?:song|track|music|playback))?|the\s+(?:song|track|music|playback))(?:\s+(?:again|back(?:\s+up)?))?(?:\s+(?:please|plz|now))?\s*$/i;
-export const EN_MUSIC_REPLAY_LAST_TRACK_RE =
-  /\bplay\s+(?:it|(?:this|that|the)(?:\s+(?:same|last))?(?:\s+(?:song|track|music|playback))?)(?:\s+(?:again|back(?:\s+up)?|one\s+more\s+time))(?:\s+(?:please|plz|now))?\s*$/i;
 export const EN_MUSIC_SKIP_VERB_RE = /\b(?:skip|next)\b/i;
 export const EN_MUSIC_CUE_RE = /\b(?:music|song|songs|track|tracks|playback|playing)\b/i;
 export const EN_MUSIC_PLAY_VERB_RE = /\b(?:play|start|queue|put\s+on|spin)\b/i;
@@ -742,23 +740,17 @@ export function isLikelyMusicResumePhrase(
     settings?: MusicPlaybackSettings;
   } = {}
 ) {
-  const normalizedResumeTranscript = normalizeMusicHeuristicTranscript(transcript);
+  const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+  if (!normalizedTranscript) return false;
+  const normalizedResumeTranscript = normalizedTranscript
+    .toLowerCase()
+    .replace(/[^\w\s]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   if (!normalizedResumeTranscript) return false;
   if (EN_MUSIC_RESUME_PLAY_CURRENT_RE.test(normalizedResumeTranscript)) return true;
   if (!EN_MUSIC_RESUME_VERB_RE.test(normalizedResumeTranscript)) return false;
   return EN_MUSIC_CUE_RE.test(normalizedResumeTranscript) || EN_MUSIC_RESUME_PRONOUN_RE.test(normalizedResumeTranscript);
-}
-
-export function isLikelyReplayMostRecentTrackPhrase(
-  _manager: MusicPlaybackHost,
-  { transcript = "" }: {
-    transcript?: string;
-    settings?: MusicPlaybackSettings;
-  } = {}
-) {
-  const normalizedReplayTranscript = normalizeMusicHeuristicTranscript(transcript);
-  if (!normalizedReplayTranscript) return false;
-  return EN_MUSIC_REPLAY_LAST_TRACK_RE.test(normalizedReplayTranscript);
 }
 
 export function isLikelyMusicPlayPhrase(
@@ -801,129 +793,6 @@ export function extractMusicPlayQuery(
   if (!cleaned) return "";
   if (EN_MUSIC_QUERY_EMPTY_RE.test(cleaned)) return "";
   return cleaned.slice(0, 120);
-}
-
-function normalizeMusicHeuristicTranscript(transcript = "") {
-  const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-  if (!normalizedTranscript) return "";
-  return normalizedTranscript
-    .toLowerCase()
-    .replace(/[^\w\s]+/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function inferStoredTrackPlatform(trackId = "", trackUrl = ""): "youtube" | "soundcloud" {
-  const normalizedId = String(trackId || "").trim().toLowerCase();
-  const normalizedUrl = String(trackUrl || "").trim().toLowerCase();
-  if (
-    normalizedId.startsWith("soundcloud:") ||
-    normalizedId.startsWith("sc:") ||
-    normalizedUrl.includes("soundcloud.com")
-  ) {
-    return "soundcloud";
-  }
-  return "youtube";
-}
-
-function resolveMostRecentTrackSelection(
-  manager: MusicPlaybackHost,
-  session: MusicRuntimeSessionLike | null | undefined
-) {
-  const queueState = ensureToolMusicQueueState(manager, session);
-  const queueTrack =
-    queueState && queueState.nowPlayingIndex != null
-      ? queueState.tracks[queueState.nowPlayingIndex] || null
-      : null;
-  if (queueTrack?.id && queueTrack?.title) {
-    return normalizeMusicSelectionResult(manager, {
-      id: queueTrack.id,
-      title: queueTrack.title,
-      artist: queueTrack.artist || "Unknown artist",
-      platform: queueTrack.platform || inferStoredTrackPlatform(queueTrack.id, queueTrack.externalUrl || queueTrack.streamUrl || ""),
-      externalUrl: queueTrack.externalUrl || queueTrack.streamUrl || null,
-      durationSeconds: Number.isFinite(Number(queueTrack.durationMs))
-        ? Math.max(0, Math.round(Number(queueTrack.durationMs) / 1000))
-        : null
-    });
-  }
-
-  const music = ensureSessionMusicState(manager, session);
-  const lastTrackId = normalizeInlineText(music?.lastTrackId, 180);
-  const lastTrackTitle = normalizeInlineText(music?.lastTrackTitle, 220);
-  if (!lastTrackId || !lastTrackTitle) return null;
-  const lastTrackArtist =
-    normalizeInlineText(Array.isArray(music?.lastTrackArtists) ? music.lastTrackArtists.join(", ") : "", 220) ||
-    "Unknown artist";
-  const lastTrackUrl = normalizeInlineText(music?.lastTrackUrl, 260) || null;
-  return normalizeMusicSelectionResult(manager, {
-    id: lastTrackId,
-    title: lastTrackTitle,
-    artist: lastTrackArtist,
-    platform: inferStoredTrackPlatform(lastTrackId, lastTrackUrl || ""),
-    externalUrl: lastTrackUrl
-  });
-}
-
-export async function maybeHandleReplayMostRecentTrackTurn(
-  manager: MusicPlaybackHost,
-  {
-    session,
-    settings,
-    userId = null,
-    transcript = "",
-    source = "voice_turn"
-  }: {
-    session?: VoiceSession | null;
-    settings?: MusicPlaybackSettings;
-    userId?: string | null;
-    transcript?: string;
-    source?: string;
-  } = {}
-) {
-  if (!session || session.ending) return false;
-  if (getMusicPhase(manager, session) !== "idle") return false;
-  const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-  if (!normalizedTranscript) return false;
-  if (!isLikelyReplayMostRecentTrackPhrase(manager, { transcript: normalizedTranscript })) return false;
-
-  const selectedTrack = resolveMostRecentTrackSelection(manager, session);
-  if (!selectedTrack) return false;
-
-  const resolvedSettings = settings || session.settingsSnapshot || manager.store.getSettings();
-  const playbackQuery =
-    normalizeInlineText(`${selectedTrack.title} ${selectedTrack.artist || ""}`, 120) ||
-    selectedTrack.title;
-  const handled = await requestPlayMusic(manager, {
-    guildId: session.guildId,
-    channelId: session.textChannelId,
-    requestedByUserId: userId,
-    settings: resolvedSettings,
-    query: playbackQuery,
-    trackId: selectedTrack.id,
-    searchResults: [selectedTrack],
-    reason: "voice_music_replay_last_track_phrase",
-    source: `voice_${String(source || "voice_turn")}`,
-    mustNotify: false
-  });
-  if (!handled) return false;
-
-  logMusicAction(manager, {
-    kind: "voice_runtime",
-    guildId: session.guildId,
-    channelId: session.textChannelId,
-    userId,
-    content: "voice_music_replayed_last_track",
-    metadata: {
-      sessionId: session.id,
-      source: String(source || "voice_turn"),
-      transcript: normalizedTranscript,
-      trackId: selectedTrack.id,
-      trackTitle: selectedTrack.title,
-      trackArtist: selectedTrack.artist
-    }
-  });
-  return true;
 }
 
 export function haltSessionOutputForMusicPlayback(
