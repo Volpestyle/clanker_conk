@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from "react";
 import { api } from "../api";
 import { parseUniqueList } from "../../../src/settings/listNormalization.ts";
+import { getLastGuildId, saveLastGuildId } from "./memoryTab/MemoryFormFields";
 
 type GuildChannel = {
   id: string;
@@ -42,7 +43,11 @@ export function ChannelChecklist({
       .then((rows) => {
         const list = Array.isArray(rows) ? rows : [];
         setGuilds(list);
-        if (list.length > 0) setSelectedGuildId(list[0].id);
+        const savedGuildId = getLastGuildId();
+        const restoredGuild = savedGuildId && list.some((g) => g.id === savedGuildId);
+        const guildId = restoredGuild ? savedGuildId : list[0]?.id || "";
+        setSelectedGuildId(guildId);
+        saveLastGuildId(guildId);
       })
       .catch(() => setGuilds([]));
   }, []);
@@ -111,7 +116,10 @@ export function ChannelChecklist({
         <select
           className="channel-checklist-guild-select"
           value={selectedGuildId}
-          onChange={(e) => setSelectedGuildId(e.target.value)}
+          onChange={(e) => {
+            setSelectedGuildId(e.target.value);
+            saveLastGuildId(e.target.value);
+          }}
         >
           {guilds.map((g) => (
             <option key={g.id} value={g.id}>

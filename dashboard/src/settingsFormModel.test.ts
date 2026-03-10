@@ -124,10 +124,12 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.browserLlmModel, "claude-opus-4-6");
   assert.equal(form.codeAgentProvider, "auto");
   assert.equal(form.codeAgentModel, "sonnet");
-  assert.equal(form.codeAgentCodexModel, "codex-mini-latest");
+  assert.equal(form.codeAgentCodexModel, "gpt-5.4");
   assert.equal(form.codeAgentCodexCliModel, "gpt-5.4");
-  assert.equal(form.memoryReflectionStrategy, "one_pass_main");
-  assert.equal(form.adaptiveDirectivesEnabled, true);
+  assert.equal(form.codeAgentRoleDesign, "codex_cli");
+  assert.equal(form.codeAgentRoleImplementation, "codex_cli");
+  assert.equal(form.codeAgentRoleReview, "codex_cli");
+  assert.equal(form.codeAgentRoleResearch, "codex_cli");
   assert.equal(form.automationsEnabled, true);
   assert.equal(form.textInitiativeEnabled, true);
   assert.equal(form.textInitiativeEagerness, 20);
@@ -173,8 +175,6 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.replyFollowupMaxMemoryLookupCalls = 3;
   form.replyFollowupMaxImageLookupCalls = 1;
   form.replyFollowupToolTimeoutMs = 16000;
-  form.memoryReflectionStrategy = "one_pass_main";
-  form.adaptiveDirectivesEnabled = false;
   form.automationsEnabled = false;
   form.voiceGenerationLlmUseTextModel = true;
   form.voiceStreamWatchKeyframeIntervalMs = 1750;
@@ -194,6 +194,10 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   form.voiceOpenAiRealtimeUsePerUserAsrBridge = false;
   form.codeAgentProvider = "codex";
   form.codeAgentCodexModel = "gpt-5-codex";
+  form.codeAgentRoleDesign = "claude_code";
+  form.codeAgentRoleImplementation = "codex_cli";
+  form.codeAgentRoleReview = "claude_code";
+  form.codeAgentRoleResearch = "codex";
   form.textInitiativeUseTextModel = false;
   form.textInitiativeLlmProvider = "anthropic";
   form.textInitiativeLlmModel = "claude-haiku-4-5";
@@ -224,8 +228,6 @@ test("settingsFormModel converts settings to form defaults and back to normalize
     "claude-oauth",
     "claude-opus-4-6"
   );
-  assert.equal(patch.memory.reflection.strategy, "one_pass_main");
-  assert.equal(patch.directives.enabled, false);
   assert.equal(patch.automations.enabled, false);
   assertDedicatedExecutionModel(
     patch.initiative.text.execution,
@@ -254,6 +256,12 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(patch.voice.transcription.languageMode, "fixed");
   assert.equal(patch.voice.transcription.languageHint, "en-us");
   assert.deepEqual(patch.agentStack.overrides.devTeam.codingWorkers, ["codex"]);
+  assert.deepEqual(patch.agentStack.overrides.devTeam.roles, {
+    design: "claude_code",
+    implementation: "codex_cli",
+    review: "claude_code",
+    research: "codex"
+  });
   assert.equal(patch.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
   assert.equal(patch.initiative.voice.enabled, true);
   assert.equal(patch.initiative.voice.eagerness, 50);
@@ -368,7 +376,7 @@ test("resolveBrowserProviderModelOptions merges catalog values with browser defa
   assert.deepEqual(claudeOAuth, ["claude-haiku-4-5", "claude-opus-4-6", "claude-sonnet-4-6"]);
 });
 
-test("resolvePresetModelSelection always resolves to a real dropdown option", () => {
+test("resolvePresetModelSelection preserves a valid current model even when the catalog is stale", () => {
   const nonClaude = resolvePresetModelSelection({
     modelCatalog: {
       openai: ["claude-haiku-4-5"]
@@ -376,16 +384,18 @@ test("resolvePresetModelSelection always resolves to a real dropdown option", ()
     provider: "openai",
     model: "custom-model-not-listed"
   });
-  assert.equal(nonClaude.selectedPresetModel, "claude-haiku-4-5");
+  assert.equal(nonClaude.selectedPresetModel, "custom-model-not-listed");
+  assert.equal(nonClaude.options.includes("custom-model-not-listed"), true);
 
-  const claudeOAuth = resolvePresetModelSelection({
+  const openAiOAuth = resolvePresetModelSelection({
     modelCatalog: {
-      "claude-oauth": ["claude-sonnet-4-6", "claude-haiku-4-5"]
+      "openai-oauth": ["gpt-5.4", "gpt-5.3-codex"]
     },
-    provider: "claude-oauth",
-    model: "nonexistent"
+    provider: "openai-oauth",
+    model: "gpt-5-codex"
   });
-  assert.equal(claudeOAuth.selectedPresetModel, "claude-sonnet-4-6");
+  assert.equal(openAiOAuth.selectedPresetModel, "gpt-5-codex");
+  assert.equal(openAiOAuth.options.includes("gpt-5-codex"), true);
 });
 
 test("resolveModelOptionsFromText normalizes model lists for dropdown options", () => {
@@ -588,6 +598,29 @@ test("settingsFormModel round-trips codex cli code agent fields", () => {
   assert.equal(patch.agentStack.runtimeConfig.devTeam.codexCli.model, "gpt-5.4");
 });
 
+test("settingsFormModel enables role-selected coding workers even when provider stays auto", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({})));
+  form.stackAdvancedOverridesEnabled = true;
+  form.codeAgentEnabled = true;
+  form.codeAgentAllowedUserIds = "123456789";
+  form.codeAgentProvider = "auto";
+  form.codeAgentRoleDesign = "claude_code";
+  form.codeAgentRoleImplementation = "codex_cli";
+  form.codeAgentRoleReview = "claude_code";
+  form.codeAgentRoleResearch = "codex";
+
+  const patch = formToSettingsPatch(form);
+
+  assert.equal(patch.agentStack.runtimeConfig.devTeam.codex.enabled, true);
+  assert.equal(patch.agentStack.runtimeConfig.devTeam.codexCli.enabled, true);
+  assert.equal(patch.agentStack.runtimeConfig.devTeam.claudeCode.enabled, true);
+  assert.equal(patch.agentStack.overrides.devTeam.codingWorkers, undefined);
+  assert.equal(
+    resolveAgentStack(normalizeSettings(patch)).devTeam.roles.research,
+    "codex"
+  );
+});
+
 test("settingsFormModel supports the claude_oauth preset (migrated from claude_oauth_local_tools)", () => {
   const form = settingsToForm(withResolved(normalizeSettings({
     agentStack: {
@@ -732,20 +765,28 @@ test("settingsFormModel round-trips elevenlabs realtime settings", () => {
   );
 });
 
-test("settingsFormModel preserves explicit reflection strategy values", () => {
+test("settingsFormModel surfaces explicit legacy memory LLM overrides in the form view", () => {
   const form = settingsToForm({
-    memory: {
-      reflection: {
-        strategy: "one_pass_main"
-      }
+    memoryLlm: {
+      provider: "anthropic",
+      model: "claude-haiku-4-5"
     }
   });
 
-  assert.equal(form.memoryReflectionStrategy, "one_pass_main");
-  form.memoryReflectionStrategy = "two_pass_extract_then_main";
+  assert.equal(form.memoryLlmInheritTextModel, false);
+  assert.equal(form.memoryLlmProvider, "anthropic");
+  form.memoryLlmProvider = "openai";
+  form.memoryLlmModel = "gpt-5-mini";
+  assert.equal(form.memoryLlmProvider, "openai");
+  assert.equal(form.memoryLlmModel, "gpt-5-mini");
+});
 
+test("settingsFormModel keeps memory LLM inheriting the main text model by default", () => {
+  const form = settingsToForm(withResolved(normalizeSettings({})));
+
+  assert.equal(form.memoryLlmInheritTextModel, true);
   const patch = formToSettingsPatch(form);
-  assert.equal(patch.memory.reflection.strategy, "two_pass_extract_then_main");
+  assert.deepEqual(patch.memoryLlm, {});
 });
 
 test("settingsToFormPreserving keeps user's comma format for aliases on reload", () => {

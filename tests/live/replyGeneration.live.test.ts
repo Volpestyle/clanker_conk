@@ -17,9 +17,9 @@
  * Env:
  *   LIVE_REPLY_FILTER=text|voice|label-substring
  *   LIVE_REPLY_DEBUG=1
- *   TEXT_LLM_PROVIDER=openai|anthropic|claude-oauth|codex-oauth|xai|codex-cli
+ *   TEXT_LLM_PROVIDER=openai|anthropic|claude-oauth|openai-oauth|xai|codex-cli
  *   TEXT_LLM_MODEL=...
- *   VOICE_LLM_PROVIDER=openai|anthropic|claude-oauth|codex-oauth|xai|codex-cli
+ *   VOICE_LLM_PROVIDER=openai|anthropic|claude-oauth|openai-oauth|xai|codex-cli
  *   VOICE_LLM_MODEL=...
  *
  * Examples:
@@ -96,7 +96,7 @@ const SUPPORTED_PROVIDERS = new Set([
   "openai",
   "anthropic",
   "claude-oauth",
-  "codex-oauth",
+  "openai-oauth",
   "xai",
   "codex-cli"
 ]);
@@ -105,7 +105,7 @@ const DEFAULT_MODEL_BY_PROVIDER: Record<string, string> = {
   openai: "gpt-5-mini",
   anthropic: "claude-haiku-4-5",
   "claude-oauth": "claude-sonnet-4-6",
-  "codex-oauth": "gpt-5.4",
+  "openai-oauth": "gpt-5.4",
   xai: "grok-3-mini-latest",
   "codex-cli": "gpt-5.4"
 };
@@ -115,8 +115,8 @@ const LIVE_REPLY_DEBUG = parseBooleanFlag(process.env.LIVE_REPLY_DEBUG, false);
 const TEXT_BINDING = resolveLiveBinding("TEXT", "claude-oauth");
 const VOICE_BINDING = resolveLiveBinding("VOICE", "claude-oauth");
 const LOGS: Array<Record<string, unknown>> = [];
-const TOOL_CALLING_PROVIDERS = new Set(["openai", "anthropic", "claude-oauth", "codex-oauth", "xai"]);
-const VISION_PROVIDERS = new Set(["openai", "anthropic", "claude-oauth", "codex-oauth", "xai"]);
+const TOOL_CALLING_PROVIDERS = new Set(["openai", "anthropic", "claude-oauth", "openai-oauth", "xai"]);
+const VISION_PROVIDERS = new Set(["openai", "anthropic", "claude-oauth", "openai-oauth", "xai"]);
 const RED_SQUARE_IMAGE: PromptImageInput = {
   filename: "red-square.png",
   contentType: "image/png",
@@ -1236,8 +1236,13 @@ function validateProviderReadiness(binding: LiveBinding, kind: "TEXT" | "VOICE")
   if (binding.provider === "claude-oauth" && !isClaudeOAuthConfigured(process.env.CLAUDE_OAUTH_REFRESH_TOKEN || "")) {
     throw new Error(`CLAUDE_OAUTH_REFRESH_TOKEN or data/claude-oauth-tokens.json is required when ${kind}_LLM_PROVIDER=claude-oauth`);
   }
-  if (binding.provider === "codex-oauth" && !isCodexOAuthConfigured(process.env.CODEX_OAUTH_REFRESH_TOKEN || "")) {
-    throw new Error(`CODEX_OAUTH_REFRESH_TOKEN or data/codex-oauth-tokens.json is required when ${kind}_LLM_PROVIDER=codex-oauth`);
+  if (
+    binding.provider === "openai-oauth" &&
+    !isCodexOAuthConfigured(process.env.OPENAI_OAUTH_REFRESH_TOKEN || process.env.CODEX_OAUTH_REFRESH_TOKEN || "")
+  ) {
+    throw new Error(
+      `OPENAI_OAUTH_REFRESH_TOKEN or data/openai-oauth-tokens.json is required when ${kind}_LLM_PROVIDER=openai-oauth`
+    );
   }
   if (binding.provider === "xai" && !process.env.XAI_API_KEY) {
     throw new Error(`XAI_API_KEY is required when ${kind}_LLM_PROVIDER=xai`);
@@ -1253,7 +1258,7 @@ beforeAll(() => {
       openaiApiKey: process.env.OPENAI_API_KEY || "",
       anthropicApiKey: process.env.ANTHROPIC_API_KEY || "",
       claudeOAuthRefreshToken: process.env.CLAUDE_OAUTH_REFRESH_TOKEN || "",
-      codexOAuthRefreshToken: process.env.CODEX_OAUTH_REFRESH_TOKEN || "",
+      openaiOAuthRefreshToken: process.env.OPENAI_OAUTH_REFRESH_TOKEN || process.env.CODEX_OAUTH_REFRESH_TOKEN || "",
       xaiApiKey: process.env.XAI_API_KEY || "",
       xaiBaseUrl: process.env.XAI_BASE_URL || ""
     },

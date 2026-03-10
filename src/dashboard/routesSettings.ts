@@ -3,6 +3,8 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import type { DashboardApp } from "./shared.ts";
 import type { Store } from "../store/store.ts";
 import { getLlmModelCatalog } from "../llm/pricing.ts";
+import { isClaudeOAuthConfigured } from "../llm/claudeOAuth.ts";
+import { isCodexOAuthConfigured } from "../llm/codexOAuth.ts";
 import {
   getReplyGenerationSettings,
   getResolvedOrchestratorBinding,
@@ -13,15 +15,14 @@ import {
   getResolvedVoiceInitiativeBinding,
   getResolvedVoiceAdmissionClassifierBinding,
   getResolvedVoiceGenerationBinding,
-  getVoiceConversationPolicy,
   getVoiceRuntimeConfig,
   resolveAgentStack
 } from "../settings/agentStack.ts";
 import {
-  normalizeVoiceAdmissionModeForDashboard,
   resolveVoiceRuntimeSelectionFromMode
 } from "../settings/voiceDashboardMappings.ts";
 import { normalizeSettings } from "../store/settingsNormalization.ts";
+import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
 import { readDashboardBody, toRecord } from "./shared.ts";
 
 export interface SettingsRouteDeps {
@@ -39,40 +40,34 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
 
   app.get("/api/settings", (c) => {
     const settings = store.getSettings();
-    return c.json({ ...settings, _resolved: resolveSettingsBindings(settings) });
+    return c.json({ ...settings, _resolved: resolveSettingsBindings(settings, appConfig) });
   });
 
   app.put("/api/settings", async (c) => {
     const nextSettings = store.patchSettings(await readDashboardBody(c));
     await bot.applyRuntimeSettings(nextSettings);
-    return c.json({ ...nextSettings, _resolved: resolveSettingsBindings(nextSettings) });
+    return c.json({ ...nextSettings, _resolved: resolveSettingsBindings(nextSettings, appConfig) });
   });
 
   app.post("/api/settings/preset-defaults", async (c) => {
     const body = await readDashboardBody(c);
     const preset = String(body.preset || "claude_oauth").trim();
-    const settings = normalizeSettings({ agentStack: { preset } });
-    const resolved = resolveSettingsBindings(settings);
-    const voiceRuntime = getVoiceRuntimeConfig(settings);
-    const voiceConversation = getVoiceConversationPolicy(settings);
-    const classifierFallback = resolved.voiceAdmissionClassifierBinding || resolved.orchestrator;
-    const generationBinding = resolved.voiceGenerationBinding;
-    return c.json({
-      stackPreset: preset,
-      provider: resolved.orchestrator.provider,
-      model: resolved.orchestrator.model,
-      voiceProvider: resolveVoiceRuntimeSelectionFromMode(voiceRuntime.runtimeMode),
-      voiceReplyPath: voiceConversation.replyPath,
-      voiceTtsMode: voiceConversation.ttsMode,
-      voiceReplyDecisionRealtimeAdmissionMode: normalizeVoiceAdmissionModeForDashboard(
-        resolved.agentStack.voiceAdmissionPolicy.mode
-      ),
-      voiceReplyDecisionLlmProvider: classifierFallback.provider,
-      voiceReplyDecisionLlmModel: classifierFallback.model,
-      voiceGenerationLlmUseTextModel: voiceRuntime.generation?.mode !== "dedicated_model",
-      voiceGenerationLlmProvider: generationBinding.provider,
-      voiceGenerationLlmModel: generationBinding.model
+    // Full reset: DEFAULT_SETTINGS with the selected preset applied on top.
+    // This gives a known-good state — every field at its global default,
+    // with preset-specific overrides (provider, model, voice config) applied.
+    // Channel permissions and user IDs are preserved from current settings —
+    // these are server-specific configuration the operator set up, not behavior tuning.
+    const current = store.getSettings();
+    const settings = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      agentStack: { ...DEFAULT_SETTINGS.agentStack, preset },
+      permissions: current.permissions,
+      voice: {
+        ...DEFAULT_SETTINGS.voice,
+        channelPolicy: current.voice?.channelPolicy
+      }
     });
+    return c.json({ ...settings, _resolved: resolveSettingsBindings(settings, appConfig) });
   });
 
   app.post("/api/settings/refresh", async (c) => {
@@ -98,10 +93,19 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
     });
   });
 
+  // Legacy reset endpoint — same as preset-defaults with the default preset.
+  // Preserves channel permissions, same as preset-defaults.
   app.post("/api/settings/reset", async (c) => {
-    const nextSettings = store.resetSettings();
-    await bot.applyRuntimeSettings(nextSettings);
-    return c.json(nextSettings);
+    const current = store.getSettings();
+    const settings = normalizeSettings({
+      ...DEFAULT_SETTINGS,
+      permissions: current.permissions,
+      voice: {
+        ...DEFAULT_SETTINGS.voice,
+        channelPolicy: current.voice?.channelPolicy
+      }
+    });
+    return c.json({ ...settings, _resolved: resolveSettingsBindings(settings, appConfig) });
   });
 
   app.get("/api/llm/models", (c) => {
@@ -213,7 +217,7 @@ export function attachSettingsRoutes(app: DashboardApp, deps: SettingsRouteDeps)
   });
 }
 
-function resolveSettingsBindings(settings: unknown) {
+function resolveSettingsBindings(settings: unknown, appConfig: DashboardAppConfig) {
   return {
     agentStack: resolveAgentStack(settings),
     orchestrator: getResolvedOrchestratorBinding(settings),
@@ -224,7 +228,18 @@ function resolveSettingsBindings(settings: unknown) {
     voiceProvider: resolveVoiceRuntimeSelectionFromMode(getVoiceRuntimeConfig(settings).runtimeMode),
     voiceInitiativeBinding: getResolvedVoiceInitiativeBinding(settings),
     voiceAdmissionClassifierBinding: getResolvedVoiceAdmissionClassifierBinding(settings),
-    voiceGenerationBinding: getResolvedVoiceGenerationBinding(settings)
+    voiceGenerationBinding: getResolvedVoiceGenerationBinding(settings),
+    providerAuth: {
+      claude_code:
+        Boolean(appConfig.anthropicApiKey) ||
+        isClaudeOAuthConfigured(appConfig.claudeOAuthRefreshToken || ""),
+      codex_cli:
+        Boolean(appConfig.openaiApiKey) ||
+        isCodexOAuthConfigured(appConfig.openaiOAuthRefreshToken || ""),
+      codex:
+        Boolean(appConfig.openaiApiKey) ||
+        isCodexOAuthConfigured(appConfig.openaiOAuthRefreshToken || "")
+    }
   };
 }
 

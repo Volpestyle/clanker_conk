@@ -14,11 +14,24 @@ interface ChannelIdFieldProps {
   onChannelIdChange: (channelId: string) => void;
 }
 
+const GUILD_STORAGE_KEY = "dashboard_last_guild_id";
+
+export function getLastGuildId(): string {
+  try { return localStorage.getItem(GUILD_STORAGE_KEY) || ""; } catch { return ""; }
+}
+
+export function saveLastGuildId(guildId: string) {
+  try { if (guildId) localStorage.setItem(GUILD_STORAGE_KEY, guildId); } catch { /* noop */ }
+}
+
 export function GuildSelectField({ guilds, guildId, onGuildChange }: GuildSelectFieldProps) {
   return (
     <label>
       Guild
-      <select value={guildId} onChange={(event) => onGuildChange(event.target.value)}>
+      <select value={guildId} onChange={(event) => {
+        onGuildChange(event.target.value);
+        saveLastGuildId(event.target.value);
+      }}>
         <option value="">Select guild...</option>
         {guilds.map((guild) => (
           <option key={guild.id} value={guild.id}>

@@ -2,7 +2,6 @@ import { stream } from "hono/streaming";
 import type { DashboardBot, DashboardMemory, DashboardScreenShareSessionManager } from "../dashboard.ts";
 import type { DashboardApp, DashboardSseClient } from "./shared.ts";
 import type { Store } from "../store/store.ts";
-import { getDirectiveSettings } from "../settings/agentStack.ts";
 import { parseBoundedInt, readDashboardBody, STREAM_INGEST_API_PATH, toRecord } from "./shared.ts";
 
 export interface VoiceRouteDeps {
@@ -47,45 +46,7 @@ function normalizeDashboardFactRows(rows: unknown) {
     .filter((row) => row !== null);
 }
 
-function normalizeMemoryFactAuditEventType(kind: string) {
-  const normalized = String(kind || "").trim().toLowerCase();
-  if (normalized === "memory_fact_updated") return "updated";
-  if (normalized === "memory_fact_removed") return "removed";
-  return "added";
-}
-
-function mapMemoryFactAuditEvent(row: unknown) {
-  const record = toRecord(row);
-  const metadata = toRecord(record.metadata);
-  const previous = toRecord(metadata.previous);
-  const next = toRecord(metadata.next);
-  const factId = Number(metadata.factId);
-  const actionId = Number(record.id);
-  const createdAt = String(record.created_at || record.createdAt || "").trim();
-  const eventType = normalizeMemoryFactAuditEventType(String(record.kind || ""));
-  return {
-    id: Number.isInteger(actionId) ? actionId : null,
-    createdAt: createdAt || null,
-    eventType,
-    actorName: String(metadata.actorName || record.user_id || record.userId || "").trim() || null,
-    source: String(metadata.source || "").trim() || null,
-    factId: Number.isInteger(factId) ? factId : null,
-    subject: String(metadata.subject || next.subject || previous.subject || "").trim() || null,
-    factType: String(metadata.factType || next.fact_type || next.factType || previous.fact_type || previous.factType || "").trim() || null,
-    fact: String(record.content || metadata.fact || next.fact || previous.fact || "").trim() || null,
-    previousFact: String(previous.fact || "").trim() || null,
-    nextFact: String(next.fact || "").trim() || null,
-    channelId:
-      String(metadata.channelId || next.channel_id || next.channelId || previous.channel_id || previous.channelId || record.channel_id || "").trim() ||
-      null,
-    sourceMessageId:
-      String(metadata.sourceMessageId || next.source_message_id || next.sourceMessageId || previous.source_message_id || previous.sourceMessageId || record.message_id || "").trim() ||
-      null,
-    removalReason: String(metadata.removalReason || "").trim() || null
-  };
-}
-
-function mapRelevantMessageRow(row: unknown) {
+function mapConversationMessageRow(row: unknown) {
   const record = toRecord(row);
   const content = String(record.content || "").trim();
   if (!content) return null;
@@ -94,6 +55,25 @@ function mapRelevantMessageRow(row: unknown) {
     timestamp: record.created_at ? String(record.created_at) : record.createdAt ? String(record.createdAt) : null,
     author: record.author_name ? String(record.author_name) : record.authorName ? String(record.authorName) : null,
     content
+  };
+}
+
+function mapConversationWindowRow(row: unknown) {
+  const record = toRecord(row);
+  const messages = (Array.isArray(record.messages) ? record.messages : [])
+    .map((entry) => mapConversationMessageRow(entry))
+    .filter((entry) => entry !== null);
+  if (!messages.length) return null;
+  const score = Number(record.score);
+  const semanticScore = Number(record.semanticScore);
+  const ageMinutes = Number(record.ageMinutes);
+  return {
+    anchorMessageId: String(record.anchorMessageId || record.anchor_message_id || "").trim() || null,
+    createdAt: record.createdAt ? String(record.createdAt) : record.created_at ? String(record.created_at) : null,
+    score: Number.isFinite(score) ? score : null,
+    semanticScore: Number.isFinite(semanticScore) ? semanticScore : null,
+    ageMinutes: Number.isFinite(ageMinutes) ? ageMinutes : null,
+    messages
   };
 }
 
@@ -121,12 +101,14 @@ function getActiveVoiceSessionFactProfileSnapshot(
       const cachedUserId = String(profileRecord.userId || "").trim();
       if (!cachedUserId) return null;
       const userFacts = normalizeDashboardFactRows(profileRecord.userFacts);
+      const guidanceFacts = normalizeDashboardFactRows(profileRecord.guidanceFacts);
       return {
         userId: cachedUserId,
         displayName: profileRecord.displayName ? String(profileRecord.displayName) : null,
         loadedAt: profileRecord.loadedAt ? String(profileRecord.loadedAt) : null,
-        factCount: userFacts.length,
-        userFacts
+        factCount: userFacts.length + guidanceFacts.length,
+        userFacts,
+        guidanceFacts
       };
     })
     .filter((entry) => entry !== null);
@@ -161,7 +143,8 @@ function getActiveVoiceSessionFactProfileSnapshot(
       ? {
           loadedAt: guildFactProfileRecord.loadedAt ? String(guildFactProfileRecord.loadedAt) : null,
           selfFacts: normalizeDashboardFactRows(guildFactProfileRecord.selfFacts),
-          loreFacts: normalizeDashboardFactRows(guildFactProfileRecord.loreFacts)
+          loreFacts: normalizeDashboardFactRows(guildFactProfileRecord.loreFacts),
+          guidanceFacts: normalizeDashboardFactRows(guildFactProfileRecord.guidanceFacts)
         }
       : null
   };
@@ -602,7 +585,7 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
     });
   });
 
-  app.get("/api/memory/fact-profile", (c) => {
+  app.get("/api/memory/fact-profile", async (c) => {
     const guildId = String(c.req.query("guildId") || "").trim();
     const userId = String(c.req.query("userId") || "").trim() || null;
     const channelId = String(c.req.query("channelId") || "").trim() || null;
@@ -617,10 +600,11 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
         durableProfile: {
           userFacts: [],
           selfFacts: [],
-          loreFacts: []
+          loreFacts: [],
+          guidanceFacts: []
         },
         promptContext: {
-          relevantMessages: []
+          recentConversationHistory: []
         },
         activeVoiceSession: null
       });
@@ -632,19 +616,47 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
             userId,
             guildId
           })
-        : { userFacts: [] };
+        : { userFacts: [], guidanceFacts: [] };
     const guildProfile =
       typeof memory.loadGuildFactProfile === "function"
         ? memory.loadGuildFactProfile({
             guildId
           })
-        : { selfFacts: [], loreFacts: [] };
-    const relevantMessages =
-      channelId && queryText && typeof store.searchRelevantMessages === "function"
-        ? (store.searchRelevantMessages(channelId, queryText, 8) || [])
-            .map((row) => mapRelevantMessageRow(row))
-            .filter((row) => row !== null)
-        : [];
+        : { selfFacts: [], loreFacts: [], guidanceFacts: [] };
+    const userProfileRecord = toRecord(userProfile);
+    const guildProfileRecord = toRecord(guildProfile);
+    let recentConversationHistory: Array<NonNullable<ReturnType<typeof mapConversationWindowRow>>> = [];
+    if (channelId && queryText) {
+      const historyRows =
+        typeof memory.searchConversationHistory === "function"
+          ? await memory.searchConversationHistory({
+              guildId,
+              channelId,
+              queryText,
+              settings: store.getSettings(),
+              trace: {
+                guildId,
+                channelId,
+                source: "dashboard_fact_profile_conversation_history"
+              },
+              limit: 3,
+              maxAgeHours: 24 * 14,
+              before: 1,
+              after: 1
+            })
+          : store.searchConversationWindows?.({
+              guildId,
+              channelId,
+              queryText,
+              limit: 3,
+              maxAgeHours: 24 * 14,
+              before: 1,
+              after: 1
+            }) || [];
+      recentConversationHistory = historyRows
+        .map((row) => mapConversationWindowRow(row))
+        .filter((row): row is NonNullable<ReturnType<typeof mapConversationWindowRow>> => row !== null);
+    }
 
     return c.json({
       guildId,
@@ -652,12 +664,16 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
       channelId,
       queryText,
       durableProfile: {
-        userFacts: normalizeDashboardFactRows(userProfile?.userFacts),
-        selfFacts: normalizeDashboardFactRows(guildProfile?.selfFacts),
-        loreFacts: normalizeDashboardFactRows(guildProfile?.loreFacts)
+        userFacts: normalizeDashboardFactRows(userProfileRecord.userFacts),
+        selfFacts: normalizeDashboardFactRows(guildProfileRecord.selfFacts),
+        loreFacts: normalizeDashboardFactRows(guildProfileRecord.loreFacts),
+        guidanceFacts: normalizeDashboardFactRows([
+          ...(Array.isArray(guildProfileRecord.guidanceFacts) ? guildProfileRecord.guidanceFacts : []),
+          ...(Array.isArray(userProfileRecord.guidanceFacts) ? userProfileRecord.guidanceFacts : [])
+        ])
       },
       promptContext: {
-        relevantMessages
+        recentConversationHistory
       },
       activeVoiceSession: getActiveVoiceSessionFactProfileSnapshot(bot, {
         guildId,
@@ -666,233 +682,10 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
     });
   });
 
-  app.get("/api/memory/adaptive-directives", (c) => {
-    const guildId = String(c.req.query("guildId") || "").trim();
-    const limit = parseBoundedInt(c.req.query("limit"), 50, 1, 200);
-    if (!guildId) {
-      return c.json({
-        guildId,
-        notes: [],
-        limit
-      });
-    }
-
-    return c.json({
-      guildId,
-      limit,
-      notes:
-        typeof store.getActiveAdaptiveStyleNotes === "function"
-          ? store.getActiveAdaptiveStyleNotes(guildId, limit)
-          : []
-    });
-  });
-
-  app.get("/api/memory/adaptive-directives/audit", (c) => {
-    const guildId = String(c.req.query("guildId") || "").trim();
-    const limit = parseBoundedInt(c.req.query("limit"), 100, 1, 500);
-    if (!guildId) {
-      return c.json({
-        guildId,
-        events: [],
-        limit
-      });
-    }
-
-    return c.json({
-      guildId,
-      limit,
-      events:
-        typeof store.getAdaptiveStyleNoteAuditLog === "function"
-          ? store.getAdaptiveStyleNoteAuditLog(guildId, limit)
-          : []
-    });
-  });
-
-  app.post("/api/memory/adaptive-directives", async (c) => {
-    const adaptiveDirectivesEnabled = Boolean(getDirectiveSettings(store.getSettings?.()).enabled);
-    if (!adaptiveDirectivesEnabled) {
-      return c.json(
-        {
-          ok: false,
-          reason: "adaptive_directives_disabled"
-        },
-        503
-      );
-    }
-
-    const body = await readDashboardBody(c);
-    const guildId = String(body.guildId || "").trim();
-    const noteText = String(body.noteText || "").trim();
-    const directiveKind = String(body.directiveKind || "guidance").trim() || "guidance";
-    const actorName = String(body.actorName || "dashboard").trim() || "dashboard";
-    if (!guildId || !noteText) {
-      return c.json(
-        {
-          ok: false,
-          reason: !guildId ? "guild_id_required" : "note_text_required"
-        },
-        400
-      );
-    }
-
-    const result = store.addAdaptiveStyleNote({
-      guildId,
-      directiveKind,
-      noteText,
-      actorName,
-      source: "dashboard"
-    });
-    if (!result?.ok) {
-      return c.json(
-        {
-          ok: false,
-          reason: String(result?.error || "adaptive_directive_add_failed")
-        },
-        400
-      );
-    }
-    return c.json(result);
-  });
-
-  app.patch("/api/memory/adaptive-directives/:noteId", async (c) => {
-    const adaptiveDirectivesEnabled = Boolean(getDirectiveSettings(store.getSettings?.()).enabled);
-    if (!adaptiveDirectivesEnabled) {
-      return c.json(
-        {
-          ok: false,
-          reason: "adaptive_directives_disabled"
-        },
-        503
-      );
-    }
-
-    const body = await readDashboardBody(c);
-    const guildId = String(body.guildId || "").trim();
-    const noteId = Number(c.req.param("noteId"));
-    const noteText = String(body.noteText || "").trim();
-    const directiveKind = String(body.directiveKind || "guidance").trim() || "guidance";
-    const actorName = String(body.actorName || "dashboard").trim() || "dashboard";
-    if (!guildId || !Number.isInteger(noteId) || noteId <= 0 || !noteText) {
-      return c.json(
-        {
-          ok: false,
-          reason: !guildId
-            ? "guild_id_required"
-            : !Number.isInteger(noteId) || noteId <= 0
-              ? "note_id_required"
-              : "note_text_required"
-        },
-        400
-      );
-    }
-
-    const result = store.updateAdaptiveStyleNote({
-      noteId,
-      guildId,
-      directiveKind,
-      noteText,
-      actorName,
-      source: "dashboard"
-    });
-    if (!result?.ok) {
-      return c.json(
-        {
-          ok: false,
-          reason: String(result?.error || "adaptive_directive_update_failed")
-        },
-        result?.error === "note_not_found" ? 404 : 400
-      );
-    }
-    return c.json(result);
-  });
-
-  app.post("/api/memory/adaptive-directives/:noteId/remove", async (c) => {
-    const adaptiveDirectivesEnabled = Boolean(getDirectiveSettings(store.getSettings?.()).enabled);
-    if (!adaptiveDirectivesEnabled) {
-      return c.json(
-        {
-          ok: false,
-          reason: "adaptive_directives_disabled"
-        },
-        503
-      );
-    }
-
-    const body = await readDashboardBody(c);
-    const guildId = String(body.guildId || "").trim();
-    const noteId = Number(c.req.param("noteId"));
-    const actorName = String(body.actorName || "dashboard").trim() || "dashboard";
-    const removalReason = String(body.removalReason || "").trim();
-    if (!guildId || !Number.isInteger(noteId) || noteId <= 0) {
-      return c.json(
-        {
-          ok: false,
-          reason: !guildId ? "guild_id_required" : "note_id_required"
-        },
-        400
-      );
-    }
-
-    const result = store.removeAdaptiveStyleNote({
-      noteId,
-      guildId,
-      actorName,
-      removalReason,
-      source: "dashboard"
-    });
-    if (!result?.ok) {
-      return c.json(
-        {
-          ok: false,
-          reason: String(result?.error || "adaptive_directive_remove_failed")
-        },
-        result?.error === "note_not_found" ? 404 : 400
-      );
-    }
-    return c.json(result);
-  });
-
   app.get("/api/memory/reflections", (c) => {
     const limit = parseBoundedInt(c.req.query("limit"), 20, 1, 100);
     return c.json({
       runs: store.getRecentMemoryReflections(limit)
-    });
-  });
-
-  app.post("/api/memory/reflections/rerun", async (c) => {
-    if (!memory || typeof memory.rerunDailyReflection !== "function") {
-      return c.json(
-        {
-          ok: false,
-          reason: "memory_reflection_rerun_unavailable"
-        },
-        503
-      );
-    }
-
-    const body = await readDashboardBody(c);
-    const dateKey = String(body.dateKey || "").trim();
-    const guildId = String(body.guildId || "").trim();
-    if (!dateKey || !guildId) {
-      return c.json(
-        {
-          ok: false,
-          reason: !dateKey ? "date_key_required" : "guild_id_required"
-        },
-        400
-      );
-    }
-
-    await memory.rerunDailyReflection({
-      dateKey,
-      guildId,
-      settings: store.getSettings()
-    });
-
-    return c.json({
-      ok: true,
-      dateKey,
-      guildId
     });
   });
 
@@ -921,201 +714,6 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
       queryText
     });
     return c.json({ guildId, limit, subject: subjectFilter, queryText, facts });
-  });
-
-  app.get("/api/memory/facts/audit", (c) => {
-    const guildId = String(c.req.query("guildId") || "").trim();
-    const factId = Number(c.req.query("factId"));
-    const limit = parseBoundedInt(c.req.query("limit"), 40, 1, 200);
-    if (!guildId) {
-      return c.json({
-        guildId,
-        factId: Number.isInteger(factId) && factId > 0 ? factId : null,
-        events: [],
-        limit
-      });
-    }
-
-    const events = store
-      .getRecentActions(Math.max(120, limit * 4), {
-        guildId,
-        kinds: ["memory_fact", "memory_fact_updated", "memory_fact_removed"]
-      })
-      .map((row) => mapMemoryFactAuditEvent(row))
-      .filter((event) =>
-        Number.isInteger(factId) && factId > 0
-          ? Number(event.factId || 0) === factId
-          : true
-      )
-      .slice(0, limit);
-
-    return c.json({
-      guildId,
-      factId: Number.isInteger(factId) && factId > 0 ? factId : null,
-      limit,
-      events
-    });
-  });
-
-  app.patch("/api/memory/facts/:factId", async (c) => {
-    const body = await readDashboardBody(c);
-    const guildId = String(body.guildId || "").trim();
-    const factId = Number(c.req.param("factId"));
-    const subject = String(body.subject || "").trim();
-    const fact = String(body.fact || "").trim();
-    const factType = String(body.factType || "general").trim() || "general";
-    const evidenceText = String(body.evidenceText || "").trim() || null;
-    const actorName = String(body.actorName || "dashboard").trim() || "dashboard";
-    const confidence = Number(body.confidence);
-
-    if (!guildId || !Number.isInteger(factId) || factId <= 0 || !subject || !fact) {
-      return c.json(
-        {
-          ok: false,
-          reason: !guildId
-            ? "guild_id_required"
-            : !Number.isInteger(factId) || factId <= 0
-              ? "fact_id_required"
-              : !subject
-                ? "subject_required"
-                : "fact_required"
-        },
-        400
-      );
-    }
-    if (!Number.isFinite(confidence) || confidence < 0 || confidence > 1) {
-      return c.json(
-        {
-          ok: false,
-          reason: "confidence_invalid"
-        },
-        400
-      );
-    }
-
-    const existing = store.getMemoryFactById(factId, { guildId });
-    if (!existing) {
-      return c.json(
-        {
-          ok: false,
-          reason: "fact_not_found"
-        },
-        404
-      );
-    }
-
-    const result = store.updateMemoryFact({
-      factId,
-      guildId,
-      channelId: existing.channel_id,
-      subject,
-      fact,
-      factType,
-      evidenceText,
-      sourceMessageId: existing.source_message_id,
-      confidence
-    });
-
-    if (!result?.ok) {
-      return c.json(
-        {
-          ok: false,
-          reason: String(result?.error || "memory_fact_update_failed")
-        },
-        String(result?.error || "").trim() === "duplicate_fact" ? 409 : 400
-      );
-    }
-
-    const updated = result.fact || store.getMemoryFactById(factId, { guildId });
-    store.logAction({
-      kind: "memory_fact_updated",
-      guildId,
-      channelId: updated?.channel_id || existing.channel_id,
-      messageId: updated?.source_message_id || existing.source_message_id,
-      content: updated?.fact || fact,
-      metadata: {
-        actorName,
-        source: "dashboard",
-        factId,
-        subject: updated?.subject || subject,
-        factType: updated?.fact_type || factType,
-        channelId: updated?.channel_id || existing.channel_id,
-        sourceMessageId: updated?.source_message_id || existing.source_message_id,
-        previous: existing,
-        next: updated
-      }
-    });
-
-    return c.json({
-      ok: true,
-      fact: mapDashboardFactRow(updated)
-    });
-  });
-
-  app.post("/api/memory/facts/:factId/remove", async (c) => {
-    const body = await readDashboardBody(c);
-    const guildId = String(body.guildId || "").trim();
-    const factId = Number(c.req.param("factId"));
-    const actorName = String(body.actorName || "dashboard").trim() || "dashboard";
-    const removalReason = String(body.removalReason || "").trim() || null;
-    if (!guildId || !Number.isInteger(factId) || factId <= 0) {
-      return c.json(
-        {
-          ok: false,
-          reason: !guildId ? "guild_id_required" : "fact_id_required"
-        },
-        400
-      );
-    }
-
-    const existing = store.getMemoryFactById(factId, { guildId });
-    if (!existing) {
-      return c.json(
-        {
-          ok: false,
-          reason: "fact_not_found"
-        },
-        404
-      );
-    }
-
-    const result = store.removeMemoryFact({
-      factId,
-      guildId
-    });
-    if (!result?.ok) {
-      return c.json(
-        {
-          ok: false,
-          reason: String(result?.error || "memory_fact_remove_failed")
-        },
-        400
-      );
-    }
-
-    store.logAction({
-      kind: "memory_fact_removed",
-      guildId,
-      channelId: existing.channel_id,
-      messageId: existing.source_message_id,
-      content: existing.fact,
-      metadata: {
-        actorName,
-        source: "dashboard",
-        factId,
-        subject: existing.subject,
-        factType: existing.fact_type,
-        channelId: existing.channel_id,
-        sourceMessageId: existing.source_message_id,
-        removalReason,
-        previous: existing
-      }
-    });
-
-    return c.json({
-      ok: true,
-      factId
-    });
   });
 }
 

@@ -187,7 +187,7 @@ export function VoiceModeSettingsSection({
     "openai",
     "anthropic",
     "claude-oauth",
-    "codex-oauth",
+    "openai-oauth",
     "codex-cli",
     "codex_cli_session",
     "xai"

@@ -1,7 +1,8 @@
 import { useState, type FormEvent } from "react";
 import { api } from "../../api";
 import MemoryResultsTable, { type FactResult } from "./MemoryResultsTable";
-import { ChannelIdField, GuildSelectField } from "./MemoryFormFields";
+import { useEffect } from "react";
+import { ChannelIdField, GuildSelectField, getLastGuildId, saveLastGuildId } from "./MemoryFormFields";
 
 interface Guild {
   id: string;
@@ -24,6 +25,16 @@ export default function MemorySearch({ guilds, notify }: Props) {
   const [limit, setLimit] = useState(10);
   const [results, setResults] = useState<FactResult[] | null>(null);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!guildId && guilds.length > 0) {
+      const saved = getLastGuildId();
+      const restored = saved && guilds.some((g) => g.id === saved);
+      const next = restored ? saved : guilds[0].id;
+      setGuildId(next);
+      saveLastGuildId(next);
+    }
+  }, [guildId, guilds]);
 
   const handleSearch = async (e: FormEvent) => {
     e.preventDefault();

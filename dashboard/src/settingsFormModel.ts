@@ -12,6 +12,7 @@ import {
   parseUniqueLineList,
   parseUniqueList
 } from "../../src/settings/listNormalization.ts";
+import { getResolvedMemoryBinding } from "../../src/settings/agentStack.ts";
 import {
   normalizeVoiceAdmissionModeForDashboard,
   resolveVoiceRuntimeModeFromSelection,
@@ -48,14 +49,35 @@ export type ResolvedBindings = {
   voiceInitiativeBinding: { provider: string; model: string; temperature?: number };
   voiceAdmissionClassifierBinding: { provider: string; model: string } | null;
   voiceGenerationBinding: { provider: string; model: string };
+  codeAgent: {
+    enabled: boolean;
+    provider: string;
+    model: string;
+    codexModel: string;
+    codexCliModel: string;
+    maxTurns: number;
+    timeoutMs: number;
+    maxBufferBytes: number;
+    defaultCwd: string;
+    maxTasksPerHour: number;
+    maxParallelTasks: number;
+    allowedUserIds: readonly string[];
+    roleDesign?: string;
+    roleImplementation?: string;
+    roleReview?: string;
+    roleResearch?: string;
+  };
+  providerAuth?: { claude_code?: boolean; codex_cli?: boolean; codex?: boolean };
 };
 
 const PROVIDER_SET = new Set<string>(MODEL_PROVIDER_KINDS);
 
 function normalizeLlmProvider(value: unknown, fallback = "openai"): string {
   const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "codex-oauth") return "openai-oauth";
   if (PROVIDER_SET.has(normalized)) return normalized;
   const fallbackNormalized = String(fallback || "").trim().toLowerCase();
+  if (fallbackNormalized === "codex-oauth") return "openai-oauth";
   if (PROVIDER_SET.has(fallbackNormalized)) return fallbackNormalized;
   return "openai";
 }
@@ -64,7 +86,7 @@ function getPresetClassifierFallback(preset: string): { provider: string; model:
   if (preset === "claude_oauth") return { provider: "claude-oauth", model: "claude-haiku-4-5" };
   if (preset === "claude_api") return { provider: "anthropic", model: "claude-haiku-4-5" };
   if (preset === "openai_native_realtime" || preset === "openai_api") return { provider: "openai", model: "gpt-5-mini" };
-  if (preset === "openai_oauth") return { provider: "codex-oauth", model: "gpt-5.4" };
+  if (preset === "openai_oauth") return { provider: "openai-oauth", model: "gpt-5.4" };
   if (preset === "grok_native_agent") return { provider: "xai", model: "grok-3-mini-latest" };
   return undefined;
 }
@@ -132,14 +154,20 @@ function buildSettingsFormView(settings: unknown) {
   const permissions = valueOr(s.permissions?.replies, d.permissions.replies);
   const textInitiative = valueOr(s.initiative?.text, d.initiative.text);
   const memory = valueOr(s.memory, d.memory);
-  const directives = valueOr(s.directives, d.directives);
   const automations = valueOr(s.automations, d.automations);
   const sessions = valueOr(s.interaction?.sessions, d.interaction.sessions);
   const followup = valueOr(s.interaction?.followup, d.interaction.followup);
   const replyGeneration = valueOr(s.interaction?.replyGeneration, d.interaction.replyGeneration);
   const orchestrator = resolved?.orchestrator || { provider: agentStack.overrides?.orchestrator?.provider || "openai", model: agentStack.overrides?.orchestrator?.model || "gpt-5" };
   const followupBinding = resolved?.followupBinding || orchestrator;
-  const memoryBinding = resolved?.memoryBinding || orchestrator;
+  const rawMemoryBinding =
+    s.memoryLlm && typeof s.memoryLlm === "object" && !Array.isArray(s.memoryLlm)
+      ? s.memoryLlm
+      : {};
+  const memoryOverrideConfigured =
+    Boolean(String((rawMemoryBinding as Record<string, unknown>).provider || "").trim()) ||
+    Boolean(String((rawMemoryBinding as Record<string, unknown>).model || "").trim());
+  const memoryBinding = resolved?.memoryBinding || getResolvedMemoryBinding(s);
   const research = valueOr(agentStack.runtimeConfig?.research, d.agentStack.runtimeConfig.research);
   const browser = valueOr(agentStack.runtimeConfig?.browser, d.agentStack.runtimeConfig.browser);
   const browserExecution = browser.localBrowserAgent?.execution;
@@ -212,7 +240,6 @@ function buildSettingsFormView(settings: unknown) {
       model: textInitiativeBinding.model
     },
     memory,
-    adaptiveDirectives: directives,
     automations,
     subAgentOrchestration: sessions,
     llm: orchestrator,
@@ -232,6 +259,7 @@ function buildSettingsFormView(settings: unknown) {
       toolTimeoutMs: followup.toolBudget.toolTimeoutMs
     },
     memoryLlm: memoryBinding,
+    memoryLlmInheritTextModel: !memoryOverrideConfigured,
     browser: {
       runtime: resolvedStack?.browserRuntime || "",
       enabled: browser.enabled,
@@ -255,7 +283,7 @@ function buildSettingsFormView(settings: unknown) {
         Number(devTeam.codexCli?.maxBufferBytes || 0),
         Number(devTeam.claudeCode?.maxBufferBytes || 0)
       ),
-      defaultCwd: String(devTeam.codex?.defaultCwd || devTeam.codexCli?.defaultCwd || devTeam.claudeCode?.defaultCwd || ""),
+      defaultCwd: String(devTeam.codexCli?.defaultCwd || devTeam.claudeCode?.defaultCwd || devTeam.codex?.defaultCwd || ""),
       maxTasksPerHour: Math.max(
         Number(devTeam.codex?.maxTasksPerHour || 0),
         Number(devTeam.codexCli?.maxTasksPerHour || 0),
@@ -266,7 +294,11 @@ function buildSettingsFormView(settings: unknown) {
         Number(devTeam.codexCli?.maxParallelTasks || 0),
         Number(devTeam.claudeCode?.maxParallelTasks || 0)
       ),
-      allowedUserIds: devPermissions.allowedUserIds
+      allowedUserIds: devPermissions.allowedUserIds,
+      roleDesign: String(resolvedStack?.devTeam?.roles?.design || ""),
+      roleImplementation: String(resolvedStack?.devTeam?.roles?.implementation || ""),
+      roleReview: String(resolvedStack?.devTeam?.roles?.review || ""),
+      roleResearch: String(resolvedStack?.devTeam?.roles?.research || "")
     },
     vision: {
       captionEnabled: vision.enabled,
@@ -339,7 +371,8 @@ function buildSettingsFormView(settings: unknown) {
       operationalMessages: voiceConversation.operationalMessages
     },
     startup,
-    discovery
+    discovery,
+    providerAuth: resolved?.providerAuth || {}
   };
 }
 
@@ -424,16 +457,12 @@ export function settingsToForm(settings: unknown) {
     textInitiativeLlmModel:
       resolved.textInitiative.model ?? defaultTextInitiative.model,
     memoryEnabled: resolved.memory.enabled ?? defaults.memory.enabled,
-    adaptiveDirectivesEnabled:
-      resolved.adaptiveDirectives.enabled ?? defaults.adaptiveDirectives.enabled,
     automationsEnabled:
       resolved.automations.enabled ?? defaults.automations.enabled,
     subAgentSessionIdleTimeoutMs:
       resolved.subAgentOrchestration.sessionIdleTimeoutMs ?? defaults.subAgentOrchestration.sessionIdleTimeoutMs,
     subAgentMaxConcurrentSessions:
       resolved.subAgentOrchestration.maxConcurrentSessions ?? defaults.subAgentOrchestration.maxConcurrentSessions,
-    memoryReflectionStrategy:
-      resolved.memory.reflection.strategy ?? defaults.memory.reflection.strategy,
     provider: resolved.llm.provider ?? defaultLlm.provider,
     model: resolved.llm.model ?? defaultLlm.model,
     replyFollowupLlmEnabled: resolved.replyFollowupLlm.enabled ?? defaultReplyFollowupLlm.enabled,
@@ -450,6 +479,7 @@ export function settingsToForm(settings: unknown) {
       resolved.replyFollowupLlm.maxImageLookupCalls ?? defaultReplyFollowupLlm.maxImageLookupCalls,
     replyFollowupToolTimeoutMs:
       resolved.replyFollowupLlm.toolTimeoutMs ?? defaultReplyFollowupLlm.toolTimeoutMs,
+    memoryLlmInheritTextModel: resolved.memoryLlmInheritTextModel ?? true,
     memoryLlmProvider: resolved.memoryLlm.provider ?? defaultMemoryLlm.provider,
     memoryLlmModel: resolved.memoryLlm.model ?? defaultMemoryLlm.model,
     temperature: resolved.replyGeneration.temperature ?? defaults.replyGeneration.temperature,
@@ -477,6 +507,12 @@ export function settingsToForm(settings: unknown) {
     codeAgentMaxTasksPerHour: resolved.codeAgent.maxTasksPerHour ?? defaults.codeAgent.maxTasksPerHour,
     codeAgentMaxParallelTasks: resolved.codeAgent.maxParallelTasks ?? defaults.codeAgent.maxParallelTasks,
     codeAgentAllowedUserIds: formatLineList(resolved.codeAgent.allowedUserIds ?? defaults.codeAgent.allowedUserIds),
+    codeAgentRoleDesign: String(resolved.codeAgent.roleDesign ?? "claude_code"),
+    codeAgentRoleImplementation: String(resolved.codeAgent.roleImplementation ?? "claude_code"),
+    codeAgentRoleReview: String(resolved.codeAgent.roleReview ?? "claude_code"),
+    codeAgentRoleResearch: String(resolved.codeAgent.roleResearch ?? "claude_code"),
+    providerAuthClaudeCode: Boolean(resolved.providerAuth?.claude_code),
+    providerAuthCodexCli: Boolean(resolved.providerAuth?.codex_cli),
     visionCaptionEnabled: resolved.vision.captionEnabled ?? defaultVision.captionEnabled,
     visionProvider: resolved.vision.provider ?? defaultVision.provider,
     visionModel: resolved.vision.model ?? defaultVision.model,
@@ -735,11 +771,34 @@ export function getCodeAgentValidationError(form: SettingsForm): string {
 export function formToSettingsPatch(form: SettingsForm): SettingsInput {
   const discoveryFeedEnabled = Boolean(form.discoveryFeedEnabled);
   const advancedOverridesEnabled = Boolean(form.stackAdvancedOverridesEnabled);
+  const normalizedCodeAgentProvider = String(form.codeAgentProvider || "auto").trim().toLowerCase();
+  const normalizeCodeAgentRole = (value: unknown): "claude_code" | "codex_cli" | "codex" => {
+    const normalized = String(value || "").trim().toLowerCase();
+    if (normalized === "codex") return "codex";
+    if (normalized === "codex_cli") return "codex_cli";
+    return "claude_code";
+  };
+  const selectedCodeAgentRoles = [
+    normalizeCodeAgentRole(form.codeAgentRoleDesign),
+    normalizeCodeAgentRole(form.codeAgentRoleImplementation),
+    normalizeCodeAgentRole(form.codeAgentRoleReview),
+    normalizeCodeAgentRole(form.codeAgentRoleResearch)
+  ];
+  const codeAgentUsesCodex =
+    normalizedCodeAgentProvider === "codex" || selectedCodeAgentRoles.includes("codex");
+  const codeAgentUsesCodexCli =
+    normalizedCodeAgentProvider === "codex-cli" ||
+    normalizedCodeAgentProvider === "auto" ||
+    selectedCodeAgentRoles.includes("codex_cli");
+  const codeAgentUsesClaudeCode =
+    normalizedCodeAgentProvider === "claude-code" ||
+    normalizedCodeAgentProvider === "auto" ||
+    selectedCodeAgentRoles.includes("claude_code");
   const normalizedVoiceReplyPath = String(form.voiceReplyPath || "brain").trim().toLowerCase();
   const normalizedVoiceTtsMode = normalizedVoiceReplyPath === "brain" &&
     String(form.voiceTtsMode || "realtime").trim().toLowerCase() === "api"
-    ? "api"
-    : "realtime";
+      ? "api"
+      : "realtime";
   return {
     identity: {
       botName: form.botName.trim(),
@@ -832,14 +891,20 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
           model: form.model.trim()
         },
         devTeam: {
+          roles: {
+            design: selectedCodeAgentRoles[0],
+            implementation: selectedCodeAgentRoles[1],
+            review: selectedCodeAgentRoles[2],
+            research: selectedCodeAgentRoles[3]
+          },
           codingWorkers:
-            String(form.codeAgentProvider || "auto").trim().toLowerCase() === "codex"
+            normalizedCodeAgentProvider === "codex"
               ? ["codex"]
-              : String(form.codeAgentProvider || "auto").trim().toLowerCase() === "codex-cli"
+              : normalizedCodeAgentProvider === "codex-cli"
                 ? ["codex_cli"]
-              : String(form.codeAgentProvider || "auto").trim().toLowerCase() === "claude-code"
+                : normalizedCodeAgentProvider === "claude-code"
                 ? ["claude_code"]
-                : ["codex", "codex_cli", "claude_code"]
+                : undefined
         },
         voiceAdmissionClassifier: {
           mode: "dedicated_model",
@@ -934,8 +999,8 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
         },
         devTeam: {
           codex: {
-            enabled: Boolean(form.codeAgentEnabled),
-            model: String(form.codeAgentCodexModel || "gpt-5-codex").trim(),
+            enabled: Boolean(form.codeAgentEnabled) && codeAgentUsesCodex,
+            model: String(form.codeAgentCodexModel || "gpt-5.4").trim(),
             maxTurns: Number(form.codeAgentMaxTurns),
             timeoutMs: Number(form.codeAgentTimeoutMs),
             maxBufferBytes: Number(form.codeAgentMaxBufferBytes),
@@ -944,7 +1009,7 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
             maxParallelTasks: Number(form.codeAgentMaxParallelTasks)
           },
           codexCli: {
-            enabled: Boolean(form.codeAgentEnabled),
+            enabled: Boolean(form.codeAgentEnabled) && codeAgentUsesCodexCli,
             model: String(form.codeAgentCodexCliModel || "gpt-5.4").trim(),
             maxTurns: Number(form.codeAgentMaxTurns),
             timeoutMs: Number(form.codeAgentTimeoutMs),
@@ -954,7 +1019,7 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
             maxParallelTasks: Number(form.codeAgentMaxParallelTasks)
           },
           claudeCode: {
-            enabled: Boolean(form.codeAgentEnabled),
+            enabled: Boolean(form.codeAgentEnabled) && codeAgentUsesClaudeCode,
             model: String(form.codeAgentModel || "sonnet").trim(),
             maxTurns: Number(form.codeAgentMaxTurns),
             timeoutMs: Number(form.codeAgentTimeoutMs),
@@ -968,23 +1033,14 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
     },
     memory: {
       enabled: form.memoryEnabled,
-      execution: {
-        mode: "dedicated_model",
-        model: {
+      reflection: {}
+    },
+    memoryLlm: form.memoryLlmInheritTextModel
+      ? {}
+      : {
           provider: String(form.memoryLlmProvider || "").trim(),
           model: String(form.memoryLlmModel || "").trim()
-        }
-      },
-      reflection: {
-        strategy:
-          String(form.memoryReflectionStrategy || "").trim().toLowerCase() === "one_pass_main"
-            ? "one_pass_main"
-            : "two_pass_extract_then_main"
-      }
-    },
-    directives: {
-      enabled: Boolean(form.adaptiveDirectivesEnabled)
-    },
+        },
     initiative: {
       text: {
         enabled: Boolean(form.textInitiativeEnabled),
@@ -1232,8 +1288,8 @@ export function resolvePresetModelSelection({
   provider: unknown;
   model: unknown;
 }) {
-  const options = resolveProviderModelOptions(modelCatalog, provider);
   const normalizedModel = String(model || "").trim();
+  const options = resolveModelOptions(resolveProviderModelOptions(modelCatalog, provider), normalizedModel);
   const selectedPresetModel = options.includes(normalizedModel)
     ? normalizedModel
     : (options[0] || "");

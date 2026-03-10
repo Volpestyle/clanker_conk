@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef, useMemo } from "react";
-import { api, resetSettings } from "../api";
+import { api } from "../api";
 import {
   GEMINI_REALTIME_MODEL_OPTIONS,
   OPENAI_REALTIME_MODEL_OPTIONS,
   OPENAI_REALTIME_VOICE_OPTIONS,
   OPENAI_TRANSCRIPTION_MODEL_OPTIONS,
   XAI_VOICE_OPTIONS,
-  applyStackPresetDefaults,
   formToSettingsPatch,
   getCodeAgentValidationError,
   resolveBrowserProviderModelOptions,
@@ -16,8 +15,7 @@ import {
   resolveProviderModelOptions,
   sanitizeAliasListInput,
   settingsToForm,
-  settingsToFormPreserving,
-  type ResolvedBindings
+  settingsToFormPreserving
 } from "../settingsFormModel";
 import { useActiveSection } from "../hooks/useActiveSection";
 import { SettingsSection } from "./SettingsSection";
@@ -36,18 +34,6 @@ import { DiscoverySettingsSection } from "./settingsSections/DiscoverySettingsSe
 import { ChannelsPermissionsSettingsSection } from "./settingsSections/ChannelsPermissionsSettingsSection";
 import { SubAgentOrchestrationSettingsSection } from "./settingsSections/SubAgentOrchestrationSettingsSection";
 
-function formatCapabilityPolicy(policy) {
-  if (!policy || policy.mode !== "dedicated_model") {
-    return "inherit_orchestrator";
-  }
-  return `${policy.model?.provider || "unknown"}:${policy.model?.model || "default"}`;
-}
-
-function formatSessionPolicy(sessionPolicy) {
-  if (!sessionPolicy) return "transient";
-  return `${sessionPolicy.persistent ? "persistent" : "ephemeral"} (voice=${sessionPolicy.toolPolicy?.voice || "full"}, text=${sessionPolicy.toolPolicy?.text || "full"})`;
-}
-
 export default function SettingsForm({
   settings,
   modelCatalog,
@@ -58,6 +44,7 @@ export default function SettingsForm({
 }) {
   const [form, setForm] = useState(() => (settings ? settingsToForm(settings) : null));
   const savedFormRef = useRef<string>("");
+  const presetRequestIdRef = useRef(0);
   const defaultForm = useMemo(() => settingsToForm({}), []);
   const effectiveForm = form ?? defaultForm;
   const formRef = useRef(form);
@@ -102,22 +89,23 @@ export default function SettingsForm({
     if (!form || !savedFormRef.current) return false;
     return JSON.stringify(form) !== savedFormRef.current;
   }, [form]);
-
-  const resolvedStack = useMemo((): ResolvedBindings["agentStack"] => {
-    const r = (settings as Record<string, unknown>)?._resolved as ResolvedBindings | undefined;
-    return r?.agentStack || {
-      preset: "",
-      harness: "",
-      orchestrator: { provider: effectiveForm.provider, model: effectiveForm.model },
-      researchRuntime: "",
-      browserRuntime: "",
-      voiceRuntime: "",
-      voiceAdmissionPolicy: { mode: "" },
-      sessionPolicy: null,
-      devTeam: { orchestrator: { provider: "", model: "" }, roles: {}, codingWorkers: [] }
-    };
-  }, [settings, effectiveForm.provider, effectiveForm.model]);
   const codeAgentValidationError = useMemo(() => getCodeAgentValidationError(effectiveForm), [effectiveForm]);
+
+  async function loadPresetDefaults(preset: string) {
+    const requestId = ++presetRequestIdRef.current;
+    try {
+      const settings = await api<Record<string, unknown>>("/api/settings/preset-defaults", {
+        method: "POST",
+        body: { preset }
+      });
+      if (presetRequestIdRef.current !== requestId) {
+        return;
+      }
+      setForm(settingsToForm(settings));
+    } catch (err) {
+      console.error("Failed to load preset defaults:", err);
+    }
+  }
 
   function resolvePresetSelection(providerField, modelField) {
     return resolvePresetModelSelection({
@@ -235,6 +223,10 @@ export default function SettingsForm({
         syncModel("voiceGenerationLlmProvider", next.provider);
         syncModel("voiceGenerationLlmModel", selectedPresetModel);
       }
+      if (next.memoryLlmInheritTextModel) {
+        syncModel("memoryLlmProvider", next.provider);
+        syncModel("memoryLlmModel", selectedPresetModel);
+      }
       if (next.textInitiativeUseTextModel) {
         syncModel("textInitiativeLlmProvider", next.provider);
         syncModel("textInitiativeLlmModel", selectedPresetModel);
@@ -249,7 +241,8 @@ export default function SettingsForm({
     selectedBrowserLlmPresetModel,
     selectedVoiceGenerationPresetModel,
     selectedVoiceReplyDecisionPresetModel,
-    selectedVisionPresetModel
+    selectedVisionPresetModel,
+    selectedStreamWatchVisionPresetModel
   ]);
 
   if (!form) return null;
@@ -260,13 +253,18 @@ export default function SettingsForm({
       if (key === "stackPreset") {
         const preset = String(value || "").trim();
         setForm((current) => ({ ...(current || defaultForm), stackPreset: preset }));
-        api<Record<string, unknown>>("/api/settings/preset-defaults", {
-          method: "POST",
-          body: { preset }
-        }).then((defaults) => {
-          setForm((current) => applyStackPresetDefaults(current || defaultForm, defaults));
-        }).catch((err) => {
-          console.error("Failed to load preset defaults:", err);
+        void loadPresetDefaults(preset);
+        return;
+      }
+      if (key === "memoryLlmInheritTextModel") {
+        setForm((current) => {
+          if (!current) return current;
+          const next = { ...current, memoryLlmInheritTextModel: Boolean(value) };
+          if (next.memoryLlmInheritTextModel) {
+            next.memoryLlmProvider = next.provider;
+            next.memoryLlmModel = next.model;
+          }
+          return next;
         });
         return;
       }
@@ -360,19 +358,6 @@ export default function SettingsForm({
     onSave(formToSettingsPatch(form));
   }
 
-  async function resetAllSettings() {
-    if (!window.confirm("Reset all settings to defaults? This cannot be undone.")) {
-      return;
-    }
-    try {
-      const defaults = await resetSettings();
-      setForm(settingsToForm(defaults));
-      savedFormRef.current = JSON.stringify(settingsToForm(defaults));
-    } catch (err) {
-      console.error("Failed to reset settings:", err);
-    }
-  }
-
   function scrollTo(id: string) {
     setClickedId(id);
     document.getElementById(id)?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -432,21 +417,15 @@ export default function SettingsForm({
                   color: "var(--text-muted)",
                   border: "1px solid var(--border)"
                 }}
-                onClick={() => {
-                  api<Record<string, unknown>>("/api/settings/preset-defaults", {
-                    method: "POST",
-                    body: { preset: form.stackPreset }
-                  }).then((defaults) => {
-                    setForm((current) => applyStackPresetDefaults(current || defaultForm, defaults));
-                  }).catch((err) => {
-                    console.error("Failed to reset preset defaults:", err);
-                  });
-                }}
-                title="Reset stack settings to this preset's defaults"
+                onClick={() => void loadPresetDefaults(form.stackPreset)}
+                title="Load preset defaults into the form and save to apply them"
               >
                 Reset to preset defaults
               </button>
             </div>
+            <p className="status-msg" style={{ marginTop: 8 }}>
+              Preset changes update the form only. Save to apply them to the bot.
+            </p>
           </SettingsSection>
 
           <LlmConfigurationSettingsSection

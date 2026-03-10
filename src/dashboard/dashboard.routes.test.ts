@@ -155,8 +155,11 @@ test("dashboard fact profile route returns durable and active voice cache views"
       assert.equal(json.durableProfile.userFacts[0]?.fact, "Likes tea.");
       assert.equal(json.durableProfile.selfFacts[0]?.fact, "Bot likes short answers.");
       assert.equal(json.durableProfile.loreFacts[0]?.fact, "Guild prefers late-night sessions.");
-      assert.equal(json.promptContext.relevantMessages.length, 1);
-      assert.equal(json.promptContext.relevantMessages[0]?.content, "We talked about ramen bowls yesterday.");
+      assert.equal(json.promptContext.recentConversationHistory.length, 1);
+      assert.equal(
+        json.promptContext.recentConversationHistory[0]?.messages?.[0]?.content,
+        "We talked about ramen bowls yesterday."
+      );
       assert.equal(json.activeVoiceSession.sessionId, "session-1");
       assert.equal(json.activeVoiceSession.cachedUsers.length, 1);
       assert.equal(json.activeVoiceSession.userFactProfile.userFacts[0]?.fact, "Likes ramen.");
@@ -170,7 +173,7 @@ test("dashboard fact profile route returns durable and active voice cache views"
   }
 });
 
-test("dashboard memory fact inspector routes search, edit, remove, and expose audit events", async () => {
+test("dashboard memory fact inspector routes list subjects and facts", async () => {
   const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
     store.addMemoryFact({
       guildId: "guild-1",
@@ -201,63 +204,13 @@ test("dashboard memory fact inspector routes search, edit, remove, and expose au
     assert.equal(Array.isArray(searchedJson.facts), true);
     assert.equal(searchedJson.facts.length, 1);
     assert.equal(searchedJson.facts[0]?.fact, "Speaker likes old school DS hardware.");
-    const factId = Number(searchedJson.facts[0]?.id);
-    assert.equal(Number.isInteger(factId), true);
 
-    const updated = await fetch(`${baseUrl}/api/memory/facts/${factId}`, {
-      method: "PATCH",
-      headers: {
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
-        guildId: "guild-1",
-        subject: "user-1",
-        factType: "profile",
-        fact: "Speaker collects old school DS hardware and games.",
-        evidenceText: "Dashboard correction after audit.",
-        confidence: 0.93
-      })
-    });
-    assert.equal(updated.status, 200);
-    const updatedJson = await updated.json();
-    assert.equal(updatedJson.ok, true);
-    assert.equal(updatedJson.fact.fact, "Speaker collects old school DS hardware and games.");
-    assert.equal(updatedJson.fact.factType, "profile");
-
-    const removed = await fetch(`${baseUrl}/api/memory/facts/${factId}/remove`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
-        guildId: "guild-1",
-        removalReason: "User said to clear stale memory."
-      })
-    });
-    assert.equal(removed.status, 200);
-    const removedJson = await removed.json();
-    assert.equal(removedJson.ok, true);
-    assert.equal(removedJson.factId, factId);
-
-    const afterRemove = await fetch(`${baseUrl}/api/memory/facts?guildId=guild-1&subject=user-1&limit=10`);
-    assert.equal(afterRemove.status, 200);
-    const afterRemoveJson = await afterRemove.json();
-    assert.deepEqual(afterRemoveJson.facts, []);
-
-    const audit = await fetch(`${baseUrl}/api/memory/facts/audit?guildId=guild-1&factId=${factId}&limit=10`);
-    assert.equal(audit.status, 200);
-    const auditJson = await audit.json();
-    assert.equal(Array.isArray(auditJson.events), true);
-    assert.equal(auditJson.events.length, 2);
-    assert.deepEqual(
-      auditJson.events.map((event) => event.eventType),
-      ["removed", "updated"]
-    );
-    assert.equal(auditJson.events[0]?.removalReason, "User said to clear stale memory.");
-    assert.equal(
-      auditJson.events[1]?.nextFact,
-      "Speaker collects old school DS hardware and games."
-    );
+    const subjects = await fetch(`${baseUrl}/api/memory/subjects?guildId=guild-1&limit=10`);
+    assert.equal(subjects.status, 200);
+    const subjectsJson = await subjects.json();
+    assert.equal(Array.isArray(subjectsJson.subjects), true);
+    assert.equal(subjectsJson.subjects.length >= 2, true);
+    assert.equal(subjectsJson.subjects.some((entry) => entry.subject === "user-1"), true);
   });
 
   if (result?.skipped) {
@@ -277,91 +230,6 @@ test("dashboard shell finalizes HEAD requests for non-API routes", async () => {
   }
 });
 
-test("dashboard adaptive directive routes add, edit, remove, and expose audit history", async () => {
-  const result = await withDashboardServer({}, async ({ baseUrl }) => {
-    const emptyNotes = await fetch(`${baseUrl}/api/memory/adaptive-directives?guildId=guild-1`);
-    assert.equal(emptyNotes.status, 200);
-    const emptyNotesJson = await emptyNotes.json();
-    assert.deepEqual(emptyNotesJson.notes, []);
-
-    const added = await fetch(`${baseUrl}/api/memory/adaptive-directives`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
-        guildId: "guild-1",
-        directiveKind: "behavior",
-        noteText: "Use \"type shit\" occasionally in casual replies."
-      })
-    });
-    assert.equal(added.status, 200);
-    const addedJson = await added.json();
-    assert.equal(addedJson.ok, true);
-    assert.equal(addedJson.status, "added");
-    const noteId = Number(addedJson.note?.id);
-    assert.equal(Number.isInteger(noteId), true);
-
-    const updated = await fetch(`${baseUrl}/api/memory/adaptive-directives/${noteId}`, {
-      method: "PATCH",
-      headers: {
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
-        guildId: "guild-1",
-        directiveKind: "guidance",
-        noteText: "Use \"type shit\" occasionally in casual replies. Keep it natural and not every message."
-      })
-    });
-    assert.equal(updated.status, 200);
-    const updatedJson = await updated.json();
-    assert.equal(updatedJson.ok, true);
-    assert.equal(updatedJson.status, "edited");
-
-    const listed = await fetch(`${baseUrl}/api/memory/adaptive-directives?guildId=guild-1`);
-    assert.equal(listed.status, 200);
-    const listedJson = await listed.json();
-    assert.equal(Array.isArray(listedJson.notes), true);
-    assert.equal(listedJson.notes.length, 1);
-    assert.equal(listedJson.notes[0]?.directiveKind, "guidance");
-    assert.equal(String(listedJson.notes[0]?.noteText).includes("Keep it natural"), true);
-
-    const removed = await fetch(`${baseUrl}/api/memory/adaptive-directives/${noteId}/remove`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json"
-      },
-      body: JSON.stringify({
-        guildId: "guild-1",
-        removalReason: "user asked to stop"
-      })
-    });
-    assert.equal(removed.status, 200);
-    const removedJson = await removed.json();
-    assert.equal(removedJson.ok, true);
-    assert.equal(removedJson.status, "removed");
-
-    const afterRemove = await fetch(`${baseUrl}/api/memory/adaptive-directives?guildId=guild-1`);
-    const afterRemoveJson = await afterRemove.json();
-    assert.deepEqual(afterRemoveJson.notes, []);
-
-    const audit = await fetch(`${baseUrl}/api/memory/adaptive-directives/audit?guildId=guild-1&limit=10`);
-    assert.equal(audit.status, 200);
-    const auditJson = await audit.json();
-    assert.equal(Array.isArray(auditJson.events), true);
-    assert.equal(auditJson.events.length, 3);
-    assert.deepEqual(
-      auditJson.events.map((event) => event.eventType),
-      ["removed", "edited", "added"]
-    );
-    assert.equal(auditJson.events[1]?.directiveKind, "guidance");
-  });
-
-  if (result?.skipped) {
-    return;
-  }
-});
-
 test("dashboard memory reflections returns recent reflection runs with extracted and saved facts", async () => {
   const result = await withDashboardServer({}, async ({ baseUrl, store }) => {
     store.logAction({
@@ -372,13 +240,8 @@ test("dashboard memory reflections returns recent reflection runs with extracted
         runId: "reflection_run_1",
         dateKey: "2026-03-03",
         guildId: "guild-1",
-        strategy: "two_pass_extract_then_main",
         provider: "anthropic",
         model: "claude-sonnet-4-6",
-        extractorProvider: "anthropic",
-        extractorModel: "claude-haiku-4-5",
-        adjudicatorProvider: "anthropic",
-        adjudicatorModel: "claude-sonnet-4-6",
         journalEntryCount: 14,
         authorCount: 3,
         maxFacts: 20
@@ -393,13 +256,8 @@ test("dashboard memory reflections returns recent reflection runs with extracted
         runId: "reflection_run_1",
         dateKey: "2026-03-03",
         guildId: "guild-1",
-        strategy: "two_pass_extract_then_main",
         provider: "anthropic",
         model: "claude-sonnet-4-6",
-        extractorProvider: "anthropic",
-        extractorModel: "claude-haiku-4-5",
-        adjudicatorProvider: "anthropic",
-        adjudicatorModel: "claude-sonnet-4-6",
         journalEntryCount: 14,
         authorCount: 3,
         maxFacts: 20,
@@ -463,8 +321,6 @@ test("dashboard memory reflections returns recent reflection runs with extracted
     assert.equal(json.runs[0]?.factsExtracted, 3);
     assert.equal(json.runs[0]?.factsSelected, 1);
     assert.equal(json.runs[0]?.factsAdded, 1);
-    assert.equal(json.runs[0]?.strategy, "two_pass_extract_then_main");
-    assert.equal(json.runs[0]?.extractorModel, "claude-haiku-4-5");
     assert.equal(json.runs[0]?.savedFacts.length, 1);
     assert.equal(json.runs[0]?.selectedFacts.length, 1);
     assert.equal(json.runs[0]?.skippedFacts.length, 1);
@@ -472,43 +328,6 @@ test("dashboard memory reflections returns recent reflection runs with extracted
     assert.equal(json.runs[0]?.savedFacts[0]?.saveReason, "added_new");
     assert.equal(json.runs[0]?.skippedFacts[0]?.saveReason, "unresolved_author_subject");
   });
-
-  if (result?.skipped) {
-    return;
-  }
-});
-
-test("dashboard memory reflection rerun forwards date and guild to memory manager", async () => {
-  const rerunCalls = [];
-  const result = await withDashboardServer(
-    {
-      memoryOverrides: {
-        async rerunDailyReflection(payload) {
-          rerunCalls.push(payload);
-          return true;
-        }
-      }
-    },
-    async ({ baseUrl }) => {
-      const response = await fetch(`${baseUrl}/api/memory/reflections/rerun`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({
-          dateKey: "2026-03-03",
-          guildId: "guild-1"
-        })
-      });
-      assert.equal(response.status, 200);
-      const json = await response.json();
-      assert.equal(json.ok, true);
-      assert.equal(rerunCalls.length, 1);
-      assert.equal(rerunCalls[0]?.dateKey, "2026-03-03");
-      assert.equal(rerunCalls[0]?.guildId, "guild-1");
-      assert.equal(typeof rerunCalls[0]?.settings, "object");
-    }
-  );
 
   if (result?.skipped) {
     return;
@@ -730,8 +549,9 @@ test("dashboard settings refresh reapplies runtime settings and reports active s
   }
 });
 
-test("dashboard preset defaults preserve the claude oauth voice admission mode", async () => {
-  const result = await withDashboardServer({}, async ({ baseUrl }) => {
+test("dashboard preset defaults preview settings without mutating saved state", async () => {
+  const result = await withDashboardServer({}, async ({ baseUrl, store, bot }) => {
+    const before = store.getSettings();
     const response = await fetch(`${baseUrl}/api/settings/preset-defaults`, {
       method: "POST",
       headers: {
@@ -744,7 +564,10 @@ test("dashboard preset defaults preserve the claude oauth voice admission mode",
 
     assert.equal(response.status, 200);
     const json = await response.json();
-    assert.equal(json.voiceReplyDecisionRealtimeAdmissionMode, "generation_decides");
+    assert.equal(store.getSettings().agentStack.preset, before.agentStack.preset);
+    assert.equal(bot.appliedSettings.length, 0);
+    assert.equal(json._resolved.agentStack.voiceAdmissionPolicy.mode, "generation_decides");
+    assert.equal(json.agentStack.preset, "claude_oauth");
   });
 
   if (result?.skipped) {
@@ -773,6 +596,29 @@ test("dashboard settings expose realtime provider selection alongside file_wav o
     assert.equal(json._resolved?.voiceProvider, "openai");
     assert.equal(json.agentStack?.runtimeConfig?.voice?.openaiRealtime?.transcriptionMethod, "file_wav");
   });
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
+test("dashboard settings expose provider auth from OAuth-backed app config", async () => {
+  const result = await withDashboardServer(
+    {
+      appConfigOverrides: {
+        claudeOAuthRefreshToken: "claude-refresh-token",
+        openaiOAuthRefreshToken: "openai-refresh-token"
+      }
+    },
+    async ({ baseUrl }) => {
+      const response = await fetch(`${baseUrl}/api/settings`);
+      assert.equal(response.status, 200);
+      const json = await response.json();
+      assert.equal(json._resolved?.providerAuth?.claude_code, true);
+      assert.equal(json._resolved?.providerAuth?.codex_cli, true);
+      assert.equal(json._resolved?.providerAuth?.codex, true);
+    }
+  );
 
   if (result?.skipped) {
     return;

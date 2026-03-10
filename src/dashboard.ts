@@ -38,6 +38,10 @@ export interface DashboardAppConfig {
   dashboardToken: string;
   publicApiToken: string;
   elevenLabsApiKey?: string | null;
+  anthropicApiKey?: string | null;
+  openaiApiKey?: string | null;
+  claudeOAuthRefreshToken?: string | null;
+  openaiOAuthRefreshToken?: string | null;
 }
 
 export interface DashboardBot {
@@ -90,11 +94,17 @@ export interface DashboardMemory {
     trace?: Record<string, unknown>;
     limit?: number;
   }): Promise<unknown[]>;
-  rerunDailyReflection?(payload: {
-    dateKey: string;
+  searchConversationHistory?(payload: {
     guildId: string;
+    channelId?: string | null;
+    queryText: string;
     settings?: unknown;
-  }): Promise<unknown>;
+    trace?: Record<string, unknown>;
+    limit?: number;
+    maxAgeHours?: number;
+    before?: number;
+    after?: number;
+  }): Promise<unknown[]>;
 }
 
 export interface DashboardPublicHttpsState {

@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { api } from "../../api";
 import MemoryMessagesTable, { type RelevantMessage } from "./MemoryMessagesTable";
-import { ChannelIdField, GuildSelectField } from "./MemoryFormFields";
+import { ChannelIdField, GuildSelectField, getLastGuildId, saveLastGuildId } from "./MemoryFormFields";
 
 interface Guild {
   id: string;
@@ -35,12 +35,14 @@ interface ActiveVoiceUserCache {
   loadedAt: string | null;
   factCount: number;
   userFacts?: FactProfileFact[];
+  guidanceFacts?: FactProfileFact[];
 }
 
 interface ActiveVoiceGuildCache {
   loadedAt: string | null;
   selfFacts: FactProfileFact[];
   loreFacts: FactProfileFact[];
+  guidanceFacts: FactProfileFact[];
 }
 
 interface ActiveVoiceSessionProfile {
@@ -66,9 +68,17 @@ interface FactProfileResponse {
     userFacts: FactProfileFact[];
     selfFacts: FactProfileFact[];
     loreFacts: FactProfileFact[];
+    guidanceFacts: FactProfileFact[];
   };
   promptContext: {
-    relevantMessages: RelevantMessage[];
+    recentConversationHistory: Array<{
+      anchorMessageId?: string | null;
+      createdAt?: string | null;
+      score?: number | null;
+      semanticScore?: number | null;
+      ageMinutes?: number | null;
+      messages: RelevantMessage[];
+    }>;
   };
   activeVoiceSession: ActiveVoiceSessionProfile | null;
 }
@@ -109,7 +119,7 @@ function FactProfileFactList({
         >
           <div className="memory-reflection-fact-head">
             <strong>{fact.subject || "unknown subject"}</strong>
-            <span>{fact.factType || "general"}</span>
+            <span>{fact.factType || "other"}</span>
             {fact.confidence != null ? <span>{Math.round(Number(fact.confidence) * 100)}%</span> : null}
           </div>
           <p>{fact.fact || "(empty fact)"}</p>
@@ -131,7 +141,11 @@ export default function MemoryFactProfiles({ guilds, notify }: Props) {
 
   useEffect(() => {
     if (!guildId && guilds.length > 0) {
-      setGuildId(guilds[0].id);
+      const saved = getLastGuildId();
+      const restored = saved && guilds.some((g) => g.id === saved);
+      const next = restored ? saved : guilds[0].id;
+      setGuildId(next);
+      saveLastGuildId(next);
     }
   }, [guildId, guilds]);
 
@@ -156,19 +170,24 @@ export default function MemoryFactProfiles({ guilds, notify }: Props) {
   const durable = result?.durableProfile || {
     userFacts: [],
     selfFacts: [],
-    loreFacts: []
+    loreFacts: [],
+    guidanceFacts: []
   };
   const activeVoiceSession = result?.activeVoiceSession || null;
-  const relevantMessages = Array.isArray(result?.promptContext?.relevantMessages)
-    ? result?.promptContext?.relevantMessages
+  const recentConversationHistory = Array.isArray(result?.promptContext?.recentConversationHistory)
+    ? result?.promptContext?.recentConversationHistory
     : [];
-  const totalDurableFacts = durable.userFacts.length + durable.selfFacts.length + durable.loreFacts.length;
+  const totalDurableFacts =
+    durable.userFacts.length +
+    durable.selfFacts.length +
+    durable.loreFacts.length +
+    durable.guidanceFacts.length;
 
   return (
     <div>
       <p className="memory-reflection-copy">
         Fact profiles come straight from durable SQLite memory. Query text does not change which facts load. It only
-        affects the optional relevant-message lookup below.
+        affects the optional conversation-recall preview below.
       </p>
 
       <form className="memory-form" onSubmit={handleInspect}>
@@ -188,7 +207,7 @@ export default function MemoryFactProfiles({ guilds, notify }: Props) {
         <div className="memory-form-row">
           <ChannelIdField channelId={channelId} onChannelIdChange={setChannelId} />
           <label>
-            Query Text <span style={{ color: "var(--ink-3)" }}>(messages only)</span>
+            Query Text <span style={{ color: "var(--ink-3)" }}>(conversation recall)</span>
             <input
               type="text"
               value={queryText}
@@ -241,14 +260,44 @@ export default function MemoryFactProfiles({ guilds, notify }: Props) {
 
             <div className="memory-result-group">
               <h4 className="memory-result-group-title">
-                Relevant Messages
-                <span className="memory-result-group-count">{relevantMessages.length}</span>
+                Guidance Facts
+                <span className="memory-result-group-count">{durable.guidanceFacts.length}</span>
+              </h4>
+              <FactProfileFactList
+                facts={durable.guidanceFacts}
+                emptyLabel="No guidance facts found for this guild/user scope."
+              />
+            </div>
+
+            <div className="memory-result-group">
+              <h4 className="memory-result-group-title">
+                Auto-Retrieved Conversation Windows
+                <span className="memory-result-group-count">{recentConversationHistory.length}</span>
               </h4>
               {channelId.trim() && queryText.trim() ? (
-                <MemoryMessagesTable messages={relevantMessages} />
+                recentConversationHistory.length > 0 ? (
+                  <div className="memory-style-audit-list">
+                    {recentConversationHistory.map((window, index) => (
+                      <article
+                        key={`${String(window.anchorMessageId || "window")}:${index}`}
+                        className="memory-style-audit-card"
+                      >
+                        <div className="memory-style-audit-meta">
+                          <strong>Window {index + 1}</strong>
+                          <span>{formatTimestamp(window.createdAt)}</span>
+                          {window.ageMinutes != null ? <span>{window.ageMinutes}m ago</span> : null}
+                          {window.score != null ? <span>score {Number(window.score).toFixed(3)}</span> : null}
+                        </div>
+                        <MemoryMessagesTable messages={Array.isArray(window.messages) ? window.messages : []} />
+                      </article>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="memory-reflection-empty">No semantically relevant past conversation windows found.</p>
+                )
               ) : (
                 <p className="memory-reflection-empty">
-                  Provide both channel ID and query text to inspect the message lookup that still feeds prompt context.
+                  Provide both channel ID and query text to inspect the auto-retrieved conversation history that feeds prompt context.
                 </p>
               )}
             </div>
@@ -326,6 +375,19 @@ export default function MemoryFactProfiles({ guilds, notify }: Props) {
 
                 <div className="memory-result-group">
                   <h4 className="memory-result-group-title">
+                    Cached User Guidance Facts
+                    <span className="memory-result-group-count">
+                      {activeVoiceSession.userFactProfile?.guidanceFacts?.length || 0}
+                    </span>
+                  </h4>
+                  <FactProfileFactList
+                    facts={activeVoiceSession.userFactProfile?.guidanceFacts || []}
+                    emptyLabel="No cached user guidance facts are loaded on the active session."
+                  />
+                </div>
+
+                <div className="memory-result-group">
+                  <h4 className="memory-result-group-title">
                     Cached Bot Self Facts
                     <span className="memory-result-group-count">
                       {activeVoiceSession.guildFactProfile?.selfFacts?.length || 0}
@@ -347,6 +409,19 @@ export default function MemoryFactProfiles({ guilds, notify }: Props) {
                   <FactProfileFactList
                     facts={activeVoiceSession.guildFactProfile?.loreFacts || []}
                     emptyLabel="No cached guild lore facts are loaded on the active session."
+                  />
+                </div>
+
+                <div className="memory-result-group">
+                  <h4 className="memory-result-group-title">
+                    Cached Guidance Facts
+                    <span className="memory-result-group-count">
+                      {activeVoiceSession.guildFactProfile?.guidanceFacts?.length || 0}
+                    </span>
+                  </h4>
+                  <FactProfileFactList
+                    facts={activeVoiceSession.guildFactProfile?.guidanceFacts || []}
+                    emptyLabel="No cached guidance facts are loaded on the active session."
                   />
                 </div>
               </>

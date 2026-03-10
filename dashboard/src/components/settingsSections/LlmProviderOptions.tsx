@@ -11,10 +11,10 @@ const LLM_PROVIDER_LABELS: Record<string, string> = {
   ai_sdk_anthropic: "ai sdk anthropic",
   litellm: "liteLLM",
   "claude-oauth": "claude oauth",
-  "codex-oauth": "codex oauth",
-  codex_cli_session: "codex cli session",
+  "openai-oauth": "openai oauth",
+  codex_cli_session: "codex cli session (local)",
   xai: "xai (grok)",
-  codex: "codex",
+  codex: "codex api (remote)",
   "codex-cli": "codex cli (local)"
 };
 
@@ -24,7 +24,7 @@ export const GENERAL_LLM_PROVIDER_OPTIONS: LlmProviderOption[] = MODEL_PROVIDER_
 }));
 
 export const VISION_LLM_PROVIDER_OPTIONS: LlmProviderOption[] = GENERAL_LLM_PROVIDER_OPTIONS.filter(
-  (option) => ["openai", "anthropic", "ai_sdk_anthropic", "litellm", "claude-oauth", "codex-oauth", "xai"].includes(option.value)
+  (option) => ["openai", "anthropic", "ai_sdk_anthropic", "litellm", "claude-oauth", "openai-oauth", "xai"].includes(option.value)
 );
 
 export const BROWSER_LLM_PROVIDER_OPTIONS: LlmProviderOption[] = GENERAL_LLM_PROVIDER_OPTIONS.filter(

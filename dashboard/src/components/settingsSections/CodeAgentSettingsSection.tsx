@@ -1,8 +1,27 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
 
+const WORKER_LABELS: Record<string, string> = {
+  claude_code: "Claude Code",
+  codex_cli: "Codex CLI",
+  codex: "Codex API"
+};
+
+function WorkerAuthBadge({ worker, form }: { worker: string; form: Record<string, unknown> }) {
+  const authed =
+    worker === "claude_code" ? form.providerAuthClaudeCode :
+    worker === "codex_cli" || worker === "codex" ? form.providerAuthCodexCli :
+    false;
+  if (authed) return null;
+  return (
+    <span className="status-msg error" style={{ fontSize: "0.7rem", marginLeft: 6, display: "inline" }}>
+      NO AUTH
+    </span>
+  );
+}
+
 export function CodeAgentSettingsSection({ id, form, set, validationError = "" }) {
-  const provider = String(form.codeAgentProvider || "claude-code").trim().toLowerCase();
+  const provider = String(form.codeAgentProvider || "auto").trim().toLowerCase();
   const showClaudeModel = provider === "claude-code" || provider === "auto";
   const showCodexModel = provider === "codex" || provider === "auto";
   const showCodexCliModel = provider === "codex-cli" || provider === "auto";
@@ -46,10 +65,10 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
                 value={form.codeAgentProvider}
                 onChange={set("codeAgentProvider")}
               >
+                <option value="auto">Auto (preset/default)</option>
                 <option value="claude-code">Claude Code (local)</option>
                 <option value="codex-cli">Codex CLI (local)</option>
-                <option value="codex">Codex (OpenAI)</option>
-                <option value="auto">Auto (preset/default)</option>
+                <option value="codex">Codex API (remote)</option>
               </select>
             </div>
             <div>
@@ -86,7 +105,7 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
                 type="text"
                 value={form.codeAgentCodexModel}
                 onChange={set("codeAgentCodexModel")}
-                placeholder="codex-mini-latest"
+                placeholder="gpt-5.4"
               />
             </div>
           )}
@@ -165,6 +184,72 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
               onChange={set("codeAgentDefaultCwd")}
               placeholder="Leave empty for ../web (one level up)"
             />
+          </div>
+
+          <h4 className="text-xs text-muted-foreground tracking-wider mt-4 mb-2">DEV TEAM ROLES</h4>
+          <div className="split">
+            <div>
+              <label htmlFor="code-agent-role-design">
+                Design
+                <WorkerAuthBadge worker={String(form.codeAgentRoleDesign)} form={form} />
+              </label>
+              <select
+                id="code-agent-role-design"
+                value={form.codeAgentRoleDesign}
+                onChange={set("codeAgentRoleDesign")}
+              >
+                <option value="claude_code">Claude Code</option>
+                <option value="codex_cli">Codex CLI</option>
+                <option value="codex">Codex API</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="code-agent-role-implementation">
+                Implementation
+                <WorkerAuthBadge worker={String(form.codeAgentRoleImplementation)} form={form} />
+              </label>
+              <select
+                id="code-agent-role-implementation"
+                value={form.codeAgentRoleImplementation}
+                onChange={set("codeAgentRoleImplementation")}
+              >
+                <option value="claude_code">Claude Code</option>
+                <option value="codex_cli">Codex CLI</option>
+                <option value="codex">Codex API</option>
+              </select>
+            </div>
+          </div>
+          <div className="split">
+            <div>
+              <label htmlFor="code-agent-role-review">
+                Review
+                <WorkerAuthBadge worker={String(form.codeAgentRoleReview)} form={form} />
+              </label>
+              <select
+                id="code-agent-role-review"
+                value={form.codeAgentRoleReview}
+                onChange={set("codeAgentRoleReview")}
+              >
+                <option value="claude_code">Claude Code</option>
+                <option value="codex_cli">Codex CLI</option>
+                <option value="codex">Codex API</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="code-agent-role-research">
+                Research
+                <WorkerAuthBadge worker={String(form.codeAgentRoleResearch)} form={form} />
+              </label>
+              <select
+                id="code-agent-role-research"
+                value={form.codeAgentRoleResearch}
+                onChange={set("codeAgentRoleResearch")}
+              >
+                <option value="claude_code">Claude Code</option>
+                <option value="codex_cli">Codex CLI</option>
+                <option value="codex">Codex API</option>
+              </select>
+            </div>
           </div>
         </>
       )}

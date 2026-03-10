@@ -1717,6 +1717,8 @@ export default function VoiceMonitor() {
         setGuilds(nextGuilds);
         setSelectedGuildId((current) => {
           if (current && nextGuilds.some((guild) => guild.id === current)) return current;
+          const saved = localStorage.getItem("dashboard_last_guild_id") || "";
+          if (saved && nextGuilds.some((guild) => guild.id === saved)) return saved;
           return nextGuilds[0]?.id || "";
         });
       })
@@ -1793,7 +1795,10 @@ export default function VoiceMonitor() {
             <select
               id="vm-join-guild"
               value={selectedGuildId}
-              onChange={(event) => setSelectedGuildId(event.target.value)}
+              onChange={(event) => {
+                setSelectedGuildId(event.target.value);
+                localStorage.setItem("dashboard_last_guild_id", event.target.value);
+              }}
               disabled={joinPending || guilds.length <= 1}
             >
               {guilds.length === 0 && <option value="">Auto-detect</option>}

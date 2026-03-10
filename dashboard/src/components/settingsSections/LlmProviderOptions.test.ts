@@ -14,7 +14,7 @@ test("general llm provider options match canonical settings providers", () => {
     "ai_sdk_anthropic",
     "litellm",
     "claude-oauth",
-    "codex-oauth",
+    "openai-oauth",
     "codex_cli_session",
     "xai",
     "codex",
@@ -27,7 +27,7 @@ test("general llm provider options match canonical settings providers", () => {
 test("vision and browser provider options expose only supported subsets", () => {
   assert.deepEqual(
     VISION_LLM_PROVIDER_OPTIONS.map((option) => option.value),
-    ["openai", "anthropic", "ai_sdk_anthropic", "litellm", "claude-oauth", "codex-oauth", "xai"]
+    ["openai", "anthropic", "ai_sdk_anthropic", "litellm", "claude-oauth", "openai-oauth", "xai"]
   );
   assert.deepEqual(
     BROWSER_LLM_PROVIDER_OPTIONS.map((option) => option.value),

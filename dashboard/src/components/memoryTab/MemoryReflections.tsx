@@ -32,13 +32,8 @@ interface ReflectionRun {
   completedAt?: string | null;
   erroredAt?: string | null;
   durationMs?: number | null;
-  strategy?: string | null;
   provider?: string | null;
   model?: string | null;
-  extractorProvider?: string | null;
-  extractorModel?: string | null;
-  adjudicatorProvider?: string | null;
-  adjudicatorModel?: string | null;
   usdCost?: number;
   maxFacts?: number | null;
   journalEntryCount?: number | null;
@@ -94,19 +89,11 @@ function statusLabel(status?: string) {
   return "Running";
 }
 
-function strategyLabel(strategy?: string | null) {
-  if (strategy === "one_pass_main") return "1-pass main";
-  if (strategy === "two_pass_extract_then_main") return "2-pass extract + main";
-  return "Unknown";
-}
-
 export default function MemoryReflections({ guilds }: { guilds: Guild[] }) {
   const [runs, setRuns] = useState<ReflectionRun[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [limit, setLimit] = useState(20);
-  const [rerunKey, setRerunKey] = useState("");
-  const [rerunStatus, setRerunStatus] = useState("");
 
   const loadRuns = useCallback(async (nextLimit = limit) => {
     setLoading(true);
@@ -120,31 +107,6 @@ export default function MemoryReflections({ guilds }: { guilds: Guild[] }) {
       setLoading(false);
     }
   }, [limit]);
-
-  const handleRerun = async (run: ReflectionRun) => {
-    const dateKey = String(run.dateKey || "").trim();
-    const guildId = String(run.guildId || "").trim();
-    if (!dateKey || !guildId) return;
-
-    const nextRerunKey = `${dateKey}:${guildId}`;
-    setRerunKey(nextRerunKey);
-    setRerunStatus("");
-    try {
-      await api("/api/memory/reflections/rerun", {
-        method: "POST",
-        body: {
-          dateKey,
-          guildId
-        }
-      });
-      setRerunStatus(`Reran reflection for ${dateKey}.`);
-      await loadRuns(limit);
-    } catch (rerunError: unknown) {
-      setRerunStatus(rerunError instanceof Error ? rerunError.message : String(rerunError));
-    } finally {
-      setRerunKey("");
-    }
-  };
 
   useEffect(() => {
     void loadRuns();
@@ -226,18 +188,9 @@ export default function MemoryReflections({ guilds }: { guilds: Guild[] }) {
                     <div><span>Started</span><strong>{formatDateTime(run.startedAt)}</strong></div>
                     <div><span>Finished</span><strong>{formatDateTime(run.completedAt || run.erroredAt)}</strong></div>
                     <div><span>Duration</span><strong>{formatDurationMs(run.durationMs)}</strong></div>
-                    <div><span>Strategy</span><strong>{strategyLabel(run.strategy)}</strong></div>
                     <div>
-                      <span>Main LLM</span>
-                      <strong>{run.adjudicatorProvider || run.provider || "unknown"}:{run.adjudicatorModel || run.model || "unknown"}</strong>
-                    </div>
-                    <div>
-                      <span>Memory LLM</span>
-                      <strong>
-                        {run.extractorProvider && run.extractorModel
-                          ? `${run.extractorProvider}:${run.extractorModel}`
-                          : "Not used"}
-                      </strong>
+                      <span>Model</span>
+                      <strong>{run.provider || "unknown"}:{run.model || "unknown"}</strong>
                     </div>
                     <div><span>Journal entries</span><strong>{run.journalEntryCount ?? "n/a"}</strong></div>
                     <div><span>Authors</span><strong>{run.authorCount ?? "n/a"}</strong></div>
@@ -251,29 +204,6 @@ export default function MemoryReflections({ guilds }: { guilds: Guild[] }) {
                       <div><span>Cache write</span><strong>{Number(run.usage.cacheWriteTokens || 0)}</strong></div>
                       <div><span>Cache read</span><strong>{Number(run.usage.cacheReadTokens || 0)}</strong></div>
                     </div>
-                  ) : null}
-                </div>
-
-                <div className="memory-reflection-section memory-reflection-actions">
-                  <button
-                    type="button"
-                    className="sm"
-                    onClick={() => void handleRerun(run)}
-                    disabled={
-                      loading ||
-                      rerunKey === `${String(run.dateKey || "").trim()}:${String(run.guildId || "").trim()}` ||
-                      !run.dateKey ||
-                      !run.guildId
-                    }
-                  >
-                    {rerunKey === `${String(run.dateKey || "").trim()}:${String(run.guildId || "").trim()}`
-                      ? "Rerunning..."
-                      : "Rerun reflection"}
-                  </button>
-                  {rerunStatus && rerunKey === "" ? (
-                    <p className={`memory-reflection-inline-status${rerunStatus.startsWith("API ") ? " error" : ""}`}>
-                      {rerunStatus}
-                    </p>
                   ) : null}
                 </div>
 

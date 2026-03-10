@@ -113,14 +113,6 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
         <label>
           <input
             type="checkbox"
-            checked={form.adaptiveDirectivesEnabled}
-            onChange={set("adaptiveDirectivesEnabled")}
-          />
-          Adaptive directives enabled
-        </label>
-        <label>
-          <input
-            type="checkbox"
             checked={form.automationsEnabled}
             onChange={set("automationsEnabled")}
           />
