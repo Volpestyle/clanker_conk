@@ -51,7 +51,7 @@ export default function MemoryTab({ markdown, onRefresh, notify }: Props) {
         <MemorySnapshot markdown={markdown} onRefresh={onRefresh} />
       </div>
       <div style={{ display: subTab === "inspector" ? undefined : "none" }}>
-        <MemoryInspector guilds={guilds} />
+        <MemoryInspector guilds={guilds} onMemoryMutated={onRefresh} />
       </div>
       <div style={{ display: subTab === "reflections" ? undefined : "none" }}>
         <MemoryReflections guilds={guilds} />

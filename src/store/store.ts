@@ -23,7 +23,7 @@ import { wasLinkSharedSince, recordSharedLink, pruneLookupContext, recordLookupC
 import { getRecentVoiceSessions, getVoiceSessionEvents } from "./storeVoice.ts";
 import { getReplyPerformanceStats, getStats } from "./storeStats.ts";
 import { createAutomation, getAutomationById, countAutomations, listAutomations, getMostRecentAutomations, findAutomationsByQuery, setAutomationStatus, claimDueAutomations, finalizeAutomationRun, recordAutomationRun, getAutomationRuns } from "./storeAutomation.ts";
-import { addMemoryFact, getFactProfileRows, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactBySubjectAndFact, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject, searchMemoryFactsLexical, searchMemoryFactsByEmbedding } from "./storeMemory.ts";
+import { addMemoryFact, getFactProfileRows, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactById, getMemoryFactBySubjectAndFact, updateMemoryFact, deleteMemoryFact, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject, searchMemoryFactsLexical, searchMemoryFactsByEmbedding } from "./storeMemory.ts";
 
 export const SETTINGS_KEY = "runtime_settings";
 export const ACTION_LOG_RETENTION_DAYS_DEFAULT = 14;
@@ -624,6 +624,26 @@ export class Store {
 
   getMemoryFactBySubjectAndFact(guildId, subject, fact) {
     return getMemoryFactBySubjectAndFact(this, guildId, subject, fact);
+  }
+
+  getMemoryFactById(factId, guildId = null) {
+    return getMemoryFactById(this, factId, guildId);
+  }
+
+  updateMemoryFact(opts: {
+    guildId;
+    factId;
+    subject;
+    fact;
+    factType?;
+    evidenceText?;
+    confidence?;
+  }) {
+    return updateMemoryFact(this, opts);
+  }
+
+  deleteMemoryFact(opts: { guildId; factId }) {
+    return deleteMemoryFact(this, opts);
   }
 
   ensureSqliteVecReady() {

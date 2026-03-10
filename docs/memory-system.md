@@ -306,6 +306,8 @@ Dashboard API:
 - `GET /api/memory/search?q=&guildId=&channelId=&limit=` — hybrid durable fact search.
 - `GET /api/memory/fact-profile` — structured fact profile for guild/user.
 - `GET /api/memory/facts` — list/filter raw facts.
+- `PUT /api/memory/facts/:factId` — edit a durable fact from the dashboard inspector.
+- `DELETE /api/memory/facts/:factId` — soft-delete a durable fact from the dashboard inspector.
 - `GET /api/memory/subjects` — list subjects with fact counts.
 - `GET /api/memory/reflections` — reflection run history.
 

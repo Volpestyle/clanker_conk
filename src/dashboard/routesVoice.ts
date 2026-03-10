@@ -46,6 +46,28 @@ function normalizeDashboardFactRows(rows: unknown) {
     .filter((row) => row !== null);
 }
 
+function normalizeDashboardFactEditorText(value: unknown, maxChars: number) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxChars);
+}
+
+function normalizeDashboardFactConfidence(value: unknown) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return null;
+  return Math.max(0, Math.min(1, parsed));
+}
+
+async function refreshDashboardMemoryMarkdown(memory: DashboardMemory) {
+  try {
+    await memory.refreshMemoryMarkdown();
+  } catch {
+    // Durable fact edits should still succeed even if the operator snapshot
+    // fails to refresh immediately.
+  }
+}
+
 function mapConversationMessageRow(row: unknown) {
   const record = toRecord(row);
   const content = String(record.content || "").trim();
@@ -723,6 +745,83 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
       queryText
     });
     return c.json({ guildId, limit, subject: subjectFilter, queryText, facts });
+  });
+
+  app.put("/api/memory/facts/:factId", async (c) => {
+    const factId = Number(c.req.param("factId"));
+    const body = await readDashboardBody(c);
+    const guildId = String(body.guildId || "").trim();
+    const subject = normalizeDashboardFactEditorText(body.subject, 120);
+    const fact = normalizeDashboardFactEditorText(body.fact, 400);
+    const factType = normalizeDashboardFactEditorText(body.factType, 40).toLowerCase() || "other";
+    const evidenceText = normalizeDashboardFactEditorText(body.evidenceText, 240) || null;
+    const confidence = normalizeDashboardFactConfidence(body.confidence);
+
+    if (!guildId) {
+      return c.json({ ok: false, error: "guildId required" }, 400);
+    }
+    if (!Number.isInteger(factId) || factId <= 0) {
+      return c.json({ ok: false, error: "valid factId required" }, 400);
+    }
+    if (!subject) {
+      return c.json({ ok: false, error: "subject required" }, 400);
+    }
+    if (!fact) {
+      return c.json({ ok: false, error: "fact required" }, 400);
+    }
+    if (confidence === null) {
+      return c.json({ ok: false, error: "confidence must be a number between 0 and 1" }, 400);
+    }
+
+    const result = store.updateMemoryFact({
+      guildId,
+      factId,
+      subject,
+      fact,
+      factType,
+      evidenceText,
+      confidence
+    });
+
+    if (!result.ok) {
+      const status = result.reason === "duplicate" ? 409 : result.reason === "not_found" ? 404 : 400;
+      return c.json({ ok: false, error: result.reason }, status);
+    }
+
+    await refreshDashboardMemoryMarkdown(memory);
+
+    return c.json({
+      ok: true,
+      fact: result.row
+    });
+  });
+
+  app.delete("/api/memory/facts/:factId", async (c) => {
+    const factId = Number(c.req.param("factId"));
+    const body = await readDashboardBody(c);
+    const guildId = String(body.guildId || "").trim();
+
+    if (!guildId) {
+      return c.json({ ok: false, error: "guildId required" }, 400);
+    }
+    if (!Number.isInteger(factId) || factId <= 0) {
+      return c.json({ ok: false, error: "valid factId required" }, 400);
+    }
+
+    const result = store.deleteMemoryFact({
+      guildId,
+      factId
+    });
+    if (!result.ok) {
+      return c.json({ ok: false, error: result.reason }, result.reason === "not_found" ? 404 : 400);
+    }
+
+    await refreshDashboardMemoryMarkdown(memory);
+
+    return c.json({
+      ok: true,
+      deleted: result.deleted
+    });
   });
 }
 

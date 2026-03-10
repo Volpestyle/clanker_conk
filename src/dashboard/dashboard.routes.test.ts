@@ -218,6 +218,87 @@ test("dashboard memory fact inspector routes list subjects and facts", async () 
   }
 });
 
+test("dashboard memory fact inspector can update and delete facts", async () => {
+  let refreshCalls = 0;
+
+  const result = await withDashboardServer(
+    {
+      memoryOverrides: {
+        async refreshMemoryMarkdown() {
+          refreshCalls += 1;
+          return true;
+        }
+      }
+    },
+    async ({ baseUrl, store }) => {
+      store.addMemoryFact({
+        guildId: "guild-1",
+        channelId: "chan-2",
+        subject: "user-1",
+        fact: "Speaker likes old school DS hardware.",
+        factType: "preference",
+        evidenceText: "Said they were hunting for an old school DS.",
+        sourceMessageId: "msg-1",
+        confidence: 0.82
+      });
+
+      const initialFact = store.getFactsForScope({
+        guildId: "guild-1",
+        limit: 10,
+        subjectIds: ["user-1"]
+      })[0];
+      assert.ok(initialFact);
+
+      const updateResponse = await fetch(`${baseUrl}/api/memory/facts/${initialFact.id}`, {
+        method: "PUT",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          guildId: "guild-1",
+          subject: "user-1",
+          fact: "Speaker likes modded handheld PCs.",
+          factType: "project",
+          evidenceText: "Operator corrected this durable fact.",
+          confidence: 0.93
+        })
+      });
+      assert.equal(updateResponse.status, 200);
+      const updateJson = await updateResponse.json();
+      assert.equal(updateJson.ok, true);
+      assert.equal(updateJson.fact?.fact, "Speaker likes modded handheld PCs.");
+      assert.equal(updateJson.fact?.fact_type, "project");
+      assert.equal(updateJson.fact?.confidence, 0.93);
+
+      const deleteResponse = await fetch(`${baseUrl}/api/memory/facts/${initialFact.id}`, {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          guildId: "guild-1"
+        })
+      });
+      assert.equal(deleteResponse.status, 200);
+      const deleteJson = await deleteResponse.json();
+      assert.equal(deleteJson.ok, true);
+      assert.equal(deleteJson.deleted, 1);
+
+      const afterDelete = await fetch(
+        `${baseUrl}/api/memory/facts?guildId=guild-1&subject=user-1&limit=10`
+      );
+      assert.equal(afterDelete.status, 200);
+      const afterDeleteJson = await afterDelete.json();
+      assert.deepEqual(afterDeleteJson.facts, []);
+      assert.equal(refreshCalls, 2);
+    }
+  );
+
+  if (result?.skipped) {
+    return;
+  }
+});
+
 test("dashboard shell finalizes HEAD requests for non-API routes", async () => {
   const result = await withDashboardServer({}, async ({ baseUrl }) => {
     const response = await fetch(baseUrl, { method: "HEAD" });

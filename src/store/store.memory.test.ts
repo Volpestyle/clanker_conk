@@ -156,6 +156,68 @@ test("memory facts support query filtering and scope filters", async () => {
   });
 });
 
+test("memory facts can be updated and soft-deleted while clearing stale vectors", async () => {
+  await withTempStore(async (store) => {
+    store.addMemoryFact({
+      guildId: "guild-a",
+      channelId: "chan-1",
+      subject: "user-1",
+      fact: "User likes handhelds.",
+      factType: "preference",
+      evidenceText: "Mentioned handhelds.",
+      sourceMessageId: "msg-1",
+      confidence: 0.66
+    });
+
+    const inserted = store.getMemoryFactBySubjectAndFact("guild-a", "user-1", "User likes handhelds.");
+    assert.ok(inserted);
+
+    const factId = Number(inserted?.id);
+    store.upsertMemoryFactVectorNative({
+      factId,
+      model: "text-embedding-3-small",
+      embedding: [0.1, 0.2, 0.3]
+    });
+    const vector = store.getMemoryFactVectorNative(factId, "text-embedding-3-small");
+    assert.ok(vector);
+    assert.equal(vector?.length, 3);
+
+    const updated = store.updateMemoryFact({
+      guildId: "guild-a",
+      factId,
+      subject: "user-1",
+      fact: "User likes handheld PCs.",
+      factType: "project",
+      evidenceText: "Updated by operator.",
+      confidence: 0.91
+    });
+
+    assert.equal(updated.ok, true);
+    assert.equal(updated.row?.fact, "User likes handheld PCs.");
+    assert.equal(updated.row?.fact_type, "project");
+    assert.equal(updated.row?.evidence_text, "Updated by operator.");
+    assert.equal(updated.row?.confidence, 0.91);
+    assert.equal(store.getMemoryFactVectorNative(factId, "text-embedding-3-small"), null);
+
+    const deleted = store.deleteMemoryFact({
+      guildId: "guild-a",
+      factId
+    });
+
+    assert.equal(deleted.ok, true);
+    assert.equal(deleted.deleted, 1);
+    assert.equal(store.getMemoryFactById(factId, "guild-a"), null);
+    assert.equal(
+      store.getFactsForScope({
+        guildId: "guild-a",
+        limit: 10,
+        subjectIds: ["user-1"]
+      }).length,
+      0
+    );
+  });
+});
+
 test("rewriteRuntimeSettingsRow migrates legacy claude_oauth bootstrap defaults to sonnet brain generation", async () => {
   await withTempStore(async (store) => {
     const legacyDefaultSettingsJson = JSON.stringify(normalizeSettings(DEFAULT_SETTINGS));

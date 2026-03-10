@@ -31,6 +31,10 @@ interface MemoryFactIdRow {
   fact_type?: string;
 }
 
+interface DuplicateMemoryFactRow {
+  id: number;
+}
+
 const CORE_FACT_TYPES = ["profile", "relationship"] as const;
 const CORE_FACT_TYPE_SET = new Set<string>(CORE_FACT_TYPES);
 const CORE_FACT_KEEP = 35;
@@ -61,6 +65,44 @@ interface MemorySubjectRow {
 
 function escapeSqlLikePattern(value: string) {
   return String(value || "").replace(/[\\%_]/g, "\\$&");
+}
+
+function normalizeMemoryFactSubject(value: unknown) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+}
+
+function normalizeMemoryFactText(value: unknown) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 400);
+}
+
+function normalizeMemoryFactType(value: unknown) {
+  return String(value || "other")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase()
+    .slice(0, 40) || "other";
+}
+
+function normalizeMemoryFactEvidence(value: unknown) {
+  const normalized = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 240);
+  return normalized || null;
+}
+
+function deleteMemoryFactVectors(store: MemoryStore, factId: number) {
+  if (!Number.isInteger(factId) || factId <= 0) return 0;
+  const result = store.db
+    .prepare("DELETE FROM memory_fact_vectors_native WHERE fact_id = ?")
+    .run(factId);
+  return Number(result?.changes || 0);
 }
 
 function buildScopedFactWhereClause({
@@ -114,6 +156,9 @@ if (!guildId) return false;
 const rawConfidence = Number(fact.confidence);
 const confidence = clamp(Number.isFinite(rawConfidence) ? rawConfidence : 0.5, 0, 1);
 const now = nowIso();
+const normalizedSubject = normalizeMemoryFactSubject(fact.subject);
+const normalizedFact = normalizeMemoryFactText(fact.fact);
+if (!normalizedSubject || !normalizedFact) return false;
 const result = store.db
   .prepare(
     `INSERT INTO memory_facts(
@@ -143,15 +188,39 @@ const result = store.db
     now,
     guildId,
     fact.channelId ? String(fact.channelId).slice(0, 120) : null,
-    String(fact.subject),
-    String(fact.fact).slice(0, 400),
-    String(fact.factType || "other").slice(0, 40),
-    fact.evidenceText ? String(fact.evidenceText).slice(0, 240) : null,
+    normalizedSubject,
+    normalizedFact,
+    normalizeMemoryFactType(fact.factType),
+    normalizeMemoryFactEvidence(fact.evidenceText),
     fact.sourceMessageId ? String(fact.sourceMessageId) : null,
     confidence
   );
 
 return result.changes > 0;
+}
+
+export function getMemoryFactById(store: MemoryStore, factId, guildId = null) {
+const factIdInt = Number(factId);
+const normalizedGuildId = String(guildId || "").trim();
+if (!Number.isInteger(factIdInt) || factIdInt <= 0) return null;
+
+const where = ["id = ?", "is_active = 1"];
+const args: Array<string | number> = [factIdInt];
+if (normalizedGuildId) {
+  where.push("guild_id = ?");
+  args.push(normalizedGuildId);
+}
+
+return (
+  store.db
+    .prepare<MemoryFactRow, Array<string | number>>(
+      `SELECT id, created_at, updated_at, guild_id, channel_id, subject, fact, fact_type, evidence_text, source_message_id, confidence
+           FROM memory_facts
+           WHERE ${where.join(" AND ")}
+           LIMIT 1`
+    )
+    .get(...args) || null
+);
 }
 
 export function getFactsForSubjectScoped(store: MemoryStore, subject, limit = 12, scope = null) {
@@ -534,6 +603,115 @@ return (
     )
     .get(normalizedGuildId, String(subject), String(fact)) || null
 );
+}
+
+export function updateMemoryFact(store: MemoryStore, {
+  guildId,
+  factId,
+  subject,
+  fact,
+  factType = "other",
+  evidenceText = null,
+  confidence = 0.5
+}) {
+const normalizedGuildId = String(guildId || "").trim();
+const factIdInt = Number(factId);
+const normalizedSubject = normalizeMemoryFactSubject(subject);
+const normalizedFact = normalizeMemoryFactText(fact);
+if (!normalizedGuildId) return { ok: false, reason: "guild_required" } as const;
+if (!Number.isInteger(factIdInt) || factIdInt <= 0) return { ok: false, reason: "invalid_fact_id" } as const;
+if (!normalizedSubject) return { ok: false, reason: "subject_required" } as const;
+if (!normalizedFact) return { ok: false, reason: "fact_required" } as const;
+
+const existing = getMemoryFactById(store, factIdInt, normalizedGuildId);
+if (!existing) return { ok: false, reason: "not_found" } as const;
+
+const duplicate = store.db
+  .prepare<DuplicateMemoryFactRow, [string, string, string, number]>(
+    `SELECT id
+         FROM memory_facts
+         WHERE guild_id = ?
+           AND subject = ?
+           AND fact = ?
+           AND is_active = 1
+           AND id != ?
+         LIMIT 1`
+  )
+  .get(normalizedGuildId, normalizedSubject, normalizedFact, factIdInt);
+if (Number.isInteger(Number(duplicate?.id)) && Number(duplicate.id) > 0) {
+  return {
+    ok: false,
+    reason: "duplicate",
+    duplicateId: Number(duplicate.id)
+  } as const;
+}
+
+const normalizedFactType = normalizeMemoryFactType(factType);
+const normalizedEvidenceText = normalizeMemoryFactEvidence(evidenceText);
+const normalizedConfidence = clamp(Number.isFinite(Number(confidence)) ? Number(confidence) : 0.5, 0, 1);
+const updatedAt = nowIso();
+const result = store.db
+  .prepare(
+    `UPDATE memory_facts
+         SET updated_at = ?,
+             subject = ?,
+             fact = ?,
+             fact_type = ?,
+             evidence_text = ?,
+             confidence = ?
+         WHERE id = ?
+           AND guild_id = ?
+           AND is_active = 1`
+  )
+  .run(
+    updatedAt,
+    normalizedSubject,
+    normalizedFact,
+    normalizedFactType,
+    normalizedEvidenceText,
+    normalizedConfidence,
+    factIdInt,
+    normalizedGuildId
+  );
+if (Number(result?.changes || 0) <= 0) return { ok: false, reason: "not_found" } as const;
+
+deleteMemoryFactVectors(store, factIdInt);
+const row = getMemoryFactById(store, factIdInt, normalizedGuildId);
+if (!row) return { ok: false, reason: "not_found" } as const;
+
+return {
+  ok: true,
+  row
+} as const;
+}
+
+export function deleteMemoryFact(store: MemoryStore, { guildId, factId }) {
+const normalizedGuildId = String(guildId || "").trim();
+const factIdInt = Number(factId);
+if (!normalizedGuildId) return { ok: false, reason: "guild_required", deleted: 0 } as const;
+if (!Number.isInteger(factIdInt) || factIdInt <= 0) {
+  return { ok: false, reason: "invalid_fact_id", deleted: 0 } as const;
+}
+
+const result = store.db
+  .prepare(
+    `UPDATE memory_facts
+         SET is_active = 0,
+             updated_at = ?
+         WHERE id = ?
+           AND guild_id = ?
+           AND is_active = 1`
+  )
+  .run(nowIso(), factIdInt, normalizedGuildId);
+const deleted = Number(result?.changes || 0);
+if (deleted > 0) {
+  deleteMemoryFactVectors(store, factIdInt);
+}
+return {
+  ok: deleted > 0,
+  reason: deleted > 0 ? "deleted" : "not_found",
+  deleted
+} as const;
 }
 
 export function ensureSqliteVecReady(store: MemoryStore) {
