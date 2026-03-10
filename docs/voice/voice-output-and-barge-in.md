@@ -73,6 +73,10 @@ Wake-word music handoff rule:
 - if music was auto-paused because the user addressed the bot (`paused_wake_word`), auto-resume happens only after the assistant reply has actually drained from `clankvox`
 - `response.done` is not sufficient on its own because realtime generation can finish while buffered TTS is still playing locally
 - the handoff also waits for the short `botTurnOpen` guard to clear before resuming music
+- wake-word pause and explicit music pause/resume preserve the existing music subprocess when it is still alive; resume should continue the current pipeline rather than rebuilding from the original URL
+- when the music subprocess has already finished but `clankvox` still holds buffered music PCM, wake-word pause suppresses that local buffer instead of deleting it, and resume continues draining the preserved buffer from the current position
+- `clankvox` intentionally caps music prefetch to a short live window so the subprocess stays close to Discord playback instead of racing an entire track into memory
+- ducking is gain-only; duck/unduck lowers or restores music volume without pausing or restarting the track
 
 Freshness rule:
 
