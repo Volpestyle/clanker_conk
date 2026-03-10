@@ -46,6 +46,11 @@ import {
 } from "../voice/voiceSessionMemoryCache.ts";
 import { mergeImageInputs } from "./imageAnalysis.ts";
 import { MAX_MODEL_IMAGE_INPUTS } from "./replyPipelineShared.ts";
+import {
+  appendPromptFollowup,
+  buildLoggedPromptBundle,
+  createPromptCapture
+} from "../promptLogging.ts";
 
 const OPEN_ARTICLE_MAX_CANDIDATES = 12;
 const OPEN_ARTICLE_ROW_LIMIT = 4;
@@ -117,6 +122,42 @@ function normalizeVoiceReplyText(
   if (preserveInlineSoundboardDirectives) return normalized;
   if (!hasInlineSoundboardDirective(normalized)) return normalized;
   return sanitizeBotText(parseSoundboardDirectiveSequence(normalized).text, maxLen);
+}
+
+function normalizeSpokenSentenceDispatchResult(result: unknown) {
+  if (!result || result === true) {
+    return {
+      accepted: result !== false,
+      playedSoundboardRefs: [] as string[],
+      requestedRealtimeUtterance: false
+    };
+  }
+  if (result === false) {
+    return {
+      accepted: false,
+      playedSoundboardRefs: [] as string[],
+      requestedRealtimeUtterance: false
+    };
+  }
+  if (typeof result !== "object" || Array.isArray(result)) {
+    return {
+      accepted: true,
+      playedSoundboardRefs: [] as string[],
+      requestedRealtimeUtterance: false
+    };
+  }
+  const normalizedResult = result as Record<string, unknown>;
+  const playedSoundboardRefs = Array.isArray(normalizedResult.playedSoundboardRefs)
+    ? normalizedResult.playedSoundboardRefs
+      .map((entry) => String(entry || "").trim())
+      .filter(Boolean)
+      .slice(0, 10)
+    : [];
+  return {
+    accepted: normalizedResult.accepted !== false,
+    playedSoundboardRefs,
+    requestedRealtimeUtterance: Boolean(normalizedResult.requestedRealtimeUtterance)
+  };
 }
 
 function ensureAssistantContentIncludesResolvedText(content: ContentBlock[], fallbackText: unknown): ContentBlock[] {
@@ -797,7 +838,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       allowScreenShareToolCall,
       allowMemoryToolCalls,
       allowSoundboardToolCall,
-      allowInlineSoundboardDirectives: allowSoundboardToolCall && !streamingEnabled,
+      allowInlineSoundboardDirectives: allowSoundboardToolCall,
       allowVoiceToolCalls: allowVoiceTools,
       musicContext,
       hasDirectVisionFrame: Boolean(streamWatchLatestFrame?.dataBase64),
@@ -942,6 +983,10 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     };
 
     const initialUserPrompt = buildVoiceUserPrompt();
+    const promptCapture = createPromptCapture({
+      systemPrompt,
+      initialUserPrompt
+    });
     let voiceContextMessages: ContextMessage[] = [
       ...normalizedContextMessages
     ];
@@ -964,7 +1009,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     let voiceAddressing = normalizeGeneratedVoiceAddressing(null, {
       directAddressed: Boolean(directAddressed)
     });
-    const preserveInlineSoundboardDirectives = allowSoundboardToolCall && !streamingEnabled;
+    const preserveInlineSoundboardDirectives = allowSoundboardToolCall;
+    let streamedRequestedRealtimeUtterance = false;
 
     const captureGenerationText = (rawText: unknown) => {
       const normalized = normalizeVoiceReplyText(rawText, {
@@ -1018,17 +1064,26 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
             preserveInlineSoundboardDirectives
           });
           if (!normalized || normalized === "[SKIP]" || signal?.aborted) return;
-          const accepted = onSpokenSentence({
-            text: normalized,
-            index: streamedSentenceIndex
+          streamedDispatchChain = streamedDispatchChain.then(async () => {
+            if (signal?.aborted) return;
+            const dispatchResult = normalizeSpokenSentenceDispatchResult(
+              await onSpokenSentence({
+                text: normalized,
+                index: streamedSentenceIndex
+              })
+            );
+            if (!dispatchResult.accepted) return;
+            streamedTextAccepted = true;
+            streamedTextParts.push(normalized);
+            appendUniqueStrings(playedSoundboardRefs, dispatchResult.playedSoundboardRefs);
+            streamedRequestedRealtimeUtterance =
+              streamedRequestedRealtimeUtterance || dispatchResult.requestedRealtimeUtterance;
+            streamedSentenceIndex += 1;
+            streamedSentenceCount += 1;
           });
-          if (accepted === false) return;
-          streamedTextAccepted = true;
-          streamedTextParts.push(normalized);
-          streamedSentenceIndex += 1;
-          streamedSentenceCount += 1;
         }
       });
+      let streamedDispatchChain = Promise.resolve();
 
       const generation = await runtime.llm.generateStreaming({
         settings: tunedSettings,
@@ -1044,6 +1099,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         }
       });
       accumulator.flush();
+      await streamedDispatchChain;
       const resolvedSpokenText = normalizeVoiceReplyText(generation.text, {
         maxLen: 520,
         preserveInlineSoundboardDirectives
@@ -1249,9 +1305,17 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
           event: `${sessionId ? "voice_session" : "voice_turn"}:tool_loop:${voiceToolLoopSteps + 1}`
         },
       });
+      appendPromptFollowup(
+        promptCapture,
+        toolResultImageInputsAdded
+          ? "Attached are images returned by the previous tool call. Use them if they help."
+          : ""
+      );
       captureGenerationText(generation.resolvedSpokenText);
       voiceToolLoopSteps += 1;
     }
+
+    const replyPrompts = buildLoggedPromptBundle(promptCapture, voiceToolLoopSteps);
 
     const finalText = normalizeVoiceReplyText(mergeSpokenReplyText(spokenTextParts), {
       maxLen: 520,
@@ -1267,7 +1331,9 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         screenNote,
         screenMoment,
         streamedSentenceCount,
-        generationContextSnapshot
+        streamedRequestedRealtimeUtterance,
+        generationContextSnapshot,
+        replyPrompts
       };
     }
     if (!finalText) {
@@ -1281,7 +1347,9 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         screenNote,
         screenMoment,
         streamedSentenceCount,
-        generationContextSnapshot
+        streamedRequestedRealtimeUtterance,
+        generationContextSnapshot,
+        replyPrompts
       };
       if (leaveVoiceChannelRequested) {
         return {
@@ -1302,7 +1370,9 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       screenNote,
       screenMoment,
       streamedSentenceCount,
-      generationContextSnapshot
+      streamedRequestedRealtimeUtterance,
+      generationContextSnapshot,
+      replyPrompts
     };
     if (leaveVoiceChannelRequested) {
       return {
@@ -1313,7 +1383,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     return response;
   } catch (error) {
     if (isAbortError(error) || signal?.aborted) {
-      return { text: "", generationContextSnapshot: null };
+      return { text: "", generationContextSnapshot: null, replyPrompts: null };
     }
     runtime.store.logAction({
       kind: "voice_error",
@@ -1325,7 +1395,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         sessionId
       }
     });
-    return { text: "", generationContextSnapshot: null };
+    return { text: "", generationContextSnapshot: null, replyPrompts: null };
   }
 }
 

@@ -90,6 +90,41 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
       lastGenerationContext: {
         route: "voice_reply"
       },
+      livePromptState: {
+        classifier: {
+          updatedAt: now - 550,
+          source: "realtime",
+          replyPrompts: {
+            hiddenByDefault: true,
+            systemPrompt: "Return exactly one token: YES or NO.",
+            initialUserPrompt: "Transcript: \"hey bot\"",
+            followupUserPrompts: [],
+            followupSteps: 0
+          }
+        },
+        generation: {
+          updatedAt: now - 500,
+          source: "realtime_transport",
+          replyPrompts: {
+            hiddenByDefault: true,
+            systemPrompt: "You are speaking in live Discord voice chat.",
+            initialUserPrompt: "Alice: hey bot",
+            followupUserPrompts: ["Use the browser screenshot if it helps."],
+            followupSteps: 1
+          }
+        },
+        bridge: {
+          updatedAt: now - 450,
+          source: "openai_realtime_text_turn",
+          replyPrompts: {
+            hiddenByDefault: true,
+            systemPrompt: "You are in bridge mode. Reply naturally.",
+            initialUserPrompt: "(alice): where's lunch",
+            followupUserPrompts: [],
+            followupSteps: 0
+          }
+        }
+      },
       streamWatch: {
         active: true,
         targetUserId: "user-2",
@@ -118,6 +153,7 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
             speakerName: "Alice"
           }
         ],
+        durableScreenNotes: ["Huge teamfight started near dragon"],
         ingestedFrameCount: 5
       },
       openAiAsrSessions: new Map([
@@ -266,6 +302,9 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
         ]
       },
       realtimeProvider: "openai",
+      baseVoiceInstructions: "Reply naturally in live voice chat.",
+      lastRealtimeInstructions: "Use the latest voice context and stay concise.",
+      lastRealtimeInstructionsAt: now - 400,
       realtimeInputSampleRateHz: 16_000,
       realtimeOutputSampleRateHz: 24_000,
       realtimeReplySupersededCount: 1,
@@ -482,6 +521,16 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
       provider: "openai",
       model: "gpt-4o"
     });
+    assert.deepEqual(realtime?.streamWatch.durableScreenNotes, ["Huge teamfight started near dragon"]);
+    assert.equal(
+      realtime?.promptState?.instructions?.replyPrompts?.systemPrompt,
+      "Use the latest voice context and stay concise."
+    );
+    assert.equal(realtime?.promptState?.classifier?.replyPrompts?.initialUserPrompt, "Transcript: \"hey bot\"");
+    assert.deepEqual(realtime?.promptState?.generation?.replyPrompts?.followupUserPrompts, [
+      "Use the browser screenshot if it helps."
+    ]);
+    assert.equal(realtime?.promptState?.bridge?.replyPrompts?.initialUserPrompt, "(alice): where's lunch");
     assert.deepEqual(realtime?.asrSessions, [
       {
         userId: "user-1",

@@ -11,6 +11,7 @@ import type {
     AssistantOutputState
 } from "./assistantOutputState.ts";
 import type { MemoryFactRow } from "../store/storeMemory.ts";
+import type { LoggedPromptBundle } from "../promptLogging.ts";
 
 export type {
     AssistantOutputLockReason,
@@ -94,7 +95,24 @@ export type VoiceReplyDecision = {
     classifierConfidence?: number | null;
     classifierTarget?: string | null;
     classifierReason?: string | null;
+    replyPrompts?: LoggedVoicePromptBundle | null;
 };
+
+export type LoggedVoicePromptBundle = LoggedPromptBundle;
+
+export type VoiceLivePromptSlot = "classifier" | "generation" | "bridge";
+
+export interface VoiceLivePromptSnapshotEntry {
+    updatedAt: number;
+    source: string | null;
+    replyPrompts: LoggedVoicePromptBundle | null;
+}
+
+export interface VoiceLivePromptState {
+    classifier: VoiceLivePromptSnapshotEntry | null;
+    generation: VoiceLivePromptSnapshotEntry | null;
+    bridge: VoiceLivePromptSnapshotEntry | null;
+}
 
 export type VoiceTimelineTurn = {
     kind?: "speech";
@@ -947,6 +965,7 @@ export interface VoiceSession {
     deferredVoiceActions?: Partial<Record<DeferredVoiceActionType, DeferredVoiceAction>>;
     deferredVoiceActionTimers?: Partial<Record<DeferredVoiceActionType, ReturnType<typeof setTimeout> | NodeJS.Timeout | null>>;
     lastGenerationContext?: VoiceGenerationContextSnapshot | null;
+    livePromptState?: VoiceLivePromptState | null;
     inFlightAcceptedBrainTurn?: InFlightAcceptedBrainTurn | null;
     openAiAsrSessionIdleTtlMs?: number;
     realtimeTurnCoalesceTimer?: ReturnType<typeof setTimeout> | NodeJS.Timeout | null;

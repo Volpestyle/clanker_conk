@@ -4,6 +4,7 @@ import {
   formatConversationWindows,
   formatRecentLookupContext
 } from "../prompts/promptFormatters.ts";
+import { buildSingleTurnPromptLog } from "../promptLogging.ts";
 import {
   loadConversationContinuityContext,
   type ConversationContinuityPayload
@@ -144,10 +145,10 @@ interface MusicDisambiguationPromptContext {
 
 interface MusicPromptContext {
   playbackState: "playing" | "paused" | "stopped" | "idle";
-  currentTrack: { title: string; artists: string[] } | null;
-  lastTrack: { title: string; artists: string[] } | null;
+  currentTrack: { id: string | null; title: string; artists: string[] } | null;
+  lastTrack: { id: string | null; title: string; artists: string[] } | null;
   queueLength: number;
-  upcomingTracks: Array<{ title: string; artist: string | null }>;
+  upcomingTracks: Array<{ id: string | null; title: string; artist: string | null }>;
   lastAction: "play_now" | "stop" | "pause" | "resume" | "skip" | null;
   lastQuery: string | null;
 }
@@ -660,7 +661,11 @@ export class InstructionManager {
           conversationWindowCount: Array.isArray(memorySlice?.recentConversationHistory)
             ? memorySlice.recentConversationHistory.length
             : 0,
-          instructionsChars: instructions.length
+          instructionsChars: instructions.length,
+          replyPrompts: buildSingleTurnPromptLog({
+            systemPrompt: instructions,
+            userPrompt: ""
+          })
         }
       });
     } catch (error) {
@@ -874,7 +879,9 @@ export class InstructionManager {
         const artists = musicContext.currentTrack.artists.length
           ? musicContext.currentTrack.artists.join(", ")
           : "unknown artist";
-        musicLines.push(`- Current song: ${musicContext.currentTrack.title} by ${artists} (${musicDisplayState})`);
+        musicLines.push(
+          `- Current song: ${musicContext.currentTrack.title} by ${artists} (${musicDisplayState})${musicContext.currentTrack.id ? ` [selection_id: ${musicContext.currentTrack.id}]` : ""}`
+        );
       }
       if (
         musicContext.lastTrack && (
@@ -886,12 +893,16 @@ export class InstructionManager {
         const artists = musicContext.lastTrack.artists.length
           ? musicContext.lastTrack.artists.join(", ")
           : "unknown artist";
-        musicLines.push(`- Last played: ${musicContext.lastTrack.title} by ${artists}`);
+        musicLines.push(
+          `- Last played: ${musicContext.lastTrack.title} by ${artists}${musicContext.lastTrack.id ? ` [selection_id: ${musicContext.lastTrack.id}]` : ""}`
+        );
       }
       if (musicContext.queueLength > 0) {
         musicLines.push(`- Queue: ${musicContext.queueLength} track(s)`);
         for (const [index, track] of musicContext.upcomingTracks.entries()) {
-          musicLines.push(`- Queue item ${index + 1}: ${track.title}${track.artist ? ` - ${track.artist}` : ""}`);
+          musicLines.push(
+            `- Queue item ${index + 1}: ${track.title}${track.artist ? ` - ${track.artist}` : ""}${track.id ? ` [selection_id: ${track.id}]` : ""}`
+          );
         }
       }
       if (musicContext.lastAction) {
@@ -930,6 +941,7 @@ export class InstructionManager {
           "- If music_play returns choices, ask which one they want and then call music_play again with selection_id.",
           "- Use music_search only for explicit browsing requests or when you need candidate IDs for queue operations.",
           "- For a fresh play request, pass query to music_play or music_search. For a followup choice after disambiguation, call music_play with selection_id.",
+          "- If Music playback context already shows a selection_id for the exact track you want, reuse that selection_id with music_play and include the matching query text instead of re-searching.",
           "- Use music_queue_next to place a track after the current one, music_queue_add to append, and music_stop to stop playback.",
           "- Do not emulate play-now by chaining music_queue_add and music_skip.",
           "- Do not use music_skip as a substitute for music_stop.",

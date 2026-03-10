@@ -619,7 +619,7 @@ test("generateVoiceTurnReply keeps the first streamed chunk intact until punctua
   assert.equal(reply.streamedSentenceCount, 1);
 });
 
-test("generateVoiceTurnReply strips inline soundboard directives from streamed speech output", async () => {
+test("generateVoiceTurnReply preserves inline soundboard directives for streamed playback sequencing", async () => {
   const streamed: string[] = [];
   const { bot } = createVoiceBot({
     generationSequence: [
@@ -646,14 +646,21 @@ test("generateVoiceTurnReply strips inline soundboard directives from streamed s
     userId: "user-1",
     transcript: "hit the airhorn",
     soundboardCandidates: ["airhorn@123"],
-    onSpokenSentence: ({ text }) => {
+    onSpokenSentence: async ({ text }) => {
       streamed.push(text);
+      return {
+        accepted: true,
+        playedSoundboardRefs: ["airhorn@123"],
+        requestedRealtimeUtterance: true
+      };
     }
   });
 
-  assert.deepEqual(streamed, ["yo done"]);
-  assert.equal(reply.text, "yo done");
+  assert.deepEqual(streamed, ["yo [[SOUNDBOARD:airhorn@123]] done"]);
+  assert.equal(reply.text, "yo [[SOUNDBOARD:airhorn@123]] done");
+  assert.deepEqual(reply.playedSoundboardRefs, ["airhorn@123"]);
   assert.equal(reply.streamedSentenceCount, 1);
+  assert.equal(reply.streamedRequestedRealtimeUtterance, true);
 });
 
 test("generateVoiceTurnReply preserves spoken text across tool-loop turns", async () => {
@@ -1259,6 +1266,12 @@ test("generateVoiceTurnReply forwards browser screenshots from tool results into
 
   assert.equal(reply.text, "let me look at it.\nyeah the banner says sold out.");
   assert.equal(getGenerationCalls(), 2);
+  assert.equal(reply.replyPrompts?.hiddenByDefault, true);
+  assert.equal(reply.replyPrompts?.systemPrompt.includes("You are speaking in live Discord voice chat."), true);
+  assert.match(String(reply.replyPrompts?.initialUserPrompt || ""), /what does the page look like/i);
+  assert.deepEqual(reply.replyPrompts?.followupUserPrompts, [
+    "Attached are images returned by the previous tool call. Use them if they help."
+  ]);
   assert.equal(generationPayloads[1]?.userPrompt, "Attached are images returned by the previous tool call. Use them if they help.");
   assert.deepEqual(generationPayloads[1]?.imageInputs, [
     {
@@ -1432,7 +1445,7 @@ test("generateVoiceTurnReply logs voice errors when generation fails", async () 
     transcript: "hello there"
   });
 
-  assert.deepEqual(reply, { text: "", generationContextSnapshot: null });
+  assert.deepEqual(reply, { text: "", generationContextSnapshot: null, replyPrompts: null });
   const errorLogs = logs.filter((entry) => entry?.kind === "voice_error");
   assert.equal(errorLogs.length, 1);
   assert.equal(String(errorLogs[0]?.content || "").includes("voice_stt_generation_failed"), true);
@@ -1451,7 +1464,7 @@ test("generateVoiceTurnReply treats aborted generation as a supersede, not a voi
     transcript: "hello there"
   });
 
-  assert.deepEqual(reply, { text: "", generationContextSnapshot: null });
+  assert.deepEqual(reply, { text: "", generationContextSnapshot: null, replyPrompts: null });
   assert.equal(logs.some((entry) => entry?.kind === "voice_error"), false);
 });
 
@@ -1470,7 +1483,7 @@ test("generateVoiceTurnReply treats Anthropic-style aborted generation as a supe
     transcript: "hello there"
   });
 
-  assert.deepEqual(reply, { text: "", generationContextSnapshot: null });
+  assert.deepEqual(reply, { text: "", generationContextSnapshot: null, replyPrompts: null });
   assert.equal(logs.some((entry) => entry?.kind === "voice_error"), false);
 });
 

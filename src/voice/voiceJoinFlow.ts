@@ -19,6 +19,7 @@ import { buildVoiceInstructions, resolveRealtimeToolOwnership } from "./voiceCon
 import { resolveSoundboardCandidates } from "./voiceSoundboard.ts";
 import { buildRealtimeFunctionTools, getVoiceMcpServerStatuses } from "./voiceToolCallToolRegistry.ts";
 import { providerSupports } from "./voiceModes.ts";
+import { createEmptyVoiceLivePromptState } from "./voicePromptState.ts";
 import type { VoiceSession } from "./voiceSessionTypes.ts";
 import { createAssistantOutputState } from "./assistantOutputState.ts";
 import {
@@ -854,6 +855,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         settingsSnapshot: settings,
         cleanupHandlers: [],
         ending: false,
+        livePromptState: createEmptyVoiceLivePromptState(),
         playerState: null,
         botTurnOpenAt: 0
       };

@@ -1,4 +1,5 @@
 import { clamp } from "../utils.ts";
+import { buildSingleTurnPromptLog } from "../promptLogging.ts";
 import {
   getPromptBotName
 } from "../prompts/promptCore.ts";
@@ -29,6 +30,7 @@ import type {
   VoiceAddressingState,
   VoiceAddressingAnnotation,
   VoiceCommandState,
+  LoggedVoicePromptBundle,
   VoiceSession,
   OutputChannelState,
   MusicPlaybackPhase
@@ -950,6 +952,7 @@ export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {
     classifierConfidence: classifierResult.confidence,
     classifierTarget: classifierResult.target,
     classifierReason: classifierResult.reason,
+    replyPrompts: classifierResult.replyPrompts,
     error: classifierResult.error,
     ...commonFields,
     conversationContext
@@ -1139,6 +1142,7 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
   target: string | null;
   reason: string | null;
   error: string | null;
+  replyPrompts: LoggedVoicePromptBundle;
 }> {
   const classifierBinding = getResolvedVoiceAdmissionClassifierBinding(settings);
   const llmProvider = normalizeVoiceReplyDecisionProvider(
@@ -1237,17 +1241,6 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
     });
   };
 
-  if (!manager.llm?.generate) {
-    return {
-      allow: false,
-      decision: "deny",
-      latencyMs: 0,
-      confidence: null,
-      target: "UNKNOWN",
-      reason: "llm_unavailable",
-      error: "llm_generate_unavailable"
-    };
-  }
   const recentHistory = typeof manager.formatVoiceDecisionHistory === "function"
     ? manager.formatVoiceDecisionHistory(session, CLASSIFIER_HISTORY_MAX_TURNS, CLASSIFIER_HISTORY_MAX_CHARS)
     : "";
@@ -1269,7 +1262,23 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
     conversationContext,
     recentHistory
   });
+  const replyPrompts = buildSingleTurnPromptLog({
+    systemPrompt: classifierSystemPrompt,
+    userPrompt: classifierUserPrompt
+  });
   const promptSnapshot = classifierUserPrompt;
+  if (!manager.llm?.generate) {
+    return {
+      allow: false,
+      decision: "deny",
+      latencyMs: 0,
+      confidence: null,
+      target: "UNKNOWN",
+      reason: "llm_unavailable",
+      error: "llm_generate_unavailable",
+      replyPrompts
+    };
+  }
   logClassifierDebug({
     stage: "prompt",
     promptSnapshot
@@ -1315,7 +1324,8 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
         confidence: null,
         target: "UNKNOWN",
         reason: "model_yes",
-        error: null
+        error: null,
+        replyPrompts
       };
     }
     if (decision === "deny") {
@@ -1335,7 +1345,8 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
         confidence: null,
         target: "UNKNOWN",
         reason: "model_no",
-        error: null
+        error: null,
+        replyPrompts
       };
     }
     logClassifierDebug({
@@ -1355,7 +1366,8 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
       confidence: null,
       target: "UNKNOWN",
       reason: "unparseable_classifier_output",
-      error: `unparseable_classifier_output:${rawText.slice(0, 60)}`
+      error: `unparseable_classifier_output:${rawText.slice(0, 60)}`,
+      replyPrompts
     };
   } catch (error) {
     logClassifierDebug({
@@ -1374,7 +1386,8 @@ export async function runVoiceReplyClassifier(manager: ReplyDecisionHost, {
       confidence: null,
       target: "UNKNOWN",
       reason: "classifier_runtime_error",
-      error: String(error?.message || error || "unknown_error")
+      error: String(error?.message || error || "unknown_error"),
+      replyPrompts
     };
   }
 }

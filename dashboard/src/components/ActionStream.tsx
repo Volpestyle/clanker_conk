@@ -406,7 +406,7 @@ export default function ActionStream({ actions }) {
 
                           {hasPromptLog && (
                             <details className="action-detail-block">
-                              <summary>Reply prompts (hidden by default)</summary>
+                              <summary>Prompt log (hidden by default)</summary>
                               <div className="action-detail-block">
                                 <h4>System Prompt</h4>
                                 <pre>{systemPrompt || "(empty)"}</pre>

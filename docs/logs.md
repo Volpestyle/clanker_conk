@@ -21,6 +21,29 @@ Runtime action logs are produced from `Store.onActionLogged` and include:
 
 Sensitive metadata keys are redacted (`apiKey`, `token`, `authorization`, `secret`, etc.).
 
+Prompt logs for turn-level debugging are attached under `metadata.replyPrompts`
+and stay hidden by default in the dashboard Action Stream.
+
+Canonical prompt-log coverage:
+
+- text reply turns: `sent_reply`, `sent_message`, `reply_skipped`
+- voice classifier decisions: `voice_turn_addressing`
+- full-brain voice generation turns: `realtime_reply_requested`, `realtime_reply_skipped`
+- realtime bridge/native prompt refresh and forwarded turns: `openai_realtime_instructions_updated`, `openai_realtime_text_turn_forwarded`
+
+`metadata.replyPrompts` uses one shared shape:
+
+- `systemPrompt`
+- `initialUserPrompt`
+- `followupUserPrompts`
+- `followupSteps`
+
+The Voice tab complements these per-event logs with a live SSE snapshot view:
+
+- `promptState.instructions` shows the current realtime/system instructions the VC path is running with.
+- `promptState.classifier`, `promptState.generation`, and `promptState.bridge` show the latest captured classifier, full-brain, and bridge-forward prompt bundles for the active session.
+- Screen-share state in the Voice tab separates keyframe analyses (`streamWatch.visualFeed`) from the accumulated prompt context the VC brain sees (`streamWatch.brainContextPayload`).
+
 ## Environment settings
 
 Add to `.env`:

@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { api } from "../api";
 import {
   useVoiceSSE,
+  type PromptLogBundle,
+  type PromptSnapshot,
   type VoiceSession,
   type VoiceEvent,
   type RealtimeState,
@@ -10,7 +12,7 @@ import {
   type LatencyTurnEntry
 } from "../hooks/useVoiceSSE";
 import { useVoiceHistory } from "../hooks/useVoiceHistory";
-import { Section } from "./ui";
+import { CopyButton, Section } from "./ui";
 
 // ---- helpers ----
 
@@ -124,6 +126,46 @@ function resolveWakeIndicator(session: VoiceSession): {
 function snippet(text?: string, max = 120): string {
   if (!text) return "";
   return text.length > max ? text.slice(0, max) + "..." : text;
+}
+
+function normalizePromptText(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  return String(value);
+}
+
+function normalizeFollowupPrompts(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((entry) => normalizePromptText(entry));
+}
+
+function getPromptBundle(snapshot: PromptSnapshot): Exclude<PromptLogBundle, null> | null {
+  if (!snapshot || typeof snapshot !== "object") return null;
+  const bundle = snapshot.replyPrompts;
+  if (!bundle || typeof bundle !== "object" || Array.isArray(bundle)) return null;
+  return bundle;
+}
+
+function hasPromptSnapshot(snapshot: PromptSnapshot): boolean {
+  const bundle = getPromptBundle(snapshot);
+  if (!bundle) return false;
+  if (normalizePromptText(bundle.systemPrompt)) return true;
+  if (normalizePromptText(bundle.initialUserPrompt)) return true;
+  return normalizeFollowupPrompts(bundle.followupUserPrompts).length > 0;
+}
+
+function formatPromptBundleForCopy(bundle: Exclude<PromptLogBundle, null> | null): string {
+  if (!bundle) return "";
+  const parts = [
+    `System Prompt:\n${normalizePromptText(bundle.systemPrompt) || "(empty)"}`,
+    `Initial User Prompt:\n${normalizePromptText(bundle.initialUserPrompt) || "(empty)"}`
+  ];
+  const followups = normalizeFollowupPrompts(bundle.followupUserPrompts);
+  if (followups.length > 0) {
+    parts.push(
+      `Follow-up User Prompts (${followups.length}):\n${followups.map((prompt, index) => `Step ${index + 1}:\n${prompt || "(empty)"}`).join("\n\n")}`
+    );
+  }
+  return parts.join("\n\n");
 }
 
 function resolveCaptureTargetName(capture: { userId: string; displayName: string | null }): string {
@@ -686,202 +728,122 @@ function ConversationContext({ session, latencyTurns }: { session: VoiceSession;
   );
 }
 
-// ---- Generation Context Viewer ----
+// ---- Live Prompt Snapshot ----
 
-function GenerationContextViewer({ session }: { session: VoiceSession }) {
-  const ctx = session.lastGenerationContext;
-  const isNativeMode =
-    session.mode === "openai_realtime" ||
-    session.mode === "gemini_realtime" ||
-    session.mode === "elevenlabs_realtime" ||
-    session.mode === "xai_realtime";
-
-  if (isNativeMode && !ctx) {
-    return (
-      <Section title="LLM Brain Context" defaultOpen={false}>
-        <p className="vm-gen-ctx-native">Native mode — context managed by provider.</p>
-      </Section>
-    );
-  }
-
-  if (!ctx) return null;
-
-  const conversationCtx = ctx.conversationContext || {};
-  const memoryFacts = ctx.memoryFacts || { userFacts: [], relevantFacts: [] };
-  const userFactCount = Array.isArray(memoryFacts.userFacts) ? memoryFacts.userFacts.length : 0;
-  const relevantFactCount = Array.isArray(memoryFacts.relevantFacts) ? memoryFacts.relevantFacts.length : 0;
-  const totalFacts = userFactCount + relevantFactCount;
-  const visionNotes = Array.isArray(conversationCtx.streamWatchBrainContext)
-    ? conversationCtx.streamWatchBrainContext
-    : [];
-  const tools = ctx.tools;
-  const toolEntries: [string, boolean][] = [
-    ["soundboard", Boolean(tools?.soundboard)],
-    ["webSearch", Boolean(tools?.webSearch)],
-    ["openArticle", Boolean(tools?.openArticle)],
-    ["screenShare", Boolean(tools?.screenShare)],
-    ["memory", Boolean(tools?.memory)]
-  ];
-  const addressing = conversationCtx.addressing || null;
-  const timing = ctx.sessionTiming || {};
+function PromptSnapshotCard({
+  title,
+  snapshot,
+  emptyLabel
+}: {
+  title: string;
+  snapshot: PromptSnapshot;
+  emptyLabel: string;
+}) {
+  const bundle = getPromptBundle(snapshot);
+  const systemPrompt = normalizePromptText(bundle?.systemPrompt);
+  const initialUserPrompt = normalizePromptText(bundle?.initialUserPrompt);
+  const followups = normalizeFollowupPrompts(bundle?.followupUserPrompts);
+  const followupSteps = Math.max(0, Math.floor(Number(bundle?.followupSteps) || followups.length));
+  const hasData = hasPromptSnapshot(snapshot);
 
   return (
-    <Section
-      title="LLM Brain Context"
-      badge={ctx.source || null}
-      defaultOpen={false}
-    >
-      {/* Header meta */}
-      <div className="vm-gen-ctx-meta">
-        <span>{ctx.llmConfig?.provider}/{ctx.llmConfig?.model}</span>
-        {" · "}temp {ctx.llmConfig?.temperature}{" · "}
-        max {ctx.llmConfig?.maxOutputTokens} tok
-        {ctx.capturedAt && <>{" · "}{relativeTime(ctx.capturedAt)}</>}
-      </div>
-
-      {/* Incoming transcript */}
-      <div className="vm-gen-ctx-block">
-        <span className="vm-mini-label">
-          Incoming Transcript
-          {ctx.directAddressed && <span className="vm-gen-ctx-tag vm-gen-ctx-tag-direct">direct</span>}
-          {ctx.isEagerTurn && <span className="vm-gen-ctx-tag vm-gen-ctx-tag-eager">eager</span>}
-        </span>
-        <div className="vm-gen-ctx-transcript">
-          <strong>{ctx.speakerName}:</strong> {ctx.incomingTranscript || "(empty)"}
+    <div className={`vm-prompt-card${hasData ? "" : " vm-prompt-card-empty"}`}>
+      <div className="vm-prompt-card-header">
+        <div className="vm-prompt-card-title">
+          <span className="vm-prompt-title">{title}</span>
+          <span className="vm-prompt-meta">
+            {snapshot?.source ? snapshot.source : "no source"}
+            {snapshot?.updatedAt ? ` · ${relativeTime(snapshot.updatedAt)}` : ""}
+          </span>
         </div>
+        {hasData && <CopyButton text={formatPromptBundleForCopy(bundle)} label />}
       </div>
 
-      {/* Context window (conversation history sent to LLM) */}
-      {ctx.contextMessages && ctx.contextMessages.length > 0 && (
-        <div className="vm-gen-ctx-block">
-          <span className="vm-mini-label">Context Window ({ctx.contextMessages.length} messages)</span>
-          <div className="vm-convo-feed">
-            {ctx.contextMessages.map((m, i) => (
-              <div key={i} className={`vm-convo-msg vm-convo-${m.role}`}>
-                <div className="vm-convo-meta">
-                  <span className={`vm-convo-role vm-convo-role-${m.role}`}>
-                    {m.role === "assistant" ? "bot" : m.role}
-                  </span>
-                </div>
-                <div className="vm-convo-text">{m.content || "(empty)"}</div>
+      {!hasData && <p className="vm-empty">{emptyLabel}</p>}
+
+      {hasData && (
+        <div className="vm-prompt-body">
+          <div className="vm-prompt-block">
+            <div className="vm-prompt-block-header">
+              <span className="vm-mini-label">System Prompt</span>
+              <CopyButton text={systemPrompt || "(empty)"} />
+            </div>
+            <pre className="vm-prompt-pre">{systemPrompt || "(empty)"}</pre>
+          </div>
+
+          {(initialUserPrompt || followups.length > 0) && (
+            <div className="vm-prompt-block">
+              <div className="vm-prompt-block-header">
+                <span className="vm-mini-label">Initial User Prompt</span>
+                <CopyButton text={initialUserPrompt || "(empty)"} />
               </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Engagement context */}
-      <div className="vm-gen-ctx-block">
-        <span className="vm-mini-label">Engagement</span>
-        <div className="vm-detail-grid">
-          {conversationCtx.engagementState && (
-            <Stat label="State" value={conversationCtx.engagementState} />
+              <pre className="vm-prompt-pre">{initialUserPrompt || "(empty)"}</pre>
+            </div>
           )}
-          {conversationCtx.engaged != null && (
-            <Stat label="Engaged" value={conversationCtx.engaged ? "yes" : "no"} />
-          )}
-        </div>
-      </div>
 
-      {/* Participant roster */}
-      {ctx.participantRoster && ctx.participantRoster.length > 0 && (
-        <div className="vm-gen-ctx-block">
-          <span className="vm-mini-label">Participant Roster ({ctx.participantRoster.length})</span>
-          <div className="vm-convo-text">{ctx.participantRoster.join(", ")}</div>
-        </div>
-      )}
-
-      {/* Memory facts */}
-      {totalFacts > 0 && (
-        <div className="vm-gen-ctx-block">
-          <span className="vm-mini-label">Memory Facts ({totalFacts})</span>
-          <div className="vm-gen-ctx-facts">
-            {userFactCount > 0 && (
-              <>
-                <div className="vm-gen-ctx-fact" style={{ fontWeight: 600, color: "var(--ink-2)" }}>
-                  User Facts ({userFactCount})
-                </div>
-                {memoryFacts.userFacts.map((f, i) => (
-                  <div key={`u${i}`} className="vm-gen-ctx-fact">
-                    {Object.entries(f).map(([k, v]) => `${k}: ${String(v)}`).join(" · ")}
+          {followups.length > 0 && (
+            <div className="vm-prompt-block">
+              <span className="vm-mini-label">Follow-up User Prompts ({Math.max(followupSteps, followups.length)})</span>
+              <div className="vm-prompt-followups">
+                {followups.map((prompt, index) => (
+                  <div key={`${title}-followup-${index}`} className="vm-prompt-followup">
+                    <div className="vm-prompt-block-header">
+                      <span className="vm-prompt-step">Step {index + 1}</span>
+                      <CopyButton text={prompt || "(empty)"} />
+                    </div>
+                    <pre className="vm-prompt-pre">{prompt || "(empty)"}</pre>
                   </div>
                 ))}
-              </>
-            )}
-            {relevantFactCount > 0 && (
-              <>
-                <div className="vm-gen-ctx-fact" style={{ fontWeight: 600, color: "var(--ink-2)" }}>
-                  Relevant Facts ({relevantFactCount})
-                </div>
-                {memoryFacts.relevantFacts.map((f, i) => (
-                  <div key={`r${i}`} className="vm-gen-ctx-fact">
-                    {Object.entries(f).map(([k, v]) => `${k}: ${String(v)}`).join(" · ")}
-                  </div>
-                ))}
-              </>
-            )}
-          </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
+    </div>
+  );
+}
 
-      {/* Vision notes */}
-      {visionNotes.length > 0 && (
-        <div className="vm-gen-ctx-block">
-          <span className="vm-mini-label">Vision Notes ({visionNotes.length})</span>
-          <div className="vm-gen-ctx-facts">
-            {visionNotes.map((note, i) => (
-              <div key={i} className="vm-gen-ctx-fact">{String(note)}</div>
-            ))}
-          </div>
-        </div>
-      )}
+function PromptStateViewer({ session }: { session: VoiceSession }) {
+  const promptState = session.promptState || null;
+  const cards = [
+    {
+      key: "instructions",
+      title: "Current Realtime Instructions",
+      snapshot: promptState?.instructions || null,
+      emptyLabel: "No active realtime instructions."
+    },
+    {
+      key: "generation",
+      title: "Latest VC Brain Prompt",
+      snapshot: promptState?.generation || null,
+      emptyLabel: "No VC brain prompt has been captured in this session."
+    },
+    {
+      key: "classifier",
+      title: "Latest Classifier Prompt",
+      snapshot: promptState?.classifier || null,
+      emptyLabel: "No classifier prompt has been captured in this session."
+    },
+    {
+      key: "bridge",
+      title: "Latest Bridge Forwarded Turn",
+      snapshot: promptState?.bridge || null,
+      emptyLabel: "No bridge-forwarded turn has been captured in this session."
+    }
+  ];
+  const activeCount = cards.filter((card) => hasPromptSnapshot(card.snapshot)).length;
 
-      {/* Session timing */}
-      {(timing.maxRemainingMs != null || timing.inactivityRemainingMs != null) && (
-        <div className="vm-gen-ctx-block">
-          <span className="vm-mini-label">Session Timing</span>
-          <div className="vm-detail-grid">
-            {timing.maxRemainingMs != null && (
-              <Stat label="Max Remaining" value={`${Math.round(Number(timing.maxRemainingMs) / 1000)}s`} />
-            )}
-            {timing.inactivityRemainingMs != null && (
-              <Stat label="Inactivity Remaining" value={`${Math.round(Number(timing.inactivityRemainingMs) / 1000)}s`} />
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Addressing */}
-      {addressing && (
-        <div className="vm-gen-ctx-block">
-          <span className="vm-mini-label">Addressing</span>
-          <div className="vm-detail-grid">
-            {addressing.talkingTo && <Stat label="Target" value={String(addressing.talkingTo)} />}
-            {addressing.confidence != null && (
-              <Stat label="Confidence" value={Number(addressing.confidence).toFixed(2)} />
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Tools available */}
-      <div className="vm-gen-ctx-block">
-        <span className="vm-mini-label">Tools</span>
-        <div className="vm-gen-ctx-tools">
-          {toolEntries.map(([name, on]) => (
-            <span
-              key={name}
-              className={`vm-gen-ctx-tool ${on ? "vm-gen-ctx-tool-on" : "vm-gen-ctx-tool-off"}`}
-            >
-              {name}
-            </span>
-          ))}
-        </div>
-        {ctx.soundboardCandidateCount > 0 && (
-          <div style={{ fontSize: "0.68rem", color: "var(--ink-3)", marginTop: 4 }}>
-            {ctx.soundboardCandidateCount} soundboard candidates loaded
-          </div>
-        )}
+  return (
+    <Section title="Live Prompt Snapshot" badge={activeCount > 0 ? activeCount : null} defaultOpen>
+      <div className="vm-prompt-grid">
+        {cards.map((card) => (
+          <PromptSnapshotCard
+            key={card.key}
+            title={card.title}
+            snapshot={card.snapshot}
+            emptyLabel={card.emptyLabel}
+          />
+        ))}
       </div>
     </Section>
   );
@@ -1033,6 +995,7 @@ function McpPanel({ session }: { session: VoiceSession }) {
 function StreamWatchDetail({ session }: { session: VoiceSession }) {
   const sw = session.streamWatch;
   const visualFeed = Array.isArray(sw.visualFeed) ? sw.visualFeed : [];
+  const durableScreenNotes = Array.isArray(sw.durableScreenNotes) ? sw.durableScreenNotes : [];
   const brainContextPayload = sw.brainContextPayload;
   const hasBrainPayloadNotes = Boolean(
     brainContextPayload &&
@@ -1044,6 +1007,7 @@ function StreamWatchDetail({ session }: { session: VoiceSession }) {
     Number(sw.ingestedFrameCount || 0) > 0 ||
     Boolean(sw.lastCommentaryNote) ||
     Boolean(sw.lastMemoryRecapText) ||
+    durableScreenNotes.length > 0 ||
     visualFeed.length > 0 ||
     hasBrainPayloadNotes;
   if (!hasAnyStreamWatchData) return null;
@@ -1066,6 +1030,7 @@ function StreamWatchDetail({ session }: { session: VoiceSession }) {
         {sw.lastMemoryRecapAt && <Stat label="Last Recap" value={relativeTime(sw.lastMemoryRecapAt)} />}
         {sw.lastBrainContextAt && <Stat label="Last Brain Note" value={relativeTime(sw.lastBrainContextAt)} />}
         <Stat label="Brain Notes" value={Number(sw.brainContextCount || visualFeed.length)} />
+        {durableScreenNotes.length > 0 && <Stat label="Saved Moments" value={durableScreenNotes.length} />}
         {(sw.lastMemoryRecapText || sw.lastMemoryRecapAt) && (
           <Stat label="Recap Saved" value={sw.lastMemoryRecapDurableSaved ? "durable" : "journal only"} />
         )}
@@ -1109,13 +1074,13 @@ function StreamWatchDetail({ session }: { session: VoiceSession }) {
 
       {visualFeed.length > 0 && (
         <>
-          <span className="vm-mini-label">Raw Visual Analysis Feed</span>
+          <span className="vm-mini-label">Keyframe Analyses</span>
           <div className="vm-convo-feed">
             {visualFeed.slice(-10).reverse().map((entry, index) => (
               <div key={`${entry.at || "na"}-${index}`} className="vm-convo-msg vm-convo-user">
                 <div className="vm-convo-meta">
                   <span className="vm-convo-role vm-convo-role-user">
-                    {entry.speakerName || "visual"}
+                    {entry.speakerName || "scanner"}
                   </span>
                   {(entry.provider || entry.model) && (
                     <span className="vm-convo-time">
@@ -1131,32 +1096,56 @@ function StreamWatchDetail({ session }: { session: VoiceSession }) {
         </>
       )}
 
-      {brainContextPayload && (
+      {brainContextPayload?.prompt && (
         <>
-          <span className="vm-mini-label">Brain Context Payload</span>
-          <div className="vm-convo-context-summary">
-            <div className="vm-convo-meta">
-              <span className="vm-convo-role vm-convo-role-assistant">Prompt</span>
-              {brainContextPayload.lastAt && (
-                <span className="vm-convo-time">{relativeTime(brainContextPayload.lastAt)}</span>
-              )}
-              {(brainContextPayload.provider || brainContextPayload.model) && (
-                <span className="vm-convo-time">
-                  {[brainContextPayload.provider, brainContextPayload.model].filter(Boolean).join(" / ")}
+          <span className="vm-mini-label">Voice Context Builder</span>
+          <div className="vm-prompt-card">
+            <div className="vm-prompt-card-header">
+              <div className="vm-prompt-card-title">
+                <span className="vm-prompt-title">Keyframe Guidance Prompt</span>
+                <span className="vm-prompt-meta">
+                  {brainContextPayload.lastAt ? relativeTime(brainContextPayload.lastAt) : "no updates yet"}
+                  {(brainContextPayload.provider || brainContextPayload.model)
+                    ? ` · ${[brainContextPayload.provider, brainContextPayload.model].filter(Boolean).join(" / ")}`
+                    : ""}
                 </span>
-              )}
+              </div>
+              <CopyButton text={brainContextPayload.prompt || "(none)"} label />
             </div>
-            <div className="vm-convo-text">{brainContextPayload.prompt || "(none)"}</div>
+            <pre className="vm-prompt-pre">{brainContextPayload.prompt || "(none)"}</pre>
           </div>
-          {Array.isArray(brainContextPayload.notes) && brainContextPayload.notes.length > 0 && (
-            <div className="vm-convo-feed">
-              {brainContextPayload.notes.map((note, index) => (
-                <div key={`${index}-${note.slice(0, 18)}`} className="vm-convo-msg vm-convo-assistant">
-                  <div className="vm-convo-text">{note}</div>
+        </>
+      )}
+
+      {brainContextPayload && Array.isArray(brainContextPayload.notes) && brainContextPayload.notes.length > 0 && (
+        <>
+          <span className="vm-mini-label">Accumulated Voice Context</span>
+          <div className="vm-convo-feed">
+            {brainContextPayload.notes.map((note, index) => (
+              <div key={`${index}-${note.slice(0, 18)}`} className="vm-convo-msg vm-convo-assistant">
+                <div className="vm-convo-meta">
+                  <span className="vm-convo-role vm-convo-role-assistant">context</span>
                 </div>
-              ))}
-            </div>
-          )}
+                <div className="vm-convo-text">{note}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {durableScreenNotes.length > 0 && (
+        <>
+          <span className="vm-mini-label">Saved Screen Moments</span>
+          <div className="vm-convo-feed">
+            {durableScreenNotes.slice(-10).reverse().map((note, index) => (
+              <div key={`${index}-${note.slice(0, 18)}`} className="vm-convo-msg vm-convo-assistant">
+                <div className="vm-convo-meta">
+                  <span className="vm-convo-role vm-convo-role-assistant">moment</span>
+                </div>
+                <div className="vm-convo-text">{note}</div>
+              </div>
+            ))}
+          </div>
         </>
       )}
     </Section>
@@ -1386,8 +1375,8 @@ function SessionCard({ session }: { session: VoiceSession }) {
           {/* Conversation context */}
           <ConversationContext session={session} latencyTurns={session.latency?.recentTurns || []} />
 
-          {/* LLM Brain Context */}
-          <GenerationContextViewer session={session} />
+          {/* Live Prompt Snapshot */}
+          <PromptStateViewer session={session} />
 
           {/* Brain Tools */}
           <BrainToolsConfig session={session} />

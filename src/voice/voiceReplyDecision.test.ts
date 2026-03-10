@@ -79,6 +79,9 @@ test("runVoiceReplyClassifier emits debug prompt/result logs when VOICE_CLASSIFI
     const result = await runVoiceReplyClassifier(manager, buildClassifierArgs());
 
     assert.equal(result.allow, false);
+    assert.equal(result.replyPrompts.hiddenByDefault, true);
+    assert.match(String(result.replyPrompts.systemPrompt || ""), /Return exactly one token: YES or NO/i);
+    assert.match(String(result.replyPrompts.initialUserPrompt || ""), /Transcript: "Yo\."/);
     const debugLogs = logs.filter((entry) => entry.content === "voice_reply_classifier_debug");
     assert.equal(debugLogs.length, 2);
 
@@ -106,6 +109,7 @@ test("runVoiceReplyClassifier does not emit debug logs when VOICE_CLASSIFIER_DEB
     const result = await runVoiceReplyClassifier(manager, buildClassifierArgs());
 
     assert.equal(result.allow, true);
+    assert.match(String(result.replyPrompts.initialUserPrompt || ""), /Participants: alice/);
     const debugLogs = logs.filter((entry) => entry.content === "voice_reply_classifier_debug");
     assert.equal(debugLogs.length, 0);
   } finally {

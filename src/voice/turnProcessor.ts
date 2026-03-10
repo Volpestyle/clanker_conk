@@ -34,6 +34,7 @@ import {
   normalizeVoiceText,
   resolveVoiceAsrLanguageGuidance
 } from "./voiceSessionHelpers.ts";
+import { setVoiceLivePromptSnapshot } from "./voicePromptState.ts";
 import type { ReplyManager } from "./replyManager.ts";
 import type {
   OutputChannelState,
@@ -1462,6 +1463,10 @@ export class TurnProcessor {
         session,
         decision.outputLockReason || null
       );
+      setVoiceLivePromptSnapshot(session, "classifier", {
+        replyPrompts: decision.replyPrompts || null,
+        source: "realtime"
+      });
 
       this.store.logAction({
         kind: "voice_runtime",
@@ -1527,6 +1532,7 @@ export class TurnProcessor {
             : null,
           classifierTarget: decision.classifierTarget || null,
           classifierReason: decision.classifierReason || null,
+          replyPrompts: decision.replyPrompts || null,
           musicWakeLatched: Boolean(decision.conversationContext?.musicWakeLatched),
           musicWakeLatchedUntil: Number(session?.musicWakeLatchedUntil || 0) > 0
             ? new Date(Number(session.musicWakeLatchedUntil)).toISOString()
@@ -2060,6 +2066,10 @@ export class TurnProcessor {
       session,
       turnDecision.outputLockReason || null
     );
+    setVoiceLivePromptSnapshot(session, "classifier", {
+      replyPrompts: turnDecision.replyPrompts || null,
+      source: "file_asr"
+    });
 
     this.store.logAction({
       kind: "voice_runtime",
@@ -2124,6 +2134,7 @@ export class TurnProcessor {
           : null,
         classifierTarget: turnDecision.classifierTarget || null,
         classifierReason: turnDecision.classifierReason || null,
+        replyPrompts: turnDecision.replyPrompts || null,
         musicWakeLatched: Boolean(turnDecision.conversationContext?.musicWakeLatched),
         musicWakeLatchedUntil: Number(session?.musicWakeLatchedUntil || 0) > 0
           ? new Date(Number(session.musicWakeLatchedUntil)).toISOString()

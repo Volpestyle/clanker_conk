@@ -213,6 +213,16 @@ All under `voice.streamWatch`:
 
 Both layers are always active — there is no routing decision between "direct to brain" and "scanner generated." The brain always sees the frame; the scanner always builds temporal notes.
 
+## Dashboard visibility
+
+The Voice tab mirrors the screen-share pipeline as live state, not just action logs:
+
+- **Keyframe Analyses** shows the per-frame scanner outputs that were saved into `brainContextEntries`.
+- **Voice Context Builder** shows the configured scanner guidance prompt plus the accumulated notes currently eligible for injection into voice prompts.
+- **Saved Screen Moments** shows durable screen moments the main voice brain decided to keep during the session.
+
+This separates "what the scanner saw" from "what context the VC brain currently has available," which makes it easier to debug whether a bad screen-share comment came from frame analysis, prompt compaction, or the main brain turn itself.
+
 ## API Endpoints
 
 | Endpoint | Method | Auth | Purpose |

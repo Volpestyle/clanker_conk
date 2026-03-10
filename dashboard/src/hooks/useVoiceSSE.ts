@@ -41,6 +41,20 @@ export type VoiceBrainContextPayload = {
   model: string | null;
 } | null;
 
+export type PromptLogBundle = {
+  hiddenByDefault?: boolean;
+  systemPrompt?: string;
+  initialUserPrompt?: string;
+  followupUserPrompts?: string[];
+  followupSteps?: number;
+} | null;
+
+export type PromptSnapshot = {
+  updatedAt: string | null;
+  source: string | null;
+  replyPrompts: PromptLogBundle;
+} | null;
+
 export type VoiceMembershipEvent = {
   userId: string;
   displayName: string;
@@ -248,6 +262,12 @@ export type VoiceSession = {
   pendingDeferredTurns: number;
   recentTurns: VoiceTurn[];
   lastGenerationContext: GenerationContextSnapshot | null;
+  promptState: {
+    instructions: PromptSnapshot;
+    classifier: PromptSnapshot;
+    generation: PromptSnapshot;
+    bridge: PromptSnapshot;
+  } | null;
   streamWatch: {
     active: boolean;
     targetUserId: string | null;
@@ -269,6 +289,7 @@ export type VoiceSession = {
     lastBrainContextProvider: string | null;
     lastBrainContextModel: string | null;
     brainContextCount: number;
+    durableScreenNotes: string[];
     visualFeed: VoiceVisualFeedEntry[];
     brainContextPayload: VoiceBrainContextPayload;
   };

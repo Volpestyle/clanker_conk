@@ -7,6 +7,7 @@ import {
 } from "../settings/agentStack.ts";
 import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
 import { getPromptBotName } from "../prompts/promptCore.ts";
+import { buildSingleTurnPromptLog } from "../promptLogging.ts";
 import { clamp } from "../utils.ts";
 import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
 import { hasBotNameCue } from "../bot/directAddressConfidence.ts";
@@ -62,6 +63,7 @@ import {
   supportsStreamWatchCommentary,
   supportsStreamWatchBrainContext
 } from "./voiceStreamWatch.ts";
+import { setVoiceLivePromptSnapshot } from "./voicePromptState.ts";
 import { sendOperationalMessage } from "./voiceOperationalMessaging.ts";
 import {
   type AsrBridgeDeps,
@@ -203,6 +205,7 @@ import {
 import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
 import { executeLocalVoiceToolCall } from "./voiceToolCallDispatch.ts";
 import type {
+  LoggedVoicePromptBundle,
   OutputChannelState,
   RealtimeToolOwnership,
   VoiceSession
@@ -399,6 +402,7 @@ type VoiceReplyDecision = {
   classifierConfidence?: number | null;
   classifierTarget?: string | null;
   classifierReason?: string | null;
+  replyPrompts?: LoggedVoicePromptBundle | null;
 };
 
 type VoiceTimelineTurn = {
@@ -3558,6 +3562,10 @@ export class VoiceSessionManager {
       session,
       decision.outputLockReason || null
     );
+    setVoiceLivePromptSnapshot(session, "classifier", {
+      replyPrompts: decision.replyPrompts || null,
+      source: deferredReplySource
+    });
 
     this.store.logAction({
       kind: "voice_runtime",
@@ -3618,6 +3626,7 @@ export class VoiceSessionManager {
           : null,
         classifierTarget: decision.classifierTarget || null,
         classifierReason: decision.classifierReason || null,
+        replyPrompts: decision.replyPrompts || null,
         musicWakeLatched: Boolean(decision.conversationContext?.musicWakeLatched),
         musicWakeLatchedUntil: Number(session?.musicWakeLatchedUntil || 0) > 0
           ? new Date(Number(session.musicWakeLatchedUntil)).toISOString()
@@ -3738,6 +3747,14 @@ export class VoiceSessionManager {
         transcript: normalizedTranscript,
         captureReason
       });
+      const promptLog = buildSingleTurnPromptLog({
+        systemPrompt: String(session.lastRealtimeInstructions || session.baseVoiceInstructions || "").trim(),
+        userPrompt: labeledTranscript
+      });
+      setVoiceLivePromptSnapshot(session, "bridge", {
+        replyPrompts: promptLog,
+        source: String(source || "openai_realtime_text_turn")
+      });
       session.realtimeClient.requestTextUtterance(labeledTranscript);
       this.replyManager.createTrackedAudioResponse({
         session,
@@ -3774,7 +3791,8 @@ export class VoiceSessionManager {
           captureReason: String(captureReason || "stream_end"),
           transcript: normalizedTranscript,
           labeledTranscript,
-          speakerName
+          speakerName,
+          replyPrompts: promptLog
         }
       });
       return true;

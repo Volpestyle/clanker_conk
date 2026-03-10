@@ -1776,6 +1776,49 @@ test("requestRealtimeTextUtterance prefers playback-specific realtime client met
   assert.equal(playbackPrompts.length, 1);
 });
 
+test("forwardRealtimeTextTurnToBrain logs prompt details for bridge-style realtime turns", async () => {
+  const { manager, logs } = createManager();
+  const requestedPrompts = [];
+  manager.instructionManager.prepareRealtimeTurnContext = async ({ session }) => {
+    session.lastRealtimeInstructions = "You are in bridge mode. Reply naturally.";
+  };
+  manager.client.users.cache.set("user-1", {
+    id: "user-1",
+    username: "alice"
+  });
+  const session = createSession({
+    mode: "openai_realtime",
+    realtimeClient: {
+      requestTextUtterance(prompt) {
+        requestedPrompts.push(prompt);
+      }
+    },
+    settingsSnapshot: createTestSettings({
+      botName: "clanker conk",
+      voice: {
+        enabled: true,
+        replyPath: "bridge"
+      }
+    })
+  });
+
+  const forwarded = await manager.forwardRealtimeTextTurnToBrain({
+    session,
+    settings: session.settingsSnapshot,
+    userId: "user-1",
+    transcript: "where's lunch",
+    source: "bridge_test"
+  });
+
+  assert.equal(forwarded, true);
+  assert.deepEqual(requestedPrompts, ["(alice): where's lunch"]);
+  const forwardedLog = logs.find((entry) => entry?.content === "openai_realtime_text_turn_forwarded");
+  assert.equal(Boolean(forwardedLog), true);
+  assert.equal(forwardedLog?.metadata?.replyPrompts?.hiddenByDefault, true);
+  assert.equal(forwardedLog?.metadata?.replyPrompts?.systemPrompt, "You are in bridge mode. Reply naturally.");
+  assert.equal(forwardedLog?.metadata?.replyPrompts?.initialUserPrompt, "(alice): where's lunch");
+});
+
 test("handleResponseDone drains queued assistant speech after realtime audio completes", () => {
   const { manager, logs } = createManager();
   const prompts = [];

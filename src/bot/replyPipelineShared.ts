@@ -1,3 +1,11 @@
+import {
+  appendPromptFollowup,
+  buildLoggedPromptBundle,
+  createPromptCapture,
+  type LoggedPromptBundle,
+  type PromptCapture
+} from "../promptLogging.ts";
+
 export const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
 export const MAX_MODEL_IMAGE_INPUTS = 8;
 export const LOOKUP_CONTEXT_PROMPT_LIMIT = 4;
@@ -25,19 +33,9 @@ export type ReplyPerformanceTracker = {
   followupMs: number | null;
 };
 
-export type ReplyPromptCapture = {
-  systemPrompt: string;
-  initialUserPrompt: string;
-  followupUserPrompts: string[];
-};
+export type ReplyPromptCapture = PromptCapture;
 
-export type LoggedReplyPrompts = {
-  hiddenByDefault: boolean;
-  systemPrompt: string;
-  initialUserPrompt: string;
-  followupUserPrompts: string[];
-  followupSteps: number;
-};
+export type LoggedReplyPrompts = LoggedPromptBundle;
 
 export function normalizeNonNegativeMs(value: unknown) {
   const parsed = Number(value);
@@ -94,48 +92,24 @@ export function createReplyPromptCapture({
   systemPrompt?: string;
   initialUserPrompt?: string;
 } = {}): ReplyPromptCapture {
-  return {
-    systemPrompt: String(systemPrompt || ""),
-    initialUserPrompt: String(initialUserPrompt || ""),
-    followupUserPrompts: []
-  };
+  return createPromptCapture({
+    systemPrompt,
+    initialUserPrompt
+  });
 }
 
 export function appendReplyFollowupPrompt(
   capture: ReplyPromptCapture | null = null,
   userPrompt = ""
 ) {
-  if (!capture || typeof capture !== "object") return;
-  if (!Array.isArray(capture.followupUserPrompts)) {
-    capture.followupUserPrompts = [];
-  }
-  capture.followupUserPrompts.push(String(userPrompt || ""));
+  appendPromptFollowup(capture, userPrompt);
 }
 
 export function buildLoggedReplyPrompts(
   capture: ReplyPromptCapture | null = null,
   followupSteps = 0
 ): LoggedReplyPrompts | null {
-  if (!capture || typeof capture !== "object") return null;
-  const systemPrompt = String(capture.systemPrompt || "");
-  const initialUserPrompt = String(capture.initialUserPrompt || "");
-  const followupUserPrompts = Array.isArray(capture.followupUserPrompts)
-    ? capture.followupUserPrompts.map((prompt) => String(prompt || ""))
-    : [];
-  const resolvedFollowupSteps = Math.max(
-    0,
-    Number.isFinite(Number(followupSteps))
-      ? Math.floor(Number(followupSteps))
-      : followupUserPrompts.length
-  );
-
-  return {
-    hiddenByDefault: true,
-    systemPrompt,
-    initialUserPrompt,
-    followupUserPrompts,
-    followupSteps: resolvedFollowupSteps
-  };
+  return buildLoggedPromptBundle(capture, followupSteps);
 }
 
 export function finalizeReplyPerformanceSample({

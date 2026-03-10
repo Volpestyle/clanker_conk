@@ -1,3 +1,4 @@
+import { buildSingleTurnPromptLog } from "../promptLogging.ts";
 import { clamp } from "../utils.ts";
 import {
   OPENAI_ASR_SESSION_IDLE_TTL_MS,
@@ -12,6 +13,7 @@ import type {
   StreamWatchBrainContextEntry,
   VoiceAddressingState,
   VoiceConversationContext,
+  VoiceLivePromptSnapshotEntry,
   VoiceMembershipPromptEntry,
   VoiceSession,
   VoiceSessionDurableContextCategory
@@ -86,6 +88,42 @@ export interface VoiceRuntimeSnapshotDeps {
 
 function toIsoOrNull(value: number | null | undefined) {
   return value ? new Date(value).toISOString() : null;
+}
+
+function normalizeLoggedPromptBundle(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const bundle = value as {
+    hiddenByDefault?: unknown;
+    systemPrompt?: unknown;
+    initialUserPrompt?: unknown;
+    followupUserPrompts?: unknown;
+    followupSteps?: unknown;
+  };
+  const followupUserPrompts = Array.isArray(bundle.followupUserPrompts)
+    ? bundle.followupUserPrompts.map((entry) => String(entry || ""))
+    : [];
+  const followupSteps = Number(bundle.followupSteps);
+
+  return {
+    hiddenByDefault: bundle.hiddenByDefault !== false,
+    systemPrompt: String(bundle.systemPrompt || ""),
+    initialUserPrompt: String(bundle.initialUserPrompt || ""),
+    followupUserPrompts,
+    followupSteps: Number.isFinite(followupSteps)
+      ? Math.max(0, Math.floor(followupSteps))
+      : followupUserPrompts.length
+  };
+}
+
+function buildPromptSnapshotEntry(entry: VoiceLivePromptSnapshotEntry | null | undefined) {
+  if (!entry || typeof entry !== "object") return null;
+  const replyPrompts = normalizeLoggedPromptBundle(entry.replyPrompts);
+  if (!replyPrompts) return null;
+  return {
+    updatedAt: toIsoOrNull(entry.updatedAt),
+    source: String(entry.source || "").trim() || null,
+    replyPrompts
+  };
 }
 
 function buildRecentTurnAddressing(row: VoiceSession["transcriptTurns"][number]) {
@@ -432,6 +470,19 @@ export function buildVoiceRuntimeSnapshot(
       session,
       session.settingsSnapshot || null
     );
+    const activeRealtimeInstructions = String(session.lastRealtimeInstructions || session.baseVoiceInstructions || "").trim();
+    const instructionsPromptState = activeRealtimeInstructions
+      ? {
+          updatedAt: toIsoOrNull(session.lastRealtimeInstructionsAt || session.startedAt),
+          source: session.lastRealtimeInstructionsAt > 0 ? "realtime_instruction_refresh" : "session_start",
+          replyPrompts: normalizeLoggedPromptBundle(
+            buildSingleTurnPromptLog({
+              systemPrompt: activeRealtimeInstructions,
+              userPrompt: ""
+            })
+          )
+        }
+      : null;
     const durableContext: VoiceRuntimeSnapshotDurableContextEntry[] = (Array.isArray(session.durableContext) ? session.durableContext : [])
       .map((entry) => {
         const text = String(entry?.text || "").replace(/\s+/g, " ").trim();
@@ -557,6 +608,12 @@ export function buildVoiceRuntimeSnapshot(
       })),
       durableContext,
       lastGenerationContext: session.lastGenerationContext || null,
+      promptState: {
+        instructions: instructionsPromptState,
+        classifier: buildPromptSnapshotEntry(session.livePromptState?.classifier),
+        generation: buildPromptSnapshotEntry(session.livePromptState?.generation),
+        bridge: buildPromptSnapshotEntry(session.livePromptState?.bridge)
+      },
       streamWatch: {
         active: Boolean(session.streamWatch?.active),
         targetUserId: session.streamWatch?.targetUserId || null,
@@ -580,6 +637,10 @@ export function buildVoiceRuntimeSnapshot(
           ? session.streamWatch.brainContextEntries.length
           : 0,
         ingestedFrameCount: Number(session.streamWatch?.ingestedFrameCount || 0),
+        durableScreenNotes: (Array.isArray(session.streamWatch?.durableScreenNotes) ? session.streamWatch.durableScreenNotes : [])
+          .map((note) => String(note || "").trim())
+          .filter(Boolean)
+          .slice(-24),
         visualFeed: streamWatchVisualFeed,
         brainContextPayload: streamWatchBrainContext
           ? {

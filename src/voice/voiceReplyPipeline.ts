@@ -22,12 +22,14 @@ import {
   normalizeSoundboardRefs as normalizeSoundboardRefsModule,
   resolveSoundboardCandidates as resolveSoundboardCandidatesModule
 } from "./voiceSoundboard.ts";
+import { setVoiceLivePromptSnapshot } from "./voicePromptState.ts";
 import { appendStreamWatchBrainContextEntry } from "./voiceStreamWatch.ts";
 import type { ReplyInterruptionPolicy } from "./bargeInController.ts";
 import type {
   InFlightAcceptedBrainTurn,
   VoiceConversationContext,
   VoiceGenerationContextSnapshot,
+  LoggedVoicePromptBundle,
   VoicePendingResponseLatencyContext,
   VoiceRealtimeToolSettings,
   VoiceSession
@@ -37,6 +39,7 @@ import type { VoiceSessionManager } from "./voiceSessionManager.ts";
 type GeneratedPayload = {
   text?: string;
   playedSoundboardRefs?: unknown[];
+  streamedRequestedRealtimeUtterance?: boolean;
   usedWebSearchFollowup?: boolean;
   usedOpenArticleFollowup?: boolean;
   usedScreenShareOffer?: boolean;
@@ -46,6 +49,7 @@ type GeneratedPayload = {
   screenNote?: string | null;
   screenMoment?: string | null;
   generationContextSnapshot?: VoiceGenerationContextSnapshot | null;
+  replyPrompts?: LoggedVoicePromptBundle | null;
 };
 
 type ContextMessage = {
@@ -158,6 +162,7 @@ function logReplySkipped({
   host,
   params,
   replyText,
+  replyPrompts,
   usedWebSearchFollowup,
   usedOpenArticleFollowup,
   usedScreenShareOffer,
@@ -171,6 +176,7 @@ function logReplySkipped({
   host: VoiceReplyPipelineHost;
   params: VoiceReplyPipelineParams;
   replyText: string;
+  replyPrompts: LoggedVoicePromptBundle | null;
   usedWebSearchFollowup: boolean;
   usedOpenArticleFollowup: boolean;
   usedScreenShareOffer: boolean;
@@ -208,6 +214,7 @@ function logReplySkipped({
       leaveVoiceChannelRequested,
       skipCause,
       replyTextPreview: replyText ? replyText.slice(0, 220) : null,
+      replyPrompts,
       conversationState: resolvedConversationContext?.engagementState || null,
       engagedWithCurrentSpeaker: Boolean(resolvedConversationContext?.engagedWithCurrentSpeaker),
       contextTurnsSent: contextMessages.length,
@@ -427,10 +434,13 @@ export async function runVoiceReplyPipeline(
       webSearchTimeoutMs: Number(followup.toolBudget?.toolTimeoutMs),
       voiceToolCallbacks: host.buildVoiceToolCallbacks({ session, settings: params.settings }),
       onSpokenSentence: streamingVoiceReplyEnabled
-        ? ({ text, index }: { text: string; index: number }) => {
+        ? async ({ text, index }: { text: string; index: number }) => {
           if (session.ending || generationSignal?.aborted) return false;
-          const normalizedText = normalizeVoiceText(text, STT_REPLY_MAX_CHARS);
-          if (!normalizedText) return false;
+          const playbackPlan = host.buildVoiceReplyPlaybackPlan({
+            replyText: String(text || ""),
+            trailingSoundboardRefs: []
+          });
+          if (!playbackPlan.steps.length) return false;
           const requestedAt = Date.now();
           const latencyContext =
             index === 0
@@ -447,19 +457,53 @@ export async function runVoiceReplyPipeline(
                 pendingQueueDepth: latencyPendingQueueDepth
               }
               : null;
-          const requested = host.requestRealtimeTextUtterance({
+          const playbackSource = `${source}:stream_chunk_${Math.max(0, Number(index || 0))}`;
+          if (playbackPlan.soundboardRefs.length === 0) {
+            const normalizedText = normalizeVoiceText(playbackPlan.spokenText, STT_REPLY_MAX_CHARS);
+            if (!normalizedText) return false;
+            const requested = host.requestRealtimeTextUtterance({
+              session,
+              text: normalizedText,
+              userId: host.client.user?.id || null,
+              source: playbackSource,
+              latencyContext
+            });
+            if (requested && streamedReplyRequestedAt === 0) {
+              streamedReplyRequestedAt = requestedAt;
+              session.lastAssistantReplyAt = requestedAt;
+              markInFlightAcceptedBrainTurnPhase("playback_requested");
+            }
+            return {
+              accepted: requested,
+              playedSoundboardRefs: [],
+              requestedRealtimeUtterance: requested
+            };
+          }
+          const playbackResult = await host.playVoiceReplyInOrder({
             session,
-            text: normalizedText,
-            userId: host.client.user?.id || null,
-            source: `${source}:stream_chunk_${Math.max(0, Number(index || 0))}`,
+            settings: params.settings,
+            spokenText: playbackPlan.spokenText,
+            playbackSteps: playbackPlan.steps,
+            source: playbackSource,
+            preferRealtimeUtterance: useRealtimeTts,
+            interruptionPolicy: null,
             latencyContext
           });
-          if (requested && streamedReplyRequestedAt === 0) {
+          const accepted = Boolean(playbackResult.completed) &&
+            (Boolean(playbackResult.spokeLine) || Number(playbackResult.playedSoundboardCount || 0) > 0);
+          if (accepted && streamedReplyRequestedAt === 0) {
             streamedReplyRequestedAt = requestedAt;
             session.lastAssistantReplyAt = requestedAt;
             markInFlightAcceptedBrainTurnPhase("playback_requested");
           }
-          return requested;
+          return {
+            accepted,
+            playedSoundboardRefs: playbackPlan.soundboardRefs.slice(
+              0,
+              Math.max(0, Number(playbackResult.playedSoundboardCount || 0))
+            ),
+            requestedRealtimeUtterance: Boolean(playbackResult.requestedRealtimeUtterance)
+          };
         }
         : null,
       signal: generationSignal
@@ -507,10 +551,19 @@ export async function runVoiceReplyPipeline(
   const replyText = normalizeVoiceText(generatedPayload?.text || "", STT_REPLY_MAX_CHARS);
   const playedSoundboardRefs = normalizeSoundboardRefsModule(generatedPayload?.playedSoundboardRefs);
   const streamedSentenceCount = Math.max(0, Number(generatedPayload?.streamedSentenceCount || 0));
+  const streamedRequestedRealtimeUtterance = Boolean(generatedPayload?.streamedRequestedRealtimeUtterance);
   const usedWebSearchFollowup = Boolean(generatedPayload?.usedWebSearchFollowup);
   const usedOpenArticleFollowup = Boolean(generatedPayload?.usedOpenArticleFollowup);
   const usedScreenShareOffer = Boolean(generatedPayload?.usedScreenShareOffer);
   const leaveVoiceChannelRequested = Boolean(generatedPayload?.leaveVoiceChannelRequested);
+  const replyPrompts =
+    generatedPayload?.replyPrompts && typeof generatedPayload.replyPrompts === "object"
+      ? generatedPayload.replyPrompts
+      : null;
+  setVoiceLivePromptSnapshot(session, "generation", {
+    replyPrompts,
+    source
+  });
   const screenNote = typeof generatedPayload?.screenNote === "string"
     ? String(generatedPayload.screenNote || "").trim().slice(0, 220)
     : null;
@@ -594,6 +647,7 @@ export async function runVoiceReplyPipeline(
       usedWebSearchFollowup,
       usedOpenArticleFollowup,
       usedScreenShareOffer,
+      replyPrompts,
       generatedVoiceAddressing,
       leaveVoiceChannelRequested,
       resolvedConversationContext,
@@ -657,7 +711,7 @@ export async function runVoiceReplyPipeline(
         ? {
           completed: true,
           spokeLine: Boolean(playbackPlan.spokenText),
-          requestedRealtimeUtterance: true,
+          requestedRealtimeUtterance: streamedRequestedRealtimeUtterance,
           playedSoundboardCount: playedSoundboardRefs.length
         }
         : await host.playVoiceReplyInOrder({
@@ -729,7 +783,9 @@ export async function runVoiceReplyPipeline(
         requestId: pendingRequestId,
         replyText: playbackPlan.spokenText || null,
         requestedRealtimeUtterance,
-        soundboardRefs: [...playedSoundboardRefs, ...playbackPlan.soundboardRefs],
+        soundboardRefs: streamedSpeechPlayed
+          ? playedSoundboardRefs
+          : [...playedSoundboardRefs, ...playbackPlan.soundboardRefs],
         playedSoundboardCount: Number(playbackResult.playedSoundboardCount || playedSoundboardRefs.length || 0),
         usedWebSearchFollowup,
         usedOpenArticleFollowup,
@@ -739,6 +795,7 @@ export async function runVoiceReplyPipeline(
           ? Number(clamp(Number(generatedVoiceAddressing.directedConfidence), 0, 1).toFixed(3))
           : 0,
         leaveVoiceChannelRequested,
+        replyPrompts,
         contextTurnsSent: contextMessages.length,
         contextTurnsAvailable: contextTurns.length,
         contextCharsSent: contextMessageChars
