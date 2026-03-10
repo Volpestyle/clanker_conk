@@ -4,7 +4,6 @@ import { loadConversationContinuityContext } from "./conversationContinuity.ts";
 
 test("loadConversationContinuityContext still loads fact profiles for text-light turns", async () => {
   let factProfileCalls = 0;
-  let lookupCalls = 0;
   let historyCalls = 0;
 
   const continuity = await loadConversationContinuityContext({
@@ -39,10 +38,6 @@ test("loadConversationContinuityContext still loads fact profiles for text-light
         relevantFacts: []
       };
     },
-    loadRecentLookupContext() {
-      lookupCalls += 1;
-      return [];
-    },
     loadRecentConversationHistory() {
       historyCalls += 1;
       return [];
@@ -50,7 +45,6 @@ test("loadConversationContinuityContext still loads fact profiles for text-light
   });
 
   assert.equal(factProfileCalls, 1);
-  assert.equal(lookupCalls, 0);
   assert.equal(historyCalls, 0);
   assert.equal(continuity.memorySlice.userFacts.length, 1);
   assert.equal(continuity.memorySlice.userFacts[0]?.fact, "likes tea");

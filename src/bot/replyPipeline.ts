@@ -229,7 +229,6 @@ type ReplyPipelineContext = {
   webSearch: ReplyWebSearchState;
   browserBrowse: ReturnType<ReplyPipelineRuntime["buildBrowserBrowseContext"]>;
   recentConversationHistory: ReplyContinuityContext["recentConversationHistory"];
-  recentWebLookups: ReplyContinuityContext["recentWebLookups"];
   memoryLookup: ReturnType<ReplyPipelineRuntime["buildMemoryLookupContext"]>;
   videoContext: Awaited<ReturnType<ReplyPipelineRuntime["buildVideoReplyContext"]>>;
   modelImageInputs: ReplyImageInput[];
@@ -393,7 +392,6 @@ export async function buildReplyContext(
         trace: payload.trace,
         source: payload.source
     }),
-    loadRecentLookupContext: (payload) => bot.getRecentLookupContextForPrompt(payload),
     loadRecentConversationHistory: (payload) => bot.getConversationHistoryForPrompt(payload)
   });
   const memorySlice = continuity.memorySlice;
@@ -432,7 +430,6 @@ export async function buildReplyContext(
   const gifsConfigured = Boolean(bot.gifs?.isConfigured?.());
   const webSearch: ReplyWebSearchState = bot.buildWebSearchContext(settings, message.content);
   const browserBrowse = bot.buildBrowserBrowseContext(settings);
-  const recentWebLookups = continuity.recentWebLookups;
   const recentConversationHistory = continuity.recentConversationHistory;
   const memoryLookup = bot.buildMemoryLookupContext({ settings });
   const videoContext = await bot.buildVideoReplyContext({
@@ -566,7 +563,6 @@ export async function buildReplyContext(
       musicDisambiguation
     },
     recentConversationHistory,
-    recentWebLookups,
     screenShare: screenShareCapability,
     videoContext,
     channelMode: isReplyChannel ? "reply_channel" : "other_channel",
@@ -597,7 +593,7 @@ export async function buildReplyContext(
     isReplyChannel, replyEagerness, reactionEmojiOptions, source, performance,
     memorySlice, replyMediaMemoryFacts, attachmentImageInputs, imageBudget, videoBudget,
     mediaCapabilities, simpleImageCapabilityReady, complexImageCapabilityReady, imageCapabilityReady,
-    videoCapabilityReady, gifBudget, gifsConfigured, webSearch, browserBrowse, recentConversationHistory, recentWebLookups, memoryLookup,
+    videoCapabilityReady, gifBudget, gifsConfigured, webSearch, browserBrowse, recentConversationHistory, memoryLookup,
     videoContext, modelImageInputs, imageLookup, replyTrace, screenShareCapability,
     activeVoiceSession, inVoiceChannelNow, activeVoiceParticipantRoster, musicState, musicDisambiguation,
     systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture, replyPrompts
@@ -1070,18 +1066,6 @@ export async function executeReplyLlm(
   usedMemoryLookupFollowup = followup.usedMemoryLookup;
   usedImageLookupFollowup = followup.usedImageLookup;
   replyPrompts = buildLoggedReplyPrompts(replyPromptCapture, followup.followupSteps);
-
-  if (usedWebSearchFollowup && webSearch.used && Array.isArray(webSearch.results) && webSearch.results.length) {
-    bot.rememberRecentLookupContext({
-      guildId: message.guildId,
-      channelId: message.channelId,
-      userId: message.author.id,
-      source,
-      query: webSearch.query || replyDirective.webSearchQuery,
-      provider: webSearch.providerUsed || null,
-      results: webSearch.results
-    });
-  }
 
   if (followup.regenerated) {
     const followupAutomationHandled = await bot.maybeHandleStructuredAutomationIntent({

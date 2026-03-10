@@ -1,8 +1,7 @@
 import {
   formatBehaviorMemoryFacts,
   formatConversationParticipantMemory,
-  formatConversationWindows,
-  formatRecentLookupContext
+  formatConversationWindows
 } from "../prompts/promptFormatters.ts";
 import { buildSingleTurnPromptLog } from "../promptLogging.ts";
 import {
@@ -365,8 +364,7 @@ export class InstructionManager {
         relevantFacts: Array.isArray(factProfile?.relevantFacts) ? factProfile.relevantFacts : [],
         guidanceFacts: Array.isArray(factProfile?.guidanceFacts) ? factProfile.guidanceFacts : [],
         behavioralFacts: [],
-        recentConversationHistory: [],
-        recentWebLookups: []
+        recentConversationHistory: []
       };
     }
 
@@ -430,17 +428,6 @@ export class InstructionManager {
               session,
               userId: normalizedUserId
             })
-          : null,
-      loadRecentLookupContext:
-        this.store.searchLookupContext
-          ? (payload) =>
-            (this.store.searchLookupContext?.({
-              guildId: String(payload.guildId || "").trim(),
-              channelId: String(payload.channelId || "").trim() || null,
-              queryText: String(payload.queryText || ""),
-              limit: Number(payload.limit) || undefined,
-              maxAgeHours: Number(payload.maxAgeHours) || undefined
-            }) || [])
           : null,
       loadRecentConversationHistory
     });
@@ -519,9 +506,6 @@ export class InstructionManager {
           : 0,
         guidanceFactCount: guidanceFacts.length,
         behavioralFactCount: Array.isArray(behavioralFacts) ? behavioralFacts.length : 0,
-        recentWebLookupCount: Array.isArray(continuity.recentWebLookups)
-          ? continuity.recentWebLookups.length
-          : 0,
         recentConversationHistoryCount: Array.isArray(continuity.recentConversationHistory)
           ? continuity.recentConversationHistory.length
           : 0
@@ -539,8 +523,7 @@ export class InstructionManager {
       behavioralFacts: Array.isArray(behavioralFacts) ? behavioralFacts : [],
       recentConversationHistory: Array.isArray(continuity.recentConversationHistory)
         ? continuity.recentConversationHistory
-        : [],
-      recentWebLookups: Array.isArray(continuity.recentWebLookups) ? continuity.recentWebLookups : []
+        : []
     };
   }
 
@@ -739,7 +722,6 @@ export class InstructionManager {
       loreFacts: toPromptRecordRows(memorySlice?.loreFacts)
     });
     const recentConversationHistory = formatConversationWindows(memorySlice?.recentConversationHistory);
-    const recentWebLookups = formatRecentLookupContext(memorySlice?.recentWebLookups);
     const guidanceFacts = formatBehaviorMemoryFacts(memorySlice?.guidanceFacts, 8);
     const behavioralFacts = formatBehaviorMemoryFacts(memorySlice?.behavioralFacts, 8);
     const activeVoiceCommandState = this.host.ensureVoiceCommandState(session);
@@ -802,16 +784,6 @@ export class InstructionManager {
           "Recent conversation continuity:",
           "- These windows come from persisted shared text/voice history.",
           recentConversationHistory
-        ].join("\n")
-      );
-    }
-
-    if (Array.isArray(memorySlice?.recentWebLookups) && memorySlice.recentWebLookups.length > 0) {
-      sections.push(
-        [
-          "Recent lookup continuity:",
-          "- These are recent successful web searches from the shared text/voice conversation.",
-          recentWebLookups
         ].join("\n")
       );
     }

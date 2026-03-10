@@ -2,9 +2,7 @@ import { emptyFactProfileSlice, normalizeFactProfileSlice } from "./memorySlice.
 import { getMemorySettings } from "../settings/agentStack.ts";
 import {
   CONVERSATION_HISTORY_PROMPT_LIMIT,
-  CONVERSATION_HISTORY_PROMPT_MAX_AGE_HOURS,
-  LOOKUP_CONTEXT_PROMPT_LIMIT,
-  LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS
+  CONVERSATION_HISTORY_PROMPT_MAX_AGE_HOURS
 } from "./replyPipelineShared.ts";
 
 export type ConversationContinuityPayload = {
@@ -36,7 +34,6 @@ type ContinuityLoaderArgs = {
   trace?: Record<string, unknown>;
   recentMessages?: Array<Record<string, unknown>>;
   loadFactProfile?: ((payload: ConversationContinuityPayload) => unknown) | null;
-  loadRecentLookupContext?: ((payload: ConversationLookupPayload) => unknown) | null;
   loadRecentConversationHistory?: ((payload: ConversationLookupPayload) => unknown) | null;
 };
 
@@ -136,7 +133,6 @@ export async function loadConversationContinuityContext({
   trace = {},
   recentMessages = [],
   loadFactProfile = null,
-  loadRecentLookupContext = null,
   loadRecentConversationHistory = null
 }: ContinuityLoaderArgs) {
   const normalizedGuildId = String(guildId || "").trim();
@@ -161,19 +157,6 @@ export async function loadConversationContinuityContext({
     loadFactProfile
   }));
 
-  const recentWebLookupsPromise =
-    normalizedGuildId &&
-    normalizedQueryText &&
-    typeof loadRecentLookupContext === "function"
-      ? Promise.resolve(loadRecentLookupContext({
-        guildId: normalizedGuildId,
-        channelId: normalizedChannelId,
-        queryText: normalizedQueryText,
-        limit: LOOKUP_CONTEXT_PROMPT_LIMIT,
-        maxAgeHours: LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS
-      }))
-      : Promise.resolve([]);
-
   const recentConversationHistoryPromise =
     normalizedGuildId &&
     normalizedQueryText &&
@@ -187,12 +170,10 @@ export async function loadConversationContinuityContext({
       }))
       : Promise.resolve([]);
 
-  const [memorySlice, recentWebLookupsRaw, recentConversationHistoryRaw] = await Promise.all([
+  const [memorySlice, recentConversationHistoryRaw] = await Promise.all([
     memorySlicePromise,
-    recentWebLookupsPromise,
     recentConversationHistoryPromise
   ]);
-  const recentWebLookups = Array.isArray(recentWebLookupsRaw) ? recentWebLookupsRaw : [];
   const recentConversationHistory = filterConversationWindowsAgainstRecentMessages(
     recentConversationHistoryRaw,
     recentMessages
@@ -200,7 +181,6 @@ export async function loadConversationContinuityContext({
 
   return {
     memorySlice,
-    recentWebLookups,
     recentConversationHistory
   };
 }

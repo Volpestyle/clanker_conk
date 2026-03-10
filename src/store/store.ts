@@ -1,5 +1,3 @@
-export const LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL_DEFAULT = 120;
-export const LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT = 5;
 import fs from "node:fs";
 import path from "node:path";
 import { Database } from "bun:sqlite";
@@ -27,7 +25,7 @@ import {
   upsertMessageVectorNative
 } from "./storeMessages.ts";
 import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, getRecentActions, getRecentMemoryReflections, deleteReflectionRun, getRecentBrowserSessions, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted } from "./storeActionLog.ts";
-import { wasLinkSharedSince, recordSharedLink, pruneLookupContext, recordLookupContext, searchLookupContext } from "./storeLookups.ts";
+import { wasLinkSharedSince, recordSharedLink } from "./storeLookups.ts";
 import { getRecentVoiceSessions, getVoiceSessionEvents } from "./storeVoice.ts";
 import { getReplyPerformanceStats, getStats } from "./storeStats.ts";
 import { createAutomation, getAutomationById, countAutomations, listAutomations, getMostRecentAutomations, findAutomationsByQuery, setAutomationStatus, claimDueAutomations, finalizeAutomationRun, recordAutomationRun, getAutomationRuns } from "./storeAutomation.ts";
@@ -173,20 +171,6 @@ export class Store {
         source TEXT
       );
 
-      CREATE TABLE IF NOT EXISTS lookup_context (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        created_at TEXT NOT NULL,
-        expires_at TEXT NOT NULL,
-        guild_id TEXT NOT NULL,
-        channel_id TEXT,
-        user_id TEXT,
-        source TEXT,
-        query TEXT NOT NULL,
-        provider TEXT,
-        results_json TEXT NOT NULL,
-        match_text TEXT NOT NULL
-      );
-
       CREATE TABLE IF NOT EXISTS automations (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         created_at TEXT NOT NULL,
@@ -234,8 +218,6 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_memory_vectors_native_model_dims ON memory_fact_vectors_native(model, dims);
       CREATE INDEX IF NOT EXISTS idx_message_vectors_native_model_dims ON message_vectors_native(model, dims);
       CREATE INDEX IF NOT EXISTS idx_shared_links_last_shared_at ON shared_links(last_shared_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_lookup_context_scope_time ON lookup_context(guild_id, channel_id, created_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_lookup_context_expires ON lookup_context(expires_at);
       CREATE INDEX IF NOT EXISTS idx_automations_scope_status_next ON automations(guild_id, status, next_run_at);
       CREATE INDEX IF NOT EXISTS idx_automations_running_next ON automations(is_running, next_run_at);
       CREATE INDEX IF NOT EXISTS idx_automations_match_text ON automations(guild_id, match_text);
@@ -437,40 +419,6 @@ export class Store {
 
   recordSharedLink(opts: { url; source? }) {
     return recordSharedLink(this, opts);
-  }
-
-  pruneLookupContext(opts: {
-    now?: string;
-    guildId?: string | null;
-    channelId?: string | null;
-    maxRowsPerChannel?: number;
-  } = {}) {
-    return pruneLookupContext(this, opts);
-  }
-
-  recordLookupContext(opts: {
-    guildId;
-    channelId?;
-    userId?;
-    source?;
-    query;
-    provider?;
-    results?;
-    ttlHours?;
-    maxResults?;
-    maxRowsPerChannel?;
-  }) {
-    return recordLookupContext(this, opts);
-  }
-
-  searchLookupContext(opts: {
-    guildId;
-    channelId?;
-    queryText?;
-    limit?;
-    maxAgeHours?;
-  }) {
-    return searchLookupContext(this, opts);
   }
 
   getRecentVoiceSessions(limit = 3, opts: { sinceIso?: string | null } = {}) {

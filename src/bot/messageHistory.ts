@@ -5,16 +5,11 @@ import {
   CONVERSATION_HISTORY_PROMPT_LIMIT,
   CONVERSATION_HISTORY_PROMPT_MAX_AGE_HOURS,
   CONVERSATION_HISTORY_PROMPT_WINDOW_AFTER,
-  CONVERSATION_HISTORY_PROMPT_WINDOW_BEFORE,
-  LOOKUP_CONTEXT_PROMPT_LIMIT,
-  LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS
+  CONVERSATION_HISTORY_PROMPT_WINDOW_BEFORE
 } from "./replyPipelineShared.ts";
 
 const IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp|bmp|heic|heif)$/i;
 const MAX_IMAGE_INPUTS = 3;
-const LOOKUP_CONTEXT_TTL_HOURS = 48;
-const LOOKUP_CONTEXT_MAX_RESULTS = 5;
-const LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL = 120;
 
 type HistoryAttachment = {
   url?: string;
@@ -103,27 +98,14 @@ type HistoryUser = {
   globalName?: string | null;
 };
 
-type LookupContextOptions = {
+type ConversationHistoryOptions = {
   guildId?: string | null;
   channelId?: string | null;
   queryText?: string;
   limit?: number;
   maxAgeHours?: number;
-};
-
-type ConversationHistoryOptions = LookupContextOptions & {
   before?: number;
   after?: number;
-};
-
-type RememberLookupContextOptions = {
-  guildId?: string | null;
-  channelId?: string | null;
-  userId?: string | null;
-  source?: string;
-  query?: string;
-  provider?: string | null;
-  results?: unknown[];
 };
 
 function getBotUserId(ctx: BotContext) {
@@ -298,44 +280,6 @@ export async function syncMessageSnapshot(
   });
 }
 
-export function getRecentLookupContextForPrompt(
-  ctx: BotContext,
-  {
-    guildId = null,
-    channelId = null,
-    queryText = "",
-    limit = LOOKUP_CONTEXT_PROMPT_LIMIT,
-    maxAgeHours = LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS
-  }: LookupContextOptions = {}
-) {
-  if (!ctx.store || typeof ctx.store.searchLookupContext !== "function") return [];
-  const normalizedGuildId = String(guildId || "").trim();
-  if (!normalizedGuildId) return [];
-  const normalizedChannelId = String(channelId || "").trim() || null;
-  const normalizedQuery = String(queryText || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 280);
-  try {
-    return ctx.store.searchLookupContext({
-      guildId: normalizedGuildId,
-      channelId: normalizedChannelId,
-      queryText: normalizedQuery,
-      limit,
-      maxAgeHours
-    });
-  } catch (error) {
-    ctx.store.logAction({
-      kind: "bot_error",
-      guildId: normalizedGuildId,
-      channelId: normalizedChannelId,
-      userId: getBotUserId(ctx) || null,
-      content: `lookup_context_search: ${String(error?.message || error)}`
-    });
-    return [];
-  }
-}
-
 export async function getConversationHistoryForPrompt(
   ctx: BotContext,
   {
@@ -397,59 +341,6 @@ export async function getConversationHistoryForPrompt(
       // Logging must not mask the original prompt-context fallback path.
     }
     return [];
-  }
-}
-
-export function rememberRecentLookupContext(
-  ctx: BotContext,
-  {
-    guildId = null,
-    channelId = null,
-    userId = null,
-    source = "reply_web_lookup",
-    query = "",
-    provider = null,
-    results = []
-  }: RememberLookupContextOptions = {}
-) {
-  if (!ctx.store || typeof ctx.store.recordLookupContext !== "function") return false;
-  const normalizedGuildId = String(guildId || "").trim();
-  if (!normalizedGuildId) return false;
-  const normalizedChannelId = String(channelId || "").trim() || null;
-  const normalizedUserId = String(userId || "").trim() || null;
-  const normalizedSource = String(source || "reply_web_lookup")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 120);
-  const normalizedQuery = String(query || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 220);
-  if (!normalizedQuery) return false;
-  const normalizedResults = (Array.isArray(results) ? results : []).slice(0, LOOKUP_CONTEXT_MAX_RESULTS);
-  if (!normalizedResults.length) return false;
-  try {
-    return ctx.store.recordLookupContext({
-      guildId: normalizedGuildId,
-      channelId: normalizedChannelId,
-      userId: normalizedUserId,
-      source: normalizedSource,
-      query: normalizedQuery,
-      provider,
-      results: normalizedResults,
-      ttlHours: LOOKUP_CONTEXT_TTL_HOURS,
-      maxResults: LOOKUP_CONTEXT_MAX_RESULTS,
-      maxRowsPerChannel: LOOKUP_CONTEXT_MAX_ROWS_PER_CHANNEL
-    });
-  } catch (error) {
-    ctx.store.logAction({
-      kind: "bot_error",
-      guildId: normalizedGuildId,
-      channelId: normalizedChannelId,
-      userId: getBotUserId(ctx) || null,
-      content: `lookup_context_record: ${String(error?.message || error)}`
-    });
-    return false;
   }
 }
 

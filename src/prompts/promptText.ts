@@ -16,7 +16,6 @@ import {
   formatEmojiChoices,
   formatDiscoveryFindings,
   formatWebSearchFindings,
-  formatRecentLookupContext,
   formatVideoFindings,
   formatMemoryFacts,
   formatMemoryLookupResults,
@@ -94,7 +93,6 @@ export function buildReplyPrompt({
   webSearch = null,
   browserBrowse = null,
   recentConversationHistory = [],
-  recentWebLookups = [],
   memoryLookup = null,
   imageLookup = null,
   allowWebSearchDirective = false,
@@ -207,14 +205,6 @@ export function buildReplyPrompt({
       parts.push(formatImageLookupResults(imageLookup.results));
       parts.push("Use this visual context directly and avoid guessing details not present.");
     }
-  }
-
-  if (recentWebLookups?.length) {
-    parts.push("=== RECENT LOOKUP MEMORY ===");
-    parts.push("Recent successful web searches (may be stale):");
-    parts.push(formatRecentLookupContext(recentWebLookups));
-    parts.push("If the user asks what source you used earlier, reference these cached domains/URLs directly.");
-    parts.push("Use this as background context only. If freshness matters, run a new live web lookup.");
   }
 
   if (emojiHints?.length) {

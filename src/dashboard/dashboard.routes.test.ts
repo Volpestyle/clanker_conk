@@ -316,23 +316,7 @@ test("dashboard runtime snapshot route returns the real turn-scoped memory slice
         }
       }
     },
-    async ({ baseUrl, store }) => {
-      store.recordLookupContext({
-        guildId: "guild-1",
-        channelId: "chan-9",
-        userId: "user-1",
-        source: "web_search",
-        query: "best ramen downtown",
-        provider: "brave",
-        results: [
-          {
-            title: "Ramen Index",
-            url: "https://ramen.example.com",
-            domain: "ramen.example.com"
-          }
-        ]
-      });
-
+    async ({ baseUrl }) => {
       const response = await fetch(`${baseUrl}/api/memory/runtime-snapshot`, {
         method: "POST",
         headers: {
@@ -365,7 +349,6 @@ test("dashboard runtime snapshot route returns the real turn-scoped memory slice
         json.promptContext.recentConversationHistory[0]?.messages?.[0]?.content,
         "We were comparing ramen spots downtown."
       );
-      assert.equal(json.promptContext.recentWebLookups[0]?.query, "best ramen downtown");
       assert.equal(json.activeVoiceSession.sessionId, "session-9");
       assert.deepEqual(factProfileCalls[0]?.participantIds, ["user-1", "user-2"]);
       assert.deepEqual(behavioralCalls[0]?.participantIds, ["user-1", "user-2"]);

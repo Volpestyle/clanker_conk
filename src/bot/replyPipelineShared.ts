@@ -8,8 +8,6 @@ import {
 
 export const UNICODE_REACTIONS = ["🔥", "💀", "😂", "👀", "🤝", "🫡", "😮", "🧠", "💯", "😭"];
 export const MAX_MODEL_IMAGE_INPUTS = 8;
-export const LOOKUP_CONTEXT_PROMPT_LIMIT = 4;
-export const LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS = 72;
 export const CONVERSATION_HISTORY_PROMPT_LIMIT = 2;
 export const CONVERSATION_HISTORY_PROMPT_MAX_AGE_HOURS = 12;
 export const CONVERSATION_HISTORY_PROMPT_WINDOW_BEFORE = 1;

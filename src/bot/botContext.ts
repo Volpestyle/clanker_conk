@@ -104,9 +104,7 @@ export interface BudgetContext extends BotContext {
 type LoadFactProfileFn = typeof import("./memorySlice.ts").loadFactProfile;
 type BuildMediaMemoryFactsFn = typeof import("./memorySlice.ts").buildMediaMemoryFacts;
 type LoadRelevantMemoryFactsFn = typeof import("./memorySlice.ts").loadRelevantMemoryFacts;
-type GetRecentLookupContextForPromptFn = typeof import("./messageHistory.ts").getRecentLookupContextForPrompt;
 type GetConversationHistoryForPromptFn = typeof import("./messageHistory.ts").getConversationHistoryForPrompt;
-type RememberRecentLookupContextFn = typeof import("./messageHistory.ts").rememberRecentLookupContext;
 type GetImageInputsFn = typeof import("./messageHistory.ts").getImageInputs;
 type GetImageBudgetStateFn = typeof import("./budgetTracking.ts").getImageBudgetState;
 type GetVideoGenerationBudgetStateFn = typeof import("./budgetTracking.ts").getVideoGenerationBudgetState;
@@ -212,7 +210,6 @@ export interface ReplyPipelineRuntime extends BotContext, Pick<ClankerBot, Reply
   isReplyChannel: IsReplyChannelRuntimeFn;
   shouldAttemptReplyDecision: ShouldAttemptReplyDecisionRuntimeFn;
   loadFactProfile: StripFirstArg<LoadFactProfileFn>;
-  getRecentLookupContextForPrompt: StripFirstArg<GetRecentLookupContextForPromptFn>;
   getConversationHistoryForPrompt: StripFirstArg<GetConversationHistoryForPromptFn>;
   buildMediaMemoryFacts: BuildMediaMemoryFactsFn;
   getImageInputs: (message: unknown) => ReturnType<GetImageInputsFn>;
@@ -232,7 +229,6 @@ export interface ReplyPipelineRuntime extends BotContext, Pick<ClankerBot, Reply
   buildSubAgentSessionsRuntime: StripFirstArg<BuildSubAgentSessionsRuntimeFn>;
   runModelRequestedImageLookup: RunModelRequestedImageLookupRuntimeFn;
   mergeImageInputs: MergeImageInputsFn;
-  rememberRecentLookupContext: StripFirstArg<RememberRecentLookupContextFn>;
   maybeHandleScreenShareOfferIntent: MaybeHandleScreenShareOfferIntentRuntimeFn;
   resolveMediaAttachment: StripFirstArg<ResolveMediaAttachmentFn>;
   maybeAttachReplyGif: StripFirstArg<MaybeAttachReplyGifFn>;
@@ -264,10 +260,10 @@ export interface VoiceReplyRuntime extends BotContext {
       inFlightAcceptedBrainTurn?: InFlightAcceptedBrainTurn | null;
     } | null) => {
       playbackState: "playing" | "paused" | "stopped" | "idle";
-      currentTrack: { title: string; artists: string[] } | null;
-      lastTrack: { title: string; artists: string[] } | null;
+      currentTrack: { id: string | null; title: string; artists: string[] } | null;
+      lastTrack: { id: string | null; title: string; artists: string[] } | null;
       queueLength: number;
-      upcomingTracks: Array<{ title: string; artist: string | null }>;
+      upcomingTracks: Array<{ id: string | null; title: string; artist: string | null }>;
       lastAction: "play_now" | "stop" | "pause" | "resume" | "skip" | null;
       lastQuery: string | null;
     } | null;
@@ -341,8 +337,6 @@ export interface VoiceReplyRuntime extends BotContext {
   loadFactProfile: StripFirstArg<LoadFactProfileFn>;
   buildWebSearchContext: StripFirstArg<BuildWebSearchContextFn>;
   loadRecentConversationHistory: StripFirstArg<GetConversationHistoryForPromptFn>;
-  loadRecentLookupContext: StripFirstArg<GetRecentLookupContextForPromptFn>;
-  rememberRecentLookupContext: StripFirstArg<RememberRecentLookupContextFn>;
   getVoiceScreenShareCapability: StripFirstArg<GetVoiceScreenShareCapabilityFn>;
   offerVoiceScreenShareLink: StripFirstArg<OfferVoiceScreenShareLinkFn>;
   runModelRequestedBrowserBrowse: StripFirstArg<RunModelRequestedBrowserBrowseFn>;

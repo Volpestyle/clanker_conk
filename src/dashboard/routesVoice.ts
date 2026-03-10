@@ -99,47 +99,6 @@ function mapConversationWindowRow(row: unknown) {
   };
 }
 
-function mapLookupResultRow(row: unknown) {
-  const record = toRecord(row);
-  const title = String(record.title || "").trim();
-  const url = String(record.url || "").trim();
-  if (!title && !url) return null;
-  return {
-    title: title || null,
-    url: url || null,
-    domain: String(record.domain || "").trim() || null,
-    snippet: String(record.snippet || "").trim() || null,
-    pageSummary: String(record.pageSummary || "").trim() || null
-  };
-}
-
-function mapRecentLookupRow(row: unknown) {
-  const record = toRecord(row);
-  const query = String(record.query || "").trim();
-  const results = (Array.isArray(record.results) ? record.results : [])
-    .map((entry) => mapLookupResultRow(entry))
-    .filter((entry) => entry !== null);
-  if (!query && !results.length) return null;
-  const ageMinutes = Number(record.ageMinutes);
-  return {
-    id: Number.isInteger(Number(record.id)) ? Number(record.id) : null,
-    createdAt: String(record.createdAt || record.created_at || "").trim() || null,
-    channelId: String(record.channelId || record.channel_id || "").trim() || null,
-    userId: String(record.userId || record.user_id || "").trim() || null,
-    source: String(record.source || "").trim() || null,
-    query: query || null,
-    provider: String(record.provider || "").trim() || null,
-    ageMinutes: Number.isFinite(ageMinutes) ? ageMinutes : null,
-    results
-  };
-}
-
-function normalizeDashboardLookupRows(rows: unknown) {
-  return (Array.isArray(rows) ? rows : [])
-    .map((row) => mapRecentLookupRow(row))
-    .filter((row) => row !== null);
-}
-
 function getActiveVoiceSessionRecord(bot: DashboardBot, guildId: string) {
   const normalizedGuildId = String(guildId || "").trim();
   if (!normalizedGuildId) return null;
@@ -785,17 +744,6 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
           })
         : [];
 
-    const recentWebLookups =
-      queryText && typeof store.searchLookupContext === "function"
-        ? store.searchLookupContext({
-            guildId,
-            channelId,
-            queryText,
-            limit: 4,
-            maxAgeHours: 72
-          })
-        : [];
-
     return c.json({
       guildId,
       channelId,
@@ -812,8 +760,7 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
         loreFactCount: Array.isArray(factProfile.loreFacts) ? factProfile.loreFacts.length : 0,
         guidanceFactCount: Array.isArray(factProfile.guidanceFacts) ? factProfile.guidanceFacts.length : 0,
         behavioralFactCount: Array.isArray(behavioralFacts) ? behavioralFacts.length : 0,
-        conversationWindowCount: Array.isArray(recentConversationHistory) ? recentConversationHistory.length : 0,
-        recentLookupCount: Array.isArray(recentWebLookups) ? recentWebLookups.length : 0
+        conversationWindowCount: Array.isArray(recentConversationHistory) ? recentConversationHistory.length : 0
       },
       slice: {
         participantProfiles: (Array.isArray(factProfile.participantProfiles) ? factProfile.participantProfiles : [])
@@ -836,8 +783,7 @@ export function attachVoiceRoutes(app: DashboardApp, deps: VoiceRouteDeps) {
       promptContext: {
         recentConversationHistory: (Array.isArray(recentConversationHistory) ? recentConversationHistory : [])
           .map((row) => mapConversationWindowRow(row))
-          .filter((row): row is NonNullable<ReturnType<typeof mapConversationWindowRow>> => row !== null),
-        recentWebLookups: normalizeDashboardLookupRows(recentWebLookups)
+          .filter((row): row is NonNullable<ReturnType<typeof mapConversationWindowRow>> => row !== null)
       },
       activeVoiceSession
     });

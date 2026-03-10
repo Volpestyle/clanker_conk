@@ -276,34 +276,6 @@ export function formatWebSearchFindings(webSearch) {
     .join("\n");
 }
 
-export function formatRecentLookupContext(recentWebLookups) {
-  const rows = Array.isArray(recentWebLookups) ? recentWebLookups : [];
-  if (!rows.length) return "(no recent lookup cache)";
-
-  return rows
-    .slice(0, 6)
-    .map((item, index) => {
-      const query = String(item?.query || "").trim() || "unknown query";
-      const provider = String(item?.provider || "").trim();
-      const ageMinutes = Number(item?.ageMinutes);
-      const ageLabel = Number.isFinite(ageMinutes)
-        ? ageMinutes < 60
-          ? `${Math.max(0, Math.round(ageMinutes))}m ago`
-          : `${Math.max(1, Math.round(ageMinutes / 60))}h ago`
-        : "recent";
-      const sourceHints = (Array.isArray(item?.results) ? item.results : [])
-        .slice(0, 3)
-        .map((row) => String(row?.domain || row?.url || "").trim())
-        .filter(Boolean);
-      const sourceLabel = sourceHints.length
-        ? ` | sources: ${sourceHints.join(", ")}`
-        : "";
-      const providerLabel = provider ? ` | provider: ${provider}` : "";
-      return `- [R${index + 1}] "${query}" (${ageLabel})${providerLabel}${sourceLabel}`;
-    })
-    .join("\n");
-}
-
 export function formatOpenArticleCandidates(candidates) {
   const rows = Array.isArray(candidates) ? candidates : [];
   if (!rows.length) return "(no cached lookup articles available)";

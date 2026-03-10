@@ -286,7 +286,6 @@ function buildTextPrompt({
   webSearch = buildWebSearchContext(webSearchEnabled),
   browserBrowse = buildBrowserBrowseContext(browserEnabled),
   recentConversationHistory = [],
-  recentWebLookups = [],
   memoryLookup = buildMemoryLookupContext(memoryEnabled),
   imageLookup = buildImageLookupContext(false),
   allowWebSearchDirective = webSearchEnabled,
@@ -316,7 +315,6 @@ function buildTextPrompt({
   webSearch?: Record<string, unknown>;
   browserBrowse?: Record<string, unknown>;
   recentConversationHistory?: Array<Record<string, unknown>>;
-  recentWebLookups?: Array<Record<string, unknown>>;
   memoryLookup?: Record<string, unknown>;
   imageLookup?: Record<string, unknown>;
   allowWebSearchDirective?: boolean;
@@ -357,7 +355,6 @@ function buildTextPrompt({
       webSearch,
       browserBrowse,
       recentConversationHistory,
-      recentWebLookups,
       memoryLookup,
       imageLookup,
       allowWebSearchDirective,
@@ -538,7 +535,6 @@ function buildVoicePrompt(sc: VoiceLiveScenario): PromptEnvelope {
       soundboardCandidates: [],
       webSearch: null,
       recentConversationHistory: buildRecentConversationHistory(sc.timeline),
-      recentWebLookups: [],
       openArticleCandidates: [],
       openedArticle: null,
       allowWebSearchToolCall: false,

@@ -12,11 +12,9 @@ import {
   composeMessageContentForHistory,
   getConversationHistoryForPrompt,
   getImageInputs,
-  getRecentLookupContextForPrompt,
   isLikelyImageUrl,
   parseHistoryImageReference,
   recordReactionHistoryEvent,
-  rememberRecentLookupContext,
   syncMessageSnapshot
 } from "./messageHistory.ts";
 
@@ -222,41 +220,6 @@ test("image reference helpers detect format-param images and decode filenames", 
       contentType: "image/png"
     }
   );
-});
-
-test("lookup context helpers round-trip normalized recent search context", async () => {
-  await withTempHistoryContext(async (ctx) => {
-    const saved = rememberRecentLookupContext(ctx, {
-      guildId: "guild-1",
-      channelId: "chan-1",
-      userId: "user-1",
-      source: " reply_web_lookup ",
-      query: "   latest bun release notes   ",
-      provider: "brave",
-      results: [
-        { title: "one", url: "https://bun.sh/1", domain: "bun.sh", snippet: "1" },
-        { title: "two", url: "https://bun.sh/2", domain: "bun.sh", snippet: "2" },
-        { title: "three", url: "https://bun.sh/3", domain: "bun.sh", snippet: "3" },
-        { title: "four", url: "https://bun.sh/4", domain: "bun.sh", snippet: "4" },
-        { title: "five", url: "https://bun.sh/5", domain: "bun.sh", snippet: "5" },
-        { title: "six", url: "https://bun.sh/6", domain: "bun.sh", snippet: "6" }
-      ]
-    });
-
-    assert.equal(saved, true);
-
-    const rows = getRecentLookupContextForPrompt(ctx, {
-      guildId: "guild-1",
-      channelId: "chan-1",
-      queryText: "what are the current bun release notes",
-      limit: 4
-    });
-
-    assert.equal(rows.length, 1);
-    assert.equal(rows[0]?.query, "latest bun release notes");
-    assert.equal(rows[0]?.results?.length, 5);
-    assert.equal(rows[0]?.results?.[0]?.domain, "bun.sh");
-  });
 });
 
 test("getConversationHistoryForPrompt searches normalized conversation windows", async () => {

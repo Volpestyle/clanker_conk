@@ -850,7 +850,7 @@ const rows = store.db
     `SELECT id, fact_type
          FROM memory_facts
          WHERE ${where.join(" AND ")}
-         ORDER BY updated_at DESC
+         ORDER BY confidence DESC, updated_at DESC
          LIMIT 1000`
   )
   .all(...args);

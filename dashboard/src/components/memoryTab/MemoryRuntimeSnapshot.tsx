@@ -41,26 +41,6 @@ interface ConversationWindow {
   messages?: RelevantMessage[];
 }
 
-interface LookupResultRow {
-  title?: string | null;
-  url?: string | null;
-  domain?: string | null;
-  snippet?: string | null;
-  pageSummary?: string | null;
-}
-
-interface LookupRow {
-  id?: number | null;
-  createdAt?: string | null;
-  channelId?: string | null;
-  userId?: string | null;
-  source?: string | null;
-  query?: string | null;
-  provider?: string | null;
-  ageMinutes?: number | null;
-  results?: LookupResultRow[];
-}
-
 interface RuntimeSnapshotResponse {
   guildId: string;
   channelId: string | null;
@@ -82,7 +62,6 @@ interface RuntimeSnapshotResponse {
     guidanceFactCount: number;
     behavioralFactCount: number;
     conversationWindowCount: number;
-    recentLookupCount: number;
   };
   slice: {
     participantProfiles: ParticipantProfile[];
@@ -95,7 +74,6 @@ interface RuntimeSnapshotResponse {
   };
   promptContext: {
     recentConversationHistory: ConversationWindow[];
-    recentWebLookups: LookupRow[];
   };
   activeVoiceSession: {
     sessionId?: string | null;
@@ -184,40 +162,6 @@ function ParticipantProfileList({ profiles }: { profiles: ParticipantProfile[] }
   );
 }
 
-function RecentLookupList({ rows }: { rows: LookupRow[] }) {
-  if (!rows.length) {
-    return <p className="memory-reflection-empty">No recent lookup cache rows matched this query.</p>;
-  }
-
-  return (
-    <div className="memory-style-audit-list">
-      {rows.map((row, index) => (
-        <article key={`${String(row.id || "lookup")}:${index}`} className="memory-style-audit-card">
-          <div className="memory-style-audit-meta">
-            <strong>{row.query || "unknown query"}</strong>
-            <span>{row.provider || "unknown provider"}</span>
-            <span>{row.ageMinutes != null ? `${row.ageMinutes}m ago` : formatTimestamp(row.createdAt)}</span>
-          </div>
-          <div className="memory-style-audit-detail">
-            {Array.isArray(row.results) && row.results.length > 0 ? (
-              <ul className="memory-style-note-list">
-                {row.results.slice(0, 4).map((result, resultIndex) => (
-                  <li key={`${String(result.url || result.title || "result")}:${resultIndex}`}>
-                    {result.title || result.url || "untitled result"}
-                    {result.domain ? ` (${result.domain})` : ""}
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <p className="memory-reflection-empty">No cached result rows.</p>
-            )}
-          </div>
-        </article>
-      ))}
-    </div>
-  );
-}
-
 export default function MemoryRuntimeSnapshot({
   guilds,
   notify
@@ -282,8 +226,7 @@ export default function MemoryRuntimeSnapshot({
 
       <p className="memory-reflection-copy">
         Preview the actual turn-scoped memory slice the bot would assemble for a reply. This uses the real participant
-        fact profiles, contextual behavioral retrieval, conversation recall, and recent lookup cache instead of
-        `memory/MEMORY.md`.
+        fact profiles, contextual behavioral retrieval, and conversation recall instead of `memory/MEMORY.md`.
       </p>
 
       <form className="memory-form" onSubmit={handleSubmit}>
@@ -362,7 +305,6 @@ export default function MemoryRuntimeSnapshot({
                 <div><span>Guidance</span><strong>{counts?.guidanceFactCount || 0}</strong></div>
                 <div><span>Behavioral</span><strong>{counts?.behavioralFactCount || 0}</strong></div>
                 <div><span>Conversation windows</span><strong>{counts?.conversationWindowCount || 0}</strong></div>
-                <div><span>Lookup cache rows</span><strong>{counts?.recentLookupCount || 0}</strong></div>
               </div>
             </div>
 
@@ -469,14 +411,6 @@ export default function MemoryRuntimeSnapshot({
             ) : (
               <p className="memory-reflection-empty">No conversation windows matched this snapshot.</p>
             )}
-          </section>
-
-          <section className="memory-style-section">
-            <div className="memory-style-section-head">
-              <h4>Recent Lookup Cache</h4>
-              <span className="memory-result-count">{result.promptContext.recentWebLookups.length}</span>
-            </div>
-            <RecentLookupList rows={result.promptContext.recentWebLookups} />
           </section>
 
           <section className="memory-style-section">

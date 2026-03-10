@@ -160,7 +160,6 @@ Important tables:
 - `memory_facts`
 - `memory_fact_vectors_native`
 - `shared_links`
-- `lookup_context`
 - `automations`
 - `automation_runs`
 - `response_triggers`

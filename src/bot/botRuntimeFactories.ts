@@ -40,9 +40,7 @@ import {
 import {
   composeMessageContentForHistory as composeMessageContentForHistoryForMessageHistory,
   getConversationHistoryForPrompt as getConversationHistoryForPromptForMessageHistory,
-  getImageInputs as getImageInputsForMessageHistory,
-  getRecentLookupContextForPrompt as getRecentLookupContextForPromptForMessageHistory,
-  rememberRecentLookupContext as rememberRecentLookupContextForMessageHistory
+  getImageInputs as getImageInputsForMessageHistory
 } from "./messageHistory.ts";
 import {
   buildMediaMemoryFacts as buildMediaMemoryFactsForMemorySlice,
@@ -445,8 +443,6 @@ export function buildReplyPipelineRuntime(
         windowSize: unsolicitedReplyContextWindow
       } as Parameters<typeof shouldAttemptReplyDecisionForReplyAdmission>[0]),
     loadFactProfile: (payload) => loadFactProfileForMemorySlice(botContext, payload),
-    getRecentLookupContextForPrompt: (payload) =>
-      getRecentLookupContextForPromptForMessageHistory(botContext, payload),
     getConversationHistoryForPrompt: (payload) =>
       getConversationHistoryForPromptForMessageHistory(botContext, payload),
     buildMediaMemoryFacts: (payload) => buildMediaMemoryFactsForMemorySlice(payload),
@@ -488,8 +484,6 @@ export function buildReplyPipelineRuntime(
     mergeImageInputs: (payload) => mergeImageInputsForImageAnalysis(payload),
     maybeHandleStructuredAutomationIntent: (payload) =>
       bot.maybeHandleStructuredAutomationIntent(payload),
-    rememberRecentLookupContext: (payload) =>
-      rememberRecentLookupContextForMessageHistory(botContext, payload),
     maybeApplyReplyReaction: (payload) => bot.maybeApplyReplyReaction(payload),
     logSkippedReply: (payload) => bot.logSkippedReply(payload),
     maybeHandleScreenShareOfferIntent: (payload) =>
@@ -532,10 +526,6 @@ export function buildVoiceReplyRuntime(bot: ClankerBot): VoiceReplyRuntime {
       buildWebSearchContextForBudgetTracking(budgetContext, settings, messageText),
     loadRecentConversationHistory: (payload) =>
       getConversationHistoryForPromptForMessageHistory(botContext, payload),
-    loadRecentLookupContext: (payload) =>
-      getRecentLookupContextForPromptForMessageHistory(botContext, payload),
-    rememberRecentLookupContext: (payload) =>
-      rememberRecentLookupContextForMessageHistory(botContext, payload),
     getVoiceScreenShareCapability: (payload) =>
       getVoiceScreenShareCapabilityForScreenShare(buildScreenShareRuntime(bot), payload),
     offerVoiceScreenShareLink: (payload) =>
