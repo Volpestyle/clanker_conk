@@ -8,7 +8,6 @@ type DirectiveScope = "lore" | "self" | "user";
 type DirectiveScopeConfig = {
   scope: DirectiveScope;
   subject: string | null;
-  prefix: string;
   defaultFactType: string;
   keep: number;
   traceSource: string;
@@ -19,11 +18,11 @@ const FACT_TYPE_LABELS = {
   profile: "Profile",
   relationship: "Relationship",
   project: "Project",
-  lore: "Lore",
-  self: "Self"
+  guidance: "Guidance",
+  behavioral: "Behavioral"
 };
 
-const ALLOWED_FACT_TYPES = new Set(["preference", "profile", "relationship", "project", "other", "general", "lore", "self"]);
+const ALLOWED_FACT_TYPES = new Set(["preference", "profile", "relationship", "project", "guidance", "behavioral", "other"]);
 // English-only fallback heuristics for filtering obvious instruction-like memory writes.
 // These are guardrails, not the primary memory decision-maker.
 const EN_MEMORY_BEHAVIOR_VERB_RE =
@@ -43,6 +42,8 @@ const EN_MEMORY_LINE_LABEL_RE = /^(?:memory line|remember line)\s*:\s*/i;
 const EN_MEMORY_LEADING_THAT_RE = /^that\s+/i;
 const EN_MEMORY_OUTPUT_RULE_RE = /(?:always|never)\s+(?:reply|respond|say|output)/;
 const EN_MEMORY_SECRET_RE = /(?:api key|token|password|credential|secret)/;
+const EN_MEMORY_STYLE_GUIDANCE_RE =
+  /\b(?:use|keep|be|stay|avoid|prefer)\b[\s\S]{0,80}\b(?:tone|style|voice|responses?|replies?|brief|concise|casual|formal|playful|direct)\b/i;
 
 export function normalizeStoredFactText(rawFact) {
   const compact = String(rawFact || "")
@@ -57,9 +58,7 @@ export function normalizeFactType(rawType) {
   const normalized = String(rawType || "")
     .trim()
     .toLowerCase();
-  if (!ALLOWED_FACT_TYPES.has(normalized)) return "other";
-  if (normalized === "general") return "other";
-  return normalized;
+  return ALLOWED_FACT_TYPES.has(normalized) ? normalized : "other";
 }
 
 export function normalizeEvidenceText(rawEvidence, sourceText) {
@@ -252,37 +251,11 @@ export function parseDailyEntryLineWithScope(line) {
 }
 
 export function normalizeLoreFactForDisplay(rawFact) {
-  let text = String(rawFact || "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!text) return "";
-
-  text = text
-    .replace(/^alias mapping:\s*/i, "memory line: ")
-    .replace(/^important tidbit:\s*/i, "memory line: ");
-
-  if (!/^memory line:\s*/i.test(text)) {
-    text = `Memory line: ${text}`;
-  }
-
-  return cleanFactForMemory(text);
+  return cleanFactForMemory(rawFact);
 }
 
 export function normalizeSelfFactForDisplay(rawFact) {
-  let text = String(rawFact || "")
-    .replace(/\s+/g, " ")
-    .trim();
-  if (!text) return "";
-
-  text = text
-    .replace(/^bot memory:\s*/i, "self memory: ")
-    .replace(/^identity memory:\s*/i, "self memory: ");
-
-  if (!/^self memory:\s*/i.test(text)) {
-    text = `Self memory: ${text}`;
-  }
-
-  return cleanFactForMemory(text);
+  return cleanFactForMemory(rawFact);
 }
 
 export function resolveDirectiveScopeConfig(scope: string | null | undefined): DirectiveScopeConfig {
@@ -294,8 +267,7 @@ export function resolveDirectiveScopeConfig(scope: string | null | undefined): D
     return {
       scope: "self",
       subject: SELF_SUBJECT,
-      prefix: "Self memory",
-      defaultFactType: "self",
+      defaultFactType: "other",
       keep: 120,
       traceSource: "memory_self_ingest"
     };
@@ -305,9 +277,8 @@ export function resolveDirectiveScopeConfig(scope: string | null | undefined): D
     return {
       scope: "user",
       subject: null,
-      prefix: "User memory",
-      defaultFactType: "preference",
-      keep: 80,
+      defaultFactType: "other",
+      keep: 120,
       traceSource: "memory_user_ingest"
     };
   }
@@ -315,8 +286,7 @@ export function resolveDirectiveScopeConfig(scope: string | null | undefined): D
   return {
     scope: "lore",
     subject: LORE_SUBJECT,
-    prefix: "Memory line",
-    defaultFactType: "lore",
+    defaultFactType: "other",
     keep: 120,
     traceSource: "memory_lore_ingest"
   };
@@ -341,6 +311,10 @@ export function normalizeMemoryLineInput(input) {
 }
 
 export function isInstructionLikeFactText(line) {
+  return isUnsafeMemoryFactText(line) || isBehavioralDirectiveLikeFactText(line);
+}
+
+export function isUnsafeMemoryFactText(line) {
   const text = String(line || "").toLowerCase();
   if (!text) return true;
   if (/\[\[[\s\S]*\]\]/.test(text)) return true;
@@ -348,9 +322,16 @@ export function isInstructionLikeFactText(line) {
   if (/(?:ignore|disregard|bypass)\s+(?:previous|prior|earlier)/.test(text)) return true;
   if (EN_MEMORY_OUTPUT_RULE_RE.test(text)) return true;
   if (EN_MEMORY_SECRET_RE.test(text)) return true;
+  return false;
+}
+
+export function isBehavioralDirectiveLikeFactText(line) {
+  const text = String(line || "").toLowerCase();
+  if (!text) return true;
   if (EN_MEMORY_MODAL_DIRECTIVE_RE.test(text)) return true;
   if (EN_MEMORY_IMPERATIVE_DIRECTIVE_RE.test(text)) return true;
   if (EN_MEMORY_BEHAVIOR_RULE_RE.test(text)) return true;
+  if (EN_MEMORY_STYLE_GUIDANCE_RE.test(text)) return true;
   if (EN_MEMORY_BEHAVIOR_VERB_RE.test(text) && EN_MEMORY_FUTURE_BEHAVIOR_RE.test(text)) return true;
   if (EN_MEMORY_ABUSIVE_LABEL_RE.test(text) && EN_MEMORY_BEHAVIOR_VERB_RE.test(text)) return true;
   return false;
@@ -398,7 +379,7 @@ export function cleanDailyEntryContent(content) {
     .trim();
   if (!text) return "";
   if (text.length < 2) return "";
-  return text.slice(0, 320);
+  return text.slice(0, 640);
 }
 
 export function sanitizeInline(value, maxLen = 120) {

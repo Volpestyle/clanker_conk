@@ -86,7 +86,9 @@ test("archiveOldFactsForSubject evicts contextual facts before core facts", asyn
     assert.equal(contextFirstFacts.filter((row) => row.fact_type === "profile" || row.fact_type === "relationship").length, 19);
     assert.equal(contextFirstFacts.filter((row) => row.fact_type === "preference").length, 1);
 
-    for (let i = 1; i <= 22; i += 1) {
+    // Create enough core facts to exceed the core cap (35) plus some contextual,
+    // so the eviction path must archive contextual first, then overflow into core.
+    for (let i = 1; i <= 38; i += 1) {
       addFact("user-core-cap", `Core cap ${i}.`, i % 2 === 0 ? "relationship" : "profile", `core-b-${i}`);
     }
     addFact("user-core-cap", "Context survivor.", "preference", "ctx-b-1");
@@ -94,16 +96,17 @@ test("archiveOldFactsForSubject evicts contextual facts before core facts", asyn
     const archivedMixed = store.archiveOldFactsForSubject({
       guildId: "guild-a",
       subject: "user-core-cap",
-      keep: 20
+      keep: 36
     });
+    // 39 total, keep 36 → 3 to archive. 1 contextual archived first, then 2 oldest core.
     assert.equal(archivedMixed, 3);
-    const coreCapFacts = store.getFactsForSubjects(["user-core-cap"], 30, { guildId: "guild-a" });
+    const coreCapFacts = store.getFactsForSubjects(["user-core-cap"], 50, { guildId: "guild-a" });
     assert.equal(coreCapFacts.filter((row) => row.fact_type === "preference").length, 0);
-    assert.equal(coreCapFacts.filter((row) => row.fact_type === "profile" || row.fact_type === "relationship").length, 20);
+    assert.equal(coreCapFacts.filter((row) => row.fact_type === "profile" || row.fact_type === "relationship").length, 36);
   });
 });
 
-test("memory facts support query filtering, updates, and removal", async () => {
+test("memory facts support query filtering and scope filters", async () => {
   await withTempStore(async (store) => {
     store.addMemoryFact({
       guildId: "guild-a",
@@ -134,30 +137,6 @@ test("memory facts support query filtering, updates, and removal", async () => {
     assert.equal(matching.length, 1);
     assert.equal(matching[0]?.subject, "user-1");
 
-    const factId = Number(matching[0]?.id);
-    const updated = store.updateMemoryFact({
-      factId,
-      guildId: "guild-a",
-      channelId: "chan-1",
-      subject: "user-1",
-      fact: "User collects old school DS hardware and games.",
-      factType: "profile",
-      evidenceText: "Updated after audit.",
-      sourceMessageId: "msg-1",
-      confidence: 0.92
-    });
-    assert.equal(updated.ok, true);
-    assert.equal(updated.fact?.fact, "User collects old school DS hardware and games.");
-    assert.equal(updated.fact?.fact_type, "profile");
-
-    const updatedSearch = store.getFactsForScope({
-      guildId: "guild-a",
-      limit: 10,
-      queryText: "hardware and games"
-    });
-    assert.equal(updatedSearch.length, 1);
-    assert.equal(updatedSearch[0]?.id, factId);
-
     const subjectFiltered = store.getFactsForScope({
       guildId: "guild-a",
       limit: 10,
@@ -169,18 +148,9 @@ test("memory facts support query filtering, updates, and removal", async () => {
     const typeFiltered = store.getFactsForScope({
       guildId: "guild-a",
       limit: 10,
-      factTypes: ["profile"]
+      factTypes: ["preference"]
     });
-    assert.equal(typeFiltered.length, 1);
-    assert.equal(typeFiltered[0]?.id, factId);
-
-    const removed = store.removeMemoryFact({
-      factId,
-      guildId: "guild-a"
-    });
-    assert.equal(removed.ok, true);
-    assert.equal(store.getMemoryFactById(factId, { guildId: "guild-a" }), null);
-    assert.equal(store.getMemoryFactById(factId, { guildId: "guild-a", includeInactive: true })?.fact, removed.fact?.fact);
+    assert.equal(typeFiltered.length, 2);
   });
 });
 

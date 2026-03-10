@@ -57,6 +57,56 @@ test("executeSharedMemoryToolSearch forwards namespace subject and fact-type fil
   assert.deepEqual(result.matches[0]?.metadata?.tags, ["profile"]);
 });
 
+test("executeSharedMemoryToolSearch uses guild scope for cross-subject lookup", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+
+  const result = await executeSharedMemoryToolSearch({
+    runtime: {
+      memory: {
+        async searchDurableFacts(opts) {
+          calls.push(opts as Record<string, unknown>);
+          return [
+            {
+              id: "fact-1",
+              subject: "user-2",
+              fact: "Sarah likes Rust.",
+              fact_type: "preference",
+              score: 0.91,
+              created_at: "2026-03-09T00:00:00.000Z"
+            }
+          ];
+        },
+        async rememberDirectiveLineDetailed() {
+          throw new Error("not used");
+        }
+      }
+    },
+    settings: {},
+    guildId: "guild-1",
+    channelId: "chan-1",
+    actorUserId: "user-1",
+    namespace: "guild",
+    queryText: "who likes rust",
+    trace: { source: "test_memory_search_guild" },
+    limit: 4
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.namespace, "guild:guild-1");
+  assert.deepEqual(calls, [{
+    guildId: "guild-1",
+    channelId: "chan-1",
+    queryText: "who likes rust",
+    subjectIds: null,
+    factTypes: null,
+    settings: {},
+    trace: { source: "test_memory_search_guild" },
+    limit: 8
+  }]);
+  assert.equal(result.matches.length, 1);
+  assert.equal(result.matches[0]?.text, "Sarah likes Rust.");
+});
+
 test("executeSharedMemoryToolWrite forwards fact type through dedupe and write", async () => {
   const searchCalls: Array<Record<string, unknown>> = [];
   const writeCalls: Array<Record<string, unknown>> = [];

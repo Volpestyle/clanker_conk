@@ -1,8 +1,9 @@
 // Extracted Store Methods
 import type { Database } from "bun:sqlite";
 
-import { clamp } from "../utils.ts";
+import { clamp, nowIso } from "../utils.ts";
 import { normalizeMessageCreatedAt } from "./storeHelpers.ts";
+import { normalizeEmbeddingVector, vectorToBlob } from "./storeHelpers.ts";
 
 const EN_CONVERSATION_SEARCH_STOPWORDS = new Set([
   "about",
@@ -45,6 +46,9 @@ const EN_CONVERSATION_SEARCH_STOPWORDS = new Set([
 
 interface MessageStore {
   db: Database;
+  sqliteVecReady?: boolean | null;
+  sqliteVecError?: string;
+  ensureSqliteVecReady?: () => boolean;
 }
 
 interface MessageSqlRow {
@@ -84,6 +88,10 @@ interface ReferencedMessageStatsRow {
   referenced_message_id: string;
   reaction_count: number;
   reply_count: number;
+}
+
+interface MessageVectorScoreRow extends MessageSqlRow {
+  score: number;
 }
 
 function mapStoredMessageRow(row: MessageSqlRow): StoredMessageRow {
@@ -132,6 +140,45 @@ store.db
   );
 }
 
+export function upsertMessageVectorNative(
+  store: MessageStore,
+  {
+    messageId,
+    model,
+    embedding,
+    updatedAt = nowIso()
+  }: {
+    messageId: string;
+    model: string;
+    embedding: number[];
+    updatedAt?: string;
+  }
+) {
+  const normalizedMessageId = String(messageId || "").trim();
+  const normalizedModel = String(model || "").trim();
+  const vector = normalizeEmbeddingVector(embedding);
+  if (!normalizedMessageId || !normalizedModel || !vector.length) return false;
+
+  const result = store.db
+    .prepare(
+      `INSERT INTO message_vectors_native(message_id, model, dims, embedding_blob, updated_at)
+           VALUES (?, ?, ?, ?, ?)
+           ON CONFLICT(message_id, model) DO UPDATE SET
+             dims = excluded.dims,
+             embedding_blob = excluded.embedding_blob,
+             updated_at = excluded.updated_at`
+    )
+    .run(
+      normalizedMessageId,
+      normalizedModel,
+      vector.length,
+      vectorToBlob(vector),
+      String(updatedAt || nowIso())
+    );
+
+  return Number(result?.changes || 0) > 0;
+}
+
 export function getRecentMessages(store: MessageStore, channelId, limit = 40) {
 return store.db
 .prepare<MessageSqlRow, [string, number]>(
@@ -156,6 +203,55 @@ return store.db
 )
 .all(String(guildId), clamp(Math.floor(limit), 1, 300))
 .map(mapStoredMessageRow);
+}
+
+export function getMessagesInWindow(
+  store: MessageStore,
+  {
+    guildId,
+    channelId = null,
+    sinceIso = null,
+    untilIso = null,
+    limit = 120
+  }: {
+    guildId: string;
+    channelId?: string | null;
+    sinceIso?: string | null;
+    untilIso?: string | null;
+    limit?: number;
+  }
+) {
+  const normalizedGuildId = String(guildId || "").trim();
+  if (!normalizedGuildId) return [];
+
+  const where = ["guild_id = ?"];
+  const args: Array<string | number> = [normalizedGuildId];
+  const normalizedChannelId = String(channelId || "").trim();
+  if (normalizedChannelId) {
+    where.push("channel_id = ?");
+    args.push(normalizedChannelId);
+  }
+  const normalizedSinceIso = String(sinceIso || "").trim();
+  if (normalizedSinceIso) {
+    where.push("created_at >= ?");
+    args.push(normalizedSinceIso);
+  }
+  const normalizedUntilIso = String(untilIso || "").trim();
+  if (normalizedUntilIso) {
+    where.push("created_at <= ?");
+    args.push(normalizedUntilIso);
+  }
+
+  return store.db
+    .prepare<MessageSqlRow, Array<string | number>>(
+      `SELECT message_id, created_at, guild_id, channel_id, author_id, author_name, is_bot, content, referenced_message_id
+           FROM messages
+           WHERE ${where.join(" AND ")}
+           ORDER BY created_at ASC
+           LIMIT ?`
+    )
+    .all(...args, clamp(Math.floor(Number(limit) || 120), 1, 500))
+    .map(mapStoredMessageRow);
 }
 
 export function searchRelevantMessages(store: MessageStore, channelId, queryText, limit = 8) {
@@ -410,6 +506,150 @@ for (const row of rankedRows) {
 }
 
 return windows;
+}
+
+export function searchConversationWindowsByEmbedding(
+  store: MessageStore,
+  {
+    guildId,
+    channelId = null,
+    queryEmbedding,
+    model,
+    limit = 4,
+    maxAgeHours = 168,
+    before = 1,
+    after = 1
+  }: {
+    guildId: string;
+    channelId?: string | null;
+    queryEmbedding: number[];
+    model: string;
+    limit?: number;
+    maxAgeHours?: number;
+    before?: number;
+    after?: number;
+  }
+) {
+  if (typeof store.ensureSqliteVecReady !== "function" || !store.ensureSqliteVecReady()) return [];
+
+  const normalizedGuildId = String(guildId || "").trim();
+  const normalizedModel = String(model || "").trim();
+  const normalizedQueryEmbedding = normalizeEmbeddingVector(queryEmbedding);
+  if (!normalizedGuildId || !normalizedModel || !normalizedQueryEmbedding.length) return [];
+
+  const boundedLimit = clamp(Math.floor(Number(limit) || 4), 1, 8);
+  const boundedMaxAgeHours = clamp(Math.floor(Number(maxAgeHours) || 168), 1, 24 * 30);
+  const sinceIso = new Date(Date.now() - boundedMaxAgeHours * 60 * 60 * 1000).toISOString();
+  const candidateLimit = clamp(boundedLimit * 24, boundedLimit, 192);
+  const rows = store.db
+    .prepare<MessageVectorScoreRow, Array<string | number | Buffer>>(
+      `SELECT
+             m.message_id,
+             m.created_at,
+             m.guild_id,
+             m.channel_id,
+             m.author_id,
+             m.author_name,
+             m.is_bot,
+             m.content,
+             m.referenced_message_id,
+             (1 - vec_distance_cosine(v.embedding_blob, ?)) AS score
+           FROM messages AS m
+           JOIN message_vectors_native AS v
+             ON v.message_id = m.message_id
+          WHERE m.guild_id = ?
+            AND m.created_at >= ?
+            AND v.model = ?
+            AND v.dims = ?
+          ORDER BY score DESC, m.created_at DESC
+          LIMIT ?`
+    )
+    .all(
+      vectorToBlob(normalizedQueryEmbedding),
+      normalizedGuildId,
+      sinceIso,
+      normalizedModel,
+      normalizedQueryEmbedding.length,
+      candidateLimit
+    );
+  if (!rows.length) return [];
+
+  const normalizedChannelId = String(channelId || "").trim() || null;
+  const rankedRows = rows
+    .map((row, index) => {
+      const baseScore = Number.isFinite(Number(row.score)) ? Number(row.score) : 0;
+      const channelBoost =
+        normalizedChannelId && String(row.channel_id || "").trim() === normalizedChannelId
+          ? 0.08
+          : !normalizedChannelId
+            ? 0
+            : 0;
+      const createdAtMs = Date.parse(String(row.created_at || ""));
+      const ageMinutes = Number.isFinite(createdAtMs)
+        ? Math.max(0, Math.round((Date.now() - createdAtMs) / 60000))
+        : null;
+      const recencyBoost =
+        Number.isFinite(ageMinutes) && ageMinutes !== null
+          ? ageMinutes <= 30
+            ? 0.05
+            : ageMinutes <= 6 * 60
+              ? 0.03
+              : ageMinutes <= 24 * 60
+                ? 0.015
+                : 0
+          : 0;
+      return {
+        ...row,
+        _score: baseScore + channelBoost + recencyBoost,
+        _ageMinutes: ageMinutes,
+        _rank: index
+      };
+    })
+    .filter((row) => Number(row._score) >= 0.12)
+    .sort((a, b) => {
+      if (b._score !== a._score) return b._score - a._score;
+      return a._rank - b._rank;
+    });
+
+  const windows = [];
+  const usedMessageIds = new Set<string>();
+  for (const row of rankedRows) {
+    if (windows.length >= boundedLimit) break;
+    if (usedMessageIds.has(String(row.message_id || ""))) continue;
+    const messages = fetchConversationWindowRows(store, row, before, after);
+    if (!messages.length) continue;
+    const messageIds = messages
+      .map((entry) => String(entry?.message_id || "").trim())
+      .filter(Boolean);
+    if (!messageIds.length) continue;
+    if (messageIds.some((messageId) => usedMessageIds.has(messageId))) continue;
+    for (const messageId of messageIds) {
+      usedMessageIds.add(messageId);
+    }
+    windows.push({
+      anchorMessageId: String(row.message_id || "").trim(),
+      createdAt: String(row.created_at || "").trim(),
+      guildId: String(row.guild_id || "").trim() || null,
+      channelId: String(row.channel_id || "").trim() || null,
+      authorId: String(row.author_id || "").trim() || null,
+      authorName: String(row.author_name || "").trim() || null,
+      ageMinutes: row._ageMinutes,
+      score: Number(Number(row._score || 0).toFixed(6)),
+      semanticScore: Number(Number(row.score || 0).toFixed(6)),
+      messages: messages.map((entry) => ({
+        message_id: String(entry?.message_id || "").trim(),
+        created_at: String(entry?.created_at || "").trim(),
+        guild_id: String(entry?.guild_id || "").trim() || null,
+        channel_id: String(entry?.channel_id || "").trim() || null,
+        author_id: String(entry?.author_id || "").trim() || null,
+        author_name: String(entry?.author_name || "").trim() || "unknown",
+        is_bot: Number(entry?.is_bot) === 1 ? 1 : 0,
+        content: String(entry?.content || "").trim()
+      }))
+    });
+  }
+
+  return windows;
 }
 
 export function getActiveChannels(store: MessageStore, guildId, hours = 24, limit = 10) {

@@ -1,5 +1,7 @@
 import { clamp } from "../utils.ts";
 import {
+  isBehavioralDirectiveLikeFactText,
+  isUnsafeMemoryFactText,
   isInstructionLikeFactText,
   normalizeFactType,
   normalizeMemoryLineInput
@@ -98,6 +100,22 @@ const MEMORY_NAMESPACE_GUILD_RE = /^guild:(.+)$/i;
 const USER_NAMESPACE_ALIASES = new Set(["speaker", "user", "me", "current_user", "current-speaker"]);
 const GUILD_NAMESPACE_ALIASES = new Set(["guild", "lore", "shared"]);
 const SELF_NAMESPACE_ALIASES = new Set(["self", "bot", "assistant"]);
+const LORE_SUBJECT = "__lore__";
+
+function resolveMemorySearchSubjectIds(rawNamespace: unknown, scope: MemoryToolNamespaceScope) {
+  const normalizedNamespace = String(rawNamespace || "")
+    .trim()
+    .toLowerCase();
+
+  if (!scope.subject) return null;
+  if (!normalizedNamespace || normalizedNamespace === "guild" || MEMORY_NAMESPACE_GUILD_RE.test(normalizedNamespace)) {
+    return null;
+  }
+  if (normalizedNamespace === "lore" || normalizedNamespace === "shared") {
+    return [LORE_SUBJECT];
+  }
+  return [scope.subject];
+}
 
 export function resolveMemoryToolNamespaceScope({
   guildId,
@@ -258,11 +276,12 @@ export async function executeSharedMemoryToolSearch({
     ? tags.map((entry) => buildMemoryToolQuery(entry, 40)).filter(Boolean)
     : [];
   const boundedLimit = clamp(Math.floor(Number(limit) || 6), 1, 20);
+  const searchSubjectIds = resolveMemorySearchSubjectIds(namespace, scope);
   const rows = await runtime.memory.searchDurableFacts({
     guildId: scope.guildId,
     channelId,
     queryText: resolvedQuery,
-    subjectIds: scope.subject ? [scope.subject] : null,
+    subjectIds: searchSubjectIds,
     factTypes: normalizedTags.length ? normalizedTags : null,
     settings,
     trace,
@@ -271,7 +290,13 @@ export async function executeSharedMemoryToolSearch({
 
   const matches = (Array.isArray(rows) ? rows : [])
     .filter((row) => {
-      if (scope.subject && String(row?.subject || "").trim() !== scope.subject) return false;
+      if (
+        Array.isArray(searchSubjectIds) &&
+        searchSubjectIds.length > 0 &&
+        !searchSubjectIds.includes(String(row?.subject || "").trim())
+      ) {
+        return false;
+      }
       if (normalizedTags.length > 0 && !normalizedTags.includes(String(row?.fact_type || "").trim())) return false;
       return true;
     })
@@ -345,6 +370,8 @@ export async function executeSharedMemoryToolWrite({
   const resolvedDedupeThreshold = clamp(Number(dedupeThreshold) || 0.9, 0, 1);
 
   for (const [index, item] of normalizedItems.entries()) {
+    const factType = String(item.factType || "").trim().toLowerCase();
+    const allowsBehavioralWrite = factType === "guidance" || factType === "behavioral";
     if (sensitivePattern && sensitivePattern.test(item.text)) {
       skipped.push({
         text: item.text,
@@ -352,7 +379,14 @@ export async function executeSharedMemoryToolWrite({
       });
       continue;
     }
-    if (isInstructionLikeFactText(item.text)) {
+    if (isUnsafeMemoryFactText(item.text)) {
+      skipped.push({
+        text: item.text,
+        reason: "unsafe_instruction"
+      });
+      continue;
+    }
+    if (allowsBehavioralWrite ? false : isBehavioralDirectiveLikeFactText(item.text) || isInstructionLikeFactText(item.text)) {
       skipped.push({
         text: item.text,
         reason: "instruction_like"

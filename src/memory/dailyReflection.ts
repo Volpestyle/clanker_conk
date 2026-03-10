@@ -22,8 +22,6 @@ type ParsedEntry = {
   content: string;
 };
 
-type ReflectionStrategy = "one_pass_main" | "two_pass_extract_then_main";
-
 type ReflectionFact = {
   subject: string;
   subjectName: string;
@@ -56,7 +54,7 @@ type ReflectionModelResponse = {
 };
 
 type ReflectionPassMetadata = {
-  name: "extract" | "select" | "direct";
+  name: "direct";
   provider: string;
   model: string;
   usdCost: number;
@@ -80,10 +78,8 @@ type ReflectionSettings = {
   };
   memory?: {
     enabled?: boolean;
-    dailyLogRetentionDays?: number;
     reflection?: {
       enabled?: boolean;
-      strategy?: string;
       maxFactsPerReflection?: number;
     };
   };
@@ -100,8 +96,18 @@ type ReflectionStore = {
   hasReflectionBeenCompleted(dateKey: string, guildId: string): boolean;
 };
 
+type ExistingFactRow = {
+  subject: string;
+  fact: string;
+  fact_type: string;
+};
+
 type ReflectionMemory = {
   memoryDirPath: string;
+  loadExistingFactsForReflection?(args: {
+    guildId: string;
+    subjectIds: string[];
+  }): ExistingFactRow[];
   rememberDirectiveLineDetailed(args: {
     line: string;
     sourceMessageId: string;
@@ -138,14 +144,6 @@ type ReflectionLlm = {
       jsonSchema?: string;
     }
   ): Promise<ReflectionModelResponse>;
-  callMemoryExtractionModel(
-    provider: string,
-    payload: {
-      model: string;
-      systemPrompt: string;
-      userPrompt: string;
-    }
-  ): Promise<ReflectionModelResponse>;
 };
 
 const REFLECTION_FACTS_JSON_SCHEMA = JSON.stringify({
@@ -171,12 +169,6 @@ const REFLECTION_FACTS_JSON_SCHEMA = JSON.stringify({
   },
   required: ["facts"]
 });
-
-function resolveReflectionStrategy(value: unknown): ReflectionStrategy {
-  return String(value || "").trim().toLowerCase() === "one_pass_main"
-    ? "one_pass_main"
-    : "two_pass_extract_then_main";
-}
 
 function normalizeReflectionUsage(usage: Partial<ReflectionUsage> | null | undefined): ReflectionUsage {
   return {
@@ -222,38 +214,6 @@ function normalizeReflectionFacts(rawText: string, maxFacts: number): Reflection
   return facts;
 }
 
-function buildReflectionExtractionPrompts({
-  dateKey,
-  maxFacts,
-  authorNames,
-  normalizedBotName,
-  journalText
-}: {
-  dateKey: string;
-  maxFacts: number;
-  authorNames: string;
-  normalizedBotName: string;
-  journalText: string;
-}) {
-  const systemPrompt = [
-    `You are performing the extraction pass of daily reflection for ${dateKey}.`,
-    "Read the day's conversation journal and extract candidate durable facts worth considering for long-term memory.",
-    "Focus on stable preferences, identity, ongoing projects, recurring relationships, important events, and persistent shared lore.",
-    "Ignore greetings, throwaway banter, jokes, one-off requests, and ephemeral chatter.",
-    "Every fact must be grounded directly in the journal text.",
-    "Classify each fact subject as one of: author, bot, lore.",
-    `Use subject=author for facts about a specific user. Include subjectName with the author's exact display name from the journal. Authors in this journal: ${authorNames}.`,
-    `Use subject=bot only for explicit durable facts about ${normalizedBotName}.`,
-    "Use subject=lore for stable shared context not tied to a single person.",
-    "Be inclusive in this extraction pass, but do not invent or speculate.",
-    `Return strict JSON only: {"facts":[{"subject":"author|bot|lore","subjectName":"<author display name if subject=author, empty otherwise>","fact":"...","type":"preference|profile|relationship|project|other","confidence":0.0-1.0,"evidence":"exact short quote"}]}.`,
-    "If there are no viable candidates, return {\"facts\":[]}."
-  ].join("\n");
-
-  const userPrompt = [`Date: ${dateKey}`, `Max facts: ${maxFacts}`, `Journal:\n${journalText}`].join("\n");
-  return { systemPrompt, userPrompt };
-}
-
 function buildReflectionOnePassPrompts({
   dateKey,
   maxFacts,
@@ -273,6 +233,7 @@ function buildReflectionOnePassPrompts({
     "Be selective. Prefer fewer high-signal memories over many weak ones.",
     "Only keep facts that are clearly durable, specific, and worth remembering later.",
     "Drop facts that are ambiguous, ephemeral, redundant, or weakly supported.",
+    "If you notice multiple facts that say the same thing in different words (e.g. 'likes Rust' and 'enjoys Rust programming'), keep only the best-worded version.",
     "Every fact must be grounded directly in the journal text.",
     "Classify each fact subject as one of: author, bot, lore.",
     `Use subject=author for facts about a specific user. Include subjectName with the author's exact display name from the journal. Authors in this journal: ${authorNames}.`,
@@ -286,52 +247,10 @@ function buildReflectionOnePassPrompts({
   return { systemPrompt, userPrompt };
 }
 
-function buildReflectionSelectionPrompts({
-  dateKey,
-  maxFacts,
-  authorNames,
-  normalizedBotName,
-  journalText,
-  extractedFacts
-}: {
-  dateKey: string;
-  maxFacts: number;
-  authorNames: string;
-  normalizedBotName: string;
-  journalText: string;
-  extractedFacts: ReflectionFact[];
-}) {
-  const systemPrompt = [
-    `You are performing the final memory-selection pass for daily reflection on ${dateKey}.`,
-    "A cheaper model already extracted candidate durable facts from the journal.",
-    "Your job is to decide which candidate facts should actually become durable memory.",
-    "Be selective. Keep only candidates that are clearly durable, grounded, and worth remembering later.",
-    "Drop candidates that are weak, redundant, speculative, overly ephemeral, or not actually durable.",
-    "Do not invent new facts outside the candidate list.",
-    "You may rewrite accepted facts slightly for cleaner durable phrasing, but preserve the meaning and keep the evidence grounded.",
-    "Classify each fact subject as one of: author, bot, lore.",
-    `Use subject=author for facts about a specific user. Include subjectName with the author's exact display name from the journal. Authors in this journal: ${authorNames}.`,
-    `Use subject=bot only for explicit durable facts about ${normalizedBotName}.`,
-    "Use subject=lore for stable shared context not tied to a single person.",
-    `Return strict JSON only: {"facts":[{"subject":"author|bot|lore","subjectName":"<author display name if subject=author, empty otherwise>","fact":"...","type":"preference|profile|relationship|project|other","confidence":0.0-1.0,"evidence":"exact short quote"}]}.`,
-    "If no candidates should be saved, return {\"facts\":[]}."
-  ].join("\n");
-
-  const userPrompt = [
-    `Date: ${dateKey}`,
-    `Max facts to save: ${maxFacts}`,
-    `Candidate facts:\n${JSON.stringify({ facts: extractedFacts }, null, 2)}`,
-    `Journal:\n${journalText}`
-  ].join("\n\n");
-
-  return { systemPrompt, userPrompt };
-}
-
 async function runReflectionPass({
   llm,
   provider,
   model,
-  mode,
   systemPrompt,
   userPrompt,
   settings,
@@ -340,7 +259,6 @@ async function runReflectionPass({
   llm: ReflectionLlm;
   provider: string;
   model: string;
-  mode: "extract" | "select" | "direct";
   systemPrompt: string;
   userPrompt: string;
   settings: ReflectionSettings;
@@ -348,21 +266,14 @@ async function runReflectionPass({
 }) {
   const orchestratorBinding = getResolvedOrchestratorBinding(settings);
   const replyGeneration = getReplyGenerationSettings(settings);
-  const response =
-    mode === "extract"
-      ? await llm.callMemoryExtractionModel(provider, {
-          model,
-          systemPrompt,
-          userPrompt
-        })
-      : await llm.callChatModel(provider, {
-          model,
-          systemPrompt,
-          userPrompt,
-          temperature: Number(orchestratorBinding.temperature) || 0.9,
-          maxOutputTokens: Number(orchestratorBinding.maxOutputTokens) || 2500,
-          jsonSchema: REFLECTION_FACTS_JSON_SCHEMA
-        });
+  const response = await llm.callChatModel(provider, {
+    model,
+    systemPrompt,
+    userPrompt,
+    temperature: Number(orchestratorBinding.temperature) || 0.9,
+    maxOutputTokens: Number(orchestratorBinding.maxOutputTokens) || 2500,
+    jsonSchema: REFLECTION_FACTS_JSON_SCHEMA
+  });
 
   const usage = normalizeReflectionUsage(response.usage);
   const usdCost = estimateUsdCost({
@@ -380,7 +291,7 @@ async function runReflectionPass({
   return {
     facts,
     metadata: {
-      name: mode,
+      name: "direct",
       provider,
       model,
       usdCost,
@@ -471,70 +382,6 @@ export async function runDailyReflection({
   }
 }
 
-export async function rerunDailyReflectionForDateGuild({
-  memory,
-  store,
-  llm,
-  settings,
-  dateKey,
-  guildId
-}: {
-  memory: ReflectionMemory;
-  store: ReflectionStore;
-  llm: ReflectionLlm;
-  settings: ReflectionSettings;
-  dateKey: string;
-  guildId: string;
-}) {
-  if (!settings?.memory?.enabled || !settings?.memory?.reflection?.enabled) {
-    throw new Error("daily_reflection_disabled");
-  }
-
-  const normalizedDateKey = String(dateKey || "").trim();
-  const normalizedGuildId = String(guildId || "").trim();
-  if (!normalizedDateKey || !normalizedGuildId) {
-    throw new Error("dateKey_and_guildId_required");
-  }
-
-  const memoryDirPath = memory.memoryDirPath;
-  if (!memoryDirPath) {
-    throw new Error("memory_dir_unavailable");
-  }
-
-  const fullPath = path.join(memoryDirPath, `${normalizedDateKey}.md`);
-  const rawContent = await fs.readFile(fullPath, "utf8");
-  const lines = rawContent.split("\n").filter((line) => line.startsWith("- "));
-  if (!lines.length) {
-    throw new Error("daily_journal_empty");
-  }
-
-  const entries: ParsedEntry[] = [];
-  for (const line of lines) {
-    const parsed = parseDailyEntryLineWithScope(line);
-    if (parsed) entries.push(parsed);
-  }
-  if (!entries.length) {
-    throw new Error("daily_journal_unparseable");
-  }
-
-  const guildEntries = entries.filter(
-    (entry) => String(entry.guildId || "").trim() === normalizedGuildId
-  );
-  if (!guildEntries.length) {
-    throw new Error("reflection_guild_entries_not_found");
-  }
-
-  await reflectGuildJournal({
-    dateKey: normalizedDateKey,
-    guildId: normalizedGuildId,
-    guildEntries,
-    memory,
-    store,
-    llm,
-    settings
-  });
-}
-
 async function reflectGuildJournal({
   dateKey,
   guildId,
@@ -553,19 +400,15 @@ async function reflectGuildJournal({
   settings: ReflectionSettings;
 }) {
   const reflectionRunId = `reflection_${dateKey}_${guildId}_${Date.now()}`;
-  const strategy = resolveReflectionStrategy(settings?.memory?.reflection?.strategy);
   const usageTotals = normalizeReflectionUsage(null);
   const reflectionPasses: ReflectionPassMetadata[] = [];
-  let adjudicatorProvider = "";
-  let adjudicatorModel = "";
-  let extractorProvider = "";
-  let extractorModel = "";
+  let provider = "";
+  let model = "";
   let maxFacts = 0;
   let authorCount = 0;
 
   try {
     const memorySettings = getMemorySettings(settings);
-    const orchestratorBinding = getResolvedOrchestratorBinding(settings);
     const memoryBinding = getResolvedMemoryBinding(settings);
     const nameToAuthorId = new Map<string, string>();
     for (const entry of guildEntries) {
@@ -584,34 +427,30 @@ async function reflectGuildJournal({
     const authorNames = authorList.join(", ");
     authorCount = authorList.length;
 
-    adjudicatorProvider = orchestratorBinding.provider;
-    adjudicatorModel = orchestratorBinding.model;
-
-    if (strategy === "two_pass_extract_then_main") {
-      extractorProvider = memoryBinding.provider;
-      extractorModel = memoryBinding.model;
+    // Load existing facts so the reflection model can avoid producing duplicates.
+    let existingFactsSummary = "";
+    if (typeof memory.loadExistingFactsForReflection === "function") {
+      const subjectIds = [...nameToAuthorId.values(), "__self__", "__lore__"];
+      const existingFacts = memory.loadExistingFactsForReflection({ guildId, subjectIds });
+      if (existingFacts.length > 0) {
+        const lines = existingFacts.map((f) => `- [${f.subject}] ${f.fact}`);
+        existingFactsSummary = `\n\nAlready in memory (do not duplicate — skip or merge if today's journal says the same thing differently):\n${lines.join("\n")}`;
+      }
     }
 
-    const startModelLabel =
-      strategy === "two_pass_extract_then_main"
-        ? `${extractorProvider}:${extractorModel} -> ${adjudicatorProvider}:${adjudicatorModel}`
-        : `${adjudicatorProvider}:${adjudicatorModel}`;
+    provider = memoryBinding.provider;
+    model = memoryBinding.model;
 
     store.logAction({
       kind: "memory_reflection_start",
       guildId,
-      content: `Reflecting on ${dateKey} guild:${guildId} via ${startModelLabel}`,
+      content: `Reflecting on ${dateKey} guild:${guildId} via ${provider}:${model}`,
       metadata: {
         runId: reflectionRunId,
         dateKey,
         guildId,
-        strategy,
-        provider: adjudicatorProvider,
-        model: adjudicatorModel,
-        extractorProvider: extractorProvider || null,
-        extractorModel: extractorModel || null,
-        adjudicatorProvider,
-        adjudicatorModel,
+        provider,
+        model,
         maxFacts,
         journalEntryCount: guildEntries.length,
         authorCount
@@ -622,77 +461,28 @@ async function reflectGuildJournal({
     let selectedFacts: ReflectionFact[] = [];
     let rawResponseText = "";
 
-    if (strategy === "one_pass_main") {
-      const { systemPrompt, userPrompt } = buildReflectionOnePassPrompts({
-        dateKey,
-        maxFacts,
-        authorNames,
-        normalizedBotName,
-        journalText
-      });
-      const directPass = await runReflectionPass({
-        llm,
-        provider: adjudicatorProvider,
-        model: adjudicatorModel,
-        mode: "direct",
-        systemPrompt,
-        userPrompt,
-        settings,
-        maxFacts
-      });
-      extractedFacts = directPass.facts;
-      selectedFacts = directPass.facts;
-      rawResponseText = directPass.metadata.rawResponseText;
-      reflectionPasses.push(directPass.metadata);
-      addReflectionUsage(usageTotals, directPass.metadata.usage);
-    } else {
-      const { systemPrompt, userPrompt } = buildReflectionExtractionPrompts({
-        dateKey,
-        maxFacts,
-        authorNames,
-        normalizedBotName,
-        journalText
-      });
-      const extractionPass = await runReflectionPass({
-        llm,
-        provider: extractorProvider,
-        model: extractorModel,
-        mode: "extract",
-        systemPrompt,
-        userPrompt,
-        settings,
-        maxFacts
-      });
-      extractedFacts = extractionPass.facts;
-      rawResponseText = extractionPass.metadata.rawResponseText;
-      reflectionPasses.push(extractionPass.metadata);
-      addReflectionUsage(usageTotals, extractionPass.metadata.usage);
-
-      if (extractedFacts.length > 0) {
-        const selectionPrompts = buildReflectionSelectionPrompts({
-          dateKey,
-          maxFacts,
-          authorNames,
-          normalizedBotName,
-          journalText,
-          extractedFacts
-        });
-        const selectionPass = await runReflectionPass({
-          llm,
-          provider: adjudicatorProvider,
-          model: adjudicatorModel,
-          mode: "select",
-          systemPrompt: selectionPrompts.systemPrompt,
-          userPrompt: selectionPrompts.userPrompt,
-          settings,
-          maxFacts
-        });
-        selectedFacts = selectionPass.facts;
-        rawResponseText = selectionPass.metadata.rawResponseText;
-        reflectionPasses.push(selectionPass.metadata);
-        addReflectionUsage(usageTotals, selectionPass.metadata.usage);
-      }
-    }
+    const journalTextWithExisting = journalText + existingFactsSummary;
+    const { systemPrompt, userPrompt } = buildReflectionOnePassPrompts({
+      dateKey,
+      maxFacts,
+      authorNames,
+      normalizedBotName,
+      journalText: journalTextWithExisting
+    });
+    const directPass = await runReflectionPass({
+      llm,
+      provider,
+      model,
+      systemPrompt,
+      userPrompt,
+      settings,
+      maxFacts
+    });
+    extractedFacts = directPass.facts;
+    selectedFacts = directPass.facts;
+    rawResponseText = directPass.metadata.rawResponseText;
+    reflectionPasses.push(directPass.metadata);
+    addReflectionUsage(usageTotals, directPass.metadata.usage);
 
     const savedFacts: ReflectionSaveResult[] = [];
     const skippedFacts: ReflectionSaveResult[] = [];
@@ -733,11 +523,11 @@ async function reflectGuildJournal({
         userId,
         guildId,
         channelId: null,
-        sourceText: item.evidence,
+        sourceText: journalText,
         scope,
         subjectOverride,
         factType: item.type,
-        validationMode: "minimal"
+        validationMode: "strict"
       });
 
       if (saveResult?.ok) {
@@ -780,13 +570,8 @@ async function reflectGuildJournal({
         runId: reflectionRunId,
         dateKey,
         guildId,
-        strategy,
-        provider: adjudicatorProvider,
-        model: adjudicatorModel,
-        extractorProvider: extractorProvider || null,
-        extractorModel: extractorModel || null,
-        adjudicatorProvider,
-        adjudicatorModel,
+        provider,
+        model,
         maxFacts,
         journalEntryCount: guildEntries.length,
         authorCount,
@@ -813,13 +598,8 @@ async function reflectGuildJournal({
         runId: reflectionRunId,
         dateKey,
         guildId,
-        strategy,
-        provider: adjudicatorProvider || null,
-        model: adjudicatorModel || null,
-        extractorProvider: extractorProvider || null,
-        extractorModel: extractorModel || null,
-        adjudicatorProvider: adjudicatorProvider || null,
-        adjudicatorModel: adjudicatorModel || null,
+        provider: provider || null,
+        model: model || null,
         maxFacts: maxFacts || null,
         journalEntryCount: guildEntries.length,
         authorCount: authorCount || null

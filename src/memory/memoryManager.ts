@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { clamp01, clampInt } from "../normalization/numbers.ts";
 import { sleepMs } from "../normalization/time.ts";
+import { getMemorySettings } from "../settings/agentStack.ts";
 import {
   LORE_SUBJECT,
   SELF_SUBJECT,
@@ -14,6 +15,8 @@ import {
   extractStableTokens,
   formatDateLocal,
   formatTypedFactForMemory,
+  isBehavioralDirectiveLikeFactText,
+  isUnsafeMemoryFactText,
   isInstructionLikeFactText,
   isTextGroundedInSource,
   normalizeEvidenceText,
@@ -22,13 +25,15 @@ import {
   normalizeLoreFactForDisplay,
   normalizeMemoryLineInput,
   normalizeQueryEmbeddingText,
+  normalizeStoredFactText,
   normalizeSelfFactForDisplay,
   parseDailyEntryLine,
   passesHybridRelevanceGate,
   resolveDirectiveScopeConfig,
   sanitizeInline,
 } from "./memoryHelpers.ts";
-import { runDailyReflection, rerunDailyReflectionForDateGuild } from "./dailyReflection.ts";
+import { runDailyReflection } from "./dailyReflection.ts";
+import { runMicroReflection } from "./microReflection.ts";
 import type { MemoryFactRow } from "../store/storeMemory.ts";
 
 const DAILY_FILE_PATTERN = /^\d{4}-\d{2}-\d{2}\.md$/;
@@ -38,8 +43,55 @@ const HYBRID_MAX_CANDIDATES = 90;
 const HYBRID_MAX_VECTOR_BACKFILL_PER_QUERY = 8;
 const QUERY_EMBEDDING_CACHE_TTL_MS = 60 * 1000;
 const QUERY_EMBEDDING_CACHE_MAX_ENTRIES = 256;
-const FACT_RETENTION_DEFAULT = 80;
-const FACT_RETENTION_SELF_LORE = 120;
+const TEXT_MICRO_REFLECTION_SILENCE_MS = 10 * 60 * 1000;
+const TEXT_MICRO_REFLECTION_LOOKBACK_MS = 30 * 60 * 1000;
+const GUIDANCE_FACT_TYPE = "guidance";
+const BEHAVIORAL_FACT_TYPE = "behavioral";
+
+function sortProfileFacts<T extends MemoryFactRow>(rows: T[]) {
+  return [...(Array.isArray(rows) ? rows : [])].sort((left, right) => {
+    const confidenceDelta = Number(right?.confidence || 0) - Number(left?.confidence || 0);
+    if (Math.abs(confidenceDelta) > 1e-6) return confidenceDelta;
+    const updatedDelta =
+      Date.parse(String(right?.updated_at || "")) - Date.parse(String(left?.updated_at || ""));
+    if (updatedDelta !== 0) return updatedDelta;
+    return Number(right?.id || 0) - Number(left?.id || 0);
+  });
+}
+
+function buildPromptSubjectLabel(subject: string, subjectLabels: Record<string, string> = {}) {
+  const normalizedSubject = String(subject || "").trim();
+  if (!normalizedSubject) return "unknown";
+  if (subjectLabels[normalizedSubject]) return String(subjectLabels[normalizedSubject]).trim() || normalizedSubject;
+  if (normalizedSubject === SELF_SUBJECT) return "Bot";
+  if (normalizedSubject === LORE_SUBJECT) return "Shared lore";
+  return normalizedSubject;
+}
+
+function decoratePromptFactRows(rows: MemoryFactRow[], subjectLabels: Record<string, string> = {}) {
+  return sortProfileFacts(rows).map((row) => ({
+    ...row,
+    subjectLabel: buildPromptSubjectLabel(String(row?.subject || ""), subjectLabels)
+  }));
+}
+
+function dedupePromptFactRows(rows: Array<MemoryFactRow & { subjectLabel?: string }>) {
+  const seen = new Set<string>();
+  const deduped: Array<MemoryFactRow & { subjectLabel?: string }> = [];
+  for (const row of rows) {
+    const key = [
+      String(row?.id || ""),
+      String(row?.subject || ""),
+      String(row?.fact_type || ""),
+      String(row?.fact || "")
+    ].join("::");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(row);
+  }
+  return deduped;
+}
+
 export class MemoryManager {
   store;
   llm;
@@ -54,6 +106,9 @@ export class MemoryManager {
   queryEmbeddingCache;
   queryEmbeddingInFlight;
   dailyLogMessageIds;
+  textMicroReflectionTimers;
+  textMicroReflectionState;
+  microReflectionInFlight;
 
   constructor({ store, llm, memoryFilePath }) {
     this.store = store;
@@ -69,6 +124,9 @@ export class MemoryManager {
     this.queryEmbeddingCache = new Map();
     this.queryEmbeddingInFlight = new Map();
     this.dailyLogMessageIds = new Map();
+    this.textMicroReflectionTimers = new Map();
+    this.textMicroReflectionState = new Map();
+    this.microReflectionInFlight = new Set();
   }
 
   async ingestMessage({
@@ -199,6 +257,8 @@ export class MemoryManager {
     authorId,
     authorName,
     content,
+    isBot = false,
+    settings = null,
     trace = { guildId: null, channelId: null, userId: null, source: null }
   }) {
     const cleanedContent = cleanDailyEntryContent(content);
@@ -216,18 +276,23 @@ export class MemoryManager {
         content: cleanedContent
       });
       this.queueMemoryRefresh();
+      void this.ensureConversationMessageVector({
+        messageId,
+        content: cleanedContent,
+        settings,
+        trace
+      });
+      if (!isBot) {
+        this.scheduleTextChannelMicroReflection({
+          messageId,
+          guildId: scopeGuildId,
+          channelId: scopeChannelId,
+          settings
+        });
+      }
     } catch (error) {
       this.logMemoryError("daily_log_write", error, { messageId, userId: authorId });
     }
-  }
-
-  resolveSubjectRetentionLimit(subject) {
-    const normalizedSubject = String(subject || "").trim();
-    if (!normalizedSubject) return FACT_RETENTION_DEFAULT;
-    if (normalizedSubject === SELF_SUBJECT || normalizedSubject === LORE_SUBJECT) {
-      return FACT_RETENTION_SELF_LORE;
-    }
-    return FACT_RETENTION_DEFAULT;
   }
 
   async drainIngestQueue({ timeoutMs = 5000 } = {}) {
@@ -243,16 +308,25 @@ export class MemoryManager {
     const normalizedUserId = String(userId || "").trim();
     if (!normalizedGuildId || !normalizedUserId) {
       return {
-        userFacts: [] as MemoryFactRow[]
+        userFacts: [] as MemoryFactRow[],
+        guidanceFacts: [] as MemoryFactRow[]
       };
     }
 
+    const rows = this.store.getFactsForScope({
+      guildId: normalizedGuildId,
+      subjectIds: [normalizedUserId],
+      limit: 120
+    });
+    const guidanceFacts = rows.filter((row) => String(row?.fact_type || "").trim() === GUIDANCE_FACT_TYPE);
+    const userFacts = rows.filter((row) => {
+      const factType = String(row?.fact_type || "").trim();
+      return factType !== GUIDANCE_FACT_TYPE && factType !== BEHAVIORAL_FACT_TYPE;
+    });
+
     return {
-      userFacts: this.store.getFactProfileRows({
-        guildId: normalizedGuildId,
-        subjects: [normalizedUserId],
-        limit: 20
-      })
+      userFacts: sortProfileFacts(userFacts).slice(0, 20),
+      guidanceFacts: decoratePromptFactRows(guidanceFacts, { [normalizedUserId]: normalizedUserId }).slice(0, 8)
     };
   }
 
@@ -261,30 +335,500 @@ export class MemoryManager {
     if (!normalizedGuildId) {
       return {
         selfFacts: [] as MemoryFactRow[],
-        loreFacts: [] as MemoryFactRow[]
+        loreFacts: [] as MemoryFactRow[],
+        guidanceFacts: [] as MemoryFactRow[]
       };
     }
 
-    const rows = this.store.getFactProfileRows({
+    const rows = this.store.getFactsForScope({
       guildId: normalizedGuildId,
-      subjects: [SELF_SUBJECT, LORE_SUBJECT],
-      limit: 20
+      subjectIds: [SELF_SUBJECT, LORE_SUBJECT],
+      limit: 120
+    });
+    const guidanceFacts = rows.filter((row) => String(row?.fact_type || "").trim() === GUIDANCE_FACT_TYPE);
+    const regularFacts = rows.filter((row) => {
+      const factType = String(row?.fact_type || "").trim();
+      return factType !== GUIDANCE_FACT_TYPE && factType !== BEHAVIORAL_FACT_TYPE;
     });
 
     return {
-      selfFacts: rows.filter((row) => String(row.subject || "").trim() === SELF_SUBJECT).slice(0, 10),
-      loreFacts: rows.filter((row) => String(row.subject || "").trim() === LORE_SUBJECT).slice(0, 10)
+      selfFacts: sortProfileFacts(
+        regularFacts.filter((row) => String(row.subject || "").trim() === SELF_SUBJECT)
+      ).slice(0, 10),
+      loreFacts: sortProfileFacts(
+        regularFacts.filter((row) => String(row.subject || "").trim() === LORE_SUBJECT)
+      ).slice(0, 10),
+      guidanceFacts: decoratePromptFactRows(guidanceFacts, {
+        [SELF_SUBJECT]: "Bot",
+        [LORE_SUBJECT]: "Shared lore"
+      }).slice(0, 12)
     };
   }
 
-  loadFactProfile({ userId, guildId }: { userId?: string | null; guildId?: string | null }) {
-    const userProfile = this.loadUserFactProfile({ userId, guildId });
-    const guildProfile = this.loadGuildFactProfile({ guildId });
+  loadExistingFactsForReflection({ guildId, subjectIds }: { guildId: string; subjectIds: string[] }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId || !subjectIds.length) return [];
+    const rows = this.store.getFactProfileRows({
+      guildId: normalizedGuildId,
+      subjects: subjectIds,
+      limit: 200
+    });
+    return rows.map((row) => ({
+      subject: String(row.subject || ""),
+      fact: String(row.fact || ""),
+      fact_type: String(row.fact_type || "other")
+    }));
+  }
+
+  loadFactProfile({
+    userId,
+    guildId,
+    participantIds = [],
+    participantNames = {}
+  }: {
+    userId?: string | null;
+    guildId?: string | null;
+    participantIds?: string[];
+    participantNames?: Record<string, string>;
+  }) {
+    const normalizedUserId = String(userId || "").trim() || null;
+    const normalizedParticipantIds = [
+      ...new Set(
+        (Array.isArray(participantIds) ? participantIds : [])
+          .map((value) => String(value || "").trim())
+          .filter(Boolean)
+      )
+    ];
+    if (normalizedUserId && !normalizedParticipantIds.includes(normalizedUserId)) {
+      normalizedParticipantIds.unshift(normalizedUserId);
+    }
+    const normalizedGuildId = String(guildId || "").trim();
+    if (!normalizedGuildId) {
+      return {
+        participantProfiles: [],
+        selfFacts: [],
+        loreFacts: [],
+        userFacts: [],
+        relevantFacts: [],
+        guidanceFacts: []
+      };
+    }
+    const subjectLabels: Record<string, string> = {
+      [SELF_SUBJECT]: "Bot",
+      [LORE_SUBJECT]: "Shared lore"
+    };
+    for (const participantId of normalizedParticipantIds) {
+      subjectLabels[participantId] = String(participantNames?.[participantId] || participantId).trim() || participantId;
+    }
+    const rows = this.store.getFactsForScope({
+      guildId: normalizedGuildId,
+      subjectIds: [...normalizedParticipantIds, SELF_SUBJECT, LORE_SUBJECT],
+      limit: Math.max(160, (normalizedParticipantIds.length + 2) * 40)
+    });
+    const regularFacts = sortProfileFacts(
+      rows.filter((row) => {
+        const factType = String(row?.fact_type || "").trim();
+        return factType !== GUIDANCE_FACT_TYPE && factType !== BEHAVIORAL_FACT_TYPE;
+      })
+    );
+    const guidanceFacts = dedupePromptFactRows(
+      decoratePromptFactRows(
+        rows.filter((row) => String(row?.fact_type || "").trim() === GUIDANCE_FACT_TYPE),
+        subjectLabels
+      )
+    ).slice(0, 24);
+    const participants = normalizedParticipantIds.map((participantId) => {
+      const participantFacts = regularFacts.filter((row) => String(row?.subject || "").trim() === participantId);
+      return {
+        userId: participantId,
+        displayName: subjectLabels[participantId],
+        isPrimary: participantId === normalizedUserId,
+        facts: participantFacts.slice(0, participantId === normalizedUserId ? 12 : 6)
+      };
+    });
+    const primaryProfile = participants.find((entry) => entry.isPrimary) || participants[0] || null;
+    const selfFacts = regularFacts.filter((row) => String(row?.subject || "").trim() === SELF_SUBJECT).slice(0, 10);
+    const loreFacts = regularFacts.filter((row) => String(row?.subject || "").trim() === LORE_SUBJECT).slice(0, 10);
+    const secondaryFacts = participants
+      .filter((entry) => !entry.isPrimary)
+      .flatMap((entry) => entry.facts.slice(0, 3));
 
     return {
-      userFacts: userProfile.userFacts,
-      relevantFacts: [...guildProfile.selfFacts, ...guildProfile.loreFacts]
+      participantProfiles: participants.map((entry) => ({
+        userId: entry.userId,
+        displayName: entry.displayName,
+        isPrimary: entry.isPrimary,
+        facts: entry.facts
+      })),
+      selfFacts,
+      loreFacts,
+      userFacts: Array.isArray(primaryProfile?.facts) ? primaryProfile.facts : [],
+      relevantFacts: [...secondaryFacts, ...selfFacts, ...loreFacts],
+      guidanceFacts
     };
+  }
+
+  async loadBehavioralFactsForPrompt({
+    guildId,
+    channelId = null,
+    queryText,
+    participantIds = [],
+    settings,
+    trace = {},
+    limit = 8
+  }: {
+    guildId: string;
+    channelId?: string | null;
+    queryText: string;
+    participantIds?: string[];
+    settings?: Record<string, unknown> | null;
+    trace?: Record<string, unknown>;
+    limit?: number;
+  }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    const normalizedQueryText = String(queryText || "").replace(/\s+/g, " ").trim().slice(0, 420);
+    if (!normalizedGuildId || !normalizedQueryText) return [];
+
+    const subjectIds = [
+      ...new Set(
+        [SELF_SUBJECT, LORE_SUBJECT, ...(Array.isArray(participantIds) ? participantIds : [])]
+          .map((value) => String(value || "").trim())
+          .filter(Boolean)
+      )
+    ];
+    const rows = await this.searchDurableFacts({
+      guildId: normalizedGuildId,
+      channelId: String(channelId || "").trim() || null,
+      queryText: normalizedQueryText,
+      subjectIds,
+      factTypes: [BEHAVIORAL_FACT_TYPE],
+      settings,
+      trace,
+      limit: clampInt(limit, 1, 12)
+    });
+    return decoratePromptFactRows(rows as MemoryFactRow[], {
+      [SELF_SUBJECT]: "Bot",
+      [LORE_SUBJECT]: "Shared lore"
+    }).slice(0, clampInt(limit, 1, 12));
+  }
+
+  async ensureConversationMessageVector({
+    messageId,
+    content,
+    settings,
+    trace = {}
+  }: {
+    messageId?: string | null;
+    content?: string | null;
+    settings?: Record<string, unknown> | null;
+    trace?: Record<string, unknown>;
+  }) {
+    const normalizedMessageId = String(messageId || "").trim();
+    const payload = cleanDailyEntryContent(content);
+    if (!normalizedMessageId || !payload) return null;
+    if (!this.llm?.isEmbeddingReady?.()) return null;
+    if (typeof this.store?.upsertMessageVectorNative !== "function") return null;
+
+    try {
+      const embedded = await this.llm.embedText({
+        settings,
+        text: payload,
+        trace: {
+          ...trace,
+          source: String(trace?.source || "conversation_message_embed")
+        }
+      });
+      const vector = Array.isArray(embedded?.embedding)
+        ? embedded.embedding.map((value) => Number(value))
+        : [];
+      const model = String(embedded?.model || "").trim();
+      if (!vector.length || !model) return null;
+      this.store.upsertMessageVectorNative({
+        messageId: normalizedMessageId,
+        model,
+        embedding: vector
+      });
+      return {
+        model,
+        dims: vector.length
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  async searchConversationHistory({
+    guildId,
+    channelId = null,
+    queryText,
+    settings,
+    trace = {},
+    limit = 3,
+    maxAgeHours = 24 * 7,
+    before = 1,
+    after = 1
+  }: {
+    guildId: string;
+    channelId?: string | null;
+    queryText: string;
+    settings?: Record<string, unknown> | null;
+    trace?: Record<string, unknown>;
+    limit?: number;
+    maxAgeHours?: number;
+    before?: number;
+    after?: number;
+  }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    const normalizedQuery = String(queryText || "").replace(/\s+/g, " ").trim().slice(0, 320);
+    if (!normalizedGuildId || !normalizedQuery) return [];
+
+    try {
+      const queryEmbedding = await this.getQueryEmbeddingForRetrieval({
+        queryText: normalizedQuery,
+        settings,
+        trace: {
+          ...trace,
+          source: String(trace?.source || "conversation_history_query")
+        }
+      });
+      if (
+        queryEmbedding?.embedding?.length &&
+        queryEmbedding?.model &&
+        typeof this.store?.searchConversationWindowsByEmbedding === "function"
+      ) {
+        const semanticWindows = this.store.searchConversationWindowsByEmbedding({
+          guildId: normalizedGuildId,
+          channelId: String(channelId || "").trim() || null,
+          queryEmbedding: queryEmbedding.embedding,
+          model: queryEmbedding.model,
+          limit: clampInt(limit, 1, 8),
+          maxAgeHours: clampInt(maxAgeHours, 1, 24 * 30),
+          before: clampInt(before, 0, 4),
+          after: clampInt(after, 0, 4)
+        });
+        if (Array.isArray(semanticWindows) && semanticWindows.length > 0) {
+          return semanticWindows;
+        }
+      }
+    } catch {
+      // Fall back to lexical history search below.
+    }
+
+    if (typeof this.store?.searchConversationWindows !== "function") return [];
+    return this.store.searchConversationWindows({
+      guildId: normalizedGuildId,
+      channelId: String(channelId || "").trim() || null,
+      queryText: normalizedQuery,
+      limit: clampInt(limit, 1, 8),
+      maxAgeHours: clampInt(maxAgeHours, 1, 24 * 30),
+      before: clampInt(before, 0, 4),
+      after: clampInt(after, 0, 4)
+    });
+  }
+
+  isVoiceConversationMessage(messageId = "") {
+    return String(messageId || "").trim().startsWith("voice-");
+  }
+
+  scheduleTextChannelMicroReflection({
+    messageId,
+    guildId,
+    channelId,
+    settings
+  }: {
+    messageId?: string | null;
+    guildId?: string | null;
+    channelId?: string | null;
+    settings?: Record<string, unknown> | null;
+  }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    const normalizedChannelId = String(channelId || "").trim();
+    const normalizedMessageId = String(messageId || "").trim();
+    if (!normalizedGuildId || !normalizedChannelId || !normalizedMessageId) return;
+    if (this.isVoiceConversationMessage(normalizedMessageId)) return;
+
+    const resolvedSettings = settings || this.store.getSettings?.() || null;
+    const memorySettings = getMemorySettings(resolvedSettings);
+    if (!memorySettings.enabled || !memorySettings.reflection?.enabled) return;
+
+    const key = `${normalizedGuildId}:${normalizedChannelId}`;
+    const now = Date.now();
+    const currentTimer = this.textMicroReflectionTimers.get(key);
+    if (currentTimer) {
+      clearTimeout(currentTimer);
+    }
+
+    const previousState = this.textMicroReflectionState.get(key) || {};
+    this.textMicroReflectionState.set(key, {
+      ...previousState,
+      guildId: normalizedGuildId,
+      channelId: normalizedChannelId,
+      lastMessageAtMs: now,
+      lastMessageId: normalizedMessageId,
+      settings: resolvedSettings
+    });
+
+    const timer = setTimeout(() => {
+      this.textMicroReflectionTimers.delete(key);
+      void this.runTextChannelMicroReflection(key).catch((error) => {
+        this.logMemoryError("text_micro_reflection", error, {
+          guildId: normalizedGuildId,
+          channelId: normalizedChannelId
+        });
+      });
+    }, TEXT_MICRO_REFLECTION_SILENCE_MS);
+    this.textMicroReflectionTimers.set(key, timer);
+  }
+
+  async runTextChannelMicroReflection(key = "") {
+    const state = this.textMicroReflectionState.get(String(key || "").trim()) || null;
+    if (!state) return { ok: false, reason: "state_missing" };
+
+    const guildId = String(state.guildId || "").trim();
+    const channelId = String(state.channelId || "").trim();
+    const lastMessageAtMs = Number(state.lastMessageAtMs || 0);
+    const settings = state.settings || this.store.getSettings?.() || null;
+    const memorySettings = getMemorySettings(settings);
+    if (!guildId || !channelId || !lastMessageAtMs || !memorySettings.enabled || !memorySettings.reflection?.enabled) {
+      return { ok: false, reason: "state_invalid" };
+    }
+
+    const inFlightKey = `text:${guildId}:${channelId}`;
+    if (this.microReflectionInFlight.has(inFlightKey)) {
+      return { ok: false, reason: "already_running" };
+    }
+
+    const processedThroughMs = Number(state.processedThroughMs || 0);
+    const sinceMs = Math.max(processedThroughMs, lastMessageAtMs - TEXT_MICRO_REFLECTION_LOOKBACK_MS);
+    const entries = this.store.getMessagesInWindow({
+      guildId,
+      channelId,
+      sinceIso: new Date(sinceMs).toISOString(),
+      untilIso: new Date(lastMessageAtMs).toISOString(),
+      limit: 120
+    });
+    const normalizedEntries = (Array.isArray(entries) ? entries : [])
+      .filter((entry) => !String(entry?.message_id || "").startsWith("reaction:"))
+      .map((entry) => ({
+        timestampIso: String(entry?.created_at || "").trim(),
+        timestampMs: Date.parse(String(entry?.created_at || "")),
+        author: String(entry?.author_name || "unknown").trim() || "unknown",
+        authorId: String(entry?.author_id || "").trim() || null,
+        isBot: Boolean(entry?.is_bot),
+        content: String(entry?.content || "").trim()
+      }))
+      .filter((entry) => !entry.isBot)
+      .filter((entry) => entry.content);
+    if (!normalizedEntries.length) {
+      this.textMicroReflectionState.set(key, {
+        ...state,
+        processedThroughMs: lastMessageAtMs
+      });
+      return { ok: false, reason: "no_entries" };
+    }
+
+    this.microReflectionInFlight.add(inFlightKey);
+    try {
+      const result = await runMicroReflection({
+        memory: this,
+        store: this.store,
+        llm: this.llm,
+        settings,
+        guildId,
+        channelId,
+        trigger: "text_channel_silence",
+        sourceMessageId: `micro_reflection_text_${guildId}_${channelId}_${lastMessageAtMs}`,
+        entries: normalizedEntries
+      });
+      this.textMicroReflectionState.set(key, {
+        ...state,
+        processedThroughMs: lastMessageAtMs
+      });
+      return result;
+    } finally {
+      this.microReflectionInFlight.delete(inFlightKey);
+    }
+  }
+
+  async runVoiceSessionMicroReflection({
+    guildId,
+    channelId = null,
+    sessionId,
+    settings,
+    startedAtMs,
+    transcriptTurns = [],
+    pendingMemoryIngest = null
+  }: {
+    guildId?: string | null;
+    channelId?: string | null;
+    sessionId?: string | null;
+    settings?: Record<string, unknown> | null;
+    startedAtMs?: number | null;
+    transcriptTurns?: Array<Record<string, unknown>>;
+    pendingMemoryIngest?: Promise<unknown> | null;
+  }) {
+    const normalizedGuildId = String(guildId || "").trim();
+    const normalizedSessionId = String(sessionId || "").trim() || "session";
+    const resolvedSettings = settings || this.store.getSettings?.() || null;
+    const memorySettings = getMemorySettings(resolvedSettings);
+    if (!normalizedGuildId || !memorySettings.enabled || !memorySettings.reflection?.enabled) {
+      return { ok: false, reason: "memory_reflection_disabled" };
+    }
+
+    const inFlightKey = `voice:${normalizedGuildId}:${normalizedSessionId}`;
+    if (this.microReflectionInFlight.has(inFlightKey)) {
+      return { ok: false, reason: "already_running" };
+    }
+
+    if (pendingMemoryIngest) {
+      try {
+        await pendingMemoryIngest;
+      } catch {
+        // Best effort. The transcript timeline below is still enough to reflect on.
+      }
+    }
+
+    const normalizedEntries = (Array.isArray(transcriptTurns) ? transcriptTurns : [])
+      .filter((turn) => {
+        const kind = String(turn?.kind || "speech").trim();
+        return kind === "speech" || !kind;
+      })
+      .map((turn) => ({
+        timestampIso: Number.isFinite(Number(turn?.at))
+          ? new Date(Number(turn.at)).toISOString()
+          : "",
+        timestampMs: Number(turn?.at) || 0,
+        author: String(turn?.speakerName || "unknown").trim() || "unknown",
+        authorId: String(turn?.userId || "").trim() || null,
+        isBot: String(turn?.role || "").trim() === "assistant",
+        content: String(turn?.text || "").trim()
+      }))
+      .filter((entry) => entry.content);
+    if (!normalizedEntries.length) {
+      return { ok: false, reason: "no_entries" };
+    }
+
+    const sessionStartMs = Number.isFinite(Number(startedAtMs)) ? Number(startedAtMs) : 0;
+    const scopedEntries = sessionStartMs > 0
+      ? normalizedEntries.filter((entry) => entry.timestampMs >= sessionStartMs)
+      : normalizedEntries;
+
+    this.microReflectionInFlight.add(inFlightKey);
+    try {
+      return await runMicroReflection({
+        memory: this,
+        store: this.store,
+        llm: this.llm,
+        settings: resolvedSettings,
+        guildId: normalizedGuildId,
+        channelId: String(channelId || "").trim() || null,
+        trigger: "voice_session_end",
+        sourceMessageId: `micro_reflection_voice_${normalizedGuildId}_${normalizedSessionId}`,
+        entries: scopedEntries
+      });
+    } finally {
+      this.microReflectionInFlight.delete(inFlightKey);
+    }
   }
 
   async searchDurableFacts({
@@ -812,7 +1356,19 @@ export class MemoryManager {
     }
     const normalizedValidationMode =
       String(validationMode || "").trim().toLowerCase() === "minimal" ? "minimal" : "strict";
-    if (normalizedValidationMode === "strict" && isInstructionLikeFactText(cleaned)) {
+    const allowsBehavioralInstruction =
+      normalizedFactType === GUIDANCE_FACT_TYPE || normalizedFactType === BEHAVIORAL_FACT_TYPE;
+    if (normalizedValidationMode === "strict" && isUnsafeMemoryFactText(cleaned)) {
+      return {
+        ok: false,
+        reason: "unsafe_instruction"
+      };
+    }
+    if (
+      normalizedValidationMode === "strict" &&
+      !allowsBehavioralInstruction &&
+      (isBehavioralDirectiveLikeFactText(cleaned) || isInstructionLikeFactText(cleaned))
+    ) {
       return {
         ok: false,
         reason: "instruction_like"
@@ -825,7 +1381,7 @@ export class MemoryManager {
       };
     }
 
-    const factText = `${scopeConfig.prefix}: ${cleaned}.`;
+    const factText = normalizeStoredFactText(cleaned);
     const normalizedEvidenceText = normalizeEvidenceText(sourceText, sourceText);
     const existingFact = this.store.getMemoryFactBySubjectAndFact(scopeGuildId, subject, factText);
     const inserted = this.store.addMemoryFact({
@@ -1038,18 +1594,6 @@ export class MemoryManager {
       store: this.store,
       llm: this.llm,
       settings
-    });
-  }
-
-  async rerunDailyReflection({ dateKey, guildId, settings = null }) {
-    const resolvedSettings = settings || this.store.getSettings();
-    return await rerunDailyReflectionForDateGuild({
-      memory: this,
-      store: this.store,
-      llm: this.llm,
-      settings: resolvedSettings,
-      dateKey,
-      guildId
     });
   }
 }

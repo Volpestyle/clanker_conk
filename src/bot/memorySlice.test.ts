@@ -126,20 +126,18 @@ test("loadFactProfile normalizes partial fact profiles from memory manager", asy
         enabled: true
       }
     });
-    let capturedSource = "";
-    let capturedQuery = "";
-
     ctx.memory.loadFactProfile = (payload) => {
       return {
+        participantProfiles: [
+          {
+            userId: "user-1",
+            displayName: "user-1",
+            facts: [{ fact: "likes tea" }]
+          }
+        ],
         userFacts: [{ fact: "likes tea" }],
         relevantFacts: []
       };
-    };
-
-    ctx.store.searchRelevantMessages = (channelId, queryText) => {
-      capturedSource = "reply_memory_slice";
-      capturedQuery = `${String(channelId)}:${String(queryText)}`;
-      return [{ content: "hello there" }];
     };
 
     const slice = loadFactProfile(ctx, {
@@ -151,11 +149,10 @@ test("loadFactProfile normalizes partial fact profiles from memory manager", asy
       source: "reply_memory_slice"
     });
 
-    assert.equal(capturedSource, "reply_memory_slice");
-    assert.equal(capturedQuery, "chan-1:hello there");
+    assert.equal(slice.participantProfiles.length, 1);
     assert.deepEqual(slice.userFacts, [{ fact: "likes tea" }]);
     assert.deepEqual(slice.relevantFacts, []);
-    assert.deepEqual(slice.relevantMessages, [{ content: "hello there" }]);
+    assert.deepEqual(slice.guidanceFacts, []);
   });
 });
 
@@ -181,9 +178,12 @@ test("loadFactProfile logs and returns empty slice when memory manager throws", 
     });
 
     assert.deepEqual(slice, {
+      participantProfiles: [],
+      selfFacts: [],
+      loreFacts: [],
       userFacts: [],
       relevantFacts: [],
-      relevantMessages: []
+      guidanceFacts: []
     });
 
     const action = getLastLoggedAction(ctx.store);

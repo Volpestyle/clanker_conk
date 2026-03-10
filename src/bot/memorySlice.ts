@@ -13,9 +13,12 @@ type MemorySettings = {
 } & Record<string, unknown>;
 
 export type FactProfileSlice = {
+  participantProfiles: Array<Record<string, unknown>>;
+  selfFacts: Array<Record<string, unknown>>;
+  loreFacts: Array<Record<string, unknown>>;
   userFacts: Array<Record<string, unknown>>;
   relevantFacts: Array<Record<string, unknown>>;
-  relevantMessages: Array<Record<string, unknown>>;
+  guidanceFacts: Array<Record<string, unknown>>;
 };
 
 type LoadFactProfileOptions = {
@@ -24,15 +27,19 @@ type LoadFactProfileOptions = {
   guildId?: string | null;
   channelId?: string | null;
   queryText?: string;
+  recentMessages?: Array<Record<string, unknown>>;
   trace?: MemoryTrace;
   source?: string;
 };
 
 export function emptyFactProfileSlice(): FactProfileSlice {
   return {
+    participantProfiles: [],
+    selfFacts: [],
+    loreFacts: [],
     userFacts: [],
     relevantFacts: [],
-    relevantMessages: []
+    guidanceFacts: []
   };
 }
 
@@ -41,9 +48,14 @@ export function normalizeFactProfileSlice(slice: unknown): FactProfileSlice {
     ? slice as Record<string, unknown>
     : {};
   return {
+    participantProfiles: Array.isArray(value.participantProfiles)
+      ? value.participantProfiles as Array<Record<string, unknown>>
+      : [],
+    selfFacts: Array.isArray(value.selfFacts) ? value.selfFacts as Array<Record<string, unknown>> : [],
+    loreFacts: Array.isArray(value.loreFacts) ? value.loreFacts as Array<Record<string, unknown>> : [],
     userFacts: Array.isArray(value.userFacts) ? value.userFacts as Array<Record<string, unknown>> : [],
     relevantFacts: Array.isArray(value.relevantFacts) ? value.relevantFacts as Array<Record<string, unknown>> : [],
-    relevantMessages: Array.isArray(value.relevantMessages) ? value.relevantMessages as Array<Record<string, unknown>> : []
+    guidanceFacts: Array.isArray(value.guidanceFacts) ? value.guidanceFacts as Array<Record<string, unknown>> : []
   };
 }
 
@@ -69,6 +81,50 @@ type LoadRelevantMemoryFactsOptions = {
   fallbackWhenNoMatch?: boolean;
 };
 
+function collectConversationParticipants(
+  recentMessages: Array<Record<string, unknown>> = [],
+  {
+    focusUserId = null,
+    botUserId = null
+  }: {
+    focusUserId?: string | null;
+    botUserId?: string | null;
+  } = {}
+) {
+  const normalizedFocusUserId = String(focusUserId || "").trim() || null;
+  const normalizedBotUserId = String(botUserId || "").trim() || null;
+  const byUserId = new Map<string, string>();
+
+  for (const row of Array.isArray(recentMessages) ? recentMessages : []) {
+    const userId = String(row?.author_id || row?.authorId || "").trim();
+    if (!userId || userId === normalizedBotUserId) continue;
+    const displayName = String(row?.author_name || row?.authorName || "").trim() || userId;
+    if (!byUserId.has(userId)) {
+      byUserId.set(userId, displayName);
+    }
+  }
+
+  if (normalizedFocusUserId && !byUserId.has(normalizedFocusUserId)) {
+    byUserId.set(normalizedFocusUserId, normalizedFocusUserId);
+  }
+
+  const ordered = [...byUserId.entries()]
+    .map(([userId, displayName]) => ({
+      userId,
+      displayName,
+      isPrimary: userId === normalizedFocusUserId
+    }))
+    .sort((a, b) => {
+      if (a.isPrimary !== b.isPrimary) return a.isPrimary ? -1 : 1;
+      return a.displayName.localeCompare(b.displayName);
+    });
+
+  return {
+    participantIds: ordered.map((entry) => entry.userId),
+    participantNames: Object.fromEntries(ordered.map((entry) => [entry.userId, entry.displayName]))
+  };
+}
+
 export function loadFactProfile(
   ctx: BotContext,
   {
@@ -77,6 +133,7 @@ export function loadFactProfile(
     guildId,
     channelId = null,
     queryText = "",
+    recentMessages = [],
     trace: _trace = {},
     source = "fact_profile"
   }: LoadFactProfileOptions
@@ -90,24 +147,20 @@ export function loadFactProfile(
   if (!normalizedGuildId) return empty;
   const normalizedUserId = String(userId || "").trim() || null;
   const normalizedChannelId = String(channelId || "").trim() || null;
-  const normalizedQuery = String(queryText || "")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 420);
   const normalizedSource = String(source || "fact_profile").trim() || "fact_profile";
+  const participants = collectConversationParticipants(recentMessages, {
+    focusUserId: normalizedUserId,
+    botUserId: ctx.botUserId || null
+  });
 
   try {
     const factProfile = normalizeFactProfileSlice(ctx.memory.loadFactProfile({
       userId: normalizedUserId,
-      guildId: normalizedGuildId
+      guildId: normalizedGuildId,
+      participantIds: participants.participantIds,
+      participantNames: participants.participantNames
     }));
-    const relevantMessages = normalizedChannelId && normalizedQuery && typeof ctx.store?.searchRelevantMessages === "function"
-      ? ctx.store.searchRelevantMessages(normalizedChannelId, normalizedQuery, 8)
-      : [];
-    return {
-      ...factProfile,
-      relevantMessages: Array.isArray(relevantMessages) ? relevantMessages : []
-    };
+    return factProfile;
   } catch (error) {
     ctx.store.logAction({
       kind: "bot_error",
@@ -235,5 +288,64 @@ export async function loadRelevantMemoryFacts(
       channelId: normalizedChannelId,
       limit: boundedLimit
     });
+  }
+}
+
+export async function loadBehavioralMemoryFacts(
+  ctx: BotContext,
+  {
+    settings,
+    guildId,
+    channelId = null,
+    queryText = "",
+    participantIds = [],
+    trace = {},
+    limit = 8
+  }: {
+    settings: MemorySettings;
+    guildId: string;
+    channelId?: string | null;
+    queryText?: string;
+    participantIds?: string[];
+    trace?: MemoryTrace;
+    limit?: number;
+  }
+) {
+  if (!settings?.memory?.enabled || typeof ctx.memory?.loadBehavioralFactsForPrompt !== "function") return [];
+
+  const normalizedGuildId = String(guildId || "").trim();
+  if (!normalizedGuildId) return [];
+
+  const normalizedQuery = String(queryText || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 420);
+  if (!normalizedQuery) return [];
+
+  try {
+    return await ctx.memory.loadBehavioralFactsForPrompt({
+      guildId: normalizedGuildId,
+      channelId: String(channelId || "").trim() || null,
+      queryText: normalizedQuery,
+      participantIds,
+      settings,
+      trace: {
+        ...trace,
+        source: trace?.source || "behavioral_memory_context"
+      },
+      limit
+    });
+  } catch (error) {
+    ctx.store.logAction({
+      kind: "bot_error",
+      guildId: normalizedGuildId,
+      channelId: String(channelId || "").trim() || null,
+      content: `behavioral_memory_context: ${String(error?.message || error)}`,
+      metadata: {
+        queryText: normalizedQuery.slice(0, 120),
+        source: trace?.source || "behavioral_memory_context"
+      }
+    });
+    return [];
   }
 }
