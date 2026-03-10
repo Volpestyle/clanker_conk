@@ -1927,7 +1927,7 @@ export class TurnProcessor {
       captureReason,
       traceSource: "voice_file_asr_turn",
       errorPrefix: "file_asr_transcription_failed",
-      emptyTranscriptRuntimeEvent: "voice_stt_transcription_empty",
+      emptyTranscriptRuntimeEvent: "file_asr_transcription_empty",
       emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
       asrLanguage: asrLanguageGuidance.language,
       asrPrompt: asrLanguageGuidance.prompt
@@ -1946,7 +1946,7 @@ export class TurnProcessor {
         captureReason,
         traceSource: "voice_file_asr_turn_fallback",
         errorPrefix: "file_asr_transcription_fallback_failed",
-        emptyTranscriptRuntimeEvent: "voice_stt_transcription_empty",
+        emptyTranscriptRuntimeEvent: "file_asr_transcription_empty",
         emptyTranscriptErrorStreakThreshold: VOICE_EMPTY_TRANSCRIPT_ERROR_STREAK,
         suppressEmptyTranscriptLogs: true,
         asrLanguage: asrLanguageGuidance.language,

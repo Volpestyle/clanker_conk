@@ -579,6 +579,7 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
       model: "gpt-4o-transcribe",
       sessionId: "shared-1"
     });
+    assert.equal(realtime?.realtimeToolOwnership, "provider_native");
     assert.equal(realtime?.brainTools?.length, 2);
     assert.equal(realtime?.toolCalls?.[0]?.runtimeMs, 101);
     assert.equal(realtime?.mcpStatus?.[0]?.serverName, "web");
@@ -772,6 +773,7 @@ test("buildVoiceRuntimeSnapshot hides native tool registry in transport-only ses
     });
 
     const session = snapshot.sessions?.[0];
+    assert.equal(session?.realtimeToolOwnership, "transport_only");
     assert.equal(session?.brainTools, null);
     assert.equal(session?.toolCalls?.length, 1);
     assert.equal(session?.mcpStatus?.[0]?.serverName, "web");

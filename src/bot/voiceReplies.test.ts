@@ -1436,7 +1436,9 @@ test("generateVoiceTurnReply logs voice errors when generation fails", async () 
   assert.deepEqual(reply, { text: "", generationContextSnapshot: null, replyPrompts: null });
   const errorLogs = logs.filter((entry) => entry?.kind === "voice_error");
   assert.equal(errorLogs.length, 1);
-  assert.equal(String(errorLogs[0]?.content || "").includes("voice_stt_generation_failed"), true);
+  assert.equal(String(errorLogs[0]?.content || "").includes("voice_brain_generation_failed"), true);
+  assert.equal(errorLogs[0]?.metadata?.replyPath, "brain");
+  assert.equal(errorLogs[0]?.metadata?.realtimeToolOwnership, "transport_only");
 });
 
 test("generateVoiceTurnReply treats aborted generation as a supersede, not a voice error", async () => {

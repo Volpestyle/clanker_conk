@@ -4527,7 +4527,7 @@ test("runFileAsrTurn empty transcripts escalate after streak threshold", async (
   }
 
   assert.equal(
-    runtimeLogs.filter((row) => row?.content === "voice_stt_transcription_empty").length,
+    runtimeLogs.filter((row) => row?.content === "file_asr_transcription_empty").length,
     2
   );
   const escalated = errorLogs.filter((row) =>

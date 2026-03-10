@@ -544,6 +544,7 @@ export function buildVoiceRuntimeSnapshot(
         lastPlayedAt: toIsoOrNull(session.soundboard?.lastPlayedAt)
       },
       mode: session.mode || "voice_agent",
+      realtimeToolOwnership: session.realtimeToolOwnership || "transport_only",
       botTurnOpen: Boolean(session.botTurnOpen),
       assistantOutput: {
         phase: deps.replyManager.syncAssistantOutputState(session, "runtime_state")?.phase || "idle",

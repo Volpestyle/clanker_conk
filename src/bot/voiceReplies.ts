@@ -485,6 +485,10 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     sessionId && typeof runtime.voiceSessionManager?.getSessionById === "function"
       ? runtime.voiceSessionManager.getSessionById(sessionId)
       : null;
+  const realtimeToolOwnership = activeVoiceSession?.realtimeToolOwnership === "provider_native"
+    ? "provider_native"
+    : "transport_only";
+  const runtimeMode = String(activeVoiceSession?.mode || "").trim() || null;
   const musicContext =
     activeVoiceSession && typeof runtime.voiceSessionManager?.getMusicPromptContext === "function"
       ? runtime.voiceSessionManager.getMusicPromptContext(activeVoiceSession)
@@ -1181,10 +1185,13 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
           guildId,
           channelId,
           userId,
-          content: "voice_stt_tool_call",
+          content: "voice_brain_tool_call",
           metadata: {
             sessionId,
             source: voiceTrace.source,
+            replyPath: "brain",
+            realtimeToolOwnership,
+            runtimeMode,
             toolName: toolCall.name,
             toolInput: toolCall.input,
             toolCallIndex: voiceTotalToolCalls,
@@ -1375,9 +1382,12 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       guildId,
       channelId,
       userId,
-      content: `voice_stt_generation_failed: ${String(error?.message || error)}`,
+      content: `voice_brain_generation_failed: ${String(error?.message || error)}`,
       metadata: {
-        sessionId
+        sessionId,
+        replyPath: "brain",
+        realtimeToolOwnership,
+        runtimeMode
       }
     });
     return { text: "", generationContextSnapshot: null, replyPrompts: null };
