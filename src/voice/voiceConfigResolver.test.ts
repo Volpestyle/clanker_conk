@@ -95,7 +95,7 @@ describe("shouldUseTextMediatedRealtimeReply", () => {
 });
 
 describe("buildVoiceInstructions", () => {
-  test("includes soundboard tendency guidance when soundboard refs are available", () => {
+  test("includes provider-native soundboard tool guidance when soundboard refs are available", () => {
     const settings = createTestSettings({
       voice: {
         soundboard: {
@@ -119,7 +119,8 @@ describe("buildVoiceInstructions", () => {
     assert.equal(instructions.includes("Discord soundboard control is enabled."), true);
     assert.equal(instructions.includes("Discord soundboard tendency: 88/100."), true);
     assert.equal(instructions.includes("playful soundboard bits and comedic punctuation"), true);
-    assert.equal(instructions.includes("[[SOUNDBOARD:<sound_ref>]]"), true);
+    assert.equal(instructions.includes("play_soundboard"), true);
+    assert.equal(instructions.includes("[[SOUNDBOARD:<sound_ref>]]"), false);
   });
 });
 

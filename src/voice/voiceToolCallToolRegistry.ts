@@ -2,6 +2,7 @@ import { clamp } from "../utils.ts";
 import {
   getMemorySettings,
   getResolvedBrowserTaskConfig,
+  getVoiceSoundboardSettings,
   isBrowserEnabled,
   isDevTaskEnabled,
   isResearchEnabled
@@ -22,6 +23,7 @@ import {
   MUSIC_SEARCH_SCHEMA,
   MUSIC_SKIP_SCHEMA,
   MUSIC_STOP_SCHEMA,
+  PLAY_SOUNDBOARD_SCHEMA,
   WEB_SCRAPE_SCHEMA,
   WEB_SEARCH_SCHEMA,
   toRealtimeTool
@@ -53,6 +55,7 @@ const BASE_REALTIME_TOOL_SCHEMAS = [
   MUSIC_RESUME_SCHEMA,
   MUSIC_SKIP_SCHEMA,
   MUSIC_NOW_PLAYING_SCHEMA,
+  PLAY_SOUNDBOARD_SCHEMA,
   LEAVE_VOICE_CHANNEL_SCHEMA,
   WEB_SEARCH_SCHEMA,
   WEB_SCRAPE_SCHEMA,
@@ -64,12 +67,14 @@ function shouldIncludeLocalRealtimeTool(name: string, options: {
   includeBrowser: boolean;
   includeCodeAgent: boolean;
   includeMemory: boolean;
+  includeSoundboard: boolean;
   includeWebSearch: boolean;
 }) {
   if ((name === "web_search" || name === "web_scrape") && !options.includeWebSearch) return false;
   if (name === "memory_write" && !options.includeMemory) return false;
   if (name === "browser_browse" && !options.includeBrowser) return false;
   if (name === "code_task" && !options.includeCodeAgent) return false;
+  if (name === "play_soundboard" && !options.includeSoundboard) return false;
   return true;
 }
 
@@ -269,6 +274,7 @@ export function resolveVoiceRealtimeToolDescriptors(
 
   const includeWebSearch = isResearchEnabled(settings);
   const includeMemory = Boolean(getMemorySettings(settings).enabled);
+  const includeSoundboard = Boolean(getVoiceSoundboardSettings(settings).enabled);
   const browserTaskConfig = getResolvedBrowserTaskConfig(settings);
   const includeBrowser = Boolean(
     isBrowserEnabled(settings) &&
@@ -284,6 +290,7 @@ export function resolveVoiceRealtimeToolDescriptors(
         includeBrowser,
         includeCodeAgent,
         includeMemory,
+        includeSoundboard,
         includeWebSearch
       })
     ),

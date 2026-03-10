@@ -17,6 +17,7 @@ import {
 } from "./voiceToolCallMusic.ts";
 import { executeVoiceWebScrapeTool, executeVoiceWebSearchTool } from "./voiceToolCallWeb.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
+import { maybeTriggerAssistantDirectedSoundboard } from "./voiceSoundboard.ts";
 import type {
   VoiceRealtimeToolDescriptor,
   VoiceRealtimeToolSettings,
@@ -116,6 +117,54 @@ function scheduleLeaveVoiceChannel(
   }, 0);
 }
 
+async function executeVoicePlaySoundboardTool(
+  manager: VoiceToolCallManager,
+  {
+    session,
+    settings,
+    args
+  }: {
+    session?: ToolRuntimeSession | null;
+    settings?: VoiceRealtimeToolSettings | null;
+    args?: VoiceToolCallArgs;
+  }
+) {
+  if (!session || session.ending) {
+    return { ok: false, played: [], error: "soundboard_session_unavailable" };
+  }
+
+  const normalizedRefs = (Array.isArray(args?.refs) ? args.refs : [])
+    .map((entry) => normalizeInlineText(entry, 180))
+    .filter(Boolean)
+    .slice(0, 10);
+  if (normalizedRefs.length === 0) {
+    return { ok: false, played: [], error: "soundboard_refs_required" };
+  }
+
+  const played: string[] = [];
+  for (const requestedRef of normalizedRefs) {
+    const previousPlayCount = Math.max(0, Number(session.soundboard?.playCount || 0));
+    await maybeTriggerAssistantDirectedSoundboard(manager, {
+      session,
+      settings,
+      userId: manager.client.user?.id || null,
+      transcript: "",
+      requestedRef,
+      source: "voice_realtime_tool_play_soundboard"
+    });
+    const nextPlayCount = Math.max(0, Number(session.soundboard?.playCount || 0));
+    if (nextPlayCount > previousPlayCount) {
+      played.push(requestedRef);
+    }
+  }
+
+  return {
+    ok: played.length > 0,
+    played,
+    error: played.length > 0 ? null : "soundboard_refs_unresolved"
+  };
+}
+
 export async function executeLocalVoiceToolCall(manager: VoiceToolCallManager, opts: LocalVoiceToolCallOptions) {
   const normalizedToolName = normalizeInlineText(opts.toolName, 120);
   if (!normalizedToolName) {
@@ -145,6 +194,8 @@ export async function executeLocalVoiceToolCall(manager: VoiceToolCallManager, o
       return executeVoiceMusicSkipTool(manager, { session: opts.session, settings: opts.settings, signal: opts.signal });
     case "music_now_playing":
       return executeVoiceMusicNowPlayingTool(manager, { session: opts.session, signal: opts.signal });
+    case "play_soundboard":
+      return executeVoicePlaySoundboardTool(manager, { session: opts.session, settings: opts.settings, args: opts.args });
     case "offer_screen_share_link":
       throwIfAborted(opts.signal, "Voice tool cancelled");
       return executeOfferScreenShareLinkTool(manager, { session: opts.session, settings: opts.settings });

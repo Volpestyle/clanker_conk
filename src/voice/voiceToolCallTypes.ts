@@ -45,6 +45,7 @@ export type VoiceToolCallManager = Pick<
   | "search"
   | "sessions"
   | "setMusicPhase"
+  | "soundboardDirector"
   | "store"
   | "transcribePcmTurn"
   | "updateVoiceMcpStatus"
@@ -104,6 +105,7 @@ export interface SubAgentTurnResult {
   errorMessage?: string | null;
   text: string;
   costUsd?: number | null;
+  sessionCompleted?: boolean;
 }
 
 export interface SubAgentInteractiveSession {
@@ -115,4 +117,5 @@ export interface SubAgentInteractiveSession {
 export interface SubAgentSessionRegistry {
   get: (sessionId: string) => SubAgentInteractiveSession | null | undefined;
   register: (session: SubAgentInteractiveSession) => void;
+  remove?: (sessionId: string) => boolean;
 }

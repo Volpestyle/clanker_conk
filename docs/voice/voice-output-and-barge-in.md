@@ -81,6 +81,7 @@ Wake-word music handoff rule:
 Freshness rule:
 
 - positive `clankvox` buffered-playback telemetry is not durable truth forever
+- locally queued TTS above `clankvox` still counts as buffered assistant output until it is played or explicitly interrupted
 - if buffer-depth / playback-state updates stop arriving, stale positive TTS telemetry is treated as expired and the assistant output phase can return to `idle`
 - this prevents missed final drain events from pinning `outputLockReason=bot_audio_buffered`
 

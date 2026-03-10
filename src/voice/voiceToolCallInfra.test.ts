@@ -180,7 +180,10 @@ test("refreshRealtimeTools registers provider-native tools for bridge sessions",
     session,
     settings: createVoiceTestSettings({
       voice: {
-        replyPath: "bridge"
+        replyPath: "bridge",
+        soundboard: {
+          enabled: true
+        }
       }
     }),
     reason: "test"
@@ -191,6 +194,7 @@ test("refreshRealtimeTools registers provider-native tools for bridge sessions",
     ? updatedToolsPayload.tools.map((entry) => entry?.name)
     : [];
   assert.equal(toolNames.includes("music_search"), true);
+  assert.equal(toolNames.includes("play_soundboard"), true);
   assert.equal(toolNames.includes("web_search"), true);
 });
 
@@ -265,6 +269,78 @@ test("handleRealtimeFunctionCallEvent executes music_now_playing and sends funct
   const toolEvents = Array.isArray(session.toolCallEvents) ? session.toolCallEvents : [];
   assert.equal(toolEvents.length, 1);
   assert.equal(toolEvents[0]?.toolName, "music_now_playing");
+});
+
+test("handleRealtimeFunctionCallEvent executes play_soundboard and sends function output", async () => {
+  const manager = createVoiceTestManager();
+  manager.scheduleRealtimeToolFollowupResponse = () => {};
+
+  const soundboardPlayCalls = [];
+  const session = {
+    id: "session-openai-tool-call-soundboard-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    voiceChannelId: "voice-1",
+    mode: "openai_realtime",
+    ending: false,
+    realtimeToolOwnership: "provider_native",
+    soundboard: {
+      playCount: 0,
+      lastPlayedAt: 0
+    },
+    realtimeClient: {
+      sendFunctionCallOutput(payload) {
+        sentFunctionOutputs.push(payload);
+      }
+    }
+  };
+  manager.soundboardDirector.play = async (payload) => {
+    soundboardPlayCalls.push(payload);
+    session.soundboard.playCount += 1;
+    return { ok: true };
+  };
+
+  const sentFunctionOutputs = [];
+
+  const settings = createVoiceTestSettings({
+    voice: {
+      replyPath: "bridge",
+      soundboard: {
+        enabled: true,
+        preferredSoundIds: ["airhorn@123"]
+      }
+    }
+  });
+  session.realtimeToolDefinitions = buildRealtimeFunctionTools(manager, {
+    session,
+    settings
+  });
+
+  await manager.handleRealtimeFunctionCallEvent({
+    session,
+    settings,
+    event: {
+      type: "response.output_item.done",
+      item: {
+        type: "function_call",
+        call_id: "call_soundboard_1",
+        name: "play_soundboard",
+        arguments: "{\"refs\":[\"airhorn@123\"]}"
+      }
+    }
+  });
+
+  assert.equal(soundboardPlayCalls.length, 1);
+  assert.equal(soundboardPlayCalls[0]?.soundId, "airhorn");
+  assert.equal(soundboardPlayCalls[0]?.sourceGuildId, "123");
+  assert.equal(sentFunctionOutputs.length, 1);
+  assert.equal(sentFunctionOutputs[0]?.callId, "call_soundboard_1");
+  const outputPayload = JSON.parse(String(sentFunctionOutputs[0]?.output || "{}"));
+  assert.equal(outputPayload?.ok, true);
+  assert.deepEqual(outputPayload?.played, ["airhorn@123"]);
+  const toolEvents = Array.isArray(session.toolCallEvents) ? session.toolCallEvents : [];
+  assert.equal(toolEvents.length, 1);
+  assert.equal(toolEvents[0]?.toolName, "play_soundboard");
 });
 
 test("handleRealtimeFunctionCallEvent ignores provider function calls in brain sessions", async () => {

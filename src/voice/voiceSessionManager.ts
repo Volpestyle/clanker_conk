@@ -2166,9 +2166,9 @@ export class VoiceSessionManager {
 
     if (!session.voxClient?.isAlive) return false;
 
-    // Send the entire TTS PCM buffer to the subprocess. The Rust side now
-    // caps pcm_buffer at 15s (720k samples @ 48kHz) and drops oldest samples
-    // on overflow, so unbounded growth is no longer possible.
+    // Queue generated PCM into the clankvox client. The Bun-side client keeps
+    // durable TTS backlog and only feeds a short near-term window into the
+    // Rust subprocess; interruption/stop is the discard point, not age.
     const sampleRate = Math.max(8_000, Math.floor(Number(inputSampleRateHz) || 24_000));
     try {
       session.voxClient.sendAudio(pcm.toString("base64"), sampleRate);

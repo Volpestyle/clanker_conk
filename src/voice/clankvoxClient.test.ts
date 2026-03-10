@@ -6,9 +6,16 @@ class FakeSubprocess {
   exitCode: number | null = null;
   signalCode: number | null = null;
   killed = false;
+  commands: Array<Record<string, unknown>> = [];
   stdin = {
     end: () => undefined,
-    write: () => true,
+    write: (raw: string) => {
+      const normalized = String(raw || "").trim();
+      if (normalized) {
+        this.commands.push(JSON.parse(normalized) as Record<string, unknown>);
+      }
+      return true;
+    },
     flush: () => undefined,
   };
   stdout = {
@@ -49,11 +56,7 @@ type GatewayPayload = {
   };
 };
 
-test("ClankvoxClient destroy waits for child exit", async () => {
-  const client = new ClankvoxClient("guild-1", "channel-1", null);
-  const child = new FakeSubprocess();
-
-  // Wire up the exit-waiter that _handleExit would normally resolve
+function attachFakeChild(client: ClankvoxClient, child: FakeSubprocess) {
   let resolveExitWaiter!: () => void;
   const exitWaiterPromise = new Promise<void>((resolve) => {
     resolveExitWaiter = resolve;
@@ -63,6 +66,12 @@ test("ClankvoxClient destroy waits for child exit", async () => {
   Reflect.set(client, "child", child);
   Reflect.set(client, "_resolveExitWaiter", resolveExitWaiter);
   Reflect.set(client, "_exitWaiterPromise", exitWaiterPromise);
+}
+
+test("ClankvoxClient destroy waits for child exit", async () => {
+  const client = new ClankvoxClient("guild-1", "channel-1", null);
+  const child = new FakeSubprocess();
+  attachFakeChild(client, child);
 
   const startedAt = Date.now();
   await client.destroy();
@@ -86,16 +95,7 @@ test("ClankvoxClient destroy sends gateway leave before exit", async () => {
   };
   const client = new ClankvoxClient("guild-1", "channel-1", guild);
   const child = new FakeSubprocess();
-
-  let resolveExitWaiter!: () => void;
-  const exitWaiterPromise = new Promise<void>((resolve) => {
-    resolveExitWaiter = resolve;
-  });
-  child._injectExitWaiter(resolveExitWaiter);
-
-  Reflect.set(client, "child", child);
-  Reflect.set(client, "_resolveExitWaiter", resolveExitWaiter);
-  Reflect.set(client, "_exitWaiterPromise", exitWaiterPromise);
+  attachFakeChild(client, child);
 
   await client.destroy();
 
@@ -123,7 +123,8 @@ test("ClankvoxClient buffer depth telemetry clears buffered playback state at ze
   });
 
   const firstUpdatedAt = client.getTtsTelemetryUpdatedAt();
-  assert.equal(client.getTtsBufferDepthSamples(), 24_000);
+  assert.equal(client.getTtsBufferDepthSamples() > 23_000, true);
+  assert.equal(client.getTtsBufferDepthSamples() <= 24_000, true);
   assert.equal(client.getTtsPlaybackState(), "buffered");
   assert.equal(firstUpdatedAt > 0, true);
 
@@ -136,6 +137,72 @@ test("ClankvoxClient buffer depth telemetry clears buffered playback state at ze
   assert.equal(client.getTtsBufferDepthSamples(), 0);
   assert.equal(client.getTtsPlaybackState(), "idle");
   assert.equal(client.getTtsTelemetryUpdatedAt() >= firstUpdatedAt, true);
+});
+
+test("ClankvoxClient queues TTS locally until clankvox has headroom, then drains in paced chunks", () => {
+  const client = new ClankvoxClient("guild-1", "channel-1", null);
+  const child = new FakeSubprocess();
+  const handleMessage = Reflect.get(client, "_handleMessage").bind(client);
+  const flushAudioBatch = Reflect.get(client, "_flushAudioBatch").bind(client);
+  const drainQueuedTtsIngress = Reflect.get(client, "_drainQueuedTtsIngress").bind(client);
+
+  attachFakeChild(client, child);
+
+  handleMessage({
+    type: "buffer_depth",
+    ttsSamples: 120_000,
+    musicSamples: 0
+  });
+
+  const pcm = Buffer.alloc(48_000, 7);
+  client.sendAudio(pcm.toString("base64"), 24_000);
+  flushAudioBatch();
+
+  assert.equal(child.commands.some((command) => command.type === "audio"), false);
+  assert.equal(client.getTtsBufferDepthSamples() > 120_000, true);
+
+  handleMessage({
+    type: "buffer_depth",
+    ttsSamples: 0,
+    musicSamples: 0
+  });
+  drainQueuedTtsIngress();
+
+  const audioCommands = child.commands.filter((command) => command.type === "audio");
+  assert.equal(audioCommands.length > 1, true);
+  const audioBytesSent = audioCommands.reduce((total, command) => {
+    return total + Buffer.from(String(command.pcmBase64 || ""), "base64").length;
+  }, 0);
+  assert.equal(audioBytesSent, pcm.length);
+  assert.equal(Reflect.get(client, "queuedTtsOutputSamples"), 0);
+});
+
+test("ClankvoxClient stopTtsPlayback clears queued local TTS backlog", () => {
+  const client = new ClankvoxClient("guild-1", "channel-1", null);
+  const child = new FakeSubprocess();
+  const handleMessage = Reflect.get(client, "_handleMessage").bind(client);
+  const flushAudioBatch = Reflect.get(client, "_flushAudioBatch").bind(client);
+
+  attachFakeChild(client, child);
+
+  handleMessage({
+    type: "buffer_depth",
+    ttsSamples: 120_000,
+    musicSamples: 0
+  });
+
+  const pcm = Buffer.alloc(144_000, 5);
+  client.sendAudio(pcm.toString("base64"), 24_000);
+  flushAudioBatch();
+
+  assert.equal(child.commands.some((command) => command.type === "audio"), false);
+  assert.equal(client.getTtsBufferDepthSamples() > 120_000, true);
+
+  client.stopTtsPlayback();
+
+  assert.equal(client.getTtsBufferDepthSamples(), 0);
+  assert.equal(client.getTtsPlaybackState(), "idle");
+  assert.deepEqual(child.commands.at(-1), { type: "stop_tts_playback" });
 });
 
 test("ClankvoxClient emits structured IPC errors while preserving error message listeners", () => {

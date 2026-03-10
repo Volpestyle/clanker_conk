@@ -307,11 +307,7 @@ export function buildVoiceInstructions(
     lines.push("You can use Discord soundboard effects as humorous punctuation or reaction beats when they fit the room.");
     lines.push("Available sound refs:");
     lines.push(soundboardCandidateLines.join("\n"));
-    lines.push(
-      "If you want soundboard effects, insert one or more directives where they should fire: [[SOUNDBOARD:<sound_ref>]] using exact refs from the list."
-    );
-    lines.push("If no sound should play, omit that directive.");
-    lines.push("Never mention or explain the directive in normal speech.");
+    lines.push("If you want a soundboard effect, call play_soundboard with one or more exact refs from the list.");
   }
 
   return lines.join("\n");

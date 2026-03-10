@@ -74,7 +74,17 @@ type ClankvoxCommand =
   | { type: "music_set_gain"; target: number; fadeMs: number }
   | { type: "destroy" };
 
+type PendingTtsIngressChunk = {
+  pcm: Buffer;
+  sampleRate: number;
+  offsetBytes: number;
+  remainingOutputSamples: number;
+};
+
 const AUDIO_DEBUG = !!process.env.AUDIO_DEBUG;
+const TTS_INGRESS_TARGET_SAMPLES = 48_000 * 2; // Keep clankvox's live TTS buffer around 2s.
+const TTS_INGRESS_CHUNK_MS = 240;
+const TTS_INGRESS_RECHECK_MS = 60;
 
 function isRecord(value: unknown): value is JsonRecord {
   return value !== null && typeof value === "object";
@@ -101,6 +111,39 @@ function asClankvoxIpcErrorCode(value: unknown): ClankvoxIpcErrorCode | null {
   }
 }
 
+function normalizeSampleRate(sampleRate: number): number {
+  return Math.max(8_000, Math.floor(Number(sampleRate) || 24_000));
+}
+
+function clampEvenPcmByteLength(byteLength: number): number {
+  const normalized = Math.max(0, Math.floor(Number(byteLength) || 0));
+  return normalized - (normalized % 2);
+}
+
+function estimateOutputSamplesFromPcmBytes(byteLength: number, sampleRate: number): number {
+  const normalizedRate = normalizeSampleRate(sampleRate);
+  const normalizedBytes = clampEvenPcmByteLength(byteLength);
+  if (normalizedBytes <= 0) return 0;
+  const inputSamples = normalizedBytes / 2;
+  return Math.max(0, Math.round((inputSamples * 48_000) / normalizedRate));
+}
+
+function estimatePcmBytesForOutputSamples(outputSamples: number, sampleRate: number): number {
+  const normalizedRate = normalizeSampleRate(sampleRate);
+  const normalizedOutputSamples = Math.max(0, Math.floor(Number(outputSamples) || 0));
+  if (normalizedOutputSamples <= 0) return 0;
+  const inputSamples = Math.max(1, Math.floor((normalizedOutputSamples * normalizedRate) / 48_000));
+  return clampEvenPcmByteLength(inputSamples * 2);
+}
+
+function estimatePcmBytesForDurationMs(durationMs: number, sampleRate: number): number {
+  const normalizedRate = normalizeSampleRate(sampleRate);
+  const normalizedDurationMs = Math.max(0, Math.floor(Number(durationMs) || 0));
+  if (normalizedDurationMs <= 0) return 0;
+  const inputSamples = Math.max(1, Math.floor((normalizedRate * normalizedDurationMs) / 1000));
+  return clampEvenPcmByteLength(inputSamples * 2);
+}
+
 export class ClankvoxClient extends EventEmitter {
   private static liveClients = new Set<ClankvoxClient>();
   private static processExitHandlersInstalled = false;
@@ -118,6 +161,11 @@ export class ClankvoxClient extends EventEmitter {
   private lastTtsTelemetryAt = 0;
   /** Latest TTS buffer depth reported by clankvox (samples @ 48kHz) */
   ttsBufferDepthSamples: number = 0;
+  private estimatedBufferedTtsSamples = 0;
+  private estimatedBufferedTtsSamplesAt = 0;
+  private queuedTtsOutputSamples = 0;
+  private queuedTtsIngress: PendingTtsIngressChunk[] = [];
+  private ttsDrainTimer: ReturnType<typeof setTimeout> | null = null;
   private stdoutReaderController: AbortController | null = null;
   private _resolveExitWaiter: (() => void) | null = null;
   private _exitWaiterPromise: Promise<void> | null = null;
@@ -247,6 +295,10 @@ export class ClankvoxClient extends EventEmitter {
     }
     ClankvoxClient.liveClients.delete(this);
     this._cleanupAdapter();
+    this._clearQueuedTtsIngress();
+    this._setEstimatedBufferedTtsSamples(0, Date.now());
+    this.ttsBufferDepthSamples = 0;
+    this.lastTtsPlaybackState = "idle";
     this.child = null;
     this._resolveExitWaiter?.();
   }
@@ -403,6 +455,10 @@ export class ClankvoxClient extends EventEmitter {
         const status = asString(msg.status)?.trim().toLowerCase() === "buffered" ? "buffered" : "idle";
         this.lastTtsTelemetryAt = Date.now();
         this.lastTtsPlaybackState = status;
+        if (status === "idle" && this.ttsBufferDepthSamples <= 0) {
+          this._setEstimatedBufferedTtsSamples(0, Date.now());
+        }
+        this._scheduleTtsDrain(0);
         this.emit("ttsPlaybackState", status);
         break;
       }
@@ -479,10 +535,13 @@ export class ClankvoxClient extends EventEmitter {
       case "buffer_depth": {
         const ttsSamples = asNumber(msg.ttsSamples) ?? 0;
         const musicSamples = asNumber(msg.musicSamples) ?? 0;
-        this.lastTtsTelemetryAt = Date.now();
+        const now = Date.now();
+        this.lastTtsTelemetryAt = now;
         this.ttsBufferDepthSamples = Math.max(0, ttsSamples);
         this.lastTtsPlaybackState =
           this.ttsBufferDepthSamples > 0 ? "buffered" : "idle";
+        this._setEstimatedBufferedTtsSamples(this.ttsBufferDepthSamples, now);
+        this._scheduleTtsDrain(0);
         this.emit("bufferDepth", ttsSamples, musicSamples);
         break;
       }
@@ -514,23 +573,35 @@ export class ClankvoxClient extends EventEmitter {
     this.lastTtsTelemetryAt = Date.now();
     this.lastTtsPlaybackState = "idle";
     this.ttsBufferDepthSamples = 0;
+    this._clearQueuedTtsIngress();
+    this._setEstimatedBufferedTtsSamples(0, Date.now());
   }
 
   getTtsPlaybackState(): TtsPlaybackState {
-    return this.lastTtsPlaybackState;
+    return this.getTtsBufferDepthSamples() > 0 ? "buffered" : this.lastTtsPlaybackState;
   }
 
   getTtsBufferDepthSamples(): number {
-    return Math.max(0, Number(this.ttsBufferDepthSamples || 0));
+    return Math.max(
+      0,
+      Math.round(
+        this._getEstimatedBufferedTtsSamples() +
+        this.queuedTtsOutputSamples +
+        this.getBatchedTtsOutputSamples()
+      )
+    );
   }
 
   getTtsTelemetryUpdatedAt(): number {
+    if (this.getTtsBufferDepthSamples() > 0) {
+      return Math.max(0, Date.now());
+    }
     return Math.max(0, Number(this.lastTtsTelemetryAt || 0));
   }
 
   /** Returns the latest reported TTS buffer depth in seconds (48kHz sample rate). */
   getTtsBufferDepthSeconds(): number {
-    return this.ttsBufferDepthSamples / 48_000;
+    return this.getTtsBufferDepthSamples() / 48_000;
   }
 
   private _forwardToGateway(payload: JsonRecord) {
@@ -584,6 +655,133 @@ export class ClankvoxClient extends EventEmitter {
   private audioBatchTimer: ReturnType<typeof setTimeout> | null = null;
   private currentSampleRate: number = 24000;
 
+  private getBatchedTtsOutputSamples(): number {
+    if (this.audioBatchPcm.length <= 0) return 0;
+    return this.audioBatchPcm.reduce((total, chunk) => {
+      return total + estimateOutputSamplesFromPcmBytes(chunk.length, this.currentSampleRate);
+    }, 0);
+  }
+
+  private _getEstimatedBufferedTtsSamples(now = Date.now()): number {
+    const normalizedEstimate = Math.max(0, Number(this.estimatedBufferedTtsSamples || 0));
+    if (normalizedEstimate <= 0) return 0;
+    const elapsedMs = Math.max(0, now - Math.max(0, Number(this.estimatedBufferedTtsSamplesAt || 0)));
+    return Math.max(0, Math.round(normalizedEstimate - (elapsedMs * 48)));
+  }
+
+  private _setEstimatedBufferedTtsSamples(samples: number, now = Date.now()) {
+    this.estimatedBufferedTtsSamples = Math.max(0, Math.round(Number(samples) || 0));
+    this.estimatedBufferedTtsSamplesAt = now;
+    if (this.estimatedBufferedTtsSamples > 0 || this.queuedTtsOutputSamples > 0 || this.getBatchedTtsOutputSamples() > 0) {
+      this.lastTtsTelemetryAt = now;
+      this.lastTtsPlaybackState = "buffered";
+    } else if (this.ttsBufferDepthSamples <= 0) {
+      this.lastTtsPlaybackState = "idle";
+    }
+  }
+
+  private _clearQueuedTtsIngress() {
+    if (this.audioBatchTimer) {
+      clearTimeout(this.audioBatchTimer);
+      this.audioBatchTimer = null;
+    }
+    if (this.ttsDrainTimer) {
+      clearTimeout(this.ttsDrainTimer);
+      this.ttsDrainTimer = null;
+    }
+    this.audioBatchPcm = [];
+    this.queuedTtsIngress = [];
+    this.queuedTtsOutputSamples = 0;
+  }
+
+  private _scheduleTtsDrain(delayMs = TTS_INGRESS_RECHECK_MS) {
+    const normalizedDelayMs = Math.max(0, Math.floor(Number(delayMs) || 0));
+    if (this.ttsDrainTimer) {
+      if (normalizedDelayMs > 0) return;
+      clearTimeout(this.ttsDrainTimer);
+      this.ttsDrainTimer = null;
+    }
+    this.ttsDrainTimer = setTimeout(() => {
+      this.ttsDrainTimer = null;
+      this._drainQueuedTtsIngress();
+    }, normalizedDelayMs);
+  }
+
+  private _enqueueTtsIngressChunk(pcm: Buffer, sampleRate: number) {
+    const normalizedSampleRate = normalizeSampleRate(sampleRate);
+    const normalizedByteLength = clampEvenPcmByteLength(pcm.length);
+    if (normalizedByteLength <= 0) return;
+    const chunk = normalizedByteLength === pcm.length ? pcm : pcm.subarray(0, normalizedByteLength);
+    const outputSamples = estimateOutputSamplesFromPcmBytes(chunk.length, normalizedSampleRate);
+    if (outputSamples <= 0) return;
+    this.queuedTtsIngress.push({
+      pcm: chunk,
+      sampleRate: normalizedSampleRate,
+      offsetBytes: 0,
+      remainingOutputSamples: outputSamples
+    });
+    this.queuedTtsOutputSamples += outputSamples;
+    this.lastTtsTelemetryAt = Date.now();
+    this.lastTtsPlaybackState = "buffered";
+  }
+
+  private _drainQueuedTtsIngress() {
+    if (!this.isAlive) {
+      this._clearQueuedTtsIngress();
+      return;
+    }
+
+    let estimatedBufferedSamples = this._getEstimatedBufferedTtsSamples();
+    const targetSamples = TTS_INGRESS_TARGET_SAMPLES;
+
+    while (this.queuedTtsIngress.length > 0 && estimatedBufferedSamples < targetSamples) {
+      const head = this.queuedTtsIngress[0];
+      const remainingBytes = clampEvenPcmByteLength(head.pcm.length - head.offsetBytes);
+      if (remainingBytes <= 0 || head.remainingOutputSamples <= 0) {
+        this.queuedTtsIngress.shift();
+        continue;
+      }
+
+      const headroomSamples = Math.max(0, targetSamples - estimatedBufferedSamples);
+      const byteBudgetByDuration = estimatePcmBytesForDurationMs(TTS_INGRESS_CHUNK_MS, head.sampleRate);
+      const byteBudgetByHeadroom = estimatePcmBytesForOutputSamples(headroomSamples, head.sampleRate);
+      const chunkByteLength = clampEvenPcmByteLength(
+        Math.min(
+          remainingBytes,
+          byteBudgetByDuration > 0 ? byteBudgetByDuration : remainingBytes,
+          byteBudgetByHeadroom > 0 ? byteBudgetByHeadroom : remainingBytes
+        )
+      );
+      if (chunkByteLength <= 0) break;
+
+      const chunk = head.pcm.subarray(head.offsetBytes, head.offsetBytes + chunkByteLength);
+      const outputSamples = estimateOutputSamplesFromPcmBytes(chunk.length, head.sampleRate);
+      if (outputSamples <= 0) break;
+
+      this._send({
+        type: "audio",
+        pcmBase64: chunk.toString("base64"),
+        sampleRate: head.sampleRate
+      });
+
+      head.offsetBytes += chunkByteLength;
+      head.remainingOutputSamples = Math.max(0, head.remainingOutputSamples - outputSamples);
+      this.queuedTtsOutputSamples = Math.max(0, this.queuedTtsOutputSamples - outputSamples);
+      if (head.offsetBytes >= head.pcm.length || head.remainingOutputSamples <= 0) {
+        this.queuedTtsIngress.shift();
+      }
+
+      estimatedBufferedSamples += outputSamples;
+      this._setEstimatedBufferedTtsSamples(estimatedBufferedSamples, Date.now());
+    }
+
+    if (this.queuedTtsIngress.length > 0) {
+      this._scheduleTtsDrain(TTS_INGRESS_RECHECK_MS);
+    } else if (this._getEstimatedBufferedTtsSamples() <= 0 && this.ttsBufferDepthSamples <= 0) {
+      this.lastTtsPlaybackState = "idle";
+    }
+  }
+
   private _flushAudioBatch() {
     this.audioBatchTimer = null;
     if (this.audioBatchPcm.length === 0) return;
@@ -593,22 +791,25 @@ export class ClankvoxClient extends EventEmitter {
     // to a maximum size if it gets too large, but 10ms of accumulation shouldn't be huge.
     const batchedPcm = Buffer.concat(this.audioBatchPcm);
     this.audioBatchPcm = [];
-
-    this._send({
-      type: "audio",
-      pcmBase64: batchedPcm.toString("base64"),
-      sampleRate: this.currentSampleRate
-    });
+    this._enqueueTtsIngressChunk(batchedPcm, this.currentSampleRate);
+    this._drainQueuedTtsIngress();
   }
 
   sendAudio(pcmBase64: string, sampleRate: number = 24000) {
-    this.currentSampleRate = sampleRate;
+    const normalizedSampleRate = normalizeSampleRate(sampleRate);
+    if (this.audioBatchPcm.length > 0 && normalizedSampleRate !== this.currentSampleRate) {
+      this._flushAudioBatch();
+    }
+    this.currentSampleRate = normalizedSampleRate;
     try {
       const buf = Buffer.from(pcmBase64, "base64");
       if (buf.length) this.audioBatchPcm.push(buf);
     } catch {
       return;
     }
+
+    this.lastTtsTelemetryAt = Date.now();
+    this.lastTtsPlaybackState = "buffered";
 
     if (!this.audioBatchTimer) {
       // Very fast flush to keep latency low, but batching sync event loop drops
@@ -617,10 +818,12 @@ export class ClankvoxClient extends EventEmitter {
   }
 
   stopPlayback() {
+    this.clearTtsPlaybackTelemetry();
     this._send({ type: "stop_playback" });
   }
 
   stopTtsPlayback() {
+    this.clearTtsPlaybackTelemetry();
     this._send({ type: "stop_tts_playback" });
   }
 
@@ -656,10 +859,7 @@ export class ClankvoxClient extends EventEmitter {
     if (this.destroyPromise) return this.destroyPromise;
     this.destroyed = true;
 
-    if (this.audioBatchTimer) {
-      clearTimeout(this.audioBatchTimer);
-      this.audioBatchTimer = null;
-    }
+    this._clearQueuedTtsIngress();
     this.stdoutBuffer = Buffer.alloc(0);
     this._cleanupAdapter();
 

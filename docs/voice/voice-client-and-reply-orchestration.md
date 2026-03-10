@@ -91,7 +91,7 @@ On socket close or fatal error, `endSession()` is called. Only specific recovera
 | Event | Handler | Purpose | Output State Machine Effect |
 |---|---|---|---|
 | `audio_delta` | `onAudioDelta` | Forward base64 audio to clankvox for Discord playback. Handle barge-in suppression and music ducking. | `syncAssistantOutputState("audio_delta")` |
-| `transcript` | `onTranscript` | Log transcripts, record voice turns, parse inline soundboard directives out of assistant output transcripts, and capture requested refs without leaving control markup in stored speech text. | — |
+| `transcript` | `onTranscript` | Log transcripts, record voice turns, and strip inline soundboard directives out of assistant output transcripts when compatibility fallback markup appears so stored speech text stays clean. | — |
 | `error_event` | `onErrorEvent` | Check if error is recoverable. End session if not. | — |
 | `socket_closed` | `onSocketClosed` | End session with reason `"realtime_socket_closed"`. | Session ends |
 | `socket_error` | `onSocketError` | Log error only (does NOT end session by itself). | — |
@@ -330,8 +330,12 @@ Queued streamed utterances also respect local `clankvox` playback backlog
 before they are handed to realtime TTS. The session keeps a higher-level text
 queue for streamed chunks, pauses that queue once buffered TTS crosses roughly
 3 seconds, and resumes draining once backlog falls back to roughly 1.5 seconds.
-This keeps streaming responsive without letting raw PCM backlog grow until the
-Rust subprocess has to drop old audio.
+Raw PCM now follows the same product rule: generated speech stays durable above
+`clankvox`, and the Bun-side client only feeds a short live playback window
+into the Rust subprocess. Interruption clears queued speech; ordinary backlog
+does not.
+`clankvox` still keeps its own bounded safety buffer, but that cap is a
+subprocess guard rather than the normal place where speech-loss policy is made.
 See [`voice-provider-abstraction.md`](voice-provider-abstraction.md).
 
 ## 15. Deferred Turn System
