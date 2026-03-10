@@ -47,6 +47,11 @@ import type { BotContext } from "./botContext.ts";
 const INITIATIVE_TICK_MAX_RUNTIME_MS = 30_000;
 const INITIATIVE_SOURCE_STATS_WINDOW_DAYS = 14;
 const INITIATIVE_LOOKBACK_MAX_CHANNEL_MESSAGES = 5;
+const INITIATIVE_MIN_GAP_ACTION_KINDS = [
+  "initiative_post",
+  "initiative_skip",
+  "text_thought_loop_post"
+] as const;
 const SOURCE_TYPE_LABELS = {
   reddit: "Reddit",
   rss: "RSS",
@@ -826,10 +831,7 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
     if (posts24h >= initiative.maxPostsPerDay) return;
 
     const minGapMs = Math.max(1, Number(initiative.minMinutesBetweenPosts || 0) * 60_000);
-    const lastPostTimes = getLastActionTimes(runtime.store, [
-      "initiative_post",
-      "text_thought_loop_post"
-    ]);
+    const lastPostTimes = getLastActionTimes(runtime.store, [...INITIATIVE_MIN_GAP_ACTION_KINDS]);
     const lastPostTs = lastPostTimes.length ? Math.max(...lastPostTimes) : 0;
     if (lastPostTs && Date.now() - lastPostTs < minGapMs) return;
 

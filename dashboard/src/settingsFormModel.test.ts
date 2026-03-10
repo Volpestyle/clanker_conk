@@ -133,7 +133,7 @@ test("settingsFormModel converts settings to form defaults and back to normalize
   assert.equal(form.automationsEnabled, true);
   assert.equal(form.textInitiativeEnabled, true);
   assert.equal(form.textInitiativeEagerness, 20);
-  assert.equal(form.textInitiativeMinMinutesBetweenPosts, 60);
+  assert.equal(form.textInitiativeMinMinutesBetweenPosts, 360);
   assert.equal(form.textInitiativeMaxPostsPerDay, 3);
   assert.equal(form.textInitiativeAllowActiveCuriosity, true);
   assert.equal(form.textInitiativeMaxToolSteps, 3);

@@ -123,7 +123,7 @@ export function CoreBehaviorSettingsSection({ id, form, set, onSanitizeBotNameAl
       {form.textInitiativeEnabled && (
         <div className="split">
           <div>
-            <label htmlFor="text-initiative-min-minutes">Min minutes between initiative posts</label>
+            <label htmlFor="text-initiative-min-minutes">Min minutes between initiative considerations</label>
             <input
               id="text-initiative-min-minutes"
               type="number"

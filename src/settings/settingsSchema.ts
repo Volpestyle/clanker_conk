@@ -395,7 +395,7 @@ export const DEFAULT_SETTINGS = {
         mode: "inherit_orchestrator"
       },
       eagerness: 20,
-      minMinutesBetweenPosts: 60,
+      minMinutesBetweenPosts: 360,
       maxPostsPerDay: 3,
       lookbackMessages: 20,
       allowActiveCuriosity: true,
