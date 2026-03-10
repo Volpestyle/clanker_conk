@@ -257,7 +257,7 @@ export async function requestJoin(manager, { message, settings, intentConfidence
     const usesRealtimeBridgeAsr =
       replyPath !== "native" &&
       transcriptionMethod === "realtime_bridge" &&
-      !Boolean(voiceConversation.textOnlyMode);
+      !voiceConversation.textOnlyMode;
     const usesApiTts = replyPath === "brain" && ttsMode === "api";
     const usesOpenAiAudioApi = usesFileTurnTranscription || usesApiTts;
     if (runtimeMode === "voice_agent" && !manager.appConfig?.xaiApiKey) {

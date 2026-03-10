@@ -189,7 +189,7 @@ function createOAuthFetch(
         requestUrl = new URL(input.toString());
       } else if (input instanceof Request) {
         requestUrl = new URL(input.url);
-      } else if (input && typeof input === "object" && "url" in input) {
+      } else if (typeof input === "object" && input !== null && "url" in input) {
         const url = Reflect.get(input, "url");
         if (typeof url === "string" && url.trim()) {
           requestUrl = new URL(url);
@@ -238,8 +238,8 @@ function createOAuthFetch(
 
     return response;
   };
-
-  // Anthropic's SDK types its fetch hook around shimmed Request/Response classes.
+  // Anthropic's SDK still types its fetch hook around node-fetch shims.
+  // eslint-disable-next-line no-restricted-syntax
   return oauthFetch as unknown as AnthropicFetch;
 }
 
@@ -271,23 +271,23 @@ export function createClaudeOAuthClient(envRefreshToken: string): ClaudeOAuthSta
     tokens = existing;
   }
 
-  const state: ClaudeOAuthState = {
-    tokens,
-    // eslint-disable-next-line no-restricted-syntax
-    client: null as unknown as Anthropic
-  };
-
+  let currentTokens = tokens;
   const oauthFetch = createOAuthFetch(
-    () => state.tokens,
-    (updated) => { state.tokens = updated; }
+    () => currentTokens,
+    (updated) => {
+      currentTokens = updated;
+    }
   );
-
-  state.client = new Anthropic({
+  const client = new Anthropic({
     apiKey: "claude-oauth-placeholder",
     fetch: oauthFetch
   });
-
-  return state;
+  return {
+    get tokens() {
+      return currentTokens;
+    },
+    client
+  };
 }
 
 // --- PKCE OAuth setup utilities ---

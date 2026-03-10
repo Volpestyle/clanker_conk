@@ -237,3 +237,29 @@ test("processIngestMessage writes daily log without auto-extracting facts", asyn
   assert.equal(dailyLogCalled, true);
   assert.equal(refreshCalled, true);
 });
+
+test("processIngestMessage skips text micro-reflection scheduling for bot-authored messages", async () => {
+  let scheduled = false;
+  const memory = createMemoryForIngestTests();
+  memory.appendDailyLogEntry = async () => undefined;
+  memory.queueMemoryRefresh = () => undefined;
+  memory.ensureConversationMessageVector = async () => null;
+  memory.scheduleTextChannelMicroReflection = () => {
+    scheduled = true;
+  };
+
+  await memory.processIngestMessage({
+    messageId: "bot-msg-1",
+    authorId: "bot-1",
+    authorName: "clanker conk",
+    content: "I already answered that.",
+    isBot: true,
+    trace: {
+      guildId: "guild-1",
+      channelId: "chan-1",
+      userId: "bot-1"
+    }
+  });
+
+  assert.equal(scheduled, false);
+});
