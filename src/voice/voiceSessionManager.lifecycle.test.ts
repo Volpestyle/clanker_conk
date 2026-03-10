@@ -2201,6 +2201,54 @@ test("cancelPendingPrePlaybackReplyForUserSpeech does NOT requeue bot-initiated 
   assert.equal(cancelLog?.metadata?.requeued, false);
 });
 
+test("cancelPendingPrePlaybackReplyForUserSpeech does NOT requeue stream-watch commentary", () => {
+  const { manager, logs } = createManager();
+  manager.activeReplies = new ActiveReplyRegistry();
+  const session = createSession({
+    mode: "openai_realtime",
+    lastAudioDeltaAt: 0,
+    pendingResponse: null
+  });
+  const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
+  const activeReply = manager.activeReplies.begin(voiceReplyScopeKey, "voice-generation", ["voice_generation"]);
+  const promotedAt = Date.now();
+  session.inFlightAcceptedBrainTurn = {
+    transcript: "[alice is still screen sharing. The visible scene changed.]",
+    userId: "speaker-1",
+    pcmBuffer: null,
+    source: "stream_watch_brain_turn:scene_changed",
+    acceptedAt: promotedAt - 500,
+    phase: "generation_only",
+    captureReason: "stream_watch_brain_turn:scene_changed",
+    directAddressed: false
+  };
+  const capture = {
+    userId: "speaker-2",
+    startedAt: promotedAt - 420,
+    promotedAt,
+    bytesSent: 24_000,
+    signalSampleCount: 12_000,
+    signalActiveSampleCount: 6_000,
+    signalPeakAbs: 12_000,
+    signalSumSquares: 12_000 * 12_000 * 12_000
+  };
+
+  const cancelled = manager.cancelPendingPrePlaybackReplyForUserSpeech({
+    session,
+    userId: "speaker-2",
+    captureState: capture,
+    source: "capture_promoted",
+    now: promotedAt
+  });
+
+  assert.equal(cancelled, true);
+  assert.equal(activeReply.abortController.signal.aborted, true);
+  assert.equal(manager.deferredActionQueue.getDeferredQueuedUserTurns(session).length, 0);
+  const cancelLog = logs.find((entry) => entry?.content === "voice_preplay_reply_superseded_for_user_speech");
+  assert.ok(cancelLog);
+  assert.equal(cancelLog?.metadata?.requeued, false);
+});
+
 test("queueRealtimeTurnFromAsrBridge drops empty ASR transcript for all capture reasons", () => {
   const { manager, logs } = createManager();
   const queuedTurns = [];

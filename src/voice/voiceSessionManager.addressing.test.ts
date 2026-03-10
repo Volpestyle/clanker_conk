@@ -4998,6 +4998,73 @@ test("flushDeferredBotTurnOpenTurns runs brain realtime reply after one admissio
   assert.equal(manager.deferredActionQueue.getDeferredQueuedUserTurns(session).length, 0);
 });
 
+test("flushDeferredBotTurnOpenTurns preserves system-speech source for stream-watch commentary", async () => {
+  const decisionPayloads = [];
+  const realtimeReplyPayloads = [];
+  const manager = createManager();
+  manager.evaluateVoiceReplyDecision = async (payload) => {
+    decisionPayloads.push(payload);
+    return {
+      allow: true,
+      reason: "brain_decides",
+      participantCount: 2,
+      directAddressed: false,
+      transcript: payload.transcript
+    };
+  };
+  manager.runRealtimeBrainReply = async (payload) => {
+    realtimeReplyPayloads.push(payload);
+    return true;
+  };
+  const session = {
+    id: "session-realtime-defer-stream-watch-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    botTurnOpen: false,
+    userCaptures: new Map(),
+    settingsSnapshot: baseSettings(),
+    deferredVoiceActions: {
+      queued_user_turns: {
+        type: "queued_user_turns",
+        goal: "respond_to_deferred_user_turns",
+        freshnessPolicy: "regenerate_from_goal",
+        status: "scheduled",
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        notBeforeAt: Date.now(),
+        expiresAt: 0,
+        reason: "preplay_supersede_requeue",
+        revision: 1,
+        payload: {
+          turns: [
+            {
+              userId: "speaker-1",
+              transcript: "[alice is still screen sharing. The visible scene changed.]",
+              pcmBuffer: null,
+              captureReason: "stream_end",
+              source: "stream_watch_brain_turn:scene_changed",
+              directAddressed: false,
+              queuedAt: Date.now()
+            }
+          ],
+          nextFlushAt: Date.now()
+        }
+      }
+    },
+    deferredVoiceActionTimers: {}
+  };
+
+  await manager.flushDeferredBotTurnOpenTurns({ session });
+
+  assert.equal(decisionPayloads.length, 1);
+  assert.equal(decisionPayloads[0]?.source, "stream_watch_brain_turn:scene_changed");
+  assert.equal(realtimeReplyPayloads.length, 1);
+  assert.equal(realtimeReplyPayloads[0]?.source, "stream_watch_brain_turn:scene_changed");
+  assert.equal(manager.deferredActionQueue.getDeferredQueuedUserTurns(session).length, 0);
+});
+
 test("flushDeferredBotTurnOpenTurns forwards native realtime audio after one admission", async () => {
   const decisionPayloads = [];
   const forwardedPayloads = [];
@@ -5181,9 +5248,9 @@ test("buildRealtimeInstructions omits native tooling policy for transport-only s
       membershipEvents: [],
       realtimeToolDefinitions: [
         {
-          name: "memory_search",
+          name: "memory_write",
           toolType: "function",
-          description: "Search memory"
+          description: "Write durable memory"
         }
       ]
     },

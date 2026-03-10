@@ -96,7 +96,10 @@ function createManager({
   settings = createSettings(),
   llm = {},
   memory = {},
-  guildVoiceMembers = ["user-1"]
+  guildVoiceMembers = ["user-1"],
+  deferredQueuedTurns = [],
+  outputChannelState = null,
+  activeReplies = null
 } = {}) {
   const actions = [];
   const touchCalls = [];
@@ -160,6 +163,21 @@ function createManager({
         const response = { id: `resp-${createdResponses.length + 1}` };
         createdResponses.push(response);
         return response;
+      }
+    },
+    deferredActionQueue: {
+      getDeferredQueuedUserTurns() {
+        return deferredQueuedTurns;
+      }
+    },
+    getOutputChannelState() {
+      return outputChannelState || {
+        locked: false
+      };
+    },
+    activeReplies: activeReplies || {
+      has() {
+        return false;
       }
     },
     async runRealtimeBrainReply(payload) {
@@ -908,5 +926,94 @@ test("maybeTriggerStreamWatchCommentary skips while playback stream is busy", as
 
   assert.equal(brainReplyCalls.length, 0);
   assert.equal(createdResponses.length, 0);
+  assert.equal(actions.some((entry) => entry.content === "stream_watch_commentary_requested"), false);
+});
+
+test("maybeTriggerStreamWatchCommentary skips while voice generation is already in flight", async () => {
+  const now = Date.now();
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: false,
+    inFlightAcceptedBrainTurn: {
+      transcript: "already saying something",
+      userId: "bot-1",
+      pcmBuffer: null,
+      source: "realtime",
+      acceptedAt: now - 100,
+      phase: "generation_only",
+      captureReason: "stream_end",
+      directAddressed: false
+    },
+    streamWatch: {
+      active: true,
+      targetUserId: "user-1",
+      requestedByUserId: "user-1",
+      lastFrameAt: now,
+      lastCommentaryAt: 0,
+      ingestedFrameCount: 2,
+      acceptedFrameCountInWindow: 2,
+      frameWindowStartedAt: 0,
+      latestFrameMimeType: "image/png",
+      latestFrameDataBase64: "AAAA",
+      latestFrameAt: now
+    }
+  });
+  const { manager, actions, brainReplyCalls } = createManager({
+    session,
+    llm: {
+      isProviderConfigured(provider) {
+        return provider === "anthropic";
+      }
+    }
+  });
+
+  await maybeTriggerStreamWatchCommentary(manager, {
+    session,
+    settings: createSettings(),
+    streamerUserId: "user-1",
+    source: "unit_test"
+  });
+
+  assert.equal(brainReplyCalls.length, 0);
+  assert.equal(actions.some((entry) => entry.content === "stream_watch_commentary_requested"), false);
+});
+
+test("maybeTriggerStreamWatchCommentary skips while deferred turns are queued", async () => {
+  const now = Date.now();
+  const session = createSession({
+    mode: "openai_realtime",
+    botTurnOpen: false,
+    streamWatch: {
+      active: true,
+      targetUserId: "user-1",
+      requestedByUserId: "user-1",
+      lastFrameAt: now,
+      lastCommentaryAt: 0,
+      ingestedFrameCount: 2,
+      acceptedFrameCountInWindow: 2,
+      frameWindowStartedAt: 0,
+      latestFrameMimeType: "image/png",
+      latestFrameDataBase64: "AAAA",
+      latestFrameAt: now
+    }
+  });
+  const { manager, actions, brainReplyCalls } = createManager({
+    session,
+    deferredQueuedTurns: [{ transcript: "hold that thought", queuedAt: now - 100 }],
+    llm: {
+      isProviderConfigured(provider) {
+        return provider === "anthropic";
+      }
+    }
+  });
+
+  await maybeTriggerStreamWatchCommentary(manager, {
+    session,
+    settings: createSettings(),
+    streamerUserId: "user-1",
+    source: "unit_test"
+  });
+
+  assert.equal(brainReplyCalls.length, 0);
   assert.equal(actions.some((entry) => entry.content === "stream_watch_commentary_requested"), false);
 });

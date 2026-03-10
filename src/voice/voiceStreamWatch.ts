@@ -1,6 +1,7 @@
 import { clamp } from "../utils.ts";
 import { getPromptBotName } from "../prompts/promptCore.ts";
 import { safeJsonParseFromString } from "../normalization/valueParsers.ts";
+import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
 import {
   getBotName,
   getResolvedOrchestratorBinding,
@@ -22,7 +23,10 @@ type StreamWatchManager = Pick<
   | "touchActivity"
 > & {
   composeOperationalMessage?: VoiceSessionManager["composeOperationalMessage"];
+  deferredActionQueue?: VoiceSessionManager["deferredActionQueue"];
+  getOutputChannelState?: VoiceSessionManager["getOutputChannelState"];
   runRealtimeBrainReply?: VoiceSessionManager["runRealtimeBrainReply"];
+  activeReplies?: VoiceSessionManager["activeReplies"];
 };
 
 const STREAM_WATCH_AUDIO_QUIET_WINDOW_MS = 2200;
@@ -171,6 +175,35 @@ function isStreamWatchPlaybackBusy(session) {
   if (session.botTurnOpen) return true;
   const streamBuffered = Math.max(0, Number(session.botAudioStream?.writableLength || 0));
   return streamBuffered > 0;
+}
+
+function hasPendingDeferredVoiceTurns(manager: StreamWatchManager, session) {
+  if (!session || session.ending) return false;
+  const deferredTurns = manager.deferredActionQueue?.getDeferredQueuedUserTurns?.(session);
+  return Array.isArray(deferredTurns) && deferredTurns.length > 0;
+}
+
+function hasActiveVoiceGeneration(manager: StreamWatchManager, session) {
+  if (!session || session.ending) return false;
+  if (session.inFlightAcceptedBrainTurn && typeof session.inFlightAcceptedBrainTurn === "object") {
+    return true;
+  }
+  try {
+    return Boolean(manager.activeReplies?.has?.(buildVoiceReplyScopeKey(session.id)));
+  } catch {
+    return false;
+  }
+}
+
+function hasQueuedVoiceWork(manager: StreamWatchManager, session) {
+  if (!session || session.ending) return false;
+  if (hasActiveVoiceGeneration(manager, session)) return true;
+  if (Number(session.pendingFileAsrTurns || 0) > 0) return true;
+  if (session.realtimeTurnDrainActive) return true;
+  if (Array.isArray(session.pendingRealtimeTurns) && session.pendingRealtimeTurns.length > 0) return true;
+  if (hasPendingDeferredVoiceTurns(manager, session)) return true;
+  const outputChannelState = manager.getOutputChannelState?.(session);
+  return Boolean(outputChannelState?.locked);
 }
 
 async function sendStreamWatchOfflineMessage(manager: StreamWatchManager, { message, settings, guildId, requesterId }) {
@@ -1184,6 +1217,7 @@ export async function maybeTriggerStreamWatchCommentary(manager: StreamWatchMana
   if (session.userCaptures.size > 0) return;
   if (session.pendingResponse) return;
   if (isStreamWatchPlaybackBusy(session)) return;
+  if (hasQueuedVoiceWork(manager, session)) return;
 
   const quietWindowMs = STREAM_WATCH_AUDIO_QUIET_WINDOW_MS;
   const now = Date.now();

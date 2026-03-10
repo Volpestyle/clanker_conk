@@ -1,5 +1,6 @@
 export const SYSTEM_SPEECH_OPPORTUNITY = {
-  THOUGHT: "thought"
+  THOUGHT: "thought",
+  STREAM_WATCH: "stream_watch"
 } as const;
 
 export type SystemSpeechOpportunityType =
@@ -7,7 +8,8 @@ export type SystemSpeechOpportunityType =
 
 export const SYSTEM_SPEECH_SOURCE = {
   THOUGHT: "voice_thought_engine",
-  THOUGHT_TTS: "voice_thought_engine_tts"
+  THOUGHT_TTS: "voice_thought_engine_tts",
+  STREAM_WATCH: "stream_watch_brain_turn"
 } as const;
 
 export type SystemSpeechReplyAccounting = "none" | "requested" | "spoken";
@@ -36,6 +38,16 @@ const SYSTEM_SPEECH_OPPORTUNITY_DEFINITIONS: readonly SystemSpeechOpportunityDef
   {
     type: SYSTEM_SPEECH_OPPORTUNITY.THOUGHT,
     sourcePrefixes: [SYSTEM_SPEECH_SOURCE.THOUGHT, SYSTEM_SPEECH_SOURCE.THOUGHT_TTS],
+    speechClass: SYSTEM_SPEECH_CLASS.SYSTEM_OPTIONAL,
+    cancelOnPromotedUserSpeechBeforePlayback: true,
+    liveCaptureSupersedeBeforePlayback: true,
+    allowSkipAfterFire: true,
+    replyAccountingOnRequest: "requested",
+    replyAccountingOnLocalPlayback: "spoken"
+  },
+  {
+    type: SYSTEM_SPEECH_OPPORTUNITY.STREAM_WATCH,
+    sourcePrefixes: [SYSTEM_SPEECH_SOURCE.STREAM_WATCH],
     speechClass: SYSTEM_SPEECH_CLASS.SYSTEM_OPTIONAL,
     cancelOnPromotedUserSpeechBeforePlayback: true,
     liveCaptureSupersedeBeforePlayback: true,

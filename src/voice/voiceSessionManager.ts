@@ -126,6 +126,7 @@ import {
 } from "./voiceThoughtGeneration.ts";
 import { buildVoiceRuntimeSnapshot } from "./voiceRuntimeSnapshot.ts";
 import {
+  isSystemSpeechOpportunitySource,
   resolveSystemSpeechOpportunityType,
   shouldSupersedeSystemSpeechBeforePlayback
 } from "./systemSpeechOpportunity.ts";
@@ -1842,7 +1843,10 @@ export class VoiceSessionManager {
     // synthetic triggers, not real user speech. When the user speaks over a
     // greeting, the greeting is stale and should be dropped, not replayed.
     const BOT_EVENT_SOURCES = new Set(["bot_join_greeting", "member_join_greeting"]);
-    const isBotInitiatedEvent = BOT_EVENT_SOURCES.has(String(inFlight?.source || ""));
+    const normalizedInFlightSource = String(inFlight?.source || "").trim();
+    const isBotInitiatedEvent =
+      BOT_EVENT_SOURCES.has(normalizedInFlightSource) ||
+      isSystemSpeechOpportunitySource(normalizedInFlightSource);
     const requeueEligible =
       activeReplyAbortCount > 0 &&
       inFlight &&
@@ -3404,6 +3408,17 @@ export class VoiceSessionManager {
     const orderedTurns = directAddressedTurn
       ? [directAddressedTurn, ...turnsForTranscript.filter((t) => t !== directAddressedTurn)]
       : turnsForTranscript;
+    const distinctSources: string[] = Array.from(
+      new Set(
+        orderedTurns
+          .map((entry) => String(entry?.source || "").trim())
+          .filter((source): source is string => source.length > 0)
+      )
+    );
+    const deferredReplySource: string =
+      distinctSources.length === 1 && isSystemSpeechOpportunitySource(distinctSources[0])
+        ? distinctSources[0]
+        : "bot_turn_open_deferred_flush";
     const coalescedTranscript = normalizeVoiceText(
       orderedTurns
         .map((entry) => String(entry?.transcript || "").trim())
@@ -3427,7 +3442,7 @@ export class VoiceSessionManager {
       settings,
       userId: latestTurn?.userId || null,
       transcript: coalescedTranscript,
-      source: "bot_turn_open_deferred_flush"
+      source: deferredReplySource
     });
     if (decision.directAddressed && session && !session.ending) {
       session.lastDirectAddressAt = Date.now();
@@ -3465,7 +3480,7 @@ export class VoiceSessionManager {
       metadata: {
         sessionId: session.id,
         mode: session.mode,
-        source: "bot_turn_open_deferred_flush",
+        source: deferredReplySource,
         captureReason: latestTurn?.captureReason || "stream_end",
         deferredActionReason: reason,
         allow: Boolean(decision.allow),
@@ -3533,7 +3548,7 @@ export class VoiceSessionManager {
           transcript: coalescedTranscript,
           pcmBuffer: coalescedPcmBuffer,
           captureReason: latestTurn?.captureReason || "stream_end",
-          source: "bot_turn_open_deferred_flush",
+          source: deferredReplySource,
           directAddressed: Boolean(decision.directAddressed),
           deferReason: decision.reason,
           flushDelayMs: decision.retryAfterMs
@@ -3563,7 +3578,7 @@ export class VoiceSessionManager {
         userId: latestTurn?.userId || null,
         transcript: coalescedTranscript,
         captureReason: "bot_turn_open_deferred_flush",
-        source: "bot_turn_open_deferred_flush",
+        source: deferredReplySource,
         directAddressed: Boolean(decision.directAddressed),
         conversationContext: decision.conversationContext || null
       });
@@ -3578,7 +3593,7 @@ export class VoiceSessionManager {
       directAddressed: Boolean(decision.directAddressed),
       directAddressConfidence: Number(decision.directAddressConfidence),
       conversationContext: decision.conversationContext || null,
-      source: "bot_turn_open_deferred_flush"
+      source: deferredReplySource
     });
   }
 
@@ -3780,7 +3795,12 @@ export class VoiceSessionManager {
       });
 
     if (session) {
-      session.pendingMemoryIngest = ingestPromise;
+      const trackedPromise = ingestPromise.finally(() => {
+        if (session.pendingMemoryIngest === trackedPromise) {
+          session.pendingMemoryIngest = null;
+        }
+      });
+      session.pendingMemoryIngest = trackedPromise;
     }
   }
 
