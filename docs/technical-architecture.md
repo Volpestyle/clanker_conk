@@ -50,12 +50,15 @@ The orchestrator is still tool-using and LLM-driven. The preset system resolves 
 Shared conversational tools:
 
 - `conversation_search`
-- `memory_search`
 - `memory_write`
 - `web_search`
 - `browser_browse`
 - `code_task`
 - media generation tools
+
+Text-only conversational tool:
+
+- `memory_search`
 
 Core routing:
 

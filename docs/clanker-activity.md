@@ -256,7 +256,7 @@ Text channel permissions do not determine which voice channels the bot may join.
 |---|---|
 | `initiative.text.enabled` | Master switch for unified text initiative |
 | `initiative.text.eagerness` | Probability gate before the initiative LLM call |
-| `initiative.text.minMinutesBetweenPosts` | Minimum gap between initiative posts |
+| `initiative.text.minMinutesBetweenPosts` | Minimum gap between initiative considerations |
 | `initiative.text.maxPostsPerDay` | Daily initiative budget |
 | `initiative.text.lookbackMessages` | Per-channel context window size |
 | `initiative.text.allowActiveCuriosity` | Whether `web_search` and `browser_browse` are available |
@@ -280,16 +280,19 @@ Text channel permissions do not determine which voice channels the bot may join.
 
 ## Tool Calling Model
 
-Text and voice share most of the same conversational tool surface. The tools are capabilities the model may choose when they help.
+Text and voice share most of the same conversational tool surface, but voice keeps durable-memory search automatic rather than model-invoked. The tools are capabilities the model may choose when they help.
 
 Shared tools include:
 
 - `conversation_search`
-- `memory_search`
 - `memory_write`
 - `web_search`
 - `browser_browse`
 - `code_task`
+
+Text-only shared tool:
+
+- `memory_search`
 
 Voice-only or voice-centric tools include:
 
@@ -309,7 +312,7 @@ Base initiative defaults from `settingsSchema.ts`:
 
 - `initiative.text.enabled = true`
 - `initiative.text.eagerness = 20`
-- `initiative.text.minMinutesBetweenPosts = 60`
+- `initiative.text.minMinutesBetweenPosts = 360`
 - `initiative.text.maxPostsPerDay = 3`
 - `initiative.voice.enabled = true`
 - `initiative.voice.eagerness = 50`

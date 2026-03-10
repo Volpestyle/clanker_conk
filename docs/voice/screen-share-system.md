@@ -151,6 +151,11 @@ When nobody is speaking, the system periodically checks whether to fire a brain 
 
 These triggers don't gate whether the brain speaks — they trigger a normal voice turn where the brain sees the frame + notes and decides whether to comment (or `[SKIP]`). The `autonomousCommentaryEnabled` setting controls whether these proactive triggers fire at all.
 
+Autonomous commentary is treated as optional speech, not as a normal conversational obligation:
+- It does not start while another voice reply is already generating, draining, or deferred.
+- If fresh user speech arrives before commentary audio begins, the commentary is dropped rather than requeued behind the user turn.
+- Deferred stream-watch commentary keeps its original `stream_watch_brain_turn:*` source so the optional-speech interruption rules still apply after a flush delay.
+
 ### Session recap
 
 When a share session ends, the default text model summarizes the accumulated keyframe notes into a one-line memory fact for long-term context.

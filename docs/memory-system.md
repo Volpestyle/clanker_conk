@@ -46,6 +46,7 @@ The brain notices something important mid-conversation and stores it immediately
 - All scopes: `confidence = 0.72`, grounding check, instruction-injection rejection.
 - Execution path: tool call → memory fact write path → `store.addMemoryFact()` → async embedding → archive aged facts → markdown refresh.
 - In voice: the affected user's cached profile is refreshed immediately so the next turn sees the new fact.
+- In voice: prefer session-scoped `note_context` for facts that only need to stay available for the rest of the conversation. Reserve `memory_write` for explicit "remember this" requests or obviously durable facts.
 
 **Strengths:** Immediate. Agent-driven. **Gap:** Spotty in fast-moving voice sessions — the model is focused on responding, not archiving.
 
@@ -92,6 +93,9 @@ Fact profiles are loaded for **all participants**, not just the current speaker.
 - On every generation turn, all participants' facts are included in the prompt.
 - The current speaker gets full facts. Other participants get a compact summary of key facts.
 - Lore (`__lore__`) and self-facts (`__self__`) are loaded at session start and refreshed on `memory_write`.
+- Behavioral facts are cached as a session-scoped fact pool keyed by the active participant set. Spoken generation reranks that pool with the normal hybrid semantic+lexical scoring path, reusing cached fact vectors instead of refetching the pool every turn, and `memory_write` invalidates the pool.
+- Conversation-history retrieval keeps short per-session caches per retrieval mode. Same-topic follow-ups reuse recent results, and low-signal backchannels reuse the freshest cached history or skip retrieval entirely instead of re-querying memory.
+- Voice also has a session-scoped scratchpad via `note_context`. This keeps short-term plans/preferences/relationships live without promoting them to durable memory mid-conversation.
 
 **Text:**
 - Fact profiles are loaded for everyone who appears in the recent message window, not just the message author.
@@ -119,18 +123,20 @@ The model sees people, not "current speaker" vs "others." It can cross-reference
 Past conversations are retrieved by topic similarity at context assembly time, without the model calling a tool. This runs in parallel with fact profile loading and other I/O.
 
 - Conversation windows are embedded at storage time (async, background).
-- At context assembly, the current message/transcript is embedded (~50-100ms) and matched against stored windows via vector similarity.
+- At context assembly, meaningful current messages/transcripts are embedded (~50-100ms) and matched against stored windows via vector similarity.
 - Top 2-3 relevant past conversations are included in the prompt.
-- Runs on every turn — the embedding call is cheap and parallelized with other I/O.
+- Low-signal follow-ups like backchannels do not force a fresh semantic lookup every turn; the bot reuses recent same-topic recall when it already has it.
 
 The model references past conversations naturally, like genuine recall: "Oh yeah, we talked about that last week" — not "let me search my history."
 
 ### Fallback tools
 
-`memory_search` and `conversation_search` remain available as tools for cases the auto-retrieval doesn't cover:
+Text and automation runs keep `memory_search` and `conversation_search` as fallback tools for cases the auto-retrieval doesn't cover:
 - Cross-subject queries ("what do I know about Rust?" across all users)
 - Deeper lookups beyond the auto-retrieval's top-k
 - Broader time ranges or guild-wide conversation search
+
+Voice keeps `conversation_search` for "what did we say earlier?" style recall, but does not expose `memory_search` as a live tool. Same-session continuity should come from the auto-retrieved context plus `note_context`, not a manual durable-memory search on every spoken turn.
 
 These are fallbacks, not primary access paths. The model shouldn't need to search its own memory for the common case.
 
@@ -183,7 +189,8 @@ Lore is stored under the special subject `__lore__`, not as a separate fact type
 **Behavioral facts** — standing instructions about how to act:
 - Types: `guidance`, `behavioral`.
 - `guidance` facts are always included in the prompt (light, few of them — style/tone context the bot reasons about on every turn).
-- `behavioral` facts are contextually retrieved — only included when the current turn's content is relevant (prevents bloating every prompt with trigger/action rules). Uses the same embedding similarity as conversation retrieval.
+- `behavioral` facts are contextually retrieved — only included when the current turn's content is relevant (prevents bloating every prompt with trigger/action rules).
+- In voice sessions, the bot loads the scoped behavioral fact pool once, reranks it locally against each transcript, and refreshes that pool on `memory_write` or participant-set changes.
 - Subject scoping: `__lore__` for server-wide behavioral rules, user ID for per-person rules.
 - FIFO eviction, same as contextual.
 
@@ -306,6 +313,6 @@ Action log kinds: `memory_fact`, `memory_reflection_start`, `memory_reflection_c
 | `src/memory/dailyReflection.ts` | End-of-day reflection logic |
 | `src/store/store.ts` | `memory_facts` schema, query/update methods |
 | `src/tools/replyTools.ts` | `memory_write`, `memory_search`, `conversation_search` text tools |
-| `src/voice/voiceToolCallMemory.ts` | Voice `memory_search` and `memory_write` handlers |
+| `src/voice/voiceToolCallMemory.ts` | Voice `memory_write` and `conversation_search` handlers |
 | `src/bot.ts` | Ingest triggers, reflection scheduling |
 | `src/voice/voiceSessionManager.ts` | Voice transcript ingestion, session fact profile caching |

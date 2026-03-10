@@ -48,7 +48,7 @@ Before the model is consulted, the runtime checks:
 - `initiative.text.enabled`
 - eligible channel pool is non-empty
 - daily cap has not been reached
-- minimum gap since the last initiative post has passed
+- minimum gap since the last initiative consideration has passed
 - the eagerness probability roll passed
 
 Canonical settings:
@@ -60,7 +60,8 @@ Canonical settings:
 
 Implementation note:
 
-- daily-cap and cooldown accounting includes both `initiative_post` and `text_thought_loop_post` action kinds in persisted action history
+- daily-cap accounting includes both `initiative_post` and `text_thought_loop_post` action kinds in persisted action history
+- min-gap cooldown resets after either an `initiative_post`, an `initiative_skip`, or a `text_thought_loop_post`
 
 ### 3. Context Assembly
 
@@ -166,7 +167,7 @@ Behavior guidance comes from memory-backed `guidance` and `behavioral` facts.
 | `initiative.text.enabled` | Master initiative toggle |
 | `initiative.text.execution` | Execution policy for the initiative LLM call |
 | `initiative.text.eagerness` | Probability gate before consultation |
-| `initiative.text.minMinutesBetweenPosts` | Minimum spacing between initiative posts |
+| `initiative.text.minMinutesBetweenPosts` | Minimum spacing between initiative considerations |
 | `initiative.text.maxPostsPerDay` | Daily initiative budget |
 | `initiative.text.lookbackMessages` | Channel context window |
 | `initiative.text.allowActiveCuriosity` | Enables `web_search` and `browser_browse` |

@@ -71,6 +71,48 @@ Filter examples:
 {job="clanker_runtime",agent="voice",level="error"}
 ```
 
+## Voice memory attribution
+
+When voice feels redundant or expensive, attribute memory work before changing
+prompting behavior.
+
+Start with these events:
+
+- `voice_generation_memory_loaded`
+- `voice_realtime_instruction_memory_loaded`
+- `memory_embedding_call`
+
+Suggested query:
+
+```logql
+{job="clanker_runtime",kind=~"voice_runtime|memory_embedding_call"}
+```
+
+Inspect these metadata fields together:
+
+- `memorySource`
+- `traceSource`
+- `continuityLoadMs`
+- `behavioralMemoryLoadMs`
+- `totalLoadMs`
+- `usedCachedBehavioralFacts`
+- `userFactCount`
+- `relevantFactCount`
+- `behavioralFactCount`
+
+Interpretation notes:
+
+- `voice_generation_memory_loaded` is the orchestrator brain path that feeds Claude/OpenAI/etc. generation
+- `voice_realtime_instruction_memory_loaded` is the separate OpenAI/Gemini/xAI realtime instruction refresh path
+- `memory_embedding_call.traceSource` attributes the embedding API call to the caller:
+  - `voice_realtime_behavioral_memory:generation` — behavioral fact retrieval from the brain/generation path (`voiceReplies.ts`)
+  - `voice_realtime_behavioral_memory:instruction_refresh` — behavioral fact retrieval from the realtime instruction refresh path (`instructionManager.ts`)
+  - `voice_realtime_instruction_context` — conversation continuity from instruction refresh
+  - `voice_realtime_generation` — conversation continuity from generation
+  - `memory_query` — explicit memory search tool call
+- in transport_only sessions (brain mode), the instruction refresh path skips memory retrieval entirely — only the generation path should produce embedding calls
+- if both `:generation` and `:instruction_refresh` traces appear on the same turn, the session is provider_native and both paths are expected
+
 ## Voice output incident workflow
 
 When a voice turn is transcribed correctly but the bot does not answer, use the
