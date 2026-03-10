@@ -3,7 +3,6 @@ export const LOOKUP_CONTEXT_MAX_RESULTS_DEFAULT = 5;
 import fs from "node:fs";
 import path from "node:path";
 import { Database } from "bun:sqlite";
-import { DEFAULT_SETTINGS } from "../settings/settingsSchema.ts";
 import { clamp, nowIso } from "../utils.ts";
 import { normalizeSettings } from "./settingsNormalization.ts";
 import { rewriteRuntimeSettingsRow, getSettings, setSettings, patchSettings, resetSettings } from "./storeSettings.ts";
@@ -19,7 +18,7 @@ import {
   getReferencedMessageStats,
   upsertMessageVectorNative
 } from "./storeMessages.ts";
-import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, getRecentActions, getRecentMemoryReflections, getRecentBrowserSessions, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted } from "./storeActionLog.ts";
+import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, getRecentActions, getRecentMemoryReflections, deleteReflectionRun, getRecentBrowserSessions, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted } from "./storeActionLog.ts";
 import { wasLinkSharedSince, recordSharedLink, pruneLookupContext, recordLookupContext, searchLookupContext } from "./storeLookups.ts";
 import { getRecentVoiceSessions, getVoiceSessionEvents } from "./storeVoice.ts";
 import { getReplyPerformanceStats, getStats } from "./storeStats.ts";
@@ -244,7 +243,7 @@ export class Store {
     `);
 
     if (!this.db.prepare("SELECT 1 FROM settings WHERE key = ?").get(SETTINGS_KEY)) {
-      const defaultSettings = normalizeSettings(DEFAULT_SETTINGS);
+      const defaultSettings = normalizeSettings({});
       this.db
         .prepare("INSERT INTO settings(key, value, updated_at) VALUES(?, ?, ?)")
         .run(SETTINGS_KEY, JSON.stringify(defaultSettings), nowIso());
@@ -410,6 +409,10 @@ export class Store {
 
   hasReflectionBeenCompleted(dateKey: string, guildId: string): boolean {
     return hasReflectionBeenCompleted(this, dateKey, guildId);
+  }
+
+  deleteReflectionRun(runId: string): { deleted: number } {
+    return deleteReflectionRun(this, runId);
   }
 
   wasLinkSharedSince(url, sinceIso) {

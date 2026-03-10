@@ -282,7 +282,7 @@ export function resolveAgentStackPresetConfig(
     : { provider: "openai", model: "gpt-5" };
 
   const presetVoiceAdmissionClassifierFallback: SettingsModelBinding =
-    isClaudeOAuth ? { provider: "claude-oauth", model: "claude-haiku-4-5" }
+    isClaudeOAuth ? { provider: "claude-oauth", model: "claude-sonnet-4-6" }
     : isClaudeApi ? { provider: "anthropic", model: "claude-haiku-4-5" }
     : isOpenAiOAuth ? { provider: "openai-oauth", model: "gpt-5.4" }
     : isGrokNativeAgent ? { provider: "xai", model: "grok-3-mini-latest" }

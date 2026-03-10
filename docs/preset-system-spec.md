@@ -50,7 +50,7 @@ Current preset intent:
 
 - `openai_oauth`, `openai_api`, and `openai_native_realtime` use `codex-cli` as the default implementation worker, with `claude-code` also available as a local worker
 - `claude_oauth` and `claude_api` use `claude-code` as the default implementation worker, with `codex-cli` also available as a local worker
-- `claude_oauth` keeps the voice reply classifier on `claude-haiku-4-5`, but the brain-path voice generation model defaults to `claude-sonnet-4-6`
+- `claude_oauth` defaults both the voice reply classifier and the brain-path voice generation model to `claude-sonnet-4-6`
 - remote `codex` is a manual opt-in worker, not part of the preset-default local worker ordering
 
 ## Modularity

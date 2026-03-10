@@ -568,6 +568,8 @@ test("dashboard preset defaults preview settings without mutating saved state", 
     assert.equal(bot.appliedSettings.length, 0);
     assert.equal(json._resolved.agentStack.voiceAdmissionPolicy.mode, "generation_decides");
     assert.equal(json.agentStack.preset, "claude_oauth");
+    assert.equal(json._resolved.voiceAdmissionClassifierBinding.provider, "claude-oauth");
+    assert.equal(json._resolved.voiceAdmissionClassifierBinding.model, "claude-sonnet-4-6");
     assert.equal(json._resolved.voiceGenerationBinding.provider, "claude-oauth");
     assert.equal(json._resolved.voiceGenerationBinding.model, "claude-sonnet-4-6");
 
@@ -599,6 +601,8 @@ test("dashboard fresh settings default claude_oauth brain to claude sonnet", asy
     assert.equal(response.status, 200);
     const json = await response.json();
     assert.equal(json.agentStack.preset, "claude_oauth");
+    assert.equal(json._resolved.voiceAdmissionClassifierBinding.provider, "claude-oauth");
+    assert.equal(json._resolved.voiceAdmissionClassifierBinding.model, "claude-sonnet-4-6");
     assert.equal(json._resolved.voiceGenerationBinding.provider, "claude-oauth");
     assert.equal(json._resolved.voiceGenerationBinding.model, "claude-sonnet-4-6");
     assert.equal(json.agentStack.runtimeConfig.voice.generation.mode, "dedicated_model");

@@ -83,7 +83,7 @@ function normalizeLlmProvider(value: unknown, fallback = "openai"): string {
 }
 
 function getPresetClassifierFallback(preset: string): { provider: string; model: string } | undefined {
-  if (preset === "claude_oauth") return { provider: "claude-oauth", model: "claude-haiku-4-5" };
+  if (preset === "claude_oauth") return { provider: "claude-oauth", model: "claude-sonnet-4-6" };
   if (preset === "claude_api") return { provider: "anthropic", model: "claude-haiku-4-5" };
   if (preset === "openai_native_realtime" || preset === "openai_api") return { provider: "openai", model: "gpt-5-mini" };
   if (preset === "openai_oauth") return { provider: "openai-oauth", model: "gpt-5.4" };

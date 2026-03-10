@@ -35,9 +35,9 @@ bun scripts/voiceGoldenHarness.ts \
   --modes voice_agent,openai_realtime,gemini_realtime,elevenlabs_realtime \
   --iterations 1 \
   --judge-provider claude-oauth \
-  --judge-model claude-haiku-4-5 \
+  --judge-model claude-sonnet-4-6 \
   --decider-provider claude-oauth \
-  --decider-model claude-haiku-4-5 \
+  --decider-model claude-sonnet-4-6 \
   --actor-provider claude-oauth \
   --actor-model claude-sonnet-4-5 \
   --out-json data/voice-golden-report.json
@@ -66,7 +66,7 @@ For the current authoritative defaults, check `scripts/voiceGoldenHarness.ts` an
 
 - Live mode requires credentials for the providers selected by `--actor-provider` and `--decider-provider`.
 - Judge mode requires credentials for `--judge-provider`.
-- With current defaults (`claude-oauth` actor on `claude-sonnet-4-5`, `claude-oauth` decider/judge on `claude-haiku-4-5`), set `CLAUDE_OAUTH_REFRESH_TOKEN`.
+- With current defaults (`claude-oauth` actor on `claude-sonnet-4-5`, `claude-oauth` decider/judge on `claude-sonnet-4-6`), set `CLAUDE_OAUTH_REFRESH_TOKEN`.
 - For web-search cases, set at least one search provider key: `BRAVE_SEARCH_API_KEY` and/or `SERPAPI_API_KEY`.
 
 ---

@@ -633,7 +633,7 @@ test("settingsFormModel supports the claude_oauth preset (migrated from claude_o
   assert.equal(form.model, "claude-opus-4-6");
   assert.equal(form.voiceReplyDecisionRealtimeAdmissionMode, "generation_decides");
   assert.equal(form.voiceReplyDecisionLlmProvider, "claude-oauth");
-  assert.equal(form.voiceReplyDecisionLlmModel, "claude-haiku-4-5");
+  assert.equal(form.voiceReplyDecisionLlmModel, "claude-sonnet-4-6");
   assert.equal(form.voiceGenerationLlmUseTextModel, false);
   assert.equal(form.voiceGenerationLlmProvider, "claude-oauth");
   assert.equal(form.voiceGenerationLlmModel, "claude-sonnet-4-6");
@@ -704,7 +704,7 @@ test("applyStackPresetDefaults merges server-returned defaults into form", () =>
     voiceTtsMode: "realtime",
     voiceReplyDecisionRealtimeAdmissionMode: "generation_decides",
     voiceReplyDecisionLlmProvider: "claude-oauth",
-    voiceReplyDecisionLlmModel: "claude-haiku-4-5",
+    voiceReplyDecisionLlmModel: "claude-sonnet-4-6",
     voiceGenerationLlmUseTextModel: false,
     voiceGenerationLlmProvider: "claude-oauth",
     voiceGenerationLlmModel: "claude-sonnet-4-6"
@@ -718,7 +718,7 @@ test("applyStackPresetDefaults merges server-returned defaults into form", () =>
   assert.equal(patched.voiceTtsMode, "realtime");
   assert.equal(patched.voiceReplyDecisionRealtimeAdmissionMode, "generation_decides");
   assert.equal(patched.voiceReplyDecisionLlmProvider, "claude-oauth");
-  assert.equal(patched.voiceReplyDecisionLlmModel, "claude-haiku-4-5");
+  assert.equal(patched.voiceReplyDecisionLlmModel, "claude-sonnet-4-6");
   assert.equal(patched.voiceGenerationLlmUseTextModel, false);
   assert.equal(patched.voiceGenerationLlmProvider, "claude-oauth");
   assert.equal(patched.voiceGenerationLlmModel, "claude-sonnet-4-6");

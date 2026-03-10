@@ -19,9 +19,20 @@ interface SettingsValueRow {
   value: string;
 }
 
+const CANONICAL_DEFAULT_SETTINGS = normalizeSettings({});
+const LEGACY_BOOTSTRAP_DEFAULT_SETTINGS_JSON = JSON.stringify(normalizeSettings(DEFAULT_SETTINGS));
+
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 export function rewriteRuntimeSettingsRow(store: SettingsStore, rawValue: string | null | undefined) {
 const parsed = safeJsonParse(rawValue, DEFAULT_SETTINGS);
-const normalized = normalizeSettings(parsed);
+const normalizedParsed = normalizeSettings(parsed);
+const normalized =
+  JSON.stringify(normalizedParsed) === LEGACY_BOOTSTRAP_DEFAULT_SETTINGS_JSON
+    ? CANONICAL_DEFAULT_SETTINGS
+    : normalizedParsed;
 const normalizedJson = JSON.stringify(normalized);
 if (normalizedJson === String(rawValue || "")) return normalized;
 
@@ -47,10 +58,16 @@ return normalized;
 
 export function patchSettings(store: SettingsStore, patch) {
 const current = store.getSettings();
-const merged = deepMerge(current, patch ?? {});
+const patchRecord = isRecordLike(patch) ? patch : {};
+const merged = deepMerge(current, patchRecord);
+
+if (Object.prototype.hasOwnProperty.call(patchRecord, "memoryLlm")) {
+  merged.memoryLlm = patchRecord.memoryLlm;
+}
+
 return store.setSettings(merged);
 }
 
 export function resetSettings(store: SettingsStore) {
-return store.setSettings(DEFAULT_SETTINGS);
+return store.setSettings(CANONICAL_DEFAULT_SETTINGS);
 }

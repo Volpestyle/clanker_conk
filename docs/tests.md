@@ -126,11 +126,11 @@ bun test tests/live/voiceAdmission.live.test.ts
 ```
 
 ```sh
-CLASSIFIER_PROVIDER=claude-oauth CLASSIFIER_MODEL=claude-haiku-4-5 VOICE_ADMISSION_DEBUG=0 bun test tests/live/voiceAdmission.live.test.ts
+CLASSIFIER_PROVIDER=claude-oauth CLASSIFIER_MODEL=claude-sonnet-4-6 VOICE_ADMISSION_DEBUG=0 bun test tests/live/voiceAdmission.live.test.ts
 ```
 
 ```sh
-CLASSIFIER_PROVIDER=claude-oauth CLASSIFIER_MODEL=claude-haiku-4-5 LABEL_FILTER="event: another person joins" VOICE_ADMISSION_DEBUG=1 bun test tests/live/voiceAdmission.live.test.ts
+CLASSIFIER_PROVIDER=claude-oauth CLASSIFIER_MODEL=claude-sonnet-4-6 LABEL_FILTER="event: another person joins" VOICE_ADMISSION_DEBUG=1 bun test tests/live/voiceAdmission.live.test.ts
 ```
 
 Debug visibility:

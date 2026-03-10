@@ -549,14 +549,14 @@ function resolveDefaults(options: VoiceGoldenHarnessOptions = {}): VoiceGoldenRe
     actorProvider: String(options.actorProvider || "claude-oauth").trim() || "claude-oauth",
     actorModel: String(options.actorModel || "claude-sonnet-4-5").trim() || "claude-sonnet-4-5",
     deciderProvider: String(options.deciderProvider || "claude-oauth").trim() || "claude-oauth",
-    deciderModel: String(options.deciderModel || "claude-haiku-4-5").trim() || "claude-haiku-4-5",
+    deciderModel: String(options.deciderModel || "claude-sonnet-4-6").trim() || "claude-sonnet-4-6",
     judge: {
       enabled:
         options.judge?.enabled !== undefined
           ? Boolean(options.judge.enabled)
           : true,
       provider: String(options.judge?.provider || "claude-oauth").trim() || "claude-oauth",
-      model: String(options.judge?.model || "claude-haiku-4-5").trim() || "claude-haiku-4-5"
+      model: String(options.judge?.model || "claude-sonnet-4-6").trim() || "claude-sonnet-4-6"
     },
     allowMissingCredentials: parseBooleanFlag(options.allowMissingCredentials, false),
     maxCases: Math.max(1, Math.min(VOICE_GOLDEN_CASES.length, Math.floor(Number(options.maxCases) || DEFAULT_MAX_CASES)))
