@@ -76,31 +76,9 @@ test("buildVoiceTurnPrompt explains browser tool usage when interactive browsing
     }
   });
 
-  assert.equal(prompt.includes("Interactive browser browsing is available."), true);
-  assert.equal(
-    prompt.includes(
-      "Use browser_browse when you need actual site navigation or interaction, when the user asks you to open something in a browser, asks for a screenshot, asks what the page looks like, or when page appearance/layout matters, such as JS-rendered pages, clicking, typing, scrolling, dragging, or moving through a live page flow."
-    ),
-    true
-  );
-  assert.equal(
-    prompt.includes(
-      "Choose browser_browse when the speaker explicitly wants browser use or to visit/open a site, asks for a screenshot, asks what the page looks like, when visual layout matters, or when the task genuinely needs interactive browsing or JS rendering; otherwise use the lighter web tool that best fits the task."
-    ),
-    true
-  );
-  assert.equal(
-    prompt.includes("browser_browse can capture browser screenshots and return them for visual inspection on the follow-up turn."),
-    true
-  );
-  assert.equal(
-    prompt.includes("If the speaker explicitly asks you to use a browser, asks for a screenshot of a webpage, asks what a page looks like, or the task genuinely requires interactive browsing, call browser_browse in the same response."),
-    true
-  );
-  assert.equal(
-    prompt.includes("Do not say you cannot take or inspect webpage screenshots when browser_browse is available. Use the browser tool instead."),
-    true
-  );
+  assert.equal(prompt.includes("browser_browse:"), true);
+  assert.equal(prompt.includes("interactive browsing"), true);
+  assert.equal(prompt.includes("screenshots"), true);
 });
 
 test("buildVoiceTurnPrompt explains screen-share tool usage when link offers are available", () => {
@@ -116,13 +94,8 @@ test("buildVoiceTurnPrompt explains screen-share tool usage when link offers are
     }
   });
 
-  assert.equal(prompt.includes("VC screen-share link offers are available."), true);
-  assert.equal(
-    prompt.includes("If the speaker asks you to see/watch their screen or stream, call offer_screen_share_link in the same response."),
-    true
-  );
   assert.equal(prompt.includes("offer_screen_share_link"), true);
-  assert.equal(prompt.includes("Do not encode tool intent in JSON helper fields, helper refs, or placeholder control fields."), true);
+  assert.equal(prompt.includes("watch their screen"), true);
   assert.equal(prompt.includes("voice JSON contract"), false);
 });
 
@@ -154,41 +127,36 @@ test("buildVoiceTurnPrompt prefers tool calls over stale helper fields", () => {
     musicContext: {
       playbackState: "playing",
       currentTrack: {
+        id: "track-current",
         title: "Example Song",
         artists: ["Example Artist"]
       },
       lastTrack: null,
       queueLength: 2,
       upcomingTracks: [
-        { title: "Next Song", artist: "Next Artist" }
+        { id: "track-next", title: "Next Song", artist: "Next Artist" }
       ],
       lastAction: "play_now",
       lastQuery: "example song"
     }
   });
 
-  assert.equal(prompt.includes("Available tool calls this turn:"), true);
-  assert.equal(
-    prompt.includes("Default to speaking first on casual voice turns. Greetings, acknowledgements, banter, reactions, and simple conversational turns usually do not need a tool."),
-    true
-  );
-  assert.equal(
-    prompt.includes("Do not promise future action without either calling the tool or declining. A brief natural lead-in before a tool call is allowed."),
-    true
-  );
-  assert.equal(prompt.includes("call web_search in the same response."), true);
-  assert.equal(prompt.includes("call open_article with one ref from this list."), true);
-  assert.equal(prompt.includes("Use memory_write with namespace=speaker"), true);
+  assert.equal(prompt.includes("Tools:"), true);
+  assert.equal(prompt.includes("Speak first on casual turns"), true);
+  assert.equal(prompt.includes("never claim success before a tool returns"), true);
+  assert.equal(prompt.includes("web_search"), true);
+  assert.equal(prompt.includes("open_article"), true);
+  assert.equal(prompt.includes("memory_write"), true);
   assert.equal(prompt.includes("memory_search"), false);
-  assert.equal(prompt.includes("Prefer note_context for session-scoped facts"), true);
-  assert.equal(prompt.includes("Voice/session control tools are available."), true);
+  assert.equal(prompt.includes("note_context"), true);
   assert.equal(prompt.includes("music_play"), true);
   assert.equal(prompt.includes("set_addressing"), false);
-  assert.equal(prompt.includes("Use tool calls for actions, lookup, voice addressing"), false);
-  assert.equal(prompt.includes("Music playback:"), true);
-  assert.equal(prompt.includes("Current song: Example Song by Example Artist (playing)"), true);
-  assert.equal(prompt.includes("Queue item 1: Next Song - Next Artist"), true);
-  assert.equal(prompt.includes("Do not emulate play-now by chaining music_queue_add and music_skip."), true);
+  assert.equal(prompt.includes("Music:"), true);
+  assert.equal(prompt.includes("Now: Example Song by Example Artist"), true);
+  assert.equal(prompt.includes("selection_id: track-current"), true);
+  assert.equal(prompt.includes("Next Song - Next Artist"), true);
+  assert.equal(prompt.includes("selection_id: track-next"), true);
+  assert.equal(prompt.includes("queue_add+skip"), true);
   assert.equal(prompt.includes("set webSearchQuery"), false);
   assert.equal(prompt.includes("set openArticleRef"), false);
   assert.equal(prompt.includes("Set memoryLine"), false);
@@ -222,8 +190,8 @@ test("buildVoiceTurnPrompt renders durable session context above conversation hi
 
   assert.equal(prompt.includes("Session context:"), true);
   assert.equal(prompt.includes("- [preference] Alice prefers concise answers in this session"), true);
-  assert.equal(prompt.indexOf("Session context:") < prompt.indexOf("Relevant past conversation windows from shared text/voice history:"), true);
-  assert.equal(prompt.includes("Use note_context to pin important session-scoped facts, plans, preferences, or relationships"), true);
+  assert.equal(prompt.indexOf("Session context:") < prompt.indexOf("Past conversation:"), true);
+  assert.equal(prompt.includes("note_context"), true);
 });
 
 test("buildVoiceTurnPrompt trims session context to the most recent prompt-safe entries", () => {
@@ -278,7 +246,7 @@ test("buildVoiceTurnPrompt includes interruption recovery context for the next t
   assert.equal(prompt.includes("Do not mechanically continue the old answer if the new turn changes direction."), true);
 });
 
-test("buildVoiceTurnPrompt teaches inline soundboard directives when buffered playback can sequence them", () => {
+test("buildVoiceTurnPrompt teaches inline soundboard directives when ordered soundboard sequencing is available", () => {
   const prompt = buildVoiceTurnPrompt({
     speakerName: "alice",
     transcript: "that was brutal",
@@ -288,23 +256,23 @@ test("buildVoiceTurnPrompt teaches inline soundboard directives when buffered pl
     soundboardEagerness: 82
   });
 
-  assert.equal(prompt.includes("Discord soundboard playback is available this turn."), true);
-  assert.equal(prompt.includes("Discord soundboard tendency: 82/100."), true);
+  assert.equal(prompt.includes("Discord soundboard tendency: 82/100"), true);
   assert.equal(prompt.includes("playful soundboard bits and comedic punctuation"), true);
-  assert.equal(prompt.includes("[[SOUNDBOARD:<sound_ref>]]"), true);
-  assert.equal(prompt.includes("Do not both insert [[SOUNDBOARD:...]] and call play_soundboard for the same beat."), true);
+  assert.equal(prompt.includes("[[SOUNDBOARD:<ref>]]"), true);
+  assert.equal(prompt.includes("inline and tool-call the same sound"), true);
 });
 
-test("buildVoiceTurnPrompt keeps streamed replies on the play_soundboard tool path", () => {
+test("buildVoiceTurnPrompt keeps play_soundboard as the fallback when inline directives are unavailable", () => {
   const prompt = buildVoiceTurnPrompt({
     speakerName: "alice",
     transcript: "hit the rimshot",
     allowSoundboardToolCall: true,
+    allowInlineSoundboardDirectives: false,
     soundboardCandidates: ["rimshot@123"],
     soundboardEagerness: 82
   });
 
-  assert.equal(prompt.includes("Streaming speech is active this turn."), true);
-  assert.equal(prompt.includes("use play_soundboard"), true);
-  assert.equal(prompt.includes("Do not output [[SOUNDBOARD:...]] markup when streaming speech is active."), true);
+  assert.equal(prompt.includes("Inline directives unavailable"), true);
+  assert.equal(prompt.includes("play_soundboard"), true);
+  assert.equal(prompt.includes("Don't output [[SOUNDBOARD:...]] markup"), true);
 });

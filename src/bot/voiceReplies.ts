@@ -595,15 +595,10 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         }
         return { userFacts: [], relevantFacts: [] };
       },
-    loadRecentLookupContext:
-      typeof runtime.loadRecentLookupContext === "function"
-        ? (payload) => runtime.loadRecentLookupContext(payload)
-        : null,
     loadRecentConversationHistory,
   });
   const continuityLoadMs = Math.max(0, Date.now() - continuityStartedAt);
   const promptMemorySlice = normalizeFactProfileSlice(continuity.memorySlice);
-  const recentWebLookups = continuity.recentWebLookups;
   const recentConversationHistory = continuity.recentConversationHistory;
   const participantIds =
     Array.isArray(promptMemorySlice.participantProfiles)
@@ -690,7 +685,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         ? promptMemorySlice.guidanceFacts.length
         : 0,
       behavioralFactCount: Array.isArray(behavioralFacts) ? behavioralFacts.length : 0,
-      recentWebLookupCount: Array.isArray(recentWebLookups) ? recentWebLookups.length : 0,
       recentConversationHistoryCount: Array.isArray(recentConversationHistory)
         ? recentConversationHistory.length
         : 0
@@ -765,8 +759,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     browserBrowse?.budget?.canBrowse !== false
   );
   const openArticleCandidates = buildOpenArticleCandidates({
-    webSearch,
-    recentWebLookups
+    webSearch
   });
   const openedArticle = null;
   const voiceConversationPolicy = getVoiceConversationPolicy(settings);
@@ -780,18 +773,10 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
   let usedScreenShareOffer = false;
   let leaveVoiceChannelRequested = false;
 
-  const voiceToneGuardrails = buildVoiceToneGuardrails();
   const systemPrompt = [
     buildSystemPrompt(settings),
     "You are speaking in live Discord voice chat.",
-    ...voiceToneGuardrails,
-    directAddressed
-      ? "This speaker directly addressed you. Prefer a spoken response unless the transcript is too unclear."
-      : isEagerTurn
-        ? "If responding would be an interruption or you have nothing to add, output exactly [SKIP]. Otherwise reply with natural spoken text."
-        : "You are not directly addressed. Reply only if you can add clear value; otherwise output exactly [SKIP].",
-    "Goodbyes do not force exit. You can say goodbye and stay in VC; call leave_voice_channel only when you intentionally choose to end your own VC session now.",
-    allowSoundboardToolCall ? "Never mention soundboard control refs in normal speech." : null
+    ...buildVoiceToneGuardrails()
   ]
     .filter(Boolean)
     .join("\n");
@@ -828,7 +813,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       webSearch: webSearchContext,
       browserBrowse,
       recentConversationHistory,
-      recentWebLookups,
       openArticleCandidates: openArticleCandidatesContext,
       openedArticle: openedArticleContext,
       allowWebSearchToolCall: allowWebSearch,
@@ -985,7 +969,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     const initialUserPrompt = buildVoiceUserPrompt();
     const promptCapture = createPromptCapture({
       systemPrompt,
-      initialUserPrompt
+      initialUserPrompt,
+      tools: voiceReplyTools.map((t) => ({ name: t.name, description: t.description, parameters: t.input_schema || null }))
     });
     let voiceContextMessages: ContextMessage[] = [
       ...normalizedContextMessages
@@ -1471,7 +1456,7 @@ function resolveVoiceScreenShareCapability(runtime, { settings, guildId, channel
   };
 }
 
-function buildOpenArticleCandidates({ webSearch, recentWebLookups }) {
+function buildOpenArticleCandidates({ webSearch }) {
   const candidates = [];
   const seenUrls = new Set();
   const pushCandidate = ({
@@ -1507,24 +1492,6 @@ function buildOpenArticleCandidates({ webSearch, recentWebLookups }) {
       domain: row?.domain,
       query: webSearch?.query || ""
     });
-  }
-
-  const cachedRows = (Array.isArray(recentWebLookups) ? recentWebLookups : []).slice(0, OPEN_ARTICLE_ROW_LIMIT);
-  for (let rowIndex = 0; rowIndex < cachedRows.length; rowIndex += 1) {
-    const row = cachedRows[rowIndex];
-    const rowResults = (Array.isArray(row?.results) ? row.results : []).slice(0, OPEN_ARTICLE_RESULTS_PER_ROW);
-    for (let resultIndex = 0; resultIndex < rowResults.length; resultIndex += 1) {
-      const result = rowResults[resultIndex];
-      const url = String(result?.url || "").trim();
-      if (!url) continue;
-      pushCandidate({
-        ref: `R${rowIndex + 1}:${resultIndex + 1}`,
-        title: result?.title,
-        url,
-        domain: result?.domain,
-        query: row?.query
-      });
-    }
   }
 
   if (!candidates.length) return [];

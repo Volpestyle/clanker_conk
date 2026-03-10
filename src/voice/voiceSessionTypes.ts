@@ -481,7 +481,6 @@ export interface VoiceGenerationContextSnapshot {
     effectEvents?: VoiceChannelEffectPromptEntry[];
     memoryFacts?: VoiceGenerationMemoryFacts;
     recentConversationHistory?: unknown[];
-    recentWebLookups?: unknown[];
     sessionTiming?: VoiceSessionTimingContext | null;
     tools?: Record<string, boolean>;
     soundboardCandidateCount?: number;
@@ -759,7 +758,6 @@ export interface RealtimeInstructionMemorySlice {
     guidanceFacts: unknown[];
     behavioralFacts: unknown[];
     recentConversationHistory: unknown[];
-    recentWebLookups: unknown[];
 }
 
 export interface VoiceUserFactProfile {

@@ -1,7 +1,5 @@
 import {
-  buildVoiceSelfContextLines,
   buildVoiceSoundboardGuidanceLines,
-  buildVoiceToneGuardrails,
 } from "./promptCore.ts";
 
 import {
@@ -9,7 +7,6 @@ import {
   formatWebSearchFindings,
   formatConversationWindows,
   formatConversationParticipantMemory,
-  formatRecentLookupContext,
   formatOpenArticleCandidates
 } from "./promptFormatters.ts";
 import { hasBotNameCue } from "../bot/directAddressConfidence.ts";
@@ -22,10 +19,10 @@ import type { VoiceSessionDurableContextEntry } from "../voice/voiceSessionTypes
 
 type VoiceMusicPromptContext = {
   playbackState: "playing" | "paused" | "stopped" | "idle";
-  currentTrack: { title: string; artists: string[] } | null;
-  lastTrack: { title: string; artists: string[] } | null;
+  currentTrack: { id: string | null; title: string; artists: string[] } | null;
+  lastTrack: { id: string | null; title: string; artists: string[] } | null;
   queueLength: number;
-  upcomingTracks: Array<{ title: string; artist: string | null }>;
+  upcomingTracks: Array<{ id: string | null; title: string; artist: string | null }>;
   lastAction: "play_now" | "stop" | "pause" | "resume" | "skip" | null;
   lastQuery: string | null;
 };
@@ -166,7 +163,6 @@ export function buildVoiceTurnPrompt({
   webSearch = null,
   browserBrowse = null,
   recentConversationHistory = [],
-  recentWebLookups = [],
   openArticleCandidates = [],
   openedArticle = null,
   allowWebSearchToolCall = false,
@@ -184,7 +180,6 @@ export function buildVoiceTurnPrompt({
   durableContext = []
 }) {
   const parts = [];
-  const voiceToneGuardrails = buildVoiceToneGuardrails();
   const speaker = String(speakerName || "unknown").trim() || "unknown";
   const normalizedInputKind = String(inputKind || "").trim().toLowerCase() === "event"
     ? "event"
@@ -287,6 +282,7 @@ export function buildVoiceTurnPrompt({
           currentTrack:
             musicContext?.currentTrack && typeof musicContext.currentTrack === "object"
               ? {
+                  id: String(musicContext.currentTrack.id || "").trim().slice(0, 180) || null,
                   title: String(musicContext.currentTrack.title || "").trim().slice(0, 140),
                   artists: (
                     Array.isArray(musicContext.currentTrack.artists)
@@ -301,6 +297,7 @@ export function buildVoiceTurnPrompt({
           lastTrack:
             musicContext?.lastTrack && typeof musicContext.lastTrack === "object"
               ? {
+                  id: String(musicContext.lastTrack.id || "").trim().slice(0, 180) || null,
                   title: String(musicContext.lastTrack.title || "").trim().slice(0, 140),
                   artists: (
                     Array.isArray(musicContext.lastTrack.artists)
@@ -321,6 +318,7 @@ export function buildVoiceTurnPrompt({
               : []
           )
             .map((entry) => ({
+              id: String(entry?.id || "").trim().slice(0, 180) || null,
               title: String(entry?.title || "").trim().slice(0, 140),
               artist: String(entry?.artist || "").trim().slice(0, 80) || null
             }))
@@ -479,17 +477,11 @@ export function buildVoiceTurnPrompt({
       `The transcript may be using ${normalizedBotName}'s name or a phonetic variation of it. Treat that as a positive signal that the speaker may be talking to you.`
     );
   }
-  parts.push(
-    ...buildVoiceSelfContextLines({
-      voiceEnabled: true,
-      inVoiceChannel: true,
-      participantRoster: normalizedParticipantRoster
-    })
-  );
-  parts.push(
-    "Capability state rule: distinguish unsupported features from currently unavailable features. When disabled/unconfigured/budget-blocked, treat the feature as currently unavailable with the specific reason."
-  );
-  parts.push("Avoid absolute claims that a supported feature can never work.");
+  if (normalizedParticipantRoster.length) {
+    parts.push(`In VC. Participants: ${normalizedParticipantRoster.join(", ")}.`);
+  } else {
+    parts.push("In VC.");
+  }
 
   if (normalizedMembershipEvents.length) {
     parts.push("Recent voice membership changes:");
@@ -641,29 +633,11 @@ export function buildVoiceTurnPrompt({
         .join("\n")
     );
   }
-  if (normalizedSessionTiming) {
-    parts.push(
-      [
-        "Session timing context:",
-        `- Session timeout warning flag: ${normalizedSessionTiming.timeoutWarningActive ? "true" : "false"}`,
-        `- Warning reason: ${normalizedSessionTiming.timeoutWarningReason}`,
-        `- Max-session seconds remaining: ${
-          Number.isFinite(normalizedSessionTiming.maxSecondsRemaining)
-            ? normalizedSessionTiming.maxSecondsRemaining
-            : "unknown"
-        }`,
-        `- Inactivity seconds remaining: ${
-          Number.isFinite(normalizedSessionTiming.inactivitySecondsRemaining)
-            ? normalizedSessionTiming.inactivitySecondsRemaining
-            : "unknown"
-        }`
-      ].join("\n")
-    );
-    if (normalizedSessionTiming.timeoutWarningActive) {
-      parts.push(
-        "If this feels naturally wrapped up, you may call leave_voice_channel to end your VC session after this turn."
-      );
-    }
+  if (normalizedSessionTiming?.timeoutWarningActive) {
+    const reason = normalizedSessionTiming.timeoutWarningReason === "inactivity"
+      ? `${normalizedSessionTiming.inactivitySecondsRemaining ?? "?"}s inactivity remaining`
+      : `${normalizedSessionTiming.maxSecondsRemaining ?? "?"}s remaining`;
+    parts.push(`Session ending soon (${reason}). You may call leave_voice_channel if this feels wrapped up.`);
   }
 
   if (participantProfiles?.length || selfFacts?.length || loreFacts?.length) {
@@ -678,63 +652,45 @@ export function buildVoiceTurnPrompt({
   }
 
   if (guidanceFacts?.length) {
-    parts.push("Behavior guidance:");
-    parts.push("Standing guidance memory that should shape tone and behavior in this conversation:");
-    parts.push(formatBehaviorMemoryFacts(guidanceFacts, 10));
+    parts.push("Behavior guidance:\n" + formatBehaviorMemoryFacts(guidanceFacts, 10));
   }
 
   if (behavioralFacts?.length) {
-    parts.push("Relevant behavioral memory:");
-    parts.push("These behavior memories were retrieved because they match this turn. Follow them when relevant.");
-    parts.push(formatBehaviorMemoryFacts(behavioralFacts, 8));
+    parts.push("Behavioral memory (follow when relevant):\n" + formatBehaviorMemoryFacts(behavioralFacts, 8));
   }
 
-  parts.push("Tooling policy:");
-  parts.push(`- Available tool calls this turn: ${availableToolNames.join(", ")}.`);
-  parts.push("- Default to speaking first on casual voice turns. Greetings, acknowledgements, banter, reactions, and simple conversational turns usually do not need a tool.");
-  parts.push("- Use tools whenever they materially improve factuality or execute a requested action. Do not promise future action without either calling the tool or declining. A brief natural lead-in before a tool call is allowed.");
-  parts.push("- Use the exact tool name. Do not encode tool intent in JSON helper fields, helper refs, or placeholder control fields.");
-  parts.push("- Ground your spoken reply in the tool result. Do not claim a tool succeeded, opened something, searched something, or sent something before the tool actually returns.");
-  parts.push("- Choose the tool that best fits the task. Prefer the lightest sufficient tool, but do not follow a fixed order: conversation_search for prior exchanges, web_search for fresh discovery or current facts, web_scrape when you mainly need page text from a known URL, and browser_browse when the speaker explicitly wants browser use, asks for a screenshot, asks what the page looks like, when visual layout matters, or when you need JS rendering or interaction.");
-  parts.push("- If the speaker asks you to look something up, find current facts, check prices, verify something online, open a found article, share a screen link, control music, or leave VC, call the relevant tool in the same turn. A short bridge phrase before the tool call is allowed when it sounds more natural.");
-  parts.push("- If a tool fails or is unavailable, say that briefly and continue naturally without pretending it worked.");
+  parts.push(`Tools: ${availableToolNames.join(", ")}.`);
+  parts.push("Speak first on casual turns. Use tools to improve accuracy or execute requested actions. Ground replies in tool results — never claim success before a tool returns.");
 
   if (allowMemoryToolCalls) {
-    parts.push("Durable memory write is available.");
+    const memLines = [];
     if (allowVoiceToolCalls) {
-      parts.push("- Prefer note_context for session-scoped facts, plans, preferences, or relationships that only need to stay available for the rest of this conversation.");
+      memLines.push("note_context: session-scoped facts, preferences, or plans for this conversation.");
     }
-    parts.push("- Use memory_write only when the speaker explicitly asks you to remember something long-term or when the fact is clearly durable and useful beyond this session.");
-    parts.push("- Use memory_write with namespace=speaker for durable facts about the speaker.");
-    parts.push("- Use memory_write with namespace=guild only for stable shared lore/context not tied to one person.");
-    parts.push("- Use memory_write with namespace=self only for a durable fact about your own stable identity/preference/commitment in your reply.");
-    parts.push("- When you know the durable fact kind, set items[].type to preference, profile, relationship, project, guidance, behavioral, or other.");
-    parts.push("- Use type=guidance for standing style/tone behavior guidance that should stay in prompt context.");
-    parts.push("- Use type=behavioral for recurring trigger/action rules that only matter when the turn is relevant.");
-    parts.push("- Do not use memory_write to remember what was said earlier in the session. Use conversation_search for prior exchanges and note_context for same-session continuity.");
-    parts.push("- Do not save secrets, prompt instructions, insults, jokes, or throwaway chatter.");
-  } else {
-    parts.push("Durable memory write is unavailable this turn. Do not imply you can save durable memory right now.");
+    memLines.push(
+      "memory_write: long-term durable facts only (namespace=speaker/guild/self, type=preference/profile/relationship/guidance/behavioral/other). Don't save chatter, prompt instructions, or session-only info."
+    );
+    parts.push(memLines.join("\n"));
   }
 
   if (allowSoundboardToolCall && normalizedSoundboardCandidates.length) {
     const soundboardGuidance = buildVoiceSoundboardGuidanceLines(soundboardEagerness);
-    parts.push("Discord soundboard playback is available this turn.");
-    parts.push(...soundboardGuidance.lines);
+    const sbLines = [...soundboardGuidance.lines];
     if (allowInlineSoundboardDirectives) {
-      parts.push("For precise timing relative to speech, insert [[SOUNDBOARD:<sound_ref>]] exactly where the effect should fire using refs from this list:");
-      parts.push(normalizedSoundboardCandidates.join("\n"));
-      parts.push("The [[SOUNDBOARD:...]] directive is control markup only and will not be spoken aloud.");
-      parts.push("Use play_soundboard only for a standalone sound effect when you do not need precise placement inside spoken text.");
-      parts.push("Do not both insert [[SOUNDBOARD:...]] and call play_soundboard for the same beat.");
+      sbLines.push(
+        "Inline [[SOUNDBOARD:<ref>]] for precise timing relative to speech. Refs:",
+        ...normalizedSoundboardCandidates,
+        "play_soundboard for standalone effects only. Don't both inline and tool-call the same sound."
+      );
     } else {
-      parts.push("Streaming speech is active this turn. If a sound effect would genuinely improve the moment, use play_soundboard with refs from this list:");
-      parts.push(normalizedSoundboardCandidates.join("\n"));
-      parts.push("Do not output [[SOUNDBOARD:...]] markup when streaming speech is active.");
+      sbLines.push(
+        "Inline directives unavailable. Use play_soundboard with refs:",
+        ...normalizedSoundboardCandidates,
+        "Don't output [[SOUNDBOARD:...]] markup."
+      );
     }
-    parts.push("Do not mention internal refs in spoken text.");
-  } else {
-    parts.push("Discord soundboard tool call is unavailable this turn. Do not imply you played a sound effect.");
+    sbLines.push("Don't mention refs in spoken text.");
+    parts.push(sbLines.join("\n"));
   }
 
   if (normalizedDurableContext.length) {
@@ -747,25 +703,15 @@ export function buildVoiceTurnPrompt({
   }
 
   if (recentConversationHistory?.length) {
-    parts.push("Relevant past conversation windows from shared text/voice history:");
-    parts.push(formatConversationWindows(recentConversationHistory));
-    parts.push("Use this for continuity when it clearly matches the current turn.");
-  }
-
-  if (recentWebLookups?.length) {
-    parts.push("Short-term lookup memory from recent successful web searches (may be stale):");
-    parts.push(formatRecentLookupContext(recentWebLookups));
-    parts.push("If the speaker asks what source you used earlier, mention these cached domains/URLs.");
-    parts.push("Use this only as lightweight context. For fresh facts, request a new web lookup.");
+    parts.push("Past conversation:\n" + formatConversationWindows(recentConversationHistory));
   }
 
   if (shouldRenderMusicPromptContext(normalizedMusicContext)) {
     const musicDisplayState = resolveMusicPromptDisplayState(normalizedMusicContext);
-    const musicLines = ["Music playback:"];
-    musicLines.push(`- Status: ${musicDisplayState}`);
+    const musicLines = [`Music: ${musicDisplayState}`];
     if (normalizedMusicContext.currentTrack?.title) {
       musicLines.push(
-        `- Current song: ${normalizedMusicContext.currentTrack.title} by ${formatMusicPromptArtists(normalizedMusicContext.currentTrack.artists)} (${musicDisplayState})`
+        `- Now: ${normalizedMusicContext.currentTrack.title} by ${formatMusicPromptArtists(normalizedMusicContext.currentTrack.artists)}${normalizedMusicContext.currentTrack.id ? ` [selection_id: ${normalizedMusicContext.currentTrack.id}]` : ""}`
       );
     }
     if (
@@ -773,135 +719,50 @@ export function buildVoiceTurnPrompt({
       !areMusicPromptTracksEqual(normalizedMusicContext.currentTrack, normalizedMusicContext.lastTrack)
     ) {
       musicLines.push(
-        `- Last played: ${normalizedMusicContext.lastTrack.title} by ${formatMusicPromptArtists(normalizedMusicContext.lastTrack.artists)}`
+        `- Last: ${normalizedMusicContext.lastTrack.title} by ${formatMusicPromptArtists(normalizedMusicContext.lastTrack.artists)}${normalizedMusicContext.lastTrack.id ? ` [selection_id: ${normalizedMusicContext.lastTrack.id}]` : ""}`
       );
     }
     if (normalizedMusicContext.queueLength > 0) {
       musicLines.push(`- Queue: ${normalizedMusicContext.queueLength} track(s)`);
       for (const [index, track] of normalizedMusicContext.upcomingTracks.entries()) {
         musicLines.push(
-          `- Queue item ${index + 1}: ${track.title}${track.artist ? ` - ${track.artist}` : ""}`
+          `  ${index + 1}. ${track.title}${track.artist ? ` - ${track.artist}` : ""}${track.id ? ` [selection_id: ${track.id}]` : ""}`
         );
       }
     }
-    if (normalizedMusicContext.lastAction) {
-      musicLines.push(`- Last action: ${normalizedMusicContext.lastAction}`);
-    }
-    if (normalizedMusicContext.lastQuery) {
-      musicLines.push(`- Last music query: ${normalizedMusicContext.lastQuery}`);
-    }
+    if (normalizedMusicContext.lastAction) musicLines.push(`- Last action: ${normalizedMusicContext.lastAction}`);
+    if (normalizedMusicContext.lastQuery) musicLines.push(`- Last query: ${normalizedMusicContext.lastQuery}`);
     parts.push(musicLines.join("\n"));
   }
 
-  parts.push("Conversation-history lookup is available.");
-  parts.push("If the speaker asks what was said earlier, what you talked about before, or asks you to remember a past exchange, use conversation_search.");
+  parts.push("conversation_search: look up what was said earlier in text or voice history.");
 
-  if (allowOpenArticleToolCall) {
-    if (normalizedOpenArticleCandidates.length) {
-      parts.push("Opening cached articles is available for this turn.");
-      parts.push("If the speaker asks to open/read/click a previously found article, call open_article with one ref from this list.");
-      parts.push("Valid cached article refs:");
-      parts.push(formatOpenArticleCandidates(normalizedOpenArticleCandidates));
-      parts.push("Use one ref exactly as listed (or call open_article with ref=first for the top cached article).");
-    } else {
-      parts.push("No cached article refs are available right now.");
-      parts.push("Do not claim you opened a cached article.");
-    }
-  } else {
-    parts.push("Open-article tool call is unavailable this turn. Do not claim you opened a cached article.");
+  if (allowOpenArticleToolCall && normalizedOpenArticleCandidates.length) {
+    parts.push("Cached article refs (open_article to read):\n" + formatOpenArticleCandidates(normalizedOpenArticleCandidates));
   }
 
-  if (allowWebSearchToolCall) {
-    if (webSearch?.optedOutByUser) {
-      parts.push("The user asked not to use web search.");
-      parts.push("Do not call web_search.");
-    } else if (!webSearch?.enabled) {
-      parts.push("Live web lookup capability exists but is currently unavailable (disabled in settings).");
-      parts.push("Do not call web_search.");
-    } else if (!webSearch?.configured) {
-      parts.push("Live web lookup capability exists but is currently unavailable (provider not configured).");
-      parts.push("Do not call web_search.");
-    } else if (webSearch?.blockedByBudget || !webSearch?.budget?.canSearch) {
-      parts.push("Live web lookup capability exists but is currently unavailable (budget exhausted).");
-      parts.push("Do not call web_search.");
-    } else {
-      parts.push("Live web lookup is available.");
-      parts.push("If your spoken response needs fresh web info for accuracy, call web_search in the same response.");
-      parts.push("Only call one web_search when needed.");
-    }
-  } else {
-    parts.push("Web-search tool call is unavailable this turn. Do not call web_search.");
+  if (webSearchToolAvailable) {
+    parts.push("web_search: for fresh web info when accuracy requires it. One per turn.");
   }
 
-  if (allowBrowserBrowseToolCall) {
-    if (!browserBrowse?.enabled) {
-      parts.push("Interactive browser capability exists but is currently unavailable (disabled in settings).");
-      parts.push("Do not claim you can browse sites interactively right now.");
-    } else if (!browserBrowse?.configured) {
-      parts.push("Interactive browser capability exists but is currently unavailable (browser runtime is not configured).");
-      parts.push("Do not claim you can browse sites interactively right now.");
-    } else if (browserBrowse?.blockedByBudget || !browserBrowse?.budget?.canBrowse) {
-      parts.push("Interactive browser capability exists but is currently unavailable (hourly browser budget exhausted).");
-      parts.push("Do not claim you browsed the site.");
-    } else {
-      parts.push("Interactive browser browsing is available.");
-      parts.push("Choose browser_browse when the speaker explicitly wants browser use or to visit/open a site, asks for a screenshot, asks what the page looks like, when visual layout matters, or when the task genuinely needs interactive browsing or JS rendering; otherwise use the lighter web tool that best fits the task.");
-      parts.push(
-        "Use browser_browse when you need actual site navigation or interaction, when the user asks you to open something in a browser, asks for a screenshot, asks what the page looks like, or when page appearance/layout matters, such as JS-rendered pages, clicking, typing, scrolling, dragging, or moving through a live page flow."
-      );
-      parts.push("browser_browse can capture browser screenshots and return them for visual inspection on the follow-up turn.");
-      parts.push("If the speaker explicitly asks you to use a browser, asks for a screenshot of a webpage, asks what a page looks like, or the task genuinely requires interactive browsing, call browser_browse in the same response.");
-      parts.push("Do not say you cannot take or inspect webpage screenshots when browser_browse is available. Use the browser tool instead.");
-    }
-  } else {
-    parts.push("Interactive browser tool call is unavailable this turn. Do not claim you can browse sites interactively right now.");
+  if (browserBrowseToolAvailable) {
+    parts.push("browser_browse: interactive browsing, JS-rendered pages, screenshots, site navigation. Use when the speaker wants to visit a site or visual layout matters.");
   }
 
   if (allowVoiceToolCalls) {
-    parts.push("Voice/session control tools are available.");
-    parts.push("- For music controls, use music_play to start or replace playback now. It searches internally and may return disambiguation options. If the speaker then picks an option, call music_play again with selection_id.");
-    parts.push("- Use music_search only when the speaker explicitly wants to browse candidates first or when you need candidate IDs for queue operations.");
-    parts.push("- When calling music_play or music_search for a fresh request, always include the query text from the transcript. Never send either tool with empty arguments.");
-    parts.push("- Use music_queue_next to place a track after the current one, music_queue_add to append, music_stop to stop playback, music_pause to pause, music_resume to resume, music_skip to skip, and music_now_playing to inspect status.");
-    parts.push("- Do not emulate play-now by chaining music_queue_add and music_skip.");
-    parts.push("- Do not use music_skip as a substitute for music_stop.");
-    parts.push("- Use note_context to pin important session-scoped facts, plans, preferences, or relationships that should stay available later in this conversation. Do not duplicate something already pinned.");
-  } else {
-    parts.push("Voice/session control tools are unavailable this turn. Do not claim you changed music playback or left VC via a tool.");
+    parts.push([
+      "Music: music_play starts/replaces playback (re-call with selection_id for disambiguation picks). music_search only to browse candidates. Always include query text.",
+      "Queue: music_queue_next (after current), music_queue_add (append), music_stop, music_pause, music_resume, music_skip, music_now_playing. Don't chain queue_add+skip to emulate play-now."
+    ].join("\n"));
   }
-
-  const screenShareStatus = String(screenShare?.status || "disabled").trim().toLowerCase() || "disabled";
-  const screenShareEnabled = Boolean(screenShare?.enabled);
-  const screenShareAvailable =
-    screenShare?.available === undefined
-      ? screenShareEnabled && screenShareStatus === "ready"
-      : Boolean(screenShare.available);
-  const screenShareSupported =
-    screenShare?.supported === undefined
-      ? Boolean(screenShare) &&
-        String(screenShare?.reason || "").trim().toLowerCase() !== "screen_share_manager_unavailable"
-      : Boolean(screenShare.supported);
-  const screenShareReason =
-    String(screenShare?.reason || "").trim().toLowerCase() || screenShareStatus || "unavailable";
 
   if (allowScreenShareToolCall) {
-    parts.push("VC screen-share link offers are available.");
-    parts.push("If the speaker asks you to see/watch their screen or stream, call offer_screen_share_link in the same response.");
-    parts.push("Only call offer_screen_share_link once when it is clearly useful.");
-  } else if (screenShareSupported && !screenShareAvailable) {
-    parts.push(`VC screen-share link capability exists but is currently unavailable (reason: ${screenShareReason}).`);
-    parts.push("If asked, acknowledge the capability exists but is unavailable right now.");
-    parts.push("Do not claim you sent a screen-share link.");
-  } else {
-    parts.push("Screen-share tool call is unavailable this turn. Do not claim you sent a screen-share link.");
+    parts.push("offer_screen_share_link: when the speaker asks to see/watch their screen.");
   }
 
-  parts.push(
-    "If you intentionally want to leave VC after this turn, call leave_voice_channel."
-  );
-  parts.push(
-    "Another person's goodbye does not require you to leave. You may say goodbye and stay; call leave_voice_channel only when you intentionally choose to end your own VC session."
-  );
+  if (allowVoiceToolCalls) {
+    parts.push("leave_voice_channel: only when you choose to end your VC session. Goodbyes alone don't force exit.");
+  }
 
   if (webSearch?.requested && !webSearch?.used) {
     if (webSearch.error) {
@@ -965,16 +826,12 @@ export function buildVoiceTurnPrompt({
       musicWakeLatched: Boolean(normalizedConversationContext?.musicWakeLatched)
     })
   );
-  parts.push(...voiceToneGuardrails);
 
-  parts.push("Return only the spoken reply text for this turn.");
-  parts.push("If you should skip the turn, output exactly [SKIP].");
-  if (allowInlineSoundboardDirectives) {
-    parts.push("Do not output JSON, markdown, tags, or tool names in prose. The only control markup you may emit is [[SOUNDBOARD:<sound_ref>]] with an exact available sound ref.");
-  } else {
-    parts.push("Do not output JSON, markdown, tags, directive syntax like [[...]], or tool names in prose.");
-  }
-  parts.push("Use tool calls for actions, lookup, screen notes, screen moments, soundboard playback, music control, screen-share links, and leaving VC.");
+  parts.push(
+    allowInlineSoundboardDirectives
+      ? "Reply with spoken text or [SKIP]. No JSON/markdown/tags. Only markup: [[SOUNDBOARD:<ref>]]."
+      : "Reply with spoken text or [SKIP]. No JSON/markdown/tags/[[...]] directives."
+  );
 
   return parts.join("\n\n");
 }

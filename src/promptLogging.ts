@@ -1,7 +1,14 @@
+export type PromptCapturedTool = {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown> | null;
+};
+
 export type PromptCapture = {
   systemPrompt: string;
   initialUserPrompt: string;
   followupUserPrompts: string[];
+  tools: PromptCapturedTool[];
 };
 
 export type LoggedPromptBundle = {
@@ -10,19 +17,23 @@ export type LoggedPromptBundle = {
   initialUserPrompt: string;
   followupUserPrompts: string[];
   followupSteps: number;
+  tools: PromptCapturedTool[];
 };
 
 export function createPromptCapture({
   systemPrompt = "",
-  initialUserPrompt = ""
+  initialUserPrompt = "",
+  tools = []
 }: {
   systemPrompt?: string;
   initialUserPrompt?: string;
+  tools?: PromptCapturedTool[];
 } = {}): PromptCapture {
   return {
     systemPrompt: String(systemPrompt || ""),
     initialUserPrompt: String(initialUserPrompt || ""),
-    followupUserPrompts: []
+    followupUserPrompts: [],
+    tools: Array.isArray(tools) ? tools : []
   };
 }
 
@@ -54,12 +65,21 @@ export function buildLoggedPromptBundle(
       : followupUserPrompts.length
   );
 
+  const tools = Array.isArray(capture.tools)
+    ? capture.tools.map((t) => ({
+      name: String(t?.name || ""),
+      description: String(t?.description || ""),
+      parameters: t?.parameters && typeof t.parameters === "object" ? t.parameters : null
+    })).filter((t) => t.name)
+    : [];
+
   return {
     hiddenByDefault: true,
     systemPrompt,
     initialUserPrompt,
     followupUserPrompts,
-    followupSteps: resolvedFollowupSteps
+    followupSteps: resolvedFollowupSteps,
+    tools
   };
 }
 

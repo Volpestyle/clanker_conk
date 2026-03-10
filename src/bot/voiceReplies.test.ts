@@ -153,7 +153,7 @@ function createVoiceBot({
     extractionMethod: "fast"
   }),
   recentConversationHistory = [],
-  recentLookupContext = [],
+  webSearchOverride = null as { results: unknown[]; query: string } | null,
   screenShareCapability = {
     enabled: false,
     status: "disabled",
@@ -183,8 +183,6 @@ function createVoiceBot({
   const remembers = [];
   const webSearchCalls = [];
   const openArticleCalls = [];
-  const lookupMemorySearchCalls = [];
-  const lookupMemoryWrites = [];
   const screenShareCalls = [];
   const requestPlayMusicCalls = [];
   const requestStopMusicCalls = [];
@@ -274,25 +272,17 @@ function createVoiceBot({
     loadRecentConversationHistory() {
       return recentConversationHistory;
     },
-    loadRecentLookupContext(payload) {
-      lookupMemorySearchCalls.push(payload);
-      return recentLookupContext;
-    },
-    rememberRecentLookupContext(payload) {
-      lookupMemoryWrites.push(payload);
-      return true;
-    },
     buildWebSearchContext(settings) {
       return {
         requested: false,
         configured: true,
         enabled: Boolean(settings?.webSearch?.enabled),
-        used: false,
+        used: Boolean(webSearchOverride?.results?.length),
         blockedByBudget: false,
         optedOutByUser: false,
         error: null,
-        query: "",
-        results: [],
+        query: webSearchOverride?.query || "",
+        results: webSearchOverride?.results || [],
         fetchedPages: 0,
         providerUsed: null,
         providerFallbackUsed: false,
@@ -382,8 +372,6 @@ function createVoiceBot({
     remembers,
     webSearchCalls,
     openArticleCalls,
-    lookupMemorySearchCalls,
-    lookupMemoryWrites,
     screenShareCalls,
     requestPlayMusicCalls,
     requestStopMusicCalls,
@@ -1389,7 +1377,7 @@ test("generateVoiceTurnReply injects recent conversation history into the prompt
 
   assert.equal(generationPayloads.length > 0, true);
   assert.equal(
-    String(generationPayloads[0]?.userPrompt || "").includes("Relevant past conversation windows from shared text/voice history:"),
+    String(generationPayloads[0]?.userPrompt || "").includes("Past conversation:"),
     true
   );
   assert.equal(
@@ -1606,15 +1594,8 @@ test("generateVoiceTurnReply advertises tool runtimes only when the capability e
       expectedToolName: "browser_browse",
       expectedPresent: true,
       assertPrompt(prompt) {
-        assert.equal(prompt.includes("Interactive browser browsing is available."), true);
-        assert.equal(
-          prompt.includes("If the speaker explicitly asks you to use a browser, asks for a screenshot of a webpage, asks what a page looks like, or the task genuinely requires interactive browsing, call browser_browse in the same response."),
-          true
-        );
-        assert.equal(
-          prompt.includes("Do not say you cannot take or inspect webpage screenshots when browser_browse is available. Use the browser tool instead."),
-          true
-        );
+        assert.equal(prompt.includes("browser_browse:"), true);
+        assert.equal(prompt.includes("interactive browsing"), true);
       }
     }
   ];
@@ -1685,36 +1666,6 @@ test("generateVoiceTurnReply runs web lookup follow-up via tool calls", async ()
   assert.equal(reply.usedWebSearchFollowup, true);
 });
 
-test("generateVoiceTurnReply queries short-term lookup memory during generation", async () => {
-  const { bot, lookupMemorySearchCalls } = createVoiceBot({
-    generationText: "[SKIP]",
-    recentLookupContext: [
-      {
-        query: "rust stable release date",
-        provider: "brave",
-        ageMinutes: 20,
-        results: [
-          {
-            domain: "blog.rust-lang.org",
-            url: "https://blog.rust-lang.org/releases/"
-          }
-        ]
-      }
-    ]
-  });
-
-  const reply = await generateVoiceTurnReply(bot, {
-    settings: baseSettings(),
-    guildId: "guild-1",
-    channelId: "text-1",
-    userId: "user-1",
-    transcript: "what source did you use before?"
-  });
-
-  assert.equal(reply.text, "");
-  assert.equal(lookupMemorySearchCalls.length, 1);
-});
-
 test("generateVoiceTurnReply handles open_article tool call", async () => {
   const { bot, getGenerationCalls } = createVoiceBot({
     generationSequence: [
@@ -1738,20 +1689,16 @@ test("generateVoiceTurnReply handles open_article tool call", async () => {
         })
       }
     ],
-    recentLookupContext: [
-      {
-        query: "top news today",
-        provider: "brave",
-        ageMinutes: 1,
-        results: [
-          {
-            title: "example headline",
-            url: "https://example.com/news-1",
-            domain: "example.com"
-          }
-        ]
-      }
-    ]
+    webSearchOverride: {
+      results: [
+        {
+          title: "example headline",
+          url: "https://example.com/news-1",
+          domain: "example.com"
+        }
+      ],
+      query: "top news today"
+    }
   });
 
   const reply = await generateVoiceTurnReply(bot, {
@@ -1937,11 +1884,7 @@ test("generateVoiceTurnReply describes supported-but-unavailable screen-share ca
   assert.equal(reply.text, "can't pull it up rn");
   assert.equal(screenShareCalls.length, 0);
   const userPrompt = String(generationPayloads[0]?.userPrompt || "");
-  assert.equal(
-    userPrompt.includes("VC screen-share link capability exists but is currently unavailable (reason: public_https_starting)."),
-    true
-  );
-  assert.equal(userPrompt.includes("Do not claim you sent a screen-share link."), true);
+  assert.equal(userPrompt.includes("offer_screen_share_link"), false);
   assert.equal(userPrompt.includes("screenShareIntent.action"), false);
 });
 
