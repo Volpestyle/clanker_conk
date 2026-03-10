@@ -1,16 +1,16 @@
 import { clamp } from "../utils.ts";
 import { buildSingleTurnPromptLog } from "../promptLogging.ts";
+import { getPromptBotName } from "../prompts/promptCore.ts";
 import {
-  getPromptBotName
-} from "../prompts/promptCore.ts";
-import {
-  normalizeInlineText,
   normalizeVoiceText,
-  STT_TRANSCRIPT_MAX_CHARS,
   isVoiceTurnAddressedToBot,
-  isRealtimeMode,
-  normalizeVoiceAddressingTargetToken
+  isRealtimeMode
 } from "./voiceSessionHelpers.ts";
+import {
+  buildVoiceAddressingState as buildVoiceAddressingStateFromTranscript,
+  hasBotNameCueForTranscript as hasBotNameCueForTranscriptFromSettings,
+  normalizeVoiceAddressingAnnotation as normalizeVoiceAddressingAnnotationFromTranscript
+} from "./voiceAddressing.ts";
 import { parseBooleanFlag } from "../normalization/valueParsers.ts";
 import {
   VOICE_TURN_ADDRESSING_TRANSCRIPT_MAX_CHARS,
@@ -23,7 +23,7 @@ import {
   defaultVoiceReplyDecisionModel,
   resolveVoiceReplyDecisionMaxOutputTokens
 } from "./voiceDecisionRuntime.ts";
-import { hasBotNameCue, DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD } from "../bot/directAddressConfidence.ts";
+import { DEFAULT_DIRECT_ADDRESS_CONFIDENCE_THRESHOLD } from "../bot/directAddressConfidence.ts";
 import type {
   VoiceConversationContext,
   VoiceReplyDecision,
@@ -40,15 +40,13 @@ import {
 } from "./voiceSessionTypes.ts";
 import {
   applyOrchestratorOverrideSettings,
-  getBotNameAliases,
   getResolvedVoiceAdmissionClassifierBinding,
   getVoiceAdmissionSettings,
   getVoiceConversationPolicy
 } from "../settings/agentStack.ts";
+import { resolveRealtimeAdmissionModeForRuntime } from "../settings/voiceDashboardMappings.ts";
 import { isCancelIntent } from "../tools/cancelDetection.ts";
-import { isVoiceSpeechTimelineEntry } from "./voiceTimeline.ts";
 
-const DEFAULT_REALTIME_ADMISSION_MODE = "hard_classifier";
 const DEFAULT_MUSIC_WAKE_LATCH_SECONDS = 15;
 const CLASSIFIER_HISTORY_MAX_TURNS = 6;
 const CLASSIFIER_HISTORY_MAX_CHARS = 900;
@@ -135,17 +133,10 @@ export interface ReplyDecisionHost {
 }
 
 function resolveRealtimeAdmissionMode(settings: ReplyDecisionSettings): "hard_classifier" | "generation_only" {
-  const replyPath = String(getVoiceConversationPolicy(settings).replyPath || "")
-    .trim()
-    .toLowerCase();
-  // Bridge always needs the classifier — it's the only gate before generation.
-  if (replyPath === "bridge") return "hard_classifier";
-  // Brain: default off (generation LLM decides), but allow explicit opt-in.
-  const raw = String(getVoiceAdmissionSettings(settings).mode || "")
-    .trim()
-    .toLowerCase();
-  if (raw === "classifier_gate" || raw === "hard_classifier") return "hard_classifier";
-  return "generation_only";
+  return resolveRealtimeAdmissionModeForRuntime(
+    getVoiceAdmissionSettings(settings).mode,
+    getVoiceConversationPolicy(settings).replyPath
+  );
 }
 
 function resolveMusicWakeLatchSeconds(settings: ReplyDecisionSettings): number {
@@ -216,34 +207,10 @@ export function hasBotNameCueForTranscript(
     settings?: ReplyDecisionSettings;
   } = {}
 ) {
-  const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-  if (!normalizedTranscript) return false;
-
-  const resolvedSettings = settings || manager.store.getSettings();
-  const botName = getPromptBotName(resolvedSettings);
-  const aliases = getBotNameAliases(resolvedSettings);
-  const primaryToken = String(botName || "")
-    .replace(/[^a-z0-9\s]+/gi, " ")
-    .trim()
-    .split(/\s+/)
-    .filter(Boolean)
-    .at(0) || "";
-  const shortPrimaryToken = primaryToken.length >= 5 ? primaryToken.slice(0, 5) : "";
-  const candidateNames = [
-    botName,
-    ...aliases,
-    primaryToken,
-    shortPrimaryToken
-  ]
-    .map((entry) => String(entry || "").trim())
-    .filter(Boolean);
-
-  for (const candidate of candidateNames) {
-    if (hasBotNameCue({ transcript: normalizedTranscript, botName: candidate })) {
-      return true;
-    }
-  }
-  return false;
+  return hasBotNameCueForTranscriptFromSettings({
+    transcript,
+    settings: settings || manager.store.getSettings()
+  });
 }
 
 function detectSingleParticipantAssistantFollowup(manager: ReplyDecisionHost, {
@@ -439,68 +406,12 @@ export function buildVoiceAddressingState(manager: ReplyDecisionHost, {
   now = Date.now(),
   maxItems = 6
 } = {}): VoiceAddressingState | null {
-  const sourceTurns = Array.isArray(session?.transcriptTurns) ? session.transcriptTurns : [];
-  if (!sourceTurns.length) return null;
-
-  const normalizedUserId = String(userId || "").trim();
-  const normalizedMaxItems = Math.max(1, Math.min(12, Math.floor(Number(maxItems) || 6)));
-  const annotatedRows = sourceTurns
-    .filter((row) => isVoiceSpeechTimelineEntry(row))
-    .map((row) => {
-      const normalized = normalizeVoiceAddressingAnnotation(manager, {
-        rawAddressing: row?.addressing
-      });
-      if (!normalized) return null;
-      const atRaw = Number(row?.at || 0);
-      const at = atRaw > 0 ? atRaw : null;
-      const ageMs = at ? Math.max(0, now - at) : null;
-      return {
-        role: row.role === "assistant" ? "assistant" : "user",
-        userId: String(row?.userId || "").trim() || null,
-        speakerName: String(row?.speakerName || "").trim() || "someone",
-        talkingTo: normalized.talkingTo || null,
-        directedConfidence: Number(normalized.directedConfidence || 0),
-        at,
-        ageMs
-      };
-    })
-    .filter(Boolean);
-  if (!annotatedRows.length) return null;
-
-  const recentAddressingGuesses = annotatedRows
-    .slice(-normalizedMaxItems)
-    .map((row) => ({
-      speakerName: row.speakerName,
-      talkingTo: row.talkingTo || null,
-      directedConfidence: Number(clamp(Number(row.directedConfidence) || 0, 0, 1).toFixed(3)),
-      ageMs: Number.isFinite(row.ageMs) ? Math.round(row.ageMs) : null
-    }));
-
-  const currentSpeakerRow = normalizedUserId
-    ? [...annotatedRows]
-      .reverse()
-      .find((row) => row.role === "user" && String(row.userId || "") === normalizedUserId) || null
-    : null;
-  const lastDirectedToMeRow =
-    [...annotatedRows]
-      .reverse()
-      .find((row) => row.role === "user" && row.talkingTo === "ME" && Number(row.directedConfidence || 0) > 0) ||
-    null;
-
-  return {
-    currentSpeakerTarget: currentSpeakerRow?.talkingTo || null,
-    currentSpeakerDirectedConfidence: Number(
-      clamp(Number(currentSpeakerRow?.directedConfidence) || 0, 0, 1).toFixed(3)
-    ),
-    lastDirectedToMe: lastDirectedToMeRow
-      ? {
-        speakerName: lastDirectedToMeRow.speakerName,
-        directedConfidence: Number(clamp(Number(lastDirectedToMeRow.directedConfidence) || 0, 0, 1).toFixed(3)),
-        ageMs: Number.isFinite(lastDirectedToMeRow.ageMs) ? Math.round(lastDirectedToMeRow.ageMs) : null
-      }
-      : null,
-    recentAddressingGuesses
-  };
+  return buildVoiceAddressingStateFromTranscript({
+    session,
+    userId,
+    now,
+    maxItems
+  });
 }
 
 export function normalizeVoiceAddressingAnnotation(_manager: ReplyDecisionHost, {
@@ -510,43 +421,13 @@ export function normalizeVoiceAddressingAnnotation(_manager: ReplyDecisionHost, 
   source = "",
   reason = null
 } = {}): VoiceAddressingAnnotation | null {
-  const input = rawAddressing && typeof rawAddressing === "object" ? rawAddressing : null;
-  const talkingToToken = normalizeVoiceAddressingTargetToken(input?.talkingTo ?? input?.target ?? "");
-  let talkingTo = talkingToToken || null;
-
-  const confidenceRaw = Number(
-    input?.directedConfidence ?? input?.confidence ?? directedConfidence
-  );
-  let normalizedDirectedConfidence = Number.isFinite(confidenceRaw)
-    ? clamp(confidenceRaw, 0, 1)
-    : 0;
-
-  if (directAddressed && !talkingTo) {
-    talkingTo = "ME";
-  }
-  if (directAddressed && talkingTo === "ME") {
-    normalizedDirectedConfidence = Math.max(normalizedDirectedConfidence, 0.72);
-  }
-
-  if (!talkingTo && normalizedDirectedConfidence <= 0) return null;
-
-  const normalizedSource = String(source || "")
-    .replace(/\s+/g, "_")
-    .trim()
-    .toLowerCase()
-    .slice(0, 48);
-  const normalizedReason =
-    String(reason || "")
-      .replace(/\s+/g, " ")
-      .trim()
-      .slice(0, 140) || null;
-
-  return {
-    talkingTo,
-    directedConfidence: Number(normalizedDirectedConfidence.toFixed(3)),
-    source: normalizedSource || null,
-    reason: normalizedReason
-  };
+  return normalizeVoiceAddressingAnnotationFromTranscript({
+    rawAddressing,
+    directAddressed,
+    directedConfidence,
+    source,
+    reason
+  });
 }
 
 export async function evaluateVoiceReplyDecision(manager: ReplyDecisionHost, {

@@ -19,6 +19,7 @@ import {
   settingsToFormPreserving
 } from "../settingsFormModel";
 import { useActiveSection } from "../hooks/useActiveSection";
+import { AGENT_STACK_PRESET_OPTIONS } from "../../../src/settings/agentStackCatalog.ts";
 import { SettingsSection } from "./SettingsSection";
 import { CoreBehaviorSettingsSection } from "./settingsSections/CoreBehaviorSettingsSection";
 import { PromptGuidanceSettingsSection } from "./settingsSections/PromptGuidanceSettingsSection";
@@ -89,6 +90,8 @@ export default function SettingsForm({
     setPresetStatus({ text: "", type: "" });
   }, [settings]);
 
+  const showAdvancedStackSections = effectiveForm.stackAdvancedOverridesEnabled;
+
   const sections = useMemo(() => {
     const items = [
       { id: "sec-core", label: "Identity" },
@@ -102,7 +105,7 @@ export default function SettingsForm({
       { id: "sec-discovery", label: "Feed & Media" },
       { id: "sec-channels", label: "Channels" }
     ];
-    if (effectiveForm.stackAdvancedOverridesEnabled) {
+    if (showAdvancedStackSections) {
       items.splice(3, 0,
         { id: "sec-llm", label: "Advanced Stack" },
         { id: "sec-search", label: "Research Runtime" },
@@ -112,7 +115,7 @@ export default function SettingsForm({
       );
     }
     return items;
-  }, [effectiveForm.stackAdvancedOverridesEnabled]);
+  }, [showAdvancedStackSections]);
 
   const sectionIds = useMemo(() => sections.map((section) => section.id), [sections]);
 
@@ -478,12 +481,11 @@ export default function SettingsForm({
             <label htmlFor="stack-preset">Preset</label>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <select id="stack-preset" value={form.stackPreset} onChange={set("stackPreset")} style={{ flex: 1 }}>
-                <option value="claude_oauth">Claude OAuth</option>
-                <option value="claude_api">Claude API</option>
-                <option value="openai_native_realtime">OpenAI Native Realtime</option>
-                <option value="openai_api">OpenAI API</option>
-                <option value="openai_oauth">OpenAI OAuth</option>
-                <option value="grok_native_agent">Grok Native Agent</option>
+                {AGENT_STACK_PRESET_OPTIONS.map((preset) => (
+                  <option key={preset.value} value={preset.value}>
+                    {preset.label}
+                  </option>
+                ))}
               </select>
               <button
                 type="button"
@@ -528,44 +530,50 @@ export default function SettingsForm({
             )}
           </SettingsSection>
 
-          <LlmConfigurationSettingsSection
-            id="sec-llm"
-            form={form}
-            set={set}
-            setProvider={setProvider}
-            selectPresetModel={selectPresetModel}
-            providerModelOptions={providerModelOptions}
-            selectedPresetModel={selectedPresetModel}
-            setTextInitiativeProvider={setTextInitiativeProvider}
-            selectTextInitiativePresetModel={selectTextInitiativePresetModel}
-            textInitiativeModelOptions={textInitiativeModelOptions}
-            selectedTextInitiativePresetModel={selectedTextInitiativePresetModel}
-            setReplyFollowupProvider={setReplyFollowupProvider}
-            selectReplyFollowupPresetModel={selectReplyFollowupPresetModel}
-            replyFollowupModelOptions={replyFollowupModelOptions}
-            selectedReplyFollowupPresetModel={selectedReplyFollowupPresetModel}
-            setMemoryLlmProvider={setMemoryLlmProvider}
-            selectMemoryLlmPresetModel={selectMemoryLlmPresetModel}
-            memoryLlmModelOptions={memoryLlmModelOptions}
-            selectedMemoryLlmPresetModel={selectedMemoryLlmPresetModel}
-          />
-          <WebSearchSettingsSection id="sec-search" form={form} set={set} />
-          <BrowserSettingsSection
-            id="sec-browser"
-            form={form}
-            set={set}
-            setBrowserLlmProvider={setBrowserLlmProvider}
-            selectBrowserLlmPresetModel={selectBrowserLlmPresetModel}
-            browserLlmModelOptions={browserLlmModelOptions}
-            selectedBrowserLlmPresetModel={selectedBrowserLlmPresetModel}
-          />
-          <CodeAgentSettingsSection
-            id="sec-code-agent"
-            form={form}
-            set={set}
-            validationError={codeAgentValidationError}
-          />
-          <SubAgentOrchestrationSettingsSection id="sec-orchestration" form={form} set={set} />
+          {showAdvancedStackSections && (
+            <LlmConfigurationSettingsSection
+              id="sec-llm"
+              form={form}
+              set={set}
+              setProvider={setProvider}
+              selectPresetModel={selectPresetModel}
+              providerModelOptions={providerModelOptions}
+              selectedPresetModel={selectedPresetModel}
+              setTextInitiativeProvider={setTextInitiativeProvider}
+              selectTextInitiativePresetModel={selectTextInitiativePresetModel}
+              textInitiativeModelOptions={textInitiativeModelOptions}
+              selectedTextInitiativePresetModel={selectedTextInitiativePresetModel}
+              setReplyFollowupProvider={setReplyFollowupProvider}
+              selectReplyFollowupPresetModel={selectReplyFollowupPresetModel}
+              replyFollowupModelOptions={replyFollowupModelOptions}
+              selectedReplyFollowupPresetModel={selectedReplyFollowupPresetModel}
+              setMemoryLlmProvider={setMemoryLlmProvider}
+              selectMemoryLlmPresetModel={selectMemoryLlmPresetModel}
+              memoryLlmModelOptions={memoryLlmModelOptions}
+              selectedMemoryLlmPresetModel={selectedMemoryLlmPresetModel}
+            />
+          )}
+          {showAdvancedStackSections && <WebSearchSettingsSection id="sec-search" form={form} set={set} />}
+          {showAdvancedStackSections && (
+            <BrowserSettingsSection
+              id="sec-browser"
+              form={form}
+              set={set}
+              setBrowserLlmProvider={setBrowserLlmProvider}
+              selectBrowserLlmPresetModel={selectBrowserLlmPresetModel}
+              browserLlmModelOptions={browserLlmModelOptions}
+              selectedBrowserLlmPresetModel={selectedBrowserLlmPresetModel}
+            />
+          )}
+          {showAdvancedStackSections && (
+            <CodeAgentSettingsSection
+              id="sec-code-agent"
+              form={form}
+              set={set}
+              validationError={codeAgentValidationError}
+            />
+          )}
+          {showAdvancedStackSections && <SubAgentOrchestrationSettingsSection id="sec-orchestration" form={form} set={set} />}
           <VisionSettingsSection
             id="sec-vision"
             form={form}

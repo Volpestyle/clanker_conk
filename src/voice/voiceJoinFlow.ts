@@ -23,6 +23,12 @@ import { createEmptyVoiceLivePromptState } from "./voicePromptState.ts";
 import type { VoiceSession } from "./voiceSessionTypes.ts";
 import { createAssistantOutputState } from "./assistantOutputState.ts";
 import {
+  OPENAI_REALTIME_DEFAULT_SESSION_MODEL,
+  OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
+  normalizeOpenAiRealtimeSessionModel,
+  normalizeOpenAiRealtimeTranscriptionModel
+} from "./realtimeProviderNormalization.ts";
+import {
   getVoiceChannelPolicy,
   getVoiceConversationPolicy,
   getVoiceRuntimeConfig,
@@ -36,22 +42,6 @@ const MAX_MAX_SESSION_MINUTES = 120;
 const OPENAI_REALTIME_MAX_SESSION_MINUTES = 60;
 const MIN_INACTIVITY_SECONDS = 20;
 const MAX_INACTIVITY_SECONDS = 3600;
-const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
-const OPENAI_REALTIME_DEFAULT_SESSION_MODEL = "gpt-realtime";
-const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
-  "whisper-1",
-  "gpt-4o-transcribe-latest",
-  "gpt-4o-transcribe",
-  "gpt-4o-mini-transcribe-2025-12-15",
-  "gpt-4o-mini-transcribe"
-]);
-const OPENAI_REALTIME_SUPPORTED_SESSION_MODELS = new Set([
-  "gpt-realtime",
-  "gpt-realtime-1.5",
-  "gpt-realtime-mini",
-  "gpt-4o-realtime-preview",
-  "gpt-4o-mini-realtime-preview"
-]);
 
 function createRealtimeRuntimeLogger(manager, { guildId, channelId, botUserId }) {
   return ({ level, event, metadata }) => {
@@ -64,22 +54,6 @@ function createRealtimeRuntimeLogger(manager, { guildId, channelId, botUserId })
       metadata
     });
   };
-}
-
-function normalizeOpenAiRealtimeTranscriptionModel(value, fallback = OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL) {
-  const normalized =
-    String(value || "").trim() || String(fallback || "").trim() || OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
-  return OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS.has(normalized)
-    ? normalized
-    : OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
-}
-
-function normalizeOpenAiRealtimeSessionModel(value, fallback = OPENAI_REALTIME_DEFAULT_SESSION_MODEL) {
-  const normalized =
-    String(value || "").trim() || String(fallback || "").trim() || OPENAI_REALTIME_DEFAULT_SESSION_MODEL;
-  return OPENAI_REALTIME_SUPPORTED_SESSION_MODELS.has(normalized)
-    ? normalized
-    : OPENAI_REALTIME_DEFAULT_SESSION_MODEL;
 }
 
 export async function requestJoin(manager, { message, settings, intentConfidence = null }) {

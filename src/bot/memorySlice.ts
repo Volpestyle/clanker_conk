@@ -132,7 +132,7 @@ export function loadFactProfile(
     userId = null,
     guildId,
     channelId = null,
-    queryText = "",
+    queryText: _queryText = "",
     recentMessages = [],
     trace: _trace = {},
     source = "fact_profile"

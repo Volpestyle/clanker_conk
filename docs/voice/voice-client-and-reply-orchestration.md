@@ -239,11 +239,11 @@ Reply orchestration state lives on the `VoiceSession`:
 - `session.fileAsrTurnDrainActive: boolean` — whether the file-ASR drain loop is running
 - `session.deferredVoiceActions: Record<DeferredVoiceActionType, DeferredVoiceAction>` — deferred action queue (queued user turns only)
 
-The `TurnProcessor` owns turn queueing and drain logic. The `DeferredActionQueue` owns deferred action scheduling and dispatch. The `VoiceSessionManager` owns the reply pipeline caller methods.
+The `TurnProcessor` owns turn queueing, transcript admission, addressing/logging, and dispatch for realtime turns, file-ASR turns, and deferred flushes. The `DeferredActionQueue` owns deferred action scheduling and dispatch. The `VoiceSessionManager` is the lifecycle host that exposes the runtime capabilities the turn processor calls into.
 
 Code:
 
-- `src/voice/turnProcessor.ts` — turn queueing, drain loops, `runRealtimeTurn`, `runFileAsrTurn`
+- `src/voice/turnProcessor.ts` — turn queueing, drain loops, shared post-transcript admission/dispatch, deferred flush execution
 - `src/voice/voiceReplyDecision.ts` — reply admission gate (`evaluateVoiceReplyDecision`)
 - `src/voice/voiceReplyPipeline.ts` — unified reply pipeline
 - `src/voice/deferredActionQueue.ts` — deferred action management
@@ -275,6 +275,14 @@ captureManager.finalizeUserTurn() (realtime session with `transcriptionMethod="f
 
 Turn coalescing: multiple turns arriving within the coalesce window are merged into a single turn with concatenated PCM and merged transcripts.
 
+After capture/transcription, all three entry points converge on the same post-transcript helper in `turnProcessor.ts`:
+
+- realtime turns after local/per-user ASR
+- file-ASR turns after WAV transcription
+- deferred bot-turn-open flushes after coalescing queued transcripts
+
+That shared path performs the admission decision, addressing normalization, classifier snapshot logging, deferred requeue, and the final native-vs-bridge-vs-brain dispatch.
+
 ## 13. Reply Admission Gate
 
 `evaluateVoiceReplyDecision()` in `voiceReplyDecision.ts` evaluates each turn against a deterministic gate sequence:
@@ -299,7 +307,7 @@ For bridge path turns that survive deterministic gates, `runVoiceReplyClassifier
 
 ## 14. Reply Dispatch (Three Mutually Exclusive Paths)
 
-After admission, the turn processor dispatches based on mode:
+After admission, the shared turn processor dispatch helper chooses one of three mutually exclusive paths:
 
 | Path | Condition | Who generates text? | Who generates speech? | Uses `runVoiceReplyPipeline`? |
 |---|---|---|---|---|
@@ -367,9 +375,10 @@ Deferred turns are flushed when the output channel becomes free:
 2. Clear the deferred action
 3. Coalesce up to `BOT_TURN_DEFERRED_COALESCE_MAX` turns (direct-addressed get priority)
 4. Concatenate PCM buffers
-5. **Re-run the full admission gate** on the coalesced transcript
-6. If denied again: re-queue
-7. If allowed: dispatch to the correct pipeline (same mode-switching as normal turns)
+5. Call the same shared post-transcript helper used by realtime and file-ASR turns
+6. **Re-run the full admission gate** on the coalesced transcript
+7. If denied again: re-queue
+8. If allowed: dispatch to the correct pipeline (same mode-switching as normal turns)
 
 ### Capture Blocking
 

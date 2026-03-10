@@ -5,20 +5,17 @@ import {
   type SettingsCodingWorkerName,
   type SettingsInput
 } from "./settingsSchema.ts";
+import {
+  getAgentStackPresetDefaults,
+  normalizeAgentStackPresetName,
+  type AgentSessionPolicy,
+  type AgentStackPresetName,
+  type AgentStackPresetDefaults as PresetDefaults
+} from "./agentStackCatalog.ts";
 
 type ModelBinding = {
   provider?: string;
   model?: string;
-};
-
-export type AgentSessionToolPolicy = "none" | "fast_only" | "full";
-
-export type AgentSessionPolicy = {
-  persistent: boolean;
-  toolPolicy: {
-    voice: AgentSessionToolPolicy;
-    text: AgentSessionToolPolicy;
-  };
 };
 
 export type CapabilityExecutionPolicy = {
@@ -34,27 +31,6 @@ type DevTeamRoles = {
   implementation: SettingsCodingWorkerName;
   review: SettingsCodingWorkerName;
   research?: SettingsCodingWorkerName;
-};
-
-type PresetDefaults = {
-  harness: string;
-  orchestrator: Required<ModelBinding>;
-  researchRuntime: string;
-  browserRuntime: string;
-  voiceRuntime: string;
-  voiceReplyPath: "native" | "bridge" | "brain";
-  voiceTtsMode: "realtime" | "api";
-  voiceAdmissionPolicy: {
-    mode: string;
-  };
-  voiceAdmissionClassifier?: Required<ModelBinding>;
-  voiceGeneration?: Required<ModelBinding>;
-  sessionPolicy?: AgentSessionPolicy;
-  devTeam: {
-    orchestrator: Required<ModelBinding>;
-    roles: DevTeamRoles;
-    codingWorkers: SettingsCodingWorkerName[];
-  };
 };
 
 export type ResolvedAgentStack = {
@@ -83,217 +59,6 @@ const VALID_CODING_WORKERS = new Set<SettingsCodingWorkerName>([
   "codex",
   "codex_cli"
 ]);
-
-const PRESET_DEFAULTS = {
-  claude_oauth: {
-    harness: "internal",
-    orchestrator: {
-      provider: "claude-oauth",
-      model: "claude-opus-4-6"
-    },
-    researchRuntime: "local_external_search",
-    browserRuntime: "local_browser_agent",
-    voiceRuntime: "openai_realtime",
-    voiceReplyPath: "brain",
-    voiceTtsMode: "realtime",
-    voiceAdmissionPolicy: {
-      mode: "generation_decides"
-    },
-    voiceAdmissionClassifier: {
-      provider: "claude-oauth",
-      model: "claude-sonnet-4-6"
-    },
-    voiceGeneration: {
-      provider: "claude-oauth",
-      model: "claude-sonnet-4-6"
-    },
-    devTeam: {
-      orchestrator: {
-        provider: "claude-oauth",
-        model: "claude-sonnet-4-6"
-      },
-      roles: {
-        design: "claude_code",
-        implementation: "claude_code",
-        review: "claude_code",
-        research: "claude_code"
-      },
-      codingWorkers: ["claude_code", "codex_cli"]
-    }
-  },
-  claude_api: {
-    harness: "internal",
-    orchestrator: {
-      provider: "anthropic",
-      model: "claude-sonnet-4-6"
-    },
-    researchRuntime: "local_external_search",
-    browserRuntime: "local_browser_agent",
-    voiceRuntime: "openai_realtime",
-    voiceReplyPath: "brain",
-    voiceTtsMode: "realtime",
-    voiceAdmissionPolicy: {
-      mode: "generation_decides"
-    },
-    voiceAdmissionClassifier: {
-      provider: "anthropic",
-      model: "claude-haiku-4-5"
-    },
-    voiceGeneration: {
-      provider: "anthropic",
-      model: "claude-haiku-4-5"
-    },
-    devTeam: {
-      orchestrator: {
-        provider: "anthropic",
-        model: "claude-sonnet-4-6"
-      },
-      roles: {
-        design: "claude_code",
-        implementation: "claude_code",
-        review: "claude_code",
-        research: "claude_code"
-      },
-      codingWorkers: ["claude_code", "codex_cli"]
-    }
-  },
-  openai_native_realtime: {
-    harness: "responses_native",
-    orchestrator: {
-      provider: "openai",
-      model: "gpt-5"
-    },
-    researchRuntime: "openai_native_web_search",
-    browserRuntime: "openai_computer_use",
-    voiceRuntime: "openai_realtime",
-    voiceReplyPath: "bridge",
-    voiceTtsMode: "realtime",
-    voiceAdmissionPolicy: {
-      mode: "adaptive"
-    },
-    voiceAdmissionClassifier: {
-      provider: "openai",
-      model: "gpt-5-mini"
-    },
-    devTeam: {
-      orchestrator: {
-        provider: "openai",
-        model: "gpt-5"
-      },
-      roles: {
-        design: "codex_cli",
-        implementation: "codex_cli",
-        review: "codex_cli",
-        research: "codex_cli"
-      },
-      codingWorkers: ["codex_cli", "claude_code"]
-    }
-  },
-  openai_api: {
-    harness: "internal",
-    orchestrator: {
-      provider: "openai",
-      model: "gpt-5"
-    },
-    researchRuntime: "local_external_search",
-    browserRuntime: "local_browser_agent",
-    voiceRuntime: "openai_realtime",
-    voiceReplyPath: "brain",
-    voiceTtsMode: "realtime",
-    voiceAdmissionPolicy: {
-      mode: "generation_decides"
-    },
-    voiceAdmissionClassifier: {
-      provider: "openai",
-      model: "gpt-5-mini"
-    },
-    voiceGeneration: {
-      provider: "openai",
-      model: "gpt-5-mini"
-    },
-    devTeam: {
-      orchestrator: {
-        provider: "openai",
-        model: "gpt-5"
-      },
-      roles: {
-        design: "codex_cli",
-        implementation: "codex_cli",
-        review: "codex_cli",
-        research: "codex_cli"
-      },
-      codingWorkers: ["codex_cli", "claude_code"]
-    }
-  },
-  openai_oauth: {
-    harness: "internal",
-    orchestrator: {
-      provider: "openai-oauth",
-      model: "gpt-5.4"
-    },
-    researchRuntime: "local_external_search",
-    browserRuntime: "local_browser_agent",
-    voiceRuntime: "openai_realtime",
-    voiceReplyPath: "brain",
-    voiceTtsMode: "realtime",
-    voiceAdmissionPolicy: {
-      mode: "generation_decides"
-    },
-    voiceAdmissionClassifier: {
-      provider: "openai-oauth",
-      model: "gpt-5.4"
-    },
-    voiceGeneration: {
-      provider: "openai-oauth",
-      model: "gpt-5.4"
-    },
-    devTeam: {
-      orchestrator: {
-        provider: "openai-oauth",
-        model: "gpt-5.4"
-      },
-      roles: {
-        design: "codex_cli",
-        implementation: "codex_cli",
-        review: "codex_cli",
-        research: "codex_cli"
-      },
-      codingWorkers: ["codex_cli", "claude_code"]
-    }
-  },
-  grok_native_agent: {
-    harness: "internal",
-    orchestrator: {
-      provider: "xai",
-      model: "grok-4-latest"
-    },
-    researchRuntime: "local_external_search",
-    browserRuntime: "local_browser_agent",
-    voiceRuntime: "voice_agent",
-    voiceReplyPath: "native",
-    voiceTtsMode: "realtime",
-    voiceAdmissionPolicy: {
-      mode: "adaptive"
-    },
-    voiceAdmissionClassifier: {
-      provider: "xai",
-      model: "grok-3-mini-latest"
-    },
-    devTeam: {
-      orchestrator: {
-        provider: "xai",
-        model: "grok-4-latest"
-      },
-      roles: {
-        design: "codex_cli",
-        implementation: "codex_cli",
-        review: "codex_cli",
-        research: "codex_cli"
-      },
-      codingWorkers: ["claude_code", "codex_cli"]
-    }
-  }
-} as const satisfies Record<string, PresetDefaults>;
 
 function mergeWithDefaults<T>(defaults: T, value: unknown): T {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -626,8 +391,7 @@ export function getDevTeamRuntimeConfig(settings: unknown): Settings["agentStack
 
 function getPresetDefaults(settings: unknown): PresetDefaults {
   const agentStack = getAgentStackSettings(settings);
-  const presetName = String(agentStack.preset || DEFAULT_SETTINGS.agentStack.preset) as keyof typeof PRESET_DEFAULTS;
-  return PRESET_DEFAULTS[presetName] || PRESET_DEFAULTS.claude_oauth;
+  return getAgentStackPresetDefaults(agentStack.preset || DEFAULT_SETTINGS.agentStack.preset);
 }
 
 function normalizeResolvedVoiceRuntime(value: unknown, fallback: string) {
@@ -751,7 +515,7 @@ export function getResolvedVoiceAdmissionClassifierBinding(settings: unknown) {
     fallback
   );
   const mode = String(voiceAdmission.mode || "");
-  if (mode === "deterministic_only" || mode === "generation_decides") {
+  if (mode === "generation_decides") {
     return null;
   }
   const binding = overridePolicy.mode === "dedicated_model"
@@ -859,7 +623,9 @@ export function applyOrchestratorOverrideSettings(
 
 export function resolveAgentStack(settings: unknown) {
   const agentStack = getAgentStackSettings(settings);
-  const presetName = String(agentStack.preset || DEFAULT_SETTINGS.agentStack.preset) as keyof typeof PRESET_DEFAULTS;
+  const presetName = normalizeAgentStackPresetName(
+    agentStack.preset || DEFAULT_SETTINGS.agentStack.preset
+  ) as AgentStackPresetName;
   const presetDefaults = getPresetDefaults(settings);
   const overrides = agentStack.overrides || {};
   const voiceAdmission = getVoiceAdmissionSettings(settings);

@@ -1,7 +1,6 @@
 import { PermissionFlagsBits, type ChatInputCommandInteraction, type VoiceChannelEffect } from "discord.js";
 import { resolveMemoryToolNamespaceScope } from "../memory/memoryToolRuntime.ts";
 import {
-  getBotNameAliases,
   getVoiceConversationPolicy,
   getVoiceRuntimeConfig,
 } from "../settings/agentStack.ts";
@@ -10,7 +9,6 @@ import { getPromptBotName } from "../prompts/promptCore.ts";
 import { buildSingleTurnPromptLog } from "../promptLogging.ts";
 import { clamp } from "../utils.ts";
 import { buildVoiceReplyScopeKey } from "../tools/activeReplyRegistry.ts";
-import { hasBotNameCue } from "../bot/directAddressConfidence.ts";
 import { SoundboardDirector } from "./soundboardDirector.ts";
 import { createMusicPlaybackProvider } from "./musicPlayback.ts";
 import { createMusicSearchProvider } from "./musicSearch.ts";
@@ -91,6 +89,7 @@ import {
   annotateLatestVoiceTurnAddressing as annotateLatestVoiceTurnAddressingModule,
   buildVoiceAddressingState as buildVoiceAddressingStateModule,
   findLatestVoiceTurnIndex as findLatestVoiceTurnIndexModule,
+  hasBotNameCueForTranscript as hasBotNameCueForTranscriptModule,
   mergeVoiceAddressingAnnotation as mergeVoiceAddressingAnnotationModule,
   normalizeVoiceAddressingAnnotation as normalizeVoiceAddressingAnnotationModule
 } from "./voiceAddressing.ts";
@@ -134,7 +133,6 @@ import {
 } from "./systemSpeechOpportunity.ts";
 import { runVoiceReplyPipeline } from "./voiceReplyPipeline.ts";
 import { requestJoin } from "./voiceJoinFlow.ts";
-import { shouldRequestVoiceToolFollowup } from "../tools/sharedToolSchemas.ts";
 import {
   buildVoiceConversationContext as buildVoiceConversationContextModule,
   evaluateVoiceReplyDecision as evaluateVoiceReplyDecisionModule
@@ -145,7 +143,6 @@ import {
   BARGE_IN_MIN_SPEECH_MS,
   BARGE_IN_SUPPRESSION_MAX_MS,
   BOT_DISCONNECT_GRACE_MS,
-  BOT_TURN_DEFERRED_COALESCE_MAX,
   BOT_TURN_DEFERRED_FLUSH_DELAY_MS,
   BOT_TURN_DEFERRED_QUEUE_MAX,
   BOT_TURN_SILENCE_RESET_MS,
@@ -1116,34 +1113,10 @@ export class VoiceSessionManager {
   }
 
   hasBotNameCueForTranscript({ transcript = "", settings = null } = {}) {
-    const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
-    if (!normalizedTranscript) return false;
-
-    const resolvedSettings = settings || this.store.getSettings();
-    const botName = getPromptBotName(resolvedSettings);
-    const aliases = getBotNameAliases(resolvedSettings);
-    const primaryToken = String(botName || "")
-      .replace(/[^a-z0-9\s]+/gi, " ")
-      .trim()
-      .split(/\s+/)
-      .filter(Boolean)
-      .at(0) || "";
-    const shortPrimaryToken = primaryToken.length >= 5 ? primaryToken.slice(0, 5) : "";
-    const candidateNames = [
-      botName,
-      ...aliases,
-      primaryToken,
-      shortPrimaryToken
-    ]
-      .map((entry) => String(entry || "").trim())
-      .filter(Boolean);
-
-    for (const candidate of candidateNames) {
-      if (hasBotNameCue({ transcript: normalizedTranscript, botName: candidate })) {
-        return true;
-      }
-    }
-    return false;
+    return hasBotNameCueForTranscriptModule({
+      transcript,
+      settings: settings || this.store.getSettings()
+    });
   }
 
   isLikelyMusicStopPhrase({ transcript = "", settings = null } = {}) {
@@ -3355,6 +3328,11 @@ export class VoiceSessionManager {
     this.deferredActionQueue.clearDeferredVoiceAction(session, "queued_user_turns");
   }
 
+  getDeferredQueuedUserTurns(session) {
+    if (!session || session.ending) return [];
+    return this.deferredActionQueue.getDeferredQueuedUserTurns(session);
+  }
+
   queueDeferredBotTurnOpenTurn({
     session,
     userId = null,
@@ -3471,233 +3449,10 @@ export class VoiceSessionManager {
     deferredTurns = null,
     reason = "bot_turn_open_deferred_flush"
   }) {
-    if (!session || session.ending) return;
-    const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
-    const pendingQueue = Array.isArray(deferredTurns)
-      ? deferredTurns
-      : this.deferredActionQueue.getDeferredQueuedUserTurns(session).slice();
-    if (!pendingQueue.length) return;
-    const latestQueuedAt = pendingQueue.reduce((latest, entry) => {
-      const queuedAt = Math.max(0, Number(entry?.queuedAt || 0));
-      return queuedAt > latest ? queuedAt : latest;
-    }, 0);
-    if (this.activeReplies?.isStale(voiceReplyScopeKey, latestQueuedAt)) {
-      if (!Array.isArray(deferredTurns)) {
-        this.deferredActionQueue.clearDeferredVoiceAction(session, "queued_user_turns");
-      }
-      return;
-    }
-    if (!Array.isArray(deferredTurns)) {
-      const outputChannelState = this.getOutputChannelState(session);
-      if (outputChannelState.locked || outputChannelState.captureBlocking) {
-        this.scheduleDeferredBotTurnOpenFlush({ session, reason });
-        return;
-      }
-    }
-    if (!Array.isArray(deferredTurns)) {
-      this.deferredActionQueue.clearDeferredVoiceAction(session, "queued_user_turns");
-    }
-    const deferredTurnsToFlush = pendingQueue;
-    const coalescedTurns = deferredTurnsToFlush.slice(-BOT_TURN_DEFERRED_COALESCE_MAX);
-    const turnsForTranscript = coalescedTurns;
-    // If any deferred turn was direct-addressed, use that turn's userId and
-    // place its transcript first so the wake phrase isn't buried mid-string.
-    const directAddressedTurn = turnsForTranscript.find((entry) => entry?.directAddressed) || null;
-    const latestTurn = directAddressedTurn || turnsForTranscript[turnsForTranscript.length - 1];
-    const orderedTurns = directAddressedTurn
-      ? [directAddressedTurn, ...turnsForTranscript.filter((t) => t !== directAddressedTurn)]
-      : turnsForTranscript;
-    const distinctSources: string[] = Array.from(
-      new Set(
-        orderedTurns
-          .map((entry) => String(entry?.source || "").trim())
-          .filter((source): source is string => source.length > 0)
-      )
-    );
-    const deferredReplySource: string =
-      distinctSources.length === 1 && isSystemSpeechOpportunitySource(distinctSources[0])
-        ? distinctSources[0]
-        : "bot_turn_open_deferred_flush";
-    const coalescedTranscript = normalizeVoiceText(
-      orderedTurns
-        .map((entry) => String(entry?.transcript || "").trim())
-        .filter(Boolean)
-        .join(" "),
-      STT_TRANSCRIPT_MAX_CHARS
-    );
-    if (!coalescedTranscript) return;
-    const coalescedPcmBuffer = isRealtimeMode(session.mode)
-      ? Buffer.concat(
-        orderedTurns
-          .map((entry) => (entry?.pcmBuffer?.length ? entry.pcmBuffer : null))
-          .filter(Boolean)
-      )
-      : null;
-
-    const settings = session.settingsSnapshot || this.store.getSettings();
-    const useNativeRealtimeReply = this.shouldUseNativeRealtimeReply({ session, settings });
-    const decision = await this.evaluateVoiceReplyDecision({
+    return this.turnProcessor.flushDeferredBotTurnOpenTurns({
       session,
-      settings,
-      userId: latestTurn?.userId || null,
-      transcript: coalescedTranscript,
-      source: deferredReplySource
-    });
-    if (decision.directAddressed && session && !session.ending) {
-      session.lastDirectAddressAt = Date.now();
-      session.lastDirectAddressUserId = latestTurn?.userId || null;
-    }
-    const decisionVoiceAddressing = this.normalizeVoiceAddressingAnnotation({
-      rawAddressing: decision?.voiceAddressing,
-      directAddressed: Boolean(decision.directAddressed),
-      directedConfidence: Number(decision.directAddressConfidence),
-      source: "decision",
-      reason: decision.reason
-    });
-    this.annotateLatestVoiceTurnAddressing({
-      session,
-      role: "user",
-      userId: latestTurn?.userId || null,
-      text: decision.transcript || coalescedTranscript,
-      addressing: decisionVoiceAddressing
-    });
-    const decisionAddressingState = this.buildVoiceAddressingState({
-      session,
-      userId: latestTurn?.userId || null
-    });
-    const deferredOutputLockDebugMetadata = this.replyManager.getOutputLockDebugMetadata(
-      session,
-      decision.outputLockReason || null
-    );
-    setVoiceLivePromptSnapshot(session, "classifier", {
-      replyPrompts: decision.replyPrompts || null,
-      source: deferredReplySource
-    });
-
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId: latestTurn?.userId || null,
-      content: "voice_turn_addressing",
-      metadata: {
-        sessionId: session.id,
-        mode: session.mode,
-        source: deferredReplySource,
-        captureReason: latestTurn?.captureReason || "stream_end",
-        deferredActionReason: reason,
-        allow: Boolean(decision.allow),
-        reason: decision.reason,
-        participantCount: Number(decision.participantCount || 0),
-        directAddressed: Boolean(decision.directAddressed),
-        talkingTo: decisionVoiceAddressing?.talkingTo || null,
-        directedConfidence: Number.isFinite(Number(decisionVoiceAddressing?.directedConfidence))
-          ? Number(clamp(Number(decisionVoiceAddressing.directedConfidence), 0, 1).toFixed(3))
-          : 0,
-        addressingSource: decisionVoiceAddressing?.source || null,
-        addressingReason: decisionVoiceAddressing?.reason || null,
-        currentSpeakerTarget: decisionAddressingState?.currentSpeakerTarget || null,
-        currentSpeakerDirectedConfidence: Number.isFinite(
-          Number(decisionAddressingState?.currentSpeakerDirectedConfidence)
-        )
-          ? Number(clamp(Number(decisionAddressingState.currentSpeakerDirectedConfidence), 0, 1).toFixed(3))
-          : 0,
-        transcript: decision.transcript || coalescedTranscript || null,
-        deferredTurnCount: coalescedTurns.length,
-        conversationState: decision.conversationContext?.engagementState || null,
-        conversationEngaged: Boolean(decision.conversationContext?.engaged),
-        engagedWithCurrentSpeaker: Boolean(decision.conversationContext?.engagedWithCurrentSpeaker),
-        recentAssistantReply: Boolean(decision.conversationContext?.recentAssistantReply),
-        msSinceAssistantReply: Number.isFinite(decision.conversationContext?.msSinceAssistantReply)
-          ? Math.round(decision.conversationContext.msSinceAssistantReply)
-          : null,
-        msSinceDirectAddress: Number.isFinite(decision.conversationContext?.msSinceDirectAddress)
-          ? Math.round(decision.conversationContext.msSinceDirectAddress)
-          : null,
-        msSinceInboundAudio: Number.isFinite(decision.msSinceInboundAudio)
-          ? Math.round(decision.msSinceInboundAudio)
-          : null,
-        requiredSilenceMs: Number.isFinite(decision.requiredSilenceMs)
-          ? Math.round(decision.requiredSilenceMs)
-          : null,
-        retryAfterMs: Number.isFinite(decision.retryAfterMs)
-          ? Math.round(decision.retryAfterMs)
-          : null,
-        outputLockReason: decision.outputLockReason || null,
-        classifierLatencyMs: Number.isFinite(decision.classifierLatencyMs)
-          ? Math.round(decision.classifierLatencyMs)
-          : null,
-        classifierDecision: decision.classifierDecision || null,
-        classifierConfidence: Number.isFinite(decision.classifierConfidence)
-          ? Number(clamp(Number(decision.classifierConfidence), 0, 1).toFixed(3))
-          : null,
-        classifierTarget: decision.classifierTarget || null,
-        classifierReason: decision.classifierReason || null,
-        replyPrompts: decision.replyPrompts || null,
-        musicWakeLatched: Boolean(decision.conversationContext?.musicWakeLatched),
-        musicWakeLatchedUntil: Number(session?.musicWakeLatchedUntil || 0) > 0
-          ? new Date(Number(session.musicWakeLatchedUntil)).toISOString()
-          : null,
-        error: decision.error || null,
-        ...deferredOutputLockDebugMetadata
-      }
-    });
-    if (!decision.allow) {
-      if (
-        decision.reason === "bot_turn_open"
-      ) {
-        this.queueDeferredBotTurnOpenTurn({
-          session,
-          userId: latestTurn?.userId || null,
-          transcript: coalescedTranscript,
-          pcmBuffer: coalescedPcmBuffer,
-          captureReason: latestTurn?.captureReason || "stream_end",
-          source: deferredReplySource,
-          directAddressed: Boolean(decision.directAddressed),
-          deferReason: decision.reason,
-          flushDelayMs: decision.retryAfterMs
-        });
-      }
-      return;
-    }
-
-    if (!isRealtimeMode(session.mode)) return;
-    if (useNativeRealtimeReply) {
-      if (!coalescedPcmBuffer?.length) return;
-      await this.forwardRealtimeTurnAudio({
-        session,
-        settings,
-        userId: latestTurn?.userId || null,
-        transcript: coalescedTranscript,
-        pcmBuffer: coalescedPcmBuffer,
-        captureReason: "bot_turn_open_deferred_flush"
-      });
-      return;
-    }
-
-    if (this.shouldUseRealtimeTranscriptBridge({ session, settings })) {
-      await this.forwardRealtimeTextTurnToBrain({
-        session,
-        settings,
-        userId: latestTurn?.userId || null,
-        transcript: coalescedTranscript,
-        captureReason: "bot_turn_open_deferred_flush",
-        source: deferredReplySource,
-        directAddressed: Boolean(decision.directAddressed),
-        conversationContext: decision.conversationContext || null
-      });
-      return;
-    }
-
-    await this.runRealtimeBrainReply({
-      session,
-      settings,
-      userId: latestTurn?.userId || null,
-      transcript: coalescedTranscript,
-      directAddressed: Boolean(decision.directAddressed),
-      directAddressConfidence: Number(decision.directAddressConfidence),
-      conversationContext: decision.conversationContext || null,
-      source: deferredReplySource
+      deferredTurns,
+      reason
     });
   }
 
@@ -3709,7 +3464,7 @@ export class VoiceSessionManager {
     captureReason = "stream_end",
     source = "openai_realtime_text_turn",
     directAddressed = false,
-    conversationContext = null,
+    conversationContext: _conversationContext = null,
     latencyContext = null
   }) {
     if (!session || session.ending) return false;

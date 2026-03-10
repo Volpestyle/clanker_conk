@@ -1,4 +1,5 @@
 import { DEFAULT_SETTINGS, type Settings } from "../../settings/settingsSchema.ts";
+import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../settings/settingsConstraints.ts";
 import {
   normalizeBoolean,
   normalizeInt,
@@ -62,26 +63,26 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
       maxSessionMinutes: normalizeInt(
         sessionLimits.maxSessionMinutes,
         DEFAULT_SETTINGS.voice.sessionLimits.maxSessionMinutes,
-        1,
-        240
+        SETTINGS_NUMERIC_CONSTRAINTS.voice.sessionLimits.maxSessionMinutes.min,
+        SETTINGS_NUMERIC_CONSTRAINTS.voice.sessionLimits.maxSessionMinutes.max
       ),
       inactivityLeaveSeconds: normalizeInt(
         sessionLimits.inactivityLeaveSeconds,
         DEFAULT_SETTINGS.voice.sessionLimits.inactivityLeaveSeconds,
-        15,
-        3_600
+        SETTINGS_NUMERIC_CONSTRAINTS.voice.sessionLimits.inactivityLeaveSeconds.min,
+        SETTINGS_NUMERIC_CONSTRAINTS.voice.sessionLimits.inactivityLeaveSeconds.max
       ),
       maxSessionsPerDay: normalizeInt(
         sessionLimits.maxSessionsPerDay,
         DEFAULT_SETTINGS.voice.sessionLimits.maxSessionsPerDay,
-        0,
-        240
+        SETTINGS_NUMERIC_CONSTRAINTS.voice.sessionLimits.maxSessionsPerDay.min,
+        SETTINGS_NUMERIC_CONSTRAINTS.voice.sessionLimits.maxSessionsPerDay.max
       ),
       maxConcurrentSessions: normalizeInt(
         sessionLimits.maxConcurrentSessions,
         DEFAULT_SETTINGS.voice.sessionLimits.maxConcurrentSessions,
-        1,
-        3
+        SETTINGS_NUMERIC_CONSTRAINTS.voice.sessionLimits.maxConcurrentSessions.min,
+        SETTINGS_NUMERIC_CONSTRAINTS.voice.sessionLimits.maxConcurrentSessions.max
       )
     },
     conversationPolicy: {
@@ -121,14 +122,14 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
         eagerFirstChunkChars: normalizeInt(
           conversationPolicy.streaming?.eagerFirstChunkChars,
           DEFAULT_SETTINGS.voice.conversationPolicy.streaming.eagerFirstChunkChars,
-          8,
-          220
+          SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.streaming.eagerFirstChunkChars.min,
+          SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.streaming.eagerFirstChunkChars.max
         ),
         maxBufferChars: normalizeInt(
           conversationPolicy.streaming?.maxBufferChars,
           DEFAULT_SETTINGS.voice.conversationPolicy.streaming.maxBufferChars,
-          80,
-          800
+          SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.streaming.maxBufferChars.min,
+          SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.streaming.maxBufferChars.max
         )
       }
     },
@@ -143,8 +144,8 @@ export function normalizeVoiceSection(section: Settings["voice"]): Settings["voi
       musicWakeLatchSeconds: normalizeInt(
         admission.musicWakeLatchSeconds,
         DEFAULT_SETTINGS.voice.admission.musicWakeLatchSeconds,
-        0,
-        120
+        SETTINGS_NUMERIC_CONSTRAINTS.voice.admission.musicWakeLatchSeconds.min,
+        SETTINGS_NUMERIC_CONSTRAINTS.voice.admission.musicWakeLatchSeconds.max
       )
     },
     streamWatch: {

@@ -1,5 +1,6 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
+import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../../../src/settings/settingsConstraints.ts";
 
 export function StartupCatchupSettingsSection({ id, form, set }) {
   return (
@@ -18,8 +19,8 @@ export function StartupCatchupSettingsSection({ id, form, set }) {
             <input
               id="catchup-lookback"
               type="number"
-              min="1"
-              max="24"
+              min={SETTINGS_NUMERIC_CONSTRAINTS.interaction.startup.catchupLookbackHours.min}
+              max={SETTINGS_NUMERIC_CONSTRAINTS.interaction.startup.catchupLookbackHours.max}
               value={form.catchupLookbackHours}
               onChange={set("catchupLookbackHours")}
             />
@@ -29,8 +30,8 @@ export function StartupCatchupSettingsSection({ id, form, set }) {
             <input
               id="catchup-max-messages"
               type="number"
-              min="5"
-              max="80"
+              min={SETTINGS_NUMERIC_CONSTRAINTS.interaction.startup.catchupMaxMessagesPerChannel.min}
+              max={SETTINGS_NUMERIC_CONSTRAINTS.interaction.startup.catchupMaxMessagesPerChannel.max}
               value={form.catchupMaxMessages}
               onChange={set("catchupMaxMessages")}
             />
@@ -40,8 +41,8 @@ export function StartupCatchupSettingsSection({ id, form, set }) {
             <input
               id="catchup-max-replies"
               type="number"
-              min="1"
-              max="12"
+              min={SETTINGS_NUMERIC_CONSTRAINTS.interaction.startup.maxCatchupRepliesPerChannel.min}
+              max={SETTINGS_NUMERIC_CONSTRAINTS.interaction.startup.maxCatchupRepliesPerChannel.max}
               value={form.catchupMaxReplies}
               onChange={set("catchupMaxReplies")}
             />

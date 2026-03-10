@@ -6,6 +6,7 @@ import {
   type SettingsCodingWorkerName,
   type SettingsModelBinding
 } from "../../settings/settingsSchema.ts";
+import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../settings/settingsConstraints.ts";
 import {
   OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
   normalizeOpenAiRealtimeTranscriptionModel
@@ -204,26 +205,26 @@ export function normalizeAgentStackSection(
           maxBrowseCallsPerHour: normalizeInt(
             browser.localBrowserAgent.maxBrowseCallsPerHour,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.browser.localBrowserAgent.maxBrowseCallsPerHour,
-            0,
-            60
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.maxBrowseCallsPerHour.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.maxBrowseCallsPerHour.max
           ),
           maxStepsPerTask: normalizeInt(
             browser.localBrowserAgent.maxStepsPerTask,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.browser.localBrowserAgent.maxStepsPerTask,
-            1,
-            30
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.maxStepsPerTask.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.maxStepsPerTask.max
           ),
           stepTimeoutMs: normalizeInt(
             browser.localBrowserAgent.stepTimeoutMs,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.browser.localBrowserAgent.stepTimeoutMs,
-            5_000,
-            120_000
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.stepTimeoutMs.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.stepTimeoutMs.max
           ),
           sessionTimeoutMs: normalizeInt(
             browser.localBrowserAgent.sessionTimeoutMs,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.browser.localBrowserAgent.sessionTimeoutMs,
-            10_000,
-            1_800_000
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.sessionTimeoutMs.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.sessionTimeoutMs.max
           )
         }
       },
@@ -288,8 +289,8 @@ export function normalizeAgentStackSection(
           sampleRateHz: normalizeInt(
             voice.xai.sampleRateHz,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.xai.sampleRateHz,
-            8_000,
-            96_000
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.max
           ),
           region: normalizeString(
             voice.xai.region,
@@ -315,14 +316,14 @@ export function normalizeAgentStackSection(
           inputSampleRateHz: normalizeInt(
             voice.elevenLabsRealtime.inputSampleRateHz,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.elevenLabsRealtime.inputSampleRateHz,
-            8_000,
-            96_000
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.max
           ),
           outputSampleRateHz: normalizeInt(
             voice.elevenLabsRealtime.outputSampleRateHz,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.elevenLabsRealtime.outputSampleRateHz,
-            8_000,
-            96_000
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.max
           )
         },
         geminiRealtime: {
@@ -343,14 +344,14 @@ export function normalizeAgentStackSection(
           inputSampleRateHz: normalizeInt(
             voice.geminiRealtime.inputSampleRateHz,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.geminiRealtime.inputSampleRateHz,
-            8_000,
-            96_000
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.max
           ),
           outputSampleRateHz: normalizeInt(
             voice.geminiRealtime.outputSampleRateHz,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.voice.geminiRealtime.outputSampleRateHz,
-            8_000,
-            96_000
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.max
           )
         },
         openaiAudioApi: {
@@ -427,20 +428,20 @@ export function normalizeAgentStackSection(
           maxTurns: normalizeInt(
             devTeam.codex.maxTurns,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.maxTurns,
-            1,
-            200
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTurns.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTurns.max
           ),
           timeoutMs: normalizeInt(
             devTeam.codex.timeoutMs,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.timeoutMs,
-            10_000,
-            1_800_000
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.timeoutMs.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.timeoutMs.max
           ),
           maxBufferBytes: normalizeInt(
             devTeam.codex.maxBufferBytes,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.maxBufferBytes,
-            4_096,
-            10 * 1024 * 1024
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxBufferBytes.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxBufferBytes.max
           ),
           defaultCwd: normalizeString(
             devTeam.codex.defaultCwd,
@@ -450,14 +451,14 @@ export function normalizeAgentStackSection(
           maxTasksPerHour: normalizeInt(
             devTeam.codex.maxTasksPerHour,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.maxTasksPerHour,
-            0,
-            200
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTasksPerHour.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTasksPerHour.max
           ),
           maxParallelTasks: normalizeInt(
             devTeam.codex.maxParallelTasks,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.maxParallelTasks,
-            1,
-            20
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxParallelTasks.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxParallelTasks.max
           )
         },
         codexCli: {
@@ -474,20 +475,20 @@ export function normalizeAgentStackSection(
           maxTurns: normalizeInt(
             devTeam.codexCli.maxTurns,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.maxTurns,
-            1,
-            200
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTurns.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTurns.max
           ),
           timeoutMs: normalizeInt(
             devTeam.codexCli.timeoutMs,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.timeoutMs,
-            10_000,
-            1_800_000
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.timeoutMs.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.timeoutMs.max
           ),
           maxBufferBytes: normalizeInt(
             devTeam.codexCli.maxBufferBytes,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.maxBufferBytes,
-            4_096,
-            10 * 1024 * 1024
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxBufferBytes.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxBufferBytes.max
           ),
           defaultCwd: normalizeString(
             devTeam.codexCli.defaultCwd,
@@ -497,14 +498,14 @@ export function normalizeAgentStackSection(
           maxTasksPerHour: normalizeInt(
             devTeam.codexCli.maxTasksPerHour,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.maxTasksPerHour,
-            0,
-            200
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTasksPerHour.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTasksPerHour.max
           ),
           maxParallelTasks: normalizeInt(
             devTeam.codexCli.maxParallelTasks,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.maxParallelTasks,
-            1,
-            20
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxParallelTasks.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxParallelTasks.max
           )
         },
         claudeCode: {
@@ -521,20 +522,20 @@ export function normalizeAgentStackSection(
           maxTurns: normalizeInt(
             devTeam.claudeCode.maxTurns,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.maxTurns,
-            1,
-            200
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTurns.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTurns.max
           ),
           timeoutMs: normalizeInt(
             devTeam.claudeCode.timeoutMs,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.timeoutMs,
-            10_000,
-            1_800_000
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.timeoutMs.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.timeoutMs.max
           ),
           maxBufferBytes: normalizeInt(
             devTeam.claudeCode.maxBufferBytes,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.maxBufferBytes,
-            4_096,
-            10 * 1024 * 1024
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxBufferBytes.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxBufferBytes.max
           ),
           defaultCwd: normalizeString(
             devTeam.claudeCode.defaultCwd,
@@ -544,14 +545,14 @@ export function normalizeAgentStackSection(
           maxTasksPerHour: normalizeInt(
             devTeam.claudeCode.maxTasksPerHour,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.maxTasksPerHour,
-            0,
-            200
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTasksPerHour.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTasksPerHour.max
           ),
           maxParallelTasks: normalizeInt(
             devTeam.claudeCode.maxParallelTasks,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.maxParallelTasks,
-            1,
-            20
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxParallelTasks.min,
+            SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxParallelTasks.max
           )
         }
       }

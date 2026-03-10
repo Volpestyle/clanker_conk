@@ -1,16 +1,12 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
-
-const WORKER_LABELS: Record<string, string> = {
-  claude_code: "Claude Code",
-  codex_cli: "Codex CLI",
-  codex: "Codex API"
-};
+import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../../../src/settings/settingsConstraints.ts";
 
 function WorkerAuthBadge({ worker, form }: { worker: string; form: Record<string, unknown> }) {
   const authed =
     worker === "claude_code" ? form.providerAuthClaudeCode :
-    worker === "codex_cli" || worker === "codex" ? form.providerAuthCodexCli :
+    worker === "codex_cli" ? form.providerAuthCodexCli :
+    worker === "codex" ? form.providerAuthCodex :
     false;
   if (authed) return null;
   return (
@@ -76,8 +72,8 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
               <input
                 id="code-agent-max-parallel"
                 type="number"
-                min="1"
-                max="10"
+                min={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxParallelTasks.min}
+                max={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxParallelTasks.max}
                 value={form.codeAgentMaxParallelTasks}
                 onChange={set("codeAgentMaxParallelTasks")}
               />
@@ -129,8 +125,8 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
               <input
                 id="code-agent-max-per-hour"
                 type="number"
-                min="1"
-                max="100"
+                min={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTasksPerHour.min}
+                max={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTasksPerHour.max}
                 value={form.codeAgentMaxTasksPerHour}
                 onChange={set("codeAgentMaxTasksPerHour")}
               />

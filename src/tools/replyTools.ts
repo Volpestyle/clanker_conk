@@ -710,7 +710,7 @@ async function executeBrowserBrowse(
     // Fallback to one-shot if session creation returned null
   }
 
-  // --- Legacy one-shot fallback ---
+  // --- One-shot fallback when session orchestration is unavailable ---
   if (!runtime.browser?.browse) {
     return { content: "Browser browsing is not available.", isError: true };
   }
@@ -1194,7 +1194,7 @@ async function executeCodeTask(
     // Fallback to one-shot if session creation returned null (e.g. blocked)
   }
 
-  // --- Legacy one-shot fallback ---
+  // --- One-shot fallback when session orchestration is unavailable ---
   if (!runtime.codeAgent?.runTask) {
     return { content: "Code agent is not available.", isError: true };
   }

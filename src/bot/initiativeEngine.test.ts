@@ -215,7 +215,7 @@ test("maybeRunInitiativeCycle starts the min-gap cooldown after an initiative sk
           blockedByBudget: false
         };
       }
-    } as unknown as Parameters<typeof maybeRunInitiativeCycle>[0];
+    } as Parameters<typeof maybeRunInitiativeCycle>[0];
 
     await maybeRunInitiativeCycle(runtime);
     assert.equal(llmCalls.length, 1);

@@ -126,7 +126,7 @@ test("loadFactProfile normalizes partial fact profiles from memory manager", asy
         enabled: true
       }
     });
-    ctx.memory.loadFactProfile = (payload) => {
+    ctx.memory.loadFactProfile = (_payload) => {
       return {
         participantProfiles: [
           {

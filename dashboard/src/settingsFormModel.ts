@@ -1,6 +1,5 @@
 import {
   DEFAULT_SETTINGS,
-  MODEL_PROVIDER_KINDS,
   PROVIDER_MODEL_FALLBACKS,
   type Settings,
   type SettingsInput
@@ -13,11 +12,18 @@ import {
   parseUniqueList
 } from "../../src/settings/listNormalization.ts";
 import { getResolvedMemoryBinding } from "../../src/settings/agentStack.ts";
+import { getPresetVoiceAdmissionClassifierFallback } from "../../src/settings/agentStackCatalog.ts";
+import { normalizeLlmProvider } from "../../src/llm/llmHelpers.ts";
+import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../src/settings/settingsConstraints.ts";
 import {
   normalizeVoiceAdmissionModeForDashboard,
+  resolveVoiceAdmissionModeForSettings,
   resolveVoiceRuntimeModeFromSelection,
   resolveVoiceRuntimeSelectionFromMode
 } from "../../src/settings/voiceDashboardMappings.ts";
+import {
+  OPENAI_REALTIME_SESSION_MODEL_OPTIONS
+} from "../../src/voice/realtimeProviderNormalization.ts";
 export type ResolvedBindings = {
   agentStack: {
     preset: string;
@@ -69,33 +75,7 @@ export type ResolvedBindings = {
   };
   providerAuth?: { claude_code?: boolean; codex_cli?: boolean; codex?: boolean };
 };
-
-const PROVIDER_SET = new Set<string>(MODEL_PROVIDER_KINDS);
-
-function normalizeLlmProvider(value: unknown, fallback = "openai"): string {
-  const normalized = String(value || "").trim().toLowerCase();
-  if (normalized === "codex-oauth") return "openai-oauth";
-  if (PROVIDER_SET.has(normalized)) return normalized;
-  const fallbackNormalized = String(fallback || "").trim().toLowerCase();
-  if (fallbackNormalized === "codex-oauth") return "openai-oauth";
-  if (PROVIDER_SET.has(fallbackNormalized)) return fallbackNormalized;
-  return "openai";
-}
-
-function getPresetClassifierFallback(preset: string): { provider: string; model: string } | undefined {
-  if (preset === "claude_oauth") return { provider: "claude-oauth", model: "claude-sonnet-4-6" };
-  if (preset === "claude_api") return { provider: "anthropic", model: "claude-haiku-4-5" };
-  if (preset === "openai_native_realtime" || preset === "openai_api") return { provider: "openai", model: "gpt-5-mini" };
-  if (preset === "openai_oauth") return { provider: "openai-oauth", model: "gpt-5.4" };
-  if (preset === "grok_native_agent") return { provider: "xai", model: "grok-3-mini-latest" };
-  return undefined;
-}
-
-export const OPENAI_REALTIME_MODEL_OPTIONS = Object.freeze([
-  "gpt-realtime",
-  "gpt-realtime-1.5",
-  "gpt-realtime-mini"
-]);
+export const OPENAI_REALTIME_MODEL_OPTIONS = OPENAI_REALTIME_SESSION_MODEL_OPTIONS.slice(0, 3);
 
 export const OPENAI_REALTIME_VOICE_OPTIONS = Object.freeze([
   "alloy",
@@ -193,7 +173,7 @@ function buildSettingsFormView(settings: unknown) {
   const voiceRuntime = valueOr(agentStack.runtimeConfig?.voice, d.agentStack.runtimeConfig.voice);
   const voiceGenerationBinding = resolved?.voiceGenerationBinding || orchestrator;
   const voiceClassifierBinding = resolved?.voiceAdmissionClassifierBinding;
-  const presetClassifierFallback = getPresetClassifierFallback(agentStack.preset);
+  const presetClassifierFallback = getPresetVoiceAdmissionClassifierFallback(agentStack.preset);
   const voiceClassifierFallback = voiceClassifierBinding || presetClassifierFallback || orchestrator;
   const voiceStreamWatch = valueOr(s.voice?.streamWatch, d.voice.streamWatch);
   const voiceSoundboard = valueOr(s.voice?.soundboard, d.voice.soundboard);
@@ -299,7 +279,12 @@ function buildSettingsFormView(settings: unknown) {
       roleDesign: String(resolvedStack?.devTeam?.roles?.design || ""),
       roleImplementation: String(resolvedStack?.devTeam?.roles?.implementation || ""),
       roleReview: String(resolvedStack?.devTeam?.roles?.review || ""),
-      roleResearch: String(resolvedStack?.devTeam?.roles?.research || "")
+      roleResearch: String(resolvedStack?.devTeam?.roles?.research || ""),
+      workerConfigs: {
+        codex: { ...devTeam.codex },
+        codexCli: { ...devTeam.codexCli },
+        claudeCode: { ...devTeam.claudeCode }
+      }
     },
     vision: {
       captionEnabled: vision.enabled,
@@ -334,6 +319,7 @@ function buildSettingsFormView(settings: unknown) {
       maxSessionMinutes: voiceSessionLimits.maxSessionMinutes,
       inactivityLeaveSeconds: voiceSessionLimits.inactivityLeaveSeconds,
       maxSessionsPerDay: voiceSessionLimits.maxSessionsPerDay,
+      maxConcurrentSessions: voiceSessionLimits.maxConcurrentSessions,
       replyEagerness: voiceConversation.replyEagerness,
       streaming: voiceConversation.streaming,
       commandOnlyMode: voiceConversation.commandOnlyMode,
@@ -515,6 +501,8 @@ export function settingsToForm(settings: unknown) {
     codeAgentRoleResearch: String(resolved.codeAgent.roleResearch ?? "claude_code"),
     providerAuthClaudeCode: Boolean(resolved.providerAuth?.claude_code),
     providerAuthCodexCli: Boolean(resolved.providerAuth?.codex_cli),
+    providerAuthCodex: Boolean(resolved.providerAuth?.codex),
+    codeAgentWorkerConfigs: resolved.codeAgent.workerConfigs ?? defaults.codeAgent.workerConfigs,
     visionCaptionEnabled: resolved.vision.captionEnabled ?? defaultVision.captionEnabled,
     visionProvider: resolved.vision.provider ?? defaultVision.provider,
     visionModel: resolved.vision.model ?? defaultVision.model,
@@ -551,6 +539,7 @@ export function settingsToForm(settings: unknown) {
     voiceMaxSessionMinutes: resolved?.voice?.maxSessionMinutes ?? defaultVoice.maxSessionMinutes,
     voiceInactivityLeaveSeconds: resolved?.voice?.inactivityLeaveSeconds ?? defaultVoice.inactivityLeaveSeconds,
     voiceMaxSessionsPerDay: resolved?.voice?.maxSessionsPerDay ?? defaultVoice.maxSessionsPerDay,
+    voiceMaxConcurrentSessions: resolved?.voice?.maxConcurrentSessions ?? defaultVoice.maxConcurrentSessions,
     voiceReplyEagerness: resolved?.voice?.replyEagerness ?? defaultVoice.replyEagerness,
     voiceStreamingEnabled:
       resolved?.voice?.streaming?.enabled ?? defaultVoiceStreaming.enabled,
@@ -761,18 +750,6 @@ export function applyStackPresetDefaults(form: SettingsForm, defaults: Record<st
   };
 }
 
-function normalizeVoiceAdmissionModeForSettings(
-  value: unknown,
-  replyPath: unknown
-): "generation_decides" | "classifier_gate" | "adaptive" {
-  const normalizedReplyPath = String(replyPath || "brain").trim().toLowerCase();
-  if (normalizedReplyPath === "bridge") {
-    return "adaptive";
-  }
-  const normalizedMode = normalizeVoiceAdmissionModeForDashboard(value);
-  return normalizedMode === "adaptive" ? "generation_decides" : normalizedMode;
-}
-
 export function getCodeAgentValidationError(form: SettingsForm): string {
   if (!form.stackAdvancedOverridesEnabled || !form.codeAgentEnabled) {
     return "";
@@ -898,124 +875,124 @@ export function getSettingsValidationError(form: SettingsForm): SettingsFormVali
       sectionId: "sec-rate",
       label: "Max messages per hour",
       value: form.maxMessages,
-      min: 0,
-      max: 500
+      min: SETTINGS_NUMERIC_CONSTRAINTS.permissions.replies.maxMessagesPerHour.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.permissions.replies.maxMessagesPerHour.max
     }),
     validateNumericField({
       sectionId: "sec-rate",
       label: "Max reactions per hour",
       value: form.maxReactions,
-      min: 0,
-      max: 500
+      min: SETTINGS_NUMERIC_CONSTRAINTS.permissions.replies.maxReactionsPerHour.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.permissions.replies.maxReactionsPerHour.max
     }),
     validateNumericField({
       sectionId: "sec-startup",
       label: "Catch-up lookback hours",
       value: form.catchupLookbackHours,
-      min: 1,
-      max: 168
+      min: SETTINGS_NUMERIC_CONSTRAINTS.interaction.startup.catchupLookbackHours.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.interaction.startup.catchupLookbackHours.max
     }),
     validateNumericField({
       sectionId: "sec-startup",
       label: "Catch-up max messages per channel",
       value: form.catchupMaxMessages,
-      min: 1,
-      max: 200
+      min: SETTINGS_NUMERIC_CONSTRAINTS.interaction.startup.catchupMaxMessagesPerChannel.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.interaction.startup.catchupMaxMessagesPerChannel.max
     }),
     validateNumericField({
       sectionId: "sec-startup",
       label: "Catch-up max replies per channel",
       value: form.catchupMaxReplies,
-      min: 0,
-      max: 20
+      min: SETTINGS_NUMERIC_CONSTRAINTS.interaction.startup.maxCatchupRepliesPerChannel.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.interaction.startup.maxCatchupRepliesPerChannel.max
     }),
     validateNumericField({
       enabled: Boolean(form.stackAdvancedOverridesEnabled),
       sectionId: "sec-orchestration",
       label: "Session idle timeout (ms)",
       value: form.subAgentSessionIdleTimeoutMs,
-      min: 10_000,
-      max: 1_800_000
+      min: SETTINGS_NUMERIC_CONSTRAINTS.interaction.sessions.sessionIdleTimeoutMs.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.interaction.sessions.sessionIdleTimeoutMs.max
     }),
     validateNumericField({
       enabled: Boolean(form.stackAdvancedOverridesEnabled),
       sectionId: "sec-orchestration",
       label: "Max concurrent sessions",
       value: form.subAgentMaxConcurrentSessions,
-      min: 1,
-      max: 100
+      min: SETTINGS_NUMERIC_CONSTRAINTS.interaction.sessions.maxConcurrentSessions.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.interaction.sessions.maxConcurrentSessions.max
     }),
     validateNumericField({
       enabled: Boolean(form.stackAdvancedOverridesEnabled && form.browserEnabled),
       sectionId: "sec-browser",
       label: "Max browse calls per hour",
       value: form.browserMaxPerHour,
-      min: 1,
-      max: 60
+      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.maxBrowseCallsPerHour.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.maxBrowseCallsPerHour.max
     }),
     validateNumericField({
       enabled: Boolean(form.stackAdvancedOverridesEnabled && form.browserEnabled),
       sectionId: "sec-browser",
       label: "Max steps per task",
       value: form.browserMaxSteps,
-      min: 1,
-      max: 30
+      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.maxStepsPerTask.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.maxStepsPerTask.max
     }),
     validateNumericField({
       enabled: Boolean(form.stackAdvancedOverridesEnabled && form.browserEnabled),
       sectionId: "sec-browser",
       label: "Browser step timeout (ms)",
       value: form.browserStepTimeoutMs,
-      min: 5_000,
-      max: 120_000
+      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.stepTimeoutMs.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.stepTimeoutMs.max
     }),
     validateNumericField({
       enabled: Boolean(form.stackAdvancedOverridesEnabled && form.browserEnabled),
       sectionId: "sec-browser",
       label: "Browser session timeout (ms)",
       value: form.browserSessionTimeoutMs,
-      min: 10_000,
-      max: 1_800_000
+      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.sessionTimeoutMs.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.browser.sessionTimeoutMs.max
     }),
     validateNumericField({
       enabled: Boolean(form.stackAdvancedOverridesEnabled && form.codeAgentEnabled),
       sectionId: "sec-code-agent",
       label: "Max parallel tasks",
       value: form.codeAgentMaxParallelTasks,
-      min: 1,
-      max: 20
+      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxParallelTasks.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxParallelTasks.max
     }),
     validateNumericField({
       enabled: Boolean(form.stackAdvancedOverridesEnabled && form.codeAgentEnabled),
       sectionId: "sec-code-agent",
       label: "Max tasks per hour",
       value: form.codeAgentMaxTasksPerHour,
-      min: 0,
-      max: 200
+      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTasksPerHour.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTasksPerHour.max
     }),
     validateNumericField({
       enabled: Boolean(form.stackAdvancedOverridesEnabled && form.codeAgentEnabled),
       sectionId: "sec-code-agent",
       label: "Max turns per task",
       value: form.codeAgentMaxTurns,
-      min: 1,
-      max: 200
+      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTurns.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxTurns.max
     }),
     validateNumericField({
       enabled: Boolean(form.stackAdvancedOverridesEnabled && form.codeAgentEnabled),
       sectionId: "sec-code-agent",
       label: "Code agent timeout (ms)",
       value: form.codeAgentTimeoutMs,
-      min: 10_000,
-      max: 1_800_000
+      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.timeoutMs.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.timeoutMs.max
     }),
     validateNumericField({
       enabled: Boolean(form.stackAdvancedOverridesEnabled && form.codeAgentEnabled),
       sectionId: "sec-code-agent",
       label: "Max buffer bytes",
       value: form.codeAgentMaxBufferBytes,
-      min: 4_096,
-      max: 10 * 1024 * 1024
+      min: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxBufferBytes.min,
+      max: SETTINGS_NUMERIC_CONSTRAINTS.agentStack.devTeam.maxBufferBytes.max
     })
   ].filter((entry): entry is SettingsFormValidationError => entry !== null);
 
@@ -1026,6 +1003,110 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
   const discoveryFeedEnabled = Boolean(form.discoveryFeedEnabled);
   const advancedOverridesEnabled = Boolean(form.stackAdvancedOverridesEnabled);
   const normalizedCodeAgentProvider = String(form.codeAgentProvider || "auto").trim().toLowerCase();
+  const rawCodeAgentWorkerConfigs =
+    form.codeAgentWorkerConfigs && typeof form.codeAgentWorkerConfigs === "object"
+      ? form.codeAgentWorkerConfigs as Record<string, Record<string, unknown>>
+      : {};
+  const preservedCodeAgentWorkers = {
+    codex:
+      rawCodeAgentWorkerConfigs.codex && typeof rawCodeAgentWorkerConfigs.codex === "object"
+        ? rawCodeAgentWorkerConfigs.codex
+        : {},
+    codexCli:
+      rawCodeAgentWorkerConfigs.codexCli && typeof rawCodeAgentWorkerConfigs.codexCli === "object"
+        ? rawCodeAgentWorkerConfigs.codexCli
+        : {},
+    claudeCode:
+      rawCodeAgentWorkerConfigs.claudeCode && typeof rawCodeAgentWorkerConfigs.claudeCode === "object"
+        ? rawCodeAgentWorkerConfigs.claudeCode
+        : {}
+  };
+  const preservedCodeAgentAggregate = {
+    maxTurns: Math.max(
+      Number(preservedCodeAgentWorkers.codex.maxTurns || 0),
+      Number(preservedCodeAgentWorkers.codexCli.maxTurns || 0),
+      Number(preservedCodeAgentWorkers.claudeCode.maxTurns || 0)
+    ),
+    timeoutMs: Math.max(
+      Number(preservedCodeAgentWorkers.codex.timeoutMs || 0),
+      Number(preservedCodeAgentWorkers.codexCli.timeoutMs || 0),
+      Number(preservedCodeAgentWorkers.claudeCode.timeoutMs || 0)
+    ),
+    maxBufferBytes: Math.max(
+      Number(preservedCodeAgentWorkers.codex.maxBufferBytes || 0),
+      Number(preservedCodeAgentWorkers.codexCli.maxBufferBytes || 0),
+      Number(preservedCodeAgentWorkers.claudeCode.maxBufferBytes || 0)
+    ),
+    defaultCwd: String(
+      preservedCodeAgentWorkers.codex.defaultCwd ||
+      preservedCodeAgentWorkers.codexCli.defaultCwd ||
+      preservedCodeAgentWorkers.claudeCode.defaultCwd ||
+      ""
+    ).trim(),
+    maxTasksPerHour: Math.max(
+      Number(preservedCodeAgentWorkers.codex.maxTasksPerHour || 0),
+      Number(preservedCodeAgentWorkers.codexCli.maxTasksPerHour || 0),
+      Number(preservedCodeAgentWorkers.claudeCode.maxTasksPerHour || 0)
+    ),
+    maxParallelTasks: Math.max(
+      Number(preservedCodeAgentWorkers.codex.maxParallelTasks || 0),
+      Number(preservedCodeAgentWorkers.codexCli.maxParallelTasks || 0),
+      Number(preservedCodeAgentWorkers.claudeCode.maxParallelTasks || 0)
+    )
+  };
+  const codeAgentSharedOverrides = {
+    maxTurns: Number(form.codeAgentMaxTurns),
+    timeoutMs: Number(form.codeAgentTimeoutMs),
+    maxBufferBytes: Number(form.codeAgentMaxBufferBytes),
+    defaultCwd: String(form.codeAgentDefaultCwd || "").trim(),
+    maxTasksPerHour: Number(form.codeAgentMaxTasksPerHour),
+    maxParallelTasks: Number(form.codeAgentMaxParallelTasks)
+  };
+  const shouldOverrideSharedCodeAgentField = (
+    field: keyof typeof preservedCodeAgentAggregate
+  ) => {
+    const currentValue = codeAgentSharedOverrides[field];
+    const preservedValue = preservedCodeAgentAggregate[field];
+    return typeof currentValue === "string"
+      ? currentValue !== String(preservedValue || "").trim()
+      : Number(currentValue) !== Number(preservedValue || 0);
+  };
+  const buildCodeAgentWorkerConfig = ({
+    workerKey,
+    enabled,
+    model,
+    fallbackModel
+  }: {
+    workerKey: keyof typeof preservedCodeAgentWorkers;
+    enabled: boolean;
+    model: string;
+    fallbackModel: string;
+  }) => {
+    const preserved = preservedCodeAgentWorkers[workerKey];
+    return {
+      ...preserved,
+      enabled,
+      model: String(model || fallbackModel).trim(),
+      maxTurns: shouldOverrideSharedCodeAgentField("maxTurns")
+        ? codeAgentSharedOverrides.maxTurns
+        : Number(preserved.maxTurns ?? codeAgentSharedOverrides.maxTurns),
+      timeoutMs: shouldOverrideSharedCodeAgentField("timeoutMs")
+        ? codeAgentSharedOverrides.timeoutMs
+        : Number(preserved.timeoutMs ?? codeAgentSharedOverrides.timeoutMs),
+      maxBufferBytes: shouldOverrideSharedCodeAgentField("maxBufferBytes")
+        ? codeAgentSharedOverrides.maxBufferBytes
+        : Number(preserved.maxBufferBytes ?? codeAgentSharedOverrides.maxBufferBytes),
+      defaultCwd: shouldOverrideSharedCodeAgentField("defaultCwd")
+        ? codeAgentSharedOverrides.defaultCwd
+        : String(preserved.defaultCwd ?? codeAgentSharedOverrides.defaultCwd).trim(),
+      maxTasksPerHour: shouldOverrideSharedCodeAgentField("maxTasksPerHour")
+        ? codeAgentSharedOverrides.maxTasksPerHour
+        : Number(preserved.maxTasksPerHour ?? codeAgentSharedOverrides.maxTasksPerHour),
+      maxParallelTasks: shouldOverrideSharedCodeAgentField("maxParallelTasks")
+        ? codeAgentSharedOverrides.maxParallelTasks
+        : Number(preserved.maxParallelTasks ?? codeAgentSharedOverrides.maxParallelTasks)
+    };
+  };
   const normalizeCodeAgentRole = (value: unknown): "claude_code" | "codex_cli" | "codex" => {
     const normalized = String(value || "").trim().toLowerCase();
     if (normalized === "codex") return "codex";
@@ -1053,12 +1134,12 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
     String(form.voiceTtsMode || "realtime").trim().toLowerCase() === "api"
       ? "api"
       : "realtime";
-  const normalizedVoiceAdmissionMode = normalizeVoiceAdmissionModeForSettings(
-    form.voiceReplyDecisionRealtimeAdmissionMode || "generation_decides",
-    normalizedVoiceReplyPath
-  );
+  const normalizedVoiceAdmissionMode = resolveVoiceAdmissionModeForSettings({
+    value: form.voiceReplyDecisionRealtimeAdmissionMode || "generation_decides",
+    replyPath: normalizedVoiceReplyPath
+  });
   const presetClassifierFallback =
-    getPresetClassifierFallback(String(form.stackPreset || "claude_oauth").trim()) || {
+    getPresetVoiceAdmissionClassifierFallback(String(form.stackPreset || "claude_oauth").trim()) || {
       provider: String(form.provider || "").trim(),
       model: String(form.model || "").trim()
     };
@@ -1274,36 +1355,24 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
           }
         },
         devTeam: {
-          codex: {
+          codex: buildCodeAgentWorkerConfig({
+            workerKey: "codex",
             enabled: Boolean(form.codeAgentEnabled) && codeAgentUsesCodex,
-            model: String(form.codeAgentCodexModel || "gpt-5.4").trim(),
-            maxTurns: Number(form.codeAgentMaxTurns),
-            timeoutMs: Number(form.codeAgentTimeoutMs),
-            maxBufferBytes: Number(form.codeAgentMaxBufferBytes),
-            defaultCwd: String(form.codeAgentDefaultCwd || "").trim(),
-            maxTasksPerHour: Number(form.codeAgentMaxTasksPerHour),
-            maxParallelTasks: Number(form.codeAgentMaxParallelTasks)
-          },
-          codexCli: {
+            model: String(form.codeAgentCodexModel || "gpt-5.4"),
+            fallbackModel: "gpt-5.4"
+          }),
+          codexCli: buildCodeAgentWorkerConfig({
+            workerKey: "codexCli",
             enabled: Boolean(form.codeAgentEnabled) && codeAgentUsesCodexCli,
-            model: String(form.codeAgentCodexCliModel || "gpt-5.4").trim(),
-            maxTurns: Number(form.codeAgentMaxTurns),
-            timeoutMs: Number(form.codeAgentTimeoutMs),
-            maxBufferBytes: Number(form.codeAgentMaxBufferBytes),
-            defaultCwd: String(form.codeAgentDefaultCwd || "").trim(),
-            maxTasksPerHour: Number(form.codeAgentMaxTasksPerHour),
-            maxParallelTasks: Number(form.codeAgentMaxParallelTasks)
-          },
-          claudeCode: {
+            model: String(form.codeAgentCodexCliModel || "gpt-5.4"),
+            fallbackModel: "gpt-5.4"
+          }),
+          claudeCode: buildCodeAgentWorkerConfig({
+            workerKey: "claudeCode",
             enabled: Boolean(form.codeAgentEnabled) && codeAgentUsesClaudeCode,
-            model: String(form.codeAgentModel || "sonnet").trim(),
-            maxTurns: Number(form.codeAgentMaxTurns),
-            timeoutMs: Number(form.codeAgentTimeoutMs),
-            maxBufferBytes: Number(form.codeAgentMaxBufferBytes),
-            defaultCwd: String(form.codeAgentDefaultCwd || "").trim(),
-            maxTasksPerHour: Number(form.codeAgentMaxTasksPerHour),
-            maxParallelTasks: Number(form.codeAgentMaxParallelTasks)
-          }
+            model: String(form.codeAgentModel || "sonnet"),
+            fallbackModel: "sonnet"
+          })
         }
       }
     },
@@ -1399,7 +1468,7 @@ export function formToSettingsPatch(form: SettingsForm): SettingsInput {
         maxSessionMinutes: Number(form.voiceMaxSessionMinutes),
         inactivityLeaveSeconds: Number(form.voiceInactivityLeaveSeconds),
         maxSessionsPerDay: Number(form.voiceMaxSessionsPerDay),
-        maxConcurrentSessions: Number(form.subAgentMaxConcurrentSessions || 1)
+        maxConcurrentSessions: Number(form.voiceMaxConcurrentSessions || 1)
       },
       conversationPolicy: {
         replyEagerness: Number(form.voiceReplyEagerness),

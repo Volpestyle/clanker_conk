@@ -4,8 +4,7 @@ import { createTestSettings } from "../testSettings.ts";
 import {
   buildBotContext,
   buildQueueGatewayRuntime,
-  buildReplyPipelineRuntime,
-  buildVoiceReplyRuntime
+  buildReplyPipelineRuntime
 } from "./botRuntimeFactories.ts";
 
 function createBot() {
@@ -277,4 +276,3 @@ test("buildQueueGatewayRuntime exposes live bot state through getters, setters, 
   assert.equal(calls.isDirectlyAddressed.length, 1);
   assert.ok(bot.lastGatewayEventAt >= beforeGatewayMark);
 });
-

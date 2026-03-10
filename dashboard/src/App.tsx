@@ -96,7 +96,7 @@ export default function App() {
   const authState = (auth.data as DashboardAuthState | null) || null;
   const refreshAuth = useCallback(async () => {
     await auth.reload();
-  }, [auth.reload]);
+  }, [auth]);
 
   if (!authState) {
     return (

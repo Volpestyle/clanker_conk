@@ -5,6 +5,7 @@ import {
   type SettingsExecutionPolicy,
   type SettingsModelBinding
 } from "../../settings/settingsSchema.ts";
+import { getAgentStackPresetDefinition, normalizeAgentStackPresetName } from "../../settings/agentStackCatalog.ts";
 import {
   normalizeLlmProvider,
   normalizeOpenAiReasoningEffort
@@ -216,9 +217,9 @@ export function normalizeDiscoverySourceMap(
 
 export function normalizeVoiceAdmissionMode(value: unknown, fallback: string) {
   const normalized = normalizeString(value, fallback, 40).toLowerCase();
-  if (normalized === "deterministic_only") return "deterministic_only";
   if (normalized === "classifier_gate" || normalized === "hard_classifier") return "classifier_gate";
   if (
+    normalized === "deterministic_only" ||
     normalized === "generation_decides" ||
     normalized === "generation_only" ||
     normalized === "generation"
@@ -245,77 +246,46 @@ export type AgentStackPresetConfig = {
 export function resolveAgentStackPresetConfig(
   rawAgentStack: Record<string, unknown>
 ): AgentStackPresetConfig {
-  const presetRaw = normalizeString(rawAgentStack.preset, DEFAULT_SETTINGS.agentStack.preset, 48);
-  // Migrate old preset names to new names
-  const migrated =
-    presetRaw === "claude_oauth_local_tools" || presetRaw === "claude_oauth_openai_tools" || presetRaw === "claude_oauth_max"
-      ? "claude_oauth"
-    : presetRaw === "anthropic_brain_openai_tools" || presetRaw === "anthropic_api_openai_tools"
-      ? "claude_api"
-    : presetRaw === "openai_native"
-      ? "openai_native_realtime"
-    : presetRaw === "custom"
-      ? "openai_api"
-    : presetRaw;
-  const preset =
-    migrated === "claude_oauth" ||
-    migrated === "claude_api" ||
-    migrated === "openai_native_realtime" ||
-    migrated === "openai_api" ||
-    migrated === "openai_oauth" ||
-    migrated === "grok_native_agent"
-      ? migrated
-      : DEFAULT_SETTINGS.agentStack.preset;
-
-  const isClaudeOAuth = preset === "claude_oauth";
-  const isClaudeApi = preset === "claude_api";
-  const isOpenAiNativeRealtime = preset === "openai_native_realtime";
-  const isOpenAiApi = preset === "openai_api";
-  const isOpenAiOAuth = preset === "openai_oauth";
-  const isGrokNativeAgent = preset === "grok_native_agent";
-
-  const presetOrchestratorFallback: SettingsModelBinding =
-    isClaudeOAuth ? { provider: "claude-oauth", model: "claude-opus-4-6" }
-    : isClaudeApi ? { provider: "anthropic", model: "claude-sonnet-4-6" }
-    : isOpenAiOAuth ? { provider: "openai-oauth", model: "gpt-5.4" }
-    : isGrokNativeAgent ? { provider: "xai", model: "grok-3-mini-latest" }
-    : { provider: "openai", model: "gpt-5" };
-
-  const presetVoiceAdmissionClassifierFallback: SettingsModelBinding =
-    isClaudeOAuth ? { provider: "claude-oauth", model: "claude-sonnet-4-6" }
-    : isClaudeApi ? { provider: "anthropic", model: "claude-haiku-4-5" }
-    : isOpenAiOAuth ? { provider: "openai-oauth", model: "gpt-5.4" }
-    : isGrokNativeAgent ? { provider: "xai", model: "grok-3-mini-latest" }
-    : { provider: "openai", model: "gpt-5-mini" };
-
-  const presetVoiceGenerationFallback: SettingsModelBinding | undefined =
-    isClaudeOAuth ? { provider: "claude-oauth", model: "claude-sonnet-4-6" }
-    : isClaudeApi ? { provider: "anthropic", model: "claude-haiku-4-5" }
-    : isOpenAiApi ? { provider: "openai", model: "gpt-5-mini" }
-    : isOpenAiOAuth ? { provider: "openai-oauth", model: "gpt-5.4" }
-    : undefined;
-
-  const usesGenerationDecides = isClaudeOAuth || isClaudeApi || isOpenAiApi || isOpenAiOAuth;
+  const preset = normalizeAgentStackPresetName(
+    normalizeString(rawAgentStack.preset, DEFAULT_SETTINGS.agentStack.preset, 48),
+    DEFAULT_SETTINGS.agentStack.preset
+  );
+  const definition = getAgentStackPresetDefinition(preset);
 
   return {
     preset,
-    presetOrchestratorFallback,
-    presetVoiceAdmissionClassifierFallback,
-    presetVoiceGenerationFallback,
-    presetVoiceAdmissionMode: usesGenerationDecides ? "generation_decides" : "adaptive",
-    presetVoiceReplyPath:
-      isGrokNativeAgent ? "native"
-      : isOpenAiNativeRealtime ? "bridge"
-      : "brain",
-    presetVoiceTtsMode: "realtime",
-    presetVoiceRuntimeMode:
-      isGrokNativeAgent ? "voice_agent" : "openai_realtime",
-    presetBrowserFallback:
-      isClaudeOAuth ? { provider: "claude-oauth", model: "claude-opus-4-6" }
-      : undefined,
-    presetVisionFallback:
-      isClaudeOAuth ? { provider: "claude-oauth", model: "claude-opus-4-6" }
-      : isOpenAiOAuth ? { provider: "openai-oauth", model: "gpt-5.4" }
-      : undefined
+    presetOrchestratorFallback: { ...definition.orchestrator } satisfies SettingsModelBinding,
+    ...(definition.voiceAdmissionClassifier
+      ? {
+          presetVoiceAdmissionClassifierFallback: {
+            ...definition.voiceAdmissionClassifier
+          } satisfies SettingsModelBinding
+        }
+      : {}),
+    ...(definition.voiceGeneration
+      ? {
+          presetVoiceGenerationFallback: {
+            ...definition.voiceGeneration
+          } satisfies SettingsModelBinding
+        }
+      : {}),
+    presetVoiceAdmissionMode: definition.voiceAdmissionPolicy.mode,
+    presetVoiceReplyPath: definition.voiceReplyPath,
+    presetVoiceTtsMode: definition.voiceTtsMode,
+    presetVoiceRuntimeMode: definition.voiceRuntime,
+    ...(definition.browserFallback
+      ? {
+          presetBrowserFallback: {
+            ...definition.browserFallback
+          } satisfies SettingsModelBinding
+        }
+      : {}),
+    ...(definition.visionFallback
+      ? {
+          presetVisionFallback: {
+            ...definition.visionFallback
+          } satisfies SettingsModelBinding
+        }
+      : {})
   };
 }

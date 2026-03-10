@@ -1,5 +1,9 @@
 import { clamp } from "../utils.ts";
+import { hasBotNameCue } from "../bot/directAddressConfidence.ts";
+import { getBotNameAliases } from "../settings/agentStack.ts";
+import { getPromptBotName } from "../prompts/promptCore.ts";
 import {
+  normalizeInlineText,
   normalizeVoiceAddressingTargetToken,
   normalizeVoiceText
 } from "./voiceSessionHelpers.ts";
@@ -80,6 +84,42 @@ export function normalizeVoiceAddressingAnnotation({
     source: normalizedSource || null,
     reason: normalizedReason
   };
+}
+
+export function hasBotNameCueForTranscript({
+  transcript = "",
+  settings = null
+}: {
+  transcript?: string;
+  settings?: unknown;
+} = {}) {
+  const normalizedTranscript = normalizeInlineText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+  if (!normalizedTranscript) return false;
+
+  const botName = getPromptBotName(settings);
+  const aliases = getBotNameAliases(settings);
+  const primaryToken = String(botName || "")
+    .replace(/[^a-z0-9\s]+/gi, " ")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .at(0) || "";
+  const shortPrimaryToken = primaryToken.length >= 5 ? primaryToken.slice(0, 5) : "";
+  const candidateNames = [
+    botName,
+    ...aliases,
+    primaryToken,
+    shortPrimaryToken
+  ]
+    .map((entry) => String(entry || "").trim())
+    .filter(Boolean);
+
+  for (const candidate of candidateNames) {
+    if (hasBotNameCue({ transcript: normalizedTranscript, botName: candidate })) {
+      return true;
+    }
+  }
+  return false;
 }
 
 export function mergeVoiceAddressingAnnotation(

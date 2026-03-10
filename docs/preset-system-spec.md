@@ -1,6 +1,6 @@
 # Preset System Spec
 
-Canonical reference for how agent stack presets work. Preset names and runtime resolution live in `src/settings/settingsSchema.ts` and `src/settings/agentStack.ts`.
+Canonical reference for how agent stack presets work. Canonical preset metadata lives in `src/settings/agentStackCatalog.ts`, numeric guardrails live in `src/settings/settingsConstraints.ts`, and runtime resolution lives in `src/settings/agentStack.ts`.
 
 ## Presets
 
@@ -68,7 +68,7 @@ The preset defines the starting point. User changes layer on top.
 
 ### Preset Selector
 
-The Stack Preset section shows a dropdown with all 6 presets. Selecting a new preset fetches preview defaults from `/api/settings/preset-defaults` and applies them to the form, updating orchestrator, voice runtime, voice reply path, admission mode, and generation models.
+The Stack Preset section shows a dropdown with all 6 presets. The dropdown labels, preset reset defaults, admission-mode labels, and preset alias handling all come from the shared preset catalog instead of separate dashboard-only mappings. Selecting a new preset fetches preview defaults from `/api/settings/preset-defaults` and applies them to the form, updating orchestrator, voice runtime, voice reply path, admission mode, and generation models.
 
 The preview is local-only. The dirty indicator stays on until the user clicks Save, and runtime settings do not change just from selecting a preset in the dashboard.
 
@@ -84,27 +84,29 @@ A "Reset to preset defaults" button next to the preset dropdown loads a full nor
 
 For `openai_native_realtime`, saving the reset form preserves the preset's `adaptive` voice admission mode on the bridge reply path so the OpenAI classifier binding stays attached to `openai/gpt-5-mini`.
 
+The dashboard form round-trips raw worker configs and voice session concurrency instead of collapsing them into max-only aggregates. Saving the form preserves per-worker code-agent limits unless the user actually edits a shared field.
+
 The Voice section's classifier provider/model controls persist without requiring Advanced Overrides. When the classifier is active, the dashboard saves the selected provider/model directly, including cases where the selection matches the preset fallback. Choosing the preset-default classifier model does not silently preserve an older override.
 
 ### Advanced Overrides
 
-When `advancedOverridesEnabled` is true, additional sections appear: Advanced Stack (LLM), Research Runtime, Browser Runtime, Dev Team, Sessions. These allow per-field overrides that persist independently of preset selection.
+When `advancedOverridesEnabled` is true, additional sections appear: Advanced Stack (LLM), Research Runtime, Browser Runtime, Dev Team, Sessions. These sections are mounted only when advanced overrides are enabled, and their numeric bounds are shared with backend normalization through `settingsConstraints.ts`.
 
 ## Settings Resolution Flow
 
 ```
 User settings (data/settings.json)
   ↓
-Normalization (settingsNormalization.ts)
-  ├── Preset name normalization
+Normalization (settingsNormalization.ts + store/normalize/*)
+  ├── Preset name normalization via agentStackCatalog.ts
   ├── Preset config seeds defaults for admission mode, reply path, TTS mode
-  └── Per-section normalization (bounds, validation)
+  └── Per-section normalization (bounds, validation) via settingsConstraints.ts
   ↓
 Resolved Agent Stack (agentStack.ts → resolveAgentStack())
   ├── Merges preset defaults + overrides
   └── Produces runtime-only ResolvedAgentStack
   ↓
-Runtime uses resolved bindings
+Dashboard + runtime use the same preset catalog and numeric constraints
 ```
 
 ## Accepted Preset Identifiers

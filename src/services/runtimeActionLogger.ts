@@ -65,8 +65,7 @@ function normalizeInlineSpeechValue(value, maxLength = 220) {
   return truncateString(text, maxLength);
 }
 
-function resolveSpeechStyle(key, metadata) {
-  const normalizedKey = String(key || "").trim();
+function resolveSpeechStyle(_key, metadata) {
   const transcriptSource = isPlainObject(metadata)
     ? String(metadata.transcriptSource || "").trim().toLowerCase()
     : "";

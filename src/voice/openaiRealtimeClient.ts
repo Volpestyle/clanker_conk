@@ -14,19 +14,12 @@ import {
 } from "./realtimeClientCore.ts";
 import {
   DEFAULT_OPENAI_BASE_URL,
+  OPENAI_REALTIME_DEFAULT_SESSION_MODEL,
   OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL,
+  normalizeOpenAiRealtimeSessionModel,
   normalizeOpenAiBaseUrl,
   normalizeOpenAiRealtimeTranscriptionModel
 } from "./realtimeProviderNormalization.ts";
-
-const OPENAI_REALTIME_DEFAULT_SESSION_MODEL = "gpt-realtime";
-const OPENAI_REALTIME_SUPPORTED_SESSION_MODELS = new Set([
-  "gpt-realtime",
-  "gpt-realtime-1.5",
-  "gpt-realtime-mini",
-  "gpt-4o-realtime-preview",
-  "gpt-4o-mini-realtime-preview"
-]);
 
 const COMMENTARY_RESPONSE_STALE_MS = 30_000;
 
@@ -699,14 +692,6 @@ const TERMINAL_RESPONSE_STATUSES = new Set([
   "failed",
   "incomplete"
 ]);
-
-function normalizeOpenAiRealtimeSessionModel(value, fallback = OPENAI_REALTIME_DEFAULT_SESSION_MODEL) {
-  const normalized =
-    String(value || "").trim() || String(fallback || "").trim() || OPENAI_REALTIME_DEFAULT_SESSION_MODEL;
-  return OPENAI_REALTIME_SUPPORTED_SESSION_MODELS.has(normalized)
-    ? normalized
-    : OPENAI_REALTIME_DEFAULT_SESSION_MODEL;
-}
 
 function normalizeOpenAiRealtimeAudioFormat(value, direction = "input") {
   if (value && typeof value === "object" && !Array.isArray(value)) {

@@ -53,32 +53,12 @@ import {
 } from "../promptLogging.ts";
 
 const OPEN_ARTICLE_MAX_CANDIDATES = 12;
-const OPEN_ARTICLE_ROW_LIMIT = 4;
 const OPEN_ARTICLE_RESULTS_PER_ROW = 5;
 const SESSION_DURABLE_CONTEXT_MAX_ENTRIES = 50;
 const SELF_SUBJECT = "__self__";
 const LORE_SUBJECT = "__lore__";
 
 type SessionDurableContextCategory = "fact" | "plan" | "preference" | "relationship";
-
-function runAsyncCallback(callback: unknown, payload: Record<string, unknown>, callbackName: string) {
-  if (typeof callback !== "function") return;
-  try {
-    const maybePromise = callback(payload);
-    if (
-      maybePromise &&
-      typeof maybePromise === "object" &&
-      "catch" in maybePromise &&
-      typeof maybePromise.catch === "function"
-    ) {
-      maybePromise.catch((error: unknown) => {
-        console.error(`[voiceReplies] ${callbackName} callback failed:`, error);
-      });
-    }
-  } catch (error) {
-    console.error(`[voiceReplies] ${callbackName} callback threw:`, error);
-  }
-}
 
 function appendUniqueStrings(target: string[], values: unknown[]) {
   for (const value of values) {
@@ -995,7 +975,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     let streamedSentenceIndex = 0;
     let screenNote: string | null = null;
     let screenMoment: string | null = null;
-    let voiceAddressing = normalizeGeneratedVoiceAddressing(null, {
+    const voiceAddressing = normalizeGeneratedVoiceAddressing(null, {
       directAddressed: Boolean(directAddressed)
     });
     const preserveInlineSoundboardDirectives = allowSoundboardToolCall;

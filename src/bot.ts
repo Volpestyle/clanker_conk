@@ -24,7 +24,7 @@ import {
   resolveFollowingNextRunAt,
   resolveInitialNextRunAt
 } from "./bot/automation.ts";
-import { chance, clamp } from "./utils.ts";
+import { chance } from "./utils.ts";
 import {
   applyAutomationControlAction,
   composeAutomationControlReply

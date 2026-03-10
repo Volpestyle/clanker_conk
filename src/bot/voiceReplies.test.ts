@@ -82,62 +82,6 @@ function structuredVoiceOutput(overrides: {
   return String(overrides.text || "all good");
 }
 
-function structuredReplyJson(overrides: Record<string, unknown> = {}) {
-  const base = {
-    text: "",
-    skip: false,
-    reactionEmoji: null,
-    media: null,
-    webSearchQuery: null,
-    browserBrowseQuery: null,
-    memoryLookupQuery: null,
-    imageLookupQuery: null,
-    openArticleRef: null,
-    memoryLine: null,
-    selfMemoryLine: null,
-    soundboardRefs: [],
-    leaveVoiceChannel: false,
-    automationAction: {
-      operation: null,
-      title: null,
-      instruction: null,
-      schedule: null,
-      targetQuery: null,
-      automationId: null,
-      runImmediately: false,
-      targetChannelId: null
-    },
-    screenShareIntent: {
-      action: "none",
-      confidence: 0,
-      reason: null
-    },
-    voiceAddressing: {
-      talkingTo: null,
-      directedConfidence: 0
-    },
-    screenNote: null,
-    screenMoment: null
-  };
-
-  return JSON.stringify({
-    ...base,
-    ...overrides,
-    automationAction: {
-      ...base.automationAction,
-      ...(overrides.automationAction as Record<string, unknown> || {})
-    },
-    screenShareIntent: {
-      ...base.screenShareIntent,
-      ...(overrides.screenShareIntent as Record<string, unknown> || {})
-    },
-    voiceAddressing: {
-      ...base.voiceAddressing,
-      ...(overrides.voiceAddressing as Record<string, unknown> || {})
-    }
-  });
-}
-
 function createVoiceBot({
   generationText = "all good",
   generationError = null,

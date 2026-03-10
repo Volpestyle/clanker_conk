@@ -8,6 +8,7 @@ import {
   resolveRealtimeTurnTranscriptionPlan
 } from "./voiceDecisionRuntime.ts";
 import {
+  BOT_TURN_DEFERRED_COALESCE_MAX,
   MIN_RESPONSE_REQUEST_GAP_MS,
   OPENAI_ACTIVE_RESPONSE_RETRY_MS,
   REALTIME_TURN_COALESCE_MAX_BYTES,
@@ -37,6 +38,7 @@ import {
 import { setVoiceLivePromptSnapshot } from "./voicePromptState.ts";
 import type { ReplyManager } from "./replyManager.ts";
 import type {
+  DeferredQueuedUserTurn,
   OutputChannelState,
   RealtimeQueuedTurn,
   FileAsrQueuedTurn,
@@ -48,6 +50,7 @@ import type {
   VoiceTranscriptLogprob
 } from "./voiceSessionTypes.ts";
 import { providerSupports } from "./voiceModes.ts";
+import { isSystemSpeechOpportunitySource } from "./systemSpeechOpportunity.ts";
 
 type TurnProcessorSettings = Record<string, unknown> | null;
 
@@ -175,6 +178,42 @@ interface QueueDeferredBotTurnOpenTurnArgs {
   flushDelayMs?: number | null;
 }
 
+interface FlushDeferredBotTurnOpenTurnsArgs {
+  session: VoiceSession;
+  deferredTurns?: DeferredQueuedUserTurn[] | null;
+  reason?: string;
+}
+
+interface VoiceTurnDecisionLogContext {
+  queueWaitMs?: number | null;
+  pendingQueueDepth?: number | null;
+  transcriptionModelPrimary?: string | null;
+  transcriptionModelFallback?: string | null;
+  transcriptionUsedFallbackModel?: boolean;
+  transcriptionPlanReason?: string | null;
+  clipDurationMs?: number | null;
+  asrSkippedShortClip?: boolean;
+  deferredActionReason?: string | null;
+  deferredTurnCount?: number | null;
+}
+
+interface HandleResolvedVoiceTurnArgs {
+  session: VoiceSession;
+  settings: TurnProcessorSettings;
+  userId?: string | null;
+  transcript: string;
+  source: string;
+  captureReason?: string;
+  pcmBuffer?: Buffer | null;
+  transcriptionContext?: TurnDecisionTranscriptionContext;
+  logContext?: VoiceTurnDecisionLogContext | null;
+  bridgeSource?: string;
+  latencyContext?: Record<string, unknown> | null;
+  nativeCaptureReason?: string;
+  allowReplyDispatch?: boolean;
+  shouldAbortStage?: ((stage: "post_decision" | "pre_native_reply" | "pre_brain_forward" | "pre_brain_reply") => boolean) | null;
+}
+
 interface ForwardRealtimeTurnAudioArgs {
   session: VoiceSession;
   settings: TurnProcessorSettings;
@@ -272,11 +311,17 @@ export interface TurnProcessorHost {
     userId?: string | null;
     now?: number;
   }) => VoiceAddressingState | null;
+  getDeferredQueuedUserTurns: (session: VoiceSession) => DeferredQueuedUserTurn[];
   shouldUseNativeRealtimeReply: (args: {
     session: VoiceSession;
     settings?: TurnProcessorSettings;
   }) => boolean;
   queueDeferredBotTurnOpenTurn: (args: QueueDeferredBotTurnOpenTurnArgs) => void;
+  scheduleDeferredBotTurnOpenFlush: (args: {
+    session: VoiceSession;
+    delayMs?: number;
+    reason?: string;
+  }) => void;
   clearDeferredQueuedUserTurns: (session: VoiceSession) => void;
   forwardRealtimeTurnAudio: (args: ForwardRealtimeTurnAudioArgs) => Promise<boolean>;
   shouldUseRealtimeTranscriptBridge: (args: {
@@ -301,6 +346,257 @@ export interface TurnProcessorHost {
 
 export class TurnProcessor {
   constructor(private readonly host: TurnProcessorHost) {}
+
+  private roundUnitInterval(value: unknown, fallback: number | null = 0) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return fallback;
+    return Number(clamp(numeric, 0, 1).toFixed(3));
+  }
+
+  private buildVoiceTurnAddressingMetadata({
+    session,
+    decision,
+    decisionVoiceAddressing,
+    decisionAddressingState,
+    outputLockDebugMetadata,
+    source,
+    captureReason,
+    transcript,
+    logContext = null
+  }: {
+    session: VoiceSession;
+    decision: VoiceReplyDecision;
+    decisionVoiceAddressing: VoiceAddressingAnnotation | null;
+    decisionAddressingState: VoiceAddressingState | null;
+    outputLockDebugMetadata: Record<string, unknown>;
+    source: string;
+    captureReason?: string;
+    transcript: string;
+    logContext?: VoiceTurnDecisionLogContext | null;
+  }) {
+    return {
+      sessionId: session.id,
+      mode: session.mode,
+      source,
+      captureReason: String(captureReason || "stream_end"),
+      queueWaitMs:
+        Number.isFinite(Number(logContext?.queueWaitMs)) ? Math.round(Number(logContext?.queueWaitMs)) : undefined,
+      allow: Boolean(decision.allow),
+      reason: decision.reason,
+      participantCount: Number(decision.participantCount || 0),
+      directAddressed: Boolean(decision.directAddressed),
+      talkingTo: decisionVoiceAddressing?.talkingTo || null,
+      directedConfidence: this.roundUnitInterval(decisionVoiceAddressing?.directedConfidence, 0),
+      addressingSource: decisionVoiceAddressing?.source || null,
+      addressingReason: decisionVoiceAddressing?.reason || null,
+      currentSpeakerTarget: decisionAddressingState?.currentSpeakerTarget || null,
+      currentSpeakerDirectedConfidence: this.roundUnitInterval(
+        decisionAddressingState?.currentSpeakerDirectedConfidence,
+        0
+      ),
+      transcript: transcript || null,
+      transcriptionModelPrimary: logContext?.transcriptionModelPrimary || undefined,
+      transcriptionModelFallback: logContext?.transcriptionModelFallback ?? undefined,
+      transcriptionUsedFallbackModel:
+        logContext?.transcriptionUsedFallbackModel !== undefined
+          ? Boolean(logContext.transcriptionUsedFallbackModel)
+          : undefined,
+      transcriptionPlanReason: logContext?.transcriptionPlanReason || undefined,
+      clipDurationMs:
+        Number.isFinite(Number(logContext?.clipDurationMs)) ? Math.round(Number(logContext?.clipDurationMs)) : undefined,
+      asrSkippedShortClip:
+        logContext?.asrSkippedShortClip !== undefined ? Boolean(logContext.asrSkippedShortClip) : undefined,
+      deferredActionReason: logContext?.deferredActionReason || undefined,
+      deferredTurnCount:
+        Number.isFinite(Number(logContext?.deferredTurnCount))
+          ? Math.round(Number(logContext?.deferredTurnCount))
+          : undefined,
+      pendingQueueDepth:
+        Number.isFinite(Number(logContext?.pendingQueueDepth))
+          ? Math.round(Number(logContext?.pendingQueueDepth))
+          : undefined,
+      conversationState: decision.conversationContext?.engagementState || null,
+      conversationEngaged: Boolean(decision.conversationContext?.engaged),
+      engagedWithCurrentSpeaker: Boolean(decision.conversationContext?.engagedWithCurrentSpeaker),
+      recentAssistantReply: Boolean(decision.conversationContext?.recentAssistantReply),
+      msSinceAssistantReply: Number.isFinite(decision.conversationContext?.msSinceAssistantReply)
+        ? Math.round(decision.conversationContext.msSinceAssistantReply)
+        : null,
+      msSinceDirectAddress: Number.isFinite(decision.conversationContext?.msSinceDirectAddress)
+        ? Math.round(decision.conversationContext.msSinceDirectAddress)
+        : null,
+      msSinceInboundAudio: Number.isFinite(decision.msSinceInboundAudio)
+        ? Math.round(decision.msSinceInboundAudio)
+        : null,
+      requiredSilenceMs: Number.isFinite(decision.requiredSilenceMs)
+        ? Math.round(decision.requiredSilenceMs)
+        : null,
+      retryAfterMs: Number.isFinite(decision.retryAfterMs)
+        ? Math.round(decision.retryAfterMs)
+        : null,
+      outputLockReason: decision.outputLockReason || null,
+      classifierLatencyMs: Number.isFinite(decision.classifierLatencyMs)
+        ? Math.round(decision.classifierLatencyMs)
+        : null,
+      classifierDecision: decision.classifierDecision || null,
+      classifierConfidence: this.roundUnitInterval(decision.classifierConfidence, null),
+      classifierTarget: decision.classifierTarget || null,
+      classifierReason: decision.classifierReason || null,
+      replyPrompts: decision.replyPrompts || null,
+      musicWakeLatched: Boolean(decision.conversationContext?.musicWakeLatched),
+      musicWakeLatchedUntil: Number(session?.musicWakeLatchedUntil || 0) > 0
+        ? new Date(Number(session.musicWakeLatchedUntil)).toISOString()
+        : null,
+      error: decision.error || null,
+      ...outputLockDebugMetadata
+    };
+  }
+
+  private async handleResolvedVoiceTurn({
+    session,
+    settings,
+    userId = null,
+    transcript,
+    source,
+    captureReason = "stream_end",
+    pcmBuffer = null,
+    transcriptionContext = {},
+    logContext = null,
+    bridgeSource = source,
+    latencyContext = null,
+    nativeCaptureReason = captureReason,
+    allowReplyDispatch = true,
+    shouldAbortStage = null
+  }: HandleResolvedVoiceTurnArgs) {
+    const normalizedTranscript = normalizeVoiceText(transcript, STT_TRANSCRIPT_MAX_CHARS);
+
+    const decision = await this.host.evaluateVoiceReplyDecision({
+      session,
+      settings,
+      userId,
+      transcript: normalizedTranscript,
+      source,
+      transcriptionContext
+    });
+    if (shouldAbortStage?.("post_decision")) return;
+
+    if (decision.directAddressed && session && !session.ending) {
+      session.lastDirectAddressAt = Date.now();
+      session.lastDirectAddressUserId = userId;
+    }
+    const decisionTranscript = decision.transcript || normalizedTranscript;
+    const decisionVoiceAddressing = this.host.normalizeVoiceAddressingAnnotation({
+      rawAddressing: decision?.voiceAddressing,
+      directAddressed: Boolean(decision.directAddressed),
+      directedConfidence: Number(decision.directAddressConfidence),
+      source: "decision",
+      reason: decision.reason
+    });
+    this.host.annotateLatestVoiceTurnAddressing({
+      session,
+      role: "user",
+      userId,
+      text: decisionTranscript,
+      addressing: decisionVoiceAddressing
+    });
+    const decisionAddressingState = this.host.buildVoiceAddressingState({
+      session,
+      userId
+    });
+    const outputLockDebugMetadata = this.host.replyManager.getOutputLockDebugMetadata(
+      session,
+      decision.outputLockReason || null
+    );
+    setVoiceLivePromptSnapshot(session, "classifier", {
+      replyPrompts: decision.replyPrompts || null,
+      source
+    });
+
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId,
+      content: "voice_turn_addressing",
+      metadata: this.buildVoiceTurnAddressingMetadata({
+        session,
+        decision,
+        decisionVoiceAddressing,
+        decisionAddressingState,
+        outputLockDebugMetadata,
+        source,
+        captureReason,
+        transcript: decisionTranscript,
+        logContext
+      })
+    });
+
+    if (!decision.allow) {
+      if (decision.reason === "bot_turn_open") {
+        this.host.queueDeferredBotTurnOpenTurn({
+          session,
+          userId,
+          transcript: decisionTranscript,
+          pcmBuffer: pcmBuffer?.length ? pcmBuffer : null,
+          captureReason,
+          source,
+          directAddressed: Boolean(decision.directAddressed),
+          deferReason: decision.reason,
+          flushDelayMs: decision.retryAfterMs
+        });
+      }
+      return;
+    }
+
+    this.host.clearDeferredQueuedUserTurns(session);
+
+    if (!allowReplyDispatch) return;
+
+    const useNativeRealtimeReply =
+      isRealtimeMode(session.mode) && this.host.shouldUseNativeRealtimeReply({ session, settings });
+    if (useNativeRealtimeReply) {
+      if (!pcmBuffer?.length) return;
+      if (shouldAbortStage?.("pre_native_reply")) return;
+      await this.host.forwardRealtimeTurnAudio({
+        session,
+        settings,
+        userId,
+        transcript: normalizedTranscript,
+        pcmBuffer,
+        captureReason: nativeCaptureReason
+      });
+      return;
+    }
+
+    if (this.host.shouldUseRealtimeTranscriptBridge({ session, settings })) {
+      if (shouldAbortStage?.("pre_brain_forward")) return;
+      await this.host.forwardRealtimeTextTurnToBrain({
+        session,
+        settings,
+        userId,
+        transcript: normalizedTranscript,
+        captureReason,
+        source: bridgeSource,
+        directAddressed: Boolean(decision.directAddressed),
+        conversationContext: decision.conversationContext || null,
+        latencyContext
+      });
+      return;
+    }
+
+    if (shouldAbortStage?.("pre_brain_reply")) return;
+    await this.host.runRealtimeBrainReply({
+      session,
+      settings,
+      userId,
+      transcript: normalizedTranscript,
+      directAddressed: Boolean(decision.directAddressed),
+      directAddressConfidence: Number(decision.directAddressConfidence),
+      conversationContext: decision.conversationContext || null,
+      source,
+      latencyContext
+    });
+  }
 
   private resolveActiveVoiceCommandState(session: VoiceSession) {
     const state =
@@ -1424,196 +1720,30 @@ export class TurnProcessor {
         });
       }
 
-      const decision = await this.host.evaluateVoiceReplyDecision({
+      await this.handleResolvedVoiceTurn({
         session,
         settings,
         userId,
         transcript: turnTranscript,
         source: "realtime",
+        captureReason,
+        pcmBuffer: normalizedPcmBuffer,
         transcriptionContext: {
           usedFallbackModel: usedFallbackModelForTranscript,
           captureReason: String(captureReason || "stream_end"),
           clipDurationMs
-        }
-      });
-      if (isSuperseded("post_decision")) return;
-      if (decision.directAddressed && session && !session.ending) {
-        session.lastDirectAddressAt = Date.now();
-        session.lastDirectAddressUserId = userId;
-      }
-      const decisionVoiceAddressing = this.host.normalizeVoiceAddressingAnnotation({
-        rawAddressing: decision?.voiceAddressing,
-        directAddressed: Boolean(decision.directAddressed),
-        directedConfidence: Number(decision.directAddressConfidence),
-        source: "decision",
-        reason: decision.reason
-      });
-      this.host.annotateLatestVoiceTurnAddressing({
-        session,
-        role: "user",
-        userId,
-        text: decision.transcript || turnTranscript,
-        addressing: decisionVoiceAddressing
-      });
-      const decisionAddressingState = this.host.buildVoiceAddressingState({
-        session,
-        userId
-      });
-      const outputLockDebugMetadata = this.host.replyManager.getOutputLockDebugMetadata(
-        session,
-        decision.outputLockReason || null
-      );
-      setVoiceLivePromptSnapshot(session, "classifier", {
-        replyPrompts: decision.replyPrompts || null,
-        source: "realtime"
-      });
-
-      this.store.logAction({
-        kind: "voice_runtime",
-        guildId: session.guildId,
-        channelId: session.textChannelId,
-        userId,
-        content: "voice_turn_addressing",
-        metadata: {
-          sessionId: session.id,
-          mode: session.mode,
-          source: "realtime",
-          captureReason: String(captureReason || "stream_end"),
+        },
+        logContext: {
           queueWaitMs,
-          allow: Boolean(decision.allow),
-          reason: decision.reason,
-          participantCount: Number(decision.participantCount || 0),
-          directAddressed: Boolean(decision.directAddressed),
-          talkingTo: decisionVoiceAddressing?.talkingTo || null,
-          directedConfidence: Number.isFinite(Number(decisionVoiceAddressing?.directedConfidence))
-            ? Number(clamp(Number(decisionVoiceAddressing.directedConfidence), 0, 1).toFixed(3))
-            : 0,
-          addressingSource: decisionVoiceAddressing?.source || null,
-          addressingReason: decisionVoiceAddressing?.reason || null,
-          currentSpeakerTarget: decisionAddressingState?.currentSpeakerTarget || null,
-          currentSpeakerDirectedConfidence: Number.isFinite(
-            Number(decisionAddressingState?.currentSpeakerDirectedConfidence)
-          )
-            ? Number(clamp(Number(decisionAddressingState.currentSpeakerDirectedConfidence), 0, 1).toFixed(3))
-            : 0,
-          transcript: decision.transcript || turnTranscript || null,
+          pendingQueueDepth,
           transcriptionModelPrimary: transcriptionPlan.primaryModel,
           transcriptionModelFallback: resolvedFallbackModel || null,
           transcriptionUsedFallbackModel: usedFallbackModelForTranscript,
           transcriptionPlanReason: resolvedTranscriptionPlanReason,
           clipDurationMs,
-          asrSkippedShortClip: skipShortClipAsr,
-          conversationState: decision.conversationContext?.engagementState || null,
-          conversationEngaged: Boolean(decision.conversationContext?.engaged),
-          engagedWithCurrentSpeaker: Boolean(decision.conversationContext?.engagedWithCurrentSpeaker),
-          recentAssistantReply: Boolean(decision.conversationContext?.recentAssistantReply),
-          msSinceAssistantReply: Number.isFinite(decision.conversationContext?.msSinceAssistantReply)
-            ? Math.round(decision.conversationContext.msSinceAssistantReply)
-            : null,
-          msSinceDirectAddress: Number.isFinite(decision.conversationContext?.msSinceDirectAddress)
-            ? Math.round(decision.conversationContext.msSinceDirectAddress)
-            : null,
-          msSinceInboundAudio: Number.isFinite(decision.msSinceInboundAudio)
-            ? Math.round(decision.msSinceInboundAudio)
-            : null,
-          requiredSilenceMs: Number.isFinite(decision.requiredSilenceMs)
-            ? Math.round(decision.requiredSilenceMs)
-            : null,
-          retryAfterMs: Number.isFinite(decision.retryAfterMs)
-            ? Math.round(decision.retryAfterMs)
-            : null,
-          outputLockReason: decision.outputLockReason || null,
-          classifierLatencyMs: Number.isFinite(decision.classifierLatencyMs)
-            ? Math.round(decision.classifierLatencyMs)
-            : null,
-          classifierDecision: decision.classifierDecision || null,
-          classifierConfidence: Number.isFinite(decision.classifierConfidence)
-            ? Number(clamp(Number(decision.classifierConfidence), 0, 1).toFixed(3))
-            : null,
-          classifierTarget: decision.classifierTarget || null,
-          classifierReason: decision.classifierReason || null,
-          replyPrompts: decision.replyPrompts || null,
-          musicWakeLatched: Boolean(decision.conversationContext?.musicWakeLatched),
-          musicWakeLatchedUntil: Number(session?.musicWakeLatchedUntil || 0) > 0
-            ? new Date(Number(session.musicWakeLatchedUntil)).toISOString()
-            : null,
-          error: decision.error || null,
-          ...outputLockDebugMetadata
-        }
-      });
-
-      const useNativeRealtimeReply = this.host.shouldUseNativeRealtimeReply({ session, settings });
-      if (!decision.allow) {
-        if (decision.reason === "bot_turn_open") {
-          this.host.queueDeferredBotTurnOpenTurn({
-            session,
-            userId,
-            transcript: decision.transcript || turnTranscript,
-            pcmBuffer: normalizedPcmBuffer.length ? normalizedPcmBuffer : null,
-            captureReason,
-            source: "realtime",
-            directAddressed: Boolean(decision.directAddressed),
-            deferReason: decision.reason,
-            flushDelayMs: decision.retryAfterMs
-          });
-        }
-        return;
-      }
-
-      // A new turn was allowed — drain any pending deferred turns so they don't
-      // independently generate a second response. Their transcripts are already
-      // in the conversation window from when they were first captured.
-      this.host.clearDeferredQueuedUserTurns(session);
-
-      if (useNativeRealtimeReply) {
-        if (!normalizedPcmBuffer?.length) {
-          return;
-        }
-        if (isSuperseded("pre_native_reply")) return;
-        await this.host.forwardRealtimeTurnAudio({
-          session,
-          settings,
-          userId,
-          transcript: turnTranscript,
-          pcmBuffer: normalizedPcmBuffer,
-          captureReason
-        });
-        return;
-      }
-
-      if (this.host.shouldUseRealtimeTranscriptBridge({ session, settings })) {
-        if (isSuperseded("pre_brain_forward")) return;
-        await this.host.forwardRealtimeTextTurnToBrain({
-          session,
-          settings,
-          userId,
-          transcript: turnTranscript,
-          captureReason,
-          source: "realtime_transcript_turn",
-          directAddressed: Boolean(decision.directAddressed),
-          conversationContext: decision.conversationContext || null,
-          latencyContext: {
-            finalizedAtMs,
-            asrStartedAtMs,
-            asrCompletedAtMs,
-            queueWaitMs,
-            pendingQueueDepth,
-            captureReason: String(captureReason || "stream_end")
-          }
-        });
-        return;
-      }
-
-      if (isSuperseded("pre_brain_reply")) return;
-      await this.host.runRealtimeBrainReply({
-        session,
-        settings,
-        userId,
-        transcript: turnTranscript,
-        directAddressed: Boolean(decision.directAddressed),
-        directAddressConfidence: Number(decision.directAddressConfidence),
-        conversationContext: decision.conversationContext || null,
-        source: "realtime",
+          asrSkippedShortClip: skipShortClipAsr
+        },
+        bridgeSource: "realtime_transcript_turn",
         latencyContext: {
           finalizedAtMs,
           asrStartedAtMs,
@@ -1621,7 +1751,8 @@ export class TurnProcessor {
           queueWaitMs,
           pendingQueueDepth,
           captureReason: String(captureReason || "stream_end")
-        }
+        },
+        shouldAbortStage: isSuperseded
       });
     } finally {
       if (session.activeRealtimeTurn === currentTurn) {
@@ -2028,162 +2159,115 @@ export class TurnProcessor {
       return;
     }
 
-    const turnDecision = await this.host.evaluateVoiceReplyDecision({
+    await this.handleResolvedVoiceTurn({
       session,
       settings,
       userId,
       transcript,
       source: "file_asr",
+      captureReason,
+      pcmBuffer,
       transcriptionContext: {
         usedFallbackModel: usedFallbackModelForTranscript,
         captureReason: String(captureReason || "stream_end"),
         clipDurationMs
-      }
-    });
-    if (turnDecision.directAddressed && session && !session.ending) {
-      session.lastDirectAddressAt = Date.now();
-      session.lastDirectAddressUserId = userId;
-    }
-    const turnVoiceAddressing = this.host.normalizeVoiceAddressingAnnotation({
-      rawAddressing: turnDecision?.voiceAddressing,
-      directAddressed: Boolean(turnDecision.directAddressed),
-      directedConfidence: Number(turnDecision.directAddressConfidence),
-      source: "decision",
-      reason: turnDecision.reason
-    });
-    this.host.annotateLatestVoiceTurnAddressing({
-      session,
-      role: "user",
-      userId,
-      text: turnDecision.transcript || transcript,
-      addressing: turnVoiceAddressing
-    });
-    const turnAddressingState = this.host.buildVoiceAddressingState({
-      session,
-      userId
-    });
-    const turnOutputLockDebugMetadata = this.host.replyManager.getOutputLockDebugMetadata(
-      session,
-      turnDecision.outputLockReason || null
-    );
-    setVoiceLivePromptSnapshot(session, "classifier", {
-      replyPrompts: turnDecision.replyPrompts || null,
-      source: "file_asr"
-    });
-
-    this.store.logAction({
-      kind: "voice_runtime",
-      guildId: session.guildId,
-      channelId: session.textChannelId,
-      userId,
-      content: "voice_turn_addressing",
-      metadata: {
-        sessionId: session.id,
-        mode: session.mode,
-        source: "file_asr",
-        captureReason: String(captureReason || "stream_end"),
-        allow: Boolean(turnDecision.allow),
-        reason: turnDecision.reason,
-        participantCount: Number(turnDecision.participantCount || 0),
-        directAddressed: Boolean(turnDecision.directAddressed),
-        talkingTo: turnVoiceAddressing?.talkingTo || null,
-        directedConfidence: Number.isFinite(Number(turnVoiceAddressing?.directedConfidence))
-          ? Number(clamp(Number(turnVoiceAddressing.directedConfidence), 0, 1).toFixed(3))
-          : 0,
-        addressingSource: turnVoiceAddressing?.source || null,
-        addressingReason: turnVoiceAddressing?.reason || null,
-        currentSpeakerTarget: turnAddressingState?.currentSpeakerTarget || null,
-        currentSpeakerDirectedConfidence: Number.isFinite(
-          Number(turnAddressingState?.currentSpeakerDirectedConfidence)
-        )
-          ? Number(clamp(Number(turnAddressingState.currentSpeakerDirectedConfidence), 0, 1).toFixed(3))
-          : 0,
-        transcript: turnDecision.transcript || transcript || null,
+      },
+      logContext: {
+        queueWaitMs,
+        pendingQueueDepth,
         transcriptionModelPrimary,
         transcriptionModelFallback,
         transcriptionUsedFallbackModel: usedFallbackModelForTranscript,
         transcriptionPlanReason,
         clipDurationMs,
-        asrSkippedShortClip: false,
-        conversationState: turnDecision.conversationContext?.engagementState || null,
-        conversationEngaged: Boolean(turnDecision.conversationContext?.engaged),
-        engagedWithCurrentSpeaker: Boolean(turnDecision.conversationContext?.engagedWithCurrentSpeaker),
-        recentAssistantReply: Boolean(turnDecision.conversationContext?.recentAssistantReply),
-        msSinceAssistantReply: Number.isFinite(turnDecision.conversationContext?.msSinceAssistantReply)
-          ? Math.round(turnDecision.conversationContext.msSinceAssistantReply)
-          : null,
-        msSinceDirectAddress: Number.isFinite(turnDecision.conversationContext?.msSinceDirectAddress)
-          ? Math.round(turnDecision.conversationContext.msSinceDirectAddress)
-          : null,
-        msSinceInboundAudio: Number.isFinite(turnDecision.msSinceInboundAudio)
-          ? Math.round(turnDecision.msSinceInboundAudio)
-          : null,
-        requiredSilenceMs: Number.isFinite(turnDecision.requiredSilenceMs)
-          ? Math.round(turnDecision.requiredSilenceMs)
-          : null,
-        retryAfterMs: Number.isFinite(turnDecision.retryAfterMs)
-          ? Math.round(turnDecision.retryAfterMs)
-          : null,
-        outputLockReason: turnDecision.outputLockReason || null,
-        classifierLatencyMs: Number.isFinite(turnDecision.classifierLatencyMs)
-          ? Math.round(turnDecision.classifierLatencyMs)
-          : null,
-        classifierDecision: turnDecision.classifierDecision || null,
-        classifierConfidence: Number.isFinite(turnDecision.classifierConfidence)
-          ? Number(clamp(Number(turnDecision.classifierConfidence), 0, 1).toFixed(3))
-          : null,
-        classifierTarget: turnDecision.classifierTarget || null,
-        classifierReason: turnDecision.classifierReason || null,
-        replyPrompts: turnDecision.replyPrompts || null,
-        musicWakeLatched: Boolean(turnDecision.conversationContext?.musicWakeLatched),
-        musicWakeLatchedUntil: Number(session?.musicWakeLatchedUntil || 0) > 0
-          ? new Date(Number(session.musicWakeLatchedUntil)).toISOString()
-          : null,
-        error: turnDecision.error || null,
-        ...turnOutputLockDebugMetadata
-      }
+        asrSkippedShortClip: false
+      },
+      bridgeSource: "file_asr_transcript_turn"
     });
-    if (!turnDecision.allow) {
-      if (turnDecision.reason === "bot_turn_open") {
-        this.host.queueDeferredBotTurnOpenTurn({
-          session,
-          userId,
-          transcript: turnDecision.transcript || transcript,
-          captureReason,
-          source: "file_asr",
-          directAddressed: Boolean(turnDecision.directAddressed),
-          deferReason: turnDecision.reason,
-          flushDelayMs: turnDecision.retryAfterMs
-        });
+  }
+
+  async flushDeferredBotTurnOpenTurns({
+    session,
+    deferredTurns = null,
+    reason = "bot_turn_open_deferred_flush"
+  }: FlushDeferredBotTurnOpenTurnsArgs) {
+    if (!session || session.ending) return;
+    const voiceReplyScopeKey = buildVoiceReplyScopeKey(session.id);
+    const pendingQueue = Array.isArray(deferredTurns)
+      ? deferredTurns
+      : this.host.getDeferredQueuedUserTurns(session).slice();
+    if (!pendingQueue.length) return;
+
+    const latestQueuedAt = pendingQueue.reduce((latest, entry) => {
+      const queuedAt = Math.max(0, Number(entry?.queuedAt || 0));
+      return queuedAt > latest ? queuedAt : latest;
+    }, 0);
+    if (this.host.activeReplies?.isStale(voiceReplyScopeKey, latestQueuedAt)) {
+      if (!Array.isArray(deferredTurns)) {
+        this.host.clearDeferredQueuedUserTurns(session);
       }
       return;
     }
 
-    this.host.clearDeferredQueuedUserTurns(session);
-
-    if (this.host.shouldUseRealtimeTranscriptBridge({ session, settings })) {
-      await this.host.forwardRealtimeTextTurnToBrain({
-        session,
-        settings,
-        userId,
-        transcript,
-        captureReason,
-        source: "file_asr_transcript_turn",
-        directAddressed: Boolean(turnDecision.directAddressed),
-        conversationContext: turnDecision.conversationContext || null
-      });
-      return;
+    if (!Array.isArray(deferredTurns)) {
+      const outputChannelState = this.host.getOutputChannelState(session);
+      if (outputChannelState.locked || outputChannelState.captureBlocking) {
+        this.host.scheduleDeferredBotTurnOpenFlush({ session, reason });
+        return;
+      }
+      this.host.clearDeferredQueuedUserTurns(session);
     }
 
-    await this.host.runRealtimeBrainReply({
+    const coalescedTurns = pendingQueue.slice(-BOT_TURN_DEFERRED_COALESCE_MAX);
+    const directAddressedTurn = coalescedTurns.find((entry) => entry?.directAddressed) || null;
+    const latestTurn = directAddressedTurn || coalescedTurns[coalescedTurns.length - 1];
+    const orderedTurns = directAddressedTurn
+      ? [directAddressedTurn, ...coalescedTurns.filter((entry) => entry !== directAddressedTurn)]
+      : coalescedTurns;
+    const distinctSources = Array.from(
+      new Set(
+        orderedTurns
+          .map((entry) => String(entry?.source || "").trim())
+          .filter((entry): entry is string => entry.length > 0)
+      )
+    );
+    const deferredReplySource =
+      distinctSources.length === 1 && isSystemSpeechOpportunitySource(distinctSources[0])
+        ? distinctSources[0]
+        : "bot_turn_open_deferred_flush";
+    const coalescedTranscript = normalizeVoiceText(
+      orderedTurns
+        .map((entry) => String(entry?.transcript || "").trim())
+        .filter(Boolean)
+        .join(" "),
+      STT_TRANSCRIPT_MAX_CHARS
+    );
+    if (!coalescedTranscript) return;
+
+    const coalescedPcmBuffer = isRealtimeMode(session.mode)
+      ? Buffer.concat(
+        orderedTurns
+          .map((entry) => (entry?.pcmBuffer?.length ? entry.pcmBuffer : null))
+          .filter((entry): entry is Buffer => Boolean(entry))
+      )
+      : null;
+    const settings = session.settingsSnapshot || this.store.getSettings();
+
+    await this.handleResolvedVoiceTurn({
       session,
       settings,
-      userId,
-      transcript,
-      directAddressed: Boolean(turnDecision.directAddressed),
-      directAddressConfidence: Number(turnDecision.directAddressConfidence),
-      conversationContext: turnDecision.conversationContext || null,
-      source: "file_asr"
+      userId: latestTurn?.userId || null,
+      transcript: coalescedTranscript,
+      source: deferredReplySource,
+      captureReason: latestTurn?.captureReason || "stream_end",
+      pcmBuffer: coalescedPcmBuffer,
+      logContext: {
+        deferredActionReason: reason,
+        deferredTurnCount: coalescedTurns.length
+      },
+      bridgeSource: deferredReplySource,
+      nativeCaptureReason: "bot_turn_open_deferred_flush",
+      allowReplyDispatch: isRealtimeMode(session.mode)
     });
   }
 

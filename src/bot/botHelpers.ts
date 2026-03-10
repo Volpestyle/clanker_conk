@@ -26,7 +26,6 @@ export const MAX_MEMORY_LOOKUP_QUERY_LEN = 220;
 export const MAX_IMAGE_LOOKUP_QUERY_LEN = 220;
 export const MAX_BROWSER_BROWSE_QUERY_LEN = 500;
 const MAX_OPEN_ARTICLE_REF_LEN = 260;
-const MAX_MEMORY_WRITE_LINE_LEN = 180;
 const MAX_REPLY_TEXT_LEN = 3600;
 const MAX_INITIATIVE_TEXT_LEN = 3600;
 const MAX_INITIATIVE_REASON_LEN = 240;
@@ -46,8 +45,6 @@ const REPLY_MEDIA_TYPES = new Set(["image_simple", "image_complex", "video", "gi
 const INITIATIVE_MEDIA_TYPES = new Set(["none", "image", "video", "gif"]);
 const REPLY_AUTOMATION_OPERATION_TYPES = new Set(["create", "pause", "resume", "delete", "list", "none"]);
 const REPLY_SCREEN_SHARE_ACTION_TYPES = new Set(["offer_link", "none"]);
-const REPLY_MEMORY_SCOPE_TYPES = new Set(["user", "lore"]);
-const REPLY_MEMORY_FACT_TYPES = new Set(["preference", "profile", "relationship", "project", "other"]);
 const MAX_SCREEN_SHARE_REASON_LEN = 180;
 export const MAX_VIDEO_TARGET_SCAN = 8;
 export const MAX_VIDEO_FALLBACK_MESSAGES = 18;
@@ -980,22 +977,6 @@ export function pickDiscoveryMediaDirective(parsed) {
 
 export function normalizeDirectiveText(text, maxLen) {
   return normalizeWhitespaceText(text, { maxLen });
-}
-
-function normalizeStructuredMemoryScope(rawScope) {
-  const normalized = String(rawScope || "")
-    .trim()
-    .toLowerCase();
-  if (!normalized || !REPLY_MEMORY_SCOPE_TYPES.has(normalized)) return null;
-  return normalized;
-}
-
-function normalizeStructuredMemoryFactType(rawType) {
-  const normalized = String(rawType || "")
-    .trim()
-    .toLowerCase();
-  if (!normalized || !REPLY_MEMORY_FACT_TYPES.has(normalized)) return null;
-  return normalized;
 }
 
 export function serializeForPrompt(value, maxLen = 1200) {

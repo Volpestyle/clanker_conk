@@ -6,7 +6,7 @@ import {
   getVoiceConversationPolicy,
   getVoiceInitiativeSettings
 } from "../settings/agentStack.ts";
-import { getPromptBotName, buildVoiceToneGuardrails } from "../prompts/promptCore.ts";
+import { buildVoiceToneGuardrails } from "../prompts/promptCore.ts";
 import { buildSystemPrompt } from "../prompts/promptFormatters.ts";
 import { normalizeLlmProvider } from "../llm/llmHelpers.ts";
 import {

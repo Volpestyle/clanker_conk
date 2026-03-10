@@ -5,6 +5,7 @@ import { rangeStyle } from "../../utils";
 import { LlmProviderOptions, VISION_LLM_PROVIDER_OPTIONS } from "./LlmProviderOptions";
 import { OPENAI_REALTIME_TRANSCRIPTION_METHOD_OPTIONS } from "../../settingsFormModel";
 import { normalizeVoiceAdmissionModeForDashboard } from "../../../../src/settings/voiceDashboardMappings.ts";
+import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../../../src/settings/settingsConstraints.ts";
 
 /* ── Screen share mental model ── */
 
@@ -339,8 +340,8 @@ export function VoiceModeSettingsSection({
                         <input
                           id="voice-streaming-eager-first-chunk-chars"
                           type="number"
-                          min="20"
-                          max="240"
+                          min={SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.streaming.eagerFirstChunkChars.min}
+                          max={SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.streaming.eagerFirstChunkChars.max}
                           step="1"
                           value={form.voiceStreamingEagerFirstChunkChars}
                           onChange={set("voiceStreamingEagerFirstChunkChars")}
@@ -351,8 +352,8 @@ export function VoiceModeSettingsSection({
                         <input
                           id="voice-streaming-max-buffer-chars"
                           type="number"
-                          min="40"
-                          max="800"
+                          min={SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.streaming.maxBufferChars.min}
+                          max={SETTINGS_NUMERIC_CONSTRAINTS.voice.conversationPolicy.streaming.maxBufferChars.max}
                           step="1"
                           value={form.voiceStreamingMaxBufferChars}
                           onChange={set("voiceStreamingMaxBufferChars")}
@@ -570,50 +571,6 @@ export function VoiceModeSettingsSection({
             </StagePanel>
           )}
 
-          {/* ── Non-realtime ASR Controls ── */}
-          {!isRealtimeMode && (
-            <StagePanel number={1} label="ASR">
-              <div className="toggles">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={form.voiceAsrEnabled}
-                    onChange={set("voiceAsrEnabled")}
-                  />
-                  ASR enabled (disable to use slash commands only)
-                </label>
-              </div>
-
-              <div className="split">
-                <div>
-                  <label htmlFor="voice-asr-language-mode-legacy">ASR language mode</label>
-                  <select
-                    id="voice-asr-language-mode-legacy"
-                    value={form.voiceAsrLanguageMode}
-                    onChange={set("voiceAsrLanguageMode")}
-                  >
-                    <option value="auto">Auto detect (allow switching)</option>
-                    <option value="fixed">Fixed language</option>
-                  </select>
-                </div>
-                <div>
-                  <label htmlFor="voice-asr-language-hint-legacy">ASR language hint (BCP-47, e.g. en, en-us)</label>
-                  <input
-                    id="voice-asr-language-hint-legacy"
-                    type="text"
-                    value={form.voiceAsrLanguageHint}
-                    onChange={set("voiceAsrLanguageHint")}
-                    placeholder="en"
-                  />
-                </div>
-              </div>
-              <p>
-                Auto mode keeps multilingual switching and uses the hint only for ambiguity bias. Fixed mode forces that
-                language for transcription.
-              </p>
-            </StagePanel>
-          )}
-
           {/* ── Stage 2: Reply Classifier ── */}
           {classifierVisible && (
             <StagePanel number={2} label="Reply Classifier" pathTag={classifierAlwaysOn ? "Bridge" : "Brain"}>
@@ -649,8 +606,8 @@ export function VoiceModeSettingsSection({
                       <input
                         id="voice-music-wake-latch-seconds"
                         type="number"
-                        min="5"
-                        max="60"
+                        min={SETTINGS_NUMERIC_CONSTRAINTS.voice.admission.musicWakeLatchSeconds.min}
+                        max={SETTINGS_NUMERIC_CONSTRAINTS.voice.admission.musicWakeLatchSeconds.max}
                         step="1"
                         value={form.voiceReplyDecisionMusicWakeLatchSeconds}
                         onChange={set("voiceReplyDecisionMusicWakeLatchSeconds")}
@@ -829,8 +786,8 @@ export function VoiceModeSettingsSection({
                     <input
                       id="voice-xai-sample-rate"
                       type="number"
-                      min="8000"
-                      max="48000"
+                      min={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.min}
+                      max={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.max}
                       value={form.voiceXaiSampleRateHz}
                       onChange={set("voiceXaiSampleRateHz")}
                     />
@@ -923,8 +880,8 @@ export function VoiceModeSettingsSection({
                     <input
                       id="voice-gemini-realtime-input-sample-rate"
                       type="number"
-                      min="8000"
-                      max="48000"
+                      min={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.min}
+                      max={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.max}
                       value={form.voiceGeminiRealtimeInputSampleRateHz}
                       onChange={set("voiceGeminiRealtimeInputSampleRateHz")}
                     />
@@ -934,8 +891,8 @@ export function VoiceModeSettingsSection({
                     <input
                       id="voice-gemini-realtime-output-sample-rate"
                       type="number"
-                      min="8000"
-                      max="48000"
+                      min={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.min}
+                      max={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.max}
                       value={form.voiceGeminiRealtimeOutputSampleRateHz}
                       onChange={set("voiceGeminiRealtimeOutputSampleRateHz")}
                     />
@@ -974,8 +931,8 @@ export function VoiceModeSettingsSection({
                     <input
                       id="voice-elevenlabs-input-sample-rate"
                       type="number"
-                      min="8000"
-                      max="48000"
+                      min={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.min}
+                      max={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.max}
                       value={form.voiceElevenLabsRealtimeInputSampleRateHz}
                       onChange={set("voiceElevenLabsRealtimeInputSampleRateHz")}
                     />
@@ -985,8 +942,8 @@ export function VoiceModeSettingsSection({
                     <input
                       id="voice-elevenlabs-output-sample-rate"
                       type="number"
-                      min="8000"
-                      max="48000"
+                      min={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.min}
+                      max={SETTINGS_NUMERIC_CONSTRAINTS.agentStack.voiceRuntime.sampleRateHz.max}
                       value={form.voiceElevenLabsRealtimeOutputSampleRateHz}
                       onChange={set("voiceElevenLabsRealtimeOutputSampleRateHz")}
                     />
@@ -1055,8 +1012,8 @@ export function VoiceModeSettingsSection({
               <input
                 id="voice-max-session-minutes"
                 type="number"
-                min="1"
-                max="120"
+                min={SETTINGS_NUMERIC_CONSTRAINTS.voice.sessionLimits.maxSessionMinutes.min}
+                max={SETTINGS_NUMERIC_CONSTRAINTS.voice.sessionLimits.maxSessionMinutes.max}
                 value={form.voiceMaxSessionMinutes}
                 onChange={set("voiceMaxSessionMinutes")}
               />
@@ -1066,8 +1023,8 @@ export function VoiceModeSettingsSection({
               <input
                 id="voice-inactivity-seconds"
                 type="number"
-                min="20"
-                max="3600"
+                min={SETTINGS_NUMERIC_CONSTRAINTS.voice.sessionLimits.inactivityLeaveSeconds.min}
+                max={SETTINGS_NUMERIC_CONSTRAINTS.voice.sessionLimits.inactivityLeaveSeconds.max}
                 value={form.voiceInactivityLeaveSeconds}
                 onChange={set("voiceInactivityLeaveSeconds")}
               />
@@ -1080,10 +1037,21 @@ export function VoiceModeSettingsSection({
               <input
                 id="voice-max-sessions-day"
                 type="number"
-                min="0"
-                max="120"
+                min={SETTINGS_NUMERIC_CONSTRAINTS.voice.sessionLimits.maxSessionsPerDay.min}
+                max={SETTINGS_NUMERIC_CONSTRAINTS.voice.sessionLimits.maxSessionsPerDay.max}
                 value={form.voiceMaxSessionsPerDay}
                 onChange={set("voiceMaxSessionsPerDay")}
+              />
+            </div>
+            <div>
+              <label htmlFor="voice-max-concurrent-sessions">Max concurrent sessions</label>
+              <input
+                id="voice-max-concurrent-sessions"
+                type="number"
+                min={SETTINGS_NUMERIC_CONSTRAINTS.voice.sessionLimits.maxConcurrentSessions.min}
+                max={SETTINGS_NUMERIC_CONSTRAINTS.voice.sessionLimits.maxConcurrentSessions.max}
+                value={form.voiceMaxConcurrentSessions}
+                onChange={set("voiceMaxConcurrentSessions")}
               />
             </div>
             <div>

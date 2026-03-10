@@ -2,6 +2,16 @@ export const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
 export const DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com";
 export const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
 
+export const OPENAI_REALTIME_DEFAULT_SESSION_MODEL = "gpt-realtime";
+export const OPENAI_REALTIME_SESSION_MODEL_OPTIONS = Object.freeze([
+  "gpt-realtime",
+  "gpt-realtime-1.5",
+  "gpt-realtime-mini",
+  "gpt-4o-realtime-preview",
+  "gpt-4o-mini-realtime-preview"
+]);
+const OPENAI_REALTIME_SUPPORTED_SESSION_MODELS = new Set(OPENAI_REALTIME_SESSION_MODEL_OPTIONS);
+
 export const OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
 export const OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS = new Set([
   "whisper-1",
@@ -26,6 +36,17 @@ export function normalizeOpenAiRealtimeTranscriptionModel(
   return OPENAI_REALTIME_SUPPORTED_TRANSCRIPTION_MODELS.has(normalized)
     ? normalized
     : OPENAI_REALTIME_DEFAULT_TRANSCRIPTION_MODEL;
+}
+
+export function normalizeOpenAiRealtimeSessionModel(
+  value: unknown,
+  fallback = OPENAI_REALTIME_DEFAULT_SESSION_MODEL
+) {
+  const normalized =
+    String(value || "").trim() || String(fallback || "").trim() || OPENAI_REALTIME_DEFAULT_SESSION_MODEL;
+  return OPENAI_REALTIME_SUPPORTED_SESSION_MODELS.has(normalized)
+    ? normalized
+    : OPENAI_REALTIME_DEFAULT_SESSION_MODEL;
 }
 
 export function normalizeGeminiBaseUrl(value: unknown) {

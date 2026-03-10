@@ -48,6 +48,9 @@ export function normalizeVoiceAdmissionModeForDashboard(
   const normalized = String(value || "")
     .trim()
     .toLowerCase();
+  if (normalized === "deterministic_only") {
+    return "generation_decides";
+  }
   if (normalized === "adaptive") {
     return "adaptive";
   }
@@ -55,4 +58,32 @@ export function normalizeVoiceAdmissionModeForDashboard(
     return "classifier_gate";
   }
   return "generation_decides";
+}
+
+export function resolveVoiceAdmissionModeForSettings({
+  value,
+  replyPath
+}: {
+  value: unknown;
+  replyPath: unknown;
+}): "generation_decides" | "classifier_gate" | "adaptive" {
+  const normalizedReplyPath = String(replyPath || "brain").trim().toLowerCase();
+  if (normalizedReplyPath === "bridge") {
+    return "adaptive";
+  }
+  const normalizedMode = normalizeVoiceAdmissionModeForDashboard(value);
+  return normalizedMode === "adaptive" ? "generation_decides" : normalizedMode;
+}
+
+export function resolveRealtimeAdmissionModeForRuntime(
+  value: unknown,
+  replyPath: unknown
+): "hard_classifier" | "generation_only" {
+  const normalizedReplyPath = String(replyPath || "brain").trim().toLowerCase();
+  if (normalizedReplyPath === "bridge") {
+    return "hard_classifier";
+  }
+  return normalizeVoiceAdmissionModeForDashboard(value) === "classifier_gate"
+    ? "hard_classifier"
+    : "generation_only";
 }

@@ -51,7 +51,6 @@ export const VOICE_RUNTIME_KINDS = [
 ] as const;
 
 export const VOICE_ADMISSION_MODES = [
-  "deterministic_only",
   "classifier_gate",
   "generation_decides",
   "adaptive"

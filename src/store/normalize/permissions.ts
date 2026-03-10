@@ -1,4 +1,5 @@
 import { DEFAULT_SETTINGS, type Settings } from "../../settings/settingsSchema.ts";
+import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../settings/settingsConstraints.ts";
 import {
   normalizeBoolean,
   normalizeInt,
@@ -27,14 +28,14 @@ export function normalizePermissionsSection(section: Settings["permissions"]): S
       maxMessagesPerHour: normalizeInt(
         replies.maxMessagesPerHour,
         DEFAULT_SETTINGS.permissions.replies.maxMessagesPerHour,
-        0,
-        500
+        SETTINGS_NUMERIC_CONSTRAINTS.permissions.replies.maxMessagesPerHour.min,
+        SETTINGS_NUMERIC_CONSTRAINTS.permissions.replies.maxMessagesPerHour.max
       ),
       maxReactionsPerHour: normalizeInt(
         replies.maxReactionsPerHour,
         DEFAULT_SETTINGS.permissions.replies.maxReactionsPerHour,
-        0,
-        500
+        SETTINGS_NUMERIC_CONSTRAINTS.permissions.replies.maxReactionsPerHour.min,
+        SETTINGS_NUMERIC_CONSTRAINTS.permissions.replies.maxReactionsPerHour.max
       )
     },
     devTasks: {

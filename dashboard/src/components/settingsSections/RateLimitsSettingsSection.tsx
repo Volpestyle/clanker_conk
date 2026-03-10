@@ -1,5 +1,6 @@
 import React from "react";
 import { SettingsSection } from "../SettingsSection";
+import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../../../src/settings/settingsConstraints.ts";
 
 export function RateLimitsSettingsSection({ id, form, set }) {
   return (
@@ -10,8 +11,8 @@ export function RateLimitsSettingsSection({ id, form, set }) {
           <input
             id="max-messages"
             type="number"
-            min="1"
-            max="200"
+            min={SETTINGS_NUMERIC_CONSTRAINTS.permissions.replies.maxMessagesPerHour.min}
+            max={SETTINGS_NUMERIC_CONSTRAINTS.permissions.replies.maxMessagesPerHour.max}
             value={form.maxMessages}
             onChange={set("maxMessages")}
           />
@@ -21,8 +22,8 @@ export function RateLimitsSettingsSection({ id, form, set }) {
           <input
             id="max-reactions"
             type="number"
-            min="1"
-            max="300"
+            min={SETTINGS_NUMERIC_CONSTRAINTS.permissions.replies.maxReactionsPerHour.min}
+            max={SETTINGS_NUMERIC_CONSTRAINTS.permissions.replies.maxReactionsPerHour.max}
             value={form.maxReactions}
             onChange={set("maxReactions")}
           />

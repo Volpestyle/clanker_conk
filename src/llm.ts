@@ -348,7 +348,7 @@ export class LLMService {
       provider === "openai" ||
       provider === "openai-oauth";
     const streamingTransportAllowed = streamingTransportSupported;
-    let usedStreamingTransport = streamingTransportAllowed;
+    const usedStreamingTransport = streamingTransportAllowed;
     try {
       const response = streamingTransportAllowed
         ? await this.callChatModelStreaming(provider, {

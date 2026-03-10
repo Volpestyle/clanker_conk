@@ -18,8 +18,6 @@ import {
 } from "./voiceSessionManager.constants.ts";
 import {
   formatVoiceChannelEffectSummary,
-  REALTIME_MEMORY_FACT_LIMIT,
-  formatRealtimeMemoryFacts,
   normalizeVoiceText
 } from "./voiceSessionHelpers.ts";
 import {

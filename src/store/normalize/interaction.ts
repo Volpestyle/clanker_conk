@@ -4,6 +4,7 @@ import {
   type Settings,
   type SettingsModelBinding
 } from "../../settings/settingsSchema.ts";
+import { SETTINGS_NUMERIC_CONSTRAINTS } from "../../settings/settingsConstraints.ts";
 import {
   isRecord,
   normalizeBoolean,
@@ -129,34 +130,34 @@ export function normalizeInteractionSection(
       catchupLookbackHours: normalizeInt(
         startup.catchupLookbackHours,
         DEFAULT_SETTINGS.interaction.startup.catchupLookbackHours,
-        1,
-        168
+        SETTINGS_NUMERIC_CONSTRAINTS.interaction.startup.catchupLookbackHours.min,
+        SETTINGS_NUMERIC_CONSTRAINTS.interaction.startup.catchupLookbackHours.max
       ),
       catchupMaxMessagesPerChannel: normalizeInt(
         startup.catchupMaxMessagesPerChannel,
         DEFAULT_SETTINGS.interaction.startup.catchupMaxMessagesPerChannel,
-        1,
-        200
+        SETTINGS_NUMERIC_CONSTRAINTS.interaction.startup.catchupMaxMessagesPerChannel.min,
+        SETTINGS_NUMERIC_CONSTRAINTS.interaction.startup.catchupMaxMessagesPerChannel.max
       ),
       maxCatchupRepliesPerChannel: normalizeInt(
         startup.maxCatchupRepliesPerChannel,
         DEFAULT_SETTINGS.interaction.startup.maxCatchupRepliesPerChannel,
-        0,
-        20
+        SETTINGS_NUMERIC_CONSTRAINTS.interaction.startup.maxCatchupRepliesPerChannel.min,
+        SETTINGS_NUMERIC_CONSTRAINTS.interaction.startup.maxCatchupRepliesPerChannel.max
       )
     },
     sessions: {
       sessionIdleTimeoutMs: normalizeInt(
         sessions.sessionIdleTimeoutMs,
         DEFAULT_SETTINGS.interaction.sessions.sessionIdleTimeoutMs,
-        10_000,
-        1_800_000
+        SETTINGS_NUMERIC_CONSTRAINTS.interaction.sessions.sessionIdleTimeoutMs.min,
+        SETTINGS_NUMERIC_CONSTRAINTS.interaction.sessions.sessionIdleTimeoutMs.max
       ),
       maxConcurrentSessions: normalizeInt(
         sessions.maxConcurrentSessions,
         DEFAULT_SETTINGS.interaction.sessions.maxConcurrentSessions,
-        1,
-        100
+        SETTINGS_NUMERIC_CONSTRAINTS.interaction.sessions.maxConcurrentSessions.min,
+        SETTINGS_NUMERIC_CONSTRAINTS.interaction.sessions.maxConcurrentSessions.max
       )
     }
   };
