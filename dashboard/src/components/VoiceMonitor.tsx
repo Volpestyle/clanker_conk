@@ -732,36 +732,32 @@ function ConversationContext({ session, latencyTurns }: { session: VoiceSession;
 
 function PromptSnapshotCard({
   title,
-  snapshot,
-  emptyLabel
+  snapshot
 }: {
   title: string;
   snapshot: PromptSnapshot;
-  emptyLabel: string;
 }) {
   const bundle = getPromptBundle(snapshot);
   const systemPrompt = normalizePromptText(bundle?.systemPrompt);
   const initialUserPrompt = normalizePromptText(bundle?.initialUserPrompt);
   const followups = normalizeFollowupPrompts(bundle?.followupUserPrompts);
   const followupSteps = Math.max(0, Math.floor(Number(bundle?.followupSteps) || followups.length));
+  const tools = Array.isArray(bundle?.tools) ? bundle.tools.filter((t) => t.name) : [];
+  const [selectedTool, setSelectedTool] = useState<string | null>(null);
+  const activeTool = tools.find((t) => t.name === selectedTool) || null;
   const hasData = hasPromptSnapshot(snapshot);
 
+  const meta = snapshot?.source
+    ? `${snapshot.source}${snapshot.updatedAt ? ` · ${relativeTime(snapshot.updatedAt)}` : ""}`
+    : undefined;
+
   return (
-    <div className={`vm-prompt-card${hasData ? "" : " vm-prompt-card-empty"}`}>
-      <div className="vm-prompt-card-header">
-        <div className="vm-prompt-card-title">
-          <span className="vm-prompt-title">{title}</span>
-          <span className="vm-prompt-meta">
-            {snapshot?.source ? snapshot.source : "no source"}
-            {snapshot?.updatedAt ? ` · ${relativeTime(snapshot.updatedAt)}` : ""}
-          </span>
+    <Section title={title} badge={meta} defaultOpen={hasData} disabled={!hasData}>
+      <div className="vm-prompt-card">
+        <div className="vm-prompt-card-header">
+          <CopyButton text={formatPromptBundleForCopy(bundle)} label />
         </div>
-        {hasData && <CopyButton text={formatPromptBundleForCopy(bundle)} label />}
-      </div>
 
-      {!hasData && <p className="vm-empty">{emptyLabel}</p>}
-
-      {hasData && (
         <div className="vm-prompt-body">
           <div className="vm-prompt-block">
             <div className="vm-prompt-block-header">
@@ -797,9 +793,35 @@ function PromptSnapshotCard({
               </div>
             </div>
           )}
+
+          {tools.length > 0 && (
+            <div className="vm-prompt-block">
+              <span className="vm-mini-label">Tools ({tools.length})</span>
+              <div className="vm-tools-list">
+                {tools.map((t) => (
+                  <span
+                    key={t.name}
+                    className={`vm-tool-chip vm-tool-fn${selectedTool === t.name ? " vm-tool-chip-active" : ""}`}
+                    onClick={() => setSelectedTool(selectedTool === t.name ? null : t.name)}
+                    style={{ cursor: "pointer" }}
+                  >
+                    {t.name}
+                  </span>
+                ))}
+              </div>
+              {activeTool && (
+                <div className="vm-tool-detail">
+                  <p className="vm-tool-detail-desc">{activeTool.description}</p>
+                  {activeTool.parameters && (
+                    <pre className="vm-prompt-pre">{JSON.stringify(activeTool.parameters, null, 2)}</pre>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
-      )}
-    </div>
+      </div>
+    </Section>
   );
 }
 
@@ -810,41 +832,34 @@ function PromptStateViewer({ session }: { session: VoiceSession }) {
       key: "instructions",
       title: "Current Realtime Instructions",
       snapshot: promptState?.instructions || null,
-      emptyLabel: "No active realtime instructions."
     },
     {
       key: "generation",
       title: "Latest VC Brain Prompt",
       snapshot: promptState?.generation || null,
-      emptyLabel: "No VC brain prompt has been captured in this session."
     },
     {
       key: "classifier",
       title: "Latest Classifier Prompt",
       snapshot: promptState?.classifier || null,
-      emptyLabel: "No classifier prompt has been captured in this session."
     },
     {
       key: "bridge",
       title: "Latest Bridge Forwarded Turn",
       snapshot: promptState?.bridge || null,
-      emptyLabel: "No bridge-forwarded turn has been captured in this session."
     }
   ];
   const activeCount = cards.filter((card) => hasPromptSnapshot(card.snapshot)).length;
 
   return (
     <Section title="Live Prompt Snapshot" badge={activeCount > 0 ? activeCount : null} defaultOpen>
-      <div className="vm-prompt-grid">
-        {cards.map((card) => (
-          <PromptSnapshotCard
-            key={card.key}
-            title={card.title}
-            snapshot={card.snapshot}
-            emptyLabel={card.emptyLabel}
-          />
-        ))}
-      </div>
+      {cards.map((card) => (
+        <PromptSnapshotCard
+          key={card.key}
+          title={card.title}
+          snapshot={card.snapshot}
+        />
+      ))}
     </Section>
   );
 }

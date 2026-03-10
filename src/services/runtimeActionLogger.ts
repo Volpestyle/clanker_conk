@@ -47,9 +47,14 @@ function formatAgentBadge(agent) {
   return `${style.bg}${style.fg}${BOLD}${label}${RESET}`;
 }
 
-function isTranscriptMetadataKey(key) {
+function isSpeechMetadataKey(key) {
   const normalizedKey = String(key || "").trim();
   return normalizedKey === "transcript" || normalizedKey === "replyText" || normalizedKey === "incomingTranscript";
+}
+
+function isHighlightedSpeechMetadataKey(key) {
+  const normalizedKey = String(key || "").trim();
+  return normalizedKey === "transcript" || normalizedKey === "incomingTranscript";
 }
 
 function normalizeInlineSpeechValue(value, maxLength = 220) {
@@ -66,7 +71,7 @@ function resolveSpeechStyle(key, metadata) {
     ? String(metadata.transcriptSource || "").trim().toLowerCase()
     : "";
 
-  if (normalizedKey === "replyText" || transcriptSource === "output") {
+  if (transcriptSource === "output") {
     return {
       label: "said",
       color: BRIGHT_GREEN
@@ -83,9 +88,14 @@ function formatSpeechInline(metadata) {
   if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return "";
   const parts = [];
   for (const [key, value] of Object.entries(metadata)) {
-    if (!isTranscriptMetadataKey(key)) continue;
+    if (!isSpeechMetadataKey(key)) continue;
     const text = normalizeInlineSpeechValue(value);
     if (!text) continue;
+    if (key === "replyText") {
+      parts.push(`${DIM}replyText${RESET}${DIM}=${RESET}"${text}"`);
+      continue;
+    }
+    if (!isHighlightedSpeechMetadataKey(key)) continue;
     const style = resolveSpeechStyle(key, metadata);
     parts.push(
       `${DIM}${style.label}${RESET}${DIM}=${RESET}${style.color}${BOLD}"${text}"${RESET}`
@@ -101,7 +111,7 @@ function formatMetadataInline(metadata) {
   const parts = [];
   for (const [k, v] of entries) {
     if (v === null || v === undefined) continue;
-    if (isTranscriptMetadataKey(k)) continue;
+    if (isSpeechMetadataKey(k)) continue;
     const val = typeof v === "object" ? JSON.stringify(v) : String(v);
     if (val.length > 80) continue; // skip bulky values
     parts.push(`${DIM}${k}${RESET}${DIM}=${RESET}${val}`);

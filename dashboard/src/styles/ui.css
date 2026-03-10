@@ -125,6 +125,16 @@
   padding: 4px 12px 10px;
 }
 
+.ui-section-disabled .ui-section-toggle {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.ui-section-disabled .ui-section-toggle:hover {
+  background: none;
+  color: var(--ink-2);
+}
+
 /* -- Status Dot -- */
 
 .status-dot {

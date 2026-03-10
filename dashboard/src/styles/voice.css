@@ -1412,6 +1412,26 @@
   color: #c084fc;
 }
 
+.vm-tool-chip-active {
+  outline: 1px solid currentColor;
+  outline-offset: -1px;
+}
+
+.vm-tool-detail {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--line);
+}
+
+.vm-tool-detail-desc {
+  margin: 0 0 4px;
+  font-size: 0.68rem;
+  color: var(--ink-2);
+  line-height: 1.4;
+}
+
 /* ---- Tool Call Log ---- */
 
 .vm-toolcall-list {

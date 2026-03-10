@@ -110,3 +110,24 @@ test("formatPrettyLine highlights spoken transcripts for output events", () => {
   assert.match(line, /yeah for sure, what do you want me to look up\?/);
   assert.equal(line.includes("transcript\x1b[2m="), false);
 });
+
+test("formatPrettyLine keeps replyText visible without speech-style emphasis on request logs", () => {
+  const line = formatPrettyLine({
+    ts: "2026-03-01T10:11:12.000Z",
+    level: "info",
+    kind: "voice_runtime",
+    event: "realtime_reply_requested",
+    agent: "voice",
+    usd_cost: 0,
+    metadata: {
+      sessionId: "sess-123",
+      replyText: "yeah for sure, what do you want me to look up?"
+    }
+  });
+
+  assert.match(line, /realtime_reply_requested/);
+  assert.match(line, /replyText/);
+  assert.match(line, /yeah for sure, what do you want me to look up\?/);
+  assert.equal(line.includes("said"), false);
+  assert.equal(line.includes("heard"), false);
+});

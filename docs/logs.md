@@ -24,6 +24,12 @@ Sensitive metadata keys are redacted (`apiKey`, `token`, `authorization`, `secre
 Prompt logs for turn-level debugging are attached under `metadata.replyPrompts`
 and stay hidden by default in the dashboard Action Stream.
 
+Pretty stdout rules:
+
+- actual delivered speech/transcripts stay emphasized in pretty stdout when the log carries `metadata.transcript` or `metadata.incomingTranscript`
+- output delivery stays labeled as `said` when `metadata.transcriptSource=output`
+- request-time `metadata.replyText` stays visible in pretty stdout, but it is not rendered with the same bold speech emphasis as delivered transcripts
+
 Canonical prompt-log coverage:
 
 - text reply turns: `sent_reply`, `sent_message`, `reply_skipped`

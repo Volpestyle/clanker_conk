@@ -366,6 +366,8 @@ Audio arrives via `appendAudioToAsr` on every `onUserAudio` chunk:
 7. Phase: `committing` → `ready`
 8. Schedule idle close timer
 
+If the commit times out empty but the same utterance produces a late final segment shortly after, the capture manager still watches that committed utterance object during the late-recovery window. A new provisional utterance for the same speaker does not cancel recovery of the older committed transcript.
+
 ### Shared Commit Flow
 
 1. Validate user lock matches

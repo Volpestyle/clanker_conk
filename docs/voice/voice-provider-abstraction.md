@@ -218,6 +218,10 @@ Canonical soundboard settings:
 Implementation note:
 
 - `voice.soundboard.eagerness` is prompt context, not a hard gate. Lower values push the bot toward restraint; higher values let it use Discord sound effects more playfully when the joke lands.
+- The canonical precise timing mechanism is inline `[[SOUNDBOARD:<sound_ref>]]` control markup in the model text. The runtime parses those directives into an ordered speech/soundboard sequence.
+- Buffered brain playback routes the whole reply through that ordered sequencer.
+- Streamed brain playback reuses the same ordered sequencer chunk-by-chunk. This supports `speech -> soundboard -> speech` timing inside streamed replies, but playback remains serialized rather than mixed.
+- `play_soundboard` remains useful for standalone or coarse beats when the model does not need exact placement inside spoken text.
 
 ## 6. Settings Reference
 
