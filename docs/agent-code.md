@@ -39,7 +39,7 @@ If blocked, runtime returns deterministic errors (`restricted to allowed users`,
 
 ## Providers
 
-`agentStack.devTeam.roles.*` selects which worker to spin up for design, implementation, review, and research tasks. The worker runtime config then supplies that worker's own model, limits, and working directory.
+`agentStack.devTeam.roles.*` selects which worker to spin up for design, implementation, review, and research tasks. The worker runtime config then supplies that worker's own model, limits, and target repository path.
 
 The generic `code_task` path resolves through the implementation role first, then falls back to the enabled worker order when no explicit implementation worker is set.
 
@@ -98,15 +98,31 @@ Session manager:
 - owner checks prevent one user from continuing another user’s session
 - provider-specific session implementations for Claude Code, Codex CLI, and Codex
 
-## Working Directory
+## Workspace Isolation
 
 `cwd` resolution:
 
 - explicit `cwd` argument if provided
 - otherwise the selected role worker's `defaultCwd`
-- otherwise fallback: `../web` relative to app root
+- otherwise fallback: the bot repo root (`process.cwd()`)
 
-`claude-code` and `codex-cli` execute locally in that directory. `codex` runs through OpenAI's API-driven Responses execution path.
+For local workers (`claude-code`, `codex-cli`), that resolved path is treated as a target path inside a git repo, not as the live execution directory. Runtime behavior:
+
+- resolve the containing git repo root for the requested path
+- create a disposable `git worktree` on a fresh `clanker/...` branch
+- run the local coding worker inside the matching path within that worktree
+- reuse the same worktree across follow-up turns in the same code session
+- remove the worktree and throw away the branch when the session closes, times out, errors, or is cancelled
+
+This protects the live checkout from routine agent edits while still preserving full local shell power inside the disposable branch workspace.
+
+Important boundary:
+
+- this is workspace isolation, not host isolation
+- local workers still run as the same OS user and keep normal machine access
+- the resolved `cwd` must point inside a git repository for local workers
+
+`codex` still runs through OpenAI's API-driven Responses execution path and does not provision a local worktree.
 
 ## Logging
 

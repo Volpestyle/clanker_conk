@@ -20,7 +20,7 @@ Ask it to check your GitHub issues? It can browse the page and summarize them. A
 - Image generation (GPT Image, Grok Imagine)
 - Video generation (Grok Imagine Video)
 - GIF search (GIPHY)
-- Claude Code/Codex agents for coding tasks (file editing, git, PRs) — allowed users only
+- Claude Code/Codex agents for coding tasks (file editing, git, PRs) — allowed users only, with local workers running in disposable git worktrees
 - Music playback with queue management (yt-dlp + ffmpeg)
 - MCP servers for extensibility
 
@@ -70,6 +70,7 @@ bun install
 
 For voice features, install `ffmpeg` and `yt-dlp` on the host.
 For optional local code-agent runtimes, ensure `claude` and/or `codex` CLI is on `PATH`.
+Point the code-agent working directory at a git repo root or subdirectory; local workers execute inside disposable worktree branches instead of the live checkout.
 
 ### Provider Notes
 

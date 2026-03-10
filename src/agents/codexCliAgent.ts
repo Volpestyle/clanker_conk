@@ -2,6 +2,7 @@ import { createCodexCliStreamSession, type CodexCliStreamSessionLike, normalizeC
 import { createAbortError, isAbortError, throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
 import { generateSessionId } from "./subAgentSession.ts";
+import type { CodeAgentWorkspaceLease } from "./codeAgentWorkspace.ts";
 
 interface CodeAgentTrace {
   guildId?: string | null;
@@ -27,6 +28,7 @@ export interface CodexCliAgentSessionOptions {
   store: {
     logAction: (entry: Record<string, unknown>) => void;
   };
+  workspace?: CodeAgentWorkspaceLease | null;
 }
 
 export class CodexCliAgentSession implements SubAgentSession {
@@ -42,11 +44,13 @@ export class CodexCliAgentSession implements SubAgentSession {
   private readonly timeoutMs: number;
   private readonly trace: CodeAgentTrace;
   private readonly store: { logAction: (entry: Record<string, unknown>) => void };
+  private readonly workspace: CodeAgentWorkspaceLease | null;
   private turnCount: number;
   private activeAbortController: AbortController | null;
+  private workspaceReleased: boolean;
 
   constructor(options: CodexCliAgentSessionOptions) {
-    const { scopeKey, cwd, model, timeoutMs, maxBufferBytes, trace, store } = options;
+    const { scopeKey, cwd, model, timeoutMs, maxBufferBytes, trace, store, workspace = null } = options;
     this.id = generateSessionId("code", scopeKey);
     this.createdAt = Date.now();
     this.lastUsedAt = Date.now();
@@ -56,8 +60,10 @@ export class CodexCliAgentSession implements SubAgentSession {
     this.timeoutMs = timeoutMs;
     this.trace = trace;
     this.store = store;
+    this.workspace = workspace;
     this.turnCount = 0;
     this.activeAbortController = null;
+    this.workspaceReleased = false;
     this.streamSession = createCodexCliStreamSession({ model: this.model, maxBufferBytes, cwd });
   }
 
@@ -119,6 +125,11 @@ export class CodexCliAgentSession implements SubAgentSession {
           model: this.model,
           sessionId: this.id,
           turnNumber: this.turnCount,
+          workspaceMode: this.workspace?.mode || null,
+          workspaceBranch: this.workspace?.branch || null,
+          workspaceBaseRef: this.workspace?.baseRef || null,
+          workspaceRepoRoot: this.workspace?.repoRoot || null,
+          workspaceCwd: this.workspace?.cwd || null,
           isError: turnResult.isError,
           usage: turnResult.usage,
           source: this.trace.source,
@@ -131,6 +142,7 @@ export class CodexCliAgentSession implements SubAgentSession {
       if (isAbortError(error) || turnSignal.aborted) {
         this.status = "cancelled";
         this.lastUsedAt = Date.now();
+        this.releaseWorkspace();
         throw createAbortError(turnSignal.reason || error);
       }
       const normalized = normalizeCodexCliError(error, {
@@ -150,12 +162,18 @@ export class CodexCliAgentSession implements SubAgentSession {
           model: this.model,
           sessionId: this.id,
           turnNumber: this.turnCount,
+          workspaceMode: this.workspace?.mode || null,
+          workspaceBranch: this.workspace?.branch || null,
+          workspaceBaseRef: this.workspace?.baseRef || null,
+          workspaceRepoRoot: this.workspace?.repoRoot || null,
+          workspaceCwd: this.workspace?.cwd || null,
           isTimeout: normalized.isTimeout,
           errorMessage: normalized.message,
           source: this.trace.source,
           durationMs: Date.now() - turnStartMs
         }
       });
+      this.releaseWorkspace();
       return {
         text: normalized.message,
         costUsd: 0,
@@ -178,9 +196,16 @@ export class CodexCliAgentSession implements SubAgentSession {
       // ignore
     }
     this.streamSession.close();
+    this.releaseWorkspace();
   }
 
   close(): void {
     this.cancel("Codex CLI session closed");
+  }
+
+  private releaseWorkspace() {
+    if (this.workspaceReleased) return;
+    this.workspaceReleased = true;
+    this.workspace?.cleanup();
   }
 }

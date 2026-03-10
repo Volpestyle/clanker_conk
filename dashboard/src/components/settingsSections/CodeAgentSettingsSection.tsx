@@ -182,8 +182,11 @@ export function CodeAgentSettingsSection({ id, form, set, validationError = "" }
               type="text"
               value={form.codeAgentDefaultCwd}
               onChange={set("codeAgentDefaultCwd")}
-              placeholder="Leave empty for ../web (one level up)"
+              placeholder="Leave empty for this repo root"
             />
+            <p className="status-msg" role="status">
+              Local workers treat this as a git repo path and spin up a disposable worktree branch instead of editing the live checkout.
+            </p>
           </div>
 
           <h4 className="text-xs text-muted-foreground tracking-wider mt-4 mb-2">DEV TEAM ROLES</h4>

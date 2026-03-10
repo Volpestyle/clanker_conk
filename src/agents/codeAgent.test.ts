@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import assert from "node:assert/strict";
-import { resolveCodeAgentConfig } from "./codeAgent.ts";
+import { resolveCodeAgentConfig, resolveCodeAgentCwd } from "./codeAgent.ts";
 import { createTestSettings } from "../testSettings.ts";
 
 test("resolveCodeAgentConfig routes worker selection through the requested role", () => {
@@ -70,4 +70,10 @@ test("resolveCodeAgentConfig routes worker selection through the requested role"
   assert.equal(reviewConfig.provider, "claude-code");
   assert.equal(researchConfig.worker, "codex_cli");
   assert.equal(researchConfig.provider, "codex-cli");
+});
+
+test("resolveCodeAgentCwd defaults to the provided repo root and normalizes relative paths", () => {
+  assert.equal(resolveCodeAgentCwd("", "/tmp/project"), "/tmp/project");
+  assert.equal(resolveCodeAgentCwd("packages/app", "/tmp/project"), "/tmp/project/packages/app");
+  assert.equal(resolveCodeAgentCwd("/var/tmp/repo", "/tmp/project"), "/var/tmp/repo");
 });

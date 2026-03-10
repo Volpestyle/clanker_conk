@@ -12,6 +12,7 @@ import type { SubAgentSession, SubAgentTurnResult } from "./subAgentSession.ts";
 import { generateSessionId } from "./subAgentSession.ts";
 import { CodexAgentSession, getActiveCodexAgentTaskCount } from "./codexAgent.ts";
 import { CodexCliAgentSession, getActiveCodexCliAgentTaskCount } from "./codexCliAgent.ts";
+import { provisionCodeAgentWorkspace, type CodeAgentWorkspaceLease } from "./codeAgentWorkspace.ts";
 import { clamp } from "../utils.ts";
 import { normalizeOpenAiOAuthModel } from "../llm/llmHelpers.ts";
 import path from "node:path";
@@ -108,9 +109,8 @@ export function isCodeAgentUserAllowed(userId: string, settings: Record<string, 
 
 export function resolveCodeAgentCwd(settingsCwd: string, fallbackBaseDir: string): string {
   const raw = String(settingsCwd || "").trim();
-  if (raw) return raw;
-  // Default: "web" directory one level above the app root
-  return path.resolve(fallbackBaseDir, "..", "web");
+  if (raw) return path.resolve(fallbackBaseDir, raw);
+  return path.resolve(fallbackBaseDir);
 }
 
 export interface CodeAgentConfig {
@@ -159,8 +159,8 @@ export function resolveCodeAgentConfig(
       : preferredWorker === "codex_cli"
         ? devRuntime.codexCli
       : devRuntime.claudeCode;
-  const cwd = cwdOverride || resolveCodeAgentCwd(
-    String(primaryWorkerConfig?.defaultCwd || ""),
+  const cwd = resolveCodeAgentCwd(
+    String(cwdOverride || primaryWorkerConfig?.defaultCwd || ""),
     process.cwd()
   );
   const provider = normalizeCodeAgentProvider(
@@ -216,28 +216,41 @@ async function runLocalCodeAgentOnce({
   };
   signal?: AbortSignal;
 }): Promise<CodeAgentResult> {
+  const workspace = provisionCodeAgentWorkspace({
+    cwd,
+    provider,
+    scopeKey: `oneshot:${provider}:${trace.guildId || "dm"}:${trace.channelId || "dm"}`
+  });
   const scopeKey = `oneshot:${provider}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
-  const session =
-    provider === "codex-cli"
-      ? new CodexCliAgentSession({
-          scopeKey,
-          cwd,
-          model: codexCliModel,
-          timeoutMs,
-          maxBufferBytes,
-          trace,
-          store
-        })
-      : new CodeAgentSession({
-          scopeKey,
-          cwd,
-          model,
-          maxTurns,
-          timeoutMs,
-          maxBufferBytes,
-          trace,
-          store
-        });
+  let session: SubAgentSession;
+  try {
+    session =
+      provider === "codex-cli"
+        ? new CodexCliAgentSession({
+            scopeKey,
+            cwd: workspace.cwd,
+            model: codexCliModel,
+            timeoutMs,
+            maxBufferBytes,
+            trace,
+            store,
+            workspace
+          })
+        : new CodeAgentSession({
+            scopeKey,
+            cwd: workspace.cwd,
+            model,
+            maxTurns,
+            timeoutMs,
+            maxBufferBytes,
+            trace,
+            store,
+            workspace
+          });
+  } catch (error) {
+    workspace.cleanup();
+    throw error;
+  }
   try {
     const result = await session.runTurn(instruction, { signal });
     return {
@@ -401,6 +414,7 @@ export interface CodeAgentSessionOptions {
   store: {
     logAction: (entry: Record<string, unknown>) => void;
   };
+  workspace?: CodeAgentWorkspaceLease | null;
 }
 
 const EMPTY_USAGE = { inputTokens: 0, outputTokens: 0, cacheWriteTokens: 0, cacheReadTokens: 0 };
@@ -417,12 +431,14 @@ export class CodeAgentSession implements SubAgentSession {
   private readonly timeoutMs: number;
   private readonly trace: CodeAgentTrace;
   private readonly store: { logAction: (entry: Record<string, unknown>) => void };
+  private readonly workspace: CodeAgentWorkspaceLease | null;
   private turnCount: number;
   private totalCostUsd: number;
   private activeAbortController: AbortController | null;
+  private workspaceReleased: boolean;
 
   constructor(options: CodeAgentSessionOptions) {
-    const { scopeKey, cwd, model, maxTurns, timeoutMs, maxBufferBytes, trace, store } = options;
+    const { scopeKey, cwd, model, maxTurns, timeoutMs, maxBufferBytes, trace, store, workspace = null } = options;
 
     this.id = generateSessionId("code", scopeKey);
     this.createdAt = Date.now();
@@ -432,9 +448,11 @@ export class CodeAgentSession implements SubAgentSession {
     this.timeoutMs = timeoutMs;
     this.trace = trace;
     this.store = store;
+    this.workspace = workspace;
     this.turnCount = 0;
     this.totalCostUsd = 0;
     this.activeAbortController = null;
+    this.workspaceReleased = false;
 
     const args = buildCodeAgentSessionCliArgs({ model, maxTurns });
     this.streamSession = createClaudeCliStreamSession({
@@ -506,6 +524,11 @@ export class CodeAgentSession implements SubAgentSession {
           sessionId: this.id,
           turnNumber: this.turnCount,
           role: this.trace.role || "implementation",
+          workspaceMode: this.workspace?.mode || null,
+          workspaceBranch: this.workspace?.branch || null,
+          workspaceBaseRef: this.workspace?.baseRef || null,
+          workspaceRepoRoot: this.workspace?.repoRoot || null,
+          workspaceCwd: this.workspace?.cwd || null,
           isError: turnResult.isError,
           usage: turnResult.usage,
           source: this.trace.source,
@@ -519,6 +542,7 @@ export class CodeAgentSession implements SubAgentSession {
       if (isAbortError(error) || turnSignal.aborted) {
         this.status = "cancelled";
         this.lastUsedAt = Date.now();
+        this.releaseWorkspace();
         throw createAbortError(turnSignal.reason || error);
       }
       const normalized = normalizeClaudeCodeCliError(error, {
@@ -539,12 +563,18 @@ export class CodeAgentSession implements SubAgentSession {
           sessionId: this.id,
           turnNumber: this.turnCount,
           role: this.trace.role || "implementation",
+          workspaceMode: this.workspace?.mode || null,
+          workspaceBranch: this.workspace?.branch || null,
+          workspaceBaseRef: this.workspace?.baseRef || null,
+          workspaceRepoRoot: this.workspace?.repoRoot || null,
+          workspaceCwd: this.workspace?.cwd || null,
           isTimeout: normalized.isTimeout,
           errorMessage: normalized.message,
           source: this.trace.source,
           durationMs: Date.now() - turnStartMs
         }
       });
+      this.releaseWorkspace();
 
       return {
         text: normalized.message,
@@ -568,10 +598,17 @@ export class CodeAgentSession implements SubAgentSession {
       // ignore
     }
     this.streamSession.close();
+    this.releaseWorkspace();
   }
 
   close(): void {
     this.cancel("Code agent session closed");
+  }
+
+  private releaseWorkspace() {
+    if (this.workspaceReleased) return;
+    this.workspaceReleased = true;
+    this.workspace?.cleanup();
   }
 }
 
@@ -627,26 +664,48 @@ export function createCodeAgentSession(options: CreateCodeAgentSessionOptions): 
   }
 
   if (resolvedProvider === "codex-cli") {
-    return new CodexCliAgentSession({
-      scopeKey,
+    const workspace = provisionCodeAgentWorkspace({
       cwd,
-      model: codexCliModel,
-      timeoutMs,
-      maxBufferBytes,
-      trace,
-      store
+      provider: "codex-cli",
+      scopeKey
     });
+    try {
+      return new CodexCliAgentSession({
+        scopeKey,
+        cwd: workspace.cwd,
+        model: codexCliModel,
+        timeoutMs,
+        maxBufferBytes,
+        trace,
+        store,
+        workspace
+      });
+    } catch (error) {
+      workspace.cleanup();
+      throw error;
+    }
   }
 
   // claude-code: persistent multi-turn session via Claude CLI
-  return new CodeAgentSession({
-    scopeKey,
+  const workspace = provisionCodeAgentWorkspace({
     cwd,
-    model,
-    maxTurns,
-    timeoutMs,
-    maxBufferBytes,
-    trace,
-    store
+    provider: "claude-code",
+    scopeKey
   });
+  try {
+    return new CodeAgentSession({
+      scopeKey,
+      cwd: workspace.cwd,
+      model,
+      maxTurns,
+      timeoutMs,
+      maxBufferBytes,
+      trace,
+      store,
+      workspace
+    });
+  } catch (error) {
+    workspace.cleanup();
+    throw error;
+  }
 }
