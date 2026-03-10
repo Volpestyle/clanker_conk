@@ -1,12 +1,12 @@
 #!/usr/bin/env bun
 /**
- * One-time script to obtain Codex OAuth tokens for clanker conk.
- * Run: bun scripts/codex-oauth-login.ts
+ * One-time script to obtain OpenAI OAuth tokens for clanker conk.
+ * Canonical entrypoint: bun scripts/openai-oauth-login.ts
  *
  * 1. Starts a temporary localhost callback server
  * 2. Opens the OpenAI authorization URL in your browser
- * 3. Completes ChatGPT Plus/Pro login
- * 4. Saves tokens to data/codex-oauth-tokens.json
+ * 3. Completes ChatGPT account login
+ * 4. Saves tokens to data/openai-oauth-tokens.json
  */
 
 import { buildAuthorizeUrl, codexOAuthConstants, exchangeCodeForTokens } from "../src/llm/codexOAuth.ts";
@@ -14,10 +14,10 @@ import { buildAuthorizeUrl, codexOAuthConstants, exchangeCodeForTokens } from ".
 const redirectUri = codexOAuthConstants.defaultRedirectUri;
 const { url, verifier, state } = buildAuthorizeUrl({ redirectUri });
 
-console.log("\n--- Codex OAuth Login ---\n");
+console.log("\n--- OpenAI OAuth Login ---\n");
 console.log("1. Open this URL in your browser:\n");
 console.log(`   ${url}\n`);
-console.log("2. Log in with your ChatGPT Plus/Pro account and authorize.\n");
+console.log("2. Log in with a supported ChatGPT account and authorize.\n");
 console.log("3. This script will capture the callback automatically.\n");
 
 let resolveCode: ((value: string) => void) | null = null;
@@ -109,14 +109,14 @@ try {
     verifier
   });
 
-  console.log("\nTokens saved to data/codex-oauth-tokens.json");
+  console.log("\nOpenAI OAuth tokens saved to data/openai-oauth-tokens.json");
   console.log(`Refresh token: ${tokens.refreshToken.slice(0, 12)}...`);
   console.log(`Account id: ${tokens.accountId || "(not returned)"}`);
   console.log(`Access token expires: ${new Date(tokens.expiresAt).toISOString()}`);
-  console.log("\nYou can now use provider: codex-oauth in your settings.");
-  console.log("Or set DEFAULT_PROVIDER=codex-oauth in your .env\n");
+  console.log("\nYou can now use OpenAI OAuth in the app via provider: openai-oauth.");
+  console.log("Or set DEFAULT_PROVIDER=openai-oauth in your .env\n");
 } catch (error) {
-  console.error("\nFailed to complete Codex OAuth login:", (error as Error).message);
+  console.error("\nFailed to complete OpenAI OAuth login:", (error as Error).message);
   process.exitCode = 1;
 } finally {
   clearTimeout(timeout);

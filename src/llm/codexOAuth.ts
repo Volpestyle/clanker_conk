@@ -12,7 +12,8 @@ const CODEX_OAUTH_DEFAULT_CALLBACK_PORT = 1455;
 const CODEX_OAUTH_DEFAULT_REDIRECT_URI = `http://localhost:${CODEX_OAUTH_DEFAULT_CALLBACK_PORT}/auth/callback`;
 const CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses";
 const CODEX_OAUTH_SCOPES = "openid profile email offline_access";
-const TOKEN_FILE_PATH = join("data", "codex-oauth-tokens.json");
+const OPENAI_OAUTH_TOKEN_FILE_PATH = join("data", "openai-oauth-tokens.json");
+const LEGACY_CODEX_OAUTH_TOKEN_FILE_PATH = join("data", "codex-oauth-tokens.json");
 const REQUEST_ORIGINATOR = "clanker_conk";
 const REQUEST_USER_AGENT = "clanker-conk/1.0";
 
@@ -44,9 +45,9 @@ type PkceChallenge = {
   challenge: string;
 };
 
-function loadTokens(): CodexOAuthTokens | null {
+function readTokensFile(filePath: string): CodexOAuthTokens | null {
   try {
-    const raw = readFileSync(TOKEN_FILE_PATH, "utf8");
+    const raw = readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw) as Partial<{
       refreshToken: unknown;
       accessToken: unknown;
@@ -69,12 +70,16 @@ function loadTokens(): CodexOAuthTokens | null {
   }
 }
 
+function loadTokens(): CodexOAuthTokens | null {
+  return readTokensFile(OPENAI_OAUTH_TOKEN_FILE_PATH) || readTokensFile(LEGACY_CODEX_OAUTH_TOKEN_FILE_PATH);
+}
+
 function saveTokens(tokens: CodexOAuthTokens): void {
   try {
-    mkdirSync(dirname(TOKEN_FILE_PATH), { recursive: true });
-    writeFileSync(TOKEN_FILE_PATH, JSON.stringify(tokens, null, 2), { mode: 0o600 });
+    mkdirSync(dirname(OPENAI_OAUTH_TOKEN_FILE_PATH), { recursive: true });
+    writeFileSync(OPENAI_OAUTH_TOKEN_FILE_PATH, JSON.stringify(tokens, null, 2), { mode: 0o600 });
   } catch (error) {
-    console.error("[codex-oauth] Failed to save tokens:", error);
+    console.error("[openai-oauth] Failed to save tokens:", error);
   }
 }
 
@@ -170,7 +175,7 @@ async function refreshAccessToken(tokens: CodexOAuthTokens): Promise<CodexOAuthT
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`Codex OAuth token refresh failed (${response.status}): ${body.slice(0, 200)}`);
+    throw new Error(`OpenAI OAuth token refresh failed (${response.status}): ${body.slice(0, 200)}`);
   }
 
   const json = await response.json() as CodexOAuthTokenResponse;
@@ -298,8 +303,8 @@ function createOAuthFetch(
       headers
     });
   };
-
-  // OpenAI's SDK types its fetch hook around shimmed Request/Response classes.
+  // OpenAI's SDK still types its fetch hook around node-fetch shims.
+  // eslint-disable-next-line no-restricted-syntax
   return oauthFetch as unknown as OpenAiFetch;
 }
 
@@ -325,31 +330,29 @@ export function createCodexOAuthClient(envRefreshToken: string): CodexOAuthState
     const existing = loadTokens();
     if (!existing) {
       throw new Error(
-        "Codex OAuth not configured. Set CODEX_OAUTH_REFRESH_TOKEN or create data/codex-oauth-tokens.json."
+        "OpenAI OAuth not configured. Set OPENAI_OAUTH_REFRESH_TOKEN or create data/openai-oauth-tokens.json."
       );
     }
     tokens = existing;
   }
 
-  const state: CodexOAuthState = {
-    tokens,
-    // eslint-disable-next-line no-restricted-syntax
-    client: null as unknown as OpenAI
-  };
-
+  let currentTokens = tokens;
   const oauthFetch = createOAuthFetch(
-    () => state.tokens,
+    () => currentTokens,
     (updated) => {
-      state.tokens = updated;
+      currentTokens = updated;
     }
   );
-
-  state.client = new OpenAI({
-    apiKey: "codex-oauth-placeholder",
+  const client = new OpenAI({
+    apiKey: "openai-oauth-placeholder",
     fetch: oauthFetch
   });
-
-  return state;
+  return {
+    get tokens() {
+      return currentTokens;
+    },
+    client
+  };
 }
 
 export function buildAuthorizeUrl({
@@ -400,7 +403,7 @@ export async function exchangeCodeForTokens({
 
   if (!response.ok) {
     const body = await response.text().catch(() => "");
-    throw new Error(`Codex OAuth code exchange failed (${response.status}): ${body.slice(0, 200)}`);
+    throw new Error(`OpenAI OAuth code exchange failed (${response.status}): ${body.slice(0, 200)}`);
   }
 
   const json = await response.json() as CodexOAuthTokenResponse;

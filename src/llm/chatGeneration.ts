@@ -12,8 +12,11 @@ import {
   buildOpenAiReasoningParam,
   buildOpenAiToolLoopInput,
   buildOpenAiTemperatureParam,
+  type ContentBlock,
   type ChatModelStreamCallbacks,
-  type ChatModelRequest
+  type ChatModelRequest,
+  type ToolLoopContentBlock,
+  type ToolLoopMessage
 } from "./serviceShared.ts";
 
 export type ChatGenerationDeps = {
@@ -205,7 +208,7 @@ function buildOpenAiResponsesInput({
     ? buildOpenAiToolLoopInput(
       normalizedContextMessages.map((msg) => ({
         role: msg.role === "assistant" ? "assistant" : "user",
-        content: msg.content ?? ""
+        content: toToolLoopMessageContent(msg.content)
       }))
     )
     : normalizedContextMessages.map((msg) => ({
@@ -223,6 +226,42 @@ function buildOpenAiResponsesInput({
       }
     ]
     : contextInput;
+}
+
+function toToolLoopMessageContent(content: string | ContentBlock[] | null | undefined): ToolLoopMessage["content"] {
+  if (!Array.isArray(content)) {
+    return String(content || "");
+  }
+
+  const blocks: ToolLoopContentBlock[] = [];
+  for (const block of content) {
+    if (block.type === "text") {
+      blocks.push({
+        type: "text",
+        text: block.text
+      });
+      continue;
+    }
+    if (block.type === "tool_use") {
+      blocks.push({
+        type: "tool_call",
+        id: block.id,
+        name: block.name,
+        input: block.input
+      });
+      continue;
+    }
+    blocks.push({
+      type: "tool_result",
+      toolCallId: block.tool_use_id,
+      content: block.content
+    });
+  }
+  return blocks;
+}
+
+function isAsyncIterable<T>(value: object): value is AsyncIterable<T> {
+  return typeof Reflect.get(value, Symbol.asyncIterator) === "function";
 }
 
 function buildOpenAiResponsesRequestBody({
@@ -347,10 +386,14 @@ export async function callOpenAiResponsesStreaming(
     ...buildOpenAiResponsesRequestBody(request),
     stream: true as const
   } as Parameters<typeof deps.openai.responses.create>[0];
-  const stream = await deps.openai.responses.create(
+  const streamResponse = await deps.openai.responses.create(
     requestBody as never,
     abortSignal ? { signal: abortSignal } : undefined
-  ) as AsyncIterable<OpenAiResponsesStreamEvent>;
+  );
+  if (!streamResponse || typeof streamResponse !== "object" || !isAsyncIterable<OpenAiResponsesStreamEvent>(streamResponse)) {
+    throw new Error("OpenAI streaming response did not expose an async iterator.");
+  }
+  const stream = streamResponse;
   let finalResponse: OpenAiResponsesResponseLike | null = null;
   let streamErrorMessage = "";
 

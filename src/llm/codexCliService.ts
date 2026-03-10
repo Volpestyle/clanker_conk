@@ -4,7 +4,6 @@ import {
 } from "./llmClaudeCode.ts";
 import {
   buildCodexCliBrainArgs,
-  buildCodexCliMemoryExtractionPrompt,
   buildCodexCliTextArgs,
   createCodexCliOutputSchemaFile,
   createCodexCliStreamSession,
@@ -16,11 +15,8 @@ import {
 import type {
   ChatModelRequest,
   LlmTrace,
-  MemoryExtractionRequest,
-  MemoryExtractionResponse,
   UsageMetrics
 } from "./serviceShared.ts";
-import { MEMORY_EXTRACTION_SCHEMA } from "./serviceShared.ts";
 
 const CODEX_CLI_TIMEOUT_MS = 30_000;
 const CODEX_CLI_MAX_BUFFER_BYTES = 1024 * 1024;
@@ -303,50 +299,6 @@ export async function callCodexCli(
       timeoutPrefix: "codex-cli text fallback timed out"
     });
     throw new Error([streamFailure, jsonFallbackFailure, normalizedError.message].filter(Boolean).join(" | "));
-  }
-}
-
-export async function callCodexCliMemoryExtraction(
-  deps: CodexCliServiceDeps,
-  { model, systemPrompt, userPrompt }: MemoryExtractionRequest
-) {
-  if (!deps.codexCliAvailable) {
-    throw new Error("codex-cli provider requires the 'codex' CLI to be installed.");
-  }
-
-  const schemaJson = JSON.stringify(MEMORY_EXTRACTION_SCHEMA);
-  const outputSchema = createCodexCliOutputSchemaFile(schemaJson);
-  try {
-    const { stdout } = await runCodexCli({
-      args: buildCodexCliBrainArgs({
-        model,
-        prompt: buildCodexCliMemoryExtractionPrompt({ systemPrompt, userPrompt }),
-        outputSchemaPath: outputSchema?.path || ""
-      }),
-      input: "",
-      timeoutMs: CODEX_CLI_TIMEOUT_MS,
-      maxBufferBytes: CODEX_CLI_MAX_BUFFER_BYTES
-    });
-
-    const parsed = parseCodexCliJsonlOutput(stdout);
-    if (!parsed || !String(parsed.text || "").trim()) {
-      throw new Error("codex-cli returned an empty or invalid stream response.");
-    }
-    if (parsed.isError) {
-      throw new Error(parsed.errorMessage || "codex-cli returned an error result.");
-    }
-
-    return {
-      text: parsed.text,
-      usage: parsed.usage
-    } satisfies MemoryExtractionResponse;
-  } catch (error) {
-    const normalizedError = normalizeCodexCliError(error, {
-      timeoutPrefix: "codex-cli memory extraction timed out"
-    });
-    throw new Error(normalizedError.message);
-  } finally {
-    outputSchema?.cleanup();
   }
 }
 

@@ -85,18 +85,6 @@ export type ChatModelStreamCallbacks = {
   signal?: AbortSignal;
 };
 
-export type MemoryExtractionRequest = {
-  model: string;
-  systemPrompt: string;
-  userPrompt: string;
-};
-
-export type MemoryExtractionResponse = {
-  text: string;
-  usage: UsageMetrics;
-  costUsd?: number;
-};
-
 export type LlmActionStore = {
   logAction: (entry: {
     kind: string;
@@ -115,13 +103,13 @@ export type LLMAppConfig = {
   xaiBaseUrl?: string | null;
   anthropicApiKey?: string | null;
   claudeOAuthRefreshToken?: string | null;
-  codexOAuthRefreshToken?: string | null;
+  openaiOAuthRefreshToken?: string | null;
   defaultProvider?: string | null;
   defaultOpenAiModel?: string | null;
   defaultAnthropicModel?: string | null;
   defaultXaiModel?: string | null;
   defaultClaudeOAuthModel?: string | null;
-  defaultCodexOAuthModel?: string | null;
+  defaultOpenAiOAuthModel?: string | null;
   defaultCodexCliModel?: string | null;
   defaultMemoryEmbeddingModel?: string | null;
 };
@@ -311,29 +299,6 @@ export function buildContextContentBlocks(rawContent: unknown, fallbackText = ""
   const text = normalizeContextText(fallbackText);
   return text ? [{ type: "text", text }] : [];
 }
-
-export const MEMORY_EXTRACTION_SCHEMA = {
-  type: "object",
-  additionalProperties: false,
-  properties: {
-    facts: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        properties: {
-          subject: { type: "string", enum: MEMORY_FACT_SUBJECTS },
-          fact: { type: "string", minLength: 1, maxLength: 190 },
-          type: { type: "string", enum: MEMORY_FACT_TYPES },
-          confidence: { type: "number", minimum: 0, maximum: 1 },
-          evidence: { type: "string", minLength: 1, maxLength: 220 }
-        },
-        required: ["subject", "fact", "type", "confidence", "evidence"]
-      }
-    }
-  },
-  required: ["facts"]
-};
 
 export function buildOpenAiTemperatureParam(model: string, temperature: number) {
   const normalizedModel = String(model || "")

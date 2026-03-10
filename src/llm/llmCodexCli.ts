@@ -489,13 +489,6 @@ export function normalizeCodexCliError(
   };
 }
 
-export function buildCodexCliMemoryExtractionPrompt({ systemPrompt = "", userPrompt = "" }: {
-  systemPrompt?: string;
-  userPrompt?: string;
-}) {
-  return [String(systemPrompt || "").trim(), String(userPrompt || "").trim()].filter(Boolean).join("\n\n");
-}
-
 export function clampCodexCliMaxTurns(value: unknown, fallback = 30) {
   return clampInt(value, 1, Math.max(1, clampInt(fallback, 1, 10_000)));
 }

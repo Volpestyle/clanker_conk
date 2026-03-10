@@ -21,7 +21,6 @@ import {
 } from "./llm/chatGeneration.ts";
 import {
   callCodexCli as callCodexCliRequest,
-  callCodexCliMemoryExtraction as callCodexCliMemoryExtractionRequest,
   closeCodexCliSession,
   runCodexCliBrainStream as runCodexCliBrainStreamRequest,
   type CodexCliServiceDeps
@@ -43,14 +42,6 @@ import {
   type EmbeddingServiceDeps
 } from "./llm/embeddingService.ts";
 import {
-  callAnthropicMemoryExtraction as callAnthropicMemoryExtractionRequest,
-  callMemoryExtractionModel as callMemoryExtractionModelRequest,
-  callOpenAiMemoryExtraction as callOpenAiMemoryExtractionRequest,
-  callXaiMemoryExtraction as callXaiMemoryExtractionRequest,
-  extractMemoryFacts as extractMemoryFactsRequest,
-  type MemoryExtractionDeps
-} from "./llm/memoryExtraction.ts";
-import {
   fetchXaiJson as fetchXaiJsonRequest,
   generateImage as generateImageRequest,
   generateVideo as generateVideoRequest,
@@ -63,6 +54,7 @@ import {
 } from "./llm/mediaGeneration.ts";
 import {
   appendJsonSchemaInstruction,
+  type ChatModelResponse,
   type ChatModelRequest,
   type ChatModelStreamCallbacks,
   type ContextMessage,
@@ -70,8 +62,6 @@ import {
   type LLMAppConfig,
   type LlmActionStore,
   type LlmTrace,
-  type MemoryExtractionRequest,
-  type MemoryExtractionResponse,
   type XaiJsonRequestOptions,
   XAI_REQUEST_TIMEOUT_MS
 } from "./llm/serviceShared.ts";
@@ -80,7 +70,7 @@ import {
   type ToolLoopChatDeps
 } from "./llm/toolLoopChat.ts";
 import {
-  normalizeCodexOAuthModel,
+  normalizeOpenAiOAuthModel,
   normalizeDefaultModel,
   normalizeLlmProvider,
   normalizeXaiBaseUrl,
@@ -96,7 +86,6 @@ export {
   buildOpenAiJsonSchemaTextFormat,
   buildOpenAiReasoningParam,
   buildOpenAiTemperatureParam,
-  MEMORY_EXTRACTION_SCHEMA,
   XAI_REQUEST_TIMEOUT_MS,
   type ToolLoopContentBlock,
   type ToolLoopMessage
@@ -139,11 +128,11 @@ export class LLMService {
     }
 
     this.codexOAuth = null;
-    if (isCodexOAuthConfigured(appConfig.codexOAuthRefreshToken || "")) {
+    if (isCodexOAuthConfigured(appConfig.openaiOAuthRefreshToken || "")) {
       try {
-        this.codexOAuth = createCodexOAuthClient(appConfig.codexOAuthRefreshToken || "");
+        this.codexOAuth = createCodexOAuthClient(appConfig.openaiOAuthRefreshToken || "");
       } catch (error) {
-        console.error("[codex-oauth] Failed to initialize:", error);
+        console.error("[openai-oauth] Failed to initialize:", error);
       }
     }
 
@@ -161,7 +150,7 @@ export class LLMService {
 
   private chatDeps(provider?: string): ChatGenerationDeps {
     return {
-      openai: provider === "codex-oauth"
+      openai: provider === "openai-oauth"
         ? this.codexOAuth?.client ?? null
         : this.openai,
       xai: this.xai,
@@ -206,20 +195,6 @@ export class LLMService {
       setBrainModel: (model) => {
         this.codexCliBrainModel = model;
       }
-    };
-  }
-
-  private memoryExtractionDeps(): MemoryExtractionDeps {
-    return {
-      openai: this.openai,
-      xai: this.xai,
-      anthropic: this.anthropic,
-      claudeOAuthClient: this.claudeOAuth?.client ?? null,
-      codexOAuthClient: this.codexOAuth?.client ?? null,
-      store: this.store,
-      resolveProviderAndModel: (llmSettings) => this.resolveProviderAndModel(llmSettings),
-      callCodexCliMemoryExtraction: (request) =>
-        callCodexCliMemoryExtractionRequest(this.codexCliDeps(), request)
     };
   }
 
@@ -344,14 +319,14 @@ export class LLMService {
       messageId: trace.messageId == null ? null : String(trace.messageId)
     };
     const effectiveSystemPrompt =
-      normalizedJsonSchema && provider !== "codex-cli" && provider !== "codex_cli_session" && provider !== "openai" && provider !== "codex-oauth"
+      normalizedJsonSchema && provider !== "codex-cli" && provider !== "codex_cli_session" && provider !== "openai" && provider !== "openai-oauth"
         ? appendJsonSchemaInstruction(systemPrompt, normalizedJsonSchema)
         : systemPrompt;
     const streamingTransportSupported =
       provider === "anthropic" ||
       provider === "claude-oauth" ||
       provider === "openai" ||
-      provider === "codex-oauth";
+      provider === "openai-oauth";
     const streamingTransportAllowed = streamingTransportSupported;
     let usedStreamingTransport = false;
     try {
@@ -454,12 +429,12 @@ export class LLMService {
   async callChatModel(
     provider: string,
     payload: ChatModelRequest & { trace?: LlmTrace }
-  ) {
+  ): Promise<ChatModelResponse> {
     if (provider === "claude-oauth") {
       return callAnthropicRequest(this.chatDeps("claude-oauth"), payload);
     }
-    if (provider === "codex-oauth") {
-      return callOpenAIRequest(this.chatDeps("codex-oauth"), payload);
+    if (provider === "openai-oauth") {
+      return callOpenAIRequest(this.chatDeps("openai-oauth"), payload);
     }
     if (provider === "codex-cli" || provider === "codex_cli_session") {
       return callCodexCliRequest(this.codexCliDeps(), payload);
@@ -480,15 +455,15 @@ export class LLMService {
     provider: string,
     payload: ChatModelRequest & { trace?: LlmTrace },
     callbacks: ChatModelStreamCallbacks
-  ) {
+  ): Promise<ChatModelResponse> {
     if (provider === "claude-oauth") {
       return callAnthropicStreamingRequest(this.chatDeps("claude-oauth"), payload, callbacks);
     }
     if (provider === "anthropic") {
       return callAnthropicStreamingRequest(this.chatDeps(), payload, callbacks);
     }
-    if (provider === "codex-oauth") {
-      return callOpenAiResponsesStreamingRequest(this.chatDeps("codex-oauth"), payload, callbacks);
+    if (provider === "openai-oauth") {
+      return callOpenAiResponsesStreamingRequest(this.chatDeps("openai-oauth"), payload, callbacks);
     }
     if (provider === "openai") {
       return callOpenAiResponsesStreamingRequest(this.chatDeps(), payload, callbacks);
@@ -496,38 +471,8 @@ export class LLMService {
     throw new Error(`Streaming is not supported for LLM provider '${provider}'.`);
   }
 
-  async callMemoryExtractionModel(provider: string, payload: MemoryExtractionRequest) {
-    return callMemoryExtractionModelRequest(this.memoryExtractionDeps(), provider, payload);
-  }
-
-  async extractMemoryFacts(args: {
-    settings: unknown;
-    authorName: unknown;
-    messageContent: unknown;
-    maxFacts?: number;
-    trace?: LlmTrace;
-  }) {
-    return extractMemoryFactsRequest(this.memoryExtractionDeps(), args);
-  }
-
-  async callOpenAiMemoryExtraction(payload: MemoryExtractionRequest): Promise<MemoryExtractionResponse> {
-    return callOpenAiMemoryExtractionRequest(this.memoryExtractionDeps(), payload);
-  }
-
-  async callXaiMemoryExtraction(payload: MemoryExtractionRequest): Promise<MemoryExtractionResponse> {
-    return callXaiMemoryExtractionRequest(this.memoryExtractionDeps(), payload);
-  }
-
-  async callAnthropicMemoryExtraction(payload: MemoryExtractionRequest): Promise<MemoryExtractionResponse> {
-    return callAnthropicMemoryExtractionRequest(this.memoryExtractionDeps(), payload);
-  }
-
   async callCodexCli(payload: ChatModelRequest & { trace?: LlmTrace }) {
     return callCodexCliRequest(this.codexCliDeps(), payload);
-  }
-
-  async callCodexCliMemoryExtraction(payload: MemoryExtractionRequest): Promise<MemoryExtractionResponse> {
-    return callCodexCliMemoryExtractionRequest(this.codexCliDeps(), payload);
   }
 
   async runCodexCliBrainStream(args: {
@@ -633,9 +578,9 @@ export class LLMService {
         "LLM provider is set to claude-oauth, but no OAuth tokens are configured. Set CLAUDE_OAUTH_REFRESH_TOKEN or create data/claude-oauth-tokens.json."
       );
     }
-    if (desiredProvider === "codex-oauth" && !this.isProviderConfigured("codex-oauth")) {
+    if (desiredProvider === "openai-oauth" && !this.isProviderConfigured("openai-oauth")) {
       throw new Error(
-        "LLM provider is set to codex-oauth, but no OAuth tokens are configured. Set CODEX_OAUTH_REFRESH_TOKEN or create data/codex-oauth-tokens.json."
+        "LLM provider is set to openai-oauth, but no OAuth tokens are configured. Set OPENAI_OAUTH_REFRESH_TOKEN or create data/openai-oauth-tokens.json."
       );
     }
     if ((desiredProvider === "codex-cli" || desiredProvider === "codex_cli_session") && !this.isProviderConfigured(desiredProvider)) {
@@ -648,8 +593,8 @@ export class LLMService {
 
     for (const provider of fallbackProviders) {
       if (!this.isProviderConfigured(provider)) continue;
-      const model = provider === "codex-oauth"
-        ? normalizeCodexOAuthModel(
+      const model = provider === "openai-oauth"
+        ? normalizeOpenAiOAuthModel(
             provider === desiredProvider && desiredModel
               ? desiredModel
               : this.resolveDefaultModel(provider)
@@ -664,13 +609,13 @@ export class LLMService {
     }
 
     throw new Error(
-      "No LLM provider available. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, XAI_API_KEY, CLAUDE_OAUTH_REFRESH_TOKEN, or CODEX_OAUTH_REFRESH_TOKEN."
+      "No LLM provider available. Add OPENAI_API_KEY, ANTHROPIC_API_KEY, XAI_API_KEY, CLAUDE_OAUTH_REFRESH_TOKEN, or OPENAI_OAUTH_REFRESH_TOKEN."
     );
   }
 
   isProviderConfigured(provider: string) {
     if (provider === "claude-oauth") return Boolean(this.claudeOAuth);
-    if (provider === "codex-oauth") return Boolean(this.codexOAuth);
+    if (provider === "openai-oauth") return Boolean(this.codexOAuth);
     if (provider === "codex-cli") return Boolean(this.codexCliAvailable);
     if (provider === "codex_cli_session") return Boolean(this.codexCliAvailable);
     if (provider === "anthropic") return Boolean(this.anthropic);
@@ -682,9 +627,9 @@ export class LLMService {
     if (provider === "claude-oauth") {
       return normalizeDefaultModel(this.appConfig?.defaultClaudeOAuthModel, "claude-sonnet-4-6");
     }
-    if (provider === "codex-oauth") {
-      return normalizeCodexOAuthModel(
-        normalizeDefaultModel(this.appConfig?.defaultCodexOAuthModel, "gpt-5.4")
+    if (provider === "openai-oauth") {
+      return normalizeOpenAiOAuthModel(
+        normalizeDefaultModel(this.appConfig?.defaultOpenAiOAuthModel, "gpt-5.4")
       );
     }
     if (provider === "codex-cli" || provider === "codex_cli_session") {

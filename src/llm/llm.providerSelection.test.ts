@@ -17,8 +17,8 @@ function createService(appConfig = {}, { logs = null } = {}) {
       defaultAnthropicModel: "claude-haiku-4-5",
       defaultXaiModel: "grok-3-mini-latest",
       defaultClaudeOAuthModel: "claude-sonnet-4-6",
-      codexOAuthRefreshToken: "",
-      defaultCodexOAuthModel: "gpt-5.4",
+      openaiOAuthRefreshToken: "",
+      defaultOpenAiOAuthModel: "gpt-5.4",
       defaultCodexCliModel: "gpt-5.4",
       ...appConfig
     },
@@ -66,25 +66,25 @@ test("resolveProviderAndModel keeps codex_cli_session provider when CLI is avail
   assert.deepEqual(resolved, { provider: "codex_cli_session", model: "gpt-5.4" });
 });
 
-test("resolveProviderAndModel throws when codex-oauth is selected but tokens are not configured", () => {
+test("resolveProviderAndModel throws when openai-oauth is selected but tokens are not configured", () => {
   const service = createService({ anthropicApiKey: "test-anthropic-key" });
   service.codexOAuth = null;
 
   assert.throws(
-    () => service.resolveProviderAndModel({ provider: "codex-oauth", model: "gpt-5.4" }),
-    /codex-oauth.*no OAuth tokens/i
+    () => service.resolveProviderAndModel({ provider: "openai-oauth", model: "gpt-5.4" }),
+    /openai-oauth.*no OAuth tokens/i
   );
 });
 
-test("resolveProviderAndModel keeps codex-oauth provider when configured", () => {
+test("resolveProviderAndModel keeps openai-oauth provider when configured", () => {
   const service = createService({ anthropicApiKey: "test-anthropic-key" });
   service.codexOAuth = {
     tokens: { refreshToken: "test", accessToken: "", idToken: "", expiresAt: 0, accountId: "acct_123" },
     client: {}
   } as never;
 
-  const resolved = service.resolveProviderAndModel({ provider: "codex-oauth", model: "gpt-5.4" });
-  assert.deepEqual(resolved, { provider: "codex-oauth", model: "gpt-5.4" });
+  const resolved = service.resolveProviderAndModel({ provider: "openai-oauth", model: "gpt-5.4" });
+  assert.deepEqual(resolved, { provider: "openai-oauth", model: "gpt-5.4" });
 });
 
 test("resolveProviderAndModel accepts standard model IDs for claude-oauth", () => {
@@ -95,7 +95,7 @@ test("resolveProviderAndModel accepts standard model IDs for claude-oauth", () =
   assert.deepEqual(resolved, { provider: "claude-oauth", model: "claude-haiku-4-5" });
 });
 
-test("resolveProviderAndModel remaps legacy codex model aliases for codex-oauth", () => {
+test("resolveProviderAndModel canonicalizes legacy codex-oauth provider strings", () => {
   const service = createService({ anthropicApiKey: "test-anthropic-key" });
   service.codexOAuth = {
     tokens: { refreshToken: "test", accessToken: "", idToken: "", expiresAt: 0, accountId: "acct_123" },
@@ -103,7 +103,7 @@ test("resolveProviderAndModel remaps legacy codex model aliases for codex-oauth"
   } as never;
 
   const resolved = service.resolveProviderAndModel({ provider: "codex-oauth", model: "gpt-5-codex" });
-  assert.deepEqual(resolved, { provider: "codex-oauth", model: "gpt-5.3-codex" });
+  assert.deepEqual(resolved, { provider: "openai-oauth", model: "gpt-5-codex" });
 });
 
 test("resolveDefaultModel uses claude-haiku-4-5 for anthropic fallback", () => {
@@ -644,57 +644,6 @@ test("generateStreaming falls back to batch generation for non-streaming provide
 
   assert.deepEqual(deltas, ["fallback batch reply"]);
   assert.equal(result.text, "fallback batch reply");
-});
-
-test("callOpenAiMemoryExtraction uses Responses JSON schema format", async () => {
-  const service = createService({
-    openaiApiKey: "test-openai-key"
-  });
-  let seenPayload = null;
-  service.openai = {
-    responses: {
-      async create(payload) {
-        seenPayload = payload;
-        return {
-          output_text: "{\"facts\":[]}",
-          usage: {
-            input_tokens: 9,
-            output_tokens: 2,
-            input_tokens_details: {
-              cached_tokens: 0
-            }
-          }
-        };
-      }
-    }
-  };
-
-  const result = await service.callOpenAiMemoryExtraction({
-    model: "claude-haiku-4-5",
-    systemPrompt: "extract durable facts only",
-    userPrompt: "user says they like sci-fi"
-  });
-
-  assert.equal(result.text, "{\"facts\":[]}");
-  assert.deepEqual(result.usage, {
-    inputTokens: 9,
-    outputTokens: 2,
-    cacheWriteTokens: 0,
-    cacheReadTokens: 0
-  });
-  assert.equal(seenPayload.max_output_tokens, 320);
-  assert.equal(seenPayload.instructions, "extract durable facts only");
-  assert.equal(seenPayload.text?.format?.type, "json_schema");
-  assert.equal(seenPayload.text?.format?.name, "memory_fact_extraction");
-  assert.equal(seenPayload.text?.format?.strict, true);
-  assert.deepEqual(
-    seenPayload.text?.format?.schema?.properties?.facts?.items?.properties?.subject?.enum,
-    ["author", "bot", "lore"]
-  );
-  assert.deepEqual(
-    seenPayload.text?.format?.schema?.properties?.facts?.items?.required,
-    ["subject", "fact", "type", "confidence", "evidence"]
-  );
 });
 
 test("chatWithTools supports OpenAI function-call loops", async () => {

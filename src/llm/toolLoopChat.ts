@@ -133,12 +133,12 @@ export async function chatWithTools(
       cacheWriteTokens: Number(response.usage?.cache_creation_input_tokens || 0),
       cacheReadTokens: Number(response.usage?.cache_read_input_tokens || 0)
     };
-  } else if (resolvedProvider === "openai" || resolvedProvider === "codex-oauth") {
-    const openAiClient = resolvedProvider === "codex-oauth" ? deps.codexOAuthClient : deps.openai;
+  } else if (resolvedProvider === "openai" || resolvedProvider === "openai-oauth") {
+    const openAiClient = resolvedProvider === "openai-oauth" ? deps.codexOAuthClient : deps.openai;
     if (!openAiClient) {
       throw new Error(
-        resolvedProvider === "codex-oauth"
-          ? "chatWithTools requires CODEX_OAUTH_REFRESH_TOKEN."
+        resolvedProvider === "openai-oauth"
+          ? "chatWithTools requires OPENAI_OAUTH_REFRESH_TOKEN."
           : "chatWithTools requires OPENAI_API_KEY."
       );
     }
