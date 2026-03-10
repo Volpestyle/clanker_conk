@@ -117,3 +117,52 @@ test("executeVoiceMemoryWriteTool rejects abusive future-behavior memory request
   assert.equal(result?.skipped?.[0]?.reason, "instruction_like");
   assert.equal(memoryWriteCalls, 0);
 });
+
+test("executeVoiceMemoryWriteTool invalidates the session behavioral cache after a write", async () => {
+  const manager = createVoiceTestManager({
+    memory: {
+      async searchDurableFacts() {
+        return [];
+      },
+      async rememberDirectiveLineDetailed(payload) {
+        return {
+          ok: true,
+          reason: "added_new",
+          factText: String(payload?.line || "")
+        };
+      }
+    }
+  });
+
+  const session = {
+    id: "session-memory-write-invalidate-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    lastRealtimeToolCallerUserId: "speaker-1",
+    memoryWriteWindow: [],
+    behavioralFactCache: {
+      guildId: "guild-1",
+      participantKey: "speaker-1",
+      loadedAt: Date.now(),
+      facts: []
+    }
+  };
+
+  const result = await executeVoiceMemoryWriteTool(manager, {
+    session,
+    settings: createVoiceTestSettings({
+      memory: {
+        enabled: true
+      }
+    }),
+    args: {
+      namespace: "speaker",
+      items: [{ text: "Always greet me in Spanish.", type: "behavioral" }]
+    }
+  });
+
+  assert.equal(result?.ok, true);
+  assert.equal(session.behavioralFactCache, null);
+});

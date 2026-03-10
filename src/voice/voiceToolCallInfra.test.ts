@@ -76,7 +76,7 @@ test("refreshRealtimeTools registers local and MCP tool definitions", async () =
   const toolNames = Array.isArray(updatedToolsPayload?.tools)
     ? updatedToolsPayload.tools.map((entry) => entry?.name)
     : [];
-  assert.equal(toolNames.includes("memory_search"), true);
+  assert.equal(toolNames.includes("memory_search"), false);
   assert.equal(toolNames.includes("memory_write"), true);
   assert.equal(toolNames.includes("music_search"), true);
   assert.equal(toolNames.includes("music_play"), true);

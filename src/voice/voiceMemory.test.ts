@@ -46,9 +46,9 @@ function createManager({ memory = null }: { memory?: unknown } = {}) {
   return { manager, logs, recordedMessages };
 }
 
-// --- Fix 1: Memory tools gated by settings.memory.enabled ---
+// --- Fix 1: Durable memory write tool gated by settings.memory.enabled ---
 
-test("memory tools excluded when settings.memory.enabled is false", () => {
+test("voice durable memory write tool is excluded when settings.memory.enabled is false", () => {
   const { manager } = createManager();
   const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
@@ -56,11 +56,10 @@ test("memory tools excluded when settings.memory.enabled is false", () => {
   });
 
   const names = tools.map((t: { name: string }) => t.name);
-  assert.ok(!names.includes("memory_search"), "memory_search should be excluded");
   assert.ok(!names.includes("memory_write"), "memory_write should be excluded");
 });
 
-test("memory tools included when settings.memory.enabled is true", () => {
+test("voice durable memory write tool is included when settings.memory.enabled is true", () => {
   const { manager } = createManager();
   const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
@@ -71,11 +70,10 @@ test("memory tools included when settings.memory.enabled is true", () => {
   });
 
   const names = tools.map((t: { name: string }) => t.name);
-  assert.ok(names.includes("memory_search"), "memory_search should be included");
   assert.ok(names.includes("memory_write"), "memory_write should be included");
 });
 
-test("memory tools stay disabled when durable memory is disabled", () => {
+test("voice durable memory write stays disabled when durable memory is disabled", () => {
   const { manager } = createManager();
   const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
@@ -86,11 +84,10 @@ test("memory tools stay disabled when durable memory is disabled", () => {
   });
 
   const names = tools.map((t: { name: string }) => t.name);
-  assert.ok(!names.includes("memory_search"), "memory_search should be excluded");
   assert.ok(!names.includes("memory_write"), "memory_write should be excluded");
 });
 
-test("memory tools remain available when memory is enabled", () => {
+test("voice durable memory write remains available when memory is enabled", () => {
   const { manager } = createManager();
   const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
@@ -101,11 +98,10 @@ test("memory tools remain available when memory is enabled", () => {
   });
 
   const names = tools.map((t: { name: string }) => t.name);
-  assert.ok(names.includes("memory_search"), "memory_search should be included");
   assert.ok(names.includes("memory_write"), "memory_write should be included");
 });
 
-test("memory tools fall back to canonical defaults when settings is null", () => {
+test("voice durable memory write falls back to canonical defaults when settings is null", () => {
   const { manager } = createManager();
   const tools = resolveVoiceRealtimeToolDescriptors(manager, {
     session: null,
@@ -113,7 +109,6 @@ test("memory tools fall back to canonical defaults when settings is null", () =>
   });
 
   const names = tools.map((t: { name: string }) => t.name);
-  assert.ok(names.includes("memory_search"), "memory_search should be included");
   assert.ok(names.includes("memory_write"), "memory_write should be included");
 });
 
@@ -128,7 +123,7 @@ test("web_search excluded when settings.webSearch.enabled is false", () => {
 
   const names = tools.map((t: { name: string }) => t.name);
   assert.ok(!names.includes("web_search"), "web_search should be excluded");
-  assert.ok(names.includes("memory_search"), "memory_search should still be included");
+  assert.ok(names.includes("memory_write"), "memory_write should still be included");
 });
 
 test("web_search included when settings.webSearch.enabled is true", () => {
@@ -210,7 +205,7 @@ test("assistant voice turns are persisted into searchable message history", () =
 
 // --- Fix 3: Pending ingestion awaited before memory slice ---
 
-test("pending ingestion is awaited before memory slice lookup", async () => {
+test("pending ingestion clears itself after completion", async () => {
   const events: string[] = [];
 
   let resolveIngest: () => void;
@@ -251,13 +246,7 @@ test("pending ingestion is awaited before memory slice lookup", async () => {
   // Now resolve the ingest (simulating async completion)
   resolveIngest!();
 
-  // buildRealtimeMemorySlice should drain the pending ingestion first
-  await manager.instructionManager.buildRealtimeMemorySlice({
-    session,
-    settings: { memory: { enabled: true } },
-    userId: "user-1",
-    transcript: "what do you know about me"
-  });
+  await session.pendingMemoryIngest;
 
-  assert.equal(session.pendingMemoryIngest, null, "pendingMemoryIngest should be cleared after drain");
+  assert.equal(session.pendingMemoryIngest, null, "pendingMemoryIngest should be cleared after completion");
 });

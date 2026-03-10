@@ -1,10 +1,10 @@
 import {
-  executeSharedMemoryToolSearch,
   executeSharedMemoryToolWrite
 } from "../memory/memoryToolRuntime.ts";
 import { clamp } from "../utils.ts";
 import { MEMORY_SENSITIVE_PATTERN_RE, VOICE_MEMORY_WRITE_MAX_PER_MINUTE } from "./voiceSessionManager.constants.ts";
 import { normalizeInlineText } from "./voiceSessionHelpers.ts";
+import { invalidateSessionBehavioralMemoryCache } from "./voiceSessionMemoryCache.ts";
 import { ensureSessionToolRuntimeState } from "./voiceToolCallToolRegistry.ts";
 import { throwIfAborted } from "../tools/browserTaskRuntime.ts";
 import type { VoiceRealtimeToolSettings, VoiceSession, VoiceToolRuntimeSessionLike } from "./voiceSessionTypes.ts";
@@ -30,36 +30,6 @@ type VoiceConversationSearchToolOptions = {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : null;
-}
-
-export async function executeVoiceMemorySearchTool(
-  manager: VoiceToolCallManager,
-  { session, settings, args, signal }: VoiceMemoryToolOptions
-) {
-  throwIfAborted(signal, "Voice memory search cancelled");
-  const filters = asRecord(args?.filters);
-  if (!manager.memory || typeof manager.memory.searchDurableFacts !== "function") {
-    return { ok: false, matches: [], error: "memory_unavailable" };
-  }
-  return executeSharedMemoryToolSearch({
-    runtime: { memory: manager.memory },
-    settings,
-    guildId: String(session?.guildId || "").trim(),
-    channelId: session?.textChannelId || null,
-    actorUserId: session?.lastRealtimeToolCallerUserId || null,
-    namespace: args?.namespace,
-    queryText: normalizeInlineText(args?.query, 240),
-    trace: {
-      guildId: session?.guildId || null,
-      channelId: session?.textChannelId || null,
-      userId: session?.lastRealtimeToolCallerUserId || null,
-      source: "voice_realtime_tool_memory_search"
-    },
-    limit: clamp(Math.floor(Number(args?.top_k || 6)), 1, 20),
-    tags: Array.isArray(filters?.tags)
-      ? filters.tags.map((entry) => normalizeInlineText(entry, 40)).filter(Boolean)
-      : []
-  });
 }
 
 export async function executeVoiceConversationSearchTool(
@@ -180,6 +150,7 @@ export async function executeVoiceMemoryWriteTool(
       if (subject === SELF_SUBJECT || subject === LORE_SUBJECT) continue;
       manager.refreshSessionUserFactProfile?.(runtimeSession as VoiceSession, subject);
     }
+    invalidateSessionBehavioralMemoryCache(runtimeSession);
   }
 
   return result;

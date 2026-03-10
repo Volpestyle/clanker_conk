@@ -748,6 +748,8 @@ export async function requestJoin(manager, { message, settings, intentConfidence
         mcpStatus: getVoiceMcpServerStatuses(manager),
         toolMusicTrackCatalog: new Map(),
         memoryWriteWindow: [],
+        behavioralFactCache: null,
+        conversationHistoryCaches: null,
         ...(realtimeToolOwnership === "provider_native"
           ? {
               realtimePendingToolCalls: new Map(),

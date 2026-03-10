@@ -174,9 +174,9 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
       },
       realtimeToolDefinitions: [
         {
-          name: "memory_search",
+          name: "memory_write",
           toolType: "function",
-          description: "Search memory"
+          description: "Write durable memory"
         },
         {
           name: "lookup_docs",
@@ -188,9 +188,9 @@ test("buildVoiceRuntimeSnapshot captures rich realtime and file-ASR session stat
       toolCallEvents: [
         {
           callId: "call-1",
-          toolName: "memory_search",
+          toolName: "memory_write",
           toolType: "function",
-          arguments: { query: "hey" },
+          arguments: { namespace: "speaker", items: [{ text: "prefers short replies" }] },
           startedAt: "2026-03-06T17:59:50.000Z",
           completedAt: "2026-03-06T17:59:51.000Z",
           runtimeMs: 101.2,
@@ -643,17 +643,17 @@ test("buildVoiceRuntimeSnapshot hides native tool registry in transport-only ses
         realtimeToolOwnership: "transport_only",
         realtimeToolDefinitions: [
           {
-            name: "memory_search",
+            name: "memory_write",
             toolType: "function",
-            description: "Search memory"
+            description: "Write durable memory"
           }
         ],
         toolCallEvents: [
           {
             callId: "call-1",
-            toolName: "memory_search",
+            toolName: "memory_write",
             toolType: "function",
-            arguments: { query: "hey" },
+            arguments: { namespace: "speaker", items: [{ text: "prefers short replies" }] },
             startedAt: "2026-03-06T17:59:50.000Z",
             completedAt: "2026-03-06T17:59:51.000Z",
             runtimeMs: 101.2,

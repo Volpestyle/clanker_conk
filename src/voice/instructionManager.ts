@@ -23,7 +23,12 @@ import {
   normalizeVoiceText
 } from "./voiceSessionHelpers.ts";
 import {
+  loadSessionBehavioralMemoryFacts,
+  loadSessionConversationHistory
+} from "./voiceSessionMemoryCache.ts";
+import {
   buildVoiceInstructions,
+  isTransportOnlySession,
   shouldHandleRealtimeFunctionCalls,
   shouldRegisterRealtimeTools
 } from "./voiceConfigResolver.ts";
@@ -316,12 +321,15 @@ export class InstructionManager {
     if (!providerSupports(session.mode || "", "updateInstructions")) return;
 
     const normalizedTranscript = normalizeVoiceText(transcript, REALTIME_CONTEXT_TRANSCRIPT_MAX_CHARS);
-    const memorySlice = await this.buildRealtimeMemorySlice({
-      session,
-      settings,
-      userId,
-      transcript: normalizedTranscript
-    });
+    const transportOnly = isTransportOnlySession({ session, settings });
+    const memorySlice = transportOnly
+      ? null
+      : await this.buildRealtimeMemorySlice({
+          session,
+          settings,
+          userId,
+          transcript: normalizedTranscript
+        });
 
     await this.refreshRealtimeInstructions({
       session,
@@ -365,12 +373,43 @@ export class InstructionManager {
       try {
         await session.pendingMemoryIngest;
       } catch {
-        // Best effort. Fresh instructions are still more useful than failing the turn.
+        // Best effort — fresh instructions are still more useful than failing the turn.
       }
       session.pendingMemoryIngest = null;
     }
 
     const normalizedUserId = String(userId || "").trim() || null;
+    const memoryLoadStartedAt = Date.now();
+    const loadRecentConversationHistory =
+      this.store.searchConversationWindows
+        ? (payload: {
+          guildId: string;
+          channelId?: string | null;
+          queryText: string;
+          limit?: number;
+          maxAgeHours?: number;
+        }) =>
+          loadSessionConversationHistory({
+            session,
+            loadRecentConversationHistory: ({ guildId, channelId, queryText, limit, maxAgeHours }) =>
+              (this.store.searchConversationWindows?.({
+                guildId,
+                channelId,
+                queryText,
+                limit,
+                maxAgeHours,
+                before: 1,
+                after: 1
+              }) || []),
+            strategy: "lexical",
+            guildId: String(payload.guildId || "").trim(),
+            channelId: String(payload.channelId || "").trim() || null,
+            queryText: String(payload.queryText || ""),
+            limit: Number(payload.limit) || 1,
+            maxAgeHours: Number(payload.maxAgeHours) || 1
+          })
+        : null;
+    const continuityStartedAt = Date.now();
     const continuity = await loadConversationContinuityContext({
       settings,
       userId: normalizedUserId,
@@ -402,20 +441,9 @@ export class InstructionManager {
               maxAgeHours: Number(payload.maxAgeHours) || undefined
             }) || [])
           : null,
-      loadRecentConversationHistory:
-        this.store.searchConversationWindows
-          ? (payload) =>
-            (this.store.searchConversationWindows?.({
-              guildId: String(payload.guildId || "").trim(),
-              channelId: String(payload.channelId || "").trim() || null,
-              queryText: String(payload.queryText || ""),
-              limit: Number(payload.limit) || undefined,
-              maxAgeHours: Number(payload.maxAgeHours) || undefined,
-              before: 1,
-              after: 1
-            }) || [])
-          : null
+      loadRecentConversationHistory
     });
+    const continuityLoadMs = Math.max(0, Date.now() - continuityStartedAt);
     const guidanceFacts = Array.isArray(continuity.memorySlice?.guidanceFacts)
       ? continuity.memorySlice.guidanceFacts
       : [];
@@ -424,7 +452,27 @@ export class InstructionManager {
           .map((entry) => String((entry as Record<string, unknown>)?.userId || "").trim())
           .filter(Boolean)
       : [];
-    const behavioralFacts =
+    const behavioralStartedAt = Date.now();
+    const cachedBehavioralFacts = await loadSessionBehavioralMemoryFacts({
+      session,
+      searchDurableFacts:
+        typeof this.host.memory?.searchDurableFacts === "function"
+          ? (payload) => this.host.memory.searchDurableFacts(payload)
+          : null,
+      guildId: String(session.guildId || "").trim(),
+      channelId: String(session.textChannelId || "").trim() || null,
+      queryText: normalizedTranscript,
+      participantIds,
+      settings,
+      trace: {
+        guildId: session.guildId,
+        channelId: session.textChannelId,
+        userId: normalizedUserId,
+        source: "voice_realtime_behavioral_memory:instruction_refresh"
+      },
+      limit: 8
+    });
+    const behavioralFacts = cachedBehavioralFacts ?? (
       typeof this.host.memory?.loadBehavioralFactsForPrompt === "function"
         ? await this.host.memory.loadBehavioralFactsForPrompt({
             guildId: String(session.guildId || "").trim(),
@@ -436,11 +484,48 @@ export class InstructionManager {
               guildId: session.guildId,
               channelId: session.textChannelId,
               userId: normalizedUserId,
-              source: "voice_realtime_behavioral_memory"
+              source: "voice_realtime_behavioral_memory:instruction_refresh"
             },
             limit: 8
           })
-        : [];
+        : []
+    );
+    const behavioralMemoryLoadMs = Math.max(0, Date.now() - behavioralStartedAt);
+    const usedCachedBehavioralFacts = Array.isArray(cachedBehavioralFacts);
+    const totalLoadMs = Math.max(0, Date.now() - memoryLoadStartedAt);
+    this.store.logAction({
+      kind: "voice_runtime",
+      guildId: session.guildId,
+      channelId: session.textChannelId,
+      userId: normalizedUserId || this.host.client.user?.id || null,
+      content: "voice_realtime_instruction_memory_loaded",
+      metadata: {
+        sessionId: session.id,
+        memorySource: "voice_realtime_instruction_context",
+        transcriptChars: normalizedTranscript.length,
+        continuityLoadMs,
+        behavioralMemoryLoadMs,
+        totalLoadMs,
+        usedCachedBehavioralFacts,
+        participantProfileCount: Array.isArray(continuity.memorySlice?.participantProfiles)
+          ? continuity.memorySlice.participantProfiles.length
+          : 0,
+        userFactCount: Array.isArray(continuity.memorySlice?.userFacts)
+          ? continuity.memorySlice.userFacts.length
+          : 0,
+        relevantFactCount: Array.isArray(continuity.memorySlice?.relevantFacts)
+          ? continuity.memorySlice.relevantFacts.length
+          : 0,
+        guidanceFactCount: guidanceFacts.length,
+        behavioralFactCount: Array.isArray(behavioralFacts) ? behavioralFacts.length : 0,
+        recentWebLookupCount: Array.isArray(continuity.recentWebLookups)
+          ? continuity.recentWebLookups.length
+          : 0,
+        recentConversationHistoryCount: Array.isArray(continuity.recentConversationHistory)
+          ? continuity.recentConversationHistory.length
+          : 0
+      }
+    });
     return {
       participantProfiles: Array.isArray(continuity.memorySlice?.participantProfiles)
         ? continuity.memorySlice.participantProfiles

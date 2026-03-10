@@ -2,7 +2,6 @@ import { clamp } from "../utils.ts";
 import { executeVoiceBrowserBrowseTool, executeVoiceCodeTaskTool } from "./voiceToolCallAgents.ts";
 import {
   executeVoiceConversationSearchTool,
-  executeVoiceMemorySearchTool,
   executeVoiceMemoryWriteTool
 } from "./voiceToolCallMemory.ts";
 import {
@@ -124,8 +123,6 @@ export async function executeLocalVoiceToolCall(manager: VoiceToolCallManager, o
   }
 
   switch (normalizedToolName) {
-    case "memory_search":
-      return executeVoiceMemorySearchTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
     case "memory_write":
       return executeVoiceMemoryWriteTool(manager, { session: opts.session, settings: opts.settings, args: opts.args, signal: opts.signal });
     case "conversation_search":

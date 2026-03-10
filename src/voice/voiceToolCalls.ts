@@ -24,7 +24,6 @@ export { executeLocalVoiceToolCall, executeMcpVoiceToolCall } from "./voiceToolC
 
 export {
   executeVoiceConversationSearchTool,
-  executeVoiceMemorySearchTool,
   executeVoiceMemoryWriteTool
 } from "./voiceToolCallMemory.ts";
 

@@ -38,11 +38,18 @@ import {
 } from "../llm/serviceShared.ts";
 import type { VoiceReplyRuntime } from "./botContext.ts";
 import { SentenceAccumulator } from "../voice/sentenceAccumulator.ts";
+import {
+  invalidateSessionBehavioralMemoryCache,
+  loadSessionBehavioralMemoryFacts,
+  loadSessionConversationHistory
+} from "../voice/voiceSessionMemoryCache.ts";
 
 const OPEN_ARTICLE_MAX_CANDIDATES = 12;
 const OPEN_ARTICLE_ROW_LIMIT = 4;
 const OPEN_ARTICLE_RESULTS_PER_ROW = 5;
 const SESSION_DURABLE_CONTEXT_MAX_ENTRIES = 50;
+const SELF_SUBJECT = "__self__";
+const LORE_SUBJECT = "__lore__";
 
 type SessionDurableContextCategory = "fact" | "plan" | "preference" | "relationship";
 
@@ -464,7 +471,30 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     })
     .filter(Boolean)
     .slice(-6);
+  const loadRecentConversationHistory =
+    typeof runtime.loadRecentConversationHistory === "function"
+      ? (payload: {
+        guildId: string;
+        channelId?: string | null;
+        queryText: string;
+        limit: number;
+        maxAgeHours: number;
+      }) =>
+        activeVoiceSession
+          ? loadSessionConversationHistory({
+            session: activeVoiceSession,
+            loadRecentConversationHistory: runtime.loadRecentConversationHistory,
+            strategy: "semantic",
+            guildId: String(payload.guildId || "").trim(),
+            channelId: String(payload.channelId || "").trim() || null,
+            queryText: String(payload.queryText || ""),
+            limit: Number(payload.limit) || 1,
+            maxAgeHours: Number(payload.maxAgeHours) || 1
+          })
+          : runtime.loadRecentConversationHistory(payload)
+      : null;
 
+  const continuityStartedAt = Date.now();
   const continuity = await loadConversationContinuityContext({
     settings,
     userId,
@@ -496,32 +526,102 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       typeof runtime.loadRecentLookupContext === "function"
         ? (payload) => runtime.loadRecentLookupContext(payload)
         : null,
-    loadRecentConversationHistory:
-      typeof runtime.loadRecentConversationHistory === "function"
-        ? (payload) => runtime.loadRecentConversationHistory(payload)
-        : null,
+    loadRecentConversationHistory,
   });
+  const continuityLoadMs = Math.max(0, Date.now() - continuityStartedAt);
   const promptMemorySlice = normalizeFactProfileSlice(continuity.memorySlice);
   const recentWebLookups = continuity.recentWebLookups;
   const recentConversationHistory = continuity.recentConversationHistory;
-  const behavioralFacts = await loadBehavioralMemoryFacts(runtime, {
+  const participantIds =
+    Array.isArray(promptMemorySlice.participantProfiles)
+      ? promptMemorySlice.participantProfiles
+          .map((entry) => String(entry?.userId || "").trim())
+          .filter(Boolean)
+      : [];
+  const behavioralStartedAt = Date.now();
+  const cachedBehavioralFacts =
+    activeVoiceSession
+      ? await loadSessionBehavioralMemoryFacts({
+        session: activeVoiceSession,
+        searchDurableFacts:
+          typeof runtime.memory?.searchDurableFacts === "function"
+            ? (payload) => runtime.memory.searchDurableFacts(payload)
+            : null,
+        rankBehavioralFacts:
+          typeof runtime.memory?.rankHybridCandidates === "function"
+            ? async ({ candidates, queryText, channelId, settings, trace, limit }) => {
+              const ranked = await runtime.memory.rankHybridCandidates({
+                candidates,
+                queryText,
+                settings,
+                trace,
+                channelId,
+                requireRelevanceGate: true
+              });
+              const boundedLimit = Math.max(1, Math.min(12, Math.floor(Number(limit) || 8)));
+              return Array.isArray(ranked) ? ranked.slice(0, boundedLimit) : [];
+            }
+            : null,
+        settings,
+        guildId,
+        channelId,
+        queryText: incomingTranscript,
+        participantIds,
+        trace: {
+          guildId,
+          channelId,
+          userId,
+          source: "voice_realtime_behavioral_memory:generation"
+        },
+        limit: 8
+      })
+      : null;
+  const behavioralFacts = cachedBehavioralFacts ?? await loadBehavioralMemoryFacts(runtime, {
     settings,
     guildId,
     channelId,
     queryText: incomingTranscript,
-    participantIds:
-      Array.isArray(promptMemorySlice.participantProfiles)
-        ? promptMemorySlice.participantProfiles
-            .map((entry) => String(entry?.userId || "").trim())
-            .filter(Boolean)
-        : [],
+    participantIds,
     trace: {
       guildId,
       channelId,
       userId,
-      source: "voice_realtime_behavioral_memory"
+      source: "voice_realtime_behavioral_memory:generation"
     },
     limit: 8
+  });
+  const behavioralMemoryLoadMs = Math.max(0, Date.now() - behavioralStartedAt);
+  const totalMemoryLoadMs = Math.max(0, Date.now() - continuityStartedAt);
+  runtime.store.logAction({
+    kind: "voice_runtime",
+    guildId,
+    channelId,
+    userId,
+    content: "voice_generation_memory_loaded",
+    metadata: {
+      sessionId: sessionId || null,
+      memorySource: "voice_realtime_generation",
+      transcriptChars: incomingTranscript.length,
+      continuityLoadMs,
+      behavioralMemoryLoadMs,
+      totalLoadMs: totalMemoryLoadMs,
+      usedCachedBehavioralFacts: Array.isArray(cachedBehavioralFacts),
+      participantProfileCount: Array.isArray(promptMemorySlice.participantProfiles)
+        ? promptMemorySlice.participantProfiles.length
+        : 0,
+      userFactCount: Array.isArray(promptMemorySlice.userFacts) ? promptMemorySlice.userFacts.length : 0,
+      relevantFactCount: Array.isArray(promptMemorySlice.relevantFacts)
+        ? promptMemorySlice.relevantFacts.length
+        : 0,
+      guidanceFactCount: Array.isArray(promptMemorySlice.guidanceFacts)
+        ? promptMemorySlice.guidanceFacts.length
+        : 0,
+      behavioralFactCount: Array.isArray(behavioralFacts) ? behavioralFacts.length : 0,
+      recentWebLookupCount: Array.isArray(recentWebLookups) ? recentWebLookups.length : 0,
+      recentConversationHistoryCount: Array.isArray(recentConversationHistory)
+        ? recentConversationHistory.length
+        : 0
+    }
   });
 
   const voiceGenerationBinding = getResolvedVoiceGenerationBinding(settings);
@@ -1036,6 +1136,30 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
         if (toolCall.name === "leave_voice_channel" && !result.isError) {
           const toolPayload = parseReplyToolResultPayload(result.content);
           leaveVoiceChannelRequested = leaveVoiceChannelRequested || Boolean(toolPayload?.ok);
+        }
+        if (toolCall.name === "memory_write" && !result.isError && activeVoiceSession) {
+          const toolPayload = parseReplyToolResultPayload(result.content);
+          const writtenEntries = Array.isArray(toolPayload?.written) ? toolPayload.written : [];
+          if (toolPayload?.ok !== false && writtenEntries.length > 0) {
+            invalidateSessionBehavioralMemoryCache(activeVoiceSession);
+            const writtenSubjects = new Set(
+              writtenEntries
+                .map((entry) => String(entry?.subject || "").trim())
+                .filter(Boolean)
+            );
+            if (
+              typeof runtime.voiceSessionManager?.refreshSessionGuildFactProfile === "function" &&
+              (writtenSubjects.has(SELF_SUBJECT) || writtenSubjects.has(LORE_SUBJECT))
+            ) {
+              runtime.voiceSessionManager.refreshSessionGuildFactProfile(activeVoiceSession);
+            }
+            if (typeof runtime.voiceSessionManager?.refreshSessionUserFactProfile === "function") {
+              for (const subject of writtenSubjects) {
+                if (subject === SELF_SUBJECT || subject === LORE_SUBJECT) continue;
+                runtime.voiceSessionManager.refreshSessionUserFactProfile(activeVoiceSession, subject);
+              }
+            }
+          }
         }
 
         if (shouldRequestVoiceToolFollowup(toolCall.name, { hasSpokenText: generationHasSpokenText })) {

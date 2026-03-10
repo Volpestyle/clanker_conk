@@ -94,6 +94,18 @@ export function resolveRealtimeToolOwnership({
   return "transport_only";
 }
 
+export function isTransportOnlySession({
+  session = null,
+  settings = null,
+  mode = null
+}: {
+  session?: VoiceConfigSessionLike;
+  settings?: VoiceConfigSettings;
+  mode?: string | null;
+} = {}): boolean {
+  return resolveRealtimeToolOwnership({ session, settings, mode }) === "transport_only";
+}
+
 export function shouldRegisterRealtimeTools({
   session = null,
   settings = null,

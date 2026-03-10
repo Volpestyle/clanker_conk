@@ -1316,9 +1316,9 @@ test("generateVoiceTurnReply logs voice errors when generation fails", async () 
   });
 
   assert.deepEqual(reply, { text: "", generationContextSnapshot: null });
-  assert.equal(logs.length, 1);
-  assert.equal(logs[0]?.kind, "voice_error");
-  assert.equal(String(logs[0]?.content || "").includes("voice_stt_generation_failed"), true);
+  const errorLogs = logs.filter((entry) => entry?.kind === "voice_error");
+  assert.equal(errorLogs.length, 1);
+  assert.equal(String(errorLogs[0]?.content || "").includes("voice_stt_generation_failed"), true);
 });
 
 test("generateVoiceTurnReply treats aborted generation as a supersede, not a voice error", async () => {
@@ -1335,7 +1335,7 @@ test("generateVoiceTurnReply treats aborted generation as a supersede, not a voi
   });
 
   assert.deepEqual(reply, { text: "", generationContextSnapshot: null });
-  assert.equal(logs.length, 0);
+  assert.equal(logs.some((entry) => entry?.kind === "voice_error"), false);
 });
 
 test("generateVoiceTurnReply treats Anthropic-style aborted generation as a supersede, not a voice error", async () => {
@@ -1354,7 +1354,7 @@ test("generateVoiceTurnReply treats Anthropic-style aborted generation as a supe
   });
 
   assert.deepEqual(reply, { text: "", generationContextSnapshot: null });
-  assert.equal(logs.length, 0);
+  assert.equal(logs.some((entry) => entry?.kind === "voice_error"), false);
 });
 
 test("generateVoiceTurnReply uses voice generation llm provider/model instead of text llm provider/model", async () => {

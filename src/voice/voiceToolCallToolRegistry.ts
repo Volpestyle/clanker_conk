@@ -12,7 +12,6 @@ import {
   CONVERSATION_SEARCH_SCHEMA,
   LEAVE_VOICE_CHANNEL_SCHEMA,
   OFFER_SCREEN_SHARE_LINK_SCHEMA,
-  MEMORY_SEARCH_SCHEMA,
   MEMORY_WRITE_SCHEMA,
   MUSIC_NOW_PLAYING_SCHEMA,
   MUSIC_PAUSE_SCHEMA,
@@ -43,7 +42,6 @@ type ToolRuntimeSession = VoiceSession | VoiceToolRuntimeSessionLike;
 type RealtimeToolExportTarget = string;
 
 const BASE_REALTIME_TOOL_SCHEMAS = [
-  MEMORY_SEARCH_SCHEMA,
   MEMORY_WRITE_SCHEMA,
   CONVERSATION_SEARCH_SCHEMA,
   MUSIC_SEARCH_SCHEMA,
@@ -69,7 +67,7 @@ function shouldIncludeLocalRealtimeTool(name: string, options: {
   includeWebSearch: boolean;
 }) {
   if ((name === "web_search" || name === "web_scrape") && !options.includeWebSearch) return false;
-  if ((name === "memory_search" || name === "memory_write") && !options.includeMemory) return false;
+  if (name === "memory_write" && !options.includeMemory) return false;
   if (name === "browser_browse" && !options.includeBrowser) return false;
   if (name === "code_task" && !options.includeCodeAgent) return false;
   return true;

@@ -324,6 +324,17 @@ export interface VoiceReplyRuntime extends BotContext {
       requestText?: string;
       mustNotify?: boolean;
     }) => Promise<unknown>;
+    refreshSessionGuildFactProfile?: (session: {
+      durableContext?: VoiceSessionDurableContextEntry[];
+      inFlightAcceptedBrainTurn?: InFlightAcceptedBrainTurn | null;
+    } | null) => void;
+    refreshSessionUserFactProfile?: (
+      session: {
+        durableContext?: VoiceSessionDurableContextEntry[];
+        inFlightAcceptedBrainTurn?: InFlightAcceptedBrainTurn | null;
+      } | null,
+      userId: string
+    ) => void;
   } | null;
   loadRelevantMemoryFacts: StripFirstArg<LoadRelevantMemoryFactsFn>;
   buildMediaMemoryFacts: BuildMediaMemoryFactsFn;

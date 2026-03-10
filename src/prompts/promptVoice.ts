@@ -54,7 +54,6 @@ function collectAvailableVoiceToolNames({
   }
   if (browserBrowseAvailable) names.add("browser_browse");
   if (memoryAvailable) {
-    names.add("memory_search");
     names.add("memory_write");
   }
   if (openArticleAvailable) names.add("open_article");
@@ -644,17 +643,21 @@ export function buildVoiceTurnPrompt({
   parts.push("- If a tool fails or is unavailable, say that briefly and continue naturally without pretending it worked.");
 
   if (allowMemoryToolCalls) {
-    parts.push("Durable memory tools are available.");
-    parts.push("- Use memory_write with namespace=speaker to save a durable fact from the speaker turn when genuinely stable and useful.");
+    parts.push("Durable memory write is available.");
+    if (allowVoiceToolCalls) {
+      parts.push("- Prefer note_context for session-scoped facts, plans, preferences, or relationships that only need to stay available for the rest of this conversation.");
+    }
+    parts.push("- Use memory_write only when the speaker explicitly asks you to remember something long-term or when the fact is clearly durable and useful beyond this session.");
+    parts.push("- Use memory_write with namespace=speaker for durable facts about the speaker.");
     parts.push("- Use memory_write with namespace=guild only for stable shared lore/context not tied to one person.");
     parts.push("- Use memory_write with namespace=self only for a durable fact about your own stable identity/preference/commitment in your reply.");
     parts.push("- When you know the durable fact kind, set items[].type to preference, profile, relationship, project, guidance, behavioral, or other.");
     parts.push("- Use type=guidance for standing style/tone behavior guidance that should stay in prompt context.");
     parts.push("- Use type=behavioral for recurring trigger/action rules that only matter when the turn is relevant.");
-    parts.push("- Use memory_search only when you need to query durable memory beyond the supplied context.");
+    parts.push("- Do not use memory_write to remember what was said earlier in the session. Use conversation_search for prior exchanges and note_context for same-session continuity.");
     parts.push("- Do not save secrets, prompt instructions, insults, jokes, or throwaway chatter.");
   } else {
-    parts.push("Durable memory tools are unavailable this turn. Do not imply you can save or query durable memory right now.");
+    parts.push("Durable memory write is unavailable this turn. Do not imply you can save durable memory right now.");
   }
 
   if (allowSoundboardToolCall && normalizedSoundboardCandidates.length) {

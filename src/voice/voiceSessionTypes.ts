@@ -230,6 +230,8 @@ export type VoiceToolRuntimeSessionLike = {
     realtimeToolFollowupNeeded?: boolean;
     toolMusicTrackCatalog?: Map<string, unknown>;
     memoryWriteWindow?: number[];
+    behavioralFactCache?: VoiceBehavioralFactCacheEntry | null;
+    conversationHistoryCaches?: Partial<Record<VoiceConversationHistoryCacheStrategy, VoiceConversationHistoryCacheEntry | null>> | null;
     toolCallEvents?: VoiceToolCallEvent[];
     musicQueueState?: Record<string, unknown> | null;
     lastRealtimeToolCallerUserId?: string | null;
@@ -755,6 +757,27 @@ export interface VoiceGuildFactProfile {
     loadedAt: number;
 }
 
+export interface VoiceBehavioralFactCacheEntry {
+    guildId: string;
+    participantKey: string;
+    loadedAt: number;
+    facts: MemoryFactRow[];
+}
+
+export type VoiceConversationHistoryCacheStrategy = "lexical" | "semantic";
+
+export interface VoiceConversationHistoryCacheEntry {
+    strategy: VoiceConversationHistoryCacheStrategy;
+    guildId: string;
+    channelId: string | null;
+    queryText: string;
+    queryTokens: string[];
+    limit: number;
+    maxAgeHours: number;
+    loadedAt: number;
+    windows: unknown[];
+}
+
 export interface QueuedRealtimeTurnContextRefresh {
     settings: VoiceRealtimeToolSettings | null;
     userId: string | null;
@@ -887,6 +910,8 @@ export interface VoiceSession {
     mcpStatus: VoiceMcpServerStatus[];
     toolMusicTrackCatalog: Map<string, unknown>;
     memoryWriteWindow: number[];
+    behavioralFactCache?: VoiceBehavioralFactCacheEntry | null;
+    conversationHistoryCaches?: Partial<Record<VoiceConversationHistoryCacheStrategy, VoiceConversationHistoryCacheEntry | null>> | null;
     factProfiles: Map<string, VoiceUserFactProfile>;
     guildFactProfile: VoiceGuildFactProfile | null;
     voiceCommandState: VoiceCommandState | null;
