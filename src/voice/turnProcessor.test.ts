@@ -404,6 +404,64 @@ test("shouldUsePerUserTranscription follows strategy and setting", () => {
   );
 });
 
+test("runRealtimeTurn consumes deterministic last-track replay before forwarding", async () => {
+  let replayCalls = 0;
+  let forwardedTurns = 0;
+  let brainReplies = 0;
+  const manager = createVoiceTestManager();
+  manager.evaluateVoiceReplyDecision = async () => ({
+    allow: true,
+    reason: "classifier_allow",
+    participantCount: 1,
+    directAddressed: false,
+    transcript: "Could you play that song again?"
+  });
+  manager.maybeHandleReplayMostRecentTrackTurn = async ({ transcript, source }) => {
+    replayCalls += 1;
+    assert.equal(transcript, "Could you play that song again?");
+    assert.equal(source, "realtime");
+    return true;
+  };
+  manager.forwardRealtimeTextTurnToBrain = async () => {
+    forwardedTurns += 1;
+    return true;
+  };
+  manager.runRealtimeBrainReply = async () => {
+    brainReplies += 1;
+    return true;
+  };
+
+  const session = {
+    id: "session-replay-shortcut-1",
+    guildId: "guild-1",
+    textChannelId: "chan-1",
+    mode: "openai_realtime",
+    ending: false,
+    pendingRealtimeInputBytes: 0,
+    pendingRealtimeTurns: [],
+    recentVoiceTurns: [],
+    membershipEvents: [],
+    settingsSnapshot: createVoiceTestSettings({
+      voice: {
+        replyPath: "bridge"
+      }
+    })
+  };
+
+  await manager.turnProcessor.runRealtimeTurn({
+    session,
+    userId: "speaker-1",
+    pcmBuffer: Buffer.from([1, 2, 3, 4]),
+    captureReason: "speaking_end",
+    queuedAt: Date.now(),
+    transcriptOverride: "Could you play that song again?"
+  });
+
+  assert.equal(replayCalls, 1);
+  assert.equal(forwardedTurns, 0);
+  assert.equal(brainReplies, 0);
+});
+
 test("shouldUseSharedTranscription follows strategy and setting", () => {
   const manager = createVoiceTestManager();
   manager.appConfig.openaiApiKey = "test-key";

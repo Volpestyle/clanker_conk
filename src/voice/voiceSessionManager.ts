@@ -31,6 +31,7 @@ import {
   setMusicPhase as setMusicPhaseRuntime,
   isCommandOnlyActive as isCommandOnlyActiveRuntime,
   maybeHandleMusicPlaybackTurn as maybeHandleMusicPlaybackTurnRuntime,
+  maybeHandleReplayMostRecentTrackTurn as maybeHandleReplayMostRecentTrackTurnRuntime,
   maybeHandleMusicTextSelectionRequest as maybeHandleMusicTextSelectionRequestRuntime,
   maybeHandleMusicTextStopRequest as maybeHandleMusicTextStopRequestRuntime,
   normalizeMusicPlatformToken as normalizeMusicPlatformTokenRuntime,
@@ -1387,6 +1388,28 @@ export class VoiceSessionManager {
       captureReason,
       source,
       transcript
+    });
+  }
+
+  async maybeHandleReplayMostRecentTrackTurn({
+    session,
+    settings,
+    userId = null,
+    transcript = "",
+    source = "voice_turn"
+  }: {
+    session?: VoiceSession | null;
+    settings?: Record<string, unknown> | null;
+    userId?: string | null;
+    transcript?: string;
+    source?: string;
+  }) {
+    return await maybeHandleReplayMostRecentTrackTurnRuntime(this, {
+      session,
+      settings,
+      userId,
+      transcript,
+      source
     });
   }
 
@@ -3554,6 +3577,17 @@ export class VoiceSessionManager {
           flushDelayMs: decision.retryAfterMs
         });
       }
+      return;
+    }
+
+    const replayedMostRecentTrack = await this.maybeHandleReplayMostRecentTrackTurn({
+      session,
+      settings,
+      userId: latestTurn?.userId || null,
+      transcript: decision.transcript || coalescedTranscript,
+      source: "bot_turn_open_deferred_flush"
+    });
+    if (replayedMostRecentTrack) {
       return;
     }
 
