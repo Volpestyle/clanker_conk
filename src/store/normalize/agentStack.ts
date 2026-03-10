@@ -1,7 +1,9 @@
 import { normalizeProviderOrder } from "./primitives.ts";
 import {
+  CODING_WORKER_RUNTIME_KINDS,
   DEFAULT_SETTINGS,
   type Settings,
+  type SettingsCodingWorkerName,
   type SettingsModelBinding
 } from "../../settings/settingsSchema.ts";
 import {
@@ -31,6 +33,19 @@ import {
   normalizeModelBinding
 } from "./shared.ts";
 
+const CODING_WORKER_SET = new Set<SettingsCodingWorkerName>(CODING_WORKER_RUNTIME_KINDS);
+
+function normalizeCodingWorkerName(value: unknown): SettingsCodingWorkerName | undefined {
+  const normalized = normalizeString(value, "", 40).toLowerCase() as SettingsCodingWorkerName;
+  return CODING_WORKER_SET.has(normalized) ? normalized : undefined;
+}
+
+function normalizeCodingWorkerList(value: unknown) {
+  return normalizeStringList(value, 4, 40)
+    .map((entry) => normalizeCodingWorkerName(entry))
+    .filter((entry): entry is SettingsCodingWorkerName => entry !== undefined);
+}
+
 export function normalizeAgentStackSection(
   section: Settings["agentStack"],
   rawAgentStack: Record<string, unknown>,
@@ -43,7 +58,6 @@ export function normalizeAgentStackSection(
   const browser = runtimeConfig.browser;
   const voice = runtimeConfig.voice;
   const claudeOAuthSession = runtimeConfig.claudeOAuthSession;
-  const codexCliSession = runtimeConfig.codexCliSession;
   const devTeam = runtimeConfig.devTeam;
   const rawDevTeamOverride = isRecord(rawOverrides.devTeam) ? rawOverrides.devTeam : null;
   const rawRuntimeConfig = isRecord(rawAgentStack.runtimeConfig) ? rawAgentStack.runtimeConfig : {};
@@ -83,13 +97,26 @@ export function normalizeAgentStackSection(
   if (voiceRuntime) overrides.voiceRuntime = voiceRuntime;
 
   if (rawDevTeamOverride) {
+    const rawRoleOverrides = isRecord(rawDevTeamOverride.roles) ? rawDevTeamOverride.roles : {};
+    const normalizedRoles = {
+      design: normalizeCodingWorkerName(rawRoleOverrides.design),
+      implementation: normalizeCodingWorkerName(rawRoleOverrides.implementation),
+      review: normalizeCodingWorkerName(rawRoleOverrides.review),
+      research: normalizeCodingWorkerName(rawRoleOverrides.research)
+    };
+    const roleEntries = Object.entries(normalizedRoles).filter(([, value]) => value !== undefined);
     overrides.devTeam = {
       orchestrator: normalizeModelBinding(
         rawDevTeamOverride.orchestrator,
         presetConfig.presetOrchestratorFallback.provider,
         presetConfig.presetOrchestratorFallback.model
       ),
-      codingWorkers: normalizeStringList(rawDevTeamOverride.codingWorkers, 4, 40)
+      codingWorkers: normalizeCodingWorkerList(rawDevTeamOverride.codingWorkers),
+      ...(roleEntries.length
+        ? {
+            roles: Object.fromEntries(roleEntries) as NonNullable<Settings["agentStack"]["overrides"]["devTeam"]>["roles"]
+          }
+        : {})
     };
   }
 
@@ -384,30 +411,8 @@ export function normalizeAgentStackSection(
           DEFAULT_SETTINGS.agentStack.runtimeConfig.claudeOAuthSession.textToolPolicy
         )
       },
-      codexCliSession: {
-        sessionScope: normalizeClaudeCodeSessionScope(
-          codexCliSession.sessionScope,
-          DEFAULT_SETTINGS.agentStack.runtimeConfig.codexCliSession.sessionScope
-        ),
-        inactivityTimeoutMs: normalizeInt(
-          codexCliSession.inactivityTimeoutMs,
-          DEFAULT_SETTINGS.agentStack.runtimeConfig.codexCliSession.inactivityTimeoutMs,
-          10_000,
-          12 * 60 * 60 * 1000
-        ),
-        contextPruningStrategy: normalizeClaudeCodeContextPruningStrategy(
-          codexCliSession.contextPruningStrategy,
-          DEFAULT_SETTINGS.agentStack.runtimeConfig.codexCliSession.contextPruningStrategy
-        ),
-        maxPinnedStateChars: normalizeInt(
-          codexCliSession.maxPinnedStateChars,
-          DEFAULT_SETTINGS.agentStack.runtimeConfig.codexCliSession.maxPinnedStateChars,
-          0,
-          200_000
-        )
-      },
       devTeam: {
-          codex: {
+        codex: {
           enabled: normalizeBoolean(
             devTeam.codex.enabled,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.enabled
@@ -447,61 +452,61 @@ export function normalizeAgentStackSection(
             0,
             200
           ),
-            maxParallelTasks: normalizeInt(
-              devTeam.codex.maxParallelTasks,
-              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.maxParallelTasks,
-              1,
-              20
-            )
-          },
-          codexCli: {
-            enabled: normalizeBoolean(
-              devTeam.codexCli.enabled,
-              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.enabled
-            ),
-            model:
-              normalizeString(
-                devTeam.codexCli.model,
-                DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.model,
-                120
-              ) || DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.model,
-            maxTurns: normalizeInt(
-              devTeam.codexCli.maxTurns,
-              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.maxTurns,
-              1,
-              200
-            ),
-            timeoutMs: normalizeInt(
-              devTeam.codexCli.timeoutMs,
-              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.timeoutMs,
-              10_000,
-              1_800_000
-            ),
-            maxBufferBytes: normalizeInt(
-              devTeam.codexCli.maxBufferBytes,
-              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.maxBufferBytes,
-              4_096,
-              10 * 1024 * 1024
-            ),
-            defaultCwd: normalizeString(
-              devTeam.codexCli.defaultCwd,
-              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.defaultCwd,
-              400
-            ),
-            maxTasksPerHour: normalizeInt(
-              devTeam.codexCli.maxTasksPerHour,
-              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.maxTasksPerHour,
-              0,
-              200
-            ),
-            maxParallelTasks: normalizeInt(
-              devTeam.codexCli.maxParallelTasks,
-              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.maxParallelTasks,
-              1,
-              20
-            )
-          },
-          claudeCode: {
+          maxParallelTasks: normalizeInt(
+            devTeam.codex.maxParallelTasks,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codex.maxParallelTasks,
+            1,
+            20
+          )
+        },
+        codexCli: {
+          enabled: normalizeBoolean(
+            devTeam.codexCli.enabled,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.enabled
+          ),
+          model:
+            normalizeString(
+              devTeam.codexCli.model,
+              DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.model,
+              120
+            ) || DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.model,
+          maxTurns: normalizeInt(
+            devTeam.codexCli.maxTurns,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.maxTurns,
+            1,
+            200
+          ),
+          timeoutMs: normalizeInt(
+            devTeam.codexCli.timeoutMs,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.timeoutMs,
+            10_000,
+            1_800_000
+          ),
+          maxBufferBytes: normalizeInt(
+            devTeam.codexCli.maxBufferBytes,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.maxBufferBytes,
+            4_096,
+            10 * 1024 * 1024
+          ),
+          defaultCwd: normalizeString(
+            devTeam.codexCli.defaultCwd,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.defaultCwd,
+            400
+          ),
+          maxTasksPerHour: normalizeInt(
+            devTeam.codexCli.maxTasksPerHour,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.maxTasksPerHour,
+            0,
+            200
+          ),
+          maxParallelTasks: normalizeInt(
+            devTeam.codexCli.maxParallelTasks,
+            DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.codexCli.maxParallelTasks,
+            1,
+            20
+          )
+        },
+        claudeCode: {
           enabled: normalizeBoolean(
             devTeam.claudeCode.enabled,
             DEFAULT_SETTINGS.agentStack.runtimeConfig.devTeam.claudeCode.enabled

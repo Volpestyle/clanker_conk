@@ -2,11 +2,11 @@ export const PROVIDER_MODEL_FALLBACKS = {
   openai: ["gpt-5-mini", "gpt-5", "gpt-4.1-mini"],
   anthropic: ["claude-haiku-4-5", "claude-sonnet-4-6"],
   "claude-oauth": ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
-  "codex-oauth": ["gpt-5.4", "gpt-5.2", "gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.1-codex"],
-  codex_cli_session: ["gpt-5.4"],
+  "openai-oauth": ["gpt-5.4", "gpt-5.3-codex", "gpt-5.1-codex-mini"],
+  codex_cli_session: ["gpt-5.4", "gpt-5.3-codex", "gpt-5-codex"],
   xai: ["grok-3-mini-latest"],
-  codex: ["gpt-5-codex"],
-  "codex-cli": ["gpt-5.4", "gpt-5-codex"]
+  codex: ["gpt-5.4", "gpt-5-codex"],
+  "codex-cli": ["gpt-5.4", "gpt-5.3-codex", "gpt-5-codex"]
 } as const;
 
 export const AGENT_STACK_PRESETS = [
@@ -26,7 +26,7 @@ export const MODEL_PROVIDER_KINDS = [
   "ai_sdk_anthropic",
   "litellm",
   "claude-oauth",
-  "codex-oauth",
+  "openai-oauth",
   "codex_cli_session",
   "xai",
   "codex",
@@ -58,9 +58,12 @@ export const VOICE_ADMISSION_MODES = [
 ] as const;
 
 export const CODING_WORKER_RUNTIME_KINDS = [
+  "claude_code",
   "codex",
   "codex_cli"
 ] as const;
+
+export type SettingsCodingWorkerName = typeof CODING_WORKER_RUNTIME_KINDS[number];
 
 type Primitive = string | number | boolean | bigint | symbol | null | undefined;
 
@@ -337,16 +340,10 @@ export const DEFAULT_SETTINGS = {
         voiceToolPolicy: "fast_only",
         textToolPolicy: "full"
       },
-      codexCliSession: {
-        sessionScope: "guild",
-        inactivityTimeoutMs: 1_800_000,
-        contextPruningStrategy: "summarize",
-        maxPinnedStateChars: 12_000
-      },
       devTeam: {
         codex: {
           enabled: false,
-          model: "codex-mini-latest",
+          model: "gpt-5.4",
           maxTurns: 30,
           timeoutMs: 300_000,
           maxBufferBytes: 2 * 1024 * 1024,
@@ -380,34 +377,17 @@ export const DEFAULT_SETTINGS = {
   memory: {
     enabled: true,
     promptSlice: {
-      maxRecentMessages: 35,
-      maxHighlights: 16
-    },
-    execution: {
-      mode: "dedicated_model",
-      model: {
-        provider: "anthropic",
-        model: "claude-haiku-4-5"
-      },
-      temperature: 0,
-      maxOutputTokens: 320
-    },
-    extraction: {
-      enabled: true
+      maxRecentMessages: 35
     },
     embeddingModel: "text-embedding-3-small",
     reflection: {
       enabled: true,
-      strategy: "one_pass_main",
       hour: 4,
       minute: 0,
       maxFactsPerReflection: 20
-    },
-    dailyLogRetentionDays: 30
+    }
   },
-  directives: {
-    enabled: true
-  },
+  memoryLlm: {},
   initiative: {
     text: {
       enabled: true,
@@ -602,7 +582,13 @@ type SettingsAgentStack = Omit<SettingsFromDefaults["agentStack"], "overrides" |
     voiceAdmissionClassifier?: SettingsExecutionPolicy;
     devTeam?: {
       orchestrator?: SettingsModelBinding;
-      codingWorkers?: readonly string[];
+      codingWorkers?: readonly SettingsCodingWorkerName[];
+      roles?: {
+        design?: SettingsCodingWorkerName;
+        implementation?: SettingsCodingWorkerName;
+        review?: SettingsCodingWorkerName;
+        research?: SettingsCodingWorkerName;
+      };
     };
   };
   runtimeConfig: Omit<SettingsFromDefaults["agentStack"]["runtimeConfig"], "browser" | "voice"> & {
@@ -620,9 +606,7 @@ type SettingsAgentStack = Omit<SettingsFromDefaults["agentStack"], "overrides" |
   };
 };
 
-type SettingsMemory = Omit<SettingsFromDefaults["memory"], "execution"> & {
-  execution: SettingsExecutionPolicy;
-};
+type SettingsMemory = SettingsFromDefaults["memory"];
 
 type SettingsInitiative = Omit<SettingsFromDefaults["initiative"], "text" | "voice"> & {
   text: Omit<SettingsFromDefaults["initiative"]["text"], "execution"> & {

@@ -360,8 +360,9 @@ test("normalizeSettings migrates legacy code agent provider fields into dev-team
   });
 
   assert.equal(fallback.agentStack.runtimeConfig.devTeam.codex.enabled, false);
-  assert.equal(fallback.agentStack.runtimeConfig.devTeam.codex.model, "codex-mini-latest");
-  assert.equal(fallback.agentStack.runtimeConfig.devTeam.claudeCode.enabled, true);
+  assert.equal(fallback.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5.4");
+  assert.equal(fallback.agentStack.runtimeConfig.devTeam.codexCli.enabled, false);
+  assert.equal(fallback.agentStack.runtimeConfig.devTeam.claudeCode.enabled, false);
   assert.equal(fallback.agentStack.runtimeConfig.devTeam.claudeCode.model, "sonnet");
 
   const codex = normalizeLegacyView({
@@ -375,6 +376,91 @@ test("normalizeSettings migrates legacy code agent provider fields into dev-team
   assert.equal(codex.agentStack.runtimeConfig.devTeam.codex.enabled, true);
   assert.equal(codex.agentStack.runtimeConfig.devTeam.codex.model, "gpt-5-codex");
   assert.equal(codex.agentStack.runtimeConfig.devTeam.claudeCode.enabled, false);
+});
+
+test("normalizeSettings keeps valid coding worker role overrides and drops invalid ones", () => {
+  const normalized = normalizeSettings({
+    agentStack: {
+      advancedOverridesEnabled: true,
+      overrides: {
+        devTeam: {
+          roles: {
+            implementation: "codex_cli",
+            review: "claude_code",
+            research: "not-a-worker"
+          }
+        }
+      }
+    }
+  });
+
+  assert.deepEqual(normalized.agentStack.overrides.devTeam?.roles, {
+    implementation: "codex_cli",
+    review: "claude_code"
+  });
+});
+
+test("resolveAgentStack routes implementation through available workers", () => {
+  const normalized = normalizeSettings({
+    agentStack: {
+      preset: "openai_oauth",
+      advancedOverridesEnabled: true,
+      overrides: {
+        devTeam: {
+          roles: {
+            implementation: "claude_code",
+            review: "codex_cli"
+          }
+        }
+      },
+      runtimeConfig: {
+        devTeam: {
+          codex: {
+            enabled: false
+          },
+          codexCli: {
+            enabled: true
+          },
+          claudeCode: {
+            enabled: true
+          }
+        }
+      }
+    }
+  });
+
+  const resolved = resolveAgentStack(normalized);
+  assert.deepEqual(resolved.devTeam.codingWorkers, ["codex_cli", "claude_code"]);
+  assert.deepEqual(resolved.devTeam.roles, {
+    design: "codex_cli",
+    implementation: "claude_code",
+    review: "codex_cli",
+    research: "codex_cli"
+  });
+
+  const onlyClaudeEnabled = normalizeSettings({
+    agentStack: {
+      preset: "openai_oauth",
+      runtimeConfig: {
+        devTeam: {
+          codex: {
+            enabled: false
+          },
+          codexCli: {
+            enabled: false
+          },
+          claudeCode: {
+            enabled: true
+          }
+        }
+      }
+    }
+  });
+
+  const resolvedOnlyClaude = resolveAgentStack(onlyClaudeEnabled);
+  assert.deepEqual(resolvedOnlyClaude.devTeam.codingWorkers, ["claude_code"]);
+  assert.equal(resolvedOnlyClaude.devTeam.roles.implementation, "claude_code");
+  assert.equal(resolvedOnlyClaude.devTeam.roles.review, "claude_code");
 });
 
 test("normalizeSettings migrates claude_oauth_local_tools to claude_oauth and preserves session config", () => {
@@ -412,14 +498,11 @@ test("normalizeSettings migrates claude_oauth_local_tools to claude_oauth and pr
   });
 });
 
-test("normalizeSettings preserves canonical command-only, directive, and automation toggles", () => {
+test("normalizeSettings preserves canonical command-only and automation toggles", () => {
   const normalized = normalizeLegacyView({
     voice: {
       commandOnlyMode: true,
       defaultInterruptionMode: "uninterruptible"
-    },
-    adaptiveDirectives: {
-      enabled: false
     },
     automations: {
       enabled: false
@@ -428,7 +511,6 @@ test("normalizeSettings preserves canonical command-only, directive, and automat
 
   assert.equal(normalized.voice.conversationPolicy.commandOnlyMode, true);
   assert.equal(normalized.voice.conversationPolicy.defaultInterruptionMode, "none");
-  assert.equal(normalized.directives.enabled, false);
   assert.equal(normalized.automations.enabled, false);
 });
 
@@ -459,6 +541,14 @@ test("normalizeSettings dedupes guidance and preserves discovery source booleans
   assert.equal(typeof normalized.initiative.discovery.sources.youtube, "boolean");
   assert.equal(typeof normalized.initiative.discovery.sources.rss, "boolean");
   assert.equal(typeof normalized.initiative.discovery.sources.x, "boolean");
+});
+
+test("normalizeSettings leaves memoryLlm empty when no explicit override is configured", () => {
+  const normalized = normalizeSettings({
+    memoryLlm: {}
+  });
+
+  assert.deepEqual(normalized.memoryLlm, {});
 });
 
 test("normalizeSettings defaults reply max output tokens to 2500 and preserves higher values", () => {
@@ -529,37 +619,17 @@ test("normalizeSettings keeps elevenlabs voice runtime settings under canonical 
 });
 
 test("normalizeSettings uses provider-specific memory model fallbacks", () => {
-  const normalized = normalizeLegacyView({
+  const normalized = normalizeSettings({
     memoryLlm: {
       provider: "openai",
       model: ""
     }
   });
 
-  assert.deepEqual(normalized.memory.execution.model, {
+  assert.deepEqual(normalized.memoryLlm, {
     provider: "openai",
     model: "gpt-5-mini"
   });
-});
-
-test("normalizeSettings preserves supported reflection strategies and defaults invalid ones", () => {
-  const onePass = normalizeLegacyView({
-    memory: {
-      reflection: {
-        strategy: "one_pass_main"
-      }
-    }
-  });
-  assert.equal(onePass.memory.reflection.strategy, "one_pass_main");
-
-  const invalid = normalizeLegacyView({
-    memory: {
-      reflection: {
-        strategy: "something_else"
-      }
-    }
-  });
-  assert.equal(invalid.memory.reflection.strategy, "one_pass_main");
 });
 
 test("normalizeSettings drops removed replyDecisionLlm prompts and migrates enabled false to generation_decides", () => {

@@ -11,18 +11,20 @@ import {
   recordMessage,
   getRecentMessages,
   getRecentMessagesAcrossGuild,
+  getMessagesInWindow,
   searchRelevantMessages,
   searchConversationWindows,
+  searchConversationWindowsByEmbedding,
   getActiveChannels,
-  getReferencedMessageStats
+  getReferencedMessageStats,
+  upsertMessageVectorNative
 } from "./storeMessages.ts";
 import { maybePruneActionLog, pruneActionLog, logAction, countActionsSince, getLastActionTime, getRecentActions, getRecentMemoryReflections, getRecentBrowserSessions, indexResponseTriggersForAction, hasTriggeredResponse, hasReflectionBeenCompleted } from "./storeActionLog.ts";
 import { wasLinkSharedSince, recordSharedLink, pruneLookupContext, recordLookupContext, searchLookupContext } from "./storeLookups.ts";
 import { getRecentVoiceSessions, getVoiceSessionEvents } from "./storeVoice.ts";
 import { getReplyPerformanceStats, getStats } from "./storeStats.ts";
 import { createAutomation, getAutomationById, countAutomations, listAutomations, getMostRecentAutomations, findAutomationsByQuery, setAutomationStatus, claimDueAutomations, finalizeAutomationRun, recordAutomationRun, getAutomationRuns } from "./storeAutomation.ts";
-import { addMemoryFact, getFactProfileRows, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactById, getMemoryFactBySubjectAndFact, updateMemoryFact, removeMemoryFact, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject } from "./storeMemory.ts";
-import { addAdaptiveStyleNote, getActiveAdaptiveStyleNotes, getAdaptiveStyleNoteAuditLog, removeAdaptiveStyleNote, searchAdaptiveStyleNotesForPrompt, updateAdaptiveStyleNote } from "./storeAdaptiveDirectives.ts";
+import { addMemoryFact, getFactProfileRows, getFactsForSubjectScoped, getFactsForSubjects, getFactsForScope, getFactsForSubjectsScoped, getMemoryFactBySubjectAndFact, ensureSqliteVecReady, upsertMemoryFactVectorNative, getMemoryFactVectorNative, getMemoryFactVectorNativeScores, getMemorySubjects, archiveOldFactsForSubject } from "./storeMemory.ts";
 
 export const SETTINGS_KEY = "runtime_settings";
 export const ACTION_LOG_RETENTION_DAYS_DEFAULT = 14;
@@ -130,7 +132,7 @@ export class Store {
         channel_id TEXT,
         subject TEXT NOT NULL,
         fact TEXT NOT NULL,
-        fact_type TEXT NOT NULL DEFAULT 'general',
+        fact_type TEXT NOT NULL DEFAULT 'other',
         evidence_text TEXT,
         source_message_id TEXT,
         confidence REAL NOT NULL DEFAULT 0.5,
@@ -145,6 +147,15 @@ export class Store {
         embedding_blob BLOB NOT NULL,
         updated_at TEXT NOT NULL,
         PRIMARY KEY (fact_id, model)
+      );
+
+      CREATE TABLE IF NOT EXISTS message_vectors_native (
+        message_id TEXT NOT NULL,
+        model TEXT NOT NULL,
+        dims INTEGER NOT NULL,
+        embedding_blob BLOB NOT NULL,
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (message_id, model)
       );
 
       CREATE TABLE IF NOT EXISTS shared_links (
@@ -167,41 +178,6 @@ export class Store {
         provider TEXT,
         results_json TEXT NOT NULL,
         match_text TEXT NOT NULL
-      );
-
-      CREATE TABLE IF NOT EXISTS adaptive_style_notes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        created_at TEXT NOT NULL,
-        updated_at TEXT NOT NULL,
-        guild_id TEXT NOT NULL,
-        directive_kind TEXT NOT NULL DEFAULT 'guidance',
-        note_text TEXT NOT NULL,
-        created_by_user_id TEXT,
-        created_by_name TEXT,
-        updated_by_user_id TEXT,
-        updated_by_name TEXT,
-        source_message_id TEXT,
-        source_text TEXT,
-        is_active INTEGER NOT NULL DEFAULT 1,
-        removed_at TEXT,
-        removed_by_user_id TEXT,
-        removed_by_name TEXT,
-        removal_reason TEXT
-      );
-
-      CREATE TABLE IF NOT EXISTS adaptive_style_note_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        created_at TEXT NOT NULL,
-        note_id INTEGER,
-        guild_id TEXT NOT NULL,
-        directive_kind TEXT NOT NULL DEFAULT 'guidance',
-        event_type TEXT NOT NULL,
-        actor_user_id TEXT,
-        actor_name TEXT,
-        note_text TEXT NOT NULL,
-        detail_text TEXT,
-        source_message_id TEXT,
-        metadata TEXT
       );
 
       CREATE TABLE IF NOT EXISTS automations (
@@ -249,39 +225,16 @@ export class Store {
       CREATE INDEX IF NOT EXISTS idx_actions_kind_time ON actions(kind, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_actions_time ON actions(created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_memory_vectors_native_model_dims ON memory_fact_vectors_native(model, dims);
+      CREATE INDEX IF NOT EXISTS idx_message_vectors_native_model_dims ON message_vectors_native(model, dims);
       CREATE INDEX IF NOT EXISTS idx_shared_links_last_shared_at ON shared_links(last_shared_at DESC);
       CREATE INDEX IF NOT EXISTS idx_lookup_context_scope_time ON lookup_context(guild_id, channel_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_lookup_context_expires ON lookup_context(expires_at);
-      CREATE INDEX IF NOT EXISTS idx_adaptive_style_notes_scope_active ON adaptive_style_notes(guild_id, is_active, updated_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_adaptive_style_events_scope_time ON adaptive_style_note_events(guild_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_automations_scope_status_next ON automations(guild_id, status, next_run_at);
       CREATE INDEX IF NOT EXISTS idx_automations_running_next ON automations(is_running, next_run_at);
       CREATE INDEX IF NOT EXISTS idx_automations_match_text ON automations(guild_id, match_text);
       CREATE INDEX IF NOT EXISTS idx_automation_runs_job_time ON automation_runs(automation_id, created_at DESC);
       CREATE INDEX IF NOT EXISTS idx_response_triggers_action_id ON response_triggers(action_id);
     `);
-    try {
-      const noteColumns = new Set(
-        this.db
-          .prepare("PRAGMA table_info(adaptive_style_notes)")
-          .all()
-          .map((row) => String(row?.name || ""))
-      );
-      if (!noteColumns.has("directive_kind")) {
-        this.db.exec("ALTER TABLE adaptive_style_notes ADD COLUMN directive_kind TEXT NOT NULL DEFAULT 'guidance';");
-      }
-      const eventColumns = new Set(
-        this.db
-          .prepare("PRAGMA table_info(adaptive_style_note_events)")
-          .all()
-          .map((row) => String(row?.name || ""))
-      );
-      if (!eventColumns.has("directive_kind")) {
-        this.db.exec("ALTER TABLE adaptive_style_note_events ADD COLUMN directive_kind TEXT NOT NULL DEFAULT 'guidance';");
-      }
-    } catch {
-      // schema maintenance must not block startup
-    }
     this.ensureSqliteVecReady();
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_memory_scope_subject ON memory_facts(guild_id, subject, created_at DESC);
@@ -342,6 +295,16 @@ export class Store {
     return getRecentMessagesAcrossGuild(this, guildId, limit);
   }
 
+  getMessagesInWindow(opts: {
+    guildId: string;
+    channelId?: string | null;
+    sinceIso?: string | null;
+    untilIso?: string | null;
+    limit?: number;
+  }) {
+    return getMessagesInWindow(this, opts);
+  }
+
   searchRelevantMessages(channelId, queryText, limit = 8) {
     return searchRelevantMessages(this, channelId, queryText, limit);
   }
@@ -356,6 +319,28 @@ export class Store {
     after?;
   }) {
     return searchConversationWindows(this, opts);
+  }
+
+  searchConversationWindowsByEmbedding(opts: {
+    guildId: string;
+    channelId?: string | null;
+    queryEmbedding: number[];
+    model: string;
+    limit?: number;
+    maxAgeHours?: number;
+    before?: number;
+    after?: number;
+  }) {
+    return searchConversationWindowsByEmbedding(this, opts);
+  }
+
+  upsertMessageVectorNative(opts: {
+    messageId: string;
+    model: string;
+    embedding: number[];
+    updatedAt?: string;
+  }) {
+    return upsertMessageVectorNative(this, opts);
   }
 
   getActiveChannels(guildId, hours = 24, limit = 10) {
@@ -467,54 +452,6 @@ export class Store {
     maxAgeHours?;
   }) {
     return searchLookupContext(this, opts);
-  }
-
-  getActiveAdaptiveStyleNotes(guildId, limit = 24) {
-    return getActiveAdaptiveStyleNotes(this, guildId, limit);
-  }
-
-  searchAdaptiveStyleNotesForPrompt(opts: { guildId; queryText?; limit? }) {
-    return searchAdaptiveStyleNotesForPrompt(this, opts);
-  }
-
-  getAdaptiveStyleNoteAuditLog(guildId, limit = 100) {
-    return getAdaptiveStyleNoteAuditLog(this, guildId, limit);
-  }
-
-  addAdaptiveStyleNote(opts: {
-    guildId;
-    directiveKind?;
-    noteText;
-    actorUserId?;
-    actorName?;
-    sourceMessageId?;
-    sourceText?;
-    source?;
-  }) {
-    return addAdaptiveStyleNote(this, opts);
-  }
-
-  updateAdaptiveStyleNote(opts: {
-    noteId;
-    guildId;
-    directiveKind?;
-    noteText;
-    actorUserId?;
-    actorName?;
-    source?;
-  }) {
-    return updateAdaptiveStyleNote(this, opts);
-  }
-
-  removeAdaptiveStyleNote(opts: {
-    noteId;
-    guildId;
-    actorUserId?;
-    actorName?;
-    removalReason?;
-    source?;
-  }) {
-    return removeAdaptiveStyleNote(this, opts);
   }
 
   getRecentVoiceSessions(limit = 3, opts: { sinceIso?: string | null } = {}) {
@@ -660,30 +597,8 @@ export class Store {
     return getFactsForSubjectsScoped(this, opts);
   }
 
-  getMemoryFactById(factId, opts: { guildId?: string | null; includeInactive?: boolean } = {}) {
-    return getMemoryFactById(this, factId, opts);
-  }
-
   getMemoryFactBySubjectAndFact(guildId, subject, fact) {
     return getMemoryFactBySubjectAndFact(this, guildId, subject, fact);
-  }
-
-  updateMemoryFact(opts: {
-    factId;
-    guildId;
-    channelId?;
-    subject;
-    fact;
-    factType?;
-    evidenceText?;
-    sourceMessageId?;
-    confidence?;
-  }) {
-    return updateMemoryFact(this, opts);
-  }
-
-  removeMemoryFact(opts: { factId; guildId }) {
-    return removeMemoryFact(this, opts);
   }
 
   ensureSqliteVecReady() {

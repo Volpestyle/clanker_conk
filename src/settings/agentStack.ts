@@ -2,6 +2,7 @@ import { deepMerge } from "../utils.ts";
 import {
   DEFAULT_SETTINGS,
   type Settings,
+  type SettingsCodingWorkerName,
   type SettingsInput
 } from "./settingsSchema.ts";
 
@@ -29,10 +30,10 @@ export type CapabilityExecutionPolicy = {
 };
 
 type DevTeamRoles = {
-  design: CapabilityExecutionPolicy;
-  implementation: CapabilityExecutionPolicy;
-  review: CapabilityExecutionPolicy;
-  research?: CapabilityExecutionPolicy;
+  design: SettingsCodingWorkerName;
+  implementation: SettingsCodingWorkerName;
+  review: SettingsCodingWorkerName;
+  research?: SettingsCodingWorkerName;
 };
 
 type PresetDefaults = {
@@ -52,7 +53,7 @@ type PresetDefaults = {
   devTeam: {
     orchestrator: Required<ModelBinding>;
     roles: DevTeamRoles;
-    codingWorkers: string[];
+    codingWorkers: SettingsCodingWorkerName[];
   };
 };
 
@@ -72,31 +73,16 @@ export type ResolvedAgentStack = {
   };
   devTeam: {
     orchestrator: Required<ModelBinding>;
-    roles: {
-      design: ReturnType<typeof resolveExecutionPolicy>;
-      implementation: ReturnType<typeof resolveExecutionPolicy>;
-      review: ReturnType<typeof resolveExecutionPolicy>;
-      research?: ReturnType<typeof resolveExecutionPolicy>;
-    };
-    codingWorkers: string[];
+    roles: DevTeamRoles;
+    codingWorkers: SettingsCodingWorkerName[];
   };
 };
 
-function dedicatedModel(provider: string, model: string): CapabilityExecutionPolicy {
-  return {
-    mode: "dedicated_model",
-    model: {
-      provider,
-      model
-    }
-  };
-}
-
-function inheritOrchestrator(): CapabilityExecutionPolicy {
-  return {
-    mode: "inherit_orchestrator"
-  };
-}
+const VALID_CODING_WORKERS = new Set<SettingsCodingWorkerName>([
+  "claude_code",
+  "codex",
+  "codex_cli"
+]);
 
 const PRESET_DEFAULTS = {
   claude_oauth: {
@@ -127,12 +113,12 @@ const PRESET_DEFAULTS = {
         model: "claude-sonnet-4-6"
       },
       roles: {
-        design: dedicatedModel("claude-oauth", "claude-sonnet-4-6"),
-        implementation: dedicatedModel("claude-oauth", "claude-sonnet-4-6"),
-        review: dedicatedModel("claude-oauth", "claude-sonnet-4-6"),
-        research: dedicatedModel("claude-oauth", "claude-sonnet-4-6")
+        design: "claude_code",
+        implementation: "claude_code",
+        review: "claude_code",
+        research: "claude_code"
       },
-      codingWorkers: ["codex_cli", "codex"]
+      codingWorkers: ["claude_code", "codex_cli"]
     }
   },
   claude_api: {
@@ -163,12 +149,12 @@ const PRESET_DEFAULTS = {
         model: "claude-sonnet-4-6"
       },
       roles: {
-        design: dedicatedModel("anthropic", "claude-sonnet-4-6"),
-        implementation: dedicatedModel("anthropic", "claude-sonnet-4-6"),
-        review: dedicatedModel("anthropic", "claude-sonnet-4-6"),
-        research: inheritOrchestrator()
+        design: "claude_code",
+        implementation: "claude_code",
+        review: "claude_code",
+        research: "claude_code"
       },
-      codingWorkers: ["codex_cli", "codex"]
+      codingWorkers: ["claude_code", "codex_cli"]
     }
   },
   openai_native_realtime: {
@@ -195,12 +181,12 @@ const PRESET_DEFAULTS = {
         model: "gpt-5"
       },
       roles: {
-        design: dedicatedModel("anthropic", "claude-sonnet-4-6"),
-        implementation: dedicatedModel("codex", "gpt-5-codex"),
-        review: dedicatedModel("anthropic", "claude-sonnet-4-6"),
-        research: inheritOrchestrator()
+        design: "codex_cli",
+        implementation: "codex_cli",
+        review: "codex_cli",
+        research: "codex_cli"
       },
-      codingWorkers: ["codex", "codex_cli"]
+      codingWorkers: ["codex_cli", "claude_code"]
     }
   },
   openai_api: {
@@ -231,18 +217,18 @@ const PRESET_DEFAULTS = {
         model: "gpt-5"
       },
       roles: {
-        design: dedicatedModel("anthropic", "claude-sonnet-4-6"),
-        implementation: dedicatedModel("codex", "gpt-5-codex"),
-        review: dedicatedModel("anthropic", "claude-sonnet-4-6"),
-        research: inheritOrchestrator()
+        design: "codex_cli",
+        implementation: "codex_cli",
+        review: "codex_cli",
+        research: "codex_cli"
       },
-      codingWorkers: ["codex", "codex_cli"]
+      codingWorkers: ["codex_cli", "claude_code"]
     }
   },
   openai_oauth: {
     harness: "internal",
     orchestrator: {
-      provider: "codex-oauth",
+      provider: "openai-oauth",
       model: "gpt-5.4"
     },
     researchRuntime: "local_external_search",
@@ -254,32 +240,32 @@ const PRESET_DEFAULTS = {
       mode: "generation_decides"
     },
     voiceAdmissionClassifier: {
-      provider: "codex-oauth",
+      provider: "openai-oauth",
       model: "gpt-5.4"
     },
     voiceGeneration: {
-      provider: "codex-oauth",
+      provider: "openai-oauth",
       model: "gpt-5.4"
     },
     devTeam: {
       orchestrator: {
-        provider: "codex-oauth",
+        provider: "openai-oauth",
         model: "gpt-5.4"
       },
       roles: {
-        design: dedicatedModel("codex-oauth", "gpt-5.4"),
-        implementation: dedicatedModel("codex-oauth", "gpt-5.4"),
-        review: dedicatedModel("codex-oauth", "gpt-5.4"),
-        research: inheritOrchestrator()
+        design: "codex_cli",
+        implementation: "codex_cli",
+        review: "codex_cli",
+        research: "codex_cli"
       },
-      codingWorkers: ["codex_cli", "codex"]
+      codingWorkers: ["codex_cli", "claude_code"]
     }
   },
   grok_native_agent: {
     harness: "internal",
     orchestrator: {
       provider: "xai",
-      model: "grok-3-mini-latest"
+      model: "grok-4-latest"
     },
     researchRuntime: "local_external_search",
     browserRuntime: "local_browser_agent",
@@ -296,15 +282,15 @@ const PRESET_DEFAULTS = {
     devTeam: {
       orchestrator: {
         provider: "xai",
-        model: "grok-3-mini-latest"
+        model: "grok-4-latest"
       },
       roles: {
-        design: inheritOrchestrator(),
-        implementation: inheritOrchestrator(),
-        review: inheritOrchestrator(),
-        research: inheritOrchestrator()
+        design: "codex_cli",
+        implementation: "codex_cli",
+        review: "codex_cli",
+        research: "codex_cli"
       },
-      codingWorkers: ["codex_cli", "codex"]
+      codingWorkers: ["claude_code", "codex_cli"]
     }
   }
 } as const satisfies Record<string, PresetDefaults>;
@@ -370,6 +356,39 @@ function resolveExecutionPolicy(
         ? String(source.reasoningEffort || "").trim()
         : fallbackReasoningEffort
   };
+}
+
+function normalizeCodingWorkerName(value: unknown): SettingsCodingWorkerName | null {
+  const normalized = String(value || "").trim().toLowerCase() as SettingsCodingWorkerName;
+  return VALID_CODING_WORKERS.has(normalized) ? normalized : null;
+}
+
+function normalizeCodingWorkerList(values: unknown): SettingsCodingWorkerName[] {
+  if (!Array.isArray(values)) return [];
+  const normalized: SettingsCodingWorkerName[] = [];
+  for (const value of values) {
+    const worker = normalizeCodingWorkerName(value);
+    if (worker && !normalized.includes(worker)) normalized.push(worker);
+  }
+  return normalized;
+}
+
+function resolveCodingWorkerName(
+  value: unknown,
+  fallback: SettingsCodingWorkerName,
+  availableWorkers: readonly SettingsCodingWorkerName[]
+): SettingsCodingWorkerName {
+  const desired = normalizeCodingWorkerName(value);
+  if (desired && (availableWorkers.length === 0 || availableWorkers.includes(desired))) {
+    return desired;
+  }
+
+  const fallbackWorker = normalizeCodingWorkerName(fallback);
+  if (fallbackWorker && (availableWorkers.length === 0 || availableWorkers.includes(fallbackWorker))) {
+    return fallbackWorker;
+  }
+
+  return availableWorkers[0] || fallbackWorker || "codex_cli";
 }
 
 export function getIdentitySettings(settings: unknown): Settings["identity"] {
@@ -461,10 +480,6 @@ export function getAgentStackSettings(settings: unknown): Settings["agentStack"]
 
 export function getMemorySettings(settings: unknown): Settings["memory"] {
   return getSettingsSection(settings, (input) => input.memory, DEFAULT_SETTINGS.memory);
-}
-
-export function getDirectiveSettings(settings: unknown): Settings["directives"] {
-  return getSettingsSection(settings, (input) => input.directives, DEFAULT_SETTINGS.directives);
 }
 
 export function getTextInitiativeSettings(settings: unknown): Settings["initiative"]["text"] {
@@ -662,18 +677,18 @@ export function getResolvedFollowupBinding(settings: unknown) {
 }
 
 export function getResolvedMemoryBinding(settings: unknown) {
-  const memory = getMemorySettings(settings);
   const fallback = getResolvedOrchestratorBinding(settings);
-  const policy = resolveExecutionPolicy(memory.execution, fallback, 0, 320);
-  const binding = policy.mode === "dedicated_model"
-    ? policy.model
-    : fallback;
+  const configured =
+    settings && typeof settings === "object" && "memoryLlm" in settings && settings.memoryLlm && typeof settings.memoryLlm === "object"
+      ? settings.memoryLlm as CapabilityExecutionPolicy
+      : null;
+  const binding = resolveModelBinding(configured, fallback);
   return {
     provider: String(binding?.provider || fallback.provider),
     model: String(binding?.model || fallback.model),
-    temperature: policy.temperature ?? 0,
-    maxOutputTokens: policy.maxOutputTokens ?? 320,
-    reasoningEffort: policy.reasoningEffort ?? fallback.reasoningEffort
+    temperature: Number(configured?.temperature ?? fallback.temperature ?? 0),
+    maxOutputTokens: Number(configured?.maxOutputTokens ?? fallback.maxOutputTokens ?? 320),
+    reasoningEffort: fallback.reasoningEffort
   };
 }
 
@@ -851,13 +866,19 @@ export function resolveAgentStack(settings: unknown) {
   const devTeamRuntime = getDevTeamRuntimeConfig(settings);
   const enabledWorkers = [
     devTeamRuntime?.codex?.enabled ? "codex" : null,
-    devTeamRuntime?.codexCli?.enabled ? "codex_cli" : null
-  ].filter(Boolean);
-  const overrideWorkers = Array.isArray(overrides?.devTeam?.codingWorkers)
-    ? overrides.devTeam.codingWorkers.map((value: unknown) => String(value || "").trim()).filter(Boolean)
-    : [];
-  const codingWorkers = (overrideWorkers.length ? overrideWorkers : presetDefaults.devTeam.codingWorkers)
+    devTeamRuntime?.codexCli?.enabled ? "codex_cli" : null,
+    devTeamRuntime?.claudeCode?.enabled ? "claude_code" : null
+  ].filter(Boolean) as SettingsCodingWorkerName[];
+  const overrideWorkers = normalizeCodingWorkerList(overrides?.devTeam?.codingWorkers);
+  const presetWorkers = normalizeCodingWorkerList(presetDefaults.devTeam.codingWorkers);
+  const codingWorkers = (overrideWorkers.length ? overrideWorkers : presetWorkers)
     .filter((worker) => enabledWorkers.includes(worker));
+  const availableWorkers = [
+    ...new Set<SettingsCodingWorkerName>([
+      ...codingWorkers,
+      ...enabledWorkers
+    ])
+  ];
   const harness = String(overrides?.harness || presetDefaults.harness);
   const devTeamOrchestrator = resolveModelBinding(
     overrides?.devTeam?.orchestrator,
@@ -882,23 +903,27 @@ export function resolveAgentStack(settings: unknown) {
     devTeam: {
       orchestrator: devTeamOrchestrator,
       roles: {
-        design: resolveExecutionPolicy(
+        design: resolveCodingWorkerName(
+          overrides?.devTeam?.roles?.design,
           presetDefaults.devTeam.roles.design,
-          devTeamOrchestrator
+          availableWorkers
         ),
-        implementation: resolveExecutionPolicy(
+        implementation: resolveCodingWorkerName(
+          overrides?.devTeam?.roles?.implementation,
           presetDefaults.devTeam.roles.implementation,
-          devTeamOrchestrator
+          availableWorkers
         ),
-        review: resolveExecutionPolicy(
+        review: resolveCodingWorkerName(
+          overrides?.devTeam?.roles?.review,
           presetDefaults.devTeam.roles.review,
-          devTeamOrchestrator
+          availableWorkers
         ),
         ...(presetDefaults.devTeam.roles.research
           ? {
-              research: resolveExecutionPolicy(
+              research: resolveCodingWorkerName(
+                overrides?.devTeam?.roles?.research,
                 presetDefaults.devTeam.roles.research,
-                devTeamOrchestrator
+                availableWorkers
               )
             }
           : {})

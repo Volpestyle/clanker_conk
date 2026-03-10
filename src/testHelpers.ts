@@ -125,9 +125,6 @@ export async function withDashboardServer<T>(
       memoryCalls.push(payload);
       return [{ fact: "remember this" }];
     },
-    async rerunDailyReflection() {
-      return { ok: true };
-    },
     ...memoryOverrides
   };
 

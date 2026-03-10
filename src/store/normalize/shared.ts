@@ -45,6 +45,21 @@ export function normalizeModelBinding(
   };
 }
 
+export function normalizeOptionalModelBinding(
+  binding: unknown,
+  fallbackProvider: string,
+  fallbackModel: string
+): Partial<SettingsModelBinding> {
+  const source = isRecord(binding) ? binding : {};
+  const hasConfiguredBinding =
+    Boolean(normalizeString(source.provider, "", 40)) ||
+    Boolean(normalizeString(source.model, "", 120));
+  if (!hasConfiguredBinding) {
+    return {};
+  }
+  return normalizeModelBinding(binding, fallbackProvider, fallbackModel);
+}
+
 function normalizeBrowserProvider(value: unknown, fallback = "anthropic") {
   const provider = normalizeLlmProvider(value, fallback);
   return provider === "openai" || provider === "anthropic" || provider === "claude-oauth" ? provider : fallback;
@@ -262,14 +277,14 @@ export function resolveAgentStackPresetConfig(
   const presetOrchestratorFallback: SettingsModelBinding =
     isClaudeOAuth ? { provider: "claude-oauth", model: "claude-opus-4-6" }
     : isClaudeApi ? { provider: "anthropic", model: "claude-sonnet-4-6" }
-    : isOpenAiOAuth ? { provider: "codex-oauth", model: "gpt-5.4" }
+    : isOpenAiOAuth ? { provider: "openai-oauth", model: "gpt-5.4" }
     : isGrokNativeAgent ? { provider: "xai", model: "grok-3-mini-latest" }
     : { provider: "openai", model: "gpt-5" };
 
   const presetVoiceAdmissionClassifierFallback: SettingsModelBinding =
     isClaudeOAuth ? { provider: "claude-oauth", model: "claude-haiku-4-5" }
     : isClaudeApi ? { provider: "anthropic", model: "claude-haiku-4-5" }
-    : isOpenAiOAuth ? { provider: "codex-oauth", model: "gpt-5.4" }
+    : isOpenAiOAuth ? { provider: "openai-oauth", model: "gpt-5.4" }
     : isGrokNativeAgent ? { provider: "xai", model: "grok-3-mini-latest" }
     : { provider: "openai", model: "gpt-5-mini" };
 
@@ -277,7 +292,7 @@ export function resolveAgentStackPresetConfig(
     isClaudeOAuth ? { provider: "claude-oauth", model: "claude-sonnet-4-6" }
     : isClaudeApi ? { provider: "anthropic", model: "claude-haiku-4-5" }
     : isOpenAiApi ? { provider: "openai", model: "gpt-5-mini" }
-    : isOpenAiOAuth ? { provider: "codex-oauth", model: "gpt-5.4" }
+    : isOpenAiOAuth ? { provider: "openai-oauth", model: "gpt-5.4" }
     : undefined;
 
   const usesGenerationDecides = isClaudeOAuth || isClaudeApi || isOpenAiApi || isOpenAiOAuth;
@@ -300,7 +315,7 @@ export function resolveAgentStackPresetConfig(
       : undefined,
     presetVisionFallback:
       isClaudeOAuth ? { provider: "claude-oauth", model: "claude-opus-4-6" }
-      : isOpenAiOAuth ? { provider: "codex-oauth", model: "gpt-5.4" }
+      : isOpenAiOAuth ? { provider: "openai-oauth", model: "gpt-5.4" }
       : undefined
   };
 }

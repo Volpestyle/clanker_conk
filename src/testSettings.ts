@@ -47,7 +47,6 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
   const memory = isRecord(raw.memory) ? raw.memory : {};
   const reflection = isRecord(memory.reflection) ? memory.reflection : {};
   const codeAgent = isRecord(raw.codeAgent) ? raw.codeAgent : {};
-  const adaptiveDirectives = isRecord(raw.adaptiveDirectives) ? raw.adaptiveDirectives : {};
   const automations = isRecord(raw.automations) ? raw.automations : {};
   const subAgentOrchestration = isRecord(raw.subAgentOrchestration) ? raw.subAgentOrchestration : {};
   const voiceThoughtEngine = isRecord(voice.thoughtEngine) ? voice.thoughtEngine : {};
@@ -151,6 +150,10 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
         maxConcurrentSessions: subAgentOrchestration.maxConcurrentSessions
       }
     },
+    memoryLlm: {
+      provider: memoryLlm.provider,
+      model: memoryLlm.model
+    },
     agentStack: {
       preset: inferLegacyPreset(raw),
       advancedOverridesEnabled: true,
@@ -235,9 +238,7 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
         },
         devTeam: {
           codex: {
-            enabled:
-              String(codeAgent.provider || "").trim().toLowerCase() === "codex" ||
-              String(codeAgent.provider || "").trim().toLowerCase() === "auto",
+            enabled: String(codeAgent.provider || "").trim().toLowerCase() === "codex",
             model: codeAgent.codexModel,
             maxTurns: codeAgent.maxTurns,
             timeoutMs: codeAgent.timeoutMs,
@@ -260,7 +261,7 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
           },
           claudeCode: {
             enabled:
-              !["codex", "codex-cli"].includes(String(codeAgent.provider || "").trim().toLowerCase()),
+              ["claude-code", "auto"].includes(String(codeAgent.provider || "").trim().toLowerCase()),
             model: codeAgent.model,
             maxTurns: codeAgent.maxTurns,
             timeoutMs: codeAgent.timeoutMs,
@@ -275,33 +276,15 @@ export function normalizeTestSettingsInput(overrides: unknown): Record<string, u
     memory: {
       enabled: memory.enabled,
       promptSlice: {
-        maxRecentMessages: memory.maxRecentMessages,
-        maxHighlights: memory.maxHighlights
-      },
-      execution: {
-        mode: "dedicated_model",
-        model: {
-          provider: memoryLlm.provider ?? llm.provider,
-          model: memoryLlm.model ?? llm.model
-        },
-        temperature: memoryLlm.temperature,
-        maxOutputTokens: memoryLlm.maxOutputTokens
-      },
-      extraction: {
-        enabled: true
+        maxRecentMessages: memory.maxRecentMessages
       },
       embeddingModel: memory.embeddingModel,
       reflection: {
         enabled: reflection.enabled,
-        strategy: reflection.strategy,
         hour: reflection.hour,
         minute: reflection.minute,
         maxFactsPerReflection: reflection.maxFactsPerReflection
-      },
-      dailyLogRetentionDays: memory.dailyLogRetentionDays
-    },
-    directives: {
-      enabled: adaptiveDirectives.enabled
+      }
     },
     initiative: {
       text: {

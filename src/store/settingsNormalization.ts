@@ -6,7 +6,6 @@ import {
 import { deepMerge } from "../utils.ts";
 import { normalizeAgentStackSection } from "./normalize/agentStack.ts";
 import { normalizeAutomationsSection } from "./normalize/automations.ts";
-import { normalizeDirectivesSection } from "./normalize/directives.ts";
 import { normalizeIdentitySection } from "./normalize/identity.ts";
 import { normalizeInitiativeSection } from "./normalize/initiative.ts";
 import { normalizeInteractionSection } from "./normalize/interaction.ts";
@@ -22,6 +21,7 @@ import {
 } from "./normalize/primitives.ts";
 import {
   normalizeModelBinding,
+  normalizeOptionalModelBinding,
   resolveAgentStackPresetConfig
 } from "./normalize/shared.ts";
 import { normalizeVoiceSection } from "./normalize/voice.ts";
@@ -181,7 +181,11 @@ export function normalizeSettings(raw: unknown): Settings {
       orchestratorOverride
     ),
     memory: normalizeMemorySection(merged.memory),
-    directives: normalizeDirectivesSection(merged.directives),
+    memoryLlm: normalizeOptionalModelBinding(
+      merged.memoryLlm,
+      orchestratorOverride.provider,
+      orchestratorOverride.model
+    ),
     initiative: normalizeInitiativeSection(merged.initiative),
     voice: normalizedVoice,
     media: normalizeMediaSection(merged.media, presetConfig),
