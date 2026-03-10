@@ -68,6 +68,12 @@ Only one helper should translate these phases into reply output lock decisions:
 
 Ground truth for output locks is `assistantOutput.phase` and `bot_audio_buffered`. The heuristic signals above are secondary guards.
 
+Wake-word music handoff rule:
+
+- if music was auto-paused because the user addressed the bot (`paused_wake_word`), auto-resume happens only after the assistant reply has actually drained from `clankvox`
+- `response.done` is not sufficient on its own because realtime generation can finish while buffered TTS is still playing locally
+- the handoff also waits for the short `botTurnOpen` guard to clear before resuming music
+
 Freshness rule:
 
 - positive `clankvox` buffered-playback telemetry is not durable truth forever

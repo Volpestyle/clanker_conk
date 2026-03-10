@@ -130,7 +130,42 @@ export interface ReplyManagerHost {
 }
 
 export class ReplyManager {
+  private readonly wakeWordMusicResumeTimers = new WeakMap<VoiceSession, ReturnType<typeof setTimeout>>();
+
   constructor(private readonly host: ReplyManagerHost) {}
+
+  private clearWakeWordMusicResumeTimer(session: VoiceSession) {
+    const existingTimer = this.wakeWordMusicResumeTimers.get(session);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      this.wakeWordMusicResumeTimers.delete(session);
+    }
+  }
+
+  private scheduleWakeWordMusicResumeAfterAssistantPlayback(
+    session: VoiceSession,
+    delayMs = BOT_TURN_SILENCE_RESET_MS
+  ) {
+    this.clearWakeWordMusicResumeTimer(session);
+    const normalizedDelayMs = Math.max(0, Math.round(Number(delayMs) || 0));
+
+    const attemptResume = () => {
+      this.wakeWordMusicResumeTimers.delete(session);
+      if (session.ending) return;
+      if (this.host.getMusicPhase(session) !== "paused_wake_word") return;
+      if (this.hasBufferedTtsPlayback(session) || Boolean(session.botTurnOpen)) {
+        const retryTimer = setTimeout(attemptResume, 200);
+        this.wakeWordMusicResumeTimers.set(session, retryTimer);
+        return;
+      }
+      this.host.setMusicPhase(session, "playing");
+      this.host.musicPlayer?.resume?.();
+      this.host.haltSessionOutputForMusicPlayback(session, "music_resumed_after_wake_word");
+    };
+
+    const timer = setTimeout(attemptResume, normalizedDelayMs);
+    this.wakeWordMusicResumeTimers.set(session, timer);
+  }
 
   ensureAssistantOutputState(session: VoiceSession): AssistantOutputState | null {
     if (!session || session.ending) return null;
@@ -1172,12 +1207,7 @@ export class ReplyManager {
 
       const musicPhase = this.host.getMusicPhase(session);
       if (musicPhase === "paused_wake_word") {
-        setTimeout(() => {
-          if (session.ending) return;
-          this.host.setMusicPhase(session, "playing");
-          this.host.musicPlayer?.resume?.();
-          this.host.haltSessionOutputForMusicPlayback(session, "music_resumed_after_wake_word");
-        }, BOT_TURN_SILENCE_RESET_MS);
+        this.scheduleWakeWordMusicResumeAfterAssistantPlayback(session, BOT_TURN_SILENCE_RESET_MS);
       }
 
       if (preserveInFlightToolWork || preserveActiveReplies) {
