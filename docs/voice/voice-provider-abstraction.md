@@ -125,7 +125,7 @@ Canonical runtime transport/transcription settings:
 - `agentStack.runtimeConfig.voice.openaiRealtime.inputTranscriptionModel`
 - `agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge`
 
-These runtime settings configure bridge and file-turn transcription behavior. OpenAI transport keeps the configured `pcm16`, `g711_ulaw`, or `g711_alaw` formats when building realtime session updates.
+These runtime settings configure bridge and file-turn transcription behavior. OpenAI transport maps configured audio formats onto the nested realtime media descriptors used in `session.update` payloads: `pcm16` becomes `audio/pcm`, `g711_ulaw` becomes `audio/pcmu`, and `g711_alaw` becomes `audio/pcma`.
 
 ### Stage 2: Turn Promotion And Noise Rejection
 

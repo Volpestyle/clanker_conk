@@ -2,7 +2,7 @@ import { test } from "bun:test";
 import assert from "node:assert/strict";
 import { OpenAiRealtimeClient } from "./openaiRealtimeClient.ts";
 
-test("OpenAiRealtimeClient sendSessionUpdate uses current OpenAI session shape", () => {
+test("OpenAiRealtimeClient sendSessionUpdate uses nested realtime session audio shape", () => {
   const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
   let outbound = null;
   client.send = (payload) => {
@@ -21,18 +21,24 @@ test("OpenAiRealtimeClient sendSessionUpdate uses current OpenAI session shape",
 
   assert.ok(outbound);
   assert.equal(outbound.type, "session.update");
+  assert.equal(outbound.session.type, "realtime");
   assert.equal(outbound.session.model, "gpt-realtime");
   assert.equal(outbound.session.instructions, "Keep it short.");
-  assert.deepEqual(outbound.session.modalities, ["audio"]);
-  assert.equal(outbound.session.voice, "alloy");
-  assert.equal(outbound.session.input_audio_format, "pcm16");
-  assert.equal(outbound.session.output_audio_format, "pcm16");
-  assert.equal(outbound.session.turn_detection, null);
-  assert.equal(outbound.session.input_audio_transcription.model, "gpt-4o-mini-transcribe");
-  assert.equal(Object.hasOwn(outbound.session.input_audio_transcription, "language"), false);
-  assert.equal(Object.hasOwn(outbound.session.input_audio_transcription, "prompt"), false);
-  assert.equal(Object.hasOwn(outbound.session, "output_modalities"), false);
-  assert.equal(Object.hasOwn(outbound.session, "audio"), false);
+  assert.deepEqual(outbound.session.output_modalities, ["audio"]);
+  assert.equal(outbound.session.audio.input.format.type, "audio/pcm");
+  assert.equal(outbound.session.audio.input.format.rate, 24000);
+  assert.equal(outbound.session.audio.input.turn_detection, null);
+  assert.equal(outbound.session.audio.output.format.type, "audio/pcm");
+  assert.equal(outbound.session.audio.output.format.rate, 24000);
+  assert.equal(outbound.session.audio.output.voice, "alloy");
+  assert.equal(outbound.session.audio.input.transcription.model, "gpt-4o-mini-transcribe");
+  assert.equal(Object.hasOwn(outbound.session.audio.input.transcription, "language"), false);
+  assert.equal(Object.hasOwn(outbound.session.audio.input.transcription, "prompt"), false);
+  assert.equal(Object.hasOwn(outbound.session, "voice"), false);
+  assert.equal(Object.hasOwn(outbound.session, "modalities"), false);
+  assert.equal(Object.hasOwn(outbound.session, "input_audio_format"), false);
+  assert.equal(Object.hasOwn(outbound.session, "output_audio_format"), false);
+  assert.equal(Object.hasOwn(outbound.session, "input_audio_transcription"), false);
 });
 
 test("OpenAiRealtimeClient sendSessionUpdate includes transcription language guidance when configured", () => {
@@ -55,14 +61,14 @@ test("OpenAiRealtimeClient sendSessionUpdate includes transcription language gui
   client.sendSessionUpdate();
 
   assert.ok(outbound);
-  assert.equal(outbound.session.input_audio_transcription.language, "en");
+  assert.equal(outbound.session.audio.input.transcription.language, "en");
   assert.equal(
-    outbound.session.input_audio_transcription.prompt,
+    outbound.session.audio.input.transcription.prompt,
     "Language hint: en. Prefer this language when uncertain."
   );
 });
 
-test("OpenAiRealtimeClient sendSessionUpdate preserves supported G.711 formats", () => {
+test("OpenAiRealtimeClient sendSessionUpdate maps G.711 formats to OpenAI media descriptors", () => {
   const client = new OpenAiRealtimeClient({ apiKey: "test-key" });
   let outbound = null;
   client.send = (payload) => {
@@ -80,8 +86,8 @@ test("OpenAiRealtimeClient sendSessionUpdate preserves supported G.711 formats",
   client.sendSessionUpdate();
 
   assert.ok(outbound);
-  assert.equal(outbound.session.input_audio_format, "g711_ulaw");
-  assert.equal(outbound.session.output_audio_format, "g711_alaw");
+  assert.equal(outbound.session.audio.input.format.type, "audio/pcmu");
+  assert.equal(outbound.session.audio.output.format.type, "audio/pcma");
 });
 
 test("OpenAiRealtimeClient tracks response lifecycle", () => {
@@ -309,7 +315,7 @@ test("OpenAiRealtimeClient sendSessionUpdate includes function tools and manual 
   assert.equal(outbound.session.tools.length, 1);
   assert.equal(outbound.session.tools[0]?.type, "function");
   assert.equal(outbound.session.tools[0]?.name, "memory_search");
-  assert.equal(outbound.session.turn_detection, null);
+  assert.equal(outbound.session.audio.input.turn_detection, null);
   assert.equal(outbound.session.tool_choice, "auto");
 });
 

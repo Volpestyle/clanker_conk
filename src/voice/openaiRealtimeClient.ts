@@ -630,15 +630,10 @@ export class OpenAiRealtimeClient extends EventEmitter {
       throw new Error("OpenAI realtime voice is required (configure voice.openaiRealtime.voice).");
     }
     const normalizedTools = normalizeRealtimeTools(session.tools);
-    const sessionPayload: Record<string, unknown> = {
-      model: String(session.model || OPENAI_REALTIME_DEFAULT_SESSION_MODEL).trim() || OPENAI_REALTIME_DEFAULT_SESSION_MODEL,
-      modalities: ["audio"],
-      instructions: String(session.instructions || ""),
-      voice: resolvedVoice,
-      input_audio_format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat, "input"),
-      output_audio_format: normalizeOpenAiRealtimeAudioFormat(session.outputAudioFormat, "output"),
+    const inputAudio = {
+      format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat, "input"),
       turn_detection: null,
-      input_audio_transcription: compactObject({
+      transcription: compactObject({
         model:
           normalizeOpenAiRealtimeTranscriptionModel(
             session.inputTranscriptionModel,
@@ -646,14 +641,23 @@ export class OpenAiRealtimeClient extends EventEmitter {
           ),
         language: String(session.inputTranscriptionLanguage || "").trim() || null,
         prompt: String(session.inputTranscriptionPrompt || "").trim() || null
-      }),
-      ...(normalizedTools.length
-        ? {
-            tools: normalizedTools,
-            tool_choice: normalizeRealtimeToolChoice(session.toolChoice)
-          }
-        : {})
+      })
     };
+    const sessionPayload: Record<string, unknown> = compactObject({
+      type: "realtime",
+      model: String(session.model || OPENAI_REALTIME_DEFAULT_SESSION_MODEL).trim() || OPENAI_REALTIME_DEFAULT_SESSION_MODEL,
+      output_modalities: ["audio"],
+      instructions: String(session.instructions || ""),
+      audio: compactObject({
+        input: inputAudio,
+        output: compactObject({
+          format: normalizeOpenAiRealtimeAudioFormat(session.outputAudioFormat, "output"),
+          voice: resolvedVoice
+        })
+      }),
+      tools: normalizedTools.length ? normalizedTools : undefined,
+      tool_choice: normalizedTools.length ? normalizeRealtimeToolChoice(session.toolChoice) : undefined
+    });
     this.send({
       type: "session.update",
       session: sessionPayload
@@ -709,20 +713,32 @@ function normalizeOpenAiRealtimeAudioFormat(value, direction = "input") {
     const type = String(value.type || "")
       .trim()
       .toLowerCase();
-    if (type === "audio/pcm" || type === "pcm16") return "pcm16";
-    if (type === "g711_ulaw") return "g711_ulaw";
-    if (type === "g711_alaw") return "g711_alaw";
+    if (type === "audio/pcm" || type === "pcm16") {
+      const rate = Number(value.rate);
+      return {
+        type: "audio/pcm",
+        rate: Number.isFinite(rate) && rate > 0 ? Math.floor(rate) : 24000
+      };
+    }
+    if (type === "audio/pcmu" || type === "g711_ulaw") {
+      return { type: "audio/pcmu" };
+    }
+    if (type === "audio/pcma" || type === "g711_alaw") {
+      return { type: "audio/pcma" };
+    }
   }
 
   const normalized = String(value || "")
     .trim()
     .toLowerCase();
-  if (normalized === "audio/pcm" || normalized === "pcm16") return "pcm16";
-  if (normalized === "g711_ulaw") return "g711_ulaw";
-  if (normalized === "g711_alaw") return "g711_alaw";
+  if (normalized === "audio/pcmu" || normalized === "g711_ulaw") return { type: "audio/pcmu" };
+  if (normalized === "audio/pcma" || normalized === "g711_alaw") return { type: "audio/pcma" };
 
   void direction;
-  return "pcm16";
+  return {
+    type: "audio/pcm",
+    rate: 24000
+  };
 }
 
 function normalizeImageMimeType(value) {
@@ -909,21 +925,19 @@ function summarizeOutboundPayload(payload) {
 
   if (type === "session.update") {
     const session = payload.session && typeof payload.session === "object" ? payload.session : {};
-    const inputAudioTranscription =
-      session.input_audio_transcription && typeof session.input_audio_transcription === "object"
-        ? session.input_audio_transcription
-        : {};
+    const audio = session.audio && typeof session.audio === "object" ? session.audio : {};
     return compactObject({
       type,
+      sessionType: session.type || null,
       model: session.model || null,
-      modalities: Array.isArray(session.modalities) ? session.modalities : null,
-      inputAudioFormat: session.input_audio_format || null,
-      outputAudioFormat: session.output_audio_format || null,
-      outputVoice: session.voice || null,
-      inputTranscriptionModel: inputAudioTranscription.model || null,
-      inputTranscriptionLanguage: inputAudioTranscription.language || null,
-      inputTranscriptionPromptChars: inputAudioTranscription.prompt
-        ? String(inputAudioTranscription.prompt).length
+      outputModalities: Array.isArray(session.output_modalities) ? session.output_modalities : null,
+      inputAudioFormat: audio?.input?.format || null,
+      outputAudioFormat: audio?.output?.format || null,
+      outputVoice: audio?.output?.voice || null,
+      inputTranscriptionModel: audio?.input?.transcription?.model || null,
+      inputTranscriptionLanguage: audio?.input?.transcription?.language || null,
+      inputTranscriptionPromptChars: audio?.input?.transcription?.prompt
+        ? String(audio.input.transcription.prompt).length
         : 0,
       instructionsChars: session.instructions ? String(session.instructions).length : 0,
       toolCount: Array.isArray(session.tools) ? session.tools.length : 0,

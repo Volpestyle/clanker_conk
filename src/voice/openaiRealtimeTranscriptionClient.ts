@@ -332,13 +332,19 @@ export class OpenAiRealtimeTranscriptionClient extends EventEmitter {
       language: String(session.inputTranscriptionLanguage || "").trim() || null,
       prompt: String(session.inputTranscriptionPrompt || "").trim() || null
     });
+    const inputAudio = {
+      format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat),
+      noise_reduction: { type: "near_field" },
+      turn_detection: OPENAI_REALTIME_ASR_TURN_DETECTION,
+      transcription
+    };
     this.send({
-      type: "transcription_session.update",
+      type: "session.update",
       session: {
-        input_audio_format: normalizeOpenAiRealtimeAudioFormat(session.inputAudioFormat),
-        input_audio_noise_reduction: { type: "near_field" },
-        turn_detection: OPENAI_REALTIME_ASR_TURN_DETECTION,
-        input_audio_transcription: transcription,
+        type: "transcription",
+        audio: {
+          input: inputAudio
+        },
         // Include logprobs so downstream can compute transcript confidence when needed.
         include: ["item.input_audio_transcription.logprobs"]
       }
@@ -372,19 +378,27 @@ function normalizeOpenAiRealtimeAudioFormat(value) {
     const type = String(value.type || "")
       .trim()
       .toLowerCase();
-    if (type === "audio/pcm" || type === "pcm16") return "pcm16";
-    if (type === "g711_ulaw") return "g711_ulaw";
-    if (type === "g711_alaw") return "g711_alaw";
+    if (type === "audio/pcm" || type === "pcm16") {
+      const rate = Number(value.rate);
+      return {
+        type: "audio/pcm",
+        rate: Number.isFinite(rate) && rate > 0 ? Math.floor(rate) : 24000
+      };
+    }
+    if (type === "audio/pcmu" || type === "g711_ulaw") return { type: "audio/pcmu" };
+    if (type === "audio/pcma" || type === "g711_alaw") return { type: "audio/pcma" };
   }
 
   const normalized = String(value || "")
     .trim()
     .toLowerCase();
-  if (normalized === "audio/pcm" || normalized === "pcm16") return "pcm16";
-  if (normalized === "g711_ulaw") return "g711_ulaw";
-  if (normalized === "g711_alaw") return "g711_alaw";
+  if (normalized === "audio/pcmu" || normalized === "g711_ulaw") return { type: "audio/pcmu" };
+  if (normalized === "audio/pcma" || normalized === "g711_alaw") return { type: "audio/pcma" };
 
-  return "pcm16";
+  return {
+    type: "audio/pcm",
+    rate: 24000
+  };
 }
 
 function normalizeRealtimeItemId(value) {
@@ -410,17 +424,15 @@ function summarizeOutboundPayload(payload) {
     };
   }
 
-  if (type === "session.update" || type === "transcription_session.update") {
+  if (type === "session.update") {
     const session = payload.session && typeof payload.session === "object" ? payload.session : {};
-    const inputAudioTranscription =
-      session.input_audio_transcription && typeof session.input_audio_transcription === "object"
-        ? session.input_audio_transcription
-        : {};
+    const audio = session.audio && typeof session.audio === "object" ? session.audio : {};
     return compactObject({
       type,
-      inputFormat: session.input_audio_format || null,
-      inputTurnDetectionType: session.turn_detection?.type || null,
-      inputTranscriptionModel: inputAudioTranscription.model || null
+      sessionType: session.type || null,
+      inputFormat: audio?.input?.format || null,
+      inputTurnDetectionType: audio?.input?.turn_detection?.type || null,
+      inputTranscriptionModel: audio?.input?.transcription?.model || null
     });
   }
 

@@ -316,7 +316,7 @@ Phase query helpers: `asrPhaseCanAcceptAudio` (connecting or ready), `asrPhaseIs
 | Idle TTL timer fires | `ready` | `closing` → `idle` |
 | Circuit breaker (3 consecutive empty commits) | `committing` | `closing` → `idle` → `connecting` → `ready` (reconnect) |
 
-ASR bridge session updates use the OpenAI transcription-session websocket event shape: `transcription_session.update` with top-level `input_audio_format`, `input_audio_noise_reduction`, `input_audio_transcription`, `turn_detection`, and `include` fields inside `session`. Configured `g711_ulaw` and `g711_alaw` input formats are preserved instead of being rewritten to PCM.
+ASR bridge session updates use `session.update` with `session.type = "transcription"` and nested `audio.input` fields for format, noise reduction, turn detection, and transcription. Configured `g711_ulaw` and `g711_alaw` inputs are mapped to OpenAI's `audio/pcmu` and `audio/pcma` media descriptors.
 
 ## 15. Per-User vs Shared Mode
 
