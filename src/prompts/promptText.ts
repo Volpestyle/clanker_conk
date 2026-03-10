@@ -5,13 +5,14 @@ import {
 } from "./promptCore.ts";
 
 import {
-  formatAdaptiveDirectives,
+  formatBehaviorMemoryFacts,
   formatInitiativeChannelSummaries,
   formatInitiativeFeedCandidates,
   formatInitiativeInterestFacts,
   formatInitiativeSourcePerformance,
   formatRecentChat,
   formatConversationWindows,
+  formatConversationParticipantMemory,
   formatEmojiChoices,
   formatDiscoveryFindings,
   formatWebSearchFindings,
@@ -69,9 +70,13 @@ export function buildReplyPrompt({
   triggerMessageIds = [],
   imageInputs,
   recentMessages,
-  relevantMessages,
   userFacts,
   relevantFacts,
+  participantProfiles = [],
+  selfFacts = [],
+  loreFacts = [],
+  guidanceFacts = [],
+  behavioralFacts = [],
   emojiHints,
   reactionEmojiOptions = [],
   allowReplySimpleImages = false,
@@ -97,7 +102,6 @@ export function buildReplyPrompt({
   allowMemoryLookupDirective = false,
   allowImageLookupDirective = false,
   allowMemoryDirective = false,
-  allowAdaptiveDirective = false,
   allowAutomationDirective = false,
   automationTimeZoneLabel = "",
   voiceMode = null,
@@ -135,32 +139,35 @@ export function buildReplyPrompt({
   parts.push("=== RECENT MESSAGES ===");
   parts.push(formatRecentChat(recentMessages, { imageCandidates: imageLookup?.candidates }));
 
-  if (relevantMessages?.length) {
-    parts.push("=== RELEVANT PAST MESSAGES ===");
-    parts.push(formatRecentChat(relevantMessages, { imageCandidates: imageLookup?.candidates }));
-  }
-
   if (recentConversationHistory?.length) {
     parts.push("=== RECENT CONVERSATION CONTINUITY ===");
-    parts.push("Relevant past conversation windows from shared text/voice history:");
+    parts.push("Relevant past conversation windows (each labeled with age and source type — voice chat or text):");
     parts.push(formatConversationWindows(recentConversationHistory));
-    parts.push("Use this for continuity when it clearly matches the current topic. If the user asks about older or less certain history, use conversation_search.");
+    parts.push("Use this for continuity ONLY when it clearly matches the current topic AND is recent. Old windows (hours/days ago) are background context, not active conversation — do not treat them as ongoing. A voice chat transcript from hours ago is not the same as someone just saying something to you now.");
   }
   parts.push("Conversation-history lookup is available for recalling prior text/voice exchanges. If the user asks what was said earlier or what you talked about before, use conversation_search.");
-  if (allowAdaptiveDirective) {
-    parts.push("When someone asks you to always/never do something, call them a nickname, change how you talk, or follow any standing rule — even casually — you MUST call adaptive_directive_add to persist it. Don't just comply in the moment; save it so you remember next conversation. Use adaptive_directive_remove when asked to undo one.");
-  } else {
-    parts.push("Adaptive directives are unavailable right now. Do not claim you can save standing behavior changes for later.");
+
+  if (participantProfiles?.length || selfFacts?.length || loreFacts?.length) {
+    parts.push("=== PEOPLE IN THIS CONVERSATION ===");
+    parts.push(
+      formatConversationParticipantMemory({
+        participantProfiles,
+        selfFacts,
+        loreFacts
+      })
+    );
   }
 
-  if (userFacts?.length) {
-    parts.push("=== USER FACTS ===");
-    parts.push(formatMemoryFacts(userFacts, { includeType: false, includeProvenance: true, maxItems: 8 }));
+  if (guidanceFacts?.length) {
+    parts.push("=== BEHAVIOR GUIDANCE ===");
+    parts.push("Standing guidance memory that should shape how you act in this conversation:");
+    parts.push(formatBehaviorMemoryFacts(guidanceFacts, 10));
   }
 
-  if (relevantFacts?.length) {
-    parts.push("=== DURABLE MEMORY ===");
-    parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: true, maxItems: 10 }));
+  if (behavioralFacts?.length) {
+    parts.push("=== RELEVANT BEHAVIORAL MEMORY ===");
+    parts.push("These behavior memories were retrieved because they match this turn. Follow them when relevant.");
+    parts.push(formatBehaviorMemoryFacts(behavioralFacts, 8));
   }
 
   if (memoryLookup?.requested) {
@@ -310,57 +317,13 @@ export function buildReplyPrompt({
     })
   );
   if (voiceEnabled) {
-    parts.push("If users mention VC/voice requests, stay consistent with voice being available.");
+    parts.push("You have voice channel capability. Use join_voice_channel / leave_voice_channel tools to manage your VC presence.");
     if (inVoiceChannel) {
-      parts.push("If users ask whether you're in VC, acknowledge that you're already in VC.");
+      parts.push("You are currently in a voice channel.");
     } else {
-      parts.push("If users ask whether you're in VC, acknowledge that you're not currently in VC.");
+      parts.push("You are not currently in a voice channel. To play music or interact in VC, call join_voice_channel first.");
     }
-    parts.push(
-      "Hard rule: if a message is an explicit VC command aimed at you (for example: 'join vc', 'join voice', 'hop in vc', 'rejoin vc', 'join again', 'come back'), set voiceIntent.intent=join."
-    );
-    parts.push(
-      "For explicit VC join commands aimed at you, set voiceIntent.confidence to at least 0.9 and do not leave voiceIntent as none."
-    );
-    parts.push(
-      "Do not output text-only deflection for explicit VC join commands; route through voiceIntent."
-    );
-    parts.push(
-      "Use conversational continuity: follow-up VC control requests can still be aimed at you even if the user does not repeat your name."
-    );
-    parts.push(
-      "Use recent turn history to resolve target: if someone just addressed you and follows with a short imperative like 'get in vc now', treat it as likely directed at you unless another explicit target is present."
-    );
-    parts.push(
-      "Prioritize who the current message is addressed to over older context when deciding voiceIntent."
-    );
-    parts.push(
-      "If the incoming message is clearly asking you to join, leave, or report VC status, set voiceIntent.intent to join, leave, or status."
-    );
-    parts.push(
-      "If the user clearly asks you to watch their stream in VC, set voiceIntent.intent to watch_stream."
-    );
-    parts.push(
-      "If the user clearly asks you to stop watching stream, set voiceIntent.intent to stop_watching_stream."
-    );
-    parts.push(
-      "If the user asks whether stream watch is on/off, set voiceIntent.intent to stream_status."
-    );
-    parts.push(
-      "If the user clearly asks you to play music immediately, replace the current track, or start a song now in VC, set voiceIntent.intent to music_play."
-    );
-    parts.push(
-      "If the user clearly asks you to queue a song next in VC, set voiceIntent.intent to music_queue_next."
-    );
-    parts.push(
-      "If the user clearly asks you to add a song to the queue without interrupting current playback in VC, set voiceIntent.intent to music_queue_add."
-    );
-    parts.push(
-      "If the user clearly asks you to stop music, set voiceIntent.intent to music_stop."
-    );
-    parts.push(
-      "If the user clearly asks you to pause music, set voiceIntent.intent to music_pause."
-    );
+    parts.push("Music commands (play, queue, stop, pause, skip, search) are available as tool calls. If you are not in a voice channel, call join_voice_channel first, then call the music tool.");
     if (voiceMode?.musicState) {
       const musicPlaybackState = String(voiceMode.musicState.playbackState || "idle").trim().toLowerCase() || "idle";
       const currentTrackLabel = formatPromptTrackLabel(voiceMode.musicState.currentTrack);
@@ -392,12 +355,13 @@ export function buildReplyPrompt({
     if (musicDisambiguationActive && musicDisambiguationOptions.length > 0) {
       const pendingQuery = String(voiceMode?.musicDisambiguation?.query || "").trim() || null;
       const pendingPlatform = String(voiceMode?.musicDisambiguation?.platform || "auto").trim().toLowerCase() || "auto";
+      const pendingAction = voiceMode.musicDisambiguation.action === "queue_next" ? "music_queue_next" : voiceMode.musicDisambiguation.action === "queue_add" ? "music_queue_add" : "music_play";
       parts.push(
-        `There is a pending music disambiguation request${pendingQuery ? ` for query "${pendingQuery}"` : ""} on platform ${pendingPlatform} for action ${voiceMode.musicDisambiguation.action === "queue_next" ? "music_queue_next" : voiceMode.musicDisambiguation.action === "queue_add" ? "music_queue_add" : "music_play"}.`
+        `There is a pending music disambiguation request${pendingQuery ? ` for query "${pendingQuery}"` : ""} on platform ${pendingPlatform}.`
       );
       parts.push(
         [
-          "Pending music options (use exact ids for selectedResultId):",
+          "Pending music options:",
           ...musicDisambiguationOptions.slice(0, 5).map((entry, index) => {
             const id = String(entry?.id || "").trim();
             const title = String(entry?.title || "").trim() || "unknown";
@@ -408,24 +372,12 @@ export function buildReplyPrompt({
         ].join("\n")
       );
       parts.push(
-        `If the user picks one of those options (by number or by naming it), set voiceIntent.intent=${voiceMode.musicDisambiguation.action === "queue_next" ? "music_queue_next" : voiceMode.musicDisambiguation.action === "queue_add" ? "music_queue_add" : "music_play"} and voiceIntent.selectedResultId to that exact id.`
+        `If the user picks one of those options (by number or by naming it), call ${pendingAction} with the selection_id set to that exact id.`
       );
     }
-    parts.push(
-      "Set voiceIntent.confidence from 0 to 1. Use high confidence only for explicit voice-control requests aimed at you."
-    );
-    parts.push(
-      "If the message is clearly aimed at someone else (for example, only tagging another user with no clear reference to you), set voiceIntent.intent to none."
-    );
-    parts.push(
-      "Example: if a message tags another user and says 'come back' without clearly addressing you, set voiceIntent.intent=none."
-    );
-    parts.push("If intent target is ambiguous, prefer voiceIntent.intent=none with lower confidence.");
-    parts.push("For normal chat or ambiguous requests, set voiceIntent.intent to none and keep confidence low.");
   } else {
     parts.push("Voice control capability exists but is currently disabled in settings.");
-    parts.push("If asked to join VC, say voice mode is currently disabled.");
-    parts.push("Set voiceIntent.intent to none.");
+    parts.push("If asked to join VC or play music, say voice mode is currently disabled.");
   }
 
   parts.push("=== SCREEN SHARE ===");
@@ -704,36 +656,6 @@ export function buildReplyPrompt({
     parts.push("Set at most one media object for this reply.");
   }
 
-  parts.push("=== MEMORY SAVING ===");
-
-  if (allowMemoryDirective) {
-    parts.push("If the incoming message contains durable info worth keeping, set memoryLine to a concise fact.");
-    parts.push(
-      "Use memoryLine only for lasting facts (names, preferences, recurring relationships, long-lived context), not throwaway chatter."
-    );
-    parts.push("Set memoryScope to user for facts about the message author. Set memoryScope to lore only for stable shared guild/world context not tied to one person.");
-    parts.push("Set memoryFactType to one of preference, profile, relationship, project, or other whenever memoryLine is not null.");
-    parts.push(
-      "Do not save requests, dares, jokes, insults, toxic phrasing, or instructions about how you should talk/behave in future situations."
-    );
-    parts.push(
-      "Future talking-style requests and recurring trigger/action behaviors belong in adaptive_directive_add / adaptive_directive_remove, not durable memory."
-    );
-    parts.push(
-      "Use your own judgment: if a memory candidate is not a genuine durable fact, leave memoryLine as null."
-    );
-    parts.push("Keep memoryLine concise (under 180 chars) and factual.");
-    parts.push(
-      "If your own reply introduces a durable self fact (stable identity, recurring preference, or explicit standing commitment), set selfMemoryLine."
-    );
-    parts.push("Set selfMemoryFactType to one of preference, profile, relationship, project, or other whenever selfMemoryLine is not null.");
-    parts.push("Use selfMemoryLine only for durable facts about you, not temporary mood or throwaway phrasing.");
-    parts.push(
-      "Do not store abusive nicknames, harassment, or future-behavior rules as selfMemoryLine; use selfMemoryLine only for genuine stable self facts."
-    );
-    parts.push("Keep selfMemoryLine concise (under 180 chars), concrete, and grounded in your reply text.");
-  }
-
   parts.push("=== OUTPUT FORMAT ===");
   parts.push("Task: write one natural Discord reply for this turn.");
   parts.push("If recent messages are one coherent thread, you may combine and answer multiple messages in one reply.");
@@ -747,17 +669,8 @@ export function buildReplyPrompt({
   parts.push(
     "When no lookup is needed, set webSearchQuery, browserBrowseQuery, memoryLookupQuery, imageLookupQuery, and openArticleRef to null."
   );
-  parts.push("When no durable fact should be saved, set memoryLine, memoryScope, and memoryFactType to null.");
-  parts.push("When no durable self fact should be saved, set selfMemoryLine and selfMemoryFactType to null.");
   parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false for text-channel replies.");
   parts.push("When no automation command is intended, set automationAction.operation=none and other automationAction fields to null/false.");
-  parts.push(
-    "Set voiceIntent.intent to one of join|leave|status|watch_stream|stop_watching_stream|stream_status|music_play|music_queue_next|music_queue_add|music_stop|music_pause|none."
-  );
-  parts.push("When voiceIntent.intent is music_play, music_queue_next, or music_queue_add, set voiceIntent.query to the song name the user wants.");
-  parts.push("Set voiceIntent.platform to youtube|soundcloud|auto when intent is music_play, music_queue_next, or music_queue_add. Use auto to search all platforms.");
-  parts.push("When searchResults are provided (from a previous music search), set voiceIntent.selectedResultId to the ID of the track to use for music_play, music_queue_next, or music_queue_add.");
-  parts.push("When not issuing voice control, set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null, and other voiceIntent fields to null.");
   parts.push("Set screenShareIntent.action to one of offer_link|none.");
   parts.push("When not offering a share link, set screenShareIntent.action=none, screenShareIntent.confidence=0, screenShareIntent.reason=null.");
 
@@ -856,14 +769,17 @@ export function buildDiscoveryPrompt({
 
 export function buildInitiativePrompt({
   botName,
+  persona = "",
   initiativeEagerness = 20,
   channelSummaries = [],
   discoveryCandidates = [],
   sourcePerformance = [],
   communityInterestFacts = [],
   relevantFacts = [],
-  adaptiveDirectives = [],
+  guidanceFacts = [],
+  behavioralFacts = [],
   allowActiveCuriosity = false,
+  allowMemorySearch = false,
   allowSelfCuration = false,
   allowImagePosts = false,
   allowVideoPosts = false,
@@ -879,6 +795,7 @@ export function buildInitiativePrompt({
 
   parts.push("=== INITIATIVE MODE ===");
   parts.push(`You are ${String(botName || "the bot").trim() || "the bot"}. You have a moment to look around your Discord channels and decide whether you want to post something.`);
+  parts.push(`Persona: ${String(persona || "").trim() || "playful slang, open, honest, exploratory"}`);
   parts.push(`Social mode: ${describeInitiativeEagerness(initiativeEagerness)} (initiative eagerness ${Math.max(0, Math.min(100, Number(initiativeEagerness) || 0))}/100)`);
 
   parts.push("=== CHANNELS ===");
@@ -898,21 +815,32 @@ export function buildInitiativePrompt({
     parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: true, maxItems: 10 }));
   }
 
-  parts.push("=== ADAPTIVE DIRECTIVES ===");
-  parts.push(
-    adaptiveDirectives?.length
-      ? formatAdaptiveDirectives(adaptiveDirectives, 8)
-      : "(no adaptive directives)"
-  );
+  if (guidanceFacts?.length) {
+    parts.push("=== BEHAVIOR GUIDANCE ===");
+    parts.push(formatBehaviorMemoryFacts(guidanceFacts, 8));
+  }
+
+  if (behavioralFacts?.length) {
+    parts.push("=== RELEVANT BEHAVIORAL MEMORY ===");
+    parts.push(formatBehaviorMemoryFacts(behavioralFacts, 6));
+  }
 
   parts.push("=== CAPABILITIES ===");
   if (allowActiveCuriosity) {
-    parts.push("You can call web_search to look something up quickly, browser_browse to dig into something interactively, and memory_search to recall durable community context.");
+    parts.push("You can use web_search to look something up, or browser_browse to read a page in depth — if you're curious about something or want to check if a feed item is actually worth sharing.");
   } else {
-    parts.push("Active curiosity tools are unavailable right now. Reason from the feed, memory, and channel context only.");
+    parts.push("web_search and browser_browse are unavailable right now. Reason from the feed, memory, and channel context unless another tool is listed below.");
+  }
+  if (allowMemorySearch) {
+    parts.push("You can use memory_search to recall durable community context when it helps you read the room.");
+  } else {
+    parts.push("memory_search is unavailable right now.");
   }
   if (allowSelfCuration) {
-    parts.push("You can manage your own feed with discovery_source_list, discovery_source_add, and discovery_source_remove when a source pattern is clear.");
+    parts.push("You can manage your own feed:");
+    parts.push("- discovery_source_add: subscribe to a new subreddit, RSS feed, YouTube channel, or X handle");
+    parts.push("- discovery_source_remove: drop a source that is not working");
+    parts.push("- discovery_source_list: see your current subscriptions");
   } else {
     parts.push("Feed self-curation is disabled right now. Do not attempt to change feed subscriptions.");
   }
@@ -926,6 +854,7 @@ export function buildInitiativePrompt({
     allowGifPosts && boundedGifs > 0 ? `gif (${boundedGifs} left)` : ""
   ].filter(Boolean);
   if (mediaOptions.length) {
+    parts.push("You can request media (image, video, GIF) if the moment calls for it.");
     parts.push(`Media is available if it genuinely fits the moment: ${mediaOptions.join(", ")}.`);
     parts.push(`If you request media, keep mediaPrompt under ${maxMediaPromptChars} chars.`);
     parts.push("Media prompt hard constraints: no visible text, letters, numbers, logos, captions, subtitles, UI, or watermarks.");
@@ -935,9 +864,11 @@ export function buildInitiativePrompt({
   }
 
   parts.push("=== TASK ===");
-  parts.push("Look around. If something catches your eye, pick the best channel and post. That can be reacting to a live conversation, sharing something from your feed, or following your own curiosity.");
-  parts.push("If nothing feels worth posting, skip.");
+  parts.push("Look around. If something catches your eye — a conversation you can add to, a feed item worth sharing, a topic you want to explore — pick a channel and post. Otherwise, [SKIP] and check back later.");
+  parts.push("That can mean reacting to a live conversation, sharing something from your feed, or following your own curiosity.");
+  parts.push("If you notice a source consistently is not producing anything useful, or the community's interests point toward sources you do not have yet, you can adjust your feed.");
   parts.push("Choose the channel that best fits what you want to say. Do not pick a channel at random.");
+  parts.push("Check when you last posted in each channel. If you posted recently, consider whether another message so soon would feel spammy or natural.");
   parts.push("Use exact channelId values from the CHANNELS section.");
   parts.push("Keep the text natural, non-spammy, and like a real community member.");
   parts.push("If you mention a feed item or web result, include the link only if it feels natural. Never force a link.");
@@ -952,9 +883,10 @@ export function buildAutomationPrompt({
   instruction,
   channelName = "channel",
   recentMessages = [],
-  relevantMessages = [],
   userFacts = [],
   relevantFacts = [],
+  guidanceFacts = [],
+  behavioralFacts = [],
   memoryLookup = null,
   allowMemoryLookupDirective = false,
   allowSimpleImagePosts = false,
@@ -981,10 +913,6 @@ export function buildAutomationPrompt({
   parts.push("Keep the output in normal persona voice. No robotic framing.");
   parts.push("=== RECENT MESSAGES ===");
   parts.push(formatRecentChat(recentMessages));
-  if (relevantMessages?.length) {
-    parts.push("=== RELEVANT PAST MESSAGES ===");
-    parts.push(formatRecentChat(relevantMessages));
-  }
   if (userFacts?.length) {
     parts.push("=== USER FACTS ===");
     parts.push(formatMemoryFacts(userFacts, { includeType: false, includeProvenance: true, maxItems: 8 }));
@@ -992,6 +920,14 @@ export function buildAutomationPrompt({
   if (relevantFacts?.length) {
     parts.push("=== DURABLE MEMORY ===");
     parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: true, maxItems: 10 }));
+  }
+  if (guidanceFacts?.length) {
+    parts.push("=== BEHAVIOR GUIDANCE ===");
+    parts.push(formatBehaviorMemoryFacts(guidanceFacts, 8));
+  }
+  if (behavioralFacts?.length) {
+    parts.push("=== RELEVANT BEHAVIORAL MEMORY ===");
+    parts.push(formatBehaviorMemoryFacts(behavioralFacts, 6));
   }
   if (memoryLookup?.requested) {
     if (memoryLookup.error) {
@@ -1046,7 +982,7 @@ export function buildAutomationPrompt({
   parts.push("JSON format:");
   parts.push(REPLY_JSON_SCHEMA);
   parts.push(
-    "Set webSearchQuery, browserBrowseQuery, imageLookupQuery, openArticleRef, memoryLine, memoryScope, memoryFactType, selfMemoryLine, and selfMemoryFactType to null."
+    "Set webSearchQuery, browserBrowseQuery, imageLookupQuery, and openArticleRef to null when unused."
   );
   parts.push("Set soundboardRefs to [] and leaveVoiceChannel to false.");
   if (allowMemoryLookupDirective) {
@@ -1061,7 +997,6 @@ export function buildAutomationPrompt({
     parts.push("Set memoryLookupQuery to null.");
   }
   parts.push("Set automationAction.operation=none.");
-  parts.push("Set voiceIntent.intent=none, voiceIntent.confidence=0, voiceIntent.reason=null, and other voiceIntent fields to null.");
   parts.push("Set screenShareIntent.action=none, screenShareIntent.confidence=0, screenShareIntent.reason=null.");
   parts.push("Use [SKIP] only when sending nothing is clearly best.");
 

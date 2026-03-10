@@ -13,6 +13,7 @@ export type ConversationContinuityPayload = {
   channelId?: string | null;
   userId?: string | null;
   queryText?: string;
+  recentMessages?: Array<Record<string, unknown>>;
   source?: string;
   trace?: Record<string, unknown>;
 };
@@ -23,11 +24,6 @@ type ConversationLookupPayload = {
   queryText: string;
   limit: number;
   maxAgeHours: number;
-};
-
-type AdaptiveDirectiveLookupPayload = {
-  guildId: string;
-  queryText: string;
 };
 
 type ContinuityLoaderArgs = {
@@ -42,7 +38,6 @@ type ContinuityLoaderArgs = {
   loadFactProfile?: ((payload: ConversationContinuityPayload) => unknown) | null;
   loadRecentLookupContext?: ((payload: ConversationLookupPayload) => unknown) | null;
   loadRecentConversationHistory?: ((payload: ConversationLookupPayload) => unknown) | null;
-  loadAdaptiveDirectives?: ((payload: AdaptiveDirectiveLookupPayload) => unknown) | null;
 };
 
 function normalizeQueryText(value: unknown, maxChars = 420) {
@@ -62,6 +57,7 @@ function resolveFactProfile({
   channelId,
   userId,
   queryText,
+  recentMessages,
   source,
   trace,
   loadFactProfile,
@@ -71,9 +67,10 @@ function resolveFactProfile({
   channelId: string | null;
   userId: string | null;
   queryText: string;
+  recentMessages: Array<Record<string, unknown>>;
   source: string;
   trace: Record<string, unknown>;
-  loadFactProfile?: ((payload: Record<string, unknown>) => unknown) | null;
+  loadFactProfile?: ((payload: ConversationContinuityPayload) => unknown) | null;
 }) {
   const empty = emptyFactProfileSlice();
   if (!isMemoryEnabled(settings)) return empty;
@@ -88,6 +85,7 @@ function resolveFactProfile({
       guildId,
       channelId,
       queryText,
+      recentMessages,
       trace,
       source
     }));
@@ -139,8 +137,7 @@ export async function loadConversationContinuityContext({
   recentMessages = [],
   loadFactProfile = null,
   loadRecentLookupContext = null,
-  loadRecentConversationHistory = null,
-  loadAdaptiveDirectives = null
+  loadRecentConversationHistory = null
 }: ContinuityLoaderArgs) {
   const normalizedGuildId = String(guildId || "").trim();
   const normalizedChannelId = String(channelId || "").trim() || null;
@@ -152,65 +149,58 @@ export async function loadConversationContinuityContext({
       ? trace
       : {};
 
-  const memorySlice = resolveFactProfile({
+  const memorySlicePromise = Promise.resolve(resolveFactProfile({
     settings,
     guildId: normalizedGuildId,
     channelId: normalizedChannelId,
     userId: normalizedUserId,
     queryText: normalizedQueryText,
+    recentMessages,
     source: normalizedSource,
     trace: normalizedTrace,
     loadFactProfile
-  });
+  }));
 
-  const recentWebLookupsRaw =
+  const recentWebLookupsPromise =
     normalizedGuildId &&
     normalizedQueryText &&
     typeof loadRecentLookupContext === "function"
-      ? loadRecentLookupContext({
+      ? Promise.resolve(loadRecentLookupContext({
         guildId: normalizedGuildId,
         channelId: normalizedChannelId,
         queryText: normalizedQueryText,
         limit: LOOKUP_CONTEXT_PROMPT_LIMIT,
         maxAgeHours: LOOKUP_CONTEXT_PROMPT_MAX_AGE_HOURS
-      })
-      : [];
-  const recentWebLookups = Array.isArray(recentWebLookupsRaw)
-    ? recentWebLookupsRaw
-    : [];
+      }))
+      : Promise.resolve([]);
 
-  const recentConversationHistoryRaw =
+  const recentConversationHistoryPromise =
     normalizedGuildId &&
     normalizedQueryText &&
     typeof loadRecentConversationHistory === "function"
-      ? loadRecentConversationHistory({
+      ? Promise.resolve(loadRecentConversationHistory({
         guildId: normalizedGuildId,
         channelId: normalizedChannelId,
         queryText: normalizedQueryText,
         limit: CONVERSATION_HISTORY_PROMPT_LIMIT,
         maxAgeHours: CONVERSATION_HISTORY_PROMPT_MAX_AGE_HOURS
-      })
-      : [];
+      }))
+      : Promise.resolve([]);
+
+  const [memorySlice, recentWebLookupsRaw, recentConversationHistoryRaw] = await Promise.all([
+    memorySlicePromise,
+    recentWebLookupsPromise,
+    recentConversationHistoryPromise
+  ]);
+  const recentWebLookups = Array.isArray(recentWebLookupsRaw) ? recentWebLookupsRaw : [];
   const recentConversationHistory = filterConversationWindowsAgainstRecentMessages(
     recentConversationHistoryRaw,
     recentMessages
   );
-  const adaptiveDirectivesRaw =
-    normalizedGuildId &&
-    typeof loadAdaptiveDirectives === "function"
-      ? loadAdaptiveDirectives({
-        guildId: normalizedGuildId,
-        queryText: normalizedQueryText
-      })
-      : [];
-  const adaptiveDirectives = Array.isArray(adaptiveDirectivesRaw)
-    ? adaptiveDirectivesRaw
-    : [];
 
   return {
     memorySlice,
     recentWebLookups,
-    recentConversationHistory,
-    adaptiveDirectives
+    recentConversationHistory
   };
 }

@@ -36,9 +36,6 @@ const MAX_AUTOMATION_INSTRUCTION_LEN = 360;
 const MAX_AUTOMATION_TARGET_QUERY_LEN = 180;
 const MAX_REPLY_SOUNDBOARD_REFS = 10;
 const MAX_VOICE_ADDRESSING_TARGET_LEN = 80;
-const MAX_VOICE_INTENT_QUERY_LEN = 180;
-const MAX_VOICE_INTENT_SELECTED_RESULT_ID_LEN = 180;
-const MAX_VOICE_INTENT_MUSIC_RESULT_FIELD_LEN = 220;
 
 export function resolveMaxMediaPromptLen(settings) {
   const raw = Number(getDiscoverySettings(settings).maxMediaPromptChars);
@@ -47,28 +44,7 @@ export function resolveMaxMediaPromptLen(settings) {
 }
 const REPLY_MEDIA_TYPES = new Set(["image_simple", "image_complex", "video", "gif"]);
 const INITIATIVE_MEDIA_TYPES = new Set(["none", "image", "video", "gif"]);
-const REPLY_VOICE_INTENT_TYPES = new Set([
-  "join",
-  "leave",
-  "status",
-  "watch_stream",
-  "stop_watching_stream",
-  "stream_status",
-  "music_play",
-  "music_queue_next",
-  "music_queue_add",
-  "music_stop",
-  "music_pause",
-  "none"
-]);
-const REPLY_VOICE_MUSIC_QUERY_INTENT_TYPES = new Set([
-  "music_play",
-  "music_queue_next",
-  "music_queue_add"
-]);
 const REPLY_AUTOMATION_OPERATION_TYPES = new Set(["create", "pause", "resume", "delete", "list", "none"]);
-const MAX_VOICE_INTENT_REASON_LEN = 180;
-const REPLY_MUSIC_PLATFORM_TYPES = new Set(["youtube", "soundcloud", "auto"]);
 const REPLY_SCREEN_SHARE_ACTION_TYPES = new Set(["offer_link", "none"]);
 const REPLY_MEMORY_SCOPE_TYPES = new Set(["user", "lore"]);
 const REPLY_MEMORY_FACT_TYPES = new Set(["preference", "profile", "relationship", "project", "other"]);
@@ -89,18 +65,6 @@ function emptyStructuredAutomationAction() {
     automationId: null,
     runImmediately: false,
     targetChannelId: null
-  };
-}
-
-function emptyStructuredVoiceIntent() {
-  return {
-    intent: null,
-    confidence: 0,
-    reason: null,
-    query: null,
-    platform: null,
-    searchResults: null,
-    selectedResultId: null
   };
 }
 
@@ -148,11 +112,6 @@ export const REPLY_OUTPUT_SCHEMA = {
     memoryLookupQuery: { type: ["string", "null"] },
     imageLookupQuery: { type: ["string", "null"] },
     openArticleRef: { type: ["string", "null"] },
-    memoryLine: { type: ["string", "null"] },
-    memoryScope: { type: ["string", "null"] },
-    memoryFactType: { type: ["string", "null"] },
-    selfMemoryLine: { type: ["string", "null"] },
-    selfMemoryFactType: { type: ["string", "null"] },
     soundboardRefs: {
       type: "array",
       items: {
@@ -203,51 +162,6 @@ export const REPLY_OUTPUT_SCHEMA = {
         "targetChannelId"
       ]
     },
-    voiceIntent: {
-      type: "object",
-      additionalProperties: false,
-      properties: {
-        intent: {
-          type: "string",
-          enum: [
-            "join",
-            "leave",
-            "status",
-            "watch_stream",
-            "stop_watching_stream",
-            "stream_status",
-            "music_play",
-            "music_queue_next",
-            "music_queue_add",
-            "music_stop",
-            "music_pause",
-            "none"
-          ]
-        },
-        confidence: { type: "number" },
-        reason: { type: ["string", "null"] },
-        query: { type: "string", description: "The song, artist, or phrase to play/search extracted from the transcript. Must not be empty for music_play/music_queue_next/music_queue_add intents." },
-        platform: { type: ["string", "null"] },
-        searchResults: {
-          type: ["array", "null"],
-          items: {
-            type: "object",
-            additionalProperties: false,
-            properties: {
-              id: { type: "string" },
-              title: { type: "string" },
-              artist: { type: "string" },
-              platform: { type: "string" },
-              url: { type: ["string", "null"] },
-              durationSeconds: { type: ["number", "null"] }
-            },
-            required: ["id", "title", "artist", "platform", "url", "durationSeconds"]
-          }
-        },
-        selectedResultId: { type: ["string", "null"] }
-      },
-      required: ["intent", "confidence", "reason", "query", "platform", "searchResults", "selectedResultId"]
-    },
     screenShareIntent: {
       type: "object",
       additionalProperties: false,
@@ -280,15 +194,9 @@ export const REPLY_OUTPUT_SCHEMA = {
     "memoryLookupQuery",
     "imageLookupQuery",
     "openArticleRef",
-    "memoryLine",
-    "memoryScope",
-    "memoryFactType",
-    "selfMemoryLine",
-    "selfMemoryFactType",
     "soundboardRefs",
     "leaveVoiceChannel",
     "automationAction",
-    "voiceIntent",
     "screenShareIntent",
     "voiceAddressing",
     "screenNote",
@@ -752,15 +660,10 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
         memoryLookupQuery: null,
         imageLookupQuery: null,
         openArticleRef: null,
-        memoryLine: null,
-        memoryScope: null,
-        memoryFactType: null,
-        selfMemoryLine: null,
-        selfMemoryFactType: null,
         soundboardRefs: [],
         leaveVoiceChannel: false,
         automationAction: emptyStructuredAutomationAction(),
-        voiceIntent: emptyStructuredVoiceIntent(),
+
         screenShareIntent: emptyStructuredScreenShareIntent(),
         voiceAddressing: emptyStructuredVoiceAddressing(),
         parseState: "recovered_json" as ParseState
@@ -780,15 +683,9 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
       memoryLookupQuery: null,
       imageLookupQuery: null,
       openArticleRef: null,
-      memoryLine: null,
-      memoryScope: null,
-      memoryFactType: null,
-      selfMemoryLine: null,
-      selfMemoryFactType: null,
       soundboardRefs: [],
       leaveVoiceChannel: false,
       automationAction: emptyStructuredAutomationAction(),
-      voiceIntent: emptyStructuredVoiceIntent(),
       screenShareIntent: emptyStructuredScreenShareIntent(),
       voiceAddressing: emptyStructuredVoiceAddressing(),
       parseState: "unstructured" as ParseState
@@ -805,7 +702,6 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     parsed?.leaveVoiceChannelRequested === true;
   const automationAction = normalizeStructuredAutomationAction(parsed?.automationAction);
   const mediaDirective = normalizeStructuredMediaDirective(parsed?.media, maxLen);
-  const voiceIntent = normalizeStructuredVoiceIntent(parsed?.voiceIntent);
   const screenShareIntent = normalizeStructuredScreenShareIntent(parsed?.screenShareIntent);
   const voiceAddressing = normalizeStructuredVoiceAddressing(parsed?.voiceAddressing);
 
@@ -822,15 +718,9 @@ export function parseStructuredReplyOutput(rawText, maxLen = DEFAULT_MAX_MEDIA_P
     memoryLookupQuery: normalizeDirectiveText(parsed?.memoryLookupQuery, MAX_MEMORY_LOOKUP_QUERY_LEN) || null,
     imageLookupQuery: normalizeDirectiveText(parsed?.imageLookupQuery, MAX_IMAGE_LOOKUP_QUERY_LEN) || null,
     openArticleRef: normalizeDirectiveText(parsed?.openArticleRef, MAX_OPEN_ARTICLE_REF_LEN) || null,
-    memoryLine: normalizeDirectiveText(parsed?.memoryLine, MAX_MEMORY_WRITE_LINE_LEN) || null,
-    memoryScope: normalizeStructuredMemoryScope(parsed?.memoryScope),
-    memoryFactType: normalizeStructuredMemoryFactType(parsed?.memoryFactType),
-    selfMemoryLine: normalizeDirectiveText(parsed?.selfMemoryLine, MAX_MEMORY_WRITE_LINE_LEN) || null,
-    selfMemoryFactType: normalizeStructuredMemoryFactType(parsed?.selfMemoryFactType),
     soundboardRefs,
     leaveVoiceChannel,
     automationAction,
-    voiceIntent,
     screenShareIntent,
     voiceAddressing,
     parseState: "json" as ParseState
@@ -931,75 +821,6 @@ function normalizeStructuredMediaDirective(rawMedia, maxLen = DEFAULT_MAX_MEDIA_
   return {
     type: rawType,
     prompt
-  };
-}
-
-function normalizeStructuredVoiceIntent(rawIntent) {
-  if (!rawIntent || typeof rawIntent !== "object") {
-    return emptyStructuredVoiceIntent();
-  }
-
-  const intentLabel = String(rawIntent.intent || "")
-    .trim()
-    .toLowerCase();
-  if (!REPLY_VOICE_INTENT_TYPES.has(intentLabel)) {
-    return emptyStructuredVoiceIntent();
-  }
-
-  const confidenceRaw = Number(rawIntent.confidence);
-  const confidence = Number.isFinite(confidenceRaw) ? clamp(confidenceRaw, 0, 1) : 0;
-  const reason = normalizeDirectiveText(rawIntent.reason, MAX_VOICE_INTENT_REASON_LEN) || null;
-  const query = normalizeDirectiveText(rawIntent.query, MAX_VOICE_INTENT_QUERY_LEN) || null;
-  const rawPlatform = String(rawIntent.platform || "")
-    .trim()
-    .toLowerCase();
-  const platform = REPLY_MUSIC_PLATFORM_TYPES.has(rawPlatform) ? rawPlatform : null;
-  const selectedResultId =
-    normalizeDirectiveText(rawIntent.selectedResultId, MAX_VOICE_INTENT_SELECTED_RESULT_ID_LEN) || null;
-  const searchResults = normalizeStructuredMusicSearchResults(rawIntent.searchResults);
-
-  return {
-    intent: intentLabel === "none" ? null : intentLabel,
-    confidence,
-    reason,
-    query: REPLY_VOICE_MUSIC_QUERY_INTENT_TYPES.has(intentLabel) ? query : null,
-    platform: REPLY_VOICE_MUSIC_QUERY_INTENT_TYPES.has(intentLabel) ? platform : null,
-    searchResults: REPLY_VOICE_MUSIC_QUERY_INTENT_TYPES.has(intentLabel) ? searchResults : null,
-    selectedResultId: REPLY_VOICE_MUSIC_QUERY_INTENT_TYPES.has(intentLabel) ? selectedResultId : null
-  };
-}
-
-function normalizeStructuredMusicSearchResults(rawResults) {
-  if (!Array.isArray(rawResults)) return null;
-  const results = rawResults
-    .map((entry) => normalizeStructuredMusicSearchResult(entry))
-    .filter(Boolean)
-    .slice(0, 8);
-  return results.length ? results : null;
-}
-
-function normalizeStructuredMusicSearchResult(rawResult) {
-  if (!rawResult || typeof rawResult !== "object") return null;
-  const id = normalizeDirectiveText(rawResult.id, MAX_VOICE_INTENT_SELECTED_RESULT_ID_LEN) || null;
-  const title = normalizeDirectiveText(rawResult.title, MAX_VOICE_INTENT_MUSIC_RESULT_FIELD_LEN) || null;
-  const artist = normalizeDirectiveText(rawResult.artist, MAX_VOICE_INTENT_MUSIC_RESULT_FIELD_LEN) || null;
-  const rawPlatform = String(rawResult.platform || "")
-    .trim()
-    .toLowerCase();
-  const platform = REPLY_MUSIC_PLATFORM_TYPES.has(rawPlatform) ? rawPlatform : null;
-  const url = normalizeDirectiveText(rawResult.url, MAX_VOICE_INTENT_MUSIC_RESULT_FIELD_LEN) || null;
-  const durationRaw = Number(rawResult.durationSeconds);
-  const durationSeconds =
-    Number.isFinite(durationRaw) && durationRaw >= 0 ? Math.floor(durationRaw) : null;
-
-  if (!id || !title || !artist || !platform) return null;
-  return {
-    id,
-    title,
-    artist,
-    platform,
-    url,
-    durationSeconds
   };
 }
 

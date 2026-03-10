@@ -7,8 +7,7 @@ test("buildReplyToolSet includes browser_browse when browser agent is enabled an
   const tools = buildReplyToolSet({
     browser: { enabled: true },
     webSearch: { enabled: false },
-    memory: { enabled: false },
-    adaptiveDirectives: { enabled: false }
+    memory: { enabled: false }
   }, {
     browserBrowseAvailable: true,
     conversationSearchAvailable: false
@@ -21,8 +20,7 @@ test("buildReplyToolSet excludes browser_browse when caller opts out", () => {
   const tools = buildReplyToolSet({
     browser: { enabled: true },
     webSearch: { enabled: false },
-    memory: { enabled: false },
-    adaptiveDirectives: { enabled: false }
+    memory: { enabled: false }
   }, {
     browserBrowseAvailable: false,
     conversationSearchAvailable: false
@@ -35,8 +33,7 @@ test("buildReplyToolSet includes web_scrape when web search is enabled", () => {
   const tools = buildReplyToolSet({
     browser: { enabled: false },
     webSearch: { enabled: true },
-    memory: { enabled: false },
-    adaptiveDirectives: { enabled: false }
+    memory: { enabled: false }
   }, {
     conversationSearchAvailable: false
   });
@@ -48,8 +45,7 @@ test("buildReplyToolSet excludes web_scrape when caller opts out", () => {
   const tools = buildReplyToolSet({
     browser: { enabled: false },
     webSearch: { enabled: true },
-    memory: { enabled: false },
-    adaptiveDirectives: { enabled: false }
+    memory: { enabled: false }
   }, {
     webScrapeAvailable: false,
     conversationSearchAvailable: false
@@ -62,8 +58,7 @@ test("buildReplyToolSet includes memory tools and conversation search when memor
   const toolNames = buildReplyToolSet({
     browser: { enabled: false },
     webSearch: { enabled: false },
-    memory: { enabled: true },
-    adaptiveDirectives: { enabled: false }
+    memory: { enabled: true }
   }).map((tool) => tool.name);
 
   assert.equal(toolNames.includes("memory_search"), true);
@@ -76,7 +71,6 @@ test("buildReplyToolSet includes code_task when dev task runtime and permissions
     browser: { enabled: false },
     webSearch: { enabled: false },
     memory: { enabled: false },
-    adaptiveDirectives: { enabled: false },
     permissions: {
       devTasks: {
         allowedUserIds: ["user-1"]
@@ -96,12 +90,54 @@ test("buildReplyToolSet includes code_task when dev task runtime and permissions
   assert.equal(toolNames.includes("code_task"), true);
 });
 
+test("executeReplyTool forwards code_task role to the code agent runtime", async () => {
+  const calls: Array<Record<string, unknown>> = [];
+
+  const result = await executeReplyTool(
+    "code_task",
+    { task: "review this patch", role: "review" },
+    {
+      codeAgent: {
+        async runTask(opts) {
+          calls.push(opts);
+          return {
+            text: "Reviewed.",
+            costUsd: 0.12
+          };
+        }
+      }
+    },
+    {
+      settings: {},
+      guildId: "guild-1",
+      channelId: "channel-1",
+      userId: "user-1",
+      sourceMessageId: "msg-1",
+      sourceText: "please review this",
+      trace: { source: "reply_message" }
+    }
+  );
+
+  assert.equal(result.isError, undefined);
+  assert.match(result.content, /Reviewed\./);
+  assert.deepEqual(calls, [{
+    settings: {},
+    task: "review this patch",
+    role: "review",
+    cwd: undefined,
+    guildId: "guild-1",
+    channelId: "channel-1",
+    userId: "user-1",
+    source: "reply_message",
+    signal: undefined
+  }]);
+});
+
 test("buildReplyToolSet includes note_context when voice tools are available", () => {
   const toolNames = buildReplyToolSet({
     browser: { enabled: false },
     webSearch: { enabled: false },
-    memory: { enabled: false },
-    adaptiveDirectives: { enabled: false }
+    memory: { enabled: false }
   }, {
     voiceToolsAvailable: true,
     conversationSearchAvailable: false

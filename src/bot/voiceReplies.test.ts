@@ -107,15 +107,6 @@ function structuredReplyJson(overrides: Record<string, unknown> = {}) {
       runImmediately: false,
       targetChannelId: null
     },
-    voiceIntent: {
-      intent: "none",
-      confidence: 0,
-      reason: null,
-      query: null,
-      platform: null,
-      searchResults: null,
-      selectedResultId: null
-    },
     screenShareIntent: {
       action: "none",
       confidence: 0,
@@ -135,10 +126,6 @@ function structuredReplyJson(overrides: Record<string, unknown> = {}) {
     automationAction: {
       ...base.automationAction,
       ...(overrides.automationAction as Record<string, unknown> || {})
-    },
-    voiceIntent: {
-      ...base.voiceIntent,
-      ...(overrides.voiceIntent as Record<string, unknown> || {})
     },
     screenShareIntent: {
       ...base.screenShareIntent,
@@ -1684,11 +1671,18 @@ test("generateVoiceTurnReply fetches fresh memory context each turn", async () =
       memoryLoadCalls += 1;
       if (memoryLoadCalls === 1) {
         return {
+          participantProfiles: [
+            {
+              userId: "user-1",
+              displayName: "user-1",
+              facts: [{ subject: "author", fact: "likes ramen" }]
+            }
+          ],
           userFacts: [{ subject: "author", fact: "likes ramen" }],
           relevantFacts: []
         };
       }
-      return { userFacts: [], relevantFacts: [] };
+      return { participantProfiles: [], userFacts: [], relevantFacts: [] };
     }
   });
 

@@ -286,7 +286,7 @@ test("getConversationHistoryForPrompt searches normalized conversation windows",
       content: "what do you think about that nvidia stock price"
     });
 
-    const windows = getConversationHistoryForPrompt(ctx, {
+    const windows = await getConversationHistoryForPrompt(ctx, {
       guildId: "guild-1",
       channelId: "chan-1",
       queryText: "   that nvidia stock price   ",

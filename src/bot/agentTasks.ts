@@ -1,7 +1,9 @@
 import {
+  type CodeAgentRole,
   createCodeAgentSession as createCodeAgentSessionRuntime,
   getActiveCodeAgentTaskCount,
   isCodeAgentUserAllowed,
+  normalizeCodeAgentRole,
   resolveCodeAgentConfig,
   runCodeAgent
 } from "../agents/codeAgent.ts";
@@ -23,6 +25,7 @@ type AgentTaskTrace = {
   channelId?: string | null;
   userId?: string | null;
   source?: string | null;
+  role?: CodeAgentRole | null;
 };
 
 type RunModelRequestedBrowserBrowseOptions = {
@@ -41,6 +44,7 @@ type BrowserBrowseState = BrowserBrowseContextState;
 type RunModelRequestedCodeTaskOptions = {
   settings: Record<string, unknown>;
   task?: string;
+  role?: CodeAgentRole;
   cwd?: string;
   guildId?: string | null;
   channelId?: string | null;
@@ -51,6 +55,7 @@ type RunModelRequestedCodeTaskOptions = {
 
 type CreateCodeAgentSessionOptions = {
   settings: Record<string, unknown>;
+  role?: CodeAgentRole;
   cwd?: string;
   guildId?: string | null;
   channelId?: string | null;
@@ -229,6 +234,7 @@ export async function runModelRequestedCodeTask(
   {
     settings,
     task,
+    role = "implementation",
     cwd: cwdOverride,
     guildId,
     channelId = null,
@@ -244,7 +250,8 @@ export async function runModelRequestedCodeTask(
     return { text: "", blockedByPermission: true };
   }
 
-  const codeAgentConfig = resolveCodeAgentConfig(settings, cwdOverride);
+  const normalizedRole = normalizeCodeAgentRole(role);
+  const codeAgentConfig = resolveCodeAgentConfig(settings, cwdOverride, normalizedRole);
   const maxParallel = codeAgentConfig.maxParallelTasks;
   if (getActiveCodeAgentTaskCount() >= maxParallel) {
     return { text: "", blockedByParallelLimit: true };
@@ -267,7 +274,7 @@ export async function runModelRequestedCodeTask(
     maxBufferBytes
   } = codeAgentConfig;
   const codexCompatibleClient = ctx.llm?.getCodexCompatibleClient() || null;
-  const codexCostProvider = ctx.llm?.openai ? "openai" : ctx.llm?.codexOAuth ? "codex-oauth" : undefined;
+  const codexCostProvider = ctx.llm?.openai ? "openai" : ctx.llm?.codexOAuth ? "openai-oauth" : undefined;
 
   try {
     const result = await runCodeAgent({
@@ -286,7 +293,8 @@ export async function runModelRequestedCodeTask(
         guildId,
         channelId,
         userId,
-        source
+        source,
+        role: normalizedRole
       }),
       store: ctx.store,
       signal
@@ -310,6 +318,7 @@ export function createCodeAgentSession(
   ctx: AgentContext,
   {
     settings,
+    role = "implementation",
     cwd: cwdOverride,
     guildId,
     channelId = null,
@@ -320,7 +329,8 @@ export function createCodeAgentSession(
   if (!isDevTaskEnabled(settings)) return null;
   if (userId && !isCodeAgentUserAllowed(userId, settings)) return null;
 
-  const codeAgentConfig = resolveCodeAgentConfig(settings, cwdOverride);
+  const normalizedRole = normalizeCodeAgentRole(role);
+  const codeAgentConfig = resolveCodeAgentConfig(settings, cwdOverride, normalizedRole);
   const maxParallel = codeAgentConfig.maxParallelTasks;
   if (getActiveCodeAgentTaskCount() >= maxParallel) return null;
 
@@ -339,7 +349,7 @@ export function createCodeAgentSession(
     maxBufferBytes
   } = codeAgentConfig;
   const codexCompatibleClient = ctx.llm?.getCodexCompatibleClient() || null;
-  const codexCostProvider = ctx.llm?.openai ? "openai" : ctx.llm?.codexOAuth ? "codex-oauth" : undefined;
+  const codexCostProvider = ctx.llm?.openai ? "openai" : ctx.llm?.codexOAuth ? "openai-oauth" : undefined;
 
   const scopeKey = buildScopeKey({
     guildId,
@@ -360,7 +370,8 @@ export function createCodeAgentSession(
         guildId,
         channelId,
         userId,
-        source
+        source,
+        role: normalizedRole
       }),
       store: ctx.store,
       openai: codexCompatibleClient,

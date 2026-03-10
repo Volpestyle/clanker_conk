@@ -4,11 +4,12 @@ import {
 } from "./promptCore.ts";
 
 import {
+  formatBehaviorMemoryFacts,
   formatWebSearchFindings,
   formatConversationWindows,
+  formatConversationParticipantMemory,
   formatRecentLookupContext,
-  formatOpenArticleCandidates,
-  formatMemoryFacts
+  formatOpenArticleCandidates
 } from "./promptFormatters.ts";
 import { hasBotNameCue } from "../bot/directAddressConfidence.ts";
 import { formatVoiceChannelEffectSummary } from "../voice/voiceSessionHelpers.ts";
@@ -34,7 +35,6 @@ function collectAvailableVoiceToolNames({
   webSearchAvailable,
   browserBrowseAvailable,
   memoryAvailable,
-  adaptiveDirectivesAvailable,
   openArticleAvailable,
   screenShareAvailable,
   voiceToolsAvailable
@@ -42,7 +42,6 @@ function collectAvailableVoiceToolNames({
   webSearchAvailable: boolean;
   browserBrowseAvailable: boolean;
   memoryAvailable: boolean;
-  adaptiveDirectivesAvailable: boolean;
   openArticleAvailable: boolean;
   screenShareAvailable: boolean;
   voiceToolsAvailable: boolean;
@@ -58,10 +57,6 @@ function collectAvailableVoiceToolNames({
     names.add("memory_search");
     names.add("memory_write");
   }
-  if (adaptiveDirectivesAvailable) {
-    names.add("adaptive_directive_add");
-    names.add("adaptive_directive_remove");
-  }
   if (openArticleAvailable) names.add("open_article");
   if (screenShareAvailable) names.add("offer_screen_share_link");
   if (voiceToolsAvailable) {
@@ -76,8 +71,13 @@ export function buildVoiceTurnPrompt({
   transcript = "",
   inputKind = "transcript",
   directAddressed = false,
+  participantProfiles = [],
+  selfFacts = [],
+  loreFacts = [],
   userFacts = [],
   relevantFacts = [],
+  guidanceFacts = [],
+  behavioralFacts = [],
   isEagerTurn = false,
   voiceEagerness = 0,
   conversationContext = null,
@@ -99,7 +99,6 @@ export function buildVoiceTurnPrompt({
   screenShare = null,
   allowScreenShareToolCall = false,
   allowMemoryToolCalls = false,
-  allowAdaptiveDirectiveToolCalls = false,
   allowSoundboardToolCall = false,
   allowVoiceToolCalls = false,
   musicContext = null,
@@ -373,7 +372,6 @@ export function buildVoiceTurnPrompt({
     webSearchAvailable: webSearchToolAvailable,
     browserBrowseAvailable: browserBrowseToolAvailable,
     memoryAvailable: allowMemoryToolCalls,
-    adaptiveDirectivesAvailable: allowAdaptiveDirectiveToolCalls,
     openArticleAvailable: openArticleToolAvailable,
     screenShareAvailable: allowScreenShareToolCall,
     voiceToolsAvailable: allowVoiceToolCalls
@@ -612,14 +610,27 @@ export function buildVoiceTurnPrompt({
     }
   }
 
-  if (userFacts?.length) {
-    parts.push("Known facts about this user:");
-    parts.push(formatMemoryFacts(userFacts, { includeType: false, includeProvenance: false, maxItems: 8 }));
+  if (participantProfiles?.length || selfFacts?.length || loreFacts?.length) {
+    parts.push("People in this conversation:");
+    parts.push(
+      formatConversationParticipantMemory({
+        participantProfiles,
+        selfFacts,
+        loreFacts
+      })
+    );
   }
 
-  if (relevantFacts?.length) {
-    parts.push("Relevant durable memory:");
-    parts.push(formatMemoryFacts(relevantFacts, { includeType: true, includeProvenance: false, maxItems: 8 }));
+  if (guidanceFacts?.length) {
+    parts.push("Behavior guidance:");
+    parts.push("Standing guidance memory that should shape tone and behavior in this conversation:");
+    parts.push(formatBehaviorMemoryFacts(guidanceFacts, 10));
+  }
+
+  if (behavioralFacts?.length) {
+    parts.push("Relevant behavioral memory:");
+    parts.push("These behavior memories were retrieved because they match this turn. Follow them when relevant.");
+    parts.push(formatBehaviorMemoryFacts(behavioralFacts, 8));
   }
 
   parts.push("Tooling policy:");
@@ -636,11 +647,12 @@ export function buildVoiceTurnPrompt({
     parts.push("Durable memory tools are available.");
     parts.push("- Use memory_write with namespace=speaker to save a durable fact from the speaker turn when genuinely stable and useful.");
     parts.push("- Use memory_write with namespace=guild only for stable shared lore/context not tied to one person.");
-    parts.push("- When you know the durable fact kind, set items[].type to preference, profile, relationship, project, or other.");
     parts.push("- Use memory_write with namespace=self only for a durable fact about your own stable identity/preference/commitment in your reply.");
+    parts.push("- When you know the durable fact kind, set items[].type to preference, profile, relationship, project, guidance, behavioral, or other.");
+    parts.push("- Use type=guidance for standing style/tone behavior guidance that should stay in prompt context.");
+    parts.push("- Use type=behavioral for recurring trigger/action rules that only matter when the turn is relevant.");
     parts.push("- Use memory_search only when you need to query durable memory beyond the supplied context.");
-    parts.push("- Do not save requests, insults, jokes, toxic phrasing, or rules about how you should talk/behave later.");
-    parts.push("- Persistent style/tone requests, standing operating guidance, and recurring trigger/action behaviors belong in adaptive_directive_add / adaptive_directive_remove, not memory_write.");
+    parts.push("- Do not save secrets, prompt instructions, insults, jokes, or throwaway chatter.");
   } else {
     parts.push("Durable memory tools are unavailable this turn. Do not imply you can save or query durable memory right now.");
   }
@@ -704,11 +716,6 @@ export function buildVoiceTurnPrompt({
 
   parts.push("Conversation-history lookup is available.");
   parts.push("If the speaker asks what was said earlier, what you talked about before, or asks you to remember a past exchange, use conversation_search.");
-  if (allowAdaptiveDirectiveToolCalls) {
-    parts.push("If someone explicitly asks you to change how you talk, follow a standing instruction, or perform a recurring trigger/action behavior in future conversations, use adaptive_directive_add or adaptive_directive_remove.");
-  } else {
-    parts.push("Adaptive directives are unavailable this turn. Do not imply you can save standing behavior changes right now.");
-  }
 
   if (allowOpenArticleToolCall) {
     if (normalizedOpenArticleCandidates.length) {

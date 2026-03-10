@@ -1660,8 +1660,7 @@ test("reply generation passes a structured JSON schema contract for voice intent
     assert.equal(sent, true);
     assert.equal(llmCalls.length >= 1, true);
     assert.equal(typeof llmCalls[0]?.jsonSchema, "string");
-    assert.match(String(llmCalls[0]?.jsonSchema || ""), /"voiceIntent"/);
-    assert.match(String(llmCalls[0]?.jsonSchema || ""), /"join"/);
+    assert.match(String(llmCalls[0]?.jsonSchema || ""), /"screenShareIntent"/);
     assert.equal(replyPayloads.length + channelSendPayloads.length, 1);
   });
 });

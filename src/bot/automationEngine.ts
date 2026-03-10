@@ -27,13 +27,14 @@ import {
   type ContextMessage
 } from "../llm/serviceShared.ts";
 import type { BotContext } from "./botContext.ts";
+import { loadBehavioralMemoryFacts } from "./memorySlice.ts";
 
 const MAX_AUTOMATION_RUNS_PER_TICK = 4;
 
 type AutomationMemorySlice = {
   userFacts: Array<Record<string, unknown>>;
   relevantFacts: Array<Record<string, unknown>>;
-  relevantMessages: Array<Record<string, unknown>>;
+  guidanceFacts: Array<Record<string, unknown>>;
 };
 
 type AutomationChannelLike = {
@@ -396,6 +397,20 @@ export async function generateAutomationPayload(
     },
     source: "automation_run"
   });
+  const behavioralFacts = await loadBehavioralMemoryFacts(runtime, {
+    settings,
+    guildId: automation.guild_id || "",
+    channelId: automation.channel_id || null,
+    queryText: automationQuery,
+    participantIds: automationOwnerId ? [automationOwnerId] : [],
+    trace: {
+      guildId: automation.guild_id,
+      channelId: automation.channel_id,
+      userId: automationOwnerId,
+      source: "automation_run_behavioral_memory"
+    },
+    limit: 8
+  });
 
   const imageBudget = runtime.getImageBudgetState(settings);
   const videoBudget = runtime.getVideoGenerationBudgetState(settings);
@@ -411,9 +426,10 @@ export async function generateAutomationPayload(
     instruction: automation.instruction,
     channelName: channel.name || "channel",
     recentMessages,
-    relevantMessages: memorySlice.relevantMessages,
     userFacts: memorySlice.userFacts,
     relevantFacts: memorySlice.relevantFacts,
+    guidanceFacts: memorySlice.guidanceFacts,
+    behavioralFacts,
     allowSimpleImagePosts:
       discovery.allowImagePosts && mediaCapabilities.simpleImageReady && imageBudget.canGenerate,
     allowComplexImagePosts:
@@ -448,7 +464,6 @@ export async function generateAutomationPayload(
     webScrapeAvailable: false,
     browserBrowseAvailable: false,
     memoryAvailable: memory.enabled,
-    adaptiveDirectivesAvailable: false,
     imageLookupAvailable: false,
     openArticleAvailable: false
   });

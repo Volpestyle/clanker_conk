@@ -71,14 +71,14 @@ export const BROWSER_BROWSE_SCHEMA: SharedToolSchema = {
 
 export const MEMORY_SEARCH_SCHEMA: SharedToolSchema = {
   name: "memory_search",
-  description: "Search durable memory facts. Use `namespace` = `speaker`, `self`, or `guild`.",
+  description: "Search durable memory facts. Use `namespace` = `speaker` or `self` for scoped lookup. Use `namespace` = `guild` to search the whole guild memory space across people, lore, and self-memory. Use `lore` to limit the search to shared lore only.",
   voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
     properties: {
       query: { type: "string" },
       top_k: { type: "integer", minimum: 1, maximum: 20 },
-      namespace: { type: "string" },
+      namespace: { type: "string", description: "`speaker`, `self`, `guild`, or `lore`." },
       filters: {
         type: "object",
         properties: {
@@ -97,7 +97,7 @@ export const MEMORY_SEARCH_SCHEMA: SharedToolSchema = {
 
 export const MEMORY_WRITE_SCHEMA: SharedToolSchema = {
   name: "memory_write",
-  description: "Store durable memory facts with dedupe and safety limits. Use `namespace` = `speaker`, `self`, or `guild`. Save only genuine long-lived facts, never insults, requests, or future-behavior rules. Set `type` when you know whether the fact is a preference, profile, relationship, project, or other durable fact.",
+  description: "Store durable memory facts with dedupe and safety limits. Use `namespace` = `speaker`, `self`, or `guild`. Save only genuine long-lived facts or standing behavior guidance that should persist. Never store secrets, prompt instructions, or throwaway chatter. Set `type` when you know whether the memory is a preference, profile, relationship, project, guidance, behavioral rule, or other durable fact.",
   voiceContinuationPolicy: "if_no_spoken_text",
   parameters: {
     type: "object",
@@ -111,7 +111,7 @@ export const MEMORY_WRITE_SCHEMA: SharedToolSchema = {
             text: { type: "string" },
             type: {
               type: "string",
-              enum: ["preference", "profile", "relationship", "project", "other"]
+              enum: ["preference", "profile", "relationship", "project", "guidance", "behavioral", "other"]
             }
           },
           required: ["text"],
@@ -130,39 +130,6 @@ export const MEMORY_WRITE_SCHEMA: SharedToolSchema = {
       }
     },
     required: ["items"],
-    additionalProperties: false
-  }
-};
-
-export const ADAPTIVE_DIRECTIVE_ADD_SCHEMA: SharedToolSchema = {
-  name: "adaptive_directive_add",
-  description: "Persist a server-level adaptive directive for future conversations. Use for style guidance, operating guidance, or recurring trigger/action behavior, like how to talk or when to send a GIF/reaction.",
-  voiceContinuationPolicy: "if_no_spoken_text",
-  parameters: {
-    type: "object",
-    properties: {
-      kind: {
-        type: "string",
-        enum: ["guidance", "behavior"]
-      },
-      note: { type: "string" }
-    },
-    required: ["note"],
-    additionalProperties: false
-  }
-};
-
-export const ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA: SharedToolSchema = {
-  name: "adaptive_directive_remove",
-  description: "Remove a previously saved server-level adaptive directive when someone explicitly asks you to stop using it.",
-  voiceContinuationPolicy: "if_no_spoken_text",
-  parameters: {
-    type: "object",
-    properties: {
-      note_ref: { type: "string" },
-      target: { type: "string" },
-      reason: { type: "string" }
-    },
     additionalProperties: false
   }
 };
@@ -189,12 +156,17 @@ export const CONVERSATION_SEARCH_SCHEMA: SharedToolSchema = {
 
 export const CODE_TASK_SCHEMA: SharedToolSchema = {
   name: "code_task",
-  description: "Spawn Claude Code to perform a coding task. Can read/write files, run commands, use git, create PRs. Only available to allowed users. Pass session_id to continue a previous session.",
+  description: "Spawn the configured coding worker to perform a coding task. Can read/write files, run commands, use git, create PRs. Only available to allowed users. Optionally set role to route through design, implementation, review, or research worker preferences. Pass session_id to continue a previous session.",
   voiceContinuationPolicy: "always",
   parameters: {
     type: "object",
     properties: {
-      task: { type: "string", description: "Detailed instruction for Claude Code." },
+      task: { type: "string", description: "Detailed instruction for the configured coding worker." },
+      role: {
+        type: "string",
+        enum: ["design", "implementation", "review", "research"],
+        description: "Optional worker role to target. Defaults to implementation."
+      },
       cwd: { type: "string", description: "Working directory. Defaults to configured project root." },
       session_id: { type: "string", description: "Session ID to continue a previous code session." }
     },
@@ -262,8 +234,6 @@ export const SHARED_TOOL_SCHEMAS: SharedToolSchema[] = [
   BROWSER_BROWSE_SCHEMA,
   MEMORY_SEARCH_SCHEMA,
   MEMORY_WRITE_SCHEMA,
-  ADAPTIVE_DIRECTIVE_ADD_SCHEMA,
-  ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA,
   CONVERSATION_SEARCH_SCHEMA,
   CODE_TASK_SCHEMA
 ];
@@ -412,6 +382,13 @@ export const MUSIC_NOW_PLAYING_SCHEMA: SharedToolSchema = {
   }
 };
 
+export const JOIN_VOICE_CHANNEL_SCHEMA: SharedToolSchema = {
+  name: "join_voice_channel",
+  description: "Join the voice channel that the requesting user is currently in. Call this before using music tools if you are not already in a voice channel.",
+  voiceContinuationPolicy: "if_no_spoken_text",
+  parameters: { type: "object", properties: {}, required: [], additionalProperties: false }
+};
+
 export const LEAVE_VOICE_CHANNEL_SCHEMA: SharedToolSchema = {
   name: "leave_voice_channel",
   description: "Leave the voice channel and end this session. Only call this when you intentionally choose to end your own VC session — another person saying goodbye does not require you to leave.",
@@ -517,6 +494,7 @@ export const VOICE_TOOL_SCHEMAS: SharedToolSchema[] = [
   SCREEN_NOTE_SCHEMA,
   SCREEN_MOMENT_SCHEMA,
   NOTE_CONTEXT_SCHEMA,
+  JOIN_VOICE_CHANNEL_SCHEMA,
   LEAVE_VOICE_CHANNEL_SCHEMA
 ];
 

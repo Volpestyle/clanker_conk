@@ -11,6 +11,7 @@ import { codeCommand } from "./commands/codeCommand.ts";
 import {
   runCodeAgent,
   isCodeAgentUserAllowed,
+  normalizeCodeAgentRole,
   resolveCodeAgentConfig,
   getActiveCodeAgentTaskCount
 } from "./agents/codeAgent.ts";
@@ -566,6 +567,7 @@ export class ClankerBot {
       } else if (commandName === "code") {
         await interaction.deferReply();
         const codeInstruction = interaction.options.getString("task", true);
+        const codeRole = normalizeCodeAgentRole(interaction.options.getString("role", false), "implementation");
         const codeCwd = interaction.options.getString("cwd", false) || undefined;
         const settings = this.store.getSettings();
 
@@ -578,7 +580,7 @@ export class ClankerBot {
           return;
         }
 
-        const codeAgentConfig = resolveCodeAgentConfig(settings, codeCwd);
+        const codeAgentConfig = resolveCodeAgentConfig(settings, codeCwd, codeRole);
         const maxParallel = codeAgentConfig.maxParallelTasks;
         if (getActiveCodeAgentTaskCount() >= maxParallel) {
           await interaction.editReply("Too many code agent tasks are already running. Try again shortly.");
@@ -603,6 +605,8 @@ export class ClankerBot {
             timeoutMs,
             maxBufferBytes
           } = codeAgentConfig;
+          const codexCompatibleClient = this.llm?.getCodexCompatibleClient() || null;
+          const codexCostProvider = this.llm?.openai ? "openai" : this.llm?.codexOAuth ? "openai-oauth" : undefined;
 
           const result = await runCodeAgent({
             instruction: codeInstruction,
@@ -614,12 +618,14 @@ export class ClankerBot {
             model,
             codexModel,
             codexCliModel,
-            openai: this.llm?.openai || null,
+            openai: codexCompatibleClient,
+            codexCostProvider,
             trace: {
               guildId: interaction.guildId,
               channelId: interaction.channelId,
               userId: interaction.user.id,
-              source: "slash_command_code"
+              source: "slash_command_code",
+              role: codeRole
             },
             store: this.store
           });

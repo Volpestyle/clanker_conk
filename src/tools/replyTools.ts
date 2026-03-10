@@ -2,23 +2,21 @@ import type Anthropic from "@anthropic-ai/sdk";
 import { normalizeDirectiveText } from "../bot/botHelpers.ts";
 import { throwIfAborted } from "./browserTaskRuntime.ts";
 import {
-  executeSharedAdaptiveDirectiveAdd,
-  executeSharedAdaptiveDirectiveRemove
-} from "../adaptiveDirectives/adaptiveDirectiveToolRuntime.ts";
-import {
   executeSharedMemoryToolSearch,
   executeSharedMemoryToolWrite
 } from "../memory/memoryToolRuntime.ts";
 import { formatConversationWindows } from "../prompts/promptFormatters.ts";
 import type { SubAgentSessionManager, SubAgentSession } from "../agents/subAgentSession.ts";
 import {
+  normalizeCodeAgentRole,
+  type CodeAgentRole
+} from "../agents/codeAgent.ts";
+import {
   WEB_SEARCH_SCHEMA,
   WEB_SCRAPE_SCHEMA,
   BROWSER_BROWSE_SCHEMA,
   MEMORY_SEARCH_SCHEMA,
   MEMORY_WRITE_SCHEMA,
-  ADAPTIVE_DIRECTIVE_ADD_SCHEMA,
-  ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA,
   CONVERSATION_SEARCH_SCHEMA,
   CODE_TASK_SCHEMA,
   OPEN_ARTICLE_SCHEMA,
@@ -30,7 +28,6 @@ import {
   toAnthropicTool
 } from "./sharedToolSchemas.ts";
 import {
-  getDirectiveSettings,
   getMemorySettings,
   isBrowserEnabled,
   isDevTaskEnabled,
@@ -128,6 +125,7 @@ export type ReplyToolRuntime = {
     runTask: (opts: {
       settings: Record<string, unknown>;
       task: string;
+      role?: CodeAgentRole;
       cwd?: string;
       guildId: string;
       channelId: string | null;
@@ -154,6 +152,17 @@ export type ReplyToolRuntime = {
       settings: Record<string, unknown>;
       trace: Record<string, unknown>;
       limit?: number;
+    }) => Promise<Array<Record<string, unknown>>>;
+    searchConversationHistory?: (opts: {
+      guildId: string;
+      channelId?: string | null;
+      queryText: string;
+      settings?: Record<string, unknown>;
+      trace?: Record<string, unknown>;
+      limit?: number;
+      maxAgeHours?: number;
+      before?: number;
+      after?: number;
     }) => Promise<Array<Record<string, unknown>>>;
     rememberDirectiveLineDetailed: (opts: {
       line: string;
@@ -183,45 +192,12 @@ export type ReplyToolRuntime = {
       before?: number;
       after?: number;
     }) => Array<Record<string, unknown>>;
-    getActiveAdaptiveStyleNotes?: (guildId: string, limit?: number) => Array<Record<string, unknown>>;
-    searchAdaptiveStyleNotesForPrompt?: (opts: {
-      guildId: string;
-      queryText?: string;
-      limit?: number;
-    }) => Array<Record<string, unknown>>;
-    addAdaptiveStyleNote?: (opts: {
-      guildId: string;
-      directiveKind?: string;
-      noteText: string;
-      actorUserId?: string | null;
-      actorName?: string | null;
-      sourceMessageId?: string | null;
-      sourceText?: string | null;
-      source?: string;
-    }) => {
-      ok: boolean;
-      error?: string;
-      status?: string;
-      note?: Record<string, unknown> | null;
-    };
-    removeAdaptiveStyleNote?: (opts: {
-      noteId: number;
-      guildId: string;
-      actorUserId?: string | null;
-      actorName?: string | null;
-      removalReason?: string | null;
-      source?: string;
-    }) => {
-      ok: boolean;
-      error?: string;
-      status?: string;
-      note?: Record<string, unknown> | null;
-    };
   };
   subAgentSessions?: {
     manager: SubAgentSessionManager;
     createCodeSession: (opts: {
       settings: Record<string, unknown>;
+      role?: CodeAgentRole;
       cwd?: string;
       guildId: string;
       channelId: string | null;
@@ -237,20 +213,26 @@ export type ReplyToolRuntime = {
     }) => SubAgentSession | null;
   };
   voiceSession?: {
-    musicSearch: (query: string, limit: number) => Promise<{ ok: boolean; tracks: Record<string, unknown>[] }>;
+    musicSearch: (query: string, limit: number) => Promise<Record<string, unknown>>;
     musicPlay: (query: string, selectionId?: string | null, platform?: string | null) => Promise<Record<string, unknown>>;
-    musicQueueAdd: (trackIds: string[], position?: number | "end") => Promise<{ ok: boolean; queue_length: number; added: string[] }>;
-    musicQueueNext: (trackIds: string[]) => Promise<{ ok: boolean; queue_length: number }>;
-    musicStop: () => Promise<{ ok: boolean }>;
-    musicPause: () => Promise<{ ok: boolean }>;
-    musicResume: () => Promise<{ ok: boolean }>;
-    musicSkip: () => Promise<{ ok: boolean; nextTrack?: Record<string, unknown> }>;
-    musicNowPlaying: () => Promise<{ ok: boolean; now_playing: Record<string, unknown> | null; queue_state: Record<string, unknown> }>;
-    playSoundboard: (refs: string[], transcript: string) => Promise<{ ok: boolean; played: string[]; rejected?: string[] }>;
-    setScreenNote: (note: string) => Promise<{ ok: boolean; note: string }>;
-    setScreenMoment: (moment: string) => Promise<{ ok: boolean; moment: string }>;
-    leaveVoiceChannel: () => Promise<{ ok: boolean }>;
+    musicQueueAdd: (trackIds: string[], position?: number | "end") => Promise<Record<string, unknown>>;
+    musicQueueNext: (trackIds: string[]) => Promise<Record<string, unknown>>;
+    musicStop: () => Promise<Record<string, unknown>>;
+    musicPause: () => Promise<Record<string, unknown>>;
+    musicResume: () => Promise<Record<string, unknown>>;
+    musicSkip: () => Promise<Record<string, unknown>>;
+    musicNowPlaying: () => Promise<Record<string, unknown>>;
+    playSoundboard: (refs: string[], transcript: string) => Promise<Record<string, unknown>>;
+    setScreenNote: (note: string) => Promise<Record<string, unknown>>;
+    setScreenMoment: (moment: string) => Promise<Record<string, unknown>>;
+    leaveVoiceChannel: () => Promise<Record<string, unknown>>;
   };
+  voiceJoin?: () => Promise<{
+    ok: boolean;
+    reason?: string;
+    voiceChannelName?: string;
+    voiceSession?: ReplyToolRuntime["voiceSession"];
+  }>;
 };
 
 export type ReplyToolContext = {
@@ -274,8 +256,6 @@ const WEB_SCRAPE_TOOL: ReplyToolDefinition = toAnthropicTool(WEB_SCRAPE_SCHEMA);
 const BROWSER_BROWSE_TOOL: ReplyToolDefinition = toAnthropicTool(BROWSER_BROWSE_SCHEMA);
 const MEMORY_SEARCH_TOOL: ReplyToolDefinition = toAnthropicTool(MEMORY_SEARCH_SCHEMA);
 const MEMORY_WRITE_TOOL: ReplyToolDefinition = toAnthropicTool(MEMORY_WRITE_SCHEMA);
-const ADAPTIVE_STYLE_ADD_TOOL: ReplyToolDefinition = toAnthropicTool(ADAPTIVE_DIRECTIVE_ADD_SCHEMA);
-const ADAPTIVE_STYLE_REMOVE_TOOL: ReplyToolDefinition = toAnthropicTool(ADAPTIVE_DIRECTIVE_REMOVE_SCHEMA);
 const CONVERSATION_SEARCH_TOOL: ReplyToolDefinition = toAnthropicTool(CONVERSATION_SEARCH_SCHEMA);
 const CODE_TASK_TOOL: ReplyToolDefinition = toAnthropicTool(CODE_TASK_SCHEMA);
 const OFFER_SCREEN_SHARE_LINK_TOOL: ReplyToolDefinition = toAnthropicTool(OFFER_SCREEN_SHARE_LINK_SCHEMA);
@@ -314,8 +294,6 @@ const ALL_REPLY_TOOLS: ReplyToolDefinition[] = [
   BROWSER_BROWSE_TOOL,
   MEMORY_SEARCH_TOOL,
   MEMORY_WRITE_TOOL,
-  ADAPTIVE_STYLE_ADD_TOOL,
-  ADAPTIVE_STYLE_REMOVE_TOOL,
   CONVERSATION_SEARCH_TOOL,
   IMAGE_LOOKUP_TOOL,
   OPEN_ARTICLE_TOOL,
@@ -327,10 +305,6 @@ const ALL_REPLY_TOOLS: ReplyToolDefinition[] = [
 
 function isMemoryEnabled(settings: Record<string, unknown>): boolean {
   return Boolean(getMemorySettings(settings).enabled);
-}
-
-function isAdaptiveDirectivesEnabled(settings: Record<string, unknown>): boolean {
-  return Boolean(getDirectiveSettings(settings).enabled);
 }
 
 function isWebSearchEnabled(settings: Record<string, unknown>): boolean {
@@ -352,7 +326,6 @@ export function buildReplyToolSet(
     webScrapeAvailable?: boolean;
     browserBrowseAvailable?: boolean;
     memoryAvailable?: boolean;
-    adaptiveDirectivesAvailable?: boolean;
     conversationSearchAvailable?: boolean;
     imageLookupAvailable?: boolean;
     openArticleAvailable?: boolean;
@@ -389,12 +362,6 @@ export function buildReplyToolSet(
   if (capabilities.memoryAvailable !== false && memoryEnabled) {
     tools.push(MEMORY_SEARCH_TOOL);
     tools.push(MEMORY_WRITE_TOOL);
-  }
-
-  const adaptiveDirectivesEnabled = isAdaptiveDirectivesEnabled(settings);
-  if (capabilities.adaptiveDirectivesAvailable !== false && adaptiveDirectivesEnabled) {
-    tools.push(ADAPTIVE_STYLE_ADD_TOOL);
-    tools.push(ADAPTIVE_STYLE_REMOVE_TOOL);
   }
 
   if (capabilities.conversationSearchAvailable !== false) {
@@ -454,10 +421,6 @@ export async function executeReplyTool(
       return executeMemoryWrite(input, runtime, context);
     case "conversation_search":
       return executeConversationSearch(input, runtime, context);
-    case "adaptive_directive_add":
-      return executeAdaptiveStyleAdd(input, runtime, context);
-    case "adaptive_directive_remove":
-      return executeAdaptiveStyleRemove(input, runtime, context);
     case "image_lookup":
       return executeImageLookup(input, context);
     case "open_article":
@@ -470,6 +433,8 @@ export async function executeReplyTool(
       return executeScreenNote(input, runtime, context);
     case "screen_moment":
       return executeScreenMoment(input, runtime, context);
+    case "join_voice_channel":
+      return executeJoinVoiceChannel(runtime, context);
     case "leave_voice_channel":
       return executeLeaveVoiceChannel(runtime, context.signal);
     case "code_task":
@@ -495,7 +460,7 @@ async function executeConversationSearch(
   context: ReplyToolContext
 ): Promise<ReplyToolResult> {
   throwIfAborted(context.signal, "Reply tool cancelled");
-  if (!runtime.store?.searchConversationWindows) {
+  if (!runtime.store?.searchConversationWindows && !runtime.memory?.searchConversationHistory) {
     return { content: "Conversation history search is not available.", isError: true };
   }
 
@@ -513,15 +478,30 @@ async function executeConversationSearch(
   const maxAgeHours = Math.max(1, Math.min(24 * 30, Math.floor(Number(input?.max_age_hours) || 24 * 7)));
 
   try {
-    const windows = runtime.store.searchConversationWindows({
-      guildId: context.guildId,
-      channelId: searchChannelId,
-      queryText: query,
-      limit: topK,
-      maxAgeHours,
-      before: 1,
-      after: 1
-    });
+    const windows = runtime.memory?.searchConversationHistory
+      ? await runtime.memory.searchConversationHistory({
+        guildId: context.guildId,
+        channelId: searchChannelId,
+        queryText: query,
+        settings: context.settings,
+        trace: {
+          ...context.trace,
+          source: "reply_tool_conversation_search"
+        },
+        limit: topK,
+        maxAgeHours,
+        before: 1,
+        after: 1
+      })
+      : runtime.store.searchConversationWindows({
+        guildId: context.guildId,
+        channelId: searchChannelId,
+        queryText: query,
+        limit: topK,
+        maxAgeHours,
+        before: 1,
+        after: 1
+      });
     if (!Array.isArray(windows) || !windows.length) {
       return { content: `No conversation history found for: "${query}"` };
     }
@@ -853,87 +833,6 @@ async function executeMemoryWrite(
   }
 }
 
-async function executeAdaptiveStyleAdd(
-  input: ReplyToolCallInput,
-  runtime: ReplyToolRuntime,
-  context: ReplyToolContext
-): Promise<ReplyToolResult> {
-  throwIfAborted(context.signal, "Reply tool cancelled");
-  if (!runtime.store?.getActiveAdaptiveStyleNotes || !runtime.store?.addAdaptiveStyleNote) {
-    return { content: "Adaptive directives are not available.", isError: true };
-  }
-  const result = await executeSharedAdaptiveDirectiveAdd({
-    runtime: {
-      store: {
-        getActiveAdaptiveStyleNotes: runtime.store.getActiveAdaptiveStyleNotes,
-        addAdaptiveStyleNote: runtime.store.addAdaptiveStyleNote,
-        removeAdaptiveStyleNote: runtime.store.removeAdaptiveStyleNote || (() => ({ ok: false, error: "unavailable" }))
-      }
-    },
-    guildId: context.guildId,
-    actorUserId: context.userId,
-    actorName: context.actorName || null,
-    sourceMessageId: context.sourceMessageId,
-    sourceText: context.sourceText,
-    directiveKind: typeof input?.kind === "string" ? input.kind : null,
-    noteText: input?.note,
-    source: "reply_tool"
-  });
-  if (!result.ok) {
-    return {
-      content: `Adaptive directive add failed: ${String(result.error || "unknown_error")}`,
-      isError: true
-    };
-  }
-  const noteText = String(result.note?.noteText || input?.note || "").trim();
-  const kindLabel = String(result.note?.directiveKind || input?.kind || "guidance").trim();
-  if (result.status === "duplicate_active") {
-    return { content: `Adaptive directive already active [${kindLabel}]: ${noteText}` };
-  }
-  if (result.status === "reactivated") {
-    return { content: `Reactivated adaptive directive [${kindLabel}]: ${noteText}` };
-  }
-  return { content: `Saved adaptive directive [${kindLabel}]: ${noteText}` };
-}
-
-async function executeAdaptiveStyleRemove(
-  input: ReplyToolCallInput,
-  runtime: ReplyToolRuntime,
-  context: ReplyToolContext
-): Promise<ReplyToolResult> {
-  throwIfAborted(context.signal, "Reply tool cancelled");
-  if (!runtime.store?.getActiveAdaptiveStyleNotes || !runtime.store?.removeAdaptiveStyleNote) {
-    return { content: "Adaptive directives are not available.", isError: true };
-  }
-  const result = await executeSharedAdaptiveDirectiveRemove({
-    runtime: {
-      store: {
-        getActiveAdaptiveStyleNotes: runtime.store.getActiveAdaptiveStyleNotes,
-        addAdaptiveStyleNote: runtime.store.addAdaptiveStyleNote || (() => ({ ok: false, error: "unavailable" })),
-        removeAdaptiveStyleNote: runtime.store.removeAdaptiveStyleNote
-      }
-    },
-    guildId: context.guildId,
-    actorUserId: context.userId,
-    actorName: context.actorName || null,
-    sourceMessageId: context.sourceMessageId,
-    sourceText: context.sourceText,
-    noteRef: input?.note_ref,
-    target: input?.target,
-    removalReason: input?.reason,
-    source: "reply_tool"
-  });
-  if (!result.ok) {
-    return {
-      content: `Adaptive directive remove failed: ${String(result.error || "unknown_error")}`,
-      isError: true
-    };
-  }
-  return {
-    content: `Removed adaptive directive (${String(result.matchReason || "match")}): ${String(result.note?.noteText || "").trim()}`
-  };
-}
-
 async function executeImageLookup(
   input: ReplyToolCallInput,
   context: ReplyToolContext
@@ -1126,6 +1025,36 @@ async function executeScreenMoment(
   }
 }
 
+async function executeJoinVoiceChannel(
+  runtime: ReplyToolRuntime,
+  context: ReplyToolContext
+): Promise<ReplyToolResult> {
+  throwIfAborted(context.signal, "Reply tool cancelled");
+  if (!runtime.voiceJoin) {
+    return { content: "Voice join is not available.", isError: true };
+  }
+  if (runtime.voiceSession) {
+    return { content: JSON.stringify({ ok: true, already_connected: true }) };
+  }
+  try {
+    const result = await runtime.voiceJoin();
+    if (!result.ok) {
+      return {
+        content: `Could not join voice channel: ${result.reason || "unknown"}`,
+        isError: true
+      };
+    }
+    runtime.voiceSession = result.voiceSession;
+    const channelLabel = result.voiceChannelName || "voice channel";
+    return { content: JSON.stringify({ ok: true, joined: channelLabel }) };
+  } catch (error) {
+    return {
+      content: `Voice tool join_voice_channel failed: ${String((error as Error)?.message || error)}`,
+      isError: true
+    };
+  }
+}
+
 async function executeLeaveVoiceChannel(
   runtime: ReplyToolRuntime,
   signal?: AbortSignal
@@ -1159,6 +1088,7 @@ async function executeCodeTask(
     String(input?.task || ""),
     MAX_CODE_TASK_LEN
   );
+  const role = normalizeCodeAgentRole(input?.role, "implementation");
   if (!task) {
     return { content: "Missing or empty code task instruction.", isError: true };
   }
@@ -1195,6 +1125,7 @@ async function executeCodeTask(
   if (runtime.subAgentSessions?.createCodeSession) {
     const session = runtime.subAgentSessions.createCodeSession({
       settings: context.settings,
+      role,
       cwd: typeof input?.cwd === "string" ? String(input.cwd).trim() : undefined,
       guildId: context.guildId,
       channelId: context.channelId,
@@ -1231,6 +1162,7 @@ async function executeCodeTask(
     const result = await runtime.codeAgent.runTask({
       settings: context.settings,
       task,
+      role,
       cwd: typeof input?.cwd === "string" ? String(input.cwd).trim() : undefined,
       guildId: context.guildId,
       channelId: context.channelId,
@@ -1273,7 +1205,7 @@ async function executeVoiceTool(
 ): Promise<ReplyToolResult> {
   throwIfAborted(context.signal, "Reply tool cancelled");
   if (!runtime.voiceSession) {
-    return { content: "Voice session tools are not available.", isError: true };
+    return { content: "Not in a voice channel. Call join_voice_channel first, then retry this command.", isError: true };
   }
   try {
     let result: Record<string, unknown>;

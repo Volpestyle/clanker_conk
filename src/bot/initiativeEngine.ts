@@ -3,7 +3,10 @@ import {
   buildInitiativePrompt,
   buildSystemPrompt
 } from "../prompts/index.ts";
-import { getMediaPromptCraftGuidance } from "../prompts/promptCore.ts";
+import {
+  getMediaPromptCraftGuidance,
+  getPromptStyle
+} from "../prompts/promptCore.ts";
 import {
   composeDiscoveryImagePrompt,
   composeDiscoveryVideoPrompt,
@@ -15,13 +18,13 @@ import {
 } from "./botHelpers.ts";
 import {
   getBotName,
-  getDirectiveSettings,
   getDiscoverySettings,
   getMemorySettings,
   getReplyPermissions,
   getResolvedTextInitiativeBinding,
   getTextInitiativeSettings
 } from "../settings/agentStack.ts";
+import { loadBehavioralMemoryFacts } from "./memorySlice.ts";
 import {
   buildContextContentBlocks,
   type ContentBlock,
@@ -254,6 +257,7 @@ type InitiativeChannelSummary = {
   recentMessages: StoredMessageRow[];
   recentHumanMessageCount: number;
   lastHumanAt: string | null;
+  lastHumanAuthorName: string | null;
   lastHumanSnippet: string | null;
   lastBotAt: string | null;
 };
@@ -295,6 +299,18 @@ function countRecentActions(store: InitiativeRuntime["store"], kind: string, sin
   return Number(store.countActionsSince(kind, sinceIso) || 0);
 }
 
+export function getEligibleInitiativeChannelIds(settings: Record<string, unknown>) {
+  const permissions = getReplyPermissions(settings);
+  // Legacy `initiative.discovery.channelIds` is migrated into
+  // `permissions.replyChannelIds` during settings normalization, so the
+  // reply-channel list is the canonical unified initiative pool here.
+  return [...new Set(
+    (Array.isArray(permissions.replyChannelIds) ? permissions.replyChannelIds : [])
+      .map((value) => String(value || "").trim())
+      .filter(Boolean)
+  )];
+}
+
 function getLastActionTimes(store: InitiativeRuntime["store"], kinds: string[]) {
   return kinds
     .map((kind) => store.getLastActionTime(kind))
@@ -304,16 +320,11 @@ function getLastActionTimes(store: InitiativeRuntime["store"], kinds: string[]) 
 }
 
 function buildEligibleChannels(runtime: InitiativeRuntime, settings: Record<string, unknown>) {
-  const permissions = getReplyPermissions(settings);
   const lookbackMessages = Math.max(
     4,
     Math.min(80, Number(getTextInitiativeSettings(settings).lookbackMessages) || 20)
   );
-  const candidateIds = [...new Set(
-    (Array.isArray(permissions.replyChannelIds) ? permissions.replyChannelIds : [])
-      .map((value) => String(value || "").trim())
-      .filter(Boolean)
-  )];
+  const candidateIds = getEligibleInitiativeChannelIds(settings);
 
   return Promise.all(candidateIds.map(async (channelId) => {
     if (!runtime.isChannelAllowed(settings, channelId)) return null;
@@ -321,15 +332,18 @@ function buildEligibleChannels(runtime: InitiativeRuntime, settings: Record<stri
     if (!runtime.isNonPrivateReplyEligibleChannel(channel)) return null;
 
     await runtime.hydrateRecentMessages(channel, lookbackMessages);
-    const rows = runtime.store.getRecentMessages(channel.id, lookbackMessages) as StoredMessageRow[];
-    const orderedRows = rows.slice().reverse();
+    const rowsNewestFirst = runtime.store.getRecentMessages(channel.id, lookbackMessages) as StoredMessageRow[];
+    const recentMessages = rowsNewestFirst
+      .slice(0, INITIATIVE_LOOKBACK_MAX_CHANNEL_MESSAGES)
+      .reverse();
     const lastHourCutoff = Date.now() - 60 * 60_000;
     let lastHumanAt: string | null = null;
+    let lastHumanAuthorName: string | null = null;
     let lastHumanSnippet: string | null = null;
     let lastBotAt: string | null = null;
     let recentHumanMessageCount = 0;
 
-    for (const row of orderedRows) {
+    for (const row of rowsNewestFirst) {
       const createdAtText = String(row?.created_at || "").trim();
       const createdAtMs = Date.parse(createdAtText);
       const isBot = row?.is_bot === true || row?.is_bot === 1;
@@ -339,6 +353,7 @@ function buildEligibleChannels(runtime: InitiativeRuntime, settings: Record<stri
       }
       if (!isBot && !lastHumanAt && createdAtText) {
         lastHumanAt = createdAtText;
+        lastHumanAuthorName = String(row?.author_name || "").trim() || null;
         lastHumanSnippet = content.slice(0, 180) || null;
       }
       if (isBot && !lastBotAt && createdAtText) {
@@ -351,9 +366,10 @@ function buildEligibleChannels(runtime: InitiativeRuntime, settings: Record<stri
       channelId: channel.id,
       channelName: String(channel.name || channel.id).trim() || channel.id,
       channel,
-      recentMessages: orderedRows.slice(-INITIATIVE_LOOKBACK_MAX_CHANNEL_MESSAGES),
+      recentMessages,
       recentHumanMessageCount,
       lastHumanAt,
+      lastHumanAuthorName,
       lastHumanSnippet,
       lastBotAt
     } satisfies InitiativeChannelSummary;
@@ -798,7 +814,6 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
     const permissions = getReplyPermissions(settings);
     const discoverySettings = getDiscoverySettings(settings);
     const memorySettings = getMemorySettings(settings);
-    const directiveSettings = getDirectiveSettings(settings);
     if (!initiative.enabled) return;
     if (initiative.maxPostsPerDay <= 0) return;
     if (!runtime.canSendMessage(permissions.maxMessagesPerHour)) return;
@@ -835,6 +850,11 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
       .join(" ")
       .replace(/\s+/g, " ")
       .slice(0, 500);
+    const recentGuildParticipantIds = [...new Set(
+      recentGuildMessages
+        .map((row) => String(row?.author_id || "").trim())
+        .filter(Boolean)
+    )];
 
     const discoveryResult = runtime.discovery
       ? await runtime.discovery.collect({
@@ -852,17 +872,6 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
           reports: [],
           errors: []
         };
-
-    runtime.store.logAction({
-      kind: "discovery_feed_snapshot",
-      guildId,
-      channelId: guildChannels[0].channelId,
-      userId: runtime.client.user?.id || null,
-      content: `candidates=${discoveryResult.candidates.length}`,
-      metadata: {
-        sourceCounts: summarizeDiscoveryCandidates(discoveryResult.candidates)
-      }
-    });
 
     const memoryFacts = memorySettings.enabled
       ? await runtime.loadRelevantMemoryFacts({
@@ -885,26 +894,53 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
           limit: 10
         })
       : [];
+    const guildProfile =
+      memorySettings.enabled && typeof runtime.memory?.loadGuildFactProfile === "function"
+        ? runtime.memory.loadGuildFactProfile({
+            guildId
+          })
+        : { guidanceFacts: [] };
+    const behavioralFacts = await loadBehavioralMemoryFacts(runtime, {
+      settings,
+      guildId,
+      channelId: guildChannels[0].channelId,
+      queryText: [
+        recentGuildQuery,
+        ...discoveryResult.candidates.slice(0, 4).map((item) => String(item?.title || "").trim())
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .slice(0, 500),
+      participantIds: recentGuildParticipantIds,
+      trace: {
+        guildId,
+        channelId: guildChannels[0].channelId,
+        userId: runtime.client.user?.id || null,
+        source: "initiative_behavioral_memory"
+      },
+      limit: 8
+    });
 
     const sourcePerformance = buildSourcePerformanceSummary(runtime, {
       guildId,
       discoverySettings,
       discoveryCandidates: discoveryResult.candidates
     });
+    runtime.store.logAction({
+      kind: "discovery_feed_snapshot",
+      guildId,
+      channelId: guildChannels[0].channelId,
+      userId: runtime.client.user?.id || null,
+      content: `candidates=${discoveryResult.candidates.length}`,
+      metadata: {
+        sourceCounts: summarizeDiscoveryCandidates(discoveryResult.candidates)
+      }
+    });
     const communityInterestFacts = buildInterestFacts({
       recentGuildMessages,
       eligibleChannels: guildChannels,
       sourceStats: sourcePerformance
     });
-    const adaptiveDirectives =
-      directiveSettings.enabled && typeof runtime.store.searchAdaptiveStyleNotesForPrompt === "function"
-        ? runtime.store.searchAdaptiveStyleNotesForPrompt({
-            guildId,
-            queryText: recentGuildQuery,
-            limit: 8
-          })
-        : [];
-
     const imageBudget = runtime.getImageBudgetState(settings);
     const videoBudget = runtime.getVideoGenerationBudgetState(settings);
     const gifBudget = runtime.getGifBudgetState(settings);
@@ -912,19 +948,21 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
     const allowActiveCuriosity = Boolean(initiative.allowActiveCuriosity);
     const allowSelfCuration = Boolean(discoverySettings.allowSelfCuration);
     const botName = getBotName(settings);
-    const systemPrompt = buildSystemPrompt(settings, {
-      adaptiveDirectives
-    });
+    const persona = getPromptStyle(settings);
+    const systemPrompt = buildSystemPrompt(settings);
     const userPrompt = buildInitiativePrompt({
       botName,
+      persona,
       initiativeEagerness: eagerness,
       channelSummaries: guildChannels,
       discoveryCandidates: discoveryResult.candidates,
       sourcePerformance,
       communityInterestFacts,
       relevantFacts: memoryFacts,
-      adaptiveDirectives,
+      guidanceFacts: Array.isArray(guildProfile?.guidanceFacts) ? guildProfile.guidanceFacts : [],
+      behavioralFacts,
       allowActiveCuriosity,
+      allowMemorySearch: memorySettings.enabled,
       allowSelfCuration,
       allowImagePosts:
         discoverySettings.allowImagePosts &&
@@ -981,11 +1019,17 @@ export async function maybeRunInitiativeCycle(runtime: InitiativeRuntime) {
       Date.now() - startedAt < INITIATIVE_TICK_MAX_RUNTIME_MS
     ) {
       const assistantContent = buildContextContentBlocks(generation.rawContent, generation.text);
-      contextMessages = [
-        ...contextMessages,
-        { role: "user", content: userPrompt },
-        { role: "assistant", content: assistantContent }
-      ];
+      if (contextMessages.length === 0) {
+        contextMessages = [
+          { role: "user", content: userPrompt },
+          { role: "assistant", content: assistantContent }
+        ];
+      } else {
+        contextMessages = [
+          ...contextMessages,
+          { role: "assistant", content: assistantContent }
+        ];
+      }
 
       const toolResultMessages: ContentBlock[] = [];
       for (const toolCall of generation.toolCalls) {

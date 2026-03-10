@@ -38,6 +38,13 @@ export interface DiscordClientGuildLike {
       get: (id: string) => DiscordClientGuildMemberLike | undefined;
     } | null;
   } | null;
+  channels?: {
+    cache?: {
+      get: (id: string) => {
+        name?: string | null;
+      } | undefined;
+    } | null;
+  } | null;
 }
 
 export interface DiscordClientLike {
@@ -251,7 +258,6 @@ export interface VoiceReplyRuntime extends BotContext {
     }) => {
       userFacts: Array<Record<string, unknown>>;
       relevantFacts: Array<Record<string, unknown>>;
-      relevantMessages?: Array<Record<string, unknown>>;
     };
     getMusicPromptContext?: (session: {
       durableContext?: VoiceSessionDurableContextEntry[];

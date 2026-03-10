@@ -245,11 +245,6 @@ export const REPLY_JSON_SCHEMA = `{
   "memoryLookupQuery": "string or null",
   "imageLookupQuery": "string or null",
   "openArticleRef": "string or null",
-  "memoryLine": "string or null",
-  "memoryScope": "user|lore or null",
-  "memoryFactType": "preference|profile|relationship|project|other or null",
-  "selfMemoryLine": "string or null",
-  "selfMemoryFactType": "preference|profile|relationship|project|other or null",
   "soundboardRefs": [],
   "leaveVoiceChannel": false,
   "automationAction": {
@@ -261,15 +256,6 @@ export const REPLY_JSON_SCHEMA = `{
     "automationId": "string or null",
     "runImmediately": false,
     "targetChannelId": "string or null"
-  },
-  "voiceIntent": {
-    "intent": "join|leave|status|watch_stream|stop_watching_stream|stream_status|music_play|music_queue_next|music_queue_add|music_stop|music_pause|none",
-    "confidence": 0,
-    "reason": "string or null",
-    "query": "string or null",
-    "platform": "youtube|soundcloud|auto or null",
-    "searchResults": "array or null",
-    "selectedResultId": "string or null"
   },
   "screenShareIntent": {
     "action": "offer_link|none",

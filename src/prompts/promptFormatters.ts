@@ -14,26 +14,25 @@ import { extractUrlsFromText } from "../bot/botHelpers.ts";
 
 const IMAGE_URL_RE = /\.(?:jpe?g|png|gif|webp|bmp|heic)(?:$|[?#])/i;
 
-export function formatAdaptiveDirectives(notes, maxItems = 8) {
-  const rows = Array.isArray(notes) ? notes : [];
-  if (!rows.length) return "(no adaptive directives)";
+export function formatBehaviorMemoryFacts(facts, maxItems = 8) {
+  const rows = Array.isArray(facts) ? facts : [];
+  if (!rows.length) return "(no behavioral memory)";
   return rows
     .slice(0, Math.max(1, Number(maxItems) || 8))
     .map((row) => {
-      const noteId = Number(row?.id);
-      const directiveKind = String(row?.directiveKind || row?.directive_kind || "guidance").trim().toLowerCase() || "guidance";
-      const noteText = String(row?.noteText || row?.note_text || "")
+      const factType = String(row?.factType || row?.fact_type || "guidance").trim().toLowerCase() || "guidance";
+      const subjectLabel = String(row?.subjectLabel || row?.subject_label || row?.subject || "unknown").trim() || "unknown";
+      const factText = String(row?.fact || row?.noteText || row?.note_text || "")
         .replace(/\s+/g, " ")
         .trim();
-      if (!noteText) return "";
-      const ref = Number.isInteger(noteId) ? ` [S${noteId}]` : "";
-      return `-${ref} [${directiveKind}] ${noteText}`;
+      if (!factText) return "";
+      return `- [${factType}] ${subjectLabel}: ${factText}`;
     })
     .filter(Boolean)
     .join("\n");
 }
 
-export function buildSystemPrompt(settings, { adaptiveDirectives = [] } = {}) {
+export function buildSystemPrompt(settings) {
   const memoryEnabled = Boolean(settings?.memory?.enabled);
   const textGuidance = getPromptTextGuidance(settings, DEFAULT_PROMPT_TEXT_GUIDANCE);
 
@@ -42,11 +41,6 @@ export function buildSystemPrompt(settings, { adaptiveDirectives = [] } = {}) {
     `You are ${getPromptBotName(settings)}, a real-feeling regular in a Discord server.`,
     `Style: ${getPromptStyle(settings)}.`,
     ...textGuidance,
-    adaptiveDirectives.length > 0 ? `=== ADAPTIVE DIRECTIVES ===` : null,
-    adaptiveDirectives.length > 0
-      ? "These are active persistent server-level directives saved from prior conversation or dashboard edits. Guidance directives shape tone/persona. Behavior directives describe recurring trigger/action behavior. Follow them when relevant unless they conflict with hard limits or the current request."
-      : null,
-    adaptiveDirectives.length > 0 ? formatAdaptiveDirectives(adaptiveDirectives, 8) : null,
     `=== CAPABILITIES ===`,
     getPromptCapabilityHonestyLine(settings),
     memoryEnabled
@@ -159,7 +153,12 @@ export function formatConversationWindows(windows) {
     .slice(0, 4)
     .map((window, index) => {
       const ageLabel = formatConversationWindowAge(window?.ageMinutes);
-      const lines = (Array.isArray(window?.messages) ? window.messages : [])
+      const messages = Array.isArray(window?.messages) ? window.messages : [];
+      const isVoiceWindow = messages.some(
+        (msg) => String(msg?.message_id || "").startsWith("voice-")
+      );
+      const sourceLabel = isVoiceWindow ? "voice chat" : "text";
+      const lines = messages
         .slice(0, 5)
         .map((message) => {
           const authorName = String(message?.author_name || message?.authorName || "unknown").trim() || "unknown";
@@ -167,12 +166,75 @@ export function formatConversationWindows(windows) {
           const normalizedText =
             message?.is_bot === 1 || message?.is_bot === true ? stripEmojiForPrompt(rawText) : rawText;
           const text = normalizedText.replace(/\s+/g, " ").trim() || "(empty)";
-          return `  - ${authorName}: ${text}`;
+          const msgAge = formatRelativePromptAge(message?.created_at || message?.createdAt);
+          const msgAgeLabel = msgAge ? ` (${msgAge})` : "";
+          return `  - ${authorName}${msgAgeLabel}: ${text}`;
         })
         .join("\n");
-      return `- [C${index + 1}] ${ageLabel}\n${lines}`;
+      return `- [C${index + 1}] ${ageLabel}, ${sourceLabel}\n${lines}`;
     })
     .join("\n");
+}
+
+export function formatConversationParticipantMemory({
+  participantProfiles = [],
+  selfFacts = [],
+  loreFacts = []
+}: {
+  participantProfiles?: Array<Record<string, unknown>>;
+  selfFacts?: Array<Record<string, unknown>>;
+  loreFacts?: Array<Record<string, unknown>>;
+}) {
+  const participants = Array.isArray(participantProfiles) ? participantProfiles : [];
+  const lines = participants
+    .slice(0, 8)
+    .map((participant) => {
+      const displayName = String(participant?.displayName || participant?.userId || "unknown").trim() || "unknown";
+      const facts = Array.isArray(participant?.facts) ? participant.facts : [];
+      if (!facts.length) return "";
+      const factLines = formatMemoryFacts(facts, {
+        includeType: false,
+        includeProvenance: false,
+        maxItems: participant?.isPrimary ? 8 : 3
+      })
+        .split("\n")
+        .map((line) => `  ${line}`);
+      const roleLabel = participant?.isPrimary ? " (current speaker)" : "";
+      return [`${displayName}${roleLabel}:`, ...factLines].join("\n");
+    })
+    .filter(Boolean);
+
+  if (Array.isArray(selfFacts) && selfFacts.length > 0) {
+    lines.push(
+      [
+        "Bot self:",
+        ...formatMemoryFacts(selfFacts, {
+          includeType: false,
+          includeProvenance: false,
+          maxItems: 6
+        })
+          .split("\n")
+          .map((line) => `  ${line}`)
+      ].join("\n")
+    );
+  }
+
+  if (Array.isArray(loreFacts) && loreFacts.length > 0) {
+    lines.push(
+      [
+        "Shared lore:",
+        ...formatMemoryFacts(loreFacts, {
+          includeType: false,
+          includeProvenance: false,
+          maxItems: 6
+        })
+          .split("\n")
+          .map((line) => `  ${line}`)
+      ].join("\n")
+    );
+  }
+
+  return lines.length ? lines.join("\n") : "(no participant memory)";
 }
 
 export function formatEmojiChoices(emojiOptions) {
@@ -273,25 +335,50 @@ function formatPromptRelativeAge(rawValue) {
   return `${deltaDays}d ago`;
 }
 
-export function formatInitiativeChannelSummaries(channels) {
-  const rows = Array.isArray(channels) ? channels : [];
-  if (!rows.length) return "(no eligible channels)";
+type InitiativePromptMessage = {
+  author_name?: string;
+  authorName?: string;
+  content?: string;
+};
 
-  return rows
+type InitiativePromptChannel = {
+  channelId?: string;
+  channelName?: string;
+  name?: string;
+  lastHumanAt?: string | null;
+  lastHumanAuthorName?: string | null;
+  lastHumanSnippet?: string | null;
+  lastBotAt?: string | null;
+  recentHumanMessageCount?: number;
+  recentMessages?: InitiativePromptMessage[];
+};
+
+export function formatInitiativeChannelSummaries(channels) {
+  const rows = (Array.isArray(channels) ? channels : []) as InitiativePromptChannel[];
+  if (!rows.length) return "Eligible channels:\n(no eligible channels)";
+
+  const summaries = rows
     .map((channel) => {
       const channelName = String(channel?.channelName || channel?.name || "channel").trim() || "channel";
       const lastHumanSnippet = String(channel?.lastHumanSnippet || "").trim();
       const lastHumanAt = String(channel?.lastHumanAt || "").trim();
+      const lastHumanAuthorName = String(channel?.lastHumanAuthorName || "").trim();
+      const lastHumanWho = lastHumanAuthorName ? ` (user: ${lastHumanAuthorName})` : "";
       const lastHumanLine = lastHumanSnippet && lastHumanAt
-        ? `Last human message: ${formatPromptRelativeAge(lastHumanAt)} - "${lastHumanSnippet}"`
+        ? `Last human message: ${formatPromptRelativeAge(lastHumanAt)} — "${lastHumanSnippet}"${lastHumanWho}`
         : "Last human message: quiet";
       const lastBotAt = String(channel?.lastBotAt || "").trim();
       const botLine = lastBotAt
         ? `Your last message: ${formatPromptRelativeAge(lastBotAt)}`
         : "Your last message: never";
       const recentActivity = Number(channel?.recentHumanMessageCount || 0);
-      const activityLine = `Recent human activity: ${recentActivity} message${recentActivity === 1 ? "" : "s"} in the last hour`;
-      const recentMessages = Array.isArray(channel?.recentMessages) ? channel.recentMessages : [];
+      const activityLine =
+        recentActivity > 0
+          ? `Recent activity: ${recentActivity} message${recentActivity === 1 ? "" : "s"} in the last hour`
+          : "Recent activity: idle";
+      const recentMessages = Array.isArray(channel?.recentMessages)
+        ? channel.recentMessages
+        : [];
       const messageLines = recentMessages.length
         ? recentMessages
           .slice(-5)
@@ -305,22 +392,25 @@ export function formatInitiativeChannelSummaries(channels) {
           .join("\n")
         : "  - (no recent messages captured)";
       return [
-        `#${channelName} [channelId=${String(channel?.channelId || "").trim()}]`,
+        `#${channelName} (text)`,
+        `  channelId: ${String(channel?.channelId || "").trim() || "(missing)"}`,
         `  ${lastHumanLine}`,
         `  ${botLine}`,
         `  ${activityLine}`,
-        "  Recent context:",
+        "  Recent messages:",
         messageLines
       ].join("\n");
     })
     .join("\n\n");
+
+  return `Eligible channels:\n\n${summaries}`;
 }
 
 export function formatInitiativeFeedCandidates(candidates) {
   const rows = Array.isArray(candidates) ? candidates : [];
   if (!rows.length) return "Nothing new in your feed right now.";
 
-  return rows
+  const formattedRows = rows
     .slice(0, 8)
     .map((item, index) => {
       const title = String(item?.title || "untitled").trim() || "untitled";
@@ -333,23 +423,27 @@ export function formatInitiativeFeedCandidates(candidates) {
       return `${index + 1}. "${title}"\n   Source: ${source} · ${ageLabel}\n   Link: ${url}${excerptLine}`;
     })
     .join("\n\n");
+
+  return `Things from your feed (share if any catch your eye):\n\n${formattedRows}`;
 }
 
 export function formatInitiativeSourcePerformance(sources) {
   const rows = Array.isArray(sources) ? sources : [];
   if (!rows.length) return "No source performance data yet.";
 
-  return rows
+  const formattedRows = rows
     .map((entry) => {
       const label = String(entry?.label || entry?.source || "source").trim() || "source";
       const shared = Math.max(0, Number(entry?.sharedCount || 0));
       const fetched = Math.max(0, Number(entry?.fetchedCount || 0));
       const engagement = Math.max(0, Number(entry?.engagementCount || 0));
       const lastUsedAt = String(entry?.lastUsedAt || "").trim();
-      const lastUsedLabel = lastUsedAt ? formatPromptRelativeAge(lastUsedAt) : "never";
-      return `- ${label} - ${shared}/${fetched} candidates shared, ${engagement} engagement signal(s), last used ${lastUsedLabel}`;
+      const lastUsedLabel = lastUsedAt ? `, last used ${formatPromptRelativeAge(lastUsedAt)}` : "";
+      return `- ${label} — ${shared}/${fetched} candidates shared in last 2 weeks, ${engagement} community engagement${lastUsedLabel}`;
     })
     .join("\n");
+
+  return `Your feed sources:\n${formattedRows}`;
 }
 
 export function formatInitiativeInterestFacts(facts) {

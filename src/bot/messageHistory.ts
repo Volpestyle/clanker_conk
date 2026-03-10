@@ -336,7 +336,7 @@ export function getRecentLookupContextForPrompt(
   }
 }
 
-export function getConversationHistoryForPrompt(
+export async function getConversationHistoryForPrompt(
   ctx: BotContext,
   {
     guildId = null,
@@ -358,6 +358,23 @@ export function getConversationHistoryForPrompt(
     .slice(0, 320);
   if (!normalizedQuery) return [];
   try {
+    if (ctx.memory && typeof ctx.memory.searchConversationHistory === "function") {
+      return await ctx.memory.searchConversationHistory({
+        guildId: normalizedGuildId,
+        channelId: normalizedChannelId,
+        queryText: normalizedQuery,
+        settings: ctx.store.getSettings(),
+        trace: {
+          guildId: normalizedGuildId,
+          channelId: normalizedChannelId,
+          source: "conversation_history_prompt"
+        },
+        limit,
+        maxAgeHours,
+        before,
+        after
+      });
+    }
     return ctx.store.searchConversationWindows({
       guildId: normalizedGuildId,
       channelId: normalizedChannelId,
@@ -368,13 +385,17 @@ export function getConversationHistoryForPrompt(
       after
     });
   } catch (error) {
-    ctx.store.logAction({
-      kind: "bot_error",
-      guildId: normalizedGuildId,
-      channelId: normalizedChannelId,
-      userId: getBotUserId(ctx) || null,
-      content: `conversation_history_search: ${String(error?.message || error)}`
-    });
+    try {
+      ctx.store.logAction({
+        kind: "bot_error",
+        guildId: normalizedGuildId,
+        channelId: normalizedChannelId,
+        userId: getBotUserId(ctx) || null,
+        content: `conversation_history_search: ${String(error?.message || error)}`
+      });
+    } catch {
+      // Logging must not mask the original prompt-context fallback path.
+    }
     return [];
   }
 }

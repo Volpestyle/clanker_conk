@@ -21,13 +21,13 @@ import { isAbortError } from "../tools/browserTaskRuntime.ts";
 import { shouldRequestVoiceToolFollowup } from "../tools/sharedToolSchemas.ts";
 import { clamp, sanitizeBotText } from "../utils.ts";
 import { loadConversationContinuityContext } from "./conversationContinuity.ts";
+import { loadBehavioralMemoryFacts, normalizeFactProfileSlice } from "./memorySlice.ts";
 import {
   applyOrchestratorOverrideSettings,
-  getDirectiveSettings,
   getMemorySettings,
+  getReplyGenerationSettings,
   getResolvedOrchestratorBinding,
   getResolvedVoiceGenerationBinding,
-  getReplyGenerationSettings,
   getVoiceConversationPolicy,
   getVoiceSoundboardSettings
 } from "../settings/agentStack.ts";
@@ -37,7 +37,6 @@ import {
   type ContextMessage
 } from "../llm/serviceShared.ts";
 import type { VoiceReplyRuntime } from "./botContext.ts";
-import { normalizeFactProfileSlice } from "./memorySlice.ts";
 import { SentenceAccumulator } from "../voice/sentenceAccumulator.ts";
 
 const OPEN_ARTICLE_MAX_CANDIDATES = 12;
@@ -381,7 +380,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     getVoiceSoundboardSettings(settings).enabled && normalizedSoundboardCandidates.length
   );
   const allowMemoryToolCalls = Boolean(getMemorySettings(settings).enabled);
-  const allowAdaptiveDirectiveToolCalls = Boolean(getDirectiveSettings(settings).enabled);
   const allowWebSearchToolCall = Boolean(
     typeof runtime.search?.searchAndRead === "function"
   );
@@ -502,21 +500,29 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       typeof runtime.loadRecentConversationHistory === "function"
         ? (payload) => runtime.loadRecentConversationHistory(payload)
         : null,
-    loadAdaptiveDirectives:
-      allowAdaptiveDirectiveToolCalls &&
-      typeof runtime.store?.searchAdaptiveStyleNotesForPrompt === "function"
-        ? (payload) =>
-            runtime.store.searchAdaptiveStyleNotesForPrompt({
-              guildId: String(payload.guildId || "").trim(),
-              queryText: String(payload.queryText || ""),
-              limit: 8
-            })
-        : null
   });
   const promptMemorySlice = normalizeFactProfileSlice(continuity.memorySlice);
   const recentWebLookups = continuity.recentWebLookups;
   const recentConversationHistory = continuity.recentConversationHistory;
-  const adaptiveDirectives = Array.isArray(continuity.adaptiveDirectives) ? continuity.adaptiveDirectives : [];
+  const behavioralFacts = await loadBehavioralMemoryFacts(runtime, {
+    settings,
+    guildId,
+    channelId,
+    queryText: incomingTranscript,
+    participantIds:
+      Array.isArray(promptMemorySlice.participantProfiles)
+        ? promptMemorySlice.participantProfiles
+            .map((entry) => String(entry?.userId || "").trim())
+            .filter(Boolean)
+        : [],
+    trace: {
+      guildId,
+      channelId,
+      userId,
+      source: "voice_realtime_behavioral_memory"
+    },
+    limit: 8
+  });
 
   const voiceGenerationBinding = getResolvedVoiceGenerationBinding(settings);
   const replyGeneration = getReplyGenerationSettings(settings);
@@ -603,9 +609,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
 
   const voiceToneGuardrails = buildVoiceToneGuardrails();
   const systemPrompt = [
-    buildSystemPrompt(settings, {
-      adaptiveDirectives
-    }),
+    buildSystemPrompt(settings),
     "You are speaking in live Discord voice chat.",
     ...voiceToneGuardrails,
     directAddressed
@@ -631,8 +635,13 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       speakerName,
       transcript: incomingTranscript,
       directAddressed,
+      participantProfiles: promptMemorySlice.participantProfiles,
+      selfFacts: promptMemorySlice.selfFacts,
+      loreFacts: promptMemorySlice.loreFacts,
       userFacts: promptMemorySlice.userFacts,
       relevantFacts: promptMemorySlice.relevantFacts,
+      guidanceFacts: promptMemorySlice.guidanceFacts,
+      behavioralFacts,
       isEagerTurn,
       voiceEagerness,
       conversationContext,
@@ -654,7 +663,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       screenShare,
       allowScreenShareToolCall,
       allowMemoryToolCalls,
-      allowAdaptiveDirectiveToolCalls,
       allowSoundboardToolCall,
       allowVoiceToolCalls: allowVoiceTools,
       musicContext,
@@ -675,6 +683,8 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
     membershipEvents: normalizedMembershipEvents,
     effectEvents: normalizedVoiceEffectEvents,
     memoryFacts: {
+      guidanceFacts: promptMemorySlice.guidanceFacts,
+      behavioralFacts,
       userFacts: promptMemorySlice.userFacts,
       relevantFacts: promptMemorySlice.relevantFacts
     },
@@ -687,8 +697,7 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       browserBrowse: allowBrowserBrowseToolCall,
       openArticle: allowOpenArticleToolCall,
       screenShare: allowScreenShareToolCall,
-      memory: allowMemoryToolCalls,
-      adaptiveDirectives: allowAdaptiveDirectiveToolCalls
+      memory: allowMemoryToolCalls
     },
     soundboardCandidateCount: normalizedSoundboardCandidates.length,
     llmConfig: {
@@ -715,7 +724,6 @@ export async function generateVoiceTurnReply(runtime: VoiceReplyRuntime, {
       webSearchAvailable: allowWebSearchToolCall && webSearchAvailableNow,
       browserBrowseAvailable: allowBrowserBrowseToolCall && browserBrowseAvailableNow,
       memoryAvailable: allowMemoryToolCalls,
-      adaptiveDirectivesAvailable: allowAdaptiveDirectiveToolCalls,
       imageLookupAvailable: false,
       openArticleAvailable: allowOpenArticleToolCall && openArticleCandidates.length > 0,
       screenShareAvailable: allowScreenShareToolCall,

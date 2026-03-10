@@ -15,11 +15,6 @@ test("parseStructuredReplyOutput reads structured reply JSON", () => {
       skip: false,
       reactionEmoji: "🔥",
       media: { type: "gif", prompt: "cat dance" },
-      memoryLine: "Alice prefers tea over coffee.",
-      memoryScope: "user",
-      memoryFactType: "preference",
-      selfMemoryLine: "I prefer concise replies.",
-      selfMemoryFactType: "preference",
       voiceIntent: {
         intent: "join",
         confidence: 0.92,
@@ -32,15 +27,7 @@ test("parseStructuredReplyOutput reads structured reply JSON", () => {
   assert.equal(parsed.reactionEmoji, "🔥");
   assert.equal(parsed.gifQuery, "cat dance");
   assert.equal(parsed.mediaDirective?.type, "gif");
-  assert.equal(parsed.memoryLine, "Alice prefers tea over coffee.");
-  assert.equal(parsed.memoryScope, "user");
-  assert.equal(parsed.memoryFactType, "preference");
-  assert.equal(parsed.selfMemoryLine, "I prefer concise replies.");
-  assert.equal(parsed.selfMemoryFactType, "preference");
   assert.equal(parsed.automationAction.operation, null);
-  assert.equal(parsed.voiceIntent.intent, "join");
-  assert.equal(parsed.voiceIntent.confidence, 0.92);
-  assert.equal(parsed.voiceIntent.reason, "explicit join request");
 });
 
 test("parseStructuredReplyOutput rejects unstructured plain text", () => {
@@ -49,18 +36,12 @@ test("parseStructuredReplyOutput rejects unstructured plain text", () => {
   assert.equal(parsed.text, "");
   assert.equal(parsed.mediaDirective, null);
   assert.equal(parsed.automationAction.operation, null);
-  assert.equal(parsed.voiceIntent.intent, null);
-  assert.equal(parsed.voiceIntent.confidence, 0);
-  assert.equal(parsed.voiceIntent.reason, null);
   assert.equal(parsed.voiceAddressing.talkingTo, null);
   assert.equal(parsed.voiceAddressing.directedConfidence, 0);
-  assert.equal(parsed.memoryScope, null);
-  assert.equal(parsed.memoryFactType, null);
-  assert.equal(parsed.selfMemoryFactType, null);
   assert.equal(parsed.parseState, "unstructured");
 });
 
-test("parseStructuredReplyOutput normalizes invalid memory scope and fact types", () => {
+test("parseStructuredReplyOutput ignores removed structured memory fields", () => {
   const parsed = parseStructuredReplyOutput(
     JSON.stringify({
       text: "bet",
@@ -73,11 +54,9 @@ test("parseStructuredReplyOutput normalizes invalid memory scope and fact types"
     })
   );
 
-  assert.equal(parsed.memoryLine, "Alice likes tea.");
-  assert.equal(parsed.memoryScope, null);
-  assert.equal(parsed.memoryFactType, null);
-  assert.equal(parsed.selfMemoryLine, "I prefer short replies.");
-  assert.equal(parsed.selfMemoryFactType, null);
+  assert.equal(parsed.text, "bet");
+  assert.equal(parsed.memoryLookupQuery, null);
+  assert.equal(parsed.mediaDirective, null);
 });
 
 test("compose media prompts fall back to contextual defaults when no prompt is provided", () => {
@@ -147,100 +126,12 @@ test("parseStructuredReplyOutput honors skip flag", () => {
       webSearchQuery: null,
       memoryLookupQuery: null,
       memoryLine: null,
-      voiceIntent: {
-        intent: "none",
-        confidence: 0.2,
-        reason: "not a voice command"
-      }
     })
   );
 
   assert.equal(parsed.text, "[SKIP]");
-  assert.equal(parsed.voiceIntent.intent, null);
 });
 
-test("parseStructuredReplyOutput accepts stream watch voice intents", () => {
-  const parsed = parseStructuredReplyOutput(
-    JSON.stringify({
-      text: "bet",
-      skip: false,
-      reactionEmoji: null,
-      media: null,
-      webSearchQuery: null,
-      memoryLookupQuery: null,
-      memoryLine: null,
-      voiceIntent: {
-        intent: "watch_stream",
-        confidence: 0.95,
-        reason: "explicit stream watch request"
-      }
-    })
-  );
-
-  assert.equal(parsed.voiceIntent.intent, "watch_stream");
-  assert.equal(parsed.voiceIntent.confidence, 0.95);
-  assert.equal(parsed.voiceIntent.reason, "explicit stream watch request");
-});
-
-test("parseStructuredReplyOutput accepts music control voice intents", () => {
-  const play = parseStructuredReplyOutput(
-    JSON.stringify({
-      text: "playing now",
-      skip: false,
-      voiceIntent: {
-        intent: "music_play",
-        confidence: 0.96,
-        reason: "explicit play request",
-        query: "mf doom all caps",
-        platform: "youtube",
-        selectedResultId: "track:123"
-      }
-    })
-  );
-  assert.equal(play.voiceIntent.intent, "music_play");
-  assert.equal(play.voiceIntent.confidence, 0.96);
-  assert.equal(play.voiceIntent.reason, "explicit play request");
-  assert.equal(play.voiceIntent.query, "mf doom all caps");
-  assert.equal(play.voiceIntent.platform, "youtube");
-  assert.equal(play.voiceIntent.selectedResultId, "track:123");
-
-  const queueNext = parseStructuredReplyOutput(
-    JSON.stringify({
-      text: "queued next",
-      skip: false,
-      voiceIntent: {
-        intent: "music_queue_next",
-        confidence: 0.91,
-        reason: "explicit queue-next request",
-        query: "accordion",
-        platform: "soundcloud",
-        selectedResultId: "track:456"
-      }
-    })
-  );
-  assert.equal(queueNext.voiceIntent.intent, "music_queue_next");
-  assert.equal(queueNext.voiceIntent.query, "accordion");
-  assert.equal(queueNext.voiceIntent.platform, "soundcloud");
-  assert.equal(queueNext.voiceIntent.selectedResultId, "track:456");
-
-  const pause = parseStructuredReplyOutput(
-    JSON.stringify({
-      text: "paused",
-      skip: false,
-      voiceIntent: {
-        intent: "music_pause",
-        confidence: 0.9,
-        reason: "explicit pause request"
-      }
-    })
-  );
-  assert.equal(pause.voiceIntent.intent, "music_pause");
-  assert.equal(pause.voiceIntent.confidence, 0.9);
-  assert.equal(pause.voiceIntent.reason, "explicit pause request");
-  assert.equal(pause.voiceIntent.query, null);
-  assert.equal(pause.voiceIntent.platform, null);
-  assert.equal(pause.voiceIntent.selectedResultId, null);
-});
 
 test("parseStructuredReplyOutput accepts screen share offer intent", () => {
   const parsed = parseStructuredReplyOutput(
@@ -252,11 +143,6 @@ test("parseStructuredReplyOutput accepts screen share offer intent", () => {
       webSearchQuery: null,
       memoryLookupQuery: null,
       memoryLine: null,
-      voiceIntent: {
-        intent: "none",
-        confidence: 0,
-        reason: null
-      },
       screenShareIntent: {
         action: "offer_link",
         confidence: 0.88,
@@ -305,29 +191,6 @@ test("parseStructuredReplyOutput preserves model-provided voice addressing targe
   assert.equal(parsed.voiceAddressing.directedConfidence, 1);
 });
 
-test("parseStructuredReplyOutput normalizes invalid voice intent payload", () => {
-  const parsed = parseStructuredReplyOutput(
-    JSON.stringify({
-      text: "hello",
-      skip: false,
-      reactionEmoji: null,
-      media: null,
-      webSearchQuery: null,
-      memoryLookupQuery: null,
-      memoryLine: null,
-      voiceIntent: {
-        intent: "teleport",
-        confidence: 3,
-        reason: "invalid"
-      }
-    })
-  );
-
-  assert.equal(parsed.voiceIntent.intent, null);
-  assert.equal(parsed.voiceIntent.confidence, 0);
-  assert.equal(parsed.voiceIntent.reason, null);
-});
-
 test("parseStructuredReplyOutput normalizes automation create payload", () => {
   const parsed = parseStructuredReplyOutput(
     JSON.stringify({
@@ -348,11 +211,6 @@ test("parseStructuredReplyOutput normalizes automation create payload", () => {
           minute: 0
         },
         runImmediately: true
-      },
-      voiceIntent: {
-        intent: "none",
-        confidence: 0,
-        reason: null
       }
     })
   );
@@ -391,7 +249,6 @@ test("parseStructuredReplyOutput parses voice tool-call fields", () => {
       soundboardRefs: ["1234567890@555666777", "111222333@444555666"],
       leaveVoiceChannel: true,
       automationAction: { operation: "none" },
-      voiceIntent: { intent: "none", confidence: 0, reason: null },
       screenShareIntent: { action: "offer_link", confidence: 0.88, reason: "needs visual context" }
     })
   );
@@ -407,8 +264,4 @@ test("parseStructuredReplyOutput normalizes missing voice tool-call fields to sa
   assert.equal(parsed.parseState, "unstructured");
   assert.deepEqual(parsed.soundboardRefs, []);
   assert.equal(parsed.leaveVoiceChannel, false);
-  assert.equal(parsed.voiceIntent.query, null);
-  assert.equal(parsed.voiceIntent.platform, null);
-  assert.equal(parsed.voiceIntent.searchResults, null);
-  assert.equal(parsed.voiceIntent.selectedResultId, null);
 });

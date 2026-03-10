@@ -40,11 +40,11 @@ import {
   finalizeReplyPerformanceSample
 } from "./replyPipelineShared.ts";
 import { loadConversationContinuityContext } from "./conversationContinuity.ts";
+import { loadBehavioralMemoryFacts } from "./memorySlice.ts";
 import {
   getActivitySettings,
   getAutomationsSettings,
   getBotName,
-  getDirectiveSettings,
   getDiscoverySettings,
   getMemorySettings,
   getReplyPermissions,
@@ -280,10 +280,6 @@ type ReplySkippedActionResult = {
 type ReplySendableActionResult = {
   skipped: false;
   reaction: ReplyReactionResult;
-  memoryLine: ReplyDirective["memoryLine"];
-  selfMemoryLine: ReplyDirective["selfMemoryLine"];
-  memorySaved: boolean;
-  selfMemorySaved: boolean;
   mediaDirective: ReplyMediaDirective;
   finalText: string;
   mentionResolution: ReplyMentionResolution;
@@ -328,7 +324,6 @@ export async function buildReplyContext(
 ): Promise<ReplyPipelineContext | false> {
   const memorySettings = getMemorySettings(settings);
   const activity = getActivitySettings(settings);
-  const directiveSettings = getDirectiveSettings(settings);
   const automationsSettings = getAutomationsSettings(settings);
   const discovery = getDiscoverySettings(settings);
   const voiceSettings = getVoiceSettings(settings);
@@ -397,22 +392,29 @@ export async function buildReplyContext(
         queryText: payload.queryText,
         trace: payload.trace,
         source: payload.source
-      }),
+    }),
     loadRecentLookupContext: (payload) => bot.getRecentLookupContextForPrompt(payload),
-    loadRecentConversationHistory: (payload) => bot.getConversationHistoryForPrompt(payload),
-    loadAdaptiveDirectives:
-      Boolean(directiveSettings.enabled) &&
-        typeof bot.store?.searchAdaptiveStyleNotesForPrompt === "function"
-        ? (payload) =>
-          bot.store.searchAdaptiveStyleNotesForPrompt({
-            guildId: String(payload.guildId || "").trim(),
-            queryText: String(payload.queryText || ""),
-            limit: 8
-          })
-        : null
+    loadRecentConversationHistory: (payload) => bot.getConversationHistoryForPrompt(payload)
   });
   const memorySlice = continuity.memorySlice;
-  const adaptiveDirectives = Array.isArray(continuity.adaptiveDirectives) ? continuity.adaptiveDirectives : [];
+  const behavioralFacts = await loadBehavioralMemoryFacts(bot, {
+    settings,
+    guildId: message.guildId,
+    channelId: message.channelId,
+    queryText: message.content,
+    participantIds: Array.isArray(memorySlice?.participantProfiles)
+      ? memorySlice.participantProfiles
+          .map((entry) => String((entry as Record<string, unknown>)?.userId || "").trim())
+          .filter(Boolean)
+      : [],
+    trace: {
+      guildId: message.guildId,
+      channelId: message.channelId,
+      userId: message.author.id,
+      source: "reply_pipeline_behavioral_memory"
+    },
+    limit: 8
+  });
   performance.memorySliceMs = Math.max(0, Date.now() - memorySliceStartedAtMs);
   const replyMediaMemoryFacts = bot.buildMediaMemoryFacts({
     userFacts: memorySlice.userFacts,
@@ -505,9 +507,7 @@ export async function buildReplyContext(
       ? bot.voiceSessionManager.getMusicPromptContext(activeVoiceSession)
       : null;
 
-  const systemPrompt = buildSystemPrompt(settings, {
-    adaptiveDirectives
-  });
+  const systemPrompt = buildSystemPrompt(settings);
   const replyPromptBase: ReplyPromptBase = {
     message: {
       authorName: message.member?.displayName || message.author.username,
@@ -516,7 +516,11 @@ export async function buildReplyContext(
     triggerMessageIds,
     imageInputs: modelImageInputs,
     recentMessages,
-    relevantMessages: memorySlice.relevantMessages,
+    participantProfiles: memorySlice.participantProfiles,
+    selfFacts: memorySlice.selfFacts,
+    loreFacts: memorySlice.loreFacts,
+    guidanceFacts: Array.isArray(memorySlice.guidanceFacts) ? memorySlice.guidanceFacts : [],
+    behavioralFacts,
     userFacts: memorySlice.userFacts,
     relevantFacts: memorySlice.relevantFacts,
     emojiHints: bot.getEmojiHints(message.guild),
@@ -552,7 +556,6 @@ export async function buildReplyContext(
       )
     },
     allowMemoryDirective: memorySettings.enabled,
-    allowAdaptiveDirective: Boolean(directiveSettings.enabled),
     allowAutomationDirective: Boolean(automationsSettings.enabled),
     automationTimeZoneLabel: getLocalTimeZoneLabel(),
     voiceMode: {
@@ -611,7 +614,8 @@ export async function executeReplyLlm(
 ): Promise<ReplyLlmResult> {
   const {
     addressSignal, triggerMessageIds, source, performance, signal,
-    replyTrace, systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture
+    replyTrace, systemPrompt, replyPromptBase, initialUserPrompt, replyPromptCapture,
+    activeVoiceSession, inVoiceChannelNow
   } = ctx;
   let { webSearch, browserBrowse, memoryLookup, modelImageInputs, imageLookup, replyPrompts } = ctx;
 
@@ -628,11 +632,16 @@ export async function executeReplyLlm(
       !browserBrowse?.blockedByBudget &&
       browserBrowse?.budget?.canBrowse !== false,
     memoryAvailable: Boolean(getMemorySettings(settings).enabled),
-    adaptiveDirectivesAvailable: Boolean(getDirectiveSettings(settings).enabled),
     imageLookupAvailable: Boolean(imageLookup?.enabled),
     openArticleAvailable: false,
-    codeAgentAvailable: isDevTaskEnabled(settings)
+    codeAgentAvailable: isDevTaskEnabled(settings),
+    voiceToolsAvailable: Boolean(getVoiceSettings(settings).enabled)
   });
+
+  const activeVoiceCallbacks = inVoiceChannelNow && activeVoiceSession
+    ? bot.voiceSessionManager.buildVoiceToolCallbacks({ session: activeVoiceSession, settings })
+    : null;
+
   const replyToolRuntime: ReplyToolRuntime = {
     search: bot.search,
     browser: {
@@ -665,7 +674,34 @@ export async function executeReplyLlm(
     },
     memory: bot.memory,
     store: bot.store,
-    subAgentSessions: bot.buildSubAgentSessionsRuntime()
+    subAgentSessions: bot.buildSubAgentSessionsRuntime(),
+    voiceSession: activeVoiceCallbacks || undefined,
+    voiceJoin: Boolean(getVoiceSettings(settings).enabled) && bot.voiceSessionManager
+      ? async () => {
+        try {
+          const joined = await bot.voiceSessionManager.requestJoin({
+            message,
+            settings,
+            intentConfidence: 1
+          });
+          if (!joined) {
+            return { ok: false, reason: "join_not_handled" };
+          }
+          const session = bot.voiceSessionManager.getSession(message.guildId);
+          if (!session || session.ending) {
+            return { ok: false, reason: "session_not_available_after_join" };
+          }
+          const callbacks = bot.voiceSessionManager.buildVoiceToolCallbacks({ session, settings });
+          const voiceChannelId = String(session.voiceChannelId || "");
+          const guild = bot.client.guilds?.cache?.get(message.guildId);
+          const voiceChannel = voiceChannelId && guild?.channels?.cache?.get(voiceChannelId);
+          const voiceChannelName = String(voiceChannel?.name || voiceChannelId || "voice channel");
+          return { ok: true, voiceSession: callbacks, voiceChannelName };
+        } catch (error) {
+          return { ok: false, reason: String((error as Error)?.message || error) };
+        }
+      }
+      : undefined
   };
   const replyToolContext: ReplyToolContext = {
     settings,
@@ -1061,7 +1097,6 @@ export async function dispatchReplyActions(
   ctx: ReplyPipelineContext,
   llmResult: ReplyActionableLlmResult
 ): Promise<ReplyActionResult> {
-  const memorySettings = getMemorySettings(settings);
   const discovery = getDiscoverySettings(settings);
   const {
     addressSignal, triggerMessageIds, reactionEmojiOptions, source, performance,
@@ -1117,37 +1152,6 @@ export async function dispatchReplyActions(
     addressing: addressSignal
   });
 
-  const memoryLine = replyDirective.memoryLine;
-  const memoryScope = replyDirective.memoryScope || "user";
-  const memoryFactType = replyDirective.memoryFactType || null;
-  const selfMemoryLine = replyDirective.selfMemoryLine;
-  const selfMemoryFactType = replyDirective.selfMemoryFactType || null;
-  let memorySaved = false;
-  let selfMemorySaved = false;
-  if (memorySettings.enabled && memoryLine) {
-    try {
-      memorySaved = await bot.memory.rememberDirectiveLine({
-        line: memoryLine,
-        sourceMessageId: message.id,
-        userId: message.author.id,
-        guildId: message.guildId,
-        channelId: message.channelId,
-        sourceText: message.content,
-        scope: memoryScope,
-        factType: memoryFactType
-      });
-    } catch (error) {
-      bot.store.logAction({
-        kind: "bot_error",
-        guildId: message.guildId,
-        channelId: message.channelId,
-        messageId: message.id,
-        userId: message.author.id,
-        content: `memory_directive: ${String(error?.message || error)}`
-      });
-    }
-  }
-
   const mediaDirective = pickReplyMediaDirective(replyDirective);
   let finalText = sanitizeBotText(replyDirective.text || "");
   let mentionResolution = emptyMentionResolution();
@@ -1196,30 +1200,6 @@ export async function dispatchReplyActions(
       prompts: replyPrompts
     });
     return { skipped: true };
-  }
-
-  if (memorySettings.enabled && selfMemoryLine) {
-    try {
-      selfMemorySaved = await bot.memory.rememberDirectiveLine({
-        line: selfMemoryLine,
-        sourceMessageId: `${message.id}-self`,
-        userId: bot.client.user?.id || message.author.id,
-        guildId: message.guildId,
-        channelId: message.channelId,
-        sourceText: finalText,
-        scope: "self",
-        factType: selfMemoryFactType
-      });
-    } catch (error) {
-      bot.store.logAction({
-        kind: "bot_error",
-        guildId: message.guildId,
-        channelId: message.channelId,
-        messageId: message.id,
-        userId: bot.client.user?.id || null,
-        content: `memory_self_directive: ${String(error?.message || error)}`
-      });
-    }
   }
 
   mentionResolution = await resolveDeterministicMentionsForMentions(
@@ -1334,7 +1314,7 @@ export async function dispatchReplyActions(
 
   return {
     skipped: false,
-    reaction, memoryLine, selfMemoryLine, memorySaved, selfMemorySaved, mediaDirective,
+    reaction, mediaDirective,
     finalText, mentionResolution, screenShareOffer, allowMediaOnlyReply, modelProducedSkip,
     modelProducedEmpty, payload, imageUsed, imageBudgetBlocked, imageCapabilityBlocked,
     imageVariantUsed, videoUsed, videoBudgetBlocked, videoCapabilityBlocked, gifUsed,
@@ -1366,7 +1346,7 @@ export async function sendReplyMessage(
     webSearch, imageLookup, memoryLookup, replyPrompts
   } = llmResult;
   const {
-    reaction, memorySaved, selfMemorySaved,
+    reaction,
     finalText, mentionResolution, screenShareOffer, payload, imageUsed, imageBudgetBlocked, imageCapabilityBlocked,
     imageVariantUsed, videoUsed, videoBudgetBlocked, videoCapabilityBlocked, gifUsed,
     gifBudgetBlocked, gifConfigBlocked, imagePrompt, complexImagePrompt, videoPrompt, gifQuery
@@ -1481,7 +1461,6 @@ export async function sendReplyMessage(
       },
       memory: {
         toolCallsUsed: usedMemoryLookupFollowup,
-        saved: Boolean(memorySaved || selfMemorySaved),
         query: memoryLookup?.query || null,
         results: (memoryLookup?.results || []).map((r: Record<string, unknown>) => ({
           fact: r.fact,
