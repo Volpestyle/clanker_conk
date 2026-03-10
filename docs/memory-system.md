@@ -1,363 +1,311 @@
-# Memory System (Source of Truth)
+# Memory System
 
-This document describes how durable memory works in runtime, based on current code behavior.
+This document describes how the bot's memory works — how it learns, what it remembers, and how memories surface during conversation.
+
+See also: `AGENTS.md` — Agent Autonomy section.
+
+## Design Philosophy
+
+Memory should feel like memory, not like a database the bot has to query. A human in a Discord server knows things about the people they talk to, remembers past conversations, and recalls relevant context without performing a lookup. The bot should work the same way.
+
+**Three principles:**
+
+- **The bot knows everyone in the room.** In voice, fact profiles for all participants are in context — not just the current speaker. In text, profiles are loaded for everyone in the recent conversation window. The bot can cross-reference: "James, you should ask Sarah about that — she's been learning Rust too."
+- **Past conversations surface automatically.** Relevant prior conversations are retrieved by topic similarity at context assembly time, running in parallel with other I/O. The bot doesn't need to call a tool to access its own memory of what was said before.
+- **The bot builds memory three ways.** Real-time writes for things it notices mid-conversation, session-end micro-reflection for things it missed in the moment, and daily reflection for big-picture patterns. Each layer catches what the others miss.
 
 ## Scope
 
-Durable memory has three layers:
+The memory system has two persistence layers:
 
-1. **Daily journals** (`memory/YYYY-MM-DD.md`): append-only logs of ingested user text, bot-authored text outputs, and voice transcripts. Raw material.
-2. **Daily reflection**: an LLM pass that reviews each day's journal and distills it into durable facts. The bridge between raw logs and long-term memory.
-3. **SQLite facts + vectors** (`memory_facts`, `memory_fact_vectors_native`): the durable knowledge base used by runtime retrieval and prompts.
+1. **Durable facts** (`memory_facts`, `memory_fact_vectors_native`): the bot's long-term knowledge base — things it knows about people, the server, itself, and how it should behave. This includes behavioral guidance stored as `guidance` and `behavioral` facts with contextual retrieval.
+2. **Conversation history** (`messages` table): saved text chat, voice transcripts, and bot replies. Auto-retrieved by topic relevance at context assembly time. `conversation_search` tool remains available for deeper or broader lookups.
 
-Additionally, `memory/MEMORY.md` is a periodically regenerated snapshot for operator/dashboard inspection — not consumed by the model.
-
-This is only the durable-fact memory system. Two adjacent persistence layers now sit beside it:
-
-1. **Conversation history** (`messages` table): saved text chat, saved voice transcripts, and saved assistant spoken turns. Queried through `conversation_search` for “what did we say earlier?” continuity.
-2. **Adaptive directives** (`adaptive_style_notes`, `adaptive_style_note_events`): persistent server-level instructions about how the bot should talk or act in future conversations. Queried separately from durable facts so style/behavior guidance does not pollute `memory_facts`.
+Supporting infrastructure:
+- **Daily journals** (`memory/YYYY-MM-DD.md`): append-only logs of all ingested text and transcripts. Raw material consumed by reflection.
+- **Snapshot** (`memory/MEMORY.md`): periodically regenerated markdown for operator/dashboard inspection — not consumed by the model.
 
 ## Flow Diagram
 
 ![Memory System Flow](diagrams/memory-system-flow.png)
 <!-- source: docs/diagrams/memory-system-flow.mmd -->
 
-## Key Files
+## How Memory Is Created
 
-- `src/memory/memoryManager.ts`: ingestion queue, daily journaling, daily reflection job, directive writes (`rememberDirectiveLine`), fact profile loading (`loadUserFactProfile`), on-demand hybrid retrieval/ranking (`searchDurableFacts`), markdown refresh.
-- `src/memory/memoryHelpers.ts`: fact normalization, grounding checks, scoring helpers, directive scope config.
-- `src/memory/dailyReflection.ts`: end-of-day reflection logic — reads daily journal, runs LLM distillation, writes durable facts.
-- `src/store/store.ts`: `memory_facts` and `memory_fact_vectors_native` schema + query/update methods.
-- `src/store/storeAdaptiveDirectives.ts`: adaptive directive storage, prompt-time retrieval, and audit-log helpers.
-- `src/llm.ts`: embedding API calls, reflection LLM calls.
-- `src/tools/replyTools.ts`: `memory_write` and `memory_search` tool definitions + execution handlers (used by text chat brain).
-- `src/voice/voiceToolCallMemory.ts`: `memory_search` and `memory_write` voice tool execution handlers.
-- `src/voice/voiceToolCallDirectives.ts`: adaptive-directive voice tool execution handlers.
-- `src/voice/voiceToolCalls.ts`: re-export facade for the above modules.
-- `src/bot.ts`: message ingest trigger, reflection job scheduling.
-- `src/bot/voiceReplies.ts` and `src/voice/voiceSessionManager.ts`: voice transcript ingestion + session-level fact profile caching.
-- `src/dashboard.ts`: `/api/memory`, `/api/memory/refresh`, `/api/memory/search`.
+Three complementary paths, each catching what the others miss:
+
+### Real-time writes (`memory_write` tool)
+
+The brain notices something important mid-conversation and stores it immediately. The agent decides what matters — no hardcoded extraction rules.
+
+- Accepts `namespace` (speaker/guild/self) and `items` array with `text` and optional `type`.
+- `namespace = "speaker"` / `user:<id>` → stored under that user's Discord ID.
+- `namespace = "guild"` → stored under `__lore__`.
+- `namespace = "self"` → stored under `__self__`.
+- `items[].type`: `preference`, `profile`, `relationship`, `project`, `guidance`, `behavioral`, or `other`.
+- All scopes: `confidence = 0.72`, grounding check, instruction-injection rejection.
+- Execution path: tool call → memory fact write path → `store.addMemoryFact()` → async embedding → archive aged facts → markdown refresh.
+- In voice: the affected user's cached profile is refreshed immediately so the next turn sees the new fact.
+
+**Strengths:** Immediate. Agent-driven. **Gap:** Spotty in fast-moving voice sessions — the model is focused on responding, not archiving.
+
+### Session-end micro-reflection
+
+When a voice session ends or a text conversation goes quiet, a lightweight reflection pass reviews just that conversation: "anything worth remembering from the last 30 minutes?"
+
+This closes the gap between real-time writes (spotty) and daily reflection (too late). Someone mentions their birthday at 10am — micro-reflection catches it at the end of the voice session, not 14 hours later at the daily reflection run.
+
+- Triggers on voice session end event, or after sustained text silence in a channel.
+- Scoped to just that conversation's journal entries, not the full day.
+- Text-channel silence reflection is scheduled from human-authored messages and reflects on human-authored turns only, so the bot does not canonize its own prose into durable memory.
+- Same fact write path as `memory_write` — same grounding checks, dedup, archiving.
+- Lightweight: short context, fast model, capped output.
+
+**Strengths:** Catches what the real-time path missed, while context is still fresh. **Gap:** Doesn't see full-day patterns.
+
+### Daily reflection
+
+An LLM reviews the full day's journal and distills it into durable facts. The bridge between raw logs and long-term memory.
+
+1. Job triggers at the configured time (default: end of day).
+2. Reads `memory/YYYY-MM-DD.md`.
+3. Reflection prompt: "Review this day's conversations. Extract durable facts — things about people, ongoing projects, important events, preferences, recurring topics. Ignore throwaway chatter."
+4. LLM returns structured facts with scope and subject attribution.
+5. Written through the same memory fact write path — same grounding checks, dedup, archiving.
+6. Journals marked as processed. Retained indefinitely.
+
+The reflection prompt includes existing durable facts for all subjects mentioned in the journal. This lets the model skip facts that already exist and merge near-duplicates with different wording into the best version. Combined with the database-level `UNIQUE` constraint and the agent seeing its own memory during conversation, this forms a three-layer dedup system.
+
+With micro-reflection handling heavy voice sessions at session-end, daily reflection mostly processes text chat and cross-session patterns — the load is distributed rather than one massive batch.
+
+**Strengths:** Sees patterns across the full day. Catches recurring themes the moment-by-moment paths miss. Consolidates semantic duplicates. **Gap:** 24-hour delay (mitigated by micro-reflection).
+
+## How Memory Is Surfaced
+
+### Everyone in the room (fact profiles)
+
+Fact profiles are loaded for **all participants**, not just the current speaker. The bot knows things about everyone it's talking to simultaneously.
+
+**Voice:**
+- When a user joins, their fact profile is loaded and cached on `session.factProfiles[userId]`.
+- When a user leaves, their profile is removed.
+- On every generation turn, all participants' facts are included in the prompt.
+- The current speaker gets full facts. Other participants get a compact summary of key facts.
+- Lore (`__lore__`) and self-facts (`__self__`) are loaded at session start and refreshed on `memory_write`.
+
+**Text:**
+- Fact profiles are loaded for everyone who appears in the recent message window, not just the message author.
+- Loading is SQLite-only, sub-millisecond per user. 3-5 profiles in parallel adds nothing to latency.
+
+**Prompt structure:**
+```
+People in this conversation:
+
+James (current speaker):
+  - Loves Rust, works at Acme Corp, plays Elden Ring
+  - Prefers concise replies
+
+Sarah:
+  - Into indie games, learning Rust, birthday March 15
+
+Mike:
+  - Streams on Twitch, competitive FPS player
+```
+
+The model sees people, not "current speaker" vs "others." It can cross-reference naturally.
+
+### Relevant past conversations (auto-retrieved)
+
+Past conversations are retrieved by topic similarity at context assembly time, without the model calling a tool. This runs in parallel with fact profile loading and other I/O.
+
+- Conversation windows are embedded at storage time (async, background).
+- At context assembly, the current message/transcript is embedded (~50-100ms) and matched against stored windows via vector similarity.
+- Top 2-3 relevant past conversations are included in the prompt.
+- Runs on every turn — the embedding call is cheap and parallelized with other I/O.
+
+The model references past conversations naturally, like genuine recall: "Oh yeah, we talked about that last week" — not "let me search my history."
+
+### Fallback tools
+
+`memory_search` and `conversation_search` remain available as tools for cases the auto-retrieval doesn't cover:
+- Cross-subject queries ("what do I know about Rust?" across all users)
+- Deeper lookups beyond the auto-retrieval's top-k
+- Broader time ranges or guild-wide conversation search
+
+These are fallbacks, not primary access paths. The model shouldn't need to search its own memory for the common case.
 
 ## Data Model
 
 ### `memory_facts` (durable facts)
 
-Created in `Store.init()` (`src/store/store.ts`) with key fields:
-
-- `guild_id` (required): primary scope boundary.
+- `guild_id` (required): primary scope boundary. Facts never cross guild boundaries.
 - `channel_id` (optional): retrieval bias, not hard partitioning.
-- `subject` (required): user ID for user facts, `__lore__` for lore facts, or `__self__` for durable bot self-memory.
+- `subject` (required): user ID, `__lore__`, or `__self__`.
 - `fact`, `fact_type`, `evidence_text`, `source_message_id`, `confidence`.
-- `is_active`: soft archive flag.
+- `is_active`: soft archive flag (archiving is soft delete, not hard).
 - `UNIQUE(guild_id, subject, fact)`: dedup/upsert key.
 
 ### `memory_fact_vectors_native` (semantic vectors)
 
 - Primary key: `(fact_id, model)`.
-- Stores `dims` and `embedding_blob` (Float32 blob).
-- Queried with sqlite-vec cosine similarity (`1 - vec_distance_cosine(...)`).
+- Float32 blob, queried with sqlite-vec cosine similarity.
 
-## Runtime Lifecycle
+### Fact types
 
-### Startup and periodic maintenance
+| Type | Tier | Description | Examples |
+|------|------|-------------|----------|
+| `profile` | Core | Identity-level, rarely changes | Name, birthday, occupation, timezone |
+| `relationship` | Core | Connections between people | Family members, close friends, work relationships |
+| `preference` | Contextual | Likes, dislikes, habits | "Prefers short replies", "Likes Rust" |
+| `project` | Contextual | Ongoing work, activities | "Building a Discord bot", "Playing Elden Ring" |
+| `guidance` | Behavioral | Standing style/tone instructions | "Keep responses brief", "Use casual tone in #general" |
+| `behavioral` | Behavioral | Trigger/action rules from the community | "Send a GIF when Tiny Conk says 'what the heli'", "Always greet James in Spanish" |
+| `other` | Contextual | Everything else | Lore, observations, miscellaneous |
 
-- `src/app.ts` initializes `MemoryManager` and calls `refreshMemoryMarkdown()` once at startup.
-- `src/bot.ts` starts a 5-minute timer calling `refreshMemoryMarkdown()`.
-- `src/bot.ts` starts the daily reflection scheduler (checks if reflection is due on each tick).
-- On shutdown, bot drains pending ingest jobs (`drainIngestQueue`) before exit.
+### Tiered storage and retrieval
 
-### Message ingest pipeline (text chat)
-
-Text-side journaling now captures both the incoming user side and the bot-authored output side when `settings.memory.enabled` is true:
-
-1. **Incoming user text**: `ClankerBot.handleMessage()` calls `memory.ingestMessage(...)`.
-2. **Outgoing bot text**:
-   - `src/bot/replyPipeline.ts` journals normal text replies after the send succeeds.
-   - `src/bot/automationEngine.ts` journals automation posts after publish.
-   - `src/bot/initiativeEngine.ts` journals unified initiative posts after publish.
-3. All of those calls queue a job keyed by `messageId`.
-4. Queue behavior:
-   - Dedupes concurrent same-message jobs by returning one shared promise.
-   - Max queue length is `400`; overflow drops the oldest job and resolves it as `false`.
-5. Worker runs `processIngestMessage(...)` sequentially:
-   - Cleans content (trim/collapse, max 320 chars; empty/too short dropped).
-   - Appends one line to `memory/YYYY-MM-DD.md`.
-   - Schedules markdown refresh (`queueMemoryRefresh`, debounced by `pendingWrite` + 1s delay).
-
-Note: `processIngestMessage` does **not** perform automatic fact extraction. Durable facts are only created through explicit `memory_write` tool calls (see below).
-
-### Message ingest pipeline (voice transcripts)
-
-Voice paths also feed durable memory using synthetic message IDs:
-
-- **User speech**: `src/voice/voiceSessionManager.ts` calls `memory.ingestMessage(...)` via `queueVoiceMemoryIngest()` for user transcripts from both realtime bridge and file-ASR turns.
-- **Bot replies**: `src/voice/voiceSessionManager.ts` calls `memory.ingestMessage(...)` in `persistAssistantVoiceTimelineTurn()` so bot-spoken replies also appear in the daily journal.
-
-Both sides of voice conversations are now captured in the daily journal, giving daily reflection the full conversation context.
-
-### Daily reflection
-
-The reflection job is the bridge between raw journal logs and durable memory. It runs once per day (configurable) and reviews the day's journal to decide what's worth remembering long-term.
-
-**How it works:**
-
-1. Job triggers at the configured time (default: end of day, or on a configurable interval).
-2. Reads the current day's journal file (`memory/YYYY-MM-DD.md`).
-3. Sends the full journal to an LLM with a reflection prompt: "Review this day's conversations. Extract durable facts worth remembering — things about people, ongoing projects, important events, preferences, and recurring topics. Ignore throwaway chatter, greetings, and ephemeral requests."
-4. LLM returns structured facts with scope (user/lore/self) and subject attribution.
-5. Each fact is written through the same `rememberDirectiveLine` path as `memory_write` tool calls — same grounding checks, same dedup, same archiving.
-6. Reflected journals are marked as processed. Journal files are retained indefinitely.
-
-**Why reflection exists alongside `memory_write`:**
-
-Two complementary paths to durable memory:
-
-- **`memory_write` (real-time)**: the brain notices something important mid-conversation and stores it immediately. Fast, but depends on the brain's in-the-moment judgment — things slip through, especially in fast-moving voice sessions.
-- **Daily reflection (batch)**: reviews the full day with hindsight. Catches patterns, repeated topics, and facts the brain didn't think to store in real time. Sees the forest, not just the trees.
-
-Both paths produce the same kind of durable facts in `memory_facts`. Reflection just has better context for deciding what matters.
-
-**Settings:**
-
-- `memory.enabled` (default `true`): master switch for durable memory journaling and fact retrieval/write behavior.
-- `memory.reflection.enabled` (default `true`): master switch.
-- `memory.reflection.hour` / `memory.reflection.minute`: daily reflection schedule time.
-- `memory.reflection.maxFactsPerReflection`: cap on facts produced per run (default `20`).
-- `directives.enabled` (default `true`): independently enables/disables adaptive directive retrieval and conversational directive save/remove behavior.
-
-### Fact creation via `memory_write` tool
-
-Durable facts are created when the brain decides to call the `memory_write` tool during conversation.
-
-**Tool definition** (`src/tools/replyTools.ts` / `src/memory/memoryToolRuntime.ts`): accepts a `namespace` plus an `items` array, where each item has `text` and optional `type`.
-
-- `namespace = "speaker"` / `user:<id>` → stored under that user's Discord ID as `subject`.
-- `namespace = "guild"` / `guild:<guildId>` → stored under subject `__lore__`.
-- `namespace = "self"` → stored under subject `__self__`.
-- `items[].type` can explicitly preserve `preference`, `profile`, `relationship`, `project`, or `other`.
-- If `type` is omitted, the write path falls back to the scope default (`preference` for user facts, `lore` for guild lore, `self` for bot self-memory).
-
-All scopes share: `confidence = 0.72`, grounding check against source text, instruction-like text rejection.
-
-**Structured text reply path**: the text reply schema can also save one direct fact without a tool call by filling `memoryLine + memoryScope + memoryFactType` or `selfMemoryLine + selfMemoryFactType`. The reply pipeline routes those through the same durable-write path as `memory_write`.
-
-**Execution path**: tool call or structured reply directive → `executeMemoryWrite()` / reply pipeline → `memory.rememberDirectiveLineDetailed({ line, scope, subjectOverride, factType, ... })` → `store.addMemoryFact(...)` → async embedding → archive old facts → markdown refresh.
-
-When `memory_write` fires during an active voice session, the affected user's cached fact profile is refreshed on the session object so subsequent turns see the new fact without a full reload.
-
-**Scope config** is resolved by `resolveDirectiveScopeConfig()` in `memoryHelpers.ts`.
-
-This path is used in both text chat (via `replyTools.ts`) and voice chat (via `voiceToolCalls.ts`), where equivalent `memory_write` and `memory_search` tools are registered as OpenAI Realtime function tools.
-
-### Tiered fact storage and eviction
-
-Facts are classified into two durability tiers that control eviction behavior when per-subject caps are reached:
+Facts are classified into three tiers that control eviction and retrieval:
 
 **Core facts** — identity-level, rarely change:
-- Inferred from `fact_type`: `profile` and `relationship` facts are core.
-- Examples: name, birthday, occupation, family relationships, long-term preferences.
-- Evicted last. When the core tier itself fills, a consolidation pass merges/compresses related facts rather than dropping them.
-- Separate cap (default 20 per user subject).
+- Types: `profile`, `relationship`.
+- Evicted last. Consolidation pass merges/compresses when tier fills.
+- Cap: 35 per user subject.
+- Retrieval: always loaded for all participants in the conversation.
 
 **Contextual facts** — situational, expected to rotate:
-- All other `fact_type` values: `preference`, `project`, `other`, `lore`.
-- Examples: current mood, what game they're playing this week, recent opinions.
-- Standard FIFO eviction by `updated_at` — oldest contextual facts are archived first.
-- Cap: remaining budget after core facts (e.g., 60 contextual if 20 core out of 80 total).
+- Types: `preference`, `project`, `other`.
+- FIFO eviction by `updated_at`.
+- Cap: remaining budget after core facts (e.g., 85 contextual if 35 core out of 120 total).
+- Retrieval: always loaded for all participants in the conversation.
 
-**Eviction order** in `archiveOldFactsForSubject`:
-1. Archive contextual facts beyond the contextual cap (oldest first by `updated_at`).
-2. Only if contextual facts are within budget AND total exceeds the subject cap, archive core facts (oldest first).
-3. Core facts are never archived to make room for contextual facts.
+Lore is stored under the special subject `__lore__`, not as a separate fact type.
 
-The LLM already distinguishes fact types at write time (both `memory_write` and daily reflection). The tier is derived from the existing `fact_type` field — no new column needed.
+**Behavioral facts** — standing instructions about how to act:
+- Types: `guidance`, `behavioral`.
+- `guidance` facts are always included in the prompt (light, few of them — style/tone context the bot reasons about on every turn).
+- `behavioral` facts are contextually retrieved — only included when the current turn's content is relevant (prevents bloating every prompt with trigger/action rules). Uses the same embedding similarity as conversation retrieval.
+- Subject scoping: `__lore__` for server-wide behavioral rules, user ID for per-person rules.
+- FIFO eviction, same as contextual.
+
+Behavioral guidance is stored, retrieved, and reasoned about the same way as any other fact. The bot doesn't distinguish between "facts about people" and "rules for how to act." It just knows things and acts accordingly.
+
+**Per-subject total cap:** 120 facts. Enough to hold a real relationship's worth of knowledge about someone you talk to regularly.
+
+**Eviction order** (`archiveOldFactsForSubject`):
+1. Archive contextual and behavioral facts beyond cap (oldest first).
+2. Only if contextual/behavioral within budget AND total exceeds subject cap, archive core facts.
+3. Core facts are never archived to make room for other tiers.
 
 ## Safety Guards
 
-Facts written through `memory_write` are filtered in `memory.rememberDirectiveLine()` and `memoryHelpers.ts`:
+Facts are filtered at write time:
 
-- Input normalization and length bounds (`normalizeMemoryLineInput`).
-- Fact type normalization (`preference|profile|relationship|project|other`; `general` collapses to `other`; scope defaults preserve `lore` / `self` for those buckets).
-- Instruction/prompt-injection-like text rejection (`isInstructionLikeFactText` — rejects `system`, `developer`, `ignore previous`, secrets, etc.).
-- Grounding requirement (`isTextGroundedInSource`):
-  - Exact compact-substring pass, or
-  - token-overlap threshold (about 45% minimum, with short-line special case).
-
-If embedding fails, errors are logged and the fact is still stored (embedding backfill happens on next retrieval query).
+- Input normalization and length bounds.
+- Fact type normalization (`preference|profile|relationship|project|guidance|behavioral|other`).
+- Instruction/prompt-injection rejection (rejects `system`, `developer`, `ignore previous`, secrets, etc.).
+- Grounding requirement: exact substring match or ~45% token-overlap threshold.
+- If embedding fails, fact is still stored; embedding backfill happens on next retrieval.
 
 ## Embeddings
 
-Embeddings are used for semantic ranking in on-demand `memory_search` tool calls and dashboard search.
+Used for semantic ranking in `memory_search`, conversation retrieval, and dashboard search.
 
-- Query embedding: `llm.embedText(...)` when query length >= 3 and OpenAI client exists.
-- Fact embedding payload includes `type`, `fact`, and optional `evidence`.
-- Model resolution order:
-  1. `settings.memory.embeddingModel`
-  2. `appConfig.defaultMemoryEmbeddingModel` (`DEFAULT_MEMORY_EMBEDDING_MODEL` env)
-  3. fallback `"text-embedding-3-small"`
+- Query embedding: `llm.embedText(...)` when query length >= 3.
+- Fact embedding payload: `type` + `fact` + optional `evidence`.
+- Model resolution: `settings.memory.embeddingModel` → `DEFAULT_MEMORY_EMBEDDING_MODEL` env → `"text-embedding-3-small"`.
+- Missing vectors are backfilled (up to 8 per query).
+- Fact embeddings generated at write time. Conversation window embeddings generated at storage time.
 
-If vectors are missing for some candidates, retrieval backfills up to 8 missing fact vectors per query.
-
-Fact embeddings are generated at write time for use by `memory_search` queries.
-
-## Retrieval and Ranking
-
-### Fact profile retrieval (`loadUserFactProfile`)
-
-For prompt injection, facts are loaded as **fact profiles** — lightweight SQLite-only queries with no embedding API calls. Profiles are cached at the session level (voice) or loaded per-turn (text chat).
-
-**How it works:**
-
-1. Query `memory_facts` for the user's active facts (`subject = userId, is_active = 1`), ordered by `confidence DESC, updated_at DESC`.
-2. Query `memory_facts` for bot self-facts (`subject = "__self__"`) and guild lore (`subject = "__lore__"`), same ordering.
-3. Return structured profile with core vs contextual facts separated (see Tiered Fact Storage below).
-4. No embedding call, no semantic ranking. Pure SQLite, sub-millisecond.
-
-**Session-level caching (voice):**
-
-- When a user joins the voice channel, their fact profile is loaded and stored on `session.factProfiles[userId]`.
-- When a user leaves, their profile is removed from the cache.
-- When `memory_write` fires during a session, the affected user's cached profile is refreshed.
-- Instruction rebuilds (realtime mode) and turn generation (STT mode) pull from the cached profiles.
-- Lore and self-facts are loaded once at session start and refreshed on `memory_write`.
-
-**Per-turn loading (text chat / automation):**
-
-- Text replies and automation runs load fact profiles fresh per-turn via `loadConversationContinuityContext`.
-- This is still fast (SQLite-only) so per-turn loading is acceptable outside voice.
-
-**Consumers:**
-
-- Text replies (`src/bot/replyPipeline.ts`)
-- Automation runs (`src/bot/automationEngine.ts`)
-- Voice turn generation (`src/bot/voiceReplies.ts`)
-- Voice realtime instruction context (`src/voice/instructionManager.ts`)
-
-### On-demand search via `memory_search` tool
-
-For targeted, context-aware memory lookup the model calls the `memory_search` tool. This is where semantic ranking (embeddings + cosine similarity) earns its keep — the model writes a purposeful query, not a raw transcript.
-
-- Used by the brain mid-conversation when it needs specific facts ("what do I know about this person's job?")
-- Uses `searchDurableFacts` which performs full hybrid ranking with embedding.
-- Also powers dashboard search and reply followup memory lookups.
-
-### Search API retrieval (`searchDurableFacts`)
-
-For on-demand model-triggered and dashboard memory lookup:
-
-- Pulls guild-scoped active facts (`getFactsForScope`), with optional `subjectIds` and `factTypes` prefilters when the caller already knows the namespace or desired fact tags.
-- Hybrid ranking with strict relevance gate enabled.
-- Returns top N (limit clamped to 1..24).
-
-### Hybrid score formula (used by `searchDurableFacts` only)
+### Hybrid score formula (for `searchDurableFacts`)
 
 Per candidate:
-
-- `lexicalScore`: token overlap / substring match on fact + evidence text.
+- `lexicalScore`: token overlap / substring match.
 - `semanticScore`: cosine similarity from sqlite-vec.
 - `confidenceScore`: stored confidence.
 - `recencyScore`: `1 / (1 + ageDays / 45)`.
-- `channelScore`:
-  - `1` same channel,
-  - `0.25` fact has no channel_id,
-  - `0` different channel.
+- `channelScore`: 1 (same channel), 0.25 (no channel), 0 (different channel).
 
-Combined score:
+Combined: `0.50 * semantic + 0.28 * lexical + 0.10 * confidence + 0.07 * recency + 0.05 * channel` (with fallback weights when semantic is unavailable).
 
-- If semantic available:
-  - `0.50 * semantic + 0.28 * lexical + 0.10 * confidence + 0.07 * recency + 0.05 * channel`
-- If semantic unavailable:
-  - `0.75 * lexical + 0.10 * confidence + 0.10 * recency + 0.05 * channel`
+Relevance gate filters low-quality matches.
 
-Relevance gate:
+## Unified Memory Model
 
-- With semantic: pass if semantic/lexical minimums are met, or strong combined score with minimum signal.
-- Without semantic: requires lexical >= 0.24 or combined >= 0.62.
-- Strict mode (`searchDurableFacts`) returns no hits if all candidates fail gate.
+Everything the bot knows lives in `memory_facts`. There is no separate store for behavioral instructions — they're facts with a behavioral type and contextual retrieval.
 
+| What the bot knows | Stored as | Example |
+|----|----|-----|
+| Facts about people | `profile`, `relationship`, `preference` facts | "James likes Nvidia" |
+| What happened before | `messages` table (conversation history) | "Two days ago we talked about NVDA at $181" |
+| How to behave | `guidance` and `behavioral` facts | "Use 'type shit' occasionally", "Greet James in Spanish" |
+| Server context | `other` facts under the `__lore__` subject | "This server is focused on game dev" |
+| Self-knowledge | `__self__` subject facts | "I prefer concise replies" |
 
+A human doesn't have separate mental stores for "what I know" and "how I should act." The bot shouldn't either. When someone says "hey, from now on always greet me in Spanish," the bot stores that as a behavioral fact about that person. It sees the fact in context and acts on it — same as any other fact.
 
-## Adaptive Directives vs Durable Memory
+### Behavioral retrieval
 
-Adaptive directives are intentionally not stored in `memory_facts`.
+- `guidance` facts are always included in prompt context
+- `behavioral` facts are retrieved by relevance when the current turn matches
 
-- `memory_facts`: durable facts about users, the bot, or guild lore
-- `messages`: prior text/voice conversation history
-- `adaptive_style_notes`: persistent instructions about how the bot should talk or act later
+This is a retrieval strategy on fact types within the same memory store.
 
-Examples:
-- Durable memory: `James likes Nvidia.`
-- Conversation history: `Two days ago we talked about NVDA being around $181.`
-- Adaptive directive: `Use "type shit" occasionally in casual replies.` or `Send a GIF to Tiny Conk whenever they say "what the heli."`
+## Message Ingest Pipeline
 
-Adaptive directives are split into:
-- `guidance`: broad style/tone/persona/operating guidance, which can stay lightly active across turns
-- `behavior`: recurring trigger/action behavior, which is retrieved into prompt context only when the current turn appears relevant
+### Text chat
 
-That retrieval split is what keeps behavior directives useful without bloating every prompt with every saved action rule.
+Both incoming user messages and outgoing bot replies are journaled when `memory.enabled` is true:
 
-## Markdown Files in `memory/`
+1. `ClankerBot.handleMessage()` → `memory.ingestMessage(...)` for user messages.
+2. Reply pipeline, automation engine, initiative engine → `memory.ingestMessage(...)` for bot output.
+3. Jobs queued by `messageId`, deduped, max queue 400.
+4. Worker appends one line to `memory/YYYY-MM-DD.md`.
 
-### Daily logs: `memory/YYYY-MM-DD.md`
+`processIngestMessage` does NOT perform automatic fact extraction. Durable facts come from `memory_write`, micro-reflection, or daily reflection.
 
-- Append-only journal lines: timestamp, author, and scoped message text.
-- Header is initialized once per day/file.
-- Consumed by the daily reflection job to produce durable facts.
-- Retained indefinitely (no automatic pruning).
+Journal entries are capped at 640 characters — long enough to preserve a full thought or explanation without truncating nuance.
 
-### Snapshot: `memory/MEMORY.md`
+### Voice transcripts
 
-Generated by `refreshMemoryMarkdown()` with sections:
+Both sides captured via synthetic message IDs:
+- User speech: `queueVoiceMemoryIngest()` for transcripts from realtime bridge and file-ASR.
+- Bot replies: `persistAssistantVoiceTimelineTurn()`.
 
-- People (durable facts by subject)
-- Bot self memory (subject `__self__`)
-- Ongoing lore (subject `__lore__`)
-- Recent journal highlights
-- Source daily logs
+## Settings
 
-Used for dashboard/operator inspection, not direct model context.
-
-## Settings and Controls
-
-From defaults + normalization:
-
-- `memory.enabled` (default `true`)
-- `memory.promptSlice.maxRecentMessages` (default `35`, clamped `4..120`)
-  Note: this controls short-term chat context windows, not durable fact count.
-- `memory.embeddingModel` (default `"text-embedding-3-small"`)
-- `memory.reflection.enabled` (default `true`): enable/disable daily reflection.
-- `memory.reflection.hour` / `memory.reflection.minute`: daily reflection schedule time.
-- `memory.reflection.maxFactsPerReflection` (default `20`): cap on facts per reflection run.
-- `directives.enabled` (default `true`): toggle adaptive directive retrieval/write behavior separately from durable memory.
-- `memoryLlm` provider/model config controls the model used for reflection and tool-triggered operations.
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `memory.enabled` | `true` | Master switch for journaling, fact retrieval, and writes |
+| `memory.embeddingModel` | `"text-embedding-3-small"` | Model for fact and conversation embeddings |
+| `memory.promptSlice.maxRecentMessages` | `35` | Short-term chat context window size |
+| `memory.reflection.enabled` | `true` | Daily reflection toggle |
+| `memory.reflection.hour` / `minute` | end of day | Daily reflection schedule |
+| `memory.reflection.maxFactsPerReflection` | `20` | Cap on facts per reflection run |
+| `memoryLlm` | inherit | Optional override for reflection and memory-adjacent background work. Empty means inherit the main text/orchestrator model. |
 
 ## APIs and Observability
 
 Dashboard API:
 
-- `GET /api/memory`: returns snapshot markdown content.
-- `POST /api/memory/refresh`: regenerates and returns snapshot.
-- `GET /api/memory/search?q=...&guildId=...&channelId=...&limit=...`: hybrid durable fact search (uses `searchDurableFacts` with full semantic ranking).
-- `GET /api/memory/fact-profile`: structured fact profile for a guild/user.
-- `GET /api/memory/facts`: list/filter raw facts.
-- `GET /api/memory/subjects`: list subjects with fact counts.
-- `GET /api/memory/reflections`: list reflection run history.
-- `GET /api/memory/adaptive-directives`: list active adaptive directives for a guild.
-- `GET /api/memory/adaptive-directives/audit`: list directive audit events for a guild.
+- `GET /api/memory` — snapshot markdown.
+- `POST /api/memory/refresh` — regenerate snapshot.
+- `GET /api/memory/search?q=&guildId=&channelId=&limit=` — hybrid durable fact search.
+- `GET /api/memory/fact-profile` — structured fact profile for guild/user.
+- `GET /api/memory/facts` — list/filter raw facts.
+- `GET /api/memory/subjects` — list subjects with fact counts.
+- `GET /api/memory/reflections` — reflection run history.
 
-Action log kinds used by memory pipeline:
+Action log kinds: `memory_fact`, `memory_reflection_start`, `memory_reflection_complete`, `memory_reflection_error`, `memory_embedding_call`, `memory_embedding_error`, `memory_log_prune`.
 
-- `memory_fact`
-- `memory_reflection_start`, `memory_reflection_complete`, `memory_reflection_error`
-- `memory_embedding_call`, `memory_embedding_error`
-- `memory_log_prune`
-- plus `bot_error`/`voice_error` entries for pipeline failures.
+## Key Files
 
-## Practical Notes
-
-- Durable memory is always guild-scoped. Facts never cross guild boundaries.
-- Channel scope is a ranking hint, not a hard filter.
-- Archiving is soft (`is_active = 0`), not hard delete.
-- Pre-turn prompt injection uses SQLite-only fact profiles (no embedding API calls). Semantic ranking (embeddings + cosine similarity) is reserved for on-demand `memory_search` tool calls.
-- Voice sessions cache fact profiles per-user; text chat loads them fresh per-turn (still fast since it's SQLite-only).
-- The canonical source for runtime memory behavior is `src/memory/memoryManager.ts` + `src/store/store.ts`; docs should be updated if those files change.
+| File | Purpose |
+|------|---------|
+| `src/memory/memoryManager.ts` | Ingestion, journaling, reflection, fact profiles, retrieval |
+| `src/memory/memoryHelpers.ts` | Fact normalization, grounding checks, scoring |
+| `src/memory/dailyReflection.ts` | End-of-day reflection logic |
+| `src/store/store.ts` | `memory_facts` schema, query/update methods |
+| `src/tools/replyTools.ts` | `memory_write`, `memory_search`, `conversation_search` text tools |
+| `src/voice/voiceToolCallMemory.ts` | Voice `memory_search` and `memory_write` handlers |
+| `src/bot.ts` | Ingest triggers, reflection scheduling |
+| `src/voice/voiceSessionManager.ts` | Voice transcript ingestion, session fact profile caching |

@@ -1,5 +1,7 @@
 # Tests
 
+> Voice E2E and golden validation suites: [`e2e-test-spec.md`](e2e-test-spec.md)
+
 ## Default Test Commands
 
 - `bun run test` runs the default unit and integration suite and excludes `.live.test.ts` files.
@@ -58,7 +60,7 @@ The voice section uses the shared voice live scenario catalog that is also consu
 
 The text section also covers:
 
-- tool selection for `web_search`, `web_scrape`, `conversation_search`, and `adaptive_directive_add`
+- tool selection for `web_search`, `web_scrape`, `conversation_search`, and `memory_write`
 - a vision turn with inline image input
 - raw structured-output validity for representative reply and skip cases
 

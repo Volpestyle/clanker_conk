@@ -1,17 +1,231 @@
-# Voice Reply Orchestration State Machine
+# Voice Client and Reply Orchestration
 
-> **Scope:** Reply dispatch — from admitted user turn to pipeline execution, including deferred turn queuing, interruption-context handoff, and supersede logic.
+> **Scope:** Realtime brain client lifecycle and reply dispatch — from WebSocket connection through turn queueing, admission gating, pipeline execution, deferred turns, and supersede logic.
 > Voice pipeline stages: [`voice-provider-abstraction.md`](voice-provider-abstraction.md)
-> Streaming reply behavior: [`voice-streaming-reply.md`](voice-streaming-reply.md)
-> Assistant output lifecycle: [`voice-output-state-machine.md`](voice-output-state-machine.md)
-> Audio capture lifecycle: [`voice-audio-capture-state-machine.md`](voice-audio-capture-state-machine.md)
-> Barge-in policy: [`barge-in.md`](barge-in.md)
+> Output and barge-in: [`voice-output-and-barge-in.md`](voice-output-and-barge-in.md)
+> Capture and ASR: [`voice-capture-and-asr-pipeline.md`](voice-capture-and-asr-pipeline.md)
 
-This document defines the reply orchestration subsystem — how admitted user turns are dispatched to the correct reply pipeline, how turns are deferred when the output channel is busy, and how barge-in hands interruption context into the next normal turn.
+---
+
+## Part 1: Realtime Client
+
+This part defines the realtime client lifecycle — how the bot connects to the AI provider (OpenAI, xAI, Gemini, ElevenLabs) for voice generation, manages instructions and tools, and handles the event stream that drives the assistant output state machine. Tool execution and context assembly stay shared across providers; the client adapter only translates provider protocol into the common runtime surface.
+
+## 1. Source of Truth
+
+The `VoiceSession` owns the realtime client reference in `session.realtimeClient`. The client type depends on the resolved runtime mode.
+
+External systems provide events but do not own client state:
+
+- The AI provider sends WebSocket events (audio deltas, response lifecycle, tool calls, errors).
+- The `replyManager` derives assistant output state transitions from those events.
+- The `instructionManager` manages instruction/tool refresh scheduling.
+
+Code:
+
+- `src/voice/openaiRealtimeClient.ts` — OpenAI Realtime API client
+- `src/voice/xaiRealtimeClient.ts` — xAI realtime client
+- `src/voice/geminiRealtimeClient.ts` — Gemini Live API client
+- `src/voice/elevenLabsRealtimeClient.ts` — ElevenLabs conversational AI client
+- `src/voice/realtimeClientCore.ts` — shared WebSocket utilities
+- `src/voice/sessionLifecycle.ts` — event binding (`bindRealtimeHandlers`)
+- `src/voice/voiceJoinFlow.ts` — client creation and session initialization
+- `src/voice/instructionManager.ts` — instruction/tool refresh
+- `src/voice/replyManager.ts` — response tracking, output state sync
+
+## 2. Client Types and Capabilities
+
+| Mode | Client Class | `textInput` | `updateInstructions` | `updateTools` | `cancelResponse` | `perUserAsr` | `sharedAsr` |
+|---|---|---|---|---|---|---|---|
+| `openai_realtime` | `OpenAiRealtimeClient` | yes | yes | yes | yes | yes | yes |
+| `voice_agent` | `XaiRealtimeClient` | yes | yes | yes | yes | yes | yes |
+| `gemini_realtime` | `GeminiRealtimeClient` | yes | yes (local only) | — | — | — | yes |
+| `elevenlabs_realtime` | `ElevenLabsRealtimeClient` | yes | — | — | — | — | yes |
+
+Capability checks use `providerSupports(mode, capability)` in `src/voice/voiceModes.ts`.
+
+For text-mediated sessions (`bridge`, `brain`), the ASR bridge is still OpenAI-backed today even when the speaking/reasoning provider is xAI, Gemini, or ElevenLabs.
+
+## 3. Lifecycle Phases
+
+The realtime client has a simpler lifecycle than the ASR bridge — there is **no automatic reconnection**. Fatal errors end the session.
+
+| Phase | Meaning |
+|---|---|
+| `creating` | Client instantiated, WebSocket not yet opened |
+| `connecting` | `client.connect()` called, WebSocket opening (10s timeout) |
+| `connected` | WebSocket open, `session.update` sent, ready for audio/text |
+| `closed` | WebSocket closed (1000 normal close or error). Session ends. |
+
+### Creation (`voiceJoinFlow.ts`)
+
+The runtime mode determines which client class is instantiated. The subprocess (`ClankvoxClient`) is spawned **in parallel** with the API connect call for latency optimization.
+
+### Connection
+
+`client.connect()` calls `openRealtimeSocket()` which creates a WebSocket with a 10-second timeout, then `markRealtimeConnected()` sets connection metadata.
+
+### No Automatic Reconnection
+
+On socket close or fatal error, `endSession()` is called. Only specific recoverable errors are handled gracefully:
+
+- `conversation_already_has_active_response` — not fatal
+- `input_audio_buffer_commit_empty` — not fatal
+
+> **Note:** This "no reconnection" policy applies to the main realtime brain client. The ASR bridge (documented in [`voice-capture-and-asr-pipeline.md`](voice-capture-and-asr-pipeline.md)) has its own reconnection behavior — its circuit breaker reconnects after 3 consecutive empty commits.
+
+### Teardown
+
+1. `session.ending = true`
+2. Clear all timers (`clearSessionRuntimeTimers`)
+3. Clear runtime state (`clearSessionRuntimeState`)
+4. Close ASR sessions
+5. Run cleanup handlers (remove event listeners)
+6. `session.realtimeClient?.close()` — sends `ws.close(1000, "session_ended")` with 1.5s terminate fallback
+7. `session.voxClient?.destroy()`
+
+## 4. Event Binding
+
+`bindRealtimeHandlers()` in `sessionLifecycle.ts` binds 7 events from the realtime client:
+
+| Event | Handler | Purpose | Output State Machine Effect |
+|---|---|---|---|
+| `audio_delta` | `onAudioDelta` | Forward base64 audio to clankvox for Discord playback. Handle barge-in suppression and music ducking. | `syncAssistantOutputState("audio_delta")` |
+| `transcript` | `onTranscript` | Log transcripts, record voice turns, trigger soundboard from output transcripts. | — |
+| `error_event` | `onErrorEvent` | Check if error is recoverable. End session if not. | — |
+| `socket_closed` | `onSocketClosed` | End session with reason `"realtime_socket_closed"`. | Session ends |
+| `socket_error` | `onSocketError` | Log error only (does NOT end session by itself). | — |
+| `response_done` | `onResponseDone` | Delegate to `replyManager.handleResponseDone()`. Handle silent response recovery, cost logging, music unduck scheduling. | `syncAssistantOutputState("response_done_*")` |
+| `event` | `onEvent` | Raw event passthrough. Track assistant audio items, dispatch tool call events. | Various via tool call lifecycle |
+
+All listeners are tracked in `session.cleanupHandlers` and removed during teardown.
+
+## 5. Instruction and Tool Refresh
+
+### Instruction Refresh (`instructionManager.ts`)
+
+- `scheduleRealtimeInstructionRefresh()` — debounced timer
+- `refreshRealtimeInstructions()` — builds instructions, calls `realtimeClient.updateInstructions()` if text changed (provider must support `updateInstructions`)
+- `prepareRealtimeTurnContext()` — builds memory slice (user facts, conversation history, web lookups, guidance facts, relevant behavioral memory), then refreshes instructions
+- `queueRealtimeTurnContextRefresh()` — serialized async queue preventing concurrent refreshes
+
+Refresh triggers: session start, music idle/error, voice membership changes, channel changes, turn context updates.
+
+### Tool Refresh (`voiceToolCallInfra.ts`)
+
+- `refreshRealtimeTools()` — rebuilds provider-safe tool definitions from the shared registry, then sends `session.update` if the tool hash changed (provider must support `updateTools`)
+- Called at session start and during instruction refresh
+- Runs only for `session.realtimeToolOwnership === "provider_native"` sessions. Full-brain transport sessions skip provider-native tool registration entirely.
+
+## 6. Response Tracking
+
+### `pendingResponse` (`VoicePendingResponse`)
+
+Tracks the in-flight assistant response:
+
+| Field | Purpose |
+|---|---|
+| `requestId` | Monotonic ID from `nextResponseRequestId` |
+| `source` | Origin: `"user_turn"`, `"text_utterance"`, `"prompt_utterance"`, `"silent_retry"`, etc. |
+| `requestedAt` | Timestamp of request |
+| `audioReceivedAt` | First audio delta timestamp (0 until audio arrives) |
+| `interruptionPolicy` | Who can interrupt this response |
+| `trackedResponseId` | Provider-specific response ID |
+
+### Response Lifecycle
+
+1. `createTrackedAudioResponse()` — creates `pendingResponse`, triggers `syncAssistantOutputState("response_requested")`
+2. Audio deltas arrive — `audioReceivedAt` set on first delta, triggers `syncAssistantOutputState("audio_delta")`
+3. `handleResponseDone()` — response complete. If no audio was produced, triggers silent response recovery.
+4. `clearPendingResponse()` — clears `pendingResponse`, triggers deferred action rechecks.
+
+### Silent Response Recovery
+
+If a tracked response produces no audio within the watchdog timeout:
+
+1. Retry up to `MAX_RESPONSE_SILENCE_RETRIES` via `createTrackedAudioResponse(source: "silent_retry")`
+2. After retries exhausted, attempt hard recovery (commit pending input audio, create fresh response)
+3. If hard recovery also fails, `clearPendingResponse` cascades to deferred action rechecks
+
+### Stale Response Detection
+
+`isStaleRealtimeResponseAt` detects when `realtimeClient.isResponseInProgress()` reports active but the session's `pendingResponse` has been cleared or is stale. `syncAssistantOutputState` runs this periodically and emits `openai_realtime_active_response_cleared_stale`.
+
+## 7. Provider-Specific Protocol Notes
+
+### OpenAI
+
+Full Realtime API: `session.update`, `input_audio_buffer.append/commit`, `response.create/cancel`, `conversation.item.create/truncate`. Tracks `activeResponseId`/`activeResponseStatus` with terminal status detection.
+
+### xAI
+
+Similar protocol to OpenAI but simpler. Uses boolean `_responseInProgress` instead of response ID tracking.
+
+### Gemini
+
+Completely different protocol. Uses `setup` message at connection, then `realtimeInput` with `activityStart`/`activityEnd`/`mediaChunks`. `updateInstructions()` only stores locally (no mid-session WebSocket update). `cancelActiveResponse()` returns false (unsupported).
+
+### ElevenLabs
+
+Agent-based model. Uses signed URL auth (`fetchSignedUrl`). Audio sent as `user_audio_chunk`. `ping`/`pong` keepalive. Instructions sent only at connect time; no mid-session updates. `cancelActiveResponse()` returns false.
+
+## 8. Cross-Domain Interactions (Client)
+
+| Direction | Interaction | Mechanism |
+|---|---|---|
+| Capture → Client | Forward raw PCM (native path) | `realtimeClient.appendInputAudioPcm()` |
+| Capture → Client | Forward labeled transcript (bridge path) | `realtimeClient.requestTextUtterance()` |
+| Reply Pipeline → Client | Play pre-generated exact-line speech | `requestRealtimeTextUtterance()` → provider playback method (`requestPlaybackUtterance()`) |
+| Client → Output SM | Audio delta, response lifecycle events | `syncAssistantOutputState()` |
+| Client → Barge-In | Cancel active response | `realtimeClient.cancelActiveResponse()`, `realtimeClient.truncateConversationItem()` |
+| Client → Tool Dispatch | Function call events | `handleRealtimeFunctionCallEvent()` |
+| Client → Subprocess | Audio for Discord playback | `voxClient.appendTtsAudio()` |
+| Instruction Mgr → Client | Updated instructions/tools | `realtimeClient.updateInstructions()`, `session.update` with tools |
+
+Providers expose the same two logical text paths even when the wire protocol differs. Forwarded user transcripts use the normal conversation flow so the realtime brain can reason over conversation state and call tools. Exact-line playback for already-generated bot speech goes through `requestPlaybackUtterance()` so playback does not re-enter tool planning or duplicate upstream work. OpenAI implements that as an out-of-band audio response with tools disabled; xAI currently uses a constrained text turn on the normal response lane.
+
+## 9. Incident Debugging (Client)
+
+When the bot connects but produces no audio:
+
+1. Check WebSocket state — is `realtimeClient.ws?.readyState` open?
+2. Check `pendingResponse` — was a response created? Check `source` and `requestedAt`.
+3. Check for `error_event` — the provider may have rejected the request.
+4. Check silent response recovery — did the watchdog fire? How many retries?
+5. Check stale response detection — `openai_realtime_active_response_cleared_stale` suggests a hung response.
+
+When instructions/tools are stale:
+
+1. Check `lastRealtimeInstructionsAt` — when was the last instruction refresh?
+2. Check `lastRealtimeToolHash` — did the tool hash change detection work?
+3. Check provider capabilities — Gemini/ElevenLabs don't support mid-session instruction updates.
+
+## 10. Regression Tests (Client)
+
+These cases should remain covered:
+
+- Non-recoverable errors end the session
+- Recoverable errors (`conversation_already_has_active_response`) do not end the session
+- Silent response watchdog triggers retry after timeout
+- Stale active response detection clears hung state
+- Instruction refresh deduplication prevents concurrent updates
+- Tool hash change detection avoids unnecessary `session.update` calls
+- Barge-in cancels active response and truncates conversation item (OpenAI-specific)
+- Session teardown closes WebSocket with 1.5s terminate fallback
+
+Current coverage:
+
+- `src/voice/voiceSessionManager.lifecycle.test.ts` (integration scenarios)
+
+---
+
+## Part 2: Reply Orchestration
+
+This part defines the reply orchestration subsystem — how admitted user turns are dispatched to the correct reply pipeline, how turns are deferred when the output channel is busy, and how barge-in hands interruption context into the next normal turn.
 
 The orchestration layer handles infrastructure (queuing, output lock, deferred flush) — all conversational decisions (what to say, whether to speak, how to handle interrupted context) are owned by the generation model. See `AGENTS.md` — Agent Autonomy section.
 
-## 1. Source of Truth
+## 11. Source of Truth (Reply Orchestration)
 
 Reply orchestration state lives on the `VoiceSession`:
 
@@ -32,7 +246,7 @@ Code:
 - `src/voice/replyManager.ts` — response tracking, output state sync, deferred trigger
 - `src/voice/voiceSessionManager.ts` — pipeline caller methods, barge-in, supersede
 
-## 2. Turn Queue Lifecycle
+## 12. Turn Queue Lifecycle
 
 Turns enter the system via two queues and are drained serially:
 
@@ -57,7 +271,7 @@ captureManager.finalizeUserTurn() (realtime session with `transcriptionMethod="f
 
 Turn coalescing: multiple turns arriving within the coalesce window are merged into a single turn with concatenated PCM and merged transcripts.
 
-## 3. Reply Admission Gate
+## 13. Reply Admission Gate
 
 `evaluateVoiceReplyDecision()` in `voiceReplyDecision.ts` evaluates each turn against a deterministic gate sequence:
 
@@ -75,11 +289,11 @@ Turn coalescing: multiple turns arriving within the coalesce window are merged i
 | 10 | Text/full-brain path with `generation_decides` | allow |
 | 11 | Text/full-brain path with `classifier_gate` | classifier YES/NO |
 
-Direct address still matters, but it no longer hard fast-paths normal bridge turns. It feeds classifier/generation context and arms the music wake latch when music is active. Eagerness `0` is also no longer a deterministic deny; conservative behavior comes from the admission prompt and classifier/generation outcome.
+Direct address feeds classifier/generation context and arms the music wake latch when music is active. Eagerness `0` still flows through the admission prompt and classifier/generation outcome rather than acting as a standalone deny.
 
-For bridge path turns that survive deterministic gates, `runVoiceReplyClassifier()` makes a YES/NO LLM call when the canonical admission mode is `classifier_gate` (runtime internal value: `hard_classifier`).
+For bridge path turns that survive deterministic gates, `runVoiceReplyClassifier()` makes a YES/NO LLM call when the canonical admission mode is `classifier_gate`.
 
-## 4. Reply Dispatch (Three Mutually Exclusive Paths)
+## 14. Reply Dispatch (Three Mutually Exclusive Paths)
 
 After admission, the turn processor dispatches based on mode:
 
@@ -101,13 +315,13 @@ Labeled transcript `(speakerName): text` sent to realtime provider. Cancels any 
 
 The unified pipeline: generate text via LLM, build playback plan, play via realtime TTS or API TTS. See `voice-provider-abstraction.md` §3 for detailed stage description.
 
-In realtime sessions, this path can still deliver speech through the realtime client even when settings-level `voice.replyPath` is `"brain"`. Here `mode: "realtime_transport"` means "use realtime output transport for pre-generated text", not "use the transcript-to-realtime bridge path above". On OpenAI, these exact-line playback requests are sent out-of-band with tools disabled so pre-generated speech cannot start a second provider tool/reasoning loop.
+In realtime sessions, this path can still deliver speech through the realtime client even when settings-level `voice.conversationPolicy.replyPath` is `"brain"`. Here `mode: "realtime_transport"` means "use realtime output transport for pre-generated text", not "use the transcript-to-realtime bridge path above". On OpenAI, these exact-line playback requests are sent out-of-band with tools disabled so pre-generated speech cannot start a second provider tool/reasoning loop.
 
 When Brain is paired with Realtime TTS and reply streaming is enabled, this
 path can request speech incrementally from streamed generation chunks instead of
-waiting for whole-reply playback. See [`voice-streaming-reply.md`](voice-streaming-reply.md).
+waiting for whole-reply playback. See [`voice-provider-abstraction.md`](voice-provider-abstraction.md).
 
-## 5. Deferred Turn System
+## 15. Deferred Turn System
 
 When a turn is denied with reason `"bot_turn_open"` (output channel busy), it is **deferred** rather than dropped.
 
@@ -146,7 +360,7 @@ Active promoted captures block deferred turn flushing. `hasDeferredTurnBlockingA
 
 Silence-only captures (very weak signal, never promoted) do NOT block deferred turn flushing.
 
-## 6. Barge-In Recovery (Prompt-Driven)
+## 16. Barge-In Recovery (Prompt-Driven)
 
 When barge-in interrupts bot speech:
 
@@ -177,11 +391,11 @@ When the interrupting user's next turn reaches the normal voice pipeline:
 
 Deferred actions are only for queued user turns waiting on output availability. There is no deferred `"interrupted_reply"` action or auto-retry path.
 
-## 7. Generation Supersede Guard (3-Stage)
+## 17. Generation Supersede Guard (3-Stage)
 
 Three layers prevent the bot from generating or speaking replies to stale input. This handles cases where the user finishes a sentence then corrects themselves ("play Drake... actually no play Kendrick").
 
-For the related problem of mid-sentence cutoff at the 8s `max_duration` cap, see [`voice-audio-capture-state-machine.md` §7 (max_duration as Chunking)](voice-audio-capture-state-machine.md).
+For the related problem of mid-sentence cutoff at the 8s `max_duration` cap, see [`voice-capture-and-asr-pipeline.md` §7 (max_duration as Chunking)](voice-capture-and-asr-pipeline.md).
 
 ### Stage 1: Pre-generation gate
 
@@ -257,7 +471,7 @@ This is the final safety net for anything that slips through stages 1 and 2.
 | User corrects after generation, before playback | 3 | Drop at playback gate |
 | Clean short sentence, no correction | — | Normal path, no gating triggered |
 
-## 8. Cross-Domain State Reads
+## 18. Cross-Domain State Reads (Reply Orchestration)
 
 | Subsystem | State Read | Purpose |
 |---|---|---|
@@ -270,7 +484,7 @@ This is the final safety net for anything that slips through stages 1 and 2.
 | **Realtime Client** | `isResponseInProgress()`, `activeResponseId` | Stale response detection |
 | **Tool Execution** | `realtimeToolCallExecutions.size` | Tool calls blocking output? |
 
-## 9. Deferred Action Priority
+## 19. Deferred Action Priority
 
 When multiple deferred actions are pending, `recheckDeferredVoiceActions` processes them in priority order:
 
@@ -282,7 +496,7 @@ Each action has a `notBeforeAt` timestamp and an `expiresAt` deadline. `canFireD
 - `notBeforeAt` in the future? (if so, reschedule timer)
 - Output channel blocked? (if so, wait)
 
-## 10. Incident Debugging
+## 20. Incident Debugging (Reply Orchestration)
 
 When a user turn is admitted but the bot doesn't reply:
 
@@ -305,7 +519,7 @@ When post-barge-in recovery feels wrong:
 3. Check whether a newer assistant reply cleared applicability (`lastAssistantReplyAt > interruptedAt`)
 4. Inspect the generated prompt — did it include the interruption recovery section from `buildVoiceTurnPrompt`?
 
-## 11. Regression Tests
+## 21. Regression Tests (Reply Orchestration)
 
 These cases should remain covered:
 

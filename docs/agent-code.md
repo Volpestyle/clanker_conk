@@ -39,12 +39,23 @@ If blocked, runtime returns deterministic errors (`restricted to allowed users`,
 
 ## Providers
 
+`agentStack.devTeam.roles.*` selects which worker to spin up for design, implementation, review, and research tasks. The worker runtime config then supplies that worker's own model, limits, and working directory.
+
+The generic `code_task` path resolves through the implementation role first, then falls back to the enabled worker order when no explicit implementation worker is set.
+
+Preset defaults are intentionally asymmetric:
+
+- `openai_*` presets keep `codex-cli` as the primary implementation worker and `claude-code` as the secondary local worker
+- `claude_*` presets keep `claude-code` as the primary implementation worker and `codex-cli` as the secondary local worker
+- review work can route to a different worker than implementation
+- remote `codex` remains available, but it is not part of the preset-default local worker order
+
 The dashboard-facing `codeAgent.provider` compatibility field supports:
 
 - `"claude-code"` — local Claude CLI runtime
 - `"codex-cli"` — local Codex CLI runtime
 - `"codex"` — remote OpenAI Responses/Codex runtime
-- `"auto"` — defer to the resolved dev-team worker order; the current fallback path resolves to `codex-cli`
+- `"auto"` — defer to the resolved preset/default worker routing
 
 Provider model fields:
 
@@ -52,15 +63,24 @@ Provider model fields:
 - `codeAgent.codexCliModel` (Codex CLI model)
 - `codeAgent.codexModel` (OpenAI Codex Responses model)
 
+In product terms:
+
+- `claude-code` is the local Anthropic-side coding worker
+- `codex-cli` is the local OpenAI-side coding worker
+- `codex` is the optional remote OpenAI Responses worker
+
 ## Tool Contract
 
 `code_task` accepts:
 
 - `task` (required)
+- `role` (optional; `design`, `implementation`, `review`, or `research`)
 - `cwd` (optional)
 - `session_id` (optional; continue an existing code session)
 
 The same shared schema is used across text and voice tool registration (`src/tools/sharedToolSchemas.ts`).
+
+When `role` is omitted, the generic `code_task` path routes through the implementation role.
 
 ## Session Model
 
@@ -81,7 +101,7 @@ Session manager:
 `cwd` resolution:
 
 - explicit `cwd` argument if provided
-- otherwise the enabled worker's `defaultCwd`
+- otherwise the selected role worker's `defaultCwd`
 - otherwise fallback: `../web` relative to app root
 
 `claude-code` and `codex-cli` execute locally in that directory. `codex` runs through OpenAI's API-driven Responses execution path.
@@ -109,7 +129,7 @@ Canonical persisted defaults live under `agentStack.runtimeConfig.devTeam` in `s
 devTeam: {
   codex: {
     enabled: false,
-    model: "codex-mini-latest",
+    model: "gpt-5.4",
     maxTurns: 30,
     timeoutMs: 300_000,
     maxBufferBytes: 2 * 1024 * 1024,
@@ -140,4 +160,4 @@ devTeam: {
 }
 ```
 
-The selected worker order is controlled through `agentStack.overrides.devTeam.codingWorkers` when advanced overrides are enabled. The dashboard's `Auto` option serializes to the full worker set instead of pinning one provider.
+The selected worker order is controlled through `agentStack.overrides.devTeam.codingWorkers` when advanced overrides are enabled. The dashboard's `Auto` option leaves worker ordering on the preset/default path instead of pinning a specific worker override.

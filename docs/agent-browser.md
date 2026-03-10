@@ -82,7 +82,7 @@ Each call uses `--session <sessionKey>` so the browser task operates in an isola
 
 ## Cancellation Model
 
-Cancellation is unified across text and voice.
+Cancellation is unified across text and voice. See [`cancel.md`](cancel.md) for the full cancellation system (detection, speaker ownership, recovery).
 
 ### Shared principles
 

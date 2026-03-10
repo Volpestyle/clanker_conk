@@ -1,5 +1,7 @@
 # Voice Test Suites
 
+> Unit tests, live LLM tests, and replay harnesses: [`tests.md`](tests.md)
+
 Two complementary test harnesses validate voice behavior at different layers:
 
 - **Golden Validation Suite** — tests the "brain" (LLM inference, prompt orchestration, admission decisions) with mocked Discord infrastructure
@@ -431,42 +433,55 @@ The dashboard already exposes persisted voice history:
 - `GET /api/voice/history/sessions?sinceHours=<n>&limit=<n>`
 - `GET /api/voice/history/sessions/:sessionId/events`
 
-These endpoints can be used to disambiguate output events from raw audio-byte detection when needed. The current E2E harness still primarily uses `waitForAudioResponse()` byte presence checks.
+These endpoints help disambiguate output events from raw audio-byte detection when needed. The current E2E harness still primarily uses `waitForAudioResponse()` byte presence checks.
 
 In the current harness, this is an optional extension point. Existing suites still use byte-level `waitForAudioResponse()` checks and do not yet include a built-in transcript/history polling helper.
 
 ## Pipeline Presets & CLI Flags
 
-E2E tests use **pipeline presets** to lock down the voice pipeline configuration under test. Each preset configures reply path, providers, and models, while CLI flags allow overriding individual settings on top of a preset.
+E2E tests use **pipeline presets** to lock down the voice pipeline configuration under test.
+The driver applies these overrides through [`src/testSettings.ts`](../src/testSettings.ts) before runtime use.
 
 ### Available Presets
 
-| Preset | Reply Path | Voice Provider | Brain Provider | Notes |
-|--------|-----------|----------------|----------------|-------|
-| `bridge-openai` (default) | bridge | openai | openai | Per-user ASR bridge, OpenAI realtime brain |
-| `native` | native | openai | openai | Direct audio passthrough, no ASR |
-| `gemini` | brain | gemini | gemini | Gemini realtime for everything |
-| `elevenlabs` | brain | elevenlabs | openai | ElevenLabs voice, OpenAI brain |
-| `brain-anthropic` | brain | openai | anthropic | OpenAI voice, Anthropic text brain |
+| Preset | Effective canonical shape | Notes |
+|--------|---------------------------|-------|
+| `bridge-openai` (default) | `voice.conversationPolicy.replyPath=bridge`, `agentStack.runtimeConfig.voice.runtimeMode=openai_realtime` | Per-user ASR bridge, OpenAI realtime path |
+| `native` | `voice.conversationPolicy.replyPath=native`, `agentStack.runtimeConfig.voice.runtimeMode=openai_realtime` | Direct provider-native reply path |
+| `gemini` | `voice.conversationPolicy.replyPath=brain`, `agentStack.runtimeConfig.voice.runtimeMode=gemini_realtime` | Gemini realtime transport/runtime |
+| `elevenlabs` | `voice.conversationPolicy.replyPath=brain`, `agentStack.runtimeConfig.voice.runtimeMode=elevenlabs_realtime` | ElevenLabs output runtime |
+| `brain-anthropic` | `voice.conversationPolicy.replyPath=brain`, OpenAI realtime transport plus Anthropic-style brain generation override | Brain-path text generation focus |
 
-All presets set eagerness to 50, command-only off, and thought engine off as deterministic test defaults. Bridge presets use `realtimeAdmissionMode=hard_classifier`; non-bridge presets use `generation_only`.
+Shared test defaults layered onto every preset:
+
+- `interaction.activity.replyEagerness = 50`
+- `voice.conversationPolicy.replyEagerness = 50`
+- `voice.conversationPolicy.commandOnlyMode = false`
+- `initiative.voice.enabled = false`
+- `initiative.voice.eagerness = 50`
+
+Admission note:
+
+- on `bridge`, the live runtime behaves as classifier-first regardless of the stored public mode because bridge has no native `[SKIP]`
+- on non-bridge paths, the public setting surface is `voice.admission.mode`
+- internal runtime labels such as `hard_classifier` and `generation_only` are implementation details, not canonical docs keys
 
 ### CLI Flags
 
-Flags override individual pipeline settings on top of a preset:
+Flags override individual pipeline settings on top of a preset. The canonical mappings are:
 
 | Flag | Maps to | Type |
 |------|---------|------|
 | `--preset` | preset name lookup | string |
-| `--reply-path` | `voice.replyPath` | `native` / `bridge` / `brain` |
-| `--voice-provider` | `voice.voiceProvider` | `openai` / `xai` / `gemini` / `elevenlabs` |
-| `--brain-provider` | `voice.brainProvider` | `openai` / `anthropic` / `xai` / `gemini` |
-| `--brain-model` | `voice.generationLlm.model` + auto-inferred provider | string |
-| `--voice-model` | `voice.openaiRealtime.model` | string |
-| `--voice-name` | `voice.openaiRealtime.voice` | string |
-| `--classifier` | `voice.replyDecisionLlm.realtimeAdmissionMode` | `on` = `hard_classifier`, `off` = `generation_only` |
-| `--thought-engine` | `voice.thoughtEngine.enabled` | `on` / `off` |
-| `--command-only` | `voice.commandOnlyMode` | `on` / `off` |
+| `--reply-path` | `voice.conversationPolicy.replyPath` | `native` / `bridge` / `brain` |
+| `--voice-provider` | driver convenience override that normalizes into `agentStack.overrides.voiceRuntime` / `agentStack.runtimeConfig.voice.runtimeMode` | `openai` / `xai` / `gemini` / `elevenlabs` |
+| `--brain-provider` | driver convenience override that normalizes into `agentStack.overrides.orchestrator` and related generation bindings | `openai` / `anthropic` / `xai` / `gemini` |
+| `--brain-model` | effective brain generation override via orchestrator / voice generation binding | string |
+| `--voice-model` | `agentStack.runtimeConfig.voice.openaiRealtime.model` | string |
+| `--voice-name` | `agentStack.runtimeConfig.voice.openaiRealtime.voice` | string |
+| `--classifier` | public intent is `voice.admission.mode`; on bridge the runtime is classifier-first either way | `on` / `off` |
+| `--thought-engine` | `initiative.voice.enabled` | `on` / `off` |
+| `--command-only` | `voice.conversationPolicy.commandOnlyMode` | `on` / `off` |
 
 ### Examples
 

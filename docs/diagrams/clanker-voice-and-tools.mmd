@@ -4,31 +4,32 @@ flowchart TD
     subgraph Session["Active voice session"]
         Audio["Incoming speaker audio / transcript"]
         TurnDecision{"Addressed to bot,\nconversation engaged,\nor command follow-up?"}
-        VoiceReply["Generate voice reply"]
+        VoiceReply["Run voice reply path"]
         Skip["Skip / stay quiet"]
         ThoughtTimer["Per-session silence timer"]
-        ThoughtEligible{"voice.thoughtEngine.enabled\nsilence met\ncooldown met?"}
-        VoiceThought["Voice thought engine\nmay chime in"]
+        ThoughtEligible{"initiative.voice.enabled\nsilence + interval met\neagerness roll passed?"}
+        VoiceThought["Generate voice thought"]
     end
 
-    subgraph Modes["Voice runtime modes"]
-        Native["Native realtime"]
-        Bridge["Bridge"]
-        Stt["Brain + API overrides"]
+    subgraph Modes["Voice reply paths"]
+        Native["replyPath=native"]
+        Bridge["replyPath=bridge\nclassifier-first runtime"]
+        Brain["replyPath=brain"]
     end
 
     subgraph SharedBrain["Shared continuity + tool layer"]
-        Continuity["Conversation windows\nmemory facts\nadaptive directives\nrecent lookup continuity"]
+        Continuity["Conversation windows\nfact profiles + guidance facts\nbehavioral memory by relevance\nrecent lookup continuity"]
         ToolChoice{"Need a tool?"}
-        SharedTools["conversation_search\nmemory_search / write\nadaptive_directive_add/remove\nweb_search\nbrowser_browse"]
-        VoiceOnly["Voice-only tools\nmusic / playback / transport controls"]
+        SharedTools["conversation_search\nmemory_search / write\nweb_search\nbrowser_browse\ncode_task"]
+        VoiceOnly["Voice-only tools\nmusic / playback / transport actions"]
     end
 
     subgraph Controls["Main knobs"]
-        ReplyDecision["voice.replyDecisionLlm.*"]
-        VoiceEager["voice.replyEagerness"]
-        ThoughtKnobs["voice.thoughtEngine.*"]
-        ReplyPath["voice.replyPath\nprovider/runtime settings"]
+        Conversation["voice.conversationPolicy.*"]
+        Admission["voice.admission.*"]
+        Transcription["voice.transcription.*"]
+        Runtime["agentStack.runtimeConfig.voice.*"]
+        ThoughtKnobs["initiative.voice.*"]
     end
 
     Audio --> TurnDecision
@@ -41,23 +42,27 @@ flowchart TD
 
     VoiceReply --> Native
     VoiceReply --> Bridge
-    VoiceReply --> Stt
+    VoiceReply --> Brain
     VoiceThought --> Native
     VoiceThought --> Bridge
-    VoiceThought --> Stt
+    VoiceThought --> Brain
 
     Native --> Continuity
     Bridge --> Continuity
-    Stt --> Continuity
+    Brain --> Continuity
 
     Continuity --> ToolChoice
     ToolChoice -->|No| Output["Answer from context only"]
     ToolChoice -->|Yes| SharedTools
     ToolChoice -->|Yes, voice-specific| VoiceOnly
 
-    ReplyDecision --> TurnDecision
-    VoiceEager --> VoiceReply
+    Conversation --> TurnDecision
+    Conversation --> Native
+    Conversation --> Bridge
+    Conversation --> Brain
+    Admission --> TurnDecision
+    Transcription --> Audio
+    Runtime --> Native
+    Runtime --> Bridge
+    Runtime --> Brain
     ThoughtKnobs --> ThoughtEligible
-    ReplyPath --> Native
-    ReplyPath --> Bridge
-    ReplyPath --> Stt

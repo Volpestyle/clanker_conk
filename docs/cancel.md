@@ -1,7 +1,7 @@
 # Cancel System
 
 > **Scope:** How the bot detects and handles explicit cancellation commands ("stop", "cancel", "nevermind") across text and voice.
-> Voice barge-in (acoustic interruption): [`voice/barge-in.md`](voice/barge-in.md)
+> Voice barge-in (acoustic interruption): [`voice/voice-output-and-barge-in.md`](voice/voice-output-and-barge-in.md)
 > Signal threading and abort plumbing: [`tmp/archive/tool-call-cancellation-design.md`](tmp/archive/tool-call-cancellation-design.md)
 
 ## Design Philosophy

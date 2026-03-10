@@ -16,7 +16,7 @@ flowchart LR
 
     subgraph Harness["Harness Layer"]
         Orchestrator["Top-level orchestrator agent"]
-        Memory["Local product tools\nmemory, directives, music, automations"]
+        Memory["Local product tools\nmemory, music, automations"]
         Router --> Orchestrator
         Orchestrator --> Memory
     end
@@ -24,7 +24,7 @@ flowchart LR
     subgraph Capabilities["Capability Runtimes"]
         Search["Research runtime\nOpenAI web search or local search"]
         Browser["Browser runtime\nOpenAI computer use or local browser agent"]
-        Voice["Voice runtime\nOpenAI Realtime or legacy voice stack"]
+        Voice["Voice runtime\npreset-resolved realtime stack"]
         Orchestrator --> Search
         Orchestrator --> Browser
         Orchestrator --> Voice

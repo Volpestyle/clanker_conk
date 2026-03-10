@@ -54,7 +54,7 @@ bun install
 ### Required
 
 - `DISCORD_TOKEN`
-- At least one LLM provider credential: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `CLAUDE_OAUTH_REFRESH_TOKEN`, `CODEX_OAUTH_REFRESH_TOKEN`, `GOOGLE_API_KEY`, and/or `ELEVENLABS_API_KEY`
+- At least one LLM provider credential: `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `XAI_API_KEY`, `CLAUDE_OAUTH_REFRESH_TOKEN`, `OPENAI_OAUTH_REFRESH_TOKEN`, `GOOGLE_API_KEY`, and/or `ELEVENLABS_API_KEY`
 
 ### Optional
 
@@ -75,7 +75,7 @@ For optional local code-agent runtimes, ensure `claude` and/or `codex` CLI is on
 
 - `XAI_API_KEY` — Grok text models, `voice_agent` mode, Grok Imagine media generation
 - `OPENAI_API_KEY` — `openai_realtime` voice mode and OpenAI file-ASR/API-TTS voice overrides
-- `CODEX_OAUTH_REFRESH_TOKEN` — experimental ChatGPT-backed Codex/OpenAI provider (`codex-oauth`)
+- `OPENAI_OAUTH_REFRESH_TOKEN` — ChatGPT-authenticated OpenAI provider (`openai-oauth`)
 - `GOOGLE_API_KEY` — `gemini_realtime` voice mode
 - `ELEVENLABS_API_KEY` — `elevenlabs_realtime` voice mode
 - `ANTHROPIC_API_KEY` — Anthropic models
@@ -131,22 +131,21 @@ Grafana at `http://localhost:3000` — query `{job="clanker_runtime"}`. Details 
 | Doc | Description |
 |-----|-------------|
 | `docs/technical-architecture.md` | System architecture, data model, runtime flows |
-| `docs/clanker-activity.md` | Text + voice activity model: direct replies, reply/lurk channels, thought loop, discovery |
+| `docs/clanker-activity.md` | Text + voice activity model: direct replies, recent-window follow-ups, unified initiative, voice thought engine |
 | `docs/initiative-unified-spec.md` | Unified text initiative cycle and discovery feed |
 | `docs/preset-system-spec.md` | Preset-driven stack/runtime settings |
 | `docs/agent-code.md` | Code agent runtime (Claude Code, Codex CLI, Codex) |
 | `docs/agent-browser.md` | Browser agent runtime |
 | `docs/voice/voice-provider-abstraction.md` | Voice pipeline stages, providers, and settings |
 | `docs/voice/screen-share-system.md` | Screen share pipeline and frame reasoning flow |
-| `docs/claude-ai-oauth.md` | Claude AI OAuth provider (`claude-oauth`) |
-| `docs/codex-oauth.md` | Experimental ChatGPT-backed Codex/OpenAI OAuth provider (`codex-oauth`) |
+| `docs/oauth-providers.md` | OAuth providers (`claude-oauth`, `openai-oauth`) |
 | `docs/memory-system.md` | Memory system design |
 | `docs/public-https-entrypoint-spec.md` | Public HTTPS tunnel |
 | `docs/e2e-test-spec.md` | E2E bot-to-bot + golden validation suites |
 | `docs/tests.md` | Test commands, live tests, and replay harnesses |
 | `docs/logs.md` | Structured logging and Loki setup |
 
-Canonical specs live in `docs/` and `docs/voice/`. Historical implementation notes live under `docs/tmp/archive/`.
+Canonical specs live in `docs/` and `docs/voice/`. Archived reference notes live under `docs/tmp/archive/` and are not canonical.
 
 ## Notes
 

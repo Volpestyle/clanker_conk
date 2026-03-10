@@ -4,7 +4,7 @@
 
 This bot is built around a single idea: **the agent sees context like a human would, and decides what to do on its own.**
 
-We do not hardcode behaviors for the agent. We give it rich context — conversation history, channel events, available tools, memory, participant state — and let the model reason about what to do. The agent should feel like a real person who happens to have access to powerful tools, not a state machine following a script.
+We do not hardcode behaviors for the agent. We give it rich context — conversation history, channel events, available tools, memory, participant state — and let the model reason about what to do. The agent should feel like a real person who happens to have access to powerful tools, not a state machine following a script. Think about Clanker Conk as if it was YOU (agent reading this), and guide your product and design decisions based on what YOU would want if you were this autonomous, self-directed, discord 'user'.
 
 **What this means in practice:**
 
@@ -20,9 +20,10 @@ We do not hardcode behaviors for the agent. We give it rich context — conversa
 
 ## General
 
+- Always update canonical documentation of related feature when updating code. Prefer to avoid 'past tense' language, stating a canonical truth rather than a redesign or migration plan, unless explicitly asked for plan.
+- Don't add new tests willy nilly. This can lead to bloat and heavy tech debt. Tests should only test critical business logic paths and edge cases.
+- If you find tests that seem to be adding useless bloat, testing legacy things, or are redundant, please remove them.
 - Include a 'Product language' conclusion in your messages and commit messages when it seems like it makes sense.
-- Refer to docs/openai/openai-realtime-transcription.md when working with openai realtime transcripton or ASR.
-- Refer to docs/openai/openai-realtime-speech.md when working with openai realtime speech.
 - Runtime/package manager standard: use Bun (`bun`, `bun run`, `bunx`) over Node/NPM (`node`, `npm`, `npx`) unless explicitly requested.
 - Do not run 'smoke' or 'live' tests unless the user explicitly directs you to run them, since they incur cost. E2E tests and essential unit tests are the primary focus.
 - Build modular, composable, and easily testable components. Avoid monolithic architecture.

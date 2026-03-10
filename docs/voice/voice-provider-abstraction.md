@@ -1,469 +1,293 @@
 # Voice Pipeline — Provider Abstraction and Stage Reference
 
-> **Scope:** Voice pipeline architecture — what stages audio passes through, which providers are active, and what settings configure each stage.
-> Operator-facing activity paths and setting map: [`clanker-activity.md`](../clanker-activity.md)
-> Barge-in and noise rejection: [`barge-in.md`](barge-in.md)
-> Assistant reply/output lifecycle: [`voice-output-state-machine.md`](voice-output-state-machine.md)
-> Streaming reply behavior: [`voice-streaming-reply.md`](voice-streaming-reply.md)
+> **Scope:** Current voice pipeline stages, runtime modes, and canonical settings surfaces.
+> Activity model and knob map: [`../clanker-activity.md`](../clanker-activity.md)
+> Capture and ASR details: [`voice-capture-and-asr-pipeline.md`](voice-capture-and-asr-pipeline.md)
+> Reply orchestration: [`voice-client-and-reply-orchestration.md`](voice-client-and-reply-orchestration.md)
+> Output and barge-in: [`voice-output-and-barge-in.md`](voice-output-and-barge-in.md)
 
-This document describes the voice chat pipeline as a linear sequence of stages, from audio input to voice output. Each stage is independently configurable, and the active set of stages depends on which **reply path** is selected.
+This document describes the voice stack as a preset-driven runtime plus nested voice policy settings.
 
-The pipeline gives the agent full context at each stage — tools are presented as available capabilities (never forced), conversation history flows through unfiltered, and the agent decides what to do via its generation output or `[SKIP]`. Provider swapping changes the transport, not the agent's autonomy. See `AGENTS.md` — Agent Autonomy section.
+## 1. Canonical Settings Surface
 
----
+Voice configuration is split across these live surfaces:
 
-## 1. Overview
+- `agentStack.runtimeConfig.voice.*`: runtime/provider transport config
+- `voice.conversationPolicy.*`: reply-path and conversation behavior
+- `voice.admission.*`: public reply-admission policy
+- `voice.transcription.*`: ASR enablement and language hinting
+- `voice.channelPolicy.*`: channel/user access control
+- `voice.sessionLimits.*`: session duration and concurrency limits
+- `initiative.voice.*`: proactive voice-thought cadence
 
-The system keeps voice chat split into independently swappable layers:
+Preset resolution also matters:
 
-1. **Voice/TTS provider** — realtime audio model (OpenAI, xAI, Gemini, ElevenLabs)
-2. **Brain provider** — reasoning/generation model (native realtime, OpenAI, Anthropic, xAI, Gemini)
-3. **Transcriber provider** — ASR transcription (OpenAI)
+- `agentStack.preset`
+- `agentStack.overrides.voiceRuntime`
+- `agentStack.overrides.voiceAdmissionClassifier`
 
-Provider resolution (`src/voice/voiceSessionHelpers.ts`):
+## 2. Runtime Overview
 
-```
-voiceProvider    = resolveVoiceProvider(settings)         // default: "openai"
-brainProvider    = resolveBrainProvider(settings)          // default: "openai"
-transcriberProvider = resolveTranscriberProvider(settings)  // default: "openai"
-runtimeMode      = resolveVoiceRuntimeMode(settings)       // maps provider → runtime mode
-```
+The voice stack keeps transport and behavior separate:
 
-Runtime modes (`src/voice/voiceModes.ts`): `openai_realtime`, `voice_agent`, `gemini_realtime`, `elevenlabs_realtime`
+1. `runtime mode` chooses the realtime provider family
+2. `reply path` chooses how turns are planned
+3. `admission` decides whether a turn should reach generation
+4. `generation` and `tools` run either in the provider-native loop or the orchestrator loop
+5. `output` speaks through realtime or API TTS
 
-### Architecture Principles
+Runtime mode values:
 
-The design goal is provider-swappable behavior without duplicate logic. The voice stack keeps three shared sources of truth and pushes provider differences to thin adapters:
+- `openai_realtime`
+- `voice_agent`
+- `gemini_realtime`
+- `elevenlabs_realtime`
 
-- **One context/instruction service**: `instructionManager.ts` builds persona, continuity, memory, speaker, channel, and tool-policy context for provider-native sessions. `voiceReplyPipeline.ts` builds the full-brain generation payload for orchestrator-owned sessions.
-- **One tool contract**: shared tool schemas live in `src/tools/sharedToolSchemas.ts`. `src/voice/voiceToolCallToolRegistry.ts` exports provider-safe realtime tool definitions from that shared contract instead of defining a second provider-specific tool set.
-- **One tool executor**: `src/voice/voiceToolCallDispatch.ts` and the downstream tool implementations remain the canonical execution path whether the planner is the full brain or a provider-native realtime model.
-- **Thin provider adapters**: `openaiRealtimeClient.ts`, `xaiRealtimeClient.ts`, `geminiRealtimeClient.ts`, and `elevenLabsRealtimeClient.ts` are responsible for protocol translation, not business logic.
+Reply-path values:
 
-That separation is what allows the same product behavior to run in multiple shapes:
+- `native`
+- `bridge`
+- `brain`
 
-- **Native**: provider owns ASR, response planning, and provider-native tool calls.
-- **Bridge**: local ASR produces labeled text, but the provider still owns response planning and provider-native tool calls.
-- **Brain**: the upstream orchestrator owns planning and tools; the realtime provider is only the speaking transport.
+Base defaults from `settingsSchema.ts`:
 
----
+- `agentStack.runtimeConfig.voice.runtimeMode = "openai_realtime"`
+- `voice.conversationPolicy.replyPath = "brain"`
+- `voice.conversationPolicy.ttsMode = "realtime"`
+- `voice.admission.mode = "generation_decides"`
 
-## 2. The Pipeline
-
-![Voice Pipeline Stages](../diagrams/voice-pipeline-stages.png)
-
-### Stage Visibility Matrix
-
-| Stage | Native | Bridge | Brain |
-|---|---|---|---|
-| 1. Audio Input | yes | yes | yes |
-| 2a. ASR (per-speaker) | — | yes | — |
-| 2b. ASR (shared) | — | — | yes |
-| 3. Noise Rejection | bypassed | yes | yes |
-| 4a. Reply Admission (deterministic) | yes | yes | yes |
-| 4b. Reply Admission (classifier) | — | yes (always on) | optional (off by default) |
-| 5a. Brain (realtime end-to-end) | yes | — | — |
-| 5b. Brain (text→realtime) | — | yes | — |
-| 5c. Brain (text LLM) | — | — | yes |
-| 6a. Voice Output (realtime stream) | yes | yes | yes |
-| 6b. Voice Output (TTS API) | — | — | — |
-| Thought Engine (parallel) | yes | yes | yes |
-
----
+Preset defaults can override the effective voice runtime.
 
 ## 3. Reply Paths
 
 ### Native
 
-Direct audio passthrough to the realtime API. The provider handles ASR, reasoning, and audio generation end-to-end.
+The provider owns audio input, planning, tool calls, and audio output end to end.
 
-- **Latency**: lowest
-- **ASR**: provider-internal (no local transcription)
-- **Tool support**: provider-native function calling where the runtime supports `updateTools`
-- **Provider requirement**: OpenAI only (requires `perUserAsr` or native audio input)
-- **Code path**: `forwardRealtimeTurnAudio()` in `voiceSessionManager.ts`
+Properties:
+
+- lowest orchestration overhead
+- provider-native tool loop when the runtime supports it
+- no local text-generation stage
+
+Native is available on runtimes that support provider-native planning, including `openai_realtime` and `voice_agent`.
 
 ### Bridge
 
-Per-speaker ASR transcribes each user independently, producing labeled text. The text is forwarded to the realtime brain for reasoning + audio generation.
+The runtime transcribes speech locally, then forwards labeled text to the realtime provider. The provider still owns response planning and provider-native tool calls.
 
-- **Latency**: moderate (ASR round-trip added)
-- **ASR**: per-speaker via `OpenAiRealtimeTranscriptionClient` — logprobs confidence gate available
-- **Tool support**: provider-native function calling where the runtime supports `updateTools`
-- **Provider requirement**: any provider with `textInput` capability plus OpenAI-backed ASR for text-mediated voice today
-- **Code path**: `forwardRealtimeTextTurnToBrain()` in `voiceSessionManager.ts`
+Properties:
+
+- text-mediated realtime turn handling
+- classifier-first admission in practice
+- provider-native tool loop when supported
 
 ### Brain
 
-Shared ASR transcribes mixed audio. A text LLM (`generationLlm`) generates the response. The realtime provider speaks the generated text via utterance requests.
+The orchestrator owns text generation and tool calling. The realtime provider is used as transport, or OpenAI Audio API is used as TTS when `voice.conversationPolicy.ttsMode = "api"`.
 
-When `voice.conversationPolicy.streaming.enabled` is active and Brain is using
-Realtime TTS, the generated text can be spoken incrementally before the full
-LLM response finishes. The live chunking behavior is documented in
-[`voice-streaming-reply.md`](voice-streaming-reply.md).
+Properties:
 
-- **Latency**: high (ASR + text LLM + realtime utterance)
-- **ASR**: shared/file transcription inside the realtime session when `voice.openaiRealtime.transcriptionMethod="file_wav"`
-- **Tool support**: orchestrator-owned tools inside the text LLM loop
-- **Provider requirement**: works with any provider combination
-- **Code path**: `runRealtimeBrainReply()` → `generateVoiceTurn()` in `voiceSessionManager.ts`
+- works with all runtime/provider combinations
+- shared text/voice tool loop behavior
+- generation binding comes from `agentStack.runtimeConfig.voice.generation`
 
----
+## 4. Stage Visibility Matrix
 
-## 4. Stage Reference
+| Stage | Native | Bridge | Brain |
+|---|---|---|---|
+| Audio capture | yes | yes | yes |
+| Transcription | provider-native or bypassed | yes | yes |
+| Noise rejection / promotion gates | yes | yes | yes |
+| Deterministic admission | yes | yes | yes |
+| Classifier admission | no text classifier path | effectively yes | optional |
+| Provider-native planning | yes | yes | no |
+| Orchestrator text generation | no | no | yes |
+| Realtime output transport | yes | yes | yes |
+| API TTS override | no | no | yes |
+| Voice thought engine | yes | yes | yes |
 
-### Stage 1: Audio Input & ASR
+## 5. Stage Reference
 
-Discord Opus audio is decoded to PCM 48kHz, downsampled to 24kHz, and routed based on the reply path.
+### Stage 1: Capture And Transcription
 
-**Per-speaker ASR (bridge path)**
+Canonical public ASR settings:
 
-Each active speaker gets a dedicated `OpenAiRealtimeTranscriptionClient` in `openAiAsrSessions: Map<userId, state>`.
-Per-speaker audio now streams into ASR while the capture is still provisional. Local capture ownership stays per-user, but promotion to a real turn is hybrid:
+- `voice.transcription.enabled`
+- `voice.transcription.languageMode`
+- `voice.transcription.languageHint`
 
-- local provisional capture buffers PCM immediately
-- per-user OpenAI Realtime transcription receives `input_audio_buffer.append` immediately
-- OpenAI `server_vad` confirms speech boundaries for that utterance
-- the capture promotes when either:
-  - server VAD has fired for the current utterance and the local signal clears the normal promotion gate
-  - or the local signal is strong enough to use the explicit strong-local fallback
+Canonical runtime transport/transcription settings:
 
-This keeps Discord speaker attribution local while making speech promotion less dependent on fixed noise heuristics.
+- `agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod`
+- `agentStack.runtimeConfig.voice.openaiRealtime.inputTranscriptionModel`
+- `agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge`
 
-| Setting | Key Path | Default |
-|---|---|---|
-| Transcription method | `voice.openaiRealtime.transcriptionMethod` | `"realtime_bridge"` |
-| ASR model | `voice.openaiRealtime.inputTranscriptionModel` | `"gpt-4o-transcribe"` |
-| Per-user bridge | `voice.openaiRealtime.usePerUserAsrBridge` | `true` |
-| Language mode | `voice.asrLanguageMode` | `"auto"` |
-| Language hint | `voice.asrLanguageHint` | `"en"` |
-| Turn detection | OpenAI realtime `audio.input.turn_detection` | `server_vad` |
+These runtime settings configure bridge and file-turn transcription behavior.
 
-Code: `ensureOpenAiAsrSessionConnected()`, `appendAudioToOpenAiAsr()`, `commitOpenAiAsrUtterance()` in `voiceSessionManager.ts`
-Client: `src/voice/openaiRealtimeTranscriptionClient.ts`
+### Stage 2: Turn Promotion And Noise Rejection
 
-**Shared ASR (brain path)**
+Before a turn reaches admission, the runtime applies:
 
-Uses the realtime session's file-transcription model when `voice.openaiRealtime.transcriptionMethod="file_wav"`.
+- provisional capture promotion
+- silence and short-clip filters
+- bridge hallucination and ASR-confidence guards where applicable
 
-| Setting | Key Path | Default |
-|---|---|---|
-| Transcription model | `voice.openaiRealtime.inputTranscriptionModel` | `"gpt-4o-mini-transcribe"` |
+Relevant modules:
 
-**Logprobs**
-
-OpenAI realtime transcription returns per-token logprobs on `completed` events. These flow through the ASR bridge into `AsrCommitResult.transcriptLogprobs` and are evaluated at the noise rejection stage.
-
----
-
-### Stage 2: Turn Promotion and Noise Rejection Gates
-
-Before a capture becomes a real voice turn, it must first promote out of provisional state. After promotion, sequential rejection gates can still drop the turn before it consumes brain resources. Each gate fires independently — a turn is dropped at the first gate that rejects it.
-
-Applied in `runRealtimeTurn()` in `src/voice/turnProcessor.ts`:
-
-Promotion signals:
-
-- `voice_activity_started` now means a provisional capture promoted to a real turn
-- `promotionReason=server_vad_confirmed` means OpenAI VAD confirmed speech for the same utterance
-- `promotionReason=strong_local_audio` means the local fallback path promoted without waiting for VAD
-- `voice_turn_dropped_provisional_capture` means the capture never promoted and was discarded as noise / near-silence
-
-The hybrid design is deliberate:
-
-- OpenAI VAD helps reject ambient TV / room noise better than fixed local thresholds alone
-- local fallback still exists so clearly strong speech can promote even if server VAD is delayed
-- shared ASR stays promotion-gated, while per-user ASR buffers provisional audio so VAD has enough context to help
-
-| Order | Gate | Drop Reason | Threshold / Constants | Applies To |
-|---|---|---|---|---|
-| 1 | Silence gate | `voice_turn_dropped_silence_gate` | `VOICE_SILENCE_GATE_MIN_CLIP_MS=280`, `RMS_MAX=0.003`, `PEAK_MAX=0.012`, `ACTIVE_RATIO_MAX=0.01` | all captures |
-| 2 | Short clip filter | `realtime_turn_transcription_skipped_short_clip` | `VOICE_TURN_MIN_ASR_CLIP_MS=100` | `speaking_end` captures |
-| 3 | ASR logprob confidence | `voice_turn_dropped_asr_low_confidence` | `VOICE_ASR_LOGPROB_CONFIDENCE_THRESHOLD=-1.0` (mean logprob, log-base-e; -1.0 ≈ 37% per-token) | bridge path only (`hasTranscriptOverride`) |
-| 4 | Bridge fallback hallucination | `voice_turn_dropped_asr_bridge_fallback_hallucination` | same as low signal fallback | bridge active but returned empty |
-
-Code: `evaluatePcmSilenceGate()` in `src/voice/voiceSessionManager.ts`
-Confidence: `computeAsrTranscriptConfidence()` in `src/voice/voiceDecisionRuntime.ts`
-
----
+- `src/voice/captureManager.ts`
+- `src/voice/turnProcessor.ts`
+- `src/voice/voiceDecisionRuntime.ts`
 
 ### Stage 3: Reply Admission
 
-Two layers: deterministic gates (fast, no LLM call) and an optional LLM classifier (bridge path only).
+The public admission surface is:
 
-#### Deterministic Gates
+- `voice.admission.mode`
+- `voice.admission.musicWakeLatchSeconds`
 
-Evaluated in order by `evaluateVoiceReplyDecision()` in `voiceReplyDecision.ts`:
+Classifier binding is resolved through:
 
-| Order | Gate | Reason | Result |
-|---|---|---|---|
-| 1 | Missing transcript | `missing_transcript` | deny |
-| 2 | Pending command followup | `pending_command_followup` | allow |
-| 3 | Output lock (assistant output phase, non-music) | `bot_turn_open` (coarse) / `outputLockReason` (authoritative) | deny (retry after 1400ms) |
-| 4 | Owned tool followup by same speaker | `owned_tool_followup` / `owned_tool_followup_cancel` | allow |
-| 5 | Other-speaker cross-talk during owned tool followup | `owned_tool_followup_other_speaker_blocked` | deny |
-| 6 | Command-only + direct address | `command_only_direct_address` | allow |
-| 7 | Command-only + not addressed outside latch window | `command_only_not_addressed` | deny |
-| 8 | Music playing + wake latch inactive | `music_playing_not_awake` | deny |
-| 9 | Native realtime path | `native_realtime` | allow |
-| 10 | Generation-decides mode | `generation_decides` | allow |
-| 11 | Classifier mode | `classifier_allow` / `classifier_deny` | YES/NO LLM gate |
+- preset defaults in `src/settings/agentStack.ts`
+- `agentStack.overrides.voiceAdmissionClassifier`
 
-#### LLM Classifier (bridge path)
+Important runtime behavior:
 
-When the canonical admission mode is `classifier_gate` (runtime internal value: `hard_classifier`) and the turn survived deterministic gates, `runVoiceReplyClassifier()` makes a YES/NO call.
+- if `replyPath = "bridge"`, the runtime always behaves as classifier-first
+- `classifier_gate` and `generation_decides` are the canonical public settings values
+- internal labels like `hard_classifier` and `generation_only` are implementation details used by `voiceReplyDecision.ts`
 
-Direct address and eagerness still shape the decision, but no longer as hard deterministic gates for normal bridge turns. Direct address is classifier/generation context and can arm the short music wake latch when music is active. Eagerness `0` now flows through the same decision stack instead of forcing an immediate deny.
+### Stage 4: Generation And Tool Ownership
 
-| Setting | Key Path | Default |
+`native` and `bridge` use provider-native planning when the runtime supports it.
+
+`brain` uses:
+
+- `agentStack.runtimeConfig.voice.generation`
+
+Tool ownership:
+
+- provider-native tool definitions come from `src/voice/voiceToolCallToolRegistry.ts`
+- execution is still centralized in `src/voice/voiceToolCallDispatch.ts`
+- full-brain replies use the shared orchestrator tool loop instead of provider-native replanning
+
+### Stage 5: Output
+
+Conversation-policy output knobs:
+
+- `voice.conversationPolicy.replyPath`
+- `voice.conversationPolicy.ttsMode`
+- `voice.conversationPolicy.streaming.*`
+
+API TTS config:
+
+- `agentStack.runtimeConfig.voice.openaiAudioApi.ttsModel`
+- `agentStack.runtimeConfig.voice.openaiAudioApi.ttsVoice`
+- `agentStack.runtimeConfig.voice.openaiAudioApi.ttsSpeed`
+
+### Stage 6: Voice Thought Engine
+
+Canonical cadence settings:
+
+- `initiative.voice.enabled`
+- `initiative.voice.eagerness`
+- `initiative.voice.minSilenceSeconds`
+- `initiative.voice.minSecondsBetweenThoughts`
+
+Implementation note:
+
+- the thought generator resolves provider/model from the orchestrator binding during generation
+
+Relevant modules:
+
+- `src/voice/thoughtEngine.ts`
+- `src/voice/voiceThoughtGeneration.ts`
+
+## 6. Settings Reference
+
+### Conversation Policy
+
+| Setting | Default | Meaning |
 |---|---|---|
-| Provider | `voice.replyDecisionLlm.provider` | `"anthropic"` |
-| Model | `voice.replyDecisionLlm.model` | `"claude-haiku-4-5"` |
-| Reasoning effort | `voice.replyDecisionLlm.reasoningEffort` | `"minimal"` |
-| Admission mode | `voice.admission.mode` | `"classifier_gate"` |
-| Music wake latch | `voice.replyDecisionLlm.musicWakeLatchSeconds` | `15` |
+| `voice.conversationPolicy.replyEagerness` | `50` | Voice reply consultation/social mode |
+| `voice.conversationPolicy.commandOnlyMode` | `false` | Restrict replies toward command/wake interactions |
+| `voice.conversationPolicy.allowNsfwHumor` | `true` | Voice tone guardrail input |
+| `voice.conversationPolicy.textOnlyMode` | `false` | Disable voice output while still processing turns |
+| `voice.conversationPolicy.defaultInterruptionMode` | `"speaker"` | Default barge-in target |
+| `voice.conversationPolicy.replyPath` | `"brain"` | `native`, `bridge`, or `brain` |
+| `voice.conversationPolicy.ttsMode` | `"realtime"` | `realtime` or `api` output |
+| `voice.conversationPolicy.streaming.enabled` | `true` | Enables streamed speech chunks on brain path |
 
-Classifier config: `temperature: 0`, `maxOutputTokens: 4`, history window: `CLASSIFIER_HISTORY_MAX_TURNS=6` / `CLASSIFIER_HISTORY_MAX_CHARS=900`
+### Admission
 
-Decision reasons: `classifier_allow` (YES), `classifier_deny` (NO), `unparseable_classifier_output` (deny), `classifier_runtime_error` (deny), `llm_unavailable` (deny)
-
-Admission policy prompt: `buildVoiceAdmissionPolicyLines()` in `src/prompts/voiceAdmissionPolicy.ts` — generates contextual policy lines based on mode (`"classifier"` or `"generation"`), direct address, eagerness, participant count, music state.
-
----
-
-### Stage 4: Brain
-
-#### Native (Stage 5a)
-
-Raw PCM is forwarded to the realtime API. The provider handles reasoning and audio generation end-to-end.
-
-Code: `forwardRealtimeTurnAudio()` in `voiceSessionManager.ts`
-
-#### Bridge (Stage 5b — text→realtime)
-
-Labeled transcript `(speakerName): text` is sent to the realtime provider via `realtimeClient.requestTextUtterance()`. Context-aware instructions and tools are refreshed before each request.
-
-Code: `forwardRealtimeTextTurnToBrain()`, `refreshRealtimeInstructions()`, `prepareRealtimeTurnContext()` in `voiceSessionManager.ts`
-
-Context includes: participant/membership context, durable memory facts, recent conversation history (text + voice), web-search cache, adaptive directives (guidance + behavior), active speaker context, and current tool policy. This is the same product persona/continuity layer used for provider-native bridge sessions even though the bridge input itself is labeled text instead of raw provider ASR.
-
-#### Brain (Stage 5c — text LLM)
-
-The orchestrator LLM generates the text response and owns the tool loop. A speech transport then renders the final line, either through a realtime voice client (`requestPlaybackUtterance()`) or an API TTS path.
-
-| Setting | Key Path | Default |
+| Setting | Default | Meaning |
 |---|---|---|
-| Use text model | `voice.generationLlm.useTextModel` | `true` |
-| Provider | `voice.generationLlm.provider` | `"anthropic"` |
-| Model | `voice.generationLlm.model` | `"claude-sonnet-4-6"` |
+| `voice.admission.mode` | `"generation_decides"` | Public admission mode |
+| `voice.admission.musicWakeLatchSeconds` | `15` | Wake follow-up window during music playback |
 
-Code: `runRealtimeBrainReply()` → `generateVoiceTurn()` in `voiceSessionManager.ts`
+Classifier provider/model are resolved from preset defaults or `agentStack.overrides.voiceAdmissionClassifier`.
 
-#### Tool Calling
+### Transcription
 
-Realtime-native planning (native + bridge) supports provider-native tool calling through the provider event loop:
-
-- provider emits function-call event
-- `handleRealtimeFunctionCallEvent()` accumulates arguments and latches runtime state
-- `executeLocalVoiceToolCall()` or `executeMcpVoiceToolCall()` performs the canonical tool execution
-- the result is returned via `sendFunctionCallOutput()`
-- `scheduleRealtimeToolFollowupResponse()` requests a follow-up provider response when the tool policy says one is needed
-
-Full-brain replies keep tool ownership in the upstream orchestrator loop. Realtime output transport is tool-disabled or exact-line constrained in that path so upstream-generated speech cannot start a second provider tool/reasoning pass.
-
-Code: event binding in `src/voice/sessionLifecycle.ts`, tool export in `src/voice/voiceToolCallToolRegistry.ts`, execution in `src/voice/voiceToolCallDispatch.ts`, orchestration in `src/voice/voiceToolCallInfra.ts`
-
-**Local tools** (`resolveVoiceRealtimeToolDescriptors()` in `voiceToolCalls.ts`):
-
-- `conversation_search`, `memory_search`, `memory_write`
-- `adaptive_directive_add`, `adaptive_directive_remove`
-- `music_search`, `music_play`, `music_queue_next`, `music_queue_add`, `music_stop`, `music_pause`, `music_resume`, `music_skip`, `music_now_playing`
-- `web_search`, `browser_browse` (when enabled)
-
-**MCP tools**: merged from configured MCP servers, dispatched via `executeMcpVoiceToolCall()`
-
----
-
-### Stage 5: Voice Output
-
-#### Realtime Audio Stream (native + bridge + brain)
-
-The realtime provider streams audio deltas. PCM 24kHz is upsampled to 48kHz, encoded to Opus, and sent to Discord.
-
-When realtime sessions use the full-brain path, the text LLM still generates the reply text, but delivery can stay on this realtime output transport. All providers expose a playback-oriented `requestPlaybackUtterance()` surface. The transport implementation is provider-specific:
-
-- OpenAI uses an out-of-band audio response with tools disabled.
-- xAI currently uses the normal text conversation path with an exact-line constraint.
-
-The product contract is the same in both cases: the upstream brain already decided the words, and the speech transport should render that line instead of replanning.
-
-#### TTS API Override (brain path)
-
-Text response can be sent to the OpenAI audio API for synthesis when realtime sessions use `voice.ttsMode="api"`. Output is then played via `playVoiceReplyInOrder()`.
-
-| Setting | Key Path | Default |
+| Setting | Default | Meaning |
 |---|---|---|
-| TTS model | `voice.openaiAudioApi.ttsModel` | `"gpt-4o-mini-tts"` |
-| TTS voice | `voice.openaiAudioApi.ttsVoice` | `"alloy"` |
-| TTS speed | `voice.openaiAudioApi.ttsSpeed` | `1` |
+| `voice.transcription.enabled` | `true` | Master ASR toggle |
+| `voice.transcription.languageMode` | `"auto"` | Auto or fixed language mode |
+| `voice.transcription.languageHint` | `"en"` | Language hint for fixed/biased transcription |
 
-#### Music Output
+### Voice Runtime Config
 
-When music playback starts, `haltSessionOutputForMusicPlayback()` clears pending bot output and stops speech. Music audio (yt-dlp → ffmpeg) shares the same AudioPlayer — calling `audioPlayer.play()` replaces the current resource.
-
-#### Output Lock & Barge-in
-
-Bot turn tracking relies on the canonical `assistantOutput` state machine (see `docs/voice/voice-output-state-machine.md`). When a human speaks during bot output, `interruptBotSpeechForBargeIn()` cancels the active response, clears queued audio, and stores interruption context for the next turn's prompt. See `docs/voice/barge-in.md`.
-
-System-initiated speech uses a separate opportunity lifecycle:
-
-- thought-engine utterances can be cancelled before `bot_audio_started` if promoted user speech takes the floor first
-
----
-
-## 5. Thought Engine
-
-The thought engine generates ambient thoughts during silence — a parallel pipeline that feeds into voice output. It uses a system-speech opportunity lifecycle, and remains skippable after fire.
-
-### Flow
-
-1. **Silence timer**: waits `minSilenceSeconds` after last voice activity
-2. **Eagerness roll**: random `[0,100)` vs `thoughtEngine.eagerness` — skip if roll fails
-3. **Generate candidate**: thought engine LLM produces a candidate (max `VOICE_THOUGHT_MAX_CHARS=220` chars)
-4. **Decision gate**: separate LLM call evaluates relevance — allow/reject + optional memory enrichment (`VOICE_THOUGHT_MEMORY_SEARCH_LIMIT=8` facts retrieved)
-5. **Delivery**: realtime utterance by default in realtime sessions; OpenAI audio API TTS when `voice.ttsMode="api"`
-
-### Topicality Bias
-
-As silence grows, the topicality anchor drifts: anchored (recent conversation) → blended → ambient (general/memory-driven).
-
-### Settings
-
-| Setting | Key Path | Default |
+| Setting | Default | Meaning |
 |---|---|---|
-| Enabled | `voice.thoughtEngine.enabled` | `true` |
-| Provider | `voice.thoughtEngine.provider` | `"anthropic"` |
-| Model | `voice.thoughtEngine.model` | `"claude-sonnet-4-6"` |
-| Temperature | `voice.thoughtEngine.temperature` | `1.2` |
-| Eagerness | `voice.thoughtEngine.eagerness` | `50` |
-| Min silence | `voice.thoughtEngine.minSilenceSeconds` | `15` |
-| Min interval | `voice.thoughtEngine.minSecondsBetweenThoughts` | `30` |
+| `agentStack.runtimeConfig.voice.runtimeMode` | `"openai_realtime"` | Realtime runtime family |
+| `agentStack.runtimeConfig.voice.openaiRealtime.model` | `"gpt-realtime"` | OpenAI realtime model |
+| `agentStack.runtimeConfig.voice.openaiRealtime.voice` | `"ash"` | OpenAI realtime voice |
+| `agentStack.runtimeConfig.voice.openaiRealtime.transcriptionMethod` | `"realtime_bridge"` | Bridge vs file-turn transcription mode |
+| `agentStack.runtimeConfig.voice.openaiRealtime.inputTranscriptionModel` | `"gpt-4o-mini-transcribe"` | Realtime ASR model |
+| `agentStack.runtimeConfig.voice.openaiRealtime.usePerUserAsrBridge` | `true` | Per-speaker bridge mode |
+| `agentStack.runtimeConfig.voice.openaiAudioApi.ttsModel` | `"gpt-4o-mini-tts"` | API TTS model |
+| `agentStack.runtimeConfig.voice.openaiAudioApi.ttsVoice` | `"alloy"` | API TTS voice |
+| `agentStack.runtimeConfig.voice.openaiAudioApi.ttsSpeed` | `1` | API TTS speed |
+| `agentStack.runtimeConfig.voice.generation` | dedicated model policy | Brain-path text generation binding |
 
-### Constants
+### Session Limits
 
-| Constant | Value |
-|---|---|
-| `VOICE_THOUGHT_LOOP_MIN_SILENCE_SECONDS` | `8` |
-| `VOICE_THOUGHT_LOOP_MAX_SILENCE_SECONDS` | `300` |
-| `VOICE_THOUGHT_LOOP_MIN_INTERVAL_SECONDS` | `8` |
-| `VOICE_THOUGHT_LOOP_MAX_INTERVAL_SECONDS` | `600` |
-| `VOICE_THOUGHT_LOOP_BUSY_RETRY_MS` | `1400` |
-| `VOICE_THOUGHT_MAX_CHARS` | `220` |
-| `VOICE_THOUGHT_DECISION_MAX_OUTPUT_TOKENS` | `220` |
-
----
-
-## 6. Provider Capabilities
-
-From `REALTIME_PROVIDER_CAPABILITIES` in `src/voice/voiceModes.ts`:
-
-| Capability | OpenAI (`openai_realtime`) | xAI (`voice_agent`) | Gemini (`gemini_realtime`) | ElevenLabs (`elevenlabs_realtime`) |
-|---|---|---|---|---|
-| `textInput` | yes | yes | yes | yes |
-| `updateInstructions` | yes | yes | yes | — |
-| `updateTools` | yes | yes | — | — |
-| `cancelResponse` | yes | yes | — | — |
-| `perUserAsr` | yes | yes | — | — |
-| `sharedAsr` | yes | yes | yes | yes |
-
-Guards use `providerSupports(mode, capability)` for capability routing.
-
----
-
-## 7. Settings Reference
-
-### Reply Path & Eagerness
-
-| Setting | Key Path | Type | Default |
-|---|---|---|---|
-| Reply path | `voice.replyPath` | `"native" \| "bridge" \| "brain"` | `"bridge"` |
-| Reply eagerness | `voice.replyEagerness` | `0-100` | `50` |
-| Command-only mode | `voice.commandOnlyMode` | `boolean` | `false` |
-
-### Providers
-
-| Setting | Key Path | Default |
+| Setting | Default | Meaning |
 |---|---|---|
-| Voice provider | `voice.voiceProvider` | `"openai"` |
-| Brain provider | `voice.brainProvider` | `"openai"` |
-| Transcriber provider | `voice.transcriberProvider` | `"openai"` |
+| `voice.sessionLimits.maxSessionMinutes` | `30` | Max session duration |
+| `voice.sessionLimits.inactivityLeaveSeconds` | `300` | Auto-leave inactivity timer |
+| `voice.sessionLimits.maxSessionsPerDay` | `120` | Daily session cap |
+| `voice.sessionLimits.maxConcurrentSessions` | `3` | Concurrency cap |
 
-### Generation LLM (brain path)
+### Voice Thought Engine
 
-| Setting | Key Path | Default |
+| Setting | Default | Meaning |
 |---|---|---|
-| Use text model | `voice.generationLlm.useTextModel` | `true` |
-| Provider | `voice.generationLlm.provider` | `"anthropic"` |
-| Model | `voice.generationLlm.model` | `"claude-sonnet-4-6"` |
+| `initiative.voice.enabled` | `true` | Enable proactive voice thoughts |
+| `initiative.voice.eagerness` | `50` | Probability gate before thought generation |
+| `initiative.voice.minSilenceSeconds` | `45` | Required silence before a thought attempt |
+| `initiative.voice.minSecondsBetweenThoughts` | `60` | Minimum spacing between thought attempts |
 
-### Reply Decision LLM (bridge classifier)
+## 7. Provider Capabilities
 
-| Setting | Key Path | Default |
+Current runtime families:
+
+| Runtime | Typical provider | Notes |
 |---|---|---|
-| Provider | `voice.replyDecisionLlm.provider` | `"anthropic"` |
-| Model | `voice.replyDecisionLlm.model` | `"claude-haiku-4-5"` |
-| Reasoning effort | `voice.replyDecisionLlm.reasoningEffort` | `"minimal"` |
-| Admission mode | `voice.admission.mode` | `"classifier_gate"` |
-| Music wake latch | `voice.replyDecisionLlm.musicWakeLatchSeconds` | `15` |
+| `openai_realtime` | OpenAI | Supports native, bridge, and brain transports |
+| `voice_agent` | xAI | Shipped native path via `grok_native_agent` preset |
+| `gemini_realtime` | Gemini | Realtime transport/runtime family |
+| `elevenlabs_realtime` | ElevenLabs | Realtime output/runtime family |
 
-### Thought Engine
+Provider differences live in thin adapters. The higher-level product behavior stays in shared orchestration, prompts, and tool execution.
 
-| Setting | Key Path | Default |
-|---|---|---|
-| Enabled | `voice.thoughtEngine.enabled` | `true` |
-| Provider | `voice.thoughtEngine.provider` | `"anthropic"` |
-| Model | `voice.thoughtEngine.model` | `"claude-sonnet-4-6"` |
-| Temperature | `voice.thoughtEngine.temperature` | `1.2` |
-| Eagerness | `voice.thoughtEngine.eagerness` | `50` |
-| Min silence | `voice.thoughtEngine.minSilenceSeconds` | `15` |
-| Min between thoughts | `voice.thoughtEngine.minSecondsBetweenThoughts` | `30` |
+## 8. Source Files
 
-### ASR & Speech Output
-
-| Setting | Key Path | Default |
-|---|---|---|
-| ASR model (bridge) | `voice.openaiRealtime.inputTranscriptionModel` | `"gpt-4o-transcribe"` |
-| Per-user bridge | `voice.openaiRealtime.usePerUserAsrBridge` | `true` |
-| Transcription method | `voice.openaiRealtime.transcriptionMethod` | `"realtime_bridge"` |
-| Language mode | `voice.asrLanguageMode` | `"auto"` |
-| Language hint | `voice.asrLanguageHint` | `"en"` |
-| ASR model (file) | `voice.openaiRealtime.inputTranscriptionModel` | `"gpt-4o-mini-transcribe"` |
-| TTS model | `voice.openaiAudioApi.ttsModel` | `"gpt-4o-mini-tts"` |
-| TTS voice | `voice.openaiAudioApi.ttsVoice` | `"alloy"` |
-| TTS speed | `voice.openaiAudioApi.ttsSpeed` | `1` |
-
-### Session
-
-| Setting | Key Path | Default |
-|---|---|---|
-| Max session minutes | `voice.maxSessionMinutes` | `30` |
-| Inactivity leave | `voice.inactivityLeaveSeconds` | `300` |
-
----
-
-## 8. Screen Share Integration
-
-Screen share is layered onto the same brain/runtime path:
-- Frame ingestion: `src/voice/voiceStreamWatch.ts`
-- Commentary uses `requestTextUtterance` flow when available
-- Works across realtime providers through shared session orchestration
-- Commentary responses tracked separately via `pendingCommentaryResponseId` to prevent stacking (staleness valve at 30s)
-
----
-
-## 9. Extensibility
-
-- **Add voice providers**: add entry to `REALTIME_PROVIDER_CAPABILITIES` in `src/voice/voiceModes.ts`, map runtime in `resolveVoiceRuntimeMode()`
-- **Add brain providers**: extend provider resolution in `voiceSessionHelpers.ts` and reply strategy handling
-- **Add transcriber providers**: extend `TRANSCRIBER_PROVIDERS` and per-turn transcription plumbing
-- **Add tools**: extend `resolveVoiceRealtimeToolDescriptors()` in `src/voice/voiceToolCalls.ts`
+- `src/settings/agentStack.ts`
+- `src/settings/settingsSchema.ts`
+- `src/voice/voiceConfigResolver.ts`
+- `src/voice/voiceReplyDecision.ts`
+- `src/voice/turnProcessor.ts`
+- `src/voice/sessionLifecycle.ts`
+- `src/voice/voiceToolCallDispatch.ts`
+- `src/voice/voiceThoughtGeneration.ts`

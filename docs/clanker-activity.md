@@ -1,25 +1,15 @@
 # Clanker Activity Model
 
-> **Scope:** All activity paths (text + voice) — which path fired and which slider controls it.
-> Barge-in and noise rejection: [`barge-in.md`](voice/barge-in.md)
-> Voice pipeline stages, providers, and per-stage settings: [`voice-provider-abstraction.md`](voice/voice-provider-abstraction.md)
+> **Scope:** Current shipped activity paths across text and voice.
+> Unified text initiative cycle: [`initiative-unified-spec.md`](initiative-unified-spec.md)
+> Voice pipeline and stage settings: [`voice/voice-provider-abstraction.md`](voice/voice-provider-abstraction.md)
+> Architecture overview: [`technical-architecture.md`](technical-architecture.md)
 
-This document explains how the bot decides when to speak in text channels and voice sessions, which settings control each path, how tool calling fits into the runtime, and where to look in code and the dashboard when behavior needs to change.
+This document is the source of truth for how the bot decides when to speak, which runtime path is active, and which settings surface owns each part of that behavior.
 
 ### Autonomy Principle
 
-Settings control the agent's environment, not its behavior. Eagerness adjusts how often the agent is consulted (via the admission cost gate), not what it says. Guidance text is prompt context the model reasons about, not rules it follows. The model can always choose silence via `[SKIP]`. See `AGENTS.md` — Agent Autonomy section.
-
-The admission gates in this document are **cost gates** — they decide whether it's worth calling the LLM, not whether the bot should respond. The LLM decides whether to respond. At high eagerness the gates widen and the model sees more messages; at low eagerness the gates narrow to save cost and match the operator's intent that the bot should be quiet.
-
-It is the source of truth for the current activity model:
-
-- direct mentions and replies
-- recent-window follow-up replies
-- cold-channel text thought-loop replies
-- discovery / proactive posts
-- voice session reply behavior and voice thought engine behavior
-- shared text/voice tool calling
+Settings shape context, budgets, and transport. They do not script the bot's creative behavior. Admission gates are cost/noise gates, not relevance gates. The model can always choose silence through `[SKIP]`, and tools are capabilities it may use when they help.
 
 ![Clanker Activity Model](diagrams/clanker-activity.png)
 
@@ -31,685 +21,317 @@ It is the source of truth for the current activity model:
 
 ## Mental Model
 
-There are four distinct text activity paths:
+Text has three shipped paths:
 
 1. `Directly addressed reply`
-Clanker is pinged, replied to, or called by exact name / alias. This enters the reply path immediately.
-
 2. `Recent-window follow-up reply`
-Clanker already spoke in the recent message window for that channel/thread, so it is allowed to continue participating.
+3. `Unified initiative cycle`
 
-3. `Text thought loop`
-Nobody explicitly called Clanker, and Clanker is not already in the current recent window. A timer periodically checks eligible channels and decides whether Clanker wants to chime in.
+Voice has three shipped paths:
 
-4. `Discovery post`
-A separate proactive posting system that can post standalone discovery/shitpost content in explicit discovery channels.
+1. `Directed or engaged voice reply`
+2. `Voice thought engine`
+3. `Tool-assisted reply inside the active turn`
 
-These are related, but they are not the same system and they are not controlled by the same settings.
+Discovery feed items are optional context inside the unified initiative cycle.
 
-The runtime has enough separate paths and sliders that the activity model needs its own dedicated reference.
+## Text Activity Paths
 
-## Operator Checklist
-
-If you are trying to understand or tune behavior, these are the main questions:
-
-1. Is this text or voice?
-2. Is the bot being directly addressed, already in the recent conversational window, or cold-starting into a conversation?
-3. Is this a reactive reply path, a scheduled thought-loop path, or a discovery/proactive path?
-4. Does the bot need a tool, or should it answer from continuity and current prompt context alone?
-5. Which dashboard section owns the relevant knob?
-
-## Activity Paths
-
-### 1. Directly Addressed
+### 1. Directly Addressed Reply
 
 This is the highest-priority text path.
 
-Examples:
+Triggers include:
 
-- user mentions the bot
-- user replies directly to a bot message
-- user says the bot name or configured alias exactly
+- the user mentions the bot
+- the user replies to a bot message
+- the user clearly uses the configured bot name or alias
 
 Behavior:
 
-- Clanker enters the reply path immediately.
-- Reply eagerness is not meant to suppress this.
-- The reply can still be blocked by global controls like:
-  - `permissions.allowReplies = false`
-  - rate limits / cooldowns
-  - safety refusal
-  - runtime/model failure
+- the message enters the reply pipeline immediately
+- the model still decides the exact reply or `[SKIP]`
+- global blockers still apply, including permissions, rate limits, cooldowns, and runtime failures
+
+Main settings:
+
+- `permissions.replies.allowReplies`
+- `interaction.activity.minSecondsBetweenMessages`
+- `interaction.activity.replyCoalesceWindowSeconds`
+- `interaction.activity.replyEagerness`
 
 Relevant code:
 
 - `src/bot/replyAdmission.ts`
-- `src/bot.ts`
+- `src/bot/replyPipeline.ts`
+- `src/prompts/promptText.ts`
 
-## 2. Recent-Window Follow-Up
+### 2. Recent-Window Follow-Up Reply
 
-If Clanker already has a message in the recent channel window, the next non-addressed turns can still enter the reply decision loop.
-
-This is what lets Clanker continue a thread after already joining it.
-
-Behavior:
-
-- admission is allowed because the bot is already in-context
-- `permissions.allowUnsolicitedReplies` still has to be on for this path
-- once admitted, reply eagerness still matters
-- the model can still choose to respond or `[SKIP]`
-
-Relevant code:
-
-- `hasBotMessageInRecentWindow(...)` in `src/bot/replyAdmission.ts`
-- `shouldAttemptReplyDecision(...)` in `src/bot/replyAdmission.ts`
-- text prompt eagerness wording in `src/prompts/promptText.ts`
-
-## 3. Text Thought Loop
-
-This is the cold-start conversational lurking path.
-
-It exists for cases like:
-
-- two people are talking in `#general`
-- nobody addressed Clanker
-- Clanker has not posted in the recent window yet
-- Clanker may still decide to jump in
-
-The thought loop is:
-
-- timer-driven
-- in-process only
-- checked every 60 seconds
-- scoped to explicit `permissions.replyChannelIds`
-- capped by cooldown and daily limits
-- limited to channels with recent human activity
-- intentionally separate from the normal unsolicited-reply admission flag
-
-Important distinction:
-
-- the loop checks every 60 seconds
-- that does **not** mean it posts every 60 seconds
-- actual posting is limited by `initiative.text.minMinutesBetweenThoughts` and `initiative.text.maxThoughtsPerDay`
-
-The thought loop runs only while the bot process is online, with no replay catchup.
-
-Setting boundary:
-
-- `initiative.text.enabled` is the switch for this path
-- `permissions.allowUnsolicitedReplies` controls reply admission, not the thought loop — lurking/chiming in on a timer is a separate proactive system
-
-Relevant code:
-
-- `maybeRunTextThoughtLoopCycle()` in `src/bot.ts`
-- `pickTextThoughtLoopCandidate()` in `src/bot.ts`
-
-## 4. Discovery Posts
-
-Discovery posts are a separate proactive system.
-
-These are not normal conversational chime-ins. They are standalone posts based on discovery scheduling and optional external link/media sourcing.
+If the bot already has a message in the recent channel window, later non-addressed turns can still enter reply admission as a follow-up.
 
 Behavior:
 
-- only allowed in explicit `discovery.channelIds`
-- uses discovery pacing/schedule settings, not thought-loop cadence
-- does not require recent human activity in the channel
+- this is still a reactive reply path, not initiative
+- `permissions.replies.allowUnsolicitedReplies` still matters
+- `interaction.activity.replyEagerness` shapes how often the model is consulted and how socially active it should feel
+- the model can still `[SKIP]`
 
 Relevant code:
 
-- `maybeRunInitiativeCycle()` in `src/bot.ts`
+- `src/bot/replyAdmission.ts`
+- `src/bot/replyFollowup.ts`
+- `src/prompts/promptText.ts`
+
+### 3. Unified Initiative Cycle
+
+This is the cold-start text path. It handles both conversational chime-ins and standalone proactive posts.
+
+Behavior:
+
+- runs on an in-process 60 second tick
+- applies deterministic gates first: enabled, cooldown, daily cap, and eagerness probability
+- builds context for eligible channels, passive discovery feed items, source performance, and memory
+- gives the model a bounded tool loop
+- the model decides whether to post, which channel fits, whether to use tools, whether to include links, and whether to request media
+
+Canonical channel pool:
+
+- `permissions.replies.replyChannelIds`
+
+`initiative.discovery.*` controls feed and media infrastructure for the same cycle.
+
+Main settings:
+
+- `initiative.text.enabled`
+- `initiative.text.eagerness`
+- `initiative.text.minMinutesBetweenPosts`
+- `initiative.text.maxPostsPerDay`
+- `initiative.text.lookbackMessages`
+- `initiative.text.allowActiveCuriosity`
+- `initiative.text.maxToolSteps`
+- `initiative.text.maxToolCalls`
+- `initiative.discovery.*`
+
+Relevant code:
+
 - `src/bot/initiativeEngine.ts`
+- `src/services/discovery.ts`
+- `src/prompts/promptText.ts`
+- `src/store/settingsNormalization.ts`
 
 ## Voice Activity Paths
 
-Voice has a different surface area than text, but the same high-level split still exists:
+### 1. Directed Or Engaged Voice Reply
 
-1. `Explicit voice command / direct address`
-2. `Conversation-engaged follow-up reply`
-3. `Voice thought engine`
-4. `Voice tool use during a reply`
-
-The important difference is that voice behavior runs inside an active voice session and is gated by turn segmentation, silence windows, speaking state, and session-level engagement tracking.
-
-### 5. Directly Addressed In Voice
-
-Examples:
-
-- someone clearly says the bot's name in VC
-- someone issues an explicit join/leave/music command aimed at the bot
-- the current speaker is clearly continuing a command/reply chain already aimed at the bot
+Voice behavior runs only inside an active voice session. The reply path considers direct address, command follow-up state, speaker ownership, recent room context, and output locking.
 
 Behavior:
 
-- the voice decision layer is biased toward replying
-- the reply-decision LLM and addressing state both matter
-- the runtime logs one `voice_turn_addressing` decision record per processed turn
+- deterministic gates run first
+- if the turn survives, the active reply path handles generation
+- the generation layer decides the actual words or silence
+
+Main settings:
+
+- `voice.enabled`
+- `voice.conversationPolicy.replyEagerness`
+- `voice.conversationPolicy.commandOnlyMode`
+- `voice.conversationPolicy.replyPath`
+- `voice.admission.mode`
+- `voice.admission.musicWakeLatchSeconds`
 
 Relevant code:
 
-- `evaluateVoiceReplyDecision(...)` in `src/voice/voiceReplyDecision.ts`
-- `buildVoiceConversationContext(...)` in `src/voice/voiceReplyDecision.ts`
-- `buildVoiceAddressingState(...)` in `src/voice/voiceAddressing.ts`
-- `voice_turn_addressing` action logging in `src/voice/turnProcessor.ts`
+- `src/voice/voiceReplyDecision.ts`
+- `src/voice/turnProcessor.ts`
+- `src/voice/voiceConfigResolver.ts`
 
-### 6. Voice Reply Classifier Gate
+### 2. Voice Admission Gate
 
-The classifier exists because bridge mode (OpenAI Realtime) has no `[SKIP]` — if you give it text, it always speaks. In a group voice channel, the bot would respond to every utterance without a gate. The classifier gives bridge mode the same "should I speak?" autonomy that brain mode has natively via `[SKIP]`.
+Voice admission has two layers:
 
-The classifier is an LLM (Sonnet) that receives the same social context the generation model would — transcript, speaker, participants, eagerness, engagement history — and reasons about whether the bot should speak. Its eagerness context is framed as social mode descriptions, not prescriptive rules, so it reasons about the room rather than following a decision tree.
+1. deterministic gates
+2. classifier or generation-owned skip behavior, depending on reply path
 
-Mode defaults:
+Current public surface:
 
-- **Bridge:** classifier always on — it's the only gate before generation, providing the `[SKIP]` equivalent.
-- **Brain:** classifier off by default (generation LLM decides via `[SKIP]`), toggleable on via dashboard for cost savings.
-- **Native:** not applicable — audio flows directly to the realtime model.
+- `voice.admission.mode`
+- `voice.admission.musicWakeLatchSeconds`
+- `agentStack.overrides.voiceAdmissionClassifier`
 
-Decision flow:
+Runtime behavior:
 
-- Direct address (wake word) → stronger classifier/generation context; also arms the music wake latch when music is active
-- Command followup → fast-path allow
-- Owned tool followup from the same speaker → fast-path allow
-- Cross-talk during an owned tool followup → block
-- Eagerness disabled no longer hard-blocks by itself
-- Addressed-to-other signal → classifier context (strong deny prior, not hard deterministic block)
-- Full-brain/file-ASR path → `generation_decides` (the text LLM handles skip via `[SKIP]`)
-- Music playing and no wake latch → `music_playing_not_awake`
-- `voice.admission.mode=classifier_gate` → classifier YES/NO → `classifier_allow` / `classifier_deny`
-- `voice.admission.mode=generation_decides` → `generation_decides`
-- Classifier prompt context includes attributed recent history (`speaker: "text"`) up to 6 turns / 900 chars plus current turn fields
+- `bridge` reply path always behaves as classifier-first, because the text-to-realtime bridge has no native `[SKIP]`
+- `brain` reply path defaults to `generation_decides`
+- `native` reply path does not use the text classifier path
+- internal runtime labels like `hard_classifier` and `generation_only` are implementation details, not canonical settings names
 
 Relevant code:
 
-- `evaluateVoiceReplyDecision(...)` in `src/voice/voiceReplyDecision.ts`
-- `runVoiceReplyClassifier(...)` in `src/voice/voiceReplyDecision.ts`
-- `buildVoiceAddressingState(...)` in `src/voice/voiceAddressing.ts`
-- `runRealtimeTurn(...)` and `runFileAsrTurn(...)` in `src/voice/turnProcessor.ts`
+- `src/voice/voiceReplyDecision.ts`
+- `src/settings/agentStack.ts`
 
-### 7. Voice Thought Engine
+### 3. Voice Thought Engine
 
-The voice thought engine is the VC equivalent of a timer-driven conversational chime-in system.
+This is the voice equivalent of unsolicited initiative. It runs only while a voice session is active and the room is quiet enough.
 
 Behavior:
 
-- only runs while an active voice session exists
-- scheduled by silence and cooldown, not by a fixed global cron
-- uses `initiative.voice.*` settings
-- is separate from direct-address handling
+- gated by silence and spacing, not by a global cron
+- eagerness is a probability gate before generation
+- even after the gate passes, the generated thought can still be rejected or skipped
+- delivery uses the active voice output transport
 
-Important distinction:
+Canonical cadence settings:
 
-- voice thought timing is per session
-- the engine is scheduled with `setTimeout(...)` based on silence and minimum spacing
-- it is not replayed after downtime or after the session ends
+- `initiative.voice.enabled`
+- `initiative.voice.eagerness`
+- `initiative.voice.minSilenceSeconds`
+- `initiative.voice.minSecondsBetweenThoughts`
 
-Relevant code:
+Implementation note:
 
-- `resolveVoiceThoughtEngineConfig(...)` in `src/voice/thoughtEngine.ts`
-- `scheduleVoiceThoughtLoop(...)` in `src/voice/thoughtEngine.ts`
-- `maybeRunVoiceThoughtLoop(...)` in `src/voice/thoughtEngine.ts`
-
-### 8. Voice Runtime Modes Matter
-
-There are three voice runtime styles to keep in mind:
-
-- `realtime native`
-  - provider-native realtime generation owns more of the turn loop
-
-- `brain / bridge`
-  - transcript text is pushed through the shared continuity + tool-calling brain path
-  - non-direct-address turns are admitted by `voice.admission.mode`:
-    - `classifier_gate`: YES/NO classifier gate
-    - `generation_decides`: generation decides reply vs skip
-
-- `brain` with `voice.openaiRealtime.transcriptionMethod="file_wav"` and/or `voice.ttsMode="api"`
-  - transcription, text generation, and TTS are separate stages
-  - the text LLM decides whether to reply or `[SKIP]` (reason: `generation_decides`)
-
-The user-visible behavior should stay broadly aligned, but the transport is different. The most important operator takeaway is that the continuity model and tool model are intentionally shared, even when the audio pipeline is not.
+- the live thought generator currently resolves its provider/model from the orchestrator binding during generation
 
 Relevant code:
 
-- `src/voice/voiceModes.ts`
-- `src/voice/voiceSessionHelpers.ts`
-- `src/voice/voiceSessionManager.ts`
-- `src/bot/voiceReplies.ts`
+- `src/voice/thoughtEngine.ts`
+- `src/voice/voiceThoughtGeneration.ts`
+- `src/settings/agentStack.ts`
+
+### 4. Voice Runtime Modes
+
+Voice uses three reply-path shapes:
+
+- `native`: provider-native audio in and audio out
+- `bridge`: local transcription, then labeled text into the realtime provider
+- `brain`: orchestrator-owned text generation, then realtime or API TTS delivery
+
+The operator-facing knobs are:
+
+- `voice.conversationPolicy.replyPath`
+- `voice.conversationPolicy.ttsMode`
+- `agentStack.runtimeConfig.voice.runtimeMode`
+- `agentStack.runtimeConfig.voice.generation`
 
 ## Channel Scope Rules
 
-### Reply Channels
+### Text Scope
 
-`permissions.replyChannelIds` controls where reply/lurk behavior is treated as a reply-channel context.
+Reactive replies and initiative both respect the text permission surfaces:
 
-Current behavior:
+- `permissions.replies.replyChannelIds`
+- `permissions.replies.allowedChannelIds`
+- `permissions.replies.blockedChannelIds`
+- `permissions.replies.blockedUserIds`
 
-- if `replyChannelIds` is non-empty:
-  - only those listed channels are reply channels
+`replyChannelIds` is the unified initiative pool. If it is empty, the initiative cycle has no eligible text channels.
 
-`non-private` here means:
+### Voice Scope
 
-- guild text channels
-- public threads
-- not DMs
-- not private threads
+Voice session eligibility is controlled separately:
 
-`allowed` still matters:
+- `voice.channelPolicy.allowedChannelIds`
+- `voice.channelPolicy.blockedChannelIds`
+- `voice.channelPolicy.blockedUserIds`
+- `voice.sessionLimits.*`
 
-- `permissions.allowedChannelIds` can limit the overall text-channel set
-- `permissions.blockedChannelIds` always excludes channels
-
-### Discovery Channels
-
-`discovery.channelIds` is explicit-only.
-
-If it is empty:
-
-- discovery posting is disabled everywhere
-
-There is no “all channels by default” fallback for discovery posts.
-
-### Voice Channel Scope
-
-Voice uses a separate permission scope from text:
-
-- `voice.allowedVoiceChannelIds`
-- `voice.blockedVoiceChannelIds`
-- `voice.blockedVoiceUserIds`
-
-Text reply-channel defaults do not affect voice session eligibility.
+Text channel permissions do not determine which voice channels the bot may join.
 
 ## Setting Map
 
-### Immediate Reply Controls
+### Text Reply Controls
 
-- `permissions.allowReplies`
-  - global text reply master switch
+| Surface | What it controls |
+|---|---|
+| `permissions.replies.allowReplies` | Global text reply master switch |
+| `permissions.replies.allowUnsolicitedReplies` | Whether non-addressed reactive follow-up replies may enter admission |
+| `interaction.activity.replyEagerness` | Reactive reply consultation rate and prompt social mode |
+| `interaction.activity.minSecondsBetweenMessages` | Global spacing between bot text messages |
 
-- `permissions.allowUnsolicitedReplies`
-  - controls whether non-direct, non-forced reply attempts can happen once admitted by the normal unsolicited path
-  - scope: unsolicited reply admission only (direct-address replies and the text thought loop are independent systems)
+### Text Initiative Controls
 
-- `activity.replyEagerness`
-  - eagerness for admitted unsolicited replies (0–100)
-  - primarily affects recent-window follow-up and model skip behavior once the reply loop runs
-
-- `activity.minSecondsBetweenMessages`
-  - global text spacing between bot messages
-
-### Reply Eagerness Tiers
-
-The eagerness value (0–100) from `activity.replyEagerness` maps to graduated prompt context. The raw number is also exposed to the LLM so it has a continuous sense of the scale. These are descriptions of the bot's social mode, not behavioral rules — the model reasons about them and decides what fits.
-
-| Range | Label | Context provided to model |
-|-------|-------|--------------------------|
-| 0–15 | Lurker | The bot prefers to stay quiet unless someone clearly wants its attention |
-| 16–35 | Observer | The bot observes more than it talks; comfortable chiming in when genuinely engaging |
-| 36–55 | Selective | The bot is selective — skips unless it has something genuinely useful, interesting, or funny |
-| 56–75 | Engaged | The bot is engaged — contributes when it fits the flow, picks its moments |
-| 76–90 | Active | The bot is active — lighter contributions are fine if they fit naturally |
-| 91–100 | Very social | The bot treats the channel like a group hangout — riffing, casual reactions, banter |
-
-Eagerness also controls the **admission cost gate** — how many messages reach the LLM at all. At low eagerness, only clearly-addressed messages pass. At high eagerness, the gate is nearly transparent and the model decides via `[SKIP]` on most messages.
-
-### Directed-At-Someone-Else Detection
-
-When the trigger message is structurally directed at another user, the skip prompt is strengthened. Two signals are detected:
-
-- `mentionsOtherUsers` — the message @mentions one or more users, none of which are the bot
-- `repliesToOtherUser` — the message is a Discord reply to another user's message (not the bot's)
-
-How eagerness modulates the skip:
-
-- At eagerness ≤ 75: hard skip instruction — "Output [SKIP] unless the message also clearly invites you to participate"
-- At eagerness > 75: soft skip — "Strongly prefer [SKIP] — only jump in if you have something genuinely worth adding to their exchange"
-
-### Conversational Awareness
-
-Even without structural signals (no @mention, no Discord reply), the prompt instructs the LLM to detect when people are talking to each other:
-
-- At eagerness ≤ 60: "If people are talking to each other (using names, replying back and forth, making plans together), output [SKIP]."
-- At eagerness > 60: "If people are clearly having a private or directed exchange with each other, prefer [SKIP] unless you can genuinely add to the conversation."
-
-This covers cases like "yo James let's play later" where no platform mention is used but the message is clearly directed at someone else.
-
-Relevant code:
-
-- `mentionsOtherUsers` and `repliesToOtherUser` computed in `src/bot/replyPipeline.ts` (`buildReplyContext`)
-- eagerness tiers, directed-at-someone-else, and conversational awareness prompts in `src/prompts/promptText.ts` (`buildReplyPrompt`)
-
-### Thought Loop Controls
-
-- `initiative.text.enabled`
-  - enables/disables the cold-channel conversational lurking loop
-  - this is separate from `permissions.allowUnsolicitedReplies`
-
-- `initiative.text.eagerness`
-  - controls how willing Clanker is to chime in during thought-loop checks
-
-- `initiative.text.minMinutesBetweenThoughts`
-  - cooldown between thought-loop posts
-
-- `initiative.text.maxThoughtsPerDay`
-  - daily cap for thought-loop posts
-
-- `initiative.text.lookbackMessages`
-  - how much recent context the thought loop inspects when evaluating a channel
-
-### Discovery Controls
-
-- `discovery.enabled`
-- `discovery.channelIds`
-- `discovery.maxPostsPerDay`
-- `discovery.minMinutesBetweenPosts`
-- `discovery.pacingMode`
-- discovery media/link sourcing settings
-
-These affect discovery posts only, not normal conversation replies.
+| Surface | What it controls |
+|---|---|
+| `initiative.text.enabled` | Master switch for unified text initiative |
+| `initiative.text.eagerness` | Probability gate before the initiative LLM call |
+| `initiative.text.minMinutesBetweenPosts` | Minimum gap between initiative posts |
+| `initiative.text.maxPostsPerDay` | Daily initiative budget |
+| `initiative.text.lookbackMessages` | Per-channel context window size |
+| `initiative.text.allowActiveCuriosity` | Whether `web_search` and `browser_browse` are available |
+| `initiative.text.maxToolSteps` / `initiative.text.maxToolCalls` | Initiative tool-loop budgets |
+| `initiative.discovery.*` | Passive feed collection, source curation, and media budgets |
 
 ### Voice Controls
 
-- `voice.enabled`
-  - master switch for voice features
-
-- `voice.replyEagerness`
-  - general voice-reply willingness once a turn is admitted into generation
-
-- `voice.commandOnlyMode`
-  - narrows voice behavior toward commands/control instead of open-ended chatting
-
-- `initiative.voice.enabled`
-  - master switch for timer/silence-driven unsolicited VC thoughts
-
-- `initiative.voice.eagerness`
-  - how willing Clanker is to speak up on its own in an active VC
-
-- `initiative.voice.minSilenceSeconds`
-  - required silence before a voice thought can be scheduled
-
-- `initiative.voice.minSecondsBetweenThoughts`
-  - minimum spacing between voice thought-engine replies
-
-- `voice.replyPath`
-  - `native`, `bridge`, or `brain`
-  - changes how replies are transported, not the operator-facing continuity model
-
-- `voice.admission.mode`
-  - `classifier_gate` or `generation_decides` for realtime bridge admission
-
-- `voice.admission.musicWakeLatchSeconds`
-  - sliding latch window (default 15s) that allows follow-up turns during active music after a wake/direct-address
-
-- `agentStack.overrides.voiceAdmissionClassifier`
-  - model used for the realtime admission classifier in `classifier_gate` mode
-
-- classifier context window
-  - attributed recent transcript history (`speaker: "text"`) up to 6 turns / 900 chars, plus current turn fields
-
-- `agentStack.runtimeConfig.voice.generation.*`
-  - model used for voice-turn generation in non-native generation paths and `generation_decides` admission behavior
-
-- `voice.openaiRealtime.*`, `voice.geminiRealtime.*`, `voice.elevenLabsRealtime.*`, `voice.openaiAudioApi.*`
-  - provider- and transport-specific controls
+| Surface | What it controls |
+|---|---|
+| `voice.conversationPolicy.replyEagerness` | Voice reply consultation/social mode |
+| `voice.conversationPolicy.commandOnlyMode` | Restricts voice behavior toward commands and explicit wakeups |
+| `voice.conversationPolicy.replyPath` | `native`, `bridge`, or `brain` |
+| `voice.conversationPolicy.ttsMode` | Realtime or API TTS output for brain path |
+| `voice.admission.mode` | Public admission mode surface |
+| `voice.admission.musicWakeLatchSeconds` | Follow-up wake window during music playback |
+| `voice.transcription.*` | ASR enablement and language hinting |
+| `voice.sessionLimits.*` | Session duration and concurrency limits |
+| `agentStack.runtimeConfig.voice.*` | Provider/runtime-specific transport and generation config |
+| `initiative.voice.*` | Voice thought-engine cadence |
 
 ## Tool Calling Model
 
-Tool calling is part of the activity model because it changes what the bot can do during a turn and what users should expect from follow-up behavior.
+Text and voice share most of the same conversational tool surface. The tools are capabilities the model may choose when they help.
 
-There are three important rules:
-
-1. Tools are available to the brain, not to the user directly.
-2. Text and voice share most of the same core conversational tools.
-3. Tool calling is on-demand; it should not happen every turn.
-
-### Shared Core Conversational Tools
-
-Shared text/voice conversational tools include:
+Shared tools include:
 
 - `conversation_search`
 - `memory_search`
 - `memory_write`
-- `adaptive_directive_add`
-- `adaptive_directive_remove`
 - `web_search`
 - `browser_browse`
+- `code_task`
 
-These are the tools that let Clanker:
+Voice-only or voice-centric tools include:
 
-- recall earlier text or voice conversations
-- remember durable facts
-- persist recurring behavior guidance
-- look things up on the live web
-- use the browser agent when a normal web search is not enough
-
-### Tool-Calling Paths
-
-Text has two tool-calling shapes:
-
-- normal text reply loop
-- STT-pipeline voice generation, which reuses the text reply tool set
-
-Realtime voice has its own transport, but the same conceptual tool model:
-
-- tool descriptors are registered with the realtime provider
-- function-call events arrive from the provider
-- local tools and MCP tools execute in runtime
-- results are sent back into the conversation
-
-Important operator expectation:
-
-- the tool surface is mostly shared
-- the transport differs between native realtime, bridge, and full-brain/API-override replies
-- some tools remain modality-specific when they only make sense in voice
+- `music_*`
+- session transport / leave actions
+- provider-native realtime function calls
 
 Relevant code:
 
 - `src/tools/replyTools.ts`
-- `src/bot/replyPipeline.ts`
-- `src/bot/voiceReplies.ts`
 - `src/voice/voiceToolCalls.ts`
-- `src/voice/voiceSessionManager.ts`
+- `src/voice/voiceToolCallDispatch.ts`
 
-### Tool Availability And Toggles
+## Defaults Worth Remembering
 
-Tool use is still affected by settings and runtime state:
+Base initiative defaults from `settingsSchema.ts`:
 
-- memory tools depend on `memory.enabled`
-- adaptive directive persistence depends on `adaptiveDirectives.enabled`
-- browser browsing depends on browser-agent availability and caller opt-in
-- automations intentionally opt out of `browser_browse` right now
-- web search depends on `webSearch.enabled` and rate/budget conditions
+- `initiative.text.enabled = true`
+- `initiative.text.eagerness = 20`
+- `initiative.text.minMinutesBetweenPosts = 60`
+- `initiative.text.maxPostsPerDay = 3`
+- `initiative.voice.enabled = true`
+- `initiative.voice.eagerness = 50`
+- `initiative.voice.minSilenceSeconds = 45`
+- `initiative.voice.minSecondsBetweenThoughts = 60`
 
-So "the bot has a tool" and "the tool is available on this exact turn" are not always the same thing.
+Base voice defaults from `settingsSchema.ts`:
 
-## Global Guardrails That Still Apply
+- `voice.conversationPolicy.replyPath = "brain"`
+- `voice.conversationPolicy.ttsMode = "realtime"`
+- `voice.admission.mode = "generation_decides"`
 
-Even though the activity paths differ, they still share some global runtime blockers:
-
-- `permissions.allowReplies`
-  - disables normal text reply generation entirely
-
-- `permissions.maxMessagesPerHour`
-  - caps all outgoing text activity
-
-- `activity.minSecondsBetweenMessages`
-  - global spacing between bot messages
-
-- voice session state, silence windows, and addressing confidence
-- transport-specific availability for native realtime vs bridge/stt paths
-- safety / model refusal
-- runtime/provider failure
-
-So "direct mention" means "the bot must enter the reply path," not "a visible message is physically guaranteed under every failure mode."
-
-## Which Slider Actually Matters?
-
-### Direct mention / direct reply to bot
-
-Primary driver:
-
-- direct address
-
-Reply eagerness:
-
-- effectively not the deciding factor
-
-### Clanker is already in the recent window
-
-Primary driver:
-
-- recent-window follow-up admission
-
-Reply eagerness:
-
-- yes, this matters
-
-### Two humans are talking and Clanker has not spoken yet
-
-Primary driver:
-
-- text thought loop
-
-Reply eagerness:
-
-- not the main control here
-
-Thought-loop eagerness:
-
-- this is the important one
-
-### Standalone proactive post
-
-Primary driver:
-
-- discovery scheduler
-
-Thought-loop eagerness:
-
-- not relevant
-
-Discovery settings:
-
-- these are the important ones
-
-## Double-Posting Protection
-
-The thought loop intentionally backs off if Clanker already posted in the recent message window.
-
-That separation is important:
-
-- if Clanker is already in the recent window, the normal recent-window reply path handles follow-up participation
-- if Clanker is not in the recent window, the thought loop can decide whether to enter
-
-This prevents the thought loop from piling on while Clanker is already active in the conversation.
-
-## Practical Examples
-
-### Example A: user says `clanker what do you think?`
-
-- direct-address path
-- enters reply path immediately
-- reply eagerness should not suppress it
-
-### Example B: Clanker already posted, then two more users keep talking
-
-- recent-window follow-up path
-- admitted because Clanker is already in-context
-- reply eagerness can still make Clanker answer or skip
-
-### Example C: two users are chatting in `#general`, Clanker has not spoken yet
-
-- thought loop decides whether to jump in
-- `initiative.text.*` is the main control
-
-### Example D: `replyChannelIds` is blank
-
-- no channels are treated as reply channels
-- the text thought loop has no eligible channel candidates and will not post
-- direct-address replies still work
-
-### Example E: `discovery.channelIds` is blank
-
-- discovery posting is disabled everywhere
-- this does not affect direct replies or the text thought loop
-
-### Example F: `allowUnsolicitedReplies` is off, but `initiative.text.enabled` is on
-
-- recent-window follow-up replies will stop
-- direct mentions still work
-- the scheduled thought loop can still chime into eligible reply channels
-
-### Example G: in VC, someone addresses Clanker once and then asks a short follow-up
-
-- voice conversation continuity can still treat the follow-up as aimed at the bot
-- realtime admission mode (`voice.admission.mode`) and session engagement context matter more than text-channel eagerness sliders
-
-### Example H: user asks "what did we say about Nvidia earlier?"
-
-- Clanker should prefer `conversation_search`
-- this applies in both text and voice
-- durable memory is not the primary source for prior chat recall
-
-### Example I: user asks for a recurring behavior rule
-
-- Clanker should use `adaptive_directive_add` rather than `memory_write`
-- the saved directive then affects future text and voice behavior through the shared continuity layer
-
-## Current Defaults Worth Remembering
-
-- thought-loop scheduler check cadence: 60 seconds
-- thought-loop active-channel requirement: recent human activity within the last 24 hours
-- discovery channel selection: explicit-only
-- empty `replyChannelIds`: disables reply-channel classification and thought-loop candidate scanning
-- voice thought engine defaults to enabled
-- voice thought timing is silence/cooldown driven, not a 60-second global poll
-
-## Dashboard Knob Map
-
-If you are trying to change behavior from the dashboard, the main sections are:
-
-- `Core Behavior`
-  - text eagerness sliders
-  - thought-loop settings
-  - top-level reply/activity pacing
-
-- `Channels & Permissions`
-  - allowed/blocked text channels
-  - reply/lurk channel IDs
-  - blocked users
-  - voice allowed/blocked channels and blocked voice users
-
-- `Discovery`
-  - discovery posting enablement, pacing, and discovery channel IDs
-
-- `Voice Mode`
-  - voice provider/runtime mode
-  - reply path
-  - transcription model/method
-  - voice thought engine settings
-  - generation/reply-decision model settings
-
-- `Browser`
-  - browser-agent enablement and model/provider settings for `browser_browse`
-
-- `Memory`
-  - durable memory visibility
-  - adaptive directives and audit history
+Preset resolution can override parts of the effective voice runtime, so the active preset still matters.
 
 ## Source Files
 
-The main behavior described here is implemented in:
-
-- `src/bot.ts`
 - `src/bot/replyAdmission.ts`
 - `src/bot/replyPipeline.ts`
 - `src/bot/initiativeEngine.ts`
-- `src/bot/voiceReplies.ts`
-- `src/voice/voiceSessionManager.ts`
+- `src/services/discovery.ts`
 - `src/voice/voiceReplyDecision.ts`
-- `src/voice/voiceToolCalls.ts`
-- `src/tools/replyTools.ts`
-- `src/settings/settingsSchema.ts`
-- `dashboard/src/components/settingsSections/CoreBehaviorSettingsSection.tsx`
-- `dashboard/src/components/settingsSections/ChannelsPermissionsSettingsSection.tsx`
-- `dashboard/src/components/settingsSections/DiscoverySettingsSection.tsx`
-- `dashboard/src/components/settingsSections/VoiceModeSettingsSection.tsx`
+- `src/voice/thoughtEngine.ts`
+- `src/voice/voiceThoughtGeneration.ts`
+- `src/voice/voiceConfigResolver.ts`
+- `src/prompts/promptText.ts`

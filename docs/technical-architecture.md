@@ -1,188 +1,84 @@
 # Clanker Conk Technical Architecture
 
-This document explains how the bot is wired, how data moves through the system, and the key runtime flows.
+This document explains the live runtime shape of the bot: where core decisions happen, how settings flow through the system, and which modules own text, voice, memory, tools, and persistence.
 
-The live settings/runtime layer is preset-driven. Canonical stack and initiative references:
-- `docs/preset-system-spec.md`
+Canonical companion docs:
+
+- `docs/clanker-activity.md`
 - `docs/initiative-unified-spec.md`
+- `docs/voice/voice-provider-abstraction.md`
+- `docs/preset-system-spec.md`
 
 ## 1. High-Level Components
 
 Code entrypoint:
-- `src/app.ts`: bootstraps storage, services, bot, and dashboard server.
+
+- `src/app.ts`: bootstraps storage, services, bot, and dashboard server
 
 Core runtime:
-- `src/bot.ts`: Discord event handling and orchestration.
-- `src/bot/*`: extracted bot domains (`agentTasks`, `automation`, `automationEngine`, `budgetTracking`, `conversationContinuity`, `directAddressConfidence`, `imageAnalysis`, `initiativeEngine`, `mediaAttachment`, `memorySlice`, `mentionLookup`, `mentions`, `messageHistory`, `permissions`, `replyAdmission`, `replyFollowup`, `replyPipeline`, `replyPipelineShared`, `screenShare`, `startupCatchup`, `voiceCoordination`, `voiceReplies`).
-- `src/settings/settingsSchema.ts`: canonical persisted settings schema.
-- `src/settings/agentStack.ts`: preset resolution + capability/runtime accessors (`research`, `browser`, `voice`, `devTeam`, orchestrator bindings).
-- `src/llm.ts`: model/runtime provider abstraction (OpenAI, Anthropic, Claude OAuth, Codex OAuth, xAI/Grok), plus usage + cost logging, embeddings, image/video generation, ASR, and TTS.
-- `src/llm/llmClaudeCode.ts`: Claude Code CLI invocation/parsing helpers used by `LLMService`.
-- `src/llm/llmCodex.ts`: OpenAI Responses/Codex integration used by the code-agent runtime.
-- `src/memory/memoryManager.ts`: append-only daily journaling + LLM-based fact extraction + hybrid memory retrieval (lexical + vector).
-- `src/memory/dailyReflection.ts`: end-of-day journal reflection — reads daily logs, runs LLM distillation, writes durable facts.
-- `src/memory/memoryHelpers.ts`: fact normalization, grounding checks, scoring helpers, directive scope config.
-- `src/memory/memoryToolRuntime.ts`: shared execution logic for `memory_write` and `memory_search` tools.
-- `src/services/discovery.ts`: passive discovery-feed collection and candidate ranking for the unified initiative cycle.
-- `src/store/store.ts`: SQLite persistence orchestration.
-- `src/store/*`: settings normalization and store helper utilities.
-- `src/voice/voiceSessionManager.ts`: voice orchestration and session lifecycle.
-- `src/voice/voiceJoinFlow.ts`, `src/voice/voiceStreamWatch.ts`, `src/voice/voiceOperationalMessaging.ts`, `src/voice/voiceDecisionRuntime.ts`: extracted voice domains.
-- `src/voice/turnProcessor.ts`: turn queueing, drain loops, realtime and file-ASR turn processing.
-- `src/voice/thoughtEngine.ts`: voice thought engine (silence/cooldown-driven proactive speech).
-- `src/voice/replyManager.ts`: response tracking, output state sync, deferred trigger.
-- `src/voice/sessionLifecycle.ts`: session setup and teardown orchestration.
-- `src/voice/bargeInController.ts`: barge-in decision logic and interrupt execution.
-- `src/voice/captureManager.ts`: per-user audio capture lifecycle and promotion.
-- `src/voice/deferredActionQueue.ts`: deferred action scheduling and dispatch.
-- `src/voice/voiceAsrBridge.ts`: ASR bridge state machine (per-user and shared modes).
-- `src/voice/voiceToolCallInfra.ts`: voice tool call infrastructure and dispatch.
-- `src/voice/voiceToolCallMemory.ts`, `voiceToolCallMusic.ts`, `voiceToolCallWeb.ts`, `voiceToolCallAgents.ts`, `voiceToolCallDirectives.ts`: modular voice tool execution handlers.
-- `src/voice/musicPlayer.ts`, `musicCommands.ts`, `musicSearch.ts`, `musicPlayback.ts`: music subsystem.
-- `src/voice/openaiRealtimeClient.ts`, `xaiRealtimeClient.ts`, `geminiRealtimeClient.ts`, `elevenLabsRealtimeClient.ts`: provider-specific realtime clients.
-- `src/voice/openaiRealtimeTranscriptionClient.ts`: dedicated ASR transcription client.
-- `src/voice/instructionManager.ts`: realtime instruction refresh with debounced timer.
-- `docs/voice/voice-output-state-machine.md`: canonical assistant reply/output phase model and incident workflow.
-- `src/services/publicHttpsEntrypoint.ts`: optional Cloudflare Quick Tunnel runtime for exposing local dashboard/API over public HTTPS.
-- `src/services/screenShareSessionManager.ts`: tokenized browser screen-share session lifecycle and frame relay into voice stream-watch ingest.
 
-Agents:
-- `src/agents/browseAgent.ts`: headless browser agent — LLM + browser tool loop for navigating websites and extracting information.
-- `src/agents/codeAgent.ts`: code-agent orchestration (Claude Code, Codex CLI, and Codex providers), including one-shot tasks and session-backed turns.
-- `src/agents/codexAgent.ts`: Codex-backed `SubAgentSession` implementation.
-- `src/agents/subAgentSession.ts`: shared session manager + lifecycle for long-running tool sessions (`browser`, `code`).
-
-Tool definitions:
-- `src/tools/browserTools.ts`: browser tool schemas + execution wrappers for the browse agent.
-- `src/tools/openAiComputerUseRuntime.ts`: OpenAI computer-use sub-runtime that drives the browser manager when the resolved browser runtime is `openai_computer_use`.
-- `src/tools/replyTools.ts`: tool schemas available to the text chat brain (`conversation_search`, web search, memory, image lookup, open-article lookup, etc.).
-- `src/voice/voiceToolCalls.ts`: voice tool re-export facade. Actual execution is split across `voiceToolCallMemory.ts`, `voiceToolCallMusic.ts`, `voiceToolCallWeb.ts`, `voiceToolCallAgents.ts`, `voiceToolCallDirectives.ts`, dispatched via `voiceToolCallDispatch.ts`.
-
-Control plane:
-- `src/dashboard.ts`: REST API and static dashboard hosting, including tunnel-host public/private route gating.
-- `dashboard/src/*`: React dashboard (polling stats/actions/memory/settings and writing settings back).
-
-Storage:
-- `data/clanker.db`: runtime SQLite database.
-- `memory/YYYY-MM-DD.md`: append-only daily journal files.
-- `memory/MEMORY.md`: operator-facing curated snapshot for dashboard inspection (not directly injected into model prompts).
+- `src/bot.ts`: Discord orchestration and scheduler entrypoints
+- `src/bot/*`: reply admission, reply pipeline, initiative, automations, permissions, continuity, memory slices, and message history
+- `src/settings/settingsSchema.ts`: canonical persisted settings schema
+- `src/settings/agentStack.ts`: preset resolution and runtime binding helpers
+- `src/store/settingsNormalization.ts`: settings normalization into the canonical shape
+- `src/llm.ts`: provider/runtime abstraction for generation, embeddings, image/video generation, ASR, and TTS
+- `src/memory/*`: durable memory extraction, storage, lookup, and reflection
+- `src/services/discovery.ts`: passive feed collection for the unified initiative cycle
+- `src/voice/*`: session lifecycle, capture, turn processing, admission, tool dispatch, output, and thought engine
+- `src/tools/*`: shared text/voice tool schemas and execution wrappers
+- `src/agents/*`: browser and code-agent runtimes
+- `src/dashboard.ts` and `dashboard/src/*`: REST control plane and dashboard UI
 
 ## 2. Runtime Lifecycle
 
 ![Runtime Lifecycle](diagrams/runtime-lifecycle.png)
 <!-- source: docs/diagrams/runtime-lifecycle.mmd -->
 
+At a high level:
+
+1. settings are loaded and normalized
+2. Discord events and schedulers enter `src/bot.ts`
+3. text replies, initiative, automations, and voice sessions route into their domain handlers
+4. the LLM/tool layer is consulted only after deterministic guardrails pass
+5. actions and messages are persisted back into SQLite and memory logs
+
 ## 3. Tool Orchestration
 
-The central architectural idea: Clanker owns the product control plane, while the agent stack resolves external runtimes by preset. The orchestrator is still tool-using LLM-driven, but capability routing is resolved through a canonical stack.
+The orchestrator is still tool-using and LLM-driven. The preset system resolves which external runtimes back those capabilities.
 
-```
-User (voice or text)
-    │
-    ▼
-Brain (LLM with tool-use)
-    ├── conversation_search            →  persisted text + voice conversation recall
-    ├── memory_search / memory_write   →  persistent facts + vector recall
-    ├── web_search                     →  live web search + page inspection
-    ├── browser_browse                 →  headless browser agent (navigate, click, extract)
-    ├── code_task                      →  code agent runtime (Claude Code, Codex CLI, or Codex)
-    ├── music_*                        →  queue management + playback control
-    ├── image/video/gif generation     →  media creation via model APIs
-    └── MCP tools                      →  extensible third-party capabilities
-```
+Shared conversational tools:
 
-Most conversational tools are shared across both voice and text paths. The brain generally sees the same core tool surface regardless of input modality, while the backing runtime is chosen by the resolved stack:
-- research capability: `agentStack.runtimeConfig.research`
-- browser capability: `agentStack.runtimeConfig.browser`
-- voice runtime: `agentStack.runtimeConfig.voice`
-- dev-team workers: `agentStack.runtimeConfig.devTeam`
+- `conversation_search`
+- `memory_search`
+- `memory_write`
+- `web_search`
+- `browser_browse`
+- `code_task`
+- media generation tools
 
-A few tools remain modality-specific when the capability only makes sense in one runtime (for example realtime voice transport controls or voice-only playback controls).
-
-Conversation continuity is split into two retrieval layers:
-- `conversation_search`: recall of prior exchanges from persisted message history, across text chat and voice transcripts.
-- `memory_search`: durable long-lived facts/preferences/lore extracted from conversation and stored in `memory_facts`.
-
-This keeps default prompts small while still letting the model explicitly look up earlier exchanges when continuity matters.
-
-A third persistence layer now exists for recurring bot behavior:
-- `adaptive_directive_add` / `adaptive_directive_remove`: server-level persistent directives that shape how the bot talks and acts across future turns.
-- `guidance` directives: broad style/tone/persona/operating guidance.
-- `behavior` directives: recurring trigger/action behavior, such as sending a GIF or calling out a specific user when the current turn matches.
-
-Unlike durable memory facts, adaptive directives are injected into prompts directly. Guidance directives can stay broadly active, while behavior directives are retrieved query-by-query so they only enter context when the current turn is relevant.
-
-### How Tools Are Invoked
-
-**Text chat path:** The brain calls `llm.chatWithTools()` with the text reply tool set. The LLM returns `tool_use` blocks, the bot executes them, appends results, and loops until the LLM returns a text-only response. Implemented in `replyTools.ts` (inline tools) and dedicated agents like `browseAgent.ts` (agent loops).
-
-**Voice path:** Tools are registered as OpenAI Realtime function definitions. The Realtime brain emits `response.function_call_arguments.done` events, the bot dispatches the tool via `voiceToolCallDispatch.ts` to the appropriate handler module, and sends results back with `conversation.item.create`. The brain continues the conversation with the result.
-
-**Agent tools:** Some tools themselves contain an inner agent loop. When the brain calls `browser_browse`, it spawns a `browseAgent` that runs its own multi-step LLM + browser tool cycle. The brain gets back a final result — it doesn't manage the inner loop directly.
-
-`browser_browse` now uses a shared browser-task runtime across text and voice:
-- `src/tools/browserTaskRuntime.ts`: channel-scoped task registry, abort classification, and shared `runBrowserBrowseTask(...)` wrapper.
-- Text and voice both pass through that runtime, so cancellation semantics, error normalization, and logging stay aligned.
-- Automation runs currently opt out of `browser_browse` on purpose, even though they use the same generic reply-tool plumbing.
-
-### Host-Access Tools
-
-`code_task` is now a shipped tool in text and voice tool loops:
+Core routing:
 
 - text: `src/tools/replyTools.ts`
-- voice: `src/voice/voiceToolCalls.ts`
+- voice: `src/voice/voiceToolCalls.ts` and `src/voice/voiceToolCallDispatch.ts`
+- browser tasks: `src/tools/browserTaskRuntime.ts`
+- code tasks: `src/agents/codeAgent.ts`
 
-Execution is routed through `src/agents/codeAgent.ts` and gated by settings:
+Current voice dispatch modules:
 
-- `agentStack.runtimeConfig.devTeam.*` (per-worker `enabled`, `maxTasksPerHour`, `maxParallelTasks`)
-- `permissions.devTasks.allowedUserIds` (allowlist)
+- `src/voice/voiceToolCallMemory.ts`
+- `src/voice/voiceToolCallMusic.ts`
+- `src/voice/voiceToolCallWeb.ts`
+- `src/voice/voiceToolCallAgents.ts`
 
-The dashboard flattens these into `codeAgent.*` form fields for backward compatibility, but the persisted source of truth is the preset-driven `agentStack` plus `permissions.devTasks`.
+There is no separate directive tool handler in the live architecture.
 
-### Tool Composition Example
+## 4. Settings Flow
 
-A user says "go check my open GitHub issues":
-
-1. Brain calls `browser_browse` → navigates to the GitHub issues page → extracts the issue list
-2. Brain reports the issues back to the user
-3. User asks follow-up questions about one of the issues
-4. Brain optionally calls `browser_browse` again or combines the result with `memory_search`
-5. Brain reports the answer back to the user
-
-No step here is hardcoded. The brain chose which tools to use and in what order based on the conversation.
-
-## 4. Data Model (SQLite)
-
-Main tables created in `src/store/store.ts`:
-- `settings`: single `runtime_settings` JSON blob.
-- `messages`: normalized message history across text chat, persisted user voice transcripts, and persisted assistant spoken turns.
-- `actions`: event log (replies, reactions, discovery posts, llm/image calls, errors) with `usd_cost`.
-- `memory_facts`: LLM-extracted durable facts with type/confidence/evidence.
-- `memory_fact_vectors_native`: sqlite-vec-compatible embeddings per fact/model for semantic recall.
-- `shared_links`: external links already posted (for dedupe windows).
-- `lookup_context`: cached snippets/pages from background knowledge fetches (e.g., wiki pages).
-- `adaptive_style_notes`: active persistent adaptive directives, including `directive_kind` (`guidance` or `behavior`), audit metadata, and soft-delete fields.
-- `adaptive_style_note_events`: append-only audit log of directive adds/edits/reactivations/removals.
-- `automations`: natural-language schedule definitions and next-run state.
-- `automation_runs`: per-run execution history for each automation.
-- `response_triggers`: lookup index of discord message IDs the bot has successfully acted on (to avoid duplicate text processing on restart).
-
-Table relationship diagram (logical relationships):
-
-![Data Model](diagrams/data-model.png)
-<!-- source: docs/diagrams/data-model.mmd -->
-
-Note: the implementation uses logical joins and lookups; SQLite foreign-key constraints are not currently declared.
-
-Cost aggregation:
-- `llm_call` rows store `usd_cost`.
-- `/api/stats` uses `Store.getStats()` to sum total and daily LLM spend.
-
-## 5. Settings Flow
-
-Settings are patched through dashboard API and normalized in `Store.patchSettings()` / `normalizeSettings()`.
+Settings are written through the dashboard API, normalized in `normalizeSettings()`, and then read lazily at decision time.
 
 Canonical top-level settings groups:
+
 - `identity`
 - `persona`
 - `prompting`
@@ -190,116 +86,199 @@ Canonical top-level settings groups:
 - `interaction`
 - `agentStack`
 - `memory`
-- `directives`
+- `memoryLlm`
 - `initiative`
 - `voice`
 - `media`
 - `music`
 - `automations`
 
-Preset-driven stack settings:
-- `agentStack.preset`: `claude_oauth`, `claude_api`, `openai_native_realtime`, `openai_api`, `openai_oauth`, or `grok_native_agent`
-- `agentStack.advancedOverridesEnabled`: whether per-runtime overrides are exposed and persisted
-- `agentStack.overrides`: orchestrator / worker override bindings
-- `agentStack.runtimeConfig`: capability-runtime configuration for research, browser, voice, and dev-team workers
+Preset-driven runtime surfaces:
+
+- `agentStack.preset`
+- `agentStack.overrides`
+- `agentStack.runtimeConfig.research`
+- `agentStack.runtimeConfig.browser`
+- `agentStack.runtimeConfig.voice`
+- `agentStack.runtimeConfig.devTeam`
+
+Nested voice surfaces:
+
+- `voice.conversationPolicy.*`
+- `voice.admission.*`
+- `voice.transcription.*`
+- `voice.channelPolicy.*`
+- `voice.sessionLimits.*`
+- `initiative.voice.*`
 
 Normalization responsibilities:
-- clamping numeric ranges,
-- sanitizing list fields,
-- defaulting missing keys,
-- normalizing legacy aliases into the canonical preset-driven shape,
-- ensuring reply-channel and initiative config is always valid.
 
-The bot reads settings at decision time (`store.getSettings()`), so updates apply without restart.
+- clamp numeric ranges
+- sanitize lists and strings
+- normalize incoming settings into canonical nested fields
+- apply preset defaults when canonical fields are absent
 
 ![Settings Flow](diagrams/settings-flow.png)
 <!-- source: docs/diagrams/settings-flow.mmd -->
 
-## 6. Message Event Flow (Replies + Reactions)
+## 5. Persistence Model
 
-Entrypoint: Discord `messageCreate` handler in `ClankerBot`.
+Main runtime stores:
+
+- `data/clanker.db`: SQLite database
+- `memory/YYYY-MM-DD.md`: append-only daily logs
+- `memory/MEMORY.md`: operator-facing memory snapshot
+
+Important tables:
+
+- `settings`
+- `messages`
+- `actions`
+- `memory_facts`
+- `memory_fact_vectors_native`
+- `shared_links`
+- `lookup_context`
+- `automations`
+- `automation_runs`
+- `response_triggers`
+
+![Data Model](diagrams/data-model.png)
+<!-- source: docs/diagrams/data-model.mmd -->
+
+## 6. Text Reply Flow
+
+Entrypoint: Discord `messageCreate` handling in `src/bot.ts`.
+
+Main stages:
+
+1. permission and channel checks
+2. reply admission
+3. continuity and memory assembly
+4. LLM/tool loop
+5. optional follow-up passes
+6. delivery and persistence
+
+The user-facing activity model for these paths is documented in `docs/clanker-activity.md`.
 
 ![Message Event Flow](diagrams/message-event-flow.png)
 <!-- source: docs/diagrams/message-event-flow.mmd -->
 
-Key guardrails:
-- channel allow/block lists.
-- blocked users.
-- per-hour message and reaction limits.
-- minimum seconds between bot messages.
-- high-level activity behavior is documented in `docs/clanker-activity.md`.
+## 7. Voice Runtime
 
-## 7. Latency-Critical Model Choices
+Voice is split into independent layers:
 
-High-impact latency levers:
-- `llm.provider` + `llm.model` for primary reply generation.
-- `replyFollowupLlm.*` when follow-up lookup/regeneration passes are enabled.
-- voice model settings (`voice.replyDecisionLlm.provider/model` for music stop / thought engine, realtime/STT/TTS model fields).
+- capture and turn promotion
+- transcription
+- reply admission
+- generation and tool ownership
+- output / barge-in
+- proactive voice thought generation
 
-Validation signals:
-- `Store.getReplyPerformanceStats()` (`memorySliceMs`, `llm1Ms`, `followupMs`).
-- voice `voice_turn_addressing` runtime logs.
+Canonical public surfaces:
+
+- transport/runtime: `agentStack.runtimeConfig.voice.*`
+- conversation behavior: `voice.conversationPolicy.*`
+- admission: `voice.admission.*`
+- transcription: `voice.transcription.*`
+- session limits: `voice.sessionLimits.*`
+- proactive cadence: `initiative.voice.*`
+
+Voice-specific docs:
+
+- `docs/voice/voice-provider-abstraction.md`
+- `docs/voice/voice-capture-and-asr-pipeline.md`
+- `docs/voice/voice-client-and-reply-orchestration.md`
+- `docs/voice/voice-output-and-barge-in.md`
 
 ## 8. Unified Initiative Flow
 
-Text-channel proactivity now runs through `src/bot/initiativeEngine.ts`.
+Text proactivity is owned by `src/bot/initiativeEngine.ts`.
 
 The runtime splits responsibility like this:
-- `permissions.replies.replyChannelIds`: eligible text channels
-- `initiative.text.*`: consultation cadence, eagerness, and tool-loop budgets
-- `initiative.discovery.*`: passive feed collection, media budgets, and self-curation guardrails
-- `src/services/discovery.ts`: fetches and ranks optional discovery candidates for the initiative prompt
 
-The model decides whether to post, which eligible channel fits, whether to use tools, and whether to include links or media.
+- `permissions.replies.replyChannelIds`: canonical eligible initiative channel pool
+- `initiative.text.*`: initiative cadence, budgets, and tool-loop limits
+- `initiative.discovery.*`: feed collection, self-curation, and media infrastructure
+- `src/services/discovery.ts`: gathers passive feed candidates
 
-Canonical initiative behavior, settings, and migration notes live in:
+The model decides:
+
+- whether to post
+- which eligible channel fits
+- whether to use tools
+- whether to include links
+- whether to request media
+
+Canonical references:
+
 - `docs/initiative-unified-spec.md`
 - `docs/clanker-activity.md`
 
-## 10. Dashboard Read/Write Patterns
+## 9. Memory Model
 
-Dashboard polling:
-- `/api/stats` every 10s
-- `/api/actions` every 10s
-- `/api/memory` every 30s
-- `/api/settings` on load (and manual reload after save)
+Durable memory is centered on `memory_facts`.
 
-Dashboard writes:
-- `PUT /api/settings`: saves all settings.
-- `POST /api/memory/refresh`: forces immediate memory markdown regeneration.
+Current behavioral guidance model:
 
-Dashboard read APIs also include:
-- `GET /api/automations`: list automations by guild/channel/status/query.
-- `GET /api/automations/runs`: list run history for one automation.
-- `GET /api/memory/adaptive-directives`: list active adaptive directives for one guild.
-- `GET /api/memory/adaptive-directives/audit`: list adaptive directive audit events for one guild.
-- `GET /api/memory/fact-profile`: structured fact profile for a guild/user.
-- `GET /api/memory/facts`: list/filter raw facts.
-- `GET /api/memory/subjects`: list subjects with fact counts.
-- `GET /api/memory/reflections`: list reflection run history.
+- `guidance` facts: always-on operating/persona guidance
+- `behavioral` facts: retrieved by relevance
 
-## 11. Action Log Kinds
+There is no separate directive store in the live runtime.
 
-Common `actions.kind` values in current runtime:
-- Messaging/initiative: `sent_reply`, `sent_message`, `reply_skipped`, `initiative_post`, `text_thought_loop_post`, `automation_post`
-- Reactions: `reacted`, `voice_soundboard_play`
-- LLM + media generation: `llm_call`, `llm_error`, `image_call`, `image_error`, `video_call`, `video_error`, `gif_call`, `gif_error`
-- Memory pipeline: `memory_fact`, `memory_extract_call`, `memory_extract_error`, `memory_embedding_call`, `memory_embedding_error`
-- Adaptive directives: `adaptive_style_note` (current internal action-log kind for directive lifecycle events)
-- Search + video context: `search_call`, `search_error`, `video_context_call`, `video_context_error`
-- Agent tools: `browser_browse_call`, `browser_tool_step`, `browser_agent_session_turn`
-- Code agent: `code_agent_call`, `code_agent_error`
-- Voice runtime: `voice_session_start`, `voice_session_end`, `voice_turn_in`, `voice_turn_out`, `voice_runtime`, `voice_intent_detected`, `voice_error`
-- Speech services: `asr_call`, `asr_error`, `tts_call`, `tts_error`
-- Automation lifecycle: `automation_created`, `automation_updated`, `automation_run`, `automation_error`
-- Reflection lifecycle: `memory_reflection_start`, `memory_reflection_complete`, `memory_reflection_error`
-- Runtime + generic failures: `bot_runtime`, `bot_error`
+Relevant modules:
 
-These power the activity stream and metrics/cost widgets in the dashboard.
+- `src/memory/memoryManager.ts`
+- `src/memory/memoryToolRuntime.ts`
+- `src/bot/memorySlice.ts`
+- `src/prompts/promptText.ts`
+- `src/prompts/promptVoice.ts`
 
-## 12. Failure Behavior
+## 10. Dashboard And Control Plane
 
-- LLM failures are logged (`llm_error`) and bubble to caller; bot-level wrappers log `bot_error`.
-- Reaction failures (permission/emoji issues) are swallowed.
-- Image generation failures fall back to text-only discovery posts.
-- Discovery fetch failures are captured per source; discovery cycle can still continue with no links.
+The dashboard serves as the live control plane for:
+
+- reading and writing settings
+- inspecting memory
+- inspecting actions and stats
+- resetting to preset defaults
+- viewing voice/session data
+
+Key server entrypoints:
+
+- `GET /api/settings`
+- `PUT /api/settings`
+- `POST /api/settings/preset-defaults`
+- `GET /api/stats`
+- `GET /api/actions`
+- memory and voice history endpoints
+
+## 11. Latency-Critical Model Choices
+
+The main levers that change cost and latency are:
+
+- resolved orchestrator binding
+- `interaction.replyGeneration.*`
+- follow-up execution policy
+- `agentStack.runtimeConfig.voice.runtimeMode`
+- `agentStack.runtimeConfig.voice.generation`
+- `voice.conversationPolicy.replyPath`
+- `voice.admission.mode`
+
+Voice classifier provider/model binding is resolved through preset defaults or `agentStack.overrides.voiceAdmissionClassifier`.
+
+## 12. Action Log Kinds
+
+Common action kinds include:
+
+- `sent_reply`
+- `sent_message`
+- `reply_skipped`
+- `initiative_post`
+- `automation_post`
+- `llm_call`
+- `llm_error`
+- `image_call`
+- `video_call`
+- `voice_error`
+
+These power stats, diagnostics, and initiative/discovery feedback loops.

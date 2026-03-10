@@ -76,7 +76,7 @@ Filter examples:
 When a voice turn is transcribed correctly but the bot does not answer, use the
 assistant output state machine doc first:
 
-- [`voice-output-state-machine.md`](voice/voice-output-state-machine.md)
+- [`voice-output-and-barge-in.md`](voice/voice-output-and-barge-in.md)
 
 Start with these events:
 

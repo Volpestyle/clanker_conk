@@ -12,8 +12,8 @@ Six named presets. Each is a coherent combination of orchestrator, voice pipelin
 | `claude_api` | API key | anthropic/claude-sonnet-4-6 | brain | openai_realtime | transport_only | pay-per-token |
 | `openai_native_realtime` | API key | openai/gpt-5 | bridge | openai_realtime | provider_native | pay-per-token |
 | `openai_api` | API key | openai/gpt-5 | brain | openai_realtime | transport_only | pay-per-token |
-| `openai_oauth` | OAuth token | codex-oauth/gpt-5.4 | brain | openai_realtime | transport_only | zero (subscription) |
-| `grok_native_agent` | API key | xai/grok-3-mini-latest | native | voice_agent | provider_native | pay-per-token |
+| `openai_oauth` | OAuth token | OpenAI OAuth (`openai-oauth`)/gpt-5.4 | brain | openai_realtime | transport_only | subscription-limited |
+| `grok_native_agent` | API key | xai/grok-4-latest | native | voice_agent | provider_native | pay-per-token |
 
 ### Voice Reply Paths
 
@@ -26,7 +26,7 @@ Six named presets. Each is a coherent combination of orchestrator, voice pipelin
 - **provider_native** — Tools registered with the realtime/voice-agent API. The provider model calls them directly. Used when voice reply path is `native` or `bridge`.
 - **transport_only** — Realtime connection is audio transport only. Tool calls go through the internal text orchestrator (brain path). Used when voice reply path is `brain`.
 
-Tools are defined once in `src/tools/sharedToolSchemas.ts` and adapted per target via format converters (`toAnthropicTool`, `toRealtimeTool`). The tool registry in `voiceToolCallToolRegistry.ts` conditionally includes tools based on feature flags (memory, research, browser, code agent, directives) regardless of which preset is active.
+Tools are defined once in `src/tools/sharedToolSchemas.ts` and adapted per target via format converters (`toAnthropicTool`, `toRealtimeTool`). The tool registry in `voiceToolCallToolRegistry.ts` conditionally includes tools based on feature flags (memory, research, browser, code agent) regardless of which preset is active.
 
 ### Preset Defaults Detail
 
@@ -44,6 +44,14 @@ Each preset sets defaults for:
 10. **Voice generation** — provider + model for brain-path text generation (when different from orchestrator)
 11. **Dev team** — orchestrator, role bindings, coding workers
 
+`devTeam.roles.*` are worker-routing defaults, not direct model bindings. The orchestrator plans the work, then the selected role determines which worker instance to spin up, and that worker's runtime config supplies its own model.
+
+Current preset intent:
+
+- `openai_oauth`, `openai_api`, and `openai_native_realtime` use `codex-cli` as the default implementation worker, with `claude-code` also available as a local worker
+- `claude_oauth` and `claude_api` use `claude-code` as the default implementation worker, with `codex-cli` also available as a local worker
+- remote `codex` is a manual opt-in worker, not part of the preset-default local worker ordering
+
 ## Modularity
 
 Even with a preset selected, the user can:
@@ -59,11 +67,13 @@ The preset defines the starting point. User changes layer on top.
 
 ### Preset Selector
 
-The Stack Preset section shows a dropdown with all 6 presets. Selecting a new preset fetches defaults from `/api/settings/preset-defaults` and applies them to the form, updating orchestrator, voice provider, voice reply path, admission mode, and generation models.
+The Stack Preset section shows a dropdown with all 6 presets. Selecting a new preset fetches preview defaults from `/api/settings/preset-defaults` and applies them to the form, updating orchestrator, voice runtime, voice reply path, admission mode, and generation models.
+
+The preview is local-only. The dirty indicator stays on until the user clicks Save, and runtime settings do not change just from selecting a preset in the dashboard.
 
 ### Reset to Preset Defaults
 
-A "Reset to preset defaults" button next to the preset dropdown resets all settings that the preset controls back to their defaults, without changing identity, persona, prompts, permissions, or other non-stack settings. There is no universal "reset all" button — resetting means resetting to a given preset's defaults.
+A "Reset to preset defaults" button next to the preset dropdown loads a full normalized default form for the selected preset. It starts from `DEFAULT_SETTINGS`, applies the preset, and preserves only server-specific channel permissions and voice channel policy. Save is still required before those defaults affect the live bot.
 
 ### Advanced Overrides
 
@@ -75,7 +85,7 @@ When `advancedOverridesEnabled` is true, additional sections appear: Advanced St
 User settings (data/settings.json)
   ↓
 Normalization (settingsNormalization.ts)
-  ├── Preset migration (old names → new names)
+  ├── Preset name normalization
   ├── Preset config seeds defaults for admission mode, reply path, TTS mode
   └── Per-section normalization (bounds, validation)
   ↓
@@ -86,11 +96,11 @@ Resolved Agent Stack (agentStack.ts → resolveAgentStack())
 Runtime uses resolved bindings
 ```
 
-## Preset Name Aliases
+## Accepted Preset Identifiers
 
-Normalization maps legacy preset names to canonical ones:
+Normalization accepts these preset identifiers and resolves them to canonical preset names:
 
-| Alias | Canonical Name |
+| Input Name | Canonical Name |
 |---|---|
 | `claude_oauth_local_tools` | `claude_oauth` |
 | `claude_oauth_openai_tools` | `claude_oauth` |

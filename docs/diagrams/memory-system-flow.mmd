@@ -1,37 +1,34 @@
 flowchart TD
     A[Incoming text message or voice transcript] --> B{memory.enabled}
-    B -- no --> N0[Skip durable memory ingest]
+    B -- no --> N0[Skip journaling and durable retrieval]
     B -- yes --> C[memory.ingestMessage queue]
     C --> D[processIngestMessage]
     D --> E[Append line to memory/YYYY-MM-DD.md]
-    D --> F{guild scope and content >= 4 chars}
-    F -- yes --> G[LLM extractMemoryFacts]
-    G --> H[Filter and normalize facts<br/>grounded, non-instructional, typed]
-    H --> I[store.addMemoryFact in memory_facts]
-    I --> J[ensureFactVector<br/>upsert memory_fact_vectors_native]
-    I --> K[archiveOldFactsForSubject]
-    F -- no --> L
-    K --> L[queueMemoryRefresh debounce]
-    E --> L
-    L --> M[refresh memory/MEMORY.md snapshot]
+    E --> F[queueMemoryRefresh debounce]
+    F --> G[refresh memory/MEMORY.md snapshot]
 
-    R[Reply or automation or voice turn generation] --> S[memory.buildPromptMemorySlice]
-    S --> T[selectHybridFacts by subject and guild]
-    T --> U[rankHybridCandidates<br/>lexical + semantic + confidence + recency + channel]
-    S --> V[store.searchRelevantMessages]
-    U --> W[Inject userFacts and relevantFacts into LLM prompt]
-    V --> W
-    R --> AD{memoryLine/selfMemoryLine present}
-    AD -- yes --> AE[memory.rememberDirectiveLine<br/>scope=lore or self]
-    AE --> AF[store.addMemoryFact<br/>subject __lore__ or __self__]
-    AF --> AG[ensureFactVector<br/>upsert memory_fact_vectors_native]
-    AF --> AH[archiveOldFactsForSubject keep=120]
-    AG --> L
-    AH --> L
+    H[Reply / automation / voice generation] --> I[Load fact profiles for participants]
+    H --> J[Retrieve relevant conversation windows]
+    H --> K[Retrieve guidance facts<br/>always include]
+    H --> L[Retrieve behavioral facts<br/>only when relevant]
+    I --> M[Assemble prompt memory slice]
+    J --> M
+    K --> M
+    L --> M
 
-    X[Dashboard or model memory lookup] --> Y[memory.searchDurableFacts]
-    Y --> Z[Strict relevance gate hybrid ranking]
-    Z --> AA[Return ranked durable facts]
+    N[memory_write tool] --> O[rememberDirectiveLineDetailed]
+    P[Session-end micro-reflection] --> O
+    Q[Daily reflection] --> O
+    O --> R[Grounding + safety checks]
+    R --> S[store.addMemoryFact in memory_facts]
+    S --> T[ensureFactVector<br/>upsert memory_fact_vectors_native]
+    S --> U[archiveOldFactsForSubject]
+    T --> F
+    U --> F
 
-    M -. operator-facing only .-> AB[Dashboard /api/memory view]
-    M -. not prompt input .-> AC[Runtime prompts use SQLite retrieval]
+    V[Dashboard or model durable lookup] --> W[memory.searchDurableFacts]
+    W --> X[Hybrid lexical + semantic ranking]
+    X --> Y[Return ranked durable facts]
+
+    G -. operator-facing only .-> Z[Dashboard /api/memory view]
+    G -. not prompt input .-> AA[Runtime prompts read SQLite + journals]
