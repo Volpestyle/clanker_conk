@@ -149,6 +149,8 @@ When a promoted capture finalizes, the concatenated PCM buffer is routed based o
 
 > `captureManager.runAsrBridgeCommit()` → `commitAsrUtterance()` → `queueRealtimeTurnFromAsrBridge()` → `turnProcessor.queueRealtimeTurn()` with transcript overrides
 
+Per-user ASR keeps the provider's committed realtime `item_id` bound to the utterance object that issued the commit. Late final transcript events therefore stay attached to the correct committed turn even if a fresh provisional capture starts before the provider finishes streaming the transcript.
+
 See [Part 2: ASR Bridge](#part-2-asr-bridge) for the full commit and transcript resolution flow.
 
 ### Realtime Mode (without ASR bridge)
@@ -217,7 +219,8 @@ When a user speaks but no turn reaches the brain:
 1. Check for `voice_turn_dropped_provisional_capture` — the capture never promoted. Look at promotion thresholds vs actual signal metrics.
 2. Check for `voice_turn_dropped_silence_gate` — the aggregated PCM was too quiet.
 3. Check for `voice_turn_skipped_empty_capture` — no audio data was received from the subprocess.
-4. If none of the above, check `voice_activity_started` for promotion confirmation, then look downstream at noise rejection gates (logprob confidence, bridge fallback hallucination).
+4. If a promoted turn still shows `voice_realtime_transcription_empty`, inspect `trackedUtteranceId`, `activeUtteranceId`, `finalSegmentCount`, and `partialChars` on that event before blaming provisional capture. A later provisional drop can belong to a different weak follow-on capture.
+5. If none of the above, check `voice_activity_started` for promotion confirmation, then look downstream at noise rejection gates (logprob confidence, bridge fallback hallucination).
 
 When captures are too aggressive (noise triggers turns):
 

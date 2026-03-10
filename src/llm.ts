@@ -91,6 +91,14 @@ export {
   type ToolLoopMessage
 } from "./llm/serviceShared.ts";
 
+function summarizeToolCallNames(toolCalls: Array<{ name?: string | null }> = []) {
+  const names = toolCalls
+    .map((toolCall) => String(toolCall?.name || "").trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  return names.length > 0 ? names.join(", ") : null;
+}
+
 export class LLMService {
   appConfig: LLMAppConfig;
   store: LlmActionStore;
@@ -379,6 +387,9 @@ export class LLMService {
       }
       const toolCalls = Array.isArray(response.toolCalls) ? response.toolCalls : [];
       const rawContent = response.rawContent || null;
+      const stopReason = String(response.stopReason || "").trim() || null;
+      const responseText = String(response.text || "");
+      const toolNames = summarizeToolCallNames(toolCalls);
 
       const costUsd = estimateUsdCost({
         provider,
@@ -402,6 +413,11 @@ export class LLMService {
           usage: response.usage,
           inputImages: imageInputs.length,
           toolCallCount: toolCalls.length,
+          toolNames,
+          stopReason,
+          responseChars: responseText.length,
+          transcript: responseText || null,
+          transcriptSource: "output",
           source: normalizedTrace.source || null,
           event: normalizedTrace.event || null,
           reason: normalizedTrace.reason || null,
@@ -417,6 +433,7 @@ export class LLMService {
         rawContent,
         provider,
         model,
+        stopReason,
         usage: response.usage,
         costUsd
       };

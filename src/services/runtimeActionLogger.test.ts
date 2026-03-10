@@ -131,3 +131,55 @@ test("formatPrettyLine keeps replyText visible without speech-style emphasis on 
   assert.equal(line.includes("said"), false);
   assert.equal(line.includes("heard"), false);
 });
+
+test("formatPrettyLine surfaces drop reasons and signal metrics for provisional captures", () => {
+  const line = formatPrettyLine({
+    ts: "2026-03-01T10:11:12.000Z",
+    level: "info",
+    kind: "voice_runtime",
+    event: "voice_turn_dropped_provisional_capture",
+    agent: "voice",
+    usd_cost: 0,
+    metadata: {
+      sessionId: "sess-123",
+      reason: "near_silence_early_abort",
+      peak: 0.009,
+      rms: 0.001,
+      activeSampleRatio: 0.004
+    }
+  });
+
+  assert.match(line, /voice_turn_dropped_provisional_capture/);
+  assert.match(line, /near_silence_early_abort/);
+  assert.match(line, /peak=/);
+  assert.match(line, /rms=/);
+  assert.match(line, /active=/);
+});
+
+test("formatPrettyLine highlights llm call returned text for runtime debugging", () => {
+  const line = formatPrettyLine({
+    ts: "2026-03-01T10:11:12.000Z",
+    level: "info",
+    kind: "llm_call",
+    event: "claude-oauth:claude-sonnet-4-6",
+    agent: "runtime",
+    usd_cost: 0.0039,
+    metadata: {
+      transcript: "yo, give me some sound effects",
+      transcriptSource: "output",
+      toolNames: "play_soundboard",
+      toolCallCount: 1,
+      responseChars: 31,
+      stopReason: "tool_calls",
+      source: "voice_realtime_generation"
+    }
+  });
+
+  assert.match(line, /claude-oauth:claude-sonnet-4-6/);
+  assert.match(line, /said/);
+  assert.match(line, /yo, give me some sound effects/);
+  assert.match(line, /toolNames/);
+  assert.match(line, /play_soundboard/);
+  assert.match(line, /stopReason/);
+  assert.equal(line.includes("transcript\x1b[2m="), false);
+});

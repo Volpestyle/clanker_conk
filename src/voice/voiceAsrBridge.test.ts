@@ -6,6 +6,7 @@ import {
   beginAsrUtterance,
   commitAsrUtterance,
   createAsrBridgeState,
+  ensureAsrSessionConnected,
   getOrCreatePerUserAsrState,
   releaseSharedAsrActiveUser,
   tryHandoffSharedAsr
@@ -336,6 +337,46 @@ test("appendAudioToAsr buffers during connecting and flushes once the connection
   assert.equal(appendedChunks.length, 1);
   assert.deepEqual(appendedChunks[0], pcm);
   assert.equal(asrState.pendingAudioBytes, 0);
+});
+
+test("commitAsrUtterance keeps per-user final transcripts attached to the committed utterance after a new capture starts", async () => {
+  await withPatchedConnect(async () => {
+    const logs: Array<Record<string, unknown>> = [];
+    const session = createSession({
+      openAiAsrTranscriptStableMs: 5,
+      openAiAsrTranscriptWaitMaxMs: 120
+    } as Partial<VoiceSession>);
+    const deps = createDeps(session, logs);
+
+    assert.equal(beginAsrUtterance("per_user", session, deps, session.settingsSnapshot, "speaker-1"), true);
+    const asrState = await ensureAsrSessionConnected("per_user", deps, session.settingsSnapshot, "speaker-1");
+    assert.ok(asrState?.client);
+    assert.ok(asrState?.utterance);
+    asrState!.utterance.bytesSent = 48_000;
+
+    const client = asrState!.client!;
+    client.commitInputAudioBuffer = () => {
+      setTimeout(() => {
+        client.handleIncoming(JSON.stringify({
+          type: "input_audio_buffer.committed",
+          item_id: "item_1"
+        }));
+        beginAsrUtterance("per_user", session, deps, session.settingsSnapshot, "speaker-1");
+      }, 5);
+      setTimeout(() => {
+        client.handleIncoming(JSON.stringify({
+          type: "conversation.item.input_audio_transcription.completed",
+          item_id: "item_1",
+          transcript: "Yo, give me some sound effects."
+        }));
+      }, 15);
+    };
+
+    const result = await commitAsrUtterance("per_user", deps, session.settingsSnapshot, "speaker-1", "stream_end");
+
+    assert.equal(result?.transcript, "Yo, give me some sound effects.");
+    assert.equal(logs.some((entry) => entry.content === "voice_realtime_transcription_empty"), false);
+  });
 });
 
 test("commitAsrUtterance trips the empty-commit circuit breaker after three substantial empty commits", async () => {

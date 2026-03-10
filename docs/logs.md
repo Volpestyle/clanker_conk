@@ -29,12 +29,15 @@ Pretty stdout rules:
 - actual delivered speech/transcripts stay emphasized in pretty stdout when the log carries `metadata.transcript` or `metadata.incomingTranscript`
 - output delivery stays labeled as `said` when `metadata.transcriptSource=output`
 - request-time `metadata.replyText` stays visible in pretty stdout, but it is not rendered with the same bold speech emphasis as delivered transcripts
+- `llm_call` runtime lines now summarize the returned model text the same way, plus `toolNames`, `toolCallCount`, `responseChars`, and `stopReason` when the provider reports one
 
 Canonical prompt-log coverage:
 
 - text reply turns: `sent_reply`, `sent_message`, `reply_skipped`
 - voice classifier decisions: `voice_turn_addressing`
 - full-brain voice generation turns: `realtime_reply_requested`, `realtime_reply_skipped`
+- full-brain voice tool loop: `voice_brain_tool_call`, `voice_brain_generation_failed`
+- provider-native realtime tool loop: `realtime_tool_call_started`, `realtime_tool_call_completed`, `realtime_tool_call_failed`
 - realtime bridge/native prompt refresh and forwarded turns: `openai_realtime_instructions_updated`, `openai_realtime_text_turn_forwarded`
 
 `metadata.replyPrompts` uses one shared shape:
@@ -142,6 +145,24 @@ Interpretation notes:
 - in transport_only sessions (brain mode), the instruction refresh path skips memory retrieval entirely — only the generation path should produce embedding calls
 - if both `:generation` and `:instruction_refresh` traces appear on the same turn, the session is provider_native and both paths are expected
 
+## Voice tool ownership attribution
+
+When you need to distinguish provider-native realtime tools from the full-brain/orchestrator path, use event family plus ownership metadata together.
+
+Start with these events:
+
+- `voice_brain_tool_call`
+- `voice_brain_generation_failed`
+- `realtime_tool_call_started`
+- `realtime_tool_call_completed`
+- `realtime_tool_call_failed`
+
+Interpretation notes:
+
+- `voice_brain_*` events come from the full-brain reply path. They should carry `metadata.replyPath="brain"` and `metadata.realtimeToolOwnership="transport_only"`.
+- `realtime_tool_call_*` events come from provider-native tool execution. These happen only when the session owns provider tools directly (`realtimeToolOwnership="provider_native"`).
+- `session.mode` still tells you which realtime runtime carried audio. It does not, by itself, tell you who owned planning or tools.
+
 ## Voice output incident workflow
 
 When a voice turn is transcribed correctly but the bot does not answer, use the
@@ -197,6 +218,7 @@ Start with these events:
 - `openai_realtime_asr_speech_started`
 - `openai_realtime_asr_speech_stopped`
 - `voice_realtime_transcription_empty`
+- `file_asr_transcription_empty`
 - `openai_realtime_asr_bridge_empty_dropped`
 
 Important interpretation rules:
@@ -205,6 +227,9 @@ Important interpretation rules:
 - `promotionReason=server_vad_confirmed` means OpenAI Realtime transcription VAD confirmed speech for that utterance
 - `promotionReason=strong_local_audio` means the local fallback promoted without waiting for VAD
 - `voice_turn_dropped_provisional_capture` means the capture never became a real turn and was discarded before normal reply admission
+- `voice_realtime_transcription_empty` includes `trackedUtteranceId`, `activeUtteranceId`, `finalSegmentCount`, and `partialChars` so you can tell whether the commit went empty while a newer live utterance was already active
+- `file_asr_transcription_empty` means the local file-turn transcription path returned no transcript before admission/generation
+- `openai_realtime_asr_bridge_empty_dropped` means the bridge never forwarded any transcript into turn processing, so no downstream LLM generation happened for that utterance
 
 Suggested query:
 
@@ -223,7 +248,8 @@ Inspect these metadata fields together:
 
 Ambient-noise triage:
 
-- repeated `voice_activity_started` followed by `voice_realtime_transcription_empty` or `openai_realtime_asr_bridge_empty_dropped` usually means local promotion is still too permissive for the room
+- repeated `voice_activity_started` followed by `voice_realtime_transcription_empty`, `file_asr_transcription_empty`, or `openai_realtime_asr_bridge_empty_dropped` usually means local promotion is still too permissive for the room
 - repeated `voice_turn_dropped_provisional_capture` means the new provisional gate is working and the noise is being rejected before it becomes a turn
+- a promoted turn followed immediately by `voice_turn_dropped_provisional_capture` often means the drop belongs to a second weak follow-on capture, not the already-promoted utterance
 - if `openai_realtime_asr_speech_started` never appears for a promoted turn and `promotionReason=strong_local_audio`, the fallback path promoted without server VAD confirmation
 - if promoted turns keep interrupting ambient bot speech, check `voice_system_speech_cancelled_for_user_speech` together with `realtime_reply_skipped` to confirm the thought path was preempted before audio

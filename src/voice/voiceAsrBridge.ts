@@ -114,6 +114,7 @@ export interface AsrBridgeState {
   client: OpenAiRealtimeTranscriptionClient | null;
   connectPromise: Promise<void> | null;
   committingUtteranceId: number;
+  committingUtterance: AsrUtteranceState | null;
   pendingAudioChunks: AsrPendingAudioChunk[];
   pendingAudioBytes: number;
   connectedAt: number;
@@ -125,6 +126,7 @@ export interface AsrBridgeState {
   utterance: AsrUtteranceState;
   // Shared-mode only fields (unused/empty in per_user mode)
   itemIdToUserId: Map<string, string>;
+  committedItemUtterances: Map<string, AsrUtteranceState>;
   finalTranscriptsByItemId: Map<string, string>;
   pendingCommitResolvers: AsrPendingCommitResolver[];
   pendingCommitRequests: AsrPendingCommitRequest[];
@@ -186,6 +188,7 @@ export function createAsrBridgeState(): AsrBridgeState {
     client: null,
     connectPromise: null,
     committingUtteranceId: 0,
+    committingUtterance: null,
     pendingAudioChunks: [],
     pendingAudioBytes: 0,
     connectedAt: 0,
@@ -196,6 +199,7 @@ export function createAsrBridgeState(): AsrBridgeState {
     idleTimer: null,
     utterance: createAsrUtteranceState(),
     itemIdToUserId: new Map(),
+    committedItemUtterances: new Map(),
     finalTranscriptsByItemId: new Map(),
     pendingCommitResolvers: [],
     pendingCommitRequests: [],
@@ -490,6 +494,18 @@ export function trackSharedAsrCommittedItem(
   }
 }
 
+export function trackPerUserAsrCommittedItem(
+  asrState: AsrBridgeState,
+  itemId: string
+) {
+  const normalizedItemId = normalizeInlineText(itemId, 180);
+  if (!normalizedItemId) return;
+  const trackedUtterance = asrState.committingUtterance;
+  if (!trackedUtterance || typeof trackedUtterance !== "object") return;
+  asrState.committedItemUtterances.set(normalizedItemId, trackedUtterance);
+  pruneMap(asrState.committedItemUtterances);
+}
+
 function waitForSharedAsrCommittedItem(
   session: VoiceSession,
   asrState: AsrBridgeState,
@@ -605,6 +621,40 @@ export async function waitForAsrTranscriptSettle(
   return normalizeVoiceText(trackedUtterance?.partialText || "", STT_TRANSCRIPT_MAX_CHARS_LOCAL);
 }
 
+function resolveTranscriptTargetUtterance({
+  asrState,
+  mode,
+  itemId,
+  previousItemId
+}: {
+  asrState: AsrBridgeState;
+  mode: AsrBridgeMode;
+  itemId: string | null;
+  previousItemId: string | null;
+}): AsrUtteranceState {
+  if (mode !== "per_user") {
+    return asrState.utterance;
+  }
+
+  const normalizedItemId = normalizeInlineText(itemId, 180);
+  if (normalizedItemId) {
+    const mappedUtterance = asrState.committedItemUtterances.get(normalizedItemId);
+    if (mappedUtterance && typeof mappedUtterance === "object") {
+      return mappedUtterance;
+    }
+  }
+
+  const normalizedPreviousItemId = normalizeInlineText(previousItemId, 180);
+  if (normalizedPreviousItemId) {
+    const mappedUtterance = asrState.committedItemUtterances.get(normalizedPreviousItemId);
+    if (mappedUtterance && typeof mappedUtterance === "object") {
+      return mappedUtterance;
+    }
+  }
+
+  return asrState.utterance;
+}
+
 // ── Wire client events (identical for both modes) ────────────────────
 
 function wireClientEvents(
@@ -616,18 +666,20 @@ function wireClientEvents(
 ) {
   const { session, store, botUserId, resolveVoiceSpeakerName: resolveSpeaker } = deps;
 
-  // Shared mode: track committed items via the raw event stream
-  if (mode === "shared") {
-    client.on("event", (event: Record<string, unknown>) => {
-      if (session.ending || !event || typeof event !== "object") return;
-      if (event.type === "input_audio_buffer.committed") {
-        trackSharedAsrCommittedItem(
-          asrState,
-          String((event as Record<string, string>).item_id || (event as Record<string, Record<string, string>>).item?.id || "")
-        );
-      }
-    });
-  }
+  client.on("event", (event: Record<string, unknown>) => {
+    if (session.ending || !event || typeof event !== "object") return;
+    if (event.type !== "input_audio_buffer.committed") return;
+    const itemId = String(
+      (event as Record<string, string>).item_id ||
+      (event as Record<string, Record<string, string>>).item?.id ||
+      ""
+    );
+    if (mode === "shared") {
+      trackSharedAsrCommittedItem(asrState, itemId);
+      return;
+    }
+    trackPerUserAsrCommittedItem(asrState, itemId);
+  });
 
   client.on("transcript", (payload: Record<string, unknown>) => {
     if (session.ending) return;
@@ -639,14 +691,20 @@ function wireClientEvents(
     const itemId = normalizeInlineText(payload?.itemId, 180);
     const previousItemId = normalizeInlineText(payload?.previousItemId, 180) || null;
     const now = Date.now();
+    const targetUtterance = resolveTranscriptTargetUtterance({
+      asrState,
+      mode,
+      itemId: itemId || null,
+      previousItemId
+    });
 
     asrState.lastTranscriptAt = now;
-    asrState.utterance.lastUpdateAt = now;
+    targetUtterance.lastUpdateAt = now;
 
     if (isFinal) {
       if (itemId) {
-        const entries = Array.isArray(asrState.utterance.finalSegmentEntries)
-          ? asrState.utterance.finalSegmentEntries
+        const entries = Array.isArray(targetUtterance.finalSegmentEntries)
+          ? targetUtterance.finalSegmentEntries
           : [];
         const nextEntry: AsrFinalSegmentEntry = {
           itemId,
@@ -661,8 +719,8 @@ function wireClientEvents(
         } else {
           entries.push(nextEntry);
         }
-        asrState.utterance.finalSegmentEntries = entries;
-        asrState.utterance.finalSegments = orderAsrFinalSegments(entries);
+        targetUtterance.finalSegmentEntries = entries;
+        targetUtterance.finalSegments = orderAsrFinalSegments(entries);
 
         // Shared mode: also index final transcripts by itemId
         if (mode === "shared") {
@@ -670,11 +728,11 @@ function wireClientEvents(
           pruneMap(asrState.finalTranscriptsByItemId);
         }
       } else {
-        asrState.utterance.finalSegments.push(transcript);
+        targetUtterance.finalSegments.push(transcript);
       }
-      asrState.utterance.partialText = "";
+      targetUtterance.partialText = "";
     } else {
-      asrState.utterance.partialText = transcript;
+      targetUtterance.partialText = transcript;
     }
 
     // Resolve speaker: shared mode looks up by itemId mapping, per-user uses the userId directly
@@ -1211,15 +1269,18 @@ export async function commitAsrUtterance(
   if (mode === "per_user") {
     asrState.phase = "committing";
     asrState.committingUtteranceId = trackedUtteranceId;
+    asrState.committingUtterance = trackedUtterance;
     const connectedState = await ensureAsrSessionConnected(mode, deps, settings, normalizedUserId);
     if (!connectedState || connectedState !== asrState || asrPhaseIsClosing(asrState.phase)) {
       asrState.phase = "ready";
       asrState.committingUtteranceId = 0;
+      asrState.committingUtterance = null;
       return null;
     }
   } else {
     asrState.phase = "committing";
     asrState.committingUtteranceId = trackedUtteranceId;
+    asrState.committingUtterance = trackedUtterance;
   }
 
   flushPendingAsrAudio(mode, session, deps, asrState, normalizedUserId, trackedUtteranceId);
@@ -1287,7 +1348,13 @@ export async function commitAsrUtterance(
             sessionId: session.id,
             source: "openai_realtime_asr",
             model: transcriptionModelPrimary,
-            captureReason: String(captureReason || "stream_end")
+            captureReason: String(captureReason || "stream_end"),
+            trackedUtteranceId: trackedUtteranceId || null,
+            activeUtteranceId: Math.max(0, Number(asrState.utterance?.id || 0)) || null,
+            finalSegmentCount: Array.isArray(trackedUtterance?.finalSegments)
+              ? trackedUtterance.finalSegments.length
+              : 0,
+            partialChars: String(trackedUtterance?.partialText || "").trim().length
           }
         });
       }
@@ -1355,7 +1422,13 @@ export async function commitAsrUtterance(
             sessionId: session.id,
             source: "openai_realtime_asr",
             model: transcriptionModelPrimary,
-            captureReason: String(captureReason || "stream_end")
+            captureReason: String(captureReason || "stream_end"),
+            trackedUtteranceId: trackedUtteranceId || null,
+            activeUtteranceId: Math.max(0, Number(asrState.utterance?.id || 0)) || null,
+            finalSegmentCount: Array.isArray(trackedUtterance?.finalSegments)
+              ? trackedUtterance.finalSegments.length
+              : 0,
+            partialChars: String(trackedUtterance?.partialText || "").trim().length
           }
         });
       }
@@ -1388,6 +1461,7 @@ export async function commitAsrUtterance(
       asrState.phase = "ready";
     }
     asrState.committingUtteranceId = 0;
+    asrState.committingUtterance = null;
     const activeUtteranceId = Math.max(0, Number(asrState.utterance?.id || 0));
     if (activeUtteranceId > 0) {
       flushPendingAsrAudio(mode, session, deps, asrState, normalizedUserId, activeUtteranceId);

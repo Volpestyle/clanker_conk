@@ -915,6 +915,61 @@ test("generateStreaming falls back to batch generation for non-streaming provide
   assert.equal(result.text, "fallback batch reply");
 });
 
+test("generateStreaming logs returned text, tool names, and stop reason for runtime debugging", async () => {
+  const logs = [];
+  const service = createService({ xaiApiKey: "test-xai-key" }, { logs });
+  service.callChatModel = async () => ({
+    text: "yo, give me some sound effects",
+    toolCalls: [
+      {
+        id: "tool_1",
+        name: "play_soundboard",
+        input: {
+          refs: ["airhorn"]
+        }
+      }
+    ],
+    rawContent: null,
+    stopReason: "tool_calls",
+    usage: {
+      inputTokens: 9,
+      outputTokens: 4,
+      cacheWriteTokens: 0,
+      cacheReadTokens: 0
+    }
+  });
+
+  const result = await service.generateStreaming({
+    settings: {
+      agentStack: {
+        overrides: {
+          orchestrator: {
+            provider: "xai",
+            model: "grok-3-mini-latest"
+          }
+        }
+      }
+    },
+    systemPrompt: "system",
+    userPrompt: "user",
+    contextMessages: [],
+    trace: {
+      source: "voice_realtime_generation",
+      event: "voice_turn"
+    },
+    onTextDelta() {}
+  });
+
+  assert.equal(result.text, "yo, give me some sound effects");
+  assert.equal(result.stopReason, "tool_calls");
+  const llmLog = logs.find((entry) => entry?.kind === "llm_call");
+  assert.ok(llmLog);
+  assert.equal(llmLog.metadata?.toolNames, "play_soundboard");
+  assert.equal(llmLog.metadata?.stopReason, "tool_calls");
+  assert.equal(llmLog.metadata?.transcript, "yo, give me some sound effects");
+  assert.equal(llmLog.metadata?.transcriptSource, "output");
+});
+
 test("chatWithTools supports OpenAI function-call loops", async () => {
   const logs = [];
   const service = createService(

@@ -179,16 +179,33 @@ function formatSkipReason(payload, skipKind) {
   }
   // "drop" — show the drop reason from event name or metadata
   const meta = isPlainObject(payload.metadata) ? payload.metadata : {};
-  const skipCause = String(meta.skipCause || "").trim();
+  const skipCause = String(meta.skipCause || meta.reason || "").trim();
+  const metrics = [];
+  const peak = Number(meta.peak);
+  const rms = Number(meta.rms);
+  const activeSampleRatio = Number(meta.activeSampleRatio);
+  if (Number.isFinite(peak) && peak > 0) {
+    metrics.push(`${DIM}peak=${RESET}${peak.toFixed(3)}`);
+  }
+  if (Number.isFinite(rms) && rms > 0) {
+    metrics.push(`${DIM}rms=${RESET}${rms.toFixed(3)}`);
+  }
+  if (Number.isFinite(activeSampleRatio) && activeSampleRatio > 0) {
+    metrics.push(`${DIM}active=${RESET}${activeSampleRatio.toFixed(3)}`);
+  }
+  const metricsPart = metrics.length > 0 ? `  ${metrics.join("  ")}` : "";
   if (skipCause) {
-    return `  ${BRIGHT_YELLOW}${skipCause}${RESET}`;
+    return `  ${BRIGHT_YELLOW}${skipCause}${RESET}${metricsPart}`;
   }
   const event = String(payload.event || "");
   const shortReason = event
     .replace(/^voice_turn_dropped_/, "")
     .replace(/^realtime_turn_/, "")
     .replace(/^file_asr_turn_/, "");
-  return shortReason !== event ? `  ${DIM}${shortReason}${RESET}` : "";
+  if (shortReason !== event) {
+    return `  ${DIM}${shortReason}${RESET}${metricsPart}`;
+  }
+  return metricsPart;
 }
 
 export function formatPrettyLine(payload) {
