@@ -180,7 +180,7 @@ export function buildReplyPrompt({
     } else {
       const isFullMemory = memoryLookup.query === "__ALL__";
       if (isFullMemory) {
-        parts.push("Full memory dump (all stored facts):");
+        parts.push("Stored memory dump (capped view of stored facts):");
       } else {
         parts.push(`Memory lookup results for "${memoryLookup.query || message?.content || ""}":`);
       }
@@ -499,7 +499,8 @@ export function buildReplyPrompt({
       parts.push(
         "If the user asks what you remember (or asks for stored facts) and current memory context is insufficient, set memoryLookupQuery to a concise lookup query."
       );
-      parts.push("If the user asks to see ALL memory or EVERYTHING you remember, set memoryLookupQuery to \"__ALL__\".");
+      parts.push("If the user asks for a broad dump of stored memory or everything you remember, set memoryLookupQuery to \"__ALL__\".");
+      parts.push("`__ALL__` requests a capped stored-memory dump, not a ranked topical lookup.");
       parts.push("Use memoryLookupQuery only when needed and keep it under 220 characters.");
     }
   }
@@ -938,7 +939,7 @@ export function buildAutomationPrompt({
     } else {
       const isFullMemory = memoryLookup.query === "__ALL__";
       if (isFullMemory) {
-        parts.push("Full memory dump (all stored facts):");
+        parts.push("Stored memory dump (capped view of stored facts):");
       } else {
         parts.push(`Memory lookup results for "${memoryLookup.query || taskInstruction}":`);
       }

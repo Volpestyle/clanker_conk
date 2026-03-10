@@ -74,7 +74,7 @@ function resolveFactProfile({
 }) {
   const empty = emptyFactProfileSlice();
   if (!isMemoryEnabled(settings)) return empty;
-  if (!guildId || !userId || !queryText || typeof loadFactProfile !== "function") {
+  if (!guildId || !userId || typeof loadFactProfile !== "function") {
     return empty;
   }
 

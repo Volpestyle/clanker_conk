@@ -82,6 +82,8 @@ type ReplyGenerationShape = {
   [key: string]: unknown;
 };
 
+const FULL_MEMORY_DUMP_LOOKUP_LIMIT = 40;
+
 type ReplyFollowupPromptPayload = {
   webSearch: WebSearchState | null;
   browserBrowse: BrowserBrowseState | null;
@@ -386,6 +388,7 @@ async function runModelRequestedMemoryLookup<T extends MemoryLookupState>(runtim
   }
 
   try {
+    const resolvedLimit = normalizedQuery === "__ALL__" ? FULL_MEMORY_DUMP_LOOKUP_LIMIT : 10;
     const results = await runtime.memory.searchDurableFacts({
       guildId: String(guildId),
       channelId: String(channelId || "").trim() || null,
@@ -395,7 +398,7 @@ async function runModelRequestedMemoryLookup<T extends MemoryLookupState>(runtim
         ...trace,
         source: "model_memory_lookup"
       },
-      limit: 10
+      limit: resolvedLimit
     });
     return {
       ...state,
